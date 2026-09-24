@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition, useEffect } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { dejarDeRecibir } from "../actions";
 import { MESSAGES } from "../messages";
@@ -9,10 +9,12 @@ import { Aviso } from "./aviso";
 type Resultado = Awaited<ReturnType<typeof dejarDeRecibir>>;
 
 /**
- * La pregunta y el botón. Después del clic, el resultado reemplaza al
- * botón y recibe el foco, para que un lector de pantalla lo anuncie.
+ * La pregunta y el botón. Dice para qué dirección es (enmascarada) y de
+ * quién, como la baja de Substack. Después del clic, el resultado
+ * reemplaza al botón y recibe el foco, para que un lector de pantalla lo
+ * anuncie.
  */
-export function DejarDeRecibir({ token }: { token: string }) {
+export function DejarDeRecibir({ token, direccion, quien }: { token: string; direccion: string; quien: string | null }) {
   const t = MESSAGES;
   const [resultado, setResultado] = useState<Resultado | null>(null);
   const [pending, startTransition] = useTransition();
@@ -30,9 +32,7 @@ export function DejarDeRecibir({ token }: { token: string }) {
           : t.listo
         : resultado.status === "sender"
           ? t.remitente
-          : resultado.status === "unavailable"
-            ? t.noDisponible
-            : t.noExiste;
+          : t.noExiste;
     return (
       <Aviso ref={avisoRef} tono={resultado.status === "ok" ? "good" : "neutral"} title={texto.title} body={texto.body} />
     );
@@ -41,7 +41,8 @@ export function DejarDeRecibir({ token }: { token: string }) {
   return (
     <div>
       <h1 className="text-2xl font-semibold tracking-tight text-ink">{t.pregunta.title}</h1>
-      <p className="mt-3 text-base leading-relaxed text-ink-2">{t.pregunta.body}</p>
+      <p className="mt-3 text-base leading-relaxed text-ink">{t.pregunta.destino(direccion)}</p>
+      <p className="mt-2 text-base leading-relaxed text-ink-2">{t.pregunta.alcance(quien)}</p>
       {resultado?.status === "error" && (
         <p role="alert" className="mt-4 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
           {t.error}

@@ -1,60 +1,72 @@
 /**
  * VEN-15 · entregabilidad en Postgres embebido.
  *
- *   · la baja desde el enlace, de punta a punta: el token firmado por la
- *     plataforma, el rechazo del clic de quien envió (sin tocar nada), la
- *     ficha marcada y todo lo pendiente cancelado, en este workspace y en
- *     los demás que le escriben a la misma dirección; el segundo clic; un
- *     token con otra firma o sin correo detrás no encuentra nada;
+ *   · la baja desde el enlace, de punta a punta: el token opaco (el hash
+ *     manda, sin secreto), lo que la página enseña antes del clic
+ *     (public_optout_preview: dirección enmascarada, quién escribe), el
+ *     rechazo del clic de quien envió (sin tocar nada), la ficha marcada
+ *     y todo lo pendiente cancelado, en este workspace y en los demás que
+ *     le escriben a la misma dirección; el segundo clic; un token sin
+ *     correo detrás no encuentra nada; y el token del despachador de
+ *     VEN-10 (randomBytes(32) en base64url) da de baja igual;
  *   · la política editable: valores por defecto, guardar, el interruptor
  *     con dirección postal, y que no se puede quitar la dirección con el
  *     envío encendido;
  *   · contact.email_invalid (0038): no se programa un correo a un correo
  *     que rebotó, los otros canales siguen, y cambiar el correo borra la
- *     marca;
+ *     marca y también contact.bounced;
  *   · outbound_bounce: la web la lee aislada por workspace y no la escribe.
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { createOptoutToken, optoutTokenHash } from '@mc/core/outreach/deliverability';
 import {
-  checkOptoutLink, getOutboundPolicy, optoutFromLink, PolicyNeedsAddressError, saveOutboundPolicy, type OptoutGates,
+  checkOptoutLink, getOutboundPolicy, optoutFromLink, PolicyNeedsAddressError, publicOptoutPreview, saveOutboundPolicy,
+  type OptoutGates,
 } from '../src/queries/entregabilidad.ts';
 import { enableOutreach } from '../src/queries/outreach.ts';
 import { openTestDb, type TestDb } from './pglite.ts';
 
-const SECRET = 'secreto-de-prueba-de-la-baja-con-32-o-mas';
 const WS_S = '00000038-0000-4000-8000-00000000000a';
 const WS_O = '00000038-0000-4000-8000-00000000000b';
 const COMPANY = '00000038-0000-4000-8000-0000000000c1';
 const CONTACT_S = '00000038-0000-4000-8000-0000000000a1';
 const CONTACT_O = '00000038-0000-4000-8000-0000000000b1';
 const CONTACT_REBOTE = '00000038-0000-4000-8000-0000000000a2';
+const CONTACT_V10 = '00000038-0000-4000-8000-0000000000a3';
 const TOUCH_SENT = '00000038-0000-4000-8000-0000000070a1';
 const TOUCH_PENDING = '00000038-0000-4000-8000-0000000070a2';
 const TOUCH_LINKEDIN = '00000038-0000-4000-8000-0000000070a3';
 const TOUCH_PENDING_O = '00000038-0000-4000-8000-0000000070b1';
+const TOUCH_V10_SENT = '00000038-0000-4000-8000-0000000070c1';
+const TOUCH_V10_PENDING = '00000038-0000-4000-8000-0000000070c2';
 const SEQ = '00000038-0000-4000-8000-0000000005a1';
 const ENR = '00000038-0000-4000-8000-00000000e0a1';
 
-const TOKEN = createOptoutToken({ workspaceId: WS_S, contactId: CONTACT_S }, SECRET);
-/** Firmado por la plataforma, pero ningún correo salió con él. */
-const TOKEN_SIN_CORREO = createOptoutToken({ workspaceId: WS_S, contactId: CONTACT_S }, SECRET);
+const TOKEN = createOptoutToken();
+/** Un token con la forma de siempre, pero ningún correo salió con él. */
+const TOKEN_SIN_CORREO = createOptoutToken();
+/** Como lo genera hoy el despachador de VEN-10 (outreach-motor.ts, newOptoutToken), sin pasar por @mc/core. */
+const TOKEN_VEN10 = randomBytes(32).toString('base64url');
 
 let t: TestDb;
 
 before(async () => {
+  // Ningún secreto en el entorno: la baja no depende de él (hallazgo r1).
+  delete process.env.OUTREACH_OPTOUT_SECRET;
   t = await openTestDb({ seeds: false });
   await t.admin(`
     INSERT INTO workspace (id, slug, name, timezone) VALUES
-      ('${WS_S}', 'baja-envia', 'Quien envía', 'America/Bogota'),
+      ('${WS_S}', 'baja-envia', 'Laura · Cocina fácil', 'America/Bogota'),
       ('${WS_O}', 'baja-otro', 'Otro creador', 'America/Bogota');
     INSERT INTO company (id, name, owner_workspace_id) VALUES ('${COMPANY}', 'Marca de la baja', NULL);
     INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_S}', '${COMPANY}'), ('${WS_O}', '${COMPANY}');
     INSERT INTO contact (id, company_id, full_name, email, source, owner_workspace_id) VALUES
-      ('${CONTACT_S}', '${COMPANY}', 'Valentina', 'valentina@marca.test', 'user_provided', '${WS_S}'),
+      ('${CONTACT_S}', '${COMPANY}', 'Valentina', 'Valentina@marca.test', 'user_provided', '${WS_S}'),
       ('${CONTACT_O}', '${COMPANY}', 'Valentina (O)', 'valentina@marca.test', 'user_provided', '${WS_O}'),
-      ('${CONTACT_REBOTE}', '${COMPANY}', 'Rebote', 'no-existe@marca.test', 'user_provided', '${WS_S}');
+      ('${CONTACT_REBOTE}', '${COMPANY}', 'Rebote', 'no-existe@marca.test', 'user_provided', '${WS_S}'),
+      ('${CONTACT_V10}', '${COMPANY}', 'Tomás', 'tomas@marca.test', 'user_provided', '${WS_S}');
     INSERT INTO outbound_sequence (id, workspace_id, name, channel, status) VALUES ('${SEQ}', '${WS_S}', 'Secuencia', 'email', 'active');
     INSERT INTO outbound_enrollment (id, workspace_id, sequence_id, contact_id) VALUES ('${ENR}', '${WS_S}', '${SEQ}', '${CONTACT_S}');
     INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, enrollment_id, channel, body, status,
@@ -66,10 +78,16 @@ before(async () => {
       ('${TOUCH_LINKEDIN}', '${WS_S}', '${COMPANY}', '${CONTACT_S}', '${ENR}', 'linkedin', 'Hola por aquí', 'draft',
        now() + interval '3 days', NULL, NULL, NULL, 0),
       ('${TOUCH_PENDING_O}', '${WS_O}', '${COMPANY}', '${CONTACT_O}', NULL, 'email', 'Hola', 'scheduled',
+       now() + interval '1 day', NULL, NULL, NULL, 0),
+      ('${TOUCH_V10_SENT}', '${WS_S}', '${COMPANY}', '${CONTACT_V10}', NULL, 'email', 'Hola', 'sent',
+       now() - interval '2 days', now() - interval '2 days', 'gmail-2', 'tomas@marca.test', 1),
+      ('${TOUCH_V10_PENDING}', '${WS_S}', '${COMPANY}', '${CONTACT_V10}', NULL, 'email', 'Sigo', 'scheduled',
        now() + interval '1 day', NULL, NULL, NULL, 0);
     INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, recipient_address, claimed_at, sent_at)
     VALUES ('${optoutTokenHash(TOKEN)}', '${WS_S}', '${TOUCH_SENT}', '${CONTACT_S}', 'valentina@marca.test',
-            now() - interval '1 day', now() - interval '1 day');
+            now() - interval '1 day', now() - interval '1 day'),
+           ('${optoutTokenHash(TOKEN_VEN10)}', '${WS_S}', '${TOUCH_V10_SENT}', '${CONTACT_V10}', 'tomas@marca.test',
+            now() - interval '2 days', now() - interval '2 days');
   `);
 });
 
@@ -78,9 +96,9 @@ after(async () => {
     await t.admin(`
       DELETE FROM workspace WHERE id IN ('${WS_S}', '${WS_O}');
       DELETE FROM company WHERE id = '${COMPANY}';
-      DELETE FROM outbound_optout_link WHERE token_hash = '${optoutTokenHash(TOKEN)}';
-      DELETE FROM outbound_optout_event WHERE token_hash = '${optoutTokenHash(TOKEN)}';
-      DELETE FROM contact_suppression WHERE email = 'valentina@marca.test';
+      DELETE FROM outbound_optout_link WHERE token_hash IN ('${optoutTokenHash(TOKEN)}', '${optoutTokenHash(TOKEN_VEN10)}');
+      DELETE FROM outbound_optout_event WHERE token_hash IN ('${optoutTokenHash(TOKEN)}', '${optoutTokenHash(TOKEN_VEN10)}');
+      DELETE FROM contact_suppression WHERE email IN ('valentina@marca.test', 'tomas@marca.test');
     `);
   }
   await t.close();
@@ -102,26 +120,47 @@ async function estados(): Promise<Record<string, string>> {
 }
 
 describe('la baja desde el enlace', () => {
+  test('antes del clic: la dirección enmascarada y quién escribe, sin escribir nada', async () => {
+    const antes = await estados();
+    assert.deepEqual(await checkOptoutLink(puertas([]), TOKEN), {
+      status: 'valid',
+      maskedAddress: 'v•••@marca.test',
+      senderName: 'Laura · Cocina fácil',
+      alreadyOptedOut: false,
+    });
+    assert.deepEqual(await estados(), antes);
+    const eventos = await sinRls(`SELECT 1 FROM outbound_optout_event WHERE token_hash = '${optoutTokenHash(TOKEN)}'`);
+    assert.equal(eventos.length, 0, 'mirar el enlace no es darse de baja');
+  });
+
+  test('la vista previa no deja ningún parámetro abierto en la transacción', async () => {
+    await t.db.withPublicShare(async (tx) => {
+      await publicOptoutPreview(tx, TOKEN, []);
+      const { rows } = await tx.query<{ w: string | null; h: string | null }>(
+        `SELECT current_setting('app.public_optout_workspace', true) AS w, current_setting('app.public_optout', true) AS h`,
+      );
+      assert.ok(!rows[0]?.w && !rows[0]?.h);
+    });
+  });
+
   test('el clic de un miembro del workspace que envió se rechaza sin tocar nada', async () => {
     const antes = await estados();
-    assert.deepEqual(await checkOptoutLink(puertas([WS_O, WS_S]), TOKEN, SECRET), { status: 'sender' });
-    assert.deepEqual(await optoutFromLink(puertas([WS_S]), TOKEN, SECRET), { status: 'sender' });
+    assert.deepEqual(await checkOptoutLink(puertas([WS_O, WS_S]), TOKEN), { status: 'sender' });
+    assert.deepEqual(await optoutFromLink(puertas([WS_S]), TOKEN), { status: 'sender' });
     assert.deepEqual(await estados(), antes);
     const [c] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${CONTACT_S}'`);
     assert.equal(c?.opted_out, false);
   });
 
-  test('un token con otra firma, o sin correo detrás, no encuentra nada', async () => {
-    const ajeno = createOptoutToken({ workspaceId: WS_S, contactId: CONTACT_S }, `${SECRET}-de-otro`);
-    assert.deepEqual(await optoutFromLink(puertas([]), ajeno, SECRET), { status: 'not_found' });
-    assert.deepEqual(await optoutFromLink(puertas([]), 'basura', SECRET), { status: 'not_found' });
-    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN_SIN_CORREO, SECRET), { status: 'not_found' });
+  test('un token sin correo detrás, o sin forma de token, no encuentra nada', async () => {
+    assert.deepEqual(await optoutFromLink(puertas([]), 'basura'), { status: 'not_found' });
+    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN_SIN_CORREO), { status: 'not_found' });
+    assert.deepEqual(await optoutFromLink(puertas([]), "x' OR 1=1 --xxxxxxxxxxxx"), { status: 'not_found' });
   });
 
   test('un clic marca a la persona y cancela todo lo pendiente, en todos los workspaces', async () => {
-    assert.deepEqual(await checkOptoutLink(puertas([WS_O]), TOKEN, SECRET), { status: 'valid', workspaceId: WS_S });
     // Una sesión de OTRO workspace que también le escribe no es quien envió este correo.
-    assert.deepEqual(await optoutFromLink(puertas([WS_O]), TOKEN, SECRET), { status: 'ok', alreadyOptedOut: false });
+    assert.deepEqual(await optoutFromLink(puertas([WS_O]), TOKEN), { status: 'ok', alreadyOptedOut: false });
     assert.deepEqual(await estados(), {
       [TOUCH_SENT]: 'sent',
       [TOUCH_PENDING]: 'canceled',
@@ -140,8 +179,18 @@ describe('la baja desde el enlace', () => {
     assert.deepEqual(eventos.map((x) => x.workspace_id), [WS_S], 'el clic queda atribuido al workspace que envió');
   });
 
-  test('el segundo clic dice que ya estaba de baja', async () => {
-    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN, SECRET), { status: 'ok', alreadyOptedOut: true });
+  test('el segundo clic dice que ya estaba de baja, y la vista previa también', async () => {
+    const previa = await checkOptoutLink(puertas([]), TOKEN);
+    assert.equal(previa.status === 'valid' && previa.alreadyOptedOut, true);
+    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN), { status: 'ok', alreadyOptedOut: true });
+  });
+
+  test('el token del despachador de VEN-10, sin firma ni puntos, da de baja igual', async () => {
+    assert.deepEqual(await optoutFromLink(puertas([]), TOKEN_VEN10), { status: 'ok', alreadyOptedOut: false });
+    const [c] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${CONTACT_V10}'`);
+    assert.equal(c?.opted_out, true);
+    const [pend] = await sinRls<{ status: string }>(`SELECT status FROM outbound_touch WHERE id = '${TOUCH_V10_PENDING}'`);
+    assert.equal(pend?.status, 'canceled');
   });
 });
 
@@ -183,7 +232,9 @@ describe('la política editable', () => {
 
 describe('el correo inválido (0038)', () => {
   test('no se programa un correo a una ficha cuyo correo rebotó; LinkedIn sí', async () => {
-    await t.admin(`UPDATE contact SET email_invalid = true, email_invalid_at = now(), email_invalid_reason = '550 5.1.1'
+    // Como lo deja el job outbound.bounces: las dos marcas, la de 0038 y la de 0007.
+    await t.admin(`UPDATE contact SET email_invalid = true, email_invalid_at = now(), email_invalid_reason = '550 5.1.1',
+                          bounced = true
                    WHERE id = '${CONTACT_REBOTE}'`);
     await assert.rejects(
       t.db.withWorkspace(WS_S, (tx) =>
@@ -198,12 +249,12 @@ describe('el correo inválido (0038)', () => {
     );
   });
 
-  test('cambiar el correo de la ficha borra la marca', async () => {
+  test('cambiar el correo de la ficha borra la marca, también la píldora «Correo rebotado» (bounced)', async () => {
     await t.db.withWorkspace(WS_S, (tx) => tx.query(`UPDATE contact SET email = 'bien@marca.test' WHERE id = '${CONTACT_REBOTE}'`));
-    const [c] = await sinRls<{ email_invalid: boolean; email_invalid_reason: string | null }>(
-      `SELECT email_invalid, email_invalid_reason FROM contact WHERE id = '${CONTACT_REBOTE}'`,
+    const [c] = await sinRls<{ email_invalid: boolean; email_invalid_reason: string | null; bounced: boolean }>(
+      `SELECT email_invalid, email_invalid_reason, bounced FROM contact WHERE id = '${CONTACT_REBOTE}'`,
     );
-    assert.deepEqual(c, { email_invalid: false, email_invalid_reason: null });
+    assert.deepEqual(c, { email_invalid: false, email_invalid_reason: null, bounced: false });
   });
 });
 

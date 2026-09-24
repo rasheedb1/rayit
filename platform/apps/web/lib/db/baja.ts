@@ -1,7 +1,6 @@
 import "server-only";
 import { checkOptoutLink, optoutFromLink, type OptoutGates } from "@mc/db/queries/entregabilidad";
 import { getMyIdentityAndWorkspaces } from "@mc/db/queries/identidad";
-import { OPTOUT_SECRET_MIN_LENGTH } from "@mc/core/outreach/deliverability";
 import { getSesion } from "@/lib/auth/session";
 import { withIdentity, withPublicShare } from "./cliente";
 
@@ -10,34 +9,26 @@ import { withIdentity, withPublicShare } from "./cliente";
  * nombre que usan la página pública /baja/<token> y el POST de un clic.
  *
  * Como los enlaces de Cotizar, quien abre esto no tiene por qué tener
- * sesión, y lo único que se escribe va por public_optout (SECURITY
- * DEFINER, 0037 §9). La diferencia: SI hay sesión, se mira a qué
- * espacios pertenece, porque el enlace también está en la carpeta de
- * enviados del creador y su propio clic no puede dar de baja a la marca
- * en toda la plataforma. Esa pregunta va por withIdentity (la misma que
- * responde «mis espacios» en cada petición), nunca por asWorker.
+ * sesión, y todo va por funciones SECURITY DEFINER de mc_public_share:
+ * public_optout_preview (0038 §5) para lo que se enseña antes del clic y
+ * public_optout (0037 §9) para la baja. El token es opaco y lo decide su
+ * sha256 en la base: no hay secreto que configurar ni que rotar, así que
+ * un error de configuración no puede apagar la baja de la plataforma.
  *
- * El secreto que firma los tokens es OUTREACH_OPTOUT_SECRET, el mismo del
- * despachador. Sin él la página dice que el enlace no se puede comprobar
- * ahora, sin tocar la base: no hay forma de saber quién lo envió.
+ * SI hay sesión, se mira a qué espacios pertenece, porque el enlace
+ * también está en la carpeta de enviados del creador y su propio clic no
+ * puede dar de baja a la marca en toda la plataforma. Esa pregunta va por
+ * withIdentity (la misma que responde «mis espacios» en cada petición),
+ * nunca por asWorker; la respuesta la da la base, que sabe qué workspace
+ * envió el correo.
  */
 
 export type EstadoEnlace =
-  | { status: "valid" }
+  | { status: "valid"; maskedAddress: string; senderName: string | null; alreadyOptedOut: boolean }
   | { status: "not_found" }
-  | { status: "sender" }
-  | { status: "unavailable" };
+  | { status: "sender" };
 
-export type ResultadoBaja =
-  | { status: "ok"; alreadyOptedOut: boolean }
-  | { status: "not_found" }
-  | { status: "sender" }
-  | { status: "unavailable" };
-
-function secreto(): string | null {
-  const s = process.env.OUTREACH_OPTOUT_SECRET?.trim();
-  return s && s.length >= OPTOUT_SECRET_MIN_LENGTH ? s : null;
-}
+export type ResultadoBaja = { status: "ok"; alreadyOptedOut: boolean } | { status: "not_found" } | { status: "sender" };
 
 /** Los espacios de quien abre el enlace, si tiene sesión. Sin Supabase Auth o sin sesión, ninguno. */
 async function espaciosDeLaSesion(): Promise<readonly string[]> {
@@ -53,16 +44,11 @@ const puertas: OptoutGates = {
 };
 
 /** Lo que la página puede decir antes del clic. No escribe nada. */
-export async function estadoDelEnlaceDeBaja(token: string): Promise<EstadoEnlace> {
-  const s = secreto();
-  if (!s) return { status: "unavailable" };
-  const r = await checkOptoutLink(puertas, token, s);
-  return r.status === "valid" ? { status: "valid" } : r;
+export function estadoDelEnlaceDeBaja(token: string): Promise<EstadoEnlace> {
+  return checkOptoutLink(puertas, token);
 }
 
 /** El clic: da de baja a la persona en toda la plataforma. */
-export async function darDeBajaDesdeEnlace(token: string): Promise<ResultadoBaja> {
-  const s = secreto();
-  if (!s) return { status: "unavailable" };
-  return optoutFromLink(puertas, token, s);
+export function darDeBajaDesdeEnlace(token: string): Promise<ResultadoBaja> {
+  return optoutFromLink(puertas, token);
 }

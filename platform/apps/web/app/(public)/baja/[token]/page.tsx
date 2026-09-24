@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Marca } from "@/components/marca";
 import { Button } from "@/components/ui/button";
 import { estadoDelEnlaceDeBaja } from "@/lib/db/baja";
 import { MESSAGES } from "../messages";
@@ -11,14 +12,17 @@ export const dynamic = "force-dynamic";
 /**
  * /baja/<token> · la baja desde el pie de un correo del outreach (VEN-15).
  *
- * Sin sesión y sin trucos: una frase y un botón (referencia: la baja de
- * Substack). Abrir la página no da de baja a nadie —la abren también los
- * escáneres de enlaces—; el botón sí, con una server action. El POST de
- * un clic de Gmail (List-Unsubscribe-Post) va a ./un-clic.
+ * Sin sesión y sin trucos (referencia: la baja de Substack): la marca de
+ * On Cue, para qué dirección es («v•••@marca.com», enmascarada) y de
+ * quién, una frase y un botón. Abrir la página no da de baja a nadie —la
+ * abren también los escáneres de enlaces—; el botón sí, con una server
+ * action. El POST de un clic de Gmail (List-Unsubscribe-Post) va a
+ * ./un-clic.
  *
- * Antes de pintar el botón se comprueba el token (firma de la
- * plataforma) y que quien lo abre no sea del workspace que envió el
- * correo: ese enlace también está en su carpeta de enviados.
+ * Antes de pintar el botón se pregunta a la base por el sha256 del token
+ * (public_optout_preview): si el enlace es de un correo que salió, y si
+ * quien lo abre es del workspace que lo envió, porque ese enlace también
+ * está en su carpeta de enviados.
  */
 export default async function BajaPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
@@ -27,9 +31,14 @@ export default async function BajaPage({ params }: { params: Promise<{ token: st
 
   return (
     <div className="py-10 md:py-16">
-      {estado.status === "valid" && <DejarDeRecibir token={token} />}
+      <Marca />
+      {estado.status === "valid" &&
+        (estado.alreadyOptedOut ? (
+          <Aviso title={t.yaEstaba.title} body={t.yaEstaba.body} />
+        ) : (
+          <DejarDeRecibir token={token} direccion={estado.maskedAddress} quien={estado.senderName} />
+        ))}
       {estado.status === "not_found" && <Aviso title={t.noExiste.title} body={t.noExiste.body} />}
-      {estado.status === "unavailable" && <Aviso title={t.noDisponible.title} body={t.noDisponible.body} />}
       {estado.status === "sender" && (
         <Aviso
           title={t.remitente.title}

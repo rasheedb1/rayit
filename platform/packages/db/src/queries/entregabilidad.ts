@@ -1,5 +1,6 @@
 /**
- * Entregabilidad · la política de outreach editable (VEN-15). Dueño: Rasheed.
+ * Entregabilidad · la baja desde el enlace y la política de outreach
+ * editable (VEN-15). Dueño: Rasheed.
  *
  * La pantalla /ventas/politica lee y guarda outbound_policy con un
  * WorkspaceTx: el workspace es el de la transacción (current_workspace_id()),
@@ -13,23 +14,25 @@
  *   · require_optout_link: el pie de baja es obligatorio (CAN-SPAM), no
  *     un ajuste.
  */
-import { readOptoutToken } from '@mc/core/outreach/deliverability';
-import type { PublicShareTx, WorkspaceTx } from '../client.ts';
-import { publicOptout } from './outreach.ts';
+import { looksLikeOptoutToken } from '@mc/core/outreach/deliverability';
+import { WARMUP_MAX_DAYS } from '@mc/core/outreach/warmup';
+import { isUuid, type PublicShareTx, type WorkspaceTx } from '../client.ts';
+import { OutreachShapeError, publicOptout } from './outreach.ts';
 
 // ---------------------------------------------------------------------
 // La baja desde el enlace de un correo
 // ---------------------------------------------------------------------
 //
 // La página /baja/<token> y el POST de un clic (List-Unsubscribe) pasan
-// por aquí. En orden:
-//   1. el token tiene que ser nuestro: forma y firma (core). Uno que no
-//      lo es no llega a la base;
-//   2. quien lo abre NO puede ser miembro del workspace que envió: el
-//      enlace también queda en la carpeta de enviados del Gmail del
-//      creador, y su clic suprimiría a la marca en toda la plataforma
-//      (docs/ventas-outreach.md §5.2, «Obligatorio para VEN-15»). El
-//      workspace sale de la firma; la web no lee outbound_optout_link;
+// por aquí. El token es opaco (32 bytes al azar, @mc/core): TODO se
+// decide por su sha256 en la base, sin secretos. En orden:
+//   1. lo que no tiene forma de token no llega a la base;
+//   2. public_optout_preview (0038 §5) dice si el enlace existe, para qué
+//      dirección (enmascarada), quién la escribe y si quien lo abre con
+//      sesión es miembro del workspace que envió: el enlace también queda
+//      en la carpeta de enviados del Gmail del creador, y su clic
+//      suprimiría a la marca en toda la plataforma (docs/ventas-outreach.md
+//      §5.2, «Obligatorio para VEN-15»);
 //   3. public_optout, sin sesión: marca la ficha, suprime la dirección y
 //      cancela lo pendiente en todos los workspaces.
 
@@ -40,7 +43,52 @@ export interface OptoutGates {
   sessionWorkspaceIds(): Promise<readonly string[]>;
 }
 
-export type OptoutLinkCheck = { status: 'valid'; workspaceId: string } | { status: 'not_found' } | { status: 'sender' };
+/** Lo que responde public_optout_preview (0038 §5), comprobado. */
+export type OptoutPreview =
+  | { status: 'not_found' }
+  | { status: 'ok'; maskedAddress: string; senderName: string | null; isSender: boolean; alreadyOptedOut: boolean };
+
+/** Comprueba la forma del jsonb de public_optout_preview. */
+export function parseOptoutPreview(value: unknown): OptoutPreview {
+  const fn = 'public_optout_preview';
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new OutreachShapeError(fn, '$', 'se esperaba un objeto');
+  const r = value as Record<string, unknown>;
+  if (r.status === 'not_found') return { status: 'not_found' };
+  if (r.status !== 'ok') throw new OutreachShapeError(fn, '$.status', `estado desconocido «${String(r.status)}»`);
+  if (typeof r.maskedAddress !== 'string' || !r.maskedAddress.includes('@')) {
+    throw new OutreachShapeError(fn, '$.maskedAddress', 'se esperaba una dirección enmascarada');
+  }
+  if (r.senderName !== null && typeof r.senderName !== 'string') throw new OutreachShapeError(fn, '$.senderName', 'se esperaba texto o null');
+  for (const k of ['isSender', 'alreadyOptedOut'] as const) {
+    if (typeof r[k] !== 'boolean') throw new OutreachShapeError(fn, `$.${k}`, 'se esperaba boolean');
+  }
+  return {
+    status: 'ok',
+    maskedAddress: r.maskedAddress,
+    senderName: (r.senderName as string | null) ?? null,
+    isSender: r.isSender as boolean,
+    alreadyOptedOut: r.alreadyOptedOut as boolean,
+  };
+}
+
+/**
+ * Lo que la página de baja puede decir del enlace antes del clic. Sin
+ * sesión, `viewerWorkspaces` es []; los que no son uuid se descartan.
+ */
+export async function publicOptoutPreview(
+  tx: PublicShareTx,
+  token: string,
+  viewerWorkspaces: readonly string[],
+): Promise<OptoutPreview> {
+  const mios = viewerWorkspaces.filter((id) => isUuid(id));
+  const r = (await tx.query<{ r: unknown }>('SELECT public_optout_preview($1::text, $2::uuid[]) AS r', [token, mios])).rows[0]?.r;
+  return parseOptoutPreview(r);
+}
+
+export type OptoutLinkCheck =
+  | { status: 'valid'; maskedAddress: string; senderName: string | null; alreadyOptedOut: boolean }
+  | { status: 'not_found' }
+  | { status: 'sender' };
 
 export type OptoutFromLinkResult =
   | { status: 'ok'; alreadyOptedOut: boolean }
@@ -49,14 +97,16 @@ export type OptoutFromLinkResult =
 
 /**
  * Lo que la página puede decir ANTES de pedir la confirmación: si el
- * enlace es nuestro y si quien lo abre es quien lo envió. No escribe nada.
+ * enlace es de un correo que la plataforma envió, para qué dirección y
+ * de quién, y si quien lo abre es quien lo envió. No escribe nada.
  */
-export async function checkOptoutLink(gates: Pick<OptoutGates, 'sessionWorkspaceIds'>, token: string, secret: string): Promise<OptoutLinkCheck> {
-  const leido = readOptoutToken(token, secret);
-  if (!leido.ok) return { status: 'not_found' };
+export async function checkOptoutLink(gates: OptoutGates, token: string): Promise<OptoutLinkCheck> {
+  if (!looksLikeOptoutToken(token)) return { status: 'not_found' };
   const mios = await gates.sessionWorkspaceIds();
-  if (mios.includes(leido.workspaceId)) return { status: 'sender' };
-  return { status: 'valid', workspaceId: leido.workspaceId };
+  const p = await gates.withPublicShare((tx) => publicOptoutPreview(tx, token, mios));
+  if (p.status === 'not_found') return p;
+  if (p.isSender) return { status: 'sender' };
+  return { status: 'valid', maskedAddress: p.maskedAddress, senderName: p.senderName, alreadyOptedOut: p.alreadyOptedOut };
 }
 
 /**
@@ -64,8 +114,8 @@ export async function checkOptoutLink(gates: Pick<OptoutGates, 'sessionWorkspace
  * estabas dado de baja»); el workspace y el toque no salen de aquí: quien
  * pulsa el enlace no tiene por qué saber cuántos creadores le escriben.
  */
-export async function optoutFromLink(gates: OptoutGates, token: string, secret: string): Promise<OptoutFromLinkResult> {
-  const chequeo = await checkOptoutLink(gates, token, secret);
+export async function optoutFromLink(gates: OptoutGates, token: string): Promise<OptoutFromLinkResult> {
+  const chequeo = await checkOptoutLink(gates, token);
   if (chequeo.status !== 'valid') return chequeo;
   const r = await gates.withPublicShare((tx) => publicOptout(tx, token));
   if (r.status === 'not_found') return { status: 'not_found' };
@@ -78,7 +128,7 @@ export const POLICY_LIMITS = {
   minDaysBetweenTouches: { min: 1, max: 30 },
   maxEmailsPerDay: { min: 1, max: 2000 },
   cooldownDaysAfterNo: { min: 0, max: 730 },
-  warmupDays: { min: 0, max: 90 },
+  warmupDays: { min: 0, max: WARMUP_MAX_DAYS },
 } as const;
 
 export const POSTAL_ADDRESS_MAX = 300;
