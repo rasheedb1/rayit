@@ -16,6 +16,7 @@ vi.mock("@/lib/db/baja", () => ({
   darDeBajaDesdeEnlace: (...a: unknown[]) => darDeBajaDesdeEnlace(...a),
 }));
 
+import BajaError from "./[token]/error";
 import BajaPage from "./[token]/page";
 import { POST } from "./[token]/un-clic/route";
 import { dejarDeRecibir } from "./actions";
@@ -64,7 +65,8 @@ describe("/baja/<token>", () => {
     darDeBajaDesdeEnlace.mockResolvedValue({ status: "ok", alreadyOptedOut: false, scope: "workspace" });
     await pagina();
     fireEvent.click(screen.getByRole("button", { name: t.pregunta.boton }));
-    expect(await screen.findByRole("heading", { name: t.listo.title })).toBeInTheDocument();
+    // Con el nombre de quien escribía, que la página ya sabe (r4).
+    expect(await screen.findByRole("heading", { name: "Listo. Laura · Cocina fácil no te escribirá más." })).toBeInTheDocument();
     expect(darDeBajaDesdeEnlace).toHaveBeenCalledWith(TOKEN);
     // El aviso recibe el foco para que se anuncie, sin el anillo de un campo:
     // `outline-none!` gana a la regla global de :focus-visible (r3).
@@ -103,6 +105,27 @@ describe("/baja/<token>", () => {
     await pagina("basura");
     expect(screen.getByRole("heading", { name: t.noExiste.title })).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+});
+
+describe("los textos (r4)", () => {
+  it("la pregunta va en infinitivo, como la de Substack, y el listo sin nombre no inventa uno", () => {
+    expect(t.pregunta.title).toBe("¿Dejar de recibir estos mensajes?");
+    expect(t.listo.title(null)).toBe("Listo. No te escribirá más.");
+  });
+});
+
+describe("si la base falla al abrir /baja/<token> (error.tsx, r4)", () => {
+  it("habla de la baja, no de un documento, dice que se puede responder al correo y deja reintentar", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const reset = vi.fn();
+    render(<BajaError error={Object.assign(new Error("sin DATABASE_URL"), { digest: "abc123" })} reset={reset} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(t.errorPagina.title);
+    expect(screen.getByText(t.errorPagina.body)).toHaveTextContent(/responde al correo/);
+    expect(document.body.textContent).not.toMatch(/documento/i);
+    expect(screen.getByText(/abc123/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: t.errorPagina.retry }));
+    expect(reset).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -29,7 +29,7 @@ export function DejarDeRecibir({ token, direccion, quien }: { token: string; dir
       resultado.status === "ok"
         ? resultado.alreadyOptedOut
           ? t.yaEstaba
-          : t.listo
+          : { title: t.listo.title(quien), body: t.listo.body }
         : resultado.status === "sender"
           ? t.remitente
           : t.noExiste;

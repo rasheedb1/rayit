@@ -9,7 +9,7 @@ export const MESSAGES = {
   metaTitle: "Dejar de recibir mensajes",
   loading: "Comprobando el enlace",
   pregunta: {
-    title: "¿Dejas de recibir estos mensajes?",
+    title: "¿Dejar de recibir estos mensajes?",
     /** «Dejarás de recibir mensajes en v•••@marca.com.» La dirección llega enmascarada. */
     destino: (direccion: string) => `Dejarás de recibir mensajes en ${direccion}.`,
     /**
@@ -26,7 +26,8 @@ export const MESSAGES = {
     enviando: "Un momento…",
   },
   listo: {
-    title: "Listo. No te escribirá más.",
+    /** Con el nombre de quien escribía, si la página lo sabe (r4). */
+    title: (quien: string | null) => (quien ? `Listo. ${quien} no te escribirá más.` : "Listo. No te escribirá más."),
     body: "Tu dirección quedó fuera de sus envíos. Si otro creador de On Cue te escribe, su correo trae su propio enlace. Si fue un error, responde al último correo y quien te escribió lo verá.",
   },
   yaEstaba: {
@@ -43,4 +44,15 @@ export const MESSAGES = {
     accion: "Ir a Ventas",
   },
   error: "No se pudo completar la baja. Inténtalo de nuevo.",
+  /**
+   * La frontera de error de /baja/<token> (r4): si la base falla al abrir
+   * la página. Sin hablar de «documentos» (la de (public) es de Cotizar), y
+   * con la salida que siempre funciona: responder al correo.
+   */
+  errorPagina: {
+    title: "No pudimos completar la baja ahora",
+    body: "Vuelve a intentarlo en un momento, o responde al correo y pide que no te escriban más.",
+    retry: "Reintentar",
+    reference: "Referencia",
+  },
 } as const;
