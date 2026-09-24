@@ -15,16 +15,40 @@
  * Las llaves son de la plataforma (UNIPILE_DSN, UNIPILE_ACCESS_TOKEN):
  * sin ellas el canal no está configurado y lo suyo espera en la cola.
  * La cuenta del creador es provider_account_id (el account_id de
- * Unipile). Cuando VEN-9 deje packages/connectors/unipile.ts, este
- * adaptador pasa a delegar en él.
+ * Unipile).
+ *
+ * Duplicados (r2): un corte después de enviar es ambiguo; en un chat que
+ * ya existe, findSent lo comprueba leyendo el chat. Un 2xx ilegible es un
+ * envío sin id, nunca un fallo que se reintenta.
+ *
+ * Deuda conocida (VEN-10 r2, anotada en el backlog): la rama VEN-9-canales
+ * trae packages/connectors/src/unipile.ts con su traducción de errores y
+ * su fake. Cuando se integre, este archivo se reduce a un adaptador fino
+ * ChannelSender → ese cliente.
  */
 import type { DispatchChannel, InboundMessage, OpenThread } from '@mc/db/queries/outreach';
 import {
-  failureFromStatus, networkFailure, withTimeout, type ChannelReader, type ChannelSender, type Fetch, type OutgoingMessage,
-  type SendResult,
+  abortedBeforeSend, failureFromStatus, networkFailure, withTimeout, type ChannelReader, type ChannelSender, type Fetch,
+  type FindSentResult, type OutgoingMessage, type SendResult,
 } from './types.ts';
 
 const TIMEOUT_MS = 20_000;
+const UNREADABLE_2XX = 'Unipile respondió 2xx con un cuerpo que no se pudo leer: enviado sin id del proveedor.';
+
+/** El JSON de una respuesta 2xx, o null si no se puede leer (nunca lanza: un 2xx es un envío). */
+function parseSent<T>(text: string): T | null {
+  try {
+    const v = JSON.parse(text) as unknown;
+    return v && typeof v === 'object' ? (v as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Un id propio para un envío que el proveedor aceptó sin decir el suyo. */
+function syntheticId(m: OutgoingMessage): string {
+  return `unipile:${m.touchId}.${m.attempt}`;
+}
 
 export interface UnipileOptions {
   dsn: string | undefined;
@@ -85,12 +109,14 @@ export class UnipileChannel implements ChannelSender, ChannelReader {
     return { 'X-API-KEY': this.#o.accessToken!, accept: 'application/json' };
   }
 
-  async #call(path: string, init: RequestInit, signal?: AbortSignal): Promise<{ res: Response; text: string } | SendResult> {
+  /** Una llamada. `sends`: la que envía el mensaje (un corte después de hacerla es ambiguo). */
+  async #call(path: string, init: RequestInit, signal?: AbortSignal, sends = false): Promise<{ res: Response; text: string } | SendResult> {
+    if (sends && signal?.aborted) return abortedBeforeSend();
     try {
       const res = await this.#fetch(this.#url(path), { ...init, headers: { ...this.#headers(), ...(init.headers as Record<string, string>) }, signal: withTimeout(signal, TIMEOUT_MS) });
       return { res, text: await res.text() };
     } catch (err) {
-      return networkFailure(err);
+      return networkFailure(err, { sends });
     }
   }
 
@@ -102,11 +128,14 @@ export class UnipileChannel implements ChannelSender, ChannelReader {
     if (m.stepType !== 'linkedin_connect' && m.reply?.threadRef) {
       const form = new FormData();
       form.set('text', m.body);
-      const r = await this.#call(`/chats/${encodeURIComponent(m.reply.threadRef)}/messages`, { method: 'POST', body: form }, signal);
+      const r = await this.#call(`/chats/${encodeURIComponent(m.reply.threadRef)}/messages`, { method: 'POST', body: form }, signal, true);
       if ('ok' in r) return r;
       if (!r.res.ok) return unipileFailure(r.res.status, r.text);
-      const j = JSON.parse(r.text) as { message_id?: string };
-      return { ok: true, providerMessageId: j.message_id ?? `${m.reply.threadRef}:${m.touchId}`, threadRef: m.reply.threadRef, messageIdRfc: null };
+      const j = parseSent<{ message_id?: string }>(r.text);
+      return {
+        ok: true, providerMessageId: j?.message_id ?? syntheticId(m), threadRef: m.reply.threadRef, messageIdRfc: null,
+        ...(j ? {} : { warning: UNREADABLE_2XX }),
+      };
     }
 
     const identifier = profileIdentifier(this.channel, m.recipient);
@@ -114,7 +143,9 @@ export class UnipileChannel implements ChannelSender, ChannelReader {
     const profile = await this.#call(`/users/${encodeURIComponent(identifier)}?account_id=${encodeURIComponent(accountId)}`, { method: 'GET' }, signal);
     if ('ok' in profile) return profile;
     if (!profile.res.ok) return unipileFailure(profile.res.status, profile.text);
-    const providerId = (JSON.parse(profile.text) as { provider_id?: string }).provider_id;
+    const perfil = parseSent<{ provider_id?: string }>(profile.text);
+    if (!perfil) return { ok: false, kind: 'transient', code: 'provider_error', message: 'Unipile devolvió un perfil ilegible.' };
+    const providerId = perfil.provider_id;
     if (!providerId) return { ok: false, kind: 'permanent', code: 'invalid_recipient', message: `Unipile no devolvió provider_id para ${identifier}.` };
 
     if (m.stepType === 'linkedin_connect') {
@@ -122,23 +153,48 @@ export class UnipileChannel implements ChannelSender, ChannelReader {
         method: 'POST', headers: { 'content-type': 'application/json' },
         // La nota de una invitación de LinkedIn admite 300 caracteres (§5.1).
         body: JSON.stringify({ provider_id: providerId, account_id: accountId, message: m.body.slice(0, 300) }),
-      }, signal);
+      }, signal, true);
       if ('ok' in r) return r;
       if (!r.res.ok) return unipileFailure(r.res.status, r.text);
-      const j = JSON.parse(r.text) as { invitation_id?: string };
-      return { ok: true, providerMessageId: j.invitation_id ?? `invite:${providerId}:${m.touchId}`, threadRef: null, messageIdRfc: null };
+      const j = parseSent<{ invitation_id?: string }>(r.text);
+      return {
+        ok: true, providerMessageId: j?.invitation_id ?? `invite:${providerId}:${m.touchId}.${m.attempt}`, threadRef: null, messageIdRfc: null,
+        ...(j ? {} : { warning: UNREADABLE_2XX }),
+      };
     }
 
     const form = new FormData();
     form.set('account_id', accountId);
     form.set('text', m.body);
     form.set('attendees_ids', providerId);
-    const r = await this.#call('/chats', { method: 'POST', body: form }, signal);
+    const r = await this.#call('/chats', { method: 'POST', body: form }, signal, true);
     if ('ok' in r) return r;
     if (!r.res.ok) return unipileFailure(r.res.status, r.text);
-    const j = JSON.parse(r.text) as { chat_id?: string; message_id?: string };
-    if (!j.chat_id) return { ok: false, kind: 'transient', code: 'provider_error', message: 'Unipile no devolvió chat_id.' };
+    // Un 2xx es un envío, aunque el cuerpo no se pueda leer o no traiga
+    // chat_id: reenviarlo sería escribirle dos veces a la marca.
+    const j = parseSent<{ chat_id?: string; message_id?: string }>(r.text);
+    if (!j?.chat_id) {
+      return { ok: true, providerMessageId: j?.message_id ?? syntheticId(m), threadRef: null, messageIdRfc: null, warning: UNREADABLE_2XX };
+    }
     return { ok: true, providerMessageId: j.message_id ?? `${j.chat_id}:${m.touchId}`, threadRef: j.chat_id, messageIdRfc: null };
+  }
+
+  /**
+   * ¿Salió el intento anterior? Solo se puede saber en un chat que ya
+   * existe: se leen sus mensajes y se busca uno nuestro con el mismo
+   * texto. Un chat nuevo o una invitación no se pueden comprobar sin
+   * riesgo: 'unknown', y el despachador lo deja a una persona.
+   */
+  async findSent(m: OutgoingMessage, signal?: AbortSignal): Promise<FindSentResult> {
+    if (!this.configured()) return { found: 'unknown', reason: 'Unipile no está configurado' };
+    const chat = m.stepType !== 'linkedin_connect' ? m.reply?.threadRef : null;
+    if (!chat) return { found: 'unknown', reason: 'un chat nuevo o una invitación no se pueden comprobar en Unipile' };
+    const r = await this.#call(`/chats/${encodeURIComponent(chat)}/messages`, { method: 'GET' }, signal);
+    if ('ok' in r || !r.res.ok) return { found: 'unknown', reason: 'no se pudo leer el chat' };
+    const j = parseSent<{ items?: Array<{ id: string; text?: string | null; is_sender?: number | boolean }> }>(r.text);
+    if (!j) return { found: 'unknown', reason: 'la lectura del chat no se pudo interpretar' };
+    const mine = (j.items ?? []).find((i) => Boolean(i.is_sender) && (i.text ?? '').trim() === m.body.trim());
+    return mine ? { found: true, proof: { providerMessageId: mine.id, threadRef: chat, messageIdRfc: null } } : { found: false };
   }
 
   async readThread(thread: OpenThread, signal?: AbortSignal): Promise<InboundMessage[]> {

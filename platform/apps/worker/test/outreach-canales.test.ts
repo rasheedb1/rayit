@@ -102,8 +102,13 @@ test('Gmail traduce los errores: 401 es la cuenta, la red es transitoria, invali
   const s = secrets(new Date(NOW.getTime() + 3600_000));
   const r401 = await new GmailChannel({ secrets: s, fetch: recorded([['POST https://gmail', 401, GMAIL.unauthorized]]).fetch, now: () => NOW }).send(email());
   assert.deepEqual(!r401.ok && [r401.kind, r401.code, r401.account], ['permanent', 'account_auth', 'needs_reconnect']);
+  // Un corte sin código (timeout, conexión cerrada) con el POST ya hecho: pudo salir. Ambiguo.
   const red = await new GmailChannel({ secrets: s, fetch: async () => { throw new TypeError('fetch failed'); }, now: () => NOW }).send(email());
-  assert.deepEqual(!red.ok && [red.kind, red.code], ['transient', 'network']);
+  assert.deepEqual(!red.ok && [red.kind, red.code, red.ambiguous], ['transient', 'network_ambiguous', true]);
+  // Sin conexión (ECONNREFUSED): la petición nunca salió. Transitorio y sin ambigüedad.
+  const refused = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
+  const antes = await new GmailChannel({ secrets: s, fetch: async () => { throw refused; }, now: () => NOW }).send(email());
+  assert.deepEqual(!antes.ok && [antes.kind, antes.code, antes.ambiguous], ['transient', 'network', false]);
   const r503 = await new GmailChannel({ secrets: s, fetch: recorded([['POST https://gmail', 503, {}]]).fetch, now: () => NOW }).send(email());
   assert.deepEqual(!r503.ok && r503.kind, 'transient');
   const grant = await new GmailChannel({
@@ -190,6 +195,53 @@ test('Unipile lee del chat solo lo que escribió la otra parte y no conocemos', 
   assert.deepEqual(msgs.map((m) => [m.providerMessageId, m.body]), [['msg-demo-0003', 'Gracias, Laura. Pásame tu media kit.']]);
 });
 
+test('Gmail: un 2xx ilegible es un envío (lo busca por su Message-ID), y findSent dice si un intento salió', async () => {
+  const s = secrets(new Date(NOW.getTime() + 3600_000));
+  const ilegible: Fetch = async (url, init) => {
+    const method = init?.method ?? 'GET';
+    if (method === 'POST') return new Response('<html>ok</html>', { status: 200 });
+    if (url.includes('/messages?q=')) return new Response(JSON.stringify({ messages: [{ id: '18f2a9c4d1e0b777', threadId: '18f2a9c4d1e0b001' }] }), { status: 200 });
+    throw new Error(`Sin grabación para ${method} ${url}`);
+  };
+  const r = await new GmailChannel({ secrets: s, fetch: ilegible, now: () => NOW }).send(email());
+  assert.equal(r.ok, true, 'nunca un fallo que se reintenta');
+  assert.equal(r.ok && r.providerMessageId, '18f2a9c4d1e0b777');
+  assert.match(r.ok ? r.warning ?? '' : '', /sin cuerpo legible/);
+
+  const busca = recorded([['GET https://gmail.googleapis.com/gmail/v1/users/me/messages?q=', 200, { resultSizeEstimate: 0 }]]);
+  const no = await new GmailChannel({ secrets: s, fetch: busca.fetch, now: () => NOW }).findSent(email({ attempt: 2 }));
+  assert.deepEqual(no, { found: false });
+  assert.match(decodeURIComponent(busca.calls[0]!.url), /rfc822msgid:0000000b-0000-4000-8000-000000070001\.2@mail\.oncue\.app/);
+  const caido = await new GmailChannel({ secrets: s, fetch: recorded([['GET https://gmail', 500, {}]]).fetch, now: () => NOW }).findSent(email());
+  assert.equal(caido.found, 'unknown');
+});
+
+test('Unipile: un 2xx ilegible es un envío sin id; findSent lee el chat o, si no puede, no lo sabe', async () => {
+  const roto: Fetch = async () => new Response('not json', { status: 201 });
+  const r = await new UnipileChannel('linkedin', { ...UNI, fetch: roto }).send(linkedin({ reply: { threadRef: 'chat-demo-0001', messageIdRfc: null } }));
+  assert.equal(r.ok, true);
+  assert.equal(r.ok && r.providerMessageId, 'unipile:0000000b-0000-4000-8000-000000070001.1');
+  assert.ok(r.ok && r.warning);
+  const chat = recorded([['GET https://api9.unipile.test:13111/api/v1/chats/chat-demo-0001/messages', 200, {
+    items: [{ id: 'msg-x', text: 'Hola, Sofía. Te escribo por LinkedIn.', is_sender: 1 }],
+  }]]);
+  const uni = new UnipileChannel('linkedin', { ...UNI, fetch: chat.fetch });
+  const si = await uni.findSent(linkedin({ body: 'Hola, Sofía. Te escribo por LinkedIn.', reply: { threadRef: 'chat-demo-0001', messageIdRfc: null } }));
+  assert.deepEqual(si, { found: true, proof: { providerMessageId: 'msg-x', threadRef: 'chat-demo-0001', messageIdRfc: null } });
+  const otro = await uni.findSent(linkedin({ body: 'Otro texto', reply: { threadRef: 'chat-demo-0001', messageIdRfc: null } }));
+  assert.deepEqual(otro, { found: false });
+  assert.equal((await uni.findSent(linkedin())).found, 'unknown', 'un chat nuevo no se puede comprobar');
+});
+
+test('buildChannels: el canal falso nunca en producción', () => {
+  const avisos: string[] = [];
+  const logger = { warn: (msg: string) => { avisos.push(msg); } };
+  const prod = buildChannels({ env: { OUTREACH_CHANNELS: 'fake', NODE_ENV: 'production' }, secrets: new InMemorySecretStore(), logger });
+  assert.equal(prod.mode, 'real');
+  assert.match(avisos[0] ?? '', /se ignora en producción/);
+  assert.equal(buildChannels({ env: {}, secrets: new InMemorySecretStore(), mode: 'fake' }).mode, 'fake');
+});
+
 test('buildChannels: falso o real según OUTREACH_CHANNELS, y la URL del enlace de baja', () => {
   const s = new InMemorySecretStore();
   const fake = buildChannels({ env: { OUTREACH_CHANNELS: 'fake' }, secrets: s });
@@ -211,6 +263,7 @@ const CLAIMED_AT = new Date('2026-09-24T14:58:00Z');
 function ctx(over: Partial<SendContext> = {}): SendContext {
   return {
     touchId: 't', workspaceId: 'ws', status: 'processing', claimedAt: CLAIMED_AT, channel: 'email', stepType: 'email', attempt: 1,
+    stepDayOffset: 0, stepOrderInDay: 0, unconfirmedAttempt: null,
     subject: 'Hola', body: 'Hola, Sofía.', recipient: 'sofia@vitale.test', enrollmentId: 'e', contactId: 'c', dealId: null,
     contactName: 'Sofía', companyName: 'Vitalé', enrollmentStatus: 'active', resumeAt: null, sequenceStatus: 'active',
     optedOut: false, enabled: true, postalAddress: 'Calle 93', requireOptoutLink: true, workspaceName: 'Laura', locale: 'es-CO',
@@ -228,7 +281,16 @@ test('decideBeforeSend relee todo en la transacción del envío', () => {
   assert.deepEqual(decideBeforeSend(ctx({ enrollmentStatus: 'replied' }), CLAIMED_AT, NOW), { kind: 'cancel', reason: 'replied' });
   const paused = decideBeforeSend(ctx({ enrollmentStatus: 'paused' }), CLAIMED_AT, NOW);
   assert.equal(paused.kind, 'postpone');
-  assert.equal(decideBeforeSend(ctx({ account: { ...ctx().account!, status: 'needs_reconnect' } }), CLAIMED_AT, NOW).kind, 'fail');
+  // La cuenta cayó entre el reclamo y el envío: el mensaje espera, no falla.
+  const caida = decideBeforeSend(ctx({ account: { ...ctx().account!, status: 'needs_reconnect' } }), CLAIMED_AT, NOW);
+  assert.deepEqual(caida.kind === 'postpone' && caida.reason, 'account_unavailable');
+  assert.ok(caida.kind === 'postpone' && caida.until.getTime() > NOW.getTime());
+  assert.deepEqual(decideBeforeSend(ctx({ enrollmentStatus: 'bounced' }), CLAIMED_AT, NOW), { kind: 'cancel', reason: 'bounced' });
+  assert.deepEqual(decideBeforeSend(ctx({ enrollmentStatus: 'completed' }), CLAIMED_AT, NOW), { kind: 'cancel', reason: 'completed' });
+  // «Como te comenté ayer…» sobre un correo que no salió: retenido, no huérfano.
+  const huerfano = decideBeforeSend(ctx({ stepType: 'email_reply', subject: null, previous: null }), CLAIMED_AT, NOW);
+  assert.equal(huerfano.kind, 'hold');
+  assert.match(huerfano.kind === 'hold' ? huerfano.reason : '', /no salió/);
   assert.equal(decideBeforeSend(ctx({ body: 'Hola, {{first_name}}' }), CLAIMED_AT, NOW).kind, 'hold');
   assert.equal(decideBeforeSend(ctx({ postalAddress: null }), CLAIMED_AT, NOW).kind, 'hold');
 });

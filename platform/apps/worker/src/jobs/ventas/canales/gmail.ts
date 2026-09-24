@@ -15,15 +15,24 @@
  * needs_reconnect. Un fallo NUESTRO (el almacén no tiene el secreto) no
  * cambia la cuenta, como en oauth.refresh.
  *
- * Cuando VEN-9 deje packages/connectors/gmail.ts, este adaptador pasa a
- * delegar en él; la interfaz ChannelSender no cambia.
+ * Duplicados (r2): un timeout o un corte DESPUÉS de hacer el POST es
+ * ambiguo (networkFailure con sends), y antes del siguiente intento el
+ * despachador llama a findSent: si el intento anterior está en el buzón
+ * (rfc822msgid:), se registra como enviado y no se reenvía. Un 2xx con
+ * un cuerpo ilegible es un envío, nunca un fallo.
+ *
+ * Deuda conocida (VEN-10 r2, anotada en el backlog): la rama VEN-9-canales
+ * trae su propio cliente de Gmail en packages/connectors (gmail.ts,
+ * outreach/mime.ts, errors.ts, fake-gmail). Cuando se integre, este
+ * archivo y mime.ts se reducen a un adaptador fino ChannelSender → ese
+ * cliente, sin su propia traducción de errores ni su propio MIME.
  */
 import type { SecretStore } from '@mc/connectors';
 import type { InboundMessage, OpenThread } from '@mc/db/queries/outreach';
 import { buildMime, messageIdFor, toBase64Url } from './mime.ts';
 import {
-  failureFromStatus, networkFailure, withTimeout, type ChannelReader, type ChannelSender, type Fetch, type OutgoingMessage,
-  type SendResult,
+  abortedBeforeSend, failureFromStatus, networkFailure, withTimeout, type ChannelReader, type ChannelSender, type Fetch,
+  type FindSentResult, type OutgoingMessage, type SendResult,
 } from './types.ts';
 
 export const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -103,13 +112,14 @@ export class GmailChannel implements ChannelSender, ChannelReader {
   async send(m: OutgoingMessage, signal?: AbortSignal): Promise<SendResult> {
     const tok = await this.#token(m.account.secretRef, signal);
     if (!tok.ok) return tok.result;
-    const ownId = messageIdFor(m.touchId, m.attempt, this.#o.messageIdDomain ?? 'mail.oncue.app');
+    const ownId = this.#ownId(m);
     const raw = toBase64Url(buildMime({
       from: m.account.providerAccountId, fromName: m.account.displayName, to: m.recipient, toName: m.recipientName,
       subject: m.subject, body: m.body, messageId: ownId, inReplyTo: m.reply?.messageIdRfc ?? null,
       unsubscribeUrl: m.unsubscribeUrl, date: (this.#o.now ?? (() => new Date()))(),
     }));
     const auth = { authorization: `Bearer ${tok.token}` };
+    if (signal?.aborted) return abortedBeforeSend();
     let res: Response;
     try {
       res = await this.#fetch(`${GMAIL_API}/messages/send`, {
@@ -119,10 +129,27 @@ export class GmailChannel implements ChannelSender, ChannelReader {
         signal: withTimeout(signal, TIMEOUT_MS),
       });
     } catch (err) {
-      return networkFailure(err);
+      // Un timeout o un corte con la petición ya enviada es ambiguo: Gmail pudo haberlo mandado.
+      return networkFailure(err, { sends: true });
     }
     if (!res.ok) return failureFromStatus(res.status, await res.text().catch(() => ''), 'Gmail');
-    const sent = (await res.json()) as { id: string; threadId: string };
+    let sent: { id?: string; threadId?: string } | null = null;
+    try {
+      sent = (await res.json()) as { id?: string; threadId?: string };
+    } catch {
+      sent = null;
+    }
+    if (!sent?.id) {
+      // Gmail dijo 2xx: el correo SALIÓ aunque la respuesta no se pueda
+      // leer. Nunca se reenvía; se busca por su Message-ID para tener el
+      // id y el hilo, y si tampoco se puede, queda enviado sin ellos.
+      const found = await this.findSent(m, signal);
+      if (found.found === true) return { ok: true, ...found.proof, warning: 'Gmail respondió 2xx sin cuerpo legible; se tomó el id de la búsqueda.' };
+      return {
+        ok: true, providerMessageId: `gmail-rfc822:${ownId}`, threadRef: null, messageIdRfc: ownId,
+        warning: 'Gmail respondió 2xx sin cuerpo legible y la búsqueda no lo encontró: enviado sin id de Gmail ni hilo.',
+      };
+    }
     // El Message-ID que quedó. Si esta lectura falla, el correo YA salió:
     // se registra con el propio, que es el que se puso en la cabecera.
     let messageIdRfc = ownId;
@@ -137,7 +164,35 @@ export class GmailChannel implements ChannelSender, ChannelReader {
     } catch {
       // Se queda con el propio.
     }
-    return { ok: true, providerMessageId: sent.id, threadRef: sent.threadId, messageIdRfc };
+    return { ok: true, providerMessageId: sent.id, threadRef: sent.threadId ?? null, messageIdRfc };
+  }
+
+  /**
+   * ¿Salió el intento `m.attempt`? Se busca en el buzón por su Message-ID
+   * propio (rfc822msgid:, que Gmail conserva en la copia enviada). Sin
+   * token o sin respuesta legible, no se sabe: 'unknown'.
+   */
+  async findSent(m: OutgoingMessage, signal?: AbortSignal): Promise<FindSentResult> {
+    const tok = await this.#token(m.account.secretRef, signal);
+    if (!tok.ok) return { found: 'unknown', reason: 'sin token de Gmail para buscar el envío' };
+    const ownId = this.#ownId(m);
+    const q = `rfc822msgid:${ownId.replace(/^<|>$/g, '')}`;
+    try {
+      const res = await this.#fetch(`${GMAIL_API}/messages?q=${encodeURIComponent(q)}&maxResults=1&includeSpamTrash=true`, {
+        headers: { authorization: `Bearer ${tok.token}` }, signal: withTimeout(signal, TIMEOUT_MS),
+      });
+      if (!res.ok) return { found: 'unknown', reason: `Gmail respondió ${res.status} a la búsqueda` };
+      const j = (await res.json()) as { messages?: Array<{ id?: string; threadId?: string }> };
+      const hit = j.messages?.find((x) => typeof x.id === 'string');
+      if (!hit?.id) return { found: false };
+      return { found: true, proof: { providerMessageId: hit.id, threadRef: hit.threadId ?? null, messageIdRfc: ownId } };
+    } catch (err) {
+      return { found: 'unknown', reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  #ownId(m: OutgoingMessage): string {
+    return messageIdFor(m.touchId, m.attempt, this.#o.messageIdDomain ?? 'mail.oncue.app');
   }
 
   async readThread(thread: OpenThread, signal?: AbortSignal): Promise<InboundMessage[]> {

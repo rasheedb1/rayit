@@ -9,11 +9,16 @@
  *     Gmail);
  *   · `failNext(n, falla)` hace que los próximos n envíos fallen con lo
  *     que se le diga (transitorio o permanente);
+ *   · `deliverThenFail(n)` hace que los próximos n envíos SALGAN pero
+ *     respondan con un corte ambiguo (el timeout después del POST): es
+ *     lo que findSent tiene que descubrir para no duplicar;
+ *   · `unverifiable` hace que findSent no lo sepa decir ('unknown');
+ *   · `slow(ms)` hace que cada envío tarde (para cortar la corrida a mitad);
  *   · `reply(threadRef, texto)` deja una respuesta de la otra parte en el
  *     hilo, que readThread entrega una vez.
  */
 import type { InboundMessage, OpenThread, SendFailure } from '@mc/db/queries/outreach';
-import type { ChannelReader, ChannelSender, OutgoingMessage, SendResult } from './types.ts';
+import type { ChannelReader, ChannelSender, FindSentResult, OutgoingMessage, SendResult } from './types.ts';
 import type { DispatchChannel } from '@mc/db/queries/outreach';
 
 export interface FakeSent extends OutgoingMessage {
@@ -25,7 +30,10 @@ export interface FakeSent extends OutgoingMessage {
 export class FakeChannel implements ChannelSender, ChannelReader {
   readonly channel: DispatchChannel;
   readonly sent: FakeSent[] = [];
-  readonly #failures: SendFailure[] = [];
+  readonly #failures: Array<SendFailure & { delivered?: boolean }> = [];
+  #delayMs = 0;
+  /** findSent responde 'unknown' (un canal que no sabe comprobar). */
+  unverifiable = false;
   readonly #inbox = new Map<string, InboundMessage[]>();
   #seq = 0;
 
@@ -42,9 +50,37 @@ export class FakeChannel implements ChannelSender, ChannelReader {
     for (let i = 0; i < times; i++) this.#failures.push(failure);
   }
 
+  /** Los próximos `times` envíos salen, pero la respuesta se corta: el resultado es ambiguo. */
+  deliverThenFail(times: number): void {
+    for (let i = 0; i < times; i++) {
+      this.#failures.push({ kind: 'transient', code: 'network_ambiguous', message: 'timeout después del POST', ambiguous: true, delivered: true });
+    }
+  }
+
+  /** Cada envío tarda `ms`, como un proveedor lento. */
+  slow(ms: number): void {
+    this.#delayMs = ms;
+  }
+
   async send(message: OutgoingMessage): Promise<SendResult> {
+    if (this.#delayMs > 0) await new Promise((r) => setTimeout(r, this.#delayMs));
     const failure = this.#failures.shift();
-    if (failure) return { ok: false, ...failure };
+    if (failure) {
+      const { delivered, ...rest } = failure;
+      if (delivered) this.#deliver(message);
+      return { ok: false, ...rest };
+    }
+    const proof = this.#deliver(message);
+    return { ok: true, ...proof };
+  }
+
+  async findSent(message: OutgoingMessage): Promise<FindSentResult> {
+    if (this.unverifiable) return { found: 'unknown', reason: 'el canal falso no sabe comprobarlo' };
+    const hit = this.sent.find((s) => s.touchId === message.touchId && s.attempt === message.attempt);
+    return hit ? { found: true, proof: { providerMessageId: hit.providerMessageId, threadRef: hit.threadRef, messageIdRfc: hit.messageIdRfc } } : { found: false };
+  }
+
+  #deliver(message: OutgoingMessage): { providerMessageId: string; threadRef: string; messageIdRfc: string | null } {
     this.#seq += 1;
     const n = String(this.#seq).padStart(4, '0');
     const prev = this.sent.find((s) => s.recipient === message.recipient);
@@ -52,7 +88,7 @@ export class FakeChannel implements ChannelSender, ChannelReader {
     const providerMessageId = `fake-${this.channel}-${n}`;
     const messageIdRfc = this.channel === 'email' ? `<${providerMessageId}@fake.oncue.test>` : null;
     this.sent.push({ ...message, providerMessageId, threadRef, messageIdRfc });
-    return { ok: true, providerMessageId, threadRef, messageIdRfc };
+    return { providerMessageId, threadRef, messageIdRfc };
   }
 
   /** La otra parte responde en un hilo. */

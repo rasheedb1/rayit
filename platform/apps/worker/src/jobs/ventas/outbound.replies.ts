@@ -1,18 +1,23 @@
 /**
  * outbound.replies · las respuestas de los hilos abiertos (VEN-10).
  *
- * Cada cinco minutos (0038), como respaldo del webhook de Unipile y del
+ * Cada cinco minutos (0041), como respaldo del webhook de Unipile y del
  * aviso de Gmail: lee los hilos a los que se escribió en los últimos
- * treinta días y que siguen vivos, pide a cada canal lo que llegó y no
- * conocemos, y por cada mensaje nuevo, en una transacción:
+ * treinta días (también los de cadencias que ya respondieron o
+ * completaron: la baja puede llegar en el segundo mensaje), pide a cada
+ * canal lo que llegó y no conocemos, y por cada mensaje nuevo, en una
+ * transacción (recordInbound):
  *
  *   · lo escribe en outbound_message (inbound; un mensaje ya leído por
  *     el webhook no se duplica: índice único por id del proveedor);
  *   · si pide la baja (detector de catorce expresiones, @mc/core), marca
- *     contact.opted_out, el enrolamiento opted_out y cancela lo pendiente;
- *   · si no, el enrolamiento pasa a replied y cancela lo pendiente
- *     (scheduled y held). Lo que ya está en processing lo cancela el
- *     despachador al releer el enrolamiento antes de enviar.
+ *     la ficha y las de su correo, y cancela todo lo suyo pendiente en
+ *     cualquier secuencia, como el enlace de baja;
+ *   · si no y la cadencia seguía viva, pasa a replied y cancela lo
+ *     pendiente (scheduled y held). Lo que ya está en processing lo
+ *     cancela el despachador al releer el enrolamiento antes de enviar;
+ *   · si ya había respondido, el mensaje queda en la conversación y no
+ *     se vuelve a avisar.
  *
  * La intención (interesado, ahora no, fuera de oficina) la clasifica
  * VEN-14 sobre lo que queda aquí. Un hilo que no se puede leer (cuenta
@@ -97,7 +102,7 @@ export async function runReplies(db: MotorDb, deps: RepliesDeps): Promise<Replie
 export const repliesJob = defineJob(
   REPLIES_JOB_ID,
   async (_payload, ctx) => {
-    const channels = buildChannels({ env: ctx.env, secrets: ctx.secrets });
+    const channels = buildChannels({ env: ctx.env, secrets: ctx.secrets, logger: ctx.logger });
     const r = await runReplies(motorDbFromJob(ctx.db), { readers: channels.readers, now: () => ctx.now(), logger: ctx.logger, signal: ctx.signal });
     ctx.logger.info('respuestas de cadencias', { threads: r.threads, inbound: r.inbound, optOuts: r.optOuts, unreadable: r.unreadable.length });
     return {

@@ -10,18 +10,19 @@
  *   2. Con la política encendida, la cuenta de LinkedIn de la demo
  *      reconectada (el seed la deja en needs_reconnect; aquí se hace lo
  *      que haría el callback de Unipile) y el reloj en la hora del toque
- *      programado (Vitalé, mañana a las 10:30 locales): el toque sale
- *      por el buzón falso y outbound_touch queda en «sent» con el id del
- *      mensaje y el hilo.
+ *      programado (Vitalé, mañana a las 10:30 locales; si mañana cae en
+ *      fin de semana, el lunes al abrir la ventana): el toque sale por el
+ *      buzón falso y outbound_touch queda en «sent» con el id del mensaje
+ *      y el hilo.
  *
- * Sin la reconexión el toque no se pierde en silencio: pasa a failed
- * con blocked_reason = account_unavailable y un aviso (lo cubre la
- * prueba de punta a punta).
+ * Sin la reconexión el toque no se pierde: espera a que la cuenta vuelva,
+ * con un aviso por canal y día (lo cubre la prueba de punta a punta).
  *
  * Es el mismo recorrido que se pide contra Supabase con el seed. Sirve
- * mientras 0037 y 0038 no estén aplicadas allá, y después para enseñar
+ * mientras 0037 y 0041 no estén aplicadas allá, y después para enseñar
  * el motor sin tocar datos compartidos.
  */
+import { DEFAULT_SEND_WINDOW, nextWindowSlot } from '@mc/core';
 import { enableOutreach } from '@mc/db/queries/outreach';
 import { fakeChannels } from './canales/fake.ts';
 import { motorDbFromClient } from './motor-db.ts';
@@ -29,6 +30,8 @@ import { runDispatch, type DispatchReport } from './outbound.dispatch.ts';
 
 /** El workspace de la demo (Laura · Cocina fácil), el del seed 0002. */
 export const DEMO_WORKSPACE_ID = '00000002-0000-4000-8000-000000000001';
+/** Los workspaces de demostración: los únicos donde el canal falso puede correr contra una base compartida. */
+export const DEMO_WORKSPACE_IDS = [DEMO_WORKSPACE_ID] as const;
 
 export interface DemoTouch {
   id: string;
@@ -66,15 +69,20 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
     // pasadas se pone un minuto después, cuando ya está vencido. Así lo
     // único que cambia entre una y otra es el interruptor.
     const next = await db.asWorker(async (tx) =>
-      (await tx.query<{ scheduled_for: Date }>(
-        `SELECT scheduled_for FROM outbound_touch
-          WHERE workspace_id = $1 AND status = 'scheduled'
-          ORDER BY scheduled_for LIMIT 1`,
+      (await tx.query<{ scheduled_for: Date; tz: string; w_start: string | null; w_end: string | null }>(
+        `SELECT t.scheduled_for, w.timezone AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end
+           FROM outbound_touch t JOIN workspace w ON w.id = t.workspace_id
+           LEFT JOIN outbound_policy p ON p.workspace_id = t.workspace_id
+          WHERE t.workspace_id = $1 AND t.status = 'scheduled'
+          ORDER BY t.scheduled_for LIMIT 1`,
         [DEMO_WORKSPACE_ID],
-      )).rows[0]?.scheduled_for ?? null,
+      )).rows[0] ?? null,
     );
     if (!next) throw new Error('El seed no dejó ningún toque programado en el workspace de la demo.');
-    const clock = new Date(new Date(next).getTime() + 60_000);
+    // Un minuto después, y dentro de la ventana laboral: el despachador no
+    // envía de noche ni en fin de semana (si mañana es sábado, el lunes).
+    const window = next.w_start && next.w_end ? { start: next.w_start, end: next.w_end } : DEFAULT_SEND_WINDOW;
+    const clock = nextWindowSlot(new Date(new Date(next.scheduled_for).getTime() + 60_000), next.tz, window);
 
     // La dirección postal del pie (0037: sin ella el interruptor no se
     // enciende; la de la demo dice que lo es) y la cuenta reconectada.
@@ -115,7 +123,7 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
 export function resumenDemo(r: DemoMotorReport): string {
   const lineas = [
     'Demo del motor sobre Postgres embebido con las migraciones y los seeds del repositorio, canal falso.',
-    `Reloj en ${r.clock.toISOString()} (un minuto después del toque programado), ${r.reconnected} cuenta(s) reconectada(s).`,
+    `Reloj en ${r.clock.toISOString()} (el toque programado ya vencido, dentro de la ventana laboral), ${r.reconnected} cuenta(s) reconectada(s).`,
     `1. Política del seed (apagada): ${r.off.claim.claimed} reclamado(s), ${r.off.sent.length} enviado(s).`,
     `2. Política encendida: ${r.on.claim.claimed} reclamado(s), ${r.on.sent.length} enviado(s), ` +
       `${r.on.retried.length} a reintento, ${r.on.failed.length} fallido(s), ${r.on.held.length} retenido(s).`,

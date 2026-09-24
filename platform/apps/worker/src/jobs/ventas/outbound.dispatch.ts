@@ -1,44 +1,50 @@
 /**
  * outbound.dispatch · el despachador de cadencias (VEN-10).
  *
- * Cada dos minutos (0038), en tres tiempos:
+ * Cada dos minutos (0041), en cuatro tiempos:
  *
- *   1. Zombis. Lo que lleva más de cinco minutos en processing pasa a
- *      failed y avisa, sin reenviar: el proveedor pudo haberlo enviado
- *      sin que nadie lo confirmara, y un correo repetido a una marca es
- *      peor que uno perdido (la persona lo ve y decide).
- *   2. Reclamo. Hasta cincuenta toques vencidos pasan a processing en
- *      UNA transacción que se CONFIRMA antes de llamar a nadie: con su
- *      cuenta, su dirección, su intento y el enlace de baja de ese
- *      intento (0037 §4.5). Ahí se cuentan los topes: si uno no da, el
- *      toque va al siguiente día hábil sin gastar un intento.
- *   3. Envío. Por cada toque, una transacción: relee el toque bloqueado,
- *      su enrolamiento, la ficha, la lista global, el interruptor y la
- *      cuenta (decideBeforeSend); si todo sigue en pie, compone el
- *      mensaje, lo envía por el adaptador de su canal y escribe el
- *      resultado. Transitorio → reintento con espera creciente hasta
- *      cinco; permanente (rebote, cuenta caída) → failed y aviso.
+ *   1. Zombis. Lo que lleva más de cinco minutos en processing: si nunca
+ *      llegó al proveedor (sin send_started_at), vuelve a la cola; si
+ *      llegó, pasa a failed y avisa, sin reenviar (un correo repetido a
+ *      una marca es peor que uno perdido; la persona lo ve y decide).
+ *   2. Reclamo. Hasta cincuenta toques vencidos, o los que quepan en el
+ *      tiempo de la corrida, pasan a processing en UNA transacción que se
+ *      CONFIRMA antes de llamar a nadie (claim.ts: ventana laboral, orden
+ *      de los pasos, cuenta conectada, topes).
+ *   3. Envío, uno por uno: se marca send_started_at (su propia
+ *      transacción) y, en otra, se relee todo (decideBeforeSend), se
+ *      compone el mensaje, se envía por el adaptador de su canal y se
+ *      escribe el resultado. Si el intento anterior quedó ambiguo (un
+ *      timeout después de enviar), primero se pregunta al proveedor si
+ *      salió (findSent): sí → enviado, sin reenviar; no se sabe → retenido.
+ *   4. Lo que no se llegó a intentar (se acabó el tiempo, el worker se
+ *      apaga) vuelve a la cola con su intento descontado y su plaza
+ *      devuelta: no queda en processing para que la siguiente corrida lo
+ *      tome por zombi.
  *
  * Un canal sin llaves (configured() = false) no se reclama: sus toques
- * esperan en la cola, y la salud los cuenta como vencidos.
- *
- * Con el interruptor apagado (outbound_policy.enabled = false) no se
- * reclama nada de ese workspace; disable_outreach ya canceló lo
- * pendiente al apagarlo.
+ * esperan en la cola, y la salud los cuenta como vencidos. Con el
+ * interruptor apagado (outbound_policy.enabled = false) no se reclama
+ * nada de ese workspace; disable_outreach ya canceló lo pendiente.
  */
 import { optoutUrl } from '@mc/core';
 import {
-  applyDecision, claimDueTouches, decideBeforeSend, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS, loadSendContext, recordFailure,
-  recordSent, rescueZombies, type ClaimedTouch, type ClaimReport, type DispatchChannel, type SendContext,
+  applyDecision, claimDueTouches, decideBeforeSend, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS, HOLD_REASONS, loadSendContext,
+  markSendStarted, recordFailure, recordSent, releaseUnattempted, rescueZombies, type ClaimedTouch, type ClaimReport,
+  type DispatchChannel, type SendContext,
 } from '@mc/db/queries/outreach';
 import type { Logger } from '../../runner/logger.ts';
 import { defineJob } from '../../runner/registry.ts';
 import { buildChannels } from './canales/index.ts';
-import type { ChannelSender, OutgoingMessage, SendResult } from './canales/types.ts';
+import type { ChannelSender, FindSentResult, OutgoingMessage, SendResult } from './canales/types.ts';
 import { withOptoutFooter } from './messages.ts';
 import { motorDbFromJob, type MotorDb } from './motor-db.ts';
 
 export const DISPATCH_JOB_ID = 'outbound.dispatch';
+/** Lo que el despachador cuenta por toque al decidir cuántos reclama (un proveedor normal tarda menos). */
+export const ESTIMATED_SEND_MS = 2_000;
+/** Margen antes del timeout del job: a partir de ahí no empieza envíos y devuelve lo que no intentó. */
+export const DEADLINE_MARGIN_MS = 30_000;
 
 export interface DispatchDeps {
   senders: Partial<Record<DispatchChannel, ChannelSender>>;
@@ -47,21 +53,38 @@ export interface DispatchDeps {
   /** La URL pública de la web, para el enlace de baja. Sin ella no sale ningún correo. */
   appUrl: string | null;
   logger?: Logger;
+  /** El job la aborta al vencer su timeout o al apagarse el worker. */
   signal?: AbortSignal;
   limit?: number;
   /** Solo un workspace (la corrida a mano). */
   workspaceId?: string;
+  /**
+   * Hasta cuándo puede EMPEZAR un envío, en tiempo real (el timeout del
+   * job menos DEADLINE_MARGIN_MS). También acota cuántos se reclaman:
+   * los que caben a ESTIMATED_SEND_MS cada uno. Sin él, sin límite.
+   */
+  deadline?: Date;
 }
 
 export interface DispatchReport {
-  zombies: { failed: number; canceled: number };
+  zombies: { failed: number; canceled: number; released: number };
   claim: Omit<ClaimReport, 'claimed'> & { claimed: number };
   sent: string[];
+  /** Un intento ambiguo anterior que el proveedor SÍ envió: registrado, sin reenviar. */
+  confirmed: string[];
   retried: string[];
   failed: string[];
+  /** La cuenta cayó al enviar: esperan a que se reconecte. */
+  waiting: string[];
   canceled: Array<{ touchId: string; reason: string }>;
   postponed: Array<{ touchId: string; reason: string }>;
   held: Array<{ touchId: string; reason: string }>;
+  /** Reclamados que no se llegaron a intentar (tiempo o apagado): de vuelta en la cola. */
+  released: string[];
+  /** Envíos que el proveedor aceptó con una respuesta a medias (sin id o sin hilo). */
+  warnings: Array<{ touchId: string; warning: string }>;
+  /** Toques que fallaron por un error nuestro (base, forma de una fila): quedan para los zombis. */
+  errors: Array<{ touchId: string; error: string }>;
   /** Canales que no se reclamaron porque les faltan las llaves. */
   notConfigured: DispatchChannel[];
 }
@@ -76,6 +99,13 @@ export function dispatchableChannels(deps: Pick<DispatchDeps, 'senders' | 'appUr
     else notConfigured.push(ch);
   }
   return { ready, notConfigured };
+}
+
+/** Cuántos toques reclamar: el tope de la corrida, o los que caben en el tiempo que queda. */
+export function claimBudget(deps: Pick<DispatchDeps, 'limit' | 'deadline'>, wallNow: number = Date.now()): number {
+  const limit = deps.limit ?? DISPATCH_BATCH_SIZE;
+  if (!deps.deadline) return limit;
+  return Math.max(0, Math.min(limit, Math.floor((deps.deadline.getTime() - wallNow) / ESTIMATED_SEND_MS)));
 }
 
 /** El asunto de una respuesta en el hilo: el del paso, o «Re: » + el del correo anterior. */
@@ -109,7 +139,21 @@ export function composeMessage(ctx: SendContext, claimed: ClaimedTouch, appUrl: 
   };
 }
 
+/** ¿Salió el intento sin confirmar? Sin findSent, el canal no lo sabe decir. */
+async function checkUnconfirmed(sender: ChannelSender, message: OutgoingMessage, attempt: number, signal?: AbortSignal): Promise<FindSentResult> {
+  if (!sender.findSent) return { found: 'unknown', reason: 'el canal no sabe comprobar un envío' };
+  try {
+    return await sender.findSent({ ...message, attempt }, signal);
+  } catch (err) {
+    return { found: 'unknown', reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 async function sendOne(db: MotorDb, deps: DispatchDeps, claimed: ClaimedTouch, report: DispatchReport): Promise<void> {
+  // «Voy a llamar al proveedor», confirmado ANTES de llamarlo: si el
+  // proceso muere a partir de aquí, el toque pudo salir y no se reenvía.
+  const started = await db.transaction((tx) => markSendStarted(tx, claimed.id, claimed.claimedAt, deps.now()));
+  if (!started) return;
   const now = deps.now();
   await db.transaction(async (tx) => {
     const ctx = await loadSendContext(tx, claimed.id);
@@ -125,25 +169,51 @@ async function sendOne(db: MotorDb, deps: DispatchDeps, claimed: ClaimedTouch, r
       return;
     }
     const sender = deps.senders[ctx.channel];
+    const message = composeMessage(ctx, claimed, deps.appUrl);
+
+    // Un intento anterior quedó sin confirmar: primero se pregunta si salió.
+    if (sender && ctx.unconfirmedAttempt !== null) {
+      const check = await checkUnconfirmed(sender, message, ctx.unconfirmedAttempt, deps.signal);
+      if (check.found === true) {
+        await recordSent(tx, ctx, check.proof, deps.now(), { confirmedAttempt: ctx.unconfirmedAttempt });
+        report.confirmed.push(ctx.touchId);
+        deps.logger?.info('intento ambiguo confirmado: no se reenvía', { touchId: ctx.touchId, attempt: ctx.unconfirmedAttempt });
+        return;
+      }
+      if (check.found === 'unknown') {
+        const reason = HOLD_REASONS.unconfirmed(ctx.unconfirmedAttempt);
+        await applyDecision(tx, ctx, { kind: 'hold', reason }, now);
+        report.held.push({ touchId: ctx.touchId, reason });
+        deps.logger?.warn('intento ambiguo sin comprobar: retenido', { touchId: ctx.touchId, why: check.reason });
+        return;
+      }
+    }
+
     let result: SendResult;
     try {
       result = sender
-        ? await sender.send(composeMessage(ctx, claimed, deps.appUrl), deps.signal)
+        ? await sender.send(message, deps.signal)
         : { ok: false, kind: 'transient', code: 'not_configured', message: `Sin adaptador para ${ctx.channel}.` };
     } catch (err) {
-      // Un adaptador que lanza es un fallo transitorio: el reintento lo decide la espera creciente.
-      result = { ok: false, kind: 'transient', code: 'adapter_error', message: err instanceof Error ? err.message : String(err) };
+      // Un adaptador que lanza no dice si llegó a enviar: ambiguo, se pregunta antes de reintentar.
+      result = { ok: false, kind: 'transient', code: 'adapter_error', message: err instanceof Error ? err.message : String(err), ambiguous: true };
     }
     const at = deps.now();
     if (result.ok) {
       await recordSent(tx, ctx, result, at);
       report.sent.push(ctx.touchId);
+      if (result.warning) {
+        report.warnings.push({ touchId: ctx.touchId, warning: result.warning });
+        deps.logger?.warn('enviado con respuesta incompleta del proveedor', { touchId: ctx.touchId, warning: result.warning });
+      }
       return;
     }
     const outcome = await recordFailure(tx, ctx, result, at);
     if (outcome === 'retry') report.retried.push(ctx.touchId);
     else if (outcome === 'failed') report.failed.push(ctx.touchId);
-    deps.logger?.warn('envío fallido', { touchId: ctx.touchId, kind: result.kind, code: result.code, outcome });
+    else if (outcome === 'waiting') report.waiting.push(ctx.touchId);
+    else if (outcome === 'held') report.held.push({ touchId: ctx.touchId, reason: result.code });
+    deps.logger?.warn('envío fallido', { touchId: ctx.touchId, kind: result.kind, code: result.code, ambiguous: result.ambiguous ?? false, outcome });
   });
 }
 
@@ -151,17 +221,41 @@ async function sendOne(db: MotorDb, deps: DispatchDeps, claimed: ClaimedTouch, r
 export async function runDispatch(db: MotorDb, deps: DispatchDeps): Promise<DispatchReport> {
   const { ready, notConfigured } = dispatchableChannels(deps);
   const zombies = await db.transaction((tx) => rescueZombies(tx, deps.now(), deps.workspaceId));
-  const claim = await db.transaction((tx) =>
-    claimDueTouches(tx, { now: deps.now(), limit: deps.limit ?? DISPATCH_BATCH_SIZE, channels: ready, workspaceId: deps.workspaceId }),
-  );
+  const budget = deps.signal?.aborted ? 0 : claimBudget(deps);
+  const claim: ClaimReport = budget > 0
+    ? await db.transaction((tx) => claimDueTouches(tx, { now: deps.now(), limit: budget, channels: ready, workspaceId: deps.workspaceId }))
+    : {
+        claimed: [], canceledOptedOut: 0, canceledFinished: 0, skippedNoAddress: 0, outsideWindow: [], waitingAccount: [],
+        accountDownNotices: 0, rescheduled: [],
+      };
   const report: DispatchReport = {
-    zombies: { failed: zombies.failed.length, canceled: zombies.canceled.length },
+    zombies: { failed: zombies.failed.length, canceled: zombies.canceled.length, released: zombies.released.length },
     claim: { ...claim, claimed: claim.claimed.length },
-    sent: [], retried: [], failed: [...claim.failedNoAccount], canceled: [], postponed: [], held: [], notConfigured,
+    sent: [], confirmed: [], retried: [], failed: [], waiting: [], canceled: [], postponed: [], held: [], released: [],
+    warnings: [], errors: [], notConfigured,
   };
-  for (const touch of claim.claimed) {
-    if (deps.signal?.aborted) break;
-    await sendOne(db, deps, touch, report);
+  const stop = () => Boolean(deps.signal?.aborted) || (deps.deadline !== undefined && Date.now() >= deps.deadline.getTime());
+  let next = 0;
+  try {
+    for (; next < claim.claimed.length; next++) {
+      if (stop()) break;
+      const touch = claim.claimed[next]!;
+      try {
+        await sendOne(db, deps, touch, report);
+      } catch (err) {
+        // Un error nuestro con un toque no tumba la corrida: queda en
+        // processing con send_started_at y los zombis lo resuelven.
+        const error = err instanceof Error ? err.message : String(err);
+        report.errors.push({ touchId: touch.id, error });
+        deps.logger?.error('error al despachar un toque', { touchId: touch.id, error });
+      }
+    }
+  } finally {
+    const rest = claim.claimed.slice(next);
+    if (rest.length > 0) {
+      report.released = await db.transaction((tx) => releaseUnattempted(tx, rest));
+      deps.logger?.info('toques devueltos a la cola sin intentar', { released: report.released.length, reason: deps.signal?.aborted ? 'abort' : 'tiempo' });
+    }
   }
   return report;
 }
@@ -169,28 +263,31 @@ export async function runDispatch(db: MotorDb, deps: DispatchDeps): Promise<Disp
 export const dispatchJob = defineJob(
   DISPATCH_JOB_ID,
   async (_payload, ctx) => {
-    const channels = buildChannels({ env: ctx.env, secrets: ctx.secrets });
+    const channels = buildChannels({ env: ctx.env, secrets: ctx.secrets, logger: ctx.logger });
+    const deadline = new Date(Date.now() + ctx.definition.timeoutS * 1000 - DEADLINE_MARGIN_MS);
     const report = await runDispatch(motorDbFromJob(ctx.db), {
       senders: channels.senders,
       now: () => ctx.now(),
       appUrl: channels.appUrl,
       logger: ctx.logger,
       signal: ctx.signal,
+      deadline,
     });
-    ctx.logger.info('despacho de cadencias', {
-      claimed: report.claim.claimed, sent: report.sent.length, retried: report.retried.length, failed: report.failed.length,
-      rescheduled: report.claim.rescheduled.length, notConfigured: report.notConfigured,
-    });
+    const metadata = {
+      claimed: report.claim.claimed, sent: report.sent.length, confirmed: report.confirmed.length, retried: report.retried.length,
+      failed: report.failed.length, waiting: report.waiting.length + report.claim.waitingAccount.length,
+      canceled: report.canceled.length + report.claim.canceledOptedOut + report.claim.canceledFinished,
+      held: report.held.length, rescheduled: report.claim.rescheduled.length, outsideWindow: report.claim.outsideWindow.length,
+      released: report.released.length, zombies: report.zombies.failed, zombiesReleased: report.zombies.released,
+      errors: report.errors.length, notConfigured: report.notConfigured,
+    };
+    ctx.logger.info('despacho de cadencias', metadata);
     return {
-      processed: report.sent.length,
-      // Lo que falló ya quedó registrado en el toque (reintento o failed y aviso): no es un fallo del job.
-      failed: 0,
-      metadata: {
-        claimed: report.claim.claimed, sent: report.sent.length, retried: report.retried.length, failed: report.failed.length,
-        canceled: report.canceled.length + report.claim.canceledOptedOut + report.claim.canceledFinished,
-        held: report.held.length, rescheduled: report.claim.rescheduled.length, zombies: report.zombies.failed,
-        notConfigured: report.notConfigured,
-      },
+      processed: report.sent.length + report.confirmed.length,
+      // Lo que falló ya quedó registrado en el toque (reintento, espera o failed y aviso): no es un fallo del job.
+      // Un error NUESTRO sí lo es.
+      failed: report.errors.length,
+      metadata,
     };
   },
   { retryOnItemFailure: false },

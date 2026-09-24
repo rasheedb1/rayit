@@ -48,11 +48,24 @@ export interface OutgoingMessage {
 
 export type SendResult = ({ ok: true } & SentProof) | ({ ok: false } & SendFailure);
 
+/**
+ * ¿Salió un intento cuyo resultado no se supo? (r2). found: sí, con sus
+ * pruebas; false: no salió, se puede enviar; 'unknown': el canal no lo
+ * sabe decir, y el despachador retiene el mensaje para una persona.
+ */
+export type FindSentResult = { found: true; proof: SentProof } | { found: false } | { found: 'unknown'; reason: string };
+
 export interface ChannelSender {
   readonly channel: DispatchChannel;
   /** ¿Están las llaves de la plataforma? Sin ellas, lo de este canal espera en la cola. */
   configured(): boolean;
   send(message: OutgoingMessage, signal?: AbortSignal): Promise<SendResult>;
+  /**
+   * Pregunta al proveedor si el intento `message.attempt` de este toque
+   * salió (lo pide el despachador antes de reenviar uno ambiguo). Sin
+   * este método, el canal no lo sabe decir.
+   */
+  findSent?(message: OutgoingMessage, signal?: AbortSignal): Promise<FindSentResult>;
 }
 
 export interface ChannelReader {
@@ -71,10 +84,45 @@ export function withTimeout(signal: AbortSignal | undefined, ms: number): AbortS
   return signal ? AbortSignal.any([signal, t]) : t;
 }
 
-/** Un error de red o de tiempo es transitorio: el despachador reintenta con espera creciente. */
-export function networkFailure(err: unknown): SendResult {
+/**
+ * Los errores de red que pasan ANTES de que la petición salga de la
+ * máquina: no hubo conexión, no se resolvió el nombre, el TLS no cerró.
+ * Todo lo demás (timeout esperando la respuesta, conexión cortada,
+ * abort) pudo pasar DESPUÉS de que el proveedor recibió el mensaje.
+ */
+const PRE_SEND_CODES = new Set([
+  'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT',
+  'CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+/** El código de un error de fetch (undici lo pone en cause, a veces dos niveles abajo). */
+export function errorCode(err: unknown): string | null {
+  let e: unknown = err;
+  for (let i = 0; i < 3 && e && typeof e === 'object'; i++) {
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return null;
+}
+
+/**
+ * Un error de red o de tiempo es transitorio: el despachador reintenta
+ * con espera creciente. Si la llamada ENVÍA el mensaje (`sends`) y el
+ * error no es de los de antes de salir, el resultado es AMBIGUO: el
+ * proveedor pudo haberlo enviado, y reenviarlo a ciegas duplicaría el
+ * correo. El despachador pregunta antes del siguiente intento.
+ */
+export function networkFailure(err: unknown, opts: { sends?: boolean } = {}): SendResult {
   const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-  return { ok: false, kind: 'transient', code: 'network', message };
+  const code = errorCode(err);
+  const ambiguous = Boolean(opts.sends) && !(code !== null && PRE_SEND_CODES.has(code));
+  return { ok: false, kind: 'transient', code: ambiguous ? 'network_ambiguous' : 'network', message, ambiguous };
+}
+
+/** La corrida se cortó antes de llamar: no salió nada, se reintenta. */
+export function abortedBeforeSend(): SendResult {
+  return { ok: false, kind: 'transient', code: 'aborted', message: 'La corrida se detuvo antes de llamar al proveedor.' };
 }
 
 /** 429 y 5xx se reintentan; 401 y 403 son de la cuenta; el resto de 4xx, del mensaje. */

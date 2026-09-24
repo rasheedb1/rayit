@@ -16,8 +16,12 @@
  * Con `--canal-falso` (o OUTREACH_CHANNELS=fake) los envíos quedan
  * registrados en outbound_touch como enviados, con el id y el hilo del
  * buzón falso; sirve para ver el motor andar contra el seed sin llaves
- * de Google ni de Unipile. No lo uses con contactos reales: el toque
- * queda como enviado aunque nadie lo haya recibido.
+ * de Google ni de Unipile. Como el toque queda enviado aunque nadie lo
+ * haya recibido, el comando SE NIEGA (r2) salvo que la base sea local
+ * (localhost) o que se pase `--workspace` con el workspace de la demo
+ * (DEMO_WORKSPACE_IDS): contra Supabase, solo así:
+ *
+ *   pnpm --filter @mc/worker run job:dispatch -- --canal-falso --workspace 00000002-0000-4000-8000-000000000001
  *
  * Requisito en Supabase: mc_migrator miembro de mc_worker (el mismo que
  * job:seguimientos). Si no lo es, termina con «permission denied to set
@@ -31,7 +35,7 @@ import { EncryptedSecretStore, EnvSecretStore, InMemorySecretStore, keyringFromE
 import { ConfigError, loadConfig, type WorkerConfig } from '../../runner/config.ts';
 import { PostgresDatabase } from '../../runner/db.ts';
 import { buildChannels } from './canales/index.ts';
-import { resumenDemo, runDemoMotor } from './demo-motor.ts';
+import { DEMO_WORKSPACE_IDS, resumenDemo, runDemoMotor } from './demo-motor.ts';
 import { motorDbFromJob } from './motor-db.ts';
 import { runDispatch, type DispatchReport } from './outbound.dispatch.ts';
 import { runReplies, type RepliesReport } from './outbound.replies.ts';
@@ -72,6 +76,31 @@ export function parseArgs(argv: readonly string[], env: Readonly<Record<string, 
   return { pasada, canalFalso: canalFalso || demo, demo, workspaceId };
 }
 
+/** ¿La base es de esta máquina? (localhost, 127.0.0.1, ::1 o un socket). */
+export function isLocalDatabase(url: string | null | undefined): boolean {
+  if (!url) return false;
+  try {
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * El canal falso marca como enviados mensajes que nadie recibió y avanza
+ * las cadencias: contra una base compartida, solo sobre el workspace de
+ * la demo. Lanza ConfigError si no.
+ */
+export function assertFakeAllowed(o: Pick<Opciones, 'canalFalso' | 'demo' | 'workspaceId'>, databaseUrl: string | null | undefined): void {
+  if (!o.canalFalso || o.demo || isLocalDatabase(databaseUrl)) return;
+  if (o.workspaceId && (DEMO_WORKSPACE_IDS as readonly string[]).includes(o.workspaceId)) return;
+  throw new ConfigError(
+    'El canal falso deja como enviados mensajes que nadie recibió. Contra una base que no es local, solo con ' +
+      `--workspace de la demo (${DEMO_WORKSPACE_IDS.join(', ')}).`,
+  );
+}
+
 /** El almacén de tokens de las cuentas de envío, igual que el worker. El canal falso no lee tokens. */
 function secretStore(config: WorkerConfig, db: PostgresDatabase, canalFalso: boolean): SecretStore {
   if (canalFalso || config.secretStore === 'memory') return new InMemorySecretStore();
@@ -89,9 +118,14 @@ function secretStore(config: WorkerConfig, db: PostgresDatabase, canalFalso: boo
 export function resumenDespacho(r: DispatchReport): string {
   const lineas = [
     `Despacho: ${r.claim.claimed} reclamado(s), ${r.sent.length} enviado(s), ${r.retried.length} a reintento, ${r.failed.length} fallido(s).`,
-    `  Reprogramados por tope o ventana: ${r.claim.rescheduled.length}. Retenidos: ${r.held.length}. Pospuestos: ${r.postponed.length}.`,
-    `  Cancelados al releer: ${r.canceled.length + r.claim.canceledOptedOut + r.claim.canceledFinished}. Zombis a fallido: ${r.zombies.failed}.`,
+    `  Reprogramados por tope: ${r.claim.rescheduled.length}. Fuera de la ventana: ${r.claim.outsideWindow.length}. ` +
+      `Esperando cuenta: ${r.claim.waitingAccount.length + r.waiting.length}. Retenidos: ${r.held.length}. Pospuestos: ${r.postponed.length}.`,
+    `  Cancelados: ${r.canceled.length + r.claim.canceledOptedOut + r.claim.canceledFinished}. ` +
+      `Zombis: ${r.zombies.failed} a fallido, ${r.zombies.released} devuelto(s) a la cola. Sin intentar, de vuelta: ${r.released.length}.`,
   ];
+  if (r.confirmed.length) lineas.push(`  Intentos ambiguos que sí habían salido (no se reenviaron): ${r.confirmed.length}.`);
+  for (const w of r.warnings) lineas.push(`  · ${w.touchId} enviado con aviso: ${w.warning}`);
+  for (const e of r.errors) lineas.push(`  · ${e.touchId} error: ${e.error}`);
   if (r.notConfigured.length) lineas.push(`  Canales no configurados (sus toques esperan): ${r.notConfigured.join(', ')}.`);
   for (const c of r.canceled) lineas.push(`  · ${c.touchId} cancelado: ${c.reason}`);
   for (const c of r.postponed) lineas.push(`  · ${c.touchId} pospuesto: ${c.reason}`);
@@ -131,6 +165,7 @@ async function main(): Promise<void> {
   }
   try {
     config = loadConfig(process.env, { mode: 'postgres' });
+    assertFakeAllowed(opciones, config.databaseUrl);
     db = new PostgresDatabase({
       connectionString: config.databaseUrl!,
       setRole: config.setRole,
@@ -146,8 +181,9 @@ async function main(): Promise<void> {
   }
 
   try {
-    const env = opciones.canalFalso ? { ...process.env, OUTREACH_CHANNELS: 'fake' } : process.env;
-    const channels = buildChannels({ env, secrets: secretStore(config, db, opciones.canalFalso) });
+    const channels = buildChannels({
+      env: process.env, secrets: secretStore(config, db, opciones.canalFalso), mode: opciones.canalFalso ? 'fake' : 'real',
+    });
     if (channels.mode === 'fake') process.stdout.write('Canal falso: nada sale de la máquina.\n');
     const motor = motorDbFromJob(db);
     const now = () => new Date();

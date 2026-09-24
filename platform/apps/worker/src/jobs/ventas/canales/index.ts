@@ -6,7 +6,13 @@
  *                            UNIPILE_DSN y UNIPILE_ACCESS_TOKEN.
  *   OUTREACH_CHANNELS=fake   el buzón en memoria para los tres: nada sale
  *                            de la máquina. Es lo que usan las pruebas y
- *                            la demo.
+ *                            la demo. Con NODE_ENV=production se IGNORA
+ *                            (y se dice en el log): el canal falso marca
+ *                            como enviados mensajes que nadie recibió y
+ *                            avanza las cadencias reales (r2).
+ *
+ * `job:dispatch -- --canal-falso` no pasa por la variable: pide el modo
+ * explícito, después de su propia guardia (correr-motor.ts).
  *
  * El enlace de baja necesita la URL pública de la web (APP_URL, o la de
  * producción de Vercel). Sin ella el correo real no se reclama: un correo
@@ -15,6 +21,7 @@
 import type { SecretStore } from '@mc/connectors';
 import type { DispatchChannel } from '@mc/db/queries/outreach';
 import type { Env } from '../../../runner/config.ts';
+import type { Logger } from '../../../runner/logger.ts';
 import { fakeChannels } from './fake.ts';
 import { GmailChannel } from './gmail.ts';
 import type { ChannelReader, ChannelSender, Fetch } from './types.ts';
@@ -43,8 +50,18 @@ export function appUrlFrom(env: Env): string | null {
   }
 }
 
-export function buildChannels(opts: { env: Env; secrets: SecretStore; fetch?: Fetch }): Channels {
-  const mode = opts.env['OUTREACH_CHANNELS'] === 'fake' ? 'fake' : 'real';
+/** El modo que pide el entorno: el falso nunca en producción. */
+export function channelModeFrom(env: Env, logger?: Pick<Logger, 'warn'>): 'real' | 'fake' {
+  if (env['OUTREACH_CHANNELS'] !== 'fake') return 'real';
+  if (env['NODE_ENV'] === 'production') {
+    logger?.warn('OUTREACH_CHANNELS=fake se ignora en producción: el canal falso marcaría como enviados mensajes que nadie recibió.');
+    return 'real';
+  }
+  return 'fake';
+}
+
+export function buildChannels(opts: { env: Env; secrets: SecretStore; fetch?: Fetch; mode?: 'real' | 'fake'; logger?: Pick<Logger, 'warn'> }): Channels {
+  const mode = opts.mode ?? channelModeFrom(opts.env, opts.logger);
   if (mode === 'fake') {
     const f = fakeChannels();
     return { mode, senders: f, readers: f, appUrl: appUrlFrom(opts.env) ?? 'http://localhost:3100' };

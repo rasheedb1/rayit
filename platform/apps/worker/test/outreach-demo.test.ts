@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ConfigError } from '../src/runner/config.ts';
-import { parseArgs } from '../src/jobs/ventas/correr-motor.ts';
+import { assertFakeAllowed, isLocalDatabase, parseArgs } from '../src/jobs/ventas/correr-motor.ts';
 import { resumenDemo, runDemoMotor } from '../src/jobs/ventas/demo-motor.ts';
 
 test('job:dispatch y job:replies leen sus argumentos y rechazan lo que no conocen', () => {
@@ -23,6 +23,20 @@ test('job:dispatch y job:replies leen sus argumentos y rechazan lo que no conoce
   assert.throws(() => parseArgs(['dispatch', '--workspace', 'laura'], {}), ConfigError);
   assert.throws(() => parseArgs(['dispatch', '--rapido'], {}), ConfigError);
   assert.throws(() => parseArgs(['replies', '--demo'], {}), ConfigError);
+});
+
+test('el canal falso contra una base compartida solo corre sobre el workspace de la demo', () => {
+  const supabase = 'postgresql://mc_migrator.x:clave@aws-0-ca-central-1.pooler.supabase.com:5432/postgres';
+  const demo = '00000002-0000-4000-8000-000000000001';
+  const falso = (workspaceId?: string) => ({ canalFalso: true, demo: false, workspaceId });
+  assert.throws(() => assertFakeAllowed(falso(), supabase), ConfigError, 'sin --workspace, no');
+  assert.throws(() => assertFakeAllowed(falso('0000000b-0000-4000-8000-000000000001'), supabase), ConfigError, 'otro workspace, no');
+  assert.doesNotThrow(() => assertFakeAllowed(falso(demo), supabase));
+  assert.doesNotThrow(() => assertFakeAllowed(falso(), 'postgresql://postgres@localhost:5432/mc'));
+  assert.doesNotThrow(() => assertFakeAllowed({ canalFalso: false, demo: false, workspaceId: undefined }, supabase), 'los canales reales, siempre');
+  assert.equal(isLocalDatabase('postgresql://u@127.0.0.1/x'), true);
+  assert.equal(isLocalDatabase(supabase), false);
+  assert.equal(isLocalDatabase(null), false);
 });
 
 test('demo con el seed: apagada no envía nada; encendida, el canal falso deja el envío en outbound_touch', async () => {
