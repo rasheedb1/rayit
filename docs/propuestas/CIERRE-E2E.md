@@ -195,3 +195,17 @@ en el `verificar` siguiente pasó. Queda anotado como sensible a la carga.
 
 Se despliegan la prueba (no cambia la web), las notas del tablero y los
 arreglos de pruebas. La salida está al final de este documento.
+
+## 8. Salida a producción (24-sep, madrugada UTC)
+
+| Paso | Resultado |
+|---|---|
+| Merges de `origin/main` | CON-B (sin conflictos), CON-C (tres conflictos: las dos pruebas del reloj y el tablero, a favor de `main`), ACC (dos: tablero y `plan-equipo.md`, a favor de `main` con el párrafo de E2E debajo), la 0042 de CON-C (sin conflictos; `costuras-con.test.ts` vuelve a la de `main`) y dos de solo documentación |
+| `pnpm verificar` tras el último merge con código | 15/15; raíz 8, core 267, connectors 234, db 1040, worker 167, web 1268 (+1 todo) |
+| `next build` | compilado |
+| `make db.check` | 41 migraciones en limpio, 98 tablas, 10 vistas |
+| Push | `nicolas/E2E-punta-a-punta` y `main` por avance rápido: `dbc619a..da0d54d` (dos rechazos antes, por CON-C y ACC; cada vez, vuelta al paso 1) |
+| Plan B | `https://on-cue-6q5upooci-influ3.vercel.app` |
+| Deploy | desde `rayit-deploy` en `origin/main`; `on-cue-7gjhsfa9p-influ3.vercel.app`, `gitCommitSha` `da0d54d`, `READY`, alias `on-cue-web.vercel.app` (API v13) |
+| Rutas en producción | 47: 36 en 200, 3 en 307, 4 en 404 (slugs falsos y `/kit`), 3 en 405 (solo POST, también `/conexiones/oauth/youtube/start`), 1 en 400 (callback sin `code`); **ninguna en 500** |
+| `make db.guardia` (desde `rayit-deploy`) | **verde**: 41 migraciones (la última, 0042), 83 tablas aisladas, nada sin declarar |
