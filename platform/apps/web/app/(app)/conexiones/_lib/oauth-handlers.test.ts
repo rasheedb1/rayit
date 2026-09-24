@@ -132,6 +132,18 @@ describe("start", () => {
     expect(await get.text()).toMatch(/Conectar/);
   });
 
+  it("un POST sin cuerpo (o con uno que no es un formulario) no es un 500: vuelve con el aviso de consentimiento", async () => {
+    // Se vio en producción al cerrar CON-B: req.formData() lanza sin Content-Type de formulario.
+    for (const req of [
+      new Request(`${ORIGIN}/conexiones/oauth/tiktok/start`, { method: "POST" }),
+      new Request(`${ORIGIN}/conexiones/oauth/tiktok/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
+    ]) {
+      const res = await handlers.start(req, "tiktok");
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(`${ORIGIN}/conexiones?error=consentimiento`);
+    }
+  });
+
   it("con consentimiento: 303 a TikTok con state, y cookie httpOnly, SameSite=Lax, 10 minutos, sin nada secreto", async () => {
     const { res, location, state, cookie } = await start("tiktok");
     expect(location.origin + location.pathname).toBe("https://www.tiktok.com/v2/auth/authorize/");

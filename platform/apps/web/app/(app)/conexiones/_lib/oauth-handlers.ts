@@ -155,7 +155,10 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       if (!cfg) return text(404, notConfigured(provider));
       if ("error" in keys) return text(503, keys.error);
 
-      const form = await req.formData();
+      // Un POST sin formulario (sin cuerpo, JSON, un robot) hace lanzar a
+      // formData(): sin esto era un 500. Es lo mismo que no consentir.
+      const form = await req.formData().catch(() => null);
+      if (!form) return redirect(req, "/conexiones?error=consentimiento");
       const parsed = startSchema.safeParse({ acepto: form.get("acepto"), policy_version: form.get("policy_version") });
       if (!parsed.success) return redirect(req, "/conexiones?error=consentimiento");
 
