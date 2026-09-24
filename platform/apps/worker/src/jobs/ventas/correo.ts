@@ -10,7 +10,8 @@
 import nodemailer from 'nodemailer';
 
 export interface MailMessage {
-  to: string;
+  /** Uno o varios destinatarios: el resumen de alertas va en un solo correo a todos los dueños. */
+  to: string | readonly string[];
   subject: string;
   text: string;
 }
@@ -29,7 +30,7 @@ export function smtpMailerFromEnv(env: Readonly<Record<string, string | undefine
   const transport = nodemailer.createTransport(url);
   return {
     async send(msg) {
-      await transport.sendMail({ from, to: msg.to, subject: msg.subject, text: msg.text });
+      await transport.sendMail({ from, to: typeof msg.to === 'string' ? msg.to : [...msg.to], subject: msg.subject, text: msg.text });
     },
   };
 }

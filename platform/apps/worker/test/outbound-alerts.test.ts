@@ -3,11 +3,13 @@
  *
  * El «terminado cuando»: con un fixture de salud (test/fixtures/
  * salud-outreach.json) el job produce las notificaciones correctas una
- * sola vez. Además: el resumen sale por correo una vez a cada dueño y
+ * sola vez. Además: el resumen sale en UN correo a todos los dueños y
  * queda anotado (emailed_at); sin SMTP no sale y se manda en la corrida
- * siguiente con cartero; el día siguiente vuelve a avisar; antes de la
- * hora local no se revisa; y con la base real (outbound_health) una
- * cuenta por reconectar produce su alerta.
+ * siguiente con cartero, aunque sea otro día; si el correo falla no se
+ * marca nada y nadie lo recibe dos veces; el día siguiente vuelve a
+ * avisar; antes de la hora local no se revisa; un workspace en inglés lo
+ * recibe en inglés; cada alerta lleva su enlace; y con la base real
+ * (outbound_health) una cuenta por reconectar produce su alerta.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,6 +17,7 @@ import { readFileSync } from 'node:fs';
 import type { AlertInput } from '@mc/core/outreach/deliverability';
 import { allJobs } from '../src/jobs/index.ts';
 import type { Mailer, MailMessage } from '../src/jobs/ventas/correo.ts';
+import { ALERTAS_URL, SALUD_URL } from '../src/jobs/ventas/messages.ts';
 import { ALERTAS_JOB_ID, runAlertas, type ReadSignals } from '../src/jobs/ventas/outbound.alerts.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { openTestDatabase } from './helpers/harness.ts';
@@ -25,8 +28,13 @@ const MANANA = new Date('2026-09-24T14:00:00Z');
 const WS_MAL = '0000015a-0000-4000-8000-000000000001';
 const WS_SANO = '0000015a-0000-4000-8000-000000000002';
 const WS_REAL = '0000015a-0000-4000-8000-000000000003';
+const WS_DOS = '0000015a-0000-4000-8000-000000000004';
+const WS_EN = '0000015a-0000-4000-8000-000000000005';
 const USER_DUENA = '0000015a-0000-4000-8000-0000000000a1';
 const USER_MIEMBRO = '0000015a-0000-4000-8000-0000000000a2';
+const USER_DUENO_1 = '0000015a-0000-4000-8000-0000000000a3';
+const USER_DUENO_2 = '0000015a-0000-4000-8000-0000000000a4';
+const USER_OWNER_EN = '0000015a-0000-4000-8000-0000000000a5';
 
 const SALUD = JSON.parse(readFileSync(new URL('./fixtures/salud-outreach.json', import.meta.url), 'utf8')) as Record<
   'enProblemas' | 'sano',
@@ -34,12 +42,22 @@ const SALUD = JSON.parse(readFileSync(new URL('./fixtures/salud-outreach.json', 
 >;
 
 /** La salud grabada de cada workspace de fixture. */
-const desdeFixture: ReadSignals = async (_tx, ws) => (ws === WS_MAL ? SALUD.enProblemas : SALUD.sano);
+const EN_PROBLEMAS = new Set([WS_MAL, WS_DOS, WS_EN]);
+const desdeFixture: ReadSignals = async (_tx, ws) => (EN_PROBLEMAS.has(ws) ? SALUD.enProblemas : SALUD.sano);
 
 class CarteroFalso implements Mailer {
   enviados: MailMessage[] = [];
   async send(msg: MailMessage): Promise<void> {
     this.enviados.push(msg);
+  }
+}
+
+/** Un SMTP caído: cada envío falla. */
+class CarteroCaido implements Mailer {
+  intentos = 0;
+  async send(): Promise<void> {
+    this.intentos++;
+    throw new Error('SMTP caído');
   }
 }
 
@@ -66,8 +84,10 @@ after(async () => {
 });
 
 async function avisos(ws: string) {
-  const { rows } = await db.raw.query<{ kind: string; severity: string; title_es: string; emailed_at: string | null }>(
-    `SELECT kind, severity, title_es, emailed_at::text FROM notification WHERE workspace_id = '${ws}' ORDER BY created_at, kind`,
+  const { rows } = await db.raw.query<{
+    kind: string; severity: string; title_es: string; action_url: string; emailed_at: string | null;
+  }>(
+    `SELECT kind, severity, title_es, action_url, emailed_at::text FROM notification WHERE workspace_id = '${ws}' ORDER BY created_at, kind`,
   );
   return rows;
 }
@@ -98,16 +118,22 @@ test('sin SMTP las alertas quedan, y el resumen no sale', async () => {
   assert.deepEqual(await avisos(WS_SANO), []);
 });
 
+test('cada alerta lleva su propio enlace, a una pantalla que existe', async () => {
+  const mal = await avisos(WS_MAL);
+  assert.deepEqual(mal.map((a) => a.action_url), [ALERTAS_URL.account_down, ALERTAS_URL.bounce_rate]);
+  assert.ok(mal.every((a) => a.action_url.startsWith('/ventas/politica')), 'no a /ventas/canales hasta que VEN-9 la integre');
+});
+
 test('la corrida siguiente, con cartero, no repite avisos y manda el resumen una vez a la dueña', async () => {
   const cartero = new CarteroFalso();
   const r = await runAlertas(db, NOW, { mailer: cartero, appUrl: 'http://localhost:3100/', readSignals: desdeFixture });
   assert.deepEqual(r.created, {});
   assert.equal(cartero.enviados.length, 1);
   const [correo] = cartero.enviados;
-  assert.equal(correo?.to, 'laura@alertas.test');
+  assert.deepEqual(correo?.to, ['laura@alertas.test']);
   assert.equal(correo?.subject, 'On Cue · 2 alertas del outreach de Laura Creadora');
-  assert.match(correo?.text ?? '', /3 de 20 correos rebotaron/);
-  assert.match(correo?.text ?? '', /http:\/\/localhost:3100\/ventas\/politica/);
+  assert.match(correo?.text ?? '', /3 de 20 correos enviados/);
+  assert.ok((correo?.text ?? '').includes(`http://localhost:3100${SALUD_URL}`), 'el enlace de cada alerta, no uno fijo');
   assert.ok((await avisos(WS_MAL)).every((a) => a.emailed_at !== null));
 
   // Otra vez el mismo día: ni avisos ni correo.
@@ -135,4 +161,47 @@ test('con la base real: una cuenta por reconectar da su alerta (outbound_health)
   assert.equal(r.created.account_down, 1);
   const real = await avisos(WS_REAL);
   assert.deepEqual(real.map((a) => a.kind), ['outreach_account_down']);
+});
+
+test('con dos dueños: si el correo falla nadie lo recibe dos veces, y sale al día siguiente en un solo correo', async () => {
+  await db.raw.exec(`
+    INSERT INTO workspace (id, slug, name, timezone, locale) VALUES ('${WS_DOS}', 'alertas-dos', 'Dos Dueños', 'America/Bogota', 'es-CO');
+    INSERT INTO app_user (id, email, name) VALUES
+      ('${USER_DUENO_1}', 'uno@alertas.test', 'Uno'), ('${USER_DUENO_2}', 'dos@alertas.test', 'Dos');
+    INSERT INTO membership (workspace_id, user_id, role) VALUES
+      ('${WS_DOS}', '${USER_DUENO_1}', 'owner'), ('${WS_DOS}', '${USER_DUENO_2}', 'owner');
+    INSERT INTO outbound_policy (workspace_id) VALUES ('${WS_DOS}');
+  `);
+  const caido = new CarteroCaido();
+  const r = await runAlertas(db, new Date('2026-09-25T14:00:00Z'), { mailer: caido, appUrl: 'http://x.test', readSignals: desdeFixture });
+  assert.ok(r.emailFailed >= 1);
+  assert.ok((await avisos(WS_DOS)).every((a) => a.emailed_at === null), 'nada queda marcado si el correo no salió');
+
+  // Al día siguiente, con SMTP: las alertas de ayer y las de hoy, en UN correo a los dos.
+  const cartero = new CarteroFalso();
+  await runAlertas(db, new Date('2026-09-26T14:00:00Z'), { mailer: cartero, appUrl: 'http://x.test', readSignals: desdeFixture });
+  const deDos = cartero.enviados.filter((m) => m.subject.includes('Dos Dueños'));
+  assert.equal(deDos.length, 1);
+  assert.deepEqual(deDos[0]?.to, ['dos@alertas.test', 'uno@alertas.test']);
+  assert.equal(deDos[0]?.subject, 'On Cue · 4 alertas del outreach de Dos Dueños');
+  const dos = await avisos(WS_DOS);
+  assert.equal(dos.length, 4);
+  assert.ok(dos.every((a) => a.emailed_at !== null));
+});
+
+test('un workspace en inglés recibe la campana y el correo en inglés', async () => {
+  await db.raw.exec(`
+    INSERT INTO workspace (id, slug, name, timezone, locale) VALUES ('${WS_EN}', 'alerts-en', 'Creator EN', 'America/New_York', 'en-US');
+    INSERT INTO app_user (id, email, name) VALUES ('${USER_OWNER_EN}', 'owner@alerts.test', 'Owner');
+    INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_EN}', '${USER_OWNER_EN}', 'owner');
+    INSERT INTO outbound_policy (workspace_id) VALUES ('${WS_EN}');
+  `);
+  const cartero = new CarteroFalso();
+  // 10:00 en Nueva York.
+  await runAlertas(db, new Date('2026-09-27T14:00:00Z'), { mailer: cartero, appUrl: 'https://app.test', readSignals: desdeFixture });
+  const [correo] = cartero.enviados.filter((m) => m.subject.includes('Creator EN'));
+  assert.equal(correo?.subject, 'On Cue · 2 outreach alerts for Creator EN');
+  assert.match(correo?.text ?? '', /3 of 20 emails sent in the last 24 hours bounced/);
+  const en = await avisos(WS_EN);
+  assert.ok(en.some((a) => /^Too many emails are bouncing: 15\s?%$/.test(a.title_es)));
 });

@@ -5,80 +5,52 @@
  * se procesa desde las ALERTAS_HORA_LOCAL de su zona, como
  * sales.follow_ups), con la salud de las últimas 24 h:
  *
- *   outreach_bounce_rate   rebotes sobre el 5 %, con diez intentos o más
- *   outreach_no_sends      cero envíos con el envío encendido y enrolamientos activos
+ *   outreach_bounce_rate   rebotes DUROS de lo enviado sobre el 5 %, con diez envíos o más
+ *   outreach_no_sends      cero envíos con el envío encendido y toques que tocaba enviar
  *   outreach_queue_stuck   toques reclamados hace más de cinco minutos
  *   outreach_account_down  una cuenta de canal caída o por reconectar
  *   outreach_llm_budget    el presupuesto diario del modelo, agotado
  *
  * Qué está mal lo decide evaluateOutreachAlerts (@mc/core, puro); las
- * cifras salen de outbound_health (0037) y de outbound_bounce (0038):
- * ninguna resta se hace en una pantalla.
+ * cifras salen de outbound_health (0037) y de readAlertSignalCounts
+ * (@mc/db, la misma consulta que enseña /ventas/politica): ninguna resta
+ * se hace en una pantalla.
  *
  * Una notification por tipo y día LOCAL del workspace: si el tipo ya se
  * avisó hoy, no se repite aunque el job corra otra vez (la cola es
- * 'stately' y además hay un candado de transacción). Después, un correo
- * de resumen a cada dueño (membership.role = 'owner') con las alertas de
- * hoy que todavía no salieron por correo; al enviarlo se anota
- * notification.emailed_at. Si el correo falla o no hay SMTP_URL, quedan
- * sin marcar y salen en la corrida siguiente.
+ * 'stately' y además hay un candado de transacción). Cada una lleva su
+ * propio enlace (messages.ts, ALERTAS_URL).
  *
- * Corre como mc_worker: cada fila lleva el workspace que la origina.
+ * Después, UN correo de resumen por workspace, a todos sus dueños
+ * (membership.role = 'owner') a la vez, con las alertas que todavía no
+ * salieron por correo; al enviarlo se anota notification.emailed_at. Uno
+ * por workspace y no uno por dueño: si el envío falla no sale a nadie y
+ * nada queda marcado, así que la corrida siguiente no le repite el
+ * resumen a quien ya lo tenía. Sin SMTP_URL, o si el correo falla, las
+ * alertas quedan sin marcar y salen con la siguiente corrida que pueda
+ * enviar, aunque sea otro día, mientras tengan menos de
+ * ALERTAS_REENVIO_DIAS: una semana sin correo no se convierte en un
+ * resumen con alertas de hace un mes.
+ *
+ * Textos en el idioma del workspace (messages.ts). Corre como mc_worker:
+ * cada fila lleva el workspace que la origina.
  */
-import {
-  evaluateOutreachAlerts, type AlertInput, type OutreachAlert, type OutreachAlertKind,
-} from '@mc/core/outreach/deliverability';
+import { evaluateOutreachAlerts, type AlertInput, type OutreachAlert, type OutreachAlertKind } from '@mc/core/outreach/deliverability';
+import { HEALTH_WINDOW_H, readAlertSignalCounts } from '@mc/db/queries/entregabilidad';
 import { parseOutboundHealth } from '@mc/db/queries/outreach';
 import type { JobDatabase, Queryable } from '../../runner/db.ts';
 import { defineJob } from '../../runner/registry.ts';
 import { smtpMailerFromEnv, type Mailer } from './correo.ts';
+import { ALERTAS_URL, alertTextsFor } from './messages.ts';
 
 export const ALERTAS_JOB_ID = 'outbound.alerts';
 
 /** Desde qué hora local del workspace se revisa. */
 export const ALERTAS_HORA_LOCAL = 8;
 /** La ventana de la salud, en horas. */
-export const ALERTAS_VENTANA_H = 24;
-
-/**
- * Los textos del aviso y del correo. El worker no tiene messages.ts: la
- * campana los recompone con kind si hace falta. Los `{n}` se rellenan con
- * cifras ya formateadas con Intl en el locale del workspace.
- */
-export const ALERTAS_TEXTOS: Record<OutreachAlertKind, { title: string; body: string; url: string }> = {
-  bounce_rate: {
-    title: 'Rebotan demasiados correos: {rate}',
-    body: '{bounces} de {attempts} correos rebotaron en las últimas 24 horas. Revisa las direcciones antes de seguir: Gmail castiga a quien rebota mucho.',
-    url: '/ventas/politica',
-  },
-  no_sends: {
-    title: 'El outreach no envió nada ayer',
-    body: 'Hay {activeEnrollments} secuencias activas y no salió ningún mensaje en 24 horas. Revisa los canales y la cola.',
-    url: '/ventas/politica',
-  },
-  queue_stuck: {
-    title: 'Hay mensajes atascados en la cola',
-    body: '{stuck} mensajes llevan más de cinco minutos enviándose. Si sigue así, revisa el canal.',
-    url: '/ventas/politica',
-  },
-  account_down: {
-    title: 'Una cuenta de envío necesita atención',
-    body: '{accountsDown} cuentas de canal están caídas o piden reconectar. Mientras tanto no sale nada por ellas.',
-    url: '/ventas/canales',
-  },
-  llm_budget: {
-    title: 'Se agotó el presupuesto diario de redacción',
-    body: 'Se gastaron {spentToday} de {dailyCap} hoy. Los mensajes nuevos esperan a mañana; lo aprobado sigue saliendo.',
-    url: '/ventas/politica',
-  },
-};
-
-export const ALERTAS_CORREO = {
-  subject: 'On Cue · {n} alertas del outreach de {workspace}',
-  subjectOne: 'On Cue · Una alerta del outreach de {workspace}',
-  intro: 'Esto es lo que vimos hoy en el outreach de {workspace}:',
-  outro: 'Ábrelo en On Cue: {url}',
-} as const;
+export const ALERTAS_VENTANA_H = HEALTH_WINDOW_H;
+/** Una alerta sin correo se sigue intentando mandar durante estos días. */
+export const ALERTAS_REENVIO_DIAS = 7;
 
 function rellenar(plantilla: string, valores: Readonly<Record<string, string>>): string {
   return plantilla.replace(/\{(\w+)\}/g, (_, k: string) => valores[k] ?? `{${k}}`);
@@ -103,24 +75,15 @@ function cifras(alerta: OutreachAlert, locale: string): Record<string, string> {
 /** Las entradas de evaluateOutreachAlerts para un workspace. Se inyecta en las pruebas con fixtures. */
 export type ReadSignals = (tx: Queryable, workspaceId: string, now: Date) => Promise<AlertInput>;
 
-/** outbound_health (0037) y los rebotes de la ventana (0038), leídos de la base. */
+/** outbound_health (0037) y las cifras de la ventana (readAlertSignalCounts), leídas de la base. */
 export const readSignalsFromDb: ReadSignals = async (tx, workspaceId, now) => {
-  const { rows } = await tx.query<{ h: unknown; rebotes: string | number; activos: string | number }>(
-    `SELECT outbound_health($1::uuid, $2::int) AS h,
-            (SELECT count(*) FROM outbound_bounce b
-              WHERE b.workspace_id = $1 AND b.detected_at >= $3::timestamptz - make_interval(hours => $2::int)) AS rebotes,
-            (SELECT count(*) FROM outbound_enrollment e WHERE e.workspace_id = $1 AND e.status = 'active') AS activos`,
-    [workspaceId, ALERTAS_VENTANA_H, now.toISOString()],
-  );
-  const r = rows[0];
-  const health = parseOutboundHealth(r?.h);
-  const email = health.byChannel.email ?? { sent: 0, failed: 0 };
-  return {
-    health,
-    emailAttempts: email.sent + email.failed,
-    bounces: Number(r?.rebotes ?? 0),
-    activeEnrollments: Number(r?.activos ?? 0),
-  };
+  const { rows } = await tx.query<{ h: unknown }>('SELECT outbound_health($1::uuid, $2::int) AS h', [
+    workspaceId,
+    ALERTAS_VENTANA_H,
+  ]);
+  const health = parseOutboundHealth(rows[0]?.h);
+  const c = await readAlertSignalCounts(tx, workspaceId, now, ALERTAS_VENTANA_H);
+  return { health, emailsSent: c.emailsSent, hardBounces: c.hardBounces, dueToSend: c.dueToSend };
 };
 
 export interface AlertasDeps {
@@ -137,6 +100,7 @@ export interface AlertasResult {
   workspaces: number;
   /** Notificaciones nuevas, por tipo. */
   created: Partial<Record<OutreachAlertKind, number>>;
+  /** Correos de resumen enviados: uno por workspace, a todos sus dueños. */
   emailsSent: number;
   /** Workspaces con alertas por enviar y sin SMTP_URL. */
   emailSkipped: number;
@@ -175,9 +139,10 @@ async function espacios(db: Queryable, now: Date, hora: number): Promise<Espacio
 
 /** Deja las notificaciones del día que falten. Devuelve los tipos creados. */
 async function avisar(tx: Queryable, w: Espacio, alertas: OutreachAlert[], now: Date): Promise<OutreachAlertKind[]> {
+  const textos = alertTextsFor(w.locale).alerts;
   const creadas: OutreachAlertKind[] = [];
   for (const a of alertas) {
-    const t = ALERTAS_TEXTOS[a.kind];
+    const t = textos[a.kind];
     const valores = cifras(a, w.locale);
     const { rows } = await tx.query(
       `INSERT INTO notification (workspace_id, user_id, kind, severity, title_es, body_es, action_url, created_at)
@@ -187,7 +152,10 @@ async function avisar(tx: Queryable, w: Espacio, alertas: OutreachAlert[], now: 
            WHERE n.workspace_id = $1 AND n.kind = $2
              AND (n.created_at AT TIME ZONE $8)::date = ($7::timestamptz AT TIME ZONE $8)::date)
        RETURNING id`,
-      [w.id, `outreach_${a.kind}`, a.severity, rellenar(t.title, valores), rellenar(t.body, valores), t.url, now.toISOString(), w.tz],
+      [
+        w.id, `outreach_${a.kind}`, a.severity, rellenar(t.title, valores), rellenar(t.body, valores), ALERTAS_URL[a.kind],
+        now.toISOString(), w.tz,
+      ],
     );
     if (rows.length) creadas.push(a.kind);
   }
@@ -198,16 +166,20 @@ type Pendiente = {
   id: string;
   title_es: string;
   body_es: string | null;
+  action_url: string | null;
 };
 
-/** El resumen por correo de las alertas de hoy que no salieron todavía, a cada dueño. */
+/**
+ * El resumen por correo de las alertas que no salieron todavía (de los
+ * últimos ALERTAS_REENVIO_DIAS), en UN correo a todos los dueños.
+ */
 async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: AlertasDeps, r: AlertasResult): Promise<void> {
   const { rows: pendientes } = await db.query<Pendiente>(
-    `SELECT id, title_es, body_es FROM notification
+    `SELECT id, title_es, body_es, action_url FROM notification
       WHERE workspace_id = $1 AND kind LIKE 'outreach\\_%' AND emailed_at IS NULL
-        AND (created_at AT TIME ZONE $3)::date = ($2::timestamptz AT TIME ZONE $3)::date
+        AND created_at >= $2::timestamptz - make_interval(days => $3::int)
       ORDER BY created_at, kind`,
-    [w.id, now.toISOString(), w.tz],
+    [w.id, now.toISOString(), ALERTAS_REENVIO_DIAS],
   );
   if (!pendientes.length) return;
   if (!deps.mailer) {
@@ -220,7 +192,7 @@ async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: Alert
     [w.id],
   );
   if (!duenos.length) return;
-  const c = ALERTAS_CORREO;
+  const c = alertTextsFor(w.locale).email;
   const subject =
     pendientes.length === 1
       ? rellenar(c.subjectOne, { workspace: w.name })
@@ -229,13 +201,16 @@ async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: Alert
   const text = [
     rellenar(c.intro, { workspace: w.name }),
     '',
-    ...pendientes.flatMap((p) => [`· ${p.title_es}`, p.body_es ? `  ${p.body_es}` : '', '']),
-    rellenar(c.outro, { url: `${base}/ventas/politica` }),
-  ]
-    .filter((l, i, all) => !(l === '' && all[i - 1] === ''))
-    .join('\n');
+    ...pendientes.flatMap((p) => [
+      `· ${p.title_es}`,
+      ...(p.body_es ? [`  ${p.body_es}`] : []),
+      ...(p.action_url ? [`  ${rellenar(c.link, { url: `${base}${p.action_url}` })}`] : []),
+      '',
+    ]),
+    c.outro,
+  ].join('\n');
   try {
-    for (const d of duenos) await deps.mailer.send({ to: d.email, subject, text });
+    await deps.mailer.send({ to: duenos.map((d) => d.email), subject, text });
   } catch (err) {
     r.emailFailed++;
     throw err;
@@ -244,7 +219,7 @@ async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: Alert
     pendientes.map((p) => p.id),
     now.toISOString(),
   ]);
-  r.emailsSent += duenos.length;
+  r.emailsSent++;
 }
 
 export async function runAlertas(
