@@ -65,7 +65,10 @@ make worker.humo                        # = pnpm --filter @mc/worker humo: lista
 | `PGSSLROOTCERT` | Ruta al CA de Supabase; relativa a `platform/`. | `db/certs/supabase-root-2021.crt` |
 | `LOG_LEVEL` / `LOG_FORMAT` | `debug|info|warn|error` · `json|pretty`. | `info` / `json` |
 | `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY` | `collect.account_metrics` (CON-10): el token de la cuenta profesional de On Cue para `business_discovery` y la API key de YouTube. Sin ellas la plataforma se salta y se avisa. | — |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Las usará el refresher de YouTube (CON-8). Hoy no se leen. | — |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | El adaptador de Gmail del motor de cadencias (VEN-10) las usa para renovar un token de buzón vencido; las usará también el refresher de YouTube (CON-8). Sin ellas, un correo con el token vencido queda como fallo transitorio. | — |
+| `UNIPILE_DSN`, `UNIPILE_ACCESS_TOKEN` | LinkedIn e Instagram del motor de cadencias. Sin ellas esos canales no se reclaman: sus toques esperan en la cola. | — |
+| `OUTREACH_CHANNELS` | `real` (Gmail y Unipile) o `fake` (buzón en memoria, nada sale de la máquina). | `real` |
+| `APP_URL` | Origen público de la web, para el enlace de baja de cada correo. Sin él (ni `VERCEL_PROJECT_PRODUCTION_URL`) el correo real no se reclama. | — |
 
 `make worker`, `humo` e `install-schema` cargan solo `platform/.env.local`
 (lo que escribe `make db.unlock`) con `--env-file-if-exists`; no hay
@@ -140,6 +143,34 @@ Reglas:
   el elemento falla y la conexión no se toca. Una llamada que no pasa
   por un conector se registra con `ctx.callLog.record(...)`. Detalle en
   `packages/connectors/README.md`.
+
+## Motor de cadencias (Ventas, VEN-10)
+
+Dos jobs de `src/jobs/ventas/`, programados por `job_definition` en la
+migración 0038 (grupo `sales`):
+
+| Job | Cada | Qué hace |
+|---|---|---|
+| `outbound.dispatch` | 2 min | Zombis de más de 5 min en `processing` → `failed` y aviso, sin reenviar. Reclama hasta 50 toques vencidos con `UPDATE … RETURNING` (topes diarios y semanales, calentamiento, ventana laboral; si un tope no da, el toque va al siguiente día hábil sin gastar intento). Por cada uno, en su transacción: relee toque, enrolamiento, ficha, lista global, interruptor y cuenta; compone (pie de baja en el correo, hilo en la respuesta) y envía por su adaptador. Transitorio → reintento con espera creciente hasta 5; permanente → `failed` y aviso. |
+| `outbound.replies` | 5 min | Respaldo del webhook: lee los hilos abiertos, escribe `outbound_message` entrante, marca el enrolamiento `replied` (o `opted_out` si pide la baja) y cancela lo pendiente. |
+
+Adaptadores en `src/jobs/ventas/canales/` con una sola interfaz
+(`ChannelSender`, `ChannelReader`): Gmail, Unipile (LinkedIn e Instagram)
+y `fake`. La guardia de placeholders (`@mc/core`) corre en el punto de
+envío. Una pasada a mano, con la misma conexión que el worker:
+
+```bash
+pnpm --filter @mc/worker run job:dispatch                  # canales reales
+pnpm --filter @mc/worker run job:dispatch -- --canal-falso # buzón en memoria; el envío queda en outbound_touch
+pnpm --filter @mc/worker run job:replies                   # respuestas de los hilos abiertos
+pnpm --filter @mc/worker run job:dispatch -- --demo        # Postgres embebido con migraciones y seeds: apagada no envía, encendida sí
+```
+
+`--workspace <uuid>` limita la pasada a un workspace. Contra Supabase
+necesita, como `job:seguimientos`, `GRANT mc_worker TO mc_migrator` y las
+migraciones 0037 y 0038 aplicadas. El runner (`src/runner/`) es el de
+CON-2: el motor no le cambia nada, solo suma sus dos jobs en
+`src/jobs/ventas/index.ts`.
 
 ## Qué pasa cuando falla
 
@@ -230,5 +261,6 @@ src/runner/run.ts            una ejecución: job_run running → ok/partial/fail
 src/runner/worker.ts         arranque: colas, crons, handlers, resumen
 src/jobs/index.ts            suma de los jobs de todos los módulos
 src/jobs/conexiones/         oauth.refresh · collect.account_metrics (cuentas por @ y autorizadas, CON-10)
+src/jobs/ventas/             sales.follow_ups · outbound.dispatch · outbound.replies · canales/ (VEN-10)
 test/                        integración (pglite) y unitarias
 ```

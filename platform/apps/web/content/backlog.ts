@@ -406,7 +406,8 @@ export const STORIES: readonly Story[] = [
     title: "Motor de cadencias",
     desc: "Pasos normalizados, enrolamiento, cola en outbound_touch con reclamo atómico, despachador por canal con interfaz común, días hábiles y zona horaria del workspace, límites diarios y semanales, reintentos con espera creciente, interruptor de apagado, cancelación al responder con relectura del estado antes de enviar.",
     done: "Una secuencia de tres pasos con plantillas fijas se ejecuta sola contra un buzón de prueba; una respuesta cancela lo pendiente; el límite diario reprograma al día siguiente.",
-    status: "pendiente",
+    status: "en_curso",
+    note: "El motor está (24 de septiembre): programación pura en @mc/core (días hábiles, zona con Intl, dispersión con semilla en la ventana laboral, espera creciente), guardia de placeholders y detector de baja con sus pruebas; consultas en @mc/db (enrolar, reclamo atómico, relectura antes de enviar, resultado, zombis, respuestas); migración 0038_motor_cadencias; jobs outbound.dispatch (cada 2 min) y outbound.replies (cada 5) con adaptadores Gmail, Unipile y falso detrás de una interfaz. La prueba de punta a punta en pglite pasa sin red (tres pasos, dos contactos, respuesta que cancela, tope diario al siguiente día hábil, reintento transitorio, zombi, baja, interruptor), y `job:dispatch -- --demo` repite el recorrido con el seed: apagada no envía, encendida deja el envío en outbound_touch. Falta la misma corrida contra Supabase, que no se puede hacer todavía: 0037 y 0038 no están aplicadas allá (van renumeradas con el próximo deploy) y mc_migrator no es miembro de mc_worker (./scripts/supabase-admin.sh sql \"GRANT mc_worker TO mc_migrator\").",
   },
   {
     id: "VEN-11", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["CON-6", "COT-1"],
