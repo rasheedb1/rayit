@@ -5,7 +5,7 @@
  * costuras que viven en la pantalla y no en una consulta:
  *
  *   - CON-5 / CON-10 → CAM-1: los posts asociados salen de post y
- *     post_metric_snapshot (Café Alma: 417 673 y 303 685, su última lectura), y una
+ *     post_metric_snapshot (Café Alma: su última lectura, leída de la base), y una
  *     campaña sin posts lo dice con una frase, no con una tabla vacía;
  *   - CAM-5 con 0041: «Recalcular» aparece para quien tiene
  *     campanas.resultado.calcular y no para el Editor, que lee la frase;
@@ -78,9 +78,21 @@ describe("la ficha real contra el seed", () => {
     const { texto } = await ficha(CAMPAIGN_CAFE_ALMA);
     expect(texto).toContain("Posts asociados");
     expect(texto).toContain("2 posts");
-    // Las views ACTUALES: la última lectura de post_metric_snapshot de cada post (seed 0002, 22-sep).
-    expect(texto).toContain("Cold brew en casa en 3 pasos Instagram 10 ago 417.673 hasta el 22 sep");
-    expect(texto).toContain("El cold brew que me salva las mañanas TikTok 12 ago 303.685 hasta el 22 sep");
+    // Las views ACTUALES: la última lectura de post_metric_snapshot de cada post. El seed 0002 fecha
+    // sus lecturas respecto a hoy, así que la cifra y el día se leen de la base: fijarlos rompía la
+    // prueba al pasar la medianoche UTC (cierre de ACC, 23-sep).
+    const { rows } = await withWorkspaceId(SEED_WORKSPACE_ID, (tx) =>
+      tx.query<{ title: string; views: string }>(
+        `SELECT p.title, s.views::text FROM campaign_post cp JOIN post p ON p.id = cp.post_id
+           JOIN LATERAL (SELECT views FROM post_metric_snapshot m WHERE m.post_id = p.id ORDER BY captured_at DESC LIMIT 1) s ON true
+          WHERE cp.campaign_id = $1`,
+        [CAMPAIGN_CAFE_ALMA],
+      ),
+    );
+    const vistas = new Map(rows.map((r) => [r.title, new Intl.NumberFormat("es-CO").format(Number(r.views))]));
+    expect(vistas.size).toBe(2);
+    expect(texto).toMatch(new RegExp(`Cold brew en casa en 3 pasos Instagram 10 ago ${vistas.get("Cold brew en casa en 3 pasos")!.replace(/\./g, "\\.")} hasta el \\d{1,2} sep`));
+    expect(texto).toMatch(new RegExp(`El cold brew que me salva las mañanas TikTok 12 ago ${vistas.get("El cold brew que me salva las mañanas")!.replace(/\./g, "\\.")} hasta el \\d{1,2} sep`));
     expect(texto).not.toContain("Sin posts asociados");
   }, 120_000);
 
