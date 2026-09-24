@@ -169,6 +169,30 @@ export async function openProtectedMediaKit(
   return visible;
 }
 
+/**
+ * La prueba de que un aviso de proveedor es nuestro y de qué espacio es
+ * (VEN-9). Solo la fabrican las verificaciones de
+ * app/(app)/ventas/canales/_lib/: el estado firmado de una conexión
+ * (HMAC, caducidad, nonce) o la ruta firmada de un aviso de Unipile. El
+ * workspace sale de la FIRMA, nunca del cuerpo de la petición.
+ */
+export interface ProviderCallbackProof {
+  workspaceId: string;
+  verifiedBy: "channel_state" | "channel_route";
+}
+
+/**
+ * Una transacción en el espacio de un aviso de proveedor ya verificado:
+ * el webhook de Unipile llega sin sesión y sin cookie, y el espacio lo
+ * dice su firma. Es una operación con nombre, como acceptQuoteFromLink:
+ * la web sigue sin poder abrir el workspace que quiera a partir de algo
+ * que mande el navegador. Lo que puede hacer dentro es lo de cualquier
+ * withWorkspace (mc_app y RLS) más las dos funciones de 0039.
+ */
+export async function withProviderCallback<T>(proof: ProviderCallbackProof, fn: (tx: WorkspaceTx) => Promise<T>): Promise<T> {
+  return withWorkspaceId(proof.workspaceId, fn);
+}
+
 export { getDbMode } from "./cliente";
 
 /** Cierra la base del proceso. Solo para pruebas y para el apagado; una pantalla nunca la cierra. */

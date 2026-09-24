@@ -17,6 +17,7 @@
  *   estado firmado y hablar con el proveedor)
  *     completeChannelConnection  pending → connected, por outreach_channel_connect (0039)
  *     failPendingChannelAccount  la conexión no se completó: el motivo, a la fila
+ *     noteChannelAccountIssue    un aviso sobre una cuenta que sigue conectada
  *     existingGmailSecretRef     la ref del token al reconectar un Gmail
  *     findUnipileAccountForWebhook  la cuenta de un aviso de Unipile
  *     markChannelAccountDown     el proveedor dice que cayó, por outreach_channel_mark_down (0039)
@@ -304,6 +305,20 @@ export async function existingGmailSecretRef(tx: WorkspaceTx, email: string): Pr
   );
   const ref = rows[0]?.secret_ref ?? null;
   return ref?.startsWith('enc:gmail:') ? ref : null;
+}
+
+/**
+ * Algo que la persona tiene que saber de una cuenta que sigue conectada
+ * (los avisos de respuestas no se dieron de alta): va a last_error sin
+ * cambiar el estado. mc_app puede: last_error no es de los candados.
+ */
+export async function noteChannelAccountIssue(tx: WorkspaceTx, accountId: string, message: string): Promise<boolean> {
+  if (!isUuid(accountId)) return false;
+  const res = await tx.query(
+    `UPDATE outreach_channel_account SET last_error = $2, last_error_at = now() WHERE id = $1 RETURNING id`,
+    [accountId, message.slice(0, 500)],
+  );
+  return res.rows.length === 1;
 }
 
 export interface LiveChannelAccount {
