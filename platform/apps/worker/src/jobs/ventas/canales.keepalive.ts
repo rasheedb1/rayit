@@ -42,7 +42,7 @@
  */
 import {
   channelSigningKeys, freshGoogleTokens, GoogleOAuth, isOutreachApiError, keyringFromEnv, loadGoogleOAuthConfig, loadUnipileConfig,
-  MasterKeyError, PostgresOutreachCallLog, registerAccountWebhooks, UnipileClient, UNIPILE_WEBHOOK_SECRET_ENV,
+  MasterKeyError, PostgresOutreachCallLog, registerAccountWebhooks, UnipileClient, UNIPILE_ACCOUNT_WEBHOOK_SOURCES, UNIPILE_WEBHOOK_SECRET_ENV,
   type GoogleOAuthApi, type OAuthTokens, type SecretStore, type UnipileApi,
 } from '@mc/connectors';
 import { CANALES_TEXTOS, channelHealthName } from '@mc/core';
@@ -173,7 +173,7 @@ async function accounts(db: Queryable, provider: AccountRow['provider'], statuse
 }
 
 /**
- * Las cuentas de Unipile conectadas sin avisos (y con unos minutos de
+ * Las cuentas de Unipile conectadas sin sus dos avisos (y con unos minutos de
  * vida: a una recién conectada se los está dando de alta la web). Por
  * cada una, los dos avisos; si salen, sus ids a la fila y el código
  * `webhooks_missing` fuera; si no, el código se queda (o se pone) y
@@ -188,11 +188,11 @@ async function restoreWebhooks(
   const { rows } = await db.query<AccountRow>(
     `SELECT id, workspace_id, channel, provider, provider_account_id, display_name, secret_ref, status
        FROM outreach_channel_account
-      WHERE provider = 'unipile' AND status = 'connected' AND cardinality(provider_webhook_ids) = 0
+      WHERE provider = 'unipile' AND status = 'connected' AND cardinality(provider_webhook_ids) < $3
         AND provider_account_id NOT LIKE 'pending:%'
         AND updated_at < $1::timestamptz - make_interval(mins => $2)
       ORDER BY id`,
-    [now, WEBHOOKS_GRACE_MINUTES],
+    [now, WEBHOOKS_GRACE_MINUTES, UNIPILE_ACCOUNT_WEBHOOK_SOURCES.length],
   );
   let restored = 0;
   for (const a of rows) {

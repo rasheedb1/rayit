@@ -4,11 +4,9 @@
  * petición, con su propia bitácora que después se escribe en la
  * transacción) y las transacciones son las de lib/db.
  */
-import {
-  channelSigningKeys, keyringFromEnv, MasterKeyError, TokenCipher, type GoogleOAuthApi, type OutreachCallLogSink, type UnipileApi,
-} from "@mc/connectors";
+import { keyringFromEnv, TokenCipher, type GoogleOAuthApi, type OutreachCallLogSink, type UnipileApi } from "@mc/connectors";
 import type { WorkspaceTx } from "@mc/db";
-import type { ProviderCallbackProof } from "@/lib/db/aviso-de-proveedor";
+import { channelSigningKeysFromEnv, type ProviderCallbackProof } from "@/lib/db/aviso-de-proveedor";
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
@@ -44,14 +42,10 @@ export interface ChannelKeys {
 
 /** Las llaves salen de TOKEN_ENCRYPTION_KEY (y sus versiones), derivadas con etiquetas distintas. null si falta o no es válida. */
 export function channelKeys(env: Env): ChannelKeys | null {
-  try {
-    const keyring = keyringFromEnv(env);
-    const k = channelSigningKeys(keyring);
-    return { cipher: new TokenCipher(keyring), sign: k.current, verify: { state: k.state, route: k.route } };
-  } catch (err) {
-    if (err instanceof MasterKeyError) return null;
-    throw err;
-  }
+  // Una sola lectura tolerante del llavero (lib/db/aviso-de-proveedor): si las llaves de firma salen, el llavero es válido.
+  const k = channelSigningKeysFromEnv(env);
+  if (!k) return null;
+  return { cipher: new TokenCipher(keyringFromEnv(env)), sign: k.current, verify: { state: k.state, route: k.route } };
 }
 
 export function redirectTo(req: Request, path: string, headers: Record<string, string> = {}): Response {

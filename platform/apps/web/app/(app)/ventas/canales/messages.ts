@@ -8,7 +8,14 @@
  * del repositorio ni códigos crudos de un proveedor: eso va a los
  * registros del servidor, a api_call_log y, solo en desarrollo, a un
  * bloque plegado para quien administra la plataforma.
+ *
+ * Las frases de SALUD de una cuenta (qué dijo Unipile de la sesión, el
+ * aviso de la campana) no están aquí: las escribe también el keepalive
+ * del worker, y viven en @mc/core (canales-textos.ts) para que el mismo
+ * evento diga lo mismo lo detecte quien lo detecte. Se re-exportan abajo.
  */
+import { CANALES_TEXTOS } from "@mc/core";
+
 export const MESSAGES = {
   meta: { title: "Canales de outreach" },
   header: {
@@ -40,10 +47,17 @@ export const MESSAGES = {
   },
 
   detail: {
-    account: "Cuenta",
-    /** «Hoy 3 de 20 · Semana 12 de 100»: los dos límites vienen de la vista de límites (0040), siempre con número. */
-    usage: (today: string, dayCap: string, week: string, weekCap: string) => `Hoy ${today} de ${dayCap} · Semana ${week} de ${weekCap}`,
-    lastOk: (when: string) => `Comprobado ${when}`,
+    /** «Hoy 3 de 20» y «Semana 12 de 100», por separado para que en móvil no se partan a medias. Los límites vienen de la vista (0040). */
+    usageToday: (today: string, dayCap: string) => `Hoy ${today} de ${dayCap}`,
+    usageWeek: (week: string, weekCap: string) => `Semana ${week} de ${weekCap}`,
+    /** Cuándo se comprobó por última vez que la cuenta responde (last_ok_at), como las integraciones de Vercel. */
+    lastOk: (when: string) => `Comprobada ${when}`,
+    /** El nombre accesible de la lista de las demás cuentas vivas de un canal. */
+    otherAccounts: (channel: string) => `Otras cuentas de ${channel}`,
+    /** Una cuenta conectada sin avisos de Unipile: no nos enteramos de sus respuestas. */
+    webhooksMissing: "Conectada, pero todavía no nos enteramos de las respuestas: no pudimos activar sus avisos.",
+    /** Se reconectó mientras la soltábamos en el proveedor. */
+    releasing: "Estábamos soltando esta cuenta cuando la volviste a conectar. Espera un minuto y vuelve a intentarlo.",
     pendingHint: {
       email: "Estás autorizando en Google. Si cerraste esa página sin terminar, vuelve a intentarlo.",
       unipile: (provider: string) => `Termina la conexión en la página de ${provider} que se abrió. Si la cerraste, vuelve a intentarlo.`,
@@ -65,7 +79,10 @@ export const MESSAGES = {
     connect: "Conectar",
     reconnect: "Reconectar",
     retry: "Volver a intentar",
+    connecting: "Abriendo…",
     disconnect: "Desconectar",
+    /** El nombre accesible de «Desconectar» de una cuenta concreta. */
+    disconnectAccount: (account: string) => `Desconectar ${account}`,
     disconnectConfirm: "¿Desconectar esta cuenta? Los envíos pendientes por este canal se detienen y la cuenta se suelta en el proveedor.",
     cancel: "Cancelar",
     saveCaps: "Guardar límites",
@@ -76,7 +93,8 @@ export const MESSAGES = {
   },
 
   caps: {
-    legend: "Límites",
+    /** El nombre accesible del formulario de límites de una cuenta. */
+    legend: (account: string) => `Límites de ${account}`,
     daily: "Por día",
     weekly: "Por semana",
     /** El máximo de la cuenta y quién lo fija. */
@@ -109,7 +127,12 @@ export const MESSAGES = {
       sin_creador: "Este espacio no tiene un perfil de creador; no se puede conectar una cuenta.",
       no_configurado: "Este canal todavía no está disponible en tu cuenta de On Cue.",
       canal_equivocado: "La cuenta que conectaste no es de ese canal.",
+      otro_espacio: "Esta conexión se empezó en otro espacio de On Cue. Cambia a ese espacio y vuelve a intentarlo.",
+      soltando: "Estábamos soltando esa cuenta en el proveedor. Espera un minuto y vuelve a intentarlo.",
     },
+    /** «Volver a intentar» de los avisos de una cuenta conectada. */
+    webhooksRestored: "Listo: ya nos enteramos de las respuestas de esa cuenta.",
+    webhooksStillMissing: "El proveedor no respondió. Inténtalo de nuevo en unos minutos; también lo reintentamos cada día.",
   },
 
   /** Respuestas de las rutas (texto plano o JSON para el proveedor, no la pantalla). */
@@ -117,8 +140,6 @@ export const MESSAGES = {
     notConfigured: "Este canal no está disponible.",
     postOnly: "Usa el botón «Conectar» de /ventas/canales: el inicio va por POST.",
     webhookPostOnly: "Solo POST.",
-    badState: "La respuesta del proveedor no corresponde a una conexión empezada en este navegador. Vuelve a /ventas/canales y pulsa «Conectar».",
-    otherWorkspace: "Esta conexión se empezó en otro espacio. Cambia a ese espacio y vuelve a intentarlo.",
     unauthorized: "Firma inválida.",
     badJson: "JSON inválido.",
     tooLarge: "Aviso demasiado grande.",
@@ -130,6 +151,8 @@ export const MESSAGES = {
       duplicate: "mensaje repetido",
       healthy: "la cuenta sigue bien",
       unknownInUnipile: "cuenta desconocida en Unipile",
+      /** Un DM del creador que no es respuesta a un toque nuestro: ni se guarda ni se clasifica. */
+      foreignChat: "chat ajeno al outreach",
       notAccountEvent: "aviso de cuenta con cabeceras de ruta",
     },
     /** Lo que se registra en el servidor (console.warn) cuando falta configuración. */
@@ -137,29 +160,13 @@ export const MESSAGES = {
   },
 
   /**
-   * Lo que dice Unipile de una sesión, en frase. El código crudo
-   * (CREDENTIALS, STOPPED…) no llega al creador: queda en el registro del
-   * servidor.
+   * La salud de una cuenta (@mc/core): lo que dice Unipile de la sesión y
+   * el aviso de la campana cuando cae. El código crudo (CREDENTIALS,
+   * STOPPED…) no llega al creador: queda en el registro del servidor.
    */
-  unipileStatus: (status: string, channel: string): string => {
-    switch (status) {
-      case "CREDENTIALS": return `${channel} cerró la sesión.`;
-      case "STOPPED": return "La cuenta se detuvo.";
-      case "DELETED": return "La cuenta se borró en el proveedor.";
-      case "DISCONNECTED": return "La cuenta se desconectó.";
-      default: return `${channel} dio un error con la sesión.`;
-    }
-  },
-
-  /** Lo que queda escrito en la base cuando Unipile avisa que la cuenta cayó. */
-  downNotice: {
-    title: (channel: string, name: string | null) => `Vuelve a conectar tu ${channel}${name ? ` (${name})` : ""}`,
-    body: (what: string) => `${what} Vuelve a conectar la cuenta desde Canales.`,
-  },
+  health: CANALES_TEXTOS,
   /** contact.opted_out_reason cuando una respuesta pide la baja. */
   optOutReason: (channel: string) => `Pidió no ser contactado, respondiendo por ${channel}.`,
-  /** Queda en last_error si no se pudieron dar de alta los avisos de la cuenta. */
-  webhookSetupFailed: "Conectada, pero sin avisos de respuestas: no pudimos darlos de alta. Reconecta la cuenta para reintentarlo.",
 
   loading: { label: "Cargando canales" },
   error: { eyebrow: "Ventas", title: "No pudimos leer tus canales" },

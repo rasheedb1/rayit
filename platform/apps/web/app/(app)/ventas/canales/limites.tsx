@@ -1,47 +1,53 @@
 "use client";
 
-import { useActionState } from "react";
 import { Aviso } from "../../_lib/aviso";
+import { useVentasForm } from "../_lib/use-ventas-form";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
-import { guardarLimites, type LimitesState } from "./actions";
+import { guardarLimites } from "./actions";
 import { MESSAGES } from "./messages";
 
 /**
  * Los límites de una cuenta: por día y por semana. Vacío = sin tope propio
  * (rige el máximo de la cuenta). El máximo lo calcula la base
  * (outreach_channel_account_limits) y lo comprueba el servidor al
- * guardar; aquí solo sirve para el `max` del campo y la ayuda, que llegan
- * ya formateadas con el locale del espacio. Nada de eso viaja de vuelta.
+ * guardar, con las frases de messages.ts: el formulario va con noValidate
+ * para que el navegador no conteste antes con su globo, en su idioma.
+ *
+ * Se envía con useVentasForm (el de todo Ventas) y no con `action={…}`:
+ * React 19 vacía un formulario no controlado al terminar su acción,
+ * también cuando vuelve con errores, y la persona vería «no puede pasar
+ * del semanal» junto a un campo que ya no dice lo que escribió. Con el
+ * hook, lo escrito se queda y el foco va al campo con el error.
  */
 export function Limites({
-  accountId, dailyCap, weeklyCap, maxDaily, maxWeekly, dailyHelp, weeklyHelp, dailyPlaceholder, weeklyPlaceholder,
+  accountId, account, dailyCap, weeklyCap, dailyHelp, weeklyHelp, dailyPlaceholder, weeklyPlaceholder,
 }: {
   accountId: string;
+  /** El nombre de la cuenta, para el nombre accesible del formulario. */
+  account: string;
   dailyCap: number | null;
   weeklyCap: number | null;
-  maxDaily: number;
-  maxWeekly: number;
   dailyHelp: string;
   weeklyHelp: string;
   dailyPlaceholder: string;
   weeklyPlaceholder: string;
 }) {
-  const [state, action, pending] = useActionState<LimitesState, FormData>(guardarLimites, {});
+  const { state, pending, formRef, onSubmit, errors } = useVentasForm(guardarLimites);
   const t = MESSAGES.caps;
   return (
-    <form action={action} className="flex flex-col gap-3" aria-label={t.legend}>
+    <form ref={formRef} onSubmit={onSubmit} noValidate className="flex flex-col gap-3" aria-label={t.legend(account)}>
       <input type="hidden" name="accountId" value={accountId} />
       <div className="flex flex-wrap gap-x-6 gap-y-3">
-        <Field label={t.daily} help={dailyHelp} error={state.errors?.dailyCap}>
+        <Field label={t.daily} help={dailyHelp} error={errors["dailyCap"]}>
           <Input
-            name="dailyCap" type="number" inputMode="numeric" min={0} max={maxDaily} step={1}
+            name="dailyCap" type="number" inputMode="numeric" min={0} step={1}
             defaultValue={dailyCap ?? ""} placeholder={dailyPlaceholder} className="w-28 tabular-nums"
           />
         </Field>
-        <Field label={t.weekly} help={weeklyHelp} error={state.errors?.weeklyCap}>
+        <Field label={t.weekly} help={weeklyHelp} error={errors["weeklyCap"]}>
           <Input
-            name="weeklyCap" type="number" inputMode="numeric" min={0} max={maxWeekly} step={1}
+            name="weeklyCap" type="number" inputMode="numeric" min={0} step={1}
             defaultValue={weeklyCap ?? ""} placeholder={weeklyPlaceholder} className="w-28 tabular-nums"
           />
         </Field>

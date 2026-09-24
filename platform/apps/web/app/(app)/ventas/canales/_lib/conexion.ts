@@ -11,9 +11,15 @@
  *                                     espacio de la sesión → canje del
  *                                     code → alcances → correo de userinfo
  *                                     → UNA transacción: token cifrado en
- *                                     el vault (misma ref si reconecta) y
+ *                                     el vault (misma ref si reconecta una
+ *                                     cuenta viva; una nueva si la fila
+ *                                     estaba desconectada) y
  *                                     outreach_channel_connect → 303 a
  *                                     /ventas/canales?conectado=email.
+ *                                     Un estado vencido, de otro navegador
+ *                                     o de otro espacio vuelve a la
+ *                                     pantalla con su aviso, no a un texto
+ *                                     plano.
  *   POST /ventas/canales/conectar     LinkedIn o Instagram: fila 'pending',
  *                                     estado firmado como `name` del
  *                                     enlace de hosted auth de Unipile y
@@ -140,13 +146,15 @@ export async function googleCallback(req: Request, deps: ChannelDeps): Promise<R
   }
 
   if (!keys || !deps.google) return back(req, "no_configurado", headers);
+  // Volver atrás tras autorizar, abrir el enlace en otro navegador o tardar más de diez minutos: la pantalla de
+  // canales con su aviso, dentro de la aplicación, nunca una página en blanco. Nada se toca.
   const verified = verifyChannelState(params.get("state"), keys.verify.state, now, GOOGLE_STATE_TTL_MS);
-  if (!verified.ok || verified.payload.channel !== "email") return plain(400, MESSAGES.routes.badState, headers);
+  if (!verified.ok || verified.payload.channel !== "email") return back(req, "vencida", headers);
   const state = verified.payload;
-  if (readCookie(req, GOOGLE_COOKIE) !== state.nonce) return plain(400, MESSAGES.routes.badState, headers);
-  if ((await deps.currentWorkspaceId()) !== state.workspaceId) return plain(409, MESSAGES.routes.otherWorkspace, headers);
+  if (readCookie(req, GOOGLE_COOKIE) !== state.nonce) return back(req, "vencida", headers);
+  if ((await deps.currentWorkspaceId()) !== state.workspaceId) return back(req, "otro_espacio", headers);
   const code = params.get("code");
-  if (!code) return plain(400, MESSAGES.routes.badState, headers);
+  if (!code) return back(req, "vencida", headers);
 
   // Fase HTTP, fuera de la transacción. La bitácora se escribe después, con la cuenta.
   const log = new InMemoryOutreachCallLog();
@@ -178,12 +186,15 @@ export async function googleCallback(req: Request, deps: ChannelDeps): Promise<R
       const r = await completeChannelConnection(tx, { channel: "email", nonce: state.nonce, providerAccountId: email, displayName: email, secretRef: ref, scopes });
       if (r.status === "taken") throw new RollbackConnection("ocupada");
       if (r.status === "unknown_state") throw new RollbackConnection("vencida");
+      // El worker está soltando ese mismo Gmail (revoca en Google): el token nuevo moriría con el viejo. Se deshace todo.
+      if (r.status === "releasing") throw new RollbackConnection("soltando");
       await log.flushTo(new PostgresOutreachCallLog(tx), r.accountId);
     });
   } catch (err) {
     if (!(err instanceof RollbackConnection)) throw err;
     // 'vencida': la pendiente ya no existe o ya se usó; no hay nada que marcar.
-    await flushAndFail(deps, log, state.nonce, err.code === "ocupada" ? CHANNEL_ERROR_CODES.taken : null);
+    const reason = err.code === "ocupada" ? CHANNEL_ERROR_CODES.taken : err.code === "soltando" ? CHANNEL_ERROR_CODES.releasing : null;
+    await flushAndFail(deps, log, state.nonce, reason);
     return back(req, err.code, headers);
   }
   return redirectTo(req, `${CANALES}?conectado=email`, headers);

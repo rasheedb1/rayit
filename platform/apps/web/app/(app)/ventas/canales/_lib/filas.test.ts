@@ -85,7 +85,34 @@ describe("channelRows", () => {
     expect(cancelled[0]!.reason).toBe(MESSAGES.banners.errors.cancelada);
   });
 
+  it("dos cuentas vivas del mismo canal: la primera encabeza y la segunda sale en su sub-fila, con su estado y su botón", () => {
+    const rows = channelRows([
+      account({ id: "a", displayName: "alianzas@laura.test", status: "connected" }),
+      account({ id: "b", displayName: "laura@gmail.test", status: "needs_reconnect", lastError: "Google ya no acepta el permiso." }),
+      account({ id: "c", status: "disconnected" }),
+    ], channelSetup(ALL));
+    expect(rows[0]).toMatchObject({ state: "connected", action: null });
+    expect(rows[0]!.account?.id).toBe("a");
+    expect(rows[0]!.others.map((o) => [o.account?.id, o.state, o.action, o.reason])).toEqual([
+      ["b", "needs_reconnect", "reconnect", "Google ya no acepta el permiso."],
+    ]);
+    expect(rows[0]!.others[0]!.others, "una sub-fila no anida más").toEqual([]);
+    // Los demás canales no heredan nada.
+    expect(rows[1]!.others).toEqual([]);
+  });
+
+  it("una cuenta conectada sin avisos de Unipile ofrece «Volver a intentar» (rewebhook) con su motivo", () => {
+    const li = account({ id: "1", channel: "linkedin", provider: "unipile", status: "connected", lastError: "webhooks_missing" });
+    const [, row] = channelRows([li], channelSetup(ALL));
+    expect(row).toMatchObject({ state: "connected", action: "rewebhook", reason: MESSAGES.detail.webhooksMissing });
+    // Un motivo cualquiera en una conectada (un fallo pasajero del keepalive) no pide botón.
+    const [, otra] = channelRows([{ ...li, lastError: "No pudimos comprobar la cuenta hoy." }], channelSetup(ALL));
+    expect(otra!.action).toBeNull();
+  });
+
   it("reasonText traduce los códigos y deja pasar las frases", () => {
+    expect(reasonText("releasing")).toBe(MESSAGES.detail.releasing);
+    expect(reasonText("webhooks_missing")).toBe(MESSAGES.detail.webhooksMissing);
     expect(reasonText("missing_scopes")).toBe(MESSAGES.banners.errors.permisos);
     expect(reasonText("wrong_provider")).toBe(MESSAGES.banners.errors.canal_equivocado);
     expect(reasonText("Unipile dijo algo.")).toBe("Unipile dijo algo.");

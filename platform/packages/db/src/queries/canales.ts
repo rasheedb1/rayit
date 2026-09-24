@@ -25,6 +25,8 @@
  *     recordInboundMessage       una respuesta nueva, a outbound_message; su
  *                                enrolamiento deja de enviar y una baja explícita se respeta
  *     setChannelWebhooks         los avisos de Unipile de la cuenta (0040)
+ *     getConnectedUnipileAccount la cuenta de «Volver a intentar» sus avisos
+ *     clearChannelAccountIssue   quita un código de last_error que ya no aplica
  *
  * A un estado autenticado (connected, needs_reconnect, error) solo llega
  * quien habló con el proveedor: el disparador
@@ -433,6 +435,36 @@ export async function noteChannelAccountIssue(tx: WorkspaceTx, accountId: string
     [accountId, message.slice(0, 500)],
   );
   return res.rows.length === 1;
+}
+
+/**
+ * Quita de last_error un código que ya no aplica (los avisos se dieron de
+ * alta): solo si lo que hay escrito es ESE código, para no borrar un
+ * motivo más nuevo que haya escrito otro.
+ */
+export async function clearChannelAccountIssue(tx: WorkspaceTx, accountId: string, code: string): Promise<boolean> {
+  if (!isUuid(accountId)) return false;
+  const res = await tx.query(
+    `UPDATE outreach_channel_account SET last_error = NULL, last_error_at = NULL WHERE id = $1 AND last_error = $2 RETURNING id`,
+    [accountId, code],
+  );
+  return res.rows.length === 1;
+}
+
+/** Una cuenta de Unipile conectada de este espacio, con cuántos avisos tiene: la de «Volver a intentar» los avisos. */
+export async function getConnectedUnipileAccount(
+  tx: WorkspaceTx,
+  accountId: string,
+): Promise<{ id: string; providerAccountId: string; channel: OutreachChannel; webhooks: number } | null> {
+  if (!isUuid(accountId)) return null;
+  const { rows } = await tx.query<{ id: string; provider_account_id: string; channel: OutreachChannel; webhooks: number }>(
+    `SELECT id, provider_account_id, channel, cardinality(provider_webhook_ids)::int AS webhooks
+       FROM outreach_channel_account
+      WHERE id = $1 AND provider = 'unipile' AND status = 'connected' AND provider_account_id NOT LIKE 'pending:%'`,
+    [accountId],
+  );
+  const r = rows[0];
+  return r ? { id: r.id, providerAccountId: r.provider_account_id, channel: r.channel, webhooks: r.webhooks } : null;
 }
 
 export interface LiveChannelAccount {

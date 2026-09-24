@@ -3,13 +3,19 @@
 import { revalidatePath } from "next/cache";
 import { isUuid } from "@mc/db";
 import { ChannelCapError, disconnectChannelAccount, getChannelLimits, updateChannelAccountCaps } from "@mc/db/queries/canales";
+import { origenDeLaPeticion } from "@/lib/auth/origen";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import type { VentasState } from "../actions";
+import { retryAccountWebhooks } from "./_lib/aviso";
+import { channelDeps } from "./_lib/server";
 import { MESSAGES } from "./messages";
 
-export interface LimitesState {
-  errors?: { dailyCap?: string; weeklyCap?: string };
+/** El estado del formulario de límites: el de todo Ventas (useVentasForm), con errores por campo dailyCap y weeklyCap. */
+export type LimitesState = VentasState;
+
+export interface AvisosState {
   message?: string;
   notice?: string;
 }
@@ -64,6 +70,23 @@ export async function guardarLimites(_prev: LimitesState, formData: FormData): P
  * minutos) revoca el permiso de Google o borra la cuenta y sus avisos en
  * Unipile, que deja de cobrarla.
  */
+/**
+ * «Volver a intentar» de una cuenta conectada que se quedó sin avisos de
+ * Unipile (webhooks_missing): los vuelve a dar de alta, sin pasar por la
+ * hosted auth. La cuenta sale de la base con RLS; del formulario solo
+ * llega su id.
+ */
+export async function reactivarAvisos(formData: FormData): Promise<AvisosState> {
+  const accountId = String(formData.get("accountId") ?? "");
+  if (!isUuid(accountId)) return { message: MESSAGES.caps.notFound };
+  const r = await retryAccountWebhooks(accountId, await origenDeLaPeticion(), channelDeps());
+  revalidatePath("/ventas/canales");
+  if (r === "restored") return { notice: MESSAGES.banners.webhooksRestored };
+  if (r === "not_found") return { message: MESSAGES.caps.notFound };
+  if (r === "not_configured") return { message: MESSAGES.banners.errors.no_configurado };
+  return { message: MESSAGES.banners.webhooksStillMissing };
+}
+
 export async function desconectar(formData: FormData): Promise<void> {
   const accountId = String(formData.get("accountId") ?? "");
   if (!isUuid(accountId)) return;

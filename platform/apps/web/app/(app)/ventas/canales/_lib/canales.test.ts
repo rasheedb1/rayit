@@ -33,7 +33,9 @@ import { listChannelAccounts } from "@mc/db/queries/canales";
 import { proofWorkspace, type ProviderCallbackProof } from "@/lib/db/aviso-de-proveedor";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { MESSAGES } from "../messages";
-import { MAX_NOTIFY_BYTES, MAX_WEBHOOK_BYTES, unipileWebhook } from "./aviso";
+import { MAX_NOTIFY_BYTES, MAX_WEBHOOK_BYTES, retryAccountWebhooks, unipileWebhook } from "./aviso";
+import { channelSetup } from "./config";
+import { channelRows } from "./filas";
 import { GOOGLE_COOKIE, googleCallback, googleStart, unipileStart } from "./conexion";
 import { channelKeys, type ChannelDeps } from "./deps";
 
@@ -123,13 +125,20 @@ describe("Gmail", () => {
     expect(findSecretInDump(dump, [tokens!.accessToken, tokens!.refreshToken!, "CODE-GOOGLE-SECRETO"])).toBeNull();
   }, HEAVY_MS);
 
-  it("un estado que no empezó en este navegador, uno alterado o de otro espacio no pasan", async () => {
-    const { state } = await startGoogle();
-    expect((await googleCallback(callback({ code: "x", state }, "otro-nonce"), deps())).status).toBe(400);
-    expect((await googleCallback(callback({ code: "x", state: `${state}x` }, "n"), deps())).status).toBe(400);
+  it("un estado que no empezó en este navegador, uno alterado, sin code o de otro espacio no pasan, y vuelven a la pantalla con su aviso", async () => {
+    const back = (code: string) => `${ORIGIN}/ventas/canales?error=${code}`;
+    const { state, nonce } = await startGoogle();
+    const canje = vi.spyOn(gmail, "exchangeCode");
+    const otroNavegador = await googleCallback(callback({ code: "x", state }, "otro-nonce"), deps());
+    expect([otroNavegador.status, otroNavegador.headers.get("location")]).toEqual([303, back("vencida")]);
+    expect((await googleCallback(callback({ code: "x", state: `${state}x` }, "n"), deps())).headers.get("location")).toBe(back("vencida"));
+    expect((await googleCallback(callback({ state }, nonce), deps())).headers.get("location")).toBe(back("vencida"));
     const again = await startGoogle();
     const otro = deps({ currentWorkspaceId: async () => "00000009-0000-4000-8000-00000000c0a1" });
-    expect((await googleCallback(callback({ code: "x", state: again.state }, again.nonce), otro)).status).toBe(409);
+    expect((await googleCallback(callback({ code: "x", state: again.state }, again.nonce), otro)).headers.get("location")).toBe(back("otro_espacio"));
+    expect(canje, "ninguno llegó a canjear el code").not.toHaveBeenCalled();
+    canje.mockRestore();
+    expect(MESSAGES.banners.errors.otro_espacio).toBeTruthy();
   }, HEAVY_MS);
 
   it("sin gmail.modify no se conecta, y la pendiente dice por qué", async () => {
@@ -247,6 +256,19 @@ describe("el webhook de Unipile", () => {
     expect(await again.json()).toEqual({ ok: true, ignored: "unknown_state" });
     expect(unipile.webhooks.length, "no se dieron de alta avisos otra vez").toBe(2);
 
+    // Un DM de un amigo en un chat donde no hay ningún toque nuestro: se ignora y su cuerpo no queda en la base.
+    const amigo = await unipileWebhook(webhook({ ...MESSAGE("acc_li_web", "msg_amigo_1"), chat_id: "chat_de_un_amigo", message: "¿Cenamos el viernes?" }, headers), deps());
+    expect(await amigo.json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.foreignChat });
+    expect(await count(`SELECT count(*)::int AS n FROM outbound_message WHERE body LIKE '%Cenamos%'`)).toBe(0);
+
+    // El toque que el despachador (VEN-10) mandó desde ESTA cuenta abre el hilo chat_web_0001.
+    await db.queryAsSuperuser(
+      `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, scheduled_for, claimed_at, sent_at, attempt_count,
+                                   provider_message_id, thread_ref, channel_account_id)
+       VALUES ($1, '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000c0011', 'linkedin', 'Hola Marta', 'sent',
+               now() - interval '1 hour', now() - interval '1 hour', now() - interval '1 hour', 1, 'msg_nuestro_1', 'chat_web_0001', $2)`,
+      [SEED_WORKSPACE_ID, li.id],
+    );
     // Una respuesta, con las cabeceras que Unipile manda porque las pusimos al crear el aviso.
     const msg = await unipileWebhook(webhook(MESSAGE("acc_li_web", "msg_web_1"), headers), deps());
     expect(await msg.json()).toEqual({ ok: true });
@@ -266,7 +288,7 @@ describe("el webhook de Unipile", () => {
     const caidaRow = (await accounts()).find((a) => a.id === li.id);
     expect(caidaRow?.status).toBe("needs_reconnect");
     // La persona lee una frase; el código de Unipile no sale de la ruta.
-    expect(caidaRow?.lastError).toBe(MESSAGES.unipileStatus("CREDENTIALS", "LinkedIn"));
+    expect(caidaRow?.lastError).toBe(MESSAGES.health.unipileStatus("CREDENTIALS", "LinkedIn"));
     const aviso = await db.queryAsSuperuser<{ title_es: string; body_es: string }>(`SELECT title_es, body_es FROM notification WHERE entity_id = $1`, [li.id]);
     expect(aviso.rows).toHaveLength(1);
     expect(JSON.stringify(aviso.rows)).not.toMatch(/CREDENTIALS/);
@@ -290,6 +312,30 @@ describe("el webhook de Unipile", () => {
     }
     expect(unipile.hostedLinks.length).toBe(antes);
     expect(await count(`SELECT count(*)::int AS n FROM outreach_channel_account`)).toBe(filas + 1);
+  }, HEAVY_MS);
+
+  it("si el alta de los avisos falla, la cuenta queda conectada con webhooks_missing y «Volver a intentar» los da de alta", async () => {
+    await unipileStart(post("/ventas/canales/conectar", { canal: "instagram_dm" }), deps());
+    const link = unipile.hostedLinks.at(-1)!;
+    unipile.addAccount({ id: "acc_ig_sorda", provider: "INSTAGRAM", name: "@laura.sorda" });
+    unipile.failNext("createWebhook", "transient", "errors/service_unavailable", 503);
+    const res = await unipileWebhook(webhook({ status: "CREATION_SUCCESS", account_id: "acc_ig_sorda", name: link.state }), deps());
+    expect(res.status).toBe(200);
+    const ig = (await accounts()).find((a) => a.providerAccountId === "acc_ig_sorda")!;
+    expect([ig.status, ig.lastError]).toEqual(["connected", "webhooks_missing"]);
+    const [view] = channelRows([ig], channelSetup(ENV)).filter((r) => r.channel === "instagram_dm");
+    expect([view!.action, view!.reason]).toEqual(["rewebhook", MESSAGES.detail.webhooksMissing]);
+
+    // «Volver a intentar»: sin pasar por la hosted auth.
+    const enlaces = unipile.hostedLinks.length;
+    expect(await retryAccountWebhooks(ig.id, ORIGIN, deps())).toBe("restored");
+    expect(unipile.hostedLinks.length).toBe(enlaces);
+    const again = (await accounts()).find((a) => a.id === ig.id)!;
+    expect(again.lastError).toBeNull();
+    const ids = await db.queryAsSuperuser<{ n: number }>(`SELECT cardinality(provider_webhook_ids)::int AS n FROM outreach_channel_account WHERE id = $1`, [ig.id]);
+    expect(ids.rows[0]!.n).toBeGreaterThanOrEqual(2);
+    // Una cuenta de otro espacio o inventada: nada.
+    expect(await retryAccountWebhooks("00000009-0000-4000-8000-0000000ac0f9", ORIGIN, deps())).toBe("not_found");
   }, HEAVY_MS);
 
   it("una cuenta de Instagram donde se pidió LinkedIn no se conecta", async () => {
