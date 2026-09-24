@@ -23,8 +23,8 @@ import {
   type FetchLike, type PlatformId, type PublicProfile, type PublicProfileSource, type PublicProfileSources,
 } from "@mc/connectors";
 import {
-  addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, getConnectionCreator, getConsentCreator, listAccounts, markAccountLookupFailure, NoCreatorProfile,
-  recordAccountSnapshot, recordConsent, setAccountAccessMode, type AccountRow, type WorkspaceTx,
+  addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, findPublicAccountByHandle, getConnectionCreator, getConsentCreator, listAccounts, markAccountLookupFailure, NoCreatorProfile,
+  getScopeKinds, recordAccountSnapshot, recordConsent, ScopeError, setAccountAccessMode, type AccountRow, type ScopeKind, type WorkspaceTx,
 } from "@mc/db";
 import { buildConsentEvidence, buildRevocationEvidence, CONSENT_POLICY_VERSION } from "./consent";
 import { notifyOwner, type OwnerNotice } from "./owner-notice";
@@ -53,7 +53,7 @@ export interface Requester {
 
 export type AgregarResult =
   | { ok: true; id: string; created: boolean; profile: PublicProfile; ownerNotice: OwnerNotice }
-  | { ok: false; code: PublicLookupError["code"] | "sin_creador" | "sin_permiso" | "plataforma"; message: string };
+  | { ok: false; code: PublicLookupError["code"] | "sin_creador" | "sin_permiso" | "fuera_de_alcance" | "plataforma"; message: string };
 
 export type ActualizarResult =
   | {
@@ -115,11 +115,19 @@ export function createCuentasService(deps: CuentasDeps) {
       const callLog = new InMemoryCallLogSink();
       const source = build(callLog)[platformId];
       if (!source) return { ok: false, code: "plataforma", message: "Esa red no está disponible en esta versión." };
-      // Antes de gastar una llamada a la plataforma: quien no puede conectar no lee nada. La transacción que escribe lo vuelve a comprobar.
+      // Antes de gastar una llamada a la plataforma (cuota de la casa): quien no puede conectar no lee nada, y
+      // tampoco quien no tiene un creador en su alcance o pide un @ que ya es de otro creador fuera de él (ACC-6).
+      // La transacción que escribe lo vuelve a comprobar todo.
       try {
-        await deps.withWorkspace((tx) => requireConexionesPermission(tx, "conexiones.cuenta.conectar"));
+        await deps.withWorkspace(async (tx) => {
+          await requireConexionesPermission(tx, "conexiones.cuenta.conectar");
+          await getConsentCreator(tx);
+          await findPublicAccountByHandle(tx, platformId, input.handle.trim().replace(/^@/, ""));
+        });
       } catch (err) {
         if (err instanceof SinPermisoError) return { ok: false, code: "sin_permiso", message: err.message };
+        if (err instanceof NoCreatorProfile || err instanceof CreatorNotInWorkspace) return { ok: false, code: "sin_creador", message: err.message };
+        if (err instanceof ScopeError) return { ok: false, code: "fuera_de_alcance", message: err.messageEs };
         throw err;
       }
       let profile: PublicProfile;
@@ -160,6 +168,8 @@ export function createCuentasService(deps: CuentasDeps) {
       } catch (err) {
         if (err instanceof NoCreatorProfile || err instanceof CreatorNotInWorkspace) return { ok: false, code: "sin_creador", message: err.message };
         if (err instanceof SinPermisoError) return { ok: false, code: "sin_permiso", message: err.message };
+        // ACC-6: ese @ ya es una cuenta de otro creador del espacio, fuera del alcance de quien la agrega.
+        if (err instanceof ScopeError) return { ok: false, code: "fuera_de_alcance", message: err.messageEs };
         throw err;
       }
     },
@@ -279,6 +289,11 @@ export function createCuentasService(deps: CuentasDeps) {
 
     listar(): Promise<AccountRow[]> {
       return deps.withWorkspace((tx) => listAccounts(tx));
+    },
+
+    /** Los tipos de alcance de quien mira (ACC-6), para que la pantalla explique una lista vacía por alcance. */
+    alcance(): Promise<ScopeKind[]> {
+      return deps.withWorkspace((tx) => getScopeKinds(tx));
     },
   };
 }

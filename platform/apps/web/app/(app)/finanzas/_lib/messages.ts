@@ -420,6 +420,16 @@ export const MESSAGES = {
       accion: "Crear una factura",
     },
   },
+  /**
+   * ACC-6: lo que una persona con alcance acotado no ve, dicho con una
+   * frase en vez de un vacío mudo. Los gastos no cuelgan de ningún
+   * creador, marca ni campaña: son de todo el espacio.
+   */
+  alcance: {
+    gastosTitulo: "Los gastos no están en tu alcance",
+    gastosDescripcion:
+      "Tu acceso a este espacio está acotado a algunos creadores, marcas o campañas, y un gasto es de todo el espacio: no cuelga de ninguno. Los ve y los registra quien no tiene un alcance acotado.",
+  },
   /** Gastos (FIN-5). Sus propios estados de carga y de error: «no pudimos leer tus facturas» aquí sería falso. */
   gastos: {
     header: {

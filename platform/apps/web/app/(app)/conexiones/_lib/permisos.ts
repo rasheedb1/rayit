@@ -3,16 +3,12 @@
  * transacción que escribe (ACC-8).
  *
  * La Server Action ya abre con requirePermission() (ACC-1, primera
- * línea: la convención de lib/permisos). Esto es la segunda barrera, y
- * la que hoy decide: hasta ACC-5, permisosDeLaSesion() resuelve toda
- * sesión como Dueño, mientras que la base ya sabe el rol de cada
- * membresía y sus permisos (0034: membership.role_id → role_permission).
- * Además es la única comprobación que ven los route handlers de OAuth,
- * que no son Server Actions.
- *
- * TODO(ACC-5): cuando permisosDeLaSesion() lea la base, requirePermission
- * y esto responden lo mismo; esto se queda como la comprobación en la
- * misma transacción que escribe (el rol no puede cambiar entre las dos).
+ * línea: la convención de lib/permisos). Esto es la segunda barrera:
+ * desde ACC-5 las dos leen lo mismo (membership.role_id →
+ * role_permission, 0034), pero esta corre en la MISMA transacción que
+ * escribe, así que el rol no puede cambiar entre la comprobación y la
+ * escritura. Además es la única comprobación que ven los route handlers
+ * de OAuth, que no son Server Actions.
  *
  * No existe el permiso de VER un token (decisión E.2 de
  * docs/propuestas/ACC-accesos-y-roles.md): la lista muestra estado y @, y

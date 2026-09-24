@@ -15,6 +15,13 @@
  * base (0011): copiarlo aquí sería una segunda fuente de verdad.
  */
 export const MESSAGES = {
+  /** ACC-6: con alcance por marca o por campaña no se ve ninguna cuenta: una cuenta es de un creador, no de una marca. */
+  alcance: {
+    title: "Las cuentas conectadas no están en tu alcance",
+    description:
+      "Tu acceso está acotado a algunas marcas o campañas, y una cuenta conectada es de un creador, no de una marca ni de una campaña.",
+  },
+
   meta: { title: "Cuentas" },
 
   error: {

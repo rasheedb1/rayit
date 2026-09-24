@@ -27,6 +27,12 @@ const consulta = vi.hoisted(() => ({
 const sesion = vi.hoisted(() => ({ permisos: null as ReadonlySet<string> | null }));
 const base = vi.hoisted(() => ({ lecturas: 0 }));
 vi.mock("@mc/db/queries/finanzas", () => consulta);
+// ACC-6: los tipos de alcance de quien mira; por defecto ninguno (hoy, todos).
+const alcance = vi.hoisted(() => ({ kinds: [] as string[] }));
+vi.mock("@mc/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@mc/db")>()),
+  getScopeKinds: async () => alcance.kinds,
+}));
 // Mismo patrón que flujo/page.test.tsx: el rol entra sustituyendo
 // lib/permisos/sesion, que es donde la sesión se vuelve permisos.
 vi.mock("@/lib/permisos/sesion", async (importOriginal) => {
@@ -47,6 +53,7 @@ vi.mock("@/lib/workspace/settings", () => ({
 }));
 
 import { permisosDeRol } from "@mc/core";
+import { MESSAGES } from "./_lib/messages";
 import IngresosPage from "./page";
 import ImportarIngresosPage from "./importar/page";
 import NuevoIngresoPage from "./nuevo/page";
@@ -69,6 +76,7 @@ beforeEach(() => {
   consulta.listPayoutPlatforms.mockResolvedValue([{ id: "p1", name: "YouTube" }]);
   base.lecturas = 0;
   sesion.permisos = null;
+  alcance.kinds = [];
 });
 
 describe.each(PAGINAS)("$ruta (ACC-5)", ({ pagina, permiso, titulo }) => {
@@ -100,5 +108,22 @@ describe.each(PAGINAS)("$ruta (ACC-5)", ({ pagina, permiso, titulo }) => {
     expect(sesion.permisos.has(permiso)).toBe(true);
     render(await pagina());
     expect(screen.getByRole("heading", { level: 1, name: titulo })).toBeInTheDocument();
+  });
+});
+
+describe("/finanzas/ingresos con alcance (ACC-6)", () => {
+  it("con alcance por marca la lista vacía dice por qué, no «todavía no hay»", async () => {
+    sesion.permisos = permisosDeRol("creator", "finance");
+    alcance.kinds = ["company"];
+    render(await IngresosPage());
+    expect(screen.getByText(MESSAGES.vacioPorAlcance.title)).toBeInTheDocument();
+    expect(screen.queryByText(MESSAGES.vacio.title)).not.toBeInTheDocument();
+  });
+
+  it("sin alcance, el vacío de siempre con su acción de importar", async () => {
+    sesion.permisos = permisosDeRol("creator", "finance");
+    render(await IngresosPage());
+    expect(screen.getByText(MESSAGES.vacio.title)).toBeInTheDocument();
+    expect(screen.queryByText(MESSAGES.vacioPorAlcance.title)).not.toBeInTheDocument();
   });
 });

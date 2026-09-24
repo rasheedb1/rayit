@@ -30,6 +30,7 @@ vi.mock("@/lib/permisos/sesion", async (importOriginal) => {
 vi.mock("./_lib/cuentas-server", () => ({
   getCuentasService: () => ({
     listar: (...a: unknown[]) => listar(...a),
+    alcance: async () => [],
     availability: () => [
       { platformId: "instagram", name: "Instagram", offersEs: "Seguidores y publicaciones.", missing: [] },
       { platformId: "tiktok", name: "TikTok", offersEs: "Solo identidad.", missing: [] },

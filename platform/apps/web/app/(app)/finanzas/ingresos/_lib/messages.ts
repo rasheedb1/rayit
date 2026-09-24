@@ -67,6 +67,12 @@ export const MESSAGES = {
   },
   origen: { api: "Por API", csv_import: "Importado de CSV", manual: "A mano" } as const,
 
+  /** ACC-6: con alcance por marca o por campaña, un ingreso de plataforma (que solo tiene creador) no se ve. */
+  vacioPorAlcance: {
+    title: "Los ingresos de plataformas no están en tu alcance",
+    description:
+      "Tu acceso está acotado a algunas marcas o campañas, y un pago de AdSense o de Creator Rewards es de un creador, no de una marca ni de una campaña.",
+  },
   vacio: {
     title: "Todavía no hay ingresos de plataformas",
     description:

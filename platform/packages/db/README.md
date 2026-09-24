@@ -13,6 +13,7 @@ src/embedded.ts    PGlite con db/migrations + db/seed, corriendo como mc_app
 src/from-env.ts    cómo la web elige entre los dos (DATABASE_URL o demo)
 src/audit.ts       audit / auditAsJob: la bitácora obligatoria de toda escritura (uso 7)
 src/tls.ts         la CA de Supabase, verificada siempre (nunca rejectUnauthorized: false)
+src/scope.ts       scopeFilter / assertScopeAllows / assertUnscoped: el alcance dentro del workspace (uso 9)
 src/schema/        tablas y vistas del MVP, curadas desde db/migrations
 src/queries/       un archivo por módulo: cimientos, catalogos, resumen, ventas,
                    cotizar, campanas, finanzas (facturas y gastos), conexiones
@@ -54,7 +55,7 @@ nombres chocan, `tsc` lo señala (TS2308). Los operadores de Drizzle
 `drizzle-orm` ni cuiden su versión. `isUuid` / `UUID_RE` también, para
 validar ids que llegan de una ruta o un formulario antes de consultar.
 
-## Los ocho usos
+## Los nueve usos
 
 ### 1. Leer con workspace (pantallas y server actions)
 
@@ -349,11 +350,74 @@ muestra; qué puede hacer una sesión lo responde `getSessionPermissions` de
 Lo demás que deja 0034: `invitation` (una pendiente por correo y
 workspace; el token solo como SHA-256, y el `CHECK` no admite otra
 cosa; revocar es `revoked_at`, `mc_app` no borra), `membership_scope`
-(el alcance, ACC-6: sin filas, todo el workspace; la web solo lo lee), `workspace_grant`
+(el alcance, ACC-6: sin filas, todo el workspace; la web solo lo lee; uso 9), `workspace_grant`
 (la concesión creador → agencia, AGE-1: la web la lee por los dos
 extremos y no la escribe) y `audit_log.on_behalf_of_workspace_id` con
 `actor_kind = 'delegate'`. Detalle y decisiones:
 `docs/propuestas/ACC-3.md`.
+
+### 9. Alcance con `scopeFilter` (ACC-6)
+
+La tenencia la garantiza RLS; el **alcance** —«este miembro ve solo lo
+de Camilo», «el ejecutivo, solo sus marcas»— lo pone cada consulta. Las
+filas viven en `membership_scope` (0034 §6: `creator`, `company` o
+`campaign` por membresía; `mc_app` solo la lee) y las evalúa
+`scope_allows()` (0040) con la persona de la transacción
+(`current_user_id()`). **Sin filas, todo el workspace**: hoy nadie tiene
+filas y nada cambia.
+
+```ts
+import { assertScopeAllows, assertUnscoped, scopeFilter, UNSCOPED_ONLY } from '../scope.ts';
+
+// Una vez por tabla raíz: qué columna responde a cada tipo de alcance.
+const SCOPE_CAMPAIGN = scopeFilter({ creator: 'c.creator_id', company: 'c.company_id', campaign: 'c.id' });
+
+// En cada lectura Y en cada UPDATE/DELETE, junto a sus condiciones.
+await tx.query(`SELECT … FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`, [id]);
+
+// Antes de una alta: la fila nueva tiene que caer en el alcance de quien la crea.
+await assertScopeAllows(tx, { creator: creatorId, company: companyId, campaign: null });
+
+// Lo que es del espacio entero (un gasto, la configuración): solo sin alcance.
+await tx.query(`SELECT … FROM expense e WHERE ${UNSCOPED_ONLY}`);
+await assertUnscoped(tx); // antes de escribirlo
+```
+
+Las reglas, y por qué:
+
+- **Un ancla por tipo, siempre los tres.** Una expresión `uuid` (la
+  columna, o una subconsulta a su padre: una factura llega a su creadora
+  por la campaña), `{ any: 'SELECT …' }` para una relación
+  uno-a-muchos (las campañas de un post), o `null` cuando la tabla no
+  tiene camino a ese tipo: una cuenta conectada no es de una marca, así
+  que quien tenga alcance por marca no ve cuentas. `null` **oculta**; abrir
+  por defecto sería una política de alcance que no se ve como un bug.
+- **Entre tipos se intersecta, dentro de un tipo se une.** Creador Y
+  marca es «las campañas de Camilo con la marca X».
+- **Un ancla NULL no está en ningún alcance.** Una factura sin campaña no
+  es de ninguna creadora; con alcance por creadora no se ve (y no se
+  puede crear: `ScopeError`, con `messageEs`).
+- **Fuera del alcance es «no existe»**: `null`, lista vacía o el mismo
+  `…NotFound` que devuelve una fila de otro workspace. La pantalla da su
+  404 sin confirmar que la fila existe.
+- **Barato cuando no hay alcance.** Cada tipo empieza por un `EXISTS`
+  sin correlación con la fila, que Postgres evalúa una vez por consulta;
+  `scope_allows()` y los `ARRAY(…)` solo se calculan si la persona sí
+  tiene filas de ese tipo.
+- **Dos pruebas lo sostienen.** `test/alcance-<modulo>.test.ts` (arnés en
+  `test/alcance.ts`) recorre TODAS las funciones exportadas con dos
+  creadoras en un workspace; `test/alcance-convencion.test.ts` lee el
+  fuente y falla si una función exportada que consulta no pasa por
+  `scopeFilter()`/`assertScopeAllows()`/`assertUnscoped()` ni está en su
+  lista blanca con motivo. Hoy cubren `campanas` (con `campanas/reporte`),
+  `finanzas` y `conexiones`; `ventas`, `cotizar` y `resumen` son de su
+  dueño (docs/propuestas/CIERRE-ACC.md §4).
+- **El worker no filtra por alcance.** `mc_worker` corre sin persona:
+  `scope_allows()` no encuentra filas y deja pasar todo, y ningún archivo
+  de `apps/worker/src` compone el alcance (lo comprueba la prueba de
+  convención). El alcance es de la web.
+- ACC-7 puede usar el mismo predicado como política restrictiva:
+  `USING (scope_allows('creator', creator_id))`.
 
 ## Lo que hace el cliente por ti
 

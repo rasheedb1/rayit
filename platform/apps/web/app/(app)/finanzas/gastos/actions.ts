@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { CATEGORIA_GASTO_IDS, RECURRENCIA_IDS } from "@mc/core";
+import { ScopeError } from "@mc/db";
 import { createExpense, updateExpense, ExpenseNotFound, InvalidExpenseError } from "@mc/db/queries/finanzas";
 import { DECIMAL_RE, firstErrors, formField, UUID_RE, type ActionState } from "@/lib/forms";
 import { requirePermission } from "@/lib/permisos";
@@ -96,6 +97,8 @@ export async function guardarGasto(_prev: ActionState, formData: FormData): Prom
       return err.field ? { errors: { [err.field]: err.messageEs } } : { message: err.messageEs };
     }
     if (err instanceof ExpenseNotFound) return { message: err.messageEs };
+    // ACC-6: un gasto es de todo el espacio; quien tiene alcance acotado no lo escribe.
+    if (err instanceof ScopeError) return { message: err.messageEs };
     // Lo no previsto no se le enseña al usuario tal cual: el mensaje de
     // un error de la base puede traer el SQL o el nombre de una tabla.
     console.error("[finanzas] guardarGasto", err);

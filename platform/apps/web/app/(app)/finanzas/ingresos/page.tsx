@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { esMesEntero, proyeccionDePlataformas } from "@mc/core";
+import { getScopeKinds } from "@mc/db";
 import {
   getPlatformPayoutKpis,
   getPlatformPayoutMonths,
@@ -122,7 +123,8 @@ export default async function IngresosPage() {
   // semilla de la migración 0034, que ya está aplicada; está propuesto
   // en docs/propuestas/FIN-7.md §1.
   await requirePagePermission("finanzas.flujo.ver");
-  const { kpis, pagos, meses } = await withWorkspace(async (tx) => ({
+  const { kpis, pagos, meses, alcance } = await withWorkspace(async (tx) => ({
+    alcance: await getScopeKinds(tx),
     kpis: await getPlatformPayoutKpis(tx),
     pagos: await listPlatformPayouts(tx, { limit: 200 }),
     meses: await getPlatformPayoutMonths(tx),
@@ -193,11 +195,16 @@ export default async function IngresosPage() {
           rowKey={(r) => r.id}
           caption={T.tabla.caption}
           emptyState={
-            <EmptyState
-              title={T.vacio.title}
-              description={T.vacio.description}
-              action={{ label: T.vacio.accion, href: "/finanzas/ingresos/importar" }}
-            />
+            // ACC-6: con alcance por marca o campaña, el vacío no es «todavía no hay».
+            alcance.includes("company") || alcance.includes("campaign") ? (
+              <EmptyState title={T.vacioPorAlcance.title} description={T.vacioPorAlcance.description} />
+            ) : (
+              <EmptyState
+                title={T.vacio.title}
+                description={T.vacio.description}
+                action={{ label: T.vacio.accion, href: "/finanzas/ingresos/importar" }}
+              />
+            )
           }
         />
       </section>

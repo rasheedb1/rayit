@@ -38,6 +38,7 @@ export {
   UUID_RE, WORKER_ROLE,
 } from './client.ts';
 export { createDbFromEnv, type DbMode } from './from-env.ts';
+export { assertScopeAllows, assertUnscoped, getScopeKinds, SCOPE_KINDS, ScopeError, scopeFilter, UNSCOPED_ONLY, type ScopeAnchors, type ScopeKind, type ScopeMany } from './scope.ts';
 export {
   audit, auditAsJob, assertAuditAction, AUDIT_ACTIONS, CLAVES_PROHIBIDAS_EN_BITACORA, CORREO_OMITIDO, InvalidAuditActionError,
   isForbiddenAuditKey, sanitizeForAudit, type AuditAction, type AuditEntry, type AuditExecutor, type JobAuditEntry,
