@@ -107,10 +107,12 @@ export function motorKit(opts: { db: () => PgliteDatabase; motor: () => MotorDb;
       INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES ${contactos};
       -- Sin revisión humana, sin tope ni separación con la marca, salvo que
       -- la prueba los pida (el motor los aplica; aquí se prueba lo demás).
+      -- Los tres canales encendidos: desde 0045 (VEN-9) un espacio nuevo
+      -- nace sin Instagram, y el motor se prueba también por Instagram.
       INSERT INTO outbound_policy (workspace_id, enabled, postal_address, max_emails_per_day, warmup_days, require_human_review,
-                                   max_touches_per_company, min_days_between_touches)
+                                   max_touches_per_company, min_days_between_touches, allowed_channels)
       VALUES ('${w.id}', false, 'Calle 93 # 11-26, Bogotá, Colombia', 100, ${o.warmupDays ?? 14}, ${o.humanReview ? 'true' : 'false'},
-              ${o.maxTouchesPerCompany ?? 50}, ${o.minDaysBetweenTouches ?? 0});
+              ${o.maxTouchesPerCompany ?? 50}, ${o.minDaysBetweenTouches ?? 0}, '{email,linkedin,instagram_dm}');
       -- La fila del almacén a la que apunta secret_ref (el cifrado no importa aquí: el canal de la prueba usa su propio almacén).
       INSERT INTO connection_secret (secret_ref, workspace_id, ciphertext, iv, tag)
       VALUES ('enc:gmail:${opts.slug}${n}', '${w.id}', '\\x00', decode(repeat('00', 12), 'hex'), decode(repeat('00', 16), 'hex'));
