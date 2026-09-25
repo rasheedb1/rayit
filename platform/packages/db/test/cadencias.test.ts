@@ -66,7 +66,7 @@ const meta = (contactId: string | null) => ({
   model: null,
 });
 
-test('las plantillas de 0037 y 0058: ocho activas, con una por cada tipo de señal', async () => {
+test('las plantillas de 0037 y 0056: ocho activas, con una por cada tipo de señal', async () => {
   const tpls = await enLaura((tx) => listSequenceTemplates(tx));
   assert.equal(tpls.length, 8);
   for (const kind of ['active_campaign', 'launch', 'season', 'collab', 'manual']) {

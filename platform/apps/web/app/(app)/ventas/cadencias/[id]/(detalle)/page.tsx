@@ -1,4 +1,3 @@
-import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import {
   getRecommendationContext, getSequenceDetail, listAngles, listEnrollableDeals, listSequenceTemplates, type ContactOption,
@@ -6,30 +5,23 @@ import {
 } from "@mc/db/queries/cadencias";
 import { STEP_TYPES } from "@mc/db/schema";
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { ModuleTabs } from "../../_componentes/pestanas";
-import { withWorkspace } from "../../_lib/db";
-import { avisoDePolitica, ESTADO_PILL, etiquetaCanal, etiquetaTipo, horaDePaso, resumenFlujo } from "../_lib/vista";
-import { MESSAGES } from "../messages";
-import { Controles } from "./controles";
-import { Enrolar, type NegocioVista } from "./enrolar";
-import { LineaDeTiempo } from "./linea-de-tiempo";
-import { Notas } from "./notas";
-import { ProponerOtraVez } from "./proponer-otra-vez";
-import type { PasoVista } from "./tarjeta-paso";
+import { ModuleTabs } from "../../../_componentes/pestanas";
+import { withWorkspace } from "../../../_lib/db";
+import { avisoDePolitica, ESTADO_PILL, etiquetaCanal, etiquetaTipo, horaDePaso, resumenFlujo } from "../../_lib/vista";
+import { MESSAGES } from "../../messages";
+import { Controles } from "../controles";
+import { Enrolar, type NegocioVista } from "../enrolar";
+import { LineaDeTiempo } from "../linea-de-tiempo";
+import { Notas } from "../notas";
+import { ProponerOtraVez } from "../proponer-otra-vez";
+import type { PasoVista } from "../tarjeta-paso";
 
 export const dynamic = "force-dynamic";
 
 const CADENCIAS = "/ventas/cadencias";
-
-export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
-  const { id } = await params;
-  const d = await withWorkspace((tx) => getSequenceDetail(tx, id));
-  return { title: d ? MESSAGES.detalle.metaTitle(d.name) : MESSAGES.metaTitle };
-}
 
 /** Las direcciones de una persona, en palabras: «Correo, LinkedIn». */
 function alcance(c: ContactOption): string {
@@ -114,11 +106,6 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
 
   return (
     <>
-      <div className="mb-4">
-        <Button variant="ghost" size="sm" href={CADENCIAS}>
-          {t.detalle.volver}
-        </Button>
-      </div>
       <PageHeader
         eyebrow={t.header.title}
         title={d.name}

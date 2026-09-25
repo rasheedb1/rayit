@@ -1,10 +1,11 @@
 -- =====================================================================
--- 0058 · El recomendador de cadencias (VEN-13)
+-- 0056 · El recomendador de cadencias (VEN-13)
 -- ---------------------------------------------------------------------
--- Número: va detrás de 0055_motor_equipo_y_reclamo. 0056 y 0057 quedan
--- libres a propósito para las piezas que se construyen a la vez en la
--- fase 5 (perfil y generación, VEN-11 y VEN-12): así las tres ramas no
--- chocan al integrarse. El runner acepta huecos (0046–0049 ya lo son).
+-- Número: el siguiente libre, detrás de 0055_motor_equipo_y_reclamo. Las
+-- piezas de la fase 5 que se construyen a la vez (perfil y generación,
+-- VEN-11 y VEN-12) pueden traer también una 0056: al integrar, la que
+-- entre después pasa al siguiente número libre (ninguna está aplicada en
+-- Supabase, y nada de esta migración depende de las suyas).
 --
 -- 1 · De qué señal nació una secuencia, y qué propuso el recomendador
 --

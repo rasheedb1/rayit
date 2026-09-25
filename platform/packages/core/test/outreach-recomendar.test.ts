@@ -2,7 +2,7 @@
  * VEN-13 · el recomendador de cadencia, sin base ni red.
  *
  * Las plantillas del fixture son las de 0037 («Marca con campaña
- * activa») y 0058 (cocina), copiadas con sus mismos pasos: la prueba
+ * activa») y 0056 (cocina), copiadas con sus mismos pasos: la prueba
  * contra la base (packages/db/test/cadencias.test.ts) lee las de verdad.
  */
 import { test } from 'node:test';

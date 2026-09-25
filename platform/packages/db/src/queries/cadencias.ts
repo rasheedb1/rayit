@@ -19,6 +19,7 @@
  *     recordRecommendLlmCall   cada llamada al modelo, con tokens y costo
  *
  *   La línea de tiempo /ventas/cadencias/[id]
+ *     sequenceNameOf           el nombre, o null (el 404 del detalle)
  *     getSequenceDetail        la secuencia, sus pasos con su ángulo y lo que
  *                              la política no va a dejar cumplir
  *     updateStep, addStep, deleteStep, reorderSteps, renameSequence
@@ -101,7 +102,7 @@ export function channelForStepType(stepType: StepType, fallback: string = 'email
 }
 
 // ---------------------------------------------------------------------
-// La propuesta guardada (outbound_sequence.proposal, 0058)
+// La propuesta guardada (outbound_sequence.proposal, 0056)
 // ---------------------------------------------------------------------
 
 /** Lo que queda escrito de una propuesta: códigos, no frases. */
@@ -502,6 +503,13 @@ async function readSteps(tx: WorkspaceTx, sequenceId: string): Promise<SequenceS
     guidanceEs: r.guidance_es, subjectTemplate: r.subject_template, bodyTemplate: r.body_template,
     generateWithAi: r.generate_with_ai, requiresAsset: r.requires_asset,
   }));
+}
+
+/** El nombre de una secuencia de este espacio, o null: el layout del detalle decide el 404 con una sola fila. */
+export async function sequenceNameOf(tx: WorkspaceTx, id: string): Promise<string | null> {
+  if (!isUuid(id)) return null;
+  const r = await tx.query<{ name: string }>(`SELECT name FROM outbound_sequence WHERE id = $1::uuid`, [id]);
+  return r.rows[0]?.name ?? null;
 }
 
 /** La secuencia con sus pasos, o null si no existe en este espacio. */

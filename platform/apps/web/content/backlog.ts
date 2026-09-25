@@ -437,7 +437,7 @@ export const STORIES: readonly Story[] = [
     desc: "Desde el brief, la señal, los canales conectados y los contactos disponibles, una secuencia propuesta con día, canal, ángulo y guía por paso; plantillas por nicho y tipo de señal; línea de tiempo editable.",
     done: "Desde una señal de campaña activa, el creador obtiene una secuencia de seis pasos con guía y la activa en dos clics.",
     status: "hecho",
-    note: "Probado en pglite con el seed y en el navegador: «Proponer cadencia» desde la campaña activa de Fresko da seis pasos con guía y «Activar» la enciende y enrola a la persona. Recomendador puro en @mc/core (reglas; claude-sonnet-5 solo redacta la guía si hay ANTHROPIC_API_KEY, con su llamada en outbound_llm_call), siete plantillas nuevas por nicho y señal en 0058_recomendador_cadencias (sin aplicar en Supabase) y línea de tiempo editable en /ventas/cadencias.",
+    note: "Probado en pglite con el seed y en el navegador: «Proponer cadencia» desde la campaña activa de Fresko da seis pasos con guía y «Activar» la enciende y enrola a la persona. Recomendador puro en @mc/core (reglas; claude-sonnet-5 solo redacta la guía si hay ANTHROPIC_API_KEY, con su llamada en outbound_llm_call), siete plantillas nuevas por nicho y señal en 0056_recomendador_cadencias (sin aplicar en Supabase) y línea de tiempo editable en /ventas/cadencias.",
   },
   {
     id: "VEN-14", module: "VEN", owner: "rasheed", size: "L", sprint: 5, deps: ["VEN-12"],

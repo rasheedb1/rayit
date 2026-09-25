@@ -351,10 +351,10 @@ export const outboundSequence = pgTable('outbound_sequence', {
   status: text('status', { enum: SEQUENCE_STATUSES }).default('draft').notNull(),
   templateId: uuid('template_id').references(() => outboundSequenceTemplate.id, { onDelete: 'set null' }),
   updatedAt: updatedAt(),
-  /** La señal del radar desde la que se propuso (0058, VEN-13). */
+  /** La señal del radar desde la que se propuso (0056, VEN-13). */
   signalId: uuid('signal_id').references(() => signal.id, { onDelete: 'set null' }),
   /**
-   * Lo que decidió el recomendador, en códigos (0058): se lee con
+   * Lo que decidió el recomendador, en códigos (0056): se lee con
    * parseSequenceProposal de @mc/db/queries/cadencias. NULL = no salió
    * del recomendador.
    */

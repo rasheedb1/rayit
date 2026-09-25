@@ -1018,8 +1018,9 @@ campaña activa, temporada).
   `jobs` son campaña activa; `press`, lanzamiento; `season`, temporada;
   `collab`, colaboración de un competidor (nunca se nombra); lo demás,
   manual.
-- **Migración `0058_recomendador_cadencias.sql`** (0056 y 0057 quedan
-  para VEN-11 y VEN-12): `outbound_sequence.signal_id` (con su referencia
+- **Migración `0056_recomendador_cadencias.sql`** (si VEN-11 o VEN-12
+  traen otra 0056, la que se integre después toma el siguiente número;
+  ninguna depende de la otra): `outbound_sequence.signal_id` (con su referencia
   visible) y `proposal` (la propuesta en códigos), y siete plantillas:
   lanzamiento, temporada, colaboración de un competidor, señal manual,
   cocina con campaña activa, belleza con lanzamiento y fitness con

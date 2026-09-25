@@ -1,9 +1,10 @@
-import { MESSAGES } from "./messages";
+import { MESSAGES } from "../messages";
 
 /**
- * Esqueleto de Cadencias mientras la base responde, con la forma de
- * page.tsx y de [id]/page.tsx (este loading también cubre la línea de
- * tiempo): la cabecera, la tira de pestañas, dos tarjetas y una tabla.
+ * Esqueleto de la lista de Cadencias mientras la base responde, con la
+ * forma de page.tsx: la cabecera, la tira de pestañas, dos tarjetas y
+ * una tabla. Vive en su grupo (lista) para no envolver al detalle, que
+ * tiene el suyo debajo del layout que comprueba el id.
  */
 export default function CadenciasLoading() {
   return (
