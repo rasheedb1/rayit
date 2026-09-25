@@ -17,9 +17,10 @@ export interface NegocioVista {
 /**
  * «Enrolar desde un negocio»: se elige el negocio y sus personas, y cada
  * una entra en la cadencia (enrollContacts de VEN-10). Quien pidió la
- * baja, no tiene dirección, ya está dentro o sigue viva en otra cadencia
- * se ve, con el motivo, pero no se puede marcar; si nadie del negocio
- * puede entrar, «Enrolar» se apaga y lo dice.
+ * baja, no llega por ningún canal con el que la cadencia escribe, ya está
+ * dentro o sigue viva en otra cadencia se ve, con el motivo, pero no se
+ * puede marcar; si nadie del negocio puede entrar, «Enrolar» se apaga y
+ * lo dice. Tras enrolar, cada persona que entró dice qué le queda.
  */
 export function Enrolar({ sequenceId, negocios, activa, inicial }: {
   sequenceId: string;
@@ -85,6 +86,13 @@ export function Enrolar({ sequenceId, negocios, activa, inicial }: {
             {activa && nadie && <p className="mt-2 text-xs text-fg-3">{t.nadieDisponible}</p>}
           </div>
           <Aviso message={state.error} notice={state.ok} size="xs" />
+          {state.dentro && state.dentro.length > 0 && (
+            <ul className="grid gap-1 text-xs tabular-nums text-fg-2">
+              {state.dentro.map((s) => (
+                <li key={s}>{s}</li>
+              ))}
+            </ul>
+          )}
           {state.saltadas && state.saltadas.length > 0 && (
             <ul className="grid gap-1 text-xs text-fg-2">
               {state.saltadas.map((s) => (

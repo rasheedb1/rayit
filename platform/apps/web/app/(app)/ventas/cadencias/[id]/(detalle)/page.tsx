@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import {
   EDITABLE_CHANNELS, EDITABLE_STEP_TYPES, getSequenceDetail, listAngles, listEnrollableDeals, listSequenceTemplates,
-  signalContacts, type ContactOption, type EnrollableDeal, type SequenceDetail,
+  signalContacts, type SequenceDetail,
 } from "@mc/db/queries/cadencias";
 import { PageHeader } from "@/components/page-header";
 import { Pill } from "@/components/ui/pill";
@@ -9,7 +9,10 @@ import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { ModuleTabs } from "../../../_componentes/pestanas";
 import { withWorkspace } from "../../../_lib/db";
-import { avisoDePolitica, esperaEntre, ESTADO_PILL, etiquetaCanal, etiquetaTipo, horaDePaso, resumenFlujo } from "../../_lib/vista";
+import {
+  alcance, avisoDePolitica, esperaEntre, ESTADO_PILL, etiquetaActivar, etiquetaCanal, etiquetaTipo, horaDePaso, personaParaEnrolar,
+  resumenFlujo,
+} from "../../_lib/vista";
 import { IconoCanal } from "../../canal";
 import { MESSAGES } from "../../messages";
 import { Controles } from "../controles";
@@ -23,31 +26,6 @@ export const dynamic = "force-dynamic";
 
 const CADENCIAS = "/ventas/cadencias";
 
-/** Las direcciones de una persona, en palabras: «Correo, LinkedIn». */
-function alcance(c: ContactOption): string {
-  const t = MESSAGES.proponer;
-  if (c.optedOut) return t.deBaja;
-  const canales = [c.hasEmail && "email", c.hasLinkedin && "linkedin", c.hasInstagram && "instagram_dm"].filter(Boolean) as string[];
-  return canales.length ? t.sinCanales(canales.map(etiquetaCanal).join(", ")) : t.sinDireccion;
-}
-
-/**
- * El texto del botón de activar. Dice «y escribir a X» solo si X de verdad
- * va a entrar al pulsarlo: nadie dentro todavía, el negocio de la
- * propuesta sigue abierto (está entre los enrolables) y X es de su marca,
- * con alguna dirección, sin baja y sin otra cadencia viva. En pausa es
- * «Reanudar», que pasa por la misma acción y enrola igual.
- */
-function etiquetaActivar(d: SequenceDetail, negocios: readonly EnrollableDeal[]): string {
-  const t = MESSAGES.estado;
-  const negocio = d.proposal?.dealId ? negocios.find((n) => n.id === d.proposal!.dealId) : undefined;
-  const c = d.proposalContact && d.enrollments.total === 0 ? negocio?.contacts.find((x) => x.id === d.proposalContact!.id) : undefined;
-  const entra = c && !c.optedOut && !c.enrolled && !c.liveElsewhere && (c.hasEmail || c.hasLinkedin || c.hasInstagram);
-  const persona = entra ? c.name : null;
-  if (d.status === "paused") return persona ? t.reanudarPara(persona) : t.reanudar;
-  return persona ? t.activarPara(persona) : t.activar;
-}
-
 function pasosVista(d: SequenceDetail, f: Formatter, angulos: ReadonlyMap<string, string>): PasoVista[] {
   const t = MESSAGES.paso;
   const sinTexto = ["linkedin_like", "instagram_like", "manual_task"];
@@ -60,6 +38,7 @@ function pasosVista(d: SequenceDetail, f: Formatter, angulos: ReadonlyMap<string
     tipoLabel: s.stepType === "manual_task" ? `${etiquetaTipo(s.stepType)} · ${etiquetaCanal(s.channel)}` : etiquetaTipo(s.stepType),
     anguloLabel: s.angleLabel ?? (s.angleKey ? (angulos.get(s.angleKey) ?? s.angleKey) : null),
     guia: s.guidanceEs,
+    guiaAviso: s.guidanceStale && s.guidanceWrittenFor ? t.guiaPorRevisar(etiquetaTipo(s.guidanceWrittenFor)) : null,
     modoLabel: sinTexto.includes(s.stepType) ? t.sinTexto : s.generateWithAi ? t.generacion : t.textoFijo,
     activoLabel: s.requiresAsset ? (t.activo[s.requiresAsset] ?? null) : null,
     aviso: avisoDePolitica(d, s.id, f),
@@ -115,18 +94,7 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
   const negociosVista: NegocioVista[] = negocios.map((n) => ({
     id: n.id,
     label: `${n.companyName} · ${n.name}`,
-    personas: n.contacts.map((c) => ({
-      id: c.id,
-      nombre: c.name ?? t.proponer.sinPersona,
-      detalle: [
-        c.roleTitle,
-        c.enrolled ? t.enrolar.yaDentro : c.liveElsewhere ? t.enrolar.enOtraDetalle(c.liveElsewhere) : alcance(c),
-      ]
-        .filter(Boolean)
-        .join(" · "),
-      disponible: !c.enrolled && !c.liveElsewhere && !c.optedOut && (c.hasEmail || c.hasLinkedin || c.hasInstagram),
-      dentro: c.enrolled,
-    })),
+    personas: n.contacts.map(personaParaEnrolar),
   }));
 
   return (
@@ -205,7 +173,12 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
               elegida={d.proposalContact?.id ?? null}
               personas={personas
                 .filter((c) => !c.optedOut)
-                .map((c) => ({ value: c.id, label: `${c.name ?? t.proponer.sinPersona} · ${alcance(c)}` }))}
+                .map((c) => ({
+                  value: c.id,
+                  label: [c.name ?? t.proponer.sinPersona, alcance(c), c.liveElsewhere ? t.proponer.ocupada(c.liveElsewhere) : null]
+                    .filter(Boolean)
+                    .join(" · "),
+                }))}
             />
           )}
           {!archivada && (

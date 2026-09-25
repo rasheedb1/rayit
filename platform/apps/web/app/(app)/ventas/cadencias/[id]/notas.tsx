@@ -25,11 +25,16 @@ export function Notas({
 }) {
   const t = MESSAGES.notas;
   const notas = d.proposal
-    ? d.proposal.notes.map((n) => textoDeNota(n, f, plantillas, angulos)).filter((x): x is string => x !== null)
+    ? d.proposal.notes
+        .map((n) => textoDeNota(n, f, plantillas, angulos, d.proposalContact?.name ?? null))
+        .filter((x): x is string => x !== null)
     : [];
   // «Ir a Canales» solo si alguna nota se arregla ahí: una cuenta por reconectar o una que no está conectada.
   const aCanales =
     d.proposal?.notes.some((n) => n.code === "channel_down" || (n.code === "rerouted" && n.reason === "channel_not_connected")) ?? false;
+  // «Ir a la ficha» si el negocio no tiene creador: se asigna allí y se vuelve a proponer.
+  const companyId = d.signal?.companyId ?? null;
+  const aFicha = companyId !== null && (d.proposal?.notes.some((n) => n.code === "no_creator") ?? false);
   const overCap = d.policy.overCap.length;
   const gap = d.policy.closerThanGap.length;
   if (notas.length === 0 && overCap === 0 && gap === 0) return null;
@@ -47,10 +52,19 @@ export function Notas({
             ))}
             <li>{textoDeGuia(d.proposal)}</li>
           </ul>
-          {aCanales && (
-            <Link href={OUTREACH_URLS.channels} className="mt-2 inline-block text-sm underline underline-offset-2">
-              {t.reconectar}
-            </Link>
+          {(aCanales || aFicha) && (
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+              {aCanales && (
+                <Link href={OUTREACH_URLS.channels} className="underline underline-offset-2">
+                  {t.reconectar}
+                </Link>
+              )}
+              {aFicha && companyId && (
+                <Link href={OUTREACH_URLS.company(companyId)} className="underline underline-offset-2">
+                  {t.irAlNegocio}
+                </Link>
+              )}
+            </div>
           )}
         </section>
       )}

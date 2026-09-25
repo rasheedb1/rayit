@@ -87,7 +87,11 @@ export default async function CadenciasPage({
       header: t.lista.columnas.respuesta,
       align: "num",
       render: (c) =>
-        c.replyRate === null ? <CeldaVacia texto={t.lista.sinContactar} /> : t.lista.respuestaDe(f.pct(c.replyRate), f.int(c.contacted)),
+        c.replyRate === null ? (
+          <CeldaVacia texto={t.lista.sinContactar} />
+        ) : (
+          t.lista.respuestaDe(f.pct(c.replyRate), f.int(c.replied), f.int(c.contacted))
+        ),
     },
   ];
 

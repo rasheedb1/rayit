@@ -4,8 +4,10 @@
  * cada nota del recomendador. Puro y probado; los textos salen de
  * messages.ts y las cifras del Formatter del espacio.
  */
-import type { ProposalNote } from "@mc/core";
-import type { SequenceDetail, SequenceProposal, SequenceStatus } from "@mc/db/queries/cadencias";
+import { DISPATCHABLE_STEP_TYPES, type ProposalNote } from "@mc/core";
+import type {
+  ContactOption, EnrollableContact, EnrollableDeal, SequenceDetail, SequenceProposal, SequenceStatus,
+} from "@mc/db/queries/cadencias";
 import type { PillKind } from "@/components/ui/pill";
 import { formatTime, type Formatter } from "@/lib/format";
 import { IDIOMA_MENSAJES, MESSAGES } from "../messages";
@@ -60,6 +62,8 @@ export function textoDeNota(
   f: Formatter,
   plantillas: ReadonlyMap<string, string>,
   angulos: ReadonlyMap<string, string> = new Map(),
+  /** El nombre de la persona para la que se propuso (la nota contact_busy habla de ella). */
+  persona: string | null = null,
 ): string | null {
   const t = MESSAGES.notas;
   switch (n.code) {
@@ -77,6 +81,10 @@ export function textoDeNota(
       return t.noContact;
     case "disclosure":
       return t.disclosure;
+    case "contact_busy":
+      return t.contactBusy(persona ?? MESSAGES.proponer.sinPersona, n.sequenceName);
+    case "no_creator":
+      return t.noCreator;
     case "fitted_to_policy": {
       const a = t.politicaAjuste;
       const nombres = (keys: readonly string[]) => lista(keys.map((k) => `«${angulos.get(k) ?? k}»`));
@@ -105,4 +113,81 @@ export function avisoDePolitica(d: Pick<SequenceDetail, "policy">, stepId: strin
     return MESSAGES.paso.seCorre(f.int(d.policy.minDaysBetweenTouches), d.policy.minDaysBetweenTouches);
   }
   return null;
+}
+
+/** Cuántos toques nacieron de cada clase al enrolar a una persona (EnrollResult.enrolled[i] de @mc/db). */
+export interface ConteoEnrolamiento {
+  scheduled: number;
+  held: number;
+  drafts: number;
+  skipped: number;
+}
+
+/**
+ * Lo que le queda a una persona al entrar, en palabras: «4 por redactar
+ * y 2 gestos a mano». Los toques de los pasos que no son mensajes (una
+ * reacción, un comentario público, una tarea) nacen como borrador igual
+ * que los que esperan al generador (initialTouchState de VEN-10), pero no
+ * se redactan: los hace la persona a mano, y la tarjeta los marca así.
+ * `stepTypes` son los pasos de la cadencia, uno por toque.
+ */
+export function partesDeEnrolamiento(c: ConteoEnrolamiento, stepTypes: readonly string[], f: Formatter): string {
+  const gestos = stepTypes.filter((t) => !(DISPATCHABLE_STEP_TYPES as readonly string[]).includes(t)).length;
+  const manual = Math.min(c.drafts, gestos);
+  const n = { scheduled: c.scheduled, held: c.held, drafts: c.drafts - manual, manual, skipped: c.skipped };
+  const partes = (["scheduled", "held", "drafts", "manual", "skipped"] as const)
+    .filter((k) => n[k] > 0)
+    .map((k) => MESSAGES.estado.partes[k](f.int(n[k]), n[k]));
+  return lista(partes);
+}
+
+/**
+ * Por dónde se le llega a una persona, en palabras: «Llega por: Correo,
+ * LinkedIn». Solo los canales que de verdad se usan (reachChannels: la
+ * política los deja, hay cuenta y tiene dirección; al enrolar, además,
+ * los de esta cadencia), no todas sus direcciones.
+ */
+export function alcance(c: ContactOption, sinAlcance: string = MESSAGES.proponer.sinDireccion): string {
+  const t = MESSAGES.proponer;
+  if (c.optedOut) return t.deBaja;
+  return c.reachChannels.length ? t.sinCanales(c.reachChannels.map(etiquetaCanal).join(", ")) : sinAlcance;
+}
+
+/**
+ * El texto del botón de activar. Dice «y escribir a X» solo si X de verdad
+ * va a entrar al pulsarlo: nadie dentro todavía, el negocio de la
+ * propuesta sigue abierto (está entre los enrolables) y X es de su marca,
+ * le llega algún mensaje de esta cadencia, sin baja y sin otra cadencia
+ * viva: lo mismo que comprueba activarCadencia. En pausa es «Reanudar»,
+ * que pasa por la misma acción y enrola igual.
+ */
+export function etiquetaActivar(d: SequenceDetail, negocios: readonly EnrollableDeal[]): string {
+  const t = MESSAGES.estado;
+  const negocio = d.proposal?.dealId ? negocios.find((n) => n.id === d.proposal!.dealId) : undefined;
+  const c = d.proposalContact && d.enrollments.total === 0 ? negocio?.contacts.find((x) => x.id === d.proposalContact!.id) : undefined;
+  const entra = c && !c.optedOut && !c.enrolled && !c.liveElsewhere && c.reachable;
+  const persona = entra ? c.name : null;
+  if (d.status === "paused") return persona ? t.reanudarPara(persona) : t.reanudar;
+  return persona ? t.activarPara(persona) : t.activar;
+}
+
+/**
+ * Una persona en «Enrolar desde un negocio»: se ve siempre, con su
+ * motivo, y se puede marcar solo si de verdad entra (la misma regla que
+ * enrolarDesdeNegocio comprueba en el servidor): no está ya dentro, no
+ * está viva en otra cadencia, no pidió la baja y le llega algún mensaje
+ * de esta cadencia.
+ */
+export function personaParaEnrolar(c: EnrollableContact): {
+  id: string; nombre: string; detalle: string; disponible: boolean; dentro: boolean;
+} {
+  const t = MESSAGES.enrolar;
+  const motivo = c.enrolled ? t.yaDentro : c.liveElsewhere ? t.enOtraDetalle(c.liveElsewhere) : alcance(c, t.noLlegaDetalle);
+  return {
+    id: c.id,
+    nombre: c.name ?? MESSAGES.proponer.sinPersona,
+    detalle: [c.roleTitle, motivo].filter(Boolean).join(" · "),
+    disponible: !c.enrolled && !c.liveElsewhere && !c.optedOut && c.reachable,
+    dentro: c.enrolled,
+  };
 }

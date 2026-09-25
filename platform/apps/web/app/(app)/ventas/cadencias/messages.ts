@@ -74,7 +74,8 @@ export const MESSAGES = {
     titulo: "Tus cadencias",
     caption: "Cadencias del espacio",
     columnas: { cadencia: "Cadencia", estado: "Estado", pasos: "Pasos", enrolados: "Dentro", respuesta: "Respuesta" },
-    respuestaDe: (pct: string, contactados: string) => `${pct} de ${contactados}`,
+    /** «33 % · 1 de 3 contactadas»: la tasa, cuántas respondieron y de cuántas a las que ya les salió algo. */
+    respuestaDe: (pct: string, respondidas: string, contactadas: string) => `${pct} · ${respondidas} de ${contactadas} contactadas`,
     sinContactar: "Sin envíos",
     desde: (senal: string) => `Desde: ${senal}`,
     vacio: {
@@ -147,11 +148,17 @@ export const MESSAGES = {
     activada: "Cadencia activa. Enrola a las personas desde un negocio, abajo.",
     activadaCon: (persona: string, partes: string) =>
       `Cadencia activa y ${persona} dentro: ${partes}. Los ves y apruebas en la ficha de la empresa.`,
+    /**
+     * Lo que le queda a una persona al entrar, por tipo: los mensajes (programados, por revisar, por
+     * redactar, saltados) y los gestos públicos que hace ella a mano (una reacción o un comentario),
+     * que no se redactan: la tarjeta los marca «Lo hace una persona».
+     */
     partes: {
       scheduled: plural({ one: "{n} mensaje programado", other: "{n} mensajes programados" }),
       held: plural({ other: "{n} esperando tu revisión" }),
       drafts: plural({ other: "{n} por redactar" }),
-      skipped: plural({ other: "{n} sin dirección para ese canal" }),
+      manual: plural({ one: "{n} gesto a mano", other: "{n} gestos a mano" }),
+      skipped: plural({ one: "{n} paso saltado, sin dirección", other: "{n} pasos saltados, sin dirección" }),
     },
     activadaSinPersona: (persona: string, motivo: string) => `Cadencia activa, pero ${persona} no entró: ${motivo}.`,
     activadaYaEnOtra: (persona: string, cadencia: string) =>
@@ -172,6 +179,8 @@ export const MESSAGES = {
     textoFijo: "Texto fijo",
     sinTexto: "Lo hace una persona: no lleva texto.",
     activo: { media_kit: "Adjunta el media kit", quote: "Enlaza la cotización" } as Record<string, string>,
+    /** La guía la escribió la persona para otro tipo de paso y no se recompuso: que la revise. */
+    guiaPorRevisar: (tipo: string) => `Esta guía se escribió para «${tipo}». Revísala y guarda el paso.`,
     editar: "Editar",
     quitar: "Quitar",
     quitarPregunta: "¿Quitar este paso?",
@@ -219,8 +228,10 @@ export const MESSAGES = {
     sinPersona: "Sin persona todavía",
     boton: "Proponer otra vez",
     sinCanales: (canales: string) => `Llega por: ${canales}`,
-    sinDireccion: "Sin dirección",
+    sinDireccion: "Sin dirección en tus canales",
     deBaja: "Pidió no recibir mensajes",
+    /** Detrás de su nombre en «Para»: ya está viva en otra cadencia, y Activar no la enrolará. */
+    ocupada: (cadencia: string) => `ya está en «${cadencia}»`,
   },
 
   notas: {
@@ -242,6 +253,10 @@ export const MESSAGES = {
     reconectar: "Ir a Canales",
     noContact: "Sin persona elegida: se planeó como si tuviera todas las direcciones.",
     disclosure: "Tu brief pide divulgación: el cierre lo menciona.",
+    contactBusy: (persona: string, cadencia: string) => `${persona} ya está en «${cadencia}»: Activar no la enrolará aquí.`,
+    noCreator:
+      "El negocio no tiene creador y tu espacio tiene varios: la propuesta no usa el nicho ni el brief de nadie. Asigna el creador en el negocio y propón otra vez.",
+    irAlNegocio: "Ir a la ficha",
     politicaAjuste: {
       titulo: (max: string, dias: string) =>
         `Ajustada a tu política de envío (hasta ${max} mensajes por marca, ${dias} días entre ellos):`,
@@ -257,7 +272,7 @@ export const MESSAGES = {
     },
     guiaModelo: "La guía de cada paso la redactó On Cue con IA a partir de las reglas.",
     guiaReglas: {
-      no_key: "La guía sale de las reglas: la redacción con IA todavía no está disponible.",
+      no_key: "La guía sale de las reglas: la redacción con IA no está configurada en este espacio.",
       budget: "La guía sale de las reglas: se agotó el presupuesto de redacción de hoy.",
       failed: "La guía sale de las reglas: la redacción con IA no respondió.",
       rejected: "La guía sale de las reglas: lo que propuso la IA no pasó la revisión.",
@@ -284,11 +299,17 @@ export const MESSAGES = {
     negocioPlaceholder: "Elige un negocio",
     personas: "Personas",
     sinPersonas: "Este negocio no tiene personas con dirección.",
+    /** La línea bajo la casilla de quien no tiene dirección en ningún canal con el que esta cadencia escribe. */
+    noLlegaDetalle: "No llega por los canales de esta cadencia",
+    /** Motivo de una saltada: el mismo, en minúscula tras su nombre. */
+    noLlega: "no llega por los canales de esta cadencia",
     boton: "Enrolar",
     enrolando: "Enrolando…",
     soloActiva: "Activa la cadencia para enrolar.",
     sinNegocios: "No hay negocios abiertos.",
     resultado: plural({ one: "{n} persona enrolada.", other: "{n} personas enroladas." }),
+    /** Lo que le queda a cada persona que entró, con las mismas partes que «Activar». */
+    dentroCon: (persona: string, partes: string) => `${persona}: ${partes}.`,
     saltadas: {
       not_found: "no está en este espacio",
       opted_out: "pidió no recibir mensajes",

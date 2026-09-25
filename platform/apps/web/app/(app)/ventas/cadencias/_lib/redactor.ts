@@ -1,6 +1,6 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
-import { RECOMMEND_MODEL, type GuidanceRequest, type GuidanceWriter } from "@mc/core";
+import { GUIDANCE_PHRASES, RECOMMEND_MODEL, type GuidanceLocale, type GuidanceRequest, type GuidanceWriter } from "@mc/core";
 import { GUIDANCE_OUTPUT_SCHEMA, parseGuidanceOutput } from "./redactor-salida";
 
 /**
@@ -22,11 +22,18 @@ export function redactorConfigurado(env: NodeJS.ProcessEnv = process.env): boole
   return Boolean(env.ANTHROPIC_API_KEY?.trim());
 }
 
-const SISTEMA = `Eres el editor de cadencias de On Cue, una plataforma para creadores de contenido que les escriben a marcas para conseguir campañas pagadas.
+/**
+ * La instrucción del sistema, en el idioma de la petición (req.locale):
+ * el mismo de la guía compuesta con reglas (GUIDANCE_PHRASES), para que
+ * ningún paso quede en otro idioma que sus vecinos. La frase del idioma
+ * sale de la tabla de ese idioma, no de aquí.
+ */
+export function instruccionDeSistema(locale: GuidanceLocale): string {
+  return `Eres el editor de cadencias de On Cue, una plataforma para creadores de contenido que les escriben a marcas para conseguir campañas pagadas.
 
 Recibes una secuencia de pasos ya decidida (día, canal, ángulo) y un borrador de guía para cada paso. La guía NO es el mensaje: es la instrucción que seguirá quien redacte el mensaje de ese paso.
 
-Reescribe la guía de cada paso para esta marca y esta señal, en español neutro, en segunda persona («abre con…»):
+Reescribe la guía de cada paso para esta marca y esta señal, en ${GUIDANCE_PHRASES[locale].promptLanguage} (idioma «${locale}»), en segunda persona («abre con…»):
 - Una o dos frases, entre 60 y 280 caracteres.
 - Di con qué abrir, qué no mencionar (respeta lo prohibido del ángulo) y cómo cerrar (una sola pregunta, salvo en comentarios públicos y en el cierre).
 - No inventes cifras, clientes ni resultados. Si hace falta una cifra, di de dónde sale («una cifra de tu perfil»).
@@ -35,6 +42,7 @@ Reescribe la guía de cada paso para esta marca y esta señal, en español neutr
 - Si la señal es la colaboración de un competidor, nunca pidas nombrar esa colaboración ni a la competencia.
 
 Devuelve un objeto con "steps": un elemento por paso, con su "index" y su "guidance".`;
+}
 
 /** El redactor real, con el cliente de la API. */
 export function redactorAnthropic(client: Anthropic = new Anthropic()): GuidanceWriter {
@@ -43,7 +51,7 @@ export function redactorAnthropic(client: Anthropic = new Anthropic()): Guidance
       {
         model: RECOMMEND_MODEL,
         max_tokens: 4000,
-        system: SISTEMA,
+        system: instruccionDeSistema(req.locale),
         messages: [{ role: "user", content: JSON.stringify(req) }],
         output_config: { effort: "low", format: { type: "json_schema", schema: { ...GUIDANCE_OUTPUT_SCHEMA } } },
       },

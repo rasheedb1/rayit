@@ -29,6 +29,7 @@ const paso = (n: number, dia: number, espera: string | null): PasoVista => ({
   tipoLabel: "Correo",
   anguloLabel: "Encaje de audiencia",
   guia: `Guía del paso ${n}, con lo que abre y lo que no menciona.`,
+  guiaAviso: null,
   modoLabel: "Generación automática",
   activoLabel: null,
   aviso: null,

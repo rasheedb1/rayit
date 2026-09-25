@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { formatterFor } from "@/lib/format";
 import { parseGuidanceOutput } from "./redactor-salida";
 import { MESSAGES, plural } from "../messages";
-import { avisoDePolitica, esperaEntre, horaDePaso, resumenFlujo, textoDeGuia, textoDeNota } from "./vista";
+import type { EnrollableContact, SequenceDetail } from "@mc/db/queries/cadencias";
+import {
+  avisoDePolitica, esperaEntre, etiquetaActivar, horaDePaso, partesDeEnrolamiento, personaParaEnrolar, resumenFlujo, textoDeGuia,
+  textoDeNota,
+} from "./vista";
 
 const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
 const plantillas = new Map([["cocina-campana-activa", "Cocina · marca con campaña activa"]]);
@@ -81,9 +85,12 @@ describe("cadencias · lo que la pantalla decide sin base", () => {
       dealId: null, proposedAt: "",
     };
     expect(textoDeGuia({ ...base, guidance: "llm", guidanceWhyRules: null })).toMatch(/con IA/);
-    expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "no_key" })).toMatch(/todavía no está disponible/);
-    // La llave es del servidor, no del espacio: el texto no le pide a la creadora que la configure.
-    expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "no_key" })).not.toMatch(/espacio|configura/);
+    // Sin llave: dice que no está configurada (lo mismo que promete .env.example), no que a la función le falte algo,
+    // y no le pide a la creadora que configure nada (la llave es del servidor).
+    expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "no_key" })).toBe(
+      "La guía sale de las reglas: la redacción con IA no está configurada en este espacio.",
+    );
+    expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "no_key" })).not.toMatch(/todavía|configúr|configura /);
     expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "budget" })).toMatch(/presupuesto/);
   });
 
@@ -106,5 +113,50 @@ describe("cadencias · lo que devuelve el redactor", () => {
     expect(parseGuidanceOutput("no es json")).toEqual([]);
     expect(parseGuidanceOutput('{"steps":[{"index":"0","guidance":1}]}')).toEqual([]);
     expect(parseGuidanceOutput(null)).toEqual([]);
+  });
+});
+
+describe("cadencias · quién entra y qué le queda", () => {
+  const persona = (over: Partial<EnrollableContact> = {}): EnrollableContact => ({
+    id: "c1", name: "Camila Rojas", roleTitle: "Marca", hasEmail: true, hasLinkedin: true, hasInstagram: false, optedOut: false,
+    liveElsewhere: null, reachChannels: ["email", "linkedin"], enrolled: false, reachable: true, ...over,
+  });
+  // Andrés: solo Instagram, que ni está en la política ni en la cadencia: su alcance sale vacío de @mc/db.
+  const andres = persona({
+    id: "c2", name: "Andrés Pardo", roleTitle: null, hasEmail: false, hasLinkedin: false, hasInstagram: true, reachChannels: [], reachable: false,
+  });
+
+  it("«Llega por» dice solo los canales con los que la cadencia le escribe; quien no llega no se marca", () => {
+    expect(personaParaEnrolar(persona())).toMatchObject({ detalle: "Marca · Llega por: Correo, LinkedIn", disponible: true });
+    expect(personaParaEnrolar(andres)).toMatchObject({ detalle: "No llega por los canales de esta cadencia", disponible: false });
+    expect(personaParaEnrolar(persona({ liveElsewhere: "Otra" }))).toMatchObject({ detalle: "Marca · Ya está en «Otra»", disponible: false });
+  });
+
+  it("«Activar y escribir a X» solo si X de verdad entra", () => {
+    const d = (contactId: string) => ({
+      status: "draft", proposal: { dealId: "d1" }, proposalContact: { id: contactId, name: "X" }, enrollments: { total: 0 },
+    }) as unknown as SequenceDetail;
+    const negocios = [{ id: "d1", name: "N", companyName: "Fresko", contacts: [persona(), andres] }];
+    expect(etiquetaActivar(d("c1"), negocios)).toBe(MESSAGES.estado.activarPara("Camila Rojas"));
+    expect(etiquetaActivar(d("c2"), negocios)).toBe(MESSAGES.estado.activar);
+  });
+
+  it("lo que le queda separa los mensajes por redactar de los gestos que se hacen a mano", () => {
+    const tipos = ["linkedin_comment", "email", "linkedin_message", "email_reply", "linkedin_like", "email"];
+    expect(partesDeEnrolamiento({ scheduled: 0, held: 0, drafts: 6, skipped: 0 }, tipos, f)).toBe("4 por redactar y 2 gestos a mano");
+    expect(partesDeEnrolamiento({ scheduled: 1, held: 2, drafts: 2, skipped: 1 }, tipos, f)).toBe(
+      "1 mensaje programado, 2 esperando tu revisión, 2 gestos a mano y 1 paso saltado, sin dirección",
+    );
+  });
+
+  it("las notas del contexto: la persona ocupada y el negocio sin creador", () => {
+    expect(textoDeNota({ code: "contact_busy", sequenceName: "Marca con campaña activa" }, f, plantillas, new Map(), "Carolina Ruiz")).toBe(
+      "Carolina Ruiz ya está en «Marca con campaña activa»: Activar no la enrolará aquí.",
+    );
+    expect(textoDeNota({ code: "no_creator" }, f, plantillas)).toMatch(/Asigna el creador en el negocio/);
+  });
+
+  it("la columna Respuesta dice cuántas respondieron de cuántas contactadas", () => {
+    expect(MESSAGES.lista.respuestaDe(f.pct(1 / 3), f.int(1), f.int(3))).toMatch(/^33.*% · 1 de 3 contactadas$/);
   });
 });

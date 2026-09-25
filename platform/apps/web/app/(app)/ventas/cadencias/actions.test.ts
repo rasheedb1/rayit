@@ -21,6 +21,8 @@ const { q, enrollContacts, outboundHealth, redirect } = vi.hoisted(() => ({
     enrollableContactsOfDeal: vi.fn(),
     contactNames: vi.fn(),
     addStep: vi.fn(),
+    reachForSequence: vi.fn(),
+    stepTypesOf: vi.fn(),
   },
   enrollContacts: vi.fn(),
   outboundHealth: vi.fn(),
@@ -61,6 +63,10 @@ const CAMILA = "00000002-0000-4000-8000-0000000c0001";
 const DEAL = "00000002-0000-4000-8000-0000000dea07";
 const OTRA = "00000013-0000-4000-8000-00000000c001";
 const FRESKO = "00000002-0000-4000-8000-0000000000e2";
+/** Andrés Pardo, de Fresko: solo tiene Instagram. */
+const ANDRES = "00000002-0000-4000-8000-0000000c0002";
+/** Los pasos de «Marca con campaña activa»: cuatro mensajes, un comentario y una reacción públicos. */
+const PASOS_CAMPANA = ["linkedin_comment", "email", "linkedin_message", "email_reply", "linkedin_like", "email"];
 
 function form(values: Record<string, string | string[]>): FormData {
   const fd = new FormData();
@@ -75,7 +81,12 @@ const paso = (day: number, type: string, channel: string, angle: string) => ({
 const contexto = {
   signal: { id: SIGNAL, headline: "6 anuncios activos en Meta", kind: "active_campaign", companyId: null, companyName: "Fresko Market" },
   deal: { id: DEAL, name: "Lanzamiento desayunos" },
-  contacts: [{ id: CAMILA, name: "Camila Rojas", roleTitle: null, hasEmail: true, hasLinkedin: true, hasInstagram: false, optedOut: false }],
+  creator: { id: "00000002-0000-4000-8000-000000000003", name: "Laura Méndez" },
+  contacts: [{
+    id: CAMILA, name: "Camila Rojas", roleTitle: null, hasEmail: true, hasLinkedin: true, hasInstagram: false, optedOut: false,
+    liveElsewhere: null as string | null, reachChannels: ["email", "linkedin"],
+  }],
+  notes: [] as Array<{ code: string }>,
   channels: { email: "connected", linkedin: "connected", instagram_dm: "missing" },
   allowedChannels: ["email", "linkedin"],
   policy: { maxTouchesPerCompany: 4, minDaysBetweenTouches: 3 },
@@ -102,6 +113,9 @@ beforeEach(() => {
   q.liveEnrollmentElsewhere.mockResolvedValue(null);
   q.enrollableContactsOfDeal.mockImplementation(async (_tx: unknown, _deal: string, ids: string[]) => ids);
   q.contactNames.mockResolvedValue(new Map());
+  // Por defecto todas llegan por correo; la prueba de Andrés usa la regla de verdad.
+  q.reachForSequence.mockImplementation(async (_tx: unknown, _seq: string, ids: string[]) => new Map(ids.map((id) => [id, ["email"]])));
+  q.stepTypesOf.mockResolvedValue(PASOS_CAMPANA);
   vi.unstubAllEnvs();
 });
 
@@ -177,14 +191,15 @@ describe("activar (el segundo clic)", () => {
   it("activa y enrola a la persona para la que se propuso, y lleva a la ficha donde se aprueban sus mensajes", async () => {
     q.getSequenceDetail.mockResolvedValue({
       proposal: { contactId: CAMILA, dealId: DEAL }, proposalContact: { id: CAMILA, name: "Camila Rojas" }, enrollments: { total: 0 },
-      signal: { companyId: FRESKO },
+      signal: { companyId: FRESKO }, steps: PASOS_CAMPANA.map((stepType) => ({ stepType })),
     });
     enrollContacts.mockResolvedValue({ enrolled: [{ enrollmentId: "e", contactId: CAMILA, scheduled: 0, held: 0, drafts: 5, skipped: 1 }], skipped: [], warnings: [] });
     const r = await activarCadencia(SEQ);
     expect(q.setSequenceStatus).toHaveBeenCalledWith(expect.anything(), SEQ, "active");
     expect(q.enrollableContactsOfDeal).toHaveBeenCalledWith(expect.anything(), DEAL, [CAMILA]);
     expect(enrollContacts).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ sequenceId: SEQ, contactIds: [CAMILA], dealId: DEAL }));
-    expect(r.ok).toMatch(/Camila Rojas dentro: 5 por redactar y 1 sin dirección/);
+    // Los seis toques: tres mensajes por redactar, la reacción y el comentario que hace ella a mano, y uno sin dirección.
+    expect(r.ok).toMatch(/Camila Rojas dentro: 3 por redactar, 2 gestos a mano y 1 paso saltado, sin dirección\./);
     expect(r.href).toBe(`/ventas/empresas/${FRESKO}#cadencia`);
   });
 
@@ -307,5 +322,89 @@ describe("pasos y enrolamiento", () => {
   it("WhatsApp no llega a la base aunque el formulario lo mande", async () => {
     expect(await guardarPaso(SEQ, STEP, { stepType: "whatsapp_message" as never })).toEqual({ error: MESSAGES.errores.invalid });
     expect(q.updateStep).not.toHaveBeenCalled();
+  });
+});
+
+describe("quién llega (una persona solo con Instagram, política de correo y LinkedIn)", () => {
+  /** El alcance de verdad: la regla de @mc/db (reachOf y usableChannels) con la política y las direcciones del caso. */
+  async function alcanceReal() {
+    const { reachOf, usableChannels } = await vi.importActual<typeof import("@mc/db/queries/cadencias")>("@mc/db/queries/cadencias");
+    const canales = usableChannels(["email", "linkedin"], { email: "connected", linkedin: "down", instagram_dm: "missing" });
+    const direcciones: Record<string, { hasEmail: boolean; hasLinkedin: boolean; hasInstagram: boolean }> = {
+      [CAMILA]: { hasEmail: true, hasLinkedin: true, hasInstagram: false },
+      [ANDRES]: { hasEmail: false, hasLinkedin: false, hasInstagram: true },
+    };
+    q.reachForSequence.mockImplementation(async (_tx: unknown, _seq: string, ids: string[]) =>
+      new Map(ids.map((id) => [id, reachOf(direcciones[id]!, canales)])));
+  }
+
+  it("enrolar desde un negocio deja fuera a Andrés con su motivo y dice qué le queda a quien entra", async () => {
+    await alcanceReal();
+    enrollContacts.mockResolvedValue({
+      enrolled: [{ enrollmentId: "e", contactId: CAMILA, scheduled: 0, held: 0, drafts: 6, skipped: 0 }], skipped: [], warnings: [],
+    });
+    q.contactNames.mockResolvedValue(new Map([[CAMILA, "Camila Rojas"], [ANDRES, "Andrés Pardo"]]));
+    const r = await enrolarDesdeNegocio(SEQ, {}, form({ dealId: DEAL, contactId: [CAMILA, ANDRES] }));
+    // Andrés no llega al motor: entraría «dentro» sin que le saliera un solo mensaje.
+    expect(enrollContacts).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactIds: [CAMILA] }));
+    expect(r.ok).toBe("1 persona enrolada.");
+    expect(r.dentro).toEqual(["Camila Rojas: 4 por redactar y 2 gestos a mano."]);
+    expect(r.saltadas).toEqual(["Andrés Pardo: no llega por los canales de esta cadencia."]);
+  });
+
+  it("activar una propuesta para Andrés activa sin enrolarlo y dice por qué", async () => {
+    await alcanceReal();
+    q.getSequenceDetail.mockResolvedValue({
+      proposal: { contactId: ANDRES, dealId: DEAL }, proposalContact: { id: ANDRES, name: "Andrés Pardo" }, enrollments: { total: 0 },
+      signal: { companyId: FRESKO }, steps: PASOS_CAMPANA.map((stepType) => ({ stepType })),
+    });
+    const r = await activarCadencia(SEQ);
+    expect(enrollContacts).not.toHaveBeenCalled();
+    expect(r).toEqual({ ok: MESSAGES.estado.activadaSinPersona("Andrés Pardo", MESSAGES.enrolar.noLlega) });
+  });
+});
+
+describe("las notas del contexto en la propuesta", () => {
+  it("la persona elegida que ya está en otra cadencia deja la nota contact_busy; sin creador, no_creator", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    q.getRecommendationContext.mockResolvedValue({
+      ...contexto,
+      creator: null,
+      notes: [{ code: "no_creator" }],
+      contacts: [{ ...contexto.contacts[0]!, liveElsewhere: "Marca con campaña activa" }],
+    });
+    await proponerDesdeSenal({}, form({ signalId: SIGNAL, contactId: CAMILA, sequenceId: "" }));
+    const [, input] = q.createSequenceFromProposal.mock.calls[0]!;
+    expect(input.meta).toMatchObject({ contactId: CAMILA, briefId: null });
+    expect(input.proposal.notes).toContainEqual({ code: "no_creator" });
+    expect(input.proposal.notes).toContainEqual({ code: "contact_busy", sequenceName: "Marca con campaña activa" });
+  });
+
+  it("el brief del creador del negocio viaja con la propuesta (outbound_sequence.brief_id)", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    const BRIEF = "00000002-0000-4000-8000-0000000b0001";
+    q.getRecommendationContext.mockResolvedValue({ ...contexto, brief: { id: BRIEF, title: "Q4", notes: null, requiresDisclosure: true } });
+    await proponerDesdeSenal({}, form({ signalId: SIGNAL, contactId: "", sequenceId: "" }));
+    expect(q.createSequenceFromProposal.mock.calls[0]![1].meta.briefId).toBe(BRIEF);
+  });
+});
+
+describe("el redactor con Claude, sin red", () => {
+  it("le dice al modelo en qué idioma escribir: el de la petición, el mismo de la guía de reglas", async () => {
+    const { redactorAnthropic } = await import("./_lib/redactor");
+    const create = vi.fn(async () => ({
+      stop_reason: "end_turn",
+      usage: { input_tokens: 10, output_tokens: 5 },
+      content: [{ type: "text", text: JSON.stringify({ steps: [{ index: 0, guidance: "Abre con su campaña y una cifra de tu perfil." }] }) }],
+    }));
+    const writer = redactorAnthropic({ messages: { create } } as never);
+    const r = await writer({
+      signalKind: "launch", locale: "es", signalHeadline: null, companyName: null, briefTitle: null, briefNotes: null,
+      requiresDisclosure: false, steps: [],
+    });
+    const [body] = create.mock.calls[0]! as unknown as [{ system: string; messages: Array<{ content: string }> }];
+    expect(body.system).toContain("en español neutro (idioma «es»)");
+    expect(JSON.parse(body.messages[0]!.content).locale).toBe("es");
+    expect(r.steps).toEqual([{ index: 0, guidance: "Abre con su campaña y una cifra de tu perfil." }]);
   });
 });

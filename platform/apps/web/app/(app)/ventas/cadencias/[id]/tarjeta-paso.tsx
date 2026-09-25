@@ -22,6 +22,8 @@ export interface PasoVista {
   tipoLabel: string;
   anguloLabel: string | null;
   guia: string | null;
+  /** La guía se escribió para otro tipo de paso y es de la persona: que la revise. */
+  guiaAviso: string | null;
   modoLabel: string;
   activoLabel: string | null;
   /** Lo que la política no dejará cumplir en este paso. */
@@ -114,6 +116,7 @@ export function TarjetaPaso({
           <div>
             <dt className="sr-only">{t.guia}</dt>
             <dd className="whitespace-pre-line break-words text-fg-2">{paso.guia ?? t.sinGuia}</dd>
+            {paso.guiaAviso && <dd className="mt-1 text-xs text-warn">{paso.guiaAviso}</dd>}
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-3">
             <dt className="sr-only">{t.campos.modo}</dt>

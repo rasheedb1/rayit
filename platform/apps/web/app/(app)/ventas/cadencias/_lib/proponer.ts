@@ -1,5 +1,7 @@
 import "server-only";
-import { guidanceLocale, recommendSequence, refineGuidance, type GuidanceWriter, type LlmUsage, type Proposal } from "@mc/core";
+import {
+  guidanceLocale, recommendSequence, refineGuidance, type GuidanceWriter, type LlmUsage, type Proposal, type ProposalNote,
+} from "@mc/core";
 import {
   createSequenceFromProposal, defaultContact, getRecommendationContext, recordRecommendLlmCall, replaceStepsFromProposal,
   type ProposalMeta,
@@ -14,13 +16,20 @@ import { MESSAGES } from "../messages";
  *
  * Tres tiempos, para no tener una transacción abierta mientras el modelo
  * piensa:
- *   1. se leen los datos (señal, personas, canales, política, brief,
- *      plantillas) y el gasto de hoy, y las reglas deciden los pasos;
+ *   1. se leen los datos (señal, personas, canales, política, el creador
+ *      del negocio con su nicho y su brief, plantillas) y el gasto de
+ *      hoy, y las reglas deciden los pasos;
  *   2. si hay redactor y queda presupuesto, el modelo reescribe la guía
  *      (refineGuidance se queda con la regla donde su texto no sirve);
  *   3. si hubo llamada, su fila en outbound_llm_call (en su propia
  *      transacción: se cobró pase lo que pase después), y se guarda la
- *      secuencia o se reemplazan los pasos del borrador.
+ *      secuencia (con el brief del que sale) o se reemplazan los pasos
+ *      del borrador.
+ *
+ * A las notas del recomendador se suman las del contexto: `no_creator`
+ * (el negocio no tiene creador y el espacio tiene varios) y
+ * `contact_busy` (la persona elegida ya está viva en otra cadencia:
+ * Activar no la enrolará aquí).
  */
 export interface ProponerInput {
   signalId: string;
@@ -61,7 +70,9 @@ export async function proponerCadencia(input: ProponerInput, writer: GuidanceWri
   });
 
   let proposal: Proposal = leido.proposal;
-  let meta: Omit<ProposalMeta, "signalId" | "contactId" | "dealId"> = { guidance: "rules", guidanceWhyRules: "no_key", model: null };
+  let meta: Omit<ProposalMeta, "signalId" | "contactId" | "dealId" | "briefId"> = {
+    guidance: "rules", guidanceWhyRules: "no_key", model: null,
+  };
   let usage: LlmUsage | null = null;
   if (writer && !leido.conPresupuesto) {
     meta = { guidance: "rules", guidanceWhyRules: "budget", model: null };
@@ -95,8 +106,15 @@ export async function proponerCadencia(input: ProponerInput, writer: GuidanceWri
     signalId: leido.ctx.signal.id,
     contactId: leido.elegida?.id ?? null,
     dealId: leido.ctx.deal?.id ?? null,
+    briefId: leido.ctx.brief?.id ?? null,
     now: ahora,
   };
+  const ocupada = leido.elegida?.liveElsewhere ?? null;
+  const notasDelContexto: ProposalNote[] = [
+    ...leido.ctx.notes,
+    ...(ocupada ? [{ code: "contact_busy" as const, sequenceName: ocupada }] : []),
+  ];
+  proposal = { ...proposal, notes: [...proposal.notes, ...notasDelContexto] };
   const nombre = `${leido.ctx.signal.companyName ?? leido.proposal.templateName} · ${MESSAGES.senalTipos[proposal.signalKind]}`;
   // La llamada se registra aparte: se cobró aunque guardar la secuencia falle después.
   const llamada = usage;

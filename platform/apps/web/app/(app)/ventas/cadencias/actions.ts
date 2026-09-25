@@ -18,8 +18,9 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { UUID_RE } from "@/lib/forms";
 import {
   addStep, CadenciaError, contactNames, createSequenceFromTemplate, deleteStep, duplicateSequence, EDITABLE_CHANNELS,
-  EDITABLE_STEP_TYPES, enrollableContactsOfDeal, getSequenceDetail, liveEnrollmentElsewhere, renameSequence, reorderSteps,
-  setSequenceStatus, updateStep, BODY_MAX, GUIDANCE_MAX, MAX_DAY_OFFSET, MAX_STEPS, MAX_STEPS_PER_DAY, NAME_MAX, SUBJECT_MAX,
+  EDITABLE_STEP_TYPES, enrollableContactsOfDeal, getSequenceDetail, liveEnrollmentElsewhere, reachForSequence, renameSequence,
+  reorderSteps, setSequenceStatus, stepTypesOf, updateStep, BODY_MAX, GUIDANCE_MAX, MAX_DAY_OFFSET, MAX_STEPS, MAX_STEPS_PER_DAY,
+  NAME_MAX, SUBJECT_MAX,
 } from "@mc/db/queries/cadencias";
 import { enrollContacts, OutreachMotorError } from "@mc/db/queries/outreach";
 import { OUTREACH_URLS } from "@mc/core/outreach/messages";
@@ -27,6 +28,7 @@ import { withWorkspace } from "../_lib/db";
 import { proponerCadencia } from "./_lib/proponer";
 import { SIN_PERSONA } from "./_lib/protocolo";
 import { redactorAnthropic, redactorConfigurado } from "./_lib/redactor";
+import { partesDeEnrolamiento } from "./_lib/vista";
 import { MESSAGES } from "./messages";
 
 const E = MESSAGES.errores;
@@ -130,9 +132,11 @@ export async function crearDesdePlantilla(_prev: CadenciaState, formData: FormDa
  * desde un negocio»: que el negocio siga abierto y la persona sea de su
  * marca (un borrador puede esperar días y el negocio perderse entre
  * tanto: no se le escriben seis mensajes a una marca que ya dijo que
- * no), y que la persona no esté viva en otra cadencia del espacio (dos
- * cadencias a la vez duplican los mensajes). «Reanudar» pasa por aquí
- * igual: su etiqueta dice a quién le escribe.
+ * no), que la persona no esté viva en otra cadencia del espacio (dos
+ * cadencias a la vez duplican los mensajes) y que le llegue algún
+ * mensaje de esta cadencia (reachForSequence: un canal de sus pasos que
+ * la política deja y en el que tiene dirección). «Reanudar» pasa por
+ * aquí igual: su etiqueta dice a quién le escribe.
  */
 export async function activarCadencia(sequenceId: string): Promise<CadenciaState> {
   if (!UUID_RE.test(sequenceId)) return { error: E.invalid };
@@ -154,6 +158,10 @@ export async function activarCadencia(sequenceId: string): Promise<CadenciaState
       }
       const otra = await liveEnrollmentElsewhere(tx, persona.id, sequenceId);
       if (otra) return { ok: t.activadaYaEnOtra(nombre, otra.name) };
+      // Quien no llega por ningún canal con el que esta cadencia escribe se quedaría «dentro» sin un solo mensaje.
+      if (!(await reachForSequence(tx, sequenceId, [persona.id])).get(persona.id)?.length) {
+        return { ok: t.activadaSinPersona(nombre, MESSAGES.enrolar.noLlega) };
+      }
       const res = await enrollContacts(tx, {
         sequenceId, contactIds: [persona.id], dealId: p.dealId, enrolledBy: tx.identity?.userId ?? null,
       });
@@ -162,12 +170,9 @@ export async function activarCadencia(sequenceId: string): Promise<CadenciaState
         const motivo = MESSAGES.enrolar.saltadas[res.skipped[0]?.reason ?? "not_found"] ?? MESSAGES.enrolar.saltadaGenerica;
         return { ok: t.activadaSinPersona(nombre, motivo) };
       }
-      const partes = (["scheduled", "held", "drafts", "skipped"] as const)
-        .filter((k) => dentro[k] > 0)
-        .map((k) => t.partes[k](f.int(dentro[k]), dentro[k]));
       const companyId = d.signal?.companyId ?? null;
       return {
-        ok: t.activadaCon(nombre, new Intl.ListFormat(f.locale, { type: "conjunction" }).format(partes)),
+        ok: t.activadaCon(nombre, partesDeEnrolamiento(dentro, d.steps.map((s) => s.stepType), f)),
         // Donde se revisan y aprueban esos mensajes: lo que de verdad hace que salgan.
         href: companyId ? OUTREACH_URLS.companyCadence(companyId) : undefined,
       };
@@ -291,6 +296,8 @@ export async function reordenarPasos(sequenceId: string, stepIds: string[]): Pro
 // ---------------------------------------------------------------------
 
 export interface EnrolarState extends CadenciaState {
+  /** Lo que le queda a cada persona que entró, ya en palabras (las mismas partes que «Activar»). */
+  dentro?: string[];
   /** Por qué no entró cada persona, ya en palabras. */
   saltadas?: string[];
 }
@@ -303,8 +310,11 @@ const enrolarSchema = z.object({ dealId: uuid, contactIds: z.array(uuid).min(1).
  * de la marca del negocio y que el negocio sigue abierto
  * (enrollableContactsOfDeal): un formulario hecho a mano no mete a
  * alguien de otra marca bajo este negocio. Quien ya está viva en otra
- * cadencia del espacio no entra (la misma regla que «Activar»): queda
- * entre las saltadas con el nombre de esa cadencia.
+ * cadencia del espacio no entra (la misma regla que «Activar»), ni quien
+ * no llega por ningún canal con el que esta cadencia escribe: quedan
+ * entre las saltadas con su motivo. De quien entra se dice, persona por
+ * persona, qué le queda: mensajes programados, por revisar, por
+ * redactar, gestos a mano y pasos saltados.
  */
 export async function enrolarDesdeNegocio(sequenceId: string, _prev: EnrolarState, formData: FormData): Promise<EnrolarState> {
   const t = MESSAGES.enrolar;
@@ -322,30 +332,39 @@ export async function enrolarDesdeNegocio(sequenceId: string, _prev: EnrolarStat
       const validas = new Set(await enrollableContactsOfDeal(tx, dealId, contactIds));
       if (contactIds.some((id) => !validas.has(id))) return null;
       // Dos cadencias a la vez a la misma persona duplican los mensajes: quien ya está viva en otra se queda fuera.
+      // Y quien no llega por ningún canal con el que esta cadencia escribe entraría sin un solo mensaje.
+      const alcance = await reachForSequence(tx, sequenceId, contactIds);
       const libres: string[] = [];
       const enOtra: Array<{ contactId: string; cadencia: string }> = [];
+      const noLlegan: string[] = [];
       for (const id of contactIds) {
         const otra = await liveEnrollmentElsewhere(tx, id, sequenceId);
         if (otra) enOtra.push({ contactId: id, cadencia: otra.name });
+        else if (!alcance.get(id)?.length) noLlegan.push(id);
         else libres.push(id);
       }
       const res = libres.length > 0
         ? await enrollContacts(tx, { sequenceId, contactIds: libres, dealId, enrolledBy: tx.identity?.userId ?? null })
         : { enrolled: [], skipped: [] };
-      const nombres = await contactNames(tx, [...res.skipped.map((s) => s.contactId), ...enOtra.map((x) => x.contactId)]);
+      const tipos = res.enrolled.length > 0 ? await stepTypesOf(tx, sequenceId) : [];
+      const nombres = await contactNames(tx, [
+        ...res.enrolled.map((e) => e.contactId), ...res.skipped.map((s) => s.contactId), ...enOtra.map((x) => x.contactId), ...noLlegan,
+      ]);
       const nombre = (id: string) => nombres.get(id) ?? MESSAGES.proponer.sinPersona;
       return {
         enrolled: res.enrolled.length,
+        dentro: res.enrolled.map((e) => t.dentroCon(nombre(e.contactId), partesDeEnrolamiento(e, tipos, f))),
         saltadas: [
           ...res.skipped.map((s) => t.saltada(nombre(s.contactId), t.saltadas[s.reason] ?? t.saltadaGenerica)),
           ...enOtra.map((x) => t.saltada(nombre(x.contactId), t.enOtra(x.cadencia))),
+          ...noLlegan.map((id) => t.saltada(nombre(id), t.noLlega)),
         ],
       };
     });
     if (!r) return { error: t.ajenas };
     revalidatePath(LISTA);
     revalidatePath(detalle(sequenceId));
-    return { ok: t.resultado(f.int(r.enrolled), r.enrolled), saltadas: r.saltadas };
+    return { ok: t.resultado(f.int(r.enrolled), r.enrolled), dentro: r.dentro, saltadas: r.saltadas };
   } catch (err) {
     return { error: await mensajeDe(err) };
   }
