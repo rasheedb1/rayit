@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node --test --experimental-strip-types test/*.test.ts",
-    "record": "node --env-file-if-exists=../../.env --env-file-if-exists=../../.env.local --experimental-strip-types scripts/record.ts"
+    "record": "node --env-file-if-exists=../../.env --env-file-if-exists=../../.env.local --experimental-strip-types scripts/record.ts",
+    "record:outreach": "node --env-file-if-exists=../../.env --env-file-if-exists=../../.env.local --experimental-strip-types scripts/record-outreach.ts"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.17",

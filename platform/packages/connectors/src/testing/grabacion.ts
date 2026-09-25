@@ -24,9 +24,11 @@
  *     fixtures (quien escribe === la identidad de la cuenta);
  *   · Message-ID, In-Reply-To y References: la forma <local@dominio> se
  *     conserva con la parte local en hash, porque el hilo depende de ella;
- *   · el estado firmado que mandamos en el `name` de la hosted auth: se
- *     compara con el que se mandó y queda como una marca que dice si
- *     volvió intacto y cuántos caracteres tenía (STATE_MARK_*).
+ *   · el estado firmado que mandamos en el `name` de la hosted auth (y
+ *     que Unipile devuelve en la cuenta y en el aviso de cuenta creada):
+ *     queda como una marca con su largo (stateMark). Que volvió intacto
+ *     lo prueba la web al verificar su firma: el guion anota en
+ *     meta.appStatus lo que respondió al aviso.
  */
 import { createHash } from 'node:crypto';
 import type { FetchLike } from '../http/client.ts';
@@ -81,15 +83,15 @@ function parseJson(text: string): unknown {
   }
 }
 
-export const STATE_MARK_INTACT = (len: number): string => `[estado firmado de ${len} caracteres, devuelto intacto]`;
-export const STATE_MARK_ALTERED = (len: number, sent: number): string => `[estado firmado ALTERADO: ${len} caracteres de ${sent}]`;
-export const STATE_MARK_RE = /^\[estado firmado (de (\d+) caracteres, devuelto intacto|ALTERADO: (\d+) caracteres de (\d+))\]$/;
+/** La marca que reemplaza al estado firmado: solo su largo (el estado de On Cue ronda los 500 caracteres). */
+export const stateMark = (len: number): string => `[estado firmado de ${len} caracteres]`;
+export const STATE_MARK_RE = /^\[estado firmado de (\d+) caracteres\]$/;
+/** Un `name` que es nuestro estado: base64url con puntos, largo. Un nombre de persona no tiene esa forma. */
+const LOOKS_LIKE_STATE = /^[A-Za-z0-9_.~-]{100,}$/;
 
 export interface AnonymizeOptions {
   /** Valores que no pueden quedar en ninguna parte (tokens, la llave de Unipile, el secreto de los avisos). */
   secrets?: readonly string[];
-  /** El estado firmado que mandamos en la hosted auth: donde vuelva, se cambia por su marca. */
-  sentState?: string | null;
 }
 
 const KEEP_DOMAINS = new Set(['gmail.com', 'googlemail.com']);
@@ -112,10 +114,6 @@ function anonEmail(local: string, domain: string): string {
 
 /** Correos, ids de LinkedIn e Instagram y secretos dentro de cualquier texto. */
 function anonString(value: string, o: AnonymizeOptions): string {
-  if (o.sentState && value.length >= 32) {
-    if (value === o.sentState) return STATE_MARK_INTACT(value.length);
-    if (o.sentState.startsWith(value) || value.startsWith(o.sentState.slice(0, 32))) return STATE_MARK_ALTERED(value.length, o.sentState.length);
-  }
   let s = value;
   for (const sec of o.secrets ?? []) if (sec.length >= 8) s = s.split(sec).join(REDACTED);
   s = s.replace(/([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g, (_m, l: string, d: string) => anonEmail(l, d));
@@ -137,8 +135,7 @@ export function anonymizeOutreach(value: unknown, o: AnonymizeOptions = {}, key 
   if (typeof value === 'string') {
     if (key && isSecretKey(key) && key !== 'token_type') return REDACTED;
     // El estado firmado vuelve en `name` (la cuenta y el aviso de cuenta creada): su marca, antes que cualquier otra regla.
-    const marked = anonString(value, { sentState: o.sentState });
-    if (STATE_MARK_RE.test(marked)) return marked;
+    if (key === 'name' && LOOKS_LIKE_STATE.test(value)) return stateMark(value.length);
     if (key === 'data' && value.length > 0) return '';
     // Un estado de Unipile (AccountStatus.message = 'CREDENTIALS') es un código, no texto de una persona.
     if (PERSON_TEXT_KEYS.has(key)) return value === '' || /^[A-Z_]+$/.test(value) ? value : 'Texto de la prueba (omitido).';
