@@ -198,7 +198,7 @@ export function checkFigures(
     if (!c) issues.push({ code: 'unknown_claim', detail: m.id });
     else if (allowedSources && !allowedSources.includes(c.source)) issues.push({ code: 'claim_not_for_this_angle', detail: m.id });
   }
-  const figures = findFigures(maskMarkers(text));
+  const figures = findFigures(maskMarkers(text), claims);
   figures.forEach((f, i) => {
     const marker = markerFor(text, markers, f, figures[i + 1]);
     if (!marker) {
@@ -228,7 +228,7 @@ function markerFor(text: string, markers: readonly ReturnType<typeof findClaimMa
  */
 export function markFiguresByValue(text: string, claims: readonly SalesClaim[]): string {
   const markers = findClaimMarkers(text);
-  const figures = findFigures(maskMarkers(text));
+  const figures = findFigures(maskMarkers(text), claims);
   let out = text;
   // De atrás hacia delante: insertar una marca no mueve las cifras anteriores.
   for (let i = figures.length - 1; i >= 0; i--) {

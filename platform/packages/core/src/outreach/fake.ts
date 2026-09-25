@@ -10,10 +10,12 @@
  * de calidad se prueba de verdad: dos marcas del mismo nicho no reciben el
  * mismo texto con el nombre cambiado.
  */
-import { findFigures, type SalesClaim } from './claims.ts';
+import { withoutDates, type SalesClaim } from './claims.ts';
+import { platformName } from './claim-labels.ts';
 import type { GeneratedMessage, GenerationInput, MessageGenerator } from './generate.ts';
 import { textSimilarity } from './gates.ts';
 import { RUBRIC_DIMENSIONS, type JudgeInput, type JudgeVerdict, type MessageJudge, type RubricScores } from './judge.ts';
+import { RUBRIC_DIMENSION_LABELS } from './messages.ts';
 import { firstNameOf } from './render.ts';
 
 export const FAKE_GENERATOR_MODEL = 'on-cue-fake-generator';
@@ -44,11 +46,88 @@ function lower(s: string): string {
   return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;
 }
 
+/**
+ * La cifra dicha como la diría la creadora, según qué es: «Mis videos de
+ * TikTok tienen una mediana de 115.446 [claim:…] views». Lo que no tiene
+ * frase propia cae en una genérica con su etiqueta.
+ */
 function claimSentence(c: SalesClaim, k: number, lang: 'es' | 'en'): string {
-  const lead = lang === 'en'
-    ? pick(['One number from my profile:', 'For context,', 'A real figure:', 'What my numbers say:'], k)
-    : pick(['Un dato de mi perfil:', 'Para que tengas contexto,', 'Te dejo una cifra real:', 'Lo que dicen mis números:'], k);
-  return `${lead} ${lower(c.label)}, ${c.display} [claim:${c.id}].`;
+  const m = `${c.display} [claim:${c.id}]`;
+  const [kind, a = '', b = '', bucket = ''] = c.id.split(':');
+  const P = platformName(a);
+  const brand = c.entities?.[0] ?? null;
+  const en = lang === 'en';
+  if (kind === 'baseline' && b === 'median_views') {
+    return en
+      ? pick([`My ${P} videos get a median of ${m} views in their first week.`, `On ${P}, a typical video of mine reaches ${m} views in its first week.`], k)
+      : pick([`Mis videos de ${P} tienen una mediana de ${m} views en su primera semana.`, `En ${P}, un video mío típico llega a ${m} views en su primera semana.`], k);
+  }
+  if (kind === 'baseline' && b === 'median_engagement') {
+    return en ? `On ${P}, the median engagement on my videos is ${m}.` : `En ${P}, la interacción mediana de mis videos es del ${m}.`;
+  }
+  if (kind === 'campaign' && brand) {
+    const byMetric: Record<string, [string, string]> = {
+      views: [`The campaign I did with ${brand} reached ${m} views.`, `La campaña que hice con ${brand} sumó ${m} views.`],
+      redemptions: [`In the campaign with ${brand}, ${m} codes were redeemed.`, `En la campaña con ${brand} se redimieron ${m} códigos.`],
+      non_followers: [
+        `In the campaign with ${brand}, ${m} of the reach came from people who did not follow me yet.`,
+        `En la campaña con ${brand}, el ${m} del alcance fue gente que todavía no me seguía.`,
+      ],
+      brand_followers: [`With our campaign, ${brand} gained ${m} followers.`, `Con nuestra campaña, ${brand} ganó ${m} seguidores.`],
+    };
+    const s = byMetric[b];
+    if (s) return en ? s[0] : s[1];
+  }
+  if (kind === 'audience' && b === 'gender' && (bucket === 'f' || bucket === 'm')) {
+    const who = en ? (bucket === 'f' ? 'women' : 'men') : bucket === 'f' ? 'mujeres' : 'hombres';
+    return en ? `On ${P}, ${m} of the people who follow me are ${who}.` : `En ${P}, el ${m} de quienes me siguen son ${who}.`;
+  }
+  const age = kind === 'audience' && b === 'age' ? /^(\d{2})-(\d{2})$/.exec(bucket) : null;
+  if (age) {
+    return en
+      ? `On ${P}, ${m} of the people who follow me are between ${age[1]} and ${age[2]} years old.`
+      : `En ${P}, el ${m} de quienes me siguen tiene entre ${age[1]} y ${age[2]} años.`;
+  }
+  if (kind === 'media_kit' && b === 'followers') return en ? `I have ${m} followers on ${P}.` : `Tengo ${m} seguidores en ${P}.`;
+  return en ? `A number from my profile that may help: ${lower(c.label)}, ${m}.` : `Un dato de mi perfil que te puede servir: ${lower(c.label)}, ${m}.`;
+}
+
+/**
+ * La cifra que respalda el mensaje, por prioridad y no al azar: una
+ * campaña con ESTA marca; la mediana de views de la red principal del
+ * creador (la de más views); su interacción; su audiencia en esa red; lo
+ * demás. El hash solo desempata dentro de un mismo nivel.
+ */
+function proofClaim(allowed: readonly SalesClaim[], companyName: string, n: number, exclude: string | null): SalesClaim | null {
+  const xs = allowed.filter((c) => c.id !== exclude);
+  const co = companyName.toLowerCase();
+  const views = xs.filter((c) => /^baseline:[^:]+:median_views$/.test(c.id)).sort((p, q) => (q.value ?? 0) - (p.value ?? 0));
+  const main = views[0]?.id.split(':')[1] ?? null;
+  const onMain = (c: SalesClaim) => main !== null && c.id.split(':')[1] === main;
+  const tiers: SalesClaim[][] = [
+    xs.filter((c) => c.source === 'campaign_result' && (c.entities ?? []).some((e) => e.toLowerCase() === co)),
+    views.slice(0, 1),
+    xs.filter((c) => c.source === 'creator_baseline' && onMain(c)),
+    xs.filter((c) => c.id.startsWith('audience:') && onMain(c)),
+    xs.filter((c) => c.source === 'creator_baseline' || c.source === 'media_kit'),
+    xs.filter((c) => c.id.startsWith('audience:')),
+    xs.filter((c) => c.source !== 'signal'),
+  ];
+  const tier = tiers.find((t) => t.length > 0);
+  return tier ? pick(tier, n) : null;
+}
+
+/**
+ * La señal como se cita en una frase: sin el sufijo « · categoría», solo
+ * si no trae números fuera de sus fechas (esos números no tienen claim y
+ * el redactor no los copia) y si empieza por un verbo en pasado («Lanzó
+ * cold brew en botella el 22 jul»): «Top Ads en TikTok» no se lee detrás
+ * de «Vi que Café Alma…».
+ */
+function quotableSignal(headline: string | null): string | null {
+  const main = headline?.split(' · ')[0]?.trim() ?? '';
+  if (!main || /\d/.test(withoutDates(main))) return null;
+  return /^\p{L}+(?:ó|aron|ieron|ed)(?![\p{L}])/u.test(main) ? lower(main) : null;
 }
 
 /** El nicho del creador como se lee en una frase («estilo-de-vida» → «estilo de vida»), o null. */
@@ -65,24 +144,30 @@ function compose(input: GenerationInput, seed: number): Parts {
   const en = input.lang === 'en';
   const co = input.company.name;
   const who = firstNameOf(input.contact?.fullName) ?? null;
-  // Una señal con cifras («6 anuncios activos», «30 % de descuento») no se copia: esas cifras no tienen claim.
-  const headline = input.signal?.headline ?? null;
-  const sig = headline && findFigures(headline).length === 0 ? lower(headline) : null;
+  // Una señal con cifras («6 anuncios activos», «30 % de descuento») no se copia tal cual: esas cifras no tienen marca.
+  // Si la cifra de la señal es un claim que el ángulo deja citar, se dice con su marca («6 [claim:…] anuncios activos»).
+  const sig = quotableSignal(input.signal?.headline ?? null);
   const where = input.company.city ?? input.company.country ?? (en ? 'your market' : 'tu mercado');
   const sector = input.company.industry ?? (en ? 'your industry' : 'tu sector');
   const niche = nicheOf(input);
   const n = (part: string) => hash(`${seed}|${part}|${co}|${who ?? ''}|${sig ?? ''}`);
   const allowed = input.claims.filter((c) => c.value !== null && (!input.angle || input.angle.proofSources.includes(c.source)));
-  const claim = allowed.length > 0 ? pick(allowed, n('claim')) : null;
+  const ads = sig ? null : allowed.find((c) => /^signal:[^:]+:active_ads$/.test(c.id)) ?? null;
+  const adsText = ads ? `${ads.display} [claim:${ads.id}]` : '';
+  const claim = proofClaim(allowed, co, n('claim'), ads?.id ?? null);
   const video = niche ? (en ? `a short ${niche} video` : `un video corto de ${niche}`) : en ? 'a short video' : 'un video corto';
   const t = en
     ? {
         greeting: who ? [`Hi ${who},`, `${who}, hello.`, `Good morning, ${who}.`, `Hello ${who},`] : ['Hi,', 'Hello,'],
         withSignal: [
           `I saw that ${co} ${sig} and started thinking about how I would tell it in ${video}.`,
-          `What ${co} is doing (${sig}) is exactly the kind of move my audience follows closely.`,
+          `That ${co} ${sig} is exactly the kind of move my audience follows closely.`,
           `It caught my eye that ${co} ${sig}, especially thinking about who buys in ${where}.`,
-          `I was looking at the latest from ${co}: ${sig} fits what I publish every week.`,
+          `I was looking at the latest from ${co}, and the fact that it ${sig} fits what I publish every week.`,
+        ],
+        withAds: [
+          `I saw ${co} is running ${adsText} active ads right now and started thinking about how I would tell it in ${video}.`,
+          `With ${adsText} active ads live, ${co} is talking to a lot of people right now, and I think I can add to that from ${where}.`,
         ],
         noSignal: [
           `I have been following what ${co} does in ${sector} for a while and there is something I want to pitch you.`,
@@ -108,9 +193,13 @@ function compose(input: GenerationInput, seed: number): Parts {
         greeting: who ? [`Hola ${who},`, `${who}, buenas.`, `Buen día, ${who}.`, `Hola, ${who}.`] : ['Hola,', 'Buen día,'],
         withSignal: [
           `Vi que ${co} ${sig} y me quedé pensando en cómo lo contaría en ${video}.`,
-          `Lo de ${co} (${sig}) es justo el tipo de movimiento que mi audiencia sigue de cerca.`,
+          `Que ${co} ${sig} es justo el tipo de movimiento que mi audiencia sigue de cerca.`,
           `Me llamó la atención que ${co} ${sig}, sobre todo pensando en quién compra en ${where}.`,
-          `Estuve mirando lo último de ${co}: que ${sig} encaja con lo que publico cada semana.`,
+          `Estuve mirando lo último de ${co}, y que ${sig} encaja con lo que publico cada semana.`,
+        ],
+        withAds: [
+          `Vi que ${co} tiene ${adsText} anuncios activos en este momento y me quedé pensando en cómo lo contaría en ${video}.`,
+          `Con ${adsText} anuncios activos, ${co} le está hablando a mucha gente justo ahora, y creo que puedo sumar desde ${where}.`,
         ],
         noSignal: [
           `Sigo lo que hace ${co} en ${sector} desde hace un tiempo y hay algo que quiero proponerte.`,
@@ -134,7 +223,7 @@ function compose(input: GenerationInput, seed: number): Parts {
       };
   return {
     greeting: pick(t.greeting, n('greet')),
-    opener: sig ? pick(t.withSignal, n('open')) : pick(t.noSignal, n('open')),
+    opener: sig ? pick(t.withSignal, n('open')) : ads ? pick(t.withAds, n('open')) : pick(t.noSignal, n('open')),
     proof: claim ? claimSentence(claim, n('proof'), en ? 'en' : 'es') : '',
     idea: pick(t.idea, n('idea')),
     question: pick(t.question, n('ask')),
@@ -196,7 +285,7 @@ export function createFakeJudge(): MessageJudge {
         ? en
           ? 'It talks about the brand from the first sentence, cites only sourced figures and closes with one question.'
           : 'Habla de la marca desde la primera frase, cita solo cifras con origen y cierra con una pregunta.'
-        : `${en ? 'Could improve' : 'Mejorable en'}: ${weak.join(', ')}.`;
+        : `${en ? 'Could improve' : 'Mejorable en'}: ${weak.map((d) => RUBRIC_DIMENSION_LABELS[en ? 'en' : 'es'][d]).join(', ')}.`;
       return {
         scores, riskTriggers: [], hint: weak.length === 0 ? null : 'more_specific', note,
         model: FAKE_JUDGE_MODEL, inputTokens: tokensOf(input.body) + 400, outputTokens: 60, costUsd: 0,

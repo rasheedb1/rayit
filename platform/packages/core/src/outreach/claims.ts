@@ -112,7 +112,7 @@ export interface FigureHit {
 // Un número con separadores de miles o decimales, seguido opcionalmente de
 // una unidad: %, x/×/veces/times, mil/k/millones/M/million.
 const FIGURE_RE =
-  /(?<![\p{L}\p{N}_@/#.,-])(\d{1,3}(?:[.,  ]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)(\s?(?:%|por\s?ciento|percent|×|x\b|veces\b|times\b|mil\b|k\b|K\b|millones\b|millón\b|M\b|million\b|millions\b|thousand\b))?/gu;
+  /(?<![\p{L}\p{N}_@/#.,-])(\d{1,3}(?:[.,  ]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)(\s?(?:%|por\s?ciento|percent|per\s?cent|×|x\b|veces\b|times\b|mil\b|k\b|K\b|millones\b|millón\b|M\b|million\b|millions\b|thousand\b))?/gu;
 
 const URL_RE = /\b(?:https?:\/\/|www\.)\S+/gi;
 const TIME_RE = /\b\d{1,2}:\d{2}\b/g;
@@ -140,6 +140,13 @@ const DURATION_RE =
 const ADDRESS_RE =
   /(?<![\p{L}\p{N}])(?:calle|carrera|cra|kra|cr|cl|avenida|avda|av|diagonal|dg|transversal|tv|autopista|street|st|avenue|ave|road|rd|boulevard|blvd)\.?\s+(?:n[º°o]\.?\s?)?\d+[a-z]?(?:\s?bis)?(?:\s?(?:#|n[º°]\.?|no\.|n[uú]mero)\s?\d+[a-z]?(?:\s?-\s?\d+)?)?(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])\d+\s+(?:\p{Lu}\p{L}+\s+){1,3}(?:street|st|avenue|ave|road|rd|boulevard|blvd)\b/giu;
 
+/**
+ * Cuándo pasó algo («hace 2 años trabajé con…», «3 years ago»): una fecha
+ * relativa, no una trayectoria. «Desde hace 9 años» sí se afirma y no entra.
+ */
+const AGO_RE =
+  /(?<!desde\s)(?<![\p{L}])hace\s+(?:\d+|\p{L}+)\s+(?:años?|meses|mes|semanas?|d[ií]as?)(?![\p{L}])|(?<![\p{L}\p{N}])(?:\d+|\p{L}+)\s+(?:years?|months?|weeks?|days?)\s+ago(?![\p{L}])/giu;
+
 // Cifras que lo son SIEMPRE, por pequeñas que sean (no pasan por SMALL_COUNT_MAX):
 /** Un multiplicador delante: «las ventas crecieron x3», «×2 en guardados». */
 const PREFIX_MULTIPLE_RE = /(?<![\p{L}\p{N}])[x×]\s?(\d+(?:[.,]\d+)?)(?![\p{L}\p{N}])/giu;
@@ -147,9 +154,26 @@ const PREFIX_MULTIPLE_RE = /(?<![\p{L}\p{N}])[x×]\s?(\d+(?:[.,]\d+)?)(?![\p{L}\
 const FOLD_RE = /(?<![\p{L}\p{N}])(\d+(?:[.,]\d+)?)[\s-]?fold(?![\p{L}])/giu;
 /** Puntos porcentuales: «subió 5 pp», «3 puntos porcentuales». */
 const POINTS_RE = /(?<![\p{L}\p{N}])(\d+(?:[.,]\d+)?)\s?(?:pp|p\.\s?p\.|puntos porcentuales|percentage points)(?![\p{L}])/giu;
-/** Un puesto: «soy la creadora #1», «top 3», «número uno», «number one», «nº 1». */
-const RANK_RE =
-  /(?<![\p{L}\p{N}&])#\s?(\d+)(?![\p{L}\p{N}_])|\btop[\s-]?(\d+)(?!\d)|\bn[uú]mero\s+(?:uno|1)(?![\p{L}\p{N}])|\bnumber\s+(?:one|1)(?![\p{L}\p{N}])|\bn\.?\s?[º°]\s?1(?!\d)/giu;
+/**
+ * Un puesto: «soy la creadora #1», «top 3», «número uno», «number one», «nº 1»,
+ * «primer lugar», «1er puesto», «la primera creadora», «first place», «the first creator».
+ */
+const RANK_RE = new RegExp(
+  [
+    '(?<![\\p{L}\\p{N}&])#\\s?(\\d+)(?![\\p{L}\\p{N}_])',
+    '\\btop[\\s-]?(\\d+)(?!\\d)',
+    '\\bn[uú]mero\\s+(?:uno|1)(?![\\p{L}\\p{N}])',
+    '\\bnumber\\s+(?:one|1)(?![\\p{L}\\p{N}])',
+    '\\bn\\.?\\s?[º°]\\s?1(?!\\d)',
+    // «primer lugar», «primera posición», «el primer creador de recetas», «la primera creadora»
+    '(?<![\\p{L}])primer(?:a|o)?\\s+(?:lugar|puesto|posici[oó]n|creador|creadora|influencer|influenciador|influenciadora)(?![\\p{L}])',
+    // «1er lugar», «1ra posición», «1º puesto», «2do lugar», «1st place»
+    '(?<![\\p{L}\\p{N}])\\d+\\s?(?:er|ra|ro|do|da|to|ta|[º°ªo]|st|nd|rd|th)\\.?\\s+(?:lugar|puesto|posici[oó]n|place|creator|influencer)(?![\\p{L}])',
+    // «first place», «the first creator»
+    '\\bfirst[\\s-]+(?:place|creator|influencer)(?![\\p{L}])',
+  ].join('|'),
+  'giu',
+);
 
 /** Hasta cuánto un número suelto, sin unidad y sin un sustantivo de desempeño detrás, no es una cifra («3 ideas»). */
 export const SMALL_COUNT_MAX = 12;
@@ -169,6 +193,8 @@ export const PERFORMANCE_NOUNS = [
   'followers', 'subscriber', 'subscribers', 'collaboration', 'collaborations', 'partnership', 'partnerships', 'comment',
   'comments', 'shares', 'saves', 'impressions', 'clicks', 'downloads', 'order', 'orders', 'purchase', 'purchases', 'user',
   'users', 'people', 'redemptions',
+  // Ronda 4: la señal de la marca («6 anuncios activos») y la trayectoria («9 años creando contenido») también se afirman.
+  'anuncio', 'anuncios', 'año', 'años', 'tienda', 'tiendas', 'ad', 'ads', 'store', 'stores', 'year', 'years',
 ] as const;
 
 const NOUN_ALT = [...PERFORMANCE_NOUNS].sort((a, b) => b.length - a.length).join('|');
@@ -245,10 +271,42 @@ const SCALES: Record<string, number> = {
 };
 /** Los múltiplos en palabras: son una cifra siempre («el triple de views»). */
 const MULTIPLIERS: Record<string, number> = {
-  doble: 2, duplico: 2, duplica: 2, duplicaron: 2, duplicar: 2, triple: 3, triplico: 3, triplica: 3, triplicaron: 3,
-  triplicar: 3, cuadruple: 4, cuadruplico: 4, twice: 2, double: 2, doubled: 2, doubles: 2, tripled: 3, triples: 3,
-  thrice: 3, quadruple: 4, quadrupled: 4, twofold: 2, threefold: 3, fourfold: 4, fivefold: 5, tenfold: 10,
+  doble: 2, twice: 2, thrice: 3, twofold: 2, threefold: 3, fourfold: 4, fivefold: 5, tenfold: 10,
 };
+/**
+ * Los verbos y adjetivos de múltiplo, por su raíz y no por una lista de
+ * conjugaciones: «duplicamos», «triplicó», «duplicaste», «cuadruplicaron»,
+ * «doubled», «tripling», «quadruple». Se comparan plegados (sin tildes).
+ */
+const MULTIPLIER_STEMS: Array<[RegExp, number]> = [
+  [/^duplic/, 2], [/^triplic/, 3], [/^cuadruplic/, 4], [/^quintuplic/, 5],
+  [/^triple/, 3], [/^cuadruple/, 4], [/^quintuple/, 5],
+  [/^doubl/, 2], [/^tripl/, 3], [/^quadrupl/, 4], [/^quintupl/, 5],
+];
+
+function multiplierOf(w: string): number | null {
+  if (w in MULTIPLIERS) return MULTIPLIERS[w]!;
+  for (const [re, n] of MULTIPLIER_STEMS) if (re.test(w)) return n;
+  return null;
+}
+
+/**
+ * Las fracciones: «la mitad de mis seguidores», «half of my audience» son
+ * una cifra siempre; «tercio(s)», «cuarto(s)», «third(s)», «quarter(s)»
+ * solo con su numerador delante («dos tercios», «un cuarto», «a third»):
+ * solos son un ordinal («el cuarto video», «my third post»).
+ */
+const HALF_WORDS = new Set(['mitad', 'half']);
+const DENOMINATORS: Record<string, number> = {
+  tercio: 3, tercios: 3, cuarto: 4, cuartos: 4, third: 3, thirds: 3, quarter: 4, quarters: 4,
+};
+const NUMERATORS: Record<string, number> = { un: 1, una: 1, uno: 1, a: 1, one: 1, dos: 2, tres: 3, two: 2, three: 3 };
+/** Lo que viene detrás de una fracción de tiempo o de camino: «a mitad de semana», «half an hour», «un cuarto de hora». */
+const TIME_AFTER_RE =
+  /^[\s\u00a0]+(?:(?:de|del|of|an?|the)[\s\u00a0]+)?(?:(?:la|el|mi|my)[\s\u00a0]+)?(?:hora|horas|dia|dias|día|días|semana|mes|año|ano|camino|tarde|mañana|manana|noche|partido|hour|hours|day|week|month|year|way|time|game)(?![\p{L}])/iu;
+/** Un porcentaje escrito con palabras detrás de un numeral: «ochenta por ciento», «eighty percent». */
+const PERCENT_AFTER_RE = /^[\s\u00a0]*(?:por[\s\u00a0]?ciento|percent|per[\s\u00a0]cent|%)(?![\p{L}])/iu;
+
 /** «medio millón», «media docena de miles»: la mitad de la escala que sigue. Solo cuentan delante de una escala. */
 const HALVES = new Set(['medio', 'media', 'half']);
 const JOINERS = new Set(['y', 'and']);
@@ -282,42 +340,92 @@ function wordsValue(run: readonly string[]): number {
   return total + current;
 }
 
-/** Las cifras escritas con palabras: «diez mil views», «un millón de seguidores», «el triple», «once marcas». */
-function wordFigures(text: string, skip: ReadonlyArray<[number, number]>): FigureHit[] {
+/**
+ * Las cifras escritas con palabras: «diez mil views», «un millón de
+ * seguidores», «el triple», «once marcas», «el ochenta por ciento», «la
+ * mitad de mis seguidores», «dos tercios», «triplicamos las ventas».
+ */
+function wordFigures(text: string, skip: ReadonlyArray<[number, number]>, claims: readonly SalesClaim[]): FigureHit[] {
   const words = [...text.matchAll(/\p{L}+/gu)].map((m) => ({ w: foldWord(m[0]), start: m.index ?? 0, end: (m.index ?? 0) + m[0].length }));
   const hits: FigureHit[] = [];
+  const hit = (start: number, end: number, value: number, kind: FigureHit['kind']) =>
+    hits.push({ raw: text.slice(start, end), start, end, values: [value], kind });
+  /** El índice de la última palabra que empieza antes de `end`: para saltar lo que ya se leyó («por ciento»). */
+  const lastWordBefore = (end: number, from: number) => {
+    let k = from;
+    while (k + 1 < words.length && words[k + 1]!.start < end) k++;
+    return k;
+  };
   for (let i = 0; i < words.length; i++) {
     const first = words[i]!;
     if (skip.some(([a, b]) => first.start < b && first.end > a)) continue;
-    if (first.w in MULTIPLIERS) {
-      hits.push({ raw: text.slice(first.start, first.end), start: first.start, end: first.end, values: [MULTIPLIERS[first.w]!], kind: 'multiple' });
+    const next = words[i + 1];
+    const nextIsAdjacent = next !== undefined && onlySpaces(text.slice(first.end, next.start));
+    const multiple = multiplierOf(first.w);
+    if (multiple !== null) {
+      hit(first.start, first.end, multiple, 'multiple');
+      continue;
+    }
+    // «la mitad de mis seguidores», «half of my followers». No «a mitad de semana» ni «half an hour».
+    // «half million» sigue por la tirada de numerales (500.000); «half a million», aquí mismo.
+    const halfBeforeScale = first.w === 'half' && nextIsAdjacent && next.w in SCALES;
+    if (HALF_WORDS.has(first.w) && !halfBeforeScale) {
+      const third = words[i + 2];
+      if (first.w === 'half' && nextIsAdjacent && ['a', 'an'].includes(next.w) && third && third.w in SCALES && onlySpaces(text.slice(next.end, third.start))) {
+        hit(first.start, third.end, SCALES[third.w]! / 2, 'scaled');
+        i += 2;
+        continue;
+      }
+      const before = text.slice(Math.max(0, first.start - 3), first.start);
+      if (!/(?:^|[^\p{L}])a\s$/iu.test(before) && !TIME_AFTER_RE.test(text.slice(first.end, first.end + 40))) {
+        hit(first.start, first.end, 0.5, 'percent');
+      }
+      continue;
+    }
+    // «dos tercios», «un cuarto de mi audiencia», «a third», «three quarters».
+    if (first.w in NUMERATORS && nextIsAdjacent && next.w in DENOMINATORS && !TIME_AFTER_RE.test(text.slice(next.end, next.end + 40))) {
+      hit(first.start, next.end, Math.round((NUMERATORS[first.w]! / DENOMINATORS[next.w]!) * 1000) / 1000, 'percent');
+      i += 1;
       continue;
     }
     if (!isNumberWord(first.w)) continue;
-    // «un video», «a brand», «one of»: artículo, no cifra. «un», «a» y «one» solo cuentan delante de una escala («un millón»).
-    // «medio» y «media», igual: «medio millón» es una cifra, «media hora» no.
+    // «un video», «a brand», «one of»: artículo, no cifra. «un», «a» y «one» solo cuentan delante de una escala («un millón»)
+    // o de «por ciento» («one percent»). «medio» y «media», igual: «medio millón» es una cifra, «media hora» no.
     if (ONES.has(first.w) || HALVES.has(first.w)) {
-      const next = words[i + 1];
-      if (!next || !(next.w in SCALES) || !onlySpaces(text.slice(first.end, next.start))) continue;
+      const percent = ONES.has(first.w) && first.w !== 'a' ? PERCENT_AFTER_RE.exec(text.slice(first.end, first.end + 20)) : null;
+      if (percent) {
+        hit(first.start, first.end + percent[0].length, 0.01, 'percent');
+        i = lastWordBefore(first.end + percent[0].length, i);
+        continue;
+      }
+      if (!next || !(next.w in SCALES) || !nextIsAdjacent) continue;
     }
     // La tirada de numerales seguidos, con «y»/«and» entre ellos y solo espacios o guiones de separación.
     let j = i;
     while (j + 1 < words.length && onlySpaces(text.slice(words[j]!.end, words[j + 1]!.start))) {
-      const next = words[j + 1]!;
+      const n = words[j + 1]!;
       const after = words[j + 2];
-      if (isNumberWord(next.w) && !ONES.has(next.w) && !HALVES.has(next.w)) j++;
-      else if (JOINERS.has(next.w) && after && isNumberWord(after.w) && !ONES.has(after.w) && onlySpaces(text.slice(next.end, after.start))) j += 2;
+      if (isNumberWord(n.w) && !ONES.has(n.w) && !HALVES.has(n.w)) j++;
+      else if (JOINERS.has(n.w) && after && isNumberWord(after.w) && !ONES.has(after.w) && onlySpaces(text.slice(n.end, after.start))) j += 2;
       else break;
     }
     const run = words.slice(i, j + 1).map((x) => x.w).filter((w) => !JOINERS.has(w));
     const last = words[j]!;
     const second = j > i ? words[i + 1]! : null;
     i = j;
+    const value = wordsValue(run);
+    // «el ochenta por ciento», «veinte por ciento», «eighty percent»: un porcentaje siempre, sin sustantivo detrás.
+    const percent = PERCENT_AFTER_RE.exec(text.slice(last.end, last.end + 20));
+    if (percent) {
+      const end = last.end + percent[0].length;
+      hit(first.start, end, value / 100, 'percent');
+      i = lastWordBefore(end, i);
+      continue;
+    }
     const hasScale = run.some((w) => w in SCALES);
     // «a» delante de una escala vale 1, pero no es parte de lo que se escribe
     // («llegué a miles de personas»: la cifra es «miles»; «a million» dice «million»).
     const shown = first.w === 'a' && second ? second : first;
-    const value = wordsValue(run);
     // De desempeño si es grande («diez mil», «un millón»), o si es un conteo
     // pequeño con un sustantivo de desempeño detrás y no es algo que se
     // ofrece («trabajé con once marcas» sí; «te propongo tres videos» no).
@@ -326,12 +434,74 @@ function wordFigures(text: string, skip: ReadonlyArray<[number, number]>): Figur
       ? run.length >= 2 || followedByNoun(text, last.end)
       : value > SMALL_COUNT_MAX
         ? followedByNoun(text, last.end)
-        : smallCountIsFigure(text, first.start, last.end);
-    if (isFigure) {
-      hits.push({ raw: text.slice(shown.start, last.end), start: shown.start, end: last.end, values: [value], kind: hasScale ? 'scaled' : 'plain' });
-    }
+        : smallCountIsFigure(text, first.start, last.end) || citesACountClaim(text, first.start, last.end, [value], claims);
+    if (isFigure) hit(shown.start, last.end, value, hasScale ? 'scaled' : 'plain');
   }
   return hits;
+}
+
+// ---------------------------------------------------------------------
+// Proporciones («tres de cada cuatro») y conteos del perfil sin su marca
+// ---------------------------------------------------------------------
+
+const OUT_OF_WORDS: Record<string, number> = { ...UNITS, un: 1, una: 1, uno: 1, one: 1 };
+const OUT_OF_NUM = `\\d+|${Object.keys(OUT_OF_WORDS).sort((a, b) => b.length - a.length).join('|')}`;
+const OUT_OF_RE = new RegExp(
+  `(?<![\\p{L}\\p{N}])(${OUT_OF_NUM})\\s+(?:de\\s+cada|out\\s+of|in\\s+every|of\\s+every|in)\\s+(${OUT_OF_NUM})(?![\\p{L}\\p{N}])`,
+  'giu',
+);
+
+function outOfFigures(text: string): FigureHit[] {
+  // Se busca en el texto plegado (sin tildes) si conserva el largo: «dieciséis de cada veinte».
+  const folded = foldText(text);
+  const source = folded.length === text.length ? folded : text.toLowerCase();
+  const read = (t: string) => (/^\d+$/.test(t) ? Number(t) : OUT_OF_WORDS[t] ?? Number.NaN);
+  const hits: FigureHit[] = [];
+  for (const m of source.matchAll(OUT_OF_RE)) {
+    const n = read(m[1]!);
+    const d = read(m[2]!);
+    if (!(d > 0) || !(n >= 0) || n > d) continue;
+    const start = m.index ?? 0;
+    const end = start + m[0].length;
+    hits.push({ raw: text.slice(start, end), start, end, values: [Math.round((n / d) * 1000) / 1000], kind: 'percent' });
+  }
+  return hits;
+}
+
+/** Palabras de una etiqueta que no dicen qué se cuenta. */
+const LABEL_STOPWORDS = new Set(['para', 'como', 'desde', 'with', 'from', 'among', 'total', 'todas', 'todos', 'across']);
+const stemOf = (w: string) => foldText(w).slice(0, 5);
+
+/**
+ * ¿El número pequeño entre start y end cita un conteo del perfil? Dice lo
+ * mismo que un claim de unidad 'count' y una de las dos palabras que lo
+ * siguen comparte raíz con la etiqueta del claim («6 anuncios activos» y
+ * «Anuncios activos de Fresko Market»). Lo que se ofrece no cuenta.
+ */
+function citesACountClaim(text: string, start: number, end: number, values: readonly number[], claims: readonly SalesClaim[]): boolean {
+  const same = claims.filter((c) => c.unit === 'count' && c.value !== null && values.includes(c.value));
+  if (same.length === 0) return false;
+  const after = /^[ \u00a0]+(\p{L}+)(?:[ \u00a0]+(\p{L}+))?/u.exec(text.slice(end, end + 60));
+  if (!after) return false;
+  const next = [after[1], after[2]].filter((w): w is string => !!w && w.length >= 4).map(stemOf);
+  if (next.length === 0 || offeredOrSelected(text, start, end)) return false;
+  return same.some((c) => {
+    const label = (c.label.match(/\p{L}+/gu) ?? []).filter((w) => w.length >= 4 && !LABEL_STOPWORDS.has(foldText(w))).map(stemOf);
+    return next.some((w) => label.includes(w));
+  });
+}
+
+/**
+ * El texto con sus fechas, horas y años cambiados por espacios: lo que
+ * queda con dígitos trae números que no son un momento. El redactor falso
+ * no copia una señal así («6 anuncios activos en Meta desde el 12 ago»).
+ */
+export function withoutDates(text: string): string {
+  let out = text;
+  for (const [a, b] of [...spans(text, DATE_RE), ...spans(text, TIME_RE), ...spans(text, YEAR_RE)]) {
+    out = out.slice(0, a) + ' '.repeat(b - a) + out.slice(b);
+  }
+  return out;
 }
 
 function spans(text: string, re: RegExp): Array<[number, number]> {
@@ -369,18 +539,26 @@ function parseNumber(digits: string): number[] {
  * los puntos porcentuales («5 pp») y los puestos («#1», «top 3», «número
  * uno»), que ninguna cifra del perfil respalda. Los números escritos con
  * palabras también cuentan: «diez mil views», «el triple», «once marcas»,
- * «medio millón».
+ * «medio millón», «el ochenta por ciento», «la mitad de mis seguidores»,
+ * «dos tercios», «tres de cada cuatro», «triplicamos las ventas».
+ *
+ * Con `claims`, un número pequeño que dice lo mismo que un conteo del
+ * perfil y va seguido de lo que ese conteo cuenta («6 anuncios activos»
+ * frente a «Anuncios activos de Fresko: 6») es una cifra aunque su
+ * sustantivo no esté en la lista cerrada: la cita de un claim sin su marca.
  */
-export function findFigures(text: string | null | undefined): FigureHit[] {
+export function findFigures(text: string | null | undefined, claims: readonly SalesClaim[] = []): FigureHit[] {
   if (!text) return [];
   const years = spans(text, YEAR_RE).filter(([, end]) => !followedByNoun(text, end));
   const skip = [
     ...spans(text, URL_RE), ...spans(text, TIME_RE), ...spans(text, DATE_RE), ...years, ...spans(text, AGE_RANGE_RE),
-    ...spans(text, DURATION_RE), ...spans(text, ADDRESS_RE),
+    ...spans(text, DURATION_RE), ...spans(text, ADDRESS_RE), ...spans(text, AGO_RE),
   ];
   const overlaps = (start: number, end: number) => skip.some(([a, b]) => start < b && end > a);
   const hits: FigureHit[] = [];
-  // Primero lo que es cifra siempre, por pequeño que sea: «x3», «3-fold», «5 pp», «#1», «top 3», «número uno».
+  // «tres de cada cuatro», «9 out of 10», «one in five»: una proporción siempre.
+  for (const h of outOfFigures(text)) if (!overlaps(h.start, h.end)) hits.push(h);
+  // Luego lo que es cifra siempre, por pequeño que sea: «x3», «3-fold», «5 pp», «#1», «top 3», «número uno».
   const always: Array<[RegExp, FigureHit['kind'], (n: number) => number]> = [
     [PREFIX_MULTIPLE_RE, 'multiple', (n) => n],
     [FOLD_RE, 'multiple', (n) => n],
@@ -402,7 +580,7 @@ export function findFigures(text: string | null | undefined): FigureHit[] {
     const start = m.index ?? 0;
     const end = start + m[0].length;
     if (overlaps(start, end)) continue;
-    const unit = (m[2] ?? '').trim().toLowerCase();
+    const unit = (m[2] ?? '').toLowerCase().replace(/[\s\u00a0]+/g, '');
     const base = parseNumber(m[1]!);
     if (base.length === 0) continue;
     let kind: FigureHit['kind'] = 'plain';
@@ -420,11 +598,14 @@ export function findFigures(text: string | null | undefined): FigureHit[] {
       values = base.map((v) => v * 1_000_000);
     }
     // Un número pequeño sin unidad es una cifra solo con un sustantivo de desempeño detrás, y si no es lo que se ofrece.
-    if (kind === 'plain' && base.every((v) => Number.isInteger(v) && v <= SMALL_COUNT_MAX) && !smallCountIsFigure(text, start, end)) continue;
+    if (
+      kind === 'plain' && base.every((v) => Number.isInteger(v) && v <= SMALL_COUNT_MAX) &&
+      !smallCountIsFigure(text, start, end) && !citesACountClaim(text, start, end, base, claims)
+    ) continue;
     hits.push({ raw: m[0].trim(), start, end, values, kind });
   }
   // Las palabras que ya son la unidad de una cifra en dígitos («400 mil») no cuentan dos veces.
-  hits.push(...wordFigures(text, [...skip, ...hits.map((h): [number, number] => [h.start, h.end])]));
+  hits.push(...wordFigures(text, [...skip, ...hits.map((h): [number, number] => [h.start, h.end])], claims));
   return hits.sort((a, b) => a.start - b.start);
 }
 

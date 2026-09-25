@@ -160,6 +160,16 @@ export const RISK_TRIGGER_TEXTS: Record<NoticeLang, Record<string, string>> = {
   },
 };
 
+/**
+ * Las dimensiones de la rúbrica del juez (relevance, quality, structure,
+ * voice) en palabras: la nota que ve la persona nunca lleva los
+ * identificadores internos.
+ */
+export const RUBRIC_DIMENSION_LABELS: Record<NoticeLang, Record<'relevance' | 'quality' | 'structure' | 'voice', string>> = {
+  es: { relevance: 'relevancia', quality: 'calidad', structure: 'estructura', voice: 'voz' },
+  en: { relevance: 'relevance', quality: 'quality', structure: 'structure', voice: 'voice' },
+};
+
 /** Una nota de 0 a 10 con un decimal, con la coma o el punto del idioma. */
 const score = (lang: NoticeLang, d: string) =>
   Number.isFinite(Number(d)) && d !== '' ? new Intl.NumberFormat(lang, { maximumFractionDigits: 1 }).format(Number(d)) : null;
