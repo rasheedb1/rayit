@@ -4,20 +4,22 @@
  * Cada cinco minutos (0051), como respaldo del webhook de Unipile
  * (VEN-9, /api/webhooks/unipile) y como ÚNICA vía del correo, que no
  * tiene aviso: lee los hilos a los que se escribió en los últimos
- * treinta días, todos y por turno (antes siempre los mismos 200),
- * también los de cadencias que ya respondieron o completaron (la baja
- * puede llegar en el segundo mensaje); pide a cada
- * canal lo que llegó y no conocemos, y por cada mensaje nuevo, en una
- * transacción (recordInbound):
+ * treinta días, todos y por turno (primero los nunca leídos), también
+ * los de cadencias que ya respondieron o completaron (la baja puede
+ * llegar en el segundo mensaje); pide a cada canal lo que llegó y no
+ * conocemos, y por cada mensaje nuevo, en una transacción (recordInbound,
+ * que decide con applyInboundEffects, la misma función del webhook):
  *
  *   · lo escribe en outbound_message (inbound; un mensaje ya leído por
  *     el webhook no se duplica: índice único por id del proveedor);
- *   · si pide la baja (detector de catorce expresiones, @mc/core), marca
- *     la ficha y las de su correo, y cancela todo lo suyo pendiente en
+ *   · si pide la baja (detector de @mc/core), marca las fichas de ese
+ *     correo en el workspace y cancela todo lo suyo pendiente en
  *     cualquier secuencia, como el enlace de baja;
- *   · si no y la cadencia seguía viva, pasa a replied y cancela lo
- *     pendiente (scheduled y held). Lo que ya está en processing lo
- *     cancela el despachador al releer el enrolamiento antes de enviar;
+ *   · si no y la cadencia seguía viva, la persona se detiene en todas sus
+ *     secuencias (replied, lo pendiente cancelado) y, si la política lo
+ *     pide (stop_company_on_reply), las demás personas de la marca quedan
+ *     en pausa. Lo que ya está en processing lo cancela el despachador al
+ *     releer el enrolamiento antes de enviar;
  *   · si ya había respondido, el mensaje queda en la conversación y no
  *     se vuelve a avisar.
  *

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # =====================================================================
 # Renumeración de las migraciones de integración al mezclar con main
-# (VEN-10 r5). Lo corre el integrador, UNA vez, en la rama donde ya se
+# (VEN-10). Lo corre el integrador, UNA vez, en la rama donde ya se
 # mezcló main, ANTES de `make db.check` y `make db.migrate`.
 #
 # Por qué: main aplicó en Supabase su serie 0034–0042 (schema_migrations,
 # 24-sep-2026). Las de integración y de VEN-9-canales que llevan esos
 # mismos números todavía no están en ninguna base persistente, así que
 # pasan, en su mismo orden, a 0043–0049. Entregabilidad (0050) y el motor
-# (0051, 0052) ya llevan su número final.
+# (0051 a 0054) ya llevan su número final.
 #
 #   0034_seguimientos.sql              → 0043_seguimientos.sql
 #   0035_zona_del_espacio_valida.sql   → 0044_zona_del_espacio_valida.sql
