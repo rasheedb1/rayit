@@ -51,7 +51,7 @@ export function anthropicNarrativeModel(client: MessagesClient, model: string = 
 const TIMEOUT_MS = 60_000;
 
 /** El modelo con la llave del entorno, o null si no hay llave (canal no configurado). */
-export function narrativeModelFromEnv(env: NodeJS.ProcessEnv = process.env): NarrativeModel | null {
+export function narrativeModelFromEnv(env: Record<string, string | undefined> = process.env): NarrativeModel | null {
   const apiKey = env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) return null;
   return anthropicNarrativeModel(new Anthropic({ apiKey, maxRetries: 1, timeout: TIMEOUT_MS }));

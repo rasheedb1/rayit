@@ -1,0 +1,22 @@
+{
+  "_nota": "Respuesta de Messages API con la forma documentada del SDK @anthropic-ai/sdk 0.128 (id, content con un bloque thinking y uno text, stop_reason, usage). No está grabada contra la API real: en esta máquina no hay ANTHROPIC_API_KEY. Cuando la haya, se reemplaza por una grabada con la misma forma.",
+  "id": "msg_01PerfilNarrativaEjemplo",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-5",
+  "content": [
+    { "type": "thinking", "thinking": "", "signature": "sig-ejemplo" },
+    {
+      "type": "text",
+      "text": "Soy Laura y cocino fácil. [claim:audiencia-tiktok-genero-f] de quienes me siguen en TikTok son mujeres.\n\nMi mediana en TikTok es de [claim:mediana-tiktok] views, y «Cold brew en casa en 3 pasos» hizo [claim:video-000000000d01-x] mi mediana.\n\nCon Café Alma logramos [claim:campana-000000ca0001-views] views. Si tu marca le habla a esta audiencia, conversemos."
+    }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 3412,
+    "output_tokens": 287,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0
+  }
+}
