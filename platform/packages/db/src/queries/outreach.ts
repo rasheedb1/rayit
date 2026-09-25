@@ -373,3 +373,4 @@ export * from './outreach/claims.ts';
 export * from './outreach/generation.ts';
 export * from './outreach/generation-context.ts';
 export * from './outreach/generation-outcome.ts';
+export * from './outreach/pitch.ts';
