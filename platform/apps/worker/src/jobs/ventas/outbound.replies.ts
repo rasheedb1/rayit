@@ -21,18 +21,24 @@
  *   · si ya había respondido, el mensaje queda en la conversación y no
  *     se vuelve a avisar.
  *
+ * Antes de leer, busca el hilo de los correos que una persona confirmó a
+ * mano («Sí, salió», 0053): quedaron enviados sin las pruebas del
+ * proveedor y, sin su hilo, una respuesta a ellos no se vería
+ * (recoverConfirmedThreads).
+ *
  * La intención (interesado, ahora no, fuera de oficina) la clasifica
  * VEN-14 sobre lo que queda aquí. Un hilo que no se puede leer (cuenta
  * caída, canal sin llaves) se salta y se cuenta; no tumba la corrida.
  */
 import {
-  listOpenThreads, markThreadsChecked, OPEN_THREADS_PAGE, recordInbound, type DispatchChannel, type OpenThread,
+  listConfirmedWithoutThread, listOpenThreads, markThreadsChecked, OPEN_THREADS_PAGE, recordInbound, recordRecoveredThread,
+  stepTypeForChannel, type ConfirmedWithoutThread, type DispatchChannel, type OpenThread,
 } from '@mc/db/queries/outreach';
 import { PostgresOutreachCallLog } from '@mc/connectors';
 import type { Logger } from '../../runner/logger.ts';
 import { defineJob } from '../../runner/registry.ts';
 import { buildChannels, jobScope } from './canales/index.ts';
-import type { ChannelReader } from './canales/types.ts';
+import type { ChannelReader, OutgoingMessage } from './canales/types.ts';
 import { motorDbFromJob, type MotorDb } from './motor-db.ts';
 
 export const REPLIES_JOB_ID = 'outbound.replies';
@@ -40,6 +46,8 @@ export const REPLIES_JOB_ID = 'outbound.replies';
 export const REPLIES_DEADLINE_MARGIN_MS = 30_000;
 /** Las páginas que lee una corrida como mucho (el tiempo suele cortar antes). */
 export const REPLIES_MAX_PAGES = 20;
+/** Los envíos confirmados a mano cuyo hilo busca una corrida, como mucho. */
+export const RECOVER_THREADS_LIMIT = 50;
 
 export interface RepliesDeps {
   readers: Partial<Record<DispatchChannel, ChannelReader>>;
@@ -69,6 +77,9 @@ export interface RepliesReport {
   canceled: number;
   /** Hilos que no se pudieron leer (cuenta caída, canal sin llaves, error del proveedor). */
   unreadable: Array<{ threadRef: string; channel: DispatchChannel; error: string }>;
+  /** Envíos confirmados a mano cuyo hilo se encontró, y los mensajes que esperaban ese hilo y vuelven a la cola. */
+  threadsRecovered: number;
+  released: number;
 }
 
 async function readOne(reader: ChannelReader, thread: OpenThread, signal?: AbortSignal) {
@@ -110,6 +121,48 @@ async function readThread(db: MotorDb, deps: RepliesDeps, thread: OpenThread, re
   }
 }
 
+/** Lo que se busca en el canal: el mensaje tal como lo vio la persona (asunto y texto, sin el pie). */
+function confirmedMessage(t: ConfirmedWithoutThread): OutgoingMessage {
+  return {
+    touchId: t.touchId, workspaceId: t.workspaceId, channel: t.channel,
+    stepType: stepTypeForChannel(t.channel) ?? 'email', attempt: t.attempt, account: t.account, recipient: t.recipient,
+    recipientName: t.recipientName, subject: t.subject, body: t.body, content: t.body, reply: null, unsubscribeUrl: null,
+  };
+}
+
+/**
+ * El hilo de los envíos que una persona confirmó a mano: se le pregunta al
+ * canal (findSent) y, si lo encuentra, se anota (recordRecoveredThread):
+ * el lector ya puede leer ese hilo y la respuesta en el hilo del paso
+ * siguiente, que esperaba retenida, vuelve a la cola. Lo que el canal no
+ * encuentra se vuelve a intentar en la siguiente corrida; un error del
+ * proveedor no tumba la lectura de respuestas.
+ */
+async function recoverConfirmedThreads(db: MotorDb, deps: RepliesDeps, report: RepliesReport, stop: () => boolean): Promise<void> {
+  const pending = await db.transaction((tx) =>
+    listConfirmedWithoutThread(tx, { now: deps.now(), workspaceId: deps.workspaceId, limit: RECOVER_THREADS_LIMIT }),
+  );
+  for (const t of pending) {
+    if (stop()) break;
+    const reader = deps.readers[t.channel];
+    if (!reader?.configured() || !reader.findSent) continue;
+    let found;
+    try {
+      found = await reader.findSent(confirmedMessage(t), deps.signal);
+    } catch (err) {
+      deps.logger?.warn('no se pudo buscar el hilo de un envío confirmado a mano', { touchId: t.touchId, error: String(err) });
+      continue;
+    }
+    if (found.found !== true || !found.proof.threadRef) continue;
+    const proof = { providerMessageId: found.proof.providerMessageId, threadRef: found.proof.threadRef, messageIdRfc: found.proof.messageIdRfc };
+    const r = await db.transaction((tx) => recordRecoveredThread(tx, { ...t, accountId: t.account.id }, proof));
+    if (!r.recorded) continue;
+    report.threadsRecovered++;
+    report.released += r.released.length;
+    deps.logger?.info('hilo encontrado para un envío confirmado a mano', { touchId: t.touchId, released: r.released.length });
+  }
+}
+
 /**
  * Una pasada del lector de respuestas (r3): página a página, por turno
  * (primero lo nunca leído, después lo que hace más que no se lee), hasta
@@ -118,10 +171,13 @@ async function readThread(db: MotorDb, deps: RepliesDeps, thread: OpenThread, re
  * pudieron leer: la siguiente corrida empieza por los que quedaron.
  */
 export async function runReplies(db: MotorDb, deps: RepliesDeps): Promise<RepliesReport> {
-  const report: RepliesReport = { threads: 0, pages: 0, inbound: 0, optOuts: 0, automatic: 0, canceled: 0, unreadable: [] };
+  const report: RepliesReport = {
+    threads: 0, pages: 0, inbound: 0, optOuts: 0, automatic: 0, canceled: 0, unreadable: [], threadsRecovered: 0, released: 0,
+  };
   const pageSize = deps.pageSize ?? OPEN_THREADS_PAGE;
   const maxPages = deps.maxPages ?? REPLIES_MAX_PAGES;
   const stop = () => Boolean(deps.signal?.aborted) || (deps.deadline !== undefined && Date.now() >= deps.deadline.getTime());
+  await recoverConfirmedThreads(db, deps, report, stop);
   const seen: string[] = [];
   for (let page = 0; page < maxPages && !stop(); page++) {
     const threads = await db.transaction((tx) =>
@@ -160,7 +216,7 @@ export const repliesJob = defineJob(
     const r = await runReplies(motorDbFromJob(ctx.db), { readers: channels.readers, now: () => ctx.now(), logger: ctx.logger, signal: ctx.signal, deadline });
     const metadata = {
       threads: r.threads, pages: r.pages, inbound: r.inbound, optOuts: r.optOuts, automatic: r.automatic, canceled: r.canceled,
-      unreadable: r.unreadable.length,
+      unreadable: r.unreadable.length, threadsRecovered: r.threadsRecovered, released: r.released,
     };
     ctx.logger.info('respuestas de cadencias', metadata);
     return { processed: r.inbound, failed: 0, metadata };

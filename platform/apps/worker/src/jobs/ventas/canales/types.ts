@@ -86,6 +86,12 @@ export interface ChannelReader {
    * log): una fecha inventada podría colarse o quedar fuera del hilo.
    */
   readThread(thread: OpenThread, signal?: AbortSignal): Promise<InboundMessage[]>;
+  /**
+   * El mismo findSent del envío. El lector lo usa para encontrar el hilo
+   * de un envío que una persona confirmó a mano («Sí, salió»), que quedó
+   * sin las pruebas del proveedor.
+   */
+  findSent?(message: OutgoingMessage, signal?: AbortSignal): Promise<FindSentResult>;
 }
 
 /** Para los avisos de un adaptador (un mensaje descartado, un envío a medias). */

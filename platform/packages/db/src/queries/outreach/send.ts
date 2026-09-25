@@ -320,8 +320,12 @@ export function decideBeforeSend(ctx: SendContext, claimedAt: Date, now: Date): 
     const over = inviteNoteOverflow(ctx.body);
     if (over !== null) return { kind: 'hold', reason: HOLD_REASONS.noteTooLong(over) };
   }
-  // «Como te comenté ayer…» sobre un correo que no salió (§9): no sale huérfano ni sin asunto.
-  if (ctx.stepType === 'email_reply' && !ctx.previous) return { kind: 'hold', reason: HOLD_REASONS.replyWithoutThread };
+  // «Como te comenté ayer…» sobre un correo que no salió (§9), o que salió
+  // sin hilo conocido (una persona confirmó a mano que salió, o el proveedor
+  // no devolvió su hilo): no sale como un «Re:» huérfano, sin In-Reply-To.
+  // El lector de respuestas busca ese hilo y, al encontrarlo, lo devuelve a
+  // la cola (recordRecoveredThread).
+  if (ctx.stepType === 'email_reply' && !ctx.previous?.threadRef) return { kind: 'hold', reason: HOLD_REASONS.replyWithoutThread };
   // (r3, de la r2 rehecha) Un correo nuevo sin asunto no sale: llega como «(sin asunto)».
   if (ctx.channel === 'email' && ctx.stepType !== 'email_reply' && !ctx.subject?.trim()) {
     return { kind: 'hold', reason: HOLD_REASONS.noSubject };

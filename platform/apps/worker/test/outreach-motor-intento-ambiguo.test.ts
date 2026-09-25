@@ -11,9 +11,10 @@ import { FakeUnipile } from '@mc/connectors';
 import { holdReasonText } from '@mc/core/outreach/messages';
 import { enrollContacts, resolveUnconfirmedTouch, type UnconfirmedOutcome } from '@mc/db/queries/outreach';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';
-import { type ChannelSender } from '../src/jobs/ventas/canales/types.ts';
+import type { ChannelSender } from '../src/jobs/ventas/canales/types.ts';
 import { UnipileChannel } from '../src/jobs/ventas/canales/unipile.ts';
 import { runDispatch } from '../src/jobs/ventas/outbound.dispatch.ts';
+import { runReplies } from '../src/jobs/ventas/outbound.replies.ts';
 import { motorDbFromJob, type MotorDb } from '../src/jobs/ventas/motor-db.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
@@ -178,7 +179,7 @@ const plazas = (w: Ws) =>
     [w.id],
   );
 
-test('«sí salió»: queda enviado sin reenviar, su enlace de baja cuenta y la cadencia sigue con el paso de detrás', async () => {
+test('«sí salió»: queda enviado sin reenviar, su enlace de baja cuenta, y la respuesta del paso siguiente espera a encontrar su hilo', async () => {
   const { w, contact, touch, fake } = await retenidoSinConfirmar(5);
   const antes = await plazas(w);
   assert.deepEqual(await resolver(w, touch, 'was_sent'), { ok: true });
@@ -191,11 +192,33 @@ test('«sí salió»: queda enviado sin reenviar, su enlace de baja cuenta y la 
   assert.equal(await plazas(w), antes, 'la plaza del intento se queda gastada: salió');
   assert.deepEqual(await resolver(w, touch, 'resend'), { ok: false, code: 'not_unconfirmed' }, 'dos veces no');
 
-  // El paso de detrás (la respuesta en el hilo) ya no espera a nadie.
+  // El paso de detrás es la respuesta en el hilo, y el hilo del correo que
+  // confirmó la persona no se conoce: no sale como un «Re:» huérfano.
   const r = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-24', '15:00')));
-  assert.equal(r.sent.length, 1);
+  assert.equal(r.sent.length, 0);
+  assert.deepEqual(r.held.map((h) => h.reason), ['reply_without_thread']);
+  assert.equal(fake.email.sent.length, 1, 'solo el intento 1, que salió');
+
+  // El lector de respuestas le pregunta a Gmail por ese correo, anota su hilo y devuelve la respuesta a la cola.
+  fake.email.unverifiable = false;
+  const lector = await runReplies(motor, { readers: fake, now: () => bogota('2026-09-24', '15:05'), workspaceId: w.id });
+  assert.deepEqual([lector.threadsRecovered, lector.released], [1, 1]);
+  const hilo = fake.email.sent[0]!.threadRef;
+  assert.equal(await scalar<string>(`SELECT thread_ref AS v FROM outbound_touch WHERE id = $1`, [touch]), hilo);
+
+  const r2 = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-24', '15:10')));
+  assert.equal(r2.sent.length, 1);
   assert.equal(fake.email.sent.length, 2, 'el intento 1 y el paso 2: nada repetido');
+  const [, respuesta] = fake.email.sent;
+  assert.equal(respuesta!.threadRef, hilo, 'en el hilo del correo confirmado');
+  assert.equal(respuesta!.reply?.messageIdRfc, fake.email.sent[0]!.messageIdRfc, 'con su In-Reply-To');
+  assert.match(respuesta!.subject ?? '', /^Re: /);
   assert.deepEqual((await touches(contact)).map((t) => t.status), ['sent', 'sent', 'scheduled']);
+
+  // Y si la marca responde a ese correo, la cadencia se detiene.
+  fake.email.reply(hilo, 'Gracias, lo vemos la otra semana.', bogota('2026-09-24', '16:00'));
+  await runReplies(motor, { readers: fake, now: () => bogota('2026-09-24', '16:05'), workspaceId: w.id });
+  assert.deepEqual((await touches(contact)).map((t) => t.status), ['sent', 'sent', 'canceled']);
 });
 
 test('«no salió»: vuelve a la cola sin la marca, con su plaza devuelta, y sale una vez', async () => {
@@ -260,4 +283,40 @@ test('resolver lo ajeno o lo que no es un intento sin confirmar no toca nada', a
   await db.raw.query(`UPDATE contact SET opted_out = true WHERE owner_workspace_id = $1`, [w.id]);
   assert.deepEqual(await resolver(w, touch, 'was_sent'), { ok: false, code: 'opted_out' });
   assert.equal(await scalar<string>(`SELECT status AS v FROM outbound_touch WHERE id = $1`, [touch]), 'held');
+});
+
+test('si releer el toque falla antes de marcar el envío, no es un zombi que «pudo salir»: vuelve a la cola sin aviso y sale', async () => {
+  const w = await workspace(10, { contacts: 1 });
+  const [c] = w.contacts as [string];
+  await enroll(w, bogota('2026-09-23', '07:00'));
+  const fake = fakeChannels();
+  // La primera relectura (loadSendContext bloquea el enrolamiento) falla: la base se cae a mitad de la corrida.
+  let armada = true;
+  const caida: MotorDb = {
+    transaction: (fn) =>
+      motor.transaction((tx) =>
+        fn(Object.assign(Object.create(tx) as typeof tx, {
+          query: (text: string, params?: unknown[]) => {
+            if (armada && text.includes('FOR NO KEY UPDATE OF e')) {
+              armada = false;
+              throw new Error('se cortó la conexión con la base');
+            }
+            return tx.query(text, params);
+          },
+        })),
+      ),
+  };
+  const r = await runDispatch(caida, deps(w, fake, () => bogota('2026-09-23', '12:00')));
+  assert.equal(r.errors.length, 1);
+  assert.equal(fake.email.sent.length, 0, 'nada llegó al proveedor');
+  const [t] = await touches(c);
+  assert.equal(t!.status, 'processing');
+  assert.equal(await scalar<boolean>(`SELECT send_started_at IS NULL AS v FROM outbound_touch WHERE id = $1`, [t!.id]), true, 'sin la marca de envío');
+
+  // Cinco minutos después: los zombis lo devuelven a la cola, sin aviso, y sale una vez.
+  const r2 = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:07')));
+  assert.deepEqual([r2.zombies.released, r2.zombies.failed], [1, 0]);
+  assert.equal(r2.sent.length, 1);
+  assert.equal(fake.email.sent.length, 1);
+  assert.equal(await scalar<number>(`SELECT count(*)::int AS v FROM notification WHERE workspace_id = $1 AND kind = 'outreach_failed'`, [w.id]), 0);
 });

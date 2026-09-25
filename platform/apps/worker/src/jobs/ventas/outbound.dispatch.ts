@@ -11,12 +11,13 @@
  *      tiempo de la corrida, pasan a processing en UNA transacción que se
  *      CONFIRMA antes de llamar a nadie (claim.ts: ventana laboral, orden
  *      de los pasos, cuenta conectada, topes).
- *   3. Envío, uno por uno: se marca send_started_at (su propia
- *      transacción) y, en otra, se relee todo (decideBeforeSend), se
- *      compone el mensaje, se envía por el adaptador de su canal y se
- *      escribe el resultado. Si el intento anterior quedó ambiguo (un
- *      timeout después de enviar), primero se pregunta al proveedor si
- *      salió (findSent): sí → enviado, sin reenviar; no se sabe → retenido.
+ *   3. Envío, uno por uno, en tres transacciones (sendOne): se relee
+ *      todo y se decide; solo si toca enviar se marca send_started_at; y
+ *      en la última se relee otra vez, se envía por el adaptador de su
+ *      canal y se escribe el resultado. Si el intento anterior quedó
+ *      ambiguo (un timeout después de enviar), primero se pregunta al
+ *      proveedor si salió (findSent): sí → enviado, sin reenviar; no se
+ *      sabe → retenido.
  *   4. Lo que no se llegó a intentar (se acabó el tiempo, el worker se
  *      apaga) vuelve a la cola con su intento descontado y su plaza
  *      devuelta: no queda en processing para que la siguiente corrida lo
@@ -34,6 +35,7 @@ import {
   markSendStarted, recordFailure, recordSent, releaseUnattempted, releaseUnconfirmedCaps, rescueZombies, type ClaimedTouch, type ClaimReport,
   type DispatchChannel, type SendContext,
 } from '@mc/db/queries/outreach';
+import type { WorkerSql } from '@mc/db';
 import { PostgresOutreachCallLog } from '@mc/connectors';
 import type { Logger } from '../../runner/logger.ts';
 import { defineJob } from '../../runner/registry.ts';
@@ -171,27 +173,70 @@ async function checkUnconfirmed(sender: ChannelSender, message: OutgoingMessage,
   }
 }
 
+/**
+ * Relee el toque y decide, sin enviar: lo que no es enviar (cancelar,
+ * posponer, retener, fallar) se aplica aquí. Devuelve el contexto y el
+ * mensaje compuesto si toca enviar.
+ */
+async function prepare(
+  tx: WorkerSql, deps: DispatchDeps, claimed: ClaimedTouch, report: DispatchReport, now: Date,
+): Promise<{ ctx: SendContext; message: OutgoingMessage } | null> {
+  const ctx = await loadSendContext(tx, claimed.id);
+  if (!ctx) return null;
+  const decision = decideBeforeSend(ctx, claimed.claimedAt, now);
+  if (decision.kind !== 'send') {
+    await applyDecision(tx, ctx, decision, now);
+    if (decision.kind === 'cancel') report.canceled.push({ touchId: ctx.touchId, reason: decision.reason });
+    else if (decision.kind === 'postpone') report.postponed.push({ touchId: ctx.touchId, reason: decision.reason });
+    else if (decision.kind === 'hold') report.held.push({ touchId: ctx.touchId, reason: decision.reason });
+    else if (decision.kind === 'fail') report.failed.push(ctx.touchId);
+    deps.logger?.info('toque no enviado', { touchId: ctx.touchId, decision: decision.kind, reason: 'reason' in decision ? decision.reason : null });
+    return null;
+  }
+  const message = composeMessage(ctx, claimed, deps.appUrl);
+  // La guardia de huecos en el punto de envío, sobre lo que SALE: el asunto
+  // compuesto («Re: …» del correo anterior) y el cuerpo con su pie.
+  // decideBeforeSend ya miró lo que escribió la persona.
+  try {
+    assertNoPlaceholders(message.subject, message.body);
+  } catch (err) {
+    if (!(err instanceof PlaceholderError)) throw err;
+    const reason = HOLD_REASONS.placeholders(err.hits.map((h) => h.match));
+    await applyDecision(tx, ctx, { kind: 'hold', reason }, now);
+    report.held.push({ touchId: ctx.touchId, reason });
+    deps.logger?.warn('huecos sin rellenar en el mensaje final: retenido', { touchId: ctx.touchId, reason });
+    return null;
+  }
+  return { ctx, message };
+}
+
+/**
+ * Un toque reclamado, en tres transacciones:
+ *
+ *   1. Releer y decidir (prepare). Si esta transacción falla por un error
+ *      nuestro (una fila que no cuadra, la base caída), el toque sigue en
+ *      processing SIN send_started_at: nunca llegó al proveedor, y
+ *      rescueZombies lo devuelve a la cola sin aviso.
+ *   2. «Voy a llamar al proveedor» (markSendStarted), confirmado ANTES de
+ *      llamarlo, solo si la decisión es enviar: si el proceso muere a
+ *      partir de aquí, el toque pudo salir y no se reenvía.
+ *   3. Enviar y registrar. Se relee con el toque y el enrolamiento
+ *      bloqueados (una respuesta que llegó entre 1 y 3 se ve aquí y lo
+ *      cancela) y se vuelve a decidir; si el intento anterior quedó
+ *      ambiguo, primero se pregunta al proveedor si salió (findSent): sí
+ *      → enviado, sin reenviar; no se sabe → retenido.
+ */
 async function sendOne(db: MotorDb, deps: DispatchDeps, claimed: ClaimedTouch, report: DispatchReport): Promise<void> {
-  // «Voy a llamar al proveedor», confirmado ANTES de llamarlo: si el
-  // proceso muere a partir de aquí, el toque pudo salir y no se reenvía.
+  const ready = await db.transaction((tx) => prepare(tx, deps, claimed, report, deps.now()));
+  if (!ready) return;
   const started = await db.transaction((tx) => markSendStarted(tx, claimed.id, claimed.claimedAt, deps.now()));
   if (!started) return;
   const now = deps.now();
   await db.transaction(async (tx) => {
-    const ctx = await loadSendContext(tx, claimed.id);
-    if (!ctx) return;
-    const decision = decideBeforeSend(ctx, claimed.claimedAt, now);
-    if (decision.kind !== 'send') {
-      await applyDecision(tx, ctx, decision, now);
-      if (decision.kind === 'cancel') report.canceled.push({ touchId: ctx.touchId, reason: decision.reason });
-      else if (decision.kind === 'postpone') report.postponed.push({ touchId: ctx.touchId, reason: decision.reason });
-      else if (decision.kind === 'hold') report.held.push({ touchId: ctx.touchId, reason: decision.reason });
-      else if (decision.kind === 'fail') report.failed.push(ctx.touchId);
-      deps.logger?.info('toque no enviado', { touchId: ctx.touchId, decision: decision.kind, reason: 'reason' in decision ? decision.reason : null });
-      return;
-    }
+    const again = await prepare(tx, deps, claimed, report, now);
+    if (!again) return;
+    const { ctx, message } = again;
     const sender = deps.senders[ctx.channel];
-    const message = composeMessage(ctx, claimed, deps.appUrl);
 
     // Un intento anterior quedó sin confirmar: primero se pregunta si salió.
     if (sender && ctx.unconfirmedAttempt !== null) {
@@ -203,8 +248,8 @@ async function sendOne(db: MotorDb, deps: DispatchDeps, claimed: ClaimedTouch, r
         return;
       }
       if (check.found === false) {
-        // (r5) No salió: la plaza que ese intento conservaba vuelve a su día,
-        // y este envío gasta solo la que su reclamo reservó.
+        // No salió: la plaza que ese intento conservaba vuelve a su día, y
+        // este envío gasta solo la que su reclamo reservó.
         await releaseUnconfirmedCaps(tx, ctx);
       }
       if (check.found === 'unknown') {
@@ -214,21 +259,6 @@ async function sendOne(db: MotorDb, deps: DispatchDeps, claimed: ClaimedTouch, r
         deps.logger?.warn('intento ambiguo sin comprobar: retenido', { touchId: ctx.touchId, why: check.reason });
         return;
       }
-    }
-
-    // (r4) La guardia de huecos en el punto de envío, sobre lo que SALE: el
-    // asunto compuesto («Re: …» del correo anterior) y el cuerpo con su pie.
-    // decideBeforeSend ya miró lo que escribió la persona; esto es lo último
-    // antes del proveedor.
-    try {
-      assertNoPlaceholders(message.subject, message.body);
-    } catch (err) {
-      if (!(err instanceof PlaceholderError)) throw err;
-      const reason = HOLD_REASONS.placeholders(err.hits.map((h) => h.match));
-      await applyDecision(tx, ctx, { kind: 'hold', reason }, now);
-      report.held.push({ touchId: ctx.touchId, reason });
-      deps.logger?.warn('huecos sin rellenar en el mensaje final: retenido', { touchId: ctx.touchId, reason });
-      return;
     }
 
     let result: SendResult;
@@ -283,7 +313,8 @@ export async function runDispatch(db: MotorDb, deps: DispatchDeps): Promise<Disp
         await sendOne(db, deps, touch, report);
       } catch (err) {
         // Un error nuestro con un toque no tumba la corrida: queda en
-        // processing con send_started_at y los zombis lo resuelven.
+        // processing y los zombis lo resuelven (sin send_started_at vuelve
+        // a la cola; con él, pudo salir y pasa a failed con su aviso).
         const error = err instanceof Error ? err.message : String(err);
         report.errors.push({ touchId: touch.id, error });
         deps.logger?.error('error al despachar un toque', { touchId: touch.id, error });

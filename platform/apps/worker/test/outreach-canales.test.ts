@@ -392,6 +392,12 @@ test('decideBeforeSend relee todo en la transacción del envío', () => {
   const huerfano = decideBeforeSend(ctx({ stepType: 'email_reply', subject: null, previous: null }), CLAIMED_AT, NOW);
   assert.equal(huerfano.kind, 'hold');
   assert.equal(huerfano.kind === 'hold' ? huerfano.reason : '', 'reply_without_thread');
+  // Ni sobre uno que salió sin hilo conocido (una persona confirmó a mano que salió): sería un «Re:» sin In-Reply-To.
+  const sinHilo = decideBeforeSend(
+    ctx({ stepType: 'email_reply', subject: null, previous: { subject: 'Hola', threadRef: null, messageIdRfc: null, providerMessageId: null } }),
+    CLAIMED_AT, NOW,
+  );
+  assert.deepEqual(sinHilo, { kind: 'hold', reason: 'reply_without_thread' });
   assert.equal(decideBeforeSend(ctx({ body: 'Hola, {{first_name}}' }), CLAIMED_AT, NOW).kind, 'hold');
   assert.equal(decideBeforeSend(ctx({ postalAddress: null }), CLAIMED_AT, NOW).kind, 'hold');
 });

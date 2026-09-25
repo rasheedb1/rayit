@@ -20,6 +20,7 @@
  *   · una respuesta automática que no pide la baja (fuera de oficina) se
  *     guarda sin cancelar, sin avisar y sin contar como respuesta (r3).
  */
+import { formatHoldReason } from '@mc/core/outreach/messages';
 import type { WorkerSql } from '../../client.ts';
 import { applyInboundEffects } from './inbound.ts';
 import {
@@ -244,4 +245,127 @@ export async function recordInbound(tx: WorkerSql, thread: OpenThread, msg: Inbo
     occurredAt: msg.occurredAt, now, fromAddress: msg.fromAddress ?? null,
   });
   return { isNew: true, optOut: fx.optOut, optOutRule: fx.optOutRule, canceled: fx.canceled, notified: fx.notified, automatic: fx.automatic };
+}
+
+// ---------------------------------------------------------------------
+// El hilo de un envío que confirmó una persona
+// ---------------------------------------------------------------------
+
+/**
+ * Un correo que una persona marcó «Sí, salió» (0053, blocked_reason
+ * 'sent_confirmed_by_user') queda enviado sin las pruebas del proveedor:
+ * sin thread_ref, el lector no puede leer su hilo (una respuesta a ESE
+ * correo no detendría la cadencia) y la respuesta en el hilo del paso
+ * siguiente no tendría a qué colgarse. El lector de respuestas se lo
+ * pregunta al canal (findSent: en Gmail, lo enviado a esa dirección con
+ * ese asunto y ese texto) y lo anota con recordRecoveredThread.
+ */
+export interface ConfirmedWithoutThread {
+  touchId: string;
+  workspaceId: string;
+  enrollmentId: string | null;
+  channel: DispatchChannel;
+  stepType: string | null;
+  /** El intento que la persona confirmó (el de su enlace de baja enviado). */
+  attempt: number;
+  recipient: string;
+  recipientName: string | null;
+  subject: string | null;
+  body: string;
+  sentAt: Date;
+  account: { id: string; provider: SenderProvider; providerAccountId: string; secretRef: string | null; displayName: string | null };
+}
+
+/** Los envíos confirmados a mano que todavía no tienen hilo (los últimos treinta días, los más recientes primero). */
+export async function listConfirmedWithoutThread(
+  tx: WorkerSql,
+  opts: { now: Date; workspaceId?: string; limit?: number },
+): Promise<ConfirmedWithoutThread[]> {
+  if (opts.workspaceId) assertIds('listConfirmedWithoutThread', [opts.workspaceId]);
+  const rows = (
+    await tx.query<Record<string, unknown>>(
+      `SELECT t.id, t.workspace_id, t.enrollment_id, t.channel, st.step_type, t.recipient_address::text AS recipient,
+              c.full_name, t.subject, t.body, t.sent_at,
+              coalesce((SELECT max(l.attempt) FROM outbound_optout_link l WHERE l.touch_id = t.id AND l.sent_at IS NOT NULL),
+                       t.attempt_count) AS attempt,
+              a.id AS account_id, a.provider, a.provider_account_id, a.secret_ref, a.display_name
+         FROM outbound_touch t
+         JOIN outreach_channel_account a ON a.id = t.channel_account_id
+         LEFT JOIN outbound_step st ON st.id = t.step_id
+         LEFT JOIN contact c ON c.id = t.contact_id
+        WHERE t.status = 'sent' AND t.blocked_reason = 'sent_confirmed_by_user' AND t.thread_ref IS NULL
+          AND t.recipient_address IS NOT NULL AND t.channel = ANY($4::text[])
+          AND t.sent_at >= $1::timestamptz - interval '30 days'
+          AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
+        ORDER BY t.sent_at DESC
+        LIMIT $3`,
+      [opts.now.toISOString(), opts.workspaceId ?? null, Math.max(1, Math.min(opts.limit ?? 50, 500)), [...DISPATCH_CHANNELS]],
+    )
+  ).rows;
+  const fn = 'listConfirmedWithoutThread';
+  return rows.map((r, i) => ({
+    touchId: text(fn, `$[${i}].id`, r['id']),
+    workspaceId: text(fn, `$[${i}].workspace_id`, r['workspace_id']),
+    enrollmentId: textOrNull(fn, `$[${i}].enrollment_id`, r['enrollment_id']),
+    channel: oneOf(fn, `$[${i}].channel`, r['channel'], DISPATCH_CHANNELS),
+    stepType: textOrNull(fn, `$[${i}].step_type`, r['step_type']),
+    attempt: Number(r['attempt']),
+    recipient: text(fn, `$[${i}].recipient`, r['recipient']),
+    recipientName: textOrNull(fn, `$[${i}].full_name`, r['full_name']),
+    subject: textOrNull(fn, `$[${i}].subject`, r['subject']),
+    body: textOrNull(fn, `$[${i}].body`, r['body']) ?? '',
+    sentAt: date(fn, `$[${i}].sent_at`, r['sent_at']),
+    account: {
+      id: text(fn, `$[${i}].account_id`, r['account_id']),
+      provider: oneOf(fn, `$[${i}].provider`, r['provider'], SENDER_PROVIDERS),
+      providerAccountId: text(fn, `$[${i}].provider_account_id`, r['provider_account_id']),
+      secretRef: textOrNull(fn, `$[${i}].secret_ref`, r['secret_ref']),
+      displayName: textOrNull(fn, `$[${i}].display_name`, r['display_name']),
+    },
+  }));
+}
+
+/**
+ * Anota el hilo que el canal encontró para un envío confirmado a mano: sus
+ * pruebas en el toque (solo si seguían vacías) y el mensaje en la
+ * conversación, para que el lector lea ese hilo. Lo que del mismo
+ * enrolamiento y canal esperaba retenido porque no había hilo
+ * (reply_without_thread) vuelve a la cola. Devuelve esos toques.
+ */
+export async function recordRecoveredThread(
+  tx: WorkerSql,
+  touch: Pick<ConfirmedWithoutThread, 'touchId' | 'workspaceId' | 'enrollmentId' | 'channel' | 'subject' | 'body' | 'sentAt'> & {
+    accountId: string;
+  },
+  proof: { providerMessageId: string; threadRef: string; messageIdRfc: string | null },
+): Promise<{ recorded: boolean; released: string[] }> {
+  assertIds('recordRecoveredThread', [touch.touchId]);
+  const done = await tx.query<{ contact_id: string | null; deal_id: string | null }>(
+    `UPDATE outbound_touch SET thread_ref = $2, provider_message_id = $3, message_id_rfc = $4
+      WHERE id = $1::uuid AND status = 'sent' AND thread_ref IS NULL RETURNING contact_id, deal_id`,
+    [touch.touchId, proof.threadRef, proof.providerMessageId, proof.messageIdRfc],
+  );
+  const row = done.rows[0];
+  if (!row) return { recorded: false, released: [] };
+  await tx.query(
+    `INSERT INTO outbound_message
+       (workspace_id, channel_account_id, enrollment_id, touch_id, contact_id, deal_id, direction, channel, thread_ref,
+        provider_message_id, message_id_rfc, subject, body, occurred_at)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid, 'outbound', $7, $8, $9, $10, $11, $12, $13::timestamptz)
+     ON CONFLICT (workspace_id, channel, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING`,
+    [
+      touch.workspaceId, touch.accountId, touch.enrollmentId, touch.touchId, row.contact_id, row.deal_id, touch.channel,
+      proof.threadRef, proof.providerMessageId, proof.messageIdRfc, touch.subject, touch.body, touch.sentAt.toISOString(),
+    ],
+  );
+  const released = touch.enrollmentId
+    ? (
+        await tx.query<{ id: string }>(
+          `UPDATE outbound_touch SET status = 'scheduled', held_reason = NULL
+            WHERE enrollment_id = $1::uuid AND channel = $2 AND status = 'held' AND held_reason = $3 RETURNING id`,
+          [touch.enrollmentId, touch.channel, formatHoldReason({ code: 'reply_without_thread' })],
+        )
+      ).rows.map((r) => r.id)
+    : [];
+  return { recorded: true, released };
 }
