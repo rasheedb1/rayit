@@ -1002,9 +1002,21 @@ campaña activa, temporada).
   y la persona tiene dirección ahí), si no el siguiente en un orden fijo
   por tipo de paso (un directo prueba LinkedIn, Instagram y correo; un
   gesto público, la otra red o una tarea a mano), y el primer correo
-  siempre abre el hilo; (3) la guía de la plantilla si el paso no cambió,
-  una compuesta con ángulo, canal y señal si cambió, y la divulgación del
-  brief en el cierre. Lo que decide va en códigos (`ProposalNote`) que la
+  siempre abre el hilo; (3) **la política del espacio**
+  (`outbound_policy`): la propuesta nace cumpliéndola (`fitToPolicy`). Si
+  hay más mensajes que `max_touches_per_company`, los del medio se
+  sacrifican en orden (prueba social, concepto creativo, prueba de
+  desempeño) pasando a una reacción pública en su red, que no es un
+  mensaje y no cuenta para el tope, o, sin red, quitándose; el primer
+  mensaje y la síntesis (media kit y cotización) no se tocan. Luego los
+  días se estiran para dejar `min_days_between_touches` entre mensajes,
+  sin pasar del día 60. Con la política por defecto (4 y 3), la campaña
+  activa del seed queda en seis pasos (día 0 comentario, 1 correo, 4
+  LinkedIn, 7 respuesta, 9 reacción, 11 síntesis) y
+  `checkSequenceAgainstPolicy` no marca nada; (4) la guía de la plantilla
+  si el paso no cambió, una compuesta con ángulo, canal y señal si cambió,
+  y la divulgación del brief en el cierre. Lo que decide va en códigos
+  (`ProposalNote`, con `fitted_to_policy` para el ajuste) que la
   pantalla traduce.
 - **El modelo solo redacta la guía**: `refineGuidance` recibe un
   `GuidanceWriter` (el real, con `claude-sonnet-5` y salida estructurada,
@@ -1024,21 +1036,34 @@ campaña activa, temporada).
   visible) y `proposal` (la propuesta en códigos), y siete plantillas:
   lanzamiento, temporada, colaboración de un competidor, señal manual,
   cocina con campaña activa, belleza con lanzamiento y fitness con
-  temporada. La colaboración, la manual y la de fitness caben en la
-  política por defecto (cuatro mensajes, tres días); la pantalla avisa de
-  lo que no cabe en las demás (§8, pregunta 8).
+  temporada. Son la cadencia ideal; el recomendador las ajusta a la
+  política de cada espacio. Copiadas tal cual («Empezar desde una
+  plantilla»), la pantalla avisa de lo que no cabe (§8, pregunta 8).
 - **Consultas** en `@mc/db/queries/cadencias`; **pantallas** en
   `/ventas/cadencias` (señales con «Proponer cadencia», lista con estado,
   personas dentro y respuesta, arranque desde plantilla) y
   `/ventas/cadencias/[id]` (resumen «Día 0: … →», por qué la propuesta,
   línea de tiempo editable con arrastre o Subir/Bajar, «Proponer otra
-  vez» para otra persona y enrolar desde un negocio). «Activar» enrola a
-  la persona para la que se propuso: son los dos clics.
+  vez» para otra persona o para nadie, y enrolar desde un negocio).
+  «Activar» enrola a la persona para la que se propuso: son los dos
+  clics. Una señal tiene como mucho un borrador (proponer otra vez
+  reemplaza sus pasos, con un bloqueo por señal contra el doble envío);
+  duplicar copia la propuesta sin su persona, y Activar no enrola a quien
+  ya está vivo en otra cadencia del espacio. Enrolar comprueba en el
+  servidor que cada persona es de la marca del negocio y que el negocio
+  sigue abierto. La línea de tiempo es un riel con un nodo por paso (el
+  icono de su canal) y la espera entre pasos en días hábiles; el foco de
+  teclado vuelve a su botón tras mover un paso o cerrar el editor.
+  WhatsApp (fase 2) no se ofrece en el editor ni lo acepta la base al
+  editar.
 - **La regla de la edición**: con alguien enrolado, sus toques ya tienen
   día y canal, así que día, canal, orden y número de pasos se bloquean
   (`has_enrollments`) y se ofrece duplicar; guía, ángulo, texto y hora sí
   se cambian, para quien entre después. Reordenar mueve los mensajes y
-  deja los días en su puesto, como Lemlist.
+  deja los días en su puesto, como Lemlist. Reordenar, añadir, quitar o
+  cambiar un paso deja siempre un correo nuevo (no una respuesta) como
+  primer correo, y un paso añadido nace con el primer ángulo que la
+  cadencia no usa y su guía.
 
 ### 5.6 La puerta de calidad de cada mensaje
 
