@@ -8,20 +8,27 @@
  * creador en /ventas/perfil.
  *
  * La regla que lo organiza: **cada cifra es un Claim** con su origen
- * (tabla, fila y columna). Las secciones no llevan números: llevan ids
- * de claims. Así hay una sola lista de cifras que la narrativa puede
- * citar ([claim:id]), que el verificador puede comprobar y que la
- * pantalla puede enlazar a su post o a su campaña.
+ * (tabla, fila, columna y fecha de la lectura). Las secciones no llevan
+ * números: llevan ids de claims. Así hay una sola lista de cifras que la
+ * narrativa puede citar ([claim:id]), que el verificador puede comprobar
+ * y que la pantalla puede enlazar a su post o a su campaña.
+ *
+ * Aquí no hay texto para personas: un claim dice QUÉ es con una clave
+ * (`key`) y sus parámetros (red, segmento, corte, título…). La pantalla
+ * lo escribe con su messages.ts y el locale del workspace; el prompt, con
+ * claimLabelEs de narrativa.ts.
  *
  * Funciones puras: la base entrega las filas ya leídas (PerfilInputs,
  * queries/perfil-comercial.ts de @mc/db) y aquí solo se eligen, se
- * ordenan y se nombran. Las medianas, los puntajes y las demografías ya
- * vienen calculados de sus tablas; lo único que se cuenta aquí es lo que
- * sale de leer los captions (formatos y tono), que en el MVP no tiene
- * tabla (en la fase 2 lo dará el laboratorio de video).
+ * ordenan y se nombran. Las medianas de la línea base, los puntajes y
+ * las demografías ya vienen calculados de sus tablas; lo que se deriva
+ * aquí es lo que sale de leer los captions (formatos y tono) y el
+ * contraste que explica por qué funcionó un video (la mediana de su
+ * grupo frente a la del resto), que en el MVP no tienen tabla.
  */
 import type { Decimal } from '../facturacion.ts';
 import type { PlatformId } from '../campanas.ts';
+import { PLATFORM_ORDER } from '../plataformas.ts';
 import {
   contentOf, durationBucketOf, durationVsTypical, firstLine, hookFromAnalysis, hookOf, median, pieceOf,
   TONE_MIN_SHARE, toneTraitsOf,
@@ -56,6 +63,58 @@ export const CLAIM_TABLES = [
 ] as const;
 export type ClaimTable = (typeof CLAIM_TABLES)[number];
 
+/**
+ * Qué es la cifra, como clave. El texto lo pone quien la enseña:
+ * /ventas/perfil/messages.ts para la pantalla, claimLabelEs para el prompt.
+ */
+export const CLAIM_KEYS = [
+  'followers',
+  'audience.age',
+  'audience.gender',
+  'audience.country',
+  'non_followers',
+  'median',
+  'scored_videos',
+  'video.multiple',
+  'video.views',
+  'video.duration',
+  'why.group',
+  'why.rest',
+  'format.piece',
+  'format.content',
+  'tone',
+  'captions_read',
+  'campaign.views',
+  'campaign.multiple',
+  'campaign.brand_followers',
+  'campaign.redemptions',
+  'campaign.revenue',
+  'rate.low',
+  'rate.high',
+] as const;
+export type ClaimKey = (typeof CLAIM_KEYS)[number];
+
+/** Los datos que completan la clave: de qué red, qué segmento, qué video… */
+export interface ClaimParams {
+  platform?: PlatformId;
+  /** El segmento de audience_breakdown tal cual: '25-34', 'F', 'CO'. */
+  bucket?: string;
+  /** El corte de edad de la cifra, en horas desde la publicación. */
+  cutHours?: number;
+  /** El título del video (o la primera línea del caption). */
+  title?: string;
+  piece?: PieceKind;
+  content?: ContentKind;
+  trait?: ToneTrait;
+  /** La marca de la campaña. */
+  company?: string;
+  /** El nombre del entregable del tarifario. */
+  item?: string;
+  /** Para why.group y why.rest: el eje y el grupo que se contrastan. */
+  axis?: WhyAxis;
+  group?: string;
+}
+
 export interface ClaimSource {
   table: ClaimTable;
   /**
@@ -70,17 +129,22 @@ export interface ClaimSource {
   rows?: string[];
   /** El enlace público del post, cuando el origen es un post. */
   url?: string | null;
+  /**
+   * Cuándo se leyó o se calculó la fila (ISO: un día o un instante). null
+   * cuando la cifra sale de este mismo cálculo (los captions leídos).
+   */
+  asOf?: string | null;
 }
 
 export interface Claim {
   /** [a-z0-9-], estable entre cálculos si el origen no cambia: lo cita la narrativa como [claim:id]. */
   id: string;
   kind: ClaimKind;
-  /** Qué es, en una línea, en el idioma del perfil: lo lee el modelo y lo enseña el tooltip. */
-  label: string;
+  key: ClaimKey;
+  params: ClaimParams;
   /** Un número; el dinero, como decimal en texto (nunca float). */
   value: number | Decimal;
-  /** 'views', 'seguidores', 'videos', 'pct', 'x', 's' o la moneda ISO-4217. */
+  /** 'views', 'seguidores', 'videos', 'canjes', 'pct', 'x', 's' o la moneda ISO-4217. */
   unit: string;
   source: ClaimSource;
 }
@@ -130,6 +194,8 @@ export interface PerfilNonFollowerInput {
   platformId: PlatformId;
   medianShare: number | null;
   postIds: string[];
+  /** La lectura más reciente de esos videos (ISO). */
+  asOf: string | null;
 }
 
 /** La línea base vigente de una red al corte del perfil. */
@@ -166,6 +232,13 @@ export interface PerfilPostInput {
     viewsVsMedian: number | null;
     outlierTier: OutlierTier | null;
     ageHoursCut: number;
+    computedAt?: string | null;
+    /**
+     * La línea base contra la que se puntuó (post_score.baseline_id): la
+     * de su red en SU corte. Es la mediana que hace verdad el «× tu
+     * mediana» de ese video, que puede no ser la del corte del perfil.
+     */
+    baseline?: { id: string; medianViews: number | null; ageHoursCut: number; computedAt: string } | null;
   } | null;
 }
 
@@ -181,6 +254,7 @@ export interface PerfilCampaignInput {
     attributedRevenue: Decimal | null;
     currency: string | null;
     viewsVsMedian: number | null;
+    computedAt?: string | null;
   };
 }
 
@@ -236,7 +310,29 @@ export type DurationVsTypical = (typeof DURATION_VS_TYPICAL)[number];
 export const TONE_TRAITS = ['emojis', 'tutea', 'primera_persona', 'preguntas', 'breve', 'hashtags'] as const;
 export type ToneTrait = (typeof TONE_TRAITS)[number];
 
-/** Por qué funcionó un video, en tres ejes. Códigos: el texto lo pone quien lo enseña. */
+/** Los ejes en los que un video puede distinguirse de los demás del creador. */
+export const WHY_AXES = ['hook', 'piece', 'content', 'duration'] as const;
+export type WhyAxis = (typeof WHY_AXES)[number];
+
+/**
+ * Una razón de por qué funcionó: el grupo del video en un eje (los que
+ * abren con una promesa, los reels…) rinde más que el resto de los
+ * videos del creador. Las dos medianas son claims: la narrativa las cita.
+ */
+export interface WhyReason {
+  axis: WhyAxis;
+  /** El código del grupo en ese eje: un HookKind, PieceKind, ContentKind o DurationBucket. */
+  group: string;
+  groupClaimId: string;
+  restClaimId: string;
+}
+
+/**
+ * Por qué funcionó un video. Los códigos describen el video; `reasons`
+ * dice cuáles de esos rasgos lo distinguen de verdad (su grupo supera al
+ * resto). Un rasgo que tienen todos los videos no explica nada, así que
+ * no entra en `reasons`. El texto lo pone quien lo enseña.
+ */
 export interface WhyItWorked {
   hook: HookKind;
   /** 'caption' si se leyó del texto; 'video_analysis' si lo dijo el laboratorio de video. */
@@ -244,7 +340,9 @@ export interface WhyItWorked {
   piece: PieceKind;
   content: ContentKind;
   duration: DurationBucket | null;
+  /** Frente a la duración típica de la red; null si no se puede decir. 'similar' no es una razón. */
   durationVsTypical: DurationVsTypical | null;
+  reasons: WhyReason[];
 }
 
 export interface TopVideo {
@@ -255,8 +353,12 @@ export interface TopVideo {
   title: string;
   publishedAt: string | null;
   outlierTier: OutlierTier | null;
+  /** El corte al que se midió el puntaje (post_score.age_hours_cut). */
+  cutHours: number;
   viewsClaimId: string | null;
   multipleClaimId: string;
+  /** La mediana contra la que se puntuó (su red, su corte). Puede ser la misma de performance.medians. */
+  baselineClaimId: string | null;
   durationClaimId: string | null;
   why: WhyItWorked;
 }
@@ -272,6 +374,8 @@ export interface NetworkLine {
 export interface MedianLine {
   platformId: PlatformId;
   claimId: string;
+  /** El corte de ESTA mediana: si la red no tiene línea base al corte del perfil, es otro. */
+  cutHours: number;
   sampleSize: number;
   isReliable: boolean;
 }
@@ -305,7 +409,8 @@ export interface RateLine {
   highClaimId: string | null;
 }
 
-export const PERFIL_VERSION = 1;
+/** 2: los claims llevan clave y parámetros en vez de texto (r2 de VEN-11). Un perfil v1 guardado se recalcula. */
+export const PERFIL_VERSION = 2;
 
 export interface PerfilComercial {
   version: typeof PERFIL_VERSION;
@@ -347,7 +452,7 @@ export interface PerfilComercial {
 }
 
 // ---------------------------------------------------------------------
-// 4 · El cálculo
+// 4 · Piezas del cálculo
 // ---------------------------------------------------------------------
 
 /** Cuántos videos entran en «los mejores». */
@@ -363,15 +468,6 @@ export class PerfilError extends Error {
     this.code = code;
   }
 }
-
-/** Los nombres de marca de las redes: no se traducen. */
-export const PLATFORM_LABELS: Record<PlatformId, string> = {
-  tiktok: 'TikTok',
-  instagram: 'Instagram',
-  facebook: 'Facebook',
-  youtube: 'YouTube',
-};
-const PLATFORM_ORDER: readonly PlatformId[] = ['tiktok', 'instagram', 'facebook', 'youtube'];
 
 /** Los últimos doce dígitos hexadecimales de un uuid: bastan para distinguir y el modelo los copia sin error. */
 export function shortId(uuid: string): string {
@@ -389,21 +485,74 @@ export function claimSlug(text: string): string {
     .replace(/^-+|-+$/g, '') || 'x';
 }
 
-/** El corte de edad en palabras, para las etiquetas: 168 → «a los 7 días». */
-export function cutLabel(hours: number): string {
-  if (hours < 48) return `a las ${hours} horas`;
-  return `a los ${Math.round(hours / 24)} días`;
+/**
+ * Un corte de edad en la unidad en que se dice: por debajo de dos días,
+ * en horas; desde ahí, en días. Lo resuelve core para que ninguna
+ * pantalla convierta horas a mano.
+ */
+export interface CutSpan {
+  unit: 'hours' | 'days';
+  amount: number;
+}
+export function cutOf(hours: number): CutSpan {
+  return hours < 48 ? { unit: 'hours', amount: hours } : { unit: 'days', amount: Math.round(hours / 24) };
 }
 
-const GENEROS: Record<string, string> = { f: 'mujeres', m: 'hombres', u: 'de género sin especificar' };
+/**
+ * Un género de audience_breakdown en código. Los conectores guardan 'F',
+ * 'M' y 'U' (other, unknown o user_specified): 'u' nunca se dice como
+ * «mujeres» ni «hombres».
+ */
+export function genderCode(bucket: string): 'f' | 'm' | 'u' {
+  const b = bucket.trim().toLowerCase();
+  return b === 'f' || b === 'female' ? 'f' : b === 'm' || b === 'male' ? 'm' : 'u';
+}
 
-/** El nombre del país en español, o el código si Intl no lo conoce. */
-export function regionName(code: string): string {
-  try {
-    return new Intl.DisplayNames(['es'], { type: 'region' }).of(code.toUpperCase()) ?? code;
-  } catch {
-    return code;
+/** Un grupo que rinde más que el resto en un eje (standoutGroups). */
+export interface GroupContrast {
+  key: string;
+  ids: string[];
+  /** La mediana de «veces su mediana» de los videos del grupo. */
+  median: number;
+  restIds: string[];
+  restMedian: number;
+}
+
+/** Cuántos videos como mínimo en el grupo y en el resto: con uno solo no hay contraste. */
+export const WHY_MIN_GROUP = 2;
+/** Cuánto tiene que superar el grupo al resto (su mediana, en veces) para contar como razón. */
+export const WHY_MIN_LIFT = 1.2;
+
+/**
+ * Los grupos de un eje que rinden más que el resto de los videos: la
+ * mediana de `x` (veces su mediana) del grupo frente a la del resto.
+ *
+ * Solo cuentan los grupos con al menos WHY_MIN_GROUP videos, frente a un
+ * resto de al menos otros tantos, cuya mediana supera la del resto en
+ * WHY_MIN_LIFT veces. Un rasgo que tienen todos los videos (breve,
+ * hashtags) no tiene resto y nunca sale. Los ítems con `key` null (sin
+ * duración, por ejemplo) no entran ni en el grupo ni en el resto; los de
+ * `exclude` entran en el resto pero no pueden ser razón ('otro').
+ */
+export function standoutGroups(
+  items: readonly { id: string; key: string | null; x: number }[],
+  opts: { exclude?: readonly string[]; minGroup?: number; minLift?: number } = {},
+): GroupContrast[] {
+  const minGroup = opts.minGroup ?? WHY_MIN_GROUP;
+  const minLift = opts.minLift ?? WHY_MIN_LIFT;
+  const validos = items.filter((i): i is { id: string; key: string; x: number } => i.key !== null && Number.isFinite(i.x));
+  const claves = [...new Set(validos.map((i) => i.key))].filter((k) => !opts.exclude?.includes(k)).sort();
+  const out: GroupContrast[] = [];
+  for (const key of claves) {
+    const grupo = validos.filter((i) => i.key === key);
+    const resto = validos.filter((i) => i.key !== key);
+    if (grupo.length < minGroup || resto.length < minGroup) continue;
+    const mg = median(grupo.map((i) => i.x));
+    const mr = median(resto.map((i) => i.x));
+    if (mg === null || mr === null || mr <= 0 || mg < mr * minLift) continue;
+    out.push({ key, ids: grupo.map((i) => i.id).sort(), median: mg, restIds: resto.map((i) => i.id).sort(), restMedian: mr });
   }
+  return out;
 }
 
 /** La lista de claims del perfil, sin ids repetidos. */
@@ -431,6 +580,20 @@ function tituloDe(post: PerfilPostInput): string {
   return t.length > 80 ? `${t.slice(0, 79).trimEnd()}…` : t;
 }
 
+const EJE_SLUG: Record<WhyAxis, string> = { hook: 'gancho', piece: 'pieza', content: 'contenido', duration: 'duracion' };
+
+// ---------------------------------------------------------------------
+// 5 · El cálculo
+// ---------------------------------------------------------------------
+
+/** El código de un post en cada eje del porqué; null si no se puede decir (sin duración). */
+const EJES: Record<WhyAxis, (p: PerfilPostInput) => string | null> = {
+  hook: (p) => hookFromAnalysis(p.hookType) ?? hookOf(p.title, p.caption),
+  piece: (p) => pieceOf(p.platformId, p.surface, p.mediaType),
+  content: (p) => contentOf(p.title, p.caption, p.isBrandedContent),
+  duration: (p) => durationBucketOf(p.durationS),
+};
+
 /**
  * Arma el perfil comercial a partir de las filas. Determinista: las
  * mismas entradas dan el mismo perfil, con los mismos ids de claim.
@@ -438,7 +601,6 @@ function tituloDe(post: PerfilPostInput): string {
 export function buildPerfil(input: PerfilInputs): PerfilComercial {
   const claims = new ClaimSet();
   const creatorId = input.creator.id;
-  const red = (p: PlatformId) => PLATFORM_LABELS[p];
   const porRed = <T extends { platformId: PlatformId }>(a: T, b: T) =>
     PLATFORM_ORDER.indexOf(a.platformId) - PLATFORM_ORDER.indexOf(b.platformId);
 
@@ -452,10 +614,11 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
         ? claims.add({
             id: `seguidores-${c.platformId}`,
             kind: 'count',
-            label: `Seguidores en ${red(c.platformId)}`,
+            key: 'followers',
+            params: { platform: c.platformId },
             value: c.followers,
             unit: 'seguidores',
-            source: { table: 'account_metric_snapshot', id: c.followersSnapshotId, field: 'followers' },
+            source: { table: 'account_metric_snapshot', id: c.followersSnapshotId, field: 'followers', asOf: c.followersDay },
           })
         : null,
   }));
@@ -475,12 +638,6 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
         .filter((a) => a.dimension === dim && !fuera(a.bucket))
         .sort((a, b) => (b.share ?? 0) - (a.share ?? 0) || a.bucket.localeCompare(b.bucket))
         .slice(0, n);
-    const etiqueta = (dim: AudienceDimension, bucket: string) => {
-      const donde = red(principal.platformId);
-      if (dim === 'age') return `Parte de sus seguidores de ${donde} con ${bucket} años`;
-      if (dim === 'gender') return `Parte de sus seguidores de ${donde} que son ${GENEROS[bucket.toLowerCase()] ?? bucket}`;
-      return `Parte de sus seguidores de ${donde} que vive en ${regionName(bucket)}`;
-    };
     const otros = (b: string) => ['other', 'others', 'otros'].includes(b.toLowerCase());
     for (const [dim, filasDim] of [
       ['age', top('age', AUDIENCE_TOP)],
@@ -494,10 +651,11 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
           claimId: claims.add({
             id: `audiencia-${principal.platformId}-${dim === 'age' ? 'edad' : dim === 'gender' ? 'genero' : 'pais'}-${claimSlug(a.bucket)}`,
             kind: 'share',
-            label: etiqueta(dim, a.bucket),
+            key: dim === 'age' ? 'audience.age' : dim === 'gender' ? 'audience.gender' : 'audience.country',
+            params: { platform: principal.platformId, bucket: a.bucket },
             value: a.share!,
             unit: 'pct',
-            source: { table: 'audience_breakdown', id: a.id, field: 'share' },
+            source: { table: 'audience_breakdown', id: a.id, field: 'share', asOf: a.day },
           }),
         });
       }
@@ -511,46 +669,76 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
       claimId: claims.add({
         id: `no-seguidores-${n.platformId}`,
         kind: 'share',
-        label: `Alcance en personas que no la siguen, mediana por video en ${red(n.platformId)}`,
+        key: 'non_followers',
+        params: { platform: n.platformId },
         value: n.medianShare!,
         unit: 'pct',
-        source: { table: 'post_metrics_latest', id: creatorId, field: 'non_follower_share', rows: n.postIds },
+        source: { table: 'post_metrics_latest', id: creatorId, field: 'non_follower_share', rows: n.postIds, asOf: n.asOf },
       }),
     }));
 
-  // Desempeño: la mediana por red y los cinco mejores videos.
-  const medians: MedianLine[] = input.baselines
-    .filter((b) => b.medianViews !== null)
-    .sort(porRed)
-    .map((b) => ({
-      platformId: b.platformId,
-      sampleSize: b.sampleSize,
-      isReliable: b.isReliable,
-      claimId: claims.add({
-        id: `mediana-${b.platformId}`,
-        kind: 'count',
-        label: `Views medianas por video en ${red(b.platformId)} ${cutLabel(b.ageHoursCut)}`,
-        value: Math.round(b.medianViews!),
-        unit: 'views',
-        source: { table: 'creator_baseline', id: b.id, field: 'median_views' },
-      }),
-    }));
+  // Desempeño: la mediana por red, cada una con su corte.
+  const conMediana = input.baselines.filter((b) => b.medianViews !== null).sort(porRed);
+  const medianaDeRed = new Map(conMediana.map((b) => [b.platformId, b.id]));
+  const medians: MedianLine[] = conMediana.map((b) => ({
+    platformId: b.platformId,
+    cutHours: b.ageHoursCut,
+    sampleSize: b.sampleSize,
+    isReliable: b.isReliable,
+    claimId: claims.add({
+      id: `mediana-${b.platformId}`,
+      kind: 'count',
+      key: 'median',
+      params: { platform: b.platformId, cutHours: b.ageHoursCut },
+      value: Math.round(b.medianViews!),
+      unit: 'views',
+      source: { table: 'creator_baseline', id: b.id, field: 'median_views', asOf: b.computedAt },
+    }),
+  }));
 
   const puntuados = input.posts.filter((p) => p.score && p.score.viewsVsMedian !== null);
   const scoredClaimId = puntuados.length
     ? claims.add({
         id: 'videos-con-puntaje',
         kind: 'count',
-        label: 'Videos con puntaje frente a su mediana',
+        key: 'scored_videos',
+        params: {},
         value: puntuados.length,
         unit: 'videos',
         source: { table: 'post_score', id: creatorId, field: 'views_vs_median', rows: puntuados.map((p) => p.id) },
       })
     : null;
+
+  // El porqué: en cada eje, los grupos que rinden más que el resto.
+  const contrastes = new Map<WhyAxis, Map<string, GroupContrast>>();
+  for (const eje of WHY_AXES) {
+    const items = puntuados.map((p) => ({ id: p.id, key: EJES[eje](p), x: p.score!.viewsVsMedian! }));
+    const grupos = standoutGroups(items, { exclude: eje === 'content' ? ['otro'] : [] });
+    contrastes.set(eje, new Map(grupos.map((g) => [g.key, g])));
+  }
+  const razonesDe = (p: PerfilPostInput): WhyReason[] =>
+    WHY_AXES.flatMap((eje) => {
+      const grupo = EJES[eje](p);
+      const g = grupo === null ? undefined : contrastes.get(eje)!.get(grupo);
+      if (!g || grupo === null) return [];
+      const base = `porque-${EJE_SLUG[eje]}-${claimSlug(grupo)}`;
+      const src = (rows: string[]): ClaimSource => ({ table: 'post_score', id: creatorId, field: 'views_vs_median', rows });
+      return [{
+        axis: eje,
+        group: grupo,
+        groupClaimId: claims.add({ id: base, kind: 'multiple', key: 'why.group', params: { axis: eje, group: grupo }, value: g.median, unit: 'x', source: src(g.ids) }),
+        restClaimId: claims.add({ id: `${base}-resto`, kind: 'multiple', key: 'why.rest', params: { axis: eje, group: grupo }, value: g.restMedian, unit: 'x', source: src(g.restIds) }),
+      }];
+    });
+
   const duracionTipica = new Map<PlatformId, number | null>();
   for (const p of PLATFORM_ORDER) {
     duracionTipica.set(p, median(input.posts.filter((x) => x.platformId === p && x.durationS !== null).map((x) => x.durationS!)));
   }
+  // Se ordena por «veces su mediana»: cada puntaje está medido contra la
+  // línea base de su red en SU corte, así que es una razón comparable
+  // entre cortes; las views crudas no lo son, y por eso cada video dice
+  // su corte y la mediana contra la que se midió (baselineClaimId).
   const top: TopVideo[] = [...puntuados]
     .sort(
       (a, b) =>
@@ -563,8 +751,9 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
       const s = shortId(p.id);
       const score = p.score!;
       const titulo = tituloDe(p);
-      const enRed = red(p.platformId);
       const hookAnalisis = hookFromAnalysis(p.hookType);
+      const asOf = score.computedAt ?? null;
+      const bl = score.baseline ?? null;
       return {
         postId: p.id,
         platformId: p.platformId,
@@ -572,23 +761,39 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
         title: titulo,
         publishedAt: p.publishedAt,
         outlierTier: score.outlierTier,
+        cutHours: score.ageHoursCut,
         multipleClaimId: claims.add({
           id: `video-${s}-x`,
           kind: 'multiple',
-          label: `Veces su mediana de ${enRed} que hizo «${titulo}»`,
+          key: 'video.multiple',
+          params: { platform: p.platformId, title: titulo, cutHours: score.ageHoursCut },
           value: score.viewsVsMedian!,
           unit: 'x',
-          source: { table: 'post_score', id: p.id, field: 'views_vs_median', url: p.url },
+          source: { table: 'post_score', id: p.id, field: 'views_vs_median', url: p.url, asOf },
         }),
         viewsClaimId:
           score.viewsAtCut !== null
             ? claims.add({
                 id: `video-${s}-views`,
                 kind: 'count',
-                label: `Views de «${titulo}» en ${enRed} ${cutLabel(score.ageHoursCut)}`,
+                key: 'video.views',
+                params: { platform: p.platformId, title: titulo, cutHours: score.ageHoursCut },
                 value: score.viewsAtCut,
                 unit: 'views',
-                source: { table: 'post_score', id: p.id, field: 'views_at_cut', url: p.url },
+                source: { table: 'post_score', id: p.id, field: 'views_at_cut', url: p.url, asOf },
+              })
+            : null,
+        baselineClaimId:
+          bl && bl.medianViews !== null
+            ? claims.add({
+                // La misma fila que la mediana de la red: el mismo claim.
+                id: medianaDeRed.get(p.platformId) === bl.id ? `mediana-${p.platformId}` : `mediana-${p.platformId}-${shortId(bl.id)}`,
+                kind: 'count',
+                key: 'median',
+                params: { platform: p.platformId, cutHours: bl.ageHoursCut },
+                value: Math.round(bl.medianViews),
+                unit: 'views',
+                source: { table: 'creator_baseline', id: bl.id, field: 'median_views', asOf: bl.computedAt },
               })
             : null,
         durationClaimId:
@@ -596,7 +801,8 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
             ? claims.add({
                 id: `video-${s}-duracion`,
                 kind: 'duration',
-                label: `Duración de «${titulo}»`,
+                key: 'video.duration',
+                params: { platform: p.platformId, title: titulo },
                 value: p.durationS,
                 unit: 's',
                 source: { table: 'post', id: p.id, field: 'duration_s', url: p.url },
@@ -609,8 +815,9 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
           content: contentOf(p.title, p.caption, p.isBrandedContent),
           duration: durationBucketOf(p.durationS),
           durationVsTypical: durationVsTypical(p.durationS, duracionTipica.get(p.platformId) ?? null),
+          reasons: razonesDe(p),
         },
-      };
+      } satisfies TopVideo;
     });
 
   return {
@@ -636,21 +843,6 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
   };
 }
 
-const PIEZAS_ES: Record<PieceKind, string> = {
-  reel: 'reels', tiktok: 'videos de TikTok', short: 'shorts', historia: 'historias', video: 'videos largos o de feed',
-};
-const CONTENIDOS_ES: Record<ContentKind, string> = {
-  tutorial: 'tutoriales o recetas', reto: 'retos', lista: 'listas', colaboracion: 'colaboraciones con marcas', otro: 'otros',
-};
-const TONOS_ES: Record<ToneTrait, string> = {
-  emojis: 'Captions con emojis',
-  tutea: 'Captions que le hablan de tú a quien mira',
-  primera_persona: 'Captions en primera persona',
-  preguntas: 'Captions con una pregunta',
-  breve: 'Captions breves',
-  hashtags: 'Captions con hashtags',
-};
-
 /** Qué hace (piezas y tipos de contenido) y cómo habla (tono), leído de los captions. */
 function formatosDe(input: PerfilInputs, claims: ClaimSet): PerfilComercial['formats'] {
   const creatorId = input.creator.id;
@@ -667,7 +859,8 @@ function formatosDe(input: PerfilInputs, claims: ClaimSet): PerfilComercial['for
     claimId: claims.add({
       id: `formato-${key}`,
       kind: 'count',
-      label: `Publicaciones que son ${PIEZAS_ES[key]}`,
+      key: 'format.piece',
+      params: { piece: key },
       value: ids.length,
       unit: 'videos',
       source: { table: 'post', id: creatorId, field: 'surface', rows: ids },
@@ -680,7 +873,8 @@ function formatosDe(input: PerfilInputs, claims: ClaimSet): PerfilComercial['for
       claimId: claims.add({
         id: `contenido-${key}`,
         kind: 'count',
-        label: `Publicaciones que son ${CONTENIDOS_ES[key]}`,
+        key: 'format.content',
+        params: { content: key },
         value: ids.length,
         unit: 'videos',
         source: { table: 'post', id: creatorId, field: 'caption', rows: ids },
@@ -700,7 +894,8 @@ function formatosDe(input: PerfilInputs, claims: ClaimSet): PerfilComercial['for
       claimId: claims.add({
         id: `tono-${key.replace(/_/g, '-')}`,
         kind: 'share',
-        label: TONOS_ES[key],
+        key: 'tone',
+        params: { trait: key },
         value: ids.length / conCaption.length,
         unit: 'pct',
         source: { table: 'post', id: creatorId, field: 'caption', rows: ids },
@@ -710,7 +905,8 @@ function formatosDe(input: PerfilInputs, claims: ClaimSet): PerfilComercial['for
     ? claims.add({
         id: 'captions-leidos',
         kind: 'count',
-        label: 'Captions leídos para inferir formatos y tono',
+        key: 'captions_read',
+        params: {},
         value: conCaption.length,
         unit: 'videos',
         source: { table: 'post', id: creatorId, field: 'caption', rows: conCaption.map((p) => p.id) },
@@ -725,22 +921,23 @@ function pruebaSocialDe(input: PerfilInputs, claims: ClaimSet): SocialProofLine[
   for (const c of input.campaigns) {
     const s = shortId(c.id);
     const r = c.result;
-    const src = (field: string): ClaimSource => ({ table: 'campaign_result', id: c.id, field });
+    const params: ClaimParams = { company: c.companyName };
+    const src = (field: string): ClaimSource => ({ table: 'campaign_result', id: c.id, field, asOf: r.computedAt ?? null });
     const ids: string[] = [];
     if (r.views !== null) {
-      ids.push(claims.add({ id: `campana-${s}-views`, kind: 'count', label: `Views de la campaña con ${c.companyName}`, value: r.views, unit: 'views', source: src('views') }));
+      ids.push(claims.add({ id: `campana-${s}-views`, kind: 'count', key: 'campaign.views', params, value: r.views, unit: 'views', source: src('views') }));
     }
     if (r.viewsVsMedian !== null) {
-      ids.push(claims.add({ id: `campana-${s}-x`, kind: 'multiple', label: `Veces su mediana que hizo la campaña con ${c.companyName}`, value: r.viewsVsMedian, unit: 'x', source: src('views_vs_median') }));
+      ids.push(claims.add({ id: `campana-${s}-x`, kind: 'multiple', key: 'campaign.multiple', params, value: r.viewsVsMedian, unit: 'x', source: src('views_vs_median') }));
     }
     if (r.brandFollowersGained !== null) {
-      ids.push(claims.add({ id: `campana-${s}-seguidores-marca`, kind: 'count', label: `Seguidores que ganó ${c.companyName} con la campaña`, value: r.brandFollowersGained, unit: 'seguidores', source: src('brand_followers_gained') }));
+      ids.push(claims.add({ id: `campana-${s}-seguidores-marca`, kind: 'count', key: 'campaign.brand_followers', params, value: r.brandFollowersGained, unit: 'seguidores', source: src('brand_followers_gained') }));
     }
     if (r.codeRedemptions !== null) {
-      ids.push(claims.add({ id: `campana-${s}-canjes`, kind: 'count', label: `Canjes del código de ${c.companyName}`, value: r.codeRedemptions, unit: 'canjes', source: src('code_redemptions') }));
+      ids.push(claims.add({ id: `campana-${s}-canjes`, kind: 'count', key: 'campaign.redemptions', params, value: r.codeRedemptions, unit: 'canjes', source: src('code_redemptions') }));
     }
     if (r.attributedRevenue !== null && r.currency) {
-      ids.push(claims.add({ id: `campana-${s}-ingresos`, kind: 'money', label: `Ventas atribuidas a la campaña con ${c.companyName}`, value: r.attributedRevenue, unit: r.currency, source: src('attributed_revenue') }));
+      ids.push(claims.add({ id: `campana-${s}-ingresos`, kind: 'money', key: 'campaign.revenue', params, value: r.attributedRevenue, unit: r.currency, source: src('attributed_revenue') }));
     }
     if (ids.length) out.push({ campaignId: c.id, name: c.name, companyName: c.companyName, claimIds: ids });
   }
@@ -753,18 +950,19 @@ function tarifasDe(input: PerfilInputs, claims: ClaimSet): PerfilComercial['rate
   if (!card) return null;
   const lines: RateLine[] = card.items.map((i) => {
     const s = shortId(i.id);
-    const src = (field: string): ClaimSource => ({ table: 'rate_card_item', id: i.id, field });
+    const params: ClaimParams = { item: i.labelEs, ...(i.platformId ? { platform: i.platformId } : {}) };
+    const src = (field: string): ClaimSource => ({ table: 'rate_card_item', id: i.id, field, asOf: card.computedAt });
     return {
       itemId: i.id,
       label: i.labelEs,
       platformId: i.platformId,
       lowClaimId:
         i.priceLow !== null
-          ? claims.add({ id: `tarifa-${s}-desde`, kind: 'money', label: `Tarifa de «${i.labelEs}», desde`, value: i.priceLow, unit: card.currency, source: src('price_low') })
+          ? claims.add({ id: `tarifa-${s}-desde`, kind: 'money', key: 'rate.low', params, value: i.priceLow, unit: card.currency, source: src('price_low') })
           : null,
       highClaimId:
         i.priceHigh !== null
-          ? claims.add({ id: `tarifa-${s}-hasta`, kind: 'money', label: `Tarifa de «${i.labelEs}», hasta`, value: i.priceHigh, unit: card.currency, source: src('price_high') })
+          ? claims.add({ id: `tarifa-${s}-hasta`, kind: 'money', key: 'rate.high', params, value: i.priceHigh, unit: card.currency, source: src('price_high') })
           : null,
     };
   });

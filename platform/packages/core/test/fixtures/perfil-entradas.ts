@@ -26,8 +26,22 @@ function post(n: string, p: Partial<PerfilPostInput> & Pick<PerfilPostInput, 'pl
   };
 }
 
-const score = (x: number, views: number, tier: 'good' | 'outlier' | 'breakout' | 'normal' | 'under', cut = 168) => ({
-  viewsVsMedian: x, viewsAtCut: views, outlierTier: tier, ageHoursCut: cut,
+/**
+ * Las líneas base contra las que se puntuaron los videos: las de la
+ * mediana del perfil (168 h) y la de Instagram a 30 días, que es la que
+ * hace verdad el 5,97× del reel de Café Alma (412 000 / 69 000).
+ */
+const BASES = {
+  'b-tt': { id: 'b-tt', medianViews: 115446, ageHoursCut: 168, computedAt: '2026-09-25T00:00:00.000Z' },
+  'b-ig': { id: 'b-ig', medianViews: 62177, ageHoursCut: 168, computedAt: '2026-09-25T00:00:00.000Z' },
+  'b-ig-720': { id: '00000002-0000-4000-8000-ba5207200001', medianViews: 69000, ageHoursCut: 720, computedAt: '2026-09-25T00:00:00.000Z' },
+} as const;
+
+const score = (
+  x: number, views: number, tier: 'good' | 'outlier' | 'breakout' | 'normal' | 'under', cut = 168, base: keyof typeof BASES | null = null,
+) => ({
+  viewsVsMedian: x, viewsAtCut: views, outlierTier: tier, ageHoursCut: cut, computedAt: '2026-09-25T00:00:00.000Z',
+  baseline: base ? { ...BASES[base] } : null,
 });
 
 export function entradasLaura(): PerfilInputs {
@@ -60,8 +74,8 @@ export function entradasLaura(): PerfilInputs {
       { id: 'a10', platformId: 'instagram', connectionId: 'c-ig', dimension: 'gender', bucket: 'F', share: 0.7, day: '2026-09-24' },
     ],
     nonFollowers: [
-      { platformId: 'tiktok', medianShare: 0.58, postIds: ['p1', 'p2'] },
-      { platformId: 'youtube', medianShare: null, postIds: [] },
+      { platformId: 'tiktok', medianShare: 0.58, postIds: ['p1', 'p2'], asOf: '2026-09-24T06:00:00.000Z' },
+      { platformId: 'youtube', medianShare: null, postIds: [], asOf: null },
     ],
     baselines: [
       { id: 'b-yt', platformId: 'youtube', ageHoursCut: 168, medianViews: 41310, sampleSize: 11, isReliable: true, computedAt: '2026-09-25T00:00:00.000Z' },
@@ -69,12 +83,12 @@ export function entradasLaura(): PerfilInputs {
       { id: 'b-ig', platformId: 'instagram', ageHoursCut: 168, medianViews: 62177, sampleSize: 16, isReliable: true, computedAt: '2026-09-25T00:00:00.000Z' },
     ],
     posts: [
-      post('d01', { platformId: 'instagram', surface: 'reels', title: 'Cold brew en casa en 3 pasos', caption: 'Cold brew en casa en 3 pasos ☕ Con @cafealma · código LAURA15', durationS: 41, isBrandedContent: true, score: score(5.971, 412000, 'breakout', 720) }),
+      post('d01', { platformId: 'instagram', surface: 'reels', title: 'Cold brew en casa en 3 pasos', caption: 'Cold brew en casa en 3 pasos ☕ Con @cafealma · código LAURA15', durationS: 41, isBrandedContent: true, score: score(5.971, 412000, 'breakout', 720, 'b-ig-720') }),
       post('d06', { platformId: 'tiktok', title: 'La arepa que se hace sin plancha', caption: 'Reto: arepa sin plancha y sin que se pegue. Sí se puede 🫓 #arepa #recetafacil', durationS: 34, hashtags: ['arepa', 'recetafacil'], score: score(3.71, 395810, 'outlier', 72) }),
-      post('d18', { platformId: 'instagram', surface: 'reels', title: 'Tres desayunos con dos ingredientes', caption: 'Tres desayunos con dos ingredientes cada uno. Guárdalo para mañana 🍳 #desayuno', durationS: 41, hashtags: ['desayuno'], score: score(2.662, 165485, 'outlier') }),
+      post('d18', { platformId: 'instagram', surface: 'reels', title: 'Tres desayunos con dos ingredientes', caption: 'Tres desayunos con dos ingredientes cada uno. Guárdalo para mañana 🍳 #desayuno', durationS: 41, hashtags: ['desayuno'], score: score(2.662, 165485, 'outlier', 168, 'b-ig') }),
       post('d02', { platformId: 'tiktok', title: 'El cold brew que me salva las mañanas', caption: 'El cold brew que me salva las mañanas 🧊 #ad @cafealma.co', durationS: 34, isBrandedContent: true, score: score(2.469, 300000, 'outlier', 720) }),
       post('d28', { platformId: 'youtube', surface: 'shorts', title: 'Pasta cremosa en cuatro minutos', caption: 'Pasta cremosa en cuatro minutos, sin crema de leche #shorts', durationS: 55, score: score(2.359, 77095, 'outlier', 72) }),
-      post('d07', { platformId: 'tiktok', title: 'El error que arruina tu arroz', caption: 'El error que arruina tu arroz (y lo cometemos todos) 🍚 #arroz', durationS: 38, score: score(2.02, 233187, 'outlier') }),
+      post('d07', { platformId: 'tiktok', title: 'El error que arruina tu arroz', caption: 'El error que arruina tu arroz (y lo cometemos todos) 🍚 #arroz', durationS: 38, score: score(2.02, 233187, 'outlier', 168, 'b-tt') }),
       post('d33', { platformId: 'facebook', title: '¿Qué cocino un lunes sin ganas?', caption: '¿Qué cocino un lunes sin ganas de cocinar? 🙃 #cena', durationS: 62, score: score(1.557, 30669, 'good') }),
       post('d40', { platformId: 'tiktok', title: null, caption: 'Mi sopa de los domingos', durationS: 60, score: null }),
     ],

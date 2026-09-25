@@ -5,7 +5,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPerfil, claimById, claimSlug, shortId, type PerfilComercial } from '../src/outreach/perfil.ts';
+import {
+  buildPerfil, claimById, claimSlug, cutOf, genderCode, shortId, standoutGroups, type PerfilComercial,
+} from '../src/outreach/perfil.ts';
 import {
   contentOf, durationBucketOf, durationVsTypical, hookFromAnalysis, hookOf, median, pieceOf, toneTraitsOf,
 } from '../src/outreach/perfil-captions.ts';
@@ -20,7 +22,8 @@ function idsCitados(p: PerfilComercial): string[] {
     ...p.audience.nonFollowers.map((n) => n.claimId),
     ...p.performance.medians.map((m) => m.claimId),
     p.performance.scoredClaimId,
-    ...p.performance.top.flatMap((v) => [v.multipleClaimId, v.viewsClaimId, v.durationClaimId]),
+    ...p.performance.top.flatMap((v) => [v.multipleClaimId, v.viewsClaimId, v.baselineClaimId, v.durationClaimId]),
+    ...p.performance.top.flatMap((v) => v.why.reasons.flatMap((r) => [r.groupClaimId, r.restClaimId])),
     ...p.formats.pieces.map((f) => f.claimId),
     ...p.formats.contents.map((f) => f.claimId),
     ...p.formats.tone.map((f) => f.claimId),
@@ -43,13 +46,23 @@ test('los cinco mejores videos salen ordenados por veces su mediana, con sus cif
   assert.equal(primero.outlierTier, 'breakout');
   const x = claimById(p, primero.multipleClaimId)!;
   assert.deepEqual(x, {
-    id: 'video-000000000d01-x', kind: 'multiple', label: 'Veces su mediana de Instagram que hizo «Cold brew en casa en 3 pasos»',
+    id: 'video-000000000d01-x', kind: 'multiple', key: 'video.multiple',
+    params: { platform: 'instagram', title: 'Cold brew en casa en 3 pasos', cutHours: 720 },
     value: 5.971, unit: 'x',
-    source: { table: 'post_score', id: '00000002-0000-4000-8000-000000000d01', field: 'views_vs_median', url: 'https://example.com/d01' },
+    source: {
+      table: 'post_score', id: '00000002-0000-4000-8000-000000000d01', field: 'views_vs_median', url: 'https://example.com/d01',
+      asOf: '2026-09-25T00:00:00.000Z',
+    },
   });
   assert.equal(claimById(p, primero.viewsClaimId)!.value, 412000);
   assert.equal(claimById(p, primero.viewsClaimId)!.source.field, 'views_at_cut');
   assert.equal(claimById(p, primero.durationClaimId)!.source.table, 'post');
+  // Cada video dice su corte y la mediana contra la que se midió: 412 000 / 69 000 ≈ 5,97.
+  assert.equal(primero.cutHours, 720);
+  const base = claimById(p, primero.baselineClaimId)!;
+  assert.deepEqual([base.id, base.value, base.params.cutHours, base.source.table], ['mediana-instagram-ba5207200001', 69000, 720, 'creator_baseline']);
+  // Si se midió contra la misma línea base de la mediana del perfil, es el mismo claim.
+  assert.equal(p.performance.top[2]!.baselineClaimId, 'mediana-instagram');
   // El que no tiene puntaje no compite.
   assert.ok(!p.performance.top.some((v) => v.postId.endsWith('d40')));
   assert.equal(claimById(p, p.performance.scoredClaimId)!.value, 7);
@@ -68,11 +81,42 @@ test('el perfil es determinista: las mismas filas dan los mismos ids y el mismo 
   assert.deepEqual(buildPerfil(entradasLaura()), buildPerfil(entradasLaura()));
 });
 
-test('el porqué de cada video sale del gancho, la pieza, el tipo y la duración', () => {
+test('el porqué contrasta: solo es razón el grupo que rinde más que el resto de los videos', () => {
+  const p = buildPerfil(entradasLaura());
+  const [breakout, arepa, desayunos, , pasta] = p.performance.top;
+  const razones = (v: typeof breakout) => v!.why.reasons.map((r) => `${r.axis}:${r.group}`);
+  assert.deepEqual(razones(breakout), ['hook:promesa', 'piece:reel', 'content:colaboracion', 'duration:corto']);
+  assert.deepEqual(razones(arepa), ['hook:promesa', 'duration:corto']);
+  // Los desayunos abren con una lista, y es el único: una lista no se contrasta con nada.
+  assert.deepEqual(razones(desayunos), ['piece:reel', 'duration:corto']);
+  // Los videos de duración media rinden menos que el resto: la duración de la pasta no es una razón.
+  assert.deepEqual(razones(pasta), ['hook:promesa']);
+  // Las dos medianas de cada razón son claims con las filas que las forman.
+  const promesa = claimById(p, breakout!.why.reasons[0]!.groupClaimId)!;
+  const resto = claimById(p, breakout!.why.reasons[0]!.restClaimId)!;
+  assert.deepEqual([promesa.id, promesa.key, promesa.value, promesa.source.rows!.length], ['porque-gancho-promesa', 'why.group', 3.71, 3]);
+  assert.deepEqual([resto.id, resto.key, resto.value, resto.source.rows!.length], ['porque-gancho-promesa-resto', 'why.rest', 2.2445, 4]);
+  // Un rasgo que tienen todos los videos no tiene resto: nunca es razón.
+  const todos = p.performance.top.map((v, i) => ({ id: String(i), key: 'breve', x: i + 1 }));
+  assert.deepEqual(standoutGroups(todos), []);
+});
+
+test('standoutGroups: tamaño mínimo, cuánto supera al resto, excluidos y sin clave', () => {
+  const it = (id: string, key: string | null, x: number) => ({ id, key, x });
+  const items = [it('a', 'reel', 4), it('b', 'reel', 3), it('c', 'short', 1), it('d', 'short', 1.2), it('e', null, 99), it('f', 'otro', 5)];
+  assert.deepEqual(standoutGroups(items, { exclude: ['otro'] }), [
+    { key: 'reel', ids: ['a', 'b'], median: 3.5, restIds: ['c', 'd', 'f'], restMedian: 1.2 },
+  ]);
+  // Uno solo no es un grupo; con el resto igual, no hay razón.
+  assert.deepEqual(standoutGroups([it('a', 'x', 5), it('b', 'y', 1), it('c', 'y', 1)]), []);
+  assert.deepEqual(standoutGroups([it('a', 'x', 1.1), it('b', 'x', 1.1), it('c', 'y', 1), it('d', 'y', 1)]), []);
+});
+
+test('el porqué describe el video: gancho, pieza, tipo y duración', () => {
   const p = buildPerfil(entradasLaura());
   const [breakout, arepa, desayunos, coldbrew, pasta] = p.performance.top;
-  assert.deepEqual(breakout!.why, {
-    hook: 'promesa', hookSource: 'caption', piece: 'reel', content: 'colaboracion', duration: 'corto', durationVsTypical: 'similar',
+  assert.deepEqual({ ...breakout!.why, reasons: [] }, {
+    hook: 'promesa', hookSource: 'caption', piece: 'reel', content: 'colaboracion', duration: 'corto', durationVsTypical: 'similar', reasons: [],
   });
   assert.equal(arepa!.why.hook, 'promesa');
   assert.equal(arepa!.why.piece, 'tiktok');
@@ -103,8 +147,10 @@ test('la audiencia es la de la red con más seguidores que tenga demografía, si
   );
   const f = claimById(p, p.audience.lines.find((a) => a.bucket === 'F')!.claimId)!;
   assert.equal(f.id, 'audiencia-tiktok-genero-f');
-  assert.equal(f.source.table, 'audience_breakdown');
-  assert.equal(f.source.id, 'a5');
+  // Sin texto en core: clave y parámetros; la pantalla y el prompt lo escriben.
+  assert.deepEqual([f.key, f.params], ['audience.gender', { platform: 'tiktok', bucket: 'F' }]);
+  assert.deepEqual(f.source, { table: 'audience_breakdown', id: 'a5', field: 'share', asOf: '2026-09-24' });
+  assert.equal(claimById(p, 'no-seguidores-tiktok')!.source.asOf, '2026-09-24T06:00:00.000Z');
   // La mediana de no seguidores que no existe no se inventa.
   assert.deepEqual(p.audience.nonFollowers.map((n) => n.platformId), ['tiktok']);
 });
@@ -113,9 +159,9 @@ test('identidad, medianas por red y tarifas llevan su fila de origen', () => {
   const p = buildPerfil(entradasLaura());
   assert.deepEqual(p.identity.networks.map((n) => n.platformId), ['tiktok', 'instagram', 'youtube']);
   assert.equal(p.identity.networks[2]!.followersClaimId, null);
-  assert.deepEqual(claimById(p, 'seguidores-tiktok')!.source, { table: 'account_metric_snapshot', id: '902', field: 'followers' });
-  assert.deepEqual(p.performance.medians.map((m) => m.platformId), ['tiktok', 'instagram', 'youtube']);
-  assert.deepEqual(claimById(p, 'mediana-tiktok')!.source, { table: 'creator_baseline', id: 'b-tt', field: 'median_views' });
+  assert.deepEqual(claimById(p, 'seguidores-tiktok')!.source, { table: 'account_metric_snapshot', id: '902', field: 'followers', asOf: '2026-09-24' });
+  assert.deepEqual(p.performance.medians.map((m) => [m.platformId, m.cutHours]), [['tiktok', 168], ['instagram', 168], ['youtube', 168]]);
+  assert.deepEqual(claimById(p, 'mediana-tiktok')!.source, { table: 'creator_baseline', id: 'b-tt', field: 'median_views', asOf: '2026-09-25T00:00:00.000Z' });
   const tarifa = claimById(p, p.rates!.lines[0]!.lowClaimId)!;
   assert.equal(tarifa.kind, 'money');
   assert.equal(tarifa.value, '5200000.00');
@@ -168,6 +214,13 @@ test('lectura de captions: gancho, pieza, contenido, duración y tono', () => {
   assert.deepEqual(toneTraitsOf('   ', []), []);
 });
 
+test('cortes y géneros: lo que la pantalla no convierte a mano', () => {
+  assert.deepEqual([cutOf(24), cutOf(72), cutOf(168), cutOf(720)], [
+    { unit: 'hours', amount: 24 }, { unit: 'days', amount: 3 }, { unit: 'days', amount: 7 }, { unit: 'days', amount: 30 },
+  ]);
+  assert.deepEqual(['F', 'm', 'U', 'female', 'other'].map(genderCode), ['f', 'm', 'u', 'f', 'u']);
+});
+
 test('ids de claim: cortos, legibles y dentro del alfabeto de la marca', () => {
   assert.equal(shortId('00000002-0000-4000-8000-000000000D01'), '000000000d01');
   assert.equal(claimSlug('55+'), '55-mas');
@@ -178,14 +231,41 @@ test('ids de claim: cortos, legibles y dentro del alfabeto de la marca', () => {
 test('el perfil guardado se lee de vuelta; uno roto o de otra versión es «sin calcular»', () => {
   const perfil = buildPerfil(entradasLaura());
   const guardado: StoredPerfil = {
-    version: 1, computedAt: perfil.computedAt, perfil,
+    version: 2, computedAt: perfil.computedAt, perfil,
     narrative: { text: 'Hola.', source: 'template', model: null, writtenAt: perfil.computedAt, fallback: 'no_model' },
   };
   const ida = JSON.parse(JSON.stringify(guardado));
   assert.deepEqual(parseStoredPerfil(ida), guardado);
   assert.equal(parseStoredPerfil(null), null);
-  assert.equal(parseStoredPerfil({ ...ida, version: 2 }), null);
+  // Un perfil v1 (claims con texto, sin clave) se recalcula.
+  assert.equal(parseStoredPerfil({ ...ida, version: 1 }), null);
   assert.equal(parseStoredPerfil({ ...ida, narrative: { ...ida.narrative, source: 'otro' } }), null);
   const claimRoto = { ...ida, perfil: { ...ida.perfil, claims: [{ ...ida.perfil.claims[0], id: 'Con Mayúsculas' }] } };
   assert.equal(parseStoredPerfil(claimRoto), null);
+  const sinClave = { ...ida, perfil: { ...ida.perfil, claims: [{ ...ida.perfil.claims[0], key: 'inventada' }] } };
+  assert.equal(parseStoredPerfil(sinClave), null);
+});
+
+test('un perfil guardado a medio escribir no llega a la pantalla: cada arreglo que recorre se comprueba', () => {
+  const perfil = buildPerfil(entradasLaura());
+  const ida = JSON.parse(JSON.stringify({
+    version: 2, computedAt: perfil.computedAt, perfil,
+    narrative: { text: 'Hola.', source: 'template', model: null, writtenAt: perfil.computedAt, fallback: 'no_model' },
+  }));
+  const con = (cambio: (p: Record<string, any>) => void) => {
+    const copia = structuredClone(ida);
+    cambio(copia.perfil);
+    return parseStoredPerfil(copia);
+  };
+  assert.equal(con((p) => { delete p.audience.lines; }), null, 'audience sin lines');
+  assert.equal(con((p) => { p.audience.nonFollowers = {}; }), null);
+  assert.equal(con((p) => { delete p.identity.networks; }), null);
+  assert.equal(con((p) => { p.formats.tone = null; }), null);
+  assert.equal(con((p) => { p.formats.pieces[0].claimId = 7; }), null);
+  assert.equal(con((p) => { p.socialProof[0].claimIds = 'x'; }), null);
+  assert.equal(con((p) => { p.rates.lines = undefined; }), null);
+  assert.equal(con((p) => { delete p.performance.top[0].why.reasons; }), null);
+  assert.equal(con((p) => { p.performance.medians[0].cutHours = '7'; }), null);
+  // Sin tarifario es válido: rates null.
+  assert.ok(con((p) => { p.rates = null; }));
 });

@@ -38,6 +38,30 @@ function palabras(alternativas: string, inicio = false): RegExp {
 }
 
 const NUMEROS = 'dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|doce|quince|veinte';
+
+/**
+ * Los numerales y cuantificadores del español que dicen una cifra con
+ * letras: lo que el verificador de la narrativa (narrativa.ts) rechaza
+ * fuera de una marca [claim:id]. Lista cerrada a propósito. «un», «una»
+ * y «uno» quedan fuera porque son artículos y pronombres («uno de mis
+ * videos»); «medio», «cuarto» y «segundo», porque casi siempre son otra
+ * cosa (duración media, un cuarto, la unidad de tiempo). Incluye las
+ * palabras de NUMEROS, que es lo que el gancho reconoce al inicio.
+ */
+export const NUMBER_WORDS_ES: readonly string[] = [
+  ...NUMEROS.split('|'),
+  'cero', 'once', 'trece', 'catorce', 'dieciséis', 'dieciseis', 'diecisiete', 'dieciocho', 'diecinueve',
+  'veintiuno', 'veintiuna', 'veintidós', 'veintidos', 'veintitrés', 'veintitres', 'veinticuatro', 'veinticinco',
+  'veintiséis', 'veintiseis', 'veintisiete', 'veintiocho', 'veintinueve',
+  'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa',
+  'cien', 'ciento', 'cientos', 'doscientos', 'doscientas', 'trescientos', 'trescientas', 'cuatrocientos',
+  'cuatrocientas', 'quinientos', 'quinientas', 'seiscientos', 'seiscientas', 'setecientos', 'setecientas',
+  'ochocientos', 'ochocientas', 'novecientos', 'novecientas',
+  'mil', 'miles', 'millar', 'millares', 'millón', 'millon', 'millones', 'billón', 'billon', 'billones',
+  'docena', 'docenas', 'decena', 'decenas', 'centenar', 'centenares',
+  'doble', 'dobles', 'triple', 'triples', 'cuádruple', 'cuadruple', 'quíntuple', 'quintuple',
+  'mitad', 'tercio', 'tercios',
+];
 const NUMERO_AL_INICIO = palabras(`\\d+|${NUMEROS}`, true);
 const PREGUNTA = /^¿|^(?:qué|que|cómo|como|por qué|cuál|cuáles|cuánto|dónde|sabías)(?![\p{L}\p{N}_])/iu;
 const ERROR = palabras('error|errores|nunca|deja de|no hagas|no cometas|mito|mentira');

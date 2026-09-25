@@ -8,9 +8,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildPerfil, type Claim } from '../src/outreach/perfil.ts';
 import {
-  buildNarrativePrompt, narrativeSegments, perfilTerms, templateNarrative, verifyNarrative, writeNarrative,
+  buildNarrativePrompt, claimLabelEs, claimsById, narrativeSegments, perfilTerms, templateNarrative, verifyNarrative, writeNarrative,
   type NarrativeModel, type NarrativePrompt,
 } from '../src/outreach/narrativa.ts';
+import type { LlmUsage } from '../src/outreach/llm-precios.ts';
 import { llmCostUsd, UnknownModelPriceError } from '../src/outreach/llm-precios.ts';
 import { entradasLaura } from './fixtures/perfil-entradas.ts';
 
@@ -43,7 +44,7 @@ test('una cifra con dígitos fuera de una marca se rechaza, aunque sea verdad', 
   assert.deepEqual(v.issues, [{ code: 'bare_number', text: '115.446' }]);
   // Un porcentaje o un «3x» tampoco.
   const otra = verifyNarrative(BUENA.replace('Soy Laura', 'Soy Laura, con 64 % de mujeres y 3x'), perfil);
-  assert.deepEqual(otra.issues.map((i) => i.code), ['bare_number', 'bare_number']);
+  assert.deepEqual(otra.issues.map((i) => i.code), ['bare_number', 'bare_number', 'number_word']);
 });
 
 test('los términos del perfil pueden llevar dígitos; sueltos, no', () => {
@@ -52,6 +53,30 @@ test('los términos del perfil pueden llevar dígitos; sueltos, no', () => {
   assert.ok(!perfilTerms(perfil).includes('3'));
   const suelto = verifyNarrative(BUENA.replace('«Cold brew en casa en 3 pasos»', 'mi video de 3 pasos'), perfil);
   assert.deepEqual(suelto.issues, [{ code: 'bare_number', text: '3' }]);
+});
+
+test('una cantidad en letras o un signo de cifra fuera de una marca se rechaza', () => {
+  const con = (frase: string) => verifyNarrative(BUENA.replace('Soy Laura y cocino fácil.', frase), perfil, { paragraphs: null });
+  assert.deepEqual(con('Soy Laura, con un millón de seguidores.').issues, [{ code: 'number_word', text: 'millón' }]);
+  assert.deepEqual(con('Soy Laura y tengo dos millones de fans.').issues, [
+    { code: 'number_word', text: 'dos' }, { code: 'number_word', text: 'millones' },
+  ]);
+  assert.deepEqual(con('Mis videos hacen doce mil views.').issues.map((i) => i.code), ['number_word', 'number_word']);
+  assert.deepEqual(con('Mi mejor video hizo el doble de mi mediana.').issues, [{ code: 'number_word', text: 'doble' }]);
+  assert.deepEqual(con('La mitad de mi audiencia es de México.').issues, [{ code: 'number_word', text: 'mitad' }]);
+  assert.deepEqual(con('Crecí un veinte por ciento.').issues, [
+    { code: 'number_word', text: 'veinte' }, { code: 'number_word', text: 'por ciento' },
+  ]);
+  // «50 %»: el dígito y el signo, cada uno con su código.
+  assert.deepEqual(con('Soy Laura: 50 % de mujeres.').issues, [{ code: 'bare_number', text: '50' }, { code: 'number_word', text: '%' }]);
+  // Un signo pegado a una marca repite lo que la cifra ya trae.
+  assert.deepEqual(con('Hice [claim:video-000000000d01-x]× mi mediana.').issues, [{ code: 'number_word', text: '×' }]);
+  // «un», «una» y «uno» son artículos: no son cifras.
+  assert.equal(con('Soy Laura, una cocinera, y uno de mis videos es un reel.').ok, true);
+  // Dentro de un término del perfil, un número en letras no es una cifra: es el título.
+  assert.equal(con('Mi video «Pasta cremosa en cuatro minutos» funciona.').ok, true);
+  assert.equal(con('Mi video «Tres desayunos con dos ingredientes» funciona.').ok, true);
+  assert.equal(con('Hice cuatro minutos de pasta.').ok, false);
 });
 
 test('marcas mal escritas, huecos y párrafos de más se rechazan', () => {
@@ -64,7 +89,7 @@ test('marcas mal escritas, huecos y párrafos de más se rechazan', () => {
   // La edición del creador puede tener de uno a cinco párrafos.
   assert.equal(verifyNarrative(`${BUENA}\n\nUn cuarto párrafo.`, perfil, { paragraphs: null }).ok, true);
   assert.deepEqual(verifyNarrative('  ', perfil).issues, [{ code: 'empty' }]);
-  assert.deepEqual(verifyNarrative('Uno.\n\nDos.\n\nTres.', perfil, { minClaims: 1 }).issues, [{ code: 'no_claims' }]);
+  assert.deepEqual(verifyNarrative('Hola.\n\nQué tal.\n\nAdiós.', perfil, { minClaims: 1 }).issues, [{ code: 'no_claims' }]);
   assert.equal(verifyNarrative(`${BUENA} ${'palabra '.repeat(400)}`, perfil).issues[0]!.code, 'too_long');
 });
 
@@ -78,6 +103,42 @@ test('la plantilla es determinista, tiene tres párrafos y pasa el verificador',
   assert.match(t, /«Cold brew en casa en 3 pasos»/);
 });
 
+test('la plantilla compara cifras comparables: la mediana de la red del mejor video, y la de su corte', () => {
+  const t = templateNarrative(perfil);
+  // La mediana que se cita es la de Instagram, la red del mejor video, con su corte en palabras.
+  assert.match(t, /En Instagram, a la semana de publicado, mis videos tienen una mediana de \[claim:mediana-instagram\] views\./);
+  // El «× mi mediana» nombra la red, y como se midió a los treinta días, cita esa mediana (412 000 ≈ 5,97 × 69 000).
+  assert.match(
+    t,
+    /llegó a \[claim:video-000000000d01-views\] views al mes de publicado: \[claim:video-000000000d01-x\] mi mediana de Instagram, que a esa edad es de \[claim:mediana-instagram-ba5207200001\] views\./,
+  );
+  // El porqué contrasta con el resto de los videos.
+  assert.match(t, /Lo que lo distingue: mis videos que abren con una promesa concreta de resultado hacen \[claim:porque-gancho-promesa\] mi mediana, frente a \[claim:porque-gancho-promesa-resto\] del resto\./);
+  // Los rasgos de tono con el mismo verbo, juntos.
+  assert.match(t, /En mis captions escribo corto y uso emojis y hashtags\./);
+  assert.doesNotMatch(t, /uso emojis y uso/);
+});
+
+test('la plantilla no dice «mujeres» de un segmento sin especificar', () => {
+  const e = entradasLaura();
+  e.audience = e.audience.filter((a) => a.dimension !== 'gender');
+  e.audience.push(
+    { id: 'g-u', platformId: 'tiktok', connectionId: 'c-tt', dimension: 'gender', bucket: 'U', share: 0.5, day: '2026-09-24' },
+    { id: 'g-f', platformId: 'tiktok', connectionId: 'c-tt', dimension: 'gender', bucket: 'F', share: 0.3, day: '2026-09-24' },
+    { id: 'g-m', platformId: 'tiktok', connectionId: 'c-tt', dimension: 'gender', bucket: 'M', share: 0.2, day: '2026-09-24' },
+  );
+  const conU = buildPerfil(e);
+  const t = templateNarrative(conU);
+  assert.match(t, /\[claim:audiencia-tiktok-genero-f\] son mujeres/);
+  assert.doesNotMatch(t, /genero-u\] son/);
+  assert.equal(verifyNarrative(t, conU).ok, true);
+  // Solo 'U': la frase de género se omite.
+  e.audience = e.audience.filter((a) => a.id !== 'g-f' && a.id !== 'g-m');
+  const soloU = templateNarrative(buildPerfil(e));
+  assert.doesNotMatch(soloU, /son (mujeres|hombres)/);
+  assert.match(soloU, /\[claim:audiencia-tiktok-edad-25-34\] está en la franja de 25-34 años/);
+});
+
 test('la plantilla de un creador sin datos también pasa', () => {
   const e = entradasLaura();
   const vacio = buildPerfil({ ...e, connections: [], audience: [], nonFollowers: [], baselines: [], posts: [], campaigns: [], rateCard: null });
@@ -87,7 +148,7 @@ test('la plantilla de un creador sin datos también pasa', () => {
 });
 
 test('las marcas se pintan como cifras; una marca huérfana queda como texto', () => {
-  const [p1] = narrativeSegments('Hola [claim:mediana-tiktok] y [claim:no-existe].', perfil);
+  const [p1] = narrativeSegments('Hola [claim:mediana-tiktok] y [claim:no-existe].', claimsById(perfil));
   assert.deepEqual(p1!.map((s) => s.kind), ['text', 'claim', 'text']);
   assert.equal(p1![1]!.kind === 'claim' && p1![1]!.claim.value, 115446);
   assert.equal(p1![2]!.kind === 'text' && p1![2]!.text, ' y [claim:no-existe].');
@@ -96,8 +157,12 @@ test('las marcas se pintan como cifras; una marca huérfana queda como texto', (
 test('el prompt lleva cada claim con su valor y las reglas de la marca', () => {
   const p = buildNarrativePrompt(perfil, fmt);
   assert.match(p.system, /Toda cifra se escribe SOLO como su marca, \[claim:id\]/);
-  for (const c of perfil.claims) assert.ok(p.user.includes(`[claim:${c.id}] → ${c.label}: ${c.value} ${c.unit}`), c.id);
-  assert.match(p.user, /Video uno: «Cold brew en casa en 3 pasos» en Instagram\. Por qué funcionó: abre con una promesa/);
+  for (const c of perfil.claims) assert.ok(p.user.includes(`[claim:${c.id}] → ${claimLabelEs(c)}: ${c.value} ${c.unit}`), c.id);
+  assert.match(p.user, /Video uno: «Cold brew en casa en 3 pasos» en Instagram\. Cómo es: abre con una promesa/);
+  assert.match(p.user, /Lo que lo distingue: los que abren con una promesa concreta de resultado hacen \[claim:porque-gancho-promesa\] frente a \[claim:porque-gancho-promesa-resto\] del resto/);
+  // Las etiquetas del prompt salen de la clave y los parámetros, con el país en el locale que se pida.
+  assert.equal(claimLabelEs(perfil.claims.find((c) => c.id === 'audiencia-tiktok-pais-mx')!, 'en'), 'Parte de los seguidores de TikTok que vive en Mexico');
+  assert.equal(claimLabelEs(perfil.claims.find((c) => c.id === 'mediana-instagram-ba5207200001')!), 'Views medianas por video en Instagram al mes de publicado');
 });
 
 /** Un modelo falso: devuelve las respuestas en orden y guarda los prompts. */
@@ -140,6 +205,24 @@ test('un claim inventado por el modelo se rechaza: segundo intento con el motivo
   assert.equal(r2.calls.length, 2, 'las dos llamadas rechazadas también se registran');
   assert.deepEqual(r2.issues, [{ code: 'unknown_claim', id: 'clientes-felices' }]);
   assert.equal(verifyNarrative(r2.text, perfil).ok, true);
+});
+
+test('cada llamada se registra apenas responde, y el tope se vuelve a mirar antes del segundo intento', async () => {
+  const inventada = BUENA.replace('[claim:mediana-tiktok]', '[claim:clientes-felices]');
+  const registradas: LlmUsage[] = [];
+  let consultas = 0;
+  const m = falso([inventada, BUENA]);
+  const r = await writeNarrative(perfil, {
+    model: m,
+    formatClaim: fmt,
+    onCall: (u) => { registradas.push(u); },
+    // El primer intento llevó el gasto al tope.
+    budgetExhausted: async () => consultas++ > 0,
+  });
+  assert.equal(consultas, 2);
+  assert.equal(m.prompts.length, 1, 'con el tope alcanzado no hay segundo intento');
+  assert.deepEqual([r.source, r.fallback], ['template', 'budget']);
+  assert.deepEqual(registradas, [{ model: 'claude-sonnet-5', inputTokens: 3000, outputTokens: 400 }]);
 });
 
 test('sin modelo, con el tope alcanzado o con la API caída, la plantilla y el motivo', async () => {
