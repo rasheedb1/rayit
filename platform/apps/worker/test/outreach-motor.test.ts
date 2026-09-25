@@ -122,7 +122,7 @@ before(async () => {
     -- Nace apagada, como en producción, con su dirección postal. Sin
     -- revisión humana (la secuencia es 'auto' y sus plantillas, fijas) y
     -- sin la separación de tres días con la marca: esta prueba mira el
-    -- motor, no la política de la marca (la prueban outreach-motor-r5).
+    -- motor, no la política de la marca (la prueba outreach-motor-politica-marca).
     INSERT INTO outbound_policy (workspace_id, enabled, postal_address, max_emails_per_day, require_human_review,
                                  max_touches_per_company, min_days_between_touches)
     VALUES ('${WS}', false, 'Calle 93 # 11-26, Bogotá, Colombia', 20, false, 20, 0);

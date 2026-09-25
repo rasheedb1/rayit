@@ -5,7 +5,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ConfigError } from '../src/runner/config.ts';
-import { assertFakeAllowed, isLocalDatabase, parseArgs } from '../src/jobs/ventas/correr-motor.ts';
+import { emptyClaimReport } from '@mc/db/queries/outreach';
+import { assertFakeAllowed, isLocalDatabase, parseArgs, resumenDespacho } from '../src/jobs/ventas/correr-motor.ts';
+import { canceledCount } from '../src/jobs/ventas/outbound.dispatch.ts';
 import { resumenDemo, runDemoMotor } from '../src/jobs/ventas/demo-motor.ts';
 
 test('job:dispatch y job:replies leen sus argumentos y rechazan lo que no conocen', () => {
@@ -23,6 +25,19 @@ test('job:dispatch y job:replies leen sus argumentos y rechazan lo que no conoce
   assert.throws(() => parseArgs(['dispatch', '--workspace', 'laura'], {}), ConfigError);
   assert.throws(() => parseArgs(['dispatch', '--rapido'], {}), ConfigError);
   assert.throws(() => parseArgs(['replies', '--demo'], {}), ConfigError);
+});
+
+test('job:dispatch cuenta los cancelados como la metadata del job, y un argumento desconocido enseña el uso', () => {
+  const r = {
+    zombies: { failed: 0, canceled: 0, released: 0 },
+    claim: { ...emptyClaimReport(), claimed: 0, canceledOptedOut: 1, canceledEmailInvalid: 2, canceledFinished: 3, skippedNoAddress: 4, canceledCompanyCap: 5 },
+    sent: [], confirmed: [], retried: [], failed: [], waiting: [], canceled: [{ touchId: 'x', reason: 'opted_out' }], postponed: [], held: [],
+    released: [], warnings: [], errors: [], notConfigured: [],
+  };
+  assert.equal(canceledCount(r), 12);
+  const texto = resumenDespacho(r);
+  assert.match(texto, /Cancelados: 12 \(2 por correo rebotado, 5 por el tope de la marca\)\. Sin dirección: 4\./);
+  assert.throws(() => parseArgs(['dispatch', '--foo'], {}), /Argumento desconocido: --foo\. Uso: correr-motor\.ts dispatch\|replies/);
 });
 
 test('el canal falso contra una base compartida solo corre sobre el workspace de la demo', () => {

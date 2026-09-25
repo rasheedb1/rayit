@@ -10,6 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { zonedParts } from '@mc/core';
+import type { WorkspaceTx } from '@mc/db/client';
 import { enrollContacts } from '@mc/db/queries/outreach';
 import type { ChannelSender } from '../../src/jobs/ventas/canales/types.ts';
 import type { DispatchDeps } from '../../src/jobs/ventas/outbound.dispatch.ts';
@@ -69,7 +70,7 @@ export interface WorkspaceOptions {
   warmupDays?: number;
   /** Desde cuándo calienta la cuenta (NULL: sin calentamiento). */
   warmupStartedAt?: Date | null;
-  /** (r5) La política de la marca y la revisión humana (por defecto: sin tope, sin separación, sin revisión). */
+  /** La política de la marca y la revisión humana (por defecto: sin tope, sin separación, sin revisión). */
   maxTouchesPerCompany?: number;
   minDaysBetweenTouches?: number;
   humanReview?: boolean;
@@ -104,7 +105,7 @@ export function motorKit(opts: { db: () => PgliteDatabase; motor: () => MotorDb;
       INSERT INTO company_link (workspace_id, company_id) VALUES ('${w.id}', '${w.company}');
       INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES ${contactos};
       -- Sin revisión humana, sin tope ni separación con la marca, salvo que
-      -- la prueba los pida (r5: el motor los aplica; aquí se prueba lo demás).
+      -- la prueba los pida (el motor los aplica; aquí se prueba lo demás).
       INSERT INTO outbound_policy (workspace_id, enabled, postal_address, max_emails_per_day, warmup_days, require_human_review,
                                    max_touches_per_company, min_days_between_touches)
       VALUES ('${w.id}', false, 'Calle 93 # 11-26, Bogotá, Colombia', 100, ${o.warmupDays ?? 14}, ${o.humanReview ? 'true' : 'false'},
@@ -163,5 +164,90 @@ export function motorKit(opts: { db: () => PgliteDatabase; motor: () => MotorDb;
     await db().raw.query(`UPDATE outbound_touch SET scheduled_for = $2 WHERE id = $1`, [touchId, at.toISOString()]);
   }
 
-  return { workspace, enroll, deps, touches, scalar, setDue };
+  /** Una secuencia más en el workspace: sus pasos (tipo, canal, día, plantilla) y su id. */
+  async function secuencia(
+    w: Ws, n: number, pasos: Array<{ type: string; channel: string; day: number; body: string; subject?: string }>,
+  ): Promise<string> {
+    const seq = `${w.id.slice(0, 24)}${hex(0x5e00 + n, 12)}`;
+    const filas = pasos.map((p, i) =>
+      `('${seq.slice(0, 24)}${hex(0x5e0000 + n * 16 + i, 12)}', '${w.id}', '${seq}', ${p.day}, ${i}, '${p.type}', '${p.channel}', '10:00', ` +
+      `${p.subject ? `'${p.subject}'` : 'NULL'}, '${p.body.replace(/'/g, "''")}', false)`,
+    );
+    await db().raw.exec(`
+      INSERT INTO outbound_sequence (id, workspace_id, name, channel, status, automation_mode)
+      VALUES ('${seq}', '${w.id}', 'Secuencia ${n}', '${pasos[0]!.channel}', 'active', 'auto');
+      INSERT INTO outbound_step (id, workspace_id, sequence_id, day_offset, order_in_day, step_type, channel, scheduled_time,
+                                 subject_template, body_template, generate_with_ai) VALUES ${filas.join(', ')};
+    `);
+    return seq;
+  }
+
+  /** Una cuenta de Unipile conectada (LinkedIn o Instagram) y la dirección de cada ficha en ese canal. */
+  async function unipile(w: Ws, channel: 'linkedin' | 'instagram_dm', dailyCap = 100): Promise<string> {
+    const acc = `${w.id.slice(0, 24)}0000000ac0${channel === 'linkedin' ? '02' : '03'}`;
+    await db().raw.exec(`
+      INSERT INTO outreach_channel_account (id, workspace_id, channel, provider, provider_account_id, display_name, status, daily_cap, weekly_cap)
+      VALUES ('${acc}', '${w.id}', '${channel}', 'unipile', 'uni-${channel}-${w.n}', 'Creadora ${w.n}', 'connected', ${dailyCap},
+              ${channel === 'linkedin' ? 200 : 700});
+      UPDATE contact SET linkedin_url = 'https://www.linkedin.com/in/persona-' || right(id::text, 4),
+                         instagram_handle = 'persona_' || right(id::text, 4)
+       WHERE owner_workspace_id = '${w.id}';
+    `);
+    return acc;
+  }
+
+  /** Una segunda cuenta de Gmail conectada en el workspace, creada un minuto después de la primera. */
+  async function otroGmail(w: Ws, dailyCap: number): Promise<string> {
+    const acc = `${w.id.slice(0, 24)}0000000ac0b2`;
+    await db().raw.exec(`
+      INSERT INTO connection_secret (secret_ref, workspace_id, ciphertext, iv, tag)
+      VALUES ('enc:gmail:${opts.slug}-otro-${w.n}', '${w.id}', '\\x00', decode(repeat('00', 12), 'hex'), decode(repeat('00', 16), 'hex'));
+      INSERT INTO outreach_channel_account (id, workspace_id, channel, provider, provider_account_id, display_name, status, daily_cap,
+                                            weekly_cap, secret_ref, created_at)
+      VALUES ('${acc}', '${w.id}', 'email', 'gmail_oauth', 'agencia${w.n}@${opts.slug}.test', 'Agencia ${w.n}', 'connected', ${dailyCap}, 200,
+              'enc:gmail:${opts.slug}-otro-${w.n}', now() + interval '1 minute');
+    `);
+    return acc;
+  }
+
+  /** Marca el correo de una ficha como rebotado (lo que deja VEN-15). */
+  async function rebotar(contactId: string): Promise<void> {
+    await db().raw.query(
+      `UPDATE contact SET email_invalid = true, email_invalid_at = now(), email_invalid_reason = '550 5.1.1 user unknown' WHERE id = $1`,
+      [contactId],
+    );
+  }
+
+  /** La cuenta con la que salió cada toque de un contacto, en el orden de sus pasos. */
+  async function cuentas(contactId: string): Promise<Array<string | null>> {
+    const { rows } = await db().raw.query<{ acc: string | null }>(
+      `SELECT t.channel_account_id AS acc FROM outbound_touch t JOIN outbound_step s ON s.id = t.step_id
+        WHERE t.contact_id = $1 ORDER BY s.day_offset, s.order_in_day`,
+      [contactId],
+    );
+    return rows.map((r) => r.acc);
+  }
+
+  /**
+   * Lo que hace una persona desde la web, con el workspace fijado en la
+   * transacción como withWorkspace. Corre como el dueño de la base del
+   * arnés del worker (que no le da privilegios a mc_app); el rol mc_app y
+   * la RLS de verdad se prueban en packages/db/test.
+   */
+  async function comoLaWeb<T>(workspaceId: string, fn: (tx: WorkspaceTx) => Promise<T>): Promise<T> {
+    return db().raw.transaction(async (raw) => {
+      await raw.query(`SELECT set_config('app.workspace_id', $1, true)`, [workspaceId]);
+      const tx = {
+        workspaceId,
+        db: null as never,
+        query: async (text: string, params: readonly unknown[] = []) => {
+          const r = await raw.query(text, params as unknown[]);
+          return { rows: r.rows, rowCount: r.affectedRows ?? r.rows.length };
+        },
+      } as unknown as WorkspaceTx;
+      return fn(tx);
+    });
+  }
+
+  return { workspace, enroll, deps, touches, scalar, setDue, secuencia, unipile, otroGmail, rebotar, cuentas, comoLaWeb };
 }
