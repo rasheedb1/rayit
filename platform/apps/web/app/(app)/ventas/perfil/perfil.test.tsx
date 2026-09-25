@@ -304,6 +304,34 @@ describe("la pantalla", () => {
     await waitFor(() => expect(cifra.getAttribute("aria-expanded")).toBe("false"));
   });
 
+  it("con el teclado, cada cifra es una sola parada de Tab; Enter la fija y entonces su enlace sí entra", async () => {
+    getPerfilComercial.mockResolvedValue(guardado());
+    render(await PerfilPage());
+    const narrativa = screen.getByText("Narrativa").closest("section")!;
+    const [primera, segunda] = within(narrativa).getAllByRole("button").filter((b) => b.hasAttribute("aria-controls"));
+    /** Las paradas de Tab desde `a` hasta `b` (incluida b), en el orden del documento: jsdom no tabula, se cuentan. */
+    const paradas = (a: HTMLElement, b: HTMLElement) => {
+      const todas = [...document.querySelectorAll<HTMLElement>("a[href], button, input, select, textarea, [tabindex]")].filter(
+        (el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled,
+      );
+      return todas.indexOf(b) - todas.indexOf(a);
+    };
+    // El foco abre el globo para leerlo, pero su enlace no es una parada: la siguiente es la otra cifra.
+    act(() => primera!.focus());
+    expect(primera!.getAttribute("aria-expanded")).toBe("true");
+    expect(globo(primera!).enlace.tabIndex).toBe(-1);
+    expect(paradas(primera!, segunda!)).toBe(1);
+    // Enter (un clic en el botón) lo fija: ahora el siguiente Tab llega a «Abrir el origen».
+    fireEvent.click(primera!);
+    expect(globo(primera!).enlace.tabIndex).toBe(0);
+    expect(paradas(primera!, segunda!)).toBe(2);
+    // El anillo de foco del enlace se ve sobre el fondo del globo.
+    expect(globo(primera!).enlace.className).toContain("focus-visible:ring-tooltip-ink");
+    // Sacar el foco de la cifra y de su globo lo cierra, también fijo.
+    act(() => segunda!.focus());
+    expect(primera!.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("a 400 px, el globo de la última cifra de «Cuánto cobras» cabe en la pantalla", async () => {
     getPerfilComercial.mockResolvedValue(guardado());
     render(await PerfilPage());
@@ -431,11 +459,18 @@ describe("la edición de la narrativa", () => {
     render(await PerfilPage());
     fireEvent.click(screen.getByRole("button", { name: "Editar" }));
     fireEvent.change(screen.getByLabelText("Texto de la narrativa"), {
-      target: { value: "Tengo [claim:inventada], 3 millones y cuadrupliqué mis views con «Cold brew en casa en 3 pasos»." },
+      target: {
+        value:
+          "Tengo [claim:inventada], ⟦seguidores inventados⟧, ⟦115,4 mil⟧ seguidores, 3 millones y cuadrupliqué mis views con «Cold brew en casa en 3 pasos».",
+      },
     });
     const vista = screen.getByText("Así se verá").closest("section")!;
     const marcas = [...vista.querySelectorAll("mark")].map((m) => m.textContent);
-    expect(marcas).toEqual(["[claim:inventada]", "3", "millones", "cuadrupliqué"]);
+    // Una marca que no es de ninguna cifra se ve como en el editor, ⟦…⟧: el id técnico no se asoma.
+    expect(marcas).toEqual(["⟦inventada⟧", "⟦seguidores inventados⟧", "seguidores", "3", "millones", "cuadrupliqué"]);
+    expect(vista.textContent).not.toContain("[claim:");
+    // Una mediana de views seguida de «seguidores»: la cifra es real, la afirmación no.
+    expect(vista.textContent).toContain("«seguidores» no es lo que mide ⟦115,4 mil⟧");
     expect(vista.textContent).toContain("Lo subrayado no pasará el verificador al guardar:");
     expect(vista.textContent).toContain("⟦inventada⟧ no es una cifra de este perfil");
     expect(vista.textContent).toContain("«cuadrupliqué» dice una cantidad");

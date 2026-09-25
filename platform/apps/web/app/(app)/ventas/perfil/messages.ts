@@ -161,6 +161,24 @@ export const MESSAGES = {
       number_word: (texto: string) =>
         `«${texto}» dice una cantidad, un puesto o una proporción sin cifra: cámbiala por una de «Insertar una cifra» o quítala.`,
       placeholder: (texto: string) => `Quedó un hueco sin llenar: «${texto}».`,
+      /**
+       * `cifra` es la ficha de la cifra (⟦115,4 mil⟧) cuando quien la dice la conoce (la vista previa), o
+       * `cifraAnterior`; `mide` sale de `mide` (abajo), por la unidad del claim.
+       */
+      unit_mismatch: (palabra: string, cifra: string, mide: string) =>
+        `«${palabra}» no es lo que mide ${cifra}: esa cifra es ${mide}. Cambia la palabra por lo que la cifra mide o quítala.`,
+      cifraAnterior: "la cifra que va antes",
+      /** Qué mide una cifra, por su unidad (Claim.unit); una moneda ISO-4217 es `dinero`. */
+      mide: {
+        views: "un número de views",
+        seguidores: "un número de seguidores",
+        videos: "un número de videos",
+        canjes: "un número de canjes",
+        pct: "un porcentaje",
+        x: "un múltiplo de tu mediana",
+        s: "una duración",
+        dinero: "un monto de dinero",
+      } as Record<string, string>,
       no_claims: "Cita al menos una cifra.",
       stale_edit: "La narrativa cambió mientras la editabas (otra pestaña o un recálculo). Recarga la página y vuelve a intentarlo.",
       recalc_in_progress: "Hay un recálculo en curso. Espera a que termine y vuelve a intentarlo.",

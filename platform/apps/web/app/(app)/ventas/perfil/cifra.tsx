@@ -53,7 +53,14 @@ export function posicionGlobo(
  * El globo es fijo a la pantalla, se mide al abrirse y al desplazarse
  * (posicionGlobo) y nunca sale de ella: a 400 px no abre scroll
  * horizontal. Mientras está cerrado está fuera del flujo (display:
- * none). Escape o un toque fuera lo cierran.
+ * none). Escape, un toque fuera o sacar el foco de la cifra lo cierran.
+ *
+ * Con el teclado, cada cifra es UNA parada de Tab: el foco abre el globo
+ * solo para leerlo (como una descripción) y su «Abrir el origen» queda
+ * fuera del orden de tabulación (tabIndex -1), igual que al pasar el
+ * cursor. Enter o un clic lo dejan fijo, y entonces el enlace sí entra
+ * en el orden: el siguiente Tab llega a él. Así recorrer el perfil, con
+ * unas cien cifras, no cuesta doscientas paradas.
  *
  * `tipId` lo pone quien la pinta: la misma cifra puede salir en la
  * narrativa y en su sección, y dos globos no pueden compartir id.
@@ -106,7 +113,11 @@ export function Cifra({ cifra, tipId, grande = false }: { cifra: CifraVista; tip
 
   const texto = grande ? "text-2xl font-semibold tracking-tight" : "font-medium";
   const clase = `tabular-nums ${texto} cursor-pointer text-fg underline decoration-dotted decoration-fg-3 underline-offset-4 outline-none hover:decoration-fg focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-accent`;
-  const enlace = "mt-2 inline-block font-medium text-tooltip-ink underline underline-offset-2";
+  // El anillo, del color del texto del globo: sobre su fondo oscuro, el del acento no se distingue.
+  const enlace =
+    "mt-2 inline-block font-medium text-tooltip-ink underline underline-offset-2 outline-none focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-tooltip-ink";
+  /** Solo con el globo fijo (Enter o clic) el enlace es una parada de Tab. */
+  const tabEnlace = fijo ? undefined : -1;
   const cerrar = () => {
     setFijo(false);
     setEncima(false);
@@ -129,7 +140,8 @@ export function Cifra({ cifra, tipId, grande = false }: { cifra: CifraVista; tip
         setEncima(true);
       }}
       onBlur={(e) => {
-        if (!caja.current?.contains(e.relatedTarget as Node | null)) setEncima(false);
+        // El foco sale de la cifra y de su globo: se cierra, también el fijo (si no, queda un globo huérfano tapando el texto).
+        if (!caja.current?.contains(e.relatedTarget as Node | null)) cerrar();
       }}
     >
       <button
@@ -155,7 +167,7 @@ export function Cifra({ cifra, tipId, grande = false }: { cifra: CifraVista; tip
         <span className="block">{cifra.que}</span>
         <span className="mt-1 block text-tooltip-ink-2">{cifra.origen}</span>
         {cifra.externo ? (
-          <a href={cifra.href} className={enlace} aria-label={t.abrirA(cifra.origen)} target="_blank" rel="noopener noreferrer" onClick={cerrar}>
+          <a href={cifra.href} className={enlace} tabIndex={tabEnlace} aria-label={t.abrirA(cifra.origen)} target="_blank" rel="noopener noreferrer" onClick={cerrar}>
             {t.abrir}
           </a>
         ) : cifra.href.startsWith("#") ? (
@@ -164,6 +176,7 @@ export function Cifra({ cifra, tipId, grande = false }: { cifra: CifraVista; tip
           <a
             href={cifra.href}
             className={enlace}
+            tabIndex={tabEnlace}
             aria-label={t.abrirA(cifra.origen)}
             onClick={() => {
               abrirPlegableDe(cifra.href);
@@ -173,7 +186,7 @@ export function Cifra({ cifra, tipId, grande = false }: { cifra: CifraVista; tip
             {t.abrir}
           </a>
         ) : (
-          <Link href={cifra.href} className={enlace} aria-label={t.abrirA(cifra.origen)} onClick={cerrar}>
+          <Link href={cifra.href} className={enlace} tabIndex={tabEnlace} aria-label={t.abrirA(cifra.origen)} onClick={cerrar}>
             {t.abrir}
           </Link>
         )}

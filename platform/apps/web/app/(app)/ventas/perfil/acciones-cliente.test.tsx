@@ -20,7 +20,7 @@ vi.mock("./actions", () => ({
 const { Recalcular, CalcularPrimero } = await import("./recalcular");
 const { Narrativa } = await import("./narrativa");
 
-const VERIFICADOR: VerifierContext = { ids: ["mediana-tiktok"], terms: [], language: "es" };
+const VERIFICADOR: VerifierContext = { ids: ["mediana-tiktok"], units: { "mediana-tiktok": "views" }, terms: [], language: "es" };
 const CIFRAS = {
   "mediana-tiktok": {
     id: "mediana-tiktok", key: "median" as const, valor: "115,4 mil", que: "Views medianas por video en TikTok",

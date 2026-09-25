@@ -7,7 +7,10 @@
  * messages.ts. La pantalla sigue usando PLATFORM_LABEL del kit
  * (components/ui/platform-pill.tsx), que es de Nicolás y no se toca:
  * unificar las dos listas en una sola fuente queda propuesto para un PR
- * aparte que él revise (nota de VEN-11 en el backlog).
+ * aparte que él revise (rama rasheed/kit-plataformas-desde-core: el kit
+ * importa de @mc/core/plataformas). Mientras tanto, la prueba
+ * apps/web/app/(app)/ventas/perfil/plataformas.test.ts falla si las dos
+ * listas se separan.
  */
 import type { PlatformId } from './campanas.ts';
 

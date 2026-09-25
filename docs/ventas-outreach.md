@@ -1024,8 +1024,10 @@ el recomendador.
   los cinco mejores (`post.cover_url`) y el índice de los posts que
   forman algún agregado (`perfil.posts`, título y enlace). Enlaces y
   portadas se sanean al calcular (`webUrlOrNull`: solo http(s);
-  `coverSrcOrNull`: además una ruta de la propia web, como las portadas
-  de la demo), porque `post.url` no tiene CHECK y la importación CSV
+  `coverSrcOrNull`: solo https, o una de las portadas de la demo,
+  `/demo/portadas/<archivo>`; ninguna otra ruta de la web, para que una
+  portada sembrada por CSV no haga pedir `/auth/salir` ni otra ruta con
+  las cookies de quien mira, y ninguna http, que sería contenido mixto), porque `post.url` no tiene CHECK y la importación CSV
   guarda lo que venga: un enlace sin esquema queda en null y el perfil se
   guarda igual. `parseStoredPerfil` comprueba cada arreglo que la
   pantalla recorre y que enlaces (también `source.url` de cada cifra) y
@@ -1045,7 +1047,8 @@ el recomendador.
   lista de claims y escribe `[claim:id]` en vez de cifras;
   `verifyNarrative` rechaza un id que no está, cualquier dígito fuera
   de una marca, cualquier cantidad en letras de una lista cerrada
-  («dos», «mil», «millones», «el doble», «la mitad», «por ciento»), los
+  («dos», «mil», «millones», «veintiún», «treintaitrés», «una veintena»,
+  «un par», «el doble», «la mitad», «por ciento»), los
   verbos que multiplican («dupliqué», «cuadrupliqué», «doblé»), los
   ordinales y puestos de ranking («la segunda», «la primera en…»,
   «número uno», «top»), las proporciones sin cifra («la mayoría», «la
@@ -1054,8 +1057,12 @@ el recomendador.
   Unicode, no solo los dígitos («²», «⅔», «½»), salvo dentro de
   términos del perfil (títulos, campañas,
   tarifas, franjas de edad, frases de corte), y los huecos de la guardia
-  de VEN-10. Las listas y el prompt de sistema van por idioma
-  (`CANTIDADES`, `SISTEMA`: hoy solo `'es'`; añadir un idioma es añadir
+  de VEN-10. Además, la palabra pegada a una marca tiene que ser lo que
+  la cifra mide (`unit_mismatch`): «[claim:mediana-tiktok] seguidores» se
+  rechaza porque es una mediana de views, aunque la cifra sea real; el
+  vocabulario de unidades es cerrado y no juzga lo que no conoce («mi
+  mediana», «de mis seguidores»). Las listas y el prompt de sistema van por idioma
+  (`CANTIDADES`, `UNIDADES`, `SISTEMA`: hoy solo `'es'`; añadir un idioma es añadir
   sus datos), y la pantalla dice en qué idioma se redacta. Dos intentos con
   claude-sonnet-5, de 25 s cada uno y sin reintentos del SDK (caben en
   el `maxDuration` de 60 s de la página); el tope diario se consulta
@@ -1070,12 +1077,16 @@ el recomendador.
   una ficha legible con su valor, ⟦115,4 mil⟧, que al guardar vuelve a su
   `[claim:id]` (`fichas.ts`); la vista previa corre el mismo verificador en
   el cliente (`verifyNarrativeWith` con `verifierContext`, datos planos)
-  y subraya cada problema en su sitio (`narrativeIssueSpans`), y al
-  guardar pasa la puerta del servidor.
+  y subraya cada problema en su sitio (`narrativeIssueSpans`), con las
+  marcas desconocidas escritas como fichas ⟦…⟧ y no como `[claim:…]`, y al
+  guardar pasa la puerta del servidor. La plantilla dice el alcance en no
+  seguidores como lo que es, una mediana: «en un video típico».
 - **Pantalla**: `/ventas/perfil`, pestaña «Perfil comercial» de Ventas.
   Cada cifra es un botón que abre un globo (al pasar el cursor, con el
   teclado o al tocarla) con qué es, tabla, red y fecha, y «Abrir el
-  origen»: el post, la campaña, el tarifario, la serie de seguidores en
+  origen». Con el teclado cada cifra es una sola parada de Tab: el foco
+  abre el globo para leerlo, y su enlace entra en el orden de tabulación
+  solo cuando Enter o un clic lo dejan fijo. El origen es el post, la campaña, el tarifario, la serie de seguidores en
   `/resumen?red=…#seguidores`, o su fila en «De dónde sale cada cifra»
   al final de la página (línea base, demografía, no seguidores y los
   agregados). Ese bloque empieza plegado (un media kit no termina en una
@@ -1095,8 +1106,11 @@ el recomendador.
   member (`PUEDEN_EDITAR_PERFIL`), y las dos acciones lo vuelven a mirar.
 - **Carpetas ajenas**: ninguna. Los nombres de las redes que usa el
   prompt viven en `@mc/core/plataformas`; la pantalla usa
-  `PLATFORM_LABEL` del kit, que no se toca. Unificar las dos listas en
-  una sola fuente queda propuesto para un PR aparte que revise Nicolás. Todavía no se recalcula solo al conectar
+  `PLATFORM_LABEL` del kit, que no se toca. Una prueba de la web
+  (`ventas/perfil/plataformas.test.ts`) falla si las dos listas se
+  separan, y la unificación (el kit importa de `@mc/core/plataformas`)
+  queda en la rama `rasheed/kit-plataformas-desde-core`, para un PR que
+  revise Nicolás. Todavía no se recalcula solo al conectar
   una cuenta o importar un CSV: la pantalla avisa cuando hay datos más
   nuevos que el cálculo.
 

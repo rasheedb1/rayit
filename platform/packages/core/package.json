@@ -7,7 +7,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./outreach/*": "./src/outreach/*.ts"
+    "./outreach/*": "./src/outreach/*.ts",
+    "./plataformas": "./src/plataformas.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

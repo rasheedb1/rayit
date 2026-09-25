@@ -9,7 +9,7 @@ import { Field, Select, Textarea } from "@/components/ui/field";
 import { guardarNarrativa } from "./actions";
 import { Cifra } from "./cifra";
 import type { CifraVista } from "./cifras";
-import { aEditable, aMarcas, FICHA_ABRE, FICHA_CIERRA, fichasDe } from "./fichas";
+import { aEditable, aMarcas, comoFicha, FICHA_ABRE, FICHA_CIERRA, fichasDe } from "./fichas";
 import { MESSAGES } from "./messages";
 import { describirProblemas } from "./problemas";
 
@@ -21,6 +21,11 @@ const SUBRAYADO = "rounded-sm bg-bad-wash text-fg underline decoration-bad decor
  * Un trozo de texto con los problemas del verificador subrayados. `desde`
  * es dónde empieza el trozo dentro de su párrafo: las posiciones de
  * narrativeIssueSpans son del párrafo entero.
+ *
+ * Una marca que no es de ninguna cifra (unknown_claim) o que está mal
+ * escrita (malformed_marker) se pinta como el creador la escribió en el
+ * editor, ⟦…⟧ (comoFicha), no como [claim:…]: la vista previa, el editor
+ * y la lista de errores dicen lo mismo y el id técnico no se asoma.
  */
 function subrayar(text: string, desde: number, spans: readonly IssueSpan[], clave: string): ReactNode[] {
   const fin = desde + text.length;
@@ -31,9 +36,11 @@ function subrayar(text: string, desde: number, spans: readonly IssueSpan[], clav
     const a = Math.max(sp.start, cursor);
     const b = Math.min(sp.end, fin);
     if (a > cursor) out.push(text.slice(cursor - desde, a - desde));
+    const entera = a === sp.start && b === sp.end;
+    const marca = entera && (sp.code === "unknown_claim" || sp.code === "malformed_marker");
     out.push(
       <mark key={`${clave}-${a}`} className={SUBRAYADO}>
-        {text.slice(a - desde, b - desde)}
+        {marca ? comoFicha(text.slice(a - desde, b - desde)) : text.slice(a - desde, b - desde)}
       </mark>,
     );
     cursor = b;
@@ -206,7 +213,7 @@ export function Narrativa({
                 <>
                   <p className="font-medium text-bad">{t.vistaPreviaProblemas}</p>
                   <ul className="mt-1 list-disc space-y-0.5 pl-5 text-fg-2">
-                    {describirProblemas(veredicto.issues, maxTexto).map((d) => <li key={d}>{d}</li>)}
+                    {describirProblemas(veredicto.issues, maxTexto, (id) => fichas.porId.get(id)).map((d) => <li key={d}>{d}</li>)}
                   </ul>
                 </>
               )}
