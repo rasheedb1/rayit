@@ -51,6 +51,15 @@ describe("Contactos", () => {
     expect(screen.getByText(nota)).toBeInTheDocument();
   });
 
+  it("el motivo de baja guardado como código se traduce; el escrito a mano va tal cual (VEN-15 r4)", () => {
+    const porEnlace = { ...base, optedOut: true, optedOutAt: "2026-09-23T13:10:00Z", optedOutReason: "unsubscribe_link" };
+    const aMano = { ...base, id: "00000007-0000-4000-8000-000000000003", optedOut: true, optedOutReason: "Lo pidió por teléfono." };
+    render(<Contactos companyId={COMPANY} contacts={[porEnlace, aMano]} />);
+    expect(screen.getByText("Pidió la baja desde el enlace de un correo.")).toBeInTheDocument();
+    expect(screen.queryByText("unsubscribe_link")).not.toBeInTheDocument();
+    expect(screen.getByText("Lo pidió por teléfono.")).toBeInTheDocument();
+  });
+
   it("la procedencia es obligatoria y el error del servidor se ve en su campo", async () => {
     crearContacto.mockResolvedValue({ errors: { source: "Di de dónde sacaste el dato: sin eso no se guarda." } });
     render(<Contactos companyId={COMPANY} contacts={[]} />);

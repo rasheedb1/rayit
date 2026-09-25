@@ -53,6 +53,9 @@ vi.mock("@mc/db/queries/ventas", () => ({
   getStageTotals: async () => [],
   listOwnerOptions: async () => [],
 }));
+/** Los avisos urgentes del outreach de hoy (VEN-15), que la portada señala junto a «Política de envío». */
+let urgentes = 0;
+vi.mock("@mc/db/queries/entregabilidad", () => ({ countUrgentOutreachAlerts: async () => urgentes }));
 vi.mock("@mc/db/queries/ventas-ficha", () => ({
   nextActionOf: () => null,
   getLocalDates: async () => ({ today: "2026-09-23", tomorrow: "2026-09-24", now: "09:00", nextHour: "10:00", tz: "America/Bogota" }),
@@ -94,6 +97,19 @@ describe("la portada de Ventas (pulido r8)", () => {
     const bloque = screen.getByTestId("para-hoy");
     const primeraCifra = screen.getAllByText(MESSAGES.kpis.pending)[0]!;
     expect(bloque.compareDocumentPosition(primeraCifra) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("sin avisos urgentes, «Política de envío» es un enlace sin más; con uno, lo dice y lleva a «Salud de hoy» (VEN-15)", async () => {
+    urgentes = 0;
+    const { unmount } = render(await VentasPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByRole("link", { name: MESSAGES.header.politica })).toHaveAttribute("href", "/ventas/politica");
+    unmount();
+
+    urgentes = 1;
+    render(await VentasPage({ searchParams: Promise.resolve({}) }));
+    const enlace = screen.getByRole("link", { name: `${MESSAGES.header.politica} 1 urgente` });
+    expect(enlace).toHaveAttribute("href", "/ventas/politica#salud");
+    urgentes = 0;
   });
 
   it("la señal de una marca del CRM dice que ya está ahí y a qué negocio se sumará", async () => {

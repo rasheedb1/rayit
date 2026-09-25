@@ -13,7 +13,7 @@ Componentes compartidos de On Cue. Galería en `/kit` (bandera `kit`, encendida 
 | `MoneyInput` | `money-input.tsx` | Dinero como string decimal + moneda; miles es-CO, acepta pegar «5.200.000,50»; nunca `type=number`. Cliente. |
 | `DateInput` | `date-input.tsx` | Fecha nativa con valor ISO de solo fecha. Cliente. |
 | `Segmented` | `segmented.tsx` | Grupo de opciones excluyentes con aria-pressed y flechas: el filtro por red de Resumen. Cliente. |
-| `ConfirmInline` | `confirm-inline.tsx` | Acción que no se deshace en dos pasos y en el mismo sitio: el primer botón pregunta con su consecuencia (foco en la pregunta), el segundo ejecuta; Escape o Cancelar devuelven el foco. Cliente. |
+| `ConfirmInline` | `confirm-inline.tsx` | Acción que no se deshace en dos pasos y en el mismo sitio: el primer botón pregunta con su consecuencia (foco en la pregunta), el segundo ejecuta; Escape o Cancelar devuelven el foco. Si el mismo sitio alterna dos acciones (encender/apagar), dale una `key` por estado. Nació en Cotizar (ConfirmarAccion); en el kit desde VEN-10. Cliente. |
 | `EmptyState` | `empty-state.tsx` | Título, descripción y acción cuando no hay datos. |
 | `DataAsOf` | `data-as-of.tsx` | «datos hasta el 20 sep · Instagram», con `<time>` y fecha en UTC. |
 | `Kpi`, `KpiRow` | `kpi.tsx` | Cifra con nota, delta (signo en el texto), sparkline, enlace y esqueleto. Cuatro por fila en escritorio. `deltaText` opcional para un delta que no es relativo («+2,1 puntos»). |

@@ -327,6 +327,8 @@ ALTER TABLE notification ADD CONSTRAINT notification_kind_check CHECK (kind IN
    'connection_added',
    'outreach_bounce_rate','outreach_no_sends','outreach_queue_stuck',
    'outreach_account_down','outreach_llm_budget',
+   -- 'outreach_bounces_unread': de 0050 r5 (VEN-15), sumada al integrar la fase 4.
+   'outreach_bounces_unread',
    'outreach_failed','outreach_reply'));
 
 -- ---------------------------------------------------------------------

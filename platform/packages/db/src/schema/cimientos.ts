@@ -31,6 +31,7 @@ export const NOTIFICATION_KINDS = [
   'outreach_bounce_rate', 'outreach_no_sends', 'outreach_queue_stuck', 'outreach_account_down', 'outreach_llm_budget',
   // 0051: un mensaje de outreach que no salió para siempre, y una respuesta de la marca (VEN-10).
   'outreach_failed', 'outreach_reply',
+  'outreach_bounces_unread',
 ] as const;
 export const NOTIFICATION_SEVERITIES = ['info', 'success', 'warning', 'critical'] as const;
 

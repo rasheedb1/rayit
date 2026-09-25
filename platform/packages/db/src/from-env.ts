@@ -19,16 +19,23 @@
  * DATABASE_URL (con ALLOW_STALE_SCHEMA=1 como única salida explícita,
  * para el despliegue que tiene que salir antes de migrar).
  */
-import { createPgDb, createPool, type CatalogDb, type Db } from './client.ts';
+import { createPgDb, createPool, type CatalogDb, type Db, type DbOptions } from './client.ts';
 import { assertSchemaUpToDate, esquemaObligatorio } from './esquema.ts';
 
 export type DbMode = 'postgres' | 'embedded';
 
-export async function createDbFromEnv(env: NodeJS.ProcessEnv = process.env): Promise<{ db: Db; mode: DbMode }> {
+/**
+ * `opts` pasa al cliente (DbOptions): la web fija `authDisabled` cuando
+ * no hay Supabase Auth configurado (lib/db/cliente.ts).
+ */
+export async function createDbFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: DbOptions = {},
+): Promise<{ db: Db; mode: DbMode }> {
   const url = env.DATABASE_URL;
   if (url) {
     const pool = createPool(url, { sslRootCert: env.PGSSLROOTCERT ?? null, applicationName: 'mc-web' });
-    const db: CatalogDb = createPgDb(pool);
+    const db: CatalogDb = createPgDb(pool, opts);
     await assertSchemaUpToDate(db, { production: esquemaObligatorio(env) }).catch(async (err: unknown) => {
       // En producción el error es el motivo de no arrancar: se cierra el
       // pool para no dejar conexiones colgando y se propaga.
@@ -43,6 +50,6 @@ export async function createDbFromEnv(env: NodeJS.ProcessEnv = process.env): Pro
   // El embebido acaba de aplicar db/migrations con el mismo runner: no
   // hay nada que comprobar.
   const { createEmbeddedDb } = await import('./embedded.ts');
-  const db = await createEmbeddedDb({ seeds: true });
+  const db = await createEmbeddedDb({ seeds: true, ...opts });
   return { db, mode: 'embedded' };
 }

@@ -77,8 +77,15 @@ export interface TestDbOptions extends DbOptions {
   seeds?: boolean;
 }
 
+/**
+ * Por defecto las pruebas corren como la web sin Supabase Auth: ningún
+ * usuario existe y withWorkspace fija `app.auth_disabled` (DbOptions).
+ * Una prueba que quiera ver la regla cerrada pasa `authDisabled: false`
+ * o quita la bandera dentro de su transacción.
+ */
 export async function openTestDb(opts: TestDbOptions = {}): Promise<TestDb> {
-  const { seeds, ...dbOpts } = opts;
+  const { seeds, ...rest } = opts;
+  const dbOpts: DbOptions = { authDisabled: true, ...rest };
   const url = process.env.TEST_DATABASE_URL;
   if (url) {
     const adminUrl = process.env.TEST_DATABASE_ADMIN_URL || url;
@@ -105,7 +112,8 @@ export async function openTestDb(opts: TestDbOptions = {}): Promise<TestDb> {
     };
   }
   const { createEmbeddedDb } = await import('../src/embedded.ts');
-  const db = await createEmbeddedDb({ seeds: seeds ?? true, ...dbOpts });
+  // Una sola migración por proceso: cada archivo abre la foto (embedded.ts, CIM-12).
+  const db = await createEmbeddedDb({ seeds: seeds ?? true, snapshot: true, ...dbOpts });
   return {
     kind: 'pglite',
     db,

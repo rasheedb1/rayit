@@ -145,6 +145,14 @@ export const STORIES: readonly Story[] = [
     note: "Abierta en la ronda 5 de VEN-9 (23-sep): 72 pruebas rojas medidas con embedded-postgres 16.14, ninguna de outreach ni de la guardia. Camino probable: un segundo rol de conexión solo miembro de mc_app para lo que mide GRANT, como soloEmbebido en outreach.test.ts, y sembrar sin --seed o con workspaces propios.",
   },
   {
+    id: "CIM-12", module: "CIM", owner: "rasheed", size: "S", sprint: 4, deps: ["CIM-2"],
+    title: "pnpm verificar determinista",
+    desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
+    done: "Veinte corridas seguidas de pnpm verificar en una máquina cargada, sin una sola prueba cancelada.",
+    status: "hecho",
+    note: "Cerrada en VEN-15 r5 (25-sep). Dos causas. (1) Con --test-isolation=none el before() de nivel superior de cada archivo cuelga de la prueba raíz y todos corren antes de listSql, contra SUS 120 s; veinte bases migradas y sembradas pasaban de ese tiempo bajo carga. Arreglo: openTestDb migra y siembra una vez por proceso y abre cada base desde esa foto (PGlite dumpDataDir/loadDataDir, embedded.ts). (2) Las «736 canceladas con event loop has already resolved» no eran de @mc/db: turbo corta a las tareas hermanas cuando otra falla. verificar lleva --continue. No era `await acepto`. Prueba: veinte corridas seguidas con carga 17-59, cero pruebas canceladas y listSql en 7-24 s (antes 43-119); una falló en web por un foco medido antes de su efecto (baja.test.tsx), endurecido con waitFor igual que el del interruptor y el de ConfirmarAccion, y después tres corridas más en verde.",
+  },
+  {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],
     title: "Marco de la aplicación y navegación",
     desc: "Layout, navegación con los módulos del MVP, los de fase 2 ocultos tras una bandera, tema claro y oscuro, dirección visual minimalista. Cada módulo con su ruta.",
@@ -441,9 +449,9 @@ export const STORIES: readonly Story[] = [
     id: "VEN-15", module: "VEN", owner: "rasheed", size: "M", sprint: 4, deps: ["VEN-10"],
     title: "Entregabilidad y cumplimiento",
     desc: "Pie de baja con página pública, cabecera List-Unsubscribe de un clic, rebotes asíncronos, calentamiento progresivo por cuenta, baja respetada en todos los canales, alertas diarias por correo.",
-    done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud.",
-    status: "bloqueada",
-    note: "24 de septiembre, ronda 2. Hecho y probado en pglite: token de baja opaco (32 bytes al azar, sin secreto; el sha256 manda y es la misma forma que el despachador de VEN-10), página /baja/<token> con la dirección enmascarada y quién escribe (public_optout_preview, 0038 §5) y POST de un clic; pie obligatorio y List-Unsubscribe; calentamiento con una sola regla (warmupDailyLimit/warmupCurve); rebotes duros solo con lo que dice el servidor; alertas con rebotes duros de lo enviado y toques debidos, en el idioma del espacio y un resumen por espacio; /ventas/politica con «Salud de hoy»; demo:enlace-baja para probar la baja a mano. Con VEN-10 r4 el despachador ya usa el token, el pie y List-Unsubscribe de aquí, y outbound.bounces lee el Gmail de cada cuenta con el GmailChannel del motor. Solo la bloquea la integración: aplicar 0050_entregabilidad en Supabase (no está aplicada).",
+    done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud. Cambio del criterio (supuestos declarados, docs/ventas-outreach.md §8, decisiones 6 y 7; Rasheed puede revertirlos): el clic da de baja con quien envió, en todos sus canales, y nunca en toda la plataforma; el enlace es un token opaco atado al contacto y al workspace en la base.",
+    status: "hecho",
+    note: "Probado en pglite de punta a punta: baja por enlace (ni el remitente sin sesión ni dos registros nuevos suprimen a nadie para los demás), rebote de fixture que marca y cancela, y alertas una vez por tipo y día con resumen en Cco. Al integrar VEN-9, la lectura real de rebotes es una función (GmailSourceFor en gmailMailboxFor) y la prueba centinela lo exige. 0038 sin aplicar.",
   },
   {
     id: "VEN-16", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-10"],

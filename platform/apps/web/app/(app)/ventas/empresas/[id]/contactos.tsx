@@ -15,12 +15,13 @@ import { useVentasForm } from "../../_lib/use-ventas-form";
 import { Bloque } from "./bloque";
 
 /**
- * El motivo de la baja: el que escribió la persona, o, si se dio de baja
- * respondiendo a un toque, la frase de ese canal (la base guarda un
- * código, contact.opted_out_code, y aquí se traduce).
+ * El motivo de la baja: el que escribió la persona, o un código que se
+ * traduce aquí: el de opted_out_reason que deja la baja por enlace
+ * ('unsubscribe_link', VEN-15), o, si se dio de baja respondiendo a un
+ * toque, el de contact.opted_out_code (reply_optout:<canal>, VEN-9).
  */
 function optOutReason(c: Pick<ContactRow, "optedOutReason" | "optedOutByReply">): string | null {
-  if (c.optedOutReason) return c.optedOutReason;
+  if (c.optedOutReason) return MESSAGES.contacto.optedOutReasons[c.optedOutReason] ?? c.optedOutReason;
   return c.optedOutByReply ? MESSAGES.contacto.optedOutByReply[c.optedOutByReply] : null;
 }
 

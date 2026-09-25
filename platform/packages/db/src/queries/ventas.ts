@@ -820,14 +820,28 @@ export async function listOwnerOptions(tx: WorkspaceTx): Promise<OwnerOption[]> 
  */
 export async function listContacts(tx: WorkspaceTx, companyId: string): Promise<ContactRow[]> {
   if (!isUuid(companyId)) return [];
+  // Una ficha compartida (fuente pública, sin dueño) no lleva las marcas
+  // de UN workspace (0038 §2 y §8, VEN-15 r3): su rebote verificado y su
+  // baja por enlace viven en outbound_bounce y outbound_workspace_optout,
+  // con la RLS de este workspace. Aquí se suman para que la ficha diga
+  // lo mismo que la regla que frena el envío.
   const { rows } = await tx.query<ContactRowSql>(
-    `SELECT id, company_id, full_name, role_title, email::text AS email, phone, linkedin_url,
-            instagram_handle, source, source_url, opted_out, opted_out_at, opted_out_reason,
-            opted_out_code, bounced, email_invalid_reason, email_invalid_at, created_at,
-            coalesce(owner_workspace_id = current_workspace_id(), false) AS is_own
-     FROM contact
-     WHERE company_id = $1
-     ORDER BY opted_out ASC, full_name ASC NULLS LAST, created_at ASC`,
+    `SELECT c.id, c.company_id, c.full_name, c.role_title, c.email::text AS email, c.phone, c.linkedin_url,
+            c.instagram_handle, c.source, c.source_url,
+            (c.opted_out OR wo.email IS NOT NULL) AS opted_out,
+            coalesce(c.opted_out_at, wo.created_at) AS opted_out_at, c.opted_out_reason, c.opted_out_code,
+            (c.bounced OR b.detected_at IS NOT NULL) AS bounced,
+            coalesce(c.email_invalid_reason, b.reason) AS email_invalid_reason,
+            coalesce(c.email_invalid_at, b.detected_at) AS email_invalid_at, c.created_at,
+            coalesce(c.owner_workspace_id = current_workspace_id(), false) AS is_own
+     FROM contact c
+     LEFT JOIN outbound_workspace_optout wo ON wo.workspace_id = current_workspace_id() AND wo.email = c.email
+     LEFT JOIN LATERAL (
+       SELECT x.reason, x.detected_at FROM outbound_bounce x
+        WHERE x.workspace_id = current_workspace_id() AND x.kind = 'hard' AND x.verified AND x.recipient_address = c.email
+        ORDER BY x.detected_at DESC LIMIT 1) b ON true
+     WHERE c.company_id = $1
+     ORDER BY (c.opted_out OR wo.email IS NOT NULL) ASC, c.full_name ASC NULLS LAST, c.created_at ASC`,
     [companyId],
   );
   return rows.map(toContactRow);

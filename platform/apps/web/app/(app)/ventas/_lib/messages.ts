@@ -26,6 +26,13 @@ export const MESSAGES = {
     metaTitle: "Ventas",
     /** El enlace a /ventas/politica (VEN-15). */
     politica: "Política de envío",
+    /**
+     * Junto al enlace, si hoy hay avisos urgentes del outreach (una cuenta
+     * caída, los rebotes disparados): «1 urgente», «2 urgentes». `n` ya
+     * formateado; `cuantos` es la cifra cruda para el plural.
+     */
+    politicaUrgentes: (n: string, cuantos: number) =>
+      new Intl.PluralRules("es").select(cuantos) === "one" ? `${n} urgente` : `${n} urgentes`,
   },
 
   tabs: {
@@ -331,6 +338,14 @@ export const MESSAGES = {
     sourceHelp:
       "Es obligatorio. Sin procedencia no se guarda: es lo que nos deja escribirle sin romper la ley ni tu reputación.",
     optedOut: "Pidió la baja",
+    /**
+     * Los motivos que guarda la base como código (contact.opted_out_reason,
+     * VEN-15 r4): se traducen aquí. Lo que no es un código es el texto que
+     * escribió quien registró la baja a mano, y se enseña tal cual.
+     */
+    optedOutReasons: {
+      unsubscribe_link: "Pidió la baja desde el enlace de un correo.",
+    } as Readonly<Record<string, string>>,
     optedOutHelp: "No se le escribe por ningún canal. No se puede deshacer.",
     /** El motivo de una baja que llegó respondiendo a un toque (contact.opted_out_code). */
     optedOutByReply: {

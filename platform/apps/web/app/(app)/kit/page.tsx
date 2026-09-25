@@ -17,6 +17,7 @@ import { ChartCard } from "@/components/ui/chart-card";
 import { brandFollowers, CASH, followersByNetwork, weeklyViews } from "./data";
 import { FormDemo, FormDisabledDemo } from "./form-demo";
 import { Section, Variant } from "./section";
+import { ConfirmToggleDemo } from "./confirm-toggle-demo";
 import { ArrowRight } from "lucide-react";
 
 export const metadata: Metadata = { title: "Kit de interfaz" };
@@ -27,6 +28,7 @@ const SECTIONS = [
   ["platform-pill", "PlatformPill"],
   ["form", "Formulario"],
   ["segmented", "Segmented"],
+  ["confirm-inline", "ConfirmInline"],
   ["empty-state", "EmptyState"],
   ["data-as-of", "DataAsOf"],
   ["kpi", "Kpi / KpiRow"],
@@ -149,6 +151,9 @@ export default function Page() {
         </Variant>
         <Variant label="Principal, acotada en una cabecera (openWidth), con una consecuencia larga">
           <ConfirmDemo variant="primary" openWidth="w-full sm:w-80" />
+        </Variant>
+        <Variant label="Dos acciones en el mismo sitio, con una key por estado">
+          <ConfirmToggleDemo />
         </Variant>
       </Section>
 

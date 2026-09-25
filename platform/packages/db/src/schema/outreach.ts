@@ -290,6 +290,8 @@ export const outreachChannelAccount = pgTable('outreach_channel_account', {
   providerWebhookSecretFp: text('provider_webhook_secret_fp'),
   /** El cursor de los lotes del keepalive (0042). */
   keepaliveCheckedAt: timestamptz('keepalive_checked_at'),
+  /** Hasta cuándo se leyeron los avisos de rebote de su buzón (0038 §6). Solo la escribe el worker. */
+  bouncesReadAt: timestamptz('bounces_read_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -492,6 +494,9 @@ export const outboundOptoutLink = pgTable('outbound_optout_link', {
  * originaron (0037 §4.6): la baja global es atribuible y reversible. La
  * escribe public_optout; la web no la ve. Bitácora.
  */
+/** El alcance de un clic de baja (0038 §8). */
+export const OPTOUT_SCOPES = ['workspace', 'global'] as const;
+
 export const outboundOptoutEvent = pgTable('outbound_optout_event', {
   id: uuidPk(),
   tokenHash: text('token_hash').notNull(),
@@ -503,6 +508,8 @@ export const outboundOptoutEvent = pgTable('outbound_optout_event', {
   sentAt: timestamptz('sent_at'),
   alreadyOptedOut: boolean('already_opted_out').notNull(),
   createdAt: createdAt(),
+  /** workspace: la baja valió solo para quien envió; global: pasó a contact_suppression (0038 §8). */
+  scope: text('scope', { enum: OPTOUT_SCOPES }).default('global').notNull(),
 });
 
 /** Los tipos de rebote (0038): la dirección no existe, algo pasajero, o un rechazo por política del receptor. */
@@ -522,6 +529,8 @@ export const outboundBounce = pgTable('outbound_bounce', {
   touchId: uuid('touch_id').references(() => outboundTouch.id, { onDelete: 'set null' }),
   contactId: uuid('contact_id').references(() => contact.id, { onDelete: 'set null' }),
   recipientAddress: citext('recipient_address'),
+  /** El aviso se casó con un correo que este workspace envió (su Message-ID): solo entonces tiene efectos. */
+  verified: boolean('verified').default(false).notNull(),
   kind: text('kind', { enum: BOUNCE_KINDS }).notNull(),
   statusCode: text('status_code'),
   smtpCode: integer('smtp_code'),
@@ -529,3 +538,20 @@ export const outboundBounce = pgTable('outbound_bounce', {
   receivedAt: timestamptz('received_at'),
   detectedAt: timestamptz('detected_at').defaultNow().notNull(),
 });
+
+/**
+ * A quién no le vuelve a escribir un workspace (0038 §8, VEN-15 r3): la
+ * dirección pulsó el enlace de baja de un correo suyo. La escribe solo
+ * public_optout; con dos workspaces para la misma dirección, la baja pasa
+ * a contact_suppression (toda la plataforma).
+ */
+export const outboundWorkspaceOptout = pgTable(
+  'outbound_workspace_optout',
+  {
+    workspaceId: workspaceId(),
+    email: citext('email').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.email] })],
+);

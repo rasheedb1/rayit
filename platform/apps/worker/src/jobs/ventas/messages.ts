@@ -1,13 +1,9 @@
 /**
  * Textos de los jobs de Ventas que salen del worker hacia una persona:
- * las alertas diarias del outreach (VEN-15), en la campana y en el
- * correo de resumen. Los avisos del motor de cadencias (un mensaje que
- * no salió, uno retenido, una respuesta, una cuenta caída) los escribe
- * @mc/db en la misma transacción que su causa, con los textos de
- * @mc/core/outreach/messages, que es el messages.ts del
- * motor: lo leen la base, el worker y la web. En el idioma del workspace (workspace.locale), como
- * el pie del correo del outreach (footerTextsFor de @mc/core): inglés si
- * el locale es inglés, si no español.
+ * hoy, las alertas del outreach (VEN-15): la notification del día, el
+ * correo de resumen y, para las urgentes, el correo inmediato (r5). En el
+ * idioma del workspace (workspace.locale), con la misma regla que el pie
+ * del correo del outreach (outreachLanguage de @mc/core/outreach/deliverability-messages).
  *
  * notification.title_es y body_es guardan la frase ya en ese idioma, como
  * hace Cotizar (packages/db/src/queries/cotizar/cotizacion.ts,
@@ -17,7 +13,8 @@
  * Las `{n}` se rellenan con cifras ya formateadas con Intl en el locale
  * del workspace.
  */
-import type { OutreachAlertKind } from '@mc/core/outreach/deliverability';
+import type { OutreachAlertKind } from '@mc/core/outreach/alerts';
+import { outreachLanguage, type OutreachLanguage } from '@mc/core/outreach/deliverability-messages';
 import { OUTREACH_URLS } from '@mc/core/outreach/messages';
 
 /**
@@ -29,6 +26,7 @@ import { OUTREACH_URLS } from '@mc/core/outreach/messages';
  */
 export const SALUD_URL = '/ventas/politica#salud';
 export const PRESUPUESTO_URL = '/ventas/politica#presupuesto';
+/** /ventas/canales (VEN-9, integrada en la fase 4): ahí se reconecta una cuenta caída. */
 export const CANALES_URL = OUTREACH_URLS.channels;
 
 export const ALERTAS_URL: Record<OutreachAlertKind, string> = {
@@ -37,17 +35,54 @@ export const ALERTAS_URL: Record<OutreachAlertKind, string> = {
   queue_stuck: SALUD_URL,
   account_down: CANALES_URL,
   llm_budget: PRESUPUESTO_URL,
+  bounces_unread: SALUD_URL,
 };
 
+/**
+ * Una frase que cambia con una cifra («1 mensaje lleva…», «3 mensajes
+ * llevan…»). La forma la elige Intl.PluralRules del locale del workspace
+ * con la cifra CRUDA de `by` (una de las de la alerta); las `{…}` se
+ * rellenan después con las cifras ya formateadas. Las categorías que no
+ * sean 'one' (few, many… en otros idiomas) usan `other`.
+ */
+export interface Plural {
+  by: string;
+  one: string;
+  other: string;
+}
+
+/** Un texto fijo o uno con plural. */
+export type Plantilla = string | Plural;
+
 export interface AlertTexts {
-  alerts: Record<OutreachAlertKind, { title: string; body: string }>;
+  alerts: Record<OutreachAlertKind, { title: Plantilla; body: Plantilla }>;
+  /**
+   * Cómo se nombra una cuenta caída en {accounts}: «LinkedIn: Laura ·
+   * Cocina fácil». Si no se sabe cuáles son (una salud de fixture), el
+   * número: una o varias.
+   */
+  accounts: {
+    channel: Record<'email' | 'linkedin' | 'instagram_dm' | 'whatsapp', string>;
+    /** Sin nombres: «una cuenta de canal» / «{n} cuentas de canal», por accountsDown. */
+    unnamed: Plural;
+  };
   email: {
-    subject: string;
-    subjectOne: string;
+    /** Por `n`, el número de alertas del resumen. */
+    subject: Plural;
     intro: string;
     /** El enlace de cada alerta, debajo de su texto. */
     link: string;
+    /** Sin APP_URL no hay enlaces: dónde verlo, en una línea. */
+    whereToSee: string;
     outro: string;
+    /**
+     * El correo inmediato de una alerta urgente (URGENT_ALERT_KINDS, r5):
+     * aparece después del resumen del día y no espera a mañana. Por `n`,
+     * el número de alertas.
+     */
+    urgentSubject: Plural;
+    urgentIntro: string;
+    urgentOutro: string;
   };
 }
 
@@ -55,31 +90,77 @@ export const ALERT_TEXTS_ES: AlertTexts = {
   alerts: {
     bounce_rate: {
       title: 'Rebotan demasiados correos: {rate}',
-      body: '{bounces} de {attempts} correos enviados en las últimas 24 horas rebotaron porque la dirección no existe. Revisa las direcciones antes de seguir: Gmail castiga a quien rebota mucho.',
+      body: {
+        by: 'bounces',
+        one: '{bounces} de {attempts} correos enviados en las últimas 24 horas rebotó porque la dirección no existe. Revisa las direcciones antes de seguir: Gmail castiga a quien rebota mucho.',
+        other:
+          '{bounces} de {attempts} correos enviados en las últimas 24 horas rebotaron porque la dirección no existe. Revisa las direcciones antes de seguir: Gmail castiga a quien rebota mucho.',
+      },
     },
     no_sends: {
       title: 'El outreach no envió nada ayer',
-      body: 'Había {dueToSend} mensajes por salir y no salió ninguno en 24 horas. Revisa los canales y la cola.',
+      body: {
+        by: 'dueToSend',
+        one: 'Había {dueToSend} mensaje por salir y no salió en 24 horas. Revisa los canales y la cola.',
+        other: 'Había {dueToSend} mensajes por salir y no salió ninguno en 24 horas. Revisa los canales y la cola.',
+      },
     },
     queue_stuck: {
-      title: 'Hay mensajes atascados en la cola',
-      body: '{stuck} mensajes llevan más de cinco minutos enviándose. Si sigue así, revisa el canal.',
+      title: { by: 'stuck', one: 'Hay un mensaje atascado en la cola', other: 'Hay mensajes atascados en la cola' },
+      body: {
+        by: 'stuck',
+        one: '{stuck} mensaje lleva más de cinco minutos enviándose. Si sigue así, revisa el canal.',
+        other: '{stuck} mensajes llevan más de cinco minutos enviándose. Si sigue así, revisa el canal.',
+      },
     },
     account_down: {
-      title: 'Una cuenta de envío necesita atención',
-      body: '{accountsDown} cuentas de canal están caídas o piden reconectar. Mientras tanto no sale nada por ellas.',
+      title: {
+        by: 'accountsDown',
+        one: 'Una cuenta de envío necesita atención',
+        other: 'Hay cuentas de envío que necesitan atención',
+      },
+      body: {
+        by: 'accountsDown',
+        one: 'No sale nada por {accounts} hasta que se reconecte: lo de ese canal espera en la cola.',
+        other:
+          'No sale nada por {accounts} hasta que se reconecten: lo de esos canales espera en la cola.',
+      },
     },
     llm_budget: {
       title: 'Se agotó el presupuesto diario de redacción',
       body: 'Se gastaron {spentToday} de {dailyCap} hoy. Los mensajes nuevos esperan a mañana; lo aprobado sigue saliendo.',
     },
+    bounces_unread: {
+      title: 'No estamos leyendo los rebotes de tu Gmail',
+      body: {
+        by: 'mailboxes',
+        one: 'Los avisos de rebote de {mailboxes} cuenta de Gmail no se están leyendo. Mientras tanto, «ningún rebote» no quiere decir que todo llegó: revisa los rebotes en tu buzón.',
+        other:
+          'Los avisos de rebote de {mailboxes} cuentas de Gmail no se están leyendo. Mientras tanto, «ningún rebote» no quiere decir que todo llegó: revisa los rebotes en tus buzones.',
+      },
+    },
+  },
+  accounts: {
+    channel: { email: 'Gmail', linkedin: 'LinkedIn', instagram_dm: 'Instagram', whatsapp: 'WhatsApp' },
+    unnamed: { by: 'accountsDown', one: 'una cuenta de canal', other: '{accountsDown} cuentas de canal' },
   },
   email: {
-    subject: 'On Cue · {n} alertas del outreach de {workspace}',
-    subjectOne: 'On Cue · Una alerta del outreach de {workspace}',
+    subject: {
+      by: 'n',
+      one: 'On Cue · Una alerta del outreach de {workspace}',
+      other: 'On Cue · {n} alertas del outreach de {workspace}',
+    },
     intro: 'Esto es lo que vimos en el outreach de {workspace}:',
     link: 'Revísalo: {url}',
-    outro: 'Te escribimos porque eres dueño de este espacio en On Cue.',
+    whereToSee: 'Lo ves en On Cue, en Ventas → Política de envío.',
+    outro: 'Te escribimos una vez al día porque eres dueño de este espacio en On Cue. Si más tarde cae una cuenta o se disparan los rebotes, te escribimos en el momento; lo demás va en el resumen de mañana.',
+    urgentSubject: {
+      by: 'n',
+      one: 'On Cue · Alerta urgente del outreach de {workspace}',
+      other: 'On Cue · {n} alertas urgentes del outreach de {workspace}',
+    },
+    urgentIntro: 'Esto acaba de pasar en el outreach de {workspace} y no espera al resumen de mañana:',
+    urgentOutro: 'Te escribimos porque eres dueño de este espacio en On Cue. Solo las alertas urgentes salen así; lo demás va en el resumen diario.',
   },
 };
 
@@ -91,31 +172,96 @@ export const ALERT_TEXTS_EN: AlertTexts = {
     },
     no_sends: {
       title: 'Outreach sent nothing yesterday',
-      body: '{dueToSend} messages were due and none went out in 24 hours. Check your channels and the queue.',
+      body: {
+        by: 'dueToSend',
+        one: "{dueToSend} message was due and it didn't go out in 24 hours. Check your channels and the queue.",
+        other: '{dueToSend} messages were due and none went out in 24 hours. Check your channels and the queue.',
+      },
     },
     queue_stuck: {
-      title: 'Messages are stuck in the queue',
-      body: '{stuck} messages have been sending for more than five minutes. If it keeps up, check the channel.',
+      title: { by: 'stuck', one: 'A message is stuck in the queue', other: 'Messages are stuck in the queue' },
+      body: {
+        by: 'stuck',
+        one: '{stuck} message has been sending for more than five minutes. If it keeps up, check the channel.',
+        other: '{stuck} messages have been sending for more than five minutes. If it keeps up, check the channel.',
+      },
     },
     account_down: {
-      title: 'A sending account needs attention',
-      body: '{accountsDown} channel accounts are down or need to reconnect. Nothing goes out through them until then.',
+      title: { by: 'accountsDown', one: 'A sending account needs attention', other: 'Some sending accounts need attention' },
+      body: {
+        by: 'accountsDown',
+        one: 'Nothing goes out through {accounts} until it reconnects: messages for that channel wait in the queue.',
+        other:
+          'Nothing goes out through {accounts} until they reconnect: messages for those channels wait in the queue.',
+      },
     },
     llm_budget: {
       title: 'The daily writing budget is used up',
       body: '{spentToday} of {dailyCap} spent today. New messages wait until tomorrow; approved ones keep going out.',
     },
+    bounces_unread: {
+      title: "We aren't reading your Gmail bounces",
+      body: {
+        by: 'mailboxes',
+        one: "Bounce notices for {mailboxes} Gmail account aren't being read. Until they are, “no bounces” doesn't mean everything arrived: check bounces in your inbox.",
+        other:
+          "Bounce notices for {mailboxes} Gmail accounts aren't being read. Until they are, “no bounces” doesn't mean everything arrived: check bounces in your inboxes.",
+      },
+    },
+  },
+  accounts: {
+    channel: { email: 'Gmail', linkedin: 'LinkedIn', instagram_dm: 'Instagram', whatsapp: 'WhatsApp' },
+    unnamed: { by: 'accountsDown', one: 'one channel account', other: '{accountsDown} channel accounts' },
   },
   email: {
-    subject: 'On Cue · {n} outreach alerts for {workspace}',
-    subjectOne: 'On Cue · One outreach alert for {workspace}',
+    subject: {
+      by: 'n',
+      one: 'On Cue · One outreach alert for {workspace}',
+      other: 'On Cue · {n} outreach alerts for {workspace}',
+    },
     intro: "Here's what we saw in {workspace}'s outreach:",
     link: 'Review it: {url}',
-    outro: "You're receiving this because you own this workspace on On Cue.",
+    whereToSee: 'You can see it in On Cue, under Sales → Sending policy.',
+    outro: "We write once a day because you own this workspace on On Cue. If an account goes down or bounces spike later on, we write right away; everything else goes in tomorrow's summary.",
+    urgentSubject: {
+      by: 'n',
+      one: 'On Cue · Urgent outreach alert for {workspace}',
+      other: 'On Cue · {n} urgent outreach alerts for {workspace}',
+    },
+    urgentIntro: "This just happened in {workspace}'s outreach and can't wait for tomorrow's summary:",
+    urgentOutro: 'We write because you own this workspace on On Cue. Only urgent alerts go out like this; everything else goes in the daily summary.',
   },
 };
 
-/** Los textos para un locale BCP 47 ('es-CO', 'en-US'…): inglés si el locale es inglés, si no español. */
+/**
+ * Rellena una plantilla: elige la forma con Intl.PluralRules(locale) y la
+ * cifra cruda de `crudos[by]`, y cambia cada `{clave}` por su valor ya
+ * formateado. Una `{clave}` sin valor se queda como está (y una prueba lo
+ * atrapa: ningún texto guardado lleva «{»).
+ */
+export function fillTemplate(
+  plantilla: Plantilla,
+  valores: Readonly<Record<string, string>>,
+  crudos: Readonly<Record<string, number>>,
+  locale: string,
+): string {
+  const texto =
+    typeof plantilla === 'string'
+      ? plantilla
+      : new Intl.PluralRules(locale).select(crudos[plantilla.by] ?? 0) === 'one'
+        ? plantilla.one
+        : plantilla.other;
+  return texto.replace(/\{(\w+)\}/g, (_, k: string) => valores[k] ?? `{${k}}`);
+}
+
+/** Un juego de textos por idioma del outreach: sumar uno a OUTREACH_LANGUAGES obliga a traducirlo aquí. */
+export const ALERT_TEXTS: Readonly<Record<OutreachLanguage, AlertTexts>> = { es: ALERT_TEXTS_ES, en: ALERT_TEXTS_EN };
+
+/**
+ * Los textos para un locale BCP 47 ('es-CO', 'en-US'…), con la regla del
+ * pie del correo (outreachLanguage, @mc/core): idioma base por
+ * Intl.Locale y español de respaldo.
+ */
 export function alertTextsFor(locale: string): AlertTexts {
-  return /^en\b/i.test(locale) ? ALERT_TEXTS_EN : ALERT_TEXTS_ES;
+  return ALERT_TEXTS[outreachLanguage(locale)];
 }

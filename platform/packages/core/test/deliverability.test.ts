@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import {
-  BOUNCE_MIN_ATTEMPTS, buildEmailFooter, complianceReadiness, createOptoutToken, detectBounce, evaluateOutreachAlerts,
+  BOUNCE_MIN_ATTEMPTS, bounceRateStatus, buildEmailFooter, complianceReadiness, createOptoutToken, detectBounce, evaluateOutreachAlerts,
   footerTextsFor, listUnsubscribeHeaders, looksLikeOptoutToken, maskEmailAddress, oneClickUnsubscribeUrl, optoutTokenHash,
-  optoutUrl, warmupCurve, warmupDailyLimit, warmupDay, WARMUP_START_LIMIT, type AlertInput, type HealthForAlerts,
+  channelAccountLabel, optoutUrl, URGENT_ALERT_KINDS, warmupCurve, warmupDailyLimit, warmupSeries, warmupDay, WARMUP_START_LIMIT, type AlertInput, type HealthForAlerts,
 } from '../src/outreach/deliverability.ts';
 
 // ------------------------------------------------------------------ token
@@ -151,6 +151,17 @@ test('la curva enseña el primer día, el primero que sube, uno intermedio y el 
   assert.deepEqual(warmupCurve(100, 10_000), [], 'un valor fuera de rango no se pinta');
 });
 
+test('la rampa del gráfico: un punto por día hasta el tope, y los días de warmupCurve están en ella', () => {
+  const serie = warmupSeries(80, 14);
+  assert.deepEqual(serie.map((p) => p.day), Array.from({ length: 14 }, (_, i) => i + 1));
+  assert.deepEqual(serie.slice(0, 7).map((p) => p.limit), Array(7).fill(WARMUP_START_LIMIT), 'la primera semana, 20');
+  assert.equal(serie.at(-1)?.limit, 80);
+  for (const p of warmupCurve(80, 14)) assert.equal(serie[p.day - 1]?.limit, p.limit);
+  for (let i = 1; i < serie.length; i++) assert.ok(serie[i]!.limit >= serie[i - 1]!.limit, 'nunca baja');
+  assert.deepEqual(warmupSeries(WARMUP_START_LIMIT, 14), []);
+  assert.deepEqual(warmupSeries(100, 0), []);
+});
+
 test('el día del calentamiento se cuenta en la zona del workspace', () => {
   // Conectada el 22 a las 23:00 en Bogotá (04:00 UTC del 23).
   const conectada = new Date('2026-09-23T04:00:00Z');
@@ -278,6 +289,83 @@ test('«no existe» cuenta cuando lo dice el servidor sobre la dirección', () =
   assert.match(r?.reason ?? '', /no existe/);
 });
 
+test('un DSN que no viene de mailer-daemon ni de postmaster no es un aviso (r3)', () => {
+  // Cualquiera puede escribir «Status: 5.1.1» en un correo normal: sin el
+  // remitente de rebote, un aviso falso marcaba como inválida una
+  // dirección que funciona (y, con un contacto global, en otro workspace).
+  const falso = detectBounce({
+    from: 'Yo <yo@a.test>',
+    subject: 'Hola',
+    body: 'Final-Recipient: rfc822; valentina@marca.test\nStatus: 5.1.1\nDiagnostic-Code: smtp; 550 5.1.1 User unknown',
+  });
+  assert.equal(falso, null);
+});
+
+test('el aviso de Gmail sin cabeceras DSN: el destinatario sale entero de la prosa, en inglés y en español', () => {
+  const ingles = detectBounce({
+    from: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
+    subject: 'Delivery Status Notification (Failure)',
+    body:
+      "** Address not found **\n\nYour message wasn't delivered to nadie@marca.co because the address couldn't be found.\n\n" +
+      'The response from the remote server was:\n550 5.1.1 The email account that you tried to reach does not exist.',
+  });
+  assert.equal(ingles?.recipient, 'nadie@marca.co', 'no se corta en el primer punto del dominio');
+  assert.equal(ingles?.kind, 'hard');
+  const espanol = detectBounce({
+    from: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
+    subject: 'Notificación de estado de la entrega (error)',
+    body:
+      'No se ha encontrado la dirección\n\nTu mensaje no se ha entregado a compras@tienda.com.co porque no se ha encontrado la dirección.\n\n' +
+      'La respuesta del servidor remoto fue:\n550 5.1.1 The email account that you tried to reach does not exist.',
+  });
+  assert.equal(espanol?.recipient, 'compras@tienda.com.co');
+  assert.equal(espanol?.kind, 'hard');
+});
+
+test('un dominio que no existe es un rebote duro, con o sin código', () => {
+  const gmail = detectBounce({
+    from: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
+    subject: 'Delivery Status Notification (Failure)',
+    body: [
+      '** Address not found **',
+      '',
+      "Your message wasn't delivered to x@dominio-que-no-existe.co because the domain dominio-que-no-existe.co couldn't be found. " +
+        'Check for typos or unnecessary spaces and try again.',
+      '',
+      "The response was:\nDNS Error: DNS type 'mx' lookup of dominio-que-no-existe.co responded with code NXDOMAIN",
+    ].join('\n'),
+  });
+  assert.equal(gmail?.kind, 'hard');
+  assert.equal(gmail?.statusCode, null);
+  assert.equal(gmail?.recipient, 'x@dominio-que-no-existe.co');
+  assert.match(gmail?.reason ?? '', /couldn't be found|NXDOMAIN/);
+
+  const postfix = detectBounce({
+    from: 'MAILER-DAEMON@mx.ejemplo.com (Mail Delivery System)',
+    subject: 'Undelivered Mail Returned to Sender',
+    body: '<ana@nada.test>: Host or domain name not found. Name service error for name=nada.test type=MX: Host not found',
+  });
+  assert.equal(postfix?.kind, 'hard');
+  for (const frase of ['unrouteable address', 'no MX record for domain', 'Domain not found']) {
+    const r = detectBounce({ from: 'mailer-daemon@mx.test', subject: 'Mail delivery failed', body: `ana@nada.test\n${frase}` });
+    assert.equal(r?.kind, 'hard', frase);
+  }
+  const espanol = detectBounce({
+    from: 'mailer-daemon@googlemail.com',
+    subject: 'Mensaje no entregado',
+    body: 'Tu mensaje no se ha entregado a hola@nada.co porque no se ha encontrado el dominio nada.co.',
+  });
+  assert.equal(espanol?.kind, 'hard');
+  assert.equal(espanol?.recipient, 'hola@nada.co');
+  // Un fallo pasajero del DNS (SERVFAIL) no es un dominio inexistente.
+  const pasajero = detectBounce({
+    from: 'mailer-daemon@googlemail.com',
+    subject: 'Delivery Status Notification (Failure)',
+    body: "DNS Error: DNS type 'mx' lookup of marca.co responded with code SERVFAIL",
+  });
+  assert.equal(pasajero?.kind, 'soft');
+});
+
 // ------------------------------------------------------------------ alertas
 
 function salud(over: Partial<HealthForAlerts> = {}): HealthForAlerts {
@@ -297,6 +385,26 @@ function entrada(over: Partial<AlertInput> = {}): AlertInput {
 
 test('un workspace sano no alerta', () => {
   assert.deepEqual(evaluateOutreachAlerts(entrada({ hardBounces: 2, dueToSend: 5 })), []);
+});
+
+test('un Gmail cuyo buzón de rebotes nadie lee avisa (r5); sin el dato, como 0', () => {
+  assert.deepEqual(evaluateOutreachAlerts(entrada({ unreadMailboxes: 0 })), []);
+  assert.deepEqual(evaluateOutreachAlerts(entrada()), [], 'un fixture de antes, sin el campo');
+  assert.deepEqual(evaluateOutreachAlerts(entrada({ unreadMailboxes: 2 })), [
+    { kind: 'bounces_unread', severity: 'warning', values: { mailboxes: 2 } },
+  ]);
+});
+
+test('lo urgente, que no espera al resumen de mañana, es lo crítico: la cuenta caída y los rebotes (r5)', () => {
+  assert.deepEqual([...URGENT_ALERT_KINDS].sort(), ['account_down', 'bounce_rate']);
+  const todas = evaluateOutreachAlerts(
+    entrada({ emailsSent: 20, hardBounces: 5, dueToSend: 3, unreadMailboxes: 1,
+      health: salud({ accountsDown: 1, queue: { stuck: 1 }, window: { sent: 0 }, llm: { spentToday: 6, dailyCap: 5 } }) }),
+  );
+  assert.deepEqual(
+    todas.filter((a) => a.severity === 'critical').map((a) => a.kind).sort(),
+    [...URGENT_ALERT_KINDS].sort(),
+  );
 });
 
 test('rebotes duros sobre el 5 % solo con diez envíos o más', () => {
@@ -343,4 +451,27 @@ test('cola atascada, cuenta caída y presupuesto agotado, cada una con su tipo',
     ['account_down', 'critical'],
     ['llm_budget', 'warning'],
   ]);
+});
+
+test('el nombre de una cuenta no repite el canal si ya lo lleva', () => {
+  assert.equal(channelAccountLabel('LinkedIn', 'Laura · Cocina fácil'), 'LinkedIn: Laura · Cocina fácil');
+  assert.equal(channelAccountLabel('LinkedIn', 'Laura · Cocina fácil (LinkedIn)'), 'Laura · Cocina fácil (LinkedIn)');
+  assert.equal(channelAccountLabel('Gmail', 'laura@gmail.com'), 'Gmail: laura@gmail.com');
+  assert.equal(channelAccountLabel('Instagram', ''), 'Instagram');
+});
+
+test('bounceRateStatus: la misma regla que el aviso, para que «Salud de hoy» diga por qué 1 de 4 no avisa', () => {
+  assert.equal(bounceRateStatus({ emailsSent: 0, hardBounces: 0 }), 'no_data');
+  assert.equal(bounceRateStatus({ emailsSent: 4, hardBounces: 1 }), 'too_few', 'un 25 %, pero con 4 envíos no se avisa');
+  assert.equal(bounceRateStatus({ emailsSent: BOUNCE_MIN_ATTEMPTS - 1, hardBounces: 9 }), 'too_few');
+  assert.equal(bounceRateStatus({ emailsSent: 20, hardBounces: 1 }), 'under', 'el 5 % exacto no es «sobre»');
+  assert.equal(bounceRateStatus({ emailsSent: 20, hardBounces: 2 }), 'over');
+  // Y coincide con evaluateOutreachAlerts en cada caso.
+  for (const [emailsSent, hardBounces] of [[4, 1], [9, 9], [10, 1], [20, 2], [40, 1], [10, 30]] as const) {
+    const avisa = evaluateOutreachAlerts({
+      health: { enabled: true, queue: { stuck: 0 }, window: { sent: emailsSent }, accountsDown: 0, llm: { spentToday: 0, dailyCap: 5 } },
+      emailsSent, hardBounces, dueToSend: 0,
+    }).some((a) => a.kind === 'bounce_rate');
+    assert.equal(bounceRateStatus({ emailsSent, hardBounces }) === 'over', avisa, `${hardBounces} de ${emailsSent}`);
+  }
 });

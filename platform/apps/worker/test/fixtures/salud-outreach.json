@@ -1,5 +1,25 @@
 {
-  "_comentario": "Entradas de evaluateOutreachAlerts por workspace, con la forma de outbound_health (0037) más las cifras de readAlertSignalCounts (@mc/db): correos enviados en la ventana, rebotes DUROS de esos correos y toques que tocaba enviar y no salieron. «enProblemas» tiene 3 rebotes duros en 20 enviados (15 %) y una cuenta caída; «sano» no tiene nada que avisar.",
+  "_comentario": "Entradas de evaluateOutreachAlerts por workspace, con la forma de outbound_health (0037) más las cifras de readAlertSignalCounts (@mc/db): correos enviados en la ventana, rebotes DUROS de esos correos y toques que tocaba enviar y no salieron. «enProblemas» tiene 3 rebotes duros en 20 enviados (15 %) y una cuenta caída; «sano» no tiene nada que avisar. «todoMal» (r4, r5) enciende los seis tipos a la vez: 1 mensaje atascado, cero envíos en la ventana con 7 toques debidos, una cuenta caída, el presupuesto de redacción gastado (5,20 de 5 USD), 3 rebotes duros en 20 correos y un Gmail cuyo buzón de rebotes nadie lee (unreadMailboxes). Sus cifras no cuadran entre sí a propósito (window.sent sale de outbound_health y emailsSent de readAlertSignalCounts): cada regla se prueba por su lado.",
+  "todoMal": {
+    "health": {
+      "enabled": true,
+      "queue": {
+        "stuck": 1
+      },
+      "window": {
+        "sent": 0
+      },
+      "accountsDown": 1,
+      "llm": {
+        "spentToday": 5.2,
+        "dailyCap": 5
+      }
+    },
+    "emailsSent": 20,
+    "hardBounces": 3,
+    "dueToSend": 7,
+    "unreadMailboxes": 1
+  },
   "enProblemas": {
     "health": {
       "enabled": true,
@@ -17,7 +37,8 @@
     },
     "emailsSent": 20,
     "hardBounces": 3,
-    "dueToSend": 6
+    "dueToSend": 6,
+    "unreadMailboxes": 0
   },
   "sano": {
     "health": {
@@ -36,6 +57,7 @@
     },
     "emailsSent": 30,
     "hardBounces": 1,
-    "dueToSend": 4
+    "dueToSend": 4,
+    "unreadMailboxes": 0
   }
 }

@@ -26,6 +26,7 @@
     "./queries/outreach": "./src/queries/outreach.ts",
     "./queries/canales": "./src/queries/canales.ts",
     "./queries/entregabilidad": "./src/queries/entregabilidad.ts",
+    "./demo-baja": "./src/demo-baja.ts",
     "./test/pglite": "./test/pglite.ts",
     "./test/membresia": "./test/membresia.ts"
   },

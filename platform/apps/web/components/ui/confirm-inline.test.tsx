@@ -24,7 +24,7 @@ describe("ConfirmInline", () => {
     const action = pintar();
     fireEvent.click(screen.getByRole("button", { name: "Marcar rechazada" }));
     const pregunta = await screen.findByText("¿Rechazar COT-2026-003?");
-    expect(pregunta).toHaveFocus();
+    await waitFor(() => expect(pregunta).toHaveFocus());
     const grupo = screen.getByRole("group", { name: "¿Rechazar COT-2026-003?" });
     expect(grupo).toHaveAccessibleDescription(CONSECUENCIA);
     expect(action).not.toHaveBeenCalled();
