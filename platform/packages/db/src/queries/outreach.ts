@@ -179,14 +179,19 @@ export async function disableOutreach(tx: SqlExecutor, reason: string, workspace
  * outbound_policy.postal_address lanza 23514
  * (outbound_policy_enabled_needs_address) y no toca nada.
  */
-export function enableOutreach(tx: WorkspaceTx, now?: Date): Promise<ReplanResult>;
-export function enableOutreach(tx: WorkerSql, workspaceId: string, now?: Date): Promise<ReplanResult>;
-export async function enableOutreach(tx: SqlExecutor, a?: string | Date, b?: Date): Promise<ReplanResult> {
-  const workspaceId = typeof a === 'string' ? a : undefined;
-  const now = (typeof a === 'string' ? b : a) ?? new Date();
-  const ws = workspaceOf('enable_outreach', tx, workspaceId);
+export interface EnableOutreachOptions {
+  /** El workspace: lo exige el worker (WorkerSql); la web no lo pasa, lo fija withWorkspace. */
+  workspaceId?: string;
+  /** El reloj del replan: lo vencido se replanifica desde aquí. Por defecto, ahora. */
+  now?: Date;
+}
+
+export function enableOutreach(tx: WorkspaceTx, opts?: { workspaceId?: never; now?: Date }): Promise<ReplanResult>;
+export function enableOutreach(tx: WorkerSql, opts: { workspaceId: string; now?: Date }): Promise<ReplanResult>;
+export async function enableOutreach(tx: SqlExecutor, opts: EnableOutreachOptions = {}): Promise<ReplanResult> {
+  const ws = workspaceOf('enable_outreach', tx, opts.workspaceId);
   await tx.query('SELECT enable_outreach($1::uuid)', [ws]);
-  return replanOutreach(tx, ws, now);
+  return replanOutreach(tx, ws, opts.now ?? new Date());
 }
 
 // ---------------------------------------------------------------------

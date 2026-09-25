@@ -386,7 +386,7 @@ test('apagar y volver a encender: lo cancelado vuelve a la cola y los pasos sale
   for (const dia of ['2026-09-24', '2026-09-25', '2026-09-28']) await runDispatch(motor, kit.deps(w, f, () => bogota(dia, '11:00')));
   assert.equal(f.email.sent.length, 1);
 
-  const plan = await motor.transaction((tx) => enableOutreach(tx, w.id, bogota('2026-09-28', '12:00')));
+  const plan = await motor.transaction((tx) => enableOutreach(tx, { workspaceId: w.id, now: bogota('2026-09-28', '12:00') }));
   assert.deepEqual(plan, { enrollments: 1, scheduled: 2, held: 0 });
   assert.equal(await kit.scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enr.get(c)]), 'active');
   assert.deepEqual((await kit.touches(c)).map((t) => t.status), ['sent', 'scheduled', 'scheduled']);
@@ -413,7 +413,7 @@ test('encender devuelve a revisión lo que esperaba revisión, con el texto que 
   assert.deepEqual((await kit.touches(c)).map((t) => t.status), ['canceled', 'canceled', 'canceled']);
 
   // Encendido el mismo día, antes de su hora: cada uno conserva la suya.
-  const plan = await motor.transaction((tx) => enableOutreach(tx, w.id, bogota('2026-09-23', '08:00')));
+  const plan = await motor.transaction((tx) => enableOutreach(tx, { workspaceId: w.id, now: bogota('2026-09-23', '08:00') }));
   assert.deepEqual(plan, { enrollments: 1, scheduled: 0, held: 3 });
   const despues = await kit.touches(c);
   assert.deepEqual(despues.map((t) => [t.status, t.held_reason]), [['held', 'needs_review'], ['held', 'needs_review'], ['held', 'needs_review']]);
@@ -427,7 +427,7 @@ test('encender no devuelve a la cola lo de una ficha que se dio de baja mientras
   await kit.enroll(w, bogota('2026-09-23', '07:00'));
   await motor.transaction((tx) => disableOutreach(tx, 'vacaciones', w.id));
   await db.raw.query(`UPDATE contact SET opted_out = true, opted_out_at = now() WHERE id = $1`, [c1]);
-  const plan = await motor.transaction((tx) => enableOutreach(tx, w.id, bogota('2026-09-24', '12:00')));
+  const plan = await motor.transaction((tx) => enableOutreach(tx, { workspaceId: w.id, now: bogota('2026-09-24', '12:00') }));
   assert.equal(plan.scheduled, 3, 'solo los de la otra ficha');
   assert.deepEqual((await kit.touches(c1)).map((t) => t.status), ['canceled', 'canceled', 'canceled']);
   assert.deepEqual((await kit.touches(c2)).map((t) => t.status), ['scheduled', 'scheduled', 'scheduled']);

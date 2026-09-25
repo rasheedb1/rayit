@@ -158,7 +158,7 @@ test('--preparar-demo deja la demo lista con el reloj de verdad, sin SQL a mano:
     const apagada = await pasada();
     assert.match(resumenDespacho(apagada), /^Despacho: 0 reclamados, 0 enviados/);
 
-    const plan = await motor.transaction((tx) => enableOutreach(tx, DEMO_WORKSPACE_ID, clock));
+    const plan = await motor.transaction((tx) => enableOutreach(tx, { workspaceId: DEMO_WORKSPACE_ID, now: clock }));
     assert.equal(plan.scheduled + plan.held, 0, 'preparar no canceló nada: no hay nada que devolver');
     const encendida = await pasada();
     assert.ok(encendida.sent.includes(prep.touchId), resumenDespacho(encendida));

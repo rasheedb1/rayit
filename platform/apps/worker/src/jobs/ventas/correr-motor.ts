@@ -229,7 +229,7 @@ async function main(): Promise<void> {
       return;
     }
     if (opciones.accion === 'encender') {
-      const plan = await motor.transaction((tx) => enableOutreach(tx, ws, now()));
+      const plan = await motor.transaction((tx) => enableOutreach(tx, { workspaceId: ws, now: now() }));
       process.stdout.write(
         `Envío encendido en ${ws}. ${cuenta(plan.scheduled + plan.held, 'mensaje cancelado al apagar vuelve', 'mensajes cancelados al apagar vuelven')} a la cola.\n`,
       );

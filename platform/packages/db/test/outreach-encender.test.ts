@@ -6,6 +6,7 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import type { WorkerSql, WorkspaceTx } from '../src/client.ts';
 import { disableOutreach, enableOutreach } from '../src/queries/outreach.ts';
 import { openTestDb, SETUP_TIMEOUT, type TestDb } from './pglite.ts';
 
@@ -75,4 +76,24 @@ test('encender B no devuelve lo de A', async () => {
   await t.db.withWorkspace(WS_A, (tx) => disableOutreach(tx, 'vacaciones'));
   assert.deepEqual(await t.db.withWorkspace(WS_B, (tx) => enableOutreach(tx)), { enrollments: 0, scheduled: 0, held: 0 });
   assert.equal((await estado(T.programado)).status, 'canceled');
+});
+
+test('enableOutreach: el worker dice su workspace y la web no, y el error sale al compilar', async () => {
+  // Solo tipos: tsc (pnpm typecheck) falla si alguna de estas líneas deja de ser un error.
+  const soloTipos = (worker: WorkerSql, web: WorkspaceTx) => {
+    // @ts-expect-error: con una transacción del worker hay que decir el workspace
+    void enableOutreach(worker);
+    // @ts-expect-error: la firma vieja (el reloj en el lugar del workspace) ya no compila
+    void enableOutreach(worker, new Date());
+    // @ts-expect-error: la web no lo dice: lo fija withWorkspace
+    void enableOutreach(web, { workspaceId: WS_A });
+    void enableOutreach(worker, { workspaceId: WS_A, now: new Date() });
+    void enableOutreach(web, { now: new Date() });
+  };
+  assert.equal(typeof soloTipos, 'function');
+  // Y en ejecución, el mismo error si alguien lo salta con un cast.
+  await assert.rejects(
+    t.db.asWorker((tx) => enableOutreach(tx as unknown as WorkspaceTx)),
+    /con una transacción del worker hay que decir el workspace/,
+  );
 });

@@ -131,7 +131,7 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
     const { reconnected } = await db.asWorker((tx) => readyDemoAccounts(tx, DEMO_WORKSPACE_ID));
 
     const off = await runDispatch(motor, { senders: fake, appUrl, now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
-    await db.asWorker((tx) => enableOutreach(tx, DEMO_WORKSPACE_ID));
+    await db.asWorker((tx) => enableOutreach(tx, { workspaceId: DEMO_WORKSPACE_ID }));
     const on = await runDispatch(motor, { senders: fake, appUrl, now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
     // La separación con la marca lo movió: el reloj va a esa hora.
     const waitUntil = on.claim.paced.reduce<Date | null>((m, x) => (!m || x.until > m ? x.until : m), null);
