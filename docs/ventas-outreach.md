@@ -552,7 +552,13 @@ Lo que hace hoy, por partes:
 - **Reclamar** (`claimDueTouches`). Hasta cincuenta toques vencidos, con
   `UPDATE … WHERE status = 'scheduled' … RETURNING` y `FOR UPDATE SKIP
   LOCKED`, en una transacción que se confirma antes de llamar a nadie.
-  Sin gastar intento: fuera de la ventana → a la apertura; un paso
+  Un reclamo a la vez: la transacción toma
+  `pg_advisory_xact_lock(hashtext('outbound.dispatch/claim'))`, porque la
+  separación con la marca y el ritmo por hora de la cuenta se leen de lo
+  ya confirmado y dos reclamos a la vez (el cron y un `job:dispatch` a
+  mano) leerían lo mismo; `outbound.dispatch` declara `max_concurrency =
+  1` (0055). Lo prueba `packages/db/test/outreach-reclamo` contra
+  Postgres 16 en el CI. Sin gastar intento: fuera de la ventana → a la apertura; un paso
   anterior sin salir → espera; sin cuenta conectada → espera una hora con
   un aviso por canal y día; la marca con `max_touches_per_company`
   mensajes en 90 días → cancelado (`company_cap`); menos de
@@ -622,13 +628,13 @@ log de git de las ramas `rasheed/VEN-10-motor-cadencias*`.
 
 **Renumeración al integrar.** Supabase (`schema_migrations`) tiene la
 serie de main hasta `0042_metricas_al_corte_desempate.sql`. Las de esta
-rama que chocan con ella pasan, en su orden, a 0043–0049; 0050 a 0054 ya
+rama que chocan con ella pasan, en su orden, a 0043–0049; 0050 a 0055 ya
 llevan su número final. Las rondas siguientes de VEN-9-canales traen
 `0041_canales_reclamar_al_soltar`, `0042_canales_identidad_y_rotacion` y
 `0043_contacto_codigo_de_baja`, que también chocan: al integrarlas van
 detrás de 0049 y antes de 0050, y el script se amplía con ellas. Lo hace
-`platform/scripts/renumerar-outreach.sh` (git mv y la única referencia
-por nombre en las pruebas), después de mezclar main y antes de `make
+`platform/scripts/renumerar-outreach.sh` (mueve los archivos y cambia las
+referencias por nombre en las pruebas), después de mezclar main y antes de `make
 db.check`:
 
 | En esta rama | Al integrar |
@@ -640,14 +646,29 @@ db.check`:
 | `0038_canales_outreach.sql` | `0047_canales_outreach.sql` |
 | `0039_callback_de_canales.sql` | `0048_callback_de_canales.sql` |
 | `0040_canales_liberar_y_limites.sql` | `0049_canales_liberar_y_limites.sql` |
-| `0050_entregabilidad.sql` … `0054_respuesta_detiene_la_marca.sql` | igual |
+| `0050_entregabilidad.sql` … `0055_motor_equipo_y_reclamo.sql` | igual |
+
+**main borró `membership.role`.** `0034_access_control` (main, ya en
+Supabase) la cambia por `role_id → role` y convierte los `client` en
+`viewer`. El motor decide quién recibe un aviso (una respuesta, un toque
+retenido o fallido) y a qué dueños les llegan las alertas con
+`membership_is_team` y `membership_is_owner` (0055), que eligen su forma
+al aplicarse: con o sin `role_id`. Los fixtures de las pruebas dan de alta
+las membresías con `membershipSql` (`@mc/db/test/membresia`), que también
+funciona en las dos series. `make db.check` en verde no demuestra nada de
+esto: compila las migraciones, no el SQL de las consultas. Por eso el
+paso 1 corre `pnpm verificar` después de renumerar.
 
 **Lo que hace el integrador contra Supabase** (el «terminado cuando» de
 VEN-10), un comando por paso, desde `platform/`, con
 `W=00000002-0000-4000-8000-000000000001` (el workspace de la demo):
 
-1. Mezclar main, `./scripts/renumerar-outreach.sh`, `make db.check`,
-   `make db.migrate` (hasta 0054) y el seed.
+1. Mezclar main, `./scripts/renumerar-outreach.sh`, **`pnpm verificar`**
+   (las pruebas del motor sobre la serie integrada; `db.check` no basta),
+   `make db.check`, `make db.migrate` (hasta 0055) y el seed. Al
+   resolver la mezcla de `packages/db/test/ventas.test.ts`, la lista de
+   responsables del seed de main trae también a Andrés Pardo (mánager,
+   0034): es del equipo y cuenta.
 2. `./scripts/supabase-admin.sh sql "GRANT mc_worker TO mc_migrator"`.
 3. `pnpm --filter @mc/worker run job:dispatch -- --preparar-demo --workspace $W`:
    deja la demo como `--demo` con el reloj de verdad (la dirección
@@ -664,7 +685,11 @@ VEN-10), un comando por paso, desde `platform/`, con
 7. Pegar las salidas de 4 y 6 en la nota de VEN-10 y pasarla a hecho.
 
 La prueba `outreach-demo.test.ts` corre los pasos 3 a 6 sobre Postgres
-embebido con las mismas migraciones y el mismo seed.
+embebido con las mismas migraciones y el mismo seed. El 25-sep-2026
+corrió también sobre la serie integrada (las 0034–0042 de main, los
+seeds mezclados y la renumeración): las pruebas del motor de
+`apps/worker` pasan, `outreach-demo` incluida (la salida, en la nota de
+VEN-10).
 
 ### 5.3 La cadencia recomendada para un creador
 

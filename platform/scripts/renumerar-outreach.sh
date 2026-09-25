@@ -18,13 +18,16 @@
 #   0039_callback_de_canales.sql       → 0048_callback_de_canales.sql
 #   0040_canales_liberar_y_limites.sql → 0049_canales_liberar_y_limites.sql
 #
-# Solo mueve archivos (git mv) y la única referencia por nombre que hay
-# en las pruebas; no toca su contenido (los comentarios «0037 §4» siguen
+# Solo mueve archivos (git mv) y las referencias por nombre que hay en
+# las pruebas; no toca su contenido (los comentarios «0037 §4» siguen
 # hablando del documento, no del número). Idempotente: lo ya movido se
 # salta. Se niega si un número de destino ya está ocupado por otro
 # archivo, o si la base de main no llega a 0042.
 #
 # Uso:   cd platform && ./scripts/renumerar-outreach.sh
+#        y después pnpm verificar ANTES de make db.check: db.check en
+#        verde no dice que las consultas del motor funcionen sobre la
+#        serie de main (ver el final del script).
 # =====================================================================
 set -euo pipefail
 
@@ -69,12 +72,27 @@ for par in "${MAPA[@]}"; do
   movidos=$((movidos + 1))
 done
 
-# La única referencia por nombre de archivo en las pruebas.
-PRUEBA=packages/db/test/ventas-ficha.test.ts
-if grep -q "hasta: '0034_seguimientos.sql'" "$PRUEBA"; then
-  sed -i.bak "s/hasta: '0034_seguimientos.sql'/hasta: '0043_seguimientos.sql'/" "$PRUEBA" && rm -f "$PRUEBA.bak"
-  echo "  $PRUEBA: hasta 0043_seguimientos.sql"
-fi
+# Las referencias por nombre de archivo en las pruebas (hoy dos, en
+# ventas-ficha.test.ts: `hasta: '0034_seguimientos.sql'` y
+# `migrar('0035_zona_del_espacio_valida.sql')`). Se busca cada nombre
+# viejo entre comillas en todas las pruebas, para que una nueva no se
+# quede atrás.
+for par in "${MAPA[@]}"; do
+  origen="${par%%:*}"
+  destino="${par##*:}"
+  while IFS= read -r prueba; do
+    [[ -n "$prueba" ]] || continue
+    sed -i.bak "s/'${origen}'/'${destino}'/g" "$prueba" && rm -f "$prueba.bak"
+    echo "  $prueba: $origen → $destino"
+  done < <(grep -rl --include='*.ts' --include='*.mjs' "'${origen}'" packages apps db 2>/dev/null | grep -v node_modules || true)
+done
 
 echo
-echo "  $movidos archivo(s) renumerado(s). Ahora: make db.check, y después make db.migrate."
+echo "  $movidos archivo(s) renumerado(s)."
+echo
+echo "  Ahora, en este orden (db.check NO basta: compila las migraciones, no"
+echo "  el SQL de las consultas; una columna que main borró solo aparece al"
+echo "  correr las pruebas, como membership.role con 0034_access_control):"
+echo "    1. pnpm verificar            las pruebas del motor sobre la serie integrada"
+echo "    2. make db.check"
+echo "    3. make db.migrate"
