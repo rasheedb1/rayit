@@ -369,3 +369,7 @@ export * from './outreach/replies.ts';
 export * from './outreach/bounce.ts';
 export * from './outreach/inbound.ts';
 export * from './outreach/review.ts';
+export * from './outreach/claims.ts';
+export * from './outreach/generation.ts';
+export * from './outreach/generation-context.ts';
+export * from './outreach/generation-outcome.ts';

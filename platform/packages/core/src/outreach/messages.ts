@@ -121,11 +121,49 @@ export function failureReason(lang: NoticeLang, code: string): string {
 //   needs_review               espera la aprobación de una persona: la
 //                              revisión humana de la política, o una secuencia
 //                              en modo 'review'
+//
+// Los de la puerta de calidad (VEN-12):
+//   quality_warmup:<n>         el mensaje pasó la revisión automática, pero es
+//                              de los diez primeros de su tipo (n aprobados hasta hoy)
+//   quality_risk:<riesgos>     un disparador de riesgo (cifra sin origen,
+//                              urgencia falsa…) obliga a que lo mire una persona
+//   quality_low:<nota>         la revisión automática no le dio el mínimo
+//   quality_preflight:<códigos> ninguna versión pasó el pre-vuelo
+//   quality_duplicate          el mismo texto ya le llegó a esta persona
+//   llm_budget                 se acabó el presupuesto diario de redacción
+//   llm_error                  el modelo no devolvió un mensaje legible
 
 export const HOLD_CODES = [
   'no_postal_address', 'no_body', 'placeholders', 'reply_without_thread', 'unconfirmed_attempt', 'note_too_long', 'needs_review',
-  'no_subject',
+  'no_subject', 'quality_warmup', 'quality_risk', 'quality_low', 'quality_preflight', 'quality_duplicate', 'llm_budget', 'llm_error',
 ] as const;
+
+/** Los disparadores de riesgo en palabras (outbound_review.risk_triggers). */
+export const RISK_TRIGGER_TEXTS: Record<NoticeLang, Record<string, string>> = {
+  es: {
+    unsourced_figure: 'una cifra sin origen en tu perfil',
+    invented_client: 'una marca nombrada como cliente sin campaña que lo respalde',
+    false_urgency: 'urgencia que no existe',
+    pressure: 'un tono de presión',
+    competitor_mention: 'la mención de un competidor de la marca',
+    missing_disclosure: 'falta decir que la colaboración es pagada',
+  },
+  en: {
+    unsourced_figure: 'a figure with no source in your profile',
+    invented_client: 'a brand named as a client with no campaign behind it',
+    false_urgency: 'urgency that is not real',
+    pressure: 'a pushy tone',
+    competitor_mention: "a mention of the brand's competitor",
+    missing_disclosure: 'it does not say the collaboration is paid',
+  },
+};
+
+/** Una nota de 0 a 10 con un decimal, con la coma o el punto del idioma. */
+const score = (lang: NoticeLang, d: string) =>
+  Number.isFinite(Number(d)) && d !== '' ? new Intl.NumberFormat(lang, { maximumFractionDigits: 1 }).format(Number(d)) : null;
+
+const riskList = (lang: NoticeLang, d: string) =>
+  d.split(',').filter(Boolean).map((r) => RISK_TRIGGER_TEXTS[lang][r] ?? r).join(', ');
 export type HoldCode = (typeof HOLD_CODES)[number];
 
 export interface HoldReason {
@@ -160,6 +198,14 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     note_too_long: (d) => `la nota de la invitación de LinkedIn tiene ${d} caracteres y el máximo es ${LINKEDIN_INVITE_NOTE_MAX}`,
     needs_review: () => 'espera tu aprobación antes de salir (la revisión humana está encendida)',
     no_subject: () => 'es un correo nuevo y no tiene asunto; escríbelo antes de aprobarlo',
+    quality_warmup: (d) =>
+      `pasó la revisión automática, pero los diez primeros mensajes de cada tipo los aprueba una persona (llevas ${d || '0'})`,
+    quality_risk: (d) => `la revisión automática encontró ${riskList('es', d)}; revísalo antes de aprobarlo`,
+    quality_low: (d) => `la revisión automática le dio ${score('es', d) ?? 'una nota'} de 10, por debajo del mínimo; edítalo o regenéralo`,
+    quality_preflight: () => 'ninguna versión pasó las reglas de estilo y de cifras; edítalo antes de aprobarlo',
+    quality_duplicate: () => 'es igual a un mensaje que esta persona ya recibió',
+    llm_budget: () => 'se acabó el presupuesto de redacción con IA de hoy; revísalo o escríbelo tú',
+    llm_error: () => 'la redacción con IA no devolvió un mensaje legible; escríbelo tú',
   },
   en: {
     no_postal_address: () => 'the postal address for the email footer is missing; add it in the sending policy',
@@ -172,6 +218,13 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     note_too_long: (d) => `the LinkedIn invitation note has ${d} characters and the limit is ${LINKEDIN_INVITE_NOTE_MAX}`,
     needs_review: () => 'it waits for your approval before going out (human review is on)',
     no_subject: () => "it's a new email with no subject; write one before approving it",
+    quality_warmup: (d) => `it passed the automatic review, but a person approves the first ten messages of each type (${d || '0'} so far)`,
+    quality_risk: (d) => `the automatic review found ${riskList('en', d)}; check it before approving it`,
+    quality_low: (d) => `the automatic review scored it ${score('en', d) ?? 'low'} out of 10, under the minimum; edit or regenerate it`,
+    quality_preflight: () => 'no version passed the style and figure rules; edit it before approving it',
+    quality_duplicate: () => 'it is the same as a message this person already got',
+    llm_budget: () => "today's AI writing budget ran out; review it or write it yourself",
+    llm_error: () => 'AI writing did not return a readable message; write it yourself',
   },
 };
 

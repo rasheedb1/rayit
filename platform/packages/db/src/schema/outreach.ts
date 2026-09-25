@@ -413,6 +413,29 @@ export const outboundLlmCall = pgTable('outbound_llm_call', {
   createdAt: createdAt(),
 });
 
+/**
+ * El borrador generado de un toque con sus marcas [claim:id] y el turno de
+ * los jobs outbound.generate y outbound.review (0056, VEN-12). La escribe
+ * solo el worker; la web la lee para el editor del pitch.
+ */
+export const outboundGeneration = pgTable('outbound_generation', {
+  touchId: uuid('touch_id').primaryKey().references(() => outboundTouch.id, { onDelete: 'cascade' }),
+  workspaceId: workspaceId(),
+  stage: text('stage', { enum: ['generating', 'generated', 'reviewing', 'reviewed'] }).default('generating').notNull(),
+  subject: text('subject'),
+  bodyMarked: text('body_marked'),
+  model: text('model'),
+  attempts: integer('attempts').default(0).notNull(),
+  outcome: text('outcome', { enum: ['approved', 'held'] }),
+  leaseToken: uuid('lease_token'),
+  leaseUntil: timestamptz('lease_until'),
+  lastError: text('last_error'),
+  generatedAt: timestamptz('generated_at'),
+  reviewedAt: timestamptz('reviewed_at'),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
 // ---------------------------------------------------------------------
 // Límites
 // ---------------------------------------------------------------------

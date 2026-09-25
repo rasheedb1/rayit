@@ -1020,6 +1020,12 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'a quién no le vuelve a escribir este workspace porque pulsó el enlace de baja de uno de sus correos (0038 §8). ' +
       'La escribe solo public_optout: con escritura, un workspace se quitaría una baja o se la pondría a otro',
   },
+  outbound_generation: {
+    permite: ['SELECT'],
+    motivo:
+      'el borrador generado con sus marcas [claim:id] y el turno de los jobs de VEN-12 (0056): lo escribe el worker y ' +
+      'la web lo lee para el editor del pitch. Con escritura, un workspace se fabricaría un borrador «revisado»',
+  },
   outbound_llm_call: {
     permite: ['SELECT', 'INSERT'],
     motivo:
