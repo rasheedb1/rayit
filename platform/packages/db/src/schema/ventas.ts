@@ -135,6 +135,8 @@ export const contact = pgTable('contact', {
   optedOut: boolean('opted_out').default(false).notNull(),
   optedOutAt: timestamptz('opted_out_at'),
   optedOutReason: text('opted_out_reason'),
+  /** reply_optout:<canal> si se dio de baja respondiendo por ese canal (0043); la pantalla lo traduce. */
+  optedOutCode: text('opted_out_code'),
   bounced: boolean('bounced').default(false).notNull(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),

@@ -330,6 +330,12 @@ export const MESSAGES = {
       "Es obligatorio. Sin procedencia no se guarda: es lo que nos deja escribirle sin romper la ley ni tu reputación.",
     optedOut: "Pidió la baja",
     optedOutHelp: "No se le escribe por ningún canal. No se puede deshacer.",
+    /** El motivo de una baja que llegó respondiendo a un toque (contact.opted_out_code). */
+    optedOutByReply: {
+      email: "Pidió no ser contactado, respondiendo a un correo.",
+      linkedin: "Pidió no ser contactado, respondiendo por LinkedIn.",
+      instagram_dm: "Pidió no ser contactado, respondiendo por Instagram.",
+    },
     optOut: "Registrar baja",
     optOutTitle: "Registrar la baja de este contacto",
     optOutHelp:

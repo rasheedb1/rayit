@@ -15,6 +15,16 @@ import { useVentasForm } from "../../_lib/use-ventas-form";
 import { Bloque } from "./bloque";
 
 /**
+ * El motivo de la baja: el que escribió la persona, o, si se dio de baja
+ * respondiendo a un toque, la frase de ese canal (la base guarda un
+ * código, contact.opted_out_code, y aquí se traduce).
+ */
+function optOutReason(c: Pick<ContactRow, "optedOutReason" | "optedOutByReply">): string | null {
+  if (c.optedOutReason) return c.optedOutReason;
+  return c.optedOutByReply ? MESSAGES.contacto.optedOutByReply[c.optedOutByReply] : null;
+}
+
+/**
  * Los contactos de una empresa (VEN-1): los que guardó este espacio y
  * los de fuente pública de otros, que se ven pero no se editan.
  *
@@ -211,7 +221,7 @@ function ContactItem({ contact: c, companyId }: { contact: ContactRow; companyId
             )}
           </p>
           {!c.isOwn && <p className="mt-1 text-xs text-muted">{t.notOwn}</p>}
-          {c.optedOut && c.optedOutReason && <p className="mt-1 text-xs text-muted">{c.optedOutReason}</p>}
+          {c.optedOut && optOutReason(c) && <p className="mt-1 text-xs text-muted">{optOutReason(c)}</p>}
         </div>
         {/* Solo los propios y sin baja: uno del catálogo no es de este
             espacio, y a uno que pidió la baja no se le vuelve a escribir. */}

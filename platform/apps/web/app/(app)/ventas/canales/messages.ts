@@ -219,8 +219,6 @@ export const MESSAGES = {
    * STOPPED…) no llega al creador: queda en el registro del servidor.
    */
   health: CANALES_TEXTOS,
-  /** contact.opted_out_reason cuando una respuesta pide la baja. */
-  optOutReason: (channel: string) => `Pidió no ser contactado, respondiendo por ${channel}.`,
 
   loading: { label: "Cargando canales" },
   error: { eyebrow: "Ventas", title: "No pudimos leer tus canales" },

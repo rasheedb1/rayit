@@ -344,6 +344,14 @@ Decisiones que las piezas siguientes tienen que conocer:
   sobre ella y no sobre la ficha: cambiarle el correo a la ficha después
   del envío, o mover el toque a otra ficha, no da de baja a otra
   persona.
+  En LinkedIn e Instagram, `recipient_address` es el **provider_id** de
+  la persona en ese proveedor (el `provider_id` que devuelve el perfil de
+  Unipile, el mismo que llega como `attendee_provider_id` en el aviso de
+  un mensaje). Es lo que reconoce la respuesta que llega fuera del hilo
+  del toque: la invitación con nota no abre chat, y quien la acepta
+  contesta en uno nuevo (VEN-9, `recordInboundMessage`). Sin él, esa
+  respuesta se ignora como un DM ajeno, y un «no me escribas más»
+  también.
 - **La regla de la baja mira la lista global.** Un toque no entra en
   `scheduled`, `processing` ni `sent` si su ficha tiene `opted_out`, si
   el correo de la ficha está en `contact_suppression` (un rebote duro o
@@ -622,7 +630,8 @@ dueño aquí:
 | Desconectar una cuenta la deja viva en el proveedor, cobrando y recibiendo avisos | Desconectar la deja pendiente de soltar (0040) y `sales.channels_release` revoca el permiso de Google o borra la cuenta y sus avisos en Unipile, sin tocar lo que siga vivo en otro espacio | VEN-9 |
 | Topes por canal que solo miran el techo del proveedor | La vista `outreach_channel_account_limits` (0040): el máximo de cada cuenta es el menor entre la política del espacio y el proveedor (500 en un Gmail personal) | VEN-9 |
 | Un envío que falla por red se reintenta a ciegas y la marca recibe el mensaje dos veces | Los POST que mandan algo a una persona (correo, DM, invitación, comentario, reacción) no se reintentan dentro del conector (`idempotent: false`): el error sube como `transient` y el despachador decide tras mirar el hilo | VEN-9 · VEN-10 |
-| Todos los DM del creador (amigos, fans) entran a la base y al clasificador | Una respuesta solo se guarda si su hilo es el de un toque `sent` de ESA cuenta (`outbound_touch.channel_account_id`, 0041); lo demás se ignora sin guardar el cuerpo | VEN-9 |
+| Todos los DM del creador (amigos, fans) entran a la base y al clasificador | Una respuesta solo se guarda si es de un toque `sent` de ESA cuenta (`outbound_touch.channel_account_id`, 0041): por su hilo o, en LinkedIn e Instagram, porque quien escribe es a quien se le envió (`recipient_address` = su provider_id: la invitación aceptada contesta en un chat nuevo); lo demás se ignora sin guardar el cuerpo | VEN-9 |
+| La baja pedida al aceptar una invitación de LinkedIn se pierde: la respuesta llega en un chat que no es el del toque | El segundo paso de arriba la reconoce, da de baja la ficha (código `reply_optout:linkedin` en `contact.opted_out_code`, 0043) y cancela lo pendiente en todos los canales | VEN-9 |
 | Soltar una cuenta y reconectarla a la vez deja un permiso revocado en una fila «Conectado» | El job reclama la fila antes de hablar con el proveedor (`release_claimed_at`, 0041) y la conexión responde «espera un minuto» mientras dure; una fila desconectada no presta su ref del vault | VEN-9 |
 | El mismo LinkedIn conectado dos veces con dos account_id (cada hosted auth estrena uno): topes sumados y doble cobro | `provider_identity` (connection_params.im.id) único entre las filas vivas de todos los espacios (0042): conectado aquí → la cuenta nueva se borra; caído → su fila adopta la nueva; vivo en otro espacio → «ocupada» | VEN-9 |
 | Una hosted auth que termina bien en Unipile pero no se conecta aquí (canal equivocado, perfil ocupado, doble clic) deja una cuenta huérfana cobrando | La web la borra en Unipile si nadie la usa (`in_use` de outreach_channel_connect, 0042); si el borrado falla, el keepalive concilia `listAccounts` contra la base y borra las cuentas de NUESTRA hosted auth sin fila y con más de un día | VEN-9 |
@@ -718,6 +727,11 @@ cuentas existentes se migran borrando sus avisos por cuenta.
   (la tabla `notification` es de frases), de `@mc/core`. El `detail` de
   Unipile o el `message` de Google, en inglés, quedan en
   `api_call_log.error_message`.
+- **Tampoco en la ficha del contacto.** Una baja pedida al responder
+  queda como código en `contact.opted_out_code` (0043:
+  `reply_optout:<canal>`), y la ficha de Ventas lo traduce. La columna
+  `opted_out_reason` sigue siendo del texto de la persona (el «Motivo»
+  que escribe al registrar la baja a mano) y de las bajas de 0026 y 0037.
 - **Un motivo pasajero caduca.** «No pudimos conectar con Instagram
   ahora mismo» solo se enseña si es de las últimas 24 horas.
 - **El nombre de la cuenta es el de la persona.** Sale de

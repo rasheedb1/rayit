@@ -18,8 +18,8 @@ import assert from 'node:assert/strict';
 import {
   ChannelCapError, completeChannelConnection, createPendingChannelAccount, disconnectChannelAccount, existingGmailSecretRef,
   failPendingChannelAccount, findUnipileAccountForWebhook, getChannelPolicyCaps, listChannelAccounts, markChannelAccountDown,
-  channelWebhookCount, getChannelLimits, getReconnectableUnipileAccount, markChannelAccountOk, parseUnipileStatusCode, recordInboundMessage,
-  setChannelWebhooks, unipileStatusCode, updateChannelAccountCaps,
+  channelWebhookCount, getChannelLimits, getReconnectableUnipileAccount, markChannelAccountOk, parseReplyOptOutCode, parseUnipileStatusCode, recordInboundMessage,
+  replyOptOutCode, setChannelWebhooks, unipileStatusCode, updateChannelAccountCaps,
 } from '../src/queries/canales.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
@@ -260,7 +260,7 @@ describe('canales', () => {
       await t.admin(`UPDATE outbound_touch SET channel_account_id = '${GMAIL_LAURA}' WHERE id = '00000005-0000-4000-8000-000000070002'`);
       const msg = {
         account: { id: GMAIL_LAURA, channel: 'email' as const }, threadRef: 'gmail-thread-demo-0002', providerMessageId: 'gmail-demo-0002-r1',
-        body: 'Me interesa, hablemos.', fromAddress: 'sofia@vitale.co', occurredAt: new Date(), optOutReasonEs: 'Pidió la baja respondiendo.',
+        body: 'Me interesa, hablemos.', fromAddress: 'sofia@vitale.co', occurredAt: new Date()
       };
       const first = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, msg));
       assert.deepEqual(first, { matched: true, inserted: true, enrollmentStopped: true, touchesCanceled: 3, optedOut: false });
@@ -297,17 +297,84 @@ describe('canales', () => {
       `);
       const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, {
         account: { id: LINKEDIN_LAURA, channel: 'linkedin' }, threadRef: 'chat_carolina', providerMessageId: 'li-in-f1',
-        body: 'Por favor, no me escribas más.', fromAddress: 'Carolina', occurredAt: new Date(), optOutReasonEs: 'Pidió la baja respondiendo por LinkedIn.',
+        body: 'Por favor, no me escribas más.', fromAddress: 'Carolina', occurredAt: new Date()
       }));
       assert.equal(r.optedOut, true);
       const m = await sel<{ intent: string | null }>(`SELECT intent FROM outbound_message WHERE provider_message_id = 'li-in-f1'`);
       assert.equal(m[0]?.intent, 'unsubscribe');
-      const c = await sel<{ opted_out: boolean; opted_out_reason: string }>(`SELECT opted_out, opted_out_reason FROM contact WHERE id = '${CONTACTO}'`);
-      assert.deepEqual(c[0], { opted_out: true, opted_out_reason: 'Pidió la baja respondiendo por LinkedIn.' });
+      const c = await sel<{ opted_out: boolean; opted_out_reason: string | null; opted_out_code: string | null }>(
+        `SELECT opted_out, opted_out_reason, opted_out_code FROM contact WHERE id = '${CONTACTO}'`,
+      );
+      // Un código que la ficha traduce (0043), nunca una frase en español congelada en la base.
+      assert.deepEqual(c[0], { opted_out: true, opted_out_reason: null, opted_out_code: 'reply_optout:linkedin' });
       const e = await sel<{ status: string }>(`SELECT status FROM outbound_enrollment WHERE contact_id = '${CONTACTO}'`);
       assert.ok(e.every((x) => x.status === 'opted_out'), 'todos sus enrolamientos');
       const pending = await sel<{ status: string; blocked_reason: string }>(`SELECT status, blocked_reason FROM outbound_touch WHERE id = '00000005-0000-4000-8000-0000000700f2'`);
       assert.deepEqual(pending[0], { status: 'canceled', blocked_reason: 'opted_out' });
+    });
+
+    test("invitación aceptada: una respuesta en chat nuevo con 'no me escribas más' da de baja al contacto y cancela sus toques", async () => {
+      const CONTACTO = '00000002-0000-4000-8000-0000000c0009';
+      const INVITACION = '00000005-0000-4000-8000-0000000700a1';
+      const SIGUIENTE = '00000005-0000-4000-8000-0000000700a2';
+      const POR_CORREO = '00000005-0000-4000-8000-0000000700a3';
+      // La invitación con nota no abre chat: el despachador (VEN-10) deja el provider_id de la persona en recipient_address y ningún hilo.
+      await t.admin(`
+        INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for, claimed_at, sent_at,
+                                    attempt_count, provider_message_id, thread_ref, recipient_address, channel_account_id)
+        VALUES ('${INVITACION}', '${WORKSPACE_LAURA}', '00000002-0000-4000-8000-0000000000e6', '${CONTACTO}', 'linkedin',
+                'Hola Laura, me encantaría conectar.', 'sent', now() - interval '2 days', now() - interval '2 days', now() - interval '2 days',
+                1, 'inv_laura_q', NULL, 'ACoAAB_laura_quintero', '${LINKEDIN_LAURA}'),
+               ('${SIGUIENTE}', '${WORKSPACE_LAURA}', '00000002-0000-4000-8000-0000000000e6', '${CONTACTO}', 'linkedin',
+                'Te comparto un video.', 'scheduled', now() + interval '1 day', NULL, NULL, 0, NULL, NULL, NULL, NULL),
+               ('${POR_CORREO}', '${WORKSPACE_LAURA}', '00000002-0000-4000-8000-0000000000e6', '${CONTACTO}', 'email',
+                'Hola Laura', 'draft', NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+      `);
+      const antes = await sel<{ n: number }>(`SELECT count(*)::int AS n FROM outbound_message`);
+      const aviso = {
+        account: { id: LINKEDIN_LAURA, channel: 'linkedin' as const }, fromAddress: 'Laura Quintero', occurredAt: new Date(),
+        threadRef: 'chat_nuevo_laura_q', providerMessageId: 'li-in-a1', body: 'Gracias por la invitación, pero no me escribas más.',
+      };
+      // Sin saber quién escribe, el chat nuevo no casa con nada: es lo que pasaba antes y la baja se perdía.
+      const sinRemitente = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, aviso));
+      assert.equal(sinRemitente.matched, false);
+      // Otra persona en un chat nuevo tampoco: su id no es el de ningún destinatario de esta cuenta.
+      const otra = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, { ...aviso, senderProviderId: 'ACoAAB_otra_persona' }));
+      assert.equal(otra.matched, false);
+      assert.equal((await sel<{ n: number }>(`SELECT count(*)::int AS n FROM outbound_message`))[0]!.n, antes[0]!.n, 'nada guardado');
+
+      const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, { ...aviso, senderProviderId: 'ACoAAB_laura_quintero' }));
+      assert.deepEqual(r, { matched: true, inserted: true, enrollmentStopped: false, touchesCanceled: 2, optedOut: true });
+      const m = await sel<{ touch_id: string; intent: string; thread_ref: string }>(
+        `SELECT touch_id, intent, thread_ref FROM outbound_message WHERE provider_message_id = 'li-in-a1'`,
+      );
+      assert.deepEqual(m[0], { touch_id: INVITACION, intent: 'unsubscribe', thread_ref: 'chat_nuevo_laura_q' });
+      const c = await sel<{ opted_out: boolean; opted_out_code: string | null }>(`SELECT opted_out, opted_out_code FROM contact WHERE id = '${CONTACTO}'`);
+      assert.deepEqual(c[0], { opted_out: true, opted_out_code: 'reply_optout:linkedin' });
+      const toques = await sel<{ id: string; status: string; blocked_reason: string | null; thread_ref: string | null }>(
+        `SELECT id, status, blocked_reason, thread_ref FROM outbound_touch WHERE id IN ('${INVITACION}', '${SIGUIENTE}', '${POR_CORREO}') ORDER BY id`,
+      );
+      assert.deepEqual(toques.map((x) => [x.id, x.status, x.blocked_reason, x.thread_ref]), [
+        // El chat nuevo queda en la invitación: lo que siga en él casa por el hilo.
+        [INVITACION, 'sent', null, 'chat_nuevo_laura_q'],
+        [SIGUIENTE, 'canceled', 'opted_out', null],
+        [POR_CORREO, 'canceled', 'opted_out', null],
+      ], 'la baja se respeta en todos los canales');
+
+      // El mismo aviso otra vez no duplica; uno nuevo en ese chat ya casa por el hilo, aunque no traiga remitente.
+      assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, { ...aviso, senderProviderId: 'ACoAAB_laura_quintero' }))).inserted, false);
+      const porHilo = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, { ...aviso, providerMessageId: 'li-in-a2', body: 'Gracias.' }));
+      assert.equal(porHilo.matched, true);
+      // Un correo no casa por remitente: su respuesta siempre llega en el hilo.
+      const correo = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, {
+        ...aviso, account: { id: GMAIL_LAURA, channel: 'email' }, providerMessageId: 'gm-a1', threadRef: 'hilo-inventado', senderProviderId: 'ACoAAB_laura_quintero',
+      }));
+      assert.equal(correo.matched, false);
+      // El código y su lectura: solo los tres canales del CHECK de 0043.
+      assert.equal(replyOptOutCode('instagram_dm'), 'reply_optout:instagram_dm');
+      assert.equal(replyOptOutCode('whatsapp'), null);
+      assert.equal(parseReplyOptOutCode('reply_optout:email'), 'email');
+      assert.equal(parseReplyOptOutCode('Pidió la baja'), null);
     });
 
     test('un mensaje en un chat sin toque nuestro, o con el toque de OTRA cuenta, no escribe ninguna fila (ni el cuerpo)', async () => {
@@ -318,7 +385,7 @@ describe('canales', () => {
         ON CONFLICT (id) DO NOTHING;
       `);
       const antes = await sel<{ n: number }>(`SELECT count(*)::int AS n FROM outbound_message`);
-      const base = { fromAddress: 'Un amigo', occurredAt: new Date(), optOutReasonEs: 'x' };
+      const base = { fromAddress: 'Un amigo', occurredAt: new Date() };
       // Un DM de un amigo: ningún toque en ese chat.
       const amigo = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, {
         ...base, account: { id: LINKEDIN_LAURA, channel: 'linkedin' }, threadRef: 'chat_de_un_amigo', providerMessageId: 'li-amigo-1',

@@ -125,12 +125,13 @@ export async function unipileWebhook(req: Request, deps: ChannelDeps): Promise<R
     const name = channelHealthName(account.channel);
     if (event.kind === "message") {
       if (event.fromSelf) return MESSAGES.routes.ignored.echo;
+      // Con quién escribe: una respuesta en un chat nuevo (la invitación aceptada) casa con el toque enviado a esa persona.
       const r = await recordInboundMessage(tx, {
         account, threadRef: event.chatId, providerMessageId: event.messageId, body: event.text,
         fromAddress: event.senderName ?? event.senderProviderId, occurredAt: event.occurredAt ?? now,
-        optOutReasonEs: MESSAGES.optOutReason(name),
+        senderProviderId: event.senderProviderId,
       });
-      // Un DM de un amigo o de un fan: no es una respuesta a un toque de esta cuenta. No queda nada suyo.
+      // Un DM de un amigo o de un fan: ni el hilo ni quien escribe son de un toque de esta cuenta. No queda nada suyo.
       if (!r.matched) return MESSAGES.routes.ignored.foreignChat;
       return r.inserted ? null : MESSAGES.routes.ignored.duplicate;
     }

@@ -691,8 +691,35 @@ export interface InboundMessage {
   body: string;
   fromAddress: string | null;
   occurredAt: Date;
-  /** La frase que queda en contact.opted_out_reason si la respuesta pide la baja (@mc/db no escribe frases). */
-  optOutReasonEs: string;
+  /**
+   * Quién escribe, en el proveedor (el attendee_provider_id de Unipile:
+   * el member id de LinkedIn, el id de Instagram). Es lo que el
+   * despachador (VEN-10) deja en outbound_touch.recipient_address al
+   * reclamar un toque de LinkedIn o de Instagram, y con él se reconoce
+   * una respuesta que llega FUERA del hilo del toque: la invitación con
+   * nota no abre chat, y quien la acepta contesta en uno nuevo. NULL o
+   * ausente en el correo, que casa siempre por su hilo.
+   */
+  senderProviderId?: string | null;
+}
+
+/** Los canales con código de baja por respuesta: los mismos del CHECK de contact.opted_out_code (0043). */
+export const REPLY_OPT_OUT_CHANNELS = ['email', 'linkedin', 'instagram_dm'] as const satisfies readonly ConnectableChannel[];
+export type ReplyOptOutChannel = (typeof REPLY_OPT_OUT_CHANNELS)[number];
+
+/**
+ * El código que queda en contact.opted_out_code (0043) cuando una
+ * respuesta por ese canal pide la baja; null en un canal sin código (la
+ * baja se aplica igual, solo sin motivo).
+ */
+export function replyOptOutCode(channel: OutreachChannel): string | null {
+  return (REPLY_OPT_OUT_CHANNELS as readonly string[]).includes(channel) ? `reply_optout:${channel}` : null;
+}
+
+/** El canal de un código de baja por respuesta, o null si no es uno. La pantalla de la ficha lo traduce. */
+export function parseReplyOptOutCode(code: string | null | undefined): ReplyOptOutChannel | null {
+  const m = /^reply_optout:(email|linkedin|instagram_dm)$/.exec(code ?? '');
+  return m ? (m[1] as ReplyOptOutChannel) : null;
 }
 
 export interface InboundResult {
@@ -715,8 +742,16 @@ export interface InboundResult {
 /**
  * Una respuesta nueva, en UNA sentencia:
  *
- *   · SOLO si el hilo es el de un toque enviado ('sent') desde ESTA cuenta.
- *     La cuenta de LinkedIn o de Instagram es la personal del creador: por
+ *   · SOLO si es la respuesta a un toque enviado ('sent') desde ESTA
+ *     cuenta, que se busca en dos pasos: primero el toque de ese hilo
+ *     (thread_ref); si no hay ninguno, en LinkedIn e Instagram, el último
+ *     toque de la cuenta y del canal enviado A QUIEN ESCRIBE
+ *     (recipient_address = senderProviderId, que el despachador escribe al
+ *     reclamarlo). El segundo paso es el de la invitación con nota, que no
+ *     abre chat: quien la acepta contesta en uno nuevo, o por un DM
+ *     aparte, y sin él ese «no me escribas más» se perdía. Al casar así, el
+ *     chat queda en el thread_ref del toque si no tenía ninguno;
+ *   · la cuenta de LinkedIn o de Instagram es la personal del creador: por
  *     ella pasan los mensajes de amigos, fans y clientes que no tienen
  *     nada que ver con el outreach. Esos no se guardan (sus datos no son
  *     nuestros) ni entran en la cola del clasificador de VEN-14, que
@@ -734,9 +769,11 @@ export interface InboundResult {
  *     enrolamiento en la transacción del envío;
  *   · si pide la baja explícitamente (looksLikeOptOut de @mc/core, la
  *     lista mínima mientras no exista el clasificador), la intención queda
- *     'unsubscribe', la ficha dada de baja (y con ella su correo en la
- *     baja global, 0026) y TODOS sus enrolamientos y toques pendientes, de
- *     cualquier canal, se cancelan con blocked_reason 'opted_out'.
+ *     'unsubscribe', la ficha dada de baja con el código
+ *     reply_optout:<canal> en opted_out_code (0043: un código, nunca una
+ *     frase; la ficha lo traduce) y con ella su correo en la baja global
+ *     (0026), y TODOS sus enrolamientos y toques pendientes, de cualquier
+ *     canal, se cancelan con blocked_reason 'opted_out'.
  *
  * Lo demás queda con intent NULL: la cola del clasificador (VEN-14).
  */
@@ -744,12 +781,29 @@ export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): 
   const optOut = looksLikeOptOut(m.body);
   const { rows } = await tx.query<{ matched: number; inserted: number; stopped: number; canceled: number }>(
     `WITH toque AS (
-       SELECT t.id, t.enrollment_id, t.contact_id, e.deal_id
-         FROM outbound_touch t
-         LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
-        WHERE t.thread_ref = $1 AND t.channel = $2 AND t.status = 'sent' AND t.channel_account_id = $3
-        ORDER BY t.sent_at DESC NULLS LAST
+       -- 1: el toque de ese hilo; 2: si no hay, el último enviado a quien escribe (LinkedIn e Instagram).
+       SELECT c.id, c.enrollment_id, c.contact_id, e.deal_id, c.by_recipient
+         FROM (
+           SELECT t.id, t.enrollment_id, t.contact_id, t.sent_at, false AS by_recipient
+             FROM outbound_touch t
+            WHERE t.thread_ref = $1 AND t.channel = $2 AND t.status = 'sent' AND t.channel_account_id = $3
+           UNION ALL
+           SELECT t.id, t.enrollment_id, t.contact_id, t.sent_at, true
+             FROM outbound_touch t
+            WHERE $11::text IS NOT NULL AND $2 IN ('linkedin', 'instagram_dm')
+              AND t.recipient_address::text = $11 AND t.channel = $2 AND t.status = 'sent' AND t.channel_account_id = $3
+         ) c
+         LEFT JOIN outbound_enrollment e ON e.id = c.enrollment_id
+        ORDER BY c.by_recipient, c.sent_at DESC NULLS LAST
         LIMIT 1
+     ),
+     hilo AS (
+       -- El chat nuevo queda en el toque que no tenía ninguno (la invitación): lo que siga en él casa por el hilo.
+       UPDATE outbound_touch t
+          SET thread_ref = $1
+         FROM toque
+        WHERE toque.by_recipient AND t.id = toque.id AND t.thread_ref IS NULL
+       RETURNING t.id
      ),
      nuevo AS (
        INSERT INTO outbound_message
@@ -763,7 +817,7 @@ export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): 
      ),
      baja AS (
        UPDATE contact c
-          SET opted_out = true, opted_out_at = coalesce(c.opted_out_at, now()), opted_out_reason = coalesce(c.opted_out_reason, $9)
+          SET opted_out = true, opted_out_at = coalesce(c.opted_out_at, now()), opted_out_code = coalesce(c.opted_out_code, $9)
          FROM nuevo
         WHERE $8 AND c.id = nuevo.contact_id AND NOT c.opted_out
        RETURNING c.id
@@ -788,7 +842,7 @@ export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): 
      SELECT (SELECT count(*) FROM toque)::int AS matched, (SELECT count(*) FROM nuevo)::int AS inserted, (SELECT count(*) FROM enrolamientos)::int AS stopped,
             (SELECT count(*) FROM toques)::int AS canceled, (SELECT count(*) FROM baja)::int AS opted_out`,
     [m.threadRef, m.account.channel, m.account.id, m.providerMessageId, m.fromAddress, m.body, m.occurredAt, optOut,
-      m.optOutReasonEs.slice(0, 500), [...CANCELABLE_TOUCH_STATUSES]],
+      replyOptOutCode(m.account.channel), [...CANCELABLE_TOUCH_STATUSES], m.senderProviderId?.trim() || null],
   );
   const r = rows[0]!;
   const inserted = r.inserted === 1;

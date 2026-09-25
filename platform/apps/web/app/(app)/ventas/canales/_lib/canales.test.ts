@@ -293,6 +293,25 @@ describe("el webhook de Unipile", () => {
     );
     expect(rows.rows).toEqual([{ direction: "inbound", intent: null, body: "¡Hola! Nos interesa, ¿tienes media kit?" }]);
 
+    // La invitación con nota no abre chat: el despachador deja en recipient_address a quién la mandó (su provider_id).
+    await db.queryAsSuperuser(
+      `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, scheduled_for, claimed_at, sent_at, attempt_count,
+                                   provider_message_id, recipient_address, channel_account_id)
+       VALUES ($1, '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000c0009', 'linkedin', 'Hola Laura', 'sent',
+               now() - interval '1 day', now() - interval '1 day', now() - interval '1 day', 1, 'inv_web_1', 'ACoAAB_laura_q_web', $2)`,
+      [SEED_WORKSPACE_ID, li.id],
+    );
+    // Laura acepta y escribe en un chat nuevo: el aviso lleva quién escribe y casa con la invitación, con baja incluida.
+    const aceptada = await unipileWebhook(webhook({
+      ...MESSAGE("acc_li_web", "msg_web_inv_1"), chat_id: "chat_web_nuevo", message: "Gracias, pero no me escribas más.",
+      sender: { attendee_provider_id: "ACoAAB_laura_q_web", attendee_name: "Laura Quintero" },
+    }, headers), deps());
+    expect(await aceptada.json()).toEqual({ ok: true });
+    const baja = await db.queryAsSuperuser<{ opted_out: boolean; opted_out_code: string | null }>(
+      `SELECT opted_out, opted_out_code FROM contact WHERE id = '00000002-0000-4000-8000-0000000c0009'`,
+    );
+    expect(baja.rows[0]).toEqual({ opted_out: true, opted_out_code: "reply_optout:linkedin" });
+
     // La ruta de ESTA cuenta no sirve para otra cuenta del cuerpo.
     const ajena = await unipileWebhook(webhook(MESSAGE("acc_li_0001", "msg_web_2"), headers), deps());
     expect(await ajena.json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.unknownAccount });
