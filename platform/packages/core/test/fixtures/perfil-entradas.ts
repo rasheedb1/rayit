@@ -83,7 +83,7 @@ export function entradasLaura(): PerfilInputs {
       { id: 'b-ig', platformId: 'instagram', ageHoursCut: 168, medianViews: 62177, sampleSize: 16, isReliable: true, computedAt: '2026-09-25T00:00:00.000Z' },
     ],
     posts: [
-      post('d01', { platformId: 'instagram', surface: 'reels', title: 'Cold brew en casa en 3 pasos', caption: 'Cold brew en casa en 3 pasos ☕ Con @cafealma · código LAURA15', durationS: 41, isBrandedContent: true, score: score(5.971, 412000, 'breakout', 720, 'b-ig-720') }),
+      post('d01', { platformId: 'instagram', surface: 'reels', title: 'Cold brew en casa en 3 pasos', caption: 'Cold brew en casa en 3 pasos ☕ Con @cafealma · código LAURA15', durationS: 41, isBrandedContent: true, coverUrl: 'https://example.com/d01.jpg', score: score(5.971, 412000, 'breakout', 720, 'b-ig-720') }),
       post('d06', { platformId: 'tiktok', title: 'La arepa que se hace sin plancha', caption: 'Reto: arepa sin plancha y sin que se pegue. Sí se puede 🫓 #arepa #recetafacil', durationS: 34, hashtags: ['arepa', 'recetafacil'], score: score(3.71, 395810, 'outlier', 72) }),
       post('d18', { platformId: 'instagram', surface: 'reels', title: 'Tres desayunos con dos ingredientes', caption: 'Tres desayunos con dos ingredientes cada uno. Guárdalo para mañana 🍳 #desayuno', durationS: 41, hashtags: ['desayuno'], score: score(2.662, 165485, 'outlier', 168, 'b-ig') }),
       post('d02', { platformId: 'tiktok', title: 'El cold brew que me salva las mañanas', caption: 'El cold brew que me salva las mañanas 🧊 #ad @cafealma.co', durationS: 34, isBrandedContent: true, score: score(2.469, 300000, 'outlier', 720) }),
@@ -116,4 +116,21 @@ export function entradasLaura(): PerfilInputs {
     cutHours: 168,
     computedAt: '2026-09-25T10:00:00.000Z',
   };
+}
+
+/**
+ * Cuatro videos más, largos y flojos, en Facebook: con ellos los videos
+ * cortos de Laura tienen contra qué compararse (al menos tres a cada
+ * lado sin contar el que se explica).
+ */
+export function entradasConVideosLargos(): PerfilInputs {
+  const e = entradasLaura();
+  const largos: PerfilPostInput[] = [0.5, 0.6, 0.7, 0.8].map((x, i) => ({
+    id: `00000002-0000-4000-8000-00000000f0${i}0`, platformId: 'facebook', url: `https://example.com/f${i}`,
+    title: `Receta larga ${['uno', 'dos', 'tres', 'cuatro'][i]}`, caption: 'Receta larga de domingo', hashtags: [],
+    surface: 'feed', mediaType: 'video', durationS: 180, isBrandedContent: false, publishedAt: '2026-08-01T12:00:00.000Z',
+    hookType: null, score: { viewsVsMedian: x, viewsAtCut: 20000, outlierTier: 'under', ageHoursCut: 168, computedAt: null, baseline: null },
+  }));
+  e.posts.push(...largos);
+  return e;
 }

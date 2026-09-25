@@ -54,6 +54,11 @@ const isIdOrNull = (v: unknown) => v === null || (isStr(v) && CLAIM_ID_RE.test(v
 const isId = (v: unknown): v is string => isStr(v) && CLAIM_ID_RE.test(v);
 const isPlatform = (v: unknown) => isStr(v) && Object.hasOwn(PLATFORM_LABELS, v);
 const isOneOf = (list: readonly string[]) => (v: unknown) => isStr(v) && list.includes(v);
+/**
+ * Un enlace o una portada que la pantalla pone en href o en src: solo
+ * http(s). Un «javascript:» metido a mano en el jsonb no llega a un enlace.
+ */
+const isWebUrlOrNull = (v: unknown) => v === null || (isStr(v) && /^https?:\/\//i.test(v));
 /** Un arreglo cuyos elementos cumplen `each`: lo que la pantalla recorre con map y filter. */
 const arrayOf = (v: unknown, each: (x: unknown) => boolean) => Array.isArray(v) && v.every(each);
 
@@ -102,12 +107,14 @@ function isPerfil(p: Obj): boolean {
     arrayOf(perf.medians, (m) => isObj(m) && isPlatform(m.platformId) && isId(m.claimId) && isNum(m.cutHours) && isNum(m.sampleSize)) &&
     isIdOrNull(perf.scoredClaimId) &&
     arrayOf(perf.top, (v) =>
-      isObj(v) && isStr(v.postId) && isPlatform(v.platformId) && isStr(v.title) && isStrOrNull(v.url) && isNum(v.cutHours) &&
+      isObj(v) && isStr(v.postId) && isPlatform(v.platformId) && isStr(v.title) && isWebUrlOrNull(v.url) &&
+      isWebUrlOrNull(v.coverUrl) && isNum(v.cutHours) &&
       (v.outlierTier === null || isOneOf(OUTLIER_TIERS)(v.outlierTier)) &&
       isId(v.multipleClaimId) && isIdOrNull(v.viewsClaimId) && isIdOrNull(v.baselineClaimId) && isIdOrNull(v.durationClaimId) &&
       isWhy(v.why)) &&
     arrayOf(f.pieces, isKeyed(PIECE_KINDS)) && arrayOf(f.contents, isKeyed(CONTENT_KINDS)) && arrayOf(f.tone, isKeyed(TONE_TRAITS)) &&
     isIdOrNull(f.captionsClaimId) &&
+    arrayOf(p.posts, (x) => isObj(x) && isStr(x.postId) && isPlatform(x.platformId) && isStr(x.title) && isWebUrlOrNull(x.url)) &&
     arrayOf(p.socialProof, (c) => isObj(c) && isStr(c.campaignId) && isStr(c.name) && isStr(c.companyName) && arrayOf(c.claimIds, isId)) &&
     (r === null || (isObj(r) && isStr(r.currency) && arrayOf(r.lines, (l) =>
       isObj(l) && isStr(l.itemId) && isStr(l.label) && (l.platformId === null || isPlatform(l.platformId)) &&

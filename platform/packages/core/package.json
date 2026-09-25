@@ -7,7 +7,6 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./plataformas": "./src/plataformas.ts",
     "./outreach/*": "./src/outreach/*.ts"
   },
   "scripts": {

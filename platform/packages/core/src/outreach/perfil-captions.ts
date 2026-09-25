@@ -147,14 +147,6 @@ export function durationBucketOf(seconds: number | null): DurationBucket | null 
 /** Un 15 % arriba o abajo de la duración típica (la mediana de la red) ya se nota. */
 export const DURATION_TOLERANCE = 0.15;
 
-/** La mediana de una lista de números; null si está vacía. */
-export function median(values: readonly number[]): number | null {
-  const xs = values.filter((v) => Number.isFinite(v)).slice().sort((a, b) => a - b);
-  if (xs.length === 0) return null;
-  const mid = Math.floor(xs.length / 2);
-  return xs.length % 2 ? xs[mid]! : (xs[mid - 1]! + xs[mid]!) / 2;
-}
-
 export function durationVsTypical(seconds: number | null, typical: number | null): DurationVsTypical | null {
   if (seconds === null || typical === null || typical <= 0 || !Number.isFinite(seconds)) return null;
   const r = seconds / typical;

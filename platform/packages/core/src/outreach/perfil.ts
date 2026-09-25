@@ -23,14 +23,16 @@
  * ordenan y se nombran. Las medianas de la línea base, los puntajes y
  * las demografías ya vienen calculados de sus tablas; lo que se deriva
  * aquí es lo que sale de leer los captions (formatos y tono) y el
- * contraste que explica por qué funcionó un video (la mediana de su
- * grupo frente a la del resto), que en el MVP no tienen tabla.
+ * contraste que explica por qué funcionó un video (la mediana de los
+ * OTROS videos con su mismo rasgo frente a la de los que no lo tienen),
+ * que en el MVP no tienen tabla.
  */
 import type { Decimal } from '../facturacion.ts';
 import type { PlatformId } from '../campanas.ts';
 import { PLATFORM_ORDER } from '../plataformas.ts';
+import { medianOrNull } from '../scoring.ts';
 import {
-  contentOf, durationBucketOf, durationVsTypical, firstLine, hookFromAnalysis, hookOf, median, pieceOf,
+  contentOf, durationBucketOf, durationVsTypical, firstLine, hookFromAnalysis, hookOf, pieceOf,
   TONE_MIN_SHARE, toneTraitsOf,
 } from './perfil-captions.ts';
 
@@ -226,6 +228,8 @@ export interface PerfilPostInput {
   publishedAt: string | null;
   /** hook.type del laboratorio de video, si el post pasó por él (creator_post_board). */
   hookType: string | null;
+  /** La portada del post (post.cover_url), si la plataforma la dio. */
+  coverUrl?: string | null;
   /** post_score, si el post ya tiene puntaje. */
   score: {
     viewsAtCut: number | null;
@@ -315,23 +319,30 @@ export const WHY_AXES = ['hook', 'piece', 'content', 'duration'] as const;
 export type WhyAxis = (typeof WHY_AXES)[number];
 
 /**
- * Una razón de por qué funcionó: el grupo del video en un eje (los que
- * abren con una promesa, los reels…) rinde más que el resto de los
- * videos del creador. Las dos medianas son claims: la narrativa las cita.
+ * Una razón de por qué funcionó: los OTROS videos del creador que
+ * comparten el rasgo del video en un eje (abren con una promesa, son
+ * reels…) rinden claramente más que los que no lo tienen. El video que
+ * se explica no entra en ninguna de las dos medianas: si entrara, su
+ * propio resultado inflaría la de su grupo y la razón sería circular.
+ * Las dos medianas son claims: la narrativa las cita.
  */
 export interface WhyReason {
   axis: WhyAxis;
   /** El código del grupo en ese eje: un HookKind, PieceKind, ContentKind o DurationBucket. */
   group: string;
+  /** La mediana de «veces su mediana» de los otros videos con el rasgo. */
   groupClaimId: string;
+  /** La de los videos sin el rasgo. */
   restClaimId: string;
 }
 
 /**
- * Por qué funcionó un video. Los códigos describen el video; `reasons`
- * dice cuáles de esos rasgos lo distinguen de verdad (su grupo supera al
- * resto). Un rasgo que tienen todos los videos no explica nada, así que
- * no entra en `reasons`. El texto lo pone quien lo enseña.
+ * Por qué funcionó un video. Los códigos describen el video (gancho,
+ * pieza, tipo y duración frente a la típica): esa descripción es la
+ * explicación principal. `reasons` añade, cuando los datos alcanzan, el
+ * rasgo que más lo distingue (whyContrast): a lo sumo WHY_MAX_REASONS,
+ * el de mayor contraste primero. Un rasgo que tienen todos los videos no
+ * explica nada, así que nunca entra. El texto lo pone quien lo enseña.
  */
 export interface WhyItWorked {
   hook: HookKind;
@@ -349,6 +360,8 @@ export interface TopVideo {
   postId: string;
   platformId: PlatformId;
   url: string | null;
+  /** La portada del video (post.cover_url), si la hay: lo primero que ve una marca en un media kit. */
+  coverUrl: string | null;
   /** El título, o la primera línea del caption. */
   title: string;
   publishedAt: string | null;
@@ -409,8 +422,26 @@ export interface RateLine {
   highClaimId: string | null;
 }
 
-/** 2: los claims llevan clave y parámetros en vez de texto (r2 de VEN-11). Un perfil v1 guardado se recalcula. */
-export const PERFIL_VERSION = 2;
+/**
+ * Un post que forma alguna cifra agregada del perfil (la mediana de un
+ * grupo del porqué, cuántos captions usan emojis…): lo que la pantalla
+ * necesita para enlazarlo en «De dónde sale cada cifra» sin volver a la
+ * base.
+ */
+export interface PostRef {
+  postId: string;
+  platformId: PlatformId;
+  title: string;
+  url: string | null;
+}
+
+/**
+ * 3: el porqué deja fuera al video que explica (claims por video), los
+ * mejores traen portada y el perfil trae el índice de posts (r3 de
+ * VEN-11). Un perfil guardado de otra versión se lee como «sin calcular»
+ * y se recalcula.
+ */
+export const PERFIL_VERSION = 3;
 
 export interface PerfilComercial {
   version: typeof PERFIL_VERSION;
@@ -449,6 +480,8 @@ export interface PerfilComercial {
   socialProof: SocialProofLine[];
   rates: { rateCardId: string; currency: string; lines: RateLine[] } | null;
   claims: Claim[];
+  /** Los posts que aparecen en `source.rows` de algún claim, con su título y su enlace. */
+  posts: PostRef[];
 }
 
 // ---------------------------------------------------------------------
@@ -508,51 +541,69 @@ export function genderCode(bucket: string): 'f' | 'm' | 'u' {
   return b === 'f' || b === 'female' ? 'f' : b === 'm' || b === 'male' ? 'm' : 'u';
 }
 
-/** Un grupo que rinde más que el resto en un eje (standoutGroups). */
+/**
+ * El contraste que hace de un rasgo una razón (whyContrast): la mediana
+ * de los OTROS videos con el rasgo frente a la de los videos sin él.
+ */
 export interface GroupContrast {
   key: string;
+  /** Los otros videos con el rasgo: nunca incluye al que se explica. */
   ids: string[];
-  /** La mediana de «veces su mediana» de los videos del grupo. */
+  /** La mediana de «veces su mediana» de esos videos. */
   median: number;
+  /** Los videos sin el rasgo. */
   restIds: string[];
   restMedian: number;
+  /** median / restMedian: cuánto más rinde el rasgo. Ordena las razones. */
+  lift: number;
 }
 
-/** Cuántos videos como mínimo en el grupo y en el resto: con uno solo no hay contraste. */
-export const WHY_MIN_GROUP = 2;
-/** Cuánto tiene que superar el grupo al resto (su mediana, en veces) para contar como razón. */
-export const WHY_MIN_LIFT = 1.2;
+/**
+ * Cuántos videos como mínimo a cada lado, SIN contar el que se explica:
+ * con dos, uno solo de ellos mueve la mediana, y eso no es un patrón.
+ */
+export const WHY_MIN_GROUP = 3;
+/** Cuánto tiene que superar el grupo al resto (su mediana, en veces) para contar como razón: la mitad más. */
+export const WHY_MIN_LIFT = 1.5;
+/** Cuántas razones se dicen por video: la más fuerte. Dos contrastes flojos no suman uno bueno. */
+export const WHY_MAX_REASONS = 1;
 
 /**
- * Los grupos de un eje que rinden más que el resto de los videos: la
- * mediana de `x` (veces su mediana) del grupo frente a la del resto.
+ * Si el rasgo `key` del video `targetId` explica su resultado.
  *
- * Solo cuentan los grupos con al menos WHY_MIN_GROUP videos, frente a un
- * resto de al menos otros tantos, cuya mediana supera la del resto en
- * WHY_MIN_LIFT veces. Un rasgo que tienen todos los videos (breve,
- * hashtags) no tiene resto y nunca sale. Los ítems con `key` null (sin
- * duración, por ejemplo) no entran ni en el grupo ni en el resto; los de
- * `exclude` entran en el resto pero no pueden ser razón ('otro').
+ * Deja fuera al video (leave-one-out): el grupo son los OTROS videos con
+ * el mismo rasgo y el resto, los videos sin él. Sin eso, un video de 6×
+ * en un grupo de dos pone él solo la mediana del grupo y el «porqué» se
+ * demuestra con su propio resultado. Es razón solo si hay al menos
+ * WHY_MIN_GROUP videos a cada lado y la mediana del grupo supera la del
+ * resto en WHY_MIN_LIFT veces. Los ítems con `key` null (sin duración,
+ * por ejemplo) no entran en ningún lado; los de `exclude` no pueden ser
+ * razón ('otro' no dice nada) pero sí cuentan en el resto.
  */
-export function standoutGroups(
+export function whyContrast(
   items: readonly { id: string; key: string | null; x: number }[],
+  targetId: string,
+  key: string | null,
   opts: { exclude?: readonly string[]; minGroup?: number; minLift?: number } = {},
-): GroupContrast[] {
+): GroupContrast | null {
+  if (key === null || opts.exclude?.includes(key)) return null;
   const minGroup = opts.minGroup ?? WHY_MIN_GROUP;
   const minLift = opts.minLift ?? WHY_MIN_LIFT;
-  const validos = items.filter((i): i is { id: string; key: string; x: number } => i.key !== null && Number.isFinite(i.x));
-  const claves = [...new Set(validos.map((i) => i.key))].filter((k) => !opts.exclude?.includes(k)).sort();
-  const out: GroupContrast[] = [];
-  for (const key of claves) {
-    const grupo = validos.filter((i) => i.key === key);
-    const resto = validos.filter((i) => i.key !== key);
-    if (grupo.length < minGroup || resto.length < minGroup) continue;
-    const mg = median(grupo.map((i) => i.x));
-    const mr = median(resto.map((i) => i.x));
-    if (mg === null || mr === null || mr <= 0 || mg < mr * minLift) continue;
-    out.push({ key, ids: grupo.map((i) => i.id).sort(), median: mg, restIds: resto.map((i) => i.id).sort(), restMedian: mr });
-  }
-  return out;
+  const otros = items.filter((i) => i.id !== targetId && i.key !== null && Number.isFinite(i.x));
+  const grupo = otros.filter((i) => i.key === key);
+  const resto = otros.filter((i) => i.key !== key);
+  if (grupo.length < minGroup || resto.length < minGroup) return null;
+  const mg = medianOrNull(grupo.map((i) => i.x));
+  const mr = medianOrNull(resto.map((i) => i.x));
+  if (mg === null || mr === null || mr <= 0 || mg < mr * minLift) return null;
+  return {
+    key,
+    ids: grupo.map((i) => i.id).sort(),
+    median: mg,
+    restIds: resto.map((i) => i.id).sort(),
+    restMedian: mr,
+    lift: mg / mr,
+  };
 }
 
 /** La lista de claims del perfil, sin ids repetidos. */
@@ -709,31 +760,37 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
       })
     : null;
 
-  // El porqué: en cada eje, los grupos que rinden más que el resto.
-  const contrastes = new Map<WhyAxis, Map<string, GroupContrast>>();
-  for (const eje of WHY_AXES) {
-    const items = puntuados.map((p) => ({ id: p.id, key: EJES[eje](p), x: p.score!.viewsVsMedian! }));
-    const grupos = standoutGroups(items, { exclude: eje === 'content' ? ['otro'] : [] });
-    contrastes.set(eje, new Map(grupos.map((g) => [g.key, g])));
-  }
-  const razonesDe = (p: PerfilPostInput): WhyReason[] =>
-    WHY_AXES.flatMap((eje) => {
-      const grupo = EJES[eje](p);
-      const g = grupo === null ? undefined : contrastes.get(eje)!.get(grupo);
-      if (!g || grupo === null) return [];
-      const base = `porque-${EJE_SLUG[eje]}-${claimSlug(grupo)}`;
-      const src = (rows: string[]): ClaimSource => ({ table: 'post_score', id: creatorId, field: 'views_vs_median', rows });
-      return [{
-        axis: eje,
-        group: grupo,
-        groupClaimId: claims.add({ id: base, kind: 'multiple', key: 'why.group', params: { axis: eje, group: grupo }, value: g.median, unit: 'x', source: src(g.ids) }),
-        restClaimId: claims.add({ id: `${base}-resto`, kind: 'multiple', key: 'why.rest', params: { axis: eje, group: grupo }, value: g.restMedian, unit: 'x', source: src(g.restIds) }),
-      }];
-    });
+  // El porqué: en cada eje, el rasgo del video contra los OTROS videos
+  // (whyContrast deja fuera al que se explica). Cada razón tiene sus
+  // propias medianas, así que sus claims llevan el id corto del video.
+  const itemsDe = new Map(
+    WHY_AXES.map((eje) => [eje, puntuados.map((p) => ({ id: p.id, key: EJES[eje](p), x: p.score!.viewsVsMedian! }))] as const),
+  );
+  const razonesDe = (p: PerfilPostInput): WhyReason[] => {
+    const s = shortId(p.id);
+    const src = (rows: string[]): ClaimSource => ({ table: 'post_score', id: creatorId, field: 'views_vs_median', rows });
+    return WHY_AXES.flatMap((eje) => {
+      const g = whyContrast(itemsDe.get(eje)!, p.id, EJES[eje](p), { exclude: eje === 'content' ? ['otro'] : [] });
+      return g ? [{ eje, g }] : [];
+    })
+      // La más fuerte primero; a igual contraste, el orden de los ejes.
+      .sort((a, b) => b.g.lift - a.g.lift || WHY_AXES.indexOf(a.eje) - WHY_AXES.indexOf(b.eje))
+      .slice(0, WHY_MAX_REASONS)
+      .map(({ eje, g }) => {
+        const base = `porque-${s}-${EJE_SLUG[eje]}-${claimSlug(g.key)}`;
+        const params: ClaimParams = { axis: eje, group: g.key, title: tituloDe(p) };
+        return {
+          axis: eje,
+          group: g.key,
+          groupClaimId: claims.add({ id: base, kind: 'multiple', key: 'why.group', params, value: g.median, unit: 'x', source: src(g.ids) }),
+          restClaimId: claims.add({ id: `${base}-resto`, kind: 'multiple', key: 'why.rest', params, value: g.restMedian, unit: 'x', source: src(g.restIds) }),
+        };
+      });
+  };
 
   const duracionTipica = new Map<PlatformId, number | null>();
   for (const p of PLATFORM_ORDER) {
-    duracionTipica.set(p, median(input.posts.filter((x) => x.platformId === p && x.durationS !== null).map((x) => x.durationS!)));
+    duracionTipica.set(p, medianOrNull(input.posts.filter((x) => x.platformId === p && x.durationS !== null).map((x) => x.durationS!)));
   }
   // Se ordena por «veces su mediana»: cada puntaje está medido contra la
   // línea base de su red en SU corte, así que es una razón comparable
@@ -758,6 +815,7 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
         postId: p.id,
         platformId: p.platformId,
         url: p.url,
+        coverUrl: p.coverUrl ?? null,
         title: titulo,
         publishedAt: p.publishedAt,
         outlierTier: score.outlierTier,
@@ -840,7 +898,21 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
     socialProof: pruebaSocialDe(input, claims),
     rates: tarifasDe(input, claims),
     claims: claims.list,
+    posts: postsCitados(input, claims.list),
   };
+}
+
+/**
+ * El índice de los posts que forman algún agregado (source.rows), en el
+ * orden de las entradas (los más recientes primero). Los que no están
+ * entre los posts leídos (una mediana de no seguidores que abarca uno
+ * más viejo) no se inventan: la pantalla los cuenta sin enlazarlos.
+ */
+function postsCitados(input: PerfilInputs, claims: readonly Claim[]): PostRef[] {
+  const citados = new Set(claims.flatMap((c) => c.source.rows ?? []));
+  return input.posts
+    .filter((p) => citados.has(p.id))
+    .map((p) => ({ postId: p.id, platformId: p.platformId, title: tituloDe(p), url: p.url }));
 }
 
 /** Qué hace (piezas y tipos de contenido) y cómo habla (tono), leído de los captions. */

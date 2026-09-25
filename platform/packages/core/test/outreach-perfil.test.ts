@@ -6,13 +6,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildPerfil, claimById, claimSlug, cutOf, genderCode, shortId, standoutGroups, type PerfilComercial,
+  buildPerfil, claimById, claimSlug, cutOf, genderCode, shortId, whyContrast, WHY_MIN_GROUP, WHY_MIN_LIFT, type PerfilComercial,
 } from '../src/outreach/perfil.ts';
 import {
-  contentOf, durationBucketOf, durationVsTypical, hookFromAnalysis, hookOf, median, pieceOf, toneTraitsOf,
+  contentOf, durationBucketOf, durationVsTypical, hookFromAnalysis, hookOf, pieceOf, toneTraitsOf,
 } from '../src/outreach/perfil-captions.ts';
+import { median, medianOrNull } from '../src/scoring.ts';
 import { parseStoredPerfil, type StoredPerfil } from '../src/outreach/perfil-guardado.ts';
-import { entradasLaura } from './fixtures/perfil-entradas.ts';
+import { entradasConVideosLargos, entradasLaura } from './fixtures/perfil-entradas.ts';
 
 /** Todos los ids que citan las secciones: cada uno tiene que estar en claims. */
 function idsCitados(p: PerfilComercial): string[] {
@@ -44,6 +45,9 @@ test('los cinco mejores videos salen ordenados por veces su mediana, con sus cif
   );
   const primero = p.performance.top[0]!;
   assert.equal(primero.outlierTier, 'breakout');
+  // La portada viaja con el video; el que no la tiene queda en null (la pantalla pinta un hueco).
+  assert.equal(primero.coverUrl, 'https://example.com/d01.jpg');
+  assert.equal(p.performance.top[1]!.coverUrl, null);
   const x = claimById(p, primero.multipleClaimId)!;
   assert.deepEqual(x, {
     id: 'video-000000000d01-x', kind: 'multiple', key: 'video.multiple',
@@ -81,35 +85,71 @@ test('el perfil es determinista: las mismas filas dan los mismos ids y el mismo 
   assert.deepEqual(buildPerfil(entradasLaura()), buildPerfil(entradasLaura()));
 });
 
-test('el porqué contrasta: solo es razón el grupo que rinde más que el resto de los videos', () => {
+test('con el seed, ningún rasgo alcanza: el porqué no se inventa y describe el video', () => {
   const p = buildPerfil(entradasLaura());
-  const [breakout, arepa, desayunos, , pasta] = p.performance.top;
-  const razones = (v: typeof breakout) => v!.why.reasons.map((r) => `${r.axis}:${r.group}`);
-  assert.deepEqual(razones(breakout), ['hook:promesa', 'piece:reel', 'content:colaboracion', 'duration:corto']);
-  assert.deepEqual(razones(arepa), ['hook:promesa', 'duration:corto']);
-  // Los desayunos abren con una lista, y es el único: una lista no se contrasta con nada.
-  assert.deepEqual(razones(desayunos), ['piece:reel', 'duration:corto']);
-  // Los videos de duración media rinden menos que el resto: la duración de la pasta no es una razón.
-  assert.deepEqual(razones(pasta), ['hook:promesa']);
-  // Las dos medianas de cada razón son claims con las filas que las forman.
-  const promesa = claimById(p, breakout!.why.reasons[0]!.groupClaimId)!;
-  const resto = claimById(p, breakout!.why.reasons[0]!.restClaimId)!;
-  assert.deepEqual([promesa.id, promesa.key, promesa.value, promesa.source.rows!.length], ['porque-gancho-promesa', 'why.group', 3.71, 3]);
-  assert.deepEqual([resto.id, resto.key, resto.value, resto.source.rows!.length], ['porque-gancho-promesa-resto', 'why.rest', 2.2445, 4]);
-  // Un rasgo que tienen todos los videos no tiene resto: nunca es razón.
-  const todos = p.performance.top.map((v, i) => ({ id: String(i), key: 'breve', x: i + 1 }));
-  assert.deepEqual(standoutGroups(todos), []);
+  // Siete videos con puntaje: ningún grupo tiene tres OTROS videos y tres del otro lado con la mitad más de rendimiento.
+  for (const v of p.performance.top) assert.deepEqual(v.why.reasons, [], v.title);
+  assert.ok(!p.claims.some((c) => c.key === 'why.group' || c.key === 'why.rest'));
 });
 
-test('standoutGroups: tamaño mínimo, cuánto supera al resto, excluidos y sin clave', () => {
+test('el porqué deja fuera al video: su grupo son los OTROS videos con el rasgo, y sale la razón más fuerte', () => {
+  const p = buildPerfil(entradasConVideosLargos());
+  const breakout = p.performance.top[0]!;
+  assert.equal(breakout.title, 'Cold brew en casa en 3 pasos');
+  // Una sola razón, la de mayor contraste: los otros cortos (3,71; 2,662; 2,469; 2,02) frente a los que no lo son.
+  assert.deepEqual(breakout.why.reasons.map((r) => `${r.axis}:${r.group}`), ['duration:corto']);
+  const [razon] = breakout.why.reasons;
+  const grupo = claimById(p, razon!.groupClaimId)!;
+  const resto = claimById(p, razon!.restClaimId)!;
+  assert.equal(grupo.id, 'porque-000000000d01-duracion-corto');
+  assert.equal(resto.id, 'porque-000000000d01-duracion-corto-resto');
+  assert.equal(grupo.value, (2.469 + 2.662) / 2);
+  // El video que se explica no está en ninguna de las dos medianas.
+  assert.ok(!grupo.source.rows!.includes(breakout.postId));
+  assert.ok(!resto.source.rows!.includes(breakout.postId));
+  assert.equal(grupo.source.rows!.length, 4);
+  assert.equal(resto.value, 0.75);
+  assert.equal(grupo.params.title, breakout.title);
+  // Cada video tiene sus propias medianas: la arepa (también corta) se mide sin ella misma y con el cold brew dentro.
+  const arepa = p.performance.top[1]!;
+  const suya = claimById(p, arepa.why.reasons[0]!.groupClaimId)!;
+  assert.equal(suya.id, 'porque-000000000d06-duracion-corto');
+  assert.ok(suya.source.rows!.includes(breakout.postId) && !suya.source.rows!.includes(arepa.postId));
+  // Los posts que forman los agregados vienen en el índice, con título y enlace.
+  const indice = new Set(p.posts.map((x) => x.postId));
+  for (const id of grupo.source.rows!) assert.ok(indice.has(id), id);
+});
+
+test('whyContrast: un grupo de dos, con el video a 2,7× y el otro a 1,1×, no es razón', () => {
   const it = (id: string, key: string | null, x: number) => ({ id, key, x });
-  const items = [it('a', 'reel', 4), it('b', 'reel', 3), it('c', 'short', 1), it('d', 'short', 1.2), it('e', null, 99), it('f', 'otro', 5)];
-  assert.deepEqual(standoutGroups(items, { exclude: ['otro'] }), [
-    { key: 'reel', ids: ['a', 'b'], median: 3.5, restIds: ['c', 'd', 'f'], restMedian: 1.2 },
-  ]);
-  // Uno solo no es un grupo; con el resto igual, no hay razón.
-  assert.deepEqual(standoutGroups([it('a', 'x', 5), it('b', 'y', 1), it('c', 'y', 1)]), []);
-  assert.deepEqual(standoutGroups([it('a', 'x', 1.1), it('b', 'x', 1.1), it('c', 'y', 1), it('d', 'y', 1)]), []);
+  // El caso de r2: «Tus listas: 1,9× frente a 1×», donde el 1,9× lo ponía el mismo video.
+  const items = [it('yo', 'lista', 2.7), it('otra', 'lista', 1.1), it('a', 'directo', 1), it('b', 'directo', 1), it('c', 'error', 0.9), it('d', 'pregunta', 1.2)];
+  assert.equal(whyContrast(items, 'yo', 'lista'), null);
+  // Aunque se bajara el mínimo a uno, sin el video el grupo rinde como el resto.
+  assert.equal(whyContrast(items, 'yo', 'lista', { minGroup: 1 }), null);
+  assert.equal(WHY_MIN_GROUP, 3);
+  assert.equal(WHY_MIN_LIFT, 1.5);
+});
+
+test('whyContrast: tamaño mínimo sin contar el video, cuánto supera al resto, excluidos y sin clave', () => {
+  const it = (id: string, key: string | null, x: number) => ({ id, key, x });
+  const items = [
+    it('yo', 'reel', 9), it('a', 'reel', 4), it('b', 'reel', 3), it('c', 'reel', 3.5),
+    it('d', 'short', 1), it('e', 'short', 1.2), it('f', 'otro', 5), it('g', 'short', 2), it('h', null, 99),
+  ];
+  assert.deepEqual(whyContrast(items, 'yo', 'reel'), {
+    key: 'reel', ids: ['a', 'b', 'c'], median: 3.5, restIds: ['d', 'e', 'f', 'g'], restMedian: 1.6, lift: 3.5 / 1.6,
+  });
+  // Con un reel menos, quedan dos OTROS: no alcanza.
+  assert.equal(whyContrast(items.filter((i) => i.id !== 'c'), 'yo', 'reel'), null);
+  // 'otro' no puede ser razón, y un video sin clave tampoco.
+  assert.equal(whyContrast(items, 'f', 'otro', { exclude: ['otro'] }), null);
+  assert.equal(whyContrast(items, 'h', null), null);
+  // Un rasgo que tienen todos no tiene resto.
+  assert.equal(whyContrast(items.map((i) => ({ ...i, key: 'breve' })), 'yo', 'breve'), null);
+  // Por debajo de la mitad más, no es razón: 1,4 veces.
+  const flojo = [it('yo', 'x', 5), it('a', 'x', 1.4), it('b', 'x', 1.4), it('c', 'x', 1.4), it('d', 'y', 1), it('e', 'y', 1), it('f', 'y', 1)];
+  assert.equal(whyContrast(flojo, 'yo', 'x'), null);
 });
 
 test('el porqué describe el video: gancho, pieza, tipo y duración', () => {
@@ -207,9 +247,12 @@ test('lectura de captions: gancho, pieza, contenido, duración y tono', () => {
   assert.equal(contentOf('Pan', 'Hoy pan', false), 'otro');
   assert.deepEqual([durationBucketOf(10), durationBucketOf(45), durationBucketOf(46), durationBucketOf(200), durationBucketOf(null)], ['muy_corto', 'corto', 'medio', 'largo', null]);
   assert.deepEqual([durationVsTypical(30, 40), durationVsTypical(40, 40), durationVsTypical(50, 40), durationVsTypical(50, null)], ['mas_corto', 'similar', 'mas_largo', null]);
-  assert.equal(median([3, 1, 2]), 2);
-  assert.equal(median([1, 2, 3, 4]), 2.5);
-  assert.equal(median([]), null);
+  assert.equal(medianOrNull([3, 1, 2]), 2);
+  assert.equal(medianOrNull([1, 2, 3, 4]), 2.5);
+  assert.equal(medianOrNull([]), null);
+  assert.equal(medianOrNull([Number.NaN, 4]), 4);
+  // La de scoring.ts sigue devolviendo 0 en vacío: sus llamadores cuentan con eso.
+  assert.equal(median([]), 0);
   assert.deepEqual(toneTraitsOf('¿Tú qué le pones? 🍳 #arepa', ['arepa']), ['emojis', 'tutea', 'preguntas', 'breve', 'hashtags']);
   assert.deepEqual(toneTraitsOf('   ', []), []);
 });
@@ -231,14 +274,14 @@ test('ids de claim: cortos, legibles y dentro del alfabeto de la marca', () => {
 test('el perfil guardado se lee de vuelta; uno roto o de otra versión es «sin calcular»', () => {
   const perfil = buildPerfil(entradasLaura());
   const guardado: StoredPerfil = {
-    version: 2, computedAt: perfil.computedAt, perfil,
+    version: 3, computedAt: perfil.computedAt, perfil,
     narrative: { text: 'Hola.', source: 'template', model: null, writtenAt: perfil.computedAt, fallback: 'no_model' },
   };
   const ida = JSON.parse(JSON.stringify(guardado));
   assert.deepEqual(parseStoredPerfil(ida), guardado);
   assert.equal(parseStoredPerfil(null), null);
-  // Un perfil v1 (claims con texto, sin clave) se recalcula.
-  assert.equal(parseStoredPerfil({ ...ida, version: 1 }), null);
+  // Un perfil de otra versión (v2: el porqué con el video dentro de su grupo) se recalcula.
+  assert.equal(parseStoredPerfil({ ...ida, version: 2 }), null);
   assert.equal(parseStoredPerfil({ ...ida, narrative: { ...ida.narrative, source: 'otro' } }), null);
   const claimRoto = { ...ida, perfil: { ...ida.perfil, claims: [{ ...ida.perfil.claims[0], id: 'Con Mayúsculas' }] } };
   assert.equal(parseStoredPerfil(claimRoto), null);
@@ -249,7 +292,7 @@ test('el perfil guardado se lee de vuelta; uno roto o de otra versión es «sin 
 test('un perfil guardado a medio escribir no llega a la pantalla: cada arreglo que recorre se comprueba', () => {
   const perfil = buildPerfil(entradasLaura());
   const ida = JSON.parse(JSON.stringify({
-    version: 2, computedAt: perfil.computedAt, perfil,
+    version: 3, computedAt: perfil.computedAt, perfil,
     narrative: { text: 'Hola.', source: 'template', model: null, writtenAt: perfil.computedAt, fallback: 'no_model' },
   }));
   const con = (cambio: (p: Record<string, any>) => void) => {
@@ -266,6 +309,11 @@ test('un perfil guardado a medio escribir no llega a la pantalla: cada arreglo q
   assert.equal(con((p) => { p.rates.lines = undefined; }), null);
   assert.equal(con((p) => { delete p.performance.top[0].why.reasons; }), null);
   assert.equal(con((p) => { p.performance.medians[0].cutHours = '7'; }), null);
+  // La portada y el enlace de un video solo pueden ser http(s): un «javascript:» a mano no llega a un src ni a un href.
+  assert.equal(con((p) => { p.performance.top[0].coverUrl = 'javascript:alert(1)'; }), null);
+  assert.equal(con((p) => { p.performance.top[0].url = 'javascript:alert(1)'; }), null);
+  assert.equal(con((p) => { delete p.posts; }), null);
+  assert.ok(con((p) => { p.performance.top[0].coverUrl = 'https://cdn.example.com/p.jpg'; }));
   // Sin tarifario es válido: rates null.
   assert.ok(con((p) => { p.rates = null; }));
 });

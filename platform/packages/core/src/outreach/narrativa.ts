@@ -11,9 +11,11 @@
  *   · una marca con un id que no está en la lista → rechazada;
  *   · un dígito fuera de una marca → rechazado (bare_number);
  *   · un numeral o cuantificador en letras fuera de una marca («doce
- *     mil», «un millón», «el doble», «la mitad», «por ciento») o los
- *     signos % y × sueltos → rechazados (number_word). La lista es
- *     cerrada (NUMBER_WORDS_ES en perfil-captions.ts);
+ *     mil», «un millón», «el doble», «la mitad», «por ciento»), un verbo
+ *     que multiplica («dupliqué», «cuadrupliqué», «multipliqué»), un
+ *     puesto de ranking («número uno», «primer lugar», «top») o los
+ *     signos % y × sueltos → rechazados (number_word). Las listas son
+ *     cerradas y van por idioma (CANTIDADES);
  *   · salvo que el número sea parte de un término que el perfil ya
  *     contiene tal cual (el título de un video, el nombre de una campaña
  *     o de una tarifa, una franja de edad): «Pasta cremosa en cuatro
@@ -41,15 +43,72 @@ export const CLAIM_MARKER_RE = /\[claim:([a-z0-9][a-z0-9-]{0,79})\]/g;
 const MARKER_LIKE_RE = /\[\s*claim\s*:[^\]\n]*\]?/gi;
 /** Un número escrito con dígitos, con sus separadores: 412.000 · 5,97 · 25-34 cuenta como dos. */
 const DIGITS_RE = /\p{Nd}+(?:[.,]\p{Nd}+)*/gu;
+
+// ---------------------------------------------------------------------
+// El idioma de la narrativa
+// ---------------------------------------------------------------------
+
 /**
- * Un número escrito con letras, con límites de palabra Unicode (el \b de
- * JavaScript es ASCII), o un signo de cifra suelto. Los más largos
+ * Los idiomas en que se sabe redactar y verificar la narrativa. Hoy solo
+ * español: el prompt, la plantilla y las listas del verificador están en
+ * español, y la pantalla lo dice (messages.ts, narrativa.idioma). Añadir
+ * un idioma es añadir sus datos a los mapas de abajo (CANTIDADES,
+ * SISTEMA), no escribir otra función.
+ */
+export const NARRATIVE_LANGUAGES = ['es'] as const;
+export type NarrativeLanguage = (typeof NARRATIVE_LANGUAGES)[number];
+export const DEFAULT_NARRATIVE_LANGUAGE: NarrativeLanguage = 'es';
+
+/**
+ * El idioma de la narrativa para el locale del workspace: el suyo si se
+ * sabe redactar en él y, si no, español (DEFAULT_NARRATIVE_LANGUAGE).
+ */
+export function narrativeLanguage(locale: string | null | undefined): NarrativeLanguage {
+  const lang = (locale ?? '').split('-')[0]?.toLowerCase() ?? '';
+  return (NARRATIVE_LANGUAGES as readonly string[]).includes(lang) ? (lang as NarrativeLanguage) : DEFAULT_NARRATIVE_LANGUAGE;
+}
+
+/**
+ * Lo que en cada idioma dice una cantidad sin dígitos, para el verificador:
+ *   words    numerales y cuantificadores, enteros («dos», «mil», «doble»);
+ *   stems    raíces de verbos que multiplican, como expresión y con
+ *            cualquier terminación («dupli(?:c|qu)» → duplicar, dupliqué,
+ *            duplicó…: la c pasa a qu delante de e);
+ *   phrases  frases de ranking y de porcentaje, con cualquier espacio
+ *            entre sus palabras («número uno», «primer lugar», «top»).
+ */
+export const CANTIDADES: Readonly<Record<NarrativeLanguage, { words: readonly string[]; stems: readonly string[]; phrases: readonly string[] }>> = {
+  es: {
+    words: NUMBER_WORDS_ES,
+    stems: ['dupli(?:c|qu)', 'tripli(?:c|qu)', 'cuadrupli(?:c|qu)', 'quintupli(?:c|qu)', 'sextupli(?:c|qu)', 'multipli(?:c|qu)'],
+    phrases: [
+      'por ciento', 'número uno', 'numero uno', 'primer lugar', 'primer puesto', 'primera posición', 'primera posicion',
+      'primer sitio', 'top',
+    ],
+  },
+};
+
+const numberWordRes = new Map<NarrativeLanguage, RegExp>();
+/**
+ * Una cantidad escrita con letras, con límites de palabra Unicode (el \b
+ * de JavaScript es ASCII), o un signo de cifra suelto. Los más largos
  * primero: «dieciséis» antes que «seis».
  */
-const NUMBER_WORD_RE = new RegExp(
-  `(?<![\\p{L}\\p{N}_])(?:por\\s+ciento|${[...NUMBER_WORDS_ES].sort((a, b) => b.length - a.length).join('|')})(?![\\p{L}\\p{N}_])|[%×‰]`,
-  'giu',
-);
+function numberWordRe(lang: NarrativeLanguage): RegExp {
+  let re = numberWordRes.get(lang);
+  if (!re) {
+    const c = CANTIDADES[lang];
+    const frases = c.phrases.map((f) => f.split(/\s+/).map(escapar).join('\\s+'));
+    const palabras = [...frases, ...c.words.map(escapar)].sort((a, b) => b.length - a.length);
+    const raices = c.stems.map((r) => `${r}\\p{L}*`);
+    re = new RegExp(
+      `(?<![\\p{L}\\p{N}_])(?:${[...raices, ...palabras].join('|')})(?![\\p{L}\\p{N}_])|[%×‰]`,
+      'giu',
+    );
+    numberWordRes.set(lang, re);
+  }
+  return new RegExp(re.source, re.flags);
+}
 
 export const NARRATIVE_PARAGRAPHS = 3;
 /** Tres párrafos de unas cien palabras, con marcas: 2 400 caracteres sobran. */
@@ -139,14 +198,64 @@ function escapar(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Quita del texto los términos permitidos, enteros y con límites de palabra, sin distinguir mayúsculas. */
-function sinTerminos(text: string, terms: readonly string[]): string {
-  let out = text;
-  for (const term of terms) {
-    const re = new RegExp(`(?<![\\p{L}\\p{N}])${escapar(term)}(?![\\p{L}\\p{N}])`, 'giu');
-    out = out.replace(re, ' ');
+/**
+ * Lo que el verificador necesita del perfil: los ids de sus cifras y sus
+ * términos (perfilTerms). Son datos planos: la pantalla los calcula en el
+ * servidor y los pasa al cliente, que verifica la vista previa con la
+ * misma función que la puerta del servidor.
+ */
+export interface VerifierContext {
+  ids: readonly string[];
+  terms: readonly string[];
+  language?: NarrativeLanguage;
+}
+
+export function verifierContext(perfil: PerfilComercial, language: NarrativeLanguage = DEFAULT_NARRATIVE_LANGUAGE): VerifierContext {
+  return { ids: perfil.claims.map((c) => c.id), terms: perfilTerms(perfil), language };
+}
+
+/** Un problema del verificador con su lugar en el texto, para subrayarlo en la vista previa. */
+export interface IssueSpan {
+  start: number;
+  end: number;
+  code: 'unknown_claim' | 'malformed_marker' | 'bare_number' | 'number_word' | 'placeholder';
+  /** El texto tal cual (para unknown_claim, el id). */
+  text: string;
+}
+
+/** Cambia cada coincidencia por espacios del mismo largo: las posiciones del resto no se mueven. */
+function tapar(text: string, re: RegExp): string {
+  return text.replace(re, (x) => ' '.repeat(x.length));
+}
+
+/**
+ * Los problemas de un texto, con su posición. Cada pasada tapa lo que ya
+ * miró con espacios del mismo largo, así las posiciones valen para el
+ * texto que entró: primero las marcas válidas, luego las mal escritas,
+ * luego los términos del perfil (un título con «3 pasos» no es una
+ * cifra), y en lo que queda se buscan dígitos, cantidades en letras y
+ * huecos.
+ */
+export function narrativeIssueSpans(text: string, ctx: VerifierContext): IssueSpan[] {
+  const spans: IssueSpan[] = [];
+  const ids = new Set(ctx.ids);
+  for (const m of text.matchAll(CLAIM_MARKER_RE)) {
+    if (!ids.has(m[1]!)) spans.push({ start: m.index, end: m.index + m[0].length, code: 'unknown_claim', text: m[1]! });
   }
-  return out;
+  const sinMarcas = tapar(text, CLAIM_MARKER_RE);
+  for (const m of sinMarcas.matchAll(MARKER_LIKE_RE)) {
+    spans.push({ start: m.index, end: m.index + m[0].length, code: 'malformed_marker', text: m[0] });
+  }
+  let limpio = tapar(sinMarcas, MARKER_LIKE_RE);
+  for (const term of ctx.terms) {
+    limpio = tapar(limpio, new RegExp(`(?<![\\p{L}\\p{N}])${escapar(term)}(?![\\p{L}\\p{N}])`, 'giu'));
+  }
+  for (const m of limpio.matchAll(DIGITS_RE)) spans.push({ start: m.index, end: m.index + m[0].length, code: 'bare_number', text: m[0] });
+  for (const m of limpio.matchAll(numberWordRe(ctx.language ?? DEFAULT_NARRATIVE_LANGUAGE))) {
+    spans.push({ start: m.index, end: m.index + m[0].length, code: 'number_word', text: m[0].toLowerCase().replace(/\s+/g, ' ') });
+  }
+  for (const h of findPlaceholders(limpio)) spans.push({ start: h.index, end: h.index + h.match.length, code: 'placeholder', text: h.match });
+  return spans.sort((a, b) => a.start - b.start || b.end - a.end);
 }
 
 /**
@@ -155,6 +264,11 @@ function sinTerminos(text: string, terms: readonly string[]): string {
  * edición del creador tienen que pasar para guardarse.
  */
 export function verifyNarrative(text: string, perfil: PerfilComercial, opts: VerifyOptions = {}): NarrativeVerdict {
+  return verifyNarrativeWith(text, verifierContext(perfil), opts);
+}
+
+/** verifyNarrative con el contexto ya armado: la usa también la vista previa del cliente. */
+export function verifyNarrativeWith(text: string, ctx: VerifierContext, opts: VerifyOptions = {}): NarrativeVerdict {
   const issues: NarrativeIssue[] = [];
   const cited: string[] = [];
   const t = text.replace(/\r\n/g, '\n').trim();
@@ -169,31 +283,20 @@ export function verifyNarrative(text: string, perfil: PerfilComercial, opts: Ver
     issues.push({ code: 'paragraphs', expected: esperados ?? NARRATIVE_PARAGRAPHS, found: parrafos });
   }
 
-  const ids = new Set(perfil.claims.map((c) => c.id));
-  const desconocidos = new Set<string>();
+  const ids = new Set(ctx.ids);
   for (const m of t.matchAll(CLAIM_MARKER_RE)) {
-    const id = m[1]!;
-    if (!ids.has(id)) desconocidos.add(id);
-    else if (!cited.includes(id)) cited.push(id);
+    if (ids.has(m[1]!) && !cited.includes(m[1]!)) cited.push(m[1]!);
   }
-  for (const id of desconocidos) issues.push({ code: 'unknown_claim', id });
-
-  // Sin las marcas válidas, lo que quede con forma de marca está mal escrito.
-  const sinMarcas = t.replace(CLAIM_MARKER_RE, ' ');
-  const malas = new Set<string>();
-  for (const m of sinMarcas.matchAll(MARKER_LIKE_RE)) malas.add(m[0]);
-  for (const text of malas) issues.push({ code: 'malformed_marker', text });
-
-  const limpio = sinTerminos(sinMarcas.replace(MARKER_LIKE_RE, ' '), perfilTerms(perfil));
-  const sueltos = new Set<string>();
-  for (const m of limpio.matchAll(DIGITS_RE)) sueltos.add(m[0]);
-  for (const text of sueltos) issues.push({ code: 'bare_number', text });
-
-  const enLetras = new Set<string>();
-  for (const m of limpio.matchAll(NUMBER_WORD_RE)) enLetras.add(m[0].toLowerCase().replace(/\s+/g, ' '));
-  for (const text of enLetras) issues.push({ code: 'number_word', text });
-
-  for (const h of findPlaceholders(limpio)) issues.push({ code: 'placeholder', text: h.match });
+  // Un problema por texto distinto, agrupados por tipo en el orden de siempre.
+  const spans = narrativeIssueSpans(t, ctx);
+  for (const code of ['unknown_claim', 'malformed_marker', 'bare_number', 'number_word', 'placeholder'] as const) {
+    const vistos = new Set<string>();
+    for (const sp of spans) {
+      if (sp.code !== code || vistos.has(sp.text)) continue;
+      vistos.add(sp.text);
+      issues.push(code === 'unknown_claim' ? { code, id: sp.text } : { code, text: sp.text });
+    }
+  }
 
   if (cited.length < (opts.minClaims ?? 0)) issues.push({ code: 'no_claims' });
 
@@ -261,6 +364,8 @@ export const PORQUE_ES = {
   /** En plural, para hablar de un grupo de videos: «mis videos cortos». */
   durationPlural: { muy_corto: 'muy cortos', corto: 'cortos', medio: 'de duración media', largo: 'largos' } satisfies Record<DurationBucket, string>,
   vsTypical: { mas_corto: 'más corto que sus videos típicos', similar: null, mas_largo: 'más largo que sus videos típicos' },
+  /** En primera persona, para la plantilla. */
+  vsTypicalYo: { mas_corto: 'más corto que mis videos típicos', similar: null, mas_largo: 'más largo que mis videos típicos' },
   /** En tercera persona, para el prompt. */
   tone: {
     emojis: 'usa emojis',
@@ -320,13 +425,17 @@ function grupoEs(axis: WhyAxis, group: string): string {
   }
 }
 
-/** Un grupo del porqué en primera persona, para la plantilla: «mis videos que abren con…», «mis reels». */
+/**
+ * Un grupo del porqué en primera persona, para la plantilla: «mis otros
+ * videos que abren con…», «mis otros reels». «Otros» porque el grupo deja
+ * fuera al video que se explica (whyContrast).
+ */
 function grupoYo(r: WhyReason): string {
   switch (r.axis) {
-    case 'hook': return `mis videos que ${grupoEs('hook', r.group)}`;
-    case 'piece': return `mis ${PORQUE_ES.pieces[r.group as keyof typeof PORQUE_ES.pieces] ?? r.group}`;
-    case 'content': return `mis ${PORQUE_ES.contents[r.group as keyof typeof PORQUE_ES.contents] ?? r.group}`;
-    case 'duration': return `mis videos ${PORQUE_ES.durationPlural[r.group as DurationBucket] ?? r.group}`;
+    case 'hook': return `mis otros videos que ${grupoEs('hook', r.group)}`;
+    case 'piece': return `mis otros ${PORQUE_ES.pieces[r.group as keyof typeof PORQUE_ES.pieces] ?? r.group}`;
+    case 'content': return `mis otros ${PORQUE_ES.contents[r.group as keyof typeof PORQUE_ES.contents] ?? r.group}`;
+    case 'duration': return `mis otros videos ${PORQUE_ES.durationPlural[r.group as DurationBucket] ?? r.group}`;
   }
 }
 
@@ -353,8 +462,8 @@ export function claimLabelEs(c: Pick<Claim, 'key' | 'params'>, locale = 'es'): s
     case 'video.multiple': return `Veces su mediana de ${r}${corte} que hizo «${p.title}»`;
     case 'video.views': return `Views de «${p.title}» en ${r}${corte}`;
     case 'video.duration': return `Duración de «${p.title}»`;
-    case 'why.group': return `Veces su mediana, mediana de sus videos que ${grupoEs(p.axis!, p.group!)}`;
-    case 'why.rest': return `Veces su mediana, mediana del resto de sus videos (frente a los que ${grupoEs(p.axis!, p.group!)})`;
+    case 'why.group': return `Veces su mediana, mediana de sus OTROS videos que ${grupoEs(p.axis!, p.group!)} (sin contar «${p.title ?? ''}»)`;
+    case 'why.rest': return `Veces su mediana, mediana de sus videos que no ${grupoEs(p.axis!, p.group!)}`;
     case 'format.piece': return `Publicaciones que son ${PORQUE_ES.pieces[p.piece!]}`;
     case 'format.content': return `Publicaciones que son ${PORQUE_ES.contents[p.content!]}`;
     case 'tone': return `Parte de sus captions en los que ${PORQUE_ES.tone[p.trait!]}`;
@@ -442,9 +551,13 @@ export function templateNarrative(perfil: PerfilComercial, opts: TemplateOptions
         ? `Mi mejor video, «${mejor.title}» en ${r}, llegó a ${m(mejor.viewsClaimId)} views${cuando ? ` ${cuando}` : ''}: ${m(mejor.multipleClaimId)} mi mediana de ${r}${base ? `, que a esa edad es de ${m(base)} views` : ''}.`
         : `Mi mejor video, «${mejor.title}» en ${r}, hizo ${m(mejor.multipleClaimId)} mi mediana de ${r}${base ? `, que es de ${m(base)} views` : ''}.`,
     );
-    const razon = mejor.why.reasons[0];
+    // Cómo es el video: la explicación principal. La razón, solo si los datos la sostienen.
+    const w = mejor.why;
+    const vs = w.durationVsTypical ? PORQUE_ES.vsTypicalYo[w.durationVsTypical] : null;
+    p2.push(`Ese video ${PORQUE_ES.hook[w.hook]} y es ${PORQUE_ES.content[w.content] ?? PORQUE_ES.piece[w.piece]}${vs ? `, ${vs}` : ''}.`);
+    const razon = w.reasons[0];
     if (razon) {
-      p2.push(`Lo que lo distingue: ${grupoYo(razon)} hacen ${m(razon.groupClaimId)} mi mediana, frente a ${m(razon.restClaimId)} del resto.`);
+      p2.push(`Y no es casualidad: ${grupoYo(razon)} hacen ${m(razon.groupClaimId)} mi mediana, frente a ${m(razon.restClaimId)} de los demás.`);
     }
   }
   const piezas = formats.pieces.slice(0, 2).map((f) => PORQUE_ES.pieces[f.key]);
@@ -501,24 +614,27 @@ export interface NarrativePrompt {
  */
 export const NARRATIVE_MAX_TOKENS = 4000;
 
-const SISTEMA = `Escribes el perfil comercial de un creador de contenido: el texto con el que se presenta ante marcas que podrían contratarlo.
+const SISTEMA: Readonly<Record<NarrativeLanguage, string>> = {
+  es: `Escribes el perfil comercial de un creador de contenido: el texto con el que se presenta ante marcas que podrían contratarlo.
 
 Reglas que no se negocian:
 1. Escribe exactamente tres párrafos, separados por una línea en blanco, en primera persona, en español neutro, sin títulos, viñetas ni emojis.
    - Párrafo 1: quién soy y a quién llego (identidad y audiencia).
    - Párrafo 2: qué me funciona (desempeño, mejores videos y lo que los distingue, formatos y tono).
    - Párrafo 3: prueba social y cómo trabajar juntos (campañas con resultado y tarifas). Cierra con una invitación sencilla, sin urgencia.
-2. Toda cifra se escribe SOLO como su marca, [claim:id], copiada exactamente de la lista CIFRAS. Nunca escribas un dígito fuera de una marca, ni un número o cantidad en letras (dos, mil, millón, el doble, la mitad, por ciento), ni los signos % o ×.
+2. Toda cifra se escribe SOLO como su marca, [claim:id], copiada exactamente de la lista CIFRAS. Nunca escribas un dígito fuera de una marca, ni un número o cantidad en letras (dos, mil, millón, el doble, la mitad, por ciento), ni verbos que multiplican (duplicar, triplicar, multiplicar), ni puestos de ranking («número uno», «primer lugar», «top»), ni los signos % o ×.
 3. Solo puedes usar las cifras de la lista. Si una cifra no está, no la menciones.
 4. Solo menciona marcas, campañas y videos que aparecen en los datos. No inventes clientes, premios ni resultados.
 5. Puedes nombrar un video, una campaña o una tarifa copiando su nombre tal cual aparece entre «».
 6. Nada de superlativos vacíos ("increíble", "el mejor"), urgencia falsa ni presión. Máximo cien palabras por párrafo.
 7. Cada marca se reemplaza por su valor tal como aparece en CIFRAS: escribe alrededor lo que falte (por ejemplo «views»), sin repetir lo que el valor ya trae (%, ×, la moneda, «s»).
 8. Una cifra «veces su mediana» se compara con la mediana de SU red y SU corte: si la pones junto a una mediana, que sea la que dice su etiqueta, y nombra la red.
-9. Responde solo con los tres párrafos.`;
+9. Una razón de «lo que lo distingue» compara los OTROS videos con ese rasgo contra los que no lo tienen: dilo así, sin atribuirle al video un resultado que no es suyo. Si no hay razón, describe cómo es el video y no inventes una causa.
+10. Responde solo con los tres párrafos.`,
+};
 
 export interface PromptOptions {
-  /** El locale del workspace: con él se nombran los países. */
+  /** El locale del workspace: con él se nombran los países y se elige el idioma (narrativeLanguage). */
   locale?: string;
 }
 
@@ -549,11 +665,13 @@ export function buildNarrativePrompt(perfil: PerfilComercial, formatClaim: Claim
       w.duration ? `es ${PORQUE_ES.duration[w.duration]}` : null,
       w.durationVsTypical ? PORQUE_ES.vsTypical[w.durationVsTypical] : null,
     ].filter(Boolean);
-    const distingue = w.reasons.map((r) => `los que ${grupoEs(r.axis, r.group)} hacen [claim:${r.groupClaimId}] frente a [claim:${r.restClaimId}] del resto`);
+    const distingue = w.reasons.map(
+      (r) => `sus otros videos que ${grupoEs(r.axis, r.group)} hacen [claim:${r.groupClaimId}] frente a [claim:${r.restClaimId}] de los que no`,
+    );
     const cifras = [v.viewsClaimId, v.multipleClaimId, v.baselineClaimId, v.durationClaimId].filter(Boolean).map((id) => `[claim:${id}]`);
     l.push(
       `- Video ${['uno', 'dos', 'tres', 'cuatro', 'cinco'][i] ?? ''}: «${v.title}» en ${red(v.platformId)}. Cómo es: ${describe.join('; ')}.` +
-        ` Lo que lo distingue: ${distingue.length ? distingue.join('; ') : 'ningún rasgo supera al resto de sus videos; no inventes una razón'}.` +
+        ` Lo que lo distingue: ${distingue.length ? distingue.join('; ') : 'los datos no alcanzan para decir qué lo separa de sus demás videos; describe cómo es y no inventes una razón'}.` +
         ` Cifras: ${cifras.join(', ')}`,
     );
   });
@@ -576,7 +694,7 @@ export function buildNarrativePrompt(perfil: PerfilComercial, formatClaim: Claim
   l.push('', 'CIFRAS (id → qué es: valor)');
   for (const c of perfil.claims) l.push(`[claim:${c.id}] → ${claimLabelEs(c, opts.locale)}: ${formatClaim(c)}`);
 
-  return { system: SISTEMA, user: l.join('\n'), maxTokens: NARRATIVE_MAX_TOKENS };
+  return { system: SISTEMA[narrativeLanguage(opts.locale)], user: l.join('\n'), maxTokens: NARRATIVE_MAX_TOKENS };
 }
 
 /** Lo que el verificador encontró, dicho para que el modelo lo corrija en el segundo intento. */
@@ -668,6 +786,7 @@ export async function writeNarrative(perfil: PerfilComercial, opts: WriteNarrati
   const agotado = async () => (typeof opts.budgetExhausted === 'function' ? opts.budgetExhausted() : Boolean(opts.budgetExhausted));
 
   const base = buildNarrativePrompt(perfil, opts.formatClaim, { locale: opts.locale });
+  const contexto = verifierContext(perfil, narrativeLanguage(opts.locale));
   const calls: LlmUsage[] = [];
   let issues: NarrativeIssue[] = [];
   const intentos = Math.max(1, opts.attempts ?? NARRATIVE_ATTEMPTS);
@@ -686,7 +805,7 @@ export async function writeNarrative(perfil: PerfilComercial, opts: WriteNarrati
     calls.push(uso);
     await opts.onCall?.(uso);
     const text = paragraphsOf(respuesta.text).join('\n\n');
-    const veredicto = verifyNarrative(text, perfil, { paragraphs: NARRATIVE_PARAGRAPHS, minClaims: 1 });
+    const veredicto = verifyNarrativeWith(text, contexto, { paragraphs: NARRATIVE_PARAGRAPHS, minClaims: 1 });
     if (veredicto.ok) return { text, source: 'llm', model: opts.model.model, calls, fallback: null, issues: [] };
     issues = veredicto.issues;
   }

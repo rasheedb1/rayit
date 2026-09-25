@@ -1,13 +1,13 @@
 /**
  * Los nombres de marca de las cuatro redes y su orden de presentación.
  *
- * Un solo lugar: el kit de interfaz (components/ui/platform-pill.tsx) los
- * reexporta como PLATFORM_LABEL y el perfil comercial (VEN-11) los usa en
- * el prompt y en la narrativa de plantilla. Son nombres propios: no se
- * traducen, por eso pueden vivir en @mc/core y no en un messages.ts.
- *
- * Módulo sin dependencias de ejecución: lo importa un componente de
- * cliente sin arrastrar el resto de @mc/core.
+ * Los usa el perfil comercial (VEN-11) en el prompt y en la narrativa de
+ * plantilla, que viven en @mc/core y no pueden importar la web. Son
+ * nombres propios: no se traducen, por eso pueden vivir aquí y no en un
+ * messages.ts. La pantalla sigue usando PLATFORM_LABEL del kit
+ * (components/ui/platform-pill.tsx), que es de Nicolás y no se toca:
+ * unificar las dos listas en una sola fuente queda propuesto para un PR
+ * aparte que él revise (nota de VEN-11 en el backlog).
  */
 import type { PlatformId } from './campanas.ts';
 

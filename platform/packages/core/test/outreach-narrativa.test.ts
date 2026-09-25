@@ -8,12 +8,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildPerfil, type Claim } from '../src/outreach/perfil.ts';
 import {
-  buildNarrativePrompt, claimLabelEs, claimsById, narrativeSegments, perfilTerms, templateNarrative, verifyNarrative, writeNarrative,
-  type NarrativeModel, type NarrativePrompt,
+  buildNarrativePrompt, CANTIDADES, claimLabelEs, claimsById, narrativeIssueSpans, narrativeLanguage, narrativeSegments, perfilTerms,
+  templateNarrative, verifierContext, verifyNarrative, verifyNarrativeWith, writeNarrative, type NarrativeModel, type NarrativePrompt,
 } from '../src/outreach/narrativa.ts';
 import type { LlmUsage } from '../src/outreach/llm-precios.ts';
 import { llmCostUsd, UnknownModelPriceError } from '../src/outreach/llm-precios.ts';
-import { entradasLaura } from './fixtures/perfil-entradas.ts';
+import { entradasConVideosLargos, entradasLaura } from './fixtures/perfil-entradas.ts';
 
 const perfil = buildPerfil(entradasLaura());
 const fmt = (c: Claim) => `${c.value} ${c.unit}`;
@@ -79,6 +79,40 @@ test('una cantidad en letras o un signo de cifra fuera de una marca se rechaza',
   assert.equal(con('Hice cuatro minutos de pasta.').ok, false);
 });
 
+test('los verbos que multiplican y los puestos de ranking también son cifras sin marca', () => {
+  const con = (frase: string) => verifyNarrative(BUENA.replace('Soy Laura y cocino fácil.', frase), perfil, { paragraphs: null });
+  // Lo que pasó en la edición real de r2.
+  assert.deepEqual(con('Este año cuadrupliqué mis views.').issues, [{ code: 'number_word', text: 'cuadrupliqué' }]);
+  for (const verbo of ['dupliqué', 'triplicó', 'duplicar', 'multipliqué', 'Multiplicamos', 'quintuplicaron']) {
+    assert.deepEqual(con(`Mis views se ${verbo} en un mes.`).issues.map((i) => i.code), ['number_word'], verbo);
+  }
+  assert.deepEqual(con('Soy la número uno de Colombia en recetas.').issues, [{ code: 'number_word', text: 'número uno' }]);
+  assert.deepEqual(con('Quedé en primer lugar del ranking.').issues, [{ code: 'number_word', text: 'primer lugar' }]);
+  assert.deepEqual(con('Estoy en el top de cocina.').issues, [{ code: 'number_word', text: 'top' }]);
+  // Con límite de palabra: «duplicado» sí (es la raíz), «topo» o «laptop» no.
+  assert.equal(con('Mi laptop y un topo en la cocina.').ok, true);
+  // Las listas van por idioma: añadir uno es añadir sus datos.
+  assert.deepEqual(Object.keys(CANTIDADES), ['es']);
+  assert.equal(narrativeLanguage('es-CO'), 'es');
+  assert.equal(narrativeLanguage('en-US'), 'es');
+  assert.equal(narrativeLanguage(null), 'es');
+});
+
+test('la vista previa sabe dónde está cada problema, con la misma regla que la puerta del servidor', () => {
+  const ctx = verifierContext(perfil);
+  // Datos planos: viajan al cliente.
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx)), ctx);
+  const texto = 'Tengo [claim:inventada] y 3 millones; «Cold brew en casa en 3 pasos» hizo [claim:video-000000000d01-x].';
+  const spans = narrativeIssueSpans(texto, ctx);
+  assert.deepEqual(spans.map((s) => [s.code, texto.slice(s.start, s.end)]), [
+    ['unknown_claim', '[claim:inventada]'], ['bare_number', '3'], ['number_word', 'millones'],
+  ]);
+  // El 3 del título no se marca: es un término del perfil.
+  assert.equal(spans.filter((s) => s.code === 'bare_number').length, 1);
+  // La misma respuesta que verifyNarrative.
+  assert.deepEqual(verifyNarrativeWith(texto, ctx, { paragraphs: null }), verifyNarrative(texto, perfil, { paragraphs: null }));
+});
+
 test('marcas mal escritas, huecos y párrafos de más se rechazan', () => {
   const mala = verifyNarrative(BUENA.replace('[claim:mediana-tiktok]', '[claim: Mediana TikTok]'), perfil);
   assert.deepEqual(mala.issues, [{ code: 'malformed_marker', text: '[claim: Mediana TikTok]' }]);
@@ -112,8 +146,16 @@ test('la plantilla compara cifras comparables: la mediana de la red del mejor vi
     t,
     /llegó a \[claim:video-000000000d01-views\] views al mes de publicado: \[claim:video-000000000d01-x\] mi mediana de Instagram, que a esa edad es de \[claim:mediana-instagram-ba5207200001\] views\./,
   );
-  // El porqué contrasta con el resto de los videos.
-  assert.match(t, /Lo que lo distingue: mis videos que abren con una promesa concreta de resultado hacen \[claim:porque-gancho-promesa\] mi mediana, frente a \[claim:porque-gancho-promesa-resto\] del resto\./);
+  // Con el seed ningún rasgo alcanza: la plantilla describe el video y no le inventa una causa.
+  assert.match(t, /Ese video abre con una promesa concreta de resultado y es una colaboración con una marca\./);
+  assert.doesNotMatch(t, /porque-/);
+  // Con videos para comparar, cita la razón con los OTROS videos, no con el mismo.
+  const conRazon = templateNarrative(buildPerfil(entradasConVideosLargos()));
+  assert.match(
+    conRazon,
+    /Y no es casualidad: mis otros videos cortos hacen \[claim:porque-000000000d01-duracion-corto\] mi mediana, frente a \[claim:porque-000000000d01-duracion-corto-resto\] de los demás\./,
+  );
+  assert.ok(verifyNarrative(conRazon, buildPerfil(entradasConVideosLargos()), { minClaims: 1 }).ok);
   // Los rasgos de tono con el mismo verbo, juntos.
   assert.match(t, /En mis captions escribo corto y uso emojis y hashtags\./);
   assert.doesNotMatch(t, /uso emojis y uso/);
@@ -159,7 +201,15 @@ test('el prompt lleva cada claim con su valor y las reglas de la marca', () => {
   assert.match(p.system, /Toda cifra se escribe SOLO como su marca, \[claim:id\]/);
   for (const c of perfil.claims) assert.ok(p.user.includes(`[claim:${c.id}] → ${claimLabelEs(c)}: ${c.value} ${c.unit}`), c.id);
   assert.match(p.user, /Video uno: «Cold brew en casa en 3 pasos» en Instagram\. Cómo es: abre con una promesa/);
-  assert.match(p.user, /Lo que lo distingue: los que abren con una promesa concreta de resultado hacen \[claim:porque-gancho-promesa\] frente a \[claim:porque-gancho-promesa-resto\] del resto/);
+  // Sin razón, el prompt pide describir el video y no inventar una causa.
+  assert.match(p.user, /Lo que lo distingue: los datos no alcanzan para decir qué lo separa de sus demás videos; describe cómo es y no inventes una razón/);
+  const conRazon = buildPerfil(entradasConVideosLargos());
+  const q = buildNarrativePrompt(conRazon, fmt);
+  assert.match(q.user, /sus otros videos que son cortos hacen \[claim:porque-000000000d01-duracion-corto\] frente a \[claim:porque-000000000d01-duracion-corto-resto\] de los que no/);
+  assert.equal(
+    claimLabelEs(conRazon.claims.find((c) => c.id === 'porque-000000000d01-duracion-corto')!),
+    'Veces su mediana, mediana de sus OTROS videos que son cortos (sin contar «Cold brew en casa en 3 pasos»)',
+  );
   // Las etiquetas del prompt salen de la clave y los parámetros, con el país en el locale que se pida.
   assert.equal(claimLabelEs(perfil.claims.find((c) => c.id === 'audiencia-tiktok-pais-mx')!, 'en'), 'Parte de los seguidores de TikTok que vive en Mexico');
   assert.equal(claimLabelEs(perfil.claims.find((c) => c.id === 'mediana-instagram-ba5207200001')!), 'Views medianas por video en Instagram al mes de publicado');

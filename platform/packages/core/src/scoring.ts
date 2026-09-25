@@ -32,6 +32,18 @@ export function median(values: number[]): number {
   return s.length % 2 ? hi : (lo + hi) / 2;
 }
 
+/**
+ * La mediana cuando «no hay datos» tiene que distinguirse de un cero:
+ * null si no queda ningún valor finito. La usa el perfil comercial
+ * (VEN-11), que no puede decir «tu mediana es 0» de un grupo vacío.
+ * Descarta NaN e infinitos antes de ordenar; median() de arriba se queda
+ * como está porque sus llamadores cuentan con el 0.
+ */
+export function medianOrNull(values: readonly number[]): number | null {
+  const finitos = values.filter((v) => Number.isFinite(v));
+  return finitos.length === 0 ? null : median(finitos);
+}
+
 export function percentile(values: number[], p: number): number {
   if (values.length === 0) return 0;
   const s = [...values].sort((a, b) => a - b);
