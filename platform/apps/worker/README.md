@@ -67,7 +67,7 @@ make worker.humo                        # = pnpm --filter @mc/worker humo: lista
 | `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY` | `collect.account_metrics` (CON-10): el token de la cuenta profesional de On Cue para `business_discovery` y la API key de YouTube. Sin ellas la plataforma se salta y se avisa. | — |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | El adaptador de Gmail del motor de cadencias (VEN-10) las usa para renovar un token de buzón vencido; las usará también el refresher de YouTube (CON-8). Sin ellas, un correo con el token vencido queda como fallo transitorio. | — |
 | `UNIPILE_DSN`, `UNIPILE_ACCESS_TOKEN` | LinkedIn e Instagram del motor de cadencias. Sin ellas esos canales no se reclaman: sus toques esperan en la cola. | — |
-| `OUTREACH_CHANNELS` | `real` (Gmail y Unipile) o `fake` (buzón en memoria, nada sale de la máquina). | `real` |
+| `OUTREACH_CHANNELS` | `real` (Gmail y Unipile) o `fake` (buzón en memoria, nada sale de la máquina). `fake` solo contra Postgres embebido o una base local: contra Supabase, o con `NODE_ENV=production`, el worker no arranca. | `real` |
 | `APP_URL` | Origen público de la web, para el enlace de baja de cada correo. Sin él (ni `VERCEL_PROJECT_PRODUCTION_URL`) el correo real no se reclama. | — |
 
 `make worker`, `humo` e `install-schema` cargan solo `platform/.env.local`
@@ -187,12 +187,17 @@ migración 0051 (grupo `sales`). Las consultas viven en
      `/ventas/politica`;
    - cabe hoy pero no respeta el ritmo de la cuenta (`effective_hourly`,
      `min_gap_seconds`, 0052 §1) → espera su turno.
-3. **Envío**, uno por uno: `send_started_at` en su propia transacción; en
-   otra, la relectura (toque, enrolamiento, ficha, lista global,
-   interruptor, cuenta), la composición (pie de VEN-15 con la página de
-   baja y la dirección postal, `List-Unsubscribe` de un clic, el hilo) y
-   el adaptador. El enrolamiento queda bloqueado mientras dura el envío.
-   Un paso que sale tarde arrastra a los de detrás.
+3. **Envío**, uno por uno, en tres transacciones: la relectura (toque,
+   enrolamiento, ficha, lista global, interruptor, cuenta) y la decisión;
+   `send_started_at`, solo si toca enviar; y otra relectura con la
+   composición (pie de VEN-15 con la página de baja y la dirección
+   postal, `List-Unsubscribe` de un clic, el hilo) y el adaptador, con el
+   enrolamiento bloqueado mientras dura el envío. Un error nuestro antes
+   de marcar el envío deja el toque sin `send_started_at`: los zombis lo
+   devuelven a la cola, sin aviso. Una respuesta en el hilo cuyo correo
+   anterior no tiene hilo conocido se retiene (`reply_without_thread`):
+   nunca sale un «Re:» sin In-Reply-To. Un paso que sale tarde arrastra a
+   los de detrás.
 4. **Resultado**: transitorio → reintento con espera creciente, dentro
    de la ventana, hasta 5; ambiguo (corte después de enviar) → antes de
    reintentar se pregunta al proveedor si salió (`findSent`), y si no lo
@@ -211,7 +216,10 @@ turno, en páginas de 200: primero los nunca leídos, después los que hace
 más que no se leen (`replies_checked_at`). Lo que hace cada mensaje lo
 decide `applyInboundEffects` de `@mc/db`, la misma función del webhook:
 
-1. una respuesta marca `replied` y cancela lo pendiente;
+1. una respuesta detiene a la persona en TODAS sus secuencias del
+   workspace (`replied`, lo pendiente cancelado) y, con
+   `stop_company_on_reply` (0054, encendido por defecto), pone en pausa
+   las cadencias de las demás personas de la misma marca;
 2. una baja marca las fichas PROPIAS del workspace del hilo con ese
    correo y cancela lo suyo en cualquier secuencia de ese workspace,
    nunca de otro; una ficha pública no se marca: la protege su
@@ -219,7 +227,21 @@ decide `applyInboundEffects` de `@mc/db`, la misma función del webhook:
 3. si en un correo la pide un tercero en copia, la cadencia se detiene y
    se avisa para revisar;
 4. un «fuera de oficina» (Auto-Submitted, X-Autoreply) se guarda sin
-   cancelar ni avisar, salvo que pida la baja.
+   cancelar ni avisar, salvo que pida la baja;
+5. una respuesta de LinkedIn o Instagram que solo trae un adjunto (una
+   foto, una nota de voz) es una respuesta, con el cuerpo `[adjunto]`,
+   igual que por el webhook.
+
+Antes de leer, busca el hilo de los correos que una persona confirmó a
+mano («Sí, salió», 0053): con él, el lector lee ese hilo y la respuesta
+del paso siguiente, que esperaba retenida, vuelve a la cola.
+
+**El interruptor.** Apagar (`disable_outreach`) cancela lo programado y
+lo retenido con `outreach_disabled` y deja vivas las cadencias;
+encender (`enableOutreach`, desde la web o `--encender`) lo devuelve a
+la cola (`replanOutreach`): cada mensaje a su estado de antes, con su
+texto, y si ya venció, replanificado desde ahora con los mismos días
+hábiles entre pasos.
 
 Adaptadores en `src/jobs/ventas/canales/` con una sola interfaz
 (`ChannelSender`, `ChannelReader`): Gmail y Unipile (LinkedIn e
@@ -234,7 +256,10 @@ final (asunto y pie incluidos). `held_reason` guarda un código
 (`@mc/core/outreach/messages`, `holdReasonText` lo traduce) y un mensaje
 retenido deja un aviso que lleva a la ficha de la empresa. El tope de una
 cuenta es uno por canal (`accountActionType`), sea invitación o mensaje.
-`OUTREACH_CHANNELS=fake` se ignora con `NODE_ENV=production`.
+El canal falso sigue una sola regla (`fakeAllowed`, en
+`canales/index.ts`), la misma para el worker programado y para
+`job:dispatch`: Postgres embebido, una base local, o una corrida limitada
+al workspace de la demo.
 
 Una pasada a mano, con la misma conexión que el worker:
 
@@ -244,6 +269,17 @@ pnpm --filter @mc/worker run job:dispatch -- --canal-falso --workspace 00000002-
                                                            # buzón en memoria; el envío queda en outbound_touch
 pnpm --filter @mc/worker run job:replies                   # respuestas de los hilos abiertos
 pnpm --filter @mc/worker run job:dispatch -- --demo        # Postgres embebido con migraciones y seeds: apagada no envía, encendida sí
+```
+
+Contra Supabase, el «terminado cuando» de VEN-10 con el workspace de la
+demo es un comando por paso (docs/ventas-outreach.md §5.2):
+
+```bash
+W=00000002-0000-4000-8000-000000000001
+pnpm --filter @mc/worker run job:dispatch -- --preparar-demo --workspace $W   # la demo como --demo, con el reloj de verdad y el envío apagado
+pnpm --filter @mc/worker run job:dispatch -- --canal-falso --workspace $W     # apagada: 0 reclamados, 0 enviados
+pnpm --filter @mc/worker run job:dispatch -- --encender --workspace $W        # enciende el envío de la demo
+pnpm --filter @mc/worker run job:dispatch -- --canal-falso --workspace $W     # encendida: 1 reclamado, 1 enviado
 ```
 
 `--canal-falso` se niega contra una base que no es local salvo con

@@ -1,5 +1,5 @@
 /**
- * Outreach · lo que hace una respuesta, venga por donde venga (VEN-10, r5).
+ * Outreach · lo que hace una respuesta, venga por donde venga (VEN-10).
  *
  * Una respuesta entra por dos puertas: el webhook de Unipile de VEN-9
  * (recordInboundMessage, con la RLS del workspace) y el lector de
@@ -32,10 +32,14 @@
  *   · una respuesta automática que no pide la baja: nada más (ni replied,
  *     ni cancelar, ni avisar: la marca solo estaba de vacaciones);
  *   · una respuesta: replied_at en el toque; si la cadencia seguía viva o
- *     había completado sus pasos, pasa a replied, se cancela lo cancelable
- *     del enrolamiento (CANCELABLE_TOUCH_STATUSES: draft, scheduled,
- *     held) y se avisa. Si ya había respondido, el mensaje queda en la
- *     conversación sin otro aviso.
+ *     había completado sus pasos, la persona se detiene ENTERA
+ *     (stopOnReply): ese enrolamiento y los demás suyos del workspace, en
+ *     cualquier secuencia, pasan a replied con lo cancelable cancelado
+ *     (CANCELABLE_TOUCH_STATUSES: draft, scheduled, held); y, con
+ *     outbound_policy.stop_company_on_reply (0054, encendido por defecto),
+ *     las cadencias de las otras personas de la misma marca quedan en
+ *     pausa. Se avisa una vez, diciendo qué se detuvo. Si ya había
+ *     respondido, el mensaje queda en la conversación sin otro aviso.
  *
  * Funciona con cualquier transacción (SqlExecutor): con la del webhook la
  * RLS limita todo al workspace del mensaje; con la del worker cada
