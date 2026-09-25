@@ -33,7 +33,7 @@ describe("las fichas", () => {
   });
 
   it("una ficha tocada a mano vuelve como una marca que el verificador rechaza", () => {
-    const ctx = { ids: Object.keys(CIFRAS), terms: [] };
+    const ctx = { ids: Object.keys(CIFRAS), units: {}, terms: [] };
     const tocada = aMarcas("Mi mediana es ⟦2 millones⟧.", fichas);
     expect(tocada).toBe("Mi mediana es [claim:2 millones].");
     expect(verifyNarrativeWith(tocada, ctx, { paragraphs: null }).issues).toEqual([{ code: "malformed_marker", text: "[claim:2 millones]" }]);
