@@ -148,7 +148,8 @@ test('el job registrado arma los buzones con buildChannels: sin llaves de Google
   });
   assert.ok(conLlaves.bounces(cuenta), 'con las llaves, cada cuenta de correo tiene su buzón');
   // Sin token en el almacén, esa lectura falla (el job la anota) sin llamar a Google.
-  await assert.rejects(conLlaves.bounces(cuenta)!.listBounceCandidates({ since: new Date() }), /secret_missing/);
+  // MailboxFor puede ser asíncrono desde VEN-15 r5 (el token sale del vault) y pide `max`.
+  await assert.rejects((await conLlaves.bounces(cuenta))!.listBounceCandidates({ since: new Date(), max: 10 }), /secret_missing/);
 });
 
 test('un 422 genérico de Unipile falla solo ese mensaje: los otros pasos de LinkedIn siguen', async () => {
