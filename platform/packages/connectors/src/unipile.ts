@@ -134,6 +134,8 @@ export interface UnipileMessage {
   /** El mensaje lo mandó la cuenta conectada (no la otra persona). */
   isSender: boolean;
   sentAt: Date | null;
+  /** Trae adjuntos (una foto, una nota de voz, un sticker): una respuesta aunque no traiga texto. */
+  hasAttachments: boolean;
 }
 
 export interface UnipilePage<T> {
@@ -317,6 +319,7 @@ function normalizeMessage(raw: unknown): UnipileMessage {
     text: typeof m['text'] === 'string' ? m['text'] : '',
     isSender: m['is_sender'] === true || m['is_sender'] === 1,
     sentAt: date(m['timestamp']),
+    hasAttachments: Array.isArray(m['attachments']) && m['attachments'].length > 0,
   };
 }
 

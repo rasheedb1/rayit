@@ -74,7 +74,8 @@ export const CHANNEL_CAP_LIMITS = {
   instagram_dm: { daily: 100, weekly: 700 },
   whatsapp: { daily: 100, weekly: 700 },
 } as const satisfies Record<(typeof OUTBOUND_CHANNELS)[number], { daily: number; weekly: number }>;
-export const ENROLLMENT_STATUSES = ['active', 'paused', 'completed', 'replied', 'opted_out', 'cooldown'] as const;
+/** 'bounced' (0051 §7): la dirección rebotó al enviar y no le quedaba nada vivo. Terminal, como completed. */
+export const ENROLLMENT_STATUSES = ['active', 'paused', 'completed', 'replied', 'opted_out', 'cooldown', 'bounced'] as const;
 export const MESSAGE_DIRECTIONS = ['inbound', 'outbound'] as const;
 export const MESSAGE_INTENTS = ['interested', 'not_now', 'ooo', 'unsubscribe', 'referral', 'ambiguous'] as const;
 export const REGENERATE_HINTS = ['shorter', 'more_specific', 'other_angle', 'other_signal', 'soften', 'add_proof'] as const;
@@ -179,12 +180,19 @@ export const OUTREACH_FUNCTIONS = {
   incrementIfUnderCapForAccount: 'increment_if_under_cap(uuid,uuid,text,integer)',
   incrementWeekly: 'increment_weekly(uuid,text,integer)',
   incrementWeeklyForAccount: 'increment_weekly(uuid,uuid,text,integer)',
+  /** (0052 §3) Las mismas, contando el día del instante que se les pasa (el reloj del despachador). */
+  incrementIfUnderCapAt: 'increment_if_under_cap(uuid,text,integer,timestamp with time zone)',
+  incrementIfUnderCapForAccountAt: 'increment_if_under_cap(uuid,uuid,text,integer,timestamp with time zone)',
+  incrementWeeklyAt: 'increment_weekly(uuid,text,integer,timestamp with time zone)',
+  incrementWeeklyForAccountAt: 'increment_weekly(uuid,uuid,text,integer,timestamp with time zone)',
   shouldPauseOutreach: 'should_pause_outreach(uuid)',
   disableOutreach: 'disable_outreach(uuid,text)',
   enableOutreach: 'enable_outreach(uuid)',
   outboundHealth: 'outbound_health(uuid,integer)',
   nextBusinessDay: 'next_business_day(timestamp with time zone,text)',
   publicOptout: 'public_optout(text)',
+  contactVisibleTo: 'contact_visible_to(uuid,uuid)',
+  releaseCap: 'outbound_counter_release(uuid,uuid,text,date)',
 } as const;
 
 // ---------------------------------------------------------------------
@@ -495,4 +503,29 @@ export const outboundOptoutEvent = pgTable('outbound_optout_event', {
   sentAt: timestamptz('sent_at'),
   alreadyOptedOut: boolean('already_opted_out').notNull(),
   createdAt: createdAt(),
+});
+
+/** Los tipos de rebote (0038): la dirección no existe, algo pasajero, o un rechazo por política del receptor. */
+export const BOUNCE_KINDS = ['hard', 'soft', 'blocked'] as const;
+
+/**
+ * Rebotes leídos del buzón del creador (0038, VEN-15, job
+ * outbound.bounces). Append-only; la escribe el worker y la web solo la
+ * lee. Única por (workspace_id, provider_message_id): el id del aviso en
+ * el buzón.
+ */
+export const outboundBounce = pgTable('outbound_bounce', {
+  id: uuidPk(),
+  workspaceId: workspaceId(),
+  channelAccountId: uuid('channel_account_id').references(() => outreachChannelAccount.id, { onDelete: 'set null' }),
+  providerMessageId: text('provider_message_id').notNull(),
+  touchId: uuid('touch_id').references(() => outboundTouch.id, { onDelete: 'set null' }),
+  contactId: uuid('contact_id').references(() => contact.id, { onDelete: 'set null' }),
+  recipientAddress: citext('recipient_address'),
+  kind: text('kind', { enum: BOUNCE_KINDS }).notNull(),
+  statusCode: text('status_code'),
+  smtpCode: integer('smtp_code'),
+  reason: text('reason').notNull(),
+  receivedAt: timestamptz('received_at'),
+  detectedAt: timestamptz('detected_at').defaultNow().notNull(),
 });

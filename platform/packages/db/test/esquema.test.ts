@@ -18,13 +18,13 @@ import {
   PRIVILEGIOS_DEL_ENLACE_PUBLICO, type EstadoDelEsquema,
 } from '../src/esquema.ts';
 import type { CatalogDb } from '../src/client.ts';
-import { openTestDb, type TestDb } from './pglite.ts';
+import { openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 let t: TestDb;
 
 before(async () => {
   t = await openTestDb({ seeds: false });
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();
@@ -876,7 +876,7 @@ describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nom
       `INSERT INTO workspace (id, slug, name) VALUES ('${WS}', 'ronda-5', 'Ronda 5'); ` +
         "INSERT INTO niche (slug, name_es) VALUES ('zz-niche', 'Nicho intacto')",
     );
-  });
+  }, SETUP_TIMEOUT);
   after(async () => {
     await t.admin(`DELETE FROM workspace WHERE id = '${WS}'; DELETE FROM niche WHERE slug = 'zz-niche'`);
   });
@@ -1266,17 +1266,20 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
   const DEAL_PUBLIC_SHARE =
     "EXISTS (SELECT 1 FROM quote q WHERE q.deal_id = deal.id AND q.slug = nullif(current_setting('app.public_share', true), ''))";
 
-  test('el inventario declarado es el de 0030, 0031 y 0037, y la base recién migrada lo cumple', async () => {
+  test('el inventario declarado es el de 0030, 0031, 0037 y 0038, y la base recién migrada lo cumple', async () => {
     assert.deepEqual(Object.keys(PRIVILEGIOS_DEL_ENLACE_PUBLICO).sort(), [
       'company', 'company_link', 'contact', 'contact_suppression', 'deal', 'deal_stage_history',
-      'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'outbound_enrollment', 'outbound_optout_event',
-      'outbound_optout_link', 'outbound_touch', 'pipeline_stage', 'quote',
+      'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'membership', 'outbound_enrollment',
+      'outbound_optout_event', 'outbound_optout_link', 'outbound_touch', 'pipeline_stage', 'quote', 'workspace',
     ]);
     assert.equal(
       Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length,
-      17,
-      'las siete de 0030, la aceptada del negocio de 0033 y las nueve de la baja de 0037',
+      18,
+      'las siete de 0030, la aceptada del negocio de 0033, las nueve de la baja de 0037 y la de quién envía de 0038',
     );
+    // La vista previa de la baja (0038 §5) lee el nombre de quien envía, por columna, y nada más del workspace.
+    assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.workspace!.tabla, []);
+    assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.workspace!.columnas, { SELECT: ['id', 'name'] });
     // La baja (0037 §9) lee el enlace y anota el clic; no escribe el enlace ni lee los clics.
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_optout_link!.tabla, ['SELECT']);
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_optout_event!.tabla, ['INSERT']);

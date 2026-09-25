@@ -46,6 +46,7 @@ import {
   type ChannelState, type UnipileAccount, type UnipileApi, type UnipileWebhookEvent,
 } from "@mc/connectors";
 import { channelHealthName } from "@mc/core";
+import { inboundBody } from "@mc/core/outreach/messages";
 import {
   CHANNEL_ERROR_CODES, channelWebhookCount, clearChannelAccountIssue, completeChannelConnection, failPendingChannelAccount,
   findUnipileAccountForWebhook, getConnectedUnipileAccount, markChannelAccountDown, markChannelAccountOk, noteChannelAccountIssue,
@@ -131,7 +132,7 @@ export async function unipileWebhook(req: Request, deps: ChannelDeps): Promise<R
       if (event.fromSelf || isOwnAccount(event.senderProviderId, account.providerIdentity)) return MESSAGES.routes.ignored.echo;
       // Con quién escribe: una respuesta en un chat nuevo (la invitación aceptada) casa con el toque enviado a esa persona.
       const r = await recordInboundMessage(tx, {
-        account, threadRef: event.chatId, providerMessageId: event.messageId, body: event.text,
+        account, threadRef: event.chatId, providerMessageId: event.messageId, body: inboundBody(event.text, event.hasAttachments),
         fromAddress: event.senderName ?? event.senderProviderId, occurredAt: event.occurredAt ?? now,
         senderProviderId: event.senderProviderId,
       });

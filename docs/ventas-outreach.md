@@ -190,6 +190,18 @@ ciento ochenta días de enfriamiento tras un no, revisión humana
 obligatoria, afirmaciones con origen) son más conservadores que los de
 Chief. Se mantienen.
 
+**Ojo con la cadencia de §5.3** (VEN-10): tiene cinco mensajes y
+pasos a uno o dos días hábiles, así que con estos valores por defecto
+**no cabe**: el quinto mensaje (la síntesis con el media kit y la
+cotización, el que más vale) se cancelaría al reclamar (`company_cap`) y
+los pasos seguidos se correrían hasta cumplir los tres días. El motor lo
+dice al enrolar, con los pasos concretos:
+`checkSequenceAgainstPolicy` de `@mc/core` y `EnrollResult.warnings`
+(`over_company_cap` y `steps_closer_than_min_gap`, cada uno con sus
+`stepIds`), para que la pantalla que enrola lo muestre antes de activar.
+Qué cambia —la plantilla o los valores por defecto— lo decide Rasheed
+(§8, pregunta 6).
+
 ### 5.2 El modelo de datos: migración `0037_outreach.sql` (en el plan original, «0015»)
 
 Lo que ya existe y se queda: `company`, `contact` (con `opted_out`
@@ -429,11 +441,269 @@ Decisiones que las piezas siguientes tienen que conocer:
   toda la plataforma. La página de baja **rechaza el clic que llega con
   una sesión de un miembro del workspace que envió** (el servidor lo
   sabe antes de llamar a `publicOptout`: `outbound_optout_link` no se
-  lee desde la web, así que lo pregunta el servidor con `asWorker` por
-  el sha256 del token), pide una confirmación que un clic automático no
-  dé, y el despachador no vuelve a mostrar el enlace en la aplicación.
+  lee desde la web, así que se lo pregunta a `public_optout_preview`
+  (0038 §5) por el sha256 del token, sin `asWorker`), pide una
+  confirmación que un clic automático no dé, y el despachador no vuelve
+  a mostrar el enlace en la aplicación.
   Lo que se escape queda en `outbound_optout_event` para la alerta y
   para deshacerlo.
+
+**Cómo quedó la entregabilidad (VEN-15, ronda 2, 24 de septiembre).** Lo
+que el despachador de VEN-10 tiene que usar, todo en
+`@mc/core/outreach/deliverability` (puro, con pruebas):
+
+- **El token de baja** es opaco: `createOptoutToken()` da 32 bytes al
+  azar en base64url, la misma forma que genera hoy `newOptoutToken` de
+  VEN-10, y en `outbound_optout_link.token_hash` va
+  `optoutTokenHash(token)`. No lleva ningún id dentro ni depende de un
+  secreto: la base lo reconoce por su sha256, así que un error de
+  configuración no puede apagar la baja y los enlaces no caducan. La
+  primera ronda lo firmaba con `OUTREACH_OPTOUT_SECRET` y llevaba los
+  uuid en claro; esa llave ya no existe. **Hecho en VEN-10 r3:** el
+  despachador usa `createOptoutToken` + `optoutTokenHash`,
+  `buildEmailFooter` y `oneClickUnsubscribeUrl` (la cabecera
+  `List-Unsubscribe` apunta a `/baja/<token>/un-clic`); sus copias
+  (`newOptoutToken`, `withOptoutFooter`, el `optoutUrl` de
+  `@mc/core/outreach/optout.ts`) ya no existen. Un token de la ronda 2 da
+  de baja igual (probado en `packages/db/test/entregabilidad.test.ts`).
+- **La página de baja** (`/baja/<token>`, sin sesión) pregunta a
+  `public_optout_preview(token, espacios de quien la abre)` (0038 §5,
+  SECURITY DEFINER de `mc_public_share`): si el enlace es de un correo
+  que salió, la dirección enmascarada («v•••@marca.com»), el nombre del
+  espacio que escribe, si ya estaba de baja y si quien la abre es
+  miembro del espacio que la envió. Ese último caso no ofrece el botón
+  (la regla de §5.2). El clic va por `public_optout`. El POST de un clic
+  de Gmail va a `/baja/<token>/un-clic`.
+- **Cada correo** lleva `buildEmailFooter` (frase de baja con
+  `optoutUrl` y la dirección postal de la política; sin dirección no hay
+  pie y el correo no está listo) y `listUnsubscribeHeaders`.
+- **El tope diario de una cuenta** es `warmupDailyLimit({ day:
+  warmupDay(conectada, ahora, zona), policyLimit, warmupDays })`: 20 al
+  día durante la meseta (la primera semana con 14 días de calentamiento;
+  la primera mitad si son menos) y en línea recta hasta el tope el día
+  `warmup_days`. La pantalla pinta `warmupCurve`, que sale de la misma
+  función.
+- **Los rebotes** los lee `outbound.bounces` cada media hora a través de
+  la interfaz `BounceMailbox`. El adaptador sobre el `GmailApi` de VEN-9
+  está en `apps/worker/src/jobs/ventas/gmail-rebotes.ts`
+  (`gmailBounceMailbox`), y desde VEN-10 r4 el job registrado lee el
+  Gmail de verdad: `GmailChannel.bounceMailboxFor(cuenta)`, el mismo
+  canal del despachador, con el token de la cuenta del almacén
+  (`gmailMailboxes` en `outbound.bounces.ts`). Sin
+  `GOOGLE_CLIENT_ID/SECRET`, o con el canal falso, cada cuenta sale como
+  «canal no configurado». `detectBounce` solo da «duro» con un DSN o con
+  lo que dijo el servidor (Diagnostic-Code, o una línea con código SMTP),
+  nunca por una frase suelta del cuerpo: un «fuera de la oficina» de
+  postmaster@ no marca a nadie. Un rebote duro marca `contact.email_invalid`
+  (y `bounced`) con su motivo, que la ficha enseña con su fecha, y cancela
+  los correos pendientes de esa ficha, no los de LinkedIn; no va a
+  `contact_suppression`, que corta todos los canales. Corregir el correo
+  de la ficha borra las dos marcas. La base no deja programar un correo a
+  una ficha con el correo inválido (`outbound_touch_email_invalid`), pero
+  sí reclamarlo: la consulta de reclamo de VEN-10 tiene que filtrarlos.
+- **Las alertas** (`outbound.alerts`, cada hora, una vez al día por
+  workspace desde las 8:00 locales) dejan una `notification` por tipo y
+  día, en el idioma del espacio, con su propio enlace, y mandan UN
+  resumen por correo a todos los dueños por `SMTP_URL`. La tasa de
+  rebotes cuenta solo los duros de lo enviado en la ventana; «no envió
+  nada» solo salta si había toques que tocaba enviar
+  (`readAlertSignalCounts`, `@mc/db`). La cuenta caída lleva a
+  `/ventas/canales`, donde se reconecta (`CANALES_URL`, que es
+  `OUTREACH_URLS.channels` de `@mc/core/outreach/messages`).
+- La política y la **salud de hoy** se ven en `/ventas/politica`.
+
+**Probar la baja a mano, en local.** El seed guarda solo hashes de
+tokens al azar, así que ningún enlace suyo se puede pulsar. Con el
+Postgres de Docker:
+
+```bash
+cd platform
+make up && make seed
+docker compose exec -T db psql -U mc -d oncue -c \
+  "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
+pnpm --filter @mc/db demo:enlace-baja          # imprime /baja/<token> y el curl del un clic
+DATABASE_URL=postgres://mc_app_ci:ci@localhost:5432/oncue pnpm --filter @mc/web dev --port 3100
+```
+
+Abre el enlace sin sesión (o en una ventana privada), pulsa «Dejar de
+recibir mensajes» y la ficha queda de baja con sus toques cancelados. El
+comando se niega con Supabase (escribiría un enlace de baja real) y no
+sirve con la web en modo demo (el Postgres en memoria vive dentro del
+proceso de la web).
+
+#### Cómo funciona el motor (VEN-10)
+
+El motor de cadencias vive en tres sitios: la programación pura en
+`packages/core/src/outreach/` (días hábiles, zona, ventana, dispersión,
+reintentos, guardia de huecos, detector de bajas, textos de los avisos),
+las consultas en `packages/db/src/queries/outreach/` (enrolar, reclamar,
+enviar, respuestas, rebotes, la ficha) y los jobs en
+`apps/worker/src/jobs/ventas/` (`outbound.dispatch` cada dos minutos,
+`outbound.replies` cada cinco, `outbound.bounces` cada treinta, 0051).
+Sus migraciones son `0051_motor_cadencias.sql`, `0052_motor_ritmo.sql`,
+`0053_motor_intento_sin_confirmar.sql` y `0054_respuesta_detiene_la_marca.sql`.
+Lo que hace hoy, por partes:
+
+- **Enrolar** (`enrollContacts`). Solo fichas del workspace de la
+  secuencia (`contact_visible_to`, 0051 §5). Cada paso nace con su hora
+  (días hábiles, zona de la secuencia o del workspace, ventana laboral de
+  la política y una dispersión determinista) y su estado: `draft` si lo
+  completa una persona o el generador, `skipped` sin dirección (o con el
+  correo rebotado, VEN-15), `held` si faltan datos (huecos, asunto, nota
+  de LinkedIn de más de 300 caracteres) o si la revisión humana está
+  encendida (`needs_review`, el valor por defecto), y si no `scheduled`.
+  Una ficha que no se puede enrolar nunca tumba el lote; el resultado
+  dice por qué (`not_found`, `opted_out`, `already_enrolled`,
+  `email_invalid`, `no_address`, `invalid_address`) y avisa de lo que la
+  política no va a dejar cumplir (`over_company_cap`,
+  `steps_closer_than_min_gap`).
+- **Reclamar** (`claimDueTouches`). Hasta cincuenta toques vencidos, con
+  `UPDATE … WHERE status = 'scheduled' … RETURNING` y `FOR UPDATE SKIP
+  LOCKED`, en una transacción que se confirma antes de llamar a nadie.
+  Un reclamo a la vez: la transacción toma
+  `pg_advisory_xact_lock(hashtext('outbound.dispatch/claim'))`, porque la
+  separación con la marca y el ritmo por hora de la cuenta se leen de lo
+  ya confirmado y dos reclamos a la vez (el cron y un `job:dispatch` a
+  mano) leerían lo mismo; `outbound.dispatch` declara `max_concurrency =
+  1` (0055). Lo prueba `packages/db/test/outreach-reclamo` contra
+  Postgres 16 en el CI. Sin gastar intento: fuera de la ventana → a la apertura; un paso
+  anterior sin salir → espera; sin cuenta conectada → espera una hora con
+  un aviso por canal y día; la marca con `max_touches_per_company`
+  mensajes en 90 días → cancelado (`company_cap`); menos de
+  `min_days_between_touches` desde el último mensaje a la marca → espera;
+  tope diario o semanal lleno (la curva de calentamiento de VEN-15 sobre
+  el límite de la cuenta de VEN-9) → siguiente día hábil del workspace,
+  con los pasos de detrás; ritmo por hora de la cuenta → su turno.
+- **Enviar** (`sendOne`, tres transacciones). (1) Se relee todo con el
+  toque y el enrolamiento bloqueados y se decide (`decideBeforeSend`: la
+  baja, el interruptor, el enrolamiento, la cuenta, la dirección postal,
+  los huecos, el asunto, la nota, una respuesta en el hilo sin hilo
+  conocido); lo que no es enviar se aplica ahí. Si esta transacción
+  falla, el toque no tiene `send_started_at` y los zombis lo devuelven a
+  la cola sin aviso. (2) `send_started_at`, solo si toca enviar. (3) Se
+  relee otra vez, se compone el mensaje (pie y `List-Unsubscribe` de
+  VEN-15, el hilo), se pasa la guardia de huecos sobre lo que sale y se
+  llama al adaptador. Un resultado ambiguo (un corte después del POST) no
+  se reenvía a ciegas: el siguiente intento pregunta al proveedor
+  (`findSent`) y, si no lo sabe, lo retiene para una persona.
+- **Resultado.** Transitorio → reintento con espera creciente dentro de
+  la ventana, hasta cinco; dirección que no sirve → `failed`, se cancela
+  ese canal y la cadencia cierra en `bounced`; cuenta caída o sin token →
+  espera sin gastar intento. Zombis de más de cinco minutos: sin
+  `send_started_at` vuelven a la cola; con él, `failed` y aviso, sin
+  reenviar. Lo reclamado que no se llegó a intentar vuelve con su plaza.
+- **Respuestas** (`applyInboundEffects`, la misma función para el
+  webhook de Unipile y para el lector del motor). Una respuesta de
+  verdad detiene a la persona en todas sus secuencias del workspace
+  (`replied`, lo pendiente cancelado) y, con
+  `outbound_policy.stop_company_on_reply` (0054, encendido por defecto y
+  editable en `/ventas/politica`), pone en pausa las cadencias de las
+  demás personas de la misma marca. Una baja marca las fichas propias
+  del workspace con ese correo y cancela todo lo suyo; si la pide un
+  tercero en copia, la cadencia se detiene y una persona decide. Un
+  «fuera de oficina» se guarda sin cancelar nada, salvo que pida la baja.
+  Una respuesta de LinkedIn o Instagram que solo trae un adjunto es una
+  respuesta (cuerpo `[adjunto]`), por las dos vías.
+- **El intento sin confirmar.** En la ficha de la empresa, el bloque
+  «Mensajes de la cadencia» enseña el asunto, las primeras líneas, la
+  cuenta y el día del intento; «Sí, salió» lo anota como enviado
+  (`outreach_resolve_unconfirmed`, 0053) y «No salió: enviarlo» pide
+  confirmación antes de devolverlo a la cola. Un correo confirmado a mano
+  no tiene hilo: la respuesta en el hilo del paso siguiente se retiene
+  (`reply_without_thread`) y el lector de respuestas busca ese hilo en
+  Gmail (`recordRecoveredThread`); al encontrarlo, la lee y la devuelve a
+  la cola.
+- **El interruptor.** Apagar (`disable_outreach`) cancela lo programado
+  y lo retenido con `outreach_disabled` y deja vivas las cadencias.
+  Encender (`enableOutreach`) lo devuelve a la cola en la misma
+  transacción (`replanOutreach`): cada mensaje a su estado anterior y con
+  su texto; si ya venció, replanificado desde ahora con los mismos días
+  hábiles entre pasos. Lo de una ficha que se dio de baja mientras tanto
+  no vuelve.
+- **El canal falso** (`OUTREACH_CHANNELS=fake`, `--canal-falso`) sigue
+  una sola regla (`fakeAllowed`): Postgres embebido, una base local, o
+  una corrida limitada al workspace de la demo. Contra Supabase para
+  todos los workspaces, o en producción, el worker no arranca.
+- **Las pruebas**, sin red, en `apps/worker/test/`: `outreach-motor`
+  (la punta a punta y el interruptor), `-enrolar`, `-ritmo`,
+  `-politica-marca`, `-respuestas`, `-intento-ambiguo`, `-cuentas`,
+  `-rebotes`, `outreach-canales` (los adaptadores) y `outreach-demo` (los
+  comandos y la demo con el seed); con la RLS de la web, en
+  `packages/db/test/outreach-aprobar`, `-respuestas` y `-encender`.
+
+La historia de cómo se llegó aquí (las rondas de revisión) está en el
+log de git de las ramas `rasheed/VEN-10-motor-cadencias*`.
+
+**Renumeración al integrar.** Supabase (`schema_migrations`) tiene la
+serie de main hasta `0042_metricas_al_corte_desempate.sql`. Las de esta
+rama que chocan con ella pasan, en su orden, a 0043–0049; 0050 a 0055 ya
+llevan su número final. Las rondas siguientes de VEN-9-canales traen
+`0041_canales_reclamar_al_soltar`, `0042_canales_identidad_y_rotacion` y
+`0043_contacto_codigo_de_baja`, que también chocan: al integrarlas van
+detrás de 0049 y antes de 0050, y el script se amplía con ellas. Lo hace
+`platform/scripts/renumerar-outreach.sh` (mueve los archivos y cambia las
+referencias por nombre en las pruebas), después de mezclar main y antes de `make
+db.check`:
+
+| En esta rama | Al integrar |
+|---|---|
+| `0034_seguimientos.sql` | `0043_seguimientos.sql` |
+| `0035_zona_del_espacio_valida.sql` | `0044_zona_del_espacio_valida.sql` |
+| `0036_siguiente_accion_fijada.sql` | `0045_siguiente_accion_fijada.sql` |
+| `0037_outreach.sql` | `0046_outreach.sql` |
+| `0038_canales_outreach.sql` | `0047_canales_outreach.sql` |
+| `0039_callback_de_canales.sql` | `0048_callback_de_canales.sql` |
+| `0040_canales_liberar_y_limites.sql` | `0049_canales_liberar_y_limites.sql` |
+| `0050_entregabilidad.sql` … `0055_motor_equipo_y_reclamo.sql` | igual |
+
+**main borró `membership.role`.** `0034_access_control` (main, ya en
+Supabase) la cambia por `role_id → role` y convierte los `client` en
+`viewer`. El motor decide quién recibe un aviso (una respuesta, un toque
+retenido o fallido) y a qué dueños les llegan las alertas con
+`membership_is_team` y `membership_is_owner` (0055), que eligen su forma
+al aplicarse: con o sin `role_id`. Los fixtures de las pruebas dan de alta
+las membresías con `membershipSql` (`@mc/db/test/membresia`), que también
+funciona en las dos series. `make db.check` en verde no demuestra nada de
+esto: compila las migraciones, no el SQL de las consultas. Por eso el
+paso 1 corre `pnpm verificar` después de renumerar.
+
+**Lo que hace el integrador contra Supabase** (el «terminado cuando» de
+VEN-10), un comando por paso, desde `platform/`, con
+`W=00000002-0000-4000-8000-000000000001` (el workspace de la demo):
+
+1. Mezclar main, `./scripts/renumerar-outreach.sh`, **`pnpm verificar`**
+   (las pruebas del motor sobre la serie integrada; `db.check` no basta),
+   `make db.check`, `make db.migrate` (hasta 0055) y el seed. Al
+   resolver la mezcla de `packages/db/test/ventas.test.ts`, la lista de
+   responsables del seed de main trae también a Andrés Pardo (mánager,
+   0034): es del equipo y cuenta.
+2. `./scripts/supabase-admin.sh sql "GRANT mc_worker TO mc_migrator"`.
+3. `pnpm --filter @mc/worker run job:dispatch -- --preparar-demo --workspace $W`:
+   deja la demo como `--demo` con el reloj de verdad (la dirección
+   postal, el LinkedIn de la demo conectado, su mensaje vencido ya, lo
+   enviado a Vitalé lo bastante atrás para cumplir los días entre
+   mensajes) y el envío apagado. Si avisa de que está fuera del horario
+   de envío, los pasos siguientes se corren dentro de él.
+4. `pnpm --filter @mc/worker run job:dispatch -- --canal-falso --workspace $W`.
+   Esperado: `Despacho: 0 reclamados, 0 enviados`.
+5. `pnpm --filter @mc/worker run job:dispatch -- --encender --workspace $W`.
+6. `pnpm --filter @mc/worker run job:dispatch -- --canal-falso --workspace $W`.
+   Esperado: `Despacho: 1 reclamado, 1 enviado` y el toque en `sent` con
+   `provider_message_id = fake-linkedin-…`.
+7. Pegar las salidas de 4 y 6 en la nota de VEN-10 y pasarla a hecho.
+
+La prueba `outreach-demo.test.ts` corre los pasos 3 a 6 sobre Postgres
+embebido con las mismas migraciones y el mismo seed. El 25-sep-2026
+corrió también sobre la serie integrada (las 0034–0042 de main, los
+seeds mezclados y la renumeración): las pruebas del motor de
+`apps/worker` pasan, `outreach-demo` incluida. Y los pasos 3 a 6, con el
+reloj de verdad, contra un Postgres 16 local migrado con esa serie y el
+seed (la ventana del workspace abierta a toda hora, porque eran las
+03:00): el paso 4 dio `Despacho: 0 reclamados, 0 enviados` y el 6
+`Despacho: 1 reclamado, 1 enviado`, con el toque en `sent` y
+`provider_message_id = fake-linkedin-0001`. Contra Supabase, fuera del
+horario, el paso 6 mueve el toque a la apertura («Fuera de la ventana:
+1») y no envía: se corre dentro del horario.
 
 ### 5.3 La cadencia recomendada para un creador
 
@@ -528,9 +798,14 @@ llevan la respuesta a `outbound_message`. Un clasificador barato le
 pone intención. Interesado: se cancelan los toques pendientes, el deal
 pasa a «En conversación» y la siguiente acción es «Responder hoy».
 Ahora no: enfriamiento de noventa días y aviso. Fuera de oficina:
-retomar en la fecha. Baja: `contact.opted_out` global, y nadie en la
-plataforma vuelve a escribirle. Referido: se crea el contacto y se
-propone enrolarlo. Nada queda pausado para siempre.
+retomar en la fecha. Baja: `contact.opted_out` de la ficha en el
+workspace que recibió la respuesta, y ese workspace no vuelve a
+escribirle (VEN-10; la lista global `contact_suppression` es solo
+para una baja que la plataforma verifica: el enlace de baja, un rebote
+duro o una queja, 0029 §1). En un correo, la baja la tiene que pedir la
+ficha: si la escribe un tercero en copia, la cadencia se detiene y una
+persona decide. Referido: se crea el contacto y se propone enrolarlo.
+Nada queda pausado para siempre.
 
 ---
 
@@ -610,6 +885,13 @@ revisores técnico y de producto y el mismo umbral.
    Europa, en CAN-SPAM y GDPR. Propuesta: pie de baja y dirección
    postal del workspace obligatorios desde el primer envío, y la
    `source` del contacto siempre visible en el mensaje retenido.
+6. **La plantilla recomendada contra la política por defecto**
+   (VEN-10). El motor ya aplica «Mensajes por marca» (4) y «Días entre
+   mensajes» (3). La plantilla de §5.3 manda cinco mensajes a dos días
+   hábiles: con esos valores se estira y el quinto no sale. Propuesta:
+   dejar la política como está (es la conservadora) y recortar la
+   plantilla a cuatro mensajes separados tres días, o bajar la
+   separación por defecto a dos días.
 
 ## 9. Los errores de Chief que no vamos a repetir
 
@@ -618,7 +900,7 @@ dueño aquí:
 
 | Lo que pasa en Chief | Cómo queda aquí | Historia |
 |---|---|---|
-| El mensaje puede salir después de que el contacto respondió (dos crones sin coordinación) | El despachador relee el enrolamiento en la transacción del envío; el webhook de Unipile llega en segundos | VEN-10 |
+| El mensaje puede salir después de que el contacto respondió (dos crones sin coordinación) | El despachador relee el enrolamiento en la transacción del envío; una respuesta detiene a la persona en todas sus secuencias y pausa a las demás personas de su marca (0054); el webhook de Unipile llega en segundos | VEN-10 |
 | Un contacto que responde queda pausado para siempre, incluso por un «fuera de la oficina» | Clasificación de intención con fecha de retorno | VEN-14 |
 | «Como te comenté el martes» sobre un mensaje que nunca salió | Toques anteriores leídos de `status = 'sent'` | VEN-12 |
 | Los pasos de LinkedIn ignoran «no contactar» | La baja se comprueba por contacto en todos los canales, en el despachador | VEN-10 |

@@ -30,7 +30,7 @@ import {
   AuthIdentityMismatchError, createCreatorWorkspace, freeSlug, getAppUser, getMyIdentityAndWorkspaces, isMemberOf,
   listMyWorkspaces, nameFromEmail, renameWorkspace, slugify, updateMyName, upsertAppUserPorCorreo,
 } from '../src/queries/identidad.ts';
-import { openTestDb, type TestDb } from './pglite.ts';
+import { openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { MIGRATIONS_DIR } from '../../../db/lib/aplicar.mjs';
@@ -79,7 +79,7 @@ let idB = '';
 
 before(async () => {
   t = await openTestDb({ seeds: false });
-});
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t?.close();

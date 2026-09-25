@@ -38,13 +38,12 @@
  * ven más que el espacio de la transacción y piden la fila 'pending' del
  * nonce. El worker (keepalive) escribe directo con asWorker.
  */
-import { looksLikeOptOut } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import {
   CHANNEL_CAP_LIMITS, LIVE_CHANNEL_ACCOUNT_STATUSES, type CHANNEL_ACCOUNT_STATUSES, type CHANNEL_PROVIDERS,
 } from '../schema/outreach.ts';
 import type { OUTBOUND_CHANNELS } from '../schema/_canales.ts';
-import { CANCELABLE_TOUCH_STATUSES } from '../schema/ventas.ts';
+import { applyInboundEffects } from './outreach/inbound.ts';
 
 export type OutreachChannel = (typeof OUTBOUND_CHANNELS)[number];
 export type ChannelProvider = (typeof CHANNEL_PROVIDERS)[number];
@@ -771,12 +770,12 @@ export interface InboundResult {
   enrollmentStopped: boolean;
   /** Toques pendientes que se cancelaron. */
   touchesCanceled: number;
-  /** La respuesta pedía la baja explícitamente (looksLikeOptOut): intención 'unsubscribe' y ficha dada de baja. */
+  /** La respuesta pedía la baja explícitamente (el detector de @mc/core): intención 'unsubscribe' y ficha dada de baja. */
   optedOut: boolean;
 }
 
 /**
- * Una respuesta nueva, en UNA sentencia:
+ * Una respuesta nueva que llega por el webhook de Unipile:
  *
  *   · SOLO si es la respuesta a un toque enviado ('sent') desde ESTA
  *     cuenta, que se busca en dos pasos: primero el toque de ese hilo
@@ -796,26 +795,24 @@ export interface InboundResult {
  *   · una fila 'inbound' en outbound_message, atada al toque, su
  *     enrolamiento, su contacto y su negocio. Un webhook repetido no crea
  *     otra (índice único por provider_message_id) y no toca nada más;
- *   · su enrolamiento deja de enviar: pasa a 'replied' y sus toques que
- *     todavía podían salir (CANCELABLE_TOUCH_STATUSES: borrador,
- *     programado, retenido) se cancelan con blocked_reason 'replied'. El
- *     aviso llega en segundos para eso (§9): que el siguiente toque no
- *     salga mientras el clasificador de VEN-14 decide qué hacer. Lo que el
- *     despachador ya reclamó (processing) no se toca: él relee el
- *     enrolamiento en la transacción del envío;
- *   · si pide la baja explícitamente (looksLikeOptOut de @mc/core, la
- *     lista mínima mientras no exista el clasificador), la intención queda
- *     'unsubscribe', la ficha dada de baja con el código
- *     reply_optout:<canal> en opted_out_code (0043: un código, nunca una
- *     frase; la ficha lo traduce) y con ella su correo en la baja global
- *     (0026), y TODOS sus enrolamientos y toques pendientes, de cualquier
- *     canal, se cancelan con blocked_reason 'opted_out'.
+ *   · su efecto lo decide applyInboundEffects (@mc/db queries/outreach,
+ *     VEN-10), la MISMA función que usa el lector de respuestas del motor:
+ *     el mismo detector de baja (detectOptOut de @mc/core, que no marca
+ *     una respuesta que pide otro camino), los mismos estados cancelados
+ *     (CANCELABLE_TOUCH_STATUSES), el mismo trato a un enrolamiento
+ *     completo (pasa a replied) y el mismo aviso. Una baja deja en la
+ *     ficha el código reply_optout:<canal> (0043: un código, nunca una
+ *     frase; la ficha lo traduce). Una misma respuesta deja la misma base
+ *     llegue por el webhook o por el job. Lo que el despachador ya reclamó
+ *     (processing) no se toca: él relee el enrolamiento en la transacción
+ *     del envío.
  *
  * Lo demás queda con intent NULL: la cola del clasificador (VEN-14).
  */
 export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): Promise<InboundResult> {
-  const optOut = looksLikeOptOut(m.body);
-  const { rows } = await tx.query<{ matched: number; inserted: number; stopped: number; canceled: number }>(
+  const { rows } = await tx.query<{
+    matched: number; id: string | null; workspace_id: string | null; touch_id: string | null; enrollment_id: string | null; contact_id: string | null;
+  }>(
     `WITH toque AS (
        -- 1: el toque de ese hilo; 2: si no hay, el último enviado a quien escribe (LinkedIn e Instagram).
        SELECT c.id, c.enrollment_id, c.contact_id, e.deal_id, c.by_recipient
@@ -826,8 +823,8 @@ export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): 
            UNION ALL
            SELECT t.id, t.enrollment_id, t.contact_id, t.sent_at, true
              FROM outbound_touch t
-            WHERE $11::text IS NOT NULL AND $2 IN ('linkedin', 'instagram_dm')
-              AND t.recipient_address::text = $11 AND t.channel = $2 AND t.status = 'sent' AND t.channel_account_id = $3
+            WHERE $8::text IS NOT NULL AND $2 IN ('linkedin', 'instagram_dm')
+              AND t.recipient_address::text = $8 AND t.channel = $2 AND t.status = 'sent' AND t.channel_account_id = $3
          ) c
          LEFT JOIN outbound_enrollment e ON e.id = c.enrollment_id
         ORDER BY c.by_recipient, c.sent_at DESC NULLS LAST
@@ -844,45 +841,28 @@ export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): 
      nuevo AS (
        INSERT INTO outbound_message
          (workspace_id, channel_account_id, touch_id, enrollment_id, contact_id, deal_id, direction, channel,
-          thread_ref, provider_message_id, from_address, body, occurred_at, intent, classified_at)
+          thread_ref, provider_message_id, from_address, body, occurred_at)
        SELECT current_workspace_id(), $3, toque.id, toque.enrollment_id, toque.contact_id, toque.deal_id, 'inbound', $2, $1,
-              $4, $5, $6, $7, CASE WHEN $8 THEN 'unsubscribe' END, CASE WHEN $8 THEN now() END
+              $4, $5, $6, $7
          FROM toque
        ON CONFLICT (workspace_id, channel, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
-       RETURNING enrollment_id, contact_id
-     ),
-     baja AS (
-       UPDATE contact c
-          SET opted_out = true, opted_out_at = coalesce(c.opted_out_at, now()), opted_out_code = coalesce(c.opted_out_code, $9)
-         FROM nuevo
-        WHERE $8 AND c.id = nuevo.contact_id AND NOT c.opted_out
-       RETURNING c.id
-     ),
-     enrolamientos AS (
-       UPDATE outbound_enrollment e
-          SET status = CASE WHEN $8 THEN 'opted_out' ELSE 'replied' END,
-              finished_at = CASE WHEN $8 THEN coalesce(e.finished_at, now()) ELSE e.finished_at END
-         FROM nuevo
-        WHERE (e.id = nuevo.enrollment_id OR ($8 AND e.contact_id = nuevo.contact_id))
-          AND e.status IN ('active', 'paused', 'cooldown')
-       RETURNING e.id
-     ),
-     toques AS (
-       UPDATE outbound_touch t
-          SET status = 'canceled', blocked_reason = CASE WHEN $8 THEN 'opted_out' ELSE 'replied' END
-         FROM nuevo
-        WHERE (t.enrollment_id = nuevo.enrollment_id OR ($8 AND t.contact_id = nuevo.contact_id))
-          AND t.status = ANY($10::text[])
-       RETURNING t.id
+       RETURNING id, workspace_id, touch_id, enrollment_id, contact_id
      )
-     SELECT (SELECT count(*) FROM toque)::int AS matched, (SELECT count(*) FROM nuevo)::int AS inserted, (SELECT count(*) FROM enrolamientos)::int AS stopped,
-            (SELECT count(*) FROM toques)::int AS canceled, (SELECT count(*) FROM baja)::int AS opted_out`,
-    [m.threadRef, m.account.channel, m.account.id, m.providerMessageId, m.fromAddress, m.body, m.occurredAt, optOut,
-      replyOptOutCode(m.account.channel), [...CANCELABLE_TOUCH_STATUSES], m.senderProviderId?.trim() || null],
+     SELECT (SELECT count(*) FROM toque)::int AS matched, nuevo.id, nuevo.workspace_id, nuevo.touch_id, nuevo.enrollment_id, nuevo.contact_id
+       FROM (SELECT 1) uno LEFT JOIN nuevo ON true`,
+    [m.threadRef, m.account.channel, m.account.id, m.providerMessageId, m.fromAddress, m.body, m.occurredAt,
+      m.senderProviderId?.trim() || null],
   );
-  const r = rows[0]!;
-  const inserted = r.inserted === 1;
-  return { matched: r.matched === 1, inserted, enrollmentStopped: r.stopped > 0, touchesCanceled: r.canceled, optedOut: inserted && optOut };
+  const row = rows[0]!;
+  const none = { enrollmentStopped: false, touchesCanceled: 0, optedOut: false };
+  if (row.matched !== 1) return { matched: false, inserted: false, ...none };
+  if (!row.id || !row.workspace_id) return { matched: true, inserted: false, ...none };
+  const fx = await applyInboundEffects(tx, {
+    workspaceId: row.workspace_id, messageId: row.id, channel: m.account.channel, touchId: row.touch_id,
+    enrollmentId: row.enrollment_id, contactId: row.contact_id, body: m.body, automatic: false,
+    occurredAt: m.occurredAt, now: new Date(), fromAddress: m.fromAddress,
+  });
+  return { matched: true, inserted: true, enrollmentStopped: fx.enrollmentStopped, touchesCanceled: fx.canceled.length, optedOut: fx.optOut };
 }
 
 /**

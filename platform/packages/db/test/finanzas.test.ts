@@ -13,10 +13,8 @@ import {
   InvoiceNotFound,
 } from '../src/queries/finanzas.ts';
 import { assertWorkspaceId } from '../src/index.ts';
-import {
-  openTestDb, type TestDb,
-  WORKSPACE_LAURA, CAMPAIGN_CAFE_ALMA, COMPANY_CAFE_ALMA, INVOICE_FV_2026_001, INVOICE_FV_2026_010,
-} from './pglite.ts';
+import { openTestDb, type TestDb,
+  WORKSPACE_LAURA, CAMPAIGN_CAFE_ALMA, COMPANY_CAFE_ALMA, INVOICE_FV_2026_001, INVOICE_FV_2026_010, SETUP_TIMEOUT } from './pglite.ts';
 
 /** Un workspace ajeno, sin filas de finanzas, para las pruebas de aislamiento. */
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000001';
@@ -30,7 +28,7 @@ before(async () => {
     VALUES ('${WORKSPACE_AJENO}', 'workspace-ajeno-pruebas', 'Workspace ajeno', 'creator', 'COP')
     ON CONFLICT DO NOTHING;
   `);
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();

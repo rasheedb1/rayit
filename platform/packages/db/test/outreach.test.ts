@@ -62,7 +62,7 @@ import {
   WORKER_ONLY_TOUCH_COLUMNS, WORKER_ONLY_TOUCH_STATUS,
 } from '../src/schema/outreach.ts';
 import { CANCELABLE_TOUCH_STATUSES, LIVE_TOUCH_STATUSES } from '../src/schema/ventas.ts';
-import { openTestDb, type TestDb } from './pglite.ts';
+import { openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 const WS_A = '00000037-0000-4000-8000-00000000000a';
 const WS_B = '00000037-0000-4000-8000-00000000000b';
@@ -214,7 +214,7 @@ before(async () => {
     INSERT INTO company (id, name, owner_workspace_id) VALUES ('${COMPANY_C}', 'Empresa de C', '${WS_C}');
     INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_C}', '${COMPANY_C}');
   `);
-});
+}, SETUP_TIMEOUT);
 
 after(async () => {
   // Contra un Postgres que se queda (TEST_DATABASE_URL), la prueba se
@@ -894,7 +894,7 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
           );
         });
       }
-    });
+    }, SETUP_TIMEOUT);
 
     test('un toque enviado no vuelve a la cola desde la web, y el enlace no mira su estado', async () => {
       const noVuelve = (e: { code?: string; message?: string }) =>
@@ -1336,7 +1336,7 @@ describe('0037 · coherencia de la cola, lista global en la regla y tope de gast
         ('${STEP_D2}', '${WS_D}', '${SEQ_D2}', 1, 'email', 'email', false, 'Hola');
       INSERT INTO outbound_enrollment (id, workspace_id, sequence_id, contact_id) VALUES ('${ENR_D1}', '${WS_D}', '${SEQ_D1}', '${D1}');
     `);
-  });
+  }, SETUP_TIMEOUT);
 
   after(async () => {
     if (t.kind === 'postgres') {
@@ -1492,7 +1492,7 @@ describe('0037 · techo por canal, processing del despachador, baja global al en
       INSERT INTO outbound_sequence (id, workspace_id, name, channel, status) VALUES
         ('${SEQ_E}', '${WS_E}', 'E', 'email', 'active');
     `);
-  });
+  }, SETUP_TIMEOUT);
 
   after(async () => {
     if (t.kind === 'postgres') {

@@ -20,7 +20,8 @@ import assert from 'node:assert/strict';
 import { allJobs } from '../src/jobs/index.ts';
 import { runSeguimientos, SEGUIMIENTOS_HORA_LOCAL, SEGUIMIENTOS_JOB_ID } from '../src/jobs/ventas/seguimientos.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
-import { openTestDatabase } from './helpers/harness.ts';
+import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
+import { membershipSql } from '@mc/db/test/membresia';
 
 /** 9:00 en Bogotá, 16:00 en Madrid, 4:00 en Honolulu. */
 const NOW = new Date('2026-09-23T14:00:00Z');
@@ -101,9 +102,10 @@ before(async () => {
     INSERT INTO app_user (id, email, name) VALUES
       ('${USER_LAURA}', 'laura@seguimientos.test', 'Laura'),
       ('${USER_ANA}', 'ana@seguimientos.test', 'Ana');
-    INSERT INTO membership (workspace_id, user_id, role) VALUES
-      ('${WS_BOGOTA}', '${USER_LAURA}', 'owner'),
-      ('${WS_BOGOTA}', '${USER_ANA}', 'member');
+    ${membershipSql([
+      { workspaceId: WS_BOGOTA, userId: USER_LAURA, kind: 'owner' },
+      { workspaceId: WS_BOGOTA, userId: USER_ANA, kind: 'member' },
+    ])}
     INSERT INTO company (id, name, owner_workspace_id) VALUES
       ('${COMPANY}', 'Café Alma', '${WS_BOGOTA}'),
       ('${COMPANY_MADRID}', 'Marca de Madrid', '${WS_MADRID}'),
@@ -119,7 +121,7 @@ before(async () => {
       ('${DEAL_MADRID}',     '${WS_MADRID}', '${COMPANY_MADRID}', NULL, NULL, 'Otoño', 'contactado', 'EUR', 'Enviar propuesta', '2026-09-21T09:00:00Z', '${TOCADO_ANTES}', '${TOCADO_ANTES}'),
       ('${DEAL_HONOLULU}',   '${WS_HONOLULU}', '${COMPANY_HONOLULU}', NULL, NULL, 'Verano', 'contactado', 'USD', 'Escribir a la marca', '2026-09-21T09:00:00Z', '${TOCADO_ANTES}', '${TOCADO_ANTES}');
   `);
-});
+}, SETUP_TIMEOUT);
 after(async () => {
   await db?.close();
 });

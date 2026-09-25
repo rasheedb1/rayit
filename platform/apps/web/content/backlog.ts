@@ -402,11 +402,12 @@ export const STORIES: readonly Story[] = [
     note: "Bloqueada por llaves externas, no por código. Hecho: conectar Gmail, LinkedIn e Instagram con estado firmado (la cuenta nueva se ata al intento por su name), avisos con secreto y ruta firmada, keepalive, límites por cuenta que dicen quién los fija, Instagram apagado por defecto en la política, y lectura de respuestas y rebotes de correo real (charset, solo HTML, DSN). Falta: grabar una sesión real contra Google y Unipile (docs/ventas-outreach.md §9.3): Rasheed crea un cliente OAuth de Google en modo Prueba y una cuenta de prueba de Unipile, guarda sus llaves en .env.local y corre `pnpm --filter @mc/connectors record:outreach -- google | avisos | unipile`; grabados.test.ts no deja marcarla «hecho» sin las once grabaciones y su fecha en esta nota. Y aplicar en Supabase el esquema 0038 a 0045.",
   },
   {
-    id: "VEN-10", module: "VEN", owner: "rasheed", size: "L", sprint: 4, deps: ["VEN-9", "CON-2"],
+    id: "VEN-10", module: "VEN", owner: "rasheed", size: "L", sprint: 4, deps: ["VEN-9", "CON-2", "VEN-15"],
     title: "Motor de cadencias",
     desc: "Pasos normalizados, enrolamiento, cola en outbound_touch con reclamo atómico, despachador por canal con interfaz común, días hábiles y zona horaria del workspace, límites diarios y semanales, reintentos con espera creciente, interruptor de apagado, cancelación al responder con relectura del estado antes de enviar.",
     done: "Una secuencia de tres pasos con plantillas fijas se ejecuta sola contra un buzón de prueba; una respuesta cancela lo pendiente; el límite diario reprograma al día siguiente.",
-    status: "pendiente",
+    status: "bloqueada",
+    note: "Hecho y probado sin red, también sobre la serie integrada (main 0034-0042 + renumeración + 0055): las 123 pruebas del motor pasan y, en un Postgres 16 local con el seed, los pasos 3-6 de §5.2 dan «Despacho: 0 reclamados, 0 enviados» apagado y «Despacho: 1 reclamado, 1 enviado» encendido (status=sent, provider_message_id=fake-linkedin-0001). Falta lo del integrador: renumerar, pnpm verificar, db.migrate hasta 0055 en Supabase y pegar aquí las salidas de los pasos 4 y 6 contra Supabase (docs/ventas-outreach.md §5.2).",
   },
   {
     id: "VEN-11", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["CON-6", "COT-1"],
@@ -441,7 +442,8 @@ export const STORIES: readonly Story[] = [
     title: "Entregabilidad y cumplimiento",
     desc: "Pie de baja con página pública, cabecera List-Unsubscribe de un clic, rebotes asíncronos, calentamiento progresivo por cuenta, baja respetada en todos los canales, alertas diarias por correo.",
     done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud.",
-    status: "pendiente",
+    status: "bloqueada",
+    note: "24 de septiembre, ronda 2. Hecho y probado en pglite: token de baja opaco (32 bytes al azar, sin secreto; el sha256 manda y es la misma forma que el despachador de VEN-10), página /baja/<token> con la dirección enmascarada y quién escribe (public_optout_preview, 0038 §5) y POST de un clic; pie obligatorio y List-Unsubscribe; calentamiento con una sola regla (warmupDailyLimit/warmupCurve); rebotes duros solo con lo que dice el servidor; alertas con rebotes duros de lo enviado y toques debidos, en el idioma del espacio y un resumen por espacio; /ventas/politica con «Salud de hoy»; demo:enlace-baja para probar la baja a mano. Con VEN-10 r4 el despachador ya usa el token, el pie y List-Unsubscribe de aquí, y outbound.bounces lee el Gmail de cada cuenta con el GmailChannel del motor. Solo la bloquea la integración: aplicar 0050_entregabilidad en Supabase (no está aplicada).",
   },
   {
     id: "VEN-16", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-10"],

@@ -30,6 +30,8 @@ const base: ContactRow = {
   optedOutReason: null,
   optedOutByReply: null,
   bounced: false,
+  bouncedReason: null,
+  bouncedAt: null,
   isOwn: true,
   createdAt: "2026-09-20T12:00:00Z",
 };
@@ -41,6 +43,14 @@ beforeEach(() => {
 });
 
 describe("Contactos", () => {
+  it("un correo que rebotó dice cuándo y por qué, junto a la píldora (0038)", () => {
+    const rebotado = { ...base, bounced: true, bouncedReason: "550 5.1.1 The email account does not exist.", bouncedAt: "2026-09-23T13:10:00Z" };
+    const nota = "Rebotó el 23 de septiembre de 2026: 550 5.1.1 The email account does not exist.";
+    render(<Contactos companyId={COMPANY} contacts={[rebotado]} bouncedNotes={{ [rebotado.id]: nota }} />);
+    expect(screen.getByText("Correo rebotado")).toBeInTheDocument();
+    expect(screen.getByText(nota)).toBeInTheDocument();
+  });
+
   it("la procedencia es obligatoria y el error del servidor se ve en su campo", async () => {
     crearContacto.mockResolvedValue({ errors: { source: "Di de dónde sacaste el dato: sin eso no se guarda." } });
     render(<Contactos companyId={COMPANY} contacts={[]} />);

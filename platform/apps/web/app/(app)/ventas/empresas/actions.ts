@@ -4,6 +4,7 @@
  * Las Server Actions de la ficha de empresa (VEN-5) y de la siguiente
  * acción (VEN-4): registrar una actividad, fijar la siguiente acción y
  * marcarla hecha. Las usan la ficha, el pipeline y el bloque «Para hoy».
+ * Y aprobar un mensaje retenido de la cadencia.
  *
  * La misma forma que ../actions.ts: zod valida lo que llega, la consulta
  * de @mc/db hace el trabajo dentro de `withWorkspace`, y los errores de
@@ -14,6 +15,13 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX, isClockTime, isIsoDate } from "@mc/core";
+import { OUTREACH_URLS } from "@mc/core/outreach/messages";
+import {
+  releaseHeldTouch,
+  resolveUnconfirmedTouch,
+  type ReleaseHeldResult,
+  type ResolveUnconfirmedResult,
+} from "@mc/db/queries/outreach";
 import { VentasError } from "@mc/db/queries/ventas";
 import {
   FichaError,
@@ -260,4 +268,98 @@ export async function verMasActividad(
     console.error("[ventas/ficha]", err);
     return { error: t.moreError };
   }
+}
+
+// ---------------------------------------------------------------------
+// VEN-10 · Aprobar un mensaje retenido de la cadencia
+// ---------------------------------------------------------------------
+
+const aprobarSchema = z.object({
+  companyId: z.string().regex(UUID_RE),
+  touchId: z.string().regex(UUID_RE),
+  subject: z.string().max(998),
+  body: z.string().max(20_000),
+});
+
+/**
+ * «Aprobar y enviar» en la ficha: el mensaje retenido vuelve a la cola con
+ * el asunto y el texto que dejó la persona (releaseHeldTouch revalida lo
+ * mismo que el despachador). Si no se puede, el motivo vuelve en el campo
+ * que hay que corregir, o como aviso.
+ */
+export async function aprobarMensaje(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = FICHA.cadencia;
+  const parsed = aprobarSchema.safeParse({
+    companyId: field(formData, "companyId"),
+    touchId: field(formData, "touchId"),
+    subject: field(formData, "subject"),
+    body: field(formData, "body"),
+  });
+  if (!parsed.success) return { message: t.error };
+  const v = parsed.data;
+  let result: ReleaseHeldResult;
+  try {
+    result = await withWorkspace((tx) => releaseHeldTouch(tx, v.touchId, { subject: v.subject, body: v.body }));
+  } catch (err) {
+    console.error("[ventas/ficha] aprobar mensaje", err);
+    return { message: t.error };
+  }
+  if (!result.ok) {
+    const e = t.errores;
+    switch (result.code) {
+      case "empty":
+        return { errors: { body: e.empty } };
+      case "empty_subject":
+        return { errors: { subject: e.empty_subject } };
+      case "placeholders":
+        return { errors: { body: e.placeholders(result.detail ?? "") } };
+      case "note_too_long":
+        return { errors: { body: e.note_too_long(result.detail ?? "") } };
+      case "no_postal_address":
+        // Lo primero que ve quien prueba la demo (el seed no trae dirección): con el enlace para arreglarlo.
+        return { message: e.no_postal_address, link: { href: OUTREACH_URLS.policyPostalAddress, label: t.irAPolitica } };
+      default:
+        revalidate(v.companyId);
+        return { message: e[result.code] };
+    }
+  }
+  revalidate(v.companyId);
+  return { ok: true, notice: t.aprobado, stamp: Date.now() };
+}
+
+// ---------------------------------------------------------------------
+// VEN-10 · Un intento que el proveedor no confirmó
+// ---------------------------------------------------------------------
+
+const intentoSchema = z.object({
+  companyId: z.string().regex(UUID_RE),
+  touchId: z.string().regex(UUID_RE),
+  outcome: z.enum(["was_sent", "resend"]),
+});
+
+/**
+ * «Sí, salió» / «No salió: enviarlo» en la ficha, para un mensaje retenido
+ * porque no se supo si un intento llegó al proveedor. Lo resuelve
+ * resolveUnconfirmedTouch (0053) con la RLS del workspace: la web no
+ * escribe las columnas del intento ni el enlace de baja por su cuenta.
+ */
+export async function resolverIntento(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = FICHA.cadencia.intento;
+  const parsed = intentoSchema.safeParse({
+    companyId: field(formData, "companyId"),
+    touchId: field(formData, "touchId"),
+    outcome: field(formData, "outcome"),
+  });
+  if (!parsed.success) return { message: t.error };
+  const v = parsed.data;
+  let result: ResolveUnconfirmedResult;
+  try {
+    result = await withWorkspace((tx) => resolveUnconfirmedTouch(tx, v.touchId, v.outcome));
+  } catch (err) {
+    console.error("[ventas/ficha] resolver intento", err);
+    return { message: t.error };
+  }
+  revalidate(v.companyId);
+  if (!result.ok) return { message: t.errores[result.code] };
+  return { ok: true, notice: v.outcome === "was_sent" ? t.registrado : t.reenviado, stamp: Date.now() };
 }

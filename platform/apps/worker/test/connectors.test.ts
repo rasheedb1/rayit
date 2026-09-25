@@ -7,7 +7,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard, type OAuthTokens } from '@mc/connectors';
 import { defineJob } from '../src/runner/registry.ts';
-import { jobRuns, startHarness, waitFor, type Harness } from './helpers/harness.ts';
+import { jobRuns, startHarness, waitFor, type Harness, SETUP_TIMEOUT } from './helpers/harness.ts';
 
 const WORKSPACE = '00000002-0000-4000-8000-000000000001';
 const CONNECTION = '00000002-0000-4000-8000-0000000000c2';
@@ -47,7 +47,7 @@ before(async () => {
       `);
     },
   });
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await h.stop();

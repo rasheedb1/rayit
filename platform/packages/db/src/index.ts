@@ -29,7 +29,7 @@
  * hace aritmética de métricas (para eso están las vistas).
  */
 export type {
-  BaseTx, Db, DbOptions, Identity, IdentityTx, Orm, PublicShareTx, QueryResult, Schema, SqlExecutor, WorkerTx,
+  BaseTx, Db, DbOptions, Identity, IdentityTx, Orm, PublicShareTx, QueryResult, Schema, SqlExecutor, WorkerSql, WorkerTx,
   WorkspaceTx,
 } from './client.ts';
 export {

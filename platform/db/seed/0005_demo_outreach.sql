@@ -32,8 +32,8 @@
 --   * Idempotente. UUID fijos y ON CONFLICT (id). Lo que ya PASÓ (los
 --     envíos, las respuestas, los desenlaces) se congela en la primera
 --     corrida con DO NOTHING. Lo único que la demo mira HOY, el toque
---     programado de Vitalé, se reprograma para mañana a las 10:30
---     locales cada vez que se siembra, mientras siga programado.
+--     programado de Vitalé, se reprograma para el siguiente día hábil a
+--     las 10:30 locales cada vez que se siembra, mientras siga programado.
 --   * Nada real. Las direcciones del Gmail y la cuenta de Unipile son
 --     de .test, la cuenta conectada no tiene secreto (secret_ref NULL:
 --     el despachador no puede enviar con ella) y la política de 0002
@@ -136,7 +136,7 @@ INSERT INTO outbound_enrollment
   (id, workspace_id, sequence_id, contact_id, current_step_id, status, resume_at, context, enrolled_by,
    started_at, finished_at)
 VALUES
-  -- Vitalé: va por el tercer paso (el mensaje de LinkedIn de mañana).
+  -- Vitalé: va por el tercer paso (el mensaje de LinkedIn del siguiente día hábil).
   ('00000005-0000-4000-8000-0000000e0001', '00000002-0000-4000-8000-000000000001',
    '00000005-0000-4000-8000-0000005e0001', '00000002-0000-4000-8000-0000000c0011',
    '00000005-0000-4000-8000-0000005e0103', 'active', NULL,
@@ -160,12 +160,41 @@ ON CONFLICT (id) DO NOTHING;
 -- =====================================================================
 -- 4 · Los toques
 -- ---------------------------------------------------------------------
+-- Las horas, en la ventana laboral del workspace (09:00–17:00 de Bogotá,
+-- de lunes a viernes), la misma regla que el motor impone al enviar. Con
+-- `now() - interval 'N days'`, según la hora a la que se sembrara, la
+-- ficha decía «salió el 23 de septiembre a las 2:21 a. m.»: la demo
+-- contradecía lo que quiere enseñar. Las horas salen de la CTE `h`
+-- (sin funciones: quien siembra no puede crear ni temporales):
+--   habiles[n]         el n-ésimo día hábil antes de hoy: lo enviado;
+--   desde(k)           el primer día hábil desde hace k días: lo que se
+--                      canceló antes de salir, siempre DESPUÉS de la
+--                      respuesta que lo canceló.
+-- Lo comprueba verify/0005.sql (g).
+-- ---------------------------------------------------------------------
 -- Lo enviado lleva lo que dejó el despachador: el intento (attempt_count
 -- 1), la hora del reclamo, el id del proveedor y, en los correos, la
 -- dirección EXACTA a la que salió, la cabecera Message-ID y el hilo.
 -- status_changed_at es la hora del último cambio de estado: la de envío
 -- para lo enviado, la de la cancelación para lo cancelado.
 -- =====================================================================
+WITH hoy AS (SELECT (now() AT TIME ZONE 'America/Bogota')::date AS d),
+dias AS (
+  SELECT array_agg(g::date ORDER BY g DESC) AS habiles
+    FROM hoy, generate_series(hoy.d - 1, hoy.d - 30, interval '-1 day') g
+   WHERE extract(isodow FROM g) < 6),
+h AS (
+  SELECT (habiles[2] + time '10:15') AT TIME ZONE 'America/Bogota' AS vitale_1,
+         (habiles[1] + time '11:40') AT TIME ZONE 'America/Bogota' AS vitale_2,
+         (habiles[6] + time '10:05') AT TIME ZONE 'America/Bogota' AS sabores_2,
+         (habiles[10] + time '09:50') AT TIME ZONE 'America/Bogota' AS olla_2,
+         (SELECT (min(g)::date + time '10:30') AT TIME ZONE 'America/Bogota'
+            FROM hoy, generate_series(hoy.d - 4, hoy.d + 3, interval '1 day') g WHERE extract(isodow FROM g) < 6) AS sabores_3,
+         (SELECT (min(g)::date + time '10:30') AT TIME ZONE 'America/Bogota'
+            FROM hoy, generate_series(hoy.d - 8, hoy.d - 1, interval '1 day') g WHERE extract(isodow FROM g) < 6) AS olla_4,
+         (SELECT (min(g)::date + time '10:30') AT TIME ZONE 'America/Bogota'
+            FROM hoy, generate_series(hoy.d + 1, hoy.d + 7, interval '1 day') g WHERE extract(isodow FROM g) < 6) AS proximo
+    FROM dias)
 INSERT INTO outbound_touch
   (id, workspace_id, company_id, contact_id, sequence_id, step_index, enrollment_id, step_id, channel,
    subject, body, status, scheduled_for, claimed_at, sent_at, attempt_count, recipient_address,
@@ -178,9 +207,9 @@ VALUES
    '00000005-0000-4000-8000-0000005e0001', 1, '00000005-0000-4000-8000-0000000e0001',
    '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL,
    'Qué buena la idea de la avena con frutos rojos para arrancar la semana. La probé en casa y funciona.',
-   'sent', now() - interval '2 days', now() - interval '2 days' - interval '10 seconds', now() - interval '2 days', 1,
+   'sent', (SELECT vitale_1 FROM h), (SELECT vitale_1 FROM h) - interval '10 seconds', (SELECT vitale_1 FROM h), 1,
    NULL, 'unipile-demo-comment-0001', NULL, NULL, NULL, NULL, NULL, NULL,
-   now() - interval '2 days', now() - interval '2 days' - interval '1 hour'),
+   (SELECT vitale_1 FROM h), (SELECT vitale_1 FROM h) - interval '1 hour'),
   -- Vitalé · 2: el correo del encaje de audiencia; lo abrió.
   ('00000005-0000-4000-8000-000000070002', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000c0011',
@@ -188,10 +217,10 @@ VALUES
    '00000005-0000-4000-8000-0000005e0102', 'email', 'Tu audiencia y la mía desayunan igual',
    'Hola, Sofía: el 64 % de quienes me siguen son mujeres de 25 a 34 años que cocinan entre semana, '
    'el mismo cliente de Vitalé. ¿Te interesa ver cómo le fue a una receta de desayuno en mi cuenta?',
-   'sent', now() - interval '1 day', now() - interval '1 day' - interval '8 seconds', now() - interval '1 day', 1,
+   'sent', (SELECT vitale_2 FROM h), (SELECT vitale_2 FROM h) - interval '8 seconds', (SELECT vitale_2 FROM h), 1,
    'sofia@vitale.co', 'gmail-demo-0002', '<demo-0002@mail.gmail.com>', 'gmail-thread-demo-0002',
-   now() - interval '20 hours', NULL, NULL, NULL,
-   now() - interval '1 day', now() - interval '1 day' - interval '1 hour'),
+   (SELECT vitale_2 FROM h) + interval '3 hours', NULL, NULL, NULL,
+   (SELECT vitale_2 FROM h), (SELECT vitale_2 FROM h) - interval '1 hour'),
   -- Vitalé · 3: el mensaje de LinkedIn con la prueba de desempeño, programado.
   ('00000005-0000-4000-8000-000000070003', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000c0011',
@@ -199,8 +228,7 @@ VALUES
    '00000005-0000-4000-8000-0000005e0103', 'linkedin', NULL,
    'Sofía, te dejo el video de la granola casera: 212 mil views, cuatro veces mi mediana. '
    'Una receta así con Vitalé funcionaría igual de bien.',
-   'scheduled', (date_trunc('day', now() AT TIME ZONE 'America/Bogota') + interval '1 day 10 hours 30 minutes')
-                  AT TIME ZONE 'America/Bogota',
+   'scheduled', (SELECT proximo FROM h),
    NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
    now() - interval '1 day', now() - interval '1 day'),
   -- Vitalé · 4: la respuesta en el hilo, retenida por el juez.
@@ -228,17 +256,17 @@ VALUES
    '00000005-0000-4000-8000-0000005e0102', 'email', 'Recetas caseras para su temporada',
    'Hola, Daniel: mi audiencia cocina en casa de lunes a viernes y compra en supermercado de barrio, '
    'justo donde está Sabores Caseros. ¿Hablamos de su temporada de fin de año?',
-   'sent', now() - interval '6 days', now() - interval '6 days' - interval '9 seconds', now() - interval '6 days', 1,
+   'sent', (SELECT sabores_2 FROM h), (SELECT sabores_2 FROM h) - interval '9 seconds', (SELECT sabores_2 FROM h), 1,
    'daniel.restrepo@saborescaseros.co', 'gmail-demo-0006', '<demo-0006@mail.gmail.com>',
-   'gmail-thread-demo-0006', now() - interval '6 days' + interval '2 hours', now() - interval '5 days', NULL, NULL,
-   now() - interval '6 days', now() - interval '6 days' - interval '1 hour'),
+   'gmail-thread-demo-0006', (SELECT sabores_2 FROM h) + interval '2 hours', now() - interval '5 days', NULL, NULL,
+   (SELECT sabores_2 FROM h), (SELECT sabores_2 FROM h) - interval '1 hour'),
   -- Sabores Caseros · 3: cancelado por la respuesta.
   ('00000005-0000-4000-8000-000000070007', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-0000000c0008',
    '00000005-0000-4000-8000-0000005e0001', 3, '00000005-0000-4000-8000-0000000e0002',
    '00000005-0000-4000-8000-0000005e0103', 'linkedin', NULL,
    'Daniel, te comparto el video de las arepas rellenas: 180 mil views en una semana.',
-   'canceled', now() - interval '4 days', NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'replied',
+   'canceled', (SELECT sabores_3 FROM h), NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'replied',
    now() - interval '5 days', now() - interval '6 days'),
   -- Olla Fácil · 2: el correo al que Carolina contestó «ahora no».
   ('00000005-0000-4000-8000-000000070008', '00000002-0000-4000-8000-000000000001',
@@ -247,20 +275,21 @@ VALUES
    '00000005-0000-4000-8000-0000005e0102', 'email', 'Ollas que se ven en cámara',
    'Hola, Carolina: la mitad de mis videos se graban con la olla en primer plano, y quien me sigue '
    'pregunta siempre cuál es. ¿Te interesa que la próxima sea de Olla Fácil?',
-   'sent', now() - interval '12 days', now() - interval '12 days' - interval '7 seconds',
-   now() - interval '12 days', 1, 'hola@ollafacil.co', 'gmail-demo-0008', '<demo-0008@mail.gmail.com>',
-   'gmail-thread-demo-0008', now() - interval '12 days' + interval '3 hours', now() - interval '11 days', NULL, NULL,
-   now() - interval '12 days', now() - interval '12 days' - interval '1 hour'),
+   'sent', (SELECT olla_2 FROM h), (SELECT olla_2 FROM h) - interval '7 seconds',
+   (SELECT olla_2 FROM h), 1, 'hola@ollafacil.co', 'gmail-demo-0008', '<demo-0008@mail.gmail.com>',
+   'gmail-thread-demo-0008', (SELECT olla_2 FROM h) + interval '3 hours', now() - interval '11 days', NULL, NULL,
+   (SELECT olla_2 FROM h), (SELECT olla_2 FROM h) - interval '1 hour'),
   -- Olla Fácil · 4: cancelado por el «ahora no».
   ('00000005-0000-4000-8000-000000070009', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-0000000000e8', '00000002-0000-4000-8000-0000000c0012',
    '00000005-0000-4000-8000-0000005e0001', 4, '00000005-0000-4000-8000-0000000e0003',
    '00000005-0000-4000-8000-0000005e0104', 'email', 'Re: Ollas que se ven en cámara',
    'Una idea: «una olla, cinco cenas», una serie corta con la olla como protagonista.',
-   'canceled', now() - interval '8 days', NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'not_now',
+   'canceled', (SELECT olla_4 FROM h), NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'not_now',
    now() - interval '11 days', now() - interval '12 days')
--- Lo único que la demo mira hoy: el programado vuelve a mañana a las
--- 10:30 locales cada vez que se siembra, mientras siga programado.
+-- Lo único que la demo mira hoy: el programado vuelve al siguiente día
+-- hábil a las 10:30 locales cada vez que se siembra, mientras siga
+-- programado (un viernes, al lunes: el motor no envía en fin de semana).
 ON CONFLICT (id) DO UPDATE SET scheduled_for = EXCLUDED.scheduled_for
 WHERE outbound_touch.status = 'scheduled';
 

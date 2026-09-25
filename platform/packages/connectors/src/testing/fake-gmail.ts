@@ -116,8 +116,16 @@ export class FakeGmail implements GoogleOAuthApi, GmailApi {
   async getMessage(id: string): Promise<GmailMessage> {
     this.#enter();
     const m = this.inbox.find((x) => x.id === id);
-    if (!m) throw new OutreachApiError({ provider: 'gmail', endpoint: 'fake.getMessage', httpStatus: 404, code: 'notFound', kind: 'permanent', messageEs: 'No existe.' });
-    return m;
+    if (m) return m;
+    // Lo enviado también se lee, como en Gmail (la copia de la carpeta Enviados).
+    const s = this.sent.find((x) => x.result.providerMessageId === id);
+    if (!s) throw new OutreachApiError({ provider: 'gmail', endpoint: 'fake.getMessage', httpStatus: 404, code: 'notFound', kind: 'permanent', messageEs: 'No existe.' });
+    return {
+      id, threadId: s.result.threadId, messageIdRfc: s.result.messageIdRfc, inReplyTo: s.message.inReplyTo ?? null,
+      references: [...(s.message.references ?? [])], from: s.message.from.address, to: s.message.to.address,
+      subject: s.message.subject, sentAt: this.#now(), snippet: s.message.text.slice(0, 100), text: s.message.text,
+      labelIds: ['SENT'], failedRecipient: null,
+    };
   }
 
   async getThread(threadId: string): Promise<GmailMessage[]> {
@@ -130,6 +138,14 @@ export class FakeGmail implements GoogleOAuthApi, GmailApi {
     return this.inbox
       .filter((m) => !m.failedRecipient && (m.sentAt?.getTime() ?? 0) >= opts.since.getTime() && (!opts.threadId || m.threadId === opts.threadId))
       .map(({ id, threadId }) => ({ id, threadId }));
+  }
+
+  async searchSent(opts: { to: string; since: Date }): Promise<GmailMessageRef[]> {
+    this.#enter();
+    const to = opts.to.trim().toLowerCase();
+    return this.sent
+      .filter((x) => x.message.to.address.trim().toLowerCase() === to && this.#now().getTime() >= opts.since.getTime())
+      .map((x) => ({ id: x.result.providerMessageId, threadId: x.result.threadId }));
   }
 
   async searchBounces(opts: { since: Date }): Promise<GmailMessageRef[]> {

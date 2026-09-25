@@ -7,3 +7,4 @@ export * from './zonas.ts';
 export * from './ventas.ts';
 export * from './bajas.ts';
 export * from './canales-textos.ts';
+export * from './outreach/index.ts';

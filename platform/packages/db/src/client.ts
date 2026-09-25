@@ -160,7 +160,18 @@ declare const WORKER: unique symbol;
  * fallaban en ejecución con 42501. Un WorkerTx sí sirve donde se pide un
  * BaseTx.
  */
-export interface WorkerTx extends BaseTx {
+export interface WorkerTx extends BaseTx, WorkerSql {
+  readonly [WORKER]: true;
+}
+
+/**
+ * Un ejecutor SQL que corre como mc_worker, sin el ORM (VEN-10). Es lo
+ * que piden las consultas del motor de cadencias (queries/outreach): el
+ * worker tiene su propia conexión (apps/worker/src/runner/db.ts, con
+ * SET ROLE mc_worker) y no un cliente de @mc/db, así que no tiene un
+ * WorkerTx con Drizzle. Un WorkerTx sirve donde se pide un WorkerSql.
+ */
+export interface WorkerSql extends SqlExecutor {
   readonly [WORKER]: true;
 }
 

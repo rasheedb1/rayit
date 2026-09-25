@@ -7,14 +7,14 @@
  * página de baja de VEN-15) recibe parámetros con nombre, el tipo de
  * transacción que corresponde y una respuesta comprobada en ejecución.
  *
- *   incrementIfUnderCap / incrementWeekly   WorkerTx (con marca de tipo:
+ *   incrementIfUnderCap / incrementWeekly   WorkerSql o WorkerTx (con marca de tipo:
  *       un WorkspaceTx no compila aquí). Eligen la firma por
  *       accountId: con cuenta cuenta la plaza de ESA cuenta; sin ella, la
  *       del workspace entero. Así no se confunde el orden de los
  *       argumentos entre las dos firmas (cuenta antes que acción).
  *   shouldPauseOutreach / disableOutreach / enableOutreach / outboundHealth
  *       Con un WorkspaceTx el workspace es el de la transacción (nunca
- *       uno que pase la pantalla); con un WorkerTx se nombra aparte.
+ *       uno que pase la pantalla); con un WorkerSql (el worker) se nombra aparte.
  *   publicOptout   PublicShareTx: la página de baja, sin sesión.
  *   nextBusinessDay   cualquier transacción: es un cálculo.
  *
@@ -23,9 +23,10 @@
  * error sale aquí con la ruta del campo, no en una pantalla con
  * `undefined`.
  */
-import { assertWorkspaceId, isUuid, type BaseTx, type PublicShareTx, type WorkerTx, type WorkspaceTx } from '../client.ts';
+import { assertWorkspaceId, isUuid, type PublicShareTx, type SqlExecutor, type WorkerSql, type WorkspaceTx } from '../client.ts';
 import { OUTBOUND_CHANNELS } from '../schema/_canales.ts';
 import { BREAKER_STEP_TYPES, type OutboundHealth } from '../schema/outreach.ts';
+import { replanOutreach, type ReplanResult } from './outreach/enroll.ts';
 
 /** La forma de action_type (CHECK de outbound_counter): 'email', 'linkedin_invite', 'llm_call'… */
 export const ACTION_TYPE_RE = /^[a-z][a-z0-9_]{1,40}$/;
@@ -60,6 +61,11 @@ export interface CapRequest {
   actionType: string;
   /** El tope del periodo. 0 o menos no deja pasar nada. */
   cap: number;
+  /**
+   * (VEN-10, 0052 §3) El instante cuyo día local cuenta: el reloj de
+   * quien reclama. Sin él, now() de la base (las funciones de 0037).
+   */
+  at?: Date;
 }
 
 function capArgs(fn: string, req: CapRequest): { sql: string; params: unknown[] } {
@@ -73,15 +79,20 @@ function capArgs(fn: string, req: CapRequest): { sql: string; params: unknown[] 
   if (!Number.isInteger(req.cap)) {
     throw new TypeError(`${fn}: cap tiene que ser un entero (${req.cap}).`);
   }
+  if (req.at !== undefined && Number.isNaN(req.at.getTime())) throw new TypeError(`${fn}: at no es una fecha válida.`);
+  const at = req.at === undefined ? [] : [req.at.toISOString()];
   return req.accountId !== undefined && req.accountId !== null
     ? {
-        sql: `SELECT ${fn}($1::uuid, $2::uuid, $3::text, $4::int) AS ok`,
-        params: [req.workspaceId, req.accountId, req.actionType, req.cap],
+        sql: `SELECT ${fn}($1::uuid, $2::uuid, $3::text, $4::int${at.length ? ', $5::timestamptz' : ''}) AS ok`,
+        params: [req.workspaceId, req.accountId, req.actionType, req.cap, ...at],
       }
-    : { sql: `SELECT ${fn}($1::uuid, $2::text, $3::int) AS ok`, params: [req.workspaceId, req.actionType, req.cap] };
+    : {
+        sql: `SELECT ${fn}($1::uuid, $2::text, $3::int${at.length ? ', $4::timestamptz' : ''}) AS ok`,
+        params: [req.workspaceId, req.actionType, req.cap, ...at],
+      };
 }
 
-async function bump(tx: WorkerTx, fn: 'increment_if_under_cap' | 'increment_weekly', req: CapRequest): Promise<boolean> {
+async function bump(tx: WorkerSql, fn: 'increment_if_under_cap' | 'increment_weekly', req: CapRequest): Promise<boolean> {
   const { sql, params } = capArgs(fn, req);
   const ok = (await tx.query<{ ok: unknown }>(sql, params)).rows[0]?.ok;
   if (typeof ok !== 'boolean') throw new OutreachShapeError(fn, 'ok', `se esperaba boolean, llegó ${typeof ok}`);
@@ -94,12 +105,12 @@ async function bump(tx: WorkerTx, fn: 'increment_if_under_cap' | 'increment_week
  * libre reciben un true y un false. Quien necesite día y semana llama a
  * las dos en la MISMA transacción y deshace si la segunda dice false.
  */
-export function incrementIfUnderCap(tx: WorkerTx, req: CapRequest): Promise<boolean> {
+export function incrementIfUnderCap(tx: WorkerSql, req: CapRequest): Promise<boolean> {
   return bump(tx, 'increment_if_under_cap', req);
 }
 
 /** Lo mismo con la fila de la SEMANA local (la que empieza el lunes). */
-export function incrementWeekly(tx: WorkerTx, req: CapRequest): Promise<boolean> {
+export function incrementWeekly(tx: WorkerSql, req: CapRequest): Promise<boolean> {
   return bump(tx, 'increment_weekly', req);
 }
 
@@ -112,7 +123,7 @@ export function incrementWeekly(tx: WorkerTx, req: CapRequest): Promise<boolean>
  * un WorkspaceTx (y, si además se nombra uno, tiene que ser el mismo), o
  * el que se nombra si es un WorkerTx.
  */
-function workspaceOf(fn: string, tx: BaseTx, workspaceId: string | undefined): string {
+function workspaceOf(fn: string, tx: SqlExecutor, workspaceId: string | undefined): string {
   const propio = (tx as Partial<WorkspaceTx>).workspaceId;
   if (propio !== undefined) {
     if (workspaceId !== undefined && workspaceId !== propio) {
@@ -136,8 +147,8 @@ function workspaceOf(fn: string, tx: BaseTx, workspaceId: string | undefined): s
  * con más atraso que max_pending_touches.
  */
 export function shouldPauseOutreach(tx: WorkspaceTx): Promise<boolean>;
-export function shouldPauseOutreach(tx: WorkerTx, workspaceId: string): Promise<boolean>;
-export async function shouldPauseOutreach(tx: BaseTx, workspaceId?: string): Promise<boolean> {
+export function shouldPauseOutreach(tx: WorkerSql, workspaceId: string): Promise<boolean>;
+export async function shouldPauseOutreach(tx: SqlExecutor, workspaceId?: string): Promise<boolean> {
   const ws = workspaceOf('should_pause_outreach', tx, workspaceId);
   const p = (await tx.query<{ p: unknown }>('SELECT should_pause_outreach($1::uuid) AS p', [ws])).rows[0]?.p;
   if (typeof p !== 'boolean') throw new OutreachShapeError('should_pause_outreach', 'p', `llegó ${typeof p}`);
@@ -147,11 +158,12 @@ export async function shouldPauseOutreach(tx: BaseTx, workspaceId?: string): Pro
 /**
  * Apaga el envío del workspace con su motivo y cancela lo que está en
  * cola o retenido (no lo que está en processing, que es del despachador).
- * Devuelve cuántos toques canceló. Los enrolamientos siguen vivos.
+ * Devuelve cuántos toques canceló. Los enrolamientos siguen vivos, y
+ * enableOutreach devuelve a la cola lo cancelado.
  */
 export function disableOutreach(tx: WorkspaceTx, reason: string): Promise<number>;
-export function disableOutreach(tx: WorkerTx, reason: string, workspaceId: string): Promise<number>;
-export async function disableOutreach(tx: BaseTx, reason: string, workspaceId?: string): Promise<number> {
+export function disableOutreach(tx: WorkerSql, reason: string, workspaceId: string): Promise<number>;
+export async function disableOutreach(tx: SqlExecutor, reason: string, workspaceId?: string): Promise<number> {
   const ws = workspaceOf('disable_outreach', tx, workspaceId);
   const n = (await tx.query<{ n: unknown }>('SELECT disable_outreach($1::uuid, $2::text) AS n', [ws, reason])).rows[0]?.n;
   if (typeof n !== 'number' || !Number.isInteger(n)) {
@@ -161,14 +173,25 @@ export async function disableOutreach(tx: BaseTx, reason: string, workspaceId?: 
 }
 
 /**
- * Enciende el envío. Sin outbound_policy.postal_address lanza 23514
- * (outbound_policy_enabled_needs_address). No reprograma nada.
+ * Enciende el envío y, en la misma transacción, devuelve a la cola lo
+ * que el apagado canceló (replanOutreach): las cadencias siguen donde
+ * iban, con los textos ya aprobados o editados. Sin
+ * outbound_policy.postal_address lanza 23514
+ * (outbound_policy_enabled_needs_address) y no toca nada.
  */
-export function enableOutreach(tx: WorkspaceTx): Promise<void>;
-export function enableOutreach(tx: WorkerTx, workspaceId: string): Promise<void>;
-export async function enableOutreach(tx: BaseTx, workspaceId?: string): Promise<void> {
-  const ws = workspaceOf('enable_outreach', tx, workspaceId);
+export interface EnableOutreachOptions {
+  /** El workspace: lo exige el worker (WorkerSql); la web no lo pasa, lo fija withWorkspace. */
+  workspaceId?: string;
+  /** El reloj del replan: lo vencido se replanifica desde aquí. Por defecto, ahora. */
+  now?: Date;
+}
+
+export function enableOutreach(tx: WorkspaceTx, opts?: { workspaceId?: never; now?: Date }): Promise<ReplanResult>;
+export function enableOutreach(tx: WorkerSql, opts: { workspaceId: string; now?: Date }): Promise<ReplanResult>;
+export async function enableOutreach(tx: SqlExecutor, opts: EnableOutreachOptions = {}): Promise<ReplanResult> {
+  const ws = workspaceOf('enable_outreach', tx, opts.workspaceId);
   await tx.query('SELECT enable_outreach($1::uuid)', [ws]);
+  return replanOutreach(tx, ws, opts.now ?? new Date());
 }
 
 // ---------------------------------------------------------------------
@@ -250,8 +273,8 @@ export function parseOutboundHealth(value: unknown): OutboundHealth {
 
 /** La salud del outreach en las últimas `hours` horas (entero de 1 a 720), comprobada. */
 export function outboundHealth(tx: WorkspaceTx, hours: number): Promise<OutboundHealth>;
-export function outboundHealth(tx: WorkerTx, hours: number, workspaceId: string): Promise<OutboundHealth>;
-export async function outboundHealth(tx: BaseTx, hours: number, workspaceId?: string): Promise<OutboundHealth> {
+export function outboundHealth(tx: WorkerSql, hours: number, workspaceId: string): Promise<OutboundHealth>;
+export async function outboundHealth(tx: SqlExecutor, hours: number, workspaceId?: string): Promise<OutboundHealth> {
   const ws = workspaceOf(HEALTH, tx, workspaceId);
   if (!Number.isInteger(hours) || hours < HEALTH_HOURS_MIN || hours > HEALTH_HOURS_MAX) {
     throw new RangeError(`${HEALTH}: hours tiene que ser un entero entre ${HEALTH_HOURS_MIN} y ${HEALTH_HOURS_MAX} (${hours}).`);
@@ -315,7 +338,7 @@ export async function publicOptout(tx: PublicShareTx, token: string): Promise<Pu
  * El siguiente día hábil (lunes a viernes) DESPUÉS del día local de `at`
  * en `timeZone`, a la misma hora de reloj. Una zona que no es IANA lanza.
  */
-export async function nextBusinessDay(tx: BaseTx, at: Date, timeZone: string): Promise<Date> {
+export async function nextBusinessDay(tx: SqlExecutor, at: Date, timeZone: string): Promise<Date> {
   if (Number.isNaN(at.getTime())) throw new TypeError('next_business_day: la fecha no es válida.');
   const d = (
     await tx.query<{ d: unknown }>('SELECT next_business_day($1::timestamptz, $2::text) AS d', [at.toISOString(), timeZone])
@@ -326,3 +349,18 @@ export async function nextBusinessDay(tx: BaseTx, at: Date, timeZone: string): P
   }
   return fecha;
 }
+
+// ---------------------------------------------------------------------
+// El motor de cadencias (VEN-10): enrolar, reclamar, enviar, responder.
+// Vive en queries/outreach/ (shared, notices, enroll, claim, send, replies);
+// se importa desde aquí igual.
+// ---------------------------------------------------------------------
+export * from './outreach/shared.ts';
+export * from './outreach/notices.ts';
+export * from './outreach/enroll.ts';
+export * from './outreach/claim.ts';
+export * from './outreach/send.ts';
+export * from './outreach/replies.ts';
+export * from './outreach/bounce.ts';
+export * from './outreach/inbound.ts';
+export * from './outreach/review.ts';

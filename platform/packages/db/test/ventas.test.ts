@@ -57,7 +57,8 @@ import {
 } from '../src/queries/ventas.ts';
 import { WORKSPACE_DEFAULTS } from '../src/queries/cimientos.ts';
 import type { WorkspaceTx } from '../src/client.ts';
-import { openTestDb, type TestDb, WORKSPACE_LAURA, COMPANY_CAFE_ALMA } from './pglite.ts';
+import { openTestDb, type TestDb, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, SETUP_TIMEOUT } from './pglite.ts';
+import { membershipSql } from './membresia.ts';
 
 /** Empresas del seed 0002 que estas pruebas nombran. */
 const COMPANY_FRESKO = '00000002-0000-4000-8000-0000000000e2';
@@ -140,7 +141,7 @@ before(async () => {
             'Señal ajena', 'manual:marcaajena.co', 'pending', 0.99)
     ON CONFLICT DO NOTHING;
   `);
-}, { timeout: 180_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();
@@ -1138,8 +1139,7 @@ describe('VEN-1 · editar la ficha, el responsable y la búsqueda (pulido r5)', 
     await t.admin(`
       INSERT INTO app_user (id, email, name) VALUES ('${USER_AJENO}', 'vecina@marcaajena.co', 'Vecina')
       ON CONFLICT DO NOTHING;
-      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WORKSPACE_AJENO}', '${USER_AJENO}', 'owner')
-      ON CONFLICT DO NOTHING;`);
+      ${membershipSql([{ workspaceId: WORKSPACE_AJENO, userId: USER_AJENO, kind: 'owner' }])}`);
     const opciones = await laura((tx) => listOwnerOptions(tx));
     assert.deepEqual(opciones, [{ userId: USER_LAURA, label: 'Laura Méndez' }], 'solo las personas de este espacio');
 

@@ -320,6 +320,11 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'COLUMNA: la baja del contacto, el estado y el motivo de sus toques pendientes, el estado de sus ' +
     'enrolamientos, el correo en contact_suppression (reason unsubscribe_link, la baja verificable de 0029 §1) y ' +
     'el clic en outbound_optout_event (quién la provocó). No es de ningún disparador',
+  'public_optout_preview(text,uuid[])':
+    'lo que la página de baja enseña antes del clic (0038 §5, VEN-15): con el mismo rol y la misma cerradura que ' +
+    'public_optout, LEE el enlace por el sha256 del token, si la ficha ya estaba de baja y el nombre del workspace ' +
+    'que envió (id y name, por columna, solo esa fila); devuelve la dirección enmascarada y un sí o un no a «quien ' +
+    'lo abre es de ese workspace», nunca el id. No escribe nada. No es de ningún disparador',
   // La regla de la baja de outbound_touch mira la lista global (0037 §4.1).
   'address_is_suppressed(citext)':
     'la regla de la baja de outbound_touch (0037 §4.1) compara el correo de la ficha y recipient_address con la ' +
@@ -339,6 +344,11 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'fila adopta la cuenta nueva y devuelve la vieja para borrarla en Unipile. in_use dice si la cuenta la usa alguien ' +
     '(outreach_channel_live_elsewhere, sin escribir). La llaman las rutas de la web tras verificar el estado firmado y ' +
     'hablar con el proveedor. EXECUTE solo para mc_app. No es de ningún disparador',
+  'outreach_resolve_unconfirmed(uuid,text)':
+    'una persona resuelve en la ficha un mensaje retenido porque no se supo si un intento salió (0053, VEN-10): ' +
+    'was_sent lo anota como enviado y marca el enlace de baja de ese intento; resend lo devuelve a la cola, borra ese ' +
+    'enlace y devuelve su plaza. Solo el toque held con unconfirmed_attempt del workspace de la transacción; las ' +
+    'columnas del intento y outbound_optout_link son del despachador. EXECUTE a mc_app y mc_worker. No es de ningún disparador',
   'outreach_channel_mark_down(uuid,text)':
     'el aviso account_status de Unipile desde la web (0039): una cuenta de Unipile connected o error del workspace de ' +
     'la transacción pasa a needs_reconnect con el motivo. Mismo dueño y misma cerradura que outreach_channel_connect; ' +
@@ -521,7 +531,8 @@ export const ROLES_CON_ACCESO_DECLARADOS: Readonly<Record<string, string>> = {
     'rol de administración de Supabase (BYPASSRLS): se lo concede ALTER DEFAULT PRIVILEGES de mc_migrator. ' +
     'Su llave vive cifrada en el vault y ningún código de este repositorio la usa',
   mc_public_share:
-    'dueño de las funciones de los enlaces públicos: las tres de Cotizar (0030) y la baja (0037 §9). NOLOGIN, sin ' +
+    'dueño de las funciones de los enlaces públicos: las tres de Cotizar (0030) y las dos de la baja (0037 §9 y ' +
+    '0038 §5). NOLOGIN, sin ' +
     'BYPASSRLS: ninguna ' +
     'conexión entra con él. Lo que puede, privilegio por privilegio y columna por columna, lo dice ' +
     'PRIVILEGIOS_DEL_ENLACE_PUBLICO; sus políticas, POLITICAS_DEL_ENLACE_PUBLICO; y la guardia comprueba las dos ' +
@@ -643,6 +654,22 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     tabla: ['INSERT'],
     motivo: 'anotar el clic con el workspace y el toque que lo originaron (0037 §4.6). No lo lee',
   },
+  // Lo que la página de baja enseña antes del clic (0038 §5).
+  workspace: {
+    tabla: [],
+    columnas: { SELECT: ['id', 'name'] },
+    motivo:
+      'el nombre del workspace que envió el correo del enlace, para decir quién escribe (0038 §5). Solo id y name, ' +
+      'y su política solo abre la fila que fija public_optout_preview',
+  },
+  membership: {
+    tabla: [],
+    columnas: { SELECT: ['user_id', 'workspace_id'] },
+    motivo:
+      'workspace_read_member (0028), la política sin TO de workspace, pregunta por membership al leer workspace: sin ' +
+      'esto no se podría leer el nombre (0038 §5). Sus políticas solo abren la sesión o el workspace fijados, y este ' +
+      'rol no tiene ninguno: no ve ninguna fila',
+  },
 };
 
 /** Cómo tiene que ser una política `TO mc_public_share`. */
@@ -667,7 +694,8 @@ const TOKEN_DE_LA_BAJA = /^\(?token_hash = NULLIF\(current_setting\('app\.public
 const CONTACTOS_DE_LA_BAJA = /= ANY \(\(NULLIF\(current_setting\('app\.public_optout_contacts'/;
 
 /**
- * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033 y las nueve de la baja (0037 §9). Una
+ * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033, las nueve de la baja (0037 §9) y la de
+ * quién envía (0038 §5). Una
  * de más —`CREATE POLICY … ON invoice TO mc_public_share USING (true)`—
  * o una de estas reescrita con ALTER POLICY se reporta. Las políticas
  * sin TO (PUBLIC) también le alcanzan, pero alcanzan igual a mc_app y
@@ -757,6 +785,12 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
     cmd: 'w',
     exige: [/^\(?id = /, CONTACTOS_DE_LA_BAJA],
     motivo: 'marcar la baja en esas fichas',
+  },
+  // Lo que la página de baja enseña antes del clic (0038 §5).
+  'workspace.workspace_public_optout': {
+    cmd: 'r',
+    exige: [/^\(?id = \(?NULLIF\(current_setting\('app\.public_optout_workspace'/],
+    motivo: 'el workspace que envió el correo del enlace, cuyo id fija public_optout_preview',
   },
 };
 
@@ -955,6 +989,12 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
     motivo:
       'quién provocó cada baja global (0037 §4.6): la escribe public_optout y la lee un operador. Con escritura, ' +
       'un workspace borraría su rastro',
+  },
+  outbound_bounce: {
+    permite: ['SELECT'],
+    motivo:
+      'los rebotes los lee del buzón el worker (0038, VEN-15) y la web solo los muestra. Con escritura, un ' +
+      'workspace se borraría los rebotes que disparan la alerta de entregabilidad',
   },
   outbound_llm_call: {
     permite: ['SELECT', 'INSERT'],

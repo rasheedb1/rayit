@@ -51,6 +51,17 @@ export const POST_D03_TIKTOK_FRESKO = '00000002-0000-4000-8000-000000000d03';
 export const POST_D04_TIKTOK_FRESKO = '00000002-0000-4000-8000-000000000d04';
 export const POST_D05_YOUTUBE_NUTRIVE = '00000002-0000-4000-8000-000000000d05';
 
+/**
+ * El tiempo del arranque de un archivo de pruebas (VEN-10 r5): abrir la
+ * base y aplicar todas las migraciones y los seeds en PGlite. Va en su
+ * propio `before(fn, SETUP_TIMEOUT)` para que --test-timeout mida las
+ * pruebas y no la migración: con varios agentes en la máquina (carga
+ * 40-60), migrar pasaba de dos minutos y, como con --test-isolation=none
+ * todos los archivos comparten la raíz y sus `before` corren antes de la
+ * primera prueba, uno lento tumbaba a todos (falsos rojos masivos).
+ */
+export const SETUP_TIMEOUT = { timeout: 900_000 } as const;
+
 export interface TestDb {
   readonly kind: 'pglite' | 'postgres';
   db: CatalogDb;

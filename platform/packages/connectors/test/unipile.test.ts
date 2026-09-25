@@ -163,6 +163,16 @@ test('getProfile, reactToPost, commentOnPost, listChats y listMessages', async (
   assert.equal(chats.items[0]!.attendeeProviderId, 'ACoAAMarta_demo');
   const msgs = await api.listMessages({ chatId: 'chat_0001' });
   assert.deepEqual(msgs.items.map((m) => m.isSender), [true, false]);
+  assert.deepEqual(msgs.items.map((m) => m.hasAttachments), [false, false]);
+});
+
+test('listMessages lee los adjuntos: una respuesta que solo trae una foto', async () => {
+  const { api } = await client([['chats.messages.list', 'solo_adjunto']]);
+  const msgs = await api.listMessages({ chatId: 'chat_0001' });
+  assert.deepEqual(msgs.items.map((m) => [m.id, m.text, m.hasAttachments]), [
+    ['msg_0001', 'Hola Marta, vi la campaña de otoño de Café Alma.', false],
+    ['msg_0004', '', true],
+  ]);
 });
 
 test('classifyUnipileError: nuestra llave mala no tumba la cuenta de la persona', () => {

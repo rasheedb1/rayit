@@ -65,7 +65,10 @@ make worker.humo                        # = pnpm --filter @mc/worker humo: lista
 | `PGSSLROOTCERT` | Ruta al CA de Supabase; relativa a `platform/`. | `db/certs/supabase-root-2021.crt` |
 | `LOG_LEVEL` / `LOG_FORMAT` | `debug|info|warn|error` · `json|pretty`. | `info` / `json` |
 | `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY` | `collect.account_metrics` (CON-10): el token de la cuenta profesional de On Cue para `business_discovery` y la API key de YouTube. Sin ellas la plataforma se salta y se avisa. | — |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Las usará el refresher de YouTube (CON-8). Hoy no se leen. | — |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | El adaptador de Gmail del motor de cadencias (VEN-10) las usa para renovar un token de buzón vencido; las usará también el refresher de YouTube (CON-8). Sin ellas, un correo con el token vencido queda como fallo transitorio. | — |
+| `UNIPILE_DSN`, `UNIPILE_ACCESS_TOKEN` | LinkedIn e Instagram del motor de cadencias. Sin ellas esos canales no se reclaman: sus toques esperan en la cola. | — |
+| `OUTREACH_CHANNELS` | `real` (Gmail y Unipile) o `fake` (buzón en memoria, nada sale de la máquina). `fake` solo contra Postgres embebido o una base local: contra Supabase, o con `NODE_ENV=production`, el worker no arranca. | `real` |
+| `APP_URL` | Origen público de la web, para el enlace de baja de cada correo. Sin él (ni `VERCEL_PROJECT_PRODUCTION_URL`) el correo real no se reclama. | — |
 
 `make worker`, `humo` e `install-schema` cargan solo `platform/.env.local`
 (lo que escribe `make db.unlock`) con `--env-file-if-exists`; no hay
@@ -140,6 +143,153 @@ Reglas:
   el elemento falla y la conexión no se toca. Una llamada que no pasa
   por un conector se registra con `ctx.callLog.record(...)`. Detalle en
   `packages/connectors/README.md`.
+
+## Motor de cadencias (Ventas, VEN-10)
+
+Dos jobs de `src/jobs/ventas/`, programados por `job_definition` en la
+migración 0051 (grupo `sales`). Las consultas viven en
+`packages/db/src/queries/outreach/` (`enroll`, `claim`, `send`,
+`replies`), la programación pura en `packages/core/src/outreach/`.
+
+| Job | Cada | Qué hace |
+|---|---|---|
+| `outbound.dispatch` | 2 min | Rescata zombis, reclama hasta 50 toques vencidos y los envía uno por uno (ver «El despachador», abajo). |
+| `outbound.replies` | 5 min | Lee las respuestas de todos los hilos abiertos y aplica su efecto: respuesta, baja o fuera de oficina (ver «El lector de respuestas»). |
+| `outbound.bounces` | 30 min | Los rebotes de Gmail (VEN-15), buzón por buzón con el `GmailChannel` del despachador: un rebote duro marca `contact.email_invalid`, cancela sus correos y cierra la cadencia en `bounced`. Sin llaves de Google, «canal no configurado». |
+
+**El despachador** (`outbound.dispatch`), en este orden:
+
+1. **Zombis** de más de 5 min en `processing`: si nunca llegaron al
+   proveedor (sin `send_started_at`) vuelven a la cola; si llegaron,
+   `failed` y aviso, sin reenviar.
+2. **Reclamo** con `UPDATE … RETURNING` de hasta 50 toques vencidos (o
+   los que quepan en el tiempo de la corrida, a 2 s cada uno, hasta 30 s
+   antes del timeout). Sin gastar intento ni plaza:
+   - fuera de la ventana laboral o en fin de semana → a la apertura;
+   - un paso no sale mientras uno anterior de su enrolamiento siga en la
+     cola (programado, reclamado, retenido, o un borrador que espera al
+     generador);
+   - una dirección que falta o está mal escrita → `skipped`
+     (`no_address`, `invalid_address`), sin tumbar el lote;
+   - un correo a una dirección que rebotó para siempre
+     (`contact.email_invalid`, VEN-15) → cancelado;
+   - **la cuenta**: la del último envío del enrolamiento por ese
+     canal (el hilo vive en ese buzón); si está caída, el mensaje espera.
+     Sin envío previo, cualquier cuenta conectada del canal con plaza.
+     Sin ninguna, espera una hora (un aviso por canal y día);
+   - la marca que ya recibió `max_touches_per_company` mensajes en 90
+     días → cancelado (`company_cap`); la que recibió uno hace menos de
+     `min_days_between_touches` → espera;
+   - todas las cuentas con el tope lleno → al siguiente día hábil del
+     workspace, con los pasos de detrás. El tope de una cuenta es el de
+     `outreach_channel_account_limits` (VEN-9) pasado por la curva de
+     calentamiento de VEN-15, el mismo número que enseña
+     `/ventas/politica`;
+   - cabe hoy pero no respeta el ritmo de la cuenta (`effective_hourly`,
+     `min_gap_seconds`, 0052 §1) → espera su turno.
+3. **Envío**, uno por uno, en tres transacciones: la relectura (toque,
+   enrolamiento, ficha, lista global, interruptor, cuenta) y la decisión;
+   `send_started_at`, solo si toca enviar; y otra relectura con la
+   composición (pie de VEN-15 con la página de baja y la dirección
+   postal, `List-Unsubscribe` de un clic, el hilo) y el adaptador, con el
+   enrolamiento bloqueado mientras dura el envío. Un error nuestro antes
+   de marcar el envío deja el toque sin `send_started_at`: los zombis lo
+   devuelven a la cola, sin aviso. Una respuesta en el hilo cuyo correo
+   anterior no tiene hilo conocido se retiene (`reply_without_thread`):
+   nunca sale un «Re:» sin In-Reply-To. Un paso que sale tarde arrastra a
+   los de detrás.
+4. **Resultado**: transitorio → reintento con espera creciente, dentro
+   de la ventana, hasta 5; ambiguo (corte después de enviar) → antes de
+   reintentar se pregunta al proveedor si salió (`findSent`), y si no lo
+   sabe decir se retiene (`unconfirmed_attempt`) para que una persona
+   diga en la ficha «Sí, salió» o «No salió: enviarlo» (0053); rebote →
+   se cancela ese canal y la cadencia termina en `bounced`; cuenta caída
+   o sin su token → espera sin gastar intento.
+5. **Lo no intentado** (timeout, apagado) vuelve a la cola con su intento
+   descontado, sin su enlace de baja y con su plaza, que vuelve al día en
+   que se reservó (`caps_reserved_on`).
+
+**El lector de respuestas** (`outbound.replies`): respaldo del webhook
+de Unipile y única vía del correo. Lee todos los hilos de los últimos 30
+días (también los de cadencias que ya respondieron o completaron) por
+turno, en páginas de 200: primero los nunca leídos, después los que hace
+más que no se leen (`replies_checked_at`). Lo que hace cada mensaje lo
+decide `applyInboundEffects` de `@mc/db`, la misma función del webhook:
+
+1. una respuesta detiene a la persona en TODAS sus secuencias del
+   workspace (`replied`, lo pendiente cancelado) y, con
+   `stop_company_on_reply` (0054, encendido por defecto), pone en pausa
+   las cadencias de las demás personas de la misma marca;
+2. una baja marca las fichas PROPIAS del workspace del hilo con ese
+   correo y cancela lo suyo en cualquier secuencia de ese workspace,
+   nunca de otro; una ficha pública no se marca: la protege su
+   enrolamiento en `opted_out`;
+3. si en un correo la pide un tercero en copia, la cadencia se detiene y
+   se avisa para revisar;
+4. un «fuera de oficina» (Auto-Submitted, X-Autoreply) se guarda sin
+   cancelar ni avisar, salvo que pida la baja;
+5. una respuesta de LinkedIn o Instagram que solo trae un adjunto (una
+   foto, una nota de voz) es una respuesta, con el cuerpo `[adjunto]`,
+   igual que por el webhook.
+
+Antes de leer, busca el hilo de los correos que una persona confirmó a
+mano («Sí, salió», 0053): con él, el lector lee ese hilo y la respuesta
+del paso siguiente, que esperaba retenida, vuelve a la cola.
+
+**El interruptor.** Apagar (`disable_outreach`) cancela lo programado y
+lo retenido con `outreach_disabled` y deja vivas las cadencias;
+encender (`enableOutreach`, desde la web o `--encender`) lo devuelve a
+la cola (`replanOutreach`): cada mensaje a su estado de antes, con su
+texto, y si ya venció, replanificado desde ahora con los mismos días
+hábiles entre pasos.
+
+Adaptadores en `src/jobs/ventas/canales/` con una sola interfaz
+(`ChannelSender`, `ChannelReader`): Gmail y Unipile (LinkedIn e
+Instagram) son adaptadores finos sobre los clientes de VEN-9 en
+`@mc/connectors` (`GmailApi`, `UnipileApi`: su HTTP, su MIME, su
+bitácora en `api_call_log` y sus errores), y `fake` para las pruebas y
+la demo. Sin `GOOGLE_CLIENT_ID/SECRET` el correo está «no configurado»
+(no se reclama, no gasta intentos); sin `UNIPILE_DSN` y
+`UNIPILE_ACCESS_TOKEN`, LinkedIn e Instagram. La guardia de
+placeholders (`@mc/core`) corre en el punto de envío, sobre el mensaje
+final (asunto y pie incluidos). `held_reason` guarda un código
+(`@mc/core/outreach/messages`, `holdReasonText` lo traduce) y un mensaje
+retenido deja un aviso que lleva a la ficha de la empresa. El tope de una
+cuenta es uno por canal (`accountActionType`), sea invitación o mensaje.
+El canal falso sigue una sola regla (`fakeAllowed`, en
+`canales/index.ts`), la misma para el worker programado y para
+`job:dispatch`: Postgres embebido, una base local, o una corrida limitada
+al workspace de la demo.
+
+Una pasada a mano, con la misma conexión que el worker:
+
+```bash
+pnpm --filter @mc/worker run job:dispatch                  # canales reales
+pnpm --filter @mc/worker run job:dispatch -- --canal-falso --workspace 00000002-0000-4000-8000-000000000001
+                                                           # buzón en memoria; el envío queda en outbound_touch
+pnpm --filter @mc/worker run job:replies                   # respuestas de los hilos abiertos
+pnpm --filter @mc/worker run job:dispatch -- --demo        # Postgres embebido con migraciones y seeds: apagada no envía, encendida sí
+```
+
+Contra Supabase, el «terminado cuando» de VEN-10 con el workspace de la
+demo es un comando por paso (docs/ventas-outreach.md §5.2):
+
+```bash
+W=00000002-0000-4000-8000-000000000001
+pnpm --filter @mc/worker run job:dispatch -- --preparar-demo --workspace $W   # la demo como --demo, con el reloj de verdad y el envío apagado
+pnpm --filter @mc/worker run job:dispatch -- --canal-falso --workspace $W     # apagada: 0 reclamados, 0 enviados
+pnpm --filter @mc/worker run job:dispatch -- --encender --workspace $W        # enciende el envío de la demo
+pnpm --filter @mc/worker run job:dispatch -- --canal-falso --workspace $W     # encendida: 1 reclamado, 1 enviado
+```
+
+`--canal-falso` se niega contra una base que no es local salvo con
+`--workspace` de la demo: deja como enviados mensajes que nadie recibió.
+Contra Supabase necesita, como `job:seguimientos`, `GRANT mc_worker TO
+mc_migrator` y las migraciones de outreach aplicadas (0037 y las de
+VEN-9-canales, VEN-15 y 0051, con los números que les dé el integrador
+detrás de la serie de main: ver la cabecera de `0051_motor_cadencias.sql`). El runner
+(`src/runner/`) es el de CON-2: el motor no le cambia nada, solo suma sus
+dos jobs en `src/jobs/ventas/index.ts`.
 
 ## Qué pasa cuando falla
 
@@ -230,5 +380,6 @@ src/runner/run.ts            una ejecución: job_run running → ok/partial/fail
 src/runner/worker.ts         arranque: colas, crons, handlers, resumen
 src/jobs/index.ts            suma de los jobs de todos los módulos
 src/jobs/conexiones/         oauth.refresh · collect.account_metrics (cuentas por @ y autorizadas, CON-10)
+src/jobs/ventas/             sales.follow_ups · outbound.dispatch · outbound.replies · canales/ (VEN-10)
 test/                        integración (pglite) y unitarias
 ```

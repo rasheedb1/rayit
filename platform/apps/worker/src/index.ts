@@ -15,6 +15,7 @@ import {
   type SecretStore, type TokenRefresherRegistry,
 } from '@mc/connectors';
 import { allJobs } from './jobs/index.ts';
+import { channelModeFrom } from './jobs/ventas/canales/index.ts';
 import { ConfigError, loadConfig, type WorkerConfig } from './runner/config.ts';
 import { PostgresDatabase, type WorkerDatabase } from './runner/db.ts';
 import { createLogger, type Logger } from './runner/logger.ts';
@@ -36,6 +37,8 @@ try {
     mode: embedded ? 'pglite' : 'postgres',
     ...(demo ? { secretStore: 'memory' as const, tokenRefresher: 'fake' as const } : {}),
   });
+  // VEN-10: el canal falso del outreach (OUTREACH_CHANNELS=fake) solo contra una base embebida o local; si no, no arranca.
+  channelModeFrom(process.env, { databaseUrl: config.databaseUrl, embedded: config.mode === 'pglite' });
 } catch (err) {
   process.stderr.write(`${err instanceof ConfigError ? err.message : String(err)}\n`);
   process.exit(2);

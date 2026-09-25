@@ -281,6 +281,97 @@ export const FICHA = {
   },
 
   /** Los errores de @mc/db/queries/ventas-ficha, por su código (FichaError.code). */
+  /**
+   * Los mensajes de la cadencia: adonde llevan los avisos del
+   * motor. Un mensaje retenido dice por qué y se aprueba aquí, con su
+   * texto a la vista y editable. El motivo lo traduce holdReasonText de
+   * @mc/core/outreach/messages (los textos del motor viven ahí).
+   */
+  cadencia: {
+    title: "Mensajes de la cadencia",
+    caption: "Los mensajes de tus secuencias para esta empresa: primero los que esperan tu aprobación",
+    meta: (pendientes: string) => `${pendientes} por aprobar`,
+    columnas: { persona: "Persona", estado: "Estado" },
+    paso: (secuencia: string, n: string) => `${secuencia} · paso ${n}`,
+    pasoSuelto: "Mensaje suelto",
+    sinNombre: "Sin nombre",
+    estados: {
+      held: "Espera tu aprobación",
+      draft: "Borrador",
+      scheduled: "Programado",
+      processing: "Enviándose",
+      sent: "Enviado",
+      failed: "No salió",
+      skipped: "Saltado",
+      canceled: "Cancelado",
+    } as Record<string, string>,
+    canales: { email: "Correo", linkedin: "LinkedIn", instagram_dm: "Instagram", whatsapp: "WhatsApp" } as Record<string, string>,
+    /** El canal dentro de una frase («el mensaje por correo»). */
+    canalesEnFrase: { email: "correo", linkedin: "LinkedIn", instagram_dm: "Instagram", whatsapp: "WhatsApp" } as Record<string, string>,
+    /** La línea de debajo del nombre: por dónde y cuándo («Correo · sale el 25 sep, 10:12»). */
+    linea: (canal: string, cuando: string) => (cuando ? `${canal} · ${cuando}` : canal),
+    sale: (fecha: string) => `sale el ${fecha}`,
+    salio: (fecha: string) => `salió el ${fecha}`,
+    porQue: (motivo: string) => `Retenido: ${motivo}.`,
+    respondio: (fecha: string) => `Respondió ${fecha}:`,
+    vacio: {
+      title: "Sin mensajes de cadencia",
+      description: "Cuando enroles a alguien de esta empresa en una secuencia, sus mensajes aparecen aquí.",
+    },
+    revisar: "Revisar y aprobar",
+    revisarLabel: (persona: string) => `Revisar y aprobar el mensaje a ${persona}`,
+    asunto: "Asunto",
+    /** Una respuesta en el hilo no lleva asunto propio: sale como «Re: …» del correo anterior. */
+    enHilo: (asunto: string) => `Responde en el hilo de: «${asunto}»`,
+    enHiloSinAsunto: "Responde en el hilo del correo anterior.",
+    texto: "Mensaje",
+    textoHelp: "Lo que sale, tal cual. Sale a su hora, o en la próxima pasada si ya pasó.",
+    aprobar: "Aprobar y enviar",
+    cerrar: "Cerrar",
+    aprobado: "Aprobado. Sale en la próxima pasada del envío, dentro de tu horario.",
+    error: "No se pudo aprobar. Inténtalo de nuevo.",
+    errores: {
+      not_found: "Ese mensaje ya no existe.",
+      not_held: "Ese mensaje ya no espera aprobación: alguien lo movió.",
+      empty: "Escribe el mensaje.",
+      empty_subject: "Escribe el asunto del correo.",
+      placeholders: (huecos: string) => `Quedan huecos sin rellenar: ${huecos}.`,
+      note_too_long: (n: string) => `La nota de la invitación tiene ${n} caracteres; LinkedIn permite 300.`,
+      opted_out: "Esa persona pidió no ser contactada: el mensaje no puede salir.",
+      no_postal_address: "Falta tu dirección postal: guárdala en la política de envío y vuelve a aprobarlo.",
+    },
+    /** El enlace del aviso de no_postal_address. */
+    irAPolitica: "Ir a la política de envío",
+    /**
+     * Un mensaje retenido porque el proveedor no confirmó si salió
+     * (unconfirmed_attempt): la persona lo busca con lo que se le enseña y
+     * dice qué pasó. «Sí, salió» lo registra como enviado y la cadencia
+     * sigue; «No salió» lo vuelve a poner en la cola, con confirmación.
+     */
+    intento: {
+      /** «No sabemos si el correo «Una idea» que enviamos el 24 de septiembre desde laura@… llegó…». */
+      pregunta: ({ canal, asunto, dia, cuenta }: { canal: string; asunto: string | null; dia: string | null; cuenta: string | null }) =>
+        `No sabemos si ${asunto ? `el correo «${asunto}»` : `el mensaje por ${canal}`} que enviamos` +
+        `${dia ? ` el ${dia}` : ""}${cuenta ? ` desde ${cuenta}` : ""} llegó: el proveedor no lo confirmó. ` +
+        "Búscalo en tu carpeta de enviados (o en el chat) y dinos qué pasó.",
+      salio: "Sí, salió",
+      salioLabel: (persona: string) => `Sí, el mensaje a ${persona} salió`,
+      noSalio: "No salió: enviarlo",
+      confirmarReenvio: "¿Enviarlo otra vez?",
+      consecuenciaReenvio: (persona: string) => `Si en realidad sí salió, a ${persona} le llegará dos veces.`,
+      siReenviar: "Sí, enviarlo",
+      cancelar: "Cancelar",
+      registrado: "Anotado como enviado. La cadencia sigue con el paso siguiente.",
+      reenviado: "Vuelve a la cola: sale en la próxima pasada, dentro de tu horario.",
+      error: "No se pudo guardar. Inténtalo de nuevo.",
+      errores: {
+        not_found: "Ese mensaje ya no existe.",
+        not_unconfirmed: "Ese mensaje ya no espera esta respuesta: se resolvió por otro lado.",
+        opted_out: "Esa persona pidió no ser contactada: el mensaje no puede salir ni anotarse como enviado.",
+      },
+    },
+  },
+
   errores: {
     DealClosed: "Ese negocio ya se cerró: no tiene siguiente acción.",
     InvalidNextAction: `Escribe qué toca hacer, en hasta ${NEXT_ACTION_MAX} caracteres.`,

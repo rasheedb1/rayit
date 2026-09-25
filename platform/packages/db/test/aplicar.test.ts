@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DuplicateMigrationNumberError, listSql, MIGRATIONS_DIR } from '../../../db/lib/aplicar.mjs';
+import { SETUP_TIMEOUT } from './pglite.ts';
 
 /**
  * Números que ya tiene otra rama, y que esta todavía no: un hueco
@@ -25,13 +26,29 @@ import { DuplicateMigrationNumberError, listSql, MIGRATIONS_DIR } from '../../..
  */
 const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
   '0023': 'reservada en main para ACC-3 (accesos y roles)',
+  // main aplicó en Supabase su propia serie 0034–0042 (schema_migrations,
+  // 24-sep). Las de integración que chocan con ella (0034–0040 de esta
+  // rama: seguimientos, zona, siguiente acción, outreach y los tres de
+  // VEN-9-canales) pasan a 0043–0049 al mezclar con main, en su mismo
+  // orden. 0041 y 0042 son de main; 0043–0049 quedan para esa
+  // renumeración. Entregabilidad (0050) y el motor (0051) ya llevan su
+  // número final. La regla está en la cabecera de 0051_motor_cadencias.sql.
+  '0041': 'main (0041_campaign_result_escritura_web.sql, aplicada)',
+  '0042': 'main (0042_metricas_al_corte_desempate.sql, aplicada)',
+  '0043': 'integración 0034_seguimientos.sql al mezclar con main',
+  '0044': 'integración 0035_zona_del_espacio_valida.sql al mezclar con main',
+  '0045': 'integración 0036_siguiente_accion_fijada.sql al mezclar con main',
+  '0046': 'integración 0037_outreach.sql al mezclar con main',
+  '0047': 'VEN-9-canales 0038_canales_outreach.sql al mezclar con main',
+  '0048': 'VEN-9-canales 0039_callback_de_canales.sql al mezclar con main',
+  '0049': 'VEN-9-canales 0040_canales_liberar_y_limites.sql al mezclar con main',
 };
 
 let dir = '';
 
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), 'mc-migraciones-'));
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await rm(dir, { recursive: true, force: true });

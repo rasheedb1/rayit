@@ -9,7 +9,7 @@
  */
 import { sql } from 'drizzle-orm';
 import { bigserial, boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
-import { citext, country, createdAt, currency, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
+import { citext, country, createdAt, currency, localTime, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 import { OUTBOUND_CHANNELS } from './_canales.ts';
 import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts';
 // CICLO DE IMPORT, a propósito: outreach.ts también importa de aquí (el
@@ -140,6 +140,14 @@ export const contact = pgTable('contact', {
   bounced: boolean('bounced').default(false).notNull(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+  /**
+   * El correo rebotó con un error permanente (0038, VEN-15). No se le
+   * programan correos (outbound_touch_email_invalid); los otros canales
+   * siguen. Cambiar el correo de la ficha lo borra.
+   */
+  emailInvalid: boolean('email_invalid').default(false).notNull(),
+  emailInvalidAt: timestamptz('email_invalid_at'),
+  emailInvalidReason: text('email_invalid_reason'),
 });
 
 export const companyLink = pgTable(
@@ -299,6 +307,8 @@ export const outboundPolicy = pgTable('outbound_policy', {
   cooldownDaysAfterNo: integer('cooldown_days_after_no').default(180).notNull(),
   requireOptoutLink: boolean('require_optout_link').default(true).notNull(),
   requireHumanReview: boolean('require_human_review').default(true).notNull(),
+  /** Si una persona de la marca responde, se pausan las cadencias de las demás personas de esa marca (0054). */
+  stopCompanyOnReply: boolean('stop_company_on_reply').default(true).notNull(),
   claimsMustBeSourced: boolean('claims_must_be_sourced').default(true).notNull(),
   /** Instagram es opcional y nace apagado (0045, §5.1). */
   allowedChannels: text('allowed_channels').array().default(['email', 'linkedin']).notNull(),
@@ -314,6 +324,9 @@ export const outboundPolicy = pgTable('outbound_policy', {
   postalAddress: text('postal_address'),
   /** Contrapresión: con más toques en cola, should_pause_outreach dice que se pare. */
   maxPendingTouches: integer('max_pending_touches').default(200).notNull(),
+  /** La ventana laboral local en la que sale un toque (0051 §1), en la zona de la cadencia. */
+  sendWindowStart: localTime('send_window_start').default('09:00').notNull(),
+  sendWindowEnd: localTime('send_window_end').default('17:00').notNull(),
 });
 
 export const outboundSequence = pgTable('outbound_sequence', {
@@ -388,10 +401,20 @@ export const outboundTouch = pgTable('outbound_touch', {
   statusChangedAt: timestamptz('status_changed_at').defaultNow().notNull(),
   updatedAt: updatedAt(),
   /**
-   * La cuenta que envía el toque (0041 §3, la misma columna que VEN-10):
-   * la fija el despachador al reclamarlo, y es del mismo workspace y canal
+   * La cuenta que envía el toque (0041 §3 y 0051 §2): la fija el
+   * despachador al reclamarlo, y es del mismo workspace y canal
    * (disparador). Una respuesta solo se guarda si su hilo es el de un toque
    * de ESA cuenta.
    */
   channelAccountId: uuid('channel_account_id').references(() => outreachChannelAccount.id, { onDelete: 'set null' }),
+  /** Cuándo el despachador llamó al proveedor en este intento (0051 §6): sin ella, un reclamo caído nunca salió. */
+  sendStartedAt: timestamptz('send_started_at'),
+  /** El intento cuyo resultado no se sabe (timeout después de enviar): se comprueba antes de reenviar (0051 §6). */
+  unconfirmedAttempt: integer('unconfirmed_attempt'),
+  /** Cuándo leyó el hilo el lector de respuestas: el turno de la lectura (0051 §10). */
+  repliesCheckedAt: timestamptz('replies_checked_at'),
+  /** El día local en que el reclamo reservó la plaza de los topes: a él vuelve si no sale (0051 §8). */
+  capsReservedOn: date('caps_reserved_on', { mode: 'string' }),
+  /** El día en que el intento AMBIGUO reservó su plaza: vuelve ahí si el proveedor dice que no salió (0052 §2). */
+  unconfirmedCapsOn: date('unconfirmed_caps_on', { mode: 'string' }),
 });

@@ -130,11 +130,10 @@ const CANDIDATOS = `
   candidatos AS (
     SELECT d.id, d.workspace_id, d.company_id, d.name, btrim(d.next_action) AS next_action, d.next_action_due,
            d.next_action_set_at, co.name AS company_name,
+           -- «Del equipo», con y sin los roles de 0034_access_control (0055).
            coalesce(
-             (SELECT m.user_id FROM membership m
-               WHERE m.workspace_id = d.workspace_id AND m.user_id = d.next_action_user_id AND m.role <> 'client'),
-             (SELECT m.user_id FROM membership m
-               WHERE m.workspace_id = d.workspace_id AND m.user_id = d.owner_user_id AND m.role <> 'client')
+             CASE WHEN membership_is_team(d.workspace_id, d.next_action_user_id) THEN d.next_action_user_id END,
+             CASE WHEN membership_is_team(d.workspace_id, d.owner_user_id) THEN d.owner_user_id END
            ) AS user_id,
            e.tz,
            ($1::timestamptz AT TIME ZONE e.tz)::date AS hoy,

@@ -25,7 +25,7 @@ import {
   type EstadoDelEsquema,
 } from '../src/esquema.ts';
 import * as schema from '../src/schema/index.ts';
-import { openTestDb, type TestDb } from './pglite.ts';
+import { openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 /** Las tablas y vistas que el backlog (CIM-2) exige en el esquema del MVP. */
 const TABLAS_MVP = [
@@ -181,7 +181,7 @@ before(async () => {
     s.add(g.privilegio);
   }
   estado = await estadoDelEsquema(t.db);
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();

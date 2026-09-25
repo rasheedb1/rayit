@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { ESQUEMA_AL_DIA } from '@mc/db';
 import { openTestDb, type TestDb } from '@mc/db/test/pglite';
 import { explainConnectionError, explainMissing, formatJobDefinitions, runPreflight, type PreflightResult } from '../src/preflight.ts';
+import { SETUP_TIMEOUT } from './helpers/harness.ts';
 
 const URL_SUPABASE = 'postgres://mc_worker.autlbeccerunvetptywe:secreto@aws-0-ca-central-1.pooler.supabase.com:5432/postgres';
 const OPTS = { role: 'mc_worker', bossSchema: 'pgboss' };
@@ -24,7 +25,7 @@ let t: TestDb;
 
 before(async () => {
   t = await openTestDb();
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();

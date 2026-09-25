@@ -9,7 +9,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { dumpTextColumns, findSecretInDump, FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from '@mc/connectors';
 import { allJobs } from '../src/jobs/index.ts';
-import { jobRuns, startHarness, waitFor, type Harness } from './helpers/harness.ts';
+import { jobRuns, startHarness, waitFor, type Harness, SETUP_TIMEOUT } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 
 const NOW = new Date('2026-09-22T05:10:00Z');
@@ -57,7 +57,7 @@ before(async () => {
   ]);
   h = await startHarness({ jobs: allJobs, now: () => NOW, seed, env: ENV, http: { fetch: fetch.fetch } });
   await h.secrets.set('vault:tt-auth', AUTH_TOKENS);
-});
+}, SETUP_TIMEOUT);
 after(async () => { await h.stop(); guard.restore(); });
 
 test('snapshots de Instagram y YouTube, TikTok anotada sin métricas, la cuenta inexistente en error; sin credenciales en tablas ni log', async () => {

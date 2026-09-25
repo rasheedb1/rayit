@@ -1,0 +1,520 @@
+/**
+ * Outreach · enrolar contactos en una secuencia (VEN-10).
+ *
+ * Un contacto entra en una secuencia ACTIVA: su fila de
+ * outbound_enrollment y un toque por paso, ya con su hora (días hábiles,
+ * zona de la cadencia, ventana y dispersión de @mc/core) y su estado
+ * inicial (initialTouchState).
+ *
+ * Solo fichas del workspace de la secuencia: la web pasa por la RLS,
+ * pero el worker corre con BYPASSRLS, y sin el filtro una secuencia de A
+ * enrolaba la ficha privada de B y el despachador le escribía desde el
+ * Gmail de A. La regla es contact_visible_to (0051 §5), la misma que
+ * exigen los disparadores de la base: aquí para decir not_found, allá
+ * para que nadie se la salte.
+ */
+import { checkSequenceAgainstPolicy, findPlaceholders, firstNameOf, planSteps, renderTemplate } from '@mc/core';
+import { formatHoldReason, inviteNoteOverflow } from '@mc/core/outreach/messages';
+import type { SqlExecutor, WorkerSql, WorkspaceTx } from '../../client.ts';
+import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
+import { assertIds, checkRecipient, DISPATCHABLE_STEP_TYPES, OutreachMotorError, windowOf } from './shared.ts';
+
+export interface EnrollInput {
+  sequenceId: string;
+  contactIds: readonly string[];
+  dealId?: string | null;
+  enrolledBy?: string | null;
+  /** El reloj de quien llama. Por defecto, ahora. */
+  now?: Date;
+}
+
+/**
+ * Por qué una ficha no se enrola. email_invalid: su correo rebotó
+ * para siempre (VEN-15) y la secuencia no tiene ningún paso que le pueda
+ * llegar por otro canal; no_address: no tiene dirección en ninguno de los
+ * canales de la secuencia; invalid_address: la tiene, pero mal escrita
+ * (un correo sin arroba). Antes se enrolaban con todo saltado y
+ * el enrolamiento quedaba 'active' para siempre; la de correo rebotado,
+ * peor: el disparador de 0050 abortaba el lote entero.
+ */
+export type EnrollSkipReason = 'not_found' | 'opted_out' | 'already_enrolled' | 'email_invalid' | 'no_address' | 'invalid_address';
+
+/**
+ * Lo que la secuencia no va a poder cumplir con la política del
+ * workspace, dicho al enrolar (la pantalla que enrola lo muestra).
+ * Con los pasos concretos (checkSequenceAgainstPolicy de @mc/core):
+ *   · over_company_cap: tiene más pasos que el despachador envía que
+ *     max_touches_per_company; `stepIds` son los que se cancelarán al
+ *     reclamar (company_cap), casi siempre los últimos: el cierre;
+ *   · steps_closer_than_min_gap: `stepIds` están a menos días del paso
+ *     anterior que min_days_between_touches; se correrán hasta cumplirlos.
+ */
+export type EnrollWarning =
+  | { code: 'over_company_cap'; steps: number; cap: number; stepIds: string[] }
+  | { code: 'steps_closer_than_min_gap'; minDays: number; stepIds: string[] };
+
+export interface EnrollResult {
+  enrolled: Array<{ enrollmentId: string; contactId: string; scheduled: number; held: number; drafts: number; skipped: number }>;
+  skipped: Array<{ contactId: string; reason: EnrollSkipReason }>;
+  warnings: EnrollWarning[];
+}
+
+interface SequenceRow {
+  id: string;
+  workspace_id: string;
+  status: string;
+  automation_mode: string;
+  tz: string;
+  sender: string;
+  w_start: string | null;
+  w_end: string | null;
+  human_review: boolean;
+  max_touches: number;
+  min_days: number;
+}
+
+interface StepRow {
+  id: string;
+  day_offset: number;
+  order_in_day: number;
+  step_type: string;
+  channel: string;
+  scheduled_time: string;
+  subject_template: string | null;
+  body_template: string | null;
+  generate_with_ai: boolean;
+}
+
+interface ContactRow {
+  id: string;
+  company_id: string;
+  full_name: string | null;
+  role_title: string | null;
+  email: string | null;
+  linkedin_url: string | null;
+  instagram_handle: string | null;
+  opted_out: boolean;
+  suppressed: boolean;
+  email_invalid: boolean;
+  /** Pidió la baja a ESTE workspace (un enrolamiento suyo en opted_out), aunque la ficha sea pública. */
+  ws_opted_out: boolean;
+  company: string;
+}
+
+/**
+ * Qué estado nace para un paso (puro, para probarlo sin base):
+ *   · un paso que el despachador no envía solo (like, comentario, tarea
+ *     manual, WhatsApp) o que espera al generador (generate_with_ai) →
+ *     draft: lo completa una persona o VEN-12;
+ *   · el contacto no tiene dirección en ese canal → skipped (no_address);
+ *   · un correo a una ficha cuyo correo rebotó para siempre
+ *     (contact.email_invalid, VEN-15) → skipped (email_invalid): la base
+ *     no deja programarlo (0050 §2) y antes abortaba el lote entero;
+ *   · la secuencia es manual → draft (la persona envía cada toque);
+ *   · la plantilla deja huecos sin rellenar → held (placeholders:<huecos>);
+ *   · la nota de una invitación de LinkedIn pasa de 300 caracteres →
+ *     held (note_too_long:<n>): no se corta en el adaptador;
+ *   · un correo nuevo sin asunto → held (no_subject);
+ *   · la política pide revisión humana (require_human_review, el
+ *     valor por defecto) o la secuencia es 'review' (0037 §3.1: «la
+ *     máquina propone y la persona aprueba») → held (needs_review): sale
+ *     cuando una persona lo aprueba en la ficha (releaseHeldTouch);
+ *   · si no (una secuencia 'auto' con la revisión apagada) → scheduled.
+ */
+export function initialTouchState(input: {
+  stepType: string;
+  generateWithAi: boolean;
+  automationMode: string;
+  hasAddress: boolean;
+  /** La dirección está, pero no sirve (checkRecipient): skipped con invalid_address, no no_address. */
+  invalidAddress?: boolean;
+  /** El canal del paso: un correo a una ficha con email_invalid se salta. */
+  channel?: string;
+  emailInvalid?: boolean;
+  subject: string | null;
+  body: string | null;
+  /** outbound_policy.require_human_review. Por defecto, sí (como la política). */
+  requireHumanReview?: boolean;
+}): { status: 'draft' | 'scheduled' | 'held' | 'skipped'; heldReason?: string; blockedReason?: string } {
+  if (!(DISPATCHABLE_STEP_TYPES as readonly string[]).includes(input.stepType)) return { status: 'draft' };
+  if (!input.hasAddress) return { status: 'skipped', blockedReason: input.invalidAddress ? 'invalid_address' : 'no_address' };
+  if (input.channel === 'email' && input.emailInvalid) return { status: 'skipped', blockedReason: 'email_invalid' };
+  if (input.generateWithAi || !input.body) return { status: 'draft' };
+  if (input.automationMode === 'manual') return { status: 'draft' };
+  const hits = [...findPlaceholders(input.subject), ...findPlaceholders(input.body)];
+  if (hits.length > 0) {
+    return { status: 'held', heldReason: formatHoldReason({ code: 'placeholders', detail: hits.map((h) => h.match).join(' ') }) };
+  }
+  if (input.stepType === 'linkedin_connect') {
+    const over = inviteNoteOverflow(input.body);
+    if (over !== null) return { status: 'held', heldReason: formatHoldReason({ code: 'note_too_long', detail: over }) };
+  }
+  // Un correo nuevo sin asunto se retiene desde el principio (el despachador tampoco lo enviaría).
+  if (input.stepType === 'email' && !input.subject?.trim()) return { status: 'held', heldReason: formatHoldReason({ code: 'no_subject' }) };
+  if (input.requireHumanReview !== false || input.automationMode === 'review') {
+    return { status: 'held', heldReason: formatHoldReason({ code: 'needs_review' }) };
+  }
+  return { status: 'scheduled' };
+}
+
+/** Lo que la secuencia no podrá cumplir con la política (puro, ver EnrollWarning). */
+export function sequenceWarnings(
+  steps: ReadonlyArray<{ id: string; stepType: string; dayOffset: number; orderInDay?: number }>,
+  policy: { maxTouchesPerCompany: number; minDaysBetweenTouches: number },
+): EnrollWarning[] {
+  const check = checkSequenceAgainstPolicy(steps, policy);
+  const sendable = steps.filter((s) => (DISPATCHABLE_STEP_TYPES as readonly string[]).includes(s.stepType)).length;
+  const out: EnrollWarning[] = [];
+  if (check.overCap.length > 0) {
+    out.push({ code: 'over_company_cap', steps: sendable, cap: policy.maxTouchesPerCompany, stepIds: check.overCap });
+  }
+  if (check.closerThanGap.length > 0) {
+    out.push({ code: 'steps_closer_than_min_gap', minDays: policy.minDaysBetweenTouches, stepIds: check.closerThanGap });
+  }
+  return out;
+}
+
+/**
+ * Enrola contactos en una secuencia ACTIVA. Sirve desde la web
+ * (WorkspaceTx: la RLS limita a su workspace) y desde el worker
+ * (WorkerSql: el filtro contact_visible_to limita al de la secuencia).
+ * Un contacto de otro workspace o que no existe sale como not_found; uno
+ * dado de baja (su ficha o su correo en la lista global) como opted_out;
+ * uno que ya está en la secuencia, como already_enrolled; uno al que
+ * no le llega ningún paso, como email_invalid (su correo rebotó) o
+ * no_address. Una ficha que no se puede enrolar nunca tumba el lote.
+ */
+export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollInput): Promise<EnrollResult> {
+  assertIds('enrollContacts', [input.sequenceId, ...input.contactIds]);
+  if (input.dealId) assertIds('enrollContacts', [input.dealId]);
+  if (input.enrolledBy) assertIds('enrollContacts', [input.enrolledBy]);
+  const now = input.now ?? new Date();
+
+  const seq = (
+    await tx.query<SequenceRow>(
+      `SELECT s.id, s.workspace_id, s.status, s.automation_mode, coalesce(s.timezone, w.timezone) AS tz, w.name AS sender,
+              p.send_window_start::text AS w_start, p.send_window_end::text AS w_end,
+              coalesce(p.require_human_review, true) AS human_review,
+              coalesce(p.max_touches_per_company, 4) AS max_touches, coalesce(p.min_days_between_touches, 3) AS min_days
+         FROM outbound_sequence s
+         JOIN workspace w ON w.id = s.workspace_id
+         LEFT JOIN outbound_policy p ON p.workspace_id = s.workspace_id
+        WHERE s.id = $1::uuid`,
+      [input.sequenceId],
+    )
+  ).rows[0];
+  if (!seq) throw new OutreachMotorError('sequence_not_found', `La secuencia ${input.sequenceId} no existe o no es de este espacio.`);
+  if (seq.status !== 'active') {
+    throw new OutreachMotorError('sequence_not_active', `La secuencia está en «${seq.status}»: solo se enrola en una secuencia activa.`);
+  }
+  const steps = (
+    await tx.query<StepRow>(
+      `SELECT id, day_offset, order_in_day, step_type, channel, scheduled_time::text AS scheduled_time,
+              subject_template, body_template, generate_with_ai
+         FROM outbound_step WHERE sequence_id = $1::uuid ORDER BY day_offset, order_in_day`,
+      [seq.id],
+    )
+  ).rows;
+  if (steps.length === 0) throw new OutreachMotorError('sequence_without_steps', 'La secuencia no tiene pasos.');
+  const window = windowOf(seq.w_start, seq.w_end);
+
+  // Solo las fichas que el workspace de la secuencia puede ver: las
+  // demás, aunque existan, son not_found.
+  const contacts = (
+    await tx.query<ContactRow>(
+      `SELECT c.id, c.company_id, c.full_name, c.role_title, c.email::text AS email, c.linkedin_url, c.instagram_handle,
+              c.opted_out, address_is_suppressed(c.email) AS suppressed, c.email_invalid, co.name AS company,
+              EXISTS (SELECT 1 FROM outbound_enrollment e
+                       WHERE e.contact_id = c.id AND e.workspace_id = $2::uuid AND e.status = 'opted_out') AS ws_opted_out
+         FROM contact c JOIN company co ON co.id = c.company_id
+        WHERE c.id = ANY($1::uuid[]) AND contact_visible_to(c.id, $2::uuid)`,
+      [[...input.contactIds], seq.workspace_id],
+    )
+  ).rows;
+  const byId = new Map(contacts.map((c) => [c.id, c]));
+
+  const result: EnrollResult = {
+    enrolled: [], skipped: [],
+    warnings: sequenceWarnings(steps.map((s) => ({ id: s.id, stepType: s.step_type, dayOffset: s.day_offset, orderInDay: s.order_in_day })), {
+      maxTouchesPerCompany: seq.max_touches, minDaysBetweenTouches: seq.min_days,
+    }),
+  };
+  for (const contactId of new Set(input.contactIds)) {
+    const c = byId.get(contactId);
+    if (!c) {
+      result.skipped.push({ contactId, reason: 'not_found' });
+      continue;
+    }
+    if (c.opted_out || c.suppressed || c.ws_opted_out) {
+      result.skipped.push({ contactId, reason: 'opted_out' });
+      continue;
+    }
+    // Los estados de cada paso primero: una ficha a la que no le
+    // llega ningún paso no se enrola, y dice por qué.
+    const values = {
+      first_name: firstNameOf(c.full_name), full_name: c.full_name, company: c.company, role_title: c.role_title,
+      sender_name: seq.sender,
+    };
+    const drafted = steps.map((s) => {
+      const subject = renderTemplate(s.subject_template, values);
+      const body = renderTemplate(s.body_template, values);
+      const address = checkRecipient(s.channel, c);
+      const state = initialTouchState({
+        stepType: s.step_type, generateWithAi: s.generate_with_ai, automationMode: seq.automation_mode,
+        hasAddress: address.ok, invalidAddress: !address.ok && address.reason === 'invalid_address',
+        channel: s.channel, emailInvalid: c.email_invalid === true, subject, body,
+        requireHumanReview: seq.human_review,
+      });
+      return { step: s, subject, body, state };
+    });
+    if (drafted.every((d) => d.state.status === 'skipped')) {
+      const reasons = new Set(drafted.map((d) => d.state.blockedReason));
+      const reason: EnrollSkipReason = reasons.has('email_invalid') ? 'email_invalid' : reasons.has('invalid_address') ? 'invalid_address' : 'no_address';
+      result.skipped.push({ contactId, reason });
+      continue;
+    }
+    const enr = (
+      await tx.query<{ id: string }>(
+        `INSERT INTO outbound_enrollment (workspace_id, sequence_id, contact_id, deal_id, current_step_id, status, enrolled_by, started_at)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $7::timestamptz)
+         ON CONFLICT (sequence_id, contact_id) DO NOTHING
+         RETURNING id`,
+        [seq.workspace_id, seq.id, c.id, input.dealId ?? null, steps[0]!.id, input.enrolledBy ?? null, now.toISOString()],
+      )
+    ).rows[0];
+    if (!enr) {
+      result.skipped.push({ contactId, reason: 'already_enrolled' });
+      continue;
+    }
+
+    const plan = new Map(
+      planSteps(
+        steps.map((s) => ({ id: s.id, dayOffset: s.day_offset, orderInDay: s.order_in_day, scheduledTime: s.scheduled_time })),
+        { enrolledAt: now, timeZone: seq.tz, window, seed: enr.id },
+      ).map((p) => [p.stepId, p.at]),
+    );
+    const counts = { scheduled: 0, held: 0, drafts: 0, skipped: 0 };
+    for (const [i, { step: s, subject, body, state }] of drafted.entries()) {
+      await tx.query(
+        `INSERT INTO outbound_touch
+           (workspace_id, company_id, contact_id, deal_id, sequence_id, step_index, enrollment_id, step_id, channel,
+            subject, body, status, scheduled_for, held_reason, blocked_reason)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::int, $7::uuid, $8::uuid, $9, $10, $11, $12,
+                 $13::timestamptz, $14, $15)`,
+        [
+          seq.workspace_id, c.company_id, c.id, input.dealId ?? null, seq.id, i + 1, enr.id, s.id, s.channel,
+          subject, body ?? '', state.status, plan.get(s.id)!.toISOString(), state.heldReason ?? null,
+          state.blockedReason ?? null,
+        ],
+      );
+      if (state.status === 'scheduled') counts.scheduled++;
+      else if (state.status === 'held') counts.held++;
+      else if (state.status === 'draft') counts.drafts++;
+      else counts.skipped++;
+    }
+    // El primer paso vivo, no el primero: si el correo se saltó, la cadencia empieza por LinkedIn.
+    await advanceEnrollment(tx, enr.id, now);
+    result.enrolled.push({ enrollmentId: enr.id, contactId, ...counts });
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------
+// La vida del enrolamiento
+// ---------------------------------------------------------------------
+
+/**
+ * Cancela lo pendiente de un enrolamiento: lo cancelable
+ * (CANCELABLE_TOUCH_STATUSES: borrador, programado y retenido), como
+ * public_optout y el webhook de VEN-9 (una sola definición). Un
+ * borrador de un enrolamiento que terminó ya no puede salir (el reclamo lo
+ * cancelaría) y solo ensuciaba la cola de VEN-16. Lo que está en
+ * processing es del despachador, que relee el enrolamiento antes de
+ * enviar. Devuelve los ids cancelados.
+ */
+export async function cancelPendingForEnrollment(tx: SqlExecutor, enrollmentId: string, reason: string): Promise<string[]> {
+  assertIds('cancelPendingForEnrollment', [enrollmentId]);
+  return (
+    await tx.query<{ id: string }>(
+      `UPDATE outbound_touch SET status = 'canceled', blocked_reason = $2
+        WHERE enrollment_id = $1::uuid AND status = ANY($3::text[]) RETURNING id`,
+      [enrollmentId, reason, [...CANCELABLE_TOUCH_STATUSES]],
+    )
+  ).rows.map((r) => r.id);
+}
+
+/**
+ * El contacto respondió: el enrolamiento pasa a replied (si seguía vivo,
+ * o si ya había completado sus pasos) y se cancela lo pendiente. Qué
+ * hacer después (interesado, ahora no, fuera de oficina) lo decide la
+ * clasificación de VEN-14.
+ */
+export async function markEnrollmentReplied(tx: SqlExecutor, enrollmentId: string, at: Date): Promise<string[]> {
+  assertIds('markEnrollmentReplied', [enrollmentId]);
+  await tx.query(
+    `UPDATE outbound_enrollment SET status = 'replied', finished_at = coalesce(finished_at, $2::timestamptz)
+      WHERE id = $1::uuid AND status IN ('active', 'paused', 'cooldown', 'completed')`,
+    [enrollmentId, at.toISOString()],
+  );
+  return cancelPendingForEnrollment(tx, enrollmentId, 'replied');
+}
+
+/**
+ * Avanza de paso: current_step_id pasa al primer paso que todavía tiene
+ * un toque vivo. Sin ninguno, el enrolamiento activo está completo. Se
+ * llama después de cada envío; no toca un enrolamiento que no esté activo.
+ *
+ * Un toque cancelado por el interruptor (blocked_reason
+ * 'outreach_disabled') cuenta como pendiente: apagar es una pausa, y un
+ * envío que termina mientras el envío está apagado no da por completa una
+ * cadencia que replanOutreach va a devolver a la cola al encender.
+ */
+export async function advanceEnrollment(tx: SqlExecutor, enrollmentId: string, now: Date): Promise<'advanced' | 'completed' | 'unchanged'> {
+  assertIds('advanceEnrollment', [enrollmentId]);
+  const next = (
+    await tx.query<{ step_id: string }>(
+      `SELECT t.step_id FROM outbound_touch t JOIN outbound_step st ON st.id = t.step_id
+        WHERE t.enrollment_id = $1::uuid
+          AND (t.status IN ('draft', 'scheduled', 'processing', 'held')
+               OR (t.status = 'canceled' AND t.blocked_reason = 'outreach_disabled'))
+        ORDER BY st.day_offset, st.order_in_day LIMIT 1`,
+      [enrollmentId],
+    )
+  ).rows[0];
+  if (next) {
+    const r = await tx.query(
+      `UPDATE outbound_enrollment SET current_step_id = $2::uuid
+        WHERE id = $1::uuid AND status = 'active' AND current_step_id IS DISTINCT FROM $2::uuid RETURNING id`,
+      [enrollmentId, next.step_id],
+    );
+    return r.rows.length > 0 ? 'advanced' : 'unchanged';
+  }
+  const r = await tx.query(
+    `UPDATE outbound_enrollment SET status = 'completed', finished_at = $2::timestamptz
+      WHERE id = $1::uuid AND status = 'active' RETURNING id`,
+    [enrollmentId, now.toISOString()],
+  );
+  return r.rows.length > 0 ? 'completed' : 'unchanged';
+}
+
+// ---------------------------------------------------------------------
+// Volver a encender
+// ---------------------------------------------------------------------
+
+export interface ReplanResult {
+  /** Enrolamientos con algo devuelto a la cola. */
+  enrollments: number;
+  /** Toques que vuelven a scheduled. */
+  scheduled: number;
+  /** Toques que vuelven a held (esperaban una revisión o una decisión), con su texto y su motivo. */
+  held: number;
+}
+
+interface ReplanRow {
+  id: string;
+  enrollment_id: string;
+  step_id: string;
+  held_reason: string | null;
+  due: Date | string;
+  day_offset: number;
+  order_in_day: number;
+  scheduled_time: string;
+  tz: string;
+  w_start: string | null;
+  w_end: string | null;
+}
+
+/**
+ * Al encender el envío, lo que el apagado canceló vuelve a la cola
+ * (0037 §8.5: «apagar es una pausa del workspace, no el fin de ninguna
+ * cadencia»). disable_outreach cancela lo programado y lo retenido con
+ * blocked_reason 'outreach_disabled' y deja los enrolamientos vivos; aquí,
+ * por cada enrolamiento vivo (active, paused, cooldown) del workspace:
+ *
+ *   · cada toque cancelado por el apagado vuelve a su estado: held si
+ *     tenía held_reason (esperaba una revisión humana o una decisión, y
+ *     conserva el texto que la persona ya había editado), si no scheduled.
+ *     attempt_count, asunto y cuerpo no se tocan;
+ *   · la hora: si el primero todavía no había vencido (un apagado corto),
+ *     todos conservan la suya. Si ya venció, se planifica desde `now` con
+ *     planSteps, conservando los días hábiles entre pasos (el primero
+ *     devuelto es el día 0) y la hora de cada paso, en la zona y la
+ *     ventana de la secuencia;
+ *   · no vuelve lo que ya no puede salir: una ficha dada de baja (o con
+ *     su correo en la lista global) y un correo a una dirección que
+ *     rebotó (contact.email_invalid). La base tampoco los dejaría.
+ *
+ * Funciona con la transacción de la web (withWorkspace, dentro de
+ * enableOutreach) y con la del worker. Idempotente: lo devuelto ya no
+ * está cancelado.
+ */
+export async function replanOutreach(tx: SqlExecutor, workspaceId: string, now: Date): Promise<ReplanResult> {
+  assertIds('replanOutreach', [workspaceId]);
+  const rows = (
+    await tx.query<ReplanRow>(
+      `SELECT t.id, t.enrollment_id, t.step_id, t.held_reason, coalesce(t.next_retry_at, t.scheduled_for) AS due,
+              st.day_offset, st.order_in_day, st.scheduled_time::text AS scheduled_time,
+              coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end
+         FROM outbound_touch t
+         JOIN outbound_enrollment e ON e.id = t.enrollment_id
+         JOIN outbound_sequence s ON s.id = e.sequence_id
+         JOIN outbound_step st ON st.id = t.step_id
+         JOIN workspace w ON w.id = t.workspace_id
+         LEFT JOIN outbound_policy p ON p.workspace_id = t.workspace_id
+         LEFT JOIN contact c ON c.id = t.contact_id
+        WHERE t.workspace_id = $1::uuid AND t.status = 'canceled' AND t.blocked_reason = 'outreach_disabled'
+          AND e.status IN ('active', 'paused', 'cooldown')
+          AND NOT (coalesce(c.opted_out, false) OR address_is_suppressed(c.email) OR address_is_suppressed(t.recipient_address))
+          AND NOT (t.channel = 'email' AND coalesce(c.email_invalid, false)
+                   AND (t.recipient_address IS NULL OR t.recipient_address = c.email))
+        ORDER BY t.enrollment_id, st.day_offset, st.order_in_day
+        FOR UPDATE OF t`,
+      [workspaceId],
+    )
+  ).rows;
+  const byEnrollment = new Map<string, ReplanRow[]>();
+  for (const r of rows) byEnrollment.set(r.enrollment_id, [...(byEnrollment.get(r.enrollment_id) ?? []), r]);
+
+  const ids: string[] = [];
+  const due: string[] = [];
+  const result: ReplanResult = { enrollments: byEnrollment.size, scheduled: 0, held: 0 };
+  for (const [enrollmentId, touches] of byEnrollment) {
+    const first = touches[0]!;
+    const firstDue = new Date(first.due);
+    if (firstDue.getTime() >= now.getTime()) {
+      // Un apagado corto: nada venció, cada toque conserva su hora (la de su reintento, si esperaba uno).
+      for (const t of touches) {
+        ids.push(t.id);
+        due.push(new Date(t.due).toISOString());
+      }
+    } else {
+      const plan = new Map(
+        planSteps(
+          touches.map((t) => ({
+            id: t.step_id, dayOffset: t.day_offset - first.day_offset, orderInDay: t.order_in_day, scheduledTime: t.scheduled_time,
+          })),
+          { enrolledAt: now, timeZone: first.tz, window: windowOf(first.w_start, first.w_end), seed: enrollmentId },
+        ).map((p) => [p.stepId, p.at]),
+      );
+      for (const t of touches) {
+        ids.push(t.id);
+        due.push(plan.get(t.step_id)!.toISOString());
+      }
+    }
+    for (const t of touches) {
+      if (t.held_reason) result.held++;
+      else result.scheduled++;
+    }
+  }
+  if (ids.length === 0) return result;
+  await tx.query(
+    `UPDATE outbound_touch t
+        SET status = CASE WHEN t.held_reason IS NOT NULL THEN 'held' ELSE 'scheduled' END,
+            blocked_reason = NULL, scheduled_for = v.due, next_retry_at = NULL
+       FROM unnest($1::uuid[], $2::timestamptz[]) AS v(id, due)
+      WHERE t.id = v.id AND t.status = 'canceled' AND t.blocked_reason = 'outreach_disabled'`,
+    [ids, due],
+  );
+  for (const enrollmentId of byEnrollment.keys()) await advanceEnrollment(tx, enrollmentId, now);
+  return result;
+}

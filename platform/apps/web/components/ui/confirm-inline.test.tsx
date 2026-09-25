@@ -1,33 +1,32 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ConfirmarAccion } from "./confirmar-accion";
-import { MESSAGES } from "../messages";
+import { ConfirmInline } from "./confirm-inline";
 
-const t = MESSAGES.detalle;
+const CONSECUENCIA = "La cotización queda rechazada y el negocio pasa a perdido. No se deshace.";
 
 function pintar(action = vi.fn(async () => {})) {
   render(
-    <ConfirmarAccion
+    <ConfirmInline
       action={action}
-      label={t.rechazar}
+      label="Marcar rechazada"
       variant="danger"
-      pregunta={t.confirmar.rechazar.pregunta("COT-2026-003")}
-      consecuencia={t.confirmar.rechazar.consecuencia}
-      confirmar={t.confirmar.rechazar.boton}
-      cancelar={t.confirmar.cancelar}
+      question="¿Rechazar COT-2026-003?"
+      consequence={CONSECUENCIA}
+      confirmLabel="Sí, rechazar"
+      cancelLabel="Cancelar"
     />,
   );
   return action;
 }
 
-describe("ConfirmarAccion", () => {
+describe("ConfirmInline", () => {
   it("el primer clic no ejecuta nada: dice qué va a pasar y lleva el foco a la pregunta", async () => {
     const action = pintar();
     fireEvent.click(screen.getByRole("button", { name: "Marcar rechazada" }));
     const pregunta = await screen.findByText("¿Rechazar COT-2026-003?");
     expect(pregunta).toHaveFocus();
     const grupo = screen.getByRole("group", { name: "¿Rechazar COT-2026-003?" });
-    expect(grupo).toHaveAccessibleDescription(t.confirmar.rechazar.consecuencia);
+    expect(grupo).toHaveAccessibleDescription(CONSECUENCIA);
     expect(action).not.toHaveBeenCalled();
   });
 

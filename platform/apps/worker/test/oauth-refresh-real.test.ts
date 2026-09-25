@@ -15,7 +15,7 @@ import {
   type NetworkGuard, type OAuthAppConfig,
 } from '@mc/connectors';
 import { allJobs } from '../src/jobs/index.ts';
-import { jobRuns, startHarness, waitFor, type Harness } from './helpers/harness.ts';
+import { jobRuns, startHarness, waitFor, type Harness, SETUP_TIMEOUT } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 
 const NOW = new Date('2026-09-22T10:00:00Z');
@@ -85,7 +85,7 @@ before(async () => {
     refreshers: [createTikTokRefresher(core, { login: app('tiktok', TIKTOK_LOGIN_SCOPES) }), createInstagramRefresher(core, app('instagram', INSTAGRAM_LOGIN_SCOPES))],
     env: { OAUTH_REFRESH_MARGIN_MINUTES: '30' },
   });
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await h.stop();

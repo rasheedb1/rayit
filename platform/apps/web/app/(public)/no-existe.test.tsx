@@ -18,7 +18,7 @@
  *     metadatos también se transmiten a los navegadores, así que un
  *     notFound() ahí llega igual de tarde.
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { closeDb, getDbMode } from "@/lib/db";
@@ -74,8 +74,17 @@ describe("un enlace público que no existe es un 404", () => {
   }, 120_000);
 
   test("ningún loading.tsx en (public): el 200 saldría antes que el notFound()", () => {
-    const cargando = archivos(SEGMENTO).filter((f) => /[\\/]loading\.(t|j)sx?$/.test(f));
+    // La baja (VEN-15) es la excepción: su página nunca llama a notFound()
+    // —un enlace que no es de un correo enviado se explica con un 200, no
+    // con la página de «no existe»—, así que su esqueleto no adelanta
+    // ningún estado equivocado. Si algún día llamara a notFound(), esta
+    // prueba la vuelve a atrapar.
+    const baja = join(SEGMENTO, "baja");
+    const cargando = archivos(SEGMENTO).filter((f) => /[\\/]loading\.(t|j)sx?$/.test(f) && !f.startsWith(baja));
     expect(cargando).toEqual([]);
+    const paginasDeBaja = archivos(baja).filter((f) => /[\\/](page|layout)\.(t|j)sx?$/.test(f));
+    expect(paginasDeBaja.length).toBeGreaterThan(0);
+    for (const f of paginasDeBaja) expect(readFileSync(f, "utf8")).not.toMatch(/\bnotFound\b/);
     // La página de «no existe» sí está, y es la que pinta el 404.
     expect(existsSync(join(SEGMENTO, "not-found.tsx"))).toBe(true);
   });
