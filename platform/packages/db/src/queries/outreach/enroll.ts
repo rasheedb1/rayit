@@ -13,7 +13,7 @@
  * exigen los disparadores de la base: aquí para decir not_found, allá
  * para que nadie se la salte.
  */
-import { findPlaceholders, firstNameOf, planSteps, renderTemplate } from '@mc/core';
+import { checkSequenceAgainstPolicy, findPlaceholders, firstNameOf, planSteps, renderTemplate } from '@mc/core';
 import { formatHoldReason, inviteNoteOverflow } from '@mc/core/outreach/messages';
 import type { SqlExecutor, WorkerSql, WorkspaceTx } from '../../client.ts';
 import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
@@ -41,16 +41,17 @@ export type EnrollSkipReason = 'not_found' | 'opted_out' | 'already_enrolled' | 
 
 /**
  * (r5) Lo que la secuencia no va a poder cumplir con la política del
- * workspace, dicho al enrolar (la pantalla que enrola lo muestra):
+ * workspace, dicho al enrolar (la pantalla que enrola lo muestra). (r3)
+ * Con los pasos concretos (checkSequenceAgainstPolicy de @mc/core):
  *   · over_company_cap: tiene más pasos que el despachador envía que
- *     max_touches_per_company; los de más se cancelan al reclamar
- *     (company_cap);
- *   · steps_closer_than_min_gap: dos pasos enviables están a menos días
- *     que min_days_between_touches; el segundo se corre hasta cumplirlos.
+ *     max_touches_per_company; `stepIds` son los que se cancelarán al
+ *     reclamar (company_cap), casi siempre los últimos: el cierre;
+ *   · steps_closer_than_min_gap: `stepIds` están a menos días del paso
+ *     anterior que min_days_between_touches; se correrán hasta cumplirlos.
  */
 export type EnrollWarning =
-  | { code: 'over_company_cap'; steps: number; cap: number }
-  | { code: 'steps_closer_than_min_gap'; minDays: number };
+  | { code: 'over_company_cap'; steps: number; cap: number; stepIds: string[] }
+  | { code: 'steps_closer_than_min_gap'; minDays: number; stepIds: string[] };
 
 export interface EnrollResult {
   enrolled: Array<{ enrollmentId: string; contactId: string; scheduled: number; held: number; drafts: number; skipped: number }>;
@@ -155,17 +156,17 @@ export function initialTouchState(input: {
 
 /** (r5) Lo que la secuencia no podrá cumplir con la política (puro, ver EnrollWarning). */
 export function sequenceWarnings(
-  steps: ReadonlyArray<{ stepType: string; dayOffset: number }>,
+  steps: ReadonlyArray<{ id: string; stepType: string; dayOffset: number; orderInDay?: number }>,
   policy: { maxTouchesPerCompany: number; minDaysBetweenTouches: number },
 ): EnrollWarning[] {
-  const sendable = steps.filter((s) => (DISPATCHABLE_STEP_TYPES as readonly string[]).includes(s.stepType));
+  const check = checkSequenceAgainstPolicy(steps, policy);
+  const sendable = steps.filter((s) => (DISPATCHABLE_STEP_TYPES as readonly string[]).includes(s.stepType)).length;
   const out: EnrollWarning[] = [];
-  if (sendable.length > policy.maxTouchesPerCompany) {
-    out.push({ code: 'over_company_cap', steps: sendable.length, cap: policy.maxTouchesPerCompany });
+  if (check.overCap.length > 0) {
+    out.push({ code: 'over_company_cap', steps: sendable, cap: policy.maxTouchesPerCompany, stepIds: check.overCap });
   }
-  const days = sendable.map((s) => s.dayOffset).sort((a, b) => a - b);
-  if (policy.minDaysBetweenTouches > 0 && days.some((d, i) => i > 0 && d - days[i - 1]! < policy.minDaysBetweenTouches)) {
-    out.push({ code: 'steps_closer_than_min_gap', minDays: policy.minDaysBetweenTouches });
+  if (check.closerThanGap.length > 0) {
+    out.push({ code: 'steps_closer_than_min_gap', minDays: policy.minDaysBetweenTouches, stepIds: check.closerThanGap });
   }
   return out;
 }
@@ -231,7 +232,7 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
 
   const result: EnrollResult = {
     enrolled: [], skipped: [],
-    warnings: sequenceWarnings(steps.map((s) => ({ stepType: s.step_type, dayOffset: s.day_offset })), {
+    warnings: sequenceWarnings(steps.map((s) => ({ id: s.id, stepType: s.step_type, dayOffset: s.day_offset, orderInDay: s.order_in_day })), {
       maxTouchesPerCompany: seq.max_touches, minDaysBetweenTouches: seq.min_days,
     }),
   };

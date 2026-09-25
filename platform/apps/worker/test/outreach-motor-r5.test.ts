@@ -200,7 +200,9 @@ test('una secuencia de seis pasos con un tope de cuatro por marca: salen cuatro 
   const pasos = [0, 1, 2, 3, 4, 5].map((d) => ({ type: 'email', channel: 'email', day: d, subject: `Idea ${d + 1}`, body: `Idea ${d + 1} para {{company}}.` }));
   const seq = await secuencia(w, 2, pasos);
   const r = await motor.transaction((tx) => enrollContacts(tx, { sequenceId: seq, contactIds: [c], now: bogota('2026-09-23', '07:00') }));
-  assert.deepEqual(r.warnings, [{ code: 'over_company_cap', steps: 6, cap: 4 }], 'avisa al enrolar');
+  // (r3) Con los pasos concretos que se cancelarán: los dos últimos.
+  const [, , , , p5, p6] = (await db.raw.query<{ id: string }>(`SELECT id FROM outbound_step WHERE sequence_id = $1 ORDER BY day_offset`, [seq])).rows;
+  assert.deepEqual(r.warnings, [{ code: 'over_company_cap', steps: 6, cap: 4, stepIds: [p5!.id, p6!.id] }], 'avisa al enrolar');
   const fake = fakeChannels();
   // Un día hábil tras otro, a las 15:00: del miércoles 23 al miércoles 30.
   for (const dia of ['2026-09-23', '2026-09-24', '2026-09-25', '2026-09-28', '2026-09-29', '2026-09-30']) {
@@ -223,7 +225,8 @@ test('dos pasos en los días 0 y 1 con tres días entre mensajes: el segundo esp
   const w = await workspace(7, { contacts: 1, minDaysBetweenTouches: 3 });
   const [c] = w.contacts as [string];
   const r = await motor.transaction((tx) => enrollContacts(tx, { sequenceId: w.seq, contactIds: [c], now: bogota('2026-09-23', '07:00') }));
-  assert.ok(r.warnings.some((x) => x.code === 'steps_closer_than_min_gap'), 'avisa al enrolar');
+  const aviso = r.warnings.find((x) => x.code === 'steps_closer_than_min_gap');
+  assert.deepEqual(aviso && aviso.stepIds, [w.steps[1], w.steps[2]], 'avisa al enrolar, con los pasos que se correrán');
   const fake = fakeChannels();
   const d0 = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '15:00')));
   assert.equal(d0.sent.length, 1);

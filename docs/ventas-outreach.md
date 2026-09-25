@@ -190,6 +190,18 @@ ciento ochenta días de enfriamiento tras un no, revisión humana
 obligatoria, afirmaciones con origen) son más conservadores que los de
 Chief. Se mantienen.
 
+**Ojo con la cadencia de §5.3** (VEN-10 r3): tiene cinco mensajes y
+pasos a uno o dos días hábiles, así que con estos valores por defecto
+**no cabe**: el quinto mensaje (la síntesis con el media kit y la
+cotización, el que más vale) se cancelaría al reclamar (`company_cap`) y
+los pasos seguidos se correrían hasta cumplir los tres días. El motor lo
+dice al enrolar, con los pasos concretos:
+`checkSequenceAgainstPolicy` de `@mc/core` y `EnrollResult.warnings`
+(`over_company_cap` y `steps_closer_than_min_gap`, cada uno con sus
+`stepIds`), para que la pantalla que enrola lo muestre antes de activar.
+Qué cambia —la plantilla o los valores por defecto— lo decide Rasheed
+(§8, pregunta 6).
+
 ### 5.2 El modelo de datos: migración `0037_outreach.sql` (en el plan original, «0015»)
 
 Lo que ya existe y se queda: `company`, `contact` (con `opted_out`

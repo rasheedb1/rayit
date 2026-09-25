@@ -17,7 +17,7 @@
  * pruebas avanzan uno falso. Los contadores de los topes cuentan el día
  * de ese mismo reloj (r5, 0052 §3).
  */
-import { DEFAULT_SEND_WINDOW, shiftFollowingSteps, type SendWindow } from '@mc/core';
+import { DEFAULT_SEND_WINDOW, DISPATCHABLE_STEP_TYPES, shiftFollowingSteps, type DispatchableStepType, type SendWindow } from '@mc/core';
 import { isUuid, type SqlExecutor, type WorkerSql } from '../../client.ts';
 import { OutreachShapeError } from '../outreach.ts';
 
@@ -25,9 +25,12 @@ import { OutreachShapeError } from '../outreach.ts';
 // Vocabulario del motor
 // ---------------------------------------------------------------------
 
-/** Los tipos de paso que el despachador envía solo. El resto es trabajo de una persona (draft). */
-export const DISPATCHABLE_STEP_TYPES = ['email', 'email_reply', 'linkedin_connect', 'linkedin_message', 'instagram_dm'] as const;
-export type DispatchableStepType = (typeof DISPATCHABLE_STEP_TYPES)[number];
+/**
+ * Los tipos de paso que el despachador envía solo. El resto es trabajo de
+ * una persona (draft). Una sola lista, en @mc/core (r3): la usa también
+ * checkSequenceAgainstPolicy.
+ */
+export { DISPATCHABLE_STEP_TYPES, type DispatchableStepType };
 
 /** Los canales que tienen adaptador (ChannelSender) en el worker. WhatsApp es fase 2. */
 export const DISPATCH_CHANNELS = ['email', 'linkedin', 'instagram_dm'] as const;
