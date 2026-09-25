@@ -14,7 +14,8 @@
  * a los más viejos en una ráfaga de avisos (una lista mala: justo cuando
  * más importa), el adaptador recorre TODAS las páginas de ids desde
  * `since` (los ids son baratos; hasta GMAIL_BOUNCES_MAX_REFS), les da la
- * vuelta y pide el cuerpo solo de los `max` más viejos. El job avanza su
+ * vuelta y pide el cuerpo solo de los `max` más viejos que no estén ya
+ * anotados (`known`, outbound_bounce del workspace). El job avanza su
  * cursor hasta el último que leyó y la pasada siguiente sigue desde ahí.
  *
  * Aquí no se importa @mc/connectors: el tipo es ESTRUCTURAL, con solo lo
@@ -129,10 +130,13 @@ async function todosLosIds(
  */
 export function gmailBounceMailbox(api: GmailBounceSource, now: () => Date = () => new Date()): BounceMailbox {
   return {
-    async listBounceCandidates({ since, max, signal }): Promise<BounceBatch> {
+    async listBounceCandidates({ since, max, signal, known }): Promise<BounceBatch> {
       const { refs, truncated } = await todosLosIds(api, since, signal);
+      // Lo ya anotado no se vuelve a pedir: el solape del cursor relee la
+      // última hora, y cada messages.get cuesta cuota.
+      const anotados = known ? await known(refs.map((r) => r.id)) : new Set<string>();
       // Del más viejo al más nuevo, y solo los `max` más viejos.
-      const viejos = refs.slice().reverse();
+      const viejos = refs.filter((r) => !anotados.has(r.id)).reverse();
       const tanda = viejos.slice(0, Math.max(1, max));
       const messages: BounceMessage[] = [];
       for (const ref of tanda) {

@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import type { AlertInput } from '@mc/core/outreach/deliverability';
 import { allJobs } from '../src/jobs/index.ts';
-import type { Mailer, MailMessage } from '../src/jobs/ventas/correo.ts';
+import { missingMailConfig, smtpMailerFromEnv, type Mailer, type MailMessage } from '../src/jobs/ventas/correo.ts';
 import { ALERT_TEXTS_EN, ALERT_TEXTS_ES, ALERTAS_URL, SALUD_URL, fillTemplate } from '../src/jobs/ventas/messages.ts';
 import { ALERTAS_JOB_ID, createAlertasJob, runAlertas, type ReadSignals } from '../src/jobs/ventas/outbound.alerts.ts';
 import type { JobContext } from '../src/runner/registry.ts';
@@ -408,4 +408,64 @@ test('con la base real (r5): un Gmail conectado cuyo buzón de rebotes nadie lee
                       WHERE provider_account_id = 'sinleer@alertas.test'`);
   await runAlertas(db, new Date('2026-11-11T14:00:00Z'), { mailer: null, appUrl: 'https://app.test' });
   assert.equal((await avisos(WS_GMAIL)).filter((a) => a.kind === 'outreach_bounces_unread').length, 1);
+});
+
+test('dos corridas que se solapan mandan UN solo resumen: leer, enviar y marcar van bajo el mismo candado', async () => {
+  const WS_DOBLE = '0000015a-0000-4000-8000-00000000000a';
+  await espacioDeFixture(WS_DOBLE, '0000015a-0000-4000-8000-0000000000aa', 'alertas-doble', 'Dos Corridas');
+  const leer: ReadSignals = async (_tx, ws) => (ws === WS_DOBLE ? SALUD.enProblemas : SALUD.sano);
+  /** Un SMTP lento: mientras envía, la otra corrida tendría tiempo de leer los mismos pendientes. */
+  class CarteroLento extends CarteroFalso {
+    override async send(msg: MailMessage): Promise<void> {
+      await new Promise((ok) => setTimeout(ok, 30));
+      await super.send(msg);
+    }
+  }
+  const cartero = new CarteroLento();
+  const cuando = new Date('2026-12-06T14:00:00Z');
+  const deps = { mailer: cartero, appUrl: 'https://app.test', readSignals: leer };
+  await Promise.all([runAlertas(db, cuando, deps), runAlertas(db, cuando, deps)]);
+  assert.equal(cartero.enviados.filter((m) => m.subject.includes('Dos Corridas')).length, 1, 'un solo correo');
+  assert.ok((await avisos(WS_DOBLE)).every((x) => x.emailed_at !== null));
+});
+
+test('en producción sin MAIL_FROM el resumen no sale (un remitente .invalid rebota): lo dicen el registro y el resultado', async () => {
+  const WS_SIN_FROM = '0000015a-0000-4000-8000-00000000000b';
+  await espacioDeFixture(WS_SIN_FROM, '0000015a-0000-4000-8000-0000000000ab', 'alertas-sin-from', 'Sin Remitente');
+  const cartero = new CarteroFalso();
+  const registro: string[] = [];
+  const logger = {
+    level: 'info',
+    debug: () => {},
+    info: (msg: string) => registro.push(msg),
+    warn: (msg: string) => registro.push(msg),
+    error: () => {},
+    child: () => logger,
+  } as unknown as JobContext['logger'];
+  const job = createAlertasJob({
+    readSignals: async (_tx, ws) => (ws === WS_SIN_FROM ? SALUD.enProblemas : SALUD.sano),
+    mailerFromEnv: () => cartero,
+  });
+  const ctx = {
+    db,
+    logger,
+    env: { NODE_ENV: 'production', SMTP_URL: 'smtp://smtp.ejemplo.test:587', APP_URL: 'https://app.test' },
+    signal: new AbortController().signal,
+    now: () => new Date('2026-12-07T14:00:00Z'),
+  } as unknown as JobContext;
+  const out = (await job.handler({}, ctx)) as { metadata?: { emailSkipped?: number; emailSkippedReason?: string | null } };
+  assert.equal(cartero.enviados.filter((m) => m.subject.includes('Sin Remitente')).length, 0, 'no sale');
+  assert.ok(registro.some((m) => /MAIL_FROM sin configurar/.test(m)));
+  assert.ok((out.metadata?.emailSkipped ?? 0) >= 1);
+  assert.equal(out.metadata?.emailSkippedReason, 'MAIL_FROM');
+  // Quedan sin marcar: salen cuando se configure.
+  assert.ok((await avisos(WS_SIN_FROM)).every((x) => x.emailed_at === null));
+});
+
+test('smtpMailerFromEnv: sin SMTP_URL no hay cartero; en producción tampoco sin MAIL_FROM; en local basta SMTP_URL', () => {
+  assert.equal(missingMailConfig({}), 'SMTP_URL');
+  assert.equal(missingMailConfig({ NODE_ENV: 'production', SMTP_URL: 'smtp://x.test:587' }), 'MAIL_FROM');
+  assert.equal(smtpMailerFromEnv({ NODE_ENV: 'production', SMTP_URL: 'smtp://x.test:587' }), null);
+  assert.equal(missingMailConfig({ NODE_ENV: 'development', SMTP_URL: 'smtp://localhost:1025' }), null);
+  assert.equal(missingMailConfig({ NODE_ENV: 'production', SMTP_URL: 'smtp://x.test:587', MAIL_FROM: 'On Cue <hola@oncue.app>' }), null);
 });

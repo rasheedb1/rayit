@@ -101,7 +101,18 @@ export interface BounceMailbox {
    * (el conector puede filtrar por remitente), del más viejo al más
    * nuevo, como mucho `max`.
    */
-  listBounceCandidates(opts: { since: Date; max: number; signal?: AbortSignal }): Promise<BounceBatch>;
+  listBounceCandidates(opts: {
+    since: Date;
+    max: number;
+    signal?: AbortSignal;
+    /**
+     * Cuáles de estos ids ya están anotados (outbound_bounce del
+     * workspace): el buzón no los vuelve a pedir enteros (Gmail:
+     * messages.get) ni cuentan para `max`. El solape del cursor relee la
+     * última hora; así no cuesta una llamada por aviso ya guardado.
+     */
+    known?: (ids: readonly string[]) => Promise<ReadonlySet<string>>;
+  }): Promise<BounceBatch>;
 }
 
 export interface MailboxAccount {
@@ -354,7 +365,16 @@ export async function runBounces(db: JobDatabase, now: Date, mailboxFor: Mailbox
     }
     try {
       const since = desde(c.bounces_read_at ? new Date(c.bounces_read_at) : null, now);
-      const batch = await mailbox.listBounceCandidates({ since, max, signal: opts.signal });
+      const known = async (ids: readonly string[]): Promise<ReadonlySet<string>> => {
+        if (!ids.length) return new Set();
+        const { rows } = await db.query<{ id: string }>(
+          `SELECT provider_message_id AS id FROM outbound_bounce
+            WHERE workspace_id = $1 AND provider_message_id = ANY($2::text[])`,
+          [account.workspaceId, ids.map((id) => id.slice(0, 200))],
+        );
+        return new Set(rows.map((x) => x.id));
+      };
+      const batch = await mailbox.listBounceCandidates({ since, max, signal: opts.signal, known });
       const leidos: BounceMessage[] = [];
       for (const msg of batch.messages) {
         if (opts.signal?.aborted) break;

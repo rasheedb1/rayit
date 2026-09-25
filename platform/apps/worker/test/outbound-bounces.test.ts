@@ -649,11 +649,21 @@ describe('con el adaptador, de Gmail a la ficha (pglite)', () => {
     assert.equal(await cursor(ACC2), new Date(base + 99 * 12_000).toISOString(), 'el cursor queda en el último leído');
     assert.equal(await cuantos(), 100);
 
+    const antes2 = gmail.pedidos.length;
     const r2 = await runBounces(db, NOW, deTomas, { perRun: 100 });
     assert.equal(r2.bounces, 50);
     assert.equal(r2.pending, 0);
     assert.equal(await cuantos(), 150);
+    // El último de la primera pasada está en el solape del cursor, pero ya estaba anotado: no se pide otra vez.
+    assert.equal(gmail.pedidos.length - antes2, 50);
+    assert.ok(!gmail.pedidos.slice(antes2).includes('rafaga-099'));
     // Con todo leído, «ahora» menos el solape… sin volver atrás del último leído.
     assert.equal(await cursor(ACC2), new Date(base + 99 * 12_000).toISOString());
+
+    // Una tercera pasada relee la misma ventana y no pide ningún aviso entero.
+    const antes3 = gmail.pedidos.length;
+    const r3 = await runBounces(db, NOW, deTomas, { perRun: 100 });
+    assert.deepEqual({ read: r3.read, bounces: r3.bounces, pending: r3.pending }, { read: 0, bounces: 0, pending: 0 });
+    assert.equal(gmail.pedidos.length, antes3, 'ningún messages.get de un aviso ya guardado');
   });
 });

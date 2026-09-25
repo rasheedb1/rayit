@@ -20,7 +20,8 @@
  *
  * Una notification por tipo y día LOCAL del workspace: si el tipo ya se
  * avisó hoy, no se repite aunque el job corra otra vez (la cola es
- * 'stately' y además hay un candado de transacción). Cada una lleva su
+ * 'stately' y además hay un candado de transacción; otro, el del correo,
+ * cubre leer, enviar y marcar el resumen). Cada una lleva su
  * propio enlace (messages.ts, ALERTAS_URL).
  *
  * Después, UN correo de resumen por workspace y por DÍA LOCAL (r4), a
@@ -111,8 +112,10 @@ export const readSignalsFromDb: ReadSignals = async (tx, workspaceId, now) => {
 };
 
 export interface AlertasDeps {
-  /** null = sin SMTP_URL: no se envía el resumen. */
+  /** null = sin SMTP_URL (o sin MAIL_FROM en producción): no se envía el resumen. */
   mailer: Mailer | null;
+  /** Por qué no hay cartero, para el resultado y el registro. */
+  mailerMissing?: 'SMTP_URL' | 'MAIL_FROM' | null;
   /**
    * APP_URL, para el enlace de cada alerta en el correo. null = sin
    * APP_URL: el resumen sale sin enlaces (uno a localhost sería un enlace
@@ -130,8 +133,10 @@ export interface AlertasResult {
   created: Partial<Record<OutreachAlertKind, number>>;
   /** Correos de resumen enviados: uno por workspace, a todos sus dueños. */
   emailsSent: number;
-  /** Workspaces con alertas por enviar y sin SMTP_URL. */
+  /** Workspaces con alertas por enviar y sin cartero. */
   emailSkipped: number;
+  /** Por qué no hubo cartero: falta SMTP_URL, o MAIL_FROM en producción. */
+  emailSkippedReason: 'SMTP_URL' | 'MAIL_FROM' | null;
   emailFailed: number;
   /** Workspaces con alertas sin correo que esperan al resumen de mañana: hoy ya salió uno. */
   emailDeferred: number;
@@ -236,7 +241,7 @@ const KINDS_URGENTES = new Set(URGENT_ALERT_KINDS.map((k) => `outreach_${k}`));
  * mucho uno por día local del workspace. Si hoy ya salió, las urgentes
  * pendientes salen ahora en un correo aparte (r5) y las demás esperan.
  */
-async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: AlertasDeps, r: AlertasResult): Promise<void> {
+async function enviarResumen(db: Queryable, w: Espacio, now: Date, deps: AlertasDeps, r: AlertasResult): Promise<void> {
   // ¿Hoy (día local) ya salió un resumen? Lo dice emailed_at, que se anota
   // al enviarlo: sin tabla aparte que se pueda desincronizar.
   const { rows: [hoy] } = await db.query<{ ya: boolean }>(
@@ -261,6 +266,7 @@ async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: Alert
   if (!aEnviar.length) return;
   if (!deps.mailer) {
     r.emailSkipped++;
+    r.emailSkippedReason = deps.mailerMissing ?? 'SMTP_URL';
     return;
   }
   const { rows: duenos } = await db.query<{ email: string }>(
@@ -310,7 +316,8 @@ export async function runAlertas(
   const hora = Math.max(0, Math.min(23, Math.trunc(deps.horaLocal ?? ALERTAS_HORA_LOCAL)));
   const leer = deps.readSignals ?? readSignalsFromDb;
   const r: AlertasResult = {
-    workspaces: 0, created: {}, emailsSent: 0, emailSkipped: 0, emailFailed: 0, emailDeferred: 0, urgentSent: 0,
+    workspaces: 0, created: {}, emailsSent: 0, emailSkipped: 0, emailSkippedReason: null, emailFailed: 0, emailDeferred: 0,
+    urgentSent: 0,
   };
   for (const w of await espacios(db, now, hora)) {
     r.workspaces++;
@@ -320,7 +327,16 @@ export async function runAlertas(
         return avisar(tx, w, evaluateOutreachAlerts(await leer(tx, w.id, now)), now);
       });
       for (const k of creadas) r.created[k] = (r.created[k] ?? 0) + 1;
-      await enviarResumen(db, w, now, deps, r);
+      // Leer lo pendiente, enviarlo y marcarlo, bajo el mismo candado y en
+      // UNA transacción: dos corridas que se solapen (un reintento a mano,
+      // la cola sin 'stately') no leen los mismos pendientes, y la segunda
+      // ve el emailed_at de la primera. Si el correo falla, la transacción
+      // se deshace y nada queda marcado. El candado espera al SMTP, que es
+      // un correo por workspace: segundos, no minutos.
+      await db.transaction(async (tx) => {
+        await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`${ALERTAS_JOB_ID}/${w.id}/correo`]);
+        await enviarResumen(tx, w, now, deps, r);
+      });
     } catch (err) {
       onError?.(w.id, err);
     }
@@ -332,15 +348,28 @@ export function createAlertasJob(deps: Omit<AlertasDeps, 'mailer' | 'appUrl'> & 
   return defineJob(
     ALERTAS_JOB_ID,
     async (_payload, ctx) => {
-      const mailer = (deps.mailerFromEnv ?? smtpMailerFromEnv)(ctx.env);
+      // En producción, sin MAIL_FROM el resumen no sale: firmado por un
+      // dominio .invalid rebota o va a spam. Sin APP_URL sí sale, sin
+      // enlaces y diciendo dónde verlo: una cuenta caída tiene que llegar
+      // aunque el enlace no pueda ir (y nunca a localhost).
+      const sinRemitente = ctx.env['NODE_ENV'] === 'production' && !ctx.env['MAIL_FROM']?.trim();
+      const mailer = sinRemitente ? null : (deps.mailerFromEnv ?? smtpMailerFromEnv)(ctx.env);
+      const falta = sinRemitente ? 'MAIL_FROM' : mailer ? null : 'SMTP_URL';
+      if (falta === 'MAIL_FROM') {
+        ctx.logger.warn('alertas de outreach: MAIL_FROM sin configurar en producción; el resumen no sale', {});
+      }
       const appUrl = ctx.env['APP_URL']?.trim() || null;
       if (!appUrl) ctx.logger.warn('alertas de outreach: sin APP_URL, el resumen sale sin enlaces', {});
       let fallos = 0;
-      const r = await runAlertas(ctx.db, ctx.now(), { ...deps, mailer, appUrl }, (ws, err) => {
+      const r = await runAlertas(ctx.db, ctx.now(), { ...deps, mailer, mailerMissing: falta, appUrl }, (ws, err) => {
         fallos++;
         ctx.logger.warn('alertas de outreach: falló un workspace', { workspaceId: ws, error: err instanceof Error ? err.message : String(err) });
       });
-      if (r.emailSkipped) ctx.logger.info('alertas de outreach: sin SMTP_URL, el resumen no salió', { workspaces: r.emailSkipped });
+      if (r.emailSkipped) {
+        ctx.logger.info(`alertas de outreach: sin ${r.emailSkippedReason ?? 'SMTP_URL'}, el resumen no salió`, {
+          workspaces: r.emailSkipped,
+        });
+      }
       const creadas = Object.values(r.created).reduce((a, b) => a + (b ?? 0), 0);
       return { processed: creadas, failed: fallos, metadata: { ...r } };
     },
