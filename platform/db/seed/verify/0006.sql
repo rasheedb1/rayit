@@ -57,6 +57,8 @@ SELECT 'd_alerta_del_dia' AS check_id,
          AND n.action_url = '/ventas/politica#cuentas'
          -- Sin el canal repetido (r4): el nombre ya dice «(LinkedIn)».
          AND n.body_es LIKE 'No sale nada por Laura · Cocina fácil (LinkedIn) hasta%'
+         -- Se lee dentro de la política de envío: no manda a ella (r5).
+         AND n.body_es NOT LIKE '%política de envío%'
          AND EXISTS (SELECT 1 FROM outreach_channel_account a
                       WHERE a.channel = 'linkedin' AND a.status = 'needs_reconnect'
                         AND a.display_name = 'Laura · Cocina fácil (LinkedIn)') AS ok

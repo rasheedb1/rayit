@@ -229,8 +229,10 @@ INSERT INTO notification (id, workspace_id, user_id, kind, severity, title_es, b
 VALUES
   ('00000006-0000-4000-8000-0000000a1001', '00000002-0000-4000-8000-000000000001', NULL, 'outreach_account_down',
    'critical', 'Una cuenta de envío necesita atención',
+   -- La misma frase que deja el job (messages.ts): sin «en tu política de
+   -- envío ves…», porque se lee dentro de esa misma página.
    'No sale nada por Laura · Cocina fácil (LinkedIn) hasta que se reconecte: lo de ese canal espera en la '
-   'cola. En tu política de envío ves qué pasó y qué hacer.',
+   'cola.',
    '/ventas/politica#cuentas', now(), now())
 ON CONFLICT (id) DO UPDATE SET body_es = EXCLUDED.body_es, created_at = now(), emailed_at = now(), read_at = NULL,
                                dismissed_at = NULL;
