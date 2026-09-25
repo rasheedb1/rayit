@@ -12,9 +12,10 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { recommendSequence, type RecommendInput } from '@mc/core';
+import { checkSequenceAgainstPolicy, recommendSequence, type RecommendInput } from '@mc/core';
 import {
-  addStep, CadenciaError, createSequenceFromProposal, createSequenceFromTemplate, defaultContact, deleteStep,
+  addStep, CadenciaError, contactNames, createSequenceFromProposal, createSequenceFromTemplate, defaultContact, deleteStep,
+  enrollableContactsOfDeal, liveEnrollmentElsewhere,
   duplicateSequence, getRecommendationContext, getSequenceDetail, listEnrollableDeals, listProposableSignals,
   listSequences, listSequenceTemplates, recordRecommendLlmCall, renameSequence, reorderSteps, replaceStepsFromProposal,
   setSequenceStatus, updateStep, type RecommendationContext,
@@ -58,6 +59,7 @@ function entrada(ctx: RecommendationContext, contactId: string | null): Recommen
     contact: c ? { hasEmail: c.hasEmail, hasLinkedin: c.hasLinkedin, hasInstagram: c.hasInstagram } : null,
     requiresDisclosure: ctx.brief?.requiresDisclosure ?? false,
     templates: ctx.templates,
+    policy: ctx.policy,
   };
 }
 
@@ -91,6 +93,7 @@ test('el contexto: la persona por defecto llega por más canales y los canales s
   assert.ok(ctx.nicheSlugs.includes('cocina'));
   assert.equal(ctx.brief?.requiresDisclosure, true);
   assert.equal(ctx.angles.presencia?.label, 'Presencia');
+  assert.deepEqual(ctx.policy, { maxTouchesPerCompany: 4, minDaysBetweenTouches: 3 });
 });
 
 test('terminado cuando: seis pasos con guía desde la campaña activa, y se activa', async () => {
@@ -108,11 +111,68 @@ test('terminado cuando: seis pasos con guía desde la campaña activa, y se acti
   assert.equal(d.proposal?.contactId, CAMILA);
   assert.equal(d.proposal?.templateSlug, 'cocina-campana-activa');
   assert.ok(d.proposal?.notes.some((n) => n.code === 'channel_down'));
-  // La política del seed (4 mensajes, 3 días) no deja salir el último: la pantalla lo dice.
-  assert.equal(d.policy.overCap.length, 1);
+  // La propuesta nace dentro de la política del seed (4 mensajes, 3 días): ni un paso cortado ni corrido,
+  // y el cierre con el media kit sigue ahí.
+  assert.deepEqual([d.policy.overCap, d.policy.closerThanGap], [[], []]);
+  assert.deepEqual(checkSequenceAgainstPolicy(d.steps, { maxTouchesPerCompany: 4, minDaysBetweenTouches: 3 }), { overCap: [], closerThanGap: [] });
+  assert.equal(d.steps.at(-1)!.angleKey, 'sintesis');
+  assert.ok(d.steps.at(-1)!.requiresAsset !== null);
+  assert.ok(d.proposal?.notes.some((n) => n.code === 'fitted_to_policy'));
 
   await enLaura((tx) => setSequenceStatus(tx, id, 'active'));
   assert.equal((await enLaura((tx) => getSequenceDetail(tx, id)))!.status, 'active');
+
+  // La copia conserva la propuesta (sus notas) pero no la persona ni el negocio: activarla no le escribe a Camila otra vez.
+  const copia = await enLaura((tx) => duplicateSequence(tx, id, (n) => `${n} (copia)`));
+  const dc = (await enLaura((tx) => getSequenceDetail(tx, copia)))!;
+  assert.equal(dc.proposal?.templateSlug, 'cocina-campana-activa');
+  assert.deepEqual([dc.proposal?.contactId, dc.proposal?.dealId, dc.proposalContact], [null, null, null]);
+  await enLaura((tx) => setSequenceStatus(tx, copia, 'archived'));
+});
+
+test('proponer dos veces desde la misma señal deja un solo borrador, con los pasos de la última propuesta', async () => {
+  const [a, b] = await enLaura(async (tx) => {
+    const ctx = await getRecommendationContext(tx, SIGNAL_FRESKO);
+    const primera = await createSequenceFromProposal(tx, { proposal: recommendSequence(entrada(ctx, CAMILA)), name: 'Fresko · campaña activa', meta: meta(CAMILA) });
+    const segunda = await createSequenceFromProposal(tx, { proposal: recommendSequence(entrada(ctx, LUCIA)), name: 'Fresko · campaña activa', meta: meta(LUCIA) });
+    return [primera, segunda];
+  });
+  assert.equal(a, b);
+  const borradores = (await enLaura((tx) => listSequences(tx))).filter((s) => s.status === 'draft' && s.name === 'Fresko · campaña activa');
+  assert.equal(borradores.length, 1);
+  const d = (await enLaura((tx) => getSequenceDetail(tx, a)))!;
+  assert.equal(d.proposal?.contactId, LUCIA);
+  assert.ok(!d.steps.some((s) => s.stepType === 'linkedin_message'), 'los pasos son los de Lucía, sin LinkedIn');
+  await enLaura((tx) => setSequenceStatus(tx, a, 'archived'));
+});
+
+test('enrolar desde un negocio solo acepta personas de la marca del negocio, con el negocio abierto', async () => {
+  const otra = await enLaura(async (tx) => {
+    const r = await tx.query<{ id: string }>(
+      `SELECT c.id FROM contact c WHERE c.company_id <> $1::uuid AND contact_visible_to(c.id, $2::uuid) ORDER BY c.id LIMIT 1`,
+      [COMPANY_FRESKO, tx.workspaceId],
+    );
+    return r.rows[0]!.id;
+  });
+  const ok = await enLaura((tx) => enrollableContactsOfDeal(tx, DEAL_FRESKO, [CAMILA, LUCIA, otra]));
+  assert.deepEqual(new Set(ok), new Set([CAMILA, LUCIA]));
+  await assert.rejects(enLaura((tx) => enrollableContactsOfDeal(tx, DEAL_FRESKO, ['no'])), (e) => e instanceof CadenciaError && e.code === 'invalid');
+  const nombres = await enLaura((tx) => contactNames(tx, [CAMILA, 'no']));
+  assert.deepEqual([...nombres], [[CAMILA, 'Camila Rojas']]);
+});
+
+test('WhatsApp (fase 2) no se pone a mano: ni al añadir ni al editar', async () => {
+  const id = await enLaura((tx) => createSequenceFromTemplate(tx, 'senal-manual'));
+  const [p1] = (await enLaura((tx) => getSequenceDetail(tx, id)))!.steps;
+  await assert.rejects(enLaura((tx) => addStep(tx, id, { stepType: 'whatsapp_message' })), (e) => e instanceof CadenciaError && e.code === 'invalid');
+  await assert.rejects(enLaura((tx) => updateStep(tx, p1!.id, { stepType: 'whatsapp_message' })), (e) => e instanceof CadenciaError && e.code === 'invalid');
+  // Una tarea a mano sí elige su red.
+  await enLaura((tx) => updateStep(tx, p1!.id, { stepType: 'manual_task', channel: 'linkedin' }));
+  const d = (await enLaura((tx) => getSequenceDetail(tx, id)))!;
+  assert.deepEqual([d.steps[0]!.stepType, d.steps[0]!.channel], ['manual_task', 'linkedin']);
+  // El que era el segundo correo pasa a abrir el hilo.
+  assert.equal(d.steps.find((s) => s.channel === 'email')!.stepType, 'email');
+  await enLaura((tx) => setSequenceStatus(tx, id, 'archived'));
 });
 
 test('la propuesta cambia si la persona no tiene LinkedIn', async () => {
@@ -142,7 +202,7 @@ test('la línea de tiempo: editar, reordenar, añadir y quitar; con alguien dent
   const nuevo = await enLaura((tx) => addStep(tx, id, { stepType: 'email_reply', angleKey: 'prueba_social' }));
   d = (await enLaura((tx) => getSequenceDetail(tx, id)))!;
   assert.equal(d.steps.at(-1)!.id, nuevo);
-  assert.equal(d.steps.at(-1)!.dayOffset, 11, 'dos días después del último');
+  assert.equal(d.steps.at(-1)!.dayOffset, 12, 'tras el último, con la separación de la política (3 días)');
   await enLaura((tx) => deleteStep(tx, nuevo));
   await enLaura((tx) => renameSequence(tx, id, '  Fresko   · plantilla '));
 
@@ -169,6 +229,12 @@ test('la línea de tiempo: editar, reordenar, añadir y quitar; con alguien dent
   const copia = await enLaura((tx) => duplicateSequence(tx, id, (n) => `${n} (copia)`));
   const dc = (await enLaura((tx) => getSequenceDetail(tx, copia)))!;
   assert.deepEqual([dc.status, dc.steps.length, dc.locked], ['draft', 6, false]);
+  // Quien ya está en la original está «vivo» ahí: la copia no puede volver a escribirle en paralelo.
+  assert.deepEqual(await enLaura((tx) => liveEnrollmentElsewhere(tx, CAMILA, copia)), { sequenceId: id, name: 'Fresko · plantilla' });
+  assert.equal(await enLaura((tx) => liveEnrollmentElsewhere(tx, CAMILA, id)), null);
+  const deals = await enLaura((tx) => listEnrollableDeals(tx, id));
+  assert.equal(deals.find((x) => x.id === DEAL_FRESKO)!.contacts.find((c) => c.id === CAMILA)!.enrolled, true);
+  assert.equal(deals.find((x) => x.id === DEAL_FRESKO)!.contacts.find((c) => c.id === LUCIA)!.enrolled, false);
 
   await enLaura((tx) => setSequenceStatus(tx, id, 'archived'));
   await assert.rejects(enLaura((tx) => setSequenceStatus(tx, id, 'active')), (e) => e instanceof CadenciaError && e.code === 'archived');
@@ -184,6 +250,31 @@ test('reordenar pone al primer correo como correo nuevo, no como respuesta sin h
   const e = (await enLaura((tx) => getSequenceDetail(tx, id)))!;
   assert.equal(e.steps[1]!.id, ids[3]);
   assert.equal(e.steps[1]!.stepType, 'email');
+});
+
+test('quitar, añadir o editar tampoco deja una respuesta sin hilo como primer correo', async () => {
+  const id = await enLaura((tx) => createSequenceFromTemplate(tx, 'marca-con-campana-activa'));
+  const pasos = async () => (await enLaura((tx) => getSequenceDetail(tx, id)))!.steps;
+  const primerCorreo = async () => (await pasos()).find((s) => s.channel === 'email' && s.stepType !== 'manual_task')!;
+  const ids = (await pasos()).map((s) => s.id);
+
+  // Quitar el correo que abre el hilo: la respuesta del día 5 pasa a abrirlo.
+  await enLaura((tx) => deleteStep(tx, ids[1]!));
+  assert.deepEqual([(await primerCorreo()).id, (await primerCorreo()).stepType], [ids[3], 'email']);
+
+  // Cambiar el primer correo a «Respuesta en el hilo» no se queda así.
+  await enLaura((tx) => updateStep(tx, ids[3]!, { stepType: 'email_reply' }));
+  assert.equal((await primerCorreo()).stepType, 'email');
+
+  // Sin ningún correo, «Añadir paso» (una respuesta) abre el hilo, con un ángulo que la secuencia no usa y su guía.
+  for (const s of await pasos()) if (s.channel === 'email') await enLaura((tx) => deleteStep(tx, s.id));
+  const nuevo = await enLaura((tx) => addStep(tx, id, { stepType: 'email_reply' }));
+  const n = (await pasos()).find((s) => s.id === nuevo)!;
+  assert.equal(n.stepType, 'email');
+  const usados = (await pasos()).filter((s) => s.id !== nuevo).map((s) => s.angleKey);
+  assert.ok(n.angleKey && !usados.includes(n.angleKey), `ángulo nuevo: ${n.angleKey}`);
+  assert.match(n.guidanceEs ?? '', /^Abre con/);
+  await enLaura((tx) => setSequenceStatus(tx, id, 'archived'));
 });
 
 test('los negocios abiertos para enrolar traen a sus personas; la baja se marca', async () => {

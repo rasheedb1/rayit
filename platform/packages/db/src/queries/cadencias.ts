@@ -24,8 +24,15 @@
  *                              la política no va a dejar cumplir
  *     updateStep, addStep, deleteStep, reorderSteps, renameSequence
  *     setSequenceStatus        activar, pausar, archivar
- *     duplicateSequence
- *     listEnrollableDeals      los negocios abiertos y sus personas, para enrolar
+ *     duplicateSequence        sin la persona de la propuesta
+ *
+ *   Enrolar
+ *     listEnrollableDeals      los negocios abiertos y sus personas (una
+ *                              consulta), con quién ya está dentro
+ *     enrollableContactsOfDeal de unas personas, las que son de la marca del
+ *                              negocio y con el negocio abierto
+ *     contactNames             los nombres, para decir por qué no entró alguien
+ *     liveEnrollmentElsewhere  si la persona ya está en otra cadencia viva
  *
  * La regla de la edición: mientras nadie esté dentro, todo se cambia.
  * Con alguien enrolado, los toques de esa persona ya existen con su día
@@ -36,13 +43,14 @@
  * después.
  */
 import {
-  checkSequenceAgainstPolicy, llmCostUsd, RECOMMEND_CHANNELS, type ChannelState, type LlmUsage, type Proposal,
-  type ProposalNote, type RecommendChannel, type RecommendSignalKind, type RecommendTemplate, RECOMMEND_SIGNAL_KINDS,
-  signalKindOfSource,
+  checkSequenceAgainstPolicy, composeGuidance, llmCostUsd, RECOMMEND_CHANNELS, SEQUENCE_MAX_DAY_OFFSET, type ChannelState,
+  type LlmUsage, type Proposal, type ProposalNote, type RecommendChannel, type RecommendSignalKind, type RecommendTemplate,
+  RECOMMEND_SIGNAL_KINDS, signalKindOfSource,
 } from '@mc/core';
 import type { WorkspaceTx } from '../client.ts';
 import { isUuid } from '../client.ts';
 import { STEP_TYPES, type StepType } from '../schema/outreach.ts';
+import { SEQUENCE_STATUSES } from '../schema/ventas.ts';
 
 // ---------------------------------------------------------------------
 // Límites y errores
@@ -53,16 +61,24 @@ export const MAX_STEPS = 12;
 /** Pasos como máximo en un mismo día. */
 export const MAX_STEPS_PER_DAY = 4;
 /** El último día al que se puede poner un paso (CHECK de outbound_step). */
-export const MAX_DAY_OFFSET = 60;
+export const MAX_DAY_OFFSET = SEQUENCE_MAX_DAY_OFFSET;
 export const GUIDANCE_MAX = 1000;
 export const SUBJECT_MAX = 200;
 export const BODY_MAX = 5000;
 export const NAME_MAX = 120;
-/** Los estados que ven la lista y la pantalla (outbound_sequence.status). */
-export const SEQUENCE_STATUSES = ['draft', 'active', 'paused', 'archived'] as const;
+/** Los estados que ven la lista y la pantalla (outbound_sequence.status, SEQUENCE_STATUSES del esquema). */
 export type SequenceStatus = (typeof SEQUENCE_STATUSES)[number];
 /** Los que no terminaron: siguen ocupando a la persona dentro de la secuencia. */
 export const LIVE_ENROLLMENT_STATUSES = ['active', 'paused', 'cooldown'] as const;
+
+/**
+ * Los tipos de paso que se pueden poner a mano en la línea de tiempo.
+ * WhatsApp es fase 2 (§5.1): no hay conector, el recomendador no lo usa
+ * (RECOMMEND_CHANNELS) y el editor no lo ofrece.
+ */
+export const EDITABLE_STEP_TYPES = STEP_TYPES.filter((s) => s !== 'whatsapp_message') as Exclude<StepType, 'whatsapp_message'>[];
+/** Los canales de un paso editable: los del recomendador (una tarea a mano elige uno de estos). */
+export const EDITABLE_CHANNELS = RECOMMEND_CHANNELS;
 
 /** Los pasos sin texto: ni guía de texto fijo ni generación. */
 const TEXTLESS_STEP_TYPES: readonly string[] = ['linkedin_like', 'instagram_like', 'manual_task'];
@@ -122,7 +138,7 @@ export interface SequenceProposal {
   proposedAt: string;
 }
 
-const NOTE_CODES = ['template', 'rerouted', 'unreachable', 'channel_down', 'no_contact', 'disclosure'];
+const NOTE_CODES = ['template', 'rerouted', 'unreachable', 'channel_down', 'no_contact', 'disclosure', 'fitted_to_policy'];
 
 /** Lee el jsonb de la base. Lo que no tiene la forma esperada se descarta (null), sin romper la pantalla. */
 export function parseSequenceProposal(value: unknown): SequenceProposal | null {
@@ -249,26 +265,27 @@ export async function listProposableSignals(tx: WorkspaceTx, limit = 8): Promise
     signal_id: string; headline: string; source_kind: string; detected_at: Date; company_name: string | null;
     deal_id: string; deal_name: string; sequence_id: string | null;
   }>(
-    `SELECT DISTINCT ON (sg.id) sg.id AS signal_id, sg.headline_es AS headline, src.kind AS source_kind, sg.detected_at,
-            co.name AS company_name, d.id AS deal_id, d.name AS deal_name,
-            (SELECT s.id FROM outbound_sequence s WHERE s.signal_id = sg.id AND s.status <> 'archived'
+    `SELECT x.*,
+            (SELECT s.id FROM outbound_sequence s WHERE s.signal_id = x.signal_id AND s.status <> 'archived'
               ORDER BY s.updated_at DESC LIMIT 1) AS sequence_id
-       FROM signal sg
-       JOIN signal_source src ON src.id = sg.source_id
-       JOIN deal d ON d.origin_signal_id = sg.id
-       JOIN pipeline_stage st ON st.id = d.stage_id
-       LEFT JOIN company co ON co.id = sg.company_id
-      WHERE sg.status = 'accepted' AND NOT st.is_won AND NOT st.is_lost
-      ORDER BY sg.id, d.updated_at DESC`,
+       FROM (SELECT DISTINCT ON (sg.id) sg.id AS signal_id, sg.headline_es AS headline, src.kind AS source_kind,
+                    sg.detected_at, co.name AS company_name, d.id AS deal_id, d.name AS deal_name
+               FROM signal sg
+               JOIN signal_source src ON src.id = sg.source_id
+               JOIN deal d ON d.origin_signal_id = sg.id
+               JOIN pipeline_stage st ON st.id = d.stage_id
+               LEFT JOIN company co ON co.id = sg.company_id
+              WHERE sg.status = 'accepted' AND NOT st.is_won AND NOT st.is_lost
+              ORDER BY sg.id, d.updated_at DESC) x
+      ORDER BY x.detected_at DESC, x.signal_id
+      LIMIT $1::int`,
+    [Math.max(1, Math.floor(limit))],
   );
-  return rows
-    .map((r) => ({
-      signalId: r.signal_id, headline: r.headline, signalKind: signalKindOfSource(r.source_kind),
-      detectedAt: r.detected_at.toISOString(), companyName: r.company_name, dealId: r.deal_id, dealName: r.deal_name,
-      sequenceId: r.sequence_id,
-    }))
-    .sort((a, b) => b.detectedAt.localeCompare(a.detectedAt))
-    .slice(0, Math.max(1, limit));
+  return rows.map((r) => ({
+    signalId: r.signal_id, headline: r.headline, signalKind: signalKindOfSource(r.source_kind),
+    detectedAt: r.detected_at.toISOString(), companyName: r.company_name, dealId: r.deal_id, dealName: r.deal_name,
+    sequenceId: r.sequence_id,
+  }));
 }
 
 // ---------------------------------------------------------------------
@@ -292,35 +309,49 @@ export interface RecommendationContext {
   contacts: ContactOption[];
   channels: Record<RecommendChannel, ChannelState>;
   allowedChannels: string[];
+  /** outbound_policy del espacio (o sus valores por defecto de 0007): el recomendador propone dentro de ella. */
+  policy: { maxTouchesPerCompany: number; minDaysBetweenTouches: number };
   nicheSlugs: string[];
   brief: { title: string; notes: string | null; requiresDisclosure: boolean } | null;
   templates: TemplateRow[];
   angles: Record<string, { label: string; forbidden: string[] }>;
 }
 
-/** Las personas de una empresa que este espacio ve, con qué direcciones tiene cada una. */
-async function companyContacts(tx: WorkspaceTx, companyId: string): Promise<ContactOption[]> {
-  const { rows } = await tx.query<{
-    id: string; full_name: string | null; role_title: string | null; has_email: boolean; has_linkedin: boolean;
-    has_instagram: boolean; opted_out: boolean;
-  }>(
-    `SELECT c.id, c.full_name, c.role_title,
+/**
+ * Las columnas de una persona para elegirla: qué direcciones tiene y si
+ * está de baja. `$ws` es el espacio de la transacción (lo pone quien
+ * llama, nunca la pantalla). Una sola definición para la propuesta y
+ * para enrolar.
+ */
+const CONTACT_OPTION_COLUMNS = (ws: string) => `c.id, c.full_name, c.role_title,
             (c.email IS NOT NULL AND NOT c.email_invalid) AS has_email,
             (c.linkedin_url IS NOT NULL AND c.linkedin_url <> '') AS has_linkedin,
             (c.instagram_handle IS NOT NULL AND c.instagram_handle <> '') AS has_instagram,
             (c.opted_out OR address_is_suppressed(c.email)
               OR EXISTS (SELECT 1 FROM outbound_enrollment e WHERE e.contact_id = c.id AND e.status = 'opted_out')
               OR EXISTS (SELECT 1 FROM outbound_workspace_optout o
-                          WHERE o.workspace_id = $2::uuid AND o.email = c.email)) AS opted_out
+                          WHERE o.workspace_id = ${ws} AND o.email = c.email)) AS opted_out`;
+
+interface ContactOptionRow {
+  id: string; full_name: string | null; role_title: string | null; has_email: boolean; has_linkedin: boolean;
+  has_instagram: boolean; opted_out: boolean;
+}
+
+const toContactOption = (r: ContactOptionRow): ContactOption => ({
+  id: r.id, name: r.full_name, roleTitle: r.role_title, hasEmail: r.has_email, hasLinkedin: r.has_linkedin,
+  hasInstagram: r.has_instagram, optedOut: r.opted_out,
+});
+
+/** Las personas de una empresa que este espacio ve, con qué direcciones tiene cada una. */
+async function companyContacts(tx: WorkspaceTx, companyId: string): Promise<ContactOption[]> {
+  const { rows } = await tx.query<ContactOptionRow>(
+    `SELECT ${CONTACT_OPTION_COLUMNS('$2::uuid')}
        FROM contact c
       WHERE c.company_id = $1::uuid AND contact_visible_to(c.id, $2::uuid)
       ORDER BY c.full_name NULLS LAST, c.id`,
     [companyId, tx.workspaceId],
   );
-  return rows.map((r) => ({
-    id: r.id, name: r.full_name, roleTitle: r.role_title, hasEmail: r.has_email, hasLinkedin: r.has_linkedin,
-    hasInstagram: r.has_instagram, optedOut: r.opted_out,
-  }));
+  return rows.map(toContactOption);
 }
 
 /**
@@ -381,9 +412,13 @@ export async function getRecommendationContext(tx: WorkspaceTx, signalId: string
     )
   ).rows[0] ?? null;
 
+  // Sin fila de política, los valores por defecto de outbound_policy (0007 y 0045).
   const policy = (
-    await tx.query<{ allowed: string[] }>(
-      `SELECT coalesce((SELECT allowed_channels FROM outbound_policy), '{email,linkedin}'::text[]) AS allowed`,
+    await tx.query<{ allowed: string[]; max_touches: number; min_days: number }>(
+      `SELECT coalesce(p.allowed_channels, '{email,linkedin}'::text[]) AS allowed,
+              coalesce(p.max_touches_per_company, 4) AS max_touches, coalesce(p.min_days_between_touches, 3) AS min_days
+         FROM (SELECT 1) AS uno LEFT JOIN outbound_policy p ON p.workspace_id = $1::uuid`,
+      [tx.workspaceId],
     )
   ).rows[0]!;
   const niches = (
@@ -409,6 +444,7 @@ export async function getRecommendationContext(tx: WorkspaceTx, signalId: string
     contacts: sg.company_id ? await companyContacts(tx, sg.company_id) : [],
     channels: await channelStates(tx),
     allowedChannels: policy.allowed,
+    policy: { maxTouchesPerCompany: policy.max_touches, minDaysBetweenTouches: policy.min_days },
     nicheSlugs: niches.niches,
     brief: brief ? { title: brief.title, notes: brief.notes, requiresDisclosure: brief.requires_disclosure } : null,
     templates: await listSequenceTemplates(tx),
@@ -416,26 +452,107 @@ export async function getRecommendationContext(tx: WorkspaceTx, signalId: string
   };
 }
 
+export interface EnrollableContact extends ContactOption {
+  /** Ya tiene un enrolamiento en esta cadencia (sea cual sea su estado): no se vuelve a enrolar. */
+  enrolled: boolean;
+}
+
 export interface EnrollableDeal {
   id: string;
   name: string;
   companyName: string;
-  contacts: ContactOption[];
+  contacts: EnrollableContact[];
 }
 
-/** Los negocios abiertos con sus personas, para enrolar desde la cadencia. */
-export async function listEnrollableDeals(tx: WorkspaceTx): Promise<EnrollableDeal[]> {
-  const { rows } = await tx.query<{ id: string; name: string; company_id: string; company_name: string }>(
-    `SELECT d.id, d.name, d.company_id, co.name AS company_name
-       FROM deal d JOIN pipeline_stage st ON st.id = d.stage_id JOIN company co ON co.id = d.company_id
+/**
+ * Los negocios abiertos con sus personas, para enrolar desde la
+ * cadencia `sequenceId`. Una sola consulta: cada negocio con las
+ * personas de su empresa que este espacio ve (un negocio sin personas
+ * sale igual, con la lista vacía).
+ */
+export async function listEnrollableDeals(tx: WorkspaceTx, sequenceId: string | null = null): Promise<EnrollableDeal[]> {
+  if (sequenceId !== null) assertId('listEnrollableDeals', sequenceId);
+  const { rows } = await tx.query<
+    { deal_id: string; deal_name: string; company_name: string } & ({ id: null } | (ContactOptionRow & { enrolled: boolean }))
+  >(
+    `SELECT d.id AS deal_id, d.name AS deal_name, co.name AS company_name, p.*
+       FROM deal d
+       JOIN pipeline_stage st ON st.id = d.stage_id
+       JOIN company co ON co.id = d.company_id
+       LEFT JOIN LATERAL (
+         SELECT ${CONTACT_OPTION_COLUMNS('$1::uuid')},
+                EXISTS (SELECT 1 FROM outbound_enrollment e WHERE e.contact_id = c.id AND e.sequence_id = $2::uuid) AS enrolled
+           FROM contact c
+          WHERE c.company_id = d.company_id AND contact_visible_to(c.id, $1::uuid)
+       ) p ON true
       WHERE NOT st.is_won AND NOT st.is_lost
-      ORDER BY co.name, d.updated_at DESC`,
+      ORDER BY co.name, d.updated_at DESC, d.id, p.full_name NULLS LAST, p.id`,
+    [tx.workspaceId, sequenceId],
   );
   const out: EnrollableDeal[] = [];
   for (const r of rows) {
-    out.push({ id: r.id, name: r.name, companyName: r.company_name, contacts: await companyContacts(tx, r.company_id) });
+    let deal = out.at(-1);
+    if (!deal || deal.id !== r.deal_id) {
+      deal = { id: r.deal_id, name: r.deal_name, companyName: r.company_name, contacts: [] };
+      out.push(deal);
+    }
+    if (r.id !== null) deal.contacts.push({ ...toContactOption(r), enrolled: r.enrolled });
   }
   return out;
+}
+
+/**
+ * De `contactIds`, las que se pueden enrolar con el negocio `dealId`:
+ * personas de la empresa del negocio, que este espacio ve, con el
+ * negocio todavía abierto. Enrolar a alguien de otra marca bajo este
+ * negocio dejaría sus toques con el deal_id equivocado.
+ */
+export async function enrollableContactsOfDeal(tx: WorkspaceTx, dealId: string, contactIds: readonly string[]): Promise<string[]> {
+  assertId('enrollableContactsOfDeal', dealId);
+  for (const id of contactIds) assertId('enrollableContactsOfDeal', id);
+  const { rows } = await tx.query<{ id: string }>(
+    `SELECT c.id
+       FROM contact c
+       JOIN deal d ON d.company_id = c.company_id
+       JOIN pipeline_stage st ON st.id = d.stage_id
+      WHERE d.id = $1::uuid AND c.id = ANY($2::uuid[]) AND NOT st.is_won AND NOT st.is_lost
+        AND contact_visible_to(c.id, $3::uuid)`,
+    [dealId, [...contactIds], tx.workspaceId],
+  );
+  return rows.map((r) => r.id);
+}
+
+/** El nombre de cada persona de `ids` que este espacio ve (para decir por qué no entró). */
+export async function contactNames(tx: WorkspaceTx, ids: readonly string[]): Promise<Map<string, string | null>> {
+  const valid = ids.filter(isUuid);
+  if (valid.length === 0) return new Map();
+  const { rows } = await tx.query<{ id: string; full_name: string | null }>(
+    `SELECT id, full_name FROM contact WHERE id = ANY($1::uuid[]) AND contact_visible_to(id, $2::uuid)`,
+    [valid, tx.workspaceId],
+  );
+  return new Map(rows.map((r) => [r.id, r.full_name]));
+}
+
+/**
+ * Si la persona ya está dentro de OTRA cadencia del espacio (activa, en
+ * pausa o en enfriamiento), esa cadencia. Dos cadencias paralelas a la
+ * misma persona de una marca duplican los toques; enrollContacts solo
+ * evita el duplicado dentro de una misma secuencia.
+ */
+export async function liveEnrollmentElsewhere(
+  tx: WorkspaceTx, contactId: string, sequenceId: string,
+): Promise<{ sequenceId: string; name: string } | null> {
+  assertId('liveEnrollmentElsewhere', contactId);
+  assertId('liveEnrollmentElsewhere', sequenceId);
+  const { rows } = await tx.query<{ id: string; name: string }>(
+    `SELECT s.id, s.name
+       FROM outbound_enrollment e JOIN outbound_sequence s ON s.id = e.sequence_id
+      WHERE e.contact_id = $1::uuid AND e.sequence_id <> $2::uuid AND e.status = ANY($3::text[])
+      ORDER BY e.started_at DESC, s.id
+      LIMIT 1`,
+    [contactId, sequenceId, [...LIVE_ENROLLMENT_STATUSES]],
+  );
+  return rows[0] ? { sequenceId: rows[0].id, name: rows[0].name } : null;
 }
 
 // ---------------------------------------------------------------------
@@ -647,11 +764,35 @@ function cleanName(name: string): string {
   return [...n].slice(0, NAME_MAX).join('');
 }
 
-/** Crea una secuencia en borrador con los pasos de una propuesta del recomendador. Devuelve su id. */
+/**
+ * Crea una secuencia en borrador con los pasos de una propuesta del
+ * recomendador. Devuelve su id.
+ *
+ * Una señal tiene como mucho un borrador: si ya hay uno (sin nadie
+ * dentro), sus pasos se reemplazan en lugar de crear otro con el mismo
+ * nombre. Un bloqueo por señal (pg_advisory_xact_lock) hace que dos
+ * envíos a la vez del mismo formulario terminen en el mismo borrador.
+ */
 export async function createSequenceFromProposal(
   tx: WorkspaceTx, input: { proposal: Proposal; name: string; meta: ProposalMeta },
 ): Promise<string> {
   for (const id of [input.meta.signalId, input.meta.contactId, input.meta.dealId]) if (id) assertId('createSequenceFromProposal', id);
+  if (input.meta.signalId) {
+    await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended('outbound_sequence:signal:' || $1, 0))`, [input.meta.signalId]);
+    const draft = (
+      await tx.query<{ id: string }>(
+        `SELECT s.id FROM outbound_sequence s
+          WHERE s.signal_id = $1::uuid AND s.status = 'draft'
+            AND NOT EXISTS (SELECT 1 FROM outbound_enrollment e WHERE e.sequence_id = s.id)
+          ORDER BY s.updated_at DESC, s.id LIMIT 1`,
+        [input.meta.signalId],
+      )
+    ).rows[0];
+    if (draft) {
+      await replaceStepsFromProposal(tx, draft.id, input);
+      return draft.id;
+    }
+  }
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO outbound_sequence (workspace_id, name, channel, status, template_id, signal_id, proposal)
      VALUES ($1::uuid, $2, $3, 'draft', (SELECT id FROM outbound_sequence_template WHERE slug = $4), $5::uuid, $6::jsonb)
@@ -732,6 +873,7 @@ export async function replaceStepsFromProposal(
     [sequenceId, input.proposal.primaryChannel, input.proposal.templateSlug, input.meta.signalId,
       JSON.stringify(proposalJson(input.proposal, input.meta))],
   );
+  await firstEmailOpensThread(tx, sequenceId);
 }
 
 export async function renameSequence(tx: WorkspaceTx, id: string, name: string): Promise<void> {
@@ -788,7 +930,10 @@ export async function updateStep(tx: WorkspaceTx, stepId: string, patch: StepPat
   ).rows[0];
   if (!cur) throw new CadenciaError('not_found', `El paso ${stepId} no existe o no es de este espacio.`);
   const stepType = patch.stepType ?? cur.step_type;
-  if (!(STEP_TYPES as readonly string[]).includes(stepType)) throw new CadenciaError('invalid', `Tipo de paso desconocido: ${stepType}.`);
+  // Un paso que ya era de WhatsApp (de una plantilla vieja) se puede editar en su texto; poner uno nuevo, no.
+  if (!(EDITABLE_STEP_TYPES as readonly string[]).includes(stepType) && (patch.stepType !== undefined || stepType !== cur.step_type)) {
+    throw new CadenciaError('invalid', `Tipo de paso que no se puede poner: ${stepType}.`);
+  }
   const channel = stepType === 'manual_task' ? (patch.channel ?? cur.channel) : channelForStepType(stepType);
   const day = patch.dayOffset ?? cur.day_offset;
   const structural = day !== cur.day_offset || stepType !== cur.step_type || channel !== cur.channel;
@@ -796,8 +941,8 @@ export async function updateStep(tx: WorkspaceTx, stepId: string, patch: StepPat
   assertEditable(seq, structural);
 
   if (!Number.isInteger(day) || day < 0 || day > MAX_DAY_OFFSET) throw new CadenciaError('invalid', `El día va de 0 a ${MAX_DAY_OFFSET}.`);
-  if (!(['email', 'linkedin', 'instagram_dm', 'whatsapp'] as const as readonly string[]).includes(channel)) {
-    throw new CadenciaError('invalid', `Canal desconocido: ${channel}.`);
+  if (structural && !(EDITABLE_CHANNELS as readonly string[]).includes(channel)) {
+    throw new CadenciaError('invalid', `Canal que no se puede poner: ${channel}.`);
   }
   if (patch.scheduledTime !== undefined && !TIME_RE.test(patch.scheduledTime)) throw new CadenciaError('invalid', 'La hora va como HH:MM.');
   if (patch.angleKey) {
@@ -840,29 +985,62 @@ export async function updateStep(tx: WorkspaceTx, stepId: string, patch: StepPat
       patch.requiresAsset !== undefined, patch.requiresAsset ?? null,
     ],
   );
+  if (structural) await firstEmailOpensThread(tx, cur.sequence_id);
 }
 
-/** Añade un paso al final de un día (por defecto, dos días después del último). Devuelve su id. */
+/**
+ * Añade un paso al final (por defecto, tras el último con la separación
+ * de la política, y al menos dos días). Si no se dice el ángulo, toma el
+ * primero del catálogo que la secuencia todavía no usa, con su guía
+ * compuesta para el canal y la señal: un paso nuevo nace con algo que
+ * decir, no «sin ángulo». Si la secuencia no tiene correo todavía, una
+ * respuesta en el hilo pasa a ser el correo que lo abre. Devuelve su id.
+ */
 export async function addStep(
   tx: WorkspaceTx, sequenceId: string,
   input: { dayOffset?: number; stepType: StepType; channel?: string; angleKey?: string | null; guidanceEs?: string | null; scheduledTime?: string },
 ): Promise<string> {
   const seq = await lockSequence(tx, sequenceId);
   assertEditable(seq, true);
+  if (!(EDITABLE_STEP_TYPES as readonly string[]).includes(input.stepType)) {
+    throw new CadenciaError('invalid', `Tipo de paso que no se puede poner: ${input.stepType}.`);
+  }
   const stats = (
-    await tx.query<{ n: number; last: number | null }>(
-      `SELECT count(*)::int AS n, max(day_offset) AS last FROM outbound_step WHERE sequence_id = $1::uuid`,
+    await tx.query<{ n: number; last: number | null; has_email: boolean; min_days: number; proposal_kind: string | null;
+      source_kind: string | null; angle: string | null }>(
+      `SELECT (SELECT count(*) FROM outbound_step st WHERE st.sequence_id = s.id)::int AS n,
+              (SELECT max(day_offset) FROM outbound_step st WHERE st.sequence_id = s.id) AS last,
+              EXISTS (SELECT 1 FROM outbound_step st WHERE st.sequence_id = s.id AND st.step_type IN ('email', 'email_reply')) AS has_email,
+              coalesce(p.min_days_between_touches, 3) AS min_days,
+              s.proposal->>'signalKind' AS proposal_kind, src.kind AS source_kind,
+              (SELECT a.key FROM outbound_angle a
+                WHERE NOT EXISTS (SELECT 1 FROM outbound_step st JOIN outbound_angle u ON u.id = st.angle_id
+                                   WHERE st.sequence_id = s.id AND u.key = a.key)
+                ORDER BY a.position, a.key LIMIT 1) AS angle
+         FROM outbound_sequence s
+         LEFT JOIN outbound_policy p ON p.workspace_id = s.workspace_id
+         LEFT JOIN signal sg ON sg.id = s.signal_id
+         LEFT JOIN signal_source src ON src.id = sg.source_id
+        WHERE s.id = $1::uuid`,
       [sequenceId],
     )
   ).rows[0]!;
   if (stats.n >= MAX_STEPS) throw new CadenciaError('too_many_steps', `Una secuencia lleva hasta ${MAX_STEPS} pasos.`);
-  const day = input.dayOffset ?? Math.min(MAX_DAY_OFFSET, stats.last === null ? 0 : stats.last + 2);
+  const gap = Math.max(2, stats.min_days);
+  const day = input.dayOffset ?? Math.min(MAX_DAY_OFFSET, stats.last === null ? 0 : stats.last + gap);
   if (!Number.isInteger(day) || day < 0 || day > MAX_DAY_OFFSET) throw new CadenciaError('invalid', `El día va de 0 a ${MAX_DAY_OFFSET}.`);
-  if (!(STEP_TYPES as readonly string[]).includes(input.stepType)) throw new CadenciaError('invalid', `Tipo de paso desconocido: ${input.stepType}.`);
+  const stepType: StepType = input.stepType === 'email_reply' && !stats.has_email ? 'email' : input.stepType;
   const time = input.scheduledTime ?? '09:30';
   if (!TIME_RE.test(time)) throw new CadenciaError('invalid', 'La hora va como HH:MM.');
+  const channel = stepType === 'manual_task' ? (input.channel ?? 'email') : channelForStepType(stepType);
+  if (!(EDITABLE_CHANNELS as readonly string[]).includes(channel)) throw new CadenciaError('invalid', `Canal que no se puede poner: ${channel}.`);
+  const angleKey = input.angleKey === undefined ? stats.angle : input.angleKey;
+  const kind = (RECOMMEND_SIGNAL_KINDS as readonly (string | null)[]).includes(stats.proposal_kind)
+    ? (stats.proposal_kind as RecommendSignalKind)
+    : signalKindOfSource(stats.source_kind);
+  const guidance = input.guidanceEs !== undefined ? input.guidanceEs : angleKey ? composeGuidance(angleKey, stepType, kind) : null;
   const order = await nextOrderInDay(tx, sequenceId, day, null);
-  const textless = TEXTLESS_STEP_TYPES.includes(input.stepType);
+  const textless = TEXTLESS_STEP_TYPES.includes(stepType);
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO outbound_step
        (workspace_id, sequence_id, day_offset, order_in_day, step_type, channel, scheduled_time, angle_id, guidance_es, generate_with_ai)
@@ -870,11 +1048,11 @@ export async function addStep(
              (SELECT a.id FROM outbound_angle a WHERE a.key = $8 ORDER BY a.workspace_id NULLS LAST LIMIT 1), $9, $10::boolean)
      RETURNING id`,
     [
-      tx.workspaceId, sequenceId, day, order, input.stepType,
-      input.stepType === 'manual_task' ? (input.channel ?? 'email') : channelForStepType(input.stepType), time,
-      input.angleKey ?? null, trimOrNull(input.guidanceEs, GUIDANCE_MAX, 'La guía'), !textless,
+      tx.workspaceId, sequenceId, day, order, stepType, channel, time, angleKey ?? null,
+      trimOrNull(guidance, GUIDANCE_MAX, 'La guía'), !textless,
     ],
   );
+  await firstEmailOpensThread(tx, sequenceId);
   return rows[0]!.id;
 }
 
@@ -884,6 +1062,7 @@ export async function deleteStep(tx: WorkspaceTx, stepId: string): Promise<void>
   if (!cur) throw new CadenciaError('not_found', `El paso ${stepId} no existe o no es de este espacio.`);
   assertEditable(await lockSequence(tx, cur.sequence_id), true);
   await tx.query(`DELETE FROM outbound_step WHERE id = $1::uuid`, [stepId]);
+  await firstEmailOpensThread(tx, cur.sequence_id);
 }
 
 /**
@@ -929,7 +1108,7 @@ export async function reorderSteps(tx: WorkspaceTx, sequenceId: string, orderedI
 async function firstEmailOpensThread(tx: WorkspaceTx, sequenceId: string): Promise<void> {
   await tx.query(
     `UPDATE outbound_step SET step_type = 'email'
-      WHERE id = (SELECT id FROM outbound_step WHERE sequence_id = $1::uuid AND channel = 'email'
+      WHERE id = (SELECT id FROM outbound_step WHERE sequence_id = $1::uuid AND step_type IN ('email', 'email_reply')
                    ORDER BY day_offset, order_in_day LIMIT 1)
         AND step_type = 'email_reply'`,
     [sequenceId],
@@ -957,7 +1136,12 @@ export async function setSequenceStatus(tx: WorkspaceTx, id: string, status: Exc
   await tx.query(`UPDATE outbound_sequence SET status = $2 WHERE id = $1::uuid`, [id, status]);
 }
 
-/** Copia una secuencia, con sus pasos, en borrador y sin nadie dentro. Devuelve el id de la copia. */
+/**
+ * Copia una secuencia, con sus pasos, en borrador y sin nadie dentro.
+ * La propuesta se copia sin su persona ni su negocio: «Activar» en la
+ * copia no vuelve a escribir a quien ya está en la original (se enrola
+ * a quien toque desde un negocio). Devuelve el id de la copia.
+ */
 export async function duplicateSequence(tx: WorkspaceTx, id: string, copyName: (name: string) => string): Promise<string> {
   assertId('duplicateSequence', id);
   const src = (
@@ -966,7 +1150,7 @@ export async function duplicateSequence(tx: WorkspaceTx, id: string, copyName: (
   if (!src) throw new CadenciaError('not_found', `La secuencia ${id} no existe o no es de este espacio.`);
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO outbound_sequence (workspace_id, name, channel, status, automation_mode, timezone, template_id, signal_id, proposal, brief_id)
-     SELECT workspace_id, $2, channel, 'draft', automation_mode, timezone, template_id, signal_id, proposal, brief_id
+     SELECT workspace_id, $2, channel, 'draft', automation_mode, timezone, template_id, signal_id, proposal - 'contactId' - 'dealId', brief_id
        FROM outbound_sequence WHERE id = $1::uuid
      RETURNING id`,
     [id, cleanName(copyName(src.name))],

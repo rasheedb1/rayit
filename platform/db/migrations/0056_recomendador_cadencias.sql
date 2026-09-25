@@ -30,8 +30,12 @@
 -- para tres nichos con reglas propias (cocina, belleza, fitness). Dos
 -- de ellas caben en la política por defecto (cuatro mensajes, tres días
 -- entre ellos, 0007): la de la colaboración de un competidor y la de la
--- señal manual. Las demás mandan cinco o seis toques; la pantalla avisa
--- antes de activar qué pasos no saldrán con la política del espacio
+-- señal manual. Las demás mandan cinco o seis toques: son la cadencia
+-- ideal, y el recomendador la ajusta a la política de cada espacio al
+-- proponerla (fitToPolicy de @mc/core: los mensajes del medio pasan a
+-- gesto público y los días se estiran), así que la propuesta nace
+-- cumpliendo el tope y la separación. Copiada tal cual («Empezar desde
+-- una plantilla»), la pantalla avisa qué pasos no saldrán
 -- (checkSequenceAgainstPolicy, §8 pregunta 8).
 --
 -- La guía de cada paso es contenido para el generador (VEN-12) y para
@@ -277,7 +281,9 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
 -- secuencia con él. Aquí falla la migración: cada paso de cada
 -- plantilla tiene un tipo que outbound_step acepta, el canal que ese
 -- tipo exige, un ángulo del catálogo global, una hora HH:MM y guía; y
--- dentro de una plantilla no hay dos pasos en el mismo día y orden.
+-- dentro de una plantilla no hay dos pasos en el mismo día y orden. Un
+-- campo que falta da NULL en la comparación: el coalesce lo cuenta como
+-- malo en lugar de dejarlo pasar.
 DO $$
 DECLARE
   malo record;
@@ -285,7 +291,7 @@ BEGIN
   SELECT tpl.slug, p.paso INTO malo
     FROM outbound_sequence_template tpl
    CROSS JOIN LATERAL jsonb_array_elements(tpl.steps) AS p(paso)
-   WHERE NOT (
+   WHERE NOT coalesce((
          p.paso->>'step_type' IN ('email','email_reply','linkedin_connect','linkedin_message','linkedin_comment',
                                   'linkedin_like','instagram_dm','instagram_comment','instagram_like',
                                   'whatsapp_message','manual_task')
@@ -300,7 +306,7 @@ BEGIN
      AND p.paso->>'scheduled_time' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
      AND length(coalesce(p.paso->>'guidance_es', '')) BETWEEN 20 AND 400
      AND coalesce(p.paso->>'requires_asset', 'media_kit') IN ('media_kit', 'quote')
-   )
+   ), false)
    LIMIT 1;
   IF FOUND THEN
     RAISE EXCEPTION 'La plantilla % tiene un paso que outbound_step no aceptaría: %', malo.slug, malo.paso;
