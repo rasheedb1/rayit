@@ -19,10 +19,13 @@ export function DejarDeRecibir({
   direccion,
   quien,
   idioma,
+  soporte,
 }: {
   token: string;
   direccion: string;
   quien: string | null;
+  /** SUPPORT_EMAIL, para deshacer una baja por error; null si no está configurado. */
+  soporte: string | null;
   /** El de la página: el del espacio que envió el correo (r5). */
   idioma: BajaIdioma;
 }) {
@@ -40,7 +43,7 @@ export function DejarDeRecibir({
       resultado.status === "ok"
         ? resultado.alreadyOptedOut
           ? t.yaEstaba
-          : { title: t.listo.title(quien), body: t.listo.body }
+          : { title: t.listo.title(quien), body: t.listo.body(soporte) }
         : resultado.status === "sender"
           ? t.remitente
           : t.noExiste;

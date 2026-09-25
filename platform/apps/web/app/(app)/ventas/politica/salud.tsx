@@ -1,5 +1,7 @@
 import { channelAccountLabel } from "@mc/core/outreach/deliverability";
-import type { AlertSignalCounts, DownChannelAccount, RecentBounce, SendReadiness } from "@mc/db/queries/entregabilidad";
+import type {
+  AlertSignalCounts, DownChannelAccount, OutreachAlertNotice, RecentBounce, SendReadiness,
+} from "@mc/db/queries/entregabilidad";
 import type { OutboundHealth } from "@mc/db/schema";
 import { DataTable, CellMain } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -9,6 +11,12 @@ import type { Formatter } from "@/lib/format";
 import { MESSAGES } from "./messages";
 
 const TONO: Record<RecentBounce["kind"], "bad" | "warn" | "neutral"> = { hard: "bad", blocked: "warn", soft: "neutral" };
+const TONO_AVISO: Record<OutreachAlertNotice["severity"], "bad" | "warn" | "neutral"> = {
+  critical: "bad",
+  warning: "warn",
+  info: "neutral",
+  success: "neutral",
+};
 
 /**
  * «Salud de hoy»: adonde llevan las alertas diarias del outreach
@@ -26,8 +34,14 @@ const TONO: Record<RecentBounce["kind"], "bad" | "warn" | "neutral"> = { hard: "
  * (@mc/core) queda solo como interruptor del job. La fecha de cada rebote
  * va corta —la hora si es de hoy, el día y el mes si no— para que la
  * tabla quepa a 400 px.
+ *
+ * Arriba de todo, los avisos del día (listTodayOutreachAlerts): las
+ * notification que deja outbound.alerts. La web no tiene campana, así que
+ * este es el sitio donde un aviso se ve aunque el correo no esté
+ * configurado o falle.
  */
 export function Salud({
+  avisos,
   health,
   counts,
   rebotes,
@@ -35,7 +49,10 @@ export function Salud({
   f,
   ahora,
   lectura,
+  soporte = null,
 }: {
+  /** Los avisos del outreach de las últimas 24 horas, los urgentes primero. */
+  avisos: OutreachAlertNotice[];
   health: OutboundHealth;
   counts: AlertSignalCounts;
   rebotes: RecentBounce[];
@@ -46,6 +63,8 @@ export function Salud({
   ahora: string;
   /** Si se leen los rebotes de los Gmail conectados (readSendReadiness), y la última lectura. */
   lectura: { estado: SendReadiness["bouncesReading"]; desde: string | null };
+  /** SUPPORT_EMAIL: a quién escribir para reconectar una cuenta caída mientras no está la pantalla de canales. */
+  soporte?: string | null;
 }) {
   const t = MESSAGES.salud;
   // «LinkedIn: Laura», sin repetir el canal si el nombre ya lo dice.
@@ -60,7 +79,36 @@ export function Salud({
       </h2>
       <p className="mt-1 max-w-2xl text-xs text-muted">{t.description}</p>
 
-      <KpiRow className="mt-4">
+      <section aria-labelledby="avisos-titulo" className="mt-4">
+        <h3 id="avisos-titulo" className="text-sm font-medium">
+          {t.avisos.title}
+        </h3>
+        {avisos.length === 0 ? (
+          <EmptyState className="mt-2" title={t.avisos.vacio.title} description={t.avisos.vacio.description} />
+        ) : (
+          <ul className="mt-2 divide-y divide-line rounded-md border border-line">
+            {avisos.map((a) => (
+              <li key={a.id} className="min-w-0 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Pill kind={TONO_AVISO[a.severity]}>{t.avisos.severidad[a.severity]}</Pill>
+                  <span className="min-w-0 break-words text-sm font-medium">{a.title}</span>
+                  <time dateTime={a.createdAt} title={f.dateTime(a.createdAt)} className="text-xs tabular-nums text-muted">
+                    {cuando(a.createdAt)}
+                  </time>
+                </div>
+                {a.body && <p className="mt-1 break-words text-xs text-ink-2">{a.body}</p>}
+                {a.actionUrl && (
+                  <a href={a.actionUrl} className="mt-1 inline-block text-xs text-ink underline underline-offset-4 hover:text-ink-2">
+                    {t.avisos.ver}
+                  </a>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <KpiRow className="mt-6">
         <Kpi label={t.enviados.label} value={f.int(counts.emailsSent)} note={t.enviados.note} />
         <Kpi
           label={t.rebotes.label}
@@ -104,6 +152,7 @@ export function Salud({
                 </li>
               ))}
             </ul>
+            <p className="mt-3 text-xs text-ink-2">{t.caidas.donde(soporte)}</p>
           </section>
         )}
       </div>

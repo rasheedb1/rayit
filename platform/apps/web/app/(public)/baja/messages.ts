@@ -36,7 +36,14 @@ export interface BajaTexts {
   listo: {
     /** Con el nombre de quien escribía, si la página lo sabe (r4). */
     title: (quien: string | null) => string;
-    body: string;
+    /**
+     * Qué pasó y, si hay un correo de soporte (SUPPORT_EMAIL), cómo se
+     * deshace. La baja no la deshace quien escribía: solo un operador,
+     * a pedido de la persona desde esa dirección (outbound_optout_event).
+     * Así que no se promete «responde y quien te escribió lo verá». Sin
+     * correo de soporte no se inventa una salida: solo lo que pasó.
+     */
+    body: (soporte: string | null) => string;
   };
   yaEstaba: { title: string; body: string };
   noExiste: { title: string; body: string };
@@ -65,7 +72,10 @@ export const MESSAGES_ES: BajaTexts = {
   },
   listo: {
     title: (quien) => (quien ? `Listo. ${quien} no te escribirá más.` : "Listo. No te escribirá más."),
-    body: "Tu dirección quedó fuera de sus envíos. Si fue un error, responde al último correo y quien te escribió lo verá.",
+    body: (soporte) =>
+      soporte
+        ? `Tu dirección quedó fuera de sus envíos. Si fue un error, escríbenos a ${soporte} desde esta dirección y lo revisamos.`
+        : "Tu dirección quedó fuera de sus envíos.",
   },
   yaEstaba: {
     title: "Ya estabas fuera de sus envíos",
@@ -104,7 +114,10 @@ export const MESSAGES_EN: BajaTexts = {
   },
   listo: {
     title: (quien) => (quien ? `Done. ${quien} won't write to you again.` : "Done. You won't hear from them again."),
-    body: "Your address is off their list. If this was a mistake, reply to the last email and the sender will see it.",
+    body: (soporte) =>
+      soporte
+        ? `Your address is off their list. If this was a mistake, email us at ${soporte} from this address and we'll look into it.`
+        : "Your address is off their list.",
   },
   yaEstaba: {
     title: "You were already off their list",

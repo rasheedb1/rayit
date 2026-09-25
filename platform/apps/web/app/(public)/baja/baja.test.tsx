@@ -172,8 +172,19 @@ describe("los textos (r4)", () => {
 
   it("la promesa no se contradice (r5): ni «a este correo» junto a «por ningún canal», ni la plataforma por dentro", () => {
     expect(t.pregunta.alcance("Laura")).toBe("Un clic y Laura no te vuelve a escribir, ni por correo ni por otro canal.");
-    expect(t.listo.body).not.toMatch(/otro creador|On Cue/);
-    expect(en.listo.body).not.toMatch(/creator|On Cue/);
+    expect(t.listo.body(null)).not.toMatch(/otro creador|On Cue/);
+    expect(en.listo.body(null)).not.toMatch(/creator|On Cue/);
+  });
+
+  it("el listo no promete que quien escribía puede deshacer la baja: con SUPPORT_EMAIL, a quién escribir; sin él, nada inventado", () => {
+    expect(t.listo.body("ayuda@oncue.test")).toBe(
+      "Tu dirección quedó fuera de sus envíos. Si fue un error, escríbenos a ayuda@oncue.test desde esta dirección y lo revisamos.",
+    );
+    expect(en.listo.body("ayuda@oncue.test")).toMatch(/email us at ayuda@oncue\.test from this address/);
+    for (const texto of [t.listo.body(null), t.listo.body("ayuda@oncue.test"), en.listo.body("ayuda@oncue.test")]) {
+      expect(texto).not.toMatch(/responde al último correo|reply to the last email|lo verá|will see it/);
+    }
+    expect(t.listo.body(null)).toBe("Tu dirección quedó fuera de sus envíos.");
   });
 });
 

@@ -507,6 +507,72 @@ export async function listRecentBounces(tx: WorkspaceTx, limit = 10): Promise<Re
 }
 
 // ---------------------------------------------------------------------
+// Los avisos del día (las notification que deja outbound.alerts)
+// ---------------------------------------------------------------------
+
+/**
+ * Un aviso del outreach, como lo dejó el job outbound.alerts: la frase ya
+ * viene en el idioma del espacio (title_es/body_es guardan el texto
+ * resuelto, ver apps/worker/src/jobs/ventas/messages.ts).
+ */
+export interface OutreachAlertNotice {
+  id: string;
+  /** El tipo sin el prefijo: 'bounce_rate', 'account_down'… */
+  kind: string;
+  severity: 'critical' | 'warning' | 'info' | 'success';
+  title: string;
+  body: string | null;
+  actionUrl: string | null;
+  createdAt: string;
+}
+
+/**
+ * Los avisos del outreach de las últimas `hours` horas del workspace de
+ * la transacción, los urgentes primero y dentro de cada gravedad los más
+ * nuevos. La web no tiene campana todavía: «Salud de hoy» los enseña, y
+ * así un aviso llega aunque el correo (SMTP_URL) no esté configurado.
+ */
+export async function listTodayOutreachAlerts(tx: WorkspaceTx, hours = HEALTH_WINDOW_H): Promise<OutreachAlertNotice[]> {
+  const h = Math.max(1, Math.min(24 * 7, Math.trunc(hours)));
+  const { rows } = await tx.query<{
+    id: string; kind: string; severity: OutreachAlertNotice['severity']; title_es: string; body_es: string | null;
+    action_url: string | null; created_at: Date | string;
+  }>(
+    `SELECT id, kind, severity, title_es, body_es, action_url, created_at
+       FROM notification
+      WHERE workspace_id = current_workspace_id()
+        AND kind LIKE 'outreach\\_%'
+        AND dismissed_at IS NULL
+        AND created_at >= now() - make_interval(hours => $1::int)
+      ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, created_at DESC, id`,
+    [h],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    kind: r.kind.replace(/^outreach_/, ''),
+    severity: r.severity,
+    title: r.title_es,
+    body: r.body_es,
+    actionUrl: r.action_url,
+    createdAt: iso(r.created_at) as string,
+  }));
+}
+
+/** Cuántos avisos URGENTES del outreach hay en las últimas `hours` horas: el indicador junto a «Política de envío» en /ventas. */
+export async function countUrgentOutreachAlerts(tx: WorkspaceTx, hours = HEALTH_WINDOW_H): Promise<number> {
+  const h = Math.max(1, Math.min(24 * 7, Math.trunc(hours)));
+  const { rows } = await tx.query<{ n: number | string }>(
+    `SELECT count(*)::int AS n
+       FROM notification
+      WHERE workspace_id = current_workspace_id()
+        AND kind LIKE 'outreach\\_%' AND severity = 'critical' AND dismissed_at IS NULL
+        AND created_at >= now() - make_interval(hours => $1::int)`,
+    [h],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+// ---------------------------------------------------------------------
 // Lo que hace falta saber antes de encender, y las cuentas caídas
 // ---------------------------------------------------------------------
 

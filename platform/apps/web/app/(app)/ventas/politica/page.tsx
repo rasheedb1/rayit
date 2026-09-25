@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import {
-  getOutboundPolicy, HEALTH_WINDOW_H, listRecentBounces, POLICY_LIMITS, POSTAL_ADDRESS_MAX, readAlertSignalCounts,
-  readSendReadiness,
+  getOutboundPolicy, HEALTH_WINDOW_H, listRecentBounces, listTodayOutreachAlerts, POLICY_LIMITS, POSTAL_ADDRESS_MAX,
+  readAlertSignalCounts, readSendReadiness,
 } from "@mc/db/queries/entregabilidad";
 import { outboundHealth } from "@mc/db/queries/outreach";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { formatterFor } from "@/lib/format";
+import { correoDeSoporte } from "@/lib/soporte";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
 import { PoliticaForm, type PoliticaFormProps } from "./form";
@@ -33,12 +34,13 @@ const REBOTES_VISIBLES = 8;
 export default async function PoliticaPage() {
   // Un solo «ahora» para las cifras de 24 horas y para saber qué rebote es de hoy.
   const ahora = new Date();
-  const { policy, health, counts, rebotes, listo } = await withWorkspace(async (tx) => ({
+  const { policy, health, counts, rebotes, listo, avisos } = await withWorkspace(async (tx) => ({
     policy: await getOutboundPolicy(tx),
     health: await outboundHealth(tx, HEALTH_WINDOW_H),
     counts: await readAlertSignalCounts(tx, tx.workspaceId, ahora),
     rebotes: await listRecentBounces(tx, REBOTES_VISIBLES),
     listo: await readSendReadiness(tx),
+    avisos: await listTodayOutreachAlerts(tx),
   }));
   const puedeCambiar = await puedeCambiarLaPolitica();
   const workspace = await getCurrentWorkspace();
@@ -85,6 +87,7 @@ export default async function PoliticaPage() {
       />
 
       <Salud
+        avisos={avisos}
         health={health}
         counts={counts}
         rebotes={rebotes}
@@ -92,6 +95,7 @@ export default async function PoliticaPage() {
         f={f}
         ahora={ahora.toISOString()}
         lectura={{ estado: listo.bouncesReading, desde: listo.bouncesReadAt }}
+        soporte={correoDeSoporte()}
       />
 
       <PoliticaForm

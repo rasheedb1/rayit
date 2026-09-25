@@ -216,7 +216,7 @@ test('con dos dueños: si el correo falla nadie lo recibe dos veces, y sale al d
   assert.ok(dos.every((a) => a.emailed_at !== null));
 });
 
-test('un workspace en inglés recibe la campana y el correo en inglés', async () => {
+test('un workspace en inglés recibe los avisos y el correo en inglés', async () => {
   await db.raw.exec(`
     INSERT INTO workspace (id, slug, name, timezone, locale) VALUES ('${WS_EN}', 'alerts-en', 'Creator EN', 'America/New_York', 'en-US');
     INSERT INTO app_user (id, email, name) VALUES ('${USER_OWNER_EN}', 'owner@alerts.test', 'Owner');

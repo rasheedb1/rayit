@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { Marca } from "@/components/marca";
 import { Button } from "@/components/ui/button";
 import { estadoDelEnlaceDeBaja, type EstadoEnlace } from "@/lib/db/baja";
+import { correoDeSoporte } from "@/lib/soporte";
 import { bajaIdioma, bajaTexts, type BajaIdioma } from "../messages";
 import { Aviso } from "./aviso";
 import { DejarDeRecibir } from "./boton";
@@ -53,7 +54,13 @@ export default async function BajaPage({ params }: { params: Promise<{ token: st
         (estado.alreadyOptedOut ? (
           <Aviso title={t.yaEstaba.title} body={t.yaEstaba.body} />
         ) : (
-          <DejarDeRecibir token={token} direccion={estado.maskedAddress} quien={estado.senderName} idioma={idioma} />
+          <DejarDeRecibir
+            token={token}
+            direccion={estado.maskedAddress}
+            quien={estado.senderName}
+            idioma={idioma}
+            soporte={correoDeSoporte()}
+          />
         ))}
       {estado.status === "not_found" && <Aviso title={t.noExiste.title} body={t.noExiste.body} />}
       {estado.status === "sender" && (

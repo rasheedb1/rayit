@@ -150,14 +150,33 @@ export const MESSAGES = {
 
   salud: {
     title: "Salud de hoy",
-    description: "Las últimas 24 horas del envío. Si algo se sale de lo normal, también te avisamos por correo.",
+    description: "Las últimas 24 horas del envío. Si algo se sale de lo normal, lo verás aquí arriba y te avisamos por correo.",
+    /**
+     * Los avisos del día (las notification de outbound.alerts): hasta que
+     * la web tenga una campana, este es el sitio donde se ven, también sin
+     * correo configurado. La frase de cada uno ya viene en el idioma del
+     * espacio desde el worker.
+     */
+    avisos: {
+      title: "Avisos de hoy",
+      severidad: { critical: "Urgente", warning: "Revisar", info: "Aviso", success: "Aviso" } as Record<
+        "critical" | "warning" | "info" | "success",
+        string
+      >,
+      /** El enlace de un aviso que lleva a otro lugar de la pantalla. */
+      ver: "Ver",
+      vacio: {
+        title: "Nada que revisar hoy",
+        description: "Cuando algo se salga de lo normal (rebotes, una cuenta caída, la cola parada) aparecerá aquí.",
+      },
+    },
     enviados: { label: "Correos enviados", note: "En las últimas 24 horas" },
     rebotes: {
       label: "Rebotes",
       /** «1 de 40 no existe», «2 de 40 no existen»; `n` es `duros` sin formatear. */
       note: (duros: string, enviados: string, n: number) =>
         plural(n, `${duros} de ${enviados} no existe`, `${duros} de ${enviados} no existen`),
-      sinEnvios: "Sin envíos todavía",
+      sinEnvios: "Sin envíos en las últimas 24 horas",
     },
     cola: {
       label: "Por salir",
@@ -187,9 +206,18 @@ export const MESSAGES = {
        * esta lista enlazan allí (CANALES_URL del worker).
        */
       paso: {
-        email: "Para volver a enviar, vuelve a conectar este Gmail y acepta los permisos de envío.",
-        otro: "Para volver a enviar, vuelve a conectar esta cuenta con tu sesión del proveedor.",
+        email: "Para volver a enviar hay que conectar otra vez este Gmail y aceptar los permisos de envío.",
+        otro: "Para volver a enviar hay que conectar otra vez esta cuenta con tu sesión del proveedor.",
       },
+      /**
+       * Dónde se hace, mientras la pantalla de canales no esté: sin esto el
+       * paso no tiene sitio donde darse. Con SUPPORT_EMAIL, a quién
+       * escribir; sin él, solo cuándo llega.
+       */
+      donde: (soporte: string | null) =>
+        soporte
+          ? `La reconexión llega con Ventas → Canales. Mientras tanto, escríbenos a ${soporte} y la hacemos contigo.`
+          : "La reconexión llega con Ventas → Canales; hasta entonces, lo de esta cuenta espera en la cola.",
     },
     canal: { email: "Gmail", linkedin: "LinkedIn", instagram_dm: "Instagram", whatsapp: "WhatsApp" } as Record<
       "email" | "linkedin" | "instagram_dm" | "whatsapp",

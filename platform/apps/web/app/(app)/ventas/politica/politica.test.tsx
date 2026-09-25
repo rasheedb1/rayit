@@ -299,7 +299,7 @@ describe("«Salud de hoy»: la cuenta caída", () => {
 
   it("la nota dice CUÁL es, y la lista de #cuentas dice qué pasó y qué hacer (adonde lleva la alerta)", () => {
     const { container } = render(
-      <Salud lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[caida]} f={formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" })} ahora={AHORA} />,
+      <Salud avisos={[]} lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[caida]} f={formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" })} ahora={AHORA} />,
     );
     expect(screen.getAllByText("LinkedIn: Laura · Cocina fácil").length).toBeGreaterThan(0);
     const cuentas = container.querySelector("#cuentas");
@@ -309,11 +309,21 @@ describe("«Salud de hoy»: la cuenta caída", () => {
     expect(within(cuentas as HTMLElement).getByText(t.salud.caidas.paso.otro)).toBeInTheDocument();
     // Ningún enlace a una pantalla que no resuelve nada.
     expect(within(cuentas as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
+    // Y dónde se hace mientras no está la pantalla de canales: sin SUPPORT_EMAIL, solo cuándo llega.
+    expect(within(cuentas as HTMLElement).getByText(t.salud.caidas.donde(null))).toBeInTheDocument();
+  });
+
+  it("con SUPPORT_EMAIL, la cuenta caída dice a quién escribir para reconectarla", () => {
+    const { container } = render(
+      <Salud avisos={[]} lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[caida]} f={formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" })} ahora={AHORA} soporte="ayuda@oncue.test" />,
+    );
+    const cuentas = container.querySelector("#cuentas") as HTMLElement;
+    expect(within(cuentas).getByText(/escríbenos a ayuda@oncue\.test y la hacemos contigo/)).toBeInTheDocument();
   });
 
   it("sin cuentas caídas, «Todas conectadas» y nada más", () => {
     const { container } = render(
-      <Salud lectura={LEIDA}
+      <Salud avisos={[]} lectura={LEIDA}
         health={{ ...health, accountsDown: 0 }}
         counts={counts}
         rebotes={[]}
@@ -373,20 +383,56 @@ describe("ronda 4", () => {
     expect(t.salud.cola.note("2", 2)).toBe("2 atascados");
     expect(t.salud.rebotes.note("1", "40", 1)).toBe("1 de 40 no existe");
     expect(t.salud.rebotes.note("2", "40", 2)).toBe("2 de 40 no existen");
-    render(<Salud lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />);
+    render(<Salud avisos={[]} lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />);
     expect(screen.getByText("1 atascado")).toBeInTheDocument();
     expect(screen.getByText("1 de 40 no existe")).toBeInTheDocument();
   });
 
+  it("los avisos del día se ven arriba de «Salud de hoy», urgentes en rojo, con su enlace; sin avisos, «Nada que revisar hoy»", () => {
+    const avisos = [
+      {
+        id: "n1", kind: "account_down", severity: "critical" as const, title: "Una cuenta de envío necesita atención",
+        body: "No sale nada por Gmail: laura@gmail.com hasta que se reconecte.", actionUrl: "/ventas/politica#cuentas",
+        createdAt: "2026-09-23T13:30:00Z",
+      },
+      {
+        id: "n2", kind: "queue_stuck", severity: "warning" as const, title: "Hay un mensaje atascado en la cola", body: null,
+        actionUrl: null, createdAt: "2026-09-23T12:00:00Z",
+      },
+    ];
+    const { unmount } = render(
+      <Salud avisos={avisos} lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />,
+    );
+    const lista = screen.getByRole("heading", { name: t.salud.avisos.title }).parentElement!;
+    const items = within(lista).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent(t.salud.avisos.severidad.critical);
+    expect(items[0]).toHaveTextContent("Una cuenta de envío necesita atención");
+    expect(within(items[0]!).getByRole("link", { name: t.salud.avisos.ver })).toHaveAttribute("href", "/ventas/politica#cuentas");
+    expect(items[1]).toHaveTextContent(t.salud.avisos.severidad.warning);
+    expect(within(items[1]!).queryByRole("link")).toBeNull();
+    unmount();
+
+    render(<Salud avisos={[]} lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />);
+    expect(screen.getByText(t.salud.avisos.vacio.title)).toBeInTheDocument();
+  });
+
+  it("sin correos en la ventana, la nota de rebotes dice «en las últimas 24 horas», no «todavía»", () => {
+    const sinEnvios = { emailsSent: 0, hardBounces: 0, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: null };
+    render(<Salud avisos={[]} lectura={LEIDA} health={health} counts={sinEnvios} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />);
+    expect(screen.getByText("Sin envíos en las últimas 24 horas")).toBeInTheDocument();
+    expect(screen.queryByText(/todavía/)).toBeNull();
+  });
+
   it("si un Gmail no se leyó nunca, «Salud de hoy» lo dice encima de la tabla de rebotes", () => {
-    render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lectura={{ estado: "never", desde: null }} />);
+    render(<Salud avisos={[]} health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lectura={{ estado: "never", desde: null }} />);
     expect(screen.getByRole("note")).toHaveTextContent(t.salud.lectura.never.title);
     expect(screen.getByRole("note")).toHaveTextContent(t.salud.lectura.never.description);
   });
 
   it("si la lectura se paró (cursor viejo), lo dice con la hora de la última lectura (r5)", () => {
     const desde = "2026-09-23T11:00:00Z";
-    render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lectura={{ estado: "stale", desde }} />);
+    render(<Salud avisos={[]} health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lectura={{ estado: "stale", desde }} />);
     const nota = screen.getByRole("note");
     expect(nota).toHaveTextContent(t.salud.lectura.stale.title);
     expect(nota).toHaveTextContent(t.salud.lectura.stale.description(f.dateTime(desde)));
@@ -395,10 +441,10 @@ describe("ronda 4", () => {
   });
 
   it("leída hace poco, o sin ningún Gmail que leer, no hay aviso", () => {
-    const { unmount } = render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lectura={LEIDA} />);
+    const { unmount } = render(<Salud avisos={[]} health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lectura={LEIDA} />);
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
     unmount();
-    render(<Salud health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lectura={{ estado: "no_email", desde: null }} />);
+    render(<Salud avisos={[]} health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} lectura={{ estado: "no_email", desde: null }} />);
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
 
@@ -407,7 +453,7 @@ describe("ronda 4", () => {
       id: "c2", channel: "linkedin" as const, name: "Laura (LinkedIn)", status: "error" as const,
       lastError: null, lastErrorAt: null,
     };
-    render(<Salud lectura={LEIDA} health={{ ...health, accountsDown: 1 }} counts={counts} rebotes={[]} caidas={[caida]} f={f} ahora={AHORA} />);
+    render(<Salud avisos={[]} lectura={LEIDA} health={{ ...health, accountsDown: 1 }} counts={counts} rebotes={[]} caidas={[caida]} f={f} ahora={AHORA} />);
     expect(screen.getAllByText("Laura (LinkedIn)").length).toBeGreaterThan(0);
     expect(screen.queryByText(/LinkedIn: Laura/)).not.toBeInTheDocument();
   });
@@ -417,7 +463,7 @@ describe("ronda 4", () => {
       { id: "b1", recipientAddress: "hoy@marca.test", kind: "hard" as const, reason: "550 5.1.1", detectedAt: "2026-09-23T13:55:00Z" },
       { id: "b2", recipientAddress: "antes@marca.test", kind: "soft" as const, reason: "452 4.2.2", detectedAt: "2026-09-21T16:55:00Z" },
     ];
-    render(<Salud lectura={LEIDA} health={health} counts={counts} rebotes={rebotes} caidas={[]} f={f} ahora={AHORA} />);
+    render(<Salud avisos={[]} lectura={LEIDA} health={health} counts={counts} rebotes={rebotes} caidas={[]} f={f} ahora={AHORA} />);
     const tabla = screen.getByRole("table", { name: t.salud.rebotesCaption });
     expect(within(tabla).getByText(f.time("2026-09-23T13:55:00Z"))).toBeInTheDocument();
     expect(within(tabla).getByText("21 sep")).toBeInTheDocument();

@@ -26,8 +26,8 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createOptoutToken, optoutTokenHash } from '@mc/core/outreach/deliverability';
 import {
-  checkOptoutLink, getOutboundPolicy, isPolicyForbidden, optoutFromLink, PolicyForbiddenError, PolicyNeedsAddressError,
-  publicOptoutPreview, readAlertSignalCounts, readSendReadiness, saveOutboundPolicy,
+  checkOptoutLink, countUrgentOutreachAlerts, getOutboundPolicy, isPolicyForbidden, listTodayOutreachAlerts, optoutFromLink,
+  PolicyForbiddenError, PolicyNeedsAddressError, publicOptoutPreview, readAlertSignalCounts, readSendReadiness, saveOutboundPolicy,
   type OptoutGates,
 } from '../src/queries/entregabilidad.ts';
 import { disableOutreach, enableOutreach } from '../src/queries/outreach.ts';
@@ -790,6 +790,31 @@ describe('las cifras de las alertas (readAlertSignalCounts)', () => {
   test('sin envíos no hay tasa', async () => {
     const c = await t.db.asWorker((tx) => readAlertSignalCounts(tx, WS_A, new Date('2026-09-01T00:00:00Z')));
     assert.equal(c.hardBounceRate, null);
+  });
+});
+
+describe('los avisos del día en la web (listTodayOutreachAlerts)', () => {
+  test('los del outreach de las últimas 24 horas, urgentes primero; ni los viejos, ni los de otro módulo, ni los de otro espacio', async () => {
+    await t.admin(`
+      INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, action_url, created_at) VALUES
+        ('${WS_S}', 'outreach_queue_stuck', 'warning', 'Hay mensajes atascados en la cola', '2 mensajes llevan…',
+         '/ventas/politica#salud', now() - interval '1 hour'),
+        ('${WS_S}', 'outreach_account_down', 'critical', 'Una cuenta de envío necesita atención', 'No sale nada por Gmail…',
+         '/ventas/politica#cuentas', now() - interval '3 hours'),
+        ('${WS_S}', 'outreach_bounce_rate', 'critical', 'Rebotan demasiados correos: 15 %', NULL,
+         '/ventas/politica#salud', now() - interval '30 hours'),
+        ('${WS_S}', 'deal_due', 'warning', 'Un negocio vence hoy', NULL, '/ventas', now()),
+        ('${WS_O}', 'outreach_account_down', 'critical', 'De otro espacio', NULL, NULL, now());
+    `);
+    const avisos = await t.db.withWorkspace(WS_S, (tx) => listTodayOutreachAlerts(tx));
+    assert.deepEqual(
+      avisos.map((a) => [a.kind, a.severity, a.title, a.actionUrl]),
+      [
+        ['account_down', 'critical', 'Una cuenta de envío necesita atención', '/ventas/politica#cuentas'],
+        ['queue_stuck', 'warning', 'Hay mensajes atascados en la cola', '/ventas/politica#salud'],
+      ],
+    );
+    assert.equal(await t.db.withWorkspace(WS_S, (tx) => countUrgentOutreachAlerts(tx)), 1);
   });
 });
 

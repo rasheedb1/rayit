@@ -26,6 +26,13 @@ export const MESSAGES = {
     metaTitle: "Ventas",
     /** El enlace a /ventas/politica (VEN-15). */
     politica: "Política de envío",
+    /**
+     * Junto al enlace, si hoy hay avisos urgentes del outreach (una cuenta
+     * caída, los rebotes disparados): «1 urgente», «2 urgentes». `n` ya
+     * formateado; `cuantos` es la cifra cruda para el plural.
+     */
+    politicaUrgentes: (n: string, cuantos: number) =>
+      new Intl.PluralRules("es").select(cuantos) === "one" ? `${n} urgente` : `${n} urgentes`,
   },
 
   tabs: {

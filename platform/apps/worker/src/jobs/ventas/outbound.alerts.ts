@@ -33,9 +33,9 @@
  *   · lo URGENTE (URGENT_ALERT_KINDS: una cuenta caída, los rebotes
  *     disparados) sale por correo en esa misma corrida, en un correo
  *     corto aparte: una cuenta de Gmail que cae a las 15:00 no puede
- *     esperar a mañana, y la web todavía no tiene una campana donde
- *     verlo (las notification del outreach solo se leen en el correo y
- *     en /ventas/politica). Como hay una notification por tipo y día,
+ *     esperar a mañana, y la web todavía no tiene una campana (las
+ *     notification del outreach se leen en el correo y arriba de «Salud
+ *     de hoy», listTodayOutreachAlerts). Como hay una notification por tipo y día,
  *     son como mucho dos correos urgentes al día;
  *   · lo demás va en el resumen del día siguiente.
  * Uno por workspace y no uno por dueño: si el envío falla no sale a nadie

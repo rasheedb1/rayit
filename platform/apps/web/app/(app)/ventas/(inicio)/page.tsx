@@ -9,9 +9,11 @@ import {
   type PipelineSeguimiento,
 } from "@mc/db/queries/ventas";
 import { getLocalDates, nextActionOf } from "@mc/db/queries/ventas-ficha";
+import { countUrgentOutreachAlerts } from "@mc/db/queries/entregabilidad";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
+import { Pill } from "@/components/ui/pill";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 // El (i) de las cifras es de Resumen (lo envuelve sin tocar el Kpi del
@@ -49,7 +51,7 @@ export default async function VentasPage({
 
   // Una sola transacción para toda la pantalla: los KPI y la vista
   // activa se leen con el mismo workspace fijado y el mismo instante.
-  const { kpis, signals, deals, stages, owners, dates } = await withWorkspace(async (tx) => ({
+  const { kpis, signals, deals, stages, owners, dates, urgentes } = await withWorkspace(async (tx) => ({
     kpis: await getSalesKpis(tx),
     signals: vista === "radar" ? await listSignals(tx, { status: "pending" }) : [],
     deals: vista === "pipeline" ? await listPipeline(tx, { seguimiento: filtro }) : [],
@@ -58,6 +60,9 @@ export default async function VentasPage({
     // (VEN-4), sale de listPipeline: aquí solo las personas y el reloj.
     owners: vista === "pipeline" ? await listOwnerOptions(tx) : [],
     dates: vista === "pipeline" ? await getLocalDates(tx) : null,
+    // Los avisos urgentes del outreach de hoy (VEN-15): la web no tiene
+    // campana, así que se señalan junto al enlace a la política.
+    urgentes: await countUrgentOutreachAlerts(tx),
   }));
 
   const workspace = await getCurrentWorkspace();
@@ -81,8 +86,9 @@ export default async function VentasPage({
         title={t.header.title}
         description={t.header.description}
         aside={
-          <Button variant="ghost" href="/ventas/politica">
+          <Button variant="ghost" href={urgentes > 0 ? "/ventas/politica#salud" : "/ventas/politica"}>
             {t.header.politica}
+            {urgentes > 0 && <Pill kind="bad">{t.header.politicaUrgentes(f.int(urgentes), urgentes)}</Pill>}
           </Button>
         }
       />
