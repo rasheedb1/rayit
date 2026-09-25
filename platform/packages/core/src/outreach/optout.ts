@@ -299,8 +299,20 @@ const escapeRe = (p: string) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const REDIRECT = new RegExp(`(^|\\s)(${REDIRECT_PHRASES.map(escapeRe).join('|')})(?=[\\s.]|$)`);
 const EMAIL_ADDRESS = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(\.[\p{L}\p{N}-]+)+/u;
 
-/** ¿Lo que escribió la persona (sin cita ni firma) pide otro camino? Una dirección de correo o una frase de REDIRECT_PHRASES. */
-export function asksForAnotherChannel(own: string): boolean {
+/**
+ * ¿Lo que escribió la persona (sin cita ni firma) pide otro camino? Una
+ * dirección de correo o una frase de REDIRECT_PHRASES. Corta además en la
+ * línea que termina en «wrote:»/«escribió:»: cuando el cliente parte la
+ * cabecera de la cita en dos líneas, stripQuoted no la reconoce, y la
+ * dirección de quien citamos no es un camino que pida la persona.
+ */
+export function asksForAnotherChannel(ownText: string): boolean {
+  const lines: string[] = [];
+  for (const line of ownText.split(/\r?\n/)) {
+    if (/(escribio|wrote|escreveu|a ecrit|schrieb)\s*:\s*$/.test(normalizeForOptOut(line.trim()))) break;
+    lines.push(line);
+  }
+  const own = lines.join('\n');
   if (EMAIL_ADDRESS.test(own)) return true;
   const flat = normalizeForOptOut(own).replace(/[^\p{L}\p{N}@.\s-]/gu, ' ').replace(/\s+/g, ' ').trim();
   return REDIRECT.test(flat);
