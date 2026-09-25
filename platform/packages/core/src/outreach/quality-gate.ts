@@ -46,7 +46,7 @@ export interface QualityGateInput {
   recentSent: readonly string[];
   firstTouch: boolean;
   requiresDisclosure: boolean;
-  /** Un borrador ya generado (outbound.generate): es el intento 1 y no se vuelve a pagar. */
+  /** Un borrador ya generado (outbound.generate): es el intento 1 y no se vuelve a pagar (su uso ya se registró). */
   initial?: GeneratedMessage | null;
 }
 
@@ -65,7 +65,21 @@ export interface AttemptRecord {
   riskTriggers: RiskTrigger[];
   decision: ReviewDecision;
   note: string | null;
-  judge: { model: string; inputTokens: number; outputTokens: number; costUsd: number } | null;
+  /**
+   * Lo que costó escribir este intento (el generador) y juzgarlo (el
+   * juez): outbound_review guarda la suma y el desglose, para que la fila
+   * de un intento diga cuánto costó sin cruzarla con outbound_llm_call.
+   * El intento 1 que llega ya generado trae el uso de outbound.generate.
+   */
+  generation: LlmUsage | null;
+  judge: LlmUsage | null;
+}
+
+export interface LlmUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
 }
 
 export type HoldCodeFromGate = 'quality_risk' | 'quality_low' | 'quality_preflight' | 'llm_budget' | 'llm_error';
@@ -128,7 +142,8 @@ export async function runQualityGate(input: QualityGateInput, deps: QualityGateD
         return finish(attempts, rubric, { code: 'llm_budget' });
       }
       try {
-        gen = await deps.generator.generate({ ...input.generation, attempt, hint });
+        const previousDraft = attempts.at(-1)?.body ?? input.generation.previousDraft ?? null;
+        gen = await deps.generator.generate({ ...input.generation, attempt, hint, previousDraft });
       } catch (e) {
         if (!(e instanceof LlmOutputError)) throw e;
         if (e.usage) await deps.recordLlmCall({ purpose: 'generate', ...e.usage });
@@ -152,6 +167,7 @@ export async function runQualityGate(input: QualityGateInput, deps: QualityGateD
       claims: claimsCitedIn(g.claims, gen.subject, gen.body),
       gates: { preflight: { ok: pf.ok, issues: pf.issues }, subject: subj, similarity: sim },
       scores: null, total: null, hint: null, riskTriggers: pf.riskTriggers, decision: 'reject', note: null, judge: null,
+      generation: { model: gen.model, inputTokens: gen.inputTokens, outputTokens: gen.outputTokens, costUsd: gen.costUsd },
     };
     attempts.push(rec);
     if (!pf.ok || !subj.ok || !sim.ok) {

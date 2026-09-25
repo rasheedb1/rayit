@@ -60,6 +60,17 @@ export interface GenerationInput {
   hint: RegenerateHint | null;
   /** outbound_step_rubric.max_chars del paso, si la hay. */
   maxChars: number | null;
+  /**
+   * La versión anterior, con sus marcas, cuando se regenera con una pista
+   * (la del juez o la que pidió la persona en el editor): «más corto» es
+   * más corto que ESTO. null en un primer borrador.
+   */
+  previousDraft?: string | null;
+  /**
+   * Lo que la persona pidió en el editor del pitch (el tono, qué destacar),
+   * con sus palabras. Orienta; no cambia ninguna regla del prompt.
+   */
+  instructions?: string | null;
 }
 
 export interface GeneratedMessage {
@@ -173,7 +184,13 @@ export function buildGenerationPrompt(input: GenerationInput, template: string):
   if (input.avoid.length > 0) {
     lines.push('', 'No te parezcas a estos (enviados a otras marcas):', ...input.avoid.map((b) => `- ${b.replace(/\n+/g, ' ')}`));
   }
-  if (input.hint) lines.push('', `Pista de esta versión (intento ${input.attempt}): ${HINT_INSTRUCTIONS[input.hint]}`);
+  if (input.instructions?.trim()) {
+    lines.push('', `Lo que pide el creador para este mensaje (orienta el tono y el foco; las reglas no cambian): ${input.instructions.trim().replace(/\n+/g, ' ')}`);
+  }
+  if (input.hint) {
+    if (input.previousDraft?.trim()) lines.push('', 'Versión anterior (no la repitas):', input.previousDraft.trim());
+    lines.push('', `Pista de esta versión (intento ${input.attempt}): ${HINT_INSTRUCTIONS[input.hint]}`);
+  }
   return { system, user: lines.filter((l, i, all) => l !== '' || all[i - 1] !== '').join('\n').trim() };
 }
 

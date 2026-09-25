@@ -9,8 +9,10 @@
  *       workspace (Chief filtraba por un owner_id escrito a mano). Umbral
  *       0,65 en directos y 0,80 en correo: dos marcas no reciben el mismo
  *       mensaje con el nombre cambiado.
- *   C · idempotencia: el toque sigue en borrador y con el turno que tomó
- *       este intento, y el mismo texto no le llegó ya a esa persona.
+ *   C · idempotencia: el toque sigue en borrador, con el turno que tomó
+ *       este intento y con el texto que tenía entonces (si una persona lo
+ *       escribió o lo editó, manda lo suyo), y el mismo texto no le llegó
+ *       ya a esa persona.
  *
  * Puras: reciben lo que la base ya leyó y devuelven un veredicto.
  */
@@ -170,6 +172,12 @@ export interface IdempotencyInput {
   fingerprint: string;
   /** Huellas de lo ya ENVIADO a esa misma persona desde este workspace. */
   sentToContact: readonly string[];
+  /**
+   * ¿El texto del toque sigue siendo el que había cuando el job lo tomó?
+   * false = una persona lo escribió o lo editó entretanto: su texto manda
+   * y el resultado del job no se escribe encima. undefined = no se comprobó.
+   */
+  bodyUnchanged?: boolean;
 }
 
 /** Compuerta C: no se escribe dos veces el resultado de un toque ni se repite un mensaje a la misma persona. */
@@ -177,6 +185,7 @@ export function idempotencyGate(input: IdempotencyInput): GateResult {
   const codes: string[] = [];
   if (input.touchStatus !== 'draft') codes.push('touch_not_draft');
   if (!input.leaseHeld) codes.push('lease_lost');
+  if (input.bodyUnchanged === false) codes.push('edited_by_person');
   if (input.sentToContact.includes(input.fingerprint)) codes.push('already_sent_to_contact');
   return { ok: codes.length === 0, codes };
 }

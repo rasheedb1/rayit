@@ -73,6 +73,46 @@ test('las cifras: miles, decimales, porcentajes, múltiplos y escalas; fechas, h
   assert.equal(figureMatchesClaim(findFigures('150 mil')[0]!, CLAIMS[0]!), false);
 });
 
+// El sondeo de la ronda 2: cada uno de estos pasaba el pre-vuelo sin origen.
+test('una cifra pequeña con un sustantivo de desempeño detrás necesita su origen: «trabajé con 11 marcas»', () => {
+  assert.deepEqual(checkFigures('Trabajé con 11 marcas este año.', CLAIMS).map((i) => [i.code, i.detail]), [['unsourced_figure', '11']]);
+  assert.deepEqual(checkFigures('Trabajé con 11 grandes marcas.', CLAIMS).map((i) => i.code), ['unsourced_figure']);
+});
+
+test('«12 videos» también es una cifra; «3 ideas de video» no', () => {
+  assert.deepEqual(checkFigures('Publiqué 12 videos con marcas de cocina.', CLAIMS).map((i) => [i.code, i.detail]), [['unsourced_figure', '12']]);
+  assert.deepEqual(checkFigures('Te mando 3 ideas de video para el lanzamiento.', CLAIMS), []);
+});
+
+test('«2000 seguidores» es una cifra, no un año; «en 2026» sigue siendo un año', () => {
+  assert.deepEqual(checkFigures('Gané 2000 seguidores con esa serie.', CLAIMS).map((i) => [i.code, i.detail]), [['unsourced_figure', '2000']]);
+  assert.deepEqual(checkFigures('En 2026 lancé la serie de desayunos. Desde 2025 publico cada semana.', CLAIMS), []);
+});
+
+test('los números escritos con palabras se detectan: «diez mil views», «el triple», «once marcas», «un millón»', () => {
+  const casos: Array<[string, string, number]> = [
+    ['Ese video pasó las diez mil views sin pauta.', 'diez mil', 10_000],
+    ['Mis videos de desayuno tienen el triple de views.', 'triple', 3],
+    ['Trabajé con once marcas de alimentos.', 'once', 11],
+    ['Llegué a un millón de reproducciones.', 'un millón', 1_000_000],
+    ['I got ten thousand views on that video.', 'ten thousand', 10_000],
+    ['My breakfast videos get twice the views.', 'twice', 2],
+    ['Llevo treinta y dos colaboraciones.', 'treinta y dos', 32],
+  ];
+  for (const [texto, raw, valor] of casos) {
+    const hits = findFigures(texto);
+    assert.deepEqual(hits.map((h) => [h.raw, h.values[0]]), [[raw, valor]], texto);
+    assert.deepEqual(checkFigures(texto, CLAIMS).map((i) => i.code), ['unsourced_figure'], texto);
+  }
+  // Con su origen, pasa: «el triple» frente a un claim de 3,1×.
+  const triple: SalesClaim = { ...CLAIMS[2]!, id: 'post:d02:views_vs_median', value: 3.1, display: '3,1×' };
+  assert.deepEqual(checkFigures('Ese video tuvo el triple [claim:post:d02:views_vs_median] de mi mediana.', [triple]), []);
+  // No son cifras: un artículo, una fórmula, dos ideas.
+  assert.deepEqual(findFigures('Un video, mil gracias, dos ideas de receta, a la semana, one of the brands.'), []);
+  // «400 mil» es una sola cifra: la palabra «mil» no cuenta dos veces.
+  assert.deepEqual(findFigures('400 mil seguidores').map((h) => h.raw), ['400 mil']);
+});
+
 test('una cifra sin marca, con marca desconocida o con otro valor no pasa', () => {
   assert.deepEqual(checkFigures('Tengo 115.446 views [claim:baseline:tiktok:median_views].', CLAIMS), []);
   assert.deepEqual(checkFigures('Tengo 500.000 views de mediana.', CLAIMS).map((i) => i.code), ['unsourced_figure']);
@@ -130,6 +170,11 @@ test('compuerta C: solo se escribe sobre un borrador con el turno propio y sin r
   assert.deepEqual(
     idempotencyGate({ touchStatus: 'scheduled', leaseHeld: false, fingerprint: f, sentToContact: [f] }).codes,
     ['touch_not_draft', 'lease_lost', 'already_sent_to_contact'],
+  );
+  // Una persona escribió en el borrador mientras el job trabajaba: su texto manda.
+  assert.deepEqual(
+    idempotencyGate({ touchStatus: 'draft', leaseHeld: true, fingerprint: f, sentToContact: [], bodyUnchanged: false }).codes,
+    ['edited_by_person'],
   );
 });
 

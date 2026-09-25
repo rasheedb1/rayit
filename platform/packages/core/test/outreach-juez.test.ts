@@ -210,3 +210,47 @@ test('dos marcas del mismo nicho reciben correos con similitud menor de 0,65', a
   assert.ok(sim < 0.65, `similitud ${sim}`);
   assert.ok(b.attempts.every((x) => x.gates.similarity.max < 0.65));
 });
+
+test('cada intento lleva lo que costó escribirlo y juzgarlo; el primero, ya generado, trae su uso', async () => {
+  const initial = { subject: 'Café Alma y una idea', body: 'Hola', model: 'claude-sonnet-5', inputTokens: 900, outputTokens: 120, costUsd: 0.0021 };
+  const r = await runQualityGate(gateInput({ initial }), deps(createFakeGenerator(), judgeWith({ relevance: 9, quality: 9, structure: 9, voice: 9 })).deps);
+  // El intento 1 (el ya generado) no pasa el pre-vuelo: sin juez, pero con el uso del generador.
+  assert.deepEqual(r.attempts[0]!.generation, { model: 'claude-sonnet-5', inputTokens: 900, outputTokens: 120, costUsd: 0.0021 });
+  assert.equal(r.attempts[0]!.judge, null);
+  // El intento 2 lo escribió el generador de esta corrida y lo juzgó el juez.
+  assert.equal(r.attempts[1]!.generation?.model, 'on-cue-fake-generator');
+  assert.equal(r.attempts[1]!.judge?.inputTokens, 1000);
+});
+
+test('al regenerar, el generador ve la versión anterior y la pista; las instrucciones de la persona entran siempre', () => {
+  const tpl = loadPrompt('generate');
+  const { user } = buildGenerationPrompt(
+    { ...generation({ instructions: 'Más cercano, habla del desayuno.' }), attempt: 2, hint: 'shorter', previousDraft: 'Hola Valentina, versión larga.' },
+    tpl,
+  );
+  assert.ok(user.includes('Más cercano, habla del desayuno.'));
+  assert.ok(user.includes('Versión anterior (no la repitas):\nHola Valentina, versión larga.'));
+  assert.ok(user.includes('Pista de esta versión (intento 2)'));
+  const primero = buildGenerationPrompt({ ...generation(), attempt: 1, hint: null, previousDraft: 'VERSION PREVIA' }, tpl).user;
+  assert.ok(!primero.includes('VERSION PREVIA'), 'sin pista no hay versión anterior');
+});
+
+test('el redactor falso no habla de cocina fuera de la cocina y escribe en inglés en un espacio en inglés', async () => {
+  const fake = createFakeGenerator();
+  const fitness = await fake.generate({
+    ...generation({
+      creator: { name: 'Sara Gómez', handle: 'sara.entrena', niche: 'fitness', bio: null },
+      company: { name: 'Vita Gym', industry: 'deporte', city: 'Medellín', country: 'CO' },
+    }),
+    attempt: 1, hint: null,
+  });
+  for (const cocina of ['receta', 'cocina', 'mesa']) assert.ok(!fitness.body.toLowerCase().includes(cocina), `${cocina}: ${fitness.body}`);
+  const en = await fake.generate({
+    ...generation({ lang: 'en', contact: { fullName: 'Emma Hart', roleTitle: 'Brand manager' }, signal: null }),
+    attempt: 1, hint: null,
+  });
+  assert.match(en.body, /^(Hi|Hello|Good morning|Emma)/);
+  assert.match(en.body, /\?/);
+  assert.ok(!/\b(Hola|Buen día|Te dejo|Se me ocurre)\b/.test(en.body), en.body);
+  assert.ok(en.subject && !/\b(una|idea de video|Tu audiencia)\b/.test(en.subject), en.subject ?? '');
+});
