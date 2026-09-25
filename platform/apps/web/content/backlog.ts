@@ -383,7 +383,7 @@ export const STORIES: readonly Story[] = [
     desc: "Borrador de correo a partir de la señal, el media kit y la última campaña, editado a mano. Cada cifra apunta a su origen en claims. Se guarda como outbound_touch en draft y se copia al portapapeles. La generación automática y el envío los hace VEN-12 sobre esta misma base.",
     done: "Un pitch con una cifra sin origen no se puede marcar como listo.",
     status: "hecho",
-    note: "Hecha dentro de VEN-12 (rama rasheed/VEN-12-generacion-trazable-r3): «Redactar pitch» en la ficha abre /ventas/empresas/<id>/pitch con el último borrador o vacío. En el mensaje, las cifras de tu perfil y las variables son fichas (el origen al pasar el cursor), nunca marcas; se guardan con sus variables sin rellenar, así que cambiar «Para» cambia el saludo. «Redactar con IA» con instrucciones y tres pistas (en la demo embebida la redacta el redactor falso en el momento); los fallos se dicen en palabras de la creadora. «Programar» no se puede con una cifra sin origen (tampoco «x3», «#1» o «top 1») y lo dice junto al botón; lo normal de una propuesta («te propongo 3 videos», «30 segundos») no cuenta como cifra; copiar sí se puede. El aviso de guardar no se pierde al repintar. Para el integrador: aplicar 0056, 0057 y 0058.",
+    note: "Hecha dentro de VEN-12: «Redactar pitch» en la ficha abre un editor con fichas de cifras y variables, redacción con IA y revisión en línea que subraya la cifra sin origen y no deja programarla. Detalle en docs/ventas-outreach.md.",
   },
   {
     id: "VEN-7", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-2"],
@@ -431,7 +431,7 @@ export const STORIES: readonly Story[] = [
     desc: "Generador con perfil del creador, señal de la marca, ángulo del día y toques realmente enviados; pre-vuelo determinista, juez con rúbrica por paso en tabla, regeneración con pistas cerradas, disparadores de riesgo y revisión humana con calentamiento por tipo de paso.",
     done: "Un mensaje con una cifra sin origen no pasa; dos marcas del mismo nicho reciben correos con similitud menor de 0,65; el juez registra nota, tokens y costo.",
     status: "hecho",
-    note: "Hecha en rasheed/VEN-12-generacion-trazable-r3, sin red: pre-vuelo con cifras trazables (multiplicadores, puestos, «3-fold», puntos porcentuales y números en palabras; sin tomar por cifra lo que se ofrece, las duraciones ni las direcciones), compuertas A-B-C (la B compara también con lo que va a salir y con nombres propios igualados), generador y juez sobre claude-sonnet-5 (o falsos) con la señal del job hasta la llamada, jobs outbound.generate y outbound.review con espera creciente tras un fallo y rendición a los tres (el toque queda retenido con llm_error), cada intento en outbound_review por corridas (ninguno se descarta) y la nota del intento elegido en outbound_generation. Aprobar un retenido en la ficha exige origen a cada cifra. Pruebas: core/outreach-generacion y outreach-juez, worker/outreach-generacion y outreach-generacion-reintentos, db/outreach-pitch. Para el integrador: aplicar 0056, 0057 y 0058 en Supabase y poner ANTHROPIC_API_KEY en el worker (no en la web).",
+    note: "Hecha: generación con cifras trazables, pre-vuelo, compuertas A-B-C, juez con nota y costo, y jobs outbound.generate/outbound.review. Para el integrador: aplicar 0056–0059 y poner ANTHROPIC_API_KEY en el worker. Detalle en docs/ventas-outreach.md.",
   },
   {
     id: "VEN-13", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-12"],

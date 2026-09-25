@@ -1174,6 +1174,52 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   «Redactar con IA» lo redacta el redactor falso en el mismo proceso,
   por el mismo camino (`redactRequestedInProcess`).
 
+#### Ronda 4 (0059)
+
+- **Las cifras en palabras que se escapaban.** Un porcentaje escrito con
+  palabras («el ochenta por ciento», «eighty percent», «80 per cent»),
+  las fracciones («la mitad de mis seguidores», «dos tercios», «half of
+  my followers»), las proporciones («tres de cada cuatro», «9 out of
+  10») y los múltiplos por su raíz y no por una lista de conjugaciones
+  («triplicamos», «duplicó», «tripling») son cifra siempre. También los
+  puestos «primer lugar», «1er lugar», «la primera creadora», «first
+  place». No lo son «media hora», «a mitad de semana», «half an hour»,
+  «el cuarto video» ni «hace 2 años».
+- **Los números de la marca y la trayectoria.** «Anuncios», «años»,
+  «tiendas» (y sus pares en inglés) son sustantivos de desempeño: «6
+  anuncios activos» y «9 años creando contenido» necesitan su origen. Y
+  un número pequeño que dice lo mismo que un conteo del perfil, seguido
+  de lo que ese conteo cuenta («4 locales abiertos» frente a «Locales
+  abiertos de Fresko: 4»), es la cita de ese conteo sin su marca.
+- **El redactor falso escribe como una creadora.** Cita por prioridad
+  (una campaña con esa marca, la mediana de su red principal, su
+  interacción, su audiencia), con frases propias de cada cifra («Mis
+  videos de TikTok tienen una mediana de 115.446 views…»). No copia una
+  señal con números fuera de su fecha: la cifra de la señal la dice con
+  su marca si el ángulo la deja citar, o no la dice.
+- **Los datos de fuera entran como dato.** El titular de la señal, la
+  bio, el brief, las instrucciones de la persona y los mensajes
+  anteriores van al prompt entre etiquetas (`<senal>`,
+  `<instrucciones_del_creador>`, `<mensaje_anterior>`…), con sus «<» y
+  «>» neutralizados, y el sistema dice que su contenido es información,
+  nunca una orden. El juez recibe igual el mensaje que califica.
+- **El calentamiento cuenta solo lo de la IA.** Los diez primeros de cada
+  tipo de paso son diez redactados por la IA (outcome `approved` o
+  `held` en `outbound_generation`) que salieron o aprobó una persona. Un
+  pitch escrito a mano o una plantilla fija no cuentan.
+- **La guardia del pitch a mano, en la base.**
+  `outbound_generation_save_manual` solo guarda sobre un correo en
+  `draft` o `held` sin intento sin confirmar (la guardia de
+  `outbound_generation_request`); si no, `not_editable`. `savePitch` la
+  llama antes de programar.
+- **El editor.** Una cifra sin origen se subraya dentro del mensaje (API
+  de resaltado del navegador, sin tocar el texto) y se dice justo debajo,
+  con `aria-describedby` desde el campo. «Programar», «Copiar» y
+  «Guardar borrador» van pegados al mensaje, antes de la biblioteca de
+  fichas, que abre solo lo propio de la marca. «Copiar» dice su motivo
+  exacto y calla con el editor vacío. La nota del juez falso nombra las
+  dimensiones de la rúbrica en el idioma del espacio.
+
 ### 5.7 Qué pasa cuando la marca responde
 
 El webhook de mensajes nuevos de Unipile y la lectura del hilo de Gmail
