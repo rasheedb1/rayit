@@ -396,4 +396,6 @@ export const outboundTouch = pgTable('outbound_touch', {
   sendStartedAt: timestamptz('send_started_at'),
   /** El intento cuyo resultado no se sabe (timeout después de enviar): se comprueba antes de reenviar (0041 §6). */
   unconfirmedAttempt: integer('unconfirmed_attempt'),
+  /** Cuándo el lector de respuestas leyó por última vez el hilo de este toque (0041 §10): su cursor. */
+  repliesCheckedAt: timestamptz('replies_checked_at'),
 });

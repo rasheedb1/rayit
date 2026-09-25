@@ -66,7 +66,7 @@ export const OUTREACH_NOTICE_TEXTS = {
     replyTitle: (who: string) => `${who} respondió`,
     replyBody: (channel: string) => `Llegó una respuesta por ${channel}. Lo pendiente de esa cadencia se canceló.`,
     optOutTitle: (who: string) => `${who} pidió no recibir más mensajes`,
-    optOutBody: () => 'Se marcó la baja: nadie en la plataforma le volverá a escribir.',
+    optOutBody: () => 'Se marcó la baja: nadie de tu espacio le volverá a escribir, y lo pendiente para esa persona se canceló.',
     accountDownTitle: (channel: string) => `Tu cuenta de ${channel} no está conectada`,
     accountDownBody: (count: number, channel: string) =>
       `${count === 1 ? 'Un mensaje espera' : `${count} mensajes esperan`} a que reconectes tu cuenta de ${channel}. ` +
@@ -79,7 +79,7 @@ export const OUTREACH_NOTICE_TEXTS = {
     replyTitle: (who: string) => `${who} replied`,
     replyBody: (channel: string) => `A reply came in over ${channel}. What was pending in that cadence was canceled.`,
     optOutTitle: (who: string) => `${who} asked not to be contacted again`,
-    optOutBody: () => 'The opt-out was recorded: no one on the platform will write to them again.',
+    optOutBody: () => 'The opt-out was recorded: no one in your workspace will write to them again, and anything pending for them was canceled.',
     accountDownTitle: (channel: string) => `Your ${channel} account is not connected`,
     accountDownBody: (count: number, channel: string) =>
       `${count === 1 ? 'One message is' : `${count} messages are`} waiting for you to reconnect your ${channel} account. ` +

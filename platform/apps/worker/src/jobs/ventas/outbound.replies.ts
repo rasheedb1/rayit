@@ -24,7 +24,7 @@
  * caída, canal sin llaves) se salta y se cuenta; no tumba la corrida.
  */
 import {
-  listOpenThreads, recordInbound, type DispatchChannel, type OpenThread,
+  listOpenThreads, markThreadsChecked, recordInbound, type DispatchChannel, type OpenThread,
 } from '@mc/db/queries/outreach';
 import type { Logger } from '../../runner/logger.ts';
 import { defineJob } from '../../runner/registry.ts';
@@ -41,6 +41,8 @@ export interface RepliesDeps {
   signal?: AbortSignal;
   workspaceId?: string;
   sinceDays?: number;
+  /** Cuántos hilos como mucho por corrida (200 por defecto); los demás, en la siguiente (cursor). */
+  limit?: number;
 }
 
 export interface RepliesReport {
@@ -66,11 +68,24 @@ async function readOne(reader: ChannelReader, thread: OpenThread, signal?: Abort
 /** Una pasada del lector de respuestas. */
 export async function runReplies(db: MotorDb, deps: RepliesDeps): Promise<RepliesReport> {
   const threads = await db.transaction((tx) =>
-    listOpenThreads(tx, { now: deps.now(), sinceDays: deps.sinceDays, workspaceId: deps.workspaceId }),
+    listOpenThreads(tx, { now: deps.now(), sinceDays: deps.sinceDays, workspaceId: deps.workspaceId, limit: deps.limit }),
   );
   const report: RepliesReport = { threads: threads.length, inbound: 0, optOuts: 0, canceled: 0, unreadable: [] };
+  // Lo que esta corrida miró pasa al final de la fila de la siguiente,
+  // también lo que no se pudo leer: si no, un hilo roto taparía a los demás.
+  const checked: string[] = [];
+  try {
+    await readAll(db, deps, threads, report, checked);
+  } finally {
+    await db.transaction((tx) => markThreadsChecked(tx, checked, deps.now()));
+  }
+  return report;
+}
+
+async function readAll(db: MotorDb, deps: RepliesDeps, threads: OpenThread[], report: RepliesReport, checked: string[]): Promise<void> {
   for (const thread of threads) {
     if (deps.signal?.aborted) break;
+    checked.push(thread.touchId);
     const reader = deps.readers[thread.channel];
     if (!reader?.configured()) {
       report.unreadable.push({ threadRef: thread.threadRef, channel: thread.channel, error: 'canal no configurado' });
@@ -96,7 +111,6 @@ export async function runReplies(db: MotorDb, deps: RepliesDeps): Promise<Replie
       deps.logger?.info('respuesta registrada', { threadRef: thread.threadRef, channel: thread.channel, optOut: r.optOut, canceled: r.canceled.length });
     }
   }
-  return report;
 }
 
 export const repliesJob = defineJob(

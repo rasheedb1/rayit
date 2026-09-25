@@ -3,9 +3,11 @@
  *
  * listOpenThreads da los hilos a los que se escribió en los últimos
  * treinta días; recordInbound registra lo que llegó y su efecto:
- *   · pide la baja (detectOptOut, catorce expresiones) → la ficha, las
- *     fichas con su correo y todo lo suyo pendiente, en cualquier
- *     secuencia, como public_optout (r2);
+ *   · pide la baja (detectOptOut, catorce expresiones) → la ficha que
+ *     respondió, las fichas del workspace con su correo y todo lo suyo
+ *     pendiente en el workspace, en cualquier secuencia (r2). Es una baja
+ *     del WORKSPACE: la global (contact_suppression) solo la escribe una
+ *     baja verificada, el enlace (0029 §1);
  *   · si no, y la cadencia seguía viva (o había completado sus pasos) →
  *     replied, se cancela lo pendiente y se avisa;
  *   · si ya había respondido, el mensaje se registra y solo se mira la
@@ -100,6 +102,11 @@ function parseOpenThread(r: OpenThreadRow, i: number): OpenThread {
  * (READABLE_ENROLLMENT_STATUSES: los que ya respondieron o completaron
  * también, porque la baja puede llegar en el segundo mensaje), por la
  * cuenta que los envió. Uno por hilo, con su último toque.
+ *
+ * Con más hilos que `limit` (r2), primero los que nunca se leyeron y
+ * después los leídos hace más tiempo (replies_checked_at, 0041 §10, que
+ * anota markThreadsChecked): cada corrida sigue donde la anterior se
+ * quedó, en vez de leer siempre los mismos primeros por uuid.
  */
 export async function listOpenThreads(
   tx: WorkerSql,
@@ -108,7 +115,9 @@ export async function listOpenThreads(
   if (opts.workspaceId) assertIds('listOpenThreads', [opts.workspaceId]);
   const rows = (
     await tx.query<OpenThreadRow>(
-      `SELECT DISTINCT ON (t.workspace_id, t.channel, t.thread_ref)
+      `SELECT * FROM (
+       SELECT DISTINCT ON (t.workspace_id, t.channel, t.thread_ref)
+              t.replies_checked_at AS checked_at,
               t.workspace_id, t.enrollment_id, t.contact_id, t.deal_id, t.channel, t.thread_ref, t.id AS touch_id, t.sent_at,
               t.recipient_address::text AS recipient,
               (SELECT min(x.sent_at) FROM outbound_touch x
@@ -125,8 +134,10 @@ export async function listOpenThreads(
           AND t.sent_at >= $1::timestamptz - make_interval(days => $2::int)
           AND (e.id IS NULL OR e.status = ANY($5::text[]))
           AND ($3::uuid IS NULL OR t.workspace_id = $3::uuid)
-        ORDER BY t.workspace_id, t.channel, t.thread_ref, t.sent_at DESC
-        LIMIT $4`,
+        ORDER BY t.workspace_id, t.channel, t.thread_ref, t.sent_at DESC, t.id
+       ) hilos
+       ORDER BY checked_at NULLS FIRST, sent_at DESC, touch_id
+       LIMIT $4`,
       [
         opts.now.toISOString(), opts.sinceDays ?? 30, opts.workspaceId ?? null, Math.max(1, Math.min(opts.limit ?? 200, 2000)),
         [...READABLE_ENROLLMENT_STATUSES],
@@ -134,6 +145,16 @@ export async function listOpenThreads(
     )
   ).rows;
   return rows.map(parseOpenThread);
+}
+
+/**
+ * El cursor del lector (r2): anota que el hilo de estos toques se leyó
+ * ahora, aunque no trajera nada. Se llama con los que se intentaron leer.
+ */
+export async function markThreadsChecked(tx: WorkerSql, touchIds: readonly string[], now: Date): Promise<void> {
+  if (touchIds.length === 0) return;
+  assertIds('markThreadsChecked', touchIds);
+  await tx.query(`UPDATE outbound_touch SET replies_checked_at = $2::timestamptz WHERE id = ANY($1::uuid[])`, [[...touchIds], now.toISOString()]);
 }
 
 /** Un mensaje que llegó a un hilo abierto, como lo entrega el lector del canal. */
@@ -159,35 +180,38 @@ export interface InboundResult {
 }
 
 /**
- * La baja que llega en una respuesta, con el mismo alcance que la del
- * enlace (public_optout, 0037 §9): la ficha que respondió y las fichas
- * con su mismo correo, en cualquier workspace; todo lo suyo pendiente
- * (draft, scheduled, held) cancelado en cualquier secuencia, y sus
- * enrolamientos vivos a opted_out. contact.opted_out lleva la dirección a
- * contact_suppression (disparador de 0026). Lo que ya está en processing
- * lo cancela el despachador al releer. Devuelve los toques cancelados.
+ * La baja que llega en una respuesta (r2), del workspace al que se
+ * respondió: la ficha que respondió y las fichas DEL WORKSPACE con su
+ * mismo correo quedan opted_out; todo lo suyo pendiente en el workspace
+ * (draft, scheduled, held) se cancela en cualquier secuencia, y sus
+ * enrolamientos vivos pasan a opted_out. No toca las fichas propias de
+ * otros workspaces: el detector lee texto libre y no es una baja
+ * verificada, así que no entra en contact_suppression (0029 §1: esa la
+ * escribe el enlace de baja). Lo que ya está en processing lo cancela el
+ * despachador al releer. Devuelve los toques cancelados.
  */
-export async function applyContactOptOut(tx: WorkerSql, contactId: string, reason: string, now: Date): Promise<string[]> {
-  assertIds('applyContactOptOut', [contactId]);
+export async function applyContactOptOut(tx: WorkerSql, contactId: string, workspaceId: string, reason: string, now: Date): Promise<string[]> {
+  assertIds('applyContactOptOut', [contactId, workspaceId]);
   const ids = (
     await tx.query<{ id: string }>(
       `SELECT DISTINCT c.id FROM contact c, contact b
-        WHERE b.id = $1::uuid AND (c.id = b.id OR (b.email IS NOT NULL AND c.email = b.email))`,
-      [contactId],
+        WHERE b.id = $1::uuid
+          AND (c.id = b.id OR (b.email IS NOT NULL AND c.email = b.email AND c.owner_workspace_id = $2::uuid))`,
+      [contactId, workspaceId],
     )
   ).rows.map((r) => r.id);
   if (ids.length === 0) return [];
   const canceled = (
     await tx.query<{ id: string }>(
       `UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'opted_out'
-        WHERE contact_id = ANY($1::uuid[]) AND status IN ('draft', 'scheduled', 'held') RETURNING id`,
-      [ids],
+        WHERE contact_id = ANY($1::uuid[]) AND workspace_id = $2::uuid AND status IN ('draft', 'scheduled', 'held') RETURNING id`,
+      [ids, workspaceId],
     )
   ).rows.map((r) => r.id);
   await tx.query(
     `UPDATE outbound_enrollment SET status = 'opted_out', finished_at = coalesce(finished_at, $2::timestamptz)
-      WHERE contact_id = ANY($1::uuid[]) AND status = ANY($3::text[])`,
-    [ids, now.toISOString(), [...LIVE_ENROLLMENT_STATUSES]],
+      WHERE contact_id = ANY($1::uuid[]) AND workspace_id = $4::uuid AND status = ANY($3::text[])`,
+    [ids, now.toISOString(), [...LIVE_ENROLLMENT_STATUSES], workspaceId],
   );
   await tx.query(
     `UPDATE contact SET opted_out = true, opted_out_at = coalesce(opted_out_at, $2::timestamptz),
@@ -269,7 +293,7 @@ export async function recordInbound(tx: WorkerSql, thread: OpenThread, msg: Inbo
   const verdict = detectOptOut(msg.body);
   if (verdict.optOut && thread.contactId) {
     const wasOut = (await tx.query<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = $1::uuid`, [thread.contactId])).rows[0]?.opted_out === true;
-    const canceled = await applyContactOptOut(tx, thread.contactId, `reply:${verdict.ruleId}`, now);
+    const canceled = await applyContactOptOut(tx, thread.contactId, thread.workspaceId, `reply:${verdict.ruleId}`, now);
     if (!wasOut) await notifyInbound(tx, thread, inserted.id, 'optout', now);
     return { isNew: true, optOut: true, optOutRule: verdict.ruleId, canceled, notified: !wasOut };
   }

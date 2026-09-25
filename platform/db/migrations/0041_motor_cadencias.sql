@@ -38,6 +38,8 @@
 --   8. (r2) outbound_counter_release: devolver la plaza de un tope que se
 --      reservó al reclamar y no se gastó.
 --   9. (r2) notification_kind_check con la unión de todos los avisos.
+--  10. (r2) outbound_touch.replies_checked_at: el cursor del lector de
+--      respuestas, para que con más hilos que su límite los lea todos.
 --
 -- Idempotente donde se puede (IF NOT EXISTS, ON CONFLICT), como las
 -- anteriores.
@@ -308,3 +310,16 @@ ALTER TABLE notification ADD CONSTRAINT notification_kind_check CHECK (kind IN
    'outreach_bounce_rate','outreach_no_sends','outreach_queue_stuck',
    'outreach_account_down','outreach_llm_budget',
    'outreach_failed','outreach_reply'));
+
+-- ---------------------------------------------------------------------
+-- 10 · El cursor del lector de respuestas (r2)
+-- ---------------------------------------------------------------------
+-- outbound.replies lee como mucho N hilos por corrida. Ordenados por hilo
+-- (el DISTINCT ON), cada corrida leía los mismos N primeros y las
+-- respuestas del resto no se veían hasta que llegara el webhook. El
+-- lector anota en el último toque de cada hilo cuándo lo leyó, y empieza
+-- por lo nunca leído y lo leído hace más tiempo. Es solo del lector: no
+-- dice nada de lo que salió, por eso no tiene guardia.
+ALTER TABLE outbound_touch ADD COLUMN IF NOT EXISTS replies_checked_at timestamptz;
+CREATE INDEX IF NOT EXISTS outbound_touch_thread_idx ON outbound_touch (workspace_id, channel, thread_ref, sent_at DESC)
+  WHERE status = 'sent' AND thread_ref IS NOT NULL;

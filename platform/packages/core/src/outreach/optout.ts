@@ -3,13 +3,15 @@
  *
  * Catorce expresiones, siete en español y siete en inglés, como las de
  * Chief (docs/ventas-outreach.md §2), aplicadas a lo que entra por
- * correo, LinkedIn e Instagram. Una coincidencia marca contact.opted_out,
- * y el disparador de 0026 manda la dirección a contact_suppression, que es
- * GLOBAL y no tiene vuelta: nadie en la plataforma le vuelve a escribir.
- * Por eso cada regla pide una INTENCIÓN (imperativo, subjuntivo o
- * «quiero…»), no una palabra suelta (VEN-10 r2): un falso positivo pierde
- * a una marca interesada en toda la plataforma; un falso negativo lo ve
- * la persona en la bandeja y lo marca a mano.
+ * correo, LinkedIn e Instagram. Una coincidencia marca contact.opted_out
+ * en el workspace al que se respondió, termina la cadencia y cancela todo
+ * lo pendiente para esa persona; no tiene vuelta automática. (No entra en
+ * contact_suppression, la lista global: esa solo la escribe una baja
+ * verificada, el enlace, 0029 §1.) Por eso cada regla pide una INTENCIÓN
+ * (imperativo, subjuntivo o «quiero…») sobre NUESTROS mensajes, no una
+ * palabra suelta (VEN-10 r2): un falso positivo pierde a una marca
+ * interesada; un falso negativo lo ve la persona en la bandeja y lo marca
+ * a mano.
  *
  * Qué se mira: solo lo que la persona escribió.
  *   · Se quita lo citado (líneas «>» y todo lo que sigue a «El … escribió:»
