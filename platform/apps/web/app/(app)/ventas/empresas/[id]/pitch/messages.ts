@@ -42,7 +42,7 @@ export const PITCH = {
     cuantas: (n: number) => (n === 1 ? "1 cifra" : `${n} cifras`),
     /** Los grupos, en el orden en que se enseñan. */
     grupos: {
-      creator_baseline: "Mediana de views",
+      creator_baseline: "Medianas (views e interacción)",
       campaign_brand: "Campañas con esta marca",
       signal: "Señal del negocio",
       creator_profile: "Audiencia",
