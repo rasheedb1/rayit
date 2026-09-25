@@ -102,6 +102,7 @@ export function Salud({
   reconectarUrl?: string | null;
 }) {
   const t = MESSAGES.salud;
+  const hayComoReconectar = Boolean(reconectarUrl || soporte);
   // «LinkedIn: Laura», sin repetir el canal si el nombre ya lo dice.
   const nombre = (c: DownChannelAccount) => channelAccountLabel(t.canal[c.channel], c.name);
   const cuales = new Intl.ListFormat(f.locale, { style: "long", type: "conjunction" }).format(caidas.map(nombre));
@@ -118,7 +119,19 @@ export function Salud({
         : tasa === "under"
           ? t.rebotes.umbral.bajo(umbral)
           : null;
-  const notaRebotes = [t.rebotes.note(f.int(counts.hardBounces), f.int(counts.emailsSent), counts.hardBounces), detalleTasa]
+  // Con pocos envíos la tasa no dice nada (1 de 4 es un 25 %): la cifra
+  // grande es la cuenta, «1 de 4», y la tasa sale solo con volumen (r5),
+  // como en Instantly y Lemlist. La nota ya no repite la cuenta.
+  const valorRebotes =
+    counts.hardBounceRate === null
+      ? t.sinDato
+      : tasa === "too_few"
+        ? t.rebotes.cuenta(f.int(counts.hardBounces), f.int(counts.emailsSent))
+        : f.pct(counts.hardBounceRate, 1);
+  const notaRebotes = [
+    tasa === "too_few" ? null : t.rebotes.note(f.int(counts.hardBounces), f.int(counts.emailsSent), counts.hardBounces),
+    detalleTasa,
+  ]
     .filter(Boolean)
     .join(" · ");
   return (
@@ -167,7 +180,7 @@ export function Salud({
         <Kpi label={t.enviados.label} value={f.int(counts.emailsSent)} note={t.enviados.note} />
         <Kpi
           label={t.rebotes.label}
-          value={counts.hardBounceRate === null ? t.sinDato : f.pct(counts.hardBounceRate, 1)}
+          value={valorRebotes}
           note={counts.hardBounceRate === null ? t.rebotes.sinEnvios : notaRebotes}
         />
         <Kpi
@@ -199,7 +212,10 @@ export function Salud({
                     {c.lastErrorAt && <span className="text-xs text-muted">{t.caidas.desde(f.date(c.lastErrorAt, "long"))}</span>}
                   </div>
                   <p className="mt-1 break-words text-xs text-ink-2">{motivoCaida(c.lastError, t.canal[c.channel])}</p>
-                  <p className="mt-1 text-xs text-ink">{c.channel === "email" ? t.caidas.paso.email : t.caidas.paso.otro}</p>
+                  {/* El paso solo si hay cómo darlo: un botón o a quién escribir. Sin ninguno, pedirlo es un callejón (r5). */}
+                  {hayComoReconectar && (
+                    <p className="mt-1 text-xs text-ink">{c.channel === "email" ? t.caidas.paso.email : t.caidas.paso.otro}</p>
+                  )}
                   {reconectarUrl && (
                     <Button
                       href={reconectarUrl}

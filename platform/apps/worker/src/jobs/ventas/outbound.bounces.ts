@@ -49,12 +49,15 @@
  * El buzón se lee A TRAVÉS de una interfaz (BounceMailbox), no de un
  * cliente de Gmail escrito aquí: el conector de Gmail es de VEN-9
  * (packages/connectors, sin integrar). El adaptador ya está
- * (gmail-rebotes.ts) y probado contra un Gmail falso con la forma del de
- * VEN-9. Lo que falta es de la integración: construir el GmailApi de cada
- * cuenta con su token y registrar createBouncesJob((cuenta) =>
- * gmailBounceMailbox(api)). Hasta entonces el job registrado usa
- * gmailNoConfigurado: cada cuenta cuenta como «canal no configurado», y
- * el job lo dice en el registro.
+ * (gmail-rebotes.ts: gmailMailboxFor) y probado contra un Gmail falso con
+ * la forma del de VEN-9, con la cuenta, su secret_ref y el vault. Lo que
+ * falta es UNA función de la integración: `gmailDeLaCuenta`, que arma el
+ * GmailClient de VEN-9 con el token del vault (docs/ventas-outreach.md,
+ * «Lo que cambia al integrar VEN-9»), y registrar
+ * bouncesMailboxFor = gmailMailboxFor(gmailDeLaCuenta). Hasta entonces el
+ * job registrado usa gmailNoConfigurado: cada cuenta cuenta como «canal
+ * no configurado», el job lo dice en el registro, /ventas/politica avisa
+ * que no se leen los rebotes y la alerta bounces_unread llega al dueño.
  *
  * Corre como mc_worker (BYPASSRLS): cada consulta filtra por el
  * workspace de la cuenta que se está leyendo, y nada se escribe en otro.
@@ -119,10 +122,22 @@ export interface MailboxAccount {
   id: string;
   workspaceId: string;
   providerAccountId: string | null;
+  /**
+   * La referencia del token de la cuenta en el vault
+   * (outreach_channel_account.secret_ref, 'enc:…'): con ella la
+   * integración de VEN-9 saca el token y arma el GmailClient. El token
+   * nunca pasa por aquí ni por la base en claro.
+   */
+  secretRef: string | null;
 }
 
-/** El buzón de una cuenta, o null si el canal no está configurado (sin conector o sin llaves). */
-export type MailboxFor = (account: MailboxAccount) => BounceMailbox | null;
+/**
+ * El buzón de una cuenta, o null si el canal no está configurado (sin
+ * conector, sin llaves de Google o sin token). Puede ser asíncrono: el
+ * token sale del vault. Si lanza, la cuenta cuenta como fallida y las
+ * demás siguen.
+ */
+export type MailboxFor = (account: MailboxAccount) => BounceMailbox | null | Promise<BounceMailbox | null>;
 
 /** Hasta que VEN-9 entregue el conector de Gmail: ninguna cuenta tiene buzón legible. */
 export const gmailNoConfigurado: MailboxFor = () => null;
@@ -359,16 +374,27 @@ export async function runBounces(db: JobDatabase, now: Date, mailboxFor: Mailbox
   };
   const max = Math.max(1, Math.trunc(opts.perRun ?? BOUNCES_PER_RUN));
   const { rows: cuentas } = await db.query<{
-    id: string; workspace_id: string; provider_account_id: string | null; bounces_read_at: Date | string | null;
+    id: string; workspace_id: string; provider_account_id: string | null; secret_ref: string | null;
+    bounces_read_at: Date | string | null;
   }>(
-    `SELECT id, workspace_id, provider_account_id, bounces_read_at FROM outreach_channel_account
+    `SELECT id, workspace_id, provider_account_id, secret_ref, bounces_read_at FROM outreach_channel_account
       WHERE channel = 'email' AND status = 'connected' ORDER BY workspace_id, id`,
   );
   for (const c of cuentas) {
     if (opts.signal?.aborted) break;
     r.accounts++;
-    const account: MailboxAccount = { id: c.id, workspaceId: c.workspace_id, providerAccountId: c.provider_account_id };
-    const mailbox = mailboxFor(account);
+    const account: MailboxAccount = {
+      id: c.id, workspaceId: c.workspace_id, providerAccountId: c.provider_account_id, secretRef: c.secret_ref,
+    };
+    let mailbox: BounceMailbox | null;
+    try {
+      mailbox = await mailboxFor(account);
+    } catch (err) {
+      // Un token que no descifra, el vault caído: esta cuenta falla, las demás siguen.
+      r.failed++;
+      opts.onAccountError?.(account, err);
+      continue;
+    }
     if (!mailbox) {
       r.notConfigured++;
       continue;
@@ -453,11 +479,12 @@ export function createBouncesJob(mailboxFor: MailboxFor) {
 }
 
 /**
- * El buzón con el que corre el job registrado. Al integrar VEN-9: construir
- * aquí el GmailApi de cada outreach_channel_account (con su token del
- * vault) y devolver gmailBounceMailbox(api), y poner
- * BOUNCE_READING_CONNECTED (@mc/core) en true. La prueba «cuando llegue el
- * conector…» de outbound-bounces.test.ts falla mientras no se haga.
+ * El buzón con el que corre el job registrado. Al integrar VEN-9:
+ *   bouncesMailboxFor = gmailMailboxFor(gmailDeLaCuenta)
+ * con gmailDeLaCuenta = (cuenta) => el GmailClient de VEN-9 con el token
+ * de cuenta.secretRef (o null sin GOOGLE_CLIENT_ID/SECRET o sin token), y
+ * BOUNCE_READING_CONNECTED (@mc/core) en true. La prueba «cuando llegue
+ * el conector…» de outbound-bounces.test.ts falla mientras no se haga.
  */
 export const bouncesMailboxFor: MailboxFor = gmailNoConfigurado;
 

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -308,7 +308,8 @@ describe("«Salud de hoy»: la cuenta caída", () => {
     expect(within(cuentas as HTMLElement).getByText("LinkedIn cerró la sesión.")).toBeInTheDocument();
     expect(cuentas?.textContent).not.toMatch(/unipile_status|CREDENTIALS/);
     expect(within(cuentas as HTMLElement).getByText(t.salud.caidas.estado.needs_reconnect)).toBeInTheDocument();
-    expect(within(cuentas as HTMLElement).getByText(t.salud.caidas.paso.otro)).toBeInTheDocument();
+    // Sin botón ni SUPPORT_EMAIL, no se pide una acción imposible (r5): ni «hay que conectar otra vez».
+    expect(within(cuentas as HTMLElement).queryByText(t.salud.caidas.paso.otro)).not.toBeInTheDocument();
     // Ningún enlace a una pantalla que no resuelve nada.
     expect(within(cuentas as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
     // Sin SUPPORT_EMAIL: que no se pierde nada, sin prometer una función futura.
@@ -322,6 +323,8 @@ describe("«Salud de hoy»: la cuenta caída", () => {
     );
     const cuentas = container.querySelector("#cuentas") as HTMLElement;
     expect(within(cuentas).getByText(/Escríbenos a ayuda@oncue\.test y la reconectamos contigo/)).toBeInTheDocument();
+    // Con a quién escribir, el paso sí va: se puede dar.
+    expect(within(cuentas).getByText(t.salud.caidas.paso.otro)).toBeInTheDocument();
   });
 
   it("last_error guarda códigos (VEN-9): 'missing_scopes' sale en frase; un código desconocido o la jerga del proveedor, nunca crudos", () => {
@@ -528,7 +531,23 @@ describe("ronda 4", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
-  it("la nota de rebotes dice por qué una tasa alta no avisa con pocos envíos, y si pasa del umbral", () => {
+  it("con pocos envíos la cifra grande es «1 de 4», no un 25 % que alarma; la tasa sale con volumen (r5)", () => {
+    const { container } = render(
+      <Salud avisos={[]} lectura={LEIDA} health={health} f={f} ahora={AHORA} rebotes={[]} caidas={[]}
+        counts={{ emailsSent: 4, hardBounces: 1, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: 0.25 }} />,
+    );
+    expect(screen.getByText("1 de 4")).toBeInTheDocument();
+    expect(screen.getByText(t.salud.rebotes.umbral.pocos("10"))).toBeInTheDocument();
+    expect(container.textContent).not.toContain(f.pct(0.25, 1));
+    cleanup();
+    render(
+      <Salud avisos={[]} lectura={LEIDA} health={health} f={f} ahora={AHORA} rebotes={[]} caidas={[]}
+        counts={{ emailsSent: 20, hardBounces: 2, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: 0.1 }} />,
+    );
+    expect(screen.getByText(f.pct(0.1, 1))).toBeInTheDocument();
+  });
+
+  it("la nota de rebotes dice si la tasa pasa del umbral, con volumen suficiente", () => {
     const nota = (emailsSent: number, hardBounces: number) => {
       const { unmount } = render(
         <Salud avisos={[]} lectura={LEIDA} health={health} f={f} ahora={AHORA} rebotes={[]} caidas={[]}
@@ -538,8 +557,6 @@ describe("ronda 4", () => {
       unmount();
       return texto;
     };
-    // 1 de 4 es un 25 %, pero con menos de 10 envíos no se avisa todavía: la nota lo dice.
-    expect(nota(4, 1)).toBe(`1 de 4 no existe · ${t.salud.rebotes.umbral.pocos("10")}`);
     expect(nota(40, 1)).toBe(`1 de 40 no existe · ${t.salud.rebotes.umbral.bajo(f.pct(0.05, 0))}`);
     expect(nota(20, 2)).toBe(`2 de 20 no existen · ${t.salud.rebotes.umbral.sobre(f.pct(0.05, 0))}`);
   });

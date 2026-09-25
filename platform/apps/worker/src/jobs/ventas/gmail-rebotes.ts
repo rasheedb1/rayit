@@ -27,11 +27,12 @@
  *     cerrarlo, GmailApi.searchBounces tiene que pasar pageToken a
  *     messages.list y devolver nextPageToken (docs/ventas-outreach.md §9).
  * packages/connectors es de Nicolás y no se toca desde aquí. Lo que queda
- * para la integración: construir un GmailApi por cuenta conectada (con su
- * token del vault) dentro de `mailboxFor` y registrarlo en lugar de
- * gmailNoConfigurado (outbound.bounces.ts).
+ * para la integración es una sola función, `GmailSourceFor`: el GmailApi
+ * de una cuenta conectada (su GmailClient con el token del vault), o null
+ * si falta la llave de Google o el token. gmailMailboxFor hace el resto,
+ * y se registra en lugar de gmailNoConfigurado (outbound.bounces.ts).
  */
-import type { BounceBatch, BounceMailbox, BounceMessage } from './outbound.bounces.ts';
+import type { BounceBatch, BounceMailbox, BounceMessage, MailboxAccount, MailboxFor } from './outbound.bounces.ts';
 
 /** Lo que el adaptador usa de un mensaje de Gmail (GmailMessage de VEN-9). */
 export interface GmailBounceMessage {
@@ -151,5 +152,25 @@ export function gmailBounceMailbox(api: GmailBounceSource, now: () => Date = () 
         ...(truncated ? { truncated: true } : {}),
       };
     },
+  };
+}
+
+/**
+ * El GmailApi de una cuenta conectada, o null si no se puede leer
+ * (sin GOOGLE_CLIENT_ID/SECRET, o sin token en el vault para su
+ * secretRef). Es lo único que la integración de VEN-9 escribe.
+ */
+export type GmailSourceFor = (account: MailboxAccount) => Promise<GmailBounceSource | null>;
+
+/**
+ * El MailboxFor del job sobre Gmail: por cada cuenta, su GmailApi
+ * (sourceFor) envuelto en gmailBounceMailbox. Sin GmailApi, «canal no
+ * configurado»; si sourceFor lanza (el vault no responde), la cuenta
+ * falla y las demás siguen (runBounces).
+ */
+export function gmailMailboxFor(sourceFor: GmailSourceFor, now: () => Date = () => new Date()): MailboxFor {
+  return async (account) => {
+    const api = await sourceFor(account);
+    return api ? gmailBounceMailbox(api, now) : null;
   };
 }

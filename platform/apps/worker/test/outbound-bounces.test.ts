@@ -27,8 +27,8 @@ import {
   type MailboxFor,
 } from '../src/jobs/ventas/outbound.bounces.ts';
 import {
-  gmailBounceMailbox, gmailMessageToBounce, type GmailBounceMessage, type GmailBounceSource, type GmailMessageRef,
-  type GmailRefPage,
+  gmailBounceMailbox, gmailMailboxFor, gmailMessageToBounce, type GmailBounceMessage, type GmailBounceSource, type GmailMessageRef,
+  type GmailRefPage, type GmailSourceFor,
 } from '../src/jobs/ventas/gmail-rebotes.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { openTestDatabase } from './helpers/harness.ts';
@@ -546,7 +546,15 @@ describe('con el adaptador, de Gmail a la ficha (pglite)', () => {
   const T_ES_ENVIADO = '0000015b-0000-4000-8000-0000000070e3';
   const T_ES_PENDIENTE = '0000015b-0000-4000-8000-0000000070e4';
   let gmail: GmailFalso;
-  const deTomas: MailboxFor = (a) => (a.id === ACC2 ? gmailBounceMailbox(gmail) : null);
+  /**
+   * Lo que la integración de VEN-9 escribe (GmailSourceFor): con el
+   * secretRef de la cuenta, el vault da el token y sale su GmailClient.
+   * Aquí el «vault» es un mapa y el GmailClient, el Gmail falso; el resto
+   * del camino (gmailMailboxFor, runBounces, la base) es el de producción.
+   */
+  const vault = new Map<string, () => GmailFalso>([['enc:gmail-tomas', () => gmail]]);
+  const gmailDeLaCuenta: GmailSourceFor = async (a) => (a.secretRef ? (vault.get(a.secretRef)?.() ?? null) : null);
+  const deTomas: MailboxFor = gmailMailboxFor(gmailDeLaCuenta);
 
   before(async () => {
     await db.raw.exec(`
@@ -556,8 +564,10 @@ describe('con el adaptador, de Gmail a la ficha (pglite)', () => {
         ('${C2}', '${COMPANY}', 'No existe 2', 'nadie@marca-rebote.test', 'user_provided', '${WS2}'),
         ('${C_EN}', '${COMPANY}', 'Sin DSN', 'compras@tienda-rebote.com.co', 'user_provided', '${WS2}'),
         ('${C_ES}', '${COMPANY}', 'Sin DSN (es)', 'hola@tienda-rebote.co', 'user_provided', '${WS2}');
-      INSERT INTO outreach_channel_account (id, workspace_id, channel, provider, provider_account_id, status)
-      VALUES ('${ACC2}', '${WS2}', 'email', 'gmail_oauth', 'tomas@gmail.com', 'connected');
+      INSERT INTO connection_secret (secret_ref, workspace_id, ciphertext, iv, tag)
+      VALUES ('enc:gmail-tomas', '${WS2}', '\\x00'::bytea, decode(repeat('00', 12), 'hex'), decode(repeat('00', 16), 'hex'));
+      INSERT INTO outreach_channel_account (id, workspace_id, channel, provider, provider_account_id, status, secret_ref)
+      VALUES ('${ACC2}', '${WS2}', 'email', 'gmail_oauth', 'tomas@gmail.com', 'connected', 'enc:gmail-tomas');
       INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for,
                                   sent_at, provider_message_id, message_id_rfc, recipient_address, attempt_count) VALUES
         ('${T2_ENVIADO}', '${WS2}', '${COMPANY}', '${C2}', 'email', 'Hola', 'sent', '2026-09-23T12:00:00Z',
@@ -573,6 +583,28 @@ describe('con el adaptador, de Gmail a la ficha (pglite)', () => {
         ('${T_ES_PENDIENTE}', '${WS2}', '${COMPANY}', '${C_ES}', 'email', 'Sigo', 'scheduled', '2026-09-26T13:00:00Z',
          NULL, NULL, NULL, NULL, 0);
     `);
+  });
+
+  test('sin token en el vault la cuenta es «canal no configurado»; si el vault falla, falla solo esa cuenta', async () => {
+    gmail = new GmailFalso([]);
+    const sinToken = await runBounces(db, NOW, gmailMailboxFor(async () => null));
+    assert.ok(sinToken.notConfigured >= 1);
+    const errores: string[] = [];
+    const caido = await runBounces(
+      db,
+      NOW,
+      gmailMailboxFor(async (a) => {
+        if (a.id === ACC2) throw new Error('el vault no responde');
+        return null;
+      }),
+      { onAccountError: (a, e) => errores.push(`${a.id}: ${(e as Error).message}`) },
+    );
+    assert.equal(caido.failed, 1);
+    assert.deepEqual(errores, [`${ACC2}: el vault no responde`]);
+    const { rows: [c] } = await db.raw.query<{ c: Date | null }>(
+      `SELECT bounces_read_at AS c FROM outreach_channel_account WHERE id = '${ACC2}'`,
+    );
+    assert.equal(c?.c, null, 'sin leer, el cursor no se mueve');
   });
 
   test('un rebote de Gmail marca la ficha y cancela sus correos pendientes', async () => {

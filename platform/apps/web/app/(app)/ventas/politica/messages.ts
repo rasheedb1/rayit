@@ -188,13 +188,16 @@ export const MESSAGES = {
       note: (duros: string, enviados: string, n: number) =>
         plural(n, `${duros} de ${enviados} no existe`, `${duros} de ${enviados} no existen`),
       sinEnvios: "Sin envíos en las últimas 24 horas",
+      /** La cifra grande con pocos envíos: «1 de 4». Los dos llegan formateados. */
+      cuenta: (duros: string, enviados: string) => `${duros} de ${enviados}`,
       /**
        * Detrás de la nota, dónde está la tasa respecto del aviso
        * (bounceRateStatus de @mc/core): que un 25 % con cuatro envíos no
        * parezca ignorado. `minimo` y `umbral` llegan formateados.
        */
       umbral: {
-        pocos: (minimo: string) => `con menos de ${minimo} envíos no se avisa todavía`,
+        /** Sola, debajo de «1 de 4»: con pocos envíos la nota no repite la cuenta. */
+        pocos: (minimo: string) => `Con menos de ${minimo} envíos no se avisa todavía`,
         sobre: (umbral: string) => `pasa del ${umbral}: te avisamos`,
         bajo: (umbral: string) => `por debajo del ${umbral} que dispara el aviso`,
       },
@@ -264,7 +267,8 @@ export const MESSAGES = {
        * El paso concreto, en una frase, en vez de un enlace a una página
        * que no resuelve nada: la pantalla de canales (VEN-9), donde se
        * reconecta, todavía no está integrada. Cuando llegue, la alerta y
-       * esta lista enlazan allí (CANALES_URL del worker).
+       * esta lista enlazan allí (CANALES_URL del worker). Solo se enseña
+       * si hay cómo darlo: con el botón o con SUPPORT_EMAIL (r5).
        */
       paso: {
         email: "Para volver a enviar hay que conectar otra vez este Gmail y aceptar los permisos de envío.",
