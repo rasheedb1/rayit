@@ -86,10 +86,11 @@ export function markedOf(segments: readonly Segment[]): string {
 
 /**
  * Lo que se inserta con una ficha: la ficha y, si hace falta, un espacio
- * delante y otro detrás (no se pega a la palabra de al lado).
+ * delante y otro detrás (no se pega a la palabra de al lado). Al final
+ * del texto no se añade espacio detrás: lo siguiente puede ser una coma.
  */
 export function withSpacing(before: string, after: string, piece: Segment[]): Segment[] {
   const lead = before && !/\s$/.test(before) ? [{ kind: "text" as const, text: " " }] : [];
-  const trail = !after || !/^[\s.,;:!?)]/.test(after) ? [{ kind: "text" as const, text: " " }] : [];
+  const trail = after.trim() && !/^[\s.,;:!?)]/.test(after) ? [{ kind: "text" as const, text: " " }] : [];
   return [...lead, ...piece, ...trail];
 }
