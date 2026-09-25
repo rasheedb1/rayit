@@ -78,6 +78,8 @@ export const CHANNEL_CAP_LIMITS = {
 export const ENROLLMENT_STATUSES = ['active', 'paused', 'completed', 'replied', 'opted_out', 'cooldown', 'bounced'] as const;
 export const MESSAGE_DIRECTIONS = ['inbound', 'outbound'] as const;
 export const MESSAGE_INTENTS = ['interested', 'not_now', 'ooo', 'unsubscribe', 'referral', 'ambiguous'] as const;
+/** Quién puso la intención de un mensaje entrante (0064). */
+export const INTENT_SOURCES = ['detector', 'model', 'fake', 'person'] as const;
 export const REGENERATE_HINTS = ['shorter', 'more_specific', 'other_angle', 'other_signal', 'soften', 'add_proof'] as const;
 export const RISK_TRIGGERS = [
   'unsourced_figure', 'invented_client', 'false_urgency', 'pressure', 'competitor_mention', 'missing_disclosure',
@@ -374,6 +376,12 @@ export const outboundMessage = pgTable('outbound_message', {
   occurredAt: timestamptz('occurred_at').defaultNow().notNull(),
   readAt: timestamptz('read_at'),
   createdAt: createdAt(),
+  /** Quién puso la intención (0064): la regla de bajas, el modelo, el clasificador falso o una persona. */
+  intentSource: text('intent_source', { enum: INTENT_SOURCES }),
+  /** El contacto que la respuesta propone («escríbele a …»), para que una persona lo cree (0064). */
+  referral: jsonb('referral').$type<{ name?: string | null; email?: string | null; role?: string | null }>(),
+  /** La ficha creada desde esa propuesta (0064). */
+  referralContactId: uuid('referral_contact_id').references(() => contact.id, { onDelete: 'set null' }),
 });
 
 /** Una fila por intento de la puerta de calidad. Bitácora: se inserta, no se corrige. */

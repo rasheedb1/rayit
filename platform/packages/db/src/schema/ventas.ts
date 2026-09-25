@@ -8,7 +8,7 @@
  * en company_link, que también está aislada.
  */
 import { sql } from 'drizzle-orm';
-import { bigserial, boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { citext, country, createdAt, currency, localTime, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 import { OUTBOUND_CHANNELS } from './_canales.ts';
 import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts';
@@ -18,7 +18,7 @@ import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts'
 // evalúa después de cargar los dos módulos; nada de outreach.ts se lee
 // al cargar este. Por eso OUTBOUND_CHANNELS, que sí se lee al cargar,
 // vive en _canales.ts y no en ninguno de los dos.
-import { outboundEnrollment, outboundSequenceTemplate, outboundStep, outreachChannelAccount } from './outreach.ts';
+import { outboundEnrollment, outboundMessage, outboundSequenceTemplate, outboundStep, outreachChannelAccount } from './outreach.ts';
 
 export { OUTBOUND_CHANNELS, type OutboundChannel } from './_canales.ts';
 
@@ -425,4 +425,10 @@ export const outboundTouch = pgTable('outbound_touch', {
   capsReservedOn: date('caps_reserved_on', { mode: 'string' }),
   /** El día en que el intento AMBIGUO reservó su plaza: vuelve ahí si el proveedor dice que no salió (0052 §2). */
   unconfirmedCapsOn: date('unconfirmed_caps_on', { mode: 'string' }),
+  /**
+   * El mensaje entrante al que responde (0064, VEN-14): la respuesta escrita
+   * en la bandeja unificada, sin enrolamiento ni paso. El despachador la
+   * envía en el hilo de ese mensaje y por la cuenta que lo recibió.
+   */
+  replyToMessageId: uuid('reply_to_message_id').references((): AnyPgColumn => outboundMessage.id, { onDelete: 'set null' }),
 });
