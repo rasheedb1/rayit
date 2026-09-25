@@ -1122,6 +1122,58 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   creador del mismo espacio no se ofrecen ni pasan el pre-vuelo. El
   negocio del pitch tiene que ser de la empresa.
 
+#### Ronda 3 (0058)
+
+- **Lo que el pre-vuelo no veía.** Un multiplicador delante («crecieron
+  x3», «×2»), «3-fold», los puntos porcentuales («5 pp») y los puestos
+  («#1», «top 1», «número uno», «number one») son cifra siempre, por
+  pequeños que sean. Un puesto no lo respalda ninguna cifra del perfil:
+  siempre sale «sin origen». «Medio millón» es 500.000.
+- **Lo que veía de más.** Lo que una creadora ofrece no es una cifra de
+  desempeño: «te propongo 3 videos y 2 historias», «el paquete de 4
+  reels», «mis 3 mejores videos». Tampoco las duraciones («un reel de 30
+  segundos», «en 48 horas») ni las direcciones («la calle 85», «Cra. 7 #
+  71-21»). «Publiqué 12 videos» y «trabajé con 11 marcas» siguen siéndolo.
+  Una cifra sin origen impide programar, pero ya no copiar: la creadora
+  envía desde su correo y puede ser algo que On Cue no sabe leer. Un
+  correo corto y bueno pasa: el mínimo es de 150 caracteres.
+- **La aprobación de lo retenido también exige origen.** Lo que la IA deja
+  en `held` (los diez primeros, los de riesgo, los que pide la política)
+  se aprueba en la ficha con `releaseHeldTouch`, que ahora marca cada
+  cifra con su origen (la marca de la IA si el texto sigue siendo el
+  suyo, o una cifra del perfil que diga lo mismo) y no aprueba una sin
+  origen (`unsourced_figure`, con cuál). `outbound_touch.claims` se
+  recalcula con lo que cita el texto aprobado.
+- **Ningún intento se pierde.** `outbound_review.run` numera las corridas
+  de la puerta de calidad sobre un toque; los intentos van de 1 a 10
+  dentro de su corrida y la clave es `(touch_id, run, attempt)`. La nota
+  que enseña el editor es la del intento elegido (`chosen_attempt`,
+  `judge_note` y `total_score` en `outbound_generation`), no la del último.
+- **Sin bucles de gasto.** Cada fallo suma en `outbound_generation.failures`
+  y fija `next_attempt_at`: 2, 8, 30 y 120 minutos. Sin presupuesto se
+  mira cada media hora. Tras tres respuestas ilegibles del modelo, la IA
+  se rinde (stage `failed`): el toque de una cadencia queda retenido con
+  `llm_error` y el editor lo dice. `last_error` guarda un código
+  (`llm_budget`, `interrupted`, `llm_output`, `error`); el texto del error
+  va al registro del worker, nunca a la pantalla.
+- **El plazo del job.** La señal del job llega a la llamada al modelo (la
+  corta ahí mismo), `outbound.review` toma tres toques por corrida y ni
+  uno más si quedan menos de 90 s; si se corta a mitad, los intentos ya
+  pagados se escriben en `outbound_review` antes de soltar el turno.
+- **La compuerta B compara con lo que va a salir.** Además de lo enviado,
+  lo programado, lo retenido y lo que la IA redactó en el mismo lote. Los
+  nombres propios cuentan como uno solo: el mismo correo con la marca y
+  la persona cambiadas es el mismo correo. La baja de este espacio
+  (`outbound_workspace_optout`) también frena la redacción.
+- **El editor.** Las cifras y las variables son fichas dentro del mensaje
+  (el origen al pasar el cursor), no marcas. El pitch se guarda con sus
+  `{{variables}}` sin rellenar: si cambia la persona, cambia el saludo.
+  Junto a «Programar», una línea dice por qué está apagado; recién
+  abierto y vacío no hay errores en rojo. El aviso de guardar no se
+  pierde al repintar la página. En la demo embebida (sin worker),
+  «Redactar con IA» lo redacta el redactor falso en el mismo proceso,
+  por el mismo camino (`redactRequestedInProcess`).
+
 ### 5.7 Qué pasa cuando la marca responde
 
 El webhook de mensajes nuevos de Unipile y la lectura del hilo de Gmail
