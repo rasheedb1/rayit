@@ -57,10 +57,15 @@ export function reviseDraft(input: {
   values: TemplateValues;
   claims: readonly SalesClaim[];
   firstTouch: boolean;
+  /** La marca a la que se escribe: su nombre en mayúsculas («NIVEA») no es gritar. El servidor hace lo mismo. */
+  companyName?: string | null;
 }): Revision {
   const subject = renderTemplate(input.subject, input.values) ?? "";
   const body = renderTemplate(input.body, input.values) ?? "";
-  const pf = preflight({ stepType: "email", subject, body, claims: input.claims, firstTouch: input.firstTouch });
+  const pf = preflight({
+    stepType: "email", subject, body, claims: input.claims, firstTouch: input.firstTouch,
+    allowedUppercase: input.companyName ? [input.companyName] : [],
+  });
   const sg = subjectGate("email", subject);
   const items = [
     ...sg.codes.map((code) => ({ code, text: PITCH.asunto[code] ?? code })),

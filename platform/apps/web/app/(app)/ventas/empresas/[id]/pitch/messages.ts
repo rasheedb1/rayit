@@ -1,5 +1,5 @@
 import type { ClaimSource } from "@mc/core/outreach/claims";
-import type { PreflightCode } from "@mc/core/outreach/preflight";
+import type { PreflightCode, RegenerateHint } from "@mc/core/outreach/preflight";
 import type { TemplateVariable } from "@mc/core/outreach/render";
 
 /**
@@ -36,6 +36,54 @@ export const PITCH = {
     cifrasHelp: "Toca una para insertarla con su origen donde está el cursor.",
     sinCifras: "Todavía no hay cifras fiables en tu perfil: conecta tus redes o importa tus métricas para poder citarlas.",
     insertar: (label: string) => `Insertar ${label}`,
+    buscar: "Buscar una cifra",
+    buscarPlaceholder: "Mediana, TikTok, campaña…",
+    sinResultados: "Ninguna cifra coincide con la búsqueda.",
+    cuantas: (n: number) => (n === 1 ? "1 cifra" : `${n} cifras`),
+    /** Los grupos, en el orden en que se enseñan. */
+    grupos: {
+      creator_baseline: "Mediana de views",
+      campaign_brand: "Campañas con esta marca",
+      signal: "Señal del negocio",
+      creator_profile: "Audiencia",
+      post_score: "Videos",
+      media_kit: "Media kit",
+      campaign_result: "Otras campañas",
+      quote: "Cotizaciones",
+    },
+  },
+
+  ia: {
+    titulo: "Redactar con IA",
+    help: "La IA escribe a partir de tu perfil, la señal del negocio y lo que ya le enviaste a esta persona; cada cifra sale con su origen y una revisión automática le pone nota.",
+    instrucciones: "Instrucciones (opcional)",
+    instruccionesHelp: "El tono o qué destacar, con tus palabras. No cambia las reglas: ninguna cifra sin origen.",
+    senal: (headline: string) => `Se apoya en la señal del negocio: ${headline}.`,
+    sinSenal: "Sin señal en este negocio: se apoya en la marca y su sector.",
+    redactar: "Redactar con IA",
+    volverARedactar: "Otra versión",
+    pistas: {
+      shorter: "Más corto",
+      more_specific: "Más específico",
+      other_angle: "Otro ángulo",
+    } satisfies Partial<Record<RegenerateHint, string>>,
+    pistaLabel: (pista: string) => `Pedir otra versión: ${pista.toLowerCase()}`,
+    redactando: "Redactando… La IA escribe y revisa el borrador; esta página se actualiza sola.",
+    pendienteDe: {
+      requested: "En cola",
+      generating: "Escribiendo",
+      generated: "Revisando",
+      reviewing: "Revisando",
+    } as Record<string, string>,
+    reintento: (error: string) => `El último intento no salió (${error}); se vuelve a intentar solo.`,
+    editarCancela: "Si lo editas y lo guardas mientras tanto, manda lo tuyo y se cancela la redacción.",
+    pedido: "Pedido. La IA lo redacta en uno o dos minutos; esta página se actualiza sola.",
+    ocupado: "La IA ya está trabajando en este borrador: espera a que termine.",
+    necesitaContacto: "Elige a quién le escribes para pedir un borrador.",
+    noConfigurada:
+      "La redacción con IA no está encendida: falta la llave de Anthropic en el worker. Escribe el pitch tú; la revisión y las cifras funcionan igual.",
+    desconocida:
+      "No sabemos si la redacción con IA está encendida: el worker no ha corrido en el último día. Escribe el pitch tú; la revisión y las cifras funcionan igual.",
   },
 
   variables: {
@@ -80,10 +128,10 @@ export const PITCH = {
     bloquea: "Esto impide programarlo",
     calidad: "Nota de la revisión automática",
     nota: (score: string) => `${score} de 10`,
-    iaNoConfigurada:
-      "La redacción con IA no está configurada en este espacio (falta la llave de Anthropic en el servidor): escribe el pitch tú. La revisión y las cifras funcionan igual.",
     generado: "Borrador redactado con IA a partir de tu perfil y de la señal de la marca. Revísalo antes de programarlo.",
     retenido: (reason: string) => `Retenido: ${reason}.`,
+    envioApagado: "El envío está apagado: lo que programes saldrá cuando lo enciendas.",
+    encenderEnvio: "Ir al interruptor del envío",
   },
 
   asunto: {
@@ -139,6 +187,7 @@ export const PITCH = {
     opted_out: "Esa persona pidió no recibir más mensajes o su correo rebotó.",
     preflight: "Corrige lo que marca «Antes de enviar» para programarlo.",
     not_editable: "Ese borrador ya cambió (salió, se aprobó o se canceló). Recarga la página.",
+    deal: "Ese negocio no es de esta empresa. Elige otro o ninguno.",
     no_postal_address: "Falta la dirección postal que va en el pie de los correos.",
   },
 

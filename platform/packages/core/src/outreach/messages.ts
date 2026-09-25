@@ -27,6 +27,8 @@ export const OUTREACH_URLS = {
   channels: '/ventas/canales',
   /** La dirección postal en la política de envío (VEN-15): la pide un correo antes de salir. */
   policyPostalAddress: '/ventas/politica#postalAddress',
+  /** El interruptor del envío en la política: apagado, lo programado espera. */
+  policySwitch: '/ventas/politica#interruptor',
   /** La ficha de una empresa: sus contactos, su negocio y su actividad. */
   company: (companyId: string) => `/ventas/empresas/${companyId}`,
   /**
@@ -201,7 +203,8 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     quality_warmup: (d) =>
       `pasó la revisión automática, pero los diez primeros mensajes de cada tipo los aprueba una persona (llevas ${d || '0'})`,
     quality_risk: (d) => `la revisión automática encontró ${riskList('es', d)}; revísalo antes de aprobarlo`,
-    quality_low: (d) => `la revisión automática le dio ${score('es', d) ?? 'una nota'} de 10, por debajo del mínimo; edítalo o regenéralo`,
+    quality_low: (d) =>
+      `la revisión automática le dio ${score('es', d) ?? 'una nota'} de 10, por debajo del mínimo; edítalo (si es un correo, también puedes pedir otra versión en «Redactar pitch»)`,
     quality_preflight: () => 'ninguna versión pasó las reglas de estilo y de cifras; edítalo antes de aprobarlo',
     quality_duplicate: () => 'es igual a un mensaje que esta persona ya recibió',
     llm_budget: () => 'se acabó el presupuesto de redacción con IA de hoy; revísalo o escríbelo tú',
@@ -220,7 +223,8 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     no_subject: () => "it's a new email with no subject; write one before approving it",
     quality_warmup: (d) => `it passed the automatic review, but a person approves the first ten messages of each type (${d || '0'} so far)`,
     quality_risk: (d) => `the automatic review found ${riskList('en', d)}; check it before approving it`,
-    quality_low: (d) => `the automatic review scored it ${score('en', d) ?? 'low'} out of 10, under the minimum; edit or regenerate it`,
+    quality_low: (d) =>
+      `the automatic review scored it ${score('en', d) ?? 'low'} out of 10, under the minimum; edit it (for an email, you can also ask for another version in «Write pitch»)`,
     quality_preflight: () => 'no version passed the style and figure rules; edit it before approving it',
     quality_duplicate: () => 'it is the same as a message this person already got',
     llm_budget: () => "today's AI writing budget ran out; review it or write it yourself",

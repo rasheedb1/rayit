@@ -1,26 +1,35 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { startTransition, useActionState, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { SalesClaim } from "@mc/core/outreach/claims";
-import { templateValuesFrom, type TemplateVariable } from "@mc/core/outreach/render";
+import { OUTREACH_URLS } from "@mc/core/outreach/messages";
+import type { RegenerateHint } from "@mc/core/outreach/preflight";
+import { templateValuesFrom, type TemplateSources, type TemplateVariable } from "@mc/core/outreach/render";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
-import { guardarPitch, type PitchState } from "./actions";
+import { guardarPitch, pedirRedaccion, type PitchState } from "./actions";
 import { FichasInsertables } from "./fichas";
+import { PanelIA, type AiStatus, type PendingDraft } from "./ia";
 import { PITCH } from "./messages";
 import { VistaYRevision } from "./revision";
 import { claimSnippet, insertAt, previewOf, reviseDraft } from "./vista";
+
+/** Lo que cambia con el negocio elegido: quién firma, qué cifras puede citar y con qué se rellenan las variables. */
+export interface EditorVariant {
+  creator: { id: string; name: string; handle: string | null; niche: string | null } | null;
+  claims: SalesClaim[];
+  sources: Omit<TemplateSources, "contact">;
+}
 
 export interface EditorData {
   companyId: string;
   company: { name: string; industry: string | null; city: string | null };
   contacts: Array<{ id: string; fullName: string | null; roleTitle: string | null; email: string; firstTouch: boolean }>;
   deals: Array<{ id: string; label: string; signalHeadline: string | null }>;
-  claims: SalesClaim[];
-  creator: { name: string; handle: string | null; niche: string | null } | null;
-  /** La ruta del media kit público («/kit/abc»); se vuelve absoluta en el navegador. */
-  mediaKitPath: string | null;
+  /** Por negocio (su id) y sin negocio (''). Los enlaces ya vienen armados por el servidor. */
+  variants: Record<string, EditorVariant>;
   draft: {
     touchId: string;
     contactId: string | null;
@@ -31,52 +40,62 @@ export interface EditorData {
     generated: boolean;
     score: string | null;
     note: string | null;
+    pending: PendingDraft | null;
   } | null;
-  aiConfigured: boolean;
+  /** ¿El worker redacta con IA? Lo dice su última corrida, no la web. */
+  ai: AiStatus;
   sendingOn: boolean;
 }
 
+/** Cada cuánto se mira si la IA terminó mientras redacta. */
+const POLL_MS = 5_000;
+
 /**
- * El editor del pitch: a la izquierda, para quién, el asunto, el mensaje
- * y las fichas insertables; a la derecha, cómo lo recibe la marca y la
+ * El editor del pitch: a la izquierda, para quién, la redacción con IA
+ * (instrucciones, pedir un borrador y tres pistas, como el generador de
+ * Chief), el asunto, el mensaje y las cifras insertables; a la derecha,
+ * cómo lo recibe la marca, la nota de la revisión automática y la
  * revisión en línea. «Copiar» copia el texto limpio y guarda el borrador;
  * «Programar» solo se puede con la revisión en verde (y el servidor la
- * repite). Como el generador de Chief y el compositor de Superhuman: el
- * texto manda y todo lo demás está a un toque.
+ * repite). Como el compositor de Superhuman: el texto manda y lo demás
+ * está a un toque.
  */
 export function EditorDePitch({ data }: { data: EditorData }) {
   const d = data.draft;
+  const router = useRouter();
   const [contactId, setContactId] = useState(d?.contactId ?? data.contacts[0]?.id ?? "");
   const [dealId, setDealId] = useState(d?.dealId ?? data.deals[0]?.id ?? "");
   const [subject, setSubject] = useState(d?.subject ?? "");
   const [body, setBody] = useState(d?.body ?? "");
-  const [origin, setOrigin] = useState<string | null>(null);
   // El Textarea del kit no reenvía ref: el cursor se lee de su contenedor.
   const bodyRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const [state, dispatch, pending] = useActionState<PitchState, FormData>(guardarPitch, {});
+  const [aiState, dispatchAi, aiPending] = useActionState<PitchState, FormData>(pedirRedaccion, {});
   const noticeRef = useRef<HTMLParagraphElement>(null);
 
-  // La URL del media kit se arma con el dominio con el que entró la visita, no con una variable del servidor.
-  useEffect(() => setOrigin(window.location.origin), []);
   useEffect(() => {
     if (state.stamp) noticeRef.current?.focus();
   }, [state.stamp]);
+  // Mientras la IA redacta, la página se actualiza sola hasta que termine.
+  const waiting = d?.pending != null || aiState.intent === "ai";
+  useEffect(() => {
+    if (!waiting) return;
+    const id = setInterval(() => router.refresh(), POLL_MS);
+    return () => clearInterval(id);
+  }, [waiting, router]);
 
   const contact = data.contacts.find((c) => c.id === contactId) ?? null;
   const deal = data.deals.find((x) => x.id === dealId) ?? null;
-  const mediaKitUrl = data.mediaKitPath && origin ? new URL(data.mediaKitPath, origin).toString() : null;
+  const variant = data.variants[dealId] ?? data.variants[""] ?? { creator: null, claims: [], sources: {} };
   const values = useMemo(
-    () =>
-      templateValuesFrom({
-        contact: contact ? { fullName: contact.fullName, roleTitle: contact.roleTitle } : null,
-        company: data.company,
-        signal: { headline: deal?.signalHeadline ?? null },
-        creator: data.creator ? { senderName: data.creator.name, handle: data.creator.handle, niche: data.creator.niche, mediaKitUrl } : null,
-      }),
-    [contact, deal, data.company, data.creator, mediaKitUrl],
+    () => templateValuesFrom({ contact: contact ? { fullName: contact.fullName, roleTitle: contact.roleTitle } : null, ...variant.sources }),
+    [contact, variant],
   );
   const preview = previewOf(subject, body, values);
-  const revision = reviseDraft({ subject, body, values, claims: data.claims, firstTouch: contact?.firstTouch ?? true });
+  const revision = reviseDraft({
+    subject, body, values, claims: variant.claims, firstTouch: contact?.firstTouch ?? true, companyName: data.company.name,
+  });
 
   function insert(snippet: string) {
     const el = bodyRef.current?.querySelector("textarea") ?? null;
@@ -99,20 +118,39 @@ export function EditorDePitch({ data }: { data: EditorData }) {
     startTransition(() => dispatch(form));
   }
 
+  function requestAi(hint: RegenerateHint | null, instructions: string) {
+    if (!formRef.current) return;
+    const form = new FormData(formRef.current);
+    form.set("hint", hint ?? "");
+    form.set("instructions", instructions);
+    startTransition(() => dispatchAi(form));
+  }
+
   const t = PITCH.campos;
   const a = PITCH.acciones;
-  const touchId = state.touchId ?? d?.touchId ?? "";
+  const touchId = aiState.touchId ?? state.touchId ?? d?.touchId ?? "";
+  const shown = aiState.stamp && (!state.stamp || aiState.stamp > state.stamp) ? aiState : state;
   return (
-    <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_360px]">
-      <form onSubmit={onSubmit} noValidate className="grid min-w-0 content-start gap-5" aria-label={PITCH.title(data.company.name)}>
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <form
+        ref={formRef}
+        onSubmit={onSubmit}
+        noValidate
+        className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-5"
+        aria-label={PITCH.title(data.company.name)}
+      >
         <input type="hidden" name="companyId" value={data.companyId} />
         <input type="hidden" name="touchId" value={touchId} />
-        <input type="hidden" name="mediaKitUrl" value={mediaKitUrl ?? ""} />
-        {!data.aiConfigured && !d?.generated && <p className="rounded-md border border-dashed border-border p-3 text-sm text-ink-2">{PITCH.revision.iaNoConfigurada}</p>}
-        {d?.generated && <p className="text-sm text-ink-2">{PITCH.revision.generado}</p>}
+        {d?.generated && !d.pending && <p className="text-sm text-ink-2">{PITCH.revision.generado}</p>}
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label={t.contacto} help={data.contacts.length > 0 ? t.contactoHelp : t.sinContactos} htmlFor="pitch-contacto" error={state.errors?.contactId}>
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-4 sm:grid-cols-[repeat(2,minmax(0,1fr))]">
+          <Field
+            className="min-w-0"
+            label={t.contacto}
+            help={data.contacts.length > 0 ? t.contactoHelp : t.sinContactos}
+            htmlFor="pitch-contacto"
+            error={shown.errors?.contactId}
+          >
             <Select
               name="contactId"
               value={contactId}
@@ -121,7 +159,7 @@ export function EditorDePitch({ data }: { data: EditorData }) {
               options={data.contacts.map((c) => ({ value: c.id, label: c.fullName ? `${c.fullName} · ${c.email}` : c.email }))}
             />
           </Field>
-          <Field label={t.negocio} help={t.negocioHelp} htmlFor="pitch-negocio">
+          <Field className="min-w-0" label={t.negocio} help={t.negocioHelp} htmlFor="pitch-negocio" error={shown.errors?.dealId}>
             <Select
               name="dealId"
               value={dealId}
@@ -131,17 +169,29 @@ export function EditorDePitch({ data }: { data: EditorData }) {
             />
           </Field>
         </div>
-        <Field label={t.asunto} help={t.asuntoHelp} htmlFor="pitch-asunto">
+
+        <PanelIA
+          status={data.ai}
+          pending={d?.pending ?? null}
+          hasBody={body.trim() !== ""}
+          hasContact={contact !== null}
+          signalHeadline={deal?.signalHeadline ?? null}
+          busy={aiPending}
+          onRequest={requestAi}
+        />
+
+        <Field className="min-w-0" label={t.asunto} help={t.asuntoHelp} htmlFor="pitch-asunto">
           <Input name="subject" value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={300} />
         </Field>
-        <div ref={bodyRef}>
+        <div ref={bodyRef} className="min-w-0">
           <Field label={t.cuerpo} help={t.cuerpoHelp} htmlFor="pitch-cuerpo">
             <Textarea name="body" rows={12} value={body} onChange={(e) => setBody(e.target.value)} maxLength={20_000} />
           </Field>
         </div>
 
         <FichasInsertables
-          claims={data.claims}
+          claims={variant.claims}
+          companyName={data.company.name}
           onVariable={(v: TemplateVariable) => insert(`{{${v}}}`)}
           onClaim={(c) => insert(claimSnippet(c))}
         />
@@ -158,26 +208,26 @@ export function EditorDePitch({ data }: { data: EditorData }) {
           </Button>
         </div>
         {!revision.canCopy && <p className="text-xs text-muted">{a.copiarBloqueado}</p>}
-        <div aria-live="polite" className="grid gap-1 text-sm">
-          {state.notice && (
+        <div aria-live="polite" className="grid min-w-0 gap-1 text-sm">
+          {shown.notice && (
             <p ref={noticeRef} tabIndex={-1} className="text-ink">
-              {state.notice}{" "}
+              {shown.notice}{" "}
               <Link href={`/ventas/empresas/${data.companyId}`} className="underline underline-offset-4 hover:text-ink-2">
                 {a.verFicha}
               </Link>
             </p>
           )}
-          {state.message && <p className="text-bad">{state.message}</p>}
-          {state.issues && state.issues.length > 0 && (
+          {shown.message && <p className="text-bad">{shown.message}</p>}
+          {shown.issues && shown.issues.length > 0 && (
             <ul className="list-disc pl-5 text-ink-2">
-              {state.issues.map((i) => (
+              {shown.issues.map((i) => (
                 <li key={i}>{i}</li>
               ))}
             </ul>
           )}
-          {state.link && (
-            <Link href={state.link.href} className="underline underline-offset-4 hover:text-ink-2">
-              {state.link.label}
+          {shown.link && (
+            <Link href={shown.link.href} className="underline underline-offset-4 hover:text-ink-2">
+              {shown.link.label}
             </Link>
           )}
         </div>
@@ -190,7 +240,14 @@ export function EditorDePitch({ data }: { data: EditorData }) {
           revision={revision}
           quality={d ? { score: d.score, note: d.note, held: d.held } : null}
         />
-        {!data.sendingOn && <p className="mt-4 text-xs text-muted">{a.programadoApagado}</p>}
+        {!data.sendingOn && (
+          <p className="mt-4 text-xs text-muted">
+            {PITCH.revision.envioApagado}{" "}
+            <Link href={OUTREACH_URLS.policySwitch} className="underline underline-offset-4 hover:text-ink-2">
+              {PITCH.revision.encenderEnvio}
+            </Link>
+          </p>
+        )}
       </aside>
     </div>
   );
