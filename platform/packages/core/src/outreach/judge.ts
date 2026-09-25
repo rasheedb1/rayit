@@ -53,7 +53,8 @@ export type ReviewDecision = 'pass' | 'regenerate' | 'send_best' | 'hold' | 'rej
 /** La nota ponderada, con dos decimales (numeric(4,2)). */
 export function weightedScore(scores: RubricScores, weights: RubricScores): number {
   const total = RUBRIC_DIMENSIONS.reduce((acc, d) => acc + clampScore(scores[d]) * weights[d], 0);
-  return Math.round(Math.min(10, Math.max(0, total)) * 100) / 100;
+  // Medio centésimo hacia arriba, como numeric en Postgres (8,675 → 8,68, no 8,67 por el binario).
+  return Math.round(Math.min(10, Math.max(0, total)) * 100 + 1e-9) / 100;
 }
 
 function clampScore(n: number): number {
