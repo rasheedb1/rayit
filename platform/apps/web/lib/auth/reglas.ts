@@ -27,6 +27,15 @@ export const PUEDEN_RENOMBRAR: ReadonlySet<MembershipRole> = new Set<MembershipR
 export const PUEDEN_GESTIONAR_CANALES: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin"]);
 
 /**
+ * Los roles que pueden recalcular el perfil comercial y editar su
+ * narrativa (VEN-11). Recalcular gasta en el modelo contra el tope
+ * diario del espacio y la narrativa es la voz de la creadora ante las
+ * marcas: un 'viewer' o un 'client' (en una agencia, la marca misma) la
+ * leen, no la reescriben.
+ */
+export const PUEDEN_EDITAR_PERFIL: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
+
+/**
  * Cuántos espacios puede tener una persona como propietaria. Sin tope,
  * un script con sesión crea miles de workspaces con su creator_profile.
  * Veinte cubre de sobra a una creadora que separa marcas; una agencia

@@ -6,12 +6,15 @@
  * del perfil de Stripe Atlas: cada dato dice de dónde sale. Voz: la del
  * creador que se presenta ante una marca; las explicaciones, cortas.
  *
- * Nada atado a un país: las cifras y las fechas llegan formateadas con
- * el locale, la moneda y la zona del workspace (lib/format.ts). Este
- * archivo llega al cliente (narrativa.tsx): solo tipos de @mc/core.
+ * Aquí vive también lo que dice cada cifra en su tooltip (`cifra.que`):
+ * @mc/core solo guarda la clave y los parámetros del claim. Nada atado a
+ * un país: las cifras, las fechas y los países llegan formateados con el
+ * locale, la moneda y la zona del workspace (lib/format.ts). Este
+ * archivo llega al cliente (narrativa.tsx, cifra.tsx): solo tipos de
+ * @mc/core.
  */
 import type {
-  ContentKind, DurationBucket, DurationVsTypical, HookKind, OutlierTier, PieceKind, ToneTrait,
+  ContentKind, CutSpan, DurationBucket, DurationVsTypical, HookKind, OutlierTier, PieceKind, ToneTrait, WhyAxis,
 } from "@mc/core/outreach/perfil";
 import type { NarrativeFallback } from "@mc/core/outreach/narrativa";
 import type { NarrativeSource } from "@mc/core/outreach/perfil-guardado";
@@ -22,16 +25,39 @@ function plural(n: number, one: string, other: string): string {
   return reglas.select(n) === "one" ? one : other;
 }
 
+/** Tus videos de un grupo del porqué, en plural: «Tus videos que abren con una promesa», «Tus reels». */
+const GRUPOS: Record<WhyAxis, Record<string, string>> = {
+  hook: {
+    reto: "Tus videos que abren con un reto",
+    pregunta: "Tus videos que abren con una pregunta",
+    error: "Tus videos que abren con un error común",
+    lista: "Tus videos que abren con una lista",
+    promesa: "Tus videos que abren con una promesa concreta",
+    historia: "Tus videos que abren con una historia propia",
+    directo: "Tus videos que entran directo al tema",
+  } satisfies Record<HookKind, string>,
+  piece: {
+    reel: "Tus reels", tiktok: "Tus videos de TikTok", short: "Tus shorts", historia: "Tus historias", video: "Tus videos largos o de feed",
+  } satisfies Record<PieceKind, string>,
+  content: {
+    tutorial: "Tus tutoriales y recetas", reto: "Tus retos", lista: "Tus listas", colaboracion: "Tus colaboraciones con marcas", otro: "Tus demás videos",
+  } satisfies Record<ContentKind, string>,
+  duration: {
+    muy_corto: "Tus videos muy cortos", corto: "Tus videos cortos", medio: "Tus videos de duración media", largo: "Tus videos largos",
+  } satisfies Record<DurationBucket, string>,
+};
+
 export const MESSAGES = {
   metaTitle: "Perfil comercial",
   header: {
     eyebrow: "Ventas · perfil comercial",
     title: "Cómo te presentas ante una marca",
     description:
-      "Tu audiencia, tus mejores videos y por qué funcionaron, tus campañas y tus tarifas, leídos de tus datos. Pasa el cursor por una cifra para ver de dónde sale.",
+      "Tu audiencia, tus mejores videos y lo que los distingue, tus campañas y tus tarifas, leídos de tus datos. Toca o pasa el cursor por una cifra para ver de dónde sale.",
   },
   calculado: (fecha: string) => `Calculado el ${fecha}`,
   datosNuevos: "Hay datos más nuevos que este cálculo. Recalcula para ponerlo al día.",
+  sinPermiso: "Solo quien es dueño, administra o es miembro de este espacio puede recalcular el perfil o editar su narrativa.",
 
   recalcular: {
     boton: "Recalcular",
@@ -50,6 +76,8 @@ export const MESSAGES = {
     title: "Tu perfil todavía no está calculado",
     description:
       "Lo armamos con tus redes conectadas, tus videos, tus campañas y tu tarifario. Tarda unos segundos y lo puedes recalcular cuando quieras.",
+    /** Para quien solo puede mirar: no se le ofrece calcularlo. */
+    soloLectura: "Todavía nadie lo ha calculado. Lo puede calcular quien es dueño, administra o es miembro de este espacio.",
   },
   sinCreador: {
     title: "Este espacio no tiene un creador activo",
@@ -58,18 +86,19 @@ export const MESSAGES = {
 
   narrativa: {
     title: "Narrativa",
-    meta: "Tres párrafos para presentarte. Cada cifra enlaza a su origen.",
+    meta: "Tres párrafos para presentarte. Cada cifra lleva a su origen.",
+    /** Lo que de verdad se garantiza: las cifras marcadas salen del perfil (el verificador rechaza cualquier otra). */
     fuente: {
-      llm: (modelo: string) => `Redactada por ${modelo} y verificada: solo usa cifras de este perfil.`,
-      template: "Redactada con la plantilla: solo usa cifras de este perfil.",
-      edited: "Editada por ti y verificada: solo usa cifras de este perfil.",
+      llm: (modelo: string) => `Redactada por ${modelo}. Las cifras marcadas salen de este perfil; el verificador rechaza cualquier otra.`,
+      template: "Redactada con la plantilla. Las cifras marcadas salen de este perfil.",
+      edited: "Editada por ti. Las cifras marcadas salen de este perfil; el verificador rechaza cualquier otra.",
     } satisfies Record<NarrativeSource, string | ((m: string) => string)>,
     /** Por qué la narrativa es de plantilla. */
     fallback: {
       no_model: "La redacción automática no está configurada en este espacio (falta la llave de Anthropic).",
       budget: "Hoy ya se alcanzó el tope de gasto en redacción automática; mañana se puede volver a intentar.",
       rejected: "La redacción automática citó cifras que no están en tu perfil, así que usamos la plantilla.",
-      error: "La redacción automática no respondió; usamos la plantilla.",
+      error: "La redacción automática no respondió a tiempo; usamos la plantilla.",
     } satisfies Record<NarrativeFallback, string>,
     editar: "Editar",
     guardar: "Guardar narrativa",
@@ -82,6 +111,8 @@ export const MESSAGES = {
     insertar: "Insertar una cifra",
     insertarAyuda: "Elige una cifra para ponerla donde está el cursor.",
     insertarBoton: "Insertar",
+    vistaPrevia: "Así se verá",
+    vistaPreviaVacia: "Escribe algo para ver cómo quedará.",
     vacia: "Todavía no hay narrativa.",
     errores: {
       titulo: "No se guardó:",
@@ -91,6 +122,8 @@ export const MESSAGES = {
       unknown_claim: (id: string) => `[claim:${id}] no es una cifra de este perfil.`,
       malformed_marker: (texto: string) => `«${texto}» no es una marca válida: se escribe [claim:id], con el id de la lista.`,
       bare_number: (texto: string) => `«${texto}» es una cifra escrita a mano: cámbiala por su marca de la lista o quítala.`,
+      number_word: (texto: string) =>
+        `«${texto}» dice una cantidad con letras o con un signo: cámbiala por su marca de la lista o quítala.`,
       placeholder: (texto: string) => `Quedó un hueco sin llenar: «${texto}».`,
       no_claims: "Cita al menos una cifra.",
       stale_edit: "La narrativa cambió mientras la editabas (otra pestaña o un recálculo). Recarga la página y vuelve a intentarlo.",
@@ -101,10 +134,14 @@ export const MESSAGES = {
   },
 
   cifra: {
-    /** El tooltip: qué es y de dónde sale. */
-    origen: "Origen",
+    /** Nombre accesible del botón de una cifra: el valor, qué es y qué hace. */
+    ver: (valor: string, que: string) => `${valor}, ${que}. Ver de dónde sale`,
     abrir: "Abrir el origen",
+    /** El enlace del origen, con su destino en el nombre accesible. */
+    abrirA: (destino: string) => `Abrir el origen: ${destino}`,
     filas: (n: number, texto: string) => `${texto} ${plural(n, "publicación", "publicaciones")}`,
+    /** La fecha de la lectura de la fila: «al 24 de septiembre de 2026». */
+    fecha: (fecha: string) => `al ${fecha}`,
     tablas: {
       creator_baseline: "Línea base del creador",
       post: "Tus publicaciones",
@@ -114,6 +151,38 @@ export const MESSAGES = {
       account_metric_snapshot: "Lectura diaria de la cuenta",
       campaign_result: "Resultado de la campaña",
       rate_card_item: "Tu tarifario vigente",
+    },
+    /** El corte de edad de una cifra, sin convertir a mano: core entrega la unidad (cutOf). */
+    corte: (c: CutSpan, n: string) => (c.unit === "hours" ? `a las ${n} horas de publicado` : `a los ${n} días de publicado`),
+    /** Qué es cada cifra, por la clave de su claim: lo que dice el tooltip. */
+    que: {
+      followers: (red: string) => `Tus seguidores en ${red}`,
+      audienceAge: (red: string, franja: string) => `Parte de tus seguidores de ${red} con ${franja} años`,
+      audienceGender: (red: string, genero: "f" | "m" | "u") =>
+        genero === "u"
+          ? `Parte de tus seguidores de ${red} de género sin especificar`
+          : `Parte de tus seguidores de ${red} que son ${genero === "f" ? "mujeres" : "hombres"}`,
+      audienceCountry: (red: string, pais: string) => `Parte de tus seguidores de ${red} que vive en ${pais}`,
+      nonFollowers: (red: string) => `Alcance en personas que no siguen tu cuenta: mediana por video en ${red}`,
+      median: (red: string, corte: string) => `Views medianas por video en ${red}, ${corte}`,
+      scoredVideos: "Videos con puntaje frente a tu mediana",
+      videoMultiple: (titulo: string, red: string, corte: string) => `Veces tu mediana de ${red} que hizo «${titulo}», ${corte}`,
+      videoViews: (titulo: string, red: string, corte: string) => `Views de «${titulo}» en ${red}, ${corte}`,
+      videoDuration: (titulo: string) => `Duración de «${titulo}»`,
+      whyGroup: (axis: WhyAxis, group: string) => `${GRUPOS[axis][group] ?? group}: su mediana, en veces tu mediana`,
+      whyRest: (axis: WhyAxis, group: string) =>
+        `El resto de tus videos (sin ${(GRUPOS[axis][group] ?? group).replace(/^Tus /, "tus ")}): su mediana, en veces tu mediana`,
+      formatPiece: (pieza: PieceKind) => `Publicaciones que son ${PIEZAS_PLURAL[pieza]}`,
+      formatContent: (contenido: ContentKind) => `Publicaciones que son ${CONTENIDOS_PLURAL[contenido]}`,
+      tone: (rasgo: ToneTrait) => `Parte de tus captions ${TONO_CAPTIONS[rasgo]}`,
+      captionsRead: "Captions leídos para inferir formatos y tono",
+      campaignViews: (marca: string) => `Views de la campaña con ${marca}`,
+      campaignMultiple: (marca: string) => `Veces tu mediana que hizo la campaña con ${marca}`,
+      campaignBrandFollowers: (marca: string) => `Seguidores que ganó ${marca} con la campaña`,
+      campaignRedemptions: (marca: string) => `Canjes del código de ${marca}`,
+      campaignRevenue: (marca: string) => `Ventas atribuidas a la campaña con ${marca}`,
+      rateLow: (item: string) => `Tu tarifa de «${item}», desde`,
+      rateHigh: (item: string) => `Tu tarifa de «${item}», hasta`,
     },
   },
 
@@ -134,7 +203,7 @@ export const MESSAGES = {
     edad: "Edad",
     genero: "Género",
     pais: "País",
-    generos: { F: "Mujeres", M: "Hombres", U: "Sin especificar" } as Record<string, string>,
+    generos: { f: "Mujeres", m: "Hombres", u: "Sin especificar" } satisfies Record<"f" | "m" | "u", string>,
     noSeguidores: "Alcance en personas que no te siguen",
     noSeguidoresNota: "Mediana por video, últimos videos de cada red",
   },
@@ -142,25 +211,31 @@ export const MESSAGES = {
   desempeno: {
     title: "Qué te funciona",
     medianas: "Views medianas por video",
-    medianaNota: (n: string, confiable: boolean) => `${n} videos${confiable ? "" : " · muestra corta"}`,
-    corte: (dias: string) => `A los ${dias} días de publicado`,
+    medianaNota: (n: string, confiable: boolean, corte: string) => `${n} videos · ${corte}${confiable ? "" : " · muestra corta"}`,
     mejores: "Tus cinco mejores videos",
     mejoresMeta: (n: string) => `Frente a tu mediana, entre ${n} videos con puntaje`,
     sinVideos: "Todavía no hay videos con puntaje. Aparecen cuando la línea base de una red tiene suficientes videos.",
     veces: "tu mediana",
-    views: "views",
+    views: (corte: string) => `views ${corte}`,
+    viewsPalabra: "views",
     duracion: "duración",
-    verVideo: "Ver el video",
+    frenteA: (red: string) => `Tu mediana de ${red} a esa edad:`,
     tier: { under: "Bajo su mediana", normal: "Normal", good: "Bueno", outlier: "Outlier", breakout: "Breakout" } satisfies Record<OutlierTier, string>,
-    porque: "Por qué funcionó",
+    porque: "Qué lo distingue",
+    /** Una razón: «Tus reels: 4,3× frente a 2,4× del resto». */
+    razonFrente: "frente a",
+    razonResto: "del resto",
+    grupos: GRUPOS,
+    /** Cuando ningún rasgo supera al resto: se describe el video, sin prometer una causa. */
+    sinRazon: "Ningún rasgo lo separa de tus demás videos. Cómo es:",
     gancho: {
-      reto: "Abre con un reto",
-      pregunta: "Abre con una pregunta",
-      error: "Abre con un error común",
-      lista: "Abre con una lista",
-      promesa: "Abre con una promesa concreta",
-      historia: "Abre con una historia propia",
-      directo: "Entra directo al tema",
+      reto: "abre con un reto",
+      pregunta: "abre con una pregunta",
+      error: "abre con un error común",
+      lista: "abre con una lista",
+      promesa: "abre con una promesa concreta",
+      historia: "abre con una historia propia",
+      directo: "entra directo al tema",
     } satisfies Record<HookKind, string>,
     ganchoLab: "según el análisis del video",
     pieza: { reel: "reel", tiktok: "TikTok", short: "short", historia: "historia", video: "video" } satisfies Record<PieceKind, string>,
@@ -168,9 +243,10 @@ export const MESSAGES = {
       tutorial: "tutorial", reto: "reto", lista: "lista", colaboracion: "colaboración con marca", otro: "",
     } satisfies Record<ContentKind, string>,
     duracionBucket: { muy_corto: "muy corto", corto: "corto", medio: "de duración media", largo: "largo" } satisfies Record<DurationBucket, string>,
+    /** 'similar' no se dice: no distingue nada. */
     vsTipico: {
       mas_corto: "más corto que tus videos típicos",
-      similar: "de tu duración habitual",
+      similar: "",
       mas_largo: "más largo que tus videos típicos",
     } satisfies Record<DurationVsTypical, string>,
   },
@@ -193,7 +269,6 @@ export const MESSAGES = {
       breve: "Captions breves",
       hashtags: "Usa hashtags",
     } satisfies Record<ToneTrait, string>,
-    deLosCaptions: "de los captions",
     sinDatos: "Todavía no hay publicaciones para leer.",
   },
 
@@ -201,21 +276,26 @@ export const MESSAGES = {
     title: "Con quién has trabajado",
     meta: "Campañas reportadas o cerradas, con resultado medido",
     sinDatos: "Todavía no tienes campañas con resultado medido. Aparecen aquí cuando reportas una en Campañas.",
-    verCampana: "Ver la campaña",
+    /** Lo que acompaña a cada cifra de campaña, por la clave de su claim. */
     etiquetas: {
-      views: "views",
-      x: "veces tu mediana",
-      "seguidores-marca": "seguidores nuevos para la marca",
-      canjes: "canjes del código",
-      ingresos: "en ventas atribuidas",
+      "campaign.views": "views",
+      "campaign.multiple": "veces tu mediana",
+      "campaign.brand_followers": "seguidores nuevos para la marca",
+      "campaign.redemptions": "canjes del código",
+      "campaign.revenue": "en ventas atribuidas",
     } as Record<string, string>,
   },
 
   tarifas: {
     title: "Cuánto cobras",
-    meta: "Tu tarifario vigente en Cotizar",
-    sinDatos: "Todavía no tienes tarifario. Créalo en Cotizar y aparecerá aquí.",
     verTarifario: "Ver el tarifario",
+    sinDatos: "Todavía no tienes tarifario. Créalo en Cotizar y aparecerá aquí.",
+  },
+
+  fuentes: {
+    title: "De dónde sale cada cifra",
+    meta: "Las cifras que no llevan a un video, a una campaña o al tarifario, con su fila y su fecha",
+    fila: "fila",
   },
 
   unidades: {
@@ -230,3 +310,18 @@ export const MESSAGES = {
     label: "Cargando el perfil comercial",
   },
 } as const;
+
+const PIEZAS_PLURAL: Record<PieceKind, string> = {
+  reel: "reels", tiktok: "videos de TikTok", short: "shorts", historia: "historias", video: "videos largos o de feed",
+};
+const CONTENIDOS_PLURAL: Record<ContentKind, string> = {
+  tutorial: "tutoriales o recetas", reto: "retos", lista: "listas", colaboracion: "colaboraciones con marcas", otro: "otros",
+};
+const TONO_CAPTIONS: Record<ToneTrait, string> = {
+  emojis: "con emojis",
+  tutea: "que le hablan de tú a quien mira",
+  primera_persona: "en primera persona",
+  preguntas: "con una pregunta",
+  breve: "breves",
+  hashtags: "con hashtags",
+};

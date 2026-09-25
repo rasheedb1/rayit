@@ -111,6 +111,8 @@ export async function Graficos({ filtro }: { filtro: Filtro }) {
 
   return (
     <div className="grid gap-4 xl:grid-cols-2">
+      {/* #seguidores: el ancla a la que lleva cada cifra de seguidores del perfil comercial (VEN-11), con ?red=. */}
+      <div id="seguidores" className="min-w-0 scroll-mt-24">
       <ChartCard
         title={t.seguidores.title}
         subtitle={t.seguidores.subtitle(seguidores.labels.length)}
@@ -135,6 +137,7 @@ export async function Graficos({ filtro }: { filtro: Filtro }) {
           seguidores.labels.length > 0 ? undefined : seguidores.hasAccountSeries ? <SinDatos filtro={filtro} /> : <SinCuenta />
         }
       />
+      </div>
       <ChartCard
         title={t.views.title}
         subtitle={t.views.subtitle(semanas.weeks.length)}

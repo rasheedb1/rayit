@@ -47,12 +47,18 @@ export function anthropicNarrativeModel(client: MessagesClient, model: string = 
   };
 }
 
-/** Un minuto por llamada y un reintento del SDK: la acción de «Recalcular» no puede colgarse. */
-const TIMEOUT_MS = 60_000;
+/**
+ * 25 s por llamada y ningún reintento del SDK: el segundo intento ya lo
+ * hace writeNarrative (con lo que el verificador encontró), y dos
+ * intentos de 25 s caben en el maxDuration de 60 s de /ventas/perfil.
+ * Tres párrafos con esfuerzo bajo tardan unos segundos; si la API no
+ * responde en 25, la narrativa sale de la plantilla (fallback «error»).
+ */
+export const NARRATIVE_TIMEOUT_MS = 25_000;
 
 /** El modelo con la llave del entorno, o null si no hay llave (canal no configurado). */
 export function narrativeModelFromEnv(env: Record<string, string | undefined> = process.env): NarrativeModel | null {
   const apiKey = env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) return null;
-  return anthropicNarrativeModel(new Anthropic({ apiKey, maxRetries: 1, timeout: TIMEOUT_MS }));
+  return anthropicNarrativeModel(new Anthropic({ apiKey, maxRetries: 0, timeout: NARRATIVE_TIMEOUT_MS }));
 }

@@ -1,20 +1,20 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import type { OutlierTier, PerfilComercial, TopVideo } from "@mc/core/outreach/perfil";
+import { genderCode, shortId, type OutlierTier, type PerfilComercial, type TopVideo } from "@mc/core/outreach/perfil";
 import { SectionTitle } from "@/components/page-header";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import { PLATFORM_LABEL, PlatformPill } from "@/components/ui/platform-pill";
 import { RANGE_DASH, type Formatter } from "@/lib/format";
 import { Cifra } from "./cifra";
-import type { CifraVista } from "./cifras";
+import { corteTexto, origenId, type CifraVista } from "./cifras";
 import { MESSAGES } from "./messages";
 
 /**
  * Las secciones del perfil, en una columna y en el orden de un media kit
  * (Beacons, Passionfroot): quién eres, qué te funciona, a quién llegas,
- * qué haces, con quién trabajaste y cuánto cobras. Cada número es una
- * <Cifra> con su origen; aquí no se calcula nada, solo se pinta lo que
- * trae el perfil guardado.
+ * qué haces, con quién trabajaste, cuánto cobras y, al final, de dónde
+ * sale cada cifra. Cada número es una <Cifra> con su origen; aquí no se
+ * calcula nada, solo se pinta lo que trae el perfil guardado.
  */
 
 type Cifras = Record<string, CifraVista>;
@@ -112,18 +112,48 @@ const TIER_KIND: Record<OutlierTier, PillKind> = {
   breakout: "good", outlier: "good", good: "neutral", normal: "neutral", under: "warn",
 };
 
-/** «Abre con una promesa concreta · reel · colaboración con marca · corto, de tu duración habitual». */
-function porque(v: TopVideo): string {
+/** Cómo es el video, cuando ningún rasgo lo separa del resto: «abre con una pregunta · reel · corto». */
+function descripcion(v: TopVideo): string {
   const t = MESSAGES.desempeno;
-  const partes = [
+  return [
     t.gancho[v.why.hook] + (v.why.hookSource === "video_analysis" ? ` (${t.ganchoLab})` : ""),
     t.pieza[v.why.piece],
     t.contenido[v.why.content],
-    [v.why.duration ? t.duracionBucket[v.why.duration] : null, v.why.durationVsTypical ? t.vsTipico[v.why.durationVsTypical] : null]
-      .filter(Boolean)
-      .join(", "),
-  ].filter(Boolean);
-  return partes.join(" · ");
+    v.why.duration ? t.duracionBucket[v.why.duration] : "",
+    v.why.durationVsTypical ? t.vsTipico[v.why.durationVsTypical] : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/**
+ * Qué distingue al video: cada rasgo cuyo grupo rinde más que el resto
+ * de los videos del creador, con las dos medianas como cifras («Tus
+ * reels: 4,3× frente a 2,4× del resto»). Si ningún rasgo lo separa, lo
+ * dice y describe el video sin prometer una causa.
+ */
+function Distingue({ v, cifras }: { v: TopVideo; cifras: Cifras }) {
+  const t = MESSAGES.desempeno;
+  const lugar = `porque-${shortId(v.postId)}`;
+  return (
+    <div className="mt-2 text-xs leading-5 text-fg-2">
+      <p className="text-fg-3">{t.porque}</p>
+      {v.why.reasons.length ? (
+        <ul className="mt-0.5 space-y-0.5">
+          {v.why.reasons.map((r) => (
+            <li key={`${r.axis}-${r.group}`}>
+              {t.grupos[r.axis][r.group] ?? r.group}: <C id={r.groupClaimId} cifras={cifras} lugar={lugar} /> {t.razonFrente}{" "}
+              <C id={r.restClaimId} cifras={cifras} lugar={lugar} /> {t.razonResto}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-0.5">
+          {t.sinRazon} {descripcion(v)}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export function Desempeno({ perfil, cifras, f }: { perfil: PerfilComercial; cifras: Cifras; f: Formatter }) {
@@ -134,15 +164,14 @@ export function Desempeno({ perfil, cifras, f }: { perfil: PerfilComercial; cifr
     <Seccion id="perfil-desempeno" title={t.title}>
       {medians.length > 0 && (
         <div className="mb-6">
-          <h3 className="mb-2 text-xs font-medium text-fg-3">
-            {t.medianas} · {t.corte(f.int(Math.round(perfil.cutHours / 24)))}
-          </h3>
+          <h3 className="mb-2 text-xs font-medium text-fg-3">{t.medianas}</h3>
           <ul className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-line bg-line lg:grid-cols-4">
             {medians.map((m) => (
               <li key={m.platformId} className="bg-surface p-3">
                 <PlatformPill platformId={m.platformId} />
                 <p className="mt-2"><C id={m.claimId} cifras={cifras} lugar="mediana" grande /></p>
-                <p className="mt-0.5 text-xs text-fg-3">{t.medianaNota(f.int(m.sampleSize), m.isReliable)}</p>
+                {/* Cada mediana con su propio corte: una red sin línea base a 7 días usa otro. */}
+                <p className="mt-0.5 text-xs text-fg-3">{t.medianaNota(f.int(m.sampleSize), m.isReliable, corteTexto(m.cutHours, f))}</p>
               </li>
             ))}
           </ul>
@@ -179,7 +208,7 @@ export function Desempeno({ perfil, cifras, f }: { perfil: PerfilComercial; cifr
                   </span>
                   {v.viewsClaimId && (
                     <span>
-                      <C id={v.viewsClaimId} cifras={cifras} lugar="top" /> {t.views}
+                      <C id={v.viewsClaimId} cifras={cifras} lugar="top" /> {t.views(corteTexto(v.cutHours, f))}
                     </span>
                   )}
                   {v.durationClaimId && (
@@ -188,10 +217,13 @@ export function Desempeno({ perfil, cifras, f }: { perfil: PerfilComercial; cifr
                     </span>
                   )}
                 </p>
-                <p className="mt-1.5 text-xs leading-5 text-fg-2">
-                  <span className="text-fg-3">{t.porque}: </span>
-                  {porque(v)}
-                </p>
+                {v.baselineClaimId && (
+                  <p className="mt-1 text-xs text-fg-3">
+                    {t.frenteA(PLATFORM_LABEL[v.platformId])}{" "}
+                    <C id={v.baselineClaimId} cifras={cifras} lugar={`base-${shortId(v.postId)}`} /> {t.viewsPalabra}
+                  </p>
+                )}
+                <Distingue v={v} cifras={cifras} />
               </div>
             </li>
           ))}
@@ -238,7 +270,7 @@ export function Audiencia({ perfil, cifras, f }: { perfil: PerfilComercial; cifr
       ) : (
         <div className="grid gap-6 sm:grid-cols-3">
           <Lista titulo={t.edad} filas={fila("age", (b) => b)} />
-          <Lista titulo={t.genero} filas={fila("gender", (b) => t.generos[b.toUpperCase()] ?? b)} />
+          <Lista titulo={t.genero} filas={fila("gender", (b) => t.generos[genderCode(b)])} />
           <Lista titulo={t.pais} filas={fila("country", (b) => f.country(b))} />
         </div>
       )}
@@ -288,13 +320,6 @@ export function Formatos({ perfil, cifras }: { perfil: PerfilComercial; cifras: 
 // Con quién has trabajado · Cuánto cobras
 // ---------------------------------------------------------------------
 
-/** La etiqueta de una cifra de campaña sale del final de su id: «campana-…-views» → «views». */
-function etiquetaCampana(claimId: string): string {
-  const e = MESSAGES.pruebaSocial.etiquetas;
-  const clave = Object.keys(e).find((k) => claimId.endsWith(`-${k}`));
-  return clave ? e[clave]! : "";
-}
-
 export function PruebaSocial({ perfil, cifras }: { perfil: PerfilComercial; cifras: Cifras }) {
   const t = MESSAGES.pruebaSocial;
   return (
@@ -315,7 +340,7 @@ export function PruebaSocial({ perfil, cifras }: { perfil: PerfilComercial; cifr
               <p className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-sm text-fg-2">
                 {c.claimIds.map((id) => (
                   <span key={id}>
-                    <C id={id} cifras={cifras} lugar="prueba" /> {etiquetaCampana(id)}
+                    <C id={id} cifras={cifras} lugar="prueba" /> {cifras[id] ? t.etiquetas[cifras[id].key] : ""}
                   </span>
                 ))}
               </p>
@@ -351,6 +376,55 @@ export function Tarifas({ perfil, cifras }: { perfil: PerfilComercial; cifras: C
           ))}
         </ul>
       )}
+    </Seccion>
+  );
+}
+
+// ---------------------------------------------------------------------
+// De dónde sale cada cifra
+// ---------------------------------------------------------------------
+
+/**
+ * La fila de origen de cada cifra que no tiene otra pantalla a la que
+ * ir (línea base, demografía, alcance en no seguidores, los agregados de
+ * captions y del porqué): qué es, cuánto, de qué tabla y columna, de qué
+ * red, de qué fecha, y la fila o cuántas publicaciones la forman. Es el
+ * «cada dato con su fuente» del perfil de Stripe Atlas. El enlace de la
+ * cifra lleva aquí (#origen-<id>) y la fila se resalta al llegar.
+ */
+export function Fuentes({ perfil, cifras }: { perfil: PerfilComercial; cifras: Cifras }) {
+  const t = MESSAGES.fuentes;
+  const aqui = perfil.claims.filter((c) => cifras[c.id]?.href === `#${origenId(c.id)}`);
+  if (!aqui.length) return null;
+  return (
+    <Seccion id="perfil-fuentes" title={t.title} meta={t.meta}>
+      <ul className="divide-y divide-line text-sm">
+        {aqui.map((c) => {
+          const v = cifras[c.id]!;
+          return (
+            <li
+              key={c.id}
+              id={origenId(c.id)}
+              className="scroll-mt-24 px-2 py-2.5 target:rounded-md target:bg-accent-wash target:ring-1 target:ring-accent"
+            >
+              <p className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 text-fg-2">{v.que}</span>
+                <span className="shrink-0 font-medium tabular-nums text-fg">{v.valor}</span>
+              </p>
+              <p className="mt-0.5 text-xs text-fg-3">{v.origen}</p>
+              <p className="mt-0.5 break-all font-mono text-[11px] text-fg-3">
+                {c.source.table}.{c.source.field}
+                {!c.source.rows?.length && (
+                  <>
+                    {" · "}
+                    {t.fila} {c.source.id}
+                  </>
+                )}
+              </p>
+            </li>
+          );
+        })}
+      </ul>
     </Seccion>
   );
 }

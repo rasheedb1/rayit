@@ -9,11 +9,20 @@ import { withWorkspace } from "../_lib/db";
 import { cifrasVista } from "./cifras";
 import { MESSAGES } from "./messages";
 import { Narrativa } from "./narrativa";
-import { Recalcular } from "./recalcular";
-import { Audiencia, Desempeno, Formatos, Identidad, PruebaSocial, Seccion, Tarifas } from "./secciones";
+import { puedeEditarElPerfil } from "./permiso";
+import { CalcularPrimero, Recalcular } from "./recalcular";
+import { Audiencia, Desempeno, Formatos, Fuentes, Identidad, PruebaSocial, Seccion, Tarifas } from "./secciones";
 
 export const metadata: Metadata = { title: MESSAGES.metaTitle };
 export const dynamic = "force-dynamic";
+/**
+ * «Recalcular» es una server action de esta página y hereda este tope:
+ * dos intentos del modelo de a lo sumo 25 s cada uno (lib/llm/narrativa.ts)
+ * más las lecturas y el guardado caben en 60 s, el máximo del plan Hobby
+ * de Vercel. Si la función se cortara, cada llamada ya pagada quedó en
+ * outbound_llm_call apenas respondió (actions.ts).
+ */
+export const maxDuration = 60;
 
 const RUTA_PERFIL = "/ventas/perfil";
 
@@ -23,14 +32,17 @@ const RUTA_PERFIL = "/ventas/perfil";
  *
  * Una columna, como un media kit de Beacons o Passionfroot: quién eres,
  * la narrativa, qué te funciona (la mediana por red y los cinco mejores
- * videos con su porqué), a quién llegas, qué haces y cómo hablas, con
- * quién trabajaste y cuánto cobras. Cada cifra dice de dónde sale al
- * pasar el cursor y lleva a su post, a su campaña o al tarifario (la
- * regla del perfil de Stripe Atlas).
+ * videos con lo que los distingue), a quién llegas, qué haces y cómo
+ * hablas, con quién trabajaste y cuánto cobras. Cada cifra dice qué es y
+ * de dónde sale (tabla, red y fecha) al tocarla o pasar el cursor, y
+ * lleva a su post, a su campaña, al tarifario, a Resumen o a su fila en
+ * «De dónde sale cada cifra», al final (la regla del perfil de Stripe
+ * Atlas).
  *
  * La página solo lee lo guardado (creator_profile.media_kit →
  * perfil_comercial): calcular y redactar lo hace «Recalcular», que es
- * una acción, porque escribe y puede llamar al modelo.
+ * una acción, porque escribe y puede llamar al modelo. Solo se ofrece a
+ * quien puede usarla (puedeEditarElPerfil).
  */
 export default async function PerfilPage() {
   const datos = await withWorkspace(async (tx) => {
@@ -41,7 +53,8 @@ export default async function PerfilPage() {
       datosAl: await readPerfilDataAsOf(tx, creador.id),
     };
   });
-  const f = formatterFor(await getCurrentWorkspace());
+  const [ws, editable] = await Promise.all([getCurrentWorkspace(), puedeEditarElPerfil()]);
+  const f = formatterFor(ws);
   const t = MESSAGES;
 
   const cabecera = (
@@ -65,10 +78,7 @@ export default async function PerfilPage() {
     return (
       <>
         {cabecera}
-        <EmptyState title={t.vacio.title} description={t.vacio.description} />
-        <div className="mt-4 flex justify-center">
-          <Recalcular primera />
-        </div>
+        {editable ? <CalcularPrimero /> : <EmptyState title={t.vacio.title} description={t.vacio.soloLectura} />}
       </>
     );
   }
@@ -92,9 +102,9 @@ export default async function PerfilPage() {
           <p>
             <time dateTime={guardado.computedAt}>{t.calculado(f.dateTime(guardado.computedAt))}</time>
           </p>
-          {hayDatosNuevos && <p className="mt-1 text-warn">{t.datosNuevos}</p>}
+          {hayDatosNuevos && editable && <p className="mt-1 text-warn">{t.datosNuevos}</p>}
         </div>
-        <Recalcular editada={narrative.source === "edited"} />
+        {editable && <Recalcular editada={narrative.source === "edited"} />}
       </div>
 
       <div className="max-w-3xl space-y-10">
@@ -108,6 +118,7 @@ export default async function PerfilPage() {
             fuente={fuente}
             aviso={narrative.fallback ? t.narrativa.fallback[narrative.fallback] : null}
             cifras={cifras}
+            editable={editable}
           />
         </Seccion>
 
@@ -116,6 +127,7 @@ export default async function PerfilPage() {
         <Formatos perfil={perfil} cifras={cifras} />
         <PruebaSocial perfil={perfil} cifras={cifras} />
         <Tarifas perfil={perfil} cifras={cifras} />
+        <Fuentes perfil={perfil} cifras={cifras} />
       </div>
     </>
   );

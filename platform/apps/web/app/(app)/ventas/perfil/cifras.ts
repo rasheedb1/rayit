@@ -1,21 +1,26 @@
-import type { Claim } from "@mc/core/outreach/perfil";
+import { cutOf, genderCode, type Claim } from "@mc/core/outreach/perfil";
+import { PLATFORM_LABEL } from "@/components/ui/platform-pill";
 import type { Formatter } from "@/lib/format";
 import { MESSAGES } from "./messages";
 
 /**
- * Cómo se escribe y adónde lleva cada cifra del perfil. Se resuelve en
- * el servidor, con el formateador del workspace, y viaja al cliente como
- * datos planos (CifraVista): un componente de cliente no recibe funciones.
+ * Cómo se escribe, qué es y adónde lleva cada cifra del perfil. Se
+ * resuelve en el servidor, con el formateador y el locale del workspace,
+ * y viaja al cliente como datos planos (CifraVista): un componente de
+ * cliente no recibe funciones. El texto sale de messages.ts a partir de
+ * la clave y los parámetros del claim; @mc/core no escribe nada.
  */
 export interface CifraVista {
   id: string;
+  /** La clave del claim (campaign.views, median…): para rotular sin leer el id. */
+  key: Claim["key"];
   /** La cifra escrita con Intl y el locale, la moneda y la zona del workspace. */
   valor: string;
-  /** Qué es («Views medianas por video en TikTok a los 7 días»). */
-  etiqueta: string;
-  /** De dónde sale («Puntaje del video frente a tu mediana»). */
+  /** Qué es («Views medianas por video en TikTok, a los 7 días de publicado»). */
+  que: string;
+  /** De dónde sale: tabla, red y fecha de la lectura («Demografía de la cuenta · TikTok · al 24 de septiembre de 2026»). */
   origen: string;
-  href: string | null;
+  href: string;
   /** true si el enlace sale de On Cue (el post en su red). */
   externo: boolean;
 }
@@ -40,45 +45,102 @@ export function formatClaim(c: Claim, f: Formatter): string {
   }
 }
 
+/** El corte de una cifra dicho en palabras, con la unidad que decide core. */
+export function corteTexto(hours: number, f: Formatter): string {
+  const c = cutOf(hours);
+  return MESSAGES.cifra.corte(c, f.int(c.amount));
+}
+
+/** Qué es una cifra, en la voz de la pantalla y con el locale del workspace. */
+export function claimQue(c: Claim, f: Formatter): string {
+  const q = MESSAGES.cifra.que;
+  const p = c.params;
+  const red = p.platform ? PLATFORM_LABEL[p.platform] : "";
+  const corte = p.cutHours !== undefined ? corteTexto(p.cutHours, f) : "";
+  switch (c.key) {
+    case "followers": return q.followers(red);
+    case "audience.age": return q.audienceAge(red, p.bucket ?? "");
+    case "audience.gender": return q.audienceGender(red, genderCode(p.bucket ?? ""));
+    case "audience.country": return q.audienceCountry(red, f.country(p.bucket ?? ""));
+    case "non_followers": return q.nonFollowers(red);
+    case "median": return q.median(red, corte);
+    case "scored_videos": return q.scoredVideos;
+    case "video.multiple": return q.videoMultiple(p.title ?? "", red, corte);
+    case "video.views": return q.videoViews(p.title ?? "", red, corte);
+    case "video.duration": return q.videoDuration(p.title ?? "");
+    case "why.group": return q.whyGroup(p.axis!, p.group ?? "");
+    case "why.rest": return q.whyRest(p.axis!, p.group ?? "");
+    case "format.piece": return q.formatPiece(p.piece!);
+    case "format.content": return q.formatContent(p.content!);
+    case "tone": return q.tone(p.trait!);
+    case "captions_read": return q.captionsRead;
+    case "campaign.views": return q.campaignViews(p.company ?? "");
+    case "campaign.multiple": return q.campaignMultiple(p.company ?? "");
+    case "campaign.brand_followers": return q.campaignBrandFollowers(p.company ?? "");
+    case "campaign.redemptions": return q.campaignRedemptions(p.company ?? "");
+    case "campaign.revenue": return q.campaignRevenue(p.company ?? "");
+    case "rate.low": return q.rateLow(p.item ?? "");
+    case "rate.high": return q.rateHigh(p.item ?? "");
+  }
+}
+
+/** El id del elemento de «De dónde sale cada cifra» que sostiene una cifra agregada. */
+export function origenId(claimId: string): string {
+  return `origen-${claimId}`;
+}
+
 /**
- * Adónde lleva una cifra: al post en su red, a la campaña, al tarifario
- * o a Resumen (donde viven la línea base, los seguidores y la
- * demografía). Un agregado de captions no tiene una sola fila a la que
- * ir: su tooltip dice cuántas publicaciones lo sostienen.
+ * Adónde lleva una cifra:
+ *   · un video → el post en su red;
+ *   · una campaña → su ficha en Campañas; una tarifa → el tarifario;
+ *   · los seguidores → su serie en Resumen, filtrada a la red (#seguidores);
+ *   · lo demás (línea base, demografía, alcance en no seguidores, los
+ *     agregados de captions y del porqué) → su fila en «De dónde sale
+ *     cada cifra», al final de esta misma página, con tabla, red, fecha
+ *     y cuántas publicaciones la forman. Ninguna otra pantalla enseña
+ *     esas filas: Resumen no tiene demografía ni líneas base.
  */
-export function claimHref(c: Claim): { href: string; externo: boolean } | null {
+export function claimHref(c: Claim): { href: string; externo: boolean } {
   const s = c.source;
   switch (s.table) {
     case "post":
     case "post_score":
-      return s.url ? { href: s.url, externo: true } : null;
+      if (s.url && !s.rows) return { href: s.url, externo: true };
+      break;
     case "campaign_result":
       return { href: `/campanas/${s.id}`, externo: false };
     case "rate_card_item":
       return { href: "/cotizar", externo: false };
-    case "creator_baseline":
-    case "post_metrics_latest":
-    case "audience_breakdown":
     case "account_metric_snapshot":
-      return { href: "/resumen", externo: false };
+      if (c.params.platform) return { href: `/resumen?red=${c.params.platform}#seguidores`, externo: false };
+      break;
+    default:
+      break;
   }
+  return { href: `#${origenId(c.id)}`, externo: false };
 }
 
+/** De dónde sale: la tabla, la red, la fecha de la lectura y, si es un agregado, cuántas filas. */
 export function claimOrigin(c: Claim, f: Formatter): string {
-  const tabla = MESSAGES.cifra.tablas[c.source.table];
+  const t = MESSAGES.cifra;
+  const partes: string[] = [t.tablas[c.source.table]];
+  if (c.params.platform) partes.push(PLATFORM_LABEL[c.params.platform]);
+  if (c.source.asOf) partes.push(t.fecha(f.date(c.source.asOf, "long")));
   const filas = c.source.rows?.length;
-  return filas ? `${tabla} · ${MESSAGES.cifra.filas(filas, f.int(filas))}` : tabla;
+  if (filas) partes.push(t.filas(filas, f.int(filas)));
+  return partes.join(" · ");
 }
 
 export function cifraVista(c: Claim, f: Formatter): CifraVista {
   const destino = claimHref(c);
   return {
     id: c.id,
+    key: c.key,
     valor: formatClaim(c, f),
-    etiqueta: c.label,
+    que: claimQue(c, f),
     origen: claimOrigin(c, f),
-    href: destino?.href ?? null,
-    externo: destino?.externo ?? false,
+    href: destino.href,
+    externo: destino.externo,
   };
 }
 

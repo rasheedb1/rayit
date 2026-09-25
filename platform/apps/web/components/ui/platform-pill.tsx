@@ -1,3 +1,5 @@
+import { PLATFORM_LABELS } from "@mc/core/plataformas";
+
 /** Las cuatro redes del producto (platform.id en la base y tokens --s-<red> del tema). */
 export type PlatformId = "tiktok" | "instagram" | "facebook" | "youtube";
 
@@ -7,12 +9,8 @@ export type PlatformPillProps = {
   className?: string;
 };
 
-export const PLATFORM_LABEL: Record<PlatformId, string> = {
-  tiktok: "TikTok",
-  instagram: "Instagram",
-  facebook: "Facebook",
-  youtube: "YouTube",
-};
+// Los nombres viven en @mc/core (plataformas.ts), que también los usa el prompt del perfil comercial (VEN-11).
+export const PLATFORM_LABEL: Record<PlatformId, string> = PLATFORM_LABELS;
 
 export function isPlatformId(value: string): value is PlatformId {
   // hasOwn y no `in`: "constructor" o "toString" también están «en» un objeto.

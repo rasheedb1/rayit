@@ -13,20 +13,31 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
 import { formatClaim } from "./cifras";
 import { MESSAGES } from "./messages";
+import { puedeEditarElPerfil } from "./permiso";
 
 /**
  * Las acciones de /ventas/perfil (VEN-11). El workspace lo fija
  * withWorkspace; aquí no llega ni sale ningún id: el creador es el
  * principal del workspace, el mismo que usa Cotizar.
  *
- * Recalcular son tres pasos y dos transacciones, a propósito:
+ * Las dos acciones exigen el rol (puedeEditarElPerfil: owner, admin o
+ * member) ANTES de tocar la base o el modelo: un 'viewer' o un 'client'
+ * del espacio no reescribe la narrativa ni gasta contra el tope diario.
+ *
+ * Recalcular son tres pasos, a propósito sin una transacción que los
+ * abarque:
  *   1. leer las filas y armar el perfil (una transacción);
  *   2. escribir la narrativa: claude-sonnet-5 si hay llave y presupuesto,
  *      la plantilla si no (red, SIN transacción abierta: una transacción
- *      que espera a una API retiene una conexión del pooler);
- *   3. registrar cada llamada al modelo y guardar (otra transacción cada
- *      una: la bitácora de lo que ya se pagó no depende de que el
- *      guardado salga bien).
+ *      que espera a una API retiene una conexión del pooler). Cada
+ *      llamada se registra en outbound_llm_call apenas responde (su
+ *      propia transacción), y el tope se vuelve a consultar antes de
+ *      cada intento: si la acción se corta después, lo pagado ya está en
+ *      la bitácora y el tope lo ve;
+ *   3. guardar (otra transacción).
+ *
+ * El tiempo: dos intentos de a lo sumo 25 s cada uno (lib/llm/narrativa.ts,
+ * sin reintentos del SDK) caben en el maxDuration de 60 s de la página.
  */
 
 const RUTA = "/ventas/perfil";
@@ -44,9 +55,10 @@ function problemas(issues: readonly NarrativeIssue[], f: Formatter): string[] {
       i.code === "unknown_claim" ? e.unknown_claim(i.id)
         : i.code === "malformed_marker" ? e.malformed_marker(i.text)
           : i.code === "bare_number" ? e.bare_number(i.text)
-            : i.code === "placeholder" ? e.placeholder(i.text)
-              : i.code === "too_long" ? e.too_long(f.int(i.max))
-                : e[i.code];
+            : i.code === "number_word" ? e.number_word(i.text)
+              : i.code === "placeholder" ? e.placeholder(i.text)
+                : i.code === "too_long" ? e.too_long(f.int(i.max))
+                  : e[i.code];
     if (!vistos.has(texto)) {
       vistos.add(texto);
       out.push(texto);
@@ -60,22 +72,25 @@ async function formateador(): Promise<Formatter> {
 }
 
 export async function recalcularPerfil(): Promise<ResultadoAccion> {
+  if (!(await puedeEditarElPerfil())) return { ok: false, message: t.sinPermiso, detalles: [] };
   try {
-    const leido = await withWorkspace(async (tx) => {
+    const perfil = await withWorkspace(async (tx) => {
       const creador = await getPrimaryCreator(tx);
-      if (!creador) return null;
-      return { perfil: await computePerfil(tx, creador.id), sinPresupuesto: await llmBudgetExhausted(tx) };
+      return creador ? computePerfil(tx, creador.id) : null;
     });
-    if (!leido) return { ok: false, message: t.narrativa.errores.creator_not_found, detalles: [] };
+    if (!perfil) return { ok: false, message: t.narrativa.errores.creator_not_found, detalles: [] };
 
     const f = await formateador();
-    const narrativa = await writeNarrative(leido.perfil, {
+    const narrativa = await writeNarrative(perfil, {
       model: narrativeModelFromEnv(),
       formatClaim: (c) => formatClaim(c, f),
-      budgetExhausted: leido.sinPresupuesto,
+      locale: f.locale,
+      // Antes de cada intento: el primero pudo haber llevado el gasto del día al tope.
+      budgetExhausted: () => withWorkspace((tx) => llmBudgetExhausted(tx)),
+      // Apenas responde, antes de verificarla: lo pagado queda en la bitácora aunque la acción se corte.
+      onCall: (uso) => withWorkspace((tx) => recordProfileLlmCalls(tx, [uso])),
     });
-    if (narrativa.calls.length) await withWorkspace((tx) => recordProfileLlmCalls(tx, narrativa.calls));
-    await withWorkspace((tx) => savePerfilComercial(tx, leido.perfil, narrativa));
+    await withWorkspace((tx) => savePerfilComercial(tx, perfil, narrativa));
   } catch (error) {
     console.error("[ventas/perfil] recalcular", error);
     return { ok: false, message: t.recalcular.error, detalles: [] };
@@ -91,6 +106,7 @@ const EdicionSchema = z.object({
 });
 
 export async function guardarNarrativa(texto: string, escritaEl: string): Promise<ResultadoAccion> {
+  if (!(await puedeEditarElPerfil())) return { ok: false, message: t.sinPermiso, detalles: [] };
   const f = await formateador();
   const entrada = EdicionSchema.safeParse({ texto, escritaEl });
   if (!entrada.success) return { ok: false, message: t.narrativa.errores.titulo, detalles: [t.narrativa.errores.too_long(f.int(NARRATIVE_MAX_CHARS))] };
