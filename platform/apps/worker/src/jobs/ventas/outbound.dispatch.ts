@@ -319,6 +319,7 @@ export const dispatchJob = defineJob(
       failed: report.failed.length, waiting: report.waiting.length + report.claim.waitingAccount.length,
       canceled: canceledCount(report),
       canceledEmailInvalid: report.claim.canceledEmailInvalid, skippedNoAddress: report.claim.skippedNoAddress,
+      skippedInvalidAddress: report.claim.skippedInvalidAddress,
       held: report.held.length, rescheduled: report.claim.rescheduled.length, outsideWindow: report.claim.outsideWindow.length,
       canceledCompanyCap: report.claim.canceledCompanyCap, paced: report.claim.paced.length,
       released: report.released.length, zombies: report.zombies.failed, zombiesReleased: report.zombies.released,

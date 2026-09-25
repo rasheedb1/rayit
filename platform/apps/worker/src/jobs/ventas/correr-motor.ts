@@ -125,7 +125,7 @@ export function resumenDespacho(r: DispatchReport): string {
       `Esperando cuenta: ${r.claim.waitingAccount.length + r.waiting.length}. Retenidos: ${r.held.length}. Pospuestos: ${r.postponed.length}. ` +
       `Movidos por el ritmo (marca o cuenta): ${r.claim.paced.length}.`,
     `  Cancelados: ${canceledCount(r)} (${r.claim.canceledEmailInvalid} por correo rebotado, ${r.claim.canceledCompanyCap} por el tope de la marca). ` +
-      `Sin dirección: ${r.claim.skippedNoAddress}. ` +
+      `Sin dirección: ${r.claim.skippedNoAddress}. Dirección mal escrita: ${r.claim.skippedInvalidAddress}. ` +
       `Zombis: ${r.zombies.failed} a fallido, ${r.zombies.released} devuelto(s) a la cola. Sin intentar, de vuelta: ${r.released.length}.`,
   ];
   if (r.confirmed.length) lineas.push(`  Intentos ambiguos que sí habían salido (no se reenviaron): ${r.confirmed.length}.`);

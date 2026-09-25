@@ -17,7 +17,7 @@ import { findPlaceholders, firstNameOf, planSteps, renderTemplate } from '@mc/co
 import { formatHoldReason, inviteNoteOverflow } from '@mc/core/outreach/messages';
 import type { SqlExecutor, WorkerSql, WorkspaceTx } from '../../client.ts';
 import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
-import { assertIds, DISPATCHABLE_STEP_TYPES, OutreachMotorError, recipientFor, windowOf } from './shared.ts';
+import { assertIds, checkRecipient, DISPATCHABLE_STEP_TYPES, OutreachMotorError, windowOf } from './shared.ts';
 
 export interface EnrollInput {
   sequenceId: string;
@@ -32,11 +32,12 @@ export interface EnrollInput {
  * Por qué una ficha no se enrola. (r4) email_invalid: su correo rebotó
  * para siempre (VEN-15) y la secuencia no tiene ningún paso que le pueda
  * llegar por otro canal; no_address: no tiene dirección en ninguno de los
- * canales de la secuencia. Antes las dos se enrolaban con todo saltado y
+ * canales de la secuencia; (r3) invalid_address: la tiene, pero mal escrita
+ * (un correo sin arroba). Antes se enrolaban con todo saltado y
  * el enrolamiento quedaba 'active' para siempre; la de correo rebotado,
  * peor: el disparador de 0050 abortaba el lote entero.
  */
-export type EnrollSkipReason = 'not_found' | 'opted_out' | 'already_enrolled' | 'email_invalid' | 'no_address';
+export type EnrollSkipReason = 'not_found' | 'opted_out' | 'already_enrolled' | 'email_invalid' | 'no_address' | 'invalid_address';
 
 /**
  * (r5) Lo que la secuencia no va a poder cumplir con la política del
@@ -123,6 +124,8 @@ export function initialTouchState(input: {
   generateWithAi: boolean;
   automationMode: string;
   hasAddress: boolean;
+  /** (r3) La dirección está, pero no sirve (checkRecipient): skipped con invalid_address, no no_address. */
+  invalidAddress?: boolean;
   /** El canal del paso (r4): un correo a una ficha con email_invalid se salta. */
   channel?: string;
   emailInvalid?: boolean;
@@ -132,7 +135,7 @@ export function initialTouchState(input: {
   requireHumanReview?: boolean;
 }): { status: 'draft' | 'scheduled' | 'held' | 'skipped'; heldReason?: string; blockedReason?: string } {
   if (!(DISPATCHABLE_STEP_TYPES as readonly string[]).includes(input.stepType)) return { status: 'draft' };
-  if (!input.hasAddress) return { status: 'skipped', blockedReason: 'no_address' };
+  if (!input.hasAddress) return { status: 'skipped', blockedReason: input.invalidAddress ? 'invalid_address' : 'no_address' };
   if (input.channel === 'email' && input.emailInvalid) return { status: 'skipped', blockedReason: 'email_invalid' };
   if (input.generateWithAi || !input.body) return { status: 'draft' };
   if (input.automationMode === 'manual') return { status: 'draft' };
@@ -251,15 +254,18 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
     const drafted = steps.map((s) => {
       const subject = renderTemplate(s.subject_template, values);
       const body = renderTemplate(s.body_template, values);
+      const address = checkRecipient(s.channel, c);
       const state = initialTouchState({
         stepType: s.step_type, generateWithAi: s.generate_with_ai, automationMode: seq.automation_mode,
-        hasAddress: recipientFor(s.channel, c) !== null, channel: s.channel, emailInvalid: c.email_invalid === true, subject, body,
+        hasAddress: address.ok, invalidAddress: !address.ok && address.reason === 'invalid_address',
+        channel: s.channel, emailInvalid: c.email_invalid === true, subject, body,
         requireHumanReview: seq.human_review,
       });
       return { step: s, subject, body, state };
     });
     if (drafted.every((d) => d.state.status === 'skipped')) {
-      const reason = drafted.some((d) => d.state.blockedReason === 'email_invalid') ? 'email_invalid' : 'no_address';
+      const reasons = new Set(drafted.map((d) => d.state.blockedReason));
+      const reason: EnrollSkipReason = reasons.has('email_invalid') ? 'email_invalid' : reasons.has('invalid_address') ? 'invalid_address' : 'no_address';
       result.skipped.push({ contactId, reason });
       continue;
     }

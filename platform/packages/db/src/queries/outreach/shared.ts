@@ -134,13 +134,42 @@ export function int(fn: string, path: string, value: unknown): number {
 // Dirección
 // ---------------------------------------------------------------------
 
-/** La dirección a la que sale un toque según su canal, o null si la ficha no la tiene. */
-export function recipientFor(channel: string, c: { email: string | null; linkedin_url: string | null; instagram_handle: string | null }): string | null {
+/** Las direcciones de una ficha, tal como están en contact. */
+export interface ContactAddresses {
+  email: string | null;
+  linkedin_url: string | null;
+  instagram_handle: string | null;
+}
+
+/**
+ * La regla de los CHECK de outbound_touch.recipient_address (0037 §4.2),
+ * repetida aquí para decirla ANTES de escribir (traída de la r2 rehecha):
+ * de 3 a 320 caracteres, y en un correo una sola arroba y sin espacios.
+ * contact.email no tiene CHECK: una ficha con «carla arroba marca.test»
+ * hacía fallar el UPDATE en lote del reclamo, y con él el despachador de
+ * toda la plataforma, en cada corrida.
+ */
+export const RECIPIENT_EMAIL_RE = /^[^@\s]+@[^@\s]+$/;
+
+export type RecipientCheck = { ok: true; address: string } | { ok: false; reason: 'no_address' | 'invalid_address' };
+
+/** La dirección a la que sale un toque según su canal: la que es, la que falta o la que no sirve. */
+export function checkRecipient(channel: string, c: ContactAddresses): RecipientCheck {
   const pick = (v: string | null) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
-  if (channel === 'email') return pick(c.email)?.toLowerCase() ?? null;
-  if (channel === 'linkedin') return pick(c.linkedin_url);
-  if (channel === 'instagram_dm') return pick(c.instagram_handle)?.replace(/^@/, '') ?? null;
-  return null;
+  let address: string | null = null;
+  if (channel === 'email') address = pick(c.email)?.toLowerCase() ?? null;
+  else if (channel === 'linkedin') address = pick(c.linkedin_url);
+  else if (channel === 'instagram_dm') address = pick(c.instagram_handle)?.replace(/^@/, '') ?? null;
+  if (address === null) return { ok: false, reason: 'no_address' };
+  if (address.length < 3 || address.length > 320) return { ok: false, reason: 'invalid_address' };
+  if (channel === 'email' && !RECIPIENT_EMAIL_RE.test(address)) return { ok: false, reason: 'invalid_address' };
+  return { ok: true, address };
+}
+
+/** La dirección a la que sale un toque según su canal, o null si la ficha no la tiene o no sirve. */
+export function recipientFor(channel: string, c: ContactAddresses): string | null {
+  const r = checkRecipient(channel, c);
+  return r.ok ? r.address : null;
 }
 
 // ---------------------------------------------------------------------
