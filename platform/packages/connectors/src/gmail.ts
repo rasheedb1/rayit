@@ -156,7 +156,10 @@ export interface GmailMessage {
   subject: string | null;
   sentAt: Date | null;
   snippet: string;
-  /** El texto plano del cuerpo, si lo hay. */
+  /**
+   * El texto del cuerpo: el primer text/plain en su charset; si no hay,
+   * el text/html sin etiquetas ni lo citado; si tampoco, el snippet.
+   */
   text: string;
   labelIds: string[];
   /** Cabecera X-Failed-Recipients o Final-Recipient de un rebote. */
@@ -481,28 +484,127 @@ function header(message: Json, name: string): string | null {
   return h ? str(h['value']) : null;
 }
 
-function decodeData(data: unknown): string {
-  return typeof data === 'string' ? Buffer.from(data, 'base64url').toString('utf8') : '';
+const partsOf = (part: Json): Json[] => (Array.isArray(part['parts']) ? part['parts'].map(obj) : []);
+
+function partHeader(part: Json, name: string): string | null {
+  const headers = Array.isArray(part['headers']) ? (part['headers'] as unknown[]).map(obj) : [];
+  const h = headers.find((x) => typeof x['name'] === 'string' && x['name'].toLowerCase() === name.toLowerCase());
+  return h ? str(h['value']) : null;
 }
 
-/** El primer text/plain del árbol de partes (o el cuerpo si no hay partes). */
-function plainText(part: Json): string {
-  const mime = str(part['mimeType']) ?? '';
-  if (mime === 'text/plain') return decodeData(obj(part['body'])['data']);
-  const parts = Array.isArray(part['parts']) ? part['parts'].map(obj) : [];
-  for (const p of parts) {
-    const t = plainText(p);
-    if (t) return t;
+/**
+ * El charset de la parte (Content-Type: text/plain; charset="iso-8859-1").
+ * Gmail entrega en body.data los bytes de la parte ya sin el
+ * Content-Transfer-Encoding, pero en SU juego de caracteres: una
+ * respuesta de Outlook en windows-1252 leída como UTF-8 rompe «¿Cómo
+ * estás?» y, con ella, el detector de bajas y el clasificador.
+ */
+function charsetOf(part: Json): string {
+  const ct = partHeader(part, 'Content-Type') ?? '';
+  return /charset\s*=\s*"?([^";\s]+)"?/i.exec(ct)?.[1]?.toLowerCase() ?? 'utf-8';
+}
+
+/** Los bytes de la parte en su charset; uno que Node no conoce se lee como UTF-8, sin lanzar. */
+function decodePart(part: Json): string {
+  const data = obj(part['body'])['data'];
+  if (typeof data !== 'string') return '';
+  const bytes = Buffer.from(data, 'base64url');
+  try {
+    return new TextDecoder(charsetOf(part), { fatal: false }).decode(bytes);
+  } catch {
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
   }
-  return '';
+}
+
+/** La primera parte de ese tipo en el árbol (la raíz incluida), en profundidad. */
+function findPart(part: Json, mime: string): Json | null {
+  if ((str(part['mimeType']) ?? '').toLowerCase() === mime) return part;
+  for (const p of partsOf(part)) {
+    const found = findPart(p, mime);
+    if (found) return found;
+  }
+  return null;
+}
+
+const ENTITIES: Record<string, string> = {
+  nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", iquest: '¿', iexcl: '¡', laquo: '«', raquo: '»', ndash: '–', mdash: '—',
+  hellip: '…', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', euro: '€', copy: '©', ordm: 'º', ordf: 'ª',
+};
+// Las letras con acento de español, portugués y francés, en las dos cajas (&aacute; &Aacute; &ccedil; &atilde;…).
+for (const [base, marks] of Object.entries({ a: 'acute grave circ tilde uml', e: 'acute grave circ uml', i: 'acute grave circ uml', o: 'acute grave circ tilde uml', u: 'acute grave circ uml', n: 'tilde', c: 'cedil' })) {
+  const combining: Record<string, string> = { acute: '\u0301', grave: '\u0300', circ: '\u0302', tilde: '\u0303', uml: '\u0308', cedil: '\u0327' };
+  for (const mark of marks.split(' ')) {
+    ENTITIES[`${base}${mark}`] = `${base}${combining[mark]}`.normalize('NFC');
+    ENTITIES[`${base.toUpperCase()}${mark}`] = `${base.toUpperCase()}${combining[mark]}`.normalize('NFC');
+  }
+}
+
+/** Las entidades de HTML más comunes (y las numéricas): el snippet de Gmail también las trae («&#39;»). */
+export function decodeHtmlEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, name: string) => {
+    if (name[0] === '#') {
+      const code = name[1] === 'x' || name[1] === 'X' ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+    }
+    return ENTITIES[name] ?? ENTITIES[name.toLowerCase()] ?? whole;
+  });
+}
+
+/**
+ * El texto de una respuesta que solo viene en HTML (frecuente en marcas):
+ * sin estilos ni scripts, sin lo citado (blockquote, que es donde Gmail y
+ * Outlook meten el mensaje original: lo que cita no es lo que la persona
+ * dice), con saltos donde había bloques y sin etiquetas.
+ */
+export function htmlToText(html: string): string {
+  let t = html.replace(/<(style|script|head)\b[\s\S]*?<\/\1\s*>/gi, ' ');
+  // Las citas, de la más interna hacia afuera (anidan).
+  for (let i = 0, prev = ''; i < 20 && prev !== t; i++) {
+    prev = t;
+    t = t.replace(/<blockquote\b[^>]*>(?:(?!<blockquote\b)[\s\S])*?<\/blockquote\s*>/gi, '\n');
+  }
+  t = t.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|tr|h[1-6])\s*>/gi, '\n').replace(/<[^>]+>/g, '');
+  return decodeHtmlEntities(t).replace(/[ \t\f\v\u00a0]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/**
+ * El texto del mensaje: el primer text/plain del árbol en su charset; si
+ * no hay, el text/html sin etiquetas; si tampoco, '' (normalizeGmailMessage
+ * cae entonces al snippet).
+ */
+function messageText(payload: Json): string {
+  const plain = findPart(payload, 'text/plain');
+  if (plain) {
+    const t = decodePart(plain);
+    if (t.trim()) return t;
+  }
+  const html = findPart(payload, 'text/html');
+  return html ? htmlToText(decodePart(html)) : '';
+}
+
+/**
+ * A quién no se pudo entregar, en un rebote. Por orden: la cabecera
+ * X-Failed-Recipients (la pone Gmail), el Final-Recipient de la parte
+ * message/delivery-status de un DSN (RFC 3464: multipart/report, que es
+ * como rebota un postmaster ajeno) y, por último, un Final-Recipient
+ * escrito en el texto.
+ */
+function failedRecipientOf(message: Json, payload: Json, text: string): string | null {
+  const x = header(message, 'X-Failed-Recipients');
+  if (x) return x.split(',')[0]!.trim().toLowerCase() || null;
+  const re = /Final-Recipient:\s*rfc822;\s*<?([^\s>]+)>?/i;
+  const status = findPart(payload, 'message/delivery-status');
+  const fromStatus = status ? re.exec(decodePart(status)) ?? re.exec(partsOf(status).map(decodePart).join('\n')) : null;
+  const found = fromStatus?.[1] ?? re.exec(text)?.[1] ?? null;
+  return found ? found.trim().toLowerCase() : null;
 }
 
 export function normalizeGmailMessage(raw: unknown): GmailMessage {
   const m = obj(raw);
   const payload = obj(m['payload']);
   const internal = typeof m['internalDate'] === 'string' ? Number(m['internalDate']) : NaN;
-  const text = plainText(payload);
-  const finalRecipient = /Final-Recipient:\s*rfc822;\s*([^\s]+)/i.exec(text)?.[1] ?? null;
+  const snippet = typeof m['snippet'] === 'string' ? decodeHtmlEntities(m['snippet']) : '';
+  const text = messageText(payload) || snippet;
   return {
     id: String(m['id'] ?? ''),
     threadId: String(m['threadId'] ?? ''),
@@ -513,9 +615,9 @@ export function normalizeGmailMessage(raw: unknown): GmailMessage {
     to: header(m, 'To'),
     subject: header(m, 'Subject'),
     sentAt: Number.isFinite(internal) ? new Date(internal) : null,
-    snippet: typeof m['snippet'] === 'string' ? m['snippet'] : '',
+    snippet,
     text,
     labelIds: Array.isArray(m['labelIds']) ? m['labelIds'].filter((l): l is string => typeof l === 'string') : [],
-    failedRecipient: (header(m, 'X-Failed-Recipients') ?? finalRecipient)?.trim().toLowerCase() ?? null,
+    failedRecipient: failedRecipientOf(m, payload, text),
   };
 }

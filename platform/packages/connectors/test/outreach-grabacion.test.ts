@@ -23,6 +23,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { InMemoryOutreachCallLog } from '../src/outreach/log.ts';
 import { parseUnipileWebhook } from '../src/outreach/unipile-webhook.ts';
+import { CHANNEL_STATE_TYPICAL_CHARS } from '../src/outreach/state.ts';
 import { normalizeGmailMessage } from '../src/gmail.ts';
 import { normalizeUnipileAccount, UnipileClient } from '../src/unipile.ts';
 import { FIXTURES_DIR, FixtureFetch, withoutNetwork, type Fixture, type NetworkGuard } from '../src/testing/fixture-fetch.ts';
@@ -188,7 +189,8 @@ describe('fixtures de outreach', () => {
           const ev = parseUnipileWebhook(body);
           assert.equal(ev.kind, 'account_connected', `${name}: se lee como cuenta conectada`);
           const len = Number(STATE_MARK_RE.exec(String((body as { name?: string }).name))?.[1] ?? 0);
-          assert.ok(len >= 300, `${name}: el name trae el estado entero (${len} caracteres)`);
+          // Un estado entero mide al menos CHANNEL_STATE_TYPICAL_CHARS (sin reconexión, exactamente eso): uno recortado, menos.
+          assert.ok(len >= CHANNEL_STATE_TYPICAL_CHARS, `${name}: el name trae el estado entero (${len} caracteres)`);
           assert.equal((fx['meta'] as { appStatus?: number }).appStatus, 200, `${name}: la web verificó la firma del estado que volvió`);
         } else if (name === 'unipile/webhooks/message.received' || name === 'unipile/webhooks/message.echo') {
           const ev = parseUnipileWebhook(body);

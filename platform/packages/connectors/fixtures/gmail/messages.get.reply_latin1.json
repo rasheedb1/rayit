@@ -1,0 +1,63 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-25",
+    "notes": "Una respuesta de Outlook en iso-8859-1 (un solo text/plain con su charset): Gmail entrega en body.data los bytes de la parte ya sin el Content-Transfer-Encoding, pero en el juego de caracteres del remitente. Escrito a partir de la documentación de users.messages (MessagePart.body.data) y de RFC 2046."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://gmail\\.googleapis\\.com/gmail/v1/users/me/messages/18c1f0a0b0c0d0a1\\?format=full"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "18c1f0a0b0c0d0a1",
+      "threadId": "18c1f0a0b0c0d0e1",
+      "labelIds": [
+        "INBOX",
+        "UNREAD"
+      ],
+      "snippet": "¿Cómo estás, Laura? Gracias, pero no me escribas más.",
+      "internalDate": "1790010800000",
+      "payload": {
+        "partId": "",
+        "mimeType": "text/plain",
+        "filename": "",
+        "headers": [
+          {
+            "name": "From",
+            "value": "Marta Ríos <marta@marca.test>"
+          },
+          {
+            "name": "To",
+            "value": "laura@gmail.test"
+          },
+          {
+            "name": "Subject",
+            "value": "RE: Propuesta"
+          },
+          {
+            "name": "Message-ID",
+            "value": "<AM0PR01MB1234@eurprd01.prod.outlook.test>"
+          },
+          {
+            "name": "In-Reply-To",
+            "value": "<CADemo123@mail.gmail.com>"
+          },
+          {
+            "name": "Content-Type",
+            "value": "text/plain; charset=\"iso-8859-1\""
+          },
+          {
+            "name": "Content-Transfer-Encoding",
+            "value": "quoted-printable"
+          }
+        ],
+        "body": {
+          "size": 69,
+          "data": "v0PzbW8gZXN04XMsIExhdXJhPyBHcmFjaWFzLCBwZXJvIG5vIG1lIGVzY3JpYmFzIG3hcy4NCg0KTWFydGEgUu1vcw0K"
+        }
+      }
+    }
+  }
+}

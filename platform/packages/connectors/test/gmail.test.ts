@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  freshGoogleTokens, GmailClient, GMAIL_REFRESH_MARGIN_MS, GMAIL_SCOPES, GoogleOAuth, loadGoogleOAuthConfig, loadGoogleTokenConfig, shortScope,
+  freshGoogleTokens, GmailClient, GMAIL_REFRESH_MARGIN_MS, GMAIL_SCOPES, GoogleOAuth, htmlToText, loadGoogleOAuthConfig, loadGoogleTokenConfig, normalizeGmailMessage, shortScope,
 } from '../src/gmail.ts';
 import type { OutreachApiError } from '../src/outreach/errors.ts';
 import { FakeGmail } from '../src/testing/index.ts';
@@ -150,6 +150,34 @@ test('getThread, searchReplies, searchBounces y getMessage de un rebote', async 
   assert.equal(bounces.length, 1);
   const bounce = await gmail.getMessage(bounces[0]!.id);
   assert.equal(bounce.failedRecipient, 'nadie@cafealma.test');
+});
+
+test('correo real: el charset de la parte, una respuesta solo en HTML (sin lo que cita) y el DSN de un postmaster ajeno', async () => {
+  const { http, oauth } = await setup([['messages.get', 'reply_latin1'], ['messages.get', 'reply_html_only'], ['messages.get', 'bounce_dsn']]);
+  const gmail = new GmailClient({ ...http, oauth, channelAccountId: CA, tokens: TOKENS });
+  // iso-8859-1 de Outlook: sin caracteres rotos para el detector de bajas y el clasificador.
+  const latin = await gmail.getMessage('18c1f0a0b0c0d0a1');
+  assert.match(latin.text, /^¿Cómo estás, Laura\? Gracias, pero no me escribas más\./);
+  assert.ok(!latin.text.includes('�'), 'ni un carácter de reemplazo');
+  // Solo HTML (windows-1252): el texto sin etiquetas, sin estilos y sin la cita anidada (que traía «dame de baja»).
+  const html = await gmail.getMessage('18c1f0a0b0c0d0a2');
+  assert.equal(html.text, '¡Hola Laura! Nos interesa, ¿tienes media kit?\nEscríbeme el lunes.');
+  assert.equal(html.snippet, '¡Hola Laura! Nos interesa, ¿tienes media kit? Escríbeme el lunes.', 'el snippet sin entidades');
+  // multipart/report sin X-Failed-Recipients: Final-Recipient sale de la parte message/delivery-status.
+  const dsn = await gmail.getMessage('18c1f0a0b0c0d0a3');
+  assert.equal(dsn.failedRecipient, 'nadie@marca.test');
+  assert.match(dsn.text, /^This is the mail system/, 'el texto es la parte legible, no el mensaje original');
+});
+
+test('htmlToText y el charset desconocido: nunca lanzan', () => {
+  assert.equal(htmlToText('<p>Uno</p><p>Dos &amp; tres&nbsp;&#8364;</p><script>alert(1)</script>'), 'Uno\nDos & tres €');
+  assert.equal(htmlToText('Sí<blockquote>a<blockquote>b</blockquote>c</blockquote>'), 'Sí');
+  const raro = normalizeGmailMessage({
+    id: 'x', threadId: 'x', payload: { mimeType: 'text/plain', headers: [{ name: 'Content-Type', value: 'text/plain; charset=x-inventado' }], body: { data: Buffer.from('Hola ñ').toString('base64url') } },
+  });
+  assert.equal(raro.text, 'Hola ñ', 'un charset que no existe se lee como UTF-8');
+  const vacio = normalizeGmailMessage({ id: 'y', threadId: 'y', snippet: 'Solo el snippet &#39;corto&#39;', payload: { mimeType: 'multipart/mixed', parts: [] } });
+  assert.equal(vacio.text, "Solo el snippet 'corto'", 'sin cuerpo legible, el snippet');
 });
 
 test('FakeGmail: refresca con un token nuevo y responde invalid_grant a un refresh token revocado', async () => {
