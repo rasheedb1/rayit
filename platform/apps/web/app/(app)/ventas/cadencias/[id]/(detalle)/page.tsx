@@ -1,16 +1,16 @@
 import { notFound } from "next/navigation";
 import {
-  getRecommendationContext, getSequenceDetail, listAngles, listEnrollableDeals, listSequenceTemplates, type ContactOption,
-  type SequenceDetail,
+  EDITABLE_CHANNELS, EDITABLE_STEP_TYPES, getRecommendationContext, getSequenceDetail, listAngles, listEnrollableDeals,
+  listSequenceTemplates, type ContactOption, type SequenceDetail,
 } from "@mc/db/queries/cadencias";
-import { STEP_TYPES } from "@mc/db/schema";
 import { PageHeader } from "@/components/page-header";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { ModuleTabs } from "../../../_componentes/pestanas";
 import { withWorkspace } from "../../../_lib/db";
-import { avisoDePolitica, ESTADO_PILL, etiquetaCanal, etiquetaTipo, horaDePaso, resumenFlujo } from "../../_lib/vista";
+import { avisoDePolitica, esperaEntre, ESTADO_PILL, etiquetaCanal, etiquetaTipo, horaDePaso, resumenFlujo } from "../../_lib/vista";
+import { IconoCanal } from "../../canal";
 import { MESSAGES } from "../../messages";
 import { Controles } from "../controles";
 import { Enrolar, type NegocioVista } from "../enrolar";
@@ -34,10 +34,11 @@ function alcance(c: ContactOption): string {
 function pasosVista(d: SequenceDetail, f: Formatter, angulos: ReadonlyMap<string, string>): PasoVista[] {
   const t = MESSAGES.paso;
   const sinTexto = ["linkedin_like", "instagram_like", "manual_task"];
-  return d.steps.map((s) => ({
+  return d.steps.map((s, i) => ({
     id: s.id,
     numero: f.int(s.position),
     diaLabel: t.dia(f.int(s.dayOffset)),
+    esperaLabel: esperaEntre(d.steps[i - 1], s, f),
     horaLabel: t.hora(horaDePaso(s.scheduledTime, f)),
     tipoLabel: s.stepType === "manual_task" ? `${etiquetaTipo(s.stepType)} · ${etiquetaCanal(s.channel)}` : etiquetaTipo(s.stepType),
     anguloLabel: s.angleLabel ?? (s.angleKey ? (angulos.get(s.angleKey) ?? s.angleKey) : null),
@@ -47,6 +48,7 @@ function pasosVista(d: SequenceDetail, f: Formatter, angulos: ReadonlyMap<string
     aviso: avisoDePolitica(d, s.id, f),
     dayOffset: s.dayOffset,
     stepType: s.stepType,
+    channel: s.channel,
     scheduledTime: s.scheduledTime,
     angleKey: s.angleKey,
     generateWithAi: s.generateWithAi,
@@ -75,7 +77,7 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
       d,
       plantillas: await listSequenceTemplates(tx),
       angulos: await listAngles(tx),
-      negocios: archivada ? [] : await listEnrollableDeals(tx),
+      negocios: archivada ? [] : await listEnrollableDeals(tx, d.id),
       personas: d.signal && !d.locked && !archivada ? (await getRecommendationContext(tx, d.signal.id)).contacts : [],
     };
   });
@@ -99,8 +101,9 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
     personas: n.contacts.map((c) => ({
       id: c.id,
       nombre: c.name ?? t.proponer.sinPersona,
-      detalle: [c.roleTitle, alcance(c)].filter(Boolean).join(" · "),
-      disponible: !c.optedOut && (c.hasEmail || c.hasLinkedin || c.hasInstagram),
+      detalle: [c.roleTitle, c.enrolled ? t.enrolar.yaDentro : alcance(c)].filter(Boolean).join(" · "),
+      disponible: !c.enrolled && !c.optedOut && (c.hasEmail || c.hasLinkedin || c.hasInstagram),
+      dentro: c.enrolled,
     })),
   }));
 
@@ -140,7 +143,12 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
                     →
                   </span>
                 )}
-                <span>{trozo}</span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="text-fg-3">
+                    <IconoCanal canal={d.steps[i]!.channel} tipo={d.steps[i]!.stepType} size={13} />
+                  </span>
+                  {trozo}
+                </span>
               </li>
             ))}
           </ol>
@@ -148,7 +156,7 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
       )}
 
       <div className="mb-6">
-        <Notas d={d} f={f} plantillas={nombresPlantilla} />
+        <Notas d={d} f={f} plantillas={nombresPlantilla} angulos={nombresAngulo} />
       </div>
 
       {(archivada || d.locked) && (
@@ -164,7 +172,8 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
           estructura={!d.locked && !archivada}
           editable={!archivada}
           angulos={angulos.map((a) => ({ value: a.key, label: a.label }))}
-          tipos={STEP_TYPES.map((s) => ({ value: s, label: etiquetaTipo(s) }))}
+          tipos={EDITABLE_STEP_TYPES.map((s) => ({ value: s, label: etiquetaTipo(s) }))}
+          canales={EDITABLE_CHANNELS.map((c) => ({ value: c, label: etiquetaCanal(c) }))}
         />
         <aside className="grid content-start gap-4">
           {d.signal && !d.locked && !archivada && (

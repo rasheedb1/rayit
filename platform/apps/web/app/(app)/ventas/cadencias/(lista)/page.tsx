@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { RECOMMEND_SIGNAL_KINDS, type RecommendSignalKind } from "@mc/core";
 import Link from "next/link";
 import { listProposableSignals, listSequences, listSequenceTemplates, type SequenceListRow } from "@mc/db/queries/cadencias";
 import { PageHeader, SectionTitle } from "@/components/page-header";
@@ -100,13 +101,11 @@ export default async function CadenciasPage({ searchParams }: { searchParams: Pr
                   <p className="mt-1 text-xs text-fg-3 break-words">{t.senales.negocio(s.dealName)}</p>
                 </div>
                 <div className="flex flex-wrap items-start gap-2">
+                  {/* Con cadencia ya, se abre esa: volver a proponer vive en su «Proponer otra vez» y no crea un duplicado. */}
                   {s.sequenceId ? (
-                    <>
-                      <Button href={`${CADENCIAS}/${s.sequenceId}`} size="sm" variant="secondary">
-                        {t.senales.verCadencia}
-                      </Button>
-                      <ProponerBoton signalId={s.signalId} variant="ghost" />
-                    </>
+                    <Button href={`${CADENCIAS}/${s.sequenceId}`} size="sm" variant="secondary">
+                      {t.senales.verCadencia}
+                    </Button>
                   ) : (
                     <ProponerBoton signalId={s.signalId} />
                   )}
@@ -141,7 +140,19 @@ export default async function CadenciasPage({ searchParams }: { searchParams: Pr
           <span id="plantillas">{t.plantillas.titulo}</span>
         </SectionTitle>
         <p className="mb-4 text-sm text-fg-2">{t.plantillas.descripcion}</p>
-        <PlantillaForm opciones={plantillas.map((p) => ({ value: p.slug, label: p.nameEs }))} />
+        <PlantillaForm
+          opciones={plantillas.map((p) => {
+            const kind = (RECOMMEND_SIGNAL_KINDS as readonly (string | null)[]).includes(p.signalKind)
+              ? t.senalTipos[p.signalKind as RecommendSignalKind]
+              : null;
+            return {
+              value: p.slug,
+              label: p.nameEs,
+              resumen: t.plantillas.resumen(f.int(p.steps.length), p.steps.length, f.int(p.spanDays), kind),
+              descripcion: p.descriptionEs,
+            };
+          })}
+        />
       </section>
     </>
   );

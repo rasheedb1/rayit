@@ -9,7 +9,9 @@ import { MESSAGES } from "../messages";
 
 /**
  * «Proponer desde esta señal» en el borrador: otra persona de la marca,
- * otra propuesta. Reemplaza los pasos (solo sin nadie dentro).
+ * otra propuesta. Reemplaza los pasos (solo sin nadie dentro). «Sin
+ * persona todavía» manda un valor propio (MESSAGES.proponer.ninguna), no
+ * el vacío: el vacío es «la de por defecto» y planearía para alguien.
  */
 export function ProponerOtraVez({
   sequenceId,
@@ -35,7 +37,11 @@ export function ProponerOtraVez({
         <input type="hidden" name="signalId" value={signalId} />
         <input type="hidden" name="sequenceId" value={sequenceId} />
         <Field label={t.persona}>
-          <Select name="contactId" options={[{ value: "", label: t.sinPersona }, ...personas]} defaultValue={elegida ?? ""} />
+          <Select
+            name="contactId"
+            options={[{ value: t.ninguna, label: t.sinPersona }, ...personas]}
+            defaultValue={elegida ?? t.ninguna}
+          />
         </Field>
         <div>
           <Button type="submit" size="sm" variant="secondary" loading={pending}>

@@ -23,8 +23,14 @@ import { MESSAGES } from "../messages";
  */
 export interface ProponerInput {
   signalId: string;
-  /** La persona elegida; si no viene o no sirve, la que llega por más canales. */
+  /** La persona elegida; si no viene o no sirve, la que llega por más canales (salvo `sinPersona`). */
   contactId: string | null;
+  /**
+   * «Sin persona todavía», elegido a propósito: se planea sin nadie (la
+   * nota no_contact lo dice) y la propuesta no guarda a quién escribir,
+   * así que Activar no enrola a nadie.
+   */
+  sinPersona?: boolean;
   /** Para «Proponer desde esta señal» en un borrador que ya existe. */
   sequenceId?: string;
 }
@@ -33,7 +39,9 @@ export async function proponerCadencia(input: ProponerInput, writer: GuidanceWri
   const ahora = new Date();
   const leido = await withWorkspace(async (tx) => {
     const ctx = await getRecommendationContext(tx, input.signalId);
-    const elegida = ctx.contacts.find((c) => c.id === input.contactId && !c.optedOut) ?? defaultContact(ctx.contacts);
+    const elegida = input.sinPersona
+      ? null
+      : (ctx.contacts.find((c) => c.id === input.contactId && !c.optedOut) ?? defaultContact(ctx.contacts));
     const proposal = recommendSequence({
       signalKind: ctx.signal.kind,
       nicheSlugs: ctx.nicheSlugs,
@@ -42,6 +50,7 @@ export async function proponerCadencia(input: ProponerInput, writer: GuidanceWri
       contact: elegida ? { hasEmail: elegida.hasEmail, hasLinkedin: elegida.hasLinkedin, hasInstagram: elegida.hasInstagram } : null,
       requiresDisclosure: ctx.brief?.requiresDisclosure ?? false,
       templates: ctx.templates,
+      policy: ctx.policy,
     });
     const llm = writer ? (await outboundHealth(tx, 24)).llm : null;
     return { ctx, elegida, proposal, conPresupuesto: llm ? llm.spentToday < llm.dailyCap : false };

@@ -10,8 +10,24 @@
  */
 import type { RerouteReason, RecommendSignalKind } from "@mc/core";
 
+/**
+ * El idioma de estos textos. Sus reglas de plural son las del idioma en
+ * que están escritos (no las del número): al traducir el archivo, cambia
+ * esto y cada frase trae las formas que su idioma pida (one, few, many…).
+ */
+export const IDIOMA_MENSAJES = "es";
+const reglasPlural = new Intl.PluralRules(IDIOMA_MENSAJES);
+
+type Formas = Partial<Record<Intl.LDMLPluralRule, string>> & { other: string };
 type Plural = (n: string, count: number) => string;
-const plural = (uno: string, varios: string): Plural => (n, count) => (count === 1 ? `${n} ${uno}` : `${n} ${varios}`);
+/**
+ * Una frase con cifra. `n` llega ya formateado (Formatter del espacio) y
+ * reemplaza «{n}»; la forma la elige Intl.PluralRules con `count`.
+ */
+export const plural =
+  (formas: Formas): Plural =>
+  (n, count) =>
+    (formas[reglasPlural.select(count)] ?? formas.other).replaceAll("{n}", n);
 
 export const MESSAGES = {
   metaTitle: "Cadencias",
@@ -44,6 +60,11 @@ export const MESSAGES = {
     label: "Plantilla",
     placeholder: "Elige una plantilla",
     crear: "Crear borrador",
+    resumen: (pasos: string, count: number, dias: string, senal: string | null) =>
+      plural({
+        one: `{n} paso en ${dias} días${senal ? ` · ${senal}` : ""}`,
+        other: `{n} pasos en ${dias} días${senal ? ` · ${senal}` : ""}`,
+      })(pasos, count),
   },
 
   lista: {
@@ -94,13 +115,14 @@ export const MESSAGES = {
     desdeSenal: (tipo: string, titular: string, empresa: string | null) =>
       empresa ? `${tipo} · ${empresa}: ${titular}` : `${tipo}: ${titular}`,
     plantilla: (nombre: string) => `Plantilla: ${nombre}`,
-    dentro: (n: string, count: number) => (count === 1 ? `${n} persona dentro` : `${n} personas dentro`),
+    dentro: plural({ one: "{n} persona dentro", other: "{n} personas dentro" }),
     renombrar: "Cambiar el nombre",
     nombreLabel: "Nombre de la cadencia",
     guardar: "Guardar",
     cancelar: "Cancelar",
     flujo: "Resumen",
     flujoPaso: (dia: string, tipo: string) => `Día ${dia}: ${tipo}`,
+    pasos: "Pasos",
     bloqueada:
       "Ya hay personas en esta cadencia: sus mensajes ya tienen día y canal. Puedes cambiar la guía, el ángulo, el texto y la hora (vale para quien entre después); para cambiar días, canales u orden, duplícala.",
     archivada: "Esta cadencia está archivada. Duplícala para volver a usarla.",
@@ -122,12 +144,14 @@ export const MESSAGES = {
     activadaCon: (persona: string, partes: string) =>
       `Cadencia activa y ${persona} dentro: ${partes}. Los ves y apruebas en la ficha de la empresa.`,
     partes: {
-      scheduled: plural("mensaje programado", "mensajes programados"),
-      held: plural("esperando tu revisión", "esperando tu revisión"),
-      drafts: plural("por redactar", "por redactar"),
-      skipped: plural("sin dirección para ese canal", "sin dirección para ese canal"),
+      scheduled: plural({ one: "{n} mensaje programado", other: "{n} mensajes programados" }),
+      held: plural({ other: "{n} esperando tu revisión" }),
+      drafts: plural({ other: "{n} por redactar" }),
+      skipped: plural({ other: "{n} sin dirección para ese canal" }),
     },
     activadaSinPersona: (persona: string, motivo: string) => `Cadencia activa, pero ${persona} no entró: ${motivo}.`,
+    activadaYaEnOtra: (persona: string, cadencia: string) =>
+      `Cadencia activa. ${persona} no entró: ya está en «${cadencia}», y dos cadencias a la vez a la misma persona duplican los mensajes.`,
     sinPasos: "Añade al menos un paso para activarla.",
   },
 
@@ -152,12 +176,19 @@ export const MESSAGES = {
     bajar: (n: string) => `Bajar el paso ${n}`,
     arrastrar: (n: string) => `Arrastra para mover el paso ${n}`,
     fueraDePolitica: "Con tu política no sale: pasa del máximo de mensajes a una marca.",
-    seCorre: (dias: string) => `Sale más tarde: tu política pide ${dias} días entre mensajes.`,
+    espera: plural({ one: "Espera {n} día hábil", other: "Espera {n} días hábiles" }),
+    mismoDia: "El mismo día",
+    seCorre: plural({
+      one: "Sale más tarde: tu política pide {n} día entre mensajes.",
+      other: "Sale más tarde: tu política pide {n} días entre mensajes.",
+    }),
     campos: {
       dia: "Día",
       diaAyuda: "Días hábiles desde que la persona entra.",
       hora: "Hora",
       tipo: "Canal y tipo",
+      red: "Red",
+      redAyuda: "Dónde la haces tú.",
       angulo: "Ángulo",
       guia: "Guía",
       guiaAyuda: "Qué abrir, qué no mencionar y cómo cerrar. La sigue el generador y la vigila quien revisa.",
@@ -179,6 +210,8 @@ export const MESSAGES = {
     descripcion: "Vuelve a pedir la propuesta, por ejemplo para otra persona de la marca. Reemplaza los pasos de este borrador.",
     persona: "Para",
     sinPersona: "Sin persona todavía",
+    /** El valor de «Sin persona todavía» en el formulario: se planea sin nadie, y Activar no enrola a nadie. */
+    ninguna: "__ninguna__",
     boton: "Proponer otra vez",
     sinCanales: (canales: string) => `Llega por: ${canales}`,
     sinDireccion: "Sin dirección",
@@ -204,6 +237,19 @@ export const MESSAGES = {
     reconectar: "Ir a Canales",
     noContact: "Sin persona elegida: se planeó como si tuviera todas las direcciones.",
     disclosure: "Tu brief pide divulgación: el cierre lo menciona.",
+    politicaAjuste: {
+      titulo: (max: string, dias: string) =>
+        `Ajustada a tu política de envío (hasta ${max} mensajes por marca, ${dias} días entre ellos):`,
+      suavizados: (angulos: string, count: number) =>
+        plural({
+          one: `${angulos} pasa a una reacción en su publicación, que no cuenta como mensaje`,
+          other: `${angulos} pasan a reacciones en su publicación, que no cuentan como mensajes`,
+        })("", count).trim(),
+      quitados: (angulos: string, count: number) =>
+        plural({ one: `${angulos} se quita`, other: `${angulos} se quitan` })("", count).trim(),
+      corridos: plural({ one: "el cierre sale {n} día más tarde", other: "el cierre sale {n} días más tarde" }),
+      soloSeparacion: "los días se separan para respetarla",
+    },
     guiaModelo: "La guía de cada paso la redactó On Cue con IA a partir de las reglas.",
     guiaReglas: {
       no_key: "La guía sale de las reglas: la redacción con IA no está configurada en este espacio.",
@@ -213,9 +259,15 @@ export const MESSAGES = {
     } as Record<string, string>,
     politica: {
       titulo: "Con tu política de envío",
-      overCap: (n: string, max: string) =>
-        `${n} de estos mensajes no saldrán: tu política permite ${max} mensajes por marca.`,
-      gap: (dias: string) => `Algunos pasos saldrán más tarde de lo que dicen: tu política pide ${dias} días entre mensajes.`,
+      overCap: (n: string, count: number, max: string) =>
+        plural({
+          one: `{n} de estos mensajes no saldrá: tu política permite ${max} mensajes por marca.`,
+          other: `{n} de estos mensajes no saldrán: tu política permite ${max} mensajes por marca.`,
+        })(n, count),
+      gap: plural({
+        one: "Algunos pasos saldrán más tarde de lo que dicen: tu política pide {n} día entre mensajes.",
+        other: "Algunos pasos saldrán más tarde de lo que dicen: tu política pide {n} días entre mensajes.",
+      }),
       ir: "Revisar la política",
     },
   },
@@ -231,7 +283,7 @@ export const MESSAGES = {
     enrolando: "Enrolando…",
     soloActiva: "Activa la cadencia para enrolar.",
     sinNegocios: "No hay negocios abiertos.",
-    resultado: (n: string, count: number) => (count === 1 ? `${n} persona enrolada.` : `${n} personas enroladas.`),
+    resultado: plural({ one: "{n} persona enrolada.", other: "{n} personas enroladas." }),
     saltadas: {
       not_found: "no está en este espacio",
       opted_out: "pidió no recibir mensajes",
@@ -240,8 +292,11 @@ export const MESSAGES = {
       no_address: "no tiene dirección en ningún canal de la cadencia",
       invalid_address: "su dirección está mal escrita",
     } as Record<string, string>,
+    saltadaGenerica: "no se pudo enrolar",
     saltada: (persona: string, motivo: string) => `${persona}: ${motivo}.`,
     elige: "Elige al menos una persona.",
+    ajenas: "Alguna de esas personas no es de la marca de este negocio, o el negocio ya se cerró. Vuelve a elegir.",
+    yaDentro: "Ya está dentro",
   },
 
   errores: {
@@ -249,12 +304,16 @@ export const MESSAGES = {
     has_enrollments: "Ya hay personas en esta cadencia: duplícala para cambiar días, canales u orden.",
     archived: "La cadencia está archivada: duplícala para cambiarla.",
     no_steps: "Añade al menos un paso para activarla.",
-    too_many_steps: "Una cadencia lleva hasta 12 pasos.",
-    day_full: "Ese día ya tiene 4 pasos: elige otro.",
     invalid: "Revisa los datos del paso.",
     no_template: "No hay ninguna plantilla para esta señal todavía.",
     no_signal: "Esa señal ya no existe o no es de este espacio.",
     sequence_not_active: "Activa la cadencia para enrolar.",
     generico: "No pudimos guardar el cambio. Inténtalo otra vez.",
   } as Record<string, string>,
+
+  /** Los errores que dicen un límite: reciben la cifra ya formateada (MAX_STEPS, MAX_STEPS_PER_DAY de @mc/db). */
+  erroresConLimite: {
+    too_many_steps: (max: string) => `Una cadencia lleva hasta ${max} pasos.`,
+    day_full: (max: string) => `Ese día ya tiene ${max} pasos: elige otro.`,
+  } as Record<string, (max: string) => string>,
 } as const;

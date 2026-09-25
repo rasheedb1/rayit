@@ -76,7 +76,11 @@ export const LIVE_ENROLLMENT_STATUSES = ['active', 'paused', 'cooldown'] as cons
  * WhatsApp es fase 2 (§5.1): no hay conector, el recomendador no lo usa
  * (RECOMMEND_CHANNELS) y el editor no lo ofrece.
  */
-export const EDITABLE_STEP_TYPES = STEP_TYPES.filter((s) => s !== 'whatsapp_message') as Exclude<StepType, 'whatsapp_message'>[];
+export type EditableStepType = Exclude<StepType, 'whatsapp_message'>;
+export const EDITABLE_STEP_TYPES = STEP_TYPES.filter((s): s is EditableStepType => s !== 'whatsapp_message') as [
+  EditableStepType,
+  ...EditableStepType[],
+];
 /** Los canales de un paso editable: los del recomendador (una tarea a mano elige uno de estos). */
 export const EDITABLE_CHANNELS = RECOMMEND_CHANNELS;
 
@@ -227,6 +231,8 @@ export async function listSequences(tx: WorkspaceTx, opts: { includeArchived?: b
 
 export interface TemplateRow extends RecommendTemplate {
   descriptionEs: string;
+  /** El último día de la plantilla: «6 pasos en 9 días». */
+  spanDays: number;
 }
 
 /** Las plantillas globales activas, por slug (el orden en que el recomendador desempata). */
@@ -240,7 +246,7 @@ export async function listSequenceTemplates(tx: WorkspaceTx): Promise<TemplateRo
   );
   return rows.map((r) => ({
     slug: r.slug, nameEs: r.name_es, descriptionEs: r.description_es, signalKind: r.signal_kind, nicheSlug: r.niche_slug,
-    steps: r.steps,
+    steps: r.steps, spanDays: r.steps.reduce((max, s) => Math.max(max, s.day_offset), 0),
   }));
 }
 

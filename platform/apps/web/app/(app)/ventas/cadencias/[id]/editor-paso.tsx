@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import { SEQUENCE_MAX_DAY_OFFSET as MAX_DAY_OFFSET } from "@mc/core/outreach/recomendar";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { Aviso } from "../../../_lib/aviso";
@@ -15,6 +16,9 @@ const SIN_TEXTO = ["linkedin_like", "instagram_like", "manual_task"];
  * La edición en línea de un paso, dentro de su tarjeta (referencia:
  * Linear, que edita en el sitio sin abrir otra pantalla). Con personas
  * dentro, el día y el tipo se ven pero no se cambian (`estructura`).
+ * Una tarea a mano elige además su red. Solo se manda lo que cambió: un
+ * día que nadie tocó no mueve el paso. Al cerrar (Guardar, Cancelar o
+ * Escape), quien lo monta devuelve el foco a su «Editar».
  */
 export function EditorPaso({
   sequenceId,
@@ -22,6 +26,7 @@ export function EditorPaso({
   estructura,
   angulos,
   tipos,
+  canales,
   onDone,
 }: {
   sequenceId: string;
@@ -29,11 +34,13 @@ export function EditorPaso({
   estructura: boolean;
   angulos: { value: string; label: string }[];
   tipos: { value: string; label: string }[];
+  canales: { value: string; label: string }[];
   onDone: () => void;
 }) {
   const t = MESSAGES.paso;
   const c = t.campos;
   const [tipo, setTipo] = useState(paso.stepType);
+  const [canal, setCanal] = useState(canales.some((x) => x.value === paso.channel) ? paso.channel : (canales[0]?.value ?? "email"));
   const [modo, setModo] = useState(paso.generateWithAi ? "ai" : "fijo");
   const [error, setError] = useState<string | undefined>();
   const [pending, start] = useTransition();
@@ -53,8 +60,10 @@ export function EditorPaso({
       requiresAsset: (texto("activo") || null) as PasoCambios["requiresAsset"],
     };
     if (estructura) {
-      cambios.dayOffset = Number(texto("dia"));
-      cambios.stepType = tipo as PasoCambios["stepType"];
+      const dia = Number(texto("dia"));
+      if (dia !== paso.dayOffset) cambios.dayOffset = dia;
+      if (tipo !== paso.stepType) cambios.stepType = tipo as PasoCambios["stepType"];
+      if (tipo === "manual_task" && canal !== paso.channel) cambios.channel = canal as PasoCambios["channel"];
     }
     if (!sinTexto && modo === "fijo") {
       cambios.bodyTemplate = texto("cuerpo");
@@ -86,7 +95,7 @@ export function EditorPaso({
             type="number"
             inputMode="numeric"
             min={0}
-            max={60}
+            max={MAX_DAY_OFFSET}
             defaultValue={paso.dayOffset}
             disabled={!estructura}
             className="tabular-nums"
@@ -99,6 +108,11 @@ export function EditorPaso({
           <Select name="tipo" options={tipos} value={tipo} onChange={(e) => setTipo(e.target.value)} disabled={!estructura} />
         </Field>
       </div>
+      {tipo === "manual_task" && (
+        <Field label={c.red} help={c.redAyuda}>
+          <Select name="canal" options={canales} value={canal} onChange={(e) => setCanal(e.target.value)} disabled={!estructura} />
+        </Field>
+      )}
       <Field label={c.angulo}>
         <Select name="angulo" options={[{ value: "", label: t.sinAngulo }, ...angulos]} defaultValue={paso.angleKey ?? ""} />
       </Field>

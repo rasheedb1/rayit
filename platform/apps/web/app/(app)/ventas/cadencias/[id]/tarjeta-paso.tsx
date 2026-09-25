@@ -3,7 +3,7 @@
 import { ArrowDown, ArrowUp, GripVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmInline } from "@/components/ui/confirm-inline";
-import { Pill } from "@/components/ui/pill";
+import { CanalPill } from "../canal";
 import { MESSAGES } from "../messages";
 
 /**
@@ -16,6 +16,8 @@ export interface PasoVista {
   /** «1», «2»…, en el idioma del espacio. */
   numero: string;
   diaLabel: string;
+  /** «Espera 2 días hábiles» desde el paso anterior; null en el primero. Es del puesto, como el día. */
+  esperaLabel: string | null;
   horaLabel: string;
   tipoLabel: string;
   anguloLabel: string | null;
@@ -27,6 +29,7 @@ export interface PasoVista {
   // Los valores crudos, para el editor.
   dayOffset: number;
   stepType: string;
+  channel: string;
   scheduledTime: string;
   angleKey: string | null;
   generateWithAi: boolean;
@@ -44,6 +47,7 @@ export function TarjetaPaso({
   quitar,
   arrastrable,
   editable,
+  ocupado = false,
   onDragStart,
   onDragEnd,
 }: {
@@ -52,6 +56,12 @@ export function TarjetaPaso({
   ultimo: boolean;
   mover: (direccion: -1 | 1) => void;
   editar: () => void;
+  /**
+   * Se está guardando un cambio de orden: Editar y Quitar trabajarían
+   * sobre un puesto que se mueve, así que se apagan. Subir y Bajar siguen
+   * montados (quien llama ignora el clic) para no perder el foco.
+   */
+  ocupado?: boolean;
   quitar: () => Promise<void>;
   /** La forma se puede cambiar: arrastrar, subir, bajar y quitar. */
   arrastrable: boolean;
@@ -64,7 +74,8 @@ export function TarjetaPaso({
   return (
     <article
       aria-labelledby={`paso-${paso.id}`}
-      draggable={arrastrable}
+      data-paso={paso.id}
+      draggable={arrastrable && !ocupado}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/plain", paso.id);
@@ -73,7 +84,7 @@ export function TarjetaPaso({
       onDragEnd={onDragEnd}
       className="flex min-w-0 gap-2 rounded-md border border-line bg-surface p-3 sm:p-4"
     >
-      {arrastrable && (
+      {arrastrable && !ocupado && (
         <span
           aria-hidden="true"
           title={t.arrastrar(paso.numero)}
@@ -84,13 +95,15 @@ export function TarjetaPaso({
       )}
       <div className="min-w-0 flex-1">
         <header className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <h3 id={`paso-${paso.id}`} className="text-sm font-semibold">
+          <h3 id={`paso-${paso.id}`} tabIndex={-1} className="text-sm font-semibold outline-none">
             {t.titulo(paso.numero)}
           </h3>
           <span className="text-sm tabular-nums text-fg-2">
             {paso.diaLabel} · {paso.horaLabel}
           </span>
-          <Pill kind="neutral">{paso.tipoLabel}</Pill>
+          <CanalPill canal={paso.channel} tipo={paso.stepType}>
+            {paso.tipoLabel}
+          </CanalPill>
         </header>
 
         <dl className="mt-3 grid gap-2 text-sm">
@@ -113,31 +126,39 @@ export function TarjetaPaso({
         {(editable || arrastrable) && (
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             {editable && (
-              <Button size="sm" variant="secondary" onClick={editar}>
-                {t.editar}
-              </Button>
+              <span data-accion="editar" className="contents">
+                <Button size="sm" variant="secondary" onClick={editar} disabled={ocupado}>
+                  {t.editar}
+                </Button>
+              </span>
             )}
             {arrastrable && (
               <>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={primero}
-                  onClick={() => mover(-1)}
-                  icon={<ArrowUp size={14} aria-hidden="true" />}
-                >
-                  <span className="sr-only">{t.subir(paso.numero)}</span>
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={ultimo}
-                  onClick={() => mover(1)}
-                  icon={<ArrowDown size={14} aria-hidden="true" />}
-                >
-                  <span className="sr-only">{t.bajar(paso.numero)}</span>
-                </Button>
-                <ConfirmInline
+                {/* Subir y Bajar siguen montados mientras se guarda el orden: el foco se queda en ellos (WCAG 2.4.3). */}
+                <span data-accion="subir" className="contents">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={primero}
+                    onClick={() => mover(-1)}
+                    icon={<ArrowUp size={14} aria-hidden="true" />}
+                  >
+                    <span className="sr-only">{t.subir(paso.numero)}</span>
+                  </Button>
+                </span>
+                <span data-accion="bajar" className="contents">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={ultimo}
+                    onClick={() => mover(1)}
+                    icon={<ArrowDown size={14} aria-hidden="true" />}
+                  >
+                    <span className="sr-only">{t.bajar(paso.numero)}</span>
+                  </Button>
+                </span>
+                {!ocupado && (
+                  <ConfirmInline
                   action={quitar}
                   label={t.quitar}
                   variant="ghost"
@@ -146,7 +167,8 @@ export function TarjetaPaso({
                   confirmLabel={t.quitarConfirmar}
                   cancelLabel={MESSAGES.detalle.cancelar}
                   openWidth="w-full sm:w-80"
-                />
+                  />
+                )}
               </>
             )}
           </div>

@@ -12,9 +12,21 @@ import { textoDeGuia, textoDeNota } from "../_lib/vista";
  * va a dejar cumplir. Como el «por qué» de Stripe Radar: cada regla que
  * decidió, dicha.
  */
-export function Notas({ d, f, plantillas }: { d: SequenceDetail; f: Formatter; plantillas: ReadonlyMap<string, string> }) {
+export function Notas({
+  d,
+  f,
+  plantillas,
+  angulos,
+}: {
+  d: SequenceDetail;
+  f: Formatter;
+  plantillas: ReadonlyMap<string, string>;
+  angulos: ReadonlyMap<string, string>;
+}) {
   const t = MESSAGES.notas;
-  const notas = d.proposal ? d.proposal.notes.map((n) => textoDeNota(n, f, plantillas)).filter((x): x is string => x !== null) : [];
+  const notas = d.proposal
+    ? d.proposal.notes.map((n) => textoDeNota(n, f, plantillas, angulos)).filter((x): x is string => x !== null)
+    : [];
   const caida = d.proposal?.notes.some((n) => n.code === "channel_down") ?? false;
   const overCap = d.policy.overCap.length;
   const gap = d.policy.closerThanGap.length;
@@ -46,8 +58,8 @@ export function Notas({ d, f, plantillas }: { d: SequenceDetail; f: Formatter; p
             {t.politica.titulo}
           </h2>
           <ul className="mt-2 grid list-disc gap-1.5 pl-4 text-sm">
-            {overCap > 0 && <li>{t.politica.overCap(f.int(overCap), f.int(d.policy.maxTouchesPerCompany))}</li>}
-            {gap > 0 && <li>{t.politica.gap(f.int(d.policy.minDaysBetweenTouches))}</li>}
+            {overCap > 0 && <li>{t.politica.overCap(f.int(overCap), overCap, f.int(d.policy.maxTouchesPerCompany))}</li>}
+            {gap > 0 && <li>{t.politica.gap(f.int(d.policy.minDaysBetweenTouches), d.policy.minDaysBetweenTouches)}</li>}
           </ul>
           <Link href="/ventas/politica" className="mt-2 inline-block text-sm underline underline-offset-2">
             {t.politica.ir}

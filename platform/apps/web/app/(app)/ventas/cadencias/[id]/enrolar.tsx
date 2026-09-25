@@ -10,13 +10,15 @@ import { MESSAGES } from "../messages";
 export interface NegocioVista {
   id: string;
   label: string;
-  personas: Array<{ id: string; nombre: string; detalle: string; disponible: boolean }>;
+  /** `dentro`: ya está en esta cadencia; se ve, con «Ya está dentro», pero no se marca. */
+  personas: Array<{ id: string; nombre: string; detalle: string; disponible: boolean; dentro: boolean }>;
 }
 
 /**
  * «Enrolar desde un negocio»: se elige el negocio y sus personas, y cada
  * una entra en la cadencia (enrollContacts de VEN-10). Quien pidió la
- * baja o no tiene dirección se ve, pero no se puede marcar.
+ * baja, no tiene dirección o ya está dentro se ve, pero no se puede
+ * marcar.
  */
 export function Enrolar({ sequenceId, negocios, activa, inicial }: {
   sequenceId: string;
