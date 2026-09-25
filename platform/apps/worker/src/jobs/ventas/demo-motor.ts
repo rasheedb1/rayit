@@ -35,14 +35,12 @@
 import { DEFAULT_SEND_WINDOW, nextBusinessSlot, nextWindowSlot } from '@mc/core';
 import { enableOutreach, enrollContacts, releaseHeldTouch } from '@mc/db/queries/outreach';
 import { fakeChannels } from './canales/fake.ts';
+import { DEMO_WORKSPACE_ID } from './demo-ids.ts';
 import { motorDbFromClient } from './motor-db.ts';
 import { runDispatch, type DispatchReport } from './outbound.dispatch.ts';
 import { runReplies, type RepliesReport } from './outbound.replies.ts';
 
-/** El workspace de la demo (Laura · Cocina fácil), el del seed 0002. */
-export const DEMO_WORKSPACE_ID = '00000002-0000-4000-8000-000000000001';
-/** Los workspaces de demostración: los únicos donde el canal falso puede correr contra una base compartida. */
-export const DEMO_WORKSPACE_IDS = [DEMO_WORKSPACE_ID] as const;
+export { DEMO_WORKSPACE_ID, DEMO_WORKSPACE_IDS } from './demo-ids.ts';
 
 export interface DemoTouch {
   id: string;

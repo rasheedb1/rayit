@@ -37,7 +37,7 @@ import {
 import { PostgresOutreachCallLog } from '@mc/connectors';
 import type { Logger } from '../../runner/logger.ts';
 import { defineJob } from '../../runner/registry.ts';
-import { buildChannels } from './canales/index.ts';
+import { buildChannels, jobScope } from './canales/index.ts';
 import type { ChannelSender, FindSentResult, OutgoingMessage, SendResult } from './canales/types.ts';
 import { motorDbFromJob, type MotorDb } from './motor-db.ts';
 
@@ -303,7 +303,8 @@ export const dispatchJob = defineJob(
   DISPATCH_JOB_ID,
   async (_payload, ctx) => {
     const channels = buildChannels({
-      env: ctx.env, secrets: ctx.secrets, logger: ctx.logger, callLog: new PostgresOutreachCallLog(ctx.db), now: () => ctx.now(),
+      env: ctx.env, scope: jobScope(ctx), secrets: ctx.secrets, logger: ctx.logger, callLog: new PostgresOutreachCallLog(ctx.db),
+      now: () => ctx.now(),
     });
     const deadline = new Date(Date.now() + ctx.definition.timeoutS * 1000 - DEADLINE_MARGIN_MS);
     const report = await runDispatch(motorDbFromJob(ctx.db), {

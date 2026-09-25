@@ -36,8 +36,8 @@ import {
 } from '@mc/connectors';
 import { ConfigError, loadConfig, type WorkerConfig } from '../../runner/config.ts';
 import { PostgresDatabase } from '../../runner/db.ts';
-import { buildChannels } from './canales/index.ts';
-import { DEMO_WORKSPACE_IDS, resumenDemo, runDemoMotor } from './demo-motor.ts';
+import { buildChannels, fakeAllowed, fakeRefusal } from './canales/index.ts';
+import { resumenDemo, runDemoMotor } from './demo-motor.ts';
 import { motorDbFromJob } from './motor-db.ts';
 import { canceledCount, runDispatch, type DispatchReport } from './outbound.dispatch.ts';
 import { runReplies, type RepliesReport } from './outbound.replies.ts';
@@ -79,29 +79,17 @@ export function parseArgs(argv: readonly string[], env: Readonly<Record<string, 
   return { pasada, canalFalso: canalFalso || demo, demo, workspaceId };
 }
 
-/** ¿La base es de esta máquina? (localhost, 127.0.0.1, ::1 o un socket). */
-export function isLocalDatabase(url: string | null | undefined): boolean {
-  if (!url) return false;
-  try {
-    const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '';
-  } catch {
-    return false;
-  }
-}
+export { isLocalDatabase } from './canales/index.ts';
 
 /**
  * El canal falso marca como enviados mensajes que nadie recibió y avanza
- * las cadencias: contra una base compartida, solo sobre el workspace de
- * la demo. Lanza ConfigError si no.
+ * las cadencias: la misma regla que el worker programado (fakeAllowed).
+ * Contra una base compartida, solo sobre el workspace de la demo. Lanza
+ * ConfigError si no.
  */
 export function assertFakeAllowed(o: Pick<Opciones, 'canalFalso' | 'demo' | 'workspaceId'>, databaseUrl: string | null | undefined): void {
-  if (!o.canalFalso || o.demo || isLocalDatabase(databaseUrl)) return;
-  if (o.workspaceId && (DEMO_WORKSPACE_IDS as readonly string[]).includes(o.workspaceId)) return;
-  throw new ConfigError(
-    'El canal falso deja como enviados mensajes que nadie recibió. Contra una base que no es local, solo con ' +
-      `--workspace de la demo (${DEMO_WORKSPACE_IDS.join(', ')}).`,
-  );
+  if (!o.canalFalso || o.demo) return;
+  if (!fakeAllowed({ databaseUrl, workspaceId: o.workspaceId })) throw new ConfigError(fakeRefusal({}));
 }
 
 /** El almacén de tokens de las cuentas de envío, igual que el worker. El canal falso no lee tokens. */

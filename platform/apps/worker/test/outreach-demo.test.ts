@@ -4,7 +4,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { InMemorySecretStore } from '@mc/connectors';
 import { ConfigError } from '../src/runner/config.ts';
+import { buildChannels, channelModeFrom, databaseUrlFrom, fakeAllowed, jobScope } from '../src/jobs/ventas/canales/index.ts';
 import { emptyClaimReport } from '@mc/db/queries/outreach';
 import { assertFakeAllowed, isLocalDatabase, parseArgs, resumenDespacho } from '../src/jobs/ventas/correr-motor.ts';
 import { canceledCount } from '../src/jobs/ventas/outbound.dispatch.ts';
@@ -52,6 +54,24 @@ test('el canal falso contra una base compartida solo corre sobre el workspace de
   assert.equal(isLocalDatabase('postgresql://u@127.0.0.1/x'), true);
   assert.equal(isLocalDatabase(supabase), false);
   assert.equal(isLocalDatabase(null), false);
+});
+
+test('el worker programado sigue la misma regla: con Supabase y NODE_ENV=development, OUTREACH_CHANNELS=fake no arranca', () => {
+  const supabase = 'postgresql://mc_migrator.x:clave@aws-0-ca-central-1.pooler.supabase.com:5432/postgres';
+  const env = { OUTREACH_CHANNELS: 'fake', NODE_ENV: 'development', DATABASE_URL_DIRECT: supabase };
+  // El arranque del worker (src/index.ts) y cada job (jobScope) preguntan lo mismo.
+  assert.throws(() => channelModeFrom(env, { databaseUrl: supabase }), ConfigError);
+  assert.throws(() => channelModeFrom(env, jobScope({ env, db: { kind: 'postgres' } })), ConfigError);
+  assert.throws(() => buildChannels({ env, scope: jobScope({ env, db: { kind: 'postgres' } }), secrets: new InMemorySecretStore() }), ConfigError);
+  assert.equal(databaseUrlFrom(env), supabase);
+  // Con el embebido (worker --pglite o --demo) o una base local, sí.
+  assert.equal(channelModeFrom(env, jobScope({ env, db: { kind: 'pglite' } })), 'fake');
+  assert.equal(channelModeFrom({ ...env, DATABASE_URL_DIRECT: 'postgresql://postgres@localhost:5432/mc' }, { databaseUrl: 'postgresql://postgres@localhost:5432/mc' }), 'fake');
+  // Solo el workspace de la demo, contra Supabase: la corrida a mano.
+  assert.equal(fakeAllowed({ databaseUrl: supabase, workspaceId: '00000002-0000-4000-8000-000000000001' }), true);
+  assert.equal(fakeAllowed({ databaseUrl: supabase }), false);
+  // Sin pedir el canal falso, siempre el real.
+  assert.equal(channelModeFrom({ NODE_ENV: 'production', DATABASE_URL_DIRECT: supabase }, { databaseUrl: supabase }), 'real');
 });
 
 test('demo con el seed: apagada no envía nada; encendida, la cadencia de tres correos sale, una respuesta la corta y la otra sigue', async () => {

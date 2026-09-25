@@ -25,6 +25,7 @@ import {
 } from '@mc/connectors';
 import { decideBeforeSend, type OpenThread, type SendContext } from '@mc/db/queries/outreach';
 import { appUrlFrom, buildChannels } from '../src/jobs/ventas/canales/index.ts';
+import { ConfigError } from '../src/runner/config.ts';
 import { GmailChannel } from '../src/jobs/ventas/canales/gmail.ts';
 import { inviteNote, profileIdentifier, UnipileChannel } from '../src/jobs/ventas/canales/unipile.ts';
 import type { OutgoingMessage } from '../src/jobs/ventas/canales/types.ts';
@@ -352,18 +353,17 @@ test('Unipile lee del chat solo lo que escribió la otra parte, no conocemos y t
 // Qué adaptador, y la decisión antes de enviar
 // ---------------------------------------------------------------------
 
-test('buildChannels: el canal falso nunca en producción', () => {
-  const avisos: string[] = [];
-  const logger = { warn: (msg: string) => { avisos.push(msg); } };
-  const prod = buildChannels({ env: { OUTREACH_CHANNELS: 'fake', NODE_ENV: 'production' }, secrets: new InMemorySecretStore(), logger });
-  assert.equal(prod.mode, 'real');
-  assert.match(avisos[0] ?? '', /se ignora en producción/);
-  assert.equal(buildChannels({ env: {}, secrets: new InMemorySecretStore(), mode: 'fake' }).mode, 'fake');
+test('buildChannels: el canal falso nunca en producción, ni con una base embebida', () => {
+  assert.throws(
+    () => buildChannels({ env: { OUTREACH_CHANNELS: 'fake', NODE_ENV: 'production' }, scope: { databaseUrl: null, embedded: true }, secrets: new InMemorySecretStore() }),
+    (e: Error) => e instanceof ConfigError && /no se permite en producción/.test(e.message),
+  );
+  assert.equal(buildChannels({ env: {}, secrets: new InMemorySecretStore(), mode: 'fake' }).mode, 'fake', 'el modo explícito de job:dispatch');
 });
 
 test('buildChannels: falso o real según OUTREACH_CHANNELS, y la URL del enlace de baja', () => {
   const s = new InMemorySecretStore();
-  const fake = buildChannels({ env: { OUTREACH_CHANNELS: 'fake' }, secrets: s });
+  const fake = buildChannels({ env: { OUTREACH_CHANNELS: 'fake' }, scope: { databaseUrl: null, embedded: true }, secrets: s });
   assert.equal(fake.mode, 'fake');
   assert.equal(fake.appUrl, 'http://localhost:3100');
   const real = buildChannels({ env: { APP_URL: 'https://on-cue-web.vercel.app/algo' }, secrets: s });

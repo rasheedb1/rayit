@@ -41,7 +41,7 @@ import { workerSqlFrom } from '@mc/db/worker';
 import { PostgresOutreachCallLog } from '@mc/connectors';
 import type { JobDatabase, Queryable } from '../../runner/db.ts';
 import { defineJob, type JobContext } from '../../runner/registry.ts';
-import { buildChannels } from './canales/index.ts';
+import { buildChannels, jobScope } from './canales/index.ts';
 
 export const BOUNCES_JOB_ID = 'outbound.bounces';
 
@@ -257,7 +257,8 @@ export function createBouncesJob(mailboxFor: MailboxFor) {
  */
 export function gmailMailboxes(ctx: JobContext): MailboxFor {
   return buildChannels({
-    env: ctx.env, secrets: ctx.secrets, logger: ctx.logger, callLog: new PostgresOutreachCallLog(ctx.db), now: () => ctx.now(),
+    env: ctx.env, scope: jobScope(ctx), secrets: ctx.secrets, logger: ctx.logger, callLog: new PostgresOutreachCallLog(ctx.db),
+    now: () => ctx.now(),
   }).bounces;
 }
 
