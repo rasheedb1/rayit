@@ -81,6 +81,12 @@ const TOUCH_Z_SENT = '00000038-0000-4000-8000-0000000070d1';
 const TOUCH_Z_RETRY = '00000038-0000-4000-8000-0000000070d2';
 const TOUCH_Z_FLIGHT = '00000038-0000-4000-8000-0000000070d3';
 const TOKEN_Z = createOptoutToken();
+/** El rescate por lotes: tres zombis en un solo UPDATE (baja del espacio, baja global y sin baja). */
+const CONTACT_ZG = '00000038-0000-4000-8000-0000000000fb';
+const CONTACT_ZOK = '00000038-0000-4000-8000-0000000000fc';
+const TOUCH_ZB_BAJA = '00000038-0000-4000-8000-0000000070d6';
+const TOUCH_ZB_GLOBAL = '00000038-0000-4000-8000-0000000070d7';
+const TOUCH_ZB_OK = '00000038-0000-4000-8000-0000000070d8';
 const CONTACT_RZ = '00000038-0000-4000-8000-0000000000fa';
 const TOUCH_RZ = '00000038-0000-4000-8000-0000000070d4';
 /** Otro correo reclamado a la misma dirección, que el despachador devuelve a la cola. */
@@ -407,15 +413,38 @@ describe('la baja con un toque reclamado (r5: una sola regla de la baja)', () =>
     assert.equal((await toque(TOUCH_Z_FLIGHT))?.status, 'processing');
   });
 
-  test('el reintento o el rescate del zombi (processing → scheduled) falla con check_violation', async () => {
-    await assert.rejects(
-      t.db.asWorker((tx) => tx.query(`UPDATE outbound_touch SET status = 'scheduled', claimed_at = NULL WHERE id = '${TOUCH_Z_RETRY}'`)),
-      rechazo(/pidió no recibir más mensajes de este espacio/),
+  test('el reintento o el rescate del zombi (processing → scheduled) se cancela en el sitio, sin error', async () => {
+    await t.db.asWorker((tx) => tx.query(`UPDATE outbound_touch SET status = 'scheduled', claimed_at = NULL WHERE id = '${TOUCH_Z_RETRY}'`));
+    assert.deepEqual(await toque(TOUCH_Z_RETRY), { status: 'canceled', blocked_reason: 'opted_out' });
+  });
+
+  test('el rescate por lotes (un solo UPDATE) no aborta por un zombi dado de baja: los demás vuelven a la cola', async () => {
+    // Lo que hace el rescate de VEN-10 (releaseUnattempted): un UPDATE para
+    // todos los zombis, de todos los workspaces. Uno es de quien pulsó la
+    // baja de este espacio, otro de una ficha dada de baja en toda la
+    // plataforma y otro de alguien que no pidió nada.
+    await t.admin(`
+      INSERT INTO contact (id, company_id, full_name, email, source, owner_workspace_id, opted_out, opted_out_at) VALUES
+        ('${CONTACT_ZG}', '${COMPANY}', 'Dada de baja', 'baja-total@marca.test', 'user_provided', '${WS_S}', true, now()),
+        ('${CONTACT_ZOK}', '${COMPANY}', 'Sigue aquí', 'sigue@marca.test', 'user_provided', '${WS_S}', false, NULL);
+      ALTER TABLE outbound_touch DISABLE TRIGGER outbound_touch_optout;
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for, claimed_at, attempt_count) VALUES
+        ('${TOUCH_ZB_BAJA}', '${WS_S}', '${COMPANY}', '${CONTACT_Z}', 'linkedin', 'Zombi de baja', 'processing',
+         now() - interval '10 minutes', now() - interval '10 minutes', 1),
+        ('${TOUCH_ZB_GLOBAL}', '${WS_S}', '${COMPANY}', '${CONTACT_ZG}', 'linkedin', 'Zombi de baja global', 'processing',
+         now() - interval '10 minutes', now() - interval '10 minutes', 1),
+        ('${TOUCH_ZB_OK}', '${WS_S}', '${COMPANY}', '${CONTACT_ZOK}', 'linkedin', 'Zombi sin baja', 'processing',
+         now() - interval '10 minutes', now() - interval '10 minutes', 1);
+      ALTER TABLE outbound_touch ENABLE TRIGGER outbound_touch_optout;
+    `);
+    const vueltos = await t.db.asWorker((tx) =>
+      tx.query(`UPDATE outbound_touch SET status = 'scheduled', claimed_at = NULL
+                 WHERE id IN ('${TOUCH_ZB_BAJA}', '${TOUCH_ZB_GLOBAL}', '${TOUCH_ZB_OK}') RETURNING id`),
     );
-    assert.equal((await toque(TOUCH_Z_RETRY))?.status, 'processing');
-    // Lo que sí puede: cancelarlo.
-    await t.db.asWorker((tx) => tx.query(`UPDATE outbound_touch SET status = 'canceled' WHERE id = '${TOUCH_Z_RETRY}'`));
-    assert.equal((await toque(TOUCH_Z_RETRY))?.status, 'canceled');
+    assert.equal(vueltos.rows.length, 3);
+    assert.deepEqual(await toque(TOUCH_ZB_BAJA), { status: 'canceled', blocked_reason: 'opted_out' });
+    assert.deepEqual(await toque(TOUCH_ZB_GLOBAL), { status: 'canceled', blocked_reason: 'opted_out' });
+    assert.deepEqual(await toque(TOUCH_ZB_OK), { status: 'scheduled', blocked_reason: null });
   });
 
   test('lo que ya salió se registra (processing → sent) y queda marcado opted_out_in_flight', async () => {

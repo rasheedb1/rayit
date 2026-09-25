@@ -37,6 +37,12 @@
 --      un miembro con el primero (una agencia con dos espacios) no
 --      confirma nada.
 --
+-- Después de la última revisión, en su sitio: la vuelta desde 'processing' de
+-- alguien dado de baja (de este workspace o de toda la plataforma) se
+-- cancela en vez de rechazarse (§8.3), como la del correo inválido: el
+-- rescate por lotes del despachador de VEN-10 ya no aborta entero por un
+-- solo zombi dado de baja.
+--
 -- Después de la ronda 5, en su sitio: la vuelta desde 'processing' a una
 -- dirección que rebotó se cancela en vez de rechazarse (§2): el toque
 -- no vuelve a la cola ni se queda atascado en 'processing'.
@@ -833,7 +839,10 @@ REVOKE CREATE ON SCHEMA public FROM mc_public_share;
 -- no entra en 'scheduled', 'processing' ni 'sent' si su workspace tiene
 -- la dirección de su ficha, o la del envío, en outbound_workspace_optout.
 -- La excepción es la de siempre: processing → sent se registra con
--- blocked_reason = 'opted_out_in_flight'. El despachador de VEN-10
+-- blocked_reason = 'opted_out_in_flight'. Y la vuelta processing →
+-- scheduled no se rechaza: se cancela en el sitio con blocked_reason =
+-- 'opted_out' (como §2 con el correo inválido), para
+-- que un zombi dado de baja no aborte el rescate por lotes. El despachador de VEN-10
 -- descubre la baja porque la base le rechaza el reclamo; su consulta de
 -- reclamo filtra también outbound_workspace_optout y pasa esas filas a
 -- 'canceled' (docs/ventas-outreach.md §5.2).
@@ -891,6 +900,19 @@ BEGIN
   IF NEW.status = 'sent' AND TG_OP = 'UPDATE' AND OLD.status = 'processing'
      AND NEW.contact_id IS NOT DISTINCT FROM OLD.contact_id THEN
     NEW.blocked_reason := 'opted_out_in_flight';
+    RETURN NEW;
+  END IF;
+
+  -- La vuelta a la cola de lo reclamado (el reintento, o el rescate de
+  -- un zombi) se CANCELA en el sitio, igual que §2 con el correo
+  -- inválido. El rescate de VEN-10 devuelve a la cola con un solo UPDATE
+  -- por lote: si esto lanzara check_violation, un solo zombi de alguien
+  -- que pulsó la baja abortaría el rescate entero, de todos los
+  -- workspaces, en cada pasada, y esos toques se quedarían en
+  -- 'processing' para siempre.
+  IF TG_OP = 'UPDATE' AND OLD.status = 'processing' AND NEW.status = 'scheduled' THEN
+    NEW.status := 'canceled';
+    NEW.blocked_reason := 'opted_out';
     RETURN NEW;
   END IF;
 

@@ -359,9 +359,18 @@ Decisiones que las piezas siguientes tienen que conocer:
   que el reclamo de VEN-10 filtra además `outbound_workspace_optout` (por
   `workspace_id` y por la dirección de la ficha o la del envío) y, en
   correo, `contact.email_invalid` y los rebotes duros verificados del
-  workspace (`outbound_touch_email_invalid`, 0038 §2); y el rescate del
-  zombi y el reintento (`processing → scheduled`) pasan esas filas a
-  `canceled`, porque la base los rechaza con 23514. Hasta r4 la baja del
+  workspace (`outbound_touch_email_invalid`, 0038 §2). **La vuelta a la
+  cola desde `processing`** (el reintento, o el rescate del zombi) de
+  alguien dado de baja **no se rechaza: la base la cancela en el sitio**
+  (`canceled`, `blocked_reason = 'opted_out'`), igual que la del correo
+  inválido (`email_invalid`). El rescate de VEN-10 (`releaseUnattempted`)
+  devuelve a la cola con un solo `UPDATE` por lote, de todos los
+  workspaces: con un 23514, un solo zombi dado de baja abortaba el rescate
+  entero en cada pasada y esos toques se quedaban en `processing` para
+  siempre (con `outreach_queue_stuck` avisando cada día). Ahora las demás
+  filas del lote vuelven a `scheduled` y la dada de baja termina
+  cancelada; lo prueba `entregabilidad.test.ts` con tres zombis en un
+  solo `UPDATE`. Hasta r4 la baja del
   workspace se saltaba la vuelta desde `processing`: un toque de LinkedIn
   reclamado al pulsar la baja volvía a la cola y salía como `sent` sin
   marca. `mc_app` no lee la lista: la regla usa
