@@ -156,8 +156,8 @@ migración 0051 (grupo `sales`). Las consultas viven en
 | `outbound.dispatch` | 2 min | Rescata zombis, reclama hasta 50 toques vencidos y los envía uno por uno (ver «El despachador», abajo). |
 | `outbound.replies` | 5 min | Lee las respuestas de todos los hilos abiertos y aplica su efecto: respuesta, baja o fuera de oficina (ver «El lector de respuestas»). |
 | `outbound.bounces` | 30 min | Los rebotes de Gmail (VEN-15), buzón por buzón con el `GmailChannel` del despachador: un rebote duro marca `contact.email_invalid`, cancela sus correos y cierra la cadencia en `bounced`. Sin llaves de Google, «canal no configurado». |
-| `outbound.generate` | 2 min | Redacta con IA los borradores de los pasos con `generate_with_ai` cuya hora cae en el próximo día y cuyos pasos anteriores ya salieron (VEN-12). Sin `ANTHROPIC_API_KEY`, esperan: «redacción con IA no configurada». |
-| `outbound.review` | 2 min (al minuto impar) | La puerta de calidad de cada borrador redactado: pre-vuelo, juez con la rúbrica del paso, hasta cinco regeneraciones y «enviar el mejor»; deja el toque en `scheduled` o `held` con su motivo, y cada intento en `outbound_review` con nota, tokens y costo (VEN-12). |
+| `outbound.generate` | 2 min | Redacta con IA, primero, lo que una persona pidió desde el editor del pitch (con su pista y sus instrucciones) y después los borradores de los pasos con `generate_with_ai` cuya hora cae en el próximo día y cuyos pasos anteriores ya salieron; nunca para quien pidió la baja o tiene el correo rebotado (VEN-12). Sin `ANTHROPIC_API_KEY`, esperan: «redacción con IA no configurada», y la web lo lee de `job_run` (`outreach_writer_status`). |
+| `outbound.review` | 2 min (al minuto impar) | La puerta de calidad de cada borrador redactado: pre-vuelo, juez con la rúbrica del paso, hasta cinco regeneraciones y «enviar el mejor»; deja el toque en `scheduled` o `held` con su motivo (o en `draft` si lo pidió una persona), y cada intento en `outbound_review` con nota y lo que costó escribirlo y juzgarlo. No toma ni pisa un borrador cuyo texto escribió una persona (VEN-12). |
 
 **El despachador** (`outbound.dispatch`), en este orden:
 

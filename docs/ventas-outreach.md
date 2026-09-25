@@ -1040,13 +1040,21 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   pregunta al cierre, sin enlace de agenda en el primer toque, y cada
   cifra con su marca, que exista, que el ángulo la deje citar y que
   diga lo mismo (5 % de redondeo: «400 mil» por 412.000). No cuentan
-  como cifra las fechas, las horas, los años, los rangos de edad y los
-  conteos sueltos hasta 12 sin unidad.
+  como cifra las fechas, las horas, los rangos de edad, los años («en
+  2026») y los conteos sueltos hasta 12 sin unidad («3 ideas»); pero un
+  número seguido de un sustantivo de desempeño de una lista cerrada
+  (marcas, campañas, clientes, videos, ventas, seguidores, views,
+  colaboraciones…) sí es una cifra, por pequeño que sea o aunque parezca
+  un año («11 marcas», «12 videos», «2000 seguidores»). Los números
+  escritos con palabras también cuentan: «diez mil views», «un millón»,
+  «once marcas» y los múltiplos «el doble», «el triple» (ronda 2).
 - **Compuertas** (`gates.ts`): A, el asunto; B, Jaccard sobre 5-shingles
   contra los últimos 20 enviados del mismo tipo en el mismo espacio
   (0,65 directos, 0,80 correo); C, al escribir el resultado: el toque
-  sigue en borrador, el turno sigue siendo del job y el mismo texto no le
-  llegó ya a esa persona.
+  sigue en borrador, el turno sigue siendo del job, su cuerpo sigue
+  siendo el que había cuando el job lo tomó (`base_body_md5`, 0057: si
+  una persona escribió, manda lo suyo, código `edited_by_person`) y el
+  mismo texto no le llegó ya a esa persona.
 - **Generador y juez** (`generate.ts`, `judge.ts`, prompts en
   `outreach/prompts/*.md`) detrás de `LlmClient`: `claude-sonnet-5`
   con salida estructurada, tope de tokens por tipo de paso y sin
@@ -1067,12 +1075,15 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   deja en `outbound_generation` con sus marcas; `outbound.review`
   (desfasado un minuto) los juzga, escribe una fila de `outbound_review`
   por intento (nota por dimensión, nota ponderada, pista, riesgos,
-  decisión, tokens y costo del juez; la frase del juez en
-  `gates.judge_note`) y deja el toque en `scheduled` o en `held` con su
+  decisión, y tokens y costo de escribir Y juzgar ese intento, con el
+  desglose en `gates.usage`; la frase del juez en `gates.judge_note`)
+  y deja el toque en `scheduled` o en `held` con su
   motivo (`quality_warmup`, `quality_risk`, `quality_low`,
   `quality_preflight`, `quality_duplicate`, `llm_budget`, `llm_error` o
   el `needs_review` de la política). Los diez primeros de cada tipo de
-  paso siempre esperan a una persona.
+  paso siempre esperan a una persona. No se redacta (ni se gasta) para
+  quien pidió la baja o tiene el correo rebotado, y `outbound.review` no
+  toma un borrador cuyo texto escribió una persona.
 - **El pitch a mano** (VEN-6): «Redactar pitch» en la ficha abre
   `/ventas/empresas/<id>/pitch` con el último borrador (el generado, con
   la nota de la revisión, o uno guardado) o vacío; las cifras del perfil
@@ -1080,8 +1091,36 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   vista previa enseña lo que recibe la marca; la revisión corre en línea
   y el servidor la repite al guardar (`savePitch`). «Programar» no se
   puede con una cifra sin origen; «Copiar» copia el texto limpio y lo
-  guarda como borrador. La regeneración con pistas desde la pantalla es
-  de la bandeja de VEN-14.
+  guarda como borrador.
+
+#### Ronda 2 (0057)
+
+- **Lo que escribe una persona manda.** Guardar el pitch
+  (`savePitch`) guarda también su marcado con las `[claim:id]` en
+  `outbound_generation` (`outbound_generation_save_manual`, outcome
+  `manual`): al reabrirlo, cada cifra sigue teniendo su origen, y ningún
+  job escribe encima. Mientras la IA trabaja, el editor abre su borrador
+  aunque el toque todavía esté vacío.
+- **Pedir a la IA desde el editor**, como el generador de Chief: un panel
+  con la señal que usa, instrucciones (tono, qué destacar), «Redactar con
+  IA» y tres pistas cerradas (más corto, más específico, otro ángulo).
+  La web no llama al modelo: `outbound_generation_request` deja la fila en
+  `requested` con la pista y las instrucciones; `outbound.generate` la
+  toma antes que las cadencias y le pasa al generador la versión
+  anterior; `outbound.review` la juzga y el toque vuelve a `draft` con la
+  nota a la vista (lo programa la persona). El editor dice en qué va y se
+  actualiza solo.
+- **La llave vive en el worker.** La web sabe si la IA está encendida por
+  la última corrida de `outbound.generate` (`outreach_writer_status`:
+  `anthropic`, `fake`, `off` o `unknown`), no por su propio entorno.
+- **Una sola lectura de variables** (`loadTemplateSources`, `@mc/db`): el
+  motor al enrolar y el pitch rellenan las doce variables de la misma
+  forma. El creador que firma es el del negocio (`deal.creator_id`) o el
+  primero activo; los enlaces del media kit y de la cotización los arma
+  el servidor con `APP_URL` y el slug de la base, nunca el navegador.
+- **Cada creador cita solo lo suyo**: en una agencia, las campañas de otro
+  creador del mismo espacio no se ofrecen ni pasan el pre-vuelo. El
+  negocio del pitch tiene que ser de la empresa.
 
 ### 5.7 Qué pasa cuando la marca responde
 

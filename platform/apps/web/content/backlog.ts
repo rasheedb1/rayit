@@ -382,8 +382,8 @@ export const STORIES: readonly Story[] = [
     title: "Pitch manual con afirmaciones trazables",
     desc: "Borrador de correo a partir de la señal, el media kit y la última campaña, editado a mano. Cada cifra apunta a su origen en claims. Se guarda como outbound_touch en draft y se copia al portapapeles. La generación automática y el envío los hace VEN-12 sobre esta misma base.",
     done: "Un pitch con una cifra sin origen no se puede marcar como listo.",
-    status: "en_curso",
-    note: "Absorbida en VEN-12 (misma rama): «Redactar pitch» en la ficha abre /ventas/empresas/<id>/pitch con el borrador generado o vacío, las cifras del perfil como fichas con su origen, las variables, la vista previa y la revisión en línea; «Programar» no se puede con una cifra sin origen y el servidor repite la revisión (packages/db/test/outreach-pitch.test.ts). Pasa a hecho con VEN-12 al integrarse.",
+    status: "hecho",
+    note: "Hecha dentro de VEN-12 (misma rama; ronda 2): «Redactar pitch» en la ficha abre /ventas/empresas/<id>/pitch con el último borrador (el de la IA o el que guardó la persona, con sus marcas de origen) o vacío; «Redactar con IA» con instrucciones y tres pistas (más corto, más específico, otro ángulo) que redacta el worker; las cifras del creador que firma, agrupadas y con búsqueda; variables, vista previa y revisión en línea. «Programar» no se puede con una cifra sin origen y el servidor repite la revisión (packages/db/test/outreach-pitch.test.ts). Para el integrador: aplicar 0056 y 0057.",
   },
   {
     id: "VEN-7", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-2"],
@@ -430,8 +430,8 @@ export const STORIES: readonly Story[] = [
     title: "Generación con afirmaciones trazables",
     desc: "Generador con perfil del creador, señal de la marca, ángulo del día y toques realmente enviados; pre-vuelo determinista, juez con rúbrica por paso en tabla, regeneración con pistas cerradas, disparadores de riesgo y revisión humana con calentamiento por tipo de paso.",
     done: "Un mensaje con una cifra sin origen no pasa; dos marcas del mismo nicho reciben correos con similitud menor de 0,65; el juez registra nota, tokens y costo.",
-    status: "en_curso",
-    note: "Terminada en rasheed/VEN-12-generacion-trazable, sin red: pre-vuelo con cifras trazables, compuertas A-B-C, generador y juez sobre claude-sonnet-5 (o falsos), jobs outbound.generate y outbound.review, migración 0056 y el pitch de VEN-6. Las tres condiciones tienen su prueba (core/outreach-generacion, worker/outreach-generacion). Falta lo del integrador: mezclar, aplicar 0056 en Supabase y poner ANTHROPIC_API_KEY en el worker; sin ella los borradores de IA esperan y el editor lo dice.",
+    status: "hecho",
+    note: "Hecha en rasheed/VEN-12-generacion-trazable-r2, sin red: pre-vuelo con cifras trazables (también los conteos pequeños con sustantivo de desempeño, los años que no lo son y los números en palabras), compuertas A-B-C (la C no pisa lo que escribe una persona), generador y juez sobre claude-sonnet-5 (o falsos), jobs outbound.generate y outbound.review con la redacción que pide el editor, costo de escribir y juzgar cada intento en outbound_review, migraciones 0056 y 0057 y el pitch de VEN-6. Las tres condiciones tienen su prueba (core/outreach-generacion, worker/outreach-generacion). Para el integrador: aplicar 0056 y 0057 en Supabase y poner ANTHROPIC_API_KEY en el worker (no en la web); sin ella los borradores de IA esperan y el editor lo dice.",
   },
   {
     id: "VEN-13", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-12"],
