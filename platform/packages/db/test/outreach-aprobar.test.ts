@@ -10,11 +10,14 @@
  *   · aprobar un retenido por un intento sin comprobar borra esa marca
  *     (0052 §2 se lo deja a mc_app solo desde 'held'); fuera de esa
  *     transición la columna sigue siendo del despachador;
- *   · otro workspace no puede aprobar lo ajeno.
+ *   · otro workspace no puede aprobar lo ajeno;
+ *   · (r3, 0053) «sí salió» con la RLS de la web: outreach_resolve_unconfirmed
+ *     deja el toque enviado y anota el enlace de ese intento, que la web
+ *     sola no puede escribir.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { listCompanyCadenceTouches, releaseHeldTouch } from '../src/queries/outreach.ts';
+import { listCompanyCadenceTouches, releaseHeldTouch, resolveUnconfirmedTouch } from '../src/queries/outreach.ts';
 import { openTestDb, SETUP_TIMEOUT, type TestDb } from './pglite.ts';
 
 const id = (kind: string) => `00000052-0000-4000-8000-${kind.padStart(12, '0')}`;
@@ -109,6 +112,44 @@ test('aprobar un retenido por un intento sin comprobar borra esa marca; fuera de
   await assert.rejects(
     t.db.withWorkspace(WS_A, (tx) => tx.query(`UPDATE outbound_touch SET unconfirmed_attempt = 2 WHERE id = $1`, [T.ambiguo])),
     /solo el despachador/,
+  );
+});
+
+test('«sí salió» con la RLS de la web: el toque queda enviado y el enlace de ese intento cuenta; otro workspace no lo ve (r3, 0053)', async () => {
+  const toque = id('76');
+  await t.admin(`
+    INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, sequence_id, step_index, enrollment_id, channel, subject, body,
+                                status, scheduled_for, held_reason)
+    VALUES ('${toque}', '${WS_A}', '${CO}', '${CONTACT}', '${SEQ}', 5, '${ENR}', 'email', 'Otra', 'Otra idea.', 'held', now(),
+            'unconfirmed_attempt:1');
+  `);
+  await t.db.asWorker(async (tx) => {
+    await tx.query(
+      `UPDATE outbound_touch SET unconfirmed_attempt = 1, recipient_address = 'sofia@vitale.test', attempt_count = 1 WHERE id = $1`,
+      [toque],
+    );
+    await tx.query(
+      `INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, attempt, recipient_address, claimed_at)
+       VALUES (repeat('a', 64), $1, $2, $3, 1, 'sofia@vitale.test', now())`,
+      [WS_A, toque, CONTACT],
+    );
+  });
+  assert.deepEqual(await t.db.withWorkspace(WS_B, (tx) => resolveUnconfirmedTouch(tx, toque, 'was_sent')), { ok: false, code: 'not_found' });
+  assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => resolveUnconfirmedTouch(tx, T.review, 'was_sent')), { ok: false, code: 'not_unconfirmed' });
+  assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => resolveUnconfirmedTouch(tx, toque, 'was_sent')), { ok: true });
+  const fila = await t.db.asWorker(async (tx) =>
+    (await tx.query<{ status: string; motivo: string | null; ua: number | null; enlace: boolean }>(
+      `SELECT t.status, t.blocked_reason AS motivo, t.unconfirmed_attempt AS ua,
+              (SELECT l.sent_at IS NOT NULL FROM outbound_optout_link l WHERE l.touch_id = t.id AND l.attempt = 1) AS enlace
+         FROM outbound_touch t WHERE t.id = $1`,
+      [toque],
+    )).rows[0]!,
+  );
+  assert.deepEqual({ ...fila }, { status: 'sent', motivo: 'sent_confirmed_by_user', ua: null, enlace: true });
+  // La web sigue sin poder escribir el enlace ni las columnas del intento por su cuenta.
+  await assert.rejects(
+    t.db.withWorkspace(WS_A, (tx) => tx.query(`UPDATE outbound_optout_link SET sent_at = now() WHERE touch_id = $1`, [toque])),
+    /permission denied/,
   );
 });
 

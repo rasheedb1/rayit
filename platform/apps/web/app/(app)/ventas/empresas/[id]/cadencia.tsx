@@ -1,11 +1,12 @@
 import type { CadenceTouch } from "@mc/db/queries/outreach";
-import { holdReasonText, noticeLang } from "@mc/core/outreach/messages";
+import { holdReasonText, noticeLang, parseHoldReason } from "@mc/core/outreach/messages";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
 import { FICHA } from "../messages";
 import { AprobarMensaje } from "./aprobar";
+import { ResolverIntento } from "./intento";
 import { Bloque } from "./bloque";
 
 /** Lo primero de una respuesta, en una línea: la conversación entera es de VEN-16. */
@@ -30,7 +31,8 @@ const KIND: Record<string, PillKind> = {
 /**
  * «Mensajes de la cadencia» (VEN-10 r5): los mensajes de las secuencias
  * para esta empresa, con los retenidos arriba, su motivo en palabras y
- * «Revisar y aprobar». Es adonde llevan los avisos del motor («Un mensaje
+ * «Revisar y aprobar» (o, si no se supo si un intento salió, «Sí, salió» /
+ * «No salió: enviarlo»). Es adonde llevan los avisos del motor («Un mensaje
  * a X espera tu revisión»); la bandeja completa de todas las empresas es
  * VEN-16. Server Component: el formulario de aprobar es el único cliente.
  */
@@ -70,14 +72,18 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
           {x.status === "held" && (
             <>
               {x.heldReason && <p className="text-xs text-ink-2">{t.porQue(holdReasonText(lang, x.heldReason))}</p>}
-              <AprobarMensaje
-                companyId={companyId}
-                touchId={x.id}
-                persona={persona(x)}
-                isEmail={x.channel === "email"}
-                subject={x.subject}
-                body={x.body}
-              />
+              {parseHoldReason(x.heldReason)?.code === "unconfirmed_attempt" ? (
+                <ResolverIntento companyId={companyId} touchId={x.id} persona={persona(x)} />
+              ) : (
+                <AprobarMensaje
+                  companyId={companyId}
+                  touchId={x.id}
+                  persona={persona(x)}
+                  isEmail={x.channel === "email"}
+                  subject={x.subject}
+                  body={x.body}
+                />
+              )}
             </>
           )}
         </div>

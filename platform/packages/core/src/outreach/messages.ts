@@ -151,7 +151,7 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     placeholders: (d) => `quedan huecos sin rellenar (${d})`,
     reply_without_thread: () => 'es una respuesta en el hilo, pero el correo al que responde no salió',
     unconfirmed_attempt: (d) =>
-      `no pudimos comprobar si el intento ${d} salió; mira tu carpeta de enviados antes de aprobarlo, para no mandarlo dos veces`,
+      `no pudimos comprobar si el intento ${d} salió; mira tu carpeta de enviados y dinos si salió o no, para no mandarlo dos veces`,
     note_too_long: (d) => `la nota de la invitación de LinkedIn tiene ${d} caracteres y el máximo es ${LINKEDIN_INVITE_NOTE_MAX}`,
     needs_review: () => 'espera tu aprobación antes de salir (la revisión humana está encendida)',
   },
@@ -161,7 +161,7 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     placeholders: (d) => `there are unfilled placeholders (${d})`,
     reply_without_thread: () => "it's a reply in the thread, but the email it replies to was not sent",
     unconfirmed_attempt: (d) =>
-      `we couldn't confirm whether attempt ${d} went out; check your sent folder before approving it, so it isn't sent twice`,
+      `we couldn't confirm whether attempt ${d} went out; check your sent folder and tell us whether it did, so it isn't sent twice`,
     note_too_long: (d) => `the LinkedIn invitation note has ${d} characters and the limit is ${LINKEDIN_INVITE_NOTE_MAX}`,
     needs_review: () => 'it waits for your approval before going out (human review is on)',
   },

@@ -15,7 +15,12 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX, isClockTime, isIsoDate } from "@mc/core";
-import { releaseHeldTouch, type ReleaseHeldResult } from "@mc/db/queries/outreach";
+import {
+  releaseHeldTouch,
+  resolveUnconfirmedTouch,
+  type ReleaseHeldResult,
+  type ResolveUnconfirmedResult,
+} from "@mc/db/queries/outreach";
 import { VentasError } from "@mc/db/queries/ventas";
 import {
   FichaError,
@@ -316,4 +321,41 @@ export async function aprobarMensaje(_prev: VentasState, formData: FormData): Pr
   }
   revalidate(v.companyId);
   return { ok: true, notice: t.aprobado, stamp: Date.now() };
+}
+
+// ---------------------------------------------------------------------
+// VEN-10 r3 · Un intento que el proveedor no confirmó
+// ---------------------------------------------------------------------
+
+const intentoSchema = z.object({
+  companyId: z.string().regex(UUID_RE),
+  touchId: z.string().regex(UUID_RE),
+  outcome: z.enum(["was_sent", "resend"]),
+});
+
+/**
+ * «Sí, salió» / «No salió: enviarlo» en la ficha, para un mensaje retenido
+ * porque no se supo si un intento llegó al proveedor. Lo resuelve
+ * resolveUnconfirmedTouch (0053) con la RLS del workspace: la web no
+ * escribe las columnas del intento ni el enlace de baja por su cuenta.
+ */
+export async function resolverIntento(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = FICHA.cadencia.intento;
+  const parsed = intentoSchema.safeParse({
+    companyId: field(formData, "companyId"),
+    touchId: field(formData, "touchId"),
+    outcome: field(formData, "outcome"),
+  });
+  if (!parsed.success) return { message: t.error };
+  const v = parsed.data;
+  let result: ResolveUnconfirmedResult;
+  try {
+    result = await withWorkspace((tx) => resolveUnconfirmedTouch(tx, v.touchId, v.outcome));
+  } catch (err) {
+    console.error("[ventas/ficha] resolver intento", err);
+    return { message: t.error };
+  }
+  revalidate(v.companyId);
+  if (!result.ok) return { message: t.errores[result.code] };
+  return { ok: true, notice: v.outcome === "was_sent" ? t.registrado : t.reenviado, stamp: Date.now() };
 }

@@ -9,8 +9,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * packages/db/test/outreach-aprobar.test.ts.
  */
 const aprobarMensaje = vi.fn();
+const resolverIntento = vi.fn();
 vi.mock("../actions", () => ({
   aprobarMensaje: (...a: unknown[]) => aprobarMensaje(...a),
+  resolverIntento: (...a: unknown[]) => resolverIntento(...a),
 }));
 
 import type { CadenceTouch } from "@mc/db/queries/outreach";
@@ -31,7 +33,10 @@ function toque(over: Partial<CadenceTouch>): CadenceTouch {
   };
 }
 
-beforeEach(() => aprobarMensaje.mockReset());
+beforeEach(() => {
+  aprobarMensaje.mockReset();
+  resolverIntento.mockReset();
+});
 
 describe("MensajesDeCadencia", () => {
   it("un retenido dice por qué en palabras y se revisa ahí; una respuesta se lee", () => {
@@ -73,6 +78,25 @@ describe("MensajesDeCadencia", () => {
     expect(data.get("companyId")).toBe(COMPANY);
     expect(data.get("body")).toBe("Hola, Sofía: una idea.");
     expect(await screen.findByText(t.aprobado)).toBeInTheDocument();
+  });
+
+  it("un intento sin confirmar se resuelve con «Sí, salió» o «No salió», no con «Revisar y aprobar» (r3)", async () => {
+    resolverIntento.mockResolvedValue({ ok: true, notice: t.intento.registrado, stamp: 1 });
+    render(
+      <MensajesDeCadencia companyId={COMPANY} f={f} touches={[toque({ status: "held", heldReason: "unconfirmed_attempt:1" })]} />,
+    );
+    expect(screen.getByText(/no pudimos comprobar si el intento 1 salió/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t.revisarLabel("Sofía Cárdenas") })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t.intento.noSalioLabel("Sofía Cárdenas") })).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.intento.salioLabel("Sofía Cárdenas") }));
+    });
+    expect(resolverIntento).toHaveBeenCalledTimes(1);
+    const data = resolverIntento.mock.calls[0]![1] as FormData;
+    expect(data.get("outcome")).toBe("was_sent");
+    expect(data.get("touchId")).toBe("00000005-0000-4000-8000-000000070001");
+    expect(data.get("companyId")).toBe(COMPANY);
+    expect(await screen.findByText(t.intento.registrado)).toBeInTheDocument();
   });
 
   it("sin mensajes de cadencia, lo dice", () => {

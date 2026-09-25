@@ -333,6 +333,27 @@ export const FICHA = {
       opted_out: "Esa persona pidió no ser contactada: el mensaje no puede salir.",
       no_postal_address: "Falta tu dirección postal: guárdala en la política de envío y vuelve a aprobarlo.",
     },
+    /**
+     * (VEN-10 r3) Un mensaje retenido porque no se supo si un intento salió
+     * (unconfirmed_attempt): la persona lo mira en su carpeta de enviados y
+     * dice qué pasó. «Sí salió» lo registra como enviado y la cadencia
+     * sigue; «No salió» lo vuelve a poner en la cola.
+     */
+    intento: {
+      pregunta: "Míralo en tu carpeta de enviados (o en el chat) y dinos qué pasó.",
+      salio: "Sí, salió",
+      salioLabel: (persona: string) => `Sí, el mensaje a ${persona} salió`,
+      noSalio: "No salió: enviarlo",
+      noSalioLabel: (persona: string) => `No salió: enviar el mensaje a ${persona}`,
+      registrado: "Anotado como enviado. La cadencia sigue con el paso siguiente.",
+      reenviado: "Vuelve a la cola: sale en la próxima pasada, dentro de tu horario.",
+      error: "No se pudo guardar. Inténtalo de nuevo.",
+      errores: {
+        not_found: "Ese mensaje ya no existe.",
+        not_unconfirmed: "Ese mensaje ya no espera esta respuesta: se resolvió por otro lado.",
+        opted_out: "Esa persona pidió no ser contactada: el mensaje no puede salir ni anotarse como enviado.",
+      },
+    },
   },
 
   errores: {

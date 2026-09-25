@@ -15,6 +15,7 @@
 import { findPlaceholders } from '@mc/core';
 import { inviteNoteOverflow } from '@mc/core/outreach/messages';
 import type { WorkspaceTx } from '../../client.ts';
+import { advanceEnrollment } from './enroll.ts';
 import { assertIds, date, int, text, textOrNull, toDate } from './shared.ts';
 
 /** Un mensaje de una cadencia, como lo pinta la ficha. */
@@ -123,9 +124,9 @@ export async function releaseHeldTouch(
   assertIds('releaseHeldTouch', [touchId]);
   const row = (
     await tx.query<{
-      status: string; channel: string; step_type: string | null; opted_out: boolean; needs_postal: boolean;
+      status: string; channel: string; step_type: string | null; opted_out: boolean; needs_postal: boolean; unconfirmed: boolean;
     }>(
-      `SELECT t.status, t.channel, st.step_type,
+      `SELECT t.status, t.channel, st.step_type, t.unconfirmed_attempt IS NOT NULL AS unconfirmed,
               (coalesce(c.opted_out, false) OR address_is_suppressed(c.email) OR address_is_suppressed(t.recipient_address)) AS opted_out,
               (t.channel = 'email' AND coalesce(p.require_optout_link, true) AND nullif(btrim(p.postal_address), '') IS NULL) AS needs_postal
          FROM outbound_touch t
@@ -152,6 +153,18 @@ export async function releaseHeldTouch(
   }
   if (row.opted_out) return { ok: false, code: 'opted_out' };
   if (row.needs_postal) return { ok: false, code: 'no_postal_address' };
+  // (r3) Retenido por un intento sin comprobar: aprobarlo es decir que no
+  // salió. outreach_resolve_unconfirmed (0053) lo devuelve a la cola, borra
+  // el enlace de ese intento y devuelve su plaza; después, el texto.
+  if (row.unconfirmed) {
+    const r = await resolveUnconfirmedTouch(tx, touchId, 'resend');
+    if (!r.ok) return { ok: false, code: r.code === 'opted_out' ? 'opted_out' : 'not_held' };
+    const edited = await tx.query(
+      `UPDATE outbound_touch SET subject = $2, body = $3 WHERE id = $1::uuid AND status = 'scheduled' RETURNING id`,
+      [touchId, subject, body],
+    );
+    return edited.rows.length > 0 ? { ok: true } : { ok: false, code: 'not_held' };
+  }
   const done = await tx.query(
     `UPDATE outbound_touch
         SET status = 'scheduled', held_reason = NULL, subject = $2, body = $3, next_retry_at = NULL,
@@ -161,4 +174,44 @@ export async function releaseHeldTouch(
     [touchId, subject, body],
   );
   return done.rows.length > 0 ? { ok: true } : { ok: false, code: 'not_held' };
+}
+
+/** Qué dice la persona de un intento que el proveedor no confirmó (0053). */
+export type UnconfirmedOutcome = 'was_sent' | 'resend';
+
+export type ResolveUnconfirmedResult = { ok: true } | { ok: false; code: 'not_found' | 'not_unconfirmed' | 'opted_out' };
+
+/**
+ * (r3, hallazgo 4) Un mensaje retenido porque no se supo si un intento
+ * salió (held_reason 'unconfirmed_attempt:<n>'): la persona mira su
+ * carpeta de enviados y dice qué pasó.
+ *   · 'was_sent': salió. Queda como enviado (sin pruebas del proveedor,
+ *     blocked_reason 'sent_confirmed_by_user'), el enlace de baja de ese
+ *     intento cuenta como enviado y la cadencia sigue con el paso de
+ *     detrás.
+ *   · 'resend': no salió. Vuelve a la cola, sin la marca, sin el enlace de
+ *     ese intento y con su plaza devuelta; el despachador no vuelve a
+ *     preguntarle al proveedor (en Unipile, un chat nuevo o una invitación
+ *     no se pueden comprobar: sin esto volvía a retenerse para siempre).
+ * Lo hace outreach_resolve_unconfirmed (0053), con la RLS del workspace:
+ * las columnas del intento y el enlace de baja son del despachador.
+ */
+export async function resolveUnconfirmedTouch(
+  tx: WorkspaceTx,
+  touchId: string,
+  outcome: UnconfirmedOutcome,
+  now: Date = new Date(),
+): Promise<ResolveUnconfirmedResult> {
+  assertIds('resolveUnconfirmedTouch', [touchId]);
+  if (outcome !== 'was_sent' && outcome !== 'resend') throw new RangeError(`Resultado desconocido: ${String(outcome)}.`);
+  const r = (await tx.query<{ r: string }>(`SELECT outreach_resolve_unconfirmed($1::uuid, $2) AS r`, [touchId, outcome])).rows[0]?.r;
+  if (r === 'not_found' || r === 'not_unconfirmed' || r === 'opted_out') return { ok: false, code: r };
+  if (r !== 'ok') throw new Error(`outreach_resolve_unconfirmed devolvió ${String(r)}.`);
+  if (outcome === 'was_sent') {
+    const enrollmentId = (
+      await tx.query<{ enrollment_id: string | null }>(`SELECT enrollment_id FROM outbound_touch WHERE id = $1::uuid`, [touchId])
+    ).rows[0]?.enrollment_id;
+    if (enrollmentId) await advanceEnrollment(tx, enrollmentId, now);
+  }
+  return { ok: true };
 }
