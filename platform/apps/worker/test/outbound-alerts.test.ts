@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs';
 import type { AlertInput } from '@mc/core/outreach/deliverability';
 import { allJobs } from '../src/jobs/index.ts';
 import { missingMailConfig, smtpMailerFromEnv, type Mailer, type MailMessage, type MailTransport } from '../src/jobs/ventas/correo.ts';
-import { ALERT_TEXTS_EN, ALERT_TEXTS_ES, ALERTAS_URL, SALUD_URL, fillTemplate } from '../src/jobs/ventas/messages.ts';
+import { ALERT_TEXTS_EN, ALERT_TEXTS_ES, ALERTAS_URL, CANALES_URL, SALUD_URL, fillTemplate } from '../src/jobs/ventas/messages.ts';
 import { ALERTAS_JOB_ID, createAlertasJob, runAlertas, type ReadSignals } from '../src/jobs/ventas/outbound.alerts.ts';
 import type { JobContext } from '../src/runner/registry.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
@@ -201,7 +201,7 @@ test('con la base real: una cuenta por reconectar da su alerta (outbound_health)
   assert.deepEqual(real.map((a) => a.kind), ['outreach_account_down']);
   // Dice CUÁL es, y lleva a donde se ve qué pasó (no a una pantalla que no la nombra).
   assert.match(real[0]?.body_es ?? '', /No sale nada por LinkedIn: Creador Real hasta que se reconecte/);
-  assert.equal(real[0]?.action_url, '/ventas/politica#cuentas');
+  assert.equal(real[0]?.action_url, CANALES_URL);
 });
 
 test('con dos dueños: si el correo falla nadie lo recibe dos veces, y sale al día siguiente en un solo correo', async () => {
@@ -313,7 +313,7 @@ test('todo mal (r4, r5): el fixture da las seis notificaciones, con su gravedad,
   assert.deepEqual(
     todo.map((a) => [a.kind, a.severity, a.action_url]).sort(),
     [
-      ['outreach_account_down', 'critical', '/ventas/politica#cuentas'],
+      ['outreach_account_down', 'critical', CANALES_URL],
       ['outreach_bounce_rate', 'critical', '/ventas/politica#salud'],
       ['outreach_bounces_unread', 'warning', '/ventas/politica#salud'],
       ['outreach_llm_budget', 'warning', '/ventas/politica#presupuesto'],

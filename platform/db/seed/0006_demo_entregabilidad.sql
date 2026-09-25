@@ -17,7 +17,8 @@
 --     seed 0005): se anota y no marca nada;
 --   * la alerta outreach_account_down del día, que cuadra con el LinkedIn
 --     que pide reconectar (seed 0005), con el texto y el enlace que deja
---     el job (/ventas/politica#cuentas).
+--     el job (/ventas/canales, CANALES_URL desde la integración de la
+--     fase 4).
 --
 -- Ronda 4: la demo tiene que CONTAR la entregabilidad al abrir
 -- /ventas/politica, y antes no lo hacía (todo era de hace días: «Salud de
@@ -231,8 +232,8 @@ VALUES
    'critical', 'Una cuenta de envío necesita atención',
    -- La misma frase que deja el job (messages.ts): sin «en tu política de
    -- envío ves…», porque se lee dentro de esa misma página.
-   'No sale nada por Laura · Cocina fácil (LinkedIn) hasta que se reconecte: lo de ese canal espera en la '
-   'cola.',
-   '/ventas/politica#cuentas', now(), now())
-ON CONFLICT (id) DO UPDATE SET body_es = EXCLUDED.body_es, created_at = now(), emailed_at = now(), read_at = NULL,
+   -- La cuenta se llama como la trae Unipile (seed 0005, VEN-9 r4): «Laura Méndez», y el job le antepone el canal.
+   'No sale nada por LinkedIn: Laura Méndez hasta que se reconecte: lo de ese canal espera en la cola.',
+   '/ventas/canales', now(), now())
+ON CONFLICT (id) DO UPDATE SET body_es = EXCLUDED.body_es, action_url = EXCLUDED.action_url, created_at = now(), emailed_at = now(), read_at = NULL,
                                dismissed_at = NULL;

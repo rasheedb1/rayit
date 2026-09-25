@@ -648,12 +648,13 @@ describe('la política editable', () => {
                                               last_error, last_error_at) VALUES
           ('${WS_O}', 'email', 'gmail_oauth', 'otro@creador.test', NULL, 'connected', NULL, NULL),
           ('${WS_O}', 'linkedin', 'unipile', 'unipile-otro', 'Otro creador (LinkedIn)', 'needs_reconnect',
-           'La sesión expiró.', now() - interval '1 hour');
+           'unipile_status:CREDENTIALS', now() - interval '1 hour');
       `);
       const r = await t.db.withWorkspace(WS_O, (tx) => readSendReadiness(tx));
       assert.equal(r.connectedAccounts, 1);
       assert.deepEqual(r.downAccounts.map((a) => [a.channel, a.name, a.status, a.lastError]), [
-        ['linkedin', 'Otro creador (LinkedIn)', 'needs_reconnect', 'La sesión expiró.'],
+        // last_error guarda un código desde 0044 (VEN-9): la pantalla lo traduce.
+        ['linkedin', 'Otro creador (LinkedIn)', 'needs_reconnect', 'unipile_status:CREDENTIALS'],
       ]);
       // TOUCH_PENDING_O está programado para mañana: hoy no sale nada.
       assert.equal(r.approvedDueToday, 0);

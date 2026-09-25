@@ -48,9 +48,8 @@
  * pero sin enlaces (uno a localhost sería un enlace roto) y con una línea
  * que dice dónde verlo; el job lo avisa en el registro.
  *
- * La alerta de cuenta caída dice CUÁL es («LinkedIn: Laura · Cocina
- * fácil») y lleva a /ventas/politica#cuentas, donde está lo que dijo el
- * proveedor.
+ * La alerta de cuenta caída dice CUÁL es («LinkedIn: Laura Méndez») y
+ * lleva a /ventas/canales (CANALES_URL), donde se reconecta.
  *
  * Textos en el idioma del workspace (messages.ts), con los plurales de
  * Intl.PluralRules («1 mensaje lleva…», «3 mensajes llevan…»). Corre como mc_worker:

@@ -91,6 +91,14 @@ test('el job de rebotes lee el Gmail de verdad: un rebote duro del fixture marca
   const fake = fakeChannels();
   const r = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:00')));
   assert.equal(r.sent.length, 1);
+  // Desde VEN-15 r5 solo un rebote VERIFICADO tiene efectos: el aviso trae el Message-ID de un correo que este
+  // espacio envió antes del aviso. El del fixture es <CAF=rebote001@mail.gmail.com>, a las 13:10Z: se le da al
+  // correo enviado ese Message-ID y una hora anterior (integración de la fase 4).
+  await db.raw.query(
+    `UPDATE outbound_touch SET message_id_rfc = '<CAF=rebote001@mail.gmail.com>', sent_at = '2026-09-23T13:00:00Z'
+      WHERE contact_id = $1 AND status = 'sent'`,
+    [c],
+  );
 
   // El buzón de la cuenta: el MISMO GmailChannel del despachador, sobre FakeGmail, con el token en el almacén.
   const gmail = new FakeGmail({ now: () => bogota('2026-09-23', '13:00') });
@@ -100,10 +108,20 @@ test('el job de rebotes lee el Gmail de verdad: un rebote duro del fixture marca
   await secrets.set(ref, { accessToken: 'ya29.prueba', refreshToken: '1//prueba', accessExpiresAt: new Date('2026-09-23T20:00:00Z'), scopes: ['gmail.send', 'gmail.modify'] });
   const canal = new GmailChannel({ secrets, oauth: gmail, mailbox: () => gmail });
   const leidos = await runBounces(db, bogota('2026-09-23', '14:00'), (a) => (a.id === w.gmail ? canal.bounceMailboxFor(a) : null));
-  assert.deepEqual([leidos.hard, leidos.contactsInvalidated, leidos.touchesCanceled, leidos.failed], [1, 1, 2, 0]);
+  // touchesCanceled cuenta también el barrido de todos los espacios de VEN-15 r5 (lo que dejaron las pruebas de
+  // arriba en esta misma base): lo de ESTA ficha se comprueba abajo, toque por toque.
+  assert.deepEqual([leidos.hard, leidos.contactsInvalidated, leidos.failed], [1, 1, 0]);
+  assert.ok(leidos.touchesCanceled >= 2);
   assert.equal(await scalar<boolean>(`SELECT email_invalid AS v FROM contact WHERE id = $1`, [c]), true);
   assert.deepEqual((await touches(c)).map((t) => [t.status, t.blocked_reason]), [['sent', null], ['canceled', 'email_invalid'], ['canceled', 'email_invalid']]);
-  assert.equal(await scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enr.get(c)]), 'bounced', 'no queda activa para siempre');
+  // La cadencia no queda activa para siempre: la secuencia es solo de correo, y el barrido de VEN-15 r5 la pausa
+  // con su motivo (context.paused_reason = 'email_invalid').
+  assert.deepEqual(
+    await db.raw.query<{ status: string; motivo: string | null }>(
+      `SELECT status, context->>'paused_reason' AS motivo FROM outbound_enrollment WHERE id = $1`, [enr.get(c)],
+    ).then((q) => q.rows[0]),
+    { status: 'paused', motivo: 'email_invalid' },
+  );
 });
 
 test('un rebote síncrono marca el correo inválido: otra secuencia que la enrole ya no le programa correos', async () => {

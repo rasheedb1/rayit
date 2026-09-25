@@ -115,8 +115,8 @@ SELECT 'g_last_error_son_codigos' AS check_id,
          AND (SELECT last_error = 'unipile_status:CREDENTIALS' AND display_name NOT LIKE '%LinkedIn%'
                 FROM outreach_channel_account WHERE id = '00000005-0000-4000-8000-0000000ac002') AS ok
   FROM outreach_channel_account;
--- (h) La demo cumple la ventana que enseña: lo enviado salió, y lo
---     cancelado iba a salir, en día hábil y entre las 09:00 y las 17:00
+-- (h) La demo de outreach (este seed) cumple la ventana que enseña: lo
+--     enviado salió, y lo cancelado iba a salir, en día hábil y entre las 09:00 y las 17:00
 --     de Bogotá (la zona del workspace). Y cada envío va antes de la
 --     respuesta que llegó en su hilo.
 SELECT 'h_en_la_ventana' AS check_id,
@@ -128,4 +128,6 @@ SELECT 'h_en_la_ventana' AS check_id,
                coalesce(t.sent_at < (SELECT min(m.occurred_at) FROM outbound_message m
                                       WHERE m.touch_id = t.id AND m.direction = 'inbound'), true) AS antes_de_la_respuesta
           FROM outbound_touch t
-         WHERE t.workspace_id = '00000002-0000-4000-8000-000000000001' AND t.status IN ('sent', 'canceled', 'scheduled')) x;
+         WHERE t.workspace_id = '00000002-0000-4000-8000-000000000001' AND t.status IN ('sent', 'canceled', 'scheduled')
+           -- Los toques de ESTE seed: los de 0006 (VEN-15) salieron «en las últimas 24 horas» del reloj de verdad.
+           AND t.id::text LIKE '00000005-%') x;

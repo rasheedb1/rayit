@@ -47,21 +47,21 @@ SELECT 'c_ultimos_rebotes' AS check_id,
                         AND l.recipient_address = 'natalia.velez@nutrive.co' AND l.sent_at IS NOT NULL) AS ok;
 
 -- (d) La alerta del día: de hoy en la zona del workspace, sin leer, con
---     el enlace a la lista de cuentas caídas, y cuadra con la cuenta que
+--     el enlace a /ventas/canales (donde se reconecta), y cuadra con la cuenta que
 --     de verdad pide reconectar (seed 0005). No espera ningún correo.
 SELECT 'd_alerta_del_dia' AS check_id,
        n.kind, n.action_url, n.read_at, n.emailed_at IS NOT NULL AS sin_correo_pendiente,
        n.kind = 'outreach_account_down' AND n.severity = 'critical'
          AND (n.created_at AT TIME ZONE 'America/Bogota')::date = (now() AT TIME ZONE 'America/Bogota')::date
          AND n.read_at IS NULL AND n.emailed_at IS NOT NULL
-         AND n.action_url = '/ventas/politica#cuentas'
-         -- Sin el canal repetido (r4): el nombre ya dice «(LinkedIn)».
-         AND n.body_es LIKE 'No sale nada por Laura · Cocina fácil (LinkedIn) hasta%'
+         AND n.action_url = '/ventas/canales'
+         -- El nombre de la cuenta con su canal delante (channelAccountLabel), sin repetirlo.
+         AND n.body_es LIKE 'No sale nada por LinkedIn: Laura Méndez hasta%'
          -- Se lee dentro de la política de envío: no manda a ella (r5).
          AND n.body_es NOT LIKE '%política de envío%'
          AND EXISTS (SELECT 1 FROM outreach_channel_account a
                       WHERE a.channel = 'linkedin' AND a.status = 'needs_reconnect'
-                        AND a.display_name = 'Laura · Cocina fácil (LinkedIn)') AS ok
+                        AND a.display_name = 'Laura Méndez') AS ok
   FROM notification n
  WHERE n.id = '00000006-0000-4000-8000-0000000a1001';
 

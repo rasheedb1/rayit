@@ -78,6 +78,9 @@ describe('canales', () => {
     });
 
     test('los límites salen de la vista: el correo lo fija la política, LinkedIn el proveedor; lo que rige nunca pasa del máximo', async () => {
+      // La política de 20 correos al día de la demo de outreach (seed 0005); el seed 0006 de VEN-15 la sube a 80
+      // para pintar la rampa del calentamiento, y aquí se prueba el techo de la política.
+      await t.admin(`UPDATE outbound_policy SET max_emails_per_day = 20 WHERE workspace_id = '${WORKSPACE_LAURA}'`);
       const rows = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listChannelAccounts(tx));
       const gmail = rows.find((r) => r.id === GMAIL_LAURA)!;
       assert.deepEqual(gmail.limits, {
