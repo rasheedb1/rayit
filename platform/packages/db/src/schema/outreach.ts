@@ -375,6 +375,8 @@ export const outboundReview = pgTable('outbound_review', {
   id: uuidPk(),
   workspaceId: workspaceId(),
   touchId: uuid('touch_id').notNull().references(() => outboundTouch.id, { onDelete: 'cascade' }),
+  /** La corrida de la puerta de calidad (0058): attempt va de 1 a 10 dentro de ella. */
+  run: integer('run').default(1).notNull(),
   attempt: integer('attempt').notNull(),
   subject: text('subject'),
   body: text('body').notNull(),
@@ -421,7 +423,7 @@ export const outboundLlmCall = pgTable('outbound_llm_call', {
 export const outboundGeneration = pgTable('outbound_generation', {
   touchId: uuid('touch_id').primaryKey().references(() => outboundTouch.id, { onDelete: 'cascade' }),
   workspaceId: workspaceId(),
-  stage: text('stage', { enum: ['requested', 'generating', 'generated', 'reviewing', 'reviewed'] }).default('generating').notNull(),
+  stage: text('stage', { enum: ['requested', 'generating', 'generated', 'reviewing', 'reviewed', 'failed'] }).default('generating').notNull(),
   subject: text('subject'),
   bodyMarked: text('body_marked'),
   model: text('model'),
@@ -443,6 +445,13 @@ export const outboundGeneration = pgTable('outbound_generation', {
   genInputTokens: integer('gen_input_tokens').default(0).notNull(),
   genOutputTokens: integer('gen_output_tokens').default(0).notNull(),
   genCost: numeric('gen_cost', { precision: 14, scale: 6 }).default('0').notNull(),
+  // 0058: la corrida y el intento elegido con su nota, y los fallos con su espera.
+  reviewRun: integer('review_run'),
+  chosenAttempt: integer('chosen_attempt'),
+  judgeNote: text('judge_note'),
+  totalScore: numeric('total_score', { precision: 4, scale: 2 }),
+  failures: integer('failures').default(0).notNull(),
+  nextAttemptAt: timestamptz('next_attempt_at'),
 });
 
 // ---------------------------------------------------------------------

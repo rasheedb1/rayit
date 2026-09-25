@@ -95,21 +95,22 @@ const usageOf = (u: LlmUsage | null) =>
   u ? { model: u.model, inputTokens: u.inputTokens, outputTokens: u.outputTokens, costUsd: u.costUsd } : null;
 
 /**
- * Los intentos, como filas de outbound_review, numerados detrás de los que
- * ya tenía el toque. Tokens y costo son los de ESCRIBIR y JUZGAR el
- * intento (un intento que el pre-vuelo rechazó también se pagó), con el
- * desglose en gates.usage.
+ * Los intentos de UNA corrida como filas de outbound_review: el número de
+ * intento es el de la corrida (1 a 10) y la corrida la pone quien escribe
+ * (0058). Tokens y costo son los de ESCRIBIR y JUZGAR el intento (un
+ * intento que el pre-vuelo rechazó también se pagó), con el desglose en
+ * gates.usage.
  */
-export function reviewRowsFrom(attempts: readonly AttemptRecord[], offset: number): ReviewRow[] {
+export function reviewRowsFrom(attempts: readonly AttemptRecord[]): ReviewRow[] {
   return attempts.map((a) => ({
-    attempt: offset + a.attempt,
+    attempt: a.attempt,
     subject: a.cleanSubject,
     body: a.cleanBody || a.body,
     gates: {
       preflight: a.gates.preflight,
       subject: a.gates.subject,
       similarity: a.gates.similarity,
-      ...(a.gates.chosenAttempt === undefined ? {} : { chosen_attempt: offset + a.gates.chosenAttempt }),
+      ...(a.gates.chosenAttempt === undefined ? {} : { chosen_attempt: a.gates.chosenAttempt }),
       ...(a.note ? { judge_note: a.note } : {}),
       claims: a.claims.map((c) => c.id),
       usage: { generate: usageOf(a.generation), judge: usageOf(a.judge) },
@@ -139,5 +140,7 @@ export function generationFinalFrom(ctx: GenerationContext, outcome: QualityGate
     claims: chosen?.claims ?? [],
     model,
     attempts: (ctx.generation?.attempts ?? 0) + outcome.attempts.filter((a) => a.attempt > 1).length,
+    // La nota que enseña el editor es la del texto que queda en el toque, no la del último intento (0058).
+    chosen: chosen ? { attempt: chosen.attempt, note: chosen.note, total: chosen.total } : null,
   };
 }

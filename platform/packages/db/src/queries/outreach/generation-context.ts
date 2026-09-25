@@ -44,14 +44,17 @@ export interface GenerationContext {
   claims: SalesClaim[];
   /** Solo lo ENVIADO a esta persona desde este workspace, del más viejo al más nuevo. */
   previousTouches: SentTouch[];
-  /** Los últimos cuerpos enviados del mismo tipo de paso en el workspace (compuerta B). */
+  /**
+   * Los últimos cuerpos del mismo tipo de paso en el workspace (compuerta
+   * B): los enviados y los que van a salir (programados, en envío,
+   * retenidos) y los que la IA redactó y esperan al juez. Así dos correos
+   * del mismo lote para dos marcas del mismo nicho también se comparan.
+   */
   recentSent: string[];
   /** Huellas de lo enviado a esta persona (compuerta C). */
   sentFingerprints: string[];
   /** Cuántos toques de este tipo ya aprobó una persona o salieron: el calentamiento. */
   approvedOfStepType: number;
-  /** El último intento registrado en outbound_review para este toque (0 si ninguno). */
-  lastReviewAttempt: number;
   generation: {
     stage: string; subject: string | null; bodyMarked: string | null; model: string | null; attempts: number;
     /** Lo que pidió una persona desde el editor (0057): la pista, sus instrucciones y cuándo. null = un borrador de cadencia. */
@@ -160,20 +163,28 @@ export async function loadGenerationContext(tx: WorkerSql, touchId: string): Pro
 
   const recentSent = (
     await tx.query<{ body: string }>(
-      `SELECT t.body FROM outbound_touch t LEFT JOIN outbound_step st ON st.id = t.step_id
-        WHERE t.workspace_id = $1::uuid AND t.status = 'sent' AND ${TOUCH_STEP_TYPE_SQL('t', 'st')} = $2
-        ORDER BY t.sent_at DESC NULLS LAST, t.id LIMIT ${SIMILARITY_WINDOW}`,
-      [ws, m.step_type],
+      `SELECT body FROM (
+         SELECT t.body, coalesce(t.sent_at, t.status_changed_at) AS at, t.id
+           FROM outbound_touch t LEFT JOIN outbound_step st ON st.id = t.step_id
+          WHERE t.workspace_id = $1::uuid AND t.id <> $3::uuid AND t.status IN ('sent','scheduled','processing','held')
+            AND coalesce(btrim(t.body), '') <> '' AND ${TOUCH_STEP_TYPE_SQL('t', 'st')} = $2
+         UNION ALL
+         -- Lo que la IA ya redactó en este lote y espera al juez: todavía no está en el toque.
+         SELECT g.body_marked, coalesce(g.generated_at, g.updated_at), g.touch_id
+           FROM outbound_generation g JOIN outbound_touch t ON t.id = g.touch_id LEFT JOIN outbound_step st ON st.id = t.step_id
+          WHERE g.workspace_id = $1::uuid AND g.touch_id <> $3::uuid AND g.stage IN ('generated','reviewing')
+            AND g.body_marked IS NOT NULL AND ${TOUCH_STEP_TYPE_SQL('t', 'st')} = $2) x
+        ORDER BY at DESC NULLS LAST, id LIMIT ${SIMILARITY_WINDOW}`,
+      [ws, m.step_type, touchId],
     )
   ).rows.map((x) => x.body);
 
   const counts = (
-    await tx.query<{ approved: number; last_attempt: number }>(
+    await tx.query<{ approved: number }>(
       `SELECT (SELECT count(*)::int FROM outbound_touch t LEFT JOIN outbound_step st ON st.id = t.step_id
                 WHERE t.workspace_id = $1::uuid AND ${TOUCH_STEP_TYPE_SQL('t', 'st')} = $2
-                  AND (t.status = 'sent' OR t.approved_at IS NOT NULL)) AS approved,
-              (SELECT coalesce(max(attempt), 0)::int FROM outbound_review WHERE touch_id = $3::uuid) AS last_attempt`,
-      [ws, m.step_type, touchId],
+                  AND (t.status = 'sent' OR t.approved_at IS NOT NULL)) AS approved`,
+      [ws, m.step_type],
     )
   ).rows[0]!;
 
@@ -208,7 +219,6 @@ export async function loadGenerationContext(tx: WorkerSql, touchId: string): Pro
     recentSent,
     sentFingerprints: sentToContact.map((x) => bodyFingerprint(x.subject, x.body)),
     approvedOfStepType: counts.approved,
-    lastReviewAttempt: counts.last_attempt,
     generation: gen
       ? {
           stage: gen.stage, subject: gen.subject, bodyMarked: gen.body_marked, model: gen.model, attempts: gen.attempts,

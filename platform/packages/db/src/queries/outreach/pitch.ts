@@ -23,7 +23,7 @@
 import { claimsCitedIn, stripClaimMarkers, type SalesClaim } from '@mc/core/outreach/claims';
 import { subjectGate } from '@mc/core/outreach/gates';
 import { preflight, type PreflightIssue, type RegenerateHint } from '@mc/core/outreach/preflight';
-import { renderTemplate, templateValuesFrom, type TemplateSources } from '@mc/core/outreach/render';
+import { renderTemplate, templateValuesFrom, type TemplateSources, type TemplateValues } from '@mc/core/outreach/render';
 import type { WorkspaceTx } from '../../client.ts';
 import { listSalesClaims } from './claims.ts';
 import { assertIds } from './shared.ts';
@@ -46,14 +46,34 @@ export interface PitchDraft {
   status: string;
   contactId: string | null;
   dealId: string | null;
-  /** Con sus marcas [claim:id] (lo último que guardó la persona o redactó la IA); si no hay marcado, el texto del toque. */
+  /**
+   * Con sus marcas [claim:id] y sus {{variables}} tal cual los escribió la
+   * persona (o con las marcas de la IA); si no hay marcado, el texto del toque.
+   */
   subject: string | null;
   body: string;
   heldReason: string | null;
-  /** La última nota de la revisión automática, si el texto que se abre es el de la IA. */
-  review: { total: number | null; decision: string; note: string | null; attempt: number } | null;
-  /** La IA está redactando o revisando este borrador (lo pidió alguien o es de una cadencia). */
+  /**
+   * La nota de la revisión automática del texto que se abre: la del
+   * intento ELEGIDO (el que pasó, el mejor o el que se retuvo), no la del
+   * último intento (0058). null si el texto no es el de la IA.
+   */
+  review: { total: number | null; note: string | null; attempt: number | null } | null;
+  /**
+   * Cuándo terminó la IA con este borrador (outbound_generation.reviewed_at,
+   * solo si no lo escribió una persona). El editor se vuelve a montar
+   * cuando cambia: cuando llega un borrador nuevo de la IA, no cuando la
+   * propia persona guarda.
+   */
+  generationStamp: string | null;
+  /**
+   * La IA está redactando o revisando este borrador (lo pidió alguien o es
+   * de una cadencia). lastError es un código ('llm_budget', 'interrupted',
+   * 'llm_output', 'error'): la pantalla lo traduce, nunca lo enseña crudo.
+   */
   pending: { stage: string; hint: RegenerateHint | null; lastError: string | null } | null;
+  /** La IA se rindió con este borrador (el modelo no devolvió nada legible, 0058): lo escribe la persona o pide otra versión. */
+  failed: boolean;
 }
 
 /** Lo que cambia según el negocio elegido: quién firma, qué cifras puede citar y con qué se rellenan las variables. */
@@ -111,24 +131,24 @@ export async function loadPitchComposer(tx: WorkspaceTx, companyId: string, loca
     await tx.query<{
       id: string; status: string; contact_id: string | null; deal_id: string | null; subject: string | null; body: string;
       held_reason: string | null; g_subject: string | null; g_body: string | null; g_stage: string | null; g_outcome: string | null;
-      g_hint: RegenerateHint | null; g_error: string | null;
+      g_hint: RegenerateHint | null; g_error: string | null; g_note: string | null; g_total: string | null; g_chosen: number | null;
+      g_reviewed_at: unknown;
     }>(
       `SELECT t.id, t.status, t.contact_id, t.deal_id, t.subject, t.body, t.held_reason,
               g.subject AS g_subject, g.body_marked AS g_body, g.stage AS g_stage, g.outcome AS g_outcome,
-              g.requested_hint AS g_hint, g.last_error AS g_error
+              g.requested_hint AS g_hint, g.last_error AS g_error, g.judge_note AS g_note, g.total_score AS g_total,
+              g.chosen_attempt AS g_chosen, g.reviewed_at AS g_reviewed_at
          FROM outbound_touch t LEFT JOIN outbound_generation g ON g.touch_id = t.id
         WHERE t.company_id = $1::uuid AND t.channel = 'email' AND t.status IN ('draft','held') AND ${EDITABLE_PITCH_SQL}
           AND (g.body_marked IS NOT NULL OR btrim(t.body) <> '' OR g.stage = ANY($2::text[]))
         ORDER BY t.status_changed_at DESC, t.id LIMIT 1`,
-      [companyId, [...PITCH_PENDING_STAGES]],
+      [companyId, [...PITCH_PENDING_STAGES, 'failed']],
     )
   ).rows[0];
-  const review = d && d.g_outcome !== 'manual'
-    ? (await tx.query<{ total_score: string | null; decision: string; gates: { judge_note?: string }; attempt: number }>(
-        'SELECT total_score, decision, gates, attempt FROM outbound_review WHERE touch_id = $1::uuid ORDER BY attempt DESC LIMIT 1',
-        [d.id],
-      )).rows[0]
-    : undefined;
+  // Las variables con los datos de la persona y el negocio del borrador: con ellas se sabe si el marcado dice lo que dice el toque.
+  const draftValues = d
+    ? templateValuesFrom((await loadTemplateSources(tx, { contactId: d.contact_id, companyId, dealId: d.deal_id, appUrl })).sources)
+    : {};
   const policy = (
     await tx.query<{ enabled: boolean | null; postal: boolean | null; account: boolean }>(
       `SELECT p.enabled, nullif(btrim(p.postal_address), '') IS NOT NULL AS postal,
@@ -146,38 +166,47 @@ export async function loadPitchComposer(tx: WorkspaceTx, companyId: string, loca
     contactedIds: contacted,
     deals: deals.map((x) => ({ id: x.id, name: x.name, signalHeadline: x.headline, open: x.open })),
     variants,
-    draft: d ? draftFrom(d, review) : null,
+    draft: d ? draftFrom(d, draftValues) : null,
     policy: { enabled: policy?.enabled ?? false, hasEmailAccount: policy?.account ?? false, hasPostalAddress: policy?.postal ?? false },
   };
 }
 
 type DraftRow = {
   id: string; status: string; contact_id: string | null; deal_id: string | null; subject: string | null; body: string;
-  held_reason: string | null; g_subject: string | null; g_body: string | null; g_stage: string | null; g_hint: RegenerateHint | null;
-  g_error: string | null;
+  held_reason: string | null; g_subject: string | null; g_body: string | null; g_stage: string | null; g_outcome: string | null;
+  g_hint: RegenerateHint | null; g_error: string | null; g_note: string | null; g_total: string | null; g_chosen: number | null;
+  g_reviewed_at: unknown;
 };
 
+/** Lo que sale de un marcado: las variables rellenas y sin marcas. */
+const outgoing = (marked: string | null, values: TemplateValues) => stripClaimMarkers(renderTemplate(marked, values) ?? '').trim();
+
 /**
- * Qué texto abre el editor: el marcado de outbound_generation (con las
- * [claim:id]) si dice lo mismo que el toque —lo guardó la persona o lo
- * aprobó la revisión— o si el toque todavía está vacío (la IA ya lo
- * redactó y espera al juez); si no, el texto del toque, que alguien
- * editó por otro camino.
+ * Qué texto abre el editor: el marcado de outbound_generation (con sus
+ * [claim:id] y sus {{variables}}) si, rellenado con los datos de la
+ * persona y el negocio del toque, dice lo mismo que el toque —lo guardó
+ * la persona o lo aprobó la revisión— o si el toque todavía está vacío (la
+ * IA ya lo redactó y espera al juez); si no, el texto del toque, que
+ * alguien editó por otro camino.
  */
-function draftFrom(d: DraftRow, review: { total_score: string | null; decision: string; gates: { judge_note?: string }; attempt: number } | undefined): PitchDraft {
+function draftFrom(d: DraftRow, values: TemplateValues): PitchDraft {
   const touchBody = d.body.trim();
-  const marked = d.g_body !== null && (touchBody === '' || stripClaimMarkers(d.g_body).trim() === touchBody);
+  const marked = d.g_body !== null && (touchBody === '' || outgoing(d.g_body, values) === touchBody);
+  const byAi = d.g_outcome !== null && d.g_outcome !== 'manual';
+  const reviewedAt = d.g_reviewed_at === null || d.g_reviewed_at === undefined ? null : new Date(d.g_reviewed_at as string);
   return {
     touchId: d.id, status: d.status, contactId: d.contact_id, dealId: d.deal_id,
     subject: marked ? (d.g_subject ?? d.subject) : d.subject,
     body: marked ? d.g_body! : d.body,
     heldReason: d.held_reason,
-    review: review && marked
-      ? { total: review.total_score === null ? null : Number(review.total_score), decision: review.decision, note: review.gates.judge_note ?? null, attempt: review.attempt }
+    review: byAi && marked && (d.g_note !== null || d.g_total !== null)
+      ? { total: d.g_total === null ? null : Number(d.g_total), note: d.g_note, attempt: d.g_chosen }
       : null,
+    generationStamp: byAi && reviewedAt ? reviewedAt.toISOString() : null,
     pending: d.g_stage && (PITCH_PENDING_STAGES as readonly string[]).includes(d.g_stage)
       ? { stage: d.g_stage, hint: d.g_hint, lastError: d.g_error }
       : null,
+    failed: d.g_stage === 'failed',
   };
 }
 
@@ -203,7 +232,8 @@ export interface SavePitchInput {
 }
 
 export type SavePitchResult =
-  | { ok: true; touchId: string; status: 'draft' | 'scheduled' }
+  /** sendingEnabled: ¿el envío del espacio está encendido? (outbound_policy.enabled): la pantalla dice si sale ya o cuando lo encienda. */
+  | { ok: true; touchId: string; status: 'draft' | 'scheduled'; sendingEnabled: boolean }
   | {
       ok: false;
       code: 'contact' | 'deal' | 'no_email' | 'opted_out' | 'preflight' | 'not_editable' | 'no_postal_address';
@@ -244,13 +274,14 @@ export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise
   // La marca se escribe como se escribe («NIVEA»): no es gritar.
   const pf = preflight({ stepType: 'email', subject, body, claims, firstTouch, allowedUppercase: [c.company] });
   const sg = subjectGate('email', subject);
+  const policy = (await tx.query<{ enabled: boolean; postal: boolean }>(
+    `SELECT coalesce(p.enabled, false) AS enabled,
+            coalesce(nullif(btrim(p.postal_address), '') IS NOT NULL OR NOT p.require_optout_link, false) AS postal
+       FROM (SELECT 1) x LEFT JOIN outbound_policy p ON p.workspace_id = current_workspace_id()`,
+  )).rows[0]!;
   if (input.intent === 'schedule') {
     if (!pf.ok || !sg.ok) return { ok: false, code: 'preflight', issues: pf.issues, subjectCodes: sg.codes };
-    const postal = (await tx.query<{ ok: boolean }>(
-      `SELECT coalesce((SELECT nullif(btrim(postal_address), '') IS NOT NULL OR NOT require_optout_link FROM outbound_policy
-                         WHERE workspace_id = current_workspace_id()), false) AS ok`,
-    )).rows[0]!.ok;
-    if (!postal) return { ok: false, code: 'no_postal_address' };
+    if (!policy.postal) return { ok: false, code: 'no_postal_address' };
   }
   const status = input.intent === 'schedule' ? 'scheduled' : 'draft';
   const cited = JSON.stringify(claimsCitedIn(claims, subject, body));
@@ -280,9 +311,12 @@ export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise
       )
     ).rows[0]!.id;
   }
-  // El marcado de la persona, con sus [claim:id]: el editor lo vuelve a abrir tal cual y ningún job lo pisa (0057).
-  await tx.query('SELECT outbound_generation_save_manual($1::uuid, $2, $3)', [touchId, subject, body]);
-  return { ok: true, touchId, status };
+  // El marcado de la persona TAL CUAL lo escribió, con sus {{variables}} y
+  // sus [claim:id]: el editor lo vuelve a abrir así (si cambia «Para», el
+  // saludo cambia con la persona) y ningún job lo pisa (0057, 0058). Lo que
+  // sale, ya rellenado, está en outbound_touch.
+  await tx.query('SELECT outbound_generation_save_manual($1::uuid, $2, $3)', [touchId, input.subject, input.body]);
+  return { ok: true, touchId, status, sendingEnabled: policy.enabled };
 }
 
 export type RequestPitchDraftResult = { ok: true } | { ok: false; code: 'not_found' | 'not_editable' | 'opted_out' | 'busy' };
