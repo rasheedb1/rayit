@@ -13,7 +13,7 @@
  */
 import { readFileSync } from 'node:fs';
 import type { ClaimSource, SalesClaim } from './claims.ts';
-import { GENERATION_MAX_TOKENS, OUTREACH_MODELS, LlmOutputError, readLlmResponse, type LlmClient } from './llm.ts';
+import { GENERATION_MAX_TOKENS, OUTREACH_MODELS, LlmOutputError, readLlmResponse, type LlmCallOptions, type LlmClient } from './llm.ts';
 import { STEP_LENGTH, type RegenerateHint } from './preflight.ts';
 import { SUBJECT_MAX_WORDS, SUBJECT_MIN_WORDS } from './gates.ts';
 
@@ -87,7 +87,7 @@ export interface MessageGenerator {
   /** Un nombre para el registro y la pantalla («anthropic», «fake»). */
   readonly name: string;
   readonly model: string;
-  generate(input: GenerationInput): Promise<GeneratedMessage>;
+  generate(input: GenerationInput, opts?: LlmCallOptions): Promise<GeneratedMessage>;
 }
 
 // ---------------------------------------------------------------------
@@ -228,12 +228,12 @@ export class LlmMessageGenerator implements MessageGenerator {
     this.#template = opts.template ?? loadPrompt('generate');
   }
 
-  async generate(input: GenerationInput): Promise<GeneratedMessage> {
+  async generate(input: GenerationInput, opts?: LlmCallOptions): Promise<GeneratedMessage> {
     const { system, user } = buildGenerationPrompt(input, this.#template);
     const res = await this.#llm.complete({
       purpose: 'generate', model: this.model, system, user,
       maxTokens: GENERATION_MAX_TOKENS[input.stepType] ?? 600, jsonSchema: GENERATION_SCHEMA,
-    });
+    }, opts);
     const out = readLlmResponse(res, parseGeneration);
     return { ...out, model: res.model, inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd };
   }

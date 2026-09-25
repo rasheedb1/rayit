@@ -88,7 +88,7 @@ test('el prompt del generador lleva el ángulo, los claims, la pista y SOLO los 
     loadPrompt('generate'),
   );
   assert.ok(system.includes('[claim:ID]'));
-  assert.ok(system.includes('entre 250 y 1200 caracteres'));
+  assert.ok(system.includes('entre 150 y 1200 caracteres'));
   assert.ok(user.includes('baseline:tiktok:median_views · Mediana de views en TikTok a 7 días · 115.446 · creator_baseline'));
   assert.ok(user.includes('Lo que sí salió.'));
   assert.ok(user.includes('Prohibido: Hablar de tarifas'));
@@ -253,4 +253,64 @@ test('el redactor falso no habla de cocina fuera de la cocina y escribe en ingl�
   assert.match(en.body, /\?/);
   assert.ok(!/\b(Hola|Buen día|Te dejo|Se me ocurre)\b/.test(en.body), en.body);
   assert.ok(en.subject && !/\b(una|idea de video|Tu audiencia)\b/.test(en.subject), en.subject ?? '');
+});
+
+/**
+ * Un generador que no hace caso de «No te parezcas a estos»: devuelve el
+ * primer mensaje de la lista con la marca y la persona cambiadas. Es lo
+ * que la compuerta B tiene que parar con un modelo de verdad, sin contar
+ * con que el generador se porte bien.
+ */
+function copycatGenerator(): MessageGenerator {
+  return {
+    name: 'copion', model: 'guion',
+    async generate(input) {
+      const base = input.avoid[0] ?? '';
+      const body = base.replaceAll('Café Alma', input.company.name).replaceAll('Valentina', input.contact?.fullName?.split(' ')[0] ?? '');
+      return { subject: `Una idea para ${input.company.name}`, body, model: 'guion', inputTokens: 10, outputTokens: 10, costUsd: 0 };
+    },
+  };
+}
+
+test('compuerta B con un generador que no esquiva: el mismo correo con la marca cambiada se rechaza (too_similar) y se pide otro ángulo', async () => {
+  const a = await runQualityGate(gateInput(), deps(createFakeGenerator(), createFakeJudge()).deps);
+  const enviadoA = a.chosen!.body;
+  const b = await runQualityGate(
+    gateInput({
+      generation: generation({
+        company: { name: 'Fresko Market', industry: 'alimentos', city: 'Bogotá', country: 'CO' },
+        contact: { fullName: 'Andrés Pardo', roleTitle: 'Mercadeo' },
+        avoid: [enviadoA],
+      }),
+      recentSent: [enviadoA],
+    }),
+    deps(copycatGenerator(), createFakeJudge()).deps,
+  );
+  const first = b.attempts[0]!;
+  assert.deepEqual(first.gates.similarity.codes, ['too_similar']);
+  assert.ok(first.gates.similarity.max >= 0.8, String(first.gates.similarity.max));
+  assert.deepEqual([first.decision, first.hint, first.judge], ['reject', 'other_angle', null]);
+  // El copión nunca cambia: ninguna versión pasa y lo revisa una persona, sin que el juez gaste.
+  assert.deepEqual([b.status, b.hold?.code], ['hold', 'quality_preflight']);
+  assert.ok(b.attempts.every((x) => x.judge === null && x.hint === 'other_angle'));
+});
+
+test('si el job se aborta a mitad, la llamada en curso recibe la señal y el bucle devuelve lo que alcanzó a hacer', async () => {
+  const abort = new AbortController();
+  const signals: Array<AbortSignal | undefined> = [];
+  const lento: MessageJudge = {
+    name: 'lento', model: 'claude-sonnet-5',
+    async judge(_input, opts) {
+      signals.push(opts?.signal);
+      abort.abort(new Error('timeout'));
+      throw new Error('Request was aborted.');
+    },
+  };
+  const { calls, deps: d } = deps(createFakeGenerator(), lento);
+  const r = await runQualityGate(gateInput(), { ...d, signal: abort.signal });
+  assert.equal(r.status, 'aborted');
+  assert.equal(signals[0], abort.signal);
+  // El primer intento se generó (y se pagó): vuelve para que se registre en outbound_review.
+  assert.equal(r.attempts.length, 1);
+  assert.deepEqual(calls.map((c) => c.purpose), ['generate']);
 });

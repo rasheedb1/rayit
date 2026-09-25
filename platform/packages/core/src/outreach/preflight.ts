@@ -20,7 +20,9 @@
  * regeneraría.
  */
 import { findPlaceholders } from './placeholder-guard.ts';
-import { figureMatchesClaim, findClaimMarkers, findFigures, stripClaimMarkers, type ClaimSource, type SalesClaim } from './claims.ts';
+import {
+  figureMatchesClaim, findClaimMarkers, findFigures, stripClaimMarkers, type ClaimSource, type FigureHit, type SalesClaim,
+} from './claims.ts';
 
 // ---------------------------------------------------------------------
 // Vocabulario
@@ -86,9 +88,13 @@ export const ALLOWED_UPPERCASE = ['UGC', 'ROI', 'CPM', 'CPA', 'CTA', 'SEO', 'B2B
 export const CALENDAR_LINK_RE =
   /\b(?:calendly\.com|cal\.com|savvycal\.com|zcal\.co|tidycal\.com|meetings\.hubspot\.com|hubspot\.com\/meetings|calendar\.google\.com|calendar\.app\.google|outlook\.office\.com\/bookwithme|doodle\.com)\b/i;
 
-/** Largo por tipo de paso, en caracteres del cuerpo sin marcas. El máximo de la rúbrica (max_chars) manda sobre este. */
+/**
+ * Largo por tipo de paso, en caracteres del cuerpo sin marcas. El máximo de la rúbrica (max_chars) manda sobre este.
+ * Un correo en frío bueno tiene de 50 a 125 palabras: el mínimo (150 caracteres, unas 25 palabras) solo
+ * para lo que no dice nada; castigar uno de 35 palabras con gancho, cifra y pregunta sería castigar lo bueno.
+ */
 export const STEP_LENGTH: Record<string, { min: number; max: number }> = {
-  email: { min: 250, max: 1200 },
+  email: { min: 150, max: 1200 },
   email_reply: { min: 120, max: 700 },
   linkedin_message: { min: 120, max: 600 },
   instagram_dm: { min: 80, max: 500 },
@@ -194,11 +200,7 @@ export function checkFigures(
   }
   const figures = findFigures(maskMarkers(text));
   figures.forEach((f, i) => {
-    const next = figures[i + 1];
-    const marker = markers.find(
-      (m) =>
-        m.start >= f.end && m.start - f.end <= MARKER_REACH && (!next || m.start < next.start) && !text.slice(f.end, m.start).includes('\n'),
-    );
+    const marker = markerFor(text, markers, f, figures[i + 1]);
     if (!marker) {
       issues.push({ code: 'unsourced_figure', detail: f.raw });
       return;
@@ -207,6 +209,36 @@ export function checkFigures(
     if (c && !figureMatchesClaim(f, c)) issues.push({ code: 'claim_mismatch', detail: `${f.raw} ≠ ${c.display}` });
   });
   return issues;
+}
+
+/** La marca que le toca a una cifra: la primera que viene detrás, a MARKER_REACH como mucho, antes de la siguiente cifra y sin saltar de línea. */
+function markerFor(text: string, markers: readonly ReturnType<typeof findClaimMarkers>[number][], f: FigureHit, next: FigureHit | undefined) {
+  return markers.find(
+    (m) => m.start >= f.end && m.start - f.end <= MARKER_REACH && (!next || m.start < next.start) && !text.slice(f.end, m.start).includes('\n'),
+  );
+}
+
+/**
+ * Pone su marca a cada cifra que no la tiene y que dice lo mismo que una
+ * cifra del perfil («115.446» → «115.446 [claim:baseline:tiktok:median_views]»).
+ * Es para un texto que una persona editó a mano (la aprobación de un
+ * mensaje retenido en la ficha): allí no hay fichas, pero una cifra que
+ * coincide con una del perfil sí tiene origen. Una cifra que no coincide
+ * con ninguna se queda sin marca y el pre-vuelo la sigue viendo.
+ */
+export function markFiguresByValue(text: string, claims: readonly SalesClaim[]): string {
+  const markers = findClaimMarkers(text);
+  const figures = findFigures(maskMarkers(text));
+  let out = text;
+  // De atrás hacia delante: insertar una marca no mueve las cifras anteriores.
+  for (let i = figures.length - 1; i >= 0; i--) {
+    const f = figures[i]!;
+    if (markerFor(text, markers, f, figures[i + 1])) continue;
+    const exact = claims.find((c) => c.display === f.raw && figureMatchesClaim(f, c));
+    const c = exact ?? claims.find((x) => figureMatchesClaim(f, x));
+    if (c) out = `${out.slice(0, f.end)} [claim:${c.id}]${out.slice(f.end)}`;
+  }
+  return out;
 }
 
 const HINT_BY_CODE: Partial<Record<PreflightCode, RegenerateHint>> = {
@@ -232,7 +264,7 @@ const HINT_BY_CODE: Partial<Record<PreflightCode, RegenerateHint>> = {
 };
 
 /** Los códigos que son riesgo de cifra: la cifra no tiene origen, o el origen no dice eso. */
-const FIGURE_RISK_CODES: readonly PreflightCode[] = ['unsourced_figure', 'unknown_claim', 'claim_mismatch'];
+export const FIGURE_RISK_CODES: readonly PreflightCode[] = ['unsourced_figure', 'unknown_claim', 'claim_mismatch'];
 
 export function preflight(input: PreflightInput): PreflightResult {
   const issues: PreflightIssue[] = [];

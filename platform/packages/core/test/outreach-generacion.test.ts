@@ -10,7 +10,7 @@ import {
 import {
   bodyFingerprint, idempotencyGate, jaccard, shingles, similarityGate, similarityThreshold, subjectGate, textSimilarity,
 } from '../src/outreach/gates.ts';
-import { checkFigures, preflight, questionCloses, shoutingIn } from '../src/outreach/preflight.ts';
+import { checkFigures, markFiguresByValue, preflight, questionCloses, shoutingIn } from '../src/outreach/preflight.ts';
 import { renderTemplate, TEMPLATE_VARIABLES, templateValuesFrom, templateVariablesIn } from '../src/outreach/render.ts';
 
 const CLAIMS: SalesClaim[] = [
@@ -111,6 +111,76 @@ test('los números escritos con palabras se detectan: «diez mil views», «el t
   assert.deepEqual(findFigures('Un video, mil gracias, dos ideas de receta, a la semana, one of the brands.'), []);
   // «400 mil» es una sola cifra: la palabra «mil» no cuenta dos veces.
   assert.deepEqual(findFigures('400 mil seguidores').map((h) => h.raw), ['400 mil']);
+});
+
+// Ronda 3: lo que el pre-vuelo no veía y lo que veía de más.
+test('un multiplicador delante, un puesto, «3-fold» y los puntos porcentuales son cifras siempre, por pequeñas que sean', () => {
+  const casos: Array<[string, string, string]> = [
+    ['Con mi último video las ventas crecieron x3.', 'x3', 'multiple'],
+    ['Las ventas crecieron ×2 en una semana.', '×2', 'multiple'],
+    ['Soy la creadora #1 de recetas en Colombia.', '#1', 'rank'],
+    ['Estuve en el top 1 de TikTok.', 'top 1', 'rank'],
+    ['Soy la número uno en recetas de desayuno.', 'número uno', 'rank'],
+    ["I'm the number one creator in my niche.", 'number one', 'rank'],
+    ['My engagement grew 3-fold this year.', '3-fold', 'multiple'],
+    ['La interacción subió 5 pp en un mes.', '5 pp', 'percent'],
+  ];
+  for (const [texto, raw, kind] of casos) {
+    assert.deepEqual(findFigures(texto).map((h) => [h.raw, h.kind]), [[raw, kind]], texto);
+    assert.deepEqual(checkFigures(texto, CLAIMS).map((i) => [i.code, i.detail]), [['unsourced_figure', raw]], texto);
+  }
+  // Un puesto no lo respalda ninguna cifra del perfil, aunque lleve una marca.
+  const uno: SalesClaim = { ...CLAIMS[0]!, id: 'x:uno', value: 1, display: '1' };
+  assert.deepEqual(checkFigures('Soy la #1 [claim:x:uno] de mi nicho.', [uno]).map((i) => i.code), ['claim_mismatch']);
+  // Un hashtag con números no es un puesto; un multiplicador con su origen, sí pasa.
+  assert.deepEqual(findFigures('Súmate al #2024challenge'), []);
+  const triple: SalesClaim = { ...CLAIMS[2]!, id: 'post:d02:views_vs_median', value: 3.1, display: '3,1×' };
+  assert.deepEqual(checkFigures('Ese video hizo x3 [claim:post:d02:views_vs_median] mi mediana.', [triple]), []);
+});
+
+test('lo normal de una propuesta no es una cifra: entregables que se ofrecen, duraciones y direcciones', () => {
+  for (const texto of [
+    'Te propongo 3 videos para el lanzamiento.',
+    'Un reel de 30 segundos con la receta.',
+    'Grabo en 48 horas y te lo mando.',
+    'Pasé por su local de la calle 85 y me encantó.',
+    'Mis 3 mejores videos son de desayunos.',
+    'Te propongo 3 videos y 2 historias para la semana.',
+    'El paquete de 4 reels incluye 2 historias.',
+    'Lo entrego de 2 a 3 semanas después.',
+    'Nos vemos en la Cra. 7 # 71-21.',
+    'Te propongo tres videos cortos.',
+  ]) {
+    assert.deepEqual(checkFigures(texto, CLAIMS), [], texto);
+  }
+  // Pero un resultado sigue siendo una cifra: «publiqué 12 videos», «11 marcas», «2 millones de views».
+  assert.deepEqual(checkFigures('Publiqué 12 videos con marcas de cocina.', CLAIMS).map((i) => i.code), ['unsourced_figure']);
+  assert.deepEqual(checkFigures('Te propongo algo: trabajé con 11 marcas.', CLAIMS).map((i) => i.code), ['unsourced_figure']);
+  assert.deepEqual(checkFigures('En 48 horas llegué a 2 millones de views.', CLAIMS).map((i) => i.detail), ['2 millones']);
+});
+
+test('«medio millón» es 500.000 y «a miles» dice «miles»', () => {
+  assert.deepEqual(findFigures('Llegué a medio millón de views.').map((h) => [h.raw, h.values[0]]), [['medio millón', 500_000]]);
+  assert.deepEqual(findFigures('Van un millón y medio de reproducciones.').map((h) => [h.raw, h.values[0]]), [['un millón y medio', 1_500_000]]);
+  assert.deepEqual(findFigures('Llegué a miles de personas.').map((h) => [h.raw, h.values[0]]), [['miles', 1_000]]);
+  assert.deepEqual(findFigures('I reached a million people.').map((h) => h.raw), ['million']);
+  // Una cita correcta de 500.000 escrita como «medio millón» coincide con su claim.
+  const medio: SalesClaim = { ...CLAIMS[0]!, id: 'baseline:ig:median_views', value: 500_000, display: '500.000' };
+  assert.deepEqual(checkFigures('Mis reels tienen medio millón [claim:baseline:ig:median_views] de views.', [medio]), []);
+  // «media hora» no es una cifra.
+  assert.deepEqual(findFigures('Lo grabo en media hora.'), []);
+});
+
+test('una cifra que coincide con una del perfil recibe su marca; la que no coincide se queda sin ella', () => {
+  const marcado = markFiguresByValue('Mi mediana es 115.446 views y el 37 % tiene 25 a 34. Crecí x9 este año.', CLAIMS);
+  assert.equal(
+    marcado,
+    'Mi mediana es 115.446 [claim:baseline:tiktok:median_views] views y el 37 % [claim:audience:tiktok:age:25-34] tiene 25 a 34. Crecí x9 este año.',
+  );
+  assert.deepEqual(checkFigures(marcado, CLAIMS).map((i) => [i.code, i.detail]), [['unsourced_figure', 'x9']]);
+  // Lo que ya tenía marca no se marca dos veces.
+  const ya = 'Tengo 115.446 views [claim:baseline:tiktok:median_views].';
+  assert.equal(markFiguresByValue(ya, CLAIMS), ya);
 });
 
 test('una cifra sin marca, con marca desconocida o con otro valor no pasa', () => {
@@ -255,4 +325,26 @@ test('las siglas y la marca en mayúsculas no son gritar; la pregunta de cierre 
   // Un comentario público no necesita pregunta y no lleva asunto.
   const comentario = preflight({ stepType: 'linkedin_comment', body: 'Qué buena la idea del empaque retornable para la ciudad.', claims: [], firstTouch: true });
   assert.equal(comentario.ok, true);
+});
+
+test('un correo corto y bueno (unas 35 palabras) pasa el largo; uno que no dice nada, no', () => {
+  const corto = [
+    'Hola Sofía,',
+    '',
+    'Vi los snacks nuevos de Vitalé. Mis recetas tienen una mediana de 115.446 views [claim:baseline:tiktok:median_views] y encajan con su lanzamiento.',
+    '',
+    '¿Te mando una idea?',
+    '',
+    'Laura',
+  ].join('\n');
+  const r = correo(corto);
+  assert.ok(!r.issues.some((i) => i.code === 'too_short'), JSON.stringify(r.issues));
+  assert.ok(correo('Hola, ¿hablamos esta semana?\n\nLaura').issues.some((i) => i.code === 'too_short'));
+});
+
+test('compuerta B: el mismo correo con el nombre de la marca y de la persona cambiados es el mismo correo', () => {
+  const a = 'Hola Camilo,\n\nVi que Café Alma lanzó su cold brew en botella y pensé en quien me ve en Bogotá cada mañana.\n\n¿Te interesa que te mande una idea?\n\nLaura';
+  const b = a.replace('Camilo', 'Camila').replace('Café Alma', 'Fresko Market').replace('Bogotá', 'Medellín');
+  assert.equal(textSimilarity(a, b), 1);
+  assert.deepEqual(similarityGate('email', b, [a]).codes, ['too_similar']);
 });

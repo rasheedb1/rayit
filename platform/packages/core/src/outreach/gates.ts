@@ -5,10 +5,13 @@
  *       palabras, de menos de 80 caracteres, y «Re:» solo en una respuesta
  *       en el hilo.
  *   B · similitud: Jaccard sobre 5-shingles de palabras contra los últimos
- *       veinte mensajes ENVIADOS del mismo tipo de paso en el MISMO
- *       workspace (Chief filtraba por un owner_id escrito a mano). Umbral
- *       0,65 en directos y 0,80 en correo: dos marcas no reciben el mismo
- *       mensaje con el nombre cambiado.
+ *       veinte mensajes del mismo tipo de paso en el MISMO workspace
+ *       (Chief filtraba por un owner_id escrito a mano): los enviados y
+ *       también los que van a salir (programados, retenidos y redactados
+ *       por la IA en el mismo lote). Umbral 0,65 en directos y 0,80 en
+ *       correo. Los nombres propios se comparan como uno solo («§»):
+ *       dos marcas no reciben el mismo mensaje con el nombre cambiado, y
+ *       ese cambio no baja la similitud.
  *   C · idempotencia: el toque sigue en borrador, con el turno que tomó
  *       este intento y con el texto que tenía entonces (si una persona lo
  *       escribió o lo editó, manda lo suyo), y el mismo texto no le llegó
@@ -91,9 +94,35 @@ export function normalizedWords(text: string): string[] {
     .filter(Boolean);
 }
 
-/** Los 5-shingles de palabras. Un texto de menos de cinco palabras es un solo shingle con todas. */
+/** Lo que ocupa un nombre propio en la compuerta B. */
+export const PROPER_NOUN_TOKEN = '§';
+
+/**
+ * Las palabras con las que se mide la similitud: como normalizedWords,
+ * pero cada nombre propio (una palabra con mayúscula que no abre frase:
+ * la marca, la persona, la ciudad) vale lo mismo. «Hola Camilo, vi que
+ * Café Alma…» y «Hola Camila, vi que Fresko Market…» son el mismo texto.
+ */
+export function similarityWords(text: string): string[] {
+  const t = stripClaimMarkers(text).replace(/https?:\/\/\S+/g, ' ');
+  const out: string[] = [];
+  let opensSentence = true;
+  for (const m of t.matchAll(/[\p{L}\p{N}]+|[.!?\n]/gu)) {
+    const w = m[0];
+    if (w === '.' || w === '!' || w === '?' || w === '\n') {
+      opensSentence = true;
+      continue;
+    }
+    const proper = !opensSentence && /^\p{Lu}/u.test(w);
+    out.push(proper ? PROPER_NOUN_TOKEN : w.toLowerCase().normalize('NFD').replace(/\p{M}/gu, ''));
+    opensSentence = false;
+  }
+  return out;
+}
+
+/** Los 5-shingles de palabras (con los nombres propios igualados). Un texto de menos de cinco palabras es un solo shingle con todas. */
 export function shingles(text: string, size: number = SHINGLE_SIZE): Set<string> {
-  const w = normalizedWords(text);
+  const w = similarityWords(text);
   const out = new Set<string>();
   if (w.length === 0) return out;
   if (w.length < size) {
@@ -125,9 +154,9 @@ export interface SimilarityVerdict extends GateResult {
 }
 
 /**
- * Compuerta B. `recent` son los cuerpos de los últimos mensajes enviados
- * del mismo tipo de paso en el workspace (la base ya los filtró y cortó en
- * SIMILARITY_WINDOW): aquí solo se compara.
+ * Compuerta B. `recent` son los cuerpos de los últimos mensajes del mismo
+ * tipo de paso en el workspace, enviados o por salir (la base ya los
+ * filtró y cortó en SIMILARITY_WINDOW): aquí solo se compara.
  */
 export function similarityGate(stepType: string, body: string, recent: readonly string[]): SimilarityVerdict {
   const threshold = similarityThreshold(stepType);

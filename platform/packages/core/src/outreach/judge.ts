@@ -18,7 +18,7 @@
 import type { SalesClaim } from './claims.ts';
 import type { SentTouch } from './generate.ts';
 import { fillPrompt, loadPrompt } from './generate.ts';
-import { JUDGE_MAX_TOKENS, LlmOutputError, OUTREACH_MODELS, readLlmResponse, type LlmClient } from './llm.ts';
+import { JUDGE_MAX_TOKENS, LlmOutputError, OUTREACH_MODELS, readLlmResponse, type LlmCallOptions, type LlmClient } from './llm.ts';
 import { REGENERATE_HINTS, RISK_TRIGGERS, type RegenerateHint, type RiskTrigger } from './preflight.ts';
 
 export const RUBRIC_DIMENSIONS = ['relevance', 'quality', 'structure', 'voice'] as const;
@@ -130,7 +130,7 @@ export interface JudgeVerdict {
 export interface MessageJudge {
   readonly name: string;
   readonly model: string;
-  judge(input: JudgeInput): Promise<JudgeVerdict>;
+  judge(input: JudgeInput, opts?: LlmCallOptions): Promise<JudgeVerdict>;
 }
 
 export const JUDGE_SCHEMA: Record<string, unknown> = {
@@ -212,9 +212,12 @@ export class LlmMessageJudge implements MessageJudge {
     this.#template = opts.template ?? loadPrompt('judge');
   }
 
-  async judge(input: JudgeInput): Promise<JudgeVerdict> {
+  async judge(input: JudgeInput, opts?: LlmCallOptions): Promise<JudgeVerdict> {
     const { system, user } = buildJudgePrompt(input, this.#template);
-    const res = await this.#llm.complete({ purpose: 'judge', model: this.model, system, user, maxTokens: JUDGE_MAX_TOKENS, jsonSchema: JUDGE_SCHEMA });
+    const res = await this.#llm.complete(
+      { purpose: 'judge', model: this.model, system, user, maxTokens: JUDGE_MAX_TOKENS, jsonSchema: JUDGE_SCHEMA },
+      opts,
+    );
     return { ...readLlmResponse(res, parseJudgement), model: res.model, inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd };
   }
 }

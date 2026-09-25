@@ -9,6 +9,12 @@
  * worker escribe en outbound_review, y el resultado: aprobado por la
  * puerta, retenido para una persona (con su motivo) o sin presupuesto.
  * La compuerta C (idempotencia) la aplica quien escribe el resultado.
+ *
+ * Si el job se aborta a mitad (vence su plazo, se apaga el worker), la
+ * llamada en curso se corta (la señal llega al cliente del modelo) y el
+ * bucle devuelve 'aborted' con los intentos que ya hizo: quien lo llama
+ * los registra en outbound_review antes de soltar el turno, para que lo
+ * ya pagado quede anotado y no se pierda.
  */
 import { claimsCitedIn, type SalesClaim } from './claims.ts';
 import type { GeneratedMessage, GenerationInput, MessageGenerator } from './generate.ts';
@@ -42,7 +48,7 @@ export interface QualityGateInput {
   /** Lo que recibe el generador en cada intento (sin el número de intento ni la pista, que pone el bucle). */
   generation: Omit<GenerationInput, 'attempt' | 'hint'>;
   rubric: StepRubric;
-  /** Cuerpos de los últimos mensajes ENVIADOS del mismo tipo de paso en el workspace (compuerta B). */
+  /** Cuerpos de los últimos mensajes del mismo tipo de paso en el workspace, enviados o por salir (compuerta B). */
   recentSent: readonly string[];
   firstTouch: boolean;
   requiresDisclosure: boolean;
@@ -85,8 +91,12 @@ export interface LlmUsage {
 export type HoldCodeFromGate = 'quality_risk' | 'quality_low' | 'quality_preflight' | 'llm_budget' | 'llm_error';
 
 export interface QualityGateOutcome {
-  /** approved: la puerta lo deja salir (la política decide si aún pasa por una persona). */
-  status: 'approved' | 'hold' | 'budget_exhausted';
+  /**
+   * approved: la puerta lo deja salir (la política decide si aún pasa por
+   * una persona). aborted: el job se abortó a mitad; `attempts` trae lo
+   * que alcanzó a hacer (y pagar), sin decisión.
+   */
+  status: 'approved' | 'hold' | 'budget_exhausted' | 'aborted';
   chosen: AttemptRecord | null;
   attempts: AttemptRecord[];
   hold: { code: HoldCodeFromGate; detail?: string } | null;
@@ -117,6 +127,8 @@ function finish(attempts: AttemptRecord[], rubric: StepRubric, reason: { code: H
   return { status: 'hold', chosen: shown, attempts, hold };
 }
 
+const aborted = (attempts: AttemptRecord[]): QualityGateOutcome => ({ status: 'aborted', chosen: null, attempts, hold: null });
+
 export async function runQualityGate(input: QualityGateInput, deps: QualityGateDeps): Promise<QualityGateOutcome> {
   const { rubric } = input;
   const stepType = input.generation.stepType;
@@ -131,8 +143,9 @@ export async function runQualityGate(input: QualityGateInput, deps: QualityGateD
     return left > 0 && left >= estimateCallUsd(model, ESTIMATED_PROMPT_CHARS, maxTokens);
   };
 
+  const opts = deps.signal ? { signal: deps.signal } : undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    deps.signal?.throwIfAborted();
+    if (deps.signal?.aborted) return aborted(attempts);
     // 1 · generar (el intento 1 puede venir ya generado)
     let gen: GeneratedMessage;
     if (attempt === 1 && input.initial) {
@@ -143,8 +156,10 @@ export async function runQualityGate(input: QualityGateInput, deps: QualityGateD
       }
       try {
         const previousDraft = attempts.at(-1)?.body ?? input.generation.previousDraft ?? null;
-        gen = await deps.generator.generate({ ...input.generation, attempt, hint, previousDraft });
+        gen = await deps.generator.generate({ ...input.generation, attempt, hint, previousDraft }, opts);
       } catch (e) {
+        // Cortada por el plazo del job: lo hecho hasta aquí se registra; esta llamada no llegó a cobrarse entera.
+        if (deps.signal?.aborted) return aborted(attempts);
         if (!(e instanceof LlmOutputError)) throw e;
         if (e.usage) await deps.recordLlmCall({ purpose: 'generate', ...e.usage });
         lastReason = { code: 'llm_error', detail: e.stopReason ?? 'invalid_output' };
@@ -186,8 +201,9 @@ export async function runQualityGate(input: QualityGateInput, deps: QualityGateD
         signalHeadline: g.signal?.headline ?? null, creator: { name: g.creator.name, bio: g.creator.bio },
         company: { name: g.company.name, industry: g.company.industry }, previousTouches: g.previousTouches,
         subject: pf.cleanSubject, body: pf.cleanBody, citedClaims: rec.claims, requiresDisclosure: input.requiresDisclosure,
-      });
+      }, opts);
     } catch (e) {
+      if (deps.signal?.aborted) return aborted(attempts);
       if (!(e instanceof LlmOutputError)) throw e;
       if (e.usage) await deps.recordLlmCall({ purpose: 'judge', ...e.usage });
       lastReason = { code: 'llm_error', detail: e.stopReason ?? 'invalid_output' };

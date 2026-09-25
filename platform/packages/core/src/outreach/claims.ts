@@ -101,7 +101,12 @@ export interface FigureHit {
    * Un porcentaje se lee como proporción (37 % → 0,37).
    */
   values: number[];
-  kind: 'plain' | 'percent' | 'multiple' | 'scaled';
+  /**
+   * 'rank' es un puesto («#1», «top 3», «número uno»): ninguna cifra del
+   * perfil lo respalda (On Cue no guarda rankings), así que nunca coincide
+   * con un claim y siempre sale como «cifra sin origen».
+   */
+  kind: 'plain' | 'percent' | 'multiple' | 'scaled' | 'rank';
 }
 
 // Un número con separadores de miles o decimales, seguido opcionalmente de
@@ -119,6 +124,32 @@ const DATE_RE = new RegExp(`\\b\\d{1,2}\\s+(?:de\\s+)?(?:${MONTHS})\\b|\\b(?:${M
 const YEAR_RE = /(?<!\d|\d[.,])(?:19|20)\d{2}(?!\d|[.,]\d|\s?%)/g;
 // Un rango de edad («de 25 a 34», «18-24»): es el nombre del grupo, no una cifra; la cifra es su porcentaje.
 const AGE_RANGE_RE = /(?<!\d|\d[.,])\d{2}(?:\s+(?:a|y|to|and)\s+|\s?-\s?)\d{2}(?!\d|[.,]\d)(?!\s?(?:%|mil\b|k\b|millones\b))/giu;
+/**
+ * Una duración («un reel de 30 segundos», «lo grabo en 48 horas», «de 2 a
+ * 3 semanas»): dice cuánto dura o cuánto tarda algo, no cómo le va al
+ * creador. Como las fechas y las horas, no es una cifra. Los años no
+ * entran: «15 años creando contenido» es una trayectoria que se afirma.
+ */
+const DURATION_RE =
+  /(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?(?:\s?(?:-|a|y|o|to|or)\s?\d+(?:[.,]\d+)?)?\s?(?:segundos?|seg|s|minutos?|mins?|horas?|hrs?|h|d[ií]as?|semanas?|meses|mes|seconds?|secs?|minutes?|hours?|days?|weeks?|months?)(?![\p{L}\p{N}])/giu;
+/**
+ * Una dirección («el local de la calle 85», «Cra. 7 # 71-21», «221 Baker
+ * Street»): es un sitio, no un número de desempeño. El «#» de una
+ * dirección colombiana tampoco es un puesto.
+ */
+const ADDRESS_RE =
+  /(?<![\p{L}\p{N}])(?:calle|carrera|cra|kra|cr|cl|avenida|avda|av|diagonal|dg|transversal|tv|autopista|street|st|avenue|ave|road|rd|boulevard|blvd)\.?\s+(?:n[º°o]\.?\s?)?\d+[a-z]?(?:\s?bis)?(?:\s?(?:#|n[º°]\.?|no\.|n[uú]mero)\s?\d+[a-z]?(?:\s?-\s?\d+)?)?(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])\d+\s+(?:\p{Lu}\p{L}+\s+){1,3}(?:street|st|avenue|ave|road|rd|boulevard|blvd)\b/giu;
+
+// Cifras que lo son SIEMPRE, por pequeñas que sean (no pasan por SMALL_COUNT_MAX):
+/** Un multiplicador delante: «las ventas crecieron x3», «×2 en guardados». */
+const PREFIX_MULTIPLE_RE = /(?<![\p{L}\p{N}])[x×]\s?(\d+(?:[.,]\d+)?)(?![\p{L}\p{N}])/giu;
+/** «3-fold», «10 fold». */
+const FOLD_RE = /(?<![\p{L}\p{N}])(\d+(?:[.,]\d+)?)[\s-]?fold(?![\p{L}])/giu;
+/** Puntos porcentuales: «subió 5 pp», «3 puntos porcentuales». */
+const POINTS_RE = /(?<![\p{L}\p{N}])(\d+(?:[.,]\d+)?)\s?(?:pp|p\.\s?p\.|puntos porcentuales|percentage points)(?![\p{L}])/giu;
+/** Un puesto: «soy la creadora #1», «top 3», «número uno», «number one», «nº 1». */
+const RANK_RE =
+  /(?<![\p{L}\p{N}&])#\s?(\d+)(?![\p{L}\p{N}_])|\btop[\s-]?(\d+)(?!\d)|\bn[uú]mero\s+(?:uno|1)(?![\p{L}\p{N}])|\bnumber\s+(?:one|1)(?![\p{L}\p{N}])|\bn\.?\s?[º°]\s?1(?!\d)/giu;
 
 /** Hasta cuánto un número suelto, sin unidad y sin un sustantivo de desempeño detrás, no es una cifra («3 ideas»). */
 export const SMALL_COUNT_MAX = 12;
@@ -152,6 +183,44 @@ function followedByNoun(text: string, end: number): boolean {
   return FOLLOWED_BY_NOUN_RE.test(text.slice(end, end + 60));
 }
 
+/**
+ * Lo que una creadora OFRECE («te propongo 3 videos y 2 historias», «el
+ * paquete de 4 reels»): un conteo de entregables detrás de un verbo de
+ * oferta no es una cifra de desempeño. Tampoco «mis 3 mejores videos» o
+ * «los 2 próximos reels»: es una selección, no un resultado.
+ */
+export const DELIVERABLE_NOUNS = [
+  'video', 'videos', 'vídeo', 'vídeos', 'reel', 'reels', 'historia', 'historias', 'post', 'posts', 'publicación',
+  'publicaciones', 'pieza', 'piezas', 'tiktok', 'tiktoks', 'short', 'shorts', 'carrusel', 'carruseles', 'contenido',
+  'contenidos', 'entregable', 'entregables', 'story', 'stories', 'carousel', 'carousels', 'piece', 'pieces',
+  'deliverable', 'deliverables',
+] as const;
+const DELIVERABLE_ALT = [...DELIVERABLE_NOUNS].sort((a, b) => b.length - a.length).join('|');
+const FOLLOWED_BY_DELIVERABLE_RE = new RegExp(`^[ \\u00a0]+(?:\\p{L}+[ \\u00a0]+)?(?:${DELIVERABLE_ALT})(?![\\p{L}\\p{N}])`, 'iu');
+/** Un calificativo de selección justo detrás del número: «3 mejores», «2 próximos», «3 best». */
+const SELECTION_AFTER_RE = /^[ \u00a0]+(?:mejores|próximos|próximas|proximos|proximas|nuevos|nuevas|primeros|primeras|best|next|new|first|top)(?![\p{L}])/iu;
+/** Los verbos de oferta, en la misma frase y antes del número. Se comparan plegados (sin tildes). */
+const OFFER_BEFORE_RE =
+  /(?<![\p{L}])(?:propongo|propondria|proponemos|ofrezco|ofreceria|ofrecemos|haria|hago|haremos|incluye|incluiria|incluyo|incluimos|paquete de|entrego|entregaria|grabo|grabaria|grabamos|preparo|prepararia|armo|armaria|produzco|produciria|te mando|te envio|seria de|serian|propose|offer|would make|would create|would film|include|includes|package of|deliver|i'd make|i'd create|i'd film|i can make|i can create|i can film)(?![\p{L}])/iu;
+
+const foldText = (s: string) => s.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+
+/** ¿El número pequeño entre start y end es un conteo de lo que se ofrece o una selección, no un resultado? */
+function offeredOrSelected(text: string, start: number, end: number): boolean {
+  const after = text.slice(end, end + 60);
+  if (SELECTION_AFTER_RE.test(after)) return true;
+  if (!FOLLOWED_BY_DELIVERABLE_RE.test(after)) return false;
+  // La frase en la que está: desde el último punto, salto de línea o dos puntos.
+  const before = text.slice(Math.max(0, start - 80), start);
+  const cut = Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'), before.lastIndexOf('?'), before.lastIndexOf('\n'), before.lastIndexOf(':'));
+  return OFFER_BEFORE_RE.test(foldText(before.slice(cut + 1)));
+}
+
+/** ¿Un número pequeño (hasta SMALL_COUNT_MAX) es una cifra? Solo con un sustantivo de desempeño detrás, y si no es algo que se ofrece. */
+function smallCountIsFigure(text: string, start: number, end: number): boolean {
+  return followedByNoun(text, end) && !offeredOrSelected(text, start, end);
+}
+
 // ---------------------------------------------------------------------
 // Los números escritos con palabras
 // ---------------------------------------------------------------------
@@ -178,28 +247,36 @@ const SCALES: Record<string, number> = {
 const MULTIPLIERS: Record<string, number> = {
   doble: 2, duplico: 2, duplica: 2, duplicaron: 2, duplicar: 2, triple: 3, triplico: 3, triplica: 3, triplicaron: 3,
   triplicar: 3, cuadruple: 4, cuadruplico: 4, twice: 2, double: 2, doubled: 2, doubles: 2, tripled: 3, triples: 3,
-  thrice: 3, quadruple: 4, quadrupled: 4,
+  thrice: 3, quadruple: 4, quadrupled: 4, twofold: 2, threefold: 3, fourfold: 4, fivefold: 5, tenfold: 10,
 };
+/** «medio millón», «media docena de miles»: la mitad de la escala que sigue. Solo cuentan delante de una escala. */
+const HALVES = new Set(['medio', 'media', 'half']);
 const JOINERS = new Set(['y', 'and']);
 
 const foldWord = (w: string) => w.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
-const isNumberWord = (w: string) => w in UNITS || w in SCALES || ONES.has(w);
+const isNumberWord = (w: string) => w in UNITS || w in SCALES || ONES.has(w) || HALVES.has(w);
 const onlySpaces = (s: string) => /^[\s-]*$/.test(s);
 
 /** El valor de una tirada de numerales: «dos millones trescientos mil» → 2.300.000. */
 function wordsValue(run: readonly string[]): number {
   let total = 0;
   let current = 0;
+  let lastScale = 0;
   for (const w of run) {
     if (ONES.has(w)) current += 1;
+    // «un millón y medio»: la mitad de la última escala; «medio millón»: la mitad de la que sigue.
+    else if (HALVES.has(w) && current === 0 && lastScale > 0) total += lastScale / 2;
+    else if (HALVES.has(w)) current += 0.5;
     else if (w in UNITS) current += UNITS[w]!;
     else if (SCALES[w] === 100) current = (current || 1) * 100;
     else if (SCALES[w] === 1_000) {
       total += (current || 1) * 1_000;
       current = 0;
+      lastScale = 1_000;
     } else {
       total = (total + (current || 1)) * 1_000_000;
       current = 0;
+      lastScale = 1_000_000;
     }
   }
   return total + current;
@@ -218,7 +295,8 @@ function wordFigures(text: string, skip: ReadonlyArray<[number, number]>): Figur
     }
     if (!isNumberWord(first.w)) continue;
     // «un video», «a brand», «one of»: artículo, no cifra. «un», «a» y «one» solo cuentan delante de una escala («un millón»).
-    if (ONES.has(first.w)) {
+    // «medio» y «media», igual: «medio millón» es una cifra, «media hora» no.
+    if (ONES.has(first.w) || HALVES.has(first.w)) {
       const next = words[i + 1];
       if (!next || !(next.w in SCALES) || !onlySpaces(text.slice(first.end, next.start))) continue;
     }
@@ -227,17 +305,30 @@ function wordFigures(text: string, skip: ReadonlyArray<[number, number]>): Figur
     while (j + 1 < words.length && onlySpaces(text.slice(words[j]!.end, words[j + 1]!.start))) {
       const next = words[j + 1]!;
       const after = words[j + 2];
-      if (isNumberWord(next.w) && !ONES.has(next.w)) j++;
-      else if (JOINERS.has(next.w) && after && isNumberWord(after.w) && onlySpaces(text.slice(next.end, after.start))) j += 2;
+      if (isNumberWord(next.w) && !ONES.has(next.w) && !HALVES.has(next.w)) j++;
+      else if (JOINERS.has(next.w) && after && isNumberWord(after.w) && !ONES.has(after.w) && onlySpaces(text.slice(next.end, after.start))) j += 2;
       else break;
     }
     const run = words.slice(i, j + 1).map((x) => x.w).filter((w) => !JOINERS.has(w));
     const last = words[j]!;
+    const second = j > i ? words[i + 1]! : null;
     i = j;
     const hasScale = run.some((w) => w in SCALES);
-    // De desempeño si la sigue un sustantivo de la lista, o si es grande («diez mil», «un millón»): «mil gracias» no.
-    if ((hasScale && run.length >= 2) || followedByNoun(text, last.end)) {
-      hits.push({ raw: text.slice(first.start, last.end), start: first.start, end: last.end, values: [wordsValue(run)], kind: hasScale ? 'scaled' : 'plain' });
+    // «a» delante de una escala vale 1, pero no es parte de lo que se escribe
+    // («llegué a miles de personas»: la cifra es «miles»; «a million» dice «million»).
+    const shown = first.w === 'a' && second ? second : first;
+    const value = wordsValue(run);
+    // De desempeño si es grande («diez mil», «un millón»), o si es un conteo
+    // pequeño con un sustantivo de desempeño detrás y no es algo que se
+    // ofrece («trabajé con once marcas» sí; «te propongo tres videos» no).
+    // «mil gracias» no es ninguna de las dos.
+    const isFigure = hasScale
+      ? run.length >= 2 || followedByNoun(text, last.end)
+      : value > SMALL_COUNT_MAX
+        ? followedByNoun(text, last.end)
+        : smallCountIsFigure(text, first.start, last.end);
+    if (isFigure) {
+      hits.push({ raw: text.slice(shown.start, last.end), start: shown.start, end: last.end, values: [value], kind: hasScale ? 'scaled' : 'plain' });
     }
   }
   return hits;
@@ -270,19 +361,47 @@ function parseNumber(digits: string): number[] {
  * octubre»), los rangos de edad («de 25 a 34»), los años («en 2026») SALVO
  * que los siga un sustantivo de desempeño («2000 seguidores» es una
  * cifra), y los números pequeños sin unidad (hasta SMALL_COUNT_MAX: «3
- * ideas») salvo con ese mismo sustantivo detrás («11 marcas»). Los números
- * escritos con palabras también cuentan: «diez mil views», «el triple»,
- * «once marcas».
+ * ideas») salvo con ese mismo sustantivo detrás («11 marcas») y salvo que
+ * sea lo que se ofrece («te propongo 3 videos», «mis 3 mejores videos»).
+ * Tampoco las duraciones («un reel de 30 segundos», «en 48 horas») ni las
+ * direcciones («la calle 85», «Cra. 7 # 71-21»). Cuentan SIEMPRE, por
+ * pequeños que sean, los multiplicadores delante («x3», «×2»), «3-fold»,
+ * los puntos porcentuales («5 pp») y los puestos («#1», «top 3», «número
+ * uno»), que ninguna cifra del perfil respalda. Los números escritos con
+ * palabras también cuentan: «diez mil views», «el triple», «once marcas»,
+ * «medio millón».
  */
 export function findFigures(text: string | null | undefined): FigureHit[] {
   if (!text) return [];
   const years = spans(text, YEAR_RE).filter(([, end]) => !followedByNoun(text, end));
-  const skip = [...spans(text, URL_RE), ...spans(text, TIME_RE), ...spans(text, DATE_RE), ...years, ...spans(text, AGE_RANGE_RE)];
+  const skip = [
+    ...spans(text, URL_RE), ...spans(text, TIME_RE), ...spans(text, DATE_RE), ...years, ...spans(text, AGE_RANGE_RE),
+    ...spans(text, DURATION_RE), ...spans(text, ADDRESS_RE),
+  ];
+  const overlaps = (start: number, end: number) => skip.some(([a, b]) => start < b && end > a);
   const hits: FigureHit[] = [];
+  // Primero lo que es cifra siempre, por pequeño que sea: «x3», «3-fold», «5 pp», «#1», «top 3», «número uno».
+  const always: Array<[RegExp, FigureHit['kind'], (n: number) => number]> = [
+    [PREFIX_MULTIPLE_RE, 'multiple', (n) => n],
+    [FOLD_RE, 'multiple', (n) => n],
+    [POINTS_RE, 'percent', (n) => n / 100],
+    [RANK_RE, 'rank', (n) => n],
+  ];
+  for (const [re, kind, scale] of always) {
+    for (const m of text.matchAll(re)) {
+      const start = m.index ?? 0;
+      const end = start + m[0].length;
+      if (overlaps(start, end) || hits.some((h) => start < h.end && end > h.start)) continue;
+      const digits = m[1] ?? m[2];
+      const base = digits ? parseNumber(digits) : [1];
+      hits.push({ raw: m[0].trim(), start, end, values: base.map(scale), kind });
+    }
+  }
+  skip.push(...hits.map((h): [number, number] => [h.start, h.end]));
   for (const m of text.matchAll(FIGURE_RE)) {
     const start = m.index ?? 0;
     const end = start + m[0].length;
-    if (skip.some(([a, b]) => start < b && end > a)) continue;
+    if (overlaps(start, end)) continue;
     const unit = (m[2] ?? '').trim().toLowerCase();
     const base = parseNumber(m[1]!);
     if (base.length === 0) continue;
@@ -300,7 +419,8 @@ export function findFigures(text: string | null | undefined): FigureHit[] {
       kind = 'scaled';
       values = base.map((v) => v * 1_000_000);
     }
-    if (kind === 'plain' && base.every((v) => Number.isInteger(v) && v <= SMALL_COUNT_MAX) && !followedByNoun(text, end)) continue;
+    // Un número pequeño sin unidad es una cifra solo con un sustantivo de desempeño detrás, y si no es lo que se ofrece.
+    if (kind === 'plain' && base.every((v) => Number.isInteger(v) && v <= SMALL_COUNT_MAX) && !smallCountIsFigure(text, start, end)) continue;
     hits.push({ raw: m[0].trim(), start, end, values, kind });
   }
   // Las palabras que ya son la unidad de una cifra en dígitos («400 mil») no cuentan dos veces.
@@ -313,7 +433,8 @@ export const FIGURE_TOLERANCE = 0.05;
 
 /** ¿La cifra escrita dice lo mismo que el claim, con redondeo? */
 export function figureMatchesClaim(hit: FigureHit, claim: SalesClaim): boolean {
-  if (claim.value === null) return false;
+  // Un puesto («#1», «top 3») no lo respalda ninguna cifra del perfil.
+  if (claim.value === null || hit.kind === 'rank') return false;
   const target = claim.value;
   return hit.values.some((v) => {
     if (target === 0) return v === 0;

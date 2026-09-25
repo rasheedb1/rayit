@@ -97,10 +97,16 @@ export interface LlmResponse {
   stopReason: string | null;
 }
 
+/** Lo que acompaña a una llamada sin ser parte de ella: la señal que la corta (el plazo del job). */
+export interface LlmCallOptions {
+  signal?: AbortSignal;
+}
+
 export interface LlmClient {
   /** Un nombre para el registro («anthropic», «fake»). */
   readonly name: string;
-  complete(req: LlmRequest): Promise<LlmResponse>;
+  /** Con `signal`, la llamada se corta en cuanto el job se aborta (no espera a su propio tiempo límite). */
+  complete(req: LlmRequest, opts?: LlmCallOptions): Promise<LlmResponse>;
 }
 
 /** La respuesta del modelo no se pudo leer (JSON roto, cortada por el tope, rechazada). */
