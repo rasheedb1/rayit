@@ -984,32 +984,60 @@ el recomendador.
 - **Cálculo**: `buildPerfil` en `@mc/core/outreach/perfil` (puro) a
   partir de las filas que lee `readPerfilInputs` en
   `@mc/db/queries/perfil-comercial`. Cada cifra es un
-  `Claim { id, kind, label, value, unit, source: { table, id, field } }`;
-  las secciones solo llevan ids. Las medianas salen de
-  `creator_baseline` al corte de 168 h (el del tarifario), los cinco
-  mejores de `post_score.views_vs_median`, el alcance en no seguidores
-  de `percentile_cont` sobre `post_metrics_latest`. Lo único que se
-  cuenta en código es lo que sale de los captions (gancho, pieza, tipo,
-  duración frente a la típica de la red, tono), en
-  `perfil-captions.ts`; si `creator_post_board.hook_type` existe, gana.
+  `Claim { id, kind, key, params, value, unit, source: { table, id, field, rows?, url?, asOf? } }`:
+  una clave (`median`, `audience.gender`, `video.multiple`…) y sus
+  parámetros (red, segmento, corte, título), sin texto. La pantalla lo
+  escribe con su `messages.ts` y el locale del workspace; el prompt, con
+  `claimLabelEs`. `source.asOf` es la fecha de la lectura (día de la
+  demografía y de los seguidores, `computed_at` de la línea base, del
+  puntaje, del resultado y del tarifario). Las secciones solo llevan ids.
+- **Medianas y cortes**: la mediana de cada red sale de
+  `creator_baseline` al corte de 168 h (o el más largo que haya), y cada
+  una dice su corte. Los cinco mejores se ordenan por
+  `post_score.views_vs_median`, que ya está normalizado contra la línea
+  base de SU corte (por eso es comparable entre cortes); cada video lleva
+  además su corte y la mediana contra la que se midió
+  (`post_score.baseline_id` → `baselineClaimId`), así «6× tu mediana»
+  se puede comprobar: views ≈ veces × esa mediana (probado con el seed).
+- **Por qué funcionó**: `standoutGroups` agrupa los videos puntuados por
+  gancho, pieza, tipo y duración y solo marca como razón el grupo cuya
+  mediana de «veces su mediana» supera la del resto (al menos dos
+  videos en cada lado y 1,2 veces más). Las dos medianas son claims
+  (`porque-…` y `porque-…-resto`). Un rasgo que tienen todos los videos
+  no es razón; si ninguno lo separa, la pantalla lo dice y describe el
+  video. Lo que se lee de los captions sigue en `perfil-captions.ts`; si
+  `creator_post_board.hook_type` existe, gana.
 - **Guardado**: `creator_profile.media_kit → perfil_comercial`
-  (`StoredPerfil`, versión 1, con `computedAt`), escrito con
-  `jsonb_set` sin tocar las demás claves. Un documento de otra versión
-  se lee como «sin calcular».
+  (`StoredPerfil`, versión 2, con `computedAt`), escrito con
+  `jsonb_set` sin tocar las demás claves. `parseStoredPerfil` comprueba
+  cada arreglo que la pantalla recorre; un documento de otra versión, a
+  medio escribir o editado a mano se lee como «sin calcular».
 - **Narrativa**: `@mc/core/outreach/narrativa`. El modelo recibe la
   lista de claims y escribe `[claim:id]` en vez de cifras;
   `verifyNarrative` rechaza un id que no está, cualquier dígito fuera
-  de una marca (salvo términos del perfil: títulos, campañas, tarifas,
-  franjas de edad) y los huecos de la guardia de VEN-10. Dos intentos
-  con claude-sonnet-5; si ninguno pasa, sin llave o con el tope diario
-  alcanzado, la plantilla determinista. Cada llamada va a
-  `outbound_llm_call` con propósito `'profile'` (migración 0056) en su
-  propia transacción. El creador puede editarla y pasa el mismo
-  verificador.
-- **Pantalla**: `/ventas/perfil`, pestaña «Perfil comercial» de Ventas,
-  con «Recalcular». Todavía no se recalcula solo al conectar una cuenta
-  o importar un CSV: la pantalla avisa cuando hay datos más nuevos que
-  el cálculo.
+  de una marca, cualquier cantidad en letras de una lista cerrada
+  (`NUMBER_WORDS_ES`: «dos», «mil», «millones», «el doble», «la mitad»,
+  «por ciento») y los signos % y × sueltos, salvo dentro de términos del
+  perfil (títulos, campañas, tarifas, franjas de edad, frases de corte),
+  y los huecos de la guardia de VEN-10. Dos intentos con
+  claude-sonnet-5, de 25 s cada uno y sin reintentos del SDK (caben en
+  el `maxDuration` de 60 s de la página); el tope diario se consulta
+  antes de cada intento y cada llamada va a `outbound_llm_call` con
+  propósito `'profile'` (migración 0056) apenas responde. Si ninguno
+  pasa, sin llave o con el tope alcanzado, la plantilla determinista,
+  que cita la mediana de la red del mejor video y la de su corte. El
+  creador puede editarla, con vista previa, y pasa el mismo verificador.
+- **Pantalla**: `/ventas/perfil`, pestaña «Perfil comercial» de Ventas.
+  Cada cifra es un botón que abre un globo (al pasar el cursor, con el
+  teclado o al tocarla) con qué es, tabla, red y fecha, y «Abrir el
+  origen»: el post, la campaña, el tarifario, la serie de seguidores en
+  `/resumen?red=…#seguidores`, o su fila en «De dónde sale cada cifra»
+  al final de la página (línea base, demografía, no seguidores y los
+  agregados), con tabla, columna y fila. «Recalcular» y «Editar» solo se
+  ofrecen a owner, admin y member (`PUEDEN_EDITAR_PERFIL`), y las dos
+  acciones lo vuelven a mirar. Todavía no se recalcula solo al conectar
+  una cuenta o importar un CSV: la pantalla avisa cuando hay datos más
+  nuevos que el cálculo.
 
 ### 5.5 El recomendador de cadencia
 

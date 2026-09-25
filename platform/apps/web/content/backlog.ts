@@ -423,7 +423,7 @@ export const STORIES: readonly Story[] = [
     desc: "Identidad, audiencia, desempeño (mediana y mejores videos con su porqué), formatos, prueba social de campañas reportadas y tarifas, más una narrativa generada cuyas cifras enlazan a su origen. Es el análisis del perfil y los videos del creador que alimenta el outreach.",
     done: "Con el seed, el perfil muestra los cinco mejores videos con sus cifras y cada cifra de la narrativa lleva a su origen.",
     status: "hecho",
-    note: "/ventas/perfil: cada cifra es un Claim con tabla, fila y columna, enlazado a su post, campaña o tarifario. La narrativa solo cita [claim:id]; un verificador determinista rechaza ids inventados y dígitos sueltos (probado en core, pglite y pantalla). Sin ANTHROPIC_API_KEY, plantilla. Guardado en creator_profile.media_kit.perfil_comercial; costo en outbound_llm_call con la 0056 (sin aplicar en Supabase).",
+    note: "r2: cada cifra es un Claim con clave, tabla, fila, columna y fecha de lectura; el tooltip (táctil, cabe a 400 px) dice red y fecha y lleva al post, la campaña, el tarifario, Resumen o su fila en «De dónde sale cada cifra». El verificador rechaza ids inventados, dígitos y cantidades en letras («dos millones», «el doble») fuera de las marcas. El porqué contrasta el grupo del video con el resto; cada «× mediana» cita la de su red y su corte. Solo owner, admin y member recalculan o editan. Sin ANTHROPIC_API_KEY, plantilla. Pendiente del integrador: aplicar la 0056 en Supabase.",
   },
   {
     id: "VEN-12", module: "VEN", owner: "rasheed", size: "L", sprint: 5, deps: ["VEN-10", "VEN-11"],
