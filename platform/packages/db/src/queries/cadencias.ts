@@ -471,6 +471,8 @@ export interface SequenceDetail {
   templateName: string | null;
   signal: { id: string; headline: string; kind: RecommendSignalKind; companyName: string | null } | null;
   proposal: SequenceProposal | null;
+  /** La persona para la que se propuso, si este espacio la sigue viendo. */
+  proposalContact: { id: string; name: string | null } | null;
   steps: SequenceStep[];
   enrollments: { live: number; total: number; contacted: number; replied: number };
   /** Con alguien dentro, la forma de la secuencia no se cambia (ver el encabezado). */
@@ -534,6 +536,13 @@ export async function getSequenceDetail(tx: WorkspaceTx, id: string): Promise<Se
   ).rows[0];
   if (!s) return null;
   const steps = await readSteps(tx, id);
+  const proposal = parseSequenceProposal(s.proposal);
+  const persona = proposal?.contactId && isUuid(proposal.contactId)
+    ? (await tx.query<{ id: string; full_name: string | null }>(
+        `SELECT id, full_name FROM contact WHERE id = $1::uuid AND contact_visible_to(id, $2::uuid)`,
+        [proposal.contactId, tx.workspaceId],
+      )).rows[0]
+    : undefined;
   const check = checkSequenceAgainstPolicy(
     steps.map((x) => ({ id: x.id, stepType: x.stepType, dayOffset: x.dayOffset, orderInDay: x.orderInDay })),
     { maxTouchesPerCompany: s.max_touches, minDaysBetweenTouches: s.min_days },
@@ -544,7 +553,8 @@ export async function getSequenceDetail(tx: WorkspaceTx, id: string): Promise<Se
     signal: s.signal_id && s.signal_headline !== null
       ? { id: s.signal_id, headline: s.signal_headline, kind: signalKindOfSource(s.source_kind), companyName: s.company_name }
       : null,
-    proposal: parseSequenceProposal(s.proposal),
+    proposal,
+    proposalContact: persona ? { id: persona.id, name: persona.full_name } : null,
     steps,
     enrollments: { live: s.live, total: s.total, contacted: s.contacted, replied: s.replied },
     locked: s.total > 0,
