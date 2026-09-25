@@ -133,7 +133,6 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
       <ModuleTabs active={CADENCIAS} />
 
       <Controles
-        key={d.status}
         sequenceId={d.id}
         status={d.status}
         nombre={d.name}

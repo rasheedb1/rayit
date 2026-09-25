@@ -68,6 +68,7 @@ export function Controles({
         <div className="flex flex-wrap items-start gap-2">
           {(status === "draft" || status === "paused") && (
             <Button
+              variant="primary"
               loading={pending}
               disabled={!puedeActivar}
               onClick={() => correr(() => activarCadencia(sequenceId))}
