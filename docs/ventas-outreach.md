@@ -475,7 +475,14 @@ que el despachador de VEN-10 tiene que usar, todo en
   botón (la regla de §5.2). La página habla el idioma del pie que trajo
   hasta ella (español o inglés, la regla de `footerTextsFor`); sin
   espacio que lo diga (un enlace que no existe, la frontera de error), el
-  del `Accept-Language` del navegador. El clic va por `public_optout`.
+  del `Accept-Language` del navegador. Un token que no es de ningún
+  correo enviado responde **404 de verdad** (`notFound()` y su propio
+  `not-found.tsx`, con los mismos textos por idioma; el segmento no tiene
+  `loading.tsx`, que mandaba un 200 antes de saberlo): un monitor o el
+  proveedor que prueba el enlace distingue uno roto de uno bueno. La
+  pregunta es una sola frase con quién escribe primero y la dirección
+  («Laura no volverá a escribirte: ni a l•••@marca.co ni por ningún otro
+  canal»). El clic va por `public_optout`.
   Después del clic no se promete lo que el producto no cumple: quien
   escribía no puede deshacer la baja (solo un operador, a pedido de la
   persona), así que el «listo» da `SUPPORT_EMAIL` como la vía para
@@ -567,7 +574,11 @@ que el despachador de VEN-10 tiene que usar, todo en
   que un correo reclamado cuando llegó el aviso ni vuelve a salir ni se
   queda atascado. `processing → sent` sí, porque ya salió. En la misma
   transacción del rebote, y en un **barrido idempotente al final de cada
-  pasada** (`sweepInvalidEmail`), el job cancela lo que quede en draft,
+  pasada** (`sweepInvalidEmail`, que solo mira los candidatos —fichas con
+  `email_invalid` y espacios con un rebote duro verificado— por los
+  índices parciales `contact_email_invalid_idx` y
+  `outbound_touch_email_pending_idx`: una pasada sin rebotes no recorre
+  `outbound_touch`), el job cancela lo que quede en draft,
   scheduled o held a esa dirección —un borrador creado después del
   rebote, por ejemplo— y **pausa los enrolamientos activos** de esa
   ficha en ese espacio cuya secuencia es solo de correo
@@ -611,11 +622,19 @@ que el despachador de VEN-10 tiene que usar, todo en
   rebotes cuenta solo los duros de lo enviado en la ventana; «no envió
   nada» solo salta si había toques que tocaba enviar
   (`readAlertSignalCounts`, `@mc/db`). La cuenta caída dice cuál es y
-  lleva a la lista de cuentas caídas de `/ventas/politica#cuentas` (lo
-  que dijo el proveedor y el paso para volver a enviar) hasta que exista
-  `/ventas/canales` (se cambia en `CANALES_URL`,
-  `apps/worker/src/jobs/ventas/messages.ts`); mientras, esa lista dice
-  dónde se hace (con `SUPPORT_EMAIL`, a quién escribir para reconectar).
+  lleva a la lista de cuentas caídas de `/ventas/politica#cuentas` (qué
+  pasó y el paso para volver a enviar) hasta que exista
+  `/ventas/canales`. **Al integrar VEN-9:** `CANALES_URL`
+  (`apps/worker/src/jobs/ventas/messages.ts`) pasa a `/ventas/canales` y
+  `reconectarUrl` en `ventas/politica/page.tsx` también, y cada cuenta
+  caída lleva su botón «Reconectar». Mientras, la lista no habla de una
+  función futura: con `SUPPORT_EMAIL`, a quién escribir; sin él, que lo de
+  esa cuenta espera en la cola. `last_error` guarda códigos
+  (`CHANNEL_ERROR_CODES` de VEN-9 y `unipile_status:<X>`): la lista los
+  traduce (`motivoCaida`, las frases en `ventas/politica/messages.ts`,
+  las mismas de `CANALES_TEXTOS`), y uno desconocido —o una frase vieja
+  con la jerga del proveedor— sale como «No tenemos más detalle», nunca
+  crudo.
   Sin `APP_URL` el resumen sale sin enlaces —nunca a localhost— y el job
   lo avisa en el registro; en producción sin `MAIL_FROM` no sale (un
   remitente `.invalid` rebota) y el resultado lo cuenta en
@@ -646,6 +665,19 @@ que el despachador de VEN-10 tiene que usar, todo en
   (`@mc/db`); la frase de la baja ya no dice «a este correo» y «por
   ningún canal» a la vez; y el enlace de baja de la demo no se fabrica en
   las pruebas ni sin una URL absoluta.
+
+- **Ronda 6 (25 de septiembre), en una línea cada cosa:** la vuelta
+  `processing → scheduled` de alguien dado de baja (de este espacio o de
+  toda la plataforma) se cancela en el sitio con `opted_out`, así que el
+  rescate por lotes de VEN-10 no aborta entero por un zombi (prueba con
+  tres zombis en un `UPDATE`); el barrido del correo inválido parte de
+  los candidatos con índices parciales; `/baja/<token>` responde 404 a un
+  token desconocido; en el móvil «Últimos rebotes» es una lista (la
+  tabla de cuatro columnas medía 505 px en 366 y escondía la fecha); la
+  nota de «Rebotes» dice por qué 1 de 4 no avisa (`bounceRateStatus`,
+  `@mc/core`, la misma regla que la alerta); los enlaces de los avisos
+  dicen adónde llevan y son solo el ancla; `last_error` se traduce; y la
+  demo guarda `unipile_status:CREDENTIALS` en vez de la frase de Unipile.
 
 **Probar la baja a mano, en local.** El seed guarda solo hashes de
 tokens al azar, así que ningún enlace suyo se puede pulsar.
@@ -885,8 +917,10 @@ revisores técnico y de producto y el mismo umbral.
    menos 30 días), y es la misma forma que ya genera el despachador de
    VEN-10. El contacto y el workspace no viajan en el token: los guarda
    la fila del enlace, que solo escribe el despachador. Propuesta:
-   quedarse con el token opaco. **Estado (ronda 5): implementado así y
-   pendiente de su firma, junto con la 6.** Si Rasheed firma las dos, el
+   quedarse con el token opaco. **Estado (ronda 6): implementado así y
+   pendiente de su firma, junto con la 6. Mientras no firme, VEN-15 sigue
+   'bloqueada' y no se despliega a un cliente: el «terminado cuando» de
+   `backlog.ts` promete otra cosa, y ningún agente lo reescribe por él.** Si Rasheed firma las dos, el
    «terminado cuando» de VEN-15 en `backlog.ts` se reescribe con los dos
    cambios a la vez (la baja con quien envió y en toda la plataforma al
    confirmarla un segundo creador; el enlace por token opaco).

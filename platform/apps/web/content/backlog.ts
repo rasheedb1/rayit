@@ -145,6 +145,14 @@ export const STORIES: readonly Story[] = [
     note: "Abierta en la ronda 5 de VEN-9 (23-sep): 72 pruebas rojas medidas con embedded-postgres 16.14, ninguna de outreach ni de la guardia. Camino probable: un segundo rol de conexión solo miembro de mc_app para lo que mide GRANT, como soloEmbebido en outreach.test.ts, y sembrar sin --seed o con workspaces propios.",
   },
   {
+    id: "CIM-12", module: "CIM", owner: "rasheed", size: "S", sprint: 4, deps: ["CIM-2"],
+    title: "pnpm verificar determinista",
+    desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
+    done: "Veinte corridas seguidas de pnpm verificar en una máquina cargada, sin una sola prueba cancelada.",
+    status: "pendiente",
+    note: "Abierta en la ronda 4 de VEN-15 (25-sep). No se reprodujo: cuatro corridas de @mc/db a la vez y dos de pnpm verificar, en verde. Sospechosos: las pruebas que esperan un aviso de dentro de una transacción (cotizar.test.ts y outreach.test.ts: `await acepto` sin carrera con la transacción, que se cuelga si esta falla antes de avisar) y el arranque de openTestDb; empezar por Promise.race([aviso, transacción]) y un registro de tiempos del arranque.",
+  },
+  {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],
     title: "Marco de la aplicación y navegación",
     desc: "Layout, navegación con los módulos del MVP, los de fase 2 ocultos tras una bandera, tema claro y oscuro, dirección visual minimalista. Cada módulo con su ruta.",
@@ -442,7 +450,7 @@ export const STORIES: readonly Story[] = [
     desc: "Pie de baja con página pública, cabecera List-Unsubscribe de un clic, rebotes asíncronos, calentamiento progresivo por cuenta, baja respetada en todos los canales, alertas diarias por correo.",
     done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud.",
     status: "bloqueada",
-    note: "Hecho y probado: el rebote pausa lo que ya no tiene por dónde seguir y los avisos se ven en «Salud de hoy». Bloqueada por la integración de VEN-9 (Gmail en bouncesMailboxFor) y las decisiones 6 y 7 de docs/ventas-outreach.md §8. 0038 sin aplicar.",
+    note: "Hecho y probado en pglite. Bloqueada por dos cosas que no puede cerrar un agente: el Gmail de VEN-9 en bouncesMailboxFor (sin él no se leen rebotes reales) y la firma de Rasheed a las decisiones 6 y 7 de docs/ventas-outreach.md §8 (la baja vale para quien envió y pasa a toda la plataforma con un segundo creador; token opaco). Hasta firmarlas, el «terminado cuando» no describe lo hecho y no se despliega a un cliente. 0038 sin aplicar.",
   },
   {
     id: "VEN-16", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-10"],
