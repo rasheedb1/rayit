@@ -6,7 +6,7 @@
  *   - con el seed, el perfil trae los cinco mejores videos con sus cifras
  *     y cada cifra lleva su fila de origen;
  *   - una narrativa con un claim inventado no se guarda;
- *   - cada llamada al modelo deja su fila en outbound_llm_call (0056);
+ *   - cada llamada al modelo deja su fila en outbound_llm_call (0060);
  *   - nada cruza de un workspace a otro.
  */
 import { after, before, test } from 'node:test';
@@ -14,8 +14,9 @@ import assert from 'node:assert/strict';
 import { templateNarrative, type NarrativeOutcome } from '@mc/core/outreach/narrativa';
 import type { WorkspaceTx } from '../src/client.ts';
 import {
-  computePerfil, getPerfilComercial, getPrimaryCreator, llmBudgetExhausted, PerfilComercialError, readPerfilDataAsOf,
-  recordProfileLlmCalls, saveNarrativeEdit, savePerfilComercial,
+  claimPerfilRecalc, computePerfil, getPerfilComercial, getPrimaryCreator, llmBudgetExhausted, PERFIL_RECALCULO_KEY,
+  PERFIL_RECALCULO_TTL_S, PerfilComercialError, readPerfilDataAsOf, recordProfileLlmCalls, releasePerfilRecalc, saveNarrativeEdit,
+  savePerfilComercial,
 } from '../src/queries/perfil-comercial.ts';
 import { CAMPAIGN_CAFE_ALMA, POST_D01_REEL_CAFE_ALMA, WORKSPACE_LAURA, openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
@@ -89,6 +90,78 @@ test('cada video se mide contra la mediana de su red en su corte: views ≈ vece
   }
   // Las medianas de la cabecera dicen su propio corte.
   for (const m of perfil.performance.medians) assert.equal(claim(m.claimId).params.cutHours, m.cutHours);
+});
+
+test('con el seed, el porqué nunca se demuestra con el mismo video y cada agregado enlaza sus videos', async () => {
+  const perfil = await laura((tx) => computePerfil(tx, CREADORA_LAURA, new Date('2026-09-25T10:00:00Z')));
+  const claim = (id: string) => perfil.claims.find((c) => c.id === id)!;
+  for (const v of perfil.performance.top) {
+    assert.ok(v.why.reasons.length <= 1, v.title);
+    for (const r of v.why.reasons) {
+      const grupo = claim(r.groupClaimId);
+      const resto = claim(r.restClaimId);
+      assert.ok(!grupo.source.rows!.includes(v.postId) && !resto.source.rows!.includes(v.postId), v.title);
+      assert.ok(grupo.source.rows!.length >= 3 && resto.source.rows!.length >= 3, v.title);
+      assert.ok(Number(grupo.value) >= 1.5 * Number(resto.value), v.title);
+    }
+  }
+  // Los posts de los agregados vienen con título y enlace para «De dónde sale cada cifra».
+  const indice = new Map(perfil.posts.map((p) => [p.postId, p]));
+  const captions = claim('captions-leidos');
+  for (const id of captions.source.rows!) assert.ok(indice.get(id)?.title, id);
+});
+
+test('un recálculo a la vez: la marca se toma, se niega a un segundo, vence y se suelta al guardar', async () => {
+  const ahora = new Date('2026-09-25T12:00:00Z');
+  const primera = await laura((tx) => claimPerfilRecalc(tx, CREADORA_LAURA, ahora));
+  await assert.rejects(
+    laura((tx) => claimPerfilRecalc(tx, CREADORA_LAURA, new Date(ahora.getTime() + 30_000))),
+    (e: unknown) => e instanceof PerfilComercialError && e.code === 'recalc_in_progress',
+  );
+  // Una acción cortada no la suelta: vence sola.
+  const segunda = await laura((tx) => claimPerfilRecalc(tx, CREADORA_LAURA, new Date(ahora.getTime() + (PERFIL_RECALCULO_TTL_S + 1) * 1000)));
+  assert.notEqual(segunda.token, primera.token);
+  // Soltar con el token vencido no le quita la marca al que la tiene ahora.
+  await laura((tx) => releasePerfilRecalc(tx, CREADORA_LAURA, primera.token));
+  const marca = async () => (await laura(async (tx) => (await tx.query<{ m: unknown }>(
+    `SELECT media_kit -> $2::text AS m FROM creator_profile WHERE id = $1`, [CREADORA_LAURA, PERFIL_RECALCULO_KEY])).rows[0]!.m));
+  assert.ok(await marca());
+  // Guardar con su token la suelta en la misma transacción.
+  await laura(async (tx) => {
+    const perfil = await computePerfil(tx, CREADORA_LAURA);
+    return savePerfilComercial(tx, perfil, plantilla(perfil), { recalcToken: segunda.token });
+  });
+  assert.equal(await marca(), null);
+});
+
+test('recalcular no pisa una edición guardada mientras tanto', async () => {
+  const doc = await laura(async (tx) => {
+    const perfil = await computePerfil(tx, CREADORA_LAURA);
+    return savePerfilComercial(tx, perfil, plantilla(perfil));
+  });
+  // Empieza el recálculo: se anota la narrativa que había.
+  const marca = await laura((tx) => claimPerfilRecalc(tx, CREADORA_LAURA));
+  assert.equal(marca.narrativeWrittenAt, doc.narrative.writtenAt);
+  // Mientras el modelo escribe, otra pestaña guarda una edición.
+  const editada = await laura((tx) =>
+    saveNarrativeEdit(tx, CREADORA_LAURA, 'Mi mediana en TikTok es de [claim:mediana-tiktok] views.', doc.narrative.writtenAt));
+  await assert.rejects(
+    laura(async (tx) => {
+      const perfil = await computePerfil(tx, CREADORA_LAURA);
+      return savePerfilComercial(tx, perfil, plantilla(perfil), { expectedWrittenAt: marca.narrativeWrittenAt, recalcToken: marca.token });
+    }),
+    (e: unknown) => e instanceof PerfilComercialError && e.code === 'stale_edit',
+  );
+  assert.deepEqual((await laura((tx) => getPerfilComercial(tx, CREADORA_LAURA)))!.narrative, editada.narrative);
+  await laura((tx) => releasePerfilRecalc(tx, CREADORA_LAURA, marca.token));
+  // Si la edición es la que se vio al empezar, recalcular la reemplaza (lo confirmó quien pulsó).
+  const otra = await laura((tx) => claimPerfilRecalc(tx, CREADORA_LAURA));
+  assert.equal(otra.narrativeWrittenAt, editada.narrative.writtenAt);
+  const nuevo = await laura(async (tx) => {
+    const perfil = await computePerfil(tx, CREADORA_LAURA);
+    return savePerfilComercial(tx, perfil, plantilla(perfil), { expectedWrittenAt: otra.narrativeWrittenAt, recalcToken: otra.token });
+  });
+  assert.equal(nuevo.narrative.source, 'template');
 });
 
 test('el perfil se guarda en media_kit.perfil_comercial sin tocar las demás claves, y se lee igual', async () => {
@@ -169,6 +242,10 @@ test('otro workspace no ve ni escribe el perfil de Laura', async () => {
   );
   await assert.rejects(
     ajeno((tx) => saveNarrativeEdit(tx, CREADORA_LAURA, 'Hola.', 'x')),
+    (e: unknown) => e instanceof PerfilComercialError && e.code === 'creator_not_found',
+  );
+  await assert.rejects(
+    ajeno((tx) => claimPerfilRecalc(tx, CREADORA_LAURA)),
     (e: unknown) => e instanceof PerfilComercialError && e.code === 'creator_not_found',
   );
   assert.equal(await ajeno((tx) => readPerfilDataAsOf(tx, CREADORA_LAURA)), null);

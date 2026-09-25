@@ -1,9 +1,12 @@
 -- =====================================================================
--- 0056 · El perfil comercial del creador registra su narrativa (VEN-11)
+-- 0060 · El perfil comercial del creador registra su narrativa (VEN-11)
 -- ---------------------------------------------------------------------
--- Número: va detrás de 0055_motor_equipo_y_reclamo. Si otra pieza de la
--- fase C (VEN-12, VEN-13) reclama el mismo número al integrar, esta se
--- renumera a la siguiente libre: no depende de ninguna de ellas.
+-- Número: 0060 y no 0056, a propósito. En la fase C, VEN-12 trae
+-- 0056_generacion_trazable y 0057_generacion_pedida_y_a_mano, y VEN-13
+-- trae 0056_recomendador_cadencias (que al integrar pasa a la siguiente
+-- libre, 0058). Esta no depende de ninguna de ellas ni ellas de esta
+-- (ninguna toca outbound_llm_call_purpose_check), así que toma un número
+-- que no puede chocar: el runner acepta huecos (0045 → 0050 ya lo es).
 --
 -- El perfil comercial (docs/ventas-outreach.md §5.4) se guarda en
 -- creator_profile.media_kit bajo la clave perfil_comercial: no necesita

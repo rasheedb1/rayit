@@ -1023,7 +1023,7 @@ el recomendador.
   claude-sonnet-5, de 25 s cada uno y sin reintentos del SDK (caben en
   el `maxDuration` de 60 s de la página); el tope diario se consulta
   antes de cada intento y cada llamada va a `outbound_llm_call` con
-  propósito `'profile'` (migración 0056) apenas responde. Si ninguno
+  propósito `'profile'` (migración 0060) apenas responde. Si ninguno
   pasa, sin llave o con el tope alcanzado, la plantilla determinista,
   que cita la mediana de la red del mejor video y la de su corte. El
   creador puede editarla, con vista previa, y pasa el mismo verificador.

@@ -38,7 +38,7 @@ export { getPrimaryCreator } from './cotizar/tarifario.ts';
 // Errores
 // ---------------------------------------------------------------------
 
-export const PERFIL_ERROR_CODES = ['creator_not_found', 'not_calculated', 'stale_edit', 'invalid_narrative'] as const;
+export const PERFIL_ERROR_CODES = ['creator_not_found', 'not_calculated', 'stale_edit', 'invalid_narrative', 'recalc_in_progress'] as const;
 export type PerfilErrorCode = (typeof PERFIL_ERROR_CODES)[number];
 
 /** Un error del perfil con su código: el texto para la persona lo pone messages.ts de la pantalla. */
@@ -161,7 +161,7 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
   );
 
   const { rows: posts } = await tx.query<{
-    id: string; platform_id: PlatformId; url: string | null; title: string | null; caption: string | null;
+    id: string; platform_id: PlatformId; url: string | null; cover_url: string | null; title: string | null; caption: string | null;
     hashtags: string[]; surface: string | null; media_type: string; duration_s: string | null;
     is_branded_content: boolean | null; published_at: Date | string | null; hook_type: string | null;
     views_at_cut: string | null; views_vs_median: string | null; outlier_tier: string | null; age_hours_cut: number | null;
@@ -170,7 +170,7 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
   }>(
     // La línea base contra la que se puntuó cada video (post_score.baseline_id):
     // la de su red en SU corte, que es la que hace verdad su «× tu mediana».
-    `SELECT p.id, p.platform_id, coalesce(p.permalink, p.url) AS url, p.title, p.caption, p.hashtags, p.surface,
+    `SELECT p.id, p.platform_id, coalesce(p.permalink, p.url) AS url, p.cover_url, p.title, p.caption, p.hashtags, p.surface,
             p.media_type, p.duration_s, p.is_branded_content, p.published_at, b.hook_type,
             s.views_at_cut, s.views_vs_median, s.outlier_tier, s.age_hours_cut, s.computed_at AS score_computed_at,
             bl.id AS baseline_id, bl.median_views AS baseline_median, bl.age_hours_cut AS baseline_cut,
@@ -231,7 +231,7 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
       sampleSize: r.sample_size, isReliable: r.is_reliable, computedAt: iso(r.computed_at),
     })),
     posts: posts.map((r) => ({
-      id: r.id, platformId: r.platform_id, url: r.url, title: r.title, caption: r.caption, hashtags: r.hashtags,
+      id: r.id, platformId: r.platform_id, url: r.url, coverUrl: r.cover_url, title: r.title, caption: r.caption, hashtags: r.hashtags,
       surface: r.surface, mediaType: r.media_type, durationS: num(r.duration_s), isBrandedContent: r.is_branded_content,
       publishedAt: r.published_at === null ? null : iso(r.published_at), hookType: r.hook_type,
       score:
@@ -308,22 +308,110 @@ async function escribir(tx: WorkspaceTx, creatorId: string, doc: StoredPerfil): 
   if (!rows[0]) throw new PerfilComercialError('creator_not_found', 'Ese creador no existe en este espacio de trabajo.');
 }
 
+// ---------------------------------------------------------------------
+// Un recálculo a la vez
+// ---------------------------------------------------------------------
+
+/** La clave de media_kit que marca un recálculo en curso: { token, startedAt }. */
+export const PERFIL_RECALCULO_KEY = 'perfil_comercial_recalculo';
+/**
+ * Cuánto vale la marca, en segundos. Más que el maxDuration de 60 s de la
+ * página: una acción cortada por Vercel no la suelta, y a los 90 s se
+ * puede volver a recalcular sin que nadie la limpie a mano.
+ */
+export const PERFIL_RECALCULO_TTL_S = 90;
+
+export interface RecalcClaim {
+  /** Lo que suelta la marca (releasePerfilRecalc) y lo que la guarda al guardar (savePerfilComercial). */
+  token: string;
+  /** El writtenAt de la narrativa guardada al empezar, o null si no había perfil. */
+  narrativeWrittenAt: string | null;
+}
+
+/**
+ * Toma la marca de «recalculando» del creador, o lanza recalc_in_progress
+ * si otra pestaña o persona ya la tiene (y no venció). Un solo UPDATE
+ * condicionado: dos recálculos a la vez se ordenan por el bloqueo de la
+ * fila y el segundo encuentra la marca del primero. Así dos «Recalcular»
+ * concurrentes no miran el tope diario los dos antes de gastar: solo uno
+ * llama al modelo.
+ *
+ * La marca vale lo que dure la transacción de quien llama: tiene que
+ * confirmarse ANTES de llamar al modelo (en las acciones, la primera
+ * transacción de recalcular).
+ */
+export async function claimPerfilRecalc(tx: WorkspaceTx, creatorId: string, now: Date = new Date()): Promise<RecalcClaim> {
+  if (!isUuid(creatorId)) throw new PerfilComercialError('creator_not_found', 'Ese creador no existe en este espacio de trabajo.');
+  const token = globalThis.crypto.randomUUID();
+  const { rows } = await tx.query<{ written_at: string | null }>(
+    `UPDATE creator_profile
+        SET media_kit = jsonb_set(coalesce(media_kit, '{}'::jsonb), ARRAY[$2::text],
+                                  jsonb_build_object('token', $3::text, 'startedAt', $4::timestamptz), true)
+      WHERE id = $1 AND deleted_at IS NULL
+        AND (media_kit -> $2::text IS NULL
+             OR (media_kit -> $2::text ->> 'startedAt')::timestamptz < $4::timestamptz - make_interval(secs => $5))
+      RETURNING media_kit -> $6::text -> 'narrative' ->> 'writtenAt' AS written_at`,
+    [creatorId, PERFIL_RECALCULO_KEY, token, now.toISOString(), PERFIL_RECALCULO_TTL_S, PERFIL_MEDIA_KIT_KEY],
+  );
+  if (rows[0]) return { token, narrativeWrittenAt: rows[0].written_at };
+  const { rows: existe } = await tx.query(`SELECT 1 FROM creator_profile WHERE id = $1 AND deleted_at IS NULL`, [creatorId]);
+  if (!existe[0]) throw new PerfilComercialError('creator_not_found', 'Ese creador no existe en este espacio de trabajo.');
+  throw new PerfilComercialError('recalc_in_progress', 'Ya hay un recálculo en curso para este creador.');
+}
+
+/** Suelta la marca, si sigue siendo la de `token` (una vencida y retomada por otro no se toca). */
+export async function releasePerfilRecalc(tx: WorkspaceTx, creatorId: string, token: string): Promise<void> {
+  if (!isUuid(creatorId)) return;
+  await tx.query(
+    `UPDATE creator_profile SET media_kit = media_kit - $2::text
+      WHERE id = $1 AND media_kit -> $2::text ->> 'token' = $3`,
+    [creatorId, PERFIL_RECALCULO_KEY, token],
+  );
+}
+
+export interface SavePerfilOptions {
+  /**
+   * El writtenAt de la narrativa que había al empezar el recálculo
+   * (RecalcClaim.narrativeWrittenAt). Si al guardar la narrativa vigente
+   * es una edición del creador con otra fecha, alguien la editó mientras
+   * tanto: no se pisa (stale_edit). undefined = no comprobar.
+   */
+  expectedWrittenAt?: string | null;
+  /** La marca de recálculo que se suelta al guardar, en la misma transacción. */
+  recalcToken?: string;
+  now?: Date;
+}
+
 /**
  * Guarda el perfil recién calculado con su narrativa. La narrativa se
  * vuelve a verificar aquí, en la frontera de la base: lo que no pasa no
- * se guarda. Las llamadas al modelo NO se registran aquí: van antes, en
- * su propia transacción (recordProfileLlmCalls), para que un guardado
- * que falla no se lleve la bitácora de lo que ya se pagó.
+ * se guarda. Lee la fila con FOR UPDATE para comparar la narrativa
+ * vigente con la que había al empezar (expectedWrittenAt): una edición a
+ * mano guardada en otra pestaña mientras se recalculaba no se pierde sin
+ * aviso, aunque la confirmación de «Recalcular» se haya pedido antes.
+ * Las llamadas al modelo NO se registran aquí: van antes, en su propia
+ * transacción (recordProfileLlmCalls), para que un guardado que falla no
+ * se lleve la bitácora de lo que ya se pagó.
  */
 export async function savePerfilComercial(
   tx: WorkspaceTx,
   perfil: ReturnType<typeof buildPerfil>,
   narrative: Pick<NarrativeOutcome, 'text' | 'source' | 'model' | 'fallback'>,
-  now: Date = new Date(),
+  opts: SavePerfilOptions = {},
 ): Promise<StoredPerfil> {
   const veredicto = verifyNarrative(narrative.text, perfil);
   if (!veredicto.ok) {
     throw new PerfilComercialError('invalid_narrative', 'La narrativa cita cifras que no están en el perfil.', veredicto.issues);
+  }
+  if (opts.expectedWrittenAt !== undefined) {
+    const { rows } = await tx.query<{ doc: unknown }>(
+      `SELECT media_kit -> $2::text AS doc FROM creator_profile WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+      [perfil.creatorId, PERFIL_MEDIA_KIT_KEY],
+    );
+    const vigente = parseStoredPerfil(rows[0]?.doc ?? null);
+    if (vigente && vigente.narrative.source === 'edited' && vigente.narrative.writtenAt !== opts.expectedWrittenAt) {
+      throw new PerfilComercialError('stale_edit', 'La narrativa se editó mientras se recalculaba.');
+    }
   }
   const doc: StoredPerfil = {
     version: perfil.version,
@@ -333,17 +421,18 @@ export async function savePerfilComercial(
       text: narrative.text,
       source: narrative.source,
       model: narrative.model,
-      writtenAt: now.toISOString(),
+      writtenAt: (opts.now ?? new Date()).toISOString(),
       fallback: narrative.fallback,
     },
   };
   await escribir(tx, perfil.creatorId, doc);
+  if (opts.recalcToken) await releasePerfilRecalc(tx, perfil.creatorId, opts.recalcToken);
   return doc;
 }
 
 /**
  * Una fila de outbound_llm_call por llamada, con propósito 'profile'
- * (0056) y su costo en USD. También las que el verificador rechazó: se
+ * (0060) y su costo en USD. También las que el verificador rechazó: se
  * pagaron, y el tope diario (outbound_health) tiene que verlas.
  */
 export async function recordProfileLlmCalls(tx: WorkspaceTx, calls: readonly LlmUsage[]): Promise<void> {
