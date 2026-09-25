@@ -732,8 +732,15 @@ cuentas existentes se migran borrando sus avisos por cuenta.
   `reply_optout:<canal>`), y la ficha de Ventas lo traduce. La columna
   `opted_out_reason` sigue siendo del texto de la persona (el «Motivo»
   que escribe al registrar la baja a mano) y de las bajas de 0026 y 0037.
-- **Un motivo pasajero caduca.** «No pudimos conectar con Instagram
-  ahora mismo» solo se enseña si es de las últimas 24 horas.
+- **Un motivo de un intento caduca.** «No pudimos conectar con Instagram
+  ahora mismo», «Cancelaste la autorización» o «Revisa el usuario y la
+  contraseña» solo se enseñan si son de las últimas 24 horas: el
+  keepalive borra el intento a los 7 días, y mientras tanto la fila «Sin
+  conectar» no los repite.
+- **No todo es un error.** Cancelar en Google va en texto neutro, en la
+  fila y en el aviso de arriba; «LinkedIn todavía no está disponible en
+  On Cue» (sin llaves) va en ámbar y dice lo mismo en el aviso y en la
+  fila. En rojo, solo lo que falló.
 - **El nombre de la cuenta es el de la persona.** Sale de
   `connection_params.im` de Unipile, nunca del `name` de la cuenta (con
   la hosted auth, Unipile guarda ahí el estado firmado que le mandamos).
