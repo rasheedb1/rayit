@@ -224,6 +224,14 @@ test('la demo embebida (sin worker) redacta en el proceso lo que pidió la perso
   ))[0]!;
   assert.deepEqual([g.stage, g.review_run], ['reviewed', 1]);
   assert.ok(g.judge_note);
+  // Ronda 5: el marcado de la IA guarda a la persona y a quien firma como variables, no con sus nombres.
+  const abierto = await compose();
+  assert.equal(abierto.draft?.touchId, touchId);
+  assert.match(abierto.draft!.body, /\{\{first_name\}\}/, abierto.draft!.body);
+  assert.match(abierto.draft!.body, /\{\{sender_name\}\}$/, abierto.draft!.body);
+  assert.doesNotMatch(abierto.draft!.body, /Camilo|Laura Méndez/, abierto.draft!.body);
+  assert.match(touch.body, /Camilo/, 'lo que sale sí lleva el nombre');
+  assert.ok(abierto.draft!.review, 'con la nota de la revisión: el marcado dice lo mismo que el toque');
   // Otra vez sin pedido: no hay nada que redactar.
   assert.deepEqual(
     await t.db.asWorker((tx) => redactRequestedInProcess(tx, { touchId, generator: createFakeGenerator(), judge: createFakeJudge(), now: new Date() })),
@@ -374,4 +382,21 @@ test('la base no guarda un marcado a mano sobre un correo que ya no se edita (pr
     ),
     'not_found',
   );
+});
+
+test('ronda 5: quién pidió el borrador lo dice la sesión (0060), no lo que mande quien llama', async () => {
+  const LAURA_USER = '00000002-0000-4000-8000-000000000002';
+  const AJENO = '00000612-0000-4000-8000-00000000abcd';
+  const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => savePitch(tx, { ...base, subject: null, body: '', intent: 'draft', now: new Date() }));
+  assert.ok(r.ok);
+  const touchId = r.ok ? r.touchId : '';
+  const quien = async () => (await rows<{ requested_by: string | null }>(`SELECT requested_by FROM outbound_generation WHERE touch_id = '${touchId}'`))[0]!.requested_by;
+  // Con sesión, manda la sesión aunque p_user diga otra cosa.
+  await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => requestPitchDraft(tx, { touchId, hint: null, instructions: null, userId: AJENO }), { userId: LAURA_USER });
+  assert.equal(await quien(), LAURA_USER);
+  // Sin sesión, p_user solo vale si es miembro del espacio.
+  await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => requestPitchDraft(tx, { touchId, hint: null, instructions: null, userId: AJENO }));
+  assert.equal(await quien(), null);
+  await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => requestPitchDraft(tx, { touchId, hint: null, instructions: null, userId: LAURA_USER }));
+  assert.equal(await quien(), LAURA_USER);
 });

@@ -8,6 +8,7 @@
  */
 import type { GenerationInput } from '@mc/core/outreach/generate';
 import type { HoldCode } from '@mc/core/outreach/messages';
+import { PERSON_VARIABLES, templateValuesFrom, templatizeKnownValues } from '@mc/core/outreach/render';
 import type { AttemptRecord, LlmUsage, QualityGateOutcome } from '@mc/core/outreach/quality-gate';
 import type { GenerationContext } from './generation-context.ts';
 import { WARMUP_TOUCHES_PER_STEP_TYPE } from './generation.ts';
@@ -96,6 +97,21 @@ export function reviewRowsFrom(attempts: readonly AttemptRecord[]): ReviewRow[] 
   }));
 }
 
+/**
+ * El marcado que guarda outbound_generation de lo que escribió la IA: con
+ * la persona que recibe y la que firma como variables ({{first_name}},
+ * {{full_name}}, {{sender_name}}), no con sus nombres escritos. Así el
+ * editor del pitch abre «Hola {{first_name}},» y, si la creadora cambia
+ * «Para», el saludo cambia con la persona (ronda 5). Lo que sale, ya
+ * rellenado, sigue en outbound_touch; rellenado con la persona del toque,
+ * el marcado dice exactamente lo mismo.
+ */
+export function personalizedMarkup(ctx: GenerationContext, marked: string | null): string | null {
+  if (marked === null) return null;
+  const values = templateValuesFrom({ contact: ctx.contact, creator: { senderName: ctx.creator.name } });
+  return templatizeKnownValues(marked, values, PERSON_VARIABLES);
+}
+
 /** Todo lo que se escribe del resultado: el estado, el texto sin marcas y el marcado, los claims. */
 export function generationFinalFrom(ctx: GenerationContext, outcome: QualityGateOutcome, model: string | null): GenerationFinal {
   const chosen = outcome.chosen;
@@ -104,8 +120,8 @@ export function generationFinalFrom(ctx: GenerationContext, outcome: QualityGate
     ...state,
     subject: chosen?.cleanSubject ?? null,
     body: chosen?.cleanBody ?? '',
-    subjectMarked: chosen ? chosen.subject : (ctx.generation?.subject ?? null),
-    bodyMarked: chosen?.body ?? null,
+    subjectMarked: chosen ? personalizedMarkup(ctx, chosen.subject) : (ctx.generation?.subject ?? null),
+    bodyMarked: personalizedMarkup(ctx, chosen?.body ?? null),
     claims: chosen?.claims ?? [],
     model,
     attempts: (ctx.generation?.attempts ?? 0) + outcome.attempts.filter((a) => a.attempt > 1).length,

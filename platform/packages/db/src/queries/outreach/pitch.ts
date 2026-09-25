@@ -90,6 +90,12 @@ export interface PitchComposer {
   /** Por negocio (su id) y sin negocio (''). */
   variants: Record<string, PitchVariant>;
   draft: PitchDraft | null;
+  /**
+   * enabled: el envío está encendido. hasEmailAccount: hay un correo
+   * conectado para enviar. hasPostalAddress: el pie lleva dirección postal
+   * o la política no la pide; es la misma regla con la que savePitch
+   * niega programar (no_postal_address), para que el editor lo diga antes.
+   */
   policy: { enabled: boolean; hasEmailAccount: boolean; hasPostalAddress: boolean };
   /** Las personas de la empresa a las que este espacio ya les envió algo: para ellas no es el primer correo. */
   contactedIds: string[];
@@ -151,7 +157,8 @@ export async function loadPitchComposer(tx: WorkspaceTx, companyId: string, loca
     : {};
   const policy = (
     await tx.query<{ enabled: boolean | null; postal: boolean | null; account: boolean }>(
-      `SELECT p.enabled, nullif(btrim(p.postal_address), '') IS NOT NULL AS postal,
+      `SELECT p.enabled,
+              coalesce(nullif(btrim(p.postal_address), '') IS NOT NULL OR NOT p.require_optout_link, false) AS postal,
               EXISTS (SELECT 1 FROM outreach_channel_account a WHERE a.channel = 'email' AND a.status = 'connected') AS account
          FROM (SELECT 1) x LEFT JOIN outbound_policy p ON p.workspace_id = current_workspace_id()`,
     )
