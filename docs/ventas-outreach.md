@@ -992,6 +992,53 @@ una sola pregunta»). El creador la edita en una línea de tiempo y la
 activa. Hay plantillas por nicho y por tipo de señal (lanzamiento,
 campaña activa, temporada).
 
+**Cómo quedó (VEN-13, 25 de septiembre).**
+
+- **El recomendador es puro** (`packages/core/src/outreach/recomendar.ts`,
+  con pruebas sin base ni red). Reglas, en orden: (1) la plantilla de su
+  tipo de señal y su nicho, luego la de su señal, luego una genérica,
+  nunca la de otra señal; (2) el canal de cada paso: el de la plantilla
+  si llega (la política lo deja, hay cuenta, aunque esté por reconectar,
+  y la persona tiene dirección ahí), si no el siguiente en un orden fijo
+  por tipo de paso (un directo prueba LinkedIn, Instagram y correo; un
+  gesto público, la otra red o una tarea a mano), y el primer correo
+  siempre abre el hilo; (3) la guía de la plantilla si el paso no cambió,
+  una compuesta con ángulo, canal y señal si cambió, y la divulgación del
+  brief en el cierre. Lo que decide va en códigos (`ProposalNote`) que la
+  pantalla traduce.
+- **El modelo solo redacta la guía**: `refineGuidance` recibe un
+  `GuidanceWriter` (el real, con `claude-sonnet-5` y salida estructurada,
+  vive en `apps/web/app/(app)/ventas/cadencias/_lib/redactor.ts`; las
+  pruebas usan uno falso), valida paso a paso y se queda con la regla
+  donde el texto no sirve. Sin `ANTHROPIC_API_KEY`, o con el tope diario
+  gastado, no se llama. Cada llamada deja su fila en `outbound_llm_call`
+  (`recommend`) con el costo de `llmCostUsd`. Al modelo no le llega nada
+  de la persona a la que se escribe.
+- **Tipos de señal**: `signal_source.kind` → `ads`, `marketplace` y
+  `jobs` son campaña activa; `press`, lanzamiento; `season`, temporada;
+  `collab`, colaboración de un competidor (nunca se nombra); lo demás,
+  manual.
+- **Migración `0058_recomendador_cadencias.sql`** (0056 y 0057 quedan
+  para VEN-11 y VEN-12): `outbound_sequence.signal_id` (con su referencia
+  visible) y `proposal` (la propuesta en códigos), y siete plantillas:
+  lanzamiento, temporada, colaboración de un competidor, señal manual,
+  cocina con campaña activa, belleza con lanzamiento y fitness con
+  temporada. La colaboración, la manual y la de fitness caben en la
+  política por defecto (cuatro mensajes, tres días); la pantalla avisa de
+  lo que no cabe en las demás (§8, pregunta 8).
+- **Consultas** en `@mc/db/queries/cadencias`; **pantallas** en
+  `/ventas/cadencias` (señales con «Proponer cadencia», lista con estado,
+  personas dentro y respuesta, arranque desde plantilla) y
+  `/ventas/cadencias/[id]` (resumen «Día 0: … →», por qué la propuesta,
+  línea de tiempo editable con arrastre o Subir/Bajar, «Proponer otra
+  vez» para otra persona y enrolar desde un negocio). «Activar» enrola a
+  la persona para la que se propuso: son los dos clics.
+- **La regla de la edición**: con alguien enrolado, sus toques ya tienen
+  día y canal, así que día, canal, orden y número de pasos se bloquean
+  (`has_enrollments`) y se ofrece duplicar; guía, ángulo, texto y hora sí
+  se cambian, para quien entre después. Reordenar mueve los mensajes y
+  deja los días en su puesto, como Lemlist.
+
 ### 5.6 La puerta de calidad de cada mensaje
 
 Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
