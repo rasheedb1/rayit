@@ -38,7 +38,9 @@
  * Lo que NO es baja, con sus pruebas: «no me enviaste el media kit»
  * (pretérito), «¿no me contactas el lunes?» (pregunta), «no me mandes el
  * contrato todavía» (un objeto concreto), «remove me from the CC», «no
- * estoy interesada ahora» (un «ahora no»: enfriamiento, VEN-14).
+ * estoy interesada ahora» (un «ahora no»: enfriamiento, VEN-14), «darme
+ * de baja del newsletter pero seguir hablando contigo» (la baja de otra
+ * cosa).
  */
 
 export interface OptOutRule {
@@ -66,11 +68,28 @@ const ES_CONTACT_SUBJ = '(escriba[ns]?|contacte[ns]?|envie[ns]?|mande[ns]?)';
 const ES_TAIL = '(\\s+(mas|nunca|nada|otra\\s+vez|de\\s+nuevo)\\b|\\s*(,?\\s*(por\\s+favor|porfa|gracias))?\\s*([.!;,]|$))';
 const EN_TAIL = '(\\s+(again|anymore|any\\s+more|ever|further|in\\s+the\\s+future)\\b|\\s*(,?\\s*(please|thanks|thank\\s+you))?\\s*([.!;,]|$))';
 
+/**
+ * «De baja» de QUÉ (r2): si sigue «de/del <algo>», ese algo tiene que ser
+ * lo nuestro (la lista, la base, los correos, todo). «Darme de baja del
+ * newsletter pero seguir hablando contigo» no es una baja de la cadencia;
+ * «denme de baja», «de baja de su lista» y «de baja de todo», sí.
+ */
+const ES_BAJA_DE_LO_NUESTRO =
+  '(?!\\s+de(l|\\s+(la|las|los|el|mi|su|tu|este|esta|estos|estas|nuestra|nuestro|vuestra))?\\s+' +
+  // Un determinante suelto tampoco cuenta como «otra cosa»: así la ruta sin
+  // él no deja pasar «de su lista» por la puerta de atrás.
+  '(?!(lista|listas|base|correos?|e-?mails?|mensajes|comunicaciones|envios?|todo|todos|todas|' +
+  'la|las|los|el|mi|su|sus|tu|tus|este|esta|estos|estas|nuestra|nuestro|vuestra|vuestras)\\b))';
+
 export const OPT_OUT_RULES: readonly OptOutRule[] = [
   // Español
   {
     id: 'es_dar_de_baja', lang: 'es',
-    re: /\b(dar(me|nos)|da(me|nos)|den(me|nos)|de(me|nos))\s+de\s+baja\b|\b(por\s+)?favor,?\s+(dar|den)\s+de\s+baja\b|\b(quiero|queremos|deseo|deseamos)\s+(dar(me|nos)?\s+de\s+baja|la\s+baja)\b/,
+    re: new RegExp(
+      `\\b(dar(me|nos)|da(me|nos)|den(me|nos)|de(me|nos))\\s+de\\s+baja\\b${ES_BAJA_DE_LO_NUESTRO}` +
+        `|\\b(por\\s+)?favor,?\\s+(dar|den)\\s+de\\s+baja\\b${ES_BAJA_DE_LO_NUESTRO}` +
+        `|\\b(quiero|queremos|deseo|deseamos)\\s+(dar(me|nos)?\\s+de\\s+baja|la\\s+baja)\\b${ES_BAJA_DE_LO_NUESTRO}`,
+    ),
     // (r4) La baja de una palabra, como «Unsubscribe» en inglés: «Baja», «BAJA»,
     // «Dar de baja», «Dar de baja por favor». Solo si es la línea entera.
     head: /^\s*(por\s+favor\s*,?\s*)?(dar(me|nos)?\s+de\s+)?baja(\s*,?\s*por\s+favor)?\s*[.!]*\s*$/m,

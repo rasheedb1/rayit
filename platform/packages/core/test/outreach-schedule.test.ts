@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addBusinessDays, clampToWindow, companyGapSlot, paceSlot, isInsideWindow, nextBusinessSlot, nextRetryAt, nextWindowSlot, parseClock, planSteps,
-  retryDelayMs, seededUnit, shiftFollowingSteps, spreadSeconds, stepClockSeconds, zonedInstant, zonedParts,
+  retryDelayMs, seededUnit, shiftFollowingSteps, spreadSeconds, stepClock, stepClockSeconds, zonedInstant, zonedParts,
   MAX_SEND_ATTEMPTS, RETRY_BASE_MS, RETRY_MAX_MS, type PlanStep,
 } from '../src/outreach/schedule.ts';
 
@@ -52,13 +52,42 @@ test('la dispersión es determinista y cae en su rango', () => {
   assert.equal(spreadSeconds('x', 0), 0);
 });
 
-test('la ventana encierra la hora: antes va al inicio, después da la vuelta', () => {
+test('la ventana encierra la hora sin dar la vuelta: antes y después del cierre, la apertura', () => {
   assert.equal(clampToWindow(parseClock('07:00'), W), parseClock('09:00'));
   assert.equal(clampToWindow(parseClock('10:15'), W), parseClock('10:15'));
-  assert.equal(clampToWindow(parseClock('17:20'), W), parseClock('09:20'));
+  assert.equal(clampToWindow(parseClock('17:20'), W), parseClock('09:00'));
   assert.throws(() => clampToWindow(0, { start: '17:00', end: '09:00' }), RangeError);
+});
+
+test('la dispersión de un paso va hacia delante y se queda en su día (r2): 16:30 con 40 minutos sale entre 16:30 y 17:00', () => {
+  for (let i = 0; i < 200; i++) {
+    const c = stepClock({ id: `p${i}`, scheduledTime: '16:30' }, { seed: `e${i}`, window: W, spreadMinutes: 40 });
+    assert.equal(c.nextDay, false);
+    assert.ok(c.seconds >= parseClock('16:30') && c.seconds < parseClock('17:00'), `fuera de [16:30, 17:00): ${c.seconds}`);
+  }
   const s = stepClockSeconds({ id: 'p', scheduledTime: '16:50' }, { seed: 'e', window: W, spreadMinutes: 40 });
-  assert.ok(s >= parseClock('09:00') && s < parseClock('17:00'));
+  assert.ok(s >= parseClock('16:50') && s < parseClock('17:00'));
+  // Un paso de las 17:30 no cabe ese día: al siguiente hábil desde la apertura.
+  const tarde = stepClock({ id: 'p', scheduledTime: '17:30' }, { seed: 'e', window: W, spreadMinutes: 40 });
+  assert.equal(tarde.nextDay, true);
+  assert.ok(tarde.seconds >= parseClock('09:00') && tarde.seconds < parseClock('09:40'));
+});
+
+test('planSteps: un paso de las 16:30 nunca sale antes que otro de las 10:00 del mismo día, ni fuera de la ventana', () => {
+  const pasos: PlanStep[] = [
+    { id: 'a', dayOffset: 0, orderInDay: 0, scheduledTime: '10:00' },
+    { id: 'b', dayOffset: 0, orderInDay: 1, scheduledTime: '16:30' },
+    { id: 'c', dayOffset: 0, orderInDay: 2, scheduledTime: '16:58' },
+    { id: 'd', dayOffset: 0, orderInDay: 3, scheduledTime: '17:30' },
+  ];
+  for (let i = 0; i < 50; i++) {
+    const plan = planSteps(pasos, { enrolledAt: new Date('2026-09-23T12:00:00Z'), timeZone: BOGOTA, seed: `enr-${i}`, window: W });
+    for (let k = 1; k < plan.length; k++) assert.ok(plan[k]!.at > plan[k - 1]!.at, `el paso ${k} no va detrás del anterior`);
+    for (const p of plan) assert.ok(isInsideWindow(p.at, BOGOTA, W), `${p.stepId} fuera de la ventana: ${p.at.toISOString()}`);
+    assert.equal(localDay(plan[0]!.at, BOGOTA), '2026-09-23');
+    assert.equal(localDay(plan[1]!.at, BOGOTA), '2026-09-23');
+    assert.equal(localDay(plan[3]!.at, BOGOTA), '2026-09-24', 'el de las 17:30 va al día hábil siguiente');
+  }
 });
 
 const TRES: PlanStep[] = [
@@ -96,13 +125,13 @@ test('planSteps: los instantes son estrictamente crecientes aunque dos pasos com
   assert.throws(() => planSteps(mismos, { enrolledAt: new Date(), timeZone: 'Bogota', seed: 'e' }), RangeError);
 });
 
-test('nextBusinessSlot: viernes 15:10 → lunes 15:10; fuera de la ventana, dentro de ella', () => {
+test('nextBusinessSlot: viernes 15:10 → lunes 15:10; pasado el cierre, a la apertura del siguiente hábil', () => {
   const lunes = nextBusinessSlot(new Date('2026-09-25T20:10:00Z'), BOGOTA, W);
   assert.equal(localDay(lunes, BOGOTA), '2026-09-28');
   assert.equal(localClock(lunes, BOGOTA), '15:10');
   const tarde = nextBusinessSlot(new Date('2026-09-23T23:30:00Z'), BOGOTA, W); // miércoles 18:30
   assert.equal(localDay(tarde, BOGOTA), '2026-09-24');
-  assert.equal(localClock(tarde, BOGOTA), '10:30');
+  assert.equal(localClock(tarde, BOGOTA), '09:00');
 });
 
 test('los reintentos esperan cada vez más, hasta un tope, y se acaban en el quinto', () => {
