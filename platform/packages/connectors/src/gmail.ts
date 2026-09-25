@@ -62,7 +62,12 @@ export const GMAIL_REFRESH_MARGIN_MS = 2 * 60 * 1000;
 export interface GoogleOAuthConfig {
   clientId: string;
   clientSecret: string;
-  redirectUri: string;
+  /**
+   * La vuelta de la pantalla de Google. Solo la usan authorizationUrl y
+   * exchangeCode (la web); refrescar y revocar no la mandan, así que el
+   * worker la deja en null (loadGoogleTokenConfig) y no depende de APP_URL.
+   */
+  redirectUri: string | null;
 }
 
 export const GOOGLE_ENV = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'] as const;
@@ -77,6 +82,19 @@ export function loadGoogleOAuthConfig(
   if (!redirectUri) missing.push('GOOGLE_REDIRECT_URI');
   if (missing.length > 0) return { missing };
   return { config: { clientId: env['GOOGLE_CLIENT_ID']!.trim(), clientSecret: env['GOOGLE_CLIENT_SECRET']!.trim(), redirectUri } };
+}
+
+/**
+ * La configuración del worker: refrescar y revocar un token solo piden el
+ * cliente y su secreto. Sin redirección, authorizationUrl y exchangeCode
+ * lanzan; el keepalive y la liberación nunca los llaman.
+ */
+export function loadGoogleTokenConfig(
+  env: Readonly<Record<string, string | undefined>>,
+): { config: GoogleOAuthConfig } | { missing: string[] } {
+  const missing: string[] = GOOGLE_ENV.filter((k) => !env[k]?.trim());
+  if (missing.length > 0) return { missing };
+  return { config: { clientId: env['GOOGLE_CLIENT_ID']!.trim(), clientSecret: env['GOOGLE_CLIENT_SECRET']!.trim(), redirectUri: null } };
 }
 
 // ---------------------------------------------------------------------
@@ -246,10 +264,16 @@ export class GoogleOAuth implements GoogleOAuthApi {
     this.#now = opts.now ?? (() => new Date());
   }
 
+  /** La conexión (authorizationUrl, exchangeCode) necesita la vuelta; el worker no la tiene. */
+  #redirectUri(): string {
+    if (!this.#cfg.redirectUri) throw new Error('GoogleOAuth sin redirectUri: la conexión se hace desde la web, con loadGoogleOAuthConfig.');
+    return this.#cfg.redirectUri;
+  }
+
   authorizationUrl(state: string, opts: AuthorizationUrlOptions = {}): string {
     const u = new URL(GOOGLE_AUTH_URL);
     u.searchParams.set('client_id', this.#cfg.clientId);
-    u.searchParams.set('redirect_uri', this.#cfg.redirectUri);
+    u.searchParams.set('redirect_uri', this.#redirectUri());
     u.searchParams.set('response_type', 'code');
     u.searchParams.set('scope', GMAIL_SCOPES.join(' '));
     u.searchParams.set('access_type', 'offline');
@@ -263,7 +287,7 @@ export class GoogleOAuth implements GoogleOAuthApi {
 
   async exchangeCode(code: string): Promise<{ tokens: OAuthTokens; scopesGranted: string[] }> {
     const body = await this.#token('google.oauth.token', {
-      grant_type: 'authorization_code', code, redirect_uri: this.#cfg.redirectUri, client_id: this.#cfg.clientId, client_secret: this.#cfg.clientSecret,
+      grant_type: 'authorization_code', code, redirect_uri: this.#redirectUri(), client_id: this.#cfg.clientId, client_secret: this.#cfg.clientSecret,
     }, [code], null);
     const tokens = this.#tokensFrom(body, undefined);
     if (!tokens.refreshToken) throw malformed('google.oauth.token', 'Google no devolvió un refresh token: vuelve a conectar la cuenta.');

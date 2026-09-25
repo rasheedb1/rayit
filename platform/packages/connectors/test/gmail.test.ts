@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  freshGoogleTokens, GmailClient, GMAIL_REFRESH_MARGIN_MS, GMAIL_SCOPES, GoogleOAuth, loadGoogleOAuthConfig, shortScope,
+  freshGoogleTokens, GmailClient, GMAIL_REFRESH_MARGIN_MS, GMAIL_SCOPES, GoogleOAuth, loadGoogleOAuthConfig, loadGoogleTokenConfig, shortScope,
 } from '../src/gmail.ts';
 import type { OutreachApiError } from '../src/outreach/errors.ts';
 import { FakeGmail } from '../src/outreach/fake-gmail.ts';
@@ -39,6 +39,19 @@ test('loadGoogleOAuthConfig: dice qué falta y deduce la redirección del origen
   assert.deepEqual(loadGoogleOAuthConfig({}, 'https://app.test'), { missing: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'] });
   const ok = loadGoogleOAuthConfig({ GOOGLE_CLIENT_ID: 'a', GOOGLE_CLIENT_SECRET: 'b' }, 'https://app.test/');
   assert.deepEqual(ok, { config: { clientId: 'a', clientSecret: 'b', redirectUri: 'https://app.test/api/oauth/google/callback' } });
+});
+
+test('loadGoogleTokenConfig: el worker refresca sin APP_URL ni GOOGLE_REDIRECT_URI, y no puede iniciar una conexión', async () => {
+  assert.deepEqual(loadGoogleTokenConfig({}), { missing: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'] });
+  const cfg = loadGoogleTokenConfig({ GOOGLE_CLIENT_ID: 'a', GOOGLE_CLIENT_SECRET: 'b' });
+  assert.ok('config' in cfg);
+  assert.equal(cfg.config.redirectUri, null);
+  const log = new InMemoryOutreachCallLog();
+  const fetch = new FixtureFetch(await loadFixtures('gmail', [['oauth.token.refresh', 'ok']]));
+  const oauth = new GoogleOAuth(cfg.config, { callLog: log, fetch: fetch.fetch, now: () => NOW, sleep: async () => {}, random: () => 0 });
+  const t = await oauth.refresh(TOKENS);
+  assert.equal(t.refreshToken, TOKENS.refreshToken, 'refrescar no necesita la redirección');
+  assert.throws(() => oauth.authorizationUrl('E'), /redirectUri/);
 });
 
 test('authorizationUrl: offline, consent, los tres alcances y el state', async () => {

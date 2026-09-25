@@ -47,7 +47,7 @@
  * interfaces: las pruebas la corren en pglite con FakeGmail y FakeUnipile.
  */
 import {
-  channelSigningKeys, freshGoogleTokens, GoogleOAuth, isOutreachApiError, keyringFromEnv, loadGoogleOAuthConfig, loadUnipileConfig,
+  channelSigningKeys, freshGoogleTokens, GoogleOAuth, isOutreachApiError, keyringFromEnv, loadGoogleTokenConfig, loadUnipileConfig,
   MasterKeyError, PostgresOutreachCallLog, registerAccountWebhooks, UnipileClient, UNIPILE_ACCOUNT_WEBHOOK_SOURCES, UNIPILE_WEBHOOK_SECRET_ENV,
   verifyChannelState, webhookSecretFingerprint, type GoogleOAuthApi, type OAuthTokens, type SecretStore, type UnipileApi,
 } from '@mc/connectors';
@@ -523,8 +523,11 @@ export const canalesKeepaliveJob = defineJob(
   CHANNELS_KEEPALIVE_JOB_ID,
   async (_payload, ctx) => {
     const callLog = new PostgresOutreachCallLog(ctx.db);
-    const googleCfg = loadGoogleOAuthConfig(ctx.env, ctx.env['APP_URL'] ?? null);
+    // Refrescar y revocar solo piden el cliente y su secreto: el worker no necesita APP_URL.
+    const googleCfg = loadGoogleTokenConfig(ctx.env);
     const unipileCfg = loadUnipileConfig(ctx.env);
+    if ('missing' in googleCfg) ctx.logger.warn('canales: Gmail sin configurar, no se refresca ningún buzón', { missing: googleCfg.missing });
+    if ('missing' in unipileCfg) ctx.logger.warn('canales: Unipile sin configurar, no se revisa ninguna cuenta de LinkedIn ni de Instagram', { missing: unipileCfg.missing });
     const r = await runChannelsKeepalive({
       db: ctx.db,
       secrets: ctx.secrets,

@@ -39,7 +39,7 @@
  * FakeUnipile.
  */
 import {
-  GoogleOAuth, isOutreachApiError, loadGoogleOAuthConfig, loadUnipileConfig, PostgresOutreachCallLog, TokenCipherError, UnipileClient,
+  GoogleOAuth, isOutreachApiError, loadGoogleTokenConfig, loadUnipileConfig, PostgresOutreachCallLog, TokenCipherError, UnipileClient,
   type GoogleOAuthApi, type SecretStore, type UnipileApi,
 } from '@mc/connectors';
 import type { Queryable } from '../../runner/db.ts';
@@ -244,7 +244,8 @@ export const canalesReleaseJob = defineJob(
   CHANNELS_RELEASE_JOB_ID,
   async (_payload, ctx) => {
     const callLog = new PostgresOutreachCallLog(ctx.db);
-    const googleCfg = loadGoogleOAuthConfig(ctx.env, ctx.env['APP_URL'] ?? null);
+    // Refrescar y revocar solo piden el cliente y su secreto: el worker no necesita APP_URL.
+    const googleCfg = loadGoogleTokenConfig(ctx.env);
     const unipileCfg = loadUnipileConfig(ctx.env);
     const r = await runChannelsRelease({
       db: ctx.db,
