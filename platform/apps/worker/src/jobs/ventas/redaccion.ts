@@ -57,7 +57,7 @@ export function generationInputFrom(ctx: GenerationContext): Omit<GenerationInpu
   return {
     lang: ctx.lang, stepType: ctx.stepType, dayOffset: ctx.dayOffset, angle: ctx.angle, guidance: ctx.guidance,
     creator: ctx.creator, company: ctx.company, contact: ctx.contact, signal: ctx.signal, brief: ctx.brief,
-    claims: ctx.claims, previousTouches: ctx.previousTouches, avoid: ctx.recentSent.slice(0, AVOID_IN_PROMPT),
+    claims: ctx.claims, previousTouches: ctx.previousTouches, avoid: ctx.avoid.slice(0, AVOID_IN_PROMPT),
     maxChars: ctx.rubric.maxChars, instructions: ctx.generation?.requestedInstructions ?? null,
   };
 }
@@ -111,6 +111,7 @@ export function reviewRowsFrom(attempts: readonly AttemptRecord[]): ReviewRow[] 
       subject: a.gates.subject,
       similarity: a.gates.similarity,
       ...(a.gates.chosenAttempt === undefined ? {} : { chosen_attempt: a.gates.chosenAttempt }),
+      ...(a.gates.interrupted ? { interrupted: true } : {}),
       ...(a.note ? { judge_note: a.note } : {}),
       claims: a.claims.map((c) => c.id),
       usage: { generate: usageOf(a.generation), judge: usageOf(a.judge) },

@@ -53,7 +53,7 @@ export interface GenerationInput {
   brief: { title: string; notes: string | null; requiresDisclosure: boolean } | null;
   claims: readonly SalesClaim[];
   previousTouches: readonly SentTouch[];
-  /** Mensajes enviados del mismo tipo a otras marcas: el nuevo no se les tiene que parecer (compuerta B). */
+  /** Mensajes del mismo tipo a otras personas, enviados o por salir: el nuevo no se les tiene que parecer (compuerta B). */
   avoid: readonly string[];
   /** El número de intento (1 el primero) y la pista de la regeneración. */
   attempt: number;
@@ -182,7 +182,7 @@ export function buildGenerationPrompt(input: GenerationInput, template: string):
       : ['- (ninguno: este es el primero)']),
   ];
   if (input.avoid.length > 0) {
-    lines.push('', 'No te parezcas a estos (enviados a otras marcas):', ...input.avoid.map((b) => `- ${b.replace(/\n+/g, ' ')}`));
+    lines.push('', 'No te parezcas a estos (a otras marcas, enviados o por salir):', ...input.avoid.map((b) => `- ${b.replace(/\n+/g, ' ')}`));
   }
   if (input.instructions?.trim()) {
     lines.push('', `Lo que pide el creador para este mensaje (orienta el tono y el foco; las reglas no cambian): ${input.instructions.trim().replace(/\n+/g, ' ')}`);

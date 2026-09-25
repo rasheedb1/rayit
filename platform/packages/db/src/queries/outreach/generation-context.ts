@@ -51,6 +51,12 @@ export interface GenerationContext {
    * del mismo lote para dos marcas del mismo nicho también se comparan.
    */
   recentSent: string[];
+  /**
+   * Los de recentSent que van a OTRAS personas: lo que el prompt enseña en
+   * «No te parezcas a estos». Lo dirigido a esta misma persona no entra:
+   * de ella el prompt solo ve lo que de verdad le llegó (previousTouches).
+   */
+  avoid: string[];
   /** Huellas de lo enviado a esta persona (compuerta C). */
   sentFingerprints: string[];
   /** Cuántos toques de este tipo ya aprobó una persona o salieron: el calentamiento. */
@@ -161,23 +167,25 @@ export async function loadGenerationContext(tx: WorkerSql, touchId: string): Pro
       )).rows.reverse()
     : [];
 
-  const recentSent = (
-    await tx.query<{ body: string }>(
-      `SELECT body FROM (
-         SELECT t.body, coalesce(t.sent_at, t.status_changed_at) AS at, t.id
+  const recent = (
+    await tx.query<{ body: string; contact_id: string | null }>(
+      `SELECT body, contact_id FROM (
+         SELECT t.body, t.contact_id, coalesce(t.sent_at, t.status_changed_at) AS at, t.id
            FROM outbound_touch t LEFT JOIN outbound_step st ON st.id = t.step_id
           WHERE t.workspace_id = $1::uuid AND t.id <> $3::uuid AND t.status IN ('sent','scheduled','processing','held')
             AND coalesce(btrim(t.body), '') <> '' AND ${TOUCH_STEP_TYPE_SQL('t', 'st')} = $2
          UNION ALL
          -- Lo que la IA ya redactó en este lote y espera al juez: todavía no está en el toque.
-         SELECT g.body_marked, coalesce(g.generated_at, g.updated_at), g.touch_id
+         SELECT g.body_marked, t.contact_id, coalesce(g.generated_at, g.updated_at), g.touch_id
            FROM outbound_generation g JOIN outbound_touch t ON t.id = g.touch_id LEFT JOIN outbound_step st ON st.id = t.step_id
           WHERE g.workspace_id = $1::uuid AND g.touch_id <> $3::uuid AND g.stage IN ('generated','reviewing')
             AND g.body_marked IS NOT NULL AND ${TOUCH_STEP_TYPE_SQL('t', 'st')} = $2) x
         ORDER BY at DESC NULLS LAST, id LIMIT ${SIMILARITY_WINDOW}`,
       [ws, m.step_type, touchId],
     )
-  ).rows.map((x) => x.body);
+  ).rows;
+  const recentSent = recent.map((x) => x.body);
+  const avoid = recent.filter((x) => m.contact_id === null || x.contact_id !== m.contact_id).map((x) => x.body);
 
   const counts = (
     await tx.query<{ approved: number }>(
@@ -217,6 +225,7 @@ export async function loadGenerationContext(tx: WorkerSql, touchId: string): Pro
     claims,
     previousTouches: sentToContact.map((x) => ({ stepType: x.step_type, channel: x.channel, sentAt: toDate(x.sent_at)!, subject: x.subject, body: x.body })),
     recentSent,
+    avoid,
     sentFingerprints: sentToContact.map((x) => bodyFingerprint(x.subject, x.body)),
     approvedOfStepType: counts.approved,
     generation: gen

@@ -64,7 +64,11 @@ export interface AttemptRecord {
   cleanSubject: string | null;
   cleanBody: string;
   claims: SalesClaim[];
-  gates: { preflight: { ok: boolean; issues: PreflightIssue[] }; subject: GateResult; similarity: SimilarityVerdict; chosenAttempt?: number };
+  gates: {
+    preflight: { ok: boolean; issues: PreflightIssue[] }; subject: GateResult; similarity: SimilarityVerdict; chosenAttempt?: number;
+    /** El juez se cortó a mitad (el job se abortó): el intento pasó el pre-vuelo pero no tiene nota. */
+    interrupted?: boolean;
+  };
   scores: RubricScores | null;
   total: number | null;
   hint: RegenerateHint | null;
@@ -203,7 +207,10 @@ export async function runQualityGate(input: QualityGateInput, deps: QualityGateD
         subject: pf.cleanSubject, body: pf.cleanBody, citedClaims: rec.claims, requiresDisclosure: input.requiresDisclosure,
       }, opts);
     } catch (e) {
-      if (deps.signal?.aborted) return aborted(attempts);
+      if (deps.signal?.aborted) {
+        rec.gates.interrupted = true;
+        return aborted(attempts);
+      }
       if (!(e instanceof LlmOutputError)) throw e;
       if (e.usage) await deps.recordLlmCall({ purpose: 'judge', ...e.usage });
       lastReason = { code: 'llm_error', detail: e.stopReason ?? 'invalid_output' };

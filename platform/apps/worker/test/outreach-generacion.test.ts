@@ -46,6 +46,8 @@ const VALENTINA_CAFE_ALMA = '00000002-0000-4000-8000-0000000c0003';
 /** Una persona que el seed no tiene: se crea en la prueba de la baja. */
 const PEDRO_VITALE = '00000612-0000-4000-8000-0000000c0e01';
 const DANIEL_SABORES = '00000002-0000-4000-8000-0000000c0008';
+/** Otra persona que el seed no tiene: pulsa el enlace de baja de este espacio. */
+const MARTA_VITALE = '00000612-0000-4000-8000-0000000c0e02';
 const SOFIA_VITALE = '00000002-0000-4000-8000-0000000c0011';
 const CAROLINA_OLLA = '00000002-0000-4000-8000-0000000c0012';
 const VITALE = '00000002-0000-4000-8000-0000000000e7';
@@ -104,6 +106,14 @@ const touch = (id: string) =>
 async function markSent(touchId: string, address: string): Promise<void> {
   await db.execAsSuperuser(
     `UPDATE outbound_touch SET status = 'sent', sent_at = now(), recipient_address = '${address}' WHERE id = '${touchId}'`,
+  );
+}
+
+/** Una persona nueva en una empresa del seed. */
+async function newContact(id: string, companyId: string, fullName: string, email: string): Promise<void> {
+  await db.execAsSuperuser(
+    `INSERT INTO contact (id, company_id, owner_workspace_id, full_name, role_title, email, source)
+     VALUES ('${id}', '${companyId}', '${WS}', '${fullName}', 'Mercadeo', '${email}', 'user_provided')`,
   );
 }
 
@@ -245,8 +255,10 @@ test('sin presupuesto no se llama al modelo; un toque que cambió durante la rev
   assert.deepEqual([sinPlata.generated, sinPlata.overBudget], [[], [t]]);
   assert.equal((await touch(t)).status, 'draft', 'el toque espera en borrador');
   await db.execAsSuperuser(`UPDATE outbound_policy SET llm_daily_cap_usd = 5 WHERE workspace_id = '${WS}'`);
-
-  assert.deepEqual((await runGenerate(motor, { writers: fake, now: later, workspaceId: WS })).generated, [t]);
+  // Sin presupuesto no es un fallo, pero tampoco se mira en cada corrida: espera media hora (0058).
+  assert.deepEqual((await runGenerate(motor, { writers: fake, now: later, workspaceId: WS })).generated, []);
+  const masTarde = () => new Date(later().getTime() + 31 * 60_000);
+  assert.deepEqual((await runGenerate(motor, { writers: fake, now: masTarde, workspaceId: WS })).generated, [t]);
   // Mientras el juez piensa, alguien cancela el toque: el resultado no se escribe.
   const judge = createFakeJudge();
   const writers: Writers = {
@@ -299,7 +311,8 @@ test('generar, editar a mano y revisar: el editor abre el borrador de la IA y lo
   assert.ok(![...r.scheduled, ...r.returned, ...r.held.map((h) => h.touchId)].includes(t), JSON.stringify(r));
   const after = await touch(t);
   assert.deepEqual([after.status, after.subject, after.body], ['draft', 'Lo escribo yo', 'Hola Sofía,\n\nEsto lo escribí yo, con mis palabras.\n\nLaura']);
-  assert.deepEqual(await generationRow(t), { stage: 'reviewed', outcome: 'manual', body_marked: 'Hola Sofía,\n\nEsto lo escribí yo, con mis palabras.\n\nLaura' });
+  // El marcado guarda las variables tal cual (0058): si cambia «Para», el saludo cambia con la persona.
+  assert.deepEqual(await generationRow(t), { stage: 'reviewed', outcome: 'manual', body_marked: humano });
 });
 
 test('si alguien escribe en el toque mientras el juez piensa, la compuerta C lo ve (edited_by_person) y no escribe encima', async () => {
@@ -341,6 +354,20 @@ test('no se redacta (ni se gasta) para quien tiene el correo rebotado o pidió l
   assert.equal(await generationRow(t), undefined);
   const calls = await db.asWorker(async (tx) => (await tx.query('SELECT 1 FROM outbound_llm_call WHERE touch_id = $1', [t])).rows);
   assert.equal(calls.length, 0);
+
+  // La baja de ESTE espacio (el enlace de baja de un correo, 0050) cuenta igual, en la cadencia y en lo que pide una persona.
+  await newContact(MARTA_VITALE, VITALE, 'Marta Gil', 'marta.gil@vitale.co');
+  const m = await enroll(MARTA_VITALE);
+  await db.execAsSuperuser(
+    `INSERT INTO outbound_workspace_optout (workspace_id, email, token_hash) VALUES ('${WS}', 'marta.gil@vitale.co', repeat('a', 64))`,
+  );
+  const g2 = await runGenerate(motor, { writers: fake, now: later, workspaceId: WS });
+  assert.ok(!g2.generated.includes(m));
+  assert.equal(await generationRow(m), undefined);
+  assert.deepEqual(
+    await db.withWorkspace(WS, (tx) => requestPitchDraft(tx, { touchId: m, hint: null, instructions: null, userId: null })),
+    { ok: false, code: 'opted_out' },
+  );
 });
 
 test('«Redactar con IA» desde el editor: el worker redacta con las instrucciones, lo juzga y el toque vuelve a la persona; «Más corto» ve la versión anterior', async () => {
