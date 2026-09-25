@@ -35,7 +35,7 @@
  * INSERT escriben current_workspace_id(), el dinero viaja como string.
  */
 import { isUuid, type WorkspaceTx } from '../client.ts';
-import { BRIEF_STATUSES } from '../schema/ventas.ts';
+import type { BRIEF_STATUSES } from '../schema/ventas.ts';
 
 export type BriefStatus = (typeof BRIEF_STATUSES)[number];
 
