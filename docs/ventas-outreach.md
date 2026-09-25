@@ -696,10 +696,51 @@ prueba en `apps/worker/test/outreach-motor-r5.test.ts`,
   con la máquina cargada, migrar en PGlite ya no tumba a todos los
   archivos.
 
+**Ronda 3 del motor, segunda vuelta (VEN-10, 24 de septiembre).** La
+revisión de la r2 rehecha, sobre lo de la ronda 5, con sus pruebas en
+`apps/worker/test/outreach-motor-r3b.test.ts`,
+`packages/db/test/outreach-aprobar.test.ts`,
+`packages/core/test/outreach-guardias.test.ts` y
+`packages/core/test/outreach-politica-secuencia.test.ts`:
+
+- **La baja no se pierde tras un saludo.** La firma se quita solo si
+  antes hay algo escrito y la línea es una marca de firma, el saludo con
+  un nombre, o el saludo solo seguido de un nombre o de nada: «Saludos,
+  por favor denme de baja», «Saludos.\nNo nos contacten más» y «Best,
+  please remove me from your list» son bajas. «De:»/«From:» abre la cita
+  solo si la siguen «Para:», «Asunto:» u otra cabecera. Si quitar la
+  firma no deja nada, se mira el texto con ella.
+- **La cuenta que envía.** La del último envío del enrolamiento por ese
+  canal (el hilo de Gmail y el chat de LinkedIn solo existen ahí; si
+  está caída, el mensaje espera); sin envío previo, cualquier cuenta
+  conectada del canal: se prueba el tope de cada una antes de
+  reprogramar. Antes, siempre la primera.
+- **Un intento sin confirmar tiene salida.** En la ficha, «Sí, salió»
+  lo anota como enviado (sin pruebas del proveedor, `blocked_reason =
+  'sent_confirmed_by_user'`) y la cadencia sigue; «No salió: enviarlo»
+  lo devuelve a la cola sin volver a preguntar, con su plaza devuelta.
+  Lo hace `outreach_resolve_unconfirmed` (0053, SECURITY DEFINER, en el
+  workspace de la transacción): las columnas del intento y el enlace de
+  baja siguen siendo del despachador.
+- **Lo que la política le hace a una secuencia se dice al enrolar,**
+  con los pasos concretos (`checkSequenceAgainstPolicy`, §5.1).
+- **Una dirección mal escrita** (un correo sin arroba) se salta
+  (`invalid_address`) antes del UPDATE en lote: una sola ficha ya no
+  tumba el reclamo de toda la plataforma. Traído de la r2 rehecha, con
+  la dispersión que no da la vuelta (un paso de las 16:30 sale antes del
+  cierre, nunca a las 09:00 del mismo día) y «darme de baja del
+  newsletter» que no es baja.
+- **La demo** ancla lo enviado a la marca a su propio reloj: cuenta la
+  misma historia cualquier día de la semana.
+
 **Renumeración al integrar.** Supabase (`schema_migrations`) tiene la
 serie de main hasta `0042_metricas_al_corte_desempate.sql`. Las de esta
-rama que chocan con ella pasan, en su orden, a 0043–0049; 0050, 0051 y
-0052 ya llevan su número final. Lo hace
+rama que chocan con ella pasan, en su orden, a 0043–0049; 0050, 0051,
+0052 y 0053 ya llevan su número final. Ojo: las rondas siguientes de
+VEN-9-canales traen `0041_canales_reclamar_al_soltar`,
+`0042_canales_identidad_y_rotacion` y `0043_contacto_codigo_de_baja`,
+que también chocan con main (y con 0043 de aquí): al integrarlas van
+detrás de 0049 y antes de 0050, y el script se amplía con ellas. Lo hace
 `platform/scripts/renumerar-outreach.sh` (git mv y la única referencia
 por nombre en las pruebas), después de mezclar main y antes de `make
 db.check`:
@@ -713,7 +754,7 @@ db.check`:
 | `0038_canales_outreach.sql` | `0047_canales_outreach.sql` |
 | `0039_callback_de_canales.sql` | `0048_callback_de_canales.sql` |
 | `0040_canales_liberar_y_limites.sql` | `0049_canales_liberar_y_limites.sql` |
-| `0050_entregabilidad.sql`, `0051_motor_cadencias.sql`, `0052_motor_ritmo.sql` | igual |
+| `0050_entregabilidad.sql`, `0051_motor_cadencias.sql`, `0052_motor_ritmo.sql`, `0053_motor_intento_sin_confirmar.sql` | igual |
 
 Comprobado en PGlite con esa mezcla exacta (las 41 de `origin/main` +
 las siete renumeradas + 0050–0052): se aplican las 51, el CHECK de
@@ -724,7 +765,7 @@ de límites trae el ritmo.
 falta):
 
 1. Mezclar main, `./scripts/renumerar-outreach.sh`, `make db.check`,
-   `make db.migrate` (hasta 0052) y el seed.
+   `make db.migrate` (hasta 0053) y el seed.
 2. `./scripts/supabase-admin.sh sql "GRANT mc_worker TO mc_migrator"`.
 3. Preparar el workspace de la demo como `--demo` (con `make db.sql
    ADMIN=1`): la dirección postal de la política, el LinkedIn de la demo
