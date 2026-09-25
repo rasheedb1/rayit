@@ -29,7 +29,7 @@
     "./demo-baja": "./src/demo-baja.ts",
     "./test/pglite": "./test/pglite.ts",
     "./test/membresia": "./test/membresia.ts",
-    "./queries/cadencias": "./src/queries/cadencias.ts"
+    "./queries/cadencias": "./src/queries/cadencias/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

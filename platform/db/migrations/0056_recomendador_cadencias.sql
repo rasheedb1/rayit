@@ -40,7 +40,28 @@
 --
 -- La guía de cada paso es contenido para el generador (VEN-12) y para
 -- quien revisa: dice con qué abrir, qué no mencionar y cómo cerrar. No
--- lleva huecos {{…}}: no se envía, se obedece.
+-- lleva huecos {{…}}: no se envía, se obedece. El cierre pide solo el
+-- activo que el paso declara (requires_asset): el media kit, o la
+-- cotización en las de temporada; el otro, «si lo tienes». Así quien
+-- revisa puede vigilar lo que la guía exige.
+--
+-- 3 · La guía del cierre de «Marca con campaña activa» (0037)
+--
+-- Pedía «el media kit y la cotización» con requires_asset = media_kit:
+-- la misma corrección que en las de aquí, con una política de
+-- actualización solo para quien migra (como la de alta de 0037 §7.3;
+-- mc_app sigue sin UPDATE sobre el catálogo).
+--
+-- 4 · Quién escribió la guía de cada paso, y para qué tipo de paso
+--
+-- outbound_step.guidance_source: la plantilla, las reglas del
+-- recomendador, el modelo o la persona. outbound_step.guidance_for_type:
+-- el tipo de paso para el que se escribió. Cuando un paso cambia de tipo
+-- (se reordena y pasa a abrir el hilo, se cambia de correo a LinkedIn),
+-- la guía que no escribió la persona se recompone para el tipo nuevo, y
+-- la suya se queda y la pantalla le pide revisarla (guidanceAfterRetype
+-- de @mc/core). En las filas anteriores, guidance_source NULL: no se
+-- sabe quién la escribió, y se trata como de la persona (no se pisa).
 -- =====================================================================
 
 
@@ -79,7 +100,7 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
 ('lanzamiento-de-producto',
  'Lanzamiento de producto',
  'Seis toques en diez días para una marca que acaba de lanzar: presencia, una idea para el lanzamiento en el primer '
- 'correo, encaje de audiencia, prueba de desempeño, prueba social y cierre con media kit y cotización.',
+ 'correo, encaje de audiencia, prueba de desempeño, prueba social y cierre con el media kit.',
  'launch', NULL,
  '[
    {"day_offset": 0, "order_in_day": 0, "step_type": "linkedin_comment", "channel": "linkedin", "angle_key": "presencia",
@@ -99,7 +120,7 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
     "guidance_es": "Cuenta el resultado medido de una campaña tuya con una marca del mismo sector. Solo campañas con resultado; no nombres a su competencia directa."},
    {"day_offset": 10, "order_in_day": 0, "step_type": "email", "channel": "email", "angle_key": "sintesis",
     "scheduled_time": "09:30", "generate_with_ai": true, "requires_asset": "media_kit",
-    "guidance_es": "Resume en tres líneas la idea para el lanzamiento, enlaza el media kit y la cotización y propón una fecha concreta para hablar. Sin urgencia falsa."}
+    "guidance_es": "Resume en tres líneas la idea para el lanzamiento, enlaza el media kit y, si tienes una cotización pública, su enlace, y propón una fecha concreta para hablar. Sin urgencia falsa."}
  ]'::jsonb),
 
 -- ---------------------------------------------------------------------
@@ -128,7 +149,7 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
     "guidance_es": "Responde en el mismo hilo con una campaña de temporada que hiciste y su resultado medido. Solo campañas con resultado. Cierra con una sola pregunta."},
    {"day_offset": 11, "order_in_day": 0, "step_type": "email", "channel": "email", "angle_key": "sintesis",
     "scheduled_time": "09:30", "generate_with_ai": true, "requires_asset": "quote",
-    "guidance_es": "Resume la idea y la fecha de publicación, enlaza la cotización y el media kit y propón una fecha para cerrar el calendario. Sin presión ni cupos que se acaban."}
+    "guidance_es": "Resume la idea y la fecha de publicación, enlaza la cotización y, si lo tienes a mano, el media kit, y propón una fecha para cerrar el calendario. Sin presión ni cupos que se acaban."}
  ]'::jsonb),
 
 -- ---------------------------------------------------------------------
@@ -155,7 +176,7 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
     "guidance_es": "Responde en el mismo hilo con una idea de video que solo funcione para su marca, no para la categoría. Sin cifras de audiencia. Cierra con una sola pregunta."},
    {"day_offset": 9, "order_in_day": 0, "step_type": "email", "channel": "email", "angle_key": "sintesis",
     "scheduled_time": "09:30", "generate_with_ai": true, "requires_asset": "media_kit",
-    "guidance_es": "Resume en tres líneas, enlaza el media kit y la cotización y propón una fecha concreta para hablar. Sin urgencia falsa ni menciones a la competencia."}
+    "guidance_es": "Resume en tres líneas, enlaza el media kit y, si tienes una cotización pública, su enlace, y propón una fecha concreta para hablar. Sin urgencia falsa ni menciones a la competencia."}
  ]'::jsonb),
 
 -- ---------------------------------------------------------------------
@@ -180,7 +201,7 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
     "guidance_es": "Responde en el mismo hilo con una idea de video concreta para uno de sus productos. Sin cifras de audiencia. Cierra con una sola pregunta."},
    {"day_offset": 9, "order_in_day": 0, "step_type": "email", "channel": "email", "angle_key": "sintesis",
     "scheduled_time": "09:30", "generate_with_ai": true, "requires_asset": "media_kit",
-    "guidance_es": "Resume en tres líneas, enlaza el media kit y la cotización y propón una fecha concreta para hablar. Sin urgencia falsa."}
+    "guidance_es": "Resume en tres líneas, enlaza el media kit y, si tienes una cotización pública, su enlace, y propón una fecha concreta para hablar. Sin urgencia falsa."}
  ]'::jsonb),
 
 -- ---------------------------------------------------------------------
@@ -213,7 +234,7 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
     "guidance_es": "Cuenta el resultado medido de una campaña tuya con otra marca de alimentos que no compita con ella. Solo campañas con resultado."},
    {"day_offset": 9, "order_in_day": 0, "step_type": "email", "channel": "email", "angle_key": "sintesis",
     "scheduled_time": "09:30", "generate_with_ai": true, "requires_asset": "media_kit",
-    "guidance_es": "Resume la receta propuesta en tres líneas, enlaza el media kit y la cotización y propón una fecha concreta para hablar. Sin urgencia falsa."}
+    "guidance_es": "Resume la receta propuesta en tres líneas, enlaza el media kit y, si tienes una cotización pública, su enlace, y propón una fecha concreta para hablar. Sin urgencia falsa."}
  ]'::jsonb),
 
 -- ---------------------------------------------------------------------
@@ -243,7 +264,7 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
     "guidance_es": "Responde en el mismo hilo con una idea de uso real del producto nuevo. No prometas resultados ni hables de antes y después. Cierra con una sola pregunta."},
    {"day_offset": 9, "order_in_day": 0, "step_type": "email", "channel": "email", "angle_key": "sintesis",
     "scheduled_time": "09:30", "generate_with_ai": true, "requires_asset": "media_kit",
-    "guidance_es": "Resume en tres líneas, enlaza el media kit y la cotización y propón una fecha concreta para hablar. Sin urgencia falsa."}
+    "guidance_es": "Resume en tres líneas, enlaza el media kit y, si tienes una cotización pública, su enlace, y propón una fecha concreta para hablar. Sin urgencia falsa."}
  ]'::jsonb),
 
 -- ---------------------------------------------------------------------
@@ -270,7 +291,7 @@ INSERT INTO outbound_sequence_template (slug, name_es, description_es, signal_ki
     "guidance_es": "Responde en el mismo hilo con un reto de varias semanas con su producto y la fecha en que empezaría. No prometas cambios físicos ni hables de salud. Cierra con una sola pregunta."},
    {"day_offset": 9, "order_in_day": 0, "step_type": "email", "channel": "email", "angle_key": "sintesis",
     "scheduled_time": "09:30", "generate_with_ai": true, "requires_asset": "quote",
-    "guidance_es": "Resume el reto en tres líneas, enlaza la cotización y el media kit y propón una fecha para cerrar el calendario. Sin presión."}
+    "guidance_es": "Resume el reto en tres líneas, enlaza la cotización y, si lo tienes a mano, el media kit, y propón una fecha para cerrar el calendario. Sin presión."}
  ]'::jsonb);
 
 
@@ -322,3 +343,40 @@ BEGIN
     RAISE EXCEPTION 'La plantilla % tiene dos pasos en el mismo día y orden', malo.slug;
   END IF;
 END $$;
+
+
+-- =====================================================================
+-- 3 · La guía del cierre de «Marca con campaña activa» (0037)
+-- =====================================================================
+CREATE POLICY outbound_sequence_template_migrate ON outbound_sequence_template FOR UPDATE TO CURRENT_USER
+  USING (current_workspace_id() IS NULL)
+  WITH CHECK (current_workspace_id() IS NULL);
+
+UPDATE outbound_sequence_template tpl
+   SET steps = (
+     SELECT jsonb_agg(
+              CASE WHEN p.paso->>'angle_key' = 'sintesis'
+                   THEN jsonb_set(p.paso, '{guidance_es}', to_jsonb(
+                          'Resume en tres líneas, enlaza el media kit y, si tienes una cotización pública, su enlace, '
+                          'y propón una fecha concreta para hablar. Sin urgencia falsa.'::text))
+                   ELSE p.paso END
+              ORDER BY p.n)
+       FROM jsonb_array_elements(tpl.steps) WITH ORDINALITY AS p(paso, n)),
+       description_es = replace(description_es, 'cierre con media kit y cotización', 'cierre con el media kit')
+ WHERE tpl.slug = 'marca-con-campana-activa';
+
+
+-- =====================================================================
+-- 4 · outbound_step: quién escribió la guía y para qué tipo de paso
+-- =====================================================================
+ALTER TABLE outbound_step
+  ADD COLUMN guidance_source   text CHECK (guidance_source IN ('template', 'rules', 'llm', 'person')),
+  ADD COLUMN guidance_for_type text CHECK (guidance_for_type IN ('email','email_reply','linkedin_connect','linkedin_message',
+                                                                 'linkedin_comment','linkedin_like','instagram_dm',
+                                                                 'instagram_comment','instagram_like','whatsapp_message',
+                                                                 'manual_task'));
+
+-- Sin relleno de las filas que ya existen: quien migra no salta la RLS
+-- (FORCE), así que un UPDATE aquí no las alcanzaría. NULL se lee como
+-- «escrita para el tipo que el paso tiene ahora» (@mc/db lo resuelve al
+-- cambiar el tipo, antes de cambiarlo).

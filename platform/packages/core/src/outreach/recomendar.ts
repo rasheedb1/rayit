@@ -307,6 +307,19 @@ export function composeGuidance(
   return `${lead} ${forbidden}${collab}${close}`;
 }
 
+/**
+ * La guía compuesta de un paso con la divulgación del brief en el cierre:
+ * la que la línea de tiempo pone al añadir un paso, al cambiarle el
+ * ángulo o al cambiarle el tipo (si no la escribió la persona).
+ */
+export function composeStepGuidance(
+  angleKey: string | null,
+  stepType: string,
+  ctx: { signalKind: RecommendSignalKind; locale?: GuidanceLocale; requiresDisclosure: boolean },
+): string {
+  return withDisclosure(composeGuidance(angleKey, stepType, ctx.signalKind, ctx.locale), angleKey, ctx.requiresDisclosure, ctx.locale);
+}
+
 function withDisclosure(guidance: string, angleKey: string | null, requires: boolean, locale: GuidanceLocale = 'es'): string {
   const disclosure = GUIDANCE_PHRASES[locale].disclosure;
   if (!requires || angleKey !== 'sintesis' || guidance.includes(disclosure)) return guidance;
@@ -453,9 +466,8 @@ export function guidanceAfterRetype(
   if (writtenFor === stepType) return { guidance, source, writtenFor };
   if (guidance === null) return { guidance: null, source, writtenFor: stepType };
   if (source === 'person' || source === null) return { guidance, source, writtenFor };
-  const composed = composeGuidance(current.angleKey, stepType, ctx.signalKind, ctx.locale);
   return {
-    guidance: withDisclosure(composed, current.angleKey, ctx.requiresDisclosure, ctx.locale),
+    guidance: composeStepGuidance(current.angleKey, stepType, ctx),
     source: 'rules',
     writtenFor: stepType,
   };
