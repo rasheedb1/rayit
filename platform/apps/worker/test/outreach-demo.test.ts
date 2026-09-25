@@ -5,22 +5,34 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemorySecretStore } from '@mc/connectors';
-import { ConfigError } from '../src/runner/config.ts';
+import { nextWindowSlot } from '@mc/core';
+import { emptyClaimReport, enableOutreach } from '@mc/db/queries/outreach';
 import { buildChannels, channelModeFrom, databaseUrlFrom, fakeAllowed, jobScope } from '../src/jobs/ventas/canales/index.ts';
-import { emptyClaimReport } from '@mc/db/queries/outreach';
-import { assertFakeAllowed, isLocalDatabase, parseArgs, resumenDespacho } from '../src/jobs/ventas/correr-motor.ts';
-import { canceledCount } from '../src/jobs/ventas/outbound.dispatch.ts';
+import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';
+import { assertFakeAllowed, isLocalDatabase, parseArgs, resumenDespacho, resumenPreparacion } from '../src/jobs/ventas/correr-motor.ts';
+import { DEMO_WORKSPACE_ID } from '../src/jobs/ventas/demo-ids.ts';
 import { resumenDemo, runDemoMotor } from '../src/jobs/ventas/demo-motor.ts';
+import { prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
+import { motorDbFromClient } from '../src/jobs/ventas/motor-db.ts';
+import { canceledCount, runDispatch } from '../src/jobs/ventas/outbound.dispatch.ts';
+import { ConfigError } from '../src/runner/config.ts';
 
 test('job:dispatch y job:replies leen sus argumentos y rechazan lo que no conocen', () => {
-  assert.deepEqual(parseArgs(['dispatch'], {}), { pasada: 'dispatch', canalFalso: false, demo: false, workspaceId: undefined });
+  assert.deepEqual(parseArgs(['dispatch'], {}), { pasada: 'dispatch', canalFalso: false, demo: false, workspaceId: undefined, accion: 'pasada' });
   // pnpm deja pasar el «--» que separa sus argumentos.
   assert.deepEqual(parseArgs(['dispatch', '--', '--canal-falso'], {}).canalFalso, true);
   assert.equal(parseArgs(['replies'], { OUTREACH_CHANNELS: 'fake' }).canalFalso, true);
   const ws = '00000002-0000-4000-8000-000000000001';
   assert.equal(parseArgs(['replies', '--workspace', ws], {}).workspaceId, ws);
   // La demo siempre va por el canal falso.
-  assert.deepEqual(parseArgs(['dispatch', '--demo'], {}), { pasada: 'dispatch', canalFalso: true, demo: true, workspaceId: undefined });
+  assert.deepEqual(parseArgs(['dispatch', '--demo'], {}), { pasada: 'dispatch', canalFalso: true, demo: true, workspaceId: undefined, accion: 'pasada' });
+  // Preparar y encender la demo: un comando por paso, solo con el workspace de la demo.
+  assert.equal(parseArgs(['dispatch', '--', '--preparar-demo', '--workspace', ws], {}).accion, 'preparar-demo');
+  assert.equal(parseArgs(['dispatch', '--encender', '--workspace', ws], {}).accion, 'encender');
+  assert.throws(() => parseArgs(['dispatch', '--encender', '--workspace', '0000000b-0000-4000-8000-000000000001'], {}), /solo toca el workspace de la demo/);
+  assert.throws(() => parseArgs(['dispatch', '--preparar-demo'], {}), ConfigError);
+  assert.throws(() => parseArgs(['dispatch', '--preparar-demo', '--encender', '--workspace', ws], {}), /uno por paso/);
+  assert.throws(() => parseArgs(['replies', '--encender', '--workspace', ws], {}), ConfigError);
 
   assert.throws(() => parseArgs([], {}), ConfigError);
   assert.throws(() => parseArgs(['enviar'], {}), ConfigError);
@@ -39,6 +51,8 @@ test('job:dispatch cuenta los cancelados como la metadata del job, y un argument
   assert.equal(canceledCount(r), 12);
   const texto = resumenDespacho(r);
   assert.match(texto, /Cancelados: 12 \(2 por correo rebotado, 5 por el tope de la marca\)\. Sin dirección: 4\./);
+  assert.match(texto, /^Despacho: 0 reclamados, 0 enviados, 0 a reintento, 0 fallidos\./, 'con su plural, sin «(s)»');
+  assert.match(resumenDespacho({ ...r, claim: { ...r.claim, claimed: 1 }, sent: ['t'] }), /^Despacho: 1 reclamado, 1 enviado,/);
   assert.throws(() => parseArgs(['dispatch', '--foo'], {}), /Argumento desconocido: --foo\. Uso: correr-motor\.ts dispatch\|replies/);
 });
 
@@ -115,10 +129,45 @@ test('demo con el seed: apagada no envía nada; encendida, la cadencia de tres c
   assert.equal(segundo.threadRef, correos.find((m) => m.recipient === segundo.recipient)!.threadRef, 'en el mismo hilo');
 
   const texto = resumenDemo(r);
-  assert.match(texto, /apagada\): 0 reclamado\(s\), 0 enviado\(s\)/);
+  assert.match(texto, /apagada\): 0 reclamados, 0 enviados/);
   assert.match(texto, /1 esperando la separación con la marca/);
-  assert.match(texto, /la creadora aprueba 6 mensaje\(s\)/);
+  assert.match(texto, /la creadora aprueba 6 mensajes/);
+  assert.doesNotMatch(texto, /\(s\)|\d{4}-\d{2}-\d{2}T/, 'ni «(s)» ni horas en ISO UTC');
+  assert.match(texto, /Reloj: \w+, \d+ de \w+, \d\d:\d\d \(hora estándar de Colombia\)/, 'la hora en la zona del workspace');
   assert.match(texto, /List-Unsubscribe: <https:\/\/oncue\.test\/baja\/\S+\/un-clic>/);
   assert.match(texto, /LinkedIn a \S+: mensaje de LinkedIn/);
   assert.doesNotMatch(texto, /sin asunto/);
+});
+
+test('--preparar-demo deja la demo lista con el reloj de verdad, sin SQL a mano: apagada no sale nada; con --encender sale el mensaje del seed', async () => {
+  const { createEmbeddedDb } = await import('@mc/db/embedded');
+  const db = await createEmbeddedDb();
+  try {
+    const motor = motorDbFromClient(db);
+    // El reloj de quien integra, dentro del horario de envío (en la prueba, la próxima apertura si ahora no lo es).
+    const clock = nextWindowSlot(new Date(), 'America/Bogota');
+    const prep = await motor.transaction((tx) => prepareDemoForDispatch(tx, DEMO_WORKSPACE_ID, clock));
+    assert.equal(prep.insideWindow, true);
+    assert.equal(prep.reconnected, 1, 'el LinkedIn de la demo');
+    assert.ok(prep.anchored > 0, 'lo enviado a Vitalé queda lo bastante atrás');
+    assert.match(resumenPreparacion(prep), /vence ya/);
+    assert.doesNotMatch(resumenPreparacion(prep), /fuera del horario/);
+
+    const fake = fakeChannels();
+    const pasada = () => runDispatch(motor, { senders: fake, appUrl: 'https://oncue.test', now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
+    const apagada = await pasada();
+    assert.match(resumenDespacho(apagada), /^Despacho: 0 reclamados, 0 enviados/);
+
+    const plan = await motor.transaction((tx) => enableOutreach(tx, DEMO_WORKSPACE_ID, clock));
+    assert.equal(plan.scheduled + plan.held, 0, 'preparar no canceló nada: no hay nada que devolver');
+    const encendida = await pasada();
+    assert.ok(encendida.sent.includes(prep.touchId), resumenDespacho(encendida));
+    const [fila] = (await db.asWorker((tx) =>
+      tx.query<{ status: string; provider_message_id: string | null }>(`SELECT status, provider_message_id FROM outbound_touch WHERE id = $1`, [prep.touchId]),
+    )).rows;
+    assert.equal(fila!.status, 'sent');
+    assert.match(fila!.provider_message_id ?? '', /^fake-linkedin-/);
+  } finally {
+    await db.close();
+  }
 });

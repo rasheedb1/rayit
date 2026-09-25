@@ -1,11 +1,19 @@
 /**
  * Una pasada del motor de cadencias, a mano y sin el runner (VEN-10):
  *
- *   pnpm --filter @mc/worker run job:dispatch                 despacha lo vencido por los canales reales
+ *   pnpm --filter @mc/worker run job:dispatch                     despacha lo vencido por los canales reales
  *   pnpm --filter @mc/worker run job:dispatch -- --canal-falso    …por el buzón en memoria: nada sale de la máquina
- *   pnpm --filter @mc/worker run job:replies                  lee los hilos abiertos y registra las respuestas
- *   … -- --workspace <uuid>                                   solo ese workspace
- *   pnpm --filter @mc/worker run job:dispatch -- --demo       el recorrido con el seed en Postgres embebido (demo-motor.ts)
+ *   pnpm --filter @mc/worker run job:replies                      lee los hilos abiertos y registra las respuestas
+ *   … -- --workspace <uuid>                                       solo ese workspace
+ *   pnpm --filter @mc/worker run job:dispatch -- --demo           el recorrido con el seed en Postgres embebido (demo-motor.ts)
+ *
+ * Y para demostrar el motor contra la base de verdad con el workspace de
+ * la demo (docs/ventas-outreach.md §5.2), un comando por paso:
+ *
+ *   … job:dispatch -- --preparar-demo --workspace <demo>   deja la demo como --demo, con el reloj de verdad y el envío apagado
+ *   … job:dispatch -- --canal-falso --workspace <demo>     apagado: no sale nada
+ *   … job:dispatch -- --encender --workspace <demo>        enciende el envío de la demo (enableOutreach)
+ *   … job:dispatch -- --canal-falso --workspace <demo>     encendido: sale el mensaje de LinkedIn del seed
  *
  * Usa la misma conexión que el worker (DATABASE_URL_DIRECT, sesión
  * estable y SET ROLE mc_worker) y las mismas funciones que los jobs
@@ -15,13 +23,11 @@
  *
  * Con `--canal-falso` (o OUTREACH_CHANNELS=fake) los envíos quedan
  * registrados en outbound_touch como enviados, con el id y el hilo del
- * buzón falso; sirve para ver el motor andar contra el seed sin llaves
- * de Google ni de Unipile. Como el toque queda enviado aunque nadie lo
- * haya recibido, el comando SE NIEGA (r2) salvo que la base sea local
- * (localhost) o que se pase `--workspace` con el workspace de la demo
- * (DEMO_WORKSPACE_IDS): contra Supabase, solo así:
- *
- *   pnpm --filter @mc/worker run job:dispatch -- --canal-falso --workspace 00000002-0000-4000-8000-000000000001
+ * buzón falso. Como el toque queda enviado aunque nadie lo haya
+ * recibido, el comando se niega fuera de lo que permite fakeAllowed (la
+ * misma regla del worker programado): contra Supabase, solo con
+ * `--workspace` de la demo. `--preparar-demo` y `--encender` solo existen
+ * para los workspaces de la demo.
  *
  * Requisito en Supabase: mc_migrator miembro de mc_worker (el mismo que
  * job:seguimientos). Si no lo es, termina con «permission denied to set
@@ -34,13 +40,17 @@ import { fileURLToPath } from 'node:url';
 import {
   EncryptedSecretStore, EnvSecretStore, InMemorySecretStore, keyringFromEnv, MasterKeyError, PostgresOutreachCallLog, TokenCipher, type SecretStore,
 } from '@mc/connectors';
+import { enableOutreach } from '@mc/db/queries/outreach';
 import { ConfigError, loadConfig, type WorkerConfig } from '../../runner/config.ts';
 import { PostgresDatabase } from '../../runner/db.ts';
 import { buildChannels, fakeAllowed, fakeRefusal } from './canales/index.ts';
+import { DEMO_WORKSPACE_IDS } from './demo-ids.ts';
 import { resumenDemo, runDemoMotor } from './demo-motor.ts';
+import { prepareDemoForDispatch, type DemoPreparation } from './demo-preparar.ts';
 import { motorDbFromJob } from './motor-db.ts';
 import { canceledCount, runDispatch, type DispatchReport } from './outbound.dispatch.ts';
 import { runReplies, type RepliesReport } from './outbound.replies.ts';
+import { cuenta, fechaHora } from './salida.ts';
 
 type Pasada = 'dispatch' | 'replies';
 
@@ -50,10 +60,13 @@ interface Opciones {
   /** Postgres embebido con el seed, canal falso: no toca ninguna base compartida. */
   demo: boolean;
   workspaceId: string | undefined;
+  /** En vez de una pasada: dejar la demo lista (--preparar-demo) o encender su envío (--encender). */
+  accion: 'pasada' | 'preparar-demo' | 'encender';
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const USO = 'Uso: correr-motor.ts dispatch|replies [--canal-falso] [--workspace <uuid>] [--demo]';
+export const USO =
+  'Uso: correr-motor.ts dispatch|replies [--canal-falso] [--workspace <uuid>] [--demo] [--preparar-demo | --encender] (las dos últimas, con --workspace de la demo)';
 
 /** Lee los argumentos. Lanza ConfigError con el uso si algo no cuadra. */
 export function parseArgs(argv: readonly string[], env: Readonly<Record<string, string | undefined>>): Opciones {
@@ -65,10 +78,13 @@ export function parseArgs(argv: readonly string[], env: Readonly<Record<string, 
   let workspaceId: string | undefined;
   let canalFalso = env['OUTREACH_CHANNELS'] === 'fake';
   let demo = false;
+  const acciones: Array<Opciones['accion']> = [];
   for (let i = 0; i < resto.length; i++) {
     const a = resto[i];
     if (a === '--canal-falso') canalFalso = true;
     else if (a === '--demo') demo = true;
+    else if (a === '--preparar-demo') acciones.push('preparar-demo');
+    else if (a === '--encender') acciones.push('encender');
     else if (a === '--workspace') {
       const v = resto[++i];
       if (!v || !UUID.test(v)) throw new ConfigError(`--workspace pide el uuid de un workspace. ${USO}`);
@@ -76,7 +92,15 @@ export function parseArgs(argv: readonly string[], env: Readonly<Record<string, 
     } else throw new ConfigError(`Argumento desconocido: ${a}. ${USO}`);
   }
   if (demo && pasada !== 'dispatch') throw new ConfigError('--demo solo existe para dispatch.');
-  return { pasada, canalFalso: canalFalso || demo, demo, workspaceId };
+  if (acciones.length > 1) throw new ConfigError('--preparar-demo y --encender van en comandos separados, uno por paso.');
+  const accion = acciones[0] ?? 'pasada';
+  if (accion !== 'pasada') {
+    if (pasada !== 'dispatch' || demo) throw new ConfigError(`--${accion} solo existe para dispatch, sin --demo.`);
+    if (!workspaceId || !(DEMO_WORKSPACE_IDS as readonly string[]).includes(workspaceId)) {
+      throw new ConfigError(`--${accion} solo toca el workspace de la demo: --workspace ${DEMO_WORKSPACE_IDS.join(' o ')}.`);
+    }
+  }
+  return { pasada, canalFalso: canalFalso || demo, demo, workspaceId, accion };
 }
 
 export { isLocalDatabase } from './canales/index.ts';
@@ -108,13 +132,14 @@ function secretStore(config: WorkerConfig, db: PostgresDatabase, canalFalso: boo
 
 export function resumenDespacho(r: DispatchReport): string {
   const lineas = [
-    `Despacho: ${r.claim.claimed} reclamado(s), ${r.sent.length} enviado(s), ${r.retried.length} a reintento, ${r.failed.length} fallido(s).`,
+    `Despacho: ${cuenta(r.claim.claimed, 'reclamado', 'reclamados')}, ${cuenta(r.sent.length, 'enviado', 'enviados')}, ` +
+      `${r.retried.length} a reintento, ${cuenta(r.failed.length, 'fallido', 'fallidos')}.`,
     `  Reprogramados por tope: ${r.claim.rescheduled.length}. Fuera de la ventana: ${r.claim.outsideWindow.length}. ` +
       `Esperando cuenta: ${r.claim.waitingAccount.length + r.waiting.length}. Retenidos: ${r.held.length}. Pospuestos: ${r.postponed.length}. ` +
       `Movidos por el ritmo (marca o cuenta): ${r.claim.paced.length}.`,
     `  Cancelados: ${canceledCount(r)} (${r.claim.canceledEmailInvalid} por correo rebotado, ${r.claim.canceledCompanyCap} por el tope de la marca). ` +
       `Sin dirección: ${r.claim.skippedNoAddress}. Dirección mal escrita: ${r.claim.skippedInvalidAddress}. ` +
-      `Zombis: ${r.zombies.failed} a fallido, ${r.zombies.released} devuelto(s) a la cola. Sin intentar, de vuelta: ${r.released.length}.`,
+      `Zombis: ${r.zombies.failed} a fallido, ${r.zombies.released} de vuelta a la cola. Sin intentar, de vuelta: ${r.released.length}.`,
   ];
   if (r.confirmed.length) lineas.push(`  Intentos ambiguos que sí habían salido (no se reenviaron): ${r.confirmed.length}.`);
   for (const w of r.warnings) lineas.push(`  · ${w.touchId} enviado con aviso: ${w.warning}`);
@@ -128,10 +153,31 @@ export function resumenDespacho(r: DispatchReport): string {
 
 export function resumenRespuestas(r: RepliesReport): string {
   const lineas = [
-    `Respuestas: ${r.threads} hilo(s) leído(s) en ${r.pages} página(s), ${r.inbound} mensaje(s) nuevo(s), ${r.optOuts} baja(s), ` +
-      `${r.automatic} automática(s), ${r.canceled} toque(s) cancelado(s).`,
+    `Respuestas: ${cuenta(r.threads, 'hilo leído', 'hilos leídos')} en ${cuenta(r.pages, 'página', 'páginas')}, ` +
+      `${cuenta(r.inbound, 'mensaje nuevo', 'mensajes nuevos')}, ${cuenta(r.optOuts, 'baja', 'bajas')}, ` +
+      `${cuenta(r.automatic, 'automática', 'automáticas')}, ${cuenta(r.canceled, 'toque cancelado', 'toques cancelados')}.`,
   ];
+  if (r.threadsRecovered) {
+    lineas.push(`  ${cuenta(r.threadsRecovered, 'hilo encontrado', 'hilos encontrados')} de envíos confirmados a mano; ` +
+      `${cuenta(r.released, 'respuesta vuelve', 'respuestas vuelven')} a la cola.`);
+  }
   for (const u of r.unreadable) lineas.push(`  · ${u.channel} ${u.threadRef} sin leer: ${u.error}`);
+  return `${lineas.join('\n')}\n`;
+}
+
+export function resumenPreparacion(p: DemoPreparation): string {
+  const lineas = [
+    'Demo lista para el despachador, con el envío apagado:',
+    `  · el mensaje ${p.touchId} vence ya (${fechaHora(p.dueAt, p.timeZone)});`,
+    `  · ${cuenta(p.anchored, 'mensaje anterior', 'mensajes anteriores')} a esa marca, corridos para cumplir los días entre mensajes;`,
+    `  · ${cuenta(p.reconnected, 'cuenta reconectada', 'cuentas reconectadas')} y la dirección postal del pie guardada.`,
+  ];
+  if (!p.insideWindow) {
+    lineas.push(
+      `  Ojo: ahora está fuera del horario de envío (${p.window.start}–${p.window.end}, de lunes a viernes, ${fechaHora(new Date(), p.timeZone)}). ` +
+        'El despachador no envía fuera de él: corre los pasos siguientes dentro del horario.',
+    );
+  }
   return `${lineas.join('\n')}\n`;
 }
 
@@ -175,14 +221,26 @@ async function main(): Promise<void> {
   }
 
   try {
+    const motor = motorDbFromJob(db);
+    const now = () => new Date();
+    const ws = opciones.workspaceId!;
+    if (opciones.accion === 'preparar-demo') {
+      process.stdout.write(resumenPreparacion(await motor.transaction((tx) => prepareDemoForDispatch(tx, ws, now()))));
+      return;
+    }
+    if (opciones.accion === 'encender') {
+      const plan = await motor.transaction((tx) => enableOutreach(tx, ws, now()));
+      process.stdout.write(
+        `Envío encendido en ${ws}. ${cuenta(plan.scheduled + plan.held, 'mensaje cancelado al apagar vuelve', 'mensajes cancelados al apagar vuelven')} a la cola.\n`,
+      );
+      return;
+    }
     const channels = buildChannels({
       env: process.env, secrets: secretStore(config, db, opciones.canalFalso), mode: opciones.canalFalso ? 'fake' : 'real',
       // Como el job: cada llamada a Gmail o a Unipile deja su fila en api_call_log.
       callLog: new PostgresOutreachCallLog(db),
     });
     if (channels.mode === 'fake') process.stdout.write('Canal falso: nada sale de la máquina.\n');
-    const motor = motorDbFromJob(db);
-    const now = () => new Date();
     if (opciones.pasada === 'dispatch') {
       const r = await runDispatch(motor, { senders: channels.senders, appUrl: channels.appUrl, now, workspaceId: opciones.workspaceId });
       process.stdout.write(resumenDespacho(r));

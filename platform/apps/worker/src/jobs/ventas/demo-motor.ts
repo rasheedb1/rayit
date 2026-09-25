@@ -32,10 +32,12 @@
  * secuencia es de revisión con pasos generados por IA, que el motor deja
  * en borrador para VEN-12.
  */
-import { DEFAULT_SEND_WINDOW, nextBusinessSlot, nextWindowSlot } from '@mc/core';
+import { nextBusinessSlot, nextWindowSlot } from '@mc/core';
 import { enableOutreach, enrollContacts, releaseHeldTouch } from '@mc/db/queries/outreach';
 import { fakeChannels } from './canales/fake.ts';
 import { DEMO_WORKSPACE_ID } from './demo-ids.ts';
+import { anchorBrandHistory, nextDemoTouch, readyDemoAccounts } from './demo-preparar.ts';
+import { cuenta, fechaHora } from './salida.ts';
 import { motorDbFromClient } from './motor-db.ts';
 import { runDispatch, type DispatchReport } from './outbound.dispatch.ts';
 import { runReplies, type RepliesReport } from './outbound.replies.ts';
@@ -74,6 +76,8 @@ export interface DemoMotorReport {
   sentTouches: DemoTouch[];
   /** La hora a la que se movió el reloj en la segunda pasada. */
   clock: Date;
+  /** La zona del workspace de la demo: las horas del resumen se dicen en ella. */
+  timeZone: string;
   /** Cuentas que la demo reconectó antes de la segunda pasada. */
   reconnected: number;
   /** La cadencia de tres correos. */
@@ -112,66 +116,27 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
     // El siguiente toque programado de la demo: el reloj de las dos
     // primeras pasadas se pone un minuto después, cuando ya está vencido.
     // Así lo único que cambia entre una y otra es el interruptor.
-    const next = await db.asWorker(async (tx) =>
-      (await tx.query<{ scheduled_for: Date; tz: string; w_start: string | null; w_end: string | null }>(
-        `SELECT t.scheduled_for, w.timezone AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end
-           FROM outbound_touch t JOIN workspace w ON w.id = t.workspace_id
-           LEFT JOIN outbound_policy p ON p.workspace_id = t.workspace_id
-          WHERE t.workspace_id = $1 AND t.status = 'scheduled'
-          ORDER BY t.scheduled_for LIMIT 1`,
-        [DEMO_WORKSPACE_ID],
-      )).rows[0] ?? null,
-    );
+    const next = await db.asWorker((tx) => nextDemoTouch(tx, DEMO_WORKSPACE_ID));
     if (!next) throw new Error('El seed no dejó ningún toque programado en el workspace de la demo.');
+    const window = next.window;
     // Un minuto después, y dentro de la ventana laboral: el despachador no
     // envía de noche ni en fin de semana (si mañana es sábado, el lunes).
-    const window = next.w_start && next.w_end ? { start: next.w_start, end: next.w_end } : DEFAULT_SEND_WINDOW;
-    const clock = nextWindowSlot(new Date(new Date(next.scheduled_for).getTime() + 60_000), next.tz, window);
-    // (r3) El seed fecha lo enviado contra now() de la base («ayer», «hace
-    // dos días»), y el reloj de la demo cae en el siguiente hueco hábil: un
-    // jueves por la noche lo lleva al lunes y los tres días con la marca ya
-    // se cumplían, así que la demo contaba otra historia según el día de la
-    // semana. Lo enviado a la marca de ese toque se ancla al reloj: lo
-    // último, exactamente un día antes. Así siempre se ven las tres pasadas
-    // (apagada, esperando la separación, enviada).
-    await db.asWorker((tx) =>
-      tx.query(
-        `WITH marca AS (
-           SELECT t.company_id FROM outbound_touch t
-            WHERE t.workspace_id = $1 AND t.status = 'scheduled' ORDER BY t.scheduled_for LIMIT 1),
-         corrimiento AS (
-           SELECT $2::timestamptz - interval '1 day' - max(t.sent_at) AS d FROM outbound_touch t, marca m
-            WHERE t.workspace_id = $1 AND t.company_id = m.company_id AND t.status = 'sent')
-         UPDATE outbound_touch t
-            SET sent_at = t.sent_at + c.d, claimed_at = t.claimed_at + c.d
-           FROM marca m, corrimiento c
-          WHERE t.workspace_id = $1 AND t.company_id = m.company_id AND t.status = 'sent' AND c.d IS NOT NULL`,
-        [DEMO_WORKSPACE_ID, clock.toISOString()],
-      ),
-    );
-
-    // La dirección postal del pie (sin ella el interruptor no se enciende)
-    // y la cuenta de LinkedIn reconectada.
-    const reconnected = await db.asWorker(async (tx) => {
-      await tx.query(
-        `UPDATE outbound_policy SET postal_address = COALESCE(postal_address, $2) WHERE workspace_id = $1`,
-        [DEMO_WORKSPACE_ID, 'Carrera 7 # 71-21, Bogotá, Colombia'],
-      );
-      return (await tx.query(
-        `UPDATE outreach_channel_account
-            SET status = 'connected', last_ok_at = now(), last_error = NULL, last_error_at = NULL
-          WHERE workspace_id = $1 AND status = 'needs_reconnect'
-          RETURNING id`,
-        [DEMO_WORKSPACE_ID],
-      )).rows.length;
-    });
+    const clock = nextWindowSlot(new Date(next.scheduledFor.getTime() + 60_000), next.timeZone, window);
+    // El seed fecha lo enviado contra now() de la base («ayer»), y el reloj
+    // de la demo cae en el siguiente hueco hábil: lo enviado a la marca de
+    // ese toque se ancla al reloj, lo último exactamente un día antes. Así
+    // siempre se ven las tres pasadas (apagada, esperando la separación,
+    // enviada), cualquier día de la semana. --preparar-demo usa la misma
+    // función con el reloj de verdad y la separación ya cumplida.
+    await db.asWorker((tx) => anchorBrandHistory(tx, DEMO_WORKSPACE_ID, next.companyId, new Date(clock.getTime() - 24 * 3600_000)));
+    const { reconnected } = await db.asWorker((tx) => readyDemoAccounts(tx, DEMO_WORKSPACE_ID));
 
     const off = await runDispatch(motor, { senders: fake, appUrl, now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
     await db.asWorker((tx) => enableOutreach(tx, DEMO_WORKSPACE_ID));
     const on = await runDispatch(motor, { senders: fake, appUrl, now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
     // (r5) La separación con la marca lo movió: el reloj va a esa hora.
     const waitUntil = on.claim.paced.reduce<Date | null>((m, x) => (!m || x.until > m ? x.until : m), null);
-    const laterClock = waitUntil ? nextWindowSlot(new Date(waitUntil.getTime() + 60_000), next.tz, window) : clock;
+    const laterClock = waitUntil ? nextWindowSlot(new Date(waitUntil.getTime() + 60_000), next.timeZone, window) : clock;
     const later = waitUntil
       ? await runDispatch(motor, { senders: fake, appUrl, now: () => laterClock, workspaceId: DEMO_WORKSPACE_ID })
       : on;
@@ -252,12 +217,12 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
     // escribe a la otra. Si la separación con la marca todavía no se cumple,
     // el reloj va a la hora que dice el despachador (como mucho, dos veces).
     let nextClock = firstClock;
-    for (let i = 0; i < 3; i++) nextClock = nextBusinessSlot(nextClock, next.tz, window);
+    for (let i = 0; i < 3; i++) nextClock = nextBusinessSlot(nextClock, next.timeZone, window);
     nextClock = new Date(nextClock.getTime() + 3 * 3600_000);
     let nextRun = await runDispatch(motor, { senders: fake, appUrl, now: () => nextClock, workspaceId: DEMO_WORKSPACE_ID });
     for (let i = 0; i < 2 && nextRun.sent.length === 0 && nextRun.claim.paced.length > 0; i++) {
       const until = nextRun.claim.paced.reduce((m, x) => (x.until > m ? x.until : m), nextClock);
-      const at = nextWindowSlot(new Date(until.getTime() + 60_000), next.tz, window);
+      const at = nextWindowSlot(new Date(until.getTime() + 60_000), next.timeZone, window);
       nextClock = at;
       nextRun = await runDispatch(motor, { senders: fake, appUrl, now: () => at, workspaceId: DEMO_WORKSPACE_ID });
     }
@@ -279,7 +244,7 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
       })),
     );
     return {
-      off, on, later, laterClock, sentTouches, clock, reconnected, delivered,
+      off, on, later, laterClock, sentTouches, clock, timeZone: next.timeZone, reconnected, delivered,
       cadence: { brands, approved, first, replies, next: nextRun, nextClock, statuses },
     };
   } finally {
@@ -289,17 +254,20 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
 
 const CHANNEL_NAME: Record<string, string> = { email: 'Correo', linkedin: 'LinkedIn', instagram_dm: 'Instagram' };
 
-/** Lo que sale en la terminal: la historia, paso por paso. */
+/** Lo que sale en la terminal: la historia, paso por paso, con las horas en la zona del workspace. */
 export function resumenDemo(r: DemoMotorReport): string {
+  const hora = (at: Date) => fechaHora(at, r.timeZone);
   const l: string[] = [
     'Demo del motor sobre Postgres embebido con las migraciones y los seeds del repositorio, canal falso (nada sale de la máquina).',
-    `Reloj en ${r.clock.toISOString()}: el toque del seed ya vencido, dentro de la ventana laboral; ${r.reconnected} cuenta(s) reconectada(s).`,
+    `Reloj: ${hora(r.clock)}. El mensaje del seed ya venció, dentro del horario de envío; ` +
+      `${cuenta(r.reconnected, 'cuenta reconectada', 'cuentas reconectadas')}.`,
     '',
-    `1. Política del seed (apagada): ${r.off.claim.claimed} reclamado(s), ${r.off.sent.length} enviado(s).`,
-    `2. Política encendida: ${r.on.claim.claimed} reclamado(s), ${r.on.sent.length} enviado(s), ` +
-      `${r.on.retried.length} a reintento, ${r.on.failed.length} fallido(s), ${r.on.held.length} retenido(s), ` +
+    `1. Política del seed (apagada): ${cuenta(r.off.claim.claimed, 'reclamado', 'reclamados')}, ${cuenta(r.off.sent.length, 'enviado', 'enviados')}.`,
+    `2. Política encendida: ${cuenta(r.on.claim.claimed, 'reclamado', 'reclamados')}, ${cuenta(r.on.sent.length, 'enviado', 'enviados')}, ` +
+      `${r.on.retried.length} a reintento, ${cuenta(r.on.failed.length, 'fallido', 'fallidos')}, ${cuenta(r.on.held.length, 'retenido', 'retenidos')}, ` +
       `${r.on.claim.paced.length} esperando la separación con la marca (tres días entre mensajes, la política del seed).`,
-    `3. ${r.laterClock.toISOString()}: se cumple la separación. ${r.later.claim.claimed} reclamado(s), ${r.later.sent.length} enviado(s).`,
+    `3. ${hora(r.laterClock)}: se cumple la separación. ${cuenta(r.later.claim.claimed, 'reclamado', 'reclamados')}, ` +
+      `${cuenta(r.later.sent.length, 'enviado', 'enviados')}.`,
   ];
   for (const t of r.sentTouches) {
     l.push(`   · outbound_touch ${t.id}: ${t.status}, provider_message_id ${t.provider_message_id}, hilo ${t.thread_ref}`);
@@ -308,7 +276,8 @@ export function resumenDemo(r: DemoMotorReport): string {
   l.push(
     '',
     `4. Cadencia de tres correos (días 0, 3 y 6), ${c.brands.map((b) => b.name).join(' y ')} enroladas ayer. ` +
-      `Revisión humana encendida: la creadora aprueba ${c.approved} mensaje(s); salen ${c.first.sent.length} correo(s).`,
+      `Revisión humana encendida: la creadora aprueba ${cuenta(c.approved, 'mensaje', 'mensajes')}; ` +
+      `${c.first.sent.length === 1 ? 'sale 1 correo' : `salen ${cuenta(c.first.sent.length, 'correo', 'correos')}`}.`,
   );
   const firstEmail = r.delivered.find((d) => d.channel === 'email');
   if (firstEmail) {
@@ -318,8 +287,9 @@ export function resumenDemo(r: DemoMotorReport): string {
   }
   l.push(
     '',
-    `5. ${c.brands[0]!.name} responde: ${c.replies.inbound} respuesta(s) leída(s), ${c.replies.canceled} toque(s) pendiente(s) cancelado(s).`,
-    `6. Tres días hábiles después (${c.nextClock.toISOString()}): ${c.next.sent.length} enviado(s), solo a quien no respondió.`,
+    `5. ${c.brands[0]!.name} responde: ${cuenta(c.replies.inbound, 'respuesta leída', 'respuestas leídas')}, ` +
+      `${cuenta(c.replies.canceled, 'mensaje pendiente cancelado', 'mensajes pendientes cancelados')}.`,
+    `6. Tres días hábiles después (${hora(c.nextClock)}): ${cuenta(c.next.sent.length, 'enviado', 'enviados')}, solo a quien no respondió.`,
   );
   for (const s of c.statuses) l.push(`   · ${s.name}: ${s.statuses.join(' → ')}`);
   l.push('', 'Todo lo que recibió el buzón falso:');
