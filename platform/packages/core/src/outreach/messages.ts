@@ -151,9 +151,10 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     no_postal_address: () => 'falta la dirección postal que va en el pie de los correos; agrégala en la política de envío',
     no_body: () => 'el mensaje no tiene texto',
     placeholders: (d) => `quedan huecos sin rellenar (${d})`,
-    reply_without_thread: () => 'es una respuesta en el hilo, pero el correo al que responde no salió',
-    unconfirmed_attempt: (d) =>
-      `no pudimos comprobar si el intento ${d} salió; mira tu carpeta de enviados y dinos si salió o no, para no mandarlo dos veces`,
+    reply_without_thread: () =>
+      'es una respuesta en el hilo, pero todavía no tenemos el hilo del correo al que responde (no salió, o lo confirmaste a mano y lo estamos buscando)',
+    unconfirmed_attempt: () =>
+      'no sabemos si salió porque el proveedor no lo confirmó; búscalo en tu carpeta de enviados (o en el chat) y dinos si salió, para no mandarlo dos veces',
     note_too_long: (d) => `la nota de la invitación de LinkedIn tiene ${d} caracteres y el máximo es ${LINKEDIN_INVITE_NOTE_MAX}`,
     needs_review: () => 'espera tu aprobación antes de salir (la revisión humana está encendida)',
     no_subject: () => 'es un correo nuevo y no tiene asunto; escríbelo antes de aprobarlo',
@@ -162,19 +163,26 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     no_postal_address: () => 'the postal address for the email footer is missing; add it in the sending policy',
     no_body: () => 'the message has no text',
     placeholders: (d) => `there are unfilled placeholders (${d})`,
-    reply_without_thread: () => "it's a reply in the thread, but the email it replies to was not sent",
-    unconfirmed_attempt: (d) =>
-      `we couldn't confirm whether attempt ${d} went out; check your sent folder and tell us whether it did, so it isn't sent twice`,
+    reply_without_thread: () =>
+      "it's a reply in the thread, but we don't have the thread of the email it replies to yet (it wasn't sent, or you confirmed it by hand and we're looking for it)",
+    unconfirmed_attempt: () =>
+      "we don't know whether it went out because the provider didn't confirm it; look for it in your sent folder (or the chat) and tell us whether it did, so it isn't sent twice",
     note_too_long: (d) => `the LinkedIn invitation note has ${d} characters and the limit is ${LINKEDIN_INVITE_NOTE_MAX}`,
     needs_review: () => 'it waits for your approval before going out (human review is on)',
     no_subject: () => "it's a new email with no subject; write one before approving it",
   },
 };
 
-/** held_reason en palabras, en el idioma del workspace. Lo que no es un código se devuelve tal cual. */
+/**
+ * held_reason en palabras, en el idioma del workspace, sin puntuación al
+ * final: quien lo pinta pone la suya («Retenido: ….», «quedó retenido:
+ * …. Lo que sigue…»). Lo que no es un código (un motivo que escribió una
+ * persona) se devuelve tal cual, sin su punto final, para no pintarlo con
+ * dos.
+ */
 export function holdReasonText(lang: NoticeLang, value: string): string {
   const r = parseHoldReason(value);
-  if (!r) return value;
+  if (!r) return value.trim().replace(/[.!?…]+$/u, '');
   return HOLD_REASON_TEXTS[lang][r.code](r.detail === undefined ? '' : String(r.detail));
 }
 

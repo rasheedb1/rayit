@@ -38,6 +38,14 @@ export interface CadenceTouch {
   statusChangedAt: Date;
   /** La última respuesta que llegó a este mensaje (outbound_message entrante): adonde lleva el aviso de respuesta. */
   reply: { body: string; occurredAt: Date } | null;
+  /** La cuenta que lo envía o lo envió: su nombre, o su dirección. */
+  accountName: string | null;
+  /**
+   * El día (local del workspace, 'YYYY-MM-DD') del intento que el
+   * proveedor no confirmó (unconfirmed_caps_on): con el asunto y la
+   * cuenta, lo que la persona necesita para buscarlo en sus enviados.
+   */
+  unconfirmedDay: string | null;
 }
 
 /** Cuántos mensajes enseña la ficha como mucho: primero los retenidos, después lo que viene y lo último que pasó. */
@@ -45,8 +53,9 @@ export const CADENCE_TOUCHES_LIMIT = 50;
 
 /**
  * Los mensajes de cadencia (con enrolamiento) de una empresa: primero los
- * retenidos, después lo que está por salir por su hora, y después lo que
- * ya pasó (enviado, cancelado, fallido), lo más reciente primero.
+ * retenidos (esperan a la persona), y después cada secuencia en el orden
+ * en que sus mensajes salen o salieron (por sent_at o scheduled_for, y el
+ * paso para desempatar), no mezclados por estado.
  */
 export async function listCompanyCadenceTouches(tx: WorkspaceTx, companyId: string): Promise<CadenceTouch[]> {
   assertIds('listCompanyCadenceTouches', [companyId]);
@@ -56,11 +65,12 @@ export async function listCompanyCadenceTouches(tx: WorkspaceTx, companyId: stri
       id: string; contact_name: string | null; channel: string; step_type: string | null; step_index: number | null;
       sequence_name: string | null; status: string; held_reason: string | null; blocked_reason: string | null;
       scheduled_for: unknown; sent_at: unknown; subject: string | null; body: string | null; status_changed_at: unknown;
-      reply_body: string | null; reply_at: unknown;
+      reply_body: string | null; reply_at: unknown; account_name: string | null; unconfirmed_day: string | null;
     }>(
       `SELECT t.id, c.full_name AS contact_name, t.channel, st.step_type, t.step_index, s.name AS sequence_name, t.status,
               t.held_reason, t.blocked_reason, t.scheduled_for, t.sent_at, t.subject, t.body, t.status_changed_at,
-              r.body AS reply_body, r.occurred_at AS reply_at
+              r.body AS reply_body, r.occurred_at AS reply_at,
+              coalesce(a.display_name, a.provider_account_id) AS account_name, t.unconfirmed_caps_on::text AS unconfirmed_day
          FROM outbound_touch t
          LEFT JOIN LATERAL (
                 SELECT m.body, m.occurred_at FROM outbound_message m
@@ -69,11 +79,11 @@ export async function listCompanyCadenceTouches(tx: WorkspaceTx, companyId: stri
          LEFT JOIN contact c ON c.id = t.contact_id
          LEFT JOIN outbound_step st ON st.id = t.step_id
          LEFT JOIN outbound_sequence s ON s.id = t.sequence_id
+         LEFT JOIN outreach_channel_account a ON a.id = t.channel_account_id
         WHERE t.company_id = $1::uuid AND t.enrollment_id IS NOT NULL
-        ORDER BY CASE WHEN t.status = 'held' THEN 0
-                      WHEN t.status IN ('draft', 'scheduled', 'processing') THEN 1 ELSE 2 END,
-                 CASE WHEN t.status IN ('held', 'draft', 'scheduled', 'processing') THEN t.scheduled_for END ASC NULLS LAST,
-                 coalesce(t.sent_at, t.status_changed_at) DESC, t.id
+        ORDER BY CASE WHEN t.status = 'held' THEN 0 ELSE 1 END,
+                 s.name, t.sequence_id, t.enrollment_id,
+                 coalesce(t.sent_at, t.scheduled_for) ASC NULLS LAST, t.step_index, t.id
         LIMIT $2`,
       [companyId, CADENCE_TOUCHES_LIMIT],
     )
@@ -94,6 +104,8 @@ export async function listCompanyCadenceTouches(tx: WorkspaceTx, companyId: stri
     body: textOrNull(fn, `$[${i}].body`, r.body) ?? '',
     statusChangedAt: date(fn, `$[${i}].status_changed_at`, r.status_changed_at),
     reply: r.reply_body === null ? null : { body: r.reply_body, occurredAt: date(fn, `$[${i}].reply_at`, r.reply_at) },
+    accountName: textOrNull(fn, `$[${i}].account_name`, r.account_name),
+    unconfirmedDay: textOrNull(fn, `$[${i}].unconfirmed_day`, r.unconfirmed_day),
   }));
 }
 

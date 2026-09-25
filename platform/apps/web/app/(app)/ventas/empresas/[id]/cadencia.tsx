@@ -29,8 +29,9 @@ const KIND: Record<string, PillKind> = {
 };
 
 /**
- * «Mensajes de la cadencia» (VEN-10 r5): los mensajes de las secuencias
- * para esta empresa, con los retenidos arriba, su motivo en palabras y
+ * «Mensajes de la cadencia» (VEN-10): los mensajes de las secuencias
+ * para esta empresa, con los retenidos arriba (después, cada secuencia en
+ * el orden en que salen sus mensajes), su motivo en palabras y
  * «Revisar y aprobar» (o, si no se supo si un intento salió, «Sí, salió» /
  * «No salió: enviarlo»). Es adonde llevan los avisos del motor («Un mensaje
  * a X espera tu revisión»); la bandeja completa de todas las empresas es
@@ -42,39 +43,51 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
   const pendientes = touches.filter((x) => x.status === "held").length;
   const persona = (x: CadenceTouch) => x.contactName ?? t.sinNombre;
 
+  const canal = (x: CadenceTouch) => t.canales[x.channel] ?? x.channel;
+  const cuando = (x: CadenceTouch) =>
+    x.sentAt ? t.salio(f.dateTime(x.sentAt.toISOString())) : x.scheduledFor ? t.sale(f.dateTime(x.scheduledFor.toISOString())) : "";
+
+  // Dos columnas, para que a 400 px se lea sin mover la tabla: quién, por
+  // dónde y cuándo en la primera (lo primero que busca la creadora), y el
+  // estado con lo que hay que hacer en la segunda.
   const columns: Column<CadenceTouch>[] = [
     {
       key: "persona",
       header: t.columnas.persona,
       render: (x) => (
         <CellMain
-          sub={x.sequenceName && x.stepIndex !== null ? t.paso(x.sequenceName, f.int(x.stepIndex)) : t.pasoSuelto}
+          sub={
+            <>
+              <span className="block tabular-nums">{t.linea(canal(x), cuando(x))}</span>
+              <span className="block">
+                {x.sequenceName && x.stepIndex !== null ? t.paso(x.sequenceName, f.int(x.stepIndex)) : t.pasoSuelto}
+              </span>
+            </>
+          }
         >
           {persona(x)}
         </CellMain>
       ),
     },
-    { key: "canal", header: t.columnas.canal, render: (x) => t.canales[x.channel] ?? x.channel },
     {
       key: "estado",
       header: t.columnas.estado,
-      render: (x) => (
-        <div className="grid min-w-0 gap-2">
-          <span>
-            <Pill kind={KIND[x.status] ?? "neutral"}>{t.estados[x.status] ?? x.status}</Pill>
-          </span>
-          {x.reply && (
-            <p className="text-xs text-ink-2">
-              {t.respondio(f.dateTime(x.reply.occurredAt.toISOString()))}{" "}
-              <q className="text-ink">{recortar(x.reply.body)}</q>
-            </p>
-          )}
-          {x.status === "held" && (
-            <>
-              {x.heldReason && <p className="text-xs text-ink-2">{t.porQue(holdReasonText(lang, x.heldReason))}</p>}
-              {parseHoldReason(x.heldReason)?.code === "unconfirmed_attempt" ? (
-                <ResolverIntento companyId={companyId} touchId={x.id} persona={persona(x)} />
-              ) : (
+      render: (x) => {
+        const sinConfirmar = x.status === "held" && parseHoldReason(x.heldReason)?.code === "unconfirmed_attempt";
+        return (
+          <div className="grid min-w-0 gap-2">
+            <span>
+              <Pill kind={KIND[x.status] ?? "neutral"}>{t.estados[x.status] ?? x.status}</Pill>
+            </span>
+            {x.reply && (
+              <p className="text-xs text-ink-2">
+                {t.respondio(f.dateTime(x.reply.occurredAt.toISOString()))}{" "}
+                <q className="text-ink">{recortar(x.reply.body)}</q>
+              </p>
+            )}
+            {x.status === "held" && !sinConfirmar && (
+              <>
+                {x.heldReason && <p className="text-xs text-ink-2">{t.porQue(holdReasonText(lang, x.heldReason))}</p>}
                 <AprobarMensaje
                   companyId={companyId}
                   touchId={x.id}
@@ -83,20 +96,23 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
                   subject={x.subject}
                   body={x.body}
                 />
-              )}
-            </>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "cuando",
-      header: t.columnas.cuando,
-      render: (x) => (
-        <span className="whitespace-nowrap tabular-nums text-ink-2">
-          {x.sentAt ? t.salio(f.dateTime(x.sentAt.toISOString())) : x.scheduledFor ? t.sale(f.dateTime(x.scheduledFor.toISOString())) : ""}
-        </span>
-      ),
+              </>
+            )}
+            {sinConfirmar && (
+              <ResolverIntento
+                companyId={companyId}
+                touchId={x.id}
+                persona={persona(x)}
+                canal={t.canalesEnFrase[x.channel] ?? x.channel}
+                subject={x.channel === "email" ? x.subject : null}
+                body={x.body}
+                cuenta={x.accountName}
+                dia={x.unconfirmedDay ? f.date(x.unconfirmedDay, "long") : null}
+              />
+            )}
+          </div>
+        );
+      },
     },
   ];
 

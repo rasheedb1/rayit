@@ -27,9 +27,19 @@ test('cada código tiene su frase en español y en inglés, sin nombres de colum
       assert.doesNotMatch(texto, /outbound_|postal_address|held_reason|_/, `${lang} ${code}: «${texto}»`);
     }
   }
-  assert.match(holdReasonText('es', 'unconfirmed_attempt:2'), /intento 2/);
+  assert.match(holdReasonText('es', 'unconfirmed_attempt:2'), /no sabemos si salió/);
+  assert.doesNotMatch(holdReasonText('es', 'unconfirmed_attempt:2'), /intento/, 'sin jerga interna');
   assert.match(holdReasonText('en', 'placeholders:TBD'), /placeholders \(TBD\)/);
   assert.equal(holdReasonText('en', 'revisar el tono'), 'revisar el tono', 'lo manual se muestra tal cual');
+  // Un motivo escrito a mano que ya termina en punto: sin él, para que «Retenido: ….» no lleve dos.
+  assert.equal(
+    holdReasonText('es', 'La marca pidió esperar a octubre. Revísalo antes de programarlo.'),
+    'La marca pidió esperar a octubre. Revísalo antes de programarlo',
+  );
+  assert.equal(holdReasonText('es', '¿Seguro?  '), '¿Seguro');
+  for (const code of HOLD_CODES) {
+    assert.doesNotMatch(holdReasonText('es', formatHoldReason({ code, detail: 1 })), /[.!?]$/, `${code} sin punto final`);
+  }
 });
 
 test('la nota de LinkedIn se mide en caracteres, no en unidades de UTF-16', () => {

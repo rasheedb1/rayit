@@ -147,8 +147,8 @@ test('un intento ambiguo que el canal no sabe comprobar se retiene para una pers
   [t] = await touches(c);
   assert.equal(t!.status, 'held');
   assert.equal(t!.held_reason, 'unconfirmed_attempt:1');
-  assert.match(holdReasonText('es', t!.held_reason!), /no pudimos comprobar si el intento 1 salió/);
-  assert.match(holdReasonText('en', t!.held_reason!), /couldn't confirm whether attempt 1 went out/);
+  assert.match(holdReasonText('es', t!.held_reason!), /no sabemos si salió porque el proveedor no lo confirmó/);
+  assert.match(holdReasonText('en', t!.held_reason!), /we don't know whether it went out/);
   assert.equal(fake.email.sent.length, 1, 'ni un envío de más');
 });
 

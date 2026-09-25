@@ -291,7 +291,7 @@ export const FICHA = {
     title: "Mensajes de la cadencia",
     caption: "Los mensajes de tus secuencias para esta empresa: primero los que esperan tu aprobación",
     meta: (pendientes: string) => `${pendientes} por aprobar`,
-    columnas: { persona: "Persona", canal: "Canal", estado: "Estado", cuando: "Cuándo" },
+    columnas: { persona: "Persona", estado: "Estado" },
     paso: (secuencia: string, n: string) => `${secuencia} · paso ${n}`,
     pasoSuelto: "Mensaje suelto",
     sinNombre: "Sin nombre",
@@ -306,8 +306,12 @@ export const FICHA = {
       canceled: "Cancelado",
     } as Record<string, string>,
     canales: { email: "Correo", linkedin: "LinkedIn", instagram_dm: "Instagram", whatsapp: "WhatsApp" } as Record<string, string>,
-    sale: (fecha: string) => `Sale ${fecha}`,
-    salio: (fecha: string) => `Salió ${fecha}`,
+    /** El canal dentro de una frase («el mensaje por correo»). */
+    canalesEnFrase: { email: "correo", linkedin: "LinkedIn", instagram_dm: "Instagram", whatsapp: "WhatsApp" } as Record<string, string>,
+    /** La línea de debajo del nombre: por dónde y cuándo («Correo · sale el 25 sep, 10:12»). */
+    linea: (canal: string, cuando: string) => (cuando ? `${canal} · ${cuando}` : canal),
+    sale: (fecha: string) => `sale el ${fecha}`,
+    salio: (fecha: string) => `salió el ${fecha}`,
     porQue: (motivo: string) => `Retenido: ${motivo}.`,
     respondio: (fecha: string) => `Respondió ${fecha}:`,
     vacio: {
@@ -334,17 +338,24 @@ export const FICHA = {
       no_postal_address: "Falta tu dirección postal: guárdala en la política de envío y vuelve a aprobarlo.",
     },
     /**
-     * (VEN-10 r3) Un mensaje retenido porque no se supo si un intento salió
-     * (unconfirmed_attempt): la persona lo mira en su carpeta de enviados y
-     * dice qué pasó. «Sí salió» lo registra como enviado y la cadencia
-     * sigue; «No salió» lo vuelve a poner en la cola.
+     * Un mensaje retenido porque el proveedor no confirmó si salió
+     * (unconfirmed_attempt): la persona lo busca con lo que se le enseña y
+     * dice qué pasó. «Sí, salió» lo registra como enviado y la cadencia
+     * sigue; «No salió» lo vuelve a poner en la cola, con confirmación.
      */
     intento: {
-      pregunta: "Míralo en tu carpeta de enviados (o en el chat) y dinos qué pasó.",
+      /** «No sabemos si el correo «Una idea» que enviamos el 24 de septiembre desde laura@… llegó…». */
+      pregunta: ({ canal, asunto, dia, cuenta }: { canal: string; asunto: string | null; dia: string | null; cuenta: string | null }) =>
+        `No sabemos si ${asunto ? `el correo «${asunto}»` : `el mensaje por ${canal}`} que enviamos` +
+        `${dia ? ` el ${dia}` : ""}${cuenta ? ` desde ${cuenta}` : ""} llegó: el proveedor no lo confirmó. ` +
+        "Búscalo en tu carpeta de enviados (o en el chat) y dinos qué pasó.",
       salio: "Sí, salió",
       salioLabel: (persona: string) => `Sí, el mensaje a ${persona} salió`,
       noSalio: "No salió: enviarlo",
-      noSalioLabel: (persona: string) => `No salió: enviar el mensaje a ${persona}`,
+      confirmarReenvio: "¿Enviarlo otra vez?",
+      consecuenciaReenvio: (persona: string) => `Si en realidad sí salió, a ${persona} le llegará dos veces.`,
+      siReenviar: "Sí, enviarlo",
+      cancelar: "Cancelar",
       registrado: "Anotado como enviado. La cadencia sigue con el paso siguiente.",
       reenviado: "Vuelve a la cola: sale en la próxima pasada, dentro de tu horario.",
       error: "No se pudo guardar. Inténtalo de nuevo.",
