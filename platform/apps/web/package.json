@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
     "@mc/connectors": "workspace:*",
     "@mc/core": "workspace:*",
     "@mc/db": "workspace:*",

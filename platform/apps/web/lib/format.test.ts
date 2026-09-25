@@ -227,6 +227,9 @@ describe("formatMultiple", () => {
     expect(formatMultiple(12)).toBe("12×");
     expect(formatMultiple(3.57, 1, { locale: "en-US" })).toBe("3.6×");
     expect(formatterFor({ locale: "es-MX", currency: "MXN", timezone: "UTC" }).multiple(2.25)).toBe("2.3×");
+    // Con decimales mínimos, 1 se escribe 1,0× para leerse junto a 1,2×.
+    expect(formatMultiple(1, 1, { minDigits: 1 })).toBe("1,0×");
+    expect(formatterFor({ locale: "es-CO", currency: "COP", timezone: "UTC" }).multiple(12, 1, 1)).toBe("12,0×");
   });
 });
 

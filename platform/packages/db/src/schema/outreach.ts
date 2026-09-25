@@ -84,7 +84,7 @@ export const RISK_TRIGGERS = [
 ] as const;
 export const REVIEW_DECISIONS = ['pass', 'regenerate', 'send_best', 'hold', 'reject'] as const;
 /** Para qué se llamó al modelo (outbound_llm_call). */
-export const LLM_CALL_PURPOSES = ['generate', 'judge', 'classify', 'recommend'] as const;
+export const LLM_CALL_PURPOSES = ['generate', 'judge', 'classify', 'recommend', 'profile'] as const;
 /**
  * Las columnas de outbound_touch que solo escribe el despachador
  * (mc_worker): las pruebas de que la plataforma envió el mensaje y a qué

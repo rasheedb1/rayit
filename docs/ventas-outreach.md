@@ -979,6 +979,141 @@ videos de la persona que va a montar sus redes». Se calcula al
 conectar las cuentas o al importar el CSV, y alimenta el generador y
 el recomendador.
 
+#### Cómo funciona hoy (VEN-11)
+
+- **Cálculo**: `buildPerfil` en `@mc/core/outreach/perfil` (puro) a
+  partir de las filas que lee `readPerfilInputs` en
+  `@mc/db/queries/perfil-comercial`. Cada cifra es un
+  `Claim { id, kind, key, params, value, unit, source: { table, id, field, rows?, url?, asOf? } }`:
+  una clave (`median`, `audience.gender`, `video.multiple`…) y sus
+  parámetros (red, segmento, corte, título), sin texto. La pantalla lo
+  escribe con su `messages.ts` y el locale del workspace; el prompt, con
+  `claimLabelEs`. `source.asOf` es la fecha de la lectura (día de la
+  demografía y de los seguidores, `computed_at` de la línea base, del
+  puntaje, del resultado y del tarifario). Las secciones solo llevan ids.
+- **Medianas y cortes**: la mediana de cada red sale de
+  `creator_baseline` al corte de 168 h (o el más largo que haya), y cada
+  una dice su corte. Los cinco mejores salen de TODO el historial con
+  puntaje (`scoredPosts`: los 1 000 más recientes con puntaje y, siempre,
+  los cinco de más «veces su mediana»), no solo de los 200 posts
+  recientes que se leen para formatos y tono: un breakout de hace años
+  entra. Se ordenan por
+  `post_score.views_vs_median`, que ya está normalizado contra la línea
+  base de SU corte (por eso es comparable entre cortes); cada video lleva
+  además su corte y la mediana contra la que se midió
+  (`post_score.baseline_id` → `baselineClaimId`), así «6× tu mediana»
+  se puede comprobar: views ≈ veces × esa mediana (probado con el seed).
+- **Por qué funcionó**: primero, cómo es el video (gancho, pieza, tipo y
+  duración frente a la típica de su red): es la explicación que siempre
+  se da. Después, solo si los datos la sostienen, lo que lo distingue:
+  `whyContrast` compara los OTROS videos con el mismo rasgo contra los
+  que no lo tienen, dejando fuera al video que se explica (si entrara,
+  un 6× en un grupo de dos pondría él solo la mediana del grupo y la
+  razón sería circular). Hace falta al menos tres videos a cada lado sin
+  contarlo (`WHY_MIN_GROUP`) y que el grupo rinda la mitad más
+  (`WHY_MIN_LIFT = 1,5`); de los ejes que pasan, se dice solo el de mayor
+  contraste (`WHY_MAX_REASONS = 1`). Las dos medianas son claims por
+  video (`porque-<video>-<eje>-<grupo>` y `…-resto`) con las filas que
+  las forman. Con el seed de Laura ningún rasgo alcanza, y la pantalla y
+  la plantilla describen el video sin inventarle una causa. Lo que se
+  lee de los captions sigue en `perfil-captions.ts`; si
+  `creator_post_board.hook_type` existe, gana.
+- **Guardado**: `creator_profile.media_kit → perfil_comercial`
+  (`StoredPerfil`, versión 3, con `computedAt`), escrito con
+  `jsonb_set` sin tocar las demás claves. Trae la portada de cada uno de
+  los cinco mejores (`post.cover_url`) y el índice de los posts que
+  forman algún agregado (`perfil.posts`, título y enlace). Enlaces y
+  portadas se sanean al calcular (`webUrlOrNull`: solo http(s);
+  `coverSrcOrNull`: solo https, o una de las portadas de la demo,
+  `/demo/portadas/<archivo>`; ninguna otra ruta de la web, para que una
+  portada sembrada por CSV no haga pedir `/auth/salir` ni otra ruta con
+  las cookies de quien mira, y ninguna http, que sería contenido mixto), porque `post.url` no tiene CHECK y la importación CSV
+  guarda lo que venga: un enlace sin esquema queda en null y el perfil se
+  guarda igual. `parseStoredPerfil` comprueba cada arreglo que la
+  pantalla recorre y que enlaces (también `source.url` de cada cifra) y
+  portadas tengan esa forma; un documento de otra versión, a medio
+  escribir o editado a mano se lee como «sin calcular».
+- **Un recálculo a la vez**: «Recalcular» toma una marca en
+  `media_kit → perfil_comercial_recalculo` (`claimPerfilRecalc`, un
+  UPDATE condicionado) en la misma transacción que lee las filas, y la
+  suelta al guardar. Un segundo «Recalcular» mientras tanto dice que ya
+  hay uno en curso y no llama al modelo, así dos pestañas no se pasan
+  del tope diario por una llamada cada una. Si Vercel corta la función,
+  la marca vence sola a los 90 s. La marca anota la narrativa que había:
+  si al guardar la vigente es una edición del creador con otra fecha
+  (alguien la editó mientras el modelo escribía), no se pisa
+  (`stale_edit`).
+- **Narrativa**: `@mc/core/outreach/narrativa`. El modelo recibe la
+  lista de claims y escribe `[claim:id]` en vez de cifras;
+  `verifyNarrative` rechaza un id que no está, cualquier dígito fuera
+  de una marca, cualquier cantidad en letras de una lista cerrada
+  («dos», «mil», «millones», «veintiún», «treintaitrés», «una veintena»,
+  «un par», «el doble», «la mitad», «por ciento»), los
+  verbos que multiplican («dupliqué», «cuadrupliqué», «doblé»), los
+  ordinales y puestos de ranking («la segunda», «la primera en…»,
+  «número uno», «top»), las proporciones sin cifra («la mayoría», «la
+  cuarta parte», «tres cuartos»), los numerales en inglés («two
+  million», «twice») y los signos % y × sueltos; y cualquier número
+  Unicode, no solo los dígitos («²», «⅔», «½»), salvo dentro de
+  términos del perfil (títulos, campañas,
+  tarifas, franjas de edad, frases de corte), y los huecos de la guardia
+  de VEN-10. Además, la palabra pegada a una marca tiene que ser lo que
+  la cifra mide (`unit_mismatch`): «[claim:mediana-tiktok] seguidores» se
+  rechaza porque es una mediana de views, aunque la cifra sea real; el
+  vocabulario de unidades es cerrado y no juzga lo que no conoce («mi
+  mediana», «de mis seguidores»). Las listas y el prompt de sistema van por idioma
+  (`CANTIDADES`, `UNIDADES`, `SISTEMA`: hoy solo `'es'`; añadir un idioma es añadir
+  sus datos), y la pantalla dice en qué idioma se redacta. Dos intentos con
+  claude-sonnet-5, de 25 s cada uno y sin reintentos del SDK (caben en
+  el `maxDuration` de 60 s de la página); el tope diario se consulta
+  antes de cada intento y cada llamada va a `outbound_llm_call` con
+  propósito `'profile'` (migración 0060) apenas responde. Si ninguno
+  pasa, sin llave o con el tope alcanzado, la plantilla determinista,
+  que cita la mediana de la red del mejor video y la de su corte. Los
+  países de la narrativa y del prompt se nombran en el idioma de la
+  narrativa, no en el locale del workspace (un workspace en-US no
+  escribe «vive en United States» en un párrafo en español). El
+  creador puede editarla sin ver ningún id: en el editor cada cifra es
+  una ficha legible con su valor, ⟦115,4 mil⟧, que al guardar vuelve a su
+  `[claim:id]` (`fichas.ts`); la vista previa corre el mismo verificador en
+  el cliente (`verifyNarrativeWith` con `verifierContext`, datos planos)
+  y subraya cada problema en su sitio (`narrativeIssueSpans`), con las
+  marcas desconocidas escritas como fichas ⟦…⟧ y no como `[claim:…]`, y al
+  guardar pasa la puerta del servidor. La plantilla dice el alcance en no
+  seguidores como lo que es, una mediana: «en un video típico».
+- **Pantalla**: `/ventas/perfil`, pestaña «Perfil comercial» de Ventas.
+  Cada cifra es un botón que abre un globo (al pasar el cursor, con el
+  teclado o al tocarla) con qué es, tabla, red y fecha, y «Abrir el
+  origen». Con el teclado cada cifra es una sola parada de Tab: el foco
+  abre el globo para leerlo, y su enlace entra en el orden de tabulación
+  solo cuando Enter o un clic lo dejan fijo. El origen es el post, la campaña, el tarifario, la serie de seguidores en
+  `/resumen?red=…#seguidores`, o su fila en «De dónde sale cada cifra»
+  al final de la página (línea base, demografía, no seguidores y los
+  agregados). Ese bloque empieza plegado (un media kit no termina en una
+  cola técnica), se abre al seguir el enlace de una cifra, va por grupos
+  (demografía y alcance, líneas base, puntajes y porqué, captions) y en
+  cada fila dice qué es, cuánto, de dónde y qué videos la forman, con su
+  enlace; la tabla, la columna y la fila quedan en el `title`, para
+  soporte. Los cinco mejores llevan su portada 9:16, leída viva al pintar
+  (`readPostCovers`): las de TikTok e Instagram son URLs firmadas que
+  caducan, así que no se usa la congelada en el perfil. Una que ya no
+  carga, o la que falta, cambia a un marcador con el color de su red, su
+  nombre y la duración; si ninguno de los cinco tiene portada, la columna
+  no se pinta. La demo trae ocho portadas ilustradas
+  (`apps/web/public/demo/portadas`, seed 0007). Si la petición de una acción falla antes de
+  responder, el error se dice en su región `role=status`, sin caer en
+  `error.tsx`. «Recalcular» y «Editar» solo se ofrecen a owner, admin y
+  member (`PUEDEN_EDITAR_PERFIL`), y las dos acciones lo vuelven a mirar.
+- **Carpetas ajenas**: ninguna. Los nombres de las redes que usa el
+  prompt viven en `@mc/core/plataformas`; la pantalla usa
+  `PLATFORM_LABEL` del kit, que no se toca. Una prueba de la web
+  (`ventas/perfil/plataformas.test.ts`) falla si las dos listas se
+  separan, y la unificación (el kit importa de `@mc/core/plataformas`)
+  queda en la rama `rasheed/kit-plataformas-desde-core`, para un PR que
+  revise Nicolás. Todavía no se recalcula solo al conectar
+  una cuenta o importar un CSV: la pantalla avisa cuando hay datos más
+  nuevos que el cálculo.
+
 ### 5.5 El recomendador de cadencia
 
 Chief tiene `suggest-outreach-strategy`, pero decide a quién contactar
