@@ -77,7 +77,7 @@ SELECT 'd_salud' AS check_id,
   FROM (SELECT outbound_health('00000002-0000-4000-8000-000000000001', 720) AS h) x;
 
 -- (e) El programado es para el futuro: volver a sembrar lo reprograma
---     para mañana a las 10:30 de Bogotá.
+--     para el siguiente día hábil a las 10:30 de Bogotá.
 SELECT 'e_programado_al_dia' AS check_id,
        scheduled_for,
        scheduled_for > now()
@@ -98,3 +98,18 @@ SELECT 'f_desenlaces' AS check_id,
   FROM outbound_enrollment e
   LEFT JOIN outbound_message m ON m.enrollment_id = e.id AND m.direction = 'inbound'
  ORDER BY e.status;
+
+-- (g) La demo cumple la ventana que enseña: lo enviado salió, y lo
+--     cancelado iba a salir, en día hábil y entre las 09:00 y las 17:00
+--     de Bogotá (la zona del workspace). Y cada envío va antes de la
+--     respuesta que llegó en su hilo.
+SELECT 'g_en_la_ventana' AS check_id,
+       count(*) AS toques,
+       bool_and(extract(isodow FROM (x.at AT TIME ZONE 'America/Bogota')) < 6
+                AND (x.at AT TIME ZONE 'America/Bogota')::time BETWEEN time '09:00' AND time '17:00')
+         AND bool_and(x.antes_de_la_respuesta) AS ok
+  FROM (SELECT coalesce(t.sent_at, t.scheduled_for) AS at,
+               coalesce(t.sent_at < (SELECT min(m.occurred_at) FROM outbound_message m
+                                      WHERE m.touch_id = t.id AND m.direction = 'inbound'), true) AS antes_de_la_respuesta
+          FROM outbound_touch t
+         WHERE t.workspace_id = '00000002-0000-4000-8000-000000000001' AND t.status IN ('sent', 'canceled', 'scheduled')) x;
