@@ -192,9 +192,9 @@ pnpm --filter @mc/worker run job:dispatch -- --demo        # Postgres embebido c
 `--canal-falso` se niega contra una base que no es local salvo con
 `--workspace` de la demo: deja como enviados mensajes que nadie recibió.
 La demo respeta la política del seed: Vitalé recibió un correo ayer y la
-política pide tres días entre mensajes a la marca, así que la pasada a la
-hora del toque lo aplaza (`company_gap`) y una tercera, a esa hora, lo
-envía.
+política pide tres días entre mensajes a la marca. Si a la hora del toque
+todavía no se cumplen (depende del día de la semana en que se siembra),
+esa pasada lo aplaza (`company_gap`) y una tercera, a esa hora, lo envía.
 Contra Supabase necesita, como `job:seguimientos`, `GRANT mc_worker TO
 mc_migrator` y las migraciones 0037 y 0041 aplicadas. El runner
 (`src/runner/`) es el de CON-2: el motor no le cambia nada, solo suma sus

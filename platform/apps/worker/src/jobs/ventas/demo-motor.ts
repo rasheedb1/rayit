@@ -13,10 +13,13 @@
  *      programado (Vitalé, mañana a las 10:30 locales; si mañana cae en
  *      fin de semana, el lunes al abrir la ventana). La política del seed
  *      pide tres días entre mensajes a la misma marca, y Vitalé recibió
- *      un correo ayer (r2): el despachador no lo envía, lo aplaza a
- *      cuando se cumplan (company_gap).
- *   3. Con el reloj en esa hora: el toque sale por el buzón falso y
- *      outbound_touch queda en «sent» con el id del mensaje y el hilo.
+ *      un correo ayer (r2). Si a esa hora todavía no se cumplen, el
+ *      despachador no lo envía: lo aplaza a cuando se cumplan
+ *      (company_gap), y
+ *   3. con el reloj en esa hora, se corre otra vez.
+ *   El toque sale por el buzón falso y outbound_touch queda en «sent» con
+ *   el id del mensaje y el hilo. Con un fin de semana de por medio los
+ *   tres días ya pasaron y sale en la segunda pasada.
  *
  * Sin la reconexión el toque no se pierde: espera a que la cuenta vuelva,
  * con un aviso por canal y día (lo cubre la prueba de punta a punta).
