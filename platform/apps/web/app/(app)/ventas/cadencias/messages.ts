@@ -50,7 +50,6 @@ export const MESSAGES = {
     titulo: "Tus cadencias",
     caption: "Cadencias del espacio",
     columnas: { cadencia: "Cadencia", estado: "Estado", pasos: "Pasos", enrolados: "Dentro", respuesta: "Respuesta" },
-    pasos: plural("paso", "pasos"),
     respuestaDe: (pct: string, contactados: string) => `${pct} de ${contactados}`,
     sinContactar: "Sin envíos",
     desde: (senal: string) => `Desde: ${senal}`,
@@ -129,7 +128,6 @@ export const MESSAGES = {
       skipped: plural("sin dirección para ese canal", "sin dirección para ese canal"),
     },
     activadaSinPersona: (persona: string, motivo: string) => `Cadencia activa, pero ${persona} no entró: ${motivo}.`,
-    verEmpresa: "Ver la ficha de la empresa",
     sinPasos: "Añade al menos un paso para activarla.",
   },
 
@@ -153,7 +151,6 @@ export const MESSAGES = {
     subir: (n: string) => `Subir el paso ${n}`,
     bajar: (n: string) => `Bajar el paso ${n}`,
     arrastrar: (n: string) => `Arrastra para mover el paso ${n}`,
-    cambiado: (antes: string) => `Antes: ${antes}`,
     fueraDePolitica: "Con tu política no sale: pasa del máximo de mensajes a una marca.",
     seCorre: (dias: string) => `Sale más tarde: tu política pide ${dias} días entre mensajes.`,
     campos: {
@@ -183,7 +180,6 @@ export const MESSAGES = {
     persona: "Para",
     sinPersona: "Sin persona todavía",
     boton: "Proponer otra vez",
-    bloqueado: "Ya hay personas dentro: la propuesta nueva va en una copia.",
     sinCanales: (canales: string) => `Llega por: ${canales}`,
     sinDireccion: "Sin dirección",
     deBaja: "Pidió no recibir mensajes",
