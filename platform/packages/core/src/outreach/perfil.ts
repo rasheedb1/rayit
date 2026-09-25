@@ -507,6 +507,18 @@ export function shortId(uuid: string): string {
   return uuid.replace(/-/g, '').toLowerCase().slice(-12);
 }
 
+/**
+ * Un enlace o una portada que la pantalla pone en href o en src: solo
+ * http(s), y si no, null. post.url y post.cover_url no tienen CHECK y la
+ * importación CSV guarda lo que venga («www.tiktok.com/@x/video/1», sin
+ * esquema): se sanea aquí, al armar el perfil, para que el documento
+ * guardado siempre pase parseStoredPerfil en vez de quedarse «sin
+ * calcular» por un enlace mal escrito.
+ */
+export function webUrlOrNull(u: string | null | undefined): string | null {
+  return typeof u === 'string' && /^https?:\/\/\S/i.test(u.trim()) ? u.trim() : null;
+}
+
 /** Un segmento legible en un id de claim: «25-34» → «25-34», «55+» → «55-mas», «F» → «f». */
 export function claimSlug(text: string): string {
   return text
@@ -620,6 +632,8 @@ class ClaimSet {
       }
       throw new PerfilError('duplicate_claim', `Dos cifras distintas con el id «${claim.id}».`);
     }
+    // El enlace del origen es un href externo: solo http(s) (webUrlOrNull).
+    if (claim.source.url !== undefined) claim = { ...claim, source: { ...claim.source, url: webUrlOrNull(claim.source.url) } };
     this.byId.set(claim.id, claim);
     this.list.push(claim);
     return claim.id;
@@ -814,8 +828,8 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
       return {
         postId: p.id,
         platformId: p.platformId,
-        url: p.url,
-        coverUrl: p.coverUrl ?? null,
+        url: webUrlOrNull(p.url),
+        coverUrl: webUrlOrNull(p.coverUrl),
         title: titulo,
         publishedAt: p.publishedAt,
         outlierTier: score.outlierTier,
@@ -912,7 +926,7 @@ function postsCitados(input: PerfilInputs, claims: readonly Claim[]): PostRef[] 
   const citados = new Set(claims.flatMap((c) => c.source.rows ?? []));
   return input.posts
     .filter((p) => citados.has(p.id))
-    .map((p) => ({ postId: p.id, platformId: p.platformId, title: tituloDe(p), url: p.url }));
+    .map((p) => ({ postId: p.id, platformId: p.platformId, title: tituloDe(p), url: webUrlOrNull(p.url) }));
 }
 
 /** Qué hace (piezas y tipos de contenido) y cómo habla (tono), leído de los captions. */

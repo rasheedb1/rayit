@@ -77,6 +77,16 @@ test('una cantidad en letras o un signo de cifra fuera de una marca se rechaza',
   assert.equal(con('Mi video «Pasta cremosa en cuatro minutos» funciona.').ok, true);
   assert.equal(con('Mi video «Tres desayunos con dos ingredientes» funciona.').ok, true);
   assert.equal(con('Hice cuatro minutos de pasta.').ok, false);
+  // Cualquier número Unicode es una cifra: superíndices, fracciones y romanos.
+  assert.deepEqual(con('Crecí mis views²³ este año.').issues, [{ code: 'bare_number', text: '²³' }]);
+  assert.deepEqual(con('Tengo ⅔ de audiencia femenina.').issues, [{ code: 'bare_number', text: '⅔' }]);
+  assert.deepEqual(con('Llego a ½ de Colombia.').issues, [{ code: 'bare_number', text: '½' }]);
+  assert.deepEqual(con('Soy la creadora Ⅻ del año.').issues, [{ code: 'bare_number', text: 'Ⅻ' }]);
+  // Las fracciones y proporciones dichas con palabras.
+  assert.deepEqual(con('La cuarta parte vive en México.').issues, [{ code: 'number_word', text: 'cuarta parte' }]);
+  assert.deepEqual(con('Una tercera parte me ve a diario.').issues, [{ code: 'number_word', text: 'tercera parte' }]);
+  assert.deepEqual(con('Tres cuartos de mi público son mujeres.').issues, [{ code: 'number_word', text: 'tres cuartos' }]);
+  assert.deepEqual(con('La mayoría de mi audiencia es de México.').issues, [{ code: 'number_word', text: 'mayoría' }]);
 });
 
 test('los verbos que multiplican y los puestos de ranking también son cifras sin marca', () => {
@@ -89,6 +99,27 @@ test('los verbos que multiplican y los puestos de ranking también son cifras si
   assert.deepEqual(con('Soy la número uno de Colombia en recetas.').issues, [{ code: 'number_word', text: 'número uno' }]);
   assert.deepEqual(con('Quedé en primer lugar del ranking.').issues, [{ code: 'number_word', text: 'primer lugar' }]);
   assert.deepEqual(con('Estoy en el top de cocina.').issues, [{ code: 'number_word', text: 'top' }]);
+  // Doblar también multiplica.
+  for (const verbo of ['Doblé', 'dobló', 'doblar', 'doblaron']) {
+    assert.deepEqual(con(`${verbo} mis views en un mes.`).issues.map((i) => i.code), ['number_word'], verbo);
+  }
+  // Los ordinales son puestos de ranking: la primera, la segunda…
+  assert.deepEqual(con('Soy la segunda creadora más vista.').issues, [{ code: 'number_word', text: 'segunda' }]);
+  assert.deepEqual(con('Soy la primera en Colombia.').issues, [{ code: 'number_word', text: 'primera' }]);
+  for (const ordinal of ['primero', 'tercera', 'tercer', 'cuarto', 'quinta', 'décimo']) {
+    assert.deepEqual(con(`Quedé ${ordinal} en recetas.`).issues.map((i) => i.code), ['number_word'], ordinal);
+  }
+  // «Primera persona» no es un puesto: es cómo escribo (y lo dice la plantilla).
+  assert.equal(con('Escribo en primera persona.').ok, true);
+  // El modelo puede cambiar de idioma: los numerales en inglés también se rechazan.
+  assert.deepEqual(con('I have two million fans.').issues, [
+    { code: 'number_word', text: 'two' }, { code: 'number_word', text: 'million' },
+  ]);
+  for (const en of ['one hundred', 'three thousand', 'fifty percent', 'twice', 'half', 'first', 'second', 'doubled', 'tripled']) {
+    assert.ok(con(`My views ${en} here.`).issues.some((i) => i.code === 'number_word'), en);
+  }
+  // «ten» no está en la lista: en español es «ten en cuenta».
+  assert.equal(con('Ten en cuenta que cocino fácil.').ok, true);
   // Con límite de palabra: «duplicado» sí (es la raíz), «topo» o «laptop» no.
   assert.equal(con('Mi laptop y un topo en la cocina.').ok, true);
   // Las listas van por idioma: añadir uno es añadir sus datos.
@@ -118,10 +149,10 @@ test('marcas mal escritas, huecos y párrafos de más se rechazan', () => {
   assert.deepEqual(mala.issues, [{ code: 'malformed_marker', text: '[claim: Mediana TikTok]' }]);
   const hueco = verifyNarrative(BUENA.replace('Soy Laura', 'Soy {{nombre}}'), perfil);
   assert.deepEqual(hueco.issues.map((i) => i.code), ['placeholder']);
-  const cuatro = verifyNarrative(`${BUENA}\n\nUn cuarto párrafo.`, perfil);
+  const cuatro = verifyNarrative(`${BUENA}\n\nOtro párrafo más.`, perfil);
   assert.deepEqual(cuatro.issues, [{ code: 'paragraphs', expected: 3, found: 4 }]);
   // La edición del creador puede tener de uno a cinco párrafos.
-  assert.equal(verifyNarrative(`${BUENA}\n\nUn cuarto párrafo.`, perfil, { paragraphs: null }).ok, true);
+  assert.equal(verifyNarrative(`${BUENA}\n\nOtro párrafo más.`, perfil, { paragraphs: null }).ok, true);
   assert.deepEqual(verifyNarrative('  ', perfil).issues, [{ code: 'empty' }]);
   assert.deepEqual(verifyNarrative('Hola.\n\nQué tal.\n\nAdiós.', perfil, { minClaims: 1 }).issues, [{ code: 'no_claims' }]);
   assert.equal(verifyNarrative(`${BUENA} ${'palabra '.repeat(400)}`, perfil).issues[0]!.code, 'too_long');
@@ -210,8 +241,8 @@ test('el prompt lleva cada claim con su valor y las reglas de la marca', () => {
     claimLabelEs(conRazon.claims.find((c) => c.id === 'porque-000000000d01-duracion-corto')!),
     'Veces su mediana, mediana de sus OTROS videos que son cortos (sin contar «Cold brew en casa en 3 pasos»)',
   );
-  // Las etiquetas del prompt salen de la clave y los parámetros, con el país en el locale que se pida.
-  assert.equal(claimLabelEs(perfil.claims.find((c) => c.id === 'audiencia-tiktok-pais-mx')!, 'en'), 'Parte de los seguidores de TikTok que vive en Mexico');
+  // Las etiquetas del prompt salen de la clave y los parámetros, con el país en el idioma de la narrativa.
+  assert.equal(claimLabelEs(perfil.claims.find((c) => c.id === 'audiencia-tiktok-pais-mx')!), 'Parte de los seguidores de TikTok que vive en México');
   assert.equal(claimLabelEs(perfil.claims.find((c) => c.id === 'mediana-instagram-ba5207200001')!), 'Views medianas por video en Instagram al mes de publicado');
 });
 
@@ -291,4 +322,19 @@ test('el costo de una llamada, en decimal de seis cifras y sin float', () => {
   assert.equal(llmCostUsd({ model: 'claude-sonnet-5', inputTokens: 2_000_000, outputTokens: 100_000 }), '5.000000');
   assert.throws(() => llmCostUsd({ model: 'otro-modelo', inputTokens: 1, outputTokens: 1 }), UnknownModelPriceError);
   assert.throws(() => llmCostUsd({ model: 'claude-sonnet-5', inputTokens: -1, outputTokens: 1 }), RangeError);
+});
+
+test('los países se nombran en el idioma de la narrativa, no en el locale del workspace', () => {
+  // Un workspace en-US: la narrativa sigue en español, y el país también.
+  const e = entradasLaura();
+  // México primero, que en inglés se escribe distinto.
+  for (const a of e.audience) if (a.dimension === 'country') a.share = a.bucket === 'MX' ? 0.7 : a.bucket === 'CO' ? 0.1 : a.share;
+  const mx = buildPerfil(e);
+  const plantilla = templateNarrative(mx, { locale: 'en-US' });
+  assert.match(plantilla, /vive en México/);
+  assert.doesNotMatch(plantilla, /Mexico/);
+  assert.deepEqual(verifyNarrative(plantilla, mx).issues, []);
+  const p = buildNarrativePrompt(perfil, fmt, { locale: 'en-US' });
+  assert.match(p.user, /que vive en México:/);
+  assert.doesNotMatch(p.user, /Mexico|United States/);
 });

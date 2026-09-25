@@ -73,7 +73,7 @@ function isClaim(v: unknown): v is Claim {
     (isNum(v.value) || (isStr(v.value) && /^-?\d+(\.\d+)?$/.test(v.value))) &&
     (CLAIM_TABLES as readonly unknown[]).includes(s.table) && isStr(s.id) && isStr(s.field) &&
     (s.rows === undefined || arrayOf(s.rows, isStr)) &&
-    (s.url === undefined || isStrOrNull(s.url)) &&
+    (s.url === undefined || isWebUrlOrNull(s.url)) &&
     (s.asOf === undefined || s.asOf === null || isIso(s.asOf))
   );
 }

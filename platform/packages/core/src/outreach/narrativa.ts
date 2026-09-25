@@ -11,11 +11,15 @@
  *   · una marca con un id que no está en la lista → rechazada;
  *   · un dígito fuera de una marca → rechazado (bare_number);
  *   · un numeral o cuantificador en letras fuera de una marca («doce
- *     mil», «un millón», «el doble», «la mitad», «por ciento»), un verbo
- *     que multiplica («dupliqué», «cuadrupliqué», «multipliqué»), un
- *     puesto de ranking («número uno», «primer lugar», «top») o los
- *     signos % y × sueltos → rechazados (number_word). Las listas son
- *     cerradas y van por idioma (CANTIDADES);
+ *     mil», «un millón», «el doble», «la mitad», «por ciento», «two
+ *     million»), un verbo que multiplica («dupliqué», «doblé»,
+ *     «multipliqué»), un ordinal o puesto de ranking («la segunda», «la
+ *     primera en Colombia», «número uno», «top»), una proporción sin
+ *     cifra («la mayoría», «la cuarta parte») o los signos % y × sueltos
+ *     → rechazados (number_word). Las listas son cerradas y van por
+ *     idioma (CANTIDADES);
+ *   · un número Unicode que no es un dígito decimal («²», «⅔», «½»)
+ *     cuenta como dígito (bare_number);
  *   · salvo que el número sea parte de un término que el perfil ya
  *     contiene tal cual (el título de un video, el nombre de una campaña
  *     o de una tarifa, una franja de edad): «Pasta cremosa en cuatro
@@ -41,8 +45,13 @@ import type { LlmUsage } from './llm-precios.ts';
 export const CLAIM_MARKER_RE = /\[claim:([a-z0-9][a-z0-9-]{0,79})\]/g;
 /** Algo que quiso ser una marca y no lo es (id con mayúsculas, espacios, sin cerrar…). */
 const MARKER_LIKE_RE = /\[\s*claim\s*:[^\]\n]*\]?/gi;
-/** Un número escrito con dígitos, con sus separadores: 412.000 · 5,97 · 25-34 cuenta como dos. */
-const DIGITS_RE = /\p{Nd}+(?:[.,]\p{Nd}+)*/gu;
+/**
+ * Un número escrito con dígitos, con sus separadores: 412.000 · 5,97 ·
+ * 25-34 cuenta como dos. Cualquier número Unicode (\p{N}), no solo los
+ * decimales: los superíndices «²³», las fracciones «⅔ ½ ¼» y los
+ * romanos «Ⅻ» también son cifras.
+ */
+const DIGITS_RE = /\p{N}+(?:[.,]\p{N}+)*/gu;
 
 // ---------------------------------------------------------------------
 // El idioma de la narrativa
@@ -69,22 +78,60 @@ export function narrativeLanguage(locale: string | null | undefined): NarrativeL
 }
 
 /**
+ * Los ordinales y lo que dice una proporción sin número: «soy la
+ * segunda más vista», «la primera en Colombia», «la cuarta parte», «la
+ * mayoría». Fuera de NUMBER_WORDS_ES (que también lee el gancho) porque
+ * allí «cuarto» o «segundo» casi nunca son una cifra; en la narrativa, un
+ * ranking o una proporción sin marca no se puede comprobar, y la
+ * estrictez gana. «Primera persona» no es un puesto: va en `allowed`.
+ */
+const ORDINALES_ES = [
+  'primer', 'primero', 'primera', 'primeros', 'primeras', 'segundo', 'segunda', 'segundas',
+  'tercer', 'tercero', 'tercera', 'terceros', 'terceras', 'cuarto', 'cuarta', 'cuartos', 'cuartas',
+  'quinto', 'quinta', 'quintos', 'quintas', 'sexto', 'sexta', 'séptimo', 'séptima', 'septimo', 'septima',
+  'octavo', 'octava', 'noveno', 'novena', 'décimo', 'décima', 'decimo', 'decima',
+  'mayoría', 'mayoria', 'minoría', 'minoria',
+];
+
+/**
+ * Numerales en inglés: el modelo puede cambiar de idioma a media frase
+ * («two million fans») y rechazarlos no cuesta nada. Sin «ten» ni
+ * «once», que en español son otra cosa («ten en cuenta») o ya están
+ * («once» es once).
+ */
+const NUMERALES_EN = [
+  'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'eleven', 'twelve', 'twenty',
+  'hundred', 'hundreds', 'thousand', 'thousands', 'million', 'millions', 'billion', 'billions',
+  'percent', 'twice', 'half', 'dozen', 'dozens', 'first', 'second', 'third',
+];
+
+/**
  * Lo que en cada idioma dice una cantidad sin dígitos, para el verificador:
- *   words    numerales y cuantificadores, enteros («dos», «mil», «doble»);
+ *   words    numerales, ordinales y cuantificadores, enteros («dos», «mil»,
+ *            «doble», «segunda», «mayoría»);
  *   stems    raíces de verbos que multiplican, como expresión y con
  *            cualquier terminación («dupli(?:c|qu)» → duplicar, dupliqué,
- *            duplicó…: la c pasa a qu delante de e);
- *   phrases  frases de ranking y de porcentaje, con cualquier espacio
- *            entre sus palabras («número uno», «primer lugar», «top»).
+ *            duplicó…: la c pasa a qu delante de e; «dobl» → doblé, dobló);
+ *   phrases  frases de ranking, de proporción y de porcentaje, con
+ *            cualquier espacio entre sus palabras («número uno», «primer
+ *            lugar», «cuarta parte», «top»);
+ *   allowed  frases que llevan una de esas palabras sin ser una cifra
+ *            («primera persona»): se tapan antes de buscar.
  */
-export const CANTIDADES: Readonly<Record<NarrativeLanguage, { words: readonly string[]; stems: readonly string[]; phrases: readonly string[] }>> = {
+export const CANTIDADES: Readonly<Record<NarrativeLanguage, {
+  words: readonly string[]; stems: readonly string[]; phrases: readonly string[]; allowed: readonly string[];
+}>> = {
   es: {
-    words: NUMBER_WORDS_ES,
-    stems: ['dupli(?:c|qu)', 'tripli(?:c|qu)', 'cuadrupli(?:c|qu)', 'quintupli(?:c|qu)', 'sextupli(?:c|qu)', 'multipli(?:c|qu)'],
+    words: [...NUMBER_WORDS_ES, ...ORDINALES_ES, ...NUMERALES_EN],
+    stems: [
+      'dupli(?:c|qu)', 'tripli(?:c|qu)', 'cuadrupli(?:c|qu)', 'quintupli(?:c|qu)', 'sextupli(?:c|qu)', 'multipli(?:c|qu)', 'dobl',
+      'doubl', 'tripl', 'quadrupl',
+    ],
     phrases: [
       'por ciento', 'número uno', 'numero uno', 'primer lugar', 'primer puesto', 'primera posición', 'primera posicion',
-      'primer sitio', 'top',
+      'primer sitio', 'top', 'cuarta parte', 'tercera parte', 'quinta parte', 'décima parte', 'decima parte', 'tres cuartos',
     ],
+    allowed: ['primera persona', 'segunda persona', 'tercera persona'],
   },
 };
 
@@ -98,7 +145,7 @@ function numberWordRe(lang: NarrativeLanguage): RegExp {
   let re = numberWordRes.get(lang);
   if (!re) {
     const c = CANTIDADES[lang];
-    const frases = c.phrases.map((f) => f.split(/\s+/).map(escapar).join('\\s+'));
+    const frases = c.phrases.map(frase);
     const palabras = [...frases, ...c.words.map(escapar)].sort((a, b) => b.length - a.length);
     const raices = c.stems.map((r) => `${r}\\p{L}*`);
     re = new RegExp(
@@ -198,6 +245,11 @@ function escapar(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** Una frase como expresión, con cualquier espacio entre sus palabras. */
+function frase(s: string): string {
+  return s.split(/\s+/).map(escapar).join('\\s+');
+}
+
 /**
  * Lo que el verificador necesita del perfil: los ids de sus cifras y sus
  * términos (perfilTerms). Son datos planos: la pantalla los calcula en el
@@ -247,11 +299,12 @@ export function narrativeIssueSpans(text: string, ctx: VerifierContext): IssueSp
     spans.push({ start: m.index, end: m.index + m[0].length, code: 'malformed_marker', text: m[0] });
   }
   let limpio = tapar(sinMarcas, MARKER_LIKE_RE);
-  for (const term of ctx.terms) {
-    limpio = tapar(limpio, new RegExp(`(?<![\\p{L}\\p{N}])${escapar(term)}(?![\\p{L}\\p{N}])`, 'giu'));
+  const lang = ctx.language ?? DEFAULT_NARRATIVE_LANGUAGE;
+  for (const term of [...ctx.terms, ...CANTIDADES[lang].allowed]) {
+    limpio = tapar(limpio, new RegExp(`(?<![\\p{L}\\p{N}])${frase(term)}(?![\\p{L}\\p{N}])`, 'giu'));
   }
   for (const m of limpio.matchAll(DIGITS_RE)) spans.push({ start: m.index, end: m.index + m[0].length, code: 'bare_number', text: m[0] });
-  for (const m of limpio.matchAll(numberWordRe(ctx.language ?? DEFAULT_NARRATIVE_LANGUAGE))) {
+  for (const m of limpio.matchAll(numberWordRe(lang))) {
     spans.push({ start: m.index, end: m.index + m[0].length, code: 'number_word', text: m[0].toLowerCase().replace(/\s+/g, ' ') });
   }
   for (const h of findPlaceholders(limpio)) spans.push({ start: h.index, end: h.index + h.match.length, code: 'placeholder', text: h.match });
@@ -400,7 +453,13 @@ export function listaEs(items: readonly string[]): string {
   return `${items.slice(0, -1).join(', ')} y ${items.at(-1)}`;
 }
 
-/** El nombre de un país en el locale que se pida (el del workspace), o el código si Intl no lo conoce. */
+/**
+ * El nombre de un país en el idioma que se pida, o el código si Intl no
+ * lo conoce. La narrativa y su prompt lo piden en el idioma de la
+ * narrativa (narrativeLanguage), no en el locale del workspace: un
+ * workspace en-US no escribe «vive en United States» dentro de un
+ * párrafo en español. La pantalla sí usa el locale del workspace.
+ */
 export function regionName(code: string, locale = 'es'): string {
   try {
     return new Intl.DisplayNames([locale], { type: 'region' }).of(code.toUpperCase()) ?? code;
@@ -444,7 +503,7 @@ function grupoYo(r: WhyReason): string {
  * lista CIFRAS. Se arma desde la clave y los parámetros del claim, los
  * mismos de los que la pantalla arma su tooltip con su messages.ts.
  */
-export function claimLabelEs(c: Pick<Claim, 'key' | 'params'>, locale = 'es'): string {
+export function claimLabelEs(c: Pick<Claim, 'key' | 'params'>, language: NarrativeLanguage = DEFAULT_NARRATIVE_LANGUAGE): string {
   const p: ClaimParams = c.params;
   const r = p.platform ? PLATFORM_LABELS[p.platform] : '';
   const corte = p.cutHours !== undefined ? ` ${corteEs(p.cutHours)}` : '';
@@ -455,7 +514,7 @@ export function claimLabelEs(c: Pick<Claim, 'key' | 'params'>, locale = 'es'): s
       const g = genderCode(p.bucket ?? '');
       return g === 'u' ? `Parte de los seguidores de ${r} de género sin especificar` : `Parte de los seguidores de ${r} que son ${GENERO_ES[g]}`;
     }
-    case 'audience.country': return `Parte de los seguidores de ${r} que vive en ${regionName(p.bucket ?? '', locale)}`;
+    case 'audience.country': return `Parte de los seguidores de ${r} que vive en ${regionName(p.bucket ?? '', language)}`;
     case 'non_followers': return `Alcance en personas que no siguen la cuenta, mediana por video en ${r}`;
     case 'median': return `Views medianas por video en ${r}${corte}`;
     case 'scored_videos': return 'Videos con puntaje frente a su mediana';
@@ -492,7 +551,7 @@ function tonoYo(keys: readonly (keyof typeof PORQUE_ES.toneYo)[]): string {
 }
 
 export interface TemplateOptions {
-  /** El locale del workspace: con él se nombran los países. */
+  /** El locale del workspace: de él sale el idioma de la narrativa, que es el de los países. */
   locale?: string;
 }
 
@@ -510,6 +569,7 @@ export interface TemplateOptions {
 export function templateNarrative(perfil: PerfilComercial, opts: TemplateOptions = {}): string {
   const { identity, audience, performance, formats } = perfil;
   const red = (p: PlatformId) => PLATFORM_LABELS[p];
+  const idioma = narrativeLanguage(opts.locale);
 
   // 1 · Quién es y a quién llega.
   const p1: string[] = [];
@@ -526,7 +586,7 @@ export function templateNarrative(perfil: PerfilComercial, opts: TemplateOptions
     if (genero) partes.push(`${m(genero.claimId)} son ${GENERO_ES[genderCode(genero.bucket) as 'f' | 'm']}`);
     // La franja va tal cual la guarda audience_breakdown («25-34»): es un término del perfil, no una cifra.
     if (edad) partes.push(`${m(edad.claimId)} está en la franja de ${edad.bucket} años`);
-    if (pais) partes.push(`${m(pais.claimId)} vive en ${regionName(pais.bucket, opts.locale)}`);
+    if (pais) partes.push(`${m(pais.claimId)} vive en ${regionName(pais.bucket, idioma)}`);
     if (partes.length) p1.push(`De quienes me siguen en ${donde}, ${listaEs(partes)}.`);
   }
   const nf = audience.nonFollowers[0];
@@ -622,7 +682,7 @@ Reglas que no se negocian:
    - Párrafo 1: quién soy y a quién llego (identidad y audiencia).
    - Párrafo 2: qué me funciona (desempeño, mejores videos y lo que los distingue, formatos y tono).
    - Párrafo 3: prueba social y cómo trabajar juntos (campañas con resultado y tarifas). Cierra con una invitación sencilla, sin urgencia.
-2. Toda cifra se escribe SOLO como su marca, [claim:id], copiada exactamente de la lista CIFRAS. Nunca escribas un dígito fuera de una marca, ni un número o cantidad en letras (dos, mil, millón, el doble, la mitad, por ciento), ni verbos que multiplican (duplicar, triplicar, multiplicar), ni puestos de ranking («número uno», «primer lugar», «top»), ni los signos % o ×.
+2. Toda cifra se escribe SOLO como su marca, [claim:id], copiada exactamente de la lista CIFRAS. Nunca escribas un dígito fuera de una marca, ni un número o cantidad en letras (dos, mil, millón, el doble, la mitad, por ciento), ni verbos que multiplican (duplicar, doblar, triplicar, multiplicar), ni ordinales o puestos de ranking («la primera», «la segunda», «número uno», «primer lugar», «top»), ni proporciones sin cifra («la mayoría», «la cuarta parte», «tres cuartos»), ni números en otro idioma, ni los signos % o ×. Sí puedes decir «en primera persona».
 3. Solo puedes usar las cifras de la lista. Si una cifra no está, no la menciones.
 4. Solo menciona marcas, campañas y videos que aparecen en los datos. No inventes clientes, premios ni resultados.
 5. Puedes nombrar un video, una campaña o una tarifa copiando su nombre tal cual aparece entre «».
@@ -634,7 +694,7 @@ Reglas que no se negocian:
 };
 
 export interface PromptOptions {
-  /** El locale del workspace: con él se nombran los países y se elige el idioma (narrativeLanguage). */
+  /** El locale del workspace: de él sale el idioma (narrativeLanguage), que es también el de los países. */
   locale?: string;
 }
 
@@ -642,11 +702,12 @@ export interface PromptOptions {
 export function buildNarrativePrompt(perfil: PerfilComercial, formatClaim: ClaimFormatter, opts: PromptOptions = {}): NarrativePrompt {
   const { identity, audience, performance, formats } = perfil;
   const red = (p: PlatformId) => PLATFORM_LABELS[p];
+  const idioma = narrativeLanguage(opts.locale);
   const l: string[] = [];
   l.push('IDENTIDAD');
   l.push(`- Nombre: «${identity.displayName}»${identity.handle ? ` (@${identity.handle.replace(/^@/, '')})` : ''}`);
   if (identity.niches.length) l.push(`- Nichos: ${identity.niches.map((n) => `«${n}»`).join(', ')}`);
-  if (identity.country) l.push(`- País: ${regionName(identity.country, opts.locale)}`);
+  if (identity.country) l.push(`- País: ${regionName(identity.country, idioma)}`);
   if (identity.networks.length) l.push(`- Redes: ${identity.networks.map((n) => red(n.platformId)).join(', ')}`);
   if (identity.bio) l.push(`- Bio escrita por el creador (contexto, no la cites): ${identity.bio.replace(/\s+/g, ' ')}`);
 
@@ -692,9 +753,9 @@ export function buildNarrativePrompt(perfil: PerfilComercial, formatClaim: Claim
   }
 
   l.push('', 'CIFRAS (id → qué es: valor)');
-  for (const c of perfil.claims) l.push(`[claim:${c.id}] → ${claimLabelEs(c, opts.locale)}: ${formatClaim(c)}`);
+  for (const c of perfil.claims) l.push(`[claim:${c.id}] → ${claimLabelEs(c, idioma)}: ${formatClaim(c)}`);
 
-  return { system: SISTEMA[narrativeLanguage(opts.locale)], user: l.join('\n'), maxTokens: NARRATIVE_MAX_TOKENS };
+  return { system: SISTEMA[idioma], user: l.join('\n'), maxTokens: NARRATIVE_MAX_TOKENS };
 }
 
 /** Lo que el verificador encontró, dicho para que el modelo lo corrija en el segundo intento. */

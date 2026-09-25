@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildPerfil, claimById, claimSlug, cutOf, genderCode, shortId, whyContrast, WHY_MIN_GROUP, WHY_MIN_LIFT, type PerfilComercial,
+  buildPerfil, claimById, claimSlug, webUrlOrNull, cutOf, genderCode, shortId, whyContrast, WHY_MIN_GROUP, WHY_MIN_LIFT, type PerfilComercial,
 } from '../src/outreach/perfil.ts';
 import {
   contentOf, durationBucketOf, durationVsTypical, hookFromAnalysis, hookOf, pieceOf, toneTraitsOf,
@@ -316,4 +316,34 @@ test('un perfil guardado a medio escribir no llega a la pantalla: cada arreglo q
   assert.ok(con((p) => { p.performance.top[0].coverUrl = 'https://cdn.example.com/p.jpg'; }));
   // Sin tarifario es válido: rates null.
   assert.ok(con((p) => { p.rates = null; }));
+  // El enlace del origen de una cifra también es un href: solo http(s).
+  assert.equal(con((p) => { p.claims.find((c: { source: { url?: unknown } }) => c.source.url).source.url = 'javascript:alert(1)'; }), null);
+});
+
+test('un enlace o una portada sin esquema se sanea al calcular: el perfil se guarda y se lee, con null', () => {
+  const entradas = entradasLaura();
+  // Lo que deja la importación CSV: la url tal cual venga, sin https://.
+  const d01 = entradas.posts.find((p) => p.id.endsWith('d01'))!;
+  d01.url = 'www.tiktok.com/@laura/video/1';
+  d01.coverUrl = 'cdn.example.com/d01.jpg';
+  const perfil = buildPerfil(entradas);
+  const mejor = perfil.performance.top.find((v) => v.postId === d01.id)!;
+  assert.equal(mejor.url, null);
+  assert.equal(mejor.coverUrl, null);
+  // Las cifras del video siguen, con su origen sin enlace.
+  assert.equal(claimById(perfil, mejor.multipleClaimId)!.source.url, null);
+  assert.ok(perfil.posts.every((x) => x.url === null || x.url.startsWith('https://')));
+  const guardado = JSON.parse(JSON.stringify({
+    version: 3, computedAt: perfil.computedAt, perfil,
+    narrative: { text: 'Hola.', source: 'template', model: null, writtenAt: perfil.computedAt, fallback: 'no_model' },
+  }));
+  const leido = parseStoredPerfil(guardado);
+  assert.ok(leido, 'el perfil con una url sin esquema se lee: no queda «sin calcular»');
+  assert.equal(leido.perfil.performance.top.find((v) => v.postId === d01.id)!.url, null);
+  // Con esquema, se conserva; con espacios alrededor, se recorta.
+  assert.equal(webUrlOrNull(' https://www.tiktok.com/@laura/video/1 '), 'https://www.tiktok.com/@laura/video/1');
+  assert.equal(webUrlOrNull('HTTP://x.co/a'), 'HTTP://x.co/a');
+  assert.equal(webUrlOrNull('javascript:alert(1)'), null);
+  assert.equal(webUrlOrNull('https://'), null);
+  assert.equal(webUrlOrNull(undefined), null);
 });
