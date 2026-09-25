@@ -47,18 +47,17 @@
 import type { LlmUsage } from './llm-cost.ts';
 import { findPlaceholders } from './placeholder-guard.ts';
 import { GUIDANCE_PHRASES, type GuidanceLocale } from './guidance-phrases.ts';
+import {
+  RECOMMEND_CHANNELS, type ProposalNote, type RecommendChannel, type RecommendSignalKind, type RerouteReason,
+} from './proposal-notes.ts';
 import { DISPATCHABLE_STEP_TYPES, type SequencePolicy } from './sequence-policy.ts';
+import { normalizeThread } from './thread.ts';
 
 /** El último día al que se puede poner un paso (CHECK de outbound_step.day_offset, 0037). */
 export const SEQUENCE_MAX_DAY_OFFSET = 60;
 
-/** Los tipos de señal de outbound_sequence_template.signal_kind que el recomendador distingue. */
-export const RECOMMEND_SIGNAL_KINDS = ['active_campaign', 'launch', 'season', 'collab', 'manual'] as const;
-export type RecommendSignalKind = (typeof RECOMMEND_SIGNAL_KINDS)[number];
-
-/** Los canales en los que el recomendador puede poner un paso. WhatsApp es fase 2 (§5.1). */
-export const RECOMMEND_CHANNELS = ['email', 'linkedin', 'instagram_dm'] as const;
-export type RecommendChannel = (typeof RECOMMEND_CHANNELS)[number];
+// Los tipos de señal, los canales, los motivos de cambio de canal y las
+// notas (ProposalNote) viven en proposal-notes.ts, con su esquema zod.
 
 /**
  * El tipo de señal de una fuente del radar (signal_source.kind, 0007):
@@ -153,37 +152,21 @@ export interface ProposedStep {
   generateWithAi: boolean;
   requiresAsset: 'media_kit' | 'quote' | null;
   guidanceEs: string;
+  /**
+   * Quién escribió la guía: la plantilla tal cual, las reglas (compuesta
+   * porque el paso cambió) o el modelo. Se guarda con el paso
+   * (outbound_step.guidance_source): si el paso cambia de tipo después,
+   * la de la plantilla, las reglas o el modelo se recompone, y la que
+   * escribió la persona se queda (guidanceAfterRetype).
+   */
+  guidanceSource: Exclude<GuidanceSource, 'person'>;
   /** Lo que decía la plantilla, si el recomendador lo cambió. */
   changedFrom: { stepType: string; channel: string } | null;
 }
 
-/** Por qué un paso no se quedó en su canal. */
-export type RerouteReason = 'channel_not_allowed' | 'channel_not_connected' | 'contact_has_no_address';
-
-/** Lo que el recomendador decidió, en códigos (la pantalla los traduce). */
-export type ProposalNote =
-  | { code: 'template'; slug: string; match: 'niche_and_signal' | 'signal' | 'generic' }
-  | { code: 'rerouted'; step: number; from: string; to: string; manual: boolean; reason: RerouteReason }
-  | { code: 'unreachable'; step: number; channel: string }
-  | { code: 'channel_down'; channel: RecommendChannel }
-  | { code: 'no_contact' }
-  | { code: 'disclosure' }
-  /**
-   * La propuesta se ajustó a la política del espacio. `softened`: los
-   * ángulos de los mensajes que pasaron a gesto público (una reacción);
-   * `dropped`: los que se quitaron (no había red para el gesto);
-   * `shiftedDays`: cuántos días se corrió el último paso para respetar
-   * la separación. `maxTouches` y `minDays`: la política con la que se
-   * ajustó, para decirla.
-   */
-  | {
-      code: 'fitted_to_policy';
-      softened: string[];
-      dropped: string[];
-      shiftedDays: number;
-      maxTouches: number;
-      minDays: number;
-    };
+/** Quién escribió la guía de un paso (outbound_step.guidance_source, 0056). */
+export const GUIDANCE_SOURCES = ['template', 'rules', 'llm', 'person'] as const;
+export type GuidanceSource = (typeof GUIDANCE_SOURCES)[number];
 
 export interface Proposal {
   templateSlug: string;
@@ -385,6 +368,7 @@ export function recommendSequence(input: RecommendInput): Proposal {
       generateWithAi: s.generate_with_ai,
       requiresAsset: s.requires_asset,
       guidanceEs: changed ? composeGuidance(s.angle_key, stepType, input.signalKind, locale) : s.guidance_es,
+      guidanceSource: changed ? 'rules' : 'template',
       changedFrom: changed ? { stepType: s.step_type, channel: s.channel } : null,
     });
   });
@@ -421,25 +405,65 @@ export function recommendSequence(input: RecommendInput): Proposal {
 }
 
 /**
- * El primer correo de la secuencia abre el hilo: un email_reply sin
- * correo antes no tiene a qué responder (el despachador lo retendría,
- * reply_without_thread). Corre después de ajustar a la política, porque
- * quitar un paso puede dejar una respuesta como primer correo.
+ * El hilo de correo (normalizeThread, thread.ts): el primer correo lo
+ * abre y los siguientes responden en él, salvo el cierre que la
+ * plantilla pide como hilo nuevo. Corre después de ajustar a la
+ * política, porque quitar un paso puede dejar una respuesta como primer
+ * correo. Un paso que cambia de tipo lleva la guía de su tipo nuevo.
  */
 function openThread(steps: readonly ProposedStep[], signalKind: RecommendSignalKind, locale: GuidanceLocale): ProposedStep[] {
-  let emailSeen = false;
-  return steps.map((s) => {
-    if (s.channel !== 'email') return s;
-    const first = !emailSeen;
-    emailSeen = true;
-    if (!first || s.stepType !== 'email_reply') return s;
+  const types = normalizeThread(steps);
+  return steps.map((s, i) => {
+    const stepType = types[i]!;
+    if (stepType === s.stepType) return s;
     return {
       ...s,
-      stepType: 'email',
-      guidanceEs: composeGuidance(s.angleKey, 'email', signalKind, locale),
+      stepType,
+      guidanceEs: composeGuidance(s.angleKey, stepType, signalKind, locale),
+      guidanceSource: 'rules',
       changedFrom: s.changedFrom ?? { stepType: s.stepType, channel: s.channel },
     };
   });
+}
+
+/** La guía de un paso: quién la escribió y para qué tipo de paso (outbound_step, 0056). */
+export interface StepGuidance {
+  guidance: string | null;
+  /** null: una fila anterior a 0056, que no se sabe; se trata como de la persona (no se pisa). */
+  source: GuidanceSource | null;
+  /** El tipo de paso para el que se escribió (outbound_step.guidance_for_type). */
+  writtenFor: string | null;
+}
+
+/**
+ * La guía de un paso que pasa a `stepType` (se reordenó, se quitó otro
+ * paso o se le cambió el tipo). La que salió de la plantilla, de las
+ * reglas o del modelo se recompone para el tipo nuevo: una guía de
+ * «Responde en el mismo hilo» en el correo que abre el hilo, o una de
+ * correo en un directo de LinkedIn, le daría al generador (VEN-12) una
+ * orden imposible. La que escribió la persona no se toca: queda marcada
+ * (guidanceIsStale) para que la revise.
+ */
+export function guidanceAfterRetype(
+  current: StepGuidance & { angleKey: string | null },
+  stepType: string,
+  ctx: { signalKind: RecommendSignalKind; locale?: GuidanceLocale; requiresDisclosure: boolean },
+): StepGuidance {
+  const { guidance, source, writtenFor } = current;
+  if (writtenFor === stepType) return { guidance, source, writtenFor };
+  if (guidance === null) return { guidance: null, source, writtenFor: stepType };
+  if (source === 'person' || source === null) return { guidance, source, writtenFor };
+  const composed = composeGuidance(current.angleKey, stepType, ctx.signalKind, ctx.locale);
+  return {
+    guidance: withDisclosure(composed, current.angleKey, ctx.requiresDisclosure, ctx.locale),
+    source: 'rules',
+    writtenFor: stepType,
+  };
+}
+
+/** La guía se escribió para otro tipo de paso y nadie la ha revisado desde entonces. */
+export function guidanceIsStale(g: Pick<StepGuidance, 'guidance' | 'writtenFor'>, stepType: string): boolean {
+  return g.guidance !== null && g.writtenFor !== null && g.writtenFor !== stepType;
 }
 
 // ---------------------------------------------------------------------
@@ -499,6 +523,7 @@ function softenToGesture(s: ProposedStep, input: FitInput): ProposedStep | null 
     generateWithAi: false,
     requiresAsset: null,
     guidanceEs: composeGuidance('presencia', stepType, input.signalKind, input.locale),
+    guidanceSource: 'rules',
     changedFrom: s.changedFrom ?? { stepType: s.stepType, channel: s.channel },
   };
 }
@@ -640,6 +665,12 @@ export interface GuidanceRequestStep {
  */
 export interface GuidanceRequest {
   signalKind: RecommendSignalKind;
+  /**
+   * El idioma en que se escribe la guía: el mismo de las frases de la
+   * guía compuesta (guidanceLocale del espacio), para que ningún paso
+   * quede en otro idioma que sus vecinos.
+   */
+  locale: GuidanceLocale;
   signalHeadline: string | null;
   companyName: string | null;
   briefTitle: string | null;
@@ -688,7 +719,7 @@ export interface RefineResult {
  */
 export async function refineGuidance(
   proposal: Proposal,
-  ctx: Omit<GuidanceRequest, 'steps' | 'signalKind' | 'requiresDisclosure'> & {
+  ctx: Omit<GuidanceRequest, 'steps' | 'signalKind' | 'requiresDisclosure' | 'locale'> & {
     requiresDisclosure: boolean;
     angles: Readonly<Record<string, { label: string; forbidden: readonly string[] }>>;
     /** El idioma de la frase de divulgación que se vuelve a añadir (el mismo de recommendSequence). */
@@ -698,6 +729,7 @@ export async function refineGuidance(
 ): Promise<RefineResult> {
   const request: GuidanceRequest = {
     signalKind: proposal.signalKind,
+    locale: ctx.locale ?? 'es',
     signalHeadline: ctx.signalHeadline,
     companyName: ctx.companyName,
     briefTitle: ctx.briefTitle,
@@ -733,7 +765,11 @@ export async function refineGuidance(
       keptRules++;
       return s;
     }
-    return { ...s, guidanceEs: withDisclosure(text.trim(), s.angleKey, ctx.requiresDisclosure, ctx.locale) };
+    return {
+      ...s,
+      guidanceEs: withDisclosure(text.trim(), s.angleKey, ctx.requiresDisclosure, ctx.locale),
+      guidanceSource: 'llm' as const,
+    };
   });
   return {
     proposal: { ...proposal, steps },

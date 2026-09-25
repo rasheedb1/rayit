@@ -10,13 +10,19 @@
  * lleguen plantillas en otro idioma, su tabla entra aquí y
  * `guidanceLocale` la elige por el locale del espacio.
  */
-import type { RecommendSignalKind } from './recomendar.ts';
+import type { RecommendSignalKind } from './proposal-notes.ts';
 
 /** Los idiomas que tienen tabla. */
 export const GUIDANCE_LOCALES = ['es'] as const;
 export type GuidanceLocale = (typeof GUIDANCE_LOCALES)[number];
 
 export interface GuidancePhrases {
+  /**
+   * El idioma de la tabla dicho para el modelo que redacta la guía
+   * (el redactor de la web lo pone en su instrucción): la guía del
+   * modelo sale en el mismo idioma que la compuesta con estas frases.
+   */
+  promptLanguage: string;
   /** Cómo se nombra la señal dentro de una guía. */
   signal: Record<RecommendSignalKind, string>;
   /** Con qué abre cada ángulo (sin el canal); recibe la frase de la señal. */
@@ -44,6 +50,7 @@ export interface GuidancePhrases {
 }
 
 const ES: GuidancePhrases = {
+  promptLanguage: 'español neutro',
   signal: {
     active_campaign: 'su campaña activa',
     launch: 'su lanzamiento',
@@ -57,7 +64,9 @@ const ES: GuidancePhrases = {
     prueba_desempeno: (s) => `un video tuyo parecido a lo que necesita ${s}, con sus views frente a tu mediana`,
     concepto_creativo: (s) => `una idea de video concreta para ${s}`,
     prueba_social: () => 'el resultado medido de una campaña tuya con una marca del mismo sector',
-    sintesis: () => 'un resumen de tres líneas, el enlace al media kit y a la cotización y una fecha concreta para hablar',
+    // El paso de cierre exige el media kit (requires_asset); la cotización solo si la creadora tiene una pública.
+    sintesis: () =>
+      'un resumen de tres líneas, el enlace al media kit (y a tu cotización pública, si la tienes) y una fecha concreta para hablar',
   },
   genericOpening: (s) => `algo específico de ${s}`,
   angleForbidden: {
