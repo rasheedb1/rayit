@@ -421,12 +421,12 @@ export const outboundLlmCall = pgTable('outbound_llm_call', {
 export const outboundGeneration = pgTable('outbound_generation', {
   touchId: uuid('touch_id').primaryKey().references(() => outboundTouch.id, { onDelete: 'cascade' }),
   workspaceId: workspaceId(),
-  stage: text('stage', { enum: ['generating', 'generated', 'reviewing', 'reviewed'] }).default('generating').notNull(),
+  stage: text('stage', { enum: ['requested', 'generating', 'generated', 'reviewing', 'reviewed'] }).default('generating').notNull(),
   subject: text('subject'),
   bodyMarked: text('body_marked'),
   model: text('model'),
   attempts: integer('attempts').default(0).notNull(),
-  outcome: text('outcome', { enum: ['approved', 'held'] }),
+  outcome: text('outcome', { enum: ['approved', 'held', 'manual'] }),
   leaseToken: uuid('lease_token'),
   leaseUntil: timestamptz('lease_until'),
   lastError: text('last_error'),
@@ -434,6 +434,15 @@ export const outboundGeneration = pgTable('outbound_generation', {
   reviewedAt: timestamptz('reviewed_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+  // 0057: lo que pidió una persona desde el editor, el cuerpo que había al tomarlo y lo que costó el borrador.
+  requestedHint: text('requested_hint', { enum: ['shorter', 'more_specific', 'other_angle', 'other_signal', 'soften', 'add_proof'] }),
+  requestedInstructions: text('requested_instructions'),
+  requestedBy: uuid('requested_by').references(() => appUser.id, { onDelete: 'set null' }),
+  requestedAt: timestamptz('requested_at'),
+  baseBodyMd5: text('base_body_md5'),
+  genInputTokens: integer('gen_input_tokens').default(0).notNull(),
+  genOutputTokens: integer('gen_output_tokens').default(0).notNull(),
+  genCost: numeric('gen_cost', { precision: 14, scale: 6 }).default('0').notNull(),
 });
 
 // ---------------------------------------------------------------------
