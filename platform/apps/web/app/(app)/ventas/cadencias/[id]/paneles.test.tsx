@@ -44,8 +44,8 @@ describe("activar", () => {
 
   it("«Duplicar» gira y apaga la fila mientras corre: un segundo clic no hace otra copia", async () => {
     const { duplicarCadencia } = await import("../actions");
-    let contestar: (v: unknown) => void = () => {};
-    vi.mocked(duplicarCadencia).mockImplementationOnce(() => new Promise((r) => (contestar = r)));
+    let contestar: () => void = () => {};
+    vi.mocked(duplicarCadencia).mockImplementationOnce(() => new Promise((r) => (contestar = () => r({}))));
     render(<Controles sequenceId={SEQ} status="active" nombre="Fresko" activarLabel="Activar" puedeActivar />);
     const duplicar = screen.getByRole("button", { name: MESSAGES.estado.duplicar });
     fireEvent.click(duplicar);
@@ -56,7 +56,7 @@ describe("activar", () => {
     expect(screen.getByRole("button", { name: MESSAGES.detalle.renombrar })).toBeDisabled();
     fireEvent.click(duplicar);
     expect(duplicarCadencia).toHaveBeenCalledTimes(1);
-    await act(async () => contestar({}));
+    await act(async () => contestar());
     expect(screen.getByRole("button", { name: MESSAGES.estado.duplicar })).not.toBeDisabled();
   });
 

@@ -90,7 +90,11 @@ export default async function CadenciasPage({
         c.replyRate === null ? (
           <CeldaVacia texto={t.lista.sinContactar} />
         ) : (
-          t.lista.respuestaDe(f.pct(c.replyRate), f.int(c.replied), f.int(c.contacted))
+          // La tasa en la columna de cifras; de cuántas sale, debajo y en texto normal (en mono y en una línea no cabía a 400 px).
+          <span className="block">
+            <span className="block">{f.pct(c.replyRate)}</span>
+            <span className="block font-sans text-xs text-fg-3">{t.lista.contactadas(f.int(c.replied), f.int(c.contacted))}</span>
+          </span>
         ),
     },
   ];
@@ -145,7 +149,8 @@ export default async function CadenciasPage({
                       {t.senales.verCadencia}
                     </Button>
                   ) : (
-                    <ProponerBoton signalId={s.signalId} />
+                    // Secundario: aquí hay hasta seis a la vez; el primario de la cadencia es «Activar», en su línea de tiempo.
+                    <ProponerBoton signalId={s.signalId} variant="secondary" />
                   )}
                 </div>
               </li>
@@ -169,6 +174,8 @@ export default async function CadenciasPage({
           rows={cadencias}
           rowKey={(c) => c.id}
           caption={t.lista.caption}
+          // En un teléfono la tabla se desplaza dentro de su marco en vez de aplastar la columna «Cadencia».
+          className="[&_table]:min-w-[36rem]"
           emptyState={<EmptyState title={t.lista.vacio.titulo} description={t.lista.vacio.descripcion} />}
         />
       </section>

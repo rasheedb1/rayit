@@ -115,6 +115,28 @@ describe("línea de tiempo · el foco", () => {
     await waitFor(() => expect(document.activeElement).toBe(within(tarjeta(3)).getByRole("button", { name: "Subir el paso 3" })));
   });
 
+  it("al arrastrar con el ratón, una línea de inserción dice dónde va a caer el paso", () => {
+    pintar();
+    const item = (n: number) => tarjeta(n).closest("li")!;
+    const dataTransfer = { setData: () => {}, effectAllowed: "" };
+    fireEvent.dragStart(tarjeta(1), { dataTransfer });
+    // El paso 1 baja: cae debajo del 3.
+    fireEvent.dragEnter(item(3));
+    expect(item(3)).toHaveAttribute("data-insercion", "debajo");
+    expect(item(2)).not.toHaveAttribute("data-insercion");
+    // Al salir del paso entero, la línea se va.
+    fireEvent.dragLeave(item(3), { relatedTarget: document.body });
+    expect(item(3)).not.toHaveAttribute("data-insercion");
+    fireEvent.dragEnd(tarjeta(1));
+
+    // El paso 3 sube: cae encima del 1. Al soltar (dragEnd), no queda ninguna marca.
+    fireEvent.dragStart(tarjeta(3), { dataTransfer });
+    fireEvent.dragEnter(item(1));
+    expect(item(1)).toHaveAttribute("data-insercion", "encima");
+    fireEvent.dragEnd(tarjeta(3));
+    expect(item(1)).not.toHaveAttribute("data-insercion");
+  });
+
   it("la línea de tiempo dice la espera entre pasos y el editor de una tarea a mano pide su red", async () => {
     pintar();
     expect(screen.getAllByText("Espera 3 días hábiles")).toHaveLength(2);

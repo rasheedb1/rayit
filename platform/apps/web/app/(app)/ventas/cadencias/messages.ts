@@ -74,8 +74,8 @@ export const MESSAGES = {
     titulo: "Tus cadencias",
     caption: "Cadencias del espacio",
     columnas: { cadencia: "Cadencia", estado: "Estado", pasos: "Pasos", enrolados: "Dentro", respuesta: "Respuesta" },
-    /** «33 % · 1 de 3 contactadas»: la tasa, cuántas respondieron y de cuántas a las que ya les salió algo. */
-    respuestaDe: (pct: string, respondidas: string, contactadas: string) => `${pct} · ${respondidas} de ${contactadas} contactadas`,
+    /** Bajo la tasa de respuesta, en su propia línea: cuántas respondieron de cuántas a las que ya les salió algo. */
+    contactadas: (respondidas: string, contactadas: string) => `${respondidas} de ${contactadas} contactadas`,
     sinContactar: "Sin envíos",
     desde: (senal: string) => `Desde: ${senal}`,
     vacio: {

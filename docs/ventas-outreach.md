@@ -1134,6 +1134,28 @@ campaña activa, temporada).
   descarta. Las consultas viven partidas en
   `packages/db/src/queries/cadencias/` (lista, contexto, propuesta,
   pasos, edición, estado).
+- **La baja del espacio antes de enrolar (r5)**: «Activar» y «Enrolar
+  desde un negocio» miran la baja con la misma expresión que la etiqueta
+  de la pantalla (`optedOutAmong`: la ficha, la lista global, un
+  enrolamiento en baja y `outbound_workspace_optout`, el enlace de un
+  correo del espacio) antes de llamar a `enrollContacts`. Si la persona
+  pulsó la baja entre «Proponer» y «Activar», la cadencia se activa sin
+  ella y lo dice; en un lote, esa persona sale entre las saltadas y las
+  demás entran. Sin esto, el disparador de 0050 revertía la transacción
+  entera y la cadencia no se podía activar nunca. Quién está viva en
+  otra cadencia se pregunta en una sola consulta para todo el lote
+  (`liveEnrollmentsElsewhere`).
+- **Lo que hace una persona no lleva texto, en todas las capas (r5)**:
+  un paso que el despachador no envía (comentario y reacción públicos,
+  tarea a mano) no se redacta. La pantalla (`sinTexto`), la base
+  (`TEXTLESS_STEP_TYPES`, que el recomendador, las plantillas copiadas,
+  «Añadir paso» y el editor usan para dejar `generate_with_ai` en false)
+  y «Activar» al contar gestos a mano usan la misma regla. 0057 afloja
+  el CHECK de `outbound_step` de 0037 para que un comentario pueda
+  guardarse sin generación ni texto fijo, y apaga la generación de los
+  que ya había. La reacción tiene su propia guía («reacciona a su última
+  publicación…; no comentes ni escribas»): comentar es otro paso. El
+  canal principal de la secuencia cuenta solo los mensajes.
 
 ### 5.6 La puerta de calidad de cada mensaje
 

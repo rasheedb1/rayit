@@ -97,7 +97,12 @@ export function TarjetaPaso({
       )}
       <div className="min-w-0 flex-1">
         <header className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <h3 id={`paso-${paso.id}`} tabIndex={-1} className="text-sm font-semibold outline-none">
+          <h3
+            id={`paso-${paso.id}`}
+            tabIndex={-1}
+            // El foco de reserva de la línea de tiempo cae aquí: se ve con el mismo anillo que el kit (WCAG 2.4.7).
+            className="rounded-sm text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-ink"
+          >
             {t.titulo(paso.numero)}
           </h3>
           <span className="text-sm tabular-nums text-fg-2">
@@ -115,8 +120,12 @@ export function TarjetaPaso({
           </div>
           <div>
             <dt className="sr-only">{t.guia}</dt>
-            <dd className="whitespace-pre-line break-words text-fg-2">{paso.guia ?? t.sinGuia}</dd>
-            {paso.guiaAviso && <dd className="mt-1 text-xs text-warn">{paso.guiaAviso}</dd>}
+            <dd className="whitespace-pre-line break-words text-fg-2">
+              {paso.guia ?? t.sinGuia}
+            </dd>
+            {paso.guiaAviso && (
+              <dd className="mt-1 text-xs text-warn">{paso.guiaAviso}</dd>
+            )}
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-3">
             <dt className="sr-only">{t.campos.modo}</dt>
@@ -130,7 +139,12 @@ export function TarjetaPaso({
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             {editable && (
               <span data-accion="editar" className="contents">
-                <Button size="sm" variant="secondary" onClick={editar} disabled={ocupado}>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={editar}
+                  disabled={ocupado}
+                >
                   {t.editar}
                 </Button>
               </span>
@@ -164,14 +178,14 @@ export function TarjetaPaso({
                 </span>
                 {!ocupado && (
                   <ConfirmInline
-                  action={quitar}
-                  label={t.quitar}
-                  variant="ghost"
-                  question={t.quitarPregunta}
-                  consequence={t.quitarConsecuencia}
-                  confirmLabel={t.quitarConfirmar}
-                  cancelLabel={MESSAGES.detalle.cancelar}
-                  openWidth="w-full sm:w-80"
+                    action={quitar}
+                    label={t.quitar}
+                    variant="ghost"
+                    question={t.quitarPregunta}
+                    consequence={t.quitarConsecuencia}
+                    confirmLabel={t.quitarConfirmar}
+                    cancelLabel={MESSAGES.detalle.cancelar}
+                    openWidth="w-full sm:w-80"
                   />
                 )}
               </>

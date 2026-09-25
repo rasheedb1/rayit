@@ -171,6 +171,6 @@ describe("cadencias · quién entra y qué le queda", () => {
   });
 
   it("la columna Respuesta dice cuántas respondieron de cuántas contactadas", () => {
-    expect(MESSAGES.lista.respuestaDe(f.pct(1 / 3), f.int(1), f.int(3))).toMatch(/^33.*% · 1 de 3 contactadas$/);
+    expect(MESSAGES.lista.contactadas(f.int(1), f.int(3))).toBe("1 de 3 contactadas");
   });
 });
