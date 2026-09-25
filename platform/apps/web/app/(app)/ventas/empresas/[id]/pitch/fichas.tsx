@@ -12,8 +12,12 @@ const CHIP =
 
 export type ClaimGroup = keyof typeof PITCH.fichas.grupos;
 const ORDER = Object.keys(PITCH.fichas.grupos) as ClaimGroup[];
-/** Abiertos de entrada: lo que más se cita (la mediana y las campañas con esta misma marca). */
-const OPEN_BY_DEFAULT: readonly ClaimGroup[] = ["creator_baseline", "campaign_brand", "signal"];
+/**
+ * Abiertos de entrada: solo lo propio de ESTA marca (las campañas con ella
+ * y la señal del negocio), que son pocas fichas. Las medianas y lo demás,
+ * plegados: la biblioteca no empuja el resto del editor hacia abajo.
+ */
+const OPEN_BY_DEFAULT: readonly ClaimGroup[] = ["campaign_brand", "signal"];
 
 const fold = (s: string) => s.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "");
 
@@ -39,8 +43,8 @@ export function groupClaims(claims: readonly SalesClaim[], companyName: string, 
 
 /**
  * Las fichas insertables del editor: las cifras del creador que firma,
- * agrupadas por su origen en secciones plegables (abiertas de entrada la
- * mediana, las campañas con esta marca y la señal), con un filtro de
+ * agrupadas por su origen en secciones plegables (abiertas de entrada solo
+ * las campañas con esta marca y la señal del negocio), con un filtro de
  * texto; y las variables de la lista canónica (render.ts, @mc/core).
  * Tocar una la escribe donde está el cursor; el editor decide cómo
  * (cuerpo.tsx). Como el compositor de Superhuman: lo que se cita está a un

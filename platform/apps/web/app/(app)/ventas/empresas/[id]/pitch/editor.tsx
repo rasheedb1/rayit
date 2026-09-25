@@ -61,8 +61,9 @@ const POLL_MS = 5_000;
  * El editor del pitch: a la izquierda, para quién, la redacción con IA
  * (instrucciones, pedir un borrador y tres pistas, como el generador de
  * Chief), el asunto, el mensaje (las cifras y las variables son fichas,
- * no marcas) y las fichas insertables; debajo de los botones, en una
- * línea, por qué «Programar» está apagado. A la derecha, cómo lo recibe
+ * no marcas; una cifra sin origen se subraya donde está), justo debajo
+ * los botones con una línea de por qué «Programar» está apagado, y al
+ * final las fichas insertables. A la derecha, cómo lo recibe
  * la marca, la nota de la revisión automática y la revisión completa.
  * «Copiar» copia el texto limpio y guarda el borrador; «Programar» solo
  * con la revisión en verde (y el servidor la repite). Como el compositor
@@ -202,13 +203,7 @@ export function EditorDePitch({ data }: { data: EditorData }) {
           </p>
         </div>
 
-        <FichasInsertables
-          claims={variant.claims}
-          companyName={data.company.name}
-          onVariable={(v: TemplateVariable) => cuerpo.current?.insert([{ kind: "variable", name: v }])}
-          onClaim={(c) => cuerpo.current?.insert([{ kind: "claim", id: c.id, raw: c.display }])}
-        />
-
+        {/* Las acciones van pegadas al mensaje, como en el compositor de Superhuman: la biblioteca de fichas va debajo. */}
         <div className="grid gap-2 border-t border-border pt-4">
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -240,7 +235,7 @@ export function EditorDePitch({ data }: { data: EditorData }) {
               )}
             </p>
           )}
-          {!revision.canCopy && <p className="text-xs text-muted">{a.copiarBloqueado}</p>}
+          {revision.copyBlockedBy && <p className="text-xs text-muted">{a.copiarBloqueado[revision.copyBlockedBy]}</p>}
         </div>
         <div aria-live="polite" className="grid min-w-0 gap-1 text-sm">
           {shown.notice && (
@@ -265,6 +260,13 @@ export function EditorDePitch({ data }: { data: EditorData }) {
             </Link>
           )}
         </div>
+        <FichasInsertables
+          claims={variant.claims}
+          companyName={data.company.name}
+          onVariable={(v: TemplateVariable) => cuerpo.current?.insert([{ kind: "variable", name: v }])}
+          onClaim={(c) => cuerpo.current?.insert([{ kind: "claim", id: c.id, raw: c.display }])}
+        />
+
       </form>
 
       <aside className="min-w-0" aria-label={PITCH.vista.titulo}>

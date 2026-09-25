@@ -34,6 +34,11 @@ export const PITCH = {
     cifra: (display: string, label: string, origen: string) => `${display}: ${label} (${origen})`,
     cifraDesconocida: (display: string) => `${display}: esta cifra no es de tu perfil`,
     variable: (label: string) => `${label}, se rellena al enviar`,
+    /** Bajo el mensaje, junto a las cifras subrayadas: cuáles no tienen origen o no coinciden con él. */
+    cifrasSinOrigen: (list: string, n: number) =>
+      n === 1
+        ? `La cifra subrayada (${list}) no tiene un origen que coincida: insértala desde «Cifras de tu perfil» o quítala.`
+        : `Las cifras subrayadas (${list}) no tienen un origen que coincida: insértalas desde «Cifras de tu perfil» o quítalas.`,
   },
 
   fichas: {
@@ -194,7 +199,12 @@ export const PITCH = {
     copiar: "Copiar",
     copiarLabel: "Copiar el asunto y el mensaje, sin marcas",
     copiado: "Copiado. También quedó guardado como borrador en la ficha.",
-    copiarBloqueado: "Antes de copiarlo, rellena los huecos y quita las cifras cuyo origen no coincide.",
+    /** Por qué «Copiar» está apagado, con el motivo exacto (vista.ts, copyBlockedBy). Con el mensaje vacío no se dice nada. */
+    copiarBloqueado: {
+      holes: "Antes de copiarlo, rellena los huecos.",
+      figures: "Antes de copiarlo, quita las cifras cuyo origen no coincide.",
+      both: "Antes de copiarlo, rellena los huecos y quita las cifras cuyo origen no coincide.",
+    },
     guardar: "Guardar borrador",
     guardado: "Guardado como borrador.",
     programar: "Programar",

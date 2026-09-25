@@ -350,3 +350,66 @@ describe("fichas de cifras", () => {
     expect(r.items.filter((i) => i.code === "shouting")).toEqual([]);
   });
 });
+
+describe("ronda 4: el aviso donde está el problema y las acciones junto al mensaje", () => {
+  const INVENTADO = BUENO.replace("Mis recetas de desayuno", "Trabajé con 11 marcas este año. Mis recetas de desayuno");
+
+  it("una cifra sin origen se dice bajo el mensaje, y el campo la anuncia (aria-describedby)", () => {
+    render(<EditorDePitch data={datos({ draft: { ...BORRADOR, body: INVENTADO } })} />);
+    const aviso = screen.getByText(PITCH.cuerpo.cifrasSinOrigen("«11»", 1));
+    expect(aviso.id).toBe("pitch-cuerpo-cifras");
+    expect(cuerpo().getAttribute("aria-describedby")).toBe("pitch-cuerpo-help pitch-cuerpo-cifras");
+  });
+
+  it("con la API de resaltado del navegador, la cifra se subraya dentro del mensaje sin tocar el texto", () => {
+    const registry = new Map<string, { ranges: Range[] }>();
+    class FakeHighlight {
+      ranges: Range[];
+      constructor(...ranges: Range[]) {
+        this.ranges = ranges;
+      }
+    }
+    vi.stubGlobal("CSS", { highlights: registry });
+    vi.stubGlobal("Highlight", FakeHighlight);
+    try {
+      const { unmount } = render(<EditorDePitch data={datos({ draft: { ...BORRADOR, body: INVENTADO } })} />);
+      const marcadas = registry.get("pitch-cifra-sin-origen")?.ranges.map((r) => r.toString());
+      expect(marcadas).toEqual(["11"]);
+      expect(cuerpo().textContent).toContain("Trabajé con 11 marcas");
+      // Al corregirlo, el subrayado se va.
+      escribir("Hola, mis recetas de desayuno se guardan para la semana.");
+      expect(registry.has("pitch-cifra-sin-origen")).toBe(false);
+      unmount();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("«Programar», «Copiar» y «Guardar borrador» van antes de la biblioteca de fichas; las medianas empiezan plegadas", () => {
+    render(<EditorDePitch data={datos()} />);
+    const cifras = screen.getByRole("heading", { name: PITCH.fichas.cifras });
+    for (const boton of [programar(), copiar(), screen.getByRole("button", { name: PITCH.acciones.guardar })]) {
+      expect(boton.compareDocumentPosition(cifras) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    const medianas = screen.getByText(PITCH.fichas.grupos.creator_baseline).closest("details")!;
+    expect(medianas.open).toBe(false);
+  });
+
+  it("con el editor vacío no dice por qué no se copia; con un hueco dice el motivo exacto", () => {
+    render(<EditorDePitch data={datos()} />);
+    for (const texto of Object.values(PITCH.acciones.copiarBloqueado)) expect(screen.queryByText(texto)).toBeNull();
+    escribir("Hola {{apodo}}, mis recetas de desayuno se guardan para la semana.");
+    expect(screen.getByText(PITCH.acciones.copiarBloqueado.holes)).toBeTruthy();
+    expect(screen.queryByText(PITCH.acciones.copiarBloqueado.both)).toBeNull();
+  });
+
+  it("una marca detrás de un número pequeño se lleva ese número: «6 [claim] anuncios» es una ficha que dice 6", () => {
+    const s = segmentsOf("Vi que Fresko tiene 6 [claim:signal:s1:active_ads] anuncios activos.");
+    expect(s).toEqual([
+      { kind: "text", text: "Vi que Fresko tiene " },
+      { kind: "claim", id: "signal:s1:active_ads", raw: "6" },
+      { kind: "text", text: " anuncios activos." },
+    ]);
+    expect(markedOf(s)).toBe("Vi que Fresko tiene 6 [claim:signal:s1:active_ads] anuncios activos.");
+  });
+});

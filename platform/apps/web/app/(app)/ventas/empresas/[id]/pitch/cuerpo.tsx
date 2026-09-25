@@ -2,6 +2,7 @@
 
 import { useEffect, useImperativeHandle, useMemo, useRef, type ClipboardEvent, type KeyboardEvent, type Ref } from "react";
 import type { SalesClaim } from "@mc/core/outreach/claims";
+import { figureIssueSpans, type FigureIssue } from "@mc/core/outreach/preflight";
 import { isTemplateVariable } from "@mc/core/outreach/render";
 import { CONTROL } from "@/components/ui/field";
 import { markedOf, pushText, segmentsOf, withSpacing, type Segment } from "./marcas";
@@ -89,6 +90,69 @@ function readSegments(root: Node, out: Segment[] = []): Segment[] {
   return out;
 }
 
+/** El nombre del resaltado de las cifras sin origen (CSS Custom Highlight API): se pinta sin tocar el DOM ni mover el cursor. */
+const FLAG_HIGHLIGHT = "pitch-cifra-sin-origen";
+/** Subrayado ondulado con el color semántico de error (--bad, de globals.css), claro y oscuro. */
+const FLAG_CSS = `::highlight(${FLAG_HIGHLIGHT}){text-decoration-line:underline;text-decoration-style:wavy;text-decoration-color:var(--bad);background-color:var(--bad-wash);}`;
+
+/**
+ * Dónde empieza cada nodo de texto del cuerpo dentro del texto marcado:
+ * se recorre el DOM como readSegments y se reconstruye el marcado a la
+ * vez (una ficha de cifra cuenta lo que escribe «115.446 [claim:…]», una
+ * variable «{{first_name}}»). Si lo reconstruido no es `marked`, null.
+ */
+function textOffsets(root: HTMLElement, marked: string): Array<{ node: Text; start: number }> | null {
+  const out: Array<{ node: Text; start: number }> = [];
+  let text = "";
+  const walk = (parent: Node) => {
+    parent.childNodes.forEach((node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        out.push({ node: node as Text, start: text.length });
+        text += (node.textContent ?? "").replace(/\u00a0/g, " ");
+        return;
+      }
+      if (!(node instanceof HTMLElement) || node.dataset.fin !== undefined) return;
+      if (node.dataset.claim) {
+        const raw = node.dataset.raw ?? "";
+        text += raw ? `${raw} [claim:${node.dataset.claim}]` : ` [claim:${node.dataset.claim}]`;
+      } else if (node.dataset.variable && isTemplateVariable(node.dataset.variable)) {
+        text += `{{${node.dataset.variable}}}`;
+      } else if (node.tagName === "BR") {
+        text += "\n";
+      } else if (node.tagName === "DIV" || node.tagName === "P") {
+        if (text.length > 0 && !text.endsWith("\n")) text += "\n";
+        walk(node);
+      } else {
+        walk(node);
+      }
+    });
+  };
+  walk(root);
+  return text === marked ? out : null;
+}
+
+/** Subraya dentro del mensaje las cifras sin origen o que no coinciden con él. Sin la API de resaltado, no hace nada (queda el aviso). */
+function paintFlagged(root: HTMLElement, marked: string, flagged: readonly FigureIssue[]): void {
+  if (typeof CSS === "undefined" || !("highlights" in CSS) || typeof Highlight === "undefined") return;
+  const offsets = flagged.length > 0 ? textOffsets(root, marked) : null;
+  const at = (pos: number) => {
+    const piece = offsets?.findLast((o) => o.start <= pos && pos <= o.start + (o.node.textContent ?? "").length);
+    return piece ? { node: piece.node, offset: pos - piece.start } : null;
+  };
+  const ranges: Range[] = [];
+  for (const f of flagged) {
+    const a = at(f.start);
+    const b = at(f.end);
+    if (!a || !b) continue;
+    const r = root.ownerDocument.createRange();
+    r.setStart(a.node, a.offset);
+    r.setEnd(b.node, b.offset);
+    ranges.push(r);
+  }
+  if (ranges.length > 0) CSS.highlights.set(FLAG_HIGHLIGHT, new Highlight(...ranges));
+  else CSS.highlights.delete(FLAG_HIGHLIGHT);
+}
+
 /**
  * El cuerpo del pitch: un campo de texto en el que las cifras de tu
  * perfil y las variables son fichas (como en el compositor de Superhuman),
@@ -135,6 +199,20 @@ export function CuerpoConCifras({
     lastValue.current = value;
     renderedClaims.current = byId;
   }, [value, byId]);
+
+  // Las cifras sin origen (o con un origen que no coincide), subrayadas donde están y dichas justo debajo (§5.3).
+  const flagged = useMemo(() => figureIssueSpans(value, claims), [value, claims]);
+  useEffect(() => {
+    if (ref.current) paintFlagged(ref.current, value, flagged);
+  }, [value, flagged]);
+  useEffect(
+    () => () => {
+      if (typeof CSS !== "undefined" && "highlights" in CSS) CSS.highlights.delete(FLAG_HIGHLIGHT);
+    },
+    [],
+  );
+  const flaggedId = `${id}-cifras`;
+  const flaggedList = [...new Set(flagged.map((f) => `«${value.slice(f.start, f.end)}»`))];
 
   // Dónde está el cursor dentro del cuerpo: ahí se insertan las fichas aunque el foco se haya ido al botón.
   useEffect(() => {
@@ -220,7 +298,7 @@ export function CuerpoConCifras({
         role="textbox"
         aria-multiline="true"
         aria-labelledby={labelledBy}
-        aria-describedby={describedBy}
+        aria-describedby={[describedBy, flagged.length > 0 ? flaggedId : null].filter(Boolean).join(" ") || undefined}
         contentEditable
         suppressContentEditableWarning
         tabIndex={0}
@@ -232,6 +310,12 @@ export function CuerpoConCifras({
         className={`${CONTROL} min-h-72 whitespace-pre-wrap break-words py-2 leading-7`}
       />
       <input type="hidden" name={name} value={value} />
+      <style>{FLAG_CSS}</style>
+      {flagged.length > 0 && (
+        <p id={flaggedId} className="min-w-0 break-words text-xs text-bad">
+          {PITCH.cuerpo.cifrasSinOrigen(flaggedList.join(", "), flaggedList.length)}
+        </p>
+      )}
     </>
   );
 }

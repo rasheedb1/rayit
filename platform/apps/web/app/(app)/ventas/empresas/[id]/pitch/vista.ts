@@ -36,6 +36,12 @@ export interface Revision {
    * no sabe leer; lo que no puede es programarlo desde aquí.
    */
   canCopy: boolean;
+  /**
+   * Por qué no se puede copiar, para decirlo exacto junto a los botones:
+   * huecos sin rellenar, cifras cuyo origen no coincide, o las dos. null
+   * si se puede copiar o si solo falta escribir (eso ya lo dice el resumen).
+   */
+  copyBlockedBy: "holes" | "figures" | "both" | null;
   /** Nada escrito todavía: el editor enseña un estado neutro, no una lista de errores. */
   pristine: boolean;
   cited: SalesClaim[];
@@ -71,10 +77,13 @@ export function reviseDraft(input: {
     ...pf.issues.map((i) => ({ code: i.code as string, text: issueText(i) })),
   ];
   const pristine = input.subject.trim() === "" && input.body.trim() === "";
+  const holes = pf.issues.some((i) => i.code === "placeholders");
+  const figures = pf.issues.some((i) => i.code === "unknown_claim" || i.code === "claim_mismatch");
   return {
     ok: all.length === 0,
     items: pristine ? all.filter((i) => !SILENT_WHEN_PRISTINE.has(i.code)) : all,
     canCopy: !pf.issues.some((i) => COPY_BLOCKERS.has(i.code)),
+    copyBlockedBy: holes && figures ? "both" : holes ? "holes" : figures ? "figures" : null,
     pristine,
     cited: claimsCitedIn(input.claims, subject, body),
   };

@@ -46,19 +46,36 @@ function textWithVariables(out: Segment[], text: string): void {
   pushText(out, text.slice(pos));
 }
 
+/** Un número pegado al final del texto («… tiene 6»): la cifra que una marca [claim:id] señala aunque sea pequeña. */
+const TRAILING_NUMBER_RE = /(?<![\p{L}\p{N}])\d+(?:[.,]\d+)*\s*$/u;
+
 /**
  * Parte un mensaje marcado en trozos. Cada marca [claim:id] se lleva la
  * cifra que la precede (la misma que el pre-vuelo le atribuye: a
  * MARKER_REACH como mucho y sin saltar de línea) y juntas son una ficha.
- * Si entre la cifra y la marca había texto («115.446 views [claim:x]»),
- * ese texto queda detrás de la ficha: lo que ve la marca no cambia.
+ * Las cifras se buscan en el mensaje entero con las marcas tapadas, como
+ * el pre-vuelo: «6 [claim:…] anuncios» es una cifra por lo que la sigue.
+ * Y si la marca va justo detrás de un número que sola no sería cifra
+ * («6 [claim:…] tiendas»), la marca dice que lo es. Si entre la cifra y
+ * la marca había texto («115.446 views [claim:x]»), ese texto queda
+ * detrás de la ficha: lo que ve la marca no cambia.
  */
 export function segmentsOf(marked: string): Segment[] {
   const out: Segment[] = [];
+  const markers = findClaimMarkers(marked);
+  let masked = marked;
+  for (const m of markers) masked = masked.slice(0, m.start) + " ".repeat(m.end - m.start) + masked.slice(m.end);
+  const figures = findFigures(masked);
   let pos = 0;
-  for (const m of findClaimMarkers(marked)) {
+  for (const m of markers) {
     const before = marked.slice(pos, m.start);
-    const f = findFigures(before).at(-1);
+    const found = figures.filter((f) => f.start >= pos && f.end <= m.start).at(-1);
+    const trailing = found ? null : TRAILING_NUMBER_RE.exec(before);
+    const f = found
+      ? { start: found.start - pos, end: found.end - pos }
+      : trailing
+        ? { start: trailing.index, end: trailing.index + trailing[0].trimEnd().length }
+        : null;
     if (f && m.start - (pos + f.end) <= MARKER_REACH && !before.slice(f.end).includes("\n")) {
       textWithVariables(out, before.slice(0, f.start));
       out.push({ kind: "claim", id: m.id, raw: before.slice(f.start, f.end) });

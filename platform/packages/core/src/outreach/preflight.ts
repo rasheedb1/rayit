@@ -184,6 +184,35 @@ function maskMarkers(text: string): string {
   return out;
 }
 
+/** Un problema de cifra con su sitio en el texto: el editor lo subraya donde está. */
+export interface FigureIssue extends PreflightIssue {
+  code: 'unsourced_figure' | 'claim_mismatch';
+  start: number;
+  end: number;
+}
+
+/**
+ * Las cifras sin origen o que no coinciden con su origen, con su posición
+ * en `text` (el texto marcado, con sus [claim:id]). Las mismas que ve
+ * checkFigures: el editor del pitch las subraya dentro del mensaje.
+ */
+export function figureIssueSpans(text: string, claims: readonly SalesClaim[]): FigureIssue[] {
+  const byId = new Map(claims.map((c) => [c.id, c]));
+  const markers = findClaimMarkers(text);
+  const figures = findFigures(maskMarkers(text), claims);
+  const out: FigureIssue[] = [];
+  figures.forEach((f, i) => {
+    const marker = markerFor(text, markers, f, figures[i + 1]);
+    if (!marker) {
+      out.push({ code: 'unsourced_figure', detail: f.raw, start: f.start, end: f.end });
+      return;
+    }
+    const c = byId.get(marker.id);
+    if (c && !figureMatchesClaim(f, c)) out.push({ code: 'claim_mismatch', detail: `${f.raw} ≠ ${c.display}`, start: f.start, end: f.end });
+  });
+  return out;
+}
+
 /** Revisa que cada cifra lleve su marca, que la marca exista y que diga lo mismo (§5.3). */
 export function checkFigures(
   text: string,
@@ -192,22 +221,12 @@ export function checkFigures(
 ): PreflightIssue[] {
   const issues: PreflightIssue[] = [];
   const byId = new Map(claims.map((c) => [c.id, c]));
-  const markers = findClaimMarkers(text);
-  for (const m of markers) {
+  for (const m of findClaimMarkers(text)) {
     const c = byId.get(m.id);
     if (!c) issues.push({ code: 'unknown_claim', detail: m.id });
     else if (allowedSources && !allowedSources.includes(c.source)) issues.push({ code: 'claim_not_for_this_angle', detail: m.id });
   }
-  const figures = findFigures(maskMarkers(text), claims);
-  figures.forEach((f, i) => {
-    const marker = markerFor(text, markers, f, figures[i + 1]);
-    if (!marker) {
-      issues.push({ code: 'unsourced_figure', detail: f.raw });
-      return;
-    }
-    const c = byId.get(marker.id);
-    if (c && !figureMatchesClaim(f, c)) issues.push({ code: 'claim_mismatch', detail: `${f.raw} ≠ ${c.display}` });
-  });
+  for (const f of figureIssueSpans(text, claims)) issues.push({ code: f.code, detail: f.detail });
   return issues;
 }
 
