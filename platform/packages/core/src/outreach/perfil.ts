@@ -356,9 +356,11 @@ export const TOP_VIDEOS = 5;
 export const AUDIENCE_TOP = 3;
 
 export class PerfilError extends Error {
-  constructor(readonly code: 'duplicate_claim' | 'invalid_claim_id', message: string) {
+  readonly code: 'duplicate_claim' | 'invalid_claim_id';
+  constructor(code: 'duplicate_claim' | 'invalid_claim_id', message: string) {
     super(message);
     this.name = 'PerfilError';
+    this.code = code;
   }
 }
 
@@ -395,7 +397,8 @@ export function cutLabel(hours: number): string {
 
 const GENEROS: Record<string, string> = { f: 'mujeres', m: 'hombres', u: 'sin especificar' };
 
-function regionName(code: string): string {
+/** El nombre del país en español, o el código si Intl no lo conoce. */
+export function regionName(code: string): string {
   try {
     return new Intl.DisplayNames(['es'], { type: 'region' }).of(code.toUpperCase()) ?? code;
   } catch {
