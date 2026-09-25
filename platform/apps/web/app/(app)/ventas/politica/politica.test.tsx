@@ -46,7 +46,7 @@ function formulario(over: Record<string, string> = {}): FormData {
   const f = new FormData();
   const base = {
     maxTouchesPerCompany: "4", minDaysBetweenTouches: "3", maxEmailsPerDay: "60", cooldownDaysAfterNo: "180",
-    warmupDays: "14", requireHumanReview: "si", claimsMustBeSourced: "si", postalAddress: "1 Main St, Springfield, US",
+    warmupDays: "14", requireHumanReview: "si", claimsMustBeSourced: "si", stopCompanyOnReply: "si", postalAddress: "1 Main St, Springfield, US",
     sendWindowStart: "09:00", sendWindowEnd: "17:00",
     ...over,
   };
@@ -63,10 +63,10 @@ beforeEach(() => {
 describe("guardarPolitica", () => {
   it("guarda con los tipos de la base y sin workspace en el formulario", async () => {
     saveOutboundPolicy.mockResolvedValue({});
-    expect(await guardarPolitica({}, formulario({ requireHumanReview: "no" }))).toEqual({ ok: true });
+    expect(await guardarPolitica({}, formulario({ requireHumanReview: "no", stopCompanyOnReply: "no" }))).toEqual({ ok: true });
     expect(saveOutboundPolicy).toHaveBeenCalledWith({}, {
       maxTouchesPerCompany: 4, minDaysBetweenTouches: 3, maxEmailsPerDay: 60, cooldownDaysAfterNo: 180, warmupDays: 14,
-      requireHumanReview: false, claimsMustBeSourced: true, postalAddress: "1 Main St, Springfield, US",
+      requireHumanReview: false, claimsMustBeSourced: true, stopCompanyOnReply: false, postalAddress: "1 Main St, Springfield, US",
       sendWindowStart: "09:00", sendWindowEnd: "17:00",
     });
   });
@@ -163,7 +163,8 @@ describe("la curva de calentamiento", () => {
   it("se mueve con lo escrito, con cifras en el locale del workspace", () => {
     const policy = {
       maxTouchesPerCompany: 4, minDaysBetweenTouches: 3, maxEmailsPerDay: 1500, cooldownDaysAfterNo: 180, warmupDays: 14,
-      requireHumanReview: true, claimsMustBeSourced: true, postalAddress: null, sendWindowStart: "09:15", sendWindowEnd: "17:00",
+      requireHumanReview: true, claimsMustBeSourced: true, stopCompanyOnReply: true, postalAddress: null, sendWindowStart: "09:15",
+      sendWindowEnd: "17:00",
     };
     const rangos = { maxTouchesPerCompany: "", minDaysBetweenTouches: "", maxEmailsPerDay: "", cooldownDaysAfterNo: "", warmupDays: "" };
     const maximos = { maxTouchesPerCompany: 12, minDaysBetweenTouches: 30, maxEmailsPerDay: 2000, cooldownDaysAfterNo: 730, warmupDays: 90 };

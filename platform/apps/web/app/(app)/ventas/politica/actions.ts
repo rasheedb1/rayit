@@ -45,8 +45,9 @@ function politicaSchema(rango: (c: Campo) => string, direccionLarga: string) {
     warmupDays: entero("warmupDays", rango),
     requireHumanReview: z.enum(["si", "no"]).transform((v) => v === "si"),
     claimsMustBeSourced: z.enum(["si", "no"]).transform((v) => v === "si"),
+    stopCompanyOnReply: z.enum(["si", "no"]).transform((v) => v === "si"),
     postalAddress: z.string().trim().max(POSTAL_ADDRESS_MAX, direccionLarga),
-    // (VEN-10 r5) La ventana laboral: 'HH:MM', y el fin después del inicio (el CHECK de 0051 §1).
+    // La ventana laboral: 'HH:MM', y el fin después del inicio (el CHECK de 0051 §1).
     sendWindowStart: z.string().regex(HORA, t.campos.sendWindow.invalida),
     sendWindowEnd: z.string().regex(HORA, t.campos.sendWindow.invalida),
   }).refine((v) => v.sendWindowEnd > v.sendWindowStart, { path: ["sendWindowEnd"], message: t.campos.sendWindow.error });
@@ -80,6 +81,7 @@ export async function guardarPolitica(_prev: GuardarPoliticaState, form: FormDat
     warmupDays: campo("warmupDays"),
     requireHumanReview: campo("requireHumanReview"),
     claimsMustBeSourced: campo("claimsMustBeSourced"),
+    stopCompanyOnReply: campo("stopCompanyOnReply"),
     postalAddress: campo("postalAddress"),
     sendWindowStart: campo("sendWindowStart"),
     sendWindowEnd: campo("sendWindowEnd"),

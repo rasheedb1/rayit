@@ -206,15 +206,17 @@ describe('la política editable', () => {
     const guardada = await t.db.withWorkspace(WS_O, (tx) =>
       saveOutboundPolicy(tx, {
         maxTouchesPerCompany: 5, minDaysBetweenTouches: 4, maxEmailsPerDay: 60, cooldownDaysAfterNo: 90,
-        requireHumanReview: false, claimsMustBeSourced: true, warmupDays: 21, postalAddress: '  Calle 93 # 11-26, Bogotá  ',
-        sendWindowStart: '08:00', sendWindowEnd: '12:30',
+        requireHumanReview: false, claimsMustBeSourced: true, stopCompanyOnReply: false, warmupDays: 21,
+        postalAddress: '  Calle 93 # 11-26, Bogotá  ', sendWindowStart: '08:00', sendWindowEnd: '12:30',
       }),
     );
+    assert.equal(antes.stopCompanyOnReply, true, 'por defecto, una respuesta pausa a la marca (0054)');
+    assert.equal(guardada.stopCompanyOnReply, false);
     assert.equal(guardada.saved, true);
     assert.equal(guardada.enabled, false);
     assert.equal(guardada.maxEmailsPerDay, 60);
     assert.equal(guardada.postalAddress, 'Calle 93 # 11-26, Bogotá');
-    // (VEN-10 r5) El horario de envío se guarda y es el que lee el motor.
+    // El horario de envío se guarda y es el que lee el motor.
     assert.deepEqual([guardada.sendWindowStart, guardada.sendWindowEnd], ['08:00', '12:30']);
     const ventana = await t.db.asWorker(async (tx) =>
       (await tx.query<{ w: string }>(`SELECT send_window_start::text || '-' || send_window_end::text AS w FROM outbound_policy WHERE workspace_id = $1`, [WS_O])).rows[0]!.w,

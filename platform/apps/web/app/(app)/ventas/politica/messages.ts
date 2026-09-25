@@ -77,6 +77,10 @@ export const MESSAGES = {
       label: "Revisión humana",
       help: "Cada mensaje de tus secuencias espera tu aprobación en la ficha de la empresa antes de salir. Recomendado hasta que confíes en lo que se redacta.",
     },
+    stopCompanyOnReply: {
+      label: "Una respuesta pausa a la marca",
+      help: "Si alguien de una marca te responde, las cadencias con las demás personas de esa marca quedan en pausa para que no les sigan llegando mensajes mientras hablas.",
+    },
     claimsMustBeSourced: {
       label: "Cifras con origen",
       help: "Toda cifra de un mensaje (vistas, resultados de campañas) tiene que salir de tus datos. Un mensaje con una cifra inventada no sale.",

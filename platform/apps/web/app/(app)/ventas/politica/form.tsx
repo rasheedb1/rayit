@@ -16,7 +16,13 @@ type SiNo = "si" | "no";
 export interface PoliticaFormProps {
   policy: Pick<
     OutboundPolicyView,
-    Numerico | "requireHumanReview" | "claimsMustBeSourced" | "postalAddress" | "sendWindowStart" | "sendWindowEnd"
+    | Numerico
+    | "requireHumanReview"
+    | "claimsMustBeSourced"
+    | "stopCompanyOnReply"
+    | "postalAddress"
+    | "sendWindowStart"
+    | "sendWindowEnd"
   >;
   /** Los rangos de cada número, ya formateados («Entre 1 y 12.»). */
   rangos: Record<Numerico, string>;
@@ -26,7 +32,7 @@ export interface PoliticaFormProps {
   minimos: Record<Numerico, number>;
   /** El locale del workspace, para las cifras de la curva. */
   locale: string;
-  /** (VEN-10 r5) Las horas que se pueden elegir para el horario de envío ('HH:MM', con su etiqueta en el locale). */
+  /** Las horas que se pueden elegir para el horario de envío ('HH:MM', con su etiqueta en el locale). */
   horas: Array<{ value: string; label: string }>;
   /** El nombre de la zona del workspace, para decir en qué hora se lee el horario. */
   zona: string;
@@ -82,6 +88,7 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale, horas, 
   const formRef = useRef<HTMLFormElement>(null);
   const [revision, setRevision] = useState<SiNo>(policy.requireHumanReview ? "si" : "no");
   const [cifras, setCifras] = useState<SiNo>(policy.claimsMustBeSourced ? "si" : "no");
+  const [marca, setMarca] = useState<SiNo>(policy.stopCompanyOnReply ? "si" : "no");
   // Controlados: si el guardado falla, React 19 reinicia el formulario y
   // los valores escritos se perderían con defaultValue.
   const [valores, setValores] = useState<Record<Numerico, string>>({
@@ -147,7 +154,7 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale, horas, 
     </Field>
   );
 
-  const siNo = (campo: "requireHumanReview" | "claimsMustBeSourced", value: SiNo, set: (v: SiNo) => void) => (
+  const siNo = (campo: "requireHumanReview" | "claimsMustBeSourced" | "stopCompanyOnReply", value: SiNo, set: (v: SiNo) => void) => (
     <div className="flex flex-col gap-1.5">
       <span className="text-sm font-medium text-ink" id={`${campo}-label`}>
         {t.campos[campo].label}
@@ -218,6 +225,7 @@ export function PoliticaForm({ policy, rangos, maximos, minimos, locale, horas, 
           </h2>
           {siNo("requireHumanReview", revision, setRevision)}
           {siNo("claimsMustBeSourced", cifras, setCifras)}
+          {siNo("stopCompanyOnReply", marca, setMarca)}
         </section>
 
         <section aria-labelledby="sec-cumplimiento" className="space-y-5">

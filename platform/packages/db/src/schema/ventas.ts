@@ -305,6 +305,8 @@ export const outboundPolicy = pgTable('outbound_policy', {
   cooldownDaysAfterNo: integer('cooldown_days_after_no').default(180).notNull(),
   requireOptoutLink: boolean('require_optout_link').default(true).notNull(),
   requireHumanReview: boolean('require_human_review').default(true).notNull(),
+  /** Si una persona de la marca responde, se pausan las cadencias de las demás personas de esa marca (0054). */
+  stopCompanyOnReply: boolean('stop_company_on_reply').default(true).notNull(),
   claimsMustBeSourced: boolean('claims_must_be_sourced').default(true).notNull(),
   allowedChannels: text('allowed_channels').array().default(['email', 'linkedin', 'instagram_dm']).notNull(),
   updatedAt: updatedAt(),

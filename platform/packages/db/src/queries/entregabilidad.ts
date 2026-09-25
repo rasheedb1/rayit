@@ -141,9 +141,11 @@ export const POLICY_DEFAULTS = {
   cooldownDaysAfterNo: 180,
   requireHumanReview: true,
   claimsMustBeSourced: true,
+  /** Una respuesta pausa a las demás personas de la marca (0054). */
+  stopCompanyOnReply: true,
   warmupDays: 14,
   postalAddress: null as string | null,
-  /** (VEN-10 r5) La ventana laboral de 0051 §1, en la zona del workspace: 'HH:MM'. */
+  /** La ventana laboral de 0051 §1, en la zona del workspace: 'HH:MM'. */
   sendWindowStart: '09:00',
   sendWindowEnd: '17:00',
 } as const;
@@ -165,9 +167,11 @@ export interface OutboundPolicyView {
   cooldownDaysAfterNo: number;
   requireHumanReview: boolean;
   claimsMustBeSourced: boolean;
+  /** Si una persona de la marca responde, se pausan las cadencias de las demás personas de esa marca (0054). */
+  stopCompanyOnReply: boolean;
   warmupDays: number;
   postalAddress: string | null;
-  /** (VEN-10 r5) Desde qué hora y hasta cuál salen los mensajes, 'HH:MM', en la zona del workspace, de lunes a viernes. */
+  /** Desde qué hora y hasta cuál salen los mensajes, 'HH:MM', en la zona del workspace, de lunes a viernes. */
   sendWindowStart: string;
   sendWindowEnd: string;
   enabled: boolean;
@@ -186,6 +190,7 @@ export type OutboundPolicyInput = Pick<
   | 'cooldownDaysAfterNo'
   | 'requireHumanReview'
   | 'claimsMustBeSourced'
+  | 'stopCompanyOnReply'
   | 'warmupDays'
   | 'postalAddress'
   | 'sendWindowStart'
@@ -199,6 +204,7 @@ interface PolicyRow {
   cooldown_days_after_no: number;
   require_human_review: boolean;
   claims_must_be_sourced: boolean;
+  stop_company_on_reply: boolean;
   warmup_days: number;
   postal_address: string | null;
   send_window_start: string;
@@ -211,7 +217,7 @@ interface PolicyRow {
 }
 
 const COLUMNAS = `max_touches_per_company, min_days_between_touches, max_emails_per_day, cooldown_days_after_no,
-  require_human_review, claims_must_be_sourced, warmup_days, postal_address,
+  require_human_review, claims_must_be_sourced, stop_company_on_reply, warmup_days, postal_address,
   to_char(send_window_start, 'HH24:MI') AS send_window_start, to_char(send_window_end, 'HH24:MI') AS send_window_end,
   enabled, disabled_reason, disabled_at,
   llm_daily_cap_usd::text AS llm_daily_cap_usd, updated_at`;
@@ -233,6 +239,7 @@ function toView(r: PolicyRow | undefined, defaultCap: string): OutboundPolicyVie
     cooldownDaysAfterNo: r.cooldown_days_after_no,
     requireHumanReview: r.require_human_review,
     claimsMustBeSourced: r.claims_must_be_sourced,
+    stopCompanyOnReply: r.stop_company_on_reply,
     warmupDays: r.warmup_days,
     postalAddress: r.postal_address,
     sendWindowStart: r.send_window_start,
@@ -290,8 +297,8 @@ export async function saveOutboundPolicy(tx: WorkspaceTx, input: OutboundPolicyI
     const { rows } = await tx.query<PolicyRow>(
       `INSERT INTO outbound_policy AS p (workspace_id, max_touches_per_company, min_days_between_touches,
          max_emails_per_day, cooldown_days_after_no, require_human_review, claims_must_be_sourced, warmup_days,
-         postal_address, send_window_start, send_window_end)
-       VALUES (current_workspace_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9::time, $10::time)
+         postal_address, send_window_start, send_window_end, stop_company_on_reply)
+       VALUES (current_workspace_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9::time, $10::time, $11)
        ON CONFLICT (workspace_id) DO UPDATE SET
          max_touches_per_company = EXCLUDED.max_touches_per_company,
          min_days_between_touches = EXCLUDED.min_days_between_touches,
@@ -302,12 +309,13 @@ export async function saveOutboundPolicy(tx: WorkspaceTx, input: OutboundPolicyI
          warmup_days = EXCLUDED.warmup_days,
          postal_address = EXCLUDED.postal_address,
          send_window_start = EXCLUDED.send_window_start,
-         send_window_end = EXCLUDED.send_window_end
+         send_window_end = EXCLUDED.send_window_end,
+         stop_company_on_reply = EXCLUDED.stop_company_on_reply
        RETURNING ${COLUMNAS}`,
       [
         input.maxTouchesPerCompany, input.minDaysBetweenTouches, input.maxEmailsPerDay, input.cooldownDaysAfterNo,
         input.requireHumanReview, input.claimsMustBeSourced, input.warmupDays, direccion, input.sendWindowStart,
-        input.sendWindowEnd,
+        input.sendWindowEnd, input.stopCompanyOnReply,
       ],
     );
     return toView(rows[0], rows[0]?.llm_daily_cap_usd ?? '5.00');

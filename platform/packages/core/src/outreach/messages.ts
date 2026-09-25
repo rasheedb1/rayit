@@ -182,6 +182,19 @@ export function holdReasonText(lang: NoticeLang, value: string): string {
 // Los avisos de la campana
 // ---------------------------------------------------------------------
 
+/**
+ * Lo que detuvo una respuesta además de su cadencia (0054): los otros
+ * enrolamientos de la misma persona y las personas de la misma marca
+ * cuya cadencia quedó en pausa.
+ */
+export interface ReplyStop {
+  otherSequences: number;
+  pausedPeople: number;
+  company: string;
+}
+
+const NO_STOP: ReplyStop = { otherSequences: 0, pausedPeople: 0, company: '' };
+
 /** Los textos de cada aviso del motor, por idioma. */
 export const OUTREACH_NOTICE_TEXTS = {
   es: {
@@ -192,7 +205,14 @@ export const OUTREACH_NOTICE_TEXTS = {
     heldBody: (who: string, channel: string, reason: string, company: string) =>
       `El mensaje a ${who} por ${channel} quedó retenido: ${reason}. Lo que sigue de esa cadencia espera; revisa la ficha de ${company}.`,
     replyTitle: (who: string) => `${who} respondió`,
-    replyBody: (channel: string) => `Llegó una respuesta por ${channel}. Lo pendiente de esa cadencia se canceló.`,
+    replyBody: (channel: string, stop: ReplyStop = NO_STOP) =>
+      `Llegó una respuesta por ${channel}. Lo pendiente con esa persona se canceló` +
+      (stop.otherSequences > 0 ? `, también en ${stop.otherSequences === 1 ? 'otra secuencia' : `otras ${stop.otherSequences} secuencias`}` : '') +
+      '.' +
+      (stop.pausedPeople > 0
+        ? ` Pausamos también ${stop.pausedPeople === 1 ? 'la cadencia de otra persona' : `las cadencias de otras ${stop.pausedPeople} personas`} de ${stop.company}, ` +
+          'para que no les lleguen mensajes mientras sigue la conversación.'
+        : ''),
     optOutTitle: (who: string) => `${who} pidió no recibir más mensajes`,
     optOutBody: () => 'Se marcó la baja: no le volverás a escribir desde On Cue. Lo pendiente con esa persona se canceló.',
     /** (r5) Pidió la baja alguien del hilo que no es la ficha: lo decide una persona. */
@@ -214,7 +234,14 @@ export const OUTREACH_NOTICE_TEXTS = {
     heldBody: (who: string, channel: string, reason: string, company: string) =>
       `The message to ${who} over ${channel} is on hold: ${reason}. The rest of that cadence waits; check ${company}'s page.`,
     replyTitle: (who: string) => `${who} replied`,
-    replyBody: (channel: string) => `A reply came in over ${channel}. What was pending in that cadence was canceled.`,
+    replyBody: (channel: string, stop: ReplyStop = NO_STOP) =>
+      `A reply came in over ${channel}. Everything pending for that person was canceled` +
+      (stop.otherSequences > 0 ? `, also in ${stop.otherSequences === 1 ? 'another sequence' : `${stop.otherSequences} other sequences`}` : '') +
+      '.' +
+      (stop.pausedPeople > 0
+        ? ` We also paused the cadence${stop.pausedPeople === 1 ? ' of one other person' : `s of ${stop.pausedPeople} other people`} at ${stop.company}, ` +
+          'so no messages reach them while the conversation goes on.'
+        : ''),
     optOutTitle: (who: string) => `${who} asked not to be contacted again`,
     optOutBody: () => "The opt-out was recorded: you won't write to them again from On Cue. Anything pending for them was canceled.",
     optOutReviewTitle: (who: string) => `Someone in the thread with ${who} asked not to be contacted`,

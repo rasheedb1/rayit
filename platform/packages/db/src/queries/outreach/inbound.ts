@@ -46,7 +46,7 @@ import { detectOptOut, type OptOutResult } from '@mc/core';
 import { channelLabel, noticeLang, OUTREACH_NOTICE_TEXTS, OUTREACH_URLS } from '@mc/core/outreach/messages';
 import type { SqlExecutor } from '../../client.ts';
 import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
-import { markEnrollmentReplied } from './enroll.ts';
+import { cancelPendingForEnrollment, markEnrollmentReplied } from './enroll.ts';
 import { assertIds } from './shared.ts';
 
 /** Los enrolamientos que todavía pueden recibir mensajes nuestros. */
@@ -73,7 +73,7 @@ export interface InboundEffectsInput {
   now: Date;
   /** contact.opted_out_reason si pide la baja. Por defecto, la frase de @mc/core en el idioma del workspace. */
   optOutReason?: string;
-  /** (r5) Quien escribió, tal como lo dio el proveedor. En un correo, la baja solo vale si es la ficha. */
+  /** Quien escribió, tal como lo dio el proveedor. En un correo, la baja solo vale si es la ficha. */
   fromAddress?: string | null;
 }
 
@@ -87,8 +87,12 @@ export interface InboundEffects {
   /** Si dejó un aviso (una baja nueva, o la PRIMERA respuesta de una cadencia viva). */
   notified: boolean;
   automatic: boolean;
-  /** (r5) Pidió la baja alguien que no es la ficha (un tercero en copia): queda para una persona, sin dar de baja a nadie. */
+  /** Pidió la baja alguien que no es la ficha (un tercero en copia): queda para una persona, sin dar de baja a nadie. */
   optOutReview: boolean;
+  /** Otros enrolamientos de la misma ficha que la respuesta detuvo (pasaron a replied). */
+  otherEnrollmentsStopped: string[];
+  /** Enrolamientos de otras personas de la misma marca que quedaron en pausa (stop_company_on_reply, 0054). */
+  companyPaused: string[];
 }
 
 /**
@@ -209,13 +213,19 @@ async function notifyInbound(
   input: InboundEffectsInput,
   kind: 'reply' | 'optout' | 'optout_review',
   w: Who,
+  stop?: ReplyStopResult,
 ): Promise<void> {
   const lang = noticeLang(w.locale);
   const m = OUTREACH_NOTICE_TEXTS[lang];
   const label = channelLabel(lang, input.channel);
   const who = w.who ?? label;
   const text = {
-    reply: { severity: 'success', title: m.replyTitle(who), body: m.replyBody(label) },
+    reply: {
+      severity: 'success', title: m.replyTitle(who),
+      body: m.replyBody(label, {
+        otherSequences: stop?.otherEnrollments.length ?? 0, pausedPeople: stop?.pausedPeople ?? 0, company: stop?.company ?? '',
+      }),
+    },
     optout: { severity: 'warning', title: m.optOutTitle(who), body: m.optOutBody() },
     optout_review: {
       severity: 'warning', title: m.optOutReviewTitle(who), body: m.optOutReviewBody(normalizeAddress(input.fromAddress) ?? label, who),
@@ -239,7 +249,7 @@ export async function applyInboundEffects(tx: SqlExecutor, input: InboundEffects
   assertIds('applyInboundEffects', [input.workspaceId, input.messageId]);
   const none: InboundEffects = {
     optOut: false, optOutRule: null, canceled: [], enrollmentStopped: false, notified: false, automatic: input.automatic,
-    optOutReview: false,
+    optOutReview: false, otherEnrollmentsStopped: [], companyPaused: [],
   };
   // El enrolamiento primero, y bloqueado: una respuesta que llega mientras
   // el despachador envía espera a que el envío se registre (loadSendContext).
@@ -259,11 +269,12 @@ export async function applyInboundEffects(tx: SqlExecutor, input: InboundEffects
     // a la ficha: la cadencia se detiene (nadie quiere seguir escribiendo en
     // ese hilo) y una persona decide.
     if (!(await senderIsContact(tx, input))) {
-      const live = enrollmentStatus !== null
-        && ((LIVE_ENROLLMENT_STATUSES as readonly string[]).includes(enrollmentStatus) || enrollmentStatus === 'completed');
-      const canceled = live && input.enrollmentId ? await markEnrollmentReplied(tx, input.enrollmentId, input.occurredAt) : [];
+      const stop = await stopOnReply(tx, input, enrollmentStatus);
       await notifyInbound(tx, input, 'optout_review', w);
-      return { ...none, optOutRule: verdict.ruleId, canceled, enrollmentStopped: live, notified: true, optOutReview: true };
+      return {
+        ...none, optOutRule: verdict.ruleId, canceled: stop.canceled, enrollmentStopped: stop.threadStopped, notified: true, optOutReview: true,
+        otherEnrollmentsStopped: stop.otherEnrollments, companyPaused: stop.companyPaused,
+      };
     }
     const lang = noticeLang(w.locale);
     const reason = input.optOutReason ?? OUTREACH_NOTICE_TEXTS[lang].optOutReason(channelLabel(lang, input.channel));
@@ -287,16 +298,81 @@ export async function applyInboundEffects(tx: SqlExecutor, input: InboundEffects
         [input.touchId, input.occurredAt.toISOString()],
       )).rows.length > 0
     : false;
-  if (input.enrollmentId) {
-    // Una cadencia viva, o que ya había completado sus pasos: esta es SU respuesta.
-    if (enrollmentStatus && ((LIVE_ENROLLMENT_STATUSES as readonly string[]).includes(enrollmentStatus) || enrollmentStatus === 'completed')) {
-      const canceled = await markEnrollmentReplied(tx, input.enrollmentId, input.occurredAt);
-      await notifyInbound(tx, input, 'reply', await whoAndLocale(tx, input.workspaceId, input.contactId));
-      return { ...none, canceled, enrollmentStopped: true, notified: true };
-    }
-    // Ya había respondido (o terminó de otra forma): el mensaje queda en la conversación, sin otro aviso.
-    return none;
-  }
-  if (firstReply) await notifyInbound(tx, input, 'reply', await whoAndLocale(tx, input.workspaceId, input.contactId));
-  return { ...none, notified: firstReply };
+  // La primera respuesta de este hilo (su cadencia seguía viva o había
+  // completado sus pasos, o el toque no tenía respuesta): detiene a la
+  // persona y, si la política lo pide, pausa a su marca. Si ya había
+  // respondido, el mensaje queda en la conversación sin otro aviso ni otra
+  // pausa: una cadencia que la creadora reanudó después no se vuelve a parar.
+  const threadLive = input.enrollmentId !== null && isStoppable(enrollmentStatus);
+  if (!threadLive && !(input.enrollmentId === null && firstReply)) return none;
+  const stop = await stopOnReply(tx, input, enrollmentStatus);
+  await notifyInbound(tx, input, 'reply', await whoAndLocale(tx, input.workspaceId, input.contactId), stop);
+  return {
+    ...none, canceled: stop.canceled, enrollmentStopped: stop.threadStopped, notified: true,
+    otherEnrollmentsStopped: stop.otherEnrollments, companyPaused: stop.companyPaused,
+  };
+}
+
+/** ¿Una respuesta detiene este enrolamiento? Si sigue vivo o si ya había completado sus pasos. */
+function isStoppable(status: string | null): boolean {
+  return status !== null && ((LIVE_ENROLLMENT_STATUSES as readonly string[]).includes(status) || status === 'completed');
+}
+
+interface ReplyStopResult {
+  canceled: string[];
+  threadStopped: boolean;
+  otherEnrollments: string[];
+  companyPaused: string[];
+  /** Cuántas personas distintas de la marca quedaron en pausa, y el nombre de la marca, para el aviso. */
+  pausedPeople: number;
+  company: string | null;
+}
+
+/**
+ * Lo que detiene una respuesta de verdad (docs/ventas-outreach.md §9, el
+ * error número uno de Chief: el mensaje sale después de que la marca
+ * respondió):
+ *
+ *   · el enrolamiento del hilo pasa a replied y se cancela lo suyo;
+ *   · TODOS los enrolamientos vivos de la misma ficha en el workspace
+ *     también, en cualquier secuencia: ya contestó, lo que sigue lo
+ *     decide una persona (como optOutContact con la baja);
+ *   · con outbound_policy.stop_company_on_reply (0054, encendido por
+ *     defecto), los enrolamientos vivos de las OTRAS fichas de la misma
+ *     marca quedan en pausa (paused, sin resume_at): el reclamo no toma
+ *     nada de un enrolamiento pausado y el despachador pospone lo que ya
+ *     tenía en la mano. Se pausan, no se cancelan: la conversación puede
+ *     no llegar a nada.
+ */
+async function stopOnReply(tx: SqlExecutor, input: InboundEffectsInput, enrollmentStatus: string | null): Promise<ReplyStopResult> {
+  const threadStopped = input.enrollmentId !== null && isStoppable(enrollmentStatus);
+  const canceled = threadStopped ? await markEnrollmentReplied(tx, input.enrollmentId!, input.occurredAt) : [];
+  const out: ReplyStopResult = { canceled, threadStopped, otherEnrollments: [], companyPaused: [], pausedPeople: 0, company: null };
+  if (!input.contactId) return out;
+
+  out.otherEnrollments = (
+    await tx.query<{ id: string }>(
+      `UPDATE outbound_enrollment SET status = 'replied', finished_at = coalesce(finished_at, $4::timestamptz)
+        WHERE contact_id = $1::uuid AND workspace_id = $2::uuid AND id IS DISTINCT FROM $3::uuid AND status = ANY($5::text[])
+        RETURNING id`,
+      [input.contactId, input.workspaceId, input.enrollmentId, input.occurredAt.toISOString(), [...LIVE_ENROLLMENT_STATUSES]],
+    )
+  ).rows.map((r) => r.id);
+  for (const id of out.otherEnrollments) out.canceled.push(...(await cancelPendingForEnrollment(tx, id, 'replied')));
+
+  const paused = (
+    await tx.query<{ id: string; contact_id: string; company: string }>(
+      `UPDATE outbound_enrollment e SET status = 'paused', resume_at = NULL
+         FROM contact c, contact yo, company co
+        WHERE yo.id = $1::uuid AND co.id = yo.company_id AND c.company_id = yo.company_id AND c.id <> yo.id
+          AND e.contact_id = c.id AND e.workspace_id = $2::uuid AND e.status IN ('active', 'cooldown')
+          AND coalesce((SELECT p.stop_company_on_reply FROM outbound_policy p WHERE p.workspace_id = $2::uuid), true)
+        RETURNING e.id, e.contact_id, co.name AS company`,
+      [input.contactId, input.workspaceId],
+    )
+  ).rows;
+  out.companyPaused = paused.map((r) => r.id);
+  out.pausedPeople = new Set(paused.map((r) => r.contact_id)).size;
+  out.company = paused[0]?.company ?? null;
+  return out;
 }

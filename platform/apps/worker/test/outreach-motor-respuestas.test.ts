@@ -32,7 +32,7 @@ after(async () => {
   await db?.close();
 });
 
-const { workspace, enroll, deps, touches, scalar } = motorKit({ db: () => db, motor: () => motor, prefix: '00000113', slug: 'motor-respuestas' });
+const { workspace, enroll, deps, touches, scalar, secuencia } = motorKit({ db: () => db, motor: () => motor, prefix: '00000113', slug: 'motor-respuestas' });
 
 test('el lector recorre todos los hilos por turno: con 250, la respuesta del hilo 240 se ve en dos corridas', async () => {
   const w = await workspace(1, { contacts: 1 });
@@ -103,21 +103,14 @@ test('una respuesta automática que pide la baja da de baja; no cuenta como resp
   assert.equal(await scalar<Date | null>(`SELECT replied_at AS v FROM outbound_touch WHERE thread_ref = $1`, [hilo]), null, 'no es una respuesta');
 });
 
-test('la baja que llega después de una respuesta se respeta, y cancela lo de las otras secuencias', async () => {
+test('una respuesta en la secuencia A detiene también la B; la baja que llega después marca la ficha', async () => {
   const w = await workspace(4, { contacts: 1 });
   const c = w.contacts[0]!;
   const enr = await enroll(w, bogota('2026-09-23', '07:00'));
-  // La misma marca, también en otra secuencia de un paso.
-  const seq2 = `${w.id.slice(0, 24)}0000005e0002`;
-  const step2 = `${w.id.slice(0, 24)}0000005e0201`;
-  await db.raw.exec(`
-    INSERT INTO outbound_sequence (id, workspace_id, name, channel, status, automation_mode)
-    VALUES ('${seq2}', '${w.id}', 'Otra', 'email', 'active', 'auto');
-    INSERT INTO outbound_step (id, workspace_id, sequence_id, day_offset, order_in_day, step_type, channel, scheduled_time,
-                               subject_template, body_template, generate_with_ai)
-    VALUES ('${step2}', '${w.id}', '${seq2}', 3, 0, 'email', 'email', '10:00', 'Otra idea', 'Otra idea para {{company}}.', false);
-  `);
+  // La misma persona, también en otra secuencia de un paso.
+  const seq2 = await secuencia(w, 2, [{ type: 'email', channel: 'email', day: 3, subject: 'Otra idea', body: 'Otra idea para {{company}}.' }]);
   const otra = await motor.transaction((tx) => enrollContacts(tx, { sequenceId: seq2, contactIds: [c], now: bogota('2026-09-23', '07:00') }));
+  const otraId = otra.enrolled[0]!.enrollmentId;
   const fake = fakeChannels();
   let clock = bogota('2026-09-23', '12:00');
   await runDispatch(motor, deps(w, fake, () => clock));
@@ -128,24 +121,85 @@ test('la baja que llega después de una respuesta se respeta, y cancela lo de la
   const r1 = await runReplies(motor, { readers: fake, now: () => clock, workspaceId: w.id });
   assert.deepEqual([r1.inbound, r1.optOuts], [1, 0]);
   assert.equal(await scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enr.get(c)]), 'replied');
+  // La otra secuencia se detiene con la respuesta, no cuando llegue una baja.
+  assert.equal(await scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [otraId]), 'replied');
+  assert.equal(
+    await scalar<string>(`SELECT status || ':' || blocked_reason AS v FROM outbound_touch WHERE enrollment_id = $1`, [otraId]),
+    'canceled:replied',
+  );
+  // Y en los días siguientes no sale nada más: ni la B ni el resto de la A.
+  const antes = fake.email.sent.length;
+  for (const dia of ['2026-09-24', '2026-09-25', '2026-09-28', '2026-09-29', '2026-09-30']) {
+    await runDispatch(motor, deps(w, fake, () => bogota(dia, '16:00')));
+  }
+  assert.equal(fake.email.sent.length, antes, 'nada sale después de la respuesta');
 
   // Días después, en el mismo hilo: la baja. El hilo de una cadencia que respondió se sigue leyendo.
-  fake.email.reply(hilo, 'Lo pensamos mejor. No nos escriban más, gracias.', bogota('2026-09-24', '09:00'));
-  clock = bogota('2026-09-24', '10:00');
+  fake.email.reply(hilo, 'Lo pensamos mejor. No nos escriban más, gracias.', bogota('2026-10-01', '09:00'));
+  clock = bogota('2026-10-01', '10:00');
   const r2 = await runReplies(motor, { readers: fake, now: () => clock, workspaceId: w.id });
   assert.deepEqual([r2.inbound, r2.optOuts], [1, 1]);
   assert.equal(await scalar<boolean>(`SELECT opted_out AS v FROM contact WHERE id = $1`, [c]), true);
-  // Lo de la otra secuencia se cancela YA, no cuando venza.
-  assert.equal(await scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [otra.enrolled[0]!.enrollmentId]), 'opted_out');
-  assert.equal(
-    await scalar<string>(`SELECT status || ':' || blocked_reason AS v FROM outbound_touch WHERE step_id = $1`, [step2]),
-    'canceled:opted_out',
-  );
-  const avisos = await db.raw.query<{ severity: string; title_es: string }>(
-    `SELECT severity, title_es FROM notification WHERE workspace_id = $1 AND kind = 'outreach_reply' ORDER BY created_at`, [w.id],
+  const avisos = await db.raw.query<{ severity: string; title_es: string; body_es: string }>(
+    `SELECT severity, title_es, body_es FROM notification WHERE workspace_id = $1 AND kind = 'outreach_reply' ORDER BY created_at`, [w.id],
   );
   assert.deepEqual(avisos.rows.map((a) => a.severity), ['success', 'warning'], 'un aviso de respuesta y uno de baja, sin repetir el de respuesta');
+  assert.equal(
+    avisos.rows[0]!.body_es,
+    'Llegó una respuesta por correo. Lo pendiente con esa persona se canceló, también en otra secuencia.',
+  );
   assert.equal(avisos.rows[1]!.title_es, 'Persona 1 Prueba pidió no recibir más mensajes');
+});
+
+test('la respuesta de una persona pausa a las demás de la misma marca: no les llega nada más', async () => {
+  const w = await workspace(11, { contacts: 2 });
+  const [ana, pedro] = w.contacts as [string, string];
+  const enr = await enroll(w, bogota('2026-09-23', '07:00'));
+  const fake = fakeChannels();
+  await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:00')));
+  assert.equal(fake.email.sent.length, 2, 'el primer correo sale a las dos');
+  const hiloAna = fake.email.sent.find((m) => m.recipient.startsWith('p1.'))!.threadRef;
+
+  fake.email.reply(hiloAna, 'Me interesa, ¿hablamos el jueves?', bogota('2026-09-23', '13:00'));
+  const r = await runReplies(motor, { readers: fake, now: () => bogota('2026-09-23', '14:00'), workspaceId: w.id });
+  assert.equal(r.inbound, 1);
+  assert.equal(await scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enr.get(ana)]), 'replied');
+  assert.equal(
+    await scalar<string>(`SELECT status || ':' || coalesce(resume_at::text, '-') AS v FROM outbound_enrollment WHERE id = $1`, [enr.get(pedro)]),
+    'paused:-',
+    'Pedro queda en pausa, sin fecha de vuelta',
+  );
+  const aviso = await scalar<string>(
+    `SELECT body_es AS v FROM notification WHERE workspace_id = $1 AND kind = 'outreach_reply'`, [w.id],
+  );
+  assert.equal(
+    aviso,
+    'Llegó una respuesta por correo. Lo pendiente con esa persona se canceló. Pausamos también la cadencia de otra persona de Marca 11, ' +
+      'para que no les lleguen mensajes mientras sigue la conversación.',
+  );
+
+  const antes = fake.email.sent.length;
+  for (const dia of ['2026-09-24', '2026-09-25', '2026-09-28', '2026-09-29']) {
+    await runDispatch(motor, deps(w, fake, () => bogota(dia, '16:00')));
+  }
+  assert.equal(fake.email.sent.length, antes, 'ni «Re: Hola» ni «Una última idea» le llegan a Pedro');
+  assert.deepEqual((await touches(pedro)).map((t) => t.status), ['sent', 'scheduled', 'scheduled'], 'lo suyo espera, no se cancela');
+});
+
+test('con stop_company_on_reply apagado, la respuesta de una persona no pausa a las demás de su marca', async () => {
+  const w = await workspace(12, { contacts: 2 });
+  await db.raw.query(`UPDATE outbound_policy SET stop_company_on_reply = false WHERE workspace_id = $1`, [w.id]);
+  const [ana, pedro] = w.contacts as [string, string];
+  const enr = await enroll(w, bogota('2026-09-23', '07:00'));
+  const fake = fakeChannels();
+  await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:00')));
+  const hiloAna = fake.email.sent.find((m) => m.recipient.startsWith('p1.'))!.threadRef;
+  fake.email.reply(hiloAna, 'Me interesa.', bogota('2026-09-23', '13:00'));
+  await runReplies(motor, { readers: fake, now: () => bogota('2026-09-23', '14:00'), workspaceId: w.id });
+  assert.equal(await scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enr.get(ana)]), 'replied');
+  assert.equal(await scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enr.get(pedro)]), 'active');
+  await runDispatch(motor, deps(w, fake, () => bogota('2026-09-24', '16:00')));
+  assert.equal(fake.email.sent.at(-1)!.recipient.startsWith('p2.'), true, 'a Pedro le sigue llegando su cadencia');
 });
 
 test('una ficha pública que responde «no me escriban más»: no se marca la ficha compartida, A no la vuelve a enrolar y B sí', async () => {
