@@ -157,6 +157,10 @@ test('--preparar-demo deja la demo lista con el reloj de verdad, sin SQL a mano:
     assert.ok(prep.anchored > 0, 'lo enviado a Vitalé queda lo bastante atrás');
     assert.match(resumenPreparacion(prep), /vence ya/);
     assert.doesNotMatch(resumenPreparacion(prep), /fuera del horario/);
+    // Fuera del horario lo dice, con la ventana en horas y minutos (la base la da como «09:00:00»).
+    const deNoche = resumenPreparacion({ ...prep, insideWindow: false, window: { start: '09:00:00', end: '17:00:00' } });
+    assert.match(deNoche, /fuera del horario de envío \(09:00–17:00, de lunes a viernes\)/);
+    assert.doesNotMatch(deNoche, /\([^()]*\(/, 'sin paréntesis anidados');
 
     const fake = fakeChannels();
     const pasada = () => runDispatch(motor, { senders: fake, appUrl: 'https://oncue.test', now: () => clock, workspaceId: DEMO_WORKSPACE_ID });

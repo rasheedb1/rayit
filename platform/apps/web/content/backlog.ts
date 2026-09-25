@@ -407,7 +407,7 @@ export const STORIES: readonly Story[] = [
     desc: "Pasos normalizados, enrolamiento, cola en outbound_touch con reclamo atómico, despachador por canal con interfaz común, días hábiles y zona horaria del workspace, límites diarios y semanales, reintentos con espera creciente, interruptor de apagado, cancelación al responder con relectura del estado antes de enviar.",
     done: "Una secuencia de tres pasos con plantillas fijas se ejecuta sola contra un buzón de prueba; una respuesta cancela lo pendiente; el límite diario reprograma al día siguiente.",
     status: "bloqueada",
-    note: "Hecho y probado sin red; falta aplicar 0043-0054 en Supabase y la corrida de job:dispatch contra el seed (docs/ventas-outreach.md §5.2, un comando por paso).",
+    note: "Hecho y probado sin red, también sobre la serie integrada (main 0034-0042 + renumeración + 0055): las 123 pruebas del motor pasan y, en un Postgres 16 local con el seed, los pasos 3-6 de §5.2 dan «Despacho: 0 reclamados, 0 enviados» apagado y «Despacho: 1 reclamado, 1 enviado» encendido (status=sent, provider_message_id=fake-linkedin-0001). Falta lo del integrador: renumerar, pnpm verificar, db.migrate hasta 0055 en Supabase y pegar aquí las salidas de los pasos 4 y 6 contra Supabase (docs/ventas-outreach.md §5.2).",
   },
   {
     id: "VEN-11", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["CON-6", "COT-1"],

@@ -174,7 +174,7 @@ export function resumenPreparacion(p: DemoPreparation): string {
   ];
   if (!p.insideWindow) {
     lineas.push(
-      `  Ojo: ahora, ${fechaHora(new Date(), p.timeZone)}, está fuera del horario de envío (${p.window.start}–${p.window.end}, de lunes a viernes). ` +
+      `  Ojo: ahora, ${fechaHora(new Date(), p.timeZone)}, está fuera del horario de envío (${p.window.start.slice(0, 5)}–${p.window.end.slice(0, 5)}, de lunes a viernes). ` +
         'El despachador no envía fuera de él: corre los pasos siguientes dentro del horario.',
     );
   }

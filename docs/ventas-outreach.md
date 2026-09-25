@@ -688,8 +688,14 @@ La prueba `outreach-demo.test.ts` corre los pasos 3 a 6 sobre Postgres
 embebido con las mismas migraciones y el mismo seed. El 25-sep-2026
 corrió también sobre la serie integrada (las 0034–0042 de main, los
 seeds mezclados y la renumeración): las pruebas del motor de
-`apps/worker` pasan, `outreach-demo` incluida (la salida, en la nota de
-VEN-10).
+`apps/worker` pasan, `outreach-demo` incluida. Y los pasos 3 a 6, con el
+reloj de verdad, contra un Postgres 16 local migrado con esa serie y el
+seed (la ventana del workspace abierta a toda hora, porque eran las
+03:00): el paso 4 dio `Despacho: 0 reclamados, 0 enviados` y el 6
+`Despacho: 1 reclamado, 1 enviado`, con el toque en `sent` y
+`provider_message_id = fake-linkedin-0001`. Contra Supabase, fuera del
+horario, el paso 6 mueve el toque a la apertura («Fuera de la ventana:
+1») y no envía: se corre dentro del horario.
 
 ### 5.3 La cadencia recomendada para un creador
 
