@@ -96,7 +96,7 @@ export async function createSequenceFromTemplate(tx: WorkspaceTx, slug: string, 
   const steps: StepInsert[] = tpl.steps.map((s) => ({
     dayOffset: s.day_offset, orderInDay: s.order_in_day, stepType: s.step_type, channel: s.channel,
     scheduledTime: s.scheduled_time, angleKey: s.angle_key, guidanceEs: s.guidance_es, guidanceSource: 'template',
-    generateWithAi: s.generate_with_ai, requiresAsset: s.requires_asset,
+    generateWithAi: TEXTLESS_STEP_TYPES.includes(s.step_type) ? false : s.generate_with_ai, requiresAsset: s.requires_asset,
   }));
   const channel = steps.find((s) => s.channel === 'email') ? 'email' : (steps[0]?.channel ?? 'email');
   const { rows } = await tx.query<{ id: string }>(

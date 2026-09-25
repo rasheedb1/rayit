@@ -286,12 +286,14 @@ export function composeGuidance(
   const forbidden = (angleKey && t.angleForbidden[angleKey]) || t.genericForbidden;
   const collab = signalKind === 'collab' ? ` ${t.collabForbidden}` : '';
   const family = familyOf(stepType);
+  // Una reacción no lleva texto: ni apertura, ni lo que no se menciona, ni cierre. Solo reaccionar.
+  if (family === 'public_like') return t.lead.reaction(signal);
   let lead: string;
   let close = ` ${t.closeWithQuestion}`;
   if (family === 'public_comment') {
     lead = t.lead.publicComment(opening);
     close = '';
-  } else if (family === 'public_like' || family === 'manual') {
+  } else if (family === 'manual') {
     lead = t.lead.byHand(opening);
     close = '';
   } else if (stepType === 'email_reply') {
@@ -379,7 +381,8 @@ export function recommendSequence(input: RecommendInput): Proposal {
       channel,
       angleKey: s.angle_key,
       scheduledTime: s.scheduled_time,
-      generateWithAi: s.generate_with_ai,
+      // Lo que no se despacha (un comentario, una reacción, una tarea) lo hace una persona: nadie lo redacta.
+      generateWithAi: isDispatchable(stepType) && s.generate_with_ai,
       requiresAsset: s.requires_asset,
       guidanceEs: changed ? composeGuidance(s.angle_key, stepType, input.signalKind, locale) : s.guidance_es,
       guidanceSource: changed ? 'rules' : 'template',
@@ -637,11 +640,15 @@ export interface FitResult {
   sacrificed: ReadonlySet<number>;
 }
 
-/** El canal con más pasos que le escriben a la persona; a igualdad, el correo. */
+/**
+ * El canal con más pasos que le escriben a la persona (los que se
+ * despachan: DISPATCHABLE_STEP_TYPES); a igualdad, el correo. Un
+ * comentario o una reacción públicos no le escriben a nadie y no cuentan.
+ */
 export function primaryChannelOf(steps: ReadonlyArray<{ channel: string; stepType: string }>): RecommendChannel {
   const count = new Map<string, number>();
   for (const s of steps) {
-    if (s.stepType === 'manual_task') continue;
+    if (!isDispatchable(s.stepType)) continue;
     count.set(s.channel, (count.get(s.channel) ?? 0) + 1);
   }
   let best: RecommendChannel = 'email';

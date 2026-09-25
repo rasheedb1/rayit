@@ -35,11 +35,29 @@ describe("activar", () => {
     activarCadencia.mockImplementation(() => new Promise((r) => (contestar = r)));
     render(<Controles sequenceId={SEQ} status="draft" nombre="Fresko" activarLabel="Activar y escribir a Camila Rojas" puedeActivar />);
     fireEvent.click(screen.getByRole("button", { name: "Activar y escribir a Camila Rojas" }));
-    await waitFor(() => expect(screen.getByText(MESSAGES.estado.activando)).toBeInTheDocument());
-    expect(screen.getByText(MESSAGES.estado.activando)).toHaveAttribute("aria-live", "polite");
+    await waitFor(() => expect(screen.getByText(MESSAGES.estado.trabajando.activar)).toBeInTheDocument());
+    expect(screen.getByText(MESSAGES.estado.trabajando.activar)).toHaveAttribute("aria-live", "polite");
     await act(async () => contestar({ ok: "Cadencia activa y Camila Rojas dentro.", href: "/ventas/empresas/e2#cadencia" }));
     expect(await screen.findByRole("link", { name: MESSAGES.estado.revisarEnFicha })).toHaveAttribute("href", "/ventas/empresas/e2#cadencia");
-    expect(screen.queryByText(MESSAGES.estado.activando)).not.toBeInTheDocument();
+    expect(screen.queryByText(MESSAGES.estado.trabajando.activar)).not.toBeInTheDocument();
+  });
+
+  it("«Duplicar» gira y apaga la fila mientras corre: un segundo clic no hace otra copia", async () => {
+    const { duplicarCadencia } = await import("../actions");
+    let contestar: (v: unknown) => void = () => {};
+    vi.mocked(duplicarCadencia).mockImplementationOnce(() => new Promise((r) => (contestar = r)));
+    render(<Controles sequenceId={SEQ} status="active" nombre="Fresko" activarLabel="Activar" puedeActivar />);
+    const duplicar = screen.getByRole("button", { name: MESSAGES.estado.duplicar });
+    fireEvent.click(duplicar);
+    await waitFor(() => expect(screen.getByText(MESSAGES.estado.trabajando.duplicar)).toBeInTheDocument());
+    expect(duplicar).toBeDisabled();
+    expect(duplicar).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("button", { name: MESSAGES.estado.pausar })).toBeDisabled();
+    expect(screen.getByRole("button", { name: MESSAGES.detalle.renombrar })).toBeDisabled();
+    fireEvent.click(duplicar);
+    expect(duplicarCadencia).toHaveBeenCalledTimes(1);
+    await act(async () => contestar({}));
+    expect(screen.getByRole("button", { name: MESSAGES.estado.duplicar })).not.toBeDisabled();
   });
 
   it("en pausa, el botón es el que la página decide (Reanudar y escribir a X), no un «Reanudar» fijo", () => {

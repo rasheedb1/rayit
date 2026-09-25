@@ -19,10 +19,8 @@ export const MAX_STEPS = 12;
 export const MAX_STEPS_PER_DAY = 4;
 /** El último día al que se puede poner un paso (CHECK de outbound_step). */
 export const MAX_DAY_OFFSET = SEQUENCE_MAX_DAY_OFFSET;
-export const GUIDANCE_MAX = 1000;
-export const SUBJECT_MAX = 200;
-export const BODY_MAX = 5000;
-export const NAME_MAX = 120;
+import { BODY_MAX, GUIDANCE_MAX, NAME_MAX, SUBJECT_MAX } from './limites.ts';
+export { BODY_MAX, GUIDANCE_MAX, NAME_MAX, SUBJECT_MAX };
 /** Los estados que ven la lista y la pantalla (outbound_sequence.status, SEQUENCE_STATUSES del esquema). */
 export type SequenceStatus = (typeof SEQUENCE_STATUSES)[number];
 /** Los que no terminaron: siguen ocupando a la persona dentro de la secuencia. */
@@ -41,8 +39,18 @@ export const EDITABLE_STEP_TYPES = STEP_TYPES.filter((s): s is EditableStepType 
 /** Los canales de un paso editable: los del recomendador (una tarea a mano elige uno de estos). */
 export const EDITABLE_CHANNELS = RECOMMEND_CHANNELS;
 
-/** Los pasos sin texto: ni guía de texto fijo ni generación. */
-export const TEXTLESS_STEP_TYPES: readonly string[] = ['linkedin_like', 'instagram_like', 'manual_task'];
+/**
+ * Los pasos sin texto: ni texto fijo ni generación. Son todos los que el
+ * despachador no envía (DISPATCHABLE_STEP_TYPES): un comentario o una
+ * reacción públicos y una tarea a mano los hace una persona, y §5.5 dice
+ * que no se redactan. La misma regla que la pantalla (sinTexto, en
+ * apps/web/.../cadencias/_lib/vista.ts), que «Activar» al contar gestos
+ * y que el CHECK de outbound_step desde 0057. WhatsApp (fase 2) no entra:
+ * es un mensaje, aunque todavía no haya conector.
+ */
+export const TEXTLESS_STEP_TYPES: readonly string[] = EDITABLE_STEP_TYPES.filter(
+  (t) => !(DISPATCHABLE_STEP_TYPES as readonly string[]).includes(t),
+);
 
 /** Un paso que el despachador envía (un mensaje a la persona); los demás los hace alguien a mano. */
 export function isMessageStep(stepType: string): boolean {

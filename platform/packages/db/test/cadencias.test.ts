@@ -18,7 +18,7 @@ import {
   enrollableContactsOfDeal, liveEnrollmentElsewhere, liveEnrollmentsElsewhere, optedOutAmong, parseSequenceProposal, signalContacts,
   duplicateSequence, getRecommendationContext, getSequenceDetail, listEnrollableDeals, listProposableSignals, reachForSequence,
   listSequences, listSequenceTemplates, recordRecommendLlmCall, renameSequence, reorderSteps, replaceStepsFromProposal,
-  setSequenceStatus, updateStep, type RecommendationContext,
+  setSequenceStatus, TEXTLESS_STEP_TYPES, updateStep, type RecommendationContext,
 } from '../src/queries/cadencias/index.ts';
 import { enrollContacts } from '../src/queries/outreach/enroll.ts';
 import type { WorkspaceTx } from '../src/client.ts';
@@ -149,6 +149,31 @@ test('terminado cuando: seis pasos con guía desde la campaña activa, y se acti
   assert.equal(dc.proposal?.templateSlug, 'cocina-campana-activa');
   assert.deepEqual([dc.proposal?.contactId, dc.proposal?.dealId, dc.proposalContact], [null, null, null]);
   await enLaura((tx) => setSequenceStatus(tx, copia, 'archived'));
+});
+
+test('lo que hace una persona no se redacta: el comentario y la reacción quedan sin generación en la base (0057)', async () => {
+  const id = await enLaura(async (tx) => {
+    const ctx = await getRecommendationContext(tx, SIGNAL_FRESKO);
+    return createSequenceFromProposal(tx, { proposal: recommendSequence(entrada(ctx, CAMILA)), name: 'Fresko · sin texto', meta: meta(CAMILA) });
+  });
+  try {
+    const d = (await enLaura((tx) => getSequenceDetail(tx, id)))!;
+    // El día 0 es un comentario en LinkedIn: la base dice lo mismo que la tarjeta y que «Activar» (un gesto a mano).
+    const comentario = d.steps.find((s) => s.stepType === 'linkedin_comment')!;
+    assert.equal(comentario.generateWithAi, false);
+    for (const s of d.steps) assert.equal(s.generateWithAi, !TEXTLESS_STEP_TYPES.includes(s.stepType), s.stepType);
+    // Ni editándolo se le enciende la generación, y no pide texto fijo.
+    await enLaura((tx) => updateStep(tx, comentario.id, { generateWithAi: true }));
+    const tras = (await enLaura((tx) => getSequenceDetail(tx, id)))!.steps.find((s) => s.id === comentario.id)!;
+    assert.equal(tras.generateWithAi, false);
+    // Una plantilla copiada tal cual también: su comentario viene con generate_with_ai en la plantilla.
+    const copia = await enLaura((tx) => createSequenceFromTemplate(tx, 'marca-con-campana-activa'));
+    const dc = (await enLaura((tx) => getSequenceDetail(tx, copia)))!;
+    assert.ok(dc.steps.filter((s) => TEXTLESS_STEP_TYPES.includes(s.stepType)).every((s) => !s.generateWithAi));
+    await enLaura((tx) => setSequenceStatus(tx, copia, 'archived'));
+  } finally {
+    await enLaura((tx) => setSequenceStatus(tx, id, 'archived'));
+  }
 });
 
 test('proponer dos veces desde la misma señal deja un solo borrador, con los pasos de la última propuesta', async () => {

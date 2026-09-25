@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  chooseTemplate, composeGuidance, DISCLOSURE_GUIDANCE, guidanceProblem, recommendSequence, RecommendError, refineGuidance,
+  chooseTemplate, composeGuidance, DISCLOSURE_GUIDANCE, guidanceProblem, primaryChannelOf, recommendSequence, RecommendError, refineGuidance,
   signalKindOfSource, type GuidanceWriter, type RecommendInput, type RecommendTemplate, type RecommendTemplateStep,
 } from '../src/outreach/recomendar.ts';
 import { GUIDANCE_PHRASES, guidanceLocale } from '../src/outreach/guidance-phrases.ts';
@@ -79,6 +79,27 @@ test('campaña activa: seis pasos con día, canal, ángulo y guía, tal como la 
   assert.equal(p.primaryChannel, 'email');
 });
 
+test('el canal principal cuenta solo los pasos que le escriben a la persona, no los gestos públicos', () => {
+  // Dos gestos en LinkedIn (un comentario y una reacción) y un correo: ningún mensaje sale por LinkedIn.
+  assert.equal(
+    primaryChannelOf([
+      { channel: 'linkedin', stepType: 'linkedin_comment' }, { channel: 'linkedin', stepType: 'linkedin_like' },
+      { channel: 'email', stepType: 'email' },
+    ]),
+    'email',
+  );
+  assert.equal(
+    primaryChannelOf([{ channel: 'linkedin', stepType: 'linkedin_message' }, { channel: 'email', stepType: 'manual_task' }]),
+    'linkedin',
+  );
+});
+
+test('lo que no se despacha no se redacta: el comentario y la reacción públicos salen sin generación automática', () => {
+  const p = recommendSequence(entrada());
+  // La plantilla marca generate_with_ai en todos; el comentario del día 0 lo hace una persona.
+  assert.deepEqual(p.steps.map((s) => s.generateWithAi), [false, true, true, true, true, true]);
+});
+
 test('la propuesta cambia si el contacto no tiene LinkedIn: los directos pasan al hilo del correo', () => {
   const con = recommendSequence(entrada());
   const sin = recommendSequence(entrada({ contact: { hasEmail: true, hasLinkedin: false, hasInstagram: false } }));
@@ -112,7 +133,9 @@ test('con la política por defecto (4 mensajes, 3 días) la propuesta nace cumpl
   assert.equal(cierre.changedFrom, null, 'la síntesis no se toca');
   assert.deepEqual(p.steps[4]!.changedFrom, { stepType: 'linkedin_message', channel: 'linkedin' });
   assert.equal(p.steps[4]!.generateWithAi, false);
-  assert.match(p.steps[4]!.guidanceEs, /^Hazlo a mano/);
+  // Es una reacción: la guía no pide frases ni comentar (eso es otro paso).
+  assert.match(p.steps[4]!.guidanceEs, /^Hazlo a mano: reacciona a su última publicación/);
+  assert.doesNotMatch(p.steps[4]!.guidanceEs, /frases|[Cc]omenta /);
   assert.deepEqual(p.notes.find((n) => n.code === 'fitted_to_policy'), {
     code: 'fitted_to_policy', softened: ['prueba_social'], dropped: [], shiftedDays: 2, maxTouches: 4, minDays: 3,
   });
@@ -303,9 +326,20 @@ test('las frases de la guía salen de una tabla por idioma; hoy, la española, y
   assert.equal(guidanceLocale('pt-BR'), 'es');
   assert.equal(guidanceLocale(null), 'es');
   assert.equal(DISCLOSURE_GUIDANCE, GUIDANCE_PHRASES.es.disclosure);
+  // Una reacción no lleva texto: ni frases ni comentario (comentar es otro paso), y lo dice.
   assert.equal(
     composeGuidance('presencia', 'linkedin_like', 'active_campaign', 'es'),
+    'Hazlo a mano: reacciona a su última publicación, mejor si habla de su campaña activa. No comentes ni escribas.',
+  );
+  assert.equal(composeGuidance('prueba_social', 'instagram_like', 'launch', 'es'), GUIDANCE_PHRASES.es.lead.reaction('su lanzamiento'));
+  // La tarea a mano (un gesto sin red conectada) sí puede ser comentar: conserva su frase.
+  assert.equal(
+    composeGuidance('presencia', 'manual_task', 'active_campaign', 'es'),
     'Hazlo a mano: reacciona o comenta algo concreto de su último post, en una o dos frases. No vendas, no menciones tarifas ni pongas enlaces.',
+  );
+  assert.equal(
+    composeGuidance('presencia', 'linkedin_comment', 'active_campaign', 'es'),
+    'Comenta algo concreto de su último post, en una o dos frases. No vendas, no menciones tarifas ni pongas enlaces.',
   );
   assert.equal(
     composeGuidance('prueba_social', 'linkedin_message', 'season', 'es'),

@@ -4,9 +4,10 @@ import { parseGuidanceOutput } from "./redactor-salida";
 import { MESSAGES, plural } from "../messages";
 import type { EnrollableContact, SequenceDetail } from "@mc/db/queries/cadencias";
 import {
-  avisoDePolitica, esperaEntre, etiquetaActivar, horaDePaso, partesDeEnrolamiento, personaParaEnrolar, resumenFlujo, textoDeGuia,
-  textoDeNota,
+  avisoDePolitica, esperaEntre, etiquetaActivar, horaDePaso, modoDePaso, partesDeEnrolamiento, personaParaEnrolar, resumenFlujo,
+  sinTexto, textoDeGuia, textoDeNota,
 } from "./vista";
+import { TEXTLESS_STEP_TYPES } from "@mc/db/queries/cadencias";
 
 const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
 const plantillas = new Map([["cocina-campana-activa", "Cocina · marca con campaña activa"]]);
@@ -23,6 +24,19 @@ describe("cadencias · lo que la pantalla decide sin base", () => {
         f,
       ),
     ).toEqual(["Día 0: Comentario en LinkedIn", "Día 1: Correo", "Día 5: Respuesta en el hilo"]);
+  });
+
+  it("un comentario público lo hace una persona: la tarjeta no dice «Generación automática» aunque la fila lo diga", () => {
+    // El paso 1 de Fresko: un comentario en LinkedIn. «Activar» lo cuenta como gesto a mano; la tarjeta dice lo mismo.
+    expect(modoDePaso({ stepType: "linkedin_comment", generateWithAi: true })).toBe("Lo hace una persona: no lleva texto.");
+    expect(modoDePaso({ stepType: "instagram_like", generateWithAi: false })).toBe(MESSAGES.paso.sinTexto);
+    expect(modoDePaso({ stepType: "email", generateWithAi: true })).toBe(MESSAGES.paso.generacion);
+    expect(modoDePaso({ stepType: "linkedin_message", generateWithAi: false })).toBe(MESSAGES.paso.textoFijo);
+    // Una sola regla para la pantalla y para la base: los pasos sin texto son los que no se despachan.
+    const tipos = ["email", "email_reply", "linkedin_connect", "linkedin_message", "linkedin_comment", "linkedin_like",
+      "instagram_dm", "instagram_comment", "instagram_like", "manual_task"];
+    expect(tipos.filter(sinTexto)).toEqual(tipos.filter((t) => TEXTLESS_STEP_TYPES.includes(t)));
+    expect(tipos.filter(sinTexto)).toEqual(["linkedin_comment", "linkedin_like", "instagram_comment", "instagram_like", "manual_task"]);
   });
 
   it("la hora de un paso es una hora de reloj en el idioma del espacio, no un instante", () => {

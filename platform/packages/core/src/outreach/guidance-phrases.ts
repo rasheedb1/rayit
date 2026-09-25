@@ -38,9 +38,16 @@ export interface GuidancePhrases {
   disclosure: string;
   /** El cierre de un mensaje que espera respuesta. */
   closeWithQuestion: string;
-  /** El arranque de cada forma de paso; reciben la apertura del ángulo. */
+  /** El arranque de cada forma de paso; reciben la apertura del ángulo (salvo `reaction`). */
   lead: {
     publicComment: (opening: string) => string;
+    /**
+     * La guía entera de una reacción pública (linkedin_like, instagram_like):
+     * recibe la frase de la señal, no la apertura del ángulo, porque una
+     * reacción no lleva texto que abrir ni cerrar. Comentar es otro paso.
+     */
+    reaction: (signal: string) => string;
+    /** Una tarea a mano (manual_task): el gesto que ninguna red conectada puede llevar. */
     byHand: (opening: string) => string;
     reply: (opening: string) => string;
     connectNote: (opening: string) => string;
@@ -83,6 +90,7 @@ const ES: GuidancePhrases = {
   closeWithQuestion: 'Cierra con una sola pregunta.',
   lead: {
     publicComment: (o) => `Comenta ${o}.`,
+    reaction: (s) => `Hazlo a mano: reacciona a su última publicación, mejor si habla de ${s}. No comentes ni escribas.`,
     byHand: (o) => `Hazlo a mano: reacciona o comenta ${o}.`,
     reply: (o) => `Responde en el mismo hilo con ${o}.`,
     connectNote: (o) => `Nota de conexión de menos de 300 caracteres con ${o}.`,

@@ -2,15 +2,14 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { SEQUENCE_MAX_DAY_OFFSET as MAX_DAY_OFFSET } from "@mc/core/outreach/recomendar";
+import { BODY_MAX, GUIDANCE_MAX, SUBJECT_MAX } from "@mc/db/queries/cadencias-limites";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { Aviso } from "../../../_lib/aviso";
 import { guardarPaso, type PasoCambios } from "../actions";
+import { sinTexto as esSinTexto } from "../_lib/vista";
 import { MESSAGES } from "../messages";
 import type { PasoVista } from "./tarjeta-paso";
-
-/** Los pasos que no llevan texto: la generación no aplica. */
-const SIN_TEXTO = ["linkedin_like", "instagram_like", "manual_task"];
 
 /**
  * La edición en línea de un paso, dentro de su tarjeta (referencia:
@@ -45,7 +44,8 @@ export function EditorPaso({
   const [error, setError] = useState<string | undefined>();
   const [pending, start] = useTransition();
   const formRef = useRef<HTMLFormElement>(null);
-  const sinTexto = SIN_TEXTO.includes(tipo);
+  // La misma regla que la tarjeta y que «Activar»: lo que no se despacha lo hace una persona y no lleva texto.
+  const sinTexto = esSinTexto(tipo);
 
   // Al abrir, el foco va al primer campo que se puede cambiar (con personas dentro, el día no).
   useEffect(() => formRef.current?.querySelector<HTMLElement>("input:not([disabled]), select:not([disabled])")?.focus(), []);
@@ -117,7 +117,7 @@ export function EditorPaso({
         <Select name="angulo" options={[{ value: "", label: t.sinAngulo }, ...angulos]} defaultValue={paso.angleKey ?? ""} />
       </Field>
       <Field label={c.guia} help={c.guiaAyuda}>
-        <Textarea name="guia" rows={4} maxLength={1000} defaultValue={paso.guia ?? ""} />
+        <Textarea name="guia" rows={4} maxLength={GUIDANCE_MAX} defaultValue={paso.guia ?? ""} />
       </Field>
       {sinTexto ? (
         <p className="text-xs text-fg-3">{t.sinTexto}</p>
@@ -151,11 +151,11 @@ export function EditorPaso({
         <>
           {tipo === "email" && (
             <Field label={c.asunto}>
-              <Input name="asunto" maxLength={200} defaultValue={paso.subjectTemplate ?? ""} />
+              <Input name="asunto" maxLength={SUBJECT_MAX} defaultValue={paso.subjectTemplate ?? ""} />
             </Field>
           )}
           <Field label={c.cuerpo} help={c.cuerpoAyuda} required>
-            <Textarea name="cuerpo" rows={6} maxLength={5000} defaultValue={paso.bodyTemplate ?? ""} required />
+            <Textarea name="cuerpo" rows={6} maxLength={BODY_MAX} defaultValue={paso.bodyTemplate ?? ""} required />
           </Field>
         </>
       )}

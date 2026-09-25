@@ -135,7 +135,8 @@ export const MESSAGES = {
   estado: {
     activar: "Activar",
     activarPara: (persona: string) => `Activar y escribir a ${persona}`,
-    activando: "Activando…",
+    /** Lo que dice la región viva mientras corre cada acción de la fila (el botón pulsado gira). */
+    trabajando: { activar: "Activando…", pausar: "Pausando…", duplicar: "Duplicando…", archivar: "Archivando…" },
     pausar: "Pausar",
     reanudar: "Reanudar",
     reanudarPara: (persona: string) => `Reanudar y escribir a ${persona}`,

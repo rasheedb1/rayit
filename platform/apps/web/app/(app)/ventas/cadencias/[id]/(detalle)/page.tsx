@@ -10,8 +10,8 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { ModuleTabs } from "../../../_componentes/pestanas";
 import { withWorkspace } from "../../../_lib/db";
 import {
-  alcance, avisoDePolitica, esperaEntre, ESTADO_PILL, etiquetaActivar, etiquetaCanal, etiquetaTipo, horaDePaso, personaParaEnrolar,
-  resumenFlujo,
+  alcance, avisoDePolitica, esperaEntre, ESTADO_PILL, etiquetaActivar, etiquetaCanal, etiquetaTipo, horaDePaso, modoDePaso,
+  personaParaEnrolar, resumenFlujo,
 } from "../../_lib/vista";
 import { IconoCanal } from "../../canal";
 import { MESSAGES } from "../../messages";
@@ -28,7 +28,6 @@ const CADENCIAS = "/ventas/cadencias";
 
 function pasosVista(d: SequenceDetail, f: Formatter, angulos: ReadonlyMap<string, string>): PasoVista[] {
   const t = MESSAGES.paso;
-  const sinTexto = ["linkedin_like", "instagram_like", "manual_task"];
   return d.steps.map((s, i) => ({
     id: s.id,
     numero: f.int(s.position),
@@ -39,7 +38,7 @@ function pasosVista(d: SequenceDetail, f: Formatter, angulos: ReadonlyMap<string
     anguloLabel: s.angleLabel ?? (s.angleKey ? (angulos.get(s.angleKey) ?? s.angleKey) : null),
     guia: s.guidanceEs,
     guiaAviso: s.guidanceStale && s.guidanceWrittenFor ? t.guiaPorRevisar(etiquetaTipo(s.guidanceWrittenFor)) : null,
-    modoLabel: sinTexto.includes(s.stepType) ? t.sinTexto : s.generateWithAi ? t.generacion : t.textoFijo,
+    modoLabel: modoDePaso(s),
     activoLabel: s.requiresAsset ? (t.activo[s.requiresAsset] ?? null) : null,
     aviso: avisoDePolitica(d, s.id, f),
     dayOffset: s.dayOffset,

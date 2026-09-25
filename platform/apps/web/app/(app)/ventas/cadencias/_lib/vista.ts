@@ -4,7 +4,9 @@
  * cada nota del recomendador. Puro y probado; los textos salen de
  * messages.ts y las cifras del Formatter del espacio.
  */
-import { DISPATCHABLE_STEP_TYPES, type ProposalNote } from "@mc/core";
+// La regla de qué se despacha sale del módulo sin dependencias de @mc/core: este archivo también lo usa el editor, en el navegador.
+import { DISPATCHABLE_STEP_TYPES } from "@mc/core/outreach/sequence-policy";
+import type { ProposalNote } from "@mc/core";
 import type {
   ContactOption, EnrollableContact, EnrollableDeal, SequenceDetail, SequenceProposal, SequenceStatus,
 } from "@mc/db/queries/cadencias";
@@ -18,6 +20,22 @@ export const ESTADO_PILL: Record<SequenceStatus, PillKind> = {
   paused: "warn",
   archived: "neutral",
 };
+
+/**
+ * Un paso que no se despacha (un comentario o una reacción públicos, una
+ * tarea a mano) lo hace una persona: no lleva texto ni se redacta. La
+ * misma regla que TEXTLESS_STEP_TYPES de @mc/db y que «Activar» al contar
+ * los gestos a mano: la tarjeta, el editor y el aviso dicen lo mismo.
+ */
+export function sinTexto(stepType: string): boolean {
+  return !(DISPATCHABLE_STEP_TYPES as readonly string[]).includes(stepType);
+}
+
+/** Cómo sale el texto de un paso, para su tarjeta: a mano, generación automática o texto fijo. */
+export function modoDePaso(s: { stepType: string; generateWithAi: boolean }): string {
+  const t = MESSAGES.paso;
+  return sinTexto(s.stepType) ? t.sinTexto : s.generateWithAi ? t.generacion : t.textoFijo;
+}
 
 export function etiquetaCanal(canal: string): string {
   return MESSAGES.canales[canal] ?? canal;
@@ -132,7 +150,7 @@ export interface ConteoEnrolamiento {
  * `stepTypes` son los pasos de la cadencia, uno por toque.
  */
 export function partesDeEnrolamiento(c: ConteoEnrolamiento, stepTypes: readonly string[], f: Formatter): string {
-  const gestos = stepTypes.filter((t) => !(DISPATCHABLE_STEP_TYPES as readonly string[]).includes(t)).length;
+  const gestos = stepTypes.filter(sinTexto).length;
   const manual = Math.min(c.drafts, gestos);
   const n = { scheduled: c.scheduled, held: c.held, drafts: c.drafts - manual, manual, skipped: c.skipped };
   const partes = (["scheduled", "held", "drafts", "manual", "skipped"] as const)
