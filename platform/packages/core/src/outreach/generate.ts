@@ -97,7 +97,7 @@ export interface MessageGenerator {
 const promptCache = new Map<string, string>();
 
 /** Lee un prompt de prompts/*.md (solo en el servidor: el worker). */
-export function loadPrompt(name: 'generate' | 'judge'): string {
+export function loadPrompt(name: 'generate' | 'judge' | 'classify'): string {
   let p = promptCache.get(name);
   if (p === undefined) {
     p = readFileSync(new URL(`./prompts/${name}.md`, import.meta.url), 'utf8');
