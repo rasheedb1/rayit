@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -89,7 +89,8 @@ describe("/baja/<token>", () => {
     // El aviso recibe el foco para que se anuncie, sin el anillo de un campo:
     // `outline-none!` gana a la regla global de :focus-visible (r3).
     const aviso = screen.getByRole("status");
-    expect(aviso).toHaveFocus();
+    // El foco llega en un efecto después de pintar: bajo carga, un tick más tarde.
+    await waitFor(() => expect(aviso).toHaveFocus());
     expect(aviso.className).toMatch(/(^|\s)outline-none!(\s|$)/);
   });
 
