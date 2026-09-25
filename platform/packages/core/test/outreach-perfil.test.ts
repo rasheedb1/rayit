@@ -354,6 +354,12 @@ test('un enlace o una portada sin esquema se sanea al calcular: el perfil se gua
   assert.equal(coverSrcOrNull('/\\evil.example.com/x.jpg'), null);
   assert.equal(coverSrcOrNull('https://p16.tiktokcdn.com/x.jpg'), 'https://p16.tiktokcdn.com/x.jpg');
   assert.equal(coverSrcOrNull('javascript:alert(1)'), null);
+  // Solo las portadas de la demostración: otra ruta de la aplicación sería un GET con las cookies de quien mira.
+  assert.equal(coverSrcOrNull('/auth/salir'), null);
+  assert.equal(coverSrcOrNull('/demo/portadas/../../auth/salir'), null);
+  assert.equal(coverSrcOrNull('/demo/portadas/1.svg?x=/auth/salir'), null);
+  // Y las externas, solo https: una http es contenido mixto.
+  assert.equal(coverSrcOrNull('http://p16.tiktokcdn.com/x.jpg'), null);
 });
 
 test('los mejores salen de todo el historial con puntaje; formatos y tono, solo de los recientes', () => {

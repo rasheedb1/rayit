@@ -87,6 +87,41 @@ test('una cantidad en letras o un signo de cifra fuera de una marca se rechaza',
   assert.deepEqual(con('Una tercera parte me ve a diario.').issues, [{ code: 'number_word', text: 'tercera parte' }]);
   assert.deepEqual(con('Tres cuartos de mi público son mujeres.').issues, [{ code: 'number_word', text: 'tres cuartos' }]);
   assert.deepEqual(con('La mayoría de mi audiencia es de México.').issues, [{ code: 'number_word', text: 'mayoría' }]);
+  // Los huecos que encontró la revisión de r4, con el perfil de Laura.
+  assert.deepEqual(con('Publiqué veintiún videos.').issues, [{ code: 'number_word', text: 'veintiún' }]);
+  assert.deepEqual(con('Llevo una veintena de campañas.').issues, [{ code: 'number_word', text: 'veintena' }]);
+  assert.deepEqual(con('Trabajé con treintaitrés marcas.').issues, [{ code: 'number_word', text: 'treintaitrés' }]);
+  assert.deepEqual(con('Trabajé con un par de marcas.').issues, [{ code: 'number_word', text: 'un par' }]);
+  assert.deepEqual(con('Tengo centenas de comentarios.').issues, [{ code: 'number_word', text: 'centenas' }]);
+  for (const x of ['cuarentaycinco', 'noventainueve', 'treintenas', 'veintitantos']) {
+    assert.deepEqual(con(`Hice ${x} recetas.`).issues.map((i) => i.code), ['number_word'], x);
+  }
+  // «a la par» y «parque» no son «un par».
+  assert.equal(con('Cocino a la par de mi audiencia, en un parque.').ok, true);
+});
+
+test('la palabra pegada a una marca tiene que ser lo que esa cifra mide', () => {
+  const con = (frase: string) => verifyNarrative(BUENA.replace('Soy Laura y cocino fácil.', frase), perfil, { paragraphs: null });
+  const seguidores = perfil.claims.find((c) => c.key === 'followers' && c.params.platform === 'tiktok')!;
+  // Una mediana de views no son seguidores: la cifra es real, la afirmación no.
+  assert.deepEqual(con('Tengo [claim:mediana-tiktok] seguidores.').issues, [
+    { code: 'unit_mismatch', id: 'mediana-tiktok', word: 'seguidores', unit: 'views' },
+  ]);
+  // La misma palabra con la cifra que sí la mide pasa.
+  assert.equal(con(`Tengo [claim:${seguidores.id}] seguidores.`).ok, true);
+  // Sinónimos, mayúsculas y el vocabulario que ninguna cifra mide.
+  assert.equal(con('Mis videos hacen [claim:mediana-tiktok] reproducciones.').ok, true);
+  assert.deepEqual(con(`Tengo [claim:${seguidores.id}] Views.`).issues.map((i) => i.code), ['unit_mismatch']);
+  assert.deepEqual(con('Hice [claim:video-000000000d01-x] views.').issues.map((i) => i.code), ['unit_mismatch']);
+  assert.deepEqual(con('Tengo [claim:mediana-tiktok] likes.').issues.map((i) => i.code), ['unit_mismatch']);
+  // Lo que no es una palabra de unidad no se juzga: «mi mediana», «de quienes me siguen».
+  assert.equal(con('Hice [claim:video-000000000d01-x] mi mediana.').ok, true);
+  assert.equal(con('[claim:audiencia-tiktok-genero-f] de mis seguidores son mujeres.').ok, true);
+  // La vista previa subraya la palabra, no la marca.
+  const texto = 'Tengo [claim:mediana-tiktok] seguidores.';
+  const [sp] = narrativeIssueSpans(texto, verifierContext(perfil));
+  assert.equal(texto.slice(sp!.start, sp!.end), 'seguidores');
+  assert.equal(sp!.claimId, 'mediana-tiktok');
 });
 
 test('los verbos que multiplican y los puestos de ranking también son cifras sin marca', () => {
@@ -187,6 +222,9 @@ test('la plantilla compara cifras comparables: la mediana de la red del mejor vi
     /Y no es casualidad: mis otros videos cortos hacen \[claim:porque-000000000d01-duracion-corto\] mi mediana, frente a \[claim:porque-000000000d01-duracion-corto-resto\] de los demás\./,
   );
   assert.ok(verifyNarrative(conRazon, buildPerfil(entradasConVideosLargos()), { minClaims: 1 }).ok);
+  // El alcance en no seguidores es una mediana por video: «en un video típico», no «de cada video».
+  assert.match(t, /En TikTok, en un video típico, \[claim:[a-z0-9-]+\] del alcance llega a personas que todavía no me siguen\./);
+  assert.doesNotMatch(t, /cada video/);
   // Los rasgos de tono con el mismo verbo, juntos.
   assert.match(t, /En mis captions escribo corto y uso emojis y hashtags\./);
   assert.doesNotMatch(t, /uso emojis y uso/);

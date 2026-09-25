@@ -25,7 +25,13 @@
  *     o de una tarifa, una franja de edad): «Pasta cremosa en cuatro
  *     minutos» es un título, no una cifra;
  *   · y lo que la guardia de VEN-10 llama hueco ({{x}}, [NOMBRE]…) fuera
- *     de las marcas → rechazado.
+ *     de las marcas → rechazado;
+ *   · una marca válida seguida de una palabra de unidad que no es la
+ *     suya («[claim:mediana-tiktok] seguidores», cuando es una mediana de
+ *     views) → rechazada (unit_mismatch). La cifra es real, pero el texto
+ *     que se copia a un correo no lleva el globo que dice qué es. Se mira
+ *     solo la palabra pegada a la marca, contra un vocabulario cerrado
+ *     por idioma (UNIDADES): «[claim:x] de mis seguidores» no se juzga.
  *
  * Lo que sigue sin poder comprobar: una afirmación sin número («soy la
  * más vista de Colombia»). El prompt la prohíbe y el juez de VEN-12 la
@@ -62,7 +68,7 @@ const DIGITS_RE = /\p{N}+(?:[.,]\p{N}+)*/gu;
  * español: el prompt, la plantilla y las listas del verificador están en
  * español, y la pantalla lo dice (messages.ts, narrativa.idioma). Añadir
  * un idioma es añadir sus datos a los mapas de abajo (CANTIDADES,
- * SISTEMA), no escribir otra función.
+ * UNIDADES, SISTEMA), no escribir otra función.
  */
 export const NARRATIVE_LANGUAGES = ['es'] as const;
 export type NarrativeLanguage = (typeof NARRATIVE_LANGUAGES)[number];
@@ -111,7 +117,9 @@ const NUMERALES_EN = [
  *            «doble», «segunda», «mayoría»);
  *   stems    raíces de verbos que multiplican, como expresión y con
  *            cualquier terminación («dupli(?:c|qu)» → duplicar, dupliqué,
- *            duplicó…: la c pasa a qu delante de e; «dobl» → doblé, dobló);
+ *            duplicó…: la c pasa a qu delante de e; «dobl» → doblé, dobló),
+ *            y las decenas compuestas en una sola palabra («treintaitrés»,
+ *            «cuarentaycinco»: la decena pegada a su «y» o «i»);
  *   phrases  frases de ranking, de proporción y de porcentaje, con
  *            cualquier espacio entre sus palabras («número uno», «primer
  *            lugar», «cuarta parte», «top»);
@@ -126,14 +134,46 @@ export const CANTIDADES: Readonly<Record<NarrativeLanguage, {
     stems: [
       'dupli(?:c|qu)', 'tripli(?:c|qu)', 'cuadrupli(?:c|qu)', 'quintupli(?:c|qu)', 'sextupli(?:c|qu)', 'multipli(?:c|qu)', 'dobl',
       'doubl', 'tripl', 'quadrupl',
+      '(?:treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa)(?:y|i)',
     ],
     phrases: [
       'por ciento', 'número uno', 'numero uno', 'primer lugar', 'primer puesto', 'primera posición', 'primera posicion',
-      'primer sitio', 'top', 'cuarta parte', 'tercera parte', 'quinta parte', 'décima parte', 'decima parte', 'tres cuartos',
+      'primer sitio', 'top', 'un par', 'cuarta parte', 'tercera parte', 'quinta parte', 'décima parte', 'decima parte', 'tres cuartos',
     ],
     allowed: ['primera persona', 'segunda persona', 'tercera persona'],
   },
 };
+
+/**
+ * Las palabras de unidad que pueden ir pegadas a una marca, y la unidad
+ * del claim (Claim.unit) que les corresponde. Una palabra que ninguna
+ * cifra del perfil mide («likes», «impresiones», «marcas») lleva una
+ * unidad que ningún claim tiene: detrás de cualquier marca es un error.
+ * Lo que no está en la lista no se juzga («mi mediana», «del alcance»).
+ */
+export const UNIDADES: Readonly<Record<NarrativeLanguage, Readonly<Record<string, string>>>> = {
+  es: {
+    ...Object.fromEntries(
+      ['views', 'view', 'vistas', 'visualizaciones', 'reproducciones', 'visitas'].map((w) => [w, 'views']),
+    ),
+    ...Object.fromEntries(
+      ['seguidores', 'seguidoras', 'seguidor', 'seguidora', 'fans', 'followers', 'suscriptores', 'suscriptoras'].map((w) => [w, 'seguidores']),
+    ),
+    ...Object.fromEntries(
+      [
+        'videos', 'vídeos', 'video', 'vídeo', 'publicaciones', 'posts', 'reels', 'shorts', 'tiktoks', 'historias', 'piezas', 'captions',
+      ].map((w) => [w, 'videos']),
+    ),
+    canjes: 'canjes',
+    canje: 'canjes',
+    ...Object.fromEntries(
+      ['likes', 'comentarios', 'compartidos', 'guardados', 'impresiones', 'clics', 'marcas', 'campañas', 'clientes'].map((w) => [w, `~${w}`]),
+    ),
+  },
+};
+
+/** La palabra que va justo después de una marca, separada solo por espacios. */
+const PALABRA_TRAS_MARCA_RE = /^[ \t\u00a0]+(\p{L}+)/u;
 
 const numberWordRes = new Map<NarrativeLanguage, RegExp>();
 /**
@@ -170,6 +210,8 @@ export type NarrativeIssue =
   | { code: 'bare_number'; text: string }
   | { code: 'number_word'; text: string }
   | { code: 'placeholder'; text: string }
+  /** `word` va pegada a [claim:id], pero la cifra mide `unit` (Claim.unit). */
+  | { code: 'unit_mismatch'; id: string; word: string; unit: string }
   | { code: 'no_claims' };
 
 export interface VerifyOptions {
@@ -251,28 +293,38 @@ function frase(s: string): string {
 }
 
 /**
- * Lo que el verificador necesita del perfil: los ids de sus cifras y sus
- * términos (perfilTerms). Son datos planos: la pantalla los calcula en el
- * servidor y los pasa al cliente, que verifica la vista previa con la
- * misma función que la puerta del servidor.
+ * Lo que el verificador necesita del perfil: los ids de sus cifras con
+ * su unidad (id → Claim.unit) y sus términos (perfilTerms). Son datos
+ * planos: la pantalla los calcula en el servidor y los pasa al cliente,
+ * que verifica la vista previa con la misma función que la puerta del
+ * servidor.
  */
 export interface VerifierContext {
   ids: readonly string[];
+  units: Readonly<Record<string, string>>;
   terms: readonly string[];
   language?: NarrativeLanguage;
 }
 
 export function verifierContext(perfil: PerfilComercial, language: NarrativeLanguage = DEFAULT_NARRATIVE_LANGUAGE): VerifierContext {
-  return { ids: perfil.claims.map((c) => c.id), terms: perfilTerms(perfil), language };
+  return {
+    ids: perfil.claims.map((c) => c.id),
+    units: Object.fromEntries(perfil.claims.map((c) => [c.id, c.unit])),
+    terms: perfilTerms(perfil),
+    language,
+  };
 }
 
 /** Un problema del verificador con su lugar en el texto, para subrayarlo en la vista previa. */
 export interface IssueSpan {
   start: number;
   end: number;
-  code: 'unknown_claim' | 'malformed_marker' | 'bare_number' | 'number_word' | 'placeholder';
-  /** El texto tal cual (para unknown_claim, el id). */
+  code: 'unknown_claim' | 'malformed_marker' | 'bare_number' | 'number_word' | 'placeholder' | 'unit_mismatch';
+  /** El texto tal cual (para unknown_claim, el id; para unit_mismatch, la palabra). */
   text: string;
+  /** Solo unit_mismatch: la marca a la que va pegada la palabra y la unidad que de verdad mide. */
+  claimId?: string;
+  unit?: string;
 }
 
 /** Cambia cada coincidencia por espacios del mismo largo: las posiciones del resto no se mueven. */
@@ -291,15 +343,31 @@ function tapar(text: string, re: RegExp): string {
 export function narrativeIssueSpans(text: string, ctx: VerifierContext): IssueSpan[] {
   const spans: IssueSpan[] = [];
   const ids = new Set(ctx.ids);
+  const lang = ctx.language ?? DEFAULT_NARRATIVE_LANGUAGE;
+  const unidades = UNIDADES[lang];
   for (const m of text.matchAll(CLAIM_MARKER_RE)) {
-    if (!ids.has(m[1]!)) spans.push({ start: m.index, end: m.index + m[0].length, code: 'unknown_claim', text: m[1]! });
+    const id = m[1]!;
+    const fin = m.index + m[0].length;
+    if (!ids.has(id)) {
+      spans.push({ start: m.index, end: fin, code: 'unknown_claim', text: id });
+      continue;
+    }
+    // La palabra pegada a la marca: si es de unidad, tiene que ser la de la cifra.
+    const tras = PALABRA_TRAS_MARCA_RE.exec(text.slice(fin));
+    const palabra = tras?.[1];
+    if (!palabra) continue;
+    const suya = ctx.units[id];
+    const dice = Object.hasOwn(unidades, palabra.toLowerCase()) ? unidades[palabra.toLowerCase()] : undefined;
+    if (dice !== undefined && dice !== suya) {
+      const start = fin + tras![0].length - palabra.length;
+      spans.push({ start, end: start + palabra.length, code: 'unit_mismatch', text: palabra, claimId: id, unit: suya ?? '' });
+    }
   }
   const sinMarcas = tapar(text, CLAIM_MARKER_RE);
   for (const m of sinMarcas.matchAll(MARKER_LIKE_RE)) {
     spans.push({ start: m.index, end: m.index + m[0].length, code: 'malformed_marker', text: m[0] });
   }
   let limpio = tapar(sinMarcas, MARKER_LIKE_RE);
-  const lang = ctx.language ?? DEFAULT_NARRATIVE_LANGUAGE;
   for (const term of [...ctx.terms, ...CANTIDADES[lang].allowed]) {
     limpio = tapar(limpio, new RegExp(`(?<![\\p{L}\\p{N}])${frase(term)}(?![\\p{L}\\p{N}])`, 'giu'));
   }
@@ -342,12 +410,19 @@ export function verifyNarrativeWith(text: string, ctx: VerifierContext, opts: Ve
   }
   // Un problema por texto distinto, agrupados por tipo en el orden de siempre.
   const spans = narrativeIssueSpans(t, ctx);
-  for (const code of ['unknown_claim', 'malformed_marker', 'bare_number', 'number_word', 'placeholder'] as const) {
+  for (const code of ['unknown_claim', 'malformed_marker', 'unit_mismatch', 'bare_number', 'number_word', 'placeholder'] as const) {
     const vistos = new Set<string>();
     for (const sp of spans) {
-      if (sp.code !== code || vistos.has(sp.text)) continue;
-      vistos.add(sp.text);
-      issues.push(code === 'unknown_claim' ? { code, id: sp.text } : { code, text: sp.text });
+      const clave = code === 'unit_mismatch' ? `${sp.claimId} ${sp.text.toLowerCase()}` : sp.text;
+      if (sp.code !== code || vistos.has(clave)) continue;
+      vistos.add(clave);
+      issues.push(
+        code === 'unknown_claim'
+          ? { code, id: sp.text }
+          : code === 'unit_mismatch'
+            ? { code, id: sp.claimId!, word: sp.text, unit: sp.unit! }
+            : { code, text: sp.text },
+      );
     }
   }
 
@@ -590,7 +665,8 @@ export function templateNarrative(perfil: PerfilComercial, opts: TemplateOptions
     if (partes.length) p1.push(`De quienes me siguen en ${donde}, ${listaEs(partes)}.`);
   }
   const nf = audience.nonFollowers[0];
-  if (nf) p1.push(`En ${red(nf.platformId)}, ${m(nf.claimId)} del alcance de cada video llega a personas que todavía no me siguen.`);
+  // Es una mediana por video: se dice «en un video típico», no «de cada video».
+  if (nf) p1.push(`En ${red(nf.platformId)}, en un video típico, ${m(nf.claimId)} del alcance llega a personas que todavía no me siguen.`);
 
   // 2 · Qué funciona.
   const p2: string[] = [];
@@ -687,7 +763,7 @@ Reglas que no se negocian:
 4. Solo menciona marcas, campañas y videos que aparecen en los datos. No inventes clientes, premios ni resultados.
 5. Puedes nombrar un video, una campaña o una tarifa copiando su nombre tal cual aparece entre «».
 6. Nada de superlativos vacíos ("increíble", "el mejor"), urgencia falsa ni presión. Máximo cien palabras por párrafo.
-7. Cada marca se reemplaza por su valor tal como aparece en CIFRAS: escribe alrededor lo que falte (por ejemplo «views»), sin repetir lo que el valor ya trae (%, ×, la moneda, «s»).
+7. Cada marca se reemplaza por su valor tal como aparece en CIFRAS: escribe alrededor lo que falte (por ejemplo «views»), sin repetir lo que el valor ya trae (%, ×, la moneda, «s»). La palabra que pongas justo después de una marca tiene que ser lo que esa cifra mide según su etiqueta: una mediana de views nunca va seguida de «seguidores».
 8. Una cifra «veces su mediana» se compara con la mediana de SU red y SU corte: si la pones junto a una mediana, que sea la que dice su etiqueta, y nombra la red.
 9. Una razón de «lo que lo distingue» compara los OTROS videos con ese rasgo contra los que no lo tienen: dilo así, sin atribuirle al video un resultado que no es suyo. Si no hay razón, describe cómo es el video y no inventes una causa.
 10. Responde solo con los tres párrafos.`,
@@ -771,6 +847,8 @@ export function describeIssues(issues: readonly NarrativeIssue[]): string {
         case 'bare_number': return `Escribiste «${i.text}» con dígitos fuera de una marca: cámbialo por su [claim:id] o quítalo.`;
         case 'number_word': return `Escribiste «${i.text}», una cantidad en letras o un signo de cifra fuera de una marca: cámbialo por su [claim:id] o quítalo.`;
         case 'placeholder': return `Quedó un hueco sin llenar: «${i.text}».`;
+        case 'unit_mismatch':
+          return `Después de [claim:${i.id}] escribiste «${i.word}», que no es lo que mide esa cifra (mira su etiqueta en CIFRAS): cámbialo por lo que dice la etiqueta o quítalo.`;
         case 'no_claims': return 'No citaste ninguna cifra: usa las marcas de la lista.';
       }
     })

@@ -531,13 +531,24 @@ export function webUrlOrNull(u: string | null | undefined): string | null {
 }
 
 /**
- * Una portada que la pantalla pone en src: http(s), como webUrlOrNull, o
- * una ruta de la propia aplicación («/demo/portadas/1.svg», las portadas
- * de la demostración que sirve apps/web/public). Nunca «//otro.host».
+ * Las portadas de la demostración que sirve apps/web/public (seed 0007):
+ * la única ruta de la propia aplicación que puede ser una portada. Un
+ * nombre de archivo plano, sin «..» ni subcarpetas.
+ */
+const DEMO_COVER_RE = /^\/demo\/portadas\/[A-Za-z0-9_-]+\.(?:svg|png|jpe?g|webp)$/;
+
+/**
+ * Una portada que la pantalla pone en src: solo https (una http sería
+ * contenido mixto) o una portada de la demostración
+ * («/demo/portadas/1.svg»). Cualquier otra ruta de la aplicación queda
+ * fuera: post.cover_url no tiene CHECK y viene de la importación CSV, y
+ * un <img src="/auth/salir"> haría que el navegador de otro miembro
+ * pidiera esa ruta con sus cookies. Nunca «//otro.host».
  */
 export function coverSrcOrNull(u: string | null | undefined): string | null {
   const v = typeof u === 'string' ? u.trim() : '';
-  return /^\/(?![/\\])\S/.test(v) ? v : webUrlOrNull(v);
+  if (DEMO_COVER_RE.test(v)) return v;
+  return /^https:\/\/\S/i.test(v) ? v : null;
 }
 
 /** Un segmento legible en un id de claim: «25-34» → «25-34», «55+» → «55-mas», «F» → «f». */

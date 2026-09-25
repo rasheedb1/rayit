@@ -51,14 +51,15 @@ const NUMEROS = 'dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|doce|quince|ve
 export const NUMBER_WORDS_ES: readonly string[] = [
   ...NUMEROS.split('|'),
   'cero', 'once', 'trece', 'catorce', 'dieciséis', 'dieciseis', 'diecisiete', 'dieciocho', 'diecinueve',
-  'veintiuno', 'veintiuna', 'veintidós', 'veintidos', 'veintitrés', 'veintitres', 'veinticuatro', 'veinticinco',
+  'veintiuno', 'veintiuna', 'veintiún', 'veintidós', 'veintidos', 'veintitrés', 'veintitres', 'veinticuatro', 'veinticinco',
   'veintiséis', 'veintiseis', 'veintisiete', 'veintiocho', 'veintinueve',
   'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa',
   'cien', 'ciento', 'cientos', 'doscientos', 'doscientas', 'trescientos', 'trescientas', 'cuatrocientos',
   'cuatrocientas', 'quinientos', 'quinientas', 'seiscientos', 'seiscientas', 'setecientos', 'setecientas',
   'ochocientos', 'ochocientas', 'novecientos', 'novecientas',
   'mil', 'miles', 'millar', 'millares', 'millón', 'millon', 'millones', 'billón', 'billon', 'billones',
-  'docena', 'docenas', 'decena', 'decenas', 'centenar', 'centenares',
+  'docena', 'docenas', 'decena', 'decenas', 'veintena', 'veintenas', 'treintena', 'treintenas',
+  'centena', 'centenas', 'centenar', 'centenares', 'veintitantos', 'veintitantas',
   'doble', 'dobles', 'triple', 'triples', 'cuádruple', 'cuadruple', 'quíntuple', 'quintuple',
   'mitad', 'tercio', 'tercios',
 ];
