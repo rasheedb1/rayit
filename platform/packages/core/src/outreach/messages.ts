@@ -138,6 +138,7 @@ export function failureReason(lang: NoticeLang, code: string): string {
 export const HOLD_CODES = [
   'no_postal_address', 'no_body', 'placeholders', 'reply_without_thread', 'unconfirmed_attempt', 'note_too_long', 'needs_review',
   'no_subject', 'quality_warmup', 'quality_risk', 'quality_low', 'quality_preflight', 'quality_duplicate', 'llm_budget', 'llm_error',
+  'cooldown_over',
 ] as const;
 
 /** Los disparadores de riesgo en palabras (outbound_review.risk_triggers). */
@@ -219,6 +220,7 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     quality_duplicate: () => 'es igual a un mensaje que esta persona ya recibió',
     llm_budget: () => 'se acabó el presupuesto de redacción con IA de hoy; revísalo o escríbelo tú',
     llm_error: () => 'la redacción con IA no devolvió un mensaje legible; escríbelo tú',
+    cooldown_over: () => 'la marca dijo «ahora no» hace noventa días; la cadencia vuelve solo si tú lo apruebas',
   },
   en: {
     no_postal_address: () => 'the postal address for the email footer is missing; add it in the sending policy',
@@ -239,6 +241,7 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     quality_duplicate: () => 'it is the same as a message this person already got',
     llm_budget: () => "today's AI writing budget ran out; review it or write it yourself",
     llm_error: () => 'AI writing did not return a readable message; write it yourself',
+    cooldown_over: () => 'the brand said "not now" ninety days ago; the cadence only comes back if you approve it',
   },
 };
 
