@@ -654,9 +654,10 @@ export const FIGURE_TOLERANCE = 0.05;
  *
  *   · redondeada hacia abajo, hasta un 5 % («115 mil» o «110 mil» por
  *     115.446: «más de 110 mil» es verdad);
- *   · el redondeo del dato a la precisión con que está escrita («58 %» por
- *     0,576; «1,2 M» por 1.180.000; «6,7×» por 6,66): la cifra que da
- *     Intl al formatear el claim siempre pasa.
+ *   · el redondeo del dato a la precisión con que está escrita, sin
+ *     alejarse más de un 5 % («58 %» por 0,576; «1,2 M» por 1.180.000;
+ *     «6,7×» por 6,66): la cifra que da Intl al formatear el claim
+ *     siempre pasa; «x3» por 3,4× no (redondeo, pero un 12 % de más).
  *
  * «120 mil» por 115.446 no pasa: escrito a miles, el dato es 115 mil, y
  * 120 es redondearlo hacia arriba (ronda 5).
@@ -671,8 +672,8 @@ export function figureMatchesClaim(hit: FigureHit, claim: SalesClaim): boolean {
     const eps = size * 1e-9;
     // Hacia abajo (hacia el cero), hasta la tolerancia.
     if (Math.abs(v) <= size + eps && Math.sign(v) === Math.sign(target) && (size - Math.abs(v)) / size <= FIGURE_TOLERANCE) return true;
-    // El redondeo del dato a la precisión con que se escribió.
+    // El redondeo del dato a la precisión con que se escribió, y cerca de él: «x3» no es 3,4×.
     const step = hit.steps?.[i];
-    return step !== undefined && step > 0 && Math.abs(v - target) <= step / 2 + eps;
+    return step !== undefined && step > 0 && Math.abs(v - target) <= step / 2 + eps && Math.abs(v - target) / size <= FIGURE_TOLERANCE;
   });
 }

@@ -1220,6 +1220,56 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   exacto y calla con el editor vacío. La nota del juez falso nombra las
   dimensiones de la rúbrica en el idioma del espacio.
 
+#### Ronda 5 (0060)
+
+- **El camino principal no pierde el pitch.** El editor se monta de
+  nuevo solo cuando la IA trae un borrador nuevo o se pone a redactar
+  (`montaje.tsx` compara la clave que manda el servidor con la montada).
+  Guardar, copiar o programar no lo remontan: el aviso («Programado»,
+  «Copiado») sigue a la vista con el foco. Tras programar, el correo
+  queda en solo lectura con «Ver la ficha» y «Escribir otro pitch».
+  Cuando llega otra versión de la IA, el foco va a su aviso; un error al
+  guardar o programar también se lleva el foco.
+- **La persona es una variable, no un nombre.** Lo que escribe la IA se
+  guarda en `outbound_generation.body_marked` con quien recibe y quien
+  firma como `{{first_name}}`, `{{full_name}}` y `{{sender_name}}`
+  (`templatizeKnownValues` en `render.ts`, aplicado en
+  `generationFinalFrom`, que usan el worker y la demo). Si la creadora
+  cambia «Para», el saludo cambia con la persona. Como red, la revisión
+  del editor no deja programar un mensaje que nombra a otra persona de
+  la marca («El borrador se escribió para Camilo…»). La variable del
+  creador es `sender_name`, la de la lista canónica: no hay otra.
+- **Lo que impide programar sin estar en el mensaje, se dice antes.** Sin
+  dirección postal en el pie (con la misma regla que `savePitch`), la
+  revisión lo dice con el enlace a la política y «Programar» se apaga;
+  sin correo conectado, una nota neutra con el enlace a Canales.
+- **Redondear no es inflar.** Una cifra vale si redondea el dato hacia
+  abajo (hasta un 5 %) o si es el dato redondeado a la precisión con que
+  está escrita, sin alejarse más de un 5 % («58 %» por 0,576; «1,2 M» por
+  1.180.000). «120 mil» por 115.446 no pasa: escrito a miles, el dato es
+  115 mil. «x3» por 3,4× tampoco.
+- **Más cifras sin origen.** «Dupliqué», «dupliquemos», «cuadrupliqué»
+  (la «c» pasa a «qu»), «gané 3 premios» (premios, reconocimientos,
+  menciones, awards) y «mi tasa de interacción es del 12» (un número
+  detrás de «tasa de…», «engagement rate», «interacción» es un
+  porcentaje aunque le falte el signo).
+- **Una sola regla de porcentaje.** `formatShare` (`claim-labels.ts`) la
+  usan las cifras del pitch y `formatPct` de la web: la ficha y el correo
+  dicen «58 %» igual.
+- **La marca también es dato de fuera.** El juez recibe el nombre y el
+  sector entre `<marca>` y `<sector>`, como el generador.
+- **Quién pidió el borrador lo dice la sesión.** 0060 rehace
+  `outbound_generation_request` con la misma firma: `requested_by` es
+  `current_user_id()`; sin sesión, `p_user` solo vale si es miembro del
+  espacio.
+- **Copiar dice la verdad.** Si el navegador no deja copiar, la pantalla
+  lo dice en vez de «Copiado»; sin asunto se copia solo el cuerpo. Tocar
+  una ficha dice su origen debajo del mensaje. Enter usa la selección
+  viva, no la última guardada.
+- **El redactor falso no escribe en frío a quien ya conoce.** Con una
+  campaña con esa marca abre con la relación («Después de la campaña que
+  hicimos juntos con…») y nombra la marca dos veces como mucho.
+
 ### 5.7 Qué pasa cuando la marca responde
 
 El webhook de mensajes nuevos de Unipile y la lectura del hilo de Gmail

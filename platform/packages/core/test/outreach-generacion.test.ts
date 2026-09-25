@@ -521,6 +521,8 @@ test('ronda 5: el redondeo solo vale hacia abajo o a la precisión escrita: «11
   assert.equal(pasa('60 %', share), false);
   const multiple: SalesClaim = { ...CLAIMS[2]!, value: 6.66, display: '6,7×' };
   assert.equal(pasa('6,7×', multiple), true);
+  assert.equal(pasa('x3', { ...multiple, value: 2.96, display: '3×' }), true, 'el display de Intl pasa');
+  assert.equal(pasa('x3', { ...multiple, value: 3.4, display: '3,4×' }), false, 'redondeo a la unidad, pero un 12 % lejos');
   const millones: SalesClaim = { ...mediana, value: 1_180_000, display: '1.180.000' };
   assert.equal(pasa('1,2 millones', millones), true);
   assert.equal(pasa('1,3 millones', millones), false);

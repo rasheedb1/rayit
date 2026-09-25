@@ -431,7 +431,7 @@ export const STORIES: readonly Story[] = [
     desc: "Generador con perfil del creador, señal de la marca, ángulo del día y toques realmente enviados; pre-vuelo determinista, juez con rúbrica por paso en tabla, regeneración con pistas cerradas, disparadores de riesgo y revisión humana con calentamiento por tipo de paso.",
     done: "Un mensaje con una cifra sin origen no pasa; dos marcas del mismo nicho reciben correos con similitud menor de 0,65; el juez registra nota, tokens y costo.",
     status: "hecho",
-    note: "Hecha: generación con cifras trazables, pre-vuelo, compuertas A-B-C, juez con nota y costo, y jobs outbound.generate/outbound.review. Para el integrador: aplicar 0056–0059 y poner ANTHROPIC_API_KEY en el worker. Detalle en docs/ventas-outreach.md.",
+    note: "Hecha: generación con cifras trazables, pre-vuelo, compuertas A-B-C, juez con nota y costo, y jobs outbound.generate/outbound.review. Para el integrador: aplicar 0056–0060 y poner ANTHROPIC_API_KEY en el worker. Detalle en docs/ventas-outreach.md.",
   },
   {
     id: "VEN-13", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-12"],
