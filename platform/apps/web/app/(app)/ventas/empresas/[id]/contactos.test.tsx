@@ -28,6 +28,7 @@ const base: ContactRow = {
   optedOut: false,
   optedOutAt: null,
   optedOutReason: null,
+  optedOutByReply: null,
   bounced: false,
   isOwn: true,
   createdAt: "2026-09-20T12:00:00Z",
@@ -125,5 +126,16 @@ describe("Contactos", () => {
     expect(screen.getByText("Pidió la baja")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "laura@cafealma.co" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Registrar baja/ })).toBeNull();
+  });
+
+  it("la baja por respuesta llega como código y se pinta traducida; el motivo escrito por la persona manda", () => {
+    const porLinkedIn = { ...base, optedOut: true, optedOutByReply: "linkedin" as const };
+    const { unmount } = render(<Contactos companyId={COMPANY} contacts={[porLinkedIn]} />);
+    expect(screen.getByText("Pidió no ser contactado, respondiendo por LinkedIn.")).toBeInTheDocument();
+    expect(screen.queryByText(/reply_optout/)).toBeNull();
+    unmount();
+    render(<Contactos companyId={COMPANY} contacts={[{ ...porLinkedIn, optedOutReason: "Lo pidió por teléfono." }]} />);
+    expect(screen.getByText("Lo pidió por teléfono.")).toBeInTheDocument();
+    expect(screen.queryByText(/respondiendo por LinkedIn/)).toBeNull();
   });
 });

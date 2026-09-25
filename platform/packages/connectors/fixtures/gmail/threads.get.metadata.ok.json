@@ -1,0 +1,41 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-24",
+    "notes": "GET threads/{id}?format=metadata&metadataHeaders=From: el enviado (SENT), la respuesta de la marca y un rebote en el mismo hilo."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://gmail\\.googleapis\\.com/gmail/v1/users/me/threads/18c1f0a0b0c0d0e1\\?format=metadata"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "18c1f0a0b0c0d0e1",
+      "historyId": "987654",
+      "messages": [
+        {
+          "id": "18c1f0a0b0c0d0e1",
+          "threadId": "18c1f0a0b0c0d0e1",
+          "labelIds": ["SENT"],
+          "internalDate": "1790000000000",
+          "payload": { "headers": [{ "name": "From", "value": "Laura <laura@cocina-facil.test>" }] }
+        },
+        {
+          "id": "18c1f0a0b0c0d0f2",
+          "threadId": "18c1f0a0b0c0d0e1",
+          "labelIds": ["INBOX", "UNREAD"],
+          "internalDate": "1790003600000",
+          "payload": { "headers": [{ "name": "From", "value": "Marta Ríos <marta@cafealma.test>" }] }
+        },
+        {
+          "id": "18c1f0a0b0c0d0f3",
+          "threadId": "18c1f0a0b0c0d0e1",
+          "labelIds": ["INBOX"],
+          "internalDate": "1790003700000",
+          "payload": { "headers": [{ "name": "From", "value": "Mail Delivery Subsystem <mailer-daemon@googlemail.com>" }] }
+        }
+      ]
+    }
+  }
+}

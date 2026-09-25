@@ -1,0 +1,97 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "GET threads/{id}?format=full: el correo enviado y la respuesta de la marca."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://gmail\\.googleapis\\.com/gmail/v1/users/me/threads/18c1f0a0b0c0d0e1\\?format=full"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "18c1f0a0b0c0d0e1",
+      "messages": [
+        {
+          "id": "18c1f0a0b0c0d0e1",
+          "threadId": "18c1f0a0b0c0d0e1",
+          "labelIds": [
+            "SENT"
+          ],
+          "snippet": "Hola Marta",
+          "internalDate": "1790000000000",
+          "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+              {
+                "name": "Message-ID",
+                "value": "<CADemo123@mail.gmail.com>"
+              },
+              {
+                "name": "Subject",
+                "value": "Una idea para Café Alma"
+              },
+              {
+                "name": "From",
+                "value": "Laura <laura@cocina-facil.test>"
+              }
+            ],
+            "body": {
+              "data": "SG9sYSBNYXJ0YSwg4oCm"
+            }
+          }
+        },
+        {
+          "id": "18c1f0a0b0c0d0f2",
+          "threadId": "18c1f0a0b0c0d0e1",
+          "labelIds": [
+            "INBOX",
+            "UNREAD"
+          ],
+          "snippet": "Me interesa",
+          "internalDate": "1790003600000",
+          "payload": {
+            "mimeType": "multipart/alternative",
+            "headers": [
+              {
+                "name": "Message-ID",
+                "value": "<BrandReply456@cafealma.test>"
+              },
+              {
+                "name": "In-Reply-To",
+                "value": "<CADemo123@mail.gmail.com>"
+              },
+              {
+                "name": "References",
+                "value": "<CADemo123@mail.gmail.com>"
+              },
+              {
+                "name": "Subject",
+                "value": "Re: Una idea para Café Alma"
+              },
+              {
+                "name": "From",
+                "value": "Marta Ríos <marta@cafealma.test>"
+              }
+            ],
+            "parts": [
+              {
+                "mimeType": "text/plain",
+                "body": {
+                  "data": "TWUgaW50ZXJlc2EsIMK_dGllbmVzIG1lZGlhIGtpdD8"
+                }
+              },
+              {
+                "mimeType": "text/html",
+                "body": {
+                  "data": "PHA-TWUgaW50ZXJlc2E8L3A-"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

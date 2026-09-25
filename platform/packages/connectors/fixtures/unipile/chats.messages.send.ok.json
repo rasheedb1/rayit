@@ -1,0 +1,18 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "POST /chats/{chat_id}/messages (multipart) → MessageSent."
+  },
+  "request": {
+    "method": "POST",
+    "urlPattern": "^https://[^/]+/api/v1/chats/chat_0001/messages$"
+  },
+  "response": {
+    "status": 201,
+    "body": {
+      "object": "MessageSent",
+      "message_id": "msg_0002"
+    }
+  }
+}

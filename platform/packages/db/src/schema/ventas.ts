@@ -18,7 +18,7 @@ import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts'
 // evalúa después de cargar los dos módulos; nada de outreach.ts se lee
 // al cargar este. Por eso OUTBOUND_CHANNELS, que sí se lee al cargar,
 // vive en _canales.ts y no en ninguno de los dos.
-import { outboundEnrollment, outboundSequenceTemplate, outboundStep } from './outreach.ts';
+import { outboundEnrollment, outboundSequenceTemplate, outboundStep, outreachChannelAccount } from './outreach.ts';
 
 export { OUTBOUND_CHANNELS, type OutboundChannel } from './_canales.ts';
 
@@ -135,6 +135,8 @@ export const contact = pgTable('contact', {
   optedOut: boolean('opted_out').default(false).notNull(),
   optedOutAt: timestamptz('opted_out_at'),
   optedOutReason: text('opted_out_reason'),
+  /** reply_optout:<canal> si se dio de baja respondiendo por ese canal (0043); la pantalla lo traduce. */
+  optedOutCode: text('opted_out_code'),
   bounced: boolean('bounced').default(false).notNull(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -298,7 +300,8 @@ export const outboundPolicy = pgTable('outbound_policy', {
   requireOptoutLink: boolean('require_optout_link').default(true).notNull(),
   requireHumanReview: boolean('require_human_review').default(true).notNull(),
   claimsMustBeSourced: boolean('claims_must_be_sourced').default(true).notNull(),
-  allowedChannels: text('allowed_channels').array().default(['email', 'linkedin', 'instagram_dm']).notNull(),
+  /** Instagram es opcional y nace apagado (0045, §5.1). */
+  allowedChannels: text('allowed_channels').array().default(['email', 'linkedin']).notNull(),
   updatedAt: updatedAt(),
   /** El interruptor de apagado (0037 §6.1). Nace apagado; sin postal_address no se puede encender (CHECK). */
   enabled: boolean('enabled').default(false).notNull(),
@@ -384,4 +387,11 @@ export const outboundTouch = pgTable('outbound_touch', {
   /** La hora del último cambio de estado; solo se mueve con él (disparador). */
   statusChangedAt: timestamptz('status_changed_at').defaultNow().notNull(),
   updatedAt: updatedAt(),
+  /**
+   * La cuenta que envía el toque (0041 §3, la misma columna que VEN-10):
+   * la fija el despachador al reclamarlo, y es del mismo workspace y canal
+   * (disparador). Una respuesta solo se guarda si su hilo es el de un toque
+   * de ESA cuenta.
+   */
+  channelAccountId: uuid('channel_account_id').references(() => outreachChannelAccount.id, { onDelete: 'set null' }),
 });

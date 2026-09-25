@@ -39,6 +39,7 @@
  */
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES } from '../schema/ventas.ts';
+import { parseReplyOptOutCode, type ReplyOptOutChannel } from './canales.ts';
 import { WORKSPACE_DEFAULTS } from './cimientos.ts';
 
 export { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES };
@@ -262,6 +263,11 @@ export interface ContactRow {
   optedOut: boolean;
   optedOutAt: string | null;
   optedOutReason: string | null;
+  /**
+   * Se dio de baja al responder pidiéndolo por ese canal (contact.opted_out_code,
+   * 0043). La pantalla lo traduce; opted_out_reason, si lo hay, manda.
+   */
+  optedOutByReply: ReplyOptOutChannel | null;
   bounced: boolean;
   /**
    * Lo guardó este workspace. Un contacto visible pero ajeno (fuente
@@ -810,7 +816,7 @@ export async function listContacts(tx: WorkspaceTx, companyId: string): Promise<
   const { rows } = await tx.query<ContactRowSql>(
     `SELECT id, company_id, full_name, role_title, email::text AS email, phone, linkedin_url,
             instagram_handle, source, source_url, opted_out, opted_out_at, opted_out_reason,
-            bounced, created_at,
+            opted_out_code, bounced, created_at,
             coalesce(owner_workspace_id = current_workspace_id(), false) AS is_own
      FROM contact
      WHERE company_id = $1
@@ -2248,7 +2254,7 @@ interface ContactRowSql {
   id: string; company_id: string; full_name: string | null; role_title: string | null;
   email: string | null; phone: string | null; linkedin_url: string | null;
   instagram_handle: string | null; source: ContactSource; source_url: string | null;
-  opted_out: boolean; opted_out_at: string | null; opted_out_reason: string | null;
+  opted_out: boolean; opted_out_at: string | null; opted_out_reason: string | null; opted_out_code: string | null;
   bounced: boolean; is_own: boolean; created_at: string;
 }
 
@@ -2267,6 +2273,7 @@ function toContactRow(r: ContactRowSql): ContactRow {
     optedOut: r.opted_out,
     optedOutAt: r.opted_out_at,
     optedOutReason: r.opted_out_reason,
+    optedOutByReply: parseReplyOptOutCode(r.opted_out_code),
     bounced: r.bounced,
     isOwn: r.is_own,
     createdAt: r.created_at,

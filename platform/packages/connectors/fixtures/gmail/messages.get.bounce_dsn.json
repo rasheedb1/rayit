@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-25",
+    "notes": "Un rebote de un postmaster ajeno como DSN de RFC 3464: multipart/report con la parte legible (sin Final-Recipient), la message/delivery-status (donde está Final-Recipient) y el mensaje original. Sin X-Failed-Recipients, que solo pone Gmail. Escrito a partir de RFC 3464 y de la documentación de users.messages."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://gmail\\.googleapis\\.com/gmail/v1/users/me/messages/18c1f0a0b0c0d0a3\\?format=full"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "18c1f0a0b0c0d0a3",
+      "threadId": "18c1f0a0b0c0d0a3",
+      "labelIds": [
+        "INBOX"
+      ],
+      "snippet": "This is the mail system at host mx.marca.test.",
+      "internalDate": "1790011000000",
+      "payload": {
+        "partId": "",
+        "mimeType": "multipart/report",
+        "filename": "",
+        "headers": [
+          {
+            "name": "From",
+            "value": "MAILER-DAEMON@mx.marca.test (Mail Delivery System)"
+          },
+          {
+            "name": "To",
+            "value": "laura@gmail.test"
+          },
+          {
+            "name": "Subject",
+            "value": "Undelivered Mail Returned to Sender"
+          },
+          {
+            "name": "Content-Type",
+            "value": "multipart/report; report-type=delivery-status; boundary=\"r1\""
+          }
+        ],
+        "body": {
+          "size": 0
+        },
+        "parts": [
+          {
+            "partId": "0",
+            "mimeType": "text/plain",
+            "filename": "",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "text/plain; charset=us-ascii"
+              }
+            ],
+            "body": {
+              "size": 152,
+              "data": "VGhpcyBpcyB0aGUgbWFpbCBzeXN0ZW0gYXQgaG9zdCBteC5tYXJjYS50ZXN0Lg0KDQpJJ20gc29ycnkgdG8gaGF2ZSB0byBpbmZvcm0geW91IHRoYXQgeW91ciBtZXNzYWdlIGNvdWxkIG5vdA0KYmUgZGVsaXZlcmVkIHRvIG9uZSBvciBtb3JlIHJlY2lwaWVudHMuDQo"
+            }
+          },
+          {
+            "partId": "1",
+            "mimeType": "message/delivery-status",
+            "filename": "",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "message/delivery-status"
+              }
+            ],
+            "body": {
+              "size": 252,
+              "data": "UmVwb3J0aW5nLU1UQTogZG5zOyBteC5tYXJjYS50ZXN0DQpBcnJpdmFsLURhdGU6IFdlZCwgMjMgU2VwIDIwMjYgMTI6MDA6MDAgKzAwMDANCg0KRmluYWwtUmVjaXBpZW50OiByZmM4MjI7IDxOYWRpZUBNYXJjYS50ZXN0Pg0KT3JpZ2luYWwtUmVjaXBpZW50OiByZmM4MjI7bmFkaWVAbWFyY2EudGVzdA0KQWN0aW9uOiBmYWlsZWQNClN0YXR1czogNS4xLjENCkRpYWdub3N0aWMtQ29kZTogc210cDsgNTUwIDUuMS4xIFVzZXIgdW5rbm93bg0K"
+            }
+          },
+          {
+            "partId": "2",
+            "mimeType": "message/rfc822",
+            "filename": "",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "message/rfc822"
+              }
+            ],
+            "body": {
+              "size": 0
+            },
+            "parts": [
+              {
+                "partId": "2.0",
+                "mimeType": "text/plain",
+                "filename": "",
+                "headers": [
+                  {
+                    "name": "Content-Type",
+                    "value": "text/plain; charset=UTF-8"
+                  }
+                ],
+                "body": {
+                  "size": 25,
+                  "data": "SG9sYSBOYWRpZSwgwr9oYWJsYW1vcz8NCg"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

@@ -98,3 +98,17 @@ SELECT 'f_desenlaces' AS check_id,
   FROM outbound_enrollment e
   LEFT JOIN outbound_message m ON m.enrollment_id = e.id AND m.direction = 'inbound'
  ORDER BY e.status;
+
+-- (g) En last_error solo hay CÓDIGOS (docs/ventas-outreach.md §9.2), con
+--     la forma que fija 0044: 'provider_error', 'unipile_status:CREDENTIALS'.
+--     Una frase aquí sale en la pantalla como el motivo genérico y la demo
+--     pierde su historia. Que cada código sea uno que la pantalla traduce
+--     lo comprueba la prueba de la web (canales.test.ts, «la demo
+--     sembrada»). El LinkedIn caído lleva el nombre de la persona, como el
+--     que trae connection_params.im, sin el canal repetido.
+SELECT 'g_last_error_son_codigos' AS check_id,
+       string_agg(coalesce(last_error, '-'), ',' ORDER BY id) AS motivos,
+       bool_and(last_error IS NULL OR last_error ~ '^[a-z_]+(:[A-Z_]+)?$')
+         AND (SELECT last_error = 'unipile_status:CREDENTIALS' AND display_name NOT LIKE '%LinkedIn%'
+                FROM outreach_channel_account WHERE id = '00000005-0000-4000-8000-0000000ac002') AS ok
+  FROM outreach_channel_account;

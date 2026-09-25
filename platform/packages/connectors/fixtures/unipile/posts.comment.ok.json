@@ -1,0 +1,17 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "POST /posts/{post_id}/comments → CommentSent."
+  },
+  "request": {
+    "method": "POST",
+    "urlPattern": "^https://[^/]+/api/v1/posts/urn%3Ali%3Aactivity%3A7001/comments$"
+  },
+  "response": {
+    "status": 201,
+    "body": {
+      "object": "CommentSent"
+    }
+  }
+}

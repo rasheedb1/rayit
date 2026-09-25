@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-24",
+    "notes": "DELETE /api/v1/webhooks/{id} → WebhookDeleted."
+  },
+  "request": {
+    "method": "DELETE",
+    "urlPattern": "^https://[^/]+/api/v1/webhooks/wh_0001$"
+  },
+  "response": {
+    "status": 200,
+    "body": { "object": "WebhookDeleted" }
+  }
+}

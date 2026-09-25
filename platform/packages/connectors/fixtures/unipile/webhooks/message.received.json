@@ -1,0 +1,23 @@
+{
+  "account_id": "acc_li_0001",
+  "account_type": "LINKEDIN",
+  "account_info": {
+    "type": "LINKEDIN",
+    "feature": "classic",
+    "user_id": "ACoAAB_demo"
+  },
+  "event": "message_received",
+  "chat_id": "chat_0001",
+  "timestamp": "2026-09-22T15:00:00.000Z",
+  "webhook_name": "on-cue-mensajes",
+  "message_id": "msg_0003",
+  "message": "¡Hola Laura! Me interesa, ¿tienes media kit?",
+  "sender": {
+    "attendee_id": "att_marta",
+    "attendee_name": "Marta Ríos",
+    "attendee_provider_id": "ACoAAMarta_demo",
+    "attendee_profile_url": "https://www.linkedin.com/in/marta-rios-alma"
+  },
+  "attendees": [],
+  "attachments": []
+}

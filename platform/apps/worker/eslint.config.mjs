@@ -32,4 +32,15 @@ export default [
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     },
   },
+  // Los dobles de los canales (FakeGmail, FakeUnipile) solo en las pruebas: un job
+  // que los importara compilaría sin aviso y refrescaría tokens falsos (VEN-9).
+  {
+    files: ['src/**/*.ts'],
+    ignores: ['src/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [{ name: '@mc/connectors/testing', message: 'Los dobles de @mc/connectors/testing son solo para las pruebas (test/, *.test.ts).' }],
+      }],
+    },
+  },
 ];

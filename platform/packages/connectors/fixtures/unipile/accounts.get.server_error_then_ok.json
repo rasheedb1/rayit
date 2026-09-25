@@ -1,0 +1,45 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "503 service_unavailable y luego la cuenta: el transporte reintenta."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://[^/]+/api/v1/accounts/acc_li_0001$"
+  },
+  "response": [
+    {
+      "status": 503,
+      "body": {
+        "status": 503,
+        "type": "errors/service_unavailable",
+        "title": "Service unavailable",
+        "detail": "Try again later."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "object": "Account",
+        "type": "LINKEDIN",
+        "id": "acc_li_0001",
+        "name": "Laura Gómez",
+        "created_at": "2026-09-20T14:02:11.000Z",
+        "connection_params": {
+          "im": {
+            "id": "ACoAAB_demo",
+            "publicIdentifier": "laura-gomez-cocina",
+            "username": "Laura Gómez"
+          }
+        },
+        "sources": [
+          {
+            "id": "acc_li_0001_MESSAGING",
+            "status": "OK"
+          }
+        ]
+      }
+    }
+  ]
+}

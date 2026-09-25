@@ -1,0 +1,75 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-25",
+    "notes": "Una respuesta que solo trae text/html (sin text/plain), en windows-1252, con la cita del mensaje original en blockquote anidado. Frecuente en marcas. Escrito a partir de la documentación de users.messages y de cómo Gmail cita (div.gmail_quote > blockquote)."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://gmail\\.googleapis\\.com/gmail/v1/users/me/messages/18c1f0a0b0c0d0a2\\?format=full"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "18c1f0a0b0c0d0a2",
+      "threadId": "18c1f0a0b0c0d0e1",
+      "labelIds": [
+        "INBOX",
+        "UNREAD"
+      ],
+      "snippet": "¡Hola Laura! Nos interesa, &iquest;tienes media kit? Escríbeme el lunes.",
+      "internalDate": "1790010900000",
+      "payload": {
+        "partId": "",
+        "mimeType": "multipart/alternative",
+        "filename": "",
+        "headers": [
+          {
+            "name": "From",
+            "value": "Equipo Marca <hola@marca.test>"
+          },
+          {
+            "name": "To",
+            "value": "laura@gmail.test"
+          },
+          {
+            "name": "Subject",
+            "value": "Re: Propuesta"
+          },
+          {
+            "name": "Message-ID",
+            "value": "<html-only-1@marca.test>"
+          },
+          {
+            "name": "Content-Type",
+            "value": "multipart/alternative; boundary=\"b1\""
+          }
+        ],
+        "body": {
+          "size": 0
+        },
+        "parts": [
+          {
+            "partId": "0",
+            "mimeType": "text/html",
+            "filename": "",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=windows-1252"
+              },
+              {
+                "name": "Content-Transfer-Encoding",
+                "value": "quoted-printable"
+              }
+            ],
+            "body": {
+              "size": 360,
+              "data": "PGh0bWw-PGhlYWQ-PHN0eWxlPnB7Y29sb3I6cmVkfTwvc3R5bGU-PC9oZWFkPjxib2R5PjxkaXYgZGlyPSJsdHIiPqFIb2xhIExhdXJhISBOb3MgaW50ZXJlc2EsICZpcXVlc3Q7dGllbmVzIG1lZGlhIGtpdD88YnI-RXNjcu1iZW1lIGVsIGx1bmVzLjwvZGl2Pjxicj48ZGl2IGNsYXNzPSJnbWFpbF9xdW90ZSI-PGJsb2NrcXVvdGUgY2xhc3M9ImdtYWlsX3F1b3RlIiBzdHlsZT0ibWFyZ2luOjAgMCAwIC44ZXgiPkhvbGEgTWFydGEsIL9oYWJsYW1vcz88YmxvY2txdW90ZT5TaSBubyBxdWllcmVzIHJlY2liaXIgbeFzLCBkYW1lIGRlIGJhamEgYXF17S48L2Jsb2NrcXVvdGU-PC9ibG9ja3F1b3RlPjwvZGl2PjwvYm9keT48L2h0bWw-"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

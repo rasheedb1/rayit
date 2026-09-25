@@ -16,7 +16,7 @@ src/secret-store.ts          SecretStore: InMemory y Env (CON-2, desarrollo)
 src/encrypted-secret-store.ts   EncryptedSecretStore: el real (CON-3), connection_secret cifrado; newSecretRef('tiktok') → 'enc:tiktok:<uuid>'
 src/crypto/master-key.ts     TOKEN_ENCRYPTION_KEY (32 bytes en base64 o hex) y llavero por versión (_V2, _CURRENT)
 src/crypto/token-cipher.ts   AES-256-GCM con HKDF (info on-cue/token/<versión>), IV por escritura, AAD = secret_ref, rotación
-src/crypto/sealed-cookie.ts  sello HMAC-SHA256 con TTL para la cookie del flujo OAuth
+src/crypto/sealed-cookie.ts  sello HMAC-SHA256 con TTL para la cookie del flujo OAuth; openWithAnyKey (VEN-9) prueba cada llave del llavero
 src/oauth/                   OAUTH_PROVIDERS: tiktok (Login Kit), tiktok-business (Accounts API), instagram (Instagram Login):
                              authorizationUrl, exchangeCode, identity, refresh; loadOAuthApps(env) solo con nombres de variables
 src/token-refresher.ts       TokenRefresher, TokenRefreshError, kindFromHttp (CON-2)
@@ -46,6 +46,27 @@ src/factory.ts               createConnectors(): lo que el worker cuelga en ctx.
 src/testing/fixture-fetch.ts FixtureFetch, loadFixture(s), withoutNetwork()
 fixtures/<plataforma>/<endpoint>[.<caso>].json
 scripts/record.ts            regraba fixtures con un token real, anonimizando
+
+— Canales de Ventas (VEN-9): el correo y los mensajes a marcas —
+src/gmail.ts                 GoogleOAuth (gmail.send + gmail.modify + userinfo.email, refresco con 2 min de margen en
+                             freshGoogleTokens), GmailClient (envío MIME, hilo por Message-ID, respuestas y rebotes)
+src/unipile.ts               UnipileClient (hosted auth, cuentas, mensajes, invitación con nota de 300, perfil, reacción,
+                             comentario, chats, avisos) para LINKEDIN e INSTAGRAM; normalizeUnipileAccount
+src/outreach/errors.ts       OutreachApiError { kind: not_connected | already_connected | limit | transient | permanent }
+src/outreach/http.ts         OutreachHttp: reintentos, INTERACTIVE_BUDGET y `idempotent: false` en lo que llega a una persona
+src/outreach/log.ts          bitácora de cada llamada en api_call_log (Postgres, memoria, nula)
+src/outreach/mime.ts         RFC 2047 en cabeceras, RFC 2231 en adjuntos, multipart, List-Unsubscribe(-Post)
+src/outreach/state.ts        el estado firmado y cifrado de la conexión (workspace, creador, canal, nonce)
+src/outreach/unipile-webhook.ts   ruta firmada, secreto compartido (rotable), parseUnipileWebhook, registerAccountWebhooks
+
+— @mc/connectors/testing: solo para pruebas y guiones (regla no-restricted-imports en web, worker y aquí) —
+src/testing/index.ts         el subpath @mc/connectors/testing
+src/testing/fake-gmail.ts    FakeGmail: GoogleOAuthApi + GmailApi en memoria
+src/testing/fake-unipile.ts  FakeUnipile: UnipileApi en memoria
+src/testing/grabacion.ts     RecordingFetch, anonymizeOutreach, fixtures .recorded.json y REQUIRED_OUTREACH_RECORDINGS
+src/testing/dump-text.ts     (también en el barril principal, por CON-3)
+fixtures/gmail/, fixtures/unipile/   meta.source 'docs' hoy; lo grabado va al lado, en <endpoint>.recorded.json
+scripts/record-outreach.ts   graba una sesión real de Google y Unipile (google · avisos · unipile), ver abajo
 ```
 
 ## Usarlo desde un job
@@ -232,6 +253,32 @@ El script sobrescribe los casos `ok`/`paginated` con
 `meta.source = 'recorded'`, anonimiza ids numéricos largos, ids de
 canal, handles y nombres, y quita las firmas de las URLs de CDN. Los
 casos de error siguen saliendo de la documentación.
+
+## Grabar los canales de Ventas (VEN-9)
+
+Los fixtures de `fixtures/gmail` y `fixtures/unipile` salen de la
+documentación (`meta.source = 'docs'`) y VEN-9 no se da por hecha hasta
+grabar el camino real (docs/ventas-outreach.md §9.3). Con las llaves en
+`platform/.env.local` (ver `.env.example`):
+
+```bash
+# 1. Google: su propio OAuth, con http://localhost:8788/callback en el cliente de Prueba.
+pnpm --filter @mc/connectors record:outreach -- google --port 8788 --send-to <buzón de pruebas>
+# 2. Unipile: un proxy delante de la web (el túnel apunta aquí; APP_URL = la URL del túnel).
+pnpm --filter @mc/connectors record:outreach -- avisos --port 8787 --forward http://localhost:3100
+#    … conectar LinkedIn en /ventas/canales, escribirle a la cuenta, responder desde ella, cerrar su sesión …
+# 3. La API de Unipile con esa cuenta.
+pnpm --filter @mc/connectors record:outreach -- unipile --account <account_id> --app-url <túnel>
+```
+
+Cada respuesta queda en `<endpoint>.recorded.json` (los avisos, en
+`webhooks/<tipo>.recorded.json`, con lo que respondió la web en
+`meta.appStatus`), sin tokens, sin correos reales, sin textos de
+personas y con los ids de LinkedIn en un hash estable
+(`anonymizeOutreach`). `test/outreach-grabacion.test.ts` pasa cada
+grabación por el normalizador de producción; la prueba de la web
+`ventas/canales/_lib/grabados.test.ts` no deja marcar VEN-9 como hecha
+sin las once de `REQUIRED_OUTREACH_RECORDINGS`.
 
 ## Pruebas
 

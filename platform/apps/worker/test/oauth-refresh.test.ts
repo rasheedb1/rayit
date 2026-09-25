@@ -37,6 +37,9 @@ let seed: Seed;
 
 async function seedConnections(db: PgliteDatabase): Promise<void> {
   const raw = db.raw;
+  // Sin el cron de cada 15 minutos: un tick en medio de la prueba renovaría las conexiones antes que el job que
+  // envía la prueba, y la cola 'stately' podría rechazar ese envío. Aquí cada corrida la lanza la prueba.
+  await raw.query(`UPDATE job_definition SET default_cron = NULL WHERE id = 'oauth.refresh'`);
   const ws = await raw.query<{ id: string }>(`INSERT INTO workspace (slug, name) VALUES ('ws-a', 'A') RETURNING id`);
   const ws2 = await raw.query<{ id: string }>(`INSERT INTO workspace (slug, name) VALUES ('ws-b', 'B') RETURNING id`);
   const workspaceId = ws.rows[0]!.id;
@@ -98,8 +101,12 @@ async function conn(id: string): Promise<ConnRow> {
 
 test('5 · renueva la que vence pronto, deja intacta la lejana y marca needs_reauth la revocada', async () => {
   const jobId = await h.worker.boss.send('oauth.refresh', { source: 'test' });
-  // max_attempts = 5 con fallos transitorios: esperamos la primera corrida (partial) y paramos ahí.
-  const run = await waitFor(async () => (await jobRuns(h.db, 'oauth.refresh')).find((r) => r.status !== 'running'), { label: 'primera corrida' });
+  // max_attempts = 5 con fallos transitorios: esperamos la primera corrida (partial) y paramos ahí. La de ESTE
+  // job y su primer intento, no la primera que termine: con la máquina cargada se cuela otra corrida en medio.
+  const run = await waitFor(
+    async () => (await jobRuns(h.db, 'oauth.refresh')).find((r) => r.metadata?.['bossJobId'] === jobId && r.attempt === 1 && r.status !== 'running'),
+    { label: 'primera corrida' },
+  );
 
   assert.equal(run.status, 'partial', 'renovó unas y una falló transitoriamente');
   assert.equal(run.items_processed, 3, 'near + other renovadas, revoked resuelta como needs_reauth');
@@ -185,11 +192,11 @@ test('5 · renueva la que vence pronto, deja intacta la lejana y marca needs_rea
 });
 
 test('el reintento solo toca lo que quedó pendiente (flaky), porque near ya no vence pronto', async () => {
-  const runs = await waitFor(async () => {
+  // Por su número de intento y no por su posición: con la máquina cargada, otra corrida puede colarse en medio.
+  const second = await waitFor(async () => {
     const r = await jobRuns(h.db, 'oauth.refresh');
-    return r.length >= 2 && r[1]!.status !== 'running' ? r : null;
+    return r.find((x) => x.attempt === 2 && x.status !== 'running') ?? null;
   }, { timeoutMs: 20_000, label: 'segundo intento' });
-  const second = runs[1]!;
   assert.equal(second.attempt, 2);
   const md = second.metadata as { due: number; renewed: string[]; needsReauth: string[]; transient: string[] };
   assert.equal(md.due, 1, 'solo flaky sigue dentro del margen y activa');
