@@ -15,8 +15,8 @@ import { templateNarrative, type NarrativeOutcome } from '@mc/core/outreach/narr
 import type { WorkspaceTx } from '../src/client.ts';
 import {
   claimPerfilRecalc, computePerfil, getPerfilComercial, getPrimaryCreator, llmBudgetExhausted, PERFIL_RECALCULO_KEY,
-  PERFIL_RECALCULO_TTL_S, PerfilComercialError, readPerfilDataAsOf, recordProfileLlmCalls, releasePerfilRecalc, saveNarrativeEdit,
-  savePerfilComercial,
+  PERFIL_MAX_POSTS, PERFIL_RECALCULO_TTL_S, PerfilComercialError, readPerfilDataAsOf, readPerfilInputs, readPostCovers,
+  recordProfileLlmCalls, releasePerfilRecalc, saveNarrativeEdit, savePerfilComercial,
 } from '../src/queries/perfil-comercial.ts';
 import { CAMPAIGN_CAFE_ALMA, POST_D01_REEL_CAFE_ALMA, WORKSPACE_LAURA, openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
@@ -249,4 +249,55 @@ test('otro workspace no ve ni escribe el perfil de Laura', async () => {
     (e: unknown) => e instanceof PerfilComercialError && e.code === 'creator_not_found',
   );
   assert.equal(await ajeno((tx) => readPerfilDataAsOf(tx, CREADORA_LAURA)), null);
+});
+
+test('con el seed, los cinco mejores tienen portada, y la pantalla la lee viva por id', async () => {
+  const perfil = await laura((tx) => computePerfil(tx, CREADORA_LAURA, new Date('2026-09-25T10:00:00Z')));
+  // La demo trae portadas (seed 0007): una ruta de la aplicación, que el perfil acepta.
+  for (const v of perfil.performance.top) assert.match(v.coverUrl ?? '', /^\/demo\/portadas\/[1-8]\.svg$/, v.title);
+  const ids = perfil.performance.top.map((v) => v.postId);
+  const vivas = await laura((tx) => readPostCovers(tx, [...ids, 'no-es-un-uuid']));
+  assert.deepEqual(Object.keys(vivas).sort(), [...ids].sort());
+  // La sincronización trae una portada nueva (las firmadas caducan): se lee la de hoy, no la del cálculo.
+  await t.admin(`UPDATE post SET cover_url = 'https://p16.tiktokcdn.com/nueva.jpg' WHERE id = '${POST_D01_REEL_CAFE_ALMA}'`);
+  try {
+    const hoy = await laura((tx) => readPostCovers(tx, [POST_D01_REEL_CAFE_ALMA]));
+    assert.equal(hoy[POST_D01_REEL_CAFE_ALMA], 'https://p16.tiktokcdn.com/nueva.jpg');
+    // Una portada sin esquema no llega a un src.
+    await t.admin(`UPDATE post SET cover_url = 'cdn.example.com/x.jpg' WHERE id = '${POST_D01_REEL_CAFE_ALMA}'`);
+    assert.equal((await laura((tx) => readPostCovers(tx, [POST_D01_REEL_CAFE_ALMA])))[POST_D01_REEL_CAFE_ALMA], null);
+  } finally {
+    await t.admin(`UPDATE post SET cover_url = '${perfil.performance.top.find((v) => v.postId === POST_D01_REEL_CAFE_ALMA)!.coverUrl}' WHERE id = '${POST_D01_REEL_CAFE_ALMA}'`);
+  }
+  // Otro workspace no ve las portadas de Laura.
+  assert.deepEqual(await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => readPostCovers(tx, ids)), {});
+});
+
+test('un breakout viejo entra entre los mejores aunque ya no esté entre los posts recientes', async () => {
+  const hecho = new Error('deshacer');
+  await assert.rejects(
+    laura(async (tx) => {
+      // Más publicaciones nuevas que PERFIL_MAX_POSTS: el reel de Café Alma (agosto) queda fuera de los recientes.
+      await tx.query(
+        `INSERT INTO post (workspace_id, creator_id, connection_id, platform_id, external_post_id, url, media_type, surface, title, caption, published_at)
+         SELECT current_workspace_id(), $1, c.id, c.platform_id, 'relleno-' || g, 'https://www.tiktok.com/@laura/video/r' || g,
+                'video', 'feed', 'Relleno ' || g, 'Relleno ' || g, now() + make_interval(mins => g)
+           FROM generate_series(1, $2::int) g
+           JOIN social_connection c ON c.creator_id = $1 AND c.platform_id = 'tiktok'`,
+        [CREADORA_LAURA, PERFIL_MAX_POSTS + 5],
+      );
+      const e = (await readPerfilInputs(tx, CREADORA_LAURA))!;
+      assert.equal(e.posts.length, PERFIL_MAX_POSTS);
+      assert.ok(!e.posts.some((p) => p.id === POST_D01_REEL_CAFE_ALMA), 'el reel ya no está entre los recientes');
+      assert.ok(e.scoredPosts!.some((p) => p.id === POST_D01_REEL_CAFE_ALMA), 'sí entre los puntuados del historial');
+      assert.ok(e.scoredPosts!.every((p) => p.score?.viewsVsMedian !== null));
+      const perfil = await computePerfil(tx, CREADORA_LAURA, new Date('2026-09-25T10:00:00Z'));
+      assert.equal(perfil.performance.top[0]!.postId, POST_D01_REEL_CAFE_ALMA);
+      // «Entre N videos con puntaje» cuenta todo el historial con puntaje.
+      const puntuados = perfil.claims.find((c) => c.id === perfil.performance.scoredClaimId)!;
+      assert.equal(puntuados.value, e.scoredPosts!.length);
+      throw hecho;
+    }),
+    (err: unknown) => err === hecho,
+  );
 });

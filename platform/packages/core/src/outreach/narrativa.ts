@@ -408,7 +408,7 @@ export const PORQUE_ES = {
     directo: 'abre directo al tema',
   },
   /** Con su artículo: «es un reel», «es una historia». */
-  piece: { reel: 'un reel', tiktok: 'un video de TikTok', short: 'un short', historia: 'una historia', video: 'un video' },
+  piece: { reel: 'un reel', tiktok: 'un video de TikTok', short: 'un short', historia: 'una historia', video: 'un video largo o de feed' },
   /** Con su artículo; 'otro' no dice nada del tipo y se usa la pieza. */
   content: {
     tutorial: 'un tutorial', reto: 'un reto', lista: 'una lista', colaboracion: 'una colaboración con una marca', otro: null,
@@ -441,7 +441,7 @@ export const PORQUE_ES = {
     breve: ['escribo', 'corto'],
     hashtags: ['uso', 'hashtags'],
   },
-  pieces: { reel: 'reels', tiktok: 'videos de TikTok', short: 'shorts', historia: 'historias', video: 'videos' },
+  pieces: { reel: 'reels', tiktok: 'videos de TikTok', short: 'shorts', historia: 'historias', video: 'videos largos o de feed' },
   contents: { tutorial: 'tutoriales', reto: 'retos', lista: 'listas', colaboracion: 'colaboraciones', otro: 'otros' },
 } as const;
 
