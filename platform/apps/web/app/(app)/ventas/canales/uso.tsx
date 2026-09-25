@@ -12,6 +12,10 @@ import { MESSAGES } from "./messages";
  * Linear, con la fecha completa en el title, y SÍ puede partirse: la fecha
  * completa con nowrap se salía de la fila a 400 px y daba scroll
  * horizontal a 360 px.
+ *
+ * En una cuenta caída, last_ok_at es la última vez que FUNCIONÓ, no la
+ * última vez que se miró (la caída se detectó después): ahí la línea dice
+ * «Funcionó por última vez …», y «Comprobada» queda para las conectadas.
  */
 export function UsoCuenta({ live, f }: { live: ChannelAccountRow; f: Formatter }) {
   return (
@@ -20,7 +24,7 @@ export function UsoCuenta({ live, f }: { live: ChannelAccountRow; f: Formatter }
       <span className="whitespace-nowrap">{MESSAGES.detail.usageWeek(f.int(live.usedThisWeek), f.int(live.limits.effectiveWeekly))}</span>
       {live.lastOkAt && live.lastOkAgoS !== null && (
         <span className="min-w-0 break-words text-fg-3" title={f.dateTime(live.lastOkAt.toISOString())} data-comprobada="">
-          {MESSAGES.detail.lastOk(f.relative(-live.lastOkAgoS))}
+          {(live.status === "connected" ? MESSAGES.detail.lastOk : MESSAGES.detail.lastWorked)(f.relative(-live.lastOkAgoS))}
         </span>
       )}
     </p>

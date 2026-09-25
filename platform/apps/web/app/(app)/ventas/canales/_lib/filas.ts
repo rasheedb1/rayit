@@ -114,32 +114,44 @@ const REASON_BY_CODE: Record<string, (service: string) => string> = {
 };
 
 /**
- * Los motivos de un intento concreto: se enseñan solo si son de las
- * últimas 24 horas (lastErrorRecent). Pasajeros (el servicio no
- * respondió, no se pudo comprobar) o de un intento que la persona ya dejó
- * atrás (canceló en Google, la contraseña no era): el keepalive borra el
- * intento a los 7 días, y hasta entonces la fila no tiene que repetirlo.
+ * Los motivos de un intento que la persona ya dejó atrás (canceló en
+ * Google, la contraseña no era): se enseñan solo si son de las últimas 24
+ * horas (lastErrorRecent). El keepalive borra el intento a los 7 días, y
+ * hasta entonces la fila no tiene que repetirlo.
  */
-const EXPIRING_CODES: ReadonlySet<string> = new Set([
-  CHANNEL_ERROR_CODES.providerError, CHANNEL_ERROR_CODES.transient, CHANNEL_ERROR_CODES.cancelled, CHANNEL_ERROR_CODES.authFailed,
-]);
+const EXPIRING_CODES: ReadonlySet<string> = new Set([CHANNEL_ERROR_CODES.cancelled, CHANNEL_ERROR_CODES.authFailed]);
+
+/**
+ * Los fallos pasajeros del servicio (no respondió al empezar la conexión,
+ * no se pudo comprobar la cuenta): solo durante una hora
+ * (lastErrorFresh). No son culpa de la persona y lo único que le piden es
+ * reintentar; un fallo de un minuto no deja la fila en rojo todo el día.
+ */
+const TRANSIENT_CODES: ReadonlySet<string> = new Set([CHANNEL_ERROR_CODES.providerError, CHANNEL_ERROR_CODES.transient]);
 
 /** Los motivos que no son un error: la persona lo decidió. Van en texto neutro, no en el recuadro rojo. */
 const NEUTRAL_CODES: ReadonlySet<string> = new Set([CHANNEL_ERROR_CODES.cancelled]);
 
 /**
  * El motivo de una cuenta en frase, o null si no hay nada que decir.
- * `recent`: last_error es de las últimas 24 horas (la consulta lo dice).
- * Un código que la pantalla no conoce nunca se enseña crudo.
+ * `recent`: last_error es de las últimas 24 horas; `fresh`, de la última
+ * hora (la consulta lo dice, la pantalla no resta fechas). Un código que
+ * la pantalla no conoce nunca se enseña crudo; tampoco con un estado
+ * caído, donde la frase genérica cambia (`state`).
  */
-export function reasonText(lastError: string | null, channel: Channel, recent = true): string | null {
+export function reasonText(
+  lastError: string | null, channel: Channel, recent = true, fresh = true, state: RowState = "error",
+): string | null {
   if (!lastError) return null;
   if (EXPIRING_CODES.has(lastError) && !recent) return null;
+  if (TRANSIENT_CODES.has(lastError) && !fresh) return null;
   const service = MESSAGES.channels[channel].provider;
   const status = parseUnipileStatusCode(lastError);
   if (status !== null) return H.unipileStatus(status, service);
   const byCode = Object.hasOwn(REASON_BY_CODE, lastError) ? REASON_BY_CODE[lastError] : undefined;
-  return byCode ? byCode(service) : MESSAGES.detail.unknownReason;
+  if (byCode) return byCode(service);
+  // Marcada para reconectar (o un intento que no terminó), la cuenta no «se arregla sola»: la frase genérica pide reconectar.
+  return state === "needs_reconnect" || state === "disconnected" ? MESSAGES.detail.unknownReasonReconnect : MESSAGES.detail.unknownReason;
 }
 
 /** El tono del motivo de un código (ver NEUTRAL_CODES). */
@@ -152,7 +164,8 @@ const rest = { others: [] as ChannelRowView[], addAnother: false, returned: fals
 
 /** La vista de UNA cuenta viva: conectada (con «Volver a intentar» si le faltan los avisos) o caída (con «Reconectar»). */
 function liveRow(base: Base, account: ChannelAccountRow): ChannelRowView {
-  const reason = reasonText(account.lastError, base.channel, account.lastErrorRecent);
+  const state = account.status === "connected" ? "connected" : (account.status as "needs_reconnect" | "error");
+  const reason = reasonText(account.lastError, base.channel, account.lastErrorRecent, account.lastErrorFresh, state);
   const tone = reasonTone(account.lastError);
   if (account.status === "connected") {
     const action: RowAction = account.lastError === CHANNEL_ERROR_CODES.webhooksMissing ? "rewebhook" : null;
@@ -184,7 +197,11 @@ export function channelRows(accounts: readonly ChannelAccountRow[], setup: Chann
       const state = account.stale ? "expired" : "pending";
       return { ...base, ...rest, account, state, action: "retry", reason: null, returned: state === "pending" && opts.returnedFrom === channel };
     }
-    const reason = reasonText(account?.lastError ?? null, channel, account?.lastErrorRecent ?? true);
-    return { ...base, ...rest, account, state: "disconnected", action: "connect", reason, reasonTone: reasonTone(account?.lastError ?? null) };
+    // El motivo es de un INTENTO que no terminó (la fila nunca tuvo cuenta: providerAccountId NULL). Una cuenta que la
+    // persona desconectó a propósito no arrastra el motivo de su última caída, aunque la base aún lo guarde.
+    const attempt = account !== null && account.providerAccountId === null;
+    const code = attempt ? account.lastError : null;
+    const reason = reasonText(code, channel, account?.lastErrorRecent ?? true, account?.lastErrorFresh ?? true, "disconnected");
+    return { ...base, ...rest, account, state: "disconnected", action: "connect", reason, reasonTone: reasonTone(code) };
   });
 }

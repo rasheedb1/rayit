@@ -124,6 +124,13 @@ export const CHANNEL_ERROR_CODES = {
 } as const;
 
 /**
+ * La forma de todo código de last_error: la misma del CHECK de 0044
+ * (minúsculas y guion bajo, y opcionalmente ':' y un estado en
+ * mayúsculas). Una frase no cabe: la base la rechaza.
+ */
+export const CHANNEL_ERROR_CODE_RE = /^[a-z_]+(:[A-Z_]+)?$/;
+
+/**
  * Lo que dijo Unipile de una sesión caída, como código parametrizado:
  * 'unipile_status:CREDENTIALS'. La pantalla lo traduce con el nombre del
  * canal; el estado crudo solo viaja dentro del código, nunca en frase.
@@ -161,8 +168,14 @@ export interface ChannelAccountRow {
   lastOkAgoS: number | null;
   lastErrorAt: Date | null;
   lastError: string | null;
-  /** last_error es de las últimas 24 horas: un motivo pasajero más viejo ya no se enseña. */
+  /** last_error es de las últimas 24 horas: un motivo de un intento más viejo ya no se enseña. */
   lastErrorRecent: boolean;
+  /**
+   * last_error es de la última hora: un fallo pasajero del servicio
+   * (provider_error, transient) no deja la fila en rojo todo el día
+   * cuando el servicio ya volvió.
+   */
+  lastErrorFresh: boolean;
   updatedAt: Date;
   /** Acciones de hoy y de esta semana (lunes local), sumadas en outbound_counter por cuenta. */
   usedToday: number;
@@ -213,6 +226,7 @@ interface RawAccount extends RawLimits, Record<string, unknown> {
   last_error_at: Date | string | null;
   last_error: string | null;
   last_error_recent: boolean;
+  last_error_fresh: boolean;
   updated_at: Date | string;
   used_today: number;
   used_week: number;
@@ -241,6 +255,7 @@ export async function listChannelAccounts(tx: WorkspaceTx): Promise<ChannelAccou
             a.daily_cap, a.weekly_cap, a.scopes, a.last_ok_at, a.last_error_at, a.last_error, a.updated_at,
             greatest(0, extract(epoch FROM now() - a.last_ok_at))::int AS last_ok_ago_s,
             coalesce(a.last_error_at > now() - interval '24 hours', false) AS last_error_recent,
+            coalesce(a.last_error_at > now() - interval '1 hour', false) AS last_error_fresh,
             l.effective_daily, l.effective_weekly, l.max_daily, l.max_weekly, l.daily_limited_by, l.personal_mailbox,
             coalesce((SELECT sum(c.count) FROM outbound_counter c, periodo p
                        WHERE c.channel_account_id = a.id AND c.period = 'day' AND c.period_start = p.hoy), 0)::int AS used_today,
@@ -268,6 +283,7 @@ export async function listChannelAccounts(tx: WorkspaceTx): Promise<ChannelAccou
     lastErrorAt: toDate(r.last_error_at),
     lastError: r.last_error,
     lastErrorRecent: r.last_error_recent,
+    lastErrorFresh: r.last_error_fresh,
     updatedAt: toDate(r.updated_at)!,
     usedToday: r.used_today,
     usedThisWeek: r.used_week,
@@ -892,11 +908,17 @@ export async function channelWebhookCount(tx: WorkspaceTx, accountId: string): P
  * Devuelve el nombre de la cuenta (el que enseña la pantalla) para que la
  * web confirme QUÉ cuenta soltó, o null si no había nada que desconectar
  * (no es de este espacio, o ya estaba desconectada).
+ *
+ * Borra también el motivo de la última caída (last_error): la persona
+ * soltó la cuenta a propósito, y una fila «Sin conectar» que sigue
+ * diciendo «LinkedIn cerró la sesión» le pediría reconectar lo que
+ * acaba de quitar.
  */
 export async function disconnectChannelAccount(tx: WorkspaceTx, accountId: string): Promise<{ name: string } | null> {
   if (!isUuid(accountId)) return null;
   const { rows } = await tx.query<{ name: string }>(
-    `UPDATE outreach_channel_account SET status = 'disconnected' WHERE id = $1 AND status <> 'disconnected'
+    `UPDATE outreach_channel_account SET status = 'disconnected', last_error = NULL, last_error_at = NULL
+      WHERE id = $1 AND status <> 'disconnected'
      RETURNING coalesce(display_name, provider_account_id) AS name`,
     [accountId],
   );

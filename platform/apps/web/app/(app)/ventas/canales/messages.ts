@@ -19,7 +19,7 @@
 import { CANALES_TEXTOS } from "@mc/core";
 
 export const MESSAGES = {
-  meta: { title: "Canales de outreach" },
+  meta: { title: "Canales para escribir a marcas" },
   header: {
     eyebrow: "Ventas",
     title: "Canales",
@@ -28,7 +28,7 @@ export const MESSAGES = {
   },
   tabs: { canales: "Canales" },
   section: "Tus canales",
-  policyOff: "El outreach automático de este espacio está apagado. Conectar un canal no envía nada todavía.",
+  policyOff: "Los envíos automáticos a marcas están apagados en este espacio. Conectar un canal no envía nada todavía.",
 
   channels: {
     email: { name: "Correo", provider: "Gmail", blurb: "El canal principal: las marcas leen su buzón de alianzas." },
@@ -58,6 +58,8 @@ export const MESSAGES = {
      * hace 2 horas»); la fecha completa va en el title.
      */
     lastOk: (when: string) => `Comprobada ${when}`,
+    /** En una cuenta caída, last_ok_at es la última vez que funcionó, no la última vez que se miró. */
+    lastWorked: (when: string) => `Funcionó por última vez ${when}`,
     /** El nombre accesible de la lista de las demás cuentas vivas de un canal. */
     otherAccounts: (channel: string) => `Otras cuentas de ${channel}`,
     /** Una cuenta conectada sin avisos de Unipile: no nos enteramos de sus respuestas. */
@@ -84,7 +86,7 @@ export const MESSAGES = {
     /** Lo mismo cuando no se sabe de qué servicio (el «Volver a intentar» de los avisos, sin la cuenta a mano). */
     unavailableGeneric: "Este canal todavía no está disponible en On Cue.",
     /** Los tres canales sin llaves: UN aviso arriba de la lista, y en cada fila solo la pastilla. */
-    allUnavailable: "Los canales de outreach todavía no están disponibles en On Cue. Puedes seguir usando el resto de Ventas.",
+    allUnavailable: "Los canales para escribir a marcas todavía no están disponibles en On Cue. Puedes seguir usando el resto de Ventas.",
     /** Una cuenta conectada que no puede enviar mientras el canal no esté disponible. */
     unavailableConnected: "Tu cuenta sigue conectada, pero On Cue no puede enviar por este canal ahora mismo.",
     /**
@@ -98,6 +100,8 @@ export const MESSAGES = {
     adminMissing: (vars: string) => `Faltan en el servidor: ${vars}. Cómo se consiguen: platform/.env.example.`,
     /** Un motivo guardado que la pantalla no conoce (un código nuevo del worker): nunca se enseña crudo. */
     unknownReason: "Algo falló con esta cuenta. Si no se arregla sola, vuelve a conectarla.",
+    /** Lo mismo, con la cuenta ya marcada para reconectar (o un intento que no terminó): no se va a arreglar sola. */
+    unknownReasonReconnect: "No pudimos usar esta cuenta. Vuelve a conectarla.",
     /** Las frases de los códigos que escribe el keepalive (last_error). */
     reasons: {
       transient: "No pudimos comprobar la cuenta. Lo volvemos a intentar en unas horas.",
@@ -117,7 +121,7 @@ export const MESSAGES = {
     disconnect: "Desconectar",
     /** El nombre accesible de «Desconectar» de una cuenta concreta. */
     disconnectAccount: (account: string) => `Desconectar ${account}`,
-    disconnectConfirm: "¿Desconectar esta cuenta? Los envíos pendientes por este canal se detienen y On Cue deja de tener acceso a ella.",
+    disconnectConfirm: "¿Desconectar esta cuenta? Los envíos pendientes desde esta cuenta se detienen y On Cue deja de tener acceso a ella.",
     /** La confirmación, anunciada en la fila del canal, después de desconectar. */
     disconnected: (account: string) => `Desconectaste ${account}. On Cue deja de usarla ahora y retira su acceso en unos minutos.`,
     /** Desconectar una cuenta que ya no estaba (otra pestaña, otro miembro del espacio). */

@@ -62,7 +62,10 @@ SELECT set_config('TimeZone', 'UTC', false);
 -- ---------------------------------------------------------------------
 -- El Gmail conectado por el OAuth (con los dos alcances que pide VEN-9)
 -- y el LinkedIn de Unipile caído: Unipile avisó que la sesión expiró y
--- la cuenta espera que Laura la reconecte. Los topes están dentro del
+-- la cuenta espera que Laura la reconecte. En last_error va el código
+-- (unipile_status:CREDENTIALS), nunca una frase (§9.2: la pantalla lo
+-- traduce a «LinkedIn cerró la sesión»), y el nombre es el de la
+-- persona, como el que trae connection_params.im de Unipile. Los topes están dentro del
 -- máximo de cada cuenta (outreach_channel_account_limits, 0040): el
 -- correo, en los 20 al día de la política del espacio.
 -- =====================================================================
@@ -76,10 +79,22 @@ VALUES
    NULL, NULL, '{gmail.send,gmail.modify}'),
   ('00000005-0000-4000-8000-0000000ac002', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-000000000003', 'linkedin', 'unipile', 'unipile-demo-laura-linkedin',
-   'Laura · Cocina fácil (LinkedIn)', 'needs_reconnect', 25, 100, now() - interval '20 days',
+   'Laura Méndez', 'needs_reconnect', 25, 100, now() - interval '20 days',
    now() - interval '3 days', now() - interval '2 days',
-   'LinkedIn cerró la sesión. Vuelve a conectar la cuenta.', '{}')
+   'unipile_status:CREDENTIALS', '{}')
 ON CONFLICT (id) DO NOTHING;
+
+-- Una base sembrada antes de que last_error guardara solo códigos (§9.2)
+-- tiene aquí una frase y el nombre con el canal repetido: se corrigen,
+-- solo en esa fila de la demo y solo si siguen como se sembraron.
+UPDATE outreach_channel_account
+   SET last_error = 'unipile_status:CREDENTIALS'
+ WHERE id = '00000005-0000-4000-8000-0000000ac002'
+   AND last_error = 'LinkedIn cerró la sesión. Vuelve a conectar la cuenta.';
+UPDATE outreach_channel_account
+   SET display_name = 'Laura Méndez'
+ WHERE id = '00000005-0000-4000-8000-0000000ac002'
+   AND display_name = 'Laura · Cocina fácil (LinkedIn)';
 
 
 -- =====================================================================

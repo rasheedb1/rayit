@@ -16,11 +16,12 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ChannelCapError, completeChannelConnection, createPendingChannelAccount, disconnectChannelAccount, existingGmailSecretRef,
+  CHANNEL_ERROR_CODE_RE, CHANNEL_ERROR_CODES, ChannelCapError, completeChannelConnection, createPendingChannelAccount, disconnectChannelAccount, existingGmailSecretRef,
   failPendingChannelAccount, findUnipileAccountForWebhook, getChannelPolicyCaps, listChannelAccounts, markChannelAccountDown,
   channelWebhookCount, getChannelLimits, getReconnectableUnipileAccount, markChannelAccountOk, parseReplyOptOutCode, parseUnipileStatusCode, recordInboundMessage,
-  replyOptOutCode, setChannelWebhooks, unipileStatusCode, updateChannelAccountCaps,
+  noteChannelAccountIssue, replyOptOutCode, setChannelWebhooks, unipileStatusCode, updateChannelAccountCaps,
 } from '../src/queries/canales.ts';
+import { createEmbeddedDb } from '../src/embedded.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
@@ -151,9 +152,14 @@ describe('canales', () => {
       assert.ok(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => disconnectChannelAccount(tx, id)));
       assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => disconnectChannelAccount(tx, id)), null, 'dos veces no cambia nada');
       // Devuelve el nombre de la cuenta, para que la pantalla confirme cuál soltó.
-      await t.admin(`UPDATE outreach_channel_account SET status = 'needs_reconnect' WHERE id = '${LINKEDIN_LAURA}'`);
+      await t.admin(`UPDATE outreach_channel_account SET status = 'needs_reconnect', last_error = 'unipile_status:CREDENTIALS', last_error_at = now() WHERE id = '${LINKEDIN_LAURA}'`);
       const soltada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => disconnectChannelAccount(tx, LINKEDIN_LAURA));
       assert.ok(soltada && soltada.name.length > 0);
+      // Desconectar a propósito borra el motivo de la última caída: la fila «Sin conectar» no pide reconectar lo que se quitó.
+      const motivo = await sel<{ last_error: string | null; last_error_at: Date | null }>(
+        `SELECT last_error, last_error_at FROM outreach_channel_account WHERE id = '${LINKEDIN_LAURA}'`,
+      );
+      assert.deepEqual(motivo[0], { last_error: null, last_error_at: null });
       assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => disconnectChannelAccount(tx, LINKEDIN_LAURA)), null, 'otro espacio no la ve');
       await t.admin(`UPDATE outreach_channel_account SET status = 'needs_reconnect', provider_webhook_ids = '{}' WHERE id = '${LINKEDIN_LAURA}'`);
     });
@@ -246,9 +252,9 @@ describe('canales', () => {
       const [li] = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listChannelAccounts(tx))).filter((r) => r.providerAccountId === 'acc_li_nueva');
       assert.ok(li);
       const notice = { titleEs: 'Vuelve a conectar tu LinkedIn', bodyEs: 'La sesión de LinkedIn expiró.' };
-      assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markChannelAccountDown(tx, li.id, 'La sesión de LinkedIn expiró.', notice)), true);
-      assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markChannelAccountDown(tx, li.id, 'otra vez', notice)), false, 'no vuelve a avisar');
-      assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => markChannelAccountDown(tx, li.id, 'ajena')), false, 'otro espacio no la toca');
+      assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markChannelAccountDown(tx, li.id, unipileStatusCode('CREDENTIALS'), notice)), true);
+      assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => markChannelAccountDown(tx, li.id, unipileStatusCode('STOPPED'), notice)), false, 'no vuelve a avisar');
+      assert.equal(await t.db.withWorkspace(WS_OTRO, (tx) => markChannelAccountDown(tx, li.id, unipileStatusCode('ERROR'))), false, 'otro espacio no la toca');
       const again = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findUnipileAccountForWebhook(tx, li.id, 'acc_li_nueva'));
       assert.equal(again?.status, 'needs_reconnect');
       const avisos = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`SELECT 1 FROM notification WHERE entity_id = $1`, [li.id]));
@@ -535,5 +541,54 @@ describe('canales', () => {
       assert.equal(parseUnipileStatusCode('unipile_status:STOPPED'), 'STOPPED');
       assert.equal(parseUnipileStatusCode('taken'), null);
     });
+
+    test('0044: last_error solo acepta códigos, y todos los que escribe el código tienen esa forma', async () => {
+      for (const code of [...Object.values(CHANNEL_ERROR_CODES), unipileStatusCode('CREDENTIALS'), unipileStatusCode('<b>x</b>'), unipileStatusCode(null)]) {
+        assert.match(code, CHANNEL_ERROR_CODE_RE, `«${code}» cabe en el CHECK de 0044`);
+      }
+      // Ni siquiera el despachador escribe una frase: la base lo impide (23514).
+      await assert.rejects(
+        t.admin(`UPDATE outreach_channel_account SET last_error = 'LinkedIn cerró la sesión.' WHERE id = '${LINKEDIN_LAURA}'`),
+        (e: { code?: string }) => e.code === '23514',
+      );
+      await assert.rejects(
+        t.db.withWorkspace(WORKSPACE_LAURA, (tx) => noteChannelAccountIssue(tx, GMAIL_LAURA, 'Google dijo invalid_grant')),
+        (e: { code?: string }) => e.code === '23514',
+      );
+    });
+  });
+});
+
+describe('0044 · last_error de antes, en frase', () => {
+  test('la frase del seed viejo pasa a su código, cualquier otra a «unknown», y una fila vieja se puede seguir actualizando', { timeout: 120_000 }, async () => {
+    const antes = await createEmbeddedDb({ seeds: false, hasta: '0043_contacto_codigo_de_baja.sql' });
+    try {
+      await antes.execAsSuperuser(`
+        INSERT INTO workspace (id, slug, name) VALUES ('${WS_OTRO}', 'ws-0044', 'ws 0044');
+        INSERT INTO creator_profile (id, workspace_id, display_name) VALUES ('${CREATOR_OTRO}', '${WS_OTRO}', 'Otro');
+        INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, status, last_error) VALUES
+          ('00000009-0000-4000-8000-0000000a4401', '${WS_OTRO}', '${CREATOR_OTRO}', 'linkedin', 'unipile', 'acc_frase_seed', 'needs_reconnect',
+           'LinkedIn cerró la sesión. Vuelve a conectar la cuenta.'),
+          ('00000009-0000-4000-8000-0000000a4402', '${WS_OTRO}', '${CREATOR_OTRO}', 'linkedin', 'unipile', 'acc_frase_otra', 'error',
+           'Unipile dijo: Internal Server Error'),
+          ('00000009-0000-4000-8000-0000000a4403', '${WS_OTRO}', '${CREATOR_OTRO}', 'instagram_dm', 'unipile', 'acc_codigo', 'connected',
+           'webhooks_missing');
+      `);
+      assert.deepEqual(await antes.migrar('0044_canales_last_error_codigo.sql'), ['0044_canales_last_error_codigo.sql']);
+      const { rows } = await antes.queryAsSuperuser<{ provider_account_id: string; last_error: string }>(
+        `SELECT provider_account_id, last_error FROM outreach_channel_account ORDER BY provider_account_id`,
+      );
+      assert.deepEqual(rows, [
+        { provider_account_id: 'acc_codigo', last_error: 'webhooks_missing' },
+        { provider_account_id: 'acc_frase_otra', last_error: 'unknown' },
+        { provider_account_id: 'acc_frase_seed', last_error: 'unipile_status:CREDENTIALS' },
+      ]);
+      // El keepalive actualiza otras columnas de esas filas: con el CHECK en pie, no falla.
+      await antes.execAsSuperuser(`UPDATE outreach_channel_account SET keepalive_checked_at = now()`);
+      const forzada = await antes.queryAsSuperuser<{ f: boolean }>(`SELECT relforcerowsecurity AS f FROM pg_class WHERE relname = 'outreach_channel_account'`);
+      assert.equal(forzada.rows[0]?.f, true, 'la RLS forzada vuelve a quedar puesta');
+    } finally {
+      await antes.close();
+    }
   });
 });

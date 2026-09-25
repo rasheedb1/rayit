@@ -39,7 +39,7 @@ import { disconnect, saveCaps } from "./acciones";
 import { MAX_NOTIFY_BYTES, MAX_WEBHOOK_BYTES, retryAccountWebhooks, unipileWebhook } from "./aviso";
 import { channelSetup } from "./config";
 import { channelBanner } from "./banner";
-import { channelRows } from "./filas";
+import { channelRows, reasonText } from "./filas";
 import { GOOGLE_COOKIE, googleCallback, googleStart, UNIPILE_COOKIE, unipileFailure, unipileStart } from "./conexion";
 import { channelKeys, type ChannelDeps } from "./deps";
 
@@ -107,6 +107,24 @@ function callback(query: Record<string, string>, cookie?: string): Request {
   for (const [k, v] of Object.entries(query)) u.searchParams.set(k, v);
   return new Request(u, { headers: cookie ? { cookie: `${GOOGLE_COOKIE}=${cookie}` } : {} });
 }
+
+describe("la demo sembrada (seed 0005)", () => {
+  it("todo last_error sembrado es un código que la pantalla traduce, y la cuenta caída dice qué pasó", async () => {
+    const rows = await db.queryAsSuperuser<{ channel: "email" | "linkedin" | "instagram_dm"; status: string; last_error: string | null; display_name: string | null }>(
+      `SELECT channel, status, last_error, display_name FROM outreach_channel_account WHERE last_error IS NOT NULL`,
+    );
+    expect(rows.rows.length, "la demo tiene al menos una cuenta caída con su motivo").toBeGreaterThan(0);
+    for (const r of rows.rows) {
+      const state = r.status === "needs_reconnect" ? "needs_reconnect" : "error";
+      const frase = reasonText(r.last_error, r.channel, true, true, state);
+      expect([MESSAGES.detail.unknownReason, MESSAGES.detail.unknownReasonReconnect], `last_error «${r.last_error}» es un código conocido`).not.toContain(frase);
+    }
+    const li = rows.rows.find((r) => r.channel === "linkedin")!;
+    expect(reasonText(li.last_error, "linkedin")).toBe(MESSAGES.health.unipileStatus("CREDENTIALS", "LinkedIn"));
+    // El nombre es el de la persona, como el que trae connection_params.im: sin el canal repetido dentro de la fila.
+    expect(li.display_name).not.toMatch(/LinkedIn/);
+  });
+});
 
 describe("Gmail", () => {
   it("de punta a punta: el correo queda conectado con su token cifrado y en ninguna tabla en claro", async () => {

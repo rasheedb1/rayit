@@ -81,7 +81,7 @@ describe("UsoCuenta", () => {
   const live = {
     id: ID, channel: "email", provider: "gmail_oauth", providerAccountId: "a@b.test", displayName: "a@b.test", status: "connected", stale: false,
     dailyCap: null, weeklyCap: null, scopes: [], lastOkAt: new Date("2026-09-24T11:18:00Z"), lastOkAgoS: 2 * 3600 + 5, lastErrorAt: null, lastError: null,
-    lastErrorRecent: false, updatedAt: new Date(0), usedToday: 3, usedThisWeek: 12,
+    lastErrorRecent: false, lastErrorFresh: false, updatedAt: new Date(0), usedToday: 3, usedThisWeek: 12,
     limits: { effectiveDaily: 20, effectiveWeekly: 140, maxDaily: 20, maxWeekly: 140, dailyLimitedBy: "policy", personalMailbox: false },
   } satisfies ChannelAccountRow;
 
@@ -93,6 +93,12 @@ describe("UsoCuenta", () => {
     expect(comprobada.className).not.toMatch(/nowrap/);
     expect(comprobada.className).toMatch(/break-words/);
     expect(screen.getByText(MESSAGES.detail.usageToday("3", "20"))).toBeTruthy();
+  });
+
+  it("en una cuenta caída dice cuándo funcionó por última vez, no que se comprobó", () => {
+    const caida = { ...live, status: "needs_reconnect", lastOkAgoS: 3 * 86400 } satisfies ChannelAccountRow;
+    const { container } = render(<UsoCuenta live={caida} f={f} />);
+    expect(container.querySelector("[data-comprobada]")!.textContent).toBe(MESSAGES.detail.lastWorked("hace 3 días"));
   });
 });
 
