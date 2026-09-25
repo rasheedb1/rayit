@@ -187,9 +187,14 @@ export async function loadGenerationContext(tx: WorkerSql, touchId: string): Pro
   const recentSent = recent.map((x) => x.body);
   const avoid = recent.filter((x) => m.contact_id === null || x.contact_id !== m.contact_id).map((x) => x.body);
 
+  // El calentamiento («los primeros diez de cada tipo pasan por una persona», §5.6.4) cuenta solo lo que
+  // redactó la IA y salió o aprobó una persona. Un pitch escrito a mano (outcome 'manual') o una plantilla
+  // fija del motor (sin fila en outbound_generation) no enseñan nada sobre el redactor: no cuentan.
   const counts = (
     await tx.query<{ approved: number }>(
-      `SELECT (SELECT count(*)::int FROM outbound_touch t LEFT JOIN outbound_step st ON st.id = t.step_id
+      `SELECT (SELECT count(*)::int FROM outbound_touch t
+                 JOIN outbound_generation g ON g.touch_id = t.id AND g.outcome IN ('approved','held')
+                 LEFT JOIN outbound_step st ON st.id = t.step_id
                 WHERE t.workspace_id = $1::uuid AND ${TOUCH_STEP_TYPE_SQL('t', 'st')} = $2
                   AND (t.status = 'sent' OR t.approved_at IS NOT NULL)) AS approved`,
       [ws, m.step_type],

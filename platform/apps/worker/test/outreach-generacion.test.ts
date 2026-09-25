@@ -134,6 +134,46 @@ test('sin llave no se redacta nada, y el redactor falso no corre contra una base
   assert.deepEqual([r.notConfigured, r.generated.length], [true, 0]);
 });
 
+// Ronda 4: el calentamiento cuenta solo lo que redactó la IA.
+const PANADERIA = '00000612-0000-4000-8000-0000000000f1';
+const LUCIA_PANADERIA = '00000612-0000-4000-8000-0000000c0e03';
+
+test('el calentamiento cuenta solo lo redactado por la IA: con diez correos a mano ya enviados, el primero generado sigue retenido', async () => {
+  await db.execAsSuperuser(`
+    INSERT INTO company (id, name, domain, owner_workspace_id) VALUES ('${PANADERIA}', 'Panadería La Espiga', 'laespiga.test', '${WS}');
+    INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS}', '${PANADERIA}') ON CONFLICT DO NOTHING;
+  `);
+  // Diez correos que salieron sin la IA: cinco pitch escritos a mano (outcome 'manual') y cinco de plantilla fija (sin fila de generación).
+  const manual = await db.asWorker(async (tx) => {
+    const ids: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      const id = (await tx.query<{ id: string }>(
+        `INSERT INTO outbound_touch (workspace_id, company_id, channel, subject, body, status, sent_at, recipient_address)
+         VALUES ($1, $2, 'email', $3, $4, 'sent', now() - make_interval(days => $5::int + 1), 'compras@laespiga.test') RETURNING id`,
+        [WS, PANADERIA, `Correo a mano ${i + 1}`, `Hola, este es el correo a mano número ${i + 1} con su propia historia.`, i],
+      )).rows[0]!.id;
+      if (i < 5) {
+        await tx.query(
+          `INSERT INTO outbound_generation (touch_id, workspace_id, stage, outcome, subject, body_marked, reviewed_at)
+           VALUES ($1, $2, 'reviewed', 'manual', 'Correo a mano', 'Hola, escrito a mano.', now())`,
+          [id, WS],
+        );
+      }
+      ids.push(id);
+    }
+    return ids;
+  });
+  assert.equal(manual.length, 10);
+  await newContact(LUCIA_PANADERIA, PANADERIA, 'Lucía Pardo', 'lucia@laespiga.test');
+  const t = await enroll(LUCIA_PANADERIA);
+  const { g, r } = await generateAndReview(fake);
+  assert.deepEqual(g.generated, [t]);
+  assert.deepEqual(r.held, [{ touchId: t, reason: 'quality_warmup' }]);
+  const row = await touch(t);
+  assert.equal(row.status, 'held');
+  assert.equal(row.held_reason, 'quality_warmup:0');
+});
+
 test('terminado cuando: dos marcas del mismo nicho reciben correos con similitud menor de 0,65', async () => {
   const a = await enroll(CAMILO_CAFE_ALMA);
   const first = await generateAndReview(fake);
