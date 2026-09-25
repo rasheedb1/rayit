@@ -3,9 +3,12 @@
  *
  * En UNA transacción, con el toque y su fila de outbound_generation
  * bloqueados: la compuerta C (el toque sigue en borrador, el turno sigue
- * siendo nuestro y el mismo texto no le llegó ya a esa persona), una fila
- * de outbound_review por intento (nota, pista, riesgos, decisión, tokens y
- * costo del juez), y el toque en scheduled o held con el texto sin marcas
+ * siendo nuestro, su cuerpo sigue siendo el que había al tomarlo —si una
+ * persona escribió, manda lo suyo: 'edited_by_person'— y el mismo texto no
+ * le llegó ya a esa persona), una fila
+ * de outbound_review por intento (nota, pista, riesgos, decisión, y tokens y
+ * costo de escribirlo y juzgarlo), y el toque en scheduled o held (o de
+ * vuelta en draft, si lo pidió una persona desde el editor) con el texto sin marcas
  * y los claims citados en outbound_touch.claims. Si la compuerta C falla,
  * no se escribe nada del resultado y el turno se suelta.
  */
@@ -34,7 +37,8 @@ export interface ReviewRow {
 }
 
 export interface GenerationFinal {
-  status: 'scheduled' | 'held';
+  /** draft: lo pidió una persona desde el editor; vuelve a ella, que decide. */
+  status: 'scheduled' | 'held' | 'draft';
   hold: { code: HoldCode; detail?: string | number } | null;
   /** Lo que sale: sin marcas. */
   subject: string | null;
@@ -49,7 +53,7 @@ export interface GenerationFinal {
   attempts: number;
 }
 
-export type ApplyResult = { applied: true; status: 'scheduled' | 'held' } | { applied: false; codes: string[] };
+export type ApplyResult = { applied: true; status: 'scheduled' | 'held' | 'draft' } | { applied: false; codes: string[] };
 
 /** Las filas de outbound_review admiten intentos del 1 al 10 (CHECK de 0037): un toque regenerado más veces no anota más. */
 export const MAX_REVIEW_ATTEMPT = 10;
@@ -62,13 +66,17 @@ export async function applyGenerationOutcome(
   now: Date,
 ): Promise<ApplyResult> {
   const t = (
-    await tx.query<{ status: string; contact_id: string | null }>(
-      'SELECT status, contact_id FROM outbound_touch WHERE id = $1::uuid AND workspace_id = $2::uuid FOR UPDATE',
+    await tx.query<{ status: string; contact_id: string | null; body_md5: string }>(
+      `SELECT status, contact_id, md5(coalesce(body, '')) AS body_md5 FROM outbound_touch
+        WHERE id = $1::uuid AND workspace_id = $2::uuid FOR UPDATE`,
       [lease.touchId, lease.workspaceId],
     )
   ).rows[0];
   const g = (
-    await tx.query<{ lease_token: string | null }>('SELECT lease_token FROM outbound_generation WHERE touch_id = $1::uuid FOR UPDATE', [lease.touchId])
+    await tx.query<{ lease_token: string | null; base: string }>(
+      `SELECT lease_token, coalesce(base_body_md5, md5('')) AS base FROM outbound_generation WHERE touch_id = $1::uuid FOR UPDATE`,
+      [lease.touchId],
+    )
   ).rows[0];
   const sent = t?.contact_id
     ? (await tx.query<{ subject: string | null; body: string }>(
@@ -80,11 +88,12 @@ export async function applyGenerationOutcome(
   const gate = idempotencyGate({
     touchStatus: t?.status ?? 'missing', leaseHeld: g?.lease_token === lease.leaseToken,
     fingerprint: bodyFingerprint(final.subject, final.body), sentToContact: sent,
+    bodyUnchanged: t && g ? t.body_md5 === g.base : undefined,
   });
   const onlyDuplicate = gate.codes.length === 1 && gate.codes[0] === 'already_sent_to_contact';
   if (!gate.ok && !onlyDuplicate) return { applied: false, codes: gate.codes };
-  // El mismo texto ya le llegó a esta persona: no sale solo, lo decide alguien.
-  const out: GenerationFinal = onlyDuplicate ? { ...final, status: 'held', hold: { code: 'quality_duplicate' } } : final;
+  // El mismo texto ya le llegó a esta persona: no sale solo, lo decide alguien (en el editor, si lo pidió desde ahí).
+  const out: GenerationFinal = onlyDuplicate && final.status !== 'draft' ? { ...final, status: 'held', hold: { code: 'quality_duplicate' } } : final;
 
   for (const r of reviews) {
     if (r.attempt < 1 || r.attempt > MAX_REVIEW_ATTEMPT) continue;

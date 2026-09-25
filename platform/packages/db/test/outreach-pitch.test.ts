@@ -9,13 +9,19 @@
  *   · uno bien hecho sale sin marcas, con sus variables rellenas y con sus
  *     claims en outbound_touch.claims;
  *   · a quien pidió la baja no se le programa nada;
- *   · otro workspace no ve los claims de Laura.
+ *   · otro workspace no ve los claims de Laura;
+ *   · (ronda 2) guardar y reabrir conserva las marcas [claim:id]; el
+ *     negocio tiene que ser de la empresa; el enlace del media kit lo arma
+ *     el servidor con el origen de la app; la marca en mayúsculas no es
+ *     gritar; pedir un borrador a la IA deja la petición para el worker;
+ *     y en una agencia cada creador cita solo sus campañas.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { SalesClaim } from '@mc/core/outreach/claims';
-import { loadPitchComposer, savePitch } from '../src/queries/outreach.ts';
-import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { preflight } from '@mc/core/outreach/preflight';
+import { loadPitchComposer, outreachWriterStatus, requestPitchDraft, savePitch } from '../src/queries/outreach.ts';
+import { CAMPAIGN_CAFE_ALMA, openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const CAFE_ALMA = '00000002-0000-4000-8000-0000000000e1';
 const CAMILO = '00000002-0000-4000-8000-0000000c0004';
@@ -53,24 +59,26 @@ function pitchWith(claim: SalesClaim, figure: string): string {
 
 test('el editor recibe los claims del perfil con su origen y la política', async () => {
   const c = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => loadPitchComposer(tx, CAFE_ALMA, LOCALE));
-  const ids = c.claims.map((x) => x.id);
+  const ids = c.variants['']!.claims.map((x) => x.id);
   assert.ok(ids.includes('baseline:tiktok:median_views'), ids.join(' '));
   assert.ok(ids.some((i) => i.startsWith('audience:tiktok:age:')));
   assert.ok(ids.some((i) => i.startsWith('post:') && i.endsWith(':views_vs_median')));
   assert.ok(ids.some((i) => i.startsWith('campaign:')));
-  const mediana = c.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
+  const mediana = c.variants['']!.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
   assert.equal(mediana.ref.table, 'creator_baseline');
   assert.match(mediana.display, /^\d{1,3}(\.\d{3})+$/, 'con los miles del locale');
-  assert.equal(c.creator?.name, 'Laura Méndez');
+  assert.equal(c.variants['']!.creator?.name, 'Laura Méndez');
   assert.equal(typeof c.policy.enabled, 'boolean');
+  // Una variante por negocio de la empresa, con las cifras de su señal.
+  assert.deepEqual(Object.keys(c.variants).sort(), ['', ...c.deals.map((d) => d.id)].sort());
   // Otro espacio no ve el perfil de Laura.
   const otro = await t.db.withWorkspace(OTRO_WS, (tx) => loadPitchComposer(tx, CAFE_ALMA, LOCALE));
-  assert.deepEqual([otro.claims.length, otro.creator], [0, null]);
+  assert.deepEqual([otro.variants['']!.claims.length, otro.variants['']!.creator], [0, null]);
 });
 
 test('terminado cuando: un pitch con una cifra sin origen no se puede programar; como borrador, sí', async () => {
   const c = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => loadPitchComposer(tx, CAFE_ALMA, LOCALE));
-  const mediana = c.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
+  const mediana = c.variants['']!.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
   const inventado = pitchWith(mediana, mediana.display).replace(` [claim:${mediana.id}]`, '').replace(mediana.display, '900.000');
   const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
     savePitch(tx, { ...base, subject: 'Tu cold brew y mi audiencia', body: inventado, intent: 'schedule', now: new Date() }),
@@ -87,7 +95,7 @@ test('terminado cuando: un pitch con una cifra sin origen no se puede programar;
 test('un pitch bien hecho se programa sin marcas y con sus claims; a quien pidió la baja, no', async () => {
   await t.admin(`UPDATE outbound_policy SET postal_address = 'Calle 93 # 11-26, Bogotá' WHERE workspace_id = '${WORKSPACE_LAURA}'`);
   const c = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => loadPitchComposer(tx, CAFE_ALMA, LOCALE));
-  const mediana = c.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
+  const mediana = c.variants['']!.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
   const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
     savePitch(tx, { ...base, subject: 'Tu cold brew y mi audiencia', body: pitchWith(mediana, mediana.display), intent: 'schedule', now: new Date() }),
   );
@@ -105,4 +113,123 @@ test('un pitch bien hecho se programa sin marcas y con sus claims; a quien pidi�
     savePitch(tx, { ...base, companyId: GRANOS, contactId: MATEO_BAJA, subject: 'Una idea para Granos', body: pitchWith(mediana, mediana.display), intent: 'draft', now: new Date() }),
   );
   assert.deepEqual(baja, { ok: false, code: 'opted_out' });
+});
+
+const compose = (opts: { appUrl?: string | null } = {}) =>
+  t.db.withWorkspace(WORKSPACE_LAURA, (tx) => loadPitchComposer(tx, CAFE_ALMA, LOCALE, opts));
+/** Una lectura con la RLS de Laura, como la web. */
+const rows = async <T extends Record<string, unknown>>(sql: string): Promise<T[]> =>
+  (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query<T>(sql))).rows;
+
+test('ida y vuelta: guardar un borrador a mano y reabrirlo conserva las marcas, y el pre-vuelo sigue en verde', async () => {
+  const c = await compose();
+  const mediana = c.variants['']!.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
+  // La marca escrita en mayúsculas («CAFÉ ALMA») no es gritar.
+  const body = pitchWith(mediana, mediana.display).replace('de Café Alma', 'de CAFÉ ALMA');
+  const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, subject: 'Tu cold brew y mi audiencia', body, intent: 'draft', now: new Date() }),
+  );
+  assert.ok(r.ok && r.status === 'draft', JSON.stringify(r));
+  const again = await compose();
+  assert.equal(again.draft?.touchId, r.touchId);
+  assert.ok(again.draft!.body.includes(`${mediana.display} [claim:${mediana.id}]`), again.draft!.body);
+  assert.equal(again.draft!.pending, null);
+  const pf = preflight({
+    stepType: 'email', subject: again.draft!.subject, body: again.draft!.body, claims: again.variants['']!.claims, firstTouch: true,
+    allowedUppercase: ['Café Alma'],
+  });
+  assert.ok(pf.ok, JSON.stringify(pf.issues));
+  // Y programarlo desde lo reabierto funciona sin volver a insertar ninguna cifra.
+  const prog = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, touchId: r.touchId, subject: again.draft!.subject, body: again.draft!.body, intent: 'schedule', now: new Date() }),
+  );
+  assert.ok(prog.ok && prog.status === 'scheduled', JSON.stringify(prog));
+});
+
+test('el negocio tiene que ser de la empresa; el enlace del media kit lo arma el servidor con el origen de la app', async () => {
+  const ajeno = (await rows<{ id: string }>(`SELECT id FROM deal WHERE company_id <> '${CAFE_ALMA}' AND workspace_id = '${WORKSPACE_LAURA}' LIMIT 1`))[0]!;
+  const body = 'Hola {{first_name}},\n\nMi media kit: {{media_kit_url}}\n\n¿Te lo reviso contigo?\n\nLaura';
+  const otro = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, dealId: ajeno.id, subject: 'Mi media kit para ti', body, intent: 'draft', now: new Date() }),
+  );
+  assert.deepEqual(otro, { ok: false, code: 'deal' });
+
+  const c = await compose({ appUrl: 'https://on-cue.test/cualquier/ruta' });
+  const kit = c.variants['']!.sources.creator?.mediaKitUrl;
+  assert.match(kit ?? '', /^https:\/\/on-cue\.test\/kit\/[a-z0-9]+$/);
+  const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, subject: 'Mi media kit para ti', body, intent: 'draft', appUrl: 'https://on-cue.test', now: new Date() }),
+  );
+  assert.ok(r.ok);
+  const row = (await rows<{ body: string }>(`SELECT body FROM outbound_touch WHERE id = '${r.ok ? r.touchId : ''}'`))[0]!;
+  assert.ok(row.body.includes(kit!), row.body);
+  // Sin origen, o con uno que no es http(s), el hueco queda a la vista: nunca un enlace a otro sitio.
+  const sin = await compose({ appUrl: 'javascript:alert(1)' });
+  assert.equal(sin.variants['']!.sources.creator?.mediaKitUrl, null);
+});
+
+test('«Redactar con IA» deja la petición para el worker; guardar a mano la cancela; el editor sabe si el worker redacta', async () => {
+  assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => outreachWriterStatus(tx)), 'unknown');
+  await t.admin(`INSERT INTO job_run (job_id, status, finished_at, metadata)
+                 VALUES ('outbound.generate', 'ok', now(), '{"writer": "anthropic", "notConfigured": false}')`);
+  assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => outreachWriterStatus(tx)), 'anthropic');
+
+  const nuevo = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, subject: null, body: '', intent: 'draft', now: new Date() }),
+  );
+  assert.ok(nuevo.ok);
+  const touchId = nuevo.ok ? nuevo.touchId : '';
+  const pedido = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    requestPitchDraft(tx, { touchId, hint: 'shorter', instructions: 'Más cercano.', userId: null }),
+  );
+  assert.deepEqual(pedido, { ok: true });
+  const fila = (await rows<{ stage: string; requested_hint: string; requested_instructions: string }>(
+    `SELECT stage, requested_hint, requested_instructions FROM outbound_generation WHERE touch_id = '${touchId}'`,
+  ))[0]!;
+  assert.deepEqual(fila, { stage: 'requested', requested_hint: 'shorter', requested_instructions: 'Más cercano.' });
+  const abierto = await compose();
+  assert.equal(abierto.draft?.touchId, touchId);
+  assert.deepEqual(abierto.draft?.pending, { stage: 'requested', hint: 'shorter', lastError: null });
+
+  // La persona escribe y guarda mientras espera: su texto manda y la petición se cancela.
+  await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, touchId, subject: 'Una idea para Café Alma', body: 'Hola {{first_name}}, lo escribo yo.', intent: 'draft', now: new Date() }),
+  );
+  const despues = (await rows<{ stage: string; outcome: string }>(`SELECT stage, outcome FROM outbound_generation WHERE touch_id = '${touchId}'`))[0]!;
+  assert.deepEqual(despues, { stage: 'reviewed', outcome: 'manual' });
+
+  // Lo que ya salió o se programó no se regenera.
+  const programado = (await rows<{ id: string }>(`SELECT id FROM outbound_touch WHERE company_id = '${CAFE_ALMA}' AND status = 'scheduled' LIMIT 1`))[0]!;
+  assert.deepEqual(
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => requestPitchDraft(tx, { touchId: programado.id, hint: null, instructions: null, userId: null })),
+    { ok: false, code: 'not_editable' },
+  );
+});
+
+test('en una agencia, cada creador cita solo sus campañas: las de otro no salen como fichas ni pasan el pre-vuelo', async () => {
+  const SARA = '00000612-0000-4000-8000-0000000000b2';
+  const antes = await compose();
+  assert.ok(antes.variants['']!.claims.some((x) => x.id === `campaign:${CAMPAIGN_CAFE_ALMA}:views`), 'la campaña es de Laura');
+  await t.admin(`INSERT INTO creator_profile (id, workspace_id, display_name, handle, niche_slugs)
+                 VALUES ('${SARA}', '${WORKSPACE_LAURA}', 'Sara Gómez', 'sara.entrena', '{fitness}')`);
+  await t.admin(`UPDATE campaign SET creator_id = '${SARA}' WHERE id = '${CAMPAIGN_CAFE_ALMA}'`);
+  const deal = (await rows<{ id: string }>(`SELECT id FROM deal WHERE company_id = '${CAFE_ALMA}' ORDER BY created_at LIMIT 1`))[0]!;
+  await t.admin(`UPDATE deal SET creator_id = '${SARA}' WHERE id = '${deal.id}'`);
+
+  const c = await compose();
+  const laura = c.variants['']!;
+  const sara = c.variants[deal.id]!;
+  assert.equal(laura.creator?.name, 'Laura Méndez');
+  assert.ok(!laura.claims.some((x) => x.id.startsWith(`campaign:${CAMPAIGN_CAFE_ALMA}:`)), 'la campaña de Sara no es de Laura');
+  assert.equal(sara.creator?.name, 'Sara Gómez');
+  assert.equal(sara.sources.creator?.handle, 'sara.entrena');
+  assert.ok(sara.claims.some((x) => x.id === `campaign:${CAMPAIGN_CAFE_ALMA}:views`));
+  assert.ok(!sara.claims.some((x) => x.id === 'baseline:tiktok:median_views'), 'la mediana de Laura no es de Sara');
+
+  // Un pitch del negocio de Sara que cita la mediana de Laura no se programa.
+  const mediana = laura.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
+  const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, dealId: deal.id, subject: 'Tu cold brew y mi audiencia', body: pitchWith(mediana, mediana.display), intent: 'schedule', now: new Date() }),
+  );
+  assert.ok(!r.ok && r.code === 'preflight' && r.issues!.some((i) => i.code === 'unknown_claim'), JSON.stringify(r));
 });

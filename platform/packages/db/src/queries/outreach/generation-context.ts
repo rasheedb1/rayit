@@ -7,6 +7,7 @@
  */
 import { CLAIM_SOURCES, type ClaimSource, type SalesClaim } from '@mc/core/outreach/claims';
 import type { GenerationAngle, GenerationLang, SentTouch } from '@mc/core/outreach/generate';
+import { REGENERATE_HINTS, type RegenerateHint } from '@mc/core/outreach/preflight';
 import { bodyFingerprint, SIMILARITY_WINDOW } from '@mc/core/outreach/gates';
 import { DEFAULT_RUBRIC, RUBRIC_DIMENSIONS, type StepRubric } from '@mc/core/outreach/judge';
 import type { WorkerSql } from '../../client.ts';
@@ -51,7 +52,20 @@ export interface GenerationContext {
   approvedOfStepType: number;
   /** El último intento registrado en outbound_review para este toque (0 si ninguno). */
   lastReviewAttempt: number;
-  generation: { stage: string; subject: string | null; bodyMarked: string | null; model: string | null; attempts: number } | null;
+  generation: {
+    stage: string; subject: string | null; bodyMarked: string | null; model: string | null; attempts: number;
+    /** Lo que pidió una persona desde el editor (0057): la pista, sus instrucciones y cuándo. null = un borrador de cadencia. */
+    requestedHint: RegenerateHint | null;
+    requestedInstructions: string | null;
+    requestedAt: Date | null;
+    /** Lo que costó el borrador de outbound.generate (0057). */
+    usage: { inputTokens: number; outputTokens: number; costUsd: number };
+  } | null;
+  /** El asunto y el cuerpo que tiene ahora el toque (sin marcas). */
+  touchSubject: string | null;
+  touchBody: string;
+  /** ¿Es un toque de cadencia (con paso) o un pitch suelto de la ficha? */
+  fromSequence: boolean;
 }
 
 const toDate = (v: unknown): Date | null => (v === null || v === undefined ? null : new Date(v as string));
@@ -59,6 +73,7 @@ const toDate = (v: unknown): Date | null => (v === null || v === undefined ? nul
 interface MainRow {
   workspace_id: string; status: string; step_type: string; day_offset: number; contact_id: string | null; deal_id: string | null;
   angle_id: string | null; guidance_es: string | null; locale: string; automation_mode: string; require_human_review: boolean | null;
+  subject: string | null; body: string; from_sequence: boolean;
   creator_name: string | null; creator_handle: string | null; creator_niches: string[] | null; creator_bio: string | null; creator_id: string | null;
   company_name: string; industry: string | null; city: string | null; country: string | null;
   contact_name: string | null; role_title: string | null;
@@ -70,17 +85,18 @@ export async function loadGenerationContext(tx: WorkerSql, touchId: string): Pro
   assertIds('loadGenerationContext', [touchId]);
   const m = (
     await tx.query<MainRow>(
-      `SELECT t.workspace_id, t.status, st.step_type, st.day_offset, t.contact_id, t.deal_id, st.angle_id, st.guidance_es,
-              w.locale, w.name AS workspace_name, s.automation_mode, p.require_human_review,
+      `SELECT t.workspace_id, t.status, ${TOUCH_STEP_TYPE_SQL('t', 'st')} AS step_type, coalesce(st.day_offset, 0) AS day_offset,
+              t.contact_id, t.deal_id, st.angle_id, st.guidance_es, t.subject, t.body, t.step_id IS NOT NULL AS from_sequence,
+              w.locale, w.name AS workspace_name, coalesce(s.automation_mode, 'review') AS automation_mode, p.require_human_review,
               cp.id AS creator_id, cp.display_name AS creator_name, cp.handle AS creator_handle, cp.niche_slugs AS creator_niches, cp.bio AS creator_bio,
               co.name AS company_name, co.industry, co.city, co.country,
               c.full_name AS contact_name, c.role_title,
               sg.headline_es AS signal_headline, sg.source_id AS signal_source, sg.detected_at AS signal_at,
               b.title AS brief_title, b.notes AS brief_notes, b.requires_disclosure AS brief_disclosure
          FROM outbound_touch t
-         JOIN outbound_step st ON st.id = t.step_id
-         JOIN outbound_enrollment e ON e.id = t.enrollment_id
-         JOIN outbound_sequence s ON s.id = e.sequence_id
+         LEFT JOIN outbound_step st ON st.id = t.step_id
+         LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
+         LEFT JOIN outbound_sequence s ON s.id = e.sequence_id
          JOIN workspace w ON w.id = t.workspace_id
          JOIN company co ON co.id = t.company_id
          LEFT JOIN contact c ON c.id = t.contact_id
@@ -97,7 +113,7 @@ export async function loadGenerationContext(tx: WorkerSql, touchId: string): Pro
       [touchId],
     )
   ).rows[0];
-  if (!m) throw new OutreachMotorError('invalid_input', `El toque ${touchId} no existe o no es de una cadencia.`);
+  if (!m) throw new OutreachMotorError('invalid_input', `El toque ${touchId} no existe.`);
   const ws = m.workspace_id;
 
   const angleRow = m.angle_id
@@ -162,10 +178,17 @@ export async function loadGenerationContext(tx: WorkerSql, touchId: string): Pro
   ).rows[0]!;
 
   const gen = (
-    await tx.query<{ stage: string; subject: string | null; body_marked: string | null; model: string | null; attempts: number }>(
-      'SELECT stage, subject, body_marked, model, attempts FROM outbound_generation WHERE touch_id = $1::uuid', [touchId],
+    await tx.query<{
+      stage: string; subject: string | null; body_marked: string | null; model: string | null; attempts: number; requested_hint: string | null;
+      requested_instructions: string | null; requested_at: unknown; gen_input_tokens: number; gen_output_tokens: number; gen_cost: unknown;
+    }>(
+      `SELECT stage, subject, body_marked, model, attempts, requested_hint, requested_instructions, requested_at,
+              gen_input_tokens, gen_output_tokens, gen_cost
+         FROM outbound_generation WHERE touch_id = $1::uuid`,
+      [touchId],
     )
   ).rows[0];
+  const hint = gen?.requested_hint && (REGENERATE_HINTS as readonly string[]).includes(gen.requested_hint) ? (gen.requested_hint as RegenerateHint) : null;
 
   const claims = await listSalesClaims(tx, { workspaceId: ws, locale: m.locale, creatorId: m.creator_id, dealId: m.deal_id });
   return {
@@ -186,6 +209,15 @@ export async function loadGenerationContext(tx: WorkerSql, touchId: string): Pro
     sentFingerprints: sentToContact.map((x) => bodyFingerprint(x.subject, x.body)),
     approvedOfStepType: counts.approved,
     lastReviewAttempt: counts.last_attempt,
-    generation: gen ? { stage: gen.stage, subject: gen.subject, bodyMarked: gen.body_marked, model: gen.model, attempts: gen.attempts } : null,
+    generation: gen
+      ? {
+          stage: gen.stage, subject: gen.subject, bodyMarked: gen.body_marked, model: gen.model, attempts: gen.attempts,
+          requestedHint: hint, requestedInstructions: gen.requested_instructions, requestedAt: toDate(gen.requested_at),
+          usage: { inputTokens: gen.gen_input_tokens, outputTokens: gen.gen_output_tokens, costUsd: Number(gen.gen_cost ?? 0) },
+        }
+      : null,
+    touchSubject: m.subject,
+    touchBody: m.body ?? '',
+    fromSequence: m.from_sequence,
   };
 }

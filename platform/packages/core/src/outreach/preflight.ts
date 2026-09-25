@@ -158,7 +158,8 @@ function withoutUrls(text: string): string {
 
 /** Mayúsculas sostenidas: una palabra de cinco letras o más en mayúsculas, o dos seguidas. */
 export function shoutingIn(text: string, allowed: readonly string[] = []): string[] {
-  const ok = new Set([...ALLOWED_UPPERCASE, ...allowed.map((a) => a.toUpperCase())]);
+  // Un nombre de varias palabras («CAFÉ ALMA») vale palabra por palabra.
+  const ok = new Set([...ALLOWED_UPPERCASE, ...allowed.flatMap((a) => a.toUpperCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean))]);
   const words = withoutUrls(text).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   const isCaps = (w: string) => /\p{Lu}/u.test(w) && w === w.toUpperCase() && /^\p{L}{2,}$/u.test(w) && !ok.has(w);
   const hits: string[] = [];

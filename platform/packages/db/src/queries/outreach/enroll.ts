@@ -13,11 +13,12 @@
  * exigen los disparadores de la base: aquí para decir not_found, allá
  * para que nadie se la salte.
  */
-import { checkSequenceAgainstPolicy, findPlaceholders, firstNameOf, planSteps, renderTemplate } from '@mc/core';
+import { checkSequenceAgainstPolicy, findPlaceholders, planSteps, renderTemplate, templateValuesFrom } from '@mc/core';
 import { formatHoldReason, inviteNoteOverflow } from '@mc/core/outreach/messages';
 import type { SqlExecutor, WorkerSql, WorkspaceTx } from '../../client.ts';
 import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
 import { assertIds, checkRecipient, DISPATCHABLE_STEP_TYPES, OutreachMotorError, windowOf } from './shared.ts';
+import { loadTemplateSources } from './template-sources.ts';
 
 export interface EnrollInput {
   sequenceId: string;
@@ -26,6 +27,11 @@ export interface EnrollInput {
   enrolledBy?: string | null;
   /** El reloj de quien llama. Por defecto, ahora. */
   now?: Date;
+  /**
+   * El origen público de la app (APP_URL), para {{media_kit_url}} y
+   * {{quote_url}}. Sin él esas dos quedan a la vista y el toque se retiene.
+   */
+  appUrl?: string | null;
 }
 
 /**
@@ -65,7 +71,6 @@ interface SequenceRow {
   status: string;
   automation_mode: string;
   tz: string;
-  sender: string;
   w_start: string | null;
   w_end: string | null;
   human_review: boolean;
@@ -192,7 +197,7 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
 
   const seq = (
     await tx.query<SequenceRow>(
-      `SELECT s.id, s.workspace_id, s.status, s.automation_mode, coalesce(s.timezone, w.timezone) AS tz, w.name AS sender,
+      `SELECT s.id, s.workspace_id, s.status, s.automation_mode, coalesce(s.timezone, w.timezone) AS tz,
               p.send_window_start::text AS w_start, p.send_window_end::text AS w_end,
               coalesce(p.require_human_review, true) AS human_review,
               coalesce(p.max_touches_per_company, 4) AS max_touches, coalesce(p.min_days_between_touches, 3) AS min_days
@@ -251,10 +256,9 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
     }
     // Los estados de cada paso primero: una ficha a la que no le
     // llega ningún paso no se enrola, y dice por qué.
-    const values = {
-      first_name: firstNameOf(c.full_name), full_name: c.full_name, company: c.company, role_title: c.role_title,
-      sender_name: seq.sender,
-    };
+    // Las doce variables de la lista canónica, de la misma lectura que usa el pitch (template-sources.ts).
+    const { sources } = await loadTemplateSources(tx, { workspaceId: seq.workspace_id, contactId: c.id, dealId: input.dealId ?? null, appUrl: input.appUrl });
+    const values = templateValuesFrom(sources);
     const drafted = steps.map((s) => {
       const subject = renderTemplate(s.subject_template, values);
       const body = renderTemplate(s.body_template, values);

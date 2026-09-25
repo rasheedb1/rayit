@@ -247,6 +247,8 @@ test('el pre-vuelo ve estilo, estructura y riesgos sin gastar tokens', () => {
 
 test('las siglas y la marca en mayúsculas no son gritar; la pregunta de cierre puede ir antes de la firma', () => {
   assert.deepEqual(shoutingIn('Un video UGC con ROI medido para NIVEA', ['NIVEA']), []);
+  // Una marca de varias palabras vale palabra por palabra.
+  assert.deepEqual(shoutingIn('Una idea para CAFÉ ALMA en Bogotá', ['Café Alma']), []);
   assert.deepEqual(shoutingIn('Es GRATIS y YA'), ['GRATIS']);
   assert.equal(questionCloses('Idea.\n\n¿Te sirve?\n\nLaura'), true);
   assert.equal(questionCloses('¿Te sirve?\n\nUna idea larga que sigue después de la pregunta y no es una firma para nada.'), false);

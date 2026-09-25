@@ -41,7 +41,12 @@ export interface ListSalesClaimsOptions {
   workspaceId?: string;
   /** El locale del workspace: nombra y formatea cada cifra como la verá la marca. */
   locale: string;
-  /** El creador, si el workspace tiene varios (una agencia). Por defecto, el primero activo. */
+  /**
+   * El creador que firma, si el workspace tiene varios (una agencia). Por
+   * defecto, el del negocio (deal.creator_id) y, si no, el primero activo.
+   * Las cifras son SOLO suyas: las campañas de otro creador del mismo
+   * espacio no se ofrecen (serían una afirmación falsa con cara de trazable).
+   */
   creatorId?: string | null;
   /** El deal del toque: suma las cifras de su señal de origen. */
   dealId?: string | null;
@@ -57,12 +62,16 @@ export async function listSalesClaims(tx: SqlExecutor, opts: ListSalesClaimsOpti
     out.push({ ...c, display: c.display ?? formatClaimValue(c.value, c.unit!, opts.locale, c.currency) });
   };
 
+  if (opts.creatorId) assertIds('listSalesClaims', [opts.creatorId]);
+  if (opts.dealId) assertIds('listSalesClaims', [opts.dealId]);
   const creator = (
     await tx.query<{ id: string }>(
-      `SELECT id FROM creator_profile
-        WHERE workspace_id = $1::uuid AND deleted_at IS NULL AND ($2::uuid IS NULL OR id = $2::uuid)
-        ORDER BY (status = 'active') DESC, created_at LIMIT 1`,
-      [ws, opts.creatorId ?? null],
+      `SELECT cp.id FROM creator_profile cp
+        WHERE cp.workspace_id = $1::uuid AND cp.deleted_at IS NULL AND ($2::uuid IS NULL OR cp.id = $2::uuid)
+        ORDER BY (cp.id = (SELECT d.creator_id FROM deal d WHERE d.id = $3::uuid AND d.workspace_id = $1::uuid)) DESC NULLS LAST,
+                 (cp.status = 'active') DESC, cp.created_at
+        LIMIT 1`,
+      [ws, opts.creatorId ?? null, opts.dealId ?? null],
     )
   ).rows[0];
 
@@ -142,14 +151,15 @@ export async function listSalesClaims(tx: SqlExecutor, opts: ListSalesClaimsOpti
     }
   }
 
-  // Las campañas con resultado calculado, con la marca que las respalda.
+  // Las campañas con resultado calculado, con la marca que las respalda: las de ESTE creador (o las del
+  // espacio sin creador asignado, que son del único que había). Las de otro creador de la agencia, no.
   const campaigns = (
     await tx.query<{ campaign_id: string; brand: string; views: unknown; reach_non_followers_pct: unknown; code_redemptions: unknown; brand_followers_gained: unknown }>(
       `SELECT r.campaign_id, co.name AS brand, r.views, r.reach_non_followers_pct, r.code_redemptions, r.brand_followers_gained
          FROM campaign_result r JOIN campaign c ON c.id = r.campaign_id JOIN company co ON co.id = c.company_id
-        WHERE r.workspace_id = $1::uuid
+        WHERE r.workspace_id = $1::uuid AND (c.creator_id IS NULL OR c.creator_id = $2::uuid)
         ORDER BY r.computed_at DESC, r.campaign_id`,
-      [ws],
+      [ws, creator?.id ?? null],
     )
   ).rows;
   for (const c of campaigns) {
@@ -163,7 +173,6 @@ export async function listSalesClaims(tx: SqlExecutor, opts: ListSalesClaimsOpti
 
   // La señal que originó el deal: sus cifras de evidencia.
   if (opts.dealId) {
-    assertIds('listSalesClaims', [opts.dealId]);
     const s = (
       await tx.query<{ id: string; brand: string | null; evidence: Record<string, unknown> | null }>(
         `SELECT s.id, co.name AS brand, s.evidence
