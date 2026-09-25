@@ -1132,7 +1132,9 @@ async function firstEmailOpensThread(tx: WorkspaceTx, sequenceId: string): Promi
  * archivada al reclamar (sequence_paused, sequence_archived).
  */
 export async function setSequenceStatus(tx: WorkspaceTx, id: string, status: Exclude<SequenceStatus, 'draft'>): Promise<void> {
-  if (!['active', 'paused', 'archived'].includes(status)) throw new CadenciaError('invalid', `Estado desconocido: ${status}.`);
+  if (status === ('draft' as string) || !(SEQUENCE_STATUSES as readonly string[]).includes(status)) {
+    throw new CadenciaError('invalid', `Estado desconocido: ${status}.`);
+  }
   const s = await lockSequence(tx, id);
   if (s.status === 'archived') throw new CadenciaError('archived', 'La secuencia está archivada: duplícala para volver a usarla.');
   if (status === 'active') {
