@@ -47,6 +47,9 @@ export interface EditorData {
   sendingOn: boolean;
 }
 
+/** Sin creador ni cifras: un espacio sin perfil todavía. Constante, para que useMemo no recalcule en cada render. */
+const SIN_VARIANTE: EditorVariant = { creator: null, claims: [], sources: {} };
+
 /** Cada cuánto se mira si la IA terminó mientras redacta. */
 const POLL_MS = 5_000;
 
@@ -87,7 +90,7 @@ export function EditorDePitch({ data }: { data: EditorData }) {
 
   const contact = data.contacts.find((c) => c.id === contactId) ?? null;
   const deal = data.deals.find((x) => x.id === dealId) ?? null;
-  const variant = data.variants[dealId] ?? data.variants[""] ?? { creator: null, claims: [], sources: {} };
+  const variant = data.variants[dealId] ?? data.variants[""] ?? SIN_VARIANTE;
   const values = useMemo(
     () => templateValuesFrom({ contact: contact ? { fullName: contact.fullName, roleTitle: contact.roleTitle } : null, ...variant.sources }),
     [contact, variant],
