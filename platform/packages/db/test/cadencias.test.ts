@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { checkSequenceAgainstPolicy, recommendSequence, type RecommendInput } from '@mc/core';
 import {
   addStep, CadenciaError, contactNames, createSequenceFromProposal, createSequenceFromTemplate, defaultContact, deleteStep,
-  enrollableContactsOfDeal, liveEnrollmentElsewhere, parseSequenceProposal, signalContacts,
+  enrollableContactsOfDeal, liveEnrollmentElsewhere, liveEnrollmentsElsewhere, optedOutAmong, parseSequenceProposal, signalContacts,
   duplicateSequence, getRecommendationContext, getSequenceDetail, listEnrollableDeals, listProposableSignals, reachForSequence,
   listSequences, listSequenceTemplates, recordRecommendLlmCall, renameSequence, reorderSteps, replaceStepsFromProposal,
   setSequenceStatus, updateStep, type RecommendationContext,
@@ -253,6 +253,9 @@ test('la línea de tiempo: editar, reordenar, añadir y quitar; con alguien dent
   // Quien ya está en la original está «vivo» ahí: la copia no puede volver a escribirle en paralelo.
   assert.deepEqual(await enLaura((tx) => liveEnrollmentElsewhere(tx, CAMILA, copia)), { sequenceId: id, name: 'Fresko · plantilla' });
   assert.equal(await enLaura((tx) => liveEnrollmentElsewhere(tx, CAMILA, id)), null);
+  // El lote entero en una sola consulta: solo sale quien está viva en otra.
+  const vivas = await enLaura((tx) => liveEnrollmentsElsewhere(tx, [CAMILA, LUCIA], copia));
+  assert.deepEqual([...vivas.entries()], [[CAMILA, { sequenceId: id, name: 'Fresko · plantilla' }]]);
   const deals = await enLaura((tx) => listEnrollableDeals(tx, id));
   assert.equal(deals.find((x) => x.id === DEAL_FRESKO)!.contacts.find((c) => c.id === CAMILA)!.enrolled, true);
   assert.equal(deals.find((x) => x.id === DEAL_FRESKO)!.contacts.find((c) => c.id === LUCIA)!.enrolled, false);
@@ -523,6 +526,22 @@ test('con dos creadores, el nicho y el brief son los del creador del negocio; si
       DELETE FROM outbound_brief WHERE id = '${BRIEF_OTRA}';
       DELETE FROM creator_profile WHERE id = '${OTRA}';
     `);
+  }
+});
+
+test('la baja del espacio (el enlace de un correo) cuenta como baja antes de enrolar', async () => {
+  assert.equal((await enLaura((tx) => optedOutAmong(tx, [CAMILA, LUCIA]))).size, 0);
+  await t.admin(`INSERT INTO outbound_workspace_optout (workspace_id, email, token_hash)
+                 VALUES ('${WORKSPACE_LAURA}', 'lucia.parra@fresko.test', repeat('a', 64))`);
+  try {
+    assert.deepEqual([...(await enLaura((tx) => optedOutAmong(tx, [CAMILA, LUCIA])))], [LUCIA]);
+    // La misma expresión que la etiqueta de la pantalla: Lucía sale de baja en «Enrolar desde un negocio».
+    const deals = await enLaura((tx) => listEnrollableDeals(tx));
+    assert.equal(deals.find((d) => d.id === DEAL_FRESKO)!.contacts.find((c) => c.id === LUCIA)!.optedOut, true);
+    // Y la baja es de ESTE espacio: otro no la ve como suya.
+    assert.equal((await t.db.withWorkspace(WS_OTRO, (tx) => optedOutAmong(tx, [LUCIA]))).size, 0);
+  } finally {
+    await t.admin(`DELETE FROM outbound_workspace_optout WHERE email = 'lucia.parra@fresko.test'`);
   }
 });
 

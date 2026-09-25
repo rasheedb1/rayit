@@ -17,7 +17,8 @@ const { q, enrollContacts, outboundHealth, redirect } = vi.hoisted(() => ({
     replaceStepsFromProposal: vi.fn(),
     recordRecommendLlmCall: vi.fn(),
     duplicateSequence: vi.fn(),
-    liveEnrollmentElsewhere: vi.fn(),
+    liveEnrollmentsElsewhere: vi.fn(),
+    optedOutAmong: vi.fn(),
     enrollableContactsOfDeal: vi.fn(),
     contactNames: vi.fn(),
     addStep: vi.fn(),
@@ -110,7 +111,8 @@ beforeEach(() => {
   redirect.mockReset();
   q.getRecommendationContext.mockResolvedValue(contexto);
   q.createSequenceFromProposal.mockResolvedValue(SEQ);
-  q.liveEnrollmentElsewhere.mockResolvedValue(null);
+  q.liveEnrollmentsElsewhere.mockResolvedValue(new Map());
+  q.optedOutAmong.mockResolvedValue(new Set());
   q.enrollableContactsOfDeal.mockImplementation(async (_tx: unknown, _deal: string, ids: string[]) => ids);
   q.contactNames.mockResolvedValue(new Map());
   // Por defecto todas llegan por correo; la prueba de Andrés usa la regla de verdad.
@@ -227,10 +229,25 @@ describe("activar (el segundo clic)", () => {
     q.getSequenceDetail.mockResolvedValue({
       proposal: { contactId: CAMILA, dealId: DEAL }, proposalContact: { id: CAMILA, name: "Camila Rojas" }, enrollments: { total: 0 },
     });
-    q.liveEnrollmentElsewhere.mockResolvedValue({ sequenceId: "x", name: "Fresko Market · Campaña activa" });
+    q.liveEnrollmentsElsewhere.mockResolvedValue(new Map([[CAMILA, { sequenceId: "x", name: "Fresko Market · Campaña activa" }]]));
     const r = await activarCadencia(SEQ);
     expect(enrollContacts).not.toHaveBeenCalled();
     expect(r.ok).toBe(MESSAGES.estado.activadaYaEnOtra("Camila Rojas", "Fresko Market · Campaña activa"));
+  });
+
+  it("la persona pidió la baja entre proponer y activar: se activa sin ella y lo dice", async () => {
+    q.getSequenceDetail.mockResolvedValue({
+      proposal: { contactId: CAMILA, dealId: DEAL }, proposalContact: { id: CAMILA, name: "Camila Rojas" }, enrollments: { total: 0 },
+      signal: { companyId: FRESKO }, steps: PASOS_CAMPANA.map((stepType) => ({ stepType })),
+    });
+    // Pulsó el enlace de baja de un correo del espacio: el disparador de 0050 rechazaría el enrolamiento y la activación entera.
+    q.optedOutAmong.mockResolvedValue(new Set([CAMILA]));
+    enrollContacts.mockRejectedValue(Object.assign(new Error("check_violation"), { code: "23514" }));
+    const r = await activarCadencia(SEQ);
+    expect(q.optedOutAmong).toHaveBeenCalledWith(expect.anything(), [CAMILA]);
+    expect(enrollContacts).not.toHaveBeenCalled();
+    expect(q.setSequenceStatus).toHaveBeenCalledWith(expect.anything(), SEQ, "active");
+    expect(r).toEqual({ ok: MESSAGES.estado.activadaSinPersona("Camila Rojas", MESSAGES.enrolar.saltadas.opted_out!) });
   });
 
   it("una copia (duplicar) no trae persona: activarla no enrola a nadie", async () => {
@@ -289,12 +306,13 @@ describe("pasos y enrolamiento", () => {
   });
 
   it("enrolar desde un negocio no mete en esta cadencia a quien ya está viva en otra: la salta y dice en cuál", async () => {
-    q.liveEnrollmentElsewhere.mockImplementation(async (_tx: unknown, id: string) =>
-      id === CAMILA ? { sequenceId: "x", name: "Fresko Market · Campaña activa" } : null);
+    q.liveEnrollmentsElsewhere.mockResolvedValue(new Map([[CAMILA, { sequenceId: "x", name: "Fresko Market · Campaña activa" }]]));
     enrollContacts.mockResolvedValue({ enrolled: [{ enrollmentId: "e", contactId: OTRA, scheduled: 1, held: 0, drafts: 0, skipped: 0 }], skipped: [], warnings: [] });
     q.contactNames.mockResolvedValue(new Map([[CAMILA, "Camila Rojas"]]));
     const r = await enrolarDesdeNegocio(SEQ, {}, form({ dealId: DEAL, contactId: [CAMILA, OTRA] }));
-    expect(q.liveEnrollmentElsewhere).toHaveBeenCalledWith(expect.anything(), CAMILA, SEQ);
+    // Una sola consulta para todo el lote, no una por persona.
+    expect(q.liveEnrollmentsElsewhere).toHaveBeenCalledTimes(1);
+    expect(q.liveEnrollmentsElsewhere).toHaveBeenCalledWith(expect.anything(), [CAMILA, OTRA], SEQ);
     expect(enrollContacts).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactIds: [OTRA], dealId: DEAL }));
     expect(r.ok).toBe("1 persona enrolada.");
     expect(r.saltadas).toEqual(["Camila Rojas: ya está en «Fresko Market · Campaña activa»."]);
@@ -304,6 +322,24 @@ describe("pasos y enrolamiento", () => {
     const r2 = await enrolarDesdeNegocio(SEQ, {}, form({ dealId: DEAL, contactId: [CAMILA] }));
     expect(enrollContacts).not.toHaveBeenCalled();
     expect(r2.ok).toBe("0 personas enroladas.");
+  });
+
+  it("la persona pidió la baja después de abrir el formulario: las demás entran y ella sale entre las saltadas", async () => {
+    q.optedOutAmong.mockResolvedValue(new Set([CAMILA]));
+    enrollContacts.mockResolvedValue({ enrolled: [{ enrollmentId: "e", contactId: OTRA, scheduled: 1, held: 0, drafts: 0, skipped: 0 }], skipped: [], warnings: [] });
+    q.contactNames.mockResolvedValue(new Map([[CAMILA, "Camila Rojas"], [OTRA, "Lucía Parra"]]));
+    const r = await enrolarDesdeNegocio(SEQ, {}, form({ dealId: DEAL, contactId: [CAMILA, OTRA] }));
+    expect(q.optedOutAmong).toHaveBeenCalledWith(expect.anything(), [CAMILA, OTRA]);
+    // Camila no llega al motor: una sola persona de baja no tumba el lote.
+    expect(enrollContacts).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactIds: [OTRA] }));
+    expect(r.ok).toBe("1 persona enrolada.");
+    expect(r.saltadas).toEqual(["Camila Rojas: pidió no recibir mensajes."]);
+
+    // Si la única elegida está de baja, no se llama al motor.
+    enrollContacts.mockClear();
+    const r2 = await enrolarDesdeNegocio(SEQ, {}, form({ dealId: DEAL, contactId: [CAMILA] }));
+    expect(enrollContacts).not.toHaveBeenCalled();
+    expect(r2.saltadas).toEqual(["Camila Rojas: pidió no recibir mensajes."]);
   });
 
   it("«Añadir paso» avisa cuando el paso nuevo es un gesto porque la política ya está llena de mensajes", async () => {

@@ -272,7 +272,7 @@ export const MESSAGES = {
     },
     guiaModelo: "La guía de cada paso la redactó On Cue con IA a partir de las reglas.",
     guiaReglas: {
-      no_key: "La guía sale de las reglas: la redacción con IA no está configurada en este espacio.",
+      no_key: "La guía sale de las reglas: la redacción con IA está apagada en On Cue.",
       budget: "La guía sale de las reglas: se agotó el presupuesto de redacción de hoy.",
       failed: "La guía sale de las reglas: la redacción con IA no respondió.",
       rejected: "La guía sale de las reglas: lo que propuso la IA no pasó la revisión.",

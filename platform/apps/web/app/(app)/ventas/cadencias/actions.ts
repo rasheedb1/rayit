@@ -18,7 +18,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { UUID_RE } from "@/lib/forms";
 import {
   addStep, CadenciaError, contactNames, createSequenceFromTemplate, deleteStep, duplicateSequence, EDITABLE_CHANNELS,
-  EDITABLE_STEP_TYPES, enrollableContactsOfDeal, getSequenceDetail, liveEnrollmentElsewhere, reachForSequence, renameSequence,
+  EDITABLE_STEP_TYPES, enrollableContactsOfDeal, getSequenceDetail, liveEnrollmentsElsewhere, optedOutAmong, reachForSequence, renameSequence,
   reorderSteps, setSequenceStatus, stepTypesOf, updateStep, BODY_MAX, GUIDANCE_MAX, MAX_DAY_OFFSET, MAX_STEPS, MAX_STEPS_PER_DAY,
   NAME_MAX, SUBJECT_MAX,
 } from "@mc/db/queries/cadencias";
@@ -132,7 +132,9 @@ export async function crearDesdePlantilla(_prev: CadenciaState, formData: FormDa
  * desde un negocio»: que el negocio siga abierto y la persona sea de su
  * marca (un borrador puede esperar días y el negocio perderse entre
  * tanto: no se le escriben seis mensajes a una marca que ya dijo que
- * no), que la persona no esté viva en otra cadencia del espacio (dos
+ * no), que la persona no haya pedido la baja entre «Proponer» y
+ * «Activar» (el disparador de 0050 rechazaría el enrolamiento y, con él,
+ * la activación entera, una y otra vez), que no esté viva en otra cadencia del espacio (dos
  * cadencias a la vez duplican los mensajes) y que le llegue algún
  * mensaje de esta cadencia (reachForSequence: un canal de sus pasos que
  * la política deja y en el que tiene dirección). «Reanudar» pasa por
@@ -156,7 +158,11 @@ export async function activarCadencia(sequenceId: string): Promise<CadenciaState
       if (deSuNegocio.length === 0) {
         return { ok: t.activadaSinPersona(nombre, p.dealId ? MESSAGES.enrolar.negocioCerrado : MESSAGES.enrolar.sinNegocio) };
       }
-      const otra = await liveEnrollmentElsewhere(tx, persona.id, sequenceId);
+      // Pidió la baja después de la propuesta: la cadencia se activa sin ella, y se dice.
+      if ((await optedOutAmong(tx, [persona.id])).has(persona.id)) {
+        return { ok: t.activadaSinPersona(nombre, MESSAGES.enrolar.saltadas.opted_out!) };
+      }
+      const otra = (await liveEnrollmentsElsewhere(tx, [persona.id], sequenceId)).get(persona.id);
       if (otra) return { ok: t.activadaYaEnOtra(nombre, otra.name) };
       // Quien no llega por ningún canal con el que esta cadencia escribe se quedaría «dentro» sin un solo mensaje.
       if (!(await reachForSequence(tx, sequenceId, [persona.id])).get(persona.id)?.length) {
@@ -309,8 +315,10 @@ const enrolarSchema = z.object({ dealId: uuid, contactIds: z.array(uuid).min(1).
  * VEN-10). Antes comprueba, en la misma transacción, que cada persona es
  * de la marca del negocio y que el negocio sigue abierto
  * (enrollableContactsOfDeal): un formulario hecho a mano no mete a
- * alguien de otra marca bajo este negocio. Quien ya está viva en otra
- * cadencia del espacio no entra (la misma regla que «Activar»), ni quien
+ * alguien de otra marca bajo este negocio. Quien pidió la baja (quizá
+ * después de abrir el formulario) no entra: enrollContacts la mandaría al
+ * disparador de 0050 y una sola persona tumbaría el lote. Quien ya está
+ * viva en otra cadencia del espacio tampoco (la misma regla que «Activar»), ni quien
  * no llega por ningún canal con el que esta cadencia escribe: quedan
  * entre las saltadas con su motivo. De quien entra se dice, persona por
  * persona, qué le queda: mensajes programados, por revisar, por
@@ -333,13 +341,18 @@ export async function enrolarDesdeNegocio(sequenceId: string, _prev: EnrolarStat
       if (contactIds.some((id) => !validas.has(id))) return null;
       // Dos cadencias a la vez a la misma persona duplican los mensajes: quien ya está viva en otra se queda fuera.
       // Y quien no llega por ningún canal con el que esta cadencia escribe entraría sin un solo mensaje.
+      // Y quien pidió la baja no entra: el disparador de 0050 revertiría el lote entero.
       const alcance = await reachForSequence(tx, sequenceId, contactIds);
+      const deBaja = await optedOutAmong(tx, contactIds);
+      const vivas = await liveEnrollmentsElsewhere(tx, contactIds, sequenceId);
       const libres: string[] = [];
+      const bajas: string[] = [];
       const enOtra: Array<{ contactId: string; cadencia: string }> = [];
       const noLlegan: string[] = [];
       for (const id of contactIds) {
-        const otra = await liveEnrollmentElsewhere(tx, id, sequenceId);
-        if (otra) enOtra.push({ contactId: id, cadencia: otra.name });
+        const otra = vivas.get(id);
+        if (deBaja.has(id)) bajas.push(id);
+        else if (otra) enOtra.push({ contactId: id, cadencia: otra.name });
         else if (!alcance.get(id)?.length) noLlegan.push(id);
         else libres.push(id);
       }
@@ -348,7 +361,7 @@ export async function enrolarDesdeNegocio(sequenceId: string, _prev: EnrolarStat
         : { enrolled: [], skipped: [] };
       const tipos = res.enrolled.length > 0 ? await stepTypesOf(tx, sequenceId) : [];
       const nombres = await contactNames(tx, [
-        ...res.enrolled.map((e) => e.contactId), ...res.skipped.map((s) => s.contactId), ...enOtra.map((x) => x.contactId), ...noLlegan,
+        ...res.enrolled.map((e) => e.contactId), ...res.skipped.map((s) => s.contactId), ...bajas, ...enOtra.map((x) => x.contactId), ...noLlegan,
       ]);
       const nombre = (id: string) => nombres.get(id) ?? MESSAGES.proponer.sinPersona;
       return {
@@ -356,6 +369,7 @@ export async function enrolarDesdeNegocio(sequenceId: string, _prev: EnrolarStat
         dentro: res.enrolled.map((e) => t.dentroCon(nombre(e.contactId), partesDeEnrolamiento(e, tipos, f))),
         saltadas: [
           ...res.skipped.map((s) => t.saltada(nombre(s.contactId), t.saltadas[s.reason] ?? t.saltadaGenerica)),
+          ...bajas.map((id) => t.saltada(nombre(id), t.saltadas.opted_out!)),
           ...enOtra.map((x) => t.saltada(nombre(x.contactId), t.enOtra(x.cadencia))),
           ...noLlegan.map((id) => t.saltada(nombre(id), t.noLlega)),
         ],

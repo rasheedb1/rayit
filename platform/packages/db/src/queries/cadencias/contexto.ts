@@ -55,14 +55,23 @@ export interface ContactOption {
  * cadencia que no cuenta como «otra» (o NULL). Una sola definición para
  * la propuesta y para enrolar.
  */
+/**
+ * Si la persona `c` está de baja: la ficha, la lista global de
+ * direcciones, un enrolamiento que terminó en baja o el enlace de baja de
+ * un correo de este espacio (outbound_workspace_optout, la que el
+ * disparador de 0050 hace cumplir al enrolar). Una sola expresión para la
+ * etiqueta de la pantalla y para la comprobación de «Activar» y «Enrolar».
+ */
+const OPTED_OUT_EXPR = (ws: string) => `(c.opted_out OR address_is_suppressed(c.email)
+              OR EXISTS (SELECT 1 FROM outbound_enrollment e WHERE e.contact_id = c.id AND e.status = 'opted_out')
+              OR EXISTS (SELECT 1 FROM outbound_workspace_optout o
+                          WHERE o.workspace_id = ${ws} AND o.email = c.email))`;
+
 const CONTACT_OPTION_COLUMNS = (ws: string, except: string, live: string) => `c.id, c.full_name, c.role_title,
             (c.email IS NOT NULL AND NOT c.email_invalid) AS has_email,
             (c.linkedin_url IS NOT NULL AND c.linkedin_url <> '') AS has_linkedin,
             (c.instagram_handle IS NOT NULL AND c.instagram_handle <> '') AS has_instagram,
-            (c.opted_out OR address_is_suppressed(c.email)
-              OR EXISTS (SELECT 1 FROM outbound_enrollment e WHERE e.contact_id = c.id AND e.status = 'opted_out')
-              OR EXISTS (SELECT 1 FROM outbound_workspace_optout o
-                          WHERE o.workspace_id = ${ws} AND o.email = c.email)) AS opted_out,
+            ${OPTED_OUT_EXPR(ws)} AS opted_out,
             (SELECT s.name FROM outbound_enrollment e JOIN outbound_sequence s ON s.id = e.sequence_id
               WHERE e.contact_id = c.id AND e.sequence_id IS DISTINCT FROM ${except} AND e.status = ANY(${live})
               ORDER BY e.started_at DESC, s.id LIMIT 1) AS live_elsewhere`;
@@ -411,23 +420,49 @@ export async function contactNames(tx: WorkspaceTx, ids: readonly string[]): Pro
 }
 
 /**
- * Si la persona ya está dentro de OTRA cadencia del espacio (activa, en
- * pausa o en enfriamiento), esa cadencia. Dos cadencias paralelas a la
- * misma persona de una marca duplican los toques; enrollContacts solo
- * evita el duplicado dentro de una misma secuencia.
+ * De `contactIds`, las que están de baja (la misma expresión que la
+ * etiqueta de la pantalla). «Activar» y «Enrolar» las dejan fuera antes de
+ * llamar a enrollContacts: la baja puede llegar entre «Proponer» y
+ * «Activar», o después de abrir el formulario, y el disparador de 0050
+ * rechazaría el INSERT y con él la transacción entera.
  */
+export async function optedOutAmong(tx: WorkspaceTx, contactIds: readonly string[]): Promise<Set<string>> {
+  const ids = contactIds.filter(isUuid);
+  if (ids.length === 0) return new Set();
+  const { rows } = await tx.query<{ id: string }>(
+    `SELECT c.id FROM contact c WHERE c.id = ANY($1::uuid[]) AND ${OPTED_OUT_EXPR('$2::uuid')}`,
+    [ids, tx.workspaceId],
+  );
+  return new Set(rows.map((r) => r.id));
+}
+
+/**
+ * De `contactIds`, las que ya están dentro de OTRA cadencia del espacio
+ * (activa, en pausa o en enfriamiento), con esa cadencia (la más reciente).
+ * Dos cadencias paralelas a la misma persona de una marca duplican los
+ * toques; enrollContacts solo evita el duplicado dentro de una misma
+ * secuencia. Una sola consulta para todo el lote.
+ */
+export async function liveEnrollmentsElsewhere(
+  tx: WorkspaceTx, contactIds: readonly string[], sequenceId: string,
+): Promise<Map<string, { sequenceId: string; name: string }>> {
+  assertId('liveEnrollmentsElsewhere', sequenceId);
+  const ids = contactIds.filter(isUuid);
+  if (ids.length === 0) return new Map();
+  const { rows } = await tx.query<{ contact_id: string; id: string; name: string }>(
+    `SELECT DISTINCT ON (e.contact_id) e.contact_id, s.id, s.name
+       FROM outbound_enrollment e JOIN outbound_sequence s ON s.id = e.sequence_id
+      WHERE e.contact_id = ANY($1::uuid[]) AND e.sequence_id <> $2::uuid AND e.status = ANY($3::text[])
+      ORDER BY e.contact_id, e.started_at DESC, s.id`,
+    [ids, sequenceId, [...LIVE_ENROLLMENT_STATUSES]],
+  );
+  return new Map(rows.map((r) => [r.contact_id, { sequenceId: r.id, name: r.name }]));
+}
+
+/** liveEnrollmentsElsewhere para una sola persona. */
 export async function liveEnrollmentElsewhere(
   tx: WorkspaceTx, contactId: string, sequenceId: string,
 ): Promise<{ sequenceId: string; name: string } | null> {
   assertId('liveEnrollmentElsewhere', contactId);
-  assertId('liveEnrollmentElsewhere', sequenceId);
-  const { rows } = await tx.query<{ id: string; name: string }>(
-    `SELECT s.id, s.name
-       FROM outbound_enrollment e JOIN outbound_sequence s ON s.id = e.sequence_id
-      WHERE e.contact_id = $1::uuid AND e.sequence_id <> $2::uuid AND e.status = ANY($3::text[])
-      ORDER BY e.started_at DESC, s.id
-      LIMIT 1`,
-    [contactId, sequenceId, [...LIVE_ENROLLMENT_STATUSES]],
-  );
-  return rows[0] ? { sequenceId: rows[0].id, name: rows[0].name } : null;
+  return (await liveEnrollmentsElsewhere(tx, [contactId], sequenceId)).get(contactId) ?? null;
 }

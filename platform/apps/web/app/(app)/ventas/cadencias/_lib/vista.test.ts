@@ -85,12 +85,12 @@ describe("cadencias · lo que la pantalla decide sin base", () => {
       dealId: null, proposedAt: "",
     };
     expect(textoDeGuia({ ...base, guidance: "llm", guidanceWhyRules: null })).toMatch(/con IA/);
-    // Sin llave: dice que no está configurada (lo mismo que promete .env.example), no que a la función le falte algo,
-    // y no le pide a la creadora que configure nada (la llave es del servidor).
+    // Sin llave: dice que está apagada en On Cue (lo mismo que promete .env.example). No lo presenta como un ajuste
+    // del espacio ni le pide a la creadora que configure nada: la llave es del servidor.
     expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "no_key" })).toBe(
-      "La guía sale de las reglas: la redacción con IA no está configurada en este espacio.",
+      "La guía sale de las reglas: la redacción con IA está apagada en On Cue.",
     );
-    expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "no_key" })).not.toMatch(/todavía|configúr|configura /);
+    expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "no_key" })).not.toMatch(/espacio|configúr|configura/);
     expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "budget" })).toMatch(/presupuesto/);
   });
 
