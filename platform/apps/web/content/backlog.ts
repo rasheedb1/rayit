@@ -442,7 +442,7 @@ export const STORIES: readonly Story[] = [
     desc: "Pie de baja con página pública, cabecera List-Unsubscribe de un clic, rebotes asíncronos, calentamiento progresivo por cuenta, baja respetada en todos los canales, alertas diarias por correo.",
     done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud.",
     status: "bloqueada",
-    note: "Hecho y probado (ronda 5); bloqueada por la integración de VEN-9 (Gmail en bouncesMailboxFor y BOUNCE_READING_CONNECTED) y por las decisiones 6 y 7 de docs/ventas-outreach.md §8. 0038 sin aplicar.",
+    note: "Hecho y probado: el rebote pausa lo que ya no tiene por dónde seguir y los avisos se ven en «Salud de hoy». Bloqueada por la integración de VEN-9 (Gmail en bouncesMailboxFor) y las decisiones 6 y 7 de docs/ventas-outreach.md §8. 0038 sin aplicar.",
   },
   {
     id: "VEN-16", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-10"],

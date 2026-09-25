@@ -466,7 +466,11 @@ que el despachador de VEN-10 tiene que usar, todo en
   botón (la regla de §5.2). La página habla el idioma del pie que trajo
   hasta ella (español o inglés, la regla de `footerTextsFor`); sin
   espacio que lo diga (un enlace que no existe, la frontera de error), el
-  del `Accept-Language` del navegador. El clic va por `public_optout`. El POST de un clic
+  del `Accept-Language` del navegador. El clic va por `public_optout`.
+  Después del clic no se promete lo que el producto no cumple: quien
+  escribía no puede deshacer la baja (solo un operador, a pedido de la
+  persona), así que el «listo» da `SUPPORT_EMAIL` como la vía para
+  deshacerla por error, y sin él no ofrece ninguna. El POST de un clic
   de Gmail va a `/baja/<token>/un-clic`, que acepta el cuerpo en
   `multipart/form-data` (el SHOULD de la RFC 8058 §3.1) y en
   `application/x-www-form-urlencoded` (lo que manda Gmail).
@@ -546,14 +550,31 @@ que el despachador de VEN-10 tiene que usar, todo en
   ficha compartida (contacto global), que no se marca: un aviso en el
   buzón de un creador no le cierra el correo a los demás. No va a
   `contact_suppression`, que corta todos los canales. Corregir el correo
-  de la ficha borra las dos marcas. La base no deja programar, reclamar
-  ni devolver a la cola un correo a esa dirección
-  (`outbound_touch_email_invalid`, desde r5 también en `processing` y en
-  la vuelta desde él); `processing → sent` sí, porque ya salió. La
-  consulta de reclamo de VEN-10 tiene que filtrarlos. El job lee cada
-  buzón desde su cursor (`outreach_channel_account.bounces_read_at`), del
-  más viejo al más nuevo y como mucho 300 avisos por pasada: una ráfaga
-  no deja atrás a los viejos. **Falta en el conector de VEN-9:**
+  de la ficha borra las dos marcas. La base no deja programar ni
+  reclamar un correo a esa dirección (`outbound_touch_email_invalid`):
+  lo rechaza con `check_violation`. La vuelta a la cola desde
+  `processing` (el reintento, o el rescate de un zombi) no se rechaza:
+  la base la **cancela en el sitio** (`canceled`, `email_invalid`), así
+  que un correo reclamado cuando llegó el aviso ni vuelve a salir ni se
+  queda atascado. `processing → sent` sí, porque ya salió. En la misma
+  transacción del rebote, y en un **barrido idempotente al final de cada
+  pasada** (`sweepInvalidEmail`), el job cancela lo que quede en draft,
+  scheduled o held a esa dirección —un borrador creado después del
+  rebote, por ejemplo— y **pausa los enrolamientos activos** de esa
+  ficha en ese espacio cuya secuencia es solo de correo
+  (`context.paused_reason = 'email_invalid'`): sin eso el enrolamiento
+  seguía «activo» y el planificador chocaba con la regla en cada vuelta.
+  Una secuencia con LinkedIn o Instagram sigue por ahí: **el planificador
+  de VEN-10 salta los pasos de correo** de una ficha con el correo
+  inválido (o con un rebote verificado de su espacio) en vez de
+  insertarlos, y su consulta de reclamo filtra esas filas. Reanudar un
+  enrolamiento pausado así es a mano, después de corregir el correo. El
+  job lee cada buzón desde su cursor
+  (`outreach_channel_account.bounces_read_at`), del más viejo al más
+  nuevo y como mucho 300 avisos por pasada: una ráfaga no deja atrás a
+  los viejos; y no vuelve a pedir entero (`messages.get`) un aviso que
+  ya está en `outbound_bounce`, así que el solape de una hora del
+  cursor no cuesta cuota. **Falta en el conector de VEN-9:**
   `GmailApi.searchBounces` tiene que aceptar `pageToken` y devolver
   `nextPageToken` (messages.list los tiene); con el arreglo de hoy, si la
   lista viene llena el job lo avisa en el registro.
@@ -565,10 +586,15 @@ que el despachador de VEN-10 tiene que usar, todo en
   contar. **Desde r5, lo urgente no espera:** si después del resumen cae
   una cuenta o se disparan los rebotes (`URGENT_ALERT_KINDS`, las dos
   'critical'), sale en esa misma corrida un correo corto aparte; lo demás
-  va en el resumen del día siguiente. La web todavía no tiene una
-  campana de avisos (ni `shell.tsx` ni `nav.tsx` la tienen): hasta que
-  exista, esas `notification` solo se ven en el correo y en
-  `/ventas/politica`. Hay un sexto tipo, `outreach_bounces_unread`: un
+  va en el resumen del día siguiente. Leer lo pendiente, enviarlo y
+  marcarlo va en una transacción bajo un candado por espacio: dos
+  corridas que se solapen mandan un solo correo. La web todavía no tiene
+  una campana de avisos (ni `shell.tsx` ni `nav.tsx` la tienen): los
+  avisos de las últimas 24 horas se ven **arriba de «Salud de hoy»**
+  (`listTodayOutreachAlerts`, los urgentes primero, con su enlace), y
+  `/ventas` señala los urgentes junto a «Política de envío»
+  (`countUrgentOutreachAlerts`). Así un aviso llega aunque el correo no
+  esté configurado o falle. Hay un sexto tipo, `outreach_bounces_unread`: un
   Gmail conectado cuyo buzón de rebotes no se leyó nunca o lleva más de
   dos horas sin leerse (`readAlertSignalCounts.unreadMailboxes`), para
   que «ningún rebote» no se lea como «todo llegó» mientras la lectura no
@@ -579,8 +605,12 @@ que el despachador de VEN-10 tiene que usar, todo en
   lleva a la lista de cuentas caídas de `/ventas/politica#cuentas` (lo
   que dijo el proveedor y el paso para volver a enviar) hasta que exista
   `/ventas/canales` (se cambia en `CANALES_URL`,
-  `apps/worker/src/jobs/ventas/messages.ts`). Sin `APP_URL` el resumen
-  sale sin enlaces y el job lo avisa en el registro.
+  `apps/worker/src/jobs/ventas/messages.ts`); mientras, esa lista dice
+  dónde se hace (con `SUPPORT_EMAIL`, a quién escribir para reconectar).
+  Sin `APP_URL` el resumen sale sin enlaces —nunca a localhost— y el job
+  lo avisa en el registro; en producción sin `MAIL_FROM` no sale (un
+  remitente `.invalid` rebota) y el resultado lo cuenta en
+  `emailSkipped` con su motivo.
 - La política y la **salud de hoy** se ven en `/ventas/politica`. Solo
   la cambian 'owner' y 'admin' del espacio (0038 §7: políticas
   RESTRICTIVE de `outbound_policy`, y la pantalla lo dice); encender pide
