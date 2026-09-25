@@ -125,6 +125,7 @@ interface SendContextRow {
   provider_account_id: string | null;
   secret_ref: string | null;
   display_name: string | null;
+  reply_to_message_id: string | null;
 }
 
 /** Comprueba la fila y la pasa al contexto. Lanza OutreachShapeError con la ruta del campo que no cuadra. */
@@ -139,7 +140,10 @@ function parseSendContext(r: SendContextRow, previous: SendContext['previous']):
     scheduledFor: toDate(r.scheduled_for),
     capsReservedOn: textOrNull(fn, '$.caps_reserved_on', r.caps_reserved_on),
     channel,
-    stepType: r.step_type === null ? stepTypeForChannel(channel)! : oneOf(fn, '$.step_type', r.step_type, DISPATCHABLE_STEP_TYPES),
+    // Una respuesta de la bandeja (0064) no tiene paso: en correo es una respuesta en el hilo.
+    stepType: r.step_type !== null
+      ? oneOf(fn, '$.step_type', r.step_type, DISPATCHABLE_STEP_TYPES)
+      : r.reply_to_message_id !== null && channel === 'email' ? 'email_reply' : stepTypeForChannel(channel)!,
     stepDayOffset: r.day_offset === null ? null : int(fn, '$.day_offset', r.day_offset),
     stepOrderInDay: r.order_in_day === null ? null : int(fn, '$.order_in_day', r.order_in_day),
     attempt: int(fn, '$.attempt_count', r.attempt_count),
@@ -210,7 +214,8 @@ export async function loadSendContext(tx: WorkerSql, touchId: string): Promise<S
               coalesce(p.enabled, false) AS enabled, p.postal_address, coalesce(p.require_optout_link, true) AS require_optout_link,
               p.send_window_start::text AS w_start, p.send_window_end::text AS w_end,
               w.name AS workspace_name, w.locale, coalesce(s.timezone, w.timezone) AS tz,
-              a.id AS account_id, a.status AS account_status, a.provider, a.provider_account_id, a.secret_ref, a.display_name
+              a.id AS account_id, a.status AS account_status, a.provider, a.provider_account_id, a.secret_ref, a.display_name,
+              t.reply_to_message_id
          FROM outbound_touch t
          JOIN workspace w ON w.id = t.workspace_id
          JOIN company co ON co.id = t.company_id
@@ -226,7 +231,16 @@ export async function loadSendContext(tx: WorkerSql, touchId: string): Promise<S
     )
   ).rows[0];
   if (!r) return null;
-  const prev = r.enrollment_id
+  // El hilo: el del mensaje al que responde (una respuesta de la bandeja,
+  // 0064) o el del último envío del mismo enrolamiento y canal.
+  const prev = r.reply_to_message_id
+    ? (
+        await tx.query<{ subject: string | null; thread_ref: string | null; message_id_rfc: string | null; provider_message_id: string | null }>(
+          `SELECT subject, thread_ref, message_id_rfc, provider_message_id FROM outbound_message WHERE id = $1::uuid`,
+          [r.reply_to_message_id],
+        )
+      ).rows[0]
+    : r.enrollment_id
     ? (
         await tx.query<{ subject: string | null; thread_ref: string | null; message_id_rfc: string | null; provider_message_id: string | null }>(
           `SELECT subject, thread_ref, message_id_rfc, provider_message_id FROM outbound_touch
