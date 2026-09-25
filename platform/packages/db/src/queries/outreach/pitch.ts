@@ -286,28 +286,26 @@ export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise
   const status = input.intent === 'schedule' ? 'scheduled' : 'draft';
   const cited = JSON.stringify(claimsCitedIn(claims, subject, body));
   const approved = input.intent === 'schedule';
+  // Primero el toque queda en borrador con el texto nuevo; luego se guarda el marcado de la persona (la
+  // función de la base solo lo acepta sobre un correo en draft o held, 0059); y al final, si se programa,
+  // pasa a 'scheduled' con su aprobación. Todo en la misma transacción.
   let touchId = input.touchId;
   if (touchId) {
     const r = await tx.query<{ id: string }>(
       `UPDATE outbound_touch t
-          SET contact_id = $2::uuid, deal_id = $3::uuid, subject = $4, body = $5, claims = $6::jsonb, status = $7, held_reason = NULL,
-              scheduled_for = CASE WHEN $8 THEN greatest(coalesce(scheduled_for, $9::timestamptz), $9::timestamptz) ELSE scheduled_for END,
-              approved_by = CASE WHEN $8 THEN $10::uuid ELSE approved_by END,
-              approved_at = CASE WHEN $8 THEN $9::timestamptz ELSE approved_at END
-        WHERE id = $1::uuid AND company_id = $11::uuid AND channel = 'email' AND status IN ('draft','held') AND ${EDITABLE_PITCH_SQL}
+          SET contact_id = $2::uuid, deal_id = $3::uuid, subject = $4, body = $5, claims = $6::jsonb, status = 'draft', held_reason = NULL
+        WHERE id = $1::uuid AND company_id = $7::uuid AND channel = 'email' AND status IN ('draft','held') AND ${EDITABLE_PITCH_SQL}
         RETURNING id`,
-      [touchId, input.contactId, input.dealId, pf.cleanSubject, pf.cleanBody, cited, status, approved, input.now.toISOString(), input.userId, input.companyId],
+      [touchId, input.contactId, input.dealId, pf.cleanSubject, pf.cleanBody, cited, input.companyId],
     );
     if (r.rows.length === 0) return { ok: false, code: 'not_editable' };
   } else {
     touchId = (
       await tx.query<{ id: string }>(
-        `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, deal_id, channel, subject, body, claims, status, scheduled_for,
-                                     approved_by, approved_at)
-         VALUES (current_workspace_id(), $1::uuid, $2::uuid, $3::uuid, 'email', $4, $5, $6::jsonb, $7, $8::timestamptz,
-                 CASE WHEN $9 THEN $10::uuid END, CASE WHEN $9 THEN $8::timestamptz END)
+        `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, deal_id, channel, subject, body, claims, status, scheduled_for)
+         VALUES (current_workspace_id(), $1::uuid, $2::uuid, $3::uuid, 'email', $4, $5, $6::jsonb, 'draft', $7::timestamptz)
          RETURNING id`,
-        [input.companyId, input.contactId, input.dealId, pf.cleanSubject, pf.cleanBody, cited, status, input.now.toISOString(), approved, input.userId],
+        [input.companyId, input.contactId, input.dealId, pf.cleanSubject, pf.cleanBody, cited, input.now.toISOString()],
       )
     ).rows[0]!.id;
   }
@@ -315,7 +313,19 @@ export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise
   // sus [claim:id]: el editor lo vuelve a abrir así (si cambia «Para», el
   // saludo cambia con la persona) y ningún job lo pisa (0057, 0058). Lo que
   // sale, ya rellenado, está en outbound_touch.
-  await tx.query('SELECT outbound_generation_save_manual($1::uuid, $2, $3)', [touchId, input.subject, input.body]);
+  const saved = (
+    await tx.query<{ r: string }>('SELECT outbound_generation_save_manual($1::uuid, $2, $3) AS r', [touchId, input.subject, input.body])
+  ).rows[0]!.r;
+  if (saved !== 'ok') return { ok: false, code: 'not_editable' };
+  if (approved) {
+    await tx.query(
+      `UPDATE outbound_touch
+          SET status = 'scheduled', scheduled_for = greatest(coalesce(scheduled_for, $2::timestamptz), $2::timestamptz),
+              approved_by = $3::uuid, approved_at = $2::timestamptz
+        WHERE id = $1::uuid AND status = 'draft'`,
+      [touchId, input.now.toISOString(), input.userId],
+    );
+  }
   return { ok: true, touchId, status, sendingEnabled: policy.enabled };
 }
 

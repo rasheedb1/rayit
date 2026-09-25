@@ -359,8 +359,9 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
   'outbound_generation_save_manual(uuid,text,text)':
     'el pitch que escribe o edita una persona (0057, VEN-12): guarda su marcado [claim:id] en outbound_generation con ' +
     'outcome manual, o borra la fila si no hay texto, y así ningún job escribe encima de lo suyo. Mismo dueño y misma ' +
-    'cerradura: solo un toque del workspace de la transacción, y lo llama savePitch después de guardar el toque con ' +
-    'el pre-vuelo del servidor. EXECUTE solo para mc_app. No es de ningún disparador',
+    'cerradura: solo un correo del workspace de la transacción en draft o held, sin intento sin confirmar (la misma ' +
+    'guardia que outbound_generation_request, 0059); si no, not_editable sin escribir. La llama savePitch después de ' +
+    'guardar el borrador con el pre-vuelo del servidor y antes de programarlo. EXECUTE solo para mc_app. No es de ningún disparador',
   'outreach_writer_status()':
     '¿el worker redacta con IA? (0057, VEN-12): la llave de Anthropic vive en el worker y la web lo sabe por la última ' +
     'corrida de outbound.generate en job_run, que de un cron no tiene workspace. Solo LEE esas filas (una política TO ' +

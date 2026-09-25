@@ -318,3 +318,60 @@ test('en una agencia, cada creador cita solo sus campañas: las de otro no salen
   );
   assert.ok(!r.ok && r.code === 'preflight' && r.issues!.some((i) => i.code === 'unknown_claim'), JSON.stringify(r));
 });
+
+// Ronda 4: las cifras en palabras y la guardia del marcado a mano en la base.
+test('terminado cuando (ronda 4): un pitch con «el ochenta por ciento de mi audiencia» no se puede programar', async () => {
+  await t.admin(`UPDATE outbound_policy SET postal_address = 'Calle 93 # 11-26, Bogotá' WHERE workspace_id = '${WORKSPACE_LAURA}'`);
+  const body = [
+    'Hola {{first_name}},',
+    '',
+    'Vi el lanzamiento del cold brew en botella de Café Alma. El ochenta por ciento de mi audiencia toma café a diario y con la última marca de bebidas triplicamos las ventas del mes.',
+    '',
+    '¿Te interesa que te mande una idea de video para el lanzamiento?',
+    '',
+    'Laura',
+  ].join('\n');
+  const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, subject: 'Tu cold brew y mi audiencia', body, intent: 'schedule', now: new Date() }),
+  );
+  assert.equal(r.ok, false);
+  assert.ok(!r.ok && r.code === 'preflight', JSON.stringify(r));
+  assert.deepEqual(
+    !r.ok && r.issues!.filter((i) => i.code === 'unsourced_figure').map((i) => i.detail),
+    ['ochenta por ciento', 'triplicamos'],
+  );
+});
+
+test('la base no guarda un marcado a mano sobre un correo que ya no se edita (programado o enviado): not_editable', async () => {
+  await t.admin(`UPDATE outbound_policy SET postal_address = 'Calle 93 # 11-26, Bogotá' WHERE workspace_id = '${WORKSPACE_LAURA}'`);
+  const c = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => loadPitchComposer(tx, CAFE_ALMA, LOCALE));
+  const mediana = c.variants['']!.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
+  const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, contactId: VALENTINA, subject: 'Tu cold brew y mi audiencia', body: pitchWith(mediana, mediana.display), intent: 'schedule', now: new Date() }),
+  );
+  assert.ok(r.ok && r.status === 'scheduled', JSON.stringify(r));
+  const touchId = r.ok ? r.touchId : '';
+  const marcado = () =>
+    t.db.withWorkspace(WORKSPACE_LAURA, async (tx) =>
+      (await tx.query<{ outcome: string; body_marked: string }>('SELECT outcome, body_marked FROM outbound_generation WHERE touch_id = $1', [touchId])).rows[0]!,
+    );
+  const antes = await marcado();
+  assert.equal(antes.outcome, 'manual');
+  const llamar = () =>
+    t.db.withWorkspace(WORKSPACE_LAURA, async (tx) =>
+      (await tx.query<{ r: string }>('SELECT outbound_generation_save_manual($1::uuid, $2, $3) AS r', [touchId, 'Otro asunto', 'Otro texto que no salió.'])).rows[0]!.r,
+    );
+  // Programado: ya no se edita desde aquí.
+  assert.equal(await llamar(), 'not_editable');
+  // Enviado: tampoco, y el marcado sigue siendo el de lo que salió.
+  await t.admin(`UPDATE outbound_touch SET status = 'sent', sent_at = now(), recipient_address = 'valentina@cafealma.co' WHERE id = '${touchId}'`);
+  assert.equal(await llamar(), 'not_editable');
+  assert.deepEqual(await marcado(), antes);
+  // Tampoco sobre un toque de otro espacio.
+  assert.equal(
+    await t.db.withWorkspace(OTRO_WS, async (tx) =>
+      (await tx.query<{ r: string }>('SELECT outbound_generation_save_manual($1::uuid, $2, $3) AS r', [touchId, 'x', 'y'])).rows[0]!.r,
+    ),
+    'not_found',
+  );
+});
