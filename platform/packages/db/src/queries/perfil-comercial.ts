@@ -127,9 +127,11 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
 
   // La mediana de alcance en no seguidores por red, sobre los últimos
   // videos de cada una (post_metrics_latest.non_follower_share).
-  const { rows: noSeguidores } = await tx.query<{ platform_id: PlatformId; median: string | null; post_ids: string[] }>(
+  const { rows: noSeguidores } = await tx.query<{
+    platform_id: PlatformId; median: string | null; post_ids: string[]; as_of: Date | string | null;
+  }>(
     `WITH recientes AS (
-       SELECT p.id, p.platform_id, m.non_follower_share,
+       SELECT p.id, p.platform_id, m.non_follower_share, m.captured_at,
               row_number() OVER (PARTITION BY p.platform_id ORDER BY p.published_at DESC NULLS LAST, p.id) AS n
          FROM post p
          JOIN post_metrics_latest m ON m.post_id = p.id
@@ -137,7 +139,8 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
      )
      SELECT platform_id,
             percentile_cont(0.5) WITHIN GROUP (ORDER BY non_follower_share)::text AS median,
-            array_agg(id ORDER BY id) AS post_ids
+            array_agg(id ORDER BY id) AS post_ids,
+            max(captured_at) AS as_of
        FROM recientes
       WHERE n <= $2
       GROUP BY platform_id`,
@@ -162,12 +165,19 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
     hashtags: string[]; surface: string | null; media_type: string; duration_s: string | null;
     is_branded_content: boolean | null; published_at: Date | string | null; hook_type: string | null;
     views_at_cut: string | null; views_vs_median: string | null; outlier_tier: string | null; age_hours_cut: number | null;
+    score_computed_at: Date | string | null; baseline_id: string | null; baseline_median: string | null;
+    baseline_cut: number | null; baseline_computed_at: Date | string | null;
   }>(
+    // La línea base contra la que se puntuó cada video (post_score.baseline_id):
+    // la de su red en SU corte, que es la que hace verdad su «× tu mediana».
     `SELECT p.id, p.platform_id, coalesce(p.permalink, p.url) AS url, p.title, p.caption, p.hashtags, p.surface,
             p.media_type, p.duration_s, p.is_branded_content, p.published_at, b.hook_type,
-            s.views_at_cut, s.views_vs_median, s.outlier_tier, s.age_hours_cut
+            s.views_at_cut, s.views_vs_median, s.outlier_tier, s.age_hours_cut, s.computed_at AS score_computed_at,
+            bl.id AS baseline_id, bl.median_views AS baseline_median, bl.age_hours_cut AS baseline_cut,
+            bl.computed_at AS baseline_computed_at
        FROM post p
        LEFT JOIN post_score s ON s.post_id = p.id
+       LEFT JOIN creator_baseline bl ON bl.id = s.baseline_id
        LEFT JOIN creator_post_board b ON b.post_id = p.id
       WHERE p.creator_id = $1 AND NOT p.deleted_on_platform
       ORDER BY p.published_at DESC NULLS LAST, p.id
@@ -179,10 +189,10 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
   const { rows: campanas } = await tx.query<{
     id: string; name: string; company_name: string; status: string; views: string | null;
     brand_followers_gained: string | null; code_redemptions: string | null; attributed_revenue: string | null;
-    currency: string | null; views_vs_median: string | null;
+    currency: string | null; views_vs_median: string | null; computed_at: Date | string | null;
   }>(
     `SELECT c.id, c.name, co.name AS company_name, c.status, r.views, r.brand_followers_gained, r.code_redemptions,
-            r.attributed_revenue::text AS attributed_revenue, r.currency, r.views_vs_median
+            r.attributed_revenue::text AS attributed_revenue, r.currency, r.views_vs_median, r.computed_at
        FROM campaign c
        JOIN campaign_result r ON r.campaign_id = c.id
        JOIN company co ON co.id = c.company_id
@@ -213,7 +223,9 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
       id: r.id, platformId: r.platform_id, connectionId: r.connection_id, dimension: r.dimension, bucket: r.bucket,
       share: num(r.share), day: r.day,
     })),
-    nonFollowers: noSeguidores.map((r) => ({ platformId: r.platform_id, medianShare: num(r.median), postIds: r.post_ids })),
+    nonFollowers: noSeguidores.map((r) => ({
+      platformId: r.platform_id, medianShare: num(r.median), postIds: r.post_ids, asOf: r.as_of === null ? null : iso(r.as_of),
+    })),
     baselines: bases.map((r) => ({
       id: r.id, platformId: r.platform_id, ageHoursCut: r.age_hours_cut, medianViews: num(r.median_views),
       sampleSize: r.sample_size, isReliable: r.is_reliable, computedAt: iso(r.computed_at),
@@ -230,6 +242,14 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
               viewsVsMedian: num(r.views_vs_median),
               outlierTier: isTier(r.outlier_tier) ? r.outlier_tier : null,
               ageHoursCut: r.age_hours_cut,
+              computedAt: r.score_computed_at === null ? null : iso(r.score_computed_at),
+              baseline:
+                r.baseline_id === null || r.baseline_cut === null || r.baseline_computed_at === null
+                  ? null
+                  : {
+                      id: r.baseline_id, medianViews: num(r.baseline_median), ageHoursCut: r.baseline_cut,
+                      computedAt: iso(r.baseline_computed_at),
+                    },
             },
     })),
     campaigns: campanas.map((r) => ({
@@ -237,13 +257,15 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
       result: {
         views: num(r.views), brandFollowersGained: num(r.brand_followers_gained), codeRedemptions: num(r.code_redemptions),
         attributedRevenue: r.attributed_revenue as Decimal | null, currency: r.currency, viewsVsMedian: num(r.views_vs_median),
+        computedAt: r.computed_at === null ? null : iso(r.computed_at),
       },
     })),
     rateCard: tarifario
       ? {
           id: tarifario.card.id,
           currency: tarifario.card.currency,
-          computedAt: tarifario.card.computedAt,
+          // node-postgres entrega timestamptz como Date aunque el tipo diga string: se normaliza a ISO.
+          computedAt: iso(tarifario.card.computedAt as Date | string),
           items: tarifario.items
             .filter((i) => !i.isModifier)
             .map((i) => ({ id: i.id, labelEs: i.labelEs, platformId: i.platformId, priceLow: i.priceLow, priceHigh: i.priceHigh })),

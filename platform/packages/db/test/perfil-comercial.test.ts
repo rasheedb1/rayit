@@ -69,6 +69,26 @@ test('con el seed, el perfil trae los cinco mejores videos con sus cifras y su o
   assert.ok(perfil.formats.pieces.length > 0 && perfil.formats.tone.length > 0);
   // Cada claim tiene fila de origen: un uuid o un bigserial.
   for (const c of perfil.claims) assert.match(c.source.id, /^([0-9a-f-]{36}|\d+)$/, c.id);
+  // Toda cifra leída de una tabla dice cuándo se leyó (los agregados de captions y del porqué son de este cálculo).
+  const deEsteCalculo = new Set(['video.duration', 'why.group', 'why.rest', 'scored_videos', 'format.piece', 'format.content', 'tone', 'captions_read']);
+  for (const c of perfil.claims) if (!deEsteCalculo.has(c.key)) assert.ok(c.source.asOf && !Number.isNaN(Date.parse(c.source.asOf)), c.id);
+});
+
+test('cada video se mide contra la mediana de su red en su corte: views ≈ veces × esa mediana', async () => {
+  const perfil = await laura((tx) => computePerfil(tx, CREADORA_LAURA, new Date('2026-09-25T10:00:00Z')));
+  const claim = (id: string | null) => perfil.claims.find((c) => c.id === id)!;
+  for (const v of perfil.performance.top) {
+    const base = claim(v.baselineClaimId);
+    assert.ok(base, v.title);
+    assert.equal(base.source.table, 'creator_baseline');
+    assert.equal(base.params.platform, v.platformId);
+    assert.equal(base.params.cutHours, v.cutHours, v.title);
+    const x = Number(claim(v.multipleClaimId).value);
+    const views = Number(claim(v.viewsClaimId).value);
+    assert.ok(Math.abs(views / Number(base.value) - x) <= 0.01 * x, `${v.title}: ${views} / ${base.value} ≠ ${x}`);
+  }
+  // Las medianas de la cabecera dicen su propio corte.
+  for (const m of perfil.performance.medians) assert.equal(claim(m.claimId).params.cutHours, m.cutHours);
 });
 
 test('el perfil se guarda en media_kit.perfil_comercial sin tocar las demás claves, y se lee igual', async () => {
@@ -122,6 +142,12 @@ test('la edición a mano pasa el mismo verificador y no pisa una versión más n
   await assert.rejects(
     laura((tx) => saveNarrativeEdit(tx, CREADORA_LAURA, `${texto} Y 3 millones de fans.`, doc.narrative.writtenAt)),
     (e: unknown) => e instanceof PerfilComercialError && e.code === 'invalid_narrative' && e.issues[0]?.code === 'bare_number',
+  );
+  // Con letras tampoco: «dos millones de fans» es una cifra sin origen.
+  await assert.rejects(
+    laura((tx) => saveNarrativeEdit(tx, CREADORA_LAURA, `${texto} Tengo dos millones de fans.`, doc.narrative.writtenAt)),
+    (e: unknown) => e instanceof PerfilComercialError && e.code === 'invalid_narrative'
+      && e.issues.some((i) => i.code === 'number_word' && i.text === 'millones'),
   );
   await assert.rejects(
     laura((tx) => saveNarrativeEdit(tx, CREADORA_LAURA, texto, '2020-01-01T00:00:00.000Z')),
