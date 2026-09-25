@@ -8,7 +8,10 @@
  *   · el contacto de un enrolamiento o de un toque es del workspace,
  *     también para el worker (contact_visible_to);
  *   · send_started_at y unconfirmed_attempt son solo del despachador;
- *   · outbound_counter_release devuelve una plaza y nunca baja de cero.
+ *   · outbound_counter_release devuelve una plaza y nunca baja de cero;
+ *   · la cuenta de un toque es de su workspace y de su canal (disparador
+ *     outbound_touch_account_check), también para el worker;
+ *   · el cursor del lector de respuestas (replies_checked_at).
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -133,4 +136,30 @@ test('outbound_counter_release devuelve la plaza de hoy y de la semana, sin baja
     t.db.withWorkspace(WS_A, (tx) => tx.query(`SELECT outbound_counter_release($1, $2, 'email')`, [WS_A, ACC_A])),
     (e: { code?: string }) => e.code === '42501',
   );
+});
+
+test('la cuenta de un toque es de su workspace y de su canal, también para el worker (23514)', async () => {
+  const ACC_B = '00000041-0000-4000-8000-00000000acb1';
+  const LINKEDIN_A = '00000041-0000-4000-8000-00000000aca2';
+  await t.admin(`
+    INSERT INTO outreach_channel_account (id, workspace_id, channel, provider, provider_account_id, status, daily_cap, weekly_cap) VALUES
+      ('${ACC_B}', '${WS_B}', 'email', 'gmail_oauth', 'b@gmail.test', 'connected', 40, 200),
+      ('${LINKEDIN_A}', '${WS_A}', 'linkedin', 'unipile', 'unipile-a', 'connected', 20, 100);
+  `);
+  const cambiar = (cuenta: string | null) =>
+    t.db.asWorker((tx) => tx.query(`UPDATE outbound_touch SET channel_account_id = $2 WHERE id = $1`, [TOUCH_A, cuenta]));
+  const violacion = (e: { code?: string; message?: string }) => e.code === '23514' && /no es del workspace o del canal/.test(e.message ?? '');
+  await assert.rejects(cambiar(ACC_B), violacion, 'la cuenta de otro workspace');
+  await assert.rejects(cambiar(LINKEDIN_A), violacion, 'una cuenta de LinkedIn en un toque de correo');
+  // La suya, sí; y quitarla, también.
+  await cambiar(ACC_A);
+  await cambiar(null);
+});
+
+test('replies_checked_at existe y no es una prueba de envío: la puede escribir el lector (0041 §10)', async () => {
+  await t.db.asWorker((tx) => tx.query(`UPDATE outbound_touch SET replies_checked_at = now() WHERE id = $1`, [TOUCH_A]));
+  const leido = await t.db.asWorker(async (tx) =>
+    (await tx.query<{ v: boolean }>(`SELECT replies_checked_at IS NOT NULL AS v FROM outbound_touch WHERE id = $1`, [TOUCH_A])).rows[0]!.v,
+  );
+  assert.equal(leido, true);
 });
