@@ -12,6 +12,9 @@ vi.mock("./actions", () => ({
 
 import type { ChannelAccountRow } from "@mc/db/queries/canales";
 import { formatterFor } from "@/lib/format";
+import { POINTER_FOCUS_ATTR } from "./_lib/foco";
+import type { ChannelRowView } from "./_lib/filas";
+import { AccionFila, rowActionVariant } from "./accion-fila";
 import { ConectarBoton } from "./conectar-boton";
 import { Desconectar } from "./desconectar";
 import { FilaCanal } from "./fila-canal";
@@ -55,6 +58,14 @@ describe("Limites", () => {
     expect(weekly.value).toBe("10");
     expect(daily.getAttribute("aria-invalid")).toBe("true");
     expect(document.activeElement).toBe(daily);
+  });
+
+  it("el ancho de los campos lo fija la rejilla (dos columnas iguales), no el texto de su ayuda: ningún w-28 que el kit ignore", () => {
+    const { container } = limites();
+    const rejilla = container.querySelector("[data-limites-rejilla]")!;
+    expect(rejilla.className).toMatch(/\bgrid\b/);
+    expect(rejilla.className).toMatch(/\bgrid-cols-2\b/);
+    for (const input of container.querySelectorAll("input[type=number]")) expect(input.className).not.toMatch(/\bw-28\b/);
   });
 
   it("no deja que el navegador conteste con su globo: noValidate y sin max en los campos", () => {
@@ -109,6 +120,19 @@ describe("Desconectar", () => {
   });
 });
 
+describe("Desconectar: el botón no se parte", () => {
+  it("el margen negativo va en el envoltorio, que no se encoge ni parte el texto; el botón no lo lleva", () => {
+    render(<Desconectar accountId={ID} account="laura@cocina.test" />);
+    const button = screen.getByRole("button", { name: MESSAGES.actions.disconnectAccount("laura@cocina.test") });
+    expect(button.className).not.toMatch(/-ml-2\.5/);
+    const wrapper = button.parentElement!;
+    expect(wrapper.hasAttribute("data-desconectar")).toBe(true);
+    expect(wrapper.className).toMatch(/-ml-2\.5/);
+    expect(wrapper.className).toMatch(/\bwhitespace-nowrap\b/);
+    expect(wrapper.className).toMatch(/\bshrink-0\b/);
+  });
+});
+
 describe("Desconectar dentro de su fila", () => {
   it("al terminar, la fila anuncia qué cuenta se soltó (aria-live) y el foco va a su título, no al cuerpo", async () => {
     const notice = MESSAGES.actions.disconnected("laura@cocina.test");
@@ -130,6 +154,39 @@ describe("Desconectar dentro de su fila", () => {
     expect(said.closest("[aria-live='polite']")).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Correo" }));
     expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("con el ratón, el título recibe el foco igual pero sin anillo (data-foco-raton, hasta que lo pierde); con el teclado, con anillo", async () => {
+    desconectar.mockResolvedValue({ notice: MESSAGES.actions.disconnected("laura@cocina.test") });
+    const fila = () => render(
+      <ul>
+        <FilaCanal headingId="canal-email-titulo">
+          <h3 id="canal-email-titulo" tabIndex={-1}>Correo</h3>
+          <Desconectar accountId={ID} account="laura@cocina.test" />
+        </FilaCanal>
+      </ul>,
+    );
+    const { unmount } = fila();
+    fireEvent.click(screen.getByRole("button", { name: MESSAGES.actions.disconnectAccount("laura@cocina.test") }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: MESSAGES.actions.disconnect }), { detail: 1 });
+    });
+    const heading = screen.getByRole("heading", { name: "Correo" });
+    expect(document.activeElement).toBe(heading);
+    expect(heading.hasAttribute(POINTER_FOCUS_ATTR)).toBe(true);
+    act(() => heading.blur());
+    expect(heading.hasAttribute(POINTER_FOCUS_ATTR), "al perder el foco vuelve a pintar el anillo la próxima vez").toBe(false);
+    unmount();
+
+    fila();
+    fireEvent.click(screen.getByRole("button", { name: MESSAGES.actions.disconnectAccount("laura@cocina.test") }));
+    await act(async () => {
+      // Enter o espacio sobre un botón: el clic llega con detail 0.
+      fireEvent.click(screen.getByRole("button", { name: MESSAGES.actions.disconnect }), { detail: 0 });
+    });
+    const conTeclado = screen.getByRole("heading", { name: "Correo" });
+    expect(document.activeElement).toBe(conTeclado);
+    expect(conTeclado.hasAttribute(POINTER_FOCUS_ATTR)).toBe(false);
   });
 
   it("si la cuenta ya estaba desconectada, lo dice en la fila", async () => {
@@ -179,5 +236,36 @@ describe("ReintentarAvisos", () => {
     });
     expect((reactivarAvisos.mock.calls[0]![0] as FormData).get("accountId")).toBe(ID);
     expect(await screen.findByText(MESSAGES.banners.webhooksRestored)).toBeTruthy();
+  });
+});
+
+describe("AccionFila", () => {
+  const fila = (over: Partial<ChannelRowView>): ChannelRowView => ({
+    channel: "linkedin", state: "needs_reconnect", missing: [], unavailable: false, action: "reconnect", reason: null, reasonTone: "error",
+    others: [], addAnother: false, returned: false,
+    account: { id: ID } as ChannelAccountRow,
+    ...over,
+  });
+
+  it("«Reconectar» va en primario solo si se puede pulsar; deshabilitado, en secundario como el «Conectar» de al lado", () => {
+    expect(rowActionVariant({ action: "reconnect" }, false)).toBe("primary");
+    expect(rowActionVariant({ action: "reconnect" }, true)).toBe("secondary");
+    expect(rowActionVariant({ action: "connect" }, false)).toBe("secondary");
+
+    const { unmount } = render(<AccionFila row={fila({})} canManage />);
+    expect(screen.getByRole("button", { name: MESSAGES.actions.reconnect }).className).toMatch(/\bbg-accent\b/);
+    unmount();
+    // Una cuenta caída en un canal sin llaves: deshabilitado, sin el primario gris macizo que parecía activo.
+    render(<AccionFila row={fila({ unavailable: true })} canManage />);
+    const off = screen.getByRole("button", { name: MESSAGES.actions.unavailableLabel(MESSAGES.actions.reconnect, MESSAGES.detail.unavailable("LinkedIn")) });
+    expect((off as HTMLButtonElement).disabled).toBe(true);
+    expect(off.className).not.toMatch(/\bbg-accent\b/);
+    expect(off.className).toMatch(/\bbg-surface\b/);
+  });
+
+  it("sin el rol de gestionar canales también va deshabilitado y en secundario", () => {
+    render(<AccionFila row={fila({})} canManage={false} />);
+    const off = screen.getByRole("button", { name: MESSAGES.actions.unavailableLabel(MESSAGES.actions.reconnect, MESSAGES.detail.readOnly) });
+    expect(off.className).toMatch(/\bbg-surface\b/);
   });
 });

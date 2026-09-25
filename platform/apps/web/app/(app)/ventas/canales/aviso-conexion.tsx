@@ -23,8 +23,8 @@ export const REFRESH_FOR_MS = 60_000;
  *     volver a pedir la página), para que no reaparezca al recargar.
  */
 export function AvisoConexion({
-  message, notice, refresh, slowNotice = null,
-}: { message: string | null; notice: string | null; refresh: boolean; slowNotice?: string | null }) {
+  message, notice, warning = null, info = null, refresh, slowNotice = null,
+}: { message: string | null; notice: string | null; warning?: string | null; info?: string | null; refresh: boolean; slowNotice?: string | null }) {
   const router = useRouter();
   const [slow, setSlow] = useState(false);
   useEffect(() => {
@@ -47,5 +47,5 @@ export function AvisoConexion({
     }
     return undefined;
   }, [refresh, router]);
-  return <Aviso message={message} notice={refresh && slow && slowNotice ? slowNotice : notice} />;
+  return <Aviso message={message} warning={warning} info={info} notice={refresh && slow && slowNotice ? slowNotice : notice} />;
 }

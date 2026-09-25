@@ -182,7 +182,7 @@ describe("sin llaves", () => {
       const li = await unipileStart(post("/ventas/canales/conectar", { canal: "linkedin" }), deps({ env, unipile: null }));
       expect(li.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=no_configurado&canal=linkedin`);
       // El navegador no ve ni una variable; el servidor sí las registra.
-      expect(MESSAGES.banners.errors.no_configurado).not.toMatch(/[A-Z]{3,}_[A-Z]+/);
+      expect(MESSAGES.banners.errors.no_configurado("LinkedIn")).not.toMatch(/[A-Z]{3,}_[A-Z]+/);
       const logged = warn.mock.calls.map((c) => String(c[0])).join("\n");
       expect(logged).toMatch(/GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET/);
       expect(logged).toMatch(/UNIPILE_DSN, UNIPILE_ACCESS_TOKEN, UNIPILE_WEBHOOK_SECRET/);

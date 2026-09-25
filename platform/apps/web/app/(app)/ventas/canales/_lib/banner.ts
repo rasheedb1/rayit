@@ -21,6 +21,11 @@
  * de ?canal= cuando la frase lo lleva. Pero si la fila de ese canal ya
  * dice ese mismo motivo (la ruta lo dejó en last_error), el aviso de
  * arriba no lo repite: la misma falla, dos veces y con dos redacciones, era ruido.
+ *
+ * No todo ?error= es un error (NOTICE_TONE): «no disponible» va en ámbar
+ * (`warning`: no depende de la persona) y «Cancelaste la autorización» o
+ * «ese perfil ya estaba conectado» en neutro (`info`: la persona lo
+ * decidió, o no pasó nada malo). Lo demás, en rojo (`message`).
  * Pura: se prueba sin React.
  */
 import { MESSAGES } from "../messages";
@@ -30,15 +35,28 @@ import type { ChannelRowView } from "./filas";
 export type ChannelErrorCode = keyof typeof MESSAGES.banners.errors;
 
 export interface ChannelBanner {
+  /** Un error, en rojo. */
   message: string | null;
+  /** Salió bien, en verde. */
   notice: string | null;
+  /** No depende de la persona (el canal no está disponible), en ámbar. */
+  warning: string | null;
+  /** Lo decidió la persona o no pasó nada malo (canceló), en neutro. */
+  info: string | null;
   /** La conexión todavía no terminó: refrescar la pantalla hasta que la fila cambie. */
   refresh: boolean;
   /** Lo que dice el aviso cuando pasó el minuto de refrescos y la fila sigue sin confirmar. */
   slowNotice: string | null;
 }
 
-const NONE: ChannelBanner = { message: null, notice: null, refresh: false, slowNotice: null };
+const NONE: ChannelBanner = { message: null, notice: null, warning: null, info: null, refresh: false, slowNotice: null };
+
+/** El tono de los ?error= que no son un error; los que no están aquí van en rojo. */
+export const NOTICE_TONE: Partial<Record<ChannelErrorCode, "warning" | "info">> = {
+  no_configurado: "warning",
+  cancelada: "info",
+  duplicado: "info",
+};
 
 export function isChannelErrorCode(v: unknown): v is ChannelErrorCode {
   return typeof v === "string" && Object.hasOwn(MESSAGES.banners.errors, v);
@@ -58,7 +76,7 @@ export function channelBanner(params: { conectado?: string; error?: string; cana
     const message = errorText(params.error, service);
     // La fila ya lo dice con las mismas palabras: no se repite arriba.
     if (row?.reason === message) return NONE;
-    return { ...NONE, message };
+    return { ...NONE, [NOTICE_TONE[params.error] ?? "message"]: message };
   }
   if (!isChannel(params.conectado)) return NONE;
   const channel = params.conectado;

@@ -44,7 +44,7 @@ export async function reactivarAvisos(formData: FormData): Promise<AvisosState> 
   revalidatePath("/ventas/canales");
   if (r === "restored") return { notice: MESSAGES.banners.webhooksRestored };
   if (r === "not_found") return { message: MESSAGES.caps.notFound };
-  if (r === "not_configured") return { message: MESSAGES.banners.errors.no_configurado };
+  if (r === "not_configured") return { message: MESSAGES.detail.unavailableGeneric };
   return { message: MESSAGES.banners.webhooksStillMissing };
 }
 

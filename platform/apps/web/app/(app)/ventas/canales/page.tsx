@@ -11,7 +11,9 @@ import { ModuleTabs } from "../_componentes/pestanas";
 import { channelBanner } from "./_lib/banner";
 import { channelSetup, isChannel, type Channel } from "./_lib/config";
 import { CANALES } from "./_lib/conexion";
+import { AccionFila, connectTarget } from "./accion-fila";
 import { channelRows, pillFor, type ChannelRowView } from "./_lib/filas";
+import { HEADING_FOCUS } from "./_lib/foco";
 import { puedeGestionarCanales } from "./_lib/server";
 import { AvisoConexion } from "./aviso-conexion";
 import { ConectarBoton } from "./conectar-boton";
@@ -20,7 +22,6 @@ import { FilaCanal } from "./fila-canal";
 import { ChannelIcon } from "./iconos";
 import { Limites } from "./limites";
 import { MESSAGES } from "./messages";
-import { ReintentarAvisos } from "./reintentar-avisos";
 import { UsoCuenta } from "./uso";
 
 export const metadata: Metadata = { title: MESSAGES.meta.title };
@@ -50,43 +51,6 @@ function warnMissingOnce(rows: readonly ChannelRowView[]): void {
 }
 
 /**
- * El botón que abre la conexión de un canal: el correo va a Google,
- * LinkedIn e Instagram a Unipile. Reconectar manda el id de NUESTRA fila
- * (el servidor lee el buzón o la cuenta: Google propone ese buzón con
- * login_hint); «Conectar otra cuenta» del correo manda otra=1 para que
- * Google pregunte qué cuenta en vez de autorizar sola la sesión abierta.
- */
-function connectTarget(channel: Channel, opts: { reconnectId?: string; another?: boolean } = {}): { action: string; fields: Record<string, string> } {
-  const extra: Record<string, string> = opts.reconnectId ? { reconectar: opts.reconnectId } : {};
-  if (channel === "email") return { action: "/api/oauth/google", fields: { ...extra, ...(opts.another ? { otra: "1" } : {}) } };
-  return { action: `${CANALES}/conectar`, fields: { canal: channel, ...extra } };
-}
-
-/**
- * El botón de la fila. Conectar, reconectar y volver a empezar son un
- * formulario (POST): el correo va a Google, LinkedIn e Instagram a
- * Unipile, con estado de carga (ConectarBoton). Reconectar manda el id de
- * NUESTRA fila; el account_id del proveedor lo lee el servidor. Los
- * avisos de una cuenta conectada se reintentan con una acción de
- * servidor, sin salir de la página. Sin llaves, el botón sigue ahí pero
- * deshabilitado, con el motivo en su nombre accesible.
- */
-function RowAction({ row, canManage }: { row: ChannelRowView; canManage: boolean }) {
-  if (!row.action) return null;
-  const label = row.action === "connect" ? MESSAGES.actions.connect : row.action === "reconnect" ? MESSAGES.actions.reconnect : MESSAGES.actions.retry;
-  // Deshabilitado con el motivo en su nombre accesible: sin llaves en la plataforma, o sin el rol para gestionar canales.
-  const why = row.unavailable ? MESSAGES.detail.unavailable : !canManage ? MESSAGES.detail.readOnly : null;
-  const a11y = why ? MESSAGES.actions.unavailableLabel(label, why) : undefined;
-  const disabled = why !== null;
-  if (row.action === "rewebhook" && row.account) {
-    return <ReintentarAvisos accountId={row.account.id} disabled={disabled} ariaLabel={a11y} />;
-  }
-  const variant = row.action === "reconnect" ? "primary" : "secondary";
-  const { action, fields } = connectTarget(row.channel, { reconnectId: row.action === "reconnect" ? row.account?.id : undefined });
-  return <ConectarBoton action={action} fields={fields} label={label} variant={variant} disabled={disabled} ariaLabel={a11y} />;
-}
-
-/**
  * La frase de «no disponible» de una fila, o null. Una cuenta caída en un
  * canal sin llaves no repite «Vuelve a conectar la cuenta» (su botón va
  * deshabilitado): dice que necesita reconectarse y que el canal no está.
@@ -97,7 +61,7 @@ function unavailableText(row: ChannelRowView, quiet: boolean): string | null {
   if (!row.unavailable) return null;
   if (row.state === "connected") return MESSAGES.detail.unavailableConnected;
   if (row.state === "needs_reconnect" || row.state === "error") return MESSAGES.detail.unavailableDown;
-  return quiet ? null : MESSAGES.detail.unavailable;
+  return quiet ? null : MESSAGES.detail.unavailable(MESSAGES.channels[row.channel].provider);
 }
 
 /** Las frases de debajo de la fila: por qué está así y qué hacer. Nunca nombres de variables ni códigos del proveedor. */
@@ -119,7 +83,12 @@ function Hints({ row, adminDetails, quiet }: { row: ChannelRowView; adminDetails
   if (lines.length === 0 && !reason && !showAdmin) return null;
   return (
     <div className="flex flex-col gap-1.5">
-      {reason && (row.state === "connected" ? <p className="text-xs text-warn">{reason}</p> : <Aviso message={reason} size="xs" />)}
+      {reason && (
+        row.state === "connected" ? <p className="text-xs text-warn">{reason}</p>
+          // Cancelar no es un error: texto neutro, sin el recuadro rojo.
+          : row.reasonTone === "neutral" ? <p className="text-xs text-fg-2">{reason}</p>
+          : <Aviso message={reason} size="xs" />
+      )}
       {lines.map((l) => <p key={l.key} className={`text-xs ${l.tone === "warn" ? "text-warn" : "text-fg-2"}`}>{l.text}</p>)}
       {showAdmin && (
         <details className="text-xs text-fg-3">
@@ -183,12 +152,8 @@ function AccountLine({
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div className="min-w-0 flex-1">
           {heading && (
-            // Recibe el foco al desconectar (FilaCanal): sin anillo al ratón, y con teclado uno pegado al texto, no a la fila.
-            <h3
-              id={heading.id}
-              tabIndex={-1}
-              className="w-fit rounded-sm text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ink"
-            >
+            // Recibe el foco al desconectar (FilaCanal): con teclado, un anillo dentro del título; tras un clic de ratón, ninguno.
+            <h3 id={heading.id} tabIndex={-1} className={`text-sm font-semibold ${HEADING_FOCUS}`}>
               {heading.text}
             </h3>
           )}
@@ -201,7 +166,7 @@ function AccountLine({
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <Pill kind={pill.kind}>{pill.label}</Pill>
-          <RowAction row={row} canManage={canManage} />
+          <AccionFila row={row} canManage={canManage} />
         </div>
       </div>
       <Hints row={row} adminDetails={adminDetails} quiet={quiet} />
@@ -274,7 +239,7 @@ export default async function CanalesPage({ searchParams }: { searchParams: Prom
       <PageHeader eyebrow={MESSAGES.header.eyebrow} title={MESSAGES.header.title} description={MESSAGES.header.description} />
       <ModuleTabs active={CANALES} />
       <div className="flex flex-col gap-4">
-        <AvisoConexion message={banner.message} notice={banner.notice} refresh={banner.refresh} slowNotice={banner.slowNotice} />
+        <AvisoConexion {...banner} />
         {quiet && <p className="text-sm text-warn">{MESSAGES.detail.allUnavailable}</p>}
         {!canManage && <p className="text-sm text-fg-2">{MESSAGES.detail.readOnly}</p>}
         {!policy.enabled && <p className="text-sm text-fg-2">{MESSAGES.policyOff}</p>}

@@ -76,9 +76,13 @@ export const MESSAGES = {
     },
     /**
      * Sin las llaves del proveedor en la plataforma: para el creador, en
-     * voz de producto. Sin promesas: nada avisa cuando las llaves llegan.
+     * voz de producto y con el nombre del servicio. Sin promesas: nada
+     * avisa cuando las llaves llegan. Es la misma frase que el aviso de
+     * arriba (banners.errors.no_configurado): la fila y el aviso dicen lo mismo.
      */
-    unavailable: "Este canal todavía no está disponible en On Cue.",
+    unavailable: (service: string) => `${service} todavía no está disponible en On Cue.`,
+    /** Lo mismo cuando no se sabe de qué servicio (el «Volver a intentar» de los avisos, sin la cuenta a mano). */
+    unavailableGeneric: "Este canal todavía no está disponible en On Cue.",
     /** Los tres canales sin llaves: UN aviso arriba de la lista, y en cada fila solo la pastilla. */
     allUnavailable: "Los canales de outreach todavía no están disponibles en On Cue. Puedes seguir usando el resto de Ventas.",
     /** Una cuenta conectada que no puede enviar mientras el canal no esté disponible. */
@@ -151,6 +155,8 @@ export const MESSAGES = {
    * error que depende del servicio es una función de su nombre (Gmail,
    * LinkedIn, Instagram): la persona conectó «LinkedIn», no «el
    * proveedor». Los mismos textos son el motivo de la fila (filas.ts).
+   * No todo lo que vuelve por ?error= es un error: el tono de cada código
+   * (rojo, ámbar o neutro) lo fija NOTICE_TONE en _lib/banner.ts.
    */
   banners: {
     connected: (channel: string) => `${channel} quedó conectado.`,
@@ -170,7 +176,8 @@ export const MESSAGES = {
         `No se pudo conectar tu ${service}. Revisa el usuario y la contraseña, o el código de verificación, y vuelve a intentarlo.`,
       intercambio: "Google no aceptó la autorización. Vuelve a intentar conectar el correo.",
       sin_creador: "Este espacio no tiene un perfil de creador; no se puede conectar una cuenta.",
-      no_configurado: "Este canal todavía no está disponible en tu cuenta de On Cue.",
+      /** Sin las llaves del servicio en la plataforma: la misma frase que la fila (detail.unavailable), en ámbar. */
+      no_configurado: (service: string) => `${service} todavía no está disponible en On Cue.`,
       canal_equivocado: "La cuenta que conectaste no es de ese canal.",
       otro_espacio: "Esta conexión se empezó en otro espacio de On Cue. Cambia a ese espacio y vuelve a intentarlo.",
       soltando: "Todavía estábamos desconectando esa cuenta. Espera un minuto y vuelve a intentarlo.",

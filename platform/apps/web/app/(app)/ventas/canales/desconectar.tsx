@@ -57,10 +57,12 @@ export function Desconectar({ accountId, account }: { accountId: string; account
             size="sm"
             variant="danger"
             loading={pending}
-            onClick={() => {
+            onClick={(e) => {
               const form = new FormData();
               form.set("accountId", accountId);
-              start(async () => announce(await desconectar(form)));
+              // detail 0: lo pulsó el teclado (Enter o espacio). Con el ratón, el título de la fila recibe el foco sin anillo.
+              const pointer = e.detail > 0;
+              start(async () => announce({ ...(await desconectar(form)), pointer }));
             }}
           >
             {MESSAGES.actions.disconnect}
@@ -70,9 +72,14 @@ export function Desconectar({ accountId, account }: { accountId: string; account
           </Button>
         </div>
       ) : (
-        <span ref={openerRef}>
-          {/* -ml-2.5: el texto del botón fantasma queda alineado con el de la fila (su padding es px-2.5). */}
-          <Button size="sm" variant="ghost" className="-ml-2.5" onClick={() => setAsking(true)} aria-label={MESSAGES.actions.disconnectAccount(account)}>
+        /*
+         * -ml-2.5 en el envoltorio, no en el botón: el texto del botón fantasma
+         * queda alineado con el de la fila (su padding es px-2.5). En el botón,
+         * el margen negativo le quitaba 10 px al ancho del envoltorio y el
+         * max-w-full del kit partía «Desconectar» en dos líneas.
+         */
+        <span ref={openerRef} className="-ml-2.5 inline-flex shrink-0 whitespace-nowrap" data-desconectar>
+          <Button size="sm" variant="ghost" onClick={() => setAsking(true)} aria-label={MESSAGES.actions.disconnectAccount(account)}>
             {MESSAGES.actions.disconnect}
           </Button>
         </span>

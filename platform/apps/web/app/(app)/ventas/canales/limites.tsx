@@ -38,17 +38,23 @@ export function Limites({
   return (
     <form ref={formRef} onSubmit={onSubmit} noValidate className="flex flex-col gap-3" aria-label={t.legend(account)}>
       <input type="hidden" name="accountId" value={accountId} />
-      <div className="flex flex-wrap gap-x-6 gap-y-3">
-        <Field label={t.daily} help={dailyHelp} error={errors["dailyCap"]}>
+      {/*
+        * El ancho lo fija la rejilla, no el campo: el CONTROL del kit trae w-full
+        * y un w-28 en el Input no hacía nada, así que cada campo medía lo que su
+        * ayuda («Máximo 20 (política del espacio)») y cambiaba con el idioma. Dos
+        * columnas iguales, de 10rem como mucho; la ayuda larga se parte debajo.
+        */}
+      <div className="grid max-w-[21.5rem] grid-cols-2 gap-x-6 gap-y-3" data-limites-rejilla>
+        <Field label={t.daily} help={dailyHelp} error={errors["dailyCap"]} className="min-w-0">
           <Input
             name="dailyCap" type="number" inputMode="numeric" min={0} step={1}
-            defaultValue={dailyCap ?? ""} placeholder={dailyPlaceholder} className="w-28 tabular-nums"
+            defaultValue={dailyCap ?? ""} placeholder={dailyPlaceholder} className="tabular-nums"
           />
         </Field>
-        <Field label={t.weekly} help={weeklyHelp} error={errors["weeklyCap"]}>
+        <Field label={t.weekly} help={weeklyHelp} error={errors["weeklyCap"]} className="min-w-0">
           <Input
             name="weeklyCap" type="number" inputMode="numeric" min={0} step={1}
-            defaultValue={weeklyCap ?? ""} placeholder={weeklyPlaceholder} className="w-28 tabular-nums"
+            defaultValue={weeklyCap ?? ""} placeholder={weeklyPlaceholder} className="tabular-nums"
           />
         </Field>
       </div>

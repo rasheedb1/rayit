@@ -22,9 +22,13 @@
  * explicación al lado. Nunca una fila en rojo sin botón y sin motivo.
  *
  * El motivo de la fila sale de un CÓDIGO (last_error, que la base guarda
- * sin frases): REASON_BY_CODE lo traduce con las frases de messages.ts.
- * Un motivo pasajero (el servicio no respondió) solo se enseña si es de
- * las últimas 24 horas: días después ya no dice nada útil.
+ * sin frases): REASON_BY_CODE lo traduce con las frases de messages.ts, y
+ * un código que no conoce sale siempre como detail.unknownReason, nunca
+ * como el texto de la base. Los motivos de UN intento (el servicio no
+ * respondió, la persona canceló, la contraseña no era) solo se enseñan si
+ * son de las últimas 24 horas (EXPIRING_CODES): días después ya no dicen
+ * nada útil y solo ponían ruido en una fila «Sin conectar». Cancelar no es
+ * un error: su motivo va en neutro (`reasonTone`), no en el recuadro rojo.
  */
 import {
   CHANNEL_ERROR_CODES, isLiveChannelStatus, parseUnipileStatusCode, type ChannelAccountRow,
@@ -45,6 +49,8 @@ export type RowState = "not_configured" | "disconnected" | "pending" | "expired"
  */
 export type RowAction = "connect" | "reconnect" | "retry" | "rewebhook" | null;
 
+export type ReasonTone = "error" | "neutral";
+
 export interface ChannelRowView {
   channel: Channel;
   state: RowState;
@@ -56,6 +62,8 @@ export interface ChannelRowView {
   action: RowAction;
   /** El motivo, en español, de la última falla, si hay que decirlo. */
   reason: string | null;
+  /** Cómo se pinta el motivo: «error» en el recuadro rojo; «neutral» en texto (la persona canceló: no es un error). */
+  reasonTone: ReasonTone;
   /** Las demás cuentas vivas del canal, cada una con su vista (y `others` vacío). */
   others: ChannelRowView[];
   /** El canal ya tiene una cuenta conectada y se puede conectar otra (solo en la fila principal, con el canal disponible). */
@@ -105,21 +113,19 @@ const REASON_BY_CODE: Record<string, (service: string) => string> = {
   [CHANNEL_ERROR_CODES.transient]: () => MESSAGES.detail.reasons.transient,
 };
 
-/** Los motivos pasajeros: días después ya no dicen nada, y no se enseñan. */
-const TRANSIENT_CODES: ReadonlySet<string> = new Set([CHANNEL_ERROR_CODES.providerError, CHANNEL_ERROR_CODES.transient]);
-
 /**
- * Las frases que la ronda 4 escribía en last_error (el keepalive y el
- * webhook). Una cuenta viva se renueva a diario y pasa a guardar el código;
- * mientras tanto se enseñan tal cual, porque son nuestras. Se borra en la
- * ronda siguiente.
+ * Los motivos de un intento concreto: se enseñan solo si son de las
+ * últimas 24 horas (lastErrorRecent). Pasajeros (el servicio no
+ * respondió, no se pudo comprobar) o de un intento que la persona ya dejó
+ * atrás (canceló en Google, la contraseña no era): el keepalive borra el
+ * intento a los 7 días, y hasta entonces la fila no tiene que repetirlo.
  */
-const LEGACY_PHRASES: ReadonlySet<string> = new Set(
-  ["Gmail", "LinkedIn", "Instagram"].flatMap((n) => [
-    ...["CREDENTIALS", "STOPPED", "DELETED", "DISCONNECTED", null].map((s) => H.unipileStatus(s, n)),
-    H.unipileGone(n),
-  ]).concat([H.gmailRevoked, H.gmailNoSecret, H.transient]),
-);
+const EXPIRING_CODES: ReadonlySet<string> = new Set([
+  CHANNEL_ERROR_CODES.providerError, CHANNEL_ERROR_CODES.transient, CHANNEL_ERROR_CODES.cancelled, CHANNEL_ERROR_CODES.authFailed,
+]);
+
+/** Los motivos que no son un error: la persona lo decidió. Van en texto neutro, no en el recuadro rojo. */
+const NEUTRAL_CODES: ReadonlySet<string> = new Set([CHANNEL_ERROR_CODES.cancelled]);
 
 /**
  * El motivo de una cuenta en frase, o null si no hay nada que decir.
@@ -128,26 +134,31 @@ const LEGACY_PHRASES: ReadonlySet<string> = new Set(
  */
 export function reasonText(lastError: string | null, channel: Channel, recent = true): string | null {
   if (!lastError) return null;
-  if (TRANSIENT_CODES.has(lastError) && !recent) return null;
+  if (EXPIRING_CODES.has(lastError) && !recent) return null;
   const service = MESSAGES.channels[channel].provider;
   const status = parseUnipileStatusCode(lastError);
   if (status !== null) return H.unipileStatus(status, service);
   const byCode = Object.hasOwn(REASON_BY_CODE, lastError) ? REASON_BY_CODE[lastError] : undefined;
-  if (byCode) return byCode(service);
-  return LEGACY_PHRASES.has(lastError) ? lastError : MESSAGES.detail.unknownReason;
+  return byCode ? byCode(service) : MESSAGES.detail.unknownReason;
+}
+
+/** El tono del motivo de un código (ver NEUTRAL_CODES). */
+export function reasonTone(lastError: string | null): ReasonTone {
+  return lastError !== null && NEUTRAL_CODES.has(lastError) ? "neutral" : "error";
 }
 
 type Base = Pick<ChannelRowView, "channel" | "missing" | "unavailable">;
-const rest = { others: [] as ChannelRowView[], addAnother: false, returned: false };
+const rest = { others: [] as ChannelRowView[], addAnother: false, returned: false, reasonTone: "error" as ReasonTone };
 
 /** La vista de UNA cuenta viva: conectada (con «Volver a intentar» si le faltan los avisos) o caída (con «Reconectar»). */
 function liveRow(base: Base, account: ChannelAccountRow): ChannelRowView {
   const reason = reasonText(account.lastError, base.channel, account.lastErrorRecent);
+  const tone = reasonTone(account.lastError);
   if (account.status === "connected") {
     const action: RowAction = account.lastError === CHANNEL_ERROR_CODES.webhooksMissing ? "rewebhook" : null;
-    return { ...base, ...rest, account, state: "connected", action, reason };
+    return { ...base, ...rest, account, state: "connected", action, reason, reasonTone: tone };
   }
-  return { ...base, ...rest, account, state: account.status as "needs_reconnect" | "error", action: "reconnect", reason };
+  return { ...base, ...rest, account, state: account.status as "needs_reconnect" | "error", action: "reconnect", reason, reasonTone: tone };
 }
 
 /**
@@ -174,6 +185,6 @@ export function channelRows(accounts: readonly ChannelAccountRow[], setup: Chann
       return { ...base, ...rest, account, state, action: "retry", reason: null, returned: state === "pending" && opts.returnedFrom === channel };
     }
     const reason = reasonText(account?.lastError ?? null, channel, account?.lastErrorRecent ?? true);
-    return { ...base, ...rest, account, state: "disconnected", action: "connect", reason };
+    return { ...base, ...rest, account, state: "disconnected", action: "connect", reason, reasonTone: reasonTone(account?.lastError ?? null) };
   });
 }
