@@ -17,5 +17,8 @@ export default defineConfig({
     setupFiles: ["./vitest.setup.ts"],
     include: ["**/*.test.{ts,tsx}"],
     exclude: ["node_modules", ".next"],
+    // Las pruebas que importan un módulo entero (una página, unas acciones) tardan en transformar la primera vez;
+    // con varios agentes a la vez en la máquina (carga 50-60) pasaban de los 5 s por defecto sin fallar de verdad.
+    testTimeout: 20_000,
   },
 });

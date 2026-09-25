@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { formatterFor } from "@/lib/format";
 import { parseGuidanceOutput } from "./redactor-salida";
-import { avisoDePolitica, horaDePaso, resumenFlujo, textoDeGuia, textoDeNota } from "./vista";
+import { MESSAGES, plural } from "../messages";
+import { avisoDePolitica, esperaEntre, horaDePaso, resumenFlujo, textoDeGuia, textoDeNota } from "./vista";
 
 const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
 const plantillas = new Map([["cocina-campana-activa", "Cocina · marca con campaña activa"]]);
@@ -36,6 +37,42 @@ describe("cadencias · lo que la pantalla decide sin base", () => {
       textoDeNota({ code: "rerouted", step: 1, from: "instagram_dm", to: "instagram_dm", manual: true, reason: "channel_not_allowed" }, f, plantillas),
     ).toBe("Paso 1: queda como tarea a mano en Instagram, porque tu política de envío no lo permite.");
     expect(textoDeNota({ code: "channel_down", channel: "linkedin" }, f, plantillas)).toMatch(/LinkedIn pide reconectar/);
+  });
+
+  it("el ajuste a la política se dice con los nombres de los ángulos y la cifra del espacio", () => {
+    const angulos = new Map([["prueba_social", "Prueba social"], ["concepto_creativo", "Concepto creativo"]]);
+    expect(
+      textoDeNota(
+        { code: "fitted_to_policy", softened: ["prueba_social"], dropped: [], shiftedDays: 2, maxTouches: 4, minDays: 3 },
+        f,
+        plantillas,
+        angulos,
+      ),
+    ).toBe(
+      "Ajustada a tu política de envío (hasta 4 mensajes por marca, 3 días entre ellos): «Prueba social» pasa a una reacción en su publicación, que no cuenta como mensaje; el cierre sale 2 días más tarde.",
+    );
+    expect(
+      textoDeNota(
+        { code: "fitted_to_policy", softened: [], dropped: ["prueba_social", "concepto_creativo"], shiftedDays: 1, maxTouches: 2, minDays: 1 },
+        f,
+        plantillas,
+        angulos,
+      ),
+    ).toMatch(/«Prueba social» y «Concepto creativo» se quitan; el cierre sale 1 día más tarde\.$/);
+  });
+
+  it("la espera entre dos pasos, en días hábiles y con su plural", () => {
+    expect(esperaEntre(undefined, { dayOffset: 0 }, f)).toBeNull();
+    expect(esperaEntre({ dayOffset: 1 }, { dayOffset: 4 }, f)).toBe("Espera 3 días hábiles");
+    expect(esperaEntre({ dayOffset: 1 }, { dayOffset: 2 }, f)).toBe("Espera 1 día hábil");
+    expect(esperaEntre({ dayOffset: 2 }, { dayOffset: 2 }, f)).toBe("El mismo día");
+  });
+
+  it("los plurales salen de Intl.PluralRules, no de count === 1", () => {
+    expect(MESSAGES.notas.politica.overCap("1", 1, "4")).toBe("1 de estos mensajes no saldrá: tu política permite 4 mensajes por marca.");
+    expect(MESSAGES.notas.politica.overCap("2", 2, "4")).toMatch(/^2 de estos mensajes no saldrán/);
+    expect(plural({ one: "{n} paso", other: "{n} pasos" })("1.000", 1000)).toBe("1.000 pasos");
+    expect(MESSAGES.erroresConLimite.too_many_steps!("12")).toBe("Una cadencia lleva hasta 12 pasos.");
   });
 
   it("quién redactó la guía, y por qué no fue el modelo", () => {

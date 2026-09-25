@@ -16,7 +16,10 @@ const { q, enrollContacts, outboundHealth, redirect } = vi.hoisted(() => ({
     createSequenceFromProposal: vi.fn(),
     replaceStepsFromProposal: vi.fn(),
     recordRecommendLlmCall: vi.fn(),
-    listEnrollableDeals: vi.fn(),
+    duplicateSequence: vi.fn(),
+    liveEnrollmentElsewhere: vi.fn(),
+    enrollableContactsOfDeal: vi.fn(),
+    contactNames: vi.fn(),
   },
   enrollContacts: vi.fn(),
   outboundHealth: vi.fn(),
@@ -43,6 +46,7 @@ vi.mock("@mc/db/queries/outreach", async (original) => ({
   outboundHealth: (...a: unknown[]) => outboundHealth(...a),
 }));
 
+import { checkSequenceAgainstPolicy } from "@mc/core";
 import { CadenciaError } from "@mc/db/queries/cadencias";
 import { proponerCadencia } from "./_lib/proponer";
 import { activarCadencia, enrolarDesdeNegocio, guardarPaso, proponerDesdeSenal } from "./actions";
@@ -53,6 +57,7 @@ const STEP = "00000013-0000-4000-8000-000000000b01";
 const SIGNAL = "00000002-0000-4000-8000-00000005e001";
 const CAMILA = "00000002-0000-4000-8000-0000000c0001";
 const DEAL = "00000002-0000-4000-8000-0000000dea07";
+const OTRA = "00000013-0000-4000-8000-00000000c001";
 
 function form(values: Record<string, string | string[]>): FormData {
   const fd = new FormData();
@@ -70,6 +75,7 @@ const contexto = {
   contacts: [{ id: CAMILA, name: "Camila Rojas", roleTitle: null, hasEmail: true, hasLinkedin: true, hasInstagram: false, optedOut: false }],
   channels: { email: "connected", linkedin: "connected", instagram_dm: "missing" },
   allowedChannels: ["email", "linkedin"],
+  policy: { maxTouchesPerCompany: 4, minDaysBetweenTouches: 3 },
   nicheSlugs: [],
   brief: null,
   templates: [{
@@ -90,6 +96,9 @@ beforeEach(() => {
   redirect.mockReset();
   q.getRecommendationContext.mockResolvedValue(contexto);
   q.createSequenceFromProposal.mockResolvedValue(SEQ);
+  q.liveEnrollmentElsewhere.mockResolvedValue(null);
+  q.enrollableContactsOfDeal.mockImplementation(async (_tx: unknown, _deal: string, ids: string[]) => ids);
+  q.contactNames.mockResolvedValue(new Map());
   vi.unstubAllEnvs();
 });
 
@@ -123,6 +132,29 @@ describe("proponer", () => {
     expect(input.proposal.steps[0].guidanceEs).toMatch(/^Guía redactada/);
   });
 
+  it("la propuesta nace dentro de la política del espacio: seis pasos y ninguno cortado ni corrido", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    await proponerDesdeSenal({}, form({ signalId: SIGNAL, contactId: "", sequenceId: "" }));
+    const [, input] = q.createSequenceFromProposal.mock.calls[0]!;
+    const pasos = input.proposal.steps.map((s: { stepType: string; dayOffset: number; orderInDay: number }, i: number) => ({ id: String(i), ...s }));
+    expect(pasos).toHaveLength(6);
+    expect(checkSequenceAgainstPolicy(pasos, contexto.policy)).toEqual({ overCap: [], closerThanGap: [] });
+    expect(input.proposal.steps.at(-1).angleKey).toBe("sintesis");
+    expect(input.proposal.notes).toContainEqual(expect.objectContaining({ code: "fitted_to_policy", softened: ["prueba_social"] }));
+  });
+
+  it("«Sin persona todavía» planea sin nadie y no guarda a quién escribir; vacío es la persona por defecto", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    await proponerDesdeSenal({}, form({ signalId: SIGNAL, contactId: MESSAGES.proponer.ninguna, sequenceId: SEQ }));
+    const [, seq, input] = q.replaceStepsFromProposal.mock.calls[0]!;
+    expect(seq).toBe(SEQ);
+    expect(input.meta.contactId).toBeNull();
+    expect(input.proposal.notes).toContainEqual({ code: "no_contact" });
+
+    await proponerDesdeSenal({}, form({ signalId: SIGNAL, contactId: "", sequenceId: SEQ }));
+    expect(q.replaceStepsFromProposal.mock.calls[1]![2].meta.contactId).toBe(CAMILA);
+  });
+
   it("sin presupuesto de hoy no llama al modelo", async () => {
     outboundHealth.mockResolvedValue({ llm: { spentToday: 5, dailyCap: 5, currency: "USD" } });
     const writer = vi.fn();
@@ -150,6 +182,22 @@ describe("activar (el segundo clic)", () => {
     expect(r.ok).toMatch(/Camila Rojas dentro: 5 por redactar y 1 sin dirección/);
   });
 
+  it("si la persona ya está viva en otra cadencia, activa sin enrolarla y dice en cuál", async () => {
+    q.getSequenceDetail.mockResolvedValue({
+      proposal: { contactId: CAMILA, dealId: DEAL }, proposalContact: { id: CAMILA, name: "Camila Rojas" }, enrollments: { total: 0 },
+    });
+    q.liveEnrollmentElsewhere.mockResolvedValue({ sequenceId: "x", name: "Fresko Market · Campaña activa" });
+    const r = await activarCadencia(SEQ);
+    expect(enrollContacts).not.toHaveBeenCalled();
+    expect(r.ok).toBe(MESSAGES.estado.activadaYaEnOtra("Camila Rojas", "Fresko Market · Campaña activa"));
+  });
+
+  it("una copia (duplicar) no trae persona: activarla no enrola a nadie", async () => {
+    q.getSequenceDetail.mockResolvedValue({ proposal: { contactId: null, dealId: null }, proposalContact: null, enrollments: { total: 0 } });
+    expect(await activarCadencia(SEQ)).toEqual({ ok: MESSAGES.estado.activada });
+    expect(enrollContacts).not.toHaveBeenCalled();
+  });
+
   it("con alguien dentro ya, solo activa", async () => {
     q.getSequenceDetail.mockResolvedValue({ proposal: { contactId: CAMILA }, proposalContact: { id: CAMILA, name: "Camila" }, enrollments: { total: 2 } });
     expect(await activarCadencia(SEQ)).toEqual({ ok: MESSAGES.estado.activada });
@@ -174,10 +222,38 @@ describe("pasos y enrolamiento", () => {
 
   it("enrolar pide al menos una persona y dice por qué no entró cada una", async () => {
     expect(await enrolarDesdeNegocio(SEQ, {}, form({ dealId: DEAL }))).toEqual({ error: MESSAGES.enrolar.elige });
-    enrollContacts.mockResolvedValue({ enrolled: [], skipped: [{ contactId: CAMILA, reason: "already_enrolled" }], warnings: [] });
-    q.listEnrollableDeals.mockResolvedValue([{ id: DEAL, name: "x", companyName: "Fresko", contacts: [{ id: CAMILA, name: "Camila Rojas" }] }]);
-    const r = await enrolarDesdeNegocio(SEQ, {}, form({ dealId: DEAL, contactId: [CAMILA] }));
+    enrollContacts.mockResolvedValue({
+      enrolled: [],
+      skipped: [
+        { contactId: CAMILA, reason: "already_enrolled" },
+        { contactId: OTRA, reason: "motivo_nuevo_del_motor" },
+      ],
+      warnings: [],
+    });
+    q.contactNames.mockResolvedValue(new Map([[CAMILA, "Camila Rojas"], [OTRA, "Lucía Parra"]]));
+    const r = await enrolarDesdeNegocio(SEQ, {}, form({ dealId: DEAL, contactId: [CAMILA, OTRA] }));
     expect(r.ok).toBe("0 personas enroladas.");
-    expect(r.saltadas).toEqual(["Camila Rojas: ya estaba dentro."]);
+    // Un motivo que la pantalla no conoce no sale como código crudo.
+    expect(r.saltadas).toEqual(["Camila Rojas: ya estaba dentro.", "Lucía Parra: no se pudo enrolar."]);
+    // Los nombres se leen solo de quien no entró, no de todos los negocios.
+    expect(q.contactNames).toHaveBeenCalledWith(expect.anything(), [CAMILA, OTRA]);
+  });
+
+  it("una persona de otra marca bajo este negocio se rechaza antes de enrolar a nadie", async () => {
+    q.enrollableContactsOfDeal.mockResolvedValue([CAMILA]);
+    const r = await enrolarDesdeNegocio(SEQ, {}, form({ dealId: DEAL, contactId: [CAMILA, OTRA] }));
+    expect(r).toEqual({ error: MESSAGES.enrolar.ajenas });
+    expect(enrollContacts).not.toHaveBeenCalled();
+    expect(q.enrollableContactsOfDeal).toHaveBeenCalledWith(expect.anything(), DEAL, [CAMILA, OTRA]);
+  });
+
+  it("los errores con límite dicen la cifra de @mc/db, formateada", async () => {
+    q.updateStep.mockRejectedValue(new CadenciaError("day_full", "x"));
+    expect(await guardarPaso(SEQ, STEP, { dayOffset: 4 })).toEqual({ error: "Ese día ya tiene 4 pasos: elige otro." });
+  });
+
+  it("WhatsApp no llega a la base aunque el formulario lo mande", async () => {
+    expect(await guardarPaso(SEQ, STEP, { stepType: "whatsapp_message" as never })).toEqual({ error: MESSAGES.errores.invalid });
+    expect(q.updateStep).not.toHaveBeenCalled();
   });
 });

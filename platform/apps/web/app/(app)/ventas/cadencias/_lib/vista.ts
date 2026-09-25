@@ -85,7 +85,7 @@ export function textoDeNota(
         n.dropped.length > 0 ? a.quitados(nombres(n.dropped), n.dropped.length) : null,
         n.shiftedDays > 0 ? a.corridos(f.int(n.shiftedDays), n.shiftedDays) : null,
       ].filter((x): x is string => x !== null);
-      return `${a.titulo(f.int(n.maxTouches), f.int(n.minDays))} ${partes.length ? lista(partes) : a.soloSeparacion}.`;
+      return `${a.titulo(f.int(n.maxTouches), f.int(n.minDays))} ${partes.length ? partes.join("; ") : a.soloSeparacion}.`;
     }
     default:
       return null;
