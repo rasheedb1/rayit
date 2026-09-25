@@ -17,8 +17,9 @@
  */
 import { detectOptOut } from '@mc/core';
 import type { WorkerSql } from '../../client.ts';
+import { OutreachShapeError } from '../outreach.ts';
 import { markEnrollmentReplied } from './enroll.ts';
-import { channelLabel, noticeLang, OUTREACH_NOTICE_TEXTS } from './notices.ts';
+import { channelLabel, noticeLang, OUTREACH_NOTICE_TEXTS } from './messages.ts';
 import {
   assertIds, date, DISPATCH_CHANNELS, oneOf, SENDER_PROVIDERS, text, textOrNull, type DispatchChannel, type SenderProvider,
 } from './shared.ts';
@@ -71,7 +72,7 @@ function parseOpenThread(r: OpenThreadRow, i: number): OpenThread {
   const fn = 'listOpenThreads';
   const known = r.known ?? [];
   if (!Array.isArray(known) || known.some((k) => typeof k !== 'string')) {
-    throw new Error(`${fn}: $[${i}].known no es una lista de textos.`);
+    throw new OutreachShapeError(fn, `$[${i}].known`, 'se esperaba una lista de textos');
   }
   const lastSentAt = date(fn, `$[${i}].sent_at`, r.sent_at);
   return {

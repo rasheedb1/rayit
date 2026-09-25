@@ -333,6 +333,7 @@ export async function nextBusinessDay(tx: SqlExecutor, at: Date, timeZone: strin
 // se importa desde aquí igual.
 // ---------------------------------------------------------------------
 export * from './outreach/shared.ts';
+export * from './outreach/messages.ts';
 export * from './outreach/notices.ts';
 export * from './outreach/enroll.ts';
 export * from './outreach/claim.ts';

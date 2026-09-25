@@ -153,13 +153,26 @@ migración 0041 (grupo `sales`). Las consultas viven en
 
 | Job | Cada | Qué hace |
 |---|---|---|
-| `outbound.dispatch` | 2 min | **Zombis** de más de 5 min en `processing`: si nunca llegaron al proveedor (sin `send_started_at`) vuelven a la cola; si llegaron, `failed` y aviso, sin reenviar. **Reclamo** de hasta 50 toques vencidos (o los que quepan en el tiempo de la corrida, a 2 s cada uno, hasta 30 s antes del timeout) con `UPDATE … RETURNING`: fuera de la ventana laboral o en fin de semana van a la apertura; un paso no sale mientras uno anterior de su enrolamiento siga en la cola; sin cuenta conectada esperan una hora (un aviso por canal y día); con un tope lleno (diario, semanal, calentamiento) van al siguiente día hábil y los pasos de detrás se corren con ellos. **Envío**, uno por uno: `send_started_at` en su propia transacción, y en otra la relectura (toque, enrolamiento, ficha, lista global, interruptor, cuenta), la composición (pie de baja, hilo; una respuesta en el hilo sin correo anterior se retiene) y el adaptador. Transitorio → reintento con espera creciente, dentro de la ventana, hasta 5; ambiguo (corte después de enviar) → antes de reintentar se pregunta al proveedor si salió (`findSent`); rebote → se cancela ese canal y la cadencia termina en `bounced`; cuenta caída → espera. **Lo no intentado** (timeout, apagado) vuelve a la cola con su intento descontado, sin su enlace de baja y con su plaza del tope. |
-| `outbound.replies` | 5 min | Respaldo del webhook: lee los hilos de los últimos 30 días (también los de cadencias que ya respondieron o completaron), escribe `outbound_message` entrante; una respuesta marca `replied` y cancela lo pendiente; una baja marca la ficha y las de su correo y cancela todo lo suyo pendiente en cualquier secuencia, como el enlace de baja. |
+| `outbound.dispatch` | 2 min | **Zombis** de más de 5 min en `processing`: si nunca llegaron al proveedor (sin `send_started_at`) vuelven a la cola; si llegaron, `failed` y aviso, sin reenviar. **Reclamo** de hasta 50 toques vencidos (o los que quepan en el tiempo de la corrida, a 2 s cada uno, hasta 30 s antes del timeout) con `UPDATE … RETURNING`. Antes del lote, cada candidato pasa, sin gastar intento: una ficha sin dirección o con una que no es una dirección (el correo sin arroba) se salta (`no_address`, `invalid_address`) y no tumba el lote; fuera de la ventana laboral o en fin de semana va a la apertura; la política de la marca (`max_touches_per_company` mensajes en 90 días → cancelado; menos de `min_days_between_touches` desde el último → cuando se cumplan); un paso no sale mientras uno anterior de su enrolamiento siga en la cola (programado, en vuelo o retenido); sin cuenta conectada espera una hora (un aviso por canal y día); con un tope lleno (diario, semanal, calentamiento) va al siguiente día hábil. Todo lo que se mueve arrastra los pasos de detrás. **Envío**, uno por uno: `send_started_at` en su propia transacción, y en otra la relectura (toque, enrolamiento, ficha, lista global, interruptor, cuenta), la composición (pie de baja, hilo; una respuesta en el hilo sin correo anterior, o un correo sin asunto, se retiene) y el adaptador. Transitorio → reintento con espera creciente, dentro de la ventana, hasta 5; ambiguo (corte después de enviar) → antes de reintentar se pregunta al proveedor si salió (`findSent`); rebote → se cancela ese canal y la cadencia termina en `bounced`; cuenta caída → espera. **Lo no intentado** (timeout, apagado) vuelve a la cola con su intento descontado, sin su enlace de baja y con su plaza del tope. |
+| `outbound.replies` | 5 min | Respaldo del webhook: lee los hilos de los últimos 30 días (también los de cadencias que ya respondieron o completaron), hasta 200 por corrida empezando por los que hace más que no lee (`replies_checked_at`), y escribe `outbound_message` entrante; una respuesta marca `replied` y cancela lo pendiente; una baja marca la ficha y las del workspace con su correo, y cancela todo lo suyo pendiente en el workspace, en cualquier secuencia. Es una baja del workspace: la global (`contact_suppression`) solo la escribe el enlace. |
+
+La política del workspace (`outbound_policy`) manda también al enrolar:
+con `require_human_review` (el valor por defecto) o una secuencia en
+`review`, los mensajes nacen retenidos (`held`, `review`) y salen cuando
+una persona los aprueba (`approveHeldTouch`); solo una secuencia `auto`
+en un workspace que apagó la revisión sale sola.
 
 Adaptadores en `src/jobs/ventas/canales/` con una sola interfaz
 (`ChannelSender`, `ChannelReader`): Gmail, Unipile (LinkedIn e Instagram)
 y `fake`. La guardia de placeholders (`@mc/core`) corre en el punto de
 envío. `OUTREACH_CHANNELS=fake` se ignora con `NODE_ENV=production`.
+
+El correo real necesita la página de baja: cada correo lleva en el pie y
+en `List-Unsubscribe` (con `List-Unsubscribe-Post` de un clic) un enlace
+a `{APP_URL}/baja/<token>`, y esa página es de VEN-15. Mientras
+`OUTREACH_OPTOUT_PAGE_READY` no esté en `true`, el despachador no reclama
+correo real (lo dice en el log y en `notConfigured`); LinkedIn e
+Instagram siguen.
 
 Deuda conocida: la rama VEN-9-canales trae clientes de Gmail y Unipile en
 `packages/connectors` (con su MIME, sus errores y sus fakes). Cuando se
@@ -178,6 +191,10 @@ pnpm --filter @mc/worker run job:dispatch -- --demo        # Postgres embebido c
 
 `--canal-falso` se niega contra una base que no es local salvo con
 `--workspace` de la demo: deja como enviados mensajes que nadie recibió.
+La demo respeta la política del seed: Vitalé recibió un correo ayer y la
+política pide tres días entre mensajes a la marca, así que la pasada a la
+hora del toque lo aplaza (`company_gap`) y una tercera, a esa hora, lo
+envía.
 Contra Supabase necesita, como `job:seguimientos`, `GRANT mc_worker TO
 mc_migrator` y las migraciones 0037 y 0041 aplicadas. El runner
 (`src/runner/`) es el de CON-2: el motor no le cambia nada, solo suma sus

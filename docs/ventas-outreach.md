@@ -190,6 +190,24 @@ ciento ochenta días de enfriamiento tras un no, revisión humana
 obligatoria, afirmaciones con origen) son más conservadores que los de
 Chief. Se mantienen.
 
+Cómo los aplica el motor (VEN-10):
+
+- **Revisión humana.** Con `require_human_review` (por defecto) o una
+  secuencia en `review`, cada mensaje nace retenido (`held`, motivo
+  `review`) y sale cuando una persona lo aprueba. Solo una secuencia
+  `auto` en un workspace que apagó la revisión sale sola.
+- **Toques por empresa.** `max_touches_per_company` cuenta los mensajes
+  que la marca recibió del workspace en los últimos noventa días,
+  sumando todas sus secuencias y contactos; el que pasa del tope se
+  cancela. Un like o un comentario hecho a mano no cuenta.
+- **Días entre toques.** `min_days_between_touches` separa dos mensajes
+  a la misma empresa, también dentro de una cadencia: una plantilla con
+  pasos diarios se estira a la separación de la política. Un workspace
+  que quiere pasos diarios lo baja en su política.
+- **Correos al día, ventana y días hábiles**: al reclamar, no solo al
+  programar.
+- `cooldown_days_after_no` es de VEN-14 (la clasificación del «no»).
+
 ### 5.2 El modelo de datos: migración `0037_outreach.sql` (en el plan original, «0015»)
 
 Lo que ya existe y se queda: `company`, `contact` (con `opted_out`
@@ -520,9 +538,13 @@ llevan la respuesta a `outbound_message`. Un clasificador barato le
 pone intención. Interesado: se cancelan los toques pendientes, el deal
 pasa a «En conversación» y la siguiente acción es «Responder hoy».
 Ahora no: enfriamiento de noventa días y aviso. Fuera de oficina:
-retomar en la fecha. Baja: `contact.opted_out` global, y nadie en la
-plataforma vuelve a escribirle. Referido: se crea el contacto y se
-propone enrolarlo. Nada queda pausado para siempre.
+retomar en la fecha. Baja: `contact.opted_out` y todo lo pendiente
+cancelado; nadie del workspace vuelve a escribirle. La baja que se lee
+en una respuesta es del workspace (el detector lee texto libre); la que
+entra por el enlace de baja es verificada y va a la lista global
+(`contact_suppression`, 0029 §1): nadie en la plataforma vuelve a
+escribirle. Referido: se crea el contacto y se propone enrolarlo. Nada
+queda pausado para siempre.
 
 ---
 
