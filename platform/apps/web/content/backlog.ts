@@ -422,7 +422,8 @@ export const STORIES: readonly Story[] = [
     title: "Perfil comercial del creador",
     desc: "Identidad, audiencia, desempeño (mediana y mejores videos con su porqué), formatos, prueba social de campañas reportadas y tarifas, más una narrativa generada cuyas cifras enlazan a su origen. Es el análisis del perfil y los videos del creador que alimenta el outreach.",
     done: "Con el seed, el perfil muestra los cinco mejores videos con sus cifras y cada cifra de la narrativa lleva a su origen.",
-    status: "pendiente",
+    status: "hecho",
+    note: "/ventas/perfil: cada cifra es un Claim con tabla, fila y columna, enlazado a su post, campaña o tarifario. La narrativa solo cita [claim:id]; un verificador determinista rechaza ids inventados y dígitos sueltos (probado en core, pglite y pantalla). Sin ANTHROPIC_API_KEY, plantilla. Guardado en creator_profile.media_kit.perfil_comercial; costo en outbound_llm_call con la 0056 (sin aplicar en Supabase).",
   },
   {
     id: "VEN-12", module: "VEN", owner: "rasheed", size: "L", sprint: 5, deps: ["VEN-10", "VEN-11"],

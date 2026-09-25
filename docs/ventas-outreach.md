@@ -979,6 +979,38 @@ videos de la persona que va a montar sus redes». Se calcula al
 conectar las cuentas o al importar el CSV, y alimenta el generador y
 el recomendador.
 
+#### Cómo funciona hoy (VEN-11)
+
+- **Cálculo**: `buildPerfil` en `@mc/core/outreach/perfil` (puro) a
+  partir de las filas que lee `readPerfilInputs` en
+  `@mc/db/queries/perfil-comercial`. Cada cifra es un
+  `Claim { id, kind, label, value, unit, source: { table, id, field } }`;
+  las secciones solo llevan ids. Las medianas salen de
+  `creator_baseline` al corte de 168 h (el del tarifario), los cinco
+  mejores de `post_score.views_vs_median`, el alcance en no seguidores
+  de `percentile_cont` sobre `post_metrics_latest`. Lo único que se
+  cuenta en código es lo que sale de los captions (gancho, pieza, tipo,
+  duración frente a la típica de la red, tono), en
+  `perfil-captions.ts`; si `creator_post_board.hook_type` existe, gana.
+- **Guardado**: `creator_profile.media_kit → perfil_comercial`
+  (`StoredPerfil`, versión 1, con `computedAt`), escrito con
+  `jsonb_set` sin tocar las demás claves. Un documento de otra versión
+  se lee como «sin calcular».
+- **Narrativa**: `@mc/core/outreach/narrativa`. El modelo recibe la
+  lista de claims y escribe `[claim:id]` en vez de cifras;
+  `verifyNarrative` rechaza un id que no está, cualquier dígito fuera
+  de una marca (salvo términos del perfil: títulos, campañas, tarifas,
+  franjas de edad) y los huecos de la guardia de VEN-10. Dos intentos
+  con claude-sonnet-5; si ninguno pasa, sin llave o con el tope diario
+  alcanzado, la plantilla determinista. Cada llamada va a
+  `outbound_llm_call` con propósito `'profile'` (migración 0056) en su
+  propia transacción. El creador puede editarla y pasa el mismo
+  verificador.
+- **Pantalla**: `/ventas/perfil`, pestaña «Perfil comercial» de Ventas,
+  con «Recalcular». Todavía no se recalcula solo al conectar una cuenta
+  o importar un CSV: la pantalla avisa cuando hay datos más nuevos que
+  el cálculo.
+
 ### 5.5 El recomendador de cadencia
 
 Chief tiene `suggest-outreach-strategy`, pero decide a quién contactar
