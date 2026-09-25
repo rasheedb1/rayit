@@ -11,6 +11,7 @@ import {
   chooseTemplate, composeGuidance, DISCLOSURE_GUIDANCE, guidanceProblem, recommendSequence, RecommendError, refineGuidance,
   signalKindOfSource, type GuidanceWriter, type RecommendInput, type RecommendTemplate, type RecommendTemplateStep,
 } from '../src/outreach/recomendar.ts';
+import { GUIDANCE_PHRASES, guidanceLocale } from '../src/outreach/guidance-phrases.ts';
 import { llmCostUsd, UnknownModelPriceError } from '../src/outreach/llm-cost.ts';
 import { checkSequenceAgainstPolicy } from '../src/outreach/sequence-policy.ts';
 
@@ -293,4 +294,25 @@ test('guidanceProblem y llmCostUsd', () => {
   assert.equal(llmCostUsd({ model: 'claude-sonnet-5', inputTokens: 1000, outputTokens: 500 }), '0.007000');
   assert.equal(llmCostUsd({ model: 'claude-haiku-4-5-20251001', inputTokens: 2_000_000, outputTokens: 0 }), '2.000000');
   assert.throws(() => llmCostUsd({ model: 'otro', inputTokens: 1, outputTokens: 1 }), UnknownModelPriceError);
+});
+
+test('las frases de la guía salen de una tabla por idioma; hoy, la española, y el texto no cambió', () => {
+  assert.equal(guidanceLocale('es-CO'), 'es');
+  assert.equal(guidanceLocale('es_MX'), 'es');
+  // Sin tabla para ese idioma: español, como las plantillas.
+  assert.equal(guidanceLocale('pt-BR'), 'es');
+  assert.equal(guidanceLocale(null), 'es');
+  assert.equal(DISCLOSURE_GUIDANCE, GUIDANCE_PHRASES.es.disclosure);
+  assert.equal(
+    composeGuidance('presencia', 'linkedin_like', 'active_campaign', 'es'),
+    'Hazlo a mano: reacciona o comenta algo concreto de su último post, en una o dos frases. No vendas, no menciones tarifas ni pongas enlaces.',
+  );
+  assert.equal(
+    composeGuidance('prueba_social', 'linkedin_message', 'season', 'es'),
+    'Mensaje corto con el resultado medido de una campaña tuya con una marca del mismo sector. Solo campañas con resultado; no nombres a su competencia directa. Cierra con una sola pregunta.',
+  );
+  // Pasar el idioma del espacio no cambia nada en español: la misma propuesta que sin él.
+  const conLocale = recommendSequence(entrada({ locale: guidanceLocale('es-CO'), contact: { hasEmail: true, hasLinkedin: false, hasInstagram: false } }));
+  const sinLocale = recommendSequence(entrada({ contact: { hasEmail: true, hasLinkedin: false, hasInstagram: false } }));
+  assert.deepEqual(conLocale, sinLocale);
 });

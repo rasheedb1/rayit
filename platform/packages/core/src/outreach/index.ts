@@ -5,4 +5,5 @@ export * from './optout.ts';
 export * from './template.ts';
 export * from './sequence-policy.ts';
 export * from './recomendar.ts';
+export * from './guidance-phrases.ts';
 export * from './llm-cost.ts';

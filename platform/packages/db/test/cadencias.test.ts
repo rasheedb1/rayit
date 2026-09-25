@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { checkSequenceAgainstPolicy, recommendSequence, type RecommendInput } from '@mc/core';
 import {
   addStep, CadenciaError, contactNames, createSequenceFromProposal, createSequenceFromTemplate, defaultContact, deleteStep,
-  enrollableContactsOfDeal, liveEnrollmentElsewhere,
+  enrollableContactsOfDeal, liveEnrollmentElsewhere, parseSequenceProposal, signalContacts,
   duplicateSequence, getRecommendationContext, getSequenceDetail, listEnrollableDeals, listProposableSignals,
   listSequences, listSequenceTemplates, recordRecommendLlmCall, renameSequence, reorderSteps, replaceStepsFromProposal,
   setSequenceStatus, updateStep, type RecommendationContext,
@@ -77,8 +77,15 @@ test('las plantillas de 0037 y 0056: ocho activas, con una por cada tipo de señ
 });
 
 test('la señal de campaña activa del seed está entre las que se proponen, con su negocio abierto', async () => {
-  const lista = await enLaura((tx) => listProposableSignals(tx, 20));
+  const { signals: lista, total } = await enLaura((tx) => listProposableSignals(tx, { limit: 20 }));
   const fresko = lista.find((s) => s.signalId === SIGNAL_FRESKO);
+  assert.equal(total, lista.length);
+  // Con un límite, el total sigue diciendo cuántas hay: la lista ofrece «Ver todas» y ninguna queda sin camino.
+  const una = await enLaura((tx) => listProposableSignals(tx, { limit: 1 }));
+  assert.deepEqual([una.signals.length, una.total], [1, total]);
+  // Las de una empresa: lo que la ficha pone junto a cada negocio.
+  const deFresko = await enLaura((tx) => listProposableSignals(tx, { companyId: COMPANY_FRESKO }));
+  assert.deepEqual(deFresko.signals.map((s) => s.signalId), [SIGNAL_FRESKO]);
   assert.ok(fresko);
   assert.equal(fresko.signalKind, 'active_campaign');
   assert.equal(fresko.dealId, DEAL_FRESKO);
@@ -199,7 +206,7 @@ test('la línea de tiempo: editar, reordenar, añadir y quitar; con alguien dent
   assert.equal(d.steps[0]!.scheduledTime, '11:15');
   assert.match(d.steps[0]!.guidanceEs!, /25 a 34/);
 
-  const nuevo = await enLaura((tx) => addStep(tx, id, { stepType: 'email_reply', angleKey: 'prueba_social' }));
+  const { id: nuevo } = await enLaura((tx) => addStep(tx, id, { stepType: 'email_reply', angleKey: 'prueba_social' }));
   d = (await enLaura((tx) => getSequenceDetail(tx, id)))!;
   assert.equal(d.steps.at(-1)!.id, nuevo);
   assert.equal(d.steps.at(-1)!.dayOffset, 12, 'tras el último, con la separación de la política (3 días)');
@@ -235,6 +242,11 @@ test('la línea de tiempo: editar, reordenar, añadir y quitar; con alguien dent
   const deals = await enLaura((tx) => listEnrollableDeals(tx, id));
   assert.equal(deals.find((x) => x.id === DEAL_FRESKO)!.contacts.find((c) => c.id === CAMILA)!.enrolled, true);
   assert.equal(deals.find((x) => x.id === DEAL_FRESKO)!.contacts.find((c) => c.id === LUCIA)!.enrolled, false);
+  // Desde la copia, Camila sale marcada con la cadencia en la que ya está: su casilla no se puede marcar.
+  const desdeCopia = await enLaura((tx) => listEnrollableDeals(tx, copia));
+  const camila = desdeCopia.find((x) => x.id === DEAL_FRESKO)!.contacts.find((c) => c.id === CAMILA)!;
+  assert.deepEqual([camila.enrolled, camila.liveElsewhere], [false, 'Fresko · plantilla']);
+  assert.equal(desdeCopia.find((x) => x.id === DEAL_FRESKO)!.contacts.find((c) => c.id === LUCIA)!.liveElsewhere, null);
 
   await enLaura((tx) => setSequenceStatus(tx, id, 'archived'));
   await assert.rejects(enLaura((tx) => setSequenceStatus(tx, id, 'active')), (e) => e instanceof CadenciaError && e.code === 'archived');
@@ -268,7 +280,7 @@ test('quitar, añadir o editar tampoco deja una respuesta sin hilo como primer c
 
   // Sin ningún correo, «Añadir paso» (una respuesta) abre el hilo, con un ángulo que la secuencia no usa y su guía.
   for (const s of await pasos()) if (s.channel === 'email') await enLaura((tx) => deleteStep(tx, s.id));
-  const nuevo = await enLaura((tx) => addStep(tx, id, { stepType: 'email_reply' }));
+  const { id: nuevo } = await enLaura((tx) => addStep(tx, id, { stepType: 'email_reply' }));
   const n = (await pasos()).find((s) => s.id === nuevo)!;
   assert.equal(n.stepType, 'email');
   const usados = (await pasos()).filter((s) => s.id !== nuevo).map((s) => s.angleKey);
@@ -308,4 +320,85 @@ test('cada llamada del recomendador al modelo queda con sus tokens y su costo', 
   const rows = await enLaura((tx) =>
     tx.query<{ cost: string; purpose: string }>(`SELECT cost::text, purpose FROM outbound_llm_call WHERE purpose = 'recommend'`));
   assert.deepEqual(rows.rows, [{ cost: '0.006400', purpose: 'recommend' }]);
+});
+
+test('proponer otra vez solo reemplaza los pasos con la propuesta de la señal del borrador', async () => {
+  const otraSenal = await enLaura(async (tx) =>
+    (await tx.query<{ id: string }>(`SELECT id FROM signal WHERE id <> $1::uuid ORDER BY id LIMIT 1`, [SIGNAL_FRESKO])).rows[0]!.id);
+  const [borrador, plantilla, propuesta] = await enLaura(async (tx) => {
+    const ctx = await getRecommendationContext(tx, SIGNAL_FRESKO);
+    const p = recommendSequence(entrada(ctx, CAMILA));
+    return [
+      await createSequenceFromProposal(tx, { proposal: p, name: 'Fresko · señal', meta: meta(CAMILA) }),
+      await createSequenceFromTemplate(tx, 'senal-manual'),
+      p,
+    ];
+  });
+  const invalida = (e: unknown) => e instanceof CadenciaError && e.code === 'invalid';
+  // Un formulario hecho a mano: el borrador de Fresko con la propuesta de otra señal, o uno sin señal con la de Fresko.
+  await assert.rejects(enLaura((tx) => replaceStepsFromProposal(tx, borrador, { proposal: propuesta, meta: { ...meta(CAMILA), signalId: otraSenal } })), invalida);
+  await assert.rejects(enLaura((tx) => replaceStepsFromProposal(tx, plantilla, { proposal: propuesta, meta: meta(CAMILA) })), invalida);
+  const d = (await enLaura((tx) => getSequenceDetail(tx, borrador)))!;
+  assert.equal(d.signal?.id, SIGNAL_FRESKO);
+  assert.equal(d.signal?.companyId, COMPANY_FRESKO);
+  // Con su propia señal, sí.
+  await enLaura((tx) => replaceStepsFromProposal(tx, borrador, { proposal: propuesta, meta: meta(LUCIA) }));
+  assert.equal((await enLaura((tx) => getSequenceDetail(tx, borrador)))!.proposal?.contactId, LUCIA);
+  // Las personas de la marca de la señal, sin el contexto entero del recomendador.
+  const personas = await enLaura((tx) => signalContacts(tx, SIGNAL_FRESKO));
+  assert.ok(personas.some((c) => c.id === CAMILA) && personas.some((c) => c.id === LUCIA));
+  for (const id of [borrador, plantilla]) await enLaura((tx) => setSequenceStatus(tx, id, 'archived'));
+});
+
+test('«Añadir paso» con la política llena de mensajes añade un gesto que sí se cumple, no un mensaje que no sale', async () => {
+  const id = await enLaura(async (tx) => {
+    const ctx = await getRecommendationContext(tx, SIGNAL_FRESKO);
+    return createSequenceFromProposal(tx, { proposal: recommendSequence(entrada(ctx, CAMILA)), name: 'Fresko · añadir', meta: meta(CAMILA) });
+  });
+  const r = await enLaura((tx) => addStep(tx, id));
+  assert.equal(r.asGesture, true);
+  const d = (await enLaura((tx) => getSequenceDetail(tx, id)))!;
+  const nuevo = d.steps.find((s) => s.id === r.id)!;
+  // LinkedIn está permitido y su cuenta existe (aunque pida reconectar): una reacción ahí.
+  assert.deepEqual([nuevo.stepType, nuevo.channel, nuevo.angleKey], ['linkedin_like', 'linkedin', 'presencia']);
+  assert.match(nuevo.guidanceEs ?? '', /^Hazlo a mano/);
+  assert.deepEqual(d.policy.overCap, []);
+  await enLaura((tx) => setSequenceStatus(tx, id, 'archived'));
+
+  // Con sitio en la política, «Añadir paso» sigue siendo el siguiente mensaje del hilo (la plantilla trae 4; se quita uno).
+  const corta = await enLaura((tx) => createSequenceFromTemplate(tx, 'senal-manual'));
+  const directo = (await enLaura((tx) => getSequenceDetail(tx, corta)))!.steps.find((s) => s.stepType === 'linkedin_message')!;
+  await enLaura((tx) => deleteStep(tx, directo.id));
+  const r2 = await enLaura((tx) => addStep(tx, corta));
+  const n2 = (await enLaura((tx) => getSequenceDetail(tx, corta)))!.steps.find((s) => s.id === r2.id)!;
+  assert.deepEqual([r2.asGesture, n2.stepType], [false, 'email_reply']);
+  await enLaura((tx) => setSequenceStatus(tx, corta, 'archived'));
+});
+
+test('parseSequenceProposal descarta las notas que no tienen la forma de su código', () => {
+  const p = parseSequenceProposal({
+    version: 1, templateSlug: 'x', signalKind: 'launch', guidance: 'rules', guidanceWhyRules: 'no_key',
+    notes: [
+      { code: 'template', slug: 'x', match: 'signal' },
+      { code: 'rerouted', step: 2, from: 'linkedin', to: 'email', manual: false, reason: 'channel_not_connected' },
+      // Otra versión: sin `reason`, con `softened` como texto, un código que no existe, y basura.
+      { code: 'rerouted', step: 3, from: 'linkedin', to: 'email', manual: false },
+      { code: 'fitted_to_policy', softened: 'prueba_social', dropped: [], shiftedDays: 0, maxTouches: 4, minDays: 3 },
+      { code: 'channel_down', channel: 'fax' },
+      { code: 'nuevo' },
+      null,
+      'texto',
+      { code: 'no_contact' },
+    ],
+  });
+  assert.deepEqual(p?.notes.map((n) => n.code), ['template', 'rerouted', 'no_contact']);
+});
+
+test('un negocio cerrado no se guarda en la propuesta ni recibe a nadie', async () => {
+  await t.admin(`UPDATE deal SET stage_id = (SELECT id FROM pipeline_stage WHERE is_lost ORDER BY position LIMIT 1)
+                  WHERE id = '${DEAL_FRESKO}'`);
+  const ctx = await enLaura((tx) => getRecommendationContext(tx, SIGNAL_FRESKO));
+  assert.equal(ctx.deal, null);
+  assert.equal(await enLaura((tx) => enrollableContactsOfDeal(tx, DEAL_FRESKO, [CAMILA])).then((x) => x.length), 0);
+  assert.ok(!(await enLaura((tx) => listProposableSignals(tx))).signals.some((s) => s.signalId === SIGNAL_FRESKO));
 });

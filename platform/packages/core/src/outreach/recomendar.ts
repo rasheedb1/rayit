@@ -46,6 +46,7 @@
  */
 import type { LlmUsage } from './llm-cost.ts';
 import { findPlaceholders } from './placeholder-guard.ts';
+import { GUIDANCE_PHRASES, type GuidanceLocale } from './guidance-phrases.ts';
 import { DISPATCHABLE_STEP_TYPES, type SequencePolicy } from './sequence-policy.ts';
 
 /** El último día al que se puede poner un paso (CHECK de outbound_step.day_offset, 0037). */
@@ -133,6 +134,12 @@ export interface RecommendInput {
   templates: readonly RecommendTemplate[];
   /** outbound_policy del espacio: tope de mensajes a una marca y días entre ellos. */
   policy: SequencePolicy;
+  /**
+   * El idioma de las frases de la guía compuesta (guidance-phrases.ts);
+   * quien llama lo saca del locale del espacio con guidanceLocale. Sin
+   * él, español: lo que hacían siempre las plantillas.
+   */
+  locale?: GuidanceLocale;
 }
 
 export interface ProposedStep {
@@ -278,75 +285,49 @@ function blockerFor(input: Pick<RecommendInput, 'allowedChannels' | 'channels' |
 // 3 · La guía compuesta
 // ---------------------------------------------------------------------
 
-/** Cómo se nombra la señal dentro de una guía. */
-const SIGNAL_PHRASE: Record<RecommendSignalKind, string> = {
-  active_campaign: 'su campaña activa',
-  launch: 'su lanzamiento',
-  season: 'la temporada que viene',
-  collab: 'su categoría',
-  manual: 'su marca',
-};
-
-/** Con qué abre cada ángulo (sin el canal). */
-const ANGLE_OPENING: Record<string, (signal: string) => string> = {
-  presencia: () => 'algo concreto de su último post, en una o dos frases',
-  encaje_audiencia: () => 'la coincidencia entre tu audiencia y su cliente, con una cifra de tu perfil',
-  prueba_desempeno: (s) => `un video tuyo parecido a lo que necesita ${s}, con sus views frente a tu mediana`,
-  concepto_creativo: (s) => `una idea de video concreta para ${s}`,
-  prueba_social: () => 'el resultado medido de una campaña tuya con una marca del mismo sector',
-  sintesis: () => 'un resumen de tres líneas, el enlace al media kit y a la cotización y una fecha concreta para hablar',
-};
-
-/** Qué no se menciona en cada ángulo (lo más importante de outbound_angle.forbidden_es). */
-const ANGLE_FORBIDDEN: Record<string, string> = {
-  presencia: 'No vendas, no menciones tarifas ni pongas enlaces.',
-  encaje_audiencia: 'No menciones precio ni adjuntes el media kit.',
-  prueba_desempeno: 'No repitas la demografía ya dicha ni uses cifras sin origen.',
-  concepto_creativo: 'Sin cifras de audiencia ni ideas que sirvan para cualquier marca.',
-  prueba_social: 'Solo campañas con resultado; no nombres a su competencia directa.',
-  sintesis: 'Sin presión ni urgencia falsa.',
-};
-
-const COLLAB_FORBIDDEN = 'No nombres la colaboración que viste ni a quien la hizo.';
-/** La frase de divulgación que el brief pide en el cierre (outbound_brief.requires_disclosure). */
-export const DISCLOSURE_GUIDANCE = 'Di que el contenido irá marcado como publicidad.';
+/** La frase de divulgación en español (GUIDANCE_PHRASES.es.disclosure), para quien la busca por nombre. */
+export const DISCLOSURE_GUIDANCE = GUIDANCE_PHRASES.es.disclosure;
 
 /**
- * La guía de un paso compuesta con reglas: canal + ángulo + señal. Es la
- * que queda cuando el paso cambió de canal o cuando el modelo no da una
- * que sirva.
+ * La guía de un paso compuesta con reglas: canal + ángulo + señal, con
+ * las frases del idioma `locale` (guidance-phrases.ts). Es la que queda
+ * cuando el paso cambió de canal o cuando el modelo no da una que sirva.
  */
-export function composeGuidance(angleKey: string | null, stepType: string, signalKind: RecommendSignalKind): string {
-  const signal = SIGNAL_PHRASE[signalKind];
-  const opening = (angleKey && ANGLE_OPENING[angleKey]?.(signal)) || `algo específico de ${signal}`;
-  const forbidden = (angleKey && ANGLE_FORBIDDEN[angleKey]) || 'No vendas en el primer párrafo.';
-  const collab = signalKind === 'collab' ? ` ${COLLAB_FORBIDDEN}` : '';
+export function composeGuidance(
+  angleKey: string | null, stepType: string, signalKind: RecommendSignalKind, locale: GuidanceLocale = 'es',
+): string {
+  const t = GUIDANCE_PHRASES[locale];
+  const signal = t.signal[signalKind];
+  const opening = (angleKey && t.angleOpening[angleKey]?.(signal)) || t.genericOpening(signal);
+  const forbidden = (angleKey && t.angleForbidden[angleKey]) || t.genericForbidden;
+  const collab = signalKind === 'collab' ? ` ${t.collabForbidden}` : '';
   const family = familyOf(stepType);
   let lead: string;
-  let close = ' Cierra con una sola pregunta.';
+  let close = ` ${t.closeWithQuestion}`;
   if (family === 'public_comment') {
-    lead = `Comenta ${opening}.`;
+    lead = t.lead.publicComment(opening);
     close = '';
   } else if (family === 'public_like' || family === 'manual') {
-    lead = `Hazlo a mano: reacciona o comenta ${opening}.`;
+    lead = t.lead.byHand(opening);
     close = '';
   } else if (stepType === 'email_reply') {
-    lead = `Responde en el mismo hilo con ${opening}.`;
+    lead = t.lead.reply(opening);
   } else if (stepType === 'linkedin_connect') {
-    lead = `Nota de conexión de menos de 300 caracteres con ${opening}.`;
+    lead = t.lead.connectNote(opening);
     close = '';
   } else if (family === 'direct') {
-    lead = `Mensaje corto con ${opening}.`;
+    lead = t.lead.direct(opening);
   } else {
-    lead = `Abre con ${opening}.`;
+    lead = t.lead.email(opening);
   }
   if (angleKey === 'sintesis') close = '';
   return `${lead} ${forbidden}${collab}${close}`;
 }
 
-function withDisclosure(guidance: string, angleKey: string | null, requires: boolean): string {
-  if (!requires || angleKey !== 'sintesis' || guidance.includes(DISCLOSURE_GUIDANCE)) return guidance;
-  return `${guidance} ${DISCLOSURE_GUIDANCE}`;
+function withDisclosure(guidance: string, angleKey: string | null, requires: boolean, locale: GuidanceLocale = 'es'): string {
+  const disclosure = GUIDANCE_PHRASES[locale].disclosure;
+  if (!requires || angleKey !== 'sintesis' || guidance.includes(disclosure)) return guidance;
+  return `${guidance} ${disclosure}`;
 }
 
 // ---------------------------------------------------------------------
@@ -359,6 +340,7 @@ export function recommendSequence(input: RecommendInput): Proposal {
   if (!chosen) throw new RecommendError('no_template');
   const { template, match } = chosen;
   if (template.steps.length === 0) throw new RecommendError('empty_template');
+  const locale = input.locale ?? 'es';
 
   const notes: ProposalNote[] = [{ code: 'template', slug: template.slug, match }];
   if (!input.contact) notes.push({ code: 'no_contact' });
@@ -402,7 +384,7 @@ export function recommendSequence(input: RecommendInput): Proposal {
       scheduledTime: s.scheduled_time,
       generateWithAi: s.generate_with_ai,
       requiresAsset: s.requires_asset,
-      guidanceEs: changed ? composeGuidance(s.angle_key, stepType, input.signalKind) : s.guidance_es,
+      guidanceEs: changed ? composeGuidance(s.angle_key, stepType, input.signalKind, locale) : s.guidance_es,
       changedFrom: changed ? { stepType: s.step_type, channel: s.channel } : null,
     });
   });
@@ -416,9 +398,9 @@ export function recommendSequence(input: RecommendInput): Proposal {
     notes.length = 0;
     notes.push(...kept.map((n) => ('step' in n ? { ...n, step: position.get(n.step)! } : n)), fitted.note);
   }
-  const steps = openThread(fitted.steps, input.signalKind).map((s) => ({
+  const steps = openThread(fitted.steps, input.signalKind, locale).map((s) => ({
     ...s,
-    guidanceEs: withDisclosure(s.guidanceEs, s.angleKey, input.requiresDisclosure),
+    guidanceEs: withDisclosure(s.guidanceEs, s.angleKey, input.requiresDisclosure, locale),
   }));
 
   if (input.requiresDisclosure && steps.some((s) => s.angleKey === 'sintesis')) notes.push({ code: 'disclosure' });
@@ -444,7 +426,7 @@ export function recommendSequence(input: RecommendInput): Proposal {
  * reply_without_thread). Corre después de ajustar a la política, porque
  * quitar un paso puede dejar una respuesta como primer correo.
  */
-function openThread(steps: readonly ProposedStep[], signalKind: RecommendSignalKind): ProposedStep[] {
+function openThread(steps: readonly ProposedStep[], signalKind: RecommendSignalKind, locale: GuidanceLocale): ProposedStep[] {
   let emailSeen = false;
   return steps.map((s) => {
     if (s.channel !== 'email') return s;
@@ -454,7 +436,7 @@ function openThread(steps: readonly ProposedStep[], signalKind: RecommendSignalK
     return {
       ...s,
       stepType: 'email',
-      guidanceEs: composeGuidance(s.angleKey, 'email', signalKind),
+      guidanceEs: composeGuidance(s.angleKey, 'email', signalKind, locale),
       changedFrom: s.changedFrom ?? { stepType: s.stepType, channel: s.channel },
     };
   });
@@ -516,7 +498,7 @@ function softenToGesture(s: ProposedStep, input: FitInput): ProposedStep | null 
     angleKey: 'presencia',
     generateWithAi: false,
     requiresAsset: null,
-    guidanceEs: composeGuidance('presencia', stepType, input.signalKind),
+    guidanceEs: composeGuidance('presencia', stepType, input.signalKind, input.locale),
     changedFrom: s.changedFrom ?? { stepType: s.stepType, channel: s.channel },
   };
 }
@@ -550,7 +532,7 @@ function stretchDays(steps: readonly ProposedStep[], minDays: number): { steps: 
   return { steps: out, shift: moved.some((s) => s.wanted > SEQUENCE_MAX_DAY_OFFSET) ? Infinity : shift };
 }
 
-type FitInput = Pick<RecommendInput, 'policy' | 'channels' | 'allowedChannels' | 'contact' | 'signalKind'>;
+type FitInput = Pick<RecommendInput, 'policy' | 'channels' | 'allowedChannels' | 'contact' | 'signalKind' | 'locale'>;
 
 /**
  * Ajusta los pasos a la política (el paso 3 del encabezado). Exportada
@@ -709,6 +691,8 @@ export async function refineGuidance(
   ctx: Omit<GuidanceRequest, 'steps' | 'signalKind' | 'requiresDisclosure'> & {
     requiresDisclosure: boolean;
     angles: Readonly<Record<string, { label: string; forbidden: readonly string[] }>>;
+    /** El idioma de la frase de divulgación que se vuelve a añadir (el mismo de recommendSequence). */
+    locale?: GuidanceLocale;
   },
   writer: GuidanceWriter,
 ): Promise<RefineResult> {
@@ -749,7 +733,7 @@ export async function refineGuidance(
       keptRules++;
       return s;
     }
-    return { ...s, guidanceEs: withDisclosure(text.trim(), s.angleKey, ctx.requiresDisclosure) };
+    return { ...s, guidanceEs: withDisclosure(text.trim(), s.angleKey, ctx.requiresDisclosure, ctx.locale) };
   });
   return {
     proposal: { ...proposal, steps },

@@ -43,8 +43,8 @@
  * después.
  */
 import {
-  checkSequenceAgainstPolicy, composeGuidance, llmCostUsd, RECOMMEND_CHANNELS, SEQUENCE_MAX_DAY_OFFSET, type ChannelState,
-  type LlmUsage, type Proposal, type ProposalNote, type RecommendChannel, type RecommendSignalKind, type RecommendTemplate,
+  checkSequenceAgainstPolicy, composeGuidance, DISPATCHABLE_STEP_TYPES, guidanceLocale, llmCostUsd, RECOMMEND_CHANNELS,
+  SEQUENCE_MAX_DAY_OFFSET, type ChannelState, type LlmUsage, type Proposal, type ProposalNote, type RecommendChannel, type RecommendSignalKind, type RecommendTemplate,
   RECOMMEND_SIGNAL_KINDS, signalKindOfSource,
 } from '@mc/core';
 import type { WorkspaceTx } from '../client.ts';
@@ -142,7 +142,37 @@ export interface SequenceProposal {
   proposedAt: string;
 }
 
-const NOTE_CODES = ['template', 'rerouted', 'unreachable', 'channel_down', 'no_contact', 'disclosure', 'fitted_to_policy'];
+const isStr = (x: unknown): x is string => typeof x === 'string';
+const isInt = (x: unknown): x is number => Number.isInteger(x);
+const isStrArray = (x: unknown): x is string[] => Array.isArray(x) && x.every(isStr);
+const REROUTE_REASONS: readonly unknown[] = ['channel_not_allowed', 'channel_not_connected', 'contact_has_no_address'];
+const TEMPLATE_MATCHES: readonly unknown[] = ['niche_and_signal', 'signal', 'generic'];
+
+/**
+ * Cada forma de nota que la pantalla sabe decir, campo por campo. Una
+ * nota guardada por otra versión, o tocada a mano en el jsonb, que no
+ * cumple su forma se descarta: la pantalla no imprime «undefined» ni
+ * revienta con el .length de un campo que no está.
+ */
+const NOTE_SHAPES: Record<ProposalNote['code'], (n: Record<string, unknown>) => boolean> = {
+  template: (n) => isStr(n.slug) && TEMPLATE_MATCHES.includes(n.match),
+  rerouted: (n) =>
+    isInt(n.step) && isStr(n.from) && isStr(n.to) && typeof n.manual === 'boolean' && REROUTE_REASONS.includes(n.reason),
+  unreachable: (n) => isInt(n.step) && isStr(n.channel),
+  channel_down: (n) => (RECOMMEND_CHANNELS as readonly unknown[]).includes(n.channel),
+  no_contact: () => true,
+  disclosure: () => true,
+  fitted_to_policy: (n) =>
+    isStrArray(n.softened) && isStrArray(n.dropped) && isInt(n.shiftedDays) && isInt(n.maxTouches) && isInt(n.minDays),
+};
+
+/** Una nota del jsonb, si tiene la forma de su código; si no, null. */
+export function parseProposalNote(value: unknown): ProposalNote | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const n = value as Record<string, unknown>;
+  const shape = isStr(n.code) && Object.hasOwn(NOTE_SHAPES, n.code) ? NOTE_SHAPES[n.code as ProposalNote['code']] : null;
+  return shape && shape(n) ? (n as unknown as ProposalNote) : null;
+}
 
 /** Lee el jsonb de la base. Lo que no tiene la forma esperada se descarta (null), sin romper la pantalla. */
 export function parseSequenceProposal(value: unknown): SequenceProposal | null {
@@ -151,7 +181,7 @@ export function parseSequenceProposal(value: unknown): SequenceProposal | null {
   if (v.version !== 1 || typeof v.templateSlug !== 'string') return null;
   if (!(RECOMMEND_SIGNAL_KINDS as readonly unknown[]).includes(v.signalKind)) return null;
   const notes = Array.isArray(v.notes)
-    ? (v.notes.filter((n) => n && typeof n === 'object' && NOTE_CODES.includes((n as { code?: string }).code ?? '')) as ProposalNote[])
+    ? v.notes.map(parseProposalNote).filter((n): n is ProposalNote => n !== null)
     : [];
   const str = (x: unknown) => (typeof x === 'string' ? x : null);
   const why = str(v.guidanceWhyRules);
@@ -262,16 +292,32 @@ export interface ProposableSignal {
   sequenceId: string | null;
 }
 
+/** Las señales que se pueden proponer, y cuántas hay en total (para «Ver todas»). */
+export interface ProposableSignals {
+  signals: ProposableSignal[];
+  total: number;
+}
+
+/** Cuántas señales devuelve listProposableSignals como mucho, aunque se pidan todas. */
+export const PROPOSABLE_SIGNALS_MAX = 200;
+
 /**
  * Las señales aceptadas cuyo negocio sigue abierto: desde ellas se pide
- * una propuesta. La más reciente primero.
+ * una propuesta. La más reciente primero. `limit` recorta la lista (la
+ * portada de cadencias muestra unas pocas) y `total` dice cuántas hay,
+ * para que ninguna quede sin camino; `companyId` las deja en las de una
+ * empresa (la ficha, junto a cada negocio).
  */
-export async function listProposableSignals(tx: WorkspaceTx, limit = 8): Promise<ProposableSignal[]> {
+export async function listProposableSignals(
+  tx: WorkspaceTx, opts: { limit?: number; companyId?: string } = {},
+): Promise<ProposableSignals> {
+  if (opts.companyId !== undefined) assertId('listProposableSignals', opts.companyId);
+  const limit = Math.min(PROPOSABLE_SIGNALS_MAX, Math.max(1, Math.floor(opts.limit ?? PROPOSABLE_SIGNALS_MAX)));
   const { rows } = await tx.query<{
     signal_id: string; headline: string; source_kind: string; detected_at: Date; company_name: string | null;
-    deal_id: string; deal_name: string; sequence_id: string | null;
+    deal_id: string; deal_name: string; sequence_id: string | null; total: number;
   }>(
-    `SELECT x.*,
+    `SELECT x.*, count(*) OVER ()::int AS total,
             (SELECT s.id FROM outbound_sequence s WHERE s.signal_id = x.signal_id AND s.status <> 'archived'
               ORDER BY s.updated_at DESC LIMIT 1) AS sequence_id
        FROM (SELECT DISTINCT ON (sg.id) sg.id AS signal_id, sg.headline_es AS headline, src.kind AS source_kind,
@@ -282,16 +328,20 @@ export async function listProposableSignals(tx: WorkspaceTx, limit = 8): Promise
                JOIN pipeline_stage st ON st.id = d.stage_id
                LEFT JOIN company co ON co.id = sg.company_id
               WHERE sg.status = 'accepted' AND NOT st.is_won AND NOT st.is_lost
+                AND ($2::uuid IS NULL OR d.company_id = $2::uuid)
               ORDER BY sg.id, d.updated_at DESC) x
       ORDER BY x.detected_at DESC, x.signal_id
       LIMIT $1::int`,
-    [Math.max(1, Math.floor(limit))],
+    [limit, opts.companyId ?? null],
   );
-  return rows.map((r) => ({
-    signalId: r.signal_id, headline: r.headline, signalKind: signalKindOfSource(r.source_kind),
-    detectedAt: r.detected_at.toISOString(), companyName: r.company_name, dealId: r.deal_id, dealName: r.deal_name,
-    sequenceId: r.sequence_id,
-  }));
+  return {
+    signals: rows.map((r) => ({
+      signalId: r.signal_id, headline: r.headline, signalKind: signalKindOfSource(r.source_kind),
+      detectedAt: r.detected_at.toISOString(), companyName: r.company_name, dealId: r.deal_id, dealName: r.deal_name,
+      sequenceId: r.sequence_id,
+    })),
+    total: rows[0]?.total ?? 0,
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -361,6 +411,18 @@ async function companyContacts(tx: WorkspaceTx, companyId: string): Promise<Cont
 }
 
 /**
+ * Las personas de la marca de una señal (con sus direcciones), para
+ * elegir a quién se le propone en un borrador. Dos consultas, no el
+ * contexto entero del recomendador. Una señal sin empresa, o que este
+ * espacio no ve, no tiene a nadie.
+ */
+export async function signalContacts(tx: WorkspaceTx, signalId: string): Promise<ContactOption[]> {
+  assertId('signalContacts', signalId);
+  const sg = (await tx.query<{ company_id: string | null }>(`SELECT company_id FROM signal WHERE id = $1::uuid`, [signalId])).rows[0];
+  return sg?.company_id ? companyContacts(tx, sg.company_id) : [];
+}
+
+/**
  * La persona a la que se le propone por defecto: la que no está de baja
  * y llega por más canales; a igualdad, la primera por nombre.
  */
@@ -410,10 +472,12 @@ export async function getRecommendationContext(tx: WorkspaceTx, signalId: string
   ).rows[0];
   if (!sg) throw new CadenciaError('no_signal', `La señal ${signalId} no existe o no es de este espacio.`);
 
+  // Solo un negocio abierto: una propuesta nunca guarda un negocio ganado o perdido (Activar lo enrolaría ahí).
   const deal = (
     await tx.query<{ id: string; name: string }>(
       `SELECT d.id, d.name FROM deal d JOIN pipeline_stage st ON st.id = d.stage_id
-        WHERE d.origin_signal_id = $1::uuid ORDER BY (NOT st.is_won AND NOT st.is_lost) DESC, d.updated_at DESC LIMIT 1`,
+        WHERE d.origin_signal_id = $1::uuid AND NOT st.is_won AND NOT st.is_lost
+        ORDER BY d.updated_at DESC, d.id LIMIT 1`,
       [signalId],
     )
   ).rows[0] ?? null;
@@ -461,6 +525,12 @@ export async function getRecommendationContext(tx: WorkspaceTx, signalId: string
 export interface EnrollableContact extends ContactOption {
   /** Ya tiene un enrolamiento en esta cadencia (sea cual sea su estado): no se vuelve a enrolar. */
   enrolled: boolean;
+  /**
+   * El nombre de OTRA cadencia en la que la persona sigue viva (activa,
+   * en pausa o en enfriamiento), o null. Mientras lo esté no se la
+   * enrola aquí: dos cadencias a la vez duplican los mensajes.
+   */
+  liveElsewhere: string | null;
 }
 
 export interface EnrollableDeal {
@@ -479,7 +549,8 @@ export interface EnrollableDeal {
 export async function listEnrollableDeals(tx: WorkspaceTx, sequenceId: string | null = null): Promise<EnrollableDeal[]> {
   if (sequenceId !== null) assertId('listEnrollableDeals', sequenceId);
   const { rows } = await tx.query<
-    { deal_id: string; deal_name: string; company_name: string } & ({ id: null } | (ContactOptionRow & { enrolled: boolean }))
+    { deal_id: string; deal_name: string; company_name: string } &
+      ({ id: null } | (ContactOptionRow & { enrolled: boolean; live_elsewhere: string | null }))
   >(
     `SELECT d.id AS deal_id, d.name AS deal_name, co.name AS company_name, p.*
        FROM deal d
@@ -487,13 +558,16 @@ export async function listEnrollableDeals(tx: WorkspaceTx, sequenceId: string | 
        JOIN company co ON co.id = d.company_id
        LEFT JOIN LATERAL (
          SELECT ${CONTACT_OPTION_COLUMNS('$1::uuid')},
-                EXISTS (SELECT 1 FROM outbound_enrollment e WHERE e.contact_id = c.id AND e.sequence_id = $2::uuid) AS enrolled
+                EXISTS (SELECT 1 FROM outbound_enrollment e WHERE e.contact_id = c.id AND e.sequence_id = $2::uuid) AS enrolled,
+                (SELECT s.name FROM outbound_enrollment e JOIN outbound_sequence s ON s.id = e.sequence_id
+                  WHERE e.contact_id = c.id AND e.sequence_id IS DISTINCT FROM $2::uuid AND e.status = ANY($3::text[])
+                  ORDER BY e.started_at DESC, s.id LIMIT 1) AS live_elsewhere
            FROM contact c
           WHERE c.company_id = d.company_id AND contact_visible_to(c.id, $1::uuid)
        ) p ON true
       WHERE NOT st.is_won AND NOT st.is_lost
       ORDER BY co.name, d.updated_at DESC, d.id, p.full_name NULLS LAST, p.id`,
-    [tx.workspaceId, sequenceId],
+    [tx.workspaceId, sequenceId, [...LIVE_ENROLLMENT_STATUSES]],
   );
   const out: EnrollableDeal[] = [];
   for (const r of rows) {
@@ -502,7 +576,7 @@ export async function listEnrollableDeals(tx: WorkspaceTx, sequenceId: string | 
       deal = { id: r.deal_id, name: r.deal_name, companyName: r.company_name, contacts: [] };
       out.push(deal);
     }
-    if (r.id !== null) deal.contacts.push({ ...toContactOption(r), enrolled: r.enrolled });
+    if (r.id !== null) deal.contacts.push({ ...toContactOption(r), enrolled: r.enrolled, liveElsewhere: r.live_elsewhere });
   }
   return out;
 }
@@ -593,7 +667,7 @@ export interface SequenceDetail {
   /** La zona de la secuencia o, si no tiene, la del espacio. */
   timeZone: string;
   templateName: string | null;
-  signal: { id: string; headline: string; kind: RecommendSignalKind; companyName: string | null } | null;
+  signal: { id: string; headline: string; kind: RecommendSignalKind; companyId: string | null; companyName: string | null } | null;
   proposal: SequenceProposal | null;
   /** La persona para la que se propuso, si este espacio la sigue viendo. */
   proposalContact: { id: string; name: string | null } | null;
@@ -642,12 +716,12 @@ export async function getSequenceDetail(tx: WorkspaceTx, id: string): Promise<Se
     await tx.query<{
       id: string; name: string; status: SequenceStatus; channel: string; automation_mode: string; tz: string;
       template_name: string | null; signal_id: string | null; signal_headline: string | null; source_kind: string | null;
-      company_name: string | null; proposal: unknown; updated_at: Date; max_touches: number; min_days: number;
+      company_id: string | null; company_name: string | null; proposal: unknown; updated_at: Date; max_touches: number; min_days: number;
       live: number; total: number; contacted: number; replied: number;
     }>(
       `SELECT s.id, s.name, s.status, s.channel, s.automation_mode, coalesce(s.timezone, w.timezone) AS tz,
               tpl.name_es AS template_name, sg.id AS signal_id, sg.headline_es AS signal_headline, src.kind AS source_kind,
-              co.name AS company_name, s.proposal, s.updated_at,
+              sg.company_id, co.name AS company_name, s.proposal, s.updated_at,
               coalesce(p.max_touches_per_company, 4) AS max_touches, coalesce(p.min_days_between_touches, 3) AS min_days,
               (SELECT count(*) FROM outbound_enrollment e WHERE e.sequence_id = s.id AND e.status = ANY($2::text[]))::int AS live,
               (SELECT count(*) FROM outbound_enrollment e WHERE e.sequence_id = s.id)::int AS total,
@@ -682,7 +756,10 @@ export async function getSequenceDetail(tx: WorkspaceTx, id: string): Promise<Se
     id: s.id, name: s.name, status: s.status, channel: s.channel, automationMode: s.automation_mode, timeZone: s.tz,
     templateName: s.template_name,
     signal: s.signal_id && s.signal_headline !== null
-      ? { id: s.signal_id, headline: s.signal_headline, kind: signalKindOfSource(s.source_kind), companyName: s.company_name }
+      ? {
+          id: s.signal_id, headline: s.signal_headline, kind: signalKindOfSource(s.source_kind), companyId: s.company_id,
+          companyName: s.company_name,
+        }
       : null,
     proposal,
     proposalContact: persona ? { id: persona.id, name: persona.full_name } : null,
@@ -840,6 +917,8 @@ interface SequenceState {
   id: string;
   status: SequenceStatus;
   enrolled: number;
+  /** La señal de la que salió, o null. */
+  signal_id: string | null;
 }
 
 /** La secuencia bloqueada para esta transacción: dos ediciones a la vez no se pisan el orden. */
@@ -847,7 +926,7 @@ async function lockSequence(tx: WorkspaceTx, id: string): Promise<SequenceState>
   assertId('cadencias', id);
   const s = (
     await tx.query<SequenceState>(
-      `SELECT s.id, s.status, (SELECT count(*) FROM outbound_enrollment e WHERE e.sequence_id = s.id)::int AS enrolled
+      `SELECT s.id, s.status, s.signal_id, (SELECT count(*) FROM outbound_enrollment e WHERE e.sequence_id = s.id)::int AS enrolled
          FROM outbound_sequence s WHERE s.id = $1::uuid FOR UPDATE`,
       [id],
     )
@@ -863,21 +942,29 @@ function assertEditable(s: SequenceState, structural: boolean): void {
   }
 }
 
-/** Reemplaza los pasos por los de una propuesta nueva («Proponer desde esta señal»). Solo sin nadie dentro. */
+/**
+ * Reemplaza los pasos por los de una propuesta nueva («Proponer desde
+ * esta señal»). Solo sin nadie dentro, y solo con la propuesta de SU
+ * señal: la secuencia y la señal llegan de un formulario, y uno hecho a
+ * mano no puede ponerle a un borrador la propuesta (ni el origen) de
+ * otra señal.
+ */
 export async function replaceStepsFromProposal(
   tx: WorkspaceTx, sequenceId: string, input: { proposal: Proposal; meta: ProposalMeta },
 ): Promise<void> {
   const s = await lockSequence(tx, sequenceId);
   assertEditable(s, true);
+  if (s.signal_id !== (input.meta.signalId ?? null)) {
+    throw new CadenciaError('invalid', `La secuencia ${sequenceId} no salió de la señal ${input.meta.signalId ?? '(ninguna)'}.`);
+  }
   await tx.query(`DELETE FROM outbound_step WHERE sequence_id = $1::uuid`, [sequenceId]);
   await insertSteps(tx, sequenceId, proposalSteps(input.proposal));
   await tx.query(
     `UPDATE outbound_sequence
         SET channel = $2, template_id = (SELECT id FROM outbound_sequence_template WHERE slug = $3),
-            signal_id = coalesce($4::uuid, signal_id), proposal = $5::jsonb
+            proposal = $4::jsonb
       WHERE id = $1::uuid`,
-    [sequenceId, input.proposal.primaryChannel, input.proposal.templateSlug, input.meta.signalId,
-      JSON.stringify(proposalJson(input.proposal, input.meta))],
+    [sequenceId, input.proposal.primaryChannel, input.proposal.templateSlug, JSON.stringify(proposalJson(input.proposal, input.meta))],
   );
   await firstEmailOpensThread(tx, sequenceId);
 }
@@ -927,14 +1014,21 @@ async function nextOrderInDay(tx: WorkspaceTx, sequenceId: string, day: number, 
 /** Cambia un paso. La forma (día, tipo, canal) solo sin nadie dentro. */
 export async function updateStep(tx: WorkspaceTx, stepId: string, patch: StepPatch): Promise<void> {
   assertId('updateStep', stepId);
+  // Primero la secuencia y su bloqueo; el paso se lee DESPUÉS, dentro del bloqueo: si no, un reordenar o
+  // un enrolamiento entre las dos lecturas haría decidir «estructural» o day_full con datos viejos.
+  const owner = (await tx.query<{ sequence_id: string }>(`SELECT sequence_id FROM outbound_step WHERE id = $1::uuid`, [stepId])).rows[0];
+  if (!owner) throw new CadenciaError('not_found', `El paso ${stepId} no existe o no es de este espacio.`);
+  const seq = await lockSequence(tx, owner.sequence_id);
   const cur = (
     await tx.query<{ sequence_id: string; day_offset: number; step_type: StepType; channel: string; generate_with_ai: boolean;
       body_template: string | null }>(
-      `SELECT sequence_id, day_offset, step_type, channel, generate_with_ai, body_template FROM outbound_step WHERE id = $1::uuid`,
-      [stepId],
+      `SELECT sequence_id, day_offset, step_type, channel, generate_with_ai, body_template
+         FROM outbound_step WHERE id = $1::uuid AND sequence_id = $2::uuid`,
+      [stepId, owner.sequence_id],
     )
   ).rows[0];
-  if (!cur) throw new CadenciaError('not_found', `El paso ${stepId} no existe o no es de este espacio.`);
+  // Se borró mientras se esperaba el bloqueo.
+  if (!cur) throw new CadenciaError('not_found', `El paso ${stepId} ya no existe.`);
   const stepType = patch.stepType ?? cur.step_type;
   // Un paso que ya era de WhatsApp (de una plantilla vieja) se puede editar en su texto; poner uno nuevo, no.
   if (!(EDITABLE_STEP_TYPES as readonly string[]).includes(stepType) && (patch.stepType !== undefined || stepType !== cur.step_type)) {
@@ -943,7 +1037,6 @@ export async function updateStep(tx: WorkspaceTx, stepId: string, patch: StepPat
   const channel = stepType === 'manual_task' ? (patch.channel ?? cur.channel) : channelForStepType(stepType);
   const day = patch.dayOffset ?? cur.day_offset;
   const structural = day !== cur.day_offset || stepType !== cur.step_type || channel !== cur.channel;
-  const seq = await lockSequence(tx, cur.sequence_id);
   assertEditable(seq, structural);
 
   if (!Number.isInteger(day) || day < 0 || day > MAX_DAY_OFFSET) throw new CadenciaError('invalid', `El día va de 0 a ${MAX_DAY_OFFSET}.`);
@@ -994,57 +1087,90 @@ export async function updateStep(tx: WorkspaceTx, stepId: string, patch: StepPat
   if (structural) await firstEmailOpensThread(tx, cur.sequence_id);
 }
 
+/** Lo que queda de un paso añadido. */
+export interface AddedStep {
+  id: string;
+  /**
+   * La política ya estaba llena de mensajes: en lugar de otro mensaje
+   * (que nunca saldría) se añadió un gesto público o una tarea a mano.
+   */
+  asGesture: boolean;
+}
+
 /**
  * Añade un paso al final (por defecto, tras el último con la separación
  * de la política, y al menos dos días). Si no se dice el ángulo, toma el
  * primero del catálogo que la secuencia todavía no usa, con su guía
  * compuesta para el canal y la señal: un paso nuevo nace con algo que
  * decir, no «sin ángulo». Si la secuencia no tiene correo todavía, una
- * respuesta en el hilo pasa a ser el correo que lo abre. Devuelve su id.
+ * respuesta en el hilo pasa a ser el correo que lo abre.
+ *
+ * Sin `stepType` («Añadir paso» de la línea de tiempo) decide el tipo: el
+ * siguiente mensaje del hilo, salvo que los mensajes ya lleguen a
+ * max_touches_per_company; entonces un gesto de presencia (una reacción
+ * en la red que llegue, como hace el recomendador al ajustarse, o una
+ * tarea a mano si no llega ninguna), que sí se cumple. Un mensaje de
+ * más quedaría marcado «no sale» desde que nace.
  */
 export async function addStep(
   tx: WorkspaceTx, sequenceId: string,
-  input: { dayOffset?: number; stepType: StepType; channel?: string; angleKey?: string | null; guidanceEs?: string | null; scheduledTime?: string },
-): Promise<string> {
+  input: { dayOffset?: number; stepType?: StepType; channel?: string; angleKey?: string | null; guidanceEs?: string | null; scheduledTime?: string } = {},
+): Promise<AddedStep> {
   const seq = await lockSequence(tx, sequenceId);
   assertEditable(seq, true);
-  if (!(EDITABLE_STEP_TYPES as readonly string[]).includes(input.stepType)) {
+  if (input.stepType !== undefined && !(EDITABLE_STEP_TYPES as readonly string[]).includes(input.stepType)) {
     throw new CadenciaError('invalid', `Tipo de paso que no se puede poner: ${input.stepType}.`);
   }
   const stats = (
-    await tx.query<{ n: number; last: number | null; has_email: boolean; min_days: number; proposal_kind: string | null;
-      source_kind: string | null; angle: string | null }>(
+    await tx.query<{ n: number; last: number | null; has_email: boolean; min_days: number; max_touches: number; allowed: string[];
+      messages: number; locale: string; proposal_kind: string | null; source_kind: string | null; angle: string | null }>(
       `SELECT (SELECT count(*) FROM outbound_step st WHERE st.sequence_id = s.id)::int AS n,
               (SELECT max(day_offset) FROM outbound_step st WHERE st.sequence_id = s.id) AS last,
               EXISTS (SELECT 1 FROM outbound_step st WHERE st.sequence_id = s.id AND st.step_type IN ('email', 'email_reply')) AS has_email,
-              coalesce(p.min_days_between_touches, 3) AS min_days,
-              s.proposal->>'signalKind' AS proposal_kind, src.kind AS source_kind,
+              coalesce(p.min_days_between_touches, 3) AS min_days, coalesce(p.max_touches_per_company, 4) AS max_touches,
+              coalesce(p.allowed_channels, '{email,linkedin}'::text[]) AS allowed,
+              (SELECT count(*) FROM outbound_step st WHERE st.sequence_id = s.id AND st.step_type = ANY($2::text[]))::int AS messages,
+              w.locale, s.proposal->>'signalKind' AS proposal_kind, src.kind AS source_kind,
               (SELECT a.key FROM outbound_angle a
                 WHERE NOT EXISTS (SELECT 1 FROM outbound_step st JOIN outbound_angle u ON u.id = st.angle_id
                                    WHERE st.sequence_id = s.id AND u.key = a.key)
                 ORDER BY a.position, a.key LIMIT 1) AS angle
          FROM outbound_sequence s
+         JOIN workspace w ON w.id = s.workspace_id
          LEFT JOIN outbound_policy p ON p.workspace_id = s.workspace_id
          LEFT JOIN signal sg ON sg.id = s.signal_id
          LEFT JOIN signal_source src ON src.id = sg.source_id
         WHERE s.id = $1::uuid`,
-      [sequenceId],
+      [sequenceId, [...DISPATCHABLE_STEP_TYPES]],
     )
   ).rows[0]!;
   if (stats.n >= MAX_STEPS) throw new CadenciaError('too_many_steps', `Una secuencia lleva hasta ${MAX_STEPS} pasos.`);
   const gap = Math.max(2, stats.min_days);
   const day = input.dayOffset ?? Math.min(MAX_DAY_OFFSET, stats.last === null ? 0 : stats.last + gap);
   if (!Number.isInteger(day) || day < 0 || day > MAX_DAY_OFFSET) throw new CadenciaError('invalid', `El día va de 0 a ${MAX_DAY_OFFSET}.`);
-  const stepType: StepType = input.stepType === 'email_reply' && !stats.has_email ? 'email' : input.stepType;
+
+  // El tipo: el que se pidió o, sin pedir ninguno, el siguiente mensaje si la política aún deja uno.
+  const asGesture = input.stepType === undefined && stats.messages >= stats.max_touches;
+  let requested: StepType = input.stepType ?? 'email_reply';
+  let requestedChannel = input.channel;
+  if (asGesture) {
+    const states = await channelStates(tx);
+    const network = (['linkedin', 'instagram_dm'] as const).find((c) => stats.allowed.includes(c) && states[c] !== 'missing');
+    requested = network === 'linkedin' ? 'linkedin_like' : network === 'instagram_dm' ? 'instagram_like' : 'manual_task';
+    requestedChannel = network ?? 'linkedin';
+  }
+  const stepType: StepType = requested === 'email_reply' && !stats.has_email ? 'email' : requested;
   const time = input.scheduledTime ?? '09:30';
   if (!TIME_RE.test(time)) throw new CadenciaError('invalid', 'La hora va como HH:MM.');
-  const channel = stepType === 'manual_task' ? (input.channel ?? 'email') : channelForStepType(stepType);
+  const channel = stepType === 'manual_task' ? (requestedChannel ?? 'email') : channelForStepType(stepType);
   if (!(EDITABLE_CHANNELS as readonly string[]).includes(channel)) throw new CadenciaError('invalid', `Canal que no se puede poner: ${channel}.`);
-  const angleKey = input.angleKey === undefined ? stats.angle : input.angleKey;
+  const angleKey = asGesture && input.angleKey === undefined ? 'presencia' : input.angleKey === undefined ? stats.angle : input.angleKey;
   const kind = (RECOMMEND_SIGNAL_KINDS as readonly (string | null)[]).includes(stats.proposal_kind)
     ? (stats.proposal_kind as RecommendSignalKind)
     : signalKindOfSource(stats.source_kind);
-  const guidance = input.guidanceEs !== undefined ? input.guidanceEs : angleKey ? composeGuidance(angleKey, stepType, kind) : null;
+  const guidance = input.guidanceEs !== undefined
+    ? input.guidanceEs
+    : angleKey ? composeGuidance(angleKey, stepType, kind, guidanceLocale(stats.locale)) : null;
   const order = await nextOrderInDay(tx, sequenceId, day, null);
   const textless = TEXTLESS_STEP_TYPES.includes(stepType);
   const { rows } = await tx.query<{ id: string }>(
@@ -1059,7 +1185,7 @@ export async function addStep(
     ],
   );
   await firstEmailOpensThread(tx, sequenceId);
-  return rows[0]!.id;
+  return { id: rows[0]!.id, asGesture };
 }
 
 export async function deleteStep(tx: WorkspaceTx, stepId: string): Promise<void> {
