@@ -1,7 +1,7 @@
 /**
  * El pie obligatorio de cada correo del outreach (VEN-15): la frase de
  * baja con su enlace y la dirección postal del workspace. Funciones puras.
- * Los textos viven en ./messages.ts.
+ * Los textos viven en ./deliverability-messages.ts.
  *
  * CAN-SPAM pide una dirección postal válida y una forma clara de darse de
  * baja en cada correo comercial; el RGPD y las leyes locales de protección
@@ -10,7 +10,7 @@
  * regla para cada correo: sin dirección o sin enlace, el correo no está
  * listo y el despachador no lo reclama.
  */
-import { FOOTER_TEXTS, OUTREACH_FALLBACK_LANGUAGE, type FooterTexts } from './messages.ts';
+import { FOOTER_TEXTS, OUTREACH_FALLBACK_LANGUAGE, type FooterTexts } from './deliverability-messages.ts';
 
 export type ComplianceGap = 'postal_address' | 'unsubscribe_link';
 

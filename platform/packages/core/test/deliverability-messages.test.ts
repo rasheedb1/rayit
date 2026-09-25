@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   FOOTER_TEXTS, OUTREACH_FALLBACK_LANGUAGE, OUTREACH_LANGUAGES, footerTextsFor, outreachLanguage,
-} from '../src/outreach/messages.ts';
+} from '../src/outreach/deliverability-messages.ts';
 import * as indice from '../src/outreach/deliverability.ts';
 import { buildEmailFooter } from '../src/outreach/footer.ts';
 

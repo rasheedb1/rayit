@@ -3,7 +3,7 @@
  * hoy, las alertas del outreach (VEN-15): la notification del día, el
  * correo de resumen y, para las urgentes, el correo inmediato (r5). En el
  * idioma del workspace (workspace.locale), con la misma regla que el pie
- * del correo del outreach (outreachLanguage de @mc/core/outreach/messages).
+ * del correo del outreach (outreachLanguage de @mc/core/outreach/deliverability-messages).
  *
  * notification.title_es y body_es guardan la frase ya en ese idioma, como
  * hace Cotizar (packages/db/src/queries/cotizar/cotizacion.ts,
@@ -14,7 +14,7 @@
  * del workspace.
  */
 import type { OutreachAlertKind } from '@mc/core/outreach/alerts';
-import { outreachLanguage, type OutreachLanguage } from '@mc/core/outreach/messages';
+import { outreachLanguage, type OutreachLanguage } from '@mc/core/outreach/deliverability-messages';
 
 /**
  * Adónde lleva cada alerta. Todas a /ventas/politica, que trae el bloque

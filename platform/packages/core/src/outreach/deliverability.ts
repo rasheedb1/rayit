@@ -4,11 +4,11 @@
  * Índice: cada pieza vive en su módulo (r5) y aquí solo se reexporta,
  * para que ningún import cambie.
  *
- *   ./optout.ts     El enlace de baja: createOptoutToken / looksLikeOptoutToken /
+ *   ./unsubscribe.ts El enlace de baja: createOptoutToken / looksLikeOptoutToken /
  *                   optoutTokenHash, maskEmailAddress, optoutUrl,
  *                   oneClickUnsubscribeUrl, listUnsubscribeHeaders
  *   ./footer.ts     El pie obligatorio: complianceReadiness / buildEmailFooter
- *   ./messages.ts   Los textos del pie por idioma y la regla del idioma
+ *   ./deliverability-messages.ts  Los textos del pie por idioma y la regla del idioma
  *                   (outreachLanguage, footerTextsFor)
  *   ./warmup.ts     El calentamiento: warmupDay / warmupDailyLimit / warmupCurve
  *   ./bounces.ts    Los rebotes: detectBounce
@@ -21,13 +21,13 @@
  * rebotes y alertas del worker. Ver docs/ventas-outreach.md §4 y §5.1.
  *
  * Se importa por su ruta (`@mc/core/outreach/deliverability`), no desde
- * `@mc/core`: optout.ts usa node:crypto, y el índice del paquete también
+ * `@mc/core`: unsubscribe.ts usa node:crypto, y el índice del paquete también
  * lo leen componentes de cliente. Un componente de cliente importa el
  * módulo que necesita (`@mc/core/outreach/warmup`, `…/alerts`).
  */
-export * from './optout.ts';
+export * from './unsubscribe.ts';
 export * from './footer.ts';
-export * from './messages.ts';
+export * from './deliverability-messages.ts';
 export * from './warmup.ts';
 export * from './bounces.ts';
 export * from './alerts.ts';

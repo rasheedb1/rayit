@@ -722,8 +722,8 @@ que el despachador de VEN-10 tiene que usar, todo en
   Cco; el aviso de cuenta caída no pide reconectar si no hay cómo, y su
   texto no manda a la página donde ya se lee; con pocos envíos «Rebotes»
   dice «1 de 4» en vez de un 25 %; `deliverability.ts` queda como índice
-  de `optout`, `footer`, `messages`, `bounces`, `alerts` y `channels`, y
-  los textos del pie viven en `outreach/messages.ts` con una sola regla
+  de `unsubscribe`, `footer`, `deliverability-messages`, `bounces`, `alerts` y `channels`, y
+  los textos del pie viven en `outreach/deliverability-messages.ts` (no `messages.ts` ni `optout.ts`, que son de VEN-10: el enlace va en `unsubscribe.ts`) con una sola regla
   de idioma (`outreachLanguage`, por `Intl.Locale`) que usan también la
   página de baja y las alertas; y `@mc/db` abre cada base de pruebas
   desde una foto migrada (`dumpDataDir`/`loadDataDir`), así que el
@@ -977,7 +977,7 @@ revisores técnico y de producto y el mismo umbral.
    menos 30 días), y es la misma forma que ya genera el despachador de
    VEN-10. **Estado: supuesto declarado, como la 6**, con el cambio del
    criterio escrito junto al «terminado cuando». Si Rasheed prefiere la
-   firma, `createOptoutToken` (`@mc/core/outreach/optout`) es el único
+   firma, `createOptoutToken` (`@mc/core/outreach/unsubscribe`) es el único
    sitio que la genera; la base seguiría buscando por el sha256.
 
 ## 9. Los errores de Chief que no vamos a repetir

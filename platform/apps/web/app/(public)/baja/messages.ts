@@ -6,7 +6,7 @@
  * frase y un botón.
  *
  * Por idioma (r5): el pie del correo sale en el idioma del espacio que
- * escribe (footerTextsFor, @mc/core/outreach/messages), y la página
+ * escribe (footerTextsFor, @mc/core/outreach/deliverability-messages), y la página
  * a la que lleva tiene que hablar el mismo. La página elige con
  * `bajaIdioma`: el locale del espacio que envió (lo devuelve
  * public_optout_preview) y, si no se sabe (un enlace que no existe, o
@@ -14,7 +14,7 @@
  * misma forma que alertTextsFor en apps/worker/src/jobs/ventas/messages.ts.
  */
 
-import { OUTREACH_LANGUAGES, outreachLanguage, type OutreachLanguage } from "@mc/core/outreach/messages";
+import { OUTREACH_LANGUAGES, outreachLanguage, type OutreachLanguage } from "@mc/core/outreach/deliverability-messages";
 
 /** Los idiomas de la página: los del outreach, ni uno más ni uno menos. */
 export type BajaIdioma = OutreachLanguage;
@@ -154,7 +154,7 @@ export function bajaTexts(idioma: BajaIdioma): BajaTexts {
 
 /**
  * El idioma de la página. Con el locale del espacio que envió, la regla
- * del pie del correo (outreachLanguage, @mc/core/outreach/messages): el
+ * del pie del correo (outreachLanguage, @mc/core/outreach/deliverability-messages): el
  * idioma base por Intl.Locale, con español de respaldo. Sin él, el primer
  * idioma que la página habla en el Accept-Language, por orden de
  * preferencia (q); si no habla ninguno, el mismo respaldo.
