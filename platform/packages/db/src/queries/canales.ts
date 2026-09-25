@@ -616,6 +616,12 @@ export interface LiveChannelAccount {
   channel: OutreachChannel;
   status: ChannelAccountStatus;
   displayName: string | null;
+  /**
+   * Quién es la persona en el proveedor (connection_params.im.id, 0042):
+   * el webhook la compara con quien escribe para reconocer el eco de un
+   * envío propio aunque el aviso no traiga account_info.
+   */
+  providerIdentity: string | null;
 }
 
 /**
@@ -626,13 +632,15 @@ export interface LiveChannelAccount {
  */
 export async function findUnipileAccountForWebhook(tx: WorkspaceTx, accountId: string, providerAccountId: string): Promise<LiveChannelAccount | null> {
   if (!isUuid(accountId)) return null;
-  const { rows } = await tx.query<{ id: string; channel: OutreachChannel; status: ChannelAccountStatus; display_name: string | null }>(
-    `SELECT id, channel, status, display_name FROM outreach_channel_account
+  const { rows } = await tx.query<{
+    id: string; channel: OutreachChannel; status: ChannelAccountStatus; display_name: string | null; provider_identity: string | null;
+  }>(
+    `SELECT id, channel, status, display_name, provider_identity FROM outreach_channel_account
       WHERE id = $1 AND provider = 'unipile' AND provider_account_id = $2 AND status = ANY($3::text[])`,
     [accountId, providerAccountId, [...LIVE_CHANNEL_ACCOUNT_STATUSES]],
   );
   const r = rows[0];
-  return r ? { id: r.id, channel: r.channel, status: r.status, displayName: r.display_name } : null;
+  return r ? { id: r.id, channel: r.channel, status: r.status, displayName: r.display_name, providerIdentity: r.provider_identity } : null;
 }
 
 /** El aviso que ve la persona en la campana cuando su cuenta cae. Las frases las pone quien llama (@mc/db no escribe frases). */

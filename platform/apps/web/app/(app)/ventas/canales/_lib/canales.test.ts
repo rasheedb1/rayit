@@ -284,6 +284,24 @@ describe("el webhook de Unipile", () => {
                now() - interval '1 hour', now() - interval '1 hour', now() - interval '1 hour', 1, 'msg_nuestro_1', 'chat_web_0001', $2)`,
       [SEED_WORKSPACE_ID, li.id],
     );
+    // El eco de nuestro propio DM en ese hilo, SIN account_info: lo reconoce porque escribe la persona de la cuenta
+    // (provider_identity = connection_params.im.id). No entra como respuesta ni detiene el enrolamiento.
+    const ENROLLMENT = "00000005-0000-4000-8000-0000000e0001";
+    await db.queryAsSuperuser(`UPDATE outbound_touch SET enrollment_id = $1 WHERE thread_ref = 'chat_web_0001'`, [ENROLLMENT]);
+    const { account_info: _sinCuenta, ...sinAccountInfo } = MESSAGE("acc_li_web", "msg_eco_1");
+    const eco = await unipileWebhook(webhook({
+      ...sinAccountInfo, message: "Hola Marta", sender: { attendee_provider_id: "ACoAAB_laura_web", attendee_name: "Laura Gómez" },
+    }, headers), deps());
+    expect(await eco.json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.echo });
+    // Sin remitente no se sabe si es un eco: se descarta antes que arriesgar la cadencia.
+    const { sender: _sinRemitente, ...sinSender } = sinAccountInfo;
+    const anonimo = await unipileWebhook(webhook({ ...sinSender, message_id: "msg_sin_remitente_1" }, headers), deps());
+    expect(await anonimo.json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.noSender });
+    expect(await count(`SELECT count(*)::int AS n FROM outbound_message WHERE provider_message_id IN ('msg_eco_1', 'msg_sin_remitente_1')`)).toBe(0);
+    const enr = await db.queryAsSuperuser<{ status: string }>(`SELECT status FROM outbound_enrollment WHERE id = $1`, [ENROLLMENT]);
+    expect(enr.rows[0]?.status, "el eco no detiene la cadencia").toBe("active");
+    await db.queryAsSuperuser(`UPDATE outbound_touch SET enrollment_id = NULL WHERE thread_ref = 'chat_web_0001'`);
+
     // Una respuesta, con las cabeceras que Unipile manda porque las pusimos al crear el aviso.
     const msg = await unipileWebhook(webhook(MESSAGE("acc_li_web", "msg_web_1"), headers), deps());
     expect(await msg.json()).toEqual({ ok: true });

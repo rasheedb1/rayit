@@ -207,6 +207,8 @@ export const MESSAGES = {
     ignored: {
       unknownAccount: "cuenta desconocida o desconectada",
       echo: "eco de un envío propio",
+      /** Un mensaje sin sender.attendee_provider_id: podría ser el eco de un envío propio y no se arriesga a detener una cadencia. */
+      noSender: "mensaje sin remitente",
       duplicate: "mensaje repetido",
       healthy: "la cuenta sigue bien",
       unknownInUnipile: "cuenta desconocida en Unipile",

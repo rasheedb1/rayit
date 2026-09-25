@@ -124,7 +124,10 @@ export async function unipileWebhook(req: Request, deps: ChannelDeps): Promise<R
     if (!account) return MESSAGES.routes.ignored.unknownAccount;
     const name = channelHealthName(account.channel);
     if (event.kind === "message") {
-      if (event.fromSelf) return MESSAGES.routes.ignored.echo;
+      // Sin quién escribe no se sabe si es el eco de un envío propio: se descarta antes que detener una cadencia.
+      if (!event.senderProviderId) return MESSAGES.routes.ignored.noSender;
+      // El eco de un envío propio: por account_info del aviso o, si no viene, porque escribe la persona de esta cuenta (0042).
+      if (event.fromSelf || isOwnAccount(event.senderProviderId, account.providerIdentity)) return MESSAGES.routes.ignored.echo;
       // Con quién escribe: una respuesta en un chat nuevo (la invitación aceptada) casa con el toque enviado a esa persona.
       const r = await recordInboundMessage(tx, {
         account, threadRef: event.chatId, providerMessageId: event.messageId, body: event.text,
@@ -152,6 +155,17 @@ export async function unipileWebhook(req: Request, deps: ChannelDeps): Promise<R
     return null;
   });
   return json(200, result ? { ok: true, ignored: result } : { ok: true });
+}
+
+/**
+ * ¿Escribe la propia cuenta? El id que Unipile pone en
+ * `sender.attendee_provider_id` es el mismo que `connection_params.im.id`
+ * de la cuenta (provider_identity, 0042). Sin identidad guardada (una
+ * cuenta conectada antes de 0042) no se puede afirmar: decide el
+ * `account_info` del aviso.
+ */
+export function isOwnAccount(senderProviderId: string, providerIdentity: string | null): boolean {
+  return providerIdentity !== null && senderProviderId.trim() !== "" && senderProviderId.trim() === providerIdentity.trim();
 }
 
 /** El aviso de cuenta creada o reconectada: sin cabeceras nuestras, lo autentica el estado firmado del cuerpo. */
