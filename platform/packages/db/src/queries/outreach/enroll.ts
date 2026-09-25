@@ -114,6 +114,7 @@ interface ContactRow {
  *   · la plantilla deja huecos sin rellenar → held (placeholders:<huecos>);
  *   · (r4) la nota de una invitación de LinkedIn pasa de 300 caracteres →
  *     held (note_too_long:<n>): no se corta en el adaptador;
+ *   · (r3) un correo nuevo sin asunto → held (no_subject);
  *   · (r5) la política pide revisión humana (require_human_review, el
  *     valor por defecto) o la secuencia es 'review' (0037 §3.1: «la
  *     máquina propone y la persona aprueba») → held (needs_review): sale
@@ -148,6 +149,8 @@ export function initialTouchState(input: {
     const over = inviteNoteOverflow(input.body);
     if (over !== null) return { status: 'held', heldReason: formatHoldReason({ code: 'note_too_long', detail: over }) };
   }
+  // (r3) Un correo nuevo sin asunto se retiene desde el principio (el despachador tampoco lo enviaría).
+  if (input.stepType === 'email' && !input.subject?.trim()) return { status: 'held', heldReason: formatHoldReason({ code: 'no_subject' }) };
   if (input.requireHumanReview !== false || input.automationMode === 'review') {
     return { status: 'held', heldReason: formatHoldReason({ code: 'needs_review' }) };
   }

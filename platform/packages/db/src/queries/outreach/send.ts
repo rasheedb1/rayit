@@ -281,6 +281,7 @@ export const HOLD_REASONS = {
   placeholders: (matches: readonly string[]) => formatHoldReason({ code: 'placeholders', detail: matches.join(' ') }),
   unconfirmed: (attempt: number) => formatHoldReason({ code: 'unconfirmed_attempt', detail: attempt }),
   noteTooLong: (length: number) => formatHoldReason({ code: 'note_too_long', detail: length }),
+  noSubject: formatHoldReason({ code: 'no_subject' }),
 } as const;
 
 /**
@@ -321,6 +322,10 @@ export function decideBeforeSend(ctx: SendContext, claimedAt: Date, now: Date): 
   }
   // «Como te comenté ayer…» sobre un correo que no salió (§9): no sale huérfano ni sin asunto.
   if (ctx.stepType === 'email_reply' && !ctx.previous) return { kind: 'hold', reason: HOLD_REASONS.replyWithoutThread };
+  // (r3, de la r2 rehecha) Un correo nuevo sin asunto no sale: llega como «(sin asunto)».
+  if (ctx.channel === 'email' && ctx.stepType !== 'email_reply' && !ctx.subject?.trim()) {
+    return { kind: 'hold', reason: HOLD_REASONS.noSubject };
+  }
   return { kind: 'send' };
 }
 

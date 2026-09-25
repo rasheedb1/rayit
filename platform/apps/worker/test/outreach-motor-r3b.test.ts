@@ -14,7 +14,8 @@
  *   · un intento sin confirmar: «sí salió» lo registra y la cadencia
  *     sigue; «no salió» lo vuelve a enviar con su plaza devuelta, también
  *     en Unipile, donde un chat nuevo no se puede comprobar (hallazgo 4);
- *   · una dirección mal escrita se salta sin tumbar el lote (r2 rehecha).
+ *   · una dirección mal escrita se salta sin tumbar el lote, y un correo
+ *     nuevo sin asunto se retiene (de la r2 rehecha).
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -313,4 +314,30 @@ test('una ficha con el correo mal escrito se salta y el resto del lote sale; al 
                      VALUES ('${nuevo}', '${w.company}', '${w.id}', 'Mal Escrita', 'sin-arroba.marca.test', 'user_provided')`);
   const e = await motor.transaction((tx) => enrollContacts(tx, { sequenceId: w.seq, contactIds: [nuevo], now: bogota('2026-09-23', '07:00') }));
   assert.deepEqual(e.skipped, [{ contactId: nuevo, reason: 'invalid_address' }]);
+});
+
+test('un correo nuevo sin asunto nace retenido (no_subject) y, si llega a la cola, el despachador tampoco lo envía', async () => {
+  const w = await workspace(11, { contacts: 2 });
+  const [c1, c2] = w.contacts as [string, string];
+  const seq = `${w.id.slice(0, 24)}${hex(0x5e88, 12)}`;
+  await db.raw.exec(`
+    INSERT INTO outbound_sequence (id, workspace_id, name, channel, status, automation_mode) VALUES ('${seq}', '${w.id}', 'Sin asunto', 'email', 'active', 'auto');
+    INSERT INTO outbound_step (workspace_id, sequence_id, day_offset, order_in_day, step_type, channel, scheduled_time, subject_template,
+                               body_template, generate_with_ai)
+    VALUES ('${w.id}', '${seq}', 0, 0, 'email', 'email', '10:00', NULL, 'Hola, {{first_name}}.', false);
+  `);
+  const e = await motor.transaction((tx) => enrollContacts(tx, { sequenceId: seq, contactIds: [c1], now: bogota('2026-09-23', '07:00') }));
+  assert.equal(e.enrolled[0]!.held, 1);
+  assert.equal(await scalar<string>(`SELECT held_reason AS v FROM outbound_touch WHERE contact_id = $1 AND sequence_id = $2`, [c1, seq]), 'no_subject');
+
+  // Uno que alguien dejó en la cola sin asunto (la web lo programó a mano).
+  await enroll(w, bogota('2026-09-23', '07:00'), [c2]);
+  const [primero] = await touches(c2);
+  await db.raw.query(`UPDATE outbound_touch SET subject = '  ' WHERE id = $1`, [primero!.id]);
+  const fake = fakeChannels();
+  const r = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:00')));
+  assert.equal(r.sent.length, 0);
+  assert.deepEqual(r.held, [{ touchId: primero!.id, reason: 'no_subject' }]);
+  assert.equal((await touches(c2))[0]!.held_reason, 'no_subject');
+  assert.equal(fake.email.sent.length, 0, 'nunca «(sin asunto)»');
 });

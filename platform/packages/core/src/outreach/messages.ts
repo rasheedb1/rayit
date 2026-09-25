@@ -115,12 +115,14 @@ export function failureReason(lang: NoticeLang, code: string): string {
 //   reply_without_thread       respuesta en el hilo a un correo que no salió
 //   unconfirmed_attempt:<n>    no se pudo comprobar si el intento n salió
 //   note_too_long:<n>          la nota de la invitación de LinkedIn tiene n caracteres
+//   no_subject                 (r3) un correo nuevo sin asunto (la respuesta en el hilo usa «Re: …»)
 //   needs_review               (r5) espera la aprobación de una persona: la
 //                              revisión humana de la política, o una secuencia
 //                              en modo 'review'
 
 export const HOLD_CODES = [
   'no_postal_address', 'no_body', 'placeholders', 'reply_without_thread', 'unconfirmed_attempt', 'note_too_long', 'needs_review',
+  'no_subject',
 ] as const;
 export type HoldCode = (typeof HOLD_CODES)[number];
 
@@ -154,6 +156,7 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
       `no pudimos comprobar si el intento ${d} salió; mira tu carpeta de enviados y dinos si salió o no, para no mandarlo dos veces`,
     note_too_long: (d) => `la nota de la invitación de LinkedIn tiene ${d} caracteres y el máximo es ${LINKEDIN_INVITE_NOTE_MAX}`,
     needs_review: () => 'espera tu aprobación antes de salir (la revisión humana está encendida)',
+    no_subject: () => 'es un correo nuevo y no tiene asunto; escríbelo antes de aprobarlo',
   },
   en: {
     no_postal_address: () => 'the postal address for the email footer is missing; add it in the sending policy',
@@ -164,6 +167,7 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
       `we couldn't confirm whether attempt ${d} went out; check your sent folder and tell us whether it did, so it isn't sent twice`,
     note_too_long: (d) => `the LinkedIn invitation note has ${d} characters and the limit is ${LINKEDIN_INVITE_NOTE_MAX}`,
     needs_review: () => 'it waits for your approval before going out (human review is on)',
+    no_subject: () => "it's a new email with no subject; write one before approving it",
   },
 };
 
