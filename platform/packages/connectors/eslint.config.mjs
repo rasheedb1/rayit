@@ -31,4 +31,16 @@ export default [
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     },
   },
+  // FakeGmail y FakeUnipile viven en src/testing y salen por @mc/connectors/testing:
+  // ningún archivo de producción del paquete los importa (VEN-9).
+  {
+    files: ['src/**/*.ts'],
+    ignores: ['src/testing/**'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [{ name: '@mc/connectors/testing', message: 'Los dobles son solo para las pruebas.' }],
+        patterns: [{ group: ['**/testing/fake-*', '**/testing/index.ts'], message: 'Los dobles son solo para las pruebas.' }],
+      }],
+    },
+  },
 ];

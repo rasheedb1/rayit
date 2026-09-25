@@ -109,17 +109,38 @@ function textPart(contentType: string, body: string): string {
   return [`Content-Type: ${contentType}; charset=UTF-8`, 'Content-Transfer-Encoding: base64', '', base64Lines(body)].join(CRLF);
 }
 
+/**
+ * El valor extendido de RFC 2231 / 5987 (`UTF-8''…`): todo lo que no es
+ * attr-char va en %XX. encodeURIComponent deja pasar ' ( ) * y !, y el
+ * apóstrofo es justo el separador de «charset'idioma'valor»: un adjunto
+ * «Propuesta d'Ana (v2).pdf» salía partido en los clientes estrictos. Se
+ * codifican los cinco (! también, aunque attr-char lo admite, por los
+ * clientes que lo leen mal: sobra y no hace daño).
+ */
+export function encodeRfc2231Value(value: string): string {
+  return `UTF-8''${encodeURIComponent(value).replace(/['()*!]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`;
+}
+
 function attachmentPart(a: MailAttachment): string {
   assertHeaderSafe('Content-Type', a.contentType);
   assertHeaderSafe('filename', a.filename);
   if (!/^[\w.+-]+\/[\w.+-]+$/.test(a.contentType)) throw new MimeError('Tipo de adjunto inválido.');
-  // RFC 2231 para el nombre con acentos; el `name` con encoded-word para clientes viejos.
-  const star = `filename*=UTF-8''${encodeURIComponent(a.filename)}`;
-  const legacy = isAscii(a.filename) ? `"${a.filename.replace(/["\\]/g, '')}"` : `"${encodeHeaderWord(a.filename)}"`;
+  /*
+   * El nombre, sin encoded-words: RFC 2047 §5 los prohíbe dentro de una
+   * cadena entre comillas y en los parámetros de Content-Type y de
+   * Content-Disposition, y sin comillas tampoco valen (? y = son tspecials
+   * de RFC 2045). En ASCII, el parámetro de siempre entre comillas; con
+   * acentos, solo la forma extendida de RFC 2231 (name* y filename*), que
+   * es la que leen Gmail, Outlook y Apple Mail.
+   */
+  const ext = encodeRfc2231Value(a.filename);
+  const quoted = `"${a.filename.replace(/["\\]/g, '\\$&')}"`;
+  const name = isAscii(a.filename) ? `name=${quoted}` : `name*=${ext}`;
+  const filename = isAscii(a.filename) ? `filename=${quoted};${CRLF} filename*=${ext}` : `filename*=${ext}`;
   return [
-    `Content-Type: ${a.contentType}; name=${legacy}`,
+    `Content-Type: ${a.contentType};${CRLF} ${name}`,
     'Content-Transfer-Encoding: base64',
-    `Content-Disposition: attachment; ${star}`,
+    `Content-Disposition: attachment;${CRLF} ${filename}`,
     '',
     base64Lines(a.data),
   ].join(CRLF);

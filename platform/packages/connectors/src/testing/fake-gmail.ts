@@ -10,8 +10,8 @@
  * invalid_grant (not_connected), que es lo que pasa cuando la persona
  * quita el acceso desde su cuenta de Google.
  */
-import { OutreachApiError, type OutreachErrorKind } from './errors.ts';
-import { buildMime, type OutgoingEmail } from './mime.ts';
+import { OutreachApiError, type OutreachErrorKind } from '../outreach/errors.ts';
+import { buildMime, type OutgoingEmail } from '../outreach/mime.ts';
 import {
   GMAIL_SCOPES, type AuthorizationUrlOptions, type GmailApi, type GmailMessage, type GmailMessageRef, type GoogleOAuthApi, type SentEmail,
 } from '../gmail.ts';

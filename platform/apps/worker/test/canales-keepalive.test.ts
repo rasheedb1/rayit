@@ -17,9 +17,9 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import {
-  EncryptedSecretStore, FakeGmail, FakeUnipile, keyringOf, signChannelState, TokenCipher, webhookSecretFingerprint, withoutNetwork, type NetworkGuard,
-  type OAuthTokens,
+  EncryptedSecretStore, keyringOf, signChannelState, TokenCipher, webhookSecretFingerprint, withoutNetwork, type NetworkGuard, type OAuthTokens,
 } from '@mc/connectors';
+import { FakeGmail, FakeUnipile } from '@mc/connectors/testing';
 import { allJobs } from '../src/jobs/index.ts';
 import { CHANNELS_KEEPALIVE_JOB_ID, runChannelsKeepalive } from '../src/jobs/ventas/canales.keepalive.ts';
 import { CHANNELS_RELEASE_JOB_ID, runChannelsRelease } from '../src/jobs/ventas/canales.release.ts';

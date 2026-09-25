@@ -12,7 +12,7 @@
  * error con `failNext`, lo lanza como lo lanzaría el cliente real
  * (OutreachApiError con el mismo kind).
  */
-import { OutreachApiError, type OutreachErrorKind } from './errors.ts';
+import { OutreachApiError, type OutreachErrorKind } from '../outreach/errors.ts';
 import {
   LINKEDIN_INVITE_NOTE_MAX, type CreateWebhookRequest, type HostedAuthRequest, type UnipilePage, type SendMessageRequest, type UnipileAccount, type UnipileApi,
   type UnipileCallOptions, type UnipileChat, type UnipileMessage, type UnipileProfile,

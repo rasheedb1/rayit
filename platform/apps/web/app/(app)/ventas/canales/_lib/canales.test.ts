@@ -24,9 +24,10 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  channelStateKey, dumpTextColumns, EncryptedSecretStore, FakeGmail, FakeUnipile, findSecretInDump, INTERACTIVE_BUDGET, normalizeUnipileAccount,
+  channelStateKey, dumpTextColumns, EncryptedSecretStore, findSecretInDump, INTERACTIVE_BUDGET, normalizeUnipileAccount,
   OutreachApiError, signChannelRoute, signChannelState, TokenCipher, UNIPILE_ROUTE_HEADER, UNIPILE_SECRET_HEADER, withoutNetwork, type NetworkGuard,
 } from "@mc/connectors";
+import { FakeGmail, FakeUnipile } from "@mc/connectors/testing";
 import type { WorkspaceTx } from "@mc/db";
 import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { listChannelAccounts } from "@mc/db/queries/canales";

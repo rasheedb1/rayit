@@ -4,7 +4,7 @@ import {
   freshGoogleTokens, GmailClient, GMAIL_REFRESH_MARGIN_MS, GMAIL_SCOPES, GoogleOAuth, loadGoogleOAuthConfig, loadGoogleTokenConfig, shortScope,
 } from '../src/gmail.ts';
 import type { OutreachApiError } from '../src/outreach/errors.ts';
-import { FakeGmail } from '../src/outreach/fake-gmail.ts';
+import { FakeGmail } from '../src/testing/index.ts';
 import { InMemoryOutreachCallLog } from '../src/outreach/log.ts';
 import { FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from '../src/testing/fixture-fetch.ts';
 import type { OAuthTokens } from '../src/types.ts';

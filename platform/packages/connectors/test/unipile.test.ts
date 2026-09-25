@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { OutreachApiError } from '../src/outreach/errors.ts';
-import { FakeUnipile } from '../src/outreach/fake-unipile.ts';
+import { FakeUnipile } from '../src/testing/index.ts';
 import { INTERACTIVE_BUDGET } from '../src/outreach/http.ts';
 import { InMemoryOutreachCallLog } from '../src/outreach/log.ts';
 import { FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from '../src/testing/fixture-fetch.ts';

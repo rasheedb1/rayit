@@ -52,9 +52,31 @@ test('buildMime: multipart/mixed con alternativa HTML y un adjunto con nombre ac
   }, { boundary });
   assert.match(mime, /^Content-Type: multipart\/mixed; boundary="b0"\r$/m);
   assert.match(mime, /^Content-Type: multipart\/alternative; boundary="b1"\r$/m);
-  assert.match(mime, /Content-Disposition: attachment; filename\*=UTF-8''Media%20kit%20%E2%80%93%20Laura%20G%C3%B3mez\.pdf/);
+  assert.match(mime, /Content-Disposition: attachment;\r\n filename\*=UTF-8''Media%20kit%20%E2%80%93%20Laura%20G%C3%B3mez\.pdf\r\n/);
+  // Con acentos, el nombre va en la forma extendida de RFC 2231, nunca como encoded-word (RFC 2047 §5 lo prohíbe en parámetros).
+  assert.match(mime, /Content-Type: application\/pdf;\r\n name\*=UTF-8''Media%20kit%20%E2%80%93%20Laura%20G%C3%B3mez\.pdf\r\n/);
+  assert.ok(!/=\?UTF-8\?B\?/.test(mime.slice(mime.indexOf('application/pdf'))), 'ningún encoded-word en las cabeceras del adjunto');
   assert.match(mime, /\r\nJVBERg==\r\n/);
   assert.ok(mime.trimEnd().endsWith('--b0--'));
+});
+
+test('buildMime: el apóstrofo y los paréntesis del nombre de un adjunto van en %XX (el apóstrofo separa charset, idioma y valor)', () => {
+  const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+  const adjunto = (filename: string) => buildMime({
+    from: { address: 'a@b.test' }, to: { address: 'c@d.test' }, subject: 'x', text: 'y',
+    attachments: [{ filename, contentType: 'application/pdf', data: pdf }],
+  }, { boundary });
+  const ascii = adjunto("Propuesta d'Ana (v2)*.pdf");
+  assert.match(ascii, /\r\n filename\*=UTF-8''Propuesta%20d%27Ana%20%28v2%29%2A\.pdf\r\n/);
+  // En ASCII, además, el parámetro de siempre entre comillas para los clientes que no leen RFC 2231.
+  assert.match(ascii, /Content-Type: application\/pdf;\r\n name="Propuesta d'Ana \(v2\)\*\.pdf"\r\n/);
+  assert.match(ascii, /Content-Disposition: attachment;\r\n filename="Propuesta d'Ana \(v2\)\*\.pdf";\r\n filename\*=/);
+  const acentos = adjunto("Cotización d'Ana (final).pdf");
+  const valor = /filename\*=UTF-8''(\S+)\r\n/.exec(acentos)![1]!;
+  assert.ok(!/['()*]/.test(valor), `sin caracteres reservados en el valor: ${valor}`);
+  assert.equal(decodeURIComponent(valor), "Cotización d'Ana (final).pdf", 'y se lee de vuelta tal cual');
+  // Unas comillas en el nombre se escapan dentro de la cadena, no rompen el parámetro.
+  assert.match(adjunto('Plan "B".pdf'), /name="Plan \\"B\\"\.pdf"/);
 });
 
 test('buildMime rechaza la inyección de cabeceras en vez de limpiarla', () => {
