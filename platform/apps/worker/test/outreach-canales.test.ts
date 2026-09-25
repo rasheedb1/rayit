@@ -19,7 +19,7 @@ import { GmailChannel } from '../src/jobs/ventas/canales/gmail.ts';
 import { encodeHeader } from '../src/jobs/ventas/canales/mime.ts';
 import { profileIdentifier, UnipileChannel } from '../src/jobs/ventas/canales/unipile.ts';
 import type { Fetch, OutgoingMessage } from '../src/jobs/ventas/canales/types.ts';
-import { claimBudget, composeMessage, ESTIMATED_SEND_MS } from '../src/jobs/ventas/outbound.dispatch.ts';
+import { claimBudget, composeMessage, dispatchableChannels, ESTIMATED_SEND_MS } from '../src/jobs/ventas/outbound.dispatch.ts';
 
 const GMAIL = JSON.parse(readFileSync(new URL('./fixtures/outreach/gmail.json', import.meta.url), 'utf8'));
 const UNIPILE = JSON.parse(readFileSync(new URL('./fixtures/outreach/unipile.json', import.meta.url), 'utf8'));
@@ -247,9 +247,18 @@ test('buildChannels: falso o real según OUTREACH_CHANNELS, y la URL del enlace 
   const fake = buildChannels({ env: { OUTREACH_CHANNELS: 'fake' }, secrets: s });
   assert.equal(fake.mode, 'fake');
   assert.equal(fake.appUrl, 'http://localhost:3100');
-  const real = buildChannels({ env: { APP_URL: 'https://on-cue-web.vercel.app/algo' }, secrets: s });
+  // Sin la página de baja (VEN-15), el correo real no se reclama aunque haya URL (r2).
+  const sinPagina = buildChannels({ env: { APP_URL: 'https://on-cue-web.vercel.app/algo' }, secrets: s });
+  assert.equal(sinPagina.mode, 'real');
+  assert.equal(sinPagina.appUrl, null);
+  assert.match(sinPagina.emailBlocked ?? '', /OUTREACH_OPTOUT_PAGE_READY/);
+  assert.equal(dispatchableChannels({ senders: sinPagina.senders, appUrl: sinPagina.appUrl }).ready.includes('email'), false);
+  const sinUrl = buildChannels({ env: { OUTREACH_OPTOUT_PAGE_READY: 'true' }, secrets: s });
+  assert.match(sinUrl.emailBlocked ?? '', /APP_URL/);
+  const real = buildChannels({ env: { APP_URL: 'https://on-cue-web.vercel.app/algo', OUTREACH_OPTOUT_PAGE_READY: 'true' }, secrets: s });
   assert.equal(real.mode, 'real');
   assert.equal(real.appUrl, 'https://on-cue-web.vercel.app');
+  assert.equal(real.emailBlocked, null);
   assert.equal(real.senders.linkedin!.configured(), false, 'sin UNIPILE_* LinkedIn espera en la cola');
   assert.equal(appUrlFrom({ VERCEL_PROJECT_PRODUCTION_URL: 'on-cue-web.vercel.app' }), 'https://on-cue-web.vercel.app');
   assert.equal(appUrlFrom({}), null);

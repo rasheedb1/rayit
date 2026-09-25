@@ -239,6 +239,7 @@ export const HOLD_REASONS = {
   noPostalAddress: 'Falta la dirección postal del pie de baja (outbound_policy.postal_address).',
   noBody: 'El mensaje no tiene cuerpo.',
   replyWithoutThread: 'Es una respuesta en el hilo, pero el correo al que responde no salió: revísalo antes de enviarlo.',
+  noSubject: 'El correo no tiene asunto.',
   unconfirmed: (attempt: number) =>
     `No se pudo comprobar si el intento ${attempt} salió: mira la carpeta de enviados antes de aprobarlo, para no enviarlo dos veces.`,
 } as const;

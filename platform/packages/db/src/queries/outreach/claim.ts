@@ -13,9 +13,19 @@
  *      un correo que no salió). FOR UPDATE SKIP LOCKED: dos despachadores
  *      no toman el mismo;
  *   3. por cada uno, en este orden, sin gastar un intento:
+ *      · la dirección de la ficha no es una dirección (un correo sin
+ *        arroba, con espacios; un usuario de dos letras) → skipped
+ *        (invalid_address), antes del UPDATE en lote: una sola ficha mal
+ *        escrita no tumba el reclamo de toda la plataforma (r2);
  *      · fuera de la ventana laboral o en fin de semana (un reintento, un
  *        resume_at, lo acumulado con el worker caído) → a la apertura de
  *        la ventana (r2);
+ *      · la política de la marca (outbound_policy, r2): si la empresa ya
+ *        recibió max_touches_per_company mensajes del workspace en
+ *        COMPANY_CAP_WINDOW_DAYS días, sumando todas sus secuencias →
+ *        canceled (max_touches_per_company) y la cadencia avanza; si el
+ *        último le llegó hace menos de min_days_between_touches días →
+ *        cuando se cumplan, dentro de la ventana;
  *      · sin cuenta conectada del canal → espera una hora dentro de la
  *        ventana, con UN aviso por canal y día (r2): al reconectar sale
  *        solo;
@@ -39,9 +49,9 @@ import { incrementIfUnderCap, incrementWeekly } from '../outreach.ts';
 import { advanceEnrollment } from './enroll.ts';
 import { notifyAccountDown, notifyTouchFailed } from './notices.ts';
 import {
-  ACCOUNT_WAIT_MS, actionTypeFor, assertIds, date, DEFAULT_ACCOUNT_DAILY_CAP, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS,
-  DISPATCHABLE_STEP_TYPES, int, newOptoutToken, oneOf, recipientFor, releaseCaps, shiftFollowing, stepTypeForChannel, text,
-  textOrNull, toDate, windowOf, ZOMBIE_AFTER_MINUTES, type DispatchableStepType, type DispatchChannel,
+  ACCOUNT_WAIT_MS, actionTypeFor, assertIds, checkRecipient, date, DEFAULT_ACCOUNT_DAILY_CAP, DISPATCH_BATCH_SIZE,
+  DISPATCH_CHANNELS, DISPATCHABLE_STEP_TYPES, int, newOptoutToken, oneOf, releaseCaps, shiftFollowing, stepTypeForChannel,
+  text, textOrNull, toDate, windowOf, ZOMBIE_AFTER_MINUTES, type DispatchableStepType, type DispatchChannel,
 } from './shared.ts';
 
 export interface ClaimOptions {
@@ -77,15 +87,40 @@ export interface ClaimReport {
   canceledFinished: number;
   /** Saltados: el contacto no tiene dirección en ese canal. */
   skippedNoAddress: number;
+  /** Saltados: la dirección de la ficha no es una dirección válida del canal (invalid_address). */
+  skippedInvalidAddress: number;
+  /** Cancelados: la marca ya recibió max_touches_per_company mensajes en COMPANY_CAP_WINDOW_DAYS días. */
+  canceledCompanyCap: number;
   /** Fuera de la ventana laboral: a la apertura, sin gastar intento ni plaza. */
   outsideWindow: Array<{ touchId: string; until: Date }>;
   /** Sin cuenta conectada del canal: esperan dentro de la ventana y salen al reconectar. */
   waitingAccount: Array<{ touchId: string; until: Date; channel: DispatchChannel }>;
   /** Avisos de cuenta caída que esta corrida dejó (uno por workspace, canal y día). */
   accountDownNotices: number;
-  /** Reprogramados porque un tope se agotó: al siguiente día hábil. */
-  rescheduled: Array<{ touchId: string; until: Date; cap: 'account_day' | 'account_week' | 'workspace_day' }>;
+  /**
+   * Reprogramados sin gastar intento: un tope se agotó (al siguiente día
+   * hábil) o la marca recibió el último mensaje hace menos de
+   * min_days_between_touches (company_gap: cuando se cumplan).
+   */
+  rescheduled: Array<{ touchId: string; until: Date; cap: 'account_day' | 'account_week' | 'workspace_day' | 'company_gap' }>;
 }
+
+/** El informe de un reclamo que no tomó nada (un solo sitio: el despachador lo usa cuando no reclama). */
+export function emptyClaimReport(): ClaimReport {
+  return {
+    claimed: [], canceledOptedOut: 0, canceledFinished: 0, skippedNoAddress: 0, skippedInvalidAddress: 0, canceledCompanyCap: 0,
+    outsideWindow: [], waitingAccount: [], accountDownNotices: 0, rescheduled: [],
+  };
+}
+
+/**
+ * La ventana de max_touches_per_company (r2): los mensajes a una marca se
+ * cuentan en los últimos noventa días, el horizonte de una campaña. Sin
+ * ventana, una marca a la que se le escribió cuatro veces hace dos años no
+ * podría volver a recibir nada. El «no» de una marca lo cubre
+ * cooldown_days_after_no, aparte (VEN-14).
+ */
+export const COMPANY_CAP_WINDOW_DAYS = 90;
 
 interface CandidateRow {
   id: string;
@@ -93,6 +128,9 @@ interface CandidateRow {
   channel: string;
   channel_account_id: string | null;
   enrollment_id: string | null;
+  company_id: string;
+  max_touches_per_company: number;
+  min_days_between_touches: number;
   step_type: string | null;
   day_offset: number | null;
   order_in_day: number | null;
@@ -112,6 +150,9 @@ interface Candidate {
   channel: DispatchChannel;
   channelAccountId: string | null;
   enrollmentId: string | null;
+  companyId: string;
+  maxTouchesPerCompany: number;
+  minDaysBetweenTouches: number;
   stepType: DispatchableStepType;
   dayOffset: number | null;
   orderInDay: number | null;
@@ -132,6 +173,9 @@ function parseCandidate(r: CandidateRow, i: number): Candidate {
     channel,
     channelAccountId: textOrNull(fn, `$[${i}].channel_account_id`, r.channel_account_id),
     enrollmentId: textOrNull(fn, `$[${i}].enrollment_id`, r.enrollment_id),
+    companyId: text(fn, `$[${i}].company_id`, r.company_id),
+    maxTouchesPerCompany: int(fn, `$[${i}].max_touches_per_company`, r.max_touches_per_company),
+    minDaysBetweenTouches: int(fn, `$[${i}].min_days_between_touches`, r.min_days_between_touches),
     stepType,
     dayOffset: r.day_offset === null ? null : int(fn, `$[${i}].day_offset`, r.day_offset),
     orderInDay: r.order_in_day === null ? null : int(fn, `$[${i}].order_in_day`, r.order_in_day),
@@ -162,6 +206,30 @@ async function moveScheduled(tx: WorkerSql, c: Candidate, until: Date): Promise<
   await shiftFollowing(tx, { enrollmentId: c.enrollmentId, dayOffset: c.dayOffset, orderInDay: c.orderInDay, at: until }, c.timeZone, c.window);
 }
 
+/** Lo que una marca ya recibió del workspace: cuántos mensajes en la ventana del tope y cuándo el último. */
+interface CompanyState {
+  recent: number;
+  last: Date | null;
+}
+
+async function companyState(tx: WorkerSql, c: Candidate, now: Date): Promise<CompanyState> {
+  const r = (
+    await tx.query<{ recent: unknown; last: unknown }>(
+      // Lo enviado y lo que está saliendo (processing) cuenta; un like o un
+      // comentario hecho a mano, no: son pasos que no despacha el motor.
+      `SELECT count(*) FILTER (WHERE coalesce(t.sent_at, t.claimed_at) >= $3::timestamptz - make_interval(days => $4::int)) AS recent,
+              max(coalesce(t.sent_at, t.claimed_at)) AS last
+         FROM outbound_touch t LEFT JOIN outbound_step st ON st.id = t.step_id
+        WHERE t.workspace_id = $1::uuid AND t.company_id = $2::uuid AND t.status IN ('sent', 'processing')
+          AND (st.step_type IS NULL OR st.step_type = ANY($5::text[]))`,
+      [c.workspaceId, c.companyId, now.toISOString(), COMPANY_CAP_WINDOW_DAYS, [...DISPATCHABLE_STEP_TYPES]],
+    )
+  ).rows[0];
+  return { recent: int('claimDueTouches', 'company.recent', r?.recent ?? 0), last: toDate(r?.last) };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** El reclamo del despachador (ver la cabecera). */
 export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promise<ClaimReport> {
   const now = opts.now;
@@ -169,10 +237,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   const ws = opts.workspaceId ?? null;
   if (ws) assertIds('claimDueTouches', [ws]);
   const channels = opts.channels.filter((c) => (DISPATCH_CHANNELS as readonly string[]).includes(c));
-  const report: ClaimReport = {
-    claimed: [], canceledOptedOut: 0, canceledFinished: 0, skippedNoAddress: 0, outsideWindow: [], waitingAccount: [],
-    accountDownNotices: 0, rescheduled: [],
-  };
+  const report = emptyClaimReport();
 
   report.canceledOptedOut = (
     await tx.query(
@@ -204,6 +269,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   const candidates = (
     await tx.query<CandidateRow>(
       `SELECT t.id, t.workspace_id, t.channel, t.channel_account_id, t.enrollment_id,
+              t.company_id, p.max_touches_per_company, p.min_days_between_touches,
               st.step_type, st.day_offset, st.order_in_day,
               c.email::text AS email, c.linkedin_url, c.instagram_handle,
               p.max_emails_per_day, p.warmup_days, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end,
@@ -241,18 +307,46 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
 
   const toClaim: Array<{ c: Candidate; recipient: string; accountId: string }> = [];
   const waiting = new Map<string, { workspaceId: string; channel: DispatchChannel; count: number }>();
+  // Lo que cada marca ya recibió, leído una vez por lote y sumando lo que
+  // este mismo lote reclama.
+  const companies = new Map<string, CompanyState>();
   for (const c of candidates) {
-    const recipient = recipientFor(c.channel, c.address);
-    if (!recipient) {
-      await tx.query(`UPDATE outbound_touch SET status = 'skipped', blocked_reason = 'no_address' WHERE id = $1::uuid`, [c.id]);
-      report.skippedNoAddress++;
+    // La dirección se valida con la regla de los CHECK de 0037 ANTES del
+    // UPDATE en lote: si no, una sola ficha mal escrita lo haría fallar
+    // entero, en cada corrida, para todos los workspaces.
+    const address = checkRecipient(c.channel, c.address);
+    if (!address.ok) {
+      await tx.query(`UPDATE outbound_touch SET status = 'skipped', blocked_reason = $2 WHERE id = $1::uuid`, [c.id, address.reason]);
+      if (address.reason === 'no_address') report.skippedNoAddress++;
+      else report.skippedInvalidAddress++;
+      if (c.enrollmentId) await advanceEnrollment(tx, c.enrollmentId, now);
       continue;
     }
+    const recipient = address.address;
     // La ventana manda también al despachar, no solo al programar.
     if (!isInsideWindow(now, c.timeZone, c.window)) {
       const until = nextWindowSlot(now, c.timeZone, c.window, { seed: c.id });
       await moveScheduled(tx, c, until);
       report.outsideWindow.push({ touchId: c.id, until });
+      continue;
+    }
+    // La política de la marca, antes de reservar ninguna plaza.
+    const companyKey = `${c.workspaceId}:${c.companyId}`;
+    const company = companies.get(companyKey) ?? (await companyState(tx, c, now));
+    companies.set(companyKey, company);
+    if (company.recent >= c.maxTouchesPerCompany) {
+      await tx.query(
+        `UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'max_touches_per_company' WHERE id = $1::uuid AND status = 'scheduled'`,
+        [c.id],
+      );
+      report.canceledCompanyCap++;
+      if (c.enrollmentId) await advanceEnrollment(tx, c.enrollmentId, now);
+      continue;
+    }
+    if (company.last && c.minDaysBetweenTouches > 0 && company.last.getTime() + c.minDaysBetweenTouches * DAY_MS > now.getTime()) {
+      const until = nextWindowSlot(new Date(company.last.getTime() + c.minDaysBetweenTouches * DAY_MS), c.timeZone, c.window, { seed: c.id });
+      await moveScheduled(tx, c, until);
+      report.rescheduled.push({ touchId: c.id, until, cap: 'company_gap' });
       continue;
     }
     const acct = (
@@ -300,6 +394,8 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     }
     await tx.query('RELEASE SAVEPOINT motor_cap');
     toClaim.push({ c, recipient, accountId: acct.id });
+    company.recent++;
+    company.last = now;
   }
   for (const w of waiting.values()) {
     if (await notifyAccountDown(tx, { workspaceId: w.workspaceId, channel: w.channel, waiting: w.count, now })) report.accountDownNotices++;

@@ -11,9 +11,12 @@
  *      reconectada (el seed la deja en needs_reconnect; aquí se hace lo
  *      que haría el callback de Unipile) y el reloj en la hora del toque
  *      programado (Vitalé, mañana a las 10:30 locales; si mañana cae en
- *      fin de semana, el lunes al abrir la ventana): el toque sale por el
- *      buzón falso y outbound_touch queda en «sent» con el id del mensaje
- *      y el hilo.
+ *      fin de semana, el lunes al abrir la ventana). La política del seed
+ *      pide tres días entre mensajes a la misma marca, y Vitalé recibió
+ *      un correo ayer (r2): el despachador no lo envía, lo aplaza a
+ *      cuando se cumplan (company_gap).
+ *   3. Con el reloj en esa hora: el toque sale por el buzón falso y
+ *      outbound_touch queda en «sent» con el id del mensaje y el hilo.
  *
  * Sin la reconexión el toque no se pierde: espera a que la cuenta vuelva,
  * con un aviso por canal y día (lo cubre la prueba de punta a punta).
@@ -45,7 +48,12 @@ export interface DemoTouch {
 export interface DemoMotorReport {
   /** La pasada con la política apagada, con el toque ya vencido. */
   off: DispatchReport;
-  /** La pasada con la política encendida y el reloj en la hora del toque. */
+  /**
+   * La pasada encendida a la hora del toque, si la separación con la marca
+   * lo aplazó (min_days_between_touches); null si salió a su hora.
+   */
+  paced: DispatchReport | null;
+  /** La pasada con la política encendida en la que el toque sale. */
   on: DispatchReport;
   /** Lo que el buzón falso recibió. */
   delivered: Array<{ touchId: string; recipient: string; subject: string | null }>;
@@ -53,6 +61,8 @@ export interface DemoMotorReport {
   sentTouches: DemoTouch[];
   /** La hora a la que se movió el reloj en la segunda pasada. */
   clock: Date;
+  /** La hora de la pasada en la que salió (clock, o la del aplazamiento). */
+  sentClock: Date;
   /** Cuentas que la demo reconectó antes de la segunda pasada. */
   reconnected: number;
 }
@@ -102,7 +112,16 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
 
     const off = await runDispatch(motor, { senders: fake, appUrl, now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
     await db.asWorker((tx) => enableOutreach(tx, DEMO_WORKSPACE_ID));
-    const on = await runDispatch(motor, { senders: fake, appUrl, now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
+    let on = await runDispatch(motor, { senders: fake, appUrl, now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
+    // La separación con la marca lo aplazó: el reloj va a esa hora y se corre otra vez.
+    let paced: DispatchReport | null = null;
+    let sentClock = clock;
+    const gap = on.sent.length === 0 ? on.claim.rescheduled.find((x) => x.cap === 'company_gap') : undefined;
+    if (gap) {
+      paced = on;
+      sentClock = gap.until;
+      on = await runDispatch(motor, { senders: fake, appUrl, now: () => sentClock, workspaceId: DEMO_WORKSPACE_ID });
+    }
 
     const sentTouches = on.sent.length === 0 ? [] : await db.asWorker(async (tx) =>
       (await tx.query<DemoTouch>(
@@ -114,7 +133,7 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
     const delivered = Object.values(fake).flatMap((ch) =>
       ch.sent.map((m) => ({ touchId: m.touchId, recipient: m.recipient, subject: m.subject })),
     );
-    return { off, on, delivered, sentTouches, clock, reconnected };
+    return { off, paced, on, delivered, sentTouches, clock, sentClock, reconnected };
   } finally {
     await db.close();
   }
@@ -125,9 +144,18 @@ export function resumenDemo(r: DemoMotorReport): string {
     'Demo del motor sobre Postgres embebido con las migraciones y los seeds del repositorio, canal falso.',
     `Reloj en ${r.clock.toISOString()} (el toque programado ya vencido, dentro de la ventana laboral), ${r.reconnected} cuenta(s) reconectada(s).`,
     `1. Política del seed (apagada): ${r.off.claim.claimed} reclamado(s), ${r.off.sent.length} enviado(s).`,
-    `2. Política encendida: ${r.on.claim.claimed} reclamado(s), ${r.on.sent.length} enviado(s), ` +
-      `${r.on.retried.length} a reintento, ${r.on.failed.length} fallido(s), ${r.on.held.length} retenido(s).`,
   ];
+  if (r.paced) {
+    const gap = r.paced.claim.rescheduled.filter((x) => x.cap === 'company_gap');
+    lineas.push(
+      `2. Política encendida, a la hora del toque: ${r.paced.sent.length} enviado(s); ${gap.length} aplazado(s) por la separación ` +
+        `con la marca (min_days_between_touches) hasta ${gap.map((x) => x.until.toISOString()).join(', ')}.`,
+    );
+  }
+  lineas.push(
+    `${r.paced ? '3' : '2'}. Política encendida (${r.sentClock.toISOString()}): ${r.on.claim.claimed} reclamado(s), ${r.on.sent.length} enviado(s), ` +
+      `${r.on.retried.length} a reintento, ${r.on.failed.length} fallido(s), ${r.on.held.length} retenido(s).`,
+  );
   for (const t of r.sentTouches) {
     lineas.push(`   · outbound_touch ${t.id}: ${t.status}, provider_message_id ${t.provider_message_id}, hilo ${t.thread_ref}`);
   }

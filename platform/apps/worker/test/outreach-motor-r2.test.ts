@@ -83,8 +83,13 @@ async function workspace(n: number, opts: { contacts?: number; locale?: string }
     INSERT INTO company (id, name, owner_workspace_id) VALUES ('${w.company}', 'Marca ${n}', '${w.id}');
     INSERT INTO company_link (workspace_id, company_id) VALUES ('${w.id}', '${w.company}');
     INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES ${contactos};
-    INSERT INTO outbound_policy (workspace_id, enabled, postal_address, max_emails_per_day)
-    VALUES ('${w.id}', false, 'Calle 93 # 11-26, Bogotá, Colombia', 100);
+    -- Esta cadencia sale sola: la secuencia es 'auto' y el workspace apagó
+    -- la revisión humana; sus pasos son diarios, así que la separación
+    -- con la marca va a cero y el tope por marca alto. La revisión, la
+    -- separación y el tope tienen su propia prueba (outreach-politica).
+    INSERT INTO outbound_policy (workspace_id, enabled, postal_address, max_emails_per_day,
+                                 require_human_review, min_days_between_touches, max_touches_per_company)
+    VALUES ('${w.id}', false, 'Calle 93 # 11-26, Bogotá, Colombia', 100, false, 0, 50);
     INSERT INTO outreach_channel_account (id, workspace_id, channel, provider, provider_account_id, display_name, status, daily_cap, weekly_cap)
     VALUES ('${w.gmail}', '${w.id}', 'email', 'gmail_oauth', 'creadora${n}@gmail.test', 'Creadora ${n}', 'connected', 40, 200);
     INSERT INTO outbound_sequence (id, workspace_id, name, channel, status, automation_mode)

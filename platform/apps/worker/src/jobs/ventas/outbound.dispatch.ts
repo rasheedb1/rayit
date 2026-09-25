@@ -29,9 +29,9 @@
  */
 import { optoutUrl } from '@mc/core';
 import {
-  applyDecision, claimDueTouches, decideBeforeSend, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS, HOLD_REASONS, loadSendContext,
-  markSendStarted, recordFailure, recordSent, releaseUnattempted, rescueZombies, type ClaimedTouch, type ClaimReport,
-  type DispatchChannel, type SendContext,
+  applyDecision, claimDueTouches, decideBeforeSend, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS, emptyClaimReport, HOLD_REASONS,
+  loadSendContext, markSendStarted, recordFailure, recordSent, releaseUnattempted, rescueZombies, type ClaimedTouch,
+  type ClaimReport, type DispatchChannel, type SendContext,
 } from '@mc/db/queries/outreach';
 import type { Logger } from '../../runner/logger.ts';
 import { defineJob } from '../../runner/registry.ts';
@@ -170,6 +170,16 @@ async function sendOne(db: MotorDb, deps: DispatchDeps, claimed: ClaimedTouch, r
     }
     const sender = deps.senders[ctx.channel];
     const message = composeMessage(ctx, claimed, deps.appUrl);
+    // Un correo nunca sale sin asunto (r2): «te dejo una idea» sobre nada
+    // es el error de Chief de §9. decideBeforeSend ya retiene la respuesta
+    // sin hilo; esto cubre cualquier otro camino (un correo suelto sin asunto).
+    if (message.channel === 'email' && !message.subject?.trim()) {
+      const reason = HOLD_REASONS.noSubject;
+      await applyDecision(tx, ctx, { kind: 'hold', reason }, now);
+      report.held.push({ touchId: ctx.touchId, reason });
+      deps.logger?.warn('correo sin asunto: retenido', { touchId: ctx.touchId });
+      return;
+    }
 
     // Un intento anterior quedó sin confirmar: primero se pregunta si salió.
     if (sender && ctx.unconfirmedAttempt !== null) {
@@ -224,10 +234,7 @@ export async function runDispatch(db: MotorDb, deps: DispatchDeps): Promise<Disp
   const budget = deps.signal?.aborted ? 0 : claimBudget(deps);
   const claim: ClaimReport = budget > 0
     ? await db.transaction((tx) => claimDueTouches(tx, { now: deps.now(), limit: budget, channels: ready, workspaceId: deps.workspaceId }))
-    : {
-        claimed: [], canceledOptedOut: 0, canceledFinished: 0, skippedNoAddress: 0, outsideWindow: [], waitingAccount: [],
-        accountDownNotices: 0, rescheduled: [],
-      };
+    : emptyClaimReport();
   const report: DispatchReport = {
     zombies: { failed: zombies.failed.length, canceled: zombies.canceled.length, released: zombies.released.length },
     claim: { ...claim, claimed: claim.claimed.length },
@@ -264,6 +271,7 @@ export const dispatchJob = defineJob(
   DISPATCH_JOB_ID,
   async (_payload, ctx) => {
     const channels = buildChannels({ env: ctx.env, secrets: ctx.secrets, logger: ctx.logger });
+    if (channels.emailBlocked) ctx.logger.warn('el correo real no se reclama en esta corrida', { reason: channels.emailBlocked });
     const deadline = new Date(Date.now() + ctx.definition.timeoutS * 1000 - DEADLINE_MARGIN_MS);
     const report = await runDispatch(motorDbFromJob(ctx.db), {
       senders: channels.senders,
@@ -276,7 +284,8 @@ export const dispatchJob = defineJob(
     const metadata = {
       claimed: report.claim.claimed, sent: report.sent.length, confirmed: report.confirmed.length, retried: report.retried.length,
       failed: report.failed.length, waiting: report.waiting.length + report.claim.waitingAccount.length,
-      canceled: report.canceled.length + report.claim.canceledOptedOut + report.claim.canceledFinished,
+      canceled: report.canceled.length + report.claim.canceledOptedOut + report.claim.canceledFinished + report.claim.canceledCompanyCap,
+      skipped: report.claim.skippedNoAddress + report.claim.skippedInvalidAddress,
       held: report.held.length, rescheduled: report.claim.rescheduled.length, outsideWindow: report.claim.outsideWindow.length,
       released: report.released.length, zombies: report.zombies.failed, zombiesReleased: report.zombies.released,
       errors: report.errors.length, notConfigured: report.notConfigured,

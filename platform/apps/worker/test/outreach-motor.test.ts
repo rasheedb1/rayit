@@ -120,8 +120,13 @@ before(async () => {
       ('${CAROLINA}', '${CO_OLLA}', '${WS}', 'Carolina Ruiz', 'carolina@olla.test', 'user_provided'),
       ('${PEDRO}', '${CO_OLLA}', '${WS}', 'Pedro Gómez', 'pedro@olla.test', 'user_provided');
     -- Nace apagada, como en producción, con su dirección postal.
-    INSERT INTO outbound_policy (workspace_id, enabled, postal_address, max_emails_per_day)
-    VALUES ('${WS}', false, 'Calle 93 # 11-26, Bogotá, Colombia', 20);
+    -- Esta cadencia sale sola: la secuencia es 'auto' y el workspace apagó
+    -- la revisión humana; sus pasos son diarios, así que la separación
+    -- con la marca va a cero y el tope por marca alto. La revisión, la
+    -- separación y el tope tienen su propia prueba (outreach-politica).
+    INSERT INTO outbound_policy (workspace_id, enabled, postal_address, max_emails_per_day,
+                                 require_human_review, min_days_between_touches, max_touches_per_company)
+    VALUES ('${WS}', false, 'Calle 93 # 11-26, Bogotá, Colombia', 20, false, 0, 50);
     INSERT INTO outreach_channel_account (id, workspace_id, channel, provider, provider_account_id, display_name, status, daily_cap, weekly_cap)
     VALUES ('${GMAIL}', '${WS}', 'email', 'gmail_oauth', 'laura@cocina-facil.test', 'Laura · Cocina fácil', 'connected', 40, 200);
     INSERT INTO outbound_sequence (id, workspace_id, name, channel, status, automation_mode)

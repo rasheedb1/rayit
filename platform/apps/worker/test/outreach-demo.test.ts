@@ -46,6 +46,13 @@ test('demo con el seed: apagada no envía nada; encendida, el canal falso deja e
   assert.equal(r.off.claim.claimed, 0);
   assert.equal(r.off.sent.length, 0);
 
+  // La política del seed pide tres días entre mensajes a la misma marca, y
+  // Vitalé recibió un correo ayer: a su hora, el toque se aplaza (r2).
+  assert.ok(r.paced, 'la separación con la marca aplaza el toque');
+  assert.equal(r.paced!.sent.length, 0);
+  assert.equal(r.paced!.claim.rescheduled.filter((x) => x.cap === 'company_gap').length, 1);
+  assert.ok(r.sentClock > r.clock);
+
   assert.equal(r.on.claim.claimed, 1);
   assert.deepEqual(r.on.failed, []);
   assert.equal(r.on.sent.length, 1);

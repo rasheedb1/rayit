@@ -15,7 +15,7 @@
  */
 import { findPlaceholders, firstNameOf, planSteps, renderTemplate } from '@mc/core';
 import type { SqlExecutor, WorkerSql, WorkspaceTx } from '../../client.ts';
-import { assertIds, DISPATCHABLE_STEP_TYPES, OutreachMotorError, recipientFor, windowOf } from './shared.ts';
+import { assertIds, checkRecipient, DISPATCHABLE_STEP_TYPES, OutreachMotorError, shiftFollowing, toDate, windowOf } from './shared.ts';
 
 export interface EnrollInput {
   sequenceId: string;
@@ -38,6 +38,7 @@ interface SequenceRow {
   workspace_id: string;
   status: string;
   automation_mode: string;
+  require_review: boolean;
   tz: string;
   sender: string;
   w_start: string | null;
@@ -69,31 +70,41 @@ interface ContactRow {
   company: string;
 }
 
+/** El held_reason de un mensaje que espera la revisión de una persona (r2): lo aprueba approveHeldTouch. */
+export const REVIEW_HELD_REASON = 'review';
+
 /**
  * Qué estado nace para un paso (puro, para probarlo sin base):
  *   · un paso que el despachador no envía solo (like, comentario, tarea
  *     manual, WhatsApp) o que espera al generador (generate_with_ai) →
  *     draft: lo completa una persona o VEN-12;
- *   · el contacto no tiene dirección en ese canal → skipped (no_address);
+ *   · el contacto no tiene dirección en ese canal → skipped (no_address),
+ *     o la que tiene no es una dirección → skipped (invalid_address);
  *   · la secuencia es manual → draft (la persona envía cada toque);
  *   · la plantilla deja huecos sin rellenar → held, con los huecos;
- *   · si no → scheduled. El texto de una plantilla fija lo escribió la
- *     persona: es un mensaje aprobado.
+ *   · la revisión humana (r2): la secuencia en 'review' (0037 §3.1: «la
+ *     máquina propone y la persona aprueba») o la política con
+ *     require_human_review (true por defecto) → held ('review'). Solo
+ *     sale sin mirar lo de una secuencia 'auto' en un workspace que
+ *     apagó la revisión;
+ *   · si no → scheduled.
  */
 export function initialTouchState(input: {
   stepType: string;
   generateWithAi: boolean;
   automationMode: string;
-  hasAddress: boolean;
+  requireHumanReview: boolean;
+  address: 'ok' | 'no_address' | 'invalid_address';
   subject: string | null;
   body: string | null;
 }): { status: 'draft' | 'scheduled' | 'held' | 'skipped'; heldReason?: string; blockedReason?: string } {
   if (!(DISPATCHABLE_STEP_TYPES as readonly string[]).includes(input.stepType)) return { status: 'draft' };
-  if (!input.hasAddress) return { status: 'skipped', blockedReason: 'no_address' };
+  if (input.address !== 'ok') return { status: 'skipped', blockedReason: input.address };
   if (input.generateWithAi || !input.body) return { status: 'draft' };
   if (input.automationMode === 'manual') return { status: 'draft' };
   const hits = [...findPlaceholders(input.subject), ...findPlaceholders(input.body)];
   if (hits.length > 0) return { status: 'held', heldReason: `placeholders: ${hits.map((h) => h.match).join(' ')}` };
+  if (input.automationMode !== 'auto' || input.requireHumanReview) return { status: 'held', heldReason: REVIEW_HELD_REASON };
   return { status: 'scheduled' };
 }
 
@@ -113,7 +124,8 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
 
   const seq = (
     await tx.query<SequenceRow>(
-      `SELECT s.id, s.workspace_id, s.status, s.automation_mode, coalesce(s.timezone, w.timezone) AS tz, w.name AS sender,
+      `SELECT s.id, s.workspace_id, s.status, s.automation_mode, coalesce(p.require_human_review, true) AS require_review,
+              coalesce(s.timezone, w.timezone) AS tz, w.name AS sender,
               p.send_window_start::text AS w_start, p.send_window_end::text AS w_end
          FROM outbound_sequence s
          JOIN workspace w ON w.id = s.workspace_id
@@ -189,9 +201,10 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
     for (const [i, s] of steps.entries()) {
       const subject = renderTemplate(s.subject_template, values);
       const body = renderTemplate(s.body_template, values);
+      const address = checkRecipient(s.channel, c);
       const state = initialTouchState({
         stepType: s.step_type, generateWithAi: s.generate_with_ai, automationMode: seq.automation_mode,
-        hasAddress: recipientFor(s.channel, c) !== null, subject, body,
+        requireHumanReview: seq.require_review !== false, address: address.ok ? 'ok' : address.reason, subject, body,
       });
       await tx.query(
         `INSERT INTO outbound_touch
@@ -213,6 +226,60 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
     result.enrolled.push({ enrollmentId: enr.id, contactId, ...counts });
   }
   return result;
+}
+
+// ---------------------------------------------------------------------
+// La revisión humana (r2)
+// ---------------------------------------------------------------------
+
+export type ApproveResult = 'approved' | 'not_found' | 'not_reviewable' | 'placeholders';
+
+/**
+ * Una persona aprueba un mensaje retenido para revisión (held_reason
+ * 'review'): vuelve a scheduled, a su hora o ahora si ya pasó, y el
+ * despachador lo toma en la siguiente corrida (dentro de la ventana y
+ * detrás de los pasos anteriores de su cadencia). Si se aprueba tarde,
+ * los pasos de detrás se corren con él y conservan su separación. Sirve desde la web
+ * (WorkspaceTx: la RLS limita a su workspace; held → scheduled es de la
+ * aplicación, 0037 §4.3) y desde el worker.
+ *
+ * Solo lo retenido para revisión: un retenido por huecos sin rellenar
+ * ('placeholders'), por un intento sin confirmar o por falta de la
+ * dirección postal se arregla primero (not_reviewable). Si el texto
+ * todavía tiene huecos, no se aprueba.
+ */
+export async function approveHeldTouch(tx: WorkspaceTx | WorkerSql, touchId: string, now: Date): Promise<ApproveResult> {
+  assertIds('approveHeldTouch', [touchId]);
+  const t = (
+    await tx.query<{
+      status: string; held_reason: string | null; subject: string | null; body: string | null; enrollment_id: string | null;
+      day_offset: number | null; order_in_day: number | null; scheduled_for: unknown; tz: string; w_start: string | null; w_end: string | null;
+    }>(
+      `SELECT t.status, t.held_reason, t.subject, t.body, t.enrollment_id, st.day_offset, st.order_in_day, t.scheduled_for,
+              coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end
+         FROM outbound_touch t JOIN workspace w ON w.id = t.workspace_id
+         LEFT JOIN outbound_step st ON st.id = t.step_id
+         LEFT JOIN outbound_sequence s ON s.id = t.sequence_id
+         LEFT JOIN outbound_policy p ON p.workspace_id = t.workspace_id
+        WHERE t.id = $1::uuid
+        FOR UPDATE OF t`,
+      [touchId],
+    )
+  ).rows[0];
+  if (!t) return 'not_found';
+  if (t.status !== 'held' || t.held_reason !== REVIEW_HELD_REASON) return 'not_reviewable';
+  if (findPlaceholders(t.subject).length > 0 || findPlaceholders(t.body).length > 0) return 'placeholders';
+  const planned = toDate(t.scheduled_for);
+  const at = planned && planned.getTime() > now.getTime() ? planned : now;
+  await tx.query(
+    `UPDATE outbound_touch SET status = 'scheduled', held_reason = NULL, scheduled_for = $2::timestamptz
+      WHERE id = $1::uuid AND status = 'held'`,
+    [touchId, at.toISOString()],
+  );
+  if (at !== planned) {
+    await shiftFollowing(tx, { enrollmentId: t.enrollment_id, dayOffset: t.day_offset, orderInDay: t.order_in_day, at }, t.tz, windowOf(t.w_start, t.w_end));
+  }
+  return 'approved';
 }
 
 // ---------------------------------------------------------------------
