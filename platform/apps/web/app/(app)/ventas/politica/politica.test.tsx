@@ -581,23 +581,26 @@ describe("ronda 4", () => {
 
 describe("ronda 5", () => {
   it("después de encender o apagar, el foco va al título del interruptor y una región status lo dice", async () => {
+    // Con la máquina cargada, la transición de React tarda en soltar el
+    // botón: se espera cada botón (findByRole) en vez de darlo por pintado.
+    const espera = { timeout: 5000 };
     enableOutreach.mockResolvedValue(undefined);
     disableOutreach.mockResolvedValue(0);
     const { rerender } = render(interruptor());
-    fireEvent.click(screen.getByRole("button", { name: t.interruptor.encender }));
-    fireEvent.click(screen.getByRole("button", { name: t.interruptor.siEncender }));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(t.interruptor.anuncioEncendido));
+    fireEvent.click(await screen.findByRole("button", { name: t.interruptor.encender }, espera));
+    fireEvent.click(await screen.findByRole("button", { name: t.interruptor.siEncender }, espera));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(t.interruptor.anuncioEncendido), espera);
     rerender(interruptor({ enabled: true }));
     const titulo = screen.getByRole("heading", { name: t.interruptor.title });
-    await waitFor(() => expect(titulo).toHaveFocus());
+    await waitFor(() => expect(titulo).toHaveFocus(), espera);
     expect(document.activeElement).not.toBe(document.body);
 
-    fireEvent.click(screen.getByRole("button", { name: t.interruptor.apagar }));
-    fireEvent.click(screen.getByRole("button", { name: t.interruptor.siApagar }));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(t.interruptor.anuncioApagado));
+    fireEvent.click(await screen.findByRole("button", { name: t.interruptor.apagar }, espera));
+    fireEvent.click(await screen.findByRole("button", { name: t.interruptor.siApagar }, espera));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(t.interruptor.anuncioApagado), espera);
     rerender(interruptor({ enabled: false }));
-    await waitFor(() => expect(screen.getByRole("heading", { name: t.interruptor.title })).toHaveFocus());
-  });
+    await waitFor(() => expect(screen.getByRole("heading", { name: t.interruptor.title })).toHaveFocus(), espera);
+  }, 20_000);
 
   it("si falla, el foco no se mueve y el error lo dice", async () => {
     enableOutreach.mockRejectedValue(new Error("base caída"));

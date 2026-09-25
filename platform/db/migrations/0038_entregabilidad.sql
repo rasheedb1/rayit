@@ -327,8 +327,9 @@ COMMENT ON COLUMN notification.body_es IS
 --     tiene que hablar el mismo;
 --   · si quien lo abre con sesión es MIEMBRO de ese workspace. El correo
 --     sale del Gmail del creador y el enlace queda en su carpeta de
---     enviados: su clic suprimiría a la marca en toda la plataforma
---     (docs/ventas-outreach.md §5.2, «Obligatorio para VEN-15»). La web
+--     enviados: su clic lo daría de baja a él mismo, sin que la persona
+--     lo pidiera (docs/ventas-outreach.md §5.2, «Obligatorio para
+--     VEN-15»). La web
 --     no puede leer outbound_optout_link; esta función sí, por el sha256
 --     del token, y responde un sí o un no: el id del workspace no sale.
 --
