@@ -88,7 +88,13 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
     re: new RegExp(
       `\\b(dar(me|nos)|da(me|nos)|den(me|nos)|de(me|nos))\\s+de\\s+baja\\b${ES_BAJA_DE_LO_NUESTRO}` +
         `|\\b(por\\s+)?favor,?\\s+(dar|den)\\s+de\\s+baja\\b${ES_BAJA_DE_LO_NUESTRO}` +
-        `|\\b(quiero|queremos|deseo|deseamos)\\s+(dar(me|nos)?\\s+de\\s+baja|la\\s+baja)\\b${ES_BAJA_DE_LO_NUESTRO}`,
+        `|\\b(quiero|queremos|deseo|deseamos)\\s+(dar(me|nos)?\\s+de\\s+baja|la\\s+baja)\\b${ES_BAJA_DE_LO_NUESTRO}`
+        // La petición cortés, que es como se pide casi siempre: «¿Me podrían
+        // dar de baja?», «¿Nos pueden quitar de su lista?». Pide «de baja»
+        // (de lo nuestro) o «de la/su/tu lista|base»: «¿me pueden mandar la
+        // lista de precios?» no lleva ninguno de esos verbos.
+        + `|\\b(me|nos)\\s+(podrian|pueden|puede|podria|podrias|puedes)\\s+(dar|quitar|sacar|borrar|eliminar)\\s+`
+        + `(de\\s+baja\\b${ES_BAJA_DE_LO_NUESTRO}|de\\s+(la|su|tu|esta|vuestra)s?\\s+(lista|base)\\b)`,
     ),
     // La baja de una palabra, como «Unsubscribe» en inglés: «Baja», «BAJA»,
     // «Dar de baja», «Dar de baja por favor». Solo si es la línea entera.
@@ -109,20 +115,25 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
   },
   {
     // «Quítenme de su lista», «que me saquen de su lista», el
-    // imperativo con c→qu («Sáquenme de su lista») y el correo como objeto
-    // («Por favor eliminen mi correo de su base de datos»).
+    // imperativo con c→qu («Sáquenme de su lista»), el correo como objeto
+    // («Por favor eliminen mi correo de su base de datos») y los datos a
+    // secas («Por favor eliminen mis datos.»), no «no eliminen mis datos».
     id: 'es_quitar_de_lista', lang: 'es',
-    re: /\b(quit|saqu|sac|elimin|borr)[a-z]*(me|nos)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|\b(me|nos)\s+(quite[ns]?|saque[ns]?|elimine[ns]?|borre[ns]?)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|\b(quit|saqu|sac|elimin|borr)[a-z]*\s+(mi|mis|nuestro|nuestros)\s+(correo|correos|e-?mail|e-?mails|contacto|datos|direccion)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)/,
+    re: /\b(quit|saqu|sac|elimin|borr)[a-z]*(me|nos)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|\b(me|nos)\s+(quite[ns]?|saque[ns]?|elimine[ns]?|borre[ns]?)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|\b(quit|saqu|sac|elimin|borr)[a-z]*\s+(mi|mis|nuestro|nuestros)\s+(correo|correos|e-?mail|e-?mails|contacto|datos|direccion)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|(?<!\bno\s)\b(eliminen|borren)\s+(mis|nuestros)\s+datos\b/,
   },
   {
-    // también «No quiero más correos», sin «recibir».
+    // también «No quiero más correos», sin «recibir», con el posesivo
+    // («Ya no quiero recibir sus correos») y el «No más correos» a secas.
     id: 'es_no_recibir', lang: 'es',
     // Sin «recibir», solo si ahí termina la frase: «No quiero más correos sin
     // la propuesta» no es baja.
     re: new RegExp(
-      '\\bno\\s+(quiero|queremos|deseo|deseamos)\\s+(recibir|seguir\\s+recibiendo)\\s+(mas\\s+)?(correos|mensajes|e-?mails|informacion|comunicaciones|publicidad|propuestas)\\b'
+      '\\bno\\s+(quiero|queremos|deseo|deseamos)\\s+(recibir|seguir\\s+recibiendo)\\s+(mas\\s+)?((sus|tus|estos|los|vuestros)\\s+)?(correos|mensajes|e-?mails|informacion|comunicaciones|publicidad|propuestas)\\b'
         + `|\\bno\\s+(quiero|queremos|deseo|deseamos)\\s+mas\\s+(correos|mensajes|e-?mails)${ES_TAIL}`
-        + '|\\bno\\s+(quiero|queremos|deseo|deseamos)\\s+que\\s+(me|nos)\\s+(escriban|contacten|sigan\\s+escribiendo)\\b',
+        + '|\\bno\\s+(quiero|queremos|deseo|deseamos)\\s+que\\s+(me|nos)\\s+(escriban|contacten|sigan\\s+escribiendo)\\b'
+        // «No más correos, gracias.»: el mismo cierre que en_no_more_emails
+        // (termina la frase, o solo le sigue un «gracias»/«por favor»).
+        + '|\\bno\\s+mas\\s+(correos|mensajes|e-?mails)\\s*(,?\\s*(por\\s+favor|porfa|gracias))?\\s*([.!;,]|$)',
       'm',
     ),
   },

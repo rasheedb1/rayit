@@ -257,3 +257,24 @@ test('el saludo de apertura y un «De:» sin cita no se comen la baja', () => {
   assert.equal(stripSignature('Gracias.\nSaludos,\nNo nos contacten más.'), 'Gracias.\nSaludos,\nNo nos contacten más.');
   assert.equal(detectOptOut('Nos interesa.\nSaludos,\nMarcela\nIf you no longer wish to receive these emails, unsubscribe').optOut, false);
 });
+
+test('las peticiones de baja corteses y a secas del español, cada una con su contracara', () => {
+  // [la baja, su regla, lo que se le parece y no es baja]
+  const casos: Array<[string, string, string]> = [
+    ['¿Me podrían dar de baja?', 'es_dar_de_baja', '¿Me podrían dar de baja del newsletter y seguimos hablando por aquí?'],
+    ['¿Me pueden quitar de su lista?', 'es_dar_de_baja', '¿Me pueden mandar la lista de precios?'],
+    ['Ya no quiero recibir sus correos', 'es_no_recibir', '¿Me pueden mandar sus correos de contacto?'],
+    ['No más correos, gracias.', 'es_no_recibir', 'No más correos sin la propuesta, mejor hablemos por teléfono.'],
+    ['Por favor eliminen mis datos.', 'es_quitar_de_lista', 'Por favor no eliminen mis datos: seguimos en contacto.'],
+  ];
+  for (const [baja, regla, parecida] of casos) {
+    const r = detectOptOut(baja);
+    assert.equal(r.optOut, true, baja);
+    assert.equal(r.ruleId, regla, baja);
+    assert.equal(detectOptOut(parecida).optOut, false, parecida);
+  }
+  // Las variantes del mismo molde.
+  for (const texto of ['¿Nos pueden sacar de su base?', 'Me puede dar de baja, por favor.', 'No más mensajes.', 'Borren nuestros datos, gracias']) {
+    assert.equal(detectOptOut(texto).optOut, true, texto);
+  }
+});
