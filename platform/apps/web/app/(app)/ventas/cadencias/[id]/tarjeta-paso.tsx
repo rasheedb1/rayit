@@ -142,6 +142,7 @@ export function TarjetaPaso({
                     disabled={primero}
                     onClick={() => mover(-1)}
                     icon={<ArrowUp size={14} aria-hidden="true" />}
+                    title={t.subir(paso.numero)}
                   >
                     <span className="sr-only">{t.subir(paso.numero)}</span>
                   </Button>
@@ -153,6 +154,7 @@ export function TarjetaPaso({
                     disabled={ultimo}
                     onClick={() => mover(1)}
                     icon={<ArrowDown size={14} aria-hidden="true" />}
+                    title={t.bajar(paso.numero)}
                   >
                     <span className="sr-only">{t.bajar(paso.numero)}</span>
                   </Button>

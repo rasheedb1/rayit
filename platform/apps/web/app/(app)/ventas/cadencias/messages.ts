@@ -47,6 +47,9 @@ export const MESSAGES = {
     proponiendo: "Proponiendo…",
     verCadencia: "Ver su cadencia",
     negocio: (nombre: string) => `Negocio: ${nombre}`,
+    /** Hay más señales que las que caben arriba: el enlace a la lista entera. */
+    verTodas: plural({ one: "Ver la señal ({n})", other: "Ver todas las señales ({n})" }),
+    verMenos: "Ver solo las más recientes",
     vacio: {
       titulo: "Ninguna señal con negocio abierto",
       descripcion: "Acepta una señal del radar y crea su negocio: desde ahí se propone la cadencia.",
@@ -134,6 +137,7 @@ export const MESSAGES = {
     activando: "Activando…",
     pausar: "Pausar",
     reanudar: "Reanudar",
+    reanudarPara: (persona: string) => `Reanudar y escribir a ${persona}`,
     duplicar: "Duplicar",
     archivar: "Archivar",
     archivarPregunta: "¿Archivar esta cadencia?",
@@ -153,6 +157,7 @@ export const MESSAGES = {
     activadaYaEnOtra: (persona: string, cadencia: string) =>
       `Cadencia activa. ${persona} no entró: ya está en «${cadencia}», y dos cadencias a la vez a la misma persona duplican los mensajes.`,
     sinPasos: "Añade al menos un paso para activarla.",
+    revisarEnFicha: "Revisar en la ficha",
   },
 
   paso: {
@@ -201,6 +206,8 @@ export const MESSAGES = {
     },
     modos: { ai: "Lo redacta On Cue con la guía", fijo: "Texto fijo" },
     anadir: "Añadir paso",
+    anadidoComoGesto:
+      "Tu política ya tiene su máximo de mensajes a una marca: el paso nuevo es una reacción en su publicación, que no cuenta. Para que sea un mensaje, quita otro antes.",
     moviendo: "Guardando el orden…",
     movido: (n: string, pos: string) => `Paso ${n} movido a la posición ${pos}.`,
   },
@@ -210,8 +217,6 @@ export const MESSAGES = {
     descripcion: "Vuelve a pedir la propuesta, por ejemplo para otra persona de la marca. Reemplaza los pasos de este borrador.",
     persona: "Para",
     sinPersona: "Sin persona todavía",
-    /** El valor de «Sin persona todavía» en el formulario: se planea sin nadie, y Activar no enrola a nadie. */
-    ninguna: "__ninguna__",
     boton: "Proponer otra vez",
     sinCanales: (canales: string) => `Llega por: ${canales}`,
     sinDireccion: "Sin dirección",
@@ -252,7 +257,7 @@ export const MESSAGES = {
     },
     guiaModelo: "La guía de cada paso la redactó On Cue con IA a partir de las reglas.",
     guiaReglas: {
-      no_key: "La guía sale de las reglas: la redacción con IA no está configurada en este espacio.",
+      no_key: "La guía sale de las reglas: la redacción con IA todavía no está disponible.",
       budget: "La guía sale de las reglas: se agotó el presupuesto de redacción de hoy.",
       failed: "La guía sale de las reglas: la redacción con IA no respondió.",
       rejected: "La guía sale de las reglas: lo que propuso la IA no pasó la revisión.",
@@ -293,6 +298,13 @@ export const MESSAGES = {
       invalid_address: "su dirección está mal escrita",
     } as Record<string, string>,
     saltadaGenerica: "no se pudo enrolar",
+    /** Motivo de una saltada: ya está viva en otra cadencia del espacio. */
+    enOtra: (cadencia: string) => `ya está en «${cadencia}»`,
+    /** La línea bajo su casilla, que no se puede marcar. */
+    enOtraDetalle: (cadencia: string) => `Ya está en «${cadencia}»`,
+    nadieDisponible: "Nadie de este negocio puede entrar ahora.",
+    negocioCerrado: "su negocio ya se cerró",
+    sinNegocio: "esta señal no tiene un negocio abierto",
     saltada: (persona: string, motivo: string) => `${persona}: ${motivo}.`,
     elige: "Elige al menos una persona.",
     ajenas: "Alguna de esas personas no es de la marca de este negocio, o el negocio ya se cerró. Vuelve a elegir.",

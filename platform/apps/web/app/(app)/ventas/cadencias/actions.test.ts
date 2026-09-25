@@ -20,6 +20,7 @@ const { q, enrollContacts, outboundHealth, redirect } = vi.hoisted(() => ({
     liveEnrollmentElsewhere: vi.fn(),
     enrollableContactsOfDeal: vi.fn(),
     contactNames: vi.fn(),
+    addStep: vi.fn(),
   },
   enrollContacts: vi.fn(),
   outboundHealth: vi.fn(),
@@ -49,7 +50,8 @@ vi.mock("@mc/db/queries/outreach", async (original) => ({
 import { checkSequenceAgainstPolicy } from "@mc/core";
 import { CadenciaError } from "@mc/db/queries/cadencias";
 import { proponerCadencia } from "./_lib/proponer";
-import { activarCadencia, enrolarDesdeNegocio, guardarPaso, proponerDesdeSenal } from "./actions";
+import { SIN_PERSONA } from "./_lib/protocolo";
+import { activarCadencia, anadirPaso, enrolarDesdeNegocio, guardarPaso, proponerDesdeSenal } from "./actions";
 import { MESSAGES } from "./messages";
 
 const SEQ = "00000013-0000-4000-8000-000000000a01";
@@ -58,6 +60,7 @@ const SIGNAL = "00000002-0000-4000-8000-00000005e001";
 const CAMILA = "00000002-0000-4000-8000-0000000c0001";
 const DEAL = "00000002-0000-4000-8000-0000000dea07";
 const OTRA = "00000013-0000-4000-8000-00000000c001";
+const FRESKO = "00000002-0000-4000-8000-0000000000e2";
 
 function form(values: Record<string, string | string[]>): FormData {
   const fd = new FormData();
@@ -145,7 +148,7 @@ describe("proponer", () => {
 
   it("«Sin persona todavía» planea sin nadie y no guarda a quién escribir; vacío es la persona por defecto", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
-    await proponerDesdeSenal({}, form({ signalId: SIGNAL, contactId: MESSAGES.proponer.ninguna, sequenceId: SEQ }));
+    await proponerDesdeSenal({}, form({ signalId: SIGNAL, contactId: SIN_PERSONA, sequenceId: SEQ }));
     const [, seq, input] = q.replaceStepsFromProposal.mock.calls[0]!;
     expect(seq).toBe(SEQ);
     expect(input.meta.contactId).toBeNull();
@@ -171,15 +174,38 @@ describe("proponer", () => {
 });
 
 describe("activar (el segundo clic)", () => {
-  it("activa y enrola a la persona para la que se propuso", async () => {
+  it("activa y enrola a la persona para la que se propuso, y lleva a la ficha donde se aprueban sus mensajes", async () => {
     q.getSequenceDetail.mockResolvedValue({
       proposal: { contactId: CAMILA, dealId: DEAL }, proposalContact: { id: CAMILA, name: "Camila Rojas" }, enrollments: { total: 0 },
+      signal: { companyId: FRESKO },
     });
     enrollContacts.mockResolvedValue({ enrolled: [{ enrollmentId: "e", contactId: CAMILA, scheduled: 0, held: 0, drafts: 5, skipped: 1 }], skipped: [], warnings: [] });
     const r = await activarCadencia(SEQ);
     expect(q.setSequenceStatus).toHaveBeenCalledWith(expect.anything(), SEQ, "active");
+    expect(q.enrollableContactsOfDeal).toHaveBeenCalledWith(expect.anything(), DEAL, [CAMILA]);
     expect(enrollContacts).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ sequenceId: SEQ, contactIds: [CAMILA], dealId: DEAL }));
     expect(r.ok).toMatch(/Camila Rojas dentro: 5 por redactar y 1 sin dirección/);
+    expect(r.href).toBe(`/ventas/empresas/${FRESKO}#cadencia`);
+  });
+
+  it("si el negocio se cerró después de proponer, activa sin escribirle a nadie y dice por qué", async () => {
+    q.getSequenceDetail.mockResolvedValue({
+      proposal: { contactId: CAMILA, dealId: DEAL }, proposalContact: { id: CAMILA, name: "Camila Rojas" }, enrollments: { total: 0 },
+      signal: { companyId: FRESKO },
+    });
+    // enrollableContactsOfDeal no devuelve a nadie con el negocio ganado o perdido.
+    q.enrollableContactsOfDeal.mockResolvedValue([]);
+    const r = await activarCadencia(SEQ);
+    expect(q.setSequenceStatus).toHaveBeenCalledWith(expect.anything(), SEQ, "active");
+    expect(enrollContacts).not.toHaveBeenCalled();
+    expect(r).toEqual({ ok: MESSAGES.estado.activadaSinPersona("Camila Rojas", MESSAGES.enrolar.negocioCerrado) });
+
+    // Una propuesta sin negocio (la señal no tenía uno abierto) tampoco enrola.
+    q.getSequenceDetail.mockResolvedValue({
+      proposal: { contactId: CAMILA, dealId: null }, proposalContact: { id: CAMILA, name: "Camila Rojas" }, enrollments: { total: 0 },
+    });
+    expect(await activarCadencia(SEQ)).toEqual({ ok: MESSAGES.estado.activadaSinPersona("Camila Rojas", MESSAGES.enrolar.sinNegocio) });
+    expect(enrollContacts).not.toHaveBeenCalled();
   });
 
   it("si la persona ya está viva en otra cadencia, activa sin enrolarla y dice en cuál", async () => {
@@ -245,6 +271,32 @@ describe("pasos y enrolamiento", () => {
     expect(r).toEqual({ error: MESSAGES.enrolar.ajenas });
     expect(enrollContacts).not.toHaveBeenCalled();
     expect(q.enrollableContactsOfDeal).toHaveBeenCalledWith(expect.anything(), DEAL, [CAMILA, OTRA]);
+  });
+
+  it("enrolar desde un negocio no mete en esta cadencia a quien ya está viva en otra: la salta y dice en cuál", async () => {
+    q.liveEnrollmentElsewhere.mockImplementation(async (_tx: unknown, id: string) =>
+      id === CAMILA ? { sequenceId: "x", name: "Fresko Market · Campaña activa" } : null);
+    enrollContacts.mockResolvedValue({ enrolled: [{ enrollmentId: "e", contactId: OTRA, scheduled: 1, held: 0, drafts: 0, skipped: 0 }], skipped: [], warnings: [] });
+    q.contactNames.mockResolvedValue(new Map([[CAMILA, "Camila Rojas"]]));
+    const r = await enrolarDesdeNegocio(SEQ, {}, form({ dealId: DEAL, contactId: [CAMILA, OTRA] }));
+    expect(q.liveEnrollmentElsewhere).toHaveBeenCalledWith(expect.anything(), CAMILA, SEQ);
+    expect(enrollContacts).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactIds: [OTRA], dealId: DEAL }));
+    expect(r.ok).toBe("1 persona enrolada.");
+    expect(r.saltadas).toEqual(["Camila Rojas: ya está en «Fresko Market · Campaña activa»."]);
+
+    // Si todas están en otra, no se llama al motor.
+    enrollContacts.mockClear();
+    const r2 = await enrolarDesdeNegocio(SEQ, {}, form({ dealId: DEAL, contactId: [CAMILA] }));
+    expect(enrollContacts).not.toHaveBeenCalled();
+    expect(r2.ok).toBe("0 personas enroladas.");
+  });
+
+  it("«Añadir paso» avisa cuando el paso nuevo es un gesto porque la política ya está llena de mensajes", async () => {
+    q.addStep.mockResolvedValue({ id: STEP, asGesture: true });
+    expect(await anadirPaso(SEQ)).toEqual({ ok: MESSAGES.paso.anadidoComoGesto });
+    expect(q.addStep).toHaveBeenCalledWith(expect.anything(), SEQ);
+    q.addStep.mockResolvedValue({ id: STEP, asGesture: false });
+    expect(await anadirPaso(SEQ)).toEqual({});
   });
 
   it("los errores con límite dicen la cifra de @mc/db, formateada", async () => {

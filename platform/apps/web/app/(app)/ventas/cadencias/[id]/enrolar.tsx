@@ -17,8 +17,9 @@ export interface NegocioVista {
 /**
  * «Enrolar desde un negocio»: se elige el negocio y sus personas, y cada
  * una entra en la cadencia (enrollContacts de VEN-10). Quien pidió la
- * baja, no tiene dirección o ya está dentro se ve, pero no se puede
- * marcar.
+ * baja, no tiene dirección, ya está dentro o sigue viva en otra cadencia
+ * se ve, con el motivo, pero no se puede marcar; si nadie del negocio
+ * puede entrar, «Enrolar» se apaga y lo dice.
  */
 export function Enrolar({ sequenceId, negocios, activa, inicial }: {
   sequenceId: string;
@@ -31,6 +32,8 @@ export function Enrolar({ sequenceId, negocios, activa, inicial }: {
   const [negocio, setNegocio] = useState(inicial && negocios.some((n) => n.id === inicial) ? inicial : "");
   const [state, action, pending] = useActionState<EnrolarState, FormData>(enrolarDesdeNegocio.bind(null, sequenceId), {});
   const elegido = negocios.find((n) => n.id === negocio);
+  // Con el negocio elegido y nadie que pueda entrar (ya dentro, de baja, sin dirección o en otra cadencia), no hay nada que enviar.
+  const nadie = elegido !== undefined && elegido.personas.length > 0 && !elegido.personas.some((p) => p.disponible);
 
   return (
     <section aria-labelledby="enrolar" className="rounded-md border border-line bg-surface p-4">
@@ -75,10 +78,11 @@ export function Enrolar({ sequenceId, negocios, activa, inicial }: {
             </fieldset>
           )}
           <div>
-            <Button type="submit" size="sm" loading={pending} disabled={!activa || !elegido}>
+            <Button type="submit" size="sm" loading={pending} disabled={!activa || !elegido || nadie}>
               {pending ? t.enrolando : t.boton}
             </Button>
             {!activa && <p className="mt-2 text-xs text-fg-3">{t.soloActiva}</p>}
+            {activa && nadie && <p className="mt-2 text-xs text-fg-3">{t.nadieDisponible}</p>}
           </div>
           <Aviso message={state.error} notice={state.ok} size="xs" />
           {state.saltadas && state.saltadas.length > 0 && (

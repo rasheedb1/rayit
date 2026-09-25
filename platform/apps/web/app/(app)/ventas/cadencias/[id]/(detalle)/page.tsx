@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import {
-  EDITABLE_CHANNELS, EDITABLE_STEP_TYPES, getRecommendationContext, getSequenceDetail, listAngles, listEnrollableDeals,
-  listSequenceTemplates, type ContactOption, type SequenceDetail,
+  EDITABLE_CHANNELS, EDITABLE_STEP_TYPES, getSequenceDetail, listAngles, listEnrollableDeals, listSequenceTemplates,
+  signalContacts, type ContactOption, type EnrollableDeal, type SequenceDetail,
 } from "@mc/db/queries/cadencias";
 import { PageHeader } from "@/components/page-header";
 import { Pill } from "@/components/ui/pill";
@@ -29,6 +29,23 @@ function alcance(c: ContactOption): string {
   if (c.optedOut) return t.deBaja;
   const canales = [c.hasEmail && "email", c.hasLinkedin && "linkedin", c.hasInstagram && "instagram_dm"].filter(Boolean) as string[];
   return canales.length ? t.sinCanales(canales.map(etiquetaCanal).join(", ")) : t.sinDireccion;
+}
+
+/**
+ * El texto del botón de activar. Dice «y escribir a X» solo si X de verdad
+ * va a entrar al pulsarlo: nadie dentro todavía, el negocio de la
+ * propuesta sigue abierto (está entre los enrolables) y X es de su marca,
+ * con alguna dirección, sin baja y sin otra cadencia viva. En pausa es
+ * «Reanudar», que pasa por la misma acción y enrola igual.
+ */
+function etiquetaActivar(d: SequenceDetail, negocios: readonly EnrollableDeal[]): string {
+  const t = MESSAGES.estado;
+  const negocio = d.proposal?.dealId ? negocios.find((n) => n.id === d.proposal!.dealId) : undefined;
+  const c = d.proposalContact && d.enrollments.total === 0 ? negocio?.contacts.find((x) => x.id === d.proposalContact!.id) : undefined;
+  const entra = c && !c.optedOut && !c.enrolled && !c.liveElsewhere && (c.hasEmail || c.hasLinkedin || c.hasInstagram);
+  const persona = entra ? c.name : null;
+  if (d.status === "paused") return persona ? t.reanudarPara(persona) : t.reanudar;
+  return persona ? t.activarPara(persona) : t.activar;
 }
 
 function pasosVista(d: SequenceDetail, f: Formatter, angulos: ReadonlyMap<string, string>): PasoVista[] {
@@ -78,7 +95,8 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
       plantillas: await listSequenceTemplates(tx),
       angulos: await listAngles(tx),
       negocios: archivada ? [] : await listEnrollableDeals(tx, d.id),
-      personas: d.signal && !d.locked && !archivada ? (await getRecommendationContext(tx, d.signal.id)).contacts : [],
+      // Solo las personas de la marca: no el contexto entero del recomendador (plantillas y ángulos ya están arriba).
+      personas: d.signal && !d.locked && !archivada ? await signalContacts(tx, d.signal.id) : [],
     };
   });
   if (!datos) notFound();
@@ -94,15 +112,19 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
     : d.templateName
       ? t.detalle.plantilla(d.templateName)
       : undefined;
-  const persona = d.proposalContact && d.enrollments.total === 0 ? d.proposalContact.name : null;
   const negociosVista: NegocioVista[] = negocios.map((n) => ({
     id: n.id,
     label: `${n.companyName} · ${n.name}`,
     personas: n.contacts.map((c) => ({
       id: c.id,
       nombre: c.name ?? t.proponer.sinPersona,
-      detalle: [c.roleTitle, c.enrolled ? t.enrolar.yaDentro : alcance(c)].filter(Boolean).join(" · "),
-      disponible: !c.enrolled && !c.optedOut && (c.hasEmail || c.hasLinkedin || c.hasInstagram),
+      detalle: [
+        c.roleTitle,
+        c.enrolled ? t.enrolar.yaDentro : c.liveElsewhere ? t.enrolar.enOtraDetalle(c.liveElsewhere) : alcance(c),
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      disponible: !c.enrolled && !c.liveElsewhere && !c.optedOut && (c.hasEmail || c.hasLinkedin || c.hasInstagram),
       dentro: c.enrolled,
     })),
   }));
@@ -126,7 +148,7 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
         sequenceId={d.id}
         status={d.status}
         nombre={d.name}
-        activarLabel={persona ? t.estado.activarPara(persona) : t.estado.activar}
+        activarLabel={etiquetaActivar(d, negocios)}
         puedeActivar={d.steps.length > 0}
       />
 

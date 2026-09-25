@@ -88,12 +88,23 @@ describe("línea de tiempo · el foco", () => {
   });
 
   it("bajar un paso con el teclado deja el foco en su «Bajar», ya en el puesto nuevo", async () => {
+    // El servidor no contesta hasta el final: el orden nuevo es el optimista, y sin nuevas props del
+    // servidor volvería al viejo en cuanto la acción terminara (la prueba no dependería de la carrera).
+    let contestar: () => void = () => {};
+    reordenarPasos.mockImplementationOnce(() => new Promise((r) => (contestar = () => r({}))));
     pintar();
     fireEvent.click(within(tarjeta(1)).getByRole("button", { name: "Bajar el paso 1" }));
     await waitFor(() => expect(reordenarPasos).toHaveBeenCalledTimes(1));
     // El paso que era el 1 ocupa el segundo puesto (toma su número y su día) y el foco va con él.
     await waitFor(() => expect(document.activeElement).toBe(within(tarjeta(2)).getByRole("button", { name: "Bajar el paso 2" })));
     expect(within(tarjeta(2)).getByText(/Guía del paso 1/)).toBeInTheDocument();
+    contestar();
+  });
+
+  it("Subir y Bajar dicen lo que hacen también con el ratón (title), no solo al lector de pantalla", () => {
+    pintar();
+    expect(within(tarjeta(2)).getByTitle("Subir el paso 2")).toBeInTheDocument();
+    expect(within(tarjeta(2)).getByTitle("Bajar el paso 2")).toBeInTheDocument();
   });
 
   it("en el borde, el foco pasa al otro botón en lugar de perderse", async () => {

@@ -22,8 +22,10 @@ import {
   setSequenceStatus, updateStep, BODY_MAX, GUIDANCE_MAX, MAX_DAY_OFFSET, MAX_STEPS, MAX_STEPS_PER_DAY, NAME_MAX, SUBJECT_MAX,
 } from "@mc/db/queries/cadencias";
 import { enrollContacts, OutreachMotorError } from "@mc/db/queries/outreach";
+import { OUTREACH_URLS } from "@mc/core/outreach/messages";
 import { withWorkspace } from "../_lib/db";
 import { proponerCadencia } from "./_lib/proponer";
+import { SIN_PERSONA } from "./_lib/protocolo";
 import { redactorAnthropic, redactorConfigurado } from "./_lib/redactor";
 import { MESSAGES } from "./messages";
 
@@ -35,6 +37,8 @@ const detalle = (id: string) => `${LISTA}/${id}`;
 export interface CadenciaState {
   error?: string;
   ok?: string;
+  /** Adónde seguir después del aviso: la ficha de la empresa, donde se aprueban los mensajes retenidos. */
+  href?: string;
 }
 
 /** Los límites que dicen algunos errores, para decirlos con la cifra del idioma del espacio. */
@@ -61,8 +65,8 @@ const uuid = z.string().regex(UUID_RE);
 
 const proponerSchema = z.object({
   signalId: uuid,
-  /** Vacío: la persona por defecto (el primer clic, desde la lista). MESSAGES.proponer.ninguna: sin nadie. */
-  contactId: uuid.or(z.literal("")).or(z.literal(MESSAGES.proponer.ninguna)),
+  /** Vacío: la persona por defecto (el primer clic, desde la lista). SIN_PERSONA: sin nadie. */
+  contactId: uuid.or(z.literal("")).or(z.literal(SIN_PERSONA)),
   sequenceId: uuid.or(z.literal("")),
 });
 
@@ -81,7 +85,7 @@ export async function proponerDesdeSenal(_prev: CadenciaState, formData: FormDat
   let id: string;
   try {
     const { contactId } = parsed.data;
-    const sinPersona = contactId === MESSAGES.proponer.ninguna;
+    const sinPersona = contactId === SIN_PERSONA;
     id = await proponerCadencia(
       {
         signalId: parsed.data.signalId,
@@ -120,9 +124,15 @@ export async function crearDesdePlantilla(_prev: CadenciaState, formData: FormDa
  * «Activar» (el segundo clic). Si la cadencia salió de una propuesta para
  * una persona y un negocio, y nadie está dentro todavía, la activa y
  * enrola a esa persona en la misma transacción: si no se puede enrolar,
- * la cadencia queda activa igual y el aviso dice por qué. Si la persona
- * ya está viva en otra cadencia del espacio, no se la enrola: dos
- * cadencias a la vez a la misma persona duplican los mensajes.
+ * la cadencia queda activa igual y el aviso dice por qué.
+ *
+ * Antes de enrolar, en la misma transacción, lo mismo que pide «Enrolar
+ * desde un negocio»: que el negocio siga abierto y la persona sea de su
+ * marca (un borrador puede esperar días y el negocio perderse entre
+ * tanto: no se le escriben seis mensajes a una marca que ya dijo que
+ * no), y que la persona no esté viva en otra cadencia del espacio (dos
+ * cadencias a la vez duplican los mensajes). «Reanudar» pasa por aquí
+ * igual: su etiqueta dice a quién le escribe.
  */
 export async function activarCadencia(sequenceId: string): Promise<CadenciaState> {
   if (!UUID_RE.test(sequenceId)) return { error: E.invalid };
@@ -130,31 +140,41 @@ export async function activarCadencia(sequenceId: string): Promise<CadenciaState
   try {
     const workspace = await getCurrentWorkspace();
     const f = formatterFor(workspace);
-    const ok = await withWorkspace(async (tx) => {
+    const r = await withWorkspace(async (tx): Promise<CadenciaState> => {
       await setSequenceStatus(tx, sequenceId, "active");
       const d = await getSequenceDetail(tx, sequenceId);
       const p = d?.proposal;
-      if (!d || !p?.contactId || d.enrollments.total > 0) return t.activada;
-      if (!d.proposalContact) return t.activada;
-      const nombre = d.proposalContact.name ?? MESSAGES.proponer.sinPersona;
-      const otra = await liveEnrollmentElsewhere(tx, d.proposalContact.id, sequenceId);
-      if (otra) return t.activadaYaEnOtra(nombre, otra.name);
-      const r = await enrollContacts(tx, {
-        sequenceId, contactIds: [d.proposalContact.id], dealId: p.dealId, enrolledBy: tx.identity?.userId ?? null,
+      if (!d || !p?.contactId || d.enrollments.total > 0) return { ok: t.activada };
+      if (!d.proposalContact) return { ok: t.activada };
+      const persona = d.proposalContact;
+      const nombre = persona.name ?? MESSAGES.proponer.sinPersona;
+      const deSuNegocio = p.dealId ? await enrollableContactsOfDeal(tx, p.dealId, [persona.id]) : [];
+      if (deSuNegocio.length === 0) {
+        return { ok: t.activadaSinPersona(nombre, p.dealId ? MESSAGES.enrolar.negocioCerrado : MESSAGES.enrolar.sinNegocio) };
+      }
+      const otra = await liveEnrollmentElsewhere(tx, persona.id, sequenceId);
+      if (otra) return { ok: t.activadaYaEnOtra(nombre, otra.name) };
+      const res = await enrollContacts(tx, {
+        sequenceId, contactIds: [persona.id], dealId: p.dealId, enrolledBy: tx.identity?.userId ?? null,
       });
-      const dentro = r.enrolled[0];
+      const dentro = res.enrolled[0];
       if (!dentro) {
-        const motivo = MESSAGES.enrolar.saltadas[r.skipped[0]?.reason ?? "not_found"] ?? MESSAGES.enrolar.saltadaGenerica;
-        return t.activadaSinPersona(nombre, motivo);
+        const motivo = MESSAGES.enrolar.saltadas[res.skipped[0]?.reason ?? "not_found"] ?? MESSAGES.enrolar.saltadaGenerica;
+        return { ok: t.activadaSinPersona(nombre, motivo) };
       }
       const partes = (["scheduled", "held", "drafts", "skipped"] as const)
         .filter((k) => dentro[k] > 0)
         .map((k) => t.partes[k](f.int(dentro[k]), dentro[k]));
-      return t.activadaCon(nombre, new Intl.ListFormat(f.locale, { type: "conjunction" }).format(partes));
+      const companyId = d.signal?.companyId ?? null;
+      return {
+        ok: t.activadaCon(nombre, new Intl.ListFormat(f.locale, { type: "conjunction" }).format(partes)),
+        // Donde se revisan y aprueban esos mensajes: lo que de verdad hace que salgan.
+        href: companyId ? OUTREACH_URLS.companyCadence(companyId) : undefined,
+      };
     });
     revalidatePath(LISTA);
     revalidatePath(detalle(sequenceId));
-    return { ok };
+    return r;
   } catch (err) {
     return { error: await mensajeDe(err) };
   }
@@ -230,14 +250,16 @@ export async function guardarPaso(sequenceId: string, stepId: string, cambios: P
 
 export async function anadirPaso(sequenceId: string): Promise<CadenciaState> {
   if (!UUID_RE.test(sequenceId)) return { error: E.invalid };
+  let comoGesto: boolean;
   try {
-    // Sin ángulo dicho: addStep toma el primero que la cadencia no usa, con su guía.
-    await withWorkspace((tx) => addStep(tx, sequenceId, { stepType: "email_reply" }));
+    // Sin tipo ni ángulo: addStep pone el siguiente mensaje con el primer ángulo que la cadencia no usa, o
+    // un gesto de presencia si la política ya está llena de mensajes (uno más nunca saldría).
+    comoGesto = (await withWorkspace((tx) => addStep(tx, sequenceId))).asGesture;
   } catch (err) {
     return { error: await mensajeDe(err) };
   }
   revalidatePath(detalle(sequenceId));
-  return {};
+  return comoGesto ? { ok: MESSAGES.paso.anadidoComoGesto } : {};
 }
 
 export async function quitarPaso(sequenceId: string, stepId: string): Promise<CadenciaState> {
@@ -280,7 +302,9 @@ const enrolarSchema = z.object({ dealId: uuid, contactIds: z.array(uuid).min(1).
  * VEN-10). Antes comprueba, en la misma transacción, que cada persona es
  * de la marca del negocio y que el negocio sigue abierto
  * (enrollableContactsOfDeal): un formulario hecho a mano no mete a
- * alguien de otra marca bajo este negocio.
+ * alguien de otra marca bajo este negocio. Quien ya está viva en otra
+ * cadencia del espacio no entra (la misma regla que «Activar»): queda
+ * entre las saltadas con el nombre de esa cadencia.
  */
 export async function enrolarDesdeNegocio(sequenceId: string, _prev: EnrolarState, formData: FormData): Promise<EnrolarState> {
   const t = MESSAGES.enrolar;
@@ -297,13 +321,25 @@ export async function enrolarDesdeNegocio(sequenceId: string, _prev: EnrolarStat
       const { dealId, contactIds } = parsed.data;
       const validas = new Set(await enrollableContactsOfDeal(tx, dealId, contactIds));
       if (contactIds.some((id) => !validas.has(id))) return null;
-      const res = await enrollContacts(tx, { sequenceId, contactIds, dealId, enrolledBy: tx.identity?.userId ?? null });
-      const nombres = await contactNames(tx, res.skipped.map((s) => s.contactId));
+      // Dos cadencias a la vez a la misma persona duplican los mensajes: quien ya está viva en otra se queda fuera.
+      const libres: string[] = [];
+      const enOtra: Array<{ contactId: string; cadencia: string }> = [];
+      for (const id of contactIds) {
+        const otra = await liveEnrollmentElsewhere(tx, id, sequenceId);
+        if (otra) enOtra.push({ contactId: id, cadencia: otra.name });
+        else libres.push(id);
+      }
+      const res = libres.length > 0
+        ? await enrollContacts(tx, { sequenceId, contactIds: libres, dealId, enrolledBy: tx.identity?.userId ?? null })
+        : { enrolled: [], skipped: [] };
+      const nombres = await contactNames(tx, [...res.skipped.map((s) => s.contactId), ...enOtra.map((x) => x.contactId)]);
+      const nombre = (id: string) => nombres.get(id) ?? MESSAGES.proponer.sinPersona;
       return {
         enrolled: res.enrolled.length,
-        saltadas: res.skipped.map((s) =>
-          t.saltada(nombres.get(s.contactId) ?? MESSAGES.proponer.sinPersona, t.saltadas[s.reason] ?? t.saltadaGenerica),
-        ),
+        saltadas: [
+          ...res.skipped.map((s) => t.saltada(nombre(s.contactId), t.saltadas[s.reason] ?? t.saltadaGenerica)),
+          ...enOtra.map((x) => t.saltada(nombre(x.contactId), t.enOtra(x.cadencia))),
+        ],
       };
     });
     if (!r) return { error: t.ajenas };

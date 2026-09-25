@@ -81,7 +81,9 @@ describe("cadencias · lo que la pantalla decide sin base", () => {
       dealId: null, proposedAt: "",
     };
     expect(textoDeGuia({ ...base, guidance: "llm", guidanceWhyRules: null })).toMatch(/con IA/);
-    expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "no_key" })).toMatch(/no está configurada/);
+    expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "no_key" })).toMatch(/todavía no está disponible/);
+    // La llave es del servidor, no del espacio: el texto no le pide a la creadora que la configure.
+    expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "no_key" })).not.toMatch(/espacio|configura/);
     expect(textoDeGuia({ ...base, guidance: "rules", guidanceWhyRules: "budget" })).toMatch(/presupuesto/);
   });
 

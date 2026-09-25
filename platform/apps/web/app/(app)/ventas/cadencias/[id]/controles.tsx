@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
 import type { SequenceStatus } from "@mc/db/queries/cadencias";
 import { Button } from "@/components/ui/button";
@@ -26,7 +27,11 @@ export function Controles({
   sequenceId: string;
   status: SequenceStatus;
   nombre: string;
-  /** «Activar» o «Activar y escribir a Camila Rojas». */
+  /**
+   * «Activar», «Activar y escribir a Camila Rojas», «Reanudar» o «Reanudar
+   * y escribir a Camila Rojas»: lo decide la página con el estado y con si
+   * esa persona de verdad va a entrar.
+   */
   activarLabel: string;
   puedeActivar: boolean;
 }) {
@@ -35,6 +40,7 @@ export function Controles({
   const [renombrando, setRenombrando] = useState(false);
   const [pending, start] = useTransition();
   const archivada = status === "archived";
+  const [activando, setActivando] = useState(false);
 
   function correr(fn: () => Promise<CadenciaState>, despues?: () => void) {
     setState({});
@@ -71,9 +77,18 @@ export function Controles({
               variant="primary"
               loading={pending}
               disabled={!puedeActivar}
-              onClick={() => correr(() => activarCadencia(sequenceId))}
+              onClick={() => {
+                setActivando(true);
+                correr(async () => {
+                  try {
+                    return await activarCadencia(sequenceId);
+                  } finally {
+                    setActivando(false);
+                  }
+                });
+              }}
             >
-              {pending ? t.activando : status === "paused" ? t.reanudar : activarLabel}
+              {activarLabel}
             </Button>
           )}
           {status === "active" && (
@@ -101,10 +116,19 @@ export function Controles({
               openWidth="w-full sm:w-80"
             />
           )}
+          {/* El botón con spinner no dice nada: el estado se lee aquí, y un lector de pantalla lo oye. Siempre montado: una región viva que aparece no se anuncia. */}
+          <p aria-live="polite" className="self-center text-xs text-fg-3">
+            {pending && activando ? t.activando : ""}
+          </p>
         </div>
       )}
       {!puedeActivar && !archivada && status !== "active" && <p className="text-xs text-fg-3">{t.sinPasos}</p>}
       <Aviso message={state.error} notice={state.ok} />
+      {state.ok && state.href && (
+        <Link href={state.href} className="text-sm underline underline-offset-2">
+          {t.revisarEnFicha}
+        </Link>
+      )}
     </div>
   );
 }

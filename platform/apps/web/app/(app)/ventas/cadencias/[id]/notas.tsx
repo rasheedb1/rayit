@@ -27,7 +27,9 @@ export function Notas({
   const notas = d.proposal
     ? d.proposal.notes.map((n) => textoDeNota(n, f, plantillas, angulos)).filter((x): x is string => x !== null)
     : [];
-  const caida = d.proposal?.notes.some((n) => n.code === "channel_down") ?? false;
+  // «Ir a Canales» solo si alguna nota se arregla ahí: una cuenta por reconectar o una que no está conectada.
+  const aCanales =
+    d.proposal?.notes.some((n) => n.code === "channel_down" || (n.code === "rerouted" && n.reason === "channel_not_connected")) ?? false;
   const overCap = d.policy.overCap.length;
   const gap = d.policy.closerThanGap.length;
   if (notas.length === 0 && overCap === 0 && gap === 0) return null;
@@ -45,7 +47,7 @@ export function Notas({
             ))}
             <li>{textoDeGuia(d.proposal)}</li>
           </ul>
-          {caida && (
+          {aCanales && (
             <Link href={OUTREACH_URLS.channels} className="mt-2 inline-block text-sm underline underline-offset-2">
               {t.reconectar}
             </Link>

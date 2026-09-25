@@ -67,6 +67,8 @@ export function LineaDeTiempo({
   const [editando, setEditando] = useState<string | null>(null);
   const [arrastrado, setArrastrado] = useState<string | null>(null);
   const [error, setError] = useState<string | undefined>();
+  /** Lo que una acción quiere decir sin ser error (el paso añadido como gesto porque la política ya está llena). */
+  const [info, setInfo] = useState<string | undefined>();
   const [anuncio, setAnuncio] = useState("");
   const [foco, setFoco] = useState<Foco | null>(null);
   const [pending, start] = useTransition();
@@ -113,11 +115,13 @@ export function LineaDeTiempo({
     reordenar(orden, arrastrado);
   }
 
-  function actuar(fn: () => Promise<{ error?: string }>) {
+  function actuar(fn: () => Promise<{ error?: string; ok?: string }>) {
     setError(undefined);
+    setInfo(undefined);
     start(async () => {
       const r = await fn();
       if (r.error) setError(r.error);
+      else if (r.ok) setInfo(r.ok);
     });
   }
 
@@ -131,7 +135,7 @@ export function LineaDeTiempo({
       <h2 id="linea" className="mb-3 text-xs font-medium uppercase tracking-wide text-fg-3">
         {MESSAGES.detalle.pasos}
       </h2>
-      <Aviso message={error} className="mb-3" />
+      <Aviso message={error} info={info} className="mb-3" />
       <p aria-live="polite" className="sr-only">
         {pending ? t.moviendo : anuncio}
       </p>

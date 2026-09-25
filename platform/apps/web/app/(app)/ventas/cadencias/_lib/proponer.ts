@@ -1,10 +1,11 @@
 import "server-only";
-import { recommendSequence, refineGuidance, type GuidanceWriter, type LlmUsage, type Proposal } from "@mc/core";
+import { guidanceLocale, recommendSequence, refineGuidance, type GuidanceWriter, type LlmUsage, type Proposal } from "@mc/core";
 import {
   createSequenceFromProposal, defaultContact, getRecommendationContext, recordRecommendLlmCall, replaceStepsFromProposal,
   type ProposalMeta,
 } from "@mc/db/queries/cadencias";
 import { outboundHealth } from "@mc/db/queries/outreach";
+import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
 import { MESSAGES } from "../messages";
 
@@ -37,6 +38,8 @@ export interface ProponerInput {
 
 export async function proponerCadencia(input: ProponerInput, writer: GuidanceWriter | null): Promise<string> {
   const ahora = new Date();
+  // Las frases de la guía compuesta, en el idioma del espacio (el que tenga tabla; si no, español).
+  const locale = guidanceLocale((await getCurrentWorkspace()).locale);
   const leido = await withWorkspace(async (tx) => {
     const ctx = await getRecommendationContext(tx, input.signalId);
     const elegida = input.sinPersona
@@ -51,6 +54,7 @@ export async function proponerCadencia(input: ProponerInput, writer: GuidanceWri
       requiresDisclosure: ctx.brief?.requiresDisclosure ?? false,
       templates: ctx.templates,
       policy: ctx.policy,
+      locale,
     });
     const llm = writer ? (await outboundHealth(tx, 24)).llm : null;
     return { ctx, elegida, proposal, conPresupuesto: llm ? llm.spentToday < llm.dailyCap : false };
@@ -72,6 +76,7 @@ export async function proponerCadencia(input: ProponerInput, writer: GuidanceWri
         briefNotes: ctx.brief?.notes ?? null,
         requiresDisclosure: ctx.brief?.requiresDisclosure ?? false,
         angles: ctx.angles,
+        locale,
       },
       writer,
     );

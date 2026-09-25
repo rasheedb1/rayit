@@ -4,13 +4,14 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
 import { Aviso } from "../../../_lib/aviso";
+import { SIN_PERSONA } from "../_lib/protocolo";
 import { proponerDesdeSenal, type CadenciaState } from "../actions";
 import { MESSAGES } from "../messages";
 
 /**
  * «Proponer desde esta señal» en el borrador: otra persona de la marca,
  * otra propuesta. Reemplaza los pasos (solo sin nadie dentro). «Sin
- * persona todavía» manda un valor propio (MESSAGES.proponer.ninguna), no
+ * persona todavía» manda un valor propio (SIN_PERSONA), no
  * el vacío: el vacío es «la de por defecto» y planearía para alguien.
  */
 export function ProponerOtraVez({
@@ -39,8 +40,8 @@ export function ProponerOtraVez({
         <Field label={t.persona}>
           <Select
             name="contactId"
-            options={[{ value: t.ninguna, label: t.sinPersona }, ...personas]}
-            defaultValue={elegida ?? t.ninguna}
+            options={[{ value: SIN_PERSONA, label: t.sinPersona }, ...personas]}
+            defaultValue={elegida ?? SIN_PERSONA}
           />
         </Field>
         <div>

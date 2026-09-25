@@ -12,6 +12,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { CeldaVacia } from "../../_componentes/celda-vacia";
 import { ModuleTabs } from "../../_componentes/pestanas";
 import { withWorkspace } from "../../_lib/db";
+import { TODAS_LAS_SENALES } from "../_lib/protocolo";
 import { ESTADO_PILL } from "../_lib/vista";
 import { MESSAGES } from "../messages";
 import { PlantillaForm } from "../plantilla-form";
@@ -21,25 +22,46 @@ export const metadata: Metadata = { title: MESSAGES.metaTitle };
 export const dynamic = "force-dynamic";
 
 const CADENCIAS = "/ventas/cadencias";
+/** Las señales que caben arriba sin pedir «Ver todas». */
+const SENALES_ARRIBA = 6;
+
+/** La URL de la lista con sus dos filtros, sin parámetros vacíos. */
+function listaHref(opts: { todas: boolean; archivadas: boolean }): string {
+  const q = new URLSearchParams();
+  if (opts.todas) q.set("senales", TODAS_LAS_SENALES);
+  if (opts.archivadas) q.set("archivadas", "1");
+  const s = q.toString();
+  return s ? `${CADENCIAS}?${s}` : CADENCIAS;
+}
 
 /**
  * /ventas/cadencias (VEN-13): de dónde sale una cadencia y cuáles hay.
  *
  * Arriba, las señales aceptadas con negocio abierto y su «Proponer
  * cadencia» (el primer clic; el segundo es «Activar» en la línea de
- * tiempo). En medio, las cadencias con su estado, sus personas dentro y
+ * tiempo): las más recientes y, si hay más, «Ver todas las señales (N)»
+ * (?senales=todas), para que ninguna quede sin camino. La ficha de la
+ * empresa ofrece lo mismo junto a cada negocio. En medio, las cadencias con su estado, sus personas dentro y
  * su tasa de respuesta, todo contado en SQL. Abajo, empezar desde una
  * plantilla sin señal.
  */
-export default async function CadenciasPage({ searchParams }: { searchParams: Promise<{ archivadas?: string }> }) {
-  const conArchivadas = (await searchParams).archivadas === "1";
-  const { senales, cadencias, plantillas } = await withWorkspace(async (tx) => ({
-    senales: await listProposableSignals(tx, 6),
+export default async function CadenciasPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ archivadas?: string; senales?: string }>;
+}) {
+  const sp = await searchParams;
+  const conArchivadas = sp.archivadas === "1";
+  const todas = sp.senales === TODAS_LAS_SENALES;
+  const { senales: propuestas, cadencias, plantillas } = await withWorkspace(async (tx) => ({
+    senales: await listProposableSignals(tx, todas ? {} : { limit: SENALES_ARRIBA }),
     cadencias: await listSequences(tx, { includeArchived: conArchivadas }),
     plantillas: await listSequenceTemplates(tx),
   }));
   const f = formatterFor(await getCurrentWorkspace());
   const t = MESSAGES;
+  const senales = propuestas.signals;
+  const hayMas = propuestas.total > senales.length;
 
   const columns: Column<SequenceListRow>[] = [
     {
@@ -75,7 +97,19 @@ export default async function CadenciasPage({ searchParams }: { searchParams: Pr
       <ModuleTabs active={CADENCIAS} />
 
       <section aria-labelledby="senales" className="mb-10">
-        <SectionTitle>
+        <SectionTitle
+          meta={
+            hayMas ? (
+              <Link href={listaHref({ todas: true, archivadas: conArchivadas })} className="hover:underline">
+                {t.senales.verTodas(f.int(propuestas.total), propuestas.total)}
+              </Link>
+            ) : todas && propuestas.total > SENALES_ARRIBA ? (
+              <Link href={listaHref({ todas: false, archivadas: conArchivadas })} className="hover:underline">
+                {t.senales.verMenos}
+              </Link>
+            ) : undefined
+          }
+        >
           <span id="senales">{t.senales.titulo}</span>
         </SectionTitle>
         <p className="mb-4 max-w-2xl text-sm text-fg-2">{t.senales.descripcion}</p>
@@ -119,7 +153,7 @@ export default async function CadenciasPage({ searchParams }: { searchParams: Pr
       <section aria-labelledby="lista" className="mb-10">
         <SectionTitle
           meta={
-            <Link href={conArchivadas ? CADENCIAS : `${CADENCIAS}?archivadas=1`} className="hover:underline">
+            <Link href={listaHref({ todas, archivadas: !conArchivadas })} className="hover:underline">
               {conArchivadas ? t.lista.ocultarArchivadas : t.lista.verArchivadas}
             </Link>
           }
