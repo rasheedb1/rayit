@@ -101,3 +101,39 @@ export function templateValuesFrom(s: TemplateSources): TemplateValues {
     quote_url: s.creator?.quoteUrl,
   };
 }
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Lo contrario de renderTemplate, para lo que escribe la IA: cambia en el
+ * texto los valores conocidos por su variable («Hola Camilo,» → «Hola
+ * {{first_name}},»; «Laura Méndez» → «{{sender_name}}»). Así, si en el
+ * editor la persona cambia «Para» a otra persona de la marca, el saludo
+ * cambia con ella (ronda 5).
+ *
+ * Solo palabras enteras y con la misma grafía; primero los valores más
+ * largos («Camilo Herrera» antes que «Camilo»). Un valor de menos de dos
+ * letras no se toca, y si dos variables tienen el mismo valor gana la
+ * primera de `vars` (una persona con un solo nombre: first_name). Lo que
+ * ya es una variable o una marca [claim:…] no se toca.
+ */
+export function templatizeKnownValues(text: string, values: TemplateValues, vars: readonly TemplateVariable[]): string {
+  const seen = new Set<string>();
+  const pairs: Array<{ name: TemplateVariable; value: string }> = [];
+  for (const name of vars) {
+    const value = values[name]?.trim();
+    if (!value || [...value].length < 2 || seen.has(value)) continue;
+    seen.add(value);
+    pairs.push({ name, value });
+  }
+  pairs.sort((a, b) => b.value.length - a.value.length);
+  let out = text;
+  for (const { name, value } of pairs) {
+    const re = new RegExp(`(?<![\\p{L}\\p{N}_{:])${escapeRe(value)}(?![\\p{L}\\p{N}_}])`, 'gu');
+    out = out.replace(re, `{{${name}}}`);
+  }
+  return out;
+}
+
+/** Las variables de las personas que la IA escribe por su nombre: quién recibe y quién firma. */
+export const PERSON_VARIABLES = ['first_name', 'full_name', 'sender_name'] as const satisfies readonly TemplateVariable[];

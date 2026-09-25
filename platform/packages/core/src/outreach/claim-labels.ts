@@ -73,13 +73,26 @@ export function countryName(code: string, locale: string): string {
   }
 }
 
+/**
+ * Un porcentaje, con la regla de toda la app: 0,576 → «58 %», 0,053 con
+ * un decimal → «5,3 %». El número con Intl y el locale del workspace
+ * (sin espacios finos: un espacio normal) y « %» detrás, siempre con
+ * espacio, sea cual sea el locale. Es la misma función que usa formatPct
+ * de la web (apps/web/lib/format.ts): la ficha de la empresa, las fichas
+ * del pitch y el correo escriben la misma cifra igual (ronda 5).
+ */
+export function formatShare(ratio: number, digits: number, locale: string): string {
+  const n = new Intl.NumberFormat(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(ratio * 100);
+  return `${n.replace(/[\u00A0\u202F]/g, ' ')} %`;
+}
+
 /** Cómo se escribe la cifra de un claim en el mensaje, con el locale del workspace. */
 export function formatClaimValue(value: number, unit: ClaimUnit, locale: string, currency?: string | null): string {
   switch (unit) {
     case 'count':
       return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value);
     case 'share':
-      return new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: value < 0.1 ? 1 : 0 }).format(value);
+      return formatShare(value, value < 0.1 ? 1 : 0, locale);
     case 'multiple':
       return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value)}×`;
     case 'money':

@@ -147,7 +147,7 @@ export function untrusted(tag: string, value: string, keepLines = false): string
 
 /** Las etiquetas con datos de fuera que el prompt del sistema declara como información. */
 export const UNTRUSTED_TAGS = [
-  'marca', 'contacto', 'senal', 'bio_del_creador', 'brief_del_creador', 'instrucciones_del_creador', 'mensaje_anterior',
+  'marca', 'sector', 'contacto', 'senal', 'bio_del_creador', 'brief_del_creador', 'instrucciones_del_creador', 'mensaje_anterior',
   'mensaje_a_evitar', 'version_anterior', 'mensaje',
 ] as const;
 
@@ -178,7 +178,7 @@ export function buildGenerationPrompt(input: GenerationInput, template: string):
     `Creador: ${input.creator.name}${input.creator.handle ? ` (@${input.creator.handle.replace(/^@/, '')})` : ''}` +
       `${input.creator.niche ? `, nicho ${input.creator.niche}` : ''}`,
     input.creator.bio ? `Cómo se presenta: ${untrusted('bio_del_creador', input.creator.bio)}` : '',
-    `Marca: ${untrusted('marca', input.company.name)}${input.company.industry ? `, sector ${input.company.industry}` : ''}` +
+    `Marca: ${untrusted('marca', input.company.name)}${input.company.industry ? `, sector ${untrusted('sector', input.company.industry)}` : ''}` +
       `${input.company.city ? `, ${input.company.city}` : ''}${input.company.country ? ` (${input.company.country})` : ''}`,
     input.contact?.fullName
       ? `Contacto: ${untrusted('contacto', `${input.contact.fullName}${input.contact.roleTitle ? `, ${input.contact.roleTitle}` : ''}`)}`

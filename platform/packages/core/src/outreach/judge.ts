@@ -159,7 +159,8 @@ export function buildJudgePrompt(input: JudgeInput, template: string): { system:
     `Tipo de paso: ${input.stepType} (día ${input.dayOffset})`,
     `Ángulo del día: ${input.angleLabel ?? 'libre'}${input.angleGoal ? `. ${input.angleGoal}` : ''}`,
     `Señal de la marca: ${input.signalHeadline ? untrusted('senal', input.signalHeadline) : 'ninguna registrada'}`,
-    `Marca destinataria: ${input.company.name}${input.company.industry ? ` (${input.company.industry})` : ''}`,
+    // El nombre y el sector vienen del CRM o de un raspado: datos de fuera, entre etiquetas como en el generador (ronda 5).
+    `Marca destinataria: ${untrusted('marca', input.company.name)}${input.company.industry ? `, sector ${untrusted('sector', input.company.industry)}` : ''}`,
     `Creador: ${input.creator.name}${input.creator.bio ? `. ${untrusted('bio_del_creador', input.creator.bio)}` : ''}`,
     `Exige divulgar colaboraciones pagadas: ${input.requiresDisclosure ? 'sí' : 'no'}`,
     '',

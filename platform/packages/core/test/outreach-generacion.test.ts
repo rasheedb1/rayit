@@ -15,7 +15,10 @@ import {
   bodyFingerprint, idempotencyGate, jaccard, shingles, similarityGate, similarityThreshold, subjectGate, textSimilarity,
 } from '../src/outreach/gates.ts';
 import { checkFigures, markFiguresByValue, preflight, questionCloses, shoutingIn } from '../src/outreach/preflight.ts';
-import { renderTemplate, TEMPLATE_VARIABLES, templateValuesFrom, templateVariablesIn } from '../src/outreach/render.ts';
+import { formatClaimValue, formatShare } from '../src/outreach/claim-labels.ts';
+import {
+  PERSON_VARIABLES, renderTemplate, TEMPLATE_VARIABLES, templateValuesFrom, templateVariablesIn, templatizeKnownValues,
+} from '../src/outreach/render.ts';
 
 const CLAIMS: SalesClaim[] = [
   {
@@ -371,6 +374,11 @@ test('porcentajes, fracciones, proporciones, múltiplos conjugados y puestos en 
     ['Con mi video duplicamos las ventas.', 'duplicamos', 'multiple', 2],
     ['Tu marca duplicó sus pedidos conmigo.', 'duplicó', 'multiple', 2],
     ['That video ended up tripling their sales.', 'tripling', 'multiple', 3],
+    // Ronda 5: la «c» pasa a «qu» delante de «e».
+    ['Dupliqué las ventas de la marca.', 'Dupliqué', 'multiple', 2],
+    ['Cuadrupliqué mis seguidores con esa serie.', 'Cuadrupliqué', 'multiple', 4],
+    ['Dupliquemos tus pedidos este trimestre.', 'Dupliquemos', 'multiple', 2],
+    ['Quintupliqué los guardados del reel.', 'Quintupliqué', 'multiple', 5],
     ['Quedé en primer lugar del reto de recetas.', 'primer lugar', 'rank', 1],
     ['Quedé en 1er lugar del reto de recetas.', '1er lugar', 'rank', 1],
     ['I was the first creator to review it.', 'first creator', 'rank', 1],
@@ -483,6 +491,92 @@ test('el redactor falso cita por prioridad: la campaña con esta marca, luego la
     const alma = await gen.generate(fakeInput({
       angle: { ...angle, proofSources: [...angle.proofSources] }, claims, signal: null, attempt, company: { name: 'Café Alma', industry: 'alimentos', city: 'Bogotá', country: 'CO' },
     }));
-    assert.match(alma.body, /La campaña que hice con Café Alma sumó 412\.000 \[claim:campaign:c1:views\] views\./, alma.body);
+    // Ronda 5: ya trabajaron juntos, así que abre con esa relación y cita la campaña como «esa campaña».
+    assert.match(alma.body, /(Después de la campaña que hicimos juntos con|Sigo con buen recuerdo de nuestra campaña con) Café Alma/, alma.body);
+    assert.match(alma.body, /Esa campaña sumó 412\.000 \[claim:campaign:c1:views\] views\./, alma.body);
+    assert.doesNotMatch(alma.body, /Sigo lo que hace|hay algo que quiero proponerte/, 'no es un correo en frío');
+    assert.ok(alma.body.split('Café Alma').length - 1 <= 2, `la marca, dos veces como mucho: ${alma.body}`);
+    assert.ok(fresko.body.split(fakeInput().company.name).length - 1 <= 2, `la marca, dos veces como mucho: ${fresko.body}`);
   }
+});
+
+// ---------------------------------------------------------------------
+// Ronda 5
+// ---------------------------------------------------------------------
+
+test('ronda 5: el redondeo solo vale hacia abajo o a la precisión escrita: «115 mil» pasa por 115.446, «120 mil» no', () => {
+  const mediana = CLAIMS[0]!;
+  const pasa = (t: string, c: SalesClaim = mediana) => figureMatchesClaim(findFigures(t)[0]!, c);
+  assert.equal(pasa('115 mil'), true);
+  assert.equal(pasa('110 mil'), true, 'hacia abajo, dentro del 5 %');
+  assert.equal(pasa('115.446'), true);
+  assert.equal(pasa('120 mil'), false, 'redondear hacia arriba infla la cifra');
+  assert.equal(pasa('120.000'), false);
+  assert.equal(pasa('0,12 millones'), true, 'escrito a decenas de miles, 0,12 es el redondeo de 0,115');
+  assert.equal(pasa('0,13 millones'), false);
+  // El redondeo a la precisión con que se escribió sí vale, aunque suba: es lo que da Intl.
+  const share: SalesClaim = { ...CLAIMS[1]!, value: 0.576, display: '58 %' };
+  assert.equal(pasa('58 %', share), true);
+  assert.equal(pasa('57,6 %', share), true);
+  assert.equal(pasa('60 %', share), false);
+  const multiple: SalesClaim = { ...CLAIMS[2]!, value: 6.66, display: '6,7×' };
+  assert.equal(pasa('6,7×', multiple), true);
+  const millones: SalesClaim = { ...mediana, value: 1_180_000, display: '1.180.000' };
+  assert.equal(pasa('1,2 millones', millones), true);
+  assert.equal(pasa('1,3 millones', millones), false);
+  // En el pre-vuelo: la cifra inflada con su marca no coincide con su origen.
+  assert.deepEqual(checkFigures('Mi mediana es de 120 mil [claim:baseline:tiktok:median_views] views.', CLAIMS).map((i) => i.code), ['claim_mismatch']);
+  assert.deepEqual(checkFigures('Mi mediana es de 115 mil [claim:baseline:tiktok:median_views] views.', CLAIMS), []);
+});
+
+test('ronda 5: «gané 3 premios» y «mi tasa de interacción es del 12» son cifras sin origen', () => {
+  for (const [texto, raw] of [
+    ['Este año gané 3 premios de contenido.', '3'],
+    ['Tengo 2 reconocimientos de la industria.', '2'],
+    ['I won 4 awards last year.', '4'],
+  ] as const) {
+    assert.deepEqual(checkFigures(texto, CLAIMS).map((i) => [i.code, i.detail]), [['unsourced_figure', raw]], texto);
+  }
+  for (const [texto, valor] of [
+    ['Mi tasa de interacción es del 12, muy por encima del promedio.', 0.12],
+    ['My engagement rate of 9 beats the average.', 0.09],
+    ['La interacción mediana: 7 en mis últimos reels.', 0.07],
+  ] as const) {
+    const hits = findFigures(texto);
+    assert.deepEqual(hits.map((h) => [h.kind, h.values[0]]), [['percent', valor]], texto);
+    assert.equal(checkFigures(texto, CLAIMS)[0]?.code, 'unsourced_figure', texto);
+  }
+  // Con su origen, pasa: el 12 detrás de «tasa de interacción» es un 12 %.
+  const tasa: SalesClaim = { ...CLAIMS[1]!, id: 'baseline:tiktok:median_engagement', value: 0.12, display: '12 %' };
+  assert.deepEqual(checkFigures('Mi tasa de interacción es del 12 [claim:baseline:tiktok:median_engagement].', [tasa]), []);
+  // Un número pequeño que no es un resultado sigue sin serlo.
+  assert.deepEqual(checkFigures('Te mando 3 ideas de video para el lanzamiento.', CLAIMS), []);
+});
+
+test('ronda 5: el porcentaje de un claim se escribe con la regla de la app («58 %», con espacio), en cualquier locale', () => {
+  for (const locale of ['es-CO', 'es-MX', 'en-US', 'es']) {
+    assert.equal(formatClaimValue(0.576, 'share', locale), formatShare(0.576, 0, locale), locale);
+    assert.match(formatClaimValue(0.576, 'share', locale), /^58 %$/, locale);
+  }
+  assert.equal(formatClaimValue(0.053, 'share', 'es-CO'), '5,3 %');
+  assert.equal(formatClaimValue(0.053, 'share', 'en-US'), '5.3 %');
+});
+
+test('ronda 5: lo que escribe la IA guarda a la persona como variable: si cambia «Para», cambia el saludo', () => {
+  const values = templateValuesFrom({ contact: { fullName: 'Camilo Herrera', roleTitle: null }, creator: { senderName: 'Laura Méndez' } });
+  const ia = 'Hola Camilo,\n\nCamilo Herrera me recomendó escribirte. Mi mediana es de 115.446 [claim:baseline:tiktok:median_views] views.\n\n¿Te cuento?\n\nLaura Méndez';
+  const marked = templatizeKnownValues(ia, values, PERSON_VARIABLES);
+  assert.equal(
+    marked,
+    'Hola {{first_name}},\n\n{{full_name}} me recomendó escribirte. Mi mediana es de 115.446 [claim:baseline:tiktok:median_views] views.\n\n¿Te cuento?\n\n{{sender_name}}',
+  );
+  // Rellenado con la misma persona, dice lo mismo; con otra, saluda a la otra.
+  assert.equal(renderTemplate(marked, values), ia);
+  const valentina = templateValuesFrom({ contact: { fullName: 'Valentina Ortiz', roleTitle: null }, creator: { senderName: 'Laura Méndez' } });
+  assert.match(renderTemplate(marked, valentina)!, /^Hola Valentina,/);
+  // Solo palabras enteras y con su grafía: «Camilonga» o «camilo» no son la persona.
+  assert.equal(templatizeKnownValues('Camilonga y camilo', values, PERSON_VARIABLES), 'Camilonga y camilo');
+  // Una persona con un solo nombre: first_name, no full_name.
+  const solo = templateValuesFrom({ contact: { fullName: 'Camilo', roleTitle: null } });
+  assert.equal(templatizeKnownValues('Hola Camilo,', solo, PERSON_VARIABLES), 'Hola {{first_name}},');
 });

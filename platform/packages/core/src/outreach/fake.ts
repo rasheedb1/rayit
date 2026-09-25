@@ -51,11 +51,13 @@ function lower(s: string): string {
  * TikTok tienen una mediana de 115.446 [claim:…] views». Lo que no tiene
  * frase propia cae en una genérica con su etiqueta.
  */
-function claimSentence(c: SalesClaim, k: number, lang: 'es' | 'en'): string {
+function claimSentence(c: SalesClaim, k: number, lang: 'es' | 'en', companyName: string): string {
   const m = `${c.display} [claim:${c.id}]`;
   const [kind, a = '', b = '', bucket = ''] = c.id.split(':');
   const P = platformName(a);
   const brand = c.entities?.[0] ?? null;
+  // Una campaña con ESTA marca ya se nombró al abrir («Después de nuestra campaña con…»): aquí es «esa campaña».
+  const same = brand !== null && brand.toLowerCase() === companyName.toLowerCase();
   const en = lang === 'en';
   if (kind === 'baseline' && b === 'median_views') {
     return en
@@ -64,6 +66,16 @@ function claimSentence(c: SalesClaim, k: number, lang: 'es' | 'en'): string {
   }
   if (kind === 'baseline' && b === 'median_engagement') {
     return en ? `On ${P}, the median engagement on my videos is ${m}.` : `En ${P}, la interacción mediana de mis videos es del ${m}.`;
+  }
+  if (kind === 'campaign' && brand && same) {
+    const byMetric: Record<string, [string, string]> = {
+      views: [`That campaign reached ${m} views.`, `Esa campaña sumó ${m} views.`],
+      redemptions: [`In that campaign, ${m} codes were redeemed.`, `En esa campaña se redimieron ${m} códigos.`],
+      non_followers: [`In that campaign, ${m} of the reach came from people who did not follow me yet.`, `En esa campaña, el ${m} del alcance fue gente que todavía no me seguía.`],
+      brand_followers: [`With that campaign, you gained ${m} followers.`, `Con esa campaña ganaron ${m} seguidores.`],
+    };
+    const s = byMetric[b];
+    if (s) return en ? s[0] : s[1];
   }
   if (kind === 'campaign' && brand) {
     const byMetric: Record<string, [string, string]> = {
@@ -139,6 +151,9 @@ function nicheOf(input: GenerationInput): string | null {
 /**
  * Las piezas del mensaje. Neutras respecto al nicho: el nicho del creador
  * entra como variable, nunca una frase de cocina en un espacio de fitness.
+ * La marca se nombra al abrir y, como mucho, una vez más (ronda 5): la
+ * idea y la pregunta hablan de «su producto» o «la marca». Si ya hicieron
+ * una campaña juntos, se abre con esa relación, no como un correo en frío.
  */
 function compose(input: GenerationInput, seed: number): Parts {
   const en = input.lang === 'en';
@@ -156,6 +171,8 @@ function compose(input: GenerationInput, seed: number): Parts {
   const adsText = ads ? `${ads.display} [claim:${ads.id}]` : '';
   const claim = proofClaim(allowed, co, n('claim'), ads?.id ?? null);
   const video = niche ? (en ? `a short ${niche} video` : `un video corto de ${niche}`) : en ? 'a short video' : 'un video corto';
+  // Ya trabajaron juntos (una campaña con esta marca en el perfil): se abre con la relación, no como un correo en frío.
+  const worked = input.claims.some((c) => c.source === 'campaign_result' && (c.entities ?? []).some((e) => e.toLowerCase() === co.toLowerCase()));
   const t = en
     ? {
         greeting: who ? [`Hi ${who},`, `${who}, hello.`, `Good morning, ${who}.`, `Hello ${who},`] : ['Hi,', 'Hello,'],
@@ -169,22 +186,27 @@ function compose(input: GenerationInput, seed: number): Parts {
           `I saw ${co} is running ${adsText} active ads right now and started thinking about how I would tell it in ${video}.`,
           `With ${adsText} active ads live, ${co} is talking to a lot of people right now, and I think I can add to that from ${where}.`,
         ],
+        together: [
+          `After the campaign we did together with ${co}, I kept thinking about what could come next.`,
+          `I still have our campaign with ${co} in mind, and I have an idea for the next one.`,
+        ],
+        togetherSignal: `And I saw it ${sig}, so the timing fits.`,
         noSignal: [
           `I have been following what ${co} does in ${sector} for a while and there is something I want to pitch you.`,
           `Every time ${co} shows up in my feed I think about how my audience in ${where} would use it.`,
           `${co} talks to ${where} in a way that is very close to how I do.`,
         ],
         idea: [
-          `I have in mind ${video} where ${co} fits into my day without feeling like an ad.`,
-          `I am picturing a short series that shows ${co} in the real routine of the people who watch me, from morning to night.`,
-          `I could put together a weekend challenge with ${co} at the center and my community joining from home.`,
-          `I am thinking of a before and after video, told with humor, where ${co} solves the problem of the day.`,
-          `I imagine a format where I answer my followers' questions with ${co} in hand.`,
+          `I have in mind ${video} where your product fits into my day without feeling like an ad.`,
+          `I am picturing a short series that shows the brand in the real routine of the people who watch me, from morning to night.`,
+          `I could put together a weekend challenge with your product at the center and my community joining from home.`,
+          `I am thinking of a before and after video, told with humor, where your product solves the problem of the day.`,
+          `I imagine a format where I answer my followers' questions with your product in hand.`,
         ],
         question: [
-          `Would you like me to send you the full idea for ${co}?`,
+          'Would you like me to send you the full idea?',
           'Does it make sense to talk for a few minutes this week?',
-          `Who on your team handles creator partnerships at ${co}?`,
+          'Who on your team handles creator partnerships?',
           'Would it help if I shared two more concrete video ideas?',
         ],
         subject: [`${co} and a video idea`, `An idea for ${co} in ${where}`, `Your audience and mine in ${where}`, `A video for ${co}`],
@@ -201,30 +223,37 @@ function compose(input: GenerationInput, seed: number): Parts {
           `Vi que ${co} tiene ${adsText} anuncios activos en este momento y me quedé pensando en cómo lo contaría en ${video}.`,
           `Con ${adsText} anuncios activos, ${co} le está hablando a mucha gente justo ahora, y creo que puedo sumar desde ${where}.`,
         ],
+        together: [
+          `Después de la campaña que hicimos juntos con ${co}, me quedé pensando en qué podría venir ahora.`,
+          `Sigo con buen recuerdo de nuestra campaña con ${co}, y tengo una idea para la siguiente.`,
+        ],
+        togetherSignal: `Y vi que ${sig}, así que el momento encaja.`,
         noSignal: [
           `Sigo lo que hace ${co} en ${sector} desde hace un tiempo y hay algo que quiero proponerte.`,
           `Cada vez que ${co} aparece en mi feed pienso en cómo lo usaría mi audiencia en ${where}.`,
           `${co} tiene una forma de hablarle a ${where} que se parece mucho a la mía.`,
         ],
         idea: [
-          `Se me ocurre ${video} donde ${co} entre en mi día a día sin que parezca un anuncio.`,
-          `Tengo en mente una serie corta que muestre ${co} en la rutina real de quien me ve, de la mañana a la noche.`,
-          `Podría armar un reto de fin de semana con ${co} como protagonista y la comunidad participando desde casa.`,
-          `Pienso en un video de antes y después, contado con humor, donde ${co} resuelve el problema del día.`,
-          `Me imagino un formato de preguntas de mis seguidores respondidas con ${co} en la mano.`,
+          `Se me ocurre ${video} donde su producto entre en mi día a día sin que parezca un anuncio.`,
+          `Tengo en mente una serie corta que muestre la marca en la rutina real de quien me ve, de la mañana a la noche.`,
+          `Podría armar un reto de fin de semana con su producto como protagonista y la comunidad participando desde casa.`,
+          `Pienso en un video de antes y después, contado con humor, donde su producto resuelve el problema del día.`,
+          `Me imagino un formato de preguntas de mis seguidores respondidas con su producto en la mano.`,
         ],
         question: [
-          `¿Te interesa que te mande la idea completa para ${co}?`,
+          '¿Te interesa que te mande la idea completa?',
           '¿Tiene sentido que lo hablemos unos minutos esta semana?',
-          `¿Quién en tu equipo ve las colaboraciones con creadores en ${co}?`,
+          '¿Quién en tu equipo ve las colaboraciones con creadores?',
           '¿Te sirve si te comparto dos ideas de video más concretas?',
         ],
         subject: [`${co} y una idea de video`, `Una idea para ${co} en ${where}`, `Tu audiencia y la mía en ${where}`, `Un video para ${co}`],
       };
   return {
     greeting: pick(t.greeting, n('greet')),
-    opener: sig ? pick(t.withSignal, n('open')) : ads ? pick(t.withAds, n('open')) : pick(t.noSignal, n('open')),
-    proof: claim ? claimSentence(claim, n('proof'), en ? 'en' : 'es') : '',
+    opener: worked
+      ? `${pick(t.together, n('open'))}${sig ? ` ${t.togetherSignal}` : ''}`
+      : sig ? pick(t.withSignal, n('open')) : ads ? pick(t.withAds, n('open')) : pick(t.noSignal, n('open')),
+    proof: claim ? claimSentence(claim, n('proof'), en ? 'en' : 'es', co) : '',
     idea: pick(t.idea, n('idea')),
     question: pick(t.question, n('ask')),
     sign: input.creator.name,

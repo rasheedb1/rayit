@@ -102,6 +102,15 @@ export interface FigureHit {
    */
   values: number[];
   /**
+   * Con qué precisión está escrita cada lectura, en paralelo a `values`:
+   * el valor del último dígito que se escribió, con los ceros finales
+   * como significativos («120 mil» → 1.000; «57,6 %» → 0,001; «1,2 M» →
+   * 100.000). Con ella se sabe si una cifra es el redondeo del dato o
+   * lo infla (figureMatchesClaim). Sin ella (las cifras en palabras, las
+   * proporciones), solo se acepta el redondeo hacia abajo.
+   */
+  steps?: number[];
+  /**
    * 'rank' es un puesto («#1», «top 3», «número uno»): ninguna cifra del
    * perfil lo respalda (On Cue no guarda rankings), así que nunca coincide
    * con un claim y siempre sale como «cifra sin origen».
@@ -195,6 +204,9 @@ export const PERFORMANCE_NOUNS = [
   'users', 'people', 'redemptions',
   // Ronda 4: la señal de la marca («6 anuncios activos») y la trayectoria («9 años creando contenido») también se afirman.
   'anuncio', 'anuncios', 'año', 'años', 'tienda', 'tiendas', 'ad', 'ads', 'store', 'stores', 'year', 'years',
+  // Ronda 5: los premios y reconocimientos («gané 3 premios») también son un resultado que se afirma.
+  'premio', 'premios', 'reconocimiento', 'reconocimientos', 'mención', 'menciones', 'galardón', 'galardones', 'award',
+  'awards', 'mention', 'mentions',
 ] as const;
 
 const NOUN_ALT = [...PERFORMANCE_NOUNS].sort((a, b) => b.length - a.length).join('|');
@@ -279,7 +291,8 @@ const MULTIPLIERS: Record<string, number> = {
  * «doubled», «tripling», «quadruple». Se comparan plegados (sin tildes).
  */
 const MULTIPLIER_STEMS: Array<[RegExp, number]> = [
-  [/^duplic/, 2], [/^triplic/, 3], [/^cuadruplic/, 4], [/^quintuplic/, 5],
+  // La «c» pasa a «qu» delante de «e»: «dupliqué», «dupliquemos», «cuadrupliqué» (ronda 5).
+  [/^dupli(?:c|qu)/, 2], [/^tripli(?:c|qu)/, 3], [/^cuadrupli(?:c|qu)/, 4], [/^quintupli(?:c|qu)/, 5],
   [/^triple/, 3], [/^cuadruple/, 4], [/^quintuple/, 5],
   [/^doubl/, 2], [/^tripl/, 3], [/^quadrupl/, 4], [/^quintupl/, 5],
 ];
@@ -508,21 +521,42 @@ function spans(text: string, re: RegExp): Array<[number, number]> {
   return [...text.matchAll(re)].map((m) => [m.index ?? 0, (m.index ?? 0) + m[0].length]);
 }
 
-function parseNumber(digits: string): number[] {
+/**
+ * Lo que convierte un número sin signo en un porcentaje: «mi tasa de
+ * interacción es del 12», «engagement rate of 9», «interacción: 7». Se
+ * mira la misma frase justo antes del número.
+ */
+const PERCENT_CONTEXT_RE =
+  /(?:tasa[\s\u00a0]+de[\s\u00a0]+\p{L}+|engagement(?:[\s\u00a0]+rate)?|interacci[oó]n|conversi[oó]n|retenci[oó]n|\bctr)(?:[\s\u00a0]+(?:media|mediana|promedio|average|median))?[\s\u00a0:]+(?:(?:es|fue|está|esta|anda|llega|ronda|is|was|of|de|del|en|el|al|a|un|una|around|about)[\s\u00a0]+)*$/iu;
+
+function percentByContext(text: string, start: number): boolean {
+  return PERCENT_CONTEXT_RE.test(text.slice(Math.max(0, start - 60), start));
+}
+
+/** Una lectura de un número escrito: su valor y el valor de su último dígito escrito. */
+interface Reading {
+  value: number;
+  step: number;
+}
+
+function parseReadings(digits: string): Reading[] {
   const compact = digits.replace(/[  ]/g, '');
-  const out = new Set<number>();
+  const out: Reading[] = [];
+  const add = (value: number, step: number) => {
+    if (Number.isFinite(value) && !out.some((r) => r.value === value)) out.push({ value, step });
+  };
   // Separadores de miles con grupos de tres: «115.446» o «115,446».
   if (/^\d{1,3}([.,]\d{3})+$/.test(compact)) {
-    out.add(Number(compact.replace(/[.,]/g, '')));
+    add(Number(compact.replace(/[.,]/g, '')), 1);
     // «1.240» también puede ser 1,24 en inglés (solo con un separador).
-    if ((compact.match(/[.,]/g) ?? []).length === 1) out.add(Number(compact.replace(',', '.')));
+    if ((compact.match(/[.,]/g) ?? []).length === 1) add(Number(compact.replace(',', '.')), 0.001);
   } else {
     // Lo demás: el último separador es el decimal y los anteriores, de miles.
     const i = Math.max(compact.lastIndexOf('.'), compact.lastIndexOf(','));
-    if (i < 0) out.add(Number(compact));
-    else out.add(Number(`${compact.slice(0, i).replace(/[.,]/g, '')}.${compact.slice(i + 1)}`));
+    if (i < 0) add(Number(compact), 1);
+    else add(Number(`${compact.slice(0, i).replace(/[.,]/g, '')}.${compact.slice(i + 1)}`), 10 ** -(compact.length - i - 1));
   }
-  return [...out].filter((n) => Number.isFinite(n));
+  return out;
 }
 
 /**
@@ -571,8 +605,8 @@ export function findFigures(text: string | null | undefined, claims: readonly Sa
       const end = start + m[0].length;
       if (overlaps(start, end) || hits.some((h) => start < h.end && end > h.start)) continue;
       const digits = m[1] ?? m[2];
-      const base = digits ? parseNumber(digits) : [1];
-      hits.push({ raw: m[0].trim(), start, end, values: base.map(scale), kind });
+      const base = digits ? parseReadings(digits) : [{ value: 1, step: 1 }];
+      hits.push({ raw: m[0].trim(), start, end, values: base.map((r) => scale(r.value)), steps: base.map((r) => scale(r.step)), kind });
     }
   }
   skip.push(...hits.map((h): [number, number] => [h.start, h.end]));
@@ -581,44 +615,64 @@ export function findFigures(text: string | null | undefined, claims: readonly Sa
     const end = start + m[0].length;
     if (overlaps(start, end)) continue;
     const unit = (m[2] ?? '').toLowerCase().replace(/[\s\u00a0]+/g, '');
-    const base = parseNumber(m[1]!);
-    if (base.length === 0) continue;
+    const readings = parseReadings(m[1]!);
+    if (readings.length === 0) continue;
+    const base = readings.map((r) => r.value);
     let kind: FigureHit['kind'] = 'plain';
-    let values = base;
-    if (unit === '%' || unit.startsWith('por') || unit === 'percent') {
+    let scale = 1;
+    // «mi tasa de interacción es del 12»: un porcentaje aunque le falte el signo (ronda 5).
+    if (unit === '%' || unit.startsWith('por') || unit === 'percent' || (unit === '' && percentByContext(text, start))) {
       kind = 'percent';
-      values = base.map((v) => v / 100);
+      scale = 1 / 100;
     } else if (['×', 'x', 'veces', 'times'].includes(unit)) {
       kind = 'multiple';
     } else if (['mil', 'k', 'thousand'].includes(unit)) {
       kind = 'scaled';
-      values = base.map((v) => v * 1_000);
+      scale = 1_000;
     } else if (['millones', 'millón', 'm', 'million', 'millions'].includes(unit)) {
       kind = 'scaled';
-      values = base.map((v) => v * 1_000_000);
+      scale = 1_000_000;
     }
     // Un número pequeño sin unidad es una cifra solo con un sustantivo de desempeño detrás, y si no es lo que se ofrece.
     if (
       kind === 'plain' && base.every((v) => Number.isInteger(v) && v <= SMALL_COUNT_MAX) &&
       !smallCountIsFigure(text, start, end) && !citesACountClaim(text, start, end, base, claims)
     ) continue;
-    hits.push({ raw: m[0].trim(), start, end, values, kind });
+    hits.push({ raw: m[0].trim(), start, end, values: readings.map((r) => r.value * scale), steps: readings.map((r) => r.step * scale), kind });
   }
   // Las palabras que ya son la unidad de una cifra en dígitos («400 mil») no cuentan dos veces.
   hits.push(...wordFigures(text, [...skip, ...hits.map((h): [number, number] => [h.start, h.end])], claims));
   return hits.sort((a, b) => a.start - b.start);
 }
 
-/** Tolerancia de una cifra redondeada frente al dato («400 mil» por 412.000; «6,7×» por 6,72). */
+/** Tolerancia de una cifra redondeada HACIA ABAJO frente al dato («400 mil» por 412.000; «6,7×» por 6,72). */
 export const FIGURE_TOLERANCE = 0.05;
 
-/** ¿La cifra escrita dice lo mismo que el claim, con redondeo? */
+/**
+ * ¿La cifra escrita dice lo mismo que el claim, con redondeo? Se acepta
+ * de dos maneras, y ninguna infla el dato:
+ *
+ *   · redondeada hacia abajo, hasta un 5 % («115 mil» o «110 mil» por
+ *     115.446: «más de 110 mil» es verdad);
+ *   · el redondeo del dato a la precisión con que está escrita («58 %» por
+ *     0,576; «1,2 M» por 1.180.000; «6,7×» por 6,66): la cifra que da
+ *     Intl al formatear el claim siempre pasa.
+ *
+ * «120 mil» por 115.446 no pasa: escrito a miles, el dato es 115 mil, y
+ * 120 es redondearlo hacia arriba (ronda 5).
+ */
 export function figureMatchesClaim(hit: FigureHit, claim: SalesClaim): boolean {
   // Un puesto («#1», «top 3») no lo respalda ninguna cifra del perfil.
   if (claim.value === null || hit.kind === 'rank') return false;
   const target = claim.value;
-  return hit.values.some((v) => {
+  return hit.values.some((v, i) => {
     if (target === 0) return v === 0;
-    return Math.abs(v - target) / Math.abs(target) <= FIGURE_TOLERANCE;
+    const size = Math.abs(target);
+    const eps = size * 1e-9;
+    // Hacia abajo (hacia el cero), hasta la tolerancia.
+    if (Math.abs(v) <= size + eps && Math.sign(v) === Math.sign(target) && (size - Math.abs(v)) / size <= FIGURE_TOLERANCE) return true;
+    // El redondeo del dato a la precisión con que se escribió.
+    const step = hit.steps?.[i];
+    return step !== undefined && step > 0 && Math.abs(v - target) <= step / 2 + eps;
   });
 }
