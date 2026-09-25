@@ -15,6 +15,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX, isClockTime, isIsoDate } from "@mc/core";
+import { OUTREACH_URLS } from "@mc/core/outreach/messages";
 import {
   releaseHeldTouch,
   resolveUnconfirmedTouch,
@@ -314,6 +315,9 @@ export async function aprobarMensaje(_prev: VentasState, formData: FormData): Pr
         return { errors: { body: e.placeholders(result.detail ?? "") } };
       case "note_too_long":
         return { errors: { body: e.note_too_long(result.detail ?? "") } };
+      case "no_postal_address":
+        // Lo primero que ve quien prueba la demo (el seed no trae dirección): con el enlace para arreglarlo.
+        return { message: e.no_postal_address, link: { href: OUTREACH_URLS.policyPostalAddress, label: t.irAPolitica } };
       default:
         revalidate(v.companyId);
         return { message: e[result.code] };

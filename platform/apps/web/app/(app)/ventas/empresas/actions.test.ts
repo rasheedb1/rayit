@@ -12,6 +12,7 @@ const completeNextAction = vi.fn();
 const listCompanyActivity = vi.fn();
 const getCompanyName = vi.fn();
 const revalidatePath = vi.fn();
+const releaseHeldTouch = vi.fn();
 
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => revalidatePath(...a) }));
 vi.mock("../_lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
@@ -23,6 +24,10 @@ vi.mock("@mc/db/queries/ventas-ficha", async (original) => ({
   listCompanyActivity: (...a: unknown[]) => listCompanyActivity(...a),
   getCompanyName: (...a: unknown[]) => getCompanyName(...a),
 }));
+vi.mock("@mc/db/queries/outreach", async (original) => ({
+  ...(await original<typeof import("@mc/db/queries/outreach")>()),
+  releaseHeldTouch: (...a: unknown[]) => releaseHeldTouch(...a),
+}));
 vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
 }));
@@ -30,7 +35,8 @@ vi.mock("@/lib/workspace/settings", () => ({
 import { FichaError } from "@mc/db/queries/ventas-ficha";
 import { DealNotFound } from "@mc/db/queries/ventas";
 import { formatterFor } from "@/lib/format";
-import { fijarSiguienteAccion, marcarHecha, registrarActividad, verMasActividad } from "./actions";
+import { OUTREACH_URLS } from "@mc/core/outreach/messages";
+import { aprobarMensaje, fijarSiguienteAccion, marcarHecha, registrarActividad, verMasActividad } from "./actions";
 import { FICHA } from "./messages";
 
 const COMPANY = "00000002-0000-4000-8000-0000000000e1";
@@ -240,5 +246,20 @@ describe("verMasActividad", () => {
     listCompanyActivity.mockResolvedValue({ rows: [], hasMore: false, nextCursor: null });
     expect(await verMasActividad(COMPANY, "c")).toEqual({ error: FICHA.actividad.moreError });
     expect(await verMasActividad("1; drop", "c")).toEqual({ error: FICHA.actividad.moreError });
+  });
+});
+
+describe("aprobarMensaje", () => {
+  const TOUCH = "00000005-0000-4000-8000-000000070001";
+
+  it("sin dirección postal, el aviso trae el enlace a la política de envío (VEN-10)", async () => {
+    releaseHeldTouch.mockReset().mockResolvedValue({ ok: false, code: "no_postal_address" });
+    const r = await aprobarMensaje({}, form({ companyId: COMPANY, touchId: TOUCH, subject: "Hola", body: "Una idea." }));
+    expect(releaseHeldTouch).toHaveBeenCalledWith({}, TOUCH, { subject: "Hola", body: "Una idea." });
+    expect(r).toEqual({
+      message: FICHA.cadencia.errores.no_postal_address,
+      link: { href: OUTREACH_URLS.policyPostalAddress, label: FICHA.cadencia.irAPolitica },
+    });
+    expect(OUTREACH_URLS.policyPostalAddress).toBe("/ventas/politica#postalAddress");
   });
 });

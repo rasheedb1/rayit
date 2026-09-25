@@ -321,6 +321,9 @@ export const FICHA = {
     revisar: "Revisar y aprobar",
     revisarLabel: (persona: string) => `Revisar y aprobar el mensaje a ${persona}`,
     asunto: "Asunto",
+    /** Una respuesta en el hilo no lleva asunto propio: sale como «Re: …» del correo anterior. */
+    enHilo: (asunto: string) => `Responde en el hilo de: «${asunto}»`,
+    enHiloSinAsunto: "Responde en el hilo del correo anterior.",
     texto: "Mensaje",
     textoHelp: "Lo que sale, tal cual. Sale a su hora, o en la próxima pasada si ya pasó.",
     aprobar: "Aprobar y enviar",
@@ -337,6 +340,8 @@ export const FICHA = {
       opted_out: "Esa persona pidió no ser contactada: el mensaje no puede salir.",
       no_postal_address: "Falta tu dirección postal: guárdala en la política de envío y vuelve a aprobarlo.",
     },
+    /** El enlace del aviso de no_postal_address. */
+    irAPolitica: "Ir a la política de envío",
     /**
      * Un mensaje retenido porque el proveedor no confirmó si salió
      * (unconfirmed_attempt): la persona lo busca con lo que se le enseña y

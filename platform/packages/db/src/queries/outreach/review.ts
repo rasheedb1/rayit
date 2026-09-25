@@ -46,6 +46,13 @@ export interface CadenceTouch {
    * cuenta, lo que la persona necesita para buscarlo en sus enviados.
    */
   unconfirmedDay: string | null;
+  /**
+   * Solo en una respuesta en el hilo (email_reply): el asunto del último
+   * correo enviado de su enrolamiento, el del hilo en el que responde. La
+   * ficha lo enseña en vez de un campo «Asunto» (el paso sale como «Re: …»).
+   * null si no es una respuesta o todavía no salió ningún correo.
+   */
+  threadSubject: string | null;
 }
 
 /** Cuántos mensajes enseña la ficha como mucho: primero los retenidos, después lo que viene y lo último que pasó. */
@@ -66,11 +73,13 @@ export async function listCompanyCadenceTouches(tx: WorkspaceTx, companyId: stri
       sequence_name: string | null; status: string; held_reason: string | null; blocked_reason: string | null;
       scheduled_for: unknown; sent_at: unknown; subject: string | null; body: string | null; status_changed_at: unknown;
       reply_body: string | null; reply_at: unknown; account_name: string | null; unconfirmed_day: string | null;
+      thread_subject: string | null;
     }>(
       `SELECT t.id, c.full_name AS contact_name, t.channel, st.step_type, t.step_index, s.name AS sequence_name, t.status,
               t.held_reason, t.blocked_reason, t.scheduled_for, t.sent_at, t.subject, t.body, t.status_changed_at,
               r.body AS reply_body, r.occurred_at AS reply_at,
-              coalesce(a.display_name, a.provider_account_id) AS account_name, t.unconfirmed_caps_on::text AS unconfirmed_day
+              coalesce(a.display_name, a.provider_account_id) AS account_name, t.unconfirmed_caps_on::text AS unconfirmed_day,
+              hilo.subject AS thread_subject
          FROM outbound_touch t
          LEFT JOIN LATERAL (
                 SELECT m.body, m.occurred_at FROM outbound_message m
@@ -80,6 +89,12 @@ export async function listCompanyCadenceTouches(tx: WorkspaceTx, companyId: stri
          LEFT JOIN outbound_step st ON st.id = t.step_id
          LEFT JOIN outbound_sequence s ON s.id = t.sequence_id
          LEFT JOIN outreach_channel_account a ON a.id = t.channel_account_id
+         -- El hilo de una respuesta: el último correo enviado de su enrolamiento (como loadSendContext).
+         LEFT JOIN LATERAL (
+                SELECT pt.subject FROM outbound_touch pt
+                 WHERE st.step_type = 'email_reply' AND pt.enrollment_id = t.enrollment_id AND pt.channel = t.channel
+                   AND pt.status = 'sent' AND pt.id <> t.id
+                 ORDER BY pt.sent_at DESC NULLS LAST LIMIT 1) hilo ON true
         WHERE t.company_id = $1::uuid AND t.enrollment_id IS NOT NULL
         ORDER BY CASE WHEN t.status = 'held' THEN 0 ELSE 1 END,
                  s.name, t.sequence_id, t.enrollment_id,
@@ -106,6 +121,7 @@ export async function listCompanyCadenceTouches(tx: WorkspaceTx, companyId: stri
     reply: r.reply_body === null ? null : { body: r.reply_body, occurredAt: date(fn, `$[${i}].reply_at`, r.reply_at) },
     accountName: textOrNull(fn, `$[${i}].account_name`, r.account_name),
     unconfirmedDay: textOrNull(fn, `$[${i}].unconfirmed_day`, r.unconfirmed_day),
+    threadSubject: textOrNull(fn, `$[${i}].thread_subject`, r.thread_subject),
   }));
 }
 

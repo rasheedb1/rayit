@@ -93,6 +93,8 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
                   touchId={x.id}
                   persona={persona(x)}
                   isEmail={x.channel === "email"}
+                  isReply={x.stepType === "email_reply"}
+                  threadSubject={x.threadSubject}
                   subject={x.subject}
                   body={x.body}
                 />

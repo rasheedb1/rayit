@@ -166,3 +166,39 @@ test('sin dirección postal un correo no se aprueba; y una ficha dada de baja, t
     { ok: false, code: 'opted_out' },
   );
 });
+
+test('una respuesta en el hilo trae el asunto de su hilo, para enseñarlo en vez de un «Asunto» vacío', async () => {
+  const CONTACT2 = id('d2');
+  const ENR2 = id('e2');
+  const STEP_UNO = id('5e03');
+  const STEP_RE = id('5e04');
+  const PRIMERO = id('91');
+  const RESPUESTA = id('92');
+  await t.admin(`
+    INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source)
+    VALUES ('${CONTACT2}', '${CO}', '${WS_A}', 'Pedro Ruiz', 'pedro@vitale.test', 'user_provided');
+    INSERT INTO outbound_step (id, workspace_id, sequence_id, day_offset, order_in_day, step_type, channel, scheduled_time, subject_template, body_template)
+    VALUES ('${STEP_UNO}', '${WS_A}', '${SEQ}', 0, 1, 'email', 'email', '10:00', 'Una idea para Vitalé', 'Hola'),
+           ('${STEP_RE}', '${WS_A}', '${SEQ}', 1, 1, 'email_reply', 'email', '10:00', NULL, 'Como te comenté');
+    INSERT INTO outbound_enrollment (id, workspace_id, sequence_id, contact_id, status) VALUES ('${ENR2}', '${WS_A}', '${SEQ}', '${CONTACT2}', 'active');
+    INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, sequence_id, step_index, enrollment_id, step_id, channel,
+                                subject, body, status, scheduled_for, held_reason) VALUES
+      ('${PRIMERO}', '${WS_A}', '${CO}', '${CONTACT2}', '${SEQ}', 1, '${ENR2}', '${STEP_UNO}', 'email', 'Una idea para Vitalé', 'Hola',
+       'draft', now() - interval '1 day', NULL),
+      ('${RESPUESTA}', '${WS_A}', '${CO}', '${CONTACT2}', '${SEQ}', 2, '${ENR2}', '${STEP_RE}', 'email', NULL, 'Como te comenté',
+       'held', now() + interval '1 day', 'needs_review');
+  `);
+  const hilo = async () =>
+    (await t.db.withWorkspace(WS_A, (tx) => listCompanyCadenceTouches(tx, CO))).filter((x) => x.id === PRIMERO || x.id === RESPUESTA)
+      .map((x) => [x.id, x.stepType, x.threadSubject]);
+  assert.deepEqual(await hilo(), [[RESPUESTA, 'email_reply', null], [PRIMERO, 'email', null]], 'sin nada enviado todavía, no hay hilo');
+  await t.db.asWorker((tx) =>
+    tx.query(
+      `UPDATE outbound_touch SET status = 'sent', sent_at = now() - interval '1 day', provider_message_id = 'gmail-1', thread_ref = 'hilo-2',
+              recipient_address = 'pedro@vitale.test'
+        WHERE id = $1`,
+      [PRIMERO],
+    ),
+  );
+  assert.deepEqual(await hilo(), [[RESPUESTA, 'email_reply', 'Una idea para Vitalé'], [PRIMERO, 'email', null]]);
+});

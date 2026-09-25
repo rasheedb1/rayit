@@ -25,6 +25,8 @@ export function noticeLang(locale: string | null | undefined): NoticeLang {
 export const OUTREACH_URLS = {
   /** Donde se conecta y se reconecta una cuenta de envío (VEN-9). */
   channels: '/ventas/canales',
+  /** La dirección postal en la política de envío (VEN-15): la pide un correo antes de salir. */
+  policyPostalAddress: '/ventas/politica#postalAddress',
   /** La ficha de una empresa: sus contactos, su negocio y su actividad. */
   company: (companyId: string) => `/ventas/empresas/${companyId}`,
   /**

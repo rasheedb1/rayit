@@ -29,7 +29,8 @@ function toque(over: Partial<CadenceTouch>): CadenceTouch {
     id: "00000005-0000-4000-8000-000000070001", contactName: "Sofía Cárdenas", channel: "email", stepType: "email", stepIndex: 1,
     sequenceName: "Tres correos", status: "scheduled", heldReason: null, blockedReason: null,
     scheduledFor: new Date("2026-09-25T15:30:00Z"), sentAt: null, subject: "Una idea para Vitalé", body: "Hola, Sofía.",
-    statusChangedAt: new Date("2026-09-24T15:00:00Z"), reply: null, accountName: "laura@cocina-facil.test", unconfirmedDay: null, ...over,
+    statusChangedAt: new Date("2026-09-24T15:00:00Z"), reply: null, accountName: "laura@cocina-facil.test", unconfirmedDay: null,
+    threadSubject: null, ...over,
   };
 }
 
@@ -151,6 +152,51 @@ describe("MensajesDeCadencia", () => {
     fireEvent.click(screen.getByRole("button", { name: t.revisarLabel("Sofía Cárdenas") }));
     const form = screen.getByRole("form", { name: t.revisarLabel("Sofía Cárdenas") });
     expect(document.activeElement).toBe(within(form).getByRole("textbox"));
+  });
+
+  it("una respuesta en el hilo no pide asunto: dice en qué hilo responde y lo manda vacío", async () => {
+    aprobarMensaje.mockResolvedValue({ ok: true, notice: t.aprobado, stamp: 1 });
+    render(
+      <MensajesDeCadencia
+        companyId={COMPANY}
+        f={f}
+        touches={[toque({ status: "held", heldReason: "needs_review", stepType: "email_reply", subject: null, threadSubject: "Una idea para Vitalé" })]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: t.revisarLabel("Sofía Cárdenas") }));
+    const form = screen.getByRole("form", { name: t.revisarLabel("Sofía Cárdenas") });
+    expect(within(form).queryByLabelText(t.asunto)).not.toBeInTheDocument();
+    expect(within(form).getByText(t.enHilo("Una idea para Vitalé"))).toBeInTheDocument();
+    expect(document.activeElement).toBe(within(form).getByRole("textbox"));
+    await act(async () => {
+      fireEvent.click(within(form).getByRole("button", { name: t.aprobar }));
+    });
+    expect((aprobarMensaje.mock.calls[0]![1] as FormData).get("subject")).toBe("");
+  });
+
+  it("sin hilo conocido todavía, lo dice sin inventar un asunto", () => {
+    render(
+      <MensajesDeCadencia companyId={COMPANY} f={f} touches={[toque({ status: "held", heldReason: "needs_review", stepType: "email_reply", subject: null })]} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: t.revisarLabel("Sofía Cárdenas") }));
+    expect(screen.getByText(t.enHiloSinAsunto)).toBeInTheDocument();
+  });
+
+  it("sin dirección postal, el aviso lleva a la política de envío con el foco en el enlace", async () => {
+    aprobarMensaje.mockResolvedValue({
+      message: t.errores.no_postal_address,
+      link: { href: "/ventas/politica#postalAddress", label: t.irAPolitica },
+    });
+    render(<MensajesDeCadencia companyId={COMPANY} f={f} touches={[toque({ status: "held", heldReason: "needs_review" })]} />);
+    fireEvent.click(screen.getByRole("button", { name: t.revisarLabel("Sofía Cárdenas") }));
+    const form = screen.getByRole("form", { name: t.revisarLabel("Sofía Cárdenas") });
+    await act(async () => {
+      fireEvent.click(within(form).getByRole("button", { name: t.aprobar }));
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(t.errores.no_postal_address);
+    const enlace = screen.getByRole("link", { name: t.irAPolitica });
+    expect(enlace).toHaveAttribute("href", "/ventas/politica#postalAddress");
+    expect(document.activeElement).toBe(enlace);
   });
 
   it("un motivo escrito a mano que ya termina en punto no se pinta con dos", () => {
