@@ -153,9 +153,73 @@ migración 0051 (grupo `sales`). Las consultas viven en
 
 | Job | Cada | Qué hace |
 |---|---|---|
-| `outbound.dispatch` | 2 min | **Zombis** de más de 5 min en `processing`: si nunca llegaron al proveedor (sin `send_started_at`) vuelven a la cola; si llegaron, `failed` y aviso, sin reenviar. **Reclamo** de hasta 50 toques vencidos (o los que quepan en el tiempo de la corrida, a 2 s cada uno, hasta 30 s antes del timeout) con `UPDATE … RETURNING`: fuera de la ventana laboral o en fin de semana van a la apertura; un paso no sale mientras uno anterior de su enrolamiento siga en la cola (programado, reclamado, retenido, o un borrador que espera al generador); un correo a una dirección que rebotó para siempre (`contact.email_invalid`, VEN-15) se cancela; sin cuenta conectada esperan una hora (un aviso por canal y día); (r5) la marca que ya recibió `max_touches_per_company` mensajes en 90 días se cancela (`company_cap`) y la que recibió uno hace menos de `min_days_between_touches` espera; con un tope lleno van al siguiente día hábil del workspace (los contadores cuentan el día del reloj del despachador, 0052 §3) y los pasos de detrás se corren con ellos; y lo que cabe hoy pero no respeta el ritmo de la cuenta (`effective_hourly`, `min_gap_seconds`, 0052 §1) espera su turno. El tope de una cuenta es el que rige en `outreach_channel_account_limits` (VEN-9) pasado por la curva de calentamiento de VEN-15 (`warmupDailyLimit`), en la zona del workspace: el mismo número que enseña `/ventas/politica`. **Envío**, uno por uno: `send_started_at` en su propia transacción, y en otra la relectura (toque, enrolamiento, ficha, lista global, interruptor, cuenta), la composición (el pie de VEN-15 con la página de baja y la dirección postal, la cabecera `List-Unsubscribe` de un clic a `/baja/<token>/un-clic`, el hilo; una respuesta en el hilo sin correo anterior se retiene) y el adaptador. El enrolamiento queda bloqueado mientras dura el envío: una respuesta que llega a la vez espera o se ve. Un paso que sale tarde arrastra a los de detrás. Transitorio → reintento con espera creciente, dentro de la ventana, hasta 5; ambiguo (corte después de enviar) → antes de reintentar se pregunta al proveedor si salió (`findSent`); rebote → se cancela ese canal y la cadencia termina en `bounced`; cuenta caída, o no disponible por algo nuestro (sin el token en el almacén) → espera sin gastar intento. **Lo no intentado** (timeout, apagado) vuelve a la cola con su intento descontado, sin su enlace de baja y con su plaza del tope, que vuelve al día en que se reservó (`caps_reserved_on`). |
-| `outbound.replies` | 5 min | Respaldo del webhook de Unipile y única vía del correo: lee TODOS los hilos de los últimos 30 días (también los de cadencias que ya respondieron o completaron) por turno, en páginas de 200 hasta 30 s antes del timeout: primero los nunca leídos, después los que hace más que no se leen (`replies_checked_at`). Escribe `outbound_message` entrante; una respuesta marca `replied` y cancela lo pendiente; una baja (r5) marca la ficha y las de su correo DEL WORKSPACE del hilo y cancela lo suyo pendiente en cualquier secuencia de ese workspace, nunca de otro; en un correo, si la pide un tercero en copia, la cadencia se detiene y se avisa para revisar; un «fuera de oficina» (Auto-Submitted, X-Autoreply) se guarda sin cancelar ni avisar, salvo que pida la baja. Lo que hace una respuesta lo decide `applyInboundEffects` de `@mc/db`, la misma función que usa el webhook de Unipile (r4). |
-| `outbound.bounces` | 30 min | Los rebotes de Gmail (VEN-15): lee el buzón de cada cuenta de correo conectada con el `GmailChannel` del despachador (`bounceMailboxFor`, r4) y un rebote duro marca `contact.email_invalid`, cancela los correos pendientes de la ficha y cierra en `bounced` la cadencia sin nada vivo (`markContactEmailInvalid`, lo mismo que un rebote síncrono al enviar). Sin llaves de Google, «canal no configurado». |
+| `outbound.dispatch` | 2 min | Rescata zombis, reclama hasta 50 toques vencidos y los envía uno por uno (ver «El despachador», abajo). |
+| `outbound.replies` | 5 min | Lee las respuestas de todos los hilos abiertos y aplica su efecto: respuesta, baja o fuera de oficina (ver «El lector de respuestas»). |
+| `outbound.bounces` | 30 min | Los rebotes de Gmail (VEN-15), buzón por buzón con el `GmailChannel` del despachador: un rebote duro marca `contact.email_invalid`, cancela sus correos y cierra la cadencia en `bounced`. Sin llaves de Google, «canal no configurado». |
+
+**El despachador** (`outbound.dispatch`), en este orden:
+
+1. **Zombis** de más de 5 min en `processing`: si nunca llegaron al
+   proveedor (sin `send_started_at`) vuelven a la cola; si llegaron,
+   `failed` y aviso, sin reenviar.
+2. **Reclamo** con `UPDATE … RETURNING` de hasta 50 toques vencidos (o
+   los que quepan en el tiempo de la corrida, a 2 s cada uno, hasta 30 s
+   antes del timeout). Sin gastar intento ni plaza:
+   - fuera de la ventana laboral o en fin de semana → a la apertura;
+   - un paso no sale mientras uno anterior de su enrolamiento siga en la
+     cola (programado, reclamado, retenido, o un borrador que espera al
+     generador);
+   - una dirección que falta o está mal escrita → `skipped`
+     (`no_address`, `invalid_address`), sin tumbar el lote (r3);
+   - un correo a una dirección que rebotó para siempre
+     (`contact.email_invalid`, VEN-15) → cancelado;
+   - **la cuenta** (r3): la del último envío del enrolamiento por ese
+     canal (el hilo vive en ese buzón); si está caída, el mensaje espera.
+     Sin envío previo, cualquier cuenta conectada del canal con plaza.
+     Sin ninguna, espera una hora (un aviso por canal y día);
+   - la marca que ya recibió `max_touches_per_company` mensajes en 90
+     días → cancelado (`company_cap`); la que recibió uno hace menos de
+     `min_days_between_touches` → espera;
+   - todas las cuentas con el tope lleno → al siguiente día hábil del
+     workspace, con los pasos de detrás. El tope de una cuenta es el de
+     `outreach_channel_account_limits` (VEN-9) pasado por la curva de
+     calentamiento de VEN-15, el mismo número que enseña
+     `/ventas/politica`;
+   - cabe hoy pero no respeta el ritmo de la cuenta (`effective_hourly`,
+     `min_gap_seconds`, 0052 §1) → espera su turno.
+3. **Envío**, uno por uno: `send_started_at` en su propia transacción; en
+   otra, la relectura (toque, enrolamiento, ficha, lista global,
+   interruptor, cuenta), la composición (pie de VEN-15 con la página de
+   baja y la dirección postal, `List-Unsubscribe` de un clic, el hilo) y
+   el adaptador. El enrolamiento queda bloqueado mientras dura el envío.
+   Un paso que sale tarde arrastra a los de detrás.
+4. **Resultado**: transitorio → reintento con espera creciente, dentro
+   de la ventana, hasta 5; ambiguo (corte después de enviar) → antes de
+   reintentar se pregunta al proveedor si salió (`findSent`), y si no lo
+   sabe decir se retiene (`unconfirmed_attempt`) para que una persona
+   diga en la ficha «Sí, salió» o «No salió: enviarlo» (0053); rebote →
+   se cancela ese canal y la cadencia termina en `bounced`; cuenta caída
+   o sin su token → espera sin gastar intento.
+5. **Lo no intentado** (timeout, apagado) vuelve a la cola con su intento
+   descontado, sin su enlace de baja y con su plaza, que vuelve al día en
+   que se reservó (`caps_reserved_on`).
+
+**El lector de respuestas** (`outbound.replies`): respaldo del webhook
+de Unipile y única vía del correo. Lee todos los hilos de los últimos 30
+días (también los de cadencias que ya respondieron o completaron) por
+turno, en páginas de 200: primero los nunca leídos, después los que hace
+más que no se leen (`replies_checked_at`). Lo que hace cada mensaje lo
+decide `applyInboundEffects` de `@mc/db`, la misma función del webhook:
+
+1. una respuesta marca `replied` y cancela lo pendiente;
+2. una baja marca las fichas PROPIAS del workspace del hilo con ese
+   correo y cancela lo suyo en cualquier secuencia de ese workspace,
+   nunca de otro; una ficha pública no se marca: la protege su
+   enrolamiento en `opted_out`;
+3. si en un correo la pide un tercero en copia, la cadencia se detiene y
+   se avisa para revisar;
+4. un «fuera de oficina» (Auto-Submitted, X-Autoreply) se guarda sin
+   cancelar ni avisar, salvo que pida la baja.
 
 Adaptadores en `src/jobs/ventas/canales/` con una sola interfaz
 (`ChannelSender`, `ChannelReader`): Gmail y Unipile (LinkedIn e

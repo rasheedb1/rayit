@@ -12,7 +12,9 @@
  *      en needs_reconnect; aquí se hace lo que haría el callback de
  *      Unipile): el mensaje de LinkedIn que el seed dejó programado para
  *      Vitalé espera (r5): la política del seed pide tres días entre
- *      mensajes a la misma marca y el seed le mandó un correo ayer.
+ *      mensajes a la misma marca y el seed le mandó un correo el día
+ *      anterior (r3: anclado al reloj de la demo, no a now(); la historia
+ *      es la misma cualquier día de la semana).
  *   3. Cuando se cumplen, sale.
  *   4. Una secuencia de tres correos (días 0, 3 y 6: la separación de la
  *      política; el segundo es la respuesta en el hilo) con dos marcas
@@ -127,6 +129,28 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
     // envía de noche ni en fin de semana (si mañana es sábado, el lunes).
     const window = next.w_start && next.w_end ? { start: next.w_start, end: next.w_end } : DEFAULT_SEND_WINDOW;
     const clock = nextWindowSlot(new Date(new Date(next.scheduled_for).getTime() + 60_000), next.tz, window);
+    // (r3) El seed fecha lo enviado contra now() de la base («ayer», «hace
+    // dos días»), y el reloj de la demo cae en el siguiente hueco hábil: un
+    // jueves por la noche lo lleva al lunes y los tres días con la marca ya
+    // se cumplían, así que la demo contaba otra historia según el día de la
+    // semana. Lo enviado a la marca de ese toque se ancla al reloj: lo
+    // último, exactamente un día antes. Así siempre se ven las tres pasadas
+    // (apagada, esperando la separación, enviada).
+    await db.asWorker((tx) =>
+      tx.query(
+        `WITH marca AS (
+           SELECT t.company_id FROM outbound_touch t
+            WHERE t.workspace_id = $1 AND t.status = 'scheduled' ORDER BY t.scheduled_for LIMIT 1),
+         corrimiento AS (
+           SELECT $2::timestamptz - interval '1 day' - max(t.sent_at) AS d FROM outbound_touch t, marca m
+            WHERE t.workspace_id = $1 AND t.company_id = m.company_id AND t.status = 'sent')
+         UPDATE outbound_touch t
+            SET sent_at = t.sent_at + c.d, claimed_at = t.claimed_at + c.d
+           FROM marca m, corrimiento c
+          WHERE t.workspace_id = $1 AND t.company_id = m.company_id AND t.status = 'sent' AND c.d IS NOT NULL`,
+        [DEMO_WORKSPACE_ID, clock.toISOString()],
+      ),
+    );
 
     // La dirección postal del pie (sin ella el interruptor no se enciende)
     // y la cuenta de LinkedIn reconectada.
