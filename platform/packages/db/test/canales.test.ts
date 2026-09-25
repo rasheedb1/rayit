@@ -72,19 +72,23 @@ describe('canales', () => {
       }
       const otro = await t.db.withWorkspace(WS_OTRO, (tx) => listChannelAccounts(tx));
       assert.deepEqual(otro, [], 'otro workspace no ve las cuentas de Laura');
-      assert.deepEqual(await t.db.withWorkspace(WS_OTRO, (tx) => getChannelPolicyCaps(tx)), { emailPerDay: 20, enabled: false });
+      // Sin fila de política, los valores por defecto de la tabla: Instagram nace apagado (0045).
+      assert.deepEqual(await t.db.withWorkspace(WS_OTRO, (tx) => getChannelPolicyCaps(tx)), { emailPerDay: 20, enabled: false, allowedChannels: ['email', 'linkedin'] });
+      assert.deepEqual((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getChannelPolicyCaps(tx))).allowedChannels, ['email', 'linkedin', 'instagram_dm'], 'la demo lo tiene encendido');
     });
 
     test('los límites salen de la vista: el correo lo fija la política, LinkedIn el proveedor; lo que rige nunca pasa del máximo', async () => {
       const rows = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listChannelAccounts(tx));
       const gmail = rows.find((r) => r.id === GMAIL_LAURA)!;
       assert.deepEqual(gmail.limits, {
-        effectiveDaily: 20, effectiveWeekly: 100, maxDaily: 20, maxWeekly: 140, dailyLimitedBy: 'policy', personalMailbox: false,
+        effectiveDaily: 20, effectiveWeekly: 100, maxDaily: 20, maxWeekly: 140, dailyLimitedBy: 'policy', weeklyLimitedBy: 'policy', personalMailbox: false,
       });
       const li = rows.find((r) => r.id === LINKEDIN_LAURA)!;
       assert.equal(li.limits.maxDaily, 100);
       assert.equal(li.limits.maxWeekly, 200);
       assert.equal(li.limits.dailyLimitedBy, 'provider');
+      // El semanal de LinkedIn (200) es el del proveedor, no 7 × 100.
+      assert.equal(li.limits.weeklyLimitedBy, 'provider');
       // Un tope viejo por encima de la política (la demo tenía 40 con una política de 20): rige la política.
       await t.admin(`UPDATE outreach_channel_account SET daily_cap = 40 WHERE id = '${GMAIL_LAURA}'`);
       assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getChannelLimits(tx, GMAIL_LAURA)))?.effectiveDaily, 20);
@@ -94,6 +98,7 @@ describe('canales', () => {
         VALUES ('00000005-0000-4000-8000-0000000acf01', '${WORKSPACE_LAURA}', '${CREATOR_LAURA}', 'email', 'gmail_oauth', 'laura.personal@gmail.com', 'disconnected')`);
       const personal = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getChannelLimits(tx, '00000005-0000-4000-8000-0000000acf01'));
       assert.deepEqual([personal?.maxDaily, personal?.dailyLimitedBy, personal?.personalMailbox], [500, 'provider', true]);
+      assert.deepEqual([personal?.maxWeekly, personal?.weeklyLimitedBy], [3500, 'provider'], 'Gmail personal: 3.500 a la semana, del proveedor');
       assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getChannelLimits(tx, GMAIL_LAURA)))?.maxDaily, 900);
       await t.admin(`UPDATE outbound_policy SET max_emails_per_day = 20 WHERE workspace_id = '${WORKSPACE_LAURA}';
                      UPDATE outreach_channel_account SET daily_cap = 20 WHERE id = '${GMAIL_LAURA}';
@@ -107,7 +112,7 @@ describe('canales', () => {
         await assert.rejects(updateChannelAccountCaps(tx, LINKEDIN_LAURA, { dailyCap: 101, weeklyCap: 150 }), (e: unknown) => e instanceof ChannelCapError && e.field === 'dailyCap' && e.max === 100 && e.limitedBy === 'provider');
         // 2.000 cabe en el techo del CHECK, pero la política del espacio dice 20.
         await assert.rejects(updateChannelAccountCaps(tx, GMAIL_LAURA, { dailyCap: 2000, weeklyCap: null }), (e: unknown) => e instanceof ChannelCapError && e.field === 'dailyCap' && e.max === 20 && e.limitedBy === 'policy');
-        await assert.rejects(updateChannelAccountCaps(tx, GMAIL_LAURA, { dailyCap: 10, weeklyCap: 141 }), (e: unknown) => e instanceof ChannelCapError && e.field === 'weeklyCap' && e.max === 140);
+        await assert.rejects(updateChannelAccountCaps(tx, GMAIL_LAURA, { dailyCap: 10, weeklyCap: 141 }), (e: unknown) => e instanceof ChannelCapError && e.field === 'weeklyCap' && e.max === 140 && e.limitedBy === 'policy');
         // El diario no pasa del semanal.
         await assert.rejects(updateChannelAccountCaps(tx, LINKEDIN_LAURA, { dailyCap: 50, weeklyCap: 30 }), (e: unknown) => e instanceof ChannelCapError && e.problem === 'daily_above_weekly');
         assert.equal(await updateChannelAccountCaps(tx, GMAIL_LAURA, { dailyCap: null, weeklyCap: null }), true);

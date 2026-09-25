@@ -56,6 +56,7 @@ export const NOTICE_TONE: Partial<Record<ChannelErrorCode, "warning" | "info">> 
   no_configurado: "warning",
   cancelada: "info",
   duplicado: "info",
+  apagado: "warning",
 };
 
 export function isChannelErrorCode(v: unknown): v is ChannelErrorCode {

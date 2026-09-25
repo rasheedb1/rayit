@@ -73,13 +73,13 @@ export function Desconectar({ accountId, account }: { accountId: string; account
         </div>
       ) : (
         /*
-         * -ml-2.5 en el envoltorio, no en el botón: el texto del botón fantasma
-         * queda alineado con el de la fila (su padding es px-2.5). En el botón,
-         * el margen negativo le quitaba 10 px al ancho del envoltorio y el
-         * max-w-full del kit partía «Desconectar» en dos líneas.
+         * En tono de peligro (variant danger del kit) y en su propio bloque al
+         * final de «Límites y cuenta», como «Disconnect» en Vercel y Linear:
+         * no se confunde con «Conectar otra cuenta». El envoltorio no se
+         * encoge ni parte «Desconectar» en dos líneas a 400 px.
          */
-        <span ref={openerRef} className="-ml-2.5 inline-flex shrink-0 whitespace-nowrap" data-desconectar>
-          <Button size="sm" variant="ghost" onClick={() => setAsking(true)} aria-label={MESSAGES.actions.disconnectAccount(account)}>
+        <span ref={openerRef} className="inline-flex shrink-0 whitespace-nowrap" data-desconectar>
+          <Button size="sm" variant="danger" onClick={() => setAsking(true)} aria-label={MESSAGES.actions.disconnectAccount(account)}>
             {MESSAGES.actions.disconnect}
           </Button>
         </span>

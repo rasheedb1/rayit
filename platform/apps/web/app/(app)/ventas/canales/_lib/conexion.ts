@@ -74,7 +74,7 @@ import {
 } from "@mc/connectors";
 import { getDefaultCreatorId, NoCreatorProfile, type WorkspaceTx } from "@mc/db";
 import {
-  CHANNEL_ERROR_CODES, completeChannelConnection, createPendingChannelAccount, existingGmailSecretRef, failPendingChannelAccount,
+  CHANNEL_ERROR_CODES, completeChannelConnection, createPendingChannelAccount, existingGmailSecretRef, failPendingChannelAccount, getChannelPolicyCaps,
   getReconnectableGmail, getReconnectableUnipileAccount,
 } from "@mc/db/queries/canales";
 import { MESSAGES } from "../messages";
@@ -153,7 +153,8 @@ function notConfigured(req: Request, channel: Channel, missing: readonly string[
 }
 
 /**
- * La fila 'pending' y el estado firmado, en el espacio de la sesión. Con
+ * La fila 'pending' y el estado firmado, en el espacio de la sesión, solo
+ * si el canal está en la política del espacio (allowed_channels). Con
  * `reconnectRowId`, en la MISMA transacción se lee el account_id de
  * Unipile de esa fila (de este espacio, del canal y caída): si no hay,
  * no se crea nada y vuelve 'vencida'.
@@ -169,6 +170,8 @@ async function begin(
   const workspaceId = await deps.currentWorkspaceId();
   try {
     const started = await deps.withWorkspace(async (tx) => {
+      // Un canal fuera de la política del espacio no se conecta (la fila no ofrece el botón; esto es un POST a mano).
+      if (!(await getChannelPolicyCaps(tx)).allowedChannels.includes(channel)) return "off" as const;
       let reconnectAccountId: string | undefined;
       if (reconnectRowId !== undefined) {
         if (channel === "email") return null;
@@ -179,6 +182,7 @@ async function begin(
       await createPendingChannelAccount(tx, { channel, creatorId: id, nonce });
       return { creatorId: id, reconnectAccountId };
     });
+    if (started === "off") return { error: "apagado" };
     if (!started) return { error: "vencida" };
     const payload: ChannelState = { workspaceId, creatorId: started.creatorId, channel, nonce };
     // Reconectar firma la cuenta que se reconecta: el aviso de vuelta tiene que traer esa y no otra.

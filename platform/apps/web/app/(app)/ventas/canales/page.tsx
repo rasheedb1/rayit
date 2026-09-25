@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ChevronRight } from "lucide-react";
 import type { ChannelAccountRow } from "@mc/db/queries/canales";
 import { getChannelPolicyCaps, isLiveChannelStatus, listChannelAccounts } from "@mc/db/queries/canales";
 import { PageHeader, SectionTitle } from "@/components/page-header";
@@ -64,6 +65,13 @@ function unavailableText(row: ChannelRowView, quiet: boolean): string | null {
   return quiet ? null : MESSAGES.detail.unavailable(MESSAGES.channels[row.channel].provider);
 }
 
+/** La frase de un canal apagado en el espacio, o null. «No disponible» (la plataforma) manda sobre «apagado» (el espacio). */
+function offText(row: ChannelRowView): string | null {
+  if (!row.off || row.unavailable) return null;
+  const provider = MESSAGES.channels[row.channel].provider;
+  return row.state === "off" ? MESSAGES.detail.off(provider) : MESSAGES.detail.offLive(provider);
+}
+
 /** Las frases de debajo de la fila: por qué está así y qué hacer. Nunca nombres de variables ni códigos del proveedor. */
 function Hints({ row, adminDetails, quiet }: { row: ChannelRowView; adminDetails: boolean; quiet: boolean }) {
   const provider = MESSAGES.channels[row.channel].provider;
@@ -77,8 +85,12 @@ function Hints({ row, adminDetails, quiet }: { row: ChannelRowView; adminDetails
   if (row.state === "expired") lines.push({ key: "e", tone: "fg", text: row.channel === "email" ? MESSAGES.detail.expiredHint.email : MESSAGES.detail.expiredHint.unipile(provider) });
   const unavailable = unavailableText(row, quiet);
   if (unavailable) lines.push({ key: "u", tone: "warn", text: unavailable });
-  // Caída y sin llaves: la frase de la caída pide reconectar con un botón deshabilitado; manda la de «no disponible».
-  const reason = row.unavailable && (row.state === "needs_reconnect" || row.state === "error") ? null : row.reason;
+  // Apagado en el espacio (y con llaves: si faltan, ya lo dice «no disponible»). Sin cuenta, en neutro; con una viva, en ámbar.
+  const off = offText(row);
+  if (off) lines.push({ key: "o", tone: row.state === "off" ? "fg" : "warn", text: off });
+  // Caída y sin llaves o apagada: la frase de la caída pide reconectar con un botón deshabilitado; manda la del canal.
+  const down = row.state === "needs_reconnect" || row.state === "error";
+  const reason = (row.unavailable || row.off) && down ? null : row.reason;
   const showAdmin = adminDetails && row.missing.length > 0;
   if (lines.length === 0 && !reason && !showAdmin) return null;
   return (
@@ -100,17 +112,25 @@ function Hints({ row, adminDetails, quiet }: { row: ChannelRowView; adminDetails
   );
 }
 
-/** Límites y desconectar, plegados: la fila se queda compacta, como en las integraciones de Vercel o Linear. */
+/** «Máximo 140 (política del espacio)»: el máximo y quién lo fija, igual para el diario y el semanal (la vista lo dice, 0045). */
+function maxHelp(by: "policy" | "provider", personal: boolean, n: string, provider: string): string {
+  const max = MESSAGES.caps.max;
+  return by === "policy" ? max.policy(n) : personal ? max.personal(n) : max.provider(n, provider);
+}
+
+/**
+ * Límites y desconectar, plegados: la fila se queda compacta, como en las
+ * integraciones de Vercel o Linear. «Desconectar» va al final, separado y
+ * en tono de peligro: lo destructivo no se lee como lo constructivo.
+ */
 function Manage({ row, live, f }: { row: ChannelRowView; live: ChannelAccountRow; f: Formatter }) {
   const l = live.limits;
   const provider = MESSAGES.channels[row.channel].provider;
-  const max = MESSAGES.caps.max;
-  const dailyHelp = l.dailyLimitedBy === "policy" ? max.policy(f.int(l.maxDaily)) : l.personalMailbox ? max.personal(f.int(l.maxDaily)) : max.provider(f.int(l.maxDaily), provider);
   const name = accountName(live);
   return (
     <details className="group">
       <summary className="inline-flex cursor-pointer select-none items-center gap-1 text-xs text-fg-2 hover:text-fg">
-        <span aria-hidden className="transition-transform group-open:rotate-90">›</span>
+        <ChevronRight size={14} aria-hidden className="shrink-0 transition-transform group-open:rotate-90" />
         {MESSAGES.actions.manage}
       </summary>
       <div className="mt-3 flex flex-col gap-4 border-t border-line pt-3">
@@ -119,13 +139,13 @@ function Manage({ row, live, f }: { row: ChannelRowView; live: ChannelAccountRow
           account={name}
           dailyCap={live.dailyCap}
           weeklyCap={live.weeklyCap}
-          dailyHelp={dailyHelp}
-          weeklyHelp={max.plain(f.int(l.maxWeekly))}
+          dailyHelp={maxHelp(l.dailyLimitedBy, l.personalMailbox, f.int(l.maxDaily), provider)}
+          weeklyHelp={maxHelp(l.weeklyLimitedBy, l.personalMailbox, f.int(l.maxWeekly), provider)}
           dailyPlaceholder={f.int(l.maxDaily)}
           weeklyPlaceholder={f.int(l.maxWeekly)}
         />
         <p className="text-xs text-fg-3">{MESSAGES.caps.emptyMeansMax}</p>
-        <div>
+        <div className="border-t border-line pt-3">
           <Desconectar accountId={live.id} account={name} />
         </div>
       </div>
@@ -136,13 +156,13 @@ function Manage({ row, live, f }: { row: ChannelRowView; live: ChannelAccountRow
 /**
  * Una cuenta (o el canal sin cuenta): nombre, uso, estado y botón. En
  * móvil se apila (la pastilla y el botón bajan); desde `sm`, en línea,
- * con el estado a la derecha. `heading` es el nombre del canal en la fila
- * principal (con su id: FilaCanal le lleva el foco); las sub-filas de las
- * demás cuentas no lo repiten.
+ * con el estado a la derecha. `primary`: la cuenta que encabeza el canal
+ * (bajo el título de la fila); las sub-filas de las demás cuentas llevan
+ * el nombre más marcado porque no tienen título encima.
  */
 function AccountLine({
-  row, f, adminDetails, heading, quiet, canManage,
-}: { row: ChannelRowView; f: Formatter; adminDetails: boolean; heading: { id: string; text: string } | null; quiet: boolean; canManage: boolean }) {
+  row, f, adminDetails, primary, quiet, canManage,
+}: { row: ChannelRowView; f: Formatter; adminDetails: boolean; primary: boolean; quiet: boolean; canManage: boolean }) {
   const t = MESSAGES.channels[row.channel];
   const pill = pillFor(row);
   const live = row.account && isLiveChannelStatus(row.state) ? row.account : null;
@@ -151,14 +171,8 @@ function AccountLine({
     <div className="flex flex-col gap-2">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div className="min-w-0 flex-1">
-          {heading && (
-            // Recibe el foco al desconectar (FilaCanal): con teclado, un anillo dentro del título; tras un clic de ratón, ninguno.
-            <h3 id={heading.id} tabIndex={-1} className={`text-sm font-semibold ${HEADING_FOCUS}`}>
-              {heading.text}
-            </h3>
-          )}
           {name ? (
-            <p className={`truncate ${heading ? "text-xs text-fg-3" : "text-sm font-medium"}`} title={name}>{name}</p>
+            <p className={`truncate ${primary ? "text-xs text-fg-3" : "text-sm font-medium"}`} title={name}>{name}</p>
           ) : (
             <p className="text-xs text-fg-3">{t.blurb}</p>
           )}
@@ -178,9 +192,12 @@ function AccountLine({
 
 /**
  * La fila de un canal: el icono del servicio a la izquierda (como las
- * integraciones de Vercel y de Linear), la cuenta principal, las demás
- * cuentas vivas en sub-filas y, si ya hay una viva, «Conectar otra
- * cuenta». FilaCanal (cliente) anuncia lo que pasa con sus cuentas.
+ * integraciones de Vercel y de Linear) y, arriba, el nombre del canal con
+ * «Conectar otra cuenta» a su derecha cuando ya hay una conectada (como
+ * «Add» en Vercel: lejos de «Desconectar», que vive plegado al final de
+ * cada cuenta). Debajo, la cuenta principal y las demás cuentas vivas en
+ * sub-filas. FilaCanal (cliente) anuncia lo que pasa con sus cuentas y le
+ * lleva el foco al título.
  */
 function ChannelRow({
   row, f, adminDetails, quiet, canManage,
@@ -191,27 +208,31 @@ function ChannelRow({
     <FilaCanal headingId={headingId(row.channel)}>
       <div className="flex items-start gap-3">
         <ChannelIcon channel={row.channel} />
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <AccountLine
-            row={row} f={f} adminDetails={adminDetails} heading={{ id: headingId(row.channel), text: channelName }} quiet={quiet} canManage={canManage}
-          />
-          {row.others.length > 0 && (
-            <ul className="flex flex-col gap-3 border-l border-line pl-3" aria-label={MESSAGES.detail.otherAccounts(channelName)}>
-              {row.others.map((other) => (
-                <li key={other.account?.id}>
-                  <AccountLine row={other} f={f} adminDetails={false} heading={null} quiet={quiet} canManage={canManage} />
-                </li>
-              ))}
-            </ul>
-          )}
-          {row.addAnother && canManage && (
-            <div>
-              {/* -ml-2.5: el texto del botón fantasma se alinea con el de la fila (su padding es px-2.5). */}
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex min-h-7 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            {/* Recibe el foco al desconectar (FilaCanal): con teclado, un anillo dentro del título; tras un clic de ratón, ninguno. */}
+            <h3 id={headingId(row.channel)} tabIndex={-1} className={`text-sm font-semibold ${HEADING_FOCUS}`}>
+              {channelName}
+            </h3>
+            {row.addAnother && canManage && (
+              // -mr-2.5: el texto del botón fantasma se alinea con el borde derecho de la fila (su padding es px-2.5).
               <ConectarBoton
-                action={another.action} fields={another.fields} label={MESSAGES.actions.connectAnother} variant="ghost" disabled={false} className="-ml-2.5"
+                action={another.action} fields={another.fields} label={MESSAGES.actions.connectAnother} variant="ghost" disabled={false} className="-mr-2.5"
               />
-            </div>
-          )}
+            )}
+          </div>
+          <div className="flex flex-col gap-3">
+            <AccountLine row={row} f={f} adminDetails={adminDetails} primary quiet={quiet} canManage={canManage} />
+            {row.others.length > 0 && (
+              <ul className="flex flex-col gap-3 border-l border-line pl-3" aria-label={MESSAGES.detail.otherAccounts(channelName)}>
+                {row.others.map((other) => (
+                  <li key={other.account?.id}>
+                    <AccountLine row={other} f={f} adminDetails={false} primary={false} quiet={quiet} canManage={canManage} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       </div>
     </FilaCanal>
@@ -226,7 +247,10 @@ export default async function CanalesPage({ searchParams }: { searchParams: Prom
   }));
   const f = formatterFor(await getCurrentWorkspace());
   const canManage = await puedeGestionarCanales();
-  const rows = channelRows(accounts, channelSetup(process.env), { returnedFrom: isChannel(params.conectado) ? params.conectado : null });
+  const rows = channelRows(accounts, channelSetup(process.env), {
+    returnedFrom: isChannel(params.conectado) ? params.conectado : null,
+    allowed: policy.allowedChannels,
+  });
   const banner = channelBanner(params, rows);
   // Qué falta en el servidor: al registro una vez por proceso; a la pantalla, solo en desarrollo y plegado.
   warnMissingOnce(rows);

@@ -16,6 +16,10 @@
  * cuenta CONECTADA: con la única cuenta caída, lo que importa es
  * «Reconectar», y un segundo botón competía con él.
  *
+ * Un canal fuera de la política del espacio (allowed_channels: Instagram
+ * nace así) sale «Apagado en este espacio», con el botón deshabilitado y
+ * el motivo en su nombre accesible; una cuenta viva en él, «En pausa».
+ *
  * Sin las llaves del proveedor en la plataforma («no disponible»), la fila
  * lo dice SIEMPRE, también cuando hay una cuenta viva: una conectada sale
  * «En pausa», y una caída conserva su «Reconectar», deshabilitado y con la
@@ -37,7 +41,7 @@ import type { PillKind } from "@/components/ui/pill";
 import { MESSAGES } from "../messages";
 import { CHANNELS, type Channel, type ChannelSetup } from "./config";
 
-export type RowState = "not_configured" | "disconnected" | "pending" | "expired" | "connected" | "needs_reconnect" | "error";
+export type RowState = "not_configured" | "off" | "disconnected" | "pending" | "expired" | "connected" | "needs_reconnect" | "error";
 
 /**
  * Qué botón toca:
@@ -59,6 +63,12 @@ export interface ChannelRowView {
   missing: string[];
   /** El canal no está disponible en la plataforma (faltan llaves): el botón va deshabilitado y la fila lo explica. */
   unavailable: boolean;
+  /**
+   * El canal está apagado en ESTE espacio (fuera de outbound_policy.allowed_channels):
+   * el botón va deshabilitado con el motivo, como «no disponible». Si falta
+   * además la llave, manda «no disponible» (es de la plataforma).
+   */
+  off: boolean;
   action: RowAction;
   /** El motivo, en español, de la última falla, si hay que decirlo. */
   reason: string | null;
@@ -80,11 +90,12 @@ export const STATE_PILL: Record<RowState, { kind: PillKind; label: string }> = {
   error: { kind: "bad", label: MESSAGES.status.error },
   disconnected: { kind: "neutral", label: MESSAGES.status.disconnected },
   not_configured: { kind: "neutral", label: MESSAGES.status.notConfigured },
+  off: { kind: "neutral", label: MESSAGES.status.off },
 };
 
-/** La pill de una fila: una cuenta conectada en un canal no disponible sale «En pausa», en ámbar. */
+/** La pill de una fila: una cuenta conectada en un canal no disponible o apagado sale «En pausa», en ámbar. */
 export function pillFor(row: ChannelRowView): { kind: PillKind; label: string } {
-  if (row.state === "connected" && row.unavailable) return { kind: "warn", label: MESSAGES.status.paused };
+  if (row.state === "connected" && (row.unavailable || row.off)) return { kind: "warn", label: MESSAGES.status.paused };
   return STATE_PILL[row.state];
 }
 
@@ -159,7 +170,7 @@ export function reasonTone(lastError: string | null): ReasonTone {
   return lastError !== null && NEUTRAL_CODES.has(lastError) ? "neutral" : "error";
 }
 
-type Base = Pick<ChannelRowView, "channel" | "missing" | "unavailable">;
+type Base = Pick<ChannelRowView, "channel" | "missing" | "unavailable" | "off">;
 const rest = { others: [] as ChannelRowView[], addAnother: false, returned: false, reasonTone: "error" as ReasonTone };
 
 /** La vista de UNA cuenta viva: conectada (con «Volver a intentar» si le faltan los avisos) o caída (con «Reconectar»). */
@@ -177,22 +188,29 @@ function liveRow(base: Base, account: ChannelAccountRow): ChannelRowView {
 /**
  * Las filas de la pantalla. `returnedFrom`: el canal de ?conectado= (la
  * persona volvió de la página del proveedor), para que su fila pendiente
- * no le pida terminar algo que ya terminó.
+ * no le pida terminar algo que ya terminó. `allowed`: los canales de la
+ * política del espacio (getChannelPolicyCaps); sin ella, todos.
  */
-export function channelRows(accounts: readonly ChannelAccountRow[], setup: ChannelSetup, opts: { returnedFrom?: Channel | null } = {}): ChannelRowView[] {
+export function channelRows(
+  accounts: readonly ChannelAccountRow[],
+  setup: ChannelSetup,
+  opts: { returnedFrom?: Channel | null; allowed?: readonly string[] } = {},
+): ChannelRowView[] {
   return CHANNELS.map((channel): ChannelRowView => {
     const mine = accounts.filter((a) => a.channel === channel);
     const live = mine.filter((a) => isLiveChannelStatus(a.status));
     const { configured, missing } = setup[channel];
-    const base: Base = { channel, missing, unavailable: !configured };
+    const off = opts.allowed !== undefined && !opts.allowed.includes(channel);
+    const base: Base = { channel, missing, unavailable: !configured, off };
     if (live.length > 0) {
       const [first, ...others] = live;
       const anyConnected = live.some((a) => a.status === "connected");
-      return { ...liveRow(base, first!), others: others.map((a) => liveRow(base, a)), addAnother: configured && anyConnected };
+      return { ...liveRow(base, first!), others: others.map((a) => liveRow(base, a)), addAnother: configured && !off && anyConnected };
     }
     // El intento más reciente (listChannelAccounts ordena por updated_at, de nuevo a viejo), no «cualquier pendiente».
     const account = mine[0] ?? null;
     if (!configured) return { ...base, ...rest, account, state: "not_configured", action: "connect", reason: null };
+    if (off) return { ...base, ...rest, account, state: "off", action: "connect", reason: null };
     if (account?.status === "pending") {
       const state = account.stale ? "expired" : "pending";
       return { ...base, ...rest, account, state, action: "retry", reason: null, returned: state === "pending" && opts.returnedFrom === channel };

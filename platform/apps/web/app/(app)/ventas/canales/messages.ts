@@ -44,8 +44,10 @@ export const MESSAGES = {
     error: "Con error",
     disconnected: "Sin conectar",
     notConfigured: "No disponible",
-    /** Una cuenta conectada que hoy no puede enviar porque el canal no está disponible en la plataforma. */
+    /** Una cuenta conectada que hoy no puede enviar porque el canal no está disponible en la plataforma o está apagado en el espacio. */
     paused: "En pausa",
+    /** El canal no está en outbound_policy.allowed_channels: Instagram nace así (0045, §5.1). */
+    off: "Apagado en este espacio",
   },
 
   detail: {
@@ -95,6 +97,14 @@ export const MESSAGES = {
      * «… Vuelve a conectar la cuenta», contradecía al botón).
      */
     unavailableDown: "Esta cuenta necesita volver a conectarse, pero el canal no está disponible ahora mismo en On Cue.",
+    /**
+     * El canal está fuera de la política del espacio (allowed_channels): el
+     * outreach no lo usa, así que no se ofrece conectarlo (Unipile cobraría
+     * la cuenta cada mes sin que nada escribiera por ella).
+     */
+    off: (service: string) => `${service} está apagado en este espacio: los envíos a marcas no lo usan. Se enciende en la política de ventas del espacio.`,
+    /** Una cuenta viva en un canal que el espacio apagó después de conectarla. */
+    offLive: (service: string) => `${service} está apagado en este espacio: esta cuenta sigue conectada, pero no se usa para escribir a marcas.`,
     /** Solo en desarrollo: qué falta en el servidor, plegado. */
     adminDetails: "Detalles para quien administra la plataforma",
     adminMissing: (vars: string) => `Faltan en el servidor: ${vars}. Cómo se consiguen: platform/.env.example.`,
@@ -139,12 +149,11 @@ export const MESSAGES = {
     legend: (account: string) => `Límites de ${account}`,
     daily: "Por día",
     weekly: "Por semana",
-    /** El máximo de la cuenta y quién lo fija. */
+    /** El máximo de la cuenta y quién lo fija, igual para el diario y el semanal (daily_limited_by y weekly_limited_by, 0045). */
     max: {
       policy: (n: string) => `Máximo ${n} (política del espacio)`,
       personal: (n: string) => `Máximo ${n} (Gmail personal)`,
       provider: (n: string, provider: string) => `Máximo ${n} (${provider})`,
-      plain: (n: string) => `Máximo ${n}`,
     },
     /** Vacío = sin tope propio: rige el máximo, que va de marcador en el campo. */
     emptyMeansMax: "Vacío: el máximo.",
@@ -187,6 +196,8 @@ export const MESSAGES = {
       soltando: "Todavía estábamos desconectando esa cuenta. Espera un minuto y vuelve a intentarlo.",
       /** El mismo perfil ya está conectado en este espacio (0042): la cuenta nueva se soltó en Unipile. */
       duplicado: "Ese perfil ya está conectado en este espacio. Seguimos usando esa conexión.",
+      /** Un inicio de conexión de un canal fuera de la política del espacio (la fila no ofrece el botón; esto es un POST a mano). */
+      apagado: (service: string) => `${service} está apagado en este espacio: los envíos a marcas no lo usan.`,
     },
     /** El nombre del servicio cuando un ?error= llega sin ?canal= (un enlace viejo). */
     genericService: "el servicio",

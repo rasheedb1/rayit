@@ -17,7 +17,7 @@ function account(over: Partial<ChannelAccountRow>): ChannelAccountRow {
     id: "00000000-0000-4000-8000-000000000001", channel: "email", provider: "gmail_oauth", providerAccountId: "a@b.test", displayName: "a@b.test",
     status: "connected", stale: false, dailyCap: null, weeklyCap: null, scopes: [], lastOkAt: null, lastOkAgoS: null, lastErrorAt: null,
     lastError: null, lastErrorRecent: true, lastErrorFresh: true, updatedAt: new Date(0), usedToday: 0, usedThisWeek: 0,
-    limits: { effectiveDaily: 20, effectiveWeekly: 140, maxDaily: 20, maxWeekly: 140, dailyLimitedBy: "policy", personalMailbox: false },
+    limits: { effectiveDaily: 20, effectiveWeekly: 140, maxDaily: 20, maxWeekly: 140, dailyLimitedBy: "policy", weeklyLimitedBy: "policy", personalMailbox: false },
     ...over,
   };
 }
@@ -53,6 +53,24 @@ describe("channelRows", () => {
       ["not_configured", "connect", true], ["not_configured", "connect", true], ["not_configured", "connect", true],
     ]);
     expect(pillFor(rows[1]!).label).toBe(MESSAGES.status.notConfigured);
+  });
+
+  it("un canal fuera de la política del espacio (Instagram nace así, 0045): «Apagado en este espacio» y sin «Conectar otra cuenta»", () => {
+    const allowed = ["email", "linkedin"];
+    const rows = channelRows([], channelSetup(ALL), { allowed });
+    expect(rows.map((r) => [r.channel, r.state, r.off])).toEqual([
+      ["email", "disconnected", false], ["linkedin", "disconnected", false], ["instagram_dm", "off", true],
+    ]);
+    expect(pillFor(rows[2]!)).toEqual({ kind: "neutral", label: MESSAGES.status.off });
+    // Una cuenta que se conectó antes de apagarlo: sigue a la vista, «En pausa», y no se ofrece otra.
+    const ig = account({ id: "00000000-0000-4000-8000-0000000000a1", channel: "instagram_dm", provider: "unipile", providerAccountId: "acc_ig", displayName: "laura" });
+    const [, , conCuenta] = channelRows([ig], channelSetup(ALL), { allowed });
+    expect([conCuenta!.state, conCuenta!.off, conCuenta!.addAnother]).toEqual(["connected", true, false]);
+    expect(pillFor(conCuenta!).label).toBe(MESSAGES.status.paused);
+    // Sin llaves manda «No disponible» (la plataforma), aunque el espacio también lo tenga apagado.
+    expect(channelRows([], channelSetup({}), { allowed })[2]!.state).toBe("not_configured");
+    // Sin la lista (una llamada sin política), los tres se ofrecen.
+    expect(channelRows([], channelSetup(ALL)).some((r) => r.off)).toBe(false);
   });
 
   it("sin llaves, un Gmail conectado no sale en verde: «En pausa» y dice por qué", () => {

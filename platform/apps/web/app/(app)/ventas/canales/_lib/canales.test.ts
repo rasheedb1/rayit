@@ -30,7 +30,7 @@ import {
 import { FakeGmail, FakeUnipile } from "@mc/connectors/testing";
 import type { WorkspaceTx } from "@mc/db";
 import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
-import { listChannelAccounts } from "@mc/db/queries/canales";
+import { getChannelPolicyCaps, listChannelAccounts } from "@mc/db/queries/canales";
 import { proofWorkspace, type ProviderCallbackProof } from "@/lib/db/aviso-de-proveedor";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { formatterFor } from "@/lib/format";
@@ -466,7 +466,8 @@ describe("conectar LinkedIn o Instagram: lo que sale mal", () => {
     const from = (path: string, canal: string, headers: Record<string, string>) => new Request(`${ORIGIN}${path}`, {
       method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: new URLSearchParams({ canal }).toString(),
     });
-    for (const headers of [{ origin: "https://pagina-ajena.test" }, { "sec-fetch-site": "cross-site" }, { "sec-fetch-site": "same-site", origin: ORIGIN }, { origin: "null" }]) {
+    const ajenos: Record<string, string>[] = [{ origin: "https://pagina-ajena.test" }, { "sec-fetch-site": "cross-site" }, { "sec-fetch-site": "same-site", origin: ORIGIN }, { origin: "null" }];
+    for (const headers of ajenos) {
       const li = await unipileStart(from("/ventas/canales/conectar", "linkedin", headers), deps());
       expect([li.status, await li.text()], JSON.stringify(headers)).toEqual([403, MESSAGES.routes.crossOrigin]);
       const gm = await googleStart(from("/api/oauth/google", "email", headers), deps());
@@ -479,6 +480,23 @@ describe("conectar LinkedIn o Instagram: lo que sale mal", () => {
     expect(propio.status).toBe(303);
     const google = await googleStart(from("/api/oauth/google", "email", { origin: ORIGIN, "sec-fetch-site": "same-origin" }), deps());
     expect(google.status).toBe(303);
+  }, HEAVY_MS);
+
+  it("un canal apagado en la política del espacio no pide enlace ni crea la pendiente, aunque el POST llegue a mano", async () => {
+    await db.queryAsSuperuser(`UPDATE outbound_policy SET allowed_channels = '{email,linkedin}' WHERE workspace_id = $1`, [SEED_WORKSPACE_ID]);
+    try {
+      const filas = await count(`SELECT count(*)::int AS n FROM outreach_channel_account`);
+      const enlaces = unipile.hostedLinks.length;
+      const res = await unipileStart(post("/ventas/canales/conectar", { canal: "instagram_dm" }), deps());
+      expect(res.headers.get("location")).toBe(`${ORIGIN}/ventas/canales?error=apagado&canal=instagram_dm`);
+      expect(unipile.hostedLinks.length).toBe(enlaces);
+      expect(await count(`SELECT count(*)::int AS n FROM outreach_channel_account`)).toBe(filas);
+      // La fila lo dice sin ofrecer el botón.
+      const policy = await withWorkspace((tx) => getChannelPolicyCaps(tx));
+      expect(channelRows(await accounts(), channelSetup(ENV), { allowed: policy.allowedChannels }).find((r) => r.channel === "instagram_dm")?.off).toBe(true);
+    } finally {
+      await db.queryAsSuperuser(`UPDATE outbound_policy SET allowed_channels = '{email,linkedin,instagram_dm}' WHERE workspace_id = $1`, [SEED_WORKSPACE_ID]);
+    }
   }, HEAVY_MS);
 
   it("un cuerpo que no es de formulario, o un canal inventado, responde 400 sin tocar la base (ni «no disponible», que sería falso)", async () => {

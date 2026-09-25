@@ -35,14 +35,16 @@ export function rowActionVariant(row: Pick<ChannelRowView, "action">, disabled: 
  * Unipile, con estado de carga (ConectarBoton). Reconectar manda el id de
  * NUESTRA fila; el account_id del proveedor lo lee el servidor. Los
  * avisos de una cuenta conectada se reintentan con una acción de
- * servidor, sin salir de la página. Sin llaves o sin el rol, el botón
+ * servidor, sin salir de la página. Sin llaves, con el canal apagado en
+ * el espacio o sin el rol, el botón
  * sigue ahí pero deshabilitado, con el motivo en su nombre accesible.
  */
 export function AccionFila({ row, canManage }: { row: ChannelRowView; canManage: boolean }) {
   if (!row.action) return null;
   const label = row.action === "connect" ? MESSAGES.actions.connect : row.action === "reconnect" ? MESSAGES.actions.reconnect : MESSAGES.actions.retry;
-  // Deshabilitado con el motivo en su nombre accesible: sin llaves en la plataforma, o sin el rol para gestionar canales.
-  const why = row.unavailable ? MESSAGES.detail.unavailable(MESSAGES.channels[row.channel].provider) : !canManage ? MESSAGES.detail.readOnly : null;
+  // Deshabilitado con el motivo en su nombre accesible: sin llaves en la plataforma, apagado en el espacio, o sin el rol.
+  const provider = MESSAGES.channels[row.channel].provider;
+  const why = row.unavailable ? MESSAGES.detail.unavailable(provider) : row.off ? MESSAGES.detail.off(provider) : !canManage ? MESSAGES.detail.readOnly : null;
   const a11y = why ? MESSAGES.actions.unavailableLabel(label, why) : undefined;
   const disabled = why !== null;
   if (row.action === "rewebhook" && row.account) {

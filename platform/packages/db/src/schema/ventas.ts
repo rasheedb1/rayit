@@ -300,7 +300,8 @@ export const outboundPolicy = pgTable('outbound_policy', {
   requireOptoutLink: boolean('require_optout_link').default(true).notNull(),
   requireHumanReview: boolean('require_human_review').default(true).notNull(),
   claimsMustBeSourced: boolean('claims_must_be_sourced').default(true).notNull(),
-  allowedChannels: text('allowed_channels').array().default(['email', 'linkedin', 'instagram_dm']).notNull(),
+  /** Instagram es opcional y nace apagado (0045, §5.1). */
+  allowedChannels: text('allowed_channels').array().default(['email', 'linkedin']).notNull(),
   updatedAt: updatedAt(),
   /** El interruptor de apagado (0037 §6.1). Nace apagado; sin postal_address no se puede encender (CHECK). */
   enabled: boolean('enabled').default(false).notNull(),

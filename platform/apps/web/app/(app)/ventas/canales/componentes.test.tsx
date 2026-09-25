@@ -82,7 +82,7 @@ describe("UsoCuenta", () => {
     id: ID, channel: "email", provider: "gmail_oauth", providerAccountId: "a@b.test", displayName: "a@b.test", status: "connected", stale: false,
     dailyCap: null, weeklyCap: null, scopes: [], lastOkAt: new Date("2026-09-24T11:18:00Z"), lastOkAgoS: 2 * 3600 + 5, lastErrorAt: null, lastError: null,
     lastErrorRecent: false, lastErrorFresh: false, updatedAt: new Date(0), usedToday: 3, usedThisWeek: 12,
-    limits: { effectiveDaily: 20, effectiveWeekly: 140, maxDaily: 20, maxWeekly: 140, dailyLimitedBy: "policy", personalMailbox: false },
+    limits: { effectiveDaily: 20, effectiveWeekly: 140, maxDaily: 20, maxWeekly: 140, dailyLimitedBy: "policy", weeklyLimitedBy: "policy", personalMailbox: false },
   } satisfies ChannelAccountRow;
 
   it("«Comprobada» va en relativo, con la fecha completa en el title, y puede partirse (a 400 px no desborda la fila)", () => {
@@ -126,14 +126,14 @@ describe("Desconectar", () => {
   });
 });
 
-describe("Desconectar: el botón no se parte", () => {
-  it("el margen negativo va en el envoltorio, que no se encoge ni parte el texto; el botón no lo lleva", () => {
+describe("Desconectar: el botón no se parte y se ve como lo que es", () => {
+  it("en tono de peligro (no el fantasma de «Conectar otra cuenta»), y su envoltorio no se encoge ni parte el texto", () => {
     render(<Desconectar accountId={ID} account="laura@cocina.test" />);
     const button = screen.getByRole("button", { name: MESSAGES.actions.disconnectAccount("laura@cocina.test") });
-    expect(button.className).not.toMatch(/-ml-2\.5/);
+    expect(button.className).toMatch(/\btext-bad\b/);
+    expect(button.className).not.toMatch(/\bbg-transparent\b/);
     const wrapper = button.parentElement!;
     expect(wrapper.hasAttribute("data-desconectar")).toBe(true);
-    expect(wrapper.className).toMatch(/-ml-2\.5/);
     expect(wrapper.className).toMatch(/\bwhitespace-nowrap\b/);
     expect(wrapper.className).toMatch(/\bshrink-0\b/);
   });
@@ -250,7 +250,7 @@ describe("ReintentarAvisos", () => {
 
 describe("AccionFila", () => {
   const fila = (over: Partial<ChannelRowView>): ChannelRowView => ({
-    channel: "linkedin", state: "needs_reconnect", missing: [], unavailable: false, action: "reconnect", reason: null, reasonTone: "error",
+    channel: "linkedin", state: "needs_reconnect", missing: [], unavailable: false, off: false, action: "reconnect", reason: null, reasonTone: "error",
     others: [], addAnother: false, returned: false,
     account: { id: ID } as ChannelAccountRow,
     ...over,
@@ -270,6 +270,12 @@ describe("AccionFila", () => {
     expect((off as HTMLButtonElement).disabled).toBe(true);
     expect(off.className).not.toMatch(/\bbg-accent\b/);
     expect(off.className).toMatch(/\bbg-surface\b/);
+  });
+
+  it("un canal apagado en el espacio: «Conectar» deshabilitado con el motivo en su nombre accesible, como «no disponible»", () => {
+    render(<AccionFila row={fila({ channel: "instagram_dm", state: "off", action: "connect", account: null, off: true })} canManage />);
+    const off = screen.getByRole("button", { name: MESSAGES.actions.unavailableLabel(MESSAGES.actions.connect, MESSAGES.detail.off("Instagram")) });
+    expect((off as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("sin el rol de gestionar canales también va deshabilitado y en secundario", () => {

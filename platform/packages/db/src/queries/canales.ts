@@ -192,6 +192,8 @@ export interface ChannelLimits {
   maxWeekly: number;
   /** Qué fija el máximo diario: la política del espacio o el proveedor. */
   dailyLimitedBy: 'policy' | 'provider';
+  /** Qué fija el máximo semanal (0045): quien fija el diario si manda 7 × el diario, o el proveedor. */
+  weeklyLimitedBy: 'policy' | 'provider';
   /** Un buzón @gmail.com o @googlemail.com (Google corta en 500 al día). */
   personalMailbox: boolean;
 }
@@ -202,12 +204,13 @@ interface RawLimits {
   max_daily: number;
   max_weekly: number;
   daily_limited_by: 'policy' | 'provider';
+  weekly_limited_by: 'policy' | 'provider';
   personal_mailbox: boolean;
 }
 
 const toLimits = (r: RawLimits): ChannelLimits => ({
   effectiveDaily: r.effective_daily, effectiveWeekly: r.effective_weekly, maxDaily: r.max_daily, maxWeekly: r.max_weekly,
-  dailyLimitedBy: r.daily_limited_by, personalMailbox: r.personal_mailbox,
+  dailyLimitedBy: r.daily_limited_by, weeklyLimitedBy: r.weekly_limited_by, personalMailbox: r.personal_mailbox,
 });
 
 interface RawAccount extends RawLimits, Record<string, unknown> {
@@ -256,7 +259,7 @@ export async function listChannelAccounts(tx: WorkspaceTx): Promise<ChannelAccou
             greatest(0, extract(epoch FROM now() - a.last_ok_at))::int AS last_ok_ago_s,
             coalesce(a.last_error_at > now() - interval '24 hours', false) AS last_error_recent,
             coalesce(a.last_error_at > now() - interval '1 hour', false) AS last_error_fresh,
-            l.effective_daily, l.effective_weekly, l.max_daily, l.max_weekly, l.daily_limited_by, l.personal_mailbox,
+            l.effective_daily, l.effective_weekly, l.max_daily, l.max_weekly, l.daily_limited_by, l.weekly_limited_by, l.personal_mailbox,
             coalesce((SELECT sum(c.count) FROM outbound_counter c, periodo p
                        WHERE c.channel_account_id = a.id AND c.period = 'day' AND c.period_start = p.hoy), 0)::int AS used_today,
             coalesce((SELECT sum(c.count) FROM outbound_counter c, periodo p
@@ -295,14 +298,23 @@ export interface ChannelPolicyCaps {
   emailPerDay: number;
   /** El interruptor del outreach del workspace (nace apagado). */
   enabled: boolean;
+  /** Los canales que el espacio usa (outbound_policy.allowed_channels). Uno fuera no se ofrece para conectar. */
+  allowedChannels: readonly OutreachChannel[];
 }
 
-/** Sin fila de política valen los de 0007: 20 correos al día y apagado. */
+/** El valor por defecto de allowed_channels desde 0045: Instagram es opcional y nace apagado (§5.1). */
+export const DEFAULT_ALLOWED_CHANNELS: readonly OutreachChannel[] = ['email', 'linkedin'];
+
+/** Sin fila de política valen los valores por defecto de la tabla: 20 correos al día, apagado, correo y LinkedIn. */
 export async function getChannelPolicyCaps(tx: WorkspaceTx): Promise<ChannelPolicyCaps> {
-  const { rows } = await tx.query<{ max_emails_per_day: number; enabled: boolean }>(
-    `SELECT max_emails_per_day, enabled FROM outbound_policy WHERE workspace_id = current_workspace_id()`,
+  const { rows } = await tx.query<{ max_emails_per_day: number; enabled: boolean; allowed_channels: OutreachChannel[] }>(
+    `SELECT max_emails_per_day, enabled, allowed_channels FROM outbound_policy WHERE workspace_id = current_workspace_id()`,
   );
-  return { emailPerDay: rows[0]?.max_emails_per_day ?? 20, enabled: rows[0]?.enabled ?? false };
+  return {
+    emailPerDay: rows[0]?.max_emails_per_day ?? 20,
+    enabled: rows[0]?.enabled ?? false,
+    allowedChannels: rows[0]?.allowed_channels ?? DEFAULT_ALLOWED_CHANNELS,
+  };
 }
 
 export type ChannelCapProblem = 'above_max' | 'daily_above_weekly';
@@ -336,7 +348,7 @@ export function channelCapLimits(channel: OutreachChannel): { daily: number; wee
 export async function getChannelLimits(tx: WorkspaceTx, accountId: string): Promise<ChannelLimits | null> {
   if (!isUuid(accountId)) return null;
   const { rows } = await tx.query<RawLimits & Record<string, unknown>>(
-    `SELECT effective_daily, effective_weekly, max_daily, max_weekly, daily_limited_by, personal_mailbox
+    `SELECT effective_daily, effective_weekly, max_daily, max_weekly, daily_limited_by, weekly_limited_by, personal_mailbox
        FROM outreach_channel_account_limits WHERE channel_account_id = $1`,
     [accountId],
   );
@@ -358,7 +370,7 @@ export async function updateChannelAccountCaps(
 ): Promise<boolean> {
   const limits = await getChannelLimits(tx, accountId);
   if (!limits) return false;
-  const bounds = [['dailyCap', limits.maxDaily, limits.dailyLimitedBy], ['weeklyCap', limits.maxWeekly, 'provider']] as const;
+  const bounds = [['dailyCap', limits.maxDaily, limits.dailyLimitedBy], ['weeklyCap', limits.maxWeekly, limits.weeklyLimitedBy]] as const;
   for (const [field, max, by] of bounds) {
     const v = caps[field];
     if (v !== null && (!Number.isInteger(v) || v < 0 || v > max)) throw new ChannelCapError(field, max, 'above_max', by);
