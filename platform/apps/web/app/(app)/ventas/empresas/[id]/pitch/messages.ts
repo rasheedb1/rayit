@@ -89,7 +89,10 @@ export const PITCH = {
      */
     reintento: (code: string | null): string => {
       if (code === "llm_budget") return "Se agotó el presupuesto de IA de hoy: lo retomamos mañana, o escríbelo tú.";
-      if (code === "interrupted") return "Se interrumpió; lo retomamos en unos minutos.";
+      // 'aborted' y 'lease_lost' son los códigos de antes de 0058: se leen igual.
+      if (code === "interrupted" || code === "aborted" || code?.includes("lease_lost") || code?.includes("touch_not_draft")) {
+        return "Se interrumpió; lo retomamos en unos minutos.";
+      }
       return "La IA no pudo redactarlo; lo intentamos de nuevo en unos minutos.";
     },
     fallo: "La IA no pudo redactar este correo después de varios intentos. Escríbelo tú, o pide otra versión.",
