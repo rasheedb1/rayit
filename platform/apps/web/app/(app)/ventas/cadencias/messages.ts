@@ -22,7 +22,7 @@ export const MESSAGES = {
       "Los pasos con los que le escribes a una marca: qué día, por qué canal, con qué ángulo y qué decir en cada uno. Pide una propuesta desde una señal del radar, ajústala y actívala.",
   },
   loading: { label: "Cargando las cadencias" },
-  error: "No pudimos cargar las cadencias",
+  error: { eyebrow: "Ventas · Cadencias", title: "No pudimos cargar las cadencias" },
 
   senales: {
     titulo: "Proponer desde una señal",
