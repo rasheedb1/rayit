@@ -269,13 +269,21 @@ export interface SweepResult {
  * Hace falta además del disparador porque el disparador solo mira la
  * entrada en la cola: un borrador creado después del rebote, o uno que ya
  * estaba en draft o held cuando la ficha se marcó, no lo cancela nadie
- * más. Cada pasada del job lo corre al final para todos los workspaces.
+ * más. Cada pasada del job lo corre al final para todos los workspaces,
+ * pero solo sobre los candidatos (fichas con email_invalid y workspaces con
+ * un rebote duro verificado) y por el índice parcial de los correos
+ * pendientes (0038 §2): sin rebotes, la pasada no recorre outbound_touch.
  */
 export async function sweepInvalidEmail(q: Queryable, workspaceId: string | null, now: Date): Promise<SweepResult> {
   const cancel = await q.query(
     `UPDATE outbound_touch t SET status = 'canceled', blocked_reason = 'email_invalid'
       WHERE ($1::uuid IS NULL OR t.workspace_id = $1::uuid)
         AND t.channel = 'email' AND t.status IN ('draft', 'scheduled', 'held')
+        -- Solo los candidatos: fichas marcadas o workspaces con un rebote
+        -- duro verificado. Con el índice parcial de los correos pendientes
+        -- (0038 §2), una pasada sin nada que barrer no recorre la tabla.
+        AND (t.contact_id IN (SELECT c.id FROM contact c WHERE c.email_invalid)
+             OR t.workspace_id IN (SELECT b.workspace_id FROM outbound_bounce b WHERE b.kind = 'hard' AND b.verified))
         AND (EXISTS (SELECT 1 FROM contact c
                       WHERE c.id = t.contact_id AND c.email_invalid
                         AND (t.recipient_address IS NULL OR t.recipient_address = c.email))
@@ -295,6 +303,8 @@ export async function sweepInvalidEmail(q: Queryable, workspaceId: string | null
        FROM contact c, outbound_sequence s
       WHERE ($1::uuid IS NULL OR e.workspace_id = $1::uuid)
         AND e.status = 'active' AND c.id = e.contact_id AND s.id = e.sequence_id
+        AND (e.contact_id IN (SELECT x.id FROM contact x WHERE x.email_invalid)
+             OR e.workspace_id IN (SELECT b.workspace_id FROM outbound_bounce b WHERE b.kind = 'hard' AND b.verified))
         AND c.email IS NOT NULL
         AND (c.email_invalid
              OR EXISTS (SELECT 1 FROM outbound_bounce b

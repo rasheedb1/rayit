@@ -79,6 +79,11 @@ COMMENT ON COLUMN contact.email_invalid IS
   'El correo de la ficha rebotó con un error permanente (VEN-15, job outbound.bounces). No se le programan correos; '
   'los otros canales siguen. Cambiar el correo de la ficha lo borra.';
 
+-- Las fichas con el correo inválido son pocas: el barrido de
+-- outbound.bounces (sweepInvalidEmail) parte de ellas en vez de recorrer
+-- todos los toques.
+CREATE INDEX contact_email_invalid_idx ON contact (id) WHERE email_invalid;
+
 -- Otro correo, otra historia: el rebote era de la dirección anterior.
 -- También se limpia contact.bounced (0007), que el job marca junto con
 -- email_invalid y que la ficha de Ventas enseña como «Correo rebotado»:
@@ -192,6 +197,13 @@ $$;
 CREATE TRIGGER outbound_touch_email_invalid
   BEFORE INSERT OR UPDATE OF status ON outbound_touch
   FOR EACH ROW EXECUTE FUNCTION outbound_touch_email_invalid();
+
+-- Los correos que todavía pueden salir (draft, scheduled, held): lo único
+-- que el barrido de cada media hora de outbound.bounces mira. Sin este
+-- índice parcial el barrido global recorría outbound_touch entero, de
+-- todos los workspaces, en cada pasada, hubiera rebotes nuevos o no.
+CREATE INDEX outbound_touch_email_pending_idx ON outbound_touch (workspace_id, contact_id)
+  WHERE channel = 'email' AND status IN ('draft', 'scheduled', 'held');
 
 -- ---------------------------------------------------------------------
 -- 3 · outbound_bounce: la bitácora de rebotes
