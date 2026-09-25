@@ -224,6 +224,12 @@ export function formatMultiple(ratio: number, digits = 1, opts: LocaleOpts = {})
   return `${body}×`;
 }
 
+/** Un número con decimales, sin unidad: 8.675 → "8,7" (una nota de 0 a 10). */
+export function formatDecimal(n: number, digits = 1, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  return plain(numberFormat(locale, { maximumFractionDigits: digits }).format(n));
+}
+
 function utcDate(iso: string): Date {
   const d = new Date(iso.length === 10 ? `${iso}T00:00:00Z` : iso);
   if (Number.isNaN(d.getTime())) throw new Error(`No es una fecha ISO: "${iso}"`);
@@ -493,6 +499,7 @@ export function formatterFor(settings: FormatSettings) {
     compact: (n: number) => formatCompact(n, base),
     pct: (ratio: number, digits = 0) => formatPct(ratio, digits, base),
     multiple: (ratio: number, digits = 1) => formatMultiple(ratio, digits, base),
+    decimal: (n: number, digits = 1) => formatDecimal(n, digits, base),
     delta: (ratio: number, digits = 0) => formatDelta(ratio, digits, base),
     points: (diff: number, digits = 1) => formatPoints(diff, digits, base),
     date: (iso: string, style: "short" | "long" = "short") => formatDate(iso, style, base),

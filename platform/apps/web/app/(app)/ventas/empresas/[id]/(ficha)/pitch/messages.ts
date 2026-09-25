@@ -76,6 +76,7 @@ export const PITCH = {
 
   revision: {
     titulo: "Antes de enviar",
+    listo: "Listo",
     ok: "Todo en orden: el mensaje pasa las reglas de estilo y cada cifra tiene su origen.",
     bloquea: "Esto impide programarlo",
     calidad: "Nota de la revisión automática",
@@ -111,7 +112,7 @@ export const PITCH = {
     question_not_closing: () => "La pregunta va al final, antes de la firma.",
     calendar_link_first_touch: () => "En el primer correo no pongas un enlace de agenda: primero, que te conozcan.",
     unsourced_figure: (d) => `La cifra «${d}» no tiene origen: insértala desde «Cifras de tu perfil» o quítala.`,
-    unknown_claim: (d) => `La marca «${d}» no es de ninguna cifra de tu perfil.`,
+    unknown_claim: (d) => `La referencia «${d}» no es de ninguna cifra de tu perfil.`,
     claim_mismatch: (d) => `La cifra no coincide con su origen (${d}).`,
     claim_not_for_this_angle: (d) => `La cifra «${d}» no va en este tipo de mensaje.`,
     false_urgency: (d) => `«${d}» mete una urgencia que no existe.`,
@@ -143,5 +144,5 @@ export const PITCH = {
   },
 
   cargando: "Cargando el pitch",
-  errorFrontera: "No pudimos abrir el pitch de esta empresa.",
+  errorFrontera: { eyebrow: "Ventas · Pitch", title: "No pudimos abrir el pitch de esta empresa" },
 } as const;

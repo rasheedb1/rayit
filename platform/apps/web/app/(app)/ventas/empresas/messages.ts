@@ -38,6 +38,11 @@ export const FICHA = {
     /** El resumen de la cabecera, para quien no ve la tira de datos. */
     label: "Resumen de la empresa",
   },
+  /** El editor del pitch (VEN-6 dentro de VEN-12), que se abre desde la ficha. */
+  pitch: {
+    abrir: "Redactar pitch",
+    abrirLabel: (company: string) => `Redactar un pitch para ${company}`,
+  },
 
   bloques: {
     deals: "Negocios",

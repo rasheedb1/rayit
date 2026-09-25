@@ -43,21 +43,34 @@ export interface PitchDraft {
 }
 
 export interface PitchComposer {
+  /** Los negocios de la empresa, con la señal que originó cada uno. */
+  deals: Array<{ id: string; name: string; signalHeadline: string | null; open: boolean }>;
   claims: SalesClaim[];
   creator: { name: string; handle: string | null; niche: string | null } | null;
   /** El slug del último media kit público y vigente (la página /kit/<slug>). */
   mediaKitSlug: string | null;
   draft: PitchDraft | null;
   policy: { enabled: boolean; hasEmailAccount: boolean; hasPostalAddress: boolean };
+  /** Las personas de la empresa a las que este espacio ya les envió algo: para ellas no es el primer correo. */
+  contactedIds: string[];
 }
 
 export async function loadPitchComposer(tx: WorkspaceTx, companyId: string, locale: string): Promise<PitchComposer> {
   assertIds('loadPitchComposer', [companyId]);
   // Los claims del perfil, más las cifras de la señal de cada negocio de la empresa.
-  const deals = (await tx.query<{ id: string }>('SELECT id FROM deal WHERE company_id = $1::uuid AND origin_signal_id IS NOT NULL', [companyId])).rows;
+  const deals = (
+    await tx.query<{ id: string; name: string; headline: string | null; has_signal: boolean; open: boolean }>(
+      `SELECT d.id, d.name, s.headline_es AS headline, d.origin_signal_id IS NOT NULL AS has_signal,
+              (d.won_at IS NULL AND d.lost_at IS NULL) AS open
+         FROM deal d LEFT JOIN signal s ON s.id = d.origin_signal_id
+        WHERE d.company_id = $1::uuid
+        ORDER BY (d.won_at IS NULL AND d.lost_at IS NULL) DESC, d.created_at DESC`,
+      [companyId],
+    )
+  ).rows;
   const claims = await listSalesClaims(tx, { locale });
   const seen = new Set(claims.map((c) => c.id));
-  for (const d of deals) {
+  for (const d of deals.filter((x) => x.has_signal)) {
     for (const c of await listSalesClaims(tx, { locale, dealId: d.id })) {
       if (!seen.has(c.id)) {
         seen.add(c.id);
@@ -100,7 +113,15 @@ export async function loadPitchComposer(tx: WorkspaceTx, companyId: string, loca
          FROM (SELECT 1) x LEFT JOIN outbound_policy p ON p.workspace_id = current_workspace_id()`,
     )
   ).rows[0];
+  const contacted = (
+    await tx.query<{ contact_id: string }>(
+      `SELECT DISTINCT contact_id FROM outbound_touch WHERE company_id = $1::uuid AND status = 'sent' AND contact_id IS NOT NULL`,
+      [companyId],
+    )
+  ).rows.map((r) => r.contact_id);
   return {
+    contactedIds: contacted,
+    deals: deals.map((x) => ({ id: x.id, name: x.name, signalHeadline: x.headline, open: x.open })),
     claims,
     creator: creator ? { name: creator.display_name, handle: creator.handle, niche: creator.niche } : null,
     mediaKitSlug: creator?.slug ?? null,
