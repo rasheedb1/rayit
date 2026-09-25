@@ -16,14 +16,16 @@
  *     «Este enlace no existe» con un 200 debajo (medido con curl en la
  *     ronda 2). generateMetadata no sirve de atajo: desde Next 15.2 los
  *     metadatos también se transmiten a los navegadores, así que un
- *     notFound() ahí llega igual de tarde.
+ *     notFound() ahí llega igual de tarde. La baja (VEN-15) sigue la misma
+ *     regla desde que un token desconocido responde 404.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { closeDb, getDbMode } from "@/lib/db";
 import KitPage from "./kit/[slug]/page";
 import CotizacionPage from "./cotizacion/[slug]/page";
+import BajaPage from "./baja/[token]/page";
 
 vi.mock("next/headers", () => ({
   headers: async () => new Headers({ "user-agent": "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/140 Safari/537.36" }),
@@ -73,19 +75,17 @@ describe("un enlace público que no existe es un 404", () => {
     expect(digest).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
   }, 120_000);
 
-  test("ningún loading.tsx en (public): el 200 saldría antes que el notFound()", () => {
-    // La baja (VEN-15) es la excepción: su página nunca llama a notFound()
-    // —un enlace que no es de un correo enviado se explica con un 200, no
-    // con la página de «no existe»—, así que su esqueleto no adelanta
-    // ningún estado equivocado. Si algún día llamara a notFound(), esta
-    // prueba la vuelve a atrapar.
-    const baja = join(SEGMENTO, "baja");
-    const cargando = archivos(SEGMENTO).filter((f) => /[\\/]loading\.(t|j)sx?$/.test(f) && !f.startsWith(baja));
+  test("la baja con un token que no es de ningún correo enviado llama a notFound() (VEN-15)", async () => {
+    const digest = await digestDe(() => BajaPage({ params: Promise.resolve({ token: SLUG_INEXISTENTE }) }));
+    expect(digest).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
+  }, 120_000);
+
+  test("ningún loading.tsx en (public), tampoco en la baja: el 200 saldría antes que el notFound()", () => {
+    const cargando = archivos(SEGMENTO).filter((f) => /[\\/]loading\.(t|j)sx?$/.test(f));
     expect(cargando).toEqual([]);
-    const paginasDeBaja = archivos(baja).filter((f) => /[\\/](page|layout)\.(t|j)sx?$/.test(f));
-    expect(paginasDeBaja.length).toBeGreaterThan(0);
-    for (const f of paginasDeBaja) expect(readFileSync(f, "utf8")).not.toMatch(/\bnotFound\b/);
-    // La página de «no existe» sí está, y es la que pinta el 404.
+    // Las páginas de «no existe» sí están, y son las que pintan el 404: la
+    // de (public) y la de la baja, que habla de dejar de recibir correos.
     expect(existsSync(join(SEGMENTO, "not-found.tsx"))).toBe(true);
+    expect(existsSync(join(SEGMENTO, "baja", "[token]", "not-found.tsx"))).toBe(true);
   });
 });

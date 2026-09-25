@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import { notFound } from "next/navigation";
 import { Marca } from "@/components/marca";
 import { Button } from "@/components/ui/button";
 import { estadoDelEnlaceDeBaja, type EstadoEnlace } from "@/lib/db/baja";
@@ -40,10 +41,19 @@ export async function generateMetadata({ params }: { params: Promise<{ token: st
  * quien lo abre es del workspace que lo envió, porque ese enlace también
  * está en su carpeta de enviados. La misma respuesta trae el idioma del
  * espacio que escribe, y la página habla ese idioma (también en `lang`).
+ *
+ * Un token que no es de ningún correo enviado responde 404 de verdad
+ * (notFound() y ./not-found.tsx, con los mismos textos por idioma): un
+ * monitor, o el proveedor que prueba el enlace, distingue uno roto de uno
+ * bueno. Para que el estado llegue como 404 el segmento no tiene
+ * loading.tsx: su límite de Suspense mandaba el esqueleto con un 200 antes
+ * de saber que el enlace no existe (el mismo motivo que en el resto de
+ * (public); lo comprueba no-existe.test.tsx).
  */
 export default async function BajaPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   const estado = await estadoDelEnlaceDeBaja(token);
+  if (estado.status === "not_found") notFound();
   const idioma = await idiomaDe(estado);
   const t = bajaTexts(idioma);
 
@@ -62,7 +72,6 @@ export default async function BajaPage({ params }: { params: Promise<{ token: st
             soporte={correoDeSoporte()}
           />
         ))}
-      {estado.status === "not_found" && <Aviso title={t.noExiste.title} body={t.noExiste.body} />}
       {estado.status === "sender" && (
         <Aviso
           title={t.remitente.title}

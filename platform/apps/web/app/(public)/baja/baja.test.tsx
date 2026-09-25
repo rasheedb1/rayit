@@ -23,6 +23,7 @@ vi.mock("next/headers", () => ({
 }));
 
 import BajaError from "./[token]/error";
+import BajaNoExiste from "./[token]/not-found";
 import BajaPage from "./[token]/page";
 import { POST } from "./[token]/un-clic/route";
 import { dejarDeRecibir } from "./actions";
@@ -54,8 +55,10 @@ describe("/baja/<token>", () => {
     estadoDelEnlaceDeBaja.mockResolvedValue(VALIDO);
     await pagina();
     expect(screen.getByRole("heading", { name: t.pregunta.title })).toBeInTheDocument();
-    expect(screen.getByText(t.pregunta.destino("v•••@marca.com"))).toBeInTheDocument();
-    expect(screen.getByText(t.pregunta.alcance("Laura · Cocina fácil"))).toBeInTheDocument();
+    // Una sola frase: quién primero (lo que limita la promesa) y la dirección.
+    expect(
+      screen.getByText("Laura · Cocina fácil no volverá a escribirte: ni a v•••@marca.com ni por ningún otro canal."),
+    ).toBeInTheDocument();
     expect(screen.getByText("On Cue")).toBeInTheDocument();
     expect(screen.getAllByRole("button")).toHaveLength(1);
     expect(darDeBajaDesdeEnlace).not.toHaveBeenCalled();
@@ -64,7 +67,8 @@ describe("/baja/<token>", () => {
   it("sin nombre de quien escribe (el espacio ya no existe), la frase no inventa uno", async () => {
     estadoDelEnlaceDeBaja.mockResolvedValue({ ...VALIDO, senderName: null });
     await pagina();
-    expect(screen.getByText(t.pregunta.alcance(null))).toBeInTheDocument();
+    expect(screen.getByText(t.pregunta.frase(null, "v•••@marca.com"))).toBeInTheDocument();
+    expect(t.pregunta.frase(null, "v•••@marca.com")).toMatch(/^Quien te escribió no volverá a escribirte/);
   });
 
   it("quien ya estaba fuera lo sabe sin pulsar nada", async () => {
@@ -114,10 +118,12 @@ describe("/baja/<token>", () => {
     expect(screen.queryByRole("button", { name: t.pregunta.boton })).not.toBeInTheDocument();
   });
 
-  it("un enlace que no es de un correo enviado no ofrece nada", async () => {
+  it("un enlace que no es de un correo enviado es un 404 de verdad (notFound), con su página y sin botón", async () => {
     estadoDelEnlaceDeBaja.mockResolvedValue({ status: "not_found" });
-    await pagina("basura");
+    await expect(pagina("basura")).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+    render(await BajaNoExiste());
     expect(screen.getByRole("heading", { name: t.noExiste.title })).toBeInTheDocument();
+    expect(screen.getByText("On Cue")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 });
@@ -129,19 +135,18 @@ describe("/baja/<token> en el idioma de quien escribe (r5)", () => {
     acceptLanguage = "es-CO,es;q=0.9";
     await pagina();
     expect(screen.getByRole("heading", { name: en.pregunta.title })).toBeInTheDocument();
-    expect(screen.getByText(en.pregunta.destino("v•••@marca.com"))).toBeInTheDocument();
-    expect(screen.getByText(en.pregunta.alcance("Laura's Kitchen"))).toBeInTheDocument();
+    expect(screen.getByText(en.pregunta.frase("Laura's Kitchen", "v•••@marca.com"))).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: en.pregunta.title }).closest("[lang]")).toHaveAttribute("lang", "en");
     fireEvent.click(screen.getByRole("button", { name: en.pregunta.boton }));
     expect(await screen.findByRole("heading", { name: "Done. Laura's Kitchen won't write to you again." })).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/Dejar de recibir|Listo/);
   });
 
-  it("sin espacio que diga el idioma (un enlace que no existe), el del navegador", async () => {
-    estadoDelEnlaceDeBaja.mockResolvedValue({ status: "not_found" });
+  it("sin espacio que diga el idioma (un enlace que no existe), el 404 habla el del navegador", async () => {
     acceptLanguage = "fr-FR,en-GB;q=0.8,es;q=0.5";
-    await pagina();
+    render(await BajaNoExiste());
     expect(screen.getByRole("heading", { name: en.noExiste.title })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: en.noExiste.title }).closest("[lang]")).toHaveAttribute("lang", "en");
   });
 
   it("el título de la pestaña va en el mismo idioma", async () => {
@@ -171,7 +176,12 @@ describe("los textos (r4)", () => {
   });
 
   it("la promesa no se contradice (r5): ni «a este correo» junto a «por ningún canal», ni la plataforma por dentro", () => {
-    expect(t.pregunta.alcance("Laura")).toBe("Un clic y Laura no te vuelve a escribir, ni por correo ni por otro canal.");
+    expect(t.pregunta.frase("Laura", "l•••@granosdelvalle.co")).toBe(
+      "Laura no volverá a escribirte: ni a l•••@granosdelvalle.co ni por ningún otro canal.",
+    );
+    // Quién va primero: la frase no empieza sonando a una baja total, ni repite «un clic» encima del botón.
+    expect(t.pregunta.frase("Laura", "l•••@x.co")).not.toMatch(/^Dejarás|Un clic/);
+    expect(en.pregunta.frase("Laura", "l•••@x.co")).not.toMatch(/^You'll stop|One click/);
     expect(t.listo.body(null)).not.toMatch(/otro creador|On Cue/);
     expect(en.listo.body(null)).not.toMatch(/creator|On Cue/);
   });

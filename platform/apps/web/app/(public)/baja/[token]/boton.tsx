@@ -55,8 +55,7 @@ export function DejarDeRecibir({
   return (
     <div>
       <h1 className="text-2xl font-semibold tracking-tight text-ink">{t.pregunta.title}</h1>
-      <p className="mt-3 text-base leading-relaxed text-ink">{t.pregunta.destino(direccion)}</p>
-      <p className="mt-2 text-base leading-relaxed text-ink-2">{t.pregunta.alcance(quien)}</p>
+      <p className="mt-3 text-base leading-relaxed text-ink">{t.pregunta.frase(quien, direccion)}</p>
       {resultado?.status === "error" && (
         <p role="alert" className="mt-4 rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
           {t.error}

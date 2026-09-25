@@ -18,18 +18,21 @@ export type BajaIdioma = "es" | "en";
 
 export interface BajaTexts {
   metaTitle: string;
-  loading: string;
   pregunta: {
     title: string;
-    /** «Dejarás de recibir mensajes en v•••@marca.com.» La dirección llega enmascarada. */
-    destino: (direccion: string) => string;
     /**
-     * Quién escribe, si se sabe; si el espacio ya no existe, sin nombre.
-     * La promesa es la de quien envió este correo: la baja pasa a toda la
-     * plataforma cuando la pide también a otro creador (0038 §8), y eso
-     * no se promete aquí.
+     * Una sola frase con quién escribe y a qué dirección (enmascarada),
+     * como la baja de Substack: «Laura no volverá a escribirte: ni a
+     * v•••@marca.com ni por ningún otro canal». Quién va PRIMERO, porque es
+     * lo que limita la promesa: la baja es de quien envió este correo, y
+     * pasa a toda la plataforma cuando la pide también a otro creador
+     * (0038 §8), cosa que aquí no se promete. Antes eran dos frases y la
+     * primera («Dejarás de recibir mensajes en v•••@…») sonaba a baja
+     * total. Sin nombre (el espacio ya no existe), «quien te escribió».
+     * No dice «a este correo, ni por correo»: la dirección y los demás
+     * canales van como dos cosas distintas.
      */
-    alcance: (quien: string | null) => string;
+    frase: (quien: string | null, direccion: string) => string;
     boton: string;
     enviando: string;
   };
@@ -46,6 +49,12 @@ export interface BajaTexts {
     body: (soporte: string | null) => string;
   };
   yaEstaba: { title: string; body: string };
+  /**
+   * Un enlace que no es de ningún correo enviado: /baja/<token>/not-found
+   * con un 404 de verdad (los monitores y los proveedores que prueban el
+   * enlace distinguen uno roto de uno bueno), o el botón si el enlace deja
+   * de valer entre abrir la página y pulsar.
+   */
   noExiste: { title: string; body: string };
   remitente: { title: string; body: string; accion: string };
   error: string;
@@ -59,14 +68,10 @@ export interface BajaTexts {
 
 export const MESSAGES_ES: BajaTexts = {
   metaTitle: "Dejar de recibir mensajes",
-  loading: "Comprobando el enlace",
   pregunta: {
     title: "¿Dejar de recibir estos mensajes?",
-    destino: (direccion) => `Dejarás de recibir mensajes en ${direccion}.`,
-    alcance: (quien) =>
-      quien
-        ? `Un clic y ${quien} no te vuelve a escribir, ni por correo ni por otro canal.`
-        : "Un clic y quien te escribió no te vuelve a escribir, ni por correo ni por otro canal.",
+    frase: (quien, direccion) =>
+      `${quien ?? "Quien te escribió"} no volverá a escribirte: ni a ${direccion} ni por ningún otro canal.`,
     boton: "Dejar de recibir mensajes",
     enviando: "Un momento…",
   },
@@ -101,14 +106,10 @@ export const MESSAGES_ES: BajaTexts = {
 
 export const MESSAGES_EN: BajaTexts = {
   metaTitle: "Unsubscribe",
-  loading: "Checking the link",
   pregunta: {
     title: "Stop getting these messages?",
-    destino: (direccion) => `You'll stop getting messages at ${direccion}.`,
-    alcance: (quien) =>
-      quien
-        ? `One click and ${quien} won't write to you again, by email or any other channel.`
-        : "One click and the sender won't write to you again, by email or any other channel.",
+    frase: (quien, direccion) =>
+      `${quien ?? "The sender"} won't write to you again: not at ${direccion}, and not on any other channel.`,
     boton: "Unsubscribe",
     enviando: "One moment…",
   },
