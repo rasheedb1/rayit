@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { angleId, buildMime, encodeHeaderWord, MimeError, toGmailRaw } from '../src/outreach/mime.ts';
 import {
-  channelStateKey, GOOGLE_STATE_TTL_MS, newNonce, pendingAccountId, signChannelState, verifyChannelState, type ChannelState,
+  CHANNEL_STATE_TYPICAL_CHARS, channelStateKey, GOOGLE_STATE_TTL_MS, newNonce, pendingAccountId, signChannelState, verifyChannelState, type ChannelState,
 } from '../src/outreach/state.ts';
 import { openWithAnyKey, sealValue } from '../src/crypto/sealed-cookie.ts';
+import { UNIPILE_NAME_WARN_CHARS } from '../src/unipile.ts';
 
 const boundary = (n: number) => `b${n}`;
 const decodeWord = (w: string) => Buffer.from(/=\?UTF-8\?B\?(.+)\?=/.exec(w)![1]!, 'base64').toString('utf8');
@@ -124,6 +125,29 @@ test('estado firmado: el cuerpo va cifrado (ni el espacio, ni el creador, ni el 
   assert.deepEqual(r.payload, state);
   // Dos estados iguales no dan el mismo texto (IV al azar).
   assert.notEqual(signChannelState(state, vieja, now), token);
+});
+
+test('estado firmado: corto (Unipile lo guarda como `name` de la cuenta) y un estado recortado no abre', () => {
+  const key = channelStateKey(new Uint8Array(32).fill(7));
+  const now = new Date('2026-09-23T12:00:00Z');
+  const state: ChannelState = {
+    workspaceId: '00000002-0000-4000-8000-000000000001', creatorId: '00000002-0000-4000-8000-000000000003', channel: 'instagram_dm', nonce: newNonce(),
+  };
+  const plain = signChannelState(state, key, now);
+  const reconnect = signChannelState({ ...state, reconnectAccountId: 'aB3dE5fG7hI9jK1lM3nO5p' }, key, now);
+  assert.ok(plain.length <= CHANNEL_STATE_TYPICAL_CHARS, `sin reconexión, ${plain.length} caracteres`);
+  assert.ok(reconnect.length < UNIPILE_NAME_WARN_CHARS, `con reconexión, ${reconnect.length} caracteres`);
+  const back = verifyChannelState(reconnect, key, now, GOOGLE_STATE_TTL_MS);
+  assert.ok(back.ok && back.payload.reconnectAccountId === 'aB3dE5fG7hI9jK1lM3nO5p');
+  // Un proveedor que guardara el `name` a medias: ni un carácter menos pasa.
+  for (const cut of [plain.length - 1, plain.indexOf('.') + 1, plain.indexOf('.'), 120]) {
+    assert.equal(verifyChannelState(plain.slice(0, cut), key, now, GOOGLE_STATE_TTL_MS).ok, false, `recortado a ${cut}`);
+  }
+  // Un nonce que no es de newNonce (las pruebas usan 'n'.repeat(43)) también va y vuelve.
+  const libre = verifyChannelState(signChannelState({ ...state, nonce: 'n'.repeat(43) }, key, now), key, now, GOOGLE_STATE_TTL_MS);
+  assert.ok(libre.ok && libre.payload.nonce === 'n'.repeat(43));
+  // Un uuid sin forma se firma, pero no se verifica.
+  assert.deepEqual(verifyChannelState(signChannelState({ ...state, workspaceId: 'no-es-uuid' }, key, now), key, now, GOOGLE_STATE_TTL_MS), { ok: false, reason: 'bad_shape' });
 });
 
 test('openWithAnyKey dice qué llave casó (verifyChannelState descifra con ella, sin repetir el bucle)', () => {

@@ -83,7 +83,7 @@ function parseJson(text: string): unknown {
   }
 }
 
-/** La marca que reemplaza al estado firmado: solo su largo (el estado de On Cue ronda los 500 caracteres). */
+/** La marca que reemplaza al estado firmado: solo su largo (el estado de On Cue ronda los 180 caracteres). */
 export const stateMark = (len: number): string => `[estado firmado de ${len} caracteres]`;
 export const STATE_MARK_RE = /^\[estado firmado de (\d+) caracteres\]$/;
 /** Un `name` que es nuestro estado: base64url con puntos, largo. Un nombre de persona no tiene esa forma. */

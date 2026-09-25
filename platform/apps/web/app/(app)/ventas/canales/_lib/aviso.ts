@@ -22,8 +22,9 @@
  *     nuestro estado firmado. La cuenta se lee en Unipile con nuestra
  *     llave y, antes de ligarla a nada, tiene que ser la de ESTE intento:
  *     al reconectar, el account_id que se firmó en el estado; al crear,
- *     una cuenta nacida después de firmarlo (una que ya existía en el
- *     tenant no se liga a quien tenga un estado válido propio). Después,
+ *     una cuenta cuyo `name` es un estado nuestro con el MISMO nonce (la
+ *     de otro enlace no se liga, aunque quien avisa tenga un estado válido
+ *     propio y su account_id) y nacida después de firmarlo. Después,
  *     del canal pedido, y se conecta por outreach_channel_connect (0042:
  *     un perfil es una fila). Si no se conecta (canal equivocado, perfil
  *     duplicado u ocupado, fila soltándose, pendiente ya usada), la cuenta
@@ -41,7 +42,7 @@
 import {
   acceptedWebhookSecrets, InMemoryOutreachCallLog, INTERACTIVE_BUDGET, isOutreachApiError, isUnipileDownStatus, isUnipileOkStatus, matchSharedSecret,
   parseUnipileWebhook, PostgresOutreachCallLog, registerAccountWebhooks, UNIPILE_ACCOUNT_WEBHOOK_SOURCES, UNIPILE_PROVIDER_BY_CHANNEL,
-  UNIPILE_ROUTE_HEADER, UNIPILE_SECRET_HEADER, UNIPILE_STATE_TTL_MS, UNIPILE_WEBHOOK_SECRET_ENV,
+  UNIPILE_ROUTE_HEADER, UNIPILE_SECRET_HEADER, UNIPILE_STATE_TTL_MS, UNIPILE_WEBHOOK_SECRET_ENV, verifyChannelState,
   type ChannelState, type UnipileAccount, type UnipileApi, type UnipileWebhookEvent,
 } from "@mc/connectors";
 import { channelHealthName } from "@mc/core";
@@ -175,19 +176,40 @@ async function accountNotify(req: Request, deps: ChannelDeps, now: Date): Promis
   const event = parseUnipileWebhook(body.value);
   if (event.kind !== "account_connected") return plain(401, MESSAGES.routes.unauthorized);
   const verified = verifyChannelStateProof(event.state, now, UNIPILE_STATE_TTL_MS, deps.env);
-  if (!verified || verified.state.channel === "email") return plain(401, MESSAGES.routes.unauthorized);
+  if (!verified || verified.state.channel === "email") {
+    // Solo el largo: si Unipile recortara el `name`, aquí se vería (un estado entero ronda los 180 caracteres).
+    console.warn("[canales] aviso de cuenta creada con un estado que no abre", { length: event.state.length });
+    return plain(401, MESSAGES.routes.unauthorized);
+  }
   if (!deps.unipile) return plain(503, MESSAGES.routes.notConfigured);
   return accountConnected(req, event, verified, deps, now);
 }
 
 /**
  * ¿Es la cuenta de ESTE intento? Al reconectar, la que se firmó en el
- * estado; al crear, una nacida después de firmarlo (con un margen por la
- * diferencia de relojes). Sin fecha de alta no se liga: la documentación
- * de Account la trae siempre, y sin ella no se puede saber.
+ * estado. Al crear, dos pruebas, y las dos hacen falta:
+ *
+ *   · la criptográfica: el `name` de la cuenta es el que mandamos al
+ *     pedir el enlace (Unipile lo guarda tal cual), es decir, un estado
+ *     firmado por nosotros con el MISMO nonce y el mismo espacio que el
+ *     del aviso. Una cuenta nacida de otro enlace (de otro cliente del
+ *     tenant, o de otro intento de la misma persona) no la trae, aunque
+ *     quien avisa tenga un estado válido propio y su account_id. Sin
+ *     caducidad: el estado del aviso ya la pasó y el `name` es su gemelo;
+ *   · la de fecha: una nacida después de firmar el estado (con un margen
+ *     por la diferencia de relojes). Sin fecha de alta no se liga: la
+ *     documentación de Account la trae siempre.
  */
-export function isAccountOfThisAttempt(account: Pick<UnipileAccount, "id" | "createdAt">, state: ChannelState, issuedAt: Date): boolean {
+export function isAccountOfThisAttempt(
+  account: Pick<UnipileAccount, "id" | "createdAt" | "hostedAuthName">,
+  state: ChannelState,
+  issuedAt: Date,
+  stateKeys: Uint8Array | readonly Uint8Array[],
+  now: Date,
+): boolean {
   if (state.reconnectAccountId !== undefined) return account.id === state.reconnectAccountId;
+  const named = verifyChannelState(account.hostedAuthName, stateKeys, now, Number.MAX_SAFE_INTEGER);
+  if (!named.ok || named.payload.nonce !== state.nonce || named.payload.workspaceId !== state.workspaceId) return false;
   if (!account.createdAt) return false;
   return account.createdAt.getTime() >= issuedAt.getTime() - CREATED_CLOCK_SKEW_MS;
 }
@@ -215,7 +237,7 @@ async function accountConnected(
     return json(200, { ok: true, ignored: MESSAGES.routes.ignored.unknownInUnipile });
   }
   // Un estado válido no sirve para ligar OTRA cuenta del tenant: ni una que ya existía ni otra que la reconectada.
-  if (!isAccountOfThisAttempt(account, state, issuedAt)) {
+  if (!isAccountOfThisAttempt(account, state, issuedAt, channelKeys(deps.env)!.verify.state, now)) {
     await flush();
     console.warn("[canales] aviso de cuenta creada con una cuenta que no es de ese intento", { channel, reconnect: state.reconnectAccountId !== undefined });
     return json(200, { ok: true, ignored: MESSAGES.routes.ignored.notThisAttempt });

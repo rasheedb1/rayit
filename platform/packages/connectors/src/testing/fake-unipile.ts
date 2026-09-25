@@ -56,6 +56,18 @@ export class FakeUnipile implements UnipileApi {
     return full;
   }
 
+  /**
+   * La persona completa la página de un enlace de hosted auth: nace la
+   * cuenta y, como en Unipile, su `name` es el que mandamos al pedir el
+   * enlace (nuestro estado firmado). Por omisión, el último enlace pedido.
+   * El aviso de cuenta creada comprueba que ese `name` sea el de su
+   * intento: una cuenta de otro enlace no se liga.
+   */
+  completeHostedAuth(account: Partial<UnipileAccount> & { id: string }, link: HostedAuthRequest | undefined = this.hostedLinks.at(-1)): UnipileAccount {
+    if (!link) throw new Error('FakeUnipile.completeHostedAuth: no se pidió ningún enlace.');
+    return this.addAccount({ ...account, hostedAuthName: link.state });
+  }
+
   /** El siguiente llamado a `method` lanza este error. */
   failNext(method: keyof UnipileApi, kind: OutreachErrorKind, code = `errors/${kind}`, httpStatus: number | null = null): void {
     const list = this.#failures.get(method) ?? [];

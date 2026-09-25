@@ -399,7 +399,7 @@ describe("el webhook de Unipile", () => {
   it("si el alta de los avisos falla, la cuenta queda conectada con webhooks_missing y «Volver a intentar» los da de alta", async () => {
     await unipileStart(post("/ventas/canales/conectar", { canal: "instagram_dm" }), deps());
     const link = unipile.hostedLinks.at(-1)!;
-    unipile.addAccount({ id: "acc_ig_sorda", provider: "INSTAGRAM", displayName: "laura.sorda" });
+    unipile.completeHostedAuth({ id: "acc_ig_sorda", provider: "INSTAGRAM", displayName: "laura.sorda" });
     unipile.failNext("createWebhook", "transient", "errors/service_unavailable", 503);
     const res = await unipileWebhook(webhook({ status: "CREATION_SUCCESS", account_id: "acc_ig_sorda", name: link.state }), deps());
     expect(res.status).toBe(200);
@@ -423,7 +423,7 @@ describe("el webhook de Unipile", () => {
   it("una cuenta de Instagram donde se pidió LinkedIn no se conecta, y se borra en Unipile (no se queda cobrando)", async () => {
     await unipileStart(post("/ventas/canales/conectar", { canal: "linkedin" }), deps());
     const link = unipile.hostedLinks.at(-1)!;
-    unipile.addAccount({ id: "acc_ig_web", provider: "INSTAGRAM" });
+    unipile.completeHostedAuth({ id: "acc_ig_web", provider: "INSTAGRAM" });
     const res = await unipileWebhook(webhook({ status: "CREATION_SUCCESS", account_id: "acc_ig_web", name: link.state }), deps());
     expect(await res.json()).toEqual({ ok: true, ignored: "wrong_provider" });
     expect((await accounts()).some((a) => a.lastError === "wrong_provider")).toBe(true);
@@ -533,10 +533,10 @@ const notify = (accountId: string, state: string, d = deps()) =>
 describe("un perfil es una cuenta (0042)", () => {
   it("el mismo perfil conectado otra vez en el espacio: la cuenta nueva se borra en Unipile y la fila dice por qué", async () => {
     const primero = await hostedAuth("instagram_dm");
-    unipile.addAccount({ id: "acc_ig_perfil_1", provider: "INSTAGRAM", displayName: "laura.perfil", providerIdentity: "ig_perfil_laura" });
+    unipile.completeHostedAuth({ id: "acc_ig_perfil_1", provider: "INSTAGRAM", displayName: "laura.perfil", providerIdentity: "ig_perfil_laura" });
     expect(await (await notify("acc_ig_perfil_1", primero.state)).json()).toEqual({ ok: true });
     const segundo = await hostedAuth("instagram_dm");
-    unipile.addAccount({ id: "acc_ig_perfil_2", provider: "INSTAGRAM", displayName: "laura.perfil", providerIdentity: "ig_perfil_laura" });
+    unipile.completeHostedAuth({ id: "acc_ig_perfil_2", provider: "INSTAGRAM", displayName: "laura.perfil", providerIdentity: "ig_perfil_laura" });
     expect(await (await notify("acc_ig_perfil_2", segundo.state)).json()).toEqual({ ok: true, ignored: "duplicate" });
     expect(unipile.deletedAccounts).toContain("acc_ig_perfil_2");
     expect(unipile.deletedAccounts).not.toContain("acc_ig_perfil_1");
@@ -551,7 +551,7 @@ describe("un perfil es una cuenta (0042)", () => {
     await db.queryAsSuperuser(`INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, provider_identity, status)
       VALUES ('${OTRO}', 'linkedin', 'unipile', 'acc_li_de_otro_espacio', 'ACoAAB_perfil_compartido', 'connected')`);
     const link = await hostedAuth("linkedin");
-    unipile.addAccount({ id: "acc_li_perfil_nuevo", provider: "LINKEDIN", providerIdentity: "ACoAAB_perfil_compartido" });
+    unipile.completeHostedAuth({ id: "acc_li_perfil_nuevo", provider: "LINKEDIN", providerIdentity: "ACoAAB_perfil_compartido" });
     expect(await (await notify("acc_li_perfil_nuevo", link.state)).json()).toEqual({ ok: true, ignored: "taken" });
     expect(unipile.deletedAccounts).toContain("acc_li_perfil_nuevo");
     const intento = (await accounts()).find((a) => a.channel === "linkedin" && a.lastError === "taken")!;
@@ -566,10 +566,30 @@ describe("un perfil es una cuenta (0042)", () => {
     expect(unipile.deletedAccounts, "no es nuestra: ni se liga ni se borra").not.toContain("acc_li_vieja_del_tenant");
   }, HEAVY_MS);
 
+  it("una cuenta nacida después del estado pero de OTRO intento (name de otro nonce) no se liga", async () => {
+    const link = await hostedAuth("linkedin");
+    // Otro enlace del mismo tenant (otro cliente, u otro intento): su `name` es un estado nuestro, válido, con OTRO nonce.
+    const otroIntento = signChannelState(
+      { workspaceId: SEED_WORKSPACE_ID, creatorId: SEED_WORKSPACE_ID, channel: "linkedin", nonce: randomBytes(32).toString("hex") }, channelKeys(ENV)!.sign.state, NOW,
+    );
+    unipile.addAccount({ id: "acc_li_de_otro_intento", provider: "LINKEDIN", providerIdentity: "ACoAAB_otro_intento", hostedAuthName: otroIntento });
+    // Y una sin `name` (creada fuera de la hosted auth, por ejemplo con credenciales).
+    unipile.addAccount({ id: "acc_li_sin_name", provider: "LINKEDIN", providerIdentity: "ACoAAB_sin_name" });
+    for (const id of ["acc_li_de_otro_intento", "acc_li_sin_name"]) {
+      expect(await (await notify(id, link.state)).json(), id).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.notThisAttempt });
+      expect((await accounts()).some((a) => a.providerAccountId === id)).toBe(false);
+      expect(unipile.deletedAccounts, "no es de este intento: ni se liga ni se borra").not.toContain(id);
+    }
+    // La pendiente sigue esperando a la suya: la de ESTE enlace sí se liga.
+    unipile.completeHostedAuth({ id: "acc_li_de_este_intento", provider: "LINKEDIN", providerIdentity: "ACoAAB_este_intento" }, link);
+    expect(await (await notify("acc_li_de_este_intento", link.state)).json()).toEqual({ ok: true });
+    expect((await accounts()).find((a) => a.providerAccountId === "acc_li_de_este_intento")?.status).toBe("connected");
+  }, HEAVY_MS);
+
   it("un doble «Conectar»: la cuenta del primer enlace llega con el nonce ya reemplazado, nadie la usa y se borra", async () => {
     const primero = await hostedAuth("instagram_dm");
     await hostedAuth("instagram_dm");
-    unipile.addAccount({ id: "acc_ig_doble_clic", provider: "INSTAGRAM", providerIdentity: "ig_doble" });
+    unipile.completeHostedAuth({ id: "acc_ig_doble_clic", provider: "INSTAGRAM", providerIdentity: "ig_doble" }, primero);
     expect(await (await notify("acc_ig_doble_clic", primero.state)).json()).toEqual({ ok: true, ignored: "unknown_state" });
     expect(unipile.deletedAccounts).toContain("acc_ig_doble_clic");
   }, HEAVY_MS);
@@ -585,7 +605,7 @@ describe("un perfil es una cuenta (0042)", () => {
 describe("la sesión vuelve sola y el secreto se rota", () => {
   it("un aviso OK de una cuenta caída la devuelve a connected, con su aviso de éxito en la campana", async () => {
     const link = await hostedAuth("linkedin");
-    unipile.addAccount({ id: "acc_li_vuelve", provider: "LINKEDIN", displayName: "Laura Vuelve", providerIdentity: "ACoAAB_vuelve" });
+    unipile.completeHostedAuth({ id: "acc_li_vuelve", provider: "LINKEDIN", displayName: "Laura Vuelve", providerIdentity: "ACoAAB_vuelve" });
     await notify("acc_li_vuelve", link.state);
     const li = (await accounts()).find((a) => a.providerAccountId === "acc_li_vuelve")!;
     const headers = unipile.webhooks.find((w) => w.accountId === "acc_li_vuelve")!.headers;
@@ -604,7 +624,7 @@ describe("la sesión vuelve sola y el secreto se rota", () => {
 
   it("durante una rotación se aceptan el secreto actual y el anterior; sin la rotación, el viejo es 401", async () => {
     const link = await hostedAuth("linkedin");
-    unipile.addAccount({ id: "acc_li_rotacion", provider: "LINKEDIN", providerIdentity: "ACoAAB_rotacion" });
+    unipile.completeHostedAuth({ id: "acc_li_rotacion", provider: "LINKEDIN", providerIdentity: "ACoAAB_rotacion" });
     await notify("acc_li_rotacion", link.state);
     const route = unipile.webhooks.find((w) => w.accountId === "acc_li_rotacion")!.headers[UNIPILE_ROUTE_HEADER]!;
     const body = { AccountStatus: { account_id: "acc_li_rotacion", account_type: "LINKEDIN", message: "OK" } };

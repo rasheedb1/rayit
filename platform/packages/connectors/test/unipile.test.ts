@@ -80,9 +80,9 @@ test('listAccounts recorre las páginas con el cursor (el keepalive concilia con
 test('una cuenta de NUESTRA hosted auth: el nombre visible nunca es el `name` (el estado firmado), y sale su identidad', async () => {
   const { api } = await client([['accounts.get', 'hosted_auth']]);
   const a = await api.getAccount('acc_li_hosted');
-  assert.match(a.hostedAuthName ?? '', /^eyJ.+\..+$/, 'el fixture trae el estado como name, como lo guarda Unipile');
+  assert.match(a.hostedAuthName ?? '', /^[A-Za-z0-9_-]{100,}\.[A-Za-z0-9_-]{43}$/, 'el fixture trae el estado como name, como lo guarda Unipile');
   assert.equal(a.displayName, 'Laura Gómez');
-  assert.ok(!(a.displayName ?? '').startsWith('eyJ') && !(a.username ?? '').startsWith('eyJ'));
+  assert.ok(a.displayName !== a.hostedAuthName && a.username !== a.hostedAuthName);
   assert.equal(a.providerIdentity, 'ACoAAB_laura_demo', 'el member id: el mismo perfil aunque cambie el account_id');
   assert.equal(a.createdAt?.toISOString(), '2026-09-24T09:58:40.000Z');
 });

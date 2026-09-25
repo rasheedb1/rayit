@@ -18,13 +18,17 @@
  * el estado no lleva secretos, pero sí los ids internos del espacio y del
  * creador, y viaja en la URL de Google (historial del navegador,
  * registros del proveedor) y en el `name` de la cuenta de Unipile. Lo que
- * se ve desde fuera es `<base64url({p:{c}, at})>.<hmac>`: la hora de
- * emisión y un bloque opaco.
+ * se ve desde fuera es `<base64url(versión · hora · bloque cifrado)>.<hmac>`:
+ * la hora de emisión y un bloque opaco.
+ *
+ * Y es CORTO (binario, no JSON: unos 180 caracteres, frente a los ~500 de
+ * la versión 1): Unipile lo guarda como `name` de la cuenta y no documenta
+ * un largo máximo. Si lo recortara, ninguna cuenta de LinkedIn o Instagram
+ * se ligaría; cuanto más corto, menos margen para ese fallo, y la
+ * grabación de §9.3 mide el largo que vuelve (record-outreach.ts).
  */
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { deriveKey } from '../crypto/token-cipher.ts';
-import { openWithAnyKey, sealValue } from '../crypto/sealed-cookie.ts';
-import type { OpenSealedResult } from '../crypto/sealed-cookie.ts';
 
 export const CHANNEL_STATE_INFO = 'on-cue/channel-state/v1';
 /** La llave de cifrado del cuerpo, derivada de la de firma: rotar TOKEN_ENCRYPTION_KEY rota las dos. */
@@ -75,65 +79,163 @@ export function newNonce(random: (bytes: number) => Uint8Array = (n) => new Uint
   return Buffer.from(random(32)).toString('hex');
 }
 
+const VERSION = 2;
+const HEADER_BYTES = 7; // versión (1) + instante de emisión en ms (6, big-endian)
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HEX_NONCE_RE = /^[0-9a-f]{64}$/;
+const ZERO_UUID = '00000000-0000-0000-0000-000000000000';
+/** El byte del nonce que dice «32 bytes de hexadecimal en minúsculas» (newNonce). Cualquier otro valor es el largo en ASCII. */
+const HEX_NONCE_TAG = 0xff;
+/** Un canal fuera de la lista: se firma igual y la verificación lo rechaza (bad_shape). */
+const UNKNOWN_CHANNEL = 0xff;
+/** El account_id de una reconexión, en bytes de UTF-8 (va con un byte de largo). */
+export const RECONNECT_ID_MAX_BYTES = 255;
 
-function encrypt(state: ChannelState, key: Uint8Array, random: (bytes: number) => Uint8Array): string {
-  const iv = random(IV_BYTES);
-  const cipher = createCipheriv('aes-256-gcm', deriveKey(key, CHANNEL_STATE_ENC_INFO), iv);
-  const body = Buffer.concat([cipher.update(JSON.stringify(state), 'utf8'), cipher.final()]);
-  return Buffer.concat([iv, body, cipher.getAuthTag()]).toString('base64url');
+/**
+ * Lo que mide un estado firmado, sin reconexión: unos 180 caracteres
+ * (con un account_id de Unipile de 22, unos 210). Unipile guarda el
+ * estado como `name` de la cuenta y lo devuelve en el aviso; su
+ * documentación no dice un largo máximo, así que el estado se hace lo más
+ * corto que se puede (binario, no JSON) y createHostedAuthLink avisa si
+ * alguna vez pasa de UNIPILE_NAME_WARN_CHARS.
+ */
+export const CHANNEL_STATE_TYPICAL_CHARS = 180;
+
+function uuidBytes(id: string): Buffer {
+  return Buffer.from(id.replace(/-/g, ''), 'hex');
 }
 
-function decrypt(blob: unknown, key: Uint8Array): unknown {
-  if (typeof blob !== 'string') return null;
-  const raw = Buffer.from(blob, 'base64url');
-  if (raw.length <= IV_BYTES + TAG_BYTES) return null;
-  try {
-    const decipher = createDecipheriv('aes-256-gcm', deriveKey(key, CHANNEL_STATE_ENC_INFO), raw.subarray(0, IV_BYTES));
-    decipher.setAuthTag(raw.subarray(raw.length - TAG_BYTES));
-    const plain = Buffer.concat([decipher.update(raw.subarray(IV_BYTES, raw.length - TAG_BYTES)), decipher.final()]);
-    return JSON.parse(plain.toString('utf8')) as unknown;
-  } catch {
-    return null;
+function uuidString(b: Buffer): string {
+  const h = b.toString('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/**
+ * El estado en binario: espacio (16), creador (16), canal (1), nonce
+ * (32 si es de newNonce; si no, largo y ASCII) y el account_id de la
+ * reconexión (largo y UTF-8; 0 si no hay). Un campo sin la forma
+ * esperada se escribe tal cual y lo rechaza la verificación (bad_shape):
+ * firmar no valida, verificar sí.
+ */
+function encodeState(state: ChannelState): Buffer {
+  const parts: Buffer[] = [];
+  // Un uuid sin forma va en ceros, y la verificación rechaza el uuid en ceros.
+  const uuid = (id: string) => (UUID_RE.test(id) ? uuidBytes(id) : Buffer.alloc(16));
+  parts.push(uuid(state.workspaceId), uuid(state.creatorId));
+  const ch = (CONNECTABLE_CHANNELS as readonly string[]).indexOf(state.channel);
+  parts.push(Buffer.from([ch < 0 ? UNKNOWN_CHANNEL : ch]));
+  if (HEX_NONCE_RE.test(state.nonce)) parts.push(Buffer.from([HEX_NONCE_TAG]), Buffer.from(state.nonce, 'hex'));
+  else {
+    const n = Buffer.from(state.nonce, 'utf8').subarray(0, 254);
+    parts.push(Buffer.from([n.length]), n);
   }
+  const r = Buffer.from(state.reconnectAccountId ?? '', 'utf8');
+  if (r.length > RECONNECT_ID_MAX_BYTES) throw new RangeError(`El account_id de la reconexión pasa de ${RECONNECT_ID_MAX_BYTES} bytes.`);
+  parts.push(Buffer.from([r.length]), r);
+  return Buffer.concat(parts);
 }
 
-/** Cifra el estado y firma el resultado. `random`, para fijar el IV en pruebas. */
+function decodeState(b: Buffer): ChannelState | null {
+  let i = 0;
+  const take = (n: number): Buffer | null => {
+    if (i + n > b.length) return null;
+    const out = b.subarray(i, i + n);
+    i += n;
+    return out;
+  };
+  const ws = take(16);
+  const creator = take(16);
+  const ch = take(1);
+  const tag = take(1);
+  if (!ws || !creator || !ch || !tag) return null;
+  const channel = CONNECTABLE_CHANNELS[ch[0]!];
+  if (!channel) return null;
+  const nonceBytes = tag[0] === HEX_NONCE_TAG ? take(32) : take(tag[0]!);
+  if (!nonceBytes) return null;
+  const nonce = tag[0] === HEX_NONCE_TAG ? nonceBytes.toString('hex') : nonceBytes.toString('utf8');
+  const rLen = take(1);
+  if (!rLen) return null;
+  const r = take(rLen[0]!);
+  if (!r || i !== b.length) return null;
+  const state: ChannelState = { workspaceId: uuidString(ws), creatorId: uuidString(creator), channel, nonce };
+  if (r.length > 0) state.reconnectAccountId = r.toString('utf8');
+  return state;
+}
+
+function hmac(key: Uint8Array, body: string): Buffer {
+  return createHmac('sha256', key).update(body).digest();
+}
+
+/**
+ * `<base64url(versión · instante · iv · cifrado · etiqueta)>.<base64url(hmac)>`.
+ * El cuerpo va cifrado con AES-256-GCM (la cabecera de versión e instante
+ * como datos asociados) y el conjunto firmado con HMAC-SHA256. `random`,
+ * para fijar el IV en pruebas.
+ */
 export function signChannelState(
   state: ChannelState,
   key: Uint8Array,
   issuedAt: Date,
   random: (bytes: number) => Uint8Array = (n) => new Uint8Array(randomBytes(n)),
 ): string {
-  return sealValue({ c: encrypt(state, key, random) }, key, issuedAt);
+  const header = Buffer.alloc(HEADER_BYTES);
+  header[0] = VERSION;
+  header.writeUIntBE(issuedAt.getTime(), 1, 6);
+  const iv = Buffer.from(random(IV_BYTES));
+  const cipher = createCipheriv('aes-256-gcm', deriveKey(key, CHANNEL_STATE_ENC_INFO), iv);
+  cipher.setAAD(header);
+  const body = Buffer.concat([cipher.update(encodeState(state)), cipher.final()]);
+  const token = Buffer.concat([header, iv, body, cipher.getAuthTag()]).toString('base64url');
+  return `${token}.${hmac(key, token).toString('base64url')}`;
 }
 
-export type VerifiedChannelState = OpenSealedResult<ChannelState> | { ok: false; reason: 'bad_shape' };
+export type VerifiedChannelState =
+  | { ok: true; payload: ChannelState; issuedAt: Date }
+  | { ok: false; reason: 'malformed' | 'bad_signature' | 'expired' | 'bad_shape' };
 
 /**
  * Firma, caducidad, descifrado y forma. Un estado con la firma buena pero
  * sin los cuatro campos no pasa. `keys`: la actual primero; el cuerpo se
  * descifra con la llave que verificó la firma (rotar no invalida lo que
- * está en vuelo).
+ * está en vuelo). Un estado recortado (el `name` que un proveedor
+ * guardara a medias) no casa con ninguna firma: 'bad_signature'.
  */
 export function verifyChannelState(token: string | null | undefined, keys: Uint8Array | readonly Uint8Array[], now: Date, ttlMs: number): VerifiedChannelState {
-  const opened = openWithAnyKey<{ c?: unknown }>(token, keys, now, ttlMs);
-  if (!opened.ok) return opened;
-  const p = decrypt(opened.payload?.c, opened.key) as Partial<ChannelState> | null;
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!token) return { ok: false, reason: 'malformed' };
+  const dot = token.indexOf('.');
+  if (dot <= 0 || dot === token.length - 1 || token.indexOf('.', dot + 1) !== -1) return { ok: false, reason: 'malformed' };
+  const body = token.slice(0, dot);
+  const given = Buffer.from(token.slice(dot + 1), 'base64url');
+  const key = (keys instanceof Uint8Array ? [keys] : keys).find((k) => {
+    const expected = hmac(k, body);
+    return given.length === expected.length && timingSafeEqual(given, expected);
+  });
+  if (!key) return { ok: false, reason: 'bad_signature' };
+  const raw = Buffer.from(body, 'base64url');
+  if (raw.length <= HEADER_BYTES + IV_BYTES + TAG_BYTES || raw[0] !== VERSION) return { ok: false, reason: 'malformed' };
+  const header = raw.subarray(0, HEADER_BYTES);
+  const at = header.readUIntBE(1, 6);
+  const age = now.getTime() - at;
+  if (age < 0 || age > ttlMs) return { ok: false, reason: 'expired' };
+  let plain: Buffer;
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', deriveKey(key, CHANNEL_STATE_ENC_INFO), raw.subarray(HEADER_BYTES, HEADER_BYTES + IV_BYTES));
+    decipher.setAAD(header);
+    decipher.setAuthTag(raw.subarray(raw.length - TAG_BYTES));
+    plain = Buffer.concat([decipher.update(raw.subarray(HEADER_BYTES + IV_BYTES, raw.length - TAG_BYTES)), decipher.final()]);
+  } catch {
+    return { ok: false, reason: 'bad_shape' };
+  }
+  const p = decodeState(plain);
   if (
-    !p || typeof p.workspaceId !== 'string' || !uuid.test(p.workspaceId)
-    || typeof p.creatorId !== 'string' || !uuid.test(p.creatorId)
-    || !isConnectableChannel(p.channel)
-    || typeof p.nonce !== 'string' || !/^[A-Za-z0-9_-]{32,64}$/.test(p.nonce)
-    || (p.reconnectAccountId !== undefined && (typeof p.reconnectAccountId !== 'string' || p.reconnectAccountId === '' || p.reconnectAccountId.length > 256))
+    !p || p.workspaceId === ZERO_UUID || p.creatorId === ZERO_UUID
+    || !/^[A-Za-z0-9_-]{32,64}$/.test(p.nonce)
   ) {
     return { ok: false, reason: 'bad_shape' };
   }
-  const payload: ChannelState = { workspaceId: p.workspaceId, creatorId: p.creatorId, channel: p.channel, nonce: p.nonce };
-  if (p.reconnectAccountId !== undefined) payload.reconnectAccountId = p.reconnectAccountId;
-  return { ok: true, payload, issuedAt: opened.issuedAt };
+  return { ok: true, payload: p, issuedAt: new Date(at) };
 }
 
 /**

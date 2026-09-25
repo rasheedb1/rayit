@@ -71,8 +71,8 @@ export type OpenedWithAnyKey<T> =
  * rutas de los avisos de Unipile, que se firman una vez al conectar y
  * viven diez años. Una firma mala con todas las llaves es 'bad_signature';
  * si alguna llave casa, manda lo que diga esa (caducado, por ejemplo).
- * Cuando abre, `key` es la llave que casó: el estado de un canal
- * (outreach/state.ts) descifra su cuerpo con ella.
+ * Cuando abre, `key` es la llave que casó, para descifrar con ella lo que
+ * viaje dentro.
  */
 export function openWithAnyKey<T>(token: string | null | undefined, keys: Uint8Array | readonly Uint8Array[], now: Date, ttlMs: number): OpenedWithAnyKey<T> {
   const list = keys instanceof Uint8Array ? [keys] : keys;
