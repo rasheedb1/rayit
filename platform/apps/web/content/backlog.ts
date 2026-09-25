@@ -149,8 +149,8 @@ export const STORIES: readonly Story[] = [
     title: "pnpm verificar determinista",
     desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
     done: "Veinte corridas seguidas de pnpm verificar en una máquina cargada, sin una sola prueba cancelada.",
-    status: "pendiente",
-    note: "Abierta en la ronda 4 de VEN-15 (25-sep). No se reprodujo: cuatro corridas de @mc/db a la vez y dos de pnpm verificar, en verde. Sospechosos: las pruebas que esperan un aviso de dentro de una transacción (cotizar.test.ts y outreach.test.ts: `await acepto` sin carrera con la transacción, que se cuelga si esta falla antes de avisar) y el arranque de openTestDb; empezar por Promise.race([aviso, transacción]) y un registro de tiempos del arranque.",
+    status: "en_curso",
+    note: "Causa (revisión de VEN-15 r4): con --test-isolation=none el before() de nivel superior de cada archivo cuelga de la prueba raíz, y todos corren antes de la primera prueba (listSql), contra SUS 120 s; veinte bases migradas y sembradas pasaban de ese tiempo bajo carga. No era `await acepto`. Arreglo (VEN-15 r5): openTestDb migra y siembra una vez por proceso y abre cada base desde esa foto (PGlite dumpDataDir/loadDataDir, embedded.ts): cada archivo arranca en décimas. Falta la prueba del done: veinte corridas seguidas.",
   },
   {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],
@@ -448,9 +448,9 @@ export const STORIES: readonly Story[] = [
     id: "VEN-15", module: "VEN", owner: "rasheed", size: "M", sprint: 4, deps: ["VEN-10"],
     title: "Entregabilidad y cumplimiento",
     desc: "Pie de baja con página pública, cabecera List-Unsubscribe de un clic, rebotes asíncronos, calentamiento progresivo por cuenta, baja respetada en todos los canales, alertas diarias por correo.",
-    done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud.",
-    status: "bloqueada",
-    note: "Hecho y probado en pglite. Bloqueada por dos cosas que no puede cerrar un agente: el Gmail de VEN-9 en bouncesMailboxFor (sin él no se leen rebotes reales) y la firma de Rasheed a las decisiones 6 y 7 de docs/ventas-outreach.md §8 (la baja vale para quien envió y pasa a toda la plataforma con un segundo creador; token opaco). Hasta firmarlas, el «terminado cuando» no describe lo hecho y no se despliega a un cliente. 0038 sin aplicar.",
+    done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud. Cambio del criterio (supuestos declarados, docs/ventas-outreach.md §8, decisiones 6 y 7; Rasheed puede revertirlos): el clic da de baja con quien envió, en todos sus canales, y nunca en toda la plataforma; el enlace es un token opaco atado al contacto y al workspace en la base.",
+    status: "hecho",
+    note: "Probado en pglite de punta a punta: baja por enlace (ni el remitente sin sesión ni dos registros nuevos suprimen a nadie para los demás), rebote de fixture que marca y cancela, y alertas una vez por tipo y día con resumen en Cco. Al integrar VEN-9, la lectura real de rebotes es una función (GmailSourceFor en gmailMailboxFor) y la prueba centinela lo exige. 0038 sin aplicar.",
   },
   {
     id: "VEN-16", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-10"],

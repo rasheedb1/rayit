@@ -23,6 +23,7 @@ import { dirname } from 'node:path';
 import { applyMigrations, applySeeds, MIGRATIONS_DIR, SEED_DIR, type MigrationExec } from '../../../db/lib/aplicar.mjs';
 import type { DbOptions } from './client.ts';
 import type { PgliteDb } from './pglite.ts';
+import type { PGlite } from '@electric-sql/pglite';
 
 export { MIGRATIONS_DIR, SEED_DIR };
 /** platform/db: migraciones, seeds y certificados. */
@@ -71,7 +72,7 @@ export interface EmbeddedDb extends PgliteDb {
   migrar(hasta?: string): Promise<string[]>;
 }
 
-type Pglite = InstanceType<(typeof import('@electric-sql/pglite'))['PGlite']>;
+type Pglite = PGlite;
 
 async function pgliteModules() {
   const { PGlite } = await import('@electric-sql/pglite');

@@ -303,16 +303,20 @@ Decisiones que las piezas siguientes tienen que conocer:
   de la cola: ni del estado del toque, ni de que el toque, su empresa,
   su ficha o su workspace sigan existiendo (CAN-SPAM pide al menos 30
   días; aquí no caduca). `public_optout` busca ahí y solo ahí.
-- `public_optout` es de `mc_public_share`, como los enlaces de Cotizar,
-  y da de baja a la persona en toda la plataforma: la dirección entra en
-  `contact_suppression` con `unsubscribe_link`, se marcan la ficha que
-  recibió el correo y todas las fichas con esa dirección en cualquier
-  workspace, y se cancela lo pendiente (los enrolamientos, con
+- `public_optout` es de `mc_public_share`, como los enlaces de Cotizar.
+  En 0037 daba de baja a la persona en toda la plataforma
+  (`contact_suppression`, todas las fichas con esa dirección en cualquier
+  workspace). **Desde 0038 §8 (VEN-15) vale para el workspace que envió
+  ese correo, en todos sus canales, y nunca para toda la plataforma** (ver
+  «La baja por enlace vale para quien envió», más abajo): la dirección
+  entra en `outbound_workspace_optout`, se marca la ficha que recibió el
+  correo y las fichas propias de ese workspace con esa dirección, y se
+  cancela lo pendiente de ese workspace (los enrolamientos, con
   `finished_at`). Cancela exactamente `CANCELABLE_TOUCH_STATUSES`
   (`draft`, `scheduled`, `held`): todo lo vivo (`LIVE_TOUCH_STATUSES`)
   menos `processing`. Responde `workspaceId` y `touchId`, que son `null`
   si ya no existen.
-- **Cada baja global es atribuible y reversible.** `public_optout` deja
+- **Cada baja por enlace es atribuible y reversible.** `public_optout` deja
   cada clic en `outbound_optout_event` (token, workspace y toque que lo
   originaron, dirección, `sent_at`, si ya estaba de baja). Un operador
   (worker) puede ver qué workspace provocó cada entrada de
@@ -490,33 +494,35 @@ que el despachador de VEN-10 tiene que usar, todo en
   de Gmail va a `/baja/<token>/un-clic`, que acepta el cuerpo en
   `multipart/form-data` (el SHOULD de la RFC 8058 §3.1) y en
   `application/x-www-form-urlencoded` (lo que manda Gmail).
-- **La baja por enlace va en dos tiempos (ronda 3, 0038 §8).** Sin
-  sesión nadie sabe quién pulsa: el propio creador, en una ventana
-  privada o con un `curl` a `/un-clic`, suprimía a la marca para toda la
-  plataforma. Ahora el clic vale YA para el espacio que envió ese correo
-  (`outbound_workspace_optout`: no le vuelve a escribir por ningún canal,
-  se cancela lo suyo y se marca su ficha si es propia) y pasa a
-  `contact_suppression` (toda la plataforma, como decía 0007) cuando la
-  confirma un SEGUNDO espacio: la misma dirección pulsa el enlace de un
-  correo de otro creador. Eso el remitente no lo puede fabricar sin que
-  otro espacio le haya escrito de verdad. **Desde la ronda 4 ese segundo
-  espacio tiene que ser de OTRAS personas:** uno que comparte algún
-  miembro con el primero no confirma nada (una agencia, o cualquiera que
-  sea miembro de dos espacios que escriben a la misma marca, pulsaba sus
-  dos enlaces y la suprimía para todos). La política
-  `membership_public_optout` abre, solo mientras dura la llamada, las
-  membresías de esos espacios y de ninguno más. Lo que queda abierto es
-  el sabotaje de dos personas distintas en connivencia, y eso ya no es un
-  clic: queda en `outbound_optout_event` para verlo y deshacerlo. La base
-  guarda el motivo como código (`contact.opted_out_reason =
-  'unsubscribe_link'`, `outbound_policy.disabled_reason = 'manual'`) y la
-  pantalla lo traduce. No se usa «una ventana corta
-  sin señal del remitente»: la única señal sería la IP o el navegador de
-  sus sesiones, que la plataforma no guarda, y con una ventana el
-  remitente por VPN volvía a suprimir a la marca, solo que más tarde.
-  **Pendiente de la firma de Rasheed (§8, decisión 6):** una persona que
-  pide la baja a un solo creador deja de recibir mensajes de ese creador,
-  no de todos; la ley (CAN-SPAM, RGPD) pide lo primero.
+- **La baja por enlace vale para quien envió (0038 §8; alcance cerrado
+  el 25 de septiembre).** Sin sesión nadie sabe quién pulsa: el propio
+  creador, en una ventana privada o con un `curl` a `/un-clic`, suprimía
+  a la marca para toda la plataforma. El clic vale para el espacio que
+  envió ese correo, **en todos sus canales**: la dirección entra en
+  `outbound_workspace_optout` (ese espacio no le vuelve a escribir, ni por
+  correo, ni por LinkedIn, ni por Instagram), se cancela lo suyo, se
+  cierran sus enrolamientos y su ficha queda de baja: si es propia, con
+  `contact.opted_out`; si es compartida (contacto global), la ficha que
+  ese espacio ve dice «Dado de baja», porque `listContacts` suma su fila
+  de `outbound_workspace_optout`. Es lo que la ley pide (CAN-SPAM, RGPD,
+  habeas data: cada creador responde de su propio envío). **Un enlace
+  nunca escribe `contact_suppression`.** Las rondas 3 y 4 la pasaban a
+  toda la plataforma cuando la confirmaba un segundo espacio sin miembros
+  en común; la revisión mostró que eso lo fabrica UNA sola persona con dos
+  registros gratis y un correo desde cada uno, y ninguna señal que la
+  plataforma tenga (antigüedad de la cuenta, envío encendido, dominios)
+  distingue dos registros de la misma persona: solo alarga la espera del
+  sabotaje. La lista de toda la plataforma se llena con lo que un clic no
+  fabrica: una respuesta de la persona clasificada como baja (VEN-14,
+  desde el worker) o un administrador. `mc_public_share` ya no tiene
+  `INSERT` sobre `contact_suppression`, y de las fichas por dirección
+  solo lee las propias del espacio que envió (`contact_public_optout_email`
+  rehecha en 0038 §8). Probado en pglite: dos espacios recién creados por
+  dos usuarios nuevos pulsan sus enlaces y el creador de verdad le sigue
+  escribiendo. La base guarda el motivo como código
+  (`contact.opted_out_reason = 'unsubscribe_link'`,
+  `outbound_policy.disabled_reason = 'manual'`) y la pantalla lo traduce.
+  Es la decisión 6 de §8, tomada como supuesto declarado.
 - **Cada correo** lleva `buildEmailFooter` (frase de baja con
   `optoutUrl` y la dirección postal de la política; sin dirección no hay
   pie y el correo no está listo) y `listUnsubscribeHeaders`.
@@ -530,17 +536,37 @@ que el despachador de VEN-10 tiene que usar, todo en
   la interfaz `BounceMailbox`. El adaptador sobre el `GmailApi` de VEN-9
   ya está (`apps/worker/src/jobs/ventas/gmail-rebotes.ts`,
   `gmailBounceMailbox`), probado con un Gmail falso de la forma de su
-  FakeGmail. **Falta al integrar VEN-9:** construir el `GmailApi` de cada
-  cuenta (con su token del vault) en `bouncesMailboxFor`
-  (`outbound.bounces.ts`), que devuelva `gmailBounceMailbox(api)`, y poner
-  `BOUNCE_READING_CONNECTED` (`@mc/core/outreach/deliverability`) en
-  `true`. **Condición de integración, con dueño (r5):** quien integre
-  VEN-9 en `rasheed/integracion` (el integrador de la fase, con Rasheed
-  como responsable de la historia) hace esos dos cambios en el mismo
-  merge y deja en verde la prueba «cuando llegue el conector…» de
-  `outbound-bounces.test.ts`; hasta entonces VEN-15 queda `bloqueada` en
-  el backlog y la mitad de los rebotes no funciona en producción. Hasta
-  entonces cada cuenta sale como «canal no configurado», la alerta
+  FakeGmail. **Lo que cambia al integrar VEN-9, en una función:**
+  `gmailMailboxFor` (`gmail-rebotes.ts`) ya envuelve el `GmailApi` de cada
+  cuenta; la integración solo escribe `GmailSourceFor`, que con el
+  `secretRef` de la cuenta saca el token del vault y arma el cliente de
+  VEN-9, y lo registra:
+
+  ```ts
+  // apps/worker/src/jobs/ventas/outbound.bounces.ts
+  const google = loadGoogleTokenConfig(process.env);          // null sin GOOGLE_CLIENT_ID/SECRET
+  const gmailDeLaCuenta: GmailSourceFor = async (cuenta) => {
+    if (!google || !cuenta.secretRef) return null;             // «canal no configurado»
+    const tokens = await secrets.get(cuenta.secretRef);        // EncryptedSecretStore de VEN-9
+    if (!tokens) return null;
+    return new GmailClient({
+      tokens, oauth: new GoogleOAuth(google), channelAccountId: cuenta.id,
+      onTokens: (t) => secrets.set(cuenta.secretRef!, t),      // el refresco se guarda con la misma ref
+    });
+  };
+  export const bouncesMailboxFor: MailboxFor = gmailMailboxFor(gmailDeLaCuenta);
+  ```
+
+  y `BOUNCE_READING_CONNECTED` (`@mc/core/outreach/bounces`) pasa a
+  `true`. La prueba de `outbound-bounces.test.ts` recorre ese mismo
+  camino con un vault de prueba y el `secret_ref` de la cuenta (y un vault
+  que falla tumba solo esa cuenta). **Condición de integración, con
+  dueño:** quien integre VEN-9 en `rasheed/integracion` (el integrador de
+  la fase, con Rasheed como responsable de la historia) hace ese cambio en
+  el mismo merge; la prueba «cuando llegue el conector…» falla mientras
+  no se haga, así que el merge no pasa la puerta de calidad sin él. Hasta
+  entonces no sale ningún correo de outreach (el despachador de VEN-10
+  tampoco está integrado), cada cuenta sale como «canal no configurado», la alerta
   diaria trae `outreach_bounces_unread`, y `/ventas/politica` dice en
   «Salud de hoy» que la lectura de rebotes no está conectada. Desde r5
   eso lo decide el cursor de cada Gmail (`readSendReadiness.
@@ -602,7 +628,8 @@ que el despachador de VEN-10 tiene que usar, todo en
   8:00 locales) dejan una `notification` por tipo y día, en el idioma del
   espacio, con su propio enlace y sus plurales (`Intl.PluralRules`), y
   mandan UN resumen por correo al día (local) a todos los dueños por
-  `SMTP_URL`: sale en la primera corrida del día que tenga algo que
+  `SMTP_URL`, con los dueños en **Cco** (el «Para:» es el remitente): en
+  una agencia con varios dueños ninguno ve la dirección de los demás. Sale en la primera corrida del día que tenga algo que
   contar. **Desde r5, lo urgente no espera:** si después del resumen cae
   una cuenta o se disparan los rebotes (`URGENT_ALERT_KINDS`, las dos
   'critical'), sale en esa misma corrida un correo corto aparte; lo demás
@@ -623,13 +650,21 @@ que el despachador de VEN-10 tiene que usar, todo en
   nada» solo salta si había toques que tocaba enviar
   (`readAlertSignalCounts`, `@mc/db`). La cuenta caída dice cuál es y
   lleva a la lista de cuentas caídas de `/ventas/politica#cuentas` (qué
-  pasó y el paso para volver a enviar) hasta que exista
-  `/ventas/canales`. **Al integrar VEN-9:** `CANALES_URL`
+  pasó y, si hay cómo darlo, el paso para volver a enviar) hasta que exista
+  `/ventas/canales`. El texto del aviso no dice «en tu política de envío
+  ves qué pasó»: se lee dentro de esa misma página, y el correo ya lleva
+  su enlace. **Al integrar VEN-9:** `CANALES_URL`
   (`apps/worker/src/jobs/ventas/messages.ts`) pasa a `/ventas/canales` y
   `reconectarUrl` en `ventas/politica/page.tsx` también, y cada cuenta
   caída lleva su botón «Reconectar». Mientras, la lista no habla de una
-  función futura: con `SUPPORT_EMAIL`, a quién escribir; sin él, que lo de
-  esa cuenta espera en la cola. `last_error` guarda códigos
+  función futura ni pide una acción imposible: con `SUPPORT_EMAIL`, el
+  paso y a quién escribir; sin él, solo que lo de esa cuenta espera en la
+  cola. Los avisos guardan su frase ya en el idioma del espacio en
+  `notification.title_es` y `body_es` (columnas de 0009, cuando todo era
+  español; 0038 §4 lo dice en su `COMMENT`). Renombrarlas —`title`,
+  `body` y un `locale`, o `kind` y los valores en `jsonb` para traducir al
+  leer— toca a todos los que escriben avisos y queda para una migración
+  propia. `last_error` guarda códigos
   (`CHANNEL_ERROR_CODES` de VEN-9 y `unipile_status:<X>`): la lista los
   traduce (`motivoCaida`, las frases en `ventas/politica/messages.ts`,
   las mismas de `CANALES_TEXTOS`), y uno desconocido —o una frase vieja
@@ -678,6 +713,22 @@ que el despachador de VEN-10 tiene que usar, todo en
   `@mc/core`, la misma regla que la alerta); los enlaces de los avisos
   dicen adónde llevan y son solo el ancla; `last_error` se traduce; y la
   demo guarda `unipile_status:CREDENTIALS` en vez de la frase de Unipile.
+
+- **Ronda 7 (25 de septiembre), en una línea cada cosa:** la baja por
+  enlace vale siempre para quien envió y nunca escribe
+  `contact_suppression` (cierra el sabotaje de una persona con dos
+  registros); `gmailMailboxFor` deja la lectura real de rebotes en una
+  función de la integración; el resumen de alertas va con los dueños en
+  Cco; el aviso de cuenta caída no pide reconectar si no hay cómo, y su
+  texto no manda a la página donde ya se lee; con pocos envíos «Rebotes»
+  dice «1 de 4» en vez de un 25 %; `deliverability.ts` queda como índice
+  de `optout`, `footer`, `messages`, `bounces`, `alerts` y `channels`, y
+  los textos del pie viven en `outreach/messages.ts` con una sola regla
+  de idioma (`outreachLanguage`, por `Intl.Locale`) que usan también la
+  página de baja y las alertas; y `@mc/db` abre cada base de pruebas
+  desde una foto migrada (`dumpDataDir`/`loadDataDir`), así que el
+  arranque de pglite ya no se come el tiempo límite de la primera prueba
+  (CIM-12).
 
 **Probar la baja a mano, en local.** El seed guarda solo hashes de
 tokens al azar, así que ningún enlace suyo se puede pulsar.
@@ -891,39 +942,43 @@ revisores técnico y de producto y el mismo umbral.
    Europa, en CAN-SPAM y GDPR. Propuesta: pie de baja y dirección
    postal del workspace obligatorios desde el primer envío, y la
    `source` del contacto siempre visible en el mensaje retenido.
-6. **Alcance de la baja por enlace (VEN-15, ronda 3).** Hoy va en dos
-   tiempos: el clic vale para el creador que envió ese correo, y pasa a
-   toda la plataforma cuando la persona pide la baja a un segundo
-   creador (0038 §8). Es lo que cierra el sabotaje del remitente que
-   pulsa su propio enlace sin sesión. La alternativa —toda la plataforma
-   al primer clic, descartando los clics que vengan de las IP de las
-   sesiones del remitente— pide guardar la IP de cada sesión de cada
-   miembro, que hoy no se guarda. Propuesta: quedarse con los dos
-   tiempos. **Estado (ronda 4): implementado así y pendiente de su
-   firma.** Un agente no puede cerrarla por él. Si la aprueba, el
-   «terminado cuando» de VEN-15 en `backlog.ts` pasa a «un clic da de
-   baja con quien envió, y en toda la plataforma cuando un segundo
-   creador lo confirma». Si no, se vuelve al alcance global del primer
-   clic, que la ronda 4 ya deja menos expuesto: el segundo espacio no
-   puede compartir miembros con el primero, y el mismo filtro serviría
-   para el primer clic.
-7. **El token de baja: opaco, no firmado (VEN-15, ronda 2).** La pieza
-   pedía un «token de baja firmado por contacto y workspace». Se entrega
-   un token opaco (32 bytes al azar) que la base reconoce por su sha256
-   en `outbound_optout_link`: no lleva ningún id dentro (un enlace
+6. **Alcance de la baja por enlace (VEN-15).** El «terminado cuando»
+   decía «un clic en el enlace de baja marca al contacto y cancela
+   todo». Se entrega: el clic da de baja con **quien envió ese correo, en
+   todos sus canales** (su ficha queda de baja —la propia con
+   `contact.opted_out`, la compartida porque la ficha de ese espacio suma
+   su fila de `outbound_workspace_optout`— y se cancela todo lo suyo), y
+   **nunca en toda la plataforma**. Por qué: sin sesión nadie sabe quién
+   pulsa, y la baja global por enlace era una vía de sabotaje entre
+   inquilinos que ninguna confirmación cierra (rondas 3 y 4: un segundo
+   espacio sin miembros en común; la revisión mostró que una sola persona
+   lo fabrica con dos registros gratis). La ley pide la baja con quien
+   envía, no con todos. La lista de toda la plataforma
+   (`contact_suppression`) se llena con una respuesta de baja verificada
+   (VEN-14) o un administrador. **Estado (25 de septiembre): implementado
+   así como supuesto declarado**, igual que las decisiones 1 a 5 (el
+   workflow avanza con la propuesta y Rasheed puede revertirla). El
+   «terminado cuando» de VEN-15 en `backlog.ts` conserva la frase
+   original y dice el cambio del criterio al lado, como COT-1. **Si
+   Rasheed lo rechaza**, volver a la baja global al primer clic es una
+   línea en `public_optout` (0038 §8.2, el `INSERT` en
+   `contact_suppression` y el alcance de los `UPDATE`) más devolverle a
+   `mc_public_share` ese `INSERT`; las pruebas de sabotaje de
+   `entregabilidad.test.ts` dicen qué se pierde.
+7. **El token de baja: opaco, no firmado (VEN-15).** La pieza pedía un
+   «token de baja firmado por contacto y workspace». Se entrega un token
+   opaco (32 bytes al azar) que la base reconoce por su sha256 en
+   `outbound_optout_link`, donde el despachador guarda el contacto y el
+   workspace al reclamar el envío: el enlace queda atado a los dos igual
+   que con una firma, y además no lleva ningún id dentro (un enlace
    reenviado no enseña a quién ni desde dónde), no depende de un secreto
    (un `OUTREACH_OPTOUT_SECRET` mal configurado o rotado habría apagado
    la baja de toda la plataforma, y la ley pide que el enlace funcione al
    menos 30 días), y es la misma forma que ya genera el despachador de
-   VEN-10. El contacto y el workspace no viajan en el token: los guarda
-   la fila del enlace, que solo escribe el despachador. Propuesta:
-   quedarse con el token opaco. **Estado (ronda 6): implementado así y
-   pendiente de su firma, junto con la 6. Mientras no firme, VEN-15 sigue
-   'bloqueada' y no se despliega a un cliente: el «terminado cuando» de
-   `backlog.ts` promete otra cosa, y ningún agente lo reescribe por él.** Si Rasheed firma las dos, el
-   «terminado cuando» de VEN-15 en `backlog.ts` se reescribe con los dos
-   cambios a la vez (la baja con quien envió y en toda la plataforma al
-   confirmarla un segundo creador; el enlace por token opaco).
+   VEN-10. **Estado: supuesto declarado, como la 6**, con el cambio del
+   criterio escrito junto al «terminado cuando». Si Rasheed prefiere la
+   firma, `createOptoutToken` (`@mc/core/outreach/optout`) es el único
+   sitio que la genera; la base seguiría buscando por el sha256.
 
 ## 9. Los errores de Chief que no vamos a repetir
 
