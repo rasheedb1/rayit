@@ -11,3 +11,5 @@
  */
 export * from './fake-gmail.ts';
 export * from './fake-unipile.ts';
+// Grabar una sesión real (scripts/record-outreach.ts) y lo que VEN-9 necesita grabado para darse por hecha.
+export * from './grabacion.ts';

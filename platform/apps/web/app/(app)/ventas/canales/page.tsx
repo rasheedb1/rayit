@@ -3,13 +3,13 @@ import type { ChannelAccountRow } from "@mc/db/queries/canales";
 import { getChannelPolicyCaps, isLiveChannelStatus, listChannelAccounts } from "@mc/db/queries/canales";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Pill } from "@/components/ui/pill";
-import { getDbMode, withWorkspace } from "@/lib/db";
+import { withWorkspace } from "@/lib/db";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { Aviso } from "../../_lib/aviso";
 import { ModuleTabs } from "../_componentes/pestanas";
 import { channelBanner } from "./_lib/banner";
-import { channelSetup, isChannel, type Channel } from "./_lib/config";
+import { channelSetup, isChannel, showAdminDetails, type Channel } from "./_lib/config";
 import { CANALES } from "./_lib/conexion";
 import { AccionFila, connectTarget } from "./accion-fila";
 import { channelRows, pillFor, type ChannelRowView } from "./_lib/filas";
@@ -232,7 +232,8 @@ export default async function CanalesPage({ searchParams }: { searchParams: Prom
   warnMissingOnce(rows);
   // Ningún canal disponible: un solo aviso arriba, no la misma frase tres veces.
   const quiet = rows.every((r) => r.unavailable);
-  const adminDetails = process.env.NODE_ENV !== "production" || (await getDbMode()) === "embedded";
+  // Los nombres de las variables que faltan: solo en desarrollo y solo a quien gestiona los canales (nunca en una demo pública).
+  const adminDetails = showAdminDetails({ canManage, nodeEnv: process.env.NODE_ENV });
 
   return (
     <>

@@ -3,7 +3,7 @@ import { GOOGLE_STATE_TTL_MS, UNIPILE_STATE_TTL_MS } from "@mc/connectors";
 import { PENDING_STALE_MINUTES, type ChannelAccountRow } from "@mc/db/queries/canales";
 import { MESSAGES } from "../messages";
 import { channelBanner } from "./banner";
-import { channelSetup } from "./config";
+import { channelSetup, showAdminDetails } from "./config";
 import { channelRows, pillFor, reasonText } from "./filas";
 
 const ALL = {
@@ -29,6 +29,14 @@ describe("channelSetup", () => {
     expect(none.linkedin.missing).toEqual(["UNIPILE_DSN", "UNIPILE_ACCESS_TOKEN", "UNIPILE_WEBHOOK_SECRET", "TOKEN_ENCRYPTION_KEY"]);
     const all = channelSetup(ALL);
     expect([all.email.configured, all.linkedin.configured, all.instagram_dm.configured]).toEqual([true, true, true]);
+  });
+});
+
+describe("showAdminDetails", () => {
+  it("los nombres de las variables que faltan: solo en desarrollo y a quien gestiona; nunca en producción, ni en una demo pública", () => {
+    expect(showAdminDetails({ canManage: true, nodeEnv: "development" })).toBe(true);
+    expect(showAdminDetails({ canManage: false, nodeEnv: "development" }), "un miembro sin permiso no los ve").toBe(false);
+    expect(showAdminDetails({ canManage: true, nodeEnv: "production" }), "producción, también con la base embebida").toBe(false);
   });
 });
 

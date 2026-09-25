@@ -51,3 +51,15 @@ export function channelSetup(env: Env): ChannelSetup {
   }
   return out;
 }
+
+/**
+ * ¿Se enseña el bloque plegado «Detalles para quien administra la
+ * plataforma» (los nombres de las variables que faltan)? Solo fuera de
+ * producción y solo a quien gestiona los canales. Una demo pública en
+ * producción (con la base embebida) tampoco lo enseña: un visitante no
+ * tiene por qué leer nombres internos como TOKEN_ENCRYPTION_KEY. En
+ * producción, lo que falta va al registro del servidor.
+ */
+export function showAdminDetails(i: { canManage: boolean; nodeEnv: string | undefined }): boolean {
+  return i.canManage && i.nodeEnv !== "production";
+}
