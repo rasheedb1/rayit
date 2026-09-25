@@ -1,0 +1,82 @@
+/**
+ * La conversión por etapa del pipeline (VEN-8), desde deal_stage_history.
+ * Dueño: Rasheed.
+ *
+ * La pregunta que responde es la de Pipedrive: «de los negocios que
+ * entraron en esta etapa, ¿cuántos llegaron más lejos?». Por etapa
+ * abierta (ni ganada ni perdida):
+ *
+ *   entraron  negocios con al menos una fila de historia que llega a ella
+ *             (to_stage_id). Desde VEN-3 todo negocio nace con su fila
+ *             (from_stage_id NULL), así que «entró» incluye al que se
+ *             creó directamente ahí.
+ *   avanzaron de esos, los que DESPUÉS de entrar por primera vez llegaron
+ *             a una etapa de posición mayor que no es perdida (la
+ *             siguiente, una más adelante saltándose alguna, o
+ *             «Ganado»). Retroceder y volver no cuenta dos veces: se
+ *             cuentan negocios, no movimientos.
+ *   tasa      avanzaron / entraron, en SQL, con cuatro decimales. Null si
+ *             no entró ninguno: 0 % sería una cifra, y no la hay.
+ *
+ * Los que siguen en la etapa cuentan como «no avanzaron todavía»: la
+ * tasa es la de toda la historia del workspace, sin ventana de fechas,
+ * y el número de negocios va al lado para que 100 % sobre 1 no se lea
+ * como 100 % sobre 40.
+ *
+ * Las etapas son las que el workspace ve (las globales y las suyas,
+ * RLS de 0020) y la historia la filtra la política de 0018 (hereda de
+ * deal). Ninguna cifra se calcula en la pantalla.
+ */
+import type { WorkspaceTx } from '../client.ts';
+
+export interface StageConversion {
+  stageId: string;
+  /** Negocios que entraron en la etapa alguna vez. */
+  entered: number;
+  /** De esos, los que llegaron más lejos (sin contar «Perdido»). */
+  advanced: number;
+  /** advanced / entered como decimal de 0 a 1 («0.5833»); null si entered = 0. */
+  rate: string | null;
+}
+
+/** La conversión de cada etapa abierta, en el orden del embudo. */
+export async function getStageConversion(tx: WorkspaceTx): Promise<StageConversion[]> {
+  const { rows } = await tx.query<{ stage_id: string; entered: string; advanced: string; rate: string | null }>(
+    `WITH entradas AS (
+       SELECT h.deal_id, h.to_stage_id AS stage_id, min(h.changed_at) AS entro
+         FROM deal_stage_history h
+        GROUP BY h.deal_id, h.to_stage_id
+     ),
+     resultado AS (
+       SELECT e.stage_id, e.deal_id,
+              EXISTS (
+                SELECT 1
+                  FROM deal_stage_history h2
+                  JOIN pipeline_stage t2 ON t2.id = h2.to_stage_id
+                  JOIN pipeline_stage t1 ON t1.id = e.stage_id
+                 WHERE h2.deal_id = e.deal_id
+                   AND h2.changed_at >= e.entro
+                   AND t2.position > t1.position
+                   AND NOT t2.is_lost
+              ) AS avanzo
+         FROM entradas e
+     )
+     SELECT st.id AS stage_id,
+            count(r.deal_id)::text                          AS entered,
+            count(r.deal_id) FILTER (WHERE r.avanzo)::text  AS advanced,
+            CASE WHEN count(r.deal_id) > 0
+                 THEN round(count(r.deal_id) FILTER (WHERE r.avanzo)::numeric / count(r.deal_id), 4)::text
+            END                                             AS rate
+       FROM pipeline_stage st
+       LEFT JOIN resultado r ON r.stage_id = st.id
+      WHERE NOT st.is_won AND NOT st.is_lost
+      GROUP BY st.id, st.position
+      ORDER BY st.position, st.id`,
+  );
+  return rows.map((r) => ({
+    stageId: r.stage_id,
+    entered: Number(r.entered),
+    advanced: Number(r.advanced),
+    rate: r.rate,
+  }));
+}

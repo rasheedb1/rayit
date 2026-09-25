@@ -40,6 +40,7 @@
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES } from '../schema/ventas.ts';
 import { parseReplyOptOutCode, type ReplyOptOutChannel } from './canales.ts';
+import { briefVerdictSql, type BriefVerdict } from './brief.ts';
 import { WORKSPACE_DEFAULTS } from './cimientos.ts';
 
 export { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES };
@@ -319,6 +320,12 @@ export interface SignalRow {
   reviewedAt: string | null;
   /** 'csv' si entró por una lista importada; 'manual' si la escribió alguien. */
   via: SignalVia;
+  /**
+   * Por qué el brief activo la deja fuera de la bandeja (VEN-7): su
+   * empresa o su categoría están excluidas. Null si se ve. Solo llega
+   * distinto de null en las pendientes pedidas con `brief: 'show_hidden'`.
+   */
+  hiddenBy: BriefVerdict | null;
 }
 
 export type SignalStatus = (typeof SIGNAL_STATUSES)[number];
@@ -1017,15 +1024,25 @@ export interface ListSignalsParams {
   status?: SignalStatus;
   /** 1..200. Por defecto 100. */
   limit?: number;
+  /**
+   * Qué hacer con las pendientes que el brief activo no acepta (VEN-7):
+   * 'apply' (por defecto) las deja fuera; 'show_hidden' las trae todas,
+   * con `hiddenBy` diciendo por qué se ocultarían. En los demás estados
+   * no se filtra nada: lo aceptado y lo descartado ya se decidió.
+   */
+  brief?: 'apply' | 'show_hidden';
 }
 
 /**
  * La bandeja del radar. Por defecto las pendientes, de mayor a menor
- * encaje: es el orden en que se revisan.
+ * encaje: es el orden en que se revisan. Las pendientes que el brief
+ * activo excluye no vienen (VEN-7), salvo con `brief: 'show_hidden'`.
  */
 export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {}): Promise<SignalRow[]> {
   const status = params.status ?? 'pending';
   const limit = safeLimit(params.limit, 100, 200);
+  const aplicaBrief = status === 'pending';
+  const ocultar = aplicaBrief && (params.brief ?? 'apply') === 'apply';
   const { rows } = await tx.query<SignalRowSql>(
     // Una señal manual o de CSV no tiene company_id hasta que se acepta:
     // el nombre y el dominio que se escribieron viven en `evidence`.
@@ -1043,8 +1060,10 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
             s.headline_es, s.detected_at, s.evidence_url, s.fit_score::text AS fit_score,
             s.budget_estimate::text AS budget_estimate, s.budget_currency::text AS budget_currency,
             s.dedupe_key, s.status, s.discard_reason, s.reviewed_at,
-            COALESCE(s.evidence->>'via', 'manual') AS via
+            COALESCE(s.evidence->>'via', 'manual') AS via,
+            veredicto.hidden_by
      FROM signal s
+     CROSS JOIN LATERAL (SELECT ${aplicaBrief ? briefVerdictSql('s') : 'NULL::text'} AS hidden_by) veredicto
      LEFT JOIN company co        ON co.id = s.company_id
      LEFT JOIN LATERAL (
             SELECT r.id FROM (
@@ -1078,7 +1097,7 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
              LIMIT 1
           ) abierto ON true
      LEFT JOIN signal_source src ON src.id = s.source_id
-     WHERE s.status = $1
+     WHERE s.status = $1${ocultar ? ' AND veredicto.hidden_by IS NULL' : ''}
      ORDER BY s.fit_score DESC NULLS LAST, s.detected_at DESC
      LIMIT $2`,
     [status, limit],
@@ -1086,10 +1105,13 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
   return rows.map(toSignalRow);
 }
 
-/** Cuántas señales esperan revisión. Lo pinta el KPI y la pestaña. */
+/**
+ * Cuántas señales esperan revisión. Lo pinta el KPI y la pestaña. Las
+ * que el brief activo oculta no cuentan (VEN-7): son las de la bandeja.
+ */
 export async function countPendingSignals(tx: WorkspaceTx): Promise<number> {
   const { rows } = await tx.query<{ n: string }>(
-    "SELECT count(*)::text AS n FROM signal WHERE status = 'pending'",
+    `SELECT count(*)::text AS n FROM signal s WHERE s.status = 'pending' AND ${briefVerdictSql('s')} IS NULL`,
   );
   return Number(rows[0]?.n ?? 0);
 }
@@ -1187,6 +1209,12 @@ export interface CreateSignalResult {
    * no entró.
    */
   companyId: string | null;
+  /**
+   * Entró, pero el brief activo la deja fuera de la bandeja (VEN-7): la
+   * pantalla lo dice en vez de anunciar «ya está en la bandeja». Null si
+   * se ve, o si no entró.
+   */
+  hiddenBy?: BriefVerdict | null;
 }
 
 export type SignalDuplicateReason = 'same_key' | 'pending' | 'discarded' | 'accepted';
@@ -1345,7 +1373,13 @@ export async function createSignal(tx: WorkspaceTx, input: CreateSignalInput): P
     ],
   );
   const id = rows[0]?.id ?? null;
-  if (id) return { id, duplicate: false, reason: null, dedupeKey, companyId: company?.id ?? null };
+  if (id) {
+    const { rows: veredicto } = await tx.query<{ hidden_by: BriefVerdict | null }>(
+      `SELECT ${briefVerdictSql('s')} AS hidden_by FROM signal s WHERE s.id = $1`,
+      [id],
+    );
+    return { id, duplicate: false, reason: null, dedupeKey, companyId: company?.id ?? null, hiddenBy: veredicto[0]?.hidden_by ?? null };
+  }
 
   // La clave chocó: ¿con qué? La fila que ya la ocupa dice si esa misma
   // señal se aceptó (la marca es un negocio), sigue en la bandeja o se
@@ -1381,6 +1415,8 @@ export interface ImportSignalsResult {
    * fila repetida que no entró (pulido r7).
    */
   createdRows: number[];
+  /** De las que entraron, cuántas deja fuera de la bandeja el brief activo (VEN-7). */
+  hiddenByBrief: number;
 }
 
 export interface ImportSignalsOptions {
@@ -1405,6 +1441,7 @@ export async function importSignals(
 ): Promise<ImportSignalsResult> {
   const createdRows: number[] = [];
   const duplicatedKeys: string[] = [];
+  let hiddenByBrief = 0;
   for (const [i, row] of rows.entries()) {
     const name = row.name.trim();
     const res = await createSignal(tx, {
@@ -1418,8 +1455,9 @@ export async function importSignals(
     });
     if (res.duplicate) duplicatedKeys.push(res.dedupeKey);
     else createdRows.push(i);
+    if (res.hiddenBy) hiddenByBrief++;
   }
-  return { created: createdRows.length, duplicated: duplicatedKeys.length, duplicatedKeys, createdRows };
+  return { created: createdRows.length, duplicated: duplicatedKeys.length, duplicatedKeys, createdRows, hiddenByBrief };
 }
 
 export interface AcceptSignalResult {
@@ -1855,7 +1893,8 @@ export async function getSalesKpis(tx: WorkspaceTx): Promise<SalesKpis> {
           desde AS (SELECT coalesce((SELECT date_trunc('quarter', now() AT TIME ZONE w.tz) AT TIME ZONE w.tz FROM w),
                                     date_trunc('quarter', now())) AS inicio)
      SELECT
-       (SELECT count(*) FROM signal WHERE status = 'pending')::text                      AS pending_signals,
+       (SELECT count(*) FROM signal s
+         WHERE s.status = 'pending' AND ${briefVerdictSql('s')} IS NULL)::text            AS pending_signals,
        (SELECT count(*) FROM deal_pipeline WHERE NOT is_won AND NOT is_lost)::text        AS open_deals,
        (SELECT COALESCE(sum(amount), 0) FROM deal_pipeline
          WHERE NOT is_won AND NOT is_lost)::text                                          AS open_amount,
@@ -2316,6 +2355,7 @@ interface SignalRowSql {
   detected_at: string; evidence_url: string | null; fit_score: string | null;
   budget_estimate: string | null; budget_currency: string | null; dedupe_key: string;
   status: SignalStatus; discard_reason: string | null; reviewed_at: string | null; via: string;
+  hidden_by: BriefVerdict | null;
 }
 
 function toSignalRow(r: SignalRowSql): SignalRow {
@@ -2340,6 +2380,7 @@ function toSignalRow(r: SignalRowSql): SignalRow {
     discardReason: r.discard_reason,
     reviewedAt: r.reviewed_at,
     via: r.via === 'csv' ? 'csv' : 'manual',
+    hiddenBy: r.hidden_by,
   };
 }
 
