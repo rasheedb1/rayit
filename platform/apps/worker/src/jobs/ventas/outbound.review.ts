@@ -7,11 +7,13 @@
  * pre-vuelo y compuertas A y B sin tokens; el juez con la rúbrica del
  * paso; hasta cinco regeneraciones con pistas cerradas y «enviar el
  * mejor». Cada intento deja su fila en outbound_review (nota, pista,
- * riesgos, decisión, tokens y costo del juez) y cada llamada la suya en
+ * riesgos, decisión, y tokens y costo de escribirlo y juzgarlo) y cada llamada la suya en
  * outbound_llm_call. El toque queda en 'scheduled' (la puerta y la
  * política lo dejan salir) o en 'held' con su motivo, y la persona recibe
- * el aviso de siempre (notifyTouchHeld). La compuerta C la aplica
- * applyGenerationOutcome al escribir.
+ * el aviso de siempre (notifyTouchHeld). Lo que pidió una persona desde
+ * el editor del pitch vuelve a 'draft', con la nota a la vista: lo
+ * programa ella. La compuerta C la aplica applyGenerationOutcome al
+ * escribir, y no se toma un borrador cuyo texto escribió una persona.
  */
 import { runQualityGate } from '@mc/core/outreach/quality-gate';
 import {
@@ -40,13 +42,15 @@ export interface ReviewReport {
   held: Array<{ touchId: string; reason: string }>;
   /** Sin presupuesto hoy: vuelven a esperar al juez. */
   overBudget: string[];
-  /** La compuerta C: el toque cambió mientras se revisaba (lo aprobó o canceló alguien, o se perdió el turno). */
+  /** Lo que pidió una persona desde el editor: vuelve a ella en borrador, con la nota del juez. */
+  returned: string[];
+  /** La compuerta C: el toque cambió mientras se revisaba (lo aprobó, editó o canceló alguien, o se perdió el turno). */
   skipped: Array<{ touchId: string; codes: string[] }>;
   errors: Array<{ touchId: string; error: string }>;
 }
 
 export async function runReview(db: MotorDb, deps: ReviewDeps): Promise<ReviewReport> {
-  const report: ReviewReport = { notConfigured: deps.writers === null, scheduled: [], held: [], overBudget: [], skipped: [], errors: [] };
+  const report: ReviewReport = { notConfigured: deps.writers === null, scheduled: [], held: [], returned: [], overBudget: [], skipped: [], errors: [] };
   if (!deps.writers) return report;
   const { generator, judge } = deps.writers;
   const leases = await db.transaction((tx) => claimGeneratedForReview(tx, { now: deps.now(), limit: deps.limit, workspaceId: deps.workspaceId }));
@@ -63,8 +67,11 @@ export async function runReview(db: MotorDb, deps: ReviewDeps): Promise<ReviewRe
         {
           generation: generationInputFrom(ctx), rubric: ctx.rubric, recentSent: ctx.recentSent,
           firstTouch: ctx.previousTouches.length === 0, requiresDisclosure: ctx.brief?.requiresDisclosure ?? false,
-          // El primer borrador ya se pagó y se registró en outbound.generate.
-          initial: { subject: g.subject, body: g.bodyMarked, model: g.model ?? generator.model, inputTokens: 0, outputTokens: 0, costUsd: 0 },
+          // El primer borrador ya se pagó y se registró en outbound.generate: su uso va a la fila del intento 1, sin volver a registrarlo.
+          initial: {
+            subject: g.subject, body: g.bodyMarked, model: g.model ?? generator.model,
+            inputTokens: g.usage.inputTokens, outputTokens: g.usage.outputTokens, costUsd: g.usage.costUsd,
+          },
         },
         {
           generator, judge, signal: deps.signal,
@@ -85,6 +92,8 @@ export async function runReview(db: MotorDb, deps: ReviewDeps): Promise<ReviewRe
         await db.transaction((tx) => releaseGenerationLease(tx, lease, res.codes.join(',')));
       } else if (res.status === 'scheduled') {
         report.scheduled.push(lease.touchId);
+      } else if (res.status === 'draft') {
+        report.returned.push(lease.touchId);
       } else {
         report.held.push({ touchId: lease.touchId, reason: final.hold?.code ?? 'quality_duplicate' });
       }
@@ -103,9 +112,10 @@ export const reviewJob = defineJob(REVIEW_JOB_ID, async (_payload, ctx) => {
   const report = await runReview(motorDbFromJob(ctx.db), { writers, now: () => ctx.now(), logger: ctx.logger, signal: ctx.signal });
   const metadata = {
     notConfigured: report.notConfigured, writer: writers?.mode ?? null, scheduled: report.scheduled.length, held: report.held.length,
+    returned: report.returned.length,
     overBudget: report.overBudget.length, skipped: report.skipped.length, errors: report.errors.length,
   };
   if (report.notConfigured) ctx.logger.info('revisión con IA no configurada: falta ANTHROPIC_API_KEY', metadata);
   else ctx.logger.info('revisión de mensajes', metadata);
-  return { processed: report.scheduled.length + report.held.length, failed: 0, metadata };
+  return { processed: report.scheduled.length + report.held.length + report.returned.length, failed: 0, metadata };
 });

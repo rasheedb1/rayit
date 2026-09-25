@@ -18,7 +18,7 @@ import { createFakeGenerator, createFakeJudge } from '@mc/core/outreach/fake';
 import { LlmMessageGenerator, type GenerationInput, type MessageGenerator } from '@mc/core/outreach/generate';
 import { LlmMessageJudge, type MessageJudge } from '@mc/core/outreach/judge';
 import type { HoldCode } from '@mc/core/outreach/messages';
-import type { AttemptRecord, QualityGateOutcome } from '@mc/core/outreach/quality-gate';
+import type { AttemptRecord, LlmUsage, QualityGateOutcome } from '@mc/core/outreach/quality-gate';
 import { WARMUP_TOUCHES_PER_STEP_TYPE, type GenerationContext, type GenerationFinal, type ReviewRow } from '@mc/db/queries/outreach';
 import { ConfigError, type Env } from '../../runner/config.ts';
 import { fakeAllowed, type ChannelScope } from './canales/index.ts';
@@ -48,24 +48,36 @@ export function writersFrom(env: Env, scope: ChannelScope): Writers | null {
   return { mode: 'anthropic', generator: new LlmMessageGenerator(llm), judge: new LlmMessageJudge(llm) };
 }
 
-/** La entrada del generador a partir del contexto de la base (sin el intento ni la pista). */
+/**
+ * La entrada del generador a partir del contexto de la base (sin el
+ * intento ni la pista). Si una persona pidió el borrador desde el editor,
+ * sus instrucciones van en todos los intentos.
+ */
 export function generationInputFrom(ctx: GenerationContext): Omit<GenerationInput, 'attempt' | 'hint'> {
   return {
     lang: ctx.lang, stepType: ctx.stepType, dayOffset: ctx.dayOffset, angle: ctx.angle, guidance: ctx.guidance,
     creator: ctx.creator, company: ctx.company, contact: ctx.contact, signal: ctx.signal, brief: ctx.brief,
     claims: ctx.claims, previousTouches: ctx.previousTouches, avoid: ctx.recentSent.slice(0, AVOID_IN_PROMPT),
-    maxChars: ctx.rubric.maxChars,
+    maxChars: ctx.rubric.maxChars, instructions: ctx.generation?.requestedInstructions ?? null,
   };
 }
 
+/** ¿Lo pidió una persona desde el editor del pitch? Entonces el resultado vuelve a ella, en borrador. */
+export function requestedByPerson(ctx: GenerationContext): boolean {
+  return ctx.generation?.requestedAt != null;
+}
+
 /**
- * El estado final del toque: lo que la puerta retuvo se queda retenido con
- * su motivo; lo que aprobó pasa por la política. Los primeros
+ * El estado final del toque. Lo que pidió una persona desde el editor
+ * vuelve a ella en borrador, con la nota del juez: ella decide si lo
+ * programa. Si no, lo que la puerta retuvo se queda retenido con su
+ * motivo, y lo que aprobó pasa por la política. Los primeros
  * WARMUP_TOUCHES_PER_STEP_TYPE de cada tipo siempre los aprueba una
  * persona; después, la revisión humana de la política (encendida por
  * defecto) o una secuencia que no está en modo automático también lo retienen.
  */
 export function finalStateFor(ctx: GenerationContext, outcome: QualityGateOutcome): Pick<GenerationFinal, 'status' | 'hold' | 'outcome'> {
+  if (requestedByPerson(ctx)) return { status: 'draft', hold: null, outcome: outcome.status === 'approved' ? 'approved' : 'held' };
   if (outcome.status !== 'approved') {
     const code: HoldCode = outcome.hold?.code ?? 'quality_low';
     return { status: 'held', hold: { code, detail: outcome.hold?.detail }, outcome: 'held' };
@@ -79,7 +91,15 @@ export function finalStateFor(ctx: GenerationContext, outcome: QualityGateOutcom
   return { status: 'scheduled', hold: null, outcome: 'approved' };
 }
 
-/** Los intentos, como filas de outbound_review, numerados detrás de los que ya tenía el toque. */
+const usageOf = (u: LlmUsage | null) =>
+  u ? { model: u.model, inputTokens: u.inputTokens, outputTokens: u.outputTokens, costUsd: u.costUsd } : null;
+
+/**
+ * Los intentos, como filas de outbound_review, numerados detrás de los que
+ * ya tenía el toque. Tokens y costo son los de ESCRIBIR y JUZGAR el
+ * intento (un intento que el pre-vuelo rechazó también se pagó), con el
+ * desglose en gates.usage.
+ */
 export function reviewRowsFrom(attempts: readonly AttemptRecord[], offset: number): ReviewRow[] {
   return attempts.map((a) => ({
     attempt: offset + a.attempt,
@@ -92,16 +112,17 @@ export function reviewRowsFrom(attempts: readonly AttemptRecord[], offset: numbe
       ...(a.gates.chosenAttempt === undefined ? {} : { chosen_attempt: offset + a.gates.chosenAttempt }),
       ...(a.note ? { judge_note: a.note } : {}),
       claims: a.claims.map((c) => c.id),
+      usage: { generate: usageOf(a.generation), judge: usageOf(a.judge) },
     },
     scores: a.scores,
     total: a.total,
     hint: a.hint,
     riskTriggers: a.riskTriggers,
     decision: a.decision,
-    model: a.judge?.model ?? null,
-    inputTokens: a.judge?.inputTokens ?? 0,
-    outputTokens: a.judge?.outputTokens ?? 0,
-    costUsd: a.judge?.costUsd ?? 0,
+    model: a.judge?.model ?? a.generation?.model ?? null,
+    inputTokens: (a.generation?.inputTokens ?? 0) + (a.judge?.inputTokens ?? 0),
+    outputTokens: (a.generation?.outputTokens ?? 0) + (a.judge?.outputTokens ?? 0),
+    costUsd: Math.round(((a.generation?.costUsd ?? 0) + (a.judge?.costUsd ?? 0)) * 1e6) / 1e6,
   }));
 }
 

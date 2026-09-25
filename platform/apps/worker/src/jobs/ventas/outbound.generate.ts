@@ -1,9 +1,12 @@
 /**
  * outbound.generate · redacta los borradores de las cadencias (VEN-12).
  *
- * Cada dos minutos (0056): reclama los toques en 'draft' de un paso con
- * generate_with_ai cuya hora cae en el próximo día y cuyos pasos
- * anteriores ya salieron (claimTouchesToGenerate), lee su contexto (perfil
+ * Cada dos minutos (0056): reclama primero lo que una persona pidió desde
+ * el editor del pitch (0057: un borrador nuevo o regenerar con una pista
+ * cerrada y sus instrucciones) y después los toques en 'draft' de un paso
+ * con generate_with_ai cuya hora cae en el próximo día y cuyos pasos
+ * anteriores ya salieron (claimTouchesToGenerate), nunca para quien pidió
+ * la baja o tiene el correo rebotado; lee su contexto (perfil
  * comercial con claims, marca, contacto, señal, ángulo, brief y SOLO lo
  * enviado antes a esa persona) y le pide al generador un primer borrador
  * con cada cifra marcada [claim:id]. Lo deja en outbound_generation para
@@ -65,7 +68,10 @@ export async function runGenerate(db: MotorDb, deps: GenerateDeps): Promise<Gene
       }
       let draft;
       try {
-        draft = await generator.generate({ ...generationInputFrom(ctx), attempt: 1, hint: null });
+        // Lo que pidió una persona: su pista y, para «más corto» o «otro ángulo», la versión anterior.
+        const hint = ctx.generation?.requestedHint ?? null;
+        const previousDraft = hint ? (ctx.generation?.bodyMarked ?? (ctx.touchBody.trim() || null)) : null;
+        draft = await generator.generate({ ...generationInputFrom(ctx), attempt: 1, hint, previousDraft });
       } catch (e) {
         if (e instanceof LlmOutputError && e.usage) {
           const usage = e.usage;
@@ -80,7 +86,10 @@ export async function runGenerate(db: MotorDb, deps: GenerateDeps): Promise<Gene
         }),
       );
       const saved = await db.transaction((tx) =>
-        saveGeneratedDraft(tx, lease, { subject: draft.subject, bodyMarked: draft.body, model: draft.model, now: deps.now() }),
+        saveGeneratedDraft(tx, lease, {
+          subject: draft.subject, bodyMarked: draft.body, model: draft.model, now: deps.now(),
+          inputTokens: draft.inputTokens, outputTokens: draft.outputTokens, costUsd: draft.costUsd,
+        }),
       );
       if (saved) report.generated.push(lease.touchId);
       else report.errors.push({ touchId: lease.touchId, error: 'lease_lost' });
