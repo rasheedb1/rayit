@@ -6,7 +6,7 @@
  * frase y un botón.
  *
  * Por idioma (r5): el pie del correo sale en el idioma del espacio que
- * escribe (footerTextsFor, @mc/core/outreach/deliverability), y la página
+ * escribe (footerTextsFor, @mc/core/outreach/messages), y la página
  * a la que lleva tiene que hablar el mismo. La página elige con
  * `bajaIdioma`: el locale del espacio que envió (lo devuelve
  * public_optout_preview) y, si no se sabe (un enlace que no existe, o
@@ -14,7 +14,10 @@
  * misma forma que alertTextsFor en apps/worker/src/jobs/ventas/messages.ts.
  */
 
-export type BajaIdioma = "es" | "en";
+import { OUTREACH_LANGUAGES, outreachLanguage, type OutreachLanguage } from "@mc/core/outreach/messages";
+
+/** Los idiomas de la página: los del outreach, ni uno más ni uno menos. */
+export type BajaIdioma = OutreachLanguage;
 
 export interface BajaTexts {
   metaTitle: string;
@@ -142,24 +145,26 @@ export const MESSAGES_EN: BajaTexts = {
   },
 };
 
+const TEXTOS: Readonly<Record<BajaIdioma, BajaTexts>> = { es: MESSAGES_ES, en: MESSAGES_EN };
+
 /** Los textos de un idioma. */
 export function bajaTexts(idioma: BajaIdioma): BajaTexts {
-  return idioma === "en" ? MESSAGES_EN : MESSAGES_ES;
+  return TEXTOS[idioma];
 }
 
 /**
  * El idioma de la página. Con el locale del espacio que envió, la regla
- * del pie (footerTextsFor): inglés si empieza por «en», español si no.
- * Sin él, el primer idioma que la página habla en el Accept-Language, por
- * orden de preferencia (q); si no habla ninguno, español, el idioma por
- * defecto de un espacio.
+ * del pie del correo (outreachLanguage, @mc/core/outreach/messages): el
+ * idioma base por Intl.Locale, con español de respaldo. Sin él, el primer
+ * idioma que la página habla en el Accept-Language, por orden de
+ * preferencia (q); si no habla ninguno, el mismo respaldo.
  */
 export function bajaIdioma(locale: string | null | undefined, acceptLanguage?: string | null): BajaIdioma {
-  if (locale) return /^en\b/i.test(locale) ? "en" : "es";
-  return idiomaDelNavegador(acceptLanguage ?? "") ?? "es";
+  if (locale) return outreachLanguage(locale);
+  return idiomaDelNavegador(acceptLanguage ?? "") ?? outreachLanguage(null);
 }
 
-/** El primer «es» o «en» del Accept-Language, por q descendente (RFC 9110 §12.5.4). */
+/** El primer idioma que la página habla en el Accept-Language, por q descendente (RFC 9110 §12.5.4). */
 export function idiomaDelNavegador(acceptLanguage: string): BajaIdioma | null {
   const pedidos = acceptLanguage
     .split(",")
@@ -169,11 +174,14 @@ export function idiomaDelNavegador(acceptLanguage: string): BajaIdioma | null {
       const peso = q ? Number(q.slice(2)) : 1;
       return { tag: tag.trim().toLowerCase(), peso: Number.isFinite(peso) ? peso : 0, orden };
     })
-    .filter((p) => p.tag && p.peso > 0)
+    .filter((p) => p.tag && p.tag !== "*" && p.peso > 0)
     .sort((a, b) => b.peso - a.peso || a.orden - b.orden);
   for (const p of pedidos) {
-    if (/^en\b/.test(p.tag)) return "en";
-    if (/^es\b/.test(p.tag)) return "es";
+    // outreachLanguage cae al respaldo con lo que no habla: aquí se quiere
+    // saber si lo habla, así que se compara con su idioma base.
+    const base = p.tag.split("-")[0] ?? "";
+    const idioma = OUTREACH_LANGUAGES.find((l) => l === base);
+    if (idioma) return idioma;
   }
   return null;
 }

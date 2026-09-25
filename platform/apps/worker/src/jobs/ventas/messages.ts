@@ -1,9 +1,9 @@
 /**
  * Textos de los jobs de Ventas que salen del worker hacia una persona:
  * hoy, las alertas del outreach (VEN-15): la notification del día, el
- * correo de resumen y, para las urgentes, el correo inmediato (r5). En el idioma del workspace (workspace.locale), como
- * el pie del correo del outreach (footerTextsFor de @mc/core): inglés si
- * el locale es inglés, si no español.
+ * correo de resumen y, para las urgentes, el correo inmediato (r5). En el
+ * idioma del workspace (workspace.locale), con la misma regla que el pie
+ * del correo del outreach (outreachLanguage de @mc/core/outreach/messages).
  *
  * notification.title_es y body_es guardan la frase ya en ese idioma, como
  * hace Cotizar (packages/db/src/queries/cotizar/cotizacion.ts,
@@ -13,7 +13,8 @@
  * Las `{n}` se rellenan con cifras ya formateadas con Intl en el locale
  * del workspace.
  */
-import type { OutreachAlertKind } from '@mc/core/outreach/deliverability';
+import type { OutreachAlertKind } from '@mc/core/outreach/alerts';
+import { outreachLanguage, type OutreachLanguage } from '@mc/core/outreach/messages';
 
 /**
  * Adónde lleva cada alerta. Todas a /ventas/politica, que trae el bloque
@@ -253,7 +254,14 @@ export function fillTemplate(
   return texto.replace(/\{(\w+)\}/g, (_, k: string) => valores[k] ?? `{${k}}`);
 }
 
-/** Los textos para un locale BCP 47 ('es-CO', 'en-US'…): inglés si el locale es inglés, si no español. */
+/** Un juego de textos por idioma del outreach: sumar uno a OUTREACH_LANGUAGES obliga a traducirlo aquí. */
+export const ALERT_TEXTS: Readonly<Record<OutreachLanguage, AlertTexts>> = { es: ALERT_TEXTS_ES, en: ALERT_TEXTS_EN };
+
+/**
+ * Los textos para un locale BCP 47 ('es-CO', 'en-US'…), con la regla del
+ * pie del correo (outreachLanguage, @mc/core): idioma base por
+ * Intl.Locale y español de respaldo.
+ */
 export function alertTextsFor(locale: string): AlertTexts {
-  return /^en\b/i.test(locale) ? ALERT_TEXTS_EN : ALERT_TEXTS_ES;
+  return ALERT_TEXTS[outreachLanguage(locale)];
 }
