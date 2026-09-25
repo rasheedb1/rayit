@@ -39,9 +39,9 @@ export interface GenerationFinal {
   /** Lo que sale: sin marcas. */
   subject: string | null;
   body: string;
-  /** Lo que guardó el generador: con marcas (lo lee el editor del pitch). */
+  /** Lo que guardó el generador: con marcas (lo lee el editor del pitch). null = se queda el que había. */
   subjectMarked: string | null;
-  bodyMarked: string;
+  bodyMarked: string | null;
   claims: SalesClaim[];
   /** Lo que decidió la puerta (la política puede retenerlo igual). */
   outcome: 'approved' | 'held';
@@ -110,7 +110,7 @@ export async function applyGenerationOutcome(
   );
   await tx.query(
     `UPDATE outbound_generation
-        SET stage = 'reviewed', outcome = $2, subject = $3, body_marked = $4, model = coalesce($5, model), attempts = $6::int,
+        SET stage = 'reviewed', outcome = $2, subject = $3, body_marked = coalesce($4, body_marked), model = coalesce($5, model), attempts = $6::int,
             reviewed_at = $7::timestamptz, lease_token = NULL, lease_until = NULL, last_error = NULL
       WHERE touch_id = $1::uuid`,
     [lease.touchId, out.outcome, out.subjectMarked, out.bodyMarked, out.model, Math.min(20, out.attempts), now.toISOString()],
