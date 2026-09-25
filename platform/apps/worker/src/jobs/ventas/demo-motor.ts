@@ -36,7 +36,7 @@ import { enableOutreach, enrollContacts, releaseHeldTouch } from '@mc/db/queries
 import { fakeChannels } from './canales/fake.ts';
 import { DEMO_WORKSPACE_ID } from './demo-ids.ts';
 import { anchorBrandHistory, nextDemoTouch, readyDemoAccounts } from './demo-preparar.ts';
-import { cuenta, fechaHora } from './salida.ts';
+import { cuenta, estadoDelToque, fechaHora } from './salida.ts';
 import { motorDbFromClient } from './motor-db.ts';
 import { runDispatch, type DispatchReport } from './outbound.dispatch.ts';
 import { runReplies, type RepliesReport } from './outbound.replies.ts';
@@ -265,11 +265,12 @@ export function resumenDemo(r: DemoMotorReport): string {
     `2. Política encendida: ${cuenta(r.on.claim.claimed, 'reclamado', 'reclamados')}, ${cuenta(r.on.sent.length, 'enviado', 'enviados')}, ` +
       `${r.on.retried.length} a reintento, ${cuenta(r.on.failed.length, 'fallido', 'fallidos')}, ${cuenta(r.on.held.length, 'retenido', 'retenidos')}, ` +
       `${r.on.claim.paced.length} esperando la separación con la marca (tres días entre mensajes, la política del seed).`,
-    `3. ${hora(r.laterClock)}: se cumple la separación. ${cuenta(r.later.claim.claimed, 'reclamado', 'reclamados')}, ` +
+    `3. El ${hora(r.laterClock)}, se cumple la separación. ${cuenta(r.later.claim.claimed, 'reclamado', 'reclamados')}, ` +
       `${cuenta(r.later.sent.length, 'enviado', 'enviados')}.`,
   ];
   for (const t of r.sentTouches) {
-    l.push(`   · outbound_touch ${t.id}: ${t.status}, provider_message_id ${t.provider_message_id}, hilo ${t.thread_ref}`);
+    // Las columnas de la fila tal como están en la base: es lo que el integrador compara con Supabase (§5.2).
+    l.push(`   · outbound_touch ${t.id}: status=${t.status}, provider_message_id=${t.provider_message_id}, thread_ref=${t.thread_ref}`);
   }
   const c = r.cadence;
   l.push(
@@ -288,9 +289,9 @@ export function resumenDemo(r: DemoMotorReport): string {
     '',
     `5. ${c.brands[0]!.name} responde: ${cuenta(c.replies.inbound, 'respuesta leída', 'respuestas leídas')}, ` +
       `${cuenta(c.replies.canceled, 'mensaje pendiente cancelado', 'mensajes pendientes cancelados')}.`,
-    `6. Tres días hábiles después (${hora(c.nextClock)}): ${cuenta(c.next.sent.length, 'enviado', 'enviados')}, solo a quien no respondió.`,
+    `6. Tres días hábiles después, el ${hora(c.nextClock)}: ${cuenta(c.next.sent.length, 'enviado', 'enviados')}, solo a quien no respondió.`,
   );
-  for (const s of c.statuses) l.push(`   · ${s.name}: ${s.statuses.join(' → ')}`);
+  for (const s of c.statuses) l.push(`   · ${s.name}: ${s.statuses.map(estadoDelToque).join(' → ')}`);
   l.push('', 'Todo lo que recibió el buzón falso:');
   for (const d of r.delivered) {
     const what = d.subject ? `«${d.subject}»` : `mensaje de ${CHANNEL_NAME[d.channel] ?? d.channel}`;

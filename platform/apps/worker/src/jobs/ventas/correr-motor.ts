@@ -168,13 +168,13 @@ export function resumenRespuestas(r: RepliesReport): string {
 export function resumenPreparacion(p: DemoPreparation): string {
   const lineas = [
     'Demo lista para el despachador, con el envío apagado:',
-    `  · el mensaje ${p.touchId} vence ya (${fechaHora(p.dueAt, p.timeZone)});`,
+    `  · el mensaje ${p.touchId} vence ya: ${fechaHora(p.dueAt, p.timeZone)};`,
     `  · ${cuenta(p.anchored, 'mensaje anterior', 'mensajes anteriores')} a esa marca, corridos para cumplir los días entre mensajes;`,
     `  · ${cuenta(p.reconnected, 'cuenta reconectada', 'cuentas reconectadas')} y la dirección postal del pie guardada.`,
   ];
   if (!p.insideWindow) {
     lineas.push(
-      `  Ojo: ahora está fuera del horario de envío (${p.window.start}–${p.window.end}, de lunes a viernes, ${fechaHora(new Date(), p.timeZone)}). ` +
+      `  Ojo: ahora, ${fechaHora(new Date(), p.timeZone)}, está fuera del horario de envío (${p.window.start}–${p.window.end}, de lunes a viernes). ` +
         'El despachador no envía fuera de él: corre los pasos siguientes dentro del horario.',
     );
   }

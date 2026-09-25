@@ -133,7 +133,12 @@ test('demo con el seed: apagada no envía nada; encendida, la cadencia de tres c
   assert.match(texto, /1 esperando la separación con la marca/);
   assert.match(texto, /la creadora aprueba 6 mensajes/);
   assert.doesNotMatch(texto, /\(s\)|\d{4}-\d{2}-\d{2}T/, 'ni «(s)» ni horas en ISO UTC');
-  assert.match(texto, /Reloj: \w+, \d+ de \w+, \d\d:\d\d \(hora estándar de Colombia\)/, 'la hora en la zona del workspace');
+  assert.match(texto, /Reloj: \p{L}+ \d+ de \p{L}+ a las \d\d:\d\d, hora estándar de Colombia\./u, 'la hora en la zona del workspace, sin paréntesis');
+  assert.match(texto, /6\. Tres días hábiles después, el \p{L}+ \d+ de \p{L}+ a las \d\d:\d\d, hora estándar de Colombia: /u);
+  assert.doesNotMatch(texto, /\([^()]*\(/, 'sin paréntesis anidados');
+  assert.match(texto, /: enviado → cancelado → cancelado$/m, 'los estados en español');
+  assert.doesNotMatch(texto.replace(/^ {3}· outbound_touch .*$/gm, ''), /\b(sent|canceled|scheduled)\b/, 'ningún estado de la base en inglés fuera de la fila de la base');
+  assert.match(texto, /outbound_touch \S+: status=sent, provider_message_id=fake-linkedin-\d+/);
   assert.match(texto, /List-Unsubscribe: <https:\/\/oncue\.test\/baja\/\S+\/un-clic>/);
   assert.match(texto, /LinkedIn a \S+: mensaje de LinkedIn/);
   assert.doesNotMatch(texto, /sin asunto/);
