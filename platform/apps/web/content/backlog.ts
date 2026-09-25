@@ -382,7 +382,8 @@ export const STORIES: readonly Story[] = [
     title: "Pitch manual con afirmaciones trazables",
     desc: "Borrador de correo a partir de la señal, el media kit y la última campaña, editado a mano. Cada cifra apunta a su origen en claims. Se guarda como outbound_touch en draft y se copia al portapapeles. La generación automática y el envío los hace VEN-12 sobre esta misma base.",
     done: "Un pitch con una cifra sin origen no se puede marcar como listo.",
-    status: "pendiente",
+    status: "en_curso",
+    note: "Absorbida en VEN-12 (misma rama): «Redactar pitch» en la ficha abre /ventas/empresas/<id>/pitch con el borrador generado o vacío, las cifras del perfil como fichas con su origen, las variables, la vista previa y la revisión en línea; «Programar» no se puede con una cifra sin origen y el servidor repite la revisión (packages/db/test/outreach-pitch.test.ts). Pasa a hecho con VEN-12 al integrarse.",
   },
   {
     id: "VEN-7", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-2"],
@@ -429,7 +430,8 @@ export const STORIES: readonly Story[] = [
     title: "Generación con afirmaciones trazables",
     desc: "Generador con perfil del creador, señal de la marca, ángulo del día y toques realmente enviados; pre-vuelo determinista, juez con rúbrica por paso en tabla, regeneración con pistas cerradas, disparadores de riesgo y revisión humana con calentamiento por tipo de paso.",
     done: "Un mensaje con una cifra sin origen no pasa; dos marcas del mismo nicho reciben correos con similitud menor de 0,65; el juez registra nota, tokens y costo.",
-    status: "pendiente",
+    status: "en_curso",
+    note: "Terminada en rasheed/VEN-12-generacion-trazable, sin red: pre-vuelo con cifras trazables, compuertas A-B-C, generador y juez sobre claude-sonnet-5 (o falsos), jobs outbound.generate y outbound.review, migración 0056 y el pitch de VEN-6. Las tres condiciones tienen su prueba (core/outreach-generacion, worker/outreach-generacion). Falta lo del integrador: mezclar, aplicar 0056 en Supabase y poner ANTHROPIC_API_KEY en el worker; sin ella los borradores de IA esperan y el editor lo dice.",
   },
   {
     id: "VEN-13", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-12"],

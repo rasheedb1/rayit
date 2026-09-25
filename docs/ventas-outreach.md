@@ -1017,6 +1017,72 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
    cada tipo pasan por la bandeja de aprobación; después, solo los que
    el juez marque.
 
+#### Cómo quedó (VEN-12, con VEN-6 dentro)
+
+- **Un solo renderizador** en `@mc/core/outreach/render` (sustituye a
+  `template.ts`): la lista canónica de variables por origen (contacto,
+  empresa, señal, creador) y `templateValuesFrom`, la única traducción
+  entre la base y las plantillas. Lo usan el motor, el generador y el editor.
+- **Afirmaciones trazables** (`@mc/core/outreach/claims`): un
+  `SalesClaim` es una cifra con su fila de origen. Las lee
+  `listSalesClaims` (`@mc/db`): la mediana a 7 días fiable por red, el
+  grupo mayor de edad, género y país, los cinco mejores videos frente a
+  la mediana, los seguidores del último media kit, las campañas con
+  resultado y las cifras de la señal del deal, cada una formateada con
+  el locale del espacio. Es la lectura mínima del perfil de §5.4: cuando
+  VEN-11 publique el perfil completo, esta función puede leer de él sin
+  cambiar la forma. El generador escribe cada cifra con `[claim:id]`
+  detrás; al guardar, las marcas salen del texto y los claims citados
+  van a `outbound_touch.claims`.
+- **Pre-vuelo** (`preflight.ts`, sin tokens): huecos, largo por paso (la
+  rúbrica manda), palabras prohibidas y muletillas en español e inglés,
+  guiones largos y punto y coma, mayúsculas sostenidas, una sola
+  pregunta al cierre, sin enlace de agenda en el primer toque, y cada
+  cifra con su marca, que exista, que el ángulo la deje citar y que
+  diga lo mismo (5 % de redondeo: «400 mil» por 412.000). No cuentan
+  como cifra las fechas, las horas, los años, los rangos de edad y los
+  conteos sueltos hasta 12 sin unidad.
+- **Compuertas** (`gates.ts`): A, el asunto; B, Jaccard sobre 5-shingles
+  contra los últimos 20 enviados del mismo tipo en el mismo espacio
+  (0,65 directos, 0,80 correo); C, al escribir el resultado: el toque
+  sigue en borrador, el turno sigue siendo del job y el mismo texto no le
+  llegó ya a esa persona.
+- **Generador y juez** (`generate.ts`, `judge.ts`, prompts en
+  `outreach/prompts/*.md`) detrás de `LlmClient`: `claude-sonnet-5`
+  con salida estructurada, tope de tokens por tipo de paso y sin
+  pensamiento extendido. La temperatura que pedía el diseño (0,7 y 0) no
+  se envía: los modelos posteriores a Opus 4.6 la rechazan con un 400
+  (`temperatureFor`). Sin `ANTHROPIC_API_KEY` no se redacta nada; el
+  generador y el juez falsos (`fake.ts`) son para las pruebas y la demo
+  (`OUTREACH_WRITER=fake`, con la regla del canal falso).
+- **La puerta** (`quality-gate.ts`): pre-vuelo y compuertas → juez →
+  decisión; riesgo o nota bajo el mínimo → una persona; entre el mínimo
+  y el umbral, otra versión con una pista cerrada, hasta los intentos de
+  la rúbrica, y «enviar el mejor». Antes de cada llamada mira lo que
+  queda del tope diario (`outbound_health`), y cada llamada deja su fila
+  en `outbound_llm_call` en su propia transacción.
+- **Los jobs** (`0056_generacion_trazable.sql`): `outbound.generate`
+  (cada dos minutos) redacta los borradores con `generate_with_ai` cuya
+  hora cae en el próximo día y cuyos pasos anteriores ya salieron, y los
+  deja en `outbound_generation` con sus marcas; `outbound.review`
+  (desfasado un minuto) los juzga, escribe una fila de `outbound_review`
+  por intento (nota por dimensión, nota ponderada, pista, riesgos,
+  decisión, tokens y costo del juez; la frase del juez en
+  `gates.judge_note`) y deja el toque en `scheduled` o en `held` con su
+  motivo (`quality_warmup`, `quality_risk`, `quality_low`,
+  `quality_preflight`, `quality_duplicate`, `llm_budget`, `llm_error` o
+  el `needs_review` de la política). Los diez primeros de cada tipo de
+  paso siempre esperan a una persona.
+- **El pitch a mano** (VEN-6): «Redactar pitch» en la ficha abre
+  `/ventas/empresas/<id>/pitch` con el último borrador (el generado, con
+  la nota de la revisión, o uno guardado) o vacío; las cifras del perfil
+  y las variables son fichas que se insertan donde está el cursor; la
+  vista previa enseña lo que recibe la marca; la revisión corre en línea
+  y el servidor la repite al guardar (`savePitch`). «Programar» no se
+  puede con una cifra sin origen; «Copiar» copia el texto limpio y lo
+  guarda como borrador. La regeneración con pistas desde la pantalla es
+  de la bandeja de VEN-14.
+
 ### 5.7 Qué pasa cuando la marca responde
 
 El webhook de mensajes nuevos de Unipile y la lectura del hilo de Gmail
