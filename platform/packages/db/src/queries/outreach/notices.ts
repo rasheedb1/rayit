@@ -1,8 +1,8 @@
 /**
  * Outreach · los avisos del motor (notification), en el idioma del
- * workspace (VEN-10 r2).
+ * workspace.
  *
- * (r4) Las frases no viven aquí: están en @mc/core/outreach/messages
+ * Las frases no viven aquí: están en @mc/core/outreach/messages
  * (OUTREACH_NOTICE_TEXTS, los motivos de un fallo y de una retención, las
  * etiquetas de cada canal y las URL de cada aviso), el messages.ts del
  * motor, que leen también el worker y la web. Aquí solo se elige el
@@ -42,9 +42,9 @@ async function touchNoticeRow(tx: SqlExecutor, touchId: string): Promise<TouchNo
 
 /**
  * El aviso de un mensaje que no salió y no se va a reintentar (rebote,
- * cinco fallos, zombi, rechazo). Lleva a la ficha de la empresa (r4:
- * antes a '/ventas', una cola que no existe todavía; la de VEN-16). Corre
- * como mc_worker: el workspace es el del toque, nunca otro.
+ * cinco fallos, zombi, rechazo). Lleva a la ficha de la empresa, donde
+ * está el bloque «Mensajes de la cadencia», mientras no exista la cola de
+ * VEN-16. Corre como mc_worker: el workspace es el del toque, nunca otro.
  */
 export async function notifyTouchFailed(tx: SqlExecutor, touchId: string, reason: string, now: Date): Promise<void> {
   assertIds('notifyTouchFailed', [touchId]);
@@ -66,7 +66,7 @@ export async function notifyTouchFailed(tx: SqlExecutor, touchId: string, reason
 }
 
 /**
- * (r4) El aviso de un mensaje RETENIDO (huecos sin rellenar, un intento
+ * El aviso de un mensaje RETENIDO (huecos sin rellenar, un intento
  * sin comprobar, una respuesta en el hilo sin correo previo, sin texto,
  * sin dirección postal, una nota de LinkedIn demasiado larga): sin él, un
  * mensaje retenido desaparecía en silencio, porque la cola que los
@@ -74,7 +74,7 @@ export async function notifyTouchFailed(tx: SqlExecutor, touchId: string, reason
  * mensaje se retiene otra vez, no se repite. Es un 'outreach_failed' de
  * severidad info con entity_type 'outbound_touch_held' (no hace falta un
  * aviso nuevo en el CHECK de 0051 §9), y lleva al bloque «Mensajes de la
- * cadencia» de la ficha (r5), donde el mensaje se revisa y se aprueba
+ * cadencia» de la ficha, donde el mensaje se revisa y se aprueba
  * (releaseHeldTouch).
  * `reason` es el código de held_reason; la frase sale de holdReasonText.
  */
@@ -103,7 +103,7 @@ export async function notifyTouchHeld(tx: SqlExecutor, touchId: string, reason: 
 
 /**
  * Un solo aviso por workspace, canal y día cuando la cuenta del canal no
- * está conectada (r2): no uno por mensaje. Lleva a /ventas/canales (r4),
+ * está conectada: no uno por mensaje. Lleva a /ventas/canales,
  * donde está el botón de reconectar. Los mensajes esperan en la
  * cola (se posponen) y salen solos al reconectar. El «día» son las
  * últimas veinte horas: la corrida de mañana vuelve a avisar si sigue

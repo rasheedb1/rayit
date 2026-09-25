@@ -341,7 +341,7 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'escribir. La llaman las rutas de la web tras verificar el estado firmado y hablar con el proveedor. EXECUTE solo ' +
     'para mc_app. No es de ningún disparador',
   'outreach_resolve_unconfirmed(uuid,text)':
-    'una persona resuelve en la ficha un mensaje retenido porque no se supo si un intento salió (0053, VEN-10 r3): ' +
+    'una persona resuelve en la ficha un mensaje retenido porque no se supo si un intento salió (0053, VEN-10): ' +
     'was_sent lo anota como enviado y marca el enlace de baja de ese intento; resend lo devuelve a la cola, borra ese ' +
     'enlace y devuelve su plaza. Solo el toque held con unconfirmed_attempt del workspace de la transacción; las ' +
     'columnas del intento y outbound_optout_link son del despachador. EXECUTE a mc_app y mc_worker. No es de ningún disparador',

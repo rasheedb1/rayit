@@ -9,29 +9,29 @@
  *      interruptor encendido, de un canal configurado y permitido, de
  *      enrolamientos y secuencias activas, sin disyuntor abierto, y sin
  *      un paso ANTERIOR del mismo enrolamiento que todavía no salió
- *      (scheduled, processing o held: r2, el «como te comenté ayer» sobre
- *      un correo que no salió; y r3, un borrador de un paso enviable, que
+ *      (scheduled, processing o held: el «como te comenté ayer» sobre
+ *      un correo que no salió; o el borrador de un paso enviable, que
  *      espera al generador). FOR UPDATE SKIP LOCKED: dos despachadores
  *      no toman el mismo;
  *   3. por cada uno, en este orden, sin gastar un intento:
  *      · fuera de la ventana laboral o en fin de semana (un reintento, un
  *        resume_at, lo acumulado con el worker caído) → a la apertura de
- *        la ventana (r2);
+ *        la ventana;
  *      · sin cuenta conectada del canal → espera una hora dentro de la
- *        ventana, con UN aviso por canal y día (r2): al reconectar sale
- *        solo. (r3) Si el enrolamiento ya envió por ese canal, la cuenta
+ *        ventana, con UN aviso por canal y día: al reconectar sale
+ *        solo. Si el enrolamiento ya envió por ese canal, la cuenta
  *        es la de ese envío (el mismo hilo); si no, se prueban todas las
  *        conectadas del canal antes de reprogramar (senderAccounts);
- *      · (r5) la marca ya recibió max_touches_per_company mensajes del
+ *      · la marca ya recibió max_touches_per_company mensajes del
  *        workspace en COMPANY_CAP_WINDOW_DAYS días, sumando todas sus
  *        secuencias → cancelado (company_cap), y la cadencia avanza;
- *      · (r5) el último mensaje a la marca fue hace menos de
+ *      · el último mensaje a la marca fue hace menos de
  *        min_days_between_touches → cuando se cumplan, en la ventana;
  *      · un tope lleno (el de la cuenta según outreach_channel_account_limits
  *        con la curva de calentamiento de VEN-15, el semanal o el diario
  *        de correos del workspace) → al siguiente día hábil DEL WORKSPACE
  *        (el de los contadores, r5), y los pasos de detrás se corren con él;
- *      · (r5) la cuenta ya sacó su ritmo por hora, o su último envío fue
+ *      · la cuenta ya sacó su ritmo por hora, o su último envío fue
  *        hace menos de su separación mínima (0052 §1) → cuando quepa, sin
  *        quedarse con la plaza del día;
  *   4. pasa los que quedan a processing con UPDATE … WHERE status =
@@ -106,13 +106,13 @@ export interface ClaimReport {
   /** Reprogramados porque un tope se agotó: al siguiente día hábil. */
   rescheduled: Array<{ touchId: string; until: Date; cap: 'account_day' | 'account_week' | 'workspace_day' }>;
   /**
-   * (r5) Cancelados porque la marca ya recibió los mensajes que permite la
+   * Cancelados porque la marca ya recibió los mensajes que permite la
    * política (max_touches_per_company en COMPANY_CAP_WINDOW_DAYS días,
    * sumando todas las secuencias del workspace).
    */
   canceledCompanyCap: number;
   /**
-   * (r5) Movidos sin gastar intento ni plaza por el ritmo: la separación
+   * Movidos sin gastar intento ni plaza por el ritmo: la separación
    * mínima con la marca (company_gap, min_days_between_touches), o el
    * ritmo por hora de la cuenta (account_hour, account_gap: 0052 §1).
    */
@@ -120,7 +120,7 @@ export interface ClaimReport {
 }
 
 /**
- * Un reclamo que no tomó nada (r5): la ÚNICA definición del informe
+ * Un reclamo que no tomó nada: la ÚNICA definición del informe
  * vacío. La usan claimDueTouches y el despachador cuando no le queda
  * tiempo para reclamar; un campo nuevo se añade aquí y en ClaimReport.
  */
@@ -158,7 +158,7 @@ interface Candidate {
   id: string;
   workspaceId: string;
   companyId: string;
-  /** La política de la marca (r5): cuántos mensajes como mucho y cuántos días entre uno y otro. */
+  /** La política de la marca: cuántos mensajes como mucho y cuántos días entre uno y otro. */
   maxTouchesPerCompany: number;
   minDaysBetweenTouches: number;
   channel: DispatchChannel;
@@ -243,7 +243,7 @@ export function accountDailyCap(input: {
 }
 
 /**
- * La ventana de max_touches_per_company (r5): los mensajes a una marca se
+ * La ventana de max_touches_per_company: los mensajes a una marca se
  * cuentan en los últimos 90 días, sumando todas las secuencias del
  * workspace. Pasado ese plazo, una campaña nueva vuelve a empezar de cero
  * (el «no» de una marca lo cubre cooldown_days_after_no, aparte).
@@ -301,8 +301,7 @@ interface SenderAccount {
 }
 
 /**
- * Las cuentas que pueden enviar un toque, en el orden en que se prueban
- * (r3, hallazgo 6):
+ * Las cuentas que pueden enviar un toque, en el orden en que se prueban:
  *   · si su enrolamiento ya envió por este canal, solo la cuenta de ese
  *     último envío, y solo si sigue conectada: el siguiente mensaje va en
  *     el mismo hilo o el mismo chat, que no existen en otro buzón. Vacío
@@ -355,7 +354,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   const channels = opts.channels.filter((c) => (DISPATCH_CHANNELS as readonly string[]).includes(c));
   const report = emptyClaimReport();
 
-  // (r4) Los enrolamientos que se quedan sin un toque vivo por lo que el
+  // Los enrolamientos que se quedan sin un toque vivo por lo que el
   // reclamo cancela o salta: al final se avanzan (advanceEnrollment), como
   // en rescueZombies. Si no, el último paso sin dirección dejaba el
   // enrolamiento 'active' para siempre y el embudo de VEN-16 contaba
@@ -379,7 +378,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     )).rows,
   );
 
-  // (r3, con VEN-15) Un correo a una dirección que rebotó para siempre
+  // (con VEN-15) Un correo a una dirección que rebotó para siempre
   // (contact.email_invalid) no se reclama: la base impide programarlo
   // (0050 §2), pero no mira lo que ya estaba en la cola ni un reintento.
   // Solo si el toque va a ESA dirección: si va a otra, esa no rebotó.
@@ -444,7 +443,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
                                                                      WHEN 'linkedin' THEN 'linkedin_message'
                                                                      ELSE t.channel END))
           -- Un paso no sale mientras uno ANTERIOR de su enrolamiento siga en la cola:
-          -- programado, reclamado, retenido, o (r3) un borrador de un paso que el
+          -- programado, reclamado, retenido, o un borrador de un paso que el
           -- despachador envía (el correo que espera al generador de VEN-12). Un
           -- borrador de un paso manual (un «me gusta», una tarea) no frena a nadie.
           AND NOT EXISTS (
@@ -462,7 +461,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
 
   const toClaim: Array<{ c: Candidate; recipient: string; accountId: string }> = [];
   const waiting = new Map<string, { workspaceId: string; channel: DispatchChannel; count: number }>();
-  // (r5) Lo que cada marca y cada cuenta ya recibieron o sacaron, leído una
+  // Lo que cada marca y cada cuenta ya recibieron o sacaron, leído una
   // vez por corrida y sumado con lo que ESTA corrida reclama: dos toques de
   // la misma marca o de la misma cuenta en el mismo lote cuentan.
   const companies = new Map<string, CompanyState>();
@@ -487,7 +486,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
       report.outsideWindow.push({ touchId: c.id, until });
       continue;
     }
-    // (r3) La cuenta que envía (hallazgo 6). Hasta aquí era siempre la
+    // La cuenta que envía. Hasta aquí era siempre la
     // primera conectada del canal: una segunda cuenta de Gmail o LinkedIn
     // no se usaba nunca, un tope lleno en la primera mandaba el mensaje a
     // mañana aunque la otra tuviera plazas, y la respuesta en el hilo podía
@@ -515,7 +514,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
       continue;
     }
 
-    // (r5) La política de la marca, antes de reservar ninguna plaza:
+    // La política de la marca, antes de reservar ninguna plaza:
     //   · max_touches_per_company: ya recibió todos los mensajes que se le
     //     pueden mandar en COMPANY_CAP_WINDOW_DAYS días, contando todas
     //     las secuencias del workspace → este no sale nunca (company_cap);
@@ -540,7 +539,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
       continue;
     }
 
-    // Una plaza por cuenta, sea invitación o mensaje (r4): el techo es de la cuenta.
+    // Una plaza por cuenta, sea invitación o mensaje: el techo es de la cuenta.
     const action = accountActionType(c.channel);
     let chosen: SenderAccount | null = null;
     let capHit: ClaimReport['rescheduled'][number]['cap'] | null = null;
@@ -555,7 +554,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
         await tx.query('ROLLBACK TO SAVEPOINT motor_cap');
         await tx.query('RELEASE SAVEPOINT motor_cap');
       };
-      // (r5) Los contadores cuentan el día del reloj del despachador (0052 §3).
+      // Los contadores cuentan el día del reloj del despachador (0052 §3).
       let cap: ClaimReport['rescheduled'][number]['cap'] | null = null;
       if (!(await incrementIfUnderCap(tx, { workspaceId: c.workspaceId, accountId: acct.id, actionType: action, cap: dayCap, at: now }))) {
         cap = 'account_day';
@@ -576,7 +575,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
         capHit ??= cap;
         continue;
       }
-      // (r5) El ritmo de la cuenta (0052 §1): tantos por hora, y separados.
+      // El ritmo de la cuenta (0052 §1): tantos por hora, y separados.
       // Después de los topes del día y la semana: lo que ya no cabe hoy va
       // directo a mañana; lo que cabe hoy pero no ahora, espera su turno sin
       // quedarse con la plaza (o sale por otra cuenta que sí tenga turno).
@@ -604,7 +603,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
         await moveScheduled(tx, c, paced.until);
         report.paced.push({ touchId: c.id, until: paced.until, reason: paced.reason });
       } else {
-        // (r5) El día de los contadores es el de la zona del WORKSPACE
+        // El día de los contadores es el de la zona del WORKSPACE
         // (outreach_local_date): el siguiente día hábil se cuenta ahí, y
         // después se encierra en la ventana de la zona de la cadencia. Con la
         // zona de la secuencia, el «mañana» podía caer todavía en el mismo
@@ -664,8 +663,8 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
 }
 
 /**
- * Devuelve a la cola lo reclamado que el despachador no llegó a intentar
- * (r2): se le acabó el tiempo de la corrida, o el worker se apaga. Solo
+ * Devuelve a la cola lo reclamado que el despachador no llegó a intentar:
+ * se le acabó el tiempo de la corrida, o el worker se apaga. Solo
  * lo que sigue en processing con ESE reclamo y sin send_started_at (no
  * llegó al proveedor): vuelve a scheduled, con el intento descontado, sin
  * el enlace de baja de ese intento (nunca salió) y con la plaza del tope
@@ -713,7 +712,7 @@ export interface ZombieReport {
 
 /**
  * Rescata los zombis: lo que lleva más de ZOMBIE_AFTER_MINUTES en
- * processing (r2, en dos grupos):
+ * processing (en dos grupos):
  *   · sin send_started_at: el despachador se cayó antes de llamar al
  *     proveedor. Nunca salió: vuelve a la cola como releaseUnattempted,
  *     sin aviso;

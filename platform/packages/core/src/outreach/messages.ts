@@ -1,5 +1,5 @@
 /**
- * Ventas · los textos del motor de cadencias (VEN-10 r4), en un solo
+ * Ventas · los textos del motor de cadencias, en un solo
  * lugar por idioma: los avisos de la campana, las etiquetas de cada
  * canal, por qué no salió un mensaje y por qué quedó retenido.
  *
@@ -28,7 +28,7 @@ export const OUTREACH_URLS = {
   /** La ficha de una empresa: sus contactos, su negocio y su actividad. */
   company: (companyId: string) => `/ventas/empresas/${companyId}`,
   /**
-   * (r5) El bloque «Mensajes de la cadencia» de la ficha: los retenidos con
+   * El bloque «Mensajes de la cadencia» de la ficha: los retenidos con
    * su «Revisar y aprobar», y las respuestas. Adonde llevan los avisos de un
    * mensaje retenido, fallido o respondido.
    */
@@ -115,8 +115,8 @@ export function failureReason(lang: NoticeLang, code: string): string {
 //   reply_without_thread       respuesta en el hilo a un correo que no salió
 //   unconfirmed_attempt:<n>    no se pudo comprobar si el intento n salió
 //   note_too_long:<n>          la nota de la invitación de LinkedIn tiene n caracteres
-//   no_subject                 (r3) un correo nuevo sin asunto (la respuesta en el hilo usa «Re: …»)
-//   needs_review               (r5) espera la aprobación de una persona: la
+//   no_subject                 un correo nuevo sin asunto (la respuesta en el hilo usa «Re: …»)
+//   needs_review               espera la aprobación de una persona: la
 //                              revisión humana de la política, o una secuencia
 //                              en modo 'review'
 
@@ -237,7 +237,7 @@ export const OUTREACH_NOTICE_TEXTS = {
         : ''),
     optOutTitle: (who: string) => `${who} pidió no recibir más mensajes`,
     optOutBody: () => 'Se marcó la baja: no le volverás a escribir desde On Cue. Lo pendiente con esa persona se canceló.',
-    /** (r5) Pidió la baja alguien del hilo que no es la ficha: lo decide una persona. */
+    /** Pidió la baja alguien del hilo que no es la ficha: lo decide una persona. */
     optOutReviewTitle: (who: string) => `Alguien en el hilo con ${who} pidió no recibir más mensajes`,
     optOutReviewBody: (from: string, who: string) =>
       `Lo escribió ${from}, que no es el correo de ${who}. La cadencia se detuvo y ${who} no quedó de baja: revisa la conversación y márcala a mano si corresponde.`,

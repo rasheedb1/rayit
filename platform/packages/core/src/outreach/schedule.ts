@@ -183,7 +183,7 @@ export function windowSeconds(window: SendWindow): { start: number; end: number 
 
 /**
  * Encierra una hora del día (segundos) en la ventana [start, end), sin dar
- * la vuelta (r2): antes de abrir → la apertura; dentro → tal cual; al
+ * la vuelta: antes de abrir → la apertura; dentro → tal cual; al
  * cierre o después → la apertura. Quien llama con una hora pasada del
  * cierre ya eligió OTRO día (nextBusinessSlot, shiftFollowingSteps), y
  * allí la apertura es lo primero que hay. La hora de un paso, que sí puede
@@ -230,7 +230,7 @@ export interface PlanOptions {
 export const MIN_STEP_GAP_MS = 5 * 60 * 1000;
 
 /**
- * La hora local de un paso, ya dispersa y dentro de la ventana (r2):
+ * La hora local de un paso, ya dispersa y dentro de la ventana:
  *   · la dispersión va HACIA DELANTE desde la hora elegida y se queda
  *     dentro del día: [base, min(base + dispersión, cierre)). Un paso de
  *     las 16:30 con 40 minutos sale entre las 16:30 y las 17:00, nunca a
@@ -289,7 +289,7 @@ export function planSteps(steps: readonly PlanStep[], opts: PlanOptions): Array<
   let prev = opts.enrolledAt.getTime();
   for (const step of ordered) {
     let at = instantOf(step, start);
-    // La separación mínima tampoco saca un paso de la ventana (r2): si no
+    // La separación mínima tampoco saca un paso de la ventana: si no
     // cabe ese día, a la siguiente apertura.
     if (at < prev + MIN_STEP_GAP_MS) at = nextWindowSlot(new Date(prev + MIN_STEP_GAP_MS), opts.timeZone, window).getTime();
     out.push({ stepId: step.id, at: new Date(at) });
@@ -314,7 +314,7 @@ export function nextBusinessSlot(at: Date, timeZone: string, window: SendWindow 
 export const DEFAULT_OPENING_SPREAD_MINUTES = 30;
 
 /**
- * El primer instante en que algo puede salir, a partir de `at` (VEN-10 r2).
+ * El primer instante en que algo puede salir, a partir de `at`.
  * Es lo que el despachador aplica a TODO lo que reclama, no solo a lo que
  * programa: un reintento, un resume_at, un retenido que se aprueba de
  * noche o lo que se acumuló con el worker caído el fin de semana.
@@ -357,7 +357,7 @@ export interface ShiftStep {
 
 /**
  * Cuando un paso se mueve (un tope lo mandó al siguiente día hábil), los
- * que van detrás en el mismo enrolamiento se corren con él (VEN-10 r2):
+ * que van detrás en el mismo enrolamiento se corren con él:
  * cada uno conserva su separación en DÍAS HÁBILES respecto del que se
  * movió (day_offset) y su hora local de reloj, encerrada en la ventana,
  * con la separación mínima entre pasos. Nunca adelanta un paso: si su
@@ -433,7 +433,7 @@ export function nextRetryAt(
 }
 
 // ---------------------------------------------------------------------
-// El ritmo (VEN-10 r5): por hora y por cuenta, y por marca
+// El ritmo: por hora y por cuenta, y por marca
 // ---------------------------------------------------------------------
 
 /** Lo que una cuenta ya sacó: en la última hora corrida y su último envío. */

@@ -62,7 +62,7 @@ export interface CapRequest {
   /** El tope del periodo. 0 o menos no deja pasar nada. */
   cap: number;
   /**
-   * (VEN-10 r5, 0052 §3) El instante cuyo día local cuenta: el reloj de
+   * (VEN-10, 0052 §3) El instante cuyo día local cuenta: el reloj de
    * quien reclama. Sin él, now() de la base (las funciones de 0037).
    */
   at?: Date;

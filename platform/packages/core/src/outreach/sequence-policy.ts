@@ -1,5 +1,5 @@
 /**
- * Una secuencia frente a la política de la marca (VEN-10 r3, hallazgo 12).
+ * Una secuencia frente a la política de la marca.
  *
  * El despachador aplica dos reglas de outbound_policy al reclamar:
  * max_touches_per_company (los mensajes a una marca en 90 días; los de

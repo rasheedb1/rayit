@@ -2,7 +2,7 @@
  * Outreach · el motor de cadencias (VEN-10): el vocabulario común a
  * enrolar, reclamar, enviar y leer respuestas. Dueño: Rasheed.
  *
- * El motor vive en cuatro archivos (r2), reexportados desde
+ * El motor vive en cuatro archivos, reexportados desde
  * queries/outreach.ts:
  *
  *   enroll.ts    un contacto entra en una secuencia: su enrolamiento y un
@@ -15,7 +15,7 @@
  *
  * El reloj lo pone quien llama (`now`): el worker pasa el suyo y las
  * pruebas avanzan uno falso. Los contadores de los topes cuentan el día
- * de ese mismo reloj (r5, 0052 §3).
+ * de ese mismo reloj (0052 §3).
  */
 import { DEFAULT_SEND_WINDOW, DISPATCHABLE_STEP_TYPES, shiftFollowingSteps, type DispatchableStepType, type SendWindow } from '@mc/core';
 import { isUuid, type SqlExecutor, type WorkerSql } from '../../client.ts';
@@ -27,7 +27,7 @@ import { OutreachShapeError } from '../outreach.ts';
 
 /**
  * Los tipos de paso que el despachador envía solo. El resto es trabajo de
- * una persona (draft). Una sola lista, en @mc/core (r3): la usa también
+ * una persona (draft). Una sola lista, en @mc/core: la usa también
  * checkSequenceAgainstPolicy.
  */
 export { DISPATCHABLE_STEP_TYPES, type DispatchableStepType };
@@ -48,7 +48,7 @@ export const ZOMBIE_AFTER_MINUTES = 5;
 export const ACCOUNT_WAIT_MS = 60 * 60 * 1000;
 
 /**
- * La plaza que cuenta en outbound_counter por CUENTA (r4): una sola por
+ * La plaza que cuenta en outbound_counter por CUENTA: una sola por
  * canal, porque el techo de la cuenta (outreach_channel_account_limits:
  * effective_daily y effective_weekly, 100/200 en LinkedIn) es uno para
  * todo lo que sale por ella. Antes se contaba por acción (linkedin_invite
@@ -96,7 +96,7 @@ export function windowOf(start: string | null, end: string | null): SendWindow {
 }
 
 // ---------------------------------------------------------------------
-// La forma de las filas (r2): lo que llega de la base se comprueba
+// La forma de las filas: lo que llega de la base se comprueba
 // ---------------------------------------------------------------------
 
 /** Un valor de una lista cerrada, o OutreachShapeError con la ruta del campo. */
@@ -146,7 +146,7 @@ export interface ContactAddresses {
 
 /**
  * La regla de los CHECK de outbound_touch.recipient_address (0037 §4.2),
- * repetida aquí para decirla ANTES de escribir (traída de la r2 rehecha):
+ * repetida aquí para decirla ANTES de escribir:
  * de 3 a 320 caracteres, y en un correo una sola arroba y sin espacios.
  * contact.email no tiene CHECK: una ficha con «carla arroba marca.test»
  * hacía fallar el UPDATE en lote del reclamo, y con él el despachador de
@@ -186,8 +186,8 @@ export interface CapReservation {
   channel: string;
   stepType: string | null;
   /**
-   * El día local en que se reservó (outbound_touch.caps_reserved_on, 'AAAA-MM-DD'),
-   * r3: la plaza vuelve a ESE día y a su semana. null: no hay nada que devolver.
+   * El día local en que se reservó (outbound_touch.caps_reserved_on, 'AAAA-MM-DD'):
+   * la plaza vuelve a ESE día y a su semana. null: no hay nada que devolver.
    */
   reservedOn: string | null;
 }
@@ -207,7 +207,7 @@ export async function releaseCaps(tx: WorkerSql, r: CapReservation): Promise<voi
 }
 
 // ---------------------------------------------------------------------
-// Correr los pasos de detrás (r2)
+// Correr los pasos de detrás
 // ---------------------------------------------------------------------
 
 /**

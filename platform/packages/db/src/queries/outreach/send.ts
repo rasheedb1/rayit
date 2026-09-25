@@ -38,9 +38,9 @@ export interface SendContext {
   workspaceId: string;
   status: (typeof TOUCH_STATUSES)[number];
   claimedAt: Date | null;
-  /** La hora a la que tocaba (r3): si sale mucho después, los pasos de detrás se corren. */
+  /** La hora a la que tocaba: si sale mucho después, los pasos de detrás se corren. */
   scheduledFor: Date | null;
-  /** El día local en que el reclamo reservó la plaza de los topes (r3): a él vuelve si no sale. */
+  /** El día local en que el reclamo reservó la plaza de los topes: a él vuelve si no sale. */
   capsReservedOn: string | null;
   channel: DispatchChannel;
   stepType: DispatchableStepType;
@@ -50,7 +50,7 @@ export interface SendContext {
   attempt: number;
   /** El intento cuyo resultado no se supo (0051 §6): se comprueba antes de reenviar. */
   unconfirmedAttempt: number | null;
-  /** (r5) El día en que ese intento reservó su plaza (0052 §2): vuelve ahí si el proveedor dice que no salió. */
+  /** El día en que ese intento reservó su plaza (0052 §2): vuelve ahí si el proveedor dice que no salió. */
   unconfirmedCapsOn: string | null;
   subject: string | null;
   body: string;
@@ -182,7 +182,7 @@ function parseSendContext(r: SendContextRow, previous: SendContext['previous']):
  * Relee y bloquea un toque reclamado, y antes su enrolamiento. null si ya
  * no existe.
  *
- * (r3) El enrolamiento se bloquea (FOR NO KEY UPDATE) hasta que la
+ * El enrolamiento se bloquea (FOR NO KEY UPDATE) hasta que la
  * transacción del envío termina: recordInbound lo pide FOR UPDATE, así que
  * una respuesta que llega mientras dura la llamada al proveedor espera a
  * que el envío se registre, y una que llegó antes se ve aquí (replied →
@@ -268,7 +268,7 @@ export type SendDecision =
   | { kind: 'fail'; reason: string };
 
 /**
- * Por qué se retiene un toque (r4): held_reason guarda un CÓDIGO estable
+ * Por qué se retiene un toque: held_reason guarda un CÓDIGO estable
  * de @mc/core/outreach/messages (HOLD_CODES), con su dato detrás de «:»
  * (formatHoldReason), nunca una frase: la cola de VEN-16 y el aviso lo
  * traducen al idioma del workspace con holdReasonText. Antes se guardaba
@@ -314,7 +314,7 @@ export function decideBeforeSend(ctx: SendContext, claimedAt: Date, now: Date): 
   if (!ctx.body.trim()) return { kind: 'hold', reason: HOLD_REASONS.noBody };
   const hits = [...findPlaceholders(ctx.subject), ...findPlaceholders(ctx.body)];
   if (hits.length > 0) return { kind: 'hold', reason: HOLD_REASONS.placeholders(hits.map((h) => h.match)) };
-  // (r4) La nota de una invitación de LinkedIn no se corta: una nota de 320
+  // La nota de una invitación de LinkedIn no se corta: una nota de 320
   // caracteres cortada a mitad de palabra le llegaba así a la marca.
   if (ctx.stepType === 'linkedin_connect') {
     const over = inviteNoteOverflow(ctx.body);
@@ -326,7 +326,7 @@ export function decideBeforeSend(ctx: SendContext, claimedAt: Date, now: Date): 
   // El lector de respuestas busca ese hilo y, al encontrarlo, lo devuelve a
   // la cola (recordRecoveredThread).
   if (ctx.stepType === 'email_reply' && !ctx.previous?.threadRef) return { kind: 'hold', reason: HOLD_REASONS.replyWithoutThread };
-  // (r3, de la r2 rehecha) Un correo nuevo sin asunto no sale: llega como «(sin asunto)».
+  // Un correo nuevo sin asunto no sale: llegaría como «(sin asunto)».
   if (ctx.channel === 'email' && ctx.stepType !== 'email_reply' && !ctx.subject?.trim()) {
     return { kind: 'hold', reason: HOLD_REASONS.noSubject };
   }
@@ -350,7 +350,7 @@ async function release(tx: WorkerSql, ctx: SendContext): Promise<void> {
  * status = 'processing': si otro lo movió, no se toca nada. La plaza del
  * tope vuelve; lo pospuesto arrastra los pasos de detrás.
  *
- * (r3) Posponer no gasta un intento: nada llegó al proveedor (la cuenta
+ * Posponer no gasta un intento: nada llegó al proveedor (la cuenta
  * no estaba, la cadencia estaba en pausa). attempt_count vuelve a lo que
  * era antes del reclamo y el enlace de baja de ese intento, que nunca
  * salió, se borra, como en releaseUnattempted. Así una cuenta caída o un
@@ -397,7 +397,7 @@ export async function applyDecision(
         `UPDATE outbound_touch SET status = 'held', held_reason = $2 WHERE id = $1::uuid AND status = 'processing' RETURNING id`,
         [ctx.touchId, decision.reason],
       )).rows.length > 0;
-      // (r4) Un mensaje retenido avisa (uno por mensaje): sin la cola de
+      // Un mensaje retenido avisa (uno por mensaje): sin la cola de
       // VEN-16, era un mensaje que desaparecía en silencio.
       if (moved) await notifyTouchHeld(tx, ctx.touchId, decision.reason, now);
       break;
@@ -410,7 +410,7 @@ export async function applyDecision(
 }
 
 /**
- * (r5) El proveedor dijo que el intento ambiguo anterior NO salió: su
+ * El proveedor dijo que el intento ambiguo anterior NO salió: su
  * plaza (reservada el día unconfirmed_caps_on) vuelve, y la columna se
  * borra en la misma transacción para no devolverla dos veces. Sin esto,
  * cada ambigüedad que no salió gastaba dos plazas del tope: la del
@@ -506,7 +506,7 @@ export async function recordSent(
     await tx.query(`UPDATE outreach_channel_account SET last_ok_at = $2::timestamptz WHERE id = $1::uuid`, [ctx.account.id, now.toISOString()]);
   }
   if (opts.confirmedAttempt !== undefined && opts.confirmedAttempt !== ctx.attempt) await release(tx, ctx);
-  // (r3) Un paso que sale tarde (estuvo retenido o bloqueado días) arrastra
+  // Un paso que sale tarde (estuvo retenido o bloqueado días) arrastra
   // a los de detrás: conservan su separación en días hábiles desde HOY.
   // Sin esto, el paso 2 ya vencido salía en la corrida siguiente, dos
   // minutos después del 1. shiftFollowing nunca adelanta nada.
@@ -528,7 +528,7 @@ export interface SendFailure {
   message: string;
   /**
    * Si la cuenta no sirvió: needs_reconnect (permiso perdido) o error, y
-   * la cuenta cambia de estado; o (r3) unavailable: no se pudo usar por
+   * la cuenta cambia de estado; o unavailable: no se pudo usar por
    * algo NUESTRO (falta el token en el almacén, faltan las llaves de
    * Google para renovarlo), y la cuenta no cambia. En los tres casos el
    * mensaje espera sin gastar intento, con un aviso por canal y día.
@@ -585,7 +585,7 @@ export async function recordFailure(tx: WorkerSql, ctx: SendContext, failure: Se
       if (await failTouch(tx, ctx.touchId, 'max_attempts', now)) await release(tx, ctx);
       return 'failed';
     }
-    // (r5) Un ambiguo anota también el día de su plaza (unconfirmed_caps_on):
+    // Un ambiguo anota también el día de su plaza (unconfirmed_caps_on):
     // si el proveedor dice después que no salió, vuelve a ese día.
     const r = await tx.query(
       `UPDATE outbound_touch SET status = 'scheduled', next_retry_at = $2::timestamptz, unconfirmed_attempt = $3::int,
@@ -615,7 +615,7 @@ export async function recordFailure(tx: WorkerSql, ctx: SendContext, failure: Se
  * 'bounced' (0051 §7). No es una baja (la persona no pidió nada): los
  * otros canales siguen.
  *
- * (r4) Si es un correo, la ficha queda además con contact.email_invalid,
+ * Si es un correo, la ficha queda además con contact.email_invalid,
  * igual que cuando el rebote llega al buzón (outbound.bounces de VEN-15,
  * con la misma función, markContactEmailInvalid): una secuencia que la
  * enrole mañana, aquí o en otro workspace, ya no le programa correos a una

@@ -4,7 +4,7 @@
  * correo de resumen. Los avisos del motor de cadencias (un mensaje que
  * no salió, uno retenido, una respuesta, una cuenta caída) los escribe
  * @mc/db en la misma transacción que su causa, con los textos de
- * @mc/core/outreach/messages (VEN-10 r4), que es el messages.ts del
+ * @mc/core/outreach/messages, que es el messages.ts del
  * motor: lo leen la base, el worker y la web. En el idioma del workspace (workspace.locale), como
  * el pie del correo del outreach (footerTextsFor de @mc/core): inglés si
  * el locale es inglés, si no español.

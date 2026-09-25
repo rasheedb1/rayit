@@ -4,7 +4,7 @@
  * Cada cinco minutos (0051), como respaldo del webhook de Unipile
  * (VEN-9, /api/webhooks/unipile) y como ÚNICA vía del correo, que no
  * tiene aviso: lee los hilos a los que se escribió en los últimos
- * treinta días, todos y por turno (r3: antes siempre los mismos 200),
+ * treinta días, todos y por turno (antes siempre los mismos 200),
  * también los de cadencias que ya respondieron o completaron (la baja
  * puede llegar en el segundo mensaje); pide a cada
  * canal lo que llegó y no conocemos, y por cada mensaje nuevo, en una
@@ -164,7 +164,7 @@ async function recoverConfirmedThreads(db: MotorDb, deps: RepliesDeps, report: R
 }
 
 /**
- * Una pasada del lector de respuestas (r3): página a página, por turno
+ * Una pasada del lector de respuestas: página a página, por turno
  * (primero lo nunca leído, después lo que hace más que no se lee), hasta
  * agotar los hilos, el tiempo o REPLIES_MAX_PAGES. Cada página anota su
  * lectura (markThreadsChecked), también la de los hilos que no se

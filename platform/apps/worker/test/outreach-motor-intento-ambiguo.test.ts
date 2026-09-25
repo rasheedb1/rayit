@@ -99,7 +99,7 @@ test('un intento ambiguo que el proveedor sí envió no se reenvía: se confirma
   assert.equal(plazaDespues, 1, 'el segundo reclamo devolvió su plaza: un solo envío, una sola plaza');
 });
 
-test('un intento ambiguo que NO salió devuelve su plaza al reenviar: una sola plaza gastada, no dos (r5)', async () => {
+test('un intento ambiguo que NO salió devuelve su plaza al reenviar: una sola plaza gastada, no dos', async () => {
   const w = await workspace(3, { contacts: 1 });
   const c = w.contacts[0]!;
   await enroll(w, bogota('2026-09-23', '07:00'));

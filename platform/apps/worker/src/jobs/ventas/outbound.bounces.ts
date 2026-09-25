@@ -17,7 +17,7 @@
  *      tampoco va a contact_suppression (0038).
  *
  * El buzón se lee A TRAVÉS de una interfaz (BounceMailbox), no de un
- * cliente de Gmail escrito aquí. (VEN-10 r4) El job registrado lee el
+ * cliente de Gmail escrito aquí. El job registrado lee el
  * Gmail de verdad: el mismo GmailChannel del despachador (buildChannels,
  * con el token de cada cuenta del almacén y las llaves de Google de la
  * plataforma) le da a cada cuenta su buzón (bounceMailboxFor), y
@@ -250,7 +250,7 @@ export function createBouncesJob(mailboxFor: MailboxFor) {
 }
 
 /**
- * Los buzones de verdad (VEN-10 r4): el GmailChannel de buildChannels, el
+ * Los buzones de verdad: el GmailChannel de buildChannels, el
  * mismo del despachador, con el almacén de tokens y las llaves de Google
  * del worker, y la bitácora de api_call_log. Sin llaves, o con el canal
  * falso, ninguna cuenta tiene buzón (canal no configurado).

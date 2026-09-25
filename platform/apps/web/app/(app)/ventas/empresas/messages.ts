@@ -282,7 +282,7 @@ export const FICHA = {
 
   /** Los errores de @mc/db/queries/ventas-ficha, por su código (FichaError.code). */
   /**
-   * Los mensajes de la cadencia (VEN-10 r5): adonde llevan los avisos del
+   * Los mensajes de la cadencia: adonde llevan los avisos del
    * motor. Un mensaje retenido dice por qué y se aprueba aquí, con su
    * texto a la vista y editable. El motivo lo traduce holdReasonText de
    * @mc/core/outreach/messages (los textos del motor viven ahí).

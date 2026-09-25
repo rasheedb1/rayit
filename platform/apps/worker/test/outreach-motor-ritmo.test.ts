@@ -87,7 +87,7 @@ test('el tope corre los pasos de detrás, y ningún paso sale antes que el anter
   await enroll(w, bogota('2026-09-25', '07:00')); // viernes: pasos el viernes, el lunes y el martes
   const antes = await touches(c);
   assert.deepEqual(antes.map((t) => localDay(t.scheduled_for)), ['2026-09-25', '2026-09-28', '2026-09-29']);
-  // El tope diario de la cuenta ya está lleno hoy (r5: el contador cuenta el día del reloj del despachador, 0052 §3).
+  // El tope diario de la cuenta ya está lleno hoy (el contador cuenta el día del reloj del despachador, 0052 §3).
   await db.raw.query(`UPDATE outreach_channel_account SET daily_cap = 1 WHERE id = $1`, [w.gmail]);
   await db.raw.query(
     `INSERT INTO outbound_counter (workspace_id, channel_account_id, period, period_start, action_type, count)
@@ -111,7 +111,7 @@ test('el tope corre los pasos de detrás, y ningún paso sale antes que el anter
   assert.equal(fake.email.sent.length, 0);
   const r3 = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-28', '12:30')));
   assert.deepEqual(r3.sent, [despues[0]!.id], 'primero el 1: en esta corrida el 2 todavía lo espera');
-  // El 1 salió tres horas tarde: el 2 no sale dos minutos después, se corre un día hábil desde hoy (r3).
+  // El 1 salió tres horas tarde: el 2 no sale dos minutos después, se corre un día hábil desde hoy.
   const r4 = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-28', '12:32')));
   assert.deepEqual(r4.sent, []);
   const [, t2] = await touches(c);
@@ -157,7 +157,7 @@ test('el tope del día es la curva de VEN-15 sobre el límite que rige de VEN-9,
   assert.equal(esperado, 20, 'la meseta de la primera semana');
   await enroll(w, bogota('2026-09-23', '07:00'));
   const fake = fakeChannels();
-  // (r5) La primera hora, el ritmo de la cuenta: un cuarto de su tope que
+  // La primera hora, el ritmo de la cuenta: un cuarto de su tope que
   // rige (0052 §1), 60 / 4 = 15. Lo demás espera su turno sin gastar plaza.
   const porHora = await scalar<number>(
     `SELECT effective_hourly AS v FROM outreach_channel_account_limits WHERE channel_account_id = $1`, [w.gmail],
@@ -202,7 +202,7 @@ test('la plaza de un reclamo que no salió vuelve al día en que se reservó, no
   const zombies = await motor.transaction((tx) => rescueZombies(tx, new Date(claimedAt.getTime() + 10 * 60_000), w.id));
   assert.deepEqual(zombies.released, [touch.id]);
   const filas = await db.raw.query<{ period: string; viejo: boolean; count: number }>(
-    // (r5) Los contadores cuentan el día del reloj del despachador (0052 §3): «hoy» es el del reclamo.
+    // Los contadores cuentan el día del reloj del despachador (0052 §3): «hoy» es el del reclamo.
     `SELECT period, period_start < $2::date - 6 AS viejo, count
        FROM outbound_counter WHERE workspace_id = $1 ORDER BY period, viejo`, [w.id, localDay(claimedAt)],
   );

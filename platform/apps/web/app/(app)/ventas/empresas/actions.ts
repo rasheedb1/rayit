@@ -4,7 +4,7 @@
  * Las Server Actions de la ficha de empresa (VEN-5) y de la siguiente
  * acción (VEN-4): registrar una actividad, fijar la siguiente acción y
  * marcarla hecha. Las usan la ficha, el pipeline y el bloque «Para hoy».
- * Y (VEN-10 r5) aprobar un mensaje retenido de la cadencia.
+ * Y aprobar un mensaje retenido de la cadencia.
  *
  * La misma forma que ../actions.ts: zod valida lo que llega, la consulta
  * de @mc/db hace el trabajo dentro de `withWorkspace`, y los errores de
@@ -270,7 +270,7 @@ export async function verMasActividad(
 }
 
 // ---------------------------------------------------------------------
-// VEN-10 r5 · Aprobar un mensaje retenido de la cadencia
+// VEN-10 · Aprobar un mensaje retenido de la cadencia
 // ---------------------------------------------------------------------
 
 const aprobarSchema = z.object({
@@ -324,7 +324,7 @@ export async function aprobarMensaje(_prev: VentasState, formData: FormData): Pr
 }
 
 // ---------------------------------------------------------------------
-// VEN-10 r3 · Un intento que el proveedor no confirmó
+// VEN-10 · Un intento que el proveedor no confirmó
 // ---------------------------------------------------------------------
 
 const intentoSchema = z.object({

@@ -3,22 +3,22 @@
  *
  * listOpenThreads da los hilos a los que se escribió en los últimos
  * treinta días, primero los que nunca se leyeron y después los que hace
- * más que no se leen (r3: antes siempre los mismos 200); markThreadsChecked
+ * más que no se leen (antes siempre los mismos 200); markThreadsChecked
  * anota la lectura. recordInbound registra lo que llegó, y su efecto lo
  * decide applyInboundEffects (inbound.ts, r4), la misma función que usa
  * el webhook de VEN-9:
  *   · pide la baja (el detector único de @mc/core) → la ficha, las fichas
  *     con su correo que el workspace ve y todo lo suyo cancelable, en
- *     cualquier secuencia DEL WORKSPACE (r5: nunca otro); también si la
- *     respuesta es automática (r4). En un correo, solo si la pide la
- *     ficha: un tercero en copia deja la baja para una persona (r5);
+ *     cualquier secuencia DEL WORKSPACE (nunca otro); también si la
+ *     respuesta es automática. En un correo, solo si la pide la
+ *     ficha: un tercero en copia deja la baja para una persona;
  *   · si no, y la cadencia seguía viva (o había completado sus pasos) →
  *     replied, se cancela lo cancelable y se avisa;
  *   · si ya había respondido, el mensaje se registra y solo se mira la
  *     baja: una marca que respondió y luego escribe «no nos escriban más»
  *     queda de baja en todos los canales, sin un segundo aviso;
  *   · una respuesta automática que no pide la baja (fuera de oficina) se
- *     guarda sin cancelar, sin avisar y sin contar como respuesta (r3).
+ *     guarda sin cancelar, sin avisar y sin contar como respuesta.
  */
 import { formatHoldReason } from '@mc/core/outreach/messages';
 import type { WorkerSql } from '../../client.ts';
@@ -112,7 +112,7 @@ export const OPEN_THREADS_PAGE = 200;
  * también, porque la baja puede llegar en el segundo mensaje), por la
  * cuenta que los envió. Uno por hilo, con su último toque.
  *
- * El orden es el turno (r3): primero los que nunca se leyeron, después
+ * El orden es el turno: primero los que nunca se leyeron, después
  * los que hace más que no se leen (outbound_touch.replies_checked_at del
  * último toque, 0051 §10), y a igualdad lo enviado más reciente. Con
  * markThreadsChecked después de cada lectura, dos corridas de 200 leen
@@ -194,7 +194,7 @@ export interface InboundMessage {
   body: string;
   occurredAt: Date;
   /**
-   * Una respuesta automática (r3): fuera de oficina, Auto-Submitted
+   * Una respuesta automática: fuera de oficina, Auto-Submitted
    * distinto de «no», X-Autoreply, Precedence: auto_reply. La lee el
    * adaptador del canal de las cabeceras.
    */
@@ -218,7 +218,7 @@ export interface InboundResult {
  * Registra una respuesta: el mensaje entrante en outbound_message (sin
  * duplicar) y su efecto, en la misma transacción, con applyInboundEffects
  * (inbound.ts): la MISMA función que usa el webhook de VEN-9, así que una
- * respuesta deja la misma base llegue por donde llegue (r4). Solo lo nuevo
+ * respuesta deja la misma base llegue por donde llegue. Solo lo nuevo
  * tiene efecto: releer un hilo no vuelve a cancelar ni a avisar.
  */
 export async function recordInbound(tx: WorkerSql, thread: OpenThread, msg: InboundMessage, now: Date): Promise<InboundResult> {

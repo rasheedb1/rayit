@@ -1,5 +1,5 @@
 /**
- * Outreach · una dirección de correo que no existe (VEN-10 r4, con VEN-15).
+ * Outreach · una dirección de correo que no existe (VEN-10, con VEN-15).
  *
  * Dos caminos llegan a saber que un correo rebotó para siempre, y los dos
  * dejan lo mismo en la base con estas funciones:

@@ -9,7 +9,7 @@
  * Lo mismo para leer respuestas: ChannelReader devuelve los mensajes
  * nuevos de un hilo abierto, y el job outbound.replies decide qué hacer.
  *
- * Implementaciones (r3): adaptadores finos sobre los clientes de VEN-9 en
+ * Implementaciones: adaptadores finos sobre los clientes de VEN-9 en
  * @mc/connectors (GmailApi y UnipileApi: su HTTP, su MIME, su bitácora en
  * api_call_log y su traducción de errores a OutreachApiError), y `fake`
  * para las pruebas y la demo. Aquí solo queda traducir un OutreachApiError
@@ -58,7 +58,7 @@ export interface OutgoingMessage {
 export type SendResult = ({ ok: true } & SentProof) | ({ ok: false } & SendFailure);
 
 /**
- * ¿Salió un intento cuyo resultado no se supo? (r2). found: sí, con sus
+ * ¿Salió un intento cuyo resultado no se supo?. found: sí, con sus
  * pruebas; false: no salió, se puede enviar; 'unknown': el canal no lo
  * sabe decir, y el despachador retiene el mensaje para una persona.
  */
@@ -112,7 +112,7 @@ export function abortedBeforeSend(): SendResult {
 const PLATFORM_CONFIG_CODES = new Set(['invalid_client', 'unauthorized_client', 'redirect_uri_mismatch', 'errors/missing_credentials']);
 /**
  * Los que dicen que el destinatario no existe o no se le puede escribir
- * (r5: solo los EXPLÍCITOS). Activan stopForBadAddress, que cancela todo lo
+ * (solo los EXPLÍCITOS). Activan stopForBadAddress, que cancela todo lo
  * pendiente de ese canal para la ficha y cierra la cadencia en 'bounced':
  * por eso un 404 o un 422 genéricos ya no cuentan. Un 404 al escribir en
  * un chat que se borró no dice que la persona no exista (el adaptador
@@ -139,7 +139,7 @@ export function isNotFound(err: unknown): boolean {
  *   tiempo agotado en ella es AMBIGUO: el proveedor pudo haberlo enviado,
  *   y el siguiente intento pregunta antes (findSent). En una lectura, o en
  *   la renovación del token, es un transitorio sin más.
- *   `lookup` (r5): la llamada que busca el PERFIL del destinatario. Ahí,
+ *   `lookup`: la llamada que busca el PERFIL del destinatario. Ahí,
  *   y solo ahí, un «no existe» dice que la dirección no sirve.
  */
 export function failureFrom(err: unknown, opts: { sends: boolean; lookup?: boolean }): SendResult {

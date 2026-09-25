@@ -132,7 +132,7 @@ export interface GmailMessage {
   /** Cabecera X-Failed-Recipients o Final-Recipient de un rebote. */
   failedRecipient: string | null;
   /**
-   * Una respuesta automática (VEN-10 r3): Auto-Submitted distinto de «no»
+   * Una respuesta automática: Auto-Submitted distinto de «no»
    * (RFC 3834), X-Autoreply o X-Autorespond, o Precedence: auto_reply. El
    * lector de respuestas la guarda sin cancelar la cadencia.
    */
@@ -153,7 +153,7 @@ export interface GmailApi {
   /** Los rebotes (mailer-daemon, postmaster) desde `since`. */
   searchBounces(opts: { since: Date; max?: number }): Promise<GmailMessageRef[]>;
   /**
-   * Lo que la persona envió a `to` desde `since` (VEN-10 r3): el
+   * Lo que la persona envió a `to` desde `since`: el
    * despachador lo mira antes de reenviar un intento cuyo resultado no se
    * supo, para no mandarle dos veces el mismo correo a una marca.
    */

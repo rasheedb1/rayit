@@ -1,5 +1,5 @@
 /**
- * VEN-10 r5 · los mensajes de la cadencia en la ficha y la aprobación de
+ * VEN-10 · los mensajes de la cadencia en la ficha y la aprobación de
  * un retenido (releaseHeldTouch), con la RLS del workspace como la web:
  *
  *   · la ficha lista los mensajes de cadencia de SU empresa, retenidos
@@ -11,7 +11,7 @@
  *     (0052 §2 se lo deja a mc_app solo desde 'held'); fuera de esa
  *     transición la columna sigue siendo del despachador;
  *   · otro workspace no puede aprobar lo ajeno;
- *   · (r3, 0053) «sí salió» con la RLS de la web: outreach_resolve_unconfirmed
+ *   · (0053) «sí salió» con la RLS de la web: outreach_resolve_unconfirmed
  *     deja el toque enviado y anota el enlace de ese intento, que la web
  *     sola no puede escribir.
  */
@@ -115,7 +115,7 @@ test('aprobar un retenido por un intento sin comprobar borra esa marca; fuera de
   );
 });
 
-test('«sí salió» con la RLS de la web: el toque queda enviado y el enlace de ese intento cuenta; otro workspace no lo ve (r3, 0053)', async () => {
+test('«sí salió» con la RLS de la web: el toque queda enviado y el enlace de ese intento cuenta; otro workspace no lo ve (0053)', async () => {
   const toque = id('76');
   await t.admin(`
     INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, sequence_id, step_index, enrollment_id, channel, subject, body,

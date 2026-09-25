@@ -48,7 +48,7 @@ test('un rebote cancela lo pendiente de ese canal y la cadencia termina en bounc
   );
   assert.equal(aviso.rows[0]!.title_es, 'Un mensaje a Marca 1 no salió');
   assert.equal(aviso.rows[0]!.body_es, 'El mensaje a Persona 1 Prueba por correo no se envió: el correo rebotó. Revisa la ficha de Marca 1.');
-  assert.equal(await scalar<boolean>(`SELECT email_invalid AS v FROM contact WHERE id = $1`, [c]), true, 'r4: el rebote síncrono marca el correo inválido');
+  assert.equal(await scalar<boolean>(`SELECT email_invalid AS v FROM contact WHERE id = $1`, [c]), true, 'el rebote síncrono marca el correo inválido');
 });
 
 test('un correo a una dirección que rebotó para siempre (VEN-15) no se reclama: se cancela en la cola', async () => {

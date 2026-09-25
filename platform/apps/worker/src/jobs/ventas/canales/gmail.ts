@@ -11,7 +11,7 @@
  *   · leer un hilo sin lo nuestro, sin lo conocido, sin rebotes, sin lo
  *     que no trae fecha, y marcando las respuestas automáticas.
  *
- * «Canal no configurado» (r3): sin GOOGLE_CLIENT_ID/SECRET no hay OAuth
+ * «Canal no configurado»: sin GOOGLE_CLIENT_ID/SECRET no hay OAuth
  * para renovar un token que dura una hora, y la web tampoco puede
  * conectar un Gmail. configured() es false: el despachador no reclama
  * correos (esperan en la cola sin gastar intentos, y la salud los cuenta)
@@ -175,7 +175,7 @@ export class GmailChannel implements ChannelSender, ChannelReader {
   }
 
   /**
-   * El buzón de rebotes de una cuenta (VEN-10 r4, para outbound.bounces de
+   * El buzón de rebotes de una cuenta (VEN-10, para outbound.bounces de
    * VEN-15): el mismo GmailApi que envía, abierto con el token de la cuenta
    * del almacén, visto como BounceMailbox (gmail-rebotes.ts). null si el
    * canal no está configurado (sin las llaves de Google). El token se lee

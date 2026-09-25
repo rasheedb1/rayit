@@ -6,7 +6,7 @@
  * zona de la cadencia, ventana y dispersión de @mc/core) y su estado
  * inicial (initialTouchState).
  *
- * Solo fichas del workspace de la secuencia (r2): la web pasa por la RLS,
+ * Solo fichas del workspace de la secuencia: la web pasa por la RLS,
  * pero el worker corre con BYPASSRLS, y sin el filtro una secuencia de A
  * enrolaba la ficha privada de B y el despachador le escribía desde el
  * Gmail de A. La regla es contact_visible_to (0051 §5), la misma que
@@ -29,10 +29,10 @@ export interface EnrollInput {
 }
 
 /**
- * Por qué una ficha no se enrola. (r4) email_invalid: su correo rebotó
+ * Por qué una ficha no se enrola. email_invalid: su correo rebotó
  * para siempre (VEN-15) y la secuencia no tiene ningún paso que le pueda
  * llegar por otro canal; no_address: no tiene dirección en ninguno de los
- * canales de la secuencia; (r3) invalid_address: la tiene, pero mal escrita
+ * canales de la secuencia; invalid_address: la tiene, pero mal escrita
  * (un correo sin arroba). Antes se enrolaban con todo saltado y
  * el enrolamiento quedaba 'active' para siempre; la de correo rebotado,
  * peor: el disparador de 0050 abortaba el lote entero.
@@ -40,8 +40,8 @@ export interface EnrollInput {
 export type EnrollSkipReason = 'not_found' | 'opted_out' | 'already_enrolled' | 'email_invalid' | 'no_address' | 'invalid_address';
 
 /**
- * (r5) Lo que la secuencia no va a poder cumplir con la política del
- * workspace, dicho al enrolar (la pantalla que enrola lo muestra). (r3)
+ * Lo que la secuencia no va a poder cumplir con la política del
+ * workspace, dicho al enrolar (la pantalla que enrola lo muestra).
  * Con los pasos concretos (checkSequenceAgainstPolicy de @mc/core):
  *   · over_company_cap: tiene más pasos que el despachador envía que
  *     max_touches_per_company; `stepIds` son los que se cancelarán al
@@ -96,7 +96,7 @@ interface ContactRow {
   opted_out: boolean;
   suppressed: boolean;
   email_invalid: boolean;
-  /** (r5) Pidió la baja a ESTE workspace (un enrolamiento suyo en opted_out), aunque la ficha sea pública. */
+  /** Pidió la baja a ESTE workspace (un enrolamiento suyo en opted_out), aunque la ficha sea pública. */
   ws_opted_out: boolean;
   company: string;
 }
@@ -107,15 +107,15 @@ interface ContactRow {
  *     manual, WhatsApp) o que espera al generador (generate_with_ai) →
  *     draft: lo completa una persona o VEN-12;
  *   · el contacto no tiene dirección en ese canal → skipped (no_address);
- *   · (r4) un correo a una ficha cuyo correo rebotó para siempre
+ *   · un correo a una ficha cuyo correo rebotó para siempre
  *     (contact.email_invalid, VEN-15) → skipped (email_invalid): la base
  *     no deja programarlo (0050 §2) y antes abortaba el lote entero;
  *   · la secuencia es manual → draft (la persona envía cada toque);
  *   · la plantilla deja huecos sin rellenar → held (placeholders:<huecos>);
- *   · (r4) la nota de una invitación de LinkedIn pasa de 300 caracteres →
+ *   · la nota de una invitación de LinkedIn pasa de 300 caracteres →
  *     held (note_too_long:<n>): no se corta en el adaptador;
- *   · (r3) un correo nuevo sin asunto → held (no_subject);
- *   · (r5) la política pide revisión humana (require_human_review, el
+ *   · un correo nuevo sin asunto → held (no_subject);
+ *   · la política pide revisión humana (require_human_review, el
  *     valor por defecto) o la secuencia es 'review' (0037 §3.1: «la
  *     máquina propone y la persona aprueba») → held (needs_review): sale
  *     cuando una persona lo aprueba en la ficha (releaseHeldTouch);
@@ -126,14 +126,14 @@ export function initialTouchState(input: {
   generateWithAi: boolean;
   automationMode: string;
   hasAddress: boolean;
-  /** (r3) La dirección está, pero no sirve (checkRecipient): skipped con invalid_address, no no_address. */
+  /** La dirección está, pero no sirve (checkRecipient): skipped con invalid_address, no no_address. */
   invalidAddress?: boolean;
-  /** El canal del paso (r4): un correo a una ficha con email_invalid se salta. */
+  /** El canal del paso: un correo a una ficha con email_invalid se salta. */
   channel?: string;
   emailInvalid?: boolean;
   subject: string | null;
   body: string | null;
-  /** (r5) outbound_policy.require_human_review. Por defecto, sí (como la política). */
+  /** outbound_policy.require_human_review. Por defecto, sí (como la política). */
   requireHumanReview?: boolean;
 }): { status: 'draft' | 'scheduled' | 'held' | 'skipped'; heldReason?: string; blockedReason?: string } {
   if (!(DISPATCHABLE_STEP_TYPES as readonly string[]).includes(input.stepType)) return { status: 'draft' };
@@ -149,7 +149,7 @@ export function initialTouchState(input: {
     const over = inviteNoteOverflow(input.body);
     if (over !== null) return { status: 'held', heldReason: formatHoldReason({ code: 'note_too_long', detail: over }) };
   }
-  // (r3) Un correo nuevo sin asunto se retiene desde el principio (el despachador tampoco lo enviaría).
+  // Un correo nuevo sin asunto se retiene desde el principio (el despachador tampoco lo enviaría).
   if (input.stepType === 'email' && !input.subject?.trim()) return { status: 'held', heldReason: formatHoldReason({ code: 'no_subject' }) };
   if (input.requireHumanReview !== false || input.automationMode === 'review') {
     return { status: 'held', heldReason: formatHoldReason({ code: 'needs_review' }) };
@@ -157,7 +157,7 @@ export function initialTouchState(input: {
   return { status: 'scheduled' };
 }
 
-/** (r5) Lo que la secuencia no podrá cumplir con la política (puro, ver EnrollWarning). */
+/** Lo que la secuencia no podrá cumplir con la política (puro, ver EnrollWarning). */
 export function sequenceWarnings(
   steps: ReadonlyArray<{ id: string; stepType: string; dayOffset: number; orderInDay?: number }>,
   policy: { maxTouchesPerCompany: number; minDaysBetweenTouches: number },
@@ -180,7 +180,7 @@ export function sequenceWarnings(
  * (WorkerSql: el filtro contact_visible_to limita al de la secuencia).
  * Un contacto de otro workspace o que no existe sale como not_found; uno
  * dado de baja (su ficha o su correo en la lista global) como opted_out;
- * uno que ya está en la secuencia, como already_enrolled; (r4) uno al que
+ * uno que ya está en la secuencia, como already_enrolled; uno al que
  * no le llega ningún paso, como email_invalid (su correo rebotó) o
  * no_address. Una ficha que no se puede enrolar nunca tumba el lote.
  */
@@ -249,7 +249,7 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
       result.skipped.push({ contactId, reason: 'opted_out' });
       continue;
     }
-    // Los estados de cada paso primero (r4): una ficha a la que no le
+    // Los estados de cada paso primero: una ficha a la que no le
     // llega ningún paso no se enrola, y dice por qué.
     const values = {
       first_name: firstNameOf(c.full_name), full_name: c.full_name, company: c.company, role_title: c.role_title,
@@ -326,7 +326,7 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
 /**
  * Cancela lo pendiente de un enrolamiento: lo cancelable
  * (CANCELABLE_TOUCH_STATUSES: borrador, programado y retenido), como
- * public_optout y el webhook de VEN-9 (r4: una sola definición). Un
+ * public_optout y el webhook de VEN-9 (una sola definición). Un
  * borrador de un enrolamiento que terminó ya no puede salir (el reclamo lo
  * cancelaría) y solo ensuciaba la cola de VEN-16. Lo que está en
  * processing es del despachador, que relee el enrolamiento antes de

@@ -1,5 +1,5 @@
 /**
- * VEN-10 r4 · los textos del motor (@mc/core/outreach/messages): held_reason
+ * VEN-10 · los textos del motor (@mc/core/outreach/messages): held_reason
  * es un código que se traduce por idioma, y una nota de LinkedIn se mide
  * sin partir un emoji.
  */

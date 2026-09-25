@@ -84,7 +84,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
       invoices: await listChainInvoices(tx, id, chain),
       niches: await listNicheNames(tx, company.nicheSlugs),
       dates: await getLocalDates(tx),
-      // Los mensajes de las secuencias (VEN-10 r5): adonde llevan los avisos del motor.
+      // Los mensajes de las secuencias (VEN-10): adonde llevan los avisos del motor.
       cadence: await listCompanyCadenceTouches(tx, id),
     };
   });

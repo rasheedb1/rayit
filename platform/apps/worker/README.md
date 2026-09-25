@@ -170,10 +170,10 @@ migración 0051 (grupo `sales`). Las consultas viven en
      cola (programado, reclamado, retenido, o un borrador que espera al
      generador);
    - una dirección que falta o está mal escrita → `skipped`
-     (`no_address`, `invalid_address`), sin tumbar el lote (r3);
+     (`no_address`, `invalid_address`), sin tumbar el lote;
    - un correo a una dirección que rebotó para siempre
      (`contact.email_invalid`, VEN-15) → cancelado;
-   - **la cuenta** (r3): la del último envío del enrolamiento por ese
+   - **la cuenta**: la del último envío del enrolamiento por ese
      canal (el hilo vive en ese buzón); si está caída, el mensaje espera.
      Sin envío previo, cualquier cuenta conectada del canal con plaza.
      Sin ninguna, espera una hora (un aviso por canal y día);

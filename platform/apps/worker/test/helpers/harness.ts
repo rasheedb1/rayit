@@ -11,7 +11,7 @@ import type { JobRegistration } from '../../src/runner/registry.ts';
 import { startWorker, type RunningWorker } from '../../src/runner/worker.ts';
 
 /**
- * El tiempo del arranque de un archivo de pruebas (VEN-10 r5): aplicar
+ * El tiempo del arranque de un archivo de pruebas: aplicar
  * todas las migraciones en PGlite. Va en su propio `before(fn,
  * SETUP_TIMEOUT)` para que --test-timeout mida las pruebas y no la
  * migración: con varios agentes en la máquina (carga 40-60), migrar pasaba

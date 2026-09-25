@@ -1,5 +1,5 @@
 /**
- * Outreach · lo que hace una respuesta, venga por donde venga (VEN-10 r4, r5).
+ * Outreach · lo que hace una respuesta, venga por donde venga (VEN-10, r5).
  *
  * Una respuesta entra por dos puertas: el webhook de Unipile de VEN-9
  * (recordInboundMessage, con la RLS del workspace) y el lector de
@@ -10,21 +10,20 @@
  *   · el detector es UNO (detectOptOut de @mc/core, el mismo que
  *     looksLikeOptOut), y se mira también en las respuestas automáticas
  *     («ya no trabajo aquí, sáquenme de su lista» llega con Auto-Submitted);
- *   · una baja es del WORKSPACE del mensaje (r5, 0029 §1): la marca
+ *   · una baja es del WORKSPACE del mensaje (0029 §1): la marca
  *     contact.opted_out de SUS fichas con ese correo, cancela lo suyo
  *     cancelable (draft, scheduled, held) en cualquier secuencia SUYA y
- *     pasa SUS enrolamientos vivos a opted_out. Nunca toca otro workspace:
- *     hasta la r4 el lector (mc_worker, BYPASSRLS) daba de baja las fichas
- *     con ese correo de TODOS los workspaces, y un falso positivo del
- *     detector en A borraba el outreach de B sin avisarle, mientras el
- *     webhook (con RLS) solo tocaba A. Ahora las dos puertas filtran igual
- *     (contact_visible_to y workspace_id) y dejan la misma base. Una ficha
+ *     pasa SUS enrolamientos vivos a opted_out. Nunca toca otro workspace
+ *     (el lector corre como mc_worker, BYPASSRLS: un falso positivo del
+ *     detector en A no puede borrar el outreach de B): las dos puertas
+ *     filtran igual (contact_visible_to y workspace_id) y dejan la misma
+ *     base. Una ficha
  *     pública (del catálogo, sin dueño) no se marca: es de todos; lo que
  *     la protege en este workspace es su enrolamiento en opted_out, que
  *     enrollContacts mira antes de volver a enrolarla. La lista global
  *     (contact_suppression) es solo para lo que la plataforma verifica
  *     (enlace de baja, rebote duro, queja: 0029 §1);
- *   · (r5) en un correo, la baja la pide la ficha: si quien escribe
+ *   · en un correo, la baja la pide la ficha: si quien escribe
  *     (fromAddress) no es su correo ni la dirección a la que se escribió
  *     (un tercero en copia, otra persona de la marca), el mensaje queda
  *     con intención 'unsubscribe', la cadencia se detiene como con una
@@ -96,7 +95,7 @@ export interface InboundEffects {
 }
 
 /**
- * La baja que llega en una respuesta, en el workspace del mensaje (r5):
+ * La baja que llega en una respuesta, en el workspace del mensaje:
  * la ficha que respondió y las fichas con su mismo correo que ESE
  * workspace ve (contact_visible_to); lo suyo cancelable (draft, scheduled,
  * held) cancelado en cualquier secuencia del workspace, y sus
@@ -168,7 +167,7 @@ export function normalizeAddress(value: string | null | undefined): string | nul
 }
 
 /**
- * (r5) ¿Escribió la ficha? En un correo, quien pide la baja tiene que ser
+ * ¿Escribió la ficha? En un correo, quien pide la baja tiene que ser
  * la persona a la que se escribió: su correo en la ficha o la dirección
  * del toque. Sin fromAddress (el proveedor no lo dijo) no hay con qué
  * compararla y vale lo que diga el hilo; en LinkedIn e Instagram el chat
@@ -192,7 +191,7 @@ async function senderIsContact(tx: SqlExecutor, input: InboundEffectsInput): Pro
 interface Who {
   locale: string | null;
   who: string | null;
-  /** La empresa de la ficha: el aviso lleva a su bloque «Mensajes de la cadencia», donde se ve la respuesta (r5). */
+  /** La empresa de la ficha: el aviso lleva a su bloque «Mensajes de la cadencia», donde se ve la respuesta. */
   company_id: string | null;
 }
 
@@ -265,7 +264,7 @@ export async function applyInboundEffects(tx: SqlExecutor, input: InboundEffects
     );
     if (!input.contactId) return { ...none, optOut: true, optOutRule: verdict.ruleId };
     const w = await whoAndLocale(tx, input.workspaceId, input.contactId);
-    // (r5) Un tercero en copia que pide «sáquenme de su lista» no da de baja
+    // Un tercero en copia que pide «sáquenme de su lista» no da de baja
     // a la ficha: la cadencia se detiene (nadie quiere seguir escribiendo en
     // ese hilo) y una persona decide.
     if (!(await senderIsContact(tx, input))) {

@@ -4,22 +4,21 @@
  * Levanta Postgres embebido con TODAS las migraciones y los seeds del
  * repositorio (los mismos archivos y el mismo runner que `make
  * db.migrate` y `make db.seed`) y corre el despachador y el lector de
- * respuestas como mc_worker con el canal falso. Cuenta la historia entera
- * (r3):
+ * respuestas como mc_worker con el canal falso. Cuenta la historia entera:
  *
  *   1. Con la política del seed, que viene APAGADA: no se reclama nada.
  *   2. Encendida, con el LinkedIn de la demo reconectado (el seed lo deja
  *      en needs_reconnect; aquí se hace lo que haría el callback de
  *      Unipile): el mensaje de LinkedIn que el seed dejó programado para
- *      Vitalé espera (r5): la política del seed pide tres días entre
+ *      Vitalé espera: la política del seed pide tres días entre
  *      mensajes a la misma marca y el seed le mandó un correo el día
- *      anterior (r3: anclado al reloj de la demo, no a now(); la historia
+ *      anterior (anclado al reloj de la demo, no a now(); la historia
  *      es la misma cualquier día de la semana).
  *   3. Cuando se cumplen, sale.
  *   4. Una secuencia de tres correos (días 0, 3 y 6: la separación de la
  *      política; el segundo es la respuesta en el hilo) con dos marcas
- *      enroladas desde ayer. La política del seed pide revisión humana
- *      (r5): los mensajes nacen retenidos y la creadora los aprueba como
+ *      enroladas desde ayer. La política del seed pide revisión humana:
+ *      los mensajes nacen retenidos y la creadora los aprueba como
  *      en la ficha (releaseHeldTouch, con la RLS de su espacio). Sus dos
  *      primeros correos, ya vencidos, salen con su pie (la página de baja
  *      y la dirección postal) y su cabecera de baja de un clic.
@@ -67,7 +66,7 @@ export interface DemoDelivery {
 export interface DemoMotorReport {
   /** La pasada con la política apagada, con el toque ya vencido. */
   off: DispatchReport;
-  /** La pasada con la política encendida y el reloj en la hora del toque: la separación con la marca lo hace esperar (r5). */
+  /** La pasada con la política encendida y el reloj en la hora del toque: la separación con la marca lo hace esperar. */
   on: DispatchReport;
   /** La pasada cuando se cumple la separación: sale. */
   later: DispatchReport;
@@ -134,7 +133,7 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
     const off = await runDispatch(motor, { senders: fake, appUrl, now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
     await db.asWorker((tx) => enableOutreach(tx, DEMO_WORKSPACE_ID));
     const on = await runDispatch(motor, { senders: fake, appUrl, now: () => clock, workspaceId: DEMO_WORKSPACE_ID });
-    // (r5) La separación con la marca lo movió: el reloj va a esa hora.
+    // La separación con la marca lo movió: el reloj va a esa hora.
     const waitUntil = on.claim.paced.reduce<Date | null>((m, x) => (!m || x.until > m ? x.until : m), null);
     const laterClock = waitUntil ? nextWindowSlot(new Date(waitUntil.getTime() + 60_000), next.timeZone, window) : clock;
     const later = waitUntil
@@ -181,7 +180,7 @@ export async function runDemoMotor(): Promise<DemoMotorReport> {
       enrollContacts(tx, { sequenceId, contactIds: brands.map((b) => b.contactId), now: yesterday }),
     );
     const byContact = new Map(enrolled.enrolled.map((e) => [e.contactId, e.enrollmentId]));
-    // (r5) La revisión humana del seed: los mensajes nacen retenidos
+    // La revisión humana del seed: los mensajes nacen retenidos
     // (needs_review) y la creadora los aprueba tal cual, como en la ficha.
     const approved = await db.withWorkspace(DEMO_WORKSPACE_ID, async (tx) => {
       const held = (await tx.query<{ id: string; subject: string | null; body: string }>(

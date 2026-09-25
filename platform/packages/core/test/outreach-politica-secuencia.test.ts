@@ -1,6 +1,6 @@
 /**
- * VEN-10 r3 · una secuencia frente a la política de la marca, antes de
- * activarla (checkSequenceAgainstPolicy, hallazgo 12).
+ * VEN-10 · una secuencia frente a la política de la marca, antes de
+ * activarla (checkSequenceAgainstPolicy).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

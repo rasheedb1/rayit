@@ -1,5 +1,5 @@
 /**
- * VEN-10 r2 · lo que la migración 0051 le pone al esquema del motor,
+ * VEN-10 · lo que la migración 0051 le pone al esquema del motor,
  * probado contra la base (embebida, o TEST_DATABASE_URL en el CI):
  *
  *   · los avisos de notification son la UNIÓN de las ramas y coinciden
@@ -125,7 +125,7 @@ test('outbound_counter_release devuelve la plaza del día de la reserva y de su 
     }
   });
   assert.deepEqual(await cuenta(), ['day:2', 'week:2']);
-  // Una reserva de hace dos semanas no toca las filas de hoy (r3: antes restaba de hoy).
+  // Una reserva de hace dos semanas no toca las filas de hoy (antes restaba de hoy).
   await t.db.asWorker((tx) => tx.query(`SELECT outbound_counter_release($1, $2, 'email', outreach_local_date($1, now()) - 14)`, [WS_A, ACC_A]));
   assert.deepEqual(await cuenta(), ['day:2', 'week:2']);
   await t.db.asWorker((tx) => tx.query(`SELECT outbound_counter_release($1, $2, 'email', ${HOY})`, [WS_A, ACC_A]));

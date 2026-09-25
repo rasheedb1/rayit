@@ -1,13 +1,13 @@
 /**
  * Outreach · los mensajes de la cadencia de una empresa y su aprobación
- * (VEN-10 r5). Es lo que la ficha de la empresa enseña («Mensajes de la
+ * (VEN-10). Es lo que la ficha de la empresa enseña («Mensajes de la
  * cadencia») y adonde llevan los avisos del motor: un mensaje retenido
- * (held) tiene aquí su motivo y su botón «Aprobar y enviar».
+ * (held) tiene aquí su motivo y su botón «Aprobar y enviar», y uno cuyo
+ * intento no se confirmó, «Sí, salió» / «No salió: enviarlo».
  *
- * Hasta la r4 el aviso «Un mensaje a X espera tu revisión» llevaba a una
- * ficha que no enseñaba ningún toque, y no había forma de aprobar uno: la
- * cola de VEN-16 todavía no existe. Esto es lo mínimo para que el aviso
- * tenga salida; VEN-16 lo reemplaza por la bandeja completa.
+ * Es lo mínimo para que el aviso «Un mensaje a X espera tu revisión»
+ * tenga salida mientras no existe la cola de VEN-16, que lo reemplaza
+ * por la bandeja completa.
  *
  * Corre con la RLS del workspace (WorkspaceTx): la pantalla nunca fija el
  * workspace, lo fija el cliente de base.
@@ -165,7 +165,7 @@ export async function releaseHeldTouch(
   }
   if (row.opted_out) return { ok: false, code: 'opted_out' };
   if (row.needs_postal) return { ok: false, code: 'no_postal_address' };
-  // (r3) Retenido por un intento sin comprobar: aprobarlo es decir que no
+  // Retenido por un intento sin comprobar: aprobarlo es decir que no
   // salió. outreach_resolve_unconfirmed (0053) lo devuelve a la cola, borra
   // el enlace de ese intento y devuelve su plaza; después, el texto.
   if (row.unconfirmed) {
@@ -194,7 +194,7 @@ export type UnconfirmedOutcome = 'was_sent' | 'resend';
 export type ResolveUnconfirmedResult = { ok: true } | { ok: false; code: 'not_found' | 'not_unconfirmed' | 'opted_out' };
 
 /**
- * (r3, hallazgo 4) Un mensaje retenido porque no se supo si un intento
+ * Un mensaje retenido porque no se supo si un intento
  * salió (held_reason 'unconfirmed_attempt:<n>'): la persona mira su
  * carpeta de enviados y dice qué pasó.
  *   · 'was_sent': salió. Queda como enviado (sin pruebas del proveedor,

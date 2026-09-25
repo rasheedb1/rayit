@@ -43,7 +43,7 @@ test('${x} cuenta una vez, no también como {x}', () => {
   assert.equal(findPlaceholders('${a} y {b}').length, 2);
 });
 
-test('el detector reconoce las catorce expresiones, y la de portugués (r4)', () => {
+test('el detector reconoce las catorce expresiones, y la de portugués', () => {
   assert.equal(OPT_OUT_RULES.filter((r) => r.lang !== 'pt').length, 14);
   assert.equal(OPT_OUT_RULES.length, 15);
   const frases: Record<string, string> = {
@@ -84,7 +84,7 @@ test('el detector no confunde un «ahora no», un interés ni nuestro pie citado
   assert.equal(stripQuoted('hola\n> citado\nadiós'), 'hola\nadiós');
 });
 
-test('el detector no toma por baja a una marca interesada (VEN-10 r2)', () => {
+test('el detector no toma por baja a una marca interesada', () => {
   // Los cinco casos de la revisión: pretérito, pregunta, firma corporativa y «remove me from the CC».
   for (const texto of [
     'no me enviaste el media kit, ¿me lo mandas?',
@@ -142,7 +142,7 @@ test('el detector sí ve la baja en sus formas reales, y en la primera línea lo
   assert.equal(stripSignature('Hola\nSaludos, Marcela\nTo unsubscribe…'), 'Hola');
 });
 
-test('una respuesta de una línea que empieza por el saludo es el mensaje, no la firma (r3)', () => {
+test('una respuesta de una línea que empieza por el saludo es el mensaje, no la firma', () => {
   for (const texto of [
     'Saludos. No nos escriban más.',
     'Saludos, por favor dejen de escribirnos',
@@ -157,7 +157,7 @@ test('una respuesta de una línea que empieza por el saludo es el mensaje, no la
   assert.equal(stripSignature('Nos interesa.\nSaludos, por favor sigan'), 'Nos interesa.\nSaludos, por favor sigan');
 });
 
-test('las formas pronominales de la baja en español (r3)', () => {
+test('las formas pronominales de la baja en español', () => {
   const casos: Array<[string, string]> = [
     ['No vuelvan a escribirnos.', 'es_no_escribir'],
     ['Por favor no volver a contactarnos', 'es_no_escribir'],
@@ -186,7 +186,7 @@ test('el renderizador sustituye lo conocido y deja a la vista lo que falta', () 
   assert.equal(firstNameOf(null), null);
 });
 
-test('el detector ve las bajas más comunes que la ronda 3 dejaba pasar (r4)', () => {
+test('el detector ve las bajas más comunes, también las de una sola palabra', () => {
   const casos: Array<[string, string]> = [
     ['Sáquenme de su lista', 'es_quitar_de_lista'],
     ['Sáquenme de su lista, por favor.', 'es_quitar_de_lista'],
@@ -213,7 +213,7 @@ test('el detector ve las bajas más comunes que la ronda 3 dejaba pasar (r4)', (
   }
 });
 
-test('las reglas nuevas no toman por baja lo que no lo es (r4)', () => {
+test('las reglas nuevas no toman por baja lo que no lo es', () => {
   for (const texto of [
     'Stop by our office next week.',
     'Sure, please remove me from the CC and loop in Andrés.',
@@ -227,7 +227,7 @@ test('las reglas nuevas no toman por baja lo que no lo es (r4)', () => {
   }
 });
 
-test('el saludo de apertura y un «De:» sin cita no se comen la baja (r3, hallazgos 1 y 18)', () => {
+test('el saludo de apertura y un «De:» sin cita no se comen la baja', () => {
   const casos: Array<[string, string]> = [
     ['Saludos, por favor denme de baja.', 'es_dar_de_baja'],
     ['Cordialmente, no me escriban más.', 'es_no_escribir'],

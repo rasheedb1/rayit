@@ -2,13 +2,13 @@
  * Detector de baja en lo que responde una marca (VEN-10).
  *
  * Catorce expresiones, siete en español y siete en inglés, como las de
- * Chief (docs/ventas-outreach.md §2), más una de portugués (r4: antes
+ * Chief (docs/ventas-outreach.md §2), más una de portugués (antes
  * era una lista aparte en bajas.ts, y el webhook y el job decidían
  * distinto), aplicadas a lo que entra por correo, LinkedIn e Instagram.
  * Es el ÚNICO detector: lo usan el webhook de Unipile (VEN-9) y el lector
  * de respuestas del motor, a través de @mc/db (applyInboundEffects).
  *
- * Qué hace una coincidencia (r5): marca contact.opted_out de la ficha en
+ * Qué hace una coincidencia: marca contact.opted_out de la ficha en
  * el workspace que recibió la respuesta, cancela lo pendiente de ESE
  * workspace y pasa sus cadencias a opted_out. No toca a los demás
  * workspaces ni la lista global: contact_suppression solo la llena el
@@ -16,8 +16,8 @@
  * queja: 0029 §1), nunca con una expresión regular sobre una respuesta. En
  * un correo, además, la tiene que pedir la ficha: si la escribe un tercero
  * en copia, queda para una persona. Aun así cada regla pide una
- * INTENCIÓN (imperativo, subjuntivo o «quiero…»), no una palabra suelta
- * (VEN-10 r2): un falso positivo pierde a una marca interesada para ese
+ * INTENCIÓN (imperativo, subjuntivo o «quiero…»), no una palabra suelta:
+ * un falso positivo pierde a una marca interesada para ese
  * workspace; un falso negativo lo ve la persona en la bandeja y lo marca
  * a mano.
  *
@@ -27,12 +27,12 @@
  *     pie dice cómo darse de baja.
  *   · Se quita la firma: desde «--», «Sent from…», el saludo y un nombre
  *     («Saludos, Marcela»), o el saludo de cierre solo («Saludos,») si lo
- *     sigue un nombre o nada; siempre DESPUÉS de algo escrito (r3):
+ *     sigue un nombre o nada; siempre DESPUÉS de algo escrito:
  *     «Saludos. No nos escriban más.» es el mensaje entero. Las firmas
  *     corporativas traen «To unsubscribe from our newsletter…». Si quitar
  *     la firma no deja nada, se mira el texto con ella.
  *   · «De: …»/«From: …» abre la cita solo si la siguen «Para:», «Asunto:»
- *     u otra cabecera (r3).
+ *     u otra cabecera.
  *   · Se busca sin tildes, en minúsculas y con el apóstrofo recto.
  *
  * Lo que NO es baja, con sus pruebas: «no me enviaste el media kit»
@@ -69,7 +69,7 @@ const ES_TAIL = '(\\s+(mas|nunca|nada|otra\\s+vez|de\\s+nuevo)\\b|\\s*(,?\\s*(po
 const EN_TAIL = '(\\s+(again|anymore|any\\s+more|ever|further|in\\s+the\\s+future)\\b|\\s*(,?\\s*(please|thanks|thank\\s+you))?\\s*([.!;,]|$))';
 
 /**
- * «De baja» de QUÉ (r2): si sigue «de/del <algo>», ese algo tiene que ser
+ * «De baja» de QUÉ: si sigue «de/del <algo>», ese algo tiene que ser
  * lo nuestro (la lista, la base, los correos, todo). «Darme de baja del
  * newsletter pero seguir hablando contigo» no es una baja de la cadencia;
  * «denme de baja», «de baja de su lista» y «de baja de todo», sí.
@@ -90,12 +90,12 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
         `|\\b(por\\s+)?favor,?\\s+(dar|den)\\s+de\\s+baja\\b${ES_BAJA_DE_LO_NUESTRO}` +
         `|\\b(quiero|queremos|deseo|deseamos)\\s+(dar(me|nos)?\\s+de\\s+baja|la\\s+baja)\\b${ES_BAJA_DE_LO_NUESTRO}`,
     ),
-    // (r4) La baja de una palabra, como «Unsubscribe» en inglés: «Baja», «BAJA»,
+    // La baja de una palabra, como «Unsubscribe» en inglés: «Baja», «BAJA»,
     // «Dar de baja», «Dar de baja por favor». Solo si es la línea entera.
     head: /^\s*(por\s+favor\s*,?\s*)?(dar(me|nos)?\s+de\s+)?baja(\s*,?\s*por\s+favor)?\s*[.!]*\s*$/m,
   },
   {
-    // «No me escriban más», «no nos vuelvan a escribir», y (r3) el pronombre
+    // «No me escriban más», «no nos vuelvan a escribir», y el pronombre
     // pegado o ausente: «no vuelvan a escribirnos», «no volver a
     // contactarnos», «NO ESCRIBAN MÁS». Sin pronombre, el subjuntivo solo
     // cuenta con «más» o «nunca»: «no manden el contrato» no es baja.
@@ -108,14 +108,14 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
     ),
   },
   {
-    // «Quítenme de su lista», (r3) «que me saquen de su lista», (r4) el
+    // «Quítenme de su lista», «que me saquen de su lista», el
     // imperativo con c→qu («Sáquenme de su lista») y el correo como objeto
     // («Por favor eliminen mi correo de su base de datos»).
     id: 'es_quitar_de_lista', lang: 'es',
     re: /\b(quit|saqu|sac|elimin|borr)[a-z]*(me|nos)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|\b(me|nos)\s+(quite[ns]?|saque[ns]?|elimine[ns]?|borre[ns]?)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|\b(quit|saqu|sac|elimin|borr)[a-z]*\s+(mi|mis|nuestro|nuestros)\s+(correo|correos|e-?mail|e-?mails|contacto|datos|direccion)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)/,
   },
   {
-    // (r4) también «No quiero más correos», sin «recibir».
+    // también «No quiero más correos», sin «recibir».
     id: 'es_no_recibir', lang: 'es',
     // Sin «recibir», solo si ahí termina la frase: «No quiero más correos sin
     // la propuesta» no es baja.
@@ -137,7 +137,7 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
     head: /^\s*(please\s+)?unsubscribe(\s+please)?\s*[.!]*\s*$/m,
   },
   {
-    // (r4) y «Please remove me.» al final de la frase («Not interested, please
+    // y «Please remove me.» al final de la frase («Not interested, please
     // remove me.»), no «please remove me from the CC».
     id: 'en_remove_me', lang: 'en',
     re: new RegExp(
@@ -148,7 +148,7 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
     head: /^\s*(please\s+)?remove\s+(me|us)(\s+please)?\s*[.!]*\s*$/m,
   },
   {
-    // (r4) «STOP» como respuesta entera (la convención de los SMS), no «Stop by our office».
+    // «STOP» como respuesta entera (la convención de los SMS), no «Stop by our office».
     id: 'en_stop_contacting', lang: 'en',
     re: /\bstop\s+(emailing|contacting|messaging|spamming|writing\s+to\s+(me|us)|sending\s+(me|us))\b/,
     head: /^\s*stop\s*[.!]*\s*$/m,
@@ -164,7 +164,7 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
     re: /\btake\s+(me|us)\s+off\s+(your|this|the|all)\s+(\w+\s+)?(list|lists|mailing|emails?|database|sequence)\b/,
   },
   { id: 'en_no_more_emails', lang: 'en', re: /\bno\s+more\s+(e-?mails|messages)\s*(,?\s*(please|pls|thanks|thank\s+you))?\s*([.!;,]|$)/m },
-  // Portugués (r4): era la lista aparte de bajas.ts (VEN-9); ahora es una
+  // Portugués: era la lista aparte de bajas.ts (VEN-9); ahora es una
   // regla más del MISMO detector, el del webhook y el del job.
   {
     id: 'pt_nao_escrever', lang: 'pt',
@@ -187,7 +187,7 @@ const QUOTE_HEADER_LOOKAHEAD = 4;
  * Solo lo que escribió quien responde: sin las líneas citadas («> …») y
  * sin lo que sigue a la cabecera de la cita de Gmail u Outlook. Una línea
  * «De: …»/«From: …» abre la cita solo si la sigue otra cabecera («Para:»,
- * «Asunto:», «Enviado:»…) en las líneas de abajo (r3): «De: Sofía\nPor
+ * «Asunto:», «Enviado:»…) en las líneas de abajo: «De: Sofía\nPor
  * favor denme de baja» es un mensaje que empieza con su nombre, no una cita.
  */
 export function stripQuoted(text: string): string {
@@ -223,16 +223,16 @@ const NAME_AFTER_CLOSING = /^\s*[,.!-]?\s+\p{Lu}[\p{L}'.-]*(\s+\p{Lu}[\p{L}'.-]*
 const NAME_LINE = /^\p{Lu}[\p{L}'.-]*(\s+((de|del|la|las|los|da|das|do|dos|van|von|y)\s+)*\p{Lu}[\p{L}'.-]*){0,4}\s*[.,]?$/u;
 
 /**
- * ¿La línea `i` abre la firma? (r3) Solo si ANTES hay algo escrito por la
+ * ¿La línea `i` abre la firma? Solo si ANTES hay algo escrito por la
  * persona, y la línea es:
  *   · una marca de firma («--», «Sent from…»);
  *   · el saludo de cierre y un nombre en la misma línea («Saludos, Marcela»);
  *   · o el saludo de cierre solo («Saludos,»), si lo que sigue es un nombre
- *     o ya no hay nada (r3): «Gracias.\nSaludos,\nNo nos contacten más» es
+ *     o ya no hay nada: «Gracias.\nSaludos,\nNo nos contacten más» es
  *     una petición después del saludo, no una firma.
  * «Saludos. No nos escriban más.», «Saludos, por favor denme de baja» y
- * «Best, please remove me from your list» son el mensaje entero: la
- * ronda 2 los cortaba y la baja se perdía.
+ * «Best, please remove me from your list» son el mensaje entero: si se
+ * cortaran como firma, la baja se perdería.
  */
 function opensSignature(lines: readonly string[], i: number, hasContent: boolean): boolean {
   if (!hasContent) return false;
@@ -268,7 +268,7 @@ export interface OptOutResult {
 /** ¿La respuesta pide la baja? */
 export function detectOptOut(text: string | null | undefined): OptOutResult {
   if (!text) return { optOut: false, ruleId: null };
-  // Red de seguridad (r3): si quitar la firma no deja nada, se mira lo que
+  // Red de seguridad: si quitar la firma no deja nada, se mira lo que
   // quedaba antes. Lo citado nunca: es nuestro correo, con nuestro pie.
   const unquoted = stripQuoted(text);
   const signed = stripSignature(unquoted);

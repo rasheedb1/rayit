@@ -33,7 +33,7 @@ test('una secuencia de seis pasos con un tope de cuatro por marca: salen cuatro 
   const pasos = [0, 1, 2, 3, 4, 5].map((d) => ({ type: 'email', channel: 'email', day: d, subject: `Idea ${d + 1}`, body: `Idea ${d + 1} para {{company}}.` }));
   const seq = await secuencia(w, 2, pasos);
   const r = await motor.transaction((tx) => enrollContacts(tx, { sequenceId: seq, contactIds: [c], now: bogota('2026-09-23', '07:00') }));
-  // (r3) Con los pasos concretos que se cancelarán: los dos últimos.
+  // Con los pasos concretos que se cancelarán: los dos últimos.
   const [, , , , p5, p6] = (await db.raw.query<{ id: string }>(`SELECT id FROM outbound_step WHERE sequence_id = $1 ORDER BY day_offset`, [seq])).rows;
   assert.deepEqual(r.warnings, [{ code: 'over_company_cap', steps: 6, cap: 4, stepIds: [p5!.id, p6!.id] }], 'avisa al enrolar');
   const fake = fakeChannels();

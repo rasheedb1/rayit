@@ -95,7 +95,7 @@ test('demo con el seed: apagada no envía nada; encendida, la cadencia de tres c
   assert.equal(r.off.claim.claimed, 0);
   assert.equal(r.off.sent.length, 0);
 
-  // (r5) Encendida, el mensaje de LinkedIn del seed espera: la política del
+  // Encendida, el mensaje de LinkedIn del seed espera: la política del
   // seed pide tres días entre mensajes a Vitalé, y el seed le escribió ayer.
   assert.equal(r.on.claim.claimed, 0);
   assert.deepEqual(r.on.claim.paced.map((x) => x.reason), ['company_gap']);
@@ -112,7 +112,7 @@ test('demo con el seed: apagada no envía nada; encendida, la cadencia de tres c
 
   // La cadencia: dos correos con su pie y su baja de un clic; una marca responde y se corta; la otra recibe el día 2 en el hilo.
   const c = r.cadence;
-  // (r5) La revisión humana del seed: los seis mensajes nacen retenidos y la creadora los aprueba.
+  // La revisión humana del seed: los seis mensajes nacen retenidos y la creadora los aprueba.
   assert.equal(c.approved, 6);
   assert.equal(c.first.sent.length, 2);
   const correos = r.delivered.filter((d) => d.channel === 'email');

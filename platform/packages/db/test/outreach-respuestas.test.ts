@@ -1,15 +1,14 @@
 /**
- * VEN-10 r4 · una respuesta deja la MISMA base llegue por el webhook de
+ * VEN-10 · una respuesta deja la MISMA base llegue por el webhook de
  * Unipile (recordInboundMessage, VEN-9, con la RLS del workspace) o por
  * el lector de respuestas del motor (recordInbound, como mc_worker).
  *
  * Una prueba de tabla: cada mensaje se manda por las dos puertas, a dos
  * escenarios idénticos (una marca, su cadencia con un correo enviado, uno
  * programado y un borrador), y se compara lo que queda: el enrolamiento,
- * los toques, la ficha, la intención del mensaje y los avisos. Hasta la
- * r3 una baja en portugués por el job solo marcaba replied, el webhook
- * cancelaba los borradores y el job no, y un enrolamiento completo solo
- * pasaba a replied por el job.
+ * los toques, la ficha, la intención del mensaje y los avisos: una baja
+ * en portugués, los borradores cancelados y un enrolamiento completo que
+ * pasa a replied, igual por las dos.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,7 +34,7 @@ const id = (n: number, kind: string) => `000010a4-${n.toString(16).padStart(4, '
 async function escenario(n: number, enrollmentStatus: 'active' | 'completed'): Promise<{ contact: string; enrollment: string; thread: string }> {
   const [company, contact, seq, enr] = [id(n, 'c0'), id(n, 'c1'), id(n, '5e'), id(n, 'e0')];
   const steps = [id(n, '5e01'), id(n, '5e02'), id(n, '5e03')];
-  const thread = `hilo-r4-${n}`;
+  const thread = `hilo-${n}`;
   const pendientes = enrollmentStatus === 'active';
   await t.admin(`
     INSERT INTO company (id, name, owner_workspace_id) VALUES ('${company}', 'Marca ${n}', '${WORKSPACE_LAURA}');
@@ -55,15 +54,15 @@ async function escenario(n: number, enrollmentStatus: 'active' | 'completed'): P
                                 status, scheduled_for, claimed_at, sent_at, attempt_count, provider_message_id, thread_ref,
                                 channel_account_id, recipient_address)
     VALUES ('${WORKSPACE_LAURA}', '${company}', '${contact}', '${seq}', 1, '${enr}', '${steps[0]}', 'email', 'Hola', 'Hola.', 'sent',
-            now() - interval '3 days', now() - interval '3 days', now() - interval '3 days', 1, 'enviado-r4-${n}', '${thread}',
+            now() - interval '3 days', now() - interval '3 days', now() - interval '3 days', 1, 'enviado-${n}', '${thread}',
             '${GMAIL_LAURA}', 'persona${n}@respuestas-r4.test'),
            ('${WORKSPACE_LAURA}', '${company}', '${contact}', '${seq}', 2, '${enr}', '${steps[1]}', 'email', 'Sigo', 'Sigo.',
             '${pendientes ? 'scheduled' : 'sent'}', now() + interval '1 day', NULL, ${pendientes ? 'NULL' : "now() - interval '2 days'"},
-            ${pendientes ? 0 : 1}, ${pendientes ? 'NULL' : `'enviado-r4-${n}-2'`}, ${pendientes ? 'NULL' : `'${thread}'`},
+            ${pendientes ? 0 : 1}, ${pendientes ? 'NULL' : `'enviado-${n}-2'`}, ${pendientes ? 'NULL' : `'${thread}'`},
             ${pendientes ? 'NULL' : `'${GMAIL_LAURA}'`}, ${pendientes ? 'NULL' : `'persona${n}@respuestas-r4.test'`}),
            ('${WORKSPACE_LAURA}', '${company}', '${contact}', '${seq}', 3, '${enr}', '${steps[2]}', 'email', 'Cierro', 'Cierro.',
             '${pendientes ? 'draft' : 'sent'}', now() + interval '3 days', NULL, ${pendientes ? 'NULL' : "now() - interval '1 day'"},
-            ${pendientes ? 0 : 1}, ${pendientes ? 'NULL' : `'enviado-r4-${n}-3'`}, ${pendientes ? 'NULL' : `'${thread}'`},
+            ${pendientes ? 0 : 1}, ${pendientes ? 'NULL' : `'enviado-${n}-3'`}, ${pendientes ? 'NULL' : `'${thread}'`},
             ${pendientes ? 'NULL' : `'${GMAIL_LAURA}'`}, ${pendientes ? 'NULL' : `'persona${n}@respuestas-r4.test'`});
   `);
   return { contact, enrollment: enr, thread };
@@ -109,8 +108,8 @@ for (const [i, caso] of CASOS.entries()) {
   test(`${caso.nombre}: el webhook y el lector dejan la misma base`, async () => {
     const porWebhook = await escenario(2 * i + 1, caso.status);
     const porJob = await escenario(2 * i + 2, caso.status);
-    const pmWebhook = `webhook-r4-${i}`;
-    const pmJob = `job-r4-${i}`;
+    const pmWebhook = `webhook-${i}`;
+    const pmJob = `job-${i}`;
 
     const w = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, {
       account: { id: GMAIL_LAURA, channel: 'email' }, threadRef: porWebhook.thread, providerMessageId: pmWebhook, body: caso.body,
@@ -147,7 +146,7 @@ for (const [i, caso] of CASOS.entries()) {
 }
 
 // ---------------------------------------------------------------------
-// r5 · la baja se queda en el workspace del mensaje, por las dos puertas
+// La baja se queda en el workspace del mensaje, por las dos puertas
 // ---------------------------------------------------------------------
 
 const WS_OTRO = '000010a4-ffff-4000-8000-00000000000b';
@@ -156,7 +155,7 @@ const WS_OTRO = '000010a4-ffff-4000-8000-00000000000b';
 async function fichaAjena(n: number): Promise<{ contact: string; touch: string; enrollment: string }> {
   const [company, contact, seq, enr, touch] = [id(n, 'bc0'), id(n, 'bc1'), id(n, 'b5e'), id(n, 'be0'), id(n, 'b70')];
   await t.admin(`
-    INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_OTRO}', 'respuestas-r5-otro', 'Otra creadora', 'America/Bogota')
+    INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_OTRO}', 'respuestas-otro', 'Otra creadora', 'America/Bogota')
     ON CONFLICT (id) DO NOTHING;
     INSERT INTO company (id, name, owner_workspace_id) VALUES ('${company}', 'Marca ${n} (otra)', '${WS_OTRO}');
     INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_OTRO}', '${company}');
@@ -171,20 +170,20 @@ async function fichaAjena(n: number): Promise<{ contact: string; touch: string; 
   return { contact, touch, enrollment: enr };
 }
 
-test('una baja por respuesta no toca la ficha de otro workspace con el mismo correo, ni por el webhook ni por el lector (r5)', async () => {
+test('una baja por respuesta no toca la ficha de otro workspace con el mismo correo, ni por el webhook ni por el lector', async () => {
   const porWebhook = await escenario(21, 'active');
   const porJob = await escenario(22, 'active');
   const ajenaW = await fichaAjena(21);
   const ajenaJ = await fichaAjena(22);
 
   await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordInboundMessage(tx, {
-    account: { id: GMAIL_LAURA, channel: 'email' }, threadRef: porWebhook.thread, providerMessageId: 'webhook-r5', body: 'Sáquenme de su lista.',
+    account: { id: GMAIL_LAURA, channel: 'email' }, threadRef: porWebhook.thread, providerMessageId: 'webhook-baja', body: 'Sáquenme de su lista.',
     fromAddress: null, occurredAt: NOW, optOutReasonEs: OUTREACH_NOTICE_TEXTS.es.optOutReason('correo'),
   }));
   await t.db.asWorker(async (tx) => {
     const threads = await listOpenThreads(tx, { now: NOW, workspaceId: WORKSPACE_LAURA, limit: 2000 });
     const thread = threads.find((x) => x.threadRef === porJob.thread)!;
-    return recordInbound(tx, thread, { providerMessageId: 'job-r5', body: 'Sáquenme de su lista.', occurredAt: NOW }, NOW);
+    return recordInbound(tx, thread, { providerMessageId: 'job-baja', body: 'Sáquenme de su lista.', occurredAt: NOW }, NOW);
   });
 
   const estadoAjeno = (a: { contact: string; touch: string; enrollment: string }) =>
@@ -195,7 +194,7 @@ test('una baja por respuesta no toca la ficha de otro workspace con el mismo cor
   for (const ajena of [ajenaW, ajenaJ]) {
     assert.deepEqual({ ...(await estadoAjeno(ajena)) }, { opted_out: false, touch: 'scheduled', enr: 'active' }, 'la otra creadora no se entera');
   }
-  const [a, b] = [await estado(porWebhook, 'webhook-r5'), await estado(porJob, 'job-r5')];
+  const [a, b] = [await estado(porWebhook, 'webhook-baja'), await estado(porJob, 'job-baja')];
   assert.deepEqual(a, b, 'la misma base por las dos puertas');
   assert.equal(a.contact?.opted_out, true, 'la ficha del workspace del mensaje sí');
   assert.equal(a.enr?.status, 'opted_out');

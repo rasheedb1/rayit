@@ -162,7 +162,7 @@ test('la respuesta en el hilo cuyo correo no salió se retiene: nunca huérfana 
   const [t1, t2] = await touches(c);
   assert.equal(t1!.status, 'failed');
   assert.equal(t2!.status, 'held');
-  assert.equal(t2!.held_reason, 'reply_without_thread', 'un código, no una frase (r4)');
+  assert.equal(t2!.held_reason, 'reply_without_thread', 'un código, no una frase');
   assert.match(holdReasonText('es', t2!.held_reason!), /no salió/);
   assert.equal(fake.email.sent.length, 0);
 });
@@ -228,7 +228,7 @@ test('un mensaje retenido guarda un código, avisa una sola vez y lleva a la fic
   assert.equal(avisos.rows.length, 1, 'uno por mensaje');
   assert.equal(avisos.rows[0]!.title_es, 'A message to Marca 11 needs your review', 'en el idioma del workspace');
   assert.match(avisos.rows[0]!.body_es, /there are unfilled placeholders \(\[NOMBRE\]\)/);
-  assert.equal(avisos.rows[0]!.action_url, `/ventas/empresas/${w.company}#cadencia`, 'al bloque donde se aprueba (r5)');
+  assert.equal(avisos.rows[0]!.action_url, `/ventas/empresas/${w.company}#cadencia`, 'al bloque donde se aprueba');
   assert.equal(fake.email.sent.length, 0);
 });
 
@@ -276,5 +276,5 @@ test('los avisos hablan el idioma del workspace', async () => {
   );
   assert.equal(aviso.rows[0]!.title_es, 'A message to Marca 14 was not sent');
   assert.equal(aviso.rows[0]!.body_es, "The message to Persona 1 Prueba over email was not sent: the address is not valid. Check Marca 14's page.");
-  assert.equal(aviso.rows[0]!.action_url, `/ventas/empresas/${w.company}#cadencia`, 'a la ficha, no a una cola que no existe (r4)');
+  assert.equal(aviso.rows[0]!.action_url, `/ventas/empresas/${w.company}#cadencia`, 'a la ficha, no a una cola que no existe');
 });

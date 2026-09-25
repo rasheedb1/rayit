@@ -47,7 +47,7 @@ export function profileIdentifier(channel: DispatchChannel, recipient: string): 
 
 /**
  * La nota de una invitación de LinkedIn: el cuerpo, sin espacios alrededor.
- * (r4) Nunca se corta: una nota de 320 caracteres cortada a mitad de
+ * Nunca se corta: una nota de 320 caracteres cortada a mitad de
  * palabra le llegaba así a la marca. decideBeforeSend (y enrollContacts)
  * retienen la que pasa de 300 (note_too_long); si aun así llega una
  * aquí, no sale.
@@ -83,7 +83,7 @@ export class UnipileChannel implements ChannelSender, ChannelReader {
     const accountId = m.account.providerAccountId;
     const opts = { channelAccountId: m.account.id, signal };
 
-    // Un chat que ya existe: el mensaje va ahí. (r5) Si Unipile dice que el
+    // Un chat que ya existe: el mensaje va ahí. Si Unipile dice que el
     // chat no existe (se borró), no salió nada: se abre uno nuevo con la
     // persona, como la primera vez. Un 404 del chat no dice que ella no exista.
     if (m.stepType !== 'linkedin_connect' && m.reply?.threadRef) {

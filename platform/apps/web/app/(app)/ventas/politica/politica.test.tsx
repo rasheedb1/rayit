@@ -71,7 +71,7 @@ describe("guardarPolitica", () => {
     });
   });
 
-  it("el horario de envío: el fin va después del inicio, y una hora que no es HH:MM no llega a la base (VEN-10 r5)", async () => {
+  it("el horario de envío: el fin va después del inicio, y una hora que no es HH:MM no llega a la base", async () => {
     const alReves = await guardarPolitica({}, formulario({ sendWindowStart: "12:00", sendWindowEnd: "08:00" }));
     expect(alReves.errors?.sendWindowEnd).toBe(t.campos.sendWindow.error);
     const rara = await guardarPolitica({}, formulario({ sendWindowStart: "9h" }));

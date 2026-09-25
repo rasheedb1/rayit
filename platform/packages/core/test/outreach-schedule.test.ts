@@ -59,7 +59,7 @@ test('la ventana encierra la hora sin dar la vuelta: antes y después del cierre
   assert.throws(() => clampToWindow(0, { start: '17:00', end: '09:00' }), RangeError);
 });
 
-test('la dispersión de un paso va hacia delante y se queda en su día (r2): 16:30 con 40 minutos sale entre 16:30 y 17:00', () => {
+test('la dispersión de un paso va hacia delante y se queda en su día: 16:30 con 40 minutos sale entre 16:30 y 17:00', () => {
   for (let i = 0; i < 200; i++) {
     const c = stepClock({ id: `p${i}`, scheduledTime: '16:30' }, { seed: `e${i}`, window: W, spreadMinutes: 40 });
     assert.equal(c.nextDay, false);
@@ -207,7 +207,7 @@ test('shiftFollowingSteps: el paso que va detrás se corre con el que se movió,
 });
 
 // ---------------------------------------------------------------------
-// El ritmo (r5)
+// El ritmo
 // ---------------------------------------------------------------------
 
 test('paceSlot: diez por hora en Instagram; la separación mínima lleva su azar; fuera de la ventana, mañana', () => {
