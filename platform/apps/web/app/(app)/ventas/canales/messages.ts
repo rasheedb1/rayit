@@ -203,6 +203,8 @@ export const MESSAGES = {
     unauthorized: "Firma inválida.",
     /** Conectar o desconectar sin el rol (PUEDEN_GESTIONAR_CANALES). */
     forbidden: "Solo quien administra este espacio puede conectar o desconectar canales.",
+    /** Un POST de inicio que no sale de una página de On Cue (Origin o Sec-Fetch-Site de otro sitio). */
+    crossOrigin: "Conecta el canal desde la pantalla de canales de On Cue.",
     badJson: "JSON inválido.",
     badForm: "Formulario inválido.",
     tooLarge: "Aviso demasiado grande.",

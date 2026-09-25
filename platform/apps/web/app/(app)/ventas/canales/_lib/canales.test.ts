@@ -460,6 +460,27 @@ describe("conectar LinkedIn o Instagram: lo que sale mal", () => {
     expect(channelBanner({ error: "proveedor", canal: "instagram_dm" }, rows).message).toBeNull();
   }, HEAVY_MS);
 
+  it("un POST de inicio desde otra página (Origin ajeno o Sec-Fetch-Site de otro sitio) responde 403 sin tocar la base ni pedir enlace", async () => {
+    const filas = await count(`SELECT count(*)::int AS n FROM outreach_channel_account`);
+    const enlaces = unipile.hostedLinks.length;
+    const from = (path: string, canal: string, headers: Record<string, string>) => new Request(`${ORIGIN}${path}`, {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: new URLSearchParams({ canal }).toString(),
+    });
+    for (const headers of [{ origin: "https://pagina-ajena.test" }, { "sec-fetch-site": "cross-site" }, { "sec-fetch-site": "same-site", origin: ORIGIN }, { origin: "null" }]) {
+      const li = await unipileStart(from("/ventas/canales/conectar", "linkedin", headers), deps());
+      expect([li.status, await li.text()], JSON.stringify(headers)).toEqual([403, MESSAGES.routes.crossOrigin]);
+      const gm = await googleStart(from("/api/oauth/google", "email", headers), deps());
+      expect([gm.status, await gm.text()], JSON.stringify(headers)).toEqual([403, MESSAGES.routes.crossOrigin]);
+    }
+    expect(unipile.hostedLinks.length).toBe(enlaces);
+    expect(await count(`SELECT count(*)::int AS n FROM outreach_channel_account`)).toBe(filas);
+    // Desde la propia pantalla (lo que manda el navegador con el botón), sí.
+    const propio = await unipileStart(from("/ventas/canales/conectar", "linkedin", { origin: ORIGIN, "sec-fetch-site": "same-origin" }), deps());
+    expect(propio.status).toBe(303);
+    const google = await googleStart(from("/api/oauth/google", "email", { origin: ORIGIN, "sec-fetch-site": "same-origin" }), deps());
+    expect(google.status).toBe(303);
+  }, HEAVY_MS);
+
   it("un cuerpo que no es de formulario, o un canal inventado, responde 400 sin tocar la base (ni «no disponible», que sería falso)", async () => {
     const antes = await count(`SELECT count(*)::int AS n FROM outreach_channel_account`);
     const json = new Request(`${ORIGIN}/ventas/canales/conectar`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ canal: "linkedin" }) });

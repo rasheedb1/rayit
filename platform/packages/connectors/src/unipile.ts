@@ -50,7 +50,9 @@ export type UnipileChannel = keyof typeof UNIPILE_PROVIDER_BY_CHANNEL;
  * registro. Unipile no documenta su máximo; 255 es el techo más común de
  * una columna de texto corta, y el estado firmado ronda los 180
  * (outreach/state.ts). Si alguna vez pasa de aquí, conviene mirarlo antes
- * de que un recorte deje todas las conexiones en «Conectando».
+ * de que un recorte deje todas las conexiones en «Conectando»: lo avisa
+ * en el registro quien pide el enlace (la web, ventas/canales/_lib/conexion.ts;
+ * este paquete no escribe en la consola).
  */
 export const UNIPILE_NAME_WARN_CHARS = 255;
 
@@ -368,10 +370,6 @@ export class UnipileClient implements UnipileApi {
   }
 
   async createHostedAuthLink(req: HostedAuthRequest, opts?: UnipileCallOptions): Promise<{ url: string }> {
-    if (req.state.length > UNIPILE_NAME_WARN_CHARS) {
-      // Solo el largo: el estado no se escribe en ningún registro.
-      console.warn('[unipile] el estado de la hosted auth pasa del largo seguro', { length: req.state.length, max: UNIPILE_NAME_WARN_CHARS });
-    }
     const body = await this.request({
       // Pedir el enlace dos veces solo da dos enlaces; la cuenta nace cuando la persona completa uno.
       endpoint: 'unipile.hosted.link', method: 'POST', path: '/hosted/accounts/link', idempotent: true,
