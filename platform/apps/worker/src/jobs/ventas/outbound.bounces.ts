@@ -23,9 +23,19 @@
  *          recipient_address y los que todavía no la tienen pero van a
  *          una ficha con ese correo (la misma regla que el disparador de
  *          0038 §2);
+ *        · pausa los enrolamientos activos de esa ficha cuya secuencia
+ *          es solo de correo (context.paused_reason = 'email_invalid'):
+ *          ya no tienen por dónde seguir;
  *        · y el rebote verificado frena, en este workspace, los correos
  *          nuevos a esa dirección (0038 §2), también a una ficha
- *          compartida.
+ *          compartida. Un correo que estaba en 'processing' cuando llegó
+ *          el aviso y que el despachador devuelve a la cola, la base lo
+ *          cancela en el sitio (0038 §2);
+ *   5. al final de cada pasada, un barrido idempotente de todos los
+ *      workspaces (sweepInvalidEmail): cancela lo que haya quedado en
+ *      draft, scheduled o held a una dirección que ya rebotó —un borrador
+ *      creado después del rebote, por ejemplo— y pausa los enrolamientos
+ *      que sigan activos.
  *      Los de LinkedIn e Instagram siguen: un rebote dice que la
  *      dirección no existe, no que la persona pidió no ser contactada, y
  *      por eso tampoco va a contact_suppression.
@@ -116,6 +126,8 @@ export interface BouncesResult {
   verified: number;
   contactsInvalidated: number;
   touchesCanceled: number;
+  /** Enrolamientos de secuencias solo de correo pausados por el correo inválido. */
+  enrollmentsPaused: number;
   /** Cuentas cuyo buzón falló al leerse (red, token vencido). */
   failed: number;
   /** Cuentas con más avisos de los que caben en una pasada: siguen en la próxima. */
@@ -165,6 +177,7 @@ interface Registro {
   verified: boolean;
   invalidated: boolean;
   canceled: number;
+  paused: number;
 }
 
 /** Anota un aviso ya reconocido y, si es duro y verificado, aplica sus efectos en ESTE workspace. Una transacción. */
@@ -195,7 +208,7 @@ async function registrar(
         d.statusCode, d.smtpCode, d.reason || 'Rebote', msg.receivedAt.toISOString(), now.toISOString(),
       ],
     );
-    const nada = { inserted: ins.rows.length > 0, verified, invalidated: false, canceled: 0 };
+    const nada = { inserted: ins.rows.length > 0, verified, invalidated: false, canceled: 0, paused: 0 };
     if (!ins.rows.length || d.kind !== 'hard' || !verified) return nada;
 
     // La ficha, solo si es de este workspace y SIGUE teniendo la dirección
@@ -213,19 +226,77 @@ async function registrar(
       );
       invalidated = marca.rows.length > 0;
     }
-    // Los correos pendientes de ESTE workspace a esa dirección. Lo que
-    // 'processing' tiene es del despachador (0037 §4.1): no se toca.
-    const cancel = await tx.query(
-      `UPDATE outbound_touch t SET status = 'canceled', blocked_reason = 'email_invalid'
-        WHERE t.workspace_id = $1 AND t.channel = 'email' AND t.status IN ('draft', 'scheduled', 'held')
-          AND (t.recipient_address = $2::citext
-               OR (t.recipient_address IS NULL AND t.contact_id IS NOT NULL
-                   AND EXISTS (SELECT 1 FROM contact c WHERE c.id = t.contact_id AND c.email = $2::citext)))
-        RETURNING t.id`,
-      [ws, address],
-    );
-    return { inserted: true, verified, invalidated, canceled: cancel.rows.length };
+    // Los correos pendientes de ESTE workspace a esa dirección y los
+    // enrolamientos que ya no tienen por dónde seguir, en la misma
+    // transacción. Lo que 'processing' tiene es del despachador (0037
+    // §4.1): si lo devuelve a la cola, la base lo cancela (0038 §2).
+    const barrido = await sweepInvalidEmail(tx, ws, now);
+    return { inserted: true, verified, invalidated, canceled: barrido.canceled, paused: barrido.paused };
   });
+}
+
+export interface SweepResult {
+  canceled: number;
+  paused: number;
+}
+
+/**
+ * El barrido del correo inválido: idempotente, se puede correr cuantas
+ * veces se quiera. En `workspaceId` (o en todos, con null):
+ *   · cancela los correos en draft, scheduled o held a una dirección que
+ *     rebotó: la de una ficha con email_invalid, o una con un rebote duro
+ *     verificado de ESE workspace (outbound_bounce). La misma regla que el
+ *     disparador de 0038 §2: la dirección que cuenta es la del envío si ya
+ *     la tiene, y si no la de la ficha.
+ *   · pausa los enrolamientos activos de esa ficha en ESE workspace cuya
+ *     secuencia es solo de correo (canal 'email' y ningún paso de otro
+ *     canal), con context.paused_reason = 'email_invalid': sin esto el
+ *     enrolamiento seguía «activo» y el planificador de VEN-10 chocaba con
+ *     la regla de 0038 §2 en cada vuelta. Una secuencia con LinkedIn o
+ *     Instagram sigue por ahí; sus pasos de correo los salta el
+ *     planificador (docs/ventas-outreach.md §5.2).
+ * Hace falta además del disparador porque el disparador solo mira la
+ * entrada en la cola: un borrador creado después del rebote, o uno que ya
+ * estaba en draft o held cuando la ficha se marcó, no lo cancela nadie
+ * más. Cada pasada del job lo corre al final para todos los workspaces.
+ */
+export async function sweepInvalidEmail(q: Queryable, workspaceId: string | null, now: Date): Promise<SweepResult> {
+  const cancel = await q.query(
+    `UPDATE outbound_touch t SET status = 'canceled', blocked_reason = 'email_invalid'
+      WHERE ($1::uuid IS NULL OR t.workspace_id = $1::uuid)
+        AND t.channel = 'email' AND t.status IN ('draft', 'scheduled', 'held')
+        AND (EXISTS (SELECT 1 FROM contact c
+                      WHERE c.id = t.contact_id AND c.email_invalid
+                        AND (t.recipient_address IS NULL OR t.recipient_address = c.email))
+             OR EXISTS (SELECT 1 FROM outbound_bounce b
+                         WHERE b.workspace_id = t.workspace_id AND b.kind = 'hard' AND b.verified
+                           AND b.recipient_address = coalesce(t.recipient_address,
+                                                              (SELECT c.email FROM contact c WHERE c.id = t.contact_id))))
+      RETURNING t.id`,
+    [workspaceId],
+  );
+  // Quien pidió la baja no se pausa: su enrolamiento es de la regla de la
+  // baja (0037 §3.3, 0038 §8), y pausarlo la haría saltar.
+  const pause = await q.query(
+    `UPDATE outbound_enrollment e
+        SET status = 'paused',
+            context = e.context || jsonb_build_object('paused_reason', 'email_invalid', 'paused_at', $2::text)
+       FROM contact c, outbound_sequence s
+      WHERE ($1::uuid IS NULL OR e.workspace_id = $1::uuid)
+        AND e.status = 'active' AND c.id = e.contact_id AND s.id = e.sequence_id
+        AND c.email IS NOT NULL
+        AND (c.email_invalid
+             OR EXISTS (SELECT 1 FROM outbound_bounce b
+                         WHERE b.workspace_id = e.workspace_id AND b.kind = 'hard' AND b.verified
+                           AND b.recipient_address = c.email))
+        AND s.channel = 'email'
+        AND NOT EXISTS (SELECT 1 FROM outbound_step st WHERE st.sequence_id = s.id AND st.channel <> 'email')
+        AND NOT c.opted_out AND NOT address_is_suppressed(c.email)
+        AND NOT EXISTS (SELECT 1 FROM outbound_workspace_optout o WHERE o.workspace_id = e.workspace_id AND o.email = c.email)
+      RETURNING e.id`,
+    [workspaceId, now.toISOString()],
+  );
+  return { canceled: cancel.rows.length, paused: pause.rows.length };
 }
 
 /** Desde cuándo leer una cuenta: su cursor, o las últimas 72 h la primera vez. Nunca más de un mes. */
@@ -263,7 +334,7 @@ export interface BouncesOptions {
 export async function runBounces(db: JobDatabase, now: Date, mailboxFor: MailboxFor, opts: BouncesOptions = {}): Promise<BouncesResult> {
   const r: BouncesResult = {
     accounts: 0, notConfigured: 0, read: 0, bounces: 0, hard: 0, verified: 0, contactsInvalidated: 0, touchesCanceled: 0,
-    failed: 0, pending: 0, truncated: 0,
+    enrollmentsPaused: 0, failed: 0, pending: 0, truncated: 0,
   };
   const max = Math.max(1, Math.trunc(opts.perRun ?? BOUNCES_PER_RUN));
   const { rows: cuentas } = await db.query<{
@@ -298,6 +369,7 @@ export async function runBounces(db: JobDatabase, now: Date, mailboxFor: Mailbox
         if (d.kind === 'hard' && reg.verified) r.verified++;
         if (reg.invalidated) r.contactsInvalidated++;
         r.touchesCanceled += reg.canceled;
+        r.enrollmentsPaused += reg.paused;
       }
       // Lo que se cortó a medias (una señal de parar) cuenta como no leído.
       const leido: BounceBatch = {
@@ -318,6 +390,12 @@ export async function runBounces(db: JobDatabase, now: Date, mailboxFor: Mailbox
       opts.onAccountError?.(account, err);
     }
   }
+  // El barrido de todos los workspaces, también de los que no se leyeron
+  // en esta pasada: lo que se creó en draft o held después de un rebote,
+  // o un enrolamiento que quedó activo, se cierra aquí.
+  const barrido = await db.transaction((tx) => sweepInvalidEmail(tx, null, now));
+  r.touchesCanceled += barrido.canceled;
+  r.enrollmentsPaused += barrido.paused;
   return r;
 }
 

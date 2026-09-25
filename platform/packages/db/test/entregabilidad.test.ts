@@ -83,8 +83,11 @@ const TOUCH_Z_FLIGHT = '00000038-0000-4000-8000-0000000070d3';
 const TOKEN_Z = createOptoutToken();
 const CONTACT_RZ = '00000038-0000-4000-8000-0000000000fa';
 const TOUCH_RZ = '00000038-0000-4000-8000-0000000070d4';
+/** Otro correo reclamado a la misma dirección, que el despachador devuelve a la cola. */
+const TOUCH_RZ2 = '00000038-0000-4000-8000-0000000070d5';
 const TOKEN_RZ = createOptoutToken();
-const TOKENS = [TOKEN, TOKEN_VEN10, TOKEN_GLOBAL_S, TOKEN_GLOBAL_O, TOKEN_AG1, TOKEN_AG2, TOKEN_AGO, TOKEN_Z, TOKEN_RZ];
+const TOKEN_RZ2 = createOptoutToken();
+const TOKENS = [TOKEN, TOKEN_VEN10, TOKEN_GLOBAL_S, TOKEN_GLOBAL_O, TOKEN_AG1, TOKEN_AG2, TOKEN_AGO, TOKEN_Z, TOKEN_RZ, TOKEN_RZ2];
 
 let t: TestDb;
 
@@ -629,7 +632,7 @@ describe('el correo inválido (0038)', () => {
     );
   });
 
-  test('un correo que rebota mientras está reclamado no vuelve a la cola (r5)', async () => {
+  test('un correo que rebota mientras está reclamado no vuelve a la cola: la vuelta lo cancela en el sitio', async () => {
     await t.admin(`
       INSERT INTO contact (id, company_id, full_name, email, source, owner_workspace_id) VALUES
         ('${CONTACT_RZ}', '${COMPANY}', 'Rebote en vuelo', 'rebota-z@marca.test', 'user_provided', '${WS_S}');
@@ -645,17 +648,46 @@ describe('el correo inválido (0038)', () => {
       UPDATE contact SET email_invalid = true, email_invalid_at = now(), email_invalid_reason = '550 5.1.1', bounced = true
        WHERE id = '${CONTACT_RZ}';
     `);
-    await assert.rejects(
-      t.db.asWorker((tx) => tx.query(`UPDATE outbound_touch SET status = 'scheduled', claimed_at = NULL WHERE id = '${TOUCH_RZ}'`)),
-      rechazo(/rebotó/),
-    );
-    // Si ya había salido, se registra.
+    // Si ya había salido, se registra (processing → sent).
     await t.db.asWorker((tx) =>
       tx.query(`UPDATE outbound_touch SET status = 'sent', sent_at = now(), provider_message_id = 'gmail-rz'
                  WHERE id = '${TOUCH_RZ}'`),
     );
-    const [z] = await sinRls<{ status: string }>(`SELECT status FROM outbound_touch WHERE id = '${TOUCH_RZ}'`);
-    assert.equal(z?.status, 'sent');
+    const [enviado] = await sinRls<{ status: string }>(`SELECT status FROM outbound_touch WHERE id = '${TOUCH_RZ}'`);
+    assert.equal(enviado?.status, 'sent');
+  });
+
+  test('el reintento o el rescate del zombi (processing → scheduled) a una dirección que rebotó queda cancelado', async () => {
+    // Reclamado ANTES del rebote: la marca llega con el correo ya en 'processing'.
+    await t.admin(`
+      UPDATE contact SET email_invalid = false WHERE id = '${CONTACT_RZ}';
+      BEGIN;
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for, claimed_at,
+                                  recipient_address, attempt_count) VALUES
+        ('${TOUCH_RZ2}', '${WS_S}', '${COMPANY}', '${CONTACT_RZ}', 'email', 'Otra vez', 'processing',
+         now() - interval '10 minutes', now() - interval '10 minutes', 'rebota-z@marca.test', 1);
+      INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, recipient_address, attempt, claimed_at)
+      VALUES ('${optoutTokenHash(TOKEN_RZ2)}', '${WS_S}', '${TOUCH_RZ2}', '${CONTACT_RZ}', 'rebota-z@marca.test', 1,
+              now() - interval '10 minutes');
+      COMMIT;
+      UPDATE contact SET email_invalid = true WHERE id = '${CONTACT_RZ}';
+    `);
+    // El despachador lo devuelve a la cola: la base no lo deja en 'scheduled' ni lo deja atascado.
+    await t.db.asWorker((tx) =>
+      tx.query(`UPDATE outbound_touch SET status = 'scheduled', claimed_at = NULL WHERE id = '${TOUCH_RZ2}'`),
+    );
+    const [z] = await sinRls<{ status: string; blocked_reason: string | null }>(
+      `SELECT status, blocked_reason FROM outbound_touch WHERE id = '${TOUCH_RZ2}'`,
+    );
+    assert.deepEqual(z, { status: 'canceled', blocked_reason: 'email_invalid' });
+    // Aprobar un borrador a esa dirección sí se rechaza: quien programa se entera.
+    await assert.rejects(
+      t.db.asWorker((tx) =>
+        tx.query(`INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, scheduled_for)
+                  VALUES ('${WS_S}', '${COMPANY}', '${CONTACT_RZ}', 'email', 'Nuevo', 'scheduled', now() + interval '1 day')`),
+      ),
+      rechazo(/rebotó/),
+    );
   });
 
   test('cambiar el correo de la ficha borra la marca, también la píldora «Correo rebotado» (bounced)', async () => {

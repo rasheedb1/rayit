@@ -37,6 +37,10 @@
 --      un miembro con el primero (una agencia con dos espacios) no
 --      confirma nada.
 --
+-- Después de la ronda 5, en su sitio: la vuelta desde 'processing' a una
+-- dirección que rebotó se cancela en vez de rechazarse (§2): el toque
+-- no vuelve a la cola ni se queda atascado en 'processing'.
+--
 -- Ronda 5, también en su sitio: una sola regla de la baja para los toques
 -- (§8.3: enforce_outbound_optout mira también outbound_workspace_optout,
 -- con las transiciones de 0037, así que un toque reclamado al pulsar la
@@ -100,13 +104,23 @@ CREATE TRIGGER contact_email_invalid_reset
 -- la regla de la baja (0037 §4.1): el alta, aprobar (draft/held →
 -- scheduled), el reclamo del despachador (scheduled → processing), el
 -- reintento o el rescate de un zombi (processing → scheduled) y un envío
--- registrado a mano. Hasta r4 solo miraba la entrada en 'scheduled' y se
--- saltaba la vuelta desde 'processing': un correo que rebotaba mientras
--- estaba reclamado volvía a la cola y nadie lo cancelaba otra vez. La
--- excepción es processing → sent: el correo ya salió y se registra.
--- Como con la baja, el despachador de VEN-10 descubre el rebote porque
--- la base le rechaza el reclamo; su consulta de reclamo filtra esas
--- filas y las pasa a 'canceled' (docs/ventas-outreach.md §5.2).
+-- registrado a mano. La excepción es processing → sent: el correo ya
+-- salió y se registra.
+-- La vuelta desde 'processing' (el reintento, o el rescate de un zombi
+-- de más de cinco minutos) NO se rechaza: se CANCELA en el sitio
+-- (status 'canceled', blocked_reason 'email_invalid'). Un correo que
+-- rebotó mientras estaba reclamado no vuelve a la cola, y tampoco se
+-- queda para siempre en 'processing' con el despachador chocando en
+-- cada rescate. Solo el despachador saca un toque de 'processing'
+-- (0037 §4.1, outbound_touch_worker_columns), así que esto no le cambia
+-- a nadie más lo que ve.
+-- Lo demás se rechaza con check_violation: quien programa (la web, el
+-- planificador de VEN-10) se entera y salta ese paso; el reclamo de
+-- VEN-10 filtra esas filas y las pasa a 'canceled'
+-- (docs/ventas-outreach.md §5.2). Y lo que queda en draft o held a una
+-- dirección que ya rebotó lo cancela el barrido de cada pasada de
+-- outbound.bounces, que también pausa los enrolamientos de secuencias
+-- solo de correo.
 -- La dirección que cuenta es la del envío si ya la tiene, y si no la de
 -- la ficha: si el toque va a otra dirección, esa no rebotó.
 --
@@ -141,6 +155,12 @@ BEGIN
   SELECT x.email, x.email_invalid INTO c FROM contact x WHERE x.id = NEW.contact_id;
   IF FOUND AND c.email_invalid
      AND (NEW.recipient_address IS NULL OR NEW.recipient_address = c.email) THEN
+    -- La vuelta a la cola de lo reclamado: se cancela en el sitio (arriba).
+    IF TG_OP = 'UPDATE' AND OLD.status = 'processing' AND NEW.status = 'scheduled' THEN
+      NEW.status := 'canceled';
+      NEW.blocked_reason := 'email_invalid';
+      RETURN NEW;
+    END IF;
     RAISE EXCEPTION 'El correo de la ficha % rebotó: no se le programan correos.', NEW.contact_id
       USING ERRCODE = 'check_violation',
             HINT = 'Corrige el correo de la ficha (eso borra la marca) o escríbele por otro canal.';
@@ -150,6 +170,11 @@ BEGIN
        SELECT 1 FROM outbound_bounce b
         WHERE b.workspace_id = NEW.workspace_id AND b.kind = 'hard'
           AND b.verified AND b.recipient_address = direccion) THEN
+    IF TG_OP = 'UPDATE' AND OLD.status = 'processing' AND NEW.status = 'scheduled' THEN
+      NEW.status := 'canceled';
+      NEW.blocked_reason := 'email_invalid';
+      RETURN NEW;
+    END IF;
     RAISE EXCEPTION 'La dirección de la ficha % rebotó en un correo de este espacio: no se le programan correos.', NEW.contact_id
       USING ERRCODE = 'check_violation',
             HINT = 'Escríbele por otro canal, o usa otra dirección.';

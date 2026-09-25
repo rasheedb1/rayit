@@ -20,7 +20,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { BOUNCE_READING_CONNECTED } from '@mc/core/outreach/deliverability';
+import { BOUNCE_READING_CONNECTED, createOptoutToken, optoutTokenHash } from '@mc/core/outreach/deliverability';
 import { allJobs } from '../src/jobs/index.ts';
 import {
   BOUNCES_JOB_ID, bouncesMailboxFor, gmailNoConfigurado, nextBouncesCursor, runBounces, type BounceBatch, type BounceMailbox, type BounceMessage,
@@ -324,6 +324,103 @@ describe('un aviso en el buzón de un creador no toca a los demás', () => {
       });
     await assert.rejects(nuevo(WS_A), /rebotó en un correo de este espacio/);
     await nuevo(WS_B);
+  });
+});
+
+// ------------------------------------------------------------------
+// El correo inválido se sostiene: lo reclamado, lo que se crea después y
+// los enrolamientos
+// ------------------------------------------------------------------
+
+describe('después del rebote no sale un segundo correo a esa dirección', () => {
+  const C_VUELO = '0000015b-0000-4000-8000-0000000000e7';
+  const T_VUELO_ENVIADO = '0000015b-0000-4000-8000-0000000072a1';
+  const T_VUELO = '0000015b-0000-4000-8000-0000000072a2';
+  const T_NUEVO = '0000015b-0000-4000-8000-0000000072a3';
+  const S_CORREO = '0000015b-0000-4000-8000-0000000073a1';
+  const S_MIXTA = '0000015b-0000-4000-8000-0000000073a2';
+  const E_CORREO = '0000015b-0000-4000-8000-0000000074a1';
+  const E_MIXTA = '0000015b-0000-4000-8000-0000000074a2';
+  const VUELO = 'vuelo@marca-rebote.test';
+
+  before(async () => {
+    await db.raw.exec(`
+      INSERT INTO contact (id, company_id, full_name, email, source, owner_workspace_id)
+      VALUES ('${C_VUELO}', '${COMPANY}', 'En vuelo', '${VUELO}', 'user_provided', '${WS}');
+      INSERT INTO outbound_sequence (id, workspace_id, name, channel, status) VALUES
+        ('${S_CORREO}', '${WS}', 'Solo correo', 'email', 'active'),
+        ('${S_MIXTA}', '${WS}', 'Correo y LinkedIn', 'email', 'active');
+      INSERT INTO outbound_step (workspace_id, sequence_id, day_offset, step_type, channel, generate_with_ai) VALUES
+        ('${WS}', '${S_CORREO}', 0, 'email', 'email', true),
+        ('${WS}', '${S_CORREO}', 3, 'email', 'email', true),
+        ('${WS}', '${S_MIXTA}', 0, 'email', 'email', true),
+        ('${WS}', '${S_MIXTA}', 2, 'linkedin_connect', 'linkedin', true);
+      INSERT INTO outbound_enrollment (id, workspace_id, sequence_id, contact_id, status) VALUES
+        ('${E_CORREO}', '${WS}', '${S_CORREO}', '${C_VUELO}', 'active'),
+        ('${E_MIXTA}', '${WS}', '${S_MIXTA}', '${C_VUELO}', 'active');
+      BEGIN;
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for, claimed_at,
+                                  sent_at, provider_message_id, message_id_rfc, recipient_address, attempt_count) VALUES
+        ('${T_VUELO_ENVIADO}', '${WS}', '${COMPANY}', '${C_VUELO}', 'email', 'Hola', 'sent', '2026-09-23T12:00:00Z', NULL,
+         '2026-09-23T12:00:00Z', 'gmail-vuelo-1', '<CAF=vuelo001@mail.gmail.com>', '${VUELO}', 1),
+        -- El segundo paso, reclamado por el despachador justo cuando llega el aviso.
+        ('${T_VUELO}', '${WS}', '${COMPANY}', '${C_VUELO}', 'email', 'Sigo', 'processing', '2026-09-23T13:55:00Z',
+         '2026-09-23T13:55:00Z', NULL, NULL, NULL, '${VUELO}', 1);
+      INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, recipient_address, attempt, claimed_at)
+      VALUES ('${optoutTokenHash(createOptoutToken())}', '${WS}', '${T_VUELO}', '${C_VUELO}', '${VUELO}', 1,
+              '2026-09-23T13:55:00Z');
+      COMMIT;
+    `);
+  });
+
+  const avisoVuelo: BounceMessage = {
+    id: 'vuelo-aviso-1',
+    from: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
+    subject: 'Delivery Status Notification (Failure)',
+    body: `Final-Recipient: rfc822; ${VUELO}\nAction: failed\nStatus: 5.1.1\nDiagnostic-Code: smtp; 550 5.1.1 User unknown`,
+    headers: { 'in-reply-to': '<CAF=vuelo001@mail.gmail.com>' },
+    receivedAt: new Date('2026-09-23T13:56:00Z'),
+  };
+
+  const soloLaura = (avisos: BounceMessage[]): MailboxFor => (a) => (a.id === ACCOUNT ? new BuzonGrabado(avisos) : null);
+
+  async function enrolamiento(id: string) {
+    const { rows } = await db.raw.query<{ status: string; reason: string | null }>(
+      `SELECT status, context->>'paused_reason' AS reason FROM outbound_enrollment WHERE id = '${id}'`,
+    );
+    return rows[0];
+  }
+
+  test('el rebote pausa el enrolamiento solo de correo, deja el mixto y no toca lo reclamado', async () => {
+    const r = await runBounces(db, NOW, soloLaura([avisoVuelo]));
+    assert.equal(r.verified, 1);
+    assert.equal(r.enrollmentsPaused, 1);
+    assert.deepEqual(await enrolamiento(E_CORREO), { status: 'paused', reason: 'email_invalid' });
+    assert.deepEqual(await enrolamiento(E_MIXTA), { status: 'active', reason: null }, 'la secuencia mixta sigue por LinkedIn');
+    assert.equal((await toque(T_VUELO))?.status, 'processing', "lo reclamado es del despachador");
+  });
+
+  test('el despachador devuelve a la cola lo reclamado (reintento o zombi): queda cancelado, no programado', async () => {
+    await db.transaction((tx) =>
+      tx.query(`UPDATE outbound_touch SET status = 'scheduled', claimed_at = NULL WHERE id = '${T_VUELO}'`),
+    );
+    assert.deepEqual(await toque(T_VUELO), { status: 'canceled', blocked_reason: 'email_invalid' });
+  });
+
+  test('un borrador creado después del rebote lo cancela la pasada siguiente, aunque no llegue ningún aviso', async () => {
+    await db.raw.exec(`
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for)
+      VALUES ('${T_NUEVO}', '${WS}', '${COMPANY}', '${C_VUELO}', 'email', 'Otro intento', 'draft', '2026-09-30T13:00:00Z');
+      UPDATE outbound_enrollment SET status = 'active' WHERE id = '${E_CORREO}';
+    `);
+    const r = await runBounces(db, NOW, soloLaura([]));
+    assert.equal(r.bounces, 0);
+    assert.ok(r.touchesCanceled >= 1);
+    assert.deepEqual(await toque(T_NUEVO), { status: 'canceled', blocked_reason: 'email_invalid' });
+    assert.deepEqual(await enrolamiento(E_CORREO), { status: 'paused', reason: 'email_invalid' }, 'reactivado a mano, vuelve a pausarse');
+    // Idempotente: otra pasada no encuentra nada.
+    const otra = await runBounces(db, NOW, soloLaura([]));
+    assert.deepEqual({ canceled: otra.touchesCanceled, paused: otra.enrollmentsPaused }, { canceled: 0, paused: 0 });
   });
 });
 
