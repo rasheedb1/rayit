@@ -15,6 +15,7 @@
 import { claimsCitedIn, stripClaimMarkers, type SalesClaim } from '@mc/core/outreach/claims';
 import { subjectGate } from '@mc/core/outreach/gates';
 import { preflight, type PreflightIssue } from '@mc/core/outreach/preflight';
+import { renderTemplate, templateValuesFrom } from '@mc/core/outreach/render';
 import type { WorkspaceTx } from '../../client.ts';
 import { listSalesClaims } from './claims.ts';
 import { assertIds } from './shared.ts';
@@ -131,6 +132,8 @@ export interface SavePitchInput {
   intent: 'draft' | 'schedule';
   userId: string | null;
   locale: string;
+  /** La URL pública del media kit ({{media_kit_url}}), si la web la conoce. */
+  mediaKitUrl?: string | null;
   now: Date;
 }
 
@@ -141,11 +144,14 @@ export type SavePitchResult =
 export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise<SavePitchResult> {
   assertIds('savePitch', [input.companyId, input.contactId, ...(input.dealId ? [input.dealId] : []), ...(input.touchId ? [input.touchId] : [])]);
   const c = (
-    await tx.query<{ email: string | null; blocked: boolean }>(
-      `SELECT c.email::text AS email,
+    await tx.query<{
+      email: string | null; blocked: boolean; full_name: string | null; role_title: string | null;
+      company: string; industry: string | null; city: string | null;
+    }>(
+      `SELECT c.email::text AS email, c.full_name, c.role_title, co.name AS company, co.industry, co.city,
               (c.opted_out OR coalesce(c.email_invalid, false) OR address_is_suppressed(c.email)
                OR EXISTS (SELECT 1 FROM outbound_workspace_optout wo WHERE wo.workspace_id = current_workspace_id() AND wo.email = c.email)) AS blocked
-         FROM contact c WHERE c.id = $1::uuid AND c.company_id = $2::uuid`,
+         FROM contact c JOIN company co ON co.id = c.company_id WHERE c.id = $1::uuid AND c.company_id = $2::uuid`,
       [input.contactId, input.companyId],
     )
   ).rows[0];
@@ -153,12 +159,31 @@ export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise
   if (!c.email) return { ok: false, code: 'no_email' };
   if (c.blocked) return { ok: false, code: 'opted_out' };
 
+  // Las variables se rellenan aquí con los datos de la base, como las ve la marca: lo que no tenga valor queda
+  // a la vista y el pre-vuelo lo marca como hueco.
+  const extra = (
+    await tx.query<{ creator: string | null; handle: string | null; niche: string | null; signal: string | null }>(
+      `SELECT (SELECT display_name FROM creator_profile WHERE deleted_at IS NULL ORDER BY (status = 'active') DESC, created_at LIMIT 1) AS creator,
+              (SELECT handle FROM creator_profile WHERE deleted_at IS NULL ORDER BY (status = 'active') DESC, created_at LIMIT 1) AS handle,
+              (SELECT niche_slugs[1] FROM creator_profile WHERE deleted_at IS NULL ORDER BY (status = 'active') DESC, created_at LIMIT 1) AS niche,
+              (SELECT s.headline_es FROM deal d JOIN signal s ON s.id = d.origin_signal_id WHERE d.id = $1::uuid) AS signal`,
+      [input.dealId],
+    )
+  ).rows[0]!;
+  const values = templateValuesFrom({
+    contact: { fullName: c.full_name, roleTitle: c.role_title },
+    company: { name: c.company, industry: c.industry, city: c.city },
+    signal: { headline: extra.signal },
+    creator: { senderName: extra.creator, handle: extra.handle, niche: extra.niche, mediaKitUrl: input.mediaKitUrl ?? null },
+  });
+  const subject = renderTemplate(input.subject, values);
+  const body = renderTemplate(input.body, values) ?? '';
   const claims = await listSalesClaims(tx, { locale: input.locale, dealId: input.dealId });
   const firstTouch = (
     await tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM outbound_touch WHERE contact_id = $1::uuid AND status = 'sent'`, [input.contactId])
   ).rows[0]!.n === 0;
-  const pf = preflight({ stepType: 'email', subject: input.subject, body: input.body, claims, firstTouch });
-  const sg = subjectGate('email', input.subject);
+  const pf = preflight({ stepType: 'email', subject, body, claims, firstTouch });
+  const sg = subjectGate('email', subject);
   if (input.intent === 'schedule') {
     if (!pf.ok || !sg.ok) return { ok: false, code: 'preflight', issues: pf.issues, subjectCodes: sg.codes };
     const postal = (await tx.query<{ ok: boolean }>(
@@ -168,7 +193,7 @@ export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise
     if (!postal) return { ok: false, code: 'no_postal_address' };
   }
   const status = input.intent === 'schedule' ? 'scheduled' : 'draft';
-  const cited = JSON.stringify(claimsCitedIn(claims, input.subject, input.body));
+  const cited = JSON.stringify(claimsCitedIn(claims, subject, body));
   const approved = input.intent === 'schedule';
   if (input.touchId) {
     const r = await tx.query<{ id: string }>(
@@ -190,7 +215,7 @@ export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise
      VALUES (current_workspace_id(), $1::uuid, $2::uuid, $3::uuid, 'email', $4, $5, $6::jsonb, $7, $8::timestamptz,
              CASE WHEN $9 THEN $10::uuid END, CASE WHEN $9 THEN $8::timestamptz END)
      RETURNING id`,
-    [input.companyId, input.contactId, input.dealId, pf.cleanSubject, pf.cleanBody || stripClaimMarkers(input.body), cited, status,
+    [input.companyId, input.contactId, input.dealId, pf.cleanSubject, pf.cleanBody || stripClaimMarkers(body), cited, status,
       input.now.toISOString(), approved, input.userId],
   );
   return { ok: true, touchId: r.rows[0]!.id, status };

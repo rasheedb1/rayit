@@ -6,13 +6,15 @@
  *     campañas) con su origen, y la política de envío;
  *   · un pitch con una cifra sin claim no se puede programar (el servidor
  *     corre el pre-vuelo otra vez), pero sí guardarse como borrador;
- *   · uno bien hecho sale sin marcas y con sus claims en outbound_touch.claims;
+ *   · uno bien hecho sale sin marcas, con sus variables rellenas y con sus
+ *     claims en outbound_touch.claims;
  *   · a quien pidió la baja no se le programa nada;
  *   · otro workspace no ve los claims de Laura.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadPitchComposer, savePitch, type SalesClaim } from '../src/queries/outreach.ts';
+import type { SalesClaim } from '@mc/core/outreach/claims';
+import { loadPitchComposer, savePitch } from '../src/queries/outreach.ts';
 import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const CAFE_ALMA = '00000002-0000-4000-8000-0000000000e1';
@@ -37,7 +39,7 @@ const base = { companyId: CAFE_ALMA, contactId: CAMILO, dealId: null, touchId: n
 
 function pitchWith(claim: SalesClaim, figure: string): string {
   return [
-    'Hola Camilo,',
+    'Hola {{first_name}},',
     '',
     `Vi el lanzamiento del cold brew en botella de Café Alma y pensé en quien me ve: ${claim.label.toLowerCase()}, ${figure} [claim:${claim.id}].`,
     '',
@@ -95,6 +97,7 @@ test('un pitch bien hecho se programa sin marcas y con sus claims; a quien pidi�
   )).rows[0]!;
   assert.equal(row.status, 'scheduled');
   assert.ok(!row.body.includes('[claim:'));
+  assert.ok(row.body.startsWith('Hola Camilo,'), 'las variables se rellenan con la ficha');
   assert.ok(row.body.includes(mediana.display));
   assert.deepEqual(row.claims.map((x) => [x.id, x.ref.table]), [[mediana.id, 'creator_baseline']]);
 
