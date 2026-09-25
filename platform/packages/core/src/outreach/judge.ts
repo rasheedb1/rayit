@@ -17,7 +17,7 @@
  */
 import type { SalesClaim } from './claims.ts';
 import type { SentTouch } from './generate.ts';
-import { fillPrompt, loadPrompt } from './generate.ts';
+import { fillPrompt, loadPrompt, untrusted } from './generate.ts';
 import { JUDGE_MAX_TOKENS, LlmOutputError, OUTREACH_MODELS, readLlmResponse, type LlmCallOptions, type LlmClient } from './llm.ts';
 import { REGENERATE_HINTS, RISK_TRIGGERS, type RegenerateHint, type RiskTrigger } from './preflight.ts';
 
@@ -158,9 +158,9 @@ export function buildJudgePrompt(input: JudgeInput, template: string): { system:
     `Idioma del mensaje: ${input.lang === 'en' ? 'inglés' : 'español'}`,
     `Tipo de paso: ${input.stepType} (día ${input.dayOffset})`,
     `Ángulo del día: ${input.angleLabel ?? 'libre'}${input.angleGoal ? `. ${input.angleGoal}` : ''}`,
-    `Señal de la marca: ${input.signalHeadline ?? 'ninguna registrada'}`,
+    `Señal de la marca: ${input.signalHeadline ? untrusted('senal', input.signalHeadline) : 'ninguna registrada'}`,
     `Marca destinataria: ${input.company.name}${input.company.industry ? ` (${input.company.industry})` : ''}`,
-    `Creador: ${input.creator.name}${input.creator.bio ? `. ${input.creator.bio}` : ''}`,
+    `Creador: ${input.creator.name}${input.creator.bio ? `. ${untrusted('bio_del_creador', input.creator.bio)}` : ''}`,
     `Exige divulgar colaboraciones pagadas: ${input.requiresDisclosure ? 'sí' : 'no'}`,
     '',
     'Criterios del paso:',
@@ -170,11 +170,10 @@ export function buildJudgePrompt(input: JudgeInput, template: string): { system:
     ...(input.citedClaims.length > 0 ? input.citedClaims.map((x) => `- ${x.label}: ${x.display}`) : ['- ninguna']),
     '',
     'Mensajes enviados antes a esta persona:',
-    ...(input.previousTouches.length > 0 ? input.previousTouches.map((t) => `- ${t.body.replace(/\n+/g, ' ')}`) : ['- ninguno']),
+    ...(input.previousTouches.length > 0 ? input.previousTouches.map((t) => `- ${untrusted('mensaje_anterior', t.body)}`) : ['- ninguno']),
     '',
     'El mensaje:',
-    input.subject ? `Asunto: ${input.subject}` : 'Asunto: (sin asunto)',
-    input.body,
+    untrusted('mensaje', `${input.subject ? `Asunto: ${input.subject}` : 'Asunto: (sin asunto)'}\n${input.body}`, true),
   ];
   return { system, user: lines.join('\n') };
 }

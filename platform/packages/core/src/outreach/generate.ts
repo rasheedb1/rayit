@@ -131,6 +131,26 @@ function subjectRule(stepType: string): string {
 
 const dateOnly = (d: Date) => d.toISOString().slice(0, 10);
 
+/**
+ * Un dato de fuera (un titular raspado, la bio, el brief, lo que escribió
+ * la persona, un mensaje anterior) entre etiquetas, para que el modelo lo
+ * lea como información y nunca como una orden (la regla está en el prompt
+ * del sistema). Los «<» y «>» del dato se cambian por comillas angulares:
+ * un texto que traiga «</senal>» no puede cerrar la etiqueta y colarse
+ * fuera de ella.
+ */
+export function untrusted(tag: string, value: string, keepLines = false): string {
+  const angled = value.replace(/</g, '‹').replace(/>/g, '›');
+  const safe = (keepLines ? angled : angled.replace(/\n+/g, ' ')).trim();
+  return `<${tag}>${safe}</${tag}>`;
+}
+
+/** Las etiquetas con datos de fuera que el prompt del sistema declara como información. */
+export const UNTRUSTED_TAGS = [
+  'marca', 'contacto', 'senal', 'bio_del_creador', 'brief_del_creador', 'instrucciones_del_creador', 'mensaje_anterior',
+  'mensaje_a_evitar', 'version_anterior', 'mensaje',
+] as const;
+
 /** El sistema y el mensaje del usuario para el generador. Puro: recibe el texto de prompts/generate.md. */
 export function buildGenerationPrompt(input: GenerationInput, template: string): { system: string; user: string } {
   const limits = STEP_LENGTH[input.stepType] ?? { min: 1, max: 2000 };
@@ -157,15 +177,17 @@ export function buildGenerationPrompt(input: GenerationInput, template: string):
     '',
     `Creador: ${input.creator.name}${input.creator.handle ? ` (@${input.creator.handle.replace(/^@/, '')})` : ''}` +
       `${input.creator.niche ? `, nicho ${input.creator.niche}` : ''}`,
-    input.creator.bio ? `Cómo se presenta: ${input.creator.bio}` : '',
-    `Marca: ${input.company.name}${input.company.industry ? `, sector ${input.company.industry}` : ''}` +
+    input.creator.bio ? `Cómo se presenta: ${untrusted('bio_del_creador', input.creator.bio)}` : '',
+    `Marca: ${untrusted('marca', input.company.name)}${input.company.industry ? `, sector ${input.company.industry}` : ''}` +
       `${input.company.city ? `, ${input.company.city}` : ''}${input.company.country ? ` (${input.company.country})` : ''}`,
-    input.contact?.fullName ? `Contacto: ${input.contact.fullName}${input.contact.roleTitle ? `, ${input.contact.roleTitle}` : ''}` : 'Contacto: sin nombre',
+    input.contact?.fullName
+      ? `Contacto: ${untrusted('contacto', `${input.contact.fullName}${input.contact.roleTitle ? `, ${input.contact.roleTitle}` : ''}`)}`
+      : 'Contacto: sin nombre',
     input.signal
-      ? `Señal: ${input.signal.headline}${input.signal.detectedAt ? ` (detectada el ${dateOnly(input.signal.detectedAt)})` : ''}`
+      ? `Señal: ${untrusted('senal', input.signal.headline)}${input.signal.detectedAt ? ` (detectada el ${dateOnly(input.signal.detectedAt)})` : ''}`
       : 'Señal: ninguna registrada; apóyate en la marca y su sector.',
     input.brief
-      ? `Brief del creador: ${input.brief.title}${input.brief.notes ? `. ${input.brief.notes}` : ''}` +
+      ? `Brief del creador: ${untrusted('brief_del_creador', `${input.brief.title}${input.brief.notes ? `. ${input.brief.notes}` : ''}`)}` +
         `${input.brief.requiresDisclosure ? '. Exige divulgar las colaboraciones pagadas.' : ''}`
       : '',
     '',
@@ -177,18 +199,18 @@ export function buildGenerationPrompt(input: GenerationInput, template: string):
     'Mensajes enviados antes a esta persona (solo los que salieron):',
     ...(input.previousTouches.length > 0
       ? input.previousTouches.map(
-          (t) => `- ${dateOnly(t.sentAt)} · ${t.stepType ?? t.channel}${t.subject ? ` · «${t.subject}»` : ''}\n  ${t.body.replace(/\n+/g, ' ')}`,
+          (t) => `- ${dateOnly(t.sentAt)} · ${t.stepType ?? t.channel}\n  ${untrusted('mensaje_anterior', `${t.subject ? `Asunto: ${t.subject}. ` : ''}${t.body}`)}`,
         )
       : ['- (ninguno: este es el primero)']),
   ];
   if (input.avoid.length > 0) {
-    lines.push('', 'No te parezcas a estos (a otras marcas, enviados o por salir):', ...input.avoid.map((b) => `- ${b.replace(/\n+/g, ' ')}`));
+    lines.push('', 'No te parezcas a estos (a otras marcas, enviados o por salir):', ...input.avoid.map((b) => `- ${untrusted('mensaje_a_evitar', b)}`));
   }
   if (input.instructions?.trim()) {
-    lines.push('', `Lo que pide el creador para este mensaje (orienta el tono y el foco; las reglas no cambian): ${input.instructions.trim().replace(/\n+/g, ' ')}`);
+    lines.push('', `Lo que pide el creador para este mensaje (orienta el tono y el foco; las reglas no cambian): ${untrusted('instrucciones_del_creador', input.instructions)}`);
   }
   if (input.hint) {
-    if (input.previousDraft?.trim()) lines.push('', 'Versión anterior (no la repitas):', input.previousDraft.trim());
+    if (input.previousDraft?.trim()) lines.push('', 'Versión anterior (no la repitas):', untrusted('version_anterior', input.previousDraft, true));
     lines.push('', `Pista de esta versión (intento ${input.attempt}): ${HINT_INSTRUCTIONS[input.hint]}`);
   }
   return { system, user: lines.filter((l, i, all) => l !== '' || all[i - 1] !== '').join('\n').trim() };

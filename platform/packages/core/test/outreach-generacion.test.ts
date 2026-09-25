@@ -5,8 +5,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  claimsCitedIn, figureMatchesClaim, findClaimMarkers, findFigures, stripClaimMarkers, type SalesClaim,
+  claimsCitedIn, figureMatchesClaim, findClaimMarkers, findFigures, stripClaimMarkers, type FigureHit, type SalesClaim,
 } from '../src/outreach/claims.ts';
+import { createFakeGenerator } from '../src/outreach/fake.ts';
+import type { GenerationInput } from '../src/outreach/generate.ts';
+
+type FigureKind = FigureHit['kind'];
 import {
   bodyFingerprint, idempotencyGate, jaccard, shingles, similarityGate, similarityThreshold, subjectGate, textSimilarity,
 } from '../src/outreach/gates.ts';
@@ -347,4 +351,138 @@ test('compuerta B: el mismo correo con el nombre de la marca y de la persona cam
   const b = a.replace('Camilo', 'Camila').replace('Café Alma', 'Fresko Market').replace('Bogotá', 'Medellín');
   assert.equal(textSimilarity(a, b), 1);
   assert.deepEqual(similarityGate('email', b, [a]).codes, ['too_similar']);
+});
+
+// ---------------------------------------------------------------------
+// Ronda 4: las cifras en palabras que se escapaban y los conteos del perfil sin marca
+// ---------------------------------------------------------------------
+
+test('porcentajes, fracciones, proporciones, múltiplos conjugados y puestos en palabras son cifras sin sustantivo detrás', () => {
+  const casos: Array<[string, string, FigureKind, number]> = [
+    ['El ochenta por ciento de mi audiencia toma café.', 'ochenta por ciento', 'percent', 0.8],
+    ['Un veinte por ciento compra en línea.', 'veinte por ciento', 'percent', 0.2],
+    ['Eighty percent of my audience drinks coffee.', 'Eighty percent', 'percent', 0.8],
+    ['La mitad de mis seguidores vive en Medellín.', 'mitad', 'percent', 0.5],
+    ['Half of my followers are in Bogotá.', 'Half', 'percent', 0.5],
+    ['Dos tercios de mi audiencia son mujeres.', 'Dos tercios', 'percent', 0.667],
+    ['Tres de cada cuatro seguidoras cocinan en casa.', 'Tres de cada cuatro', 'percent', 0.75],
+    ['9 out of 10 followers cook at home.', '9 out of 10', 'percent', 0.9],
+    ['Con esa marca triplicamos las ventas del mes.', 'triplicamos', 'multiple', 3],
+    ['Con mi video duplicamos las ventas.', 'duplicamos', 'multiple', 2],
+    ['Tu marca duplicó sus pedidos conmigo.', 'duplicó', 'multiple', 2],
+    ['That video ended up tripling their sales.', 'tripling', 'multiple', 3],
+    ['Quedé en primer lugar del reto de recetas.', 'primer lugar', 'rank', 1],
+    ['Quedé en 1er lugar del reto de recetas.', '1er lugar', 'rank', 1],
+    ['I was the first creator to review it.', 'first creator', 'rank', 1],
+  ];
+  for (const [texto, raw, kind, valor] of casos) {
+    assert.deepEqual(findFigures(texto).map((h) => [h.raw, h.kind, h.values[0]]), [[raw, kind, valor]], texto);
+    assert.deepEqual(checkFigures(texto, CLAIMS).map((i) => [i.code, i.detail]), [['unsourced_figure', raw]], texto);
+  }
+  // Con su origen, pasan: «el ochenta por ciento» frente a un 80 %, «la mitad» frente a un 51 %.
+  const ochenta: SalesClaim = { ...CLAIMS[1]!, id: 'audience:tiktok:gender:f', value: 0.8, display: '80 %' };
+  assert.deepEqual(checkFigures('El ochenta por ciento [claim:audience:tiktok:gender:f] de mi audiencia son mujeres.', [ochenta]), []);
+  const mitad: SalesClaim = { ...CLAIMS[1]!, id: 'audience:tiktok:country:co', value: 0.51, display: '51 %' };
+  assert.deepEqual(checkFigures('La mitad [claim:audience:tiktok:country:co] de mis seguidores vive en Colombia.', [mitad]), []);
+  // No son cifras: el tiempo, un ordinal, una fecha relativa.
+  for (const texto of [
+    'Lo grabo en media hora.', 'Nos vemos a mitad de semana.', 'It takes half an hour.', 'El cuarto video de la serie.',
+    'Un cuarto de hora y listo.', 'Hace 2 años trabajé con ellos.', 'Mi primer video fue de desayunos.',
+  ]) {
+    assert.deepEqual(findFigures(texto), [], texto);
+  }
+  assert.deepEqual(findFigures('I reached half a million people.').map((h) => [h.raw, h.values[0]]), [['half a million', 500_000]]);
+});
+
+test('terminado cuando (ronda 4): el correo del revisor con cifras en palabras no pasa el pre-vuelo', () => {
+  const body =
+    'Hola Sofía,\n\nEl ochenta por ciento de mi audiencia toma café a diario y con la última marca de bebidas triplicamos las ventas del mes. ' +
+    'La mitad de mis seguidores vive en Medellín.\n\n¿Te cuento la idea?\n\nLaura';
+  const r = preflight({ stepType: 'email', subject: 'Una idea para Café Alma', body, claims: [], firstTouch: true });
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.issues.filter((i) => i.code === 'unsourced_figure').map((i) => i.detail), ['ochenta por ciento', 'triplicamos', 'mitad']);
+  assert.deepEqual(r.riskTriggers, ['unsourced_figure']);
+});
+
+const ADS: SalesClaim = {
+  id: 'signal:s1:active_ads', source: 'signal', label: 'Anuncios activos de Fresko Market', value: 6, unit: 'count', display: '6',
+  ref: { table: 'signal', id: 's1' },
+};
+
+test('un número de la marca sin su marca [claim] no pasa: «6 anuncios activos» es la cifra de la señal', () => {
+  const body =
+    'Hola Sofía,\n\nLo de Fresko Market (6 anuncios activos en Meta desde el 12 ago) es justo lo que mi audiencia sigue de cerca. ' +
+    'Me imagino una serie corta con sus productos en la rutina real de quien me ve.\n\n¿Te interesa que te mande la idea completa?\n\nLaura';
+  const r = preflight({ stepType: 'email', subject: 'Una idea para Fresko Market', body, claims: [...CLAIMS, ADS], firstTouch: true });
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.issues.map((i) => [i.code, i.detail]), [['unsourced_figure', '6']]);
+  assert.deepEqual(r.riskTriggers, ['unsourced_figure']);
+  // Con su marca, pasa: la cifra tiene origen.
+  const marcado = preflight({
+    stepType: 'email', subject: 'Una idea para Fresko Market', body: body.replace('(6 anuncios', '(6 [claim:signal:s1:active_ads] anuncios'),
+    claims: [...CLAIMS, ADS], firstTouch: true,
+  });
+  assert.deepEqual(marcado.issues, []);
+  // La trayectoria también se afirma: «9 años creando contenido».
+  assert.deepEqual(checkFigures('Tengo 9 años creando contenido de cocina.', CLAIMS).map((i) => [i.code, i.detail]), [['unsourced_figure', '9']]);
+  // Un conteo del perfil con un sustantivo fuera de la lista: basta con que diga lo que cuenta la etiqueta.
+  const locales: SalesClaim = { ...ADS, id: 'signal:s2:stores', label: 'Locales abiertos de Fresko Market', value: 4, display: '4' };
+  assert.deepEqual(checkFigures('Fresko ya tiene 4 locales abiertos en Bogotá.', [locales]).map((i) => i.code), ['unsourced_figure']);
+  assert.deepEqual(checkFigures('Te mando 4 ideas para Fresko.', [locales]), []);
+  assert.deepEqual(checkFigures('Te propongo 4 videos para Fresko.', [locales]), []);
+});
+
+function fakeInput(over: Partial<GenerationInput> = {}): GenerationInput {
+  return {
+    lang: 'es', stepType: 'email', dayOffset: 0, guidance: null,
+    angle: { key: 'x', label: 'x', goal: 'x', allowed: [], forbidden: [], proof: null, proofSources: ['creator_baseline', 'creator_profile', 'signal'] },
+    creator: { name: 'Laura Méndez', handle: 'laura', niche: 'cocina', bio: null },
+    company: { name: 'Fresko Market', industry: 'alimentos', city: 'Bogotá', country: 'CO' },
+    contact: { fullName: 'Sofía Cárdenas', roleTitle: null },
+    signal: { headline: '6 anuncios activos en Meta desde el 12 ago · alimentos', source: null, detectedAt: null },
+    brief: null, claims: [...CLAIMS, ADS], previousTouches: [], avoid: [], attempt: 1, hint: null, maxChars: null,
+    ...over,
+  };
+}
+
+test('el redactor falso no copia una señal con cifras: la dice con su marca o no la dice', async () => {
+  const gen = createFakeGenerator();
+  const base = fakeInput();
+  const con = await gen.generate(base);
+  assert.match(con.body, /6 \[claim:signal:s1:active_ads\] anuncios activos/);
+  assert.ok(!con.body.includes('· alimentos') && !con.body.includes('('), con.body);
+  const pf = preflight({ stepType: 'email', subject: con.subject, body: con.body, claims: base.claims, allowedSources: base.angle!.proofSources, firstTouch: true });
+  assert.deepEqual(pf.issues, []);
+  // Si el ángulo no deja citar la señal, la señal con cifras no entra.
+  const sin = await gen.generate(fakeInput({ angle: { ...base.angle!, proofSources: ['creator_baseline', 'creator_profile'] } }));
+  assert.ok(!/anuncios|\b6\b/.test(stripClaimMarkers(sin.body)), sin.body);
+  // Una señal sin cifras (más allá de su fecha) sí se cita, y sin paréntesis.
+  const cafe = await gen.generate(fakeInput({
+    company: { ...base.company, name: 'Café Alma' }, signal: { headline: 'Lanzó cold brew en botella el 22 jul', source: null, detectedAt: null },
+  }));
+  assert.match(cafe.body, /lanzó cold brew en botella el 22 jul/);
+  assert.ok(!cafe.body.includes('('), cafe.body);
+});
+
+test('el redactor falso cita por prioridad: la campaña con esta marca, luego la mediana de su red principal', async () => {
+  const gen = createFakeGenerator();
+  const youtube: SalesClaim = {
+    id: 'audience:youtube:gender:f', source: 'creator_profile', label: 'Seguidores mujeres en YouTube', value: 0.58, unit: 'share',
+    display: '58 %', ref: { table: 'audience_breakdown', id: 'y1' },
+  };
+  const ytViews: SalesClaim = { ...CLAIMS[0]!, id: 'baseline:youtube:median_views', label: 'Mediana de views en YouTube a 7 días', value: 8000, display: '8.000' };
+  const campana: SalesClaim = {
+    id: 'campaign:c1:views', source: 'campaign_result', label: 'Views de la campaña con Café Alma', value: 412000, unit: 'count',
+    display: '412.000', ref: { table: 'campaign_result', id: 'c1' }, entities: ['Café Alma'],
+  };
+  const angle = { key: 'x', label: 'x', goal: 'x', allowed: [], forbidden: [], proof: null, proofSources: ['creator_baseline', 'creator_profile', 'campaign_result'] as const };
+  const claims = [youtube, ytViews, ...CLAIMS, campana];
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const fresko = await gen.generate(fakeInput({ angle: { ...angle, proofSources: [...angle.proofSources] }, claims, signal: null, attempt }));
+    assert.match(fresko.body, /(Mis videos de TikTok tienen una mediana de|En TikTok, un video mío típico llega a) 115\.446 \[claim:baseline:tiktok:median_views\] views/, fresko.body);
+    const alma = await gen.generate(fakeInput({
+      angle: { ...angle, proofSources: [...angle.proofSources] }, claims, signal: null, attempt, company: { name: 'Café Alma', industry: 'alimentos', city: 'Bogotá', country: 'CO' },
+    }));
+    assert.match(alma.body, /La campaña que hice con Café Alma sumó 412\.000 \[claim:campaign:c1:views\] views\./, alma.body);
+  }
 });
