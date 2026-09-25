@@ -13,6 +13,7 @@ import {
   nextActionOf,
 } from "@mc/db/queries/ventas-ficha";
 import { PageHeader } from "@/components/page-header";
+import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
@@ -171,8 +172,11 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
               ) : undefined
             }
           >
-            <div className="mb-3">
+            <div className="mb-3 flex flex-wrap items-start gap-2">
               <NuevoNegocio companyId={company.id} currency={workspace.currency} />
+              <Button href={`/ventas/empresas/${company.id}/pitch`} size="sm" aria-label={x.pitch.abrirLabel(company.name)}>
+                {x.pitch.abrir}
+              </Button>
             </div>
             {deals.length === 0 ? (
               <p className="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted">{t.noDeals}</p>

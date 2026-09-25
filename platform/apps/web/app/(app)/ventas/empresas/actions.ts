@@ -315,6 +315,9 @@ export async function aprobarMensaje(_prev: VentasState, formData: FormData): Pr
         return { errors: { body: e.placeholders(result.detail ?? "") } };
       case "note_too_long":
         return { errors: { body: e.note_too_long(result.detail ?? "") } };
+      case "unsourced_figure":
+        // Una cifra que no sale del perfil del creador (VEN-12): el mensaje no sale así, ni tal cual ni editado.
+        return { errors: { body: e.unsourced_figure(result.detail ?? "") } };
       case "no_postal_address":
         // Lo primero que ve quien prueba la demo (el seed no trae dirección): con el enlace para arreglarlo.
         return { message: e.no_postal_address, link: { href: OUTREACH_URLS.policyPostalAddress, label: t.irAPolitica } };

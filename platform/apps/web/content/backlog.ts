@@ -382,7 +382,8 @@ export const STORIES: readonly Story[] = [
     title: "Pitch manual con afirmaciones trazables",
     desc: "Borrador de correo a partir de la señal, el media kit y la última campaña, editado a mano. Cada cifra apunta a su origen en claims. Se guarda como outbound_touch en draft y se copia al portapapeles. La generación automática y el envío los hace VEN-12 sobre esta misma base.",
     done: "Un pitch con una cifra sin origen no se puede marcar como listo.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Hecha dentro de VEN-12: «Redactar pitch» en la ficha abre un editor con fichas de cifras y variables, redacción con IA y revisión en línea que subraya la cifra sin origen y no deja programarla. Detalle en docs/ventas-outreach.md.",
   },
   {
     id: "VEN-7", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-2"],
@@ -430,7 +431,8 @@ export const STORIES: readonly Story[] = [
     title: "Generación con afirmaciones trazables",
     desc: "Generador con perfil del creador, señal de la marca, ángulo del día y toques realmente enviados; pre-vuelo determinista, juez con rúbrica por paso en tabla, regeneración con pistas cerradas, disparadores de riesgo y revisión humana con calentamiento por tipo de paso.",
     done: "Un mensaje con una cifra sin origen no pasa; dos marcas del mismo nicho reciben correos con similitud menor de 0,65; el juez registra nota, tokens y costo.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Hecha: generación con cifras trazables, pre-vuelo, compuertas A-B-C, juez con nota y costo, y jobs outbound.generate/outbound.review. Para el integrador: aplicar 0056–0060 y poner ANTHROPIC_API_KEY en el worker. Detalle en docs/ventas-outreach.md.",
   },
   {
     id: "VEN-13", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-12"],

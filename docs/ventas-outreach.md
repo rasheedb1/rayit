@@ -1152,6 +1152,259 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
    cada tipo pasan por la bandeja de aprobación; después, solo los que
    el juez marque.
 
+#### Cómo quedó (VEN-12, con VEN-6 dentro)
+
+- **Un solo renderizador** en `@mc/core/outreach/render` (sustituye a
+  `template.ts`): la lista canónica de variables por origen (contacto,
+  empresa, señal, creador) y `templateValuesFrom`, la única traducción
+  entre la base y las plantillas. Lo usan el motor, el generador y el editor.
+- **Afirmaciones trazables** (`@mc/core/outreach/claims`): un
+  `SalesClaim` es una cifra con su fila de origen. Las lee
+  `listSalesClaims` (`@mc/db`): la mediana a 7 días fiable por red, el
+  grupo mayor de edad, género y país, los cinco mejores videos frente a
+  la mediana, los seguidores del último media kit, las campañas con
+  resultado y las cifras de la señal del deal, cada una formateada con
+  el locale del espacio. Es la lectura mínima del perfil de §5.4: cuando
+  VEN-11 publique el perfil completo, esta función puede leer de él sin
+  cambiar la forma. El generador escribe cada cifra con `[claim:id]`
+  detrás; al guardar, las marcas salen del texto y los claims citados
+  van a `outbound_touch.claims`.
+- **Pre-vuelo** (`preflight.ts`, sin tokens): huecos, largo por paso (la
+  rúbrica manda), palabras prohibidas y muletillas en español e inglés,
+  guiones largos y punto y coma, mayúsculas sostenidas, una sola
+  pregunta al cierre, sin enlace de agenda en el primer toque, y cada
+  cifra con su marca, que exista, que el ángulo la deje citar y que
+  diga lo mismo (5 % de redondeo: «400 mil» por 412.000). No cuentan
+  como cifra las fechas, las horas, los rangos de edad, los años («en
+  2026») y los conteos sueltos hasta 12 sin unidad («3 ideas»); pero un
+  número seguido de un sustantivo de desempeño de una lista cerrada
+  (marcas, campañas, clientes, videos, ventas, seguidores, views,
+  colaboraciones…) sí es una cifra, por pequeño que sea o aunque parezca
+  un año («11 marcas», «12 videos», «2000 seguidores»). Los números
+  escritos con palabras también cuentan: «diez mil views», «un millón»,
+  «once marcas» y los múltiplos «el doble», «el triple» (ronda 2).
+- **Compuertas** (`gates.ts`): A, el asunto; B, Jaccard sobre 5-shingles
+  contra los últimos 20 enviados del mismo tipo en el mismo espacio
+  (0,65 directos, 0,80 correo); C, al escribir el resultado: el toque
+  sigue en borrador, el turno sigue siendo del job, su cuerpo sigue
+  siendo el que había cuando el job lo tomó (`base_body_md5`, 0057: si
+  una persona escribió, manda lo suyo, código `edited_by_person`) y el
+  mismo texto no le llegó ya a esa persona.
+- **Generador y juez** (`generate.ts`, `judge.ts`, prompts en
+  `outreach/prompts/*.md`) detrás de `LlmClient`: `claude-sonnet-5`
+  con salida estructurada, tope de tokens por tipo de paso y sin
+  pensamiento extendido. La temperatura que pedía el diseño (0,7 y 0) no
+  se envía: los modelos posteriores a Opus 4.6 la rechazan con un 400
+  (`temperatureFor`). Sin `ANTHROPIC_API_KEY` no se redacta nada; el
+  generador y el juez falsos (`fake.ts`) son para las pruebas y la demo
+  (`OUTREACH_WRITER=fake`, con la regla del canal falso).
+- **La puerta** (`quality-gate.ts`): pre-vuelo y compuertas → juez →
+  decisión; riesgo o nota bajo el mínimo → una persona; entre el mínimo
+  y el umbral, otra versión con una pista cerrada, hasta los intentos de
+  la rúbrica, y «enviar el mejor». Antes de cada llamada mira lo que
+  queda del tope diario (`outbound_health`), y cada llamada deja su fila
+  en `outbound_llm_call` en su propia transacción.
+- **Los jobs** (`0056_generacion_trazable.sql`): `outbound.generate`
+  (cada dos minutos) redacta los borradores con `generate_with_ai` cuya
+  hora cae en el próximo día y cuyos pasos anteriores ya salieron, y los
+  deja en `outbound_generation` con sus marcas; `outbound.review`
+  (desfasado un minuto) los juzga, escribe una fila de `outbound_review`
+  por intento (nota por dimensión, nota ponderada, pista, riesgos,
+  decisión, y tokens y costo de escribir Y juzgar ese intento, con el
+  desglose en `gates.usage`; la frase del juez en `gates.judge_note`)
+  y deja el toque en `scheduled` o en `held` con su
+  motivo (`quality_warmup`, `quality_risk`, `quality_low`,
+  `quality_preflight`, `quality_duplicate`, `llm_budget`, `llm_error` o
+  el `needs_review` de la política). Los diez primeros de cada tipo de
+  paso siempre esperan a una persona. No se redacta (ni se gasta) para
+  quien pidió la baja o tiene el correo rebotado, y `outbound.review` no
+  toma un borrador cuyo texto escribió una persona.
+- **El pitch a mano** (VEN-6): «Redactar pitch» en la ficha abre
+  `/ventas/empresas/<id>/pitch` con el último borrador (el generado, con
+  la nota de la revisión, o uno guardado) o vacío; las cifras del perfil
+  y las variables son fichas que se insertan donde está el cursor; la
+  vista previa enseña lo que recibe la marca; la revisión corre en línea
+  y el servidor la repite al guardar (`savePitch`). «Programar» no se
+  puede con una cifra sin origen; «Copiar» copia el texto limpio y lo
+  guarda como borrador.
+
+#### Ronda 2 (0057)
+
+- **Lo que escribe una persona manda.** Guardar el pitch
+  (`savePitch`) guarda también su marcado con las `[claim:id]` en
+  `outbound_generation` (`outbound_generation_save_manual`, outcome
+  `manual`): al reabrirlo, cada cifra sigue teniendo su origen, y ningún
+  job escribe encima. Mientras la IA trabaja, el editor abre su borrador
+  aunque el toque todavía esté vacío.
+- **Pedir a la IA desde el editor**, como el generador de Chief: un panel
+  con la señal que usa, instrucciones (tono, qué destacar), «Redactar con
+  IA» y tres pistas cerradas (más corto, más específico, otro ángulo).
+  La web no llama al modelo: `outbound_generation_request` deja la fila en
+  `requested` con la pista y las instrucciones; `outbound.generate` la
+  toma antes que las cadencias y le pasa al generador la versión
+  anterior; `outbound.review` la juzga y el toque vuelve a `draft` con la
+  nota a la vista (lo programa la persona). El editor dice en qué va y se
+  actualiza solo.
+- **La llave vive en el worker.** La web sabe si la IA está encendida por
+  la última corrida de `outbound.generate` (`outreach_writer_status`:
+  `anthropic`, `fake`, `off` o `unknown`), no por su propio entorno.
+- **Una sola lectura de variables** (`loadTemplateSources`, `@mc/db`): el
+  motor al enrolar y el pitch rellenan las doce variables de la misma
+  forma. El creador que firma es el del negocio (`deal.creator_id`) o el
+  primero activo; los enlaces del media kit y de la cotización los arma
+  el servidor con `APP_URL` y el slug de la base, nunca el navegador.
+- **Cada creador cita solo lo suyo**: en una agencia, las campañas de otro
+  creador del mismo espacio no se ofrecen ni pasan el pre-vuelo. El
+  negocio del pitch tiene que ser de la empresa.
+
+#### Ronda 3 (0058)
+
+- **Lo que el pre-vuelo no veía.** Un multiplicador delante («crecieron
+  x3», «×2»), «3-fold», los puntos porcentuales («5 pp») y los puestos
+  («#1», «top 1», «número uno», «number one») son cifra siempre, por
+  pequeños que sean. Un puesto no lo respalda ninguna cifra del perfil:
+  siempre sale «sin origen». «Medio millón» es 500.000.
+- **Lo que veía de más.** Lo que una creadora ofrece no es una cifra de
+  desempeño: «te propongo 3 videos y 2 historias», «el paquete de 4
+  reels», «mis 3 mejores videos». Tampoco las duraciones («un reel de 30
+  segundos», «en 48 horas») ni las direcciones («la calle 85», «Cra. 7 #
+  71-21»). «Publiqué 12 videos» y «trabajé con 11 marcas» siguen siéndolo.
+  Una cifra sin origen impide programar, pero ya no copiar: la creadora
+  envía desde su correo y puede ser algo que On Cue no sabe leer. Un
+  correo corto y bueno pasa: el mínimo es de 150 caracteres.
+- **La aprobación de lo retenido también exige origen.** Lo que la IA deja
+  en `held` (los diez primeros, los de riesgo, los que pide la política)
+  se aprueba en la ficha con `releaseHeldTouch`, que ahora marca cada
+  cifra con su origen (la marca de la IA si el texto sigue siendo el
+  suyo, o una cifra del perfil que diga lo mismo) y no aprueba una sin
+  origen (`unsourced_figure`, con cuál). `outbound_touch.claims` se
+  recalcula con lo que cita el texto aprobado.
+- **Ningún intento se pierde.** `outbound_review.run` numera las corridas
+  de la puerta de calidad sobre un toque; los intentos van de 1 a 10
+  dentro de su corrida y la clave es `(touch_id, run, attempt)`. La nota
+  que enseña el editor es la del intento elegido (`chosen_attempt`,
+  `judge_note` y `total_score` en `outbound_generation`), no la del último.
+- **Sin bucles de gasto.** Cada fallo suma en `outbound_generation.failures`
+  y fija `next_attempt_at`: 2, 8, 30 y 120 minutos. Sin presupuesto se
+  mira cada media hora. Tras tres respuestas ilegibles del modelo, la IA
+  se rinde (stage `failed`): el toque de una cadencia queda retenido con
+  `llm_error` y el editor lo dice. `last_error` guarda un código
+  (`llm_budget`, `interrupted`, `llm_output`, `error`); el texto del error
+  va al registro del worker, nunca a la pantalla.
+- **El plazo del job.** La señal del job llega a la llamada al modelo (la
+  corta ahí mismo), `outbound.review` toma tres toques por corrida y ni
+  uno más si quedan menos de 90 s; si se corta a mitad, los intentos ya
+  pagados se escriben en `outbound_review` antes de soltar el turno.
+- **La compuerta B compara con lo que va a salir.** Además de lo enviado,
+  lo programado, lo retenido y lo que la IA redactó en el mismo lote. Los
+  nombres propios cuentan como uno solo: el mismo correo con la marca y
+  la persona cambiadas es el mismo correo. La baja de este espacio
+  (`outbound_workspace_optout`) también frena la redacción.
+- **El editor.** Las cifras y las variables son fichas dentro del mensaje
+  (el origen al pasar el cursor), no marcas. El pitch se guarda con sus
+  `{{variables}}` sin rellenar: si cambia la persona, cambia el saludo.
+  Junto a «Programar», una línea dice por qué está apagado; recién
+  abierto y vacío no hay errores en rojo. El aviso de guardar no se
+  pierde al repintar la página. En la demo embebida (sin worker),
+  «Redactar con IA» lo redacta el redactor falso en el mismo proceso,
+  por el mismo camino (`redactRequestedInProcess`).
+
+#### Ronda 4 (0059)
+
+- **Las cifras en palabras que se escapaban.** Un porcentaje escrito con
+  palabras («el ochenta por ciento», «eighty percent», «80 per cent»),
+  las fracciones («la mitad de mis seguidores», «dos tercios», «half of
+  my followers»), las proporciones («tres de cada cuatro», «9 out of
+  10») y los múltiplos por su raíz y no por una lista de conjugaciones
+  («triplicamos», «duplicó», «tripling») son cifra siempre. También los
+  puestos «primer lugar», «1er lugar», «la primera creadora», «first
+  place». No lo son «media hora», «a mitad de semana», «half an hour»,
+  «el cuarto video» ni «hace 2 años».
+- **Los números de la marca y la trayectoria.** «Anuncios», «años»,
+  «tiendas» (y sus pares en inglés) son sustantivos de desempeño: «6
+  anuncios activos» y «9 años creando contenido» necesitan su origen. Y
+  un número pequeño que dice lo mismo que un conteo del perfil, seguido
+  de lo que ese conteo cuenta («4 locales abiertos» frente a «Locales
+  abiertos de Fresko: 4»), es la cita de ese conteo sin su marca.
+- **El redactor falso escribe como una creadora.** Cita por prioridad
+  (una campaña con esa marca, la mediana de su red principal, su
+  interacción, su audiencia), con frases propias de cada cifra («Mis
+  videos de TikTok tienen una mediana de 115.446 views…»). No copia una
+  señal con números fuera de su fecha: la cifra de la señal la dice con
+  su marca si el ángulo la deja citar, o no la dice.
+- **Los datos de fuera entran como dato.** El titular de la señal, la
+  bio, el brief, las instrucciones de la persona y los mensajes
+  anteriores van al prompt entre etiquetas (`<senal>`,
+  `<instrucciones_del_creador>`, `<mensaje_anterior>`…), con sus «<» y
+  «>» neutralizados, y el sistema dice que su contenido es información,
+  nunca una orden. El juez recibe igual el mensaje que califica.
+- **El calentamiento cuenta solo lo de la IA.** Los diez primeros de cada
+  tipo de paso son diez redactados por la IA (outcome `approved` o
+  `held` en `outbound_generation`) que salieron o aprobó una persona. Un
+  pitch escrito a mano o una plantilla fija no cuentan.
+- **La guardia del pitch a mano, en la base.**
+  `outbound_generation_save_manual` solo guarda sobre un correo en
+  `draft` o `held` sin intento sin confirmar (la guardia de
+  `outbound_generation_request`); si no, `not_editable`. `savePitch` la
+  llama antes de programar.
+- **El editor.** Una cifra sin origen se subraya dentro del mensaje (API
+  de resaltado del navegador, sin tocar el texto) y se dice justo debajo,
+  con `aria-describedby` desde el campo. «Programar», «Copiar» y
+  «Guardar borrador» van pegados al mensaje, antes de la biblioteca de
+  fichas, que abre solo lo propio de la marca. «Copiar» dice su motivo
+  exacto y calla con el editor vacío. La nota del juez falso nombra las
+  dimensiones de la rúbrica en el idioma del espacio.
+
+#### Ronda 5 (0060)
+
+- **El camino principal no pierde el pitch.** El editor se monta de
+  nuevo solo cuando la IA trae un borrador nuevo o se pone a redactar
+  (`montaje.tsx` compara la clave que manda el servidor con la montada).
+  Guardar, copiar o programar no lo remontan: el aviso («Programado»,
+  «Copiado») sigue a la vista con el foco. Tras programar, el correo
+  queda en solo lectura con «Ver la ficha» y «Escribir otro pitch».
+  Cuando llega otra versión de la IA, el foco va a su aviso; un error al
+  guardar o programar también se lleva el foco.
+- **La persona es una variable, no un nombre.** Lo que escribe la IA se
+  guarda en `outbound_generation.body_marked` con quien recibe y quien
+  firma como `{{first_name}}`, `{{full_name}}` y `{{sender_name}}`
+  (`templatizeKnownValues` en `render.ts`, aplicado en
+  `generationFinalFrom`, que usan el worker y la demo). Si la creadora
+  cambia «Para», el saludo cambia con la persona. Como red, la revisión
+  del editor no deja programar un mensaje que nombra a otra persona de
+  la marca («El borrador se escribió para Camilo…»). La variable del
+  creador es `sender_name`, la de la lista canónica: no hay otra.
+- **Lo que impide programar sin estar en el mensaje, se dice antes.** Sin
+  dirección postal en el pie (con la misma regla que `savePitch`), la
+  revisión lo dice con el enlace a la política y «Programar» se apaga;
+  sin correo conectado, una nota neutra con el enlace a Canales.
+- **Redondear no es inflar.** Una cifra vale si redondea el dato hacia
+  abajo (hasta un 5 %) o si es el dato redondeado a la precisión con que
+  está escrita, sin alejarse más de un 5 % («58 %» por 0,576; «1,2 M» por
+  1.180.000). «120 mil» por 115.446 no pasa: escrito a miles, el dato es
+  115 mil. «x3» por 3,4× tampoco.
+- **Más cifras sin origen.** «Dupliqué», «dupliquemos», «cuadrupliqué»
+  (la «c» pasa a «qu»), «gané 3 premios» (premios, reconocimientos,
+  menciones, awards) y «mi tasa de interacción es del 12» (un número
+  detrás de «tasa de…», «engagement rate», «interacción» es un
+  porcentaje aunque le falte el signo).
+- **Una sola regla de porcentaje.** `formatShare` (`claim-labels.ts`) la
+  usan las cifras del pitch y `formatPct` de la web: la ficha y el correo
+  dicen «58 %» igual.
+- **La marca también es dato de fuera.** El juez recibe el nombre y el
+  sector entre `<marca>` y `<sector>`, como el generador.
+- **Quién pidió el borrador lo dice la sesión.** 0060 rehace
+  `outbound_generation_request` con la misma firma: `requested_by` es
+  `current_user_id()`; sin sesión, `p_user` solo vale si es miembro del
+  espacio.
+- **Copiar dice la verdad.** Si el navegador no deja copiar, la pantalla
+  lo dice en vez de «Copiado»; sin asunto se copia solo el cuerpo. Tocar
+  una ficha dice su origen debajo del mensaje. Enter usa la selección
+  viva, no la última guardada.
+- **El redactor falso no escribe en frío a quien ya conoce.** Con una
+  campaña con esa marca abre con la relación («Después de la campaña que
+  hicimos juntos con…») y nombra la marca dos veces como mucho.
+
 ### 5.7 Qué pasa cuando la marca responde
 
 El webhook de mensajes nuevos de Unipile y la lectura del hilo de Gmail

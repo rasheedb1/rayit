@@ -15,6 +15,8 @@
 // El dinero entra como string decimal ("5200000.50"), nunca como number:
 // es la regla del repo para no perder centavos por el camino.
 
+import { formatShare } from "@mc/core/outreach/claim-labels";
+
 /** Valores por defecto de `workspace` (migración 0001). No son constantes del producto. */
 export const DEFAULT_LOCALE = "es-CO";
 export const DEFAULT_CURRENCY = "COP";
@@ -184,9 +186,13 @@ export function formatCompact(n: number, opts: LocaleOpts = {}): string {
   return plain(numberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(n));
 }
 
-/** 0.31 → "31 %" · formatPct(0.3125, 1) → "31,3 %" */
+/**
+ * 0.31 → "31 %" · formatPct(0.3125, 1) → "31,3 %". La regla vive en
+ * @mc/core (formatShare): con ella se escriben también las cifras de los
+ * correos de Ventas, y así la ficha y el pitch dicen la misma cifra igual.
+ */
 export function formatPct(ratio: number, digits = 0, opts: LocaleOpts = {}): string {
-  return `${decimals(ratio * 100, digits, opts.locale ?? DEFAULT_LOCALE)} %`;
+  return formatShare(ratio, digits, opts.locale ?? DEFAULT_LOCALE);
 }
 
 /** 0.31 → "+31 %" · −0.05 → "−5 %" · 0 → "0 %". El signo va en el texto: el color nunca es el único indicador. */
@@ -225,6 +231,12 @@ export function formatMultiple(ratio: number, digits = 1, opts: LocaleOpts & { m
   const min = Math.min(opts.minDigits ?? 0, digits);
   const body = plain(numberFormat(locale, { minimumFractionDigits: min, maximumFractionDigits: digits }).format(ratio));
   return `${body}×`;
+}
+
+/** Un número con decimales, sin unidad: 8.675 → "8,7" (una nota de 0 a 10). */
+export function formatDecimal(n: number, digits = 1, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  return plain(numberFormat(locale, { maximumFractionDigits: digits }).format(n));
 }
 
 function utcDate(iso: string): Date {
@@ -496,6 +508,7 @@ export function formatterFor(settings: FormatSettings) {
     compact: (n: number) => formatCompact(n, base),
     pct: (ratio: number, digits = 0) => formatPct(ratio, digits, base),
     multiple: (ratio: number, digits = 1, minDigits = 0) => formatMultiple(ratio, digits, { ...base, minDigits }),
+    decimal: (n: number, digits = 1) => formatDecimal(n, digits, base),
     delta: (ratio: number, digits = 0) => formatDelta(ratio, digits, base),
     points: (diff: number, digits = 1) => formatPoints(diff, digits, base),
     date: (iso: string, style: "short" | "long" = "short") => formatDate(iso, style, base),

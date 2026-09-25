@@ -97,7 +97,7 @@ export interface DemoMotorReport {
 
 const STEPS = [
   { day: 0, type: 'email', time: '10:00', subject: 'Una idea para {{company}}',
-    body: 'Hola, {{first_name}}: cocino para 180 mil personas que compran lo que ven en mis recetas. Tengo una idea para {{company}}.' },
+    body: 'Hola, {{first_name}}: cocino para una audiencia que compra lo que ve en mis recetas. Tengo una idea para {{company}}.' },
   { day: 3, type: 'email_reply', time: '10:30', subject: null,
     body: 'Como te comenté el otro día, {{first_name}}: te dejo mi media kit por si quieres verlo.' },
   { day: 6, type: 'email', time: '11:00', subject: 'La última, {{first_name}}',

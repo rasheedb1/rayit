@@ -175,6 +175,10 @@ importers:
         version: 5.9.3
 
   packages/core:
+    dependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^0.128.0
+        version: 0.128.0(zod@4.6.5)
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

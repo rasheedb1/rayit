@@ -13,8 +13,11 @@
  * workspace, lo fija el cliente de base.
  */
 import { findPlaceholders } from '@mc/core';
+import { claimsCitedIn, stripClaimMarkers, type SalesClaim } from '@mc/core/outreach/claims';
 import { inviteNoteOverflow } from '@mc/core/outreach/messages';
+import { checkFigures, FIGURE_RISK_CODES, markFiguresByValue } from '@mc/core/outreach/preflight';
 import type { WorkspaceTx } from '../../client.ts';
+import { listSalesClaims } from './claims.ts';
 import { advanceEnrollment } from './enroll.ts';
 import { assertIds, date, int, text, textOrNull, toDate } from './shared.ts';
 
@@ -126,7 +129,9 @@ export async function listCompanyCadenceTouches(tx: WorkspaceTx, companyId: stri
 }
 
 /** Por qué no se pudo aprobar un mensaje retenido. */
-export type ReleaseHeldCode = 'not_found' | 'not_held' | 'empty' | 'empty_subject' | 'placeholders' | 'note_too_long' | 'opted_out' | 'no_postal_address';
+export type ReleaseHeldCode =
+  | 'not_found' | 'not_held' | 'empty' | 'empty_subject' | 'placeholders' | 'note_too_long' | 'unsourced_figure' | 'opted_out'
+  | 'no_postal_address';
 
 export type ReleaseHeldResult = { ok: true } | { ok: false; code: ReleaseHeldCode; detail?: string };
 
@@ -137,6 +142,15 @@ export type ReleaseHeldResult = { ok: true } | { ok: false; code: ReleaseHeldCod
  * mismo: sin texto, huecos sin rellenar (findPlaceholders), la nota de una
  * invitación de LinkedIn de más de 300 caracteres, la ficha dada de baja,
  * y un correo sin la dirección postal que exige la política.
+ *
+ * Y las cifras (VEN-12, §5.3): aquí llega todo lo que la IA dejó retenido
+ * (los diez primeros de cada tipo, los de riesgo, los que pide revisar la
+ * política), y la persona puede editar el texto al aprobarlo. Cada cifra
+ * del texto tiene que tener su origen en el perfil comercial del creador
+ * que firma: la marca que le puso la IA, si el texto sigue siendo el suyo,
+ * o una cifra del perfil que diga lo mismo. Una cifra sin origen no se
+ * aprueba ('unsourced_figure', con cuáles), y outbound_touch.claims se
+ * recalcula con lo que de verdad cita el texto aprobado.
  *
  * Sale a su hora (scheduled_for, que no se toca: si ya pasó, en la
  * siguiente corrida, y los pasos de detrás se corren con él al enviarse).
@@ -179,6 +193,8 @@ export async function releaseHeldTouch(
     const over = inviteNoteOverflow(body);
     if (over !== null) return { ok: false, code: 'note_too_long', detail: String(over) };
   }
+  const figures = await sourceFigures(tx, touchId, subject, body);
+  if (!figures.ok) return { ok: false, code: 'unsourced_figure', detail: figures.unsourced.join(', ') };
   if (row.opted_out) return { ok: false, code: 'opted_out' };
   if (row.needs_postal) return { ok: false, code: 'no_postal_address' };
   // Retenido por un intento sin comprobar: aprobarlo es decir que no
@@ -188,20 +204,54 @@ export async function releaseHeldTouch(
     const r = await resolveUnconfirmedTouch(tx, touchId, 'resend');
     if (!r.ok) return { ok: false, code: r.code === 'opted_out' ? 'opted_out' : 'not_held' };
     const edited = await tx.query(
-      `UPDATE outbound_touch SET subject = $2, body = $3 WHERE id = $1::uuid AND status = 'scheduled' RETURNING id`,
-      [touchId, subject, body],
+      `UPDATE outbound_touch SET subject = $2, body = $3, claims = $4::jsonb WHERE id = $1::uuid AND status = 'scheduled' RETURNING id`,
+      [touchId, subject, body, JSON.stringify(figures.cited)],
     );
     return edited.rows.length > 0 ? { ok: true } : { ok: false, code: 'not_held' };
   }
   const done = await tx.query(
     `UPDATE outbound_touch
-        SET status = 'scheduled', held_reason = NULL, subject = $2, body = $3, next_retry_at = NULL,
+        SET status = 'scheduled', held_reason = NULL, subject = $2, body = $3, claims = $4::jsonb, next_retry_at = NULL,
             unconfirmed_attempt = NULL, unconfirmed_caps_on = NULL
       WHERE id = $1::uuid AND status = 'held'
       RETURNING id`,
-    [touchId, subject, body],
+    [touchId, subject, body, JSON.stringify(figures.cited)],
   );
   return done.rows.length > 0 ? { ok: true } : { ok: false, code: 'not_held' };
+}
+
+/**
+ * El origen de cada cifra del texto que se aprueba. Las cifras que se
+ * pueden citar son las del creador que firma el negocio del toque (las
+ * mismas que vio el generador). El texto se marca con lo que la IA marcó
+ * —si la persona no lo cambió— y cada cifra que siga sin marca y coincida
+ * con una del perfil recibe la suya. Lo que quede sin origen, o con un
+ * origen que dice otra cosa, impide aprobarlo.
+ */
+async function sourceFigures(
+  tx: WorkspaceTx,
+  touchId: string,
+  subject: string | null,
+  body: string,
+): Promise<{ ok: true; cited: SalesClaim[] } | { ok: false; unsourced: string[] }> {
+  const t = (
+    await tx.query<{ deal_id: string | null; locale: string; g_subject: string | null; g_body: string | null }>(
+      `SELECT t.deal_id, w.locale, g.subject AS g_subject, g.body_marked AS g_body
+         FROM outbound_touch t JOIN workspace w ON w.id = t.workspace_id
+         LEFT JOIN outbound_generation g ON g.touch_id = t.id AND g.outcome IS DISTINCT FROM 'manual'
+        WHERE t.id = $1::uuid`,
+      [touchId],
+    )
+  ).rows[0];
+  const claims = await listSalesClaims(tx, { locale: t?.locale ?? 'es-CO', dealId: t?.deal_id ?? null });
+  // El marcado de la IA vale si dice lo mismo que lo que se aprueba; si la persona lo editó, se marca por valor.
+  const sameAs = (marked: string | null | undefined, clean: string | null) =>
+    marked !== null && marked !== undefined && stripClaimMarkers(marked).trim() === (clean ?? '').trim();
+  const markedSubject = markFiguresByValue(sameAs(t?.g_subject, subject) ? t!.g_subject! : (subject ?? ''), claims);
+  const markedBody = markFiguresByValue(sameAs(t?.g_body, body) ? t!.g_body! : body, claims);
+  const issues = checkFigures(`${markedSubject}\n${markedBody}`, claims).filter((i) => FIGURE_RISK_CODES.includes(i.code));
+  if (issues.length > 0) return { ok: false, unsourced: [...new Set(issues.map((i) => i.detail ?? ''))].filter(Boolean) };
+  return { ok: true, cited: claimsCitedIn(claims, markedSubject, markedBody) };
 }
 
 /** Qué dice la persona de un intento que el proveedor no confirmó (0053). */

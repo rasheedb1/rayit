@@ -2,7 +2,9 @@ import "server-only";
 import {
   createDbFromEnv, type Db, type DbMode, type Identity, type IdentityTx, type PublicShareTx, type WorkspaceTx,
 } from "@mc/db";
+import { createFakeGenerator, createFakeJudge } from "@mc/core/outreach/fake";
 import { crearEnlaceDeDemo } from "@mc/db/demo-baja";
+import { redactRequestedInProcess } from "@mc/db/queries/outreach";
 import { authConfig } from "@/lib/auth/config";
 
 /**
@@ -120,6 +122,25 @@ export async function withPublicShare<T>(fn: (tx: PublicShareTx) => Promise<T>):
 /** Contra qué corre la web: 'postgres' (DATABASE_URL) o 'embedded' (modo demo). */
 export async function getDbMode(): Promise<DbMode> {
   return (await getDb()).mode;
+}
+
+/**
+ * Solo en modo demo (Postgres embebido dentro de este proceso, sin worker
+ * que tome la cola): redacta en el momento lo que una persona pidió desde
+ * el editor del pitch, con el redactor y el juez falsos (deterministas,
+ * sin red ni llave), por el mismo camino que el worker
+ * (redactRequestedInProcess, VEN-12). Así «Redactar con IA» se puede
+ * probar en la demo. Con DATABASE_URL no hace nada y devuelve false: ahí
+ * redacta el worker, con su llave, y un texto de ejemplo nunca toca una
+ * base de verdad.
+ */
+export async function redactarPitchEnLaDemo(touchId: string): Promise<boolean> {
+  const { db, mode } = await getDb();
+  if (mode !== "embedded") return false;
+  const r = await db.asWorker((tx) =>
+    redactRequestedInProcess(tx, { touchId, generator: createFakeGenerator(), judge: createFakeJudge(), now: new Date() }),
+  );
+  return r.status === "returned";
 }
 
 /** Cierra la base del proceso. Solo para pruebas y para el apagado; una pantalla nunca la cierra. */

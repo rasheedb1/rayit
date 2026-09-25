@@ -349,6 +349,23 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'was_sent lo anota como enviado y marca el enlace de baja de ese intento; resend lo devuelve a la cola, borra ese ' +
     'enlace y devuelve su plaza. Solo el toque held con unconfirmed_attempt del workspace de la transacción; las ' +
     'columnas del intento y outbound_optout_link son del despachador. EXECUTE a mc_app y mc_worker. No es de ningún disparador',
+  // La redacción que pide una persona y el pitch a mano (0057, VEN-12).
+  'outbound_generation_request(uuid,text,text,uuid)':
+    'una persona pide desde el editor del pitch que la IA redacte o regenere con una pista cerrada (0057, VEN-12): ' +
+    'mc_app no escribe outbound_generation (0056). Del rol que migra, con la cerradura de 0053: solo un correo nuevo ' +
+    'en draft o held del workspace de la transacción, sin intento sin confirmar y cuya persona no pidió la baja; deja ' +
+    'la fila en requested con la pista (del CHECK) y devuelve un held a draft. No escribe texto. EXECUTE solo para ' +
+    'mc_app. No es de ningún disparador',
+  'outbound_generation_save_manual(uuid,text,text)':
+    'el pitch que escribe o edita una persona (0057, VEN-12): guarda su marcado [claim:id] en outbound_generation con ' +
+    'outcome manual, o borra la fila si no hay texto, y así ningún job escribe encima de lo suyo. Mismo dueño y misma ' +
+    'cerradura: solo un correo del workspace de la transacción en draft o held, sin intento sin confirmar (la misma ' +
+    'guardia que outbound_generation_request, 0059); si no, not_editable sin escribir. La llama savePitch después de ' +
+    'guardar el borrador con el pre-vuelo del servidor y antes de programarlo. EXECUTE solo para mc_app. No es de ningún disparador',
+  'outreach_writer_status()':
+    '¿el worker redacta con IA? (0057, VEN-12): la llave de Anthropic vive en el worker y la web lo sabe por la última ' +
+    'corrida de outbound.generate en job_run, que de un cron no tiene workspace. Solo LEE esas filas (una política TO ' +
+    'CURRENT_USER por job_id) y devuelve una palabra: anthropic, fake, off o unknown. EXECUTE solo para mc_app',
   'outreach_channel_mark_down(uuid,text)':
     'el aviso account_status de Unipile desde la web (0039): una cuenta de Unipile connected o error del workspace de ' +
     'la transacción pasa a needs_reconnect con el motivo. Mismo dueño y misma cerradura que outreach_channel_connect; ' +
@@ -1019,6 +1036,12 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
     motivo:
       'a quién no le vuelve a escribir este workspace porque pulsó el enlace de baja de uno de sus correos (0038 §8). ' +
       'La escribe solo public_optout: con escritura, un workspace se quitaría una baja o se la pondría a otro',
+  },
+  outbound_generation: {
+    permite: ['SELECT'],
+    motivo:
+      'el borrador generado con sus marcas [claim:id] y el turno de los jobs de VEN-12 (0056): lo escribe el worker y ' +
+      'la web lo lee para el editor del pitch. Con escritura, un workspace se fabricaría un borrador «revisado»',
   },
   outbound_llm_call: {
     permite: ['SELECT', 'INSERT'],

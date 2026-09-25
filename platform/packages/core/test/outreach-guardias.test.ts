@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assertNoPlaceholders, findPlaceholders, hasPlaceholders, PlaceholderError } from '../src/outreach/placeholder-guard.ts';
 import { detectOptOut, OPT_OUT_RULES, stripQuoted, stripSignature } from '../src/outreach/optout.ts';
-import { firstNameOf, renderTemplate } from '../src/outreach/template.ts';
+import { firstNameOf, renderTemplate } from '../src/outreach/render.ts';
 
 test('la guardia bloquea los siete tipos de hueco', () => {
   const casos: Array<[string, string]> = [

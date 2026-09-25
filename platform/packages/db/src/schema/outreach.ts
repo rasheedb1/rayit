@@ -375,6 +375,8 @@ export const outboundReview = pgTable('outbound_review', {
   id: uuidPk(),
   workspaceId: workspaceId(),
   touchId: uuid('touch_id').notNull().references(() => outboundTouch.id, { onDelete: 'cascade' }),
+  /** La corrida de la puerta de calidad (0058): attempt va de 1 a 10 dentro de ella. */
+  run: integer('run').default(1).notNull(),
   attempt: integer('attempt').notNull(),
   subject: text('subject'),
   body: text('body').notNull(),
@@ -411,6 +413,45 @@ export const outboundLlmCall = pgTable('outbound_llm_call', {
   touchId: uuid('touch_id').references(() => outboundTouch.id, { onDelete: 'set null' }),
   messageId: uuid('message_id').references(() => outboundMessage.id, { onDelete: 'set null' }),
   createdAt: createdAt(),
+});
+
+/**
+ * El borrador generado de un toque con sus marcas [claim:id] y el turno de
+ * los jobs outbound.generate y outbound.review (0056, VEN-12). La escribe
+ * solo el worker; la web la lee para el editor del pitch.
+ */
+export const outboundGeneration = pgTable('outbound_generation', {
+  touchId: uuid('touch_id').primaryKey().references(() => outboundTouch.id, { onDelete: 'cascade' }),
+  workspaceId: workspaceId(),
+  stage: text('stage', { enum: ['requested', 'generating', 'generated', 'reviewing', 'reviewed', 'failed'] }).default('generating').notNull(),
+  subject: text('subject'),
+  bodyMarked: text('body_marked'),
+  model: text('model'),
+  attempts: integer('attempts').default(0).notNull(),
+  outcome: text('outcome', { enum: ['approved', 'held', 'manual'] }),
+  leaseToken: uuid('lease_token'),
+  leaseUntil: timestamptz('lease_until'),
+  lastError: text('last_error'),
+  generatedAt: timestamptz('generated_at'),
+  reviewedAt: timestamptz('reviewed_at'),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+  // 0057: lo que pidió una persona desde el editor, el cuerpo que había al tomarlo y lo que costó el borrador.
+  requestedHint: text('requested_hint', { enum: ['shorter', 'more_specific', 'other_angle', 'other_signal', 'soften', 'add_proof'] }),
+  requestedInstructions: text('requested_instructions'),
+  requestedBy: uuid('requested_by').references(() => appUser.id, { onDelete: 'set null' }),
+  requestedAt: timestamptz('requested_at'),
+  baseBodyMd5: text('base_body_md5'),
+  genInputTokens: integer('gen_input_tokens').default(0).notNull(),
+  genOutputTokens: integer('gen_output_tokens').default(0).notNull(),
+  genCost: numeric('gen_cost', { precision: 14, scale: 6 }).default('0').notNull(),
+  // 0058: la corrida y el intento elegido con su nota, y los fallos con su espera.
+  reviewRun: integer('review_run'),
+  chosenAttempt: integer('chosen_attempt'),
+  judgeNote: text('judge_note'),
+  totalScore: numeric('total_score', { precision: 4, scale: 2 }),
+  failures: integer('failures').default(0).notNull(),
+  nextAttemptAt: timestamptz('next_attempt_at'),
 });
 
 // ---------------------------------------------------------------------
