@@ -27,9 +27,9 @@ export interface BajaTexts {
      * Una sola frase con quién escribe y a qué dirección (enmascarada),
      * como la baja de Substack: «Laura no volverá a escribirte: ni a
      * v•••@marca.com ni por ningún otro canal». Quién va PRIMERO, porque es
-     * lo que limita la promesa: la baja es de quien envió este correo, y
-     * pasa a toda la plataforma cuando la pide también a otro creador
-     * (0038 §8), cosa que aquí no se promete. Antes eran dos frases y la
+     * lo que limita la promesa: la baja es de quien envió este correo, en
+     * todos sus canales, y no de toda la plataforma (0038 §8): cada creador
+     * responde de su propio envío. Antes eran dos frases y la
      * primera («Dejarás de recibir mensajes en v•••@…») sonaba a baja
      * total. Sin nombre (el espacio ya no existe), «quien te escribió».
      * No dice «a este correo, ni por correo»: la dirección y los demás

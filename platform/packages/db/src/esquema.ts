@@ -313,13 +313,13 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'negocio; la campaña la crea después la web dentro del workspace de la cotización',
   // La baja desde el enlace de un correo (0037 §9, VEN-9 y VEN-15).
   'public_optout(text)':
-    'la baja desde el enlace de un correo (0037 §9): la página se abre sin sesión y la baja cruza workspaces (0007: ' +
-    'nadie en la plataforma vuelve a escribirle). Corre como mc_public_share, cuyas políticas `TO mc_public_share` ' +
-    'abren solo el enlace (outbound_optout_link, que escribe solo el despachador) cuyo sha256 del token fija la ' +
-    'función, y después la ficha que recibió el correo y las que tienen la dirección a la que salió. Escribe por ' +
-    'COLUMNA: la baja del contacto, el estado y el motivo de sus toques pendientes, el estado de sus ' +
-    'enrolamientos, el correo en contact_suppression (reason unsubscribe_link, la baja verificable de 0029 §1) y ' +
-    'el clic en outbound_optout_event (quién la provocó). No es de ningún disparador',
+    'la baja desde el enlace de un correo (0037 §9, 0038 §8): la página se abre sin sesión y la baja vale para el ' +
+    'workspace que envió ese correo, en todos sus canales. Corre como mc_public_share, cuyas políticas `TO ' +
+    'mc_public_share` abren solo el enlace (outbound_optout_link, que escribe solo el despachador) cuyo sha256 del ' +
+    'token fija la función, y después la ficha que recibió el correo y las PROPIAS de ese workspace con la dirección ' +
+    'a la que salió. Escribe por COLUMNA: la baja de esas fichas, el estado y el motivo de sus toques pendientes, el ' +
+    'estado de sus enrolamientos, la dirección en outbound_workspace_optout y el clic en outbound_optout_event. Nunca ' +
+    'contact_suppression (0038 §8). No es de ningún disparador',
   'public_optout_preview(text,uuid[])':
     'lo que la página de baja enseña antes del clic (0038 §5, VEN-15): con el mismo rol y la misma cerradura que ' +
     'public_optout, LEE el enlace por el sha256 del token, si la ficha ya estaba de baja y el nombre del workspace ' +
@@ -606,12 +606,6 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
       'el WITH CHECK de contact_write (0020) pregunta por company_link al marcar la baja (0037 §9). Su política es ' +
       'la de 0010: sin workspace fijado, este rol no ve ninguna fila',
   },
-  contact_suppression: {
-    tabla: ['INSERT'],
-    motivo:
-      'anotar el correo en la baja global con reason unsubscribe_link, la baja verificable de la propia persona que ' +
-      '0029 §1 reserva a la lista (0037 §9). No la lee',
-  },
   outbound_optout_link: {
     tabla: ['SELECT'],
     motivo:
@@ -636,18 +630,17 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     columnas: { SELECT: ['user_id', 'workspace_id'] },
     motivo:
       'workspace_read_member (0028), la política sin TO de workspace, pregunta por membership al leer workspace: sin ' +
-      'esto no se podría leer el nombre (0038 §5). Y la baja en dos tiempos (r4) mira si dos workspaces comparten ' +
-      'miembro: membership_public_optout abre solo las membresías del workspace del enlace y de los que ya anotaron ' +
-      'la baja de esa dirección, mientras public_optout las tiene fijadas',
+      'esto no se podría leer el nombre (0038 §5). No le abre ninguna fila: ninguna política de membership es `TO ' +
+      'mc_public_share`',
   },
-  // La baja en dos tiempos (0038 §8, VEN-15 r3).
+  // La baja con quien envió (0038 §8).
   outbound_workspace_optout: {
     tabla: ['INSERT'],
     columnas: { SELECT: ['email', 'workspace_id'] },
     motivo:
-      'la baja vale ya para el workspace que envió el correo (el alta, solo con el token, el workspace y la dirección ' +
-      'del enlace) y pasa a toda la plataforma cuando otro workspace la confirma: por eso lee QUÉ workspaces tienen ' +
-      'esa dirección (0038 §8). Solo las filas de la dirección que fija public_optout',
+      'la baja vale para el workspace que envió el correo (el alta, solo con el token, el workspace y la dirección ' +
+      'del enlace), y la vista previa y la baja leen si ESE workspace ya la tenía, para decir «ya estabas fuera» ' +
+      '(0038 §8). Solo la fila del workspace y la dirección que fija la función',
   },
 };
 
@@ -674,7 +667,7 @@ const CONTACTOS_DE_LA_BAJA = /= ANY \(\(NULLIF\(current_setting\('app\.public_op
 
 /**
  * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033, las nueve de la baja (0037 §9), la de
- * quién envía (0038 §5), las dos de la baja en dos tiempos (0038 §8) y la de quién la confirma (r4). Una
+ * quién envía (0038 §5) y las dos de la baja con quien envió (0038 §8). Una
  * de más —`CREATE POLICY … ON invoice TO mc_public_share USING (true)`—
  * o una de estas reescrita con ALTER POLICY se reporta. Las políticas
  * sin TO (PUBLIC) también le alcanzan, pero alcanzan igual a mc_app y
@@ -758,7 +751,9 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
   'contact.contact_public_optout_email': {
     cmd: 'r',
     exige: [/^\(?email = \(NULLIF\(current_setting\('app\.public_optout_email'/],
-    motivo: 'las fichas con la dirección a la que salió el correo del enlace (recipient_address), en cualquier workspace',
+    motivo:
+      'las fichas PROPIAS del workspace que envió con la dirección a la que salió el correo del enlace ' +
+      '(recipient_address); desde 0038 §8, ninguna de otro workspace',
   },
   'contact.contact_public_optout_mark': {
     cmd: 'w',
@@ -771,24 +766,16 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
     exige: [/^\(?id = \(?NULLIF\(current_setting\('app\.public_optout_workspace'/],
     motivo: 'el workspace que envió el correo del enlace, cuyo id fija public_optout_preview',
   },
-  // La baja en dos tiempos (0038 §8).
+  // La baja con quien envió (0038 §8).
   'outbound_workspace_optout.outbound_workspace_optout_public_optout_read': {
     cmd: 'r',
-    exige: [/^\(?email = \(NULLIF\(current_setting\('app\.public_optout_email'/],
-    motivo: 'qué workspaces ya tienen de baja la dirección del enlace: con dos, la baja pasa a toda la plataforma',
+    exige: [/^\(?workspace_id = \(?NULLIF\(current_setting\('app\.public_optout_workspace'/],
+    motivo: 'si el workspace que envió el correo del enlace ya tenía de baja esa dirección, y ningún otro workspace',
   },
   'outbound_workspace_optout.outbound_workspace_optout_public_optout': {
     cmd: 'a',
     exige: [TOKEN_DE_LA_BAJA],
     motivo: 'la baja de ese mismo enlace en el workspace que lo envió, y ninguna otra',
-  },
-  // Quién confirma la baja global (0038 §8, r4).
-  'membership.membership_public_optout': {
-    cmd: 'r',
-    exige: [/^\(?workspace_id = ANY \(\(?NULLIF\(current_setting\('app\.public_optout_members'/],
-    motivo:
-      'las membresías del workspace del enlace y de los que ya anotaron la baja de esa dirección: dos workspaces ' +
-      'que comparten un miembro no confirman una baja global (una persona con dos espacios no suprime a nadie)',
   },
 };
 
@@ -979,7 +966,8 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
   outbound_optout_event: {
     permite: [],
     motivo:
-      'quién provocó cada baja global (0037 §4.6): la escribe public_optout y la lee un operador. Con escritura, ' +
+      'quién provocó cada baja por enlace (0037 §4.6, con su alcance desde 0038 §8): la escribe public_optout y la ' +
+      'lee un operador. Con escritura, ' +
       'un workspace borraría su rastro',
   },
   outbound_bounce: {

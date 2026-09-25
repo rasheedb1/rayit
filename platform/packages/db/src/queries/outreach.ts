@@ -302,10 +302,10 @@ export function parsePublicOptout(value: unknown): PublicOptoutResult {
  * con una sesión del workspace que envió: el enlace también está en la
  * carpeta de enviados del creador (docs/ventas-outreach.md §5.2).
  *
- * Desde 0038 §8 (VEN-15 r3) la baja va en dos tiempos: vale para el
- * workspace que envió y pasa a toda la plataforma cuando otro workspace
- * la confirma; la respuesta trae además su alcance («scope»), que esta
- * función no lee. La página usa linkOptout (@mc/db/queries/entregabilidad).
+ * Desde 0038 §8 (VEN-15) la baja vale para el workspace que envió ese
+ * correo, en todos sus canales, y nunca para toda la plataforma; la
+ * respuesta trae además su alcance («scope»), que esta función no lee.
+ * La página usa linkOptout (@mc/db/queries/entregabilidad).
  */
 export async function publicOptout(tx: PublicShareTx, token: string): Promise<PublicOptoutResult> {
   const r = (await tx.query<{ r: unknown }>('SELECT public_optout($1::text) AS r', [token])).rows[0]?.r;

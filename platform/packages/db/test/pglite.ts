@@ -101,7 +101,8 @@ export async function openTestDb(opts: TestDbOptions = {}): Promise<TestDb> {
     };
   }
   const { createEmbeddedDb } = await import('../src/embedded.ts');
-  const db = await createEmbeddedDb({ seeds: seeds ?? true, ...dbOpts });
+  // Una sola migración por proceso: cada archivo abre la foto (embedded.ts, CIM-12).
+  const db = await createEmbeddedDb({ seeds: seeds ?? true, snapshot: true, ...dbOpts });
   return {
     kind: 'pglite',
     db,

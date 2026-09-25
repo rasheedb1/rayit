@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import type { AlertInput } from '@mc/core/outreach/deliverability';
 import { allJobs } from '../src/jobs/index.ts';
-import { missingMailConfig, smtpMailerFromEnv, type Mailer, type MailMessage } from '../src/jobs/ventas/correo.ts';
+import { missingMailConfig, smtpMailerFromEnv, type Mailer, type MailMessage, type MailTransport } from '../src/jobs/ventas/correo.ts';
 import { ALERT_TEXTS_EN, ALERT_TEXTS_ES, ALERTAS_URL, SALUD_URL, fillTemplate } from '../src/jobs/ventas/messages.ts';
 import { ALERTAS_JOB_ID, createAlertasJob, runAlertas, type ReadSignals } from '../src/jobs/ventas/outbound.alerts.ts';
 import type { JobContext } from '../src/runner/registry.ts';
@@ -116,6 +116,17 @@ test('los plurales salen de Intl.PluralRules del locale, con 1 y con 2 (r4)', ()
   assert.equal(fillTemplate(subject, { n: '2', workspace: 'X' }, { n: 2 }, 'es-CO'), 'On Cue · 2 alertas del outreach de X');
 });
 
+test('el texto de un aviso no manda a la política de envío: se lee ahí mismo, y el correo ya lleva su enlace (r5)', () => {
+  for (const [idioma, textos] of [['es', ALERT_TEXTS_ES], ['en', ALERT_TEXTS_EN]] as const) {
+    for (const [kind, t] of Object.entries(textos.alerts)) {
+      const formas = [t.title, t.body].flatMap((p) => (typeof p === 'string' ? [p] : [p.one, p.other]));
+      for (const f of formas) {
+        assert.doesNotMatch(f, /pol[ií]tica de env[ií]o|sending policy/i, `${idioma}/${kind}: «${f}»`);
+      }
+    }
+  }
+});
+
 test('el job está registrado y corre cada hora (0038)', async () => {
   assert.ok(allJobs.some((j) => j.id === ALERTAS_JOB_ID));
   const { rows } = await db.raw.query<{ default_cron: string }>('SELECT default_cron FROM job_definition WHERE id = $1', [ALERTAS_JOB_ID]);
@@ -154,7 +165,7 @@ test('la corrida siguiente, con cartero, no repite avisos y manda el resumen una
   assert.deepEqual(r.created, {});
   assert.equal(cartero.enviados.length, 1);
   const [correo] = cartero.enviados;
-  assert.deepEqual(correo?.to, ['laura@alertas.test']);
+  assert.deepEqual(correo?.recipients, ['laura@alertas.test']);
   assert.equal(correo?.subject, 'On Cue · 2 alertas del outreach de Laura Creadora');
   assert.match(correo?.text ?? '', /3 de 20 correos enviados/);
   assert.ok((correo?.text ?? '').includes(`http://localhost:3100${SALUD_URL}`), 'el enlace de cada alerta, no uno fijo');
@@ -209,7 +220,7 @@ test('con dos dueños: si el correo falla nadie lo recibe dos veces, y sale al d
   await runAlertas(db, new Date('2026-09-26T14:00:00Z'), { mailer: cartero, appUrl: 'http://x.test', readSignals: desdeFixture });
   const deDos = cartero.enviados.filter((m) => m.subject.includes('Dos Dueños'));
   assert.equal(deDos.length, 1);
-  assert.deepEqual(deDos[0]?.to, ['dos@alertas.test', 'uno@alertas.test']);
+  assert.deepEqual(deDos[0]?.recipients, ['dos@alertas.test', 'uno@alertas.test']);
   assert.equal(deDos[0]?.subject, 'On Cue · 4 alertas del outreach de Dos Dueños');
   const dos = await avisos(WS_DOS);
   assert.equal(dos.length, 4);
@@ -468,4 +479,25 @@ test('smtpMailerFromEnv: sin SMTP_URL no hay cartero; en producción tampoco sin
   assert.equal(smtpMailerFromEnv({ NODE_ENV: 'production', SMTP_URL: 'smtp://x.test:587' }), null);
   assert.equal(missingMailConfig({ NODE_ENV: 'development', SMTP_URL: 'smtp://localhost:1025' }), null);
   assert.equal(missingMailConfig({ NODE_ENV: 'production', SMTP_URL: 'smtp://x.test:587', MAIL_FROM: 'On Cue <hola@oncue.app>' }), null);
+});
+
+test('el resumen va con los dueños en Cco: ninguno ve la dirección de los demás (r5)', async () => {
+  const entregas: Parameters<MailTransport['sendMail']>[0][] = [];
+  const cartero = smtpMailerFromEnv(
+    { SMTP_URL: 'smtp://localhost:1025', MAIL_FROM: 'On Cue <avisos@oncue.test>' },
+    () => ({ sendMail: async (m) => void entregas.push(m) }),
+  );
+  assert.ok(cartero);
+  await cartero.send({ recipients: ['uno@alertas.test', 'dos@alertas.test'], subject: 'Resumen', text: 'Hola' });
+  assert.equal(entregas.length, 1, 'un solo correo por workspace');
+  assert.deepEqual(entregas[0], {
+    from: 'On Cue <avisos@oncue.test>',
+    to: 'On Cue <avisos@oncue.test>',
+    bcc: ['uno@alertas.test', 'dos@alertas.test'],
+    subject: 'Resumen',
+    text: 'Hola',
+  });
+  // Sin destinatarios no se manda nada.
+  await cartero.send({ recipients: [], subject: 'x', text: 'x' });
+  assert.equal(entregas.length, 1);
 });

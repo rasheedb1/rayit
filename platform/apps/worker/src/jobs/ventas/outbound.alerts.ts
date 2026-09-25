@@ -237,7 +237,8 @@ const KINDS_URGENTES = new Set(URGENT_ALERT_KINDS.map((k) => `outreach_${k}`));
 
 /**
  * El resumen por correo de las alertas que no salieron todavía (de los
- * últimos ALERTAS_REENVIO_DIAS), en UN correo a todos los dueños, y como
+ * últimos ALERTAS_REENVIO_DIAS), en UN correo a todos los dueños (en Cco:
+ * ninguno ve la dirección de los demás), y como
  * mucho uno por día local del workspace. Si hoy ya salió, las urgentes
  * pendientes salen ahora en un correo aparte (r5) y las demás esperan.
  */
@@ -294,7 +295,7 @@ async function enviarResumen(db: Queryable, w: Espacio, now: Date, deps: Alertas
     urgente ? c.urgentOutro : c.outro,
   ].join('\n');
   try {
-    await deps.mailer.send({ to: duenos.map((d) => d.email), subject, text });
+    await deps.mailer.send({ recipients: duenos.map((d) => d.email), subject, text });
   } catch (err) {
     r.emailFailed++;
     throw err;

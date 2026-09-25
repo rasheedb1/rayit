@@ -42,6 +42,20 @@ export interface EmbeddedOptions extends DbOptions {
    * están escritos para el esquema completo.
    */
   hasta?: string;
+  /**
+   * Migrar y sembrar UNA vez por proceso y abrir las siguientes bases
+   * desde esa foto (PGlite dumpDataDir → loadDataDir), en vez de repetir
+   * las migraciones y los seeds en cada archivo de pruebas. Lo pide
+   * test/pglite.ts. Con `hasta` no aplica: esas pruebas migran a mano.
+   *
+   * Por qué: con `--test-isolation=none`, el before() de nivel superior
+   * de cada archivo cuelga de la prueba raíz y todos corren antes de la
+   * primera prueba del proceso (listSql, de aplicar.test.ts), contra SU
+   * tiempo límite. Con veinte bases de 38 migraciones y 6 seeds, bajo
+   * carga eso pasaba de 120 s y el runner cancelaba las 736 pruebas
+   * (CIM-12). Migrar tarda segundos; abrir la foto, décimas.
+   */
+  snapshot?: boolean;
 }
 
 export interface EmbeddedDb extends PgliteDb {
@@ -57,13 +71,53 @@ export interface EmbeddedDb extends PgliteDb {
   migrar(hasta?: string): Promise<string[]>;
 }
 
-export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<EmbeddedDb> {
+type Pglite = InstanceType<(typeof import('@electric-sql/pglite'))['PGlite']>;
+
+async function pgliteModules() {
   const { PGlite } = await import('@electric-sql/pglite');
   const { citext } = await import('@electric-sql/pglite/contrib/citext');
   const { pg_trgm } = await import('@electric-sql/pglite/contrib/pg_trgm');
-  const { createPgliteDb } = await import('./pglite.ts');
-  const pglite = await PGlite.create({ extensions: { citext, pg_trgm } });
+  return { PGlite, extensions: { citext, pg_trgm } };
+}
 
+/** exec() admite varias sentencias y devuelve un resultado por cada una; el runner solo mira las filas de la última. */
+function execOf(pglite: Pglite): MigrationExec {
+  return async (sql) => {
+    const out = await pglite.exec(sql);
+    return { rows: (out.at(-1)?.rows ?? []) as Array<Record<string, unknown>> };
+  };
+}
+
+/**
+ * Las fotos de una base ya migrada, por variante (con o sin seeds), una
+ * por proceso. Se guarda la PROMESA: dos archivos que abren a la vez
+ * esperan la misma foto en vez de migrar dos veces. Si falla, se olvida,
+ * y la siguiente llamada lo intenta de nuevo (y falla con su error).
+ */
+const fotos = new Map<string, Promise<Blob>>();
+
+function fotoDe(seeds: boolean): Promise<Blob> {
+  const clave = seeds ? 'con-seeds' : 'sin-seeds';
+  let foto = fotos.get(clave);
+  if (!foto) {
+    foto = (async () => {
+      const { PGlite, extensions } = await pgliteModules();
+      const molde = await PGlite.create({ extensions });
+      try {
+        await prepararBase(molde, { seeds });
+        return await molde.dumpDataDir('none');
+      } finally {
+        await molde.close();
+      }
+    })();
+    fotos.set(clave, foto);
+    foto.catch(() => fotos.delete(clave));
+  }
+  return foto;
+}
+
+/** Los roles, las migraciones y (si se piden) los seeds, como en Supabase. La sesión queda como el migrador. */
+async function prepararBase(pglite: Pglite, opts: { seeds: boolean; hasta?: string }): Promise<void> {
   await pglite.exec(`
     CREATE EXTENSION IF NOT EXISTS citext;
     CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -84,15 +138,25 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ${APP_ROLE};
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO ${APP_ROLE};
   `);
-
-  // exec() admite varias sentencias y devuelve un resultado por cada
-  // una; el runner solo mira las filas de la última.
-  const exec: MigrationExec = async (sql) => {
-    const out = await pglite.exec(sql);
-    return { rows: (out.at(-1)?.rows ?? []) as Array<Record<string, unknown>> };
-  };
+  const exec = execOf(pglite);
   await applyMigrations(exec, { dir: MIGRATIONS_DIR, hasta: opts.hasta });
-  if (opts.seeds !== false && opts.hasta === undefined) await applySeeds(exec, { dir: SEED_DIR });
+  if (opts.seeds && opts.hasta === undefined) await applySeeds(exec, { dir: SEED_DIR });
+}
+
+export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<EmbeddedDb> {
+  const { PGlite, extensions } = await pgliteModules();
+  const { createPgliteDb } = await import('./pglite.ts');
+  const seeds = opts.seeds !== false && opts.hasta === undefined;
+  let pglite: Pglite;
+  if (opts.snapshot && opts.hasta === undefined) {
+    // La foto ya trae los roles (son del directorio de datos), el esquema
+    // y los seeds; lo de la sesión (el rol, la zona) se fija abajo.
+    pglite = await PGlite.create({ loadDataDir: await fotoDe(seeds), extensions });
+  } else {
+    pglite = await PGlite.create({ extensions });
+    await prepararBase(pglite, { seeds, hasta: opts.hasta });
+  }
+  const exec = execOf(pglite);
 
   // La sesión queda como mc_app. Los privilegios de filas ya los tiene:
   // se conceden ARRIBA, con ALTER DEFAULT PRIVILEGES, antes de crear
@@ -126,7 +190,7 @@ export async function createEmbeddedDb(opts: EmbeddedOptions = {}): Promise<Embe
 
   const db = createPgliteDb(pglite, opts);
   /** Corre fn como superusuario y deja la sesión como mc_app pase lo que pase. */
-  const asSuperuser = <T>(fn: (p: InstanceType<typeof PGlite>) => Promise<T>) =>
+  const asSuperuser = <T>(fn: (p: Pglite) => Promise<T>) =>
     db.raw(async (p) => {
       await p.exec('RESET ROLE');
       try {

@@ -30,14 +30,14 @@ import { OutreachShapeError } from './outreach.ts';
 //   2. public_optout_preview (0038 §5) dice si el enlace existe, para qué
 //      dirección (enmascarada), quién la escribe y si quien lo abre con
 //      sesión es miembro del workspace que envió: el enlace también queda
-//      en la carpeta de enviados del Gmail del creador, y su clic
-//      suprimiría a la marca en toda la plataforma (docs/ventas-outreach.md
-//      §5.2, «Obligatorio para VEN-15»);
-//   3. public_optout, sin sesión, en dos tiempos (0038 §8): vale ya para
-//      el workspace que envió ese correo (su ficha, sus toques, sus
-//      enrolamientos) y pasa a toda la plataforma cuando otro workspace
-//      la confirma. Así el remitente que pulsa su propio enlace sin
-//      sesión solo se da de baja a sí mismo.
+//      en la carpeta de enviados del Gmail del creador, y su clic lo
+//      daría de baja a él mismo (docs/ventas-outreach.md §5.2,
+//      «Obligatorio para VEN-15»);
+//   3. public_optout, sin sesión (0038 §8): vale para el workspace que
+//      envió ese correo, en todos sus canales (su ficha, sus toques, sus
+//      enrolamientos) y nunca para toda la plataforma. Así el remitente
+//      que pulsa su propio enlace sin sesión solo se da de baja a sí
+//      mismo, y dos registros de una misma persona tampoco suman.
 
 /** Las dos puertas que necesita la baja; la web las arma con su sesión y su cliente. */
 export interface OptoutGates {
@@ -106,11 +106,13 @@ export type OptoutLinkCheck =
   | { status: 'sender' };
 
 /**
- * El alcance de una baja por enlace (0038 §8): 'workspace' vale para el
- * creador que envió ese correo; 'global', para toda la plataforma (otro
- * workspace ya la había anotado).
+ * El alcance de una baja por enlace (0038 §8): el workspace que envió
+ * ese correo, en todos sus canales. Siempre ese: un enlace nunca suprime
+ * a la persona para toda la plataforma (eso lo hace una respuesta
+ * verificada o un administrador). La base lo sigue diciendo en la
+ * respuesta; si un día dijera otra cosa, parseLinkOptout lo rechaza.
  */
-export type OptoutScope = 'workspace' | 'global';
+export type OptoutScope = 'workspace';
 
 export type OptoutFromLinkResult =
   | { status: 'ok'; alreadyOptedOut: boolean; scope: OptoutScope }
@@ -130,7 +132,7 @@ export function parseLinkOptout(value: unknown): LinkOptoutResult {
   if (r.status === 'not_found') return { status: 'not_found' };
   if (r.status !== 'ok') throw new OutreachShapeError(fn, '$.status', `estado desconocido «${String(r.status)}»`);
   if (typeof r.alreadyOptedOut !== 'boolean') throw new OutreachShapeError(fn, '$.alreadyOptedOut', 'se esperaba boolean');
-  if (r.scope !== 'workspace' && r.scope !== 'global') {
+  if (r.scope !== 'workspace') {
     throw new OutreachShapeError(fn, '$.scope', `alcance desconocido «${String(r.scope)}»`);
   }
   for (const k of ['workspaceId', 'touchId'] as const) {
@@ -147,9 +149,8 @@ export function parseLinkOptout(value: unknown): LinkOptoutResult {
 }
 
 /**
- * public_optout (0038 §8): vale ya para el workspace que envió el correo
- * del enlace y pasa a toda la plataforma cuando otro workspace la
- * confirma. Sin sesión (withPublicShare).
+ * public_optout (0038 §8): la baja vale para el workspace que envió el
+ * correo del enlace, en todos sus canales. Sin sesión (withPublicShare).
  */
 export async function linkOptout(tx: PublicShareTx, token: string): Promise<LinkOptoutResult> {
   const r = (await tx.query<{ r: unknown }>('SELECT public_optout($1::text) AS r', [token])).rows[0]?.r;
@@ -182,9 +183,9 @@ export async function checkOptoutLink(gates: OptoutGates, token: string): Promis
  * pulsa el enlace no tiene por qué saber cuántos creadores le escriben.
  *
  * Sin sesión, la base no sabe quién pulsa: puede ser el propio remitente
- * en una ventana privada o con un POST a mano. Por eso public_optout va
- * en dos tiempos (0038 §8) y un solo clic nunca suprime a la persona
- * para los demás creadores.
+ * en una ventana privada o con un POST a mano, o una sola persona con dos
+ * registros. Por eso public_optout vale para quien envió (0038 §8) y
+ * ningún clic suprime a la persona para los demás creadores.
  */
 export async function optoutFromLink(gates: OptoutGates, token: string): Promise<OptoutFromLinkResult> {
   const chequeo = await checkOptoutLink(gates, token);

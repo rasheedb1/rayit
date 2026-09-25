@@ -29,13 +29,13 @@
 --   6. outreach_channel_account.bounces_read_at: hasta dónde se leyó el
 --      buzón de rebotes de cada cuenta (r3).
 --   7. La política de envío la escriben solo 'owner' y 'admin' (r3).
---   8. La baja por enlace en dos tiempos (r3): vale ya para el workspace
---      que envió (outbound_workspace_optout) y pasa a toda la plataforma
---      cuando otro workspace la confirma. Cierra el sabotaje del
---      remitente que pulsa su propio enlace sin sesión. Desde r4 el
---      segundo workspace tiene que ser de OTRAS personas: uno que comparte
---      un miembro con el primero (una agencia con dos espacios) no
---      confirma nada.
+--   8. La baja por enlace vale para el workspace que envió, en todos sus
+--      canales (outbound_workspace_optout), y nunca para toda la
+--      plataforma: un enlace ya no escribe contact_suppression (25-sep).
+--      Cierra el sabotaje del remitente que pulsa su propio enlace sin
+--      sesión, también el de una sola persona con dos registros.
+--   9. notification.title_es y body_es dicen en su comentario que guardan
+--      el idioma del espacio, no siempre español (§4).
 --
 -- Después de la última revisión, en su sitio: la vuelta desde 'processing' de
 -- alguien dado de baja (de este workspace o de toda la plataforma) se
@@ -299,6 +299,19 @@ ALTER TABLE notification ADD CONSTRAINT notification_kind_check CHECK (kind IN
    'outreach_bounce_rate','outreach_no_sends','outreach_queue_stuck',
    'outreach_account_down','outreach_llm_budget','outreach_bounces_unread'));
 
+-- title_es y body_es se llaman así desde 0009, cuando todo era español.
+-- Las alertas del outreach las escriben en el idioma del workspace
+-- (workspace.locale al crearse el aviso): un espacio en inglés las
+-- guarda en inglés. Lo dicen los comentarios de las columnas para quien
+-- lea la tabla. Renombrarlas (title, body y un locale, o kind + valores
+-- en jsonb para traducir al leer) toca a todos los que escriben avisos, y
+-- queda para una migración propia (docs/ventas-outreach.md, VEN-15).
+COMMENT ON COLUMN notification.title_es IS
+  'El título del aviso, ya escrito en el idioma del workspace cuando se creó (workspace.locale). Se llama _es por 0009; '
+  'las alertas del outreach (VEN-15) lo guardan en inglés para un espacio en inglés.';
+COMMENT ON COLUMN notification.body_es IS
+  'El cuerpo del aviso, en el mismo idioma que title_es (el del workspace cuando se creó). Se llama _es por 0009.';
+
 -- ---------------------------------------------------------------------
 -- 5 · public_optout_preview: lo que la página de baja dice antes del clic
 -- ---------------------------------------------------------------------
@@ -529,7 +542,7 @@ CREATE POLICY outbound_policy_manage_delete ON outbound_policy AS RESTRICTIVE
   USING (outreach_can_manage(workspace_id));
 
 -- =====================================================================
--- 8 · La baja por enlace, en dos tiempos (r3)
+-- 8 · La baja por enlace vale para quien envió (r3; alcance cerrado en r5)
 -- ---------------------------------------------------------------------
 -- El correo sale del Gmail del creador y el enlace de baja queda en SU
 -- carpeta de enviados. La página rechaza el clic que llega con una
@@ -539,43 +552,53 @@ CREATE POLICY outbound_policy_manage_delete ON outbound_policy AS RESTRICTIVE
 -- metía en contact_suppression al primer clic. Era una vía de sabotaje
 -- entre inquilinos (docs/ventas-outreach.md §5.2).
 --
--- Ahora la baja por enlace va en dos tiempos:
+-- Desde r5 un clic en el enlace de baja vale SIEMPRE para el workspace
+-- que envió ese correo, por todos sus canales:
+--   · la dirección entra en outbound_workspace_optout (§8.1): ese
+--     workspace no le vuelve a escribir, ni por correo ni por LinkedIn ni
+--     por Instagram (regla de §8.3, que frena el alta, el reclamo y la
+--     vuelta desde 'processing');
+--   · se cancela lo pendiente (draft, scheduled, held) y se cierran los
+--     enrolamientos de ESE workspace;
+--   · la ficha queda marcada: opted_out si es propia de ese workspace; si
+--     es compartida (contacto global, owner_workspace_id NULL), la ficha
+--     que ese workspace ve dice «Dado de baja» porque la lectura suma su
+--     fila de §8.1 (listContacts, @mc/db). La ficha compartida en sí no
+--     cambia para los demás creadores.
+-- Es lo que la ley pide: la baja es con quien envía (CAN-SPAM, 15 U.S.C.
+-- §7704(a)(4); RGPD art. 21; habeas data): cada creador responde de su
+-- propio envío.
 --
---   1. El clic vale YA para el workspace que envió ese correo: la
---      dirección entra en outbound_workspace_optout (este workspace no
---      le vuelve a escribir, por ningún canal), se cancela lo pendiente
---      y se cierran los enrolamientos de ESE workspace, y se marca
---      opted_out la ficha si es propia de ese workspace. Es lo que la
---      ley pide (CAN-SPAM, RGPD: la baja es con quien envía) y lo que
---      la persona pidió al pulsar el enlace de ese correo. Una ficha
---      compartida (contacto global, owner_workspace_id NULL) no se
---      marca: el freno es la fila de este workspace (§8.3).
+-- Lo que un enlace NO hace es suprimir a la persona para toda la
+-- plataforma (contact_suppression). En r3 y r4 eso pasaba cuando otro
+-- workspace, sin miembros en común con el primero, confirmaba la baja.
+-- La revisión de r4 mostró que lo fabrica UNA sola persona: dos registros
+-- gratis con dos correos distintos, un correo a la marca desde cada uno y
+-- dos clics sin sesión. Endurecer la confirmación (antigüedad de la
+-- cuenta de Gmail, envío encendido, dominios distintos) solo alarga la
+-- espera del sabotaje: la plataforma no tiene cómo saber que dos
+-- registros son la misma persona. Así que la lista de toda la plataforma
+-- se alimenta solo de lo que un remitente no fabrica con clics: una
+-- respuesta de la propia persona clasificada como baja (VEN-14, que la
+-- escribe desde el worker) o un administrador. mc_public_share pierde el
+-- INSERT sobre contact_suppression que le dio 0037 §9: ni un error en
+-- esta función la puede escribir.
 --
---   2. La baja pasa a TODA la plataforma (contact_suppression con
---      'unsubscribe_link', las fichas marcadas y lo pendiente cancelado
---      en cualquier workspace, como hacía 0037) cuando la confirma un
---      SEGUNDO workspace DE OTRAS PERSONAS: la misma dirección pulsa el
---      enlace de un correo de otro creador. Eso el remitente no lo puede
---      fabricar: necesita que otro workspace le haya escrito de verdad a
---      esa dirección (el enlace solo existe si el despachador lo
---      reclamó), y desde r4 que ese workspace no comparta NINGÚN miembro
---      con el suyo. Sin esto, una agencia (o cualquier persona miembro de
---      dos espacios) que escribe a la misma marca desde los dos pulsaba
---      sus dos enlaces sin sesión y la suprimía para todos los creadores.
---      Lo que sigue abierto es el sabotaje con dos cuentas de personas
---      distintas en connivencia; eso ya no es un clic, y queda en
---      outbound_optout_event para la alerta y para deshacerlo.
---
--- Por qué no «pasa a global si en una ventana no hay señal de que fue el
--- remitente»: la única señal sería la IP o el navegador de una sesión
--- reciente de sus miembros, y la plataforma no guarda ninguna de las
--- dos (audit_log.ip no se escribe en cada petición). Con una ventana, el
--- remitente en una ventana privada o por VPN volvía a suprimir a la
--- marca para todos, solo que una hora más tarde.
---
--- Cada clic sigue en outbound_optout_event, ahora con su alcance
--- (scope): 'workspace' o 'global'.
+-- Cada clic sigue en outbound_optout_event, con su alcance (scope): los
+-- de antes de esta migración fueron 'global' (0037 suprimía al primer
+-- clic); desde aquí, todos 'workspace'.
 -- =====================================================================
+
+REVOKE INSERT ON contact_suppression FROM mc_public_share;
+
+-- Y de las fichas con la dirección del enlace, la baja ya solo lee las
+-- PROPIAS del workspace que envió: 0037 las abría en cualquier workspace
+-- porque la baja era de toda la plataforma.
+DROP POLICY contact_public_optout_email ON contact;
+CREATE POLICY contact_public_optout_email ON contact
+  FOR SELECT TO mc_public_share
+  USING (email = nullif(current_setting('app.public_optout_email', true), '')::citext
+         AND owner_workspace_id = nullif(current_setting('app.public_optout_workspace', true), '')::uuid);
 
 -- ---------------------------------------------------------------------
 -- 8.1 · outbound_workspace_optout: a quién no le vuelve a escribir un workspace
@@ -610,27 +633,19 @@ CREATE POLICY outbound_workspace_optout_ws_read ON outbound_workspace_optout FOR
 REVOKE INSERT, UPDATE, DELETE ON outbound_workspace_optout FROM mc_app;
 
 COMMENT ON TABLE outbound_workspace_optout IS
-  'La baja por enlace con efecto en el workspace que envió el correo (VEN-15 r3). La escribe public_optout; con dos '
-  'workspaces sin miembros en común para la misma dirección, la baja pasa a contact_suppression (toda la plataforma).';
+  'La baja por enlace: a quién no le vuelve a escribir el workspace que envió el correo, por ningún canal (VEN-15). '
+  'La escribe public_optout y nadie más; un enlace nunca pasa a contact_suppression (0038 §8).';
 
 -- Lo que la baja lee y escribe aquí, con la misma cerradura que 0037 §9:
--- las filas de la dirección que fija la función, y el alta solo para el
--- workspace y el token del enlace que se está pulsando.
+-- la fila del workspace y la dirección que fija la función (para decir
+-- «ya estabas fuera»), y el alta solo para el workspace y el token del
+-- enlace que se está pulsando. Ninguna fila de otro workspace.
 GRANT SELECT (workspace_id, email), INSERT ON outbound_workspace_optout TO mc_public_share;
-
--- Quién confirma (r4): para saber si dos workspaces comparten miembro,
--- public_optout lee las membresías del workspace del enlace y de los
--- workspaces que ya anotaron la baja de ESA dirección, y nada más. Los
--- fija en app.public_optout_members (una lista de uuid, como
--- app.public_optout_contacts) y los restaura al salir. Las columnas
--- (workspace_id, user_id) ya son suyas desde §5.
-CREATE POLICY membership_public_optout ON membership
-  FOR SELECT TO mc_public_share
-  USING (workspace_id = ANY (nullif(current_setting('app.public_optout_members', true), '')::uuid[]));
 
 CREATE POLICY outbound_workspace_optout_public_optout_read ON outbound_workspace_optout
   FOR SELECT TO mc_public_share
-  USING (email = nullif(current_setting('app.public_optout_email', true), '')::citext);
+  USING (workspace_id = nullif(current_setting('app.public_optout_workspace', true), '')::uuid
+         AND email = nullif(current_setting('app.public_optout_email', true), '')::citext);
 
 CREATE POLICY outbound_workspace_optout_public_optout ON outbound_workspace_optout
   FOR INSERT TO mc_public_share
@@ -638,18 +653,22 @@ CREATE POLICY outbound_workspace_optout_public_optout ON outbound_workspace_opto
               AND workspace_id = nullif(current_setting('app.public_optout_workspace', true), '')::uuid
               AND email = nullif(current_setting('app.public_optout_email', true), '')::citext);
 
--- El alcance de cada clic. Los de antes de r3 fueron globales.
+-- El alcance de cada clic. Los que ya estaban fueron globales (0037); los
+-- nuevos, del workspace que envió.
 ALTER TABLE outbound_optout_event
   ADD COLUMN scope text NOT NULL DEFAULT 'global' CHECK (scope IN ('workspace', 'global'));
+ALTER TABLE outbound_optout_event ALTER COLUMN scope SET DEFAULT 'workspace';
 COMMENT ON COLUMN outbound_optout_event.scope IS
-  'workspace: la baja valió solo para el workspace que envió el correo; global: pasó a contact_suppression (VEN-15 r3).';
+  'workspace: la baja valió para el workspace que envió el correo, en todos sus canales (desde 0038, todos los clics); '
+  'global: un clic de antes de 0038, cuando public_optout (0037) suprimía la dirección para toda la plataforma.';
 
 -- ---------------------------------------------------------------------
--- 8.2 · public_optout, en dos tiempos
+-- 8.2 · public_optout: la baja con quien envió
 -- ---------------------------------------------------------------------
 -- La misma puerta que 0037 §9 (el mismo rol, las mismas políticas, los
--- parámetros restaurados al salir) y la misma respuesta, con «scope»:
---   {"status":"ok","alreadyOptedOut":bool,"scope":"workspace"|"global",
+-- parámetros restaurados al salir) y la misma respuesta, con «scope»,
+-- que desde r5 es siempre 'workspace':
+--   {"status":"ok","alreadyOptedOut":bool,"scope":"workspace",
 --    "workspaceId":"…"|null,"touchId":"…"|null}
 -- alreadyOptedOut dice si ESTE remitente ya no le escribía (un segundo
 -- clic del mismo enlace, o de otro correo del mismo workspace).
@@ -665,16 +684,11 @@ DECLARE
   antes_contacts  text := coalesce(current_setting('app.public_optout_contacts', true), '');
   antes_email     text := coalesce(current_setting('app.public_optout_email', true), '');
   antes_workspace text := coalesce(current_setting('app.public_optout_workspace', true), '');
-  antes_members   text := coalesce(current_setting('app.public_optout_members', true), '');
   resumen   text;
   enlace    outbound_optout_link%ROWTYPE;
-  espacios  uuid[];
   ya_ficha  boolean;
   ya_aqui   boolean;
   ya        boolean;
-  remitentes int;
-  es_global boolean;
-  nuevas    int;
   ids       uuid[];
   r         jsonb;
 BEGIN
@@ -704,77 +718,36 @@ BEGIN
       SELECT EXISTS (SELECT 1 FROM outbound_workspace_optout o
                       WHERE o.workspace_id = enlace.workspace_id AND o.email = enlace.recipient_address)
         INTO ya_aqui;
+      -- Un workspace que ya no existe tampoco le escribe: ya estaba fuera.
+      ya := enlace.workspace_id IS NULL OR coalesce(ya_aqui, false) OR coalesce(ya_ficha, false);
 
-      -- 1 · Para el workspace que envió, ya. (Si ese workspace se borró,
-      -- no queda nadie que le escriba desde él.)
+      -- La lista del workspace que envió. (Si ese workspace se borró, no
+      -- queda nadie que le escriba desde él: solo se anota el clic.)
       IF enlace.workspace_id IS NOT NULL THEN
         INSERT INTO outbound_workspace_optout (workspace_id, email, token_hash)
         VALUES (enlace.workspace_id, enlace.recipient_address, resumen)
         ON CONFLICT DO NOTHING;
       END IF;
 
-      -- 2 · Para toda la plataforma, cuando lo confirma otro workspace DE
-      -- OTRAS PERSONAS (r4): cuenta el del enlace y los que ya anotaron la
-      -- baja sin compartir ningún miembro con él. Una persona con dos
-      -- espacios que pulsa sus dos enlaces sigue en 'workspace'. Un
-      -- workspace que ya no existe cuenta como el remitente que fue (su
-      -- fila se fue con él): su enlace confirma la baja que otro anotó.
-      -- Las membresías que hacen falta, y ninguna más, las abre
-      -- membership_public_optout con esta lista.
-      SELECT array_agg(DISTINCT o.workspace_id) INTO espacios
-        FROM outbound_workspace_optout o
-       WHERE o.email = enlace.recipient_address;
-      PERFORM set_config('app.public_optout_members',
-                         format('{%s}', array_to_string(array_append(coalesce(espacios, '{}'::uuid[]), enlace.workspace_id), ',')),
-                         true);
-      SELECT count(DISTINCT o.workspace_id) INTO remitentes
-        FROM outbound_workspace_optout o
-       WHERE o.email = enlace.recipient_address
-         AND (o.workspace_id = enlace.workspace_id
-              OR NOT EXISTS (SELECT 1
-                               FROM membership m1
-                               JOIN membership m2 ON m1.user_id = m2.user_id
-                              WHERE m1.workspace_id = o.workspace_id
-                                AND m2.workspace_id = enlace.workspace_id));
-      es_global := remitentes + CASE WHEN enlace.workspace_id IS NULL THEN 1 ELSE 0 END >= 2;
-
-      IF es_global THEN
-        -- Lo de 0037: la ficha del correo y las fichas con esa dirección
-        -- en cualquier workspace.
-        SELECT array_agg(DISTINCT c.id) INTO ids
-          FROM contact c
-         WHERE c.id = enlace.contact_id OR c.email = enlace.recipient_address;
-        -- Sin columna en ON CONFLICT a propósito: nombrarla pediría SELECT
-        -- sobre la lista, y este rol solo inserta en ella.
-        INSERT INTO contact_suppression (email, reason) VALUES (enlace.recipient_address, 'unsubscribe_link')
-        ON CONFLICT DO NOTHING;
-        GET DIAGNOSTICS nuevas = ROW_COUNT;
-      ELSE
-        -- Solo lo de ese workspace: la ficha del correo y sus fichas
-        -- propias con esa dirección. La RLS de 9.2 (0037) abre todas las
-        -- que se nombran, y la condición de cada UPDATE de abajo acota.
-        SELECT array_agg(DISTINCT c.id) INTO ids
-          FROM contact c
-         WHERE c.id = enlace.contact_id
-            OR (c.email = enlace.recipient_address AND c.owner_workspace_id = enlace.workspace_id);
-        nuevas := 0;
-      END IF;
+      -- Las fichas de ese workspace: la del correo y sus fichas PROPIAS
+      -- con esa dirección. La RLS de 9.2 (0037) abre todas las que se
+      -- nombran, y la condición de cada UPDATE de abajo acota.
+      SELECT array_agg(DISTINCT c.id) INTO ids
+        FROM contact c
+       WHERE c.id = enlace.contact_id
+          OR (c.email = enlace.recipient_address AND c.owner_workspace_id = enlace.workspace_id);
       ids := coalesce(ids, '{}'::uuid[]);
-      -- Ya estaba: este remitente ya no le escribía, o la dirección ya
-      -- estaba en la lista global (el INSERT no entró).
-      ya := coalesce(ya_aqui, false) OR coalesce(ya_ficha, false) OR (es_global AND nuevas = 0);
       PERFORM set_config('app.public_optout_contacts', format('{%s}', array_to_string(ids, ',')), true);
 
-      -- Quién la provocó, y con qué alcance (4.6 de 0037, 8.1).
+      -- Quién la provocó (4.6 de 0037), con su alcance (8.1).
       INSERT INTO outbound_optout_event (token_hash, workspace_id, touch_id, recipient_address, claimed_at,
                                          sent_at, already_opted_out, scope)
       VALUES (resumen, enlace.workspace_id, enlace.touch_id, enlace.recipient_address, enlace.claimed_at,
-              enlace.sent_at, ya,
-              CASE WHEN es_global THEN 'global' ELSE 'workspace' END);
+              enlace.sent_at, ya, 'workspace');
 
-      -- Las fichas: todas si es global; si no, solo las PROPIAS del
-      -- workspace que envió. Una ficha compartida no se marca por el clic
-      -- de un solo remitente: la frena su fila de 8.1 (regla de 8.3).
+      -- Solo las fichas PROPIAS del workspace que envió. Una ficha
+      -- compartida no se marca por el clic de un remitente: la frena su
+      -- fila de 8.1 (regla de 8.3), y ese workspace la ve de baja.
       UPDATE contact
          SET opted_out = true,
              opted_out_at = coalesce(opted_out_at, now()),
@@ -782,25 +755,26 @@ BEGIN
              -- del espacio (ventas/_lib/messages.ts, contacto.optedOutReasons).
              opted_out_reason = coalesce(opted_out_reason, 'unsubscribe_link')
        WHERE id = ANY (ids) AND NOT opted_out
-         AND (es_global OR owner_workspace_id = enlace.workspace_id);
+         AND owner_workspace_id = enlace.workspace_id;
 
       -- CANCELABLE_TOUCH_STATUSES: todo lo que puede salir menos lo que
-      -- el despachador ya reclamó (processing, 0037 §4.1).
+      -- el despachador ya reclamó (processing, 0037 §4.1; la vuelta desde
+      -- processing la cancela la regla de 8.3). Todos los canales.
       UPDATE outbound_touch
          SET status = 'canceled', blocked_reason = 'opted_out'
        WHERE contact_id = ANY (ids)
          AND status IN ('draft', 'scheduled', 'held')
-         AND (es_global OR workspace_id = enlace.workspace_id);
+         AND workspace_id = enlace.workspace_id;
 
       UPDATE outbound_enrollment
          SET status = 'opted_out', finished_at = coalesce(finished_at, now())
        WHERE contact_id = ANY (ids)
          AND status IN ('active', 'paused', 'cooldown')
-         AND (es_global OR workspace_id = enlace.workspace_id);
+         AND workspace_id = enlace.workspace_id;
 
       r := jsonb_build_object('status', 'ok',
                               'alreadyOptedOut', ya,
-                              'scope', CASE WHEN es_global THEN 'global' ELSE 'workspace' END,
+                              'scope', 'workspace',
                               'workspaceId', enlace.workspace_id, 'touchId', enlace.touch_id);
     END IF;
   EXCEPTION WHEN OTHERS THEN
@@ -808,7 +782,6 @@ BEGIN
     PERFORM set_config('app.public_optout_contacts', antes_contacts, true);
     PERFORM set_config('app.public_optout_email', antes_email, true);
     PERFORM set_config('app.public_optout_workspace', antes_workspace, true);
-    PERFORM set_config('app.public_optout_members', antes_members, true);
     RAISE;
   END;
 
@@ -816,16 +789,15 @@ BEGIN
   PERFORM set_config('app.public_optout_contacts', antes_contacts, true);
   PERFORM set_config('app.public_optout_email', antes_email, true);
   PERFORM set_config('app.public_optout_workspace', antes_workspace, true);
-  PERFORM set_config('app.public_optout_members', antes_members, true);
   RETURN r;
 END;
 $$;
 
 COMMENT ON FUNCTION public_optout(text) IS
-  'Baja desde el enlace de un correo (VEN-9, VEN-15 r3), en dos tiempos: vale ya para el workspace que envió ese '
-  'correo (outbound_workspace_optout, su ficha propia, sus toques y enrolamientos) y pasa a contact_suppression, con '
-  'las fichas y lo pendiente de cualquier workspace, cuando otro workspace la confirma. Busca el sha256 del token en '
-  'outbound_optout_link y deja el clic en outbound_optout_event. SECURITY DEFINER de mc_public_share (0037 §9, 0038 §8).';
+  'Baja desde el enlace de un correo (VEN-9, VEN-15): vale para el workspace que envió ese correo, en todos sus '
+  'canales (outbound_workspace_optout, su ficha propia, sus toques y enrolamientos). Nunca escribe contact_suppression: '
+  'la baja de toda la plataforma sale de una respuesta verificada o de un administrador (0038 §8). Busca el sha256 del '
+  'token en outbound_optout_link y deja el clic en outbound_optout_event. SECURITY DEFINER de mc_public_share.';
 
 REVOKE ALL ON FUNCTION public_optout(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public_optout(text) TO mc_app;

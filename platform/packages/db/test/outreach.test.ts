@@ -213,19 +213,10 @@ before(async () => {
     INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_C}', 'outreach-c', 'Outreach C', 'America/Mexico_City');
     INSERT INTO company (id, name, owner_workspace_id) VALUES ('${COMPANY_C}', 'Empresa de C', '${WS_C}');
     INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_C}', '${COMPANY_C}');
-    -- Desde 0038 §8 (VEN-15 r3) la baja por enlace va en dos tiempos: el
-    -- primer clic vale solo para el workspace que envió, y pasa a toda la
-    -- plataforma cuando otro workspace la confirma. Estas pruebas miden la
-    -- baja GLOBAL de 0037 (lo que hace el clic que la confirma), así que
-    -- cada dirección llega con la baja de otro workspace (C) ya anotada.
-    -- El primer tiempo, y que un solo remitente no suprime a nadie para
-    -- los demás, se prueban en entregabilidad.test.ts.
-    INSERT INTO outbound_workspace_optout (workspace_id, email, token_hash) VALUES
-      ('${WS_C}', 'marta@cafe.test', '${sha256('confirmacion-previa-marta')}'),
-      ('${WS_C}', 'sola@cafe.test', '${sha256('confirmacion-previa-sola')}'),
-      ('${WS_C}', 'victima@cafe.test', '${sha256('confirmacion-previa-victima')}'),
-      ('${WS_C}', 'yo@outreach-b.test', '${sha256('confirmacion-previa-yo-b')}'),
-      ('${WS_C}', 'borrada@cafe.test', '${sha256('confirmacion-previa-borrada')}');
+    -- Desde 0038 §8 (VEN-15) la baja por enlace vale para el workspace
+    -- que envió ese correo, en todos sus canales, y nunca para toda la
+    -- plataforma: estas pruebas miden eso. Lo que ve la página y el
+    -- sabotaje entre inquilinos se prueban en entregabilidad.test.ts.
   `);
 });
 
@@ -734,7 +725,7 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
     await t.admin(`DELETE FROM outbound_touch WHERE id = '${id}'`);
   });
 
-  test('marca la baja en todas las fichas de esa persona y cancela lo pendiente en cualquier workspace', async () => {
+  test('marca la baja en la ficha de quien envió y cancela lo suyo; otro workspace sigue igual hasta que su enlace se pulse', async () => {
     const { r, quedan } = await baja(TOKEN);
     assert.deepEqual(r, { status: 'ok', alreadyOptedOut: false, workspaceId: WS_A, touchId: TOUCH_SENT });
     assert.deepEqual({ ...quedan }, { a: '', b: '', c: '' }, 'los parámetros no sobreviven a la llamada');
@@ -747,14 +738,15 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
       [
         [CONTACT_A, true, true],
         [CONTACT_OTRO, false, false],
-        [CONTACT_B, true, true],
+        // La ficha de B con la misma dirección no es de A: un enlace de A no la toca (0038 §8).
+        [CONTACT_B, false, false],
       ],
     );
 
     const esperado: Record<string, [string, string | null]> = {
       [TOUCH_SENT]: ['sent', null],
       [TOUCH_PENDING_A]: ['canceled', 'opted_out'],
-      [TOUCH_PENDING_B]: ['canceled', 'opted_out'],
+      [TOUCH_PENDING_B]: ['scheduled', null],
       [TOUCH_OTRO]: ['scheduled', null],
       // Lo reclamado es del despachador: la baja no lo toca (0037 §4.1).
       [TOUCH_EN_VUELO]: ['processing', null],
@@ -772,13 +764,17 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
       enrolamientos.map((e) => [e.id, e.status, e.terminado]),
       [
         [ENR_A, 'opted_out', true],
-        [ENR_B, 'opted_out', true],
+        [ENR_B, 'active', false],
       ],
-      'la baja termina los enrolamientos y dice cuándo',
+      'la baja termina los enrolamientos de quien envió y dice cuándo',
     );
 
-    const supresion = await sinRls<{ reason: string }>("SELECT reason FROM contact_suppression WHERE email = 'marta@cafe.test'");
-    assert.deepEqual(supresion.map((s) => s.reason), ['unsubscribe_link']);
+    // Un enlace nunca escribe la lista de toda la plataforma (0038 §8); sí la del workspace que envió.
+    assert.deepEqual(await sinRls("SELECT 1 FROM contact_suppression WHERE email = 'marta@cafe.test'"), []);
+    const listas = await sinRls<{ workspace_id: string }>(
+      "SELECT workspace_id FROM outbound_workspace_optout WHERE email = 'marta@cafe.test'",
+    );
+    assert.deepEqual(listas.map((x) => x.workspace_id), [WS_A]);
 
     // Y queda quién la provocó: el workspace y el toque del correo.
     const clics = await sinRls<{ workspace_id: string; touch_id: string; already_opted_out: boolean }>(
@@ -796,6 +792,17 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
       def!.d.includes(`status IN (${CANCELABLE_TOUCH_STATUSES.map((x) => `'${x}'`).join(', ')})`),
       'public_optout cancela los estados de CANCELABLE_TOUCH_STATUSES',
     );
+
+    // Marta pulsa también el enlace del correo de B (el que el despachador
+    // tiene en vuelo): ahora B tampoco le escribe. Lo reclamado sigue siendo
+    // del despachador; las pruebas de las transiciones parten de aquí.
+    assert.deepEqual((await baja(TOKEN_EN_VUELO)).r, {
+      status: 'ok', alreadyOptedOut: false, workspaceId: WS_B, touchId: TOUCH_EN_VUELO,
+    });
+    const [enB] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${CONTACT_B}'`);
+    assert.equal(enB?.opted_out, true);
+    assert.deepEqual([(await toque(TOUCH_PENDING_B)).status, (await toque(TOUCH_EN_VUELO)).status], ['canceled', 'processing']);
+    assert.deepEqual(await sinRls("SELECT 1 FROM contact_suppression WHERE email = 'marta@cafe.test'"), []);
   });
 
   test('sabotaje: un toque enviado de verdad no cambia de destinatario desde la web', async () => {
@@ -825,9 +832,10 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
     );
     const { r } = await baja(TOKEN_YO_B);
     assert.deepEqual(r, { status: 'ok', alreadyOptedOut: false, workspaceId: WS_B, touchId: TOUCH_YO_B });
-    // Se suprime la dirección a la que salió el correo, no la de hoy.
+    // Se da de baja la dirección a la que salió el correo, no la de hoy.
     const lista = await sinRls<{ email: string }>(
-      `SELECT email::text AS email FROM contact_suppression WHERE email IN ('yo@outreach-b.test', 'otra@cafe.test')`,
+      `SELECT email::text AS email FROM outbound_workspace_optout
+        WHERE workspace_id = '${WS_B}' AND email IN ('yo@outreach-b.test', 'otra@cafe.test')`,
     );
     assert.deepEqual(lista.map((x) => x.email), ['yo@outreach-b.test']);
     // Otra sigue igual en A, con lo suyo en cola; la ficha de B que recibió el correo, de baja.
@@ -845,6 +853,7 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
     // Y el token no se reutiliza contra otra persona: responde lo mismo y no toca a nadie más.
     assert.deepEqual((await baja(TOKEN_YO_B)).r, { status: 'ok', alreadyOptedOut: true, workspaceId: WS_B, touchId: TOUCH_YO_B });
     assert.deepEqual(await sinRls("SELECT 1 FROM contact_suppression WHERE email = 'otra@cafe.test'"), []);
+    assert.deepEqual(await sinRls("SELECT 1 FROM outbound_workspace_optout WHERE email = 'otra@cafe.test'"), []);
   });
 
   test('el enlace sigue funcionando si el workspace borró la ficha después del envío', async () => {
@@ -856,15 +865,16 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
 
     const { r } = await baja(TOKEN_BORRADA);
     assert.deepEqual(r, { status: 'ok', alreadyOptedOut: false, workspaceId: WS_A, touchId: TOUCH_BORRADA });
-    assert.deepEqual(
-      (await sinRls<{ reason: string }>("SELECT reason FROM contact_suppression WHERE email = 'borrada@cafe.test'")).map((x) => x.reason),
-      ['unsubscribe_link'],
+    // A ya no le escribe a esa dirección, aunque no quede ficha.
+    assert.equal(
+      (await sinRls(`SELECT 1 FROM outbound_workspace_optout WHERE workspace_id = '${WS_A}' AND email = 'borrada@cafe.test'`)).length,
+      1,
     );
-    // La misma persona en B: de baja, y lo que B tenía en cola para ella, cancelado.
+    // La misma persona en B: B no envió ese correo, así que lo suyo sigue (0038 §8).
     const [enB] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${CONTACT_BORRADA_B}'`);
-    assert.equal(enB?.opted_out, true);
-    const x = await toque(TOUCH_BORRADA_B);
-    assert.deepEqual([x.status, x.blocked_reason], ['canceled', 'opted_out']);
+    assert.equal(enB?.opted_out, false);
+    assert.equal((await toque(TOUCH_BORRADA_B)).status, 'scheduled');
+    assert.deepEqual(await sinRls("SELECT 1 FROM contact_suppression WHERE email = 'borrada@cafe.test'"), []);
   });
 
   describe('el enlace no depende de la cola (C)', () => {
@@ -877,8 +887,10 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
     const T3 = '00000037-0000-4000-8000-0000000070c3';
     const TK = { [T1]: 'c-uno-0123456789abcdefghij', [T2]: 'c-dos-0123456789abcdefghij', [T3]: 'c-tres-0123456789abcdefghi' };
     const c = (sql: string, params: unknown[] = []) => t.db.withWorkspace(WS_C, (tx) => tx.query(sql, params));
+    /** C ya no le escribe a esa dirección (0038 §8): la baja del workspace que envió. */
     const suprimido = async (correo: string) =>
-      (await sinRls(`SELECT 1 FROM contact_suppression WHERE email = '${correo}'`)).length === 1;
+      (await sinRls(`SELECT 1 FROM outbound_workspace_optout WHERE workspace_id = '${WS_C}' AND email = '${correo}'`))
+        .length === 1;
 
     before(async () => {
       await t.admin(`
@@ -886,11 +898,6 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
           ('${C1}', '${COMPANY_C}', 'Uno', 'uno@c.outreach.test', 'user_provided', '${WS_C}'),
           ('${C2}', '${COMPANY_C}', 'Dos', 'dos@c.outreach.test', 'user_provided', '${WS_C}'),
           ('${C3}', '${COMPANY_C}', 'Tres', 'tres@c.outreach.test', 'user_provided', '${WS_C}');
-        -- La confirmación de otro workspace (A), para medir la baja global (0038 §8; ver el before de arriba).
-        INSERT INTO outbound_workspace_optout (workspace_id, email, token_hash) VALUES
-          ('${WS_A}', 'uno@c.outreach.test', '${sha256('confirmacion-previa-uno')}'),
-          ('${WS_A}', 'dos@c.outreach.test', '${sha256('confirmacion-previa-dos')}'),
-          ('${WS_A}', 'tres@c.outreach.test', '${sha256('confirmacion-previa-tres')}');
       `);
       // El despachador envía: el toque con sus pruebas y el enlace, en la misma transacción.
       for (const [touch, contacto, correo] of [

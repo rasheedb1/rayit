@@ -121,9 +121,9 @@ export const ALERT_TEXTS_ES: AlertTexts = {
       },
       body: {
         by: 'accountsDown',
-        one: 'No sale nada por {accounts} hasta que se reconecte: lo de ese canal espera en la cola. En tu política de envío ves qué pasó y qué hacer.',
+        one: 'No sale nada por {accounts} hasta que se reconecte: lo de ese canal espera en la cola.',
         other:
-          'No sale nada por {accounts} hasta que se reconecten: lo de esos canales espera en la cola. En tu política de envío ves qué le pasa a cada una y qué hacer.',
+          'No sale nada por {accounts} hasta que se reconecten: lo de esos canales espera en la cola.',
       },
     },
     llm_budget: {
@@ -190,9 +190,9 @@ export const ALERT_TEXTS_EN: AlertTexts = {
       title: { by: 'accountsDown', one: 'A sending account needs attention', other: 'Some sending accounts need attention' },
       body: {
         by: 'accountsDown',
-        one: 'Nothing goes out through {accounts} until it reconnects: messages for that channel wait in the queue. Your sending policy shows what happened and what to do.',
+        one: 'Nothing goes out through {accounts} until it reconnects: messages for that channel wait in the queue.',
         other:
-          'Nothing goes out through {accounts} until they reconnect: messages for those channels wait in the queue. Your sending policy shows what happened to each one and what to do.',
+          'Nothing goes out through {accounts} until they reconnect: messages for those channels wait in the queue.',
       },
     },
     llm_budget: {

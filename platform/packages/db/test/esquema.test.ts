@@ -1268,18 +1268,20 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
 
   test('el inventario declarado es el de 0030, 0031, 0037 y 0038, y la base recién migrada lo cumple', async () => {
     assert.deepEqual(Object.keys(PRIVILEGIOS_DEL_ENLACE_PUBLICO).sort(), [
-      'company', 'company_link', 'contact', 'contact_suppression', 'deal', 'deal_stage_history',
+      'company', 'company_link', 'contact', 'deal', 'deal_stage_history',
       'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'membership', 'outbound_enrollment',
       'outbound_optout_event', 'outbound_optout_link', 'outbound_touch', 'outbound_workspace_optout', 'pipeline_stage', 'quote',
       'workspace',
     ]);
     assert.equal(
       Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length,
-      21,
-      'las siete de 0030, la aceptada del negocio de 0033, las nueve de la baja de 0037, la de quién envía de 0038, ' +
-        'las dos de la baja en dos tiempos (0038 §8) y la de quién confirma la baja global (0038 §8, r4)',
+      20,
+      'las siete de 0030, la aceptada del negocio de 0033, las nueve de la baja de 0037 (una, la de las fichas por ' +
+        'dirección, rehecha en 0038 §8), la de quién envía de 0038 y las dos de la baja con quien envió (0038 §8)',
     );
-    // La baja en dos tiempos (0038 §8) anota la baja de ESE workspace y lee quién más la tiene; no la borra ni la cambia.
+    // La baja nunca escribe la lista de toda la plataforma (0038 §8): mc_public_share ni la nombra.
+    assert.equal(PRIVILEGIOS_DEL_ENLACE_PUBLICO.contact_suppression, undefined);
+    // La baja con quien envió (0038 §8) anota la de ESE workspace y lee si ya estaba; no la borra ni la cambia.
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_workspace_optout!.tabla, ['INSERT']);
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_workspace_optout!.columnas, { SELECT: ['email', 'workspace_id'] });
     // La vista previa de la baja (0038 §5) lee el nombre y el idioma (r5) de quien envía, por columna, y nada más del workspace.
