@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import type { ChannelAccountRow } from "@mc/db/queries/canales";
 import { getChannelPolicyCaps, isLiveChannelStatus, listChannelAccounts } from "@mc/db/queries/canales";
 import { PageHeader, SectionTitle } from "@/components/page-header";
@@ -216,9 +216,13 @@ function ChannelRow({
             </h3>
             {row.addAnother && canManage && (
               // -mr-2.5: el texto del botón fantasma se alinea con el borde derecho de la fila (su padding es px-2.5).
-              <ConectarBoton
-                action={another.action} fields={another.fields} label={MESSAGES.actions.connectAnother} variant="ghost" disabled={false} className="-mr-2.5"
-              />
+              // shrink-0 y nowrap: el formulario no se encoge y «Conectar otra cuenta» no se parte en dos líneas.
+              <span className="-mr-2.5 inline-flex shrink-0 whitespace-nowrap">
+                <ConectarBoton
+                  action={another.action} fields={another.fields} label={MESSAGES.actions.connectAnother} variant="ghost" disabled={false}
+                  icon={<Plus size={14} aria-hidden />}
+                />
+              </span>
             )}
           </div>
           <div className="flex flex-col gap-3">

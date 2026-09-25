@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button, type ButtonVariant } from "@/components/ui/button";
 import { MESSAGES } from "./messages";
 
@@ -22,6 +22,7 @@ export function ConectarBoton({
   disabled,
   ariaLabel,
   className,
+  icon,
 }: {
   action: string;
   fields: Record<string, string>;
@@ -31,6 +32,8 @@ export function ConectarBoton({
   ariaLabel?: string;
   /** Para alinear un botón fantasma con el texto de la fila. */
   className?: string;
+  /** Decorativo, a la izquierda del texto (el «+» de «Conectar otra cuenta»). */
+  icon?: ReactNode;
 }) {
   const [sending, setSending] = useState(false);
   useEffect(() => {
@@ -55,7 +58,7 @@ export function ConectarBoton({
       {Object.entries(fields).map(([name, value]) => (
         <input key={name} type="hidden" name={name} value={value} />
       ))}
-      <Button type="submit" size="sm" variant={variant} disabled={disabled} loading={sending} aria-label={ariaLabel} className={className}>
+      <Button type="submit" size="sm" variant={variant} disabled={disabled} loading={sending} aria-label={ariaLabel} className={className} icon={sending ? undefined : icon}>
         {sending ? MESSAGES.actions.connecting : label}
       </Button>
     </form>

@@ -177,7 +177,7 @@ Esto es lo que hay que construir de verdad, y donde va el tiempo.
 |---|---|---|---|---|
 | **Correo (Gmail del creador)** | OAuth de Google, alcances `gmail.send` y `gmail.modify` (leer respuestas y rebotes) | Enviar, responder en el mismo hilo, adjuntar el media kit, leer respuestas | Cuenta personal: 500 al día oficial, recomendados 50–100; Workspace: 2.000, recomendados 100–150; cuenta nueva: empezar con 20–50 | **Principal.** Las marcas leen `partnerships@`; SPF y DKIM son de Google |
 | **LinkedIn** | Unipile hosted auth (enlace de un uso, webhook de creación con estado firmado) | Solicitud de conexión con nota de 300 caracteres, mensaje, ver perfil, comentar y reaccionar a posts, buscar personas | 80–100 invitaciones al día y 200 por semana en cuenta activa; ~100 perfiles al día; espaciar al azar en horario laboral | **Secundario.** Sirve para llegar al responsable de marketing de la marca |
-| **Instagram DM** | Unipile con usuario y contraseña; reto 2FA de cinco minutos | Mensaje directo, leer bandeja | 100 acciones al día, 10 por hora; empezar bajo | **Opcional, apagado por defecto.** Se enciende por workspace cuando la marca no tiene otro contacto |
+| **Instagram DM** | Unipile con usuario y contraseña; reto 2FA de cinco minutos | Mensaje directo, leer bandeja | 100 acciones al día, 10 por hora; empezar bajo | **Opcional, apagado por defecto** (`outbound_policy.allowed_channels` nace con correo y LinkedIn, 0045). Se enciende por workspace cuando la marca no tiene otro contacto |
 | **WhatsApp** | Unipile | Mensaje | Esperar 24 h tras conectar; intervalos cortos entre mensajes | **Fase 2.** Solo para contactos que ya respondieron |
 
 Unipile cobra por cuenta conectada al mes. Es el costo variable
@@ -636,7 +636,11 @@ dueño aquí:
 | Soltar una cuenta y reconectarla a la vez deja un permiso revocado en una fila «Conectado» | El job reclama la fila antes de hablar con el proveedor (`release_claimed_at`, 0041) y la conexión responde «espera un minuto» mientras dure; una fila desconectada no presta su ref del vault | VEN-9 |
 | El mismo LinkedIn conectado dos veces con dos account_id (cada hosted auth estrena uno): topes sumados y doble cobro | `provider_identity` (connection_params.im.id) único entre las filas vivas de todos los espacios (0042): conectado aquí → la cuenta nueva se borra; caído → su fila adopta la nueva; vivo en otro espacio → «ocupada» | VEN-9 |
 | Una hosted auth que termina bien en Unipile pero no se conecta aquí (canal equivocado, perfil ocupado, doble clic) deja una cuenta huérfana cobrando | La web la borra en Unipile si nadie la usa (`in_use` de outreach_channel_connect, 0042); si el borrado falla, el keepalive concilia `listAccounts` contra la base y borra las cuentas de NUESTRA hosted auth sin fila y con más de un día | VEN-9 |
-| El aviso de cuenta creada confía en el account_id del cuerpo | Al crear, la cuenta tiene que haber nacido después de firmar el estado; al reconectar, tiene que ser la que se firmó en él | VEN-9 |
+| El aviso de cuenta creada confía en el account_id del cuerpo | Al crear, el `name` de la cuenta (que Unipile guarda tal cual) tiene que ser un estado nuestro con el MISMO nonce y espacio que el del aviso, y la cuenta tiene que haber nacido después de firmarlo; al reconectar, tiene que ser la que se firmó en él. Con un estado válido propio y el account_id de una cuenta ajena del tenant no se liga nada | VEN-9 |
+| Un formulario de otra página puede empezar conexiones (crear pendientes y enlaces de hosted auth), sobre todo en modo demo, sin sesión | Los dos inicios por POST rechazan con 403 un `Origin` que no es el de la app ni el de la petición, o un `Sec-Fetch-Site` distinto de `same-origin` | VEN-9 |
+| Se ofrece conectar un canal que el espacio no usa, y el proveedor lo cobra cada mes | `outbound_policy.allowed_channels` nace sin Instagram (0045); la fila de un canal fuera de la lista dice «Apagado en este espacio» con el botón deshabilitado, y el inicio lo rechaza también en el servidor | VEN-9 |
+| Una respuesta de Outlook en windows-1252 llega con caracteres rotos; una solo en HTML, vacía; un rebote de otro servidor, sin destinatario | El cuerpo se decodifica con el charset de su parte, sin text/plain se lee el HTML sin la cita (o el snippet), y `Final-Recipient` se busca en la parte `message/delivery-status` del DSN | VEN-9 · VEN-15 |
+| «No me escribas por LinkedIn, escríbeme a partnerships@…» da de baja en todos los canales | Con un correo o un «escríbeme» en la misma respuesta no se marca la baja: queda para el clasificador; y la baja se lee sin la cita ni la firma | VEN-9 · VEN-14 |
 | Una concesión de Google canjeada y deshecha se queda viva en la cuenta de la persona | Se revoca si nadie usa ese buzón; si vive en otro espacio, NO (revocar tumbaría la concesión entera, también la de ese espacio) | VEN-9 |
 | Cualquier miembro del espacio conecta o suelta el buzón de la creadora | `PUEDEN_GESTIONAR_CANALES` (owner, admin) en el servidor, en las tres acciones y en los dos inicios; la pantalla no ofrece los botones a los demás | VEN-9 |
 | Sin `List-Unsubscribe`, sin pie de baja, sin rebotes asíncronos | VEN-15 completa | VEN-15 |
@@ -770,9 +774,19 @@ cuentas existentes se migran borrando sus avisos por cuenta.
   `connection_params.im` de Unipile, nunca del `name` de la cuenta (con
   la hosted auth, Unipile guarda ahí el estado firmado que le mandamos).
 - **«Conectar otra cuenta»** solo cuando el canal ya tiene una cuenta
-  conectada. En el correo pide a Google elegir cuenta
-  (`select_account`); «Reconectar» le propone el buzón caído
-  (`login_hint`).
+  conectada, junto al título de la fila (como «Add» en Vercel). En el
+  correo pide a Google elegir cuenta (`select_account`); «Reconectar» le
+  propone el buzón caído (`login_hint`).
+- **Desconectar vive aparte.** Al final de «Límites y cuenta», tras un
+  separador y en tono de peligro: lo destructivo no se confunde con lo
+  constructivo, tampoco a 400 px.
+- **Cada máximo dice quién lo fija**, el diario y el semanal por igual:
+  «Máximo 140 (política del espacio)», «Máximo 200 (LinkedIn)»
+  (`daily_limited_by` y `weekly_limited_by` de la vista, 0045).
+- **Un canal apagado en el espacio** (fuera de `allowed_channels`: así
+  nace Instagram) sale «Apagado en este espacio», con el botón
+  deshabilitado y el motivo en su nombre accesible; una cuenta que ya
+  estaba conectada, «En pausa».
 - **De vuelta de Unipile sin confirmación.** Si el aviso de cuenta
   creada no llega en el minuto que la pantalla se refresca sola, el
   aviso cambia a «LinkedIn tarda en confirmar…» y la fila deja de pedir
@@ -796,8 +810,10 @@ Todo lo anterior está probado contra dobles (`FakeGmail`, `FakeUnipile`)
 y contra fixtures armados de la documentación de Google y de Unipile
 (`meta.source = 'docs'`). Eso prueba NUESTRA lógica, no que el servicio
 responda así. Tres cosas solo se saben con el servicio de verdad: si
-Unipile acepta y devuelve sin cortar el `name` de ~500 caracteres de la
-hosted auth (el estado firmado), la forma real del aviso de
+Unipile acepta y devuelve sin cortar el `name` de la hosted auth (el
+estado firmado: binario y cifrado, ~180 caracteres, ~210 al reconectar;
+la versión 1 medía ~500 y se acortó para dejarle margen a un recorte),
+la forma real del aviso de
 `notify_url` y del de mensajes (en especial `sender.attendee_provider_id`
 y `account_info`, de los que dependen casar la invitación aceptada y
 reconocer el eco), y la del canje de Google. Por eso VEN-9 queda
@@ -854,7 +870,7 @@ no son de Ventas. Ninguno cambia el comportamiento de lo que ya estaba:
 | Archivo | Dueño | Qué se agregó | Por qué es aditivo |
 |---|---|---|---|
 | `packages/connectors/src/unipile.ts`, `gmail.ts`, `outreach/*`, `testing/fake-*.ts`, `testing/grabacion.ts`, `scripts/record-outreach.ts`, `fixtures/gmail/`, `fixtures/unipile/` | Nicolás (carpeta) | Los conectores de los canales de Ventas | Asignados a VEN-9 en la tarea; archivos nuevos, ninguno reemplaza uno de Conexiones |
-| `packages/connectors/src/crypto/sealed-cookie.ts` | Nicolás (Conexiones) | `openWithAnyKey` y su tipo `OpenedWithAnyKey`: abre un sello probando cada llave del llavero y dice cuál casó | `openSealedValue` y el sello de la cookie de CON-3 quedan igual; la función nueva solo la usan el estado de canal y la ruta de los avisos (rotar `TOKEN_ENCRYPTION_KEY` no invalida los avisos de Unipile, que viven años) |
+| `packages/connectors/src/crypto/sealed-cookie.ts` | Nicolás (Conexiones) | `openWithAnyKey` y su tipo `OpenedWithAnyKey`: abre un sello probando cada llave del llavero y dice cuál casó | `openSealedValue` y el sello de la cookie de CON-3 quedan igual; la función nueva solo la usa la ruta de los avisos (rotar `TOKEN_ENCRYPTION_KEY` no invalida los avisos de Unipile, que viven años). El estado de canal tiene desde la ronda 5 su propio formato binario (outreach/state.ts), con el mismo recorrido de llaves |
 | `packages/connectors/src/index.ts`, `package.json` | Nicolás | Exporta los módulos de outreach; `exports` con el subpath `./testing` | `.` sigue apuntando a `src/index.ts`; el subpath aparta los dobles del barril de producción |
 | `packages/connectors/eslint.config.mjs`, `apps/worker/eslint.config.mjs` | Nicolás | Un bloque `no-restricted-imports` que prohíbe `@mc/connectors/testing` fuera de las pruebas | Solo añade una regla; las demás reglas y archivos no cambian. Evita que un job o una pantalla conecte canales falsos sin aviso |
 | `apps/web/lib/format.ts` | compartido | `formatRelativeSeconds` y `f.relative` («hace 2 horas», con Intl y el locale del espacio) | Funciones nuevas; las existentes no cambian. La usa la línea «Comprobada hace…» / «Funcionó por última vez…» |
