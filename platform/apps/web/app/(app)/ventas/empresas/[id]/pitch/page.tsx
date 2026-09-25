@@ -77,7 +77,8 @@ export default async function PitchPage({ params }: { params: Promise<{ id: stri
     ai: writer === "anthropic" || writer === "fake" ? "on" : writer,
     sendingOn: composer.policy.enabled,
   };
-  const key = draft ? `${draft.touchId}:${draft.pending?.stage ?? "listo"}:${fingerprint(`${draft.subject ?? ""}\n${draft.body}`)}` : "nuevo";
+  // Mientras la IA trabaja, el editor no se vuelve a montar en cada refresco; cuando termina, abre su borrador.
+  const key = draft ? `${draft.touchId}:${draft.pending ? "pendiente" : fingerprint(`${draft.subject ?? ""}\n${draft.body}`)}` : "nuevo";
 
   return (
     <>

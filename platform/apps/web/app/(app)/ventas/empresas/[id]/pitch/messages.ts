@@ -76,7 +76,8 @@ export const PITCH = {
       reviewing: "Revisando",
     } as Record<string, string>,
     reintento: (error: string) => `El último intento no salió (${error}); se vuelve a intentar solo.`,
-    editarCancela: "Si lo editas y lo guardas mientras tanto, manda lo tuyo y se cancela la redacción.",
+    editarCancela:
+      "Si lo editas mientras tanto, guárdalo: lo tuyo manda y se cancela la redacción. Lo que no guardes se reemplaza por el borrador de la IA cuando llegue.",
     pedido: "Pedido. La IA lo redacta en uno o dos minutos; esta página se actualiza sola.",
     ocupado: "La IA ya está trabajando en este borrador: espera a que termine.",
     necesitaContacto: "Elige a quién le escribes para pedir un borrador.",
