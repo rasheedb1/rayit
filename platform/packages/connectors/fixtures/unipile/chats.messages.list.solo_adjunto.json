@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-25",
+    "notes": "GET /chats/{chat_id}/messages → MessageList. La marca responde solo con una foto: text vacío y un adjunto (MessageAttachment de la documentación de Unipile)."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://[^/]+/api/v1/chats/chat_0001/messages"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "object": "MessageList",
+      "cursor": null,
+      "items": [
+        {
+          "object": "Message",
+          "id": "msg_0001",
+          "chat_id": "chat_0001",
+          "sender_id": "ACoAAB_demo",
+          "text": "Hola Marta, vi la campaña de otoño de Café Alma.",
+          "timestamp": "2026-09-23T15:00:00.000Z",
+          "is_sender": 1,
+          "attachments": []
+        },
+        {
+          "object": "Message",
+          "id": "msg_0004",
+          "chat_id": "chat_0001",
+          "sender_id": "ACoAAMarta_demo",
+          "text": "",
+          "timestamp": "2026-09-23T18:00:00.000Z",
+          "is_sender": 0,
+          "attachments": [
+            {
+              "id": "att_0001",
+              "type": "img",
+              "mimetype": "image/jpeg",
+              "size": { "width": 1080, "height": 1350 },
+              "unavailable": false
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -12,8 +12,11 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { FixtureFetch, loadFixtures, NULL_OUTREACH_CALL_LOG, UnipileClient } from '@mc/connectors';
+import { inboundBody } from '@mc/core/outreach/messages';
 import { enrollContacts, OPEN_THREADS_PAGE } from '@mc/db/queries/outreach';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';
+import { UnipileChannel } from '../src/jobs/ventas/canales/unipile.ts';
 import { runDispatch } from '../src/jobs/ventas/outbound.dispatch.ts';
 import { runReplies } from '../src/jobs/ventas/outbound.replies.ts';
 import { motorDbFromJob, type MotorDb } from '../src/jobs/ventas/motor-db.ts';
@@ -32,7 +35,7 @@ after(async () => {
   await db?.close();
 });
 
-const { workspace, enroll, deps, touches, scalar, secuencia } = motorKit({ db: () => db, motor: () => motor, prefix: '00000113', slug: 'motor-respuestas' });
+const { workspace, enroll, deps, touches, scalar, secuencia, unipile } = motorKit({ db: () => db, motor: () => motor, prefix: '00000113', slug: 'motor-respuestas' });
 
 test('el lector recorre todos los hilos por turno: con 250, la respuesta del hilo 240 se ve en dos corridas', async () => {
   const w = await workspace(1, { contacts: 1 });
@@ -306,4 +309,36 @@ test('un tercero en copia que pide la baja no da de baja a la ficha: la cadencia
   const r2 = await runReplies(motor, { readers: fake, now: () => bogota('2026-09-23', '14:00'), workspaceId: w2.id });
   assert.equal(r2.optOuts, 1);
   assert.equal(await scalar<boolean>(`SELECT opted_out AS v FROM contact WHERE id = $1`, [c2]), true);
+});
+
+test('una respuesta de LinkedIn que solo trae una foto detiene la cadencia, con el mismo cuerpo que le pone el webhook', async () => {
+  const w = await workspace(13, { contacts: 1 });
+  const [c] = w.contacts as [string];
+  await unipile(w, 'linkedin');
+  const seq = await secuencia(w, 3, [
+    { type: 'linkedin_message', channel: 'linkedin', day: 0, body: 'Hola, {{first_name}}: una idea para {{company}}.' },
+    { type: 'linkedin_message', channel: 'linkedin', day: 2, body: 'Te escribo otra vez, {{first_name}}.' },
+  ]);
+  const r = await motor.transaction((tx) => enrollContacts(tx, { sequenceId: seq, contactIds: [c], now: bogota('2026-09-23', '07:00') }));
+  const enrollmentId = r.enrolled[0]!.enrollmentId;
+  await runDispatch(motor, deps(w, fakeChannels(), () => bogota('2026-09-23', '12:00')));
+  // El chat de LinkedIn es el del fixture grabado de Unipile.
+  await db.raw.query(`UPDATE outbound_touch SET thread_ref = 'chat_0001' WHERE enrollment_id = $1 AND status = 'sent'`, [enrollmentId]);
+  await db.raw.query(`UPDATE outbound_message SET thread_ref = 'chat_0001' WHERE enrollment_id = $1`, [enrollmentId]);
+
+  const http = new FixtureFetch(await loadFixtures('unipile', [['chats.messages.list', 'solo_adjunto']]));
+  const api = new UnipileClient({
+    config: { dsn: 'api1.unipile.test:13111', accessToken: 'llave' }, callLog: NULL_OUTREACH_CALL_LOG, fetch: http.fetch, retry: { maxRetries: 0 },
+  });
+  const leidas = await runReplies(motor, {
+    readers: { linkedin: new UnipileChannel('linkedin', { api }) }, now: () => bogota('2026-09-23', '14:00'), workspaceId: w.id,
+  });
+  assert.equal(leidas.inbound, 1, 'una foto sola es una respuesta');
+  assert.equal(await scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enrollmentId]), 'replied');
+  assert.deepEqual((await touches(c)).map((t) => `${t.status}:${t.blocked_reason ?? ''}`), ['sent:', 'canceled:replied']);
+  assert.equal(
+    await scalar<string>(`SELECT body AS v FROM outbound_message WHERE enrollment_id = $1 AND direction = 'inbound'`, [enrollmentId]),
+    inboundBody('', true),
+    'el mismo cuerpo que guarda el webhook de Unipile',
+  );
 });

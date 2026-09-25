@@ -106,6 +106,8 @@ export type UnipileWebhookEvent =
   | {
     kind: 'message'; accountId: string; chatId: string; messageId: string; text: string;
     senderName: string | null; senderProviderId: string | null; fromSelf: boolean; occurredAt: Date | null;
+    /** Trae adjuntos (foto, nota de voz, sticker): una respuesta aunque `text` venga vacío. */
+    hasAttachments: boolean;
   }
   /** la salud de la cuenta: 'OK', 'CREDENTIALS', 'ERROR', 'STOPPED'… */
   | { kind: 'account_status'; accountId: string; status: string }
@@ -146,6 +148,7 @@ export function parseUnipileWebhook(raw: unknown): UnipileWebhookEvent {
       senderName: s(sender['attendee_name']), senderProviderId,
       fromSelf: self !== null && senderProviderId === self,
       occurredAt: occurredAt && !Number.isNaN(occurredAt.getTime()) ? occurredAt : null,
+      hasAttachments: Array.isArray(b['attachments']) && b['attachments'].length > 0,
     };
   }
   return { kind: 'ignored', reason: `evento sin manejar (${s(b['event']) ?? status ?? 'desconocido'})` };

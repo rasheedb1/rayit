@@ -195,6 +195,20 @@ export interface ReplyStop {
 
 const NO_STOP: ReplyStop = { otherSequences: 0, pausedPeople: 0, company: '' };
 
+/**
+ * El cuerpo que se guarda de una respuesta que solo trae un adjunto (una
+ * foto, una nota de voz, un sticker de LinkedIn o Instagram). Es una
+ * respuesta y detiene la cadencia; el webhook y el lector del motor
+ * guardan el mismo texto, para que la base quede igual venga por donde
+ * venga.
+ */
+export const INBOUND_ATTACHMENT_BODY = '[adjunto]';
+
+/** El cuerpo de un mensaje entrante: su texto, o el marcador si solo trae adjuntos. */
+export function inboundBody(text: string, hasAttachments: boolean): string {
+  return text.trim() === '' && hasAttachments ? INBOUND_ATTACHMENT_BODY : text;
+}
+
 /** Los textos de cada aviso del motor, por idioma. */
 export const OUTREACH_NOTICE_TEXTS = {
   es: {

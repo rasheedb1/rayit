@@ -20,6 +20,7 @@
  */
 import { LINKEDIN_INVITE_NOTE_MAX, OutreachApiError, type UnipileApi, type UnipileMessage } from '@mc/connectors';
 import type { DispatchChannel, InboundMessage, OpenThread } from '@mc/db/queries/outreach';
+import { inboundBody } from '@mc/core/outreach/messages';
 import {
   abortedBeforeSend, failureFrom, isNotFound, type ChannelLogger, type ChannelReader, type ChannelSender, type FindSentResult,
   type OutgoingMessage, type SendResult,
@@ -172,12 +173,20 @@ export class UnipileChannel implements ChannelSender, ChannelReader {
     return page.items.flatMap((i) => this.#inbound(thread, i));
   }
 
+  /**
+   * Lo que escribió la otra parte y no conocemos. Un mensaje sin texto
+   * pero con adjunto (una foto, una nota de voz, un sticker) es una
+   * respuesta: se guarda con el mismo cuerpo que le pone el webhook
+   * (inboundBody), y detiene la cadencia igual. Sin texto ni adjunto (una
+   * reacción, un evento del chat) no es nada.
+   */
   #inbound(thread: OpenThread, i: UnipileMessage): InboundMessage[] {
-    if (i.isSender || !i.id || thread.knownMessageIds.includes(i.id) || i.text.trim() === '') return [];
+    if (i.isSender || !i.id || thread.knownMessageIds.includes(i.id)) return [];
+    if (i.text.trim() === '' && !i.hasAttachments) return [];
     if (!i.sentAt) {
       this.#logger?.warn('Unipile entregó un mensaje sin fecha: se descarta', { threadRef: thread.threadRef, messageId: i.id });
       return [];
     }
-    return [{ providerMessageId: i.id, body: i.text, occurredAt: i.sentAt }];
+    return [{ providerMessageId: i.id, body: inboundBody(i.text, i.hasAttachments), occurredAt: i.sentAt }];
   }
 }

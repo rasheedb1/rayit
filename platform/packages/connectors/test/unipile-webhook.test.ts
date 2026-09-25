@@ -62,6 +62,11 @@ test('parseUnipileWebhook: cuenta creada, salud y mensaje, con los fixtures grab
   assert.equal(m.senderName, 'Marta Ríos');
   assert.equal(m.fromSelf, false);
   assert.equal(m.occurredAt?.toISOString(), '2026-09-22T15:00:00.000Z');
+  assert.equal(m.hasAttachments, false);
+  // Una respuesta que solo trae una foto: sin texto, con su adjunto.
+  const foto = parseUnipileWebhook(await fixture('message.received.solo_adjunto'));
+  assert.ok(foto.kind === 'message');
+  assert.deepEqual([foto.text, foto.hasAttachments], ['', true]);
 });
 
 test('parseUnipileWebhook: el eco de un envío propio se marca, y lo incompleto se ignora', async () => {

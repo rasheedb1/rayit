@@ -101,7 +101,7 @@ export class FakeUnipile implements UnipileApi {
     }
     const messageId = this.#id('msg');
     const list = this.messages.get(chatId) ?? [];
-    list.push({ id: messageId, chatId, senderId: req.accountId, text: req.text, isSender: true, sentAt: new Date(0) });
+    list.push({ id: messageId, chatId, senderId: req.accountId, text: req.text, isSender: true, sentAt: new Date(0), hasAttachments: false });
     this.messages.set(chatId, list);
     return { chatId, messageId };
   }

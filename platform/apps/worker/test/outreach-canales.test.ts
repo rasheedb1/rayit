@@ -328,20 +328,21 @@ test('Unipile traduce los errores de VEN-9: cuenta desconectada, destinatario in
   assert.ok(!llave.ok && llave.account === 'unavailable', 'nuestra llave, no la cuenta de la persona');
 });
 
-test('Unipile lee del chat solo lo que escribió la otra parte, no conocemos y trae fecha; findSent lee el chat', async () => {
+test('Unipile lee del chat solo lo que escribió la otra parte, no conocemos y trae fecha (texto o adjunto); findSent lee el chat', async () => {
   const avisos: string[] = [];
   const fake = new FakeUnipile();
   fake.addAccount({ id: 'uni-1' });
   fake.messages.set('chat-1', [
-    { id: 'm1', chatId: 'chat-1', senderId: 'uni-1', text: 'Hola, Sofía.', isSender: true, sentAt: NOW },
-    { id: 'conocido', chatId: 'chat-1', senderId: 'p', text: 'Ya leído', isSender: false, sentAt: NOW },
-    { id: 'm3', chatId: 'chat-1', senderId: 'p', text: '¡Hola! Nos interesa.', isSender: false, sentAt: NOW },
-    { id: 'm4', chatId: 'chat-1', senderId: 'p', text: '', isSender: false, sentAt: NOW },
-    { id: 'm5', chatId: 'chat-1', senderId: 'p', text: 'Sin fecha', isSender: false, sentAt: null },
+    { id: 'm1', chatId: 'chat-1', senderId: 'uni-1', text: 'Hola, Sofía.', isSender: true, sentAt: NOW, hasAttachments: false },
+    { id: 'conocido', chatId: 'chat-1', senderId: 'p', text: 'Ya leído', isSender: false, sentAt: NOW, hasAttachments: false },
+    { id: 'm3', chatId: 'chat-1', senderId: 'p', text: '¡Hola! Nos interesa.', isSender: false, sentAt: NOW, hasAttachments: false },
+    { id: 'm4', chatId: 'chat-1', senderId: 'p', text: '', isSender: false, sentAt: NOW, hasAttachments: false },
+    { id: 'm5', chatId: 'chat-1', senderId: 'p', text: 'Sin fecha', isSender: false, sentAt: null, hasAttachments: false },
+    { id: 'm6', chatId: 'chat-1', senderId: 'p', text: '', isSender: false, sentAt: NOW, hasAttachments: true },
   ]);
   const channel = new UnipileChannel('linkedin', { api: fake, logger: { warn: (m) => { avisos.push(m); } } });
   const got = await channel.readThread(thread({ channel: 'linkedin', threadRef: 'chat-1' }));
-  assert.deepEqual(got.map((m) => m.providerMessageId), ['m3']);
+  assert.deepEqual(got.map((m) => [m.providerMessageId, m.body]), [['m3', '¡Hola! Nos interesa.'], ['m6', '[adjunto]']], 'una foto sola es una respuesta');
   assert.match(avisos.join(' '), /sin fecha/);
   const enviado = await channel.findSent(linkedin({ reply: { threadRef: 'chat-1', messageIdRfc: null } }));
   assert.ok(enviado.found === true && enviado.proof.providerMessageId === 'm1');

@@ -31,6 +31,7 @@ import {
   UNIPILE_PROVIDER_BY_CHANNEL, UNIPILE_ROUTE_HEADER, UNIPILE_SECRET_HEADER, UNIPILE_STATE_TTL_MS, UNIPILE_WEBHOOK_SECRET_ENV,
   type ChannelState, type UnipileApi, type UnipileWebhookEvent,
 } from "@mc/connectors";
+import { inboundBody } from "@mc/core/outreach/messages";
 import {
   CHANNEL_ERROR_CODES, channelWebhookCount, completeChannelConnection, failPendingChannelAccount, findUnipileAccountForWebhook,
   markChannelAccountDown, noteChannelAccountIssue, recordInboundMessage, setChannelWebhooks,
@@ -109,7 +110,7 @@ export async function unipileWebhook(req: Request, deps: ChannelDeps): Promise<R
     if (event.kind === "message") {
       if (event.fromSelf) return MESSAGES.routes.ignored.echo;
       const r = await recordInboundMessage(tx, {
-        account, threadRef: event.chatId, providerMessageId: event.messageId, body: event.text,
+        account, threadRef: event.chatId, providerMessageId: event.messageId, body: inboundBody(event.text, event.hasAttachments),
         fromAddress: event.senderName ?? event.senderProviderId, occurredAt: event.occurredAt ?? now,
         optOutReasonEs: MESSAGES.optOutReason(name),
       });
