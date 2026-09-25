@@ -363,13 +363,20 @@ export async function markEnrollmentReplied(tx: SqlExecutor, enrollmentId: strin
  * Avanza de paso: current_step_id pasa al primer paso que todavía tiene
  * un toque vivo. Sin ninguno, el enrolamiento activo está completo. Se
  * llama después de cada envío; no toca un enrolamiento que no esté activo.
+ *
+ * Un toque cancelado por el interruptor (blocked_reason
+ * 'outreach_disabled') cuenta como pendiente: apagar es una pausa, y un
+ * envío que termina mientras el envío está apagado no da por completa una
+ * cadencia que replanOutreach va a devolver a la cola al encender.
  */
 export async function advanceEnrollment(tx: SqlExecutor, enrollmentId: string, now: Date): Promise<'advanced' | 'completed' | 'unchanged'> {
   assertIds('advanceEnrollment', [enrollmentId]);
   const next = (
     await tx.query<{ step_id: string }>(
       `SELECT t.step_id FROM outbound_touch t JOIN outbound_step st ON st.id = t.step_id
-        WHERE t.enrollment_id = $1::uuid AND t.status IN ('draft', 'scheduled', 'processing', 'held')
+        WHERE t.enrollment_id = $1::uuid
+          AND (t.status IN ('draft', 'scheduled', 'processing', 'held')
+               OR (t.status = 'canceled' AND t.blocked_reason = 'outreach_disabled'))
         ORDER BY st.day_offset, st.order_in_day LIMIT 1`,
       [enrollmentId],
     )
@@ -388,4 +395,126 @@ export async function advanceEnrollment(tx: SqlExecutor, enrollmentId: string, n
     [enrollmentId, now.toISOString()],
   );
   return r.rows.length > 0 ? 'completed' : 'unchanged';
+}
+
+// ---------------------------------------------------------------------
+// Volver a encender
+// ---------------------------------------------------------------------
+
+export interface ReplanResult {
+  /** Enrolamientos con algo devuelto a la cola. */
+  enrollments: number;
+  /** Toques que vuelven a scheduled. */
+  scheduled: number;
+  /** Toques que vuelven a held (esperaban una revisión o una decisión), con su texto y su motivo. */
+  held: number;
+}
+
+interface ReplanRow {
+  id: string;
+  enrollment_id: string;
+  step_id: string;
+  held_reason: string | null;
+  due: Date | string;
+  day_offset: number;
+  order_in_day: number;
+  scheduled_time: string;
+  tz: string;
+  w_start: string | null;
+  w_end: string | null;
+}
+
+/**
+ * Al encender el envío, lo que el apagado canceló vuelve a la cola
+ * (0037 §8.5: «apagar es una pausa del workspace, no el fin de ninguna
+ * cadencia»). disable_outreach cancela lo programado y lo retenido con
+ * blocked_reason 'outreach_disabled' y deja los enrolamientos vivos; aquí,
+ * por cada enrolamiento vivo (active, paused, cooldown) del workspace:
+ *
+ *   · cada toque cancelado por el apagado vuelve a su estado: held si
+ *     tenía held_reason (esperaba una revisión humana o una decisión, y
+ *     conserva el texto que la persona ya había editado), si no scheduled.
+ *     attempt_count, asunto y cuerpo no se tocan;
+ *   · la hora: si el primero todavía no había vencido (un apagado corto),
+ *     todos conservan la suya. Si ya venció, se planifica desde `now` con
+ *     planSteps, conservando los días hábiles entre pasos (el primero
+ *     devuelto es el día 0) y la hora de cada paso, en la zona y la
+ *     ventana de la secuencia;
+ *   · no vuelve lo que ya no puede salir: una ficha dada de baja (o con
+ *     su correo en la lista global) y un correo a una dirección que
+ *     rebotó (contact.email_invalid). La base tampoco los dejaría.
+ *
+ * Funciona con la transacción de la web (withWorkspace, dentro de
+ * enableOutreach) y con la del worker. Idempotente: lo devuelto ya no
+ * está cancelado.
+ */
+export async function replanOutreach(tx: SqlExecutor, workspaceId: string, now: Date): Promise<ReplanResult> {
+  assertIds('replanOutreach', [workspaceId]);
+  const rows = (
+    await tx.query<ReplanRow>(
+      `SELECT t.id, t.enrollment_id, t.step_id, t.held_reason, coalesce(t.next_retry_at, t.scheduled_for) AS due,
+              st.day_offset, st.order_in_day, st.scheduled_time::text AS scheduled_time,
+              coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end
+         FROM outbound_touch t
+         JOIN outbound_enrollment e ON e.id = t.enrollment_id
+         JOIN outbound_sequence s ON s.id = e.sequence_id
+         JOIN outbound_step st ON st.id = t.step_id
+         JOIN workspace w ON w.id = t.workspace_id
+         LEFT JOIN outbound_policy p ON p.workspace_id = t.workspace_id
+         LEFT JOIN contact c ON c.id = t.contact_id
+        WHERE t.workspace_id = $1::uuid AND t.status = 'canceled' AND t.blocked_reason = 'outreach_disabled'
+          AND e.status IN ('active', 'paused', 'cooldown')
+          AND NOT (coalesce(c.opted_out, false) OR address_is_suppressed(c.email) OR address_is_suppressed(t.recipient_address))
+          AND NOT (t.channel = 'email' AND coalesce(c.email_invalid, false)
+                   AND (t.recipient_address IS NULL OR t.recipient_address = c.email))
+        ORDER BY t.enrollment_id, st.day_offset, st.order_in_day
+        FOR UPDATE OF t`,
+      [workspaceId],
+    )
+  ).rows;
+  const byEnrollment = new Map<string, ReplanRow[]>();
+  for (const r of rows) byEnrollment.set(r.enrollment_id, [...(byEnrollment.get(r.enrollment_id) ?? []), r]);
+
+  const ids: string[] = [];
+  const due: string[] = [];
+  const result: ReplanResult = { enrollments: byEnrollment.size, scheduled: 0, held: 0 };
+  for (const [enrollmentId, touches] of byEnrollment) {
+    const first = touches[0]!;
+    const firstDue = new Date(first.due);
+    if (firstDue.getTime() >= now.getTime()) {
+      // Un apagado corto: nada venció, cada toque conserva su hora (la de su reintento, si esperaba uno).
+      for (const t of touches) {
+        ids.push(t.id);
+        due.push(new Date(t.due).toISOString());
+      }
+    } else {
+      const plan = new Map(
+        planSteps(
+          touches.map((t) => ({
+            id: t.step_id, dayOffset: t.day_offset - first.day_offset, orderInDay: t.order_in_day, scheduledTime: t.scheduled_time,
+          })),
+          { enrolledAt: now, timeZone: first.tz, window: windowOf(first.w_start, first.w_end), seed: enrollmentId },
+        ).map((p) => [p.stepId, p.at]),
+      );
+      for (const t of touches) {
+        ids.push(t.id);
+        due.push(plan.get(t.step_id)!.toISOString());
+      }
+    }
+    for (const t of touches) {
+      if (t.held_reason) result.held++;
+      else result.scheduled++;
+    }
+  }
+  if (ids.length === 0) return result;
+  await tx.query(
+    `UPDATE outbound_touch t
+        SET status = CASE WHEN t.held_reason IS NOT NULL THEN 'held' ELSE 'scheduled' END,
+            blocked_reason = NULL, scheduled_for = v.due, next_retry_at = NULL
+       FROM unnest($1::uuid[], $2::timestamptz[]) AS v(id, due)
+      WHERE t.id = v.id AND t.status = 'canceled' AND t.blocked_reason = 'outreach_disabled'`,
+    [ids, due],
+  );
+  for (const enrollmentId of byEnrollment.keys()) await advanceEnrollment(tx, enrollmentId, now);
+  return result;
 }

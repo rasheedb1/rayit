@@ -16,7 +16,9 @@
  *   · un reclamo caído: lo que no llegó al proveedor vuelve a la cola y
  *     sale; lo que estaba en vuelo es un zombi: failed, sin reenviar;
  *   · una respuesta que pide la baja marca la ficha;
- *   · apagar el interruptor cancela lo pendiente y el despachador no toma nada.
+ *   · apagar el interruptor cancela lo pendiente y el despachador no toma nada;
+ *   · volver a encenderlo devuelve lo cancelado a la cola: las cadencias
+ *     siguen donde iban, con sus días entre pasos y sus textos.
  *
  * Los contadores de 0037 cuentan el día con now() de la BASE, que el
  * reloj falso no mueve: por eso la prueba del límite vacía
@@ -26,7 +28,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zonedParts } from '@mc/core';
-import { claimDueTouches, enrollContacts, markSendStarted } from '@mc/db/queries/outreach';
+import { claimDueTouches, disableOutreach, enableOutreach, enrollContacts, markSendStarted } from '@mc/db/queries/outreach';
 import { allJobs } from '../src/jobs/index.ts';
 import { fakeChannels, type FakeChannel } from '../src/jobs/ventas/canales/fake.ts';
 import { DISPATCH_JOB_ID, runDispatch, type DispatchDeps } from '../src/jobs/ventas/outbound.dispatch.ts';
@@ -34,6 +36,7 @@ import { REPLIES_JOB_ID, runReplies } from '../src/jobs/ventas/outbound.replies.
 import { motorDbFromJob, type MotorDb } from '../src/jobs/ventas/motor-db.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
+import { motorKit } from './helpers/motor-kit.ts';
 
 const TZ = 'America/Bogota';
 const WS = '0000000b-0000-4000-8000-000000000001';
@@ -340,4 +343,71 @@ test('apagar el interruptor cancela lo pendiente y el despachador no toma nada',
   assert.equal(r.claim.claimed, 0);
   assert.equal(fake.email.sent.length, sentBefore);
   assert.equal(await scalar<number>(`SELECT count(*)::int AS v FROM outbound_touch WHERE blocked_reason = 'outreach_disabled'`), pending);
+});
+
+// ---------------------------------------------------------------------
+// Apagar y volver a encender: las cadencias siguen donde iban
+// ---------------------------------------------------------------------
+
+const kit = motorKit({ db: () => db, motor: () => motor, prefix: '0000011a', slug: 'motor-interruptor' });
+
+test('apagar y volver a encender: lo cancelado vuelve a la cola y los pasos salen en orden, un día hábil entre cada uno', async () => {
+  const w = await kit.workspace(1, { contacts: 1 });
+  const [c] = w.contacts as [string];
+  const enr = await kit.enroll(w, bogota('2026-09-23', '07:00'));
+  const f = fakeChannels();
+  await runDispatch(motor, kit.deps(w, f, () => bogota('2026-09-23', '12:00')));
+  assert.equal(f.email.sent.length, 1, 'el paso 1 sale el miércoles');
+
+  const cancelados = await motor.transaction((tx) => disableOutreach(tx, 'vacaciones', w.id));
+  assert.equal(cancelados, 2);
+  // Casi una semana apagado: no sale nada.
+  for (const dia of ['2026-09-24', '2026-09-25', '2026-09-28']) await runDispatch(motor, kit.deps(w, f, () => bogota(dia, '11:00')));
+  assert.equal(f.email.sent.length, 1);
+
+  const plan = await motor.transaction((tx) => enableOutreach(tx, w.id, bogota('2026-09-28', '12:00')));
+  assert.deepEqual(plan, { enrollments: 1, scheduled: 2, held: 0 });
+  assert.equal(await kit.scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enr.get(c)]), 'active');
+  assert.deepEqual((await kit.touches(c)).map((t) => t.status), ['sent', 'scheduled', 'scheduled']);
+
+  for (const dia of ['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01']) {
+    await runDispatch(motor, kit.deps(w, f, () => bogota(dia, '16:30')));
+  }
+  assert.equal(f.email.sent.length, 3, 'salen los dos pasos que faltaban');
+  const [, dos, tres] = await kit.touches(c);
+  assert.equal(localDay(dos!.scheduled_for), '2026-09-29', 'el paso 2, el siguiente día hábil (su hora del lunes ya había pasado)');
+  assert.equal(localDay(tres!.scheduled_for), '2026-09-30', 'el paso 3, un día hábil después del 2, como en la secuencia');
+  assert.match(f.email.sent[1]!.subject ?? '', /^Re: /, 'el paso 2 sigue en el hilo del 1');
+  assert.equal(f.email.sent[1]!.threadRef, f.email.sent[0]!.threadRef);
+  assert.equal(await kit.scalar<string>(`SELECT status AS v FROM outbound_enrollment WHERE id = $1`, [enr.get(c)]), 'completed');
+});
+
+test('encender devuelve a revisión lo que esperaba revisión, con el texto que la persona ya había editado', async () => {
+  const w = await kit.workspace(2, { contacts: 1, humanReview: true });
+  const [c] = w.contacts as [string];
+  await kit.enroll(w, bogota('2026-09-23', '07:00'));
+  const [uno] = await kit.touches(c);
+  await db.raw.query(`UPDATE outbound_touch SET body = 'Hola, Persona: lo escribí yo.' WHERE id = $1`, [uno!.id]);
+  await motor.transaction((tx) => disableOutreach(tx, 'vacaciones', w.id));
+  assert.deepEqual((await kit.touches(c)).map((t) => t.status), ['canceled', 'canceled', 'canceled']);
+
+  // Encendido el mismo día, antes de su hora: cada uno conserva la suya.
+  const plan = await motor.transaction((tx) => enableOutreach(tx, w.id, bogota('2026-09-23', '08:00')));
+  assert.deepEqual(plan, { enrollments: 1, scheduled: 0, held: 3 });
+  const despues = await kit.touches(c);
+  assert.deepEqual(despues.map((t) => [t.status, t.held_reason]), [['held', 'needs_review'], ['held', 'needs_review'], ['held', 'needs_review']]);
+  assert.equal(despues[0]!.scheduled_for.getTime(), uno!.scheduled_for.getTime());
+  assert.equal(await kit.scalar<string>(`SELECT body AS v FROM outbound_touch WHERE id = $1`, [uno!.id]), 'Hola, Persona: lo escribí yo.');
+});
+
+test('encender no devuelve a la cola lo de una ficha que se dio de baja mientras estaba apagado', async () => {
+  const w = await kit.workspace(3, { contacts: 2 });
+  const [c1, c2] = w.contacts as [string, string];
+  await kit.enroll(w, bogota('2026-09-23', '07:00'));
+  await motor.transaction((tx) => disableOutreach(tx, 'vacaciones', w.id));
+  await db.raw.query(`UPDATE contact SET opted_out = true, opted_out_at = now() WHERE id = $1`, [c1]);
+  const plan = await motor.transaction((tx) => enableOutreach(tx, w.id, bogota('2026-09-24', '12:00')));
+  assert.equal(plan.scheduled, 3, 'solo los de la otra ficha');
+  assert.deepEqual((await kit.touches(c1)).map((t) => t.status), ['canceled', 'canceled', 'canceled']);
+  assert.deepEqual((await kit.touches(c2)).map((t) => t.status), ['scheduled', 'scheduled', 'scheduled']);
 });

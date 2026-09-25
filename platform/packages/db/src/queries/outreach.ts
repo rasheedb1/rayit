@@ -26,6 +26,7 @@
 import { assertWorkspaceId, isUuid, type PublicShareTx, type SqlExecutor, type WorkerSql, type WorkspaceTx } from '../client.ts';
 import { OUTBOUND_CHANNELS } from '../schema/_canales.ts';
 import { BREAKER_STEP_TYPES, type OutboundHealth } from '../schema/outreach.ts';
+import { replanOutreach, type ReplanResult } from './outreach/enroll.ts';
 
 /** La forma de action_type (CHECK de outbound_counter): 'email', 'linkedin_invite', 'llm_call'… */
 export const ACTION_TYPE_RE = /^[a-z][a-z0-9_]{1,40}$/;
@@ -157,7 +158,8 @@ export async function shouldPauseOutreach(tx: SqlExecutor, workspaceId?: string)
 /**
  * Apaga el envío del workspace con su motivo y cancela lo que está en
  * cola o retenido (no lo que está en processing, que es del despachador).
- * Devuelve cuántos toques canceló. Los enrolamientos siguen vivos.
+ * Devuelve cuántos toques canceló. Los enrolamientos siguen vivos, y
+ * enableOutreach devuelve a la cola lo cancelado.
  */
 export function disableOutreach(tx: WorkspaceTx, reason: string): Promise<number>;
 export function disableOutreach(tx: WorkerSql, reason: string, workspaceId: string): Promise<number>;
@@ -171,14 +173,20 @@ export async function disableOutreach(tx: SqlExecutor, reason: string, workspace
 }
 
 /**
- * Enciende el envío. Sin outbound_policy.postal_address lanza 23514
- * (outbound_policy_enabled_needs_address). No reprograma nada.
+ * Enciende el envío y, en la misma transacción, devuelve a la cola lo
+ * que el apagado canceló (replanOutreach): las cadencias siguen donde
+ * iban, con los textos ya aprobados o editados. Sin
+ * outbound_policy.postal_address lanza 23514
+ * (outbound_policy_enabled_needs_address) y no toca nada.
  */
-export function enableOutreach(tx: WorkspaceTx): Promise<void>;
-export function enableOutreach(tx: WorkerSql, workspaceId: string): Promise<void>;
-export async function enableOutreach(tx: SqlExecutor, workspaceId?: string): Promise<void> {
+export function enableOutreach(tx: WorkspaceTx, now?: Date): Promise<ReplanResult>;
+export function enableOutreach(tx: WorkerSql, workspaceId: string, now?: Date): Promise<ReplanResult>;
+export async function enableOutreach(tx: SqlExecutor, a?: string | Date, b?: Date): Promise<ReplanResult> {
+  const workspaceId = typeof a === 'string' ? a : undefined;
+  const now = (typeof a === 'string' ? b : a) ?? new Date();
   const ws = workspaceOf('enable_outreach', tx, workspaceId);
   await tx.query('SELECT enable_outreach($1::uuid)', [ws]);
+  return replanOutreach(tx, ws, now);
 }
 
 // ---------------------------------------------------------------------
