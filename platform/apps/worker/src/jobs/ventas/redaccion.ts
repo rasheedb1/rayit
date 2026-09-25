@@ -64,7 +64,7 @@ export function generationInputFrom(ctx: GenerationContext): Omit<GenerationInpu
 
 /** ¿Lo pidió una persona desde el editor del pitch? Entonces el resultado vuelve a ella, en borrador. */
 export function requestedByPerson(ctx: GenerationContext): boolean {
-  return ctx.generation?.requestedAt != null;
+  return (ctx.generation?.requestedAt ?? null) !== null;
 }
 
 /**
