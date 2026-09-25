@@ -185,7 +185,7 @@ test('con la base real: una cuenta por reconectar da su alerta (outbound_health)
   assert.equal(r.created.account_down, 1);
   const real = await avisos(WS_REAL);
   assert.deepEqual(real.map((a) => a.kind), ['outreach_account_down']);
-  // Dice CUÁL es, y lleva a donde se ve qué dijo el proveedor (no a una pantalla que no la nombra).
+  // Dice CUÁL es, y lleva a donde se ve qué pasó (no a una pantalla que no la nombra).
   assert.match(real[0]?.body_es ?? '', /No sale nada por LinkedIn: Creador Real hasta que se reconecte/);
   assert.equal(real[0]?.action_url, '/ventas/politica#cuentas');
 });

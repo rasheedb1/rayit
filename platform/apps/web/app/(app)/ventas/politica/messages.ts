@@ -163,8 +163,19 @@ export const MESSAGES = {
         "critical" | "warning" | "info" | "success",
         string
       >,
-      /** El enlace de un aviso que lleva a otro lugar de la pantalla. */
-      ver: "Ver",
+      /**
+       * El enlace de cada aviso, con su destino: un lector de pantalla no
+       * oye «Ver, Ver» con dos avisos. Un tipo que no está aquí usa `ver`.
+       */
+      verPor: {
+        account_down: "Ver la cuenta",
+        bounce_rate: "Ver los rebotes",
+        bounces_unread: "Ver la lectura de rebotes",
+        no_sends: "Ver la salud del envío",
+        queue_stuck: "Ver la cola",
+        llm_budget: "Ver el presupuesto",
+      } as Readonly<Record<string, string>>,
+      ver: "Ver el detalle",
       vacio: {
         title: "Nada que revisar hoy",
         description: "Cuando algo se salga de lo normal (rebotes, una cuenta caída, la cola parada) aparecerá aquí.",
@@ -177,6 +188,16 @@ export const MESSAGES = {
       note: (duros: string, enviados: string, n: number) =>
         plural(n, `${duros} de ${enviados} no existe`, `${duros} de ${enviados} no existen`),
       sinEnvios: "Sin envíos en las últimas 24 horas",
+      /**
+       * Detrás de la nota, dónde está la tasa respecto del aviso
+       * (bounceRateStatus de @mc/core): que un 25 % con cuatro envíos no
+       * parezca ignorado. `minimo` y `umbral` llegan formateados.
+       */
+      umbral: {
+        pocos: (minimo: string) => `con menos de ${minimo} envíos no se avisa todavía`,
+        sobre: (umbral: string) => `pasa del ${umbral}: te avisamos`,
+        bajo: (umbral: string) => `por debajo del ${umbral} que dispara el aviso`,
+      },
     },
     cola: {
       label: "Por salir",
@@ -193,12 +214,52 @@ export const MESSAGES = {
     /** La lista de cuentas caídas, adonde lleva la alerta outreach_account_down. */
     caidas: {
       title: "Cuentas que necesitan atención",
-      description:
-        "Mientras una cuenta no se reconecte, no sale nada por ella: lo de ese canal espera en la cola y no se pierde.",
+      description: "Mientras una cuenta no se reconecte, no sale nada por ella.",
       estado: { needs_reconnect: "Pide reconectar", error: "Falla" } as Record<"needs_reconnect" | "error", string>,
       /** «Desde el 23 de septiembre». */
       desde: (fecha: string) => `Desde el ${fecha}`,
-      sinDetalle: "El proveedor no dio más detalle.",
+      sinDetalle: "No tenemos más detalle de lo que pasó.",
+      /**
+       * Qué pasó, en frase. En last_error solo van CÓDIGOS: los de
+       * CHANNEL_ERROR_CODES de VEN-9 (@mc/db, rama rasheed/VEN-9-canales) y
+       * 'unipile_status:<X>' para lo que Unipile dice de una sesión. Un
+       * código que no está aquí (o una frase vieja) nunca se enseña crudo:
+       * sale `sinDetalle`. Al integrar VEN-9, estas frases pasan a leerse
+       * de CANALES_TEXTOS (@mc/core/canales-textos) y la pantalla de
+       * canales; los códigos son los mismos.
+       */
+      motivos: {
+        taken: "Esta cuenta ya está conectada en otro espacio.",
+        missing_scopes: "Google no dio los permisos de envío: al conectar hay que aceptarlos todos.",
+        cancelled: "La conexión se canceló antes de terminar.",
+        wrong_provider: "La cuenta que se conectó no es de este canal.",
+        releasing: "La cuenta se estaba desconectando: espera un minuto y vuelve a conectarla.",
+        webhooks_missing: "Está conectada, pero no nos enteramos de sus respuestas.",
+        provider_error: "El servicio no respondió al conectar. Suele ser pasajero.",
+        exchange_failed: "Google no aceptó la autorización.",
+        auth_failed: "La conexión no terminó: la contraseña o el código de verificación no pasaron.",
+        duplicate: "Este perfil ya está conectado en este espacio con otra cuenta.",
+        gmail_revoked: "Google ya no acepta el permiso de este Gmail (lo quitaste o venció).",
+        gmail_no_secret: "No encontramos el permiso guardado de este Gmail.",
+        transient: "No pudimos comprobar la cuenta hoy. Lo intentamos de nuevo mañana.",
+      } as Readonly<Record<string, string>>,
+      /** 'unipile_gone': el canal ya no reconoce la cuenta. */
+      motivoSinCuenta: (canal: string) => `${canal} ya no reconoce esta cuenta.`,
+      /** 'unipile_status:<X>': lo que dijo Unipile de la sesión, sin nombrar a Unipile. */
+      motivoSesion: (estado: string, canal: string) => {
+        switch (estado) {
+          case "CREDENTIALS":
+            return `${canal} cerró la sesión.`;
+          case "STOPPED":
+            return "La cuenta se detuvo.";
+          case "DELETED":
+            return `La cuenta de ${canal} se borró.`;
+          case "DISCONNECTED":
+            return "La cuenta se desconectó.";
+          default:
+            return `${canal} dio un error con la sesión.`;
+        }
+      },
       /**
        * El paso concreto, en una frase, en vez de un enlace a una página
        * que no resuelve nada: la pantalla de canales (VEN-9), donde se
@@ -210,14 +271,19 @@ export const MESSAGES = {
         otro: "Para volver a enviar hay que conectar otra vez esta cuenta con tu sesión del proveedor.",
       },
       /**
-       * Dónde se hace, mientras la pantalla de canales no esté: sin esto el
-       * paso no tiene sitio donde darse. Con SUPPORT_EMAIL, a quién
-       * escribir; sin él, solo cuándo llega.
+       * Qué pasa mientras tanto, y a quién escribir. Sin frases de una
+       * función futura: con SUPPORT_EMAIL, a quién; sin él, solo que no se
+       * pierde nada. Cuando la pantalla de canales (VEN-9) esté, cada
+       * cuenta lleva su botón `reconectar` y esta línea sobra.
        */
       donde: (soporte: string | null) =>
         soporte
-          ? `La reconexión llega con Ventas → Canales. Mientras tanto, escríbenos a ${soporte} y la hacemos contigo.`
-          : "La reconexión llega con Ventas → Canales; hasta entonces, lo de esta cuenta espera en la cola.",
+          ? `Escríbenos a ${soporte} y la reconectamos contigo. Lo de esta cuenta espera en la cola; no se pierde nada.`
+          : "Lo de esta cuenta espera en la cola; no se pierde nada.",
+      /** El botón de cada cuenta cuando hay una pantalla donde reconectarla. */
+      reconectar: "Reconectar",
+      /** El nombre accesible del botón: con varias cuentas, cuál. */
+      reconectarCuenta: (cuenta: string) => `Reconectar ${cuenta}`,
     },
     canal: { email: "Gmail", linkedin: "LinkedIn", instagram_dm: "Instagram", whatsapp: "WhatsApp" } as Record<
       "email" | "linkedin" | "instagram_dm" | "whatsapp",

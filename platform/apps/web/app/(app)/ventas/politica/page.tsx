@@ -96,6 +96,9 @@ export default async function PoliticaPage() {
         ahora={ahora.toISOString()}
         lectura={{ estado: listo.bouncesReading, desde: listo.bouncesReadAt }}
         soporte={correoDeSoporte()}
+        // Al integrar la pantalla de canales de VEN-9: "/ventas/canales" (y
+        // CANALES_URL del worker). Hasta entonces, sin botón que no lleva a ningún sitio.
+        reconectarUrl={null}
       />
 
       <PoliticaForm

@@ -552,11 +552,30 @@ export interface OutreachAlert {
   values: Readonly<Record<string, number>>;
 }
 
+/**
+ * Dónde está la tasa de rebotes respecto del aviso, con la misma regla
+ * que evaluateOutreachAlerts, para que «Salud de hoy» diga por qué una
+ * tasa alta todavía no avisa (1 de 4 es un 25 %, pero con menos de
+ * BOUNCE_MIN_ATTEMPTS envíos no dice nada):
+ *   · 'no_data'  ningún correo enviado en la ventana;
+ *   · 'too_few'  menos de BOUNCE_MIN_ATTEMPTS: no se avisa todavía;
+ *   · 'over'     sobre BOUNCE_RATE_THRESHOLD: avisa;
+ *   · 'under'    por debajo: todo en orden.
+ */
+export type BounceRateStatus = 'no_data' | 'too_few' | 'over' | 'under';
+
+export function bounceRateStatus(input: { emailsSent: number; hardBounces: number }): BounceRateStatus {
+  if (input.emailsSent <= 0) return 'no_data';
+  if (input.emailsSent < BOUNCE_MIN_ATTEMPTS) return 'too_few';
+  const duros = Math.min(input.hardBounces, input.emailsSent);
+  return duros / input.emailsSent > BOUNCE_RATE_THRESHOLD ? 'over' : 'under';
+}
+
 export function evaluateOutreachAlerts(input: AlertInput): OutreachAlert[] {
   const { health } = input;
   const alertas: OutreachAlert[] = [];
   const duros = Math.min(input.hardBounces, input.emailsSent);
-  if (input.emailsSent >= BOUNCE_MIN_ATTEMPTS && duros / input.emailsSent > BOUNCE_RATE_THRESHOLD) {
+  if (bounceRateStatus(input) === 'over') {
     alertas.push({
       kind: 'bounce_rate',
       severity: 'critical',

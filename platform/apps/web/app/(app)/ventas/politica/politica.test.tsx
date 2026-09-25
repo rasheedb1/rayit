@@ -48,7 +48,7 @@ import { apagarEnvio, encenderEnvio, guardarPolitica } from "./actions";
 import { calentamientoDe, PoliticaForm } from "./form";
 import { Interruptor } from "./interruptor";
 import { MESSAGES } from "./messages";
-import { Salud } from "./salud";
+import { Salud, motivoCaida } from "./salud";
 import { formatterFor } from "@/lib/format";
 
 const t = MESSAGES;
@@ -294,7 +294,7 @@ describe("«Salud de hoy»: la cuenta caída", () => {
   const counts = { emailsSent: 3, hardBounces: 0, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: 0 };
   const caida = {
     id: "c1", channel: "linkedin" as const, name: "Laura · Cocina fácil", status: "needs_reconnect" as const,
-    lastError: "Unipile: la sesión de LinkedIn expiró.", lastErrorAt: "2026-09-22T14:00:00Z",
+    lastError: "unipile_status:CREDENTIALS", lastErrorAt: "2026-09-22T14:00:00Z",
   };
 
   it("la nota dice CUÁL es, y la lista de #cuentas dice qué pasó y qué hacer (adonde lleva la alerta)", () => {
@@ -304,13 +304,16 @@ describe("«Salud de hoy»: la cuenta caída", () => {
     expect(screen.getAllByText("LinkedIn: Laura · Cocina fácil").length).toBeGreaterThan(0);
     const cuentas = container.querySelector("#cuentas");
     expect(cuentas).not.toBeNull();
-    expect(within(cuentas as HTMLElement).getByText(caida.lastError)).toBeInTheDocument();
+    // El código se traduce; nunca se enseña crudo.
+    expect(within(cuentas as HTMLElement).getByText("LinkedIn cerró la sesión.")).toBeInTheDocument();
+    expect(cuentas?.textContent).not.toMatch(/unipile_status|CREDENTIALS/);
     expect(within(cuentas as HTMLElement).getByText(t.salud.caidas.estado.needs_reconnect)).toBeInTheDocument();
     expect(within(cuentas as HTMLElement).getByText(t.salud.caidas.paso.otro)).toBeInTheDocument();
     // Ningún enlace a una pantalla que no resuelve nada.
     expect(within(cuentas as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
-    // Y dónde se hace mientras no está la pantalla de canales: sin SUPPORT_EMAIL, solo cuándo llega.
+    // Sin SUPPORT_EMAIL: que no se pierde nada, sin prometer una función futura.
     expect(within(cuentas as HTMLElement).getByText(t.salud.caidas.donde(null))).toBeInTheDocument();
+    expect(cuentas?.textContent).not.toMatch(/llega con|Ventas → Canales/);
   });
 
   it("con SUPPORT_EMAIL, la cuenta caída dice a quién escribir para reconectarla", () => {
@@ -318,7 +321,37 @@ describe("«Salud de hoy»: la cuenta caída", () => {
       <Salud avisos={[]} lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[caida]} f={formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" })} ahora={AHORA} soporte="ayuda@oncue.test" />,
     );
     const cuentas = container.querySelector("#cuentas") as HTMLElement;
-    expect(within(cuentas).getByText(/escríbenos a ayuda@oncue\.test y la hacemos contigo/)).toBeInTheDocument();
+    expect(within(cuentas).getByText(/Escríbenos a ayuda@oncue\.test y la reconectamos contigo/)).toBeInTheDocument();
+  });
+
+  it("last_error guarda códigos (VEN-9): 'missing_scopes' sale en frase; un código desconocido o la jerga del proveedor, nunca crudos", () => {
+    const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
+    const gmail = { ...caida, id: "c3", channel: "email" as const, name: "laura@gmail.com", lastError: "missing_scopes" };
+    const { container } = render(
+      <Salud avisos={[]} lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[gmail]} f={f} ahora={AHORA} />,
+    );
+    const cuentas = container.querySelector("#cuentas") as HTMLElement;
+    expect(within(cuentas).getByText(t.salud.caidas.motivos.missing_scopes!)).toBeInTheDocument();
+    expect(cuentas.textContent).not.toMatch(/missing_scopes/);
+    expect(motivoCaida("unipile_gone", "Instagram")).toBe("Instagram ya no reconoce esta cuenta.");
+    expect(motivoCaida("webhooks_missing", "LinkedIn")).toBe(t.salud.caidas.motivos.webhooks_missing);
+    expect(motivoCaida("algo_nuevo", "Gmail")).toBe(t.salud.caidas.sinDetalle);
+    expect(motivoCaida("Unipile: la sesión expiró (CREDENTIALS).", "LinkedIn")).toBe(t.salud.caidas.sinDetalle);
+    expect(motivoCaida("toString", "Gmail")).toBe(t.salud.caidas.sinDetalle);
+    expect(motivoCaida(null, "Gmail")).toBe(t.salud.caidas.sinDetalle);
+  });
+
+  it("con la pantalla de canales (reconectarUrl), cada cuenta lleva su botón «Reconectar» y sobra la línea de mientras tanto", () => {
+    const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
+    const { container } = render(
+      <Salud avisos={[]} lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[caida]} f={f} ahora={AHORA}
+        reconectarUrl="/ventas/canales" />,
+    );
+    const cuentas = container.querySelector("#cuentas") as HTMLElement;
+    const boton = within(cuentas).getByRole("link", { name: t.salud.caidas.reconectarCuenta("LinkedIn: Laura · Cocina fácil") });
+    expect(boton).toHaveAttribute("href", "/ventas/canales");
+    expect(boton).toHaveTextContent(t.salud.caidas.reconectar);
+    expect(within(cuentas).queryByText(t.salud.caidas.donde(null))).not.toBeInTheDocument();
   });
 
   it("sin cuentas caídas, «Todas conectadas» y nada más", () => {
@@ -385,7 +418,7 @@ describe("ronda 4", () => {
     expect(t.salud.rebotes.note("2", "40", 2)).toBe("2 de 40 no existen");
     render(<Salud avisos={[]} lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />);
     expect(screen.getByText("1 atascado")).toBeInTheDocument();
-    expect(screen.getByText("1 de 40 no existe")).toBeInTheDocument();
+    expect(screen.getByText(/^1 de 40 no existe/)).toBeInTheDocument();
   });
 
   it("los avisos del día se ven arriba de «Salud de hoy», urgentes en rojo, con su enlace; sin avisos, «Nada que revisar hoy»", () => {
@@ -408,7 +441,10 @@ describe("ronda 4", () => {
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent(t.salud.avisos.severidad.critical);
     expect(items[0]).toHaveTextContent("Una cuenta de envío necesita atención");
-    expect(within(items[0]!).getByRole("link", { name: t.salud.avisos.ver })).toHaveAttribute("href", "/ventas/politica#cuentas");
+    // El enlace dice adónde lleva, y es solo el ancla: la misma página, sin recargar.
+    const enlace = within(items[0]!).getByRole("link", { name: t.salud.avisos.verPor.account_down });
+    expect(enlace).toHaveAttribute("href", "#cuentas");
+    expect(enlace).toHaveAccessibleDescription("Una cuenta de envío necesita atención");
     expect(items[1]).toHaveTextContent(t.salud.avisos.severidad.warning);
     expect(within(items[1]!).queryByRole("link")).toBeNull();
     unmount();
@@ -468,6 +504,44 @@ describe("ronda 4", () => {
     expect(within(tabla).getByText(f.time("2026-09-23T13:55:00Z"))).toBeInTheDocument();
     expect(within(tabla).getByText("21 sep")).toBeInTheDocument();
     expect(tabla.textContent).not.toMatch(/de septiembre de 2026/);
+  });
+
+  it("en el móvil los rebotes van en una lista: la dirección y debajo el tipo, la fecha y lo que dijo el servidor", () => {
+    const rebotes = [
+      { id: "b1", recipientAddress: "natalia.velez@nutrive.test", kind: "hard" as const, reason: "550 5.1.1 no existe", detectedAt: "2026-09-23T13:55:00Z" },
+    ];
+    render(<Salud avisos={[]} lectura={LEIDA} health={health} counts={counts} rebotes={rebotes} caidas={[]} f={f} ahora={AHORA} />);
+    const lista = screen.getByRole("list", { name: t.salud.rebotesCaption });
+    // Oculta desde sm (la tabla se ve ahí), y la tabla oculta por debajo.
+    expect(lista).toHaveClass("sm:hidden");
+    expect(screen.getByRole("table", { name: t.salud.rebotesCaption }).closest("div.hidden")).toHaveClass("sm:block");
+    const [fila] = within(lista).getAllByRole("listitem");
+    expect(fila).toHaveTextContent("natalia.velez@nutrive.test");
+    expect(fila).toHaveTextContent(t.salud.tipos.hard);
+    expect(within(fila!).getByText(f.time("2026-09-23T13:55:00Z"))).toBeInTheDocument();
+    expect(fila).toHaveTextContent("550 5.1.1 no existe");
+  });
+
+  it("sin rebotes, un solo «Ningún rebote» (ni lista ni tabla)", () => {
+    render(<Salud avisos={[]} lectura={LEIDA} health={health} counts={counts} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />);
+    expect(screen.getAllByText(t.salud.sinRebotes.title)).toHaveLength(1);
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("la nota de rebotes dice por qué una tasa alta no avisa con pocos envíos, y si pasa del umbral", () => {
+    const nota = (emailsSent: number, hardBounces: number) => {
+      const { unmount } = render(
+        <Salud avisos={[]} lectura={LEIDA} health={health} f={f} ahora={AHORA} rebotes={[]} caidas={[]}
+          counts={{ emailsSent, hardBounces, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: hardBounces / emailsSent }} />,
+      );
+      const texto = screen.getByText(new RegExp(`^${hardBounces} de ${emailsSent} no exist`)).textContent;
+      unmount();
+      return texto;
+    };
+    // 1 de 4 es un 25 %, pero con menos de 10 envíos no se avisa todavía: la nota lo dice.
+    expect(nota(4, 1)).toBe(`1 de 4 no existe · ${t.salud.rebotes.umbral.pocos("10")}`);
+    expect(nota(40, 1)).toBe(`1 de 40 no existe · ${t.salud.rebotes.umbral.bajo(f.pct(0.05, 0))}`);
+    expect(nota(20, 2)).toBe(`2 de 20 no existen · ${t.salud.rebotes.umbral.sobre(f.pct(0.05, 0))}`);
   });
 
   it("la rampa de calentamiento se pinta con el LineChart del kit, un punto por día", () => {

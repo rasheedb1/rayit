@@ -94,3 +94,10 @@ SELECT 'g_rebotes_leidos' AS check_id, a.bounces_read_at,
        a.bounces_read_at IS NOT NULL AND a.bounces_read_at > now() - interval '2 hours' AS ok
   FROM outreach_channel_account a
  WHERE a.id = '00000005-0000-4000-8000-0000000ac001';
+
+-- (h) El LinkedIn caído guarda un código, no la jerga del proveedor:
+--     «Salud de hoy» lo traduce («LinkedIn cerró la sesión.»).
+SELECT 'h_motivo_como_codigo' AS check_id, a.last_error,
+       a.last_error = 'unipile_status:CREDENTIALS' AS ok
+  FROM outreach_channel_account a
+ WHERE a.id = '00000005-0000-4000-8000-0000000ac002';

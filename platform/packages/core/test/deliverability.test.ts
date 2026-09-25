@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import {
-  BOUNCE_MIN_ATTEMPTS, buildEmailFooter, complianceReadiness, createOptoutToken, detectBounce, evaluateOutreachAlerts,
+  BOUNCE_MIN_ATTEMPTS, bounceRateStatus, buildEmailFooter, complianceReadiness, createOptoutToken, detectBounce, evaluateOutreachAlerts,
   footerTextsFor, listUnsubscribeHeaders, looksLikeOptoutToken, maskEmailAddress, oneClickUnsubscribeUrl, optoutTokenHash,
   channelAccountLabel, optoutUrl, URGENT_ALERT_KINDS, warmupCurve, warmupDailyLimit, warmupSeries, warmupDay, WARMUP_START_LIMIT, type AlertInput, type HealthForAlerts,
 } from '../src/outreach/deliverability.ts';
@@ -458,4 +458,20 @@ test('el nombre de una cuenta no repite el canal si ya lo lleva', () => {
   assert.equal(channelAccountLabel('LinkedIn', 'Laura · Cocina fácil (LinkedIn)'), 'Laura · Cocina fácil (LinkedIn)');
   assert.equal(channelAccountLabel('Gmail', 'laura@gmail.com'), 'Gmail: laura@gmail.com');
   assert.equal(channelAccountLabel('Instagram', ''), 'Instagram');
+});
+
+test('bounceRateStatus: la misma regla que el aviso, para que «Salud de hoy» diga por qué 1 de 4 no avisa', () => {
+  assert.equal(bounceRateStatus({ emailsSent: 0, hardBounces: 0 }), 'no_data');
+  assert.equal(bounceRateStatus({ emailsSent: 4, hardBounces: 1 }), 'too_few', 'un 25 %, pero con 4 envíos no se avisa');
+  assert.equal(bounceRateStatus({ emailsSent: BOUNCE_MIN_ATTEMPTS - 1, hardBounces: 9 }), 'too_few');
+  assert.equal(bounceRateStatus({ emailsSent: 20, hardBounces: 1 }), 'under', 'el 5 % exacto no es «sobre»');
+  assert.equal(bounceRateStatus({ emailsSent: 20, hardBounces: 2 }), 'over');
+  // Y coincide con evaluateOutreachAlerts en cada caso.
+  for (const [emailsSent, hardBounces] of [[4, 1], [9, 9], [10, 1], [20, 2], [40, 1], [10, 30]] as const) {
+    const avisa = evaluateOutreachAlerts({
+      health: { enabled: true, queue: { stuck: 0 }, window: { sent: emailsSent }, accountsDown: 0, llm: { spentToday: 0, dailyCap: 5 } },
+      emailsSent, hardBounces, dueToSend: 0,
+    }).some((a) => a.kind === 'bounce_rate');
+    assert.equal(bounceRateStatus({ emailsSent, hardBounces }) === 'over', avisa, `${hardBounces} de ${emailsSent}`);
+  }
 });

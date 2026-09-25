@@ -19,7 +19,7 @@ import type { OutreachAlertKind } from '@mc/core/outreach/deliverability';
  * Adónde lleva cada alerta. Todas a /ventas/politica, que trae el bloque
  * «Salud de hoy» (outbound_health y los últimos rebotes) y el
  * presupuesto. account_down lleva a la lista de cuentas caídas de esa
- * misma pantalla (#cuentas: cuál es, qué dijo el proveedor y qué hacer),
+ * misma pantalla (#cuentas: cuál es, qué pasó y qué hacer),
  * y a /ventas/canales cuando VEN-9 integre esa pantalla, donde se
  * reconecta: se cambia AQUÍ (CANALES_URL) y en nada más.
  */
@@ -120,9 +120,9 @@ export const ALERT_TEXTS_ES: AlertTexts = {
       },
       body: {
         by: 'accountsDown',
-        one: 'No sale nada por {accounts} hasta que se reconecte: lo de ese canal espera en la cola. En tu política de envío ves qué dijo el proveedor y qué hacer.',
+        one: 'No sale nada por {accounts} hasta que se reconecte: lo de ese canal espera en la cola. En tu política de envío ves qué pasó y qué hacer.',
         other:
-          'No sale nada por {accounts} hasta que se reconecten: lo de esos canales espera en la cola. En tu política de envío ves qué dijo cada proveedor y qué hacer.',
+          'No sale nada por {accounts} hasta que se reconecten: lo de esos canales espera en la cola. En tu política de envío ves qué le pasa a cada una y qué hacer.',
       },
     },
     llm_budget: {
@@ -189,9 +189,9 @@ export const ALERT_TEXTS_EN: AlertTexts = {
       title: { by: 'accountsDown', one: 'A sending account needs attention', other: 'Some sending accounts need attention' },
       body: {
         by: 'accountsDown',
-        one: 'Nothing goes out through {accounts} until it reconnects: messages for that channel wait in the queue. Your sending policy shows what the provider said and what to do.',
+        one: 'Nothing goes out through {accounts} until it reconnects: messages for that channel wait in the queue. Your sending policy shows what happened and what to do.',
         other:
-          'Nothing goes out through {accounts} until they reconnect: messages for those channels wait in the queue. Your sending policy shows what each provider said and what to do.',
+          'Nothing goes out through {accounts} until they reconnect: messages for those channels wait in the queue. Your sending policy shows what happened to each one and what to do.',
       },
     },
     llm_budget: {

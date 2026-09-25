@@ -186,6 +186,17 @@ UPDATE outreach_channel_account
    SET bounces_read_at = now() - interval '20 minutes'
  WHERE id = '00000005-0000-4000-8000-0000000ac001';
 
+-- El LinkedIn caído de 0005 guardaba una frase con la jerga del proveedor
+-- («Unipile: … (CREDENTIALS)»), y «Salud de hoy» la enseñaba tal cual.
+-- En last_error solo van CÓDIGOS (CHANNEL_ERROR_CODES de VEN-9, y
+-- 'unipile_status:<X>' para lo que Unipile dice de una sesión): la
+-- pantalla los traduce en el idioma del espacio. Solo si todavía tiene la
+-- frase de 0005: lo que el keepalive haya escrito después se respeta.
+UPDATE outreach_channel_account
+   SET last_error = 'unipile_status:CREDENTIALS'
+ WHERE id = '00000005-0000-4000-8000-0000000ac002'
+   AND last_error LIKE 'Unipile:%';
+
 
 -- =====================================================================
 -- 3 · La política de la demo, con calentamiento que se vea (r4)
@@ -219,7 +230,7 @@ VALUES
   ('00000006-0000-4000-8000-0000000a1001', '00000002-0000-4000-8000-000000000001', NULL, 'outreach_account_down',
    'critical', 'Una cuenta de envío necesita atención',
    'No sale nada por Laura · Cocina fácil (LinkedIn) hasta que se reconecte: lo de ese canal espera en la '
-   'cola. En tu política de envío ves qué dijo el proveedor y qué hacer.',
+   'cola. En tu política de envío ves qué pasó y qué hacer.',
    '/ventas/politica#cuentas', now(), now())
 ON CONFLICT (id) DO UPDATE SET body_es = EXCLUDED.body_es, created_at = now(), emailed_at = now(), read_at = NULL,
                                dismissed_at = NULL;
