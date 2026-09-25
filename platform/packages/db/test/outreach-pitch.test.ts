@@ -14,14 +14,19 @@
  *     negocio tiene que ser de la empresa; el enlace del media kit lo arma
  *     el servidor con el origen de la app; la marca en mayúsculas no es
  *     gritar; pedir un borrador a la IA deja la petición para el worker;
- *     y en una agencia cada creador cita solo sus campañas.
+ *     y en una agencia cada creador cita solo sus campañas;
+ *   · (ronda 3) las variables no se hornean al guardar (cambia la persona
+ *     y cambia el saludo); savePitch dice si el envío está encendido; la
+ *     baja de este espacio también frena la redacción; y la demo
+ *     embebida redacta en el proceso, por el mismo camino que el worker.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { SalesClaim } from '@mc/core/outreach/claims';
 import { preflight } from '@mc/core/outreach/preflight';
 import { renderTemplate } from '@mc/core/outreach/render';
-import { loadPitchComposer, outreachWriterStatus, requestPitchDraft, savePitch } from '../src/queries/outreach.ts';
+import { createFakeGenerator, createFakeJudge } from '@mc/core/outreach/fake';
+import { loadPitchComposer, outreachWriterStatus, redactRequestedInProcess, requestPitchDraft, savePitch } from '../src/queries/outreach.ts';
 import { CAMPAIGN_CAFE_ALMA, openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const CAFE_ALMA = '00000002-0000-4000-8000-0000000000e1';
@@ -195,6 +200,35 @@ test('savePitch dice si el envío está encendido; la función de la redacción 
     { ok: false, code: 'opted_out' },
   );
   await t.admin(`DELETE FROM outbound_workspace_optout WHERE workspace_id = '${WORKSPACE_LAURA}' AND email = 'valentina@cafealma.co'`);
+});
+
+test('la demo embebida (sin worker) redacta en el proceso lo que pidió la persona, por el mismo camino y con su registro', async () => {
+  const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, subject: null, body: '', intent: 'draft', now: new Date() }),
+  );
+  assert.ok(r.ok, JSON.stringify(r));
+  const touchId = r.ok ? r.touchId : '';
+  assert.deepEqual(
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => requestPitchDraft(tx, { touchId, hint: null, instructions: 'Cercano.', userId: null })),
+    { ok: true },
+  );
+  const hecho = await t.db.asWorker((tx) =>
+    redactRequestedInProcess(tx, { touchId, generator: createFakeGenerator(), judge: createFakeJudge(), now: new Date() }),
+  );
+  assert.deepEqual(hecho, { status: 'returned' });
+  const touch = (await rows<{ status: string; body: string }>(`SELECT status, body FROM outbound_touch WHERE id = '${touchId}'`))[0]!;
+  assert.equal(touch.status, 'draft', 'vuelve a la persona, no se programa solo');
+  assert.ok(touch.body.length > 0 && !touch.body.includes('[claim:'), touch.body);
+  const g = (await rows<{ stage: string; judge_note: string | null; review_run: number | null }>(
+    `SELECT stage, judge_note, review_run FROM outbound_generation WHERE touch_id = '${touchId}'`,
+  ))[0]!;
+  assert.deepEqual([g.stage, g.review_run], ['reviewed', 1]);
+  assert.ok(g.judge_note);
+  // Otra vez sin pedido: no hay nada que redactar.
+  assert.deepEqual(
+    await t.db.asWorker((tx) => redactRequestedInProcess(tx, { touchId, generator: createFakeGenerator(), judge: createFakeJudge(), now: new Date() })),
+    { status: 'skipped', code: 'not_requested' },
+  );
 });
 
 test('el negocio tiene que ser de la empresa; el enlace del media kit lo arma el servidor con el origen de la app', async () => {
