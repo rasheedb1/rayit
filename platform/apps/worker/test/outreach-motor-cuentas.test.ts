@@ -6,7 +6,8 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FakeGmail, FakeUnipile, InMemorySecretStore } from '@mc/connectors';
+import { InMemorySecretStore } from '@mc/connectors';
+import { FakeGmail, FakeUnipile } from '@mc/connectors/testing';
 import { enrollContacts } from '@mc/db/queries/outreach';
 import { buildChannels } from '../src/jobs/ventas/canales/index.ts';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';

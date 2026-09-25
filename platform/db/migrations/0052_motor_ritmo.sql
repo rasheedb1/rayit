@@ -31,7 +31,9 @@
 -- ---------------------------------------------------------------------
 -- 1 · El ritmo por hora de cada cuenta
 -- ---------------------------------------------------------------------
--- Dos columnas nuevas al final de la vista de 0040 (lo demás, igual):
+-- Dos columnas nuevas al final de la vista de 0045 (lo demás, igual; la
+-- integración de la fase 4 le devolvió weekly_limited_by, que 0045 de
+-- VEN-9 añadió después de effective_weekly):
 --
 --   effective_hourly   cuántos mensajes puede sacar la cuenta en una hora
 --                      (la última hora corrida, no la hora del reloj):
@@ -78,6 +80,7 @@ semana AS (
 ),
 rige AS (
   SELECT s.*,
+         CASE WHEN s.policy_daily IS NOT NULL AND s.policy_daily < s.provider_daily THEN 'policy' ELSE 'provider' END AS daily_by,
          least(coalesce(s.daily_cap, s.max_daily), s.max_daily) AS effective_daily,
          least(coalesce(s.weekly_cap, s.max_weekly), s.max_weekly) AS effective_weekly
     FROM semana s
@@ -91,9 +94,11 @@ SELECT r.id AS channel_account_id,
        r.policy_daily,
        r.max_daily,
        r.max_weekly,
-       CASE WHEN r.policy_daily IS NOT NULL AND r.policy_daily < r.provider_daily THEN 'policy' ELSE 'provider' END AS daily_limited_by,
+       r.daily_by AS daily_limited_by,
        r.effective_daily,
        r.effective_weekly,
+       -- Si el semanal sale de 7 × el diario, lo fija quien fija el diario; si no, el proveedor (0045).
+       CASE WHEN r.max_daily * 7 < r.provider_weekly THEN r.daily_by ELSE 'provider' END AS weekly_limited_by,
        greatest(1, CASE r.channel
                      WHEN 'email'    THEN ceil(r.effective_daily / 4.0)::int
                      WHEN 'linkedin' THEN least(15, r.effective_daily)
@@ -104,9 +109,9 @@ SELECT r.id AS channel_account_id,
 
 REVOKE INSERT, UPDATE, DELETE ON outreach_channel_account_limits FROM mc_app;
 COMMENT ON VIEW outreach_channel_account_limits IS
-  'Los límites de cada cuenta de canal (0040, 0052): el techo del proveedor, el de la política, lo que la persona puede '
-  'poner, lo que rige hoy y el ritmo por hora (effective_hourly, min_gap_seconds). La pantalla de canales y el '
-  'despachador leen de aquí; nadie recalcula.';
+  'Los límites de cada cuenta de canal (0040, 0045, 0052): el techo del proveedor, el de la política, lo que la persona '
+  'puede poner, lo que rige hoy, quién fija cada máximo y el ritmo por hora (effective_hourly, min_gap_seconds). La '
+  'pantalla de canales y el despachador leen de aquí; nadie recalcula.';
 
 -- ---------------------------------------------------------------------
 -- 2 · El día de la plaza de un intento ambiguo

@@ -7,7 +7,7 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FakeUnipile } from '@mc/connectors';
+import { FakeUnipile } from '@mc/connectors/testing';
 import { holdReasonText } from '@mc/core/outreach/messages';
 import { enrollContacts, resolveUnconfirmedTouch, type UnconfirmedOutcome } from '@mc/db/queries/outreach';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';

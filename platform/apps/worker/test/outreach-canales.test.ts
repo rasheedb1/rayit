@@ -20,9 +20,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  FakeGmail, FakeUnipile, GmailClient, InMemorySecretStore, normalizeGmailMessage, NULL_OUTREACH_CALL_LOG,
-  type FetchLike, type GmailMessage,
+  GmailClient, InMemorySecretStore, normalizeGmailMessage, NULL_OUTREACH_CALL_LOG, type FetchLike, type GmailMessage,
 } from '@mc/connectors';
+import { FakeGmail, FakeUnipile } from '@mc/connectors/testing';
 import { decideBeforeSend, type OpenThread, type SendContext } from '@mc/db/queries/outreach';
 import { appUrlFrom, buildChannels } from '../src/jobs/ventas/canales/index.ts';
 import { ConfigError } from '../src/runner/config.ts';

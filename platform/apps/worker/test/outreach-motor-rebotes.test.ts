@@ -7,7 +7,8 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { FakeGmail, InMemorySecretStore, type GmailMessage } from '@mc/connectors';
+import { InMemorySecretStore, type GmailMessage } from '@mc/connectors';
+import { FakeGmail } from '@mc/connectors/testing';
 import { enrollContacts } from '@mc/db/queries/outreach';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';
 import { GmailChannel } from '../src/jobs/ventas/canales/gmail.ts';
