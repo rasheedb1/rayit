@@ -20,11 +20,14 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { SalesClaim } from '@mc/core/outreach/claims';
 import { preflight } from '@mc/core/outreach/preflight';
+import { renderTemplate } from '@mc/core/outreach/render';
 import { loadPitchComposer, outreachWriterStatus, requestPitchDraft, savePitch } from '../src/queries/outreach.ts';
 import { CAMPAIGN_CAFE_ALMA, openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const CAFE_ALMA = '00000002-0000-4000-8000-0000000000e1';
 const CAMILO = '00000002-0000-4000-8000-0000000c0004';
+/** La otra persona de Café Alma en el seed. */
+const VALENTINA = '00000002-0000-4000-8000-0000000c0003';
 const GRANOS = '00000002-0000-4000-8000-0000000000e6';
 const MATEO_BAJA = '00000002-0000-4000-8000-0000000c0010';
 const OTRO_WS = '00000612-0000-4000-8000-000000000001';
@@ -133,10 +136,13 @@ test('ida y vuelta: guardar un borrador a mano y reabrirlo conserva las marcas, 
   const again = await compose();
   assert.equal(again.draft?.touchId, r.touchId);
   assert.ok(again.draft!.body.includes(`${mediana.display} [claim:${mediana.id}]`), again.draft!.body);
+  // Y sus variables, tal cual las escribió (0058): el editor las rellena según a quién le escribe.
+  assert.ok(again.draft!.body.startsWith('Hola {{first_name}},'), again.draft!.body);
   assert.equal(again.draft!.pending, null);
+  assert.equal(again.draft!.generationStamp, null, 'lo guardó una persona: no hay sello de la IA');
   const pf = preflight({
-    stepType: 'email', subject: again.draft!.subject, body: again.draft!.body, claims: again.variants['']!.claims, firstTouch: true,
-    allowedUppercase: ['Café Alma'],
+    stepType: 'email', subject: again.draft!.subject, body: renderTemplate(again.draft!.body, { first_name: 'Camilo' })!,
+    claims: again.variants['']!.claims, firstTouch: true, allowedUppercase: ['Café Alma'],
   });
   assert.ok(pf.ok, JSON.stringify(pf.issues));
   // Y programarlo desde lo reabierto funciona sin volver a insertar ninguna cifra.
@@ -144,6 +150,51 @@ test('ida y vuelta: guardar un borrador a mano y reabrirlo conserva las marcas, 
     savePitch(tx, { ...base, touchId: r.touchId, subject: again.draft!.subject, body: again.draft!.body, intent: 'schedule', now: new Date() }),
   );
   assert.ok(prog.ok && prog.status === 'scheduled', JSON.stringify(prog));
+});
+
+test('las variables no se hornean: si el borrador cambia de persona, el saludo cambia con ella', async () => {
+  const c = await compose();
+  const mediana = c.variants['']!.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
+  const body = pitchWith(mediana, mediana.display);
+  const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, subject: 'Una idea para {{company}}', body, intent: 'draft', now: new Date() }),
+  );
+  assert.ok(r.ok, JSON.stringify(r));
+  const touchId = r.ok ? r.touchId : '';
+  const saved = async () =>
+    (await rows<{ subject: string; body: string }>(`SELECT subject, body FROM outbound_touch WHERE id = '${touchId}'`))[0]!;
+  assert.ok((await saved()).body.startsWith('Hola Camilo,'));
+  assert.equal((await saved()).subject, 'Una idea para Café Alma');
+  // La persona reabre el borrador (con sus variables) y lo manda a Valentina: el saludo es para Valentina.
+  const reabierto = (await compose()).draft!;
+  assert.equal(reabierto.touchId, touchId);
+  const otra = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, contactId: VALENTINA, touchId, subject: reabierto.subject, body: reabierto.body, intent: 'draft', now: new Date() }),
+  );
+  assert.ok(otra.ok, JSON.stringify(otra));
+  assert.ok((await saved()).body.startsWith('Hola Valentina,'), (await saved()).body);
+  const deNuevo = (await compose()).draft!;
+  assert.deepEqual([deNuevo.touchId, deNuevo.contactId, deNuevo.body.startsWith('Hola {{first_name}},')], [touchId, VALENTINA, true]);
+});
+
+test('savePitch dice si el envío está encendido; la función de la redacción mira también la baja de este espacio', async () => {
+  const c = await compose();
+  const mediana = c.variants['']!.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
+  const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, contactId: VALENTINA, subject: 'Una idea para Café Alma', body: pitchWith(mediana, mediana.display), intent: 'draft', now: new Date() }),
+  );
+  assert.ok(r.ok && typeof r.sendingEnabled === 'boolean', JSON.stringify(r));
+  assert.equal(r.ok && r.sendingEnabled, c.policy.enabled);
+  // Valentina pulsa el enlace de baja de un correo de este espacio: ya no se le redacta nada (0058), aunque la llamen directo.
+  await t.admin(
+    `INSERT INTO outbound_workspace_optout (workspace_id, email, token_hash) VALUES ('${WORKSPACE_LAURA}', 'valentina@cafealma.co', repeat('b', 64))`,
+  );
+  const touchId = r.ok ? r.touchId : '';
+  assert.deepEqual(
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => requestPitchDraft(tx, { touchId, hint: null, instructions: null, userId: null })),
+    { ok: false, code: 'opted_out' },
+  );
+  await t.admin(`DELETE FROM outbound_workspace_optout WHERE workspace_id = '${WORKSPACE_LAURA}' AND email = 'valentina@cafealma.co'`);
 });
 
 test('el negocio tiene que ser de la empresa; el enlace del media kit lo arma el servidor con el origen de la app', async () => {
