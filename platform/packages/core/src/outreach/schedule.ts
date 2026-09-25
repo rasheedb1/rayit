@@ -182,15 +182,16 @@ export function windowSeconds(window: SendWindow): { start: number; end: number 
 }
 
 /**
- * Encierra una hora del día (segundos) en la ventana [start, end): lo que
- * cae antes del inicio va al inicio, y lo que pasa del final da la vuelta
- * desde el inicio (así la dispersión no amontona todo al cierre).
+ * Encierra una hora del día (segundos) en la ventana [start, end), sin dar
+ * la vuelta (r2): antes de abrir → la apertura; dentro → tal cual; al
+ * cierre o después → la apertura. Quien llama con una hora pasada del
+ * cierre ya eligió OTRO día (nextBusinessSlot, shiftFollowingSteps), y
+ * allí la apertura es lo primero que hay. La hora de un paso, que sí puede
+ * caer el mismo día, la calcula stepClock.
  */
 export function clampToWindow(seconds: number, window: SendWindow): number {
   const { start, end } = windowSeconds(window);
-  if (seconds < start) return start;
-  if (seconds < end) return seconds;
-  return start + ((seconds - start) % (end - start));
+  return seconds >= start && seconds < end ? seconds : start;
 }
 
 /** ¿Está `at` dentro de la ventana de un día hábil, en la zona? */
@@ -229,17 +230,36 @@ export interface PlanOptions {
 export const MIN_STEP_GAP_MS = 5 * 60 * 1000;
 
 /**
- * La hora local de un paso, ya dispersa y dentro de la ventana, en
- * segundos desde la medianoche. Una hora anterior a la ventana arranca en
- * su inicio y se dispersa desde ahí.
+ * La hora local de un paso, ya dispersa y dentro de la ventana (r2):
+ *   · la dispersión va HACIA DELANTE desde la hora elegida y se queda
+ *     dentro del día: [base, min(base + dispersión, cierre)). Un paso de
+ *     las 16:30 con 40 minutos sale entre las 16:30 y las 17:00, nunca a
+ *     las 09:00 del mismo día (antes que otro paso configurado más
+ *     temprano);
+ *   · una hora anterior a la apertura arranca en la apertura;
+ *   · una hora en el cierre o después no cabe ese día: `nextDay`, y sale
+ *     al siguiente día hábil desde la apertura.
  */
+export function stepClock(
+  step: Pick<PlanStep, 'id' | 'scheduledTime'>,
+  opts: Pick<PlanOptions, 'seed' | 'window' | 'spreadMinutes'>,
+): { seconds: number; nextDay: boolean } {
+  const spreadMinutes = opts.spreadMinutes ?? DEFAULT_SPREAD_MINUTES;
+  if (!Number.isFinite(spreadMinutes) || spreadMinutes < 0) throw new RangeError(`Dispersión inválida (${spreadMinutes}).`);
+  const { start, end } = windowSeconds(opts.window ?? DEFAULT_SEND_WINDOW);
+  const configured = parseClock(step.scheduledTime);
+  const nextDay = configured >= end;
+  const base = nextDay ? start : Math.max(configured, start);
+  const room = Math.min(spreadMinutes * 60, end - base);
+  return { seconds: base + Math.floor(seededUnit(`${opts.seed}:${step.id}`) * room), nextDay };
+}
+
+/** Los segundos de stepClock (el día lo decide planSteps). */
 export function stepClockSeconds(
   step: Pick<PlanStep, 'id' | 'scheduledTime'>,
   opts: Pick<PlanOptions, 'seed' | 'window' | 'spreadMinutes'>,
 ): number {
-  const window = opts.window ?? DEFAULT_SEND_WINDOW;
-  const base = clampToWindow(parseClock(step.scheduledTime), window);
-  return clampToWindow(base + spreadSeconds(`${opts.seed}:${step.id}`, opts.spreadMinutes), window);
+  return stepClock(step, opts).seconds;
 }
 
 /**
@@ -256,16 +276,22 @@ export function planSteps(steps: readonly PlanStep[], opts: PlanOptions): Array<
   if (steps.length === 0) return [];
   const ordered = [...steps].sort((a, b) => a.dayOffset - b.dayOffset || a.orderInDay - b.orderInDay);
   const { date: today } = zonedParts(opts.enrolledAt, opts.timeZone);
+  const window = opts.window ?? DEFAULT_SEND_WINDOW;
+  const instantOf = (step: PlanStep, day0: LocalDate): number => {
+    const clock = stepClock(step, opts);
+    return zonedInstant(addBusinessDays(day0, step.dayOffset + (clock.nextDay ? 1 : 0)), clock.seconds, opts.timeZone).getTime();
+  };
   const first = ordered[0]!;
   let start = businessDayOnOrAfter(today);
-  const firstAt = zonedInstant(addBusinessDays(start, first.dayOffset), stepClockSeconds(first, opts), opts.timeZone);
-  if (firstAt.getTime() <= opts.enrolledAt.getTime()) start = nextBusinessDate(start);
+  if (instantOf(first, start) <= opts.enrolledAt.getTime()) start = nextBusinessDate(start);
 
   const out: Array<{ stepId: string; at: Date }> = [];
   let prev = opts.enrolledAt.getTime();
   for (const step of ordered) {
-    let at = zonedInstant(addBusinessDays(start, step.dayOffset), stepClockSeconds(step, opts), opts.timeZone).getTime();
-    if (at < prev + MIN_STEP_GAP_MS) at = prev + MIN_STEP_GAP_MS;
+    let at = instantOf(step, start);
+    // La separación mínima tampoco saca un paso de la ventana (r2): si no
+    // cabe ese día, a la siguiente apertura.
+    if (at < prev + MIN_STEP_GAP_MS) at = nextWindowSlot(new Date(prev + MIN_STEP_GAP_MS), opts.timeZone, window).getTime();
     out.push({ stepId: step.id, at: new Date(at) });
     prev = at;
   }
@@ -313,8 +339,11 @@ export function nextWindowSlot(
   if (isInsideWindow(at, timeZone, window)) return at;
   const { date, seconds } = zonedParts(at, timeZone);
   const day = isBusinessDay(date) && seconds < start ? date : nextBusinessDate(date);
-  const spread = opts.seed ? spreadSeconds(`${opts.seed}:opening`, opts.spreadMinutes ?? DEFAULT_OPENING_SPREAD_MINUTES) : 0;
-  return zonedInstant(day, clampToWindow(start + spread, window), timeZone);
+  // La dispersión de la apertura se queda dentro de la ventana, sin dar la vuelta.
+  const { end } = windowSeconds(window);
+  const spreadMinutes = opts.spreadMinutes ?? DEFAULT_OPENING_SPREAD_MINUTES;
+  const spread = opts.seed ? Math.floor(seededUnit(`${opts.seed}:opening`) * Math.min(spreadMinutes * 60, end - start)) : 0;
+  return zonedInstant(day, start + spread, timeZone);
 }
 
 /** Un paso que ya tiene hora y todavía no salió, para correrlo detrás de otro. */
@@ -353,7 +382,7 @@ export function shiftFollowingSteps(
   for (const s of ordered) {
     const { seconds } = zonedParts(s.at, timeZone);
     let at = zonedInstant(addBusinessDays(anchor, s.dayOffset - moved.dayOffset), clampToWindow(seconds, window), timeZone).getTime();
-    if (at < prev + MIN_STEP_GAP_MS) at = prev + MIN_STEP_GAP_MS;
+    if (at < prev + MIN_STEP_GAP_MS) at = nextWindowSlot(new Date(prev + MIN_STEP_GAP_MS), timeZone, window).getTime();
     if (at > s.at.getTime()) {
       out.push({ id: s.id, at: new Date(at) });
       prev = at;

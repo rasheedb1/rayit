@@ -90,6 +90,12 @@ test('el detector no toma por baja a una marca interesada (VEN-10 r2)', () => {
     '¿No me contactas el lunes?',
     'Perfecto, hablemos el jueves.\n\nSaludos,\nMarcela Ríos\nMarketing · Vitalé\nTo unsubscribe from our newsletter, click here.',
     'Sure, remove me from the CC and loop in Andrés.',
+    // Las cinco frases de negocio de la segunda revisión, tal cual.
+    'No me envíes la propuesta todavía',
+    'No nos mandes el contrato hasta que legal lo apruebe',
+    'Can we opt out of the exclusivity clause?',
+    'Please remove me from CC and loop in Ana',
+    'quiero darme de baja del newsletter pero seguir hablando contigo',
     // Y otros parecidos.
     'No me mandes el contrato todavía, lo reviso el lunes.',
     '¿Por qué no contactar a nuestra agencia? Ellos llevan la cuenta.',
@@ -111,6 +117,9 @@ test('el detector sí ve la baja en sus formas reales, y en la primera línea lo
     ['Gracias, pero no me contactes.', 'es_no_escribir'],
     ['No me vuelvas a mandar nada.', 'es_no_escribir'],
     ['Buenas. Por favor dar de baja este correo.', 'es_dar_de_baja'],
+    ['Denme de baja de su lista, gracias.', 'es_dar_de_baja'],
+    ['Quiero darme de baja de todos sus correos.', 'es_dar_de_baja'],
+    ['Queremos la baja del envío de correos', 'es_dar_de_baja'],
     ['No queremos que nos sigan escribiendo.', 'es_no_recibir'],
     ['Unsubscribe me, please.', 'en_unsubscribe'],
     ['unsubscribe\n\nSent from my iPhone', 'en_unsubscribe'],
