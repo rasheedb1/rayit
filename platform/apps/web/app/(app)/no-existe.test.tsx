@@ -36,6 +36,7 @@ import EditarSoloBorrador from "./cotizar/cotizaciones/[id]/editar/layout";
 import VistaPreviaExiste from "./cotizar/cotizaciones/[id]/vista/layout";
 import MediaKitExiste from "./cotizar/media-kit/[id]/(detalle)/layout";
 import EmpresaEnMiCrm, { generateMetadata as tituloEmpresa } from "./ventas/empresas/[id]/(ficha)/layout";
+import PitchDeEmpresaEnMiCrm from "./ventas/empresas/[id]/pitch/layout";
 
 vi.mock("next/navigation", async (original) => ({
   ...(await original<typeof import("next/navigation")>()),
@@ -108,6 +109,7 @@ describe("un detalle privado que no existe es un 404, con su esqueleto", () => {
     { carpeta: "cotizar/cotizaciones/[id]/vista", layout: () => VistaPreviaExiste({ children, params }) },
     { carpeta: "cotizar/media-kit/[id]/(detalle)", layout: () => MediaKitExiste({ children, params }) },
     { carpeta: "ventas/empresas/[id]/(ficha)", layout: () => EmpresaEnMiCrm({ children, params }) },
+    { carpeta: "ventas/empresas/[id]/pitch", layout: () => PitchDeEmpresaEnMiCrm({ children, params }) },
   ];
 
   for (const { carpeta, layout } of casos) {

@@ -1,5 +1,3 @@
-import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { holdReasonText, noticeLang } from "@mc/core/outreach/messages";
 import { loadPitchComposer } from "@mc/db/queries/outreach";
@@ -8,23 +6,17 @@ import { PageHeader } from "@/components/page-header";
 import { formatterFor } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { withWorkspace } from "../../../../_lib/db";
+import { withWorkspace } from "../../../_lib/db";
 import { EditorDePitch, type EditorData } from "./editor";
 import { PITCH } from "./messages";
 
 export const dynamic = "force-dynamic";
 
-export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
-  const { id } = await params;
-  const company = await withWorkspace((tx) => getCompany(tx, id));
-  return { title: company ? PITCH.metaTitle(company.name) : PITCH.eyebrow };
-}
-
 /**
  * «Redactar pitch» (VEN-6 dentro de VEN-12): el editor abre el último
  * borrador de la empresa —el que redactó el generador, con el origen de
- * cada cifra, o uno que la persona guardó— o uno vacío. El layout de la
- * ficha ya comprobó que la empresa está en el CRM del espacio (404 si no).
+ * cada cifra, o uno que la persona guardó— o uno vacío. El layout de al
+ * lado ya comprobó que la empresa está en el CRM del espacio (404 si no).
  *
  * La redacción con IA la hace el worker (outbound.generate y
  * outbound.review); aquí no se llama al modelo. Sin la llave de Anthropic
@@ -77,11 +69,6 @@ export default async function PitchPage({ params }: { params: Promise<{ id: stri
   return (
     <>
       <PageHeader eyebrow={PITCH.eyebrow} title={PITCH.title(company.name)} description={PITCH.description} />
-      <p className="-mt-5 mb-6 text-sm">
-        <Link href={`/ventas/empresas/${company.id}`} className="text-ink-2 underline underline-offset-4 hover:text-ink">
-          {PITCH.back}
-        </Link>
-      </p>
       <EditorDePitch data={editor} />
     </>
   );

@@ -16,7 +16,7 @@ import { savePitch, type SavePitchResult } from "@mc/db/queries/outreach";
 import { UUID_RE, formField as field, type ActionState } from "@/lib/forms";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { withWorkspace } from "../../../../_lib/db";
+import { withWorkspace } from "../../../_lib/db";
 import { PITCH } from "./messages";
 
 export interface PitchState extends ActionState {

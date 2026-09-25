@@ -13,7 +13,6 @@ export const PITCH = {
   title: (company: string) => `Pitch para ${company}`,
   description:
     "Un correo con cifras que salen de tu perfil. Cada cifra lleva su origen: si una no lo tiene, el correo no se puede programar.",
-  back: "Volver a la ficha",
 
   campos: {
     contacto: "Para",

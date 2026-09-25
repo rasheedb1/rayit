@@ -1,6 +1,6 @@
 "use client";
 
-import { FronteraDeError } from "../../../../../_lib/frontera";
+import { FronteraDeError } from "../../../../_lib/frontera";
 import { PITCH } from "./messages";
 
 /** La frontera del pitch: lo que no se pudo abrir es el editor de ESTA empresa, no su ficha. */
