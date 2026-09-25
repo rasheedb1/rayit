@@ -241,6 +241,27 @@ test('Gmail lee solo lo de la marca: ni lo enviado, ni lo conocido, ni rebotes, 
   assert.match(avisos.join(' '), /sin fecha/);
 });
 
+test('Gmail corta la lectura de un hilo cuando el job se apaga: la señal llega hasta la petición', async () => {
+  const signals: Array<AbortSignal | null | undefined> = [];
+  const fetch: FetchLike = async (_url, init) => {
+    signals.push(init?.signal);
+    await new Promise((_resolve, reject) => {
+      const s = init?.signal;
+      if (s?.aborted) return reject(s.reason);
+      s?.addEventListener('abort', () => reject(s.reason), { once: true });
+    });
+    throw new Error('no llega');
+  };
+  const { channel } = gmailOnHttp(fetch);
+  const apagado = new AbortController();
+  const lectura = channel.readThread(thread(), apagado.signal);
+  await new Promise((r) => setTimeout(r, 10));
+  apagado.abort(new Error('el worker se apaga'));
+  await assert.rejects(lectura);
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0]?.aborted, true, 'la petición en curso recibió la señal del job');
+});
+
 test('Una respuesta automática se reconoce por sus cabeceras (RFC 3834, X-Autoreply, Precedence)', () => {
   const raw = (headers: Array<{ name: string; value: string }>) => ({ id: 'a', threadId: 't', internalDate: String(NOW.getTime()), payload: { headers } });
   assert.equal(normalizeGmailMessage(raw([{ name: 'Auto-Submitted', value: 'auto-replied' }])).automatic, true);

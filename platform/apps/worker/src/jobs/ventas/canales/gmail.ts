@@ -194,10 +194,12 @@ export class GmailChannel implements ChannelSender, ChannelReader {
     };
   }
 
-  async readThread(thread: OpenThread): Promise<InboundMessage[]> {
+  async readThread(thread: OpenThread, signal?: AbortSignal): Promise<InboundMessage[]> {
     const box = await this.#mailbox({ id: thread.account.id, secretRef: thread.account.secretRef });
     if (!box.ok) throw new Error(`Gmail: no se pudo abrir el buzón (${box.result.ok ? '' : box.result.code}).`);
-    const messages = await box.api.getThread(thread.threadRef);
+    // Con la señal del job, como send y UnipileChannel: al apagar el worker o
+    // al vencer el plazo, la lectura en curso se corta (REPLIES_DEADLINE_MARGIN_MS).
+    const messages = await box.api.getThread(thread.threadRef, { signal });
     return messages.flatMap((msg) => this.#inbound(thread, msg));
   }
 

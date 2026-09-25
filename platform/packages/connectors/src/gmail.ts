@@ -147,7 +147,8 @@ export interface GmailMessageRef {
 export interface GmailApi {
   send(msg: OutgoingEmail): Promise<SentEmail>;
   getMessage(id: string): Promise<GmailMessage>;
-  getThread(threadId: string): Promise<GmailMessage[]>;
+  /** `signal`: el apagado del worker o el fin del plazo del job cortan la lectura en curso. */
+  getThread(threadId: string, opts?: { signal?: AbortSignal }): Promise<GmailMessage[]>;
   /** Lo que entró al buzón desde `since` y no lo mandó la persona. Con threadId, solo ese hilo. */
   searchReplies(opts: { since: Date; threadId?: string; max?: number }): Promise<GmailMessageRef[]>;
   /** Los rebotes (mailer-daemon, postmaster) desde `since`. */
@@ -363,10 +364,11 @@ export class GmailClient implements GmailApi {
     return this.#tokens.accessToken;
   }
 
-  async #get(endpoint: string, path: string, query?: Record<string, string | number | undefined>): Promise<Json> {
+  async #get(endpoint: string, path: string, query?: Record<string, string | number | undefined>, signal?: AbortSignal): Promise<Json> {
     const token = await this.#auth();
     const res = await this.#http.call({
       endpoint, method: 'GET', url: `${GMAIL_API}${path}`, query, headers: { Authorization: `Bearer ${token}` }, secrets: [token], channelAccountId: this.#opts.channelAccountId,
+      signal,
     });
     return obj(res.body);
   }
@@ -399,8 +401,8 @@ export class GmailClient implements GmailApi {
     return normalizeGmailMessage(await this.#get('gmail.messages.get', `/messages/${encodeURIComponent(id)}`, { format: 'full' }));
   }
 
-  async getThread(threadId: string): Promise<GmailMessage[]> {
-    const b = await this.#get('gmail.threads.get', `/threads/${encodeURIComponent(threadId)}`, { format: 'full' });
+  async getThread(threadId: string, opts: { signal?: AbortSignal } = {}): Promise<GmailMessage[]> {
+    const b = await this.#get('gmail.threads.get', `/threads/${encodeURIComponent(threadId)}`, { format: 'full' }, opts.signal);
     return Array.isArray(b['messages']) ? b['messages'].map(normalizeGmailMessage) : [];
   }
 
