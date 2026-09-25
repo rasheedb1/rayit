@@ -1083,7 +1083,57 @@ campaña activa, temporada).
   (`packages/core/src/outreach/guidance-phrases.ts`): el recomendador no
   escribe frases fuera de ella y recibe el idioma del espacio. Hoy solo
   hay tabla en español, como las plantillas y los ángulos; un idioma sin
-  tabla usa la española hasta que lleguen sus plantillas.
+  tabla usa la española hasta que lleguen sus plantillas. El redactor
+  recibe el mismo idioma en la petición (`GuidanceRequest.locale`) y su
+  instrucción lo dice con la frase de la tabla (`promptLanguage`): la
+  guía del modelo nunca sale en otro idioma que la de reglas.
+- **Quién «llega», en todos los caminos (r4)**: una persona llega si la
+  cadencia tiene un paso de mensaje (`DISPATCHABLE_STEP_TYPES`) por un
+  canal que la política deja, con cuenta (aunque esté por reconectar), y
+  la persona tiene dirección ahí (`reachForSequence`, `reachChannels`).
+  Un comentario o una reacción públicos no cuentan. «Enrolar desde un
+  negocio» solo deja marcar a quien llega («Llega por» dice solo esos
+  canales; si no, «No llega por los canales de esta cadencia») y el
+  servidor lo comprueba otra vez; «Activar» igual. Tras enrolar, cada
+  persona dice qué le queda, con las mismas partes que «Activar»:
+  mensajes programados, por revisar, por redactar, **gestos a mano**
+  (la reacción y el comentario públicos, que no se redactan) y pasos
+  saltados.
+- **El hilo de correo y la guía, una sola regla (r4)**:
+  `normalizeThread` (`packages/core/src/outreach/thread.ts`) la usan el
+  recomendador y la línea de tiempo: el primer correo abre el hilo, los
+  siguientes responden, salvo el cierre que ya es correo nuevo (las
+  plantillas lo piden así) y el paso que la persona acaba de poner como
+  correo nuevo. Cada paso guarda quién escribió su guía
+  (`outbound_step.guidance_source`: plantilla, reglas, modelo o persona)
+  y para qué tipo (`guidance_for_type`). Si un paso cambia de tipo
+  (reordenar, quitar, añadir o el editor), la guía que no escribió la
+  persona se recompone para el tipo nuevo (`guidanceAfterRetype`); la
+  suya se queda y la tarjeta pide revisarla («Esta guía se escribió para
+  «Correo»…»), hasta que la guarde sin cambiar el tipo. Cambiar el
+  ángulo de un paso con guía automática también la recompone.
+- **El creador del negocio (r4)**: el nicho y el brief son los del
+  creador del negocio abierto de la señal, no la unión del espacio: en
+  una agencia con varios creadores, los de otro elegirían otra plantilla,
+  otra divulgación y le mandarían al modelo notas ajenas. Sin creador en
+  el negocio vale el único del espacio; con varios, ni nicho ni brief y
+  la nota `no_creator` lleva a asignarlo. La secuencia guarda su
+  `brief_id` para el generador (VEN-12).
+- **La persona por defecto (r4)** no es la que ya está viva en otra
+  cadencia (Activar no la enrolaría); en «Para» se ve «· ya está en
+  «X»», y si se elige igual, la nota `contact_busy` lo dice.
+- **El cierre pide solo el activo que declara (r4)**: las guías de
+  síntesis dicen «enlaza el media kit y, si tienes una cotización
+  pública, su enlace» (o al revés en las de temporada, que declaran la
+  cotización), para que quien revisa pueda vigilar lo que exigen. 0056
+  corrige también la de «Marca con campaña activa» de 0037, con una
+  política de actualización del catálogo solo para quien migra.
+- **Las notas guardadas se leen con zod (r4)**: `ProposalNote` y la
+  propuesta guardada son esquemas de `@mc/core`
+  (`proposal-notes.ts`); una nota que no tiene la forma de su código se
+  descarta. Las consultas viven partidas en
+  `packages/db/src/queries/cadencias/` (lista, contexto, propuesta,
+  pasos, edición, estado).
 
 ### 5.6 La puerta de calidad de cada mensaje
 

@@ -19,8 +19,9 @@
  *      ninguna está, queda como tarea a mano). «Llega» es: la política
  *      lo deja, hay una cuenta conectada (aunque esté por reconectar) y,
  *      si el paso le escribe a la persona, la persona tiene dirección en
- *      ese canal. Un correo que queda como primero del hilo es `email`,
- *      nunca `email_reply`.
+ *      ese canal. El hilo de correo sigue normalizeThread (thread.ts),
+ *      la misma regla que la línea de tiempo editable: el primer correo
+ *      abre el hilo y los siguientes responden, salvo el cierre.
  *   3. La política del espacio (outbound_policy): la propuesta nace
  *      cumpliéndola, no con avisos. Si hay más mensajes que
  *      max_touches_per_company, los del medio (prueba social, luego el
