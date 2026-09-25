@@ -22,6 +22,8 @@ const llmBudgetExhausted = vi.fn();
 const recordProfileLlmCalls = vi.fn();
 const savePerfilComercial = vi.fn();
 const saveNarrativeEdit = vi.fn();
+const claimPerfilRecalc = vi.fn();
+const releasePerfilRecalc = vi.fn();
 const puedeEditarElPerfil = vi.fn();
 let modelo: NarrativeModel | null = null;
 
@@ -55,6 +57,8 @@ vi.mock("@mc/db/queries/perfil-comercial", async () => {
     recordProfileLlmCalls: (...a: unknown[]) => recordProfileLlmCalls(...a),
     savePerfilComercial: (...a: unknown[]) => savePerfilComercial(...a),
     saveNarrativeEdit: (...a: unknown[]) => saveNarrativeEdit(...a),
+    claimPerfilRecalc: (...a: unknown[]) => claimPerfilRecalc(...a),
+    releasePerfilRecalc: (...a: unknown[]) => releasePerfilRecalc(...a),
   };
 });
 
@@ -82,6 +86,16 @@ function post(i: number): PerfilPostInput {
   };
 }
 
+/** Cuatro videos largos y flojos en YouTube: con ellos, los cortos tienen contra qué compararse (tres o más a cada lado). */
+function largos(): PerfilPostInput[] {
+  return [0.5, 0.6, 0.8, 0.9].map((x, i) => ({
+    id: `00000002-0000-4000-8000-00000000e0${i}${i}`, platformId: "youtube", url: `https://www.youtube.com/watch?v=${i}`,
+    title: `Receta larga ${["uno", "dos", "tres", "cuatro"][i]}`, caption: "Receta larga 🍳 #receta", hashtags: ["receta"],
+    surface: "feed", mediaType: "video", durationS: 200, isBrandedContent: false, publishedAt: "2026-08-01T00:00:00.000Z", hookType: null,
+    score: { viewsVsMedian: x, viewsAtCut: 20_000, outlierTier: "under", ageHoursCut: 168, computedAt: "2026-09-25T00:00:00.000Z", baseline: null },
+  }));
+}
+
 function entradas(): PerfilInputs {
   return {
     creator: { id: CREADORA, displayName: "Laura Méndez", handle: "laura.cocinafacil", bio: null, country: "CO", languages: ["es"], nicheSlugs: ["cocina"], nicheNames: ["Cocina"] },
@@ -97,12 +111,19 @@ function entradas(): PerfilInputs {
   };
 }
 
-function guardado(source: "template" | "edited" = "template"): StoredPerfil {
-  const perfil = buildPerfil(entradas());
+function guardado(source: "template" | "edited" = "template", e: PerfilInputs = entradas()): StoredPerfil {
+  const perfil = buildPerfil(e);
   return {
-    version: 2, computedAt: perfil.computedAt, perfil,
+    version: 3, computedAt: perfil.computedAt, perfil,
     narrative: { text: templateNarrative(perfil), source, model: null, writtenAt: "2026-09-25T10:00:01.000Z", fallback: source === "template" ? "no_model" : null },
   };
+}
+
+/** El texto que se ve, sin los globos de las cifras (que están en el DOM, cerrados). */
+function visible(el: Element): string {
+  const copia = el.cloneNode(true) as Element;
+  copia.querySelectorAll("[data-globo]").forEach((g) => g.remove());
+  return copia.textContent ?? "";
 }
 
 /** El globo de una cifra (su botón controla el elemento con ese id) y el enlace a su origen. */
@@ -119,30 +140,63 @@ beforeEach(() => {
   puedeEditarElPerfil.mockResolvedValue(true);
   llmBudgetExhausted.mockResolvedValue(false);
   recordProfileLlmCalls.mockResolvedValue(undefined);
+  claimPerfilRecalc.mockResolvedValue({ token: "marca-1", narrativeWrittenAt: "2026-09-25T10:00:01.000Z" });
+  releasePerfilRecalc.mockResolvedValue(undefined);
+  // Lo que una prueba hizo fallar no se arrastra a la siguiente.
+  computePerfil.mockReset();
+  savePerfilComercial.mockReset().mockResolvedValue(undefined);
+  saveNarrativeEdit.mockReset();
 });
 afterEach(cleanup);
 
 describe("la pantalla", () => {
-  it("muestra los cinco mejores videos con sus cifras, su corte, su mediana y lo que los distingue", async () => {
+  it("muestra los cinco mejores videos con su portada, sus cifras, su corte, su mediana y cómo son", async () => {
     getPerfilComercial.mockResolvedValue(guardado());
     render(await PerfilPage());
     const lista = screen.getByText("Tus cinco mejores videos").closest("div, section")!.querySelector("ol")!;
     const items = within(lista).getAllByRole("listitem").filter((li) => li.parentElement === lista);
     expect(items).toHaveLength(5);
     expect(items.map((li) => within(li).getAllByRole("link")[0]!.textContent)).toEqual(TITULOS.slice(0, 5));
-    // La primera: 6× su mediana, 400 mil views a los 7 días, 30 s, con su pill de breakout y la mediana contra la que se midió.
+    // La primera: 6,0× su mediana, 400 mil views a los 7 días, 30 s, «Fuera de serie» y la mediana contra la que se midió.
     const primero = within(items[0]!);
-    expect(primero.getByRole("button", { name: /^6×/ })).toBeTruthy();
+    expect(primero.getByRole("button", { name: /^6,0×/ })).toBeTruthy();
     expect(primero.getByRole("button", { name: /^400 mil/ })).toBeTruthy();
     expect(primero.getByText(/views a los 7 días de publicado/)).toBeTruthy();
     expect(primero.getByRole("button", { name: /^30 s/ })).toBeTruthy();
-    expect(primero.getByText("Breakout")).toBeTruthy();
+    expect(primero.getByText("Fuera de serie")).toBeTruthy();
+    expect(within(items[1]!).getByText("Muy por encima")).toBeTruthy();
     expect(primero.getByText(/Tu mediana de Instagram a esa edad/)).toBeTruthy();
     expect(primero.getByRole("button", { name: /^66,7 mil/ })).toBeTruthy();
-    // Lo que lo distingue contrasta con el resto: «Tus videos que abren con una promesa concreta: 5× frente a 3× del resto».
-    const razon = primero.getAllByText(/Tus videos que abren con una promesa concreta/).find((el) => el.tagName === "LI")!;
-    expect(razon.textContent).toMatch(/5×.*frente a.*3×.*del resto/);
-    expect(primero.queryByText(/de tu duración habitual/)).toBeNull();
+    // Sin datos para contrastar, la explicación es cómo es el video, sin inventar una causa.
+    expect(primero.getByText("Cómo es:")).toBeTruthy();
+    expect(visible(items[0]!)).toMatch(/Cómo es: abre con una promesa concreta · reel · tutorial · corto/);
+    expect(primero.queryByText(/Lo que lo distingue/)).toBeNull();
+    expect(primero.queryByText(/Ningún rasgo/)).toBeNull();
+    // Sin portada en los datos, un hueco 9:16 del mismo tamaño; con portada, la imagen con su título.
+    expect(items[0]!.querySelector("img")).toBeNull();
+    expect(items[0]!.querySelector("span.bg-hover[aria-hidden=true]")).toBeTruthy();
+  });
+
+  it("con videos para comparar, dice lo que distingue al mejor sin contarlo a él, y enseña su portada", async () => {
+    const e = entradas();
+    e.posts[0]!.coverUrl = "https://p16.tiktokcdn.com/portada-0.jpg";
+    e.posts.push(...largos());
+    getPerfilComercial.mockResolvedValue(guardado("template", e));
+    render(await PerfilPage());
+    const lista = screen.getByText("Tus cinco mejores videos").closest("div, section")!.querySelector("ol")!;
+    const primero = lista.querySelector("li")!;
+    // Los otros cortos (5, 4, 3, 2 y 1 veces) frente a los largos (0,5; 0,6; 0,8 y 0,9): 3,0× frente a 0,7×.
+    expect(visible(primero)).toMatch(/Lo que lo distingue: Tus otros videos cortos hacen 3,0× tu mediana, frente a 0,7× de tus videos sin ser corto/);
+    const img = within(primero).getByRole("img", { name: "Portada de «Cold brew en casa en 3 pasos»" });
+    expect(img.getAttribute("src")).toBe("https://p16.tiktokcdn.com/portada-0.jpg");
+    expect(img.getAttribute("loading")).toBe("lazy");
+    // La mediana del grupo es un claim con su origen: los otros videos, con enlace, en «De dónde sale cada cifra».
+    const grupo = within(primero).getByRole("button", { name: /^3,0×/ });
+    const { enlace } = globo(grupo);
+    const fila = document.getElementById(enlace.getAttribute("href")!.slice(1))!;
+    expect(fila.textContent).toContain("Videos que la forman:");
+    expect(within(fila).getByRole("link", { name: "La arepa sin plancha" }).getAttribute("href")).toBe("https://www.tiktok.com/@laura/video/1");
+    expect(within(fila).queryByRole("link", { name: "Cold brew en casa en 3 pasos" })).toBeNull();
   });
 
   it("cada cifra de la narrativa lleva a su origen: el enlace depende de la tabla y el globo dice red y fecha", async () => {
@@ -161,7 +215,7 @@ describe("la pantalla", () => {
       if (href.startsWith("#")) expect(document.getElementById(href.slice(1)), href).toBeTruthy();
     }
     // post_score → el video en su red, en otra pestaña.
-    const alVideo = botones.find((b) => b.textContent === "6×")!;
+    const alVideo = botones.find((b) => b.textContent === "6,0×")!;
     expect(globo(alVideo).enlace.getAttribute("href")).toBe("https://www.tiktok.com/@laura/video/0");
     expect(globo(alVideo).enlace.getAttribute("target")).toBe("_blank");
     expect(globo(alVideo).tip.textContent).toContain("Puntaje del video frente a tu mediana · Instagram");
@@ -175,12 +229,15 @@ describe("la pantalla", () => {
     // 2026-09-25T00:00Z es todavía el 24 en la zona del workspace (America/Bogota).
     const mediana = porHref.get("#origen-mediana-tiktok")!;
     expect(mediana.textContent).toMatch(/Línea base del creador · TikTok · al 24 de septiembre de 2026/);
+    // La fila se lee sin jerga: la tabla, la columna y la fila quedan en su title, para soporte.
     const fila = document.getElementById("origen-mediana-tiktok")!;
-    expect(fila.textContent).toContain("creator_baseline.median_views");
-    expect(fila.textContent).toContain("00000002-0000-4000-8000-0000000b0001");
+    expect(fila.textContent).not.toContain("creator_baseline.median_views");
+    expect(fila.textContent).not.toContain("00000002-0000-4000-8000-0000000b0001");
+    expect(fila.getAttribute("title")).toBe("creator_baseline.median_views · 00000002-0000-4000-8000-0000000b0001");
     // Ninguna marca queda sin pintar.
     expect(narrativa.textContent).not.toContain("[claim:");
-    expect(within(narrativa).getByText(/falta la llave de Anthropic/)).toBeTruthy();
+    expect(within(narrativa).getByText(/todavía no está activada en On Cue; usamos una plantilla con tus mismas cifras/)).toBeTruthy();
+    expect(within(narrativa).getByText("La narrativa se redacta en español.")).toBeTruthy();
     expect(within(narrativa).getByText(/Las cifras marcadas salen de este perfil/)).toBeTruthy();
   });
 
@@ -305,6 +362,39 @@ describe("la edición de la narrativa", () => {
     const vista = screen.getByText("Así se verá").closest("section")!;
     expect(vista.textContent).toContain("Mi mediana: 115,4 mil");
     expect(vista.textContent).not.toContain("[claim:");
+    expect(vista.textContent).toContain("Todas las cifras están marcadas y salen de tu perfil.");
+  });
+
+  it("la vista previa subraya lo que el verificador rechazaría, antes de guardar", async () => {
+    getPerfilComercial.mockResolvedValue(guardado());
+    render(await PerfilPage());
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+    fireEvent.change(screen.getByLabelText("Texto de la narrativa"), {
+      target: { value: "Tengo [claim:inventada], 3 millones y cuadrupliqué mis views con «Cold brew en casa en 3 pasos»." },
+    });
+    const vista = screen.getByText("Así se verá").closest("section")!;
+    const marcas = [...vista.querySelectorAll("mark")].map((m) => m.textContent);
+    expect(marcas).toEqual(["[claim:inventada]", "3", "millones", "cuadrupliqué"]);
+    expect(vista.textContent).toContain("Lo subrayado no pasará el verificador al guardar:");
+    expect(vista.textContent).toContain("[claim:inventada] no es una cifra de este perfil.");
+    expect(vista.textContent).toContain("«cuadrupliqué» dice una cantidad con letras");
+    // Nada se mandó todavía: la puerta de verdad sigue siendo la del servidor.
+    expect(saveNarrativeEdit).not.toHaveBeenCalled();
+  });
+
+  it("«De dónde sale cada cifra» empieza plegado y la cifra que lleva a una fila lo abre", async () => {
+    getPerfilComercial.mockResolvedValue(guardado());
+    render(await PerfilPage());
+    const fuentes = screen.getByText("De dónde sale cada cifra").closest("section")!;
+    const plegable = fuentes.querySelector("details")!;
+    expect(plegable.open).toBe(false);
+    expect(within(fuentes).getByText(/^Ver las \d+ fuentes$/)).toBeTruthy();
+    // Agrupado por origen, con nombres legibles.
+    expect(within(fuentes).getByText("Demografía y alcance")).toBeTruthy();
+    expect(within(fuentes).getByText("Líneas base")).toBeTruthy();
+    const mediana = screen.getAllByRole("button", { name: /^115,4 mil/ })[0]!;
+    fireEvent.click(globo(mediana).enlace);
+    expect(plegable.open).toBe(true);
   });
 });
 
@@ -315,9 +405,29 @@ describe("las acciones", () => {
     const r = await recalcularPerfil();
     expect(r).toEqual({ ok: true, message: "Perfil recalculado." });
     expect(recordProfileLlmCalls).not.toHaveBeenCalled();
-    const [, perfilGuardado, narrativa] = savePerfilComercial.mock.calls[0]!;
+    const [, perfilGuardado, narrativa, opciones] = savePerfilComercial.mock.calls[0]!;
     expect(perfilGuardado).toBe(perfil);
     expect(narrativa).toMatchObject({ source: "template", fallback: "no_model", text: templateNarrative(perfil, { locale: "es-CO" }) });
+    // Guarda contra la narrativa que había al empezar y suelta la marca en la misma transacción.
+    expect(opciones).toEqual({ expectedWrittenAt: "2026-09-25T10:00:01.000Z", recalcToken: "marca-1" });
+    expect(claimPerfilRecalc).toHaveBeenCalledWith({}, CREADORA);
+    expect(releasePerfilRecalc).not.toHaveBeenCalled();
+  });
+
+  it("si ya hay un recálculo en curso, lo dice y no llama al modelo", async () => {
+    claimPerfilRecalc.mockRejectedValue(new PerfilComercialError("recalc_in_progress", "x"));
+    modelo = { model: "claude-sonnet-5", complete: vi.fn() };
+    expect(await recalcularPerfil()).toEqual({ ok: false, message: expect.stringMatching(/^Ya se está recalculando/), detalles: [] });
+    expect(modelo.complete).not.toHaveBeenCalled();
+    expect(computePerfil).not.toHaveBeenCalled();
+    expect(savePerfilComercial).not.toHaveBeenCalled();
+  });
+
+  it("una edición guardada mientras se recalculaba no se pisa, y la marca se suelta", async () => {
+    computePerfil.mockResolvedValue(buildPerfil(entradas()));
+    savePerfilComercial.mockRejectedValue(new PerfilComercialError("stale_edit", "x"));
+    expect((await recalcularPerfil()).message).toMatch(/^Alguien editó la narrativa mientras se recalculaba/);
+    expect(releasePerfilRecalc).toHaveBeenCalledWith({}, CREADORA, "marca-1");
   });
 
   it("con modelo, cada llamada se registra apenas responde y el tope se mira antes de cada intento", async () => {

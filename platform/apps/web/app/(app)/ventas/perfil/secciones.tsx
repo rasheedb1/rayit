@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { genderCode, shortId, type OutlierTier, type PerfilComercial, type TopVideo } from "@mc/core/outreach/perfil";
+import { genderCode, shortId, type Claim, type OutlierTier, type PerfilComercial, type TopVideo } from "@mc/core/outreach/perfil";
 import { SectionTitle } from "@/components/page-header";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import { PLATFORM_LABEL, PlatformPill } from "@/components/ui/platform-pill";
@@ -8,6 +8,7 @@ import { RANGE_DASH, type Formatter } from "@/lib/format";
 import { Cifra } from "./cifra";
 import { corteTexto, origenId, type CifraVista } from "./cifras";
 import { MESSAGES } from "./messages";
+import { Plegable } from "./plegable";
 
 /**
  * Las secciones del perfil, en una columna y en el orden de un media kit
@@ -112,7 +113,7 @@ const TIER_KIND: Record<OutlierTier, PillKind> = {
   breakout: "good", outlier: "good", good: "neutral", normal: "neutral", under: "warn",
 };
 
-/** Cómo es el video, cuando ningún rasgo lo separa del resto: «abre con una pregunta · reel · corto». */
+/** Cómo es el video: «abre con una promesa concreta · reel · colaboración con marca · corto». */
 function descripcion(v: TopVideo): string {
   const t = MESSAGES.desempeno;
   return [
@@ -127,32 +128,55 @@ function descripcion(v: TopVideo): string {
 }
 
 /**
- * Qué distingue al video: cada rasgo cuyo grupo rinde más que el resto
- * de los videos del creador, con las dos medianas como cifras («Tus
- * reels: 4,3× frente a 2,4× del resto»). Si ningún rasgo lo separa, lo
- * dice y describe el video sin prometer una causa.
+ * Por qué funcionó: primero cómo es el video (gancho, pieza, tipo y
+ * duración frente a la típica), que es la explicación que siempre se
+ * puede dar. Debajo, solo si los datos la sostienen, lo que lo distingue:
+ * el rasgo cuyos OTROS videos rinden claramente más que los que no lo
+ * tienen, con las dos medianas como cifras. Core ya deja fuera al video
+ * y elige la razón más fuerte; aquí solo se pinta.
  */
-function Distingue({ v, cifras }: { v: TopVideo; cifras: Cifras }) {
+function PorQue({ v, cifras }: { v: TopVideo; cifras: Cifras }) {
   const t = MESSAGES.desempeno;
   const lugar = `porque-${shortId(v.postId)}`;
+  const razon = v.why.reasons[0];
   return (
-    <div className="mt-2 text-xs leading-5 text-fg-2">
-      <p className="text-fg-3">{t.porque}</p>
-      {v.why.reasons.length ? (
-        <ul className="mt-0.5 space-y-0.5">
-          {v.why.reasons.map((r) => (
-            <li key={`${r.axis}-${r.group}`}>
-              {t.grupos[r.axis][r.group] ?? r.group}: <C id={r.groupClaimId} cifras={cifras} lugar={lugar} /> {t.razonFrente}{" "}
-              <C id={r.restClaimId} cifras={cifras} lugar={lugar} /> {t.razonResto}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mt-0.5">
-          {t.sinRazon} {descripcion(v)}
-        </p>
+    <dl className="mt-2 space-y-1 text-xs leading-5 text-fg-2">
+      <div>
+        <dt className="inline text-fg-3">{t.comoEs}: </dt>
+        <dd className="inline">{descripcion(v)}</dd>
+      </div>
+      {razon && (
+        <div>
+          <dt className="inline text-fg-3">{t.distingue}: </dt>
+          <dd className="inline">
+            {t.grupos[razon.axis][razon.group] ?? razon.group} {t.razonHacen} <C id={razon.groupClaimId} cifras={cifras} lugar={lugar} />{" "}
+            {t.razonFrente} <C id={razon.restClaimId} cifras={cifras} lugar={lugar} /> {t.razonResto(razon.axis, razon.group)}
+          </dd>
+        </div>
       )}
-    </div>
+    </dl>
+  );
+}
+
+/**
+ * La portada del video, 9:16 como en la red: lo primero que mira una
+ * marca en un media kit (Beacons, Passionfroot). Sin portada, un hueco
+ * del mismo tamaño para que la lista no baile.
+ */
+function Portada({ v }: { v: TopVideo }) {
+  const t = MESSAGES.desempeno;
+  const caja = "h-[100px] w-14 shrink-0 overflow-hidden rounded-md bg-hover";
+  if (!v.coverUrl) return <span className={caja} aria-hidden="true" />;
+  // Las portadas vienen de las plataformas (dominios que no controlamos):
+  // next/image exigiría declararlos (el mismo criterio que Campañas).
+  // eslint-disable-next-line @next/next/no-img-element
+  const img = <img src={v.coverUrl} alt={t.portada(v.title)} width={56} height={100} loading="lazy" className={`${caja} object-cover`} />;
+  return v.url ? (
+    <a href={v.url} target="_blank" rel="noopener noreferrer" tabIndex={-1} className="shrink-0">
+      {img}
+    </a>
+  ) : (
+    img
   );
 }
 
@@ -187,7 +211,8 @@ export function Desempeno({ perfil, cifras, f }: { perfil: PerfilComercial; cifr
         <ol className="divide-y divide-line rounded-md border border-line">
           {top.map((v, i) => (
             <li key={v.postId} className="flex gap-3 p-3 sm:gap-4">
-              <span className="w-5 shrink-0 pt-0.5 text-right text-sm tabular-nums text-fg-3">{f.int(i + 1)}</span>
+              <span className="w-4 shrink-0 pt-0.5 text-right text-sm tabular-nums text-fg-3">{f.int(i + 1)}</span>
+              <Portada v={v} />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <PlatformPill platformId={v.platformId} />
@@ -223,7 +248,7 @@ export function Desempeno({ perfil, cifras, f }: { perfil: PerfilComercial; cifr
                     <C id={v.baselineClaimId} cifras={cifras} lugar={`base-${shortId(v.postId)}`} /> {t.viewsPalabra}
                   </p>
                 )}
-                <Distingue v={v} cifras={cifras} />
+                <PorQue v={v} cifras={cifras} />
               </div>
             </li>
           ))}
@@ -384,47 +409,89 @@ export function Tarifas({ perfil, cifras }: { perfil: PerfilComercial; cifras: C
 // De dónde sale cada cifra
 // ---------------------------------------------------------------------
 
+type GrupoFuente = keyof typeof MESSAGES.fuentes.grupos;
+
+/** En qué grupo de «De dónde sale cada cifra» va una cifra, por su clave. */
+function grupoDe(key: Claim["key"]): GrupoFuente {
+  if (key.startsWith("audience.") || key === "non_followers") return "audiencia";
+  if (key === "median") return "base";
+  if (key.startsWith("format.") || key === "tone" || key === "captions_read") return "captions";
+  return "porque";
+}
+
+/** Cuántos videos de un agregado se enlazan por fila; el resto se cuenta. */
+const VIDEOS_POR_FILA = 5;
+
 /**
- * La fila de origen de cada cifra que no tiene otra pantalla a la que
- * ir (línea base, demografía, alcance en no seguidores, los agregados de
- * captions y del porqué): qué es, cuánto, de qué tabla y columna, de qué
- * red, de qué fecha, y la fila o cuántas publicaciones la forman. Es el
- * «cada dato con su fuente» del perfil de Stripe Atlas. El enlace de la
- * cifra lleva aquí (#origen-<id>) y la fila se resalta al llegar.
+ * La fila de origen de cada cifra que no tiene otra pantalla a la que ir
+ * (línea base, demografía, alcance en no seguidores, los agregados de
+ * captions y del porqué): qué es, cuánto, de qué tabla, red y fecha, y
+ * los videos que la forman con su enlace. Es el «cada dato con su
+ * fuente» del perfil de Stripe Atlas, legible: los nombres de tabla, de
+ * columna y la fila quedan en el title de cada fila, para soporte.
+ *
+ * Plegado por defecto (Plegable): un media kit que se le enseña a una
+ * marca no termina en una cola técnica. El enlace de una cifra
+ * (#origen-<id>) lo abre al llegar y la fila se resalta.
  */
-export function Fuentes({ perfil, cifras }: { perfil: PerfilComercial; cifras: Cifras }) {
+export function Fuentes({ perfil, cifras, f }: { perfil: PerfilComercial; cifras: Cifras; f: Formatter }) {
   const t = MESSAGES.fuentes;
   const aqui = perfil.claims.filter((c) => cifras[c.id]?.href === `#${origenId(c.id)}`);
   if (!aqui.length) return null;
+  const posts = new Map(perfil.posts.map((p) => [p.postId, p]));
+  const grupos = (Object.keys(t.grupos) as GrupoFuente[])
+    .map((g) => ({ g, claims: aqui.filter((c) => grupoDe(c.key) === g) }))
+    .filter((x) => x.claims.length > 0);
   return (
     <Seccion id="perfil-fuentes" title={t.title} meta={t.meta}>
-      <ul className="divide-y divide-line text-sm">
-        {aqui.map((c) => {
-          const v = cifras[c.id]!;
-          return (
-            <li
-              key={c.id}
-              id={origenId(c.id)}
-              className="scroll-mt-24 px-2 py-2.5 target:rounded-md target:bg-accent-wash target:ring-1 target:ring-accent"
-            >
-              <p className="flex items-baseline justify-between gap-3">
-                <span className="min-w-0 text-fg-2">{v.que}</span>
-                <span className="shrink-0 font-medium tabular-nums text-fg">{v.valor}</span>
-              </p>
-              <p className="mt-0.5 text-xs text-fg-3">{v.origen}</p>
-              <p className="mt-0.5 break-all font-mono text-[11px] text-fg-3">
-                {c.source.table}.{c.source.field}
-                {!c.source.rows?.length && (
-                  <>
-                    {" · "}
-                    {t.fila} {c.source.id}
-                  </>
-                )}
-              </p>
-            </li>
-          );
-        })}
-      </ul>
+      <Plegable resumen={t.ver(f.int(aqui.length))}>
+        <div className="space-y-6">
+          {grupos.map(({ g, claims }) => (
+            <div key={g}>
+              <h3 className="mb-1 text-xs font-medium text-fg-3">{t.grupos[g]}</h3>
+              <ul className="divide-y divide-line text-sm">
+                {claims.map((c) => {
+                  const v = cifras[c.id]!;
+                  const filas = (c.source.rows ?? []).map((id) => posts.get(id)).filter((p) => p !== undefined);
+                  const fuera = (c.source.rows?.length ?? 0) - Math.min(filas.length, VIDEOS_POR_FILA);
+                  return (
+                    <li
+                      key={c.id}
+                      id={origenId(c.id)}
+                      title={t.soporte(c.source.table, c.source.field, c.source.id)}
+                      className="scroll-mt-24 px-2 py-2.5 target:rounded-md target:bg-accent-wash target:ring-1 target:ring-accent"
+                    >
+                      <p className="flex items-baseline justify-between gap-3">
+                        <span className="min-w-0 text-fg-2">{v.que}</span>
+                        <span className="shrink-0 font-medium tabular-nums text-fg">{v.valor}</span>
+                      </p>
+                      <p className="mt-0.5 text-xs text-fg-3">{v.origen}</p>
+                      {filas.length > 0 && (
+                        <p className="mt-1 text-xs leading-5 text-fg-3">
+                          {t.videos}{" "}
+                          {filas.slice(0, VIDEOS_POR_FILA).map((p, i) => (
+                            <span key={p.postId}>
+                              {i > 0 && ", "}
+                              {p.url ? (
+                                <a href={p.url} target="_blank" rel="noopener noreferrer" className="break-words text-fg-2 hover:underline">
+                                  {p.title}
+                                </a>
+                              ) : (
+                                <span className="break-words text-fg-2">{p.title}</span>
+                              )}
+                            </span>
+                          ))}
+                          {fuera > 0 && <> {t.yMas(f.int(fuera))}</>}
+                        </p>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </Plegable>
     </Seccion>
   );
 }

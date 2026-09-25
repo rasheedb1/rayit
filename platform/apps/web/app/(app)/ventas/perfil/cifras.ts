@@ -37,7 +37,8 @@ export function formatClaim(c: Claim, f: Formatter): string {
     case "share":
       return f.pct(n, 0);
     case "multiple":
-      return f.multiple(n, 1);
+      // Siempre con un decimal: «1,2× frente a 1,0×» se lee parejo.
+      return f.multiple(n, 1, 1);
     case "money":
       return f.money(String(c.value), c.unit, { mode: "short" });
     case "duration":
@@ -68,7 +69,7 @@ export function claimQue(c: Claim, f: Formatter): string {
     case "video.multiple": return q.videoMultiple(p.title ?? "", red, corte);
     case "video.views": return q.videoViews(p.title ?? "", red, corte);
     case "video.duration": return q.videoDuration(p.title ?? "");
-    case "why.group": return q.whyGroup(p.axis!, p.group ?? "");
+    case "why.group": return q.whyGroup(p.axis!, p.group ?? "", p.title ?? "");
     case "why.rest": return q.whyRest(p.axis!, p.group ?? "");
     case "format.piece": return q.formatPiece(p.piece!);
     case "format.content": return q.formatContent(p.content!);

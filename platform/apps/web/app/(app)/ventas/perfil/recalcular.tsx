@@ -7,14 +7,25 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { recalcularPerfil } from "./actions";
 import { MESSAGES } from "./messages";
 
-/** Corre la acción y guarda lo que dijo, para anunciarlo en una región role=status. */
+/**
+ * Corre la acción y guarda lo que dijo, para anunciarlo en una región
+ * role=status. Si la petición misma falla antes de que la acción responda
+ * (Vercel la corta en el maxDuration, la red se cae, un despliegue nuevo
+ * cambia el id de la acción), la promesa se rechaza: se atrapa aquí y se
+ * dice en la misma región. Sin eso, el rechazo dentro de startTransition
+ * sube hasta error.tsx y la pantalla entera se cambia por la frontera.
+ */
 function useRecalcular() {
   const [pendiente, empezar] = useTransition();
   const [mensaje, setMensaje] = useState<{ ok: boolean; texto: string } | null>(null);
   async function correr() {
     setMensaje(null);
-    const r = await recalcularPerfil();
-    setMensaje({ ok: r.ok, texto: r.message });
+    try {
+      const r = await recalcularPerfil();
+      setMensaje({ ok: r.ok, texto: r.message });
+    } catch {
+      setMensaje({ ok: false, texto: MESSAGES.recalcular.error });
+    }
   }
   return { pendiente, mensaje, correr, empezar };
 }

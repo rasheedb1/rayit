@@ -25,26 +25,48 @@ function plural(n: number, one: string, other: string): string {
   return reglas.select(n) === "one" ? one : other;
 }
 
-/** Tus videos de un grupo del porqué, en plural: «Tus videos que abren con una promesa», «Tus reels». */
+/**
+ * Los OTROS videos de un grupo del porqué, en plural: «Tus otros videos
+ * que abren con una promesa», «Tus otros reels». «Otros» porque el grupo
+ * deja fuera al video que se explica (whyContrast de @mc/core).
+ */
 const GRUPOS: Record<WhyAxis, Record<string, string>> = {
   hook: {
-    reto: "Tus videos que abren con un reto",
-    pregunta: "Tus videos que abren con una pregunta",
-    error: "Tus videos que abren con un error común",
-    lista: "Tus videos que abren con una lista",
-    promesa: "Tus videos que abren con una promesa concreta",
-    historia: "Tus videos que abren con una historia propia",
-    directo: "Tus videos que entran directo al tema",
+    reto: "Tus otros videos que abren con un reto",
+    pregunta: "Tus otros videos que abren con una pregunta",
+    error: "Tus otros videos que abren con un error común",
+    lista: "Tus otros videos que abren con una lista",
+    promesa: "Tus otros videos que abren con una promesa concreta",
+    historia: "Tus otros videos que abren con una historia propia",
+    directo: "Tus otros videos que entran directo al tema",
   } satisfies Record<HookKind, string>,
   piece: {
-    reel: "Tus reels", tiktok: "Tus videos de TikTok", short: "Tus shorts", historia: "Tus historias", video: "Tus videos largos o de feed",
+    reel: "Tus otros reels", tiktok: "Tus otros videos de TikTok", short: "Tus otros shorts", historia: "Tus otras historias",
+    video: "Tus otros videos largos o de feed",
   } satisfies Record<PieceKind, string>,
   content: {
-    tutorial: "Tus tutoriales y recetas", reto: "Tus retos", lista: "Tus listas", colaboracion: "Tus colaboraciones con marcas", otro: "Tus demás videos",
+    tutorial: "Tus otros tutoriales y recetas", reto: "Tus otros retos", lista: "Tus otras listas",
+    colaboracion: "Tus otras colaboraciones con marcas", otro: "Tus demás videos",
   } satisfies Record<ContentKind, string>,
   duration: {
-    muy_corto: "Tus videos muy cortos", corto: "Tus videos cortos", medio: "Tus videos de duración media", largo: "Tus videos largos",
+    muy_corto: "Tus otros videos muy cortos", corto: "Tus otros videos cortos", medio: "Tus otros videos de duración media",
+    largo: "Tus otros videos largos",
   } satisfies Record<DurationBucket, string>,
+};
+
+/** El rasgo dicho después de «sin»: «Tus videos sin abrir con una promesa concreta», «sin ser reel». */
+const SIN_RASGO: Record<WhyAxis, Record<string, string>> = {
+  hook: {
+    reto: "abrir con un reto", pregunta: "abrir con una pregunta", error: "abrir con un error común", lista: "abrir con una lista",
+    promesa: "abrir con una promesa concreta", historia: "abrir con una historia propia", directo: "entrar directo al tema",
+  } satisfies Record<HookKind, string>,
+  piece: {
+    reel: "ser reel", tiktok: "ser video de TikTok", short: "ser short", historia: "ser historia", video: "ser video largo o de feed",
+  } satisfies Record<PieceKind, string>,
+  content: {
+    tutorial: "ser tutorial o receta", reto: "ser reto", lista: "ser lista", colaboracion: "ser colaboración con marca", otro: "ese rasgo",
+  } satisfies Record<ContentKind, string>,
+  duration: { muy_corto: "durar muy poco", corto: "ser corto", medio: "tener duración media", largo: "ser largo" } satisfies Record<DurationBucket, string>,
 };
 
 export const MESSAGES = {
@@ -70,6 +92,11 @@ export const MESSAGES = {
     confirmarNo: "Cancelar",
     listo: "Perfil recalculado.",
     error: "No se pudo recalcular. Inténtalo de nuevo en un momento.",
+    /** Otra pestaña o persona ya está recalculando: solo uno llama al modelo. */
+    enCurso: "Ya se está recalculando tu perfil. Espera unos segundos y recarga la página.",
+    /** Alguien guardó una edición de la narrativa mientras se recalculaba: no se pisa. */
+    edicionNueva:
+      "Alguien editó la narrativa mientras se recalculaba, así que no la reemplazamos. Recarga la página para verla y recalcula de nuevo si quieres.",
   },
 
   vacio: {
@@ -95,7 +122,7 @@ export const MESSAGES = {
     } satisfies Record<NarrativeSource, string | ((m: string) => string)>,
     /** Por qué la narrativa es de plantilla. */
     fallback: {
-      no_model: "La redacción automática no está configurada en este espacio (falta la llave de Anthropic).",
+      no_model: "La redacción automática todavía no está activada en On Cue; usamos una plantilla con tus mismas cifras.",
       budget: "Hoy ya se alcanzó el tope de gasto en redacción automática; mañana se puede volver a intentar.",
       rejected: "La redacción automática citó cifras que no están en tu perfil, así que usamos la plantilla.",
       error: "La redacción automática no respondió a tiempo; usamos la plantilla.",
@@ -113,6 +140,11 @@ export const MESSAGES = {
     insertarBoton: "Insertar",
     vistaPrevia: "Así se verá",
     vistaPreviaVacia: "Escribe algo para ver cómo quedará.",
+    /** La vista previa corre el mismo verificador que el servidor y subraya lo que no pasaría. */
+    vistaPreviaProblemas: "Lo subrayado no pasará el verificador al guardar:",
+    vistaPreviaBien: "Todas las cifras están marcadas y salen de tu perfil.",
+    /** Hoy la narrativa solo se redacta y se verifica en un idioma; se dice con su nombre en el idioma del workspace. */
+    idioma: (lengua: string) => `La narrativa se redacta en ${lengua}.`,
     vacia: "Todavía no hay narrativa.",
     errores: {
       titulo: "No se guardó:",
@@ -127,6 +159,7 @@ export const MESSAGES = {
       placeholder: (texto: string) => `Quedó un hueco sin llenar: «${texto}».`,
       no_claims: "Cita al menos una cifra.",
       stale_edit: "La narrativa cambió mientras la editabas (otra pestaña o un recálculo). Recarga la página y vuelve a intentarlo.",
+      recalc_in_progress: "Hay un recálculo en curso. Espera a que termine y vuelve a intentarlo.",
       not_calculated: "El perfil todavía no está calculado.",
       creator_not_found: "Ese creador no existe en este espacio.",
       generico: "No se pudo guardar. Inténtalo de nuevo.",
@@ -169,9 +202,9 @@ export const MESSAGES = {
       videoMultiple: (titulo: string, red: string, corte: string) => `Veces tu mediana de ${red} que hizo «${titulo}», ${corte}`,
       videoViews: (titulo: string, red: string, corte: string) => `Views de «${titulo}» en ${red}, ${corte}`,
       videoDuration: (titulo: string) => `Duración de «${titulo}»`,
-      whyGroup: (axis: WhyAxis, group: string) => `${GRUPOS[axis][group] ?? group}: su mediana, en veces tu mediana`,
-      whyRest: (axis: WhyAxis, group: string) =>
-        `El resto de tus videos (sin ${(GRUPOS[axis][group] ?? group).replace(/^Tus /, "tus ")}): su mediana, en veces tu mediana`,
+      whyGroup: (axis: WhyAxis, group: string, titulo: string) =>
+        `${GRUPOS[axis][group] ?? group}, sin contar «${titulo}»: su mediana, en veces tu mediana`,
+      whyRest: (axis: WhyAxis, group: string) => `Tus videos sin ${SIN_RASGO[axis][group] ?? group}: su mediana, en veces tu mediana`,
       formatPiece: (pieza: PieceKind) => `Publicaciones que son ${PIEZAS_PLURAL[pieza]}`,
       formatContent: (contenido: ContentKind) => `Publicaciones que son ${CONTENIDOS_PLURAL[contenido]}`,
       tone: (rasgo: ToneTrait) => `Parte de tus captions ${TONO_CAPTIONS[rasgo]}`,
@@ -220,14 +253,22 @@ export const MESSAGES = {
     viewsPalabra: "views",
     duracion: "duración",
     frenteA: (red: string) => `Tu mediana de ${red} a esa edad:`,
-    tier: { under: "Bajo su mediana", normal: "Normal", good: "Bueno", outlier: "Outlier", breakout: "Breakout" } satisfies Record<OutlierTier, string>,
-    porque: "Qué lo distingue",
-    /** Una razón: «Tus reels: 4,3× frente a 2,4× del resto». */
-    razonFrente: "frente a",
-    razonResto: "del resto",
+    tier: {
+      under: "Bajo tu mediana", normal: "En tu mediana", good: "Bueno", outlier: "Muy por encima", breakout: "Fuera de serie",
+    } satisfies Record<OutlierTier, string>,
+    /** La portada del video: su título, para quien no la ve. */
+    portada: (titulo: string) => `Portada de «${titulo}»`,
+    /** Cómo es el video (gancho, pieza, tipo, duración frente a la típica): la explicación principal. */
+    comoEs: "Cómo es",
+    /**
+     * Una razón, solo cuando los datos la sostienen: «Tus otros reels
+     * hacen 2,1× tu mediana, frente a 0,8× de tus videos sin ser reel».
+     */
+    distingue: "Lo que lo distingue",
+    razonHacen: "hacen",
+    razonFrente: "tu mediana, frente a",
+    razonResto: (axis: WhyAxis, group: string) => `de tus videos sin ${SIN_RASGO[axis][group] ?? group}`,
     grupos: GRUPOS,
-    /** Cuando ningún rasgo supera al resto: se describe el video, sin prometer una causa. */
-    sinRazon: "Ningún rasgo lo separa de tus demás videos. Cómo es:",
     gancho: {
       reto: "abre con un reto",
       pregunta: "abre con una pregunta",
@@ -294,8 +335,20 @@ export const MESSAGES = {
 
   fuentes: {
     title: "De dónde sale cada cifra",
-    meta: "Las cifras que no llevan a un video, a una campaña o al tarifario, con su fila y su fecha",
-    fila: "fila",
+    meta: "Las cifras que no llevan a un video, a una campaña o al tarifario",
+    /** El resumen del bloque plegado. */
+    ver: (n: string) => `Ver las ${n} fuentes`,
+    /** Los grupos, por el origen de la cifra. */
+    grupos: {
+      audiencia: "Demografía y alcance",
+      base: "Líneas base",
+      porque: "Puntajes y porqué",
+      captions: "Lo que se lee en tus captions",
+    },
+    videos: "Videos que la forman:",
+    yMas: (n: string) => `y ${n} más`,
+    /** Para soporte, solo en el title de la fila: la tabla, la columna y la fila tal cual. */
+    soporte: (tabla: string, campo: string, fila: string) => `${tabla}.${campo} · ${fila}`,
   },
 
   unidades: {

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CifraVista } from "./cifras";
 import { MESSAGES } from "./messages";
+import { abrirPlegableDe } from "./plegable";
 
 /** El ancho del globo y lo que deja libre a cada lado de la pantalla, en px. */
 export const GLOBO_ANCHO = 240;
@@ -159,7 +160,16 @@ export function Cifra({ cifra, tipId, grande = false }: { cifra: CifraVista; tip
           </a>
         ) : cifra.href.startsWith("#") ? (
           // Un ancla de esta misma página («De dónde sale cada cifra»): un enlace simple, sin navegación de Next.
-          <a href={cifra.href} className={enlace} aria-label={t.abrirA(cifra.origen)} onClick={cerrar}>
+          // La fila vive en un bloque plegado: se abre antes de que el navegador salte a ella.
+          <a
+            href={cifra.href}
+            className={enlace}
+            aria-label={t.abrirA(cifra.origen)}
+            onClick={() => {
+              abrirPlegableDe(cifra.href);
+              cerrar();
+            }}
+          >
             {t.abrir}
           </a>
         ) : (

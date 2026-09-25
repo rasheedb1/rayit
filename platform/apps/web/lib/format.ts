@@ -216,11 +216,14 @@ export function formatPoints(diff: number, digits = 1, opts: LocaleOpts = {}): s
 /**
  * Un múltiplo: 3.57 → "3,6×" · 12 → "12×". Para «este video hizo 3,6×
  * su mediana»: el compacto ("3,6") pierde el «veces» y se lee como un
- * número suelto.
+ * número suelto. `opts.minDigits` fija los decimales mínimos: donde dos
+ * múltiplos se leen juntos («1,2× frente a 1,0×»), 1× junto a 1,2× se ve
+ * raro.
  */
-export function formatMultiple(ratio: number, digits = 1, opts: LocaleOpts = {}): string {
+export function formatMultiple(ratio: number, digits = 1, opts: LocaleOpts & { minDigits?: number } = {}): string {
   const locale = opts.locale ?? DEFAULT_LOCALE;
-  const body = plain(numberFormat(locale, { maximumFractionDigits: digits }).format(ratio));
+  const min = Math.min(opts.minDigits ?? 0, digits);
+  const body = plain(numberFormat(locale, { minimumFractionDigits: min, maximumFractionDigits: digits }).format(ratio));
   return `${body}×`;
 }
 
@@ -492,7 +495,7 @@ export function formatterFor(settings: FormatSettings) {
     int: (n: number) => formatInt(n, base),
     compact: (n: number) => formatCompact(n, base),
     pct: (ratio: number, digits = 0) => formatPct(ratio, digits, base),
-    multiple: (ratio: number, digits = 1) => formatMultiple(ratio, digits, base),
+    multiple: (ratio: number, digits = 1, minDigits = 0) => formatMultiple(ratio, digits, { ...base, minDigits }),
     delta: (ratio: number, digits = 0) => formatDelta(ratio, digits, base),
     points: (diff: number, digits = 1) => formatPoints(diff, digits, base),
     date: (iso: string, style: "short" | "long" = "short") => formatDate(iso, style, base),
