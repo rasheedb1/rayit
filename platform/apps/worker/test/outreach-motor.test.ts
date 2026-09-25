@@ -20,10 +20,10 @@
  *   · volver a encenderlo devuelve lo cancelado a la cola: las cadencias
  *     siguen donde iban, con sus días entre pasos y sus textos.
  *
- * Los contadores de 0037 cuentan el día con now() de la BASE, que el
- * reloj falso no mueve: por eso la prueba del límite vacía
- * outbound_counter antes de «cambiar de día», que es lo que haría el
- * calendario real.
+ * Los contadores cuentan el día del reloj del despachador (p_at, 0052
+ * §3), no el now() de la base: cuando el reloj falso cambia de día, la
+ * plaza del día nuevo es una fila nueva de outbound_counter, como con el
+ * calendario real. La prueba no los toca a mano.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -267,8 +267,9 @@ test('el límite diario reprograma al siguiente día hábil', async () => {
   clock = bogota('2026-09-25', '07:00'); // viernes
   const r = await motor.transaction((tx) => enrollContacts(tx, { sequenceId: SEQ, contactIds: [CAROLINA, PEDRO], now: clock }));
   for (const e of r.enrolled) enrollments.set(e.contactId, e.enrollmentId);
-  // Un día nuevo: contadores nuevos (ver arriba), y la cuenta con un solo envío al día.
-  await db.raw.exec(`DELETE FROM outbound_counter; UPDATE outreach_channel_account SET daily_cap = 1 WHERE id = '${GMAIL}';`);
+  // La cuenta con un solo envío al día. El viernes es un día nuevo para los
+  // contadores sin tocarlos: cuentan el día del reloj (0052 §3).
+  await db.raw.exec(`UPDATE outreach_channel_account SET daily_cap = 1 WHERE id = '${GMAIL}';`);
   clock = bogota('2026-09-25', '12:00');
   const sentBefore = fake.email.sent.length;
   const d = await runDispatch(motor, deps());
@@ -283,10 +284,22 @@ test('el límite diario reprograma al siguiente día hábil', async () => {
     `SELECT status, attempt_count FROM outbound_touch WHERE id = ANY($1::uuid[])`, [d.claim.rescheduled.map((x) => x.touchId)],
   );
   assert.deepEqual(pendientes.rows.map((x) => [x.status, x.attempt_count]), [['scheduled', 0], ['scheduled', 0]], 'sin gastar un intento');
+  assert.deepEqual(await plazasDelDia(), [['2026-09-25', 1]], 'el viernes, una plaza gastada de una');
 });
 
+/** Las filas diarias de la cuenta de Gmail: [día local, plazas gastadas]. */
+async function plazasDelDia(): Promise<Array<[string, number]>> {
+  const { rows } = await db.raw.query<{ period_start: string; count: number }>(
+    `SELECT period_start::text, count FROM outbound_counter
+      WHERE channel_account_id = $1 AND period = 'day' AND period_start >= '2026-09-25' ORDER BY period_start`,
+    [GMAIL],
+  );
+  return rows.map((r) => [r.period_start, r.count]);
+}
+
 test('un reclamo caído: lo que nunca llegó al proveedor vuelve a la cola; lo que llegó es un zombi, sin reenviar', async () => {
-  await db.raw.exec(`DELETE FROM outbound_counter; UPDATE outreach_channel_account SET daily_cap = 40 WHERE id = '${GMAIL}';`);
+  // El lunes, sin tocar los contadores: el día del reloj es otro y el tope vuelve a 40.
+  await db.raw.exec(`UPDATE outreach_channel_account SET daily_cap = 40 WHERE id = '${GMAIL}';`);
   clock = bogota('2026-09-28', '12:00');
   // El despachador reclama, marca el primero como «voy a enviar» y se cae.
   const claimed = await motor.transaction((tx) => claimDueTouches(tx, { now: clock, channels: ['email'] }));
@@ -316,6 +329,13 @@ test('un reclamo caído: lo que nunca llegó al proveedor vuelve a la cola; lo q
     (await scalar<number>(`SELECT count(*)::int AS v FROM notification WHERE kind = 'outreach_failed'`)) - avisosAntes, 1,
     'un aviso, el del zombi; ninguno por lo devuelto',
   );
+  // El lunes es una fila nueva del contador, con lo que salió ese día; la
+  // del viernes sigue como quedó (0052 §3: el día es el del reloj).
+  const plazas = await plazasDelDia();
+  assert.deepEqual(plazas[0], ['2026-09-25', 1]);
+  assert.equal(plazas[1]?.[0], '2026-09-28');
+  // Una plaza por cada reclamado: el zombi conserva la suya (pudo salir) y lo devuelto la gastó al salir.
+  assert.equal(plazas[1]?.[1], claimed.claimed.length, JSON.stringify(plazas));
 });
 
 test('una respuesta que pide la baja marca la ficha y cancela todo lo suyo', async () => {

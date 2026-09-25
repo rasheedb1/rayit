@@ -104,7 +104,8 @@ test('el tope corre los pasos de detrás, y ningún paso sale antes que el anter
   assert.equal(localClock(despues[1]!.scheduled_for), localClock(antes[1]!.scheduled_for), 'cada uno con su hora de reloj');
 
   // Aunque el paso 2 quedara vencido antes que el 1 (una reprogramación a mano), no sale mientras el 1 siga en la cola.
-  await db.raw.exec(`DELETE FROM outbound_counter WHERE workspace_id = '${w.id}'; UPDATE outreach_channel_account SET daily_cap = 40 WHERE id = '${w.gmail}';`);
+  // El lunes los contadores ya son otro día (0052 §3): solo se devuelve el tope.
+  await db.raw.query(`UPDATE outreach_channel_account SET daily_cap = 40 WHERE id = $1`, [w.gmail]);
   await setDue(despues[1]!.id, bogota('2026-09-28', '10:00'));
   const r2 = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-28', '11:00')));
   assert.equal(r2.claim.claimed, 0, 'el paso 2 espera al 1');
@@ -234,12 +235,16 @@ test('el techo de LinkedIn es uno para la cuenta: con 1 al día, una invitación
   );
   assert.deepEqual(filas.rows.map((f) => [f.action_type, f.period, f.count]), [['linkedin', 'day', 1], ['linkedin', 'week', 1]]);
   // Al día siguiente, a su hora, sale el otro. Los contadores cuentan el día
-  // con now() de la base, que el reloj falso no mueve: la fila de «hoy» pasa a ayer.
-  await db.raw.query(`UPDATE outbound_counter SET period_start = period_start - 1 WHERE channel_account_id = $1 AND period = 'day'`, [acc]);
+  // del reloj del despachador (p_at, 0052 §3), no el now() de la base: el
+  // reloj falso cambia de día y la plaza del jueves es una fila nueva.
   const manana = new Date(r.claim.rescheduled[0]!.until.getTime() + 60_000);
   const r2 = await runDispatch(motor, deps(w, fake, () => manana));
   assert.equal(r2.sent.length, 1);
   assert.deepEqual(new Set(fake.linkedin.sent.map((m) => m.stepType)), new Set(['linkedin_connect', 'linkedin_message']));
+  const dias = await db.raw.query<{ period_start: string; count: number }>(
+    `SELECT period_start::text, count FROM outbound_counter WHERE channel_account_id = $1 AND period = 'day' ORDER BY period_start`, [acc],
+  );
+  assert.deepEqual(dias.rows.map((f) => [f.period_start, f.count]), [['2026-09-23', 1], ['2026-09-24', 1]], 'una fila por día del reloj');
 });
 
 test('15 Instagram vencidos a las 09:00 salen como mucho 10 en la primera hora, separados, y el resto después', async () => {
