@@ -113,7 +113,8 @@ const URL_RE = /\b(?:https?:\/\/|www\.)\S+/gi;
 const TIME_RE = /\b\d{1,2}:\d{2}\b/g;
 const MONTHS =
   'enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|' +
-  'january|february|march|april|may|june|july|august|september|october|november|december';
+  'january|february|march|april|may|june|july|august|september|october|november|december|' +
+  'ene|feb|mar|abr|jun|jul|ago|sep|sept|oct|nov|dic|jan|apr|aug|dec';
 const DATE_RE = new RegExp(`\\b\\d{1,2}\\s+(?:de\\s+)?(?:${MONTHS})\\b|\\b(?:${MONTHS})\\s+\\d{1,2}\\b`, 'giu');
 const YEAR_RE = /(?<!\d|\d[.,])(?:19|20)\d{2}(?!\d|[.,]\d|\s?%)/g;
 // Un rango de edad («de 25 a 34», «18-24»): es el nombre del grupo, no una cifra; la cifra es su porcentaje.
