@@ -482,7 +482,7 @@ async function readOpenDeal(
 async function assertMember(tx: WorkspaceTx, userId: string): Promise<void> {
   if (!isUuid(userId)) throw new FichaError('InvalidResponsible');
   const { rows } = await tx.query(
-    `SELECT 1 FROM membership WHERE workspace_id = current_workspace_id() AND user_id = $1 AND role <> 'client'`,
+    `SELECT 1 WHERE membership_is_team(current_workspace_id(), $1::uuid)`,
     [userId],
   );
   if (rows.length === 0) throw new FichaError('InvalidResponsible');

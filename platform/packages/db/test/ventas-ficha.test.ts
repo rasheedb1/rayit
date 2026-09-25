@@ -29,6 +29,7 @@ import {
 import { CompanyNotFound, DealNotFound, listPipeline } from '../src/queries/ventas.ts';
 import type { WorkspaceTx } from '../src/client.ts';
 import { CAMPAIGN_CAFE_ALMA, COMPANY_CAFE_ALMA, INVOICE_FV_2026_010, WORKSPACE_LAURA, openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
+import { membershipSql } from './membresia.ts';
 
 /** Negocios y empresas del seed 0002. */
 const DEAL_CAFE_RENOVACION = '00000002-0000-4000-8000-0000000dea04';
@@ -90,7 +91,7 @@ before(async () => {
     ON CONFLICT DO NOTHING;
     INSERT INTO app_user (id, email, name) VALUES ('${USER_AJENO}', 'ajeno@ficha.test', 'Persona Ajena') ON CONFLICT DO NOTHING;
     INSERT INTO app_user (id, email, name) VALUES ('${USER_EX}', 'ex@ficha.test', 'Se fue') ON CONFLICT DO NOTHING;
-    INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WORKSPACE_AJENO}', '${USER_AJENO}', 'owner') ON CONFLICT DO NOTHING;
+    ${membershipSql([{ workspaceId: WORKSPACE_AJENO, userId: USER_AJENO, kind: 'owner' }])}
     INSERT INTO company (id, name, domain, owner_workspace_id) VALUES ('${COMPANY_AJENA}', 'Marca de la ficha ajena', 'fichaajena.es', '${WORKSPACE_AJENO}')
     ON CONFLICT DO NOTHING;
     INSERT INTO company_link (workspace_id, company_id) VALUES ('${WORKSPACE_AJENO}', '${COMPANY_AJENA}') ON CONFLICT DO NOTHING;

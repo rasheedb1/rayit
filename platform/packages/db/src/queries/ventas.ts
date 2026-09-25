@@ -795,7 +795,7 @@ export async function listOwnerOptions(tx: WorkspaceTx): Promise<OwnerOption[]> 
        FROM membership m
        JOIN app_user u ON u.id = m.user_id
       WHERE m.workspace_id = current_workspace_id()
-        AND m.role <> 'client'
+        AND membership_is_team(m.workspace_id, m.user_id)
       ORDER BY label ASC`,
   );
   return rows.map((r) => ({ userId: r.user_id, label: r.label }));

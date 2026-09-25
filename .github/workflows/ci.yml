@@ -124,7 +124,8 @@ jobs:
             "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
       - name: Límites atómicos, baja y guardia de esquema contra Postgres real (tienen que pasar)
         # Lo que PGlite no puede probar: «el bloqueo es de verdad» de
-        # outreach.test.ts (dos transacciones que se pisan) y la guardia
+        # outreach.test.ts (dos transacciones que se pisan), los dos
+        # reclamos a la vez de outreach-reclamo.test.ts y la guardia
         # de esquema.test.ts sobre un Postgres que no es el embebido. Van
         # en su propio paso para que su rojo se vea: el paso siguiente
         # todavía no está en verde por razones ajenas a ellas.
@@ -133,7 +134,7 @@ jobs:
           TEST_DATABASE_ADMIN_URL: postgres://mc:mc@localhost:5432/oncue
         run: >-
           pnpm --filter @mc/db exec node --test --experimental-strip-types --test-isolation=none
-          --test-concurrency=1 --test-timeout=120000 test/outreach.test.ts test/esquema.test.ts
+          --test-concurrency=1 --test-timeout=120000 test/outreach.test.ts test/outreach-reclamo.test.ts test/esquema.test.ts
       - name: El resto de @mc/db contra Postgres real (informativo, CIM-2c)
         # Pendiente (CIM-2c en backlog.ts): varios archivos miden los
         # privilegios de mc_app con un rol de conexión que también hereda

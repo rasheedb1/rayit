@@ -37,6 +37,7 @@ import { motorDbFromJob, type MotorDb } from '../src/jobs/ventas/motor-db.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
 import { motorKit } from './helpers/motor-kit.ts';
+import { membershipSql } from '@mc/db/test/membresia';
 
 const TZ = 'America/Bogota';
 const WS = '0000000b-0000-4000-8000-000000000001';
@@ -113,7 +114,7 @@ before(async () => {
   await db.raw.exec(`
     INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS}', 'motor-laura', 'Laura · Cocina fácil', '${TZ}');
     INSERT INTO app_user (id, email, name) VALUES ('${USER}', 'laura@motor.test', 'Laura');
-    INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS}', '${USER}', 'owner');
+    ${membershipSql([{ workspaceId: WS, userId: USER, kind: 'owner' }])}
     INSERT INTO company (id, name, owner_workspace_id) VALUES
       ('${CO_VITALE}', 'Vitalé', '${WS}'), ('${CO_SABORES}', 'Sabores Caseros', '${WS}'), ('${CO_OLLA}', 'Olla Fácil', '${WS}');
     INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS}', '${CO_VITALE}'), ('${WS}', '${CO_SABORES}'), ('${WS}', '${CO_OLLA}');

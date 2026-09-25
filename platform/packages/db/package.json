@@ -26,7 +26,8 @@
     "./queries/outreach": "./src/queries/outreach.ts",
     "./queries/canales": "./src/queries/canales.ts",
     "./queries/entregabilidad": "./src/queries/entregabilidad.ts",
-    "./test/pglite": "./test/pglite.ts"
+    "./test/pglite": "./test/pglite.ts",
+    "./test/membresia": "./test/membresia.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

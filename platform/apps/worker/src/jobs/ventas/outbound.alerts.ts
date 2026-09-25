@@ -22,7 +22,7 @@
  * propio enlace (messages.ts, ALERTAS_URL).
  *
  * Después, UN correo de resumen por workspace, a todos sus dueños
- * (membership.role = 'owner') a la vez, con las alertas que todavía no
+ * (membership_is_owner, 0055) a la vez, con las alertas que todavía no
  * salieron por correo; al enviarlo se anota notification.emailed_at. Uno
  * por workspace y no uno por dueño: si el envío falla no sale a nadie y
  * nada queda marcado, así que la corrida siguiente no le repite el
@@ -188,7 +188,7 @@ async function enviarResumen(db: JobDatabase, w: Espacio, now: Date, deps: Alert
   }
   const { rows: duenos } = await db.query<{ email: string }>(
     `SELECT u.email FROM membership m JOIN app_user u ON u.id = m.user_id
-      WHERE m.workspace_id = $1 AND m.role = 'owner' AND u.deleted_at IS NULL ORDER BY u.email`,
+      WHERE m.workspace_id = $1 AND membership_is_owner(m.workspace_id, m.user_id) AND u.deleted_at IS NULL ORDER BY u.email`,
     [w.id],
   );
   if (!duenos.length) return;

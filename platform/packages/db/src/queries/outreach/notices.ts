@@ -16,9 +16,12 @@ import {
 import type { SqlExecutor } from '../../client.ts';
 import { assertIds } from './shared.ts';
 
-/** Quién recibe el aviso: quien enroló (si sigue siendo del equipo), o todo el espacio (user_id NULL). */
-const RECIPIENT_SQL = `(SELECT m.user_id FROM membership m
-                         WHERE m.workspace_id = t.workspace_id AND m.user_id = e.enrolled_by AND m.role <> 'client')`;
+/**
+ * Quién recibe el aviso: quien enroló (si sigue siendo del equipo), o todo
+ * el espacio (user_id NULL). «Del equipo» lo decide la base
+ * (membership_is_team, 0055), con y sin los roles de 0034_access_control.
+ */
+const RECIPIENT_SQL = `CASE WHEN membership_is_team(t.workspace_id, e.enrolled_by) THEN e.enrolled_by END`;
 
 interface TouchNoticeRow {
   locale: string | null;

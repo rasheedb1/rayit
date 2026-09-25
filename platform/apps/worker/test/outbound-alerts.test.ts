@@ -21,6 +21,7 @@ import { ALERTAS_URL, SALUD_URL } from '../src/jobs/ventas/messages.ts';
 import { ALERTAS_JOB_ID, runAlertas, type ReadSignals } from '../src/jobs/ventas/outbound.alerts.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
+import { membershipSql } from '@mc/db/test/membresia';
 
 /** 9:00 en Bogotá. */
 const NOW = new Date('2026-09-23T14:00:00Z');
@@ -73,9 +74,10 @@ before(async () => {
     INSERT INTO app_user (id, email, name) VALUES
       ('${USER_DUENA}', 'laura@alertas.test', 'Laura'),
       ('${USER_MIEMBRO}', 'ana@alertas.test', 'Ana');
-    INSERT INTO membership (workspace_id, user_id, role) VALUES
-      ('${WS_MAL}', '${USER_DUENA}', 'owner'),
-      ('${WS_MAL}', '${USER_MIEMBRO}', 'member');
+    ${membershipSql([
+      { workspaceId: WS_MAL, userId: USER_DUENA, kind: 'owner' },
+      { workspaceId: WS_MAL, userId: USER_MIEMBRO, kind: 'member' },
+    ])}
     INSERT INTO outbound_policy (workspace_id) VALUES ('${WS_MAL}'), ('${WS_SANO}');
   `);
 }, SETUP_TIMEOUT);
@@ -169,8 +171,10 @@ test('con dos dueños: si el correo falla nadie lo recibe dos veces, y sale al d
     INSERT INTO workspace (id, slug, name, timezone, locale) VALUES ('${WS_DOS}', 'alertas-dos', 'Dos Dueños', 'America/Bogota', 'es-CO');
     INSERT INTO app_user (id, email, name) VALUES
       ('${USER_DUENO_1}', 'uno@alertas.test', 'Uno'), ('${USER_DUENO_2}', 'dos@alertas.test', 'Dos');
-    INSERT INTO membership (workspace_id, user_id, role) VALUES
-      ('${WS_DOS}', '${USER_DUENO_1}', 'owner'), ('${WS_DOS}', '${USER_DUENO_2}', 'owner');
+    ${membershipSql([
+      { workspaceId: WS_DOS, userId: USER_DUENO_1, kind: 'owner' },
+      { workspaceId: WS_DOS, userId: USER_DUENO_2, kind: 'owner' },
+    ])}
     INSERT INTO outbound_policy (workspace_id) VALUES ('${WS_DOS}');
   `);
   const caido = new CarteroCaido();
@@ -194,7 +198,7 @@ test('un workspace en inglés recibe la campana y el correo en inglés', async (
   await db.raw.exec(`
     INSERT INTO workspace (id, slug, name, timezone, locale) VALUES ('${WS_EN}', 'alerts-en', 'Creator EN', 'America/New_York', 'en-US');
     INSERT INTO app_user (id, email, name) VALUES ('${USER_OWNER_EN}', 'owner@alerts.test', 'Owner');
-    INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_EN}', '${USER_OWNER_EN}', 'owner');
+    ${membershipSql([{ workspaceId: WS_EN, userId: USER_OWNER_EN, kind: 'owner' }])}
     INSERT INTO outbound_policy (workspace_id) VALUES ('${WS_EN}');
   `);
   const cartero = new CarteroFalso();

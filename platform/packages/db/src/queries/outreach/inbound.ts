@@ -237,8 +237,8 @@ async function notifyInbound(
   await tx.query(
     `INSERT INTO notification (workspace_id, user_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url, created_at)
      VALUES ($1::uuid,
-             (SELECT m.user_id FROM membership m JOIN outbound_enrollment e ON e.enrolled_by = m.user_id
-               WHERE e.id = $2::uuid AND m.workspace_id = $1::uuid AND m.role <> 'client'),
+             (SELECT e.enrolled_by FROM outbound_enrollment e
+               WHERE e.id = $2::uuid AND membership_is_team($1::uuid, e.enrolled_by)),
              'outreach_reply', $3, $4, $5, 'outbound_message', $6::uuid, $8, $7::timestamptz)`,
     [
       input.workspaceId, input.enrollmentId, text.severity, text.title, text.body, input.messageId, input.now.toISOString(),

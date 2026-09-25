@@ -16,6 +16,7 @@ import type { ChannelSender } from '../../src/jobs/ventas/canales/types.ts';
 import type { DispatchDeps } from '../../src/jobs/ventas/outbound.dispatch.ts';
 import type { MotorDb } from '../../src/jobs/ventas/motor-db.ts';
 import type { PgliteDatabase } from '../../src/runner/db-pglite.ts';
+import { membershipSql } from '@mc/db/test/membresia';
 
 export const TZ = 'America/Bogota';
 export const W = { start: '09:00', end: '17:00' };
@@ -100,7 +101,7 @@ export function motorKit(opts: { db: () => PgliteDatabase; motor: () => MotorDb;
     await db().raw.exec(`
       INSERT INTO workspace (id, slug, name, timezone, locale) VALUES ('${w.id}', '${opts.slug}-${n}', 'Creadora ${n}', '${TZ}', '${o.locale ?? 'es-CO'}');
       INSERT INTO app_user (id, email, name) VALUES ('${user}', 'creadora${n}@${opts.slug}.test', 'Creadora ${n}');
-      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${w.id}', '${user}', 'owner');
+      ${membershipSql([{ workspaceId: w.id, userId: user, kind: 'owner' }])}
       INSERT INTO company (id, name, owner_workspace_id) VALUES ('${w.company}', 'Marca ${n}', '${w.id}');
       INSERT INTO company_link (workspace_id, company_id) VALUES ('${w.id}', '${w.company}');
       INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES ${contactos};

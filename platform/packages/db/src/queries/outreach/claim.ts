@@ -3,6 +3,8 @@
  *
  * En UNA transacción, que quien llama confirma antes de tocar ningún
  * proveedor (0037 §4.5):
+ *   0. toma el candado del reclamo (CLAIM_LOCK_KEY): dos reclamos a la vez
+ *      no leen el mismo estado de la marca ni el mismo ritmo de la cuenta;
  *   1. cancela lo vencido de quien se dio de baja, o de un enrolamiento
  *      que ya terminó (la base rechazaría reclamarlo);
  *   2. toma hasta `limit` toques vencidos de workspaces con el
@@ -201,6 +203,9 @@ function parseCandidate(r: CandidateRow, i: number): Candidate {
   };
 }
 
+/** La clave del candado que serializa los reclamos (pg_advisory_xact_lock(hashtext(...))). */
+export const CLAIM_LOCK_KEY = 'outbound.dispatch/claim';
+
 /** Lo vencido: la hora del reintento si la hay, si no la programada. */
 const DUE = 'coalesce(t.next_retry_at, t.scheduled_for) <= $1::timestamptz';
 
@@ -353,6 +358,18 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   if (ws) assertIds('claimDueTouches', [ws]);
   const channels = opts.channels.filter((c) => (DISPATCH_CHANNELS as readonly string[]).includes(c));
   const report = emptyClaimReport();
+
+  // Un solo reclamo a la vez, en toda la base. FOR UPDATE SKIP LOCKED
+  // solo bloquea los toques; la separación con la marca (companyState) y
+  // el ritmo por hora de cada cuenta (accountPace) se leen de lo ya
+  // confirmado. Dos reclamos a la vez (el cron y un job:dispatch a mano,
+  // o dos procesos) verían el mismo estado y mandarían dos mensajes a la
+  // misma marca el mismo día, o pasarían del ritmo de una cuenta de
+  // LinkedIn. El candado es de la transacción: se suelta al confirmar el
+  // reclamo, antes de hablar con ningún proveedor, así que serializa
+  // milisegundos, no envíos. Los topes diarios y semanales ya eran
+  // atómicos (contadores en la base). 0055 deja además max_concurrency = 1.
+  await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [CLAIM_LOCK_KEY]);
 
   // Los enrolamientos que se quedan sin un toque vivo por lo que el
   // reclamo cancela o salta: al final se avanzan (advanceEnrollment), como
