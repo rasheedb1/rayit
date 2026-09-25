@@ -21,7 +21,17 @@
  *      si el paso le escribe a la persona, la persona tiene dirección en
  *      ese canal. Un correo que queda como primero del hilo es `email`,
  *      nunca `email_reply`.
- *   3. La guía: la de la plantilla si el paso quedó como estaba; si
+ *   3. La política del espacio (outbound_policy): la propuesta nace
+ *      cumpliéndola, no con avisos. Si hay más mensajes que
+ *      max_touches_per_company, los del medio (prueba social, luego el
+ *      concepto, luego la prueba de desempeño) se vuelven un gesto
+ *      público en la red (una reacción, que no es un mensaje y no cuenta
+ *      para el tope) o, si no hay red, se quitan; el primero y la
+ *      síntesis se quedan siempre. Después los días se estiran para que
+ *      entre dos mensajes haya min_days_between_touches, sin pasar del
+ *      día MAX_DAY_OFFSET. checkSequenceAgainstPolicy de la propuesta
+ *      queda vacío; lo cambiado va en una nota (fitted_to_policy).
+ *   4. La guía: la de la plantilla si el paso quedó como estaba; si
  *      cambió de canal, se compone con el ángulo, el canal y la señal
  *      (una guía de correo en un directo de LinkedIn mentiría). La
  *      divulgación del brief se añade al cierre.
@@ -36,6 +46,10 @@
  */
 import type { LlmUsage } from './llm-cost.ts';
 import { findPlaceholders } from './placeholder-guard.ts';
+import { DISPATCHABLE_STEP_TYPES, type SequencePolicy } from './sequence-policy.ts';
+
+/** El último día al que se puede poner un paso (CHECK de outbound_step.day_offset, 0037). */
+export const SEQUENCE_MAX_DAY_OFFSET = 60;
 
 /** Los tipos de señal de outbound_sequence_template.signal_kind que el recomendador distingue. */
 export const RECOMMEND_SIGNAL_KINDS = ['active_campaign', 'launch', 'season', 'collab', 'manual'] as const;
@@ -117,6 +131,8 @@ export interface RecommendInput {
   requiresDisclosure: boolean;
   /** Las plantillas activas. */
   templates: readonly RecommendTemplate[];
+  /** outbound_policy del espacio: tope de mensajes a una marca y días entre ellos. */
+  policy: SequencePolicy;
 }
 
 export interface ProposedStep {
@@ -144,7 +160,23 @@ export type ProposalNote =
   | { code: 'unreachable'; step: number; channel: string }
   | { code: 'channel_down'; channel: RecommendChannel }
   | { code: 'no_contact' }
-  | { code: 'disclosure' };
+  | { code: 'disclosure' }
+  /**
+   * La propuesta se ajustó a la política del espacio. `softened`: los
+   * ángulos de los mensajes que pasaron a gesto público (una reacción);
+   * `dropped`: los que se quitaron (no había red para el gesto);
+   * `shiftedDays`: cuántos días se corrió el último paso para respetar
+   * la separación. `maxTouches` y `minDays`: la política con la que se
+   * ajustó, para decirla.
+   */
+  | {
+      code: 'fitted_to_policy';
+      softened: string[];
+      dropped: string[];
+      shiftedDays: number;
+      maxTouches: number;
+      minDays: number;
+    };
 
 export interface Proposal {
   templateSlug: string;
@@ -233,7 +265,7 @@ function hasAddress(contact: ContactReach, channel: string): boolean {
 }
 
 /** Por qué un canal no sirve para este paso, o null si sirve. */
-function blockerFor(input: RecommendInput, channel: string, needsAddress: boolean): RerouteReason | null {
+function blockerFor(input: Pick<RecommendInput, 'allowedChannels' | 'channels' | 'contact'>, channel: string, needsAddress: boolean): RerouteReason | null {
   if (!(RECOMMEND_CHANNELS as readonly string[]).includes(channel) || !input.allowedChannels.includes(channel)) {
     return 'channel_not_allowed';
   }
@@ -332,7 +364,7 @@ export function recommendSequence(input: RecommendInput): Proposal {
   if (!input.contact) notes.push({ code: 'no_contact' });
 
   const ordered = [...template.steps].sort((a, b) => a.day_offset - b.day_offset || a.order_in_day - b.order_in_day);
-  const steps: ProposedStep[] = [];
+  const routed: ProposedStep[] = [];
   let emailSeen = false;
 
   ordered.forEach((s, i) => {
@@ -358,13 +390,10 @@ export function recommendSequence(input: RecommendInput): Proposal {
         }
       }
     }
-    // El primer correo abre el hilo: un email_reply sin correo antes no tiene a qué responder.
-    if (channel === 'email' && stepType === 'email_reply' && !emailSeen) stepType = 'email';
     if (channel === 'email') emailSeen = true;
 
     const changed = stepType !== s.step_type || channel !== s.channel;
-    const base = changed ? composeGuidance(s.angle_key, stepType, input.signalKind) : s.guidance_es;
-    steps.push({
+    routed.push({
       dayOffset: s.day_offset,
       orderInDay: s.order_in_day,
       stepType,
@@ -373,10 +402,24 @@ export function recommendSequence(input: RecommendInput): Proposal {
       scheduledTime: s.scheduled_time,
       generateWithAi: s.generate_with_ai,
       requiresAsset: s.requires_asset,
-      guidanceEs: withDisclosure(base, s.angle_key, input.requiresDisclosure),
+      guidanceEs: changed ? composeGuidance(s.angle_key, stepType, input.signalKind) : s.guidance_es,
       changedFrom: changed ? { stepType: s.step_type, channel: s.channel } : null,
     });
   });
+
+  const fitted = fitToPolicy(routed, input);
+  if (fitted.note) {
+    // Las notas de canal hablan del paso por su número: el de la propuesta final. La de un paso que
+    // pasó a gesto o se quitó ya no dice la verdad, y la explica la nota de la política.
+    const position = new Map(fitted.origins.map((o, k) => [o + 1, k + 1]));
+    const kept = notes.filter((n) => !('step' in n) || (!fitted.sacrificed.has(n.step - 1) && position.has(n.step)));
+    notes.length = 0;
+    notes.push(...kept.map((n) => ('step' in n ? { ...n, step: position.get(n.step)! } : n)), fitted.note);
+  }
+  const steps = openThread(fitted.steps, input.signalKind).map((s) => ({
+    ...s,
+    guidanceEs: withDisclosure(s.guidanceEs, s.angleKey, input.requiresDisclosure),
+  }));
 
   if (input.requiresDisclosure && steps.some((s) => s.angleKey === 'sintesis')) notes.push({ code: 'disclosure' });
   for (const c of RECOMMEND_CHANNELS) {
@@ -395,6 +438,185 @@ export function recommendSequence(input: RecommendInput): Proposal {
   };
 }
 
+/**
+ * El primer correo de la secuencia abre el hilo: un email_reply sin
+ * correo antes no tiene a qué responder (el despachador lo retendría,
+ * reply_without_thread). Corre después de ajustar a la política, porque
+ * quitar un paso puede dejar una respuesta como primer correo.
+ */
+function openThread(steps: readonly ProposedStep[], signalKind: RecommendSignalKind): ProposedStep[] {
+  let emailSeen = false;
+  return steps.map((s) => {
+    if (s.channel !== 'email') return s;
+    const first = !emailSeen;
+    emailSeen = true;
+    if (!first || s.stepType !== 'email_reply') return s;
+    return {
+      ...s,
+      stepType: 'email',
+      guidanceEs: composeGuidance(s.angleKey, 'email', signalKind),
+      changedFrom: s.changedFrom ?? { stepType: s.stepType, channel: s.channel },
+    };
+  });
+}
+
+// ---------------------------------------------------------------------
+// 5 · La propuesta, ajustada a la política del espacio
+// ---------------------------------------------------------------------
+
+/**
+ * En qué orden se sacrifican los mensajes del medio cuando pasan del
+ * tope: primero el que menos aporta a la venta (la prueba social repite
+ * lo que ya dijo la de desempeño), luego el concepto creativo, luego la
+ * prueba de desempeño. El primer mensaje (abre la conversación) y la
+ * síntesis (media kit y cotización: el que vende) no se tocan.
+ */
+export const POLICY_DROP_ORDER = ['prueba_social', 'concepto_creativo', 'prueba_desempeno', 'encaje_audiencia', 'presencia'] as const;
+
+function isDispatchable(stepType: string): boolean {
+  return (DISPATCHABLE_STEP_TYPES as readonly string[]).includes(stepType);
+}
+
+function dropRank(angle: string | null): number {
+  if (angle === 'sintesis') return POLICY_DROP_ORDER.length + 1;
+  const r = (POLICY_DROP_ORDER as readonly string[]).indexOf(angle ?? '');
+  return r < 0 ? POLICY_DROP_ORDER.length : r;
+}
+
+/**
+ * El mensaje que se sacrifica ahora, o -1 si no queda ninguno. Nunca el
+ * primer mensaje; la síntesis solo si el tope no deja ni dos mensajes.
+ * A igualdad de ángulo, el más tardío.
+ */
+function nextVictim(steps: readonly ProposedStep[], cap: number): number {
+  const sendable = steps.map((s, i) => ({ s, i })).filter((x) => isDispatchable(x.s.stepType));
+  const candidates = sendable.slice(1).filter((x) => cap < 2 || x.s.angleKey !== 'sintesis');
+  let best: (typeof candidates)[number] | null = null;
+  for (const c of candidates) {
+    const cmp = best ? dropRank(c.s.angleKey) - dropRank(best.s.angleKey) : -1;
+    if (!best || cmp < 0 || (cmp === 0 && c.i > best.i)) best = c;
+  }
+  return best ? best.i : -1;
+}
+
+/**
+ * El mensaje sacrificado pasa a gesto público (una reacción en su red o
+ * en la primera que llegue): la marca sigue viendo a la creadora ese día
+ * sin que cuente como mensaje. Sin red disponible, null: se quita.
+ */
+function softenToGesture(s: ProposedStep, input: FitInput): ProposedStep | null {
+  const own = s.channel === 'linkedin' || s.channel === 'instagram_dm' ? [s.channel] : [];
+  const network = [...own, 'linkedin', 'instagram_dm'].find((c) => blockerFor(input, c, false) === null);
+  if (!network) return null;
+  const stepType = network === 'linkedin' ? 'linkedin_like' : 'instagram_like';
+  return {
+    ...s,
+    stepType,
+    channel: network,
+    angleKey: 'presencia',
+    generateWithAi: false,
+    requiresAsset: null,
+    guidanceEs: composeGuidance('presencia', stepType, input.signalKind),
+    changedFrom: s.changedFrom ?? { stepType: s.stepType, channel: s.channel },
+  };
+}
+
+/**
+ * Corre los días para que entre dos mensajes haya `minDays`. Lo que va
+ * detrás de un mensaje corrido se corre lo mismo (un gesto conserva su
+ * distancia con el mensaje de antes). Dentro de cada día, el orden vuelve
+ * a ser 0, 1, 2…
+ */
+function stretchDays(steps: readonly ProposedStep[], minDays: number): { steps: ProposedStep[]; shift: number } {
+  let shift = 0;
+  let prevSend: number | null = null;
+  const moved = steps.map((s) => {
+    let day = s.dayOffset + shift;
+    if (isDispatchable(s.stepType)) {
+      if (prevSend !== null && day - prevSend < minDays) {
+        shift += prevSend + minDays - day;
+        day = prevSend + minDays;
+      }
+      prevSend = day;
+    }
+    return { ...s, dayOffset: Math.min(day, SEQUENCE_MAX_DAY_OFFSET), wanted: day };
+  });
+  const perDay = new Map<number, number>();
+  const out = moved.map(({ wanted: _wanted, ...s }) => {
+    const n = perDay.get(s.dayOffset) ?? 0;
+    perDay.set(s.dayOffset, n + 1);
+    return { ...s, orderInDay: n };
+  });
+  return { steps: out, shift: moved.some((s) => s.wanted > SEQUENCE_MAX_DAY_OFFSET) ? Infinity : shift };
+}
+
+type FitInput = Pick<RecommendInput, 'policy' | 'channels' | 'allowedChannels' | 'contact' | 'signalKind'>;
+
+/**
+ * Ajusta los pasos a la política (el paso 3 del encabezado). Exportada
+ * para probarla sola; recommendSequence la llama siempre.
+ */
+export function fitToPolicy(
+  routed: readonly ProposedStep[],
+  input: FitInput,
+): FitResult {
+  const cap = Math.floor(input.policy.maxTouchesPerCompany);
+  const minDays = Math.max(0, Math.floor(input.policy.minDaysBetweenTouches));
+  let steps = [...routed];
+  let origins = routed.map((_, i) => i);
+  const sacrificed = new Set<number>();
+  const softened: string[] = [];
+  const dropped: string[] = [];
+
+  const sacrifice = (): boolean => {
+    const i = nextVictim(steps, cap);
+    if (i < 0) return false;
+    const victim = steps[i]!;
+    const gesture = softenToGesture(victim, input);
+    (gesture ? softened : dropped).push(victim.angleKey ?? victim.stepType);
+    sacrificed.add(origins[i]!);
+    if (gesture) {
+      steps = steps.map((s, k) => (k === i ? gesture : s));
+    } else {
+      steps = steps.filter((_, k) => k !== i);
+      origins = origins.filter((_, k) => k !== i);
+    }
+    return true;
+  };
+
+  // Un tope de 0 no deja salir nada: ninguna propuesta lo cumple, y la pantalla ya lo avisa.
+  if (cap >= 1) {
+    while (steps.filter((s) => isDispatchable(s.stepType)).length > cap && sacrifice()) {
+      // de uno en uno, en el orden de POLICY_DROP_ORDER
+    }
+  }
+  let stretched = stretchDays(steps, minDays);
+  // Si estirar pasa del último día, se sacrifica otro mensaje del medio; sin ninguno, se queda en el último día.
+  while (stretched.shift === Infinity && sacrifice()) stretched = stretchDays(steps, minDays);
+
+  const moved = stretched.steps.some((s, i) => s.dayOffset !== steps[i]!.dayOffset);
+  if (sacrificed.size === 0 && !moved) return { steps: [...routed], note: null, origins: routed.map((_, i) => i), sacrificed };
+  const shiftedDays = Math.max(0, (stretched.steps.at(-1)?.dayOffset ?? 0) - (routed.at(-1)?.dayOffset ?? 0));
+  return {
+    steps: stretched.steps,
+    note: { code: 'fitted_to_policy', softened, dropped, shiftedDays, maxTouches: cap, minDays },
+    origins,
+    sacrificed,
+  };
+}
+
+/**
+ * Lo que devuelve fitToPolicy. `origins[k]`: de qué paso de la entrada
+ * sale el paso k; `sacrificed`: los pasos de la entrada que pasaron a
+ * gesto o se quitaron (sus notas de canal ya no dicen la verdad).
+ */
+export interface FitResult {
+  steps: ProposedStep[];
+  note: Extract<ProposalNote, { code: 'fitted_to_policy' }> | null;
+  origins: number[];
+  sacrificed: ReadonlySet<number>;
+}
+
 /** El canal con más pasos que le escriben a la persona; a igualdad, el correo. */
 export function primaryChannelOf(steps: ReadonlyArray<{ channel: string; stepType: string }>): RecommendChannel {
   const count = new Map<string, number>();
@@ -408,7 +630,7 @@ export function primaryChannelOf(steps: ReadonlyArray<{ channel: string; stepTyp
 }
 
 // ---------------------------------------------------------------------
-// 5 · La guía redactada por el modelo
+// 6 · La guía redactada por el modelo
 // ---------------------------------------------------------------------
 
 /** El modelo que redacta la guía (docs/ventas-outreach.md §5: sonnet genera y juzga). */

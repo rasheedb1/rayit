@@ -12,6 +12,7 @@ import {
   signalKindOfSource, type GuidanceWriter, type RecommendInput, type RecommendTemplate, type RecommendTemplateStep,
 } from '../src/outreach/recomendar.ts';
 import { llmCostUsd, UnknownModelPriceError } from '../src/outreach/llm-cost.ts';
+import { checkSequenceAgainstPolicy } from '../src/outreach/sequence-policy.ts';
 
 const paso = (
   day: number, type: string, channel: string, angle: string, asset: 'media_kit' | 'quote' | null = null,
@@ -42,6 +43,13 @@ const MANUAL: RecommendTemplate = {
 const BELLEZA: RecommendTemplate = { ...CAMPANA, slug: 'belleza-lanzamiento', signalKind: 'launch', nicheSlug: 'belleza' };
 
 const TODO_CONECTADO = { email: 'connected', linkedin: 'connected', instagram_dm: 'missing' } as const;
+/** Una política que no recorta nada: las pruebas de canal ven la plantilla tal cual. */
+const SIN_TOPE = { maxTouchesPerCompany: 10, minDaysBetweenTouches: 0 };
+/** La política por defecto de outbound_policy (0007) y la del seed. */
+const POR_DEFECTO = { maxTouchesPerCompany: 4, minDaysBetweenTouches: 3 };
+
+const politicaDe = (p: { steps: ReadonlyArray<{ stepType: string; dayOffset: number; orderInDay: number }> }, pol = POR_DEFECTO) =>
+  checkSequenceAgainstPolicy(p.steps.map((s, i) => ({ id: String(i + 1), ...s })), pol);
 
 function entrada(over: Partial<RecommendInput> = {}): RecommendInput {
   return {
@@ -52,6 +60,7 @@ function entrada(over: Partial<RecommendInput> = {}): RecommendInput {
     contact: { hasEmail: true, hasLinkedin: true, hasInstagram: false },
     requiresDisclosure: false,
     templates: [CAMPANA, COCINA, MANUAL, BELLEZA],
+    policy: SIN_TOPE,
     ...over,
   };
 }
@@ -87,6 +96,66 @@ test('la propuesta cambia si el contacto no tiene LinkedIn: los directos pasan a
       { code: 'rerouted', step: 5, from: 'linkedin', to: 'email', manual: false, reason: 'contact_has_no_address' },
     ],
   );
+});
+
+test('con la política por defecto (4 mensajes, 3 días) la propuesta nace cumpliéndola y conserva la síntesis', () => {
+  const p = recommendSequence(entrada({ policy: POR_DEFECTO }));
+  assert.equal(p.steps.length, 6, 'seis pasos: la prueba social pasa a gesto, no se pierde el día');
+  assert.deepEqual(p.steps.map((s) => [s.dayOffset, s.stepType, s.angleKey]), [
+    [0, 'linkedin_comment', 'presencia'], [1, 'email', 'encaje_audiencia'], [4, 'linkedin_message', 'prueba_desempeno'],
+    [7, 'email_reply', 'concepto_creativo'], [9, 'linkedin_like', 'presencia'], [11, 'email', 'sintesis'],
+  ]);
+  assert.deepEqual(politicaDe(p), { overCap: [], closerThanGap: [] });
+  const cierre = p.steps.at(-1)!;
+  assert.equal(cierre.requiresAsset, 'media_kit');
+  assert.equal(cierre.changedFrom, null, 'la síntesis no se toca');
+  assert.deepEqual(p.steps[4]!.changedFrom, { stepType: 'linkedin_message', channel: 'linkedin' });
+  assert.equal(p.steps[4]!.generateWithAi, false);
+  assert.match(p.steps[4]!.guidanceEs, /^Hazlo a mano/);
+  assert.deepEqual(p.notes.find((n) => n.code === 'fitted_to_policy'), {
+    code: 'fitted_to_policy', softened: ['prueba_social'], dropped: [], shiftedDays: 2, maxTouches: 4, minDays: 3,
+  });
+});
+
+test('la política también ajusta la propuesta sin LinkedIn, y sus notas hablan de los pasos que quedan', () => {
+  const p = recommendSequence(entrada({ policy: POR_DEFECTO, contact: { hasEmail: true, hasLinkedin: false, hasInstagram: false } }));
+  assert.deepEqual(politicaDe(p), { overCap: [], closerThanGap: [] });
+  assert.deepEqual(p.steps.map((s) => s.stepType), [
+    'linkedin_comment', 'email', 'email_reply', 'email_reply', 'linkedin_like', 'email',
+  ]);
+  // La prueba social pasó al hilo del correo y luego a gesto: su nota de canal ya no se dice.
+  assert.deepEqual(p.notes.filter((n) => n.code === 'rerouted').map((n) => 'step' in n && n.step), [3]);
+  assert.notDeepEqual(p.steps, recommendSequence(entrada({ policy: POR_DEFECTO })).steps);
+});
+
+test('un tope más bajo sacrifica en orden (prueba social, luego concepto); sin red para el gesto, el paso se quita', () => {
+  const tres = recommendSequence(entrada({ policy: { maxTouchesPerCompany: 3, minDaysBetweenTouches: 2 } }));
+  assert.deepEqual(politicaDe(tres, { maxTouchesPerCompany: 3, minDaysBetweenTouches: 2 }), { overCap: [], closerThanGap: [] });
+  const nota = tres.notes.find((n) => n.code === 'fitted_to_policy');
+  assert.deepEqual(nota && 'softened' in nota && nota.softened, ['prueba_social', 'concepto_creativo']);
+  assert.equal(tres.steps.at(-1)!.angleKey, 'sintesis');
+
+  // Solo correo: nada donde reaccionar. El concepto se va, y la respuesta que abría el hilo no queda sin hilo.
+  const soloCorreo = recommendSequence(
+    entrada({
+      policy: { maxTouchesPerCompany: 2, minDaysBetweenTouches: 3 },
+      channels: { email: 'connected', linkedin: 'missing', instagram_dm: 'missing' },
+    }),
+  );
+  assert.deepEqual(politicaDe(soloCorreo, { maxTouchesPerCompany: 2, minDaysBetweenTouches: 3 }), { overCap: [], closerThanGap: [] });
+  assert.deepEqual(soloCorreo.steps.filter((s) => s.stepType !== 'manual_task').map((s) => [s.stepType, s.angleKey]), [
+    ['email', 'encaje_audiencia'], ['email', 'sintesis'],
+  ]);
+  const fit = soloCorreo.notes.find((n) => n.code === 'fitted_to_policy');
+  assert.ok(fit && 'dropped' in fit && fit.dropped.length === 3);
+  assert.ok(soloCorreo.steps.every((s) => s.dayOffset <= 60));
+});
+
+test('una separación que no cabe en 60 días sacrifica mensajes antes de pasarse del último día', () => {
+  const p = recommendSequence(entrada({ policy: { maxTouchesPerCompany: 10, minDaysBetweenTouches: 25 } }));
+  assert.ok(p.steps.every((s) => s.dayOffset <= 60));
+  assert.deepEqual(politicaDe(p, { maxTouchesPerCompany: 10, minDaysBetweenTouches: 25 }), { overCap: [], closerThanGap: [] });
+  assert.equal(p.steps.at(-1)!.angleKey, 'sintesis');
 });
 
 test('sin LinkedIn conectado ni Instagram permitido, el gesto público queda como tarea a mano', () => {
