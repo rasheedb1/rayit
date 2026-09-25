@@ -25,11 +25,14 @@
  *   · Se quita lo citado (líneas «>» y todo lo que sigue a «El … escribió:»
  *     u «On … wrote:»): la respuesta suele citar nuestro correo, y nuestro
  *     pie dice cómo darse de baja.
- *   · Se quita la firma: desde «--», «Sent from…», o una línea que es solo
- *     el saludo de cierre («Saludos», «Regards») o el saludo y un nombre
- *     («Saludos, Marcela»), siempre DESPUÉS de algo escrito (r3): «Saludos.
- *     No nos escriban más.» es el mensaje entero. Las firmas corporativas
- *     traen «To unsubscribe from our newsletter…».
+ *   · Se quita la firma: desde «--», «Sent from…», el saludo y un nombre
+ *     («Saludos, Marcela»), o el saludo de cierre solo («Saludos,») si lo
+ *     sigue un nombre o nada; siempre DESPUÉS de algo escrito (r3):
+ *     «Saludos. No nos escriban más.» es el mensaje entero. Las firmas
+ *     corporativas traen «To unsubscribe from our newsletter…». Si quitar
+ *     la firma no deja nada, se mira el texto con ella.
+ *   · «De: …»/«From: …» abre la cita solo si la siguen «Para:», «Asunto:»
+ *     u otra cabecera (r3).
  *   · Se busca sin tildes, en minúsculas y con el apóstrofo recto.
  *
  * Lo que NO es baja, con sus pruebas: «no me enviaste el media kit»
@@ -156,18 +159,27 @@ export function normalizeForOptOut(text: string): string {
   return text.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[‘’]/g, "'").toLowerCase();
 }
 
+/** Las cabeceras que acompañan a «De:»/«From:» en la cita de Outlook y de Apple Mail. */
+const QUOTE_HEADER = /^(para|to|cc|asunto|subject|enviado|sent|fecha|date)\s*:/i;
+/** Cuántas líneas después de «De:» se busca otra cabecera. */
+const QUOTE_HEADER_LOOKAHEAD = 4;
+
 /**
  * Solo lo que escribió quien responde: sin las líneas citadas («> …») y
- * sin lo que sigue a la cabecera de la cita de Gmail u Outlook.
+ * sin lo que sigue a la cabecera de la cita de Gmail u Outlook. Una línea
+ * «De: …»/«From: …» abre la cita solo si la sigue otra cabecera («Para:»,
+ * «Asunto:», «Enviado:»…) en las líneas de abajo (r3): «De: Sofía\nPor
+ * favor denme de baja» es un mensaje que empieza con su nombre, no una cita.
  */
 export function stripQuoted(text: string): string {
   const lines = text.split(/\r?\n/);
   const out: string[] = [];
-  for (const line of lines) {
+  for (const [i, line] of lines.entries()) {
     const t = line.trim();
     if (/^(el|on)\s.+(escribio|wrote)\s*:\s*$/i.test(normalizeForOptOut(t))) break;
     if (/^-{2,}\s*(original message|mensaje original)\s*-{2,}$/i.test(normalizeForOptOut(t))) break;
-    if (/^from:\s/i.test(t) || /^de:\s/i.test(t)) break;
+    if (/^(from|de)\s*:\s/i.test(t)
+      && lines.slice(i + 1, i + 1 + QUOTE_HEADER_LOOKAHEAD).some((l) => QUOTE_HEADER.test(l.trim()))) break;
     if (t.startsWith('>')) continue;
     out.push(line);
   }
@@ -186,19 +198,33 @@ const CLOSING_LEAD = new RegExp(`^${CLOSING}`, 'i');
 const NAME_AFTER_CLOSING = /^\s*[,.!-]?\s+\p{Lu}[\p{L}'.-]*(\s+\p{Lu}[\p{L}'.-]*){0,3}\s*$/u;
 
 /**
- * ¿Esta línea abre la firma? (r3) Solo si ANTES hay algo escrito por la
- * persona, y la línea es una marca de firma, el saludo de cierre solo, o
- * el saludo y un nombre. «Saludos. No nos escriban más.», «Saludos, por
- * favor dejen de escribirnos» y «Cordialmente les pido que me saquen de
- * su lista» son el mensaje, no la firma: la ronda 2 los cortaba enteros y
- * la baja se perdía.
+ * Una línea que es solo un nombre: «Marcela Ríos», «John», «María de la
+ * Cruz». Cada palabra con mayúscula inicial, salvo las partículas.
  */
-function opensSignature(line: string, hasContent: boolean): boolean {
+const NAME_LINE = /^\p{Lu}[\p{L}'.-]*(\s+((de|del|la|las|los|da|das|do|dos|van|von|y)\s+)*\p{Lu}[\p{L}'.-]*){0,4}\s*[.,]?$/u;
+
+/**
+ * ¿La línea `i` abre la firma? (r3) Solo si ANTES hay algo escrito por la
+ * persona, y la línea es:
+ *   · una marca de firma («--», «Sent from…»);
+ *   · el saludo de cierre y un nombre en la misma línea («Saludos, Marcela»);
+ *   · o el saludo de cierre solo («Saludos,»), si lo que sigue es un nombre
+ *     o ya no hay nada (r3): «Gracias.\nSaludos,\nNo nos contacten más» es
+ *     una petición después del saludo, no una firma.
+ * «Saludos. No nos escriban más.», «Saludos, por favor denme de baja» y
+ * «Best, please remove me from your list» son el mensaje entero: la
+ * ronda 2 los cortaba y la baja se perdía.
+ */
+function opensSignature(lines: readonly string[], i: number, hasContent: boolean): boolean {
   if (!hasContent) return false;
-  const original = line.trim();
+  const original = lines[i]!.trim();
   const t = normalizeForOptOut(original);
   if (t.length > 60) return false;
-  if (SIGNATURE_MARKER.test(t) || CLOSING_ALONE.test(t)) return true;
+  if (SIGNATURE_MARKER.test(t)) return true;
+  if (CLOSING_ALONE.test(t)) {
+    const next = lines.slice(i + 1).map((l) => l.trim()).find((l) => l !== '');
+    return next === undefined || NAME_LINE.test(next) || SIGNATURE_MARKER.test(normalizeForOptOut(next));
+  }
   const lead = CLOSING_LEAD.exec(original);
   return lead !== null && NAME_AFTER_CLOSING.test(original.slice(lead[0].length));
 }
@@ -207,8 +233,8 @@ function opensSignature(line: string, hasContent: boolean): boolean {
 export function stripSignature(text: string): string {
   const lines = text.split(/\r?\n/);
   const out: string[] = [];
-  for (const line of lines) {
-    if (opensSignature(line, out.some((l) => l.trim() !== ''))) break;
+  for (const [i, line] of lines.entries()) {
+    if (opensSignature(lines, i, out.some((l) => l.trim() !== ''))) break;
     out.push(line);
   }
   return out.join('\n');
@@ -223,7 +249,11 @@ export interface OptOutResult {
 /** ¿La respuesta pide la baja? */
 export function detectOptOut(text: string | null | undefined): OptOutResult {
   if (!text) return { optOut: false, ruleId: null };
-  const own = normalizeForOptOut(stripSignature(stripQuoted(text)));
+  // Red de seguridad (r3): si quitar la firma no deja nada, se mira lo que
+  // quedaba antes. Lo citado nunca: es nuestro correo, con nuestro pie.
+  const unquoted = stripQuoted(text);
+  const signed = stripSignature(unquoted);
+  const own = normalizeForOptOut(signed.trim() === '' ? unquoted : signed);
   const head = own.split('\n').filter((l) => l.trim() !== '').slice(0, HEAD_LINES).join('\n');
   for (const rule of OPT_OUT_RULES) {
     if (rule.re.test(own) || (rule.head?.test(head) ?? false)) return { optOut: true, ruleId: rule.id };

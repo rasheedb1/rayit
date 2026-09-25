@@ -217,3 +217,34 @@ test('las reglas nuevas no toman por baja lo que no lo es (r4)', () => {
     assert.equal(detectOptOut(texto).optOut, false, texto);
   }
 });
+
+test('el saludo de apertura y un «De:» sin cita no se comen la baja (r3, hallazgos 1 y 18)', () => {
+  const casos: Array<[string, string]> = [
+    ['Saludos, por favor denme de baja.', 'es_dar_de_baja'],
+    ['Cordialmente, no me escriban más.', 'es_no_escribir'],
+    ['Saludos.\nNo nos contacten más.', 'es_no_escribir'],
+    ['Best, please remove me from your list', 'en_remove_me'],
+    ['De: Sofía\nPor favor denme de baja', 'es_dar_de_baja'],
+    ['Saludos, no me escriban más', 'es_no_escribir'],
+    ['Gracias, por favor no nos contacten más', 'es_no_escribir'],
+    // El saludo solo DESPUÉS de algo escrito, seguido de la petición y no de un nombre.
+    ['Gracias.\nSaludos,\nNo nos contacten más.', 'es_no_escribir'],
+  ];
+  for (const [texto, regla] of casos) {
+    const r = detectOptOut(texto);
+    assert.equal(r.optOut, true, texto);
+    assert.equal(r.ruleId, regla, texto);
+  }
+  // «De:» abre la cita solo con otra cabecera debajo (Outlook, Apple Mail).
+  assert.equal(stripQuoted('De: Sofía\nPor favor denme de baja'), 'De: Sofía\nPor favor denme de baja');
+  assert.equal(
+    stripQuoted('Nos interesa.\n\nDe: Laura <l@x.co>\nEnviado: martes\nPara: Sofía\nAsunto: Idea\n\nPara darte de baja…'),
+    'Nos interesa.\n',
+  );
+  assert.equal(stripQuoted('Ok\nFrom: Laura\nSent: Tuesday\nTo: Ana\n\nunsubscribe'), 'Ok');
+  // La firma de verdad se sigue quitando: el saludo solo, seguido de un nombre o de nada.
+  assert.equal(stripSignature('Nos interesa.\nSaludos,\nMaría de la Cruz\nTo unsubscribe…'), 'Nos interesa.');
+  assert.equal(stripSignature('Nos interesa.\n\nSaludos,'), 'Nos interesa.\n');
+  assert.equal(stripSignature('Gracias.\nSaludos,\nNo nos contacten más.'), 'Gracias.\nSaludos,\nNo nos contacten más.');
+  assert.equal(detectOptOut('Nos interesa.\nSaludos,\nMarcela\nIf you no longer wish to receive these emails, unsubscribe').optOut, false);
+});
