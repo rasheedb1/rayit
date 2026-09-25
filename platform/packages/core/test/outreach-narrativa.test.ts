@@ -19,7 +19,7 @@ const fmt = (c: Claim) => `${c.value} ${c.unit}`;
 
 const BUENA = [
   'Soy Laura y cocino fácil. [claim:audiencia-tiktok-genero-f] de quienes me siguen en TikTok son mujeres, y la franja de 25-34 años es la más grande, con [claim:audiencia-tiktok-edad-25-34].',
-  'Mi mediana en TikTok es de [claim:mediana-tiktok] views. «Cold brew en casa en 3 pasos» hizo [claim:video-000000000d01-x] veces mi mediana.',
+  'Mi mediana en TikTok es de [claim:mediana-tiktok] views. «Cold brew en casa en 3 pasos» hizo [claim:video-000000000d01-x] mi mediana.',
   'Con Café Alma logramos [claim:campana-000000ca0001-views] views. Mi tarifa de «Historias (3)» empieza en [claim:tarifa-0000007a1103-desde].',
 ].join('\n\n');
 

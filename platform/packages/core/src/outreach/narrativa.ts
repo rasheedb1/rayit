@@ -269,7 +269,7 @@ export function templateNarrative(perfil: PerfilComercial): string {
     const views = mejor.viewsClaimId ? `, con ${m(mejor.viewsClaimId)} views` : '';
     const porque = [PORQUE_ES.hook[mejor.why.hook], `es un ${PORQUE_ES.content[mejor.why.content] === 'pieza' ? PORQUE_ES.piece[mejor.why.piece] : PORQUE_ES.content[mejor.why.content]}`];
     if (mejor.why.durationVsTypical && mejor.why.durationVsTypical !== 'similar') porque.push(`es ${PORQUE_ES.vsTypical[mejor.why.durationVsTypical]}`);
-    p2.push(`Mi mejor video, «${mejor.title}» en ${red(mejor.platformId)}, hizo ${m(mejor.multipleClaimId)} veces mi mediana${views}: ${listaEs(porque)}.`);
+    p2.push(`Mi mejor video, «${mejor.title}» en ${red(mejor.platformId)}, hizo ${m(mejor.multipleClaimId)} mi mediana${views}: ${listaEs(porque)}.`);
   }
   const piezas = formats.pieces.slice(0, 2).map((f) => PORQUE_ES.pieces[f.key]);
   const contenidos = formats.contents.slice(0, 2).map((f) => PORQUE_ES.contents[f.key]);
@@ -286,7 +286,7 @@ export function templateNarrative(perfil: PerfilComercial): string {
       if (id.endsWith('-seguidores-marca')) return `${m(id)} seguidores nuevos para la marca`;
       if (id.endsWith('-canjes')) return `${m(id)} canjes del código`;
       if (id.endsWith('-ingresos')) return `${m(id)} en ventas atribuidas`;
-      return `${m(id)} veces mi mediana`;
+      return `${m(id)} mi mediana`;
     });
     p3.push(`Con ${c.companyName} hicimos «${c.name}»: ${listaEs(cifras)}.`);
   }
@@ -314,8 +314,13 @@ export interface NarrativePrompt {
   maxTokens: number;
 }
 
-/** Tres párrafos cortos con marcas y sin pensar en voz alta: 1 500 tokens de salida sobran. */
-export const NARRATIVE_MAX_TOKENS = 1500;
+/**
+ * El techo de salida de una llamada. Tres párrafos con marcas son unos
+ * 600 tokens; el resto es margen para el pensamiento adaptativo del
+ * modelo, que cuenta dentro de max_tokens. Un texto cortado por el techo
+ * no pasa el verificador (párrafos) y se reintenta.
+ */
+export const NARRATIVE_MAX_TOKENS = 4000;
 
 const SISTEMA = `Escribes el perfil comercial de un creador de contenido: el texto con el que se presenta ante marcas que podrían contratarlo.
 
@@ -329,7 +334,8 @@ Reglas que no se negocian:
 4. Solo menciona marcas, campañas y videos que aparecen en los datos. No inventes clientes, premios ni resultados.
 5. Puedes nombrar un video, una campaña o una tarifa copiando su nombre tal cual aparece entre «».
 6. Nada de superlativos vacíos ("increíble", "el mejor"), urgencia falsa ni presión. Máximo cien palabras por párrafo.
-7. Responde solo con los tres párrafos.`;
+7. Cada marca se reemplaza por su valor tal como aparece en CIFRAS: escribe alrededor lo que falte (por ejemplo «views»), sin repetir lo que el valor ya trae (%, ×, la moneda, «s»).
+8. Responde solo con los tres párrafos.`;
 
 /** Los datos del perfil, en el orden en que la narrativa los cuenta, con la lista de cifras al final. */
 export function buildNarrativePrompt(perfil: PerfilComercial, formatClaim: ClaimFormatter): NarrativePrompt {

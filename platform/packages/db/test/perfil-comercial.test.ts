@@ -15,7 +15,7 @@ import { templateNarrative, type NarrativeOutcome } from '@mc/core/outreach/narr
 import type { WorkspaceTx } from '../src/client.ts';
 import {
   computePerfil, getPerfilComercial, getPrimaryCreator, llmBudgetExhausted, PerfilComercialError, readPerfilDataAsOf,
-  saveNarrativeEdit, savePerfilComercial,
+  recordProfileLlmCalls, saveNarrativeEdit, savePerfilComercial,
 } from '../src/queries/perfil-comercial.ts';
 import { CAMPAIGN_CAFE_ALMA, POST_D01_REEL_CAFE_ALMA, WORKSPACE_LAURA, openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
@@ -100,17 +100,10 @@ test('una narrativa con un claim inventado no se guarda', async () => {
 });
 
 test('cada llamada al modelo deja su fila en outbound_llm_call con propósito profile y su costo', async () => {
-  await laura(async (tx) => {
-    const perfil = await computePerfil(tx, CREADORA_LAURA);
-    const outcome: NarrativeOutcome = {
-      ...plantilla(perfil), fallback: 'rejected',
-      calls: [
-        { model: 'claude-sonnet-5', inputTokens: 3000, outputTokens: 400 },
-        { model: 'claude-sonnet-5', inputTokens: 3100, outputTokens: 380 },
-      ],
-    };
-    await savePerfilComercial(tx, perfil, outcome);
-  });
+  await laura((tx) => recordProfileLlmCalls(tx, [
+    { model: 'claude-sonnet-5', inputTokens: 3000, outputTokens: 400 },
+    { model: 'claude-sonnet-5', inputTokens: 3100, outputTokens: 380 },
+  ]));
   const filas = await laura(async (tx) => (await tx.query<{ model: string; input_tokens: number; cost: string }>(
     `SELECT model, input_tokens, cost::text AS cost FROM outbound_llm_call WHERE purpose = 'profile' ORDER BY input_tokens`)).rows);
   assert.deepEqual(filas, [

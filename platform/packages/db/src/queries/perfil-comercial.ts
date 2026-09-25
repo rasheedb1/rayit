@@ -287,22 +287,22 @@ async function escribir(tx: WorkspaceTx, creatorId: string, doc: StoredPerfil): 
 }
 
 /**
- * Guarda el perfil recién calculado con su narrativa y deja en la
- * bitácora cada llamada al modelo que la narrativa hizo (también las
- * rechazadas: se pagaron). La narrativa se vuelve a verificar aquí, en
- * la frontera de la base: lo que no pasa no se guarda.
+ * Guarda el perfil recién calculado con su narrativa. La narrativa se
+ * vuelve a verificar aquí, en la frontera de la base: lo que no pasa no
+ * se guarda. Las llamadas al modelo NO se registran aquí: van antes, en
+ * su propia transacción (recordProfileLlmCalls), para que un guardado
+ * que falla no se lleve la bitácora de lo que ya se pagó.
  */
 export async function savePerfilComercial(
   tx: WorkspaceTx,
   perfil: ReturnType<typeof buildPerfil>,
-  narrative: NarrativeOutcome,
+  narrative: Pick<NarrativeOutcome, 'text' | 'source' | 'model' | 'fallback'>,
   now: Date = new Date(),
 ): Promise<StoredPerfil> {
   const veredicto = verifyNarrative(narrative.text, perfil);
   if (!veredicto.ok) {
     throw new PerfilComercialError('invalid_narrative', 'La narrativa cita cifras que no están en el perfil.', veredicto.issues);
   }
-  await recordProfileLlmCalls(tx, narrative.calls);
   const doc: StoredPerfil = {
     version: perfil.version,
     computedAt: perfil.computedAt,
@@ -319,7 +319,11 @@ export async function savePerfilComercial(
   return doc;
 }
 
-/** Una fila de outbound_llm_call por llamada, con propósito 'profile' (0056) y su costo en USD. */
+/**
+ * Una fila de outbound_llm_call por llamada, con propósito 'profile'
+ * (0056) y su costo en USD. También las que el verificador rechazó: se
+ * pagaron, y el tope diario (outbound_health) tiene que verlas.
+ */
 export async function recordProfileLlmCalls(tx: WorkspaceTx, calls: readonly LlmUsage[]): Promise<void> {
   for (const c of calls) {
     await tx.query(
