@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { ConfirmarAccion } from "../../../cotizar/_ui/confirmar-accion";
+import { ConfirmInline } from "@/components/ui/confirm-inline";
 import { resolverIntento } from "../actions";
 import { Aviso } from "../../../_lib/aviso";
 import { useVentasForm } from "../../_lib/use-ventas-form";
@@ -71,15 +71,15 @@ export function ResolverIntento({
             {t.salio}
           </Button>
         </form>
-        <ConfirmarAccion
+        <ConfirmInline
           action={async () => resubmit({ outcome: "resend" })}
           label={t.noSalio}
           variant="ghost"
-          pregunta={t.confirmarReenvio}
-          consecuencia={t.consecuenciaReenvio(persona)}
-          confirmar={t.siReenviar}
-          cancelar={t.cancelar}
-          anchoAbierta="w-full sm:w-80"
+          question={t.confirmarReenvio}
+          consequence={t.consecuenciaReenvio(persona)}
+          confirmLabel={t.siReenviar}
+          cancelLabel={t.cancelar}
+          openWidth="w-full sm:w-80"
         />
       </div>
       <Aviso message={state.message} notice={state.notice} />

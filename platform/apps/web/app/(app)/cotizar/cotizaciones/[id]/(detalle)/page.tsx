@@ -14,7 +14,7 @@ import { CopiarEnlace } from "../../../copiar-enlace";
 import { MESSAGES, mensajeDeError } from "../../../messages";
 import { etiquetaImpuesto, lineasAcordado } from "../../../_lib/acordado";
 import { enlaceDeCotizacion, estadoVisible, pillDeCotizacion, validezYaNoAplica } from "../../../_lib/estado";
-import { ConfirmarAccion } from "../../../_ui/confirmar-accion";
+import { ConfirmInline } from "@/components/ui/confirm-inline";
 import { ResumenTotales } from "../../../_ui/resumen-totales";
 import { AvisoEnviada } from "../aviso-enviada";
 import { EliminarBorrador } from "../eliminar";
@@ -297,29 +297,29 @@ export default async function CotizacionPage({ params, searchParams }: Props) {
             // paso, y el de rechazar vive aparte, bajo su propia pregunta,
             // para que no quede pegado al de aceptar.
             <div className="space-y-4 rounded-md border border-border p-4">
-              <ConfirmarAccion
+              <ConfirmInline
                 action={aceptarCotizacion.bind(null, quote.id)}
                 label={t.aceptar}
                 variant="primary"
-                pregunta={t.confirmar.aceptar.pregunta(quote.number)}
-                consecuencia={
+                question={t.confirmar.aceptar.pregunta(quote.number)}
+                consequence={
                   quote.campaignStartsOn && quote.campaignEndsOn
                     ? t.confirmar.aceptar.consecuencia
                     : t.confirmar.aceptar.consecuenciaSinVentana
                 }
-                confirmar={t.confirmar.aceptar.boton}
-                cancelar={t.confirmar.cancelar}
+                confirmLabel={t.confirmar.aceptar.boton}
+                cancelLabel={t.confirmar.cancelar}
               />
               <div className="border-t border-border pt-4">
                 <p className="mb-2 text-xs text-muted">{t.otraRespuesta}</p>
-                <ConfirmarAccion
+                <ConfirmInline
                   action={rechazarCotizacion.bind(null, quote.id)}
                   label={t.rechazar}
                   variant="danger"
-                  pregunta={t.confirmar.rechazar.pregunta(quote.number)}
-                  consecuencia={t.confirmar.rechazar.consecuencia}
-                  confirmar={t.confirmar.rechazar.boton}
-                  cancelar={t.confirmar.cancelar}
+                  question={t.confirmar.rechazar.pregunta(quote.number)}
+                  consequence={t.confirmar.rechazar.consecuencia}
+                  confirmLabel={t.confirmar.rechazar.boton}
+                  cancelLabel={t.confirmar.cancelar}
                 />
               </div>
             </div>

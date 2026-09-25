@@ -10,6 +10,7 @@ import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { CellMain, DataTable } from "@/components/ui/data-table";
 import { TableDemo } from "./table-demo";
 import { SegmentedDemo } from "./segmented-demo";
+import { ConfirmDemo } from "./confirm-demo";
 import { LineChart } from "@/components/ui/line-chart";
 import { BarChart } from "@/components/ui/bar-chart";
 import { ChartCard } from "@/components/ui/chart-card";
@@ -135,6 +136,19 @@ export default function Page() {
       <Section id="segmented" title="Segmented" usage={`<Segmented label="Red" value={net} onChange={setNet} options={[{ value: "all", label: "Todas" }, { value: "tiktok", label: "TikTok" }]} />`}>
         <Variant label="Filtro por red y orden (Tab entra al grupo, flechas cambian de opción)">
           <SegmentedDemo />
+        </Variant>
+      </Section>
+
+      <Section
+        id="confirm-inline"
+        title="ConfirmInline"
+        usage={`<ConfirmInline action={rechazar.bind(null, id)} label="Marcar rechazada" variant="danger"\n  question="¿Rechazar COT-2026-003?" consequence="No se deshace." confirmLabel="Sí, rechazar" cancelLabel="Cancelar" />`}
+      >
+        <Variant label="Destructiva: el primer clic pregunta, Escape o Cancelar devuelven el foco al botón">
+          <ConfirmDemo />
+        </Variant>
+        <Variant label="Principal, acotada en una cabecera (openWidth), con una consecuencia larga">
+          <ConfirmDemo variant="primary" openWidth="w-full sm:w-80" />
         </Variant>
       </Section>
 

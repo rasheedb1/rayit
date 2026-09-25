@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { enviarCotizacion } from "../../actions";
 import { MESSAGES } from "../../messages";
-import { ConfirmarAccion } from "../../_ui/confirmar-accion";
+import { ConfirmInline } from "@/components/ui/confirm-inline";
 
 /**
  * «Enviar y copiar enlace». Hace las dos cosas que dice: envía (congela
@@ -61,20 +61,20 @@ export function EnviarCotizacion({
   );
 
   if (confirmacion) {
-    // La acción del formulario de ConfirmarAccion: su botón «Sí, enviar…»
+    // La acción del formulario de ConfirmInline: su botón «Sí, enviar…»
     // ya lleva el estado de carga (useFormStatus), así que un doble clic
     // no envía dos veces.
     return (
       <span className="flex flex-col items-start gap-1">
-        <ConfirmarAccion
+        <ConfirmInline
           action={enviarYCopiar}
           label={t.enviar}
           variant="primary"
-          anchoAbierta="w-full sm:w-80"
-          pregunta={confirmacion.pregunta}
-          consecuencia={confirmacion.consecuencia}
-          confirmar={t.confirmar.enviar.boton}
-          cancelar={t.confirmar.cancelar}
+          openWidth="w-full sm:w-80"
+          question={confirmacion.pregunta}
+          consequence={confirmacion.consecuencia}
+          confirmLabel={t.confirmar.enviar.boton}
+          cancelLabel={t.confirmar.cancelar}
         />
         {alerta}
       </span>

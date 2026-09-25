@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
-import { ConfirmarAccion } from "../../cotizar/_ui/confirmar-accion";
+import { ConfirmInline } from "@/components/ui/confirm-inline";
 import { apagarEnvio, encenderEnvio } from "./actions";
 import { MESSAGES } from "./messages";
 
@@ -12,7 +12,7 @@ import { MESSAGES } from "./messages";
  * con su pill, una línea que dice qué implica, y el botón.
  *
  * Apagar pide confirmación en el sitio, con el patrón del producto
- * (ConfirmarAccion de Cotizar: el primer botón enseña qué va a pasar, el
+ * (ConfirmInline del kit: el primer botón enseña qué va a pasar, el
  * segundo, «Sí, apagar», es el que apaga), porque cancela la cola.
  * Encender no la pide, pero sin dirección postal la base lo rechaza y se
  * dice por qué.
@@ -66,15 +66,15 @@ export function Interruptor({
           {!enabled && !hasAddress && <p className="mt-1 text-xs text-muted">{t.sinDireccion}</p>}
         </div>
         {enabled ? (
-          <ConfirmarAccion
+          <ConfirmInline
             action={apagar}
             label={t.apagar}
             variant="danger"
-            pregunta={t.confirmarApagar}
-            consecuencia={t.consecuenciaApagar}
-            confirmar={t.siApagar}
-            cancelar={t.cancelar}
-            anchoAbierta="w-full sm:w-80"
+            question={t.confirmarApagar}
+            consequence={t.consecuenciaApagar}
+            confirmLabel={t.siApagar}
+            cancelLabel={t.cancelar}
+            openWidth="w-full sm:w-80"
           />
         ) : (
           <Button variant="primary" loading={pending} onClick={encender} disabled={!hasAddress}>

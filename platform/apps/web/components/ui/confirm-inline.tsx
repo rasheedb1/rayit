@@ -4,24 +4,25 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Button, type ButtonVariant } from "@/components/ui/button";
 
-export interface ConfirmarAccionProps {
-  /** La Server Action ya atada a su id (`accion.bind(null, id)`). */
+export interface ConfirmInlineProps {
+  /** La Server Action ya atada a su id (`accion.bind(null, id)`), o una función que reenvía un formulario. */
   action: () => Promise<void>;
   /** El texto del primer botón: «Marcar aceptada». */
   label: string;
   variant?: ButtonVariant;
   /** «¿Rechazar COT-2026-003?» */
-  pregunta: string;
+  question: string;
   /** Qué va a pasar y que no se deshace. */
-  consecuencia: string;
+  consequence: string;
   /** El botón que de verdad ejecuta: «Sí, rechazar». */
-  confirmar: string;
-  cancelar: string;
+  confirmLabel: string;
+  cancelLabel: string;
   /**
-   * El ancho de la pregunta abierta. Por defecto ocupa su tarjeta; en la
-   * cabecera del detalle se acota para no apretar el título (pulido r7).
+   * Las clases de ancho de la pregunta abierta. Por defecto ocupa su
+   * contenedor; en una cabecera se acota («w-full sm:w-80») para no
+   * apretar el título.
    */
-  anchoAbierta?: string;
+  openWidth?: string;
 }
 
 /**
@@ -29,14 +30,16 @@ export interface ConfirmarAccionProps {
  * primer botón no hace nada más que mostrar qué va a pasar, y el segundo
  * («Sí, rechazar») es el que envía. Es el patrón de Stripe Quotes para
  * aceptar o cancelar una cotización, sin un modal que tape el documento.
+ * Nació en Cotizar (ConfirmarAccion) y vive en el kit desde VEN-10, para
+ * que Ventas no dependa de una carpeta privada de otro módulo.
  *
  * Accesibilidad: al abrir, el foco va a la pregunta (el lector la lee
  * con su consecuencia); al cancelar, vuelve al botón que la abrió.
  * Escape cancela.
  */
-export function ConfirmarAccion({
-  action, label, variant = "secondary", pregunta, consecuencia, confirmar, cancelar, anchoAbierta = "w-full",
-}: ConfirmarAccionProps) {
+export function ConfirmInline({
+  action, label, variant = "secondary", question, consequence, confirmLabel, cancelLabel, openWidth = "w-full",
+}: ConfirmInlineProps) {
   const [abierta, setAbierta] = useState(false);
   const id = useId();
   const preguntaRef = useRef<HTMLParagraphElement>(null);
@@ -73,7 +76,7 @@ export function ConfirmarAccion({
       role="group"
       aria-labelledby={`${id}-pregunta`}
       aria-describedby={`${id}-consecuencia`}
-      className={`${anchoAbierta} rounded-md border border-border bg-surface-2 p-3`}
+      className={`${openWidth} rounded-md border border-border bg-surface-2 p-3`}
       onKeyDown={(e) => {
         if (e.key === "Escape") {
           e.preventDefault();
@@ -82,15 +85,15 @@ export function ConfirmarAccion({
       }}
     >
       <p id={`${id}-pregunta`} ref={preguntaRef} tabIndex={-1} className="text-sm font-medium focus:outline-none">
-        {pregunta}
+        {question}
       </p>
       <p id={`${id}-consecuencia`} className="mt-1 text-xs leading-4 text-ink-2">
-        {consecuencia}
+        {consequence}
       </p>
       <div className="mt-3 flex flex-wrap gap-2">
-        <Enviar variant={variant === "danger" ? "danger" : "primary"}>{confirmar}</Enviar>
+        <Enviar variant={variant === "danger" ? "danger" : "primary"}>{confirmLabel}</Enviar>
         <Button size="sm" variant="ghost" onClick={cerrar}>
-          {cancelar}
+          {cancelLabel}
         </Button>
       </div>
     </form>
