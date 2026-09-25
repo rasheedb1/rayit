@@ -192,7 +192,7 @@ export async function withProviderCallback<T>(proof: ProviderCallbackProof, fn: 
   return withWorkspaceId(proofWorkspace(proof), fn);
 }
 
-export { getDbMode } from "./cliente";
+export { getDbMode, redactarPitchEnLaDemo } from "./cliente";
 
 /** Cierra la base del proceso. Solo para pruebas y para el apagado; una pantalla nunca la cierra. */
 export async function closeDb(): Promise<void> {

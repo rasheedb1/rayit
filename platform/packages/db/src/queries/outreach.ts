@@ -374,4 +374,6 @@ export * from './outreach/template-sources.ts';
 export * from './outreach/generation.ts';
 export * from './outreach/generation-context.ts';
 export * from './outreach/generation-outcome.ts';
+export * from './outreach/generation-mapping.ts';
+export * from './outreach/generation-in-process.ts';
 export * from './outreach/pitch.ts';

@@ -77,16 +77,18 @@ const DUE_SQL = (g: string) => `(${g}.next_attempt_at IS NULL OR ${g}.next_attem
  */
 export async function claimTouchesToGenerate(
   tx: WorkerSql,
-  opts: { now: Date; limit?: number; workspaceId?: string },
+  /** touchId: solo ese toque (la redacción en proceso de la demo); sin él, los que toquen. */
+  opts: { now: Date; limit?: number; workspaceId?: string; touchId?: string },
 ): Promise<LeasedTouch[]> {
   if (opts.workspaceId) assertIds('claimTouchesToGenerate', [opts.workspaceId]);
+  if (opts.touchId) assertIds('claimTouchesToGenerate', [opts.touchId]);
   const rows = (
     await tx.query<{ touch_id: string; workspace_id: string; lease_token: string }>(
       `WITH pedidos AS (
          SELECT t.id, t.workspace_id, md5(coalesce(t.body, '')) AS base
            FROM outbound_generation g JOIN outbound_touch t ON t.id = g.touch_id
           WHERE g.stage = 'requested' AND t.status = 'draft' AND t.channel = 'email' AND ${DUE_SQL('g')}
-            AND ($4::uuid IS NULL OR t.workspace_id = $4::uuid)
+            AND ($4::uuid IS NULL OR t.workspace_id = $4::uuid) AND ($5::uuid IS NULL OR t.id = $5::uuid)
             AND NOT ${CONTACT_BLOCKED_SQL('t')}
           ORDER BY g.requested_at, t.id
           LIMIT $2::int
@@ -102,7 +104,7 @@ export async function claimTouchesToGenerate(
             AND coalesce(btrim(t.body), '') = ''
             AND e.status = 'active' AND s.status = 'active'
             AND t.scheduled_for <= $1::timestamptz + make_interval(hours => ${GENERATE_AHEAD_HOURS})
-            AND ($4::uuid IS NULL OR t.workspace_id = $4::uuid)
+            AND ($4::uuid IS NULL OR t.workspace_id = $4::uuid) AND ($5::uuid IS NULL OR t.id = $5::uuid)
             -- Sin fila, o una que se quedó escribiendo: su turno venció, o un fallo lo soltó y ya pasó su espera.
             AND (g.touch_id IS NULL
                  OR (g.stage = 'generating' AND (g.lease_until IS NULL OR g.lease_until < $1::timestamptz) AND ${DUE_SQL('g')}))
@@ -129,7 +131,7 @@ export async function claimTouchesToGenerate(
            OR (outbound_generation.stage = 'generating'
                AND (outbound_generation.lease_until IS NULL OR outbound_generation.lease_until < $1::timestamptz))
        RETURNING touch_id, workspace_id, lease_token`,
-      [opts.now.toISOString(), opts.limit ?? GENERATION_BATCH_SIZE, [...GENERATABLE_STEP_TYPES], opts.workspaceId ?? null],
+      [opts.now.toISOString(), opts.limit ?? GENERATION_BATCH_SIZE, [...GENERATABLE_STEP_TYPES], opts.workspaceId ?? null, opts.touchId ?? null],
     )
   ).rows;
   return rows.map((r) => ({ touchId: r.touch_id, workspaceId: r.workspace_id, leaseToken: r.lease_token }));
@@ -142,9 +144,10 @@ export async function claimTouchesToGenerate(
  */
 export async function claimGeneratedForReview(
   tx: WorkerSql,
-  opts: { now: Date; limit?: number; workspaceId?: string },
+  opts: { now: Date; limit?: number; workspaceId?: string; touchId?: string },
 ): Promise<LeasedTouch[]> {
   if (opts.workspaceId) assertIds('claimGeneratedForReview', [opts.workspaceId]);
+  if (opts.touchId) assertIds('claimGeneratedForReview', [opts.touchId]);
   const rows = (
     await tx.query<{ touch_id: string; workspace_id: string; lease_token: string }>(
       `UPDATE outbound_generation g
@@ -152,7 +155,7 @@ export async function claimGeneratedForReview(
               lease_until = $1::timestamptz + make_interval(mins => ${GENERATION_LEASE_MINUTES})
         WHERE g.touch_id IN (
                 SELECT g2.touch_id FROM outbound_generation g2 JOIN outbound_touch t ON t.id = g2.touch_id
-                 WHERE t.status = 'draft' AND ($3::uuid IS NULL OR g2.workspace_id = $3::uuid)
+                 WHERE t.status = 'draft' AND ($3::uuid IS NULL OR g2.workspace_id = $3::uuid) AND ($4::uuid IS NULL OR t.id = $4::uuid)
                    AND (g2.stage = 'generated' OR (g2.stage = 'reviewing' AND g2.lease_until < $1::timestamptz))
                    AND ${DUE_SQL('g2')}
                    -- Si una persona escribió en el toque desde que se tomó, su texto manda: no se revisa lo de la IA.
@@ -161,7 +164,7 @@ export async function claimGeneratedForReview(
                  LIMIT $2::int
                  FOR UPDATE OF g2 SKIP LOCKED)
        RETURNING g.touch_id, g.workspace_id, g.lease_token`,
-      [opts.now.toISOString(), opts.limit ?? REVIEW_BATCH_SIZE, opts.workspaceId ?? null],
+      [opts.now.toISOString(), opts.limit ?? REVIEW_BATCH_SIZE, opts.workspaceId ?? null, opts.touchId ?? null],
     )
   ).rows;
   return rows.map((r) => ({ touchId: r.touch_id, workspaceId: r.workspace_id, leaseToken: r.lease_token }));

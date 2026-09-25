@@ -14,6 +14,7 @@ export type AiStatus = "on" | "off" | "unknown";
 export interface PendingDraft {
   stage: string;
   hint: RegenerateHint | null;
+  /** El código del último fallo ('llm_budget', 'interrupted'…), nunca el texto del error: se traduce en messages.ts. */
   error: string | null;
 }
 
@@ -21,12 +22,15 @@ export interface PendingDraft {
  * «Redactar con IA» dentro del editor: el paso de Chief de tono e
  * instrucciones, con la señal que usa a la vista, un botón para pedir un
  * borrador (u otra versión) y tres pistas cerradas. No llama al modelo:
- * pide y el worker redacta; mientras tanto dice en qué va. Sin la llave
- * en el worker, o si el worker no ha corrido, lo dice y no deja pedir.
+ * pide y el worker redacta; mientras tanto dice en qué va. Si la IA no
+ * está disponible lo dice en palabras de la creadora (el detalle técnico
+ * está en los registros del worker) y no deja pedir. Si se rindió con este
+ * borrador, lo dice y deja pedir otra versión.
  */
 export function PanelIA({
   status,
   pending,
+  failed = false,
   hasBody,
   hasContact,
   signalHeadline,
@@ -35,6 +39,8 @@ export function PanelIA({
 }: {
   status: AiStatus;
   pending: PendingDraft | null;
+  /** La IA no pudo con el último pedido (0058). */
+  failed?: boolean;
   hasBody: boolean;
   hasContact: boolean;
   signalHeadline: string | null;
@@ -67,6 +73,7 @@ export function PanelIA({
         </div>
       ) : (
         <>
+          {failed && <p className="text-sm text-ink-2">{t.fallo}</p>}
           <Field label={t.instrucciones} help={t.instruccionesHelp} htmlFor="pitch-instrucciones">
             <Textarea rows={2} maxLength={500} value={instructions} onChange={(e) => setInstructions(e.target.value)} />
           </Field>

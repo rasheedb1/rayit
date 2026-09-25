@@ -16,6 +16,8 @@
  *
  * «Redactar con IA» y las pistas guardan lo que hay escrito y dejan la
  * petición para el worker (requestPitchDraft): la web no llama al modelo.
+ * En la demo embebida (sin worker) la redacta en el momento el redactor
+ * falso, por el mismo camino (redactarPitchEnLaDemo).
  */
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
@@ -23,6 +25,7 @@ import { OUTREACH_URLS } from "@mc/core/outreach/messages";
 import { REGENERATE_HINTS } from "@mc/core/outreach/preflight";
 import { requestPitchDraft, savePitch, type SavePitchResult } from "@mc/db/queries/outreach";
 import { origenDeLaPeticion } from "@/lib/auth/origen";
+import { redactarPitchEnLaDemo } from "@/lib/db";
 import { UUID_RE, formField as field, type ActionState } from "@/lib/forms";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
@@ -111,20 +114,15 @@ export async function guardarPitch(_prev: PitchState, formData: FormData): Promi
   if (!parsed.success) return invalid(parsed.error);
   const v = parsed.data;
   let result: SavePitchResult;
-  let enabled = false;
   try {
     const [workspace, ctx, appUrl] = await Promise.all([getCurrentWorkspace(), getCurrentContext(), appOrigin()]);
-    result = await withWorkspace(async (tx) => {
-      const r = await savePitch(tx, {
+    result = await withWorkspace((tx) =>
+      savePitch(tx, {
         companyId: v.companyId, contactId: v.contactId, dealId: v.dealId || null, touchId: v.touchId || null,
         subject: v.subject.trim() || null, body: v.body, intent: v.intent === "schedule" ? "schedule" : "draft",
         userId: ctx.identity?.userId ?? null, locale: workspace.locale, appUrl, now: new Date(),
-      });
-      if (r.ok && r.status === "scheduled") {
-        enabled = (await tx.query<{ on: boolean }>("SELECT coalesce((SELECT enabled FROM outbound_policy), false) AS on")).rows[0]?.on ?? false;
-      }
-      return r;
-    });
+      }),
+    );
   } catch (err) {
     console.error("[ventas/pitch] guardar", err);
     return { message: PITCH.errores.generico };
@@ -132,7 +130,9 @@ export async function guardarPitch(_prev: PitchState, formData: FormData): Promi
   if (!result.ok) return explain(result);
   revalidatePath(`/ventas/empresas/${v.companyId}`);
   const a = PITCH.acciones;
-  const notice = v.intent === "schedule" ? (enabled ? a.programado : a.programadoApagado) : v.intent === "copy" ? a.copiado : a.guardado;
+  // Si el envío está apagado, lo programado sale cuando se encienda: se dice, sin fingir que ya sale (savePitch lo sabe).
+  const notice =
+    v.intent === "schedule" ? (result.sendingEnabled ? a.programado : a.programadoApagado) : v.intent === "copy" ? a.copiado : a.guardado;
   return { ok: true, notice, touchId: result.touchId, intent: v.intent, stamp: Date.now() };
 }
 
@@ -168,6 +168,14 @@ export async function pedirRedaccion(_prev: PitchState, formData: FormData): Pro
   } catch (err) {
     console.error("[ventas/pitch] pedir redacción", err);
     return { message: PITCH.errores.generico };
+  }
+  // En la demo embebida no hay worker que tome la petición: la redacta el redactor falso ahora mismo.
+  if (outcome.ok && outcome.touchId) {
+    try {
+      await redactarPitchEnLaDemo(outcome.touchId);
+    } catch (err) {
+      console.error("[ventas/pitch] redacción de la demo", err);
+    }
   }
   if (outcome.ok) revalidatePath(`/ventas/empresas/${v.companyId}/pitch`);
   return outcome;

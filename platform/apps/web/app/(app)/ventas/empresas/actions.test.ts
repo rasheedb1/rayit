@@ -262,4 +262,12 @@ describe("aprobarMensaje", () => {
     });
     expect(OUTREACH_URLS.policyPostalAddress).toBe("/ventas/politica#postalAddress");
   });
+
+  it("una cifra que no sale del perfil no se aprueba: el error va en el texto y dice cuál (VEN-12)", async () => {
+    releaseHeldTouch.mockReset().mockResolvedValue({ ok: false, code: "unsourced_figure", detail: "987.654" });
+    const r = await aprobarMensaje({}, form({ companyId: COMPANY, touchId: TOUCH, subject: "Hola", body: "Tengo 987.654 seguidores." }));
+    expect(r).toEqual({ errors: { body: FICHA.cadencia.errores.unsourced_figure("987.654") } });
+    expect(FICHA.cadencia.errores.unsourced_figure("987.654")).toContain("La cifra 987.654 no sale de tu perfil");
+    expect(FICHA.cadencia.errores.unsourced_figure("987.654, x3")).toContain("Las cifras 987.654, x3 no salen");
+  });
 });

@@ -26,7 +26,14 @@ export const PITCH = {
     asuntoHelp: "De 2 a 12 palabras, sin «Re:».",
     cuerpo: "Mensaje",
     cuerpoHelp:
-      "Las marcas [claim:…] dicen de dónde sale cada cifra y no llegan a la marca. Las variables {{…}} se rellenan con los datos de la ficha.",
+      "Las cifras de tu perfil y las variables se ven como fichas. Cada cifra lleva su origen (pasa el cursor o tócala para verlo) y la marca solo ve el número; cada variable se rellena con los datos de la persona.",
+  },
+
+  /** Las fichas dentro del mensaje. */
+  cuerpo: {
+    cifra: (display: string, label: string, origen: string) => `${display}: ${label} (${origen})`,
+    cifraDesconocida: (display: string) => `${display}: esta cifra no es de tu perfil`,
+    variable: (label: string) => `${label}, se rellena al enviar`,
   },
 
   fichas: {
@@ -75,16 +82,24 @@ export const PITCH = {
       generated: "Revisando",
       reviewing: "Revisando",
     } as Record<string, string>,
-    reintento: (error: string) => `El último intento no salió (${error}); se vuelve a intentar solo.`,
+    /**
+     * Lo que se le dice a la persona cuando el último intento no salió.
+     * Recibe el CÓDIGO (outbound_generation.last_error), nunca el texto
+     * del error: la jerga y los mensajes del SDK van al registro del worker.
+     */
+    reintento: (code: string | null): string => {
+      if (code === "llm_budget") return "Se agotó el presupuesto de IA de hoy: lo retomamos mañana, o escríbelo tú.";
+      if (code === "interrupted") return "Se interrumpió; lo retomamos en unos minutos.";
+      return "La IA no pudo redactarlo; lo intentamos de nuevo en unos minutos.";
+    },
+    fallo: "La IA no pudo redactar este correo después de varios intentos. Escríbelo tú, o pide otra versión.",
     editarCancela:
       "Si lo editas mientras tanto, guárdalo: lo tuyo manda y se cancela la redacción. Lo que no guardes se reemplaza por el borrador de la IA cuando llegue.",
     pedido: "Pedido. La IA lo redacta en uno o dos minutos; esta página se actualiza sola.",
     ocupado: "La IA ya está trabajando en este borrador: espera a que termine.",
     necesitaContacto: "Elige a quién le escribes para pedir un borrador.",
-    noConfigurada:
-      "La redacción con IA no está encendida: falta la llave de Anthropic en el worker. Escribe el pitch tú; la revisión y las cifras funcionan igual.",
-    desconocida:
-      "No sabemos si la redacción con IA está encendida: el worker no ha corrido en el último día. Escribe el pitch tú; la revisión y las cifras funcionan igual.",
+    noConfigurada: "La redacción con IA no está disponible ahora. Escribe el pitch tú; la revisión y las cifras funcionan igual.",
+    desconocida: "La redacción con IA no responde en este momento. Escribe el pitch tú; la revisión y las cifras funcionan igual.",
   },
 
   variables: {
@@ -131,6 +146,11 @@ export const PITCH = {
     nota: (score: string) => `${score} de 10`,
     generado: "Borrador redactado con IA a partir de tu perfil y de la señal de la marca. Revísalo antes de programarlo.",
     retenido: (reason: string) => `Retenido: ${reason}.`,
+    /** La línea junto a los botones cuando «Programar» está apagado. */
+    resumen: (n: number, first: string) => (n === 1 ? `Esto impide programarlo: ${first}` : `${n} cosas impiden programarlo. La primera: ${first}`),
+    empezar: "Escribe el asunto y el mensaje para poder programarlo.",
+    verRevision: "Ver la revisión",
+    vacioNeutro: "Cuando escribas, aquí verás si el correo está listo para programar.",
     envioApagado: "El envío está apagado: lo que programes saldrá cuando lo enciendas.",
     encenderEnvio: "Ir al interruptor del envío",
   },
@@ -171,7 +191,7 @@ export const PITCH = {
     copiar: "Copiar",
     copiarLabel: "Copiar el asunto y el mensaje, sin marcas",
     copiado: "Copiado. También quedó guardado como borrador en la ficha.",
-    copiarBloqueado: "Antes de copiarlo, cada cifra tiene que tener su origen y no pueden quedar huecos.",
+    copiarBloqueado: "Antes de copiarlo, rellena los huecos y quita las cifras cuyo origen no coincide.",
     guardar: "Guardar borrador",
     guardado: "Guardado como borrador.",
     programar: "Programar",

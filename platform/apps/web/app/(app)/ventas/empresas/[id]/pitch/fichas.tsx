@@ -43,7 +43,7 @@ export function groupClaims(claims: readonly SalesClaim[], companyName: string, 
  * mediana, las campañas con esta marca y la señal), con un filtro de
  * texto; y las variables de la lista canónica (render.ts, @mc/core).
  * Tocar una la escribe donde está el cursor; el editor decide cómo
- * (insertAt). Como el compositor de Superhuman: lo que se cita está a un
+ * (cuerpo.tsx). Como el compositor de Superhuman: lo que se cita está a un
  * toque, sin bajar mil píxeles.
  */
 export function FichasInsertables({

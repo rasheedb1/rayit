@@ -8,13 +8,14 @@ import { OUTREACH_URLS } from "@mc/core/outreach/messages";
 import type { RegenerateHint } from "@mc/core/outreach/preflight";
 import { templateValuesFrom, type TemplateSources, type TemplateVariable } from "@mc/core/outreach/render";
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Field, Input, Select } from "@/components/ui/field";
 import { guardarPitch, pedirRedaccion, type PitchState } from "./actions";
+import { CuerpoConCifras, type CuerpoApi } from "./cuerpo";
 import { FichasInsertables } from "./fichas";
 import { PanelIA, type AiStatus, type PendingDraft } from "./ia";
 import { PITCH } from "./messages";
 import { VistaYRevision } from "./revision";
-import { claimSnippet, insertAt, previewOf, reviseDraft } from "./vista";
+import { previewOf, reviseDraft, revisionSummary } from "./vista";
 
 /** Lo que cambia con el negocio elegido: quién firma, qué cifras puede citar y con qué se rellenan las variables. */
 export interface EditorVariant {
@@ -35,12 +36,15 @@ export interface EditorData {
     contactId: string | null;
     dealId: string | null;
     subject: string;
+    /** Marcado: con sus [claim:id] y sus {{variables}}. El cuerpo los pinta como fichas. */
     body: string;
     held: string | null;
     generated: boolean;
     score: string | null;
     note: string | null;
     pending: PendingDraft | null;
+    /** La IA se rindió con este borrador (0058): se dice, y se puede pedir otra versión. */
+    failed: boolean;
   } | null;
   /** ¿El worker redacta con IA? Lo dice su última corrida, no la web. */
   ai: AiStatus;
@@ -56,12 +60,13 @@ const POLL_MS = 5_000;
 /**
  * El editor del pitch: a la izquierda, para quién, la redacción con IA
  * (instrucciones, pedir un borrador y tres pistas, como el generador de
- * Chief), el asunto, el mensaje y las cifras insertables; a la derecha,
- * cómo lo recibe la marca, la nota de la revisión automática y la
- * revisión en línea. «Copiar» copia el texto limpio y guarda el borrador;
- * «Programar» solo se puede con la revisión en verde (y el servidor la
- * repite). Como el compositor de Superhuman: el texto manda y lo demás
- * está a un toque.
+ * Chief), el asunto, el mensaje (las cifras y las variables son fichas,
+ * no marcas) y las fichas insertables; debajo de los botones, en una
+ * línea, por qué «Programar» está apagado. A la derecha, cómo lo recibe
+ * la marca, la nota de la revisión automática y la revisión completa.
+ * «Copiar» copia el texto limpio y guarda el borrador; «Programar» solo
+ * con la revisión en verde (y el servidor la repite). Como el compositor
+ * de Superhuman: el texto manda y lo demás está a un toque.
  */
 export function EditorDePitch({ data }: { data: EditorData }) {
   const d = data.draft;
@@ -70,8 +75,7 @@ export function EditorDePitch({ data }: { data: EditorData }) {
   const [dealId, setDealId] = useState(d?.dealId ?? data.deals[0]?.id ?? "");
   const [subject, setSubject] = useState(d?.subject ?? "");
   const [body, setBody] = useState(d?.body ?? "");
-  // El Textarea del kit no reenvía ref: el cursor se lee de su contenedor.
-  const bodyRef = useRef<HTMLDivElement>(null);
+  const cuerpo = useRef<CuerpoApi>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const [state, dispatch, pending] = useActionState<PitchState, FormData>(guardarPitch, {});
   const [aiState, dispatchAi, aiPending] = useActionState<PitchState, FormData>(pedirRedaccion, {});
@@ -99,16 +103,7 @@ export function EditorDePitch({ data }: { data: EditorData }) {
   const revision = reviseDraft({
     subject, body, values, claims: variant.claims, firstTouch: contact?.firstTouch ?? true, companyName: data.company.name,
   });
-
-  function insert(snippet: string) {
-    const el = bodyRef.current?.querySelector("textarea") ?? null;
-    const { text, cursor } = insertAt(body, el?.selectionStart ?? body.length, el?.selectionEnd ?? body.length, snippet);
-    setBody(text);
-    requestAnimationFrame(() => {
-      el?.focus();
-      el?.setSelectionRange(cursor, cursor);
-    });
-  }
+  const summary = revisionSummary(revision);
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -176,6 +171,7 @@ export function EditorDePitch({ data }: { data: EditorData }) {
         <PanelIA
           status={data.ai}
           pending={d?.pending ?? null}
+          failed={d?.failed ?? false}
           hasBody={body.trim() !== ""}
           hasContact={contact !== null}
           signalHeadline={deal?.signalHeadline ?? null}
@@ -186,31 +182,66 @@ export function EditorDePitch({ data }: { data: EditorData }) {
         <Field className="min-w-0" label={t.asunto} help={t.asuntoHelp} htmlFor="pitch-asunto">
           <Input name="subject" value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={300} />
         </Field>
-        <div ref={bodyRef} className="min-w-0">
-          <Field label={t.cuerpo} help={t.cuerpoHelp} htmlFor="pitch-cuerpo">
-            <Textarea name="body" rows={12} value={body} onChange={(e) => setBody(e.target.value)} maxLength={20_000} />
-          </Field>
+        {/* El mensaje no es un <textarea>: las cifras y las variables son fichas (cuerpo.tsx). La etiqueta lo enfoca. */}
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <span id="pitch-cuerpo-label" className="text-sm font-medium text-ink" onClick={() => cuerpo.current?.focus()}>
+            {t.cuerpo}
+          </span>
+          <CuerpoConCifras
+            id="pitch-cuerpo"
+            name="body"
+            value={body}
+            onChange={setBody}
+            claims={variant.claims}
+            labelledBy="pitch-cuerpo-label"
+            describedBy="pitch-cuerpo-help"
+            api={cuerpo}
+          />
+          <p id="pitch-cuerpo-help" className="text-xs text-muted">
+            {t.cuerpoHelp}
+          </p>
         </div>
 
         <FichasInsertables
           claims={variant.claims}
           companyName={data.company.name}
-          onVariable={(v: TemplateVariable) => insert(`{{${v}}}`)}
-          onClaim={(c) => insert(claimSnippet(c))}
+          onVariable={(v: TemplateVariable) => cuerpo.current?.insert([{ kind: "variable", name: v }])}
+          onClaim={(c) => cuerpo.current?.insert([{ kind: "claim", id: c.id, raw: c.display }])}
         />
 
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-          <Button type="submit" name="intent" value="schedule" variant="primary" loading={pending} disabled={!revision.ok || !contact}>
-            {a.programar}
-          </Button>
-          <Button type="submit" name="intent" value="copy" disabled={!revision.canCopy || !contact || pending} aria-label={a.copiarLabel}>
-            {a.copiar}
-          </Button>
-          <Button type="submit" name="intent" value="draft" variant="ghost" disabled={!contact || pending}>
-            {a.guardar}
-          </Button>
+        <div className="grid gap-2 border-t border-border pt-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="submit"
+              name="intent"
+              value="schedule"
+              variant="primary"
+              loading={pending}
+              disabled={!revision.ok || !contact}
+              aria-describedby={summary ? "pitch-resumen" : undefined}
+            >
+              {a.programar}
+            </Button>
+            <Button type="submit" name="intent" value="copy" disabled={!revision.canCopy || !contact || pending} aria-label={a.copiarLabel}>
+              {a.copiar}
+            </Button>
+            <Button type="submit" name="intent" value="draft" variant="ghost" disabled={!contact || pending}>
+              {a.guardar}
+            </Button>
+          </div>
+          {/* Por qué «Programar» está apagado, junto al botón: a 400 px la revisión completa queda muy abajo. */}
+          {summary && (
+            <p id="pitch-resumen" className="min-w-0 break-words text-xs text-ink-2">
+              {summary}{" "}
+              {!revision.pristine && (
+                <a href="#pitch-revision" className="underline underline-offset-4 hover:text-ink">
+                  {PITCH.revision.verRevision}
+                </a>
+              )}
+            </p>
+          )}
+          {!revision.canCopy && <p className="text-xs text-muted">{a.copiarBloqueado}</p>}
         </div>
-        {!revision.canCopy && <p className="text-xs text-muted">{a.copiarBloqueado}</p>}
         <div aria-live="polite" className="grid min-w-0 gap-1 text-sm">
           {shown.notice && (
             <p ref={noticeRef} tabIndex={-1} className="text-ink">

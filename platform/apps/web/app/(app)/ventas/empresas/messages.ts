@@ -342,6 +342,10 @@ export const FICHA = {
       empty_subject: "Escribe el asunto del correo.",
       placeholders: (huecos: string) => `Quedan huecos sin rellenar: ${huecos}.`,
       note_too_long: (n: string) => `La nota de la invitación tiene ${n} caracteres; LinkedIn permite 300.`,
+      unsourced_figure: (cifras: string) =>
+        cifras.includes(",")
+          ? `Las cifras ${cifras} no salen de tu perfil: cámbialas por cifras tuyas o quítalas.`
+          : `La cifra ${cifras} no sale de tu perfil: cámbiala por una de tus cifras o quítala.`,
       opted_out: "Esa persona pidió no ser contactada: el mensaje no puede salir.",
       no_postal_address: "Falta tu dirección postal: guárdala en la política de envío y vuelve a aprobarlo.",
     },

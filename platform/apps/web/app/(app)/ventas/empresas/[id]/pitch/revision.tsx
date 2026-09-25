@@ -72,6 +72,9 @@ export function VistaYRevision({
             <Pill kind="good">{r.listo}</Pill>
             <span>{r.ok}</span>
           </p>
+        ) : revision.pristine && revision.items.length === 0 ? (
+          // Recién abierto y vacío: todavía no hay nada mal, solo nada escrito.
+          <p className="text-sm text-muted">{r.vacioNeutro}</p>
         ) : (
           <>
             <p className="mb-1 text-xs text-muted">{r.bloquea}</p>

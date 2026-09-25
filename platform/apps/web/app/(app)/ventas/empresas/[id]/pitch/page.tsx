@@ -4,21 +4,16 @@ import { loadPitchComposer, outreachWriterStatus } from "@mc/db/queries/outreach
 import { getCompany, listContacts } from "@mc/db/queries/ventas";
 import { PageHeader } from "@/components/page-header";
 import { origenDeLaPeticion } from "@/lib/auth/origen";
+import { getDbMode } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../../_lib/db";
 import { EditorDePitch, type EditorData } from "./editor";
 import { PITCH } from "./messages";
+import { editorKey } from "./vista";
 
 export const dynamic = "force-dynamic";
-
-/** Una huella corta del texto: el editor se vuelve a montar cuando la IA trae un borrador nuevo, no en cada refresco. */
-function fingerprint(text: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0;
-  return h.toString(36);
-}
 
 /**
  * «Redactar pitch» (VEN-6 dentro de VEN-12): el editor abre el último
@@ -28,7 +23,9 @@ function fingerprint(text: string): string {
  *
  * La redacción con IA la hace el worker (outbound.generate y
  * outbound.review); aquí no se llama al modelo ni se lee su llave: si el
- * worker redacta lo dice su última corrida (outreachWriterStatus). Los
+ * worker redacta lo dice su última corrida (outreachWriterStatus). En la
+ * demo embebida no hay worker: redacta el redactor falso dentro del
+ * proceso (redactarPitchEnLaDemo), así que la IA está «encendida». Los
  * enlaces del media kit y de la cotización los arma el servidor con el
  * origen de la app.
  */
@@ -37,6 +34,7 @@ export default async function PitchPage({ params }: { params: Promise<{ id: stri
   const workspace = await getCurrentWorkspace();
   const f = formatterFor(workspace);
   const appUrl = await origenDeLaPeticion().catch(() => null);
+  const demo = (await getDbMode()) === "embedded";
   const data = await withWorkspace(async (tx) => {
     const company = await getCompany(tx, id);
     if (!company) return null;
@@ -44,7 +42,7 @@ export default async function PitchPage({ params }: { params: Promise<{ id: stri
       company,
       contacts: await listContacts(tx, id),
       composer: await loadPitchComposer(tx, id, workspace.locale, { appUrl }),
-      writer: await outreachWriterStatus(tx),
+      writer: demo ? ("fake" as const) : await outreachWriterStatus(tx),
     };
   });
   if (!data) notFound();
@@ -72,13 +70,15 @@ export default async function PitchPage({ params }: { params: Promise<{ id: stri
           score: draft.review?.total != null ? f.decimal(draft.review.total) : null,
           note: draft.review?.note ?? null,
           pending: draft.pending ? { stage: draft.pending.stage, hint: draft.pending.hint, error: draft.pending.lastError } : null,
+          failed: draft.failed,
         }
       : null,
     ai: writer === "anthropic" || writer === "fake" ? "on" : writer,
     sendingOn: composer.policy.enabled,
   };
-  // Mientras la IA trabaja, el editor no se vuelve a montar en cada refresco; cuando termina, abre su borrador.
-  const key = draft ? `${draft.touchId}:${draft.pending ? "pendiente" : fingerprint(`${draft.subject ?? ""}\n${draft.body}`)}` : "nuevo";
+  // El editor se vuelve a montar solo cuando la IA trae un borrador nuevo: ni en cada refresco mientras
+  // redacta, ni cuando la persona guarda, copia o programa (se perdería el aviso y su foco).
+  const key = editorKey(draft);
 
   return (
     <>
