@@ -165,7 +165,7 @@ export interface ProposedStep {
   changedFrom: { stepType: string; channel: string } | null;
 }
 
-/** Quién escribió la guía de un paso (outbound_step.guidance_source, 0056). */
+/** Quién escribió la guía de un paso (outbound_step.guidance_source, 0062). */
 export const GUIDANCE_SOURCES = ['template', 'rules', 'llm', 'person'] as const;
 export type GuidanceSource = (typeof GUIDANCE_SOURCES)[number];
 
@@ -443,10 +443,10 @@ function openThread(steps: readonly ProposedStep[], signalKind: RecommendSignalK
   });
 }
 
-/** La guía de un paso: quién la escribió y para qué tipo de paso (outbound_step, 0056). */
+/** La guía de un paso: quién la escribió y para qué tipo de paso (outbound_step, 0062). */
 export interface StepGuidance {
   guidance: string | null;
-  /** null: una fila anterior a 0056, que no se sabe; se trata como de la persona (no se pisa). */
+  /** null: una fila anterior a 0062, que no se sabe; se trata como de la persona (no se pisa). */
   source: GuidanceSource | null;
   /** El tipo de paso para el que se escribió (outbound_step.guidance_for_type). */
   writtenFor: string | null;

@@ -1067,7 +1067,7 @@ el recomendador.
   claude-sonnet-5, de 25 s cada uno y sin reintentos del SDK (caben en
   el `maxDuration` de 60 s de la página); el tope diario se consulta
   antes de cada intento y cada llamada va a `outbound_llm_call` con
-  propósito `'profile'` (migración 0060) apenas responde. Si ninguno
+  propósito `'profile'` (migración 0061) apenas responde. Si ninguno
   pasa, sin llave o con el tope alcanzado, la plantilla determinista,
   que cita la mediana de la red del mejor video y la de su corte. Los
   países de la narrativa y del prompt se nombran en el idioma de la
@@ -1165,9 +1165,9 @@ campaña activa, temporada).
   `jobs` son campaña activa; `press`, lanzamiento; `season`, temporada;
   `collab`, colaboración de un competidor (nunca se nombra); lo demás,
   manual.
-- **Migración `0056_recomendador_cadencias.sql`** (si VEN-11 o VEN-12
-  traen otra 0056, la que se integre después toma el siguiente número;
-  ninguna depende de la otra): `outbound_sequence.signal_id` (con su referencia
+- **Migración `0062_recomendador_cadencias.sql`** (nació como 0056; al
+  integrar la fase 5 VEN-12 conservó 0056–0060, VEN-11 tomó 0061 y las
+  dos de VEN-13 pasaron a 0062 y 0063; ninguna depende de la otra): `outbound_sequence.signal_id` (con su referencia
   visible) y `proposal` (la propuesta en códigos), y siete plantillas:
   lanzamiento, temporada, colaboración de un competidor, señal manual,
   cocina con campaña activa, belleza con lanzamiento y fitness con
@@ -1260,7 +1260,7 @@ campaña activa, temporada).
 - **El cierre pide solo el activo que declara (r4)**: las guías de
   síntesis dicen «enlaza el media kit y, si tienes una cotización
   pública, su enlace» (o al revés en las de temporada, que declaran la
-  cotización), para que quien revisa pueda vigilar lo que exigen. 0056
+  cotización), para que quien revisa pueda vigilar lo que exigen. 0062
   corrige también la de «Marca con campaña activa» de 0037, con una
   política de actualización del catálogo solo para quien migra.
 - **Las notas guardadas se leen con zod (r4)**: `ProposalNote` y la
@@ -1285,7 +1285,7 @@ campaña activa, temporada).
   tarea a mano) no se redacta. La pantalla (`sinTexto`), la base
   (`TEXTLESS_STEP_TYPES`, que el recomendador, las plantillas copiadas,
   «Añadir paso» y el editor usan para dejar `generate_with_ai` en false)
-  y «Activar» al contar gestos a mano usan la misma regla. 0057 afloja
+  y «Activar» al contar gestos a mano usan la misma regla. 0063 afloja
   el CHECK de `outbound_step` de 0037 para que un comentario pueda
   guardarse sin generación ni texto fijo, y apaga la generación de los
   que ya había. La reacción tiene su propia guía («reacciona a su última

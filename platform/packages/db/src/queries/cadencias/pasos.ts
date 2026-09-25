@@ -39,7 +39,7 @@ export interface SequenceStep {
   angleKey: string | null;
   angleLabel: string | null;
   guidanceEs: string | null;
-  /** Quién escribió la guía (null: una fila anterior a 0056). */
+  /** Quién escribió la guía (null: una fila anterior a 0062). */
   guidanceSource: GuidanceSource | null;
   /**
    * La guía se escribió para otro tipo de paso (`guidanceWrittenFor`) y la
@@ -271,7 +271,7 @@ export async function guidanceContextOf(tx: WorkspaceTx, sequenceId: string): Pr
  *     reglas o del modelo; la de la persona se queda (y la tarjeta pide
  *     revisarla).
  *
- * guidance_for_type NULL (una fila anterior a 0056) se lee como escrita
+ * guidance_for_type NULL (una fila anterior a 0062) se lee como escrita
  * para el tipo que el paso tiene al llegar aquí.
  */
 export async function normalizeSequenceThread(

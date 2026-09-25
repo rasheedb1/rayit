@@ -1,9 +1,9 @@
 -- =====================================================================
--- 0057 · Un comentario público no lleva texto de la cadencia (VEN-13)
+-- 0063 · Un comentario público no lleva texto de la cadencia (VEN-13)
 -- ---------------------------------------------------------------------
--- Número: el siguiente libre, detrás de 0056_recomendador_cadencias. Si
--- otra pieza de la fase 5 trae también una 0057, la que entre después
--- pasa al siguiente número libre: esta solo toca un CHECK de
+-- Número: nació como 0057, detrás de 0056_recomendador_cadencias; al
+-- integrar la fase 5 las dos pasaron a 0062 y 0063 (VEN-12 conservó
+-- 0056–0060 y VEN-11 tomó 0061). Esta solo toca un CHECK de
 -- outbound_step y no depende de ninguna otra.
 --
 -- 0037 dejó que un paso sin generación automática ni texto fijo solo
@@ -49,7 +49,7 @@ ALTER TABLE outbound_step
   );
 
 COMMENT ON CONSTRAINT outbound_step_text_or_by_hand ON outbound_step IS
-  'Sin generación automática, el paso necesita su texto fijo; salvo los que hace una persona (comentario, reacción, tarea a mano): esos no llevan texto (VEN-13, 0057).';
+  'Sin generación automática, el paso necesita su texto fijo; salvo los que hace una persona (comentario, reacción, tarea a mano): esos no llevan texto (VEN-13, 0063).';
 
 UPDATE outbound_step
    SET generate_with_ai = false

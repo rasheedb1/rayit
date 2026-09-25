@@ -79,7 +79,7 @@ export const GUIDANCE_WHY_RULES = ['no_key', 'budget', 'failed', 'rejected'] as 
 
 /**
  * Lo que queda escrito de una propuesta (outbound_sequence.proposal,
- * 0056). Lo obligatorio es la versión, la plantilla y el tipo de señal;
+ * 0062). Lo obligatorio es la versión, la plantilla y el tipo de señal;
  * lo demás, si falta o no tiene la forma, se lee con su valor por
  * defecto (.catch), y las notas que no la tienen se descartan una a una.
  */

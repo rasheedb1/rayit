@@ -42,13 +42,6 @@ const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
   '0047': 'VEN-9-canales 0038_canales_outreach.sql al mezclar con main',
   '0048': 'VEN-9-canales 0039_callback_de_canales.sql al mezclar con main',
   '0049': 'VEN-9-canales 0040_canales_liberar_y_limites.sql al mezclar con main',
-  // Fase C de Ventas: VEN-11 (perfil comercial) toma 0060 para no chocar
-  // con las dos ramas hermanas, que no dependen de ella ni ella de ellas
-  // (cabecera de 0060_perfil_comercial.sql).
-  '0056': 'VEN-12 0056_generacion_trazable.sql (fase C)',
-  '0057': 'VEN-12 0057_generacion_pedida_y_a_mano.sql (fase C)',
-  '0058': 'VEN-13 0056_recomendador_cadencias.sql, que al integrar pasa a la siguiente libre (fase C)',
-  '0059': 'margen de la fase C para VEN-12 o VEN-13 antes de 0060_perfil_comercial.sql',
 };
 
 let dir = '';

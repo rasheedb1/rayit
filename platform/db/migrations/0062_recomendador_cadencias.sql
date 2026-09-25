@@ -1,11 +1,12 @@
 -- =====================================================================
--- 0056 · El recomendador de cadencias (VEN-13)
+-- 0062 · El recomendador de cadencias (VEN-13)
 -- ---------------------------------------------------------------------
--- Número: el siguiente libre, detrás de 0055_motor_equipo_y_reclamo. Las
--- piezas de la fase 5 que se construyen a la vez (perfil y generación,
--- VEN-11 y VEN-12) pueden traer también una 0056: al integrar, la que
--- entre después pasa al siguiente número libre (ninguna está aplicada en
--- Supabase, y nada de esta migración depende de las suyas).
+-- Número: nació como 0056, detrás de 0055_motor_equipo_y_reclamo. Al
+-- integrar la fase 5, VEN-12 conservó 0056–0060 (generación trazable),
+-- VEN-11 pasó a 0061 y esta, que entró la última, a 0062 (ninguna estaba
+-- aplicada en Supabase, y nada de esta migración depende de las suyas).
+-- Donde el código o docs/ventas-outreach.md §5.5 decían «0056» del
+-- recomendador, ahora dicen 0062.
 --
 -- 1 · De qué señal nació una secuencia, y qué propuso el recomendador
 --

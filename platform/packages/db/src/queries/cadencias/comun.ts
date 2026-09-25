@@ -45,7 +45,7 @@ export const EDITABLE_CHANNELS = RECOMMEND_CHANNELS;
  * reacción públicos y una tarea a mano los hace una persona, y §5.5 dice
  * que no se redactan. La misma regla que la pantalla (sinTexto, en
  * apps/web/.../cadencias/_lib/vista.ts), que «Activar» al contar gestos
- * y que el CHECK de outbound_step desde 0057. WhatsApp (fase 2) no entra:
+ * y que el CHECK de outbound_step desde 0063. WhatsApp (fase 2) no entra:
  * es un mensaje, aunque todavía no haya conector.
  */
 export const TEXTLESS_STEP_TYPES: readonly string[] = EDITABLE_STEP_TYPES.filter(
