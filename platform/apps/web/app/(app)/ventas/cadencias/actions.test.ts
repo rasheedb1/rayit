@@ -93,6 +93,12 @@ beforeEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe('la regla de "use server"', () => {
+  it("todo lo que exporta actions.ts en tiempo de ejecución es una función async", async () => {
+    for (const [nombre, valor] of Object.entries(await import("./actions"))) expect(typeof valor, nombre).toBe("function");
+  });
+});
+
 describe("proponer", () => {
   it("sin llave de Anthropic: propone con reglas, guarda seis pasos y abre la línea de tiempo", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
