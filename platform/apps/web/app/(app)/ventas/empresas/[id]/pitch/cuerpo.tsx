@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useImperativeHandle, useMemo, useRef, type ClipboardEvent, type KeyboardEvent, type Ref } from "react";
+import {
+  useEffect, useImperativeHandle, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type Ref,
+} from "react";
 import type { SalesClaim } from "@mc/core/outreach/claims";
 import { figureIssueSpans, type FigureIssue } from "@mc/core/outreach/preflight";
 import { isTemplateVariable } from "@mc/core/outreach/render";
@@ -174,6 +176,7 @@ export function CuerpoConCifras({
   labelledBy,
   describedBy,
   api,
+  readOnly = false,
 }: {
   id: string;
   name: string;
@@ -183,11 +186,15 @@ export function CuerpoConCifras({
   labelledBy: string;
   describedBy?: string;
   api?: Ref<CuerpoApi>;
+  /** Ya programado: se lee, pero no se edita. */
+  readOnly?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const saved = useRef<Range | null>(null);
   const lastValue = useRef<string | null>(null);
   const renderedClaims = useRef<ReadonlyMap<string, SalesClaim> | null>(null);
+  /** El origen de la ficha que se tocó o se enfocó: en un teléfono no hay cursor que pase por encima. */
+  const [detail, setDetail] = useState<string | null>(null);
   const byId = useMemo<ReadonlyMap<string, SalesClaim>>(() => new Map(claims.map((c) => [c.id, c])), [claims]);
 
   // Se pinta desde fuera solo si el texto no es el que la persona acaba de escribir (o si cambian las cifras que se pueden citar).
@@ -231,15 +238,27 @@ export function CuerpoConCifras({
     ensureTail(root);
     const marked = markedOf(readSegments(root));
     lastValue.current = marked;
+    setDetail(null);
     onChange(marked);
+  }
+
+  /** Tocar (o pulsar) una ficha dice su origen debajo del mensaje. */
+  function onChipClick(e: MouseEvent<HTMLDivElement>) {
+    const chip = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-claim],[data-variable]") : null;
+    setDetail(chip && ref.current?.contains(chip) ? (chip.getAttribute("aria-label") ?? null) : null);
   }
 
   /** Inserta trozos donde estaba el cursor (o al final) y deja el cursor detrás. */
   function insertAtCaret(pieces: (before: string, after: string) => Segment[]) {
     const root = ref.current;
-    if (!root) return;
+    if (!root || readOnly) return;
     const doc = root.ownerDocument;
-    let range = saved.current && root.contains(saved.current.startContainer) ? saved.current : null;
+    // Primero la selección viva: con tecleo instantáneo (una macro, un expansor de texto) el «selectionchange»
+    // todavía no llegó y lo guardado es de antes. Lo guardado solo sirve cuando el foco está fuera (una ficha
+    // insertada desde un botón).
+    const live = doc.getSelection();
+    const liveRange = live && live.rangeCount > 0 && root.contains(live.getRangeAt(0).startContainer) ? live.getRangeAt(0) : null;
+    let range = liveRange ?? (saved.current && root.contains(saved.current.startContainer) ? saved.current : null);
     if (!range) {
       range = doc.createRange();
       const tail = root.querySelector("[data-fin]");
@@ -299,17 +318,22 @@ export function CuerpoConCifras({
         aria-multiline="true"
         aria-labelledby={labelledBy}
         aria-describedby={[describedBy, flagged.length > 0 ? flaggedId : null].filter(Boolean).join(" ") || undefined}
-        contentEditable
+        contentEditable={!readOnly}
+        aria-readonly={readOnly || undefined}
         suppressContentEditableWarning
         tabIndex={0}
         spellCheck
         onInput={emit}
         onKeyDown={onKeyDown}
         onPaste={onPaste}
+        onClick={onChipClick}
         onDrop={(e) => e.preventDefault()}
         className={`${CONTROL} min-h-72 whitespace-pre-wrap break-words py-2 leading-7`}
       />
       <input type="hidden" name={name} value={value} />
+      <p aria-live="polite" className="min-w-0 break-words text-xs text-ink-2 empty:hidden">
+        {detail ? PITCH.cuerpo.detalle(detail) : ""}
+      </p>
       <style>{FLAG_CSS}</style>
       {flagged.length > 0 && (
         <p id={flaggedId} className="min-w-0 break-words text-xs text-bad">

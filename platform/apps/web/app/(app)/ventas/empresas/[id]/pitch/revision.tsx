@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Pill } from "@/components/ui/pill";
 import { PITCH } from "./messages";
 import type { Revision } from "./vista";
@@ -6,7 +7,9 @@ import type { Revision } from "./vista";
  * La columna de la derecha del editor: cómo lo recibe la marca (sin
  * marcas, con las variables rellenas), qué cifras cita y de dónde salen,
  * y la revisión antes de enviar, en línea mientras se escribe. Si el
- * borrador lo redactó la IA, su nota de calidad va arriba.
+ * borrador lo redactó la IA, su nota de calidad va arriba; si la persona
+ * cambió el texto, la nota se rotula como de la versión de la IA y se
+ * atenúa: ya no es la de lo que hay escrito.
  */
 export function VistaYRevision({
   preview,
@@ -17,16 +20,19 @@ export function VistaYRevision({
   preview: { subject: string; body: string };
   recipient: string | null;
   revision: Revision;
-  quality: { score: string | null; note: string | null; held: string | null } | null;
+  quality: { score: string | null; note: string | null; held: string | null; edited?: boolean } | null;
 }) {
   const v = PITCH.vista;
   const r = PITCH.revision;
   return (
     <div className="grid gap-6">
       {quality && (quality.score || quality.note || quality.held) && (
-        <section aria-labelledby="pitch-calidad" className="rounded-md border border-border bg-surface-2 p-3">
+        <section
+          aria-labelledby="pitch-calidad"
+          className={`rounded-md border border-border bg-surface-2 p-3 ${quality.edited ? "opacity-60" : ""}`}
+        >
           <h2 id="pitch-calidad" className="flex flex-wrap items-center gap-2 text-sm font-medium text-ink">
-            {r.calidad}
+            {quality.edited ? r.calidadEditada : r.calidad}
             {quality.score && <span className="tabular-nums">{r.nota(quality.score)}</span>}
           </h2>
           {quality.note && <p className="mt-1 text-sm text-ink-2">{quality.note}</p>}
@@ -82,7 +88,17 @@ export function VistaYRevision({
               {revision.items.map((i, n) => (
                 <li key={`${i.code}-${n}`} className="flex items-start gap-2 text-ink-2">
                   <span aria-hidden="true" className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-bad" />
-                  <span className="min-w-0 break-words">{i.text}</span>
+                  <span className="min-w-0 break-words">
+                    {i.text}
+                    {i.href && (
+                      <>
+                        {" "}
+                        <Link href={i.href} className="underline underline-offset-4 hover:text-ink">
+                          {r.agregarDireccion}
+                        </Link>
+                      </>
+                    )}
+                  </span>
                 </li>
               ))}
             </ul>

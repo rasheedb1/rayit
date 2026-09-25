@@ -34,6 +34,8 @@ export const PITCH = {
     cifra: (display: string, label: string, origen: string) => `${display}: ${label} (${origen})`,
     cifraDesconocida: (display: string) => `${display}: esta cifra no es de tu perfil`,
     variable: (label: string) => `${label}, se rellena al enviar`,
+    /** Bajo el mensaje, al tocar o enfocar una ficha: en un teléfono no hay cursor que pase por encima. */
+    detalle: (label: string) => `Ficha: ${label}.`,
     /** Bajo el mensaje, junto a las cifras subrayadas: cuáles no tienen origen o no coinciden con él. */
     cifrasSinOrigen: (list: string, n: number) =>
       n === 1
@@ -151,8 +153,16 @@ export const PITCH = {
     ok: "Todo en orden: el mensaje pasa las reglas de estilo y cada cifra tiene su origen.",
     bloquea: "Esto impide programarlo",
     calidad: "Nota de la revisión automática",
+    /** La nota ya no es de lo que hay escrito: la persona cambió el texto de la IA. */
+    calidadEditada: "Nota de la versión de la IA (la editaste)",
     nota: (score: string) => `${score} de 10`,
     generado: "Borrador redactado con IA a partir de tu perfil y de la señal de la marca. Revísalo antes de programarlo.",
+    /** Un borrador que la IA escribió para otra persona de la marca (cambió «Para»). */
+    otraPersona: (name: string) => `El borrador se escribió para ${name} y va para otra persona: cambia el nombre o elige a ${name} en «Para».`,
+    sinDireccion: "Falta la dirección postal del pie de los correos: sin ella no se puede programar.",
+    agregarDireccion: "Agregarla en la política",
+    sinCorreo: "Todavía no hay un correo conectado: lo que programes saldrá cuando conectes uno.",
+    conectarCorreo: "Conectar un correo",
     retenido: (reason: string) => `Retenido: ${reason}.`,
     /** La línea junto a los botones cuando «Programar» está apagado. */
     resumen: (n: number, first: string) => (n === 1 ? `Esto impide programarlo: ${first}` : `${n} cosas impiden programarlo. La primera: ${first}`),
@@ -199,6 +209,8 @@ export const PITCH = {
     copiar: "Copiar",
     copiarLabel: "Copiar el asunto y el mensaje, sin marcas",
     copiado: "Copiado. También quedó guardado como borrador en la ficha.",
+    /** El navegador no dejó copiar (permiso, contexto no seguro): se dice, en vez de «Copiado». */
+    noSeCopio: "No se pudo copiar: selecciona el texto de la vista previa y cópialo a mano. El borrador sí quedó guardado.",
     /** Por qué «Copiar» está apagado, con el motivo exacto (vista.ts, copyBlockedBy). Con el mensaje vacío no se dice nada. */
     copiarBloqueado: {
       holes: "Antes de copiarlo, rellena los huecos.",
@@ -210,6 +222,9 @@ export const PITCH = {
     programar: "Programar",
     programado: "Programado: sale con el siguiente envío de tu correo.",
     programadoApagado: "Programado. Saldrá cuando enciendas el envío en la política.",
+    /** Tras programar, el mensaje queda a la vista pero ya no se edita aquí. */
+    yaProgramado: "Este correo ya está programado y no se edita aquí: lo ves en la ficha de la empresa.",
+    escribirOtro: "Escribir otro pitch",
     irAPolitica: "Ir a la política de envío",
     verFicha: "Ver la ficha",
   },

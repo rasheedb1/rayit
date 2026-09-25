@@ -9,8 +9,9 @@ import { formatterFor } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../../_lib/db";
-import { EditorDePitch, type EditorData } from "./editor";
+import type { EditorData } from "./editor";
 import { PITCH } from "./messages";
+import { MontajeDelEditor } from "./montaje";
 import { editorKey } from "./vista";
 
 export const dynamic = "force-dynamic";
@@ -75,15 +76,16 @@ export default async function PitchPage({ params }: { params: Promise<{ id: stri
       : null,
     ai: writer === "anthropic" || writer === "fake" ? "on" : writer,
     sendingOn: composer.policy.enabled,
+    policy: { hasPostalAddress: composer.policy.hasPostalAddress, hasEmailAccount: composer.policy.hasEmailAccount },
   };
-  // El editor se vuelve a montar solo cuando la IA trae un borrador nuevo: ni en cada refresco mientras
-  // redacta, ni cuando la persona guarda, copia o programa (se perdería el aviso y su foco).
-  const key = editorKey(draft);
+  // El editor se vuelve a montar solo cuando la IA trae un borrador nuevo (montaje.tsx): ni en cada refresco
+  // mientras redacta, ni cuando la persona guarda, copia o programa (se perderían el texto, el aviso y su foco).
+  const aiKey = editorKey(draft);
 
   return (
     <>
       <PageHeader eyebrow={PITCH.eyebrow} title={PITCH.title(company.name)} description={PITCH.description} />
-      <EditorDePitch key={key} data={editor} />
+      <MontajeDelEditor key={company.id} data={editor} aiKey={aiKey} />
     </>
   );
 }

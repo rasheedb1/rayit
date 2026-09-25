@@ -21,6 +21,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
 import type { SalesClaim } from "@mc/core/outreach/claims";
 import { EditorDePitch, type EditorData } from "./editor";
+import { MontajeDelEditor } from "./montaje";
 import { groupClaims } from "./fichas";
 import { markedOf, segmentsOf } from "./marcas";
 import { PITCH } from "./messages";
@@ -52,6 +53,7 @@ function datos(over: Partial<EditorData> = {}): EditorData {
     draft: null,
     ai: "off",
     sendingOn: false,
+    policy: { hasPostalAddress: true, hasEmailAccount: true },
     ...over,
   };
 }
@@ -122,9 +124,9 @@ describe("vista del pitch", () => {
     expect(revisionSummary(escrito)).toBe(PITCH.revision.resumen(escrito.items.length, escrito.items[0]!.text));
   });
 
-  it("la clave del editor no cambia cuando la persona guarda (ni en el primer guardado); sí cuando la IA trae un borrador", () => {
-    expect(editorKey(null)).toBe("a-mano");
-    expect(editorKey({ touchId: "t1", pending: null, generationStamp: null })).toBe("a-mano");
+  it("la clave de la IA es null cuando lo último lo escribió una persona; cambia cuando la IA redacta o trae un borrador", () => {
+    expect(editorKey(null)).toBeNull();
+    expect(editorKey({ touchId: "t1", pending: null, generationStamp: null })).toBeNull();
     expect(editorKey({ touchId: "t1", pending: { stage: "generating" }, generationStamp: null })).toBe("t1:pendiente");
     expect(editorKey({ touchId: "t1", pending: null, generationStamp: "2026-09-25T10:00:00.000Z" })).toBe("t1:2026-09-25T10:00:00.000Z");
   });
@@ -219,17 +221,15 @@ describe("EditorDePitch", () => {
   it("guardar: el aviso se queda y recibe el foco aunque la página se vuelva a pintar con el borrador guardado", async () => {
     guardarPitch.mockResolvedValue({ ok: true, notice: PITCH.acciones.guardado, touchId: BORRADOR.touchId, intent: "draft", stamp: 1 });
     const inicial = datos();
-    const { rerender } = render(<EditorDePitch key={editorKey(null)} data={inicial} />);
+    const { rerender } = render(<MontajeDelEditor data={inicial} aiKey={editorKey(null)} />);
     escribir("Hola, esto lo escribo yo.");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: PITCH.acciones.guardar }));
     });
     const aviso = await screen.findByText(PITCH.acciones.guardado, { exact: false });
-    // revalidatePath: la página vuelve con el borrador guardado (ya tiene toque). La clave es la misma: no se remonta.
+    // revalidatePath: la página vuelve con el borrador guardado (ya tiene toque). Sin clave de la IA: no se remonta.
     const guardado = { ...BORRADOR, generated: false, score: null, note: null, subject: "", body: "Hola, esto lo escribo yo." };
-    const key = editorKey({ touchId: guardado.touchId, pending: null, generationStamp: null });
-    expect(key).toBe(editorKey(null));
-    rerender(<EditorDePitch key={key} data={{ ...inicial, draft: guardado }} />);
+    rerender(<MontajeDelEditor data={{ ...inicial, draft: guardado }} aiKey={editorKey({ touchId: guardado.touchId, pending: null, generationStamp: null })} />);
     expect(screen.getByText(PITCH.acciones.guardado, { exact: false })).toBe(aviso);
     expect(document.activeElement).toBe(aviso);
   });
@@ -411,5 +411,143 @@ describe("ronda 4: el aviso donde está el problema y las acciones junto al mens
       { kind: "text", text: " anuncios activos." },
     ]);
     expect(markedOf(s)).toBe("Vi que Fresko tiene 6 [claim:signal:s1:active_ads] anuncios activos.");
+  });
+});
+
+describe("ronda 5: el camino principal IA → Programar/Copiar, la política y a quién se escribe", () => {
+  const STAMP = "2026-09-25T10:00:00.000Z";
+  const IA = { ...BORRADOR, body: BUENO };
+  const keyIA = editorKey({ touchId: IA.touchId, pending: null, generationStamp: STAMP });
+  const VALENTINA = {
+    id: "00000002-0000-4000-8000-0000000c0003", fullName: "Valentina Ortiz", roleTitle: "Marca", email: "valentina@cafealma.co", firstTouch: true,
+  };
+
+  it("borrador de la IA → Programar: el aviso sigue a la vista con el foco, y el texto también, aunque la página ya no traiga el borrador", async () => {
+    guardarPitch.mockResolvedValue({ ok: true, notice: PITCH.acciones.programado, touchId: IA.touchId, intent: "schedule", stamp: 7 });
+    const inicial = datos({ draft: IA });
+    const { rerender } = render(<MontajeDelEditor data={inicial} aiKey={keyIA} />);
+    await act(async () => {
+      fireEvent.click(programar());
+    });
+    const aviso = await screen.findByText(PITCH.acciones.programado, { exact: false });
+    // revalidatePath: el toque ya está programado y loadPitchComposer no devuelve borrador.
+    rerender(<MontajeDelEditor data={{ ...inicial, draft: null }} aiKey={editorKey(null)} />);
+    expect(screen.getByText(PITCH.acciones.programado, { exact: false })).toBe(aviso);
+    expect(document.activeElement).toBe(aviso);
+    expect(within(aviso).getByRole("link", { name: PITCH.acciones.verFicha }).getAttribute("href")).toBe(`/ventas/empresas/${inicial.companyId}`);
+    expect(cuerpo().textContent).toContain("115.446");
+    // Ya no se edita aquí: sin botones de guardar, y se puede empezar otro.
+    expect(cuerpo().getAttribute("contenteditable")).toBe("false");
+    expect(screen.queryByRole("button", { name: PITCH.acciones.programar })).toBeNull();
+    expect(screen.getByText(PITCH.acciones.yaProgramado)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: PITCH.acciones.escribirOtro }));
+    expect(refresh).toHaveBeenCalled();
+    expect(cuerpo().textContent?.trim()).toBe("");
+    expect(programar()).toBeTruthy();
+  });
+
+  it("borrador de la IA → Copiar: si el navegador no deja copiar, lo dice en vez de «Copiado»; sin asunto copia solo el cuerpo", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("NotAllowedError"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    try {
+      guardarPitch.mockResolvedValue({ ok: true, notice: PITCH.acciones.copiado, touchId: IA.touchId, intent: "copy", stamp: 8 });
+      const inicial = datos({ draft: { ...IA, subject: "" } });
+      const { rerender } = render(<MontajeDelEditor data={inicial} aiKey={keyIA} />);
+      await act(async () => {
+        fireEvent.click(copiar());
+      });
+      expect(writeText).toHaveBeenCalledWith(previewOf("", BUENO, { first_name: "Camilo", company: "Café Alma" }).body);
+      const aviso = await screen.findByText(PITCH.acciones.noSeCopio, { exact: false });
+      expect(screen.queryByText(PITCH.acciones.copiado, { exact: false })).toBeNull();
+      rerender(<MontajeDelEditor data={{ ...inicial, draft: { ...inicial.draft!, generated: false } }} aiKey={editorKey(null)} />);
+      expect(screen.getByText(PITCH.acciones.noSeCopio, { exact: false })).toBe(aviso);
+      expect(document.activeElement).toBe(aviso);
+    } finally {
+      Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    }
+  });
+
+  it("sin dirección postal, «Programar» se apaga y lo dice con el enlace a la política; sin correo conectado, una nota neutra", () => {
+    render(<EditorDePitch data={datos({ draft: IA, policy: { hasPostalAddress: false, hasEmailAccount: false } })} />);
+    expect(programar().disabled).toBe(true);
+    expect(screen.queryByText(PITCH.revision.ok)).toBeNull();
+    expect(screen.getAllByText(PITCH.revision.sinDireccion, { exact: false }).length).toBeGreaterThan(0);
+    const enlaces = screen.getAllByRole("link", { name: PITCH.revision.agregarDireccion });
+    expect(enlaces.every((l) => l.getAttribute("href") === "/ventas/politica#postalAddress")).toBe(true);
+    expect(screen.getByText(PITCH.revision.sinCorreo, { exact: false })).toBeTruthy();
+    expect(screen.getByRole("link", { name: PITCH.revision.conectarCorreo }).getAttribute("href")).toBe("/ventas/canales");
+    // Copiar sigue: la creadora puede enviarlo desde su correo.
+    expect(copiar().disabled).toBe(false);
+  });
+
+  it("un borrador escrito para Camilo no se programa a Valentina; con {{first_name}}, el saludo cambia con la persona", () => {
+    const camilo = datos().contacts[0]!;
+    const paraCamilo = { ...IA, contactId: camilo.id, body: BUENO.replace("{{first_name}}", "Camilo") };
+    const { unmount } = render(<EditorDePitch data={datos({ contacts: [camilo, VALENTINA], draft: paraCamilo })} />);
+    expect(programar().disabled).toBe(false);
+    fireEvent.change(screen.getByLabelText(PITCH.campos.contacto), { target: { value: VALENTINA.id } });
+    expect(screen.getByText(PITCH.vista.para("Valentina Ortiz"))).toBeTruthy();
+    expect(programar().disabled).toBe(true);
+    expect(screen.getAllByText(PITCH.revision.otraPersona("Camilo"), { exact: false }).length).toBeGreaterThan(0);
+    unmount();
+
+    render(<EditorDePitch data={datos({ contacts: [camilo, VALENTINA], draft: { ...IA, contactId: camilo.id } })} />);
+    fireEvent.change(screen.getByLabelText(PITCH.campos.contacto), { target: { value: VALENTINA.id } });
+    const vista = within(screen.getByRole("complementary", { name: PITCH.vista.titulo }));
+    expect(vista.getByText(/^Hola Valentina,/)).toBeTruthy();
+    expect(programar().disabled).toBe(false);
+  });
+
+  it("si la persona reescribe el borrador, la nota de la IA se rotula como de su versión", () => {
+    render(<EditorDePitch data={datos({ draft: IA })} />);
+    expect(screen.getByText(PITCH.revision.calidad)).toBeTruthy();
+    escribir("Hola, esto ya lo cambié yo por completo.");
+    expect(screen.queryByText(PITCH.revision.calidad)).toBeNull();
+    expect(screen.getByText(PITCH.revision.calidadEditada)).toBeTruthy();
+  });
+
+  it("cuando llega otra versión de la IA, el foco va a su aviso; un error al programar también se lleva el foco", async () => {
+    const { rerender } = render(<MontajeDelEditor data={datos({ ai: "on", draft: IA })} aiKey={keyIA} />);
+    expect(document.activeElement).toBe(document.body);
+    const nueva = { ...IA, body: BUENO.replace("Mis recetas", "Mis desayunos") };
+    const otra = editorKey({ touchId: IA.touchId, pending: null, generationStamp: "2026-09-25T10:05:00.000Z" });
+    rerender(<MontajeDelEditor data={datos({ ai: "on", draft: nueva })} aiKey={otra} />);
+    expect(document.activeElement).toBe(screen.getByText(PITCH.revision.generado));
+    expect(cuerpo().textContent).toContain("Mis desayunos");
+
+    guardarPitch.mockResolvedValue({ message: PITCH.errores.no_postal_address });
+    await act(async () => {
+      fireEvent.click(programar());
+    });
+    const error = await screen.findByText(PITCH.errores.no_postal_address);
+    expect(document.activeElement).toBe(error);
+  });
+
+  it("tocar una ficha dice su origen debajo del mensaje (en un teléfono no hay cursor)", () => {
+    render(<EditorDePitch data={datos({ draft: IA })} />);
+    const etiqueta = PITCH.cuerpo.cifra(MEDIANA.display, MEDIANA.label, PITCH.origen.creator_baseline);
+    fireEvent.click(within(cuerpo()).getByLabelText(etiqueta));
+    expect(screen.getByText(PITCH.cuerpo.detalle(etiqueta))).toBeTruthy();
+  });
+
+  it("Enter con tecleo instantáneo pone el salto donde está el cursor de verdad, no donde estaba antes", () => {
+    const { container } = render(<EditorDePitch data={datos()} />);
+    escribir("abcdef");
+    const texto = cuerpo().firstChild as Text;
+    const sel = document.getSelection()!;
+    const poner = (offset: number) => {
+      const r = document.createRange();
+      r.setStart(texto, offset);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    };
+    // Lo que guardó el último «selectionchange»: el cursor al final.
+    poner(6);
+    document.dispatchEvent(new Event("selectionchange"));
+    // La tecla siguiente llega antes que el aviso: el cursor ya está en el medio.
+    poner(3);
+    fireEvent.keyDown(cuerpo(), { key: "Enter" });
+    expect(marcado(container)).toBe("abc\ndef");
   });
 });
