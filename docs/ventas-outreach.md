@@ -631,6 +631,7 @@ dueño aquí:
 | Topes por canal que solo miran el techo del proveedor | La vista `outreach_channel_account_limits` (0040): el máximo de cada cuenta es el menor entre la política del espacio y el proveedor (500 en un Gmail personal) | VEN-9 |
 | Un envío que falla por red se reintenta a ciegas y la marca recibe el mensaje dos veces | Los POST que mandan algo a una persona (correo, DM, invitación, comentario, reacción) no se reintentan dentro del conector (`idempotent: false`): el error sube como `transient` y el despachador decide tras mirar el hilo | VEN-9 · VEN-10 |
 | Todos los DM del creador (amigos, fans) entran a la base y al clasificador | Una respuesta solo se guarda si es de un toque `sent` de ESA cuenta (`outbound_touch.channel_account_id`, 0041): por su hilo o, en LinkedIn e Instagram, porque quien escribe es a quien se le envió (`recipient_address` = su provider_id: la invitación aceptada contesta en un chat nuevo); lo demás se ignora sin guardar el cuerpo | VEN-9 |
+| El DM que acabamos de enviar vuelve por el aviso de mensajes y entra como respuesta: la cadencia se detiene sola | Es eco si el aviso trae `account_info.user_id` = quien escribe **o** si quien escribe es la identidad de la cuenta (`provider_identity`, 0042); un mensaje sin remitente se descarta antes que arriesgar la cadencia | VEN-9 |
 | La baja pedida al aceptar una invitación de LinkedIn se pierde: la respuesta llega en un chat que no es el del toque | El segundo paso de arriba la reconoce, da de baja la ficha (código `reply_optout:linkedin` en `contact.opted_out_code`, 0043) y cancela lo pendiente en todos los canales | VEN-9 |
 | Soltar una cuenta y reconectarla a la vez deja un permiso revocado en una fila «Conectado» | El job reclama la fila antes de hablar con el proveedor (`release_claimed_at`, 0041) y la conexión responde «espera un minuto» mientras dure; una fila desconectada no presta su ref del vault | VEN-9 |
 | El mismo LinkedIn conectado dos veces con dos account_id (cada hosted auth estrena uno): topes sumados y doble cobro | `provider_identity` (connection_params.im.id) único entre las filas vivas de todos los espacios (0042): conectado aquí → la cuenta nueva se borra; caído → su fila adopta la nueva; vivo en otro espacio → «ocupada» | VEN-9 |
@@ -715,7 +716,9 @@ cuentas existentes se migran borrando sus avisos por cuenta.
 ### 9.2 Lo que la pantalla de canales le dice al creador
 
 - **Nunca el texto de un proveedor, y nunca una frase en la base.** En
-  `last_error` solo van códigos (`CHANNEL_ERROR_CODES` de `@mc/db`:
+  `last_error` solo van códigos (desde 0044, un `CHECK` con la forma
+  `^[a-z_]+(:[A-Z_]+)?$` lo impone a todos los roles; el seed de la demo
+  también siembra un código) (`CHANNEL_ERROR_CODES` de `@mc/db`:
   `cancelled`, `provider_error`, `gmail_revoked`, `transient`…, y
   `unipile_status:<X>` para lo que Unipile dijo de la sesión), los
   escriba la web o el keepalive. La pantalla los traduce al pintar
@@ -732,11 +735,33 @@ cuentas existentes se migran borrando sus avisos por cuenta.
   `reply_optout:<canal>`), y la ficha de Ventas lo traduce. La columna
   `opted_out_reason` sigue siendo del texto de la persona (el «Motivo»
   que escribe al registrar la baja a mano) y de las bajas de 0026 y 0037.
-- **Un motivo de un intento caduca.** «No pudimos conectar con Instagram
-  ahora mismo», «Cancelaste la autorización» o «Revisa el usuario y la
-  contraseña» solo se enseñan si son de las últimas 24 horas: el
-  keepalive borra el intento a los 7 días, y mientras tanto la fila «Sin
-  conectar» no los repite.
+- **Un motivo de un intento caduca.** «Cancelaste la autorización» o
+  «Revisa el usuario y la contraseña» solo se enseñan si son de las
+  últimas 24 horas; los fallos pasajeros del servicio («No pudimos
+  conectar con Instagram ahora mismo», «No pudimos comprobar la
+  cuenta»), solo durante una hora (`lastErrorFresh`): un fallo de un
+  minuto no deja la fila en rojo todo el día. El keepalive borra el
+  intento a los 7 días.
+- **Desconectar a propósito no arrastra la caída.** `disconnectChannelAccount`
+  borra `last_error`, y la fila «Sin conectar» solo enseña el motivo de
+  un INTENTO que no terminó (una fila que nunca tuvo cuenta), nunca el de
+  una cuenta que la persona quitó.
+- **La frase genérica depende del estado.** Un código que la pantalla no
+  conoce dice «Algo falló con esta cuenta. Si no se arregla sola, vuelve
+  a conectarla.» solo en una cuenta conectada o con error; con la cuenta
+  marcada para reconectar dice «No pudimos usar esta cuenta. Vuelve a
+  conectarla.», que no contradice al botón.
+- **«Comprobada» solo en las conectadas.** En una caída, `last_ok_at` es
+  la última vez que funcionó: la línea dice «Funcionó por última vez
+  hace 3 días».
+- **Sin «outreach» en pantalla.** La persona lee «envíos automáticos a
+  marcas» y «canales para escribir a marcas»; la palabra queda para el
+  código y los documentos. Desconectar avisa que se detienen los envíos
+  pendientes «desde esta cuenta» (los de otra cuenta del canal siguen).
+- **Los nombres de variables, solo a quien administra y solo en
+  desarrollo.** El bloque plegado de lo que falta en el servidor no se
+  enseña en producción (tampoco en una demo pública con la base
+  embebida) ni a quien no gestiona los canales.
 - **No todo es un error.** Cancelar en Google va en texto neutro, en la
   fila y en el aviso de arriba; «LinkedIn todavía no está disponible en
   On Cue» (sin llaves) va en ámbar y dice lo mismo en el aviso y en la
@@ -764,3 +789,74 @@ cuentas existentes se migran borrando sus avisos por cuenta.
 - **Sin llaves**, la fila dice que el canal no está disponible, sin
   prometer un aviso que no existe; con los tres canales así, un solo
   aviso arriba de la lista.
+
+### 9.3 La sesión real que falta grabar (condición de salida a clientes)
+
+Todo lo anterior está probado contra dobles (`FakeGmail`, `FakeUnipile`)
+y contra fixtures armados de la documentación de Google y de Unipile
+(`meta.source = 'docs'`). Eso prueba NUESTRA lógica, no que el servicio
+responda así. Tres cosas solo se saben con el servicio de verdad: si
+Unipile acepta y devuelve sin cortar el `name` de ~500 caracteres de la
+hosted auth (el estado firmado), la forma real del aviso de
+`notify_url` y del de mensajes (en especial `sender.attendee_provider_id`
+y `account_info`, de los que dependen casar la invitación aceptada y
+reconocer el eco), y la del canje de Google. Por eso VEN-9 queda
+**bloqueada** hasta grabarlas.
+
+Qué hace falta (Rasheed; ninguna llave se inventa ni pasa por un chat):
+
+1. Un cliente OAuth de Google en modo **Prueba** con la Gmail API, los
+   alcances `gmail.send`, `gmail.modify` y `userinfo.email`, un buzón de
+   pruebas como usuario de prueba y dos URI de redirección:
+   `<APP_URL>/api/oauth/google/callback` y `http://localhost:8788/callback`.
+2. Una cuenta de pruebas de Unipile (tiene periodo gratuito) y un
+   LinkedIn de pruebas.
+3. Las llaves en `platform/.env.local` (`GOOGLE_CLIENT_ID`,
+   `GOOGLE_CLIENT_SECRET`, `UNIPILE_DSN`, `UNIPILE_ACCESS_TOKEN`,
+   `UNIPILE_WEBHOOK_SECRET`, más `TOKEN_ENCRYPTION_KEY` de `make
+   db.unlock`) y un túnel público hacia la web local.
+
+La sesión, con `packages/connectors/scripts/record-outreach.ts`:
+
+```bash
+cd platform
+pnpm --filter @mc/web dev --port 3100          # APP_URL = la URL del túnel
+pnpm --filter @mc/connectors record:outreach -- avisos --port 8787 --forward http://localhost:3100   # el túnel apunta al 8787
+pnpm --filter @mc/connectors record:outreach -- google --port 8788 --send-to <buzón de pruebas>
+# En /ventas/canales: conectar el Gmail (el camino de la web) y el LinkedIn.
+# Escribirle al LinkedIn desde otra cuenta, contestar desde él, y cerrar su sesión en LinkedIn.
+pnpm --filter @mc/connectors record:outreach -- unipile --account <account_id> --app-url <túnel>
+```
+
+Deja `fixtures/<proveedor>/<endpoint>.recorded.json` (y
+`fixtures/unipile/webhooks/<tipo>.recorded.json` con lo que respondió
+la web), anonimizados por `anonymizeOutreach`: sin tokens, sin correos
+reales, sin textos de personas, con los ids de LinkedIn en un hash
+estable. Después:
+
+- `pnpm --filter @mc/connectors test` pasa cada grabación por el
+  normalizador de producción (`outreach-grabacion.test.ts`): la cuenta
+  trae `connection_params.im.id` y `created_at`, el aviso de cuenta
+  creada trae el estado entero y la web lo verificó (`appStatus` 200),
+  el de mensajes trae quién escribe, el canje trae `refresh_token` y los
+  dos alcances, el Message-ID tiene su forma. Si algo no casa, se ajusta
+  `parseUnipileWebhook`, `normalizeUnipileAccount` o `normalizeGmailMessage`
+  a lo que llegó de verdad.
+- VEN-9 pasa a «hecho» en `apps/web/content/backlog.ts` con la fecha de
+  la grabación en su nota. `ventas/canales/_lib/grabados.test.ts` no lo
+  deja antes: exige las once de `REQUIRED_OUTREACH_RECORDINGS`.
+
+### 9.4 Decisiones y cruces de carpeta
+
+La pieza de canales tocó, a propósito y de forma aditiva, archivos que
+no son de Ventas. Ninguno cambia el comportamiento de lo que ya estaba:
+
+| Archivo | Dueño | Qué se agregó | Por qué es aditivo |
+|---|---|---|---|
+| `packages/connectors/src/unipile.ts`, `gmail.ts`, `outreach/*`, `testing/fake-*.ts`, `testing/grabacion.ts`, `scripts/record-outreach.ts`, `fixtures/gmail/`, `fixtures/unipile/` | Nicolás (carpeta) | Los conectores de los canales de Ventas | Asignados a VEN-9 en la tarea; archivos nuevos, ninguno reemplaza uno de Conexiones |
+| `packages/connectors/src/crypto/sealed-cookie.ts` | Nicolás (Conexiones) | `openWithAnyKey` y su tipo `OpenedWithAnyKey`: abre un sello probando cada llave del llavero y dice cuál casó | `openSealedValue` y el sello de la cookie de CON-3 quedan igual; la función nueva solo la usan el estado de canal y la ruta de los avisos (rotar `TOKEN_ENCRYPTION_KEY` no invalida los avisos de Unipile, que viven años) |
+| `packages/connectors/src/index.ts`, `package.json` | Nicolás | Exporta los módulos de outreach; `exports` con el subpath `./testing` | `.` sigue apuntando a `src/index.ts`; el subpath aparta los dobles del barril de producción |
+| `packages/connectors/eslint.config.mjs`, `apps/worker/eslint.config.mjs` | Nicolás | Un bloque `no-restricted-imports` que prohíbe `@mc/connectors/testing` fuera de las pruebas | Solo añade una regla; las demás reglas y archivos no cambian. Evita que un job o una pantalla conecte canales falsos sin aviso |
+| `apps/web/lib/format.ts` | compartido | `formatRelativeSeconds` y `f.relative` («hace 2 horas», con Intl y el locale del espacio) | Funciones nuevas; las existentes no cambian. La usa la línea «Comprobada hace…» / «Funcionó por última vez…» |
+| `apps/web/content/backlog.ts` | compartido | El estado y la nota de VEN-9 | Lo pide el protocolo de cada ronda |
+
