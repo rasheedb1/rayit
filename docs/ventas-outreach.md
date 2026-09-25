@@ -1063,7 +1063,27 @@ campaña activa, temporada).
   deja los días en su puesto, como Lemlist. Reordenar, añadir, quitar o
   cambiar un paso deja siempre un correo nuevo (no una respuesta) como
   primer correo, y un paso añadido nace con el primer ángulo que la
-  cadencia no usa y su guía.
+  cadencia no usa y su guía. Si los mensajes ya llegan al tope de la
+  política, «Añadir paso» pone un gesto de presencia (una reacción en la
+  red que llegue, o una tarea a mano) y lo dice: un mensaje de más
+  nacería marcado «no sale».
+- **Las reglas de quién entra, en todos los caminos**: «Activar» (y
+  «Reanudar», que pasa por la misma acción) y «Enrolar desde un
+  negocio» comprueban en la misma transacción que el negocio sigue
+  abierto, que la persona es de su marca y que no está viva en otra
+  cadencia del espacio. La propuesta nunca guarda un negocio ganado o
+  perdido, y la etiqueta del botón solo dice «y escribir a X» cuando X
+  de verdad va a entrar. Tras activar, el aviso lleva a la ficha de la
+  empresa, donde se aprueban los mensajes retenidos.
+- **Desde dónde se propone**: la portada de cadencias muestra las seis
+  señales más recientes y «Ver todas las señales (N)»; la ficha de la
+  empresa pone «Proponer cadencia» (o «Ver su cadencia») junto a cada
+  negocio abierto que salió de una señal.
+- **La guía compuesta sale de una tabla por idioma**
+  (`packages/core/src/outreach/guidance-phrases.ts`): el recomendador no
+  escribe frases fuera de ella y recibe el idioma del espacio. Hoy solo
+  hay tabla en español, como las plantillas y los ángulos; un idioma sin
+  tabla usa la española hasta que lleguen sus plantillas.
 
 ### 5.6 La puerta de calidad de cada mensaje
 
