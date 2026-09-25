@@ -12,7 +12,7 @@ vi.mock("./actions", () => ({
 
 import type { ChannelAccountRow } from "@mc/db/queries/canales";
 import { formatterFor } from "@/lib/format";
-import { POINTER_FOCUS_ATTR } from "./_lib/foco";
+import { HEADING_FOCUS, POINTER_FOCUS_ATTR } from "./_lib/foco";
 import type { ChannelRowView } from "./_lib/filas";
 import { AccionFila, rowActionVariant } from "./accion-fila";
 import { ConectarBoton } from "./conectar-boton";
@@ -187,6 +187,9 @@ describe("Desconectar dentro de su fila", () => {
     const conTeclado = screen.getByRole("heading", { name: "Correo" });
     expect(document.activeElement).toBe(conTeclado);
     expect(conTeclado.hasAttribute(POINTER_FOCUS_ATTR)).toBe(false);
+    // El anillo va dentro del título y solo sin la marca del ratón; el contorno global de :focus-visible queda anulado (!important).
+    expect(HEADING_FOCUS).toMatch(/(^|\s)outline-none!(\s|$)/);
+    expect(HEADING_FOCUS).toMatch(/\[&:focus-visible:not\(\[data-foco-raton\]\)\]:ring-inset/);
   });
 
   it("si la cuenta ya estaba desconectada, lo dice en la fila", async () => {
