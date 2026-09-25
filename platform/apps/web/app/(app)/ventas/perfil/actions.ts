@@ -52,7 +52,12 @@ import { describirProblemas } from "./problemas";
 const RUTA = "/ventas/perfil";
 const t = MESSAGES;
 
-export type ResultadoAccion = { ok: true; message: string } | { ok: false; message: string; detalles: string[] };
+/**
+ * Lo que responde una acción. `writtenAt` es la fecha de la narrativa que
+ * dejó guardada: con ella el aviso «Narrativa guardada.» sabe a qué
+ * narrativa se refiere y deja de verse si un recálculo la reemplaza.
+ */
+export type ResultadoAccion = { ok: true; message: string; writtenAt?: string } | { ok: false; message: string; detalles: string[] };
 
 async function formateador(): Promise<Formatter> {
   return formatterFor(await getCurrentWorkspace());
@@ -120,13 +125,13 @@ export async function guardarNarrativa(texto: string, escritaEl: string): Promis
   const entrada = EdicionSchema.safeParse({ texto, escritaEl });
   if (!entrada.success) return { ok: false, message: t.narrativa.errores.titulo, detalles: [t.narrativa.errores.too_long(f.int(NARRATIVE_MAX_CHARS))] };
   try {
-    await withWorkspace(async (tx) => {
+    const guardado = await withWorkspace(async (tx) => {
       const creador = await getPrimaryCreator(tx);
       if (!creador) throw new PerfilComercialError("creator_not_found", "sin creador");
       return saveNarrativeEdit(tx, creador.id, entrada.data.texto, entrada.data.escritaEl);
     });
     revalidatePath(RUTA);
-    return { ok: true, message: t.narrativa.guardada };
+    return { ok: true, message: t.narrativa.guardada, writtenAt: guardado.narrative.writtenAt };
   } catch (error) {
     if (error instanceof PerfilComercialError) {
       if (error.code === "invalid_narrative") {

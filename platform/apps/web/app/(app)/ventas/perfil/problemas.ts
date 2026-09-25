@@ -1,4 +1,5 @@
 import type { NarrativeIssue } from "@mc/core/outreach/narrativa";
+import { comoFicha } from "./fichas";
 import { MESSAGES } from "./messages";
 
 /**
@@ -13,8 +14,9 @@ export function describirProblemas(issues: readonly NarrativeIssue[], maxTexto: 
   const out = new Set<string>();
   for (const i of issues) {
     switch (i.code) {
-      case "unknown_claim": out.add(e.unknown_claim(i.id)); break;
-      case "malformed_marker": out.add(e.malformed_marker(i.text)); break;
+      // Las marcas se dicen como el creador las ve en el editor: ⟦…⟧ (fichas.ts).
+      case "unknown_claim": out.add(e.unknown_claim(comoFicha(i.id))); break;
+      case "malformed_marker": out.add(e.malformed_marker(comoFicha(i.text))); break;
       case "bare_number": out.add(e.bare_number(i.text)); break;
       case "number_word": out.add(e.number_word(i.text)); break;
       case "placeholder": out.add(e.placeholder(i.text)); break;

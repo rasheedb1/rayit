@@ -10,7 +10,7 @@
  * recalcular, en vez de pintar cifras de un formato que ya no conoce.
  */
 import {
-  AUDIENCE_DIMENSIONS, CLAIM_ID_RE, CLAIM_KEYS, CLAIM_KINDS, CLAIM_TABLES, CONTENT_KINDS, DURATION_BUCKETS, DURATION_VS_TYPICAL,
+  AUDIENCE_DIMENSIONS, coverSrcOrNull, CLAIM_ID_RE, CLAIM_KEYS, CLAIM_KINDS, CLAIM_TABLES, CONTENT_KINDS, DURATION_BUCKETS, DURATION_VS_TYPICAL,
   HOOK_KINDS, OUTLIER_TIERS, PERFIL_VERSION, PIECE_KINDS, TONE_TRAITS, WHY_AXES, type Claim, type PerfilComercial,
 } from './perfil.ts';
 import { PLATFORM_LABELS } from '../plataformas.ts';
@@ -59,6 +59,8 @@ const isOneOf = (list: readonly string[]) => (v: unknown) => isStr(v) && list.in
  * http(s). Un «javascript:» metido a mano en el jsonb no llega a un enlace.
  */
 const isWebUrlOrNull = (v: unknown) => v === null || (isStr(v) && /^https?:\/\//i.test(v));
+/** Una portada: lo mismo, o una ruta de la propia aplicación (coverSrcOrNull). */
+const isCoverSrcOrNull = (v: unknown) => v === null || (isStr(v) && coverSrcOrNull(v) === v);
 /** Un arreglo cuyos elementos cumplen `each`: lo que la pantalla recorre con map y filter. */
 const arrayOf = (v: unknown, each: (x: unknown) => boolean) => Array.isArray(v) && v.every(each);
 
@@ -108,7 +110,7 @@ function isPerfil(p: Obj): boolean {
     isIdOrNull(perf.scoredClaimId) &&
     arrayOf(perf.top, (v) =>
       isObj(v) && isStr(v.postId) && isPlatform(v.platformId) && isStr(v.title) && isWebUrlOrNull(v.url) &&
-      isWebUrlOrNull(v.coverUrl) && isNum(v.cutHours) &&
+      isCoverSrcOrNull(v.coverUrl) && isNum(v.cutHours) &&
       (v.outlierTier === null || isOneOf(OUTLIER_TIERS)(v.outlierTier)) &&
       isId(v.multipleClaimId) && isIdOrNull(v.viewsClaimId) && isIdOrNull(v.baselineClaimId) && isIdOrNull(v.durationClaimId) &&
       isWhy(v.why)) &&

@@ -7,8 +7,9 @@ import { PLATFORM_LABEL, PlatformPill } from "@/components/ui/platform-pill";
 import { RANGE_DASH, type Formatter } from "@/lib/format";
 import { Cifra } from "./cifra";
 import { corteTexto, origenId, type CifraVista } from "./cifras";
-import { MESSAGES } from "./messages";
+import { MESSAGES, type CampaignClaimKey } from "./messages";
 import { Plegable } from "./plegable";
+import { Portada } from "./portada";
 
 /**
  * Las secciones del perfil, en una columna y en el orden de un media kit
@@ -159,31 +160,23 @@ function PorQue({ v, cifras }: { v: TopVideo; cifras: Cifras }) {
 }
 
 /**
- * La portada del video, 9:16 como en la red: lo primero que mira una
- * marca en un media kit (Beacons, Passionfroot). Sin portada, un hueco
- * del mismo tamaño para que la lista no baile.
+ * «Qué te funciona»: la mediana por red y los cinco mejores videos.
+ *
+ * `portadas` son las portadas VIVAS de esos videos (readPostCovers, por
+ * postId): las de TikTok e Instagram caducan, y la que quedó en el perfil
+ * guardado solo se usa si el post ya no está. Si ninguno de los cinco
+ * tiene portada, la columna no se pinta: cinco marcadores seguidos no le
+ * dicen nada a una marca. Si solo faltan algunas, cada una lleva su
+ * Marcador (la red y la duración).
  */
-function Portada({ v }: { v: TopVideo }) {
-  const t = MESSAGES.desempeno;
-  const caja = "h-[100px] w-14 shrink-0 overflow-hidden rounded-md bg-hover";
-  if (!v.coverUrl) return <span className={caja} aria-hidden="true" />;
-  // Las portadas vienen de las plataformas (dominios que no controlamos):
-  // next/image exigiría declararlos (el mismo criterio que Campañas).
-  // eslint-disable-next-line @next/next/no-img-element
-  const img = <img src={v.coverUrl} alt={t.portada(v.title)} width={56} height={100} loading="lazy" className={`${caja} object-cover`} />;
-  return v.url ? (
-    <a href={v.url} target="_blank" rel="noopener noreferrer" tabIndex={-1} className="shrink-0">
-      {img}
-    </a>
-  ) : (
-    img
-  );
-}
-
-export function Desempeno({ perfil, cifras, f }: { perfil: PerfilComercial; cifras: Cifras; f: Formatter }) {
+export function Desempeno({
+  perfil, cifras, f, portadas = {},
+}: { perfil: PerfilComercial; cifras: Cifras; f: Formatter; portadas?: Readonly<Record<string, string | null>> }) {
   const t = MESSAGES.desempeno;
   const { medians, top, scoredClaimId } = perfil.performance;
   const puntuados = scoredClaimId ? cifras[scoredClaimId]?.valor : undefined;
+  const portadaDe = (v: TopVideo) => (Object.hasOwn(portadas, v.postId) ? portadas[v.postId]! : v.coverUrl);
+  const conPortadas = top.some((v) => portadaDe(v) !== null);
   return (
     <Seccion id="perfil-desempeno" title={t.title}>
       {medians.length > 0 && (
@@ -212,7 +205,17 @@ export function Desempeno({ perfil, cifras, f }: { perfil: PerfilComercial; cifr
           {top.map((v, i) => (
             <li key={v.postId} className="flex gap-3 p-3 sm:gap-4">
               <span className="w-4 shrink-0 pt-0.5 text-right text-sm tabular-nums text-fg-3">{f.int(i + 1)}</span>
-              <Portada v={v} />
+              {conPortadas && (
+                <Portada
+                  // Otra portada (la sincronización trajo una nueva) es otra imagen: se vuelve a intentar.
+                  key={portadaDe(v) ?? "sin-portada"}
+                  src={portadaDe(v)}
+                  href={v.url}
+                  alt={t.portada(v.title)}
+                  platformId={v.platformId}
+                  duracion={v.durationClaimId ? (cifras[v.durationClaimId]?.valor ?? null) : null}
+                />
+              )}
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <PlatformPill platformId={v.platformId} />
@@ -345,6 +348,16 @@ export function Formatos({ perfil, cifras }: { perfil: PerfilComercial; cifras: 
 // Con quién has trabajado · Cuánto cobras
 // ---------------------------------------------------------------------
 
+/** Si la clave es de una cifra de campaña: las que tienen etiqueta en messages.ts (el satisfies obliga a que estén todas). */
+function esClaveCampana(key: Claim["key"]): key is CampaignClaimKey {
+  return Object.hasOwn(MESSAGES.pruebaSocial.etiquetas, key);
+}
+
+/** La etiqueta de una cifra de campaña; una clave que no es de campaña no lleva ninguna. */
+function etiquetaCampana(key: Claim["key"] | undefined): string {
+  return key !== undefined && esClaveCampana(key) ? MESSAGES.pruebaSocial.etiquetas[key] : "";
+}
+
 export function PruebaSocial({ perfil, cifras }: { perfil: PerfilComercial; cifras: Cifras }) {
   const t = MESSAGES.pruebaSocial;
   return (
@@ -365,7 +378,7 @@ export function PruebaSocial({ perfil, cifras }: { perfil: PerfilComercial; cifr
               <p className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-sm text-fg-2">
                 {c.claimIds.map((id) => (
                   <span key={id}>
-                    <C id={id} cifras={cifras} lugar="prueba" /> {cifras[id] ? t.etiquetas[cifras[id].key] : ""}
+                    <C id={id} cifras={cifras} lugar="prueba" /> {etiquetaCampana(cifras[id]?.key)}
                   </span>
                 ))}
               </p>
@@ -387,12 +400,13 @@ export function Tarifas({ perfil, cifras }: { perfil: PerfilComercial; cifras: C
       ) : (
         <ul className="space-y-2 text-sm">
           {lineas.map((l) => (
-            <li key={l.itemId} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            // Dos columnas: al envolver una etiqueta larga a 400 px, el rango sigue pegado a la derecha.
+            <li key={l.itemId} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4">
               <span className="flex min-w-0 items-center gap-2">
                 {l.platformId && <PlatformPill platformId={l.platformId} />}
                 <span className="min-w-0 break-words">{l.label}</span>
               </span>
-              <span className="shrink-0">
+              <span className="justify-self-end text-right whitespace-nowrap">
                 <C id={l.lowClaimId} cifras={cifras} lugar="tarifa" />
                 {l.lowClaimId && l.highClaimId && <span className="text-fg-3"> {RANGE_DASH} </span>}
                 <C id={l.highClaimId} cifras={cifras} lugar="tarifa" />

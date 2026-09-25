@@ -14,7 +14,7 @@
  * @mc/core.
  */
 import type {
-  ContentKind, CutSpan, DurationBucket, DurationVsTypical, HookKind, OutlierTier, PieceKind, ToneTrait, WhyAxis,
+  ClaimKey, ContentKind, CutSpan, DurationBucket, DurationVsTypical, HookKind, OutlierTier, PieceKind, ToneTrait, WhyAxis,
 } from "@mc/core/outreach/perfil";
 import type { NarrativeFallback } from "@mc/core/outreach/narrativa";
 import type { NarrativeSource } from "@mc/core/outreach/perfil-guardado";
@@ -68,6 +68,9 @@ const SIN_RASGO: Record<WhyAxis, Record<string, string>> = {
   } satisfies Record<ContentKind, string>,
   duration: { muy_corto: "durar muy poco", corto: "ser corto", medio: "tener duración media", largo: "ser largo" } satisfies Record<DurationBucket, string>,
 };
+
+/** Las claves de las cifras de una campaña: cada una lleva su etiqueta en «Con quién has trabajado». */
+export type CampaignClaimKey = Extract<ClaimKey, `campaign.${string}`>;
 
 export const MESSAGES = {
   metaTitle: "Perfil comercial",
@@ -134,7 +137,7 @@ export const MESSAGES = {
     guardada: "Narrativa guardada.",
     campo: "Texto de la narrativa",
     ayuda:
-      "Escribe las cifras solo con su marca, por ejemplo [claim:mediana-tiktok]: así cada una sigue enlazada a su origen. Separa los párrafos con una línea en blanco.",
+      "Cada cifra va entre ⟦ ⟧ y sigue enlazada a su origen: no la escribas a mano, ponla con «Insertar una cifra». Separa los párrafos con una línea en blanco.",
     insertar: "Insertar una cifra",
     insertarAyuda: "Elige una cifra para ponerla donde está el cursor.",
     insertarBoton: "Insertar",
@@ -151,11 +154,12 @@ export const MESSAGES = {
       empty: "La narrativa está vacía.",
       too_long: (max: string) => `Es demasiado larga: el máximo son ${max} caracteres.`,
       paragraphs: "Usa de uno a cinco párrafos, separados por una línea en blanco.",
-      unknown_claim: (id: string) => `[claim:${id}] no es una cifra de este perfil.`,
-      malformed_marker: (texto: string) => `«${texto}» no es una marca válida: se escribe [claim:id], con el id de la lista.`,
-      bare_number: (texto: string) => `«${texto}» es una cifra escrita a mano: cámbiala por su marca de la lista o quítala.`,
+      /** `ficha` llega como el creador la ve en el editor: ⟦…⟧. */
+      unknown_claim: (ficha: string) => `${ficha} no es una cifra de este perfil: ponla con «Insertar una cifra».`,
+      malformed_marker: (ficha: string) => `${ficha} no es una cifra de este perfil: ponla con «Insertar una cifra».`,
+      bare_number: (texto: string) => `«${texto}» es una cifra escrita a mano: cámbiala por una de «Insertar una cifra» o quítala.`,
       number_word: (texto: string) =>
-        `«${texto}» dice una cantidad con letras o con un signo: cámbiala por su marca de la lista o quítala.`,
+        `«${texto}» dice una cantidad, un puesto o una proporción sin cifra: cámbiala por una de «Insertar una cifra» o quítala.`,
       placeholder: (texto: string) => `Quedó un hueco sin llenar: «${texto}».`,
       no_claims: "Cita al menos una cifra.",
       stale_edit: "La narrativa cambió mientras la editabas (otra pestaña o un recálculo). Recarga la página y vuelve a intentarlo.",
@@ -258,6 +262,8 @@ export const MESSAGES = {
     } satisfies Record<OutlierTier, string>,
     /** La portada del video: su título, para quien no la ve. */
     portada: (titulo: string) => `Portada de «${titulo}»`,
+    /** Sin portada (o una que ya no carga): la red y la duración en su lugar, para quien no la ve. */
+    sinPortada: (red: string, duracion: string | null) => (duracion ? `Video de ${red} de ${duracion}, sin portada` : `Video de ${red}, sin portada`),
     /** Cómo es el video (gancho, pieza, tipo, duración frente a la típica): la explicación principal. */
     comoEs: "Cómo es",
     /**
@@ -279,7 +285,9 @@ export const MESSAGES = {
       directo: "entra directo al tema",
     } satisfies Record<HookKind, string>,
     ganchoLab: "según el análisis del video",
-    pieza: { reel: "reel", tiktok: "TikTok", short: "short", historia: "historia", video: "video" } satisfies Record<PieceKind, string>,
+    pieza: {
+      reel: "reel", tiktok: "TikTok", short: "short", historia: "historia", video: "video largo o de feed",
+    } satisfies Record<PieceKind, string>,
     contenido: {
       tutorial: "tutorial", reto: "reto", lista: "lista", colaboracion: "colaboración con marca", otro: "",
     } satisfies Record<ContentKind, string>,
@@ -298,7 +306,10 @@ export const MESSAGES = {
     piezas: "Formatos",
     contenidos: "Tipos de contenido",
     tono: "Tono",
-    pieza: { reel: "Reels", tiktok: "Videos de TikTok", short: "Shorts", historia: "Historias", video: "Videos" } satisfies Record<PieceKind, string>,
+    /** «video» es lo que no es reel, TikTok, short ni historia: los videos de Facebook, los largos de YouTube y lo de feed. */
+    pieza: {
+      reel: "Reels", tiktok: "Videos de TikTok", short: "Shorts", historia: "Historias", video: "Videos largos o de feed",
+    } satisfies Record<PieceKind, string>,
     contenido: {
       tutorial: "Tutoriales y recetas", reto: "Retos", lista: "Listas", colaboracion: "Colaboraciones con marcas", otro: "Otros",
     } satisfies Record<ContentKind, string>,
@@ -324,7 +335,7 @@ export const MESSAGES = {
       "campaign.brand_followers": "seguidores nuevos para la marca",
       "campaign.redemptions": "canjes del código",
       "campaign.revenue": "en ventas atribuidas",
-    } as Record<string, string>,
+    } satisfies Record<CampaignClaimKey, string>,
   },
 
   tarifas: {

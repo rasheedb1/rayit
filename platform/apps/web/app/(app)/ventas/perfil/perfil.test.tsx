@@ -17,6 +17,7 @@ import type { StoredPerfil } from "@mc/core/outreach/perfil-guardado";
 const getPerfilComercial = vi.fn();
 const getPrimaryCreator = vi.fn();
 const readPerfilDataAsOf = vi.fn();
+const readPostCovers = vi.fn();
 const computePerfil = vi.fn();
 const llmBudgetExhausted = vi.fn();
 const recordProfileLlmCalls = vi.fn();
@@ -52,6 +53,7 @@ vi.mock("@mc/db/queries/perfil-comercial", async () => {
     getPerfilComercial: (...a: unknown[]) => getPerfilComercial(...a),
     getPrimaryCreator: (...a: unknown[]) => getPrimaryCreator(...a),
     readPerfilDataAsOf: (...a: unknown[]) => readPerfilDataAsOf(...a),
+    readPostCovers: (...a: unknown[]) => readPostCovers(...a),
     computePerfil: (...a: unknown[]) => computePerfil(...a),
     llmBudgetExhausted: (...a: unknown[]) => llmBudgetExhausted(...a),
     recordProfileLlmCalls: (...a: unknown[]) => recordProfileLlmCalls(...a),
@@ -137,6 +139,8 @@ beforeEach(() => {
   modelo = null;
   getPrimaryCreator.mockResolvedValue({ id: CREADORA, displayName: "Laura Méndez" });
   readPerfilDataAsOf.mockResolvedValue("2026-09-25T00:00:00.000Z");
+  // Por defecto, ningún post trae portada viva: se usa la guardada.
+  readPostCovers.mockResolvedValue({});
   puedeEditarElPerfil.mockResolvedValue(true);
   llmBudgetExhausted.mockResolvedValue(false);
   recordProfileLlmCalls.mockResolvedValue(undefined);
@@ -172,9 +176,48 @@ describe("la pantalla", () => {
     expect(visible(items[0]!)).toMatch(/Cómo es: abre con una promesa concreta · reel · tutorial · corto/);
     expect(primero.queryByText(/Lo que lo distingue/)).toBeNull();
     expect(primero.queryByText(/Ningún rasgo/)).toBeNull();
-    // Sin portada en los datos, un hueco 9:16 del mismo tamaño; con portada, la imagen con su título.
-    expect(items[0]!.querySelector("img")).toBeNull();
-    expect(items[0]!.querySelector("span.bg-hover[aria-hidden=true]")).toBeTruthy();
+    // Ninguno de los cinco tiene portada: la columna no se pinta (ni imágenes ni cinco rectángulos vacíos).
+    for (const li of items) {
+      expect(li.querySelector("img")).toBeNull();
+      expect(li.querySelector("[data-marcador]")).toBeNull();
+      expect(li.querySelector("span.bg-hover")).toBeNull();
+    }
+    // Las portadas se leen vivas para los cinco que se pintan.
+    expect(readPostCovers).toHaveBeenCalledWith({}, guardado().perfil.performance.top.map((v) => v.postId));
+  });
+
+  it("si solo algunos tienen portada, los demás llevan el color de su red, su nombre y su duración", async () => {
+    const e = entradas();
+    e.posts[0]!.coverUrl = "https://p16.tiktokcdn.com/portada-0.jpg";
+    getPerfilComercial.mockResolvedValue(guardado("template", e));
+    render(await PerfilPage());
+    const lista = screen.getByText("Tus cinco mejores videos").closest("div, section")!.querySelector("ol")!;
+    const items = within(lista).getAllByRole("listitem").filter((li) => li.parentElement === lista);
+    expect(within(items[0]!).getByRole("img", { name: "Portada de «Cold brew en casa en 3 pasos»" })).toBeTruthy();
+    const marcador = within(items[1]!).getByRole("img", { name: "Video de TikTok de 31 s, sin portada" });
+    expect(marcador.getAttribute("data-marcador")).toBe("tiktok");
+    expect(marcador.className).toContain("bg-s-tiktok/15");
+    expect(marcador.textContent).toBe("TikTok31 s");
+    expect(within(items[2]!).getByRole("img", { name: "Video de Instagram de 32 s, sin portada" })).toBeTruthy();
+  });
+
+  it("pinta la portada viva y no la del cálculo, y una que ya no carga cambia al marcador", async () => {
+    const e = entradas();
+    // La portada que quedó en el perfil al calcularlo: una URL firmada que ya caducó.
+    e.posts[0]!.coverUrl = "https://p16.tiktokcdn.com/portada-0.jpg?x-expires=1";
+    const g = guardado("template", e);
+    getPerfilComercial.mockResolvedValue(g);
+    const primero = g.perfil.performance.top[0]!.postId;
+    const segundo = g.perfil.performance.top[1]!.postId;
+    readPostCovers.mockResolvedValue({ [primero]: "https://p16.tiktokcdn.com/portada-0.jpg?x-expires=2", [segundo]: "/demo/portadas/2.svg" });
+    render(await PerfilPage());
+    const img = screen.getByRole("img", { name: "Portada de «Cold brew en casa en 3 pasos»" });
+    expect(img.getAttribute("src")).toBe("https://p16.tiktokcdn.com/portada-0.jpg?x-expires=2");
+    expect(screen.getByRole("img", { name: "Portada de «La arepa sin plancha»" }).getAttribute("src")).toBe("/demo/portadas/2.svg");
+    // La plataforma ya no la sirve: en vez de una imagen rota, la red y la duración.
+    fireEvent.error(img);
+    expect(screen.queryByRole("img", { name: "Portada de «Cold brew en casa en 3 pasos»" })).toBeNull();
+    expect(screen.getByRole("img", { name: "Video de Instagram de 30 s, sin portada" })).toBeTruthy();
   });
 
   it("con videos para comparar, dice lo que distingue al mejor sin contarlo a él, y enseña su portada", async () => {
@@ -268,6 +311,8 @@ describe("la pantalla", () => {
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 400 });
     try {
       const tarifas = screen.getByText("Cuánto cobras").closest("section")!;
+      // Cada fila en dos columnas: al envolver la etiqueta, el rango sigue a la derecha.
+      for (const li of tarifas.querySelectorAll("li")) expect(li.className).toContain("grid-cols-[minmax(0,1fr)_auto]");
       const cifras = within(tarifas).getAllByRole("button").filter((b) => b.hasAttribute("aria-controls"));
       const ultima = cifras.at(-1)!;
       // La cifra pegada al borde derecho, como en un teléfono (jsdom no maqueta: se le da su caja).
@@ -343,10 +388,25 @@ describe("la edición de la narrativa", () => {
     fireEvent.change(screen.getByLabelText("Texto de la narrativa"), { target: { value: "Tengo [claim:inventada], 12.000 y dos millones de fans." } });
     fireEvent.click(screen.getByRole("button", { name: "Guardar narrativa" }));
     const alerta = await screen.findByRole("alert");
-    expect(alerta.textContent).toContain("[claim:inventada] no es una cifra de este perfil.");
+    expect(alerta.textContent).toContain("⟦inventada⟧ no es una cifra de este perfil");
     expect(alerta.textContent).toContain("«12.000» es una cifra escrita a mano");
-    expect(alerta.textContent).toContain("«millones» dice una cantidad con letras");
+    expect(alerta.textContent).toContain("«millones» dice una cantidad");
     expect(saveNarrativeEdit).toHaveBeenCalledWith({}, CREADORA, "Tengo [claim:inventada], 12.000 y dos millones de fans.", "2026-09-25T10:00:01.000Z");
+  });
+
+  it("el editor enseña cada cifra como una ficha legible, sin ids, y guarda las mismas marcas", async () => {
+    const g = guardado();
+    getPerfilComercial.mockResolvedValue(g);
+    saveNarrativeEdit.mockResolvedValue({ ...g, narrative: { ...g.narrative, source: "edited", writtenAt: "2026-09-25T10:05:00.000Z" } });
+    render(await PerfilPage());
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+    const area = screen.getByLabelText("Texto de la narrativa") as HTMLTextAreaElement;
+    expect(area.value).not.toContain("[claim:");
+    expect(area.value).toContain("mediana de ⟦115,4 mil⟧ views");
+    expect(area.className).not.toContain("font-mono");
+    // Sin tocar nada, lo que se guarda es la narrativa con sus marcas, igual que estaba.
+    fireEvent.click(screen.getByRole("button", { name: "Guardar narrativa" }));
+    await waitFor(() => expect(saveNarrativeEdit).toHaveBeenCalledWith({}, CREADORA, g.narrative.text, g.narrative.writtenAt));
   });
 
   it("inserta una cifra donde está el cursor y la vista previa la pinta formateada", async () => {
@@ -358,7 +418,8 @@ describe("la edición de la narrativa", () => {
     area.setSelectionRange(12, 12);
     fireEvent.change(screen.getByLabelText("Insertar una cifra"), { target: { value: "mediana-tiktok" } });
     fireEvent.click(screen.getByRole("button", { name: "Insertar" }));
-    await waitFor(() => expect(area.value).toBe("Mi mediana: [claim:mediana-tiktok]"));
+    // En el editor la cifra es una ficha legible, no un id.
+    await waitFor(() => expect(area.value).toBe("Mi mediana: ⟦115,4 mil⟧"));
     const vista = screen.getByText("Así se verá").closest("section")!;
     expect(vista.textContent).toContain("Mi mediana: 115,4 mil");
     expect(vista.textContent).not.toContain("[claim:");
@@ -376,8 +437,8 @@ describe("la edición de la narrativa", () => {
     const marcas = [...vista.querySelectorAll("mark")].map((m) => m.textContent);
     expect(marcas).toEqual(["[claim:inventada]", "3", "millones", "cuadrupliqué"]);
     expect(vista.textContent).toContain("Lo subrayado no pasará el verificador al guardar:");
-    expect(vista.textContent).toContain("[claim:inventada] no es una cifra de este perfil.");
-    expect(vista.textContent).toContain("«cuadrupliqué» dice una cantidad con letras");
+    expect(vista.textContent).toContain("⟦inventada⟧ no es una cifra de este perfil");
+    expect(vista.textContent).toContain("«cuadrupliqué» dice una cantidad");
     // Nada se mandó todavía: la puerta de verdad sigue siendo la del servidor.
     expect(saveNarrativeEdit).not.toHaveBeenCalled();
   });

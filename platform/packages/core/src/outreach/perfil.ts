@@ -276,8 +276,19 @@ export interface PerfilInputs {
   audience: PerfilAudienceInput[];
   nonFollowers: PerfilNonFollowerInput[];
   baselines: PerfilBaselineInput[];
-  /** Los posts del creador (no borrados en la plataforma), con su puntaje si lo tienen. */
+  /**
+   * Los posts recientes del creador (no borrados en la plataforma), con
+   * su puntaje si lo tienen: de ellos salen formatos, tono y la duración
+   * típica, que hablan de lo que hace hoy.
+   */
   posts: PerfilPostInput[];
+  /**
+   * Los posts con puntaje de TODO su historial (no solo los recientes):
+   * de ellos salen los cinco mejores, su porqué y cuántos videos tienen
+   * puntaje. Así un breakout antiguo entra aunque ya no esté entre los
+   * recientes. Si falta, se usan los puntuados de `posts`.
+   */
+  scoredPosts?: PerfilPostInput[];
   /** Las campañas con resultado medido, reportadas o cerradas. */
   campaigns: PerfilCampaignInput[];
   rateCard: { id: string; currency: string; computedAt: string; items: PerfilRateItemInput[] } | null;
@@ -517,6 +528,16 @@ export function shortId(uuid: string): string {
  */
 export function webUrlOrNull(u: string | null | undefined): string | null {
   return typeof u === 'string' && /^https?:\/\/\S/i.test(u.trim()) ? u.trim() : null;
+}
+
+/**
+ * Una portada que la pantalla pone en src: http(s), como webUrlOrNull, o
+ * una ruta de la propia aplicación («/demo/portadas/1.svg», las portadas
+ * de la demostración que sirve apps/web/public). Nunca «//otro.host».
+ */
+export function coverSrcOrNull(u: string | null | undefined): string | null {
+  const v = typeof u === 'string' ? u.trim() : '';
+  return /^\/(?![/\\])\S/.test(v) ? v : webUrlOrNull(v);
 }
 
 /** Un segmento legible en un id de claim: «25-34» → «25-34», «55+» → «55-mas», «F» → «f». */
@@ -761,7 +782,7 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
     }),
   }));
 
-  const puntuados = input.posts.filter((p) => p.score && p.score.viewsVsMedian !== null);
+  const puntuados = (input.scoredPosts ?? input.posts).filter((p) => p.score && p.score.viewsVsMedian !== null);
   const scoredClaimId = puntuados.length
     ? claims.add({
         id: 'videos-con-puntaje',
@@ -829,7 +850,7 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
         postId: p.id,
         platformId: p.platformId,
         url: webUrlOrNull(p.url),
-        coverUrl: webUrlOrNull(p.coverUrl),
+        coverUrl: coverSrcOrNull(p.coverUrl),
         title: titulo,
         publishedAt: p.publishedAt,
         outlierTier: score.outlierTier,
@@ -924,7 +945,10 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
  */
 function postsCitados(input: PerfilInputs, claims: readonly Claim[]): PostRef[] {
   const citados = new Set(claims.flatMap((c) => c.source.rows ?? []));
-  return input.posts
+  // Los recientes y, después, los puntuados más viejos: cada post una vez.
+  const todos = new Map<string, PerfilPostInput>();
+  for (const p of [...input.posts, ...(input.scoredPosts ?? [])]) if (!todos.has(p.id)) todos.set(p.id, p);
+  return [...todos.values()]
     .filter((p) => citados.has(p.id))
     .map((p) => ({ postId: p.id, platformId: p.platformId, title: tituloDe(p), url: webUrlOrNull(p.url) }));
 }

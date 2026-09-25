@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, type ReactNode } from "react";
+import { useMemo, useState, useTransition, type ReactNode } from "react";
 import {
   narrativeIssueSpans, narrativeSegments, paragraphsOf, verifyNarrativeWith, type IssueSpan, type VerifierContext,
 } from "@mc/core/outreach/narrativa";
@@ -9,6 +9,7 @@ import { Field, Select, Textarea } from "@/components/ui/field";
 import { guardarNarrativa } from "./actions";
 import { Cifra } from "./cifra";
 import type { CifraVista } from "./cifras";
+import { aEditable, aMarcas, FICHA_ABRE, FICHA_CIERRA, fichasDe } from "./fichas";
 import { MESSAGES } from "./messages";
 import { describirProblemas } from "./problemas";
 
@@ -79,19 +80,24 @@ function Parrafos({
 /**
  * La narrativa del perfil: tres párrafos con cada cifra enlazada a su
  * origen, y «Editar» para corregirla si quien mira puede (editable). La
- * edición es el texto con sus marcas [claim:id], una lista para insertar
- * cifras donde está el cursor y, debajo, la vista previa en vivo con cada
- * marca ya convertida en su cifra y lo que el verificador rechazaría
- * subrayado (el mismo verifyNarrativeWith de @mc/core, en el cliente).
- * Al guardar pasa la puerta de verdad, en el servidor, y lo que rechaza
- * se dice en una lista, una línea por problema.
+ * edición es el texto con cada cifra como una ficha legible, ⟦115,4 mil⟧
+ * (fichas.ts: el creador nunca ve un id), una lista para insertar cifras
+ * donde está el cursor y, debajo, la vista previa en vivo con cada ficha
+ * ya convertida en su cifra y lo que el verificador rechazaría subrayado
+ * (el mismo verifyNarrativeWith de @mc/core, en el cliente, sobre el
+ * texto con sus marcas). Al guardar pasa la puerta de verdad, en el
+ * servidor, y lo que rechaza se dice en una lista, una línea por problema.
  *
  * La página la monta sin key: al guardar, revalidatePath trae la
  * narrativa nueva por props y el componente conserva su estado, así el
  * aviso «Narrativa guardada.» se queda en su región role=status en vez
- * de perderse con un remontaje. La fecha contra la que se guarda es la
- * que había al abrir el editor (base): si un recálculo cambió la
- * narrativa mientras se editaba, guardar no la pisa (stale_edit).
+ * de perderse con un remontaje. El aviso vale solo para la narrativa que
+ * él mismo guardó (la de antes de guardar, mientras llegan los props, y
+ * la guardada): si después un «Recalcular» la reemplaza, deja de verse y
+ * no queda un «Narrativa guardada.» junto a «Perfil recalculado.». La
+ * fecha contra la que se guarda es la que había al abrir el editor
+ * (base): si un recálculo cambió la narrativa mientras se editaba,
+ * guardar no la pisa (stale_edit).
  */
 export function Narrativa({
   texto, escritaEl, fuente, aviso, idioma, cifras, editable, verificador, maxTexto,
@@ -115,18 +121,24 @@ export function Narrativa({
 }) {
   const t = MESSAGES.narrativa;
   const [editando, setEditando] = useState(false);
-  const [borrador, setBorrador] = useState(texto);
+  const [borrador, setBorrador] = useState("");
   /** La fecha de la narrativa que se abrió para editar: contra ella se guarda. */
   const [base, setBase] = useState(escritaEl);
   const [elegida, setElegida] = useState("");
   const [error, setError] = useState<{ message: string; detalles: string[] } | null>(null);
-  const [estado, setEstado] = useState<string | null>(null);
+  /** El aviso de guardado y las narrativas para las que vale (por su fecha): la de antes de guardar y la guardada. */
+  const [estado, setEstado] = useState<{ texto: string; vale: readonly string[] } | null>(null);
   const [guardando, empezar] = useTransition();
   const opciones = Object.values(cifras).map((c) => ({ value: c.id, label: `${c.que}: ${c.valor}` }));
+  const fichas = useMemo(() => fichasDe(cifras), [cifras]);
+  /** Lo escrito en el editor con sus marcas [claim:id]: lo que se verifica y se guarda. */
+  const conMarcas = aMarcas(borrador, fichas);
+  const avisoGuardado = estado && estado.vale.includes(escritaEl) ? estado.texto : null;
 
   function insertar() {
     if (!elegida) return;
-    const marca = `[claim:${elegida}]`;
+    const ficha = fichas.porId.get(elegida);
+    const marca = ficha === undefined ? `[claim:${elegida}]` : `${FICHA_ABRE}${ficha}${FICHA_CIERRA}`;
     // El Textarea del kit no reenvía ref: se busca por su id, que es fijo en esta pantalla.
     const area = document.getElementById(AREA_ID) as HTMLTextAreaElement | null;
     const inicio = area?.selectionStart ?? borrador.length;
@@ -144,17 +156,17 @@ export function Narrativa({
     empezar(async () => {
       // Una petición que falla antes de responder (red, despliegue, tiempo) se dice aquí, no en error.tsx.
       try {
-        const r = await guardarNarrativa(borrador, base);
+        const r = await guardarNarrativa(conMarcas, base);
         if (!r.ok) return setError({ message: r.message, detalles: r.detalles });
         setEditando(false);
-        setEstado(r.message);
+        setEstado({ texto: r.message, vale: r.writtenAt ? [base, r.writtenAt] : [base] });
       } catch {
         setError({ message: t.errores.generico, detalles: [] });
       }
     });
   }
 
-  const veredicto = editando && borrador.trim() ? verifyNarrativeWith(borrador, verificador, { paragraphs: null }) : null;
+  const veredicto = editando && conMarcas.trim() ? verifyNarrativeWith(conMarcas, verificador, { paragraphs: null }) : null;
 
   if (editando) {
     return (
@@ -166,7 +178,7 @@ export function Narrativa({
             value={borrador}
             onChange={(e) => setBorrador(e.target.value)}
             invalid={Boolean(error)}
-            className="font-mono text-[13px] leading-5"
+            className="text-sm leading-6"
           />
         </Field>
         <div>
@@ -182,7 +194,7 @@ export function Narrativa({
         <section aria-labelledby="narrativa-vista-previa" className="rounded-md border border-line bg-bg-2 p-4">
           <h3 id="narrativa-vista-previa" className="mb-2 text-xs font-medium text-fg-3">{t.vistaPrevia}</h3>
           {borrador.trim() ? (
-            <Parrafos texto={borrador} cifras={cifras} prefijo="vista-previa" verificador={verificador} />
+            <Parrafos texto={conMarcas} cifras={cifras} prefijo="vista-previa" verificador={verificador} />
           ) : (
             <p className="text-sm text-fg-2">{t.vistaPreviaVacia}</p>
           )}
@@ -216,7 +228,7 @@ export function Narrativa({
           <Button
             variant="ghost"
             onClick={() => {
-              setBorrador(texto);
+              setBorrador(aEditable(texto, fichas));
               setError(null);
               setEditando(false);
             }}
@@ -239,7 +251,7 @@ export function Narrativa({
           <Button
             size="sm"
             onClick={() => {
-              setBorrador(texto);
+              setBorrador(aEditable(texto, fichas));
               setBase(escritaEl);
               setEstado(null);
               setError(null);
@@ -249,7 +261,7 @@ export function Narrativa({
             {t.editar}
           </Button>
         )}
-        <p role="status" className="text-xs text-good">{estado}</p>
+        <p role="status" className="text-xs text-good">{avisoGuardado}</p>
       </div>
     </div>
   );

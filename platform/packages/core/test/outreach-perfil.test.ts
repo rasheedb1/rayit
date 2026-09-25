@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildPerfil, claimById, claimSlug, webUrlOrNull, cutOf, genderCode, shortId, whyContrast, WHY_MIN_GROUP, WHY_MIN_LIFT, type PerfilComercial,
+  buildPerfil, claimById, claimSlug, coverSrcOrNull, webUrlOrNull, cutOf, genderCode, shortId, whyContrast, WHY_MIN_GROUP, WHY_MIN_LIFT, type PerfilComercial,
 } from '../src/outreach/perfil.ts';
 import {
   contentOf, durationBucketOf, durationVsTypical, hookFromAnalysis, hookOf, pieceOf, toneTraitsOf,
@@ -314,6 +314,8 @@ test('un perfil guardado a medio escribir no llega a la pantalla: cada arreglo q
   assert.equal(con((p) => { p.performance.top[0].url = 'javascript:alert(1)'; }), null);
   assert.equal(con((p) => { delete p.posts; }), null);
   assert.ok(con((p) => { p.performance.top[0].coverUrl = 'https://cdn.example.com/p.jpg'; }));
+  assert.ok(con((p) => { p.performance.top[0].coverUrl = '/demo/portadas/1.svg'; }));
+  assert.equal(con((p) => { p.performance.top[0].coverUrl = '//evil.example.com/p.jpg'; }), null);
   // Sin tarifario es válido: rates null.
   assert.ok(con((p) => { p.rates = null; }));
   // El enlace del origen de una cifra también es un href: solo http(s).
@@ -346,4 +348,32 @@ test('un enlace o una portada sin esquema se sanea al calcular: el perfil se gua
   assert.equal(webUrlOrNull('javascript:alert(1)'), null);
   assert.equal(webUrlOrNull('https://'), null);
   assert.equal(webUrlOrNull(undefined), null);
+  // Una portada puede ser, además, una ruta de la propia aplicación (las de la demostración); otro host sin esquema, no.
+  assert.equal(coverSrcOrNull('/demo/portadas/1.svg'), '/demo/portadas/1.svg');
+  assert.equal(coverSrcOrNull('//evil.example.com/x.jpg'), null);
+  assert.equal(coverSrcOrNull('/\\evil.example.com/x.jpg'), null);
+  assert.equal(coverSrcOrNull('https://p16.tiktokcdn.com/x.jpg'), 'https://p16.tiktokcdn.com/x.jpg');
+  assert.equal(coverSrcOrNull('javascript:alert(1)'), null);
+});
+
+test('los mejores salen de todo el historial con puntaje; formatos y tono, solo de los recientes', () => {
+  const e = entradasLaura();
+  // Un breakout de hace dos años que ya no está entre los recientes.
+  const viejo = {
+    ...e.posts[0]!, id: '00000002-0000-4000-8000-0000000000a1', url: 'https://example.com/a1', coverUrl: null,
+    title: 'El pan de bono que lo empezó todo', caption: 'El pan de bono que lo empezó todo', isBrandedContent: false,
+    publishedAt: '2024-09-01T12:00:00.000Z',
+    score: { viewsVsMedian: 9.4, viewsAtCut: 590000, outlierTier: 'breakout' as const, ageHoursCut: 168, computedAt: null, baseline: null },
+  };
+  const conHistorial = { ...e, scoredPosts: [...e.posts.filter((p) => p.score), viejo] };
+  const p = buildPerfil(conHistorial);
+  assert.equal(p.performance.top[0]!.postId, viejo.id);
+  assert.equal(p.performance.top.length, 5);
+  // «Entre N videos con puntaje» cuenta el historial, no solo los recientes.
+  assert.equal(claimById(p, p.performance.scoredClaimId)!.value, 8);
+  // Formatos y captions no cambian: son los de los recientes.
+  const soloRecientes = buildPerfil(e);
+  assert.deepEqual(p.formats, soloRecientes.formats);
+  // El viejo está en el índice de posts para enlazarlo desde su agregado.
+  assert.ok(p.posts.some((x) => x.postId === viejo.id));
 });

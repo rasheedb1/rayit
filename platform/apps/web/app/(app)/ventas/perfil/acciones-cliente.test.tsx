@@ -81,10 +81,12 @@ describe("una acción que se rechaza no tumba la página", () => {
 
 describe("el aviso de guardado", () => {
   it("sigue en su role=status cuando revalidatePath trae la narrativa nueva con otra fecha", async () => {
-    guardarNarrativa.mockResolvedValue({ ok: true, message: "Narrativa guardada." });
+    guardarNarrativa.mockResolvedValue({ ok: true, message: "Narrativa guardada.", writtenAt: "2026-09-25T10:05:00.000Z" });
     const { rerender } = render(narrativa("Mi mediana es [claim:mediana-tiktok].", "2026-09-25T10:00:01.000Z"));
     fireEvent.click(screen.getByRole("button", { name: "Editar" }));
-    fireEvent.change(screen.getByLabelText("Texto de la narrativa"), { target: { value: "Nueva: [claim:mediana-tiktok]." } });
+    // El editor enseña la cifra como su ficha legible, no con su id.
+    expect((screen.getByLabelText("Texto de la narrativa") as HTMLTextAreaElement).value).toBe("Mi mediana es ⟦115,4 mil⟧.");
+    fireEvent.change(screen.getByLabelText("Texto de la narrativa"), { target: { value: "Nueva: ⟦115,4 mil⟧." } });
     fireEvent.click(screen.getByRole("button", { name: "Guardar narrativa" }));
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Narrativa guardada."));
     // Guardó contra la fecha que había al abrir el editor.
@@ -107,5 +109,33 @@ describe("el aviso de guardado", () => {
     fireEvent.click(screen.getByRole("button", { name: "Guardar narrativa" }));
     // El servidor recibe la fecha vieja y responde stale_edit: no se pisa el recálculo.
     await waitFor(() => expect(guardarNarrativa).toHaveBeenCalledWith("Vieja [claim:mediana-tiktok].", "2026-09-25T10:00:01.000Z"));
+  });
+});
+
+describe("el aviso de guardado y Recalcular", () => {
+  it("después de guardar y recalcular solo queda «Perfil recalculado.»: la narrativa guardada ya no está", async () => {
+    guardarNarrativa.mockResolvedValue({ ok: true, message: "Narrativa guardada.", writtenAt: "2026-09-25T10:05:00.000Z" });
+    recalcularPerfil.mockResolvedValue({ ok: true, message: "Perfil recalculado." });
+    // La página: Recalcular arriba y la narrativa montada sin key.
+    const pagina = (texto: string, escritaEl: string) => (
+      <>
+        <Recalcular editada />
+        {narrativa(texto, escritaEl)}
+      </>
+    );
+    const { rerender } = render(pagina("Mi mediana es [claim:mediana-tiktok].", "2026-09-25T10:00:01.000Z"));
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+    fireEvent.change(screen.getByLabelText("Texto de la narrativa"), { target: { value: "Editada: ⟦115,4 mil⟧." } });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar narrativa" }));
+    const avisos = () => screen.getAllByRole("status").map((s) => s.textContent).filter(Boolean);
+    await waitFor(() => expect(avisos()).toEqual(["Narrativa guardada."]));
+    act(() => rerender(pagina("Editada: [claim:mediana-tiktok].", "2026-09-25T10:05:00.000Z")));
+    expect(avisos()).toEqual(["Narrativa guardada."]);
+    // Recalcular (con su confirmación, porque la narrativa está editada) la reemplaza por la de la plantilla.
+    fireEvent.click(screen.getByRole("button", { name: "Recalcular" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sí, recalcular" }));
+    await waitFor(() => expect(avisos()).toContain("Perfil recalculado."));
+    act(() => rerender(pagina("De plantilla: [claim:mediana-tiktok].", "2026-09-25T10:10:00.000Z")));
+    expect(avisos()).toEqual(["Perfil recalculado."]);
   });
 });

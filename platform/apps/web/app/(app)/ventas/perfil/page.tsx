@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { NARRATIVE_MAX_CHARS, narrativeLanguage, verifierContext } from "@mc/core/outreach/narrativa";
-import { getPerfilComercial, getPrimaryCreator, readPerfilDataAsOf } from "@mc/db/queries/perfil-comercial";
+import { getPerfilComercial, getPrimaryCreator, readPerfilDataAsOf, readPostCovers } from "@mc/db/queries/perfil-comercial";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatterFor } from "@/lib/format";
@@ -58,9 +58,12 @@ export default async function PerfilPage() {
   const datos = await withWorkspace(async (tx) => {
     const creador = await getPrimaryCreator(tx);
     if (!creador) return null;
+    const guardado = await getPerfilComercial(tx, creador.id);
     return {
-      guardado: await getPerfilComercial(tx, creador.id),
+      guardado,
       datosAl: await readPerfilDataAsOf(tx, creador.id),
+      // Las portadas de hoy, no las del cálculo: las de TikTok e Instagram son URLs firmadas que caducan.
+      portadas: guardado ? await readPostCovers(tx, guardado.perfil.performance.top.map((v) => v.postId)) : {},
     };
   });
   const [ws, editable] = await Promise.all([getCurrentWorkspace(), puedeEditarElPerfil()]);
@@ -83,7 +86,7 @@ export default async function PerfilPage() {
     );
   }
 
-  const { guardado, datosAl } = datos;
+  const { guardado, datosAl, portadas } = datos;
   if (!guardado) {
     return (
       <>
@@ -136,7 +139,7 @@ export default async function PerfilPage() {
           />
         </Seccion>
 
-        <Desempeno perfil={perfil} cifras={cifras} f={f} />
+        <Desempeno perfil={perfil} cifras={cifras} f={f} portadas={portadas} />
         <Audiencia perfil={perfil} cifras={cifras} f={f} />
         <Formatos perfil={perfil} cifras={cifras} />
         <PruebaSocial perfil={perfil} cifras={cifras} />

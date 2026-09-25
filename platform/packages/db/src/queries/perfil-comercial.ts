@@ -22,7 +22,7 @@
  *     que espera a una API retiene una conexión del pooler.
  */
 import type { Decimal, PlatformId } from '@mc/core';
-import { buildPerfil, OUTLIER_TIERS, type OutlierTier, type PerfilInputs } from '@mc/core/outreach/perfil';
+import { buildPerfil, coverSrcOrNull, OUTLIER_TIERS, type OutlierTier, type PerfilInputs, type PerfilPostInput } from '@mc/core/outreach/perfil';
 import { llmCostUsd, type LlmUsage } from '@mc/core/outreach/llm-precios';
 import { verifyNarrative, type NarrativeIssue, type NarrativeOutcome } from '@mc/core/outreach/narrativa';
 import {
@@ -59,6 +59,61 @@ export const PERFIL_CORTE_HORAS = CORTE_TARIFARIO_HORAS;
 export const PERFIL_VENTANA_POSTS = 20;
 /** Cuántos posts se leen para formatos y tono: los más recientes. */
 export const PERFIL_MAX_POSTS = 200;
+/**
+ * Cuántos posts con puntaje se leen de todo el historial para elegir los
+ * mejores y su porqué: los más recientes hasta este tope y, siempre, los
+ * cinco de más «veces su mediana» aunque sean más viejos. Muy por encima
+ * de lo que publica un creador en años; solo acota el documento guardado.
+ */
+export const PERFIL_MAX_PUNTUADOS = 1000;
+/** Los mejores de todo el historial que entran siempre: los que pinta «Tus cinco mejores videos». */
+const PERFIL_MEJORES = 5;
+
+/** Las columnas de un post para el perfil, con su puntaje y la línea base contra la que se puntuó. */
+const POST_COLUMNAS = `p.id, p.platform_id, coalesce(p.permalink, p.url) AS url, p.cover_url, p.title, p.caption, p.hashtags, p.surface,
+            p.media_type, p.duration_s, p.is_branded_content, p.published_at, b.hook_type,
+            s.views_at_cut, s.views_vs_median, s.outlier_tier, s.age_hours_cut, s.computed_at AS score_computed_at,
+            bl.id AS baseline_id, bl.median_views AS baseline_median, bl.age_hours_cut AS baseline_cut,
+            bl.computed_at AS baseline_computed_at`;
+const POST_JOINS = `LEFT JOIN creator_baseline bl ON bl.id = s.baseline_id
+       LEFT JOIN creator_post_board b ON b.post_id = p.id`;
+
+interface PostFila {
+  id: string; platform_id: PlatformId; url: string | null; cover_url: string | null; title: string | null; caption: string | null;
+  hashtags: string[]; surface: string | null; media_type: string; duration_s: string | null;
+  is_branded_content: boolean | null; published_at: Date | string | null; hook_type: string | null;
+  views_at_cut: string | null; views_vs_median: string | null; outlier_tier: string | null; age_hours_cut: number | null;
+  score_computed_at: Date | string | null; baseline_id: string | null; baseline_median: string | null;
+  baseline_cut: number | null; baseline_computed_at: Date | string | null;
+}
+
+const isoDe = (d: Date | string) => (d instanceof Date ? d : new Date(d)).toISOString();
+
+/** Una fila de post como la entrada tipada de buildPerfil. */
+function postInput(r: PostFila): PerfilPostInput {
+  return {
+    id: r.id, platformId: r.platform_id, url: r.url, coverUrl: r.cover_url, title: r.title, caption: r.caption, hashtags: r.hashtags,
+    surface: r.surface, mediaType: r.media_type, durationS: num(r.duration_s), isBrandedContent: r.is_branded_content,
+    publishedAt: r.published_at === null ? null : isoDe(r.published_at), hookType: r.hook_type,
+    score:
+      r.age_hours_cut === null
+        ? null
+        : {
+            viewsAtCut: num(r.views_at_cut),
+            viewsVsMedian: num(r.views_vs_median),
+            outlierTier: isTier(r.outlier_tier) ? r.outlier_tier : null,
+            ageHoursCut: r.age_hours_cut,
+            computedAt: r.score_computed_at === null ? null : isoDe(r.score_computed_at),
+            baseline:
+              r.baseline_id === null || r.baseline_cut === null || r.baseline_computed_at === null
+                ? null
+                : {
+                    id: r.baseline_id, medianViews: num(r.baseline_median), ageHoursCut: r.baseline_cut,
+                    computedAt: isoDe(r.baseline_computed_at),
+                  },
+          },
+  };
+}
 
 const num = (v: string | number | null): number | null => (v === null ? null : Number(v));
 const isTier = (v: string | null): v is OutlierTier => v !== null && (OUTLIER_TIERS as readonly string[]).includes(v);
@@ -160,29 +215,36 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
     [creatorId, PERFIL_CORTE_HORAS],
   );
 
-  const { rows: posts } = await tx.query<{
-    id: string; platform_id: PlatformId; url: string | null; cover_url: string | null; title: string | null; caption: string | null;
-    hashtags: string[]; surface: string | null; media_type: string; duration_s: string | null;
-    is_branded_content: boolean | null; published_at: Date | string | null; hook_type: string | null;
-    views_at_cut: string | null; views_vs_median: string | null; outlier_tier: string | null; age_hours_cut: number | null;
-    score_computed_at: Date | string | null; baseline_id: string | null; baseline_median: string | null;
-    baseline_cut: number | null; baseline_computed_at: Date | string | null;
-  }>(
-    // La línea base contra la que se puntuó cada video (post_score.baseline_id):
-    // la de su red en SU corte, que es la que hace verdad su «× tu mediana».
-    `SELECT p.id, p.platform_id, coalesce(p.permalink, p.url) AS url, p.cover_url, p.title, p.caption, p.hashtags, p.surface,
-            p.media_type, p.duration_s, p.is_branded_content, p.published_at, b.hook_type,
-            s.views_at_cut, s.views_vs_median, s.outlier_tier, s.age_hours_cut, s.computed_at AS score_computed_at,
-            bl.id AS baseline_id, bl.median_views AS baseline_median, bl.age_hours_cut AS baseline_cut,
-            bl.computed_at AS baseline_computed_at
+  // Los recientes: formatos, tono y la duración típica hablan de lo que hace hoy.
+  // La línea base contra la que se puntuó cada video (post_score.baseline_id):
+  // la de su red en SU corte, que es la que hace verdad su «× tu mediana».
+  const { rows: posts } = await tx.query<PostFila>(
+    `SELECT ${POST_COLUMNAS}
        FROM post p
        LEFT JOIN post_score s ON s.post_id = p.id
-       LEFT JOIN creator_baseline bl ON bl.id = s.baseline_id
-       LEFT JOIN creator_post_board b ON b.post_id = p.id
+       ${POST_JOINS}
       WHERE p.creator_id = $1 AND NOT p.deleted_on_platform
       ORDER BY p.published_at DESC NULLS LAST, p.id
       LIMIT $2`,
     [creatorId, PERFIL_MAX_POSTS],
+  );
+
+  // Los puntuados de todo el historial: los mejores y su porqué. Un
+  // breakout de hace años entra aunque ya no esté entre los recientes.
+  const { rows: puntuados } = await tx.query<PostFila>(
+    `WITH puntuados AS (
+       SELECT ${POST_COLUMNAS},
+              row_number() OVER (ORDER BY p.published_at DESC NULLS LAST, p.id) AS por_fecha,
+              row_number() OVER (ORDER BY s.views_vs_median DESC, s.views_at_cut DESC NULLS LAST, p.id) AS por_puntaje
+         FROM post p
+         JOIN post_score s ON s.post_id = p.id AND s.views_vs_median IS NOT NULL
+         ${POST_JOINS}
+        WHERE p.creator_id = $1 AND NOT p.deleted_on_platform
+     )
+     SELECT * FROM puntuados
+      WHERE por_fecha <= $2 OR por_puntaje <= $3
+      ORDER BY por_fecha`,
+    [creatorId, PERFIL_MAX_PUNTUADOS, PERFIL_MEJORES],
   );
 
   // La prueba social: campañas reportadas o cerradas con resultado medido.
@@ -202,7 +264,7 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
   );
 
   const tarifario = await getCurrentRateCard(tx, creatorId);
-  const iso = (d: Date | string) => (d instanceof Date ? d : new Date(d)).toISOString();
+  const iso = isoDe;
 
   return {
     creator: {
@@ -230,28 +292,8 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
       id: r.id, platformId: r.platform_id, ageHoursCut: r.age_hours_cut, medianViews: num(r.median_views),
       sampleSize: r.sample_size, isReliable: r.is_reliable, computedAt: iso(r.computed_at),
     })),
-    posts: posts.map((r) => ({
-      id: r.id, platformId: r.platform_id, url: r.url, coverUrl: r.cover_url, title: r.title, caption: r.caption, hashtags: r.hashtags,
-      surface: r.surface, mediaType: r.media_type, durationS: num(r.duration_s), isBrandedContent: r.is_branded_content,
-      publishedAt: r.published_at === null ? null : iso(r.published_at), hookType: r.hook_type,
-      score:
-        r.age_hours_cut === null
-          ? null
-          : {
-              viewsAtCut: num(r.views_at_cut),
-              viewsVsMedian: num(r.views_vs_median),
-              outlierTier: isTier(r.outlier_tier) ? r.outlier_tier : null,
-              ageHoursCut: r.age_hours_cut,
-              computedAt: r.score_computed_at === null ? null : iso(r.score_computed_at),
-              baseline:
-                r.baseline_id === null || r.baseline_cut === null || r.baseline_computed_at === null
-                  ? null
-                  : {
-                      id: r.baseline_id, medianViews: num(r.baseline_median), ageHoursCut: r.baseline_cut,
-                      computedAt: iso(r.baseline_computed_at),
-                    },
-            },
-    })),
+    posts: posts.map(postInput),
+    scoredPosts: puntuados.map(postInput),
     campaigns: campanas.map((r) => ({
       id: r.id, name: r.name, companyName: r.company_name, status: r.status,
       result: {
@@ -295,6 +337,25 @@ export async function getPerfilComercial(tx: WorkspaceTx, creatorId: string): Pr
     [creatorId, PERFIL_MEDIA_KIT_KEY],
   );
   return parseStoredPerfil(rows[0]?.doc ?? null);
+}
+
+/**
+ * Las portadas VIVAS de unos posts (post.cover_url hoy), por id: las de
+ * TikTok e Instagram son URLs firmadas que caducan en horas o días, así
+ * que la pantalla no pinta la que quedó congelada en el perfil guardado
+ * sino la que el conector dejó en la última sincronización. Saneadas
+ * como las del perfil (coverSrcOrNull). Un post que ya no está (borrado,
+ * de otro workspace: la RLS lo esconde) no viene, y la pantalla usa la
+ * guardada.
+ */
+export async function readPostCovers(tx: WorkspaceTx, postIds: readonly string[]): Promise<Record<string, string | null>> {
+  const ids = [...new Set(postIds.filter(isUuid))];
+  if (!ids.length) return {};
+  const { rows } = await tx.query<{ id: string; cover_url: string | null }>(
+    `SELECT id, cover_url FROM post WHERE id = ANY($1::uuid[])`,
+    [ids],
+  );
+  return Object.fromEntries(rows.map((r) => [r.id, coverSrcOrNull(r.cover_url)]));
 }
 
 async function escribir(tx: WorkspaceTx, creatorId: string, doc: StoredPerfil): Promise<void> {
