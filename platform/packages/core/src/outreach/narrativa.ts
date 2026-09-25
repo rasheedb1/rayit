@@ -203,12 +203,15 @@ export const PORQUE_ES = {
     historia: 'abre con una historia en primera persona',
     directo: 'abre directo al tema',
   },
-  piece: { reel: 'reel', tiktok: 'video de TikTok', short: 'short', historia: 'historia', video: 'video' },
+  /** Con su artículo: «es un reel», «es una historia». */
+  piece: { reel: 'un reel', tiktok: 'un video de TikTok', short: 'un short', historia: 'una historia', video: 'un video' },
+  /** Con su artículo; 'otro' no dice nada del tipo y se usa la pieza. */
   content: {
-    tutorial: 'tutorial', reto: 'reto', lista: 'lista', colaboracion: 'colaboración con una marca', otro: 'pieza',
+    tutorial: 'un tutorial', reto: 'un reto', lista: 'una lista', colaboracion: 'una colaboración con una marca', otro: null,
   },
   duration: { muy_corto: 'muy corto', corto: 'corto', medio: 'de duración media', largo: 'largo' },
   vsTypical: { mas_corto: 'más corto que sus videos típicos', similar: 'de la duración de siempre', mas_largo: 'más largo que sus videos típicos' },
+  /** En tercera persona, para el prompt. */
   tone: {
     emojis: 'usa emojis',
     tutea: 'le habla de tú a quien mira',
@@ -216,6 +219,15 @@ export const PORQUE_ES = {
     preguntas: 'hace preguntas',
     breve: 'escribe captions breves',
     hashtags: 'usa hashtags',
+  },
+  /** En primera persona, para la plantilla: «En mis captions uso emojis». */
+  toneYo: {
+    emojis: 'uso emojis',
+    tutea: 'le hablo de tú a quien mira',
+    primera_persona: 'escribo en primera persona',
+    preguntas: 'hago preguntas',
+    breve: 'escribo corto',
+    hashtags: 'uso hashtags',
   },
   pieces: { reel: 'reels', tiktok: 'videos de TikTok', short: 'shorts', historia: 'historias', video: 'videos' },
   contents: { tutorial: 'tutoriales', reto: 'retos', lista: 'listas', colaboracion: 'colaboraciones', otro: 'otros' },
@@ -267,14 +279,14 @@ export function templateNarrative(perfil: PerfilComercial): string {
   const mejor = performance.top[0];
   if (mejor) {
     const views = mejor.viewsClaimId ? `, con ${m(mejor.viewsClaimId)} views` : '';
-    const porque = [PORQUE_ES.hook[mejor.why.hook], `es un ${PORQUE_ES.content[mejor.why.content] === 'pieza' ? PORQUE_ES.piece[mejor.why.piece] : PORQUE_ES.content[mejor.why.content]}`];
+    const porque = [PORQUE_ES.hook[mejor.why.hook], `es ${PORQUE_ES.content[mejor.why.content] ?? PORQUE_ES.piece[mejor.why.piece]}`];
     if (mejor.why.durationVsTypical && mejor.why.durationVsTypical !== 'similar') porque.push(`es ${PORQUE_ES.vsTypical[mejor.why.durationVsTypical]}`);
     p2.push(`Mi mejor video, «${mejor.title}» en ${red(mejor.platformId)}, hizo ${m(mejor.multipleClaimId)} mi mediana${views}: ${listaEs(porque)}.`);
   }
   const piezas = formats.pieces.slice(0, 2).map((f) => PORQUE_ES.pieces[f.key]);
   const contenidos = formats.contents.slice(0, 2).map((f) => PORQUE_ES.contents[f.key]);
   if (piezas.length) p2.push(`Publico sobre todo ${listaEs(piezas)}${contenidos.length ? `, y lo que más hago son ${listaEs(contenidos)}` : ''}.`);
-  const tono = formats.tone.slice(0, 3).map((f) => PORQUE_ES.tone[f.key]);
+  const tono = formats.tone.slice(0, 3).map((f) => PORQUE_ES.toneYo[f.key]);
   if (tono.length) p2.push(`En mis captions ${listaEs(tono)}.`);
   if (!p2.length) p2.push('Todavía no tengo videos con puntaje frente a mi mediana.');
 
@@ -360,7 +372,7 @@ export function buildNarrativePrompt(perfil: PerfilComercial, formatClaim: Claim
     const w = v.why;
     const porque = [
       PORQUE_ES.hook[w.hook],
-      `es un ${w.content === 'otro' ? PORQUE_ES.piece[w.piece] : PORQUE_ES.content[w.content]}`,
+      `es ${PORQUE_ES.content[w.content] ?? PORQUE_ES.piece[w.piece]}`,
       w.duration ? `es ${PORQUE_ES.duration[w.duration]}` : null,
       w.durationVsTypical ? PORQUE_ES.vsTypical[w.durationVsTypical] : null,
     ].filter(Boolean);

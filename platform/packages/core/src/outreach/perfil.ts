@@ -395,7 +395,7 @@ export function cutLabel(hours: number): string {
   return `a los ${Math.round(hours / 24)} días`;
 }
 
-const GENEROS: Record<string, string> = { f: 'mujeres', m: 'hombres', u: 'sin especificar' };
+const GENEROS: Record<string, string> = { f: 'mujeres', m: 'hombres', u: 'de género sin especificar' };
 
 /** El nombre del país en español, o el código si Intl no lo conoce. */
 export function regionName(code: string): string {
@@ -477,9 +477,9 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
         .slice(0, n);
     const etiqueta = (dim: AudienceDimension, bucket: string) => {
       const donde = red(principal.platformId);
-      if (dim === 'age') return `Seguidores de ${bucket} años en ${donde}`;
-      if (dim === 'gender') return `Seguidores ${GENEROS[bucket.toLowerCase()] ?? bucket} en ${donde}`;
-      return `Seguidores en ${regionName(bucket)} (${donde})`;
+      if (dim === 'age') return `Parte de sus seguidores de ${donde} con ${bucket} años`;
+      if (dim === 'gender') return `Parte de sus seguidores de ${donde} que son ${GENEROS[bucket.toLowerCase()] ?? bucket}`;
+      return `Parte de sus seguidores de ${donde} que vive en ${regionName(bucket)}`;
     };
     const otros = (b: string) => ['other', 'others', 'otros'].includes(b.toLowerCase());
     for (const [dim, filasDim] of [
