@@ -176,17 +176,6 @@ export interface WorkerSql extends SqlExecutor {
 }
 
 /**
- * Marca como WorkerSql un ejecutor cuya conexión YA corre como mc_worker
- * (la transacción de un job del worker). No cambia de rol ni comprueba
- * nada: la marca solo evita confundir tipos, y lo que decide es la base
- * (una consulta del despachador desde mc_app falla con 42501). Solo lo
- * llama el worker; la web usa asWorker.
- */
-export function workerSqlFrom(executor: SqlExecutor): WorkerSql {
-  return { query: (text, params) => executor.query(text, params) } as WorkerSql;
-}
-
-/**
  * Lo que ve quien recibe una base ya construida (la web, un módulo).
  * No trae withCatalogs a propósito: ver CatalogDb.
  */
