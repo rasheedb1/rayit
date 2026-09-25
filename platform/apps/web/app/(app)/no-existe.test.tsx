@@ -37,6 +37,7 @@ import VistaPreviaExiste from "./cotizar/cotizaciones/[id]/vista/layout";
 import MediaKitExiste from "./cotizar/media-kit/[id]/(detalle)/layout";
 import EmpresaEnMiCrm, { generateMetadata as tituloEmpresa } from "./ventas/empresas/[id]/(ficha)/layout";
 import PitchDeEmpresaEnMiCrm from "./ventas/empresas/[id]/pitch/layout";
+import CadenciaDelEspacio, { generateMetadata as tituloCadencia } from "./ventas/cadencias/[id]/(detalle)/layout";
 
 vi.mock("next/navigation", async (original) => ({
   ...(await original<typeof import("next/navigation")>()),
@@ -110,6 +111,7 @@ describe("un detalle privado que no existe es un 404, con su esqueleto", () => {
     { carpeta: "cotizar/media-kit/[id]/(detalle)", layout: () => MediaKitExiste({ children, params }) },
     { carpeta: "ventas/empresas/[id]/(ficha)", layout: () => EmpresaEnMiCrm({ children, params }) },
     { carpeta: "ventas/empresas/[id]/pitch", layout: () => PitchDeEmpresaEnMiCrm({ children, params }) },
+    { carpeta: "ventas/cadencias/[id]/(detalle)", layout: () => CadenciaDelEspacio({ children, params }) },
   ];
 
   for (const { carpeta, layout } of casos) {
@@ -138,7 +140,7 @@ describe("un detalle privado que no existe es un 404, con su esqueleto", () => {
   });
 
   test("las listas conservan su esqueleto, en un grupo de rutas que no envuelve al detalle", () => {
-    for (const lista of ["cotizar/(tarifario)", "cotizar/cotizaciones/(lista)", "cotizar/media-kit/(lista)", "ventas/(inicio)", "ventas/empresas/(lista)"]) {
+    for (const lista of ["cotizar/(tarifario)", "cotizar/cotizaciones/(lista)", "cotizar/media-kit/(lista)", "ventas/(inicio)", "ventas/empresas/(lista)", "ventas/cadencias/(lista)"]) {
       expect(existsSync(join(SEGMENTO, ...lista.split("/"), "loading.tsx")), lista).toBe(true);
       expect(existsSync(join(SEGMENTO, ...lista.split("/"), "page.tsx")), lista).toBe(true);
     }
@@ -162,5 +164,11 @@ describe("el título de la pestaña del detalle dice de qué es", () => {
   test("una empresa: su nombre y el módulo", async () => {
     expect((await tituloEmpresa(id("00000002-0000-4000-8000-0000000000e1"))).title).toBe("Café Alma · Ventas");
     expect((await tituloEmpresa(id(ID_INEXISTENTE))).title).toBe("Empresa · Ventas");
+  }, 120_000);
+
+  test("una cadencia: su nombre y el módulo", async () => {
+    // La del seed 0005, copiada de la plantilla «Marca con campaña activa».
+    expect((await tituloCadencia(id("00000005-0000-4000-8000-0000005e0001"))).title).toBe("Marca con campaña activa · Cadencias");
+    expect((await tituloCadencia(id(ID_INEXISTENTE))).title).toBe("Cadencias");
   }, 120_000);
 });

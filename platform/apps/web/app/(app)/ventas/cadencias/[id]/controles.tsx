@@ -1,0 +1,143 @@
+"use client";
+
+import Link from "next/link";
+import { useState, useTransition } from "react";
+import type { SequenceStatus } from "@mc/db/queries/cadencias";
+import { NAME_MAX } from "@mc/db/queries/cadencias-limites";
+import { Button } from "@/components/ui/button";
+import { ConfirmInline } from "@/components/ui/confirm-inline";
+import { Field, Input } from "@/components/ui/field";
+import { Aviso } from "../../../_lib/aviso";
+import { activarCadencia, cambiarEstado, duplicarCadencia, renombrarCadencia, type CadenciaState } from "../actions";
+import { MESSAGES } from "../messages";
+
+/**
+ * Las acciones de la cadencia: activar (el segundo clic), pausar,
+ * duplicar, archivar y cambiar el nombre. Activar no pide confirmación:
+ * se deshace con Pausar, y lo que sale queda retenido para revisión si la
+ * política lo pide (el valor por defecto). Archivar sí la pide: no se
+ * deshace. Mientras una acción corre, la fila entera se apaga (un
+ * segundo clic en «Duplicar» haría dos copias) y el botón pulsado gira.
+ */
+type Accion = "activar" | "pausar" | "duplicar" | "archivar" | "renombrar";
+
+export function Controles({
+  sequenceId,
+  status,
+  nombre,
+  activarLabel,
+  puedeActivar,
+}: {
+  sequenceId: string;
+  status: SequenceStatus;
+  nombre: string;
+  /**
+   * «Activar», «Activar y escribir a Camila Rojas», «Reanudar» o «Reanudar
+   * y escribir a Camila Rojas»: lo decide la página con el estado y con si
+   * esa persona de verdad va a entrar.
+   */
+  activarLabel: string;
+  puedeActivar: boolean;
+}) {
+  const t = MESSAGES.estado;
+  const [state, setState] = useState<CadenciaState>({});
+  const [renombrando, setRenombrando] = useState(false);
+  const [pending, start] = useTransition();
+  const archivada = status === "archived";
+  /** La acción que corre: su botón gira y la región viva la dice. */
+  const [accion, setAccion] = useState<Accion | null>(null);
+  const corriendo = (a: Accion) => pending && accion === a;
+
+  function correr(a: Accion, fn: () => Promise<CadenciaState>, despues?: () => void) {
+    setState({});
+    setAccion(a);
+    start(async () => {
+      const r = await fn();
+      setState(r ?? {});
+      if (!r?.error) despues?.();
+    });
+  }
+
+  return (
+    <div className="mb-6 grid gap-3">
+      {renombrando ? (
+        <form
+          action={(fd) => correr("renombrar", () => renombrarCadencia(sequenceId, String(fd.get("nombre") ?? "")), () => setRenombrando(false))}
+          className="flex max-w-xl flex-col gap-2 sm:flex-row sm:items-end"
+        >
+          <Field label={MESSAGES.detalle.nombreLabel} className="min-w-0 flex-1">
+            <Input name="nombre" defaultValue={nombre} maxLength={NAME_MAX} required />
+          </Field>
+          <div className="flex gap-2">
+            <Button type="submit" size="sm" loading={pending}>
+              {MESSAGES.detalle.guardar}
+            </Button>
+            <Button type="button" size="sm" variant="ghost" disabled={pending} onClick={() => setRenombrando(false)}>
+              {MESSAGES.detalle.cancelar}
+            </Button>
+          </div>
+        </form>
+      ) : (
+        // Un fieldset apagado apaga todos sus botones, también el de ConfirmInline (su API no tiene `disabled`).
+        <fieldset disabled={pending} className="m-0 flex min-w-0 flex-wrap items-start gap-2 border-0 p-0">
+          {(status === "draft" || status === "paused") && (
+            <Button
+              variant="primary"
+              loading={corriendo("activar")}
+              disabled={!puedeActivar || pending}
+              onClick={() => correr("activar", () => activarCadencia(sequenceId))}
+            >
+              {activarLabel}
+            </Button>
+          )}
+          {status === "active" && (
+            <Button
+              variant="secondary"
+              loading={corriendo("pausar")}
+              disabled={pending}
+              onClick={() => correr("pausar", () => cambiarEstado(sequenceId, "paused"))}
+            >
+              {t.pausar}
+            </Button>
+          )}
+          {!archivada && (
+            <Button variant="ghost" disabled={pending} onClick={() => setRenombrando(true)}>
+              {MESSAGES.detalle.renombrar}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            loading={corriendo("duplicar")}
+            disabled={pending}
+            onClick={() => correr("duplicar", () => duplicarCadencia(sequenceId))}
+          >
+            {t.duplicar}
+          </Button>
+          {!archivada && (
+            <ConfirmInline
+              action={async () => correr("archivar", () => cambiarEstado(sequenceId, "archived"))}
+              label={t.archivar}
+              variant="ghost"
+              question={t.archivarPregunta}
+              consequence={t.archivarConsecuencia}
+              confirmLabel={t.archivarConfirmar}
+              cancelLabel={MESSAGES.detalle.cancelar}
+              openWidth="w-full sm:w-80"
+            />
+          )}
+          {/* El botón con spinner no dice nada: el estado se lee aquí, y un lector de pantalla lo oye. Siempre montado: una región viva que aparece no se anuncia. */}
+          <p aria-live="polite" className="self-center text-xs text-fg-3">
+            {pending && accion && accion !== "renombrar" ? t.trabajando[accion] : ""}
+          </p>
+        </fieldset>
+      )}
+      {!puedeActivar && !archivada && status !== "active" && <p className="text-xs text-fg-3">{t.sinPasos}</p>}
+      <Aviso message={state.error} notice={state.ok} />
+      {state.ok && state.href && (
+        <Link href={state.href} className="text-sm underline underline-offset-2">
+          {t.revisarEnFicha}
+        </Link>
+      )}
+    </div>
+  );
+}

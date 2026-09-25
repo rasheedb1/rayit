@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { listProposableSignals } from "@mc/db/queries/cadencias";
 import { listCompanyCadenceTouches } from "@mc/db/queries/outreach";
 import { getCompany, listContacts, listOwnerOptions, listPipeline } from "@mc/db/queries/ventas";
 import {
@@ -27,6 +28,8 @@ import { quoteHref } from "../../../_pipeline/vista";
 import { contextoDeSeguimiento, siguienteAccionData, ultimoContacto, type SiguienteAccionData } from "../../../_seguimiento/datos";
 import { SiguienteAccion } from "../../../_seguimiento/siguiente-accion";
 import { UltimoContacto } from "../../../_seguimiento/ultimo-contacto";
+import { MESSAGES as CADENCIAS } from "../../../cadencias/messages";
+import { ProponerBoton } from "../../../cadencias/proponer-boton";
 import { FICHA } from "../../messages";
 import { Bloque } from "../bloque";
 import { MensajesDeCadencia } from "../cadencia";
@@ -87,11 +90,14 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
       dates: await getLocalDates(tx),
       // Los mensajes de las secuencias (VEN-10): adonde llevan los avisos del motor.
       cadence: await listCompanyCadenceTouches(tx, id),
+      // Las señales aceptadas de sus negocios abiertos (VEN-13): la cadencia se propone desde el negocio.
+      proposable: (await listProposableSignals(tx, { companyId: id })).signals,
     };
   });
   // Se desvinculó entre la primera lectura y esta.
   if (!data) notFound();
-  const { company, contacts, deals, owners, activity, signals, chain, invoices, niches, dates, cadence } = data;
+  const { company, contacts, deals, owners, activity, signals, chain, invoices, niches, dates, cadence, proposable } = data;
+  const senalDeNegocio = new Map(proposable.map((s) => [s.dealId, s]));
 
   const workspace = await getCurrentWorkspace();
   const f = formatterFor(workspace);
@@ -188,6 +194,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                   const negocio = nombreDe(d);
                   const siguiente = abierto ? siguientes[d.id] : undefined;
                   const contacto = ultimoContacto(d, f);
+                  const senal = abierto ? senalDeNegocio.get(d.id) : undefined;
                   return (
                     <li key={d.id} className="space-y-3 p-3">
                       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -214,6 +221,18 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                           )}
                         </div>
                       </div>
+                      {senal && (
+                        // La cadencia del negocio: proponerla desde su señal o, si ya salió una, abrirla.
+                        <div className="flex flex-wrap items-start gap-2">
+                          {senal.sequenceId ? (
+                            <Button href={`/ventas/cadencias/${senal.sequenceId}`} size="sm" variant="secondary">
+                              {CADENCIAS.senales.verCadencia}
+                            </Button>
+                          ) : (
+                            <ProponerBoton signalId={senal.signalId} variant="secondary" />
+                          )}
+                        </div>
+                      )}
                       {siguiente && <SiguienteAccion data={siguiente} ctx={ctx} />}
                       <Cadena links={chain.byDeal[d.id]} invoices={invoices.byId} f={f} label={x.cadena.label(negocio)} closed={!abierto} />
                     </li>

@@ -57,6 +57,7 @@ export const MODULE_LINKS: { href: string; label: string; exact: boolean }[] = [
   { href: tabHref("radar"), label: TAB_LABELS.radar, exact: true },
   { href: tabHref("pipeline"), label: TAB_LABELS.pipeline, exact: true },
   { href: "/ventas/empresas", label: MESSAGES.tabs.empresas, exact: false },
+  { href: "/ventas/cadencias", label: MESSAGES.tabs.cadencias, exact: false },
   { href: "/ventas/canales", label: MESSAGES.tabs.canales, exact: false },
   { href: "/ventas/perfil", label: MESSAGES.tabs.perfil, exact: false },
 ];

@@ -123,6 +123,8 @@ export const DEFAULT_LLM_DAILY_CAP_USD = '5.00';
 export const COUNTER_PERIODS = ['day', 'week'] as const;
 export const BREAKER_STATES = ['closed', 'open', 'half_open'] as const;
 export const REQUIRED_ASSETS = ['media_kit', 'quote'] as const;
+/** Quién escribió la guía de un paso (outbound_step.guidance_source, 0056); la misma lista que GUIDANCE_SOURCES de @mc/core. */
+export const STEP_GUIDANCE_SOURCES = ['template', 'rules', 'llm', 'person'] as const;
 /** De dónde puede salir una cifra de un ángulo. */
 export const PROOF_SOURCES = [
   'creator_profile', 'creator_baseline', 'post_score', 'media_kit', 'campaign_result', 'signal', 'quote',
@@ -312,6 +314,10 @@ export const outboundStep = pgTable('outbound_step', {
   scheduledTime: localTime('scheduled_time').default('09:30').notNull(),
   angleId: uuid('angle_id').references(() => outboundAngle.id, { onDelete: 'set null' }),
   guidanceEs: text('guidance_es'),
+  /** Quién escribió la guía (0056): la plantilla, las reglas, el modelo o la persona. NULL: anterior, no se sabe. */
+  guidanceSource: text('guidance_source', { enum: STEP_GUIDANCE_SOURCES }),
+  /** Para qué tipo de paso se escribió la guía (0056). NULL: para el que tiene. */
+  guidanceForType: text('guidance_for_type', { enum: STEP_TYPES }),
   subjectTemplate: text('subject_template'),
   bodyTemplate: text('body_template'),
   generateWithAi: boolean('generate_with_ai').default(true).notNull(),

@@ -439,7 +439,8 @@ export const STORIES: readonly Story[] = [
     title: "Recomendador de cadencia",
     desc: "Desde el brief, la señal, los canales conectados y los contactos disponibles, una secuencia propuesta con día, canal, ángulo y guía por paso; plantillas por nicho y tipo de señal; línea de tiempo editable.",
     done: "Desde una señal de campaña activa, el creador obtiene una secuencia de seis pasos con guía y la activa en dos clics.",
-    status: "pendiente",
+    status: "hecho",
+    note: "«Proponer cadencia» desde la campaña activa de Fresko da seis pasos con guía dentro de la política, y «Activar y escribir a Camila» la enciende y la enrola; se prueba en packages/db/test/cadencias.test.ts y en /ventas/cadencias. Detalle por ronda en docs/ventas-outreach.md §5.5; 0056 y 0057 sin aplicar en Supabase.",
   },
   {
     id: "VEN-14", module: "VEN", owner: "rasheed", size: "L", sprint: 5, deps: ["VEN-12"],

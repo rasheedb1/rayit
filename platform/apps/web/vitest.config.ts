@@ -17,12 +17,13 @@ export default defineConfig({
     setupFiles: ["./vitest.setup.ts"],
     include: ["**/*.test.{ts,tsx}"],
     exclude: ["node_modules", ".next"],
-    // 15 s y no los 5 de vitest: con la máquina cargada (varios agentes y
+    // 20 s y no los 5 de vitest: con la máquina cargada (varios agentes y
     // `pnpm verificar` en paralelo) la primera prueba de un archivo carga
-    // con el import y la compilación de sus componentes, y en la
-    // integración de VEN-11 r4 se pasó de 5 s sin que nada estuviera mal.
-    // Una prueba colgada sigue fallando; solo deja de fallar la lenta.
-    testTimeout: 15_000,
-    hookTimeout: 15_000,
+    // con el import y la compilación de sus componentes (una página, unas
+    // acciones), y en las integraciones de VEN-11 r4 y VEN-13 se pasó de
+    // 5 s sin que nada estuviera mal. Una prueba colgada sigue fallando;
+    // solo deja de fallar la lenta.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
   },
 });

@@ -1127,6 +1127,171 @@ una sola pregunta»). El creador la edita en una línea de tiempo y la
 activa. Hay plantillas por nicho y por tipo de señal (lanzamiento,
 campaña activa, temporada).
 
+**Cómo quedó (VEN-13, 25 de septiembre).**
+
+- **El recomendador es puro** (`packages/core/src/outreach/recomendar.ts`,
+  con pruebas sin base ni red). Reglas, en orden: (1) la plantilla de su
+  tipo de señal y su nicho, luego la de su señal, luego una genérica,
+  nunca la de otra señal; (2) el canal de cada paso: el de la plantilla
+  si llega (la política lo deja, hay cuenta, aunque esté por reconectar,
+  y la persona tiene dirección ahí), si no el siguiente en un orden fijo
+  por tipo de paso (un directo prueba LinkedIn, Instagram y correo; un
+  gesto público, la otra red o una tarea a mano), y el primer correo
+  siempre abre el hilo; (3) **la política del espacio**
+  (`outbound_policy`): la propuesta nace cumpliéndola (`fitToPolicy`). Si
+  hay más mensajes que `max_touches_per_company`, los del medio se
+  sacrifican en orden (prueba social, concepto creativo, prueba de
+  desempeño) pasando a una reacción pública en su red, que no es un
+  mensaje y no cuenta para el tope, o, sin red, quitándose; el primer
+  mensaje y la síntesis (media kit y cotización) no se tocan. Luego los
+  días se estiran para dejar `min_days_between_touches` entre mensajes,
+  sin pasar del día 60. Con la política por defecto (4 y 3), la campaña
+  activa del seed queda en seis pasos (día 0 comentario, 1 correo, 4
+  LinkedIn, 7 respuesta, 9 reacción, 11 síntesis) y
+  `checkSequenceAgainstPolicy` no marca nada; (4) la guía de la plantilla
+  si el paso no cambió, una compuesta con ángulo, canal y señal si cambió,
+  y la divulgación del brief en el cierre. Lo que decide va en códigos
+  (`ProposalNote`, con `fitted_to_policy` para el ajuste) que la
+  pantalla traduce.
+- **El modelo solo redacta la guía**: `refineGuidance` recibe un
+  `GuidanceWriter` (el real, con `claude-sonnet-5` y salida estructurada,
+  vive en `apps/web/app/(app)/ventas/cadencias/_lib/redactor.ts`; las
+  pruebas usan uno falso), valida paso a paso y se queda con la regla
+  donde el texto no sirve. Sin `ANTHROPIC_API_KEY`, o con el tope diario
+  gastado, no se llama. Cada llamada deja su fila en `outbound_llm_call`
+  (`recommend`) con el costo de `llmCostUsd`. Al modelo no le llega nada
+  de la persona a la que se escribe.
+- **Tipos de señal**: `signal_source.kind` → `ads`, `marketplace` y
+  `jobs` son campaña activa; `press`, lanzamiento; `season`, temporada;
+  `collab`, colaboración de un competidor (nunca se nombra); lo demás,
+  manual.
+- **Migración `0056_recomendador_cadencias.sql`** (si VEN-11 o VEN-12
+  traen otra 0056, la que se integre después toma el siguiente número;
+  ninguna depende de la otra): `outbound_sequence.signal_id` (con su referencia
+  visible) y `proposal` (la propuesta en códigos), y siete plantillas:
+  lanzamiento, temporada, colaboración de un competidor, señal manual,
+  cocina con campaña activa, belleza con lanzamiento y fitness con
+  temporada. Son la cadencia ideal; el recomendador las ajusta a la
+  política de cada espacio. Copiadas tal cual («Empezar desde una
+  plantilla»), la pantalla avisa de lo que no cabe (§8, pregunta 8).
+- **Consultas** en `@mc/db/queries/cadencias`; **pantallas** en
+  `/ventas/cadencias` (señales con «Proponer cadencia», lista con estado,
+  personas dentro y respuesta, arranque desde plantilla) y
+  `/ventas/cadencias/[id]` (resumen «Día 0: … →», por qué la propuesta,
+  línea de tiempo editable con arrastre o Subir/Bajar, «Proponer otra
+  vez» para otra persona o para nadie, y enrolar desde un negocio).
+  «Activar» enrola a la persona para la que se propuso: son los dos
+  clics. Una señal tiene como mucho un borrador (proponer otra vez
+  reemplaza sus pasos, con un bloqueo por señal contra el doble envío);
+  duplicar copia la propuesta sin su persona, y Activar no enrola a quien
+  ya está vivo en otra cadencia del espacio. Enrolar comprueba en el
+  servidor que cada persona es de la marca del negocio y que el negocio
+  sigue abierto. La línea de tiempo es un riel con un nodo por paso (el
+  icono de su canal) y la espera entre pasos en días hábiles; el foco de
+  teclado vuelve a su botón tras mover un paso o cerrar el editor.
+  WhatsApp (fase 2) no se ofrece en el editor ni lo acepta la base al
+  editar.
+- **La regla de la edición**: con alguien enrolado, sus toques ya tienen
+  día y canal, así que día, canal, orden y número de pasos se bloquean
+  (`has_enrollments`) y se ofrece duplicar; guía, ángulo, texto y hora sí
+  se cambian, para quien entre después. Reordenar mueve los mensajes y
+  deja los días en su puesto, como Lemlist. Reordenar, añadir, quitar o
+  cambiar un paso deja siempre un correo nuevo (no una respuesta) como
+  primer correo, y un paso añadido nace con el primer ángulo que la
+  cadencia no usa y su guía. Si los mensajes ya llegan al tope de la
+  política, «Añadir paso» pone un gesto de presencia (una reacción en la
+  red que llegue, o una tarea a mano) y lo dice: un mensaje de más
+  nacería marcado «no sale».
+- **Las reglas de quién entra, en todos los caminos**: «Activar» (y
+  «Reanudar», que pasa por la misma acción) y «Enrolar desde un
+  negocio» comprueban en la misma transacción que el negocio sigue
+  abierto, que la persona es de su marca y que no está viva en otra
+  cadencia del espacio. La propuesta nunca guarda un negocio ganado o
+  perdido, y la etiqueta del botón solo dice «y escribir a X» cuando X
+  de verdad va a entrar. Tras activar, el aviso lleva a la ficha de la
+  empresa, donde se aprueban los mensajes retenidos.
+- **Desde dónde se propone**: la portada de cadencias muestra las seis
+  señales más recientes y «Ver todas las señales (N)»; la ficha de la
+  empresa pone «Proponer cadencia» (o «Ver su cadencia») junto a cada
+  negocio abierto que salió de una señal.
+- **La guía compuesta sale de una tabla por idioma**
+  (`packages/core/src/outreach/guidance-phrases.ts`): el recomendador no
+  escribe frases fuera de ella y recibe el idioma del espacio. Hoy solo
+  hay tabla en español, como las plantillas y los ángulos; un idioma sin
+  tabla usa la española hasta que lleguen sus plantillas. El redactor
+  recibe el mismo idioma en la petición (`GuidanceRequest.locale`) y su
+  instrucción lo dice con la frase de la tabla (`promptLanguage`): la
+  guía del modelo nunca sale en otro idioma que la de reglas.
+- **Quién «llega», en todos los caminos (r4)**: una persona llega si la
+  cadencia tiene un paso de mensaje (`DISPATCHABLE_STEP_TYPES`) por un
+  canal que la política deja, con cuenta (aunque esté por reconectar), y
+  la persona tiene dirección ahí (`reachForSequence`, `reachChannels`).
+  Un comentario o una reacción públicos no cuentan. «Enrolar desde un
+  negocio» solo deja marcar a quien llega («Llega por» dice solo esos
+  canales; si no, «No llega por los canales de esta cadencia») y el
+  servidor lo comprueba otra vez; «Activar» igual. Tras enrolar, cada
+  persona dice qué le queda, con las mismas partes que «Activar»:
+  mensajes programados, por revisar, por redactar, **gestos a mano**
+  (la reacción y el comentario públicos, que no se redactan) y pasos
+  saltados.
+- **El hilo de correo y la guía, una sola regla (r4)**:
+  `normalizeThread` (`packages/core/src/outreach/thread.ts`) la usan el
+  recomendador y la línea de tiempo: el primer correo abre el hilo, los
+  siguientes responden, salvo el cierre que ya es correo nuevo (las
+  plantillas lo piden así) y el paso que la persona acaba de poner como
+  correo nuevo. Cada paso guarda quién escribió su guía
+  (`outbound_step.guidance_source`: plantilla, reglas, modelo o persona)
+  y para qué tipo (`guidance_for_type`). Si un paso cambia de tipo
+  (reordenar, quitar, añadir o el editor), la guía que no escribió la
+  persona se recompone para el tipo nuevo (`guidanceAfterRetype`); la
+  suya se queda y la tarjeta pide revisarla («Esta guía se escribió para
+  «Correo»…»), hasta que la guarde sin cambiar el tipo. Cambiar el
+  ángulo de un paso con guía automática también la recompone.
+- **El creador del negocio (r4)**: el nicho y el brief son los del
+  creador del negocio abierto de la señal, no la unión del espacio: en
+  una agencia con varios creadores, los de otro elegirían otra plantilla,
+  otra divulgación y le mandarían al modelo notas ajenas. Sin creador en
+  el negocio vale el único del espacio; con varios, ni nicho ni brief y
+  la nota `no_creator` lleva a asignarlo. La secuencia guarda su
+  `brief_id` para el generador (VEN-12).
+- **La persona por defecto (r4)** no es la que ya está viva en otra
+  cadencia (Activar no la enrolaría); en «Para» se ve «· ya está en
+  «X»», y si se elige igual, la nota `contact_busy` lo dice.
+- **El cierre pide solo el activo que declara (r4)**: las guías de
+  síntesis dicen «enlaza el media kit y, si tienes una cotización
+  pública, su enlace» (o al revés en las de temporada, que declaran la
+  cotización), para que quien revisa pueda vigilar lo que exigen. 0056
+  corrige también la de «Marca con campaña activa» de 0037, con una
+  política de actualización del catálogo solo para quien migra.
+- **Las notas guardadas se leen con zod (r4)**: `ProposalNote` y la
+  propuesta guardada son esquemas de `@mc/core`
+  (`proposal-notes.ts`); una nota que no tiene la forma de su código se
+  descarta. Las consultas viven partidas en
+  `packages/db/src/queries/cadencias/` (lista, contexto, propuesta,
+  pasos, edición, estado).
+- **La baja del espacio antes de enrolar (r5)**: «Activar» y «Enrolar
+  desde un negocio» miran la baja con la misma expresión que la etiqueta
+  de la pantalla (`optedOutAmong`: la ficha, la lista global, un
+  enrolamiento en baja y `outbound_workspace_optout`, el enlace de un
+  correo del espacio) antes de llamar a `enrollContacts`. Si la persona
+  pulsó la baja entre «Proponer» y «Activar», la cadencia se activa sin
+  ella y lo dice; en un lote, esa persona sale entre las saltadas y las
+  demás entran. Sin esto, el disparador de 0050 revertía la transacción
+  entera y la cadencia no se podía activar nunca. Quién está viva en
+  otra cadencia se pregunta en una sola consulta para todo el lote
+  (`liveEnrollmentsElsewhere`).
+- **Lo que hace una persona no lleva texto, en todas las capas (r5)**:
+  un paso que el despachador no envía (comentario y reacción públicos,
+  tarea a mano) no se redacta. La pantalla (`sinTexto`), la base
+  (`TEXTLESS_STEP_TYPES`, que el recomendador, las plantillas copiadas,
+  «Añadir paso» y el editor usan para dejar `generate_with_ai` en false)
+  y «Activar» al contar gestos a mano usan la misma regla. 0057 afloja
+  el CHECK de `outbound_step` de 0037 para que un comentario pueda
+  guardarse sin generación ni texto fijo, y apaga la generación de los
+  que ya había. La reacción tiene su propia guía («reacciona a su última
+  publicación…; no comentes ni escribas»): comentar es otro paso. El
+  canal principal de la secuencia cuenta solo los mensajes.
+
 ### 5.6 La puerta de calidad de cada mensaje
 
 Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
