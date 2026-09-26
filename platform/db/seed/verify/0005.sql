@@ -18,17 +18,20 @@ SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', fa
 -- (a) Conteos: dos cuentas (una conectada, una por reconectar), una
 --     secuencia desde la plantilla, tres enrolamientos (uno por
 --     desenlace) y nueve toques en los estados que enseña la pantalla
---     (los de este seed: el 0006 añade el correo que rebotó).
+--     (los de este seed: el 0006 añade el correo que rebotó, y el 0008
+--     dos enrolamientos con su fallo, que se cuentan en verify/0008.sql).
 SELECT 'a_conteos' AS check_id,
        (SELECT count(*) FROM outreach_channel_account WHERE status = 'connected')       AS conectadas,
        (SELECT count(*) FROM outreach_channel_account WHERE status = 'needs_reconnect') AS por_reconectar,
-       (SELECT string_agg(status, ',' ORDER BY status) FROM outbound_enrollment)        AS enrolamientos,
+       (SELECT string_agg(status, ',' ORDER BY status) FROM outbound_enrollment
+         WHERE id::text LIKE '00000005-%')                                              AS enrolamientos,
        (SELECT string_agg(status || '=' || n, ',' ORDER BY status)
           FROM (SELECT status, count(*) AS n FROM outbound_touch
                  WHERE id::text LIKE '00000005-%' GROUP BY status) x)   AS toques,
        (SELECT count(*) FROM outreach_channel_account WHERE status = 'connected') = 1
          AND (SELECT count(*) FROM outreach_channel_account WHERE status = 'needs_reconnect') = 1
-         AND (SELECT string_agg(status, ',' ORDER BY status) FROM outbound_enrollment) = 'active,cooldown,replied'
+         AND (SELECT string_agg(status, ',' ORDER BY status) FROM outbound_enrollment
+               WHERE id::text LIKE '00000005-%') = 'active,cooldown,replied'
          AND (SELECT string_agg(status || '=' || n, ',' ORDER BY status)
                 FROM (SELECT status, count(*) AS n FROM outbound_touch
                  WHERE id::text LIKE '00000005-%' GROUP BY status) x)

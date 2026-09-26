@@ -88,6 +88,7 @@ const CRECEN_CON_EL_RELOJ = {
   post_score: 'el video que cumplió 24 h desde la última corrida se puntúa',
   account_metric_snapshot: 'la serie de cada conexión llega hasta ayer: +4 por día',
   creator_baseline: 'una línea base nueva por red y corte en cada día distinto: +16',
+  outbound_counter: 'el uso del Gmail de la demo (seed 0008): cada día hábil nuevo, su fila de la cuenta y la del espacio (+2), y una semana nueva, la suya',
 };
 
 /** Invariantes de las lecturas que la tercera pasada no puede romper. */
