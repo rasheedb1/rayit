@@ -352,6 +352,9 @@ test('las siglas y la marca en mayúsculas no son gritar; la pregunta de cierre 
   // Una marca de varias palabras vale palabra por palabra.
   assert.deepEqual(shoutingIn('Una idea para CAFÉ ALMA en Bogotá', ['Café Alma']), []);
   assert.deepEqual(shoutingIn('Es GRATIS y YA'), ['GRATIS']);
+  // Un tramo de mayúsculas seguidas es un solo aviso, con el tramo entero (pulido r1).
+  assert.deepEqual(shoutingIn('¡SÚPER OFERTA SOLO HOY! Escríbeme.'), ['SÚPER OFERTA SOLO HOY']);
+  assert.deepEqual(shoutingIn('Mira ESTO YA y luego OTRA COSA'), ['ESTO YA', 'OTRA COSA']);
   assert.equal(questionCloses('Idea.\n\n¿Te sirve?\n\nLaura'), true);
   assert.equal(questionCloses('¿Te sirve?\n\nUna idea larga que sigue después de la pregunta y no es una firma para nada.'), false);
   // Un comentario público no necesita pregunta y no lleva asunto.
