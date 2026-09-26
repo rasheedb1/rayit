@@ -1722,6 +1722,36 @@ persona.
   un referido (LinkedIn, con la cuenta caída), una ambigua (Instagram) y
   un «fuera de la oficina» automático (correo).
 
+#### Ronda 3 (0066)
+
+- **La demo vive en fichas suyas.** El seed 0008 colgaba sus retenidos e
+  hilos de Fresko, Granos del Valle, Café Alma, Nutrivé y Hogar Lindo y
+  conectaba el Instagram de Laura: el recomendador (VEN-13) veía Instagram
+  conectado y la baja por respuesta de canales cancelaba toques de más, y
+  `pnpm verificar` quedaba en rojo. Ahora son cinco marcas propias (Molino
+  Andino, Casa Olivo, Tostadores del Sur, Huerta Viva y Cereal Aurora,
+  `00000008-…`) y el Instagram está desconectado y soltado; el hilo de
+  Instagram enseña «reconéctala para responder». verify/0008 (f) comprueba
+  que nada del seed cuelga de una ficha ajena.
+- **«Deshacer» no confía en el navegador.** Aprobar guarda el motivo con
+  el que estaba retenido en `outbound_touch.approved_from_reason` (0066) y
+  `undoApproval` lo restaura desde ahí; la acción de la pantalla ya no lo
+  acepta. «Saltar» solo toma lo que la cola ofrece (un retenido, o un
+  borrador de cadencia con petición de regenerar). Con el envío apagado,
+  aprobar dice «sale cuando enciendas el envío». La nota baja de una fila
+  remite a su propio «Regenerar», o solo a editarlo si la fila no lo tiene.
+- **La bandeja**: la columna de la lista es `grid-cols-[minmax(0,1fr)]`
+  (la pista `auto` crecía con los extractos a 894 px, quedaba debajo de la
+  conversación y los clics no llegaban; a 400 px la página se desplazaba
+  de lado). `scripts/ancho-movil.mjs` mide ahora también un tope de ancho
+  (`TOPE`). Cada hilo tiene su propio estado (`key`): un borrador ya no
+  pasa de una marca a otra. Los no leídos salen de la conversación
+  (`InboxConversation.unread`); el hilo que la página abre sola solo se
+  marca como elegido en escritorio. «Corregir» a «fuera de la oficina»
+  acepta la fecha de vuelta o la lee del mensaje (`findReturnDate`).
+- **Una palabra, un lugar.** «Bandeja» es la de conversaciones; los textos
+  del radar dicen «radar».
+
 ---
 
 ## 6. Las historias nuevas de Ventas
