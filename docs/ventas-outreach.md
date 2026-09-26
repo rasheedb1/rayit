@@ -1844,6 +1844,41 @@ persona.
   está; un borrador regenerado que no se puede aprobar tal cual sigue
   como estaba (SAVEPOINT) y no queda retenido por «Revisión humana».
 
+#### Pulido r1 (0066, sin migración nueva)
+
+- **Cualquier respuesta detiene el pitch suelto.** `stopOnReply` cancela
+  lo programado a la ficha fuera de una cadencia (`replied`); si la
+  respuesta llegó sin enlazar a un toque, lo hace la intención: «ahora
+  no» (`not_now`), un referido o una dudosa (`replied`), solo lo creado
+  antes de que llegara el mensaje (lo que la creadora programó después de
+  leerla es decisión suya). Antes solo «me interesa» lo cancelaba y un
+  «ahora no» salía en frío tres días después.
+- **Un `client` no lee las bandejas** (`PUEDEN_VER_BANDEJAS`: owner,
+  admin, member y viewer). En una agencia es la marca misma: las dos
+  páginas ni cargan los hilos ni la cola, y enseñan un vacío «no está a
+  tu alcance». Los permisos de Ventas pasan por una sola función,
+  `tieneRol` (`lib/workspace/rol.ts`).
+- **La abierta sola no marca en cascada.** En escritorio, sin hilo en la
+  URL, la página abre el primero sin leer; al marcarlo leído queda fijado
+  en la URL (`router.replace`) y el siguiente render no salta al
+  siguiente sin leer. Antes, a 1,5 s la bandeja entera estaba leída.
+- **«Regenerar» también para un seguimiento en el hilo** (`email_reply`):
+  0066 redefine `outbound_generation_request` para aceptarlo (nunca una
+  respuesta escrita en la bandeja); `outbound.generate` ya lo redacta como
+  «Re:», sin asunto propio. El retenido de Vitalé de la demo (7,4) se
+  puede regenerar.
+- **Aprobar bajo el mínimo pregunta** («¿Aprobar con 7,4 de 10?», con
+  `ConfirmInline`, como Stripe Radar) y la frase del motivo ya no ordena
+  editar («puedes editarlo o aprobarlo tal cual»).
+- **«Deshacer» devuelve el mensaje a su lugar**: la cola ordena por hora
+  prevista y antigüedad del toque (`created_at`, que aprobar no cambia) y
+  la fila vuelve con el foco.
+- **La demo cuenta el criterio**: Frutos del Páramo (seed 0008 §7) dijo
+  «me interesa» hoy y su negocio pasó de «Contactado» a «En
+  conversación» con «Responder hoy»; los mensajes de la bandeja van a una
+  hora de oficina de su día local, y el «fuera de la oficina» de Esteban
+  vuelve diez días después de su respuesta.
+
 ### 5.8 El brief como regla (VEN-7, 25 de septiembre)
 
 El brief (`outbound_brief`, `/ventas/brief`) tiene dos mitades que no
@@ -2078,8 +2113,10 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
 #### Cómo quedó la actividad (VEN-16, 25 de septiembre; ronda 5)
 
 - **Migración `0067_actividad_outreach.sql`** (nació como 0065; en la
-  integración de la fase 6 pasó a 0067, y 0066 y 0067 a 0068 y 0069,
-  porque VEN-14 trajo 0064–0066. No dependen una de otra). Una
+  integración de la fase 6 pasó a 0067 porque VEN-14 trajo 0064–0066. En
+  el pulido r1 absorbió las de las rondas 4 y 5, que nacieron como 0068 y
+  0069: ninguna estaba aplicada, así que hay una sola definición de cada
+  vista). Una
   función y cuatro vistas de solo lectura, con `security_invoker` y sin
   escritura para `mc_app`:
   - `outbound_touch_retry_block(outbound_touch)`: por qué un fallido **no**
@@ -2179,7 +2216,8 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
 
 **Ronda 4** (sin cambiar lo anterior):
 
-- **Migración `0068_actividad_una_regla.sql`** (0067 no se toca): el
+- **`outbound_step_position` y `outbound_touch_is_positive`** (hoy en
+  0067 §1b; nacieron en una 0068 que el pulido fundió): el
   número de un paso sale de una sola vista, `outbound_step_position`, y
   «positivo» de una sola función, `outbound_touch_is_positive(t)`
   (enviado, **con `replied_at`** y con una respuesta entrante
@@ -2220,8 +2258,8 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
 
 **Ronda 5** (sin cambiar lo anterior):
 
-- **Migración `0069_actividad_cadencia_en_pausa.sql`** (0067 y 0068 no
-  se tocan): `outbound_queue` añade `sequence_status` al final. Con la
+- **`outbound_queue.sequence_status`** (hoy en 0067; nació en una 0069
+  que el pulido fundió), al final de la vista. Con la
   cadencia en pausa (o en borrador), o con la inscripción de esa persona
   en `paused` o `cooldown` (tras un «ahora no»), `decideBeforeSend` aplaza
   el toque cada día: la fila ya no dice «Sale mañana 8:12» con una fecha
@@ -2264,6 +2302,32 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
   fallido que puede, con los filtros, y los bloqueados siguen fallidos),
   la cadencia en pausa en la vista y en la fila, y las acciones con un
   `viewer`.
+
+**Pulido r1**:
+
+- **Una sola migración**: 0067 funde las de las rondas 4 y 5 (ver
+  arriba).
+- **La base también guarda la cola** (0067 §6): el disparador
+  `outbound_touch_guard_operator` rechaza (42501) que `mc_app`, con una
+  persona en la sesión, cancele un toque o devuelva a la cola uno
+  fallido si no es owner, admin o member (`outreach_can_operate`). Antes
+  solo lo miraba la Server Action; ahora falla cerrada como la política.
+- **Reintentar por tipo pregunta antes** («¿Volver a enviar 37 mensajes
+  de Correo?», con cuándo salen), como «Cancelar seleccionados».
+- **La fila dice las dos cosas**: con el envío apagado y la cadencia en
+  pausa, «En espera · envío apagado · cadencia en pausa» con «Ir a la
+  cadencia»: encender el envío no bastaría.
+- **El embudo cuenta y se ve**: `outbound_funnel_by_step` suma
+  `failed_retryable` (la misma regla que el botón), así que «fallidos»
+  dice si se pueden reintentar, si ninguno o cuántos, y lleva a la cola
+  de ese tipo; y `*_share_of_first` (lo enviado, abierto y respondido
+  sobre lo enviado en el paso 1) pinta una barra fina por cifra: la caída
+  de un paso al siguiente se ve sin leer números.
+- **La franja de 14 días se lee**: más alta y los días normales en el
+  acento suave, no en gris sobre gris.
+- **La demo no crece hacia abajo**: Daniel y Carolina tienen su paso 1
+  (seed 0009) y el paso 3 de Carolina, cancelado por su «ahora no».
+  verify/0009.sql (x) lo vigila paso a paso.
 
 ## 7. Cómo entra en el plan por fases
 
@@ -2381,6 +2445,9 @@ revisores técnico y de producto y el mismo umbral.
    (irreversible); hacerlo en un espacio de verdad sin que nadie lo sepa
    es peor que no hacerlo. **Estado (25 de septiembre): supuesto
    declarado, pendiente de que Rasheed lo confirme antes de mergear.**
+   Por eso VEN-14 está en `en_curso` en `backlog.ts` (pulido r1): el
+   criterio, tal como se escribió, no se cumple hasta que la decisión se
+   tome.
    El criterio de aceptación de VEN-14 (`done` en `backlog.ts`) sigue
    siendo el original: cambiarlo no le toca al constructor; el supuesto
    está en la `note` de la historia. En la ronda 5 el falso dejó de leer

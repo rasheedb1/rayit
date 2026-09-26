@@ -447,8 +447,8 @@ export const STORIES: readonly Story[] = [
     title: "Bandeja de aprobación y bandeja unificada",
     desc: "Aprobar, editar o regenerar lo propuesto; hilos de correo, LinkedIn e Instagram en un solo lugar; clasificación de la intención de la respuesta (interesado, ahora no, fuera de oficina, baja, referido) y su efecto en el deal y el enrolamiento.",
     done: "Un mensaje retenido se aprueba desde la bandeja y sale; una respuesta «me interesa» mueve el deal y aparece en la bandeja con la conversación completa.",
-    status: "hecho",
-    note: "/ventas/aprobaciones (aprobar con «Deshacer», editar, regenerar con pista, saltar; teclado) y /ventas/bandeja (conversación completa, respuesta por el motor que se cancela o edita mientras espera, corregir la intención con sus efectos, referido que se propone enrolar). El job outbound.intent reparte el lote entre workspaces, no paga dos veces y al tercer fallo deja la respuesta a una persona. Supuesto por confirmar con Rasheed (docs/ventas-outreach.md §8, decisión 9): sin ANTHROPIC_API_KEY las respuestas no se clasifican solas y la bandeja lo dice para corregirlas a mano. 0064–0066 y el seed 0008 sin aplicar en Supabase. Detalle por ronda en docs/ventas-outreach.md §5.7.",
+    status: "en_curso",
+    note: "/ventas/aprobaciones y /ventas/bandeja, el job outbound.intent y la corrección a mano; pruebas en apps/worker/test/outreach-bandejas.test.ts y packages/db/test/bandejas.test.ts. Migraciones 0064–0066 sin aplicar en Supabase. Falta confirmar la decisión 9 (sin llave de Anthropic no se clasifica): pendiente de Rasheed. Detalle en docs/ventas-outreach.md §5.7.",
   },
   {
     id: "VEN-15", module: "VEN", owner: "rasheed", size: "M", sprint: 4, deps: ["VEN-10"],
@@ -464,7 +464,7 @@ export const STORIES: readonly Story[] = [
     desc: "Cola visible con reintento por tipo, uso por canal con límite blando y duro, embudo por paso (enviados, abiertos, respondidos, positivos), vista de flujo de la cadencia.",
     done: "Con una semana de envíos de prueba, el embudo cuadra con outbound_touch fila a fila.",
     status: "hecho",
-    note: "/ventas/actividad (cola con reintento por tipo y páginas por cursor), uso por canal con sus tres topes en /ventas/canales y embudo con vista de flujo en /ventas/cadencias/[id]; el embudo cuadra con outbound_touch fila a fila en pglite. Migraciones 0067–0069 (nacieron 0065–0067; renumeradas al integrar la fase 6) y seed 0009 (nació 0008), sin aplicar en Supabase. Detalle por ronda en docs/ventas-outreach.md §6.",
+    note: "/ventas/actividad (cola con reintento por tipo que pregunta antes y páginas por cursor), uso por canal con sus tres topes en /ventas/canales y embudo con vista de flujo en /ventas/cadencias/[id]; el embudo cuadra con outbound_touch fila a fila en pglite. Una sola migración 0067 (fundió 0068 y 0069; la base rechaza que un rol de lectura opere la cola) y seed 0009, sin aplicar en Supabase. Detalle en docs/ventas-outreach.md §6.",
   },
 
   // ---------------------------------------------------------------- COT
