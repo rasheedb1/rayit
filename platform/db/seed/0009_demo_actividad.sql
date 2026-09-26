@@ -34,9 +34,13 @@
 --     verdad de la demo, y sembrar en Supabase no manda nada.
 --   * Requiere 0037, 0052 y 0067, y los seeds 0002 y 0005.
 --
+-- Y el paso 1 de Daniel y de Carolina (seed 0005), que empezaban la
+-- cadencia en el paso 2: el embudo de la vista de flujo crecía hacia
+-- abajo (verify/0009.sql lo vigila, paso a paso).
+--
 -- Mapa de identificadores (00000009-…, solo dígitos hexadecimales):
 --   …-0000000e0004..005     outbound_enrollment       (e0 = enrolamiento)
---   …-000000070001..003     outbound_touch            (7 = toque)
+--   …-000000070001..006     outbound_touch            (7 = toque)
 -- =====================================================================
 
 SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', false);
@@ -85,7 +89,13 @@ dias AS (
 h AS (
   SELECT (habiles[1] + time '10:10') AT TIME ZONE 'America/Bogota' AS camilo_1,
          (habiles[3] + time '10:20') AT TIME ZONE 'America/Bogota' AS laura_1,
-         (habiles[1] + time '09:40') AT TIME ZONE 'America/Bogota' AS laura_2
+         (habiles[1] + time '09:40') AT TIME ZONE 'America/Bogota' AS laura_2,
+         -- El paso 1 de Daniel y de Carolina (seed 0005), un día hábil antes de su correo.
+         (habiles[7] + time '10:10') AT TIME ZONE 'America/Bogota' AS daniel_1,
+         (habiles[11] + time '10:00') AT TIME ZONE 'America/Bogota' AS carolina_1,
+         -- El paso 3 de Carolina iba a salir el primer día hábil después de su «ahora no».
+         (SELECT (min(g)::date + time '10:30') AT TIME ZONE 'America/Bogota'
+            FROM hoy, generate_series(hoy.d - 10, hoy.d - 1, interval '1 day') g WHERE extract(isodow FROM g) < 6) AS carolina_3
     FROM dias)
 INSERT INTO outbound_touch
   (id, workspace_id, company_id, contact_id, sequence_id, step_index, enrollment_id, step_id, channel,
@@ -119,7 +129,34 @@ VALUES
    '¿Te interesa ver cómo le fue a una receta con producto de origen en mi cuenta?',
    'failed', (SELECT laura_2 FROM h), (SELECT laura_2 FROM h), NULL, 1, 'lquintero@granosdelvalle.co', NULL, 'rejected',
    (SELECT laura_2 FROM h) + interval '6 seconds', (SELECT laura_2 FROM h) - interval '1 hour',
-   '00000005-0000-4000-8000-0000000ac001')
+   '00000005-0000-4000-8000-0000000ac001'),
+  -- Daniel Restrepo · 1 (pulido r1): el comentario en LinkedIn antes de su correo. Sin él, el embudo de la
+  -- cadencia crecía hacia abajo (el paso 2 salía a más gente que el paso 1).
+  ('00000009-0000-4000-8000-000000070004', '00000002-0000-4000-8000-000000000001',
+   '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-0000000c0008',
+   '00000005-0000-4000-8000-0000005e0001', 1, '00000005-0000-4000-8000-0000000e0002',
+   '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL,
+   'Qué buena la receta de ajiaco en olla de barro del domingo. Se nota el sabor de casa.',
+   'sent', (SELECT daniel_1 FROM h), (SELECT daniel_1 FROM h) - interval '9 seconds', (SELECT daniel_1 FROM h), 1, NULL,
+   'unipile-demo-comment-0009-4', NULL,
+   (SELECT daniel_1 FROM h), (SELECT daniel_1 FROM h) - interval '1 hour', '00000005-0000-4000-8000-0000000ac002'),
+  -- Carolina Ruiz · 1: el comentario en LinkedIn antes de su correo.
+  ('00000009-0000-4000-8000-000000070005', '00000002-0000-4000-8000-000000000001',
+   '00000002-0000-4000-8000-0000000000e8', '00000002-0000-4000-8000-0000000c0012',
+   '00000005-0000-4000-8000-0000005e0001', 1, '00000005-0000-4000-8000-0000000e0003',
+   '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL,
+   'Me encantó el video de la olla que pasa de la estufa a la mesa. Así cocina quien me sigue.',
+   'sent', (SELECT carolina_1 FROM h), (SELECT carolina_1 FROM h) - interval '9 seconds', (SELECT carolina_1 FROM h), 1, NULL,
+   'unipile-demo-comment-0009-5', NULL,
+   (SELECT carolina_1 FROM h), (SELECT carolina_1 FROM h) - interval '1 hour', '00000005-0000-4000-8000-0000000ac002'),
+  -- Carolina Ruiz · 3: el mensaje de LinkedIn, cancelado por su «ahora no» (como su paso 4 en 0005).
+  ('00000009-0000-4000-8000-000000070006', '00000002-0000-4000-8000-000000000001',
+   '00000002-0000-4000-8000-0000000000e8', '00000002-0000-4000-8000-0000000c0012',
+   '00000005-0000-4000-8000-0000005e0001', 3, '00000005-0000-4000-8000-0000000e0003',
+   '00000005-0000-4000-8000-0000005e0103', 'linkedin', NULL,
+   'Carolina, te dejo el video de la olla en primer plano: 150 mil views en una semana.',
+   'canceled', (SELECT carolina_3 FROM h), NULL, NULL, 0, NULL, NULL, 'not_now',
+   now() - interval '11 days', (SELECT carolina_1 FROM h) - interval '1 hour', NULL)
 ON CONFLICT (id) DO NOTHING;
 
 
