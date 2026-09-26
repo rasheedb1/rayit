@@ -113,6 +113,18 @@ CREATE INDEX outbound_message_unclassified_idx ON outbound_message (created_at)
 CREATE INDEX outbound_message_referral_contact_idx ON outbound_message (referral_contact_id)
   WHERE referral_contact_id IS NOT NULL;
 
+-- Las dos claves nuevas hacia tablas con RLS solo nombran filas que quien
+-- escribe puede leer (0025 §3): ni la web apunta a un mensaje o a una
+-- ficha de otro workspace sabiendo su id.
+CREATE TRIGGER ref_visible_reply_to_message_id
+  BEFORE INSERT OR UPDATE OF reply_to_message_id ON outbound_touch
+  FOR EACH ROW WHEN (NEW.reply_to_message_id IS NOT NULL)
+  EXECUTE FUNCTION assert_reference_visible('reply_to_message_id', 'outbound_message', 'id');
+CREATE TRIGGER ref_visible_referral_contact_id
+  BEFORE INSERT OR UPDATE OF referral_contact_id ON outbound_message
+  FOR EACH ROW WHEN (NEW.referral_contact_id IS NOT NULL)
+  EXECUTE FUNCTION assert_reference_visible('referral_contact_id', 'contact', 'id');
+
 -- ---------------------------------------------------------------------
 -- 3 · El job
 -- ---------------------------------------------------------------------
