@@ -279,7 +279,7 @@ describe("la curva de calentamiento", () => {
     expect(screen.getByText(t.campos.sendWindow.help("hora estándar de Colombia"))).toBeInTheDocument();
     expect(screen.getByLabelText(t.campos.sendWindow.desde)).toHaveValue("09:15");
     expect(screen.getByLabelText(t.campos.sendWindow.hasta)).toHaveValue("17:00");
-    expect(screen.getByText(new RegExp(t.campos.maxTouchesPerCompany.help("90").slice(0, 60)))).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(t.campos.maxTouchesPerCompany.help("90", "4").slice(0, 60)))).toBeInTheDocument();
     const tabla = screen.getByRole("table", { name: t.calentamiento.caption });
     expect(within(tabla).getByRole("row", { name: /Día 1 20 al día/ })).toBeInTheDocument();
     expect(within(tabla).getByRole("row", { name: /Día 14 1\.500 al día/ })).toBeInTheDocument();
@@ -436,6 +436,21 @@ describe("ronda 4", () => {
     expect(screen.getByText(t.interruptor.offHelpNuncaCorto)).toBeInTheDocument();
     expect(screen.getByText(t.interruptor.sinDireccion)).toBeInTheDocument();
     expect(screen.queryByText(t.interruptor.offHelpListo)).not.toBeInTheDocument();
+  });
+
+  it("lo que falta lleva a donde se arregla: la dirección (con el foco en el campo) o /ventas/canales", () => {
+    const campo = document.createElement("textarea");
+    campo.id = "postalAddress";
+    document.body.appendChild(campo);
+    render(interruptor({ hasAddress: false }));
+    const aDireccion = screen.getByRole("link", { name: t.interruptor.irADireccion });
+    expect(aDireccion).toHaveAttribute("href", "#postalAddress");
+    fireEvent.click(aDireccion);
+    expect(document.activeElement).toBe(campo);
+    campo.remove();
+    cleanup();
+    render(interruptor({ cuentasConectadas: 0 }));
+    expect(screen.getByRole("link", { name: t.interruptor.irACanales })).toHaveAttribute("href", "/ventas/canales");
   });
 
   it("los plurales salen de Intl.PluralRules, con 1 y con 2", () => {

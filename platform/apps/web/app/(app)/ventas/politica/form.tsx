@@ -2,6 +2,8 @@
 
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import {
+  GMAIL_DAILY_GUIDANCE,
+  INSISTENT_TOUCHES_PER_COMPANY,
   WARMUP_START_LIMIT,
   warmupCurve,
   warmupSeries,
@@ -160,10 +162,16 @@ export function PoliticaForm({
       ),
     [valores.maxEmailsPerDay, valores.warmupDays, minimos, maximos, locale],
   );
-  const ayudaDelCalentamiento = t.campos.warmupDays.help(formatInt(WARMUP_START_LIMIT, { locale }));
+  // Toda cifra de una ayuda pasa por formatInt con el locale del espacio: ninguna va escrita en el texto.
+  const n = (v: number) => formatInt(v, { locale });
+  const ayudaDelCalentamiento = t.campos.warmupDays.help(n(WARMUP_START_LIMIT));
+  const { personal, workspace } = GMAIL_DAILY_GUIDANCE;
   const ayuda = (campo: Numerico) => {
     if (campo === "warmupDays") return ayudaDelCalentamiento;
-    if (campo === "maxTouchesPerCompany") return t.campos.maxTouchesPerCompany.help(ventanaMarca);
+    if (campo === "maxTouchesPerCompany") return t.campos.maxTouchesPerCompany.help(ventanaMarca, n(INSISTENT_TOUCHES_PER_COMPANY));
+    if (campo === "maxEmailsPerDay") {
+      return t.campos.maxEmailsPerDay.help(n(personal.from), n(personal.to), n(workspace.from), n(workspace.to));
+    }
     return t.campos[campo].help;
   };
 

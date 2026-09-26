@@ -62,6 +62,12 @@ export const MESSAGES = {
     sinDireccion: "Para encender el envío guarda primero tu dirección postal.",
     /** Sin ninguna cuenta de envío conectada, encender no enviaría nada. */
     sinCanal: "Para encender el envío conecta primero una cuenta de envío (Gmail, LinkedIn o Instagram).",
+    /**
+     * El enlace que va detrás de la línea de lo que falta: al campo de la
+     * dirección (que además recibe el foco) o a /ventas/canales.
+     */
+    irADireccion: "Ir a la dirección postal",
+    irACanales: "Conectar una cuenta",
     /** Quien no es dueño ni administra el espacio (0038 §7). */
     sinPermiso: "Solo quien es dueño o administra este espacio puede encender o apagar el envío.",
     confirmarEncender: "¿Encender el envío?",
@@ -91,9 +97,13 @@ export const MESSAGES = {
   campos: {
     maxTouchesPerCompany: {
       label: "Mensajes por marca",
-      /** `dias` es la ventana en la que se cuentan (COMPANY_CAP_WINDOW_DAYS de @mc/db), ya formateada. */
-      help: (dias: string) =>
-        `Cuántas veces, como mucho, se le escribe a una marca en ${dias} días, sumando todas tus secuencias. Los de más no salen. Más de cuatro suele sentirse insistente.`,
+      /**
+       * `dias` es la ventana en la que se cuentan (COMPANY_CAP_WINDOW_DAYS
+       * de @mc/db) e `insistente` INSISTENT_TOUCHES_PER_COMPANY
+       * (@mc/core/outreach/warmup), los dos ya formateados.
+       */
+      help: (dias: string, insistente: string) =>
+        `Cuántas veces, como mucho, se le escribe a una marca en ${dias} días, sumando todas tus secuencias. Los de más no salen. Más de ${insistente} suele sentirse insistente.`,
     },
     minDaysBetweenTouches: {
       label: "Días entre mensajes",
@@ -110,7 +120,9 @@ export const MESSAGES = {
     },
     maxEmailsPerDay: {
       label: "Correos al día",
-      help: "El tope diario de tu Gmail. Una cuenta personal aguanta 50 a 100 sin llamar la atención; Workspace, 100 a 150.",
+      /** Las cifras de GMAIL_DAILY_GUIDANCE (@mc/core/outreach/warmup), ya formateadas. */
+      help: (personalDesde: string, personalHasta: string, workspaceDesde: string, workspaceHasta: string) =>
+        `El tope diario de tu Gmail. Una cuenta personal aguanta ${personalDesde} a ${personalHasta} sin llamar la atención; Workspace, ${workspaceDesde} a ${workspaceHasta}.`,
     },
     cooldownDaysAfterNo: {
       label: "Días de espera tras un «no»",
