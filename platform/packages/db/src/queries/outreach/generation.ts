@@ -283,24 +283,73 @@ export async function releaseGenerationLease(
   return { failures, gaveUp: false, nextAttemptAt };
 }
 
-/** Registra una llamada al modelo en outbound_llm_call: lo que suma el tope diario del workspace. */
+/**
+ * Registra una llamada al modelo en outbound_llm_call: lo que suma el tope
+ * diario del workspace. Con `reservationId`, borra en la misma transacción
+ * la reserva que se apartó para ella (reserveLlmBudget): el gasto pasa de
+ * «apartado» a «gastado» sin contarse dos veces ni ninguna.
+ */
 export async function recordOutreachLlmCall(
   tx: WorkerSql,
-  call: { workspaceId: string; touchId: string | null; purpose: 'generate' | 'judge'; model: string; inputTokens: number; outputTokens: number; costUsd: number },
+  call: {
+    workspaceId: string; touchId: string | null; purpose: 'generate' | 'judge'; model: string; inputTokens: number; outputTokens: number;
+    costUsd: number; reservationId?: string | null;
+  },
 ): Promise<void> {
   await tx.query(
     `INSERT INTO outbound_llm_call (workspace_id, purpose, model, input_tokens, output_tokens, cost, cost_currency, touch_id)
      VALUES ($1::uuid, $2, $3, $4::int, $5::int, $6::numeric, 'USD', $7::uuid)`,
     [call.workspaceId, call.purpose, call.model, call.inputTokens, call.outputTokens, call.costUsd.toFixed(6), call.touchId],
   );
+  if (call.reservationId) await releaseLlmReservation(tx, call.reservationId);
 }
 
-/** Lo que le queda hoy al workspace de su tope de gasto en el modelo (el mismo día local que cuenta outbound_health). */
+/** Cuánto vive una reserva que nadie soltó (un worker que murió a media llamada): después ya no aparta nada. */
+export const LLM_RESERVATION_TTL_MIN = 10;
+
+/**
+ * Lo que le queda hoy al workspace de su tope de gasto en el modelo (el
+ * mismo día local que cuenta outbound_health), descontando lo que otras
+ * llamadas en curso ya apartaron (outbound_llm_reservation, 0072).
+ */
 export async function llmBudgetLeftUsd(tx: WorkerSql, workspaceId: string): Promise<number> {
-  const h = (await tx.query<{ h: { llm?: { spentToday?: unknown; dailyCap?: unknown } } }>(
-    'SELECT outbound_health($1::uuid, 24) AS h', [workspaceId],
-  )).rows[0]?.h;
-  const cap = Number(h?.llm?.dailyCap ?? 0);
-  const spent = Number(h?.llm?.spentToday ?? 0);
-  return Number.isFinite(cap - spent) ? Math.max(0, cap - spent) : 0;
+  const r = (await tx.query<{ h: { llm?: { spentToday?: unknown; dailyCap?: unknown } }; reserved: string | null }>(
+    `SELECT outbound_health($1::uuid, 24) AS h,
+            (SELECT coalesce(sum(amount), 0)::text FROM outbound_llm_reservation
+              WHERE workspace_id = $1::uuid AND created_at > now() - make_interval(mins => $2::int)) AS reserved`,
+    [workspaceId, LLM_RESERVATION_TTL_MIN],
+  )).rows[0];
+  const cap = Number(r?.h?.llm?.dailyCap ?? 0);
+  const spent = Number(r?.h?.llm?.spentToday ?? 0);
+  const reserved = Number(r?.reserved ?? 0);
+  const left = cap - spent - reserved;
+  return Number.isFinite(left) ? Math.max(0, left) : 0;
+}
+
+/**
+ * Aparta la estimación de una llamada del tope diario, si alcanza. El
+ * candado de transacción por espacio hace que la comprobación y la
+ * reserva sean una sola cosa: dos jobs que corren a la vez (outbound.generate
+ * y outbound.review) ya no pasan los dos con el mismo saldo. Devuelve el id
+ * de la reserva, o null si no alcanza (y entonces no se llama al modelo).
+ * El candado dura esta transacción, nunca lo que tarda el modelo.
+ */
+export async function reserveLlmBudget(
+  tx: WorkerSql,
+  input: { workspaceId: string; purpose: 'generate' | 'judge'; estimateUsd: number },
+): Promise<string | null> {
+  await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended('outbound_llm_budget:' || $1::text, 0))`, [input.workspaceId]);
+  const left = await llmBudgetLeftUsd(tx, input.workspaceId);
+  if (!(left > 0) || left < input.estimateUsd) return null;
+  return (
+    await tx.query<{ id: string }>(
+      `INSERT INTO outbound_llm_reservation (workspace_id, purpose, amount) VALUES ($1::uuid, $2, $3::numeric) RETURNING id`,
+      [input.workspaceId, input.purpose, Math.max(0, input.estimateUsd).toFixed(6)],
+    )
+  ).rows[0]!.id;
+}
+
+/** Suelta una reserva: la llamada se registró, o no se hizo. */
+export async function releaseLlmReservation(tx: WorkerSql, reservationId: string): Promise<void> {
+  await tx.query('DELETE FROM outbound_llm_reservation WHERE id = $1::uuid', [reservationId]);
 }
