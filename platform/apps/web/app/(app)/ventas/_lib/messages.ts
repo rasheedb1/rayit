@@ -645,6 +645,12 @@ export const MESSAGES = {
       labelNone: (stage: string, days: string) => `Ningún negocio entró en «${stage}» en los últimos ${days} días.`,
       /** La vista Lista: la misma fila por etapa, en un resumen encima de la tabla. */
       listTitle: (days: string) => `Conversión por etapa · últimos ${days} días`,
+      /**
+       * La regla de «entró», dicha en la pantalla: un negocio que salta una
+       * etapa (Contactado → Propuesta) no cuenta en la que saltó, así que
+       * una columna puede tener más negocios que la anterior.
+       */
+      note: "Cuenta los negocios que pasaron por cada etapa: uno que se la salta no cuenta en ella.",
     },
   },
 

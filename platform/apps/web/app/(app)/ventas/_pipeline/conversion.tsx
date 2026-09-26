@@ -68,7 +68,7 @@ export function StageConversionRow({ view, className = "" }: { view: ConversionV
   return (
     <p
       className={`relative flex items-baseline justify-between gap-2 text-xs text-muted ${className}`}
-      title={view.label}
+      title={`${view.label} ${MESSAGES.pipeline.conversion.note}`}
       data-testid="conversion-etapa"
     >
       <span className="sr-only">{view.label}</span>
@@ -108,7 +108,8 @@ export function ConversionSummary({
   if (abiertas.length === 0) return null;
   return (
     <section aria-label={t.listTitle(days)} className="mb-4">
-      <h3 className="mb-1.5 text-xs font-medium text-muted">{t.listTitle(days)}</h3>
+      <h3 className="text-xs font-medium text-muted">{t.listTitle(days)}</h3>
+      <p className="mb-1.5 text-xs text-muted">{t.note}</p>
       <dl className="grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3" data-testid="conversion-resumen">
         {abiertas.map((s) => (
           <div key={s.id} className="flex min-w-0 items-baseline gap-2 text-xs" title={s.conversion.label} data-testid="conversion-etapa">

@@ -62,7 +62,7 @@ describe("StageConversionRow", () => {
     expect(fila).toHaveTextContent(t.rate(f.pct(0.9)));
     // El periodo va en la frase (VEN-8 r4): la cifra no es la de toda la historia.
     expect(fila).toHaveTextContent("de 10 negocios en 90 días");
-    expect(fila).toHaveAttribute("title", v?.label);
+    expect(fila).toHaveAttribute("title", `${v?.label} ${MESSAGES.pipeline.conversion.note}`);
   });
 
   it("sin historia dice que no la hay, y sin vista no pinta nada", () => {
