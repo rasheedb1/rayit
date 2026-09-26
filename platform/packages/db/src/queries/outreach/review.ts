@@ -179,7 +179,10 @@ export async function releaseHeldTouch(
               (st.step_type = 'email_reply' OR t.reply_to_message_id IS NOT NULL) AS in_thread,
               -- Retenida porque el correo al que responde no salió, y en su cadencia no salió ningún
               -- correo: aprobarla la devolvería a la cola y el despachador la retendría otra vez.
+              -- Solo el paso de una cadencia: una respuesta escrita en la bandeja (reply_to_message_id)
+              -- responde al mensaje que llegó, y ese hilo existe aunque no haya salido ningún correo.
               (split_part(coalesce(t.held_reason, ''), ':', 1) = 'reply_without_thread'
+               AND t.enrollment_id IS NOT NULL AND t.reply_to_message_id IS NULL
                AND NOT EXISTS (SELECT 1 FROM outbound_touch pt
                                 WHERE pt.enrollment_id = t.enrollment_id AND pt.channel = t.channel
                                   AND pt.status = 'sent' AND pt.id <> t.id)) AS no_thread,

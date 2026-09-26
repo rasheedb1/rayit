@@ -240,6 +240,10 @@ export function motorKit(opts: { db: () => PgliteDatabase; motor: () => MotorDb;
   async function comoLaWeb<T>(workspaceId: string, fn: (tx: WorkspaceTx) => Promise<T>): Promise<T> {
     return db().raw.transaction(async (raw) => {
       await raw.query(`SELECT set_config('app.workspace_id', $1, true)`, [workspaceId]);
+      // Sin persona en la transacción, como la web sin Supabase Auth: lo que el cliente de @mc/db fija con
+      // DbOptions.authDisabled (0050 §7). Sin esto, las reglas que fallan cerradas (outreach_can_manage,
+      // outreach_resolve_unconfirmed) dirían que no.
+      await raw.query(`SELECT set_config('app.auth_disabled', 'on', true)`);
       const tx = {
         workspaceId,
         db: null as never,
