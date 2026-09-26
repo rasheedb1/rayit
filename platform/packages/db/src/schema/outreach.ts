@@ -294,6 +294,8 @@ export const outreachChannelAccount = pgTable('outreach_channel_account', {
   providerWebhookSecretFp: text('provider_webhook_secret_fp'),
   /** El cursor de los lotes del keepalive (0042). */
   keepaliveCheckedAt: timestamptz('keepalive_checked_at'),
+  /** La cuenta de Unipile que trajo el aviso de cuenta creada de este intento (0042 §8): la conciliación la reconoce por aquí. */
+  notifiedAccountId: text('notified_account_id'),
   /** Hasta cuándo se leyeron los avisos de rebote de su buzón (0038 §6). Solo la escribe el worker. */
   bouncesReadAt: timestamptz('bounces_read_at'),
   createdAt: createdAt(),

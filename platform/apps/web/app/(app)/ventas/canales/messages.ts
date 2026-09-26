@@ -127,6 +127,8 @@ export const MESSAGES = {
     reasons: {
       transient: "No pudimos comprobar la cuenta. Lo volvemos a intentar en unas horas.",
       duplicado: "Ese perfil ya estaba conectado en este espacio: seguimos usando esa conexión.",
+      /** El aviso de Unipile trajo una cuenta que no es la de este intento (not_this_attempt): no se ligó nada. */
+      notThisAttempt: (service: string) => `No pudimos confirmar la cuenta que conectaste en ${service}. Vuelve a intentarlo.`,
     },
     /** Quien no puede gestionar los canales (un miembro, un invitado): ve la pantalla, no la toca. */
     readOnly: "Solo quien administra este espacio puede conectar, desconectar o cambiar los límites de los canales.",

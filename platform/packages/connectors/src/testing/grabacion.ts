@@ -27,8 +27,9 @@
  *   · el estado firmado que mandamos en el `name` de la hosted auth (y
  *     que Unipile devuelve en la cuenta y en el aviso de cuenta creada):
  *     queda como una marca con su largo (stateMark). Que volvió intacto
- *     lo prueba la web al verificar su firma: el guion anota en
- *     meta.appStatus lo que respondió al aviso.
+ *     lo prueba la web al verificar su firma y LIGAR la cuenta: el guion
+ *     anota en meta.appStatus y meta.appReply lo que respondió al aviso
+ *     (un 200 con `ignored` es un aviso que no ligó nada).
  */
 import { createHash } from 'node:crypto';
 import type { FetchLike } from '../http/client.ts';

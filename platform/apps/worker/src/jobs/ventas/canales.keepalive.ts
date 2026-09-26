@@ -331,10 +331,13 @@ async function refreshWebhooks(
 /**
  * Las cuentas de Unipile que ninguna fila nombra (ni viva, ni pendiente
  * de soltar), con más de ORPHAN_MIN_AGE_HOURS y nacidas de NUESTRA hosted
- * auth (el `name` abre con nuestra llave de estado), se borran. Es la red
- * del borrado que hace la web cuando una conexión no se completa (canal
- * equivocado, perfil duplicado u ocupado, la pendiente ya usada): si ese
- * borrado falló, la cuenta no se queda cobrando.
+ * auth, se borran. Nuestra quiere decir: el `name` abre con nuestra llave
+ * de estado, o un aviso de cuenta creada la anotó en la pendiente de su
+ * intento (notified_account_id, 0042 §8), que es lo que la reconoce si
+ * Unipile no devuelve el `name` en la cuenta (el plan B de §9.3). Es la
+ * red del borrado que hace la web cuando una conexión no se completa
+ * (canal equivocado, perfil duplicado u ocupado, la pendiente ya usada):
+ * si ese borrado falló, la cuenta no se queda cobrando.
  */
 async function reconcileOrphans(
   db: Queryable,
@@ -346,9 +349,15 @@ async function reconcileOrphans(
 ): Promise<void> {
   const all = await unipile.listAccounts();
   const cutoff = now.getTime() - ORPHAN_MIN_AGE_HOURS * 3600_000;
-  const ours = all.filter((a) =>
-    a.createdAt !== null && a.createdAt.getTime() < cutoff
-    && verifyChannelState(a.hostedAuthName, stateKeys, now, Number.MAX_SAFE_INTEGER).ok);
+  const old = all.filter((a) => a.createdAt !== null && a.createdAt.getTime() < cutoff);
+  if (old.length === 0) return;
+  const { rows: notified } = await db.query<{ notified_account_id: string }>(
+    `SELECT DISTINCT notified_account_id FROM outreach_channel_account
+      WHERE provider = 'unipile' AND notified_account_id = ANY($1::text[])`,
+    [old.map((a) => a.id)],
+  );
+  const seen = new Set(notified.map((x) => x.notified_account_id));
+  const ours = old.filter((a) => seen.has(a.id) || verifyChannelState(a.hostedAuthName, stateKeys, now, Number.MAX_SAFE_INTEGER).ok);
   if (ours.length === 0) return;
   const { rows } = await db.query<{ provider_account_id: string }>(
     `SELECT DISTINCT provider_account_id FROM outreach_channel_account

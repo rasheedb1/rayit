@@ -185,13 +185,23 @@ describe('fixtures de outreach', () => {
         if (name === 'unipile/accounts.get') {
           const acc = normalizeUnipileAccount(body);
           assert.ok(acc.id && acc.providerIdentity && acc.createdAt, `${name}: id, connection_params.im.id y created_at`);
+          // El supuesto del que depende ligar una cuenta nueva sin el plan B (§9.3): la cuenta devuelve en `name` el
+          // estado ENTERO que mandamos al pedir el enlace. Si esto falla, cada LinkedIn nuevo se liga por el plan B
+          // (fecha, proveedor y que nadie la use): decide si basta o hay que cambiar de camino.
+          const nameLen = Number(STATE_MARK_RE.exec(String((body as { name?: string }).name))?.[1] ?? 0);
+          assert.ok(nameLen >= CHANNEL_STATE_TYPICAL_CHARS, `${name}: la cuenta trae en name el estado entero (${nameLen} caracteres)`);
         } else if (name === 'unipile/webhooks/account.created') {
           const ev = parseUnipileWebhook(body);
           assert.equal(ev.kind, 'account_connected', `${name}: se lee como cuenta conectada`);
           const len = Number(STATE_MARK_RE.exec(String((body as { name?: string }).name))?.[1] ?? 0);
           // Un estado entero mide al menos CHANNEL_STATE_TYPICAL_CHARS (sin reconexión, exactamente eso): uno recortado, menos.
           assert.ok(len >= CHANNEL_STATE_TYPICAL_CHARS, `${name}: el name trae el estado entero (${len} caracteres)`);
-          assert.equal((fx['meta'] as { appStatus?: number }).appStatus, 200, `${name}: la web verificó la firma del estado que volvió`);
+          const meta = fx['meta'] as { appStatus?: number; appReply?: unknown };
+          assert.equal(meta.appStatus, 200, `${name}: la web verificó la firma del estado que volvió`);
+          // 200 también sale cuando la web IGNORA el aviso ({ ok: true, ignored }): lo que cuenta es que ligó la cuenta.
+          const reply = (meta.appReply ?? {}) as { ok?: boolean; ignored?: unknown };
+          assert.equal(reply.ok, true, `${name}: la web respondió ok`);
+          assert.equal(reply.ignored, undefined, `${name}: la web ligó la cuenta (no la ignoró: ${String(reply.ignored)})`);
         } else if (name === 'unipile/webhooks/message.received' || name === 'unipile/webhooks/message.echo') {
           const ev = parseUnipileWebhook(body);
           assert.equal(ev.kind, 'message', name);

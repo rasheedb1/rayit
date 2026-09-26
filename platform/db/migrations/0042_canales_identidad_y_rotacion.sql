@@ -12,6 +12,7 @@
 --   5 · outreach_channel_mark_ok: la cuenta vuelve sin esperar al keepalive
 --   6 · outreach_channel_set_webhooks con la huella
 --   7 · sales.channels_keepalive cada hora, por lotes
+--   8 · notified_account_id: la cuenta que trajo el aviso, en la pendiente
 --
 -- 1 · La identidad del perfil
 --
@@ -39,7 +40,18 @@ ALTER TABLE outreach_channel_account
   ADD COLUMN provider_webhook_secret_fp text
     CONSTRAINT outreach_channel_account_webhook_secret_fp_check
     CHECK (provider_webhook_secret_fp IS NULL OR (provider = 'unipile' AND provider_webhook_secret_fp ~ '^[0-9a-f]{16}$')),
-  ADD COLUMN keepalive_checked_at timestamptz;
+  ADD COLUMN keepalive_checked_at timestamptz,
+  -- 8 · La cuenta de Unipile que trajo el aviso de cuenta creada, guardada
+  -- en la pendiente de ese intento al recibirlo (la web, por su nonce
+  -- firmado). Si la conexión no se completa y el borrado en Unipile
+  -- falla, la conciliación del keepalive reconoce la cuenta como nuestra
+  -- por aquí, sin depender de que Unipile devuelva el `name` de la hosted
+  -- auth en la cuenta (docs/ventas-outreach.md §9.3, el plan B). No entra
+  -- en el candado de 0037 §2.1: no liga ni conecta nada, y lo único que
+  -- abre es que la conciliación borre una cuenta que NINGUNA fila nombra.
+  ADD COLUMN notified_account_id text
+    CONSTRAINT outreach_channel_account_notified_account_check
+    CHECK (notified_account_id IS NULL OR (provider = 'unipile' AND length(notified_account_id) BETWEEN 1 AND 256));
 
 COMMENT ON COLUMN outreach_channel_account.provider_identity IS
   'Quién es la persona en el proveedor (0042): el member id de LinkedIn o el id de Instagram que da Unipile. Única '
@@ -47,6 +59,9 @@ COMMENT ON COLUMN outreach_channel_account.provider_identity IS
 COMMENT ON COLUMN outreach_channel_account.provider_webhook_secret_fp IS
   'La huella (HMAC, 16 hex) del UNIPILE_WEBHOOK_SECRET con el que se dieron de alta los avisos de la cuenta (0042). '
   'El keepalive vuelve a darlos de alta cuando no es la del secreto actual: rotar el secreto no pierde respuestas.';
+COMMENT ON COLUMN outreach_channel_account.notified_account_id IS
+  'La cuenta de Unipile que trajo el aviso de cuenta creada de este intento (0042 §8). La conciliación del keepalive '
+  'borra por aquí una cuenta que nadie nombra aunque Unipile no devuelva el name de la hosted auth.';
 COMMENT ON COLUMN outreach_channel_account.keepalive_checked_at IS
   'Cuándo la comprobó el keepalive por última vez (0042): el cursor de sus lotes. Cada corrida toma las más viejas.';
 

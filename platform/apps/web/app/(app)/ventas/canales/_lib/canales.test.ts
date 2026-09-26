@@ -383,8 +383,13 @@ describe("el webhook de Unipile", () => {
     expect(await otra.json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.notThisAttempt });
     expect((await accounts()).some((a) => a.providerAccountId === "acc_li_otra_del_tenant")).toBe(false);
     expect(unipile.deletedAccounts, "lo que no es de este intento no se toca").not.toContain("acc_li_otra_del_tenant");
-    // Con la suya, sí: la fila vuelve a connected.
-    const ok = await unipileWebhook(webhook({ status: "RECONNECTED", account_id: "acc_li_web", name: relink.state }), deps());
+    // Ese intento ya no dice «Conectando»: su pendiente (por el nonce firmado) dice que no se pudo confirmar.
+    const fallida = (await accounts()).find((a) => a.channel === "linkedin" && a.lastError === "not_this_attempt");
+    expect(fallida?.status).toBe("disconnected");
+    // Con la suya, en un intento nuevo, sí: la fila vuelve a connected.
+    expect((await unipileStart(post("/ventas/canales/conectar", { canal: "linkedin", reconectar: li.id }), deps())).status).toBe(303);
+    const relink2 = unipile.hostedLinks.at(-1)!;
+    const ok = await unipileWebhook(webhook({ status: "RECONNECTED", account_id: "acc_li_web", name: relink2.state }), deps());
     expect(ok.status).toBe(200);
     expect((await accounts()).find((a) => a.id === li.id)?.status).toBe("connected");
   }, HEAVY_MS);
@@ -637,23 +642,65 @@ describe("un perfil es una cuenta (0042)", () => {
     expect(unipile.deletedAccounts, "no es nuestra: ni se liga ni se borra").not.toContain("acc_li_vieja_del_tenant");
   }, HEAVY_MS);
 
-  it("una cuenta nacida después del estado pero de OTRO intento (name de otro nonce) no se liga", async () => {
+  it("una cuenta nacida después del estado pero de OTRO intento (name de otro nonce) no se liga, y la pendiente lo dice", async () => {
     const link = await hostedAuth("linkedin");
     // Otro enlace del mismo tenant (otro cliente, u otro intento): su `name` es un estado nuestro, válido, con OTRO nonce.
     const otroIntento = signChannelState(
       { workspaceId: SEED_WORKSPACE_ID, creatorId: SEED_WORKSPACE_ID, channel: "linkedin", nonce: randomBytes(32).toString("hex") }, channelKeys(ENV)!.sign.state, NOW,
     );
     unipile.addAccount({ id: "acc_li_de_otro_intento", provider: "LINKEDIN", providerIdentity: "ACoAAB_otro_intento", hostedAuthName: otroIntento });
-    // Y una sin `name` (creada fuera de la hosted auth, por ejemplo con credenciales).
-    unipile.addAccount({ id: "acc_li_sin_name", provider: "LINKEDIN", providerIdentity: "ACoAAB_sin_name" });
-    for (const id of ["acc_li_de_otro_intento", "acc_li_sin_name"]) {
-      expect(await (await notify(id, link.state)).json(), id).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.notThisAttempt });
-      expect((await accounts()).some((a) => a.providerAccountId === id)).toBe(false);
-      expect(unipile.deletedAccounts, "no es de este intento: ni se liga ni se borra").not.toContain(id);
+    expect(await (await notify("acc_li_de_otro_intento", link.state)).json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.notThisAttempt });
+    expect((await accounts()).some((a) => a.providerAccountId === "acc_li_de_otro_intento")).toBe(false);
+    expect(unipile.deletedAccounts, "no es de este intento: ni se liga ni se borra").not.toContain("acc_li_de_otro_intento");
+    // La pendiente de ESTE intento deja de decir «Conectando»: la fila dice que no se pudo confirmar y ofrece volver a intentarlo.
+    const intento = (await accounts()).find((a) => a.channel === "linkedin" && a.lastError === "not_this_attempt")!;
+    expect(intento.status).toBe("disconnected");
+    const fila = channelRows([intento], channelSetup(ENV))[1]!;
+    expect(fila.reason).toBe(MESSAGES.detail.reasons.notThisAttempt("LinkedIn"));
+  }, HEAVY_MS);
+
+  it("plan B (§9.3): una cuenta de este intento cuyo name no trae el estado se liga por la fecha y el proveedor, y queda anotada", async () => {
+    const link = await hostedAuth("linkedin");
+    // Unipile no devolvió el estado en el name de la cuenta (el supuesto que la sesión real tiene que comprobar).
+    unipile.addAccount({ id: "acc_li_sin_name", provider: "LINKEDIN", providerIdentity: "ACoAAB_sin_name", hostedAuthName: null });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await (await notify("acc_li_sin_name", link.state)).json()).toEqual({ ok: true });
+      expect(warn.mock.calls.some(([m]) => String(m).includes("plan B")), "el registro dice que se ligó por el plan B").toBe(true);
+    } finally {
+      warn.mockRestore();
     }
-    // La pendiente sigue esperando a la suya: la de ESTE enlace sí se liga.
-    unipile.completeHostedAuth({ id: "acc_li_de_este_intento", provider: "LINKEDIN", providerIdentity: "ACoAAB_este_intento" }, link);
-    expect(await (await notify("acc_li_de_este_intento", link.state)).json()).toEqual({ ok: true });
+    expect((await accounts()).find((a) => a.providerAccountId === "acc_li_sin_name")?.status).toBe("connected");
+    const anotada = await db.queryAsSuperuser<{ n: number }>(
+      `SELECT count(*)::int AS n FROM outreach_channel_account WHERE notified_account_id = 'acc_li_sin_name'`,
+    );
+    expect(anotada.rows[0]?.n, "la cuenta queda anotada para la conciliación").toBe(1);
+  }, HEAVY_MS);
+
+  it("plan B: sin name, una cuenta de otro proveedor o nacida antes del intento no se liga", async () => {
+    const link = await hostedAuth("linkedin");
+    unipile.addAccount({ id: "acc_ig_sin_name", provider: "INSTAGRAM", providerIdentity: "ig_sin_name" });
+    expect(await (await notify("acc_ig_sin_name", link.state)).json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.notThisAttempt });
+    const otro = await hostedAuth("linkedin");
+    unipile.addAccount({ id: "acc_li_sin_name_vieja", provider: "LINKEDIN", createdAt: new Date(NOW.getTime() - 60 * 60_000) });
+    expect(await (await notify("acc_li_sin_name_vieja", otro.state)).json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.notThisAttempt });
+    for (const id of ["acc_ig_sin_name", "acc_li_sin_name_vieja"]) {
+      expect((await accounts()).some((a) => a.providerAccountId === id), id).toBe(false);
+      expect(unipile.deletedAccounts, id).not.toContain(id);
+    }
+  }, HEAVY_MS);
+
+  it("un name con forma de estado que no abre (falsificado o de otra llave) no cae al plan B", async () => {
+    const link = await hostedAuth("linkedin");
+    const ajeno = signChannelState(
+      { workspaceId: SEED_WORKSPACE_ID, creatorId: SEED_WORKSPACE_ID, channel: "linkedin", nonce: randomBytes(32).toString("hex") }, new Uint8Array(32).fill(3), NOW,
+    );
+    unipile.addAccount({ id: "acc_li_name_ajeno", provider: "LINKEDIN", providerIdentity: "ACoAAB_name_ajeno", hostedAuthName: ajeno });
+    expect(await (await notify("acc_li_name_ajeno", link.state)).json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.notThisAttempt });
+    // La de ESTE enlace, en otro intento, sí se liga.
+    const nuevo = await hostedAuth("linkedin");
+    unipile.completeHostedAuth({ id: "acc_li_de_este_intento", provider: "LINKEDIN", providerIdentity: "ACoAAB_este_intento" }, nuevo);
+    expect(await (await notify("acc_li_de_este_intento", nuevo.state)).json()).toEqual({ ok: true });
     expect((await accounts()).find((a) => a.providerAccountId === "acc_li_de_este_intento")?.status).toBe("connected");
   }, HEAVY_MS);
 

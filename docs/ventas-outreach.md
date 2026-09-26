@@ -2593,15 +2593,43 @@ cuentas existentes se migran borrando sus avisos por cuenta.
 Todo lo anterior está probado contra dobles (`FakeGmail`, `FakeUnipile`)
 y contra fixtures armados de la documentación de Google y de Unipile
 (`meta.source = 'docs'`). Eso prueba NUESTRA lógica, no que el servicio
-responda así. Tres cosas solo se saben con el servicio de verdad: si
-Unipile acepta y devuelve sin cortar el `name` de la hosted auth (el
-estado firmado: binario y cifrado, ~180 caracteres, ~210 al reconectar;
-la versión 1 medía ~500 y se acortó para dejarle margen a un recorte),
-la forma real del aviso de
-`notify_url` y del de mensajes (en especial `sender.attendee_provider_id`
-y `account_info`, de los que dependen casar la invitación aceptada y
-reconocer el eco), y la del canje de Google. Por eso VEN-9 queda
-**bloqueada** hasta grabarlas.
+responda así. Tres cosas solo se saben con el servicio de verdad:
+
+1. **Que `GET /accounts/{id}` devuelve en `name` el mismo `name` que se
+   mandó al pedir el enlace de hosted auth** (el estado firmado: binario
+   y cifrado, ~180 caracteres, ~210 al reconectar; la versión 1 medía
+   ~500 y se acortó para dejarle margen a un recorte). La documentación
+   de Unipile solo promete que `name` vuelve en el aviso de `notify_url`,
+   no en el objeto Account, y el fixture `accounts.get.hosted_auth.json`
+   se escribió suponiéndolo. De esto depende ligar una cuenta NUEVA por
+   la prueba estricta (`matchAttempt` en `ventas/canales/_lib/aviso.ts`:
+   el `name` de la cuenta es un estado nuestro con el mismo nonce). **El
+   plan B ya está en el código** por si el supuesto es falso: una cuenta
+   cuyo `name` no tiene forma de estado (vacío, el nombre de la persona,
+   uno recortado) se liga si nació durante el intento, es del proveedor
+   del canal y ninguna fila viva de ningún espacio la nombra
+   (`outreach_channel_connect` responde `taken` si no); el registro dice
+   «se liga por el plan B». Al recibir el aviso, la cuenta queda anotada
+   en la pendiente (`notified_account_id`, migración
+   `canales_identidad_y_rotacion` §8), y la conciliación del keepalive
+   reconoce por ahí una cuenta nuestra sin mirar su `name`. Lo que el
+   plan B pierde frente a la prueba estricta: quien conociera el
+   `account_id` de una cuenta ajena recién creada (solo lo ven Unipile y
+   nuestro servidor) podría ligarla antes que su dueño. Un `name` con
+   forma de estado que no abre nunca cae al plan B. Y una cuenta que no
+   es de ese intento no se liga ni se borra: la pendiente de ese nonce
+   pasa a «No pudimos confirmar la cuenta que conectaste» (`not_this_attempt`).
+2. La forma real del aviso de `notify_url` y del de mensajes (en especial
+   `sender.attendee_provider_id` y `account_info`, de los que dependen
+   casar la invitación aceptada y reconocer el eco).
+3. La del canje de Google.
+
+Por eso VEN-9 queda **bloqueada** hasta grabarlas. La puerta de la
+grabación (`outreach-grabacion.test.ts`) mira justo esto: la cuenta
+grabada tiene que traer en `name` el estado entero, y el aviso de cuenta
+creada tiene que haber LIGADO la cuenta (la respuesta de la web, en
+`meta.appReply`, sin `ignored`; un 200 solo no basta: la web también
+responde 200 cuando ignora un aviso).
 
 Qué hace falta (Rasheed; ninguna llave se inventa ni pasa por un chat):
 
@@ -2638,8 +2666,9 @@ estable. Después:
 
 - `pnpm --filter @mc/connectors test` pasa cada grabación por el
   normalizador de producción (`outreach-grabacion.test.ts`): la cuenta
-  trae `connection_params.im.id` y `created_at`, el aviso de cuenta
-  creada trae el estado entero y la web lo verificó (`appStatus` 200),
+  trae `connection_params.im.id`, `created_at` y el estado entero en
+  `name`, el aviso de cuenta creada trae el estado entero y la web lo
+  verificó y ligó la cuenta (`appStatus` 200 y `appReply` sin `ignored`),
   el de mensajes trae quién escribe, el canje trae `refresh_token` y los
   dos alcances, el Message-ID tiene su forma. Si algo no casa, se ajusta
   `parseUnipileWebhook`, `normalizeUnipileAccount` o `normalizeGmailMessage`

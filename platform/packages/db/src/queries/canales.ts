@@ -120,6 +120,12 @@ export const CHANNEL_ERROR_CODES = {
   unipileGone: 'unipile_gone',
   /** No se pudo comprobar la cuenta (red, 5xx, nuestra llave): la cuenta no cambia de estado. */
   transient: 'transient',
+  /**
+   * El aviso de cuenta creada trajo una cuenta que no es la de ese intento
+   * (otra que ya existía, la de otro enlace, o nacida fuera del intento).
+   * No se liga ni se borra; la pendiente deja de decir «Conectando».
+   */
+  notThisAttempt: 'not_this_attempt',
 } as const;
 
 /**
@@ -551,6 +557,29 @@ export async function failPendingChannelAccount(
     `UPDATE outreach_channel_account SET status = 'disconnected', last_error = $3, last_error_at = now()
       WHERE provider = $1 AND channel = $2 AND provider_account_id = $4 AND status = 'pending' RETURNING id`,
     [PROVIDER_FOR_CHANNEL[input.channel], input.channel, input.code.slice(0, 500), `${PENDING_ACCOUNT_PREFIX}${input.nonce}`],
+  );
+  return res.rows.length === 1;
+}
+
+/**
+ * Al recibir el aviso de cuenta creada de un intento (su nonce firmado):
+ * la cuenta de Unipile queda anotada en la pendiente (0042 §8), antes de
+ * ligarla. Si la conexión no se completa y el borrado en Unipile falla,
+ * la conciliación del keepalive la reconoce como nuestra por aquí, sin
+ * mirar su `name`. Solo la pendiente de ese nonce, en el espacio de la
+ * transacción.
+ */
+export async function noteNotifiedAccount(
+  tx: WorkspaceTx,
+  input: { channel: ConnectableChannel; nonce: string; providerAccountId: string },
+): Promise<boolean> {
+  if (!NONCE_RE.test(input.nonce) || input.channel === 'email') return false;
+  const id = input.providerAccountId.trim();
+  if (id === '' || id.length > 256) return false;
+  const res = await tx.query(
+    `UPDATE outreach_channel_account SET notified_account_id = $3
+      WHERE provider = 'unipile' AND channel = $1 AND provider_account_id = $2 AND status = 'pending' RETURNING id`,
+    [input.channel, `${PENDING_ACCOUNT_PREFIX}${input.nonce}`, id],
   );
   return res.rows.length === 1;
 }

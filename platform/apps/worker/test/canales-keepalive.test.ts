@@ -433,6 +433,22 @@ test('conciliación: una cuenta de Unipile de NUESTRA hosted auth sin fila y con
   assert.ok(!unipile.deletedAccounts.includes('acc_huerfana_2'));
 });
 
+test('conciliación sin name (plan B, §9.3): una cuenta que el aviso anotó en su pendiente se reconoce como nuestra; una que nadie anotó, no', async () => {
+  const llave = new Uint8Array(32).fill(9);
+  const viejo = new Date(NOW.getTime() - 3 * 24 * 3600_000);
+  // Unipile no devolvió el estado en el name: la cuenta trae el nombre de la persona.
+  unipile.addAccount({ id: 'acc_anotada', hostedAuthName: 'Laura Gómez', createdAt: viejo });
+  unipile.addAccount({ id: 'acc_sin_anotar', hostedAuthName: 'Cuenta de prueba del operador', createdAt: viejo });
+  await db.raw.query(
+    `INSERT INTO outreach_channel_account (workspace_id, creator_id, channel, provider, provider_account_id, status, last_error, notified_account_id)
+     VALUES ($1, $2, 'linkedin', 'unipile', $3, 'disconnected', 'duplicate', 'acc_anotada')`,
+    [WS, CREATOR, `pending:${'n'.repeat(43)}`],
+  );
+  await runChannelsKeepalive({ db, secrets: store, google: null, unipile, stateKeys: [llave], now: NOW });
+  assert.ok(unipile.deletedAccounts.includes('acc_anotada'), 'la anotó un aviso nuestro y ninguna fila la nombra');
+  assert.ok(!unipile.deletedAccounts.includes('acc_sin_anotar'), 'sin name nuestro ni aviso, no se sabe de quién es');
+});
+
 test('limpieza: los intentos fallidos o cancelados ya soltados hace más de una semana se borran; los recientes se quedan', async () => {
   const VIEJO = '0000000b-0000-4000-8000-0000000ac0a1';
   const RECIENTE = '0000000b-0000-4000-8000-0000000ac0a2';

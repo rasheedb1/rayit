@@ -239,6 +239,18 @@ export function verifyChannelState(token: string | null | undefined, keys: Uint8
 }
 
 /**
+ * ¿Tiene la FORMA de un estado firmado entero? `<cuerpo>.<hmac>`, los dos
+ * en base64url, con el HMAC-SHA256 entero (43 caracteres). No verifica
+ * nada: separa un `name` que es un estado nuestro (o uno falsificado, que
+ * verifyChannelState rechaza) de uno que no lo es (vacío, el nombre de la
+ * persona, un estado recortado). Lo usa el plan B de la cuenta creada
+ * (docs/ventas-outreach.md §9.3).
+ */
+export function looksLikeChannelState(value: string | null | undefined): boolean {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{43}$/.test(value);
+}
+
+/**
  * El provider_account_id de la fila 'pending' de Unipile, antes de que
  * el proveedor diga cuál es la cuenta: 'pending:<nonce>'. No choca con
  * ningún account_id real y hace de un solo uso al nonce: cuando llega el
