@@ -150,7 +150,7 @@ export const STORIES: readonly Story[] = [
     desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
     done: "Veinte corridas seguidas de pnpm verificar en una máquina cargada, sin una sola prueba cancelada.",
     status: "hecho",
-    note: "Cerrada en VEN-15 r5 (25-sep). Dos causas. (1) Con --test-isolation=none el before() de nivel superior de cada archivo cuelga de la prueba raíz y todos corren antes de listSql, contra SUS 120 s; veinte bases migradas y sembradas pasaban de ese tiempo bajo carga. Arreglo: openTestDb migra y siembra una vez por proceso y abre cada base desde esa foto (PGlite dumpDataDir/loadDataDir, embedded.ts). (2) Las «736 canceladas con event loop has already resolved» no eran de @mc/db: turbo corta a las tareas hermanas cuando otra falla. verificar lleva --continue. No era `await acepto`. Prueba: veinte corridas seguidas con carga 17-59, cero pruebas canceladas y listSql en 7-24 s (antes 43-119); una falló en web por un foco medido antes de su efecto (baja.test.tsx), endurecido con waitFor igual que el del interruptor y el de ConfirmarAccion, y después tres corridas más en verde.",
+    note: "Cerrada en VEN-15 r5 (25-sep): openTestDb abre cada base desde una foto migrada una vez por proceso y verificar corre con --continue; veinte corridas con carga, sin pruebas canceladas.",
   },
   {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],
@@ -408,7 +408,7 @@ export const STORIES: readonly Story[] = [
     desc: "Migración 0037_outreach con las tablas de outreach, conector de Unipile con hosted auth y webhook firmado para LinkedIn e Instagram, OAuth de Google con gmail.send y gmail.modify, pantalla de canales con estado y límites, keepalive diario del token.",
     done: "Un creador conecta su Gmail y su LinkedIn; el token de Google se refresca solo; una cuenta caída se ve en rojo con el botón de reconectar.",
     status: "bloqueada",
-    note: "Integrada en rasheed/integracion (fase 4). Bloqueada por llaves externas, no por código. Hecho: conectar Gmail, LinkedIn e Instagram con estado firmado (la cuenta nueva se ata al intento por su name), avisos con secreto y ruta firmada, keepalive, límites por cuenta que dicen quién los fija, Instagram apagado por defecto en la política, y lectura de respuestas y rebotes de correo real (charset, solo HTML, DSN). Falta: grabar una sesión real contra Google y Unipile (docs/ventas-outreach.md §9.3): Rasheed crea un cliente OAuth de Google en modo Prueba y una cuenta de prueba de Unipile, guarda sus llaves en .env.local y corre `pnpm --filter @mc/connectors record:outreach -- google | avisos | unipile`; grabados.test.ts no deja marcarla «hecho» sin las once grabaciones y su fecha en esta nota. Y aplicar en Supabase el esquema 0038 a 0045.",
+    note: "Código listo contra FakeGmail y FakeUnipile, con plan B si Unipile no devuelve el name de la hosted auth en la cuenta (§9.3). Pendiente humano: grabar la sesión real (cliente OAuth propio del outreach, GOOGLE_OUTREACH_CLIENT_ID, y cuenta de prueba de Unipile; `record:outreach -- google | avisos | unipile`) y aplicar las migraciones de canales. Al renumerarlas, el código las cita por nombre.",
   },
   {
     id: "VEN-10", module: "VEN", owner: "rasheed", size: "L", sprint: 4, deps: ["VEN-9", "CON-2", "VEN-15"],
@@ -454,9 +454,9 @@ export const STORIES: readonly Story[] = [
     id: "VEN-15", module: "VEN", owner: "rasheed", size: "M", sprint: 4, deps: ["VEN-10"],
     title: "Entregabilidad y cumplimiento",
     desc: "Pie de baja con página pública, cabecera List-Unsubscribe de un clic, rebotes asíncronos, calentamiento progresivo por cuenta, baja respetada en todos los canales, alertas diarias por correo.",
-    done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud. Cambio del criterio (supuestos declarados, docs/ventas-outreach.md §8, decisiones 6 y 7; Rasheed puede revertirlos): el clic da de baja con quien envió, en todos sus canales, y nunca en toda la plataforma; el enlace es un token opaco atado al contacto y al workspace en la base.",
+    done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud.",
     status: "hecho",
-    note: "Probado en pglite de punta a punta: baja por enlace (ni el remitente sin sesión ni dos registros nuevos suprimen a nadie para los demás), rebote de fixture que marca y cancela, y alertas una vez por tipo y día con resumen en Cco. Integrada en la fase 4 con VEN-9 y VEN-10: el job de rebotes lee Gmail con el GmailChannel del despachador (gmailMailboxes), BOUNCE_READING_CONNECTED en true y las cuentas caídas llevan a /ventas/canales. Su migración es 0050_entregabilidad, sin aplicar en Supabase.",
+    note: "Probado en pglite de punta a punta y leyendo Gmail con el conector de VEN-9. Solo 5.1.x es rebote duro; los bloqueos (5.7.x, el límite diario 5.4.5) suman a la tasa. Pendiente humano: el visto bueno de Rasheed a las decisiones 6 y 7 de docs/ventas-outreach.md §8 (la baja vale para quien envió, no para toda la plataforma; token opaco en vez de firmado) y aplicar 0050_entregabilidad.",
   },
   {
     id: "VEN-16", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-10"],
