@@ -14,18 +14,23 @@ export interface TipoReintentable {
 
 /**
  * «Reintentar lo fallido» por tipo de paso, como la pestaña Queue de
- * Chief: un botón por tipo con cuántos fallidos reintentables tiene, con
- * la cadencia y el contacto que filtra la pantalla. El resultado se
- * anuncia (qué volvió a la cola y qué no, con su motivo).
+ * Chief: un botón por tipo con cuántos fallidos puede de verdad volver a
+ * la cola (el conteo sale de la misma regla de la base que el reintento,
+ * así que ningún botón queda muerto), con la cadencia y el contacto que
+ * filtra la pantalla.
  *
- * La pantalla lo monta siempre en la cola, también sin nada que
- * reintentar: así, después de reintentar lo último, el resultado sigue a
- * la vista. Sin tipos y sin resultado, no pinta nada.
+ * El resultado sube a `onResultado` (PanelActividad): después de
+ * reintentar lo último este bloque desaparece, y el aviso sigue a la
+ * vista. Sin tipos, no pinta nada.
  */
 export function ReintentarPorTipo({
-  tipos, sequenceId, contact,
-}: { tipos: TipoReintentable[]; sequenceId: string | null; contact: string | null }) {
-  const [estado, setEstado] = useState<ActividadState>({});
+  tipos, sequenceId, contact, onResultado,
+}: {
+  tipos: TipoReintentable[];
+  sequenceId: string | null;
+  contact: string | null;
+  onResultado: (r: ActividadState) => void;
+}) {
   const [ocupado, empezar] = useTransition();
   const [cual, setCual] = useState<string | null>(null);
   const t = MESSAGES.reintentar;
@@ -33,12 +38,13 @@ export function ReintentarPorTipo({
   function reintentar(stepType: string) {
     setCual(stepType);
     empezar(async () => {
-      setEstado(await reintentarPorTipo({ stepType, sequenceId, contact }));
+      const r = await reintentarPorTipo({ stepType, sequenceId, contact });
       setCual(null);
+      onResultado(r);
     });
   }
 
-  if (tipos.length === 0 && !estado.ok && !estado.error) return null;
+  if (tipos.length === 0) return null;
   return (
     <section aria-labelledby="reintentar-titulo" className="rounded-md border border-line bg-surface p-3 sm:p-4">
       <h2 id="reintentar-titulo" className="text-sm font-semibold">{t.titulo}</h2>
@@ -58,9 +64,6 @@ export function ReintentarPorTipo({
           </Button>
         ))}
       </div>
-      <p role="status" aria-live="polite" className={`mt-2 text-xs ${estado.error ? "text-bad" : "text-fg-2"}`}>
-        {estado.error ?? estado.ok ?? ""}
-      </p>
     </section>
   );
 }

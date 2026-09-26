@@ -347,6 +347,23 @@ export function formatDateTime(iso: string, opts: LocaleOpts = {}): string {
 }
 
 /**
+ * Fecha y hora cortas de un instante, en el locale y la zona pedidos:
+ * "25 sept, 7:31 p. m." en es-CO, "Sep 25, 7:31 PM" en en-US. Para una
+ * fila de lista a 400 px, donde el formato largo ("25 de septiembre de
+ * 2026, 7:31 p. m.") parte la hora en dos líneas; el largo va en el
+ * `title` o en el detalle. Sin año: una lista de actividad es de los
+ * últimos días. Añadido por la actividad del outreach (VEN-16); no cambia
+ * nada de lo que ya había.
+ */
+export function formatDateTimeShort(iso: string, opts: LocaleOpts = {}): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  const timeZone = opts.timeZone ?? DEFAULT_TIME_ZONE;
+  return plain(
+    dateFormat(locale, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone }).format(utcDate(iso)),
+  );
+}
+
+/**
  * Solo la hora de un instante, en el locale y la zona pedidos: "3:15 p. m."
  * en es-CO. Para frases que ya dicen el día («podrás volver a probar a
  * las…»). Añadido por Cotizar (COT-2); no cambia nada de lo que ya había.
@@ -515,6 +532,8 @@ export function formatterFor(settings: FormatSettings) {
     dayMonth: (iso: string) => formatDayMonth(iso, base),
     dayMonthRange: (from: string, to: string) => formatDayMonthRange(from, to, base),
     dateTime: (iso: string) => formatDateTime(iso, base),
+    /** «25 sept, 7:31 p. m.»: fecha y hora cortas, para una fila (el largo, en su detalle). */
+    dateTimeShort: (iso: string) => formatDateTimeShort(iso, base),
     time: (iso: string) => formatTime(iso, base),
     dateRange: (from: string, to: string) => formatDateRange(from, to, base),
     country: (code: string) => formatCountry(code, base),

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useId, useState, useTransition } from "react";
+import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmInline } from "@/components/ui/confirm-inline";
 import { Pill, type PillKind } from "@/components/ui/pill";
@@ -19,39 +20,80 @@ export interface FilaVista {
   contacto: string;
   /** La marca y la cadencia. */
   contexto: string;
-  paso: string;
+  /** El paso, o null si ya es el título o no tiene (un toque suelto: el contexto dice «Sin cadencia»). */
+  paso: string | null;
+  /** Cuándo, corto («Falló 24 de sept, 7:31 p. m.»), y la fecha larga para el detalle. */
   cuando: string;
-  cuandoTitulo: string | null;
-  /** La frase del motivo (se corta en la fila) y su detalle con el código (el título al pasar el cursor). */
+  cuandoCompleto: string | null;
+  /** «Desde laura@marca.test»: la cuenta con la que salió o se intentó. */
+  cuenta: string | null;
+  /** La frase del motivo (se corta en la fila cerrada) y su código para soporte (en el detalle que se despliega). */
   motivo: string | null;
-  motivoDetalle: string | null;
+  motivoCodigo: string | null;
   motivoTono: "bad" | "warn" | "muted";
   marcas: string[];
   intentos: string | null;
   reintentable: boolean;
-  /** Fallido pero no reintentable: se dice por qué, en vez de ofrecer el botón. */
-  noReintentable: boolean;
+  /** Fallido que no se puede reintentar: por qué, en vez del botón. */
+  bloqueo: string | null;
+  /** Fallido por la cuenta del canal, sin ninguna conectada: se ofrece reconectar en vez del botón. */
+  reconectar: boolean;
   cancelable: boolean;
   enviando: boolean;
   fichaHref: string;
 }
 
 const TONO = { bad: "text-bad", warn: "text-warn", muted: "text-fg-2" } as const;
+const CANALES_URL = "/ventas/canales";
+
+/**
+ * El motivo de una fila: cortado en una línea mientras está cerrado y
+ * entero al abrirlo, con su código y su fecha completa. Es un
+ * <details>/<summary>: se abre con el ratón, con el dedo (a 400 px no hay
+ * cursor) y con Intro o Espacio desde el teclado, y un lector de pantalla
+ * lo anuncia como algo que se despliega.
+ */
+function Motivo({ f }: { f: FilaVista }) {
+  return (
+    <details className="group text-xs">
+      <summary
+        className={`flex min-w-0 cursor-pointer list-none items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink [&::-webkit-details-marker]:hidden ${TONO[f.motivoTono]}`}
+        title={MESSAGES.fila.detalle.abrir}
+      >
+        <span className="sr-only">{MESSAGES.fila.motivo}: </span>
+        <span className="min-w-0 truncate group-open:whitespace-normal">{f.motivo}</span>
+        <ChevronDown size={12} aria-hidden className="shrink-0 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="mt-1 flex flex-col gap-0.5 border-l border-line pl-2 text-fg-3">
+        {f.motivoCodigo && <p className="font-mono">{f.motivoCodigo}</p>}
+        {f.cuandoCompleto && <p className="tabular-nums">{f.cuandoCompleto}</p>}
+      </div>
+    </details>
+  );
+}
 
 /**
  * La cola o el historial, como la lista de eventos de Stripe: una fila por
  * mensaje, con su estado, a quién, qué paso y cuándo; el motivo cortado en
- * una línea, entero al pasar el cursor (y entero para un lector de
- * pantalla, que lee el texto y no el corte). En la cola, cada fila
- * cancelable lleva su casilla y la barra de arriba cancela lo
- * seleccionado, con una confirmación en el sitio; un fallido reintentable
- * lleva su «Reintentar».
+ * una línea, entero al desplegarlo. En la cola, cada fila cancelable lleva
+ * su casilla y la barra de arriba cancela lo seleccionado, con una
+ * confirmación en el sitio; un fallido reintentable lleva su «Reintentar»,
+ * uno bloqueado dice por qué, y uno cuya cuenta está caída lleva a
+ * reconectarla.
+ *
+ * El resultado de cada acción no se pinta aquí: sube a `onResultado`
+ * (PanelActividad), que lo mantiene a la vista aunque la lista se vacíe.
  */
 export function ListaActividad({
-  filas, seleccionable, caption, locale,
-}: { filas: FilaVista[]; seleccionable: boolean; caption: string; locale: string }) {
+  filas, seleccionable, caption, locale, onResultado,
+}: {
+  filas: FilaVista[];
+  seleccionable: boolean;
+  caption: string;
+  locale: string;
+  onResultado: (r: ActividadState) => void;
+}) {
   const [seleccion, setSeleccion] = useState<ReadonlySet<string>>(new Set());
-  const [estado, setEstado] = useState<ActividadState>({});
   const [ocupada, empezar] = useTransition();
   const [reintentando, setReintentando] = useState<string | null>(null);
   const idTodas = useId();
@@ -71,15 +113,16 @@ export function ListaActividad({
   async function cancelar() {
     const ids = [...seleccion].filter((id) => cancelables.includes(id));
     const r = await cancelarSeleccion(ids);
-    setEstado(r);
     if (r.ok) setSeleccion(new Set());
+    onResultado(r);
   }
 
   function reintentar(id: string) {
     setReintentando(id);
     empezar(async () => {
-      setEstado(await reintentarUno(id));
+      const r = await reintentarUno(id);
       setReintentando(null);
+      onResultado(r);
     });
   }
 
@@ -112,9 +155,6 @@ export function ListaActividad({
           )}
         </div>
       )}
-      <p role="status" aria-live="polite" className={estado.error ? "text-sm text-bad" : "text-sm text-fg-2"}>
-        {estado.error ?? estado.ok ?? ""}
-      </p>
       <ul aria-label={caption} className="divide-y divide-line rounded-md border border-line bg-surface">
         {filas.map((f) => (
           <li key={f.id} className="flex items-start gap-3 px-3 py-3 sm:px-4">
@@ -143,24 +183,25 @@ export function ListaActividad({
                     {f.contexto}
                   </p>
                 </div>
-                <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 sm:justify-end">
                   <Pill kind={f.estadoKind}>{f.estado}</Pill>
-                  <span className="text-xs tabular-nums text-fg-2" title={f.cuandoTitulo ?? undefined}>{f.cuando}</span>
+                  <span className="whitespace-nowrap text-xs tabular-nums text-fg-2" title={f.cuandoCompleto ?? undefined}>{f.cuando}</span>
                 </div>
               </div>
               <p className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-fg-3">
-                {/* Sin asunto, el título ya es el paso: no se repite. */}
-                {f.paso !== f.titulo && <span>{f.paso}</span>}
+                {f.paso && <span>{f.paso}</span>}
                 {f.intentos && <span className="tabular-nums">{f.intentos}</span>}
+                {f.cuenta && <span className="min-w-0 break-all">{f.cuenta}</span>}
                 {f.marcas.map((m) => <span key={m} className="text-good">{m}</span>)}
               </p>
-              {f.motivo && (
-                <p className={`truncate text-xs ${TONO[f.motivoTono]}`} title={f.motivoDetalle ?? undefined}>
-                  <span className="sr-only">{MESSAGES.fila.motivo}: </span>
-                  {f.motivo}
+              {f.motivo && <Motivo f={f} />}
+              {f.bloqueo && <p className="text-xs text-fg-3">{f.bloqueo}</p>}
+              {f.reconectar && (
+                <p className="text-xs text-fg-2">
+                  {MESSAGES.reintentar.reconectar}{" "}
+                  <Link href={CANALES_URL} className="font-medium text-fg underline underline-offset-2">{MESSAGES.reintentar.irACanales}</Link>
                 </p>
               )}
-              {f.noReintentable && <p className="text-xs text-fg-3">{MESSAGES.reintentar.noReintentable}</p>}
             </div>
             {f.reintentable && (
               <Button size="sm" variant="secondary" loading={ocupada && reintentando === f.id} disabled={ocupada} onClick={() => reintentar(f.id)}>

@@ -8,7 +8,7 @@ import { FAILURE_REASON_TEXTS, holdReasonText, noticeLang, type NoticeLang } fro
 import type { BulkReport, QueueBucket, TouchStatus } from "@mc/db/queries/actividad";
 import type { PillKind } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
-import { IDIOMA_MENSAJES, MESSAGES } from "../messages";
+import { IDIOMA_MENSAJES, MESSAGES, motivoTexto } from "../messages";
 
 export const ACTIVIDAD_URL = "/ventas/actividad";
 
@@ -24,13 +24,28 @@ export const ESTADO_PILL: Record<TouchStatus, PillKind> = {
   canceled: "neutral",
 };
 
-/** Lo que la URL puede pedir: la pestaña y los tres filtros. */
+/** Una página que no es la primera: las filas después (siguiente) o antes (anterior) de un cursor. */
+export interface Pagina {
+  direction: "next" | "prev";
+  token: string;
+}
+
+/** Lo que la URL puede pedir: la pestaña, los tres filtros y la página. */
 export interface Filtros {
   vista: QueueBucket;
   cadencia: string | null;
   tipo: string | null;
   contacto: string | null;
+  pagina?: Pagina | null;
 }
+
+/**
+ * La forma de un cursor de @mc/db (listOutboundQueue): el instante en UTC
+ * con microsegundos (o «infinity») y el id del toque, con el 0/1 de
+ * «fallido primero» delante en la cola. Lo que no tiene esta forma no
+ * llega a la base; la base, además, lo vuelve a validar por pestaña.
+ */
+const CURSOR_RE = /^(?:[01]_)?(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z|infinity)_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -46,16 +61,24 @@ export function filtrosDe(params: Params): Filtros {
     cadencia: uno(params.cadencia),
     tipo: uno(params.tipo),
     contacto: uno(params.contacto),
+    pagina: paginaDe(uno(params.siguiente), uno(params.anterior)),
   };
 }
 
-/** La URL de unos filtros, sin los vacíos: «/ventas/actividad?vista=historial&tipo=email». */
+function paginaDe(siguiente: string | null, anterior: string | null): Pagina | null {
+  if (siguiente && CURSOR_RE.test(siguiente)) return { direction: "next", token: siguiente };
+  if (anterior && CURSOR_RE.test(anterior)) return { direction: "prev", token: anterior };
+  return null;
+}
+
+/** La URL de unos filtros, sin los vacíos: «/ventas/actividad?vista=historial&tipo=email&siguiente=…». */
 export function hrefDe(f: Filtros): string {
   const q = new URLSearchParams();
   if (f.vista === "history") q.set("vista", "historial");
   if (f.cadencia) q.set("cadencia", f.cadencia);
   if (f.tipo) q.set("tipo", f.tipo);
   if (f.contacto) q.set("contacto", f.contacto);
+  if (f.pagina) q.set(f.pagina.direction === "next" ? "siguiente" : "anterior", f.pagina.token);
   const s = q.toString();
   return s ? `${ACTIVIDAD_URL}?${s}` : ACTIVIDAD_URL;
 }
@@ -76,14 +99,13 @@ export function motivoDe(status: TouchStatus, reason: string | null, locale: str
   const lang: NoticeLang = noticeLang(locale);
   if (status === "held") return mayuscula(holdReasonText(lang, reason));
   const code = reason.split(":")[0]!;
-  const frase = MESSAGES.motivos[code] ?? FAILURE_REASON_TEXTS[lang][code] ?? MESSAGES.motivoGenerico;
-  return mayuscula(frase);
+  const proveedor = Object.hasOwn(FAILURE_REASON_TEXTS[lang], code) ? FAILURE_REASON_TEXTS[lang][code] : undefined;
+  return mayuscula(motivoTexto(code) ?? proveedor ?? MESSAGES.motivoGenerico);
 }
 
-/** Lo que dice el título al pasar el cursor por el motivo: la frase entera y el código, para soporte. */
-export function detalleDeMotivo(status: TouchStatus, reason: string | null, locale: string): string | null {
-  const frase = motivoDe(status, reason, locale);
-  return frase && reason ? MESSAGES.fila.detalleMotivo(frase, reason) : null;
+/** El código del motivo, para soporte: «código: account_auth». Va en el detalle que se despliega en la fila. */
+export function codigoDeMotivo(reason: string | null): string | null {
+  return reason ? MESSAGES.fila.detalle.codigo(reason) : null;
 }
 
 /**

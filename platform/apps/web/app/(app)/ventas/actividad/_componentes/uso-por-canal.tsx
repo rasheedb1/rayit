@@ -1,4 +1,5 @@
-import type { CSSProperties } from "react";
+import Link from "next/link";
+import { Suspense, type CSSProperties, type ReactNode } from "react";
 import { listChannelUsage, type ChannelUsage, type UsageLevel } from "@mc/db/queries/actividad";
 import { SectionTitle } from "@/components/page-header";
 import { Pill, type PillKind } from "@/components/ui/pill";
@@ -6,14 +7,20 @@ import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
 import { MESSAGES } from "../messages";
+import { FronteraWidget } from "./frontera-widget";
 
 const T = MESSAGES.uso;
 
-/** El semáforo: verde con margen, ámbar cerca del límite, rojo en él. El texto va siempre al lado del color. */
-const NIVEL_PILL: Record<UsageLevel, PillKind> = { ok: "good", near: "warn", full: "bad" };
-const NIVEL_BARRA: Record<UsageLevel, string> = { ok: "bg-good", near: "bg-warn", full: "bg-bad" };
+/**
+ * El semáforo: verde con margen, ámbar cerca del límite, rojo en él, y
+ * gris «Sin envío» cuando no sale nada aunque haya cupo (la cuenta caída o
+ * el envío apagado): el verde nunca dice que se envía cuando no. El texto
+ * va siempre al lado del color.
+ */
+const NIVEL_PILL: Record<UsageLevel, PillKind> = { ok: "good", near: "warn", full: "bad", off: "neutral" };
+const NIVEL_BARRA: Record<UsageLevel, string> = { ok: "bg-good", near: "bg-warn", full: "bg-bad", off: "bg-fg-3" };
 /** Los días pasados, en gris salvo los que llegaron cerca o al límite. */
-const NIVEL_DIA: Record<UsageLevel, string> = { ok: "bg-fg-3", near: "bg-warn", full: "bg-bad" };
+const NIVEL_DIA: Record<Exclude<UsageLevel, "off">, string> = { ok: "bg-fg-3", near: "bg-warn", full: "bg-bad" };
 
 /** Lo que pinta una cuenta, ya formateado. Las fracciones van a CSS como variables: aquí no se multiplica nada. */
 export interface UsoVista {
@@ -26,18 +33,27 @@ export interface UsoVista {
   blando: string;
   duro: string;
   calentando: string | null;
+  /** Qué tope manda hoy, si no es el diario de la cuenta. */
+  manda: string | null;
   proveedor: string;
-  caida: boolean;
+  /** Por qué no sale nada, con adónde ir a arreglarlo; null si sale. */
+  sinEnvio: { texto: string; enlace: string; href: string } | null;
   usedShare: number;
   softShare: number;
   medidor: string;
-  dias: { key: string; label: string; share: number; nivel: UsageLevel }[];
+  dias: { key: string; label: string; share: number; nivel: Exclude<UsageLevel, "off"> }[];
 }
 
 export function usoVista(u: ChannelUsage, f: Formatter): UsoVista {
-  const canal = T.canales[u.channel] ?? u.channel;
+  const canal = T.canales[u.channel];
   const cuenta = u.accountName ?? canal;
   const nivelTexto = T.niveles[u.level];
+  const manda =
+    u.limitedBy === "week"
+      ? T.manda.week(f.int(u.weekUsed), f.int(u.weeklyLimit))
+      : u.limitedBy === "workspace" && u.workspaceUsed !== null && u.workspaceLimit !== null
+        ? T.manda.workspace(f.int(u.workspaceUsed), f.int(u.workspaceLimit))
+        : null;
   return {
     id: u.accountId,
     canal,
@@ -47,9 +63,10 @@ export function usoVista(u: ChannelUsage, f: Formatter): UsoVista {
     cifra: T.cifra(f.int(u.used), f.int(u.hardLimit)),
     blando: T.blando(f.int(u.softLimit)),
     duro: T.duro(f.int(u.hardLimit)),
-    calentando: u.warmingUp ? T.calentando(f.int(u.hardLimit), f.int(u.dailyLimit)) : null,
+    calentando: u.warmingUp ? T.calentando(f.int(u.dayLimit), f.int(u.dailyLimit)) : null,
+    manda,
     proveedor: T.proveedor(f.int(u.providerLimit), canal),
-    caida: u.accountStatus !== "connected",
+    sinEnvio: u.offReason ? T.sinEnvio[u.offReason] : null,
     usedShare: u.usedShare,
     softShare: u.softShare,
     medidor: T.medidor(cuenta, f.int(u.used), f.int(u.hardLimit), nivelTexto),
@@ -102,8 +119,14 @@ function Cuenta({ u }: { u: UsoVista }) {
         <span>{u.duro}</span>
         <span className="text-fg-3">{u.proveedor}</span>
       </p>
+      {u.manda && <p className="text-xs text-fg-2">{u.manda}</p>}
       {u.calentando && <p className="text-xs text-fg-2">{u.calentando}</p>}
-      {u.caida && <p className="text-xs text-warn">{T.caida}</p>}
+      {u.sinEnvio && (
+        <p className="text-xs text-warn">
+          {u.sinEnvio.texto}{" "}
+          <Link href={u.sinEnvio.href} className="font-medium underline underline-offset-2">{u.sinEnvio.enlace}</Link>
+        </p>
+      )}
       <div>
         <p className="sr-only">{T.historia}</p>
         <ul className="sr-only">
@@ -124,14 +147,22 @@ function Cuenta({ u }: { u: UsoVista }) {
   );
 }
 
-/** El widget sin datos propios: recibe las cuentas ya formateadas (para la galería y las pruebas). */
-export function UsoPorCanalVista({ cuentas }: { cuentas: UsoVista[] }) {
+function Seccion({ children }: { children: ReactNode }) {
   return (
     <section aria-labelledby="uso-por-canal">
       <SectionTitle>
         <span id="uso-por-canal">{T.titulo}</span>
       </SectionTitle>
       <p className="-mt-1 mb-3 max-w-2xl text-xs text-fg-2">{T.descripcion}</p>
+      {children}
+    </section>
+  );
+}
+
+/** El widget sin datos propios: recibe las cuentas ya formateadas (para la galería y las pruebas). */
+export function UsoPorCanalVista({ cuentas }: { cuentas: UsoVista[] }) {
+  return (
+    <Seccion>
       {cuentas.length === 0 ? (
         <p className="rounded-md border border-line bg-surface px-4 py-3 text-sm text-fg-2">{T.vacio}</p>
       ) : (
@@ -139,18 +170,50 @@ export function UsoPorCanalVista({ cuentas }: { cuentas: UsoVista[] }) {
           {cuentas.map((u) => <Cuenta key={u.id} u={u} />)}
         </ul>
       )}
-    </section>
+    </Seccion>
   );
 }
 
-/**
- * El uso por canal con su límite blando, su límite duro y su semáforo,
- * montable con una línea (`<UsoPorCanal />`): lee el uso del espacio de la
- * sesión (listChannelUsage, la vista outbound_usage_daily con la curva de
- * calentamiento del despachador) y lo formatea en su idioma y su zona.
- */
-export async function UsoPorCanal() {
+/** Mientras la consulta responde: la sección con dos cuentas en gris. */
+export function UsoPorCanalEsqueleto() {
+  return (
+    <Seccion>
+      <ul aria-busy="true" aria-label={T.cargando} className="divide-y divide-line rounded-md border border-line bg-surface">
+        {[0, 1].map((i) => (
+          <li key={i} className="flex flex-col gap-2 px-4 py-3">
+            <span className="block h-4 w-1/3 animate-pulse rounded-sm bg-hover" />
+            <span className="block h-2 w-full animate-pulse rounded-full bg-hover" />
+            <span className="block h-6 w-full animate-pulse rounded-sm bg-hover" />
+          </li>
+        ))}
+      </ul>
+    </Seccion>
+  );
+}
+
+async function UsoPorCanalDatos() {
   const usage = await withWorkspace((tx) => listChannelUsage(tx));
   const f = formatterFor(await getCurrentWorkspace());
   return <UsoPorCanalVista cuentas={usage.map((u) => usoVista(u, f))} />;
+}
+
+/**
+ * El uso por canal con su límite blando, su límite duro, el tope que
+ * manda y su semáforo, montable con una línea (`<UsoPorCanal />`): lee el
+ * uso del espacio de la sesión (listChannelUsage, la vista
+ * outbound_usage_daily con la curva de calentamiento y los tres topes del
+ * despachador) y lo formatea en su idioma y su zona.
+ *
+ * Trae su Suspense y su frontera de error: mientras carga, un esqueleto;
+ * si su consulta falla, un aviso en su sitio. La pantalla anfitriona no
+ * espera por él ni cae con él.
+ */
+export function UsoPorCanal() {
+  return (
+    <FronteraWidget aviso={T.error}>
+      <Suspense fallback={<UsoPorCanalEsqueleto />}>
+        <UsoPorCanalDatos />
+      </Suspense>
+    </FronteraWidget>
+  );
 }

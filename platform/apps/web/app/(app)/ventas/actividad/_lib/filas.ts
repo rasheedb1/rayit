@@ -8,29 +8,40 @@ import type { Formatter } from "@/lib/format";
 import { etiquetaTipo } from "../../cadencias/_lib/vista";
 import type { FilaVista } from "../lista";
 import { MESSAGES } from "../messages";
-import { detalleDeMotivo, ESTADO_PILL, motivoDe } from "./vista";
+import { codigoDeMotivo, ESTADO_PILL, motivoDe } from "./vista";
 
 const T = MESSAGES.fila;
 
-/** Cuándo, en una frase: lo que va a salir, cuándo sale; lo que salió, cuándo salió; lo demás, cuándo cambió. */
-function cuando(r: QueueRow, f: Formatter): string {
-  if (r.status === "sent" && r.sentAt) return T.salio(f.dateTime(r.sentAt.toISOString()));
+/**
+ * Cuándo, en una frase corta (la fila cabe a 400 px), y la fecha larga
+ * para el detalle: lo que va a salir, cuándo sale; lo que salió, cuándo
+ * salió; lo demás, el verbo de su estado y cuándo cambió.
+ */
+function cuando(r: QueueRow, f: Formatter): { corto: string; largo: string | null } {
+  const con = (d: Date, frase: (cuando: string) => string) => ({
+    corto: frase(f.dateTimeShort(d.toISOString())),
+    largo: frase(f.dateTime(d.toISOString())),
+  });
+  if (r.status === "sent" && r.sentAt) return con(r.sentAt, T.salio);
   if (r.status === "scheduled" || r.status === "draft" || r.status === "held") {
-    if (!r.dueAt) return T.sinHora;
-    const hora = f.dateTime(r.dueAt.toISOString());
-    return r.retrying ? T.reintento(hora) : T.toca(hora);
+    if (!r.dueAt) return { corto: T.sinHora, largo: null };
+    return con(r.dueAt, r.retrying ? T.reintento : T.toca);
   }
-  return T.cambio(f.dateTime(r.statusChangedAt.toISOString()));
+  const verbo: (cuando: string) => string = r.status in T.cambio ? T.cambio[r.status as keyof typeof T.cambio] : T.cambioGenerico;
+  return con(r.statusChangedAt, verbo);
 }
 
 export function filaVista(r: QueueRow, f: Formatter): FilaVista {
   const tipo = r.stepType ? etiquetaTipo(r.stepType) : null;
-  const paso = r.stepPosition !== null && tipo ? T.paso(f.int(r.stepPosition), tipo) : (tipo ?? T.sinPaso);
-  const titulo = r.subject?.trim() || (r.channel === "email" && r.stepType !== "email_reply" ? T.sinAsunto : paso);
+  // Sin paso, el contexto ya dice «Sin cadencia»: la fila no repite «Fuera de una cadencia».
+  const paso = r.stepPosition !== null && tipo ? T.paso(f.int(r.stepPosition), tipo) : tipo;
+  const titulo = r.subject?.trim()
+    || (r.channel === "email" && r.stepType !== "email_reply" ? T.sinAsunto : (paso ?? T.suelto(MESSAGES.uso.canales[r.channel])));
   const marcas: string[] = [];
   if (r.status === "sent" && r.openedAt) marcas.push(T.abierto);
   if (r.status === "sent" && r.repliedAt) marcas.push(T.respondido);
   const conIntentos = r.attemptCount > 0 && (r.status === "failed" || r.retrying);
+  const momento = cuando(r, f);
   return {
     id: r.touchId,
     estado: MESSAGES.estados[r.status],
@@ -38,16 +49,21 @@ export function filaVista(r: QueueRow, f: Formatter): FilaVista {
     titulo,
     contacto: r.contactName ?? r.contactEmail ?? T.sinContacto,
     contexto: [r.companyName, r.sequenceName ?? T.sinCadencia].filter(Boolean).join(" · "),
-    paso,
-    cuando: cuando(r, f),
-    cuandoTitulo: r.accountName ? T.desde(r.accountName) : null,
+    paso: paso !== titulo ? paso : null,
+    cuando: momento.corto,
+    cuandoCompleto: momento.largo,
+    cuenta: r.accountName ? T.desde(r.accountName) : null,
     motivo: motivoDe(r.status, r.reason, f.locale),
-    motivoDetalle: detalleDeMotivo(r.status, r.reason, f.locale),
+    motivoCodigo: codigoDeMotivo(r.reason),
     motivoTono: r.status === "failed" ? "bad" : r.status === "held" ? "warn" : "muted",
     marcas,
     intentos: conIntentos ? T.intentos(f.int(r.attemptCount), r.attemptCount) : null,
     reintentable: r.retryable,
-    noReintentable: r.status === "failed" && !r.retryable,
+    // Un fallido que no se puede reintentar dice por qué, con la misma frase que el resumen de un reintento.
+    bloqueo: r.status === "failed" && r.retryBlock && r.retryBlock !== "account_down"
+      ? MESSAGES.reintentar.bloqueo(MESSAGES.resultado.reintento[r.retryBlock])
+      : null,
+    reconectar: r.status === "failed" && r.retryBlock === "account_down",
     cancelable: r.cancelable,
     enviando: r.status === "processing",
     fichaHref: `/ventas/empresas/${r.companyId}`,

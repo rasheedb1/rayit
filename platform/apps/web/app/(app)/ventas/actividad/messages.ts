@@ -5,13 +5,17 @@
  * de /ventas/cadencias/[id]. Un solo sitio para traducirlos.
  *
  * La base guarda CÓDIGOS (el estado del toque, su held_reason o su
- * blocked_reason, el motivo por el que un reintento se saltó): aquí se
+ * blocked_reason, el bloqueo de un reintento, el tope que manda): aquí se
  * convierten en frases. El motivo de una retención y el de un fallo del
  * proveedor son los mismos que dicen la ficha y los avisos
  * (holdReasonText y failureReason de @mc/core/outreach/messages, en el
  * idioma del espacio); lo demás vive aquí.
+ *
+ * Solo tipos de @mc/db: este archivo lo importan componentes de cliente.
  */
-import type { CancelSkipCode, RetrySkipCode, SequenceHealthLevel, TouchStatus, UsageLevel } from "@mc/db/queries/actividad";
+import type {
+  CancelSkipCode, OutboundChannel, RetrySkipCode, SequenceHealthLevel, TouchStatus, UsageLevel, UsageLimitedBy, UsageOffReason,
+} from "@mc/db/queries/actividad";
 
 /**
  * El idioma de estos textos. Sus reglas de plural son las del idioma en
@@ -27,6 +31,15 @@ const plural =
   (formas: Formas) =>
   (n: string, count: number): string =>
     (formas[reglasPlural.select(count)] ?? formas.other).replaceAll("{n}", n);
+
+/**
+ * Los códigos de blocked_reason que se dicen aquí (los de la cadencia y la
+ * web). Los fallos del proveedor usan FAILURE_REASON_TEXTS de @mc/core.
+ */
+export type MotivoCode =
+  | "replied" | "not_now" | "opted_out" | "opted_out_in_flight" | "outreach_disabled" | "sequence_archived" | "completed"
+  | "bounced" | "email_invalid" | "no_address" | "invalid_address" | "no_contact" | "company_cap" | "canceled_by_user"
+  | "sent_confirmed_by_user" | "paused" | "cooldown";
 
 export const MESSAGES = {
   metaTitle: "Actividad",
@@ -76,7 +89,8 @@ export const MESSAGES = {
   fila: {
     lista: (vista: string) => `Mensajes · ${vista}`,
     paso: (n: string, tipo: string) => `Paso ${n} · ${tipo}`,
-    sinPaso: "Fuera de una cadencia",
+    /** El título de un toque suelto (sin paso) que no lleva asunto: el canal, porque el contexto ya dice «Sin cadencia». */
+    suelto: (canal: string) => `Mensaje por ${canal}`,
     sinContacto: "Sin contacto",
     sinCadencia: "Sin cadencia",
     sinAsunto: "Sin asunto",
@@ -86,20 +100,31 @@ export const MESSAGES = {
     toca: (cuando: string) => `Sale ${cuando}`,
     sinHora: "Sin hora todavía",
     salio: (cuando: string) => `Salió ${cuando}`,
-    cambio: (cuando: string) => `${cuando}`,
+    /** Lo que ya no va a salir (o se está enviando): el verbo de su estado y cuándo cambió. */
+    cambio: {
+      failed: (cuando: string) => `Falló ${cuando}`,
+      canceled: (cuando: string) => `Se canceló ${cuando}`,
+      skipped: (cuando: string) => `Se saltó ${cuando}`,
+      processing: (cuando: string) => `Enviándose desde ${cuando}`,
+      sent: (cuando: string) => `Salió ${cuando}`,
+    } satisfies Partial<Record<TouchStatus, (cuando: string) => string>>,
+    cambioGenerico: (cuando: string) => `Cambió ${cuando}`,
     abierto: "Abierto",
     respondido: "Respondió",
     motivo: "Motivo",
     verFicha: "Ver la ficha de la empresa",
-    /** El título completo al pasar el cursor, con el código para soporte. */
-    detalleMotivo: (frase: string, codigo: string) => `${frase} (código: ${codigo})`,
+    /** El detalle del motivo, que se despliega en la fila (con teclado, con el dedo o con el ratón). */
+    detalle: {
+      abrir: "Ver el detalle",
+      codigo: (codigo: string) => `código: ${codigo}`,
+    },
   },
 
   /**
    * Por qué terminó sin salir (blocked_reason de un cancelado o un
    * saltado), y las marcas de un enviado. Los fallos del proveedor usan
    * failureReason de @mc/core; un código que no está aquí ni allí se
-   * dice de forma genérica.
+   * dice de forma genérica (motivoTexto).
    */
   motivos: {
     replied: "respondió y la cadencia se detuvo",
@@ -119,7 +144,7 @@ export const MESSAGES = {
     sent_confirmed_by_user: "confirmaste a mano que salió",
     paused: "la cadencia está en pausa",
     cooldown: "la cadencia está en espera",
-  } as Record<string, string>,
+  } satisfies Record<MotivoCode, string>,
   motivoGenerico: "no salió",
 
   seleccion: {
@@ -137,10 +162,15 @@ export const MESSAGES = {
 
   reintentar: {
     titulo: "Reintentar lo fallido",
-    ayuda: "Vuelven a la cola y salen en la próxima pasada, dentro de tu horario de envío. Lo que rebotó o quedó a medias no se reintenta.",
+    ayuda:
+      "Vuelven a la cola y salen en la próxima pasada, dentro de tu horario de envío. Solo cuenta lo que puede salir: lo que rebotó, quedó a medias o ya no tiene sentido enviar no se reintenta.",
     boton: (tipo: string, n: string) => `${tipo} · ${n}`,
     uno: "Reintentar",
-    noReintentable: "No se reintenta: volvería a fallar o podría duplicarse",
+    /** En vez del botón, en un fallido que no se puede reintentar. */
+    bloqueo: (motivo: string) => `No se reintenta: ${motivo}.`,
+    /** Un fallo de la cuenta con el canal sin ninguna cuenta conectada. */
+    reconectar: "Reconecta la cuenta del canal para reintentarlo.",
+    irACanales: "Ir a canales",
   },
 
   resultado: {
@@ -149,15 +179,18 @@ export const MESSAGES = {
     saltados: plural({ one: "{n} no se movió:", other: "{n} no se movieron:" }),
     ninguno: "Nada cambió.",
     generico: "No pudimos hacerlo. Vuelve a intentarlo en un momento.",
+    /** Por qué un fallido no volvió (o no se ofrece): el motivo del resumen y el de la fila. */
     reintento: {
       not_found: "ya no existe",
       not_failed: "ya no estaba fallido",
       not_retryable: "rebotó o pudo haber salido",
+      too_many_attempts: "ya gastó todos sus intentos",
       enrollment_closed: "la persona respondió, se dio de baja o rebotó",
       sequence_archived: "la cadencia está archivada",
       superseded: "ya salió un paso posterior",
       opted_out: "la persona pidió la baja",
       email_invalid: "el correo de la ficha rebotó",
+      account_down: "la cuenta del canal no está conectada",
       already_queued: "ese paso ya tiene otro mensaje en la cola",
       blocked: "la base no lo deja volver (una baja o un rebote)",
     } satisfies Record<RetrySkipCode, string>,
@@ -182,31 +215,52 @@ export const MESSAGES = {
       titulo: "Nada con estos filtros",
       descripcion: "Prueba con otra cadencia, otro tipo de paso u otro contacto.",
     },
+    pagina: {
+      titulo: "No hay más mensajes",
+      descripcion: "Esta página se quedó vacía: lo que había se movió mientras tanto.",
+    },
   },
-  masFilas: (n: string) => `Se muestran los primeros ${n}. Filtra por cadencia, tipo o contacto para ver el resto.`,
+
+  /** Las páginas, debajo de la lista. El historial va de lo último a lo primero; la cola, por la hora a la que sale. */
+  paginas: {
+    label: "Páginas",
+    historial: { anterior: "Más recientes", siguiente: "Más antiguos" },
+    cola: { anterior: "Anteriores", siguiente: "Siguientes" },
+    principio: "Volver al principio",
+  },
 
   /** El widget de uso por canal (en /ventas/canales). */
   uso: {
     titulo: "Uso de hoy",
     descripcion:
       "Cuánto salió hoy por cada cuenta. Al llegar al límite duro, lo demás espera al siguiente día hábil; el límite blando avisa antes.",
-    canales: { email: "Correo", linkedin: "LinkedIn", instagram_dm: "Instagram", whatsapp: "WhatsApp" } as Record<string, string>,
+    canales: { email: "Correo", linkedin: "LinkedIn", instagram_dm: "Instagram", whatsapp: "WhatsApp" } satisfies Record<OutboundChannel, string>,
     niveles: {
       ok: "Con margen",
       near: "Cerca del límite",
       full: "Límite alcanzado",
+      off: "Sin envío",
     } satisfies Record<UsageLevel, string>,
     cifra: (usado: string, duro: string) => `${usado} de ${duro}`,
     blando: (n: string) => `Límite blando ${n}`,
     duro: (n: string) => `Límite duro ${n}`,
     calentando: (hoy: string, tope: string) => `Calentando: hoy hasta ${hoy}, luego sube hasta ${tope}`,
     proveedor: (n: string, proveedor: string) => `${proveedor} permite hasta ${n} al día`,
+    /** Cuando el límite duro de hoy no es el diario de la cuenta, qué tope manda. */
+    manda: {
+      week: (usado: string, tope: string) => `Manda el tope semanal de la cuenta: ${usado} de ${tope} esta semana`,
+      workspace: (usado: string, tope: string) => `Manda el tope de correos del espacio: ${usado} de ${tope} hoy entre todas las cuentas`,
+    } satisfies Record<Exclude<UsageLimitedBy, "day">, (usado: string, tope: string) => string>,
     medidor: (cuenta: string, usado: string, duro: string, nivel: string) => `${cuenta}: ${usado} de ${duro} hoy, ${nivel}`,
     historia: "Últimos 14 días",
-    historiaSerie: "Enviados",
-    historiaLimite: "Límite duro",
     vacio: "Conecta una cuenta para ver su uso.",
-    caida: "La cuenta no está conectada: no sale nada por ella hasta que la reconectes.",
+    /** Por qué una cuenta está «Sin envío», con adónde ir a arreglarlo. */
+    sinEnvio: {
+      account: { texto: "La cuenta no está conectada: no sale nada por ella hasta que la reconectes.", enlace: "Reconectar", href: "/ventas/canales" },
+      disabled: { texto: "El envío del espacio está apagado: no sale nada hasta que lo enciendas.", enlace: "Ir a la política de envío", href: "/ventas/politica" },
+    } satisfies Record<UsageOffReason, { texto: string; enlace: string; href: string }>,
+    cargando: "Cargando el uso de hoy",
+    error: "No pudimos cargar el uso de hoy. El resto de la página sigue funcionando.",
   },
 
   /** El embudo por paso y la vista de flujo (en /ventas/cadencias/[id]). */
@@ -247,11 +301,13 @@ export const MESSAGES = {
       sinDato: "—",
       sinDatoNota: "Sin envíos todavía",
     },
+    cargando: "Cargando los resultados de la cadencia",
+    error: "No pudimos cargar los resultados de esta cadencia. Lo demás de la cadencia sigue funcionando.",
   },
 
   flujo: {
     titulo: "Flujo de la cadencia",
-    descripcion: "Cada paso con lo que pasó en él. Pasa el cursor o enfoca una cifra para ver qué cuenta.",
+    descripcion: "Cada paso con lo que pasó en él. Pasa el cursor, toca o enfoca una cifra para ver qué cuenta; Escape la cierra.",
     paso: (n: string, dia: string, tipo: string) => `Paso ${n} · Día ${dia} · ${tipo}`,
     cifras: {
       sent: "enviados",
@@ -275,4 +331,14 @@ export const MESSAGES = {
     },
     tasa: (pct: string) => `${pct} de lo enviado`,
   },
+
+  /** El aviso de una pieza montada en otra pantalla que no pudo cargar (su frontera propia). */
+  widget: {
+    reintentar: "Volver a intentar",
+  },
 } as const;
+
+/** La frase de un código de blocked_reason de la cadencia o la web, o undefined si no es uno de esos. */
+export function motivoTexto(code: string): string | undefined {
+  return Object.hasOwn(MESSAGES.motivos, code) ? MESSAGES.motivos[code as MotivoCode] : undefined;
+}

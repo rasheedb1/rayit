@@ -674,6 +674,8 @@ export interface ChannelUsage {
   limitedBy: UsageLimitedBy;
   /** El tope diario de la cuenta sin calentamiento (outreach_channel_account_limits.effective_daily). */
   dailyLimit: number;
+  /** El tope diario de HOY: dailyLimit pasado por la curva de calentamiento. */
+  dayLimit: number;
   /** Lo que salió esta semana por la cuenta y su tope semanal. */
   weekUsed: number;
   weeklyLimit: number;
@@ -802,6 +804,7 @@ export async function listChannelUsage(tx: WorkspaceTx): Promise<ChannelUsage[]>
       hardLimit,
       limitedBy,
       dailyLimit: today.dailyLimit,
+      dayLimit,
       weekUsed: today.weekUsed,
       weeklyLimit: today.weeklyLimit,
       workspaceUsed: today.workspaceUsed,

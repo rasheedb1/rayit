@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { getSequenceHealth, listFunnelByStep, type FunnelStep, type SequenceHealth, type SequenceHealthLevel } from "@mc/db/queries/actividad";
 import { SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -14,17 +15,23 @@ import { IconoCanal } from "../../cadencias/canal";
 import { hrefDe } from "../_lib/vista";
 import { MESSAGES } from "../messages";
 import { FlujoCadencia, type CifraFlujo, type PasoFlujo } from "./flujo-cadencia";
+import { FronteraWidget } from "./frontera-widget";
 
 const E = MESSAGES.embudo;
 const F = MESSAGES.flujo;
 
 const SALUD_PILL: Record<SequenceHealthLevel, PillKind> = { inactive: "neutral", failing: "bad", attention: "warn", healthy: "good" };
 
-/** Las cuatro series del embudo, en su orden: cada una cabe dentro de la anterior. */
-const SERIES = [
+/**
+ * Las cuatro series del embudo, en su orden: cada una cabe dentro de la
+ * anterior. Colores categóricos del kit (los de DEFAULT_ORDER de
+ * chart-utils) salvo «Positivos», el único que es bueno por definición:
+ * «Respondidos» no va en ámbar, que en esta app es alerta.
+ */
+export const SERIES_EMBUDO = [
   { key: "sent", color: "deemph" },
   { key: "opened", color: "accent" },
-  { key: "replied", color: "warn" },
+  { key: "replied", color: "tiktok" },
   { key: "positive", color: "good" },
 ] as const satisfies ReadonlyArray<{ key: keyof typeof E.series; color: Series["color"] }>;
 
@@ -70,7 +77,7 @@ export function MetricasCadenciaVista({
   if (funnel.length === 0) return <p className="text-sm text-fg-2">{E.sinPasos}</p>;
   const k = E.kpis;
   const pct = (r: number | null) => (r === null ? k.sinDato : f.pct(r, 1));
-  const series: Series[] = SERIES.map((s) => ({ name: E.series[s.key], color: s.color, data: funnel.map((p) => p[s.key]) }));
+  const series: Series[] = SERIES_EMBUDO.map((s) => ({ name: E.series[s.key], color: s.color, data: funnel.map((p) => p[s.key]) }));
   const actividad = hrefDe({ vista: "queue", cadencia: sequenceId, tipo: null, contacto: null });
   return (
     <section aria-labelledby="resultados-cadencia" className="flex flex-col gap-4">
@@ -116,14 +123,20 @@ export function MetricasCadenciaVista({
   );
 }
 
-/**
- * Montable con una línea en /ventas/cadencias/[id]
- * (`<MetricasCadencia sequenceId={id} />`): lee el embudo
- * (outbound_funnel_by_step) y la salud (outbound_sequence_health) de la
- * cadencia con la RLS del espacio y los formatea en su idioma. Si la
- * cadencia no es del espacio, no pinta nada.
- */
-export async function MetricasCadencia({ sequenceId }: { sequenceId: string }) {
+/** Mientras la consulta responde: el título, cuatro cifras y el flujo en gris. */
+function MetricasCadenciaEsqueleto() {
+  return (
+    <div aria-busy="true" aria-label={E.cargando} className="flex flex-col gap-4">
+      <span className="block h-5 w-48 animate-pulse rounded-sm bg-hover" />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => <span key={i} className="block h-16 animate-pulse rounded-md bg-hover" />)}
+      </div>
+      <span className="block h-40 animate-pulse rounded-md bg-hover" />
+    </div>
+  );
+}
+
+async function MetricasCadenciaDatos({ sequenceId }: { sequenceId: string }) {
   const datos = await withWorkspace(async (tx) => ({
     health: await getSequenceHealth(tx, sequenceId),
     funnel: await listFunnelByStep(tx, sequenceId),
@@ -131,4 +144,25 @@ export async function MetricasCadencia({ sequenceId }: { sequenceId: string }) {
   if (!datos.health) return null;
   const f = formatterFor(await getCurrentWorkspace());
   return <MetricasCadenciaVista sequenceId={sequenceId} health={datos.health} funnel={datos.funnel} f={f} />;
+}
+
+/**
+ * Montable con una línea en /ventas/cadencias/[id]
+ * (`<MetricasCadencia sequenceId={id} />`): lee el embudo
+ * (outbound_funnel_by_step) y la salud (outbound_sequence_health) de la
+ * cadencia con la RLS del espacio y los formatea en su idioma. Si la
+ * cadencia no es del espacio, no pinta nada.
+ *
+ * Trae su Suspense y su frontera de error: el detalle de la cadencia se
+ * pinta sin esperar a estas cifras, y si su consulta falla cae solo esta
+ * sección, con un aviso.
+ */
+export function MetricasCadencia({ sequenceId }: { sequenceId: string }) {
+  return (
+    <FronteraWidget aviso={E.error}>
+      <Suspense fallback={<MetricasCadenciaEsqueleto />}>
+        <MetricasCadenciaDatos sequenceId={sequenceId} />
+      </Suspense>
+    </FronteraWidget>
+  );
 }
