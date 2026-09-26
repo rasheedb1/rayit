@@ -124,6 +124,15 @@ describe("formatterFor: el workspace manda (locale, moneda y zona)", () => {
     expect(formatterFor(ESTADOS_UNIDOS).money("1234.00", "USD", { mode: "full" })).toBe("USD 1,234");
   });
 
+  it("fecha y hora cortas para una fila: sin año, en la zona y el idioma del workspace (VEN-16)", () => {
+    // 00:31 UTC del 25 es el 24 por la noche en Nueva York y en Bogotá.
+    const iso = "2026-09-25T00:31:00Z";
+    const corta = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }).dateTimeShort(iso);
+    expect(corta).toMatch(/^24 de sept?\.?, 7:31 p\. m\.$/);
+    expect(corta).not.toContain("2026");
+    expect(formatterFor(ESTADOS_UNIDOS).dateTimeShort(iso)).toBe("Sep 24, 8:31 PM");
+  });
+
   it("una factura emitida en otra moneda se muestra en la suya, con el locale del workspace", () => {
     const f = formatterFor(MEXICO);
     expect(f.money("1234.50", "COP", { mode: "full" })).toBe("COP 1,234.50");
