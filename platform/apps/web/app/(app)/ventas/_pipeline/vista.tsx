@@ -13,7 +13,7 @@ import { lostReasonText, type PipelineForma } from "../_lib/estado";
 import { siguienteAccionData, ultimoContacto, type SeguimientoContexto } from "../_seguimiento/datos";
 import { SiguienteAccion } from "../_seguimiento/siguiente-accion";
 import { UltimoContacto } from "../_seguimiento/ultimo-contacto";
-import { conversionView } from "./conversion";
+import { ConversionSummary, conversionView } from "./conversion";
 import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 
 /**
@@ -140,7 +140,11 @@ export function PipelineView({
       {forma === "tablero" ? (
         <PipelineBoard deals={boardDeals} stages={boardStages} ctx={ctx} locale={f.locale} />
       ) : (
-        <PipelineList deals={boardDeals} ctx={ctx} />
+        <>
+          {/* VEN-8: la conversión por etapa, la misma del tablero; con un filtro de «Para hoy» no se repite. */}
+          {!filtro && <ConversionSummary stages={boardStages} />}
+          <PipelineList deals={boardDeals} ctx={ctx} />
+        </>
       )}
     </section>
   );

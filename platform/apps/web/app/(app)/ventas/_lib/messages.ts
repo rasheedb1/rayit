@@ -279,6 +279,8 @@ export const MESSAGES = {
     allRelationships: "Todas",
     back: "Empresas",
     pendingSignals: (n: number) => `${n} ${n === 1 ? "señal" : "señales"} en el radar`,
+    /** Las de la empresa que el brief activo deja fuera de la bandeja (VEN-7); enlaza a «Verlas». */
+    hiddenSignals: (n: number) => `${n} ${n === 1 ? "señal oculta" : "señales ocultas"} por tu brief`,
 
     form: {
       metaTitle: "Nueva empresa · Ventas",
@@ -501,12 +503,23 @@ export const MESSAGES = {
       rate: (pct: string) => `${pct} avanza`,
       basis: (n: string, count: number) => `de ${n} ${count === 1 ? "negocio" : "negocios"}`,
       none: "Sin historia todavía",
-      /** Lo que lee un lector de pantalla y el title de la fila. */
-      label: (stage: string, advanced: string, entered: string, pct: string) =>
-        `De los ${entered} negocios que entraron en «${stage}», ${advanced} llegaron más lejos (${pct}).`,
-      labelOne: (stage: string, advanced: string, pct: string) =>
-        `Del negocio que entró en «${stage}», ${advanced === "1" ? "llegó más lejos" : "no llegó más lejos"} (${pct}).`,
+      /**
+       * Lo que lee un lector de pantalla y el title de la fila. `entered` y
+       * `advanced` llegan formateados con el locale del workspace; las
+       * cifras crudas (`enteredCount`, `advancedCount`) eligen la forma de
+       * la frase: nunca se compara un texto formateado.
+       */
+      label: (stage: string, entered: string, enteredCount: number, advanced: string, advancedCount: number, pct: string) => {
+        if (enteredCount === 1) {
+          return `Del negocio que entró en «${stage}», ${advancedCount === 1 ? "llegó más lejos" : "no llegó más lejos"} (${pct}).`;
+        }
+        const cuantos =
+          advancedCount === 0 ? "ninguno llegó más lejos" : advancedCount === 1 ? "uno llegó más lejos" : `${advanced} llegaron más lejos`;
+        return `De los ${entered} negocios que entraron en «${stage}», ${cuantos} (${pct}).`;
+      },
       labelNone: (stage: string) => `Ningún negocio ha pasado todavía por «${stage}».`,
+      /** La vista Lista: la misma fila por etapa, en un resumen encima de la tabla. */
+      listTitle: "Conversión por etapa",
     },
   },
 
@@ -521,8 +534,10 @@ export const MESSAGES = {
     eyebrow: "Ventas",
     title: "Qué buscas y qué no aceptas",
     description:
-      "Tu brief dice a qué marcas quieres venderles. Lo que no aceptas se respeta siempre: el radar deja fuera esas señales y el pitch nunca las propone.",
+      "Tu brief dice a qué marcas quieres venderles y a cuáles no. Lo que no aceptas es una regla: el radar deja fuera esas señales y ninguna cadencia les escribe.",
     of: (name: string) => `Brief de ${name}`,
+    /** En una agencia el brief es la regla de todo el espacio, no de un solo creador. */
+    ofSpace: "Brief del espacio",
     savedAt: (date: string) => `Guardado el ${date}`,
     none: "Todavía no tienes brief. Guárdalo y el radar empieza a aplicarlo.",
     /** El nombre con el que nace el primero, para no abrir el formulario con un campo obligatorio vacío. */
@@ -534,15 +549,15 @@ export const MESSAGES = {
     seeHidden: "Verlas en el radar",
     wants: {
       title: "Qué buscas",
-      help: "Lo que usa el pitch para elegir a quién escribir y qué contar. No oculta ninguna señal.",
+      help: "Una preferencia, no un filtro: no oculta ninguna señal. Las cadencias que propone Ventas escriben con el nombre, las notas y la divulgación de este brief; lo demás queda como referencia para ti y tu equipo.",
     },
     rejects: {
       title: "Qué no aceptas",
-      help: "Una regla, no una preferencia: el radar deja fuera de tu bandeja las señales de estas categorías y marcas.",
+      help: "Una regla, no una preferencia: el radar deja fuera de la bandeja las señales de estas categorías y marcas, y las cadencias no les escriben (no se inscriben, y lo que estaba programado se cancela).",
     },
     state: {
       title: "Estado",
-      help: "En pausa, el brief se guarda pero el radar no oculta nada.",
+      help: "En pausa, el brief se guarda pero no oculta ni frena nada.",
     },
     fields: {
       title: "Nombre del brief",
@@ -564,9 +579,9 @@ export const MESSAGES = {
       requiresDisclosure: "Divulgación obligatoria",
       requiresDisclosureHelp: "Todo contenido pagado lleva la marca de publicidad de la red. Una marca que no lo acepte no es para ti.",
       notes: "Notas",
-      notesHelp: "Lo que el pitch debe saber: «siempre con código propio y enlace rastreado».",
-      active: "Aplicar el brief en el radar",
-      activeHelp: "Si lo apagas, el brief queda en pausa y la bandeja muestra todo.",
+      notesHelp: "Lo que deben saber los mensajes que escriben las cadencias: «siempre con código propio y enlace rastreado».",
+      active: "Aplicar el brief",
+      activeHelp: "Si lo apagas, el brief queda en pausa: la bandeja muestra todo y las cadencias no lo miran.",
     },
     chips: {
       add: "Agregar",
@@ -594,14 +609,17 @@ export const MESSAGES = {
       countryUnknown: "Elige los países de la lista.",
     },
     submit: "Guardar el brief",
-    saved: "Guardado. El radar ya aplica tu brief.",
-    savedPaused: "Guardado en pausa: el radar no oculta nada.",
+    saved: "Guardado. El radar y las cadencias ya aplican tu brief.",
+    savedPaused: "Guardado en pausa: no oculta ni frena nada.",
+    /** Un 'member', 'viewer' o 'client' lo ve pero no lo cambia (PUEDEN_EDITAR_BRIEF). */
+    sinPermiso:
+      "Solo quien es dueño o administra este espacio puede cambiar el brief: lo que excluye se le oculta a todo el equipo. Puedes verlo; para cambiarlo, pídeselo.",
     error: "No se pudo guardar el brief.",
     errorTitle: { eyebrow: "Ventas", title: "No pudimos leer tu brief" },
     cargando: "Cargando el brief",
     noCreator: {
-      title: "Falta tu perfil de creadora",
-      description: "El brief es de un creador del espacio, y este todavía no tiene ninguno. Conecta tus cuentas primero.",
+      title: "Falta el perfil de creador del espacio",
+      description: "El brief cuelga de un perfil de creador, y este espacio todavía no tiene ninguno. Conecta las cuentas primero.",
       action: "Ir a Conexiones",
     },
   },
@@ -614,13 +632,15 @@ export const MESSAGES = {
     CategoryConflict: (detail: string | null) => `«${detail ?? ""}» está en lo que buscas y en lo que no aceptas. Déjala en una sola.`,
     InvalidCountry: (detail: string | null) => `«${detail ?? ""}» no es un país que reconozcamos.`,
     TooManyCountries: "Son demasiados países: hasta 30.",
-    InvalidBudget: "Escribe el presupuesto mínimo como un monto: 3.000.000.",
+    InvalidBudget: "Escribe el presupuesto mínimo como un monto, solo con cifras, o déjalo vacío.",
     InvalidWindow: "La fecha final va después de la inicial.",
     InvalidDeliverable: "Ese formato de entregable no existe.",
     InvalidNotes: "Las notas pasan de 2.000 caracteres.",
     CompanyNotInCrm: "Una de las marcas ya no está en tu CRM. Vuelve a elegirlas.",
     TooManyCompanies: "Son demasiadas marcas: hasta 100.",
     NoCreator: "Este espacio todavía no tiene un perfil de creador al que colgarle el brief.",
+    Forbidden:
+      "Solo quien es dueño o administra este espacio puede cambiar el brief: lo que excluye se le oculta a todo el equipo.",
   },
 
   /** Por qué se perdió un negocio (deal.lost_reason), en la tarjeta y en la ficha: «Perdido · Por el precio». */

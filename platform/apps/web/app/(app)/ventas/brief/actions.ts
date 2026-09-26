@@ -3,7 +3,8 @@
 /**
  * La Server Action del brief de outbound (VEN-7).
  *
- * Misma forma que las demás de Ventas: el permiso primero, zod valida lo
+ * Misma forma que las demás de Ventas: el rol primero (puedeEditarElBrief:
+ * owner o admin, porque el brief oculta señales a todo el equipo), zod valida lo
  * que llega del formulario con los textos de MESSAGES, la consulta hace
  * el trabajo dentro de `withWorkspace` y un error de dominio vuelve como
  * código (BriefError.code) traducido con MESSAGES.briefErrores, en su
@@ -17,10 +18,10 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { BRIEF_LIMITS, BriefError, saveBrief, type BriefErrorCode } from "@mc/db/queries/brief";
 import { DECIMAL_RE, UUID_RE, firstErrors, formField, type ActionState } from "@/lib/forms";
-import { requirePermission } from "@/lib/permisos";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
 import { isCountryCode } from "../_lib/paises";
+import { puedeEditarElBrief } from "./permiso";
 
 const t = MESSAGES.brief;
 const E = MESSAGES.briefErrores;
@@ -93,7 +94,7 @@ function lista(formData: FormData, name: string): string[] {
  * nuevo) y revalida Ventas: el radar, sus conteos y el KPI cambian con él.
  */
 export async function guardarBrief(_prev: BriefState, formData: FormData): Promise<BriefState> {
-  await requirePermission("ventas.senal.registrar");
+  if (!(await puedeEditarElBrief())) return { message: t.sinPermiso };
 
   const parsed = esquema.safeParse({
     title: formField(formData, "title"),

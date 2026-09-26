@@ -33,7 +33,7 @@ beforeEach(() => editarEmpresa.mockReset());
 describe("DatosEmpresa", () => {
   it("«Editar» abre el formulario del alta con los datos de la empresa y guarda", async () => {
     editarEmpresa.mockResolvedValue({ ok: true, notice: "Datos actualizados.", stamp: 1 });
-    render(<DatosEmpresa company={propia} filas={filas} signalsLink={null} countries={PAISES} />);
+    render(<DatosEmpresa company={propia} filas={filas} signalsLinks={[]} countries={PAISES} />);
     expect(screen.getByText("Colombia · Bogotá")).toBeInTheDocument();
     expect(screen.getByText("Sin notas.")).toBeInTheDocument();
 
@@ -56,7 +56,7 @@ describe("DatosEmpresa", () => {
   });
 
   it("de una empresa del catálogo compartido solo se editan las notas, y dice por qué", () => {
-    render(<DatosEmpresa company={{ ...propia, isOwn: false, notes: "Nota vieja" }} filas={filas} signalsLink={null} countries={PAISES} />);
+    render(<DatosEmpresa company={{ ...propia, isOwn: false, notes: "Nota vieja" }} filas={filas} signalsLinks={[]} countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Editar los datos de Café Alma" }));
     const form = screen.getByRole("form", { name: "Editar los datos" });
     expect(within(form).getByText(/catálogo compartido/)).toBeInTheDocument();
@@ -66,7 +66,7 @@ describe("DatosEmpresa", () => {
   });
 
   it("un país guardado que no está en la lista (un «XX» de antes) sale como «Sin país» (pulido r6)", () => {
-    render(<DatosEmpresa company={{ ...propia, country: "XX" }} filas={filas} signalsLink={null} countries={PAISES} />);
+    render(<DatosEmpresa company={{ ...propia, country: "XX" }} filas={filas} signalsLinks={[]} countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Editar los datos de Café Alma" }));
     const pais = within(screen.getByRole("form", { name: "Editar los datos" })).getByRole("combobox", { name: "País" });
     expect(pais).toHaveValue("");
@@ -74,7 +74,7 @@ describe("DatosEmpresa", () => {
   });
 
   it("cancelar vuelve a la tarjeta sin guardar", () => {
-    render(<DatosEmpresa company={propia} filas={filas} signalsLink={null} countries={PAISES} />);
+    render(<DatosEmpresa company={propia} filas={filas} signalsLinks={[]} countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Editar los datos de Café Alma" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
     expect(screen.queryByRole("form", { name: "Editar los datos" })).toBeNull();
@@ -82,7 +82,7 @@ describe("DatosEmpresa", () => {
   });
 
   it("«Editar» va donde «Negocios» y «Contactos» ponen su acción: lo primero del cuerpo, a la izquierda y secundario", () => {
-    render(<DatosEmpresa company={propia} filas={filas} signalsLink={null} countries={PAISES} />);
+    render(<DatosEmpresa company={propia} filas={filas} signalsLinks={[]} countries={PAISES} />);
     const editar = screen.getByRole("button", { name: "Editar los datos de Café Alma" });
     // Solo, a la derecha y encima de la tarjeta, parecía un botón perdido (visto a 1440 px).
     expect(editar.parentElement).not.toHaveClass("justify-end");

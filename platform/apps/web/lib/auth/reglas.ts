@@ -36,6 +36,17 @@ export const PUEDEN_GESTIONAR_CANALES: ReadonlySet<MembershipRole> = new Set<Mem
 export const PUEDEN_EDITAR_PERFIL: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
 
 /**
+ * Los roles que pueden cambiar el brief de outbound (VEN-7). El brief es
+ * una regla del ESPACIO entero: lo que excluye desaparece del radar de
+ * todo el equipo y ninguna cadencia le escribe (0064). Por eso lo
+ * cambian los mismos que la política de envío y los canales; un
+ * 'member' lo lee y lo aplica, no lo reescribe. La base dice lo mismo
+ * con outreach_can_manage (0064 §5), así que esto solo evita ofrecer lo
+ * que se va a rechazar.
+ */
+export const PUEDEN_EDITAR_BRIEF: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin"]);
+
+/**
  * Cuántos espacios puede tener una persona como propietaria. Sin tope,
  * un script con sesión crea miles de workspaces con su creator_profile.
  * Veinte cubre de sobra a una creadora que separa marcas; una agencia

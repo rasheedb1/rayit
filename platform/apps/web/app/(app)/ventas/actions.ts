@@ -33,6 +33,7 @@ import {
   updateContact,
   type SignalDuplicateReason,
 } from "@mc/db/queries/ventas";
+import type { BriefVerdict } from "@mc/db/queries/brief";
 import { MONTO_MAXIMO, excedeMontoMaximo } from "@mc/core";
 import { decodificarCsv } from "@/lib/csv";
 import { formatterFor } from "@/lib/format";
@@ -174,7 +175,7 @@ export async function anotarSenal(_prev: VentasState, formData: FormData): Promi
   const v = parsed.data;
   if (excedeMontoMaximo(v.budget)) return { errors: { budget: await montoMaximoError() } };
 
-  let res: { duplicate: boolean; reason: SignalDuplicateReason | null; companyId: string | null; hiddenBy?: string | null };
+  let res: { duplicate: boolean; reason: SignalDuplicateReason | null; companyId: string | null; hiddenBy: BriefVerdict | null };
   try {
     res = await withWorkspace((tx) =>
       createSignal(tx, {
@@ -240,7 +241,7 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
     const res = await withWorkspace((tx) => importSignals(tx, parsed.rows, { headline: t.headline }));
     created = res.created;
     duplicated = res.duplicated;
-    hiddenByBrief = res.hiddenByBrief ?? 0;
+    hiddenByBrief = res.hiddenByBrief;
     createdRows = new Set(res.createdRows);
   } catch (err) {
     return { message: messageOf(err, t.error) };

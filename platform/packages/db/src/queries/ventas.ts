@@ -229,8 +229,10 @@ export interface CompanyListRow {
   openDealAmount: string | null;
   /** Última actividad registrada para la empresa, ISO o null. */
   lastActivityAt: string | null;
-  /** Señales pendientes de revisar de esta empresa. */
+  /** Señales pendientes de revisar de esta empresa que se ven en la bandeja. */
   pendingSignalCount: number;
+  /** Las pendientes que el brief activo deja fuera de la bandeja (VEN-7): se ven con «Verlas» (/ventas?ocultas=1). */
+  hiddenSignalCount: number;
   linkedAt: string;
 }
 
@@ -1214,7 +1216,7 @@ export interface CreateSignalResult {
    * pantalla lo dice en vez de anunciar «ya está en la bandeja». Null si
    * se ve, o si no entró.
    */
-  hiddenBy?: BriefVerdict | null;
+  hiddenBy: BriefVerdict | null;
 }
 
 export type SignalDuplicateReason = 'same_key' | 'pending' | 'discarded' | 'accepted';
@@ -1342,7 +1344,7 @@ export async function createSignal(tx: WorkspaceTx, input: CreateSignalInput): P
     domain: brandDomain,
     name: companyName ?? company?.name ?? null,
   });
-  if (previa) return { id: null, duplicate: true, reason: previa, dedupeKey, companyId: company?.id ?? null };
+  if (previa) return { id: null, duplicate: true, reason: previa, dedupeKey, companyId: company?.id ?? null, hiddenBy: null };
 
   const evidence = {
     company_name: companyName ?? company?.name ?? null,
@@ -1393,7 +1395,7 @@ export async function createSignal(tx: WorkspaceTx, input: CreateSignalInput): P
     previaClave?.status === 'accepted' || previaClave?.status === 'pending' || previaClave?.status === 'discarded'
       ? previaClave.status
       : 'same_key';
-  return { id: null, duplicate: true, reason, dedupeKey, companyId: previaClave?.company_id ?? company?.id ?? null };
+  return { id: null, duplicate: true, reason, dedupeKey, companyId: previaClave?.company_id ?? company?.id ?? null, hiddenBy: null };
 }
 
 export interface ImportSignalRow {
@@ -2276,7 +2278,7 @@ interface CompanyRowSql {
   relationship: Relationship; fit_score: string | null; owner_user_id: string | null;
   owner_name: string | null; notes: string | null; linked_at: string;
   contact_count: string; opted_out_count: string; open_deal_count: string; open_deal_amount: string | null;
-  pending_signal_count: string; last_activity_at: string | null;
+  pending_signal_count: string; hidden_signal_count: string; last_activity_at: string | null;
 }
 
 interface CompanyDetailSql {
@@ -2305,6 +2307,7 @@ function toCompanyRow(r: CompanyRowSql): CompanyListRow {
     openDealCount: Number(r.open_deal_count),
     openDealAmount: r.open_deal_amount,
     pendingSignalCount: Number(r.pending_signal_count),
+    hiddenSignalCount: Number(r.hidden_signal_count),
     lastActivityAt: r.last_activity_at,
     linkedAt: r.linked_at,
   };
@@ -2485,9 +2488,20 @@ const DEAL_COUNTS = `
   (SELECT sum(dp.amount) FROM deal_pipeline dp
     WHERE dp.company_id = co.id AND NOT dp.is_won AND NOT dp.is_lost)::text               AS open_deal_amount`;
 
+/**
+ * Las señales pendientes de la empresa, partidas como las parte el radar
+ * (VEN-7): las que se ven en la bandeja y las que el brief activo deja
+ * fuera. Con la misma expresión que listSignals (briefVerdictSql): la
+ * ficha no puede decir «1 señal en el radar» y enlazar a una bandeja
+ * donde esa señal no está.
+ */
 const PENDING_SIGNALS = `
   (SELECT count(*) FROM signal s
-    WHERE s.company_id = co.id AND s.status = 'pending')::text                            AS pending_signal_count`;
+    WHERE s.company_id = co.id AND s.status = 'pending'
+      AND ${briefVerdictSql('s')} IS NULL)::text                                          AS pending_signal_count,
+  (SELECT count(*) FROM signal s
+    WHERE s.company_id = co.id AND s.status = 'pending'
+      AND ${briefVerdictSql('s')} IS NOT NULL)::text                                      AS hidden_signal_count`;
 
 const LAST_ACTIVITY = `
   (SELECT max(a.occurred_at) FROM activity a WHERE a.company_id = co.id)                  AS last_activity_at`;

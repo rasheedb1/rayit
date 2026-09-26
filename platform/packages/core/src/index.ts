@@ -5,6 +5,7 @@ export * from './campanas.ts';
 export * from './tarifas.ts';
 export * from './zonas.ts';
 export * from './ventas.ts';
+export * from './brief.ts';
 export * from './bajas.ts';
 export * from './canales-textos.ts';
 export * from './outreach/index.ts';

@@ -13,13 +13,13 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor } from "@/lib/format";
-import { requirePagePermission } from "@/lib/permisos/modulo";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { ModuleTabs } from "../_componentes/pestanas";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
 import { countryOptions } from "../_lib/paises";
 import { BriefForm, type BriefFormValues } from "./form";
+import { puedeEditarElBrief } from "./permiso";
 
 const t = MESSAGES.brief;
 
@@ -30,18 +30,17 @@ export const dynamic = "force-dynamic";
 /**
  * El brief de outbound (VEN-7): qué busca el creador y qué no acepta.
  *
- * La puerta del módulo la pone ventas/layout.tsx; esta pantalla pide
- * además ver el radar (ventas.senal.ver), porque lo que se decide aquí
- * es qué entra en esa bandeja. Guardar pide ventas.senal.registrar, en
- * la Server Action.
+ * La ve todo el equipo del espacio; la cambian owner y admin
+ * (puedeEditarElBrief), porque lo que excluye se le oculta a todos y
+ * frena las cadencias. A los demás se les enseña igual, sin «Guardar» y
+ * diciendo por qué; la acción lo vuelve a mirar y la base lo impone
+ * (0064 §5).
  *
  * Arriba dice cuántas señales deja fuera hoy, con el enlace a verlas en
  * el radar: un filtro que no se ve es un filtro que se olvida.
  */
 export default async function BriefPage() {
-  await requirePagePermission("ventas.senal.ver");
-
-  const workspace = await getCurrentWorkspace();
+  const [workspace, editable] = await Promise.all([getCurrentWorkspace(), puedeEditarElBrief()]);
   const f = formatterFor(workspace);
   const { brief, owner, suggestions, companies, hidden } = await withWorkspace(async (tx) => ({
     brief: await getBrief(tx),
@@ -96,7 +95,7 @@ export default async function BriefPage() {
       <ModuleTabs active="/ventas/brief" />
 
       <div className="mb-6 flex max-w-3xl flex-wrap items-center gap-x-3 gap-y-2 text-sm">
-        <span className="font-medium text-ink">{t.of(owner.displayName)}</span>
+        <span className="font-medium text-ink">{owner.workspaceKind === "agency" ? t.ofSpace : t.of(owner.displayName)}</span>
         {brief && <Pill kind={brief.status === "active" ? "good" : "neutral"}>{t.status[brief.status]}</Pill>}
         <span className="text-muted">{brief ? t.savedAt(f.date(brief.updatedAt)) : t.none}</span>
       </div>
@@ -117,6 +116,7 @@ export default async function BriefPage() {
         countries={countries}
         companies={companies.map((c) => ({ value: c.id, label: c.name }))}
         limits={BRIEF_LIMITS}
+        editable={editable}
       />
     </>
   );

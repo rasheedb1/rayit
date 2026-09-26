@@ -87,10 +87,12 @@ const DRAG_TYPE = "application/x-oncue-deal";
  * Soltar (o elegir en el menú) una etapa perdida no mueve todavía: abre
  * un diálogo, «¿Por qué lo pierdes?», con el motivo obligatorio (VEN-8).
  * Sin motivo el servidor tampoco lo mueve (LostReasonRequired), y la base
- * no deja llegar al COMMIT un perdido sin motivo (0043).
+ * no deja llegar al COMMIT un perdido sin motivo (0064).
  *
- * Debajo de cada columna abierta va su conversión (StageConversionRow):
- * qué parte de los negocios que entraron llegó más lejos, y sobre cuántos.
+ * Bajo la cabecera de cada columna abierta, junto al monto, va su
+ * conversión (StageConversionRow): qué parte de los negocios que
+ * entraron llegó más lejos, y sobre cuántos. Ahí y no al pie, para que
+ * las tasas de todas las columnas queden a la misma altura.
  *
  * Soltar en una etapa ganada un negocio «Sin monto» tampoco mueve
  * todavía: pregunta «¿Por cuánto lo ganaste?» en la tarjeta. Sin monto el
@@ -207,7 +209,9 @@ export function PipelineBoard({
                   <span className="text-sm font-medium text-ink">{stage.label}</span>
                   <span className="text-xs tabular-nums text-muted">{stage.countText}</span>
                 </div>
-                <p className="mb-2 min-h-4 whitespace-nowrap text-xs tabular-nums text-muted">{stage.amountText}</p>
+                <p className="mb-1 min-h-4 whitespace-nowrap text-xs tabular-nums text-muted">{stage.amountText}</p>
+                {/* VEN-8: la conversión, bajo la cabecera para que las de todas las columnas queden en línea. */}
+                <div className="mb-2 min-h-4"><StageConversionRow view={stage.conversion} /></div>
 
                 <div
                   className={`min-h-24 rounded-md transition-colors ${isOver ? "bg-hover outline-2 outline-dashed outline-axis" : ""}`}
@@ -248,7 +252,6 @@ export function PipelineBoard({
                     </ul>
                   )}
                 </div>
-                <StageConversionRow view={stage.conversion} />
               </li>
             );
           })}

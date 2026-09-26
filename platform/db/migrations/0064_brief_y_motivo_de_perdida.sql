@@ -1,11 +1,30 @@
 -- =====================================================================
--- 0043 · El brief de outbound con reglas, y el motivo de pérdida en la
+-- 0064 · El brief de outbound con reglas, y el motivo de pérdida en la
 --        base (VEN-7, VEN-8)
 -- ---------------------------------------------------------------------
--- Número: 0042 es la última aplicada en Supabase (41 migraciones, con
--- el hueco declarado de 0023). rasheed/integracion ya usa 0043–0063
--- para outreach; si esta llega detrás de ellas, el integrador la
--- renumera: no depende de ninguna.
+-- Número: la siguiente libre detrás de rasheed/integracion, que llega
+-- hasta 0063 (0063_comentario_sin_texto). Esta rama se escribió primero
+-- sobre main como 0043 y chocaba con 0043_contacto_codigo_de_baja; se
+-- rebasó sobre integracion y se renumeró antes de aplicarse en ningún
+-- sitio. No depende de ninguna migración de outreach (0037–0063): solo
+-- toca outbound_brief (0007) y deal (0007, 0031).
+--
+-- Mediciones en Supabase antes de aplicarla (25-sep, como mc_migrator):
+--   · Un brief activo por workspace (§1). La tabla tiene FORCE RLS, así
+--     que un SELECT sin workspace fijado ve 0 filas; se midió por
+--     estadística: pg_stat_user_tables.n_live_tup = 1 en outbound_brief.
+--     Con una sola fila en toda la tabla no puede haber dos activas en
+--     un workspace, y el CREATE UNIQUE INDEX no puede fallar. Aun así,
+--     el integrador repite con postgres (sin RLS) justo antes de aplicar:
+--       select workspace_id, count(*) from outbound_brief
+--        where status = 'active' group by 1 having count(*) > 1;
+--     → 0 filas esperadas. Si devolviera alguna, se pausa la más vieja
+--     (status = 'paused') antes de correr esta migración.
+--   · Límites (§2): el único brief es el del seed de Laura, que los
+--     cumple (lo comprueba brief.test.ts contra el seed).
+--   · Negocios perdidos sin motivo (§4): el disparador solo mira la
+--     TRANSICIÓN, así que una fila vieja sin motivo no rompe la
+--     migración; el seed lleva motivo en todos sus perdidos.
 --
 -- VEN-7 · outbound_brief existe desde 0007 pero nadie lo escribía: el
 -- seed dejaba una fila y ninguna pantalla la leía. Desde VEN-7 el
@@ -34,8 +53,15 @@
 -- CHECK fallaría entre las dos; el disparador mira la fila al COMMIT.
 -- Solo salta en la TRANSICIÓN a «perdido sin motivo» (el WHEN compara
 -- con OLD): un negocio perdido antes de que el motivo existiera no se
--- vuelve intocable. Hoy Supabase no tiene ninguno (medido el 25-sep:
--- 0 negocios perdidos), y el seed lleva motivo.
+-- vuelve intocable, y por eso la migración no depende de cuántos haya.
+--
+-- VEN-7 · Quién cambia el brief. Es una regla del ESPACIO entero: lo que
+-- excluye se le oculta a todo el equipo en el radar y ninguna cadencia
+-- le escribe. Hasta aquí cualquier miembro con mc_app lo reescribía. Lo
+-- cambian los mismos que la política de envío: owner o admin, con la
+-- misma función outreach_can_manage (0050 §7) y el mismo tipo de
+-- política (RESTRICTIVE, TO mc_app). Leer sigue igual: lo lee todo el
+-- espacio.
 --
 -- Nada de esto abre privilegios: la función del disparador es SECURITY
 -- INVOKER y solo lee la fila que se acaba de escribir.
@@ -121,3 +147,27 @@ CREATE CONSTRAINT TRIGGER deal_lost_reason_on_update
   WHEN (NEW.lost_at IS NOT NULL AND NEW.lost_reason IS NULL
         AND (OLD.lost_at IS NULL OR OLD.lost_reason IS NOT NULL))
   EXECUTE FUNCTION deal_lost_reason_required();
+
+
+-- ---------------------------------------------------------------------
+-- 5 · outbound_brief: lo escriben owner y admin
+-- ---------------------------------------------------------------------
+-- RESTRICTIVE: se suman (AND) a la de aislamiento por workspace de 0010,
+-- no la sustituyen. El worker (BYPASSRLS) y quien migra o siembra (las
+-- políticas son TO mc_app) no cambian. Sin identidad, outreach_can_manage
+-- solo deja pasar con app.auth_disabled = 'on' (desarrollo y pruebas).
+DROP POLICY IF EXISTS outbound_brief_manage_insert ON outbound_brief;
+CREATE POLICY outbound_brief_manage_insert ON outbound_brief AS RESTRICTIVE
+  FOR INSERT TO mc_app
+  WITH CHECK (outreach_can_manage(workspace_id));
+
+DROP POLICY IF EXISTS outbound_brief_manage_update ON outbound_brief;
+CREATE POLICY outbound_brief_manage_update ON outbound_brief AS RESTRICTIVE
+  FOR UPDATE TO mc_app
+  USING (true)
+  WITH CHECK (outreach_can_manage(workspace_id));
+
+DROP POLICY IF EXISTS outbound_brief_manage_delete ON outbound_brief;
+CREATE POLICY outbound_brief_manage_delete ON outbound_brief AS RESTRICTIVE
+  FOR DELETE TO mc_app
+  USING (outreach_can_manage(workspace_id));

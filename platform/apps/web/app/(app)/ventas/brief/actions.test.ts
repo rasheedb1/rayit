@@ -1,20 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { permisosDeRol, SinPermisoError } from "@mc/core";
 
 /**
  * guardarBrief sin base y sin Next: qué llega a @mc/db con cada
  * formulario, cómo vuelve cada error de dominio (en su campo o arriba) y
- * que el permiso es lo PRIMERO. saveBrief se prueba contra Postgres
+ * que el rol (owner o admin) es lo PRIMERO. saveBrief se prueba contra Postgres
  * embebido en packages/db/test/brief.test.ts.
  */
 const saveBrief = vi.fn();
 const revalidatePath = vi.fn();
-const sesion = vi.hoisted(() => ({ permisos: null as ReadonlySet<string> | null }));
+const puedeEditarElBrief = vi.fn();
 
-vi.mock("@/lib/permisos/sesion", async (importOriginal) => {
-  const real = await importOriginal<typeof import("@/lib/permisos/sesion")>();
-  return { permisosDeLaSesion: async () => sesion.permisos ?? real.permisosDeLaSesion() };
-});
+vi.mock("./permiso", () => ({ puedeEditarElBrief: () => puedeEditarElBrief() }));
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => revalidatePath(...a) }));
 vi.mock("../_lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
 vi.mock("@mc/db/queries/brief", async (original) => ({
@@ -56,7 +52,7 @@ function datos(cambios: Record<string, string | string[] | null> = {}): FormData
 beforeEach(() => {
   saveBrief.mockReset().mockResolvedValue("brief-1");
   revalidatePath.mockReset();
-  sesion.permisos = null;
+  puedeEditarElBrief.mockReset().mockResolvedValue(true);
 });
 
 describe("guardarBrief", () => {
@@ -117,9 +113,14 @@ describe("guardarBrief", () => {
     consola.mockRestore();
   });
 
-  it("sin permiso para registrar en el radar no valida ni escribe", async () => {
-    sesion.permisos = permisosDeRol("creator", "viewer");
-    await expect(guardarBrief({}, datos())).rejects.toBeInstanceOf(SinPermisoError);
+  it("quien no es owner ni admin no valida ni escribe: el brief oculta señales a todo el equipo", async () => {
+    puedeEditarElBrief.mockResolvedValue(false);
+    expect(await guardarBrief({}, datos({ title: "" }))).toEqual({ message: MESSAGES.brief.sinPermiso });
     expect(saveBrief).not.toHaveBeenCalled();
+  });
+
+  it("si la base lo rechaza por el rol (0064 §5), lo dice igual, sin SQL", async () => {
+    saveBrief.mockRejectedValue(new BriefError("Forbidden"));
+    expect(await guardarBrief({}, datos())).toEqual({ message: MESSAGES.briefErrores.Forbidden });
   });
 });

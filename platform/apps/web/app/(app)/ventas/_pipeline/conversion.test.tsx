@@ -19,7 +19,7 @@ describe("conversionView", () => {
     expect(v).toEqual({
       rate: t.rate(f.pct(0.5833)),
       basis: "de 12 negocios",
-      label: t.label("Contactado", "7", "12", f.pct(0.5833)),
+      label: t.label("Contactado", "12", 12, "7", 7, f.pct(0.5833)),
     });
     expect(v?.rate).toMatch(/^58\s?%/);
   });
@@ -27,7 +27,20 @@ describe("conversionView", () => {
   it("sobre un solo negocio, la frase lo dice en singular", () => {
     const v = conversionView({ stageId: "propuesta", entered: 1, advanced: 1, rate: "1.0000" }, "Propuesta enviada", f);
     expect(v?.basis).toBe("de 1 negocio");
-    expect(v?.label).toBe(t.labelOne("Propuesta enviada", "1", f.pct(1)));
+    expect(v?.label).toMatch(/^Del negocio que entró en «Propuesta enviada», llegó más lejos \(100\s?%\)\.$/);
+    const quieto = conversionView({ stageId: "propuesta", entered: 1, advanced: 0, rate: "0.0000" }, "Propuesta enviada", f);
+    expect(quieto?.label).toMatch(/, no llegó más lejos \(0\s?%\)\.$/);
+  });
+
+  it("concuerda el verbo con cuántos avanzaron: ninguno, uno o varios", () => {
+    const uno = conversionView({ stageId: "negociacion", entered: 3, advanced: 1, rate: "0.3333" }, "Negociación", f);
+    expect(uno?.label).toMatch(/^De los 3 negocios que entraron en «Negociación», uno llegó más lejos \(33\s?%\)\.$/);
+    const ninguno = conversionView({ stageId: "negociacion", entered: 3, advanced: 0, rate: "0.0000" }, "Negociación", f);
+    expect(ninguno?.label).toMatch(/, ninguno llegó más lejos \(0\s?%\)\.$/);
+    const varios = conversionView({ stageId: "nuevo", entered: 1200, advanced: 1100, rate: "0.9167" }, "Nuevo", f);
+    // La cifra va con el separador del locale y el verbo no depende de cómo se escriba.
+    expect(varios?.label).toMatch(/^De los 1\.200 negocios que entraron en «Nuevo», 1\.100 llegaron más lejos/);
+    expect(varios?.label).not.toMatch(/llegó/);
   });
 
   it("sin negocios que hayan pasado por la etapa no inventa un 0 %", () => {

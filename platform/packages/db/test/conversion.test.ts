@@ -12,7 +12,7 @@
  *      de deal_stage_history que ve su workspace: la consulta y el
  *      recuento independiente tienen que dar lo mismo, etapa por etapa.
  *
- * Y el motivo de pérdida, como regla de la BASE (0043 §4): mover a
+ * Y el motivo de pérdida, como regla de la BASE (0064 §4): mover a
  * «Perdido» sin motivo no llega al COMMIT aunque no pase por moveDeal.
  */
 import { after, before, describe, test } from 'node:test';

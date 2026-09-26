@@ -34,28 +34,31 @@ export function conversionView(c: StageConversion | undefined, stageLabel: strin
   return {
     rate: t.rate(pct),
     basis: t.basis(entered, c.entered),
-    label: c.entered === 1 ? t.labelOne(stageLabel, advanced, pct) : t.label(stageLabel, advanced, entered, pct),
+    label: t.label(stageLabel, entered, c.entered, advanced, c.advanced, pct),
   };
 }
 
 /**
- * La fila discreta de conversión debajo de una columna del pipeline
- * (VEN-8), como la de Pipedrive: qué parte de los negocios que entraron
- * en la etapa llegó más lejos, y sobre cuántos se sostiene esa cifra.
+ * La fila discreta de conversión de una columna del pipeline (VEN-8),
+ * como la de Pipedrive: qué parte de los negocios que entraron en la
+ * etapa llegó más lejos, y sobre cuántos se sostiene esa cifra.
  * «100 % avanza» sobre un negocio no es lo mismo que sobre cuarenta, y
  * por eso el número de negocios va siempre al lado.
  *
- * Se monta en el tablero con una línea (_pipeline/tablero.tsx). Sin
+ * Va bajo la cabecera de cada columna, junto al monto, y no al pie: al
+ * pie quedaba a la altura de la última tarjeta y las tasas no se leían
+ * en línea. Se monta en el tablero con una línea (_pipeline/tablero.tsx)
+ * y en la lista, en el resumen de encima (_pipeline/vista.tsx). Sin
  * `view` (una etapa cerrada) no pinta nada.
  */
-export function StageConversionRow({ view }: { view: ConversionView | null }) {
+export function StageConversionRow({ view, className = "" }: { view: ConversionView | null; className?: string }) {
   if (!view) return null;
   // `relative` no es decorativo: sin él, el sr-only (absolute) escapa del
   // scroll del tablero y ensancha la página entera a 400 px, igual que en
   // la tarjeta (_pipeline/tablero.tsx).
   return (
     <p
-      className="relative mt-2 flex items-baseline justify-between gap-2 border-t border-dashed border-border pt-2 text-xs text-muted"
+      className={`relative flex items-baseline justify-between gap-2 text-xs text-muted ${className}`}
       title={view.label}
       data-testid="conversion-etapa"
     >
@@ -69,5 +72,31 @@ export function StageConversionRow({ view }: { view: ConversionView | null }) {
         </span>
       )}
     </p>
+  );
+}
+
+/**
+ * La conversión en la vista Lista: la misma fila por etapa abierta, en
+ * un resumen encima de la tabla, en el orden del embudo. Sin etapas
+ * abiertas no pinta nada. Es la misma cifra que el tablero pone bajo
+ * cada columna: las dos formas del pipeline no pueden decir cosas
+ * distintas.
+ */
+export function ConversionSummary({ stages }: { stages: { id: string; label: string; conversion: ConversionView | null }[] }) {
+  const t = MESSAGES.pipeline.conversion;
+  const abiertas = stages.filter((s) => s.conversion !== null);
+  if (abiertas.length === 0) return null;
+  return (
+    <section aria-label={t.listTitle} className="mb-4">
+      <h3 className="mb-2 text-xs font-medium text-muted">{t.listTitle}</h3>
+      <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4" data-testid="conversion-resumen">
+        {abiertas.map((s) => (
+          <li key={s.id} className="min-w-0 rounded-md border border-border px-3 py-2">
+            <p className="truncate text-xs font-medium text-ink">{s.label}</p>
+            <StageConversionRow view={s.conversion} className="mt-1" />
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

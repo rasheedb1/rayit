@@ -167,7 +167,7 @@ describe("PipelineBoard", () => {
   });
 
   it("Escape cierra el diálogo sin mover, y el foco vuelve al menú de la tarjeta", async () => {
-    render(<PipelineBoard deals={deals} stages={stages} />);
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     const menu = screen.getByLabelText("Mover «Café Alma» a otra etapa");
     menu.focus();
     await act(async () => {
@@ -327,8 +327,8 @@ describe("PipelineBoard", () => {
     expect(within(screen.getByTestId("columna-perdido")).getByText("Por el precio")).toBeInTheDocument();
   });
 
-  it("debajo de cada columna abierta va su conversión con el número de negocios; las cerradas no llevan (VEN-8)", () => {
-    render(<PipelineBoard deals={deals} stages={stages} />);
+  it("bajo la cabecera de cada columna abierta va su conversión con el número de negocios; las cerradas no llevan (VEN-8)", () => {
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     const filas = screen.getAllByTestId("conversion-etapa");
     expect(filas).toHaveLength(1);
     const nuevo = within(screen.getByRole("listitem", { name: "Nuevo" })).getByTestId("conversion-etapa");
@@ -336,5 +336,9 @@ describe("PipelineBoard", () => {
     expect(nuevo).toHaveTextContent("de 12 negocios");
     expect(nuevo).toHaveAttribute("title", "De los 12 negocios que entraron en «Nuevo», 7 llegaron más lejos (58 %).");
     expect(within(screen.getByRole("listitem", { name: "Perdido" })).queryByTestId("conversion-etapa")).toBeNull();
+    // Arriba, junto al monto, y no al pie: antes de las tarjetas, para que
+    // las tasas de todas las columnas queden a la misma altura.
+    const tarjetas = screen.getByTestId("columna-nuevo");
+    expect(nuevo.compareDocumentPosition(tarjetas) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

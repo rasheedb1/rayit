@@ -44,6 +44,11 @@ export interface BriefFormProps {
    * el cliente de Postgres al navegador.
    */
   limits: typeof BRIEF_LIMITS;
+  /**
+   * Si quien mira puede cambiar el brief (owner o admin, puedeEditarElBrief).
+   * Si no, lo ve entero, sin «Guardar», y la pantalla dice por qué.
+   */
+  editable?: boolean;
 }
 
 /**
@@ -119,7 +124,15 @@ function Casilla({
  * useVentasForm). Aquí nada se vacía: lo guardado es lo que queda en
  * pantalla.
  */
-export function BriefForm({ values, deliverableOptions, categorySuggestions, countries, companies, limits }: BriefFormProps) {
+export function BriefForm({
+  values,
+  deliverableOptions,
+  categorySuggestions,
+  countries,
+  companies,
+  limits,
+  editable = true,
+}: BriefFormProps) {
   const [estado, dispatch, pendiente] = useActionState<BriefState, FormData>(guardarBrief, INICIAL);
   const formRef = useRef<HTMLFormElement>(null);
   const [minBudget, setMinBudget] = useState(values.minBudget);
@@ -147,7 +160,14 @@ export function BriefForm({ values, deliverableOptions, categorySuggestions, cou
   }
 
   return (
-    <form ref={formRef} onSubmit={onSubmit} noValidate className="grid max-w-3xl gap-6">
+    <form ref={formRef} onSubmit={onSubmit} noValidate className="max-w-3xl">
+      {/* Sin permiso, todo se ve y nada se toca: un fieldset apagado, como la política de envío. */}
+      <fieldset disabled={!editable} className="grid min-w-0 gap-6">
+      {!editable && (
+        <p role="note" className="rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-ink-2">
+          {t.sinPermiso}
+        </p>
+      )}
       <Aviso message={estado.message} notice={estado.ok ? estado.notice : undefined} />
 
       <Bloque titulo={t.wants.title} ayuda={t.wants.help}>
@@ -166,6 +186,8 @@ export function BriefForm({ values, deliverableOptions, categorySuggestions, cou
             max={limits.categories}
             maxLength={limits.categoryMax}
             placeholder={t.chips.categoryPlaceholder}
+            disabled={!editable}
+            saved={estado.stamp}
           />
         </div>
         <div className="sm:col-span-2">
@@ -179,6 +201,8 @@ export function BriefForm({ values, deliverableOptions, categorySuggestions, cou
             options={countries}
             max={limits.countries}
             placeholder={t.chips.countryPlaceholder}
+            disabled={!editable}
+            saved={estado.stamp}
           />
         </div>
         <Field label={f.minBudget} help={f.minBudgetHelp} error={errors.minBudget} htmlFor="brief-min-budget">
@@ -237,6 +261,8 @@ export function BriefForm({ values, deliverableOptions, categorySuggestions, cou
             max={limits.categories}
             maxLength={limits.categoryMax}
             placeholder={t.chips.categoryPlaceholder}
+            disabled={!editable}
+            saved={estado.stamp}
           />
         </div>
         <div className="sm:col-span-2">
@@ -251,6 +277,8 @@ export function BriefForm({ values, deliverableOptions, categorySuggestions, cou
             emptyOptions={t.chips.noCompanies}
             max={limits.companies}
             placeholder={t.chips.companyPlaceholder}
+            disabled={!editable}
+            saved={estado.stamp}
           />
         </div>
         <div className="sm:col-span-2">
@@ -270,11 +298,14 @@ export function BriefForm({ values, deliverableOptions, categorySuggestions, cou
         </div>
       </Bloque>
 
-      <div>
-        <Button type="submit" variant="primary" loading={pendiente}>
-          {t.submit}
-        </Button>
-      </div>
+      {editable && (
+        <div>
+          <Button type="submit" variant="primary" loading={pendiente}>
+            {t.submit}
+          </Button>
+        </div>
+      )}
+      </fieldset>
     </form>
   );
 }
