@@ -351,6 +351,16 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'columnas del intento y outbound_optout_link son del despachador. Pide ser del equipo (membership_is_team, 0060; ' +
     'sin identidad, solo con app.auth_disabled): las políticas no frenan a una SECURITY DEFINER. EXECUTE a mc_app y ' +
     'mc_worker. No es de ningún disparador',
+  // La baja no se apaga (entregabilidad §8.4, pulido r2).
+  'outbound_workspace_optout_record(uuid,text)':
+    'la baja por respuesta (reply) o marcada a mano (manual) queda también en la dirección (entregabilidad §8.4): ' +
+    'mc_app no tiene INSERT en outbound_workspace_optout. Solo el workspace de la transacción (sin él, 42501), solo el ' +
+    'correo de una ficha que ese workspace ve (contact_visible_to), y nunca borra ni cambia una fila: lo peor que ' +
+    'hace un workspace con ella es dejar de escribirse a sí mismo. EXECUTE solo para mc_app. No es de ningún disparador',
+  'contact_optout_keep()':
+    'la función del disparador contact.contact_optout_keep (entregabilidad §8.4): al borrarse una ficha de baja, por ' +
+    'la vía que sea, su correo queda en outbound_workspace_optout de su workspace. Solo inserta con ON CONFLICT DO ' +
+    'NOTHING a partir de OLD; no lee nada que quien borra no tuviera. EXECUTE revocado',
   // La redacción que pide una persona y el pitch a mano (0062, VEN-12).
   'outbound_generation_request(uuid,text,text,uuid)':
     'una persona pide desde el editor del pitch que la IA redacte o regenere con una pista cerrada (0062, VEN-12): ' +
@@ -448,6 +458,9 @@ export const COLUMNAS_QUE_USA_EL_CODIGO: readonly string[] = (() => {
  * de 0026 §3 (cualquier workspace escribía en contact_suppression).
  */
 export const DISPARADORES_DEFINER_DECLARADOS: Readonly<Record<string, string>> = {
+  'contact.contact_optout_keep':
+    'guarda la baja en la dirección cuando se borra una ficha de baja (entregabilidad §8.4): borrarla y crearla otra ' +
+    'vez con el mismo correo no la deja contactable. Solo inserta su correo en la lista de SU workspace, si existe',
   'contact.contact_suppression_apply':
     'aplica la baja global al contacto que nace o cambia de correo (0029 §1). Lee contact_suppression, que solo ' +
     'escribe el worker; lo que aprende quien escribe es que ese correo pidió no ser contactado, que es justo lo que ' +
@@ -463,6 +476,10 @@ export const DISPARADORES_DEFINER_DECLARADOS: Readonly<Record<string, string>> =
  * schema_migrations y abriría el hueco sin que nadie lo viera.
  */
 export const DISPARADORES_DE_CANDADO: Readonly<Record<string, string>> = {
+  'contact.contact_optout_no_delete':
+    'mc_app no borra una ficha que pidió la baja (entregabilidad §8.4): la baja es de una sola dirección y la ficha ' +
+    'guarda cuándo y por qué. El borrado en cascada de su empresa lo ejecuta el dueño de la tabla y pasa, con su ' +
+    'correo guardado por contact_optout_keep',
   'outbound_touch.outbound_touch_worker_columns':
     'provider_message_id, message_id_rfc y recipient_address solo los escribe el despachador, un toque con esas ' +
     'pruebas no cambia de contacto ni de empresa, un toque en sent no vuelve atrás, y el estado processing solo ' +
@@ -1050,8 +1067,9 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
   outbound_workspace_optout: {
     permite: ['SELECT'],
     motivo:
-      'a quién no le vuelve a escribir este workspace porque pulsó el enlace de baja de uno de sus correos (entregabilidad §8). ' +
-      'La escribe solo public_optout: con escritura, un workspace se quitaría una baja o se la pondría a otro',
+      'a quién no le vuelve a escribir este workspace porque pulsó el enlace de baja de uno de sus correos, pidió la baja ' +
+      'respondiendo o se la marcaron a mano (entregabilidad §8 y §8.4). La escriben solo public_optout y ' +
+      'outbound_workspace_optout_record: con escritura, un workspace se quitaría una baja o se la pondría a otro',
   },
   outbound_generation: {
     permite: ['SELECT'],

@@ -20,7 +20,10 @@
  *   · contact.email_invalid (entregabilidad): no se programa un correo a un correo
  *     que rebotó, los otros canales siguen, y cambiar el correo borra la
  *     marca y también contact.bounced;
- *   · outbound_bounce: la web la lee aislada por workspace y no la escribe.
+ *   · outbound_bounce: la web la lee aislada por workspace y no la escribe;
+ *   · la baja no se apaga (§8.4, pulido r2): la marcada a mano o por
+ *     respuesta queda en la dirección, mc_app no borra una ficha de baja, y
+ *     borrarla por otra vía y crearla otra vez no la deja contactable.
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -32,6 +35,8 @@ import {
   type OptoutGates,
 } from '../src/queries/entregabilidad.ts';
 import { disableOutreach, enableOutreach } from '../src/queries/outreach.ts';
+import { recordWorkspaceOptOut } from '../src/queries/outreach/inbound.ts';
+import { listContacts, optOutContact } from '../src/queries/ventas.ts';
 import { createDb, type BaseTx } from '../src/client.ts';
 import { crearEnlaceDeDemo, esBaseLocal } from '../scripts/demo-enlace-baja.ts';
 import { openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
@@ -896,6 +901,110 @@ describe('los avisos del día en la web (listTodayOutreachAlerts)', () => {
       ],
     );
     assert.equal(await t.db.withWorkspace(WS_S, (tx) => countUrgentOutreachAlerts(tx)), 1);
+  });
+});
+
+describe('la baja no se apaga (entregabilidad §8.4, pulido r2)', () => {
+  const COMPANY_P = '00000038-0000-4000-8000-0000000000c5';
+  const CONTACT_P = '00000038-0000-4000-8000-0000000000e5';
+  const CONTACT_P2 = '00000038-0000-4000-8000-0000000000e6';
+  const CONTACT_PUB = '00000038-0000-4000-8000-0000000000e7';
+  const WS_EFIMERO = '00000038-0000-4000-8000-0000000000ec';
+
+  before(async () => {
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_EFIMERO}', 'baja-efimero', 'Efímero', 'America/Bogota');
+      INSERT INTO company (id, name, owner_workspace_id) VALUES ('${COMPANY_P}', 'Marca que se borra', NULL);
+      INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_S}', '${COMPANY_P}'), ('${WS_EFIMERO}', '${COMPANY_P}');
+      INSERT INTO contact (id, company_id, full_name, email, source, owner_workspace_id) VALUES
+        ('${CONTACT_P}', '${COMPANY_P}', 'Paula', 'paula@borrada.test', 'user_provided', '${WS_S}'),
+        ('${CONTACT_P2}', '${COMPANY_P}', 'Pedro', 'pedro@borrada.test', 'user_provided', '${WS_S}'),
+        ('${CONTACT_PUB}', '${COMPANY_P}', 'Prensa', 'prensa@borrada.test', 'press', NULL);
+    `);
+  }, SETUP_TIMEOUT);
+
+  after(async () => {
+    if (t.kind === 'postgres') {
+      await t.admin(`
+        DELETE FROM workspace WHERE id = '${WS_EFIMERO}';
+        DELETE FROM company WHERE id = '${COMPANY_P}';
+        DELETE FROM outbound_workspace_optout WHERE email LIKE '%@borrada.test';
+      `);
+    }
+  });
+
+  const enLaLista = async (email: string) =>
+    sinRls<{ workspace_id: string; source: string; token_hash: string | null }>(
+      `SELECT workspace_id, source, token_hash FROM outbound_workspace_optout WHERE email = '${email}' ORDER BY workspace_id`,
+    );
+
+  test('la baja marcada a mano entra en la lista del espacio, sin token', async () => {
+    await t.db.withWorkspace(WS_S, (tx) => optOutContact(tx, CONTACT_P, 'Pidió no recibir más correos.'));
+    assert.deepEqual(await enLaLista('paula@borrada.test'), [{ workspace_id: WS_S, source: 'manual', token_hash: null }]);
+  });
+
+  test('mc_app no borra una ficha de baja', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WS_S, (tx) => tx.query(`DELETE FROM contact WHERE id = '${CONTACT_P}'`)),
+      /pidió no ser contactada: no se borra/,
+    );
+  });
+
+  test('borrar y recrear la ficha no deshace la baja', async () => {
+    // Por otra vía que la aplicación (un script, la cascada de su empresa):
+    // la ficha se va, la dirección se queda.
+    await t.admin(`DELETE FROM contact WHERE id = '${CONTACT_P}'`);
+    const nueva = await t.db.withWorkspace(WS_S, async (tx) => {
+      const id = (
+        await tx.query<{ id: string }>(
+          `INSERT INTO contact (company_id, full_name, email, source, owner_workspace_id)
+           VALUES ('${COMPANY_P}', 'Paula otra vez', 'paula@borrada.test', 'user_provided', current_workspace_id()) RETURNING id`,
+        )
+      ).rows[0]!.id;
+      const ficha = (await listContacts(tx, COMPANY_P)).find((c) => c.id === id);
+      return { id, optedOut: ficha?.optedOut };
+    });
+    assert.equal(nueva.optedOut, true, 'la ficha nueva dice que pidió la baja');
+    // Y la base no la deja enrolar: la regla de la baja del espacio (§8.3).
+    await assert.rejects(
+      t.db.withWorkspace(WS_S, (tx) =>
+        tx.query(`INSERT INTO outbound_enrollment (workspace_id, sequence_id, contact_id) VALUES ('${WS_S}', '${SEQ}', '${nueva.id}')`),
+      ),
+      /pidió no recibir más mensajes de este espacio/,
+    );
+  });
+
+  test('una baja por respuesta del worker anota la dirección, también de una ficha pública del catálogo', async () => {
+    await t.db.asWorker((tx) => recordWorkspaceOptOut(tx, CONTACT_PUB, WS_S, 'reply'));
+    assert.deepEqual(await enLaLista('prensa@borrada.test'), [{ workspace_id: WS_S, source: 'reply', token_hash: null }]);
+    // Es la baja de ESE espacio: el otro que tiene la marca en su embudo sigue.
+    assert.equal((await enLaLista('prensa@borrada.test')).some((r) => r.workspace_id === WS_EFIMERO), false);
+  });
+
+  test('mc_app no escribe la lista a mano ni la anota sin workspace', async () => {
+    await assert.rejects(
+      t.db.withWorkspace(WS_S, (tx) =>
+        tx.query(`INSERT INTO outbound_workspace_optout (workspace_id, email, source) VALUES ('${WS_EFIMERO}', 'x@borrada.test', 'manual')`),
+      ),
+      /permission denied|permiso denegado/,
+    );
+    await assert.rejects(
+      t.db.withCatalogs((tx) => tx.query(`SELECT outbound_workspace_optout_record('${CONTACT_P2}', 'manual')`)),
+      /necesita un workspace fijado/,
+    );
+    assert.deepEqual(await enLaLista('pedro@borrada.test'), []);
+  });
+
+  test('al borrar la empresa, la baja de sus fichas se queda; al borrar el espacio, se va con él', async () => {
+    await t.admin(`
+      UPDATE contact SET opted_out = true, opted_out_at = now() WHERE id = '${CONTACT_P2}';
+      INSERT INTO contact (company_id, full_name, email, source, owner_workspace_id, opted_out, opted_out_at)
+      VALUES ('${COMPANY_P}', 'Del efímero', 'efimero@borrada.test', 'user_provided', '${WS_EFIMERO}', true, now());
+    `);
+    await t.admin(`DELETE FROM workspace WHERE id = '${WS_EFIMERO}'`);
+    assert.deepEqual(await enLaLista('efimero@borrada.test'), []);
+    await t.admin(`DELETE FROM company WHERE id = '${COMPANY_P}'`);
+    assert.deepEqual(await enLaLista('pedro@borrada.test'), [{ workspace_id: WS_S, source: 'manual', token_hash: null }]);
   });
 });
 

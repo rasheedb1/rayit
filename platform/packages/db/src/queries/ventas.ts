@@ -42,6 +42,7 @@ import { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL
 import { parseReplyOptOutCode, type ReplyOptOutChannel } from './canales.ts';
 import { addExcludedCompany, BRIEF_LIMITS, BriefError, briefSignalLateralSql, briefVerdictSql, type BriefVerdict } from './brief.ts';
 import { WORKSPACE_DEFAULTS } from './cimientos.ts';
+import { recordWorkspaceOptOut } from './outreach/inbound.ts';
 
 export { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES };
 
@@ -1030,7 +1031,10 @@ async function updateContactRow(
 /**
  * Registra la baja de un contacto propio. Es de una sola dirección: un
  * trigger impide que `opted_out` vuelva a false, así que esta capa no
- * ofrece lo contrario y la pantalla lo pide con confirmación.
+ * ofrece lo contrario y la pantalla lo pide con confirmación. Su correo
+ * entra además en la lista del workspace (outbound_workspace_optout,
+ * entregabilidad §8.4): borrar la ficha y crearla otra vez con el mismo
+ * correo no deshace la baja.
  */
 export async function optOutContact(tx: WorkspaceTx, contactId: string, reason: string | null): Promise<void> {
   if (!isUuid(contactId)) throw new ContactNotFound();
@@ -1048,6 +1052,7 @@ export async function optOutContact(tx: WorkspaceTx, contactId: string, reason: 
     const exists = await tx.query('SELECT 1 FROM contact WHERE id = $1', [contactId]);
     throw exists.rows.length > 0 ? new ContactNotOwned() : new ContactNotFound();
   }
+  await recordWorkspaceOptOut(tx, contactId, tx.workspaceId, 'manual');
 }
 
 // ---------------------------------------------------------------------

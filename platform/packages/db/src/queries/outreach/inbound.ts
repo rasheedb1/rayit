@@ -129,7 +129,7 @@ export async function applyContactOptOut(
   reason: string,
   now: Date,
 ): Promise<string[]> {
-  return (await optOutContact(tx, contactId, workspaceId, reason, now)).canceled;
+  return (await optOutContact(tx, contactId, workspaceId, reason, now, null, 'manual')).canceled;
 }
 
 /** Los canales con código de baja por respuesta: los del CHECK de contact.opted_out_code (0052). */
@@ -147,6 +147,7 @@ async function optOutContact(
   reason: string | null,
   now: Date,
   code: string | null = null,
+  source: WorkspaceOptOutSource = 'reply',
 ): Promise<{ canceled: string[]; stopped: string[]; marked: string[] }> {
   assertIds('applyContactOptOut', [contactId, workspaceId]);
   const ids = (
@@ -181,7 +182,41 @@ async function optOutContact(
       [ids, workspaceId, now.toISOString(), reason?.slice(0, 500) ?? null, code],
     )
   ).rows.map((r) => r.id);
+  await recordWorkspaceOptOut(tx, contactId, workspaceId, source);
   return { canceled, stopped, marked };
+}
+
+/** De dónde viene una baja que no es la del enlace: una respuesta o una persona en la ficha. */
+export type WorkspaceOptOutSource = 'reply' | 'manual';
+
+/**
+ * La baja vive también en la dirección (entregabilidad §8.4): el correo
+ * de la ficha entra en outbound_workspace_optout del workspace, que
+ * sobrevive a la ficha. Sin esto, borrarla y crearla otra vez con el
+ * mismo correo la dejaba contactable. mc_app no tiene INSERT en la lista
+ * y pasa por outbound_workspace_optout_record (SECURITY DEFINER, solo el
+ * workspace de la transacción); el worker (mc_worker, sin workspace
+ * fijado) escribe la fila directo, con la misma regla de visibilidad.
+ */
+export async function recordWorkspaceOptOut(
+  tx: SqlExecutor,
+  contactId: string,
+  workspaceId: string,
+  source: WorkspaceOptOutSource,
+): Promise<void> {
+  assertIds('recordWorkspaceOptOut', [contactId, workspaceId]);
+  const role = (await tx.query<{ r: string }>('SELECT current_user::text AS r')).rows[0]?.r;
+  if (role === 'mc_app') {
+    await tx.query('SELECT outbound_workspace_optout_record($1::uuid, $2)', [contactId, source]);
+    return;
+  }
+  await tx.query(
+    `INSERT INTO outbound_workspace_optout (workspace_id, email, source)
+     SELECT $2::uuid, c.email, $3 FROM contact c
+      WHERE c.id = $1::uuid AND c.email IS NOT NULL AND contact_visible_to(c.id, $2::uuid)
+     ON CONFLICT (workspace_id, email) DO NOTHING`,
+    [contactId, workspaceId, source],
+  );
 }
 
 /** Una dirección de correo comparable: sin «Nombre <…>», sin espacios, en minúsculas. */

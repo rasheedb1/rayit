@@ -39,6 +39,10 @@
 --      sesión, también el de una sola persona con dos registros.
 --   9. notification.title_es y body_es dicen en su comentario que guardan
 --      el idioma del espacio, no siempre español (§4).
+--  10. La baja no se apaga (pulido r2, §8.4): la que llega respondiendo
+--      o la que marca una persona también entra en
+--      outbound_workspace_optout, y una ficha de baja no se borra desde
+--      la aplicación; si se borra por otra vía, su dirección se queda.
 --
 -- Después de la última revisión, en su sitio: la vuelta desde 'processing' de
 -- alguien dado de baja (de este workspace o de toda la plataforma) se
@@ -638,16 +642,22 @@ CREATE POLICY contact_public_optout_email ON contact
 -- 8.1 · outbound_workspace_optout: a quién no le vuelve a escribir un workspace
 -- ---------------------------------------------------------------------
 --   email       la dirección a la que salió el correo del enlace
---               (outbound_optout_link.recipient_address)
---   token_hash  el enlace que la puso aquí (el primero)
--- La escribe public_optout y nadie más (mc_app no tiene INSERT). La web
--- la lee con su RLS para la regla de §8.3 y para la ficha.
+--               (outbound_optout_link.recipient_address), o la de la
+--               ficha que pidió la baja respondiendo o a mano (§8.4)
+--   source      link (el enlace), reply (una respuesta que pidió la
+--               baja) o manual (la marcó una persona en la ficha)
+--   token_hash  el enlace que la puso aquí (el primero); solo en link
+-- La escriben public_optout (link) y outbound_workspace_optout_record
+-- (reply y manual, §8.4); mc_app no tiene INSERT. La web la lee con su
+-- RLS para la regla de §8.3 y para la ficha.
 CREATE TABLE outbound_workspace_optout (
   workspace_id  uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
   email         citext NOT NULL CHECK (length(email) BETWEEN 3 AND 320),
-  token_hash    text NOT NULL CHECK (token_hash ~ '^[0-9a-f]{64}$'),
+  source        text NOT NULL DEFAULT 'link' CHECK (source IN ('link', 'reply', 'manual')),
+  token_hash    text CHECK (token_hash ~ '^[0-9a-f]{64}$'),
   created_at    timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (workspace_id, email)
+  PRIMARY KEY (workspace_id, email),
+  CONSTRAINT outbound_workspace_optout_token_of_link CHECK ((source = 'link') = (token_hash IS NOT NULL))
 );
 CREATE INDEX ON outbound_workspace_optout (email);
 
@@ -667,8 +677,10 @@ CREATE POLICY outbound_workspace_optout_ws_read ON outbound_workspace_optout FOR
 REVOKE INSERT, UPDATE, DELETE ON outbound_workspace_optout FROM mc_app;
 
 COMMENT ON TABLE outbound_workspace_optout IS
-  'La baja por enlace: a quién no le vuelve a escribir el workspace que envió el correo, por ningún canal (VEN-15). '
-  'La escribe public_optout y nadie más; un enlace nunca pasa a contact_suppression (entregabilidad §8).';
+  'A quién no le vuelve a escribir el workspace, por ningún canal (VEN-15): pulsó el enlace de baja de un correo suyo '
+  '(link, lo escribe public_optout), o pidió la baja respondiendo o una persona la marcó en su ficha (reply y manual, '
+  'outbound_workspace_optout_record y el borrado de una ficha de baja, §8.4). Sobrevive a la ficha: borrarla y crearla '
+  'otra vez no deshace la baja. Un enlace nunca pasa a contact_suppression (entregabilidad §8).';
 
 -- Lo que la baja lee y escribe aquí, con la misma cerradura que 0046 §9:
 -- la fila del workspace y la dirección que fija la función (para decir
@@ -977,3 +989,127 @@ $$;
 CREATE TRIGGER outbound_enrollment_workspace_optout
   BEFORE INSERT OR UPDATE OF contact_id, status ON outbound_enrollment
   FOR EACH ROW EXECUTE FUNCTION outbound_workspace_optout_check();
+
+-- ---------------------------------------------------------------------
+-- 8.4 · La baja no se apaga (pulido r2)
+-- ---------------------------------------------------------------------
+-- Hasta aquí, una baja por respuesta (intención unsubscribe) o marcada a
+-- mano solo quedaba en contact.opted_out. mc_app puede borrar una ficha
+-- (0007), y al crearla otra vez con el mismo correo nacía contactable;
+-- lo mismo al borrar su empresa (ON DELETE CASCADE) o en una importación
+-- que la rehiciera. La regla «la baja no se apaga» dependía de que nadie
+-- añadiera esa acción. Ahora vive en la dirección, como la del enlace:
+--
+--   · outbound_workspace_optout_record(contacto, origen): el correo de la
+--     ficha entra en la lista del workspace de la transacción, con origen
+--     reply o manual. SECURITY DEFINER porque mc_app no tiene INSERT en la
+--     lista; solo el workspace fijado, solo una ficha que ese workspace ve
+--     (contact_visible_to, 0056 §5: se resuelve al llamarla) y nunca borra
+--     ni cambia una fila. Lo peor que puede hacer un workspace con ella es
+--     dejar de escribirse a sí mismo. La llaman los dos optOutContact de
+--     @mc/db; el worker (mc_worker, sin workspace) escribe la fila directo.
+--   · contact_optout_keep (BEFORE DELETE, definer): si una ficha de baja
+--     se borra por la vía que sea (su empresa, un script), su correo se
+--     queda en la lista de su workspace. Si lo que se borra es el propio
+--     workspace, no hay a quién guardársela.
+--   · contact_optout_no_delete (BEFORE DELETE, candado): mc_app no borra
+--     una ficha de baja. El borrado en cascada de su empresa lo ejecuta el
+--     dueño de la tabla (así corre la integridad referencial en Postgres)
+--     y pasa, con su correo guardado por el disparador anterior.
+--
+-- La tabla lleva FORCE ROW LEVEL SECURITY: las dos funciones corren como
+-- su dueño y necesitan su política de alta, TO CURRENT_USER (mc_migrator,
+-- o mc_migrator_embedded en PGlite) y solo para reply y manual; el
+-- enlace sigue siendo solo de public_optout. A mc_app no le alcanza.
+CREATE POLICY outbound_workspace_optout_owner_record ON outbound_workspace_optout
+  FOR INSERT TO CURRENT_USER
+  WITH CHECK (source IN ('reply', 'manual') AND token_hash IS NULL);
+
+CREATE FUNCTION outbound_workspace_optout_record(p_contact uuid, p_source text)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  ws uuid := current_workspace_id();
+  correo citext;
+BEGIN
+  IF ws IS NULL THEN
+    RAISE EXCEPTION 'outbound_workspace_optout_record necesita un workspace fijado en la transacción.'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF p_source IS NULL OR p_source NOT IN ('reply', 'manual') THEN
+    RAISE EXCEPTION 'Origen desconocido: %. Es reply o manual (el enlace lo anota public_optout).', p_source
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  SELECT c.email INTO correo FROM contact c
+   WHERE c.id = p_contact AND c.email IS NOT NULL AND contact_visible_to(c.id, ws);
+  IF correo IS NULL THEN
+    RETURN false;
+  END IF;
+  INSERT INTO outbound_workspace_optout (workspace_id, email, source)
+  VALUES (ws, correo, p_source)
+  ON CONFLICT (workspace_id, email) DO NOTHING;
+  RETURN true;
+END;
+$$;
+REVOKE ALL ON FUNCTION outbound_workspace_optout_record(uuid, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION outbound_workspace_optout_record(uuid, text) TO mc_app;
+COMMENT ON FUNCTION outbound_workspace_optout_record(uuid, text) IS
+  'Anota el correo de una ficha que pidió la baja respondiendo (reply) o que una persona dio de baja (manual) en '
+  'outbound_workspace_optout del workspace de la transacción (entregabilidad §8.4). Solo una ficha que ese workspace ve; '
+  'nunca borra ni cambia una fila. true si la ficha tiene correo (la fila ya podía estar).';
+
+CREATE FUNCTION contact_optout_keep()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF OLD.opted_out AND OLD.email IS NOT NULL AND OLD.owner_workspace_id IS NOT NULL THEN
+    -- Si lo que se borra es el workspace (la cascada llega hasta aquí), la
+    -- clave ajena lo rechaza al final de este INSERT: no hay a quién
+    -- guardársela y el borrado del workspace sigue. Si la dirección ya
+    -- estaba, la clave primaria lo dice. Ni el workspace ni la lista se
+    -- preguntan antes, ni con ON CONFLICT: sin workspace fijado, su RLS
+    -- no le deja ver esas filas al dueño.
+    BEGIN
+      INSERT INTO outbound_workspace_optout (workspace_id, email, source)
+      VALUES (OLD.owner_workspace_id, OLD.email,
+              CASE WHEN OLD.opted_out_code LIKE 'reply_optout:%' THEN 'reply' ELSE 'manual' END);
+    EXCEPTION WHEN foreign_key_violation OR unique_violation THEN
+      NULL;
+    END;
+  END IF;
+  RETURN OLD;
+END;
+$$;
+REVOKE ALL ON FUNCTION contact_optout_keep() FROM PUBLIC;
+CREATE TRIGGER contact_optout_keep
+  BEFORE DELETE ON contact
+  FOR EACH ROW EXECUTE FUNCTION contact_optout_keep();
+
+CREATE FUNCTION contact_optout_no_delete()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF OLD.opted_out AND current_user = 'mc_app' THEN
+    RAISE EXCEPTION 'La ficha % pidió no ser contactada: no se borra.', OLD.id
+      USING ERRCODE = 'check_violation',
+            HINT = 'La baja es de una sola dirección (entregabilidad §8.4). Su correo sigue en la lista del espacio.';
+  END IF;
+  RETURN OLD;
+END;
+$$;
+CREATE TRIGGER contact_optout_no_delete
+  BEFORE DELETE ON contact
+  FOR EACH ROW EXECUTE FUNCTION contact_optout_no_delete();
+
+-- Las bajas de antes de esta sección no se copian a la lista: con FORCE
+-- ROW LEVEL SECURITY, quien migra no ve las fichas de ningún workspace.
+-- No hace falta: mc_app no las puede borrar (contact_optout_no_delete) y
+-- cualquier otro borrado pasa por contact_optout_keep.

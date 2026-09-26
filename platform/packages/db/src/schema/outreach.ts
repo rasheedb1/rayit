@@ -620,16 +620,19 @@ export const outboundBounce = pgTable('outbound_bounce', {
 
 /**
  * A quién no le vuelve a escribir un workspace (entregabilidad §8, VEN-15 r3): la
- * dirección pulsó el enlace de baja de un correo suyo. La escribe solo
- * public_optout; con dos workspaces para la misma dirección, la baja pasa
- * a contact_suppression (toda la plataforma).
+ * dirección pulsó el enlace de baja de un correo suyo (source 'link', la
+ * escribe public_optout), o pidió la baja respondiendo o una persona la
+ * marcó en su ficha ('reply' y 'manual', §8.4). Sobrevive a la ficha.
+ * Nunca pasa a contact_suppression (toda la plataforma).
  */
 export const outboundWorkspaceOptout = pgTable(
   'outbound_workspace_optout',
   {
     workspaceId: workspaceId(),
     email: citext('email').notNull(),
-    tokenHash: text('token_hash').notNull(),
+    source: text('source').notNull().default('link'),
+    /** El enlace que la puso aquí; solo con source 'link'. */
+    tokenHash: text('token_hash'),
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.workspaceId, t.email] })],
