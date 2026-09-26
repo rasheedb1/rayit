@@ -115,7 +115,7 @@ function Hints({ row, adminDetails, quiet }: { row: ChannelRowView; adminDetails
   );
 }
 
-/** «Máximo 140 (política del espacio). Vacío = el máximo.»: el máximo y quién lo fija, igual para el diario y el semanal (la vista lo dice, 0045). */
+/** «Máximo 140 (política del espacio). Vacío = el máximo.»: el máximo y quién lo fija, igual para el diario y el semanal (la vista lo dice, canales_instagram_apagado_y_semana). */
 function maxHelp(by: "policy" | "provider", personal: boolean, n: string, provider: string): string {
   const max = MESSAGES.caps.max;
   return MESSAGES.caps.help(by === "policy" ? max.policy(n) : personal ? max.personal(n) : max.provider(n, provider));

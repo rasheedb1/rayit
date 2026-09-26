@@ -1,7 +1,7 @@
 /**
  * sales.channels_keepalive · mantiene vivos los canales de outreach (VEN-9).
  *
- * Cada hora (job_definition, 0038 y 0042), POR LOTES: cada corrida toma
+ * Cada hora (job_definition, canales_outreach y canales_identidad_y_rotacion), POR LOTES: cada corrida toma
  * las cuentas vivas que no se comprobaron en las últimas veinte horas
  * (keepalive_checked_at, de la más vieja a la más nueva, KEEPALIVE_BATCH
  * como mucho) y las recorre de cuatro en cuatro (max_concurrency). Cada
@@ -69,7 +69,7 @@ export const KEEPALIVE_MARGIN_MS = 25 * 60 * 60 * 1000;
 export const KEEPALIVE_BATCH = 200;
 /** Una cuenta comprobada hace menos de esto no vuelve al lote: una visita al día. */
 export const KEEPALIVE_RECHECK_HOURS = 20;
-/** Cuántas a la vez, si job_definition no dice otra cosa (max_concurrency, 0042). */
+/** Cuántas a la vez, si job_definition no dice otra cosa (max_concurrency, canales_identidad_y_rotacion). */
 export const KEEPALIVE_CONCURRENCY = 4;
 /** Una fila 'pending' de más de dos días ya no la va a terminar nadie. */
 export const PENDING_MAX_AGE_HOURS = 48;
@@ -254,7 +254,7 @@ async function dueAccounts(db: Queryable, provider: AccountRow['provider'], stat
 /**
  * Las cuentas de Unipile conectadas cuyos avisos no están al día: les
  * falta alguno, o se dieron de alta con otro secreto (la huella no es la
- * del actual: el secreto se rotó, o son de antes de 0042). A una recién
+ * del actual: el secreto se rotó, o son de antes de canales_identidad_y_rotacion). A una recién
  * conectada no se la toca: la web le está dando de alta los suyos.
  *
  * Por cada una: los dos avisos con el secreto actual; si salen los dos,
@@ -333,7 +333,7 @@ async function refreshWebhooks(
  * de soltar), con más de ORPHAN_MIN_AGE_HOURS y nacidas de NUESTRA hosted
  * auth, se borran. Nuestra quiere decir: el `name` abre con nuestra llave
  * de estado, o un aviso de cuenta creada la anotó en la pendiente de su
- * intento (notified_account_id, 0042 §8), que es lo que la reconoce si
+ * intento (notified_account_id, canales_identidad_y_rotacion §8), que es lo que la reconoce si
  * Unipile no devuelve el `name` en la cuenta (el plan B de §9.3). Es la
  * red del borrado que hace la web cuando una conexión no se completa
  * (canal equivocado, perfil duplicado u ocupado, la pendiente ya usada):

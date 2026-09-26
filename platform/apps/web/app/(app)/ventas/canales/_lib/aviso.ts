@@ -134,7 +134,7 @@ export async function unipileWebhook(req: Request, deps: ChannelDeps): Promise<R
     if (event.kind === "message") {
       // Sin quién escribe no se sabe si es el eco de un envío propio: se descarta antes que detener una cadencia.
       if (!event.senderProviderId) return MESSAGES.routes.ignored.noSender;
-      // El eco de un envío propio: por account_info del aviso o, si no viene, porque escribe la persona de esta cuenta (0042).
+      // El eco de un envío propio: por account_info del aviso o, si no viene, porque escribe la persona de esta cuenta (canales_identidad_y_rotacion).
       if (event.fromSelf || isOwnAccount(event.senderProviderId, account.providerIdentity)) return MESSAGES.routes.ignored.echo;
       // Con quién escribe: una respuesta en un chat nuevo (la invitación aceptada) casa con el toque enviado a esa persona.
       const r = await recordInboundMessage(tx, {
@@ -168,8 +168,8 @@ export async function unipileWebhook(req: Request, deps: ChannelDeps): Promise<R
 /**
  * ¿Escribe la propia cuenta? El id que Unipile pone en
  * `sender.attendee_provider_id` es el mismo que `connection_params.im.id`
- * de la cuenta (provider_identity, 0042). Sin identidad guardada (una
- * cuenta conectada antes de 0042) no se puede afirmar: decide el
+ * de la cuenta (provider_identity, canales_identidad_y_rotacion). Sin identidad guardada (una
+ * cuenta conectada antes de canales_identidad_y_rotacion) no se puede afirmar: decide el
  * `account_info` del aviso.
  */
 export function isOwnAccount(senderProviderId: string, providerIdentity: string | null): boolean {
@@ -296,7 +296,7 @@ async function accountConnected(
   const outcome = await deps.withProviderCallback(proof, async (tx) => {
     const fail = (code: string) => failPendingChannelAccount(tx, { channel, nonce: state.nonce, code });
     // La cuenta queda anotada en la pendiente ANTES de ligarla: si no se liga y el borrado falla, la conciliación la
-    // reconoce como nuestra aunque su name no diga nada (0042 §8).
+    // reconoce como nuestra aunque su name no diga nada (canales_identidad_y_rotacion §8).
     await noteNotifiedAccount(tx, { channel, nonce: state.nonce, providerAccountId: account.id });
     let out: { status: string; accountId?: string; webhooks?: number; release: boolean; replaced?: { providerAccountId: string; webhookIds: string[] } | null };
     if (account.provider !== UNIPILE_PROVIDER_BY_CHANNEL[channel]) {

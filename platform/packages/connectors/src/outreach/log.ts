@@ -2,7 +2,7 @@
  * La bitácora de las llamadas de outreach: una fila por intento en
  * api_call_log, con `provider` ('gmail' | 'unipile') en vez de
  * platform_id y la cuenta de canal en channel_account_id (migración
- * 0038). Sin cuerpo, sin token, sin destinatario: solo lo que hace falta
+ * canales_outreach). Sin cuerpo, sin token, sin destinatario: solo lo que hace falta
  * para explicar por qué una cuenta se cayó o por qué un envío esperó.
  */
 import type { SqlExecutor } from '../log/postgres.ts';

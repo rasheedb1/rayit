@@ -41,7 +41,7 @@ function parseCap(raw: FormDataEntryValue | null): number | null | "invalid" {
 /**
  * Guarda los límites de una cuenta, nunca por encima de su máximo (el
  * menor entre la política del espacio y lo que aguanta el proveedor). El
- * máximo se lee en el servidor (outreach_channel_account_limits, 0040):
+ * máximo se lee en el servidor (outreach_channel_account_limits, canales_liberar_y_limites):
  * del formulario solo llegan el id y los dos números. `saved`: si hay que
  * refrescar la pantalla.
  */
@@ -76,7 +76,7 @@ export async function saveCaps(deps: ActionDeps, formData: FormData): Promise<Li
 }
 
 /**
- * Desconectar: la fila queda 'disconnected' y pendiente de soltar (0040).
+ * Desconectar: la fila queda 'disconnected' y pendiente de soltar (canales_liberar_y_limites).
  * El worker (sales.channels_release, cada cinco minutos) revoca el permiso
  * de Google o borra la cuenta y sus avisos en Unipile. Devuelve la
  * confirmación con el nombre de la cuenta (de la base, no del formulario).

@@ -41,7 +41,7 @@
 --     que se siembra, sin leer.
 --   * Nada real: direcciones de la demo, ids de Gmail inventados, el
 --     token del enlace de baja se sortea y solo queda su sha256.
---   * Requiere 0038 (outbound_bounce, contact.email_invalid y los avisos
+--   * Requiere entregabilidad (outbound_bounce, contact.email_invalid y los avisos
 --     del outreach en notification) y el seed 0005 (el Gmail de Laura y el
 --     correo a Olla Fácil).
 --
@@ -66,7 +66,7 @@ SELECT set_config('TimeZone', 'UTC', false);
 -- cabecera Message-ID.
 --
 -- Con la ficha ya marcada (la segunda pasada), la regla del correo
--- inválido (0038 §2) rechaza dar de alta un correo 'sent' a esa
+-- inválido (entregabilidad §2) rechaza dar de alta un correo 'sent' a esa
 -- dirección antes de que ON CONFLICT lo descarte (el disparador BEFORE
 -- corre primero). Por eso el alta va dentro de un IF NOT EXISTS.
 -- =====================================================================
@@ -168,7 +168,7 @@ ON CONFLICT DO NOTHING;
 -- La ficha de Natalia, marcada como la deja el job: el correo no existe
 -- (email_invalid, con el diagnóstico y la hora) y la píldora «Correo
 -- rebotado» (bounced). Solo la primera vez: si alguien le corrige el
--- correo, la marca se borra (0038 §1) y volver a sembrar no la repone.
+-- correo, la marca se borra (entregabilidad §1) y volver a sembrar no la repone.
 UPDATE contact c
    SET email_invalid = true, email_invalid_at = b.detected_at, email_invalid_reason = b.reason, bounced = true
   FROM outbound_bounce b

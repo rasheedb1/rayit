@@ -29,7 +29,7 @@ export interface BajaTexts {
      * (todavía no ha pasado nada): «Si confirmas, Laura no volverá a
      * escribirte: ni a v•••@marca.com ni por ningún otro canal». Quién va PRIMERO, porque es
      * lo que limita la promesa: la baja es de quien envió este correo, en
-     * todos sus canales, y no de toda la plataforma (0038 §8): cada creador
+     * todos sus canales, y no de toda la plataforma (entregabilidad §8): cada creador
      * responde de su propio envío. Antes eran dos frases y la
      * primera («Dejarás de recibir mensajes en v•••@…») sonaba a baja
      * total. Sin nombre (el espacio ya no existe), «quien te escribió».

@@ -313,15 +313,15 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'negocio; la campaña la crea después la web dentro del workspace de la cotización',
   // La baja desde el enlace de un correo (0037 §9, VEN-9 y VEN-15).
   'public_optout(text)':
-    'la baja desde el enlace de un correo (0037 §9, 0038 §8): la página se abre sin sesión y la baja vale para el ' +
+    'la baja desde el enlace de un correo (0037 §9, entregabilidad §8): la página se abre sin sesión y la baja vale para el ' +
     'workspace que envió ese correo, en todos sus canales. Corre como mc_public_share, cuyas políticas `TO ' +
     'mc_public_share` abren solo el enlace (outbound_optout_link, que escribe solo el despachador) cuyo sha256 del ' +
     'token fija la función, y después la ficha que recibió el correo y las PROPIAS de ese workspace con la dirección ' +
     'a la que salió. Escribe por COLUMNA: la baja de esas fichas, el estado y el motivo de sus toques pendientes, el ' +
     'estado de sus enrolamientos, la dirección en outbound_workspace_optout y el clic en outbound_optout_event. Nunca ' +
-    'contact_suppression (0038 §8). No es de ningún disparador',
+    'contact_suppression (entregabilidad §8). No es de ningún disparador',
   'public_optout_preview(text,uuid[])':
-    'lo que la página de baja enseña antes del clic (0038 §5, VEN-15): con el mismo rol y la misma cerradura que ' +
+    'lo que la página de baja enseña antes del clic (entregabilidad §5, VEN-15): con el mismo rol y la misma cerradura que ' +
     'public_optout, LEE el enlace por el sha256 del token, si la ficha ya estaba de baja y el nombre del workspace ' +
     'que envió (id y name, por columna, solo esa fila); devuelve la dirección enmascarada y un sí o un no a «quien ' +
     'lo abre es de ese workspace», nunca el id. No escribe nada. No es de ningún disparador',
@@ -331,16 +331,16 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'baja global, y mc_app no puede leer contact_suppression (0026 §3). Solo LEE la lista y responde sí o no para ' +
     'UNA dirección: lo mismo que un workspace ya aprende creando una ficha con ese correo, que nace dada de baja ' +
     '(contact_suppression_apply). EXECUTE solo para mc_app y mc_worker',
-  // El callback de un canal de outreach desde la web (0039, VEN-9).
+  // El callback de un canal de outreach desde la web (callback_de_canales, VEN-9).
   'outreach_channel_connect(text,text,text,text,text,text[],text)':
-    'el callback de la conexión de un canal (0039, 0042 con la identidad del perfil): la web es mc_app y el disparador de 0037 §2.1 no le deja escribir ' +
+    'el callback de la conexión de un canal (callback_de_canales, canales_identidad_y_rotacion con la identidad del perfil): la web es mc_app y el disparador de 0037 §2.1 no le deja escribir ' +
     'un estado autenticado. Es del rol que migra (despachador por ser dueño de outbound_touch) y, como las tablas ' +
     'llevan FORCE ROW LEVEL SECURITY, solo ve el workspace de la transacción: pasa a connected la fila pending de ESE ' +
     'nonce (de un solo uso, nace al empezar la conexión) con la cuenta que devolvió el proveedor, o revive la fila que ' +
     'el espacio ya tenía. Un buzón vivo en otro espacio lo dice el índice global con 23505 y responde taken sin ' +
-    'escribir; una fila que sales.channels_release reclamó para soltarla responde releasing sin escribir (0041), y al ' +
+    'escribir; una fila que sales.channels_release reclamó para soltarla responde releasing sin escribir (canales_reclamar_al_soltar), y al ' +
     'revivir una fila desconectada con una ref nueva borra del vault el token viejo que ya nadie nombra. Con la ' +
-    'identidad (0042): el mismo perfil ya conectado aquí responde duplicate sin escribir; caído o desconectado, su ' +
+    'identidad (canales_identidad_y_rotacion): el mismo perfil ya conectado aquí responde duplicate sin escribir; caído o desconectado, su ' +
     'fila adopta la cuenta nueva y devuelve la vieja para borrarla en Unipile. in_use dice si la cuenta la usa alguien ' +
     '(outreach_channel_live_elsewhere, sin escribir). La llaman las rutas de la web tras verificar el estado firmado y ' +
     'hablar con el proveedor. EXECUTE solo para mc_app. No es de ningún disparador',
@@ -371,15 +371,15 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'última corrida de outbound.intent en job_run. Solo LEE esas filas (una política TO CURRENT_USER por job_id) y ' +
     'devuelve una palabra: model, fake, off o unknown. EXECUTE solo para mc_app',
   'outreach_channel_mark_down(uuid,text)':
-    'el aviso account_status de Unipile desde la web (0039): una cuenta de Unipile connected o error del workspace de ' +
+    'el aviso account_status de Unipile desde la web (callback_de_canales): una cuenta de Unipile connected o error del workspace de ' +
     'la transacción pasa a needs_reconnect con el motivo. Mismo dueño y misma cerradura que outreach_channel_connect; ' +
     'no toca otra columna. EXECUTE solo para mc_app. No es de ningún disparador',
   'outreach_channel_mark_ok(uuid)':
-    'el aviso account_status de Unipile de una sesión que volvió (0042): una cuenta de Unipile needs_reconnect o error ' +
+    'el aviso account_status de Unipile de una sesión que volvió (canales_identidad_y_rotacion): una cuenta de Unipile needs_reconnect o error ' +
     'del workspace de la transacción vuelve a connected. La pareja de outreach_channel_mark_down, mismo dueño y misma ' +
     'cerradura; no toca otra columna. EXECUTE solo para mc_app. No es de ningún disparador',
   'outreach_channel_set_webhooks(uuid,text[],text)':
-    'los avisos de Unipile que la web acaba de dar de alta para una cuenta conectada (0040, 0042 con la huella del ' +
+    'los avisos de Unipile que la web acaba de dar de alta para una cuenta conectada (canales_liberar_y_limites, canales_identidad_y_rotacion con la huella del ' +
     'secreto): provider_webhook_ids y provider_webhook_secret_fp son ' +
     'del despachador (sales.channels_release los borra en Unipile al desconectar) y mc_app no la escribe. Mismo dueño ' +
     'y misma cerradura que outreach_channel_connect: solo ve el workspace de la transacción y solo AÑADE ids con ' +
@@ -553,7 +553,7 @@ export const ROLES_CON_ACCESO_DECLARADOS: Readonly<Record<string, string>> = {
     'Su llave vive cifrada en el vault y ningún código de este repositorio la usa',
   mc_public_share:
     'dueño de las funciones de los enlaces públicos: las tres de Cotizar (0030) y las dos de la baja (0037 §9 y ' +
-    '0038 §5). NOLOGIN, sin ' +
+    'entregabilidad §5). NOLOGIN, sin ' +
     'BYPASSRLS: ninguna ' +
     'conexión entra con él. Lo que puede, privilegio por privilegio y columna por columna, lo dice ' +
     'PRIVILEGIOS_DEL_ENLACE_PUBLICO; sus políticas, POLITICAS_DEL_ENLACE_PUBLICO; y la guardia comprueba las dos ' +
@@ -669,13 +669,13 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     tabla: ['INSERT'],
     motivo: 'anotar el clic con el workspace y el toque que lo originaron (0037 §4.6). No lo lee',
   },
-  // Lo que la página de baja enseña antes del clic (0038 §5).
+  // Lo que la página de baja enseña antes del clic (entregabilidad §5).
   workspace: {
     tabla: [],
     columnas: { SELECT: ['id', 'locale', 'name'] },
     motivo:
       'el nombre del workspace que envió el correo del enlace, para decir quién escribe, y su idioma, para que la ' +
-      'página hable el del pie del correo (0038 §5, r5). Solo id, name y locale, y su política solo abre la fila que ' +
+      'página hable el del pie del correo (entregabilidad §5, r5). Solo id, name y locale, y su política solo abre la fila que ' +
       'fija public_optout_preview',
   },
   membership: {
@@ -683,17 +683,17 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     columnas: { SELECT: ['user_id', 'workspace_id'] },
     motivo:
       'workspace_read_member (0028), la política sin TO de workspace, pregunta por membership al leer workspace: sin ' +
-      'esto no se podría leer el nombre (0038 §5). No le abre ninguna fila: ninguna política de membership es `TO ' +
+      'esto no se podría leer el nombre (entregabilidad §5). No le abre ninguna fila: ninguna política de membership es `TO ' +
       'mc_public_share`',
   },
-  // La baja con quien envió (0038 §8).
+  // La baja con quien envió (entregabilidad §8).
   outbound_workspace_optout: {
     tabla: ['INSERT'],
     columnas: { SELECT: ['email', 'workspace_id'] },
     motivo:
       'la baja vale para el workspace que envió el correo (el alta, solo con el token, el workspace y la dirección ' +
       'del enlace), y la vista previa y la baja leen si ESE workspace ya la tenía, para decir «ya estabas fuera» ' +
-      '(0038 §8). Solo la fila del workspace y la dirección que fija la función',
+      '(entregabilidad §8). Solo la fila del workspace y la dirección que fija la función',
   },
 };
 
@@ -720,7 +720,7 @@ const CONTACTOS_DE_LA_BAJA = /= ANY \(\(NULLIF\(current_setting\('app\.public_op
 
 /**
  * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033, las nueve de la baja (0037 §9), la de
- * quién envía (0038 §5) y las dos de la baja con quien envió (0038 §8). Una
+ * quién envía (entregabilidad §5) y las dos de la baja con quien envió (entregabilidad §8). Una
  * de más —`CREATE POLICY … ON invoice TO mc_public_share USING (true)`—
  * o una de estas reescrita con ALTER POLICY se reporta. Las políticas
  * sin TO (PUBLIC) también le alcanzan, pero alcanzan igual a mc_app y
@@ -806,20 +806,20 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
     exige: [/^\(?email = \(NULLIF\(current_setting\('app\.public_optout_email'/],
     motivo:
       'las fichas PROPIAS del workspace que envió con la dirección a la que salió el correo del enlace ' +
-      '(recipient_address); desde 0038 §8, ninguna de otro workspace',
+      '(recipient_address); desde entregabilidad §8, ninguna de otro workspace',
   },
   'contact.contact_public_optout_mark': {
     cmd: 'w',
     exige: [/^\(?id = /, CONTACTOS_DE_LA_BAJA],
     motivo: 'marcar la baja en esas fichas',
   },
-  // Lo que la página de baja enseña antes del clic (0038 §5).
+  // Lo que la página de baja enseña antes del clic (entregabilidad §5).
   'workspace.workspace_public_optout': {
     cmd: 'r',
     exige: [/^\(?id = \(?NULLIF\(current_setting\('app\.public_optout_workspace'/],
     motivo: 'el workspace que envió el correo del enlace, cuyo id fija public_optout_preview',
   },
-  // La baja con quien envió (0038 §8).
+  // La baja con quien envió (entregabilidad §8).
   'outbound_workspace_optout.outbound_workspace_optout_public_optout_read': {
     cmd: 'r',
     exige: [/^\(?workspace_id = \(?NULLIF\(current_setting\('app\.public_optout_workspace'/],
@@ -876,10 +876,10 @@ export const UNICOS_GLOBALES_DECLARADOS: Readonly<Record<string, string>> = {
     'proveedor (outreach_channel_account_worker_columns, en DISPARADORES_DE_CANDADO): chocar exige haber ' +
     'autenticado esa misma cuenta, que ya es tenerla. Una fila pending de la web no ocupa nada',
   'outreach_channel_account.outreach_channel_account_identity_live_idx':
-    'el mismo perfil de LinkedIn o de Instagram (connection_params.im.id de Unipile, 0042) envía desde UN workspace, ' +
+    'el mismo perfil de LinkedIn o de Instagram (connection_params.im.id de Unipile, canales_identidad_y_rotacion) envía desde UN workspace, ' +
     'aunque Unipile le dé un account_id nuevo en cada hosted auth: con dos filas vivas del mismo perfil los topes se ' +
     'sumarían y LinkedIn podría bloquearlo. Mismo criterio que outreach_channel_account_live_idx: cubre solo las ' +
-    'cuentas autenticadas y provider_identity la escribe solo el callback del proveedor (candado de 0037 §2.1, 0042): ' +
+    'cuentas autenticadas y provider_identity la escribe solo el callback del proveedor (candado de 0037 §2.1, canales_identidad_y_rotacion): ' +
     'chocar exige haber autenticado ese perfil',
 };
 
@@ -1025,20 +1025,20 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
   outbound_optout_event: {
     permite: [],
     motivo:
-      'quién provocó cada baja por enlace (0037 §4.6, con su alcance desde 0038 §8): la escribe public_optout y la ' +
+      'quién provocó cada baja por enlace (0037 §4.6, con su alcance desde entregabilidad §8): la escribe public_optout y la ' +
       'lee un operador. Con escritura, ' +
       'un workspace borraría su rastro',
   },
   outbound_bounce: {
     permite: ['SELECT'],
     motivo:
-      'los rebotes los lee del buzón el worker (0038, VEN-15) y la web solo los muestra. Con escritura, un ' +
+      'los rebotes los lee del buzón el worker (entregabilidad, VEN-15) y la web solo los muestra. Con escritura, un ' +
       'workspace se borraría los rebotes que disparan la alerta de entregabilidad',
   },
   outbound_workspace_optout: {
     permite: ['SELECT'],
     motivo:
-      'a quién no le vuelve a escribir este workspace porque pulsó el enlace de baja de uno de sus correos (0038 §8). ' +
+      'a quién no le vuelve a escribir este workspace porque pulsó el enlace de baja de uno de sus correos (entregabilidad §8). ' +
       'La escribe solo public_optout: con escritura, un workspace se quitaría una baja o se la pondría a otro',
   },
   outbound_generation: {

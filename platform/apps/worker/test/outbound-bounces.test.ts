@@ -119,7 +119,7 @@ async function cursor(accountId: string): Promise<string | null> {
   return rows[0]?.c ? new Date(rows[0].c).toISOString() : null;
 }
 
-test('el job está registrado y programado cada media hora (0038)', async () => {
+test('el job está registrado y programado cada media hora (entregabilidad)', async () => {
   assert.ok(allJobs.some((j) => j.id === BOUNCES_JOB_ID));
   const { rows } = await db.raw.query<{ queue: string; default_cron: string }>(
     'SELECT queue, default_cron FROM job_definition WHERE id = $1',
@@ -166,7 +166,7 @@ test('un rebote duro marca el correo inválido y cancela los correos pendientes 
   assert.deepEqual(await toque(T_BORRADOR), { status: 'canceled', blocked_reason: 'email_invalid' });
   assert.equal((await toque(T_ENVIADO))?.status, 'sent');
   assert.deepEqual(await toque(T_LINKEDIN), { status: 'scheduled', blocked_reason: null });
-  // Lo que ya va a OTRA dirección de la misma ficha no rebotó (la misma regla que 0038 §2).
+  // Lo que ya va a OTRA dirección de la misma ficha no rebotó (la misma regla que entregabilidad §2).
   assert.deepEqual(await toque(T_OTRA_DIRECCION), { status: 'scheduled', blocked_reason: null });
 
   const { rows: bitacora } = await db.raw.query<{

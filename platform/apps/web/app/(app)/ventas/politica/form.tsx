@@ -53,7 +53,7 @@ export interface PoliticaFormProps {
   /** Los días en que se cuentan los mensajes por marca, ya formateados. */
   ventanaMarca: string;
   /**
-   * Quien mira puede cambiarla (owner o admin, 0038 §7). Si no, el
+   * Quien mira puede cambiarla (owner o admin, entregabilidad §7). Si no, el
    * formulario se enseña deshabilitado y con una línea que dice por qué;
    * la base lo rechazaría igual.
    */

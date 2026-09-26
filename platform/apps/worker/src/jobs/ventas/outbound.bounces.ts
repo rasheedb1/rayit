@@ -4,7 +4,7 @@
  * Gmail no avisa de un rebote por API: al buzón del creador llega un
  * correo de mailer-daemon. Cada media hora, por cada Gmail conectado:
  *   1. lee los avisos DESDE EL CURSOR de la cuenta
- *      (outreach_channel_account.bounces_read_at, 0038 §6), del más
+ *      (outreach_channel_account.bounces_read_at, entregabilidad §6), del más
  *      viejo al más nuevo, como mucho BOUNCES_PER_RUN por pasada, y
  *      avanza el cursor solo hasta el último aviso que leyó. Si leyó
  *      todo lo que había, el cursor queda en «ahora» menos una hora de
@@ -22,15 +22,15 @@
  *          workspace a esa dirección: los que ya la llevan en
  *          recipient_address y los que todavía no la tienen pero van a
  *          una ficha con ese correo (la misma regla que el disparador de
- *          0038 §2);
+ *          entregabilidad §2);
  *        · pausa los enrolamientos activos de esa ficha cuya secuencia
  *          es solo de correo (context.paused_reason = 'email_invalid'):
  *          ya no tienen por dónde seguir;
  *        · y el rebote verificado frena, en este workspace, los correos
- *          nuevos a esa dirección (0038 §2), también a una ficha
+ *          nuevos a esa dirección (entregabilidad §2), también a una ficha
  *          compartida. Un correo que estaba en 'processing' cuando llegó
  *          el aviso y que el despachador devuelve a la cola, la base lo
- *          cancela en el sitio (0038 §2);
+ *          cancela en el sitio (entregabilidad §2);
  *   5. al final de cada pasada, un barrido idempotente de todos los
  *      workspaces (sweepInvalidEmail): cancela lo que haya quedado en
  *      draft, scheduled o held a una dirección que ya rebotó —un borrador
@@ -240,7 +240,7 @@ async function registrar(
     // La ficha, solo si es de este workspace y SIGUE teniendo la dirección
     // que rebotó (si alguien ya le corrigió el correo, el rebote es de la
     // vieja). Una ficha compartida no se toca: la frena el rebote
-    // verificado de este workspace (0038 §2).
+    // verificado de este workspace (entregabilidad §2).
     let invalidated = false;
     if (contactId) {
       const marca = await tx.query(
@@ -255,7 +255,7 @@ async function registrar(
     // Los correos pendientes de ESTE workspace a esa dirección y los
     // enrolamientos que ya no tienen por dónde seguir, en la misma
     // transacción. Lo que 'processing' tiene es del despachador (0037
-    // §4.1): si lo devuelve a la cola, la base lo cancela (0038 §2).
+    // §4.1): si lo devuelve a la cola, la base lo cancela (entregabilidad §2).
     const barrido = await sweepInvalidEmail(tx, ws, now);
     return { inserted: true, verified, invalidated, canceled: barrido.canceled, paused: barrido.paused };
   });
@@ -272,13 +272,13 @@ export interface SweepResult {
  *   · cancela los correos en draft, scheduled o held a una dirección que
  *     rebotó: la de una ficha con email_invalid, o una con un rebote duro
  *     verificado de ESE workspace (outbound_bounce). La misma regla que el
- *     disparador de 0038 §2: la dirección que cuenta es la del envío si ya
+ *     disparador de entregabilidad §2: la dirección que cuenta es la del envío si ya
  *     la tiene, y si no la de la ficha.
  *   · pausa los enrolamientos activos de esa ficha en ESE workspace cuya
  *     secuencia es solo de correo (canal 'email' y ningún paso de otro
  *     canal), con context.paused_reason = 'email_invalid': sin esto el
  *     enrolamiento seguía «activo» y el planificador de VEN-10 chocaba con
- *     la regla de 0038 §2 en cada vuelta. Una secuencia con LinkedIn o
+ *     la regla de entregabilidad §2 en cada vuelta. Una secuencia con LinkedIn o
  *     Instagram sigue por ahí; sus pasos de correo los salta el
  *     planificador (docs/ventas-outreach.md §5.2).
  * Hace falta además del disparador porque el disparador solo mira la
@@ -287,7 +287,7 @@ export interface SweepResult {
  * más. Cada pasada del job lo corre al final para todos los workspaces,
  * pero solo sobre los candidatos (fichas con email_invalid y direcciones
  * con un rebote duro verificado, no workspaces enteros) y por el índice parcial de los correos
- * pendientes (0038 §2): sin rebotes, la pasada no recorre outbound_touch.
+ * pendientes (entregabilidad §2): sin rebotes, la pasada no recorre outbound_touch.
  */
 export async function sweepInvalidEmail(q: Queryable, workspaceId: string | null, now: Date): Promise<SweepResult> {
   const cancel = await q.query(
@@ -316,7 +316,7 @@ export async function sweepInvalidEmail(q: Queryable, workspaceId: string | null
     [workspaceId],
   );
   // Quien pidió la baja no se pausa: su enrolamiento es de la regla de la
-  // baja (0037 §3.3, 0038 §8), y pausarlo la haría saltar.
+  // baja (0037 §3.3, entregabilidad §8), y pausarlo la haría saltar.
   const pause = await q.query(
     `UPDATE outbound_enrollment e
         SET status = 'paused',

@@ -50,7 +50,7 @@ function enlaceDeAviso(url: string): string {
  * (outbound.alerts). Las cifras de las últimas 24 horas, sacadas de
  * outbound_health (0037) y de readAlertSignalCounts (la misma consulta que
  * decide las alertas), y los últimos rebotes leídos del Gmail
- * (outbound_bounce, 0038). La pantalla no calcula nada: la tasa llega
+ * (outbound_bounce, entregabilidad). La pantalla no calcula nada: la tasa llega
  * hecha.
  *
  * Si nadie está leyendo los rebotes de un Gmail conectado, lo dice encima

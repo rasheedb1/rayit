@@ -114,7 +114,7 @@ test('Gmail: el correo lleva el pie con la página de baja y la cabecera de UN C
   assert.match(sent.mime, new RegExp(`^List-Unsubscribe: <https://oncue\\.test/baja/${TOKEN}/un-clic>\\r$`, 'm'));
   assert.match(sent.mime, /^List-Unsubscribe-Post: List-Unsubscribe=One-Click\r$/m);
   // El pie es el de VEN-15: la PÁGINA de baja (un GET no da de baja a nadie) y la dirección postal.
-  assert.ok(sent.message.text.startsWith('Hola, Sofía.\n\n--\n'));
+  assert.ok(sent.message.text.startsWith('Hola, Sofía.\n\n-- \n'), 'el pie abre con el separador de firma «-- »');
   assert.ok(sent.message.text.includes(`https://oncue.test/baja/${TOKEN}`));
   assert.ok(!sent.message.text.includes('/un-clic'));
   assert.ok(sent.message.text.endsWith('Calle 93 # 11-26, Bogotá'));

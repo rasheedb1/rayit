@@ -55,7 +55,7 @@ describe("channelRows", () => {
     expect(pillFor(rows[1]!).label).toBe(MESSAGES.status.notConfigured);
   });
 
-  it("un canal fuera de la política del espacio (Instagram nace así, 0045): «Apagado en este espacio» y sin «Conectar otra cuenta»", () => {
+  it("un canal fuera de la política del espacio (Instagram nace así, canales_instagram_apagado_y_semana): «Apagado en este espacio» y sin «Conectar otra cuenta»", () => {
     const allowed = ["email", "linkedin"];
     const rows = channelRows([], channelSetup(ALL), { allowed });
     expect(rows.map((r) => [r.channel, r.state, r.off])).toEqual([
@@ -162,7 +162,7 @@ describe("channelRows", () => {
     // Un código que la pantalla no conoce (o un nombre de Object.prototype) nunca sale crudo.
     expect(reasonText("codigo_nuevo_del_worker", "email")).toBe(MESSAGES.detail.unknownReason);
     expect(reasonText("toString", "email")).toBe(MESSAGES.detail.unknownReason);
-    // Una frase en last_error (nadie las escribe: 0038 a 0043 no se aplicaron nunca con frases) tampoco sale tal cual.
+    // Una frase en last_error (nadie las escribe: canales_outreach a contacto_codigo_de_baja no se aplicaron nunca con frases) tampoco sale tal cual.
     expect(reasonText(MESSAGES.health.transient, "email")).toBe(MESSAGES.detail.unknownReason);
     expect(reasonText("LinkedIn cerró la sesión.", "linkedin")).toBe(MESSAGES.detail.unknownReason);
   });

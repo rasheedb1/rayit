@@ -129,7 +129,7 @@ test('el texto de un aviso no manda a la política de envío: se lee ahí mismo,
   }
 });
 
-test('el job está registrado y corre cada hora (0038)', async () => {
+test('el job está registrado y corre cada hora (entregabilidad)', async () => {
   assert.ok(allJobs.some((j) => j.id === ALERTAS_JOB_ID));
   const { rows } = await db.raw.query<{ default_cron: string }>('SELECT default_cron FROM job_definition WHERE id = $1', [ALERTAS_JOB_ID]);
   assert.equal(rows[0]?.default_cron, '25 * * * *');

@@ -68,7 +68,7 @@ export const MESSAGES = {
      */
     irADireccion: "Ir a la dirección postal",
     irACanales: "Conectar una cuenta",
-    /** Quien no es dueño ni administra el espacio (0038 §7). */
+    /** Quien no es dueño ni administra el espacio (entregabilidad §7). */
     sinPermiso: "Solo quien es dueño o administra este espacio puede encender o apagar el envío.",
     confirmarEncender: "¿Encender el envío?",
     /** `n` es el número de mensajes aprobados para hoy, ya formateado; `cuantos`, el mismo sin formatear. */
@@ -84,7 +84,7 @@ export const MESSAGES = {
     errorApagar: "No se pudo apagar. Inténtalo de nuevo.",
   },
 
-  /** El formulario, para quien no es dueño ni administra el espacio (0038 §7). */
+  /** El formulario, para quien no es dueño ni administra el espacio (entregabilidad §7). */
   sinPermiso: "Solo quien es dueño o administra este espacio puede cambiar estas reglas. Puedes verlas; para cambiarlas, pídeselo.",
 
   secciones: {

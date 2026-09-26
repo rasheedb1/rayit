@@ -215,7 +215,7 @@ describe("el interruptor", () => {
   });
 });
 
-describe("solo quien administra el espacio (0038 §7, r3)", () => {
+describe("solo quien administra el espacio (entregabilidad §7, r3)", () => {
   it("las tres acciones se niegan a un 'viewer' o un 'client' sin tocar la base", async () => {
     puedeCambiarLaPolitica.mockResolvedValue(false);
     expect(await guardarPolitica({}, formulario())).toEqual({ message: t.sinPermiso });

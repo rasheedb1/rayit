@@ -63,7 +63,7 @@
  * concesión recién emitida se revoca, salvo que el buzón esté vivo en
  * algún espacio (revocar tumba la concesión entera de esa persona con
  * nuestro cliente: también la de ese espacio). Lo dice
- * outreach_channel_connect (0042, in_use).
+ * outreach_channel_connect (canales_identidad_y_rotacion, in_use).
  *
  * Ni el code ni los tokens tocan logs, URLs nuestras ni la cookie.
  */
@@ -98,7 +98,7 @@ const back = (req: Request, code: ChannelErrorCode, headers: Record<string, stri
 /**
  * Lanzar esto dentro de la transacción la deshace entera (el token y la
  * fila), y el callback responde con `code`. `inUse`: el buzón está vivo en
- * algún espacio (outreach_channel_connect, 0042): su concesión no se revoca.
+ * algún espacio (outreach_channel_connect, canales_identidad_y_rotacion): su concesión no se revoca.
  */
 class RollbackConnection extends Error {
   constructor(readonly code: ChannelErrorCode, readonly inUse = true) {

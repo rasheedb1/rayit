@@ -3,10 +3,10 @@
  *
  * Desconectar en /ventas/canales solo cambia la fila a 'disconnected': la
  * web es mc_app y no puede tocar el token (secret_ref) ni los avisos
- * (provider_webhook_ids, 0040). El disparador de 0040 deja la fila con
+ * (provider_webhook_ids, canales_liberar_y_limites). El disparador de canales_liberar_y_limites deja la fila con
  * released_at NULL, que es la cola de este job. Cada cinco minutos (y en
  * la limpieza del keepalive diario), como mc_worker, cada fila se
- * RECLAMA primero (release_claimed_at, 0041) y solo después se habla con
+ * RECLAMA primero (release_claimed_at, canales_reclamar_al_soltar) y solo después se habla con
  * el proveedor: mientras dure el reclamo, reconectar esa misma cuenta
  * responde «espera un minuto» en vez de revivir una fila cuyo permiso
  * está a punto de revocarse. Si el proveedor falla, el reclamo se suelta
@@ -86,14 +86,14 @@ interface Row extends Record<string, unknown> {
   secret_ref: string | null;
   provider_webhook_ids: string[];
   /**
-   * El reclamo de esta vuelta (release_claimed_at, 0041), en texto: con
+   * El reclamo de esta vuelta (release_claimed_at, canales_reclamar_al_soltar), en texto: con
    * sus microsegundos, que un Date de JavaScript perdería y la comparación
    * de cierre ya no casaría.
    */
   claim: string;
 }
 
-/** Un reclamo más viejo que esto es de un job que murió a medias: otro lo puede tomar (0041). */
+/** Un reclamo más viejo que esto es de un job que murió a medias: otro lo puede tomar (canales_reclamar_al_soltar). */
 export const RELEASE_CLAIM_STALE_MINUTES = 15;
 
 /** ¿El mismo buzón o la misma cuenta de Unipile sigue viva en otra fila (de cualquier espacio)? */
@@ -112,7 +112,7 @@ async function liveElsewhere(db: Queryable, r: Row): Promise<boolean> {
  * solo si sigue desconectada, sin soltar y sin un reclamo vivo. Devuelve
  * lo que se va a soltar (la ref y los avisos) tal como estaban en ese
  * instante. Desde aquí outreach_channel_connect no la revive ('releasing',
- * 0041): la persona que reconecta en este minuto espera, en vez de
+ * canales_reclamar_al_soltar): la persona que reconecta en este minuto espera, en vez de
  * quedarse con un permiso que Google retira un segundo después.
  */
 async function claim(db: Queryable, id: string, staleBefore: Date): Promise<Row | null> {
@@ -202,7 +202,7 @@ export async function runChannelsRelease(deps: ReleaseDeps): Promise<ReleaseResu
             await unclaim(db, a);
             continue;
           }
-          // La ref que devolvió el reclamo: la de ESTA fila desconectada. Una reconexión estrena otra (0041).
+          // La ref que devolvió el reclamo: la de ESTA fila desconectada. Una reconexión estrena otra (canales_reclamar_al_soltar).
           const tokens = await deps.secrets.get(a.secret_ref);
           if (tokens) {
             await deps.google.revoke(tokens, { channelAccountId: a.id });

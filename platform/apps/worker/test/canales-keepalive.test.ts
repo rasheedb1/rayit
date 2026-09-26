@@ -107,13 +107,13 @@ after(async () => {
   assert.equal(guard.attempts, 0, 'el keepalive no salió a la red');
 });
 
-test('los dos jobs están registrados con el id de job_definition (0038, 0040)', async () => {
+test('los dos jobs están registrados con el id de job_definition (canales_outreach, canales_liberar_y_limites)', async () => {
   assert.ok(allJobs.some((j) => j.id === CHANNELS_KEEPALIVE_JOB_ID));
   assert.ok(allJobs.some((j) => j.id === CHANNELS_RELEASE_JOB_ID));
   const release = await db.raw.query<{ default_cron: string }>(`SELECT default_cron FROM job_definition WHERE id = $1`, [CHANNELS_RELEASE_JOB_ID]);
   assert.equal(release.rows[0]?.default_cron, '*/5 * * * *');
   const { rows } = await db.raw.query<{ default_cron: string }>(`SELECT default_cron FROM job_definition WHERE id = $1`, [CHANNELS_KEEPALIVE_JOB_ID]);
-  assert.equal(rows[0]?.default_cron, '17 * * * *', 'cada hora, por lotes (0042)');
+  assert.equal(rows[0]?.default_cron, '17 * * * *', 'cada hora, por lotes (canales_identidad_y_rotacion)');
 });
 
 test('sin llaves de Google ni de Unipile no toca ninguna cuenta, pero limpia', async () => {
@@ -189,7 +189,7 @@ test('sales.channels_release: lo ya soltado no se vuelve a tocar; desconectar ot
   const r = await runChannelsRelease({ db, secrets: store, google: gmail, unipile, now: NOW });
   assert.equal(r.released, 0);
   assert.equal(unipile.deletedAccounts.length, antes);
-  // Reconectada y vuelta a desconectar: el disparador de 0040 la deja otra vez por soltar.
+  // Reconectada y vuelta a desconectar: el disparador de canales_liberar_y_limites la deja otra vez por soltar.
   await db.raw.query(`UPDATE outreach_channel_account SET status = 'connected' WHERE id = $1`, [LINKEDIN_DESCONECTADO]);
   await db.raw.query(`UPDATE outreach_channel_account SET status = 'disconnected' WHERE id = $1`, [LINKEDIN_DESCONECTADO]);
   assert.equal((await soltada(LINKEDIN_DESCONECTADO))?.released_at, null);
@@ -223,7 +223,7 @@ test('una segunda corrida no vuelve a avisar de lo que ya estaba caído', async 
 });
 
 // ---------------------------------------------------------------------
-// Soltar y reconectar a la vez (0041)
+// Soltar y reconectar a la vez (canales_reclamar_al_soltar)
 // ---------------------------------------------------------------------
 
 /**
@@ -340,7 +340,7 @@ test('una cuenta de Unipile conectada sin avisos los recupera en el keepalive; s
 });
 
 // ---------------------------------------------------------------------
-// Por lotes, rotación del secreto, conciliación y limpieza (0042)
+// Por lotes, rotación del secreto, conciliación y limpieza (canales_identidad_y_rotacion)
 // ---------------------------------------------------------------------
 
 test('por lotes: cada corrida toma como mucho el lote, de la comprobación más vieja a la más nueva, y la siguiente sigue', async () => {

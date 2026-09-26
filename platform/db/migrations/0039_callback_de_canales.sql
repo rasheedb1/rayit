@@ -1,7 +1,7 @@
 -- =====================================================================
--- 0039 · El callback de un canal de outreach, desde la web (VEN-9)
+-- callback_de_canales · El callback de un canal de outreach, desde la web (VEN-9)
 -- ---------------------------------------------------------------------
--- Número: detrás de 0038, que tampoco está aplicada en Supabase. El
+-- Número: detrás de canales_outreach, que tampoco está aplicada en Supabase. El
 -- integrador las renumera juntas.
 --
 -- El problema. 0037 §2.1 cerró las columnas que prueban que la
@@ -127,7 +127,7 @@ $$;
 REVOKE ALL ON FUNCTION outreach_channel_connect(text, text, text, text, text, text[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION outreach_channel_connect(text, text, text, text, text, text[]) TO mc_app;
 COMMENT ON FUNCTION outreach_channel_connect(text, text, text, text, text, text[]) IS
-  'El callback de un canal de outreach desde la web (0039): la fila pending de ese nonce, en el workspace de la '
+  'El callback de un canal de outreach desde la web (callback_de_canales): la fila pending de ese nonce, en el workspace de la '
   'transacción, pasa a connected con la cuenta que devolvió el proveedor. taken si el buzón vive en otro espacio.';
 
 CREATE FUNCTION outreach_channel_mark_down(p_account_id uuid, p_reason text)
@@ -155,5 +155,5 @@ $$;
 REVOKE ALL ON FUNCTION outreach_channel_mark_down(uuid, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION outreach_channel_mark_down(uuid, text) TO mc_app;
 COMMENT ON FUNCTION outreach_channel_mark_down(uuid, text) IS
-  'El aviso account_status de Unipile desde la web (0039): una cuenta connected o error de ese workspace pasa a '
+  'El aviso account_status de Unipile desde la web (callback_de_canales): una cuenta connected o error de ese workspace pasa a '
   'needs_reconnect con el motivo. Nada más.';

@@ -19,7 +19,7 @@ import { MESSAGES } from "./messages";
  * creador, y dice cuántos mensajes aprobados salen hoy.
  *
  * Encender se ofrece deshabilitado, con su motivo en una línea, mientras
- * falte algo: el rol (owner o admin, 0038 §7), una cuenta de envío
+ * falte algo: el rol (owner o admin, entregabilidad §7), una cuenta de envío
  * conectada o la dirección postal. La acción y la base lo vuelven a mirar.
  *
  * `motivo` llega ya armado por la página («Apagado el 23 de septiembre: …»);
@@ -52,7 +52,7 @@ export function Interruptor({
   hasAddress: boolean;
   motivo: string | null;
   nuncaEncendido: boolean;
-  /** owner o admin del workspace (0038 §7). */
+  /** owner o admin del workspace (entregabilidad §7). */
   puedeCambiar: boolean;
   /** Cuentas de envío conectadas: sin ninguna, encender no enviaría nada. */
   cuentasConectadas: number;

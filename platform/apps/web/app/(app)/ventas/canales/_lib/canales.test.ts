@@ -606,7 +606,7 @@ async function hostedAuth(channel: "linkedin" | "instagram_dm", d = deps()) {
 const notify = (accountId: string, state: string, d = deps()) =>
   unipileWebhook(webhook({ status: "CREATION_SUCCESS", account_id: accountId, name: state }), d);
 
-describe("un perfil es una cuenta (0042)", () => {
+describe("un perfil es una cuenta (canales_identidad_y_rotacion)", () => {
   it("el mismo perfil conectado otra vez en el espacio: la cuenta nueva se borra en Unipile y la fila dice por qué", async () => {
     const primero = await hostedAuth("instagram_dm");
     unipile.completeHostedAuth({ id: "acc_ig_perfil_1", provider: "INSTAGRAM", displayName: "laura.perfil", providerIdentity: "ig_perfil_laura" });

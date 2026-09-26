@@ -60,7 +60,7 @@ export const MESSAGES = {
     notConfigured: "No disponible",
     /** Una cuenta conectada que hoy no puede enviar porque el canal no está disponible en la plataforma o está apagado en el espacio. */
     paused: "En pausa",
-    /** El canal no está en outbound_policy.allowed_channels: Instagram nace así (0045, §5.1). */
+    /** El canal no está en outbound_policy.allowed_channels: Instagram nace así (canales_instagram_apagado_y_semana, §5.1). */
     off: "Apagado en este espacio",
   },
 
@@ -164,7 +164,7 @@ export const MESSAGES = {
     legend: (account: string) => `Límites de ${account}`,
     daily: "Por día",
     weekly: "Por semana",
-    /** El máximo de la cuenta y quién lo fija, igual para el diario y el semanal (daily_limited_by y weekly_limited_by, 0045). */
+    /** El máximo de la cuenta y quién lo fija, igual para el diario y el semanal (daily_limited_by y weekly_limited_by, canales_instagram_apagado_y_semana). */
     max: {
       policy: (n: string) => `Máximo ${n} (política del espacio)`,
       personal: (n: string) => `Máximo ${n} (Gmail personal)`,
@@ -213,7 +213,7 @@ export const MESSAGES = {
       canal_equivocado: "La cuenta que conectaste no es de ese canal.",
       otro_espacio: "Esta conexión se empezó en otro espacio de On Cue. Cambia a ese espacio y vuelve a intentarlo.",
       soltando: "Todavía estábamos desconectando esa cuenta. Espera un minuto y vuelve a intentarlo.",
-      /** El mismo perfil ya está conectado en este espacio (0042): la cuenta nueva se soltó en Unipile. */
+      /** El mismo perfil ya está conectado en este espacio (canales_identidad_y_rotacion): la cuenta nueva se soltó en Unipile. */
       duplicado: "Ese perfil ya está conectado en este espacio. Seguimos usando esa conexión.",
       /** Un inicio de conexión de un canal fuera de la política del espacio (la fila no ofrece el botón; esto es un POST a mano). */
       apagado: (service: string) => `${service} está apagado en este espacio: los envíos a marcas no lo usan.`,

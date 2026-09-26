@@ -105,7 +105,7 @@ export function acceptedWebhookSecrets(env: Readonly<Record<string, string | und
 
 /**
  * La huella de un secreto de avisos: qué secreto llevan los avisos de una
- * cuenta (outreach_channel_account.provider_webhook_secret_fp, 0042), sin
+ * cuenta (outreach_channel_account.provider_webhook_secret_fp, canales_identidad_y_rotacion), sin
  * guardar el secreto. HMAC-SHA256 con una etiqueta fija, 16 caracteres
  * hexadecimales: el secreto es de 32 bytes al azar (.env.example), así
  * que la huella no sirve para adivinarlo. El keepalive vuelve a dar de
