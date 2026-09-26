@@ -59,6 +59,7 @@ import {
   recordInboundMessage, setChannelWebhooks, unipileAccountInUseHere, unipileStatusCode,
 } from "@mc/db/queries/canales";
 import type { WorkspaceTx } from "@mc/db";
+import { readLimitedJson } from "@/lib/cuerpo-limitado";
 import { verifyChannelRouteProof, verifyChannelStateProof, type ProviderCallbackProof } from "@/lib/db/aviso-de-proveedor";
 import { MESSAGES } from "../messages";
 import { channelKeys, plain, type ChannelDeps } from "./deps";
@@ -75,37 +76,6 @@ export const CREATED_CLOCK_SKEW_MS = 2 * 60 * 1000;
 
 const json = (status: number, body: Record<string, unknown>) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
-
-export type LimitedBody = { ok: true; value: unknown } | { ok: false; status: 400 | 413 };
-
-/**
- * El cuerpo como JSON, con un techo de BYTES: primero por Content-Length
- * (sin leer nada) y después contando lo que llega por el flujo, que corta
- * en cuanto se pasa aunque la cabecera mintiera o no estuviera.
- */
-export async function readLimitedJson(req: Request, maxBytes: number): Promise<LimitedBody> {
-  const declared = req.headers.get("content-length");
-  if (declared !== null && Number(declared) > maxBytes) return { ok: false, status: 413 };
-  if (!req.body) return { ok: false, status: 400 };
-  const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > maxBytes) {
-      await reader.cancel().catch(() => {});
-      return { ok: false, status: 413 };
-    }
-    chunks.push(value);
-  }
-  try {
-    return { ok: true, value: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown };
-  } catch {
-    return { ok: false, status: 400 };
-  }
-}
 
 const bodyError = (status: 400 | 413) => plain(status, status === 413 ? MESSAGES.routes.tooLarge : MESSAGES.routes.badJson);
 
