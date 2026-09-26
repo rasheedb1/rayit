@@ -143,7 +143,7 @@ test('el job registrado arma los buzones con buildChannels: sin llaves de Google
   const falso = buildChannels({ env: { APP_URL: 'https://oncue.test' }, secrets: new InMemorySecretStore(), mode: 'fake' });
   assert.equal(falso.bounces(cuenta), null);
   const conLlaves = buildChannels({
-    env: { APP_URL: 'https://oncue.test', GOOGLE_CLIENT_ID: 'id.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'secreto' },
+    env: { APP_URL: 'https://oncue.test', GOOGLE_OUTREACH_CLIENT_ID: 'id.apps.googleusercontent.com', GOOGLE_OUTREACH_CLIENT_SECRET: 'secreto' },
     secrets: new InMemorySecretStore(),
   });
   assert.ok(conLlaves.bounces(cuenta), 'con las llaves, cada cuenta de correo tiene su buzón');

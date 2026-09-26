@@ -7,10 +7,10 @@ import { channelSetup, showAdminDetails } from "./config";
 import { channelRows, pillFor, reasonText } from "./filas";
 
 const ALL = {
-  TOKEN_ENCRYPTION_KEY: "k", GOOGLE_CLIENT_ID: "g", GOOGLE_CLIENT_SECRET: "s",
+  TOKEN_ENCRYPTION_KEY: "k", GOOGLE_OUTREACH_CLIENT_ID: "g", GOOGLE_OUTREACH_CLIENT_SECRET: "s",
   UNIPILE_DSN: "d", UNIPILE_ACCESS_TOKEN: "t", UNIPILE_WEBHOOK_SECRET: "w",
 };
-const SIN_UNIPILE = { TOKEN_ENCRYPTION_KEY: "k", GOOGLE_CLIENT_ID: "g", GOOGLE_CLIENT_SECRET: "s" };
+const SIN_UNIPILE = { TOKEN_ENCRYPTION_KEY: "k", GOOGLE_OUTREACH_CLIENT_ID: "g", GOOGLE_OUTREACH_CLIENT_SECRET: "s" };
 
 function account(over: Partial<ChannelAccountRow>): ChannelAccountRow {
   return {
@@ -25,7 +25,7 @@ function account(over: Partial<ChannelAccountRow>): ChannelAccountRow {
 describe("channelSetup", () => {
   it("sin nada dice qué falta por canal; con todo, los tres se pueden conectar", () => {
     const none = channelSetup({});
-    expect(none.email.missing).toEqual(["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "TOKEN_ENCRYPTION_KEY"]);
+    expect(none.email.missing).toEqual(["GOOGLE_OUTREACH_CLIENT_ID", "GOOGLE_OUTREACH_CLIENT_SECRET", "TOKEN_ENCRYPTION_KEY"]);
     expect(none.linkedin.missing).toEqual(["UNIPILE_DSN", "UNIPILE_ACCESS_TOKEN", "UNIPILE_WEBHOOK_SECRET", "TOKEN_ENCRYPTION_KEY"]);
     const all = channelSetup(ALL);
     expect([all.email.configured, all.linkedin.configured, all.instagram_dm.configured]).toEqual([true, true, true]);
@@ -77,7 +77,7 @@ describe("channelRows", () => {
     const rows = channelRows([account({ status: "connected" })], channelSetup({}));
     expect(rows[0]).toMatchObject({ state: "connected", unavailable: true, action: null });
     expect(pillFor(rows[0]!)).toEqual({ kind: "warn", label: MESSAGES.status.paused });
-    expect(rows[0]!.missing).toContain("GOOGLE_CLIENT_ID");
+    expect(rows[0]!.missing).toContain("GOOGLE_OUTREACH_CLIENT_ID");
     // Con llaves, verde.
     expect(pillFor(channelRows([account({ status: "connected" })], channelSetup(ALL))[0]!)).toEqual({ kind: "good", label: MESSAGES.status.connected });
   });

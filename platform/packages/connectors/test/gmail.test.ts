@@ -36,14 +36,14 @@ async function failure(p: Promise<unknown>): Promise<OutreachApiError> {
 }
 
 test('loadGoogleOAuthConfig: dice qué falta y deduce la redirección del origen', () => {
-  assert.deepEqual(loadGoogleOAuthConfig({}, 'https://app.test'), { missing: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'] });
-  const ok = loadGoogleOAuthConfig({ GOOGLE_CLIENT_ID: 'a', GOOGLE_CLIENT_SECRET: 'b' }, 'https://app.test/');
+  assert.deepEqual(loadGoogleOAuthConfig({}, 'https://app.test'), { missing: ['GOOGLE_OUTREACH_CLIENT_ID', 'GOOGLE_OUTREACH_CLIENT_SECRET'] });
+  const ok = loadGoogleOAuthConfig({ GOOGLE_OUTREACH_CLIENT_ID: 'a', GOOGLE_OUTREACH_CLIENT_SECRET: 'b' }, 'https://app.test/');
   assert.deepEqual(ok, { config: { clientId: 'a', clientSecret: 'b', redirectUri: 'https://app.test/api/oauth/google/callback' } });
 });
 
-test('loadGoogleTokenConfig: el worker refresca sin APP_URL ni GOOGLE_REDIRECT_URI, y no puede iniciar una conexión', async () => {
-  assert.deepEqual(loadGoogleTokenConfig({}), { missing: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'] });
-  const cfg = loadGoogleTokenConfig({ GOOGLE_CLIENT_ID: 'a', GOOGLE_CLIENT_SECRET: 'b' });
+test('loadGoogleTokenConfig: el worker refresca sin APP_URL ni GOOGLE_OUTREACH_REDIRECT_URI, y no puede iniciar una conexión', async () => {
+  assert.deepEqual(loadGoogleTokenConfig({}), { missing: ['GOOGLE_OUTREACH_CLIENT_ID', 'GOOGLE_OUTREACH_CLIENT_SECRET'] });
+  const cfg = loadGoogleTokenConfig({ GOOGLE_OUTREACH_CLIENT_ID: 'a', GOOGLE_OUTREACH_CLIENT_SECRET: 'b' });
   assert.ok('config' in cfg);
   assert.equal(cfg.config.redirectUri, null);
   const log = new InMemoryOutreachCallLog();
@@ -63,6 +63,8 @@ test('authorizationUrl: offline, consent, los tres alcances y el state', async (
   assert.equal(u.origin + u.pathname, 'https://accounts.google.com/o/oauth2/v2/auth');
   assert.equal(u.searchParams.get('access_type'), 'offline');
   assert.equal(u.searchParams.get('prompt'), 'consent');
+  // Sin include_granted_scopes: una concesión combinada se revoca entera al desconectar el correo.
+  assert.equal(u.searchParams.get('include_granted_scopes'), null);
   assert.equal(u.searchParams.get('state'), 'ESTADO');
   assert.deepEqual(u.searchParams.get('scope')!.split(' ').map(shortScope), ['gmail.send', 'gmail.modify', 'userinfo.email']);
   assert.ok(!u.toString().includes(CFG.clientSecret));

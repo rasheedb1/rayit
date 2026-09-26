@@ -11,7 +11,7 @@
  *   · leer un hilo sin lo nuestro, sin lo conocido, sin rebotes, sin lo
  *     que no trae fecha, y marcando las respuestas automáticas.
  *
- * «Canal no configurado»: sin GOOGLE_CLIENT_ID/SECRET no hay OAuth
+ * «Canal no configurado»: sin GOOGLE_OUTREACH_CLIENT_ID/SECRET no hay OAuth
  * para renovar un token que dura una hora, y la web tampoco puede
  * conectar un Gmail. configured() es false: el despachador no reclama
  * correos (esperan en la cola sin gastar intentos, y la salud los cuenta)
@@ -47,7 +47,7 @@ export interface GmailMailboxInput {
 
 export interface GmailChannelOptions {
   secrets: SecretStore;
-  /** El OAuth de Google de la plataforma. null: faltan GOOGLE_CLIENT_ID/SECRET, y el canal no está configurado. */
+  /** El OAuth de Google de la plataforma. null: faltan GOOGLE_OUTREACH_CLIENT_ID/SECRET, y el canal no está configurado. */
   oauth: GoogleOAuthApi | null;
   /** El buzón de una cuenta. Por defecto, GmailClient; las pruebas pasan FakeGmail. */
   mailbox?: (input: GmailMailboxInput) => GmailApi;
@@ -90,7 +90,7 @@ export class GmailChannel implements ChannelSender, ChannelReader {
   async #mailbox(account: Pick<SenderAccount, 'id' | 'secretRef'>): Promise<Mailbox> {
     const oauth = this.#o.oauth;
     if (!oauth) {
-      return { ok: false, result: { ok: false, kind: 'transient', code: 'token_expired', message: 'Faltan GOOGLE_CLIENT_ID/SECRET.', account: 'unavailable' } };
+      return { ok: false, result: { ok: false, kind: 'transient', code: 'token_expired', message: 'Faltan GOOGLE_OUTREACH_CLIENT_ID/SECRET.', account: 'unavailable' } };
     }
     const ref = account.secretRef;
     if (!ref) return { ok: false, result: NO_TOKEN_REF };

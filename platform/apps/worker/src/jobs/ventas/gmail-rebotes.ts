@@ -157,7 +157,7 @@ export function gmailBounceMailbox(api: GmailBounceSource, now: () => Date = () 
 
 /**
  * El GmailApi de una cuenta conectada, o null si no se puede leer
- * (sin GOOGLE_CLIENT_ID/SECRET, o sin token en el vault para su
+ * (sin GOOGLE_OUTREACH_CLIENT_ID/SECRET, o sin token en el vault para su
  * secretRef). Es lo único que la integración de VEN-9 escribe.
  */
 export type GmailSourceFor = (account: MailboxAccount) => Promise<GmailBounceSource | null>;

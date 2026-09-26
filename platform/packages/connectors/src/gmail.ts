@@ -5,9 +5,10 @@
  * Google: SPF y DKIM son de Google y la marca ve la dirección que ya
  * conoce. Documentación leída el 23-sep-2026:
  *
- *   https://accounts.google.com/o/oauth2/v2/auth   response_type=code, access_type=offline, prompt=consent,
- *                                                  include_granted_scopes=true (sin prompt=consent Google no
- *                                                  vuelve a dar refresh_token a quien ya autorizó)
+ *   https://accounts.google.com/o/oauth2/v2/auth   response_type=code, access_type=offline, prompt=consent
+ *                                                  (sin él Google no vuelve a dar refresh_token a quien ya
+ *                                                  autorizó). SIN include_granted_scopes: una concesión
+ *                                                  combinada se revoca entera (ver abajo)
  *   POST https://oauth2.googleapis.com/token       authorization_code | refresh_token → access_token, expires_in,
  *                                                  refresh_token (solo en el primero), scope. Error: { error:
  *                                                  'invalid_grant' } = revocado o vencido, hay que reconectar
@@ -24,6 +25,16 @@
  * Alcances: gmail.send (enviar), gmail.modify (leer respuestas y rebotes,
  * marcar leídos) y userinfo.email (saber qué buzón autorizó). No se pide
  * gmail.readonly aparte: modify lo incluye.
+ *
+ * El cliente OAuth es SOLO del outreach (GOOGLE_OUTREACH_CLIENT_ID y
+ * _SECRET), no el de YouTube de Conexiones (GOOGLE_CLIENT_ID, CON-8). Con
+ * el mismo cliente, y más con include_granted_scopes, Google junta las
+ * dos autorizaciones de una persona en una sola concesión, y revocar una
+ * (desconectar el correo: sales.channels_release llama a /revoke) revoca
+ * TODOS sus alcances: la conexión de YouTube moriría sin aviso
+ * (invalid_grant en su siguiente refresco). Con clientes separados cada
+ * concesión es suya, y la verificación CASA de gmail.modify (un alcance
+ * restringido) no frena la de YouTube.
  *
  * El token: OAuthTokens en el vault (connection_secret, 'enc:gmail:<uuid>'),
  * una fila por concesión. Se refresca en UN solo sitio, `freshGoogleTokens`,
@@ -70,18 +81,23 @@ export interface GoogleOAuthConfig {
   redirectUri: string | null;
 }
 
-export const GOOGLE_ENV = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'] as const;
+/**
+ * El cliente OAuth de Google del outreach: uno propio, separado del de
+ * YouTube (GOOGLE_CLIENT_ID de Conexiones). Por qué, arriba: revocar una
+ * concesión compartida revocaría las dos.
+ */
+export const GOOGLE_ENV = ['GOOGLE_OUTREACH_CLIENT_ID', 'GOOGLE_OUTREACH_CLIENT_SECRET'] as const;
 
-/** La redirección sale de GOOGLE_REDIRECT_URI o, si falta, del origen de la aplicación + /api/oauth/google/callback. */
+/** La redirección sale de GOOGLE_OUTREACH_REDIRECT_URI o, si falta, del origen de la aplicación + /api/oauth/google/callback. */
 export function loadGoogleOAuthConfig(
   env: Readonly<Record<string, string | undefined>>,
   origin: string | null,
 ): { config: GoogleOAuthConfig } | { missing: string[] } {
   const missing: string[] = GOOGLE_ENV.filter((k) => !env[k]?.trim());
-  const redirectUri = env['GOOGLE_REDIRECT_URI']?.trim() || (origin ? `${origin.replace(/\/+$/, '')}/api/oauth/google/callback` : '');
-  if (!redirectUri) missing.push('GOOGLE_REDIRECT_URI');
+  const redirectUri = env['GOOGLE_OUTREACH_REDIRECT_URI']?.trim() || (origin ? `${origin.replace(/\/+$/, '')}/api/oauth/google/callback` : '');
+  if (!redirectUri) missing.push('GOOGLE_OUTREACH_REDIRECT_URI');
   if (missing.length > 0) return { missing };
-  return { config: { clientId: env['GOOGLE_CLIENT_ID']!.trim(), clientSecret: env['GOOGLE_CLIENT_SECRET']!.trim(), redirectUri } };
+  return { config: { clientId: env['GOOGLE_OUTREACH_CLIENT_ID']!.trim(), clientSecret: env['GOOGLE_OUTREACH_CLIENT_SECRET']!.trim(), redirectUri } };
 }
 
 /**
@@ -94,7 +110,7 @@ export function loadGoogleTokenConfig(
 ): { config: GoogleOAuthConfig } | { missing: string[] } {
   const missing: string[] = GOOGLE_ENV.filter((k) => !env[k]?.trim());
   if (missing.length > 0) return { missing };
-  return { config: { clientId: env['GOOGLE_CLIENT_ID']!.trim(), clientSecret: env['GOOGLE_CLIENT_SECRET']!.trim(), redirectUri: null } };
+  return { config: { clientId: env['GOOGLE_OUTREACH_CLIENT_ID']!.trim(), clientSecret: env['GOOGLE_OUTREACH_CLIENT_SECRET']!.trim(), redirectUri: null } };
 }
 
 // ---------------------------------------------------------------------
@@ -295,7 +311,6 @@ export class GoogleOAuth implements GoogleOAuthApi {
     u.searchParams.set('access_type', 'offline');
     // consent siempre (sin él Google no vuelve a dar refresh_token); select_account para elegir otro buzón.
     u.searchParams.set('prompt', opts.selectAccount ? 'select_account consent' : 'consent');
-    u.searchParams.set('include_granted_scopes', 'true');
     u.searchParams.set('state', state);
     if (opts.loginHint) u.searchParams.set('login_hint', opts.loginHint);
     return u.toString();

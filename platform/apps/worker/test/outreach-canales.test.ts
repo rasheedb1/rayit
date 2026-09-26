@@ -140,11 +140,11 @@ test('Gmail: la respuesta en el hilo va al threadId con el Message-ID real en In
   assert.match(fake.sent[0]!.mime, /^In-Reply-To: <m1@mail\.gmail\.com>\r$/m);
 });
 
-test('Gmail sin GOOGLE_CLIENT_ID/SECRET: «canal no configurado», y sin gastar la cuenta', async () => {
+test('Gmail sin GOOGLE_OUTREACH_CLIENT_ID/SECRET: «canal no configurado», y sin gastar la cuenta', async () => {
   const real = buildChannels({ env: { APP_URL: 'https://oncue.test' }, secrets: new InMemorySecretStore() });
   assert.equal(real.senders.email!.configured(), false);
   assert.equal(real.readers.email!.configured(), false);
-  const conLlaves = buildChannels({ env: { APP_URL: 'https://oncue.test', GOOGLE_CLIENT_ID: 'x', GOOGLE_CLIENT_SECRET: 'y' }, secrets: new InMemorySecretStore() });
+  const conLlaves = buildChannels({ env: { APP_URL: 'https://oncue.test', GOOGLE_OUTREACH_CLIENT_ID: 'x', GOOGLE_OUTREACH_CLIENT_SECRET: 'y' }, secrets: new InMemorySecretStore() });
   assert.equal(conLlaves.senders.email!.configured(), true);
   // Si igual le llega un correo, espera como cuenta no disponible, sin tocar la cuenta.
   const r = await new GmailChannel({ secrets: secrets(NOW), oauth: null }).send(email());

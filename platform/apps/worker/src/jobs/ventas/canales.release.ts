@@ -27,7 +27,7 @@
  * cuenta de Unipile tumbaría la de la otra fila. En ese caso solo se
  * borra lo nuestro (el token de esta fila, sus avisos).
  *
- * Qué no se suelta hoy: sin GOOGLE_CLIENT_ID/SECRET no hay cómo revocar,
+ * Qué no se suelta hoy: sin GOOGLE_OUTREACH_CLIENT_ID/SECRET no hay cómo revocar,
  * así que el token se queda cifrado en el vault hasta que las llaves
  * estén (borrarlo antes haría imposible revocar después); lo mismo con
  * Unipile sin UNIPILE_DSN/ACCESS_TOKEN. Un fallo de red o un 5xx deja la
@@ -53,7 +53,7 @@ export interface ReleaseDeps {
   /** Como mc_worker. */
   db: Queryable;
   secrets: SecretStore;
-  /** null = faltan GOOGLE_CLIENT_ID/SECRET: los Gmail esperan. */
+  /** null = faltan GOOGLE_OUTREACH_CLIENT_ID/SECRET: los Gmail esperan. */
   google: Pick<GoogleOAuthApi, 'revoke'> | null;
   /** null = faltan UNIPILE_DSN/ACCESS_TOKEN: los LinkedIn e Instagram esperan. */
   unipile: Pick<UnipileApi, 'deleteAccount' | 'deleteWebhook'> | null;

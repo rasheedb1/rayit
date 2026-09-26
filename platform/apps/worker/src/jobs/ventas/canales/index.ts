@@ -3,7 +3,7 @@
  *
  *   OUTREACH_CHANNELS=real   (por defecto) los clientes de VEN-9
  *                            (@mc/connectors): Gmail para el correo si
- *                            están GOOGLE_CLIENT_ID/SECRET; Unipile para
+ *                            están GOOGLE_OUTREACH_CLIENT_ID/SECRET; Unipile para
  *                            LinkedIn e Instagram si están UNIPILE_DSN y
  *                            UNIPILE_ACCESS_TOKEN.
  *   OUTREACH_CHANNELS=fake   el buzón en memoria para los tres: nada sale
@@ -141,7 +141,7 @@ export interface BuildChannelsOptions {
 /**
  * Los adaptadores de esta corrida. En modo real, sobre los clientes de
  * VEN-9 (@mc/connectors) con las llaves de la plataforma: el correo
- * necesita GOOGLE_CLIENT_ID/SECRET para renovar tokens, y LinkedIn e
+ * necesita GOOGLE_OUTREACH_CLIENT_ID/SECRET para renovar tokens, y LinkedIn e
  * Instagram, UNIPILE_DSN y UNIPILE_ACCESS_TOKEN. Lo que falte deja su
  * canal «no configurado» (configured() = false): sus toques esperan.
  */

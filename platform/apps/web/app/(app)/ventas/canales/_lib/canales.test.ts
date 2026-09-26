@@ -52,8 +52,8 @@ const ENV = {
   NODE_ENV: "test",
   APP_URL: ORIGIN,
   TOKEN_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
-  GOOGLE_CLIENT_ID: "google-client",
-  GOOGLE_CLIENT_SECRET: "GOOGLE-CLIENT-SECRET-SECRETO",
+  GOOGLE_OUTREACH_CLIENT_ID: "google-client",
+  GOOGLE_OUTREACH_CLIENT_SECRET: "GOOGLE-CLIENT-SECRET-SECRETO",
   UNIPILE_DSN: "api1.unipile.test:13111",
   UNIPILE_ACCESS_TOKEN: "UNIPILE-LLAVE-SECRETA",
   UNIPILE_WEBHOOK_SECRET: SECRET,
@@ -202,7 +202,7 @@ describe("sin llaves", () => {
       // El navegador no ve ni una variable; el servidor sí las registra.
       expect(MESSAGES.banners.errors.no_configurado("LinkedIn")).not.toMatch(/[A-Z]{3,}_[A-Z]+/);
       const logged = warn.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(logged).toMatch(/GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET/);
+      expect(logged).toMatch(/GOOGLE_OUTREACH_CLIENT_ID, GOOGLE_OUTREACH_CLIENT_SECRET/);
       expect(logged).toMatch(/UNIPILE_DSN, UNIPILE_ACCESS_TOKEN, UNIPILE_WEBHOOK_SECRET/);
       expect(await count(`SELECT count(*)::int AS n FROM outreach_channel_account`)).toBe(antes);
     } finally {

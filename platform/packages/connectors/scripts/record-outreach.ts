@@ -9,7 +9,7 @@
  *   pnpm --filter @mc/connectors record:outreach -- avisos --port 8787 --forward http://localhost:3100
  *   pnpm --filter @mc/connectors record:outreach -- unipile --account <account_id> [--profile <identificador>] [--app-url <túnel>]
  *
- * google   Hace SU PROPIO OAuth con el cliente de GOOGLE_CLIENT_ID (en modo
+ * google   Hace SU PROPIO OAuth con el cliente de GOOGLE_OUTREACH_CLIENT_ID (en modo
  *          Prueba, con http://localhost:<port>/callback entre sus URI de
  *          redirección): canje, userinfo, refresco, un correo de prueba a
  *          --send-to (con su Message-ID leído), el hilo y la búsqueda de

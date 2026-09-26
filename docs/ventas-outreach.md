@@ -563,7 +563,7 @@ que el despachador de VEN-10 tiene que usar, todo en
   (`gmailMailboxes` en `outbound.bounces.ts`, registrado como
   `bouncesMailboxSource`); `gmailMailboxFor` y `GmailSourceFor` quedan
   para armar un buzón desde otra fuente (las pruebas). Sin
-  `GOOGLE_CLIENT_ID/SECRET`, o con el canal falso, cada cuenta sale como
+  `GOOGLE_OUTREACH_CLIENT_ID/SECRET`, o con el canal falso, cada cuenta sale como
   «canal no configurado». `BOUNCE_READING_CONNECTED`
   (`@mc/core/outreach/bounces`) está en `true`, y la prueba de
   `outbound-bounces.test.ts` impide volver a un job que no lee mientras
@@ -2605,14 +2605,16 @@ reconocer el eco), y la del canje de Google. Por eso VEN-9 queda
 
 Qué hace falta (Rasheed; ninguna llave se inventa ni pasa por un chat):
 
-1. Un cliente OAuth de Google en modo **Prueba** con la Gmail API, los
+1. Un cliente OAuth de Google **propio del outreach** (`GOOGLE_OUTREACH_CLIENT_ID`,
+   no el `GOOGLE_CLIENT_ID` de YouTube: una concesión compartida se
+   revoca entera al desconectar el correo) en modo **Prueba** con la Gmail API, los
    alcances `gmail.send`, `gmail.modify` y `userinfo.email`, un buzón de
    pruebas como usuario de prueba y dos URI de redirección:
    `<APP_URL>/api/oauth/google/callback` y `http://localhost:8788/callback`.
 2. Una cuenta de pruebas de Unipile (tiene periodo gratuito) y un
    LinkedIn de pruebas.
-3. Las llaves en `platform/.env.local` (`GOOGLE_CLIENT_ID`,
-   `GOOGLE_CLIENT_SECRET`, `UNIPILE_DSN`, `UNIPILE_ACCESS_TOKEN`,
+3. Las llaves en `platform/.env.local` (`GOOGLE_OUTREACH_CLIENT_ID`,
+   `GOOGLE_OUTREACH_CLIENT_SECRET`, `UNIPILE_DSN`, `UNIPILE_ACCESS_TOKEN`,
    `UNIPILE_WEBHOOK_SECRET`, más `TOKEN_ENCRYPTION_KEY` de `make
    db.unlock`) y un túnel público hacia la web local.
 

@@ -101,7 +101,7 @@ export interface KeepaliveDeps {
   db: Queryable;
   /** El vault de tokens (EncryptedSecretStore en producción). */
   secrets: SecretStore;
-  /** null = GOOGLE_CLIENT_ID/SECRET no están: los Gmail no se tocan. */
+  /** null = GOOGLE_OUTREACH_CLIENT_ID/SECRET no están: los Gmail no se tocan. */
   google: Pick<GoogleOAuthApi, 'refresh' | 'revoke'> | null;
   /** null = UNIPILE_DSN/ACCESS_TOKEN no están: los LinkedIn e Instagram no se tocan. */
   unipile: Pick<UnipileApi, 'getAccount' | 'deleteAccount' | 'deleteWebhook' | 'createWebhook'> & Partial<Pick<UnipileApi, 'listAccounts'>> | null;

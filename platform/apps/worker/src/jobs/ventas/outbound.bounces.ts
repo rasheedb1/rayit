@@ -52,7 +52,7 @@
  * despachador (buildChannels, con el token de cada cuenta del almacén y
  * las llaves de Google de la plataforma) le da a cada cuenta su buzón
  * (bounceMailboxFor), y gmail-rebotes.ts lo traduce (GmailApi.searchBounces
- * + getMessage → BounceMailbox). Sin GOOGLE_CLIENT_ID/SECRET, o con el
+ * + getMessage → BounceMailbox). Sin GOOGLE_OUTREACH_CLIENT_ID/SECRET, o con el
  * canal falso, las cuentas cuentan como «canal no configurado» y el job lo
  * dice en el registro. Las pruebas usan un buzón con avisos grabados
  * (test/fixtures/rebotes) y el FakeGmail de VEN-9.
