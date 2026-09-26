@@ -1752,6 +1752,45 @@ persona.
 - **Una palabra, un lugar.** «Bandeja» es la de conversaciones; los textos
   del radar dicen «radar».
 
+#### Ronda 4 (sin migración nueva)
+
+- **Una cifra sin origen no sale ni por la bandeja.** Aprobar tal cual un
+  texto de la IA usa SUS marcas: lo que dejó sin marca sigue sin origen
+  (antes se volvía a marcar por valor y el «40 %» de una tasa de compra
+  salía respaldado por el 40 % de la audiencia de 25 a 34 años). Editado,
+  se marca por valor solo lo que encaja también en unidad (un porcentaje
+  con una proporción, un «x3» con un múltiplo, un número con un conteo o
+  un monto), y nunca lo que la IA ya había dejado sin origen, aunque se
+  toque una coma (`markFiguresByValue` con `skip`, `unsourcedFigures`). El
+  retenido de Molino Andino (seed 0008) cita ahora un «23 %» que no está
+  en ningún claim del perfil de Laura: «Aprobar» devuelve la cifra sin
+  origen y abre el editor. verify/0008 (g) y la prueba del worker lo fijan.
+- **Un «me interesa» sin negocio abre uno.** La prospección en frío
+  enrola sin negocio; antes el interesado solo avisaba. Ahora, si la marca
+  no tiene uno abierto, nace en «En conversación» con «Responder hoy», su
+  vencimiento al final del día local, el dueño que enroló y la cadencia y
+  el mensaje enlazados. «Ahora no» sin cadencia que enfriar (un pitch
+  suelto, una ficha de baja) ya no promete el enfriamiento: dice cuándo
+  volver a escribir.
+- **Quién opera las bandejas.** `PUEDEN_OPERAR_VENTAS` (owner, admin,
+  member, `lib/auth/reglas.ts`): cada acción de las dos bandejas lo mira en
+  el servidor antes de tocar la base o el modelo, y las pantallas no
+  ofrecen botones ni atajos a un 'viewer' o un 'client' (en una agencia,
+  la marca misma). Tampoco marcan como leído lo que el equipo no leyó.
+- **El teclado no atraviesa una confirmación.** Con «¿Saltar este paso?»
+  (o el editor, o la pista de «Regenerar») abiertos en la fila activa, a,
+  e, r y s no hacen nada. La fila activa solo se marca desde `sm`: en un
+  teléfono no hay atajos. `escribiendo()` vive en `lib/teclado.ts`.
+- **La procedencia del contacto** («Procedencia del contacto: Web de la
+  empresa») va en cada fila retenida (§8, decisión 5).
+- **La bandeja**: creado un referido, el mensaje enseña «Enrolar en una
+  cadencia» (con el negocio y la persona elegidos: `?contacto=` en la
+  cadencia) y el enlace a su ficha. «Editar» una respuesta en cola no la
+  deja además en «no salió» (se descarta en el mismo `UPDATE`).
+  «Descartar» tiene su estado de carga y su error. El tope de la
+  respuesta es uno solo, `INBOX_REPLY_MAX_CHARS`, en el campo y en la
+  acción. La clasificación sin llave es la decisión 9 de §8.
+
 ---
 
 ## 6. Las historias nuevas de Ventas
@@ -1874,6 +1913,30 @@ revisores técnico y de producto y el mismo umbral.
    dejar la política como está (es la conservadora) y recortar la
    plantilla a cuatro mensajes separados tres días, o bajar la
    separación por defecto a dos días.
+9. **Sin llave de Anthropic, las respuestas no se clasifican solas
+   (VEN-14).** La pieza pedía un «clasificador falso determinista sin
+   llave». Se entrega: el clasificador falso existe
+   (`createFakeIntentClassifier`, `@mc/core/outreach/intent`) y es el que
+   usan las pruebas, la demo embebida y quien pone `OUTREACH_WRITER=fake`
+   fuera de producción (con Postgres embebido, una base local o el
+   workspace de la demo, la misma regla que el redactor falso); pero sin
+   `ANTHROPIC_API_KEY` y sin esa variable, `outbound.intent` **no
+   clasifica nada**, salvo las bajas explícitas que ya ve el detector de
+   VEN-10. La bandeja lo dice arriba de cada conversación («la
+   clasificación con IA no está encendida: léelas tú») y cada respuesta
+   sin clasificar se puede «Corregir» a mano con los mismos efectos. Por
+   qué: el falso decide por palabras sueltas, y una intención mueve
+   negocios, enfría cadencias noventa días y da de baja a una persona
+   (irreversible); hacerlo en un espacio de verdad sin que nadie lo sepa
+   es peor que no hacerlo. **Estado (25 de septiembre): supuesto
+   declarado, como la 6 y la 7**, con el cambio del criterio escrito en
+   la nota de VEN-14 en `backlog.ts`. **Si Rasheed lo rechaza**, basta con
+   que `intentClassifierFrom` (`apps/worker/src/jobs/ventas/outbound.intent.ts`)
+   devuelva `createFakeIntentClassifier()` cuando no hay llave (y la
+   bandeja deje de avisar: `outreach_classifier_status` diría `fake`). Lo
+   que se pierde entonces: un «ok 👍» o un «ahora estoy con otra marca»
+   leído por palabras puede mover un negocio o enfriar una cadencia que
+   no tocaba, y nadie lo revisa porque llega como clasificado.
 
 ## 9. Los errores de Chief que no vamos a repetir
 
