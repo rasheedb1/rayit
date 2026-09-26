@@ -41,9 +41,9 @@ export interface DemoNextTouch {
 /** El siguiente mensaje programado de la demo, con la zona y la ventana del workspace. null si el seed no dejó ninguno. */
 export async function nextDemoTouch(tx: WorkerSql, workspaceId: string): Promise<DemoNextTouch | null> {
   const r = (
-    await tx.query<{ id: string; scheduled_for: Date | string; company_id: string; tz: string; w_start: string | null; w_end: string | null; min_days: number }>(
+    await tx.query<{ id: string; scheduled_for: Date | string; company_id: string; tz: string; w_start: string | null; w_end: string | null; w_country: string | null; min_days: number }>(
       `SELECT t.id, t.scheduled_for, t.company_id, w.timezone AS tz,
-              p.send_window_start::text AS w_start, p.send_window_end::text AS w_end,
+              p.send_window_start::text AS w_start, p.send_window_end::text AS w_end, w.country AS w_country,
               coalesce(p.min_days_between_touches, 3) AS min_days
          FROM outbound_touch t JOIN workspace w ON w.id = t.workspace_id
          LEFT JOIN outbound_policy p ON p.workspace_id = t.workspace_id
@@ -58,7 +58,7 @@ export async function nextDemoTouch(tx: WorkerSql, workspaceId: string): Promise
     scheduledFor: new Date(r.scheduled_for),
     companyId: r.company_id,
     timeZone: r.tz,
-    window: windowOf(r.w_start, r.w_end),
+    window: windowOf(r.w_start, r.w_end, r.w_country),
     minDaysBetweenTouches: Number(r.min_days),
   };
 }

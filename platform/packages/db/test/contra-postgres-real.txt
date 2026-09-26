@@ -5,7 +5,7 @@
 #
 # Medido el 25-sep-2026 con embedded-postgres 16.14, montado como el CI
 # (db/montaje-postgres-real.sql, migrate --seed, mc_app_ci miembro de
-# mc_app y de mc_worker): estos, juntos y en este orden, 404 en verde.
+# mc_app y de mc_worker): estos, juntos y en este orden, 406 en verde.
 test/actividad.test.ts
 test/aplicar.test.ts
 test/bandejas.test.ts
@@ -15,6 +15,7 @@ test/conversion.test.ts
 test/esquema.test.ts
 test/outreach-brief.test.ts
 test/outreach-encender.test.ts
+test/outreach-festivos.test.ts
 test/outreach-ficha-salidas.test.ts
 test/outreach-pitch.test.ts
 test/outreach-reclamo-reparto.test.ts

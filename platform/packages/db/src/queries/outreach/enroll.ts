@@ -77,6 +77,8 @@ interface SequenceRow {
   automation_mode: string;
   tz: string;
   w_start: string | null;
+  /** workspace.country: sus festivos no son hábiles (holidaysFor). */
+  w_country?: string | null;
   w_end: string | null;
   human_review: boolean;
   max_touches: number;
@@ -206,7 +208,7 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
   const seq = (
     await tx.query<SequenceRow>(
       `SELECT s.id, s.workspace_id, s.status, s.automation_mode, coalesce(s.timezone, w.timezone) AS tz,
-              p.send_window_start::text AS w_start, p.send_window_end::text AS w_end,
+              p.send_window_start::text AS w_start, p.send_window_end::text AS w_end, w.country AS w_country,
               coalesce(p.require_human_review, true) AS human_review,
               coalesce(p.max_touches_per_company, 4) AS max_touches, coalesce(p.min_days_between_touches, 3) AS min_days
          FROM outbound_sequence s
@@ -229,7 +231,7 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
     )
   ).rows;
   if (steps.length === 0) throw new OutreachMotorError('sequence_without_steps', 'La secuencia no tiene pasos.');
-  const window = windowOf(seq.w_start, seq.w_end);
+  const window = windowOf(seq.w_start, seq.w_end, seq.w_country);
 
   // Solo las fichas que el workspace de la secuencia puede ver: las
   // demás, aunque existan, son not_found.
@@ -442,6 +444,8 @@ interface ReplanRow {
   scheduled_time: string;
   tz: string;
   w_start: string | null;
+  /** workspace.country: sus festivos no son hábiles (holidaysFor). */
+  w_country?: string | null;
   w_end: string | null;
 }
 
@@ -505,7 +509,7 @@ export async function replanOutreach(tx: SqlExecutor, workspaceId: string, now: 
     await tx.query<ReplanRow>(
       `SELECT t.id, t.enrollment_id, t.step_id, t.held_reason, coalesce(t.next_retry_at, t.scheduled_for) AS due,
               st.day_offset, st.order_in_day, st.scheduled_time::text AS scheduled_time,
-              coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end
+              coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end, w.country AS w_country
        ${REPLANNABLE_FROM}
         ORDER BY t.enrollment_id, st.day_offset, st.order_in_day
         FOR UPDATE OF t`,
@@ -533,7 +537,7 @@ export async function replanOutreach(tx: SqlExecutor, workspaceId: string, now: 
           touches.map((t) => ({
             id: t.step_id, dayOffset: t.day_offset - first.day_offset, orderInDay: t.order_in_day, scheduledTime: t.scheduled_time,
           })),
-          { enrolledAt: now, timeZone: first.tz, window: windowOf(first.w_start, first.w_end), seed: enrollmentId },
+          { enrolledAt: now, timeZone: first.tz, window: windowOf(first.w_start, first.w_end, first.w_country), seed: enrollmentId },
         ).map((p) => [p.stepId, p.at]),
       );
       for (const t of touches) {

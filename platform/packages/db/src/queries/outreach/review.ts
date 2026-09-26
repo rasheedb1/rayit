@@ -341,10 +341,10 @@ export type ResumeEnrollmentResult =
 export async function resumeEnrollment(tx: WorkspaceTx, enrollmentId: string, now: Date): Promise<ResumeEnrollmentResult> {
   assertIds('resumeEnrollment', [enrollmentId]);
   const row = (
-    await tx.query<{ status: string; opted_out: boolean; tz: string; w_start: string | null; w_end: string | null }>(
+    await tx.query<{ status: string; opted_out: boolean; tz: string; w_start: string | null; w_end: string | null; w_country: string | null }>(
       `SELECT e.status,
               (coalesce(c.opted_out, false) OR address_is_suppressed(c.email)) AS opted_out,
-              coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end
+              coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end, w.country AS w_country
          FROM outbound_enrollment e
          JOIN outbound_sequence s ON s.id = e.sequence_id
          JOIN workspace w ON w.id = e.workspace_id
@@ -383,7 +383,7 @@ export async function resumeEnrollment(tx: WorkspaceTx, enrollmentId: string, no
       tx,
       { enrollmentId, dayOffset: first.day_offset, orderInDay: first.order_in_day, at: now },
       row.tz,
-      windowOf(row.w_start, row.w_end),
+      windowOf(row.w_start, row.w_end, row.w_country),
     );
   }
   await advanceEnrollment(tx, enrollmentId, now);

@@ -606,7 +606,7 @@ export async function retryFailedTouches(tx: WorkspaceTx, target: RetryTarget, n
   const { rows } = await tx.query<Record<string, unknown>>(
     `SELECT t.id, t.status, t.attempt_count, t.enrollment_id, e.status AS enrollment_status,
             outbound_touch_retry_block(t) AS retry_block,
-            coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end
+            coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end, w.country AS w_country
        FROM outbound_touch t
        JOIN workspace w ON w.id = t.workspace_id
        LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
@@ -628,7 +628,7 @@ export async function retryFailedTouches(tx: WorkspaceTx, target: RetryTarget, n
       enrollmentStatus: oneOfOrNull(fn, p('enrollment_status'), r.enrollment_status, ENROLLMENT_STATUSES),
       retryBlock: oneOfOrNull(fn, p('retry_block'), r.retry_block, RETRY_BLOCK_CODES),
       timeZone: text(fn, p('tz'), r.tz),
-      window: windowOf(textOrNull(fn, p('w_start'), r.w_start), textOrNull(fn, p('w_end'), r.w_end)),
+      window: windowOf(textOrNull(fn, p('w_start'), r.w_start), textOrNull(fn, p('w_end'), r.w_end), textOrNull(fn, p('w_country'), r.w_country ?? null)),
     }];
   }));
   const reopened = new Set<string>();
