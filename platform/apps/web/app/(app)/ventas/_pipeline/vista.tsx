@@ -113,11 +113,10 @@ export function PipelineView({
     amountText: s.dealCount > 0 ? f.money(s.amount, undefined, { mode: "short" }) : null,
     isLost: s.isLost,
     isWon: s.isWon,
-    conversion: conversionView(
-      conversion.find((c) => c.stageId === s.stageId),
-      s.labelEs,
-      f,
-    ),
+    // Con un filtro de «Para hoy», ni el tablero ni la lista la ponen
+    // (VEN-8 r5): es la de todo el embudo, y bajo columnas filtradas
+    // parecería hablar de las tarjetas que se ven.
+    conversion: filtro ? null : conversionView(conversion.find((c) => c.stageId === s.stageId), s.labelEs, f),
   }));
 
   return (
@@ -141,8 +140,8 @@ export function PipelineView({
         <PipelineBoard deals={boardDeals} stages={boardStages} ctx={ctx} locale={f.locale} />
       ) : (
         <>
-          {/* VEN-8: la conversión por etapa, la misma del tablero; con un filtro de «Para hoy» no se repite. */}
-          {!filtro && <ConversionSummary stages={boardStages} days={f.int(CONVERSION_WINDOW_DAYS)} />}
+          {/* VEN-8: la conversión por etapa, la misma del tablero; con un filtro de «Para hoy» no va (conversion: null). */}
+          <ConversionSummary stages={boardStages} days={f.int(CONVERSION_WINDOW_DAYS)} />
           <PipelineList deals={boardDeals} ctx={ctx} />
         </>
       )}

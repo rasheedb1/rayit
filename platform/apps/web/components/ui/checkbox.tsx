@@ -30,7 +30,9 @@ export type CheckboxProps = {
  *
  * Es un <input type="checkbox"> nativo: el teclado (Espacio), el lector de
  * pantalla y el envío del formulario funcionan sin nada más. El color de
- * la marca es el de la tinta (accent-ink), así que sigue al tema.
+ * la marca es el de la tinta (accent-ink), así que sigue al tema. El foco
+ * con teclado se ve como el de Button, Select e Input (un anillo de tinta,
+ * focus-visible), no con el contorno de cada navegador (VEN-7 r5).
  */
 export function Checkbox({ label, help, name, value, checked, defaultChecked, onChange, disabled, className = "" }: CheckboxProps) {
   const id = useId();
@@ -48,7 +50,7 @@ export function Checkbox({ label, help, name, value, checked, defaultChecked, on
           onChange={onChange ? (e) => onChange(e.target.checked) : undefined}
           disabled={disabled}
           aria-describedby={helpId}
-          className="size-4 shrink-0 rounded-sm border-border accent-ink disabled:opacity-50"
+          className="size-4 shrink-0 rounded-sm border-border accent-ink ring-offset-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/30 focus-visible:ring-offset-2 disabled:opacity-50"
         />
         <label htmlFor={id} className="min-w-0 text-sm font-medium text-ink">
           {label}

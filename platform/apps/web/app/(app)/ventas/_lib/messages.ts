@@ -592,6 +592,13 @@ export const MESSAGES = {
       basis: (n: string, count: number, days: string) => `de ${n} ${count === 1 ? "negocio" : "negocios"} en ${days} días`,
       none: (days: string) => `Nadie entró en ${days} días`,
       /**
+       * Lo mismo sin el periodo, para donde el título ya lo dice (el
+       * resumen de la vista Lista, VEN-8 r5): «en 90 días» no se repite
+       * en cada fila.
+       */
+      basisShort: (n: string, count: number) => `de ${n} ${count === 1 ? "negocio" : "negocios"}`,
+      noneShort: "Nadie entró",
+      /**
        * Lo que lee un lector de pantalla y el title de la fila. `entered` y
        * `advanced` llegan formateados con el locale del workspace; las
        * cifras crudas (`enteredCount`, `advancedCount`) eligen la forma de

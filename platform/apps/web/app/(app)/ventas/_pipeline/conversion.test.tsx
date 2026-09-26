@@ -19,6 +19,7 @@ describe("conversionView", () => {
     expect(v).toEqual({
       rate: t.rate(f.pct(0.5833)),
       basis: "de 12 negocios en 90 días",
+      basisShort: "de 12 negocios",
       label: t.label("Contactado", "12", 12, "7", 7, f.pct(0.5833), "90"),
     });
     expect(v?.rate).toMatch(/^58\s?%/);
@@ -45,7 +46,7 @@ describe("conversionView", () => {
 
   it("sin negocios que hayan pasado por la etapa no inventa un 0 %", () => {
     const v = conversionView({ stageId: "negociacion", entered: 0, advanced: 0, rate: null }, "Negociación", f);
-    expect(v).toEqual({ rate: null, basis: t.none("90"), label: t.labelNone("Negociación", "90") });
+    expect(v).toEqual({ rate: null, basis: t.none("90"), basisShort: t.noneShort, label: t.labelNone("Negociación", "90") });
   });
 
   it("una etapa cerrada (sin fila de conversión) no lleva nada", () => {

@@ -41,4 +41,13 @@ describe("Checkbox", () => {
     expect(casilla).not.toHaveAttribute("aria-describedby");
     expect(casilla).toBeDisabled();
   });
+
+  it("el foco con teclado lleva el mismo anillo que Button, Select e Input (VEN-7 r5)", () => {
+    render(<Checkbox label="Divulgación" />);
+    expect(screen.getByRole("checkbox", { name: "Divulgación" })).toHaveClass(
+      "focus-visible:outline-none",
+      "focus-visible:ring-2",
+      "focus-visible:ring-ink/30",
+    );
+  });
 });

@@ -130,6 +130,8 @@ export function PipelineBoard({
    * vuelve a su menú «Mover a», en la columna donde quedó (pulido r8).
    */
   const [focusDeal, setFocusDeal] = useState<string | null>(null);
+  /** Sin ninguna conversión (un filtro de «Para hoy», VEN-8 r5) no se reserva su hueco bajo las cabeceras. */
+  const conConversion = stages.some((s) => s.conversion !== null);
 
   useEffect(() => {
     if (!focusDeal || pending) return;
@@ -211,7 +213,11 @@ export function PipelineBoard({
                 </div>
                 <p className="mb-1 min-h-4 whitespace-nowrap text-xs tabular-nums text-muted">{stage.amountText}</p>
                 {/* VEN-8: la conversión, bajo la cabecera para que las de todas las columnas queden en línea. */}
-                <div className="mb-2 min-h-4"><StageConversionRow view={stage.conversion} /></div>
+                {conConversion && (
+                  <div className="mb-2 min-h-4">
+                    <StageConversionRow view={stage.conversion} />
+                  </div>
+                )}
 
                 <div
                   className={`min-h-24 rounded-md transition-colors ${isOver ? "bg-hover outline-2 outline-dashed outline-axis" : ""}`}

@@ -12,6 +12,8 @@ export interface ConversionView {
   rate: string | null;
   /** «de 12 negocios en 90 días», o «Nadie entró en 90 días». */
   basis: string;
+  /** «de 12 negocios», o «Nadie entró»: donde el periodo ya lo dice el título (VEN-8 r5). */
+  basisShort: string;
   /** La frase entera: «En los últimos 90 días, de los 12 negocios que entraron en «Contactado», 7 llegaron más lejos (58 %).» */
   label: string;
 }
@@ -32,7 +34,7 @@ export function conversionView(c: StageConversion | undefined, stageLabel: strin
   if (!c) return null;
   const days = f.int(CONVERSION_WINDOW_DAYS);
   if (c.entered === 0 || c.rate === null) {
-    return { rate: null, basis: t.none(days), label: t.labelNone(stageLabel, days) };
+    return { rate: null, basis: t.none(days), basisShort: t.noneShort, label: t.labelNone(stageLabel, days) };
   }
   const pct = f.pct(Number(c.rate));
   const entered = f.int(c.entered);
@@ -40,6 +42,7 @@ export function conversionView(c: StageConversion | undefined, stageLabel: strin
   return {
     rate: t.rate(pct),
     basis: t.basis(entered, c.entered, days),
+    basisShort: t.basisShort(entered, c.entered),
     label: t.label(stageLabel, entered, c.entered, advanced, c.advanced, pct, days),
   };
 }
@@ -82,11 +85,15 @@ export function StageConversionRow({ view, className = "" }: { view: ConversionV
 }
 
 /**
- * La conversión en la vista Lista: la misma fila por etapa abierta, en
- * un resumen encima de la tabla, en el orden del embudo. Sin etapas
- * abiertas no pinta nada. Es la misma cifra que el tablero pone bajo
- * cada columna: las dos formas del pipeline no pueden decir cosas
- * distintas.
+ * La conversión en la vista Lista: una línea por etapa abierta, en el
+ * orden del embudo, encima de la tabla. Es la misma cifra que el tablero
+ * pone bajo cada columna: las dos formas del pipeline no pueden decir
+ * cosas distintas. Sin etapas abiertas no pinta nada.
+ *
+ * Discreta (VEN-8 r5): una lista de definiciones sin cajas —etapa, tasa
+ * y sobre cuántos—, y el periodo solo en el título. Hasta la ronda 4 eran
+ * cinco cajas con borde que a 400 px ocupaban ~300 px antes del primer
+ * negocio, y cada una repetía «en 90 días».
  */
 export function ConversionSummary({
   stages,
@@ -97,19 +104,30 @@ export function ConversionSummary({
   days: string;
 }) {
   const t = MESSAGES.pipeline.conversion;
-  const abiertas = stages.filter((s) => s.conversion !== null);
+  const abiertas = stages.filter((s): s is typeof s & { conversion: ConversionView } => s.conversion !== null);
   if (abiertas.length === 0) return null;
   return (
     <section aria-label={t.listTitle(days)} className="mb-4">
-      <h3 className="mb-2 text-xs font-medium text-muted">{t.listTitle(days)}</h3>
-      <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4" data-testid="conversion-resumen">
+      <h3 className="mb-1.5 text-xs font-medium text-muted">{t.listTitle(days)}</h3>
+      <dl className="grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3" data-testid="conversion-resumen">
         {abiertas.map((s) => (
-          <li key={s.id} className="min-w-0 rounded-md border border-border px-3 py-2">
-            <p className="truncate text-xs font-medium text-ink">{s.label}</p>
-            <StageConversionRow view={s.conversion} className="mt-1" />
-          </li>
+          <div key={s.id} className="flex min-w-0 items-baseline gap-2 text-xs" title={s.conversion.label} data-testid="conversion-etapa">
+            <dt className="min-w-0 truncate text-ink">{s.label}</dt>
+            <dd className="relative ml-auto shrink-0 tabular-nums text-muted">
+              <span className="sr-only">{s.conversion.label}</span>
+              <span aria-hidden="true">
+                {s.conversion.rate ? (
+                  <>
+                    <span className="text-ink-2">{s.conversion.rate}</span> · {s.conversion.basisShort}
+                  </>
+                ) : (
+                  s.conversion.basisShort
+                )}
+              </span>
+            </dd>
+          </div>
         ))}
-      </ul>
+      </dl>
     </section>
   );
 }
