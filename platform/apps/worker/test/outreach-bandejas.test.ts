@@ -26,14 +26,17 @@ import { createFakeIntentClassifier, LlmIntentClassifier, type IntentClassifier,
 import { llmCostUsd, type LlmClient } from '@mc/core/outreach/llm';
 import {
   approveQueuedTouch, cancelInboxReply, createReferralContact, listApprovalQueue, listInboxThreads, loadInboxConversation,
-  markInboxThreadRead, reclassifyInboxMessage, replyInInboxThread, skipQueuedTouch,
+  markInboxThreadRead, reclassifyInboxMessage, regenerateQueuedTouch, replyInInboxThread, skipQueuedTouch,
 } from '@mc/db/queries/bandejas';
 import { type applyIntent, enrollContacts, INTENT_MAX_ATTEMPTS } from '@mc/db/queries/outreach';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';
+import { createFakeGenerator, createFakeJudge } from '@mc/core/outreach/fake';
 import { runDispatch } from '../src/jobs/ventas/outbound.dispatch.ts';
+import { runGenerate } from '../src/jobs/ventas/outbound.generate.ts';
+import { runReview } from '../src/jobs/ventas/outbound.review.ts';
 import { runIntent } from '../src/jobs/ventas/outbound.intent.ts';
 import { runReplies } from '../src/jobs/ventas/outbound.replies.ts';
-import { motorDbFromJob, type MotorDb } from '../src/jobs/ventas/motor-db.ts';
+import { motorDbFromClient, motorDbFromJob, type MotorDb } from '../src/jobs/ventas/motor-db.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
 import { bogota, motorKit, type Ws } from './helpers/motor-kit.ts';
@@ -118,7 +121,7 @@ test('terminado cuando: un retenido se aprueba desde la bandeja, queda programad
   assert.equal(item.subject, 'Hola, Persona');
   assert.equal(item.heldReason, 'needs_review');
   assert.equal(item.regenerable, true, 'un correo se puede regenerar');
-  assert.equal(cola[1]!.regenerable, false, 'una respuesta en el hilo no: la redacta el paso');
+  assert.equal(cola[1]!.regenerable, true, 'un seguimiento en el hilo (email_reply) también');
   // Lo ajeno (otro espacio no ve ni aprueba) se prueba con la RLS de verdad en packages/db/test/bandejas.test.ts.
 
   // Aprobar tal cual: queda programado, con quién y cuándo. El envío del espacio está encendido (sendingOff: false).
@@ -639,6 +642,33 @@ test('el retenido del seed 0008 con una cifra sin origen no se aprueba tal cual,
     assert.equal((await aprobar(conCifra)).ok, true);
     const claims = (await demo.queryAsSuperuser<{ claims: Array<{ id: string }> }>(`SELECT claims FROM outbound_touch WHERE id = $1`, [TOQUE])).rows[0]!;
     assert.deepEqual(claims.claims.map((c) => c.id), ['audience:tiktok:age:25-34']);
+  } finally {
+    await demo.close();
+  }
+});
+
+test('el seguimiento en el hilo retenido del seed (Vitalé, 7,4 de 10) se regenera y vuelve a la cola sin asunto propio', async () => {
+  const { createEmbeddedDb } = await import('@mc/db/embedded');
+  const demo = await createEmbeddedDb({ snapshot: true });
+  try {
+    const WS = '00000002-0000-4000-8000-000000000001';
+    const VITALE = '00000005-0000-4000-8000-000000070004';
+    const enCola = async () => (await demo.withWorkspace(WS, (tx) => listApprovalQueue(tx))).items.find((x) => x.touchId === VITALE)!;
+    const antes = await enCola();
+    assert.deepEqual([antes.stepType, antes.heldReason, antes.regenerable], ['email_reply', 'quality_low:7.4', true]);
+    assert.deepEqual(
+      await demo.withWorkspace(WS, (tx) => regenerateQueuedTouch(tx, { touchId: VITALE, hint: 'other_angle', instructions: null, userId: null })),
+      { ok: true },
+    );
+    const writers = { mode: 'fake' as const, generator: createFakeGenerator(), judge: createFakeJudge() };
+    const m = motorDbFromClient(demo);
+    const g = await runGenerate(m, { writers, now: () => new Date(), workspaceId: WS });
+    assert.ok(g.generated.includes(VITALE), JSON.stringify(g));
+    await runReview(m, { writers, now: () => new Date(), workspaceId: WS });
+    const despues = await enCola();
+    assert.equal(despues.stepType, 'email_reply', 'sigue siendo una respuesta en el hilo');
+    assert.equal(despues.subject, null, 'sin asunto propio: sale como «Re:» del hilo');
+    assert.ok(despues.body.trim().length > 0 && despues.body !== antes.body, 'con la versión nueva');
   } finally {
     await demo.close();
   }

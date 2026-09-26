@@ -35,17 +35,19 @@ export function Fila({
   const bloqueada = fila.regenerando || fila.motivo?.intentoSinConfirmar === true;
   const enfocarFila = () => document.getElementById(`fila-${fila.touchId}`)?.focus();
 
+  async function aprobarAhora() {
+    const r = await aprobarToque({ touchId: fila.touchId, edicion: null });
+    if (r.ok) onDone(r);
+    else if (r.errors) {
+      // Algo del texto no deja aprobarlo tal cual: se abre el editor con el motivo en su campo.
+      setFallo(null);
+      setErrorInicial(r);
+      setModo("editar");
+    } else setFallo(r);
+  }
+
   function aprobar() {
-    start(async () => {
-      const r = await aprobarToque({ touchId: fila.touchId, edicion: null });
-      if (r.ok) onDone(r);
-      else if (r.errors) {
-        // Algo del texto no deja aprobarlo tal cual: se abre el editor con el motivo en su campo.
-        setFallo(null);
-        setErrorInicial(r);
-        setModo("editar");
-      } else setFallo(r);
-    });
+    start(aprobarAhora);
   }
 
   async function saltar() {
@@ -147,9 +149,23 @@ export function Fila({
             {!bloqueada ? (
               <>
                 <span data-accion="a" className="inline-flex">
-                  <Button variant="primary" onClick={aprobar} loading={pending}>
-                    {t.acciones.aprobar}
-                  </Button>
+                  {fila.aprobarBajo ? (
+                    // Por debajo del mínimo del juez: aprobarlo tal cual es una decisión, y se pregunta (la a abre la pregunta).
+                    <ConfirmInline
+                      action={aprobarAhora}
+                      label={t.acciones.aprobar}
+                      variant="primary"
+                      question={fila.aprobarBajo.pregunta}
+                      consequence={fila.aprobarBajo.consecuencia}
+                      confirmLabel={t.acciones.aprobarBajoConfirmar}
+                      cancelLabel={t.acciones.cancelar}
+                      openWidth="w-full sm:w-96"
+                    />
+                  ) : (
+                    <Button variant="primary" onClick={aprobar} loading={pending}>
+                      {t.acciones.aprobar}
+                    </Button>
+                  )}
                 </span>
                 <span data-accion="e" className="inline-flex">
                   <Button variant="secondary" onClick={() => setModo("editar")}>

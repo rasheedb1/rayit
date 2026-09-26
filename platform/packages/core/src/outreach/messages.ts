@@ -262,12 +262,14 @@ const QUALITY_LOW_IN_QUEUE: Record<NoticeLang, Record<'regenerable' | 'edit_only
   es: {
     regenerable: (d) =>
       `la revisión automática le dio ${score('es', d) ?? 'una nota'} de 10, por debajo del mínimo; edítalo o pide otra versión con «Regenerar»`,
-    edit_only: (d) => `la revisión automática le dio ${score('es', d) ?? 'una nota'} de 10, por debajo del mínimo; edítalo antes de aprobarlo`,
+    edit_only: (d) =>
+      `la revisión automática le dio ${score('es', d) ?? 'una nota'} de 10, por debajo del mínimo; revísalo: puedes editarlo o aprobarlo tal cual`,
   },
   en: {
     regenerable: (d) =>
       `the automatic review scored it ${score('en', d) ?? 'low'} out of 10, under the minimum; edit it or ask for another version with «Regenerate»`,
-    edit_only: (d) => `the automatic review scored it ${score('en', d) ?? 'low'} out of 10, under the minimum; edit it before approving it`,
+    edit_only: (d) =>
+      `the automatic review scored it ${score('en', d) ?? 'low'} out of 10, under the minimum; review it: you can edit it or approve it as is`,
   },
 };
 

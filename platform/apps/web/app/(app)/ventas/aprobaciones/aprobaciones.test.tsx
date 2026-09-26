@@ -70,10 +70,11 @@ describe("por qué quedó retenido", () => {
     const conRegenerar = motivoDe("quality_low:6.2", "es-CO", true)!.texto;
     const sinRegenerar = motivoDe("quality_low:6.2", "es-CO", false)!.texto;
     expect(conRegenerar).toContain("«Regenerar»");
-    expect(sinRegenerar).toContain("edítalo antes de aprobarlo");
+    // No ordena editar: aprobarlo tal cual también se puede (y «Aprobar» lo pregunta antes).
+    expect(sinRegenerar).toContain("puedes editarlo o aprobarlo tal cual");
     for (const texto of [conRegenerar, sinRegenerar]) expect(texto).not.toContain("Redactar pitch");
-    // Una respuesta en el hilo no se regenera: la fila tampoco lo promete.
-    const fila = filaVista(item(1, { heldReason: "quality_low:6.2", stepType: "email_reply", regenerable: false }), f);
+    // Una respuesta escrita en la bandeja no se regenera: la fila tampoco lo promete.
+    const fila = filaVista(item(1, { heldReason: "quality_low:6.2", stepType: "email_reply", inboxReply: true, regenerable: false }), f);
     expect(fila.motivo!.texto).toBe(sinRegenerar);
     expect(motivoDe("quality_low:6.2", "en-US", true)!.texto).toContain("«Regenerate»");
   });
@@ -148,6 +149,23 @@ describe("la cola", () => {
     });
     expect(aprobarToque).toHaveBeenCalledWith({ touchId: item(2).touchId, edicion: null });
     expect(await screen.findByText(MESSAGES.avisos.aprobado("Persona 2"))).toBeInTheDocument();
+  });
+
+  it("por debajo del mínimo del juez, «Aprobar» (y la a) pregunta con la nota antes de aprobarlo tal cual", async () => {
+    aprobarToque.mockResolvedValue({ ok: true, notice: MESSAGES.avisos.aprobado("Persona 1") });
+    const bajo = item(1, {
+      heldReason: "quality_low:7.4",
+      review: { totalScore: 7.4, scores: {}, riskTriggers: [], regenerateHint: null, judgeNote: null, preflight: [], attempts: 1, threshold: 8 },
+    });
+    render(<Cola filas={[filaVista(bajo, f)]} />);
+    fireEvent.keyDown(window, { key: "a" });
+    expect(screen.getByText(MESSAGES.acciones.aprobarBajoPregunta(f.decimal(7.4, 1)))).toBeInTheDocument();
+    expect(screen.getByText(MESSAGES.acciones.aprobarBajoConsecuencia(f.decimal(8, 1)))).toBeInTheDocument();
+    expect(aprobarToque).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: MESSAGES.acciones.aprobarBajoConfirmar }));
+    });
+    expect(aprobarToque).toHaveBeenCalledWith({ touchId: bajo.touchId, edicion: null });
   });
 
   it("e abre el editor con el foco en el mensaje; lo que la base rechaza vuelve en su campo", async () => {
@@ -326,6 +344,9 @@ describe("la cola", () => {
     expect(deshacerAprobacion).toHaveBeenCalledWith(deshacer);
     expect(await screen.findByText(MESSAGES.avisos.deshecho("Persona 1"))).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: MESSAGES.avisos.deshacer })).toBeNull();
+    // La revalidación la trae de vuelta, delante de la que estaba detrás: vuelve con el foco.
+    rerender(<Cola filas={[filaVista(item(1), f), filaVista(item(2), f)]} />);
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById(`fila-${item(1).touchId}`)));
   });
 
   it("con el envío apagado, el aviso de aprobado no promete la hora", async () => {

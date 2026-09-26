@@ -48,6 +48,8 @@ export interface FilaVista {
   motivo: Motivo | null;
   juez: JuezVista | null;
   regenerable: boolean;
+  /** La nota del juez no llega al mínimo: «Aprobar» pregunta antes, con la nota y el mínimo. */
+  aprobarBajo: { pregunta: string; consecuencia: string } | null;
   /** «Por qué quedó retenido», o, en una versión nueva, «La revisión de la versión nueva». */
   porqueTitulo: string;
 }
@@ -71,6 +73,8 @@ export function filaVista(item: ApprovalItem, f: Formatter): FilaVista {
   const canal = channelLabel(noticeLang(f.locale), item.channel);
   const minimo = r?.threshold ?? null;
   const regenerado = item.status === "draft" && !item.regenerating;
+  const nota = r?.totalScore ?? null;
+  const bajo = nota !== null && minimo !== null && nota < minimo;
   return {
     touchId: item.touchId,
     etiqueta: t.fila.label(item.companyName, persona, paso, canal),
@@ -91,7 +95,7 @@ export function filaVista(item: ApprovalItem, f: Formatter): FilaVista {
     juez: r
       ? {
           total: r.totalScore === null ? null : t.porque.total(f.decimal(r.totalScore, 1), minimo === null ? null : f.decimal(minimo, 1)),
-          totalBajo: r.totalScore !== null && minimo !== null && r.totalScore < minimo,
+          totalBajo: bajo,
           // La rúbrica tiene un mínimo para la nota; una dimensión por debajo de él es la que la tiró.
           dimensiones: DIMENSIONES.filter((d) => r.scores[d] !== undefined).map((d) => ({
             key: d, label: t.porque.dimensiones[d], valor: f.decimal(r.scores[d]!, 1), bajo: minimo !== null && r.scores[d]! < minimo,
@@ -103,6 +107,10 @@ export function filaVista(item: ApprovalItem, f: Formatter): FilaVista {
         }
       : null,
     regenerable: item.regenerable,
+    aprobarBajo:
+      bajo && nota !== null && minimo !== null
+        ? { pregunta: t.acciones.aprobarBajoPregunta(f.decimal(nota, 1)), consecuencia: t.acciones.aprobarBajoConsecuencia(f.decimal(minimo, 1)) }
+        : null,
     porqueTitulo: regenerado ? t.porque.titleRegenerado : t.porque.title,
   };
 }

@@ -166,6 +166,11 @@ export const MESSAGES = {
     saltarPregunta: "¿Saltar este paso?",
     saltarConsecuencia: "Este mensaje no sale y la cadencia sigue con el siguiente paso. No se puede deshacer.",
     saltarConfirmar: "Sí, saltar",
+    /** La nota del juez no llega al mínimo: «Aprobar» pregunta antes (Stripe Radar al aprobar un pago de riesgo). */
+    aprobarBajoPregunta: (nota: string) => `¿Aprobar con ${nota} de 10?`,
+    aprobarBajoConsecuencia: (minimo: string) =>
+      `La revisión automática lo dejó por debajo del mínimo (${minimo}). Sale tal cual, a su hora; si prefieres, edítalo antes.`,
+    aprobarBajoConfirmar: "Sí, aprobar",
     resolverEnLaFicha: "Resolver en la ficha",
     /** Debajo del mensaje, las frases con la cifra sin origen señalada. */
     dondeEsta: "Dónde está en el mensaje",
