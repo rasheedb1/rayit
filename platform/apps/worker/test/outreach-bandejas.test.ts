@@ -22,13 +22,13 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { createFakeIntentClassifier, LlmIntentClassifier } from '@mc/core/outreach/intent';
+import { createFakeIntentClassifier, LlmIntentClassifier, type IntentClassifier, type IntentInput } from '@mc/core/outreach/intent';
 import { llmCostUsd, type LlmClient } from '@mc/core/outreach/llm';
 import {
-  approveQueuedTouch, createReferralContact, listApprovalQueue, listInboxThreads, loadInboxConversation, markInboxThreadRead,
-  replyInInboxThread, skipQueuedTouch,
+  approveQueuedTouch, cancelInboxReply, createReferralContact, listApprovalQueue, listInboxThreads, loadInboxConversation,
+  markInboxThreadRead, reclassifyInboxMessage, replyInInboxThread, skipQueuedTouch,
 } from '@mc/db/queries/bandejas';
-import { enrollContacts } from '@mc/db/queries/outreach';
+import { applyIntent, enrollContacts, INTENT_MAX_ATTEMPTS } from '@mc/db/queries/outreach';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';
 import { runDispatch } from '../src/jobs/ventas/outbound.dispatch.ts';
 import { runIntent } from '../src/jobs/ventas/outbound.intent.ts';
@@ -108,8 +108,9 @@ test('terminado cuando: un retenido se aprueba desde la bandeja, queda programad
   const [primero, segundo, tercero] = await touches(c);
   assert.deepEqual([primero!.status, primero!.held_reason], ['held', 'needs_review'], 'la revisión humana retiene');
 
-  const cola = await comoLaWeb(w.id, (tx) => listApprovalQueue(tx));
+  const { items: cola, total } = await comoLaWeb(w.id, (tx) => listApprovalQueue(tx));
   assert.deepEqual(cola.map((x) => x.touchId), [primero!.id, segundo!.id, tercero!.id]);
+  assert.equal(total, 3);
   const item = cola[0]!;
   assert.equal(item.companyName, 'Marca 1');
   assert.equal(item.contactName, 'Persona 1 Prueba');
@@ -122,7 +123,9 @@ test('terminado cuando: un retenido se aprueba desde la bandeja, queda programad
 
   // Aprobar tal cual: queda programado, con quién y cuándo.
   const ahora = bogota('2026-09-23', '08:00');
-  assert.deepEqual(await comoLaWeb(w.id, (tx) => approveQueuedTouch(tx, { touchId: primero!.id, userId: null, now: ahora })), { ok: true });
+  assert.deepEqual(await comoLaWeb(w.id, (tx) => approveQueuedTouch(tx, { touchId: primero!.id, userId: null, now: ahora })), {
+    ok: true, approvedAt: ahora, heldReason: 'needs_review',
+  });
   // Editar y aprobar: sale lo que dejó la persona; lo que rompe una regla no se aprueba.
   assert.deepEqual(
     await comoLaWeb(w.id, (tx) => approveQueuedTouch(tx, { touchId: segundo!.id, body: 'Hola, {{first_name}}', userId: null, now: ahora })),
@@ -132,7 +135,7 @@ test('terminado cuando: un retenido se aprueba desde la bandeja, queda programad
     await comoLaWeb(w.id, (tx) =>
       approveQueuedTouch(tx, { touchId: segundo!.id, subject: null, body: 'Te dejo una idea concreta para la temporada.', userId: null, now: ahora }),
     ),
-    { ok: true },
+    { ok: true, approvedAt: ahora, heldReason: 'needs_review' },
   );
   // Saltar: el tercero no sale y no frena a nadie.
   assert.deepEqual(await comoLaWeb(w.id, (tx) => skipQueuedTouch(tx, tercero!.id, ahora)), { ok: true });
@@ -141,7 +144,7 @@ test('terminado cuando: un retenido se aprueba desde la bandeja, queda programad
   const despues = await touches(c);
   assert.deepEqual(despues.map((x) => x.status), ['scheduled', 'scheduled', 'skipped']);
   assert.equal(await scalar<boolean>('SELECT approved_at IS NOT NULL AS v FROM outbound_touch WHERE id = $1', [primero!.id]), true);
-  assert.deepEqual(await comoLaWeb(w.id, (tx) => listApprovalQueue(tx)), [], 'la cola queda vacía');
+  assert.deepEqual(await comoLaWeb(w.id, (tx) => listApprovalQueue(tx)), { items: [], total: 0 }, 'la cola queda vacía');
 
   const fake = fakeChannels();
   const r = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '12:00')));
@@ -208,8 +211,8 @@ test('terminado cuando: «me interesa» mueve el negocio, aparece en la bandeja 
         userId: null, now: bogota('2026-09-23', '15:12'),
       }),
     );
-  assert.deepEqual(await responder(), { ok: true, touchId, duplicate: false });
-  assert.deepEqual(await responder(), { ok: true, touchId, duplicate: true });
+  assert.deepEqual(await responder(), { ok: true, touchId, duplicate: false, sendingOff: false });
+  assert.deepEqual(await responder(), { ok: true, touchId, duplicate: true, sendingOff: false });
   assert.equal(await scalar<number>('SELECT count(*)::int AS v FROM outbound_touch WHERE reply_to_message_id IS NOT NULL AND contact_id = $1', [contact]), 1);
   assert.equal((await comoLaWeb(w.id, (tx) => loadInboxConversation(tx, contact, 'email')))!.pending.length, 1, 'se ve «enviando»');
 
@@ -305,7 +308,7 @@ test('«ahora no»: noventa días de enfriamiento, y al terminar la cadencia vue
   assert.ok(vuelta[1]!.scheduled_for >= bogota('2026-12-23', '09:00'), 'desde hoy, no en el pasado');
   assert.equal(await scalar<string>('SELECT status AS v FROM outbound_enrollment WHERE contact_id = $1', [contact]), 'active');
   const cola = await comoLaWeb(w.id, (tx) => listApprovalQueue(tx));
-  assert.deepEqual(cola.map((x) => x.heldReason), ['cooldown_over', 'cooldown_over']);
+  assert.deepEqual(cola.items.map((x) => x.heldReason), ['cooldown_over', 'cooldown_over']);
   const fake = fakeChannels();
   const sale = await runDispatch(motor, deps(w, fake, () => bogota('2026-12-24', '12:00')));
   assert.deepEqual(sale.sent, [], 'nada sale sin que una persona lo apruebe');
@@ -404,4 +407,135 @@ test('sin clasificador no se clasifica nada, y sin presupuesto se espera', async
   const sinPlata = await runIntent(motor, { classifier: modelo, now: () => bogota('2026-09-23', '15:09'), workspaceId: w.id });
   assert.equal(sinPlata.overBudget.length, 1);
   assert.equal(await scalar<number>(`SELECT count(*)::int AS v FROM outbound_llm_call WHERE workspace_id = $1`, [w.id]), 0);
+});
+
+/** Un mensaje entrante sin clasificar escrito a mano, como lo deja el lector. */
+async function entrante(w: Ws, body: string, n: number): Promise<string> {
+  return scalar<string>(
+    `INSERT INTO outbound_message (workspace_id, contact_id, direction, channel, thread_ref, provider_message_id, body, occurred_at, created_at)
+     VALUES ($1, $2, 'inbound', 'email', 'hilo-' || $3, 'resp-' || gen_random_uuid()::text, $4, now() - ($3 || ' minutes')::interval,
+             now() - ($3 || ' minutes')::interval)
+     RETURNING id AS v`,
+    [w.id, w.contacts[0], String(n), body],
+  );
+}
+
+test('el lote se reparte entre workspaces: uno sin presupuesto y con 25 respuestas no deja a otro sin clasificar', async () => {
+  const a = await workspace(20, { contacts: 1 });
+  const b = await workspace(21, { contacts: 1 });
+  await db.raw.query(`UPDATE outbound_policy SET llm_daily_cap_usd = 0 WHERE workspace_id = $1`, [a.id]);
+  // Las de A son más viejas: con el lote global de antes ocupaban los 20 puestos.
+  for (let i = 0; i < 25; i++) await entrante(a, `Respuesta ${i} de A`, 100 + i);
+  const deB = await entrante(b, 'Me interesa, mándame tarifas.', 1);
+  const modelo = new LlmIntentClassifier(scriptedModel('{"intent":"interested","confidence":0.92,"return_date":null,"referral":null,"reason":"Pide tarifas."}'));
+  const r = await runIntent(motor, { classifier: modelo, now: () => new Date() });
+  assert.ok(r.classified.some((c) => c.messageId === deB), 'B se clasifica en la misma corrida');
+  assert.ok(r.overBudget.includes(a.id), 'A espera a mañana');
+  assert.equal(await scalar<number>(`SELECT count(*)::int AS v FROM outbound_llm_call WHERE workspace_id = $1`, [a.id]), 0, 'A no gasta');
+  assert.equal(
+    await scalar<number>(`SELECT count(*)::int AS v FROM outbound_message WHERE workspace_id = $1 AND classified_at IS NULL`, [a.id]), 25,
+  );
+  assert.equal(await scalar<string>(`SELECT intent_reason AS v FROM outbound_message WHERE id = $1`, [deB]), 'Pide tarifas.', 'con su razón');
+});
+
+test('si aplicar los efectos falla, la clasificación no se vuelve a pagar; al tercer fallo queda para una persona', async () => {
+  const w = await workspace(22, { contacts: 1 });
+  const m = await entrante(w, 'Me interesa, ¿hablamos el jueves?', 1);
+  const modelo = new LlmIntentClassifier(scriptedModel('{"intent":"interested","confidence":0.9,"return_date":null,"referral":null,"reason":"Quiere hablar."}'));
+  const rompe: typeof applyIntent = async () => {
+    throw new Error('deadlock simulado');
+  };
+  const correr = (apply?: typeof applyIntent) =>
+    runIntent(motor, { classifier: modelo, now: () => new Date(), workspaceId: w.id, ...(apply ? { apply } : {}) });
+  const r1 = await correr(rompe);
+  assert.equal(r1.errors.length, 1);
+  const r2 = await correr(rompe);
+  assert.equal(r2.errors.length, 1);
+  const llamadas = () => scalar<number>(`SELECT count(*)::int AS v FROM outbound_llm_call WHERE workspace_id = $1 AND purpose = 'classify'`, [w.id]);
+  assert.equal(await llamadas(), 1, 'una sola llamada pagada');
+  assert.equal(await scalar<number>(`SELECT intent_attempts AS v FROM outbound_message WHERE id = $1`, [m]), 2);
+  // La tercera, con los efectos de verdad: aplica la decisión guardada sin volver a llamar.
+  const r3 = await correr();
+  assert.deepEqual(r3.classified.map((c) => c.intent), ['interested']);
+  assert.equal(await llamadas(), 1);
+  assert.equal(await scalar<boolean>(`SELECT intent_decision IS NULL AS v FROM outbound_message WHERE id = $1`, [m]), true);
+
+  // Otro que falla siempre: al tercer fallo queda ambiguo, con un aviso, y sale de la cola.
+  const w2 = await workspace(23, { contacts: 1 });
+  const m2 = await entrante(w2, 'Me interesa.', 1);
+  let rendido: string[] = [];
+  for (let i = 0; i < INTENT_MAX_ATTEMPTS; i++) {
+    rendido = (await runIntent(motor, { classifier: modelo, now: () => new Date(), workspaceId: w2.id, apply: rompe })).gaveUp;
+  }
+  assert.deepEqual(rendido, [m2]);
+  const fila = (await db.raw.query<{ intent: string; conf: string; source: string }>(
+    `SELECT intent, intent_confidence::text AS conf, intent_source AS source FROM outbound_message WHERE id = $1`, [m2],
+  )).rows[0]!;
+  assert.deepEqual([fila.intent, fila.conf, fila.source], ['ambiguous', '0.000', 'model']);
+  assert.equal(await scalar<string>(`SELECT severity AS v FROM notification WHERE entity_id = $1 AND entity_type = 'outbound_message_intent'`, [m2]), 'warning');
+  assert.equal(await scalar<number>(`SELECT count(*)::int AS v FROM outbound_llm_call WHERE workspace_id = $1`, [w2.id]), 1);
+  const otra = await runIntent(motor, { classifier: modelo, now: () => new Date(), workspaceId: w2.id, apply: rompe });
+  assert.equal(otra.errors.length, 0, 'ya no está en la cola');
+});
+
+test('el clasificador recibe lo que dijeron las cabeceras', async () => {
+  const w = await workspace(24, { contacts: 1 });
+  await conversacion(w, 'Gracias por tu correo. Estoy de vacaciones hasta el 2026-10-02.', { automatic: true });
+  const vistos: boolean[] = [];
+  const espia: IntentClassifier = {
+    source: 'fake', model: 'espia',
+    async classify(input: IntentInput) {
+      vistos.push(input.automatic);
+      return fakeClassifier.classify(input);
+    },
+  };
+  await runIntent(motor, { classifier: espia, now: () => bogota('2026-09-23', '15:06'), workspaceId: w.id });
+  assert.deepEqual(vistos, [true]);
+});
+
+test('una persona corrige la intención desde la bandeja: la ambigua pasa a interesada y el negocio se mueve', async () => {
+  const w = await workspace(25, { contacts: 1 });
+  const deal = await negocio(w);
+  const { contact } = await conversacion(w, F.ambigua!.body, { deal });
+  const dudoso = new LlmIntentClassifier(scriptedModel('{"intent":"interested","confidence":0.5,"return_date":null,"referral":null,"reason":"Solo dice ok."}'));
+  await runIntent(motor, { classifier: dudoso, now: () => bogota('2026-09-23', '15:06'), workspaceId: w.id });
+  const conv = (await comoLaWeb(w.id, (tx) => loadInboxConversation(tx, contact, 'email')))!;
+  const m = conv.messages.find((x) => x.direction === 'inbound')!;
+  assert.deepEqual([m.intent, m.intentReason], ['ambiguous', 'Solo dice ok.']);
+  const r = await comoLaWeb(w.id, (tx) => reclassifyInboxMessage(tx, { messageId: m.id, intent: 'interested', now: bogota('2026-09-23', '16:00') }));
+  assert.equal(r.ok && r.dealMoved, true);
+  assert.equal(await scalar<string>('SELECT stage_id AS v FROM deal WHERE id = $1', [deal]), 'conversacion');
+  assert.equal(await scalar<string>(`SELECT intent_source AS v FROM outbound_message WHERE id = $1`, [m.id]), 'person');
+  assert.equal(await scalar<boolean>(`SELECT read_at IS NOT NULL AS v FROM notification WHERE entity_id = $1 AND entity_type = 'outbound_message_intent'`, [m.id]), true, 'el aviso de revisarla queda leído');
+});
+
+test('corregir un «fuera de la oficina» que no lo era: la cadencia no vuelve sola', async () => {
+  const w = await workspace(26, { contacts: 1 });
+  const { contact } = await conversacion(w, F.fuera_de_oficina!.body);
+  await runIntent(motor, { classifier: fakeClassifier, now: () => bogota('2026-09-23', '15:06'), workspaceId: w.id });
+  assert.equal(await scalar<string>('SELECT status AS v FROM outbound_enrollment WHERE contact_id = $1', [contact]), 'paused');
+  const m = await scalar<string>(`SELECT id AS v FROM outbound_message WHERE contact_id = $1 AND direction = 'inbound'`, [contact]);
+  const r = await comoLaWeb(w.id, (tx) => reclassifyInboxMessage(tx, { messageId: m, intent: 'not_now', now: bogota('2026-09-23', '16:00') }));
+  assert.equal(r.ok, true);
+  const e = await scalar<string>(`SELECT status || ':' || to_char(resume_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS v FROM outbound_enrollment WHERE contact_id = $1`, [contact]);
+  assert.equal(e, 'cooldown:2026-12-22', 'noventa días desde la respuesta');
+  assert.equal(
+    await scalar<number>(`SELECT count(*)::int AS v FROM outbound_touch WHERE contact_id = $1 AND status IN ('scheduled', 'held', 'draft')`, [contact]), 0,
+    'lo que el «fuera de la oficina» había devuelto a la cola, cancelado',
+  );
+});
+
+test('una respuesta de la bandeja cancelada no sale', async () => {
+  const w = await workspace(27, { contacts: 1 });
+  const { contact, fake } = await conversacion(w, F.me_interesa!.body);
+  const touchId = randomUUID();
+  const r = await comoLaWeb(w.id, (tx) =>
+    replyInInboxThread(tx, { touchId, contactId: contact, channel: 'email', body: 'Con una errata', userId: null, now: bogota('2026-09-23', '15:12') }),
+  );
+  assert.equal(r.ok, true);
+  assert.deepEqual(await comoLaWeb(w.id, (tx) => cancelInboxReply(tx, touchId)), { ok: true, body: 'Con una errata' });
+  const sale = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '15:14')));
+  assert.deepEqual(sale.sent, [], 'la cancelada no sale');
+  const conv = (await comoLaWeb(w.id, (tx) => loadInboxConversation(tx, contact, 'email')))!;
+  assert.deepEqual(conv.notSent.map((p) => [p.touchId, p.blockedReason]), [[touchId, 'canceled_by_person']]);
 });
