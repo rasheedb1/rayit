@@ -10,13 +10,14 @@
  *     de una cadencia en pausa, lo que va detrás de un retenido);
  *   · resolver un intento sin confirmar es del equipo, no de un cliente
  *     (outreach_resolve_unconfirmed es SECURITY DEFINER: las políticas no
- *     la frenan).
+ *     la frenan);
+ *   · el aviso de un retenido se repite si se retiene por OTRO motivo.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readAlertSignalCounts } from '../src/queries/entregabilidad.ts';
 import { skipQueuedTouch } from '../src/queries/bandejas.ts';
-import { releaseHeldTouch, resolveUnconfirmedTouch, resumeEnrollment } from '../src/queries/outreach.ts';
+import { notifyTouchHeld, releaseHeldTouch, resolveUnconfirmedTouch, resumeEnrollment } from '../src/queries/outreach.ts';
 import { openTestDb, SETUP_TIMEOUT, type TestDb } from './pglite.ts';
 
 const id = (kind: string) => `00000069-0000-4000-8000-${kind.padStart(12, '0')}`;
@@ -135,4 +136,18 @@ test('resolver un intento sin confirmar es del equipo: un cliente no, la dueña 
   assert.equal((await estado(T.ambiguo)).status, 'held');
   assert.deepEqual(await web((tx) => resolveUnconfirmedTouch(tx, T.ambiguo, 'was_sent'), DUENA), { ok: true });
   assert.equal((await estado(T.ambiguo)).status, 'sent');
+});
+
+test('el aviso de un retenido: uno por motivo, y otro si vuelve a retenerse por otra cosa', async () => {
+  const avisos = async () =>
+    t.db.asWorker(async (tx) =>
+      (await tx.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM notification WHERE entity_type = 'outbound_touch_held' AND entity_id = $1`, [T.tres],
+      )).rows[0]!.n,
+    );
+  const avisar = (motivo: string) => t.db.asWorker((tx) => notifyTouchHeld(tx, T.tres, motivo, new Date()));
+  assert.equal(await avisar('no_postal_address'), true);
+  assert.equal(await avisar('no_postal_address'), false, 'el mismo motivo no se repite');
+  assert.equal(await avisar('unconfirmed_attempt:1'), true, 'otro motivo, que pide mirar la carpeta de enviados, sí');
+  assert.equal(await avisos(), 2);
 });

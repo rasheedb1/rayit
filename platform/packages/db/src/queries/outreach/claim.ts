@@ -516,7 +516,18 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
                    AND (pt.status IN ('scheduled', 'processing', 'held')
                         OR (pt.status = 'draft' AND ps.step_type = ANY($4::text[])))
                    AND (ps.day_offset, ps.order_in_day) < (st.day_offset, st.order_in_day))
-        ORDER BY coalesce(t.next_retry_at, t.scheduled_for), t.id
+        -- Reparto entre workspaces: primero el más viejo de CADA workspace, después el
+        -- segundo de cada uno… (su puesto en la cola de su workspace, contado hasta $5).
+        -- Por orden de llegada a secas, un workspace con cientos de atrasados (al
+        -- volver a encender) se llevaba las corridas de todos los demás. Una ventana
+        -- (ROW_NUMBER) no se puede combinar con FOR UPDATE; esta subconsulta sí.
+        ORDER BY (SELECT count(*) FROM (
+                    SELECT 1 FROM outbound_touch o
+                     WHERE o.workspace_id = t.workspace_id AND o.status = 'scheduled'
+                       AND coalesce(o.next_retry_at, o.scheduled_for) <= $1::timestamptz
+                       AND (coalesce(o.next_retry_at, o.scheduled_for), o.id) < (coalesce(t.next_retry_at, t.scheduled_for), t.id)
+                     LIMIT $5) antes),
+                 coalesce(t.next_retry_at, t.scheduled_for), t.id
         LIMIT $5
         FOR UPDATE OF t SKIP LOCKED`,
       [now.toISOString(), ws, channels, [...DISPATCHABLE_STEP_TYPES], limit],

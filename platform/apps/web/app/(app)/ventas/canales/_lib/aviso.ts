@@ -121,8 +121,35 @@ export async function unipileWebhook(req: Request, deps: ChannelDeps): Promise<R
   if (event.kind === "account_connected") return json(200, { ok: true, ignored: MESSAGES.routes.ignored.notAccountEvent });
 
   const { proof, route } = routed;
-  const result = await deps.withProviderCallback(proof, async (tx) => {
-    const account = await findUnipileAccountForWebhook(tx, route.channelAccountId, event.accountId);
+  let result: string | null;
+  try {
+    result = await recordWebhookEvent(deps, proof, route.channelAccountId, event, now);
+  } catch (err) {
+    // El despachador tiene la cadencia bloqueada mientras habla con el proveedor (hasta 30 s por llamada): antes de
+    // agotar el tiempo de Unipile, se responde 503 y Unipile reintenta el aviso (el mensaje no se pierde).
+    if ((err as { code?: string }).code === LOCK_NOT_AVAILABLE) return plain(503, MESSAGES.routes.busy, { "Retry-After": "10" });
+    throw err;
+  }
+  return json(200, result ? { ok: true, ignored: result } : { ok: true });
+}
+
+/** 55P03: lock_timeout venció esperando una fila bloqueada. */
+const LOCK_NOT_AVAILABLE = "55P03";
+/** Lo más que un aviso espera una fila que tiene otro (el envío de un toque, la pausa desde la web). */
+export const WEBHOOK_LOCK_TIMEOUT = "5s";
+
+type WebhookEvent = Extract<ReturnType<typeof parseUnipileWebhook>, { kind: "message" | "account_status" }>;
+
+async function recordWebhookEvent(
+  deps: ChannelDeps,
+  proof: Parameters<ChannelDeps["withProviderCallback"]>[0],
+  channelAccountId: string,
+  event: WebhookEvent,
+  now: Date,
+): Promise<string | null> {
+  return deps.withProviderCallback(proof, async (tx) => {
+    await tx.query(`SET LOCAL lock_timeout = '${WEBHOOK_LOCK_TIMEOUT}'`);
+    const account = await findUnipileAccountForWebhook(tx, channelAccountId, event.accountId);
     if (!account) return MESSAGES.routes.ignored.unknownAccount;
     const name = channelHealthName(account.channel);
     if (event.kind === "message") {
@@ -156,7 +183,6 @@ export async function unipileWebhook(req: Request, deps: ChannelDeps): Promise<R
     });
     return null;
   });
-  return json(200, result ? { ok: true, ignored: result } : { ok: true });
 }
 
 /**

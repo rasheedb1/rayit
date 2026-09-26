@@ -241,6 +241,29 @@ describe("el webhook de Unipile", () => {
     expect(await count(`SELECT count(*)::int AS n FROM outbound_message`)).toBe(antes);
   }, HEAVY_MS);
 
+  it("si la cadencia está bloqueada por un envío más de lo que espera el aviso, 503 y Unipile reintenta", async () => {
+    const LINKEDIN_LAURA = "00000005-0000-4000-8000-0000000ac002";
+    const vistos: string[] = [];
+    const bloqueada = <T,>(proof: ProviderCallbackProof, fn: (tx: WorkspaceTx) => Promise<T>): Promise<T> =>
+      withProviderCallback(proof, async (tx) => {
+        const espia = Object.assign(Object.create(Object.getPrototypeOf(tx) as object) as WorkspaceTx, tx, {
+          query: async (sql: string, params?: unknown[]) => {
+            vistos.push(sql);
+            if (/lock_timeout/.test(sql)) return tx.query(sql, params as never);
+            throw Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" });
+          },
+        });
+        return fn(espia);
+      });
+    const r = await unipileWebhook(
+      webhook(MESSAGE("acc_li_0001", "msg_bloqueado"), { [UNIPILE_SECRET_HEADER]: SECRET, [UNIPILE_ROUTE_HEADER]: route(LINKEDIN_LAURA) }),
+      deps({ withProviderCallback: bloqueada }),
+    );
+    expect(r.status).toBe(503);
+    expect(r.headers.get("Retry-After")).toBe("10");
+    expect(vistos[0]).toMatch(/SET LOCAL lock_timeout = '5s'/);
+  }, HEAVY_MS);
+
   it("primero se autentica, después se lee: con un secreto malo, 401 aunque el cuerpo no sea JSON; y un cuerpo enorme, 413", async () => {
     const LINKEDIN_LAURA = "00000005-0000-4000-8000-0000000ac002";
     const bad = new Request(`${ORIGIN}/api/webhooks/unipile`, { method: "POST", headers: { [UNIPILE_SECRET_HEADER]: "otro", [UNIPILE_ROUTE_HEADER]: route(LINKEDIN_LAURA) }, body: "{no es json" });
