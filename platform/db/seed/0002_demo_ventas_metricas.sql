@@ -1174,11 +1174,13 @@ WHERE signal.status = 'pending';
 -- El monto de un negocio es el NETO, sin IVA (0031): lo que la marca
 -- presupuesta y lo que la creadora cuenta como venta. La campaña y la
 -- factura llevan el total con impuesto (CAM-2, FIN-1). Por eso los
--- cuatro ganados con campaña valen aquí el SUBTOTAL de su factura de
--- 0003 y no su total: Fresko 4 369 747,90 (FV-2026-011, 5,2 M con
--- IVA), Nutrivé 3 949 579,83 (FV-2026-009, 4,7 M), Café Alma
--- 2 605 042,02 (FV-2026-010, 3,1 M) y Hogar Lindo 924 369,75
--- (FV-2026-007, 1,1 M). Antes valían el total, y el mismo acuerdo
+-- cuatro ganados con campaña valen aquí el NETO de su cotización de
+-- 0004, al peso como toda cifra en COP, y no su total: Fresko
+-- 4 369 748 (FV-2026-011, 5,2 M con IVA), Nutrivé 3 949 580
+-- (FV-2026-009, 4,7 M), Café Alma 2 605 042 (FV-2026-010, 3,1 M) y
+-- Hogar Lindo 924 370 (FV-2026-007, 1,1 M). La factura lleva el mismo
+-- total con el neto al centavo (2 605 042,02), que es como Finanzas lo
+-- saca del total. Antes valían el total, y el mismo acuerdo
 -- decía 5,2 M en el pipeline y 6,18 M en una campaña recién aceptada
 -- (la app ya guardaba neto en el negocio y total en la campaña). Las
 -- cotizaciones que lo acuerdan están en 0004.
@@ -1245,21 +1247,23 @@ FROM (VALUES
    (CURRENT_DATE + 3 + time '15:00') AT TIME ZONE 'UTC', (CURRENT_DATE - 1 + time '13:00') AT TIME ZONE 'UTC', NULL, NULL, NULL, (CURRENT_DATE - 8 + time '13:00') AT TIME ZONE 'UTC'),
   -- Ganados
   ('00000002-0000-4000-8000-0000000dea09', '00000002-0000-4000-8000-0000000000e2', '00000002-0000-4000-8000-00000005e001',
-   '2 TikTok · septiembre', 'ganado', 4369747.90, DATE '2026-08-27', 'Cobrar la factura FV-2026-011',
+   '2 TikTok · septiembre', 'ganado', 4369748.00, DATE '2026-08-27', 'Cobrar la factura FV-2026-011',
    ((CURRENT_DATE + 23)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-09 15:10:00+00', '2026-08-27 17:30:00+00', NULL, NULL, '2026-08-13 14:20:00+00'),
   -- 4,7 M con IVA, no 4,5: es el mismo trabajo que la campaña ca0003 y
-  -- la factura FV-2026-009 de 0003, que valen 4 700 000 (3 949 579,83
-  -- netos, que es lo que lleva el negocio). El mock da 4,5 M para este
+  -- la factura FV-2026-009 de 0003, que valen 4 700 000 (3 949 580
+  -- netos al peso, los de la cotización COT-2026-002 de 0004, que es lo
+  -- que lleva el negocio; la factura va al centavo, 3 949 579,83, con el
+  -- mismo total). El mock da 4,5 M para este
   -- deal, pero un tablero de Ventas que no cuadre con la factura del
   -- mismo video mata la demo antes que la cifra del mock.
   ('00000002-0000-4000-8000-0000000dea10', '00000002-0000-4000-8000-0000000000e4', NULL,
-   'Video dedicado · julio', 'ganado', 3949579.83, DATE '2026-07-01', 'Cobrada',
+   'Video dedicado · julio', 'ganado', 3949580.00, DATE '2026-07-01', 'Cobrada',
    NULL, '2026-08-20 15:00:00+00', '2026-07-01 14:00:00+00', NULL, NULL, '2026-06-10 10:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea11', '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-00000005e002',
-   'Lanzamiento cold brew', 'ganado', 2605042.02, DATE '2026-07-29', 'Cobrar la factura FV-2026-010',
+   'Lanzamiento cold brew', 'ganado', 2605042.00, DATE '2026-07-29', 'Cobrar la factura FV-2026-010',
    ((CURRENT_DATE + 7)::timestamp + interval '15 hours') AT TIME ZONE 'UTC', '2026-09-12 14:00:00+00', '2026-07-29 16:00:00+00', NULL, NULL, '2026-07-22 15:00:00+00'),
   ('00000002-0000-4000-8000-0000000dea12', '00000002-0000-4000-8000-0000000000e3', NULL,
-   '3 historias · junio', 'ganado', 924369.75, DATE '2026-06-01', 'Esperar el pago de FV-2026-007 (2 recordatorios enviados)',
+   '3 historias · junio', 'ganado', 924370.00, DATE '2026-06-01', 'Esperar el pago de FV-2026-007 (2 recordatorios enviados)',
    NULL, '2026-09-04 16:00:00+00', '2026-06-01 15:00:00+00', NULL, NULL, '2026-05-18 10:00:00+00'),
   -- Perdido
   ('00000002-0000-4000-8000-0000000dea13', '00000002-0000-4000-8000-0000000000e6', NULL,
@@ -1300,18 +1304,21 @@ ON CONFLICT (id) DO UPDATE SET
 WHERE deal.stage_id IN (SELECT st.id FROM pipeline_stage st WHERE NOT st.is_won AND NOT st.is_lost);
 
 -- Una base sembrada antes de fijar la convención tiene esos cuatro
--- ganados en bruto. Se corrigen solo si siguen con la cifra vieja: un
--- monto que alguien cambió a mano, o que una cotización aceptada dejó,
--- no se toca. Es idempotente: la segunda corrida no encuentra nada.
+-- ganados en bruto, y una sembrada antes del pulido r2 de Cotizar, con
+-- el neto al centavo (2.605.042,02): el neto es el de la cotización,
+-- que en COP va al peso. Se corrigen solo si siguen con una cifra
+-- vieja: un monto que alguien cambió a mano, o que una cotización
+-- aceptada dejó, no se toca. Es idempotente: la segunda corrida no
+-- encuentra nada.
 UPDATE deal d
    SET amount = v.neto
   FROM (VALUES
-    ('00000002-0000-4000-8000-0000000dea09'::uuid, 5200000.00::numeric, 4369747.90::numeric),
-    ('00000002-0000-4000-8000-0000000dea10', 4700000.00, 3949579.83),
-    ('00000002-0000-4000-8000-0000000dea11', 3100000.00, 2605042.02),
-    ('00000002-0000-4000-8000-0000000dea12', 1100000.00,  924369.75)
-  ) AS v(id, bruto, neto)
- WHERE d.id = v.id AND d.amount = v.bruto;
+    ('00000002-0000-4000-8000-0000000dea09'::uuid, 5200000.00::numeric, 4369747.90::numeric, 4369748.00::numeric),
+    ('00000002-0000-4000-8000-0000000dea10', 4700000.00, 3949579.83, 3949580.00),
+    ('00000002-0000-4000-8000-0000000dea11', 3100000.00, 2605042.02, 2605042.00),
+    ('00000002-0000-4000-8000-0000000dea12', 1100000.00,  924369.75,  924370.00)
+  ) AS v(id, bruto, centavos, neto)
+ WHERE d.id = v.id AND d.amount IN (v.bruto, v.centavos);
 
 -- Historia de etapas: de aquí salen el ciclo de venta y la conversión
 -- por etapa. Sin clave natural: se evita el duplicado por (deal, etapa

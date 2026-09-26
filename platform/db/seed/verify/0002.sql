@@ -298,12 +298,12 @@ FROM audience_breakdown
 WHERE connection_id = '00000002-0000-4000-8000-0000000000c1';
 
 -- (i) Pipeline (deal_pipeline), las CIFRAS: 10 abiertos por COP 95,5 M,
---     ponderado 43,15 M; 4 ganados (3 en Q3 por 10 924 369,75 netos)
+--     ponderado 43,15 M; 4 ganados (3 en Q3 por 10 924 370 netos)
 --     y 1 perdido. El mock tiene 17 abiertos por 129,3 M y ponderado
 --     49,4 M; con ocho marcas y quince deals el orden es el mismo
---     (CIM-6.md §3.1). Los de Q3 son los subtotales de sus facturas de
---     0003 (el negocio va sin IVA, 0031): 4 369 747,90 (Fresko) +
---     3 949 579,83 (Nutrivé) + 2 605 042,02 (Café Alma); con IVA, los
+--     (CIM-6.md §3.1). Los de Q3 son los netos de sus cotizaciones de
+--     0004, al peso (el negocio va sin IVA, 0031): 4 369 748 (Fresko) +
+--     3 949 580 (Nutrivé) + 2 605 042 (Café Alma); con IVA, los
 --     13 M del mock (5,2 + 4,7 + 3,1). El mock da 4,5 M al de Nutrivé,
 --     pero es la misma venta que la factura FV-2026-009 de 0003, que
 --     vale 4,7 (CIM-6.md §3.11).
@@ -322,7 +322,7 @@ SELECT 'i_pipeline_cifras' AS check_id,
          AND sum(p.amount) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) = 95500000
          AND sum(p.weighted_amount) FILTER (WHERE NOT p.is_won AND NOT p.is_lost) = 43150000
          AND count(*) FILTER (WHERE p.is_won) = 4
-         AND sum(p.amount) FILTER (WHERE p.is_won AND EXTRACT(QUARTER FROM d.won_at) = 3 AND EXTRACT(YEAR FROM d.won_at) = 2026) = 10924369.75
+         AND sum(p.amount) FILTER (WHERE p.is_won AND EXTRACT(QUARTER FROM d.won_at) = 3 AND EXTRACT(YEAR FROM d.won_at) = 2026) = 10924370
          AND count(*) FILTER (WHERE p.is_lost) = 1 AS ok
 FROM deal_pipeline p
 JOIN deal d ON d.id = p.id
@@ -406,7 +406,11 @@ WHERE c.id = '00000003-0000-4000-8000-000000ca0001';
 --      trabajo cuadra en las tres tablas con UNA convención (0031,
 --      CAM-2): el negocio lleva el NETO y la campaña el total con IVA,
 --      así que deal.amount = invoice.subtotal y campaign.amount =
---      invoice.total. Sin esto, Fresko y Nutrivé quedaban con deal_id
+--      invoice.total. El neto del negocio es el de la cotización, al
+--      peso en COP (pulido r2 de Cotizar); la factura lo saca del total
+--      al centavo (subtotalFromTotal): 2.605.042 frente a 2.605.042,02.
+--      Por eso el neto cuadra a menos de una unidad de la moneda y el
+--      total, exacto. Sin esto, Fresko y Nutrivé quedaban con deal_id
 --      NULL —su deal ganado existe y se llama igual— y el tablero de
 --      Ventas enseñaba un deal de 4,5 M al lado de una factura de 4,7 M
 --      por el mismo video; y con la convención contraria en el seed, el
@@ -416,11 +420,15 @@ WHERE c.id = '00000003-0000-4000-8000-000000ca0001';
 SELECT 'k2_cadenas' AS check_id, count(*) AS campanas_con_factura,
        count(*) FILTER (WHERE c.deal_id IS NULL)     AS sin_deal,
        count(*) FILTER (WHERE st.is_won IS NOT TRUE) AS deal_no_ganado,
-       count(*) FILTER (WHERE d.amount <> i.subtotal) AS deal_distinto_del_neto,
+       count(*) FILTER (WHERE abs(d.amount - i.subtotal)
+                              >= CASE WHEN upper(i.currency::text) IN ('CLP', 'COP', 'HUF', 'ISK', 'JPY', 'KRW', 'PYG', 'UGX', 'VND', 'XAF', 'XOF')
+                                      THEN 1 ELSE 0.01 END) AS deal_distinto_del_neto,
        count(*) FILTER (WHERE i.total <> c.amount)   AS factura_distinta_de_la_campana,
        count(*) FILTER (WHERE c.deal_id IS NULL) = 0
          AND count(*) FILTER (WHERE st.is_won IS NOT TRUE) = 0
-         AND count(*) FILTER (WHERE d.amount <> i.subtotal) = 0
+         AND count(*) FILTER (WHERE abs(d.amount - i.subtotal)
+                              >= CASE WHEN upper(i.currency::text) IN ('CLP', 'COP', 'HUF', 'ISK', 'JPY', 'KRW', 'PYG', 'UGX', 'VND', 'XAF', 'XOF')
+                                      THEN 1 ELSE 0.01 END) = 0
          AND count(*) FILTER (WHERE i.total <> c.amount) = 0 AS ok
 FROM campaign c
 JOIN invoice i ON i.campaign_id = c.id
