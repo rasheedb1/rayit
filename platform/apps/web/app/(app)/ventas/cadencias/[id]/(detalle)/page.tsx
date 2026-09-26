@@ -149,9 +149,6 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
         <Notas d={d} f={f} plantillas={nombresPlantilla} angulos={nombresAngulo} />
       </div>
 
-      {/* VEN-16: el embudo por paso, la salud y la vista de flujo de solo lectura. */}
-      <div className="mb-8"><MetricasCadencia sequenceId={d.id} /></div>
-
       {(archivada || d.locked) && (
         <p className="mb-4 max-w-3xl rounded-md border border-line bg-surface-2 px-3 py-2 text-sm text-fg-2">
           {archivada ? t.detalle.archivada : t.detalle.bloqueada}
@@ -189,6 +186,8 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
           )}
         </aside>
       </div>
+      {/* VEN-16: el embudo por paso, la salud y la vista de flujo de solo lectura, debajo de lo que se edita. */}
+      <div className="mt-10"><MetricasCadencia sequenceId={d.id} /></div>
     </>
   );
 }

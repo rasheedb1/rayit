@@ -149,7 +149,8 @@ export function ListaActividad({
                 </div>
               </div>
               <p className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-fg-3">
-                <span>{f.paso}</span>
+                {/* Sin asunto, el título ya es el paso: no se repite. */}
+                {f.paso !== f.titulo && <span>{f.paso}</span>}
                 {f.intentos && <span className="tabular-nums">{f.intentos}</span>}
                 {f.marcas.map((m) => <span key={m} className="text-good">{m}</span>)}
               </p>
