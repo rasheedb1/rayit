@@ -68,6 +68,17 @@ export const BRIEF_LIMITS = {
   deliverables: 20,
 } as const;
 
+/**
+ * Las formas que la base acepta (VEN-7 r5): una fecha de la ventana
+ * (AAAA-MM-DD) y el tipo de un entregable. La Server Action del brief las
+ * importa de aquí: si una cambia, la acción y la consulta no pueden
+ * dejar de coincidir.
+ */
+export const BRIEF_PATTERNS = {
+  date: /^\d{4}-\d{2}-\d{2}$/,
+  deliverable: /^[a-z_]{1,40}$/,
+} as const;
+
 /** Por qué una señal no aparece en la bandeja: la empresa o la categoría están excluidas. */
 export type BriefVerdict = 'company' | 'category';
 
@@ -94,6 +105,7 @@ export const BRIEF_ERROR_CODES = [
   'NoActiveBrief',
   'SignalNotFound',
   'SignalWithoutBrand',
+  'InvalidBrandName',
   'Forbidden',
 ] as const;
 export type BriefErrorCode = (typeof BRIEF_ERROR_CODES)[number];
@@ -707,8 +719,8 @@ function cleanCategories(list: string[]): string[] {
 const COUNTRY_RE = /^[A-Z]{2}$/;
 const CURRENCY_RE = /^[A-Z]{3}$/;
 const MONEY_RE = /^\d{1,12}(\.\d{1,2})?$/;
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const DELIVERABLE_RE = /^[a-z_]{1,40}$/;
+const DATE_RE = BRIEF_PATTERNS.date;
+const DELIVERABLE_RE = BRIEF_PATTERNS.deliverable;
 
 function validDate(v: string | null): boolean {
   if (v === null) return true;

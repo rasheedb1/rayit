@@ -35,7 +35,7 @@ import {
   type SaveBriefInput,
 } from '../src/queries/brief.ts';
 import {
-  countPendingSignals, createSignal, getCompany, getSalesKpis, importSignals, listCompanies, listSignals, rejectSignalBrand,
+  countPendingSignals, createSignal, getCompany, getSalesKpis, importSignals, listCompanies, listSignals, rejectBrandByName, rejectSignalBrand,
 } from '../src/queries/ventas.ts';
 import type { WorkspaceTx } from '../src/client.ts';
 import { membershipSql } from './membresia.ts';
@@ -903,5 +903,98 @@ describe('VEN-7 r4 · «No aceptar esta marca» desde el radar: la da de alta y 
     assert.equal(await codigoDe(enBrief((tx) => rejectSignalBrand(tx, S_NUEVA, { creatorIds: ['no-es-uuid'] }))), 'UnknownCreator');
     assert.equal(await codigoDe(enBrief((tx) => rejectSignalBrand(tx, '00000009-0000-4000-8000-0000000b75ff'))), 'SignalNotFound');
     assert.equal(await codigoDe(enBrief((tx) => addExcludedCompany(tx, CO_FUERA))), 'CompanyNotInCrm');
+  });
+});
+
+describe('VEN-7 r5 · «No aceptar «…»» desde el brief: una marca que aún no está en el CRM se excluye por adelantado', () => {
+  const MIEMBRO = '00000009-0000-4000-8000-0000000b7a02';
+  const S_POSTERIOR = '00000009-0000-4000-8000-0000000b75b1';
+  const S_POR_DOMINIO = '00000009-0000-4000-8000-0000000b75b2';
+  const como = <T>(userId: string, fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WS_BRIEF, fn, { userId });
+  const codigoDe = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => (e instanceof BriefError ? e.code : String(e)));
+  const creadas: string[] = [];
+
+  before(async () => {
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
+    await t.admin(`
+      INSERT INTO app_user (id, email, name) VALUES ('${MIEMBRO}', 'miembro@brief.test', 'Miembro del brief') ON CONFLICT DO NOTHING;
+      ${membershipSql([{ workspaceId: WS_BRIEF, userId: MIEMBRO, kind: 'member' }])}
+    `);
+  }, SETUP_TIMEOUT);
+  after(async () => {
+    await t.admin(`DELETE FROM signal WHERE id IN ('${S_POSTERIOR}', '${S_POR_DOMINIO}');`);
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
+    if (creadas.length > 0) {
+      const ids = creadas.map((id) => `'${id}'`).join(', ');
+      await t.admin(`DELETE FROM company_link WHERE company_id IN (${ids}); DELETE FROM company WHERE id IN (${ids});`);
+    }
+  });
+
+  test("un 'member' no puede: Forbidden, y la marca no queda en el CRM", async () => {
+    assert.equal(await codigoDe(como(MIEMBRO, (tx) => rejectBrandByName(tx, { name: 'Café Monte' }))), 'Forbidden');
+    const { rows } = await enBrief((tx) => tx.query(`SELECT 1 FROM company WHERE name = 'Café Monte'`));
+    assert.equal(rows.length, 0);
+  });
+
+  test('nace en el CRM como bloqueada, con su traza; guardada en el brief, una señal posterior con ese nombre queda oculta', async () => {
+    const r = await enBrief((tx) => rejectBrandByName(tx, { name: '  Café   Monte ' }));
+    creadas.push(r.id);
+    assert.deepEqual([r.name, r.created, r.previousRelationship], ['Café Monte', true, null]);
+    const leido = await enBrief(async (tx) => ({
+      link: (await tx.query<{ relationship: string }>('SELECT relationship FROM company_link WHERE company_id = $1', [r.id])).rows,
+      traza: (
+        await tx.query<{ entity_type: string; before: unknown; after: { relationship: string; created: boolean } }>(
+          `SELECT entity_type, before, after FROM audit_log
+            WHERE action = 'ventas.brief.no_aceptar_marca' AND entity_id = $1 ORDER BY id DESC LIMIT 1`,
+          [r.id],
+        )
+      ).rows[0],
+    }));
+    assert.deepEqual(leido.link.map((l) => l.relationship), ['blocked']);
+    assert.deepEqual(
+      [leido.traza?.entity_type, leido.traza?.before, leido.traza?.after.relationship, leido.traza?.after.created],
+      ['company', null, 'blocked', true],
+    );
+
+    // La pantalla la agrega como etiqueta y viaja al guardar el brief.
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief({ excludedCompanyIds: [r.id] })));
+    await t.admin(`
+      INSERT INTO signal (id, workspace_id, company_id, source_id, headline_es, evidence, fit_score, dedupe_key, status) VALUES
+        ('${S_POSTERIOR}', '${WS_BRIEF}', NULL, 'manual', 'Cafe Monte busca creadoras',
+         '{"company_name": "CAFE MONTE", "industry": "alimentos", "via": "manual"}', 0.70, 'ven7r5:posterior', 'pending')
+      ON CONFLICT DO NOTHING;
+    `);
+    assert.ok(!(await visibles()).includes(S_POSTERIOR), 'la bandeja no la enseña');
+    assert.equal(
+      (await enBrief((tx) => listSignals(tx, { brief: 'show_hidden' }))).find((s) => s.id === S_POSTERIOR)?.hiddenBy,
+      'company',
+    );
+
+    // Otra vez con el mismo nombre (otra grafía): es la misma marca, no una segunda.
+    const otraVez = await enBrief((tx) => rejectBrandByName(tx, { name: 'CAFE MONTE' }));
+    assert.deepEqual([otraVez.id, otraVez.created, otraVez.previousRelationship], [r.id, false, 'blocked']);
+  });
+
+  test('con dominio, lo guarda normalizado y oculta la señal que llega con ese dominio aunque traiga otro nombre', async () => {
+    const r = await enBrief((tx) => rejectBrandByName(tx, { name: 'Bebidas Nube', domain: 'https://www.bebidasnube.co/tienda' }));
+    creadas.push(r.id);
+    const dominio = await enBrief((tx) => tx.query<{ domain: string }>('SELECT domain::text AS domain FROM company WHERE id = $1', [r.id]));
+    assert.equal(dominio.rows[0]?.domain, 'bebidasnube.co');
+    const actual = await enBrief((tx) => getBrief(tx, CREADORA));
+    const excluidas = [...(actual?.excludedCompanies.map((c) => c.id) ?? []), r.id];
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief({ excludedCompanyIds: excluidas })));
+    await t.admin(`
+      INSERT INTO signal (id, workspace_id, company_id, source_id, headline_es, evidence, fit_score, dedupe_key, status) VALUES
+        ('${S_POR_DOMINIO}', '${WS_BRIEF}', NULL, 'meta_ad_library', 'Anuncios de agua saborizada',
+         '{"company_name": "Nube Drinks", "domain": "bebidasnube.co", "industry": "bebidas"}', 0.66, 'ven7r5:dominio', 'pending')
+      ON CONFLICT DO NOTHING;
+    `);
+    assert.ok(!(await visibles()).includes(S_POR_DOMINIO));
+  });
+
+  test('un nombre vacío, sin letras o demasiado largo no da de alta nada', async () => {
+    assert.equal(await codigoDe(enBrief((tx) => rejectBrandByName(tx, { name: '   ' }))), 'InvalidBrandName');
+    assert.equal(await codigoDe(enBrief((tx) => rejectBrandByName(tx, { name: '¡¡!!' }))), 'InvalidBrandName');
+    assert.equal(await codigoDe(enBrief((tx) => rejectBrandByName(tx, { name: 'x'.repeat(121) }))), 'InvalidBrandName');
   });
 });

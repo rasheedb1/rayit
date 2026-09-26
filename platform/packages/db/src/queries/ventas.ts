@@ -1628,6 +1628,51 @@ export const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, '')
     FROM workspace WHERE id = current_workspace_id())`;
 
 /**
+ * La empresa que ya conocemos por dominio o, sin dominio, por nombre
+ * dentro del CRM (resolveCompany), o una nueva con lo que se sabe de ella
+ * (nombre, dominio, país y sector). Null si no la conocemos y tampoco
+ * hay nombre: no hay marca que dar de alta. La usan la señal
+ * (companyOfSignal) y «No aceptar «…»» desde el brief (rejectBrandByName):
+ * una sola forma de dar de alta una marca.
+ */
+async function findOrCreateCompany(
+  tx: WorkspaceTx,
+  input: { name: string | null; domain: string | null; country?: string | null; industry?: string | null },
+): Promise<{ company: ResolvedCompany; created: boolean } | null> {
+  const existente = await resolveCompany(tx, { domain: input.domain, name: input.name });
+  if (existente) return { company: existente, created: false };
+  const name = input.name?.trim();
+  if (!name) return null;
+  const domain = normalizeDomain(input.domain);
+  const inserted = await tx.query<{ id: string }>(
+    `INSERT INTO company (name, domain, country, industry) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [name, domain, normalizeCountry(input.country), input.industry ?? null],
+  );
+  const id = inserted.rows[0]?.id;
+  if (!id) throw new VentasError('CompanyCreateFailed');
+  return { company: { id, name, domain }, created: true };
+}
+
+/**
+ * Enlaza la marca al CRM con la relación 'blocked' si no estaba. Si ya
+ * estaba, su relación no se toca: un cliente sigue siendo cliente.
+ * Devuelve la relación que tenía antes (null si no estaba en el CRM).
+ */
+async function linkBlocked(tx: WorkspaceTx, companyId: string): Promise<string | null> {
+  const { rows: antes } = await tx.query<{ relationship: string }>(
+    'SELECT relationship FROM company_link WHERE company_id = $1',
+    [companyId],
+  );
+  await tx.query(
+    `INSERT INTO company_link (workspace_id, company_id, owner_user_id, relationship)
+     VALUES (current_workspace_id(), $1, current_user_id(), 'blocked')
+     ON CONFLICT (workspace_id, company_id) DO NOTHING`,
+    [companyId],
+  );
+  return antes[0]?.relationship ?? null;
+}
+
+/**
  * La empresa de una señal, para aceptarla o para no aceptar su marca:
  * la que ya conocemos (por id, por dominio o, sin dominio, por nombre
  * dentro del CRM, resolveCompany) o, si no hay ninguna, una nueva con lo
@@ -1640,31 +1685,22 @@ async function companyOfSignal(
   sig: { id: string; company_id: string | null; evidence: Record<string, unknown> | null },
 ): Promise<{ company: ResolvedCompany; created: boolean } | null> {
   const ev = sig.evidence ?? {};
-  const evName = typeof ev.company_name === 'string' ? ev.company_name : null;
-  const evDomain = typeof ev.domain === 'string' ? ev.domain : null;
-  const evCountry = typeof ev.country === 'string' ? ev.country : null;
-  const evIndustry = typeof ev.industry === 'string' ? ev.industry : null;
+  const texto = (k: string) => (typeof ev[k] === 'string' ? (ev[k] as string) : null);
 
-  let company = sig.company_id
-    ? await resolveCompany(tx, { companyId: sig.company_id })
-    : await resolveCompany(tx, { domain: evDomain, name: evName });
-  let created = false;
-  if (!company) {
-    if (!evName) return null;
-    const domain = normalizeDomain(evDomain);
-    const inserted = await tx.query<{ id: string }>(
-      `INSERT INTO company (name, domain, country, industry) VALUES ($1, $2, $3, $4) RETURNING id`,
-      [evName, domain, normalizeCountry(evCountry), evIndustry],
-    );
-    const id = inserted.rows[0]?.id;
-    if (!id) throw new VentasError('CompanyCreateFailed');
-    company = { id, name: evName, domain };
-    created = true;
+  const conocida = sig.company_id ? await resolveCompany(tx, { companyId: sig.company_id }) : null;
+  const resuelta = conocida
+    ? { company: conocida, created: false }
+    : await findOrCreateCompany(tx, {
+        name: texto('company_name'),
+        domain: texto('domain'),
+        country: texto('country'),
+        industry: texto('industry'),
+      });
+  if (!resuelta) return null;
+  if (sig.company_id !== resuelta.company.id) {
+    await tx.query('UPDATE signal SET company_id = $2 WHERE id = $1', [sig.id, resuelta.company.id]);
   }
-  if (sig.company_id !== company.id) {
-    await tx.query('UPDATE signal SET company_id = $2 WHERE id = $1', [sig.id, company.id]);
-  }
-  return { company, created };
+  return resuelta;
 }
 
 /**
@@ -1826,18 +1862,74 @@ export async function rejectSignalBrand(
   const resuelta = await companyOfSignal(tx, sig);
   if (!resuelta) throw new BriefError('SignalWithoutBrand');
   const { company, created } = resuelta;
-  await tx.query(
-    `INSERT INTO company_link (workspace_id, company_id, owner_user_id, relationship)
-     VALUES (current_workspace_id(), $1, current_user_id(), 'blocked')
-     ON CONFLICT (workspace_id, company_id) DO NOTHING`,
-    [company.id],
-  );
+  await linkBlocked(tx, company.id);
   const { added, briefs } = await addExcludedCompany(tx, company.id, opts);
   const { rows: v } = await tx.query<{ verdict: string | null }>(
     `SELECT ${briefVerdictSql('s')} AS verdict FROM signal s WHERE s.id = $1`,
     [signalId],
   );
   return { companyId: company.id, companyName: company.name, companyCreated: created, added, briefs, hidden: (v[0]?.verdict ?? null) !== null };
+}
+
+/** Lo que pasó al no aceptar una marca por su nombre, desde el brief (rejectBrandByName). */
+export interface RejectBrandByNameResult {
+  id: string;
+  name: string;
+  /** La marca no existía y nació aquí. */
+  created: boolean;
+  /** La relación que tenía en el CRM antes; null si no estaba (ahora es 'blocked'). */
+  previousRelationship: string | null;
+}
+
+/** El largo máximo del nombre de una marca que se da de alta desde el brief. */
+export const BRAND_NAME_MAX = 120;
+
+/**
+ * «No aceptar «…»», desde «Marcas que no aceptas» del brief (VEN-7 r5):
+ * una marca que el creador no acepta y que todavía no está en el CRM —la
+ * competencia de un cliente, como en el formulario de preferencias de
+ * Passionfroot— se da de alta por su nombre (y su dominio, si lo hay)
+ * para poder excluirla por adelantado, sin esperar a que llegue una
+ * señal suya al radar.
+ *
+ * Es la misma alta que la de rejectSignalBrand, sin la señal:
+ *   1. la marca conocida por dominio o, sin dominio, por nombre en el CRM
+ *      (findOrCreateCompany), o una nueva;
+ *   2. enlazada al CRM como 'blocked' si no estaba (linkBlocked: si ya
+ *      estaba, su relación no se toca).
+ *
+ * No toca el brief: la pantalla la agrega como etiqueta y viaja al
+ * guardar (saveBrief, con su propia traza). Desde ese momento una señal
+ * con ese nombre o ese dominio queda oculta, como cualquier marca
+ * excluida (briefVerdictSql la reconoce por nombre dentro del CRM).
+ *
+ * Mismo permiso que el brief: solo owner y admin (outreach_can_manage,
+ * la regla de 0064 §5); si no, Forbidden y no queda nada. Deja traza en
+ * audit_log ('ventas.brief.no_aceptar_marca', la relación antes y después).
+ */
+export async function rejectBrandByName(
+  tx: WorkspaceTx,
+  input: { name: string; domain?: string | null },
+): Promise<RejectBrandByNameResult> {
+  const name = input.name.trim().replace(/\s+/g, ' ');
+  if (!name || name.length > BRAND_NAME_MAX || !nameKey(name)) throw new BriefError('InvalidBrandName');
+  const { rows: permiso } = await tx.query<{ ok: boolean }>('SELECT outreach_can_manage(current_workspace_id()) AS ok');
+  if (!permiso[0]?.ok) throw new BriefError('Forbidden');
+
+  const resuelta = await findOrCreateCompany(tx, { name, domain: input.domain ?? null });
+  if (!resuelta) throw new BriefError('InvalidBrandName');
+  const { company, created } = resuelta;
+  const previa = await linkBlocked(tx, company.id);
+  await tx.query(
+    `INSERT INTO audit_log (workspace_id, actor_user_id, actor_kind, action, entity_type, entity_id, before, after)
+     VALUES (current_workspace_id(), current_user_id(), 'user', 'ventas.brief.no_aceptar_marca', 'company', $1::uuid, $2::jsonb, $3::jsonb)`,
+    [
+      company.id,
+      JSON.stringify(previa ? { relationship: previa } : null),
+      JSON.stringify({ name: company.name, domain: company.domain, relationship: previa ?? 'blocked', created }),
+    ],
+  );
+  return { id: company.id, name: company.name, created, previousRelationship: previa };
 }
 
 export interface CreateDealInput {
