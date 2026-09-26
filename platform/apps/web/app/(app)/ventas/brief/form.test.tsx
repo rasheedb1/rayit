@@ -60,7 +60,7 @@ function pintar(over: Partial<BriefFormValues> = {}, editable = true) {
       locale="es-CO"
       companySearchMin={2}
       currencies={[
-        { value: "COP", label: "COP · peso colombiano" },
+        { value: "COP", label: "Peso colombiano" },
         { value: "USD", label: "USD · dólar estadounidense" },
       ]}
       limits={BRIEF_LIMITS}
@@ -374,6 +374,20 @@ describe("BriefForm: «Marcas que no aceptas» no pierde nada en silencio (VEN-7
       fireEvent.click(screen.getByRole("button", { name: t.submit }));
     });
     expect(enviado().getAll("excludedCompanies")).toEqual([NUEVA]);
+  });
+
+  it("quitar la etiqueta de una marca recién dada de alta avisa que sigue en el CRM como bloqueada", async () => {
+    const NUEVA = "00000009-0000-4000-8000-0000000b7c0a";
+    noAceptarMarcaNueva.mockResolvedValue({ result: { value: NUEVA, label: "Marca Rival" } });
+    pintar();
+    fireEvent.change(combo(), { target: { value: "Marca Rival" } });
+    const crear = await screen.findByRole("option", { name: t.chips.createOption("Marca Rival") });
+    await act(async () => {
+      fireEvent.mouseDown(crear);
+    });
+    fireEvent.click(screen.getByRole("button", { name: t.chips.remove("Marca Rival") }));
+    expect(elegidas()).toHaveLength(0);
+    expect(screen.getByText(t.chips.removedStillBlocked("Marca Rival"))).toBeInTheDocument();
   });
 
   it("si la marca no se puede dar de alta, lo dice y lo escrito se queda", async () => {

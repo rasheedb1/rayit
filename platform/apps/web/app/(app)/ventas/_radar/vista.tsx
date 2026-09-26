@@ -93,6 +93,10 @@ export function RadarView({
       ],
       // Una señal oculta ya no se acepta desde aquí, y una sin marca no tiene nada que excluir.
       canReject: reject !== null && s.hiddenBy === null && Boolean(s.companyName?.trim()),
+      rejectWarning:
+        s.openDealCount > 0
+          ? MESSAGES.radar.reject.openDeals(f.int(s.openDealCount), s.openDealCount, (s.companyName ?? "").trim())
+          : null,
     };
   });
   const line: HiddenLine | null =

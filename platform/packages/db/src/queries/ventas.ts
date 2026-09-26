@@ -308,6 +308,11 @@ export interface SignalRow {
    */
   openDealId: string | null;
   openDealName: string | null;
+  /**
+   * Cuántos negocios abiertos tiene esa empresa: «No aceptar esta marca»
+   * avisa que sus toques programados se cancelan (brief_excluded).
+   */
+  openDealCount: number;
   sourceId: string;
   sourceLabel: string;
   headlineEs: string;
@@ -1090,7 +1095,7 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
             COALESCE(co.name, s.evidence->>'company_name')              AS company_name,
             COALESCE(co.domain::text, s.evidence->>'domain')            AS company_domain,
             (cl.company_id IS NOT NULL) AS company_linked,
-            abierto.id AS open_deal_id, abierto.name AS open_deal_name,
+            abierto.id AS open_deal_id, abierto.name AS open_deal_name, coalesce(abierto.total, 0)::int AS open_deal_count,
             s.source_id, COALESCE(src.label_es, s.source_id) AS source_label,
             s.headline_es, s.detected_at, s.evidence_url, s.fit_score::text AS fit_score,
             s.budget_estimate::text AS budget_estimate, s.budget_currency::text AS budget_currency,
@@ -1125,7 +1130,7 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
      CROSS JOIN LATERAL (SELECT COALESCE(s.company_id, resuelta.id) AS id) emp
      LEFT JOIN company_link cl   ON cl.company_id = emp.id
      LEFT JOIN LATERAL (
-            SELECT d.id, d.name
+            SELECT d.id, d.name, count(*) OVER () AS total
               FROM deal d
               JOIN pipeline_stage st ON st.id = d.stage_id
              WHERE d.company_id = emp.id AND NOT st.is_won AND NOT st.is_lost
@@ -2564,7 +2569,7 @@ function toContactRow(r: ContactRowSql): ContactRow {
 
 interface SignalRowSql {
   id: string; company_id: string | null; company_name: string | null; company_domain: string | null;
-  company_linked: boolean; open_deal_id: string | null; open_deal_name: string | null;
+  company_linked: boolean; open_deal_id: string | null; open_deal_name: string | null; open_deal_count: number;
   source_id: string; source_label: string; headline_es: string;
   detected_at: string; evidence_url: string | null; fit_score: string | null;
   budget_estimate: string | null; budget_currency: string | null; dedupe_key: string;
@@ -2582,6 +2587,7 @@ function toSignalRow(r: SignalRowSql): SignalRow {
     companyLinked: r.company_linked,
     openDealId: r.open_deal_id,
     openDealName: r.open_deal_name,
+    openDealCount: r.open_deal_count,
     sourceId: r.source_id,
     sourceLabel: r.source_label,
     headlineEs: r.headline_es,

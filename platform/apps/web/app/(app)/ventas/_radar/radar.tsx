@@ -56,6 +56,12 @@ export interface SignalCardData {
   fitNotes: string[];
   /** Ofrece «No aceptar esta marca» (VEN-7 r4): quien mira puede cambiar el brief y la señal tiene marca. */
   canReject: boolean;
+  /**
+   * Lo que «¿No aceptar…?» tiene que avisar antes de confirmar: la marca
+   * tiene negocios abiertos y sus toques programados se cancelan. Ya
+   * escrito en el servidor, con la cifra del espacio. Null si no tiene.
+   */
+  rejectWarning: string | null;
 }
 
 /** Los creadores con brief activo, para elegir en cuáles no aceptar la marca (VEN-7 r4). */
@@ -231,7 +237,10 @@ function SignalCard({
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState<"accept" | "discard" | null>(null);
   const [rejecting, setRejecting] = useState(false);
+  const [confirmingAccept, setConfirmingAccept] = useState(false);
   const name = card.companyName ?? t.unknownBrand;
+  // Una oculta por el brief no se acepta con un clic: el negocio se abriría, pero ninguna cadencia le escribiría.
+  const oculta = card.hiddenReason !== null;
 
   function report(res: VentasState, kind: "accept" | "discard") {
     if (res.ok) {
@@ -332,7 +341,14 @@ function SignalCard({
         */}
         {!discarding && (
           <div className="flex min-w-0 flex-wrap gap-2">
-            <Button variant="primary" size="sm" onClick={accept} loading={busy === "accept"} disabled={pending} aria-label={`${t.accept}: ${name}`}>
+            <Button
+              variant={oculta ? "secondary" : "primary"}
+              size="sm"
+              onClick={oculta ? () => setConfirmingAccept(true) : accept}
+              loading={busy === "accept"}
+              disabled={pending}
+              aria-label={`${t.accept}: ${name}`}
+            >
               {t.accept}
             </Button>
             <Button variant="secondary" size="sm" onClick={() => setDiscarding(true)} disabled={pending} aria-label={`${t.discard}: ${name}`}>
@@ -347,10 +363,35 @@ function SignalCard({
         )}
       </div>
 
+      {confirmingAccept && card.hiddenReason && (
+        <Dialog title={t.hidden.acceptTitle(name)} description={t.hidden.acceptDescription(card.hiddenReason)} onClose={() => setConfirmingAccept(false)}>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Link href="/ventas/brief" className="mr-auto text-sm text-ink underline underline-offset-4 hover:text-ink-2">
+              {t.hidden.editBrief}
+            </Link>
+            <Button variant="ghost" size="sm" onClick={() => setConfirmingAccept(false)}>
+              {MESSAGES.acciones.cancel}
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                setConfirmingAccept(false);
+                accept();
+              }}
+            >
+              {t.hidden.acceptConfirm}
+            </Button>
+          </div>
+        </Dialog>
+      )}
+
       {rejecting && reject && (
         <NoAceptarDialog
           signalId={card.id}
           name={name}
+          inCrm={card.crm !== null}
+          warning={card.rejectWarning}
           creators={reject.creators}
           onClose={() => setRejecting(false)}
           onDone={(notice) => {
@@ -392,12 +433,18 @@ function SignalCard({
 function NoAceptarDialog({
   signalId,
   name,
+  inCrm,
+  warning,
   creators,
   onClose,
   onDone,
 }: {
   signalId: string;
   name: string;
+  /** La marca ya está en el CRM: su relación no cambia, no «entra como bloqueada». */
+  inCrm: boolean;
+  /** Sus negocios abiertos y lo que se cancela, o null. */
+  warning: string | null;
   creators: { id: string; name: string }[];
   onClose: () => void;
   onDone: (notice: string) => void;
@@ -423,8 +470,15 @@ function NoAceptarDialog({
   }
 
   return (
-    <Dialog title={t.title(name)} description={creators.length > 1 ? t.descriptionMany : t.description} onClose={onClose}>
+    <Dialog
+      title={t.title(name)}
+      description={
+        creators.length > 1 ? (inCrm ? t.descriptionManyInCrm : t.descriptionMany) : inCrm ? t.descriptionInCrm : t.description
+      }
+      onClose={onClose}
+    >
       <form onSubmit={submit} noValidate className="space-y-4" aria-label={t.title(name)}>
+        {warning && <p className="rounded-md bg-warn-wash px-3 py-2 text-sm leading-5 text-warn">{warning}</p>}
         {creators.length > 1 && (
           <fieldset className="space-y-2" aria-describedby={`no-aceptar-${signalId}-ayuda`}>
             <legend className="text-sm font-medium text-ink">{t.creators}</legend>

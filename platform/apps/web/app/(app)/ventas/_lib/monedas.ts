@@ -29,6 +29,17 @@ function codigos(): string[] {
   return RESPALDO;
 }
 
+/** La primera letra en mayúscula, con las reglas del idioma (o las del motor si el idioma no sirve). */
+function mayuscula(texto: string, locale: string): string {
+  let primera: string;
+  try {
+    primera = texto.charAt(0).toLocaleUpperCase(locale);
+  } catch {
+    primera = texto.charAt(0).toUpperCase();
+  }
+  return primera + texto.slice(1);
+}
+
 function nombre(code: string, locale: string): string {
   try {
     return new Intl.DisplayNames([locale], { type: "currency" }).of(code) ?? code;
@@ -37,7 +48,11 @@ function nombre(code: string, locale: string): string {
   }
 }
 
-/** «COP · peso colombiano». El código primero: es lo que se reconoce de un vistazo. */
+/**
+ * «Peso colombiano»: solo el nombre. El código ya lo dice el campo del
+ * monto, que lo lleva de prefijo (MoneyInput): con «COP · peso
+ * colombiano» al lado, la moneda salía dos veces en la misma fila.
+ */
 export function currencyOptions(locale: string, first: string[] = []): CurrencyOption[] {
   const todos = new Set(codigos());
   const arriba = [...new Set(first.map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{3}$/.test(c)))];
@@ -47,7 +62,10 @@ export function currencyOptions(locale: string, first: string[] = []): CurrencyO
   } catch {
     collator = new Intl.Collator();
   }
-  const opcion = (code: string): CurrencyOption => ({ value: code, label: `${code} · ${nombre(code, locale)}` });
+  const opcion = (code: string): CurrencyOption => {
+    const n = nombre(code, locale);
+    return { value: code, label: n === code ? code : mayuscula(n, locale) };
+  };
   const resto = [...todos]
     .filter((c) => !arriba.includes(c))
     .map(opcion)
