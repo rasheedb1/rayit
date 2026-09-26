@@ -34,7 +34,7 @@ export const dynamic = "force-dynamic";
 /**
  * El brief de outbound (VEN-7): qué busca el creador y qué no acepta.
  *
- * Un brief es de UN creador (uno activo por creador, 0070 §1), y así lo
+ * Un brief es de UN creador (uno activo por creador, 0073 §1), y así lo
  * leen el recomendador y el generador de cadencias. Con un solo creador
  * la pantalla es su brief y ya; en una agencia, un selector
  * (?creador=id) elige de quién es el que se ve y se guarda, y la página
@@ -45,7 +45,7 @@ export const dynamic = "force-dynamic";
  * (puedeEditarElBrief), porque lo que excluye se le oculta a todos y
  * frena las cadencias. A los demás se les enseña igual, sin «Guardar» y
  * diciendo por qué; la acción lo vuelve a mirar y la base lo impone
- * (0070 §5).
+ * (0073 §5).
  *
  * Arriba dice cuántas señales deja fuera hoy, con el enlace a verlas en
  * el radar: un filtro que no se ve es un filtro que se olvida.

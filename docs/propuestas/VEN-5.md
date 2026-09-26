@@ -49,7 +49,7 @@ sabemos»); cada título es un `h2` con su botón de disclosure
 
 ## Pendiente humano
 
-El de VEN-4 (aplicar 0034–0036 y `make db.seed`; ver
+El de VEN-4 (aplicar 0043–0045 y `make db.seed`; ver
 [VEN-4.md](VEN-4.md)). La ficha no necesita esquema propio.
 
 ---

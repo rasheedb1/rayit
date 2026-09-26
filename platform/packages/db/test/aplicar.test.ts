@@ -8,46 +8,65 @@
  * ambos sin quejarse; desde CIM-2 se niega, y `make db.check` y el job
  * «esquema» del CI fallan antes de que llegue a Supabase.
  */
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DuplicateMigrationNumberError, listSql, MIGRATIONS_DIR } from '../../../db/lib/aplicar.mjs';
 import { SETUP_TIMEOUT } from './pglite.ts';
 
 /**
+ * Lo que main ya aplicó en Supabase y esta rama todavía no tiene
+ * (schema_migrations, 24-sep-2026: «make db.guardia verde, 41
+ * migraciones, la última 0042», docs/propuestas/CIERRE-E2E.md en main).
+ * La serie de integración va entera DETRÁS, de 0043 en adelante; ninguna
+ * está aplicada en ningún sitio. Al mezclar main, estos archivos llegan
+ * con el mismo nombre y la lista sobra (no rompe nada, pero bórrala).
+ */
+const MIGRACIONES_DE_MAIN: readonly string[] = [
+  '0034_access_control.sql',
+  '0035_brand_snapshot_por_campana.sql',
+  '0036_platform_payout_unico.sql',
+  '0037_reporte_publico.sql',
+  '0038_notification_connection_added.sql',
+  '0039_demografia_de_cuenta.sql',
+  '0040_scope_allows.sql',
+  '0041_campaign_result_escritura_web.sql',
+  '0042_metricas_al_corte_desempate.sql',
+];
+
+/**
  * Números que ya tiene otra rama, y que esta todavía no: un hueco
  * declarado. Cuando la rama que los tiene se integre, el archivo llega
- * y la entrada sobra (no rompe nada, pero bórrala). Al integrar el
- * endurecimiento en rasheed/integracion llegaron 0024, 0025, 0026 y 0029,
- * y la 0026 de Cotizar pasó a 0030_public_share.sql; ya no queda más
- * hueco que el de ACC-3.
+ * y la entrada sobra (no rompe nada, pero bórrala).
  */
 const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
   '0023': 'reservada en main para ACC-3 (accesos y roles)',
-  // main aplicó en Supabase su propia serie 0034–0042 (schema_migrations,
-  // 24-sep). Las de integración que chocan con ella (0034–0040 de esta
-  // rama: seguimientos, zona, siguiente acción, outreach y los tres de
-  // VEN-9-canales) pasan a 0043–0049 al mezclar con main, en su mismo
-  // orden. 0041 y 0042 son de main; 0043–0049 quedan para esa
-  // renumeración. Entregabilidad (0050) y el motor (0051) ya llevan su
-  // número final. La regla está en la cabecera de 0051_motor_cadencias.sql.
-  '0041': 'main (0041_campaign_result_escritura_web.sql, aplicada)',
-  '0042': 'main (0042_metricas_al_corte_desempate.sql, aplicada)',
-  '0043': 'integración 0034_seguimientos.sql al mezclar con main',
-  '0044': 'integración 0035_zona_del_espacio_valida.sql al mezclar con main',
-  '0045': 'integración 0036_siguiente_accion_fijada.sql al mezclar con main',
-  '0046': 'integración 0037_outreach.sql al mezclar con main',
-  '0047': 'VEN-9-canales 0038_canales_outreach.sql al mezclar con main',
-  '0048': 'VEN-9-canales 0039_callback_de_canales.sql al mezclar con main',
-  '0049': 'VEN-9-canales 0040_canales_liberar_y_limites.sql al mezclar con main',
-  // VEN-16 (pulido r1): las rondas 4 y 5 de la actividad se fundieron en
-  // 0067_actividad_outreach.sql; ninguna estaba aplicada en ningún sitio.
-  // El integrador puede cerrar el hueco renumerando 0070 en adelante.
-  '0068': 'fundida en 0067_actividad_outreach.sql (VEN-16, pulido r1; nunca aplicada)',
-  '0069': 'fundida en 0067_actividad_outreach.sql (VEN-16, pulido r1; nunca aplicada)',
+  ...Object.fromEntries(MIGRACIONES_DE_MAIN.map((f) => [f.slice(0, 4), `main (${f}, aplicada en Supabase)`])),
 };
+
+/**
+ * Las migraciones de origin/main, si este clon las tiene (git y el
+ * remoto); si no, ninguna, y la prueba se queda con MIGRACIONES_DE_MAIN.
+ * Así, en cuanto main suma una migración nueva, `pnpm verificar` la ve
+ * sin esperar a que alguien actualice la lista.
+ */
+function migracionesDeOriginMain(): string[] {
+  try {
+    const out = execFileSync('git', ['-C', MIGRATIONS_DIR, 'ls-tree', '--name-only', 'origin/main', '--', '.'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out
+      .split('\n')
+      .map((l) => basename(l.trim()))
+      .filter((f) => f.endsWith('.sql'));
+  } catch {
+    return [];
+  }
+}
 
 let dir = '';
 
@@ -100,5 +119,26 @@ describe('listSql', () => {
       if (!numeros.has(n) && !(nn in NUMEROS_DE_OTRAS_RAMAS)) huecos.push(nn);
     }
     assert.deepEqual(huecos, [], `huecos sin declarar en db/migrations: ${huecos.join(', ')}`);
+  });
+
+  test('esta rama mezclada con main no repite número: la serie de integración va detrás de la última de main', async () => {
+    // Lo que verá el integrador al mezclar: db/migrations más lo que main
+    // ya tiene (la lista declarada y, si el clon la tiene, origin/main).
+    // Pasó en el pulido r2: la rama llevaba doce archivos en 0034–0045 y
+    // main ya había aplicado su 0034–0042; listSql lo rechazaba al mezclar.
+    const deMain = new Set([...MIGRACIONES_DE_MAIN, ...migracionesDeOriginMain()]);
+    const propias = await listSql(MIGRATIONS_DIR);
+    const union = await mkdtemp(join(tmpdir(), 'mc-union-main-'));
+    try {
+      for (const f of new Set([...propias, ...deMain])) await writeFile(join(union, f), '');
+      await assert.doesNotReject(listSql(union));
+    } finally {
+      await rm(union, { recursive: true, force: true });
+    }
+    // Y ninguna propia que main no tenga cae dentro del rango de main:
+    // lo aplicado en Supabase es inmutable, así que lo nuevo va detrás.
+    const ultimaDeMain = Math.max(...[...deMain].map((f) => Number(f.slice(0, 4))));
+    const dentro = propias.filter((f) => !deMain.has(f) && Number(f.slice(0, 4)) <= ultimaDeMain);
+    assert.deepEqual(dentro, [], `migraciones de esta rama dentro de la serie de main (hasta ${ultimaDeMain}): ${dentro.join(', ')}`);
   });
 });

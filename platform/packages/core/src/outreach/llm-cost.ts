@@ -1,5 +1,5 @@
 /**
- * El costo de una llamada al modelo, para outbound_llm_call (0037 §5.3).
+ * El costo de una llamada al modelo, para outbound_llm_call (0046 §5.3).
  *
  * La regla del proyecto: cada llamada deja su fila con tokens y costo, y
  * outbound_health suma ese costo contra llm_daily_cap_usd. Los precios

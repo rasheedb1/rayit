@@ -567,10 +567,10 @@ describe('canales', () => {
 
 describe('canales_last_error_codigo · last_error de antes, en frase', () => {
   test('la frase del seed viejo pasa a su código, cualquier otra a «unknown», y una fila vieja se puede seguir actualizando', { timeout: 120_000 }, async () => {
-    const antes = await createEmbeddedDb({ seeds: false, hasta: '0043_contacto_codigo_de_baja.sql' });
+    const antes = await createEmbeddedDb({ seeds: false, hasta: '0052_contacto_codigo_de_baja.sql' });
     try {
       await antes.execAsSuperuser(`
-        INSERT INTO workspace (id, slug, name) VALUES ('${WS_OTRO}', 'ws-0044', 'ws canales_last_error_codigo');
+        INSERT INTO workspace (id, slug, name) VALUES ('${WS_OTRO}', 'ws-0053', 'ws canales_last_error_codigo');
         INSERT INTO creator_profile (id, workspace_id, display_name) VALUES ('${CREATOR_OTRO}', '${WS_OTRO}', 'Otro');
         INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, status, last_error) VALUES
           ('00000009-0000-4000-8000-0000000a4401', '${WS_OTRO}', '${CREATOR_OTRO}', 'linkedin', 'unipile', 'acc_frase_seed', 'needs_reconnect',
@@ -580,7 +580,7 @@ describe('canales_last_error_codigo · last_error de antes, en frase', () => {
           ('00000009-0000-4000-8000-0000000a4403', '${WS_OTRO}', '${CREATOR_OTRO}', 'instagram_dm', 'unipile', 'acc_codigo', 'connected',
            'webhooks_missing');
       `);
-      assert.deepEqual(await antes.migrar('0044_canales_last_error_codigo.sql'), ['0044_canales_last_error_codigo.sql']);
+      assert.deepEqual(await antes.migrar('0053_canales_last_error_codigo.sql'), ['0053_canales_last_error_codigo.sql']);
       const { rows } = await antes.queryAsSuperuser<{ provider_account_id: string; last_error: string }>(
         `SELECT provider_account_id, last_error FROM outreach_channel_account ORDER BY provider_account_id`,
       );

@@ -45,7 +45,7 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
   const lang = noticeLang(f.locale);
   const pendientes = touches.filter((x) => x.status === "held").length;
   const persona = (x: CadenceTouch) => x.contactName ?? t.sinNombre;
-  // «Reanudar» una vez por cadencia en pausa (0054): en la primera fila de su enrolamiento.
+  // «Reanudar» una vez por cadencia en pausa (0059): en la primera fila de su enrolamiento.
   const vistos = new Set<string>();
   const reanudarEn = new Set<string>();
   for (const x of touches) {

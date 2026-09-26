@@ -54,7 +54,7 @@ import {
 import { DISPATCHABLE_STEP_TYPES, isTextlessStep, type SequencePolicy } from './sequence-policy.ts';
 import { normalizeThread } from './thread.ts';
 
-/** El último día al que se puede poner un paso (CHECK de outbound_step.day_offset, 0037). */
+/** El último día al que se puede poner un paso (CHECK de outbound_step.day_offset, 0046). */
 export const SEQUENCE_MAX_DAY_OFFSET = 60;
 
 // Los tipos de señal, los canales, los motivos de cambio de canal y las
@@ -165,7 +165,7 @@ export interface ProposedStep {
   changedFrom: { stepType: string; channel: string } | null;
 }
 
-/** Quién escribió la guía de un paso (outbound_step.guidance_source, 0062). */
+/** Quién escribió la guía de un paso (outbound_step.guidance_source, 0067). */
 export const GUIDANCE_SOURCES = ['template', 'rules', 'llm', 'person'] as const;
 export type GuidanceSource = (typeof GUIDANCE_SOURCES)[number];
 
@@ -443,10 +443,10 @@ function openThread(steps: readonly ProposedStep[], signalKind: RecommendSignalK
   });
 }
 
-/** La guía de un paso: quién la escribió y para qué tipo de paso (outbound_step, 0062). */
+/** La guía de un paso: quién la escribió y para qué tipo de paso (outbound_step, 0067). */
 export interface StepGuidance {
   guidance: string | null;
-  /** null: una fila anterior a 0062, que no se sabe; se trata como de la persona (no se pisa). */
+  /** null: una fila anterior a 0067, que no se sabe; se trata como de la persona (no se pisa). */
   source: GuidanceSource | null;
   /** El tipo de paso para el que se escribió (outbound_step.guidance_for_type). */
   writtenFor: string | null;

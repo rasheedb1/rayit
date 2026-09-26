@@ -74,7 +74,7 @@ const meta = (contactId: string | null) => ({
   guidanceWhyRules: 'no_key' as const, model: null,
 });
 
-test('las plantillas de 0037 y 0056: ocho activas, con una por cada tipo de señal', async () => {
+test('las plantillas de 0046 y 0061: ocho activas, con una por cada tipo de señal', async () => {
   const tpls = await enLaura((tx) => listSequenceTemplates(tx));
   assert.equal(tpls.length, 8);
   for (const kind of ['active_campaign', 'launch', 'season', 'collab', 'manual']) {
@@ -162,7 +162,7 @@ test('los pasos sin texto (@mc/core) y los que se despachan parten los tipos edi
   assert.deepEqual([...EDITABLE_STEP_TYPES].sort(), [...TEXTLESS_STEP_TYPES, ...despachables].sort());
 });
 
-test('lo que hace una persona no se redacta: el comentario y la reacción quedan sin generación en la base (0057)', async () => {
+test('lo que hace una persona no se redacta: el comentario y la reacción quedan sin generación en la base (0062)', async () => {
   const id = await enLaura(async (tx) => {
     const ctx = await getRecommendationContext(tx, SIGNAL_FRESKO);
     return createSequenceFromProposal(tx, { proposal: recommendSequence(entrada(ctx, CAMILA)), name: 'Fresko · sin texto', meta: meta(CAMILA) });

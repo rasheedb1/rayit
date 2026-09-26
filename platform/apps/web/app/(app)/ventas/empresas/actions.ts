@@ -349,7 +349,7 @@ const intentoSchema = z.object({
 /**
  * «Sí, salió» / «No salió: enviarlo» en la ficha, para un mensaje retenido
  * porque no se supo si un intento llegó al proveedor. Lo resuelve
- * resolveUnconfirmedTouch (0053) con la RLS del workspace: la web no
+ * resolveUnconfirmedTouch (0058) con la RLS del workspace: la web no
  * escribe las columnas del intento ni el enlace de baja por su cuenta.
  */
 export async function resolverIntento(_prev: VentasState, formData: FormData): Promise<VentasState> {
@@ -409,7 +409,7 @@ const reanudarSchema = z.object({ companyId: z.string().regex(UUID_RE), enrollme
 
 /**
  * «Reanudar la cadencia» en la ficha, para una cadencia que el motor pausó
- * porque otra persona de la marca respondió (0054). resumeEnrollment la
+ * porque otra persona de la marca respondió (0059). resumeEnrollment la
  * vuelve a 'active' y corre lo vencido desde ahora.
  */
 export async function reanudarCadencia(_prev: VentasState, formData: FormData): Promise<VentasState> {

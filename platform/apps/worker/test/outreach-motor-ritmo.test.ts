@@ -87,7 +87,7 @@ test('el tope corre los pasos de detrás, y ningún paso sale antes que el anter
   await enroll(w, bogota('2026-09-25', '07:00')); // viernes: pasos el viernes, el lunes y el martes
   const antes = await touches(c);
   assert.deepEqual(antes.map((t) => localDay(t.scheduled_for)), ['2026-09-25', '2026-09-28', '2026-09-29']);
-  // El tope diario de la cuenta ya está lleno hoy (el contador cuenta el día del reloj del despachador, 0052 §3).
+  // El tope diario de la cuenta ya está lleno hoy (el contador cuenta el día del reloj del despachador, 0057 §3).
   await db.raw.query(`UPDATE outreach_channel_account SET daily_cap = 1 WHERE id = $1`, [w.gmail]);
   await db.raw.query(
     `INSERT INTO outbound_counter (workspace_id, channel_account_id, period, period_start, action_type, count)
@@ -104,7 +104,7 @@ test('el tope corre los pasos de detrás, y ningún paso sale antes que el anter
   assert.equal(localClock(despues[1]!.scheduled_for), localClock(antes[1]!.scheduled_for), 'cada uno con su hora de reloj');
 
   // Aunque el paso 2 quedara vencido antes que el 1 (una reprogramación a mano), no sale mientras el 1 siga en la cola.
-  // El lunes los contadores ya son otro día (0052 §3): solo se devuelve el tope.
+  // El lunes los contadores ya son otro día (0057 §3): solo se devuelve el tope.
   await db.raw.query(`UPDATE outreach_channel_account SET daily_cap = 40 WHERE id = $1`, [w.gmail]);
   await setDue(despues[1]!.id, bogota('2026-09-28', '10:00'));
   const r2 = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-28', '11:00')));
@@ -159,7 +159,7 @@ test('el tope del día es la curva de VEN-15 sobre el límite que rige de VEN-9,
   await enroll(w, bogota('2026-09-23', '07:00'));
   const fake = fakeChannels();
   // La primera hora, el ritmo de la cuenta: un cuarto de su tope que
-  // rige (0052 §1), 60 / 4 = 15. Lo demás espera su turno sin gastar plaza.
+  // rige (0057 §1), 60 / 4 = 15. Lo demás espera su turno sin gastar plaza.
   const porHora = await scalar<number>(
     `SELECT effective_hourly AS v FROM outreach_channel_account_limits WHERE channel_account_id = $1`, [w.gmail],
   );
@@ -203,7 +203,7 @@ test('la plaza de un reclamo que no salió vuelve al día en que se reservó, no
   const zombies = await motor.transaction((tx) => rescueZombies(tx, new Date(claimedAt.getTime() + 10 * 60_000), w.id));
   assert.deepEqual(zombies.released, [touch.id]);
   const filas = await db.raw.query<{ period: string; viejo: boolean; count: number }>(
-    // Los contadores cuentan el día del reloj del despachador (0052 §3): «hoy» es el del reclamo.
+    // Los contadores cuentan el día del reloj del despachador (0057 §3): «hoy» es el del reclamo.
     `SELECT period, period_start < $2::date - 6 AS viejo, count
        FROM outbound_counter WHERE workspace_id = $1 ORDER BY period, viejo`, [w.id, localDay(claimedAt)],
   );
@@ -235,7 +235,7 @@ test('el techo de LinkedIn es uno para la cuenta: con 1 al día, una invitación
   );
   assert.deepEqual(filas.rows.map((f) => [f.action_type, f.period, f.count]), [['linkedin', 'day', 1], ['linkedin', 'week', 1]]);
   // Al día siguiente, a su hora, sale el otro. Los contadores cuentan el día
-  // del reloj del despachador (p_at, 0052 §3), no el now() de la base: el
+  // del reloj del despachador (p_at, 0057 §3), no el now() de la base: el
   // reloj falso cambia de día y la plaza del jueves es una fila nueva.
   const manana = new Date(r.claim.rescheduled[0]!.until.getTime() + 60_000);
   const r2 = await runDispatch(motor, deps(w, fake, () => manana));

@@ -519,7 +519,7 @@ describe('la política editable', () => {
     assert.equal(antes.saved, false);
     assert.equal(antes.maxEmailsPerDay, 20);
     assert.equal(antes.llmDailyCapUsd, '5.00');
-    assert.deepEqual([antes.sendWindowStart, antes.sendWindowEnd], ['09:00', '17:00'], 'la ventana de 0051 §1');
+    assert.deepEqual([antes.sendWindowStart, antes.sendWindowEnd], ['09:00', '17:00'], 'la ventana de 0056 §1');
     const guardada = await t.db.withWorkspace(WS_O, (tx) =>
       saveOutboundPolicy(tx, {
         maxTouchesPerCompany: 5, minDaysBetweenTouches: 4, maxEmailsPerDay: 60, cooldownDaysAfterNo: 90,
@@ -527,7 +527,7 @@ describe('la política editable', () => {
         postalAddress: '  Calle 93 # 11-26, Bogotá  ', sendWindowStart: '08:00', sendWindowEnd: '12:30',
       }),
     );
-    assert.equal(antes.stopCompanyOnReply, true, 'por defecto, una respuesta pausa a la marca (0054)');
+    assert.equal(antes.stopCompanyOnReply, true, 'por defecto, una respuesta pausa a la marca (0059)');
     assert.equal(guardada.stopCompanyOnReply, false);
     assert.equal(guardada.saved, true);
     assert.equal(guardada.enabled, false);
@@ -544,7 +544,7 @@ describe('la política editable', () => {
   });
 
   test('encendida, no se puede quitar la dirección postal', async () => {
-    // Sin un canal conectado no se enciende (0037 §8.5): el callback conecta el Gmail del creador.
+    // Sin un canal conectado no se enciende (0046 §8.5): el callback conecta el Gmail del creador.
     await t.admin(`INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, status)
                    VALUES ('${WS_O}', 'email', 'gmail_oauth', 'otro@creador.test', 'connected')`);
     await t.db.withWorkspace(WS_O, (tx) => enableOutreach(tx));

@@ -11,7 +11,7 @@
  * un mensaje de error (safeErrorMessage).
  *
  * Los cupos de Gmail y de Unipile no se cuentan aquí: los cuenta el
- * despachador por cuenta y por día en outbound_counter (0037 §6.2), que
+ * despachador por cuenta y por día en outbound_counter (0046 §6.2), que
  * es donde el producto los necesita. Aquí solo se respeta el 429.
  */
 import type { FetchLike } from '../http/client.ts';

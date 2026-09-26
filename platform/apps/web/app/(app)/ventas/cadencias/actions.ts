@@ -133,7 +133,7 @@ export async function crearDesdePlantilla(_prev: CadenciaState, formData: FormDa
  * marca (un borrador puede esperar días y el negocio perderse entre
  * tanto: no se le escriben seis mensajes a una marca que ya dijo que
  * no), que la persona no haya pedido la baja entre «Proponer» y
- * «Activar» (el disparador de 0050 rechazaría el enrolamiento y, con él,
+ * «Activar» (el disparador de 0055 rechazaría el enrolamiento y, con él,
  * la activación entera, una y otra vez), que no esté viva en otra cadencia del espacio (dos
  * cadencias a la vez duplican los mensajes) y que le llegue algún
  * mensaje de esta cadencia (reachForSequence: un canal de sus pasos que
@@ -317,7 +317,7 @@ const enrolarSchema = z.object({ dealId: uuid, contactIds: z.array(uuid).min(1).
  * (enrollableContactsOfDeal): un formulario hecho a mano no mete a
  * alguien de otra marca bajo este negocio. Quien pidió la baja (quizá
  * después de abrir el formulario) no entra: enrollContacts la mandaría al
- * disparador de 0050 y una sola persona tumbaría el lote. Quien ya está
+ * disparador de 0055 y una sola persona tumbaría el lote. Quien ya está
  * viva en otra cadencia del espacio tampoco (la misma regla que «Activar»), ni quien
  * no llega por ningún canal con el que esta cadencia escribe: quedan
  * entre las saltadas con su motivo. De quien entra se dice, persona por
@@ -341,7 +341,7 @@ export async function enrolarDesdeNegocio(sequenceId: string, _prev: EnrolarStat
       if (contactIds.some((id) => !validas.has(id))) return null;
       // Dos cadencias a la vez a la misma persona duplican los mensajes: quien ya está viva en otra se queda fuera.
       // Y quien no llega por ningún canal con el que esta cadencia escribe entraría sin un solo mensaje.
-      // Y quien pidió la baja no entra: el disparador de 0050 revertiría el lote entero.
+      // Y quien pidió la baja no entra: el disparador de 0055 revertiría el lote entero.
       const alcance = await reachForSequence(tx, sequenceId, contactIds);
       const deBaja = await optedOutAmong(tx, contactIds);
       const vivas = await liveEnrollmentsElsewhere(tx, contactIds, sequenceId);

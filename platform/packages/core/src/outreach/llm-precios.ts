@@ -1,6 +1,6 @@
 /**
  * El costo de una llamada al modelo, para la bitácora outbound_llm_call
- * (0037 §5.3): la regla del proyecto es registrar tokens y costo de CADA
+ * (0046 §5.3): la regla del proyecto es registrar tokens y costo de CADA
  * llamada, y outbound_health suma ese costo contra llm_daily_cap_usd.
  *
  * Precios de lista de Anthropic en USD por millón de tokens (septiembre

@@ -10,14 +10,14 @@
  * vuelve a vencer, sí hay aviso nuevo: es otro compromiso.
  *
  * «Cada mañana», en la mañana de CADA espacio: job_definition lo corre
- * cada hora (0034) y aquí un espacio solo se procesa desde las
+ * cada hora (0043) y aquí un espacio solo se procesa desde las
  * SEGUIMIENTOS_HORA_LOCAL de su zona. Por eso:
  *   - lo vencido se avisa por día, no por hora: una acción que vence hoy
  *     a las 20:00 da «Vence hoy» a las 7:05 y, si sigue sin hacerse,
  *     «Seguimiento vencido» mañana a las 7:05; nunca esta noche. Dos
  *     avisos por compromiso como mucho, y en días distintos;
  *   - «Vence hoy» no avisa la acción que alguien ESCRIBIÓ hoy después de
- *     la hora de aviso (deal.next_action_set_at, 0036): quien escribe a
+ *     la hora de aviso (deal.next_action_set_at, 0045): quien escribe a
  *     las 10:00 una acción para hoy acaba de decidirla y no necesita que
  *     se la recuerden a las 11:05. Si mañana sigue ahí, le llega el
  *     vencido. Solo cuenta el texto o el vencimiento de la acción, no
@@ -39,8 +39,8 @@
  *
  * La zona de cada espacio se resuelve contra pg_timezone_names: una zona
  * mal escrita en un espacio ('Bogota') se cuenta en UTC para ese espacio
- * y no tumba la corrida de todos (0035 además corrige las que había y
- * no deja guardar otra; esto es por si el job corre antes que 0035).
+ * y no tumba la corrida de todos (0044 además corrige las que había y
+ * no deja guardar otra; esto es por si el job corre antes que 0044).
  *
  * Cómo no duplica, sin columna nueva en notification:
  *   - un 'deal_overdue' del negocio creado DESPUÉS de su vencimiento
@@ -130,7 +130,7 @@ const CANDIDATOS = `
   candidatos AS (
     SELECT d.id, d.workspace_id, d.company_id, d.name, btrim(d.next_action) AS next_action, d.next_action_due,
            d.next_action_set_at, co.name AS company_name,
-           -- «Del equipo», con y sin los roles de 0034_access_control (0055).
+           -- «Del equipo», con y sin los roles de 0034_access_control (0060).
            coalesce(
              CASE WHEN membership_is_team(d.workspace_id, d.next_action_user_id) THEN d.next_action_user_id END,
              CASE WHEN membership_is_team(d.workspace_id, d.owner_user_id) THEN d.owner_user_id END

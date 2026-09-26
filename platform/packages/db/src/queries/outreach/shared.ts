@@ -15,7 +15,7 @@
  *
  * El reloj lo pone quien llama (`now`): el worker pasa el suyo y las
  * pruebas avanzan uno falso. Los contadores de los topes cuentan el día
- * de ese mismo reloj (0052 §3).
+ * de ese mismo reloj (0057 §3).
  */
 import { DEFAULT_SEND_WINDOW, DISPATCHABLE_STEP_TYPES, holidaysFor, shiftFollowingSteps, type DispatchableStepType, type SendWindow } from '@mc/core';
 import { isUuid, type SqlExecutor, type WorkerSql } from '../../client.ts';
@@ -151,7 +151,7 @@ export interface ContactAddresses {
 }
 
 /**
- * La regla de los CHECK de outbound_touch.recipient_address (0037 §4.2),
+ * La regla de los CHECK de outbound_touch.recipient_address (0046 §4.2),
  * repetida aquí para decirla ANTES de escribir:
  * de 3 a 320 caracteres, y en un correo una sola arroba y sin espacios.
  * contact.email no tiene CHECK: una ficha con «carla arroba marca.test»
@@ -182,7 +182,7 @@ export function recipientFor(channel: string, c: ContactAddresses): string | nul
 }
 
 // ---------------------------------------------------------------------
-// Topes: devolver la plaza que no se gastó (0051 §8)
+// Topes: devolver la plaza que no se gastó (0056 §8)
 // ---------------------------------------------------------------------
 
 /** Lo que el reclamo reservó para un toque: la plaza de su cuenta (una por canal) y, si es correo, la del workspace. */

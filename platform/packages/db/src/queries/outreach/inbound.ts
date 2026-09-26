@@ -37,7 +37,7 @@
  *     cualquier secuencia, pasan a replied con lo cancelable cancelado
  *     (CANCELABLE_TOUCH_STATUSES: draft, scheduled, held), igual que los
  *     pitches sueltos a la misma ficha (cancelLoosePitches); y, con
- *     outbound_policy.stop_company_on_reply (0054, encendido por defecto),
+ *     outbound_policy.stop_company_on_reply (0059, encendido por defecto),
  *     las cadencias de las otras personas de la misma marca quedan en
  *     pausa. Se avisa una vez, diciendo qué se detuvo. Si ya había
  *     respondido, el mensaje queda en la conversación sin otro aviso.
@@ -79,7 +79,7 @@ export interface InboundEffectsInput {
   /**
    * contact.opted_out_reason si pide la baja. Por defecto ninguna: en un
    * canal con código (correo, LinkedIn, Instagram) la ficha guarda
-   * reply_optout:<canal> en opted_out_code (0043, VEN-9) y la pantalla lo
+   * reply_optout:<canal> en opted_out_code (0052, VEN-9) y la pantalla lo
    * traduce; en otro canal, la frase de @mc/core en el idioma del workspace.
    */
   optOutReason?: string;
@@ -107,7 +107,7 @@ export interface InboundEffects {
   optOutReview: boolean;
   /** Otros enrolamientos de la misma ficha que la respuesta detuvo (pasaron a replied). */
   otherEnrollmentsStopped: string[];
-  /** Enrolamientos de otras personas de la misma marca que quedaron en pausa (stop_company_on_reply, 0054). */
+  /** Enrolamientos de otras personas de la misma marca que quedaron en pausa (stop_company_on_reply, 0059). */
   companyPaused: string[];
 }
 
@@ -132,10 +132,10 @@ export async function applyContactOptOut(
   return (await optOutContact(tx, contactId, workspaceId, reason, now)).canceled;
 }
 
-/** Los canales con código de baja por respuesta: los del CHECK de contact.opted_out_code (0043). */
+/** Los canales con código de baja por respuesta: los del CHECK de contact.opted_out_code (0052). */
 const REPLY_OPT_OUT_CODE_CHANNELS: ReadonlySet<string> = new Set(['email', 'linkedin', 'instagram_dm']);
 
-/** El código de 0043 para una baja que llega respondiendo por ese canal, o null si el canal no tiene. */
+/** El código de 0052 para una baja que llega respondiendo por ese canal, o null si el canal no tiene. */
 export function replyOptOutCodeFor(channel: string): string | null {
   return REPLY_OPT_OUT_CODE_CHANNELS.has(channel) ? `reply_optout:${channel}` : null;
 }
@@ -348,7 +348,7 @@ export async function applyReplyOptOut(
       otherEnrollmentsStopped: stop.otherEnrollments, companyPaused: stop.companyPaused,
     };
   }
-  // En la base, un código que la pantalla traduce (0043); la frase solo en un canal sin código.
+  // En la base, un código que la pantalla traduce (0052); la frase solo en un canal sin código.
   const lang = noticeLang(w.locale);
   const code = replyOptOutCodeFor(input.channel);
   const reason = input.optOutReason ?? (code ? null : OUTREACH_NOTICE_TEXTS[lang].optOutReason(channelLabel(lang, input.channel)));
@@ -409,7 +409,7 @@ interface ReplyStopResult {
  *   · TODOS los enrolamientos vivos de la misma ficha en el workspace
  *     también, en cualquier secuencia: ya contestó, lo que sigue lo
  *     decide una persona (como optOutContact con la baja);
- *   · con outbound_policy.stop_company_on_reply (0054, encendido por
+ *   · con outbound_policy.stop_company_on_reply (0059, encendido por
  *     defecto), los enrolamientos vivos de las OTRAS fichas de la misma
  *     marca quedan en pausa (paused, sin resume_at): el reclamo no toma
  *     nada de un enrolamiento pausado y el despachador pospone lo que ya

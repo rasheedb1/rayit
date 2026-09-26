@@ -11,7 +11,7 @@
 -- Por qué hace falta. En Supabase las tablas las crea mc_migrator, y sus
 -- DEFAULT PRIVILEGES le dan a mc_app los cuatro privilegios de fila al
 -- nacer cada tabla; las migraciones solo QUITAN lo que no le toca
--- (0024, 0026, 0030, 0037 §7.4). Sin este archivo, en un Postgres
+-- (0024, 0026, 0030, 0046 §7.4). Sin este archivo, en un Postgres
 -- local las crea el superusuario y mc_app nace sin ningún privilegio:
 -- la guardia (src/esquema.ts) no ve ninguna política abierta ni ningún
 -- único global que mc_app pueda alcanzar, da por cerradas las

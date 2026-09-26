@@ -38,7 +38,7 @@ SELECT 'b_rebote_blando' AS check_id,
 
 -- (c) «Últimos rebotes» tiene los dos, del más reciente al más viejo, y
 --     el correo que rebotó tiene su enlace de baja (como todo correo que
---     sale, 0037 §4.5).
+--     sale, 0046 §4.5).
 SELECT 'c_ultimos_rebotes' AS check_id,
        (SELECT string_agg(kind, ',' ORDER BY detected_at DESC) FROM outbound_bounce) AS tipos,
        (SELECT string_agg(kind, ',' ORDER BY detected_at DESC) FROM outbound_bounce) = 'hard,soft'

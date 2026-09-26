@@ -56,7 +56,7 @@ export interface CadenceTouch {
    * null si no es una respuesta o todavía no salió ningún correo.
    */
   threadSubject: string | null;
-  /** El enrolamiento del mensaje y su estado: la ficha ofrece «Reanudar» a una cadencia en pausa (0054). */
+  /** El enrolamiento del mensaje y su estado: la ficha ofrece «Reanudar» a una cadencia en pausa (0059). */
   enrollmentId: string | null;
   enrollmentStatus: string | null;
 }
@@ -162,7 +162,7 @@ export type ReleaseHeldResult = { ok: true } | { ok: false; code: ReleaseHeldCod
  * siguiente corrida, y los pasos de detrás se corren con él al enviarse).
  * Si estaba retenido porque no se pudo comprobar si un intento anterior
  * salió (unconfirmed_attempt), aprobarlo es decir que no salió: la marca
- * se borra (0052 §2 deja a una persona hacerlo solo en esta transición).
+ * se borra (0057 §2 deja a una persona hacerlo solo en esta transición).
  */
 export async function releaseHeldTouch(
   tx: WorkspaceTx,
@@ -218,7 +218,7 @@ export async function releaseHeldTouch(
   if (row.opted_out) return { ok: false, code: 'opted_out' };
   if (row.needs_postal) return { ok: false, code: 'no_postal_address' };
   // Retenido por un intento sin comprobar: aprobarlo es decir que no
-  // salió. outreach_resolve_unconfirmed (0053) lo devuelve a la cola, borra
+  // salió. outreach_resolve_unconfirmed (0058) lo devuelve a la cola, borra
   // el enlace de ese intento y devuelve su plaza; después, el texto.
   if (row.unconfirmed) {
     const r = await resolveUnconfirmedTouch(tx, touchId, 'resend');
@@ -285,7 +285,7 @@ async function sourceFigures(
   return { ok: true, cited: claimsCitedIn(claims, markedSubject, markedBody) };
 }
 
-/** Qué dice la persona de un intento que el proveedor no confirmó (0053). */
+/** Qué dice la persona de un intento que el proveedor no confirmó (0058). */
 export type UnconfirmedOutcome = 'was_sent' | 'resend';
 
 export type ResolveUnconfirmedResult = { ok: true } | { ok: false; code: 'not_found' | 'not_unconfirmed' | 'opted_out' };
@@ -302,7 +302,7 @@ export type ResolveUnconfirmedResult = { ok: true } | { ok: false; code: 'not_fo
  *     ese intento y con su plaza devuelta; el despachador no vuelve a
  *     preguntarle al proveedor (en Unipile, un chat nuevo o una invitación
  *     no se pueden comprobar: sin esto volvía a retenerse para siempre).
- * Lo hace outreach_resolve_unconfirmed (0053), con la RLS del workspace:
+ * Lo hace outreach_resolve_unconfirmed (0058), con la RLS del workspace:
  * las columnas del intento y el enlace de baja son del despachador.
  */
 export async function resolveUnconfirmedTouch(
@@ -330,7 +330,7 @@ export type ResumeEnrollmentResult =
   | { ok: false; code: 'not_found' | 'not_paused' | 'opted_out' };
 
 /**
- * «Reanudar» una cadencia en pausa (0054): otra persona de la marca
+ * «Reanudar» una cadencia en pausa (0059): otra persona de la marca
  * respondió y el motor pausó ésta (status 'paused', sin resume_at). Si
  * la conversación no llegó a nada, la persona la reanuda desde la ficha.
  *

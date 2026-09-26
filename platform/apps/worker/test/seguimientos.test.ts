@@ -10,7 +10,7 @@
  * se avisa la mañana siguiente, no la misma noche; una zona mal escrita
  * en un espacio no deja sin avisos a los demás.
  *
- * deal.next_action_set_at (0036) lo pone un disparador con el reloj
+ * deal.next_action_set_at (0045) lo pone un disparador con el reloj
  * real; las pruebas corren con un `now` fijo, así que cada negocio lo
  * fija a mano (al insertarlo, y en `tocar` cuando cambia la acción) para
  * que «la acción se escribió hoy» no dependa del día en que corren.
@@ -82,7 +82,7 @@ async function avisos(): Promise<Aviso[]> {
 /**
  * Cambia un negocio fijando updated_at, sin el disparador que lo pone con
  * el reloj real. Si `set` cambia la acción o su fecha, fija también
- * next_action_set_at: si no, el disparador de 0036 pondría el reloj real.
+ * next_action_set_at: si no, el disparador de 0045 pondría el reloj real.
  */
 async function tocar(id: string, set: string, updatedAt: string): Promise<void> {
   await db.raw.exec(`
@@ -126,7 +126,7 @@ after(async () => {
   await db?.close();
 });
 
-test('el job está registrado y programado cada hora (0034)', async () => {
+test('el job está registrado y programado cada hora (0043)', async () => {
   assert.ok(allJobs.some((j) => j.id === SEGUIMIENTOS_JOB_ID));
   const { rows } = await db.raw.query<{ queue: string; default_cron: string; enabled: boolean }>(
     'SELECT queue, default_cron, enabled FROM job_definition WHERE id = $1',
@@ -192,7 +192,7 @@ test('«cada mañana» es la de cada espacio: Honolulu (4:00) espera a sus 7:00'
 });
 
 test('una zona mal escrita en un espacio se cuenta en UTC y no deja sin avisos a los demás', async () => {
-  // Un dato de antes de 0035: el disparador ya no deja guardarlo, así que
+  // Un dato de antes de 0044: el disparador ya no deja guardarlo, así que
   // se escribe con el disparador apagado, como estaría en una base vieja.
   await db.raw.exec(`
     ALTER TABLE workspace DISABLE TRIGGER workspace_timezone_check;
@@ -212,7 +212,7 @@ test('una zona mal escrita en un espacio se cuenta en UTC y no deja sin avisos a
   assert.equal(roto?.workspace_id, WS_ROTO);
 });
 
-test('0035 no deja guardar una zona que Postgres no conoce, y sí una IANA', async () => {
+test('0044 no deja guardar una zona que Postgres no conoce, y sí una IANA', async () => {
   await assert.rejects(
     db.raw.exec(`UPDATE workspace SET timezone = 'Bogota' WHERE id = '${WS_BOGOTA}'`),
     /zona horaria desconocida: «Bogota»/,
@@ -281,7 +281,7 @@ test('lo cerrado, lo futuro y lo que no tiene acción nunca avisan', async () =>
   for (const id of [DEAL_FUTURO, DEAL_GANADO, DEAL_SIN_ACCION]) assert.ok(!ids.has(id), id);
 });
 
-test('0036: next_action_set_at lo mueve la acción o su fecha, no una llamada ni la etapa', async () => {
+test('0045: next_action_set_at lo mueve la acción o su fecha, no una llamada ni la etapa', async () => {
   const leer = async () =>
     (await db.raw.query<{ at: string | null }>(`SELECT next_action_set_at::text AS at FROM deal WHERE id = '${DEAL_FUTURO}'`)).rows[0]?.at;
   const antes = await leer();

@@ -107,7 +107,7 @@ export function motorKit(opts: { db: () => PgliteDatabase; motor: () => MotorDb;
       INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES ${contactos};
       -- Sin revisión humana, sin tope ni separación con la marca, salvo que
       -- la prueba los pida (el motor los aplica; aquí se prueba lo demás).
-      -- Los tres canales encendidos: desde 0045 (VEN-9) un espacio nuevo
+      -- Los tres canales encendidos: desde 0054 (VEN-9) un espacio nuevo
       -- nace sin Instagram, y el motor se prueba también por Instagram.
       INSERT INTO outbound_policy (workspace_id, enabled, postal_address, max_emails_per_day, warmup_days, require_human_review,
                                    max_touches_per_company, min_days_between_touches, allowed_channels)
@@ -241,7 +241,7 @@ export function motorKit(opts: { db: () => PgliteDatabase; motor: () => MotorDb;
     return db().raw.transaction(async (raw) => {
       await raw.query(`SELECT set_config('app.workspace_id', $1, true)`, [workspaceId]);
       // Sin persona en la transacción, como la web sin Supabase Auth: lo que el cliente de @mc/db fija con
-      // DbOptions.authDisabled (0050 §7). Sin esto, las reglas que fallan cerradas (outreach_can_manage,
+      // DbOptions.authDisabled (0055 §7). Sin esto, las reglas que fallan cerradas (outreach_can_manage,
       // outreach_resolve_unconfirmed) dirían que no.
       await raw.query(`SELECT set_config('app.auth_disabled', 'on', true)`);
       const tx = {

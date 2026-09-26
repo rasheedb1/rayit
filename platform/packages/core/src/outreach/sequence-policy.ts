@@ -27,7 +27,7 @@ export type DispatchableStepType = (typeof DISPATCHABLE_STEP_TYPES)[number];
  * ni generación, y el modelo no les reescribe la guía (§5.5). Es el
  * resto de los tipos editables fuera de DISPATCHABLE_STEP_TYPES
  * (WhatsApp, fase 2, es un mensaje y no entra); el CHECK
- * outbound_step_text_or_by_hand (0063) dice lo mismo, y una prueba de
+ * outbound_step_text_or_by_hand (0068) dice lo mismo, y una prueba de
  * @mc/db comprueba que las dos listas parten los tipos editables.
  * Una sola definición: la usan el recomendador, @mc/db y la pantalla.
  */

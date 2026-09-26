@@ -125,7 +125,7 @@ export type LinkOptoutResult =
   | { status: 'not_found' }
   | { status: 'ok'; alreadyOptedOut: boolean; scope: OptoutScope; workspaceId: string | null; touchId: string | null };
 
-/** Comprueba la forma del jsonb de public_optout (0037 §9 con el alcance de entregabilidad §8). */
+/** Comprueba la forma del jsonb de public_optout (0046 §9 con el alcance de entregabilidad §8). */
 export function parseLinkOptout(value: unknown): LinkOptoutResult {
   const fn = 'public_optout';
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new OutreachShapeError(fn, '$', 'se esperaba un objeto');
@@ -210,12 +210,12 @@ export const POSTAL_ADDRESS_MAX = 300;
 /**
  * Los códigos que outbound_policy.disabled_reason guarda (r4: la base no
  * guarda frases; la pantalla los traduce). 'manual' es el apagado desde
- * la política, y el valor por defecto de disable_outreach (0037).
+ * la política, y el valor por defecto de disable_outreach (0046).
  */
 export const DISABLED_REASON_MANUAL = 'manual' as const;
 export type DisabledReasonCode = typeof DISABLED_REASON_MANUAL;
 
-/** Los valores de una política que todavía no existe: los DEFAULT de 0007 y 0037. */
+/** Los valores de una política que todavía no existe: los DEFAULT de 0007 y 0046. */
 export const POLICY_DEFAULTS = {
   maxTouchesPerCompany: 4,
   minDaysBetweenTouches: 3,
@@ -223,11 +223,11 @@ export const POLICY_DEFAULTS = {
   cooldownDaysAfterNo: 180,
   requireHumanReview: true,
   claimsMustBeSourced: true,
-  /** Una respuesta pausa a las demás personas de la marca (0054). */
+  /** Una respuesta pausa a las demás personas de la marca (0059). */
   stopCompanyOnReply: true,
   warmupDays: 14,
   postalAddress: null as string | null,
-  /** La ventana laboral de 0051 §1, en la zona del workspace: 'HH:MM'. */
+  /** La ventana laboral de 0056 §1, en la zona del workspace: 'HH:MM'. */
   sendWindowStart: '09:00',
   sendWindowEnd: '17:00',
 } as const;
@@ -235,7 +235,7 @@ export const POLICY_DEFAULTS = {
 /** 'HH:MM' de 00:00 a 23:59. */
 const CLOCK_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-/** ¿Es una ventana de envío válida? Las dos horas 'HH:MM' y el fin después del inicio (el CHECK de 0051 §1). */
+/** ¿Es una ventana de envío válida? Las dos horas 'HH:MM' y el fin después del inicio (el CHECK de 0056 §1). */
 export function isValidSendWindow(start: string, end: string): boolean {
   return CLOCK_RE.test(start) && CLOCK_RE.test(end) && end > start;
 }
@@ -249,7 +249,7 @@ export interface OutboundPolicyView {
   cooldownDaysAfterNo: number;
   requireHumanReview: boolean;
   claimsMustBeSourced: boolean;
-  /** Si una persona de la marca responde, se pausan las cadencias de las demás personas de esa marca (0054). */
+  /** Si una persona de la marca responde, se pausan las cadencias de las demás personas de esa marca (0059). */
   stopCompanyOnReply: boolean;
   warmupDays: number;
   postalAddress: string | null;
@@ -434,7 +434,7 @@ export async function saveOutboundPolicy(tx: WorkspaceTx, input: OutboundPolicyI
 // La salud del día: lo que leen las alertas y el bloque «Salud de hoy»
 // ---------------------------------------------------------------------
 //
-// Las cifras que outbound_health (0037) no trae y que deciden dos
+// Las cifras que outbound_health (0046) no trae y que deciden dos
 // alertas (evaluateOutreachAlerts, @mc/core):
 //   emailsSent   correos con sent_at en la ventana;
 //   hardBounces  de ESOS correos, los que tienen un rebote duro en
@@ -506,7 +506,7 @@ export async function readAlertSignalCounts(
          WHERE t.workspace_id = $1 AND t.channel = 'email' AND t.status = 'sent'
            AND t.sent_at >= v.desde AND t.sent_at < v.hasta)::int AS rebotes,
        -- Lo que el despachador DEBERÍA haber enviado: no cuenta lo de una
-       -- cadencia en pausa (una respuesta de la marca, 0054) ni lo que
+       -- cadencia en pausa (una respuesta de la marca, 0059) ni lo que
        -- espera detrás de un paso retenido: eso espera a una persona, no
        -- al envío, y daría un outreach_no_sends falso.
        (SELECT count(*) FROM outbound_touch t, v

@@ -62,7 +62,7 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
   assert.equal(rol?.['bypassRls'], true);
 
   // Cuántas definiciones hay lo dice job_definition, no un número fijo:
-  // cada migración que añade un job (0034 añadió sales.follow_ups) no
+  // cada migración que añade un job (0043 añadió sales.follow_ups) no
   // tiene que tocar esta prueba. Lo que sí se fija es el piso, las 21 de
   // 0009, y que cada una con handler en allJobs se cuente como tal.
   const catalogo = await h.db.query<{ id: string; default_cron: string | null; enabled: boolean }>(
@@ -72,7 +72,7 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
   const conHandler = catalogo.rows.filter((d) => allJobs.some((j) => j.id === d.id)).length;
   const baseCrons = catalogo.rows.filter((d) => d.enabled && d.default_cron !== null).length;
   assert.ok(base >= 21, `al menos las 21 definiciones de 0009 (hay ${base})`);
-  assert.ok(catalogo.rows.some((d) => d.id === 'sales.follow_ups'), 'y sales.follow_ups de 0034');
+  assert.ok(catalogo.rows.some((d) => d.id === 'sales.follow_ups'), 'y sales.follow_ups de 0043');
 
   const seeded = h.worker.definitions.filter((d) => !d.id.startsWith('test.'));
   assert.equal(seeded.length, base);

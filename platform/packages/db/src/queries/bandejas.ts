@@ -23,12 +23,12 @@
  *
  * La bandeja unificada es la conversación: outbound_message por ficha y
  * canal. Responder crea UN toque programado sin enrolamiento que responde
- * al último mensaje entrante (reply_to_message_id, 0064): lo envía el mismo
+ * al último mensaje entrante (reply_to_message_id, 0069): lo envía el mismo
  * motor, con sus topes, su pie de baja y su hilo. El id del toque lo pone
  * el formulario: enviar dos veces el mismo formulario no crea dos mensajes.
  * Mientras espera, se cancela (o se edita: cancelar y volver a escribir);
  * lo que no salió se ve con su motivo hasta que se descarta. Un hilo se
- * marca hecho (done_at, 0065) y una persona corrige la intención de una
+ * marca hecho (done_at, 0070) y una persona corrige la intención de una
  * respuesta con sus efectos (reclassifyInboxMessage).
  */
 import { findPlaceholders } from '@mc/core';
@@ -47,7 +47,7 @@ import { releaseHeldTouch, type ReleaseHeldCode } from './outreach/review.ts';
 import { assertIds, date, int, oneOf, text, textOrNull, toDate } from './outreach/shared.ts';
 import { createContact, type ContactSource } from './ventas.ts';
 
-/** Quién puso la intención de una respuesta (0064). */
+/** Quién puso la intención de una respuesta (0069). */
 export type IntentSource = (typeof INTENT_SOURCES)[number];
 export type TouchStatus = (typeof TOUCH_STATUSES)[number];
 export type StepType = (typeof STEP_TYPES)[number];
@@ -261,7 +261,7 @@ export type ApproveCode = ReleaseHeldCode | 'regenerating';
 /**
  * Aprobado: `approvedAt` es la versión que pide undoApproval para devolverlo
  * a la cola («Deshacer»); el motivo con el que estaba retenido lo guarda el
- * servidor (approved_from_reason, 0066), nunca lo manda el navegador.
+ * servidor (approved_from_reason, 0071), nunca lo manda el navegador.
  * `sendingOff`: el envío del espacio está apagado, así que «sale a su hora»
  * todavía no es verdad; la pantalla lo dice.
  */
@@ -338,7 +338,7 @@ export type UndoApprovalResult = { ok: true; recipientName: string } | { ok: fal
 /**
  * «Deshacer» una aprobación (el aviso de la bandeja, a la manera de
  * Linear y Superhuman): el toque vuelve a la cola retenido con el motivo
- * que guardó approveQueuedTouch (approved_from_reason, 0066), solo si
+ * que guardó approveQueuedTouch (approved_from_reason, 0071), solo si
  * sigue programado con ESA aprobación (el despachador no lo reclamó y
  * nadie lo aprobó otra vez). El motivo no llega del navegador: una
  * petición alterada no puede dejar en la cola un motivo inventado. El
@@ -526,7 +526,7 @@ export interface InboxMessage {
   intent: MessageIntent | null;
   intentConfidence: number | null;
   intentSource: IntentSource | null;
-  /** La frase del clasificador que explica la intención (0065). */
+  /** La frase del clasificador que explica la intención (0070). */
   intentReason: string | null;
   /** La fecha de vuelta de un «fuera de la oficina». */
   resumeAt: Date | null;
@@ -961,7 +961,7 @@ export async function reclassifyInboxMessage(
   return { ok: true, intent, dealMoved: fx.dealMoved, optOut: fx.optOut, optOutReview: fx.optOutReview };
 }
 
-/** ¿El worker clasifica las respuestas? 'model' o 'fake' sí; 'off' le falta la llave; 'unknown' no corrió en el último día (0065). */
+/** ¿El worker clasifica las respuestas? 'model' o 'fake' sí; 'off' le falta la llave; 'unknown' no corrió en el último día (0070). */
 export type ClassifierStatus = 'model' | 'fake' | 'off' | 'unknown';
 
 export async function outreachClassifierStatus(tx: WorkspaceTx): Promise<ClassifierStatus> {

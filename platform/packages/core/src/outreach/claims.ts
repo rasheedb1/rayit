@@ -15,7 +15,7 @@
  * Puro: sin base ni red.
  */
 
-/** De dónde puede salir una cifra: el vocabulario de outbound_angle.proof_sources (0037). */
+/** De dónde puede salir una cifra: el vocabulario de outbound_angle.proof_sources (0046). */
 export const CLAIM_SOURCES = [
   'creator_profile', 'creator_baseline', 'post_score', 'media_kit', 'campaign_result', 'signal', 'quote',
 ] as const;

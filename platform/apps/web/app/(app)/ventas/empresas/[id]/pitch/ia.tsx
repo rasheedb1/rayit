@@ -46,7 +46,7 @@ export function PanelIA({
 }: {
   status: AiStatus;
   pending: PendingDraft | null;
-  /** La IA no pudo con el último pedido (0058). */
+  /** La IA no pudo con el último pedido (0063). */
   failed?: boolean;
   hasBody: boolean;
   hasContact: boolean;

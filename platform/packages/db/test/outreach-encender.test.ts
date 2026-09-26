@@ -30,7 +30,7 @@ before(async () => {
                                                           ('${WS_B}', 'encender-b', 'Encender B', 'America/Bogota');
     INSERT INTO outbound_policy (workspace_id, postal_address, enabled) VALUES ('${WS_A}', 'Calle 93 # 11-26, Bogotá', true),
                                                                                ('${WS_B}', 'Calle 1 # 2-3, Bogotá', true);
-    -- Sin un canal conectado no se enciende (0037 §8.5).
+    -- Sin un canal conectado no se enciende (0046 §8.5).
     INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, status)
     VALUES ('${WS_A}', 'email', 'gmail_oauth', 'laura@encender-a.test', 'connected'),
            ('${WS_B}', 'email', 'gmail_oauth', 'laura@encender-b.test', 'connected');

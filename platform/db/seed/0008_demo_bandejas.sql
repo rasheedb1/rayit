@@ -11,14 +11,14 @@
 --   * su copia en outbound_message, como la deja recordSent: la misma
 --     cuenta, el mismo hilo, el mismo Message-ID y la hora del envío;
 --   * la fuente de la intención de las dos respuestas ya clasificadas
---     (0064: intent_source), para que la bandeja diga quién las clasificó.
+--     (0069: intent_source), para que la bandeja diga quién las clasificó.
 --
 -- Reglas del archivo (las de 0002 a 0007):
 --   * Idempotente: la copia entra una vez (la clave única del proveedor,
 --     outbound_message_provider_idx) y la fuente solo se llena si falta.
 --   * Nada nuevo que pase por real: son los mismos envíos del seed 0005,
 --     con sus mismas pruebas de proveedor (de .test).
---   * Requiere 0064, 0065 (automatic e intent_reason) y el seed 0005.
+--   * Requiere 0069, 0070 (automatic e intent_reason) y el seed 0005.
 --
 -- Y, desde la ronda 2 (abajo), los retenidos con su revisión, la
 -- dirección postal y los hilos de LinkedIn e Instagram.

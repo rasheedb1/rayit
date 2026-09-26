@@ -162,7 +162,7 @@ describe("guardarBrief", () => {
     expect(saveBrief).not.toHaveBeenCalled();
   });
 
-  it("si la base lo rechaza por el rol (0070 §5), lo dice igual, sin SQL", async () => {
+  it("si la base lo rechaza por el rol (0073 §5), lo dice igual, sin SQL", async () => {
     saveBrief.mockRejectedValue(new BriefError("Forbidden"));
     expect(await guardarBrief({}, datos())).toEqual({ message: E.Forbidden(L, null) });
   });

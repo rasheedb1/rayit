@@ -295,7 +295,7 @@ test('sin presupuesto no se llama al modelo; un toque que cambió durante la rev
   assert.deepEqual([sinPlata.generated, sinPlata.overBudget], [[], [t]]);
   assert.equal((await touch(t)).status, 'draft', 'el toque espera en borrador');
   await db.execAsSuperuser(`UPDATE outbound_policy SET llm_daily_cap_usd = 5 WHERE workspace_id = '${WS}'`);
-  // Sin presupuesto no es un fallo, pero tampoco se mira en cada corrida: espera media hora (0058).
+  // Sin presupuesto no es un fallo, pero tampoco se mira en cada corrida: espera media hora (0063).
   assert.deepEqual((await runGenerate(motor, { writers: fake, now: later, workspaceId: WS })).generated, []);
   const masTarde = () => new Date(later().getTime() + 31 * 60_000);
   assert.deepEqual((await runGenerate(motor, { writers: fake, now: masTarde, workspaceId: WS })).generated, [t]);
@@ -351,7 +351,7 @@ test('generar, editar a mano y revisar: el editor abre el borrador de la IA y lo
   assert.ok(![...r.scheduled, ...r.returned, ...r.held.map((h) => h.touchId)].includes(t), JSON.stringify(r));
   const after = await touch(t);
   assert.deepEqual([after.status, after.subject, after.body], ['draft', 'Lo escribo yo', 'Hola Sofía,\n\nEsto lo escribí yo, con mis palabras.\n\nLaura']);
-  // El marcado guarda las variables tal cual (0058): si cambia «Para», el saludo cambia con la persona.
+  // El marcado guarda las variables tal cual (0063): si cambia «Para», el saludo cambia con la persona.
   assert.deepEqual(await generationRow(t), { stage: 'reviewed', outcome: 'manual', body_marked: humano });
 });
 
@@ -395,7 +395,7 @@ test('no se redacta (ni se gasta) para quien tiene el correo rebotado o pidió l
   const calls = await db.asWorker(async (tx) => (await tx.query('SELECT 1 FROM outbound_llm_call WHERE touch_id = $1', [t])).rows);
   assert.equal(calls.length, 0);
 
-  // La baja de ESTE espacio (el enlace de baja de un correo, 0050) cuenta igual, en la cadencia y en lo que pide una persona.
+  // La baja de ESTE espacio (el enlace de baja de un correo, 0055) cuenta igual, en la cadencia y en lo que pide una persona.
   await newContact(MARTA_VITALE, VITALE, 'Marta Gil', 'marta.gil@vitale.co');
   const m = await enroll(MARTA_VITALE);
   await db.execAsSuperuser(

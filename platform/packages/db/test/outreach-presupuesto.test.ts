@@ -1,6 +1,6 @@
 /**
  * VEN-12 · pulido r1 · reservar el tope diario del modelo antes de
- * llamarlo (0072).
+ * llamarlo (0075).
  *
  * outbound.generate y outbound.review pueden correr a la vez en el mismo
  * espacio. Antes, los dos miraban el saldo, los dos pasaban con el mismo

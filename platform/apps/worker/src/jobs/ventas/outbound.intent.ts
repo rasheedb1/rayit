@@ -1,7 +1,7 @@
 /**
  * outbound.intent · la intención de cada respuesta nueva (VEN-14, §5.7).
  *
- * Cada tres minutos (0064):
+ * Cada tres minutos (0069):
  *   1. lo que tenía fecha de vuelta vuelve (resumeDueEnrollments): una
  *      pausa por «fuera de la oficina» a 'active', un «ahora no» de hace
  *      noventa días a la bandeja de aprobación. Corre también sin llave:
@@ -26,7 +26,7 @@
  * el mensaje queda ambiguo con un aviso. Un error de red lo deja sin
  * clasificar para la siguiente corrida. Sin ANTHROPIC_API_KEY (y sin el
  * falso) no se clasifica nada: la bandeja dice que la clasificación no
- * está encendida (outreach_classifier_status, 0065) y el job lo dice.
+ * está encendida (outreach_classifier_status, 0070) y el job lo dice.
  */
 import { anthropicLlmFromEnv } from '@mc/core/outreach/anthropic';
 import {

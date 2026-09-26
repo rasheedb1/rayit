@@ -12,16 +12,16 @@
  * Qué dejan:
  *   1. contact.email_invalid (con la fecha, el motivo y bounced), solo si
  *      la ficha SIGUE teniendo esa dirección: si alguien ya la corrigió, el
- *      rebote es de la vieja. Con la marca, 0050 §2 impide programarle un
+ *      rebote es de la vieja. Con la marca, 0055 §2 impide programarle un
  *      correo y enrollContacts salta sus pasos de correo, en cualquier
  *      secuencia y workspace que la tenga;
  *   2. los correos pendientes de esa ficha (draft, scheduled, held)
  *      cancelados con blocked_reason 'email_invalid'. Lo que está en
- *      processing es del despachador (0037 §4.1). LinkedIn e Instagram
+ *      processing es del despachador (0046 §4.1). LinkedIn e Instagram
  *      siguen: un rebote dice que la dirección no existe, no que la persona
  *      pidió no ser contactada (por eso tampoco va a contact_suppression);
  *   3. cada enrolamiento que se queda sin nada vivo termina en 'bounced'
- *      (0051 §7), no en 'completed' ni 'active' para siempre.
+ *      (0056 §7), no en 'completed' ni 'active' para siempre.
  */
 import type { SqlExecutor } from '../../client.ts';
 import { assertIds } from './shared.ts';

@@ -13,7 +13,7 @@ import type { SEQUENCE_STATUSES } from '../../schema/ventas.ts';
 // Límites
 // ---------------------------------------------------------------------
 
-/** Pasos como máximo en una secuencia (lo mismo que admite una plantilla, 0037). */
+/** Pasos como máximo en una secuencia (lo mismo que admite una plantilla, 0046). */
 export const MAX_STEPS = 12;
 /** Pasos como máximo en un mismo día. */
 export const MAX_STEPS_PER_DAY = 4;

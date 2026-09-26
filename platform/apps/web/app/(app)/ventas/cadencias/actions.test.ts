@@ -258,7 +258,7 @@ describe("activar (el segundo clic)", () => {
       proposal: { contactId: CAMILA, dealId: DEAL }, proposalContact: { id: CAMILA, name: "Camila Rojas" }, enrollments: { total: 0 },
       signal: { companyId: FRESKO }, steps: PASOS_CAMPANA.map((stepType) => ({ stepType })),
     });
-    // Pulsó el enlace de baja de un correo del espacio: el disparador de 0050 rechazaría el enrolamiento y la activación entera.
+    // Pulsó el enlace de baja de un correo del espacio: el disparador de 0055 rechazaría el enrolamiento y la activación entera.
     q.optedOutAmong.mockResolvedValue(new Set([CAMILA]));
     enrollContacts.mockRejectedValue(Object.assign(new Error("check_violation"), { code: "23514" }));
     const r = await activarCadencia(SEQ);

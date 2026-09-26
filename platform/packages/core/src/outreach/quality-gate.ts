@@ -46,7 +46,7 @@ export interface QualityGateDeps {
   /**
    * Aparta la estimación de la llamada del tope diario, si alcanza, y
    * devuelve el id de la reserva (null si no alcanza). Con ella, dos jobs
-   * que corren a la vez no gastan el mismo saldo (0072). Opcional: sin
+   * que corren a la vez no gastan el mismo saldo (0075). Opcional: sin
    * ella, se pregunta remainingBudgetUsd como antes.
    */
   reserveBudget?(purpose: LlmCallRecord['purpose'], estimateUsd: number): Promise<string | null>;

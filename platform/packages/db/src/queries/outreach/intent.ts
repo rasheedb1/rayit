@@ -38,7 +38,7 @@
  * cooldown_over), replanificados desde hoy: nada sale sin una persona.
  * Nada queda pausado para siempre.
  *
- * Nada se paga dos veces (0065): la decisión del clasificador se guarda
+ * Nada se paga dos veces (0070): la decisión del clasificador se guarda
  * con su gasto (recordClassification) antes de aplicar los efectos; si
  * aplicarlos falla, la corrida siguiente solo reintenta los efectos, y al
  * tercer fallo (failIntentAttempt) la respuesta queda ambigua para una
@@ -105,7 +105,7 @@ export interface UnclassifiedMessage {
   previousOutbound: string | null;
   /** Las cabeceras dijeron que es automática; null, el canal no lo dice. */
   automatic?: boolean | null;
-  /** La decisión ya pagada que falta aplicar (0065): se reintentan solo los efectos. */
+  /** La decisión ya pagada que falta aplicar (0070): se reintentan solo los efectos. */
   pendingDecision?: IntentDecision | null;
   /** Cuántas veces falló aplicarla. */
   attempts?: number;
@@ -798,7 +798,7 @@ export interface ResumeReport {
 
 /**
  * Lo que tenía fecha de vuelta, vuelve (ver la cabecera). Las pausas sin
- * fecha (las de stop_company_on_reply, 0054) no se tocan: las reanuda una
+ * fecha (las de stop_company_on_reply, 0059) no se tocan: las reanuda una
  * persona.
  */
 export async function resumeDueEnrollments(tx: WorkerSql, now: Date, workspaceId?: string): Promise<ResumeReport> {

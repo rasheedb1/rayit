@@ -67,7 +67,7 @@ async function enlaceDeBajaDeLaDemo(db: Db): Promise<string> {
 function getDb(): Promise<{ db: Db; mode: DbMode }> {
   if (!globalThis.__mcDb) {
     // Sin Supabase Auth no existe ningún usuario: las reglas por rol que
-    // fallan cerradas (outreach_can_manage, 0038 §7) necesitan la bandera
+    // fallan cerradas (outreach_can_manage, 0055 §7) necesitan la bandera
     // explícita app.auth_disabled. Con Auth configurado no se fija nunca.
     globalThis.__mcDb = createDbFromEnv(process.env, { authDisabled: authConfig() === null }).then(async (r) => {
       if (r.mode === "embedded") {

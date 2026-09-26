@@ -21,7 +21,7 @@
  *     el reclamo) y el semáforo dice ok, near, full u off (cuenta caída o
  *     envío apagado);
  *   · la salud de la secuencia cuadra con el embudo;
- *   · ronda 4 (0067 §1b): la cola y el embudo numeran el paso con la misma
+ *   · ronda 4 (0072 §1b): la cola y el embudo numeran el paso con la misma
  *     regla, una respuesta «me interesa» sin replied_at no es positiva, y
  *     getQueueBlockers dice qué para la cola como la para el reclamo.
  */
@@ -164,7 +164,7 @@ before(async () => {
                                 status, sent_at, recipient_address, provider_message_id, replied_at, status_changed_at)
     VALUES ('${id('7b')}', '${WS_B}', '${CO_B}', '${contact(9)}', '${SEQ_B}', '${enrollment(9)}', '${STEP.b1}', 'email', 'Hola', 'Hola.',
             'sent', now() - interval '2 days', 'b@marca-b.test', 'prov-b', now() - interval '1 day', now() - interval '2 days');
-    -- El enlace de baja del correo que está en processing (0037 §4.5).
+    -- El enlace de baja del correo que está en processing (0046 §4.5).
     INSERT INTO outbound_optout_link (token_hash, workspace_id, touch_id, contact_id, attempt, recipient_address, claimed_at)
     VALUES (repeat('b', 64), '${WS_A}', '${touch(7, 2)}', '${contact(7)}', 1, 'c7@marca.test', now());
   `);
@@ -494,7 +494,7 @@ describe('la cola y el historial (outbound_queue)', () => {
     assert.equal(await block({ status: 'scheduled', blocked_reason: 'bounced' }), null, 'lo que no está fallido no se bloquea');
   });
 
-  test('un fallido que ya gastó los intentos no vuelve: el reclamo lo subiría por encima del CHECK de 0037', async () => {
+  test('un fallido que ya gastó los intentos no vuelve: el reclamo lo subiría por encima del CHECK de 0046', async () => {
     await t.admin(`
       INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, subject, body, status, blocked_reason,
                                   attempt_count, scheduled_for, status_changed_at)
@@ -843,7 +843,7 @@ describe('cada rama del bloqueo del reintento, con filas reales (outbound_touch_
       INSERT INTO contact_suppression (email, reason) VALUES ('global@marca-d.test', 'complaint');
       UPDATE contact SET email_invalid = true, email_invalid_at = now(), email_invalid_reason = 'bounced' WHERE id = '${P.invalid}';
       UPDATE outbound_sequence SET status = 'archived' WHERE id = '${SEQ_ARCH}';
-      -- La ficha pública compartida: el enlace la saca de ESTE espacio y no toca contact.opted_out (0050 §8.1).
+      -- La ficha pública compartida: el enlace la saca de ESTE espacio y no toca contact.opted_out (0055 §8.1).
       INSERT INTO outbound_workspace_optout (workspace_id, email, token_hash) VALUES ('${WS_D}', 'prensa@marca-publica.test', repeat('d', 64));
     `);
   }, SETUP_TIMEOUT);
@@ -949,7 +949,7 @@ describe('cada rama del bloqueo del reintento, con filas reales (outbound_touch_
   });
 });
 
-describe('la base también dice quién opera la cola (0067 §6, pulido r1)', () => {
+describe('la base también dice quién opera la cola (0072 §6, pulido r1)', () => {
   const WS_G = id('a6');
   const CO_G = id('c06');
   const P_G = id('d06');

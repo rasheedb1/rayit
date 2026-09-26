@@ -33,7 +33,7 @@
  *
  * A un estado autenticado (connected, needs_reconnect, error) solo llega
  * quien habló con el proveedor: el disparador
- * outreach_channel_account_worker_columns (0037 §2.1) lo exige con 42501.
+ * outreach_channel_account_worker_columns (0046 §2.1) lo exige con 42501.
  * La web escribe esos estados solo por las dos funciones de callback_de_canales, que no
  * ven más que el espacio de la transacción y piden la fila 'pending' del
  * nonce. El worker (keepalive) escribe directo con asWorker.
@@ -52,7 +52,7 @@ export type ChannelAccountStatus = (typeof CHANNEL_ACCOUNT_STATUSES)[number];
 
 /**
  * Los estados VIVOS de una cuenta (autenticada: conectada, por reconectar
- * o con error), el mismo vocabulario que el índice global de 0037 §2. La
+ * o con error), el mismo vocabulario que el índice global de 0046 §2. La
  * pantalla lo importa de aquí: una sola lista para la base y la web.
  */
 export { LIVE_CHANNEL_ACCOUNT_STATUSES };
@@ -327,7 +327,7 @@ export class ChannelCapError extends Error {
 }
 
 /**
- * El techo del CHECK de 0037 por canal y, para el correo, por dirección:
+ * El techo del CHECK de 0046 por canal y, para el correo, por dirección:
  * un Gmail personal (@gmail.com, @googlemail.com) tiene el suyo. Sin
  * dirección, el de Google Workspace. El máximo de una cuenta concreta,
  * con la política, es el de la vista (getChannelLimits).
@@ -446,7 +446,7 @@ export async function createPendingChannelAccount(
 // El callback del proveedor, desde la web (callback_de_canales)
 // ---------------------------------------------------------------------
 // La web es mc_app y no puede escribir un estado autenticado (el
-// disparador de 0037 §2.1). Lo hace por las dos operaciones con nombre
+// disparador de 0046 §2.1). Lo hace por las dos operaciones con nombre
 // de callback_de_canales, que solo ven el workspace de la transacción. Quien llama ya
 // verificó el estado firmado y habló con el proveedor con su llave.
 
@@ -556,7 +556,7 @@ export async function getReconnectableGmail(tx: WorkspaceTx, accountId: string):
  * La conexión que empezó con ese nonce no se completó: la pendiente queda
  * 'disconnected' con el motivo (CHANNEL_ERROR_CODES), para que la
  * pantalla lo diga. mc_app puede: ni el estado ni last_error son de los
- * candados de 0037.
+ * candados de 0046.
  */
 export async function failPendingChannelAccount(
   tx: WorkspaceTx,

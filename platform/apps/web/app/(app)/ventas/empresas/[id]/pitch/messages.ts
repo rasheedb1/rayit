@@ -104,7 +104,7 @@ export const PITCH = {
      */
     reintento: (code: string | null): string => {
       if (code === "llm_budget") return "Se agotó el presupuesto de IA de hoy: lo retomamos mañana, o escríbelo tú.";
-      // 'aborted' y 'lease_lost' son los códigos de antes de 0058: se leen igual.
+      // 'aborted' y 'lease_lost' son los códigos de antes de 0063: se leen igual.
       if (code === "interrupted" || code === "aborted" || code?.includes("lease_lost") || code?.includes("touch_not_draft")) {
         return "Se interrumpió; lo retomamos en unos minutos.";
       }

@@ -64,7 +64,7 @@ test('guidanceAfterRetype: la guía que escribió la persona se queda, marcada p
   const r = guidanceAfterRetype(mia, 'linkedin_message', ctx);
   assert.deepEqual(r, { guidance: mia.guidance, source: 'person', writtenFor: 'email' });
   assert.equal(guidanceIsStale(r, 'linkedin_message'), true);
-  // Una fila anterior a 0062 (sin fuente) tampoco se pisa.
+  // Una fila anterior a 0067 (sin fuente) tampoco se pisa.
   assert.equal(guidanceAfterRetype({ ...mia, source: null }, 'linkedin_message', ctx).guidance, mia.guidance);
   // Sin cambio de tipo, nada cambia.
   assert.deepEqual(guidanceAfterRetype({ ...mia, source: 'template' }, 'email', ctx), { guidance: mia.guidance, source: 'template', writtenFor: 'email' });

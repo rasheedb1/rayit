@@ -4,13 +4,13 @@
  *
  * main borró membership.role (pasa a role_id → role). Las pruebas del
  * motor y de Ventas tienen que correr igual sobre la serie de esta rama
- * (con role) y sobre la integrada (main más la renumerada, con role_id):
- * si no, `pnpm verificar` después de renumerar no dice nada. El SQL que
- * devuelve elige la forma al correr, como membership_is_team (0055).
+ * (con role) y sobre la integrada (main más esta serie detrás, con role_id):
+ * si no, `pnpm verificar` después de mezclar main no dice nada. El SQL que
+ * devuelve elige la forma al correr, como membership_is_team (0060).
  *
  *   owner  → 'owner' / owner
- *   member → 'member' / editor (creador) o manager (agencia), el relleno de 0034
- *   client → 'client' / viewer, el relleno de 0034
+ *   member → 'member' / editor (creador) o manager (agencia), el relleno de 0034_access_control
+ *   client → 'client' / viewer, el relleno de 0034_access_control
  */
 export type MembershipKind = 'owner' | 'member' | 'client';
 

@@ -486,7 +486,7 @@ describe('VEN-7 r2 · quién cambia el brief, y la traza', () => {
     `);
   }, SETUP_TIMEOUT);
 
-  test("un 'member' lo lee pero no lo cambia: la base lo rechaza (0070 §5) y vuelve como Forbidden", async () => {
+  test("un 'member' lo lee pero no lo cambia: la base lo rechaza (0073 §5) y vuelve como Forbidden", async () => {
     const antes = await como(MIEMBRO, (tx) => getBrief(tx, CREADORA));
     assert.ok(antes, 'lo lee todo el espacio');
     await assert.rejects(
@@ -549,7 +549,7 @@ describe('VEN-7 r2 · con dos creadores, el radar oculta solo lo que ninguno ace
 
   before(async () => {
     await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
-    // Sara, del mismo espacio, con su brief activo (uno por creador, 0070 §1): no acepta alcohol ni apuestas.
+    // Sara, del mismo espacio, con su brief activo (uno por creador, 0073 §1): no acepta alcohol ni apuestas.
     await t.admin(`
       INSERT INTO creator_profile (id, workspace_id, display_name, country)
       VALUES ('${SARA}', '${WS_BRIEF}', 'Sara · fitness', 'CO') ON CONFLICT DO NOTHING;
@@ -713,7 +713,7 @@ describe('VEN-7 r3 · el veredicto no recorre el catálogo: 2 000 empresas y 100
   // la vez, una corrida sana pasaba de los topes); el plan no. Con
   // 2 000 empresas y ANALYZE, Postgres ya elige índice si puede: si una
   // búsqueda deja de poder usarlo (una condición no leakproof bajo RLS,
-  // 0071), el plan lo dice con un Seq Scan sobre company. La medición de
+  // 0074), el plan lo dice con un Seq Scan sobre company. La medición de
   // tiempo sigue, pero solo con MC_PERF=1.
   const WS_PERF = '00000009-0000-4000-8000-00000000b7f1';
   const CREADOR_PERF = '00000009-0000-4000-8000-00000000b7f2';
@@ -789,10 +789,10 @@ describe('VEN-7 r3 · el veredicto no recorre el catálogo: 2 000 empresas y 100
     );
     const indices = new Set(plan.map((n) => n['Index Name']).filter(Boolean));
     const usados = [...indices].join(', ');
-    // Por id: la llave primaria. Por dominio: el índice de 0071.
+    // Por id: la llave primaria. Por dominio: el índice de 0074.
     assert.ok(indices.has('company_pkey'), `por id usa company_pkey (usó: ${usados})`);
     assert.ok(indices.has('company_domain_text_idx'), `por dominio usa company_domain_text_idx (usó: ${usados})`);
-    // Por nombre, dentro del CRM: o el de name_key (0071) o, cuando el CRM
+    // Por nombre, dentro del CRM: o el de name_key (0074) o, cuando el CRM
     // es chico, la llave de company_link y luego la de company. Las dos
     // son búsquedas por índice; lo que no puede aparecer es el Seq Scan de
     // arriba (hasta la ronda 2, brand_key(co.name) bajo RLS no usaba ninguno).

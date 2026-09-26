@@ -81,7 +81,7 @@ export const MESSAGES = {
     limpiar: "Quitar filtros",
   },
 
-  /** El nombre de cada estado de outbound_touch (0037), para la pastilla. */
+  /** El nombre de cada estado de outbound_touch (0046), para la pastilla. */
   estados: {
     draft: "Borrador",
     scheduled: "Programado",

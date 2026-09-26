@@ -3,7 +3,7 @@
  * avisos que deja el job outbound.intent y la siguiente acción que pone
  * en el negocio, en el idioma del workspace (noticeLang). Los guarda la
  * base ya escritos, como los demás avisos del motor (notification.title_es
- * y body_es, 0038 §4); la bandeja los traduce desde el código de la
+ * y body_es, 0055 §4); la bandeja los traduce desde el código de la
  * intención, no desde estas frases.
  *
  * Aparte de messages.ts (VEN-10) para que cada pieza tenga su archivo.

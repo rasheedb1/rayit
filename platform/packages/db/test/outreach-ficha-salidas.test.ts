@@ -5,7 +5,7 @@
  *     no se «aprueba»: releaseHeldTouch responde no_thread, y la salida
  *     es saltar el paso; el paso de detrás sale;
  *   · una cadencia en pausa porque otra persona de la marca respondió
- *     (0054) se reanuda: vuelve a 'active' y lo vencido sale desde ahora;
+ *     (0059) se reanuda: vuelve a 'active' y lo vencido sale desde ahora;
  *   · la alerta «no sale nada» no cuenta lo que espera a una persona (lo
  *     de una cadencia en pausa, lo que va detrás de un retenido);
  *   · resolver un intento sin confirmar es del equipo, no de un cliente

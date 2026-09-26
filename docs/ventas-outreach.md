@@ -75,7 +75,7 @@ el suyo.
 | Pieza de Chief | Dónde queda en MultiCampaign | Qué cambia |
 |---|---|---|
 | Cola `schedules`: reclamo atómico con `UPDATE … WHERE status='scheduled'`, índice único parcial, recuperación de zombis a los cinco minutos, deduplicación en tres capas, guardia de tiempo de ejecución | `outbound_touch` deja de ser solo el registro del envío y pasa a ser la cola: una fila por contacto y paso, con `status` de máquina de estados | Se añade `attempt_count` y `next_retry_at`: Chief no reintenta nada, un fallo de red mata el paso |
-| Funciones `increment_if_under_cap` e `increment_weekly_*` por `action_type` | Migración `0037_outreach.sql`, mismas funciones por workspace | Se corrige el bloqueo: el `FOR UPDATE` de la semanal bloquea la fila de hoy pero cuenta la semana entera |
+| Funciones `increment_if_under_cap` e `increment_weekly_*` por `action_type` | Migración `0046_outreach.sql`, mismas funciones por workspace | Se corrige el bloqueo: el `FOR UPDATE` de la semanal bloquea la fila de hoy pero cuenta la semana entera |
 | Cliente de Unipile: petición genérica, clasificación de errores («no conectado», «ya conectado») | `packages/connectors/unipile.ts` | Se extiende a `INSTAGRAM`; hosted auth con estado firmado, nunca «reclamar cuentas sin dueño» |
 | Envío por Gmail: MIME con RFC 2047 para acentos, multipart para adjuntos, refresco perezoso del token con dos minutos de margen | `packages/connectors/gmail.ts` | `In-Reply-To` y `References` con el `Message-ID` real, no con el `threadId` de Gmail (bug que rompe hilos fuera de Gmail) |
 | Keepalive diario del token de Google | Job `ventas/canales.keepalive` | Una sola fila por concesión; Chief guarda el mismo refresh token en cuatro sitios y el keepalive deja uno caducado |
@@ -202,7 +202,7 @@ dice al enrolar, con los pasos concretos:
 Qué cambia —la plantilla o los valores por defecto— lo decide Rasheed
 (§8, pregunta 6).
 
-### 5.2 El modelo de datos: migración `0037_outreach.sql` (en el plan original, «0015»)
+### 5.2 El modelo de datos: migración `0046_outreach.sql` (en el plan original, «0015»)
 
 Lo que ya existe y se queda: `company`, `contact` (con `opted_out`
 global y `source` obligatoria), `company_link`, `signal`, `deal`,
@@ -230,8 +230,8 @@ Funciones: `increment_if_under_cap`, `increment_weekly`,
 `outbound_health(workspace, hours)`.
 
 **Cómo quedó (VEN-9, 23 de septiembre).** La migración es
-`platform/db/migrations/0037_outreach.sql`: el número 0015 lo tomó
-`connection_secret` y las fases 1 a 3 llegaron hasta 0036. Además de lo
+`platform/db/migrations/0046_outreach.sql`: el número 0015 lo tomó
+`connection_secret` y las fases 1 a 3 llegaron hasta 0045. Además de lo
 de arriba trae `outbound_sequence_template` (plantillas globales de solo
 lectura, con «Marca con campaña activa»), `outbound_llm_call` (cada
 llamada al modelo), `outbound_optout_link` (la prueba del enlace de
@@ -280,7 +280,7 @@ Decisiones que las piezas siguientes tienen que conocer:
   `outreach_default_llm_daily_cap()` (5,00 USD). Sin política,
   `outbound_health` devuelve ese mismo valor, no 0.
 - Antes de cada llamada, outbound.generate y outbound.review apartan su
-  estimación en `outbound_llm_reservation` (0072) con un candado de
+  estimación en `outbound_llm_reservation` (0075) con un candado de
   transacción por espacio (`reserveLlmBudget`): comprobar el saldo y
   apartarlo son una sola cosa, y dos jobs a la vez ya no gastan el mismo
   saldo. Registrar la llamada (`recordOutreachLlmCall` con su
@@ -324,7 +324,7 @@ Decisiones que las piezas siguientes tienen que conocer:
   su ficha o su workspace sigan existiendo (CAN-SPAM pide al menos 30
   días; aquí no caduca). `public_optout` busca ahí y solo ahí.
 - `public_optout` es de `mc_public_share`, como los enlaces de Cotizar.
-  En 0037 daba de baja a la persona en toda la plataforma
+  En 0046 daba de baja a la persona en toda la plataforma
   (`contact_suppression`, todas las fichas con esa dirección en cualquier
   workspace). **Desde entregabilidad §8 (VEN-15) vale para el workspace que envió
   ese correo, en todos sus canales, y nunca para toda la plataforma** (ver
@@ -773,13 +773,13 @@ reintentos, guardia de huecos, detector de bajas, textos de los avisos),
 las consultas en `packages/db/src/queries/outreach/` (enrolar, reclamar,
 enviar, respuestas, rebotes, la ficha) y los jobs en
 `apps/worker/src/jobs/ventas/` (`outbound.dispatch` cada dos minutos,
-`outbound.replies` cada cinco, `outbound.bounces` cada treinta, 0051).
-Sus migraciones son `0051_motor_cadencias.sql`, `0052_motor_ritmo.sql`,
-`0053_motor_intento_sin_confirmar.sql` y `0054_respuesta_detiene_la_marca.sql`.
+`outbound.replies` cada cinco, `outbound.bounces` cada treinta, 0056).
+Sus migraciones son `0056_motor_cadencias.sql`, `0057_motor_ritmo.sql`,
+`0058_motor_intento_sin_confirmar.sql` y `0059_respuesta_detiene_la_marca.sql`.
 Lo que hace hoy, por partes:
 
 - **Enrolar** (`enrollContacts`). Solo fichas del workspace de la
-  secuencia (`contact_visible_to`, 0051 §5). Cada paso nace con su hora
+  secuencia (`contact_visible_to`, 0056 §5). Cada paso nace con su hora
   (días hábiles, zona de la secuencia o del workspace, ventana laboral de
   la política y una dispersión determinista) y su estado: `draft` si lo
   completa una persona o el generador, `skipped` sin dirección (o con el
@@ -799,7 +799,7 @@ Lo que hace hoy, por partes:
   separación con la marca y el ritmo por hora de la cuenta se leen de lo
   ya confirmado y dos reclamos a la vez (el cron y un `job:dispatch` a
   mano) leerían lo mismo; `outbound.dispatch` declara `max_concurrency =
-  1` (0055). Lo prueba `packages/db/test/outreach-reclamo` contra
+  1` (0060). Lo prueba `packages/db/test/outreach-reclamo` contra
   Postgres 16 en el CI. Sin gastar intento: fuera de la ventana → a la apertura; un paso
   anterior sin salir → espera; sin cuenta conectada → espera una hora con
   un aviso por canal y día; la marca con `max_touches_per_company`
@@ -830,7 +830,7 @@ Lo que hace hoy, por partes:
   webhook de Unipile y para el lector del motor). Una respuesta de
   verdad detiene a la persona en todas sus secuencias del workspace
   (`replied`, lo pendiente cancelado) y, con
-  `outbound_policy.stop_company_on_reply` (0054, encendido por defecto y
+  `outbound_policy.stop_company_on_reply` (0059, encendido por defecto y
   editable en `/ventas/politica`), pone en pausa las cadencias de las
   demás personas de la misma marca. Una baja marca las fichas propias
   del workspace con ese correo y cancela todo lo suyo; si la pide un
@@ -841,7 +841,7 @@ Lo que hace hoy, por partes:
 - **El intento sin confirmar.** En la ficha de la empresa, el bloque
   «Mensajes de la cadencia» enseña el asunto, las primeras líneas, la
   cuenta y el día del intento; «Sí, salió» lo anota como enviado
-  (`outreach_resolve_unconfirmed`, 0053) y «No salió: enviarlo» pide
+  (`outreach_resolve_unconfirmed`, 0058) y «No salió: enviarlo» pide
   confirmación antes de devolverlo a la cola. Un correo confirmado a mano
   no tiene hilo: la respuesta en el hilo del paso siguiente se retiene
   (`reply_without_thread`) y el lector de respuestas busca ese hilo en
@@ -868,49 +868,46 @@ Lo que hace hoy, por partes:
 La historia de cómo se llegó aquí (las rondas de revisión) está en el
 log de git de las ramas `rasheed/VEN-10-motor-cadencias*`.
 
-**Renumeración al integrar.** Supabase (`schema_migrations`) tiene la
-serie de main hasta `0042_metricas_al_corte_desempate.sql`. Las de esta
-rama que chocan con ella pasan, en su orden, a 0043–0049; 0050 a 0055 ya
-llevan su número final. Las rondas siguientes de VEN-9-canales traen
-`0041_canales_reclamar_al_soltar`, `0042_canales_identidad_y_rotacion` y
-`0043_contacto_codigo_de_baja`, que también chocan: al integrarlas van
-detrás de 0049 y antes de 0050, y el script se amplía con ellas. Lo hace
-`platform/scripts/renumerar-outreach.sh` (mueve los archivos y cambia las
-referencias por nombre en las pruebas), después de mezclar main y antes de `make
-db.check`:
-
-| En esta rama | Al integrar |
-|---|---|
-| `0034_seguimientos.sql` | `0043_seguimientos.sql` |
-| `0035_zona_del_espacio_valida.sql` | `0044_zona_del_espacio_valida.sql` |
-| `0036_siguiente_accion_fijada.sql` | `0045_siguiente_accion_fijada.sql` |
-| `0037_outreach.sql` | `0046_outreach.sql` |
-| `0038_canales_outreach.sql` | `0047_canales_outreach.sql` |
-| `0039_callback_de_canales.sql` | `0048_callback_de_canales.sql` |
-| `0040_canales_liberar_y_limites.sql` | `0049_canales_liberar_y_limites.sql` |
-| `0050_entregabilidad.sql` … `0055_motor_equipo_y_reclamo.sql` | igual |
+**Numeración (pulido r2, 26-sep-2026).** Supabase (`schema_migrations`)
+tiene la serie de main hasta `0042_metricas_al_corte_desempate.sql`
+(0034–0042: accesos, CAM y CON). La de integración va entera detrás, de
+`0043_seguimientos.sql` a `0075_presupuesto_llm_reservas.sql`, en el
+orden en que se escribió, y ninguna está aplicada en ningún sitio. Ya no
+hay renumeración al integrar: el script `renumerar-outreach.sh` se borró
+(su mapa movía siete de los doce archivos que chocaban y los mandaba a
+números que la propia rama ya usaba). Los números de antes del pulido r2
+eran: 0034–0045 → 0043–0054 (+9), 0050–0067 → 0055–0072 (+5) y
+0070–0072 → 0073–0075 (+3); el código, las pruebas y este documento ya
+citan los nuevos. `packages/db/test/aplicar.test.ts` («esta rama mezclada
+con main no repite número») corre `listSql` sobre la unión de
+`db/migrations` y las de `origin/main`, así que un choque nuevo sale en
+`pnpm verificar` y no en el integrador.
 
 **main borró `membership.role`.** `0034_access_control` (main, ya en
 Supabase) la cambia por `role_id → role` y convierte los `client` en
-`viewer`. El motor decide quién recibe un aviso (una respuesta, un toque
-retenido o fallido) y a qué dueños les llegan las alertas con
-`membership_is_team` y `membership_is_owner` (0055), que eligen su forma
-al aplicarse: con o sin `role_id`. Los fixtures de las pruebas dan de alta
-las membresías con `membershipSql` (`@mc/db/test/membresia`), que también
-funciona en las dos series. `make db.check` en verde no demuestra nada de
-esto: compila las migraciones, no el SQL de las consultas. Por eso el
-paso 1 corre `pnpm verificar` después de renumerar.
+`viewer`. Las cuatro funciones de esta serie que miran el rol eligen su
+forma al aplicarse, con o sin `role_id`: `outreach_can_manage` (0055 §7:
+owner, admin de agencia o mánager del creador), `membership_is_team` y
+`membership_is_owner` (0060) y `outreach_can_operate` (0072: todo rol
+que no sea `viewer` ni `finance`). Con eso la unión (0001–0042 de main y
+0043–0075 de esta serie) se aplica entera en Postgres embebido
+(comprobado el 26-sep-2026). Los fixtures de las pruebas dan de alta las
+membresías con `membershipSql` (`@mc/db/test/membresia`), que también
+funciona en las dos series. `make db.check` en verde no demuestra nada
+del SQL de las consultas: compila las migraciones. Por eso el paso 1
+corre `pnpm verificar` después de mezclar.
 
 **Lo que hace el integrador contra Supabase** (el «terminado cuando» de
 VEN-10), un comando por paso, desde `platform/`, con
 `W=00000002-0000-4000-8000-000000000001` (el workspace de la demo):
 
-1. Mezclar main, `./scripts/renumerar-outreach.sh`, **`pnpm verificar`**
-   (las pruebas del motor sobre la serie integrada; `db.check` no basta),
-   `make db.check`, `make db.migrate` (hasta 0055) y el seed. Al
-   resolver la mezcla de `packages/db/test/ventas.test.ts`, la lista de
-   responsables del seed de main trae también a Andrés Pardo (mánager,
-   0034): es del equipo y cuenta.
+1. La cola única del integrador: mezclar main, **`pnpm verificar`**
+   (las pruebas del motor sobre la serie integrada; `db.check` no
+   basta), `make db.check`, `make db.migrate` (aplica 0043…0075 en
+   orden), `make db.guardia` y los seeds. Al resolver la mezcla de
+   `packages/db/test/ventas.test.ts`, la lista de responsables del seed
+   de main trae también a Andrés Pardo (mánager, 0034_access_control):
+   es del equipo y cuenta.
 2. `./scripts/supabase-admin.sh sql "GRANT mc_worker TO mc_migrator"`.
 3. `pnpm --filter @mc/worker run job:dispatch -- --preparar-demo --workspace $W`:
    deja la demo como `--demo` con el reloj de verdad (la dirección
@@ -934,11 +931,11 @@ VEN-10), un comando por paso, desde `platform/`, con
    Hasta entonces las acciones de la ficha piden `puedeOperarVentas`
    (owner, admin, member) y las del interruptor `puedeCambiarLaPolitica`
    (owner, admin); en la base, `outreach_resolve_unconfirmed` exige
-   `membership_is_team` (0053, pulido r1), que con la serie de main deja
+   `membership_is_team` (0058, pulido r1), que con la serie de main deja
    fuera al rol `viewer`.
 
 **Pulido r1 (25-sep-2026), lo que cambió en el esquema de esta serie**
-(0037, 0042, 0051 y 0053, todas sin aplicar): la web no cambia `channel`,
+(0046, 0051, 0056 y 0058, todas sin aplicar): la web no cambia `channel`,
 `provider`, `warmup_started_at` ni `last_ok_at` de una cuenta, ni la
 vuelve a `pending`, ni borra una que se autenticó (sus contadores del día
 cuelgan de ella); no apaga `require_optout_link`; un Gmail personal tiene
@@ -952,7 +949,7 @@ trabaja de lunes a viernes).
 La prueba `outreach-demo.test.ts` corre los pasos 3 a 6 sobre Postgres
 embebido con las mismas migraciones y el mismo seed. El 25-sep-2026
 corrió también sobre la serie integrada (las 0034–0042 de main, los
-seeds mezclados y la renumeración): las pruebas del motor de
+seeds mezclados y la renumeración de entonces): las pruebas del motor de
 `apps/worker` pasan, `outreach-demo` incluida. Y los pasos 3 a 6, con el
 reloj de verdad, contra un Postgres 16 local migrado con esa serie y el
 seed (la ventana del workspace abierta a toda hora, porque eran las
@@ -1110,7 +1107,7 @@ el recomendador.
   claude-sonnet-5, de 25 s cada uno y sin reintentos del SDK (caben en
   el `maxDuration` de 60 s de la página); el tope diario se consulta
   antes de cada intento y cada llamada va a `outbound_llm_call` con
-  propósito `'profile'` (migración 0061) apenas responde. Si ninguno
+  propósito `'profile'` (migración 0066) apenas responde. Si ninguno
   pasa, sin llave o con el tope alcanzado, la plantilla determinista,
   que cita la mediana de la red del mejor video y la de su corte. Los
   países de la narrativa y del prompt se nombran en el idioma de la
@@ -1240,9 +1237,9 @@ campaña activa, temporada).
   `jobs` son campaña activa; `press`, lanzamiento; `season`, temporada;
   `collab`, colaboración de un competidor (nunca se nombra); lo demás,
   manual.
-- **Migración `0062_recomendador_cadencias.sql`** (nació como 0056; al
-  integrar la fase 5 VEN-12 conservó 0056–0060, VEN-11 tomó 0061 y las
-  dos de VEN-13 pasaron a 0062 y 0063; ninguna depende de la otra): `outbound_sequence.signal_id` (con su referencia
+- **Migración `0067_recomendador_cadencias.sql`** (la generación de VEN-12 es
+  0061–0065, el perfil de VEN-11 0066 y las dos de VEN-13 0067 y 0068;
+  ninguna depende de la otra): `outbound_sequence.signal_id` (con su referencia
   visible) y `proposal` (la propuesta en códigos), y siete plantillas:
   lanzamiento, temporada, colaboración de un competidor, señal manual,
   cocina con campaña activa, belleza con lanzamiento y fitness con
@@ -1335,8 +1332,8 @@ campaña activa, temporada).
 - **El cierre pide solo el activo que declara (r4)**: las guías de
   síntesis dicen «enlaza el media kit y, si tienes una cotización
   pública, su enlace» (o al revés en las de temporada, que declaran la
-  cotización), para que quien revisa pueda vigilar lo que exigen. 0062
-  corrige también la de «Marca con campaña activa» de 0037, con una
+  cotización), para que quien revisa pueda vigilar lo que exigen. 0067
+  corrige también la de «Marca con campaña activa» de 0046, con una
   política de actualización del catálogo solo para quien migra.
 - **Las notas guardadas se leen con zod (r4)**: `ProposalNote` y la
   propuesta guardada son esquemas de `@mc/core`
@@ -1351,7 +1348,7 @@ campaña activa, temporada).
   correo del espacio) antes de llamar a `enrollContacts`. Si la persona
   pulsó la baja entre «Proponer» y «Activar», la cadencia se activa sin
   ella y lo dice; en un lote, esa persona sale entre las saltadas y las
-  demás entran. Sin esto, el disparador de 0050 revertía la transacción
+  demás entran. Sin esto, el disparador de 0055 revertía la transacción
   entera y la cadencia no se podía activar nunca. Quién está viva en
   otra cadencia se pregunta en una sola consulta para todo el lote
   (`liveEnrollmentsElsewhere`).
@@ -1360,8 +1357,8 @@ campaña activa, temporada).
   tarea a mano) no se redacta. La pantalla (`sinTexto`), la base
   (`TEXTLESS_STEP_TYPES`, que el recomendador, las plantillas copiadas,
   «Añadir paso» y el editor usan para dejar `generate_with_ai` en false)
-  y «Activar» al contar gestos a mano usan la misma regla. 0063 afloja
-  el CHECK de `outbound_step` de 0037 para que un comentario pueda
+  y «Activar» al contar gestos a mano usan la misma regla. 0068 afloja
+  el CHECK de `outbound_step` de 0046 para que un comentario pueda
   guardarse sin generación ni texto fijo, y apaga la generación de los
   que ya había. La reacción tiene su propia guía («reacciona a su última
   publicación…; no comentes ni escribas»): comentar es otro paso. El
@@ -1427,7 +1424,7 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   contra los últimos 20 enviados del mismo tipo en el mismo espacio
   (0,65 directos, 0,80 correo); C, al escribir el resultado: el toque
   sigue en borrador, el turno sigue siendo del job, su cuerpo sigue
-  siendo el que había cuando el job lo tomó (`base_body_md5`, 0057: si
+  siendo el que había cuando el job lo tomó (`base_body_md5`, 0062: si
   una persona escribió, manda lo suyo, código `edited_by_person`) y el
   mismo texto no le llegó ya a esa persona.
 - **Generador y juez** (`generate.ts`, `judge.ts`, prompts en
@@ -1444,7 +1441,7 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   la rúbrica, y «enviar el mejor». Antes de cada llamada mira lo que
   queda del tope diario (`outbound_health`), y cada llamada deja su fila
   en `outbound_llm_call` en su propia transacción.
-- **Los jobs** (`0056_generacion_trazable.sql`): `outbound.generate`
+- **Los jobs** (`0061_generacion_trazable.sql`): `outbound.generate`
   (cada dos minutos) redacta los borradores con `generate_with_ai` cuya
   hora cae en el próximo día y cuyos pasos anteriores ya salieron, y los
   deja en `outbound_generation` con sus marcas; `outbound.review`
@@ -1468,7 +1465,7 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   puede con una cifra sin origen; «Copiar» copia el texto limpio y lo
   guarda como borrador.
 
-#### Ronda 2 (0057)
+#### Ronda 2 (0062)
 
 - **Lo que escribe una persona manda.** Guardar el pitch
   (`savePitch`) guarda también su marcado con las `[claim:id]` en
@@ -1497,7 +1494,7 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   creador del mismo espacio no se ofrecen ni pasan el pre-vuelo. El
   negocio del pitch tiene que ser de la empresa.
 
-#### Ronda 3 (0058)
+#### Ronda 3 (0063)
 
 - **Lo que el pre-vuelo no veía.** Un multiplicador delante («crecieron
   x3», «×2»), «3-fold», los puntos porcentuales («5 pp») y los puestos
@@ -1549,7 +1546,7 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   «Redactar con IA» lo redacta el redactor falso en el mismo proceso,
   por el mismo camino (`redactRequestedInProcess`).
 
-#### Ronda 4 (0059)
+#### Ronda 4 (0064)
 
 - **Las cifras en palabras que se escapaban.** Un porcentaje escrito con
   palabras («el ochenta por ciento», «eighty percent», «80 per cent»),
@@ -1595,7 +1592,7 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   exacto y calla con el editor vacío. La nota del juez falso nombra las
   dimensiones de la rúbrica en el idioma del espacio.
 
-#### Ronda 5 (0060)
+#### Ronda 5 (0065)
 
 - **El camino principal no pierde el pitch.** El editor se monta de
   nuevo solo cuando la IA trae un borrador nuevo o se pone a redactar
@@ -1633,7 +1630,7 @@ Igual que en Chief, dos niveles, y el segundo con rúbrica en tabla:
   dicen «58 %» igual.
 - **La marca también es dato de fuera.** El juez recibe el nombre y el
   sector entre `<marca>` y `<sector>`, como el generador.
-- **Quién pidió el borrador lo dice la sesión.** 0060 rehace
+- **Quién pidió el borrador lo dice la sesión.** 0065 rehace
   `outbound_generation_request` con la misma firma: `requested_by` es
   `current_user_id()`; sin sesión, `p_user` solo vale si es miembro del
   espacio.
@@ -1663,7 +1660,7 @@ Nada queda pausado para siempre.
 
 #### Cómo quedó (VEN-14)
 
-Migración `0064_bandejas.sql` (sin aplicar en Supabase: la aplica el
+Migración `0069_bandejas.sql` (sin aplicar en Supabase: la aplica el
 integrador), seed `0008_demo_bandejas.sql` con su verify, y tres piezas:
 
 - **La intención** (`@mc/core/outreach/intent`, prompt en
@@ -1677,7 +1674,7 @@ integrador), seed `0008_demo_bandejas.sql` con su verify, y tres piezas:
   (`createFakeIntentClassifier`, reglas de palabras en español, inglés y
   portugués, y el mismo detector de bajas de VEN-10) es para las pruebas,
   la demo y `OUTREACH_WRITER=fake`.
-- **El job `outbound.intent`** (cada tres minutos, 0064). Primero devuelve
+- **El job `outbound.intent`** (cada tres minutos, 0069). Primero devuelve
   lo que tenía fecha: una pausa por «fuera de la oficina» vuelve a
   `active`; un enfriamiento que terminó devuelve sus mensajes cancelados a
   la bandeja de aprobación, replanificados desde ese día y retenidos con
@@ -1726,7 +1723,7 @@ integrador), seed `0008_demo_bandejas.sql` con su verify, y tres piezas:
     intención de cada respuesta y quién la clasificó, la fecha de vuelta
     de un «fuera de la oficina» y «Crear contacto» para un referido.
     Abrir el hilo lo marca leído. **Responder no envía desde la web**: deja
-    UN toque programado sin enrolamiento con `reply_to_message_id` (0064),
+    UN toque programado sin enrolamiento con `reply_to_message_id` (0069),
     con el id que trae el formulario (el mismo envío repetido no crea otro
     mensaje). El despachador lo envía en el hilo de ese mensaje (en correo,
     como `email_reply` con In-Reply-To y «Re:»), solo por la cuenta que lo
@@ -1734,7 +1731,7 @@ integrador), seed `0008_demo_bandejas.sql` con su verify, y tres piezas:
     de mensajes y los días entre uno y otro son para escribir en frío).
     Los avisos de una respuesta llevan a su hilo.
 
-Decisiones que la integración tiene que conocer: `0064` pone
+Decisiones que la integración tiene que conocer: `0069` pone
 `assert_reference_visible` en sus dos claves nuevas
 (`reply_to_message_id`, `referral_contact_id`) y un disparador que exige
 que la respuesta apunte a un mensaje entrante de la misma ficha, canal y
@@ -1745,7 +1742,7 @@ una marca en la política. Las otras cadencias de la misma marca que una
 respuesta pausó (`stop_company_on_reply`) no se tocan: las reanuda una
 persona.
 
-#### Ronda 2 (0065)
+#### Ronda 2 (0070)
 
 - **El lote es justo y nada se paga dos veces.** `listUnclassifiedInbound`
   reparte el lote entre workspaces (`INTENT_PER_WORKSPACE`, cinco de cada
@@ -1797,7 +1794,7 @@ persona.
   un referido (LinkedIn, con la cuenta caída), una ambigua (Instagram) y
   un «fuera de la oficina» automático (correo).
 
-#### Ronda 3 (0066)
+#### Ronda 3 (0071)
 
 - **La demo vive en fichas suyas.** El seed 0008 colgaba sus retenidos e
   hilos de Fresko, Granos del Valle, Café Alma, Nutrivé y Hogar Lindo y
@@ -1809,7 +1806,7 @@ persona.
   Instagram enseña «reconéctala para responder». verify/0008 (f) comprueba
   que nada del seed cuelga de una ficha ajena.
 - **«Deshacer» no confía en el navegador.** Aprobar guarda el motivo con
-  el que estaba retenido en `outbound_touch.approved_from_reason` (0066) y
+  el que estaba retenido en `outbound_touch.approved_from_reason` (0071) y
   `undoApproval` lo restaura desde ahí; la acción de la pantalla ya no lo
   acepta. «Saltar» solo toma lo que la cola ofrece (un retenido, o un
   borrador de cadencia con petición de regenerar). Con el envío apagado,
@@ -1919,7 +1916,7 @@ persona.
   está; un borrador regenerado que no se puede aprobar tal cual sigue
   como estaba (SAVEPOINT) y no queda retenido por «Revisión humana».
 
-#### Pulido r1 (0066, sin migración nueva)
+#### Pulido r1 (0071, sin migración nueva)
 
 - **Cualquier respuesta detiene el pitch suelto.** `stopOnReply` cancela
   lo programado a la ficha fuera de una cadencia (`replied`); si la
@@ -1938,7 +1935,7 @@ persona.
   en la URL (`router.replace`) y el siguiente render no salta al
   siguiente sin leer. Antes, a 1,5 s la bandeja entera estaba leída.
 - **«Regenerar» también para un seguimiento en el hilo** (`email_reply`):
-  0066 redefine `outbound_generation_request` para aceptarlo (nunca una
+  0071 redefine `outbound_generation_request` para aceptarlo (nunca una
   respuesta escrita en la bandeja); `outbound.generate` ya lo redacta como
   «Re:», sin asunto propio. El retenido de Vitalé de la demo (7,4) se
   puede regenerar.
@@ -2001,7 +1998,7 @@ sitios con la misma definición de «esta marca» y de «esta categoría»
   `briefCompanyVerdictSql` con el workspace del toque o de la secuencia
   explícito, para que el brief de un espacio nunca frene a otro.
 
-Cada brief es de un creador, con uno activo por creador (0070 §1),
+Cada brief es de un creador, con uno activo por creador (0073 §1),
 porque el recomendador ya lee el del creador del negocio (§5.5, r4). La
 pantalla edita el brief de UN creador: en una agencia, un selector
 (`?creador=id`) elige cuál, y `getBrief`/`saveBrief` reciben su id y
@@ -2047,7 +2044,7 @@ resuelve la marca de cada señal con tres búsquedas indexadas unidas con
 `UNION ALL` (id, dominio, nombre dentro del CRM), nunca con un `OR`
 sobre `company`. Bajo RLS, Postgres solo usa un índice si la condición
 es leakproof: ni `brand_key(co.name)` ni `citext = citext` lo son, así
-que 0071 agrega `company.name_key` (brand_key(name), calculada por la
+que 0074 agrega `company.name_key` (brand_key(name), calculada por la
 base) y un índice sobre `domain::text`. Medido: con 5 000 empresas en
 el catálogo y 100 señales, `countHiddenSignals` pasó de recorrer el
 catálogo por señal (28,6 s con 10 000) a unos 15 ms. Desde la ronda 4
@@ -2063,7 +2060,7 @@ Un brief en pausa no oculta ni frena nada. Es el brief de un creador,
 pero lo que excluye se oculta del radar de todo el equipo cuando lo
 excluyen todos los briefs activos, y frena las cadencias de sus
 negocios; por eso lo cambian owner y admin (la pantalla, la acción y las
-políticas RESTRICTIVE de 0070 con `outreach_can_manage`) y cada cambio
+políticas RESTRICTIVE de 0073 con `outreach_can_manage`) y cada cambio
 deja traza en `audit_log` (`ventas.brief.guardar`, antes y después).
 
 Las frases que dicen un tope del brief («hasta 30», «2.000
@@ -2076,7 +2073,7 @@ workspace si el brief no tiene mínimo) y una inválida es
 **El brief es de un creador (ronda 3).** Uno activo por creador: lo
 que excluye se oculta del radar de todo el equipo solo cuando lo
 excluyen todos los briefs activos, y frena las cadencias de los negocios
-de su creador. 0070 lo dice así en sus comentarios (corregidos en el
+de su creador. 0073 lo dice así en sus comentarios (corregidos en el
 pulido, antes de aplicarse), igual que `lib/auth/reglas.ts` y el JSDoc
 de `saveBrief`.
 
@@ -2172,7 +2169,7 @@ absorbe en VEN-12. Se agregan ocho:
 
 | Id | Historia | Tam. | Depende de | Terminado cuando |
 |---|---|---|---|---|
-| VEN-9 | **Canales de outreach.** Migración `0037_outreach` (tablas de la sección 5.2), conector de Unipile con hosted auth y webhook firmado para LinkedIn e Instagram, OAuth de Google con `gmail.send` y `gmail.modify`, pantalla de canales con estado, límites y keepalive diario. | L | CIM-2, CIM-3 | Un creador conecta su Gmail y su LinkedIn; el token de Google se refresca solo; una cuenta caída se ve en rojo con el botón de reconectar. |
+| VEN-9 | **Canales de outreach.** Migración `0046_outreach` (tablas de la sección 5.2), conector de Unipile con hosted auth y webhook firmado para LinkedIn e Instagram, OAuth de Google con `gmail.send` y `gmail.modify`, pantalla de canales con estado, límites y keepalive diario. | L | CIM-2, CIM-3 | Un creador conecta su Gmail y su LinkedIn; el token de Google se refresca solo; una cuenta caída se ve en rojo con el botón de reconectar. |
 | VEN-10 | **Motor de cadencias.** Pasos normalizados, enrolamiento, cola en `outbound_touch` con reclamo atómico, despachador por canal con interfaz común, días hábiles y zona horaria del workspace, límites diarios y semanales, reintentos con espera creciente, interruptor de apagado, cancelación al responder con relectura del estado antes de enviar. | L | VEN-9, CON-2 | Una secuencia de tres pasos con plantillas fijas se ejecuta sola contra un buzón de prueba; una respuesta cancela lo pendiente; el límite diario reprograma al día siguiente. |
 | VEN-11 | **Perfil comercial del creador.** Cálculo del perfil de la sección 5.4 y su pantalla; narrativa con afirmaciones enlazadas. | M | CON-6, COT-1 | Con el seed, el perfil muestra los cinco mejores videos con sus cifras y cada cifra de la narrativa lleva a su origen. |
 | VEN-12 | **Generación con afirmaciones trazables.** El generador de la sección 5.3 y la puerta de calidad de la 5.6: prompt con perfil, señal, ángulo del día y toques enviados; pre-vuelo, juez con rúbrica en tabla, regeneración con pistas, riesgos. | L | VEN-10, VEN-11 | Un mensaje con una cifra sin origen no pasa; dos marcas del mismo nicho reciben correos con similitud menor de 0,65; el juez registra nota, tokens y costo. |
@@ -2188,10 +2185,9 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
 
 #### Cómo quedó la actividad (VEN-16, 25 de septiembre; ronda 5)
 
-- **Migración `0067_actividad_outreach.sql`** (nació como 0065; en la
-  integración de la fase 6 pasó a 0067 porque VEN-14 trajo 0064–0066. En
-  el pulido r1 absorbió las de las rondas 4 y 5, que nacieron como 0068 y
-  0069: ninguna estaba aplicada, así que hay una sola definición de cada
+- **Migración `0072_actividad_outreach.sql`** (va detrás de las bandejas de
+  VEN-14, 0069–0071. En el pulido r1 absorbió las de las rondas 4 y 5,
+  que no estaban aplicadas, así que hay una sola definición de cada
   vista). Una
   función y cuatro vistas de solo lectura, con `security_invoker` y sin
   escritura para `mc_app`:
@@ -2202,12 +2198,12 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
     la usan la vista, los botones por tipo y el propio reintento (dentro
     de su `FOR UPDATE`). `too_many_attempts` protege al despachador: con
     `attempt_count` en 19 el siguiente reclamo lo deja en 20, el techo del
-    CHECK de 0037; uno más rompería el UPDATE del reclamo, que es uno por
+    CHECK de 0046; uno más rompería el UPDATE del reclamo, que es uno por
     lote y para todos los workspaces. `account_down`: el fallo fue de la
     cuenta del canal y el espacio no tiene ninguna conectada de ese canal.
     `opted_out` mira las **tres** fuentes de `enforce_outbound_optout`: la
     ficha dada de baja, la baja global y la baja por enlace de **este**
-    espacio (`outbound_workspace_optout`, 0050 §8.1), que en una ficha
+    espacio (`outbound_workspace_optout`, 0055 §8.1), que en una ficha
     pública compartida no marca `contact.opted_out`. Sin la tercera, el
     fallido de alguien que pulsó el enlace salía con «Reintentar» y el
     reintento terminaba en `blocked`: un botón muerto justo con quien pidió
@@ -2293,7 +2289,7 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
 **Ronda 4** (sin cambiar lo anterior):
 
 - **`outbound_step_position` y `outbound_touch_is_positive`** (hoy en
-  0067 §1b; nacieron en una 0068 que el pulido fundió): el
+  0072 §1b; nacieron en una 0068 que el pulido fundió): el
   número de un paso sale de una sola vista, `outbound_step_position`, y
   «positivo» de una sola función, `outbound_touch_is_positive(t)`
   (enviado, **con `replied_at`** y con una respuesta entrante
@@ -2334,8 +2330,8 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
 
 **Ronda 5** (sin cambiar lo anterior):
 
-- **`outbound_queue.sequence_status`** (hoy en 0067; nació en una 0069
-  que el pulido fundió), al final de la vista. Con la
+- **`outbound_queue.sequence_status`** (hoy en 0072; nació en una
+  migración aparte que el pulido r1 fundió), al final de la vista. Con la
   cadencia en pausa (o en borrador), o con la inscripción de esa persona
   en `paused` o `cooldown` (tras un «ahora no»), `decideBeforeSend` aplaza
   el toque cada día: la fila ya no dice «Sale mañana 8:12» con una fecha
@@ -2381,9 +2377,9 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
 
 **Pulido r1**:
 
-- **Una sola migración**: 0067 funde las de las rondas 4 y 5 (ver
+- **Una sola migración**: 0072 funde las de las rondas 4 y 5 (ver
   arriba).
-- **La base también guarda la cola** (0067 §6): el disparador
+- **La base también guarda la cola** (0072 §6): el disparador
   `outbound_touch_guard_operator` rechaza (42501) que `mc_app`, con una
   persona en la sesión, cancele un toque o devuelva a la cola uno
   fallido si no es owner, admin o member (`outreach_can_operate`). Antes
@@ -2422,7 +2418,7 @@ escribe `packages/connectors/{unipile,gmail}.ts` y
 `app/(app)/ventas/canales/`; `motor` escribe
 `apps/worker/src/jobs/ventas/` y `queries/ventas.ts`; `entregabilidad`
 escribe las páginas públicas de baja y el job de alertas. La
-migración (`0037_outreach`) la escribe `canales` en su primer día y las demás
+migración (`0046_outreach`) la escribe `canales` en su primer día y las demás
 piezas la consumen.
 
 Referencias de interfaz para los agentes, además de las de Chief:
@@ -2548,7 +2544,7 @@ dueño aquí:
 
 | Lo que pasa en Chief | Cómo queda aquí | Historia |
 |---|---|---|
-| El mensaje puede salir después de que el contacto respondió (dos crones sin coordinación) | El despachador relee el enrolamiento en la transacción del envío; una respuesta detiene a la persona en todas sus secuencias y pausa a las demás personas de su marca (0054); el webhook de Unipile llega en segundos | VEN-10 |
+| El mensaje puede salir después de que el contacto respondió (dos crones sin coordinación) | El despachador relee el enrolamiento en la transacción del envío; una respuesta detiene a la persona en todas sus secuencias y pausa a las demás personas de su marca (0059); el webhook de Unipile llega en segundos | VEN-10 |
 | Un contacto que responde queda pausado para siempre, incluso por un «fuera de la oficina» | Clasificación de intención con fecha de retorno | VEN-14 |
 | «Como te comenté el martes» sobre un mensaje que nunca salió | Toques anteriores leídos de `status = 'sent'` | VEN-12 |
 | Los pasos de LinkedIn ignoran «no contactar» | La baja se comprueba por contacto en todos los canales, en el despachador | VEN-10 |
@@ -2668,7 +2664,7 @@ cuentas existentes se migran borrando sus avisos por cuenta.
   queda como código en `contact.opted_out_code` (contacto_codigo_de_baja:
   `reply_optout:<canal>`), y la ficha de Ventas lo traduce. La columna
   `opted_out_reason` sigue siendo del texto de la persona (el «Motivo»
-  que escribe al registrar la baja a mano) y de las bajas de 0026 y 0037.
+  que escribe al registrar la baja a mano) y de las bajas de 0026 y 0046.
 - **Un motivo de un intento caduca.** «Cancelaste la autorización» o
   «Revisa el usuario y la contraseña» solo se enseñan si son de las
   últimas 24 horas; los fallos pasajeros del servicio («No pudimos
@@ -2827,13 +2823,13 @@ estable. Después:
 
 **Las migraciones se citan por su nombre.** Las de canales (de
 `canales_outreach` a `canales_instagram_apagado_y_semana`) y la de
-entregabilidad nacieron con números que main ya usó con otro contenido,
-y el integrador las renumera. Por eso el código, sus pruebas y este
-documento las nombran por lo que va detrás del número
-(`canales_identidad_y_rotacion §8`, `entregabilidad §2`): el nombre
-sobrevive a la renumeración y el número no. Las citas por número que
-quedan en archivos de otras piezas (el motor, la guardia de pruebas,
-Ventas) las ajusta el integrador al renumerar.
+entregabilidad nacieron con números que main ya usó con otro contenido.
+Por eso el código, sus pruebas y este documento las nombran por lo que
+va detrás del número (`canales_identidad_y_rotacion §8`,
+`entregabilidad §2`). Desde el pulido r2 la serie entera va detrás de la
+0042 de main con su número definitivo (0047–0054 los canales, 0055 la
+entregabilidad; §5.2), y las citas por número del resto del código ya
+usan esos números.
 
 La pieza de canales tocó, a propósito y de forma aditiva, archivos que
 no son de Ventas. Ninguno cambia el comportamiento de lo que ya estaba:

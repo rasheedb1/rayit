@@ -268,14 +268,14 @@ export interface ContactRow {
   optedOutReason: string | null;
   /**
    * Se dio de baja al responder pidiéndolo por ese canal (contact.opted_out_code,
-   * 0043). La pantalla lo traduce; opted_out_reason, si lo hay, manda.
+   * 0052). La pantalla lo traduce; opted_out_reason, si lo hay, manda.
    */
   optedOutByReply: ReplyOptOutChannel | null;
   bounced: boolean;
   /**
-   * Por qué y cuándo rebotó (contact.email_invalid_reason y _at, 0038):
+   * Por qué y cuándo rebotó (contact.email_invalid_reason y _at, 0055):
    * el diagnóstico del servidor que lo rechazó. Null si no rebotó, o si
-   * rebotó antes de 0038 (solo bounced, sin motivo).
+   * rebotó antes de 0055 (solo bounced, sin motivo).
    */
   bouncedReason: string | null;
   bouncedAt: string | null;
@@ -862,7 +862,7 @@ export async function listOwnerOptions(tx: WorkspaceTx): Promise<OwnerOption[]> 
 export async function listContacts(tx: WorkspaceTx, companyId: string): Promise<ContactRow[]> {
   if (!isUuid(companyId)) return [];
   // Una ficha compartida (fuente pública, sin dueño) no lleva las marcas
-  // de UN workspace (0038 §2 y §8, VEN-15 r3): su rebote verificado y su
+  // de UN workspace (0055 §2 y §8, VEN-15 r3): su rebote verificado y su
   // baja por enlace viven en outbound_bounce y outbound_workspace_optout,
   // con la RLS de este workspace. Aquí se suman para que la ficha diga
   // lo mismo que la regla que frena el envío.
@@ -1599,7 +1599,7 @@ export const PITCH_DUE_HOUR = 15;
  * «Seguimiento a la cotización»): el N-ésimo día HÁBIL después del de
  * `desde`, a las HOUR en la zona del workspace (no en UTC: en Bogotá las
  * 15:00 UTC son las 10:00). Espera la fila `w` de WORKSPACE_TZ en el
- * FROM, cuya zona siempre es una que Postgres conoce (0035).
+ * FROM, cuya zona siempre es una que Postgres conoce (0044).
  *
  * Es UNA sola expresión para el pitch y para el seguimiento: antes el
  * pitch contaba días de calendario y el seguimiento hábiles, y la misma
@@ -1627,11 +1627,11 @@ function dueInBusinessDays(desde: string, dias: string, hora: string): string {
  * definición de «la zona del espacio».
  *
  * La zona se usa tal cual en `AT TIME ZONE` sin validarla aquí: la
- * migración 0035 corrigió las que estaban mal escritas y su disparador
+ * migración 0044 corrigió las que estaban mal escritas y su disparador
  * (workspace_timezone_check) no deja guardar ninguna que Postgres no
  * conozca. Validar en cada lectura contra pg_timezone_names costaría un
  * recorrido del catálogo de zonas por consulta. Vacía cae en UTC, como
- * en Cotizar (sendQuote), aunque 0035 tampoco deja guardarla.
+ * en Cotizar (sendQuote), aunque 0044 tampoco deja guardarla.
  */
 export const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, ''), 'UTC') AS tz
     FROM workspace WHERE id = current_workspace_id())`;
@@ -1910,7 +1910,7 @@ export interface RejectBrandByNameResult {
  * excluida (briefVerdictSql la reconoce por nombre dentro del CRM).
  *
  * Mismo permiso que el brief: solo owner y admin (outreach_can_manage,
- * la regla de 0070 §5); si no, Forbidden y no queda nada. Deja traza en
+ * la regla de 0073 §5); si no, Forbidden y no queda nada. Deja traza en
  * audit_log ('ventas.brief.no_aceptar_marca', la relación antes y después).
  */
 export async function rejectBrandByName(

@@ -21,7 +21,7 @@
 --
 -- Cómo se escribe lo que es del despachador. provider_message_id,
 -- message_id_rfc, recipient_address, el estado autenticado de una
--- cuenta y el enlace de baja los escribe solo el despachador (0037
+-- cuenta y el enlace de baja los escribe solo el despachador (0046
 -- §2.1, §4.2, §4.5). Los seeds los corre el dueño del esquema
 -- (mc_migrator en Supabase, mc_migrator_test en la verificación), que
 -- outreach_is_dispatcher() reconoce: no hace falta desactivar ningún
@@ -41,7 +41,7 @@
 --   * El token de los enlaces de baja no va en el archivo (el
 --     repositorio es público): se sortea en la primera corrida y solo
 --     queda su sha256.
---   * Requiere 0037 (se siembra después de aplicarla).
+--   * Requiere 0046 (se siembra después de aplicarla).
 --
 -- Mapa de identificadores (00000005-…, solo dígitos hexadecimales):
 --   …-0000000ac001..002     outreach_channel_account  (ac = cuenta)
@@ -66,7 +66,7 @@ SELECT set_config('TimeZone', 'UTC', false);
 -- (unipile_status:CREDENTIALS), nunca una frase (§9.2: la pantalla lo
 -- traduce a «LinkedIn cerró la sesión»), y el nombre es el de la
 -- persona, como el que trae connection_params.im de Unipile. Los topes están dentro del
--- máximo de cada cuenta (outreach_channel_account_limits, 0040): el
+-- máximo de cada cuenta (outreach_channel_account_limits, 0049): el
 -- correo, en los 20 al día de la política del espacio.
 -- =====================================================================
 INSERT INTO outreach_channel_account
@@ -297,7 +297,7 @@ WHERE outbound_touch.status = 'scheduled';
 -- =====================================================================
 -- 5 · Los enlaces de baja de los tres correos enviados
 -- ---------------------------------------------------------------------
--- Uno por intento, como los deja el despachador al reclamar (0037 §4.5):
+-- Uno por intento, como los deja el despachador al reclamar (0046 §4.5):
 -- la dirección, el intento y, como el proveedor confirmó, sent_at. El
 -- token se sortea aquí y no se guarda: de la demo no se puede pulsar
 -- ningún enlace, y el repositorio no enseña uno que funcione.

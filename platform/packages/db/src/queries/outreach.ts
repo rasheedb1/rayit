@@ -1,5 +1,5 @@
 /**
- * Outreach · las funciones de 0037 con tipos (VEN-9). Dueño: Rasheed.
+ * Outreach · las funciones de 0046 con tipos (VEN-9). Dueño: Rasheed.
  *
  * Las funciones de la migración (límites, interruptor, salud, días
  * hábiles y la baja) se llaman desde aquí y no con SQL suelto: cada
@@ -62,8 +62,8 @@ export interface CapRequest {
   /** El tope del periodo. 0 o menos no deja pasar nada. */
   cap: number;
   /**
-   * (VEN-10, 0052 §3) El instante cuyo día local cuenta: el reloj de
-   * quien reclama. Sin él, now() de la base (las funciones de 0037).
+   * (VEN-10, 0057 §3) El instante cuyo día local cuenta: el reloj de
+   * quien reclama. Sin él, now() de la base (las funciones de 0046).
    */
   at?: Date;
 }
@@ -229,7 +229,7 @@ function reader(fn: string) {
 }
 
 /**
- * Comprueba la forma del jsonb de outbound_health (0037 §8.6) y lo
+ * Comprueba la forma del jsonb de outbound_health (0046 §8.6) y lo
  * devuelve tipado. Lanza OutreachShapeError con la ruta del campo que
  * falta o no cuadra.
  */
@@ -292,13 +292,13 @@ export async function outboundHealth(tx: SqlExecutor, hours: number, workspaceId
  * (avisar al creador), nunca para la página: quien pulsa el enlace no
  * tiene por qué saber quién más le escribe. Son null si el workspace que
  * envió, o el toque, ya no existen: el enlace sigue funcionando igual
- * (vive en outbound_optout_link, 0037 §4.5).
+ * (vive en outbound_optout_link, 0046 §4.5).
  */
 export type PublicOptoutResult =
   | { status: 'not_found' }
   | { status: 'ok'; alreadyOptedOut: boolean; workspaceId: string | null; touchId: string | null };
 
-/** Comprueba la forma del jsonb de public_optout (0037 §9). */
+/** Comprueba la forma del jsonb de public_optout (0046 §9). */
 export function parsePublicOptout(value: unknown): PublicOptoutResult {
   const fn = 'public_optout';
   const { obj, bool, strOrNull } = reader(fn);
@@ -325,7 +325,7 @@ export function parsePublicOptout(value: unknown): PublicOptoutResult {
  * con una sesión del workspace que envió: el enlace también está en la
  * carpeta de enviados del creador (docs/ventas-outreach.md §5.2).
  *
- * Desde 0038 §8 (VEN-15) la baja vale para el workspace que envió ese
+ * Desde 0055 §8 (VEN-15) la baja vale para el workspace que envió ese
  * correo, en todos sus canales, y nunca para toda la plataforma; la
  * respuesta trae además su alcance («scope»), que esta función no lee.
  * La página usa linkOptout (@mc/db/queries/entregabilidad).

@@ -293,7 +293,7 @@ export interface DbOptions {
    * No hay autenticación en este despliegue: ningún usuario existe (la web
    * sin Supabase Auth, las pruebas). withWorkspace fija entonces
    * `app.auth_disabled = 'on'`, la bandera explícita con la que las
-   * reglas por rol que fallan cerradas (outreach_can_manage, 0038 §7)
+   * reglas por rol que fallan cerradas (outreach_can_manage, 0055 §7)
    * aceptan una transacción sin identidad. Por defecto, no: sin identidad
    * y sin esta bandera, esas reglas responden que no.
    */

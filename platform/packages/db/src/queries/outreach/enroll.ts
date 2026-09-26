@@ -9,7 +9,7 @@
  * Solo fichas del workspace de la secuencia: la web pasa por la RLS,
  * pero el worker corre con BYPASSRLS, y sin el filtro una secuencia de A
  * enrolaba la ficha privada de B y el despachador le escribía desde el
- * Gmail de A. La regla es contact_visible_to (0051 §5), la misma que
+ * Gmail de A. La regla es contact_visible_to (0056 §5), la misma que
  * exigen los disparadores de la base: aquí para decir not_found, allá
  * para que nadie se la salte.
  */
@@ -42,7 +42,7 @@ export interface EnrollInput {
  * canales de la secuencia; invalid_address: la tiene, pero mal escrita
  * (un correo sin arroba). Antes se enrolaban con todo saltado y
  * el enrolamiento quedaba 'active' para siempre; la de correo rebotado,
- * peor: el disparador de 0050 abortaba el lote entero.
+ * peor: el disparador de 0055 abortaba el lote entero.
  * brief_excluded: la marca de la ficha es una que el brief activo del
  * workspace no acepta, por nombre o por categoría (VEN-7): el radar ya
  * la oculta y ninguna cadencia le escribe.
@@ -123,14 +123,14 @@ interface ContactRow {
  *   · el contacto no tiene dirección en ese canal → skipped (no_address);
  *   · un correo a una ficha cuyo correo rebotó para siempre
  *     (contact.email_invalid, VEN-15) → skipped (email_invalid): la base
- *     no deja programarlo (0050 §2) y antes abortaba el lote entero;
+ *     no deja programarlo (0055 §2) y antes abortaba el lote entero;
  *   · la secuencia es manual → draft (la persona envía cada toque);
  *   · la plantilla deja huecos sin rellenar → held (placeholders:<huecos>);
  *   · la nota de una invitación de LinkedIn pasa de 300 caracteres →
  *     held (note_too_long:<n>): no se corta en el adaptador;
  *   · un correo nuevo sin asunto → held (no_subject);
  *   · la política pide revisión humana (require_human_review, el
- *     valor por defecto) o la secuencia es 'review' (0037 §3.1: «la
+ *     valor por defecto) o la secuencia es 'review' (0046 §3.1: «la
  *     máquina propone y la persona aprueba») → held (needs_review): sale
  *     cuando una persona lo aprueba en la ficha (releaseHeldTouch);
  *   · si no (una secuencia 'auto' con la revisión apagada) → scheduled.
@@ -451,7 +451,7 @@ interface ReplanRow {
 
 /**
  * Al encender el envío, lo que el apagado canceló vuelve a la cola
- * (0037 §8.5: «apagar es una pausa del workspace, no el fin de ninguna
+ * (0046 §8.5: «apagar es una pausa del workspace, no el fin de ninguna
  * cadencia»). disable_outreach cancela lo programado y lo retenido con
  * blocked_reason 'outreach_disabled' y deja los enrolamientos vivos; aquí,
  * por cada enrolamiento vivo (active, paused, cooldown) del workspace:

@@ -87,7 +87,7 @@ const DRAG_TYPE = "application/x-oncue-deal";
  * Soltar (o elegir en el menú) una etapa perdida no mueve todavía: abre
  * un diálogo, «¿Por qué lo pierdes?», con el motivo obligatorio (VEN-8).
  * Sin motivo el servidor tampoco lo mueve (LostReasonRequired), y la base
- * no deja llegar al COMMIT un perdido sin motivo (0070).
+ * no deja llegar al COMMIT un perdido sin motivo (0073).
  *
  * Bajo la cabecera de cada columna abierta, junto al monto, va su
  * conversión (StageConversionRow): qué parte de los negocios que

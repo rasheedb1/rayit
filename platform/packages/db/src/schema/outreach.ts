@@ -1,5 +1,5 @@
 /**
- * Outreach: canales, cadencias, cola, revisión y límites. Migración 0037
+ * Outreach: canales, cadencias, cola, revisión y límites. Migración 0046
  * (docs/ventas-outreach.md §5.2).
  *
  * Plantilla → secuencia (outbound_sequence, en ventas.ts) → paso →
@@ -50,7 +50,7 @@ export const CHANNEL_ACCOUNT_STATUSES = ['pending', 'connected', 'needs_reconnec
 /**
  * Los estados de una cuenta AUTENTICADA: los que ocupan el buzón en toda
  * la plataforma (outreach_channel_account_live_idx) y los que solo
- * escribe el callback del proveedor (0037 §2.1). 'pending' no ocupa nada.
+ * escribe el callback del proveedor (0046 §2.1). 'pending' no ocupa nada.
  */
 export const LIVE_CHANNEL_ACCOUNT_STATUSES = ['connected', 'needs_reconnect', 'error'] as const;
 /**
@@ -67,7 +67,7 @@ export const WORKER_ONLY_CHANNEL_ACCOUNT_COLUMNS = [
  * El techo de daily_cap y weekly_cap por canal (§5.1): lo que el
  * proveedor aguanta antes de castigar la cuenta. La base lo exige a
  * todos, también al worker (CHECK outreach_channel_account_channel_caps_check,
- * 0037 §2); la pantalla de canales lo usa como máximo del campo. Por
+ * 0046 §2); la pantalla de canales lo usa como máximo del campo. Por
  * debajo, el tope es de la persona.
  */
 export const CHANNEL_CAP_LIMITS = {
@@ -80,17 +80,17 @@ export const CHANNEL_CAP_LIMITS = {
 /**
  * El techo de un Gmail PERSONAL (@gmail.com, @googlemail.com): 500 al
  * día, el cupo oficial de Google para una cuenta gratuita, y siete días
- * de eso a la semana. El mismo CHECK de 0037 §2 y la misma regla que la
+ * de eso a la semana. El mismo CHECK de 0046 §2 y la misma regla que la
  * vista outreach_channel_account_limits (personal_mailbox).
  */
 export const PERSONAL_EMAIL_CAP_LIMITS = { daily: 500, weekly: 3500 } as const;
 /** Los dominios de un buzón personal de Google, en minúsculas. */
 export const PERSONAL_EMAIL_DOMAINS = ['gmail.com', 'googlemail.com'] as const;
-/** 'bounced' (0051 §7): la dirección rebotó al enviar y no le quedaba nada vivo. Terminal, como completed. */
+/** 'bounced' (0056 §7): la dirección rebotó al enviar y no le quedaba nada vivo. Terminal, como completed. */
 export const ENROLLMENT_STATUSES = ['active', 'paused', 'completed', 'replied', 'opted_out', 'cooldown', 'bounced'] as const;
 export const MESSAGE_DIRECTIONS = ['inbound', 'outbound'] as const;
 export const MESSAGE_INTENTS = ['interested', 'not_now', 'ooo', 'unsubscribe', 'referral', 'ambiguous'] as const;
-/** Quién puso la intención de un mensaje entrante (0064). */
+/** Quién puso la intención de un mensaje entrante (0069). */
 export const INTENT_SOURCES = ['detector', 'model', 'fake', 'person'] as const;
 export const REGENERATE_HINTS = ['shorter', 'more_specific', 'other_angle', 'other_signal', 'soften', 'add_proof'] as const;
 export const RISK_TRIGGERS = [
@@ -103,7 +103,7 @@ export const LLM_CALL_PURPOSES = ['generate', 'judge', 'classify', 'recommend', 
  * Las columnas de outbound_touch que solo escribe el despachador
  * (mc_worker): las pruebas de que la plataforma envió el mensaje y a qué
  * dirección. Desde la web (mc_app) el disparador
- * outbound_touch_worker_columns lo rechaza con 42501 (0037 §4.2), y un
+ * outbound_touch_worker_columns lo rechaza con 42501 (0046 §4.2), y un
  * toque con alguna de ellas no se borra desde la web. El token del
  * enlace de baja no está aquí: vive en outbound_optout_link.
  */
@@ -111,7 +111,7 @@ export const WORKER_ONLY_TOUCH_COLUMNS = ['provider_message_id', 'message_id_rfc
 /**
  * El estado que solo pone y quita el despachador: la web no crea un
  * toque en él, no lleva uno a él y no saca uno de él (42501,
- * outbound_touch_worker_columns, 0037 §4.2). Lo reclamado no lo cancelan
+ * outbound_touch_worker_columns, 0046 §4.2). Lo reclamado no lo cancelan
  * ni la baja ni el apagado: si la web pudiera ponerlo, el toque quedaba
  * fuera de los dos.
  */
@@ -125,19 +125,19 @@ export const WORKER_ONLY_TOUCH_STATUS = 'processing' as const;
 export const LOCKED_RECIPIENT_TOUCH_COLUMNS = ['contact_id', 'company_id'] as const;
 /**
  * blocked_reason de un toque que SALIÓ aunque la baja llegó mientras el
- * despachador lo enviaba (processing → sent, 0037 §4.1).
+ * despachador lo enviaba (processing → sent, 0046 §4.1).
  */
 export const OPTED_OUT_IN_FLIGHT = 'opted_out_in_flight';
 /**
  * El tope diario de gasto en el modelo con el que nace una política, en
- * USD. Es outreach_default_llm_daily_cap() de 0037 §6.1; lo cambia solo la
+ * USD. Es outreach_default_llm_daily_cap() de 0046 §6.1; lo cambia solo la
  * plataforma (outbound_policy_llm_cap), nunca el workspace.
  */
 export const DEFAULT_LLM_DAILY_CAP_USD = '5.00';
 export const COUNTER_PERIODS = ['day', 'week'] as const;
 export const BREAKER_STATES = ['closed', 'open', 'half_open'] as const;
 export const REQUIRED_ASSETS = ['media_kit', 'quote'] as const;
-/** Quién escribió la guía de un paso (outbound_step.guidance_source, 0056); la misma lista que GUIDANCE_SOURCES de @mc/core. */
+/** Quién escribió la guía de un paso (outbound_step.guidance_source, 0061); la misma lista que GUIDANCE_SOURCES de @mc/core. */
 export const STEP_GUIDANCE_SOURCES = ['template', 'rules', 'llm', 'person'] as const;
 /** De dónde puede salir una cifra de un ángulo. */
 export const PROOF_SOURCES = [
@@ -159,7 +159,7 @@ export interface TemplateStep {
   guidance_es: string;
 }
 
-/** Lo que devuelve outbound_health(workspace, hours) (0037 §8.6). Los instantes, en ISO. */
+/** Lo que devuelve outbound_health(workspace, hours) (0046 §8.6). Los instantes, en ISO. */
 export interface OutboundHealth {
   enabled: boolean;
   disabledReason: string | null;
@@ -187,16 +187,16 @@ export interface OutboundHealth {
 }
 
 /**
- * Las funciones de 0037 que el código llama por SQL, con su firma. Los
+ * Las funciones de 0046 que el código llama por SQL, con su firma. Los
  * límites tienen dos: la del workspace entero y la de una cuenta
- * (…ForAccount), que cuenta aparte cada cuenta conectada (0037 §6.2).
+ * (…ForAccount), que cuenta aparte cada cuenta conectada (0046 §6.2).
  */
 export const OUTREACH_FUNCTIONS = {
   incrementIfUnderCap: 'increment_if_under_cap(uuid,text,integer)',
   incrementIfUnderCapForAccount: 'increment_if_under_cap(uuid,uuid,text,integer)',
   incrementWeekly: 'increment_weekly(uuid,text,integer)',
   incrementWeeklyForAccount: 'increment_weekly(uuid,uuid,text,integer)',
-  /** (0052 §3) Las mismas, contando el día del instante que se les pasa (el reloj del despachador). */
+  /** (0057 §3) Las mismas, contando el día del instante que se les pasa (el reloj del despachador). */
   incrementIfUnderCapAt: 'increment_if_under_cap(uuid,text,integer,timestamp with time zone)',
   incrementIfUnderCapForAccountAt: 'increment_if_under_cap(uuid,uuid,text,integer,timestamp with time zone)',
   incrementWeeklyAt: 'increment_weekly(uuid,text,integer,timestamp with time zone)',
@@ -330,9 +330,9 @@ export const outboundStep = pgTable('outbound_step', {
   scheduledTime: localTime('scheduled_time').default('09:30').notNull(),
   angleId: uuid('angle_id').references(() => outboundAngle.id, { onDelete: 'set null' }),
   guidanceEs: text('guidance_es'),
-  /** Quién escribió la guía (0056): la plantilla, las reglas, el modelo o la persona. NULL: anterior, no se sabe. */
+  /** Quién escribió la guía (0061): la plantilla, las reglas, el modelo o la persona. NULL: anterior, no se sabe. */
   guidanceSource: text('guidance_source', { enum: STEP_GUIDANCE_SOURCES }),
-  /** Para qué tipo de paso se escribió la guía (0056). NULL: para el que tiene. */
+  /** Para qué tipo de paso se escribió la guía (0061). NULL: para el que tiene. */
   guidanceForType: text('guidance_for_type', { enum: STEP_TYPES }),
   subjectTemplate: text('subject_template'),
   bodyTemplate: text('body_template'),
@@ -390,21 +390,21 @@ export const outboundMessage = pgTable('outbound_message', {
   occurredAt: timestamptz('occurred_at').defaultNow().notNull(),
   readAt: timestamptz('read_at'),
   createdAt: createdAt(),
-  /** Quién puso la intención (0064): la regla de bajas, el modelo, el clasificador falso o una persona. */
+  /** Quién puso la intención (0069): la regla de bajas, el modelo, el clasificador falso o una persona. */
   intentSource: text('intent_source', { enum: INTENT_SOURCES }),
-  /** El contacto que la respuesta propone («escríbele a …»), para que una persona lo cree (0064). */
+  /** El contacto que la respuesta propone («escríbele a …»), para que una persona lo cree (0069). */
   referral: jsonb('referral').$type<{ name?: string | null; email?: string | null; role?: string | null }>(),
-  /** La ficha creada desde esa propuesta (0064). */
+  /** La ficha creada desde esa propuesta (0069). */
   referralContactId: uuid('referral_contact_id').references(() => contact.id, { onDelete: 'set null' }),
-  /** Llegó con cabeceras de respuesta automática; NULL, el canal no lo dice (0065). */
+  /** Llegó con cabeceras de respuesta automática; NULL, el canal no lo dice (0070). */
   automatic: boolean('automatic'),
-  /** La frase del clasificador que explica la intención (0065). */
+  /** La frase del clasificador que explica la intención (0070). */
   intentReason: text('intent_reason'),
-  /** La clasificación ya pagada que falta aplicar (0065). */
+  /** La clasificación ya pagada que falta aplicar (0070). */
   intentDecision: jsonb('intent_decision').$type<Record<string, unknown>>(),
-  /** Cuántas veces falló aplicar la intención (0065). */
+  /** Cuántas veces falló aplicar la intención (0070). */
   intentAttempts: smallint('intent_attempts').default(0).notNull(),
-  /** La persona dio por atendida esta respuesta en la bandeja (0065). */
+  /** La persona dio por atendida esta respuesta en la bandeja (0070). */
   doneAt: timestamptz('done_at'),
 });
 
@@ -413,7 +413,7 @@ export const outboundReview = pgTable('outbound_review', {
   id: uuidPk(),
   workspaceId: workspaceId(),
   touchId: uuid('touch_id').notNull().references(() => outboundTouch.id, { onDelete: 'cascade' }),
-  /** La corrida de la puerta de calidad (0058): attempt va de 1 a 10 dentro de ella. */
+  /** La corrida de la puerta de calidad (0063): attempt va de 1 a 10 dentro de ella. */
   run: integer('run').default(1).notNull(),
   attempt: integer('attempt').notNull(),
   subject: text('subject'),
@@ -455,7 +455,7 @@ export const outboundLlmCall = pgTable('outbound_llm_call', {
 
 /**
  * El borrador generado de un toque con sus marcas [claim:id] y el turno de
- * los jobs outbound.generate y outbound.review (0056, VEN-12). La escribe
+ * los jobs outbound.generate y outbound.review (0061, VEN-12). La escribe
  * solo el worker; la web la lee para el editor del pitch.
  */
 export const outboundGeneration = pgTable('outbound_generation', {
@@ -474,7 +474,7 @@ export const outboundGeneration = pgTable('outbound_generation', {
   reviewedAt: timestamptz('reviewed_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-  // 0057: lo que pidió una persona desde el editor, el cuerpo que había al tomarlo y lo que costó el borrador.
+  // 0062: lo que pidió una persona desde el editor, el cuerpo que había al tomarlo y lo que costó el borrador.
   requestedHint: text('requested_hint', { enum: ['shorter', 'more_specific', 'other_angle', 'other_signal', 'soften', 'add_proof'] }),
   requestedInstructions: text('requested_instructions'),
   requestedBy: uuid('requested_by').references(() => appUser.id, { onDelete: 'set null' }),
@@ -483,7 +483,7 @@ export const outboundGeneration = pgTable('outbound_generation', {
   genInputTokens: integer('gen_input_tokens').default(0).notNull(),
   genOutputTokens: integer('gen_output_tokens').default(0).notNull(),
   genCost: numeric('gen_cost', { precision: 14, scale: 6 }).default('0').notNull(),
-  // 0058: la corrida y el intento elegido con su nota, y los fallos con su espera.
+  // 0063: la corrida y el intento elegido con su nota, y los fallos con su espera.
   reviewRun: integer('review_run'),
   chosenAttempt: integer('chosen_attempt'),
   judgeNote: text('judge_note'),
@@ -541,7 +541,7 @@ export const outboundBreaker = pgTable(
 // ---------------------------------------------------------------------
 
 /**
- * La prueba del enlace de baja de un intento de envío (0037 §4.5). La
+ * La prueba del enlace de baja de un intento de envío (0046 §4.5). La
  * escribe el despachador AL RECLAMAR el toque, en la transacción que lo
  * pasa a processing y ANTES de llamar al proveedor: la base no confirma
  * un correo reclamado sin el enlace de su intento
@@ -570,7 +570,7 @@ export const outboundOptoutLink = pgTable('outbound_optout_link', {
 
 /**
  * Cada clic en un enlace de baja, con el workspace y el toque que lo
- * originaron (0037 §4.6): la baja global es atribuible y reversible. La
+ * originaron (0046 §4.6): la baja global es atribuible y reversible. La
  * escribe public_optout; la web no la ve. Bitácora.
  */
 /** El alcance de un clic de baja (entregabilidad §8). */
