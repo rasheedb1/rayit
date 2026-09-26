@@ -20,6 +20,7 @@ const stages: BoardStage[] = [
     conversion: {
       rate: "58 % avanza",
       basis: "de 12 negocios",
+      basisShort: "de 12 negocios",
       label: "De los 12 negocios que entraron en «Nuevo», 7 llegaron más lejos (58 %).",
     },
   },

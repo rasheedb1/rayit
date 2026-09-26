@@ -20,7 +20,7 @@ const CAFE = "00000009-0000-4000-8000-0000000b7c02";
 
 const BETO = "00000009-0000-4000-8000-00000000b706";
 /** Los topes formateados, como los arma la acción. */
-const L = { categories: "30", countries: "30", companies: "100", titleMax: "120", categoryMax: "60", notesMax: "2.000", deliverables: "20" };
+const L = { categories: "30", countries: "30", companies: "100", titleMax: "120", categoryMax: "60", notesMax: "2.000", deliverables: "20", brandNameMax: "120" };
 /** El CRM de la prueba: lo que devuelve la búsqueda en el servidor. */
 const CRM = [
   { value: LICORES, label: "Licores del Sur" },

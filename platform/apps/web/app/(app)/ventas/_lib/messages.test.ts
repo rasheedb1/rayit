@@ -55,7 +55,7 @@ describe("los textos de Ventas", () => {
     expect(MESSAGES.briefErrores.InvalidTitle(l, null)).toContain(String(BRIEF_LIMITS.titleMax));
     expect(MESSAGES.brief.validacion.categoryTooLong(l)).toContain(String(BRIEF_LIMITS.categoryMax));
     // Ninguna frase del brief lleva una cifra propia: todas las dicen los topes.
-    const sinTopes = { categories: "X", countries: "X", companies: "X", titleMax: "X", categoryMax: "X", notesMax: "X", deliverables: "X" };
+    const sinTopes = { categories: "X", countries: "X", companies: "X", titleMax: "X", categoryMax: "X", notesMax: "X", deliverables: "X", brandNameMax: "X" };
     for (const frase of Object.values(MESSAGES.briefErrores)) expect(frase(sinTopes, null)).not.toMatch(/\d/);
   });
 

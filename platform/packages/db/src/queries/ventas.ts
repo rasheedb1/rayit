@@ -40,7 +40,7 @@
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES } from '../schema/ventas.ts';
 import { parseReplyOptOutCode, type ReplyOptOutChannel } from './canales.ts';
-import { addExcludedCompany, BriefError, briefSignalLateralSql, briefVerdictSql, type BriefVerdict } from './brief.ts';
+import { addExcludedCompany, BRIEF_LIMITS, BriefError, briefSignalLateralSql, briefVerdictSql, type BriefVerdict } from './brief.ts';
 import { WORKSPACE_DEFAULTS } from './cimientos.ts';
 
 export { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES };
@@ -1881,9 +1881,6 @@ export interface RejectBrandByNameResult {
   previousRelationship: string | null;
 }
 
-/** El largo máximo del nombre de una marca que se da de alta desde el brief. */
-export const BRAND_NAME_MAX = 120;
-
 /**
  * «No aceptar «…»», desde «Marcas que no aceptas» del brief (VEN-7 r5):
  * una marca que el creador no acepta y que todavía no está en el CRM —la
@@ -1912,7 +1909,7 @@ export async function rejectBrandByName(
   input: { name: string; domain?: string | null },
 ): Promise<RejectBrandByNameResult> {
   const name = input.name.trim().replace(/\s+/g, ' ');
-  if (!name || name.length > BRAND_NAME_MAX || !nameKey(name)) throw new BriefError('InvalidBrandName');
+  if (!name || name.length > BRIEF_LIMITS.brandNameMax || !nameKey(name)) throw new BriefError('InvalidBrandName');
   const { rows: permiso } = await tx.query<{ ok: boolean }>('SELECT outreach_can_manage(current_workspace_id()) AS ok');
   if (!permiso[0]?.ok) throw new BriefError('Forbidden');
 

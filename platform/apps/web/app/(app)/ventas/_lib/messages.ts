@@ -14,6 +14,8 @@ export interface BriefLimitTexts {
   categoryMax: string;
   notesMax: string;
   deliverables: string;
+  /** El largo del nombre de una marca que se da de alta desde el brief (rejectBrandByName). */
+  brandNameMax: string;
 }
 
 /** Una frase de error del brief: recibe los topes formateados y el dato del error, si lo trae. */
@@ -790,7 +792,7 @@ export const MESSAGES = {
     TooManyCompanies: (l) => `Son demasiadas marcas: hasta ${l.companies}.`,
     NoCreator: () => "Este espacio todavía no tiene un perfil de creador al que colgarle el brief.",
     UnknownCreator: () => "Ese creador no es de este espacio, o ya no existe. Vuelve a elegirlo.",
-    InvalidBrandName: () => "Escribe el nombre de la marca, con letras, en 120 caracteres o menos.",
+    InvalidBrandName: (l) => `Escribe el nombre de la marca, con letras, en ${l.brandNameMax} caracteres o menos.`,
     NoActiveBrief: () => "No hay ningún brief activo donde agregarla. Activa el brief primero.",
     SignalNotFound: () => "Esa señal ya no está en la bandeja.",
     SignalWithoutBrand: () => "Esta señal no dice de qué marca es: no hay nada que excluir.",

@@ -66,6 +66,8 @@ export const BRIEF_LIMITS = {
   notesMax: 2000,
   /** Formatos de entregable distintos: el catálogo tiene seis (DELIVERABLES de @mc/core); el tope deja sitio a los viejos. */
   deliverables: 20,
+  /** El nombre de una marca que se da de alta desde el brief (rejectBrandByName, VEN-7 r5). */
+  brandNameMax: 120,
 } as const;
 
 /**
@@ -372,7 +374,8 @@ export const BRIEF_COMPANY_SEARCH_MIN = 2;
  * <select> y cortaba el resto sin avisar: una agencia con un CRM grande
  * no podía excluir las que quedaban fuera. Ahora busca en el servidor,
  * en todo el CRM. Las marcas que todavía no están en el CRM se excluyen
- * desde su señal en el radar (rejectSignalBrand), que la da de alta.
+ * desde su señal en el radar (rejectSignalBrand) o, sin señal, por su
+ * nombre desde el brief (rejectBrandByName, VEN-7 r5): las dos la dan de alta.
  */
 export async function searchBriefCompanies(tx: WorkspaceTx, q: string): Promise<{ id: string; name: string }[]> {
   if (categoryKey(q).length < BRIEF_COMPANY_SEARCH_MIN) return [];
