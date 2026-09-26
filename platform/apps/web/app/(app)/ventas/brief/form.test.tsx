@@ -2,7 +2,11 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const guardarBrief = vi.fn();
-vi.mock("./actions", () => ({ guardarBrief: (...a: unknown[]) => guardarBrief(...a) }));
+const buscarMarcas = vi.fn();
+vi.mock("./actions", () => ({
+  guardarBrief: (...a: unknown[]) => guardarBrief(...a),
+  buscarMarcas: (...a: unknown[]) => buscarMarcas(...a),
+}));
 
 import { BRIEF_LIMITS } from "@mc/db/queries/brief";
 import { MESSAGES } from "../_lib/messages";
@@ -14,7 +18,12 @@ const CAFE = "00000009-0000-4000-8000-0000000b7c02";
 
 const BETO = "00000009-0000-4000-8000-00000000b706";
 /** Los topes formateados, como los arma la acción. */
-const L = { categories: "30", countries: "30", companies: "100", titleMax: "120", categoryMax: "60", notesMax: "2.000" };
+const L = { categories: "30", countries: "30", companies: "100", titleMax: "120", categoryMax: "60", notesMax: "2.000", deliverables: "20" };
+/** El CRM de la prueba: lo que devuelve la búsqueda en el servidor. */
+const CRM = [
+  { value: LICORES, label: "Licores del Sur" },
+  { value: CAFE, label: "Café Montaña" },
+];
 
 const values: BriefFormValues = {
   creatorId: BETO,
@@ -46,10 +55,8 @@ function pintar(over: Partial<BriefFormValues> = {}, editable = true) {
         { value: "CO", label: "Colombia" },
         { value: "MX", label: "México" },
       ]}
-      companies={[
-        { value: LICORES, label: "Licores del Sur" },
-        { value: CAFE, label: "Café Montaña" },
-      ]}
+      locale="es-CO"
+      companySearchMin={2}
       currencies={[
         { value: "COP", label: "COP · peso colombiano" },
         { value: "USD", label: "USD · dólar estadounidense" },
@@ -69,6 +76,9 @@ function enviado(): FormData {
 
 beforeEach(() => {
   guardarBrief.mockReset().mockResolvedValue({ ok: true, notice: t.saved, stamp: 1 });
+  buscarMarcas.mockReset().mockImplementation(async (q: string) => ({
+    results: CRM.filter((m) => m.label.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().includes(q.toLowerCase())),
+  }));
 });
 
 describe("BriefForm", () => {
@@ -78,12 +88,20 @@ describe("BriefForm", () => {
     expect(screen.getByRole("region", { name: t.rejects.title })).toHaveTextContent(t.rejects.help);
   });
 
-  it("la divulgación va en «Qué buscas»: no es una regla que filtre marcas (VEN-7 r3)", () => {
+  it("la divulgación va en «Qué no aceptas», con las demás condiciones no negociables (VEN-7 r4)", () => {
     pintar();
-    const casilla = screen.getByLabelText(t.fields.requiresDisclosure);
-    expect(within(screen.getByRole("region", { name: t.wants.title })).getByLabelText(t.fields.requiresDisclosure)).toBe(casilla);
-    expect(within(screen.getByRole("region", { name: t.rejects.title })).queryByLabelText(t.fields.requiresDisclosure)).toBeNull();
-    expect(t.fields.requiresDisclosureHelp).not.toMatch(/no es para ti|filtra|oculta/i);
+    const casilla = screen.getByRole("checkbox", { name: t.fields.requiresDisclosure });
+    expect(within(screen.getByRole("region", { name: t.rejects.title })).getByRole("checkbox", { name: t.fields.requiresDisclosure })).toBe(casilla);
+    expect(within(screen.getByRole("region", { name: t.wants.title })).queryByRole("checkbox", { name: t.fields.requiresDisclosure })).toBeNull();
+    expect(casilla).toHaveAccessibleDescription(/^No acepto contenido pagado sin la marca de publicidad de la red/);
+  });
+
+  it("los formatos y la disponibilidad dicen para qué sirven: las cadencias los usan al proponer (VEN-7 r4)", () => {
+    pintar();
+    expect(screen.getByRole("group", { name: t.fields.deliverables })).toHaveAccessibleDescription(t.fields.deliverablesHelp);
+    expect(t.fields.deliverablesHelp).toMatch(/cadencias/);
+    expect(screen.getByLabelText(t.fields.availabilityFrom)).toHaveAccessibleDescription(t.fields.availabilityHelp);
+    expect(t.fields.availabilityHelp).toMatch(/cadencias/);
   });
 
   it("manda el creador del brief y la moneda elegida junto al mínimo (VEN-7 r3)", async () => {
@@ -114,11 +132,19 @@ describe("BriefForm", () => {
     expect(enviado().getAll("excludedCategories")).toEqual(["alcohol", "Apuestas"]);
   });
 
-  it("quita una etiqueta con su botón, y excluir una marca sale de la lista del CRM", async () => {
+  it("quita una etiqueta con su botón, y la marca que no aceptas se busca en el CRM y se elige con las flechas (VEN-7 r4)", async () => {
     pintar();
     fireEvent.click(screen.getByRole("button", { name: t.chips.remove("alimentos") }));
-    fireEvent.change(screen.getByLabelText(t.fields.excludedCompanies), { target: { value: LICORES } });
-    fireEvent.click(screen.getByRole("button", { name: t.chips.addTo(t.fields.excludedCompanies) }));
+    const marcas = screen.getByRole("combobox", { name: t.fields.excludedCompanies });
+    fireEvent.change(marcas, { target: { value: "lic" } });
+    const opcion = await screen.findByRole("option", { name: "Licores del Sur" });
+    expect(buscarMarcas).toHaveBeenLastCalledWith("lic");
+    expect(marcas).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(marcas, { key: "ArrowDown" });
+    expect(marcas).toHaveAttribute("aria-activedescendant", opcion.id);
+    fireEvent.keyDown(marcas, { key: "Enter" });
+    expect(guardarBrief).not.toHaveBeenCalled();
+    expect(marcas).toHaveValue("");
     fireEvent.change(screen.getByLabelText(t.fields.wantedCountries), { target: { value: "MX" } });
     fireEvent.keyDown(screen.getByLabelText(t.fields.wantedCountries), { key: "Enter" });
     await act(async () => {
@@ -129,8 +155,28 @@ describe("BriefForm", () => {
     expect(fd.getAll("excludedCompanies")).toEqual([LICORES]);
     expect(fd.getAll("wantedCountries")).toEqual(["CO", "MX"]);
     // La marca ya elegida no se vuelve a ofrecer.
-    const opciones = within(screen.getByLabelText(t.fields.excludedCompanies)).getAllByRole("option").map((o) => o.textContent);
-    expect(opciones).not.toContain("Licores del Sur");
+    fireEvent.change(marcas, { target: { value: "li" } });
+    expect(await screen.findByText(t.chips.searchNone)).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Licores del Sur" })).toBeNull();
+  });
+
+  it("buscar marcas: con una letra lo pide, sin resultados lo dice, y el nombre exacto escrito viaja al guardar", async () => {
+    pintar();
+    const marcas = screen.getByRole("combobox", { name: t.fields.excludedCompanies });
+    fireEvent.change(marcas, { target: { value: "c" } });
+    expect(screen.getByText(t.chips.searchMin("2"))).toBeInTheDocument();
+    expect(buscarMarcas).not.toHaveBeenCalled();
+    fireEvent.change(marcas, { target: { value: "zzz" } });
+    expect(await screen.findByText(t.chips.searchNone)).toBeInTheDocument();
+    // Escrito entero, sin tildes, y sin pulsar «Agregar»: viaja igual.
+    fireEvent.change(marcas, { target: { value: "cafe montana" } });
+    await screen.findByRole("option", { name: "Café Montaña" });
+    fireEvent.keyDown(marcas, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.submit }));
+    });
+    expect(enviado().getAll("excludedCompanies")).toEqual([CAFE]);
   });
 
   it("los entregables viajan por su tipo, no como «on», y el dinero como decimal", async () => {
@@ -156,7 +202,7 @@ describe("BriefForm", () => {
     expect(enviado().get("active")).toBeNull();
   });
 
-  it("el error de un campo se pinta en él, y el aviso de guardado arriba", async () => {
+  it("el error de un campo se pinta en él y se lleva el foco", async () => {
     guardarBrief.mockResolvedValueOnce({ errors: { excludedCategories: MESSAGES.briefErrores.CategoryConflict(L, "alimentos") } });
     pintar();
     await act(async () => {
@@ -168,9 +214,24 @@ describe("BriefForm", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: t.submit }));
     });
-    expect(await screen.findByRole("status")).toHaveTextContent(t.saved);
+    expect(await within(screen.getByTestId("brief-aviso")).findByRole("status")).toHaveTextContent(t.saved);
     // El nombre no se vació al guardar.
     expect(screen.getByLabelText(new RegExp(t.fields.title))).toHaveValue("Marcas de cocina");
+  });
+
+  it("el «Guardado» sale junto al botón y se lleva el foco: a 400 px, arriba no se veía (VEN-7 r4)", async () => {
+    pintar();
+    const guardar = screen.getByRole("button", { name: t.submit });
+    await act(async () => {
+      fireEvent.click(guardar);
+    });
+    const contenedor = screen.getByTestId("brief-aviso");
+    const aviso = within(contenedor).getByRole("status");
+    expect(aviso).toHaveTextContent(t.saved);
+    expect(contenedor).toContainElement(aviso);
+    expect(document.activeElement).toBe(contenedor);
+    // Pegado a «Guardar el brief»: el mismo grupo, justo después.
+    expect(guardar.nextElementSibling).toBe(contenedor);
   });
 
   it("lo escrito sin pulsar «Agregar» ni Enter viaja al guardar y pasa a la lista", async () => {

@@ -182,7 +182,7 @@ describe("PipelineView con la conversión por etapa (VEN-8)", () => {
 
   it("en la lista también se ve, en un resumen por etapa encima de la tabla", () => {
     render(<PipelineView deals={deals} stages={stages} conversion={conversion} f={f} forma="lista" ctx={ctx} />);
-    const resumen = screen.getByRole("region", { name: MESSAGES.pipeline.conversion.listTitle });
+    const resumen = screen.getByRole("region", { name: MESSAGES.pipeline.conversion.listTitle("90") });
     expect(within(resumen).getAllByRole("listitem")).toHaveLength(1);
     expect(within(resumen).getByTestId("conversion-etapa")).toHaveTextContent("de 3 negocios");
   });

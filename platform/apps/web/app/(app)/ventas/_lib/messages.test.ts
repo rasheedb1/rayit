@@ -55,7 +55,7 @@ describe("los textos de Ventas", () => {
     expect(MESSAGES.briefErrores.InvalidTitle(l, null)).toContain(String(BRIEF_LIMITS.titleMax));
     expect(MESSAGES.brief.validacion.categoryTooLong(l)).toContain(String(BRIEF_LIMITS.categoryMax));
     // Ninguna frase del brief lleva una cifra propia: todas las dicen los topes.
-    const sinTopes = { categories: "X", countries: "X", companies: "X", titleMax: "X", categoryMax: "X", notesMax: "X" };
+    const sinTopes = { categories: "X", countries: "X", companies: "X", titleMax: "X", categoryMax: "X", notesMax: "X", deliverables: "X" };
     for (const frase of Object.values(MESSAGES.briefErrores)) expect(frase(sinTopes, null)).not.toMatch(/\d/);
   });
 
@@ -64,8 +64,21 @@ describe("los textos de Ventas", () => {
   });
 
   it("la conversión y las ocultas hablan en singular cuando es una", () => {
-    expect(MESSAGES.pipeline.conversion.basis("1", 1)).toBe("de 1 negocio");
-    expect(MESSAGES.pipeline.conversion.basis("12", 12)).toBe("de 12 negocios");
+    expect(MESSAGES.pipeline.conversion.basis("1", 1, "90")).toBe("de 1 negocio en 90 días");
+    expect(MESSAGES.pipeline.conversion.basis("12", 12, "90")).toBe("de 12 negocios en 90 días");
     expect(MESSAGES.radar.hidden.line("1", 1)).toBe("1 señal oculta por tu brief");
+  });
+
+  it("los conteos de ocultas llegan formateados; el número crudo solo elige el plural (VEN-7 r4)", () => {
+    const en = formatterFor({ locale: "en-US", currency: "USD", timezone: "UTC" });
+    expect(MESSAGES.empresas.hiddenSignals(en.int(1200), 1200)).toBe("1,200 señales ocultas por tu brief");
+    expect(MESSAGES.empresas.hiddenSignals("1", 1)).toBe("1 señal oculta por tu brief");
+    expect(MESSAGES.radar.csv.hiddenByBrief(en.int(1200), 1200)).toBe("1,200 no se ven en la bandeja: tu brief no las acepta.");
+    expect(MESSAGES.radar.csv.hiddenByBrief("1", 1)).toBe("Una no se ve en la bandeja: tu brief no la acepta.");
+  });
+
+  it("el tope de formatos de entregable sale de BRIEF_LIMITS (VEN-7 r4)", () => {
+    expect(LIMITES.deliverables).toBe(String(BRIEF_LIMITS.deliverables));
+    expect(MESSAGES.briefErrores.InvalidDeliverable(LIMITES, null)).toContain(LIMITES.deliverables);
   });
 });

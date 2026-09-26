@@ -247,6 +247,17 @@ describe('VEN-7 · una señal de una categoría excluida no aparece en la bandej
     assert.ok(!r.ids.includes(SEED_LAURA_OCULTA));
     assert.deepEqual(r.hidden, { total: 1, byCompany: 0, byCategory: 1 }, 'la demo abre con «1 señal oculta por tu brief»');
   });
+
+  test('la demo de Laura enseña las dos marcas de «Qué buscas»: una bajo el mínimo y una fuera de sus países (VEN-7 r4)', async () => {
+    const lista = await laura((tx) => listSignals(tx));
+    const bajo = lista.filter((s) => s.briefFit.belowMinBudget).map((s) => s.companyName);
+    const fuera = lista.filter((s) => s.briefFit.countryOutside).map((s) => s.companyName);
+    assert.equal(bajo.length, 1, `una bajo el mínimo (${bajo.join(', ')})`);
+    assert.equal(fuera.length, 1, `una fuera de CO y MX (${fuera.join(', ')})`);
+    assert.notEqual(bajo[0], fuera[0], 'dos tarjetas distintas');
+    // Ninguna nota en las que encajan: sin marca, la tarjeta no dice nada de más.
+    assert.ok(lista.filter((s) => !s.briefFit.belowMinBudget && !s.briefFit.countryOutside).every((s) => !s.briefFit.categoryOutside));
+  });
 });
 
 describe('VEN-7 · guardar el brief', () => {

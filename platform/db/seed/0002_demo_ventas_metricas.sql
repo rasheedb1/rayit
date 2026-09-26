@@ -1059,20 +1059,24 @@ VALUES
    jsonb_build_object('active_ads', 4, 'country', 'CO', 'category', 'bienestar', 'since', to_char(CURRENT_DATE - 32, 'YYYY-MM-DD')), 0.7300, 9800000.00, 'COP',
    'meta_ad_library:vitale.co:' || to_char(CURRENT_DATE - 32, 'YYYY-MM-DD'), 'accepted', '00000002-0000-4000-8000-000000000002', (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC', NULL),
   -- Por revisar: la bandeja de hoy.
+  -- VEN-7 r4: la de Vitalé es de su campaña en Perú, fuera de los países
+  -- del brief de Laura (CO y MX): la tarjeta enseña «Fuera de tus países».
   ('00000002-0000-4000-8000-00000005e007', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e7', 'meta_ad_library',
    '4 anuncios nuevos en Meta desde el ' || to_char(CURRENT_DATE - 7, 'FMDD') || ' '
      || (SELECT m.corto[extract(month FROM CURRENT_DATE - 7)::int] FROM meses m) || ' · snacks',
    now() - interval '2 hours', 'https://www.facebook.com/ads/library/?q=vitale',
-   jsonb_build_object('active_ads', 4, 'country', 'CO', 'category', 'snacks', 'since', to_char(CURRENT_DATE - 7, 'YYYY-MM-DD')), 0.7200, 5000000.00, 'COP',
+   jsonb_build_object('active_ads', 4, 'country', 'PE', 'category', 'snacks', 'since', to_char(CURRENT_DATE - 7, 'YYYY-MM-DD')), 0.7200, 5000000.00, 'COP',
    'meta_ad_library:vitale.co:' || to_char(CURRENT_DATE - 7, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
   ('00000002-0000-4000-8000-00000005e008', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e2', 'press_launches',
    'Anuncia línea de desayunos para ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 30)::int] FROM meses m),
    (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', 'https://www.larepublica.co/empresas/fresko-market-lanza-linea-de-desayunos',
    jsonb_build_object('launch', 'línea de desayunos', 'month', to_char(CURRENT_DATE + 30, 'YYYY-MM')), 0.7500, 6000000.00, 'COP',
    'press_launches:freskomarket.co:desayunos-' || to_char(CURRENT_DATE + 30, 'YYYY-MM'), 'pending', NULL, NULL, NULL),
+  -- VEN-7 r4: una vacante estima poco presupuesto, por debajo del mínimo
+  -- del brief de Laura (3 M): la tarjeta enseña «Bajo tu mínimo».
   ('00000002-0000-4000-8000-00000005e009', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e6', 'job_posts',
    'Vacante "coordinador de influencer marketing"', now() - interval '1 day' - interval '3 hours', 'https://www.linkedin.com/jobs/view/demo-granosdelvalle-influencer',
-   '{"title": "Coordinador de influencer marketing", "board": "linkedin", "city": "Cali"}', 0.6100, 8000000.00, 'COP',
+   '{"title": "Coordinador de influencer marketing", "board": "linkedin", "city": "Cali"}', 0.6100, 2500000.00, 'COP',
    'job_posts:granosdelvalle.co:influencer-marketing:' || to_char(CURRENT_DATE - 1, 'YYYY-MM'), 'pending', NULL, NULL, NULL),
   ('00000002-0000-4000-8000-00000005e010', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e4', 'tiktok_top_ads',
    'Top Ads en TikTok · Colombia · 7 días', now() - interval '2 days', 'https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/es',
@@ -1129,12 +1133,16 @@ VALUES
 -- sembrada antes del pulido r8, con la quinta todavía de Sabores
 -- Caseros, pasa a la marca nueva al volver a sembrar.
 ON CONFLICT (id) DO UPDATE SET
-  company_id   = EXCLUDED.company_id,
-  headline_es  = EXCLUDED.headline_es,
-  detected_at  = EXCLUDED.detected_at,
-  evidence_url = EXCLUDED.evidence_url,
-  evidence     = EXCLUDED.evidence,
-  dedupe_key   = EXCLUDED.dedupe_key
+  company_id      = EXCLUDED.company_id,
+  headline_es     = EXCLUDED.headline_es,
+  detected_at     = EXCLUDED.detected_at,
+  evidence_url    = EXCLUDED.evidence_url,
+  evidence        = EXCLUDED.evidence,
+  dedupe_key      = EXCLUDED.dedupe_key,
+  -- VEN-7 r4: el presupuesto de la vacante bajó a 2,5 M; una base ya
+  -- sembrada lo recoge al volver a sembrar.
+  budget_estimate = EXCLUDED.budget_estimate,
+  budget_currency = EXCLUDED.budget_currency
 WHERE signal.status = 'pending';
 
 

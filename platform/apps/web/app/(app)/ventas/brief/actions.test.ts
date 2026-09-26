@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * embebido en packages/db/test/brief.test.ts.
  */
 const saveBrief = vi.fn();
+const searchBriefCompanies = vi.fn();
+const rejectSignalBrand = vi.fn();
 const revalidatePath = vi.fn();
 const puedeEditarElBrief = vi.fn();
 
@@ -19,12 +21,14 @@ vi.mock("@/lib/workspace/settings", () => ({
 vi.mock("@mc/db/queries/brief", async (original) => ({
   ...(await original<typeof import("@mc/db/queries/brief")>()),
   saveBrief: (...a: unknown[]) => saveBrief(...a),
+  searchBriefCompanies: (...a: unknown[]) => searchBriefCompanies(...a),
 }));
+vi.mock("@mc/db/queries/ventas", () => ({ rejectSignalBrand: (...a: unknown[]) => rejectSignalBrand(...a) }));
 
 import { BriefError } from "@mc/db/queries/brief";
 import { formatterFor } from "@/lib/format";
 import { MESSAGES } from "../_lib/messages";
-import { guardarBrief } from "./actions";
+import { buscarMarcas, guardarBrief, noAceptarMarca } from "./actions";
 import { briefLimitTexts } from "./limites";
 
 const LICORES = "00000009-0000-4000-8000-0000000b7c01";
@@ -61,6 +65,8 @@ function datos(cambios: Record<string, string | string[] | null> = {}): FormData
 
 beforeEach(() => {
   saveBrief.mockReset().mockResolvedValue("brief-1");
+  searchBriefCompanies.mockReset().mockResolvedValue([{ id: LICORES, name: "Licores del Sur" }]);
+  rejectSignalBrand.mockReset();
   revalidatePath.mockReset();
   puedeEditarElBrief.mockReset().mockResolvedValue(true);
 });
@@ -154,5 +160,53 @@ describe("guardarBrief", () => {
   it("si la base lo rechaza por el rol (0064 §5), lo dice igual, sin SQL", async () => {
     saveBrief.mockRejectedValue(new BriefError("Forbidden"));
     expect(await guardarBrief({}, datos())).toEqual({ message: E.Forbidden(L, null) });
+  });
+});
+
+describe("buscarMarcas (VEN-7 r4)", () => {
+  it("busca en el servidor y devuelve las marcas como opciones", async () => {
+    expect(await buscarMarcas("lic")).toEqual({ results: [{ value: LICORES, label: "Licores del Sur" }] });
+    expect(searchBriefCompanies).toHaveBeenCalledWith({}, "lic");
+  });
+
+  it("si la base falla, lo dice sin SQL", async () => {
+    const consola = vi.spyOn(console, "error").mockImplementation(() => {});
+    searchBriefCompanies.mockRejectedValue(new Error("connection reset"));
+    expect(await buscarMarcas("lic")).toEqual({ error: MESSAGES.brief.chips.searchError });
+    consola.mockRestore();
+  });
+});
+
+describe("noAceptarMarca (VEN-7 r4)", () => {
+  const SENAL = "00000009-0000-4000-8000-0000000b75a1";
+  const r = MESSAGES.radar.reject;
+  const fd = (campos: Record<string, string | string[]>) => {
+    const data = new FormData();
+    for (const [k, v] of Object.entries(campos)) for (const x of Array.isArray(v) ? v : [v]) data.append(k, x);
+    return data;
+  };
+
+  it("sin permiso no escribe nada", async () => {
+    puedeEditarElBrief.mockResolvedValue(false);
+    expect(await noAceptarMarca({}, fd({ signalId: SENAL }))).toEqual({ message: MESSAGES.brief.sinPermiso });
+    expect(rejectSignalBrand).not.toHaveBeenCalled();
+  });
+
+  it("con los creadores elegidos, o con todos; y el aviso dice si la bandeja ya no la enseña", async () => {
+    rejectSignalBrand.mockResolvedValueOnce({ companyName: "Ropa Veloz", hidden: true });
+    expect(await noAceptarMarca({}, fd({ signalId: SENAL }))).toEqual({ ok: true, notice: r.doneHidden("Ropa Veloz") });
+    expect(rejectSignalBrand).toHaveBeenLastCalledWith({}, SENAL, {});
+    rejectSignalBrand.mockResolvedValueOnce({ companyName: "Ropa Veloz", hidden: false });
+    expect(await noAceptarMarca({}, fd({ signalId: SENAL, creatorIds: [BETO] }))).toEqual({ ok: true, notice: r.doneVisible("Ropa Veloz") });
+    expect(rejectSignalBrand).toHaveBeenLastCalledWith({}, SENAL, { creatorIds: [BETO] });
+    expect(revalidatePath).toHaveBeenCalledWith("/ventas", "layout");
+  });
+
+  it("un error de dominio vuelve con su frase; un id que no es uuid ni llega a la base", async () => {
+    rejectSignalBrand.mockRejectedValueOnce(new BriefError("NoActiveBrief"));
+    expect(await noAceptarMarca({}, fd({ signalId: SENAL }))).toEqual({ message: E.NoActiveBrief(L, null) });
+    expect(await noAceptarMarca({}, fd({ signalId: "x" }))).toEqual({ message: E.SignalNotFound(L, null) });
+    expect(await noAceptarMarca({}, fd({ signalId: SENAL, creatorIds: ["x"] }))).toEqual({ message: MESSAGES.brief.validacion.creatorUnknown });
+    expect(rejectSignalBrand).toHaveBeenCalledTimes(1);
   });
 });
