@@ -18,9 +18,15 @@
 --
 -- Aquí el CHECK pasa a decir lo mismo que el despachador: sin texto, los
 -- cinco tipos que hace una persona. Solo afloja la regla (toda fila que
--- cumplía la vieja cumple esta), así que no hay datos que migrar. Las
--- filas que ya existen con un comentario y generate_with_ai = true se
--- ponen en false: nadie las iba a redactar.
+-- cumplía la vieja cumple esta), así que no hay datos que migrar.
+--
+-- Las filas viejas se quedan como están: un comentario con
+-- generate_with_ai = true (la secuencia demo del seed 0005) no se
+-- corrige aquí. No haría falta, porque el motor y la pantalla miran el
+-- tipo del paso y no la bandera (al enrolar, lo que no se despacha nace
+-- como borrador a mano; la tarjeta usa sinTexto). Y no se podría:
+-- outbound_step tiene RLS en FORCE y quien migra no fija workspace, así
+-- que un UPDATE aquí no tocaría ninguna fila (lo mismo que 0062 §4).
 --
 -- El CHECK de 0037 no tiene nombre propio; se busca por su definición,
 -- no por el nombre que Postgres le puso (outbound_step_check1), para no
@@ -50,7 +56,3 @@ ALTER TABLE outbound_step
 
 COMMENT ON CONSTRAINT outbound_step_text_or_by_hand ON outbound_step IS
   'Sin generación automática, el paso necesita su texto fijo; salvo los que hace una persona (comentario, reacción, tarea a mano): esos no llevan texto (VEN-13, 0063).';
-
-UPDATE outbound_step
-   SET generate_with_ai = false
- WHERE step_type IN ('linkedin_comment', 'instagram_comment') AND generate_with_ai;

@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  useEffect,
-  useOptimistic,
-  useRef,
-  useState,
-  useTransition,
-} from "react";
+import { useEffect, useOptimistic, useRef, useState, useTransition } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Aviso } from "../../../_lib/aviso";
@@ -61,20 +55,17 @@ export function LineaDeTiempo({
   canales: Opcion[];
 }) {
   const t = MESSAGES.paso;
-  const [vista, moverOptimista] = useOptimistic(
-    pasos,
-    (actual: PasoVista[], orden: string[]) => {
-      const porId = new Map(actual.map((p) => [p.id, p]));
-      // El día es del puesto, no del mensaje: cada puesto conserva el suyo (y su espera, y su número).
-      return orden.map((id, i) => ({
-        ...porId.get(id)!,
-        numero: actual[i]!.numero,
-        diaLabel: actual[i]!.diaLabel,
-        esperaLabel: actual[i]!.esperaLabel,
-        dayOffset: actual[i]!.dayOffset,
-      }));
-    },
-  );
+  const [vista, moverOptimista] = useOptimistic(pasos, (actual: PasoVista[], orden: string[]) => {
+    const porId = new Map(actual.map((p) => [p.id, p]));
+    // El día es del puesto, no del mensaje: cada puesto conserva el suyo (y su espera, y su número).
+    return orden.map((id, i) => ({
+      ...porId.get(id)!,
+      numero: actual[i]!.numero,
+      diaLabel: actual[i]!.diaLabel,
+      esperaLabel: actual[i]!.esperaLabel,
+      dayOffset: actual[i]!.dayOffset,
+    }));
+  });
   const [editando, setEditando] = useState<string | null>(null);
   const [arrastrado, setArrastrado] = useState<string | null>(null);
   /** La tarjeta sobre la que está el paso arrastrado: ahí se pinta la línea de inserción. */
@@ -90,20 +81,10 @@ export function LineaDeTiempo({
   useEffect(() => {
     if (!foco || editando === foco.id) return;
     const tarjeta = listaRef.current?.querySelector(`[data-paso="${foco.id}"]`);
-    const boton = (accion: string) =>
-      tarjeta?.querySelector<HTMLButtonElement>(
-        `[data-accion="${accion}"] button`,
-      );
-    const otro =
-      foco.accion === "subir"
-        ? "bajar"
-        : foco.accion === "bajar"
-          ? "subir"
-          : null;
+    const boton = (accion: string) => tarjeta?.querySelector<HTMLButtonElement>(`[data-accion="${accion}"] button`);
+    const otro = foco.accion === "subir" ? "bajar" : foco.accion === "bajar" ? "subir" : null;
     const destino =
-      [boton(foco.accion), otro ? boton(otro) : null].find(
-        (b) => b && !b.disabled,
-      ) ?? tarjeta?.querySelector<HTMLElement>("h3");
+      [boton(foco.accion), otro ? boton(otro) : null].find((b) => b && !b.disabled) ?? tarjeta?.querySelector<HTMLElement>("h3");
     destino?.focus();
     // Mientras se guarda, el servidor puede volver a pintar la lista: el foco se repone hasta que termine.
     if (!pending) setFoco(null);
@@ -115,13 +96,7 @@ export function LineaDeTiempo({
       moverOptimista(orden);
       const r = await reordenarPasos(sequenceId, orden);
       if (r.error) setError(r.error);
-      else
-        setAnuncio(
-          t.movido(
-            pasos.find((p) => p.id === movido)?.numero ?? "",
-            String(orden.indexOf(movido) + 1),
-          ),
-        );
+      else setAnuncio(t.movido(pasos.find((p) => p.id === movido)?.numero ?? "", String(orden.indexOf(movido) + 1)));
     });
   }
 
@@ -140,9 +115,7 @@ export function LineaDeTiempo({
     setSobre(null);
     if (!arrastrado || arrastrado === destino || pending) return;
     const orden = vista.map((p) => p.id).filter((id) => id !== arrastrado);
-    const baja =
-      vista.findIndex((p) => p.id === arrastrado) <
-      vista.findIndex((p) => p.id === destino);
+    const baja = vista.findIndex((p) => p.id === arrastrado) < vista.findIndex((p) => p.id === destino);
     orden.splice(orden.indexOf(destino) + (baja ? 1 : 0), 0, arrastrado);
     setArrastrado(null);
     reordenar(orden, arrastrado);
@@ -165,10 +138,7 @@ export function LineaDeTiempo({
 
   return (
     <section aria-labelledby="linea" aria-busy={pending || undefined}>
-      <h2
-        id="linea"
-        className="mb-3 text-xs font-medium uppercase tracking-wide text-fg-3"
-      >
+      <h2 id="linea" className="mb-3 text-xs font-medium uppercase tracking-wide text-fg-3">
         {MESSAGES.detalle.pasos}
       </h2>
       <Aviso message={error} info={info} className="mb-3" />
@@ -198,8 +168,7 @@ export function LineaDeTiempo({
               }}
               onDragLeave={(e) => {
                 // Pasar de la tarjeta a un hijo suyo no es salir: solo se borra al dejar el paso entero.
-                if (!e.currentTarget.contains(e.relatedTarget as Node | null))
-                  setSobre((s) => (s === paso.id ? null : s));
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setSobre((s) => (s === paso.id ? null : s));
               }}
               onDrop={(e) => {
                 e.preventDefault();
@@ -212,18 +181,14 @@ export function LineaDeTiempo({
                 <span className={`h-3 w-px ${i === 0 ? "" : "bg-line"}`} />
                 <span
                   className={`grid size-7 shrink-0 place-items-center rounded-full border bg-surface ${
-                    marcado
-                      ? "border-accent text-accent"
-                      : "border-line text-fg-2"
+                    marcado ? "border-accent text-accent" : "border-line text-fg-2"
                   }`}
                 >
                   <IconoCanal canal={paso.channel} tipo={paso.stepType} />
                 </span>
                 {siguiente && <span className="w-px flex-1 bg-line" />}
               </div>
-              <div
-                className={`min-w-0 ${arrastrado === paso.id ? "opacity-50" : ""}`}
-              >
+              <div className={`min-w-0 ${arrastrado === paso.id ? "opacity-50" : ""}`}>
                 <div className="relative">
                   {insercion && (
                     <span
@@ -248,9 +213,7 @@ export function LineaDeTiempo({
                       ultimo={i === vista.length - 1}
                       mover={(d) => mover(paso.id, d)}
                       editar={() => setEditando(paso.id)}
-                      quitar={async () =>
-                        actuar(() => quitarPaso(sequenceId, paso.id))
-                      }
+                      quitar={async () => actuar(() => quitarPaso(sequenceId, paso.id))}
                       arrastrable={estructura}
                       ocupado={pending}
                       editable={editable}
@@ -264,9 +227,7 @@ export function LineaDeTiempo({
                 </div>
                 {siguiente &&
                   (siguiente.esperaLabel ? (
-                    <p className="py-2.5 text-xs tabular-nums text-fg-3">
-                      {siguiente.esperaLabel}
-                    </p>
+                    <p className="py-2.5 text-xs tabular-nums text-fg-3">{siguiente.esperaLabel}</p>
                   ) : (
                     <div className="h-3" />
                   ))}

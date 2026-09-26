@@ -75,7 +75,23 @@ export default async function CadenciasPage({
       key: "cadencia",
       header: t.lista.columnas.cadencia,
       render: (c) => (
-        <CellMain sub={c.signalHeadline ? t.lista.desde(c.companyName ? `${c.companyName} · ${c.signalHeadline}` : c.signalHeadline) : undefined}>
+        <CellMain
+          sub={
+            <>
+              {c.signalHeadline && (
+                <span className="block">{t.lista.desde(c.companyName ? `${c.companyName} · ${c.signalHeadline}` : c.signalHeadline)}</span>
+              )}
+              {/* Por debajo de md las columnas de cifras se ocultan: sus números van aquí, con las mismas cuentas de SQL. */}
+              <span className="block tabular-nums md:hidden">
+                {[
+                  t.lista.pasosCorto(f.int(c.steps), c.steps),
+                  t.lista.dentroCorto(f.int(c.enrolledLive)),
+                  c.replyRate === null ? t.lista.sinContactar : t.lista.respuestaCorto(f.pct(c.replyRate)),
+                ].join(" · ")}
+              </span>
+            </>
+          }
+        >
           <Link href={`${CADENCIAS}/${c.id}`} className="hover:underline">
             {c.name}
           </Link>
@@ -182,8 +198,9 @@ export default async function CadenciasPage({
           rows={cadencias}
           rowKey={(c) => c.id}
           caption={t.lista.caption}
-          // En un teléfono la tabla se desplaza dentro de su marco en vez de aplastar la columna «Cadencia».
-          className="[&_table]:min-w-[36rem]"
+          // Por debajo de md se ocultan Pasos, Dentro y Respuesta (columnas 4 a 6): sus cifras van bajo el nombre, así
+          // que en un teléfono no hay nada fuera de la vista. Desde md, la tabla completa con su ancho mínimo.
+          className="max-md:[&_th:nth-child(n+4)]:hidden max-md:[&_td:nth-child(n+4)]:hidden md:[&_table]:min-w-[36rem]"
           emptyState={<EmptyState title={t.lista.vacio.titulo} description={t.lista.vacio.descripcion} />}
         />
       </section>

@@ -477,6 +477,24 @@ export function guidanceAfterRetype(
   };
 }
 
+/**
+ * La guía de un paso que cambió de puesto en la secuencia (se reordenó).
+ * La de la plantilla y la del modelo se escribieron sabiendo qué iba
+ * antes («No repitas la audiencia del correo»): en otro puesto pueden
+ * hablar de un mensaje que todavía no salió, así que se recomponen con
+ * las reglas, que no dependen del puesto. La de las reglas queda igual
+ * (se recompone a lo mismo) y la de la persona no se toca.
+ */
+export function guidanceAfterMove(
+  current: StepGuidance & { angleKey: string | null },
+  stepType: string,
+  ctx: { signalKind: RecommendSignalKind; locale?: GuidanceLocale; requiresDisclosure: boolean },
+): StepGuidance {
+  const { guidance, source, writtenFor } = current;
+  if (guidance === null || source === 'person' || source === null) return { guidance, source, writtenFor };
+  return { guidance: composeStepGuidance(current.angleKey, stepType, ctx), source: 'rules', writtenFor: stepType };
+}
+
 /** La guía se escribió para otro tipo de paso y nadie la ha revisado desde entonces. */
 export function guidanceIsStale(g: Pick<StepGuidance, 'guidance' | 'writtenFor'>, stepType: string): boolean {
   return g.guidance !== null && g.writtenFor !== null && g.writtenFor !== stepType;

@@ -78,6 +78,14 @@ export const MESSAGES = {
     contactadas: (respondidas: string, contactadas: string) => `${respondidas} de ${contactadas} contactadas`,
     sinContactar: "Sin envíos",
     desde: (senal: string) => `Desde: ${senal}`,
+    /**
+     * En un teléfono, las cifras de las columnas que no caben (pasos,
+     * dentro, respuesta) van bajo el nombre: la creadora ve cómo va cada
+     * cadencia sin desplazar la tabla.
+     */
+    pasosCorto: plural({ one: "{n} paso", other: "{n} pasos" }),
+    dentroCorto: (n: string) => `${n} dentro`,
+    respuestaCorto: (pct: string) => `${pct} respuesta`,
     vacio: {
       titulo: "Todavía no tienes cadencias",
       descripcion: "Pide una propuesta desde una señal de arriba o empieza desde una plantilla.",
