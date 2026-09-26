@@ -66,8 +66,8 @@ export default async function BriefPage() {
   const countries = countryOptions(f.locale);
   const countryName = new Map(countries.map((c) => [c.value, c.label]));
   const catalogo: string[] = [...DELIVERABLES];
-  // Un formato guardado que no está en el catálogo (el seed trae
-  // «historias») se sigue viendo, marcado, para no borrarlo sin querer.
+  // Un formato guardado que no está en el catálogo se sigue viendo, con
+  // su nombre tal cual, para no borrarlo sin querer al guardar.
   const extra = (brief?.deliverables ?? []).filter((k) => !catalogo.includes(k));
   const deliverableOptions = [...catalogo, ...extra].map((k) => ({
     value: k,

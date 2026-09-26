@@ -49,7 +49,7 @@ const BRIEF: OutboundBrief = {
   wantedCountries: ["CO", "MX"],
   minBudget: "3000000.00",
   currency: "COP",
-  deliverables: ["tiktok", "reel", "historias"],
+  deliverables: ["tiktok", "reel", "podcast"],
   availabilityFrom: "2026-10-01",
   availabilityTo: "2026-12-15",
   excludedCategories: ["alcohol"],
@@ -94,8 +94,8 @@ describe("la página del brief", () => {
       { value: "MX", label: "México" },
     ]);
     expect(props.values.excludedCompanies).toEqual([{ value: "e1", label: "Café Alma" }]);
-    // Un formato guardado que no es del catálogo («historias» del seed) sigue a la vista.
-    expect(props.deliverableOptions.map((d) => d.value)).toContain("historias");
+    // Un formato guardado que no es del catálogo sigue a la vista, con su nombre tal cual.
+    expect(props.deliverableOptions).toContainEqual({ value: "podcast", label: "podcast" });
   });
 
   it("sin creador en el espacio no ofrece un formulario que no podría guardar", async () => {

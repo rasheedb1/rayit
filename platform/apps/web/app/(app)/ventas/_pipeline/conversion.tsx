@@ -50,9 +50,12 @@ export function conversionView(c: StageConversion | undefined, stageLabel: strin
  */
 export function StageConversionRow({ view }: { view: ConversionView | null }) {
   if (!view) return null;
+  // `relative` no es decorativo: sin él, el sr-only (absolute) escapa del
+  // scroll del tablero y ensancha la página entera a 400 px, igual que en
+  // la tarjeta (_pipeline/tablero.tsx).
   return (
     <p
-      className="mt-2 flex items-baseline justify-between gap-2 border-t border-dashed border-border pt-2 text-xs text-muted"
+      className="relative mt-2 flex items-baseline justify-between gap-2 border-t border-dashed border-border pt-2 text-xs text-muted"
       title={view.label}
       data-testid="conversion-etapa"
     >

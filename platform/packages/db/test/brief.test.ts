@@ -271,20 +271,25 @@ describe('VEN-7 · guardar el brief', () => {
   });
 
   test('los entregables que siguen elegidos conservan su rango del tarifario', async () => {
+    // «historias» es como lo escribió el seed 0002; el catálogo dice «historia».
     await t.admin(`
       UPDATE outbound_brief
-         SET deliverables = '[{"kind": "tiktok", "label": "Video de TikTok", "price_low": 7100000, "price_high": 10600000}]'
+         SET deliverables = '[{"kind": "tiktok", "label": "Video de TikTok", "price_low": 7100000, "price_high": 10600000},
+                              {"kind": "historias", "label": "Historia de Instagram (3 pantallas)", "price_low": 1600000}]'
        WHERE workspace_id = '${WS_BRIEF}'`);
-    await enBrief((tx) => saveBrief(tx, brief({ deliverables: ['tiktok', 'short'] })));
+    assert.deepEqual((await enBrief((tx) => getBrief(tx)))?.deliverables, ['tiktok', 'historia'], 'se lee con el nombre del catálogo');
+
+    await enBrief((tx) => saveBrief(tx, brief({ deliverables: ['tiktok', 'historia', 'short'] })));
     const { rows } = await enBrief((tx) =>
       tx.query<{ deliverables: unknown }>('SELECT deliverables FROM outbound_brief WHERE status = $1', ['active']),
     );
     assert.deepEqual(rows[0]?.deliverables, [
       { kind: 'tiktok', label: 'Video de TikTok', price_low: 7100000, price_high: 10600000 },
+      { kind: 'historia', label: 'Historia de Instagram (3 pantallas)', price_low: 1600000 },
       { kind: 'short' },
     ]);
     const b = await enBrief((tx) => getBrief(tx));
-    assert.deepEqual(b?.deliverables, ['tiktok', 'short']);
+    assert.deepEqual(b?.deliverables, ['tiktok', 'historia', 'short']);
   });
 
   test('una categoría no puede estar en «busco» y en «no acepto» a la vez', async () => {

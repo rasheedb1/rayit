@@ -390,16 +390,16 @@ export const STORIES: readonly Story[] = [
     title: "Brief de outbound",
     desc: "Qué busca el creador (categorías, países, presupuesto mínimo, entregables) y qué no acepta. Filtra la bandeja del radar.",
     done: "Una señal de una categoría excluida no aparece en la bandeja.",
-    status: "pendiente",
-    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4: es S y no es parte del ciclo que se demuestra.",
+    status: "hecho",
+    note: "/ventas/brief sobre outbound_brief (queries/brief.ts). El radar oculta las señales de categorías y marcas excluidas y lo dice («3 señales ocultas por tu brief», con «Verlas»); KPI, pestaña y bandeja cuentan igual. Migración 0043 (un brief activo por workspace y CHECK) pendiente de aplicar en Supabase.",
   },
   {
     id: "VEN-8", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-3"],
     title: "Deal perdido y conversión por etapa",
     desc: "Motivo de pérdida, y tasa de conversión por etapa desde deal_stage_history.",
     done: "La tasa entre etapas aparece en el pipeline con el número de deals que la sostiene.",
-    status: "pendiente",
-    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4: es S y no es parte del ciclo que se demuestra.",
+    status: "hecho",
+    note: "Perder un negocio pide el motivo en un diálogo, y la base lo exige al COMMIT (0043, por aplicar). Bajo cada columna abierta, «58 % avanza · de 12 negocios» desde deal_stage_history (queries/conversion.ts), probado contra un recuento independiente.",
   },
   // Outreach automático. Diseño en docs/ventas-outreach.md, a partir de CadenceV1.0.
   {

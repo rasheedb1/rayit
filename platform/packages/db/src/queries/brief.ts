@@ -125,6 +125,19 @@ export interface OutboundBrief {
   updatedAt: string;
 }
 
+/**
+ * Formatos que en datos viejos tienen otro nombre: el seed 0002 escribió
+ * «historias» y el catálogo (DELIVERABLES de @mc/core, rate_card_item)
+ * dice «historia». Se leen con el nombre del catálogo, para que la
+ * pantalla no enseñe dos casillas de lo mismo, y al guardar se conserva
+ * lo que traían (la etiqueta y el rango del tarifario).
+ */
+const DELIVERABLE_ALIASES: Readonly<Record<string, string>> = { historias: 'historia' };
+
+function canonicalKind(kind: string): string {
+  return DELIVERABLE_ALIASES[kind] ?? kind;
+}
+
 type BriefRowSql = {
   id: string; creator_id: string; creator_name: string; title: string;
   wanted_categories: string[]; wanted_countries: string[]; min_budget: string | null; currency: string;
@@ -155,9 +168,13 @@ function toBrief(r: BriefRowSql): OutboundBrief {
     wantedCountries: r.wanted_countries,
     minBudget: r.min_budget,
     currency: r.currency,
-    deliverables: (Array.isArray(r.deliverables) ? r.deliverables : [])
-      .map((d) => (d && typeof d.kind === 'string' ? d.kind : null))
-      .filter((k): k is string => k !== null),
+    deliverables: [
+      ...new Set(
+        (Array.isArray(r.deliverables) ? r.deliverables : [])
+          .map((d) => (d && typeof d.kind === 'string' ? canonicalKind(d.kind) : null))
+          .filter((k): k is string => k !== null),
+      ),
+    ],
     availabilityFrom: r.availability_from,
     availabilityTo: r.availability_to,
     excludedCategories: r.excluded_categories,
@@ -474,9 +491,12 @@ export async function saveBrief(tx: WorkspaceTx, input: SaveBriefInput): Promise
   const previos = new Map(
     (Array.isArray(actual[0]?.deliverables) ? actual[0].deliverables : [])
       .filter((d) => d && typeof d.kind === 'string')
-      .map((d) => [d.kind, d] as const),
+      .map((d) => [canonicalKind(d.kind), d] as const),
   );
-  const deliverables = kinds.map((kind) => previos.get(kind) ?? { kind });
+  const deliverables = kinds.map((kind) => {
+    const previo = previos.get(canonicalKind(kind));
+    return previo ? { ...previo, kind: canonicalKind(kind) } : { kind: canonicalKind(kind) };
+  });
   const status: BriefStatus = input.active ? 'active' : 'paused';
 
   const valores = [
