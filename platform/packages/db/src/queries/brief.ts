@@ -17,9 +17,13 @@
  *   3. Las cadencias lo RESPETAN: enrollContacts no inscribe y el
  *      despachador cancela lo de una marca excluida (briefCompanyVerdictSql).
  *
- * Un brief es de un creador, con uno activo por creador (0064 §1). Con
- * varios creadores en el espacio, las cadencias usan el del creador del
- * negocio y el radar oculta solo lo que excluyen todos.
+ * Un brief es de UN creador, con uno activo por creador (0064 §1), y la
+ * pantalla edita el de un creador concreto (getBrief y saveBrief reciben
+ * su id). Con varios creadores en el espacio:
+ *   · las cadencias usan el del creador del negocio y, si ese creador no
+ *     tiene brief activo, lo que excluyen todos los activos del espacio;
+ *   · el radar, que es del espacio (una señal no tiene creador), oculta
+ *     solo lo que excluyen todos.
  *
  * Qué es la «categoría» de una señal. El brief habla en categorías de
  * marca —«alimentos», «alcohol», «apuestas»— y una señal no tiene
@@ -32,12 +36,13 @@
  * (0031): sin tildes, sin mayúsculas, sin signos. «Suplementos» excluye
  * «SUPLEMENTOS» y «suplementos ».
  *
- * «Qué busca» (categorías, países, presupuesto, entregables,
- * disponibilidad) NO oculta nada. Del brief, el recomendador y el
- * generador usan hoy el título, las notas y la divulgación
- * (docs/ventas-outreach.md §5.5 y §5.8). Ocultar por
- * «no encaja del todo» escondería señales que valen la pena; ocultar
- * por «esto no lo acepto» es exactamente lo que el creador pidió.
+ * «Qué busca» (categorías, países, presupuesto) NO oculta nada: la
+ * bandeja lo MARCA en cada tarjeta («Bajo tu mínimo», «Fuera de tus
+ * países», «Buscas cocina»; briefSignalLateralSql). Ocultar por «no
+ * encaja del todo» escondería señales que valen la pena; ocultar por
+ * «esto no lo acepto» es exactamente lo que el creador pidió. Del brief,
+ * el recomendador y el generador usan además el título, las notas y la
+ * divulgación (docs/ventas-outreach.md §5.5 y §5.8).
  *
  * Mismas reglas que el resto de queries/: WorkspaceTx, RLS filtra, los
  * INSERT escriben current_workspace_id(), el dinero viaja como string.
@@ -73,12 +78,14 @@ export const BRIEF_ERROR_CODES = [
   'InvalidCountry',
   'TooManyCountries',
   'InvalidBudget',
+  'InvalidCurrency',
   'InvalidWindow',
   'InvalidDeliverable',
   'InvalidNotes',
   'CompanyNotInCrm',
   'TooManyCompanies',
   'NoCreator',
+  'UnknownCreator',
   'Forbidden',
 ] as const;
 export type BriefErrorCode = (typeof BRIEF_ERROR_CODES)[number];
@@ -196,61 +203,90 @@ function toBrief(r: BriefRowSql): OutboundBrief {
   };
 }
 
-/**
- * Un brief activo del workspace, o null: el más reciente si hay varios
- * (uno por creador, 0064 §1). El radar no usa este: aplica todos
- * (briefVerdictSql).
- */
-export async function getActiveBrief(tx: WorkspaceTx): Promise<OutboundBrief | null> {
-  const { rows } = await tx.query<BriefRowSql>(`${BRIEF_SELECT} WHERE b.status = 'active' ORDER BY b.updated_at DESC, b.id LIMIT 1`);
-  return rows[0] ? toBrief(rows[0]) : null;
-}
+/** El orden en que se elige «el brief de un creador»: el activo y, si no hay, el último que se tocó. */
+const BRIEF_ORDER = `ORDER BY (b.status = 'active') DESC, b.updated_at DESC, b.created_at DESC, b.id`;
 
-/**
- * El brief que edita la pantalla: el activo o, si no hay, el último que
- * se tocó (uno en pausa se sigue pudiendo editar y reactivar). Null si
- * el workspace nunca tuvo uno.
- */
-export async function getBrief(tx: WorkspaceTx): Promise<OutboundBrief | null> {
+/** El brief activo de un creador, o null (en pausa, o sin brief). */
+export async function getActiveBrief(tx: WorkspaceTx, creatorId: string): Promise<OutboundBrief | null> {
+  if (!isUuid(creatorId)) return null;
   const { rows } = await tx.query<BriefRowSql>(
-    `${BRIEF_SELECT} ORDER BY (b.status = 'active') DESC, b.updated_at DESC, b.created_at DESC LIMIT 1`,
+    `${BRIEF_SELECT} WHERE b.status = 'active' AND b.creator_id = $1::uuid ${BRIEF_ORDER} LIMIT 1`,
+    [creatorId],
   );
   return rows[0] ? toBrief(rows[0]) : null;
 }
 
 /**
- * De quién es (o sería) el brief: el creador del brief guardado o, si no
- * hay, el creador principal del workspace (el primero activo, como
- * Cotizar). Null si el workspace no tiene ninguno: la pantalla lo dice
- * en vez de ofrecer un formulario que no podría guardar (NoCreator).
+ * El brief que la pantalla edita para un creador: el activo o, si no
+ * hay, el último que se tocó (uno en pausa se sigue pudiendo editar y
+ * reactivar). Null si ese creador nunca tuvo uno, o si no es de este
+ * workspace (RLS no deja ver el de otro).
  *
- * Trae también el tipo de espacio: en una agencia el brief es la regla
- * de todos sus creadores y la pantalla no lo atribuye a uno solo
- * («Brief del espacio»).
+ * Un brief es de UN creador (outbound_brief.creator_id, uno activo por
+ * creador, 0064 §1): el recomendador y el generador leen el del creador
+ * del negocio. Por eso la pantalla elige creador y no hay «el brief del
+ * espacio»: con dos creadores, editar «el último tocado» sobrescribía el
+ * de otro sin saberlo.
  */
-export async function getBriefOwner(
+export async function getBrief(tx: WorkspaceTx, creatorId: string): Promise<OutboundBrief | null> {
+  if (!isUuid(creatorId)) return null;
+  const { rows } = await tx.query<BriefRowSql>(`${BRIEF_SELECT} WHERE b.creator_id = $1::uuid ${BRIEF_ORDER} LIMIT 1`, [
+    creatorId,
+  ]);
+  return rows[0] ? toBrief(rows[0]) : null;
+}
+
+/** Un creador del espacio, con el estado de su brief (el que editaría la pantalla). */
+export interface BriefCreator {
+  id: string;
+  displayName: string;
+  /** Null si todavía no tiene brief. */
+  briefStatus: BriefStatus | null;
+  briefTitle: string | null;
+}
+
+/**
+ * Los creadores a los que se les puede escribir brief, en el orden en
+ * que se crearon (el primero es el principal, como en Cotizar), y el
+ * tipo de espacio. Un creador borrado no sale; uno inactivo sale solo si
+ * ya tiene brief, para no perderlo de vista.
+ *
+ * La pantalla elige con esto de quién es el brief que enseña
+ * (pickBriefCreator) y, si hay más de un brief activo, lo dice: el radar
+ * oculta solo lo que excluyen todos.
+ */
+export async function listBriefCreators(
   tx: WorkspaceTx,
-): Promise<{ id: string; displayName: string; workspaceKind: 'creator' | 'agency' } | null> {
-  const { rows } = await tx.query<{ id: string; display_name: string; workspace_kind: 'creator' | 'agency' | null }>(
-    `SELECT r.id, r.display_name,
-            (SELECT w.kind FROM workspace w WHERE w.id = current_workspace_id()) AS workspace_kind
-       FROM (
-       SELECT cp.id, cp.display_name, 0 AS o
-         FROM creator_profile cp
-        WHERE cp.id = (SELECT b.creator_id FROM outbound_brief b
-                        ORDER BY (b.status = 'active') DESC, b.updated_at DESC, b.created_at DESC LIMIT 1)
-       UNION ALL
-       (SELECT cp.id, cp.display_name, 1 AS o
-          FROM creator_profile cp
-         WHERE cp.status = 'active' AND cp.deleted_at IS NULL
-         ORDER BY cp.created_at
-         LIMIT 1)
-     ) r
-     ORDER BY r.o
-     LIMIT 1`,
+): Promise<{ workspaceKind: 'creator' | 'agency'; creators: BriefCreator[] }> {
+  const { rows: ws } = await tx.query<{ kind: string }>('SELECT kind FROM workspace WHERE id = current_workspace_id()');
+  const { rows } = await tx.query<{ id: string; display_name: string; brief_status: BriefStatus | null; brief_title: string | null }>(
+    `SELECT cp.id, cp.display_name, ub.status AS brief_status, ub.title AS brief_title
+       FROM creator_profile cp
+       LEFT JOIN LATERAL (
+              SELECT b.status, b.title FROM outbound_brief b WHERE b.creator_id = cp.id ${BRIEF_ORDER} LIMIT 1
+            ) ub ON true
+      WHERE cp.deleted_at IS NULL AND (cp.status = 'active' OR ub.status IS NOT NULL)
+      ORDER BY cp.created_at, cp.id
+      LIMIT 200`,
   );
-  const r = rows[0];
-  return r ? { id: r.id, displayName: r.display_name, workspaceKind: r.workspace_kind === 'agency' ? 'agency' : 'creator' } : null;
+  return {
+    workspaceKind: ws[0]?.kind === 'agency' ? 'agency' : 'creator',
+    creators: rows.map((r) => ({ id: r.id, displayName: r.display_name, briefStatus: r.brief_status, briefTitle: r.brief_title })),
+  };
+}
+
+/**
+ * De quién es el brief que se enseña: el creador pedido (?creador=id) si
+ * es de este espacio; si no, el primero con brief activo; si ninguno lo
+ * tiene, el primero (el principal). Null sin creadores.
+ */
+export function pickBriefCreator(creators: BriefCreator[], requested: string | null | undefined): BriefCreator | null {
+  return (
+    (requested ? creators.find((c) => c.id === requested) : undefined) ??
+    creators.find((c) => c.briefStatus === 'active') ??
+    creators[0] ??
+    null
+  );
 }
 
 /**
@@ -309,117 +345,211 @@ export async function listBriefCompanyOptions(tx: WorkspaceTx): Promise<{ id: st
 const SQL_REF_RE = /^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$/;
 /** Un parámetro posicional con su tipo, «$1::uuid». */
 const SQL_PARAM_RE = /^\$\d+::uuid$/;
+/** Los alias de dentro del veredicto empiezan así; el de fuera no puede, o se confundirían. */
+const INNER_PREFIX = 'bv_';
 
 function assertRef(fn: string, ref: string, param = false): void {
-  if (SQL_REF_RE.test(ref) || (param && SQL_PARAM_RE.test(ref))) return;
+  if ((SQL_REF_RE.test(ref) && !ref.startsWith(INNER_PREFIX)) || (param && SQL_PARAM_RE.test(ref))) return;
   throw new Error(`${fn}: referencia inválida «${ref}»`);
 }
 
+/** Las columnas de la empresa que el veredicto mira, en el orden de bv_emp. */
+const EMP_COLS = 'bv_co.id, bv_co.name, bv_co.industry, bv_co.niche_slugs, bv_co.country::text AS country';
+
 /**
- * Si la empresa `co` es la de la señal `s`: la regla con la que el radar
- * reconoce una marca, la misma de resolveCompany en queries/ventas.ts:
+ * La empresa de la señal `s`, con la regla de resolveCompany
+ * (queries/ventas.ts):
  *
  *   · por id, si la señal ya tiene empresa;
- *   · si no, por dominio, si la señal trae uno (el dominio es único en
- *     el catálogo: es la misma marca);
+ *   · si no, por dominio, si la señal trae uno (el dominio es único en el
+ *     catálogo y dentro de cada dueño: es la misma marca; normalizeDomain
+ *     lo guarda en minúsculas y así se busca);
  *   · si tampoco, por nombre (brand_key: «Nutrivé» = «NUTRIVE»), pero
  *     solo entre las empresas del CRM de este workspace (company_link):
  *     fuera del CRM un nombre no basta, dos «Alma» de dos países no son
  *     la misma marca.
  *
- * Es UNA expresión y la usan las dos ramas de briefVerdictSql —la de la
- * empresa excluida y la de la categoría excluida—: antes cada rama la
- * escribía a su manera y la de la categoría no miraba el nombre, así que
- * una señal manual sin dominio de una marca de «suplementos» del CRM se
- * seguía viendo.
- */
-function signalCompanySql(s: string, co: string): string {
-  return `(${co}.id = ${s}.company_id
-           OR (${s}.company_id IS NULL
-               AND CASE WHEN nullif(${s}.evidence->>'domain', '') IS NOT NULL
-                        THEN ${co}.domain = lower(${s}.evidence->>'domain')
-                        ELSE brand_key(${co}.name) = brand_key(${s}.evidence->>'company_name')
-                             AND EXISTS (SELECT 1 FROM company_link l WHERE l.company_id = ${co}.id)
-                   END))`;
-}
-
-/**
- * Si alguna de las categorías excluidas del brief `b` está entre
- * `categorias` (una subconsulta de una sola columna), comparadas con
- * brand_key: «Suplementos» excluye «SUPLEMENTOS» y «suplementos ».
- */
-function excludedCategorySql(categorias: string): string {
-  return `EXISTS (
-            SELECT 1
-              FROM unnest(b.excluded_categories) e(cat)
-             WHERE brand_key(e.cat) IN (
-                     SELECT brand_key(x.cat) FROM (${categorias}) x(cat)
-                      WHERE brand_key(x.cat) IS NOT NULL))`;
-}
-
-/**
- * Lo que dicen los briefs ACTIVOS del espacio sobre una marca, a partir
- * del veredicto de cada uno (`verdictCase`, que puede mirar `b`):
+ * Son búsquedas SEPARADAS unidas con UNION ALL, cada una con su índice:
+ * la llave primaria; el de (domain::text); y company_link, que ya acota
+ * al CRM, con el de name_key (brand_key(name) calculada por la base). Los
+ * dos últimos son de 0065, y la comparación es text = text a propósito:
+ * bajo RLS Postgres solo usa un índice si la condición es leakproof, y ni
+ * brand_key(co.name) (regexp_replace) ni citext = citext lo son (0065
+ * explica la medición). Hasta la ronda 2 era una sola condición con OR
+ * sobre company entera, que ningún índice sirve: con 10 000 empresas en
+ * el catálogo y 100 señales, countHiddenSignals tardaba 28,6 s.
  *
- * Un brief es de un creador (outbound_brief.creator_id) y cada creador
- * tiene como mucho uno activo (0064 §1): en una agencia, o en un espacio
- * con dos creadores, puede haber varios (el recomendador y el generador
- * usan el del creador del negocio, VEN-13). La marca queda fuera solo si
- * TODOS los activos la excluyen: lo que un creador no acepta, otro del
- * mismo espacio puede aceptarlo. Con un solo creador, que es el caso de
- * casi todos, es simplemente su brief. Sin brief activo, NULL: no se
- * oculta ni se frena nada. El motivo es 'company' si algún brief la
- * excluye por nombre, 'category' si todos lo hacen por categoría.
+ * `EXISTS (SELECT 1 FROM bv_briefs)` se evalúa una vez por consulta: sin
+ * brief activo no se busca nada.
  */
-function everyActiveBriefSql(verdictCase: string, where: string): string {
-  return `(SELECT CASE WHEN count(*) > 0 AND bool_and(v.verdict IS NOT NULL)
-                       THEN CASE WHEN bool_or(v.verdict = 'company') THEN 'company' ELSE 'category' END
-                  END
-             FROM outbound_brief b
-             CROSS JOIN LATERAL (SELECT ${verdictCase} AS verdict) v
-            WHERE b.status = 'active' AND ${where})`;
+function signalCompanyRowsSql(s: string): string {
+  const dominio = `lower(nullif(btrim(${s}.evidence->>'domain'), ''))`;
+  return `
+         SELECT ${EMP_COLS} FROM company bv_co
+          WHERE bv_co.id = ${s}.company_id AND EXISTS (SELECT 1 FROM bv_briefs)
+         UNION ALL
+         SELECT ${EMP_COLS} FROM company bv_co
+          WHERE ${s}.company_id IS NULL AND bv_co.domain::text = ${dominio} AND EXISTS (SELECT 1 FROM bv_briefs)
+         UNION ALL
+         SELECT ${EMP_COLS} FROM company_link bv_l JOIN company bv_co ON bv_co.id = bv_l.company_id
+          WHERE ${s}.company_id IS NULL AND ${dominio} IS NULL
+            AND bv_co.name_key = brand_key(${s}.evidence->>'company_name') AND EXISTS (SELECT 1 FROM bv_briefs)`;
+}
+
+/**
+ * La primera categoría de `lista` (una columna text[] del brief) que está
+ * entre las de la marca (bv_cats), comparadas con brand_key: «Suplementos»
+ * excluye «SUPLEMENTOS» y «suplementos ». Devuelve cómo la escribió el
+ * creador, para decirle cuál regla la dejó fuera.
+ */
+function firstCategoryMatchSql(lista: string): string {
+  return `(SELECT bv_u.cat FROM unnest(${lista}) WITH ORDINALITY bv_u(cat, i)
+            WHERE brand_key(bv_u.cat) IN (SELECT bv_c.k FROM bv_cats bv_c)
+            ORDER BY bv_u.i LIMIT 1)`;
+}
+
+interface VerdictParts {
+  /** Qué briefs activos cuentan (una condición sobre bv_b). */
+  briefsWhere: string;
+  /** Las filas de la empresa, con EMP_COLS. */
+  companyRows: string;
+  /** Lo que trae la señal además de su empresa (evidence), o nada. */
+  signal: string | null;
+  /** Si además calcula el encaje con «Qué buscas» (solo la bandeja lo pinta). */
+  fit: boolean;
+}
+
+/**
+ * La consulta del veredicto: UNA fila con hidden_by ('company',
+ * 'category' o NULL), hidden_match (la marca o la categoría que lo
+ * decidió) y, con `fit`, wanted_match, below_min_budget y
+ * country_outside.
+ *
+ * Los briefs activos se leen UNA vez por consulta (bv_briefs, un CTE
+ * MATERIALIZED que no depende de la fila de fuera: Postgres lo rebobina
+ * en vez de recalcularlo). La empresa y las categorías de la marca, una
+ * vez por señal (bv_emp, bv_cats), y cada brief se compara contra esas
+ * dos listas cortas.
+ *
+ * Varios briefs activos (uno por creador, 0064 §1): la marca queda fuera
+ * solo si TODOS la excluyen, porque lo que un creador no acepta otro del
+ * mismo espacio puede aceptarlo. El motivo es 'company' si alguno la
+ * excluye por nombre. El encaje sigue la misma idea: «Bajo tu mínimo» y
+ * «Fuera de tus países» solo si lo están para todos, y la categoría
+ * buscada basta con que la busque uno.
+ */
+function verdictQuery({ briefsWhere, companyRows, signal, fit }: VerdictParts): string {
+  const deLaSenal = signal
+    ? `UNION ALL SELECT ${signal}.evidence->>'industry'
+                UNION ALL SELECT ${signal}.evidence->>'category'
+                UNION ALL SELECT ${signal}.evidence->>'brief_category'`
+    : '';
+  const pais = signal
+    ? `upper(coalesce(nullif(btrim(${signal}.evidence->>'country'), ''),
+                        (SELECT bv_e.country FROM bv_emp bv_e WHERE bv_e.country IS NOT NULL LIMIT 1)))`
+    : `(SELECT upper(bv_e.country) FROM bv_emp bv_e WHERE bv_e.country IS NOT NULL LIMIT 1)`;
+  const presupuesto = signal
+    ? `(${signal}.budget_estimate IS NOT NULL AND bv_b.min_budget IS NOT NULL
+                  AND bv_b.currency = ${signal}.budget_currency::text AND ${signal}.budget_estimate < bv_b.min_budget)`
+    : 'false';
+  const porBriefFit = fit
+    ? `,
+              ${firstCategoryMatchSql('bv_b.wanted_categories')} AS wanted_match,
+              ${presupuesto} AS below_min,
+              (bv_p.country IS NOT NULL AND cardinality(bv_b.wanted_countries) > 0
+                AND NOT (bv_p.country = ANY (bv_b.wanted_countries))) AS outside`
+    : '';
+  const oculta = `count(*) > 0 AND bool_and(bv_pb.company_match IS NOT NULL OR bv_pb.category_match IS NOT NULL)`;
+  const finalFit = fit
+    ? `,
+            min(bv_pb.wanted_match) AS wanted_match,
+            coalesce(count(*) > 0 AND bool_and(bv_pb.below_min), false) AS below_min_budget,
+            coalesce(count(*) > 0 AND bool_and(bv_pb.outside), false) AS country_outside`
+    : '';
+  return `WITH bv_briefs AS MATERIALIZED (
+         SELECT bv_b.excluded_companies, bv_b.excluded_categories, bv_b.wanted_categories, bv_b.wanted_countries,
+                bv_b.min_budget, bv_b.currency::text AS currency
+           FROM outbound_brief bv_b
+          WHERE bv_b.status = 'active' AND ${briefsWhere}
+       ),
+       bv_emp AS (${companyRows}
+       ),
+       bv_cats AS (
+         SELECT DISTINCT brand_key(bv_x.cat) AS k
+           FROM (SELECT bv_e.industry FROM bv_emp bv_e
+                 UNION ALL SELECT unnest(bv_e.niche_slugs) FROM bv_emp bv_e
+                 ${deLaSenal}) bv_x(cat)
+          WHERE brand_key(bv_x.cat) IS NOT NULL
+       ),
+       bv_pb AS (
+         SELECT (SELECT bv_e.name FROM bv_emp bv_e WHERE bv_e.id = ANY (bv_b.excluded_companies)
+                  ORDER BY bv_e.name LIMIT 1) AS company_match,
+                ${firstCategoryMatchSql('bv_b.excluded_categories')} AS category_match${porBriefFit}
+           FROM bv_briefs bv_b${fit ? `, (SELECT ${pais} AS country) bv_p` : ''}
+       )
+       SELECT CASE WHEN ${oculta}
+                   THEN CASE WHEN bool_or(bv_pb.company_match IS NOT NULL) THEN 'company' ELSE 'category' END
+              END AS hidden_by,
+              CASE WHEN ${oculta}
+                   THEN coalesce(min(bv_pb.company_match), min(bv_pb.category_match))
+              END AS hidden_match${finalFit}
+         FROM bv_pb bv_pb`;
+}
+
+/** El veredicto de una señal, como consulta de una fila para un LATERAL. */
+function signalVerdictQuery(s: string, fit: boolean): string {
+  return verdictQuery({
+    briefsWhere: 'bv_b.workspace_id = current_workspace_id()',
+    companyRows: signalCompanyRowsSql(s),
+    signal: s,
+    fit,
+  });
 }
 
 /**
  * La expresión SQL que dice por qué el brief activo deja fuera una
  * señal: 'company', 'category' o NULL (la señal se ve). `s` es el alias
- * de `signal` en la consulta que la usa; el texto es constante (no
- * lleva nada que venga de fuera), así que se puede componer.
+ * de `signal` en la consulta que la usa; el texto es constante (no lleva
+ * nada que venga de fuera), así que se puede componer.
  *
  * Mira solo la fila de la señal (company_id y evidence), igual en la
  * bandeja que en los conteos y en la ficha de la empresa, para que
  * «5 por revisar», las tarjetas y «1 señal en el radar» cuadren siempre:
  *
- *   · Empresa excluida: la de la señal según signalCompanySql.
+ *   · Empresa excluida: la de la señal según signalCompanyRowsSql.
  *   · Categoría excluida: el sector y los nichos de esa misma empresa, y
  *     lo que trae la señal en evidence (industry, category,
  *     brief_category).
  *
  * Una señal todavía no es de ningún creador, así que valen todos los
- * briefs activos del espacio (everyActiveBriefSql). Es para consultas
- * bajo RLS (la web): el espacio es el fijado en la transacción
- * (current_workspace_id()). El worker, que corre sin RLS, usa
- * briefCompanyVerdictSql con el workspace explícito.
+ * briefs activos del espacio. Es para consultas bajo RLS (la web): el
+ * espacio es el fijado en la transacción (current_workspace_id()). El
+ * worker, que corre sin RLS, usa briefCompanyVerdictSql con el workspace
+ * explícito.
  */
 export function briefVerdictSql(s: string): string {
   assertRef('briefVerdictSql', s);
-  return everyActiveBriefSql(
-    `CASE
-       WHEN EXISTS (
-         SELECT 1 FROM company ex
-          WHERE ex.id = ANY (b.excluded_companies)
-            AND ${signalCompanySql(s, 'ex')})
-         THEN 'company'
-       WHEN ${excludedCategorySql(`
-                    SELECT co.industry FROM company co WHERE ${signalCompanySql(s, 'co')}
-                    UNION ALL SELECT unnest(co.niche_slugs) FROM company co WHERE ${signalCompanySql(s, 'co')}
-                    UNION ALL SELECT ${s}.evidence->>'industry'
-                    UNION ALL SELECT ${s}.evidence->>'category'
-                    UNION ALL SELECT ${s}.evidence->>'brief_category'`)}
-         THEN 'category'
-     END`,
-    'b.workspace_id = current_workspace_id()',
-  );
+  return `(SELECT bv_v.hidden_by FROM (${signalVerdictQuery(s, false)}) bv_v)`;
+}
+
+/**
+ * Lo mismo que briefVerdictSql, más lo que la bandeja pinta en la
+ * tarjeta, como una consulta de UNA fila para un CROSS JOIN LATERAL:
+ *
+ *   hidden_by         'company' | 'category' | NULL
+ *   hidden_match      la marca o la categoría excluida que lo decidió
+ *                     («harinas», «Molino Andino»), para decir cuál regla
+ *   wanted_match      la primera categoría buscada que tiene la marca
+ *   below_min_budget  el presupuesto estimado está por debajo del mínimo
+ *                     (misma moneda; con otra moneda no se compara)
+ *   country_outside   el país de la señal (evidence.country, o el de su
+ *                     empresa) no está entre los buscados
+ *
+ * El encaje NO oculta nada: «Qué buscas» es una preferencia (VEN-7).
+ */
+export function briefSignalLateralSql(s: string): string {
+  assertRef('briefSignalLateralSql', s);
+  return signalVerdictQuery(s, true);
 }
 
 /**
@@ -430,9 +560,12 @@ export function briefVerdictSql(s: string): string {
  * parámetros («$2::uuid») de la consulta que la usa.
  *
  * El brief que cuenta es el del creador del negocio (`deal`), como en el
- * recomendador y el generador (VEN-13): la cadencia escribe en su
- * nombre. Sin negocio, o con un negocio sin creador, los de todos los
- * creadores del espacio (everyActiveBriefSql).
+ * recomendador y el generador (VEN-13): la cadencia escribe en su nombre
+ * y la pantalla edita el brief de cada creador. Si ese creador no tiene
+ * brief activo —o no hay negocio, o el negocio no tiene creador—, los de
+ * todos los creadores del espacio, con la misma regla que el radar: en
+ * una agencia, un creador sin brief propio no se salta lo que excluyen
+ * los demás.
  *
  * Lleva el workspace explícito porque la usa el worker (enrollContacts
  * y el reclamo del despachador), que corre con BYPASSRLS: sin el filtro
@@ -442,17 +575,19 @@ export function briefCompanyVerdictSql(companyId: string, workspace: string, dea
   assertRef('briefCompanyVerdictSql', companyId, true);
   assertRef('briefCompanyVerdictSql', workspace, true);
   if (deal !== 'NULL::uuid') assertRef('briefCompanyVerdictSql', deal, true);
-  const creador = `(SELECT d.creator_id FROM deal d WHERE d.id = ${deal})`;
-  return everyActiveBriefSql(
-    `CASE
-       WHEN ${companyId} = ANY (b.excluded_companies) THEN 'company'
-       WHEN ${excludedCategorySql(`
-                    SELECT co.industry FROM company co WHERE co.id = ${companyId}
-                    UNION ALL SELECT unnest(co.niche_slugs) FROM company co WHERE co.id = ${companyId}`)}
-         THEN 'category'
-     END`,
-    `b.workspace_id = ${workspace} AND (${creador} IS NULL OR b.creator_id = ${creador})`,
-  );
+  const creador = `(SELECT bv_d.creator_id FROM deal bv_d WHERE bv_d.id = ${deal})`;
+  const query = verdictQuery({
+    briefsWhere: `bv_b.workspace_id = ${workspace}
+            AND (bv_b.creator_id = ${creador}
+                 OR NOT EXISTS (SELECT 1 FROM outbound_brief bv_o
+                                 WHERE bv_o.status = 'active' AND bv_o.workspace_id = ${workspace}
+                                   AND bv_o.creator_id = ${creador}))`,
+    companyRows: `
+         SELECT ${EMP_COLS} FROM company bv_co WHERE bv_co.id = ${companyId}`,
+    signal: null,
+    fit: false,
+  });
+  return `(SELECT bv_v.hidden_by FROM (${query}) bv_v)`;
 }
 
 /** Cuántas señales PENDIENTES deja fuera el brief activo, y por qué. */
@@ -531,9 +666,11 @@ function validDate(v: string | null): boolean {
 }
 
 /**
- * Guarda el brief del workspace: actualiza el que devuelve getBrief o,
- * si no hay ninguno, lo crea para el creador principal (el primero
- * activo, como Cotizar). Devuelve su id.
+ * Guarda el brief de un creador del workspace: actualiza el que devuelve
+ * getBrief(tx, creatorId) o, si ese creador no tiene ninguno, lo crea.
+ * Devuelve su id. Un creador que no es de este workspace (RLS no lo deja
+ * ver) o que está borrado es UnknownCreator: nunca se escribe el brief
+ * de otro creador que el pedido.
  *
  * Valida aquí lo mismo que los CHECK de 0064 y algo más que la base no
  * puede saber: que una categoría no esté a la vez en «busco» y en «no
@@ -552,7 +689,7 @@ function validDate(v: string | null): boolean {
  *     en la misma transacción;
  *   · dos guardados a la vez se ordenan con un candado por workspace.
  */
-export async function saveBrief(tx: WorkspaceTx, input: SaveBriefInput): Promise<string> {
+export async function saveBrief(tx: WorkspaceTx, creatorId: string, input: SaveBriefInput): Promise<string> {
   const title = input.title.trim().replace(/\s+/g, ' ');
   if (!title || title.length > BRIEF_LIMITS.titleMax) throw new BriefError('InvalidTitle');
 
@@ -570,7 +707,7 @@ export async function saveBrief(tx: WorkspaceTx, input: SaveBriefInput): Promise
   const minBudget = input.minBudget?.trim() || null;
   if (minBudget !== null && !MONEY_RE.test(minBudget)) throw new BriefError('InvalidBudget');
   const currency = input.currency.trim().toUpperCase();
-  if (!CURRENCY_RE.test(currency)) throw new BriefError('InvalidBudget');
+  if (!CURRENCY_RE.test(currency)) throw new BriefError('InvalidCurrency');
 
   const from = input.availabilityFrom?.trim() || null;
   const to = input.availabilityTo?.trim() || null;
@@ -595,18 +732,29 @@ export async function saveBrief(tx: WorkspaceTx, input: SaveBriefInput): Promise
     if (Number(rows[0]?.n ?? 0) !== companyIds.length) throw new BriefError('CompanyNotInCrm');
   }
 
-  // Un guardado a la vez por workspace. El índice único de 0064 solo
-  // cubre los ACTIVOS: sin brief todavía, dos guardados «en pausa» a la
-  // vez leían los dos «no hay ninguno» y creaban dos. El candado es de la
-  // transacción y lleva el workspace, así que no frena a nadie más.
-  await tx.query("SELECT pg_advisory_xact_lock(hashtext('outbound_brief:' || current_workspace_id()::text))");
+  if (!isUuid(creatorId)) throw new BriefError('UnknownCreator');
+  const { rows: creador } = await tx.query<{ id: string }>(
+    'SELECT id FROM creator_profile WHERE id = $1::uuid AND deleted_at IS NULL',
+    [creatorId],
+  );
+  if (!creador[0]) throw new BriefError('UnknownCreator');
+
+  // Un guardado a la vez por creador. El índice único de 0064 solo cubre
+  // los ACTIVOS: sin brief todavía, dos guardados «en pausa» a la vez
+  // leían los dos «no hay ninguno» y creaban dos. El candado es de la
+  // transacción y lleva el workspace y el creador: no frena a nadie más.
+  await tx.query("SELECT pg_advisory_xact_lock(hashtext('outbound_brief:' || current_workspace_id()::text || ':' || $1))", [
+    creatorId,
+  ]);
 
   const { rows: actual } = await tx.query<{ id: string; deliverables: BriefDeliverable[]; snapshot: Record<string, unknown> }>(
     `SELECT b.id, b.deliverables, ${AUDIT_SNAPSHOT} AS snapshot
        FROM outbound_brief b
-      ORDER BY (b.status = 'active') DESC, b.updated_at DESC, b.created_at DESC
+      WHERE b.creator_id = $1::uuid
+      ${BRIEF_ORDER}
       LIMIT 1
         FOR UPDATE`,
+    [creatorId],
   );
   const previos = new Map(
     (Array.isArray(actual[0]?.deliverables) ? actual[0].deliverables : [])
@@ -639,10 +787,6 @@ export async function saveBrief(tx: WorkspaceTx, input: SaveBriefInput): Promise
       );
       saved = rows[0]!;
     } else {
-      const { rows: creador } = await tx.query<{ id: string }>(
-        "SELECT id FROM creator_profile WHERE status = 'active' AND deleted_at IS NULL ORDER BY created_at LIMIT 1",
-      );
-      if (!creador[0]) throw new BriefError('NoCreator');
       const { rows } = await tx.query<{ id: string; snapshot: Record<string, unknown> }>(
         `INSERT INTO outbound_brief AS b (workspace_id, creator_id, title, wanted_categories, wanted_countries, min_budget,
                                           currency, deliverables, availability_from, availability_to, excluded_categories,

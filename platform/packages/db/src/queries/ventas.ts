@@ -40,7 +40,7 @@
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES } from '../schema/ventas.ts';
 import { parseReplyOptOutCode, type ReplyOptOutChannel } from './canales.ts';
-import { briefVerdictSql, type BriefVerdict } from './brief.ts';
+import { briefSignalLateralSql, briefVerdictSql, type BriefVerdict } from './brief.ts';
 import { WORKSPACE_DEFAULTS } from './cimientos.ts';
 
 export { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES };
@@ -328,6 +328,27 @@ export interface SignalRow {
    * distinto de null en las pendientes pedidas con `brief: 'show_hidden'`.
    */
   hiddenBy: BriefVerdict | null;
+  /**
+   * La regla que la oculta, como la escribió el creador: la categoría
+   * excluida («harinas») o el nombre de la marca excluida. Null si se ve.
+   */
+  hiddenMatch: string | null;
+  /** Cómo encaja con «Qué buscas» del brief activo (VEN-7). No oculta nada: la tarjeta lo dice. */
+  briefFit: SignalBriefFit;
+}
+
+/**
+ * El encaje de una señal pendiente con lo que busca el brief activo,
+ * calculado en SQL (briefSignalLateralSql). Todo en falso y null sin
+ * brief activo, y en las que no están pendientes.
+ */
+export interface SignalBriefFit {
+  /** El presupuesto estimado está por debajo del mínimo del brief, en la misma moneda. */
+  belowMinBudget: boolean;
+  /** El país de la señal (o de su empresa) no está entre los que busca el brief. */
+  countryOutside: boolean;
+  /** La primera categoría buscada que tiene la marca, como la escribió el creador; null si ninguna. */
+  wantedCategory: string | null;
 }
 
 export type SignalStatus = (typeof SIGNAL_STATUSES)[number];
@@ -1035,10 +1056,16 @@ export interface ListSignalsParams {
   brief?: 'apply' | 'show_hidden';
 }
 
+/** Las columnas del veredicto cuando no se aplica el brief (lo que no está pendiente ya se decidió). */
+const SIN_VEREDICTO =
+  'SELECT NULL::text AS hidden_by, NULL::text AS hidden_match, NULL::text AS wanted_match, false AS below_min_budget, false AS country_outside';
+
 /**
  * La bandeja del radar. Por defecto las pendientes, de mayor a menor
  * encaje: es el orden en que se revisan. Las pendientes que el brief
- * activo excluye no vienen (VEN-7), salvo con `brief: 'show_hidden'`.
+ * activo excluye no vienen (VEN-7), salvo con `brief: 'show_hidden'`,
+ * que las trae al final. Cada una dice cómo encaja con «Qué buscas»
+ * (briefFit) sin que eso oculte ninguna.
  */
 export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {}): Promise<SignalRow[]> {
   const status = params.status ?? 'pending';
@@ -1063,9 +1090,10 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
             s.budget_estimate::text AS budget_estimate, s.budget_currency::text AS budget_currency,
             s.dedupe_key, s.status, s.discard_reason, s.reviewed_at,
             COALESCE(s.evidence->>'via', 'manual') AS via,
-            veredicto.hidden_by
+            veredicto.hidden_by, veredicto.hidden_match, veredicto.wanted_match,
+            veredicto.below_min_budget, veredicto.country_outside
      FROM signal s
-     CROSS JOIN LATERAL (SELECT ${aplicaBrief ? briefVerdictSql('s') : 'NULL::text'} AS hidden_by) veredicto
+     CROSS JOIN LATERAL (${aplicaBrief ? briefSignalLateralSql('s') : SIN_VEREDICTO}) veredicto
      LEFT JOIN company co        ON co.id = s.company_id
      LEFT JOIN LATERAL (
             SELECT r.id FROM (
@@ -1073,7 +1101,7 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
                  FROM company c
                 WHERE s.company_id IS NULL
                   AND nullif(s.evidence->>'domain', '') IS NOT NULL
-                  AND lower(c.domain::text) = lower(s.evidence->>'domain')
+                  AND c.domain::text = lower(s.evidence->>'domain')
                 LIMIT 1)
               UNION ALL
               (SELECT c.id, 1 AS o
@@ -1081,7 +1109,7 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
                  JOIN company c ON c.id = l.company_id
                 WHERE s.company_id IS NULL
                   AND nullif(s.evidence->>'domain', '') IS NULL
-                  AND brand_key(c.name) = brand_key(s.evidence->>'company_name')
+                  AND c.name_key = brand_key(s.evidence->>'company_name')
                 ORDER BY (c.domain IS NULL) ASC, l.created_at ASC
                 LIMIT 1)
             ) r
@@ -1100,7 +1128,9 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
           ) abierto ON true
      LEFT JOIN signal_source src ON src.id = s.source_id
      WHERE s.status = $1${ocultar ? ' AND veredicto.hidden_by IS NULL' : ''}
-     ORDER BY s.fit_score DESC NULLS LAST, s.detected_at DESC
+     -- Con «Verlas», las ocultas van al final, en su propio grupo: no
+     -- mezcladas por encaje con las que sí se ven.
+     ORDER BY (veredicto.hidden_by IS NOT NULL), s.fit_score DESC NULLS LAST, s.detected_at DESC
      LIMIT $2`,
     [status, limit],
   );
@@ -1261,7 +1291,7 @@ async function resolveCompany(
     `SELECT co.id, co.name, co.domain::text AS domain
        FROM company_link cl
        JOIN company co ON co.id = cl.company_id
-      WHERE brand_key(co.name) = brand_key($1)
+      WHERE co.name_key = brand_key($1)
       ORDER BY (co.domain IS NULL) ASC, cl.created_at ASC
       LIMIT 1`,
     [name],
@@ -2358,7 +2388,8 @@ interface SignalRowSql {
   detected_at: string; evidence_url: string | null; fit_score: string | null;
   budget_estimate: string | null; budget_currency: string | null; dedupe_key: string;
   status: SignalStatus; discard_reason: string | null; reviewed_at: string | null; via: string;
-  hidden_by: BriefVerdict | null;
+  hidden_by: BriefVerdict | null; hidden_match: string | null; wanted_match: string | null;
+  below_min_budget: boolean | null; country_outside: boolean | null;
 }
 
 function toSignalRow(r: SignalRowSql): SignalRow {
@@ -2384,6 +2415,12 @@ function toSignalRow(r: SignalRowSql): SignalRow {
     reviewedAt: r.reviewed_at,
     via: r.via === 'csv' ? 'csv' : 'manual',
     hiddenBy: r.hidden_by,
+    hiddenMatch: r.hidden_match,
+    briefFit: {
+      belowMinBudget: r.below_min_budget === true,
+      countryOutside: r.country_outside === true,
+      wantedCategory: r.wanted_match,
+    },
   };
 }
 

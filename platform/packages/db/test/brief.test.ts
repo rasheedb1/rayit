@@ -25,9 +25,10 @@ import {
   countHiddenSignals,
   getActiveBrief,
   getBrief,
-  getBriefOwner,
   listBriefCompanyOptions,
+  listBriefCreators,
   listCategorySuggestions,
+  pickBriefCreator,
   saveBrief,
   type SaveBriefInput,
 } from '../src/queries/brief.ts';
@@ -132,19 +133,23 @@ describe('VEN-7 · sin brief, el radar no oculta nada', () => {
     const { hidden, pending, brief: b } = await enBrief(async (tx) => ({
       hidden: await countHiddenSignals(tx),
       pending: await countPendingSignals(tx),
-      brief: await getBrief(tx),
+      brief: await getBrief(tx, CREADORA),
     }));
     assert.deepEqual(hidden, { total: 0, byCompany: 0, byCategory: 0 });
     assert.equal(pending, 6);
     assert.equal(b, null, 'el brief de Laura (seed) no se ve desde otro workspace');
-    const owner = await enBrief((tx) => getBriefOwner(tx));
-    assert.deepEqual(owner, { id: CREADORA, displayName: 'Creadora del brief', workspaceKind: 'creator' }, 'sin brief, el creador principal');
+    const r = await enBrief((tx) => listBriefCreators(tx));
+    assert.deepEqual(r, {
+      workspaceKind: 'creator',
+      creators: [{ id: CREADORA, displayName: 'Creadora del brief', briefStatus: null, briefTitle: null }],
+    });
+    assert.equal(pickBriefCreator(r.creators, null)?.id, CREADORA, 'sin brief, el creador principal');
   });
 });
 
 describe('VEN-7 · una señal de una categoría excluida no aparece en la bandeja', () => {
   test('guardar el brief oculta las de categoría excluida, venga de donde venga la categoría', async () => {
-    const id = await enBrief((tx) => saveBrief(tx, brief()));
+    const id = await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
     assert.ok(id);
 
     // Licores (sector de la empresa), Proteína Viva (nicho) y la manual de
@@ -169,12 +174,12 @@ describe('VEN-7 · una señal de una categoría excluida no aparece en la bandej
   });
 
   test('la categoría que trae la señal (evidence.category) también cuenta', async () => {
-    await enBrief((tx) => saveBrief(tx, brief({ excludedCategories: ['Alcohol', 'apuestas', 'Suplementos', 'snacks'] })));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief({ excludedCategories: ['Alcohol', 'apuestas', 'Suplementos', 'snacks'] })));
     assert.deepEqual(await visibles(), [S_CAFE, S_AROMA].sort());
   });
 
   test('una empresa excluida oculta sus señales, y el motivo es la empresa', async () => {
-    await enBrief((tx) => saveBrief(tx, brief({ excludedCompanyIds: [CO_CAFE] })));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief({ excludedCompanyIds: [CO_CAFE] })));
     assert.deepEqual(await visibles(), [S_AROMA]);
     const todas = await enBrief((tx) => listSignals(tx, { brief: 'show_hidden' }));
     const porId = new Map(todas.map((s) => [s.id, s.hiddenBy]));
@@ -193,20 +198,20 @@ describe('VEN-7 · una señal de una categoría excluida no aparece en la bandej
       INSERT INTO company_link (workspace_id, company_id, relationship)
       VALUES ('${WS_BRIEF}', '00000009-0000-4000-8000-0000000b7c05', 'prospect') ON CONFLICT DO NOTHING;
     `);
-    await enBrief((tx) => saveBrief(tx, brief({ excludedCompanyIds: ['00000009-0000-4000-8000-0000000b7c05'] })));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief({ excludedCompanyIds: ['00000009-0000-4000-8000-0000000b7c05'] })));
     const todas = await enBrief((tx) => listSignals(tx, { brief: 'show_hidden' }));
     assert.equal(todas.find((s) => s.id === S_AROMA)?.hiddenBy, 'company');
     assert.ok(!(await visibles()).includes(S_AROMA));
   });
 
   test('un brief en pausa no oculta nada', async () => {
-    await enBrief((tx) => saveBrief(tx, brief({ active: false })));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief({ active: false })));
     assert.deepEqual(await visibles(), [...TODAS].sort());
-    const r = await enBrief(async (tx) => ({ activo: await getActiveBrief(tx), editable: await getBrief(tx) }));
+    const r = await enBrief(async (tx) => ({ activo: await getActiveBrief(tx, CREADORA), editable: await getBrief(tx, CREADORA) }));
     assert.equal(r.activo, null);
     assert.equal(r.editable?.status, 'paused', 'la pantalla lo sigue pudiendo editar y reactivar');
     // Vuelve a estar activo para lo que sigue.
-    await enBrief((tx) => saveBrief(tx, brief()));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
   });
 
   test('anotar a mano o por CSV una marca de categoría excluida entra, pero la bandeja no la enseña y el resultado lo dice', async () => {
@@ -255,6 +260,7 @@ describe('VEN-7 · guardar el brief', () => {
     await enBrief((tx) =>
       saveBrief(
         tx,
+        CREADORA,
         brief({
           title: '  Marcas   de café  ',
           wantedCategories: ['alimentos', ' Alimentos ', 'cocina', ''],
@@ -264,7 +270,7 @@ describe('VEN-7 · guardar el brief', () => {
         }),
       ),
     );
-    const b = await enBrief((tx) => getBrief(tx));
+    const b = await enBrief((tx) => getBrief(tx, CREADORA));
     assert.ok(b);
     assert.equal(b.title, 'Marcas de café');
     assert.deepEqual(b.wantedCategories, ['alimentos', 'cocina']);
@@ -283,9 +289,9 @@ describe('VEN-7 · guardar el brief', () => {
          SET deliverables = '[{"kind": "tiktok", "label": "Video de TikTok", "price_low": 7100000, "price_high": 10600000},
                               {"kind": "historias", "label": "Historia de Instagram (3 pantallas)", "price_low": 1600000}]'
        WHERE workspace_id = '${WS_BRIEF}'`);
-    assert.deepEqual((await enBrief((tx) => getBrief(tx)))?.deliverables, ['tiktok', 'historia'], 'se lee con el nombre del catálogo');
+    assert.deepEqual((await enBrief((tx) => getBrief(tx, CREADORA)))?.deliverables, ['tiktok', 'historia'], 'se lee con el nombre del catálogo');
 
-    await enBrief((tx) => saveBrief(tx, brief({ deliverables: ['tiktok', 'historia', 'short'] })));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief({ deliverables: ['tiktok', 'historia', 'short'] })));
     const { rows } = await enBrief((tx) =>
       tx.query<{ deliverables: unknown }>('SELECT deliverables FROM outbound_brief WHERE status = $1', ['active']),
     );
@@ -294,20 +300,20 @@ describe('VEN-7 · guardar el brief', () => {
       { kind: 'historia', label: 'Historia de Instagram (3 pantallas)', price_low: 1600000 },
       { kind: 'short' },
     ]);
-    const b = await enBrief((tx) => getBrief(tx));
+    const b = await enBrief((tx) => getBrief(tx, CREADORA));
     assert.deepEqual(b?.deliverables, ['tiktok', 'historia', 'short']);
   });
 
   test('una categoría no puede estar en «busco» y en «no acepto» a la vez', async () => {
     assert.equal(
-      await codigo(enBrief((tx) => saveBrief(tx, brief({ wantedCategories: ['Bienestar'], excludedCategories: ['bienestar'] })))),
+      await codigo(enBrief((tx) => saveBrief(tx, CREADORA, brief({ wantedCategories: ['Bienestar'], excludedCategories: ['bienestar'] })))),
       'CategoryConflict:Bienestar',
     );
   });
 
   test('las empresas excluidas tienen que ser del CRM de este workspace', async () => {
-    assert.equal(await codigo(enBrief((tx) => saveBrief(tx, brief({ excludedCompanyIds: [CO_FUERA] })))), 'CompanyNotInCrm');
-    assert.equal(await codigo(enBrief((tx) => saveBrief(tx, brief({ excludedCompanyIds: ['no-es-un-uuid'] })))), 'CompanyNotInCrm');
+    assert.equal(await codigo(enBrief((tx) => saveBrief(tx, CREADORA, brief({ excludedCompanyIds: [CO_FUERA] })))), 'CompanyNotInCrm');
+    assert.equal(await codigo(enBrief((tx) => saveBrief(tx, CREADORA, brief({ excludedCompanyIds: ['no-es-un-uuid'] })))), 'CompanyNotInCrm');
   });
 
   test('lo demás se valida antes de escribir', async () => {
@@ -316,6 +322,7 @@ describe('VEN-7 · guardar el brief', () => {
       [{ wantedCountries: ['Colombia'] }, 'InvalidCountry:COLOMBIA'],
       [{ minBudget: '-5' }, 'InvalidBudget'],
       [{ minBudget: '12,5' }, 'InvalidBudget'],
+      [{ currency: 'pesos' }, 'InvalidCurrency'],
       [{ availabilityFrom: '2026-12-01', availabilityTo: '2026-11-01' }, 'InvalidWindow'],
       [{ availabilityFrom: '2026-02-30' }, 'InvalidWindow'],
       [{ deliverables: ['Reel de 30 s'] }, 'InvalidDeliverable'],
@@ -323,7 +330,7 @@ describe('VEN-7 · guardar el brief', () => {
       [{ excludedCategories: ['x'.repeat(61)] }, `InvalidCategory:${'x'.repeat(61)}`],
     ];
     for (const [extra, esperado] of casos) {
-      assert.equal(await codigo(enBrief((tx) => saveBrief(tx, brief(extra)))), esperado, JSON.stringify(extra));
+      assert.equal(await codigo(enBrief((tx) => saveBrief(tx, CREADORA, brief(extra)))), esperado, JSON.stringify(extra));
     }
   });
 
@@ -378,7 +385,7 @@ describe('VEN-7 r2 · la misma marca, se reconozca como se reconozca', () => {
          '{"company_name": "Apuestas Lejanas", "via": "manual"}', 0.50, 'ven7:nombre-fuera', 'pending')
       ON CONFLICT DO NOTHING;
     `);
-    await enBrief((tx) => saveBrief(tx, brief()));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
   });
 
   test('una señal manual con solo el nombre de una marca del CRM de categoría excluida no se ve', async () => {
@@ -390,11 +397,11 @@ describe('VEN-7 r2 · la misma marca, se reconozca como se reconozca', () => {
   });
 
   test('si la marca se excluye por nombre, la señal con solo su nombre sale por la empresa', async () => {
-    await enBrief((tx) => saveBrief(tx, brief({ excludedCompanyIds: [CO_SUPLE] })));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief({ excludedCompanyIds: [CO_SUPLE] })));
     const todas = await enBrief((tx) => listSignals(tx, { brief: 'show_hidden' }));
     assert.equal(todas.find((s) => s.id === S_NOMBRE_CRM)?.hiddenBy, 'company');
     assert.equal(todas.find((s) => s.id === S_SUPLE)?.hiddenBy, 'company');
-    await enBrief((tx) => saveBrief(tx, brief()));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
   });
 
   test('la ficha de la empresa cuenta como la bandeja: la oculta no es «1 señal en el radar»', async () => {
@@ -426,9 +433,9 @@ describe('VEN-7 r2 · la misma marca, se reconozca como se reconozca', () => {
     assert.equal(await veredicto(CO_SUPLE, WS_BRIEF), 'category', 'un nicho: suplementos');
     assert.equal(await veredicto(CO_CAFE, WS_BRIEF), null);
     assert.equal(await veredicto(CO_LICOR, WORKSPACE_LAURA), null, 'el brief de otro espacio no cuenta');
-    await enBrief((tx) => saveBrief(tx, brief({ excludedCompanyIds: [CO_CAFE] })));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief({ excludedCompanyIds: [CO_CAFE] })));
     assert.equal(await veredicto(CO_CAFE, WS_BRIEF), 'company');
-    await enBrief((tx) => saveBrief(tx, brief()));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
     // Lo que se compone en el SQL es un alias o un parámetro, nunca texto de fuera.
     assert.throws(() => briefCompanyVerdictSql("x' OR true --", 'ws'), /referencia inválida/);
   });
@@ -452,19 +459,19 @@ describe('VEN-7 r2 · quién cambia el brief, y la traza', () => {
   });
 
   test("un 'member' lo lee pero no lo cambia: la base lo rechaza (0064 §5) y vuelve como Forbidden", async () => {
-    const antes = await como(MIEMBRO, (tx) => getBrief(tx));
+    const antes = await como(MIEMBRO, (tx) => getBrief(tx, CREADORA));
     assert.ok(antes, 'lo lee todo el espacio');
     await assert.rejects(
-      como(MIEMBRO, (tx) => saveBrief(tx, brief({ title: 'Lo cambió un miembro', excludedCategories: [] }))),
+      como(MIEMBRO, (tx) => saveBrief(tx, CREADORA, brief({ title: 'Lo cambió un miembro', excludedCategories: [] }))),
       (e: unknown) => e instanceof BriefError && e.code === 'Forbidden',
     );
-    const despues = await enBrief((tx) => getBrief(tx));
+    const despues = await enBrief((tx) => getBrief(tx, CREADORA));
     assert.equal(despues?.title, antes.title);
     assert.deepEqual(despues?.excludedCategories, antes.excludedCategories, 'lo que oculta a todo el equipo sigue igual');
   });
 
   test('quien es dueña lo cambia, y queda en audit_log quién, antes y después, en la misma transacción', async () => {
-    const id = await como(DUENA, (tx) => saveBrief(tx, brief({ title: 'Marcas de cocina · Q4', excludedCategories: ['Alcohol', 'apuestas'] })));
+    const id = await como(DUENA, (tx) => saveBrief(tx, CREADORA, brief({ title: 'Marcas de cocina · Q4', excludedCategories: ['Alcohol', 'apuestas'] })));
     const { rows } = await enBrief((tx) =>
       tx.query<{ actor_user_id: string | null; before: { title: string; excluded_categories: string[] } | null; after: { title: string; excluded_categories: string[]; workspace_id?: string } }>(
         `SELECT actor_user_id, before, after FROM audit_log
@@ -480,16 +487,17 @@ describe('VEN-7 r2 · quién cambia el brief, y la traza', () => {
     assert.equal(traza.after.title, 'Marcas de cocina · Q4');
     assert.deepEqual(traza.after.excluded_categories, ['Alcohol', 'apuestas']);
     assert.equal(traza.after.workspace_id, undefined, 'el workspace ya va en su columna');
-    await enBrief((tx) => saveBrief(tx, brief()));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
   });
 
   test('dos guardados a la vez en un espacio sin brief crean uno solo, aunque ninguno quede activo', async () => {
     const WS_NUEVO = '00000009-0000-4000-8000-00000000b703';
+    const CREADOR_AGENCIA = '00000009-0000-4000-8000-00000000b704';
     await t.admin(`
       INSERT INTO workspace (id, slug, name, kind, currency)
       VALUES ('${WS_NUEVO}', 'workspace-brief-ven7-b', 'Otro espacio del brief', 'agency', 'COP') ON CONFLICT DO NOTHING;
       INSERT INTO creator_profile (id, workspace_id, display_name, country)
-      VALUES ('00000009-0000-4000-8000-00000000b704', '${WS_NUEVO}', 'Creador de la agencia', 'CO') ON CONFLICT DO NOTHING;
+      VALUES ('${CREADOR_AGENCIA}', '${WS_NUEVO}', 'Creador de la agencia', 'CO') ON CONFLICT DO NOTHING;
     `);
     const enNuevo = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WS_NUEVO, fn);
     // El índice único solo cubre los activos: sin el candado por workspace,
@@ -497,13 +505,14 @@ describe('VEN-7 r2 · quién cambia el brief, y la traza', () => {
     // PGlite las transacciones ya se serializan; con TEST_DATABASE_URL
     // (Postgres de verdad) esto ejercita el candado.
     await Promise.all([
-      enNuevo((tx) => saveBrief(tx, brief({ active: false, title: 'Uno' }))),
-      enNuevo((tx) => saveBrief(tx, brief({ active: false, title: 'Dos' }))),
+      enNuevo((tx) => saveBrief(tx, CREADOR_AGENCIA, brief({ active: false, title: 'Uno' }))),
+      enNuevo((tx) => saveBrief(tx, CREADOR_AGENCIA, brief({ active: false, title: 'Dos' }))),
     ]);
     const { rows } = await enNuevo((tx) => tx.query<{ n: string }>('SELECT count(*)::text AS n FROM outbound_brief'));
     assert.equal(rows[0]?.n, '1');
-    const owner = await enNuevo((tx) => getBriefOwner(tx));
-    assert.equal(owner?.workspaceKind, 'agency', 'en una agencia la pantalla dice «Brief del espacio»');
+    const { workspaceKind, creators } = await enNuevo((tx) => listBriefCreators(tx));
+    assert.equal(workspaceKind, 'agency');
+    assert.deepEqual(creators.map((c) => [c.id, c.briefStatus]), [[CREADOR_AGENCIA, 'paused']]);
   });
 });
 
@@ -511,7 +520,7 @@ describe('VEN-7 r2 · con dos creadores, el radar oculta solo lo que ninguno ace
   const SARA = '00000009-0000-4000-8000-00000000b705';
 
   before(async () => {
-    await enBrief((tx) => saveBrief(tx, brief()));
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
     // Sara, del mismo espacio, con su brief activo (uno por creador, 0064 §1): no acepta alcohol ni apuestas.
     await t.admin(`
       INSERT INTO creator_profile (id, workspace_id, display_name, country)
@@ -540,5 +549,190 @@ describe('VEN-7 r2 · con dos creadores, el radar oculta solo lo que ninguno ace
       t.admin(`INSERT INTO outbound_brief (workspace_id, creator_id, title, status) VALUES ('${WS_BRIEF}', '${SARA}', 'Otro', 'active')`),
       /outbound_brief_one_active|duplicate key/,
     );
+  });
+});
+
+describe('VEN-7 r3 · un brief por creador: la pantalla edita el del creador elegido', () => {
+  const BETO = '00000009-0000-4000-8000-00000000b706';
+
+  before(async () => {
+    await t.admin(`
+      INSERT INTO creator_profile (id, workspace_id, display_name, country)
+      VALUES ('${BETO}', '${WS_BRIEF}', 'Beto · cocina', 'CO') ON CONFLICT DO NOTHING;
+    `);
+  });
+  after(async () => {
+    await t.admin(`DELETE FROM outbound_brief WHERE creator_id = '${BETO}'; DELETE FROM creator_profile WHERE id = '${BETO}'`);
+  });
+
+  test('guardar el de Beto no toca el de la creadora, y cada uno se lee con su creador', async () => {
+    const antes = await enBrief((tx) => getBrief(tx, CREADORA));
+    assert.equal(await enBrief((tx) => getBrief(tx, BETO)), null, 'Beto todavía no tiene brief');
+    await enBrief((tx) => saveBrief(tx, BETO, brief({ title: 'Brief de Beto', excludedCategories: ['harinas'], active: false })));
+    const r = await enBrief(async (tx) => ({ suyo: await getBrief(tx, BETO), deElla: await getBrief(tx, CREADORA) }));
+    assert.equal(r.suyo?.title, 'Brief de Beto');
+    assert.equal(r.suyo?.creatorId, BETO);
+    assert.equal(r.deElla?.id, antes?.id);
+    assert.equal(r.deElla?.title, antes?.title, 'el de la creadora sigue igual');
+    const { creators } = await enBrief((tx) => listBriefCreators(tx));
+    assert.deepEqual(
+      creators.filter((c) => [CREADORA, BETO].includes(c.id)).map((c) => [c.id, c.briefStatus]),
+      [[CREADORA, 'active'], [BETO, 'paused']],
+    );
+    assert.equal(pickBriefCreator(creators, BETO)?.id, BETO, 'el pedido, si es del espacio');
+    assert.equal(pickBriefCreator(creators, '00000000-0000-4000-8000-000000000000')?.id, CREADORA, 'si no, el primero con brief activo');
+  });
+
+  test('el creador de otro espacio, o uno que no existe, no se puede escribir', async () => {
+    const codigoDe = async (p: Promise<unknown>) => p.then(() => null, (e: unknown) => (e instanceof BriefError ? e.code : String(e)));
+    assert.equal(await codigoDe(enBrief((tx) => saveBrief(tx, '00000009-0000-4000-8000-00000000b704', brief()))), 'UnknownCreator');
+    assert.equal(await codigoDe(enBrief((tx) => saveBrief(tx, 'no-es-un-uuid', brief()))), 'UnknownCreator');
+    assert.equal(await enBrief((tx) => getBrief(tx, '00000009-0000-4000-8000-00000000b704')), null, 'ni se lee');
+  });
+});
+
+describe('VEN-7 r3 · la tarjeta dice qué regla la oculta y cómo encaja con lo que buscas', () => {
+  const S_BAJO = '00000009-0000-4000-8000-0000000b75f1';
+  const S_USD = '00000009-0000-4000-8000-0000000b75f2';
+  const S_MX = '00000009-0000-4000-8000-0000000b75f3';
+  const NUEVAS = [S_BAJO, S_USD, S_MX];
+
+  before(async () => {
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
+    await t.admin(`
+      INSERT INTO signal (id, workspace_id, company_id, source_id, headline_es, evidence, fit_score,
+                          budget_estimate, budget_currency, dedupe_key, status) VALUES
+        -- Café Montaña (alimentos, nicho cocina), en Colombia, con un presupuesto por debajo del mínimo (2 M).
+        ('${S_BAJO}', '${WS_BRIEF}', '${CO_CAFE}', 'press_launches', 'Nueva línea de postres', '{"country": "CO"}', 0.99,
+         1500000, 'COP', 'ven7:fit-bajo', 'pending'),
+        -- Otra moneda: no se compara con el mínimo en pesos.
+        ('${S_USD}', '${WS_BRIEF}', '${CO_CAFE}', 'press_launches', 'Campaña regional', '{"country": "CO"}', 0.98,
+         500, 'USD', 'ven7:fit-usd', 'pending'),
+        -- Manual, en México: fuera de los países del brief (CO).
+        ('${S_MX}', '${WS_BRIEF}', NULL, 'manual', 'Abre en Monterrey',
+         '{"company_name": "Tacos Norte", "industry": "restaurantes", "country": "mx", "via": "manual"}', 0.97,
+         NULL, NULL, 'ven7:fit-mx', 'pending')
+      ON CONFLICT DO NOTHING;
+    `);
+  });
+  after(async () => {
+    await t.admin(`DELETE FROM signal WHERE id IN (${NUEVAS.map((id) => `'${id}'`).join(', ')})`);
+  });
+
+  test('el encaje sale en SQL y no oculta nada: bajo tu mínimo, fuera de tus países, la categoría que buscas', async () => {
+    const lista = await enBrief((tx) => listSignals(tx));
+    const porId = new Map(lista.map((s) => [s.id, s]));
+    for (const id of NUEVAS) assert.ok(porId.has(id), `${id} se ve: «Qué buscas» no oculta`);
+    assert.deepEqual(porId.get(S_BAJO)?.briefFit, { belowMinBudget: true, countryOutside: false, wantedCategory: 'alimentos' });
+    assert.deepEqual(porId.get(S_USD)?.briefFit, { belowMinBudget: false, countryOutside: false, wantedCategory: 'alimentos' });
+    assert.deepEqual(porId.get(S_MX)?.briefFit, { belowMinBudget: false, countryOutside: true, wantedCategory: null });
+  });
+
+  test('sin brief activo no marca nada', async () => {
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief({ active: false })));
+    try {
+      const lista = await enBrief((tx) => listSignals(tx));
+      for (const s of lista) assert.deepEqual(s.briefFit, { belowMinBudget: false, countryOutside: false, wantedCategory: null });
+    } finally {
+      await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
+    }
+  });
+
+  test('la oculta dice qué regla la dejó fuera: la categoría como se escribió, o la marca', async () => {
+    const todas = await enBrief((tx) => listSignals(tx, { brief: 'show_hidden' }));
+    const match = new Map(todas.map((s) => [s.id, s.hiddenMatch]));
+    assert.equal(match.get(S_LICOR), 'Alcohol');
+    assert.equal(match.get(S_SUPLE), 'Suplementos');
+    assert.equal(match.get(S_APUESTA), 'apuestas');
+    assert.equal(match.get(S_CAFE), null, 'la que se ve no lleva regla');
+
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief({ excludedCompanyIds: [CO_CAFE] })));
+    try {
+      const conMarca = await enBrief((tx) => listSignals(tx, { brief: 'show_hidden' }));
+      assert.equal(conMarca.find((s) => s.id === S_CAFE)?.hiddenMatch, 'Café Montaña');
+    } finally {
+      await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
+    }
+  });
+
+  test('con «Verlas», las ocultas van al final, detrás de todas las que se ven', async () => {
+    const todas = await enBrief((tx) => listSignals(tx, { brief: 'show_hidden' }));
+    const primeraOculta = todas.findIndex((s) => s.hiddenBy !== null);
+    assert.ok(primeraOculta > 0, 'hay visibles y ocultas');
+    assert.ok(todas.slice(primeraOculta).every((s) => s.hiddenBy !== null), 'ninguna visible después de la primera oculta');
+    // Aunque la de licores tenga más encaje (0,90) que varias visibles.
+    assert.ok(todas.findIndex((s) => s.id === S_LICOR) > todas.findIndex((s) => s.id === S_AROMA));
+  });
+});
+
+describe('VEN-7 r3 · el veredicto no recorre el catálogo: 5 000 empresas y 100 señales', () => {
+  // Un espacio propio. El catálogo compartido (owner_workspace_id NULL) es
+  // el que crece con el enriquecimiento del worker y el que ven todos los
+  // espacios: hasta la ronda 2, cada señal lo recorría entero (28,6 s con
+  // 10 000 empresas y 100 señales).
+  const WS_PERF = '00000009-0000-4000-8000-00000000b7f1';
+  const CREADOR_PERF = '00000009-0000-4000-8000-00000000b7f2';
+  const enPerf = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WS_PERF, fn);
+
+  before(async () => {
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name, kind, currency)
+      VALUES ('${WS_PERF}', 'workspace-brief-perf', 'Brief a escala', 'creator', 'COP') ON CONFLICT DO NOTHING;
+      INSERT INTO creator_profile (id, workspace_id, display_name, country)
+      VALUES ('${CREADOR_PERF}', '${WS_PERF}', 'Creador a escala', 'CO') ON CONFLICT DO NOTHING;
+
+      -- Una de cada tres empresas del catálogo es de alcohol.
+      INSERT INTO company (name, domain, industry, owner_workspace_id)
+      SELECT 'Marca catálogo ' || g, 'catalogo-perf-' || g || '.test', CASE WHEN g % 3 = 0 THEN 'alcohol' ELSE 'moda' END, NULL
+        FROM generate_series(1, 5000) g
+      ON CONFLICT DO NOTHING;
+      -- Las 71..100 están en el CRM del espacio: se reconocen por el nombre.
+      INSERT INTO company_link (workspace_id, company_id, relationship)
+      SELECT '${WS_PERF}', co.id, 'prospect' FROM company co
+       WHERE co.domain IN (SELECT 'catalogo-perf-' || g || '.test' FROM generate_series(71, 100) g)
+      ON CONFLICT DO NOTHING;
+
+      -- 40 con empresa, 30 sin empresa pero con dominio, 30 solo con el nombre.
+      INSERT INTO signal (workspace_id, company_id, source_id, headline_es, evidence, dedupe_key, status)
+      SELECT '${WS_PERF}', co.id, 'meta_ad_library', 'Anuncios ' || g, '{}', 'perf:id:' || g, 'pending'
+        FROM generate_series(1, 40) g JOIN company co ON co.domain = ('catalogo-perf-' || g || '.test')::citext;
+      INSERT INTO signal (workspace_id, company_id, source_id, headline_es, evidence, dedupe_key, status)
+      SELECT '${WS_PERF}', NULL, 'manual', 'Por dominio ' || g,
+             jsonb_build_object('company_name', 'Otra ' || g, 'domain', 'CATALOGO-PERF-' || g || '.test'), 'perf:dominio:' || g, 'pending'
+        FROM generate_series(41, 70) g;
+      INSERT INTO signal (workspace_id, company_id, source_id, headline_es, evidence, dedupe_key, status)
+      SELECT '${WS_PERF}', NULL, 'manual', 'Por nombre ' || g,
+             jsonb_build_object('company_name', 'MARCA CATALOGO ' || g), 'perf:nombre:' || g, 'pending'
+        FROM generate_series(71, 100) g;
+    `);
+    await enPerf((tx) => saveBrief(tx, CREADOR_PERF, brief({ wantedCategories: [], excludedCategories: ['Alcohol'] })));
+  });
+  after(async () => {
+    await t.admin(`
+      DELETE FROM workspace WHERE id = '${WS_PERF}';
+      DELETE FROM company WHERE owner_workspace_id IS NULL AND domain LIKE 'catalogo-perf-%';
+    `);
+  });
+
+  test('countHiddenSignals cuenta bien y tarda menos de 500 ms', async () => {
+    // Las de alcohol (múltiplos de 3): 13 por id (3..39), 10 por dominio
+    // (42..69) y 10 por nombre (72..99).
+    const esperado = { total: 33, byCompany: 0, byCategory: 33 };
+    assert.deepEqual(await enPerf((tx) => countHiddenSignals(tx)), esperado, 'la primera, que además calienta el plan');
+    const inicio = performance.now();
+    const r = await enPerf((tx) => countHiddenSignals(tx));
+    const ms = performance.now() - inicio;
+    assert.deepEqual(r, esperado);
+    assert.ok(ms < 500, `countHiddenSignals tardó ${Math.round(ms)} ms con 5 000 empresas en el catálogo`);
+  });
+
+  test('la bandeja y la cabecera de Ventas también', async () => {
+    const inicio = performance.now();
+    const r = await enPerf(async (tx) => ({ lista: await listSignals(tx), kpis: await getSalesKpis(tx), pendientes: await countPendingSignals(tx) }));
+    const ms = performance.now() - inicio;
+    assert.equal(r.lista.length, 67);
+    assert.equal(r.kpis.pendingSignals, 67);
+    assert.equal(r.pendientes, 67);
+    assert.ok(ms < 1500, `la bandeja, los KPI y la pestaña tardaron ${Math.round(ms)} ms`);
   });
 });

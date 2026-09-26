@@ -10,7 +10,9 @@
  *     cuando el brief cambió (canceledBriefExcluded), con el brief del
  *     workspace del toque: el de otro espacio no cuenta;
  *   · con dos creadores en el espacio, manda el brief del creador del
- *     negocio: lo que uno no acepta, el otro puede aceptarlo.
+ *     negocio: lo que uno no acepta, el otro puede aceptarlo;
+ *   · y si el creador del negocio no tiene brief propio, lo que excluyen
+ *     todos los activos del espacio (la agencia de la ronda 2).
  *
  * Ids nuevos en cada corrida: contra un Postgres que se queda, la prueba
  * se puede repetir.
@@ -22,6 +24,7 @@ import type { WorkspaceTx } from '../src/client.ts';
 import { createSequenceFromTemplate, setSequenceStatus } from '../src/queries/cadencias/index.ts';
 import { claimDueTouches } from '../src/queries/outreach.ts';
 import { enrollContacts } from '../src/queries/outreach/enroll.ts';
+import { saveBrief } from '../src/queries/brief.ts';
 import { openTestDb, SETUP_TIMEOUT, type TestDb } from './pglite.ts';
 
 const WS = randomUUID();
@@ -153,4 +156,63 @@ test('con dos creadores cuenta el brief del creador del negocio, al enrolar y en
   const r = await t.db.asWorker((tx) => claimDueTouches(tx, { now: CLOCK, channels: ['email'], workspaceId: WS, limit: 5 }));
   assert.equal(r.canceledBriefExcluded, 0);
   assert.deepEqual(r.claimed.map((x) => x.id), [T_SARA]);
+});
+
+test('en una agencia, el negocio de un creador SIN brief sigue lo que excluyen los briefs del espacio', async () => {
+  // La revisión de la ronda 2: agencia con Ana y Beto; el brief se guarda
+  // desde la pantalla (saveBrief, con el creador elegido: Ana) y excluye
+  // alcohol. El radar oculta la señal de Licores del Sur, pero enrolar con
+  // el negocio de Beto inscribía a Pedro. Beto no tiene brief propio: le
+  // aplica lo que excluyen los activos del espacio, igual que al radar.
+  const AG = randomUUID();
+  const ANA = randomUUID();
+  const BETO = randomUUID();
+  const CO = randomUUID();
+  const PEPE = randomUUID();
+  const CANAL = randomUUID();
+  const DEAL_BETO = randomUUID();
+  const T_BETO = randomUUID();
+  const slug = `agencia-${AG.slice(0, 8)}`;
+  await t.admin(`
+    INSERT INTO workspace (id, slug, name, kind, timezone) VALUES ('${AG}', '${slug}', 'Agencia', 'agency', 'America/Bogota');
+    INSERT INTO creator_profile (id, workspace_id, display_name, country) VALUES
+      ('${ANA}', '${AG}', 'Ana', 'CO'), ('${BETO}', '${AG}', 'Beto', 'CO');
+    INSERT INTO company (id, name, industry, owner_workspace_id) VALUES ('${CO}', 'Licores del Sur', 'Alcohol', '${AG}');
+    INSERT INTO company_link (workspace_id, company_id) VALUES ('${AG}', '${CO}');
+    INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES
+      ('${PEPE}', '${CO}', '${AG}', 'Pedro Ruiz', 'pedro.${slug}@licores.test', 'user_provided');
+    INSERT INTO outbound_policy (workspace_id, enabled, postal_address, require_human_review, max_touches_per_company, min_days_between_touches)
+    VALUES ('${AG}', true, 'Calle 93 # 11-26, Bogotá', false, 10, 0);
+    INSERT INTO connection_secret (secret_ref, workspace_id, ciphertext, iv, tag)
+    VALUES ('enc:gmail:${slug}', '${AG}', '\\x00', decode(repeat('00', 12), 'hex'), decode(repeat('00', 16), 'hex'));
+    INSERT INTO outreach_channel_account (id, workspace_id, channel, provider, provider_account_id, display_name, status,
+                                          daily_cap, weekly_cap, secret_ref)
+    VALUES ('${CANAL}', '${AG}', 'email', 'gmail_oauth', '${slug}@gmail.test', 'Agencia', 'connected', 40, 200, 'enc:gmail:${slug}');
+    INSERT INTO deal (id, workspace_id, company_id, creator_id, name, stage_id)
+    VALUES ('${DEAL_BETO}', '${AG}', '${CO}', '${BETO}', 'Ron con Beto', 'nuevo');
+  `);
+  const enAg = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(AG, fn);
+  await enAg((tx) =>
+    saveBrief(tx, ANA, {
+      title: 'Sin alcohol', wantedCategories: [], wantedCountries: [], minBudget: null, currency: 'COP', deliverables: [],
+      availabilityFrom: null, availabilityTo: null, excludedCategories: ['alcohol'], excludedCompanyIds: [],
+      requiresDisclosure: true, notes: null, active: true,
+    }),
+  );
+
+  const id = await enAg((tx) => createSequenceFromTemplate(tx, 'marca-con-campana-activa'));
+  await enAg((tx) => setSequenceStatus(tx, id, 'active'));
+  const r = await enAg((tx) => enrollContacts(tx, { sequenceId: id, contactIds: [PEPE], dealId: DEAL_BETO, now: CLOCK }));
+  assert.deepEqual(r.skipped, [{ contactId: PEPE, reason: 'brief_excluded' }], 'Beto no tiene brief: manda el del espacio');
+  assert.deepEqual(r.enrolled, []);
+
+  // Y lo que estaba en la cola con el negocio de Beto se cancela.
+  await t.admin(`
+    INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, deal_id, channel, subject, body, status, scheduled_for) VALUES
+      ('${T_BETO}', '${AG}', '${CO}', '${PEPE}', '${DEAL_BETO}', 'email', 'Hola, Pedro', 'Una idea para el ron.', 'scheduled',
+       '${new Date(CLOCK.getTime() - 60_000).toISOString()}');
+  `);
+  const cola = await t.db.asWorker((tx) => claimDueTouches(tx, { now: CLOCK, channels: ['email'], workspaceId: AG, limit: 5 }));
+  assert.equal(cola.canceledBriefExcluded, 1);
+  assert.deepEqual(cola.claimed, []);
 });
