@@ -431,4 +431,6 @@ export const outboundTouch = pgTable('outbound_touch', {
    * envía en el hilo de ese mensaje y por la cuenta que lo recibió.
    */
   replyToMessageId: uuid('reply_to_message_id').references((): AnyPgColumn => outboundMessage.id, { onDelete: 'set null' }),
+  /** Una respuesta de la bandeja que no salió y la persona ya vio (0065). */
+  inboxDismissedAt: timestamptz('inbox_dismissed_at'),
 });

@@ -36,16 +36,38 @@
  */
 import { DEFAULT_SEND_WINDOW, planSteps } from '@mc/core';
 import { INBOX_URLS, INTENT_NOTICE_TEXTS } from '@mc/core/outreach/intent-messages';
-import { notNowResumeAt, oooResumeAt, type MessageIntent, type Referral } from '@mc/core/outreach/intent';
+import { cleanReferral, MESSAGE_INTENTS, notNowResumeAt, oooResumeAt, type MessageIntent, type Referral } from '@mc/core/outreach/intent';
 import { noticeLang } from '@mc/core/outreach/messages';
 import { zonedInstant, zonedParts } from '@mc/core/outreach/schedule';
 import type { SqlExecutor, WorkerSql } from '../../client.ts';
 import { advanceEnrollment, cancelPendingForEnrollment } from './enroll.ts';
 import { applyReplyOptOut, type InboundEffectsInput } from './inbound.ts';
-import { assertIds, date, int, text, textOrNull, windowOf } from './shared.ts';
+import { assertIds, date, int, oneOf, text, textOrNull, windowOf } from './shared.ts';
 
 /** Cuántos mensajes clasifica una corrida como mucho. */
 export const INTENT_BATCH_SIZE = 20;
+/**
+ * Cuántos de un mismo workspace entran en un lote: el lote se reparte
+ * entre workspaces (uno con cien respuestas no deja a los demás esperando).
+ */
+export const INTENT_PER_WORKSPACE = 5;
+/**
+ * Al tercer fallo aplicando los efectos de un mensaje, queda 'ambiguous'
+ * con confianza 0 para una persona: nada se queda en la cola para siempre
+ * ni se vuelve a pagar en bucle.
+ */
+export const INTENT_MAX_ATTEMPTS = 3;
+
+/** Lo que el clasificador decidió, ya con la regla de la confianza. */
+export interface IntentDecision {
+  intent: MessageIntent;
+  confidence: number;
+  returnDate: string | null;
+  referral: Referral | null;
+  source: 'model' | 'fake' | 'person';
+  /** La frase que explica la clasificación (outbound_message.intent_reason). */
+  reason?: string | null;
+}
 
 /** Un mensaje entrante por clasificar, con lo que el clasificador necesita. */
 export interface UnclassifiedMessage {
@@ -65,41 +87,54 @@ export interface UnclassifiedMessage {
   locale: string;
   /** Lo último que le escribimos por ese canal: el contexto de la respuesta. */
   previousOutbound: string | null;
+  /** Las cabeceras dijeron que es automática; null, el canal no lo dice. */
+  automatic?: boolean | null;
+  /** La decisión ya pagada que falta aplicar (0065): se reintentan solo los efectos. */
+  pendingDecision?: IntentDecision | null;
+  /** Cuántas veces falló aplicarla. */
+  attempts?: number;
 }
 
-/**
- * Lo entrante sin clasificar, del más viejo al más nuevo. Las bajas que
- * vio el detector ya llegan clasificadas (applyInboundEffects) y no están.
- */
-export async function listUnclassifiedInbound(
-  tx: WorkerSql,
-  opts: { limit?: number; workspaceId?: string } = {},
-): Promise<UnclassifiedMessage[]> {
-  if (opts.workspaceId) assertIds('listUnclassifiedInbound', [opts.workspaceId]);
-  const fn = 'listUnclassifiedInbound';
-  const rows = (
-    await tx.query<{
-      id: string; workspace_id: string; channel: string; body: string; subject: string | null; contact_id: string | null;
-      enrollment_id: string | null; touch_id: string | null; deal_id: string | null; from_address: string | null;
-      occurred_at: unknown; tz: string; locale: string | null; previous: string | null;
-    }>(
-      `SELECT m.id, m.workspace_id, m.channel, m.body, m.subject, m.contact_id, m.enrollment_id, m.touch_id, m.deal_id,
-              m.from_address, m.occurred_at, w.timezone AS tz, w.locale,
-              coalesce(t.body, (SELECT o.body FROM outbound_message o
-                                 WHERE o.workspace_id = m.workspace_id AND o.contact_id = m.contact_id AND o.channel = m.channel
-                                   AND o.direction = 'outbound' AND o.occurred_at <= m.occurred_at
-                                 ORDER BY o.occurred_at DESC LIMIT 1)) AS previous
-         FROM outbound_message m
-         JOIN workspace w ON w.id = m.workspace_id
-         LEFT JOIN outbound_touch t ON t.id = m.touch_id
-        WHERE m.direction = 'inbound' AND m.classified_at IS NULL
-          AND ($2::uuid IS NULL OR m.workspace_id = $2::uuid)
-        ORDER BY m.created_at, m.id
-        LIMIT $1`,
-      [Math.max(1, Math.min(opts.limit ?? INTENT_BATCH_SIZE, 200)), opts.workspaceId ?? null],
-    )
-  ).rows;
-  return rows.map((r, i) => ({
+const DECISION_SOURCES = ['model', 'fake', 'person'] as const;
+
+/** La decisión guardada en outbound_message.intent_decision, o null si no se puede leer. */
+export function decisionFromJson(v: unknown): IntentDecision | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o['intent'] !== 'string' || !(MESSAGE_INTENTS as readonly string[]).includes(o['intent'])) return null;
+  if (typeof o['source'] !== 'string' || !(DECISION_SOURCES as readonly string[]).includes(o['source'])) return null;
+  const confidence = Number(o['confidence']);
+  return {
+    intent: o['intent'] as MessageIntent,
+    confidence: Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : 0,
+    returnDate: typeof o['returnDate'] === 'string' ? o['returnDate'] : null,
+    referral: cleanReferral(o['referral'] as Partial<Referral> | null),
+    source: o['source'] as IntentDecision['source'],
+    reason: typeof o['reason'] === 'string' ? o['reason'].slice(0, 300) : null,
+  };
+}
+
+interface MessageRow {
+  id: string; workspace_id: string; channel: string; body: string; subject: string | null; contact_id: string | null;
+  enrollment_id: string | null; touch_id: string | null; deal_id: string | null; from_address: string | null;
+  occurred_at: unknown; tz: string; locale: string | null; previous: string | null; automatic: boolean | null;
+  intent_decision: unknown; intent_attempts: number | null;
+}
+
+/** Lo que el clasificador necesita de un mensaje: la misma lectura para el job y para la bandeja. */
+const MESSAGE_SELECT = `
+  SELECT m.id, m.workspace_id, m.channel, m.body, m.subject, m.contact_id, m.enrollment_id, m.touch_id, m.deal_id,
+         m.from_address, m.occurred_at, w.timezone AS tz, w.locale, m.automatic, m.intent_decision, m.intent_attempts, m.intent,
+         coalesce(t.body, (SELECT o.body FROM outbound_message o
+                            WHERE o.workspace_id = m.workspace_id AND o.contact_id = m.contact_id AND o.channel = m.channel
+                              AND o.direction = 'outbound' AND o.occurred_at <= m.occurred_at
+                            ORDER BY o.occurred_at DESC LIMIT 1)) AS previous
+    FROM outbound_message m
+    JOIN workspace w ON w.id = m.workspace_id
+    LEFT JOIN outbound_touch t ON t.id = m.touch_id`;
+
+function messageFromRow(fn: string, r: MessageRow, i: number): UnclassifiedMessage {
+  return {
     id: text(fn, `$[${i}].id`, r.id),
     workspaceId: text(fn, `$[${i}].workspace_id`, r.workspace_id),
     channel: text(fn, `$[${i}].channel`, r.channel),
@@ -114,16 +149,96 @@ export async function listUnclassifiedInbound(
     timeZone: text(fn, `$[${i}].tz`, r.tz),
     locale: textOrNull(fn, `$[${i}].locale`, r.locale) ?? 'es-CO',
     previousOutbound: textOrNull(fn, `$[${i}].previous`, r.previous),
-  }));
+    automatic: typeof r.automatic === 'boolean' ? r.automatic : null,
+    pendingDecision: decisionFromJson(r.intent_decision),
+    attempts: r.intent_attempts === null ? 0 : int(fn, `$[${i}].intent_attempts`, r.intent_attempts),
+  };
 }
 
-/** Lo que el clasificador decidió, ya con la regla de la confianza. */
-export interface IntentDecision {
-  intent: MessageIntent;
-  confidence: number;
-  returnDate: string | null;
-  referral: Referral | null;
-  source: 'model' | 'fake' | 'person';
+/** Un lote de lo entrante sin clasificar, y los workspaces que hoy no tienen presupuesto. */
+export interface UnclassifiedBatch {
+  messages: UnclassifiedMessage[];
+  /** Sin presupuesto hoy: sus mensajes sin decisión pagada esperan a mañana (o a que suba el tope). */
+  overBudget: string[];
+}
+
+/**
+ * Lo entrante sin clasificar, repartido entre workspaces: como mucho
+ * `perWorkspace` de cada uno, del más viejo al más nuevo, y el lote
+ * alterna workspaces (el primero de cada uno, después el segundo…). Las
+ * bajas que vio el detector ya llegan clasificadas (applyInboundEffects).
+ *
+ * Con `minBudgetUsd` (el clasificador cuesta), un workspace al que hoy no
+ * le queda eso de su tope no entra en el lote, salvo sus mensajes con una
+ * decisión ya pagada (solo falta aplicarla): así un workspace sin
+ * presupuesto no ocupa el lote de los demás. `skipWorkspaces` saca además
+ * los que la corrida ya vio sin presupuesto. Un mensaje que falló
+ * INTENT_MAX_ATTEMPTS veces no vuelve.
+ */
+export async function listUnclassifiedInbound(
+  tx: WorkerSql,
+  opts: { limit?: number; perWorkspace?: number; workspaceId?: string; skipWorkspaces?: readonly string[]; minBudgetUsd?: number | null } = {},
+): Promise<UnclassifiedBatch> {
+  if (opts.workspaceId) assertIds('listUnclassifiedInbound', [opts.workspaceId]);
+  const skip = [...(opts.skipWorkspaces ?? [])];
+  assertIds('listUnclassifiedInbound', skip);
+  const fn = 'listUnclassifiedInbound';
+  let overBudget: string[] = [];
+  if (opts.minBudgetUsd !== undefined && opts.minBudgetUsd !== null) {
+    // El mismo día local y el mismo tope que llmBudgetLeftUsd: outbound_health.
+    overBudget = (
+      await tx.query<{ workspace_id: string }>(
+        `SELECT p.workspace_id
+           FROM (SELECT DISTINCT m.workspace_id FROM outbound_message m
+                  WHERE m.direction = 'inbound' AND m.classified_at IS NULL AND m.intent_decision IS NULL
+                    AND m.intent_attempts < $3 AND ($1::uuid IS NULL OR m.workspace_id = $1::uuid)
+                    AND NOT (m.workspace_id = ANY($2::uuid[]))) p
+           CROSS JOIN LATERAL (SELECT outbound_health(p.workspace_id, 24)->'llm' AS llm) h
+          WHERE coalesce((h.llm->>'dailyCap')::numeric, 0) - coalesce((h.llm->>'spentToday')::numeric, 0) < $4::numeric
+          ORDER BY p.workspace_id`,
+        [opts.workspaceId ?? null, skip, INTENT_MAX_ATTEMPTS, opts.minBudgetUsd],
+      )
+    ).rows.map((r) => r.workspace_id);
+  }
+  const excluded = [...skip, ...overBudget];
+  const rows = (
+    await tx.query<MessageRow>(
+      `WITH lote AS (
+              SELECT m.id, row_number() OVER (PARTITION BY m.workspace_id ORDER BY m.created_at, m.id) AS n, m.created_at
+                FROM outbound_message m
+               WHERE m.direction = 'inbound' AND m.classified_at IS NULL AND m.intent_attempts < $4
+                 AND ($2::uuid IS NULL OR m.workspace_id = $2::uuid)
+                 AND (m.intent_decision IS NOT NULL OR NOT (m.workspace_id = ANY($3::uuid[]))))
+       ${MESSAGE_SELECT}
+         JOIN lote l ON l.id = m.id
+        WHERE l.n <= $5
+        ORDER BY l.n, l.created_at, m.id
+        LIMIT $1`,
+      [
+        Math.max(1, Math.min(opts.limit ?? INTENT_BATCH_SIZE, 200)), opts.workspaceId ?? null, excluded, INTENT_MAX_ATTEMPTS,
+        Math.max(1, Math.min(opts.perWorkspace ?? INTENT_PER_WORKSPACE, 200)),
+      ],
+    )
+  ).rows;
+  return { messages: rows.map((r, i) => messageFromRow(fn, r, i)), overBudget };
+}
+
+/**
+ * Un mensaje entrante por su id, con lo mismo que lee el job y la
+ * intención que tiene. Corre con quien llame: desde la web, con la RLS (lo
+ * ajeno no existe).
+ */
+export async function loadIntentMessage(
+  tx: SqlExecutor,
+  messageId: string,
+): Promise<(UnclassifiedMessage & { intent: MessageIntent | null }) | null> {
+  assertIds('loadIntentMessage', [messageId]);
+  const r = (
+    await tx.query<MessageRow & { intent: string | null }>(`${MESSAGE_SELECT} WHERE m.id = $1::uuid AND m.direction = 'inbound'`, [messageId])
+  ).rows[0];
+  if (!r) return null;
+  const intent = r.intent === null ? null : oneOf('loadIntentMessage', 'intent', r.intent, MESSAGE_INTENTS);
+  return { ...messageFromRow('loadIntentMessage', r, 0), intent };
 }
 
 export interface IntentEffects {
@@ -153,7 +268,7 @@ interface Surroundings {
   enrollment_status: string | null;
 }
 
-async function surroundings(tx: WorkerSql, m: UnclassifiedMessage): Promise<Surroundings> {
+async function surroundings(tx: SqlExecutor, m: UnclassifiedMessage): Promise<Surroundings> {
   // El negocio: el del mensaje, el de su cadencia o su toque, o el abierto
   // más reciente de la marca en este workspace. El aviso, para quien enroló
   // (si sigue en el equipo) o para el dueño del negocio.
@@ -179,7 +294,7 @@ async function surroundings(tx: WorkerSql, m: UnclassifiedMessage): Promise<Surr
 
 /** Un aviso por mensaje y efecto, que lleva a su hilo en la bandeja. Idempotente. */
 async function notifyIntent(
-  tx: WorkerSql,
+  tx: SqlExecutor,
   m: UnclassifiedMessage,
   s: Surroundings,
   text: { severity: 'success' | 'info' | 'warning'; title: string; body: string },
@@ -209,6 +324,40 @@ function longDate(at: Date, locale: string, timeZone: string): string {
   return new Intl.DateTimeFormat(locale, { dateStyle: 'long', timeZone }).format(at);
 }
 
+function emptyEffects(d: IntentDecision): IntentEffects {
+  return {
+    applied: false, intent: d.intent, dealId: null, dealMoved: false, resumeAt: null, restored: [], canceled: [], optOut: false,
+    optOutReview: false, notified: false,
+  };
+}
+
+/** El enrolamiento del hilo, bloqueado como en applyInboundEffects: el despachador que envía en este hilo espera. */
+async function lockEnrollment(tx: SqlExecutor, m: UnclassifiedMessage): Promise<string | null> {
+  if (!m.enrollmentId) return null;
+  return (await tx.query<{ status: string }>(`SELECT status FROM outbound_enrollment WHERE id = $1::uuid FOR UPDATE`, [m.enrollmentId]))
+    .rows[0]?.status ?? null;
+}
+
+/** Escribe la intención en el mensaje. Sin `force`, solo si seguía sin clasificar (dos corridas no aplican dos veces). */
+async function markIntent(
+  tx: SqlExecutor, m: UnclassifiedMessage, d: IntentDecision, now: Date, resumeAt: Date | null, force: boolean,
+): Promise<boolean> {
+  const marked = await tx.query(
+    `UPDATE outbound_message
+        SET intent = $2, intent_confidence = $3::numeric, intent_source = $4, classified_at = $5::timestamptz,
+            resume_at = $6::timestamptz,
+            referral = CASE WHEN $2 = 'referral' THEN coalesce($7::jsonb, CASE WHEN $9::boolean THEN referral END) END,
+            intent_reason = $8, intent_decision = NULL
+      WHERE id = $1::uuid AND ($9::boolean OR classified_at IS NULL)
+      RETURNING id`,
+    [
+      m.id, d.intent, d.confidence.toFixed(3), d.source, now.toISOString(), resumeAt?.toISOString() ?? null,
+      d.intent === 'referral' && d.referral ? JSON.stringify(d.referral) : null, d.reason?.trim().slice(0, 300) || null, force,
+    ],
+  );
+  return marked.rows.length > 0;
+}
+
 /**
  * Aplica la intención de UN mensaje, en la transacción de quien llama (ver
  * la cabecera). Solo si el mensaje sigue sin clasificar: dos corridas
@@ -216,35 +365,33 @@ function longDate(at: Date, locale: string, timeZone: string): string {
  */
 export async function applyIntent(tx: WorkerSql, m: UnclassifiedMessage, d: IntentDecision, now: Date): Promise<IntentEffects> {
   assertIds('applyIntent', [m.id, m.workspaceId]);
-  const out: IntentEffects = {
-    applied: false, intent: d.intent, dealId: null, dealMoved: false, resumeAt: null, restored: [], canceled: [], optOut: false,
-    optOutReview: false, notified: false,
-  };
-  // El enrolamiento primero, y bloqueado, como applyInboundEffects: el
-  // despachador que envía en este hilo espera.
-  const enrollmentStatus = m.enrollmentId
-    ? (await tx.query<{ status: string }>(`SELECT status FROM outbound_enrollment WHERE id = $1::uuid FOR UPDATE`, [m.enrollmentId])).rows[0]
-        ?.status ?? null
-    : null;
+  const enrollmentStatus = await lockEnrollment(tx, m);
   const resumeAt = d.intent === 'ooo' ? oooResumeAt(d.returnDate, m.occurredAt, m.timeZone) : null;
-  const marked = await tx.query(
-    `UPDATE outbound_message
-        SET intent = $2, intent_confidence = $3::numeric, intent_source = $4, classified_at = $5::timestamptz,
-            resume_at = $6::timestamptz, referral = $7::jsonb
-      WHERE id = $1::uuid AND classified_at IS NULL
-      RETURNING id`,
-    [
-      m.id, d.intent, d.confidence.toFixed(3), d.source, now.toISOString(), resumeAt?.toISOString() ?? null,
-      d.intent === 'referral' && d.referral ? JSON.stringify(d.referral) : null,
-    ],
-  );
-  if (marked.rows.length === 0) return out;
-  out.applied = true;
+  if (!(await markIntent(tx, m, d, now, resumeAt, false))) return emptyEffects(d);
+  return intentEffects(tx, m, d, { enrollmentStatus, resumeAt, now, notify: true });
+}
+
+/**
+ * Los efectos de una intención ya escrita en el mensaje. Corre con quien
+ * llame: el worker (applyIntent) o la web con la RLS (reapplyIntent, la
+ * corrección de una persona). Todo lo que toca lo puede escribir el
+ * workspace del mensaje: la ficha propia, su negocio, su cadencia y su
+ * aviso, como el webhook de Unipile con applyReplyOptOut.
+ */
+async function intentEffects(
+  tx: SqlExecutor,
+  m: UnclassifiedMessage,
+  d: IntentDecision,
+  ctx: { enrollmentStatus: string | null; resumeAt: Date | null; now: Date; notify: boolean },
+): Promise<IntentEffects> {
+  const { now } = ctx;
+  const out: IntentEffects = { ...emptyEffects(d), applied: true };
   const s = await surroundings(tx, m);
   out.dealId = s.deal_id;
   const lang = noticeLang(m.locale);
   const t = INTENT_NOTICE_TEXTS[lang];
   const who = s.who ?? s.company ?? '';
+  const notify = (text: Parameters<typeof notifyIntent>[3]) => (ctx.notify ? notifyIntent(tx, m, s, text, now) : Promise.resolve(false));
 
   switch (d.intent) {
     case 'interested': {
@@ -260,9 +407,7 @@ export async function applyIntent(tx: WorkerSql, m: UnclassifiedMessage, d: Inte
           [s.deal_id, t.replyToday, endOfLocalDay(now, m.timeZone).toISOString(), m.occurredAt.toISOString()],
         );
       }
-      out.notified = await notifyIntent(
-        tx, m, s, { severity: 'success', title: t.interestedTitle(who), body: t.interestedBody(s.company, out.dealMoved) }, now,
-      );
+      out.notified = await notify({ severity: 'success', title: t.interestedTitle(who), body: t.interestedBody(s.company, out.dealMoved) });
       break;
     }
     case 'not_now': {
@@ -281,14 +426,12 @@ export async function applyIntent(tx: WorkerSql, m: UnclassifiedMessage, d: Inte
         }
       }
       const until = out.resumeAt ?? notNowResumeAt(m.occurredAt);
-      out.notified = await notifyIntent(
-        tx, m, s, { severity: 'info', title: t.notNowTitle(who), body: t.notNowBody(longDate(until, m.locale, m.timeZone)) }, now,
-      );
+      out.notified = await notify({ severity: 'info', title: t.notNowTitle(who), body: t.notNowBody(longDate(until, m.locale, m.timeZone)) });
       break;
     }
     case 'ooo': {
-      out.resumeAt = resumeAt;
-      if (m.enrollmentId && resumeAt) out.restored = await pauseUntilBack(tx, m, enrollmentStatus, resumeAt);
+      out.resumeAt = ctx.resumeAt;
+      if (m.enrollmentId && ctx.resumeAt) out.restored = await pauseUntilBack(tx, m, ctx.enrollmentStatus, ctx.resumeAt);
       break;
     }
     case 'unsubscribe': {
@@ -296,7 +439,7 @@ export async function applyIntent(tx: WorkerSql, m: UnclassifiedMessage, d: Inte
         workspaceId: m.workspaceId, messageId: m.id, channel: m.channel, touchId: m.touchId, enrollmentId: m.enrollmentId,
         contactId: m.contactId, body: m.body, automatic: false, occurredAt: m.occurredAt, now, fromAddress: m.fromAddress,
       };
-      const e = await applyReplyOptOut(tx, input, enrollmentStatus, null);
+      const e = await applyReplyOptOut(tx, input, ctx.enrollmentStatus, null);
       // El detector ve la baja antes de que la respuesta detenga la cadencia;
       // el modelo, después: la cadencia del hilo ya estaba en 'replied' y
       // termina igual que con el detector, en 'opted_out'.
@@ -315,18 +458,112 @@ export async function applyIntent(tx: WorkerSql, m: UnclassifiedMessage, d: Inte
     }
     case 'referral': {
       const name = d.referral?.name ?? d.referral?.email ?? null;
-      out.notified = await notifyIntent(
-        tx, m, s,
-        { severity: 'info', title: t.referralTitle(who), body: name ? t.referralBody(name) : t.referralBodyUnknown() }, now,
-      );
+      out.notified = await notify({
+        severity: 'info', title: t.referralTitle(who), body: name ? t.referralBody(name) : t.referralBodyUnknown(),
+      });
       break;
     }
     case 'ambiguous': {
-      out.notified = await notifyIntent(tx, m, s, { severity: 'warning', title: t.ambiguousTitle(who), body: t.ambiguousBody() }, now);
+      out.notified = await notify({ severity: 'warning', title: t.ambiguousTitle(who), body: t.ambiguousBody() });
       break;
     }
   }
   return out;
+}
+
+/**
+ * La corrección de una persona (la bandeja, VEN-14): la intención pasa a
+ * `d.intent` con intent_source 'person' y se aplican sus efectos, como si
+ * hubiera llegado así. Antes se deshace lo que la intención anterior dejó
+ * en la cadencia del hilo: un «fuera de la oficina» o un «ahora no»
+ * pusieron el enrolamiento en pausa o en enfriamiento con fecha de vuelta;
+ * corregidos, el enrolamiento vuelve a 'replied' (una respuesta de verdad
+ * detiene la cadencia) y lo que se había devuelto a la cola se cancela.
+ *
+ * Lo que no se deshace, a propósito: la baja (contact.opted_out es de una
+ * sola dirección; quien llama no ofrece corregir una baja) y la etapa del
+ * negocio (deal_move_stage solo avanza; la persona lo mueve en el
+ * pipeline). No avisa: quien corrige ya lo sabe; el aviso de «revísala»
+ * queda leído.
+ */
+export async function reapplyIntent(
+  tx: SqlExecutor,
+  m: UnclassifiedMessage & { intent: MessageIntent | null },
+  d: IntentDecision,
+  now: Date,
+): Promise<IntentEffects> {
+  assertIds('reapplyIntent', [m.id, m.workspaceId]);
+  let enrollmentStatus = await lockEnrollment(tx, m);
+  if (m.enrollmentId && (m.intent === 'ooo' || m.intent === 'not_now') && d.intent !== m.intent) {
+    const back = await tx.query(
+      `UPDATE outbound_enrollment SET status = 'replied', resume_at = NULL, finished_at = coalesce(finished_at, $2::timestamptz)
+        WHERE id = $1::uuid AND status IN ('paused', 'cooldown') AND resume_at IS NOT NULL
+        RETURNING id`,
+      [m.enrollmentId, now.toISOString()],
+    );
+    if (back.rows.length > 0) {
+      await cancelPendingForEnrollment(tx, m.enrollmentId, 'replied');
+      enrollmentStatus = 'replied';
+      if (m.touchId) {
+        await tx.query(`UPDATE outbound_touch SET replied_at = coalesce(replied_at, $2::timestamptz) WHERE id = $1::uuid`, [
+          m.touchId, m.occurredAt.toISOString(),
+        ]);
+      }
+    }
+  }
+  const resumeAt = d.intent === 'ooo' ? oooResumeAt(d.returnDate, m.occurredAt, m.timeZone) : null;
+  await markIntent(tx, m, d, now, resumeAt, true);
+  await tx.query(
+    `UPDATE notification SET read_at = coalesce(read_at, $3::timestamptz)
+      WHERE workspace_id = $1::uuid AND entity_type = 'outbound_message_intent' AND entity_id = $2::uuid`,
+    [m.workspaceId, m.id, now.toISOString()],
+  );
+  return intentEffects(tx, m, d, { enrollmentStatus, resumeAt, now, notify: false });
+}
+
+/**
+ * Una decisión ya pagada y su gasto, en UNA transacción: la fila de
+ * outbound_llm_call (propósito 'classify', con el mensaje) y la decisión
+ * en outbound_message.intent_decision. Si aplicar los efectos falla, la
+ * corrida siguiente los reintenta sin volver a llamar al modelo.
+ */
+export async function recordClassification(
+  tx: WorkerSql,
+  input: {
+    workspaceId: string; messageId: string; decision: IntentDecision;
+    usage: { model: string; inputTokens: number; outputTokens: number; costUsd: number } | null;
+  },
+): Promise<void> {
+  assertIds('recordClassification', [input.workspaceId, input.messageId]);
+  if (input.usage) await recordIntentLlmCall(tx, { workspaceId: input.workspaceId, messageId: input.messageId, ...input.usage });
+  await tx.query(
+    `UPDATE outbound_message SET intent_decision = $2::jsonb WHERE id = $1::uuid AND classified_at IS NULL`,
+    [input.messageId, JSON.stringify(input.decision)],
+  );
+}
+
+/**
+ * Aplicar la intención falló: suma un intento. Al llegar a
+ * INTENT_MAX_ATTEMPTS, el mensaje queda 'ambiguous' con confianza 0 (la
+ * fuente, la de la decisión que no se pudo aplicar) y un aviso para que
+ * una persona lo lea: sale de la cola sin volver a pagarse. Devuelve si se
+ * rindió.
+ */
+export async function failIntentAttempt(tx: WorkerSql, m: UnclassifiedMessage, source: IntentDecision['source'], now: Date): Promise<boolean> {
+  assertIds('failIntentAttempt', [m.id, m.workspaceId]);
+  const n = (
+    await tx.query<{ n: number }>(
+      `UPDATE outbound_message SET intent_attempts = intent_attempts + 1 WHERE id = $1::uuid AND classified_at IS NULL RETURNING intent_attempts AS n`,
+      [m.id],
+    )
+  ).rows[0]?.n;
+  if (n === undefined || n < INTENT_MAX_ATTEMPTS) return false;
+  const d: IntentDecision = { intent: 'ambiguous', confidence: 0, returnDate: null, referral: null, source, reason: null };
+  if (!(await markIntent(tx, m, d, now, null, false))) return false;
+  const s = await surroundings(tx, m);
+  const t = INTENT_NOTICE_TEXTS[noticeLang(m.locale)];
+  await notifyIntent(tx, m, s, { severity: 'warning', title: t.ambiguousTitle(s.who ?? s.company ?? ''), body: t.ambiguousBody() }, now);
+  return true;
 }
 
 /**
@@ -342,7 +579,7 @@ export async function applyIntent(tx: WorkerSql, m: UnclassifiedMessage, d: Inte
  *     toque deja de contar como respondido (el embudo de VEN-16). Solo si
  *     no hubo antes otra respuesta de verdad en ese hilo.
  */
-async function pauseUntilBack(tx: WorkerSql, m: UnclassifiedMessage, status: string | null, resumeAt: Date): Promise<string[]> {
+async function pauseUntilBack(tx: SqlExecutor, m: UnclassifiedMessage, status: string | null, resumeAt: Date): Promise<string[]> {
   if (status === 'active') {
     await tx.query(
       `UPDATE outbound_enrollment SET status = 'paused', resume_at = $2::timestamptz WHERE id = $1::uuid AND status = 'active'`,

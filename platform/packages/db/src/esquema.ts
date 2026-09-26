@@ -366,6 +366,10 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     '¿el worker redacta con IA? (0057, VEN-12): la llave de Anthropic vive en el worker y la web lo sabe por la última ' +
     'corrida de outbound.generate en job_run, que de un cron no tiene workspace. Solo LEE esas filas (una política TO ' +
     'CURRENT_USER por job_id) y devuelve una palabra: anthropic, fake, off o unknown. EXECUTE solo para mc_app',
+  'outreach_classifier_status()':
+    '¿el worker clasifica las respuestas con IA? (0065, VEN-14): la misma forma que outreach_writer_status, con la ' +
+    'última corrida de outbound.intent en job_run. Solo LEE esas filas (una política TO CURRENT_USER por job_id) y ' +
+    'devuelve una palabra: model, fake, off o unknown. EXECUTE solo para mc_app',
   'outreach_channel_mark_down(uuid,text)':
     'el aviso account_status de Unipile desde la web (0039): una cuenta de Unipile connected o error del workspace de ' +
     'la transacción pasa a needs_reconnect con el motivo. Mismo dueño y misma cerradura que outreach_channel_connect; ' +
