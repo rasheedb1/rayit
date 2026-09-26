@@ -254,6 +254,8 @@ export const MESSAGES = {
     },
     /** Lo que se registra en el servidor (console.warn) cuando falta configuración. */
     serverMissing: (channel: string, vars: string) => `[canales] ${channel} no está disponible: faltan ${vars} (ver platform/.env.example).`,
+    /** Producción sin APP_URL: los enlaces de vuelta de Google y de Unipile no tienen a qué origen apuntar. */
+    originMissing: "[canales] no se puede conectar: producción sin APP_URL ni VERCEL_PROJECT_PRODUCTION_URL (ver platform/.env.example).",
   },
 
   /**

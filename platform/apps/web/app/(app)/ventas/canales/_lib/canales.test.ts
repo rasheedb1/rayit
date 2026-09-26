@@ -31,6 +31,7 @@ import { FakeGmail, FakeUnipile } from "@mc/connectors/testing";
 import type { WorkspaceTx } from "@mc/db";
 import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { getChannelPolicyCaps, listChannelAccounts } from "@mc/db/queries/canales";
+import { OrigenNoConfiguradoError } from "@/lib/auth/origen";
 import { proofWorkspace, type ProviderCallbackProof } from "@/lib/db/aviso-de-proveedor";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { formatterFor } from "@/lib/format";
@@ -487,6 +488,30 @@ describe("conectar LinkedIn o Instagram: lo que sale mal", () => {
     expect(propio.status).toBe(303);
     const google = await googleStart(from("/api/oauth/google", "email", { origin: ORIGIN, "sec-fetch-site": "same-origin" }), deps());
     expect(google.status).toBe(303);
+  }, HEAVY_MS);
+
+  it("producción sin APP_URL: «Conectar» vuelve a la pantalla con «no disponible» (no un 500) y no crea la pendiente", async () => {
+    const filas = await count(`SELECT count(*)::int AS n FROM outreach_channel_account`);
+    const enlaces = unipile.hostedLinks.length;
+    const sinOrigen = deps({ origin: async () => { throw new OrigenNoConfiguradoError(); } });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const from = (path: string, canal: string, headers: Record<string, string>) => new Request(`${ORIGIN}${path}`, {
+        method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: new URLSearchParams({ canal }).toString(),
+      });
+      const li = await unipileStart(from("/ventas/canales/conectar", "linkedin", { origin: ORIGIN, "sec-fetch-site": "same-origin" }), sinOrigen);
+      expect([li.status, li.headers.get("location")]).toEqual([303, `${ORIGIN}/ventas/canales?error=no_configurado&canal=linkedin`]);
+      const gm = await googleStart(from("/api/oauth/google", "email", { origin: ORIGIN }), sinOrigen);
+      expect([gm.status, gm.headers.get("location")]).toEqual([303, `${ORIGIN}/ventas/canales?error=no_configurado&canal=email`]);
+      // Un Origin ajeno sigue siendo 403, no un 500.
+      const ajeno = await unipileStart(from("/ventas/canales/conectar", "linkedin", { origin: "https://pagina-ajena.test" }), sinOrigen);
+      expect(ajeno.status).toBe(403);
+      expect(warn).toHaveBeenCalledWith(MESSAGES.routes.originMissing);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(unipile.hostedLinks.length).toBe(enlaces);
+    expect(await count(`SELECT count(*)::int AS n FROM outreach_channel_account`)).toBe(filas);
   }, HEAVY_MS);
 
   it("un canal apagado en la política del espacio no pide enlace ni crea la pendiente, aunque el POST llegue a mano", async () => {

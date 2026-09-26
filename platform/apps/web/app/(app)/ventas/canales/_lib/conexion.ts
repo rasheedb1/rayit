@@ -77,6 +77,7 @@ import {
   CHANNEL_ERROR_CODES, completeChannelConnection, createPendingChannelAccount, existingGmailSecretRef, failPendingChannelAccount, getChannelPolicyCaps,
   getReconnectableGmail, getReconnectableUnipileAccount,
 } from "@mc/db/queries/canales";
+import { OrigenNoConfiguradoError } from "@/lib/auth/origen";
 import { MESSAGES } from "../messages";
 import type { ChannelErrorCode } from "./banner";
 import { missingFor, type Channel } from "./config";
@@ -130,7 +131,25 @@ export async function isSameOriginPost(req: Request, deps: Pick<ChannelDeps, "or
   if (site !== null && site !== "same-origin") return false;
   const origin = req.headers.get("origin");
   if (origin === null) return true;
-  return origin === new URL(req.url).origin || origin === (await deps.origin(req));
+  // Sin origen público configurado (producción sin APP_URL) solo vale el de la propia petición.
+  return origin === new URL(req.url).origin || origin === (await publicOrigin(req, deps));
+}
+
+/**
+ * El origen público de la app, o null si producción no lo tiene
+ * configurado (sin APP_URL ni VERCEL_PROJECT_PRODUCTION_URL:
+ * OrigenNoConfiguradoError). Es un fallo de configuración: va al registro
+ * del servidor y la persona vuelve a la pantalla con «no disponible», no
+ * a una página de error del servidor.
+ */
+async function publicOrigin(req: Request, deps: Pick<ChannelDeps, "origin">): Promise<string | null> {
+  try {
+    return await deps.origin(req);
+  } catch (err) {
+    if (!(err instanceof OrigenNoConfiguradoError)) throw err;
+    console.warn(MESSAGES.routes.originMissing);
+    return null;
+  }
 }
 
 const crossOrigin = () => plain(403, MESSAGES.routes.crossOrigin);
@@ -208,9 +227,12 @@ export async function googleStart(req: Request, deps: ChannelDeps): Promise<Resp
   const loginHint = typeof raw === "string" && raw !== ""
     ? ((await deps.withWorkspace((tx) => getReconnectableGmail(tx, raw))) ?? undefined)
     : undefined;
+  // La vuelta de Google sale del origen público: sin él no se empieza nada (ni la fila pendiente).
+  const origin = await publicOrigin(req, deps);
+  if (origin === null) return back(req, "no_configurado", {}, "email");
   const started = await begin(deps, "email", keys.sign.state);
   if ("error" in started) return back(req, started.error, {}, "email");
-  const google = deps.google(new InMemoryOutreachCallLog(), await deps.origin(req));
+  const google = deps.google(new InMemoryOutreachCallLog(), origin);
   const secure = deps.env["NODE_ENV"] === "production";
   const location = google.authorizationUrl(started.state, { loginHint, selectAccount: form.get("otra") === "1" });
   return new Response(null, {
@@ -252,7 +274,9 @@ export async function googleCallback(req: Request, deps: ChannelDeps): Promise<R
 
   // Fase HTTP, fuera de la transacción. La bitácora se escribe después, con la cuenta.
   const log = new InMemoryOutreachCallLog();
-  const google = deps.google(log, await deps.origin(req));
+  const callbackOrigin = await publicOrigin(req, deps);
+  if (callbackOrigin === null) return backEmail("no_configurado");
+  const google = deps.google(log, callbackOrigin);
   let tokens: OAuthTokens;
   let scopes: string[];
   let email: string;
@@ -342,10 +366,12 @@ export async function unipileStart(req: Request, deps: ChannelDeps): Promise<Res
   if (missing.length > 0 || !keys || !deps.unipile) return notConfigured(req, channel, missing);
   const raw = form.get("reconectar");
   const reconnectRowId = typeof raw === "string" && raw !== "" ? raw : undefined;
+  // Los avisos y las vueltas de Unipile salen del origen público: sin él no se empieza nada (ni la fila pendiente).
+  const origin = await publicOrigin(req, deps);
+  if (origin === null) return back(req, "no_configurado", {}, channel);
 
   const started = await begin(deps, channel, keys.sign.state, reconnectRowId);
   if ("error" in started) return back(req, started.error, {}, channel);
-  const origin = await deps.origin(req);
   const now = deps.now?.() ?? new Date();
   const log = new InMemoryOutreachCallLog();
   if (started.state.length > UNIPILE_NAME_WARN_CHARS) {
