@@ -62,7 +62,11 @@ export interface SequenceDetail {
   /** La zona de la secuencia o, si no tiene, la del espacio. */
   timeZone: string;
   templateName: string | null;
-  signal: { id: string; headline: string; kind: RecommendSignalKind; companyId: string | null; companyName: string | null } | null;
+  signal: {
+    id: string; headline: string; kind: RecommendSignalKind; companyId: string | null; companyName: string | null;
+    /** Cuándo se detectó la señal (ISO). */
+    detectedAt: string;
+  } | null;
   proposal: SequenceProposal | null;
   /** La persona para la que se propuso, si este espacio la sigue viendo. */
   proposalContact: { id: string; name: string | null } | null;
@@ -114,12 +118,12 @@ export async function getSequenceDetail(tx: WorkspaceTx, id: string): Promise<Se
     await tx.query<{
       id: string; name: string; status: SequenceStatus; channel: string; automation_mode: string; tz: string;
       template_name: string | null; signal_id: string | null; signal_headline: string | null; source_kind: string | null;
-      company_id: string | null; company_name: string | null; proposal: unknown; updated_at: Date; max_touches: number; min_days: number;
+      signal_detected_at: Date | null; company_id: string | null; company_name: string | null; proposal: unknown; updated_at: Date; max_touches: number; min_days: number;
       live: number; total: number; contacted: number; replied: number;
     }>(
       `SELECT s.id, s.name, s.status, s.channel, s.automation_mode, coalesce(s.timezone, w.timezone) AS tz,
               tpl.name_es AS template_name, sg.id AS signal_id, sg.headline_es AS signal_headline, src.kind AS source_kind,
-              sg.company_id, co.name AS company_name, s.proposal, s.updated_at,
+              sg.detected_at AS signal_detected_at, sg.company_id, co.name AS company_name, s.proposal, s.updated_at,
               coalesce(p.max_touches_per_company, 4) AS max_touches, coalesce(p.min_days_between_touches, 3) AS min_days,
               (SELECT count(*) FROM outbound_enrollment e WHERE e.sequence_id = s.id AND e.status = ANY($2::text[]))::int AS live,
               (SELECT count(*) FROM outbound_enrollment e WHERE e.sequence_id = s.id)::int AS total,
@@ -156,7 +160,7 @@ export async function getSequenceDetail(tx: WorkspaceTx, id: string): Promise<Se
     signal: s.signal_id && s.signal_headline !== null
       ? {
           id: s.signal_id, headline: s.signal_headline, kind: signalKindOfSource(s.source_kind), companyId: s.company_id,
-          companyName: s.company_name,
+          companyName: s.company_name, detectedAt: (s.signal_detected_at ?? s.updated_at).toISOString(),
         }
       : null,
     proposal,

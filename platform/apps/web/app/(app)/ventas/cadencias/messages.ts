@@ -124,8 +124,11 @@ export const MESSAGES = {
   detalle: {
     volver: "Todas las cadencias",
     metaTitle: (nombre: string) => `${nombre} · Cadencias`,
-    desdeSenal: (tipo: string, titular: string, empresa: string | null) =>
-      empresa ? `${tipo} · ${empresa}: ${titular}` : `${tipo}: ${titular}`,
+    /** Bajo el nombre: la señal de la que salió y cuándo. Si el nombre no dice el tipo y la marca (se renombró), también van. */
+    desdeSenal: (tipo: string, titular: string, empresa: string | null, fecha: string) =>
+      empresa ? `${tipo} · ${empresa}: ${titular} · ${fecha}` : `${tipo}: ${titular} · ${fecha}`,
+    /** El nombre ya dice la marca y el tipo («Granos del Valle · Campaña activa»): solo el titular y la fecha. */
+    senalYFecha: (titular: string, fecha: string) => `${titular} · ${fecha}`,
     plantilla: (nombre: string) => `Plantilla: ${nombre}`,
     dentro: plural({ one: "{n} persona dentro", other: "{n} personas dentro" }),
     renombrar: "Cambiar el nombre",
@@ -246,6 +249,10 @@ export const MESSAGES = {
     deBaja: "Pidió no recibir mensajes",
     /** Detrás de su nombre en «Para»: ya está viva en otra cadencia, y Activar no la enrolará. */
     ocupada: (cadencia: string) => `ya está en «${cadencia}»`,
+    /** En la opción de «Para», detrás del nombre: la marca corta; el detalle va debajo del campo. */
+    ocupadaCorto: (nombre: string) => `${nombre} · en otra cadencia`,
+    /** Debajo de «Para» cuando no se elige a nadie. */
+    sinPersonaAyuda: "Se planea sin nadie: Activar no enrola a nadie hasta que elijas.",
   },
 
   notas: {

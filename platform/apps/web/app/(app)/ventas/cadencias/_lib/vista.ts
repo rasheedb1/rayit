@@ -6,7 +6,7 @@
  */
 // La regla de qué no lleva texto sale del módulo sin dependencias de @mc/core: este archivo también lo usa el editor, en el navegador.
 import { isTextlessStep } from "@mc/core/outreach/sequence-policy";
-import type { ProposalNote } from "@mc/core";
+import type { ProposalNote, RecommendSignalKind } from "@mc/core";
 import type {
   ContactOption, EnrollableContact, EnrollableDeal, SequenceDetail, SequenceProposal, SequenceStatus,
 } from "@mc/db/queries/cadencias";
@@ -45,6 +45,25 @@ export function textoSinTexto(stepType: string): string {
 export function modoDePaso(s: { stepType: string; generateWithAi: boolean }): string {
   const t = MESSAGES.paso;
   return sinTexto(s.stepType) ? textoSinTexto(s.stepType) : s.generateWithAi ? t.generacion : t.textoFijo;
+}
+
+/**
+ * La línea bajo el nombre de una cadencia que salió de una señal. El
+ * nombre que pone la propuesta ya dice la marca y el tipo («Granos del
+ * Valle · Campaña activa»): entonces solo el titular y la fecha, sin
+ * repetirlo. Si se renombró y ya no lo dice, la línea lo lleva entero.
+ */
+export function descripcionDeSenal(
+  nombre: string,
+  senal: { kind: RecommendSignalKind; headline: string; companyName: string | null; detectedAt: string },
+  f: Formatter,
+): string {
+  const tipo = MESSAGES.senalTipos[senal.kind];
+  const fecha = f.date(senal.detectedAt);
+  const loDice = nombre.includes(tipo) && (senal.companyName === null || nombre.includes(senal.companyName));
+  return loDice
+    ? MESSAGES.detalle.senalYFecha(senal.headline, fecha)
+    : MESSAGES.detalle.desdeSenal(tipo, senal.headline, senal.companyName, fecha);
 }
 
 export function etiquetaCanal(canal: string): string {

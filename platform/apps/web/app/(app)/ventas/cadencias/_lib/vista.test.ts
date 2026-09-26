@@ -4,7 +4,7 @@ import { parseGuidanceOutput } from "./redactor-salida";
 import { MESSAGES, plural } from "../messages";
 import type { EnrollableContact, SequenceDetail } from "@mc/db/queries/cadencias";
 import {
-  avisoDePolitica, esperaEntre, etiquetaActivar, horaDePaso, modoDePaso, partesDeEnrolamiento, personaParaEnrolar, resumenFlujo,
+  avisoDePolitica, descripcionDeSenal, esperaEntre, etiquetaActivar, horaDePaso, modoDePaso, partesDeEnrolamiento, personaParaEnrolar, resumenFlujo,
   sinTexto, textoDeGuia, textoDeNota,
 } from "./vista";
 import { EDITABLE_STEP_TYPES, TEXTLESS_STEP_TYPES } from "@mc/db/queries/cadencias";
@@ -42,6 +42,19 @@ describe("cadencias · lo que la pantalla decide sin base", () => {
     expect(tipos.filter(sinTexto)).toEqual(tipos.filter((t) => TEXTLESS_STEP_TYPES.includes(t)));
     expect(tipos.filter(sinTexto)).toEqual(["linkedin_comment", "linkedin_like", "instagram_comment", "instagram_like", "manual_task"]);
     expect(tipos.filter((t) => !sinTexto(t))).toEqual(tipos.filter((t) => (DISPATCHABLE_STEP_TYPES as readonly string[]).includes(t)));
+  });
+
+  it("bajo el nombre de la propuesta va solo la señal y su fecha; si se renombró, también el tipo y la marca", () => {
+    const senal = {
+      kind: "active_campaign" as const, headline: "Top Ads en TikTok Creative Center · Colombia · 7 días", companyName: "Granos del Valle",
+      detectedAt: "2026-09-01T15:00:00Z",
+    };
+    const corto = descripcionDeSenal("Granos del Valle · Campaña activa", senal, f);
+    expect(corto).toBe(`Top Ads en TikTok Creative Center · Colombia · 7 días · ${f.date(senal.detectedAt)}`);
+    expect(corto).not.toMatch(/Granos del Valle|Campaña activa/);
+    expect(descripcionDeSenal("Café Q4", senal, f)).toBe(
+      `Campaña activa · Granos del Valle: Top Ads en TikTok Creative Center · Colombia · 7 días · ${f.date(senal.detectedAt)}`,
+    );
   });
 
   it("la hora de un paso es una hora de reloj en el idioma del espacio, no un instante", () => {

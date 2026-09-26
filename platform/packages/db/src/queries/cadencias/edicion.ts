@@ -5,7 +5,7 @@
  * regla que el recomendador, y la guía de cada paso que cambió de tipo
  * recompuesta si no la escribió la persona.
  */
-import { composeStepGuidance, DISPATCHABLE_STEP_TYPES, guidanceAfterMove, type GuidanceSource } from '@mc/core';
+import { composeStepGuidance, DISPATCHABLE_STEP_TYPES, guidanceAfterMove, type GuidanceSource, type StepGuidance } from '@mc/core';
 import type { WorkspaceTx } from '../../client.ts';
 import type { StepType } from '../../schema/outreach.ts';
 import {
@@ -320,7 +320,7 @@ export async function reorderSteps(tx: WorkspaceTx, sequenceId: string, orderedI
   for (const [k, id] of orderedIds.entries()) {
     const slot = current[k]!;
     const step = byId.get(id)!;
-    let g = { guidance: step.guidanceEs, source: step.guidanceSource, writtenFor: step.guidanceWrittenFor };
+    let g: StepGuidance = { guidance: step.guidanceEs, source: step.guidanceSource, writtenFor: step.guidanceWrittenFor };
     if (slot.id !== id) {
       ctx ??= await guidanceContextOf(tx, sequenceId);
       g = guidanceAfterMove({ ...g, angleKey: step.angleKey }, step.stepType, ctx);
