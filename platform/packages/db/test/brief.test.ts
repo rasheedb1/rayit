@@ -506,3 +506,39 @@ describe('VEN-7 r2 · quién cambia el brief, y la traza', () => {
     assert.equal(owner?.workspaceKind, 'agency', 'en una agencia la pantalla dice «Brief del espacio»');
   });
 });
+
+describe('VEN-7 r2 · con dos creadores, el radar oculta solo lo que ninguno acepta', () => {
+  const SARA = '00000009-0000-4000-8000-00000000b705';
+
+  before(async () => {
+    await enBrief((tx) => saveBrief(tx, brief()));
+    // Sara, del mismo espacio, con su brief activo (uno por creador, 0064 §1): no acepta alcohol ni apuestas.
+    await t.admin(`
+      INSERT INTO creator_profile (id, workspace_id, display_name, country)
+      VALUES ('${SARA}', '${WS_BRIEF}', 'Sara · fitness', 'CO') ON CONFLICT DO NOTHING;
+      INSERT INTO outbound_brief (workspace_id, creator_id, title, excluded_categories, status)
+      VALUES ('${WS_BRIEF}', '${SARA}', 'Fitness', '{alcohol,apuestas}', 'active');
+    `);
+  });
+  after(async () => {
+    await t.admin(`DELETE FROM outbound_brief WHERE creator_id = '${SARA}'`);
+  });
+
+  test('suplementos se ve (Sara lo acepta); alcohol y apuestas no (ninguna los acepta)', async () => {
+    const todas = await enBrief((tx) => listSignals(tx, { brief: 'show_hidden' }));
+    const porId = new Map(todas.map((s) => [s.id, s.hiddenBy]));
+    assert.equal(porId.get(S_SUPLE), null);
+    assert.equal(porId.get(S_LICOR), 'category');
+    assert.equal(porId.get(S_APUESTA), 'category');
+    const r = await enBrief(async (tx) => ({ hidden: await countHiddenSignals(tx), visibles: (await listSignals(tx)).map((s) => s.id) }));
+    assert.ok(r.visibles.includes(S_SUPLE));
+    assert.equal(r.hidden.total, todas.filter((s) => s.hiddenBy !== null).length, 'la bandeja y el conteo dicen lo mismo');
+  });
+
+  test('un creador no puede tener dos briefs activos; dos creadores, sí', async () => {
+    await assert.rejects(
+      t.admin(`INSERT INTO outbound_brief (workspace_id, creator_id, title, status) VALUES ('${WS_BRIEF}', '${SARA}', 'Otro', 'active')`),
+      /outbound_brief_one_active|duplicate key/,
+    );
+  });
+});

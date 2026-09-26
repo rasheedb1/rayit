@@ -10,9 +10,16 @@
  *      que el brief activo excluye no aparece en la bandeja, y la
  *      bandeja dice cuántas quedaron fuera («3 señales ocultas por tu
  *      brief»). La regla es UNA expresión SQL, briefVerdictSql, y la
- *      usan listSignals, countPendingSignals y getSalesKpis de
- *      queries/ventas.ts y countHiddenSignals de aquí: el número del KPI,
- *      el de la pestaña y las tarjetas no pueden decir cosas distintas.
+ *      usan listSignals, countPendingSignals, getSalesKpis y la ficha de
+ *      la empresa (queries/ventas.ts) y countHiddenSignals de aquí: el
+ *      número del KPI, el de la pestaña, las tarjetas y la ficha no pueden
+ *      decir cosas distintas.
+ *   3. Las cadencias lo RESPETAN: enrollContacts no inscribe y el
+ *      despachador cancela lo de una marca excluida (briefCompanyVerdictSql).
+ *
+ * Un brief es de un creador, con uno activo por creador (0064 §1). Con
+ * varios creadores en el espacio, las cadencias usan el del creador del
+ * negocio y el radar oculta solo lo que excluyen todos.
  *
  * Qué es la «categoría» de una señal. El brief habla en categorías de
  * marca —«alimentos», «alcohol», «apuestas»— y una señal no tiene
@@ -26,8 +33,9 @@
  * «SUPLEMENTOS» y «suplementos ».
  *
  * «Qué busca» (categorías, países, presupuesto, entregables,
- * disponibilidad) NO oculta nada: es lo que usarán el recomendador y el
- * generador de pitch (docs/ventas-outreach.md §5.5). Ocultar por
+ * disponibilidad) NO oculta nada. Del brief, el recomendador y el
+ * generador usan hoy el título, las notas y la divulgación
+ * (docs/ventas-outreach.md §5.5 y §5.8). Ocultar por
  * «no encaja del todo» escondería señales que valen la pena; ocultar
  * por «esto no lo acepto» es exactamente lo que el creador pidió.
  *
@@ -188,9 +196,13 @@ function toBrief(r: BriefRowSql): OutboundBrief {
   };
 }
 
-/** El brief activo del workspace, o null. Es el que aplica el radar. */
+/**
+ * Un brief activo del workspace, o null: el más reciente si hay varios
+ * (uno por creador, 0064 §1). El radar no usa este: aplica todos
+ * (briefVerdictSql).
+ */
 export async function getActiveBrief(tx: WorkspaceTx): Promise<OutboundBrief | null> {
-  const { rows } = await tx.query<BriefRowSql>(`${BRIEF_SELECT} WHERE b.status = 'active' LIMIT 1`);
+  const { rows } = await tx.query<BriefRowSql>(`${BRIEF_SELECT} WHERE b.status = 'active' ORDER BY b.updated_at DESC, b.id LIMIT 1`);
   return rows[0] ? toBrief(rows[0]) : null;
 }
 
@@ -346,7 +358,30 @@ function excludedCategorySql(categorias: string): string {
 }
 
 /**
- * La expresión SQL que dice por qué el brief ACTIVO deja fuera una
+ * Lo que dicen los briefs ACTIVOS del espacio sobre una marca, a partir
+ * del veredicto de cada uno (`verdictCase`, que puede mirar `b`):
+ *
+ * Un brief es de un creador (outbound_brief.creator_id) y cada creador
+ * tiene como mucho uno activo (0064 §1): en una agencia, o en un espacio
+ * con dos creadores, puede haber varios (el recomendador y el generador
+ * usan el del creador del negocio, VEN-13). La marca queda fuera solo si
+ * TODOS los activos la excluyen: lo que un creador no acepta, otro del
+ * mismo espacio puede aceptarlo. Con un solo creador, que es el caso de
+ * casi todos, es simplemente su brief. Sin brief activo, NULL: no se
+ * oculta ni se frena nada. El motivo es 'company' si algún brief la
+ * excluye por nombre, 'category' si todos lo hacen por categoría.
+ */
+function everyActiveBriefSql(verdictCase: string, where: string): string {
+  return `(SELECT CASE WHEN count(*) > 0 AND bool_and(v.verdict IS NOT NULL)
+                       THEN CASE WHEN bool_or(v.verdict = 'company') THEN 'company' ELSE 'category' END
+                  END
+             FROM outbound_brief b
+             CROSS JOIN LATERAL (SELECT ${verdictCase} AS verdict) v
+            WHERE b.status = 'active' AND ${where})`;
+}
+
+/**
+ * La expresión SQL que dice por qué el brief activo deja fuera una
  * señal: 'company', 'category' o NULL (la señal se ve). `s` es el alias
  * de `signal` en la consulta que la usa; el texto es constante (no
  * lleva nada que venga de fuera), así que se puede componer.
@@ -360,56 +395,64 @@ function excludedCategorySql(categorias: string): string {
  *     lo que trae la señal en evidence (industry, category,
  *     brief_category).
  *
- * Es para consultas bajo RLS (la web): el brief es el del workspace
- * fijado en la transacción (current_workspace_id()). Sin brief activo la
- * expresión es NULL y no se oculta nada. El worker, que corre sin RLS,
- * usa briefCompanyVerdictSql con el workspace explícito.
+ * Una señal todavía no es de ningún creador, así que valen todos los
+ * briefs activos del espacio (everyActiveBriefSql). Es para consultas
+ * bajo RLS (la web): el espacio es el fijado en la transacción
+ * (current_workspace_id()). El worker, que corre sin RLS, usa
+ * briefCompanyVerdictSql con el workspace explícito.
  */
 export function briefVerdictSql(s: string): string {
   assertRef('briefVerdictSql', s);
-  return `(SELECT CASE
-             WHEN EXISTS (
-               SELECT 1 FROM company ex
-                WHERE ex.id = ANY (b.excluded_companies)
-                  AND ${signalCompanySql(s, 'ex')})
-               THEN 'company'
-             WHEN ${excludedCategorySql(`
-                          SELECT co.industry FROM company co WHERE ${signalCompanySql(s, 'co')}
-                          UNION ALL SELECT unnest(co.niche_slugs) FROM company co WHERE ${signalCompanySql(s, 'co')}
-                          UNION ALL SELECT ${s}.evidence->>'industry'
-                          UNION ALL SELECT ${s}.evidence->>'category'
-                          UNION ALL SELECT ${s}.evidence->>'brief_category'`)}
-               THEN 'category'
-           END
-      FROM outbound_brief b
-     WHERE b.status = 'active' AND b.workspace_id = current_workspace_id()
-     LIMIT 1)`;
+  return everyActiveBriefSql(
+    `CASE
+       WHEN EXISTS (
+         SELECT 1 FROM company ex
+          WHERE ex.id = ANY (b.excluded_companies)
+            AND ${signalCompanySql(s, 'ex')})
+         THEN 'company'
+       WHEN ${excludedCategorySql(`
+                    SELECT co.industry FROM company co WHERE ${signalCompanySql(s, 'co')}
+                    UNION ALL SELECT unnest(co.niche_slugs) FROM company co WHERE ${signalCompanySql(s, 'co')}
+                    UNION ALL SELECT ${s}.evidence->>'industry'
+                    UNION ALL SELECT ${s}.evidence->>'category'
+                    UNION ALL SELECT ${s}.evidence->>'brief_category'`)}
+         THEN 'category'
+     END`,
+    'b.workspace_id = current_workspace_id()',
+  );
 }
 
 /**
  * Lo mismo para una EMPRESA ya conocida (la de un toque o la de un
- * contacto que se enrola): 'company' si el brief activo de `workspace`
- * la excluye por nombre, 'category' si excluye su sector o uno de sus
- * nichos, NULL si no. `companyId` y `workspace` son columnas
- * («t.company_id») o parámetros («$2::uuid») de la consulta que la usa.
+ * contacto que se enrola): 'company' si el brief la excluye por nombre,
+ * 'category' si excluye su sector o uno de sus nichos, NULL si no.
+ * `companyId`, `workspace` y `deal` son columnas («t.company_id») o
+ * parámetros («$2::uuid») de la consulta que la usa.
+ *
+ * El brief que cuenta es el del creador del negocio (`deal`), como en el
+ * recomendador y el generador (VEN-13): la cadencia escribe en su
+ * nombre. Sin negocio, o con un negocio sin creador, los de todos los
+ * creadores del espacio (everyActiveBriefSql).
  *
  * Lleva el workspace explícito porque la usa el worker (enrollContacts
  * y el reclamo del despachador), que corre con BYPASSRLS: sin el filtro
  * aplicaría el brief de cualquier otro espacio.
  */
-export function briefCompanyVerdictSql(companyId: string, workspace: string): string {
+export function briefCompanyVerdictSql(companyId: string, workspace: string, deal = 'NULL::uuid'): string {
   assertRef('briefCompanyVerdictSql', companyId, true);
   assertRef('briefCompanyVerdictSql', workspace, true);
-  return `(SELECT CASE
-             WHEN ${companyId} = ANY (b.excluded_companies) THEN 'company'
-             WHEN ${excludedCategorySql(`
-                          SELECT co.industry FROM company co WHERE co.id = ${companyId}
-                          UNION ALL SELECT unnest(co.niche_slugs) FROM company co WHERE co.id = ${companyId}`)}
-               THEN 'category'
-           END
-      FROM outbound_brief b
-     WHERE b.status = 'active' AND b.workspace_id = ${workspace}
-     LIMIT 1)`;
+  if (deal !== 'NULL::uuid') assertRef('briefCompanyVerdictSql', deal, true);
+  const creador = `(SELECT d.creator_id FROM deal d WHERE d.id = ${deal})`;
+  return everyActiveBriefSql(
+    `CASE
+       WHEN ${companyId} = ANY (b.excluded_companies) THEN 'company'
+       WHEN ${excludedCategorySql(`
+                    SELECT co.industry FROM company co WHERE co.id = ${companyId}
+                    UNION ALL SELECT unnest(co.niche_slugs) FROM company co WHERE co.id = ${companyId}`)}
+         THEN 'category'
+     END`,
+    `b.workspace_id = ${workspace} AND (${creador} IS NULL OR b.creator_id = ${creador})`,
+  );
 }
 
 /** Cuántas señales PENDIENTES deja fuera el brief activo, y por qué. */

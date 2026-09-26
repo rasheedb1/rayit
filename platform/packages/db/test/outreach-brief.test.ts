@@ -8,7 +8,9 @@
  *     activo excluye, por nombre o por categoría (brief_excluded);
  *   · el reclamo del despachador cancela lo que ya estaba en la cola
  *     cuando el brief cambió (canceledBriefExcluded), con el brief del
- *     workspace del toque: el de otro espacio no cuenta.
+ *     workspace del toque: el de otro espacio no cuenta;
+ *   · con dos creadores en el espacio, manda el brief del creador del
+ *     negocio: lo que uno no acepta, el otro puede aceptarlo.
  *
  * Ids nuevos en cada corrida: contra un Postgres que se queda, la prueba
  * se puede repetir.
@@ -114,4 +116,41 @@ test('el despachador cancela lo que ya estaba en la cola de una marca que el bri
     tx.query<{ status: string; blocked_reason: string | null }>('SELECT status, blocked_reason FROM outbound_touch WHERE id = $1', [T_LICOR]),
   );
   assert.deepEqual({ ...rows[0] }, { status: 'canceled', blocked_reason: 'brief_excluded' });
+});
+
+test('con dos creadores cuenta el brief del creador del negocio, al enrolar y en el despachador', async () => {
+  // Una segunda creadora del mismo espacio, con su brief activo, que SÍ acepta alcohol.
+  const SARA = randomUUID();
+  const DEAL_SARA = randomUUID();
+  const DEAL_CREADORA = randomUUID();
+  const T_SARA = randomUUID();
+  await t.admin(`
+    UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'prueba' WHERE workspace_id = '${WS}' AND status IN ('scheduled', 'held', 'draft');
+    INSERT INTO creator_profile (id, workspace_id, display_name, country) VALUES ('${SARA}', '${WS}', 'Sara', 'CO');
+    INSERT INTO outbound_brief (workspace_id, creator_id, title, excluded_categories, status)
+    VALUES ('${WS}', '${SARA}', 'Todo menos apuestas', '{apuestas}', 'active');
+    INSERT INTO deal (id, workspace_id, company_id, creator_id, name, stage_id) VALUES
+      ('${DEAL_SARA}', '${WS}', '${CO_LICOR}', '${SARA}', 'Ron de verano', 'nuevo'),
+      ('${DEAL_CREADORA}', '${WS}', '${CO_LICOR}', '${CREADORA}', 'Ron de invierno', 'nuevo');
+  `);
+  const id = await enWs((tx) => createSequenceFromTemplate(tx, 'marca-con-campana-activa'));
+  await enWs((tx) => setSequenceStatus(tx, id, 'active'));
+  // El negocio de la creadora que no acepta alcohol: Pedro no entra.
+  const suyo = await enWs((tx) => enrollContacts(tx, { sequenceId: id, contactIds: [PEDRO], dealId: DEAL_CREADORA, now: CLOCK }));
+  assert.deepEqual(suyo.skipped, [{ contactId: PEDRO, reason: 'brief_excluded' }]);
+  // El de Sara, que sí lo acepta: entra, en su nombre.
+  const deSara = await enWs((tx) => enrollContacts(tx, { sequenceId: id, contactIds: [PEDRO], dealId: DEAL_SARA, now: CLOCK }));
+  assert.deepEqual(deSara.enrolled.map((e) => e.contactId), [PEDRO]);
+
+  // En la cola: el toque del negocio de Sara sale; uno suelto (sin negocio)
+  // también, porque no TODOS los briefs del espacio excluyen alcohol.
+  await t.admin(`
+    UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'prueba' WHERE workspace_id = '${WS}' AND status IN ('scheduled', 'held', 'draft');
+    INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, deal_id, channel, subject, body, status, scheduled_for) VALUES
+      ('${T_SARA}', '${WS}', '${CO_LICOR}', '${PEDRO}', '${DEAL_SARA}', 'email', 'Hola, Pedro', 'Una idea para el ron.', 'scheduled',
+       '${new Date(CLOCK.getTime() - 60_000).toISOString()}');
+  `);
+  const r = await t.db.asWorker((tx) => claimDueTouches(tx, { now: CLOCK, channels: ['email'], workspaceId: WS, limit: 5 }));
+  assert.equal(r.canceledBriefExcluded, 0);
+  assert.deepEqual(r.claimed.map((x) => x.id), [T_SARA]);
 });

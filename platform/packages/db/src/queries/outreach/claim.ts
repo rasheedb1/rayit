@@ -424,14 +424,15 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   // (con VEN-7) Una marca que el brief activo del workspace no acepta —por
   // nombre o por categoría— no recibe mensajes, aunque su enrolamiento
   // sea de antes del brief: enrollContacts ya no la deja entrar, y esto
-  // cubre lo que estaba en la cola cuando el brief cambió. Con el
-  // workspace del toque, explícito: aquí no hay RLS.
+  // cubre lo que estaba en la cola cuando el brief cambió. El brief es
+  // el del creador del negocio del toque (sin negocio, el de todos los del
+  // espacio), con el workspace del toque explícito: aquí no hay RLS.
   report.canceledBriefExcluded = note(
     (await tx.query<{ enrollment_id: string | null }>(
       `UPDATE outbound_touch t
           SET status = 'canceled', blocked_reason = 'brief_excluded'
         WHERE t.status = 'scheduled' AND ${DUE} AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
-          AND ${briefCompanyVerdictSql('t.company_id', 't.workspace_id')} IS NOT NULL
+          AND ${briefCompanyVerdictSql('t.company_id', 't.workspace_id', 't.deal_id')} IS NOT NULL
         RETURNING t.id, t.enrollment_id`,
       [now.toISOString(), ws],
     )).rows,

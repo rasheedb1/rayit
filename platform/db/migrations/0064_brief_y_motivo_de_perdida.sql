@@ -10,14 +10,14 @@
 -- toca outbound_brief (0007) y deal (0007, 0031).
 --
 -- Mediciones en Supabase antes de aplicarla (25-sep, como mc_migrator):
---   · Un brief activo por workspace (§1). La tabla tiene FORCE RLS, así
+--   · Un brief activo por creador (§1). La tabla tiene FORCE RLS, así
 --     que un SELECT sin workspace fijado ve 0 filas; se midió por
 --     estadística: pg_stat_user_tables.n_live_tup = 1 en outbound_brief.
---     Con una sola fila en toda la tabla no puede haber dos activas en
---     un workspace, y el CREATE UNIQUE INDEX no puede fallar. Aun así,
---     el integrador repite con postgres (sin RLS) justo antes de aplicar:
---       select workspace_id, count(*) from outbound_brief
---        where status = 'active' group by 1 having count(*) > 1;
+--     Con una sola fila en toda la tabla no puede haber dos activas de
+--     un creador, y el CREATE UNIQUE INDEX no puede fallar. Aun así, el
+--     integrador repite con postgres (sin RLS) justo antes de aplicar:
+--       select workspace_id, creator_id, count(*) from outbound_brief
+--        where status = 'active' group by 1, 2 having count(*) > 1;
 --     → 0 filas esperadas. Si devolviera alguna, se pausa la más vieja
 --     (status = 'paused') antes de correr esta migración.
 --   · Límites (§2): el único brief es el del seed de Laura, que los
@@ -31,10 +31,13 @@
 -- creador lo edita en /ventas/brief y el radar lo aplica, y eso le pide
 -- a la tabla tres cosas que no tenía:
 --
---   1. UN brief activo por workspace. El radar es del workspace (signal
---      no tiene creador) y «oculta lo que tu brief no acepta» necesita
---      saber cuál es el brief. Con dos activos, qué señales se ven
---      dependería del orden en que Postgres devuelve las filas.
+--   1. UN brief activo por CREADOR. El recomendador y el generador de
+--      rasheed/integracion (VEN-13 r4) ya leen el brief activo del
+--      creador del negocio, y un espacio con dos creadores (una agencia)
+--      tiene uno por cada uno. Con dos activos del MISMO creador, cuál
+--      manda dependería del orden en que Postgres devuelve las filas.
+--      El radar, que es del espacio (signal no tiene creador), oculta lo
+--      que excluyen TODOS los activos (queries/brief.ts).
 --   2. Límites que una pantalla no puede saltarse: presupuesto mínimo
 --      no negativo, ventana de disponibilidad en orden, moneda ISO-4217,
 --      entregables como lista y listas de tamaño humano.
@@ -69,12 +72,12 @@
 
 
 -- ---------------------------------------------------------------------
--- 1 · outbound_brief: uno activo por workspace
+-- 1 · outbound_brief: uno activo por creador
 -- ---------------------------------------------------------------------
 -- Por inquilino (lleva workspace_id): no es un único global y no dice
 -- nada de otro workspace.
 CREATE UNIQUE INDEX IF NOT EXISTS outbound_brief_one_active
-  ON outbound_brief (workspace_id)
+  ON outbound_brief (workspace_id, creator_id)
   WHERE status = 'active';
 
 

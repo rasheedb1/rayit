@@ -239,10 +239,10 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
               c.opted_out, address_is_suppressed(c.email) AS suppressed, c.email_invalid, co.name AS company,
               EXISTS (SELECT 1 FROM outbound_enrollment e
                        WHERE e.contact_id = c.id AND e.workspace_id = $2::uuid AND e.status = 'opted_out') AS ws_opted_out,
-              ${briefCompanyVerdictSql('c.company_id', '$2::uuid')} AS brief_verdict
+              ${briefCompanyVerdictSql('c.company_id', '$2::uuid', '$3::uuid')} AS brief_verdict
          FROM contact c JOIN company co ON co.id = c.company_id
         WHERE c.id = ANY($1::uuid[]) AND contact_visible_to(c.id, $2::uuid)`,
-      [[...input.contactIds], seq.workspace_id],
+      [[...input.contactIds], seq.workspace_id, input.dealId ?? null],
     )
   ).rows;
   const byId = new Map(contacts.map((c) => [c.id, c]));
@@ -264,8 +264,9 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
       continue;
     }
     // Lo que el brief no acepta no se escribe (VEN-7): ni por nombre de
-    // la marca ni por su categoría. Con el brief del workspace de la
-    // SECUENCIA, explícito: el worker corre sin RLS.
+    // la marca ni por su categoría. El brief es el del creador del
+    // negocio (o, sin negocio, el de todos los del espacio), en el
+    // workspace de la SECUENCIA, explícito: el worker corre sin RLS.
     if (c.brief_verdict) {
       result.skipped.push({ contactId, reason: 'brief_excluded' });
       continue;

@@ -1586,6 +1586,43 @@ ficha: si la escribe un tercero en copia, la cadencia se detiene y una
 persona decide. Referido: se crea el contacto y se propone enrolarlo.
 Nada queda pausado para siempre.
 
+### 5.8 El brief como regla (VEN-7, 25 de septiembre)
+
+El brief (`outbound_brief`, `/ventas/brief`) tiene dos mitades que no
+pesan igual. **Qué buscas** (categorías, países, presupuesto, formatos,
+fechas) es una preferencia: no oculta nada. De ahí el recomendador y el
+generador usan hoy el nombre, las notas y la divulgación (§5.5); el
+resto queda como referencia del equipo. **Qué no aceptas** (categorías
+y marcas excluidas) es una regla, y se cumple en cuatro sitios con la
+misma definición de «esta marca» y de «esta categoría»
+(`packages/db/src/queries/brief.ts`):
+
+- **El radar** (`briefVerdictSql`): la señal no entra en la bandeja, y
+  la bandeja dice cuántas dejó fuera, con «Verlas». La marca de la
+  señal se reconoce por id, por dominio o, sin dominio, por nombre entre
+  las del CRM; la categoría, por el sector y los nichos de esa marca y
+  por lo que trae la señal en `evidence`. KPI, pestaña, bandeja y la
+  ficha de la empresa cuentan igual.
+- **Enrolar** (`enrollContacts`): una ficha de una marca excluida sale
+  como `brief_excluded` y no nace ningún toque.
+- **El despachador** (`claimDueTouches`): cancela con `brief_excluded`
+  lo que ya estaba en la cola cuando el brief cambió.
+- Las dos últimas corren en el worker, sin RLS: usan
+  `briefCompanyVerdictSql` con el workspace del toque o de la secuencia
+  explícito, para que el brief de un espacio nunca frene a otro.
+
+Cada brief es de un creador, con uno activo por creador (0064 §1),
+porque el recomendador ya lee el del creador del negocio (§5.5, r4).
+Con varios creadores en el espacio, enrolar y el despachador usan el
+brief del creador del negocio, y el radar, que no es de nadie, oculta
+solo lo que excluyen todos los activos: lo que un creador no acepta,
+otro del mismo espacio puede aceptarlo.
+
+Un brief en pausa no oculta ni frena nada. Como oculta señales a todo
+el equipo, lo cambian owner y admin (la pantalla, la acción y las
+políticas RESTRICTIVE de 0064 con `outreach_can_manage`) y cada cambio
+deja traza en `audit_log` (`ventas.brief.guardar`, antes y después).
+
 ---
 
 ## 6. Las historias nuevas de Ventas
