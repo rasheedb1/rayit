@@ -43,7 +43,7 @@ export function hiloVista(h: InboxThread, f: Formatter, activo: boolean): HiloVi
     persona: h.contactName ?? h.companyName,
     empresa: h.companyName,
     canal: channelLabel(noticeLang(f.locale), h.channel),
-    cuando: f.dateTime(h.lastAt.toISOString()),
+    cuando: f.dayMonth(h.lastAt.toISOString()),
     extracto: h.lastSnippet,
     deNosotros: h.lastDirection === "outbound",
     sinLeer: h.unread,

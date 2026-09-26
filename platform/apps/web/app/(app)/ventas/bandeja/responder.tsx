@@ -62,7 +62,7 @@ export function Responder({ contactId, channel, ayuda }: { contactId: string; ch
       </Field>
       <Aviso message={error && !error.field ? error.error : null} notice={resultado?.ok ? resultado.notice : null} />
       <div>
-        <Button type="submit" loading={pending}>
+        <Button type="submit" variant="primary" loading={pending}>
           {t.responder.enviar}
         </Button>
       </div>
@@ -120,7 +120,7 @@ export function CrearReferido({
       </div>
       <Aviso message={error && !error.field ? error.error : null} size="xs" />
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" size="sm" loading={pending}>
+        <Button type="submit" size="sm" variant="primary" loading={pending}>
           {t.referido.guardar}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => setAbierto(false)}>

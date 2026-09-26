@@ -43,6 +43,13 @@ export function Fila({
     else setFallo(r);
   }
 
+  // Lo que salió bien cierra el formulario: la fila vuelve a verse (o sale de la lista al revalidar).
+  const terminar = (notice: string) => {
+    setModo("ver");
+    setFallo(null);
+    onDone(notice);
+  };
+
   const volver = () => {
     setModo("ver");
     document.getElementById(`fila-${fila.touchId}`)?.focus();
@@ -79,7 +86,7 @@ export function Fila({
       {modo === "editar" ? (
         <div className="mt-4">
           <Fallo r={fallo} />
-          <EditarYAprobar fila={fila} onDone={onDone} onCancel={volver} />
+          <EditarYAprobar fila={fila} onDone={terminar} onCancel={volver} />
         </div>
       ) : (
         <div className="mt-4 rounded-md border border-border bg-surface-2 p-3 text-sm">
@@ -98,7 +105,7 @@ export function Fila({
 
       {modo === "regenerar" ? (
         <div className="mt-4">
-          <Regenerar fila={fila} onDone={onDone} onCancel={volver} />
+          <Regenerar fila={fila} onDone={terminar} onCancel={volver} />
         </div>
       ) : null}
 
@@ -107,7 +114,7 @@ export function Fila({
           <Fallo r={fallo} />
           {fila.motivo?.intentoSinConfirmar ? (
             <div className="flex flex-wrap items-center gap-3">
-              <Button size="sm" href={fila.fichaHref}>
+              <Button href={fila.fichaHref}>
                 {t.acciones.resolverEnLaFicha}
               </Button>
               <p className="text-xs text-ink-2">{t.acciones.resolverAyuda}</p>
@@ -117,12 +124,12 @@ export function Fila({
             {!bloqueada ? (
               <>
                 <span data-accion="a" className="inline-flex">
-                  <Button size="sm" onClick={aprobar} loading={pending}>
+                  <Button variant="primary" onClick={aprobar} loading={pending}>
                     {t.acciones.aprobar}
                   </Button>
                 </span>
                 <span data-accion="e" className="inline-flex">
-                  <Button size="sm" variant="secondary" onClick={() => setModo("editar")}>
+                  <Button variant="secondary" onClick={() => setModo("editar")}>
                     {t.acciones.editar}
                   </Button>
                 </span>
@@ -130,7 +137,7 @@ export function Fila({
             ) : null}
             {fila.regenerable ? (
               <span data-accion="r" className="inline-flex">
-                <Button size="sm" variant="secondary" onClick={() => setModo("regenerar")}>
+                <Button variant="secondary" onClick={() => setModo("regenerar")}>
                   {t.acciones.regenerar}
                 </Button>
               </span>

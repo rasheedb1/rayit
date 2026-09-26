@@ -64,11 +64,11 @@ export default async function BandejaPage({ searchParams }: { searchParams: Prom
           action={{ label: t.lista.vacio.action, href: "/ventas/cadencias" }}
         />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
-          <div className={conversacion ? "hidden lg:block" : ""}>
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
+          <div className={conversacion ? "hidden min-w-0 lg:block" : "min-w-0"}>
             <ListaHilos hilos={vistas} />
           </div>
-          <div className={conversacion ? "" : "hidden lg:block"}>
+          <div className={conversacion ? "min-w-0" : "hidden min-w-0 lg:block"}>
             {conversacion ? (
               <Conversacion c={conversacionVista(conversacion, f, sinLeer)} />
             ) : (

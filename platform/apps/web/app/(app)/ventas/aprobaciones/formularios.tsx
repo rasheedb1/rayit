@@ -78,7 +78,7 @@ export function EditarYAprobar({
       </Field>
       <Fallo r={fallo} />
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" size="sm" loading={pending}>
+        <Button type="submit" size="sm" variant="primary" loading={pending}>
           {t.aprobarCambios}
         </Button>
         <Button size="sm" variant="ghost" onClick={onCancel}>
@@ -136,7 +136,7 @@ export function Regenerar({
       </Field>
       <Fallo r={fallo} />
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" size="sm" loading={pending}>
+        <Button type="submit" size="sm" variant="primary" loading={pending}>
           {t.pedir}
         </Button>
         <Button size="sm" variant="ghost" onClick={onCancel}>

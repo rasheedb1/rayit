@@ -10,7 +10,7 @@ export default function BandejaLoading() {
         <span className="mt-3 block h-4 w-full animate-pulse rounded-sm bg-hover" />
       </div>
       <div className="mb-6 h-9 animate-pulse border-b border-border" />
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
         <div className="grid gap-px overflow-hidden rounded-md border border-border">
           {Array.from({ length: 5 }, (_, i) => (
             <span key={i} className="block h-24 animate-pulse bg-hover" />
