@@ -10,6 +10,11 @@
  * `withWorkspace` (la RLS y los disparadores deciden qué puede moverse), y
  * lo que vuelve es una frase ya resumida. Un error de Postgres se registra
  * y no se le enseña a nadie.
+ *
+ * Las tres miran el rol antes de abrir la transacción
+ * (puedeOperarLaCola): la RLS de outbound_touch es solo por workspace, y
+ * un 'viewer' o un 'client' no pueden cancelar la cola ni volver a mandar
+ * lo fallido.
  */
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
@@ -19,6 +24,7 @@ import { formatterFor } from "@/lib/format";
 import { UUID_RE } from "@/lib/forms";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
+import { puedeOperarLaCola } from "./_lib/permiso";
 import { ACTIVIDAD_URL, resumenDe } from "./_lib/vista";
 import { MESSAGES } from "./messages";
 
@@ -44,7 +50,10 @@ async function refrescar(): Promise<void> {
   revalidatePath("/ventas/empresas", "layout");
 }
 
+const SIN_PERMISO: ActividadState = { error: R.sinPermiso };
+
 async function reintentar(target: RetryTarget): Promise<ActividadState> {
+  if (!(await puedeOperarLaCola())) return SIN_PERMISO;
   try {
     const report = await withWorkspace((tx) => retryFailedTouches(tx, target));
     await refrescar();
@@ -74,6 +83,7 @@ export async function reintentarPorTipo(input: { stepType: string; sequenceId: s
 export async function cancelarSeleccion(touchIds: string[]): Promise<ActividadState> {
   const ids = z.array(uuid).min(1).max(BULK_MAX).safeParse(touchIds);
   if (!ids.success) return { error: R.generico };
+  if (!(await puedeOperarLaCola())) return SIN_PERMISO;
   try {
     const report = await withWorkspace((tx) => cancelQueuedTouches(tx, ids.data));
     await refrescar();

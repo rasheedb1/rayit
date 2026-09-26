@@ -146,12 +146,16 @@ describe("la lista de la cola", () => {
     expect(screen.getByRole("checkbox", { name: "Seleccionar «Paso 5 · Mensaje en LinkedIn» a Sofía Cárdenas" })).toBeTruthy();
   });
 
-  it("con más de una página, «todo» dice que es de esta página y cuántos hay con los filtros", () => {
-    render(lista({ soloPagina: "Solo las 50 filas de esta página; la cola tiene 120 con estos filtros." }));
+  it("con más de una página, «todo» dice que es de esta página y cuánto hay que cancelar con los filtros", () => {
+    const frase = MENSAJES.seleccion.soloPagina("48", 48, "120");
+    expect(frase).toBe("Solo los 48 mensajes de esta página; con estos filtros hay 120 que se pueden cancelar.");
+    // En una última página con uno solo, en singular («Solo las 1 filas» no).
+    expect(MENSAJES.seleccion.soloPagina("1", 1, "51")).toBe("Solo el mensaje de esta página; con estos filtros hay 51 que se pueden cancelar.");
+    render(lista({ soloPagina: frase }));
     const todas = screen.getByRole("checkbox", { name: "Seleccionar lo cancelable de esta página" });
-    expect(screen.queryByText("Solo las 50 filas de esta página; la cola tiene 120 con estos filtros.")).toBeNull();
+    expect(screen.queryByText(frase)).toBeNull();
     fireEvent.click(todas);
-    expect(screen.getByText("Solo las 50 filas de esta página; la cola tiene 120 con estos filtros.")).toBeTruthy();
+    expect(screen.getByText(frase)).toBeTruthy();
     // Con una sola página, la frase de siempre.
     cleanup();
     render(lista());
@@ -162,19 +166,19 @@ describe("la lista de la cola", () => {
     render(lista({
       filas: [
         fila("h", { estado: "Retenido", revisar: "/ventas/empresas/x#cadencia" }),
-        fila("w", { cuando: "En espera · envío apagado", espera: { texto: "El envío del espacio está apagado: no sale hasta que lo enciendas.", enlace: "Encender el envío", href: "/ventas/politica#interruptor" } }),
+        fila("w", { cuando: "En espera · sin cuenta de LinkedIn", espera: { texto: "No hay ninguna cuenta de LinkedIn conectada: sale en cuanto conectes una.", enlace: "Ir a canales", href: "/ventas/canales#canal-linkedin-titulo" } }),
       ],
     }));
     expect(screen.getByRole("link", { name: "Revisar y aprobar" }).getAttribute("href")).toBe("/ventas/empresas/x#cadencia");
-    expect(screen.getByText("En espera · envío apagado")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Encender el envío" }).getAttribute("href")).toBe("/ventas/politica#interruptor");
+    expect(screen.getByText("En espera · sin cuenta de LinkedIn")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Ir a canales" }).getAttribute("href")).toBe("/ventas/canales#canal-linkedin-titulo");
   });
 
   it("de la base a la pantalla: un retenido con hora no dice «Sale», y con el envío apagado nada dice «Sale»", () => {
     const hoy = new Date("2026-09-25T15:00:00Z");
     const toque = (over: Partial<QueueRow>): QueueRow => ({
       touchId: "t1", status: "held", bucket: "queue", channel: "email", subject: "Hola, Sofía", sequenceId: "s1", sequenceName: "Semana",
-      stepId: "p1", stepType: "email", stepPosition: 1, stepDayOffset: 0, enrollmentStatus: "active", contactId: "c1",
+      stepId: "p1", stepType: "email", stepPosition: 1, stepDayOffset: 0, enrollmentStatus: "active", sequenceStatus: "active", contactId: "c1",
       contactName: "Sofía Cárdenas", contactEmail: "sofia@marca.test", companyId: "co1", companyName: "Marca A", accountName: null,
       accountStatus: null, attemptCount: 0, dueAt: new Date("2026-09-28T15:30:00Z"), retrying: false,
       statusChangedAt: new Date("2026-09-24T15:00:00Z"), sentAt: null, openedAt: null, repliedAt: null, reason: "needs_review",
@@ -192,6 +196,16 @@ describe("la lista de la cola", () => {
     const otra = render(lista({ filas: filasApagado }));
     expect(otra.container.textContent).not.toMatch(/\bSale\b/);
     expect(screen.getAllByText("En espera · envío apagado")).toHaveLength(2);
+    // El envío apagado es del espacio: el aviso de arriba lo explica una vez; las filas no repiten la frase ni el enlace.
+    expect(otra.container.textContent).not.toContain("El envío del espacio está apagado");
+    expect(screen.queryByRole("link", { name: /Encender el envío|Ir a la política/ })).toBeNull();
+    cleanup();
+    // Una cadencia en pausa: el despachador lo aplaza cada día, así que la fila no dice «Sale mañana».
+    const pausada = filaVista(toque({ touchId: "t4", status: "scheduled", reason: null, sequenceStatus: "paused" }), f, { bloqueos: libre, now: hoy });
+    const tercera = render(lista({ filas: [pausada] }));
+    expect(tercera.container.textContent).not.toMatch(/\bSale\b/);
+    expect(screen.getByText("En espera · cadencia en pausa")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Ir a la cadencia" }).getAttribute("href")).toBe("/ventas/cadencias/s1");
   });
 
   it("el historial no lleva casillas", () => {
@@ -391,6 +405,10 @@ describe("el embudo y la vista de flujo de la cadencia", () => {
     expect(explica("respondidos")).toContain("Ninguno de los enviados ha recibido respuesta");
     expect(explica("abiertos")).toMatch(/^Uno de los enviados se abrió\./);
     expect(explica("en cola")).toBe("No queda nada de este paso en la cola.");
+    expect(explica("detenidos")).toBe("Nada de este paso se canceló ni se saltó.");
+    // Lo cancelado a mano desde la actividad (canceled_by_user) también cae en «detenidos»: la explicación lo cuenta.
+    expect(MENSAJES.flujo.explica.stopped("1", 1)).toContain("lo cancelaste tú desde la actividad");
+    expect(MENSAJES.flujo.explica.stopped("3", 3)).toMatch(/^3 mensajes .*los cancelaste tú desde la actividad/);
     // Sin «1:» delante: la cifra se lee dentro de la frase.
     expect(explica("fallidos")).not.toMatch(/^\d+:/);
   });

@@ -10,6 +10,7 @@ import { ModuleTabs } from "../_componentes/pestanas";
 import { withWorkspace } from "../_lib/db";
 import { etiquetaTipo } from "../cadencias/_lib/vista";
 import { filaVista } from "./_lib/filas";
+import { puedeOperarLaCola } from "./_lib/permiso";
 import { ACTIVIDAD_URL, filtrosDe, hayFiltros, hrefDe, type Filtros } from "./_lib/vista";
 import { AvisoApagado } from "./aviso-apagado";
 import { MESSAGES } from "./messages";
@@ -122,6 +123,10 @@ function Paginas({ filtros, next, prev }: { filtros: Filtros; next: string | nul
  * tipo de paso y la cancelación en masa; cada fila con su estado, su paso,
  * a quién, cuándo y su motivo (cortado, entero al desplegarlo); debajo,
  * las páginas por cursor.
+ *
+ * Quien no puede operar la cola (un 'viewer' o un 'client':
+ * puedeOperarLaCola) la ve igual, sin casillas ni botones de reintentar:
+ * no se le ofrece lo que las acciones le van a negar.
  */
 export default async function ActividadPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const filtros = filtrosDe(await searchParams);
@@ -132,10 +137,16 @@ export default async function ActividadPage({ searchParams }: { searchParams: Pr
     bloqueos: await getQueueBlockers(tx),
   }));
   const f = formatterFor(await getCurrentWorkspace());
-  const filas = cola.rows.map((r) => filaVista(r, f, { bloqueos }));
+  const opera = await puedeOperarLaCola();
+  const filas = cola.rows.map((r) => {
+    const fila = filaVista(r, f, { bloqueos });
+    // Sin permiso, la fila no lleva «Reintentar»: la acción lo negaría.
+    return opera ? fila : { ...fila, reintentable: false };
+  });
   const enCola = filtros.vista === "queue";
-  // La casilla de «todo» marca solo esta página: con más de una, lo dice y cuenta cuántos hay con estos filtros.
-  const paginada = enCola && Boolean(cola.next || cola.prev);
+  // La casilla de «todo» marca solo esta página: con más de una, lo dice y cuenta cuánto hay que cancelar con estos filtros.
+  const paginada = enCola && opera && Boolean(cola.next || cola.prev);
+  const enPagina = filas.filter((x) => x.cancelable).length;
   const v = MESSAGES.vacio;
   const vacio: VacioVista = filtros.pagina
     ? { titulo: v.pagina.titulo, descripcion: v.pagina.descripcion }
@@ -156,7 +167,7 @@ export default async function ActividadPage({ searchParams }: { searchParams: Pr
         <PanelActividad
           // Otra pestaña, otros filtros u otra página empiezan con la selección y el aviso vacíos.
           key={hrefDe(filtros)}
-          tipos={enCola
+          tipos={enCola && opera
             ? facets.retryableByStepType.map((x) => ({
               stepType: x.stepType,
               label: MESSAGES.reintentar.boton(etiquetaTipo(x.stepType), f.int(x.count)),
@@ -166,10 +177,10 @@ export default async function ActividadPage({ searchParams }: { searchParams: Pr
           sequenceId={filtros.cadencia}
           contact={filtros.contacto}
           filas={filas}
-          seleccionable={enCola}
+          seleccionable={enCola && opera}
           caption={MESSAGES.fila.lista(enCola ? MESSAGES.pestanas.cola : MESSAGES.pestanas.historial)}
           locale={f.locale}
-          soloPagina={paginada ? MESSAGES.seleccion.soloPagina(f.int(filas.length), f.int(facets.counts.queue)) : null}
+          soloPagina={paginada ? MESSAGES.seleccion.soloPagina(f.int(enPagina), enPagina, f.int(facets.cancelable)) : null}
           vacio={vacio}
         />
         <Paginas filtros={filtros} next={cola.next} prev={cola.prev} />

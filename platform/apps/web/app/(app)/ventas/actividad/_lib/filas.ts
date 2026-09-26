@@ -24,24 +24,75 @@ export interface ContextoFila {
 /** Los estados que esperan a salir: a ellos les importa si la cola está parada. */
 const POR_SALIR = new Set<QueueRow["status"]>(["scheduled", "draft", "held"]);
 
+/** Por qué espera una fila: la frase corta (al lado de la pastilla) y, si el motivo es de ESA fila, la frase entera con adónde ir. */
+export interface Espera {
+  corto: string;
+  detalle: { texto: string; enlace: string; href: string } | null;
+}
+
+/** La frase entera y el enlace de un motivo, sin su corto. */
+const sinCorto = ({ texto, enlace }: { texto: string; enlace: string }) => ({ texto, enlace });
+
+/** La página de una cadencia, donde está «Reanudar». */
+const cadenciaHref = (sequenceId: string) => `/ventas/cadencias/${sequenceId}`;
+
 /**
- * Por qué no va a salir aunque llegue su hora, o null: el envío del
- * espacio apagado (lo primero: para todo), el canal fuera de la política
- * o sin ninguna cuenta conectada. Son las condiciones del reclamo; con
- * cualquiera, «Sale el lunes» sería una promesa que el lunes no se cumple.
+ * La cadencia de la fila no deja salir el mensaje: las condiciones con
+ * las que el despachador lo aplaza cada día en vez de mandarlo
+ * (decideBeforeSend de @mc/db, en su orden). Solo cuenta con una
+ * inscripción (enrollmentStatus): un toque suelto no tiene cadencia que
+ * pausar. La inscripción de esta persona en pausa o en espera tras un
+ * «ahora no» va primero; después, la cadencia entera en pausa o todavía
+ * en borrador. Archivada no: el despachador lo cancela, no lo aplaza.
+ */
+function cadenciaParada(
+  r: Pick<QueueRow, "sequenceId" | "sequenceStatus" | "enrollmentStatus" | "companyId">,
+): Espera | null {
+  if (r.enrollmentStatus === null) return null;
+  const ficha = OUTREACH_URLS.companyCadence(r.companyId);
+  if (r.enrollmentStatus === "paused") return { corto: W.enrollmentPaused.corto, detalle: { ...sinCorto(W.enrollmentPaused), href: ficha } };
+  if (r.enrollmentStatus === "cooldown") {
+    return { corto: W.enrollmentCooldown.corto, detalle: { ...sinCorto(W.enrollmentCooldown), href: ficha } };
+  }
+  if ((r.sequenceStatus === "paused" || r.sequenceStatus === "draft") && r.sequenceId) {
+    return { corto: W.sequencePaused.corto, detalle: { ...sinCorto(W.sequencePaused), href: cadenciaHref(r.sequenceId) } };
+  }
+  return null;
+}
+
+/**
+ * Por qué no va a salir aunque llegue su hora, o null. En este orden:
+ *   · el envío del espacio apagado: para todo. La fila dice solo el
+ *     corto («envío apagado»); la frase y el enlace están UNA vez en el
+ *     aviso de arriba (AvisoApagado), no repetidos en cada fila;
+ *   · su cadencia en pausa, o esta persona en pausa o tras un «ahora
+ *     no» (cadenciaParada): el despachador lo aplaza cada día;
+ *   · el canal fuera de la política o sin ninguna cuenta conectada: el
+ *     reclamo no lo toma.
+ * Con cualquiera, «Sale el lunes» sería una promesa que el lunes no se
+ * cumple.
  */
 export function esperaDe(
-  r: Pick<QueueRow, "status" | "channel">,
+  r: Pick<QueueRow, "status" | "channel" | "sequenceId" | "sequenceStatus" | "enrollmentStatus" | "companyId">,
   bloqueos: QueueBlockers | null | undefined,
-): { corto: string; texto: string; enlace: string; href: string } | null {
-  if (!bloqueos || !POR_SALIR.has(r.status)) return null;
+): Espera | null {
+  if (!POR_SALIR.has(r.status)) return null;
+  if (bloqueos && !bloqueos.outreachEnabled) return { corto: W.disabled.corto, detalle: null };
+  const cadencia = cadenciaParada(r);
+  if (cadencia) return cadencia;
+  if (!bloqueos) return null;
   const canal = MESSAGES.uso.canales[r.channel];
-  if (!bloqueos.outreachEnabled) return { ...W.disabled, href: OUTREACH_URLS.policySwitch };
   if (bloqueos.channelsNotAllowed.includes(r.channel)) {
-    return { corto: W.notAllowed.corto(canal), texto: W.notAllowed.texto(canal), enlace: W.notAllowed.enlace, href: MESSAGES.uso.politicaHref };
+    return {
+      corto: W.notAllowed.corto(canal),
+      detalle: { texto: W.notAllowed.texto(canal), enlace: W.notAllowed.enlace, href: MESSAGES.uso.politicaHref },
+    };
   }
   if (bloqueos.channelsWithoutAccount.includes(r.channel)) {
-    return { corto: W.noAccount.corto(canal), texto: W.noAccount.texto(canal), enlace: W.noAccount.enlace, href: canalHref(r.channel) };
+    return {
+      corto: W.noAccount.corto(canal),
+      detalle: { texto: W.noAccount.texto(canal), enlace: W.noAccount.enlace, href: canalHref(r.channel) },
+    };
   }
   return null;
 }
@@ -127,7 +178,7 @@ export function filaVista(r: QueueRow, f: Formatter, ctx: ContextoFila = {}): Fi
       ? MESSAGES.reintentar.bloqueo(MESSAGES.resultado.reintento[r.retryBlock])
       : null,
     reconectar: r.status === "failed" && r.retryBlock === "account_down" ? canalHref(r.channel) : null,
-    espera: espera ? { texto: espera.texto, enlace: espera.enlace, href: espera.href } : null,
+    espera: espera?.detalle ?? null,
     // Lo retenido espera a una persona: su botón lleva a la cadencia de la ficha, donde está «Aprobar y enviar».
     revisar: r.status === "held" ? OUTREACH_URLS.companyCadence(r.companyId) : null,
     cancelable: r.cancelable,

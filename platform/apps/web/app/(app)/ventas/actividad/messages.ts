@@ -182,7 +182,17 @@ export const MESSAGES = {
     /** Con más de una página, la casilla solo marca las filas que se ven: lo dice. */
     pagina: "Seleccionar lo cancelable de esta página",
     /** Debajo, cuántos hay en la cola con estos filtros, para que nadie crea que canceló «todo». */
-    soloPagina: (enPagina: string, total: string) => `Solo las ${enPagina} filas de esta página; la cola tiene ${total} con estos filtros.`,
+    /**
+     * `enPagina` y `total` llegan formateados; la forma la elige `count`
+     * (lo cancelable de la página, lo que marca la casilla). El total es lo CANCELABLE de la cola con
+     * estos filtros (getQueueFacets.cancelable): lo que se está enviando no
+     * cuenta, porque no se puede cancelar.
+     */
+    soloPagina: (enPagina: string, count: number, total: string) =>
+      plural({
+        one: "Solo el mensaje de esta página; con estos filtros hay {total} que se pueden cancelar.",
+        other: "Solo los {n} mensajes de esta página; con estos filtros hay {total} que se pueden cancelar.",
+      })(enPagina, count).replaceAll("{total}", total),
     /** Una casilla: qué mensaje y a quién («Seleccionar «Paso 3 · Mensaje en LinkedIn» a Sofía Cárdenas»), para distinguir las de una misma persona. */
     una: (quien: string, que: string) => `Seleccionar «${que}» a ${quien}`,
     n: plural({ one: "{n} seleccionado", other: "{n} seleccionados" }),
@@ -217,6 +227,7 @@ export const MESSAGES = {
     saltados: plural({ one: "{n} no se movió:", other: "{n} no se movieron:" }),
     ninguno: "Nada cambió.",
     generico: "No pudimos hacerlo. Vuelve a intentarlo en un momento.",
+    sinPermiso: "Tu rol en este espacio no puede reintentar ni cancelar mensajes. Pídeselo a quien administra el espacio.",
     /** Por qué un fallido no volvió (o no se ofrece): el motivo del resumen y el de la fila. */
     reintento: {
       not_found: "ya no existe",
@@ -240,17 +251,34 @@ export const MESSAGES = {
   },
 
   /**
-   * Por qué la cola no sale (getQueueBlockers de @mc/db): el aviso de
-   * arriba y lo que dice cada fila que espera. `corto` va al lado de la
-   * pastilla; `texto`, debajo, con su enlace.
+   * Por qué un mensaje por salir no sale (getQueueBlockers de @mc/db y el
+   * estado de su cadencia): el aviso de arriba y lo que dice cada fila que
+   * espera. `corto` va al lado de la pastilla; `texto`, debajo, con su
+   * enlace, solo cuando el motivo es de esa fila (su canal, su cadencia).
+   * El envío apagado es de todo el espacio: la fila dice solo el corto y
+   * el aviso de arriba lleva a encenderlo, una vez.
    */
   espera: {
     aviso: "El envío está apagado: nada de la cola sale hasta que lo enciendas.",
     avisoEnlace: "Ir a la política de envío",
-    disabled: {
-      corto: "envío apagado",
-      texto: "El envío del espacio está apagado: no sale hasta que lo enciendas.",
-      enlace: "Encender el envío",
+    disabled: { corto: "envío apagado" },
+    /** La cadencia en pausa (o todavía en borrador): el despachador lo aplaza cada día. */
+    sequencePaused: {
+      corto: "cadencia en pausa",
+      texto: "La cadencia está en pausa: no sale nada de ella hasta que la reanudes.",
+      enlace: "Ir a la cadencia",
+    },
+    /** Esta persona, en pausa dentro de la cadencia. */
+    enrollmentPaused: {
+      corto: "en pausa para esta persona",
+      texto: "La cadencia está en pausa para esta persona: no le sale nada mientras siga así.",
+      enlace: "Ver su cadencia en la ficha",
+    },
+    /** Dijo «ahora no»: la cadencia espera antes de volver a escribirle. */
+    enrollmentCooldown: {
+      corto: "dijo «ahora no»",
+      texto: "Dijo «ahora no»: la cadencia espera antes de volver a escribirle, y este mensaje no sale mientras tanto.",
+      enlace: "Ver su cadencia en la ficha",
     },
     noAccount: {
       corto: (canal: string) => `sin cuenta de ${canal}`,
@@ -432,8 +460,8 @@ export const MESSAGES = {
       }),
       stopped: plural({
         "=0": "Nada de este paso se canceló ni se saltó.",
-        one: "Un mensaje de este paso se canceló o se saltó (la persona respondió, se dio de baja o no tenía dirección).",
-        other: "{n} mensajes de este paso se cancelaron o se saltaron (la persona respondió, se dio de baja o no tenía dirección).",
+        one: "Un mensaje de este paso no salió ni va a salir: se canceló o se saltó (la persona respondió, se dio de baja, no tenía dirección o lo cancelaste tú desde la actividad).",
+        other: "{n} mensajes de este paso no salieron ni van a salir: se cancelaron o se saltaron (la persona respondió, se dio de baja, no tenía dirección o los cancelaste tú desde la actividad).",
       }),
     },
     tasa: (pct: string) => `${pct} de lo enviado`,

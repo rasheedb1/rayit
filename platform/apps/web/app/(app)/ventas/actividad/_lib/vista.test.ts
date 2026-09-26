@@ -26,6 +26,7 @@ const fila = (over: Partial<QueueRow> = {}): QueueRow => ({
   stepPosition: 3,
   stepDayOffset: 4,
   enrollmentStatus: "completed",
+  sequenceStatus: "active",
   contactId: "00000065-0000-4000-8000-0000000000d3",
   contactName: "Persona 3",
   contactEmail: "c3@marca.test",
@@ -268,16 +269,16 @@ describe("cuando la cola está parada, la fila lo dice en vez de «Sale …»", 
   const programado = (over: Partial<QueueRow> = {}) =>
     fila({ status: "scheduled", reason: null, retryable: false, retryBlock: null, dueAt: due, ...over });
 
-  it("con el envío del espacio apagado: «En espera · envío apagado» y el enlace al interruptor", () => {
+  it("con el envío del espacio apagado: solo «En espera · envío apagado», sin repetir en cada fila la frase del aviso de arriba", () => {
     const apagado: QueueBlockers = { ...LIBRE, outreachEnabled: false };
     const v = vista(programado({ channel: "email", subject: "Hola" }), apagado);
     expect(v.cuando).toBe("En espera · envío apagado");
     expect(v.cuandoCompleto).toBe(`Estaba previsto para ${f.dateTime(due.toISOString())}`);
-    expect(v.espera).toEqual({
-      texto: "El envío del espacio está apagado: no sale hasta que lo enciendas.",
-      enlace: "Encender el envío",
-      href: "/ventas/politica#interruptor",
-    });
+    // El bloqueo es del espacio entero: la frase y el enlace al interruptor están una vez, en AvisoApagado.
+    expect(v.espera).toBeNull();
+    // Manda sobre la cadencia en pausa y el canal sin cuenta: apagado, nada sale.
+    expect(vista(programado({ sequenceStatus: "paused", enrollmentStatus: "active" }), { ...apagado, channelsWithoutAccount: ["linkedin"] }))
+      .toMatchObject({ cuando: "En espera · envío apagado", espera: null });
     // También lo retenido y el borrador (aprobarlo no lo haría salir) y un reintento recién hecho.
     expect(vista(fila({ status: "held", reason: "needs_review", retryable: false, dueAt: due }), apagado).cuando).toBe("En espera · envío apagado");
     expect(vista(fila({ status: "draft", reason: null, retryable: false }), apagado).cuando).toBe("En espera · envío apagado");
@@ -296,6 +297,37 @@ describe("cuando la cola está parada, la fila lo dice en vez de «Sale …»", 
     expect(v.espera?.texto).toBe("No hay ninguna cuenta de LinkedIn conectada: sale en cuanto conectes una.");
     // Un correo del mismo espacio sí sale.
     expect(vista(programado({ channel: "email", subject: "Hola" }), sinLinkedin).cuando).toBe(`Sale ${corta(due.toISOString())}`);
+  });
+
+  it("con la cadencia en pausa: «En espera · cadencia en pausa» y el enlace a la cadencia, no «Sale mañana»", () => {
+    const v = vista(programado({ sequenceStatus: "paused", enrollmentStatus: "active" }), LIBRE);
+    expect(v.cuando).toBe("En espera · cadencia en pausa");
+    expect(v.cuando).not.toMatch(/\bSale\b/);
+    expect(v.espera).toEqual({
+      texto: "La cadencia está en pausa: no sale nada de ella hasta que la reanudes.",
+      enlace: "Ir a la cadencia",
+      href: "/ventas/cadencias/00000065-0000-4000-8000-00000000005e",
+    });
+    // Sin conexión con el estado de la cola: también sin bloqueos leídos, y en lo retenido y el borrador.
+    expect(vista(programado({ sequenceStatus: "paused", enrollmentStatus: "active" })).cuando).toBe("En espera · cadencia en pausa");
+    expect(vista(fila({ status: "held", reason: "needs_review", retryable: false, dueAt: due, sequenceStatus: "paused", enrollmentStatus: "active" }), LIBRE)
+      .cuando).toBe("En espera · cadencia en pausa");
+    // Va antes que el canal: reconectar LinkedIn no la haría salir.
+    expect(vista(programado({ sequenceStatus: "paused", enrollmentStatus: "active" }), { ...LIBRE, channelsWithoutAccount: ["linkedin"] }).cuando)
+      .toBe("En espera · cadencia en pausa");
+  });
+
+  it("con esta persona en pausa o tras un «ahora no»: lo dice y lleva a su cadencia en la ficha", () => {
+    const pausada = vista(programado({ enrollmentStatus: "paused" }), LIBRE);
+    expect(pausada.cuando).toBe("En espera · en pausa para esta persona");
+    expect(pausada.espera?.href).toBe("/ventas/empresas/00000065-0000-4000-8000-0000000000c0#cadencia");
+    const ahoraNo = vista(programado({ enrollmentStatus: "cooldown" }), LIBRE);
+    expect(ahoraNo.cuando).toBe("En espera · dijo «ahora no»");
+    expect(ahoraNo.espera?.texto).toContain("no sale mientras tanto");
+    // Una cadencia activa, un toque suelto (sin inscripción) o una archivada (el despachador lo cancela) no esperan por esto.
+    expect(vista(programado({ enrollmentStatus: "active" }), LIBRE).cuando).toBe(`Sale ${corta(due.toISOString())}`);
+    expect(vista(programado({ enrollmentStatus: null, sequenceStatus: null, sequenceId: null }), LIBRE).espera).toBeNull();
+    expect(vista(programado({ enrollmentStatus: "active", sequenceStatus: "archived" }), LIBRE).espera).toBeNull();
   });
 
   it("con el canal fuera de la política: lo dice y lleva a la política", () => {

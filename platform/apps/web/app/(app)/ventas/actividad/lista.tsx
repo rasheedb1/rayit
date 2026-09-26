@@ -40,7 +40,11 @@ export interface FilaVista {
   bloqueo: string | null;
   /** Fallido por la cuenta del canal, sin ninguna conectada: el enlace a la fila de ese canal en /ventas/canales, en vez del botón. */
   reconectar: string | null;
-  /** Por salir, pero la cola no lo reclama (el envío apagado, el canal sin cuenta o fuera de la política): por qué y adónde ir. */
+  /**
+   * Por salir, pero no va a salir por un motivo de ESTA fila (su canal sin cuenta o fuera de la política, su cadencia
+   * en pausa): por qué y adónde ir. El envío apagado es de todo el espacio: la fila solo dice «En espera · envío
+   * apagado» junto a la pastilla y el aviso de arriba lleva a encenderlo, una vez.
+   */
   espera: { texto: string; enlace: string; href: string } | null;
   /** Retenido: adónde ir a revisarlo y aprobarlo (la cadencia de la ficha). */
   revisar: string | null;
