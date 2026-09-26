@@ -118,10 +118,10 @@ describe("vista del pitch", () => {
   it("recién abierto y vacío no es un error: no dice «falta el asunto» ni «está vacío», solo qué hacer", () => {
     const r = reviseDraft({ subject: "", body: "", values: {}, claims: [MEDIANA], firstTouch: true });
     expect([r.ok, r.pristine, r.items]).toEqual([false, true, []]);
-    expect(revisionSummary(r)).toBe(PITCH.revision.empezar);
+    expect(revisionSummary(r)).toEqual({ text: PITCH.revision.empezar, detail: null });
     const escrito = reviseDraft({ subject: "", body: "Hola", values: {}, claims: [MEDIANA], firstTouch: true });
     expect(escrito.items.map((i) => i.code)).toContain("subject_missing");
-    expect(revisionSummary(escrito)).toBe(PITCH.revision.resumen(escrito.items.length, escrito.items[0]!.text));
+    expect(revisionSummary(escrito)).toEqual({ text: PITCH.revision.resumen(escrito.items.length), detail: escrito.items[0]!.text });
   });
 
   it("la clave de la IA es null cuando lo último lo escribió una persona; cambia cuando la IA redacta o trae un borrador", () => {
@@ -179,8 +179,11 @@ describe("EditorDePitch", () => {
     const { unmount } = render(<EditorDePitch data={datos({ draft: { ...BORRADOR, body: BUENO.replace(claimSnippet(MEDIANA), "900.000") } })} />);
     expect(programar().disabled).toBe(true);
     expect(copiar().disabled).toBe(false);
-    const aviso = PITCH.revision.resumen(1, PITCH.problemas.unsourced_figure("900.000"));
-    expect(screen.getByText(aviso, { exact: false })).toBeTruthy();
+    // Junto al botón, solo cuántas cosas: el detalle está en «Antes de enviar» (y en el texto para lectores de pantalla).
+    const resumen = document.getElementById("pitch-resumen")!;
+    expect(resumen.textContent).toContain(PITCH.revision.resumen(1));
+    expect(resumen.querySelector(".sr-only")!.textContent?.trim()).toBe(PITCH.problemas.unsourced_figure("900.000"));
+    expect(within(document.getElementById("pitch-revision")!.parentElement!).getByText(PITCH.problemas.unsourced_figure("900.000"))).toBeTruthy();
     expect(programar().getAttribute("aria-describedby")).toBe("pitch-resumen");
     expect(screen.getByRole("link", { name: PITCH.revision.verRevision }).getAttribute("href")).toBe("#pitch-revision");
     // La nota de la revisión automática del borrador generado.
@@ -465,6 +468,42 @@ describe("ronda 5: el camino principal IA → Programar/Copiar, la política y a
     } finally {
       Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
     }
+  });
+
+  it("copiar con una cifra sin origen pide confirmar en línea; solo «Copiar igual» copia y guarda como copia", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    try {
+      guardarPitch.mockResolvedValue({ ok: true, notice: PITCH.acciones.copiado, touchId: IA.touchId, intent: "copy", stamp: 9 });
+      render(<EditorDePitch data={datos({ draft: { ...IA, body: BUENO.replace(claimSnippet(MEDIANA), "900.000") } })} />);
+      fireEvent.click(copiar());
+      // Nada se copió todavía: se pregunta, con el foco en la pregunta.
+      expect(writeText).not.toHaveBeenCalled();
+      expect(guardarPitch).not.toHaveBeenCalled();
+      const pregunta = screen.getByRole("group", { name: PITCH.acciones.confirmarCopia(1) });
+      expect(document.activeElement).toBe(pregunta);
+      // Cancelar la cierra sin copiar.
+      fireEvent.click(within(pregunta).getByRole("button", { name: PITCH.acciones.noCopiar }));
+      expect(screen.queryByRole("group", { name: PITCH.acciones.confirmarCopia(1) })).toBeNull();
+      expect(writeText).not.toHaveBeenCalled();
+      // «Copiar igual» copia y guarda con intent copy.
+      fireEvent.click(copiar());
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: PITCH.acciones.copiarIgual }));
+      });
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText.mock.calls[0]![0]).toContain("900.000");
+      const enviado = guardarPitch.mock.calls[0]![1] as FormData;
+      expect(enviado.get("intent")).toBe("copy");
+      expect(screen.queryByRole("group", { name: PITCH.acciones.confirmarCopia(1) })).toBeNull();
+    } finally {
+      Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    }
+  });
+
+  it("un borrador que se copió con cifras sin origen lo dice al volver a abrirlo", () => {
+    render(<EditorDePitch data={datos({ draft: { ...IA, copiedUnsourced: 2 } })} />);
+    expect(screen.getByText(PITCH.revision.copiadoSinOrigen(2))).toBeTruthy();
   });
 
   it("sin dirección postal, «Programar» se apaga y lo dice con el enlace a la política; sin correo conectado, una nota neutra", () => {

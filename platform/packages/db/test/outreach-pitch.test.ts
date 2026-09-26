@@ -400,3 +400,46 @@ test('ronda 5: quién pidió el borrador lo dice la sesión (0060), no lo que ma
   await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => requestPitchDraft(tx, { touchId, hint: null, instructions: null, userId: LAURA_USER }));
   assert.equal(await quien(), LAURA_USER);
 });
+
+test('pulido r1: copiar con cifras sin origen deja el borrador marcado y el editor lo lee; guardarlo otra vez lo limpia', async () => {
+  const c = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => loadPitchComposer(tx, CAFE_ALMA, LOCALE));
+  const mediana = c.variants['']!.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
+  const inventado = pitchWith(mediana, mediana.display)
+    .replace(` [claim:${mediana.id}]`, '')
+    .replace(mediana.display, '900.000')
+    .replace('Mis recetas', 'Trabajé con 11 marcas. Mis recetas');
+  const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, contactId: VALENTINA, subject: 'Tu cold brew y mi audiencia', body: inventado, intent: 'draft', copied: true, now: new Date() }),
+  );
+  assert.ok(r.ok, JSON.stringify(r));
+  const touchId = r.ok ? r.touchId : '';
+  const marca = async () =>
+    (await rows<{ held_reason: string | null; status: string }>(`SELECT held_reason, status FROM outbound_touch WHERE id = '${touchId}'`))[0]!;
+  assert.deepEqual(await marca(), { held_reason: 'unsourced_copy:2', status: 'draft' });
+  const abierto = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => loadPitchComposer(tx, CAFE_ALMA, LOCALE));
+  assert.equal(abierto.draft?.touchId, touchId);
+  assert.equal(abierto.draft?.unsourcedCopy, 2);
+  assert.equal(abierto.draft?.heldReason, null);
+  // Guardarlo como borrador (sin copiar) lo limpia.
+  await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, contactId: VALENTINA, touchId, subject: 'Tu cold brew y mi audiencia', body: inventado, intent: 'draft', now: new Date() }),
+  );
+  assert.equal((await marca()).held_reason, null);
+});
+
+test('pulido r1: savePitch no programa un mensaje que nombra a otra persona de la marca (other_person)', async () => {
+  await t.admin(`UPDATE outbound_policy SET postal_address = 'Calle 93 # 11-26, Bogotá' WHERE workspace_id = '${WORKSPACE_LAURA}'`);
+  const c = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => loadPitchComposer(tx, CAFE_ALMA, LOCALE));
+  const mediana = c.variants['']!.claims.find((x) => x.id === 'baseline:tiktok:median_views')!;
+  // Escrito para Camilo y enviado a Valentina por la acción directa, sin pasar por la revisión del editor.
+  const paraCamilo = pitchWith(mediana, mediana.display).replace('Hola {{first_name}},', 'Hola Camilo,');
+  const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, contactId: VALENTINA, subject: 'Tu cold brew y mi audiencia', body: paraCamilo, intent: 'schedule', now: new Date() }),
+  );
+  assert.deepEqual(r, { ok: false, code: 'other_person', person: 'Camilo' });
+  // A Camilo sí se programa.
+  const ok = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, contactId: CAMILO, subject: 'Tu cold brew y mi audiencia', body: paraCamilo, intent: 'schedule', now: new Date() }),
+  );
+  assert.ok(ok.ok && ok.status === 'scheduled', JSON.stringify(ok));
+});

@@ -72,6 +72,7 @@ export default async function PitchPage({ params }: { params: Promise<{ id: stri
           note: draft.review?.note ?? null,
           pending: draft.pending ? { stage: draft.pending.stage, hint: draft.pending.hint, error: draft.pending.lastError } : null,
           failed: draft.failed,
+          copiedUnsourced: draft.unsourcedCopy,
         }
       : null,
     ai: writer === "anthropic" || writer === "fake" ? "on" : writer,

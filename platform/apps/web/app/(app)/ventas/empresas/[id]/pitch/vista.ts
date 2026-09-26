@@ -8,7 +8,8 @@
 import { claimsCitedIn, stripClaimMarkers, type SalesClaim } from "@mc/core/outreach/claims";
 import { subjectGate } from "@mc/core/outreach/gates";
 import { preflight, type PreflightIssue } from "@mc/core/outreach/preflight";
-import { firstNameOf, renderTemplate, type TemplateValues } from "@mc/core/outreach/render";
+import { namesOtherPerson } from "@mc/core/outreach/people";
+import { renderTemplate, type TemplateValues } from "@mc/core/outreach/render";
 import { OUTREACH_URLS } from "@mc/core/outreach/messages";
 import { PITCH } from "./messages";
 
@@ -50,6 +51,12 @@ export interface Revision {
   /** Nada escrito todavía: el editor enseña un estado neutro, no una lista de errores. */
   pristine: boolean;
   cited: SalesClaim[];
+  /**
+   * Cuántas cifras distintas no tienen origen. No impiden copiar, pero
+   * «Copiar» pide confirmarlo antes (copiar es enviar desde el correo de
+   * la creadora) y el borrador guardado queda marcado (savePitch).
+   */
+  unsourced: number;
 }
 
 const COPY_BLOCKERS = new Set(["unknown_claim", "claim_mismatch", "placeholders", "empty"]);
@@ -58,31 +65,6 @@ const SILENT_WHEN_PRISTINE = new Set(["empty", "subject_missing"]);
 
 function issueText(i: PreflightIssue): string {
   return PITCH.problemas[i.code](i.detail ?? "");
-}
-
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/**
- * ¿El mensaje nombra a otra persona de la marca? Un borrador que la IA
- * escribió para Camilo y que ahora va a Valentina dice «Hola Camilo,»: se
- * devuelve «Camilo». Solo el nombre de pila (o el completo) escrito
- * entero y con su grafía, de tres letras o más, que no sea también el de
- * quien recibe ni el de quien firma. null si no nombra a nadie más.
- */
-export function writtenForSomeoneElse(
-  text: string,
-  recipient: string | null,
-  others: ReadonlyArray<string | null>,
-  sender: string | null,
-): string | null {
-  const own = new Set([firstNameOf(recipient), firstNameOf(sender)].filter(Boolean));
-  for (const full of others) {
-    const first = firstNameOf(full);
-    if (!first || [...first].length < 3 || own.has(first)) continue;
-    const re = new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRe(first)}(?![\\p{L}\\p{N}_])`, "u");
-    if (re.test(text)) return first;
-  }
-  return null;
 }
 
 /** La revisión de lo que hay escrito, con las variables ya rellenas (así se ven los huecos que de verdad quedan). */
@@ -113,7 +95,7 @@ export function reviseDraft(input: {
     allowedUppercase: input.companyName ? [input.companyName] : [],
   });
   const sg = subjectGate("email", subject);
-  const other = input.people ? writtenForSomeoneElse(`${subject}\n${body}`, input.people.recipient, input.people.others, input.people.sender) : null;
+  const other = input.people ? namesOtherPerson(`${subject}\n${body}`, input.people.recipient, input.people.others, input.people.sender) : null;
   const all: Revision["items"] = [
     ...(other ? [{ code: "wrong_recipient", text: PITCH.revision.otraPersona(other) }] : []),
     ...sg.codes.map((code) => ({ code, text: PITCH.asunto[code] ?? code })),
@@ -132,15 +114,21 @@ export function reviseDraft(input: {
     copyBlockedBy: holes && figures ? "both" : holes ? "holes" : figures ? "figures" : null,
     pristine,
     cited: claimsCitedIn(input.claims, subject, body),
+    unsourced: new Set(pf.issues.filter((i) => i.code === "unsourced_figure").map((i) => i.detail ?? "")).size,
   };
 }
 
-/** Una línea junto a los botones: por qué «Programar» está apagado, con el primer problema. null si no hay nada que decir. */
-export function revisionSummary(r: Revision): string | null {
+/**
+ * Una línea junto a los botones: por qué «Programar» está apagado, sin
+ * repetir el detalle de «Antes de enviar» (solo cuántas cosas). `detail` es
+ * el primer problema, para lectores de pantalla (aria-describedby del
+ * botón). null si no hay nada que decir.
+ */
+export function revisionSummary(r: Revision): { text: string; detail: string | null } | null {
   if (r.ok) return null;
-  if (r.pristine && r.items.length === 0) return PITCH.revision.empezar;
+  if (r.pristine && r.items.length === 0) return { text: PITCH.revision.empezar, detail: null };
   const first = r.items[0];
-  return first ? PITCH.revision.resumen(r.items.length, first.text) : null;
+  return first ? { text: PITCH.revision.resumen(r.items.length), detail: first.text } : null;
 }
 
 /**

@@ -45,6 +45,8 @@ export interface EditorData {
     pending: PendingDraft | null;
     /** La IA se rindió con este borrador (0058): se dice, y se puede pedir otra versión. */
     failed: boolean;
+    /** Se copió con N cifras sin origen (savePitch lo marcó): se dice junto a los botones. Opcional: null si no. */
+    copiedUnsourced?: number | null;
   } | null;
   /** ¿El worker redacta con IA? Lo dice su última corrida, no la web. */
   ai: AiStatus;
@@ -103,6 +105,12 @@ export function EditorDePitch({
   const aiNoticeRef = useRef<HTMLParagraphElement>(null);
   /** El resultado del portapapeles de la última copia: si el navegador no dejó, no se dice «Copiado». */
   const [clip, setClip] = useState<"ok" | "failed" | null>(null);
+  /** «Copiar» con cifras sin origen: la confirmación en línea está abierta. */
+  const [confirmCopy, setConfirmCopy] = useState(false);
+  const confirmRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (confirmCopy) confirmRef.current?.focus();
+  }, [confirmCopy]);
 
   useEffect(() => {
     if (state.stamp) noticeRef.current?.focus();
@@ -154,6 +162,14 @@ export function EditorDePitch({
     event.preventDefault();
     const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
     const form = new FormData(event.currentTarget, submitter);
+    // Una cifra sin origen no impide copiar, pero copiar es enviarlo desde el correo de la creadora:
+    // se pregunta antes, en línea, y solo «Copiar igual» copia de verdad.
+    if (form.get("intent") === "copy" && revision.unsourced > 0 && !confirmCopy) {
+      setConfirmCopy(true);
+      return;
+    }
+    if (form.get("intent") === "copy_confirmed") form.set("intent", "copy");
+    setConfirmCopy(false);
     if (form.get("intent") === "copy") {
       // Se copia en el clic (el navegador exige el gesto de la persona) y después se guarda. Si el
       // navegador no deja (permiso, contexto no seguro), se dice en vez de «Copiado». Sin asunto, solo el cuerpo.
@@ -294,12 +310,8 @@ export function EditorDePitch({
           {/* Por qué «Programar» está apagado, junto al botón: a 400 px la revisión completa queda muy abajo. */}
           {summary && !scheduled && (
             <p id="pitch-resumen" className="min-w-0 break-words text-xs text-ink-2">
-              {summary}{" "}
-              {revision.items[0]?.href && (
-                <Link href={revision.items[0].href} className="underline underline-offset-4 hover:text-ink">
-                  {PITCH.revision.agregarDireccion}
-                </Link>
-              )}{" "}
+              {summary.text}
+              {summary.detail && <span className="sr-only"> {summary.detail}</span>}{" "}
               {!revision.pristine && (
                 <a href="#pitch-revision" className="underline underline-offset-4 hover:text-ink">
                   {PITCH.revision.verRevision}
@@ -308,6 +320,29 @@ export function EditorDePitch({
             </p>
           )}
           {revision.copyBlockedBy && !scheduled && <p className="text-xs text-muted">{a.copiarBloqueado[revision.copyBlockedBy]}</p>}
+          {confirmCopy && !scheduled && (
+            <div
+              ref={confirmRef}
+              tabIndex={-1}
+              role="group"
+              aria-labelledby="pitch-confirmar-copia"
+              className="grid gap-2 rounded-md border border-border bg-surface-2 p-3"
+            >
+              <p id="pitch-confirmar-copia" className="text-sm font-medium text-ink">
+                {a.confirmarCopia(revision.unsourced)}
+              </p>
+              <p className="text-xs text-ink-2">{a.confirmarCopiaConsecuencia}</p>
+              <div className="flex flex-wrap gap-2">
+                <Button type="submit" name="intent" value="copy_confirmed" variant="primary" disabled={pending}>
+                  {a.copiarIgual}
+                </Button>
+                <Button type="button" variant="ghost" onClick={() => setConfirmCopy(false)}>
+                  {a.noCopiar}
+                </Button>
+              </div>
+            </div>
+          )}
+          {d?.copiedUnsourced ? <p className="text-xs text-muted">{PITCH.revision.copiadoSinOrigen(d.copiedUnsourced)}</p> : null}
         </div>
         <div aria-live="polite" className="grid min-w-0 gap-1 text-sm">
           {notice && (
