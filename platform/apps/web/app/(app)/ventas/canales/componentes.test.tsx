@@ -81,7 +81,7 @@ describe("UsoCuenta", () => {
   const live = {
     id: ID, channel: "email", provider: "gmail_oauth", providerAccountId: "a@b.test", displayName: "a@b.test", status: "connected", stale: false,
     dailyCap: null, weeklyCap: null, scopes: [], lastOkAt: new Date("2026-09-24T11:18:00Z"), lastOkAgoS: 2 * 3600 + 5, lastErrorAt: null, lastError: null,
-    lastErrorRecent: false, lastErrorFresh: false, updatedAt: new Date(0), usedToday: 3, usedThisWeek: 12,
+    lastErrorRecent: false, lastErrorFresh: false, updatedAt: new Date(0),
     limits: { effectiveDaily: 20, effectiveWeekly: 140, maxDaily: 20, maxWeekly: 140, dailyLimitedBy: "policy", weeklyLimitedBy: "policy", personalMailbox: false },
   } satisfies ChannelAccountRow;
 

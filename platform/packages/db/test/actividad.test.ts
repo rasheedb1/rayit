@@ -26,7 +26,7 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { warmupDailyLimit, warmupDay } from '@mc/core/outreach/warmup';
 import {
-  ACCOUNT_FAILURES, cancelQueuedTouches, getQueueFacets, getSequenceHealth, listChannelUsage, listFunnelByStep, listOutboundQueue,
+  ACCOUNT_FAILURES, cancelQueuedTouches, getQueueBlockers, getQueueFacets, getSequenceHealth, listChannelUsage, listFunnelByStep, listOutboundQueue,
   listSequenceHealth, MAX_TOUCH_ATTEMPTS, NOT_RETRYABLE_FAILURES, parseQueueCursor, QUEUE_BUCKET_STATUSES, QUEUE_PAGE_SIZE,
   retryFailedTouches, retryScheduledFor, usageBinding, usageLevel, type QueuePage,
 } from '../src/queries/actividad.ts';
@@ -192,7 +192,9 @@ async function rawTouches(workspaceId: string) {
   return t.db.asWorker(async (tx) =>
     (await tx.query<{ id: string; step_id: string | null; status: string; opened: boolean; replied: boolean; positive: boolean }>(
       `SELECT t.id, t.step_id, t.status, t.opened_at IS NOT NULL AS opened, t.replied_at IS NOT NULL AS replied,
-              EXISTS (SELECT 1 FROM outbound_message m WHERE m.touch_id = t.id AND m.direction = 'inbound' AND m.intent = 'interested') AS positive
+              t.replied_at IS NOT NULL
+                AND EXISTS (SELECT 1 FROM outbound_message m WHERE m.touch_id = t.id AND m.direction = 'inbound' AND m.intent = 'interested')
+                AS positive
          FROM outbound_touch t WHERE t.workspace_id = $1 ORDER BY t.id`,
       [workspaceId],
     )).rows,
@@ -245,6 +247,42 @@ describe('el embudo por paso (outbound_funnel_by_step)', () => {
     const colaB = await t.db.withWorkspace(WS_B, (tx) => listOutboundQueue(tx, { bucket: 'history' }));
     assert.deepEqual(colaB.rows.map((r) => r.touchId), [id('7b')]);
   });
+
+  test('la cola y el embudo numeran el paso con la misma regla (outbound_step_position)', async () => {
+    const funnel = await t.db.withWorkspace(WS_A, (tx) => listFunnelByStep(tx, SEQ));
+    const position = new Map(funnel.map((s) => [s.stepId, s.position]));
+    for (const bucket of ['queue', 'history'] as const) {
+      const { rows } = await t.db.withWorkspace(WS_A, (tx) => listOutboundQueue(tx, { bucket, sequenceId: SEQ }));
+      for (const r of rows.filter((x) => x.stepId !== null)) {
+        assert.equal(r.stepPosition, position.get(r.stepId!), `${r.touchId}: el mismo número en la cola y en el embudo`);
+      }
+    }
+  });
+
+  test('una respuesta «me interesa» sin replied_at no es positiva: el embudo no crece hacia abajo', async () => {
+    // B: un segundo enviado, con una respuesta entrante clasificada como interested pero sin replied_at (una
+    // importación, un reproceso). Va al final: los números de B de arriba ya se comprobaron.
+    const huerfano = id('7bb');
+    await t.admin(`
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, sequence_id, step_id, channel, subject, body, status,
+                                  sent_at, recipient_address, provider_message_id, status_changed_at)
+      VALUES ('${huerfano}', '${WS_B}', '${CO_B}', '${contact(9)}', '${SEQ_B}', '${STEP.b1}', 'email', 'Otra vez', 'Hola.', 'sent',
+              now() - interval '1 day', 'b@marca-b.test', 'prov-b-2', now() - interval '1 day');
+      INSERT INTO outbound_message (workspace_id, touch_id, contact_id, direction, channel, thread_ref, provider_message_id, body,
+                                    intent, classified_at, occurred_at)
+      VALUES ('${WS_B}', '${huerfano}', '${contact(9)}', 'inbound', 'email', 'hilo-b-2', 'resp-b-2', 'Sí, cuéntame', 'interested',
+              now() - interval '20 hours', now() - interval '21 hours');
+    `);
+    const [paso] = await t.db.withWorkspace(WS_B, (tx) => listFunnelByStep(tx, SEQ_B));
+    assert.deepEqual([paso!.sent, paso!.replied, paso!.positive], [2, 1, 1], 'el de sin replied_at no cuenta como positivo');
+    assert.ok(paso!.positive <= paso!.replied);
+    const salud = await t.db.withWorkspace(WS_B, (tx) => getSequenceHealth(tx, SEQ_B));
+    assert.deepEqual([salud!.sent, salud!.replied, salud!.positive], [2, 1, 1], 'la salud cuenta los mismos positivos que el embudo');
+    const directo = await t.db.withWorkspace(WS_B, async (tx) => (await tx.query<{ p: boolean }>(
+      `SELECT outbound_touch_is_positive(t) AS p FROM outbound_touch t WHERE t.id = $1`, [huerfano],
+    )).rows[0]!.p);
+    assert.equal(directo, false);
+  });
 });
 
 describe('la salud de la secuencia (outbound_sequence_health)', () => {
@@ -269,8 +307,12 @@ describe('la salud de la secuencia (outbound_sequence_health)', () => {
     assert.equal(h.failureRate7d, 0.3636);
     assert.equal(h.health, 'failing');
     assert.equal(await t.db.withWorkspace(WS_B, (tx) => getSequenceHealth(tx, SEQ)), null, 'lo ajeno no se ve');
-    const lista = await t.db.withWorkspace(WS_B, (tx) => listSequenceHealth(tx));
-    assert.deepEqual(lista.map((x) => [x.sequenceId, x.health]), [[SEQ_B, 'healthy']]);
+    // La lista de /ventas/cadencias pide la salud de sus filas por id: lo ajeno no vuelve.
+    const lista = await t.db.withWorkspace(WS_B, (tx) => listSequenceHealth(tx, [SEQ_B, SEQ, 'no-es-uuid']));
+    assert.deepEqual([...lista].map(([k, x]) => [k, x.health]), [[SEQ_B, 'healthy']]);
+    const deA = await t.db.withWorkspace(WS_A, (tx) => listSequenceHealth(tx, [SEQ]));
+    assert.equal(deA.get(SEQ)?.health, 'failing', 'la misma fila que getSequenceHealth');
+    assert.equal((await t.db.withWorkspace(WS_A, (tx) => listSequenceHealth(tx, []))).size, 0);
   });
 });
 
@@ -449,6 +491,38 @@ describe('la cola y el historial (outbound_queue)', () => {
     } finally {
       await t.admin(`UPDATE outreach_channel_account SET status = 'connected' WHERE id = '${ACC.linkedin}'`);
     }
+  });
+});
+
+describe('lo que para la cola (getQueueBlockers)', () => {
+  test('el interruptor del espacio, los canales sin cuenta conectada y los que la política no deja', async () => {
+    assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => getQueueBlockers(tx)), {
+      outreachEnabled: true,
+      channelsWithoutAccount: ['instagram_dm', 'whatsapp'],
+      channelsNotAllowed: ['instagram_dm', 'whatsapp'],
+    });
+    await t.admin(`
+      UPDATE outreach_channel_account SET status = 'needs_reconnect' WHERE id = '${ACC.linkedin}';
+      UPDATE outbound_policy SET enabled = false WHERE workspace_id = '${WS_A}';
+    `);
+    try {
+      assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => getQueueBlockers(tx)), {
+        outreachEnabled: false,
+        channelsWithoutAccount: ['linkedin', 'instagram_dm', 'whatsapp'],
+        channelsNotAllowed: ['instagram_dm', 'whatsapp'],
+      });
+    } finally {
+      await t.admin(`
+        UPDATE outreach_channel_account SET status = 'connected' WHERE id = '${ACC.linkedin}';
+        UPDATE outbound_policy SET enabled = true WHERE workspace_id = '${WS_A}';
+      `);
+    }
+    // B no tiene política ni cuentas: apagado (como el reclamo, que une la política con p.enabled) y sin ningún canal.
+    assert.deepEqual(await t.db.withWorkspace(WS_B, (tx) => getQueueBlockers(tx)), {
+      outreachEnabled: false,
+      channelsWithoutAccount: ['email', 'linkedin', 'instagram_dm', 'whatsapp'],
+      channelsNotAllowed: [],
+    });
   });
 });
 

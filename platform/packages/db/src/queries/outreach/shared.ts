@@ -55,7 +55,7 @@ export const ACCOUNT_WAIT_MS = 60 * 60 * 1000;
  * y linkedin_message por separado) y una cuenta de LinkedIn podía mandar
  * su techo en invitaciones MÁS su techo en mensajes, el doble de lo que el
  * proveedor aguanta. Una sola fila por cuenta y día es además lo que suma
- * /ventas/canales (listChannelAccounts: used_today, used_week). El correo
+ * el widget de uso de /ventas/canales (outbound_usage_daily, VEN-16). El correo
  * sigue siendo 'email', que es lo que ya era.
  */
 export function accountActionType(channel: string): string {

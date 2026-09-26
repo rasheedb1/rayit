@@ -229,12 +229,17 @@ test('refresh_expires_at vencido pasa a needs_reauth sin llamar a la plataforma'
   );
   const id = r.rows[0]!.id;
   await h.secrets.set('vault:old', { accessToken: 'ACCESS-OLD', accessExpiresAt: minutes(5), scopes: [] });
-  const callsBefore = Number((await h.db.query<{ n: number | string }>(`SELECT count(*)::int AS n FROM api_call_log`)).rows[0]!.n);
+  // Solo las llamadas de esta conexión (o de YouTube, su plataforma, por si una llega sin conexión): un job de la prueba
+  // anterior que termina en medio deja su propia fila en api_call_log, y un count(*) global fallaba bajo carga (7 !== 6).
+  const calls = async () => Number((await h.db.query<{ n: number | string }>(
+    `SELECT count(*)::int AS n FROM api_call_log WHERE connection_id = $1 OR platform_id = 'youtube'`, [id],
+  )).rows[0]!.n);
+  const callsBefore = await calls();
   await h.worker.boss.send('oauth.refresh', { connectionId: id });
   await waitFor(async () => (await conn(id)).status === 'needs_reauth', { timeoutMs: 20_000, label: 'old' });
   const row = await conn(id);
   assert.match(row.status_detail!, /permiso de renovación venció/);
-  const callsAfter = Number((await h.db.query<{ n: number | string }>(`SELECT count(*)::int AS n FROM api_call_log`)).rows[0]!.n);
+  const callsAfter = await calls();
   assert.equal(callsAfter, callsBefore, 'sin llamada a la API');
   const notes = await h.db.query<{ title_es: string }>(`SELECT title_es FROM notification WHERE entity_id = $1`, [id]);
   assert.match(notes.rows[0]!.title_es, /YouTube/);

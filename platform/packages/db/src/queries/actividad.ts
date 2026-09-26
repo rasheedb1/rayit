@@ -431,6 +431,50 @@ export async function getQueueFacets(tx: WorkspaceTx, filters: ScreenFilters): P
   };
 }
 
+/**
+ * Lo que para la cola entera o un canal, aunque un toque esté programado
+ * y a su hora. Son las condiciones del reclamo (claimDueTouches), dichas
+ * para la pantalla: con cualquiera de ellas, «Sale el lunes» sería una
+ * promesa que el lunes no se cumple.
+ *   outreachEnabled          el interruptor del envío del espacio
+ *                            (outbound_policy.enabled; sin política,
+ *                            apagado). Apagado, el reclamo no toma nada.
+ *   channelsWithoutAccount   los canales sin ninguna cuenta conectada: el
+ *                            reclamo deja esperando lo suyo hasta que
+ *                            vuelva una (waitingAccount).
+ *   channelsNotAllowed       los canales fuera de allowed_channels: el
+ *                            reclamo no los mira.
+ */
+export interface QueueBlockers {
+  outreachEnabled: boolean;
+  channelsWithoutAccount: OutboundChannel[];
+  channelsNotAllowed: OutboundChannel[];
+}
+
+/** Los bloqueos de la cola del espacio de la transacción (QueueBlockers), en una consulta. */
+export async function getQueueBlockers(tx: WorkspaceTx): Promise<QueueBlockers> {
+  const fn = 'getQueueBlockers';
+  const { rows } = await tx.query<Record<string, unknown>>(
+    `SELECT p.enabled, p.allowed_channels,
+            ARRAY(SELECT DISTINCT a.channel FROM outreach_channel_account a
+                   WHERE a.workspace_id = current_workspace_id() AND a.status = 'connected') AS connected
+       FROM (SELECT 1) uno
+       LEFT JOIN outbound_policy p ON p.workspace_id = current_workspace_id()`,
+  );
+  const r = rows[0] ?? {};
+  // Un canal que no es de OUTBOUND_CHANNELS (allowed_channels es text[] sin CHECK de valores) no bloquea ni desbloquea nada.
+  const list = (v: unknown): OutboundChannel[] =>
+    Array.isArray(v) ? v.filter((x): x is OutboundChannel => (OUTBOUND_CHANNELS as readonly unknown[]).includes(x)) : [];
+  const connected = new Set(list(r.connected));
+  // Sin política no hay lista de canales permitidos que mirar: el envío ya está apagado.
+  const allowed = r.allowed_channels === null || r.allowed_channels === undefined ? null : new Set(list(r.allowed_channels));
+  return {
+    outreachEnabled: r.enabled === null || r.enabled === undefined ? false : bool(fn, 'enabled', r.enabled),
+    channelsWithoutAccount: OUTBOUND_CHANNELS.filter((c) => !connected.has(c)),
+    channelsNotAllowed: allowed ? OUTBOUND_CHANNELS.filter((c) => !allowed.has(c)) : [],
+  };
+}
+
 // ---------------------------------------------------------------------
 // Reintentar y cancelar
 // ---------------------------------------------------------------------
@@ -1000,12 +1044,20 @@ export async function getSequenceHealth(tx: WorkspaceTx, sequenceId: string): Pr
   return rows[0] ? toHealth(rows[0], 0) : null;
 }
 
-/** La salud de todas las secuencias del workspace que no están archivadas: primero lo que pide atención. */
-export async function listSequenceHealth(tx: WorkspaceTx): Promise<SequenceHealth[]> {
+/**
+ * La salud de unas secuencias (las de una página de la lista de
+ * /ventas/cadencias), por id: la pantalla ya tiene su orden, así que aquí
+ * no se ordena nada. Lo que no existe o es de otro workspace no vuelve.
+ */
+export async function listSequenceHealth(tx: WorkspaceTx, sequenceIds: readonly string[]): Promise<Map<string, SequenceHealth>> {
+  const ids = [...new Set(sequenceIds.filter(isUuid))];
+  if (ids.length === 0) return new Map();
   const { rows } = await tx.query<Record<string, unknown>>(
-    `SELECT ${HEALTH_COLUMNS} FROM outbound_sequence_health h
-      WHERE h.status <> 'archived'
-      ORDER BY array_position(ARRAY['failing', 'attention', 'healthy', 'inactive'], h.health), h.name, h.sequence_id`,
+    `SELECT ${HEALTH_COLUMNS} FROM outbound_sequence_health h WHERE h.sequence_id = ANY($1::uuid[])`,
+    [ids],
   );
-  return rows.map(toHealth);
+  return new Map(rows.map((r, i) => {
+    const h = toHealth(r, i);
+    return [h.sequenceId, h];
+  }));
 }

@@ -169,6 +169,14 @@ export const outboundTouchRecent = pgView('outbound_touch_recent', {
 // text de queries/outreach/shared).
 // ---------------------------------------------------------------------
 
+/** El número de cada paso en su secuencia (0066): una sola regla para la cola y el embudo. */
+export const outboundStepPosition = pgView('outbound_step_position', {
+  stepId: uuid('step_id'),
+  workspaceId: uuid('workspace_id'),
+  sequenceId: uuid('sequence_id'),
+  position: integer('position'),
+}).existing();
+
 /** La cola y el historial: un toque por fila con su paso, su contacto y el código de su motivo. */
 export const outboundQueue = pgView('outbound_queue', {
   touchId: uuid('touch_id'),

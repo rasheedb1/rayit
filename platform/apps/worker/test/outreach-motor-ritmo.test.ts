@@ -229,7 +229,7 @@ test('el techo de LinkedIn es uno para la cuenta: con 1 al día, una invitación
   assert.equal(r.claim.rescheduled.length, 1);
   assert.equal(r.claim.rescheduled[0]!.cap, 'account_day');
   assert.equal(localDay(r.claim.rescheduled[0]!.until), '2026-09-24', 'al siguiente día hábil');
-  // Una sola fila por cuenta y día: la que suma /ventas/canales (used_today).
+  // Una sola fila por cuenta y día: la que lee el widget de uso de /ventas/canales (outbound_usage_daily).
   const filas = await db.raw.query<{ action_type: string; period: string; count: number }>(
     `SELECT action_type, period, count FROM outbound_counter WHERE channel_account_id = $1 ORDER BY period`, [acc],
   );

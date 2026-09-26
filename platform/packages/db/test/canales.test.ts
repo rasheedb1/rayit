@@ -66,10 +66,8 @@ describe('canales', () => {
       assert.equal(byId.get(GMAIL_LAURA)?.status, 'connected');
       assert.equal(byId.get(GMAIL_LAURA)?.providerAccountId, 'laura@cocina-facil.test');
       assert.equal(byId.get(LINKEDIN_LAURA)?.status, 'needs_reconnect');
-      for (const r of rows) {
-        assert.ok(Number.isInteger(r.usedToday) && r.usedToday >= 0);
-        assert.ok(r.usedThisWeek >= r.usedToday || r.usedThisWeek >= 0);
-      }
+      // El uso de cada cuenta ya no viaja en la fila: lo da outbound_usage_daily (listChannelUsage, VEN-16).
+      for (const r of rows) assert.equal('usedToday' in r, false);
       const otro = await t.db.withWorkspace(WS_OTRO, (tx) => listChannelAccounts(tx));
       assert.deepEqual(otro, [], 'otro workspace no ve las cuentas de Laura');
       // Sin fila de política, los valores por defecto de la tabla: Instagram nace apagado (0045).

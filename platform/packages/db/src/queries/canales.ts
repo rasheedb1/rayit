@@ -176,9 +176,6 @@ export interface ChannelAccountRow {
    */
   lastErrorFresh: boolean;
   updatedAt: Date;
-  /** Acciones de hoy y de esta semana (lunes local), sumadas en outbound_counter por cuenta. */
-  usedToday: number;
-  usedThisWeek: number;
 }
 
 /** Una fila de outreach_channel_account_limits (0040). */
@@ -230,39 +227,25 @@ interface RawAccount extends RawLimits, Record<string, unknown> {
   last_error_recent: boolean;
   last_error_fresh: boolean;
   updated_at: Date | string;
-  used_today: number;
-  used_week: number;
 }
 
 const toDate = (v: Date | string | null): Date | null => (v === null ? null : v instanceof Date ? v : new Date(v));
 
 /**
  * Las cuentas del workspace, las vivas primero y después las demás por
- * fecha. El «hoy» y la «semana» son los de la zona del workspace, igual
- * que los cuenta increment_if_under_cap (0037 §6.2).
+ * fecha. El uso de cada una (hoy, la semana, los 14 días) no está aquí:
+ * lo da outbound_usage_daily (listChannelUsage de
+ * @mc/db/queries/actividad), que es lo que pinta el widget de uso.
  */
 export async function listChannelAccounts(tx: WorkspaceTx): Promise<ChannelAccountRow[]> {
   const { rows } = await tx.query<RawAccount>(
-    `WITH zona AS (
-       SELECT coalesce((SELECT z.name FROM pg_timezone_names z WHERE z.name = w.timezone), 'UTC') AS tz
-         FROM workspace w WHERE w.id = current_workspace_id()
-     ),
-     periodo AS (
-       SELECT (now() AT TIME ZONE zona.tz)::date AS hoy,
-              date_trunc('week', now() AT TIME ZONE zona.tz)::date AS lunes
-         FROM zona
-     )
-     SELECT a.id, a.channel, a.provider, a.provider_account_id, a.display_name, a.status,
+    `SELECT a.id, a.channel, a.provider, a.provider_account_id, a.display_name, a.status,
             (a.status = 'pending' AND a.updated_at < now() - make_interval(mins => ($1::jsonb ->> a.channel)::int)) AS stale,
             a.daily_cap, a.weekly_cap, a.scopes, a.last_ok_at, a.last_error_at, a.last_error, a.updated_at,
             greatest(0, extract(epoch FROM now() - a.last_ok_at))::int AS last_ok_ago_s,
             coalesce(a.last_error_at > now() - interval '24 hours', false) AS last_error_recent,
             coalesce(a.last_error_at > now() - interval '1 hour', false) AS last_error_fresh,
-            l.effective_daily, l.effective_weekly, l.max_daily, l.max_weekly, l.daily_limited_by, l.weekly_limited_by, l.personal_mailbox,
-            coalesce((SELECT sum(c.count) FROM outbound_counter c, periodo p
-                       WHERE c.channel_account_id = a.id AND c.period = 'day' AND c.period_start = p.hoy), 0)::int AS used_today,
-            coalesce((SELECT sum(c.count) FROM outbound_counter c, periodo p
-                       WHERE c.channel_account_id = a.id AND c.period = 'week' AND c.period_start = p.lunes), 0)::int AS used_week
+            l.effective_daily, l.effective_weekly, l.max_daily, l.max_weekly, l.daily_limited_by, l.weekly_limited_by, l.personal_mailbox
        FROM outreach_channel_account a
        JOIN outreach_channel_account_limits l ON l.channel_account_id = a.id
       ORDER BY (a.status = ANY($2::text[])) DESC, a.updated_at DESC`,
@@ -287,8 +270,6 @@ export async function listChannelAccounts(tx: WorkspaceTx): Promise<ChannelAccou
     lastErrorRecent: r.last_error_recent,
     lastErrorFresh: r.last_error_fresh,
     updatedAt: toDate(r.updated_at)!,
-    usedToday: r.used_today,
-    usedThisWeek: r.used_week,
   }));
 }
 
