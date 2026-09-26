@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { DELIVERABLES } from "@mc/core";
+import { BRIEF_ERROR_CODES } from "@mc/db/queries/brief";
 import { LOST_REASONS, VENTAS_ERROR_CODES } from "@mc/db/queries/ventas";
 import { MESSAGES } from "./messages";
 
@@ -32,5 +34,21 @@ describe("los textos de Ventas", () => {
 
   it("la cabecera habla con la creadora, no de la base", () => {
     expect(MESSAGES.header.description).not.toMatch(/deal_pipeline|vista|SQL|pantalla/i);
+  });
+
+  it("cada código de error del brief tiene su frase, y las que llevan dato lo usan (VEN-7)", () => {
+    expect(Object.keys(MESSAGES.briefErrores).sort()).toEqual([...BRIEF_ERROR_CODES].sort());
+    expect(MESSAGES.briefErrores.CategoryConflict("Alcohol")).toContain("«Alcohol»");
+    expect(MESSAGES.briefErrores.InvalidCountry("ZZ")).toContain("«ZZ»");
+  });
+
+  it("cada formato de entregable del catálogo tiene su nombre en el brief", () => {
+    for (const d of DELIVERABLES) expect(MESSAGES.brief.deliverables[d], d).toBeTruthy();
+  });
+
+  it("la conversión y las ocultas hablan en singular cuando es una", () => {
+    expect(MESSAGES.pipeline.conversion.basis("1", 1)).toBe("de 1 negocio");
+    expect(MESSAGES.pipeline.conversion.basis("12", 12)).toBe("de 12 negocios");
+    expect(MESSAGES.radar.hidden.line("1", 1)).toBe("1 señal oculta por tu brief");
   });
 });

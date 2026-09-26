@@ -64,3 +64,40 @@ describe("RadarView: lo que ya sabe el CRM de cada señal (pulido r8)", () => {
     expect(within(nueva!).queryByText(MESSAGES.radar.inCrm)).toBeNull();
   });
 });
+
+describe("RadarView: las señales que el brief deja fuera (VEN-7)", () => {
+  const h = MESSAGES.radar.hidden;
+
+  it("dice cuántas oculta, con el enlace a verlas y al brief", () => {
+    render(<RadarView signals={[senal({})]} f={f} currency="COP" hidden={{ count: 3, showing: false }} />);
+    const linea = screen.getByTestId("ocultas-por-brief");
+    expect(linea).toHaveTextContent("3 señales ocultas por tu brief");
+    expect(within(linea).getByRole("link", { name: h.show })).toHaveAttribute("href", "/ventas?ocultas=1");
+    expect(within(linea).getByRole("link", { name: h.editBrief })).toHaveAttribute("href", "/ventas/brief");
+  });
+
+  it("con una sola, en singular; sin ninguna, no dice nada", () => {
+    const { unmount } = render(<RadarView signals={[]} f={f} currency="COP" hidden={{ count: 1, showing: false }} />);
+    expect(screen.getByTestId("ocultas-por-brief")).toHaveTextContent("1 señal oculta por tu brief");
+    unmount();
+    render(<RadarView signals={[senal({})]} f={f} currency="COP" hidden={{ count: 0, showing: false }} />);
+    expect(screen.queryByTestId("ocultas-por-brief")).toBeNull();
+  });
+
+  it("al verlas, cada oculta dice por qué y el enlace vuelve a ocultarlas", () => {
+    render(
+      <RadarView
+        signals={[senal({ hiddenBy: "category" }), senal({ id: "s2", companyName: "Licores del Sur", hiddenBy: "company" }), senal({ id: "s3", companyName: "Café Montaña" })]}
+        f={f}
+        currency="COP"
+        hidden={{ count: 2, showing: true }}
+      />,
+    );
+    expect(screen.getByTestId("ocultas-por-brief")).toHaveTextContent(h.showing("2", 2));
+    expect(screen.getByRole("link", { name: h.hide })).toHaveAttribute("href", "/ventas");
+    const [categoria, marca, visible] = screen.getAllByRole("listitem");
+    expect(categoria).toHaveTextContent(h.reason.category);
+    expect(marca).toHaveTextContent(h.reason.company);
+    expect(visible).not.toHaveTextContent(h.reason.category);
+  });
+});
