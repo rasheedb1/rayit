@@ -2,12 +2,15 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { createReferralContact, markInboxThreadRead, replyInInboxThread, type ReplyResult } from "@mc/db/queries/bandejas";
+import {
+  BANDEJA_CHANNELS, cancelInboxReply, createReferralContact, dismissInboxReply, markInboxThreadDone, markInboxThreadRead,
+  reclassifyInboxMessage, replyInInboxThread, type ReplyResult,
+} from "@mc/db/queries/bandejas";
 import { VentasError } from "@mc/db/queries/ventas";
 import { UUID_RE } from "@/lib/forms";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { withWorkspace } from "../_lib/db";
-import { MESSAGES } from "./messages";
+import { INTENCIONES, MESSAGES } from "./messages";
 
 /**
  * Las acciones de /ventas/bandeja (VEN-14). El workspace lo fija
@@ -19,13 +22,12 @@ import { MESSAGES } from "./messages";
 
 const t = MESSAGES;
 const RUTA = "/ventas/bandeja";
-const CANALES = ["email", "linkedin", "instagram_dm", "whatsapp"] as const;
 
 export type ResultadoBandeja = { ok: true; notice: string } | { ok: false; error: string; field?: string };
 
 const hiloSchema = z.object({
   contactId: z.string().regex(UUID_RE),
-  channel: z.string().refine((c) => (CANALES as readonly string[]).includes(c)),
+  channel: z.enum(BANDEJA_CHANNELS),
 });
 
 /** Al abrir un hilo, sus mensajes quedan leídos. */
@@ -38,6 +40,23 @@ export async function marcarLeido(input: z.input<typeof hiloSchema>): Promise<vo
   } catch (err) {
     console.error("[ventas/bandeja] marcar leído", err);
   }
+}
+
+const hechoSchema = hiloSchema.extend({ done: z.boolean() });
+
+/** «Marcar como hecha» y «Reabrir»: el hilo sale de los pendientes (o vuelve). */
+export async function marcarHecho(input: z.input<typeof hechoSchema>): Promise<ResultadoBandeja> {
+  const parsed = hechoSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: t.errores.accion };
+  const v = parsed.data;
+  try {
+    await withWorkspace((tx) => markInboxThreadDone(tx, { contactId: v.contactId, channel: v.channel, done: v.done, now: new Date() }));
+  } catch (err) {
+    console.error("[ventas/bandeja] marcar hecho", err);
+    return { ok: false, error: t.errores.accion };
+  }
+  revalidatePath(RUTA);
+  return { ok: true, notice: v.done ? t.conversacion.hechaAviso : t.conversacion.reabiertaAviso };
 }
 
 const responderSchema = hiloSchema.extend({ touchId: z.string().regex(UUID_RE), body: z.string().max(20000) });
@@ -76,7 +95,57 @@ export async function responder(input: z.input<typeof responderSchema>): Promise
   }
   if (!r.ok) return explicar(r);
   revalidatePath(RUTA);
-  return { ok: true, notice: t.responder.enviada };
+  // Con el envío apagado no sale «en la próxima pasada»: espera a que se encienda.
+  return { ok: true, notice: r.sendingOff ? t.responder.enviadaApagado : t.responder.enviada };
+}
+
+const toqueSchema = z.object({ touchId: z.string().regex(UUID_RE) });
+
+export type ResultadoCancelar = { ok: true; notice: string; body: string } | { ok: false; error: string };
+
+/** «Cancelar» (y «Editar», que cancela y devuelve el texto): la respuesta en cola no sale. */
+export async function cancelarRespuesta(input: z.input<typeof toqueSchema> & { editar?: boolean }): Promise<ResultadoCancelar> {
+  const parsed = toqueSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: t.errores.accion };
+  try {
+    const r = await withWorkspace((tx) => cancelInboxReply(tx, parsed.data.touchId));
+    revalidatePath(RUTA);
+    if (!r.ok) return { ok: false, error: r.code === "not_cancelable" ? t.errores.not_cancelable : t.errores.not_found };
+    return { ok: true, notice: input.editar ? t.responder.aEditar : t.responder.cancelada, body: r.body };
+  } catch (err) {
+    console.error("[ventas/bandeja] cancelar respuesta", err);
+    return { ok: false, error: t.errores.accion };
+  }
+}
+
+/** «Descartar» una respuesta que no salió: deja de verse en el hilo. */
+export async function descartarRespuesta(input: z.input<typeof toqueSchema>): Promise<void> {
+  const parsed = toqueSchema.safeParse(input);
+  if (!parsed.success) return;
+  try {
+    if (await withWorkspace((tx) => dismissInboxReply(tx, parsed.data.touchId, new Date()))) revalidatePath(RUTA);
+  } catch (err) {
+    console.error("[ventas/bandeja] descartar respuesta", err);
+  }
+}
+
+const corregirSchema = z.object({ messageId: z.string().regex(UUID_RE), intent: z.enum(INTENCIONES) });
+
+/** «Corregir» la intención de una respuesta: se aplican sus efectos como si hubiera llegado así. */
+export async function corregirIntencion(input: z.input<typeof corregirSchema>): Promise<ResultadoBandeja> {
+  const parsed = corregirSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: t.errores.accion };
+  const v = parsed.data;
+  try {
+    const r = await withWorkspace((tx) => reclassifyInboxMessage(tx, { messageId: v.messageId, intent: v.intent, now: new Date() }));
+    revalidatePath(RUTA);
+    if (!r.ok) return { ok: false, error: t.errores[r.code] };
+    const etiqueta = t.intenciones[v.intent].label.toLowerCase();
+    return { ok: true, notice: r.dealMoved ? t.corregir.listoMovido(etiqueta) : t.corregir.listo(etiqueta) };
+  } catch (err) {
+    console.error("[ventas/bandeja] corregir intención", err);
+    return { ok: false, error: t.errores.accion };
+  }
 }
 
 const referidoSchema = z.object({

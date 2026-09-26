@@ -9,18 +9,22 @@ const t = MESSAGES;
  * La lista de conversaciones, a la izquierda: sin leer primero, en negrita
  * y con su punto; después de la más reciente a la más vieja. Cada una es un
  * enlace (la URL lleva la ficha y el canal): se comparte y el botón de
- * atrás hace lo que se espera. La abierta lleva aria-current.
+ * atrás hace lo que se espera. La abierta lleva aria-current. Sin
+ * overflow-hidden en la lista: recortaba el anillo de foco del enlace; las
+ * esquinas redondeadas las lleva cada fila.
  */
 export function ListaHilos({ hilos }: { hilos: HiloVista[] }) {
   return (
     <nav aria-label={t.lista.label}>
-      <ul className="divide-y divide-border overflow-hidden rounded-md border border-border" role="list">
-        {hilos.map((h) => (
+      <ul className="divide-y divide-border rounded-md border border-border" role="list">
+        {hilos.map((h, i) => (
           <li key={h.key}>
             <Link
               href={h.href}
               aria-current={h.activo ? "page" : undefined}
-              className={`block px-3 py-3 transition-colors hover:bg-hover ${h.activo ? "bg-hover" : "bg-surface"}`}
+              className={`block px-3 py-3 transition-colors hover:bg-hover focus-visible:relative focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ink ${
+                h.activo ? "bg-hover" : "bg-surface"
+              } ${i === 0 ? "rounded-t-md" : ""} ${i === hilos.length - 1 ? "rounded-b-md" : ""}`}
             >
               <span className="flex items-baseline justify-between gap-2">
                 <span className={`flex min-w-0 items-center gap-2 text-sm ${h.sinLeer > 0 ? "font-semibold text-ink" : "text-ink"}`}>
@@ -38,6 +42,7 @@ export function ListaHilos({ hilos }: { hilos: HiloVista[] }) {
               </span>
               <span className="mt-2 flex flex-wrap items-center gap-2">
                 <Pill kind={t.intenciones[h.intencion].kind}>{t.intenciones[h.intencion].label}</Pill>
+                {h.hecha ? <Pill kind="neutral">{t.lista.hecha}</Pill> : null}
                 {h.sinLeerTexto ? <span className="sr-only">{h.sinLeerTexto}</span> : null}
               </span>
             </Link>
