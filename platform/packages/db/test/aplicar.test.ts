@@ -42,6 +42,10 @@ const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
   '0047': 'VEN-9-canales 0038_canales_outreach.sql al mezclar con main',
   '0048': 'VEN-9-canales 0039_callback_de_canales.sql al mezclar con main',
   '0049': 'VEN-9-canales 0040_canales_liberar_y_limites.sql al mezclar con main',
+  // VEN-16 (0065_actividad_outreach) salta el 0064, que tiene VEN-14 en su
+  // rama (0064_bandejas.sql). Al integrarse VEN-14 el hueco se llena y esta
+  // línea sobra: el integrador la borra.
+  '0064': 'rasheed/VEN-14-bandejas (0064_bandejas.sql)',
 };
 
 let dir = '';
