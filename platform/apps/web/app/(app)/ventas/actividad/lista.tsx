@@ -85,7 +85,10 @@ function Motivo({ f }: { f: FilaVista }) {
  * su casilla y la barra de arriba cancela lo seleccionado, con una
  * confirmación en el sitio; un fallido reintentable lleva su «Reintentar»,
  * uno bloqueado dice por qué, y uno cuya cuenta está caída lleva a
- * reconectarla.
+ * reconectarla. Lo retenido lleva «Revisar y aprobar» (a la cadencia de la
+ * ficha), como la pestaña Queue de Chief: lo que espera a una persona
+ * trae su acción. Lo que la cola no va a reclamar (el envío apagado, el
+ * canal sin cuenta) dice por qué espera y adónde ir, en vez de una hora.
  *
  * El resultado de cada acción no se pinta aquí: sube a `onResultado`
  * (PanelActividad), que lo mantiene a la vista aunque la lista se vacíe.

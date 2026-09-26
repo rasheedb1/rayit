@@ -1609,7 +1609,7 @@ las ocho existentes, Ventas completo son 48 a 55 días de una persona.
 Es el módulo más grande del producto, y por eso conviene construirlo
 con agentes en paralelo, con la misma puerta de calidad de 9,5.
 
-#### Cómo quedó la actividad (VEN-16, 25 de septiembre; ronda 3)
+#### Cómo quedó la actividad (VEN-16, 25 de septiembre; ronda 4)
 
 - **Migración `0065_actividad_outreach.sql`** (0064 la tomó VEN-14; no
   dependen una de otra y el runner las aplica en cualquier orden). Una
@@ -1699,12 +1699,57 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
   proveedor, nunca una frase en la base).
 - **Demo**: el seed `0008_demo_actividad.sql` deja un LinkedIn fallido con
   la cuenta caída (se ofrece reconectar), un correo fallido reintentable y
-  los contadores del Gmail de Laura (verify/0008.sql).
+  los contadores de las cuentas de Laura **sacados de los toques que el
+  reclamo tomó** (verify/0008.sql lo comprueba en los dos sentidos): el
+  widget de uso dice lo mismo que el historial, día por día. La historia
+  de la demo es que el envío salió unas horas (los correos de hoy de
+  0006) y después se apagó.
 - **Prueba**: `packages/db/test/actividad.test.ts`, una semana de envíos
   en los ocho estados; el embudo cuadra con `outbound_touch` fila a fila,
   la regla del bloqueo es la misma en la vista, los botones y el
   reintento, las páginas no repiten filas (también con 205 envíos) y el
   semáforo sigue a los tres topes.
+
+**Ronda 4** (sin cambiar lo anterior):
+
+- **Migración `0066_actividad_una_regla.sql`** (0065 no se toca): el
+  número de un paso sale de una sola vista, `outbound_step_position`, y
+  «positivo» de una sola función, `outbound_touch_is_positive(t)`
+  (enviado, **con `replied_at`** y con una respuesta entrante
+  `interested`). `outbound_queue`, `outbound_funnel_by_step` y
+  `outbound_sequence_health` se reemplazan con las mismas columnas y las
+  usan: la cola y el embudo ya no pueden numerar distinto, y una
+  clasificación «me interesa» sin `replied_at` (una importación, un
+  reproceso) no hace crecer el embudo hacia abajo. El orden del paso es
+  el de la línea de tiempo (`outbound_step_order_idx` lo hace único).
+- **La cola no promete lo que no va a pasar.** Solo lo programado dice
+  «Sale …»: lo retenido dice «Previsto para … si lo apruebas» y lleva
+  **«Revisar y aprobar»** a la cadencia de su ficha
+  (`OUTREACH_URLS.companyCadence`); el borrador, «Sale cuando lo
+  programes». `getQueueBlockers` (una consulta) dice qué para la cola
+  como la para el reclamo: el envío del espacio apagado, los canales sin
+  ninguna cuenta conectada y los que la política no deja. Con cualquiera,
+  la fila dice «En espera · envío apagado» (o «sin cuenta de LinkedIn»)
+  con su enlace (el interruptor de la política, la fila del canal); con
+  el envío apagado, además, un aviso arriba de las pestañas y la ayuda
+  del reintento deja de decir «en la próxima pasada».
+- **Textos**: el motivo va en el idioma de la interfaz
+  (`IDIOMA_MENSAJES`), no en el locale del espacio: una fila ya no mezcla
+  español e inglés; las cifras y las fechas siguen el locale. El detalle
+  dice «código: …» solo cuando el motivo **es** un código
+  (`parseHoldReason` en lo retenido). Las explicaciones del flujo
+  concuerdan con la cifra («Un mensaje de este paso falló», «Ningún…»).
+  La fecha corta lleva el año cuando no es el del espacio. Con más de
+  una página, la casilla de todo dice «de esta página» y cuántos hay con
+  los filtros.
+- **Teclado**: cada paso del flujo es una sola parada de tabulación
+  (roving tabindex); las flechas, Inicio y Fin recorren sus cifras.
+- **Salud en la lista**: `/ventas/cadencias` pinta el semáforo de cada
+  cadencia con `columnaSalud(salud)` (una línea de montaje) y
+  `listSequenceHealth(tx, ids)`, el mismo color que el detalle.
+- **Canales**: `listChannelAccounts` ya no calcula `usedToday` ni
+  `usedThisWeek` (nadie los pintaba): el uso sale solo de
+  `outbound_usage_daily`.
 
 ## 7. Cómo entra en el plan por fases
 

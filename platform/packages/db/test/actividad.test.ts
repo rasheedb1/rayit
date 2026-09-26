@@ -20,7 +20,10 @@
  *     manda el tope con menos cupo (el día, la semana o el espacio, como
  *     el reclamo) y el semáforo dice ok, near, full u off (cuenta caída o
  *     envío apagado);
- *   · la salud de la secuencia cuadra con el embudo.
+ *   · la salud de la secuencia cuadra con el embudo;
+ *   · ronda 4 (0066): la cola y el embudo numeran el paso con la misma
+ *     regla, una respuesta «me interesa» sin replied_at no es positiva, y
+ *     getQueueBlockers dice qué para la cola como la para el reclamo.
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
