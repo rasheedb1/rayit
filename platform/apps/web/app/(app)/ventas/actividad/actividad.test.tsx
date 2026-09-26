@@ -361,7 +361,7 @@ describe("la frontera de una pieza montada", () => {
 const paso = (n: number, over: Partial<FunnelStep> = {}): FunnelStep => ({
   stepId: `p${n}`, position: n, stepType: n === 3 ? "linkedin_message" : "email", channel: n === 3 ? "linkedin" : "email",
   dayOffset: (n - 1) * 2, opensTracked: n !== 3, touches: 8, sent: 5, opened: 3, replied: 2, positive: 2, pending: 0, failed: 3, stopped: 0,
-  openRate: 0.6, replyRate: 0.4, positiveRate: 0.4, ...over,
+  openRate: 0.6, replyRate: 0.4, positiveRate: 0.4, failedRetryable: 3, shareOfFirst: { sent: 1, opened: 0.6, replied: 0.4 }, ...over,
 });
 const salud: SequenceHealth = {
   sequenceId: "s1", name: "Semana de prueba", status: "active", steps: 3, enrolled: 8, enrolledActive: 4, enrolledPaused: 0,
@@ -447,6 +447,39 @@ describe("el embudo y la vista de flujo de la cadencia", () => {
     expect(MENSAJES.flujo.explica.stopped("3", 3)).toMatch(/^3 mensajes .*los cancelaste tú desde la actividad/);
     // Sin «1:» delante: la cifra se lee dentro de la frase.
     expect(explica("fallidos")).not.toMatch(/^\d+:/);
+  });
+
+  it("«fallidos» no promete un reintento que no existe: todos, ninguno o algunos; y lleva a la cola con su tipo", () => {
+    const explica = (over: Partial<FunnelStep>) => {
+      cleanup();
+      render(<MetricasCadenciaVista sequenceId="s1" health={salud} funnel={[paso(1, over)]} f={f} />);
+      const cifra = within(screen.getByRole("region", { name: "Flujo de la cadencia" })).getByText("fallidos").closest("[tabindex]")!;
+      return document.getElementById(cifra.getAttribute("aria-describedby")!)!.textContent;
+    };
+    expect(explica({ failed: 1, failedRetryable: 0 })).toBe(
+      "Un mensaje de este paso falló y no se puede reintentar: rebotó, la cuenta del canal está caída o ya no tiene sentido enviarlo.",
+    );
+    expect(screen.queryByRole("link", { name: /Reintentar/ })).toBeNull();
+    expect(explica({ failed: 3, failedRetryable: 1 })).toBe("3 mensajes de este paso fallaron; uno se puede reintentar desde la actividad.");
+    expect(screen.getByRole("link", { name: "Reintentar el fallido en la actividad" }).getAttribute("href")).toBe(
+      "/ventas/actividad?cadencia=s1&tipo=email",
+    );
+    expect(explica({ failed: 3, failedRetryable: 3 })).toBe("3 mensajes de este paso fallaron. Puedes reintentarlos desde la actividad.");
+  });
+
+  it("cada paso enseña cuánto de lo enviado en el primero llega hasta él, con barras que la vista ya calculó", () => {
+    render(<MetricasCadenciaVista sequenceId="s1" health={salud}
+      funnel={[paso(1), paso(2, { shareOfFirst: { sent: 0.6, opened: 0.2, replied: 0.2 } }), paso(3, { shareOfFirst: { sent: 0.4, opened: 0, replied: 0 } })]} f={f} />);
+    const grupos = screen.getAllByRole("group", { name: MENSAJES.flujo.barras.titulo });
+    expect(grupos).toHaveLength(3);
+    // El segundo paso retiene el 60 % de lo enviado en el primero; LinkedIn no cuenta aperturas, así que no tiene esa barra.
+    expect(grupos[1]!.textContent).toContain(f.pct(0.6));
+    expect(grupos[1]!.querySelector("[style]")!.getAttribute("style")).toContain("--barra: 0.6");
+    expect(within(grupos[2]!).queryByText(MENSAJES.flujo.barras.opened)).toBeNull();
+    cleanup();
+    // Si el primer paso no envió nada, no hay contra qué comparar: sin barras.
+    render(<MetricasCadenciaVista sequenceId="s1" health={salud} funnel={[paso(1, { shareOfFirst: { sent: null, opened: null, replied: null } })]} f={f} />);
+    expect(screen.queryByRole("group", { name: MENSAJES.flujo.barras.titulo })).toBeNull();
   });
 
   it("una sola parada de tabulación por paso; las flechas, Inicio y Fin recorren sus cifras", () => {

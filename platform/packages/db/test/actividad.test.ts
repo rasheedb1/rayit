@@ -21,7 +21,7 @@
  *     el reclamo) y el semáforo dice ok, near, full u off (cuenta caída o
  *     envío apagado);
  *   · la salud de la secuencia cuadra con el embudo;
- *   · ronda 4 (0068): la cola y el embudo numeran el paso con la misma
+ *   · ronda 4 (0067 §1b): la cola y el embudo numeran el paso con la misma
  *     regla, una respuesta «me interesa» sin replied_at no es positiva, y
  *     getQueueBlockers dice qué para la cola como la para el reclamo.
  */
@@ -241,6 +241,25 @@ describe('el embudo por paso (outbound_funnel_by_step)', () => {
     assert.equal(funnel[0]!.positiveRate, 0.4);
     assert.equal(funnel[1]!.openRate, 0.6667);
     assert.equal(funnel[2]!.replyRate, null, '0 de 0 no es 0 %');
+    // La barra de la vista de flujo: lo de cada paso sobre lo enviado en el primero, calculado en la vista (pulido r1).
+    const first = funnel[0]!.sent;
+    for (const s of funnel) {
+      const share = (n: number) => (first > 0 ? Math.min(1, Math.round((n / first) * 10_000) / 10_000) : null);
+      assert.deepEqual(s.shareOfFirst, { sent: share(s.sent), opened: share(s.opened), replied: share(s.replied) }, `paso ${s.position}`);
+    }
+    assert.equal(funnel[0]!.shareOfFirst.sent, 1);
+    // De lo fallido, lo que la actividad deja reintentar: la misma regla que su botón.
+    const facets = await t.db.withWorkspace(WS_A, (tx) => getQueueFacets(tx, { sequenceId: SEQ }));
+    for (const s of funnel) {
+      assert.ok(s.failedRetryable <= s.failed, `paso ${s.position}: no más reintentables que fallidos`);
+    }
+    const porTipo = new Map(facets.retryableByStepType.map((x) => [x.stepType, x.count]));
+    for (const tipo of new Set(funnel.map((s) => s.stepType))) {
+      assert.equal(
+        funnel.filter((s) => s.stepType === tipo).reduce((n, s) => n + s.failedRetryable, 0), porTipo.get(tipo) ?? 0,
+        `${tipo}: el embudo y el botón de reintentar cuentan lo mismo`,
+      );
+    }
   });
 
   test('otro workspace no ve el embudo ajeno, y el suyo no mezcla nada de A', async () => {
@@ -379,7 +398,7 @@ describe('la cola y el historial (outbound_queue)', () => {
     assert.equal(nada.cancelable, 0);
   });
 
-  test('la cola dice cuándo la cadencia está en pausa (0069): el despachador aplaza lo suyo cada día', async () => {
+  test('la cola dice cuándo la cadencia está en pausa (sequence_status): el despachador aplaza lo suyo cada día', async () => {
     const programado = async () => (await t.db.withWorkspace(WS_A, (tx) =>
       listOutboundQueue(tx, { bucket: 'queue', statuses: ['scheduled'], sequenceId: SEQ }))).rows.find((r) => r.touchId === touch(5, 3))!;
     assert.deepEqual([(await programado()).sequenceStatus, (await programado()).enrollmentStatus], ['active', 'active']);
@@ -927,5 +946,68 @@ describe('cada rama del bloqueo del reintento, con filas reales (outbound_touch_
     // Dentro de la ventana, sale ya.
     const martes = new Date('2026-09-29T15:00:00.000Z');
     assert.equal(retryScheduledFor(F.ok, martes, TZ, { start: '08:00', end: '18:00' }).getTime(), martes.getTime());
+  });
+});
+
+describe('la base también dice quién opera la cola (0067 §6, pulido r1)', () => {
+  const WS_G = id('a6');
+  const CO_G = id('c06');
+  const P_G = id('d06');
+  const PROG = id('7a61');
+  const FALLO = id('7a62');
+  const DUENA = id('0d1');
+  const LECTORA = id('0d2');
+  const CLIENTE = id('0d3');
+  const MIEMBRO = id('0d4');
+  const como = <T>(userId: string, fn: Parameters<typeof t.db.withWorkspace<T>>[1]) => t.db.withWorkspace(WS_G, fn, { userId });
+  const estado = async () =>
+    (await t.db.asWorker((tx) => tx.query<{ id: string; status: string }>(
+      `SELECT id, status FROM outbound_touch WHERE id IN ('${PROG}', '${FALLO}') ORDER BY id`,
+    ))).rows.map((r) => r.status);
+
+  before(async () => {
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_G}', 'actividad-guardia', 'Actividad guardia', '${TZ}');
+      INSERT INTO outbound_policy (workspace_id, postal_address, enabled) VALUES ('${WS_G}', 'Calle 93 # 11-26, Bogotá', true);
+      INSERT INTO company (id, name, owner_workspace_id) VALUES ('${CO_G}', 'Marca G', '${WS_G}');
+      INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_G}', '${CO_G}');
+      INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source)
+      VALUES ('${P_G}', '${CO_G}', '${WS_G}', 'Gabriela', 'gabriela@marca-g.test', 'user_provided');
+      INSERT INTO app_user (id, email, name) VALUES
+        ('${DUENA}', 'duena@guardia.test', 'Dueña'), ('${LECTORA}', 'lectora@guardia.test', 'Lectora'),
+        ('${CLIENTE}', 'cliente@guardia.test', 'Cliente'), ('${MIEMBRO}', 'miembro@guardia.test', 'Miembro');
+      INSERT INTO membership (workspace_id, user_id, role) VALUES
+        ('${WS_G}', '${DUENA}', 'owner'), ('${WS_G}', '${LECTORA}', 'viewer'), ('${WS_G}', '${CLIENTE}', 'client'),
+        ('${WS_G}', '${MIEMBRO}', 'member');
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, subject, body, status, scheduled_for,
+                                  blocked_reason, attempt_count, recipient_address)
+      VALUES ('${PROG}', '${WS_G}', '${CO_G}', '${P_G}', 'email', 'Hola', 'Una idea.', 'scheduled', now() + interval '1 day', NULL, 0, NULL),
+             ('${FALLO}', '${WS_G}', '${CO_G}', '${P_G}', 'email', 'Hola', 'Otra idea.', 'failed', now() - interval '1 day', 'rejected', 1,
+              'gabriela@marca-g.test');
+    `);
+  });
+
+  test("un 'viewer' o un 'client' no cancelan ni reintentan, ni por la función ni con un UPDATE a mano: 42501", async () => {
+    const denegado = (e: unknown) => (e as { code?: string }).code === '42501';
+    for (const quien of [LECTORA, CLIENTE]) {
+      await assert.rejects(como(quien, (tx) => cancelQueuedTouches(tx, [PROG])), denegado);
+      await assert.rejects(como(quien, (tx) => retryFailedTouches(tx, { touchIds: [FALLO] })), denegado);
+      await assert.rejects(
+        como(quien, (tx) => tx.query(`UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'canceled_by_user' WHERE id = '${PROG}'`)),
+        denegado,
+      );
+    }
+    assert.deepEqual(await estado(), ['scheduled', 'failed'], 'nada se movió');
+  });
+
+  test("quien opera ('member', 'owner') sí; y la web sin identidad y el worker, como siempre", async () => {
+    assert.deepEqual((await como(MIEMBRO, (tx) => retryFailedTouches(tx, { touchIds: [FALLO] }))).done, [FALLO]);
+    assert.deepEqual((await como(DUENA, (tx) => cancelQueuedTouches(tx, [PROG]))).done, [PROG]);
+    assert.deepEqual(await estado(), ['canceled', 'scheduled']);
+    // Sin identidad (desarrollo sin Supabase Auth, pruebas) y el worker no pasan por la guardia.
+    assert.deepEqual((await t.db.withWorkspace(WS_G, (tx) => cancelQueuedTouches(tx, [FALLO]))).done, [FALLO]);
+    await t.db.asWorker((tx) => tx.query(`UPDATE outbound_touch SET status = 'failed', blocked_reason = 'rejected' WHERE id = '${FALLO}'`));
+    await t.db.asWorker((tx) => tx.query(`UPDATE outbound_touch SET status = 'canceled' WHERE id = '${FALLO}'`));
+    assert.deepEqual(await estado(), ['canceled', 'canceled']);
   });
 });
