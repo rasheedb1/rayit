@@ -1759,6 +1759,41 @@ PR de Nicolás (cambia el kit); aquí queda la propuesta:
   siendo la opción; el diálogo es para cuando la pregunta pide un campo
   (el motivo de pérdida).
 
+**Ronda 5: nada se pierde en silencio en «Marcas que no aceptas».**
+
+- **Un nombre a medias no se guarda como si nada.** Lo escrito en el
+  combobox solo viaja si es exactamente una marca de la lista. Si queda
+  texto sin resolver («cafe mon»), «Guardar el brief» no envía: el campo
+  dice «Elige la marca de la lista o borra lo escrito» y se lleva el
+  foco. Enter sin opción marcada agrega la única que se ofrece; con
+  varias, abre la lista en la primera y deja lo escrito. Hasta la ronda 4
+  el texto se borraba y el aviso decía «Guardado» con la marca fuera.
+- **Excluir por adelantado una marca que no está en el CRM**, como en el
+  formulario de preferencias de Passionfroot (la competencia de un
+  cliente): si la búsqueda no encuentra nada, el combobox ofrece «No
+  aceptar «…»». La Server Action `noAceptarMarcaNueva` llama a
+  `rejectBrandByName` (queries/ventas.ts), que reutiliza el alta de
+  `rejectSignalBrand` (`findOrCreateCompany` + `linkBlocked`: la conocida
+  por dominio o por nombre en el CRM, o una nueva; enlazada como
+  `blocked`), exige owner o admin en la base (`outreach_can_manage`) y
+  deja traza (`ventas.brief.no_aceptar_marca`). Lo escrito es el nombre y,
+  si tiene forma de dominio, también el dominio. La marca entra como
+  etiqueta y viaja al guardar; desde entonces una señal con ese nombre o
+  ese dominio queda oculta (probado en db/test/brief.test.ts). Sin esquema
+  nuevo.
+- **Los dos diálogos, un solo pie.** «¿No aceptar esta marca?» usa el de
+  «¿Por qué lo pierdes?»: a la derecha, Cancelar primero y la acción
+  destructiva al final; con un solo brief el foco inicial cae en
+  Cancelar. El orden queda escrito en la fila de `Dialog` del README del
+  kit. Con una sola creadora la descripción ya no habla de «todos los
+  briefs activos». Al confirmar, el foco va al aviso del radar (la
+  tarjeta se desmonta con la revalidación y el foco caía en `<body>`).
+  La acción está junto a «Descartar», no en una franja propia.
+- **La conversión no habla de lo que no se ve.** Con el filtro «Para
+  hoy», ni el tablero ni la Lista la ponen (`conversion: null`). En la
+  Lista es una línea por etapa sin caja, y «en 90 días» solo va en el
+  título.
+
 ---
 
 ## 6. Las historias nuevas de Ventas

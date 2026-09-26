@@ -391,7 +391,7 @@ export const STORIES: readonly Story[] = [
     desc: "Qué busca el creador (categorías, países, presupuesto mínimo, entregables) y qué no acepta. Filtra la bandeja del radar.",
     done: "Una señal de una categoría excluida no aparece en la bandeja.",
     status: "hecho",
-    note: "/ventas/brief sobre outbound_brief (queries/brief.ts), un brief por creador con selector en las agencias. Lo que no acepta (categorías, marcas y la divulgación obligatoria, juntas como en Passionfroot) se cumple en cuatro sitios con la misma regla: el radar lo oculta y lo dice («1 señal oculta por tu brief»), la ficha no lo cuenta, enrolar lo salta y el despachador cancela lo de la cola. Las marcas se buscan en el servidor en todo el CRM, y desde la tarjeta del radar «No aceptar esta marca» la da de alta (bloqueada) y la excluye en una transacción. Lo que busca no oculta nada: la tarjeta marca solo lo que la aparta («Bajo tu mínimo», «Fuera de tus países», «Fuera de lo que buscas»), y los formatos y la ventana de disponibilidad los usan las cadencias al proponer. El plan del veredicto se prueba con EXPLAIN como mc_app, sin Seq Scan sobre company. Lo cambian owner y admin, con traza. Migraciones 0064 y 0065 pendientes de aplicar en Supabase por el integrador.",
+    note: "/ventas/brief: un brief por creador; el radar oculta lo que excluye y lo dice, y las marcas fuera del CRM se excluyen por adelantado. 0064 y 0065 por aplicar. Detalle en docs/ventas-outreach.md §5.8.",
   },
   {
     id: "VEN-8", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-3"],
@@ -399,7 +399,7 @@ export const STORIES: readonly Story[] = [
     desc: "Motivo de pérdida, y tasa de conversión por etapa desde deal_stage_history.",
     done: "La tasa entre etapas aparece en el pipeline con el número de deals que la sostiene.",
     status: "hecho",
-    note: "Perder un negocio pide el motivo en un diálogo modal (Dialog del kit), y la base lo exige al COMMIT (0064, por aplicar). Bajo la cabecera de cada columna abierta, «58 % avanza · de 12 negocios en 90 días» desde deal_stage_history (queries/conversion.ts): los negocios que entraron en la etapa en los últimos 90 días del workspace, con la historia ordenada por (changed_at, id) y probado contra un recuento independiente y con una entrada fuera de la ventana; en la vista Lista, el mismo resumen por etapa encima de la tabla.",
+    note: "Motivo obligatorio en un diálogo y en la base (0064); conversión por etapa de 90 días bajo cada columna, con su número de negocios. Detalle en docs/ventas-outreach.md.",
   },
   // Outreach automático. Diseño en docs/ventas-outreach.md, a partir de CadenceV1.0.
   {
