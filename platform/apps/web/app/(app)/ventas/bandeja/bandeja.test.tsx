@@ -29,13 +29,15 @@ vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 import { INBOX_REPLY_MAX_CHARS, type InboxConversation, type InboxMessage, type InboxThread } from "@mc/db/queries/bandejas";
 import { formatterFor } from "@/lib/format";
-import { AtajosBandeja } from "./acciones";
+import { AtajosBandeja, MarcarHecha } from "./acciones";
 import { Conversacion } from "./conversacion";
 import { ListaHilos } from "./lista";
 import { MESSAGE_INTENTS } from "@mc/core/outreach/intent";
 import { INTENCIONES, MESSAGES } from "./messages";
 import { CrearReferido, Respuestas } from "./responder";
-import { columnaListaClase, conversacionVista, enrolarHrefDe, hiloHref, hiloVista, intencionClave } from "./vista";
+import {
+  columnaListaClase, conversacionVista, enrolarHrefDe, hiloHref, hiloVista, intencionClave, siguienteTrasHecha,
+} from "./vista";
 
 const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
 const t = MESSAGES;
@@ -53,6 +55,7 @@ function mensaje(n: number, extra: Partial<InboxMessage> = {}): InboxMessage {
     occurredAt: new Date("2026-09-23T20:00:00Z"),
     readAt: null,
     fromAddress: null,
+    fromContact: true,
     intent: null,
     intentConfidence: null,
     intentSource: null,
@@ -79,6 +82,8 @@ function conv(extra: Partial<InboxConversation> = {}): InboxConversation {
     replyToMessageId: mensaje(2).id,
     accountName: "laura@gmail.test",
     replyBlock: null,
+    contactOptedOut: false,
+    postalAddressMissing: false,
     sendingOff: false,
     done: false,
     unread: 0,
@@ -93,6 +98,8 @@ const vista = (c: InboxConversation, clasificador: "model" | "fake" | "off" | "u
 beforeEach(() => {
   for (const m of [responder, marcarLeido, crearReferido, cancelarRespuesta, descartarRespuesta, corregirIntencion, marcarHecho]) m.mockReset();
   marcarLeido.mockResolvedValue(undefined);
+  // Los borradores viven en sessionStorage, y jsdom lo comparte entre pruebas.
+  window.sessionStorage.clear();
   router.push.mockReset();
   router.refresh.mockReset();
 });
@@ -139,8 +146,9 @@ describe("la vista", () => {
     expect(ahoraNo!.enfria).toBe(t.conversacion.enfria(f.date("2026-12-22T20:00:00.000Z", "long")));
   });
 
-  it("un referido con correo, sin datos y ya creado; una baja no se corrige", () => {
+  it("un referido con correo, sin datos y ya creado; con la ficha de baja, la baja no se corrige", () => {
     const c = conv({
+      contactOptedOut: true,
       messages: [
         mensaje(1, { intent: "referral", referral: { name: "Ana", email: "ana@vitale.test", role: null } }),
         mensaje(2, { intent: "referral", referral: null }),
@@ -331,7 +339,7 @@ describe("responder", () => {
   });
 
   it("una respuesta en cola se cancela, o se edita: su texto vuelve a «Tu respuesta»", async () => {
-    const enCola = { touchId: "t1", estado: "En cola", cuerpo: "Con errata", cancelable: true, motivo: null };
+    const enCola = { touchId: "t1", estado: "En cola", cuerpo: "Con errata", cancelable: true, motivo: null, retenida: false };
     cancelarRespuesta.mockResolvedValue({ ok: true, notice: t.responder.aEditar, body: "Con errata" });
     render(<Respuestas {...props} porSalir={[enCola]} />);
     expect(screen.getByText(t.responder.porSalir(1))).toBeInTheDocument();
@@ -344,8 +352,8 @@ describe("responder", () => {
   });
 
   it("las que no salieron dicen por qué y se descartan; una que ya está saliendo no se cancela", async () => {
-    const saliendo = { touchId: "t1", estado: "Enviándose", cuerpo: "Ya va", cancelable: false, motivo: null };
-    const cancelada = { touchId: "t2", estado: "Cancelada", cuerpo: "No", cancelable: false, motivo: t.responder.motivos["canceled_by_person"]! };
+    const saliendo = { touchId: "t1", estado: "Enviándose", cuerpo: "Ya va", cancelable: false, motivo: null, retenida: false };
+    const cancelada = { touchId: "t2", estado: "Cancelada", cuerpo: "No", cancelable: false, motivo: t.responder.motivos["canceled_by_person"]!, retenida: false };
     descartarRespuesta.mockResolvedValue({ ok: true, notice: t.responder.descartada });
     render(<Respuestas {...props} porSalir={[saliendo]} noSalieron={[cancelada]} />);
     expect(screen.queryByRole("button", { name: t.responder.cancelar })).toBeNull();
@@ -358,7 +366,7 @@ describe("responder", () => {
   });
 
   it("«Descartar» espera su respuesta (no se pulsa dos veces) y, si falla, lo dice", async () => {
-    const cancelada = { touchId: "t2", estado: "Cancelada", cuerpo: "No", cancelable: false, motivo: null };
+    const cancelada = { touchId: "t2", estado: "Cancelada", cuerpo: "No", cancelable: false, motivo: null, retenida: false };
     let soltar: (r: unknown) => void = () => {};
     descartarRespuesta.mockReturnValue(new Promise((r) => (soltar = r)));
     render(<Respuestas {...props} noSalieron={[cancelada]} />);
@@ -377,8 +385,8 @@ describe("responder", () => {
   });
 
   it("un rol que solo lee no ve la caja ni los botones: se le dice por qué", () => {
-    const enCola = { touchId: "t1", estado: "En cola", cuerpo: "Hola", cancelable: true, motivo: null };
-    const cancelada = { touchId: "t2", estado: "Cancelada", cuerpo: "No", cancelable: false, motivo: null };
+    const enCola = { touchId: "t1", estado: "En cola", cuerpo: "Hola", cancelable: true, motivo: null, retenida: false };
+    const cancelada = { touchId: "t2", estado: "Cancelada", cuerpo: "No", cancelable: false, motivo: null, retenida: false };
     render(<Respuestas {...props} porSalir={[enCola]} noSalieron={[cancelada]} puedeOperar={false} />);
     expect(screen.queryByLabelText(t.responder.label)).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
@@ -516,5 +524,130 @@ describe("marcar leído", () => {
     }
     render(<Conversacion c={conversacionVista(conv({ unread: 2 }), f, { clasificador: "model" })} volverHref="/ventas/bandeja" />);
     expect(marcarLeido).toHaveBeenCalledWith({ contactId: CONTACT, channel: "email" });
+  });
+});
+
+describe("quién escribió cada mensaje", () => {
+  it("los tuyos dicen «Tú»; los de la ficha, su nombre; los de otra persona, su dirección y que no es la ficha", () => {
+    const c = conv({
+      messages: [
+        mensaje(1, { direction: "outbound", body: "Hola, Sofía" }),
+        mensaje(2, { fromAddress: "sofia@vitale.test" }),
+        mensaje(3, { fromAddress: "Julián <julian@vitale.test>", fromContact: false }),
+      ],
+    });
+    const [mio, suyo, otro] = vista(c).mensajes;
+    expect([mio!.de, mio!.noEsLaFicha]).toEqual([t.conversacion.tu, null]);
+    expect([suyo!.de, suyo!.noEsLaFicha]).toEqual(["Sofía Cárdenas", null]);
+    expect([otro!.de, otro!.noEsLaFicha]).toEqual(["Julián <julian@vitale.test>", t.conversacion.noEsLaFicha("Sofía Cárdenas")]);
+    render(<Conversacion c={vista(c)} volverHref="/ventas/bandeja" />);
+    expect(screen.getByText("Julián <julian@vitale.test>")).toBeInTheDocument();
+    expect(screen.getByText(t.conversacion.noEsLaFicha("Sofía Cárdenas"))).toBeInTheDocument();
+  });
+});
+
+describe("la baja que pide un tercero en copia", () => {
+  const tercero = mensaje(2, { intent: "unsubscribe", intentSource: "detector", fromAddress: "otra@marca.test", fromContact: false });
+
+  it("no dice que la ficha ya no recibe mensajes: dice quién la pidió y deja «Corregir», con la baja de la ficha como opción", () => {
+    const v = vista(conv({ messages: [mensaje(1, { direction: "outbound" }), tercero] }));
+    const m = v.mensajes[1]!;
+    expect(m.bajaDeTercero).toBe(t.conversacion.bajaDeTercero("otra@marca.test"));
+    expect(m.corregible).toBe(true);
+    expect(v.opcionesIntencion.find((o) => o.value === "unsubscribe")?.label).toBe(t.corregir.opcionBaja);
+    render(<Conversacion c={v} volverHref="/ventas/bandeja" />);
+    expect(screen.getByText(t.conversacion.bajaDeTercero("otra@marca.test"))).toBeInTheDocument();
+    expect(screen.queryByText(t.corregir.bajaNoSeCorrige)).toBeNull();
+    expect(screen.getByRole("button", { name: t.corregir.abrir })).toBeInTheDocument();
+    expect(screen.getByLabelText(t.responder.label)).toBeInTheDocument();
+  });
+
+  it("con la ficha ya de baja, no se corrige", () => {
+    const m = vista(conv({ contactOptedOut: true, replyBlock: "opted_out", messages: [tercero] })).mensajes[0]!;
+    expect([m.corregible, m.bajaDeTercero]).toEqual([false, null]);
+  });
+
+  it("dar de baja a la ficha pide confirmación en rojo, y el otro botón se llama «Cerrar», no «Cancelar» dos veces", () => {
+    render(<Conversacion c={vista(conv({ messages: [tercero] }))} volverHref="/ventas/bandeja" />);
+    fireEvent.click(screen.getByRole("button", { name: t.corregir.abrir }));
+    expect(screen.getByLabelText(t.corregir.label, { selector: "select" })).toHaveValue("unsubscribe");
+    fireEvent.click(screen.getByRole("button", { name: t.corregir.guardar }));
+    expect(screen.getByText(t.corregir.bajaPregunta)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t.corregir.bajaConfirmar }).className).toContain("text-bad");
+    expect(screen.getAllByRole("button", { name: t.corregir.cancelar })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: t.corregir.cerrar })).toBeInTheDocument();
+  });
+});
+
+describe("una respuesta que el envío retuvo", () => {
+  it("dice por qué y que también espera en la bandeja de aprobación, con el enlace", () => {
+    const retenida = {
+      touchId: "t1", status: "held" as const, body: "Hola", scheduledFor: null, heldReason: "reply_without_thread", blockedReason: null,
+      cancelable: true,
+    };
+    const v = vista(conv({ pending: [retenida] }));
+    expect(v.porSalir[0]!.retenida).toBe(true);
+    expect(v.porSalir[0]!.motivo).toMatch(/También espera en tu bandeja de aprobación\.$/u);
+    render(<Respuestas contactId={CONTACT} channel="email" ayuda="" porSalir={v.porSalir} noSalieron={[]} puedeResponder maxCaracteres={10} />);
+    expect(screen.getByRole("link", { name: t.responder.irAAprobaciones })).toHaveAttribute("href", "/ventas/aprobaciones");
+  });
+
+  it("sin la dirección postal no se ofrece responder: se dice y se lleva a guardarla", () => {
+    render(<Conversacion c={vista(conv({ postalAddressMissing: true }))} volverHref="/ventas/bandeja" />);
+    expect(screen.getByText(t.responder.faltaDireccion)).toBeInTheDocument();
+    expect(screen.queryByLabelText(t.responder.label)).toBeNull();
+  });
+});
+
+describe("el borrador de cada hilo", () => {
+  it("vuelve al volver al hilo, y j con texto sin enviar primero avisa y a la segunda sigue", async () => {
+    const { unmount } = render(
+      <>
+        <AtajosBandeja hrefs={["/a", "/b", "/c"]} activo={1} listaHref="/ventas/bandeja" />
+        <Conversacion c={vista(conv())} volverHref="/ventas/bandeja" />
+      </>,
+    );
+    const area = screen.getByLabelText(t.responder.label);
+    fireEvent.change(area, { target: { value: "Hola, Sofía: el jueves me sirve" } });
+    fireEvent.keyDown(area, { key: "Escape" });
+    fireEvent.keyDown(window, { key: "j" });
+    expect(router.push).not.toHaveBeenCalled();
+    expect(await screen.findByText(t.responder.borradorPendiente("j"))).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "j" });
+    expect(router.push).toHaveBeenLastCalledWith("/c");
+    unmount();
+    // De vuelta en el hilo (otra carga de la página), el borrador sigue ahí.
+    render(<Conversacion c={vista(conv())} volverHref="/ventas/bandeja" />);
+    await waitFor(() => expect(screen.getByLabelText(t.responder.label)).toHaveValue("Hola, Sofía: el jueves me sirve"));
+  });
+
+  it("enviada, el borrador se borra", async () => {
+    responder.mockResolvedValue({ ok: true, notice: t.responder.enviada });
+    const { unmount } = render(<Conversacion c={vista(conv())} volverHref="/ventas/bandeja" />);
+    fireEvent.change(screen.getByLabelText(t.responder.label), { target: { value: "Listo" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.responder.enviar }));
+    });
+    unmount();
+    render(<Conversacion c={vista(conv())} volverHref="/ventas/bandeja" />);
+    expect(screen.getByLabelText(t.responder.label)).toHaveValue("");
+  });
+});
+
+describe("«Marcar como hecha» en pendientes", () => {
+  it("pasa a la conversación siguiente; si era la última, a la anterior; si era la única, a la lista", async () => {
+    const h = (href: string, activo: boolean) => ({ href, activo }) as Parameters<typeof siguienteTrasHecha>[0][number];
+    expect(siguienteTrasHecha([h("/a", false), h("/b", true), h("/c", false)], "pendientes", "/l")).toBe("/c");
+    expect(siguienteTrasHecha([h("/a", false), h("/b", true)], "pendientes", "/l")).toBe("/a");
+    expect(siguienteTrasHecha([h("/b", true)], "pendientes", "/l")).toBe("/l");
+    expect(siguienteTrasHecha([h("/b", true)], "todas", "/l")).toBeNull();
+    expect(siguienteTrasHecha([h("/b", false)], "pendientes", "/l")).toBeNull();
+
+    marcarHecho.mockResolvedValue({ ok: true, notice: t.conversacion.hechaAviso });
+    render(<MarcarHecha contactId={CONTACT} channel="email" hecha={false} siguienteHref="/c" />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.conversacion.marcarHecha }));
+    });
+    expect(router.push).toHaveBeenLastCalledWith("/c");
   });
 });

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition, type FormEvent, type ReactNode } from "react";
+import type { BandejaChannel } from "@mc/db/queries/bandejas";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Textarea } from "@/components/ui/field";
 import { Pill } from "@/components/ui/pill";
@@ -11,6 +12,8 @@ import { MESSAGES } from "./messages";
 import type { PendienteVista } from "./vista";
 
 const t = MESSAGES;
+/** Donde también espera una respuesta que el envío retuvo. */
+const APROBACIONES_HREF = "/ventas/aprobaciones";
 
 /** El id del campo de la respuesta: la tecla r lo enfoca. */
 export const RESPUESTA_ID = "bandeja-respuesta";
@@ -22,6 +25,44 @@ export function enfocarRespuesta(): boolean {
   const el = document.getElementById(RESPUESTA_ID);
   el?.focus();
   return el !== null;
+}
+
+/** ¿Hay algo escrito en «Tu respuesta» que no salió? Los atajos que dejan el hilo lo miran antes. */
+export function hayRespuestaSinEnviar(): boolean {
+  const el = document.getElementById(RESPUESTA_ID);
+  return el instanceof HTMLTextAreaElement && el.value.trim().length > 0;
+}
+
+/** El evento con el que los atajos piden a «Tu respuesta» que avise de su borrador (lleva la tecla). */
+const BORRADOR_EVENTO = "on-cue:bandeja-borrador";
+
+export function avisarBorrador(tecla: string): void {
+  window.dispatchEvent(new CustomEvent(BORRADOR_EVENTO, { detail: tecla }));
+}
+
+/**
+ * El borrador de cada hilo, en sessionStorage con la ficha y el canal (el
+ * de Superhuman: vuelve al volver al hilo). Es una comodidad de este
+ * navegador: puede no estar (una ventana privada, datos borrados) y la
+ * bandeja funciona igual; por eso todo va en try/catch.
+ */
+const claveBorrador = (contactId: string, channel: string) => `on-cue:bandeja:borrador:${contactId}:${channel}`;
+
+export function leerBorrador(contactId: string, channel: string): string {
+  try {
+    return window.sessionStorage.getItem(claveBorrador(contactId, channel)) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function guardarBorrador(contactId: string, channel: string, texto: string): void {
+  try {
+    if (texto.trim()) window.sessionStorage.setItem(claveBorrador(contactId, channel), texto);
+    else window.sessionStorage.removeItem(claveBorrador(contactId, channel));
+  } catch {
+    // Sin almacenamiento, el borrador vive mientras la conversación esté abierta.
+  }
 }
 
 /** Un id nuevo para el próximo envío: el mismo formulario enviado dos veces es UN mensaje. */
@@ -37,7 +78,7 @@ function nuevoId(): string {
  */
 export function MarcarLeido({
   contactId, channel, sinLeer, implicita = false,
-}: { contactId: string; channel: "email" | "linkedin" | "instagram_dm"; sinLeer: number; implicita?: boolean }) {
+}: { contactId: string; channel: BandejaChannel; sinLeer: number; implicita?: boolean }) {
   const router = useRouter();
   useEffect(() => {
     if (sinLeer === 0) return;
@@ -55,13 +96,15 @@ export function MarcarLeido({
  * por el motor (la cuenta y el hilo del mensaje, el pie de baja en un
  * correo), no desde el navegador. Al salir bien, el campo se vacía, el
  * aviso lo dice y el próximo envío lleva otro id; si falla, el id se queda
- * (reintentar no crea otro mensaje).
+ * (reintentar no crea otro mensaje). Lo escrito se guarda por hilo
+ * (leerBorrador): pasar a otra conversación con j o k, o marcar esta como
+ * hecha, no lo pierde.
  */
 export function Respuestas({
   contactId, channel, ayuda, porSalir, noSalieron, puedeResponder, puedeOperar = true, maxCaracteres,
 }: {
   contactId: string;
-  channel: "email" | "linkedin" | "instagram_dm";
+  channel: BandejaChannel;
   ayuda: string;
   porSalir: PendienteVista[];
   noSalieron: PendienteVista[];
@@ -72,9 +115,27 @@ export function Respuestas({
   maxCaracteres: number;
 }) {
   const [touchId, setTouchId] = useState(nuevoId);
-  const [texto, setTexto] = useState("");
+  const [texto, setTextoEstado] = useState("");
   const [pending, start] = useTransition();
   const [resultado, setResultado] = useState<ResultadoBandeja | null>(null);
+  const [avisoBorrador, setAvisoBorrador] = useState<string | null>(null);
+
+  // El borrador se lee al montar (no en el servidor: sessionStorage es del navegador).
+  useEffect(() => {
+    const guardado = leerBorrador(contactId, channel);
+    if (guardado) setTextoEstado(guardado);
+  }, [contactId, channel]);
+  useEffect(() => {
+    const onAviso = (e: Event) => setAvisoBorrador(t.responder.borradorPendiente(String((e as CustomEvent<string>).detail)));
+    window.addEventListener(BORRADOR_EVENTO, onAviso);
+    return () => window.removeEventListener(BORRADOR_EVENTO, onAviso);
+  }, []);
+
+  function setTexto(v: string) {
+    setTextoEstado(v);
+    setAvisoBorrador(null);
+    guardarBorrador(contactId, channel, v);
+  }
 
   function enviar(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -113,6 +174,11 @@ export function Respuestas({
         {(p) =>
           p.cancelable && puedeOperar ? (
             <>
+              {p.retenida ? (
+                <Button size="sm" variant="ghost" href={APROBACIONES_HREF}>
+                  {t.responder.irAAprobaciones}
+                </Button>
+              ) : null}
               <Button size="sm" variant="secondary" onClick={() => cancelar(p, true)} disabled={pending}>
                 {t.responder.editar}
               </Button>
@@ -148,6 +214,7 @@ export function Respuestas({
             />
           </Field>
           <Aviso message={error && !error.field ? error.error : null} notice={resultado?.ok ? resultado.notice : null} />
+          {avisoBorrador ? <Aviso info={avisoBorrador} size="xs" /> : null}
           <div>
             <Button type="submit" variant="primary" loading={pending}>
               {t.responder.enviar}
@@ -171,7 +238,7 @@ function Lista({
       {items.map((p) => (
         <div key={p.touchId} className="ml-auto w-full max-w-xl rounded-md border border-dashed border-border bg-surface p-3 text-sm">
           <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-            <Pill kind={p.motivo ? "bad" : "neutral"}>{p.estado}</Pill>
+            <Pill kind={p.retenida ? "warn" : p.motivo ? "bad" : "neutral"}>{p.estado}</Pill>
             <div className="flex flex-wrap gap-2">{children(p)}</div>
           </div>
           <p className="whitespace-pre-wrap break-words text-ink-2">{p.cuerpo}</p>

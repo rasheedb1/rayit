@@ -9,7 +9,6 @@ import { CrearReferido, MarcarLeido, Respuestas } from "./responder";
 import type { ConversacionVista, MensajeVista } from "./vista";
 
 const t = MESSAGES;
-type Canal = "email" | "linkedin" | "instagram_dm";
 
 /**
  * La conversación completa con una ficha por un canal: arriba quién es,
@@ -23,10 +22,16 @@ type Canal = "email" | "linkedin" | "instagram_dm";
  * key (y la página se la pone también al montarla). Sin eso, al pasar de un
  * hilo a otro con j o k, React conservaba el borrador de «Tu respuesta», su
  * id de envío y los avisos: el texto escrito para una marca aparecía en el
- * hilo de otra y «Enviar respuesta» se lo mandaba.
+ * hilo de otra y «Enviar respuesta» se lo mandaba. El borrador de cada
+ * hilo se guarda aparte, con su clave (responder.tsx), y vuelve al volver.
+ *
+ * `trasHecha`: adónde pasa «Marcar como hecha» en la vista de pendientes
+ * (la siguiente conversación, como «e» en Superhuman); null, se queda.
  */
-export function Conversacion({ c, volverHref }: { c: ConversacionVista; volverHref: string }) {
-  const canal = c.channel as Canal;
+export function Conversacion({
+  c, volverHref, trasHecha = null,
+}: { c: ConversacionVista; volverHref: string; trasHecha?: string | null }) {
+  const canal = c.channel;
   return (
     <section key={`${c.contactId}:${c.channel}`} aria-labelledby="conversacion-titulo" className="grid gap-4">
       {c.puedeOperar ? <MarcarLeido contactId={c.contactId} channel={canal} sinLeer={c.sinLeer} implicita={c.implicita} /> : null}
@@ -46,7 +51,7 @@ export function Conversacion({ c, volverHref }: { c: ConversacionVista; volverHr
           ) : null}
         </div>
         <div className="flex flex-wrap items-start gap-2">
-          {c.puedeOperar ? <MarcarHecha contactId={c.contactId} channel={canal} hecha={c.hecha} /> : null}
+          {c.puedeOperar ? <MarcarHecha contactId={c.contactId} channel={canal} hecha={c.hecha} siguienteHref={trasHecha} /> : null}
           <Button size="sm" variant="secondary" href={c.fichaHref}>
             {t.conversacion.verFicha}
           </Button>
@@ -75,6 +80,13 @@ export function Conversacion({ c, volverHref }: { c: ConversacionVista; volverHr
               </div>
             ) : null}
           </div>
+        ) : c.faltaDireccion && c.puedeOperar ? (
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <Aviso info={t.responder.faltaDireccion} className="flex-1" />
+            <Button size="sm" variant="secondary" href={OUTREACH_URLS.policyPostalAddress}>
+              {t.responder.irADireccion}
+            </Button>
+          </div>
         ) : c.envioApagado && c.puedeOperar ? (
           <div className="mb-3 flex flex-wrap items-center gap-3">
             <Aviso info={t.responder.envioApagado} className="flex-1" />
@@ -89,7 +101,7 @@ export function Conversacion({ c, volverHref }: { c: ConversacionVista; volverHr
           ayuda={c.cuenta ? t.responder.ayuda(c.cuenta) : t.responder.ayudaSinCuenta}
           porSalir={c.porSalir}
           noSalieron={c.noSalieron}
-          puedeResponder={c.bloqueo === null}
+          puedeResponder={c.bloqueo === null && !c.faltaDireccion}
           puedeOperar={c.puedeOperar}
           maxCaracteres={c.maxCaracteres}
         />
@@ -108,8 +120,12 @@ function Mensaje({
         m.deNosotros ? "border-border bg-surface-2" : "border-border bg-surface"
       }`}
     >
-      <p className="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-2">
-        <span>{m.deNosotros ? t.conversacion.tu : null}</span>
+      <p className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-ink-2">
+        {/* Quién habló, siempre (Front, Superhuman): en un correo con varias personas no se adivina. */}
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className={`min-w-0 break-all ${m.deNosotros ? "" : "font-medium text-ink"}`}>{m.de}</span>
+          {m.noEsLaFicha ? <Pill kind="warn">{m.noEsLaFicha}</Pill> : null}
+        </span>
         <time className="tabular-nums">{m.cuando}</time>
       </p>
       {m.asunto ? (
@@ -126,6 +142,7 @@ function Mensaje({
             {m.clasificacion ? <span className="text-xs text-ink-2">{m.clasificacion}</span> : null}
           </div>
           {m.porque ? <p className="text-xs text-ink-2">{m.porque}</p> : null}
+          {m.bajaDeTercero ? <p className="text-xs text-ink">{m.bajaDeTercero}</p> : null}
           {m.vuelve ? <p className="text-xs text-ink-2">{m.vuelve}</p> : null}
           {m.enfria ? <p className="text-xs text-ink-2">{m.enfria}</p> : null}
           {m.referido ? (

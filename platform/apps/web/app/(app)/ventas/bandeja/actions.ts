@@ -84,6 +84,8 @@ function explicar(r: Extract<ReplyResult, { ok: false }>): ResultadoBandeja {
       return { ok: false, error: t.errores.placeholders(r.detail ?? ""), field: "body" };
     case "not_found":
       return { ok: false, error: t.errores.not_found };
+    case "no_postal_address":
+      return { ok: false, error: t.errores.no_postal_address };
     default:
       return { ok: false, error: t.responder.bloqueos[r.code] };
   }
@@ -117,22 +119,25 @@ export async function responder(input: z.input<typeof responderSchema>): Promise
 }
 
 const toqueSchema = z.object({ touchId: z.string().regex(UUID_RE) });
+/** «Editar» es un booleano de verdad: un valor cualquiera que llegue del navegador no descarta la respuesta. */
+const cancelarSchema = toqueSchema.extend({ editar: z.boolean().optional() });
 
 export type ResultadoCancelar = { ok: true; notice: string; body: string } | { ok: false; error: string };
 
 /** «Cancelar» (y «Editar», que cancela y devuelve el texto): la respuesta en cola no sale. */
-export async function cancelarRespuesta(input: z.input<typeof toqueSchema> & { editar?: boolean }): Promise<ResultadoCancelar> {
+export async function cancelarRespuesta(input: z.input<typeof cancelarSchema>): Promise<ResultadoCancelar> {
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
-  const parsed = toqueSchema.safeParse(input);
+  const parsed = cancelarSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: t.errores.accion };
+  const editar = parsed.data.editar === true;
   try {
     // «Editar» es transparente (Superhuman): la respuesta vuelve al campo y no queda en «no salió».
     const r = await withWorkspace((tx) =>
-      cancelInboxReply(tx, parsed.data.touchId, input.editar ? { dismissAt: new Date() } : {}),
+      cancelInboxReply(tx, parsed.data.touchId, editar ? { dismissAt: new Date() } : {}),
     );
     revalidatePath(RUTA);
     if (!r.ok) return { ok: false, error: r.code === "not_cancelable" ? t.errores.not_cancelable : t.errores.not_found };
-    return { ok: true, notice: input.editar ? t.responder.aEditar : t.responder.cancelada, body: r.body };
+    return { ok: true, notice: editar ? t.responder.aEditar : t.responder.cancelada, body: r.body };
   } catch (err) {
     console.error("[ventas/bandeja] cancelar respuesta", err);
     return { ok: false, error: t.errores.accion };

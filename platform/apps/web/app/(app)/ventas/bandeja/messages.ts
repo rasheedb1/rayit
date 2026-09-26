@@ -103,6 +103,14 @@ export const MESSAGES = {
     negocio: (etapa: string) => `Negocio: ${etapa}`,
     siguiente: (accion: string) => `Siguiente acción: ${accion}`,
     tu: "Tú",
+    /** Quien respondió sin que el proveedor dijera su dirección y no es la ficha. */
+    otraPersona: "Otra persona",
+    /** La marca junto al remitente cuando no es la ficha (un colega, un tercero en copia). */
+    noEsLaFicha: (persona: string) => `no es ${persona}`,
+    /** Una baja que pidió un tercero: la ficha no quedó de baja y lo decide una persona. */
+    bajaDeTercero: (quien: string) =>
+      `Lo pidió ${quien}, no la ficha: la cadencia se detuvo y la ficha sigue sin baja. Decide tú con «Corregir».`,
+    bajaSinFicha: "La ficha no quedó de baja: la cadencia se detuvo. Decide tú con «Corregir».",
     asunto: "Asunto",
     /** «Clasificada por la IA · 94 %». */
     clasificada: (fuente: string, confianza: string | null) => (confianza ? `Clasificada por ${fuente} · ${confianza}` : `Clasificada por ${fuente}`),
@@ -124,13 +132,17 @@ export const MESSAGES = {
     label: "Qué pide esta respuesta",
     guardar: "Guardar",
     cancelar: "Cancelar",
+    /** Con la confirmación de la baja abierta, el botón que cierra «Corregir» no se llama igual que el suyo. */
+    cerrar: "Cerrar",
+    /** La opción de baja en «Corregir»: lo que hace. */
+    opcionBaja: "Pidió la baja: dar de baja a la ficha",
     ayuda: "Se aplica como si hubiera llegado así: interesada mueve el negocio, ahora no enfría la cadencia. El negocio no retrocede solo.",
     bajaPregunta: "¿Dar de baja a esta persona?",
     bajaConsecuencia: "No le vuelves a escribir desde On Cue por ningún canal y se cancela lo que tenía pendiente. No se puede deshacer.",
     bajaConfirmar: "Sí, dar de baja",
     listo: (intencion: string) => `Intención corregida: ${intencion}.`,
     listoMovido: (intencion: string) => `Intención corregida: ${intencion}. El negocio pasó a «En conversación».`,
-    bajaNoSeCorrige: "Una baja no se corrige: la ficha ya no recibe mensajes.",
+    bajaNoSeCorrige: "La ficha está de baja: ya no recibe mensajes y eso no se corrige.",
     vuelta: "Vuelve el",
     vueltaAyuda: "Opcional. Vacía, se lee del mensaje; sin fecha en el mensaje, la cadencia sigue en 7 días.",
   },
@@ -166,6 +178,16 @@ export const MESSAGES = {
       no_inbound: "Todavía no hay un mensaje suyo al que responder.",
       no_account: "La cuenta que recibió este mensaje no está conectada: reconéctala para responder.",
     },
+    /** Un correo sale con el pie de baja y su dirección postal (VEN-15): sin ella no se responde. */
+    faltaDireccion: "Falta tu dirección postal para el pie de los correos: guárdala en la política de envío para responder.",
+    irADireccion: "Guardar la dirección postal",
+    /** Una respuesta que el envío retuvo: por qué, y que también espera en la bandeja de aprobación. */
+    retenida: (motivo: string) => `${motivo}. También espera en tu bandeja de aprobación.`,
+    retenidaSinMotivo: "El envío la retuvo. Espera en tu bandeja de aprobación.",
+    irAAprobaciones: "Ir a aprobaciones",
+    /** j, k, e o Esc con una respuesta escrita: la primera vez avisa; la segunda, sigue. */
+    borradorPendiente: (tecla: string) =>
+      `Tienes una respuesta sin enviar. Queda guardada en esta conversación: pulsa ${tecla} otra vez para seguir.`,
     estados: {
       scheduled: "En cola",
       processing: "Enviándose",
@@ -203,7 +225,8 @@ export const MESSAGES = {
     placeholders: (huecos: string) => `Quedan huecos sin rellenar: ${huecos}.`,
     not_found: "Esa conversación ya no existe.",
     not_cancelable: "Ya no se puede cancelar: está saliendo o ya salió.",
-    opted_out: "Una baja no se corrige: la ficha ya no recibe mensajes.",
+    opted_out: "La ficha está de baja: ya no recibe mensajes y eso no se corrige.",
+    no_postal_address: "Falta tu dirección postal para el pie de los correos: guárdala en la política de envío para responder.",
     referidoGenerico: "No pudimos crear el contacto. Inténtalo de nuevo.",
     already_created: "Ese contacto ya se creó.",
     DuplicateEmail: "Ya tienes un contacto con ese correo.",

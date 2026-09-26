@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
+import type { BandejaChannel } from "@mc/db/queries/bandejas";
 import { Button } from "@/components/ui/button";
 import { ConfirmInline } from "@/components/ui/confirm-inline";
 import { DateInput } from "@/components/ui/date-input";
@@ -11,9 +12,12 @@ import { escribiendo } from "@/lib/teclado";
 import { Aviso } from "../../_lib/aviso";
 import { corregirIntencion, marcarHecho, type ResultadoBandeja } from "./actions";
 import { MESSAGES, VISTAS, type Intencion, type VistaBandeja } from "./messages";
-import { enfocarRespuesta, ESCRITORIO } from "./responder";
+import { avisarBorrador, enfocarRespuesta, ESCRITORIO, hayRespuestaSinEnviar } from "./responder";
 
 const t = MESSAGES;
+
+/** Cuánto vale la primera pulsación que avisó del borrador: la segunda, dentro de este plazo, sigue. */
+export const BORRADOR_CONFIRMA_MS = 5000;
 
 /**
  * El teclado de la bandeja, el de Superhuman: j y k abren el hilo
@@ -23,6 +27,11 @@ const t = MESSAGES;
  * La leyenda solo se ve con teclado (desde sm). Si la página abrió el
  * hilo sola (activoSoloEscritorio), en un teléfono no se ve: j abre el
  * primero de la lista, no el segundo.
+ *
+ * Una respuesta escrita y sin enviar no se pierde: queda guardada en su
+ * hilo (responder.tsx) y, además, j, k, e y Escape la primera vez solo
+ * avisan («Tienes una respuesta sin enviar»); la misma tecla otra vez, en
+ * unos segundos, sigue.
  */
 export function AtajosBandeja({
   hrefs, activo, listaHref, activoSoloEscritorio = false, puedeOperar = true,
@@ -41,6 +50,18 @@ export function AtajosBandeja({
   });
 
   useEffect(() => {
+    let armado: { key: string; at: number } | null = null;
+    /** Con una respuesta sin enviar, la primera pulsación avisa y la segunda sigue. */
+    function puedeSalir(key: string): boolean {
+      if (!hayRespuestaSinEnviar()) return true;
+      if (armado && armado.key === key && Date.now() - armado.at < BORRADOR_CONFIRMA_MS) {
+        armado = null;
+        return true;
+      }
+      armado = { key, at: Date.now() };
+      avisarBorrador(key === "Escape" ? "Esc" : key);
+      return false;
+    }
     function onKey(e: KeyboardEvent) {
       // Lo que ya atendió otro (Escape en una confirmación abierta) no es un atajo.
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
@@ -53,14 +74,14 @@ export function AtajosBandeja({
           return;
         }
         e.preventDefault();
-        router.push(volver);
+        if (puedeSalir(e.key)) router.push(volver);
         return;
       }
       if (escribiendo(e.target)) return;
       if ((e.key === "j" || e.key === "k") && lista.length > 0) {
         e.preventDefault();
         const siguiente = i < 0 ? 0 : e.key === "j" ? Math.min(i + 1, lista.length - 1) : Math.max(i - 1, 0);
-        if (siguiente !== i) router.push(lista[siguiente]!);
+        if (siguiente !== i && puedeSalir(e.key)) router.push(lista[siguiente]!);
         return;
       }
       if (e.key === "r") {
@@ -73,7 +94,7 @@ export function AtajosBandeja({
         const boton = document.querySelector<HTMLElement>('[data-accion="hecho"] button');
         if (!boton) return;
         e.preventDefault();
-        boton.click();
+        if (puedeSalir(e.key)) boton.click();
       }
     }
     window.addEventListener("keydown", onKey);
@@ -107,10 +128,17 @@ export function FiltroVista({ vista }: { vista: VistaBandeja }) {
   );
 }
 
-/** «Marcar como hecha» (la tecla e) o «Reabrir»: el hilo sale de los pendientes o vuelve. */
+/**
+ * «Marcar como hecha» (la tecla e) o «Reabrir»: el hilo sale de los
+ * pendientes o vuelve. En la vista de pendientes, hecha pasa a la
+ * siguiente conversación (`siguienteHref`: la de detrás, la de delante si
+ * era la última, o la lista), como «e» en Superhuman: la que se marcó ya
+ * no está en la lista y quedarse en ella dejaba a j sin sitio.
+ */
 export function MarcarHecha({
-  contactId, channel, hecha,
-}: { contactId: string; channel: "email" | "linkedin" | "instagram_dm"; hecha: boolean }) {
+  contactId, channel, hecha, siguienteHref = null,
+}: { contactId: string; channel: BandejaChannel; hecha: boolean; siguienteHref?: string | null }) {
+  const router = useRouter();
   const [pending, start] = useTransition();
   const [resultado, setResultado] = useState<ResultadoBandeja | null>(null);
   return (
@@ -120,7 +148,13 @@ export function MarcarHecha({
           size="sm"
           variant={hecha ? "ghost" : "primary"}
           loading={pending}
-          onClick={() => start(async () => setResultado(await marcarHecho({ contactId, channel, done: !hecha })))}
+          onClick={() =>
+            start(async () => {
+              const r = await marcarHecho({ contactId, channel, done: !hecha });
+              setResultado(r);
+              if (r.ok && !hecha && siguienteHref) router.push(siguienteHref);
+            })
+          }
         >
           {hecha ? t.conversacion.reabrir : t.conversacion.marcarHecha}
         </Button>
@@ -198,7 +232,7 @@ export function CorregirIntencion({
           <ConfirmInline
             action={async () => aplicar("unsubscribe")}
             label={t.corregir.guardar}
-            variant="primary"
+            variant="danger"
             question={t.corregir.bajaPregunta}
             consequence={t.corregir.bajaConsecuencia}
             confirmLabel={t.corregir.bajaConfirmar}
@@ -210,8 +244,9 @@ export function CorregirIntencion({
             {t.corregir.guardar}
           </Button>
         )}
+        {/* Con la baja elegida, la confirmación trae su propio «Cancelar»: este cierra «Corregir» y no se llama igual. */}
         <Button size="sm" variant="ghost" onClick={() => setAbierto(false)}>
-          {t.corregir.cancelar}
+          {elegida === "unsubscribe" ? t.corregir.cerrar : t.corregir.cancelar}
         </Button>
       </div>
     </div>

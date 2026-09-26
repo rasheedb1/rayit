@@ -71,6 +71,8 @@ describe("responder", () => {
     expect(await responder(input)).toEqual({ ok: false, error: t.responder.bloqueos.opted_out });
     replyInInboxThread.mockResolvedValue({ ok: false, code: "not_found" });
     expect(await responder(input)).toEqual({ ok: false, error: t.errores.not_found });
+    replyInInboxThread.mockResolvedValue({ ok: false, code: "no_postal_address" });
+    expect(await responder(input)).toEqual({ ok: false, error: t.errores.no_postal_address });
   });
 
   it("el tope es el de @mc/db: una más larga vuelve a su campo, sin llegar a la base", async () => {
@@ -97,6 +99,12 @@ describe("las demás acciones", () => {
     expect(cancelInboxReply.mock.calls[1]![2]).toEqual({});
     cancelInboxReply.mockResolvedValue({ ok: false, code: "not_cancelable" });
     expect(await cancelarRespuesta({ touchId: TOUCH })).toEqual({ ok: false, error: t.errores.not_cancelable });
+  });
+
+  it("«editar» pasa por el esquema: un valor que no es un booleano no descarta la respuesta ni llega a la base", async () => {
+    cancelInboxReply.mockReset();
+    expect(await cancelarRespuesta({ touchId: TOUCH, editar: "sí" } as never)).toEqual({ ok: false, error: t.errores.accion });
+    expect(cancelInboxReply).not.toHaveBeenCalled();
   });
 
   it("corregir: solo una de las seis intenciones; una baja no se corrige; si el negocio se movió, lo dice", async () => {

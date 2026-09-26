@@ -5,11 +5,11 @@
  * nada. Puro: lo prueba bandeja.test.tsx.
  */
 import {
-  INBOX_REPLY_MAX_CHARS, type ClassifierStatus, type InboxConversation, type InboxFilter, type InboxThread, type PendingReply,
-  type ReplyBlock,
+  INBOX_REPLY_MAX_CHARS, type BandejaChannel, type ClassifierStatus, type InboxConversation, type InboxFilter, type InboxThread,
+  type PendingReply, type ReplyBlock,
 } from "@mc/db/queries/bandejas";
 import type { MessageIntent } from "@mc/core/outreach/intent";
-import { channelLabel, noticeLang } from "@mc/core/outreach/messages";
+import { channelLabel, holdReasonText, noticeLang, type NoticeLang } from "@mc/core/outreach/messages";
 import type { Formatter } from "@/lib/format";
 import { INTENCIONES, MESSAGES, VISTAS, type Intencion, type IntencionClave, type VistaBandeja } from "./messages";
 
@@ -107,6 +107,20 @@ export function hiloVista(
   };
 }
 
+/**
+ * Adónde pasa «Marcar como hecha» (y la tecla e) en la vista de
+ * pendientes: la conversación de detrás de la abierta, o la de delante si
+ * era la última, o la lista si era la única. En «Hechas» y «Todas» la
+ * conversación sigue en la lista: se queda (null). Una abierta que no está
+ * en la lista (por URL) también se queda.
+ */
+export function siguienteTrasHecha(hilos: readonly HiloVista[], vista: VistaBandeja, lista: string): string | null {
+  if (vista !== "pendientes") return null;
+  const i = hilos.findIndex((h) => h.activo);
+  if (i < 0) return null;
+  return hilos[i + 1]?.href ?? hilos[i - 1]?.href ?? lista;
+}
+
 export interface ReferidoVista {
   propuesta: string;
   nombre: string | null;
@@ -125,6 +139,14 @@ export interface ReferidoVista {
 export interface MensajeVista {
   id: string;
   deNosotros: boolean;
+  /**
+   * Quién lo escribió: «Tú», el nombre de la ficha, o la dirección de quien
+   * respondió si no es ella (un colega, un tercero en copia). Front y
+   * Superhuman siempre dicen quién habló.
+   */
+  de: string;
+  /** Lo escribió alguien que no es la ficha: «no es Paula Restrepo». */
+  noEsLaFicha: string | null;
   asunto: string | null;
   cuerpo: string;
   cuando: string;
@@ -136,7 +158,12 @@ export interface MensajeVista {
   vuelve: string | null;
   enfria: string | null;
   referido: ReferidoVista | null;
-  /** Se puede corregir la intención (una respuesta que no es una baja). */
+  /**
+   * La baja la pidió alguien que no es la ficha: la cadencia se detuvo y
+   * la ficha NO quedó de baja; lo decide una persona con «Corregir».
+   */
+  bajaDeTercero: string | null;
+  /** Se puede corregir la intención: todo, salvo una baja con la ficha ya de baja. */
   corregible: boolean;
 }
 
@@ -146,13 +173,15 @@ export interface PendienteVista {
   cuerpo: string;
   /** Todavía espera su turno: se puede cancelar o editar. */
   cancelable: boolean;
-  /** Por qué no salió (solo en las que no salieron). */
+  /** Por qué no salió, o por qué la retuvo el envío. */
   motivo: string | null;
+  /** La retuvo el despachador: también espera en la bandeja de aprobación. */
+  retenida: boolean;
 }
 
 export interface ConversacionVista {
   contactId: string;
-  channel: string;
+  channel: BandejaChannel;
   persona: string;
   empresa: string;
   canal: string;
@@ -163,6 +192,8 @@ export interface ConversacionVista {
   porSalir: PendienteVista[];
   noSalieron: PendienteVista[];
   bloqueo: ReplyBlock | null;
+  /** Un correo sin la dirección postal del pie: no se puede responder hasta guardarla en la política. */
+  faltaDireccion: boolean;
   cuenta: string | null;
   envioApagado: boolean;
   /** La clasificación con IA no está encendida: se dice arriba y no se promete. */
@@ -193,15 +224,33 @@ export function enrolarHrefDe(c: Pick<InboxConversation, "sequenceId" | "company
   return `/ventas/cadencias/${c.sequenceId}${qs ? `?${qs}` : ""}#enrolar`;
 }
 
-function pendienteVista(p: PendingReply): PendienteVista {
+/**
+ * Por qué no salió (o por qué espera): lo que no salió, con el
+ * blocked_reason; lo retenido por el despachador, con el held_reason en
+ * palabras del motor (la misma frase de la bandeja de aprobación, donde
+ * también espera). Lo que solo está en cola no lleva motivo.
+ */
+function motivoPendiente(p: PendingReply, lang: NoticeLang): string | null {
   const t = MESSAGES.responder;
-  const noSalio = p.status === "failed" || p.status === "canceled";
+  if (p.status === "failed" || p.status === "canceled") {
+    return p.blockedReason ? t.motivos[p.blockedReason] ?? t.motivoGenerico : t.motivoGenerico;
+  }
+  if (p.status === "held") {
+    const frase = p.heldReason ? holdReasonText(lang, p.heldReason, "queue_edit_only") : null;
+    return frase ? t.retenida(`${frase.charAt(0).toUpperCase()}${frase.slice(1)}`) : t.retenidaSinMotivo;
+  }
+  return null;
+}
+
+function pendienteVista(p: PendingReply, lang: NoticeLang): PendienteVista {
+  const t = MESSAGES.responder;
   return {
     touchId: p.touchId,
     estado: t.estados[p.status] ?? p.status,
     cuerpo: p.body,
     cancelable: p.cancelable,
-    motivo: noSalio ? (p.blockedReason ? t.motivos[p.blockedReason] ?? t.motivoGenerico : t.motivoGenerico) : null,
+    motivo: motivoPendiente(p, lang),
+    retenida: p.status === "held",
   };
 }
 
@@ -212,18 +261,23 @@ export function conversacionVista(
 ): ConversacionVista {
   const t = MESSAGES;
   const apagado = opts.clasificador === "off";
+  const lang = noticeLang(f.locale);
+  const persona = c.contactName ?? c.companyName;
   return {
     contactId: c.contactId,
     channel: c.channel,
-    persona: c.contactName ?? c.companyName,
+    persona,
     empresa: c.companyName,
-    canal: channelLabel(noticeLang(f.locale), c.channel),
+    canal: channelLabel(lang, c.channel),
     fichaHref: `/ventas/empresas/${c.companyId}`,
     negocio: c.deal ? t.conversacion.negocio(c.deal.stageLabel) : null,
     siguiente: c.deal?.nextAction ? t.conversacion.siguiente(c.deal.nextAction) : null,
     mensajes: c.messages.map((m): MensajeVista => {
       const entrante = m.direction === "inbound";
       const r = m.referral;
+      // Un tercero: la dirección que dio el proveedor («Otra Persona <otra@marca.test>» se lee tal cual).
+      const tercero = entrante && !m.fromContact ? (m.fromAddress?.trim() || t.conversacion.otraPersona) : null;
+      const bajaDeTercero = entrante && m.intent === "unsubscribe" && !c.contactOptedOut;
       const quien = r ? [r.name, r.email].filter(Boolean).join(" · ") : "";
       const clasificacion = !entrante
         ? null
@@ -242,6 +296,8 @@ export function conversacionVista(
       return {
         id: m.id,
         deNosotros: !entrante,
+        de: !entrante ? t.conversacion.tu : tercero ?? persona,
+        noEsLaFicha: tercero ? t.conversacion.noEsLaFicha(persona) : null,
         asunto: m.subject,
         cuerpo: m.body,
         cuando: f.dateTime(m.occurredAt.toISOString()),
@@ -263,12 +319,19 @@ export function conversacionVista(
                 contactoHref: m.referralContactId ? `/ventas/empresas/${c.companyId}#contactos` : null,
               }
             : null,
-        corregible: entrante && m.intent !== "unsubscribe",
+        bajaDeTercero: bajaDeTercero
+          ? tercero
+            ? t.conversacion.bajaDeTercero(tercero)
+            : t.conversacion.bajaSinFicha
+          : null,
+        // Una baja se corrige solo mientras la ficha no esté de baja (la pidió un tercero): la de la ficha es de una sola dirección.
+        corregible: entrante && !(m.intent === "unsubscribe" && c.contactOptedOut),
       };
     }),
-    porSalir: c.pending.map(pendienteVista),
-    noSalieron: c.notSent.map(pendienteVista),
+    porSalir: c.pending.map((p) => pendienteVista(p, lang)),
+    noSalieron: c.notSent.map((p) => pendienteVista(p, lang)),
     bloqueo: c.replyBlock,
+    faltaDireccion: c.postalAddressMissing,
     cuenta: c.accountName,
     envioApagado: c.sendingOff,
     clasificadorApagado: apagado,
@@ -277,7 +340,8 @@ export function conversacionVista(
     // abierto por URL que no está en la vista actual también se marca leído.
     sinLeer: c.unread,
     implicita: opts.implicita === true,
-    opcionesIntencion: INTENCIONES.map((i) => ({ value: i, label: t.intenciones[i].label })),
+    // En «Corregir», la baja se dice por lo que hace: da de baja a la ficha (la pidiera ella o un tercero).
+    opcionesIntencion: INTENCIONES.map((i) => ({ value: i, label: i === "unsubscribe" ? t.corregir.opcionBaja : t.intenciones[i].label })),
     puedeOperar: opts.puedeOperar !== false,
     maxCaracteres: INBOX_REPLY_MAX_CHARS,
   };

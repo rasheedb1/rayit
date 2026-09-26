@@ -13,7 +13,7 @@ import { AtajosBandeja, FiltroVista } from "./acciones";
 import { Conversacion } from "./conversacion";
 import { ListaHilos } from "./lista";
 import { MESSAGES } from "./messages";
-import { columnaListaClase, conversacionVista, FILTRO, hiloVista, listaHref, vistaDe } from "./vista";
+import { columnaListaClase, conversacionVista, FILTRO, hiloVista, listaHref, siguienteTrasHecha, vistaDe } from "./vista";
 
 export const metadata: Metadata = { title: MESSAGES.metaTitle };
 export const dynamic = "force-dynamic";
@@ -61,6 +61,8 @@ export default async function BandejaPage({
   // teléfono la lista no la marca como elegida (hiloVista, ListaHilos).
   const vistas = hilos.map((h) => hiloVista(h, f, `${h.contactId}:${h.channel}` === abierto, vista, implicita));
   const volver = listaHref(vista);
+  // «Marcar como hecha» en pendientes pasa a la siguiente conversación (la marcada sale de la lista).
+  const trasHecha = siguienteTrasHecha(vistas, vista, volver);
   // Elegida a mano, en un teléfono se ve la conversación; abierta sola, la lista.
   const conversacionVisible = conversacion !== null && !implicita;
 
@@ -107,6 +109,7 @@ export default async function BandejaPage({
               key={abierto}
               c={conversacionVista(conversacion, f, { clasificador, implicita, puedeOperar })}
               volverHref={volver}
+              trasHecha={trasHecha}
             />
           ) : (
             <EmptyState title={t.conversacion.elige.title} description={t.conversacion.elige.description} />
