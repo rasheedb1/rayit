@@ -630,10 +630,11 @@ async function revisionFinal() {
 // ---------------------------------------------------------------------
 const ALCANCE_PULIDO = `
 ALCANCE DE ESTE PULIDO (lee con cuidado)
-- Lo que se califica es lo que YA está construido en ${RAMA_INTEGRACION}: cimientos y aislamiento por fila (CIM-1, CIM-2, CIM-6 y el pase de endurecimiento: migraciones 0024, 0025, 0026, 0029 y la guardia de packages/db/src/esquema.ts), autenticación y workspaces (CIM-3, migraciones 0027 y 0028), Resumen e importación CSV (RES-1, RES-2), Cotizar (COT-1 a COT-4, migración 0030) y el CRM base de Ventas (VEN-1 a VEN-3).
-- NO se califica lo que todavía no existe (VEN-4 en adelante, cadencias, canales, fases 4 a 6) ni los módulos de Nicolás (Conexiones, Campañas, Finanzas), salvo que algo nuestro los rompa.
-- Supabase está a propósito en 0022: las migraciones 0024 a 0030 NO se aplican en este pulido. Nadie corre \`make db.migrate\` ni escribe en Supabase. Para probar la app con el esquema completo usa una base local con todas las migraciones y el seed (Postgres embebido/pglite, como hacen las pruebas y \`make db.check\`); si no es posible levantar la web contra ella, dilo y evalúa con pruebas de integración.
-- Lo que depende de una persona no baja la nota si el código está listo, muestra un estado claro de «no configurado» y figura como pendiente humano en la note de backlog.ts: la llave de CAPTCHA (Turnstile), el visto bueno de Nicolás a los cambios en su carpeta, crear el rol mc_public_share con supabase-admin, aplicar 0024–0030 y las Redirect URLs de Supabase Auth.
+- Lo que se califica es TODO lo de Rasheed ya integrado en ${RAMA_INTEGRACION}: cimientos y aislamiento por fila (CIM-1/2/3/6, la guardia de packages/db/src/esquema.ts), Resumen e importación CSV (RES-1/2/5/6), Cotizar (COT-1..4), el CRM (VEN-1..5) y el outreach completo de docs/ventas-outreach.md: esquema de outreach, canales Gmail/Unipile (VEN-9), motor de cadencias (VEN-10), entregabilidad y baja (VEN-15), perfil comercial (VEN-11), generación trazable (VEN-12), recomendador (VEN-13), bandejas (VEN-14), actividad y métricas (VEN-16), brief y conversión (VEN-7/8).
+- NO se califican los módulos de Nicolás (Conexiones, Campañas, Finanzas, Accesos), salvo que algo nuestro los rompa.
+- Supabase está a propósito en 0033 (producción corre main sobre esa base). Las migraciones 0034 en adelante NO están aplicadas en ningún sitio y se pueden corregir en su propio archivo; nadie corre \`make db.migrate\` ni escribe en Supabase. Para probar la app con el esquema completo usa una base local con todas las migraciones y los seeds (Postgres embebido/pglite, como las pruebas y \`make db.check\`); si no puedes levantar la web contra ella, dilo y evalúa con pruebas de integración.
+- Las llaves de Google, Unipile y Anthropic pueden faltar: se juzga el comportamiento con los dobles y el estado claro de «no configurado», no la conexión real.
+- Lo que depende de una persona no baja la nota si el código está listo, muestra un estado claro de «no configurado» y figura como pendiente humano en la note de backlog.ts: llaves externas (Turnstile, Google OAuth, Unipile, Anthropic, SMTP), el visto bueno de Nicolás a cambios en su carpeta, aplicar las migraciones pendientes, los GRANT con supabase-admin y las Redirect URLs de Supabase Auth.
 `
 
 function promptCorregirPulido(area, findings, ronda) {
@@ -646,7 +647,7 @@ ${CONTEXTO}
 ${ALCANCE_PULIDO}
 FINDINGS (si uno ya está resuelto en ${RAMA_INTEGRACION} o te parece equivocado, dilo en decisions con evidencia, no lo ignores):
 ${lista}
-REGLAS DE MIGRACIONES: 0001–0022 están aplicadas y son inmutables. 0024–0030 NO están aplicadas en ningún sitio, así que puedes corregirlas en su propio archivo en vez de crear una nueva, conservando el orden. Si necesitas una migración nueva, usa 0031 en adelante y dilo en decisions (otras áreas corren en paralelo: si dos eligen el mismo número, el integrador renumera). Siempre \`make db.check\`.
+REGLAS DE MIGRACIONES: 0001–0033 están aplicadas y son inmutables. 0034 en adelante NO están aplicadas en ningún sitio, así que corrígelas en su propio archivo en vez de crear una nueva, conservando el orden. Si necesitas una migración nueva, usa el siguiente número libre y dilo en decisions (otras áreas corren en paralelo: si dos eligen el mismo número, el integrador renumera). Siempre \`make db.check\`.
 PROTOCOLO: estás en un worktree limpio sobre ${RAMA_INTEGRACION}. \`git checkout -b ${branch} ${RAMA_INTEGRACION}\`; \`cd platform && pnpm install\`; resuelve tocando solo los archivos de tu área (si un arreglo exige tocar otra, hazlo mínimo y dilo en decisions); en platform/backlog.ts cambia solo las notas de las historias de tu área y déjalas cortas; corre \`make db.check\`, \`pnpm verificar\` y \`pnpm --filter @mc/web build\` en verde; commits en español con el id de la historia; \`git checkout --detach\`.
 Devuelve el JSON del esquema con la rama (${branch}) y el SHA.`
 }
@@ -669,8 +670,8 @@ Devuelve el JSON del esquema.`
 
 function promptRevisionPulido(lente, ronda) {
   const foco = lente === 'tecnico'
-    ? `LENTE TÉCNICO. Corre \`make db.check\`, \`pnpm verificar\` y \`pnpm --filter @mc/web build\`. Lee \`git diff main...${RAMA_INTEGRACION} --stat\` y revisa, dentro del alcance: aislamiento por fila en cada consulta y cada tabla (la guardia de esquema.ts debe quedar activa y sin falsos verdes), el orden y la idempotencia de 0024–0030 sobre una base en 0022, autenticación (redirecciones, sesión, identidad, alta de workspace), validación de entradas, secretos, formularios públicos (media kit y cotización), duplicación entre módulos y tipos débiles.`
-    : `LENTE DE PRODUCTO. Recorre, dentro del alcance, como un creador nuevo y luego como la creadora del seed: entrar; workspace vacío; Resumen con periodos y redes e importar un CSV (también el mismo archivo dos veces); Ventas (empresas, contactos, radar, pipeline); Cotizar con tarifario, media kit público y cotización pública con su aceptación en una ventana sin sesión; cambio de workspace; cerrar sesión. Comprueba coherencia entre módulos (mismas cifras, moneda y nombres), tema claro y oscuro, 400 px y teclado.`
+    ? `LENTE TÉCNICO. Corre \`make db.check\`, \`pnpm verificar\` y \`pnpm --filter @mc/web build\`. Lee \`git diff main...${RAMA_INTEGRACION} --stat\` y revisa, dentro del alcance: aislamiento por fila en cada consulta y cada tabla (la guardia de esquema.ts debe quedar activa y sin falsos verdes), que 0034 en adelante apliquen en orden y limpias sobre una base en 0033, el outreach (cola con reclamo atómico, topes por canal y por buzón, baja respetada en todos los canales y sin forma de apagarla desde la web, webhooks firmados, secretos cifrados, costo de LLM con tope), autenticación (redirecciones, sesión, identidad, alta de workspace), validación de entradas, secretos, formularios públicos (media kit y cotización), duplicación entre módulos y tipos débiles.`
+    : `LENTE DE PRODUCTO. Recorre, dentro del alcance, como un creador nuevo y luego como la creadora del seed: entrar; workspace vacío; Resumen con periodos y redes e importar un CSV (también el mismo archivo dos veces); Ventas de punta a punta (empresas, contactos, radar, pipeline, ficha, siguiente acción; canales en estado «no configurado» y con los dobles; perfil comercial; brief; proponer y activar una cadencia desde una señal; bandeja de aprobación con un mensaje retenido; respuestas; política y baja pública; actividad y métricas; negocio perdido y conversión); Cotizar con tarifario, media kit público y cotización pública con su aceptación en una ventana sin sesión; cambio de workspace; cerrar sesión. Comprueba coherencia entre módulos (mismas cifras, moneda y nombres), tema claro y oscuro, 400 px y teclado.`
   return `Eres el revisor del pulido sobre ${RAMA_INTEGRACION}, ronda ${ronda}. Trabajas en un worktree limpio: \`git checkout --detach ${RAMA_INTEGRACION}\`; \`cd platform && pnpm install\`. No modifiques nada.
 ${CONTEXTO}
 ${ALCANCE_PULIDO}
@@ -731,7 +732,7 @@ log(`Repositorio listo en ${RAMA_INTEGRACION} (${prep.commit})`)
 
 if (args && args.pulir) {
   const pul = await pulir(args.pulir)
-  return { ok: pul.ok, umbral: UMBRAL, pulido: pul, siguiente: 'Confirmar con Rasheed: crear el rol mc_public_share, aplicar 0024–0030 en Supabase, correr la guardia contra Supabase, merge a main y deploy.' }
+  return { ok: pul.ok, umbral: UMBRAL, pulido: pul, siguiente: 'Confirmar con Rasheed: GRANT mc_worker TO mc_migrator, aplicar 0034+ en Supabase, seeds, guardia contra Supabase, merge a main y deploy.' }
 }
 
 const resultado = { ok: true, umbral: UMBRAL, fases: {} }
