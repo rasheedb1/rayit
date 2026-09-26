@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { ChevronRight, Plus } from "lucide-react";
+import { OUTREACH_URLS } from "@mc/core/outreach/messages";
 import type { ChannelAccountRow } from "@mc/db/queries/canales";
 import { getChannelPolicyCaps, isLiveChannelStatus, listChannelAccounts } from "@mc/db/queries/canales";
 import { PageHeader, SectionTitle } from "@/components/page-header";
@@ -113,10 +115,10 @@ function Hints({ row, adminDetails, quiet }: { row: ChannelRowView; adminDetails
   );
 }
 
-/** «Máximo 140 (política del espacio)»: el máximo y quién lo fija, igual para el diario y el semanal (la vista lo dice, 0045). */
+/** «Máximo 140 (política del espacio). Vacío = el máximo.»: el máximo y quién lo fija, igual para el diario y el semanal (la vista lo dice, 0045). */
 function maxHelp(by: "policy" | "provider", personal: boolean, n: string, provider: string): string {
   const max = MESSAGES.caps.max;
-  return by === "policy" ? max.policy(n) : personal ? max.personal(n) : max.provider(n, provider);
+  return MESSAGES.caps.help(by === "policy" ? max.policy(n) : personal ? max.personal(n) : max.provider(n, provider));
 }
 
 /**
@@ -145,7 +147,6 @@ function Manage({ row, live, f }: { row: ChannelRowView; live: ChannelAccountRow
           dailyPlaceholder={f.int(l.maxDaily)}
           weeklyPlaceholder={f.int(l.maxWeekly)}
         />
-        <p className="text-xs text-fg-3">{MESSAGES.caps.emptyMeansMax}</p>
         <div className="border-t border-line pt-3">
           <Desconectar accountId={live.id} account={name} />
         </div>
@@ -273,7 +274,16 @@ export default async function CanalesPage({ searchParams }: { searchParams: Prom
         <AvisoConexion {...banner} />
         {quiet && <p className="text-sm text-warn">{MESSAGES.detail.allUnavailable}</p>}
         {!canManage && <p className="text-sm text-fg-2">{MESSAGES.detail.readOnly}</p>}
-        {!policy.enabled && <p className="text-sm text-fg-2">{MESSAGES.policyOff}</p>}
+        {!policy.enabled && (
+          // Sin salida era un callejón: dice dónde se encienden (el interruptor de la política).
+          <p className="text-sm text-fg-2">
+            {MESSAGES.policyOff.text}{" "}
+            <Link href={OUTREACH_URLS.policySwitch} className="font-medium text-fg underline underline-offset-2 hover:text-accent">
+              {MESSAGES.policyOff.link}
+            </Link>
+            .
+          </p>
+        )}
         <section>
           <SectionTitle>{MESSAGES.section}</SectionTitle>
           <ul className="divide-y divide-line rounded-md border border-line bg-surface">

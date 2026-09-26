@@ -45,7 +45,9 @@ export function AccionFila({ row, canManage }: { row: ChannelRowView; canManage:
   // Deshabilitado con el motivo en su nombre accesible: sin llaves en la plataforma, apagado en el espacio, o sin el rol.
   const provider = MESSAGES.channels[row.channel].provider;
   const why = row.unavailable ? MESSAGES.detail.unavailable(provider) : row.off ? MESSAGES.detail.off(provider) : !canManage ? MESSAGES.detail.readOnly : null;
-  const a11y = why ? MESSAGES.actions.unavailableLabel(label, why) : undefined;
+  // «Conectar» del correo dice adónde lleva: a Google (solo Gmail y Google Workspace).
+  const named = row.channel === "email" && row.action === "connect" ? MESSAGES.actions.connectEmail : undefined;
+  const a11y = why ? MESSAGES.actions.unavailableLabel(named ?? label, why) : named;
   const disabled = why !== null;
   if (row.action === "rewebhook" && row.account) {
     return <ReintentarAvisos accountId={row.account.id} disabled={disabled} ariaLabel={a11y} />;

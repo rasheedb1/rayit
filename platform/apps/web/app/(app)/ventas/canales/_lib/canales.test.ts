@@ -215,6 +215,13 @@ function webhook(body: unknown, headers: Record<string, string> = {}): Request {
   return new Request(`${ORIGIN}/api/webhooks/unipile`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 }
 
+/** Una copia del aviso sin una de sus llaves (sin desestructurar a una variable que nadie usa). */
+function omit<T extends object, K extends keyof T>(o: T, key: K): Omit<T, K> {
+  const copia = { ...o };
+  delete copia[key];
+  return copia;
+}
+
 const MESSAGE = (accountId: string, messageId: string) => ({
   event: "message_received", account_id: accountId, account_info: { user_id: "ACoAAB_demo" }, chat_id: "chat_web_0001", message_id: messageId,
   message: "¡Hola! Nos interesa, ¿tienes media kit?", timestamp: "2026-09-24T09:59:00.000Z",
@@ -306,13 +313,13 @@ describe("el webhook de Unipile", () => {
     // (provider_identity = connection_params.im.id). No entra como respuesta ni detiene el enrolamiento.
     const ENROLLMENT = "00000005-0000-4000-8000-0000000e0001";
     await db.queryAsSuperuser(`UPDATE outbound_touch SET enrollment_id = $1 WHERE thread_ref = 'chat_web_0001'`, [ENROLLMENT]);
-    const { account_info: _sinCuenta, ...sinAccountInfo } = MESSAGE("acc_li_web", "msg_eco_1");
+    const sinAccountInfo = omit(MESSAGE("acc_li_web", "msg_eco_1"), "account_info");
     const eco = await unipileWebhook(webhook({
       ...sinAccountInfo, message: "Hola Marta", sender: { attendee_provider_id: "ACoAAB_laura_web", attendee_name: "Laura Gómez" },
     }, headers), deps());
     expect(await eco.json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.echo });
     // Sin remitente no se sabe si es un eco: se descarta antes que arriesgar la cadencia.
-    const { sender: _sinRemitente, ...sinSender } = sinAccountInfo;
+    const sinSender = omit(sinAccountInfo, "sender");
     const anonimo = await unipileWebhook(webhook({ ...sinSender, message_id: "msg_sin_remitente_1" }, headers), deps());
     expect(await anonimo.json()).toEqual({ ok: true, ignored: MESSAGES.routes.ignored.noSender });
     expect(await count(`SELECT count(*)::int AS n FROM outbound_message WHERE provider_message_id IN ('msg_eco_1', 'msg_sin_remitente_1')`)).toBe(0);

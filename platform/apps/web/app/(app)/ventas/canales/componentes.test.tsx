@@ -284,6 +284,12 @@ describe("AccionFila", () => {
     expect((off as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("«Conectar» del correo dice adónde lleva: a Google (el texto visible sigue siendo «Conectar»)", () => {
+    render(<AccionFila row={fila({ channel: "email", state: "disconnected", action: "connect", account: null })} canManage />);
+    const boton = screen.getByRole("button", { name: MESSAGES.actions.connectEmail });
+    expect(boton).toHaveTextContent(MESSAGES.actions.connect);
+  });
+
   it("sin el rol de gestionar canales también va deshabilitado y en secundario", () => {
     render(<AccionFila row={fila({})} canManage={false} />);
     const off = screen.getByRole("button", { name: MESSAGES.actions.unavailableLabel(MESSAGES.actions.reconnect, MESSAGES.detail.readOnly) });

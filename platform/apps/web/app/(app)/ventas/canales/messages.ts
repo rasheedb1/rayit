@@ -28,10 +28,24 @@ export const MESSAGES = {
   },
   tabs: { canales: "Canales" },
   section: "Tus canales",
-  policyOff: "Los envíos automáticos a marcas están apagados en este espacio. Conectar un canal no envía nada todavía.",
+  /**
+   * Con el envío apagado en el espacio: qué implica y dónde se enciende
+   * (el interruptor de la política de envío, OUTREACH_URLS.policySwitch).
+   */
+  policyOff: {
+    text: "Los envíos automáticos a marcas están apagados en este espacio: conectar un canal no envía nada todavía.",
+    link: "Se encienden en la política de envío",
+  },
 
   channels: {
-    email: { name: "Correo", provider: "Gmail", blurb: "El canal principal: las marcas leen su buzón de alianzas." },
+    /**
+     * Hoy el correo es solo de Google: el texto lo dice antes de llegar a
+     * la pantalla de Google. Si se suma Outlook, la frase cambia aquí.
+     */
+    email: {
+      name: "Correo", provider: "Gmail",
+      blurb: "Tu Gmail o Google Workspace. Es el canal principal: las marcas revisan su buzón de alianzas.",
+    },
     linkedin: { name: "LinkedIn", provider: "LinkedIn", blurb: "Para llegar a la persona de marketing de la marca." },
     instagram_dm: { name: "Instagram", provider: "Instagram", blurb: "Opcional: mensajes directos cuando la marca no tiene otro contacto." },
   },
@@ -120,6 +134,8 @@ export const MESSAGES = {
 
   actions: {
     connect: "Conectar",
+    /** El nombre accesible de «Conectar» del correo: dice adónde lleva (a Google), como las integraciones de Vercel y Linear. */
+    connectEmail: "Conectar con Google",
     /** Un canal que ya tiene una cuenta viva: conectar una más (dos buzones, dos LinkedIn), como «Add another» de Vercel. */
     connectAnother: "Conectar otra cuenta",
     reconnect: "Reconectar",
@@ -152,8 +168,12 @@ export const MESSAGES = {
       personal: (n: string) => `Máximo ${n} (Gmail personal)`,
       provider: (n: string, provider: string) => `Máximo ${n} (${provider})`,
     },
-    /** Vacío = sin tope propio: rige el máximo, que va de marcador en el campo. */
-    emptyMeansMax: "Vacío: el máximo.",
+    /**
+     * La ayuda de cada campo: el máximo, quién lo fija y qué pasa si se
+     * deja vacío (sin tope propio: rige el máximo, que va de marcador en
+     * el campo). Pegada al campo, no debajo del botón.
+     */
+    help: (max: string) => `${max}. Vacío = el máximo.`,
     saved: "Límites guardados.",
     invalid: (n: string) => `Tiene que ser un número entero entre 0 y ${n}.`,
     dailyAboveWeekly: (n: string) => `El tope diario no puede pasar del semanal (${n}).`,
