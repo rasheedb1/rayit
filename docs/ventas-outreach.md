@@ -1590,19 +1590,29 @@ Nada queda pausado para siempre.
 
 El brief (`outbound_brief`, `/ventas/brief`) tiene dos mitades que no
 pesan igual. **Qué buscas** (categorías, países, presupuesto, formatos,
-fechas) es una preferencia: no oculta nada. De ahí el recomendador y el
-generador usan hoy el nombre, las notas y la divulgación (§5.5); el
-resto queda como referencia del equipo. **Qué no aceptas** (categorías
+fechas, divulgación) es una preferencia: no oculta nada, pero el radar
+la MARCA en cada tarjeta, calculado en SQL (`briefSignalLateralSql`):
+«Bajo tu mínimo» (presupuesto estimado por debajo del mínimo, en la
+misma moneda), «Fuera de tus países» (el país de la señal o de su
+marca no está entre los buscados) y «Buscas «cocina»» (la categoría
+buscada que tiene la marca). Con varios briefs activos, «bajo» y
+«fuera» solo si lo están para todos. El recomendador y el generador
+usan además el nombre, las notas y la divulgación (§5.5); la
+divulgación va en «Qué buscas» porque no filtra marcas: la dicen los
+mensajes. **Qué no aceptas** (categorías
 y marcas excluidas) es una regla, y se cumple en cuatro sitios con la
 misma definición de «esta marca» y de «esta categoría»
 (`packages/db/src/queries/brief.ts`):
 
 - **El radar** (`briefVerdictSql`): la señal no entra en la bandeja, y
-  la bandeja dice cuántas dejó fuera, con «Verlas». La marca de la
-  señal se reconoce por id, por dominio o, sin dominio, por nombre entre
-  las del CRM; la categoría, por el sector y los nichos de esa marca y
-  por lo que trae la señal en `evidence`. KPI, pestaña, bandeja y la
-  ficha de la empresa cuentan igual.
+  la bandeja dice cuántas dejó fuera, con «Verlas». Vistas, van al final
+  en su propio grupo («Ocultas por tu brief») y cada una dice la regla
+  que la dejó fuera, como la escribió el creador («Tu brief no acepta
+  «harinas»», «… a Molino Andino»). La marca de la señal se reconoce por
+  id, por dominio o, sin dominio, por nombre entre las del CRM; la
+  categoría, por el sector y los nichos de esa marca y por lo que trae la
+  señal en `evidence`. KPI, pestaña, bandeja y la ficha de la empresa
+  cuentan igual.
 - **Enrolar** (`enrollContacts`): una ficha de una marca excluida sale
   como `brief_excluded` y no nace ningún toque.
 - **El despachador** (`claimDueTouches`): cancela con `brief_excluded`
@@ -1612,16 +1622,64 @@ misma definición de «esta marca» y de «esta categoría»
   explícito, para que el brief de un espacio nunca frene a otro.
 
 Cada brief es de un creador, con uno activo por creador (0064 §1),
-porque el recomendador ya lee el del creador del negocio (§5.5, r4).
-Con varios creadores en el espacio, enrolar y el despachador usan el
-brief del creador del negocio, y el radar, que no es de nadie, oculta
-solo lo que excluyen todos los activos: lo que un creador no acepta,
-otro del mismo espacio puede aceptarlo.
+porque el recomendador ya lee el del creador del negocio (§5.5, r4). La
+pantalla edita el brief de UN creador: en una agencia, un selector
+(`?creador=id`) elige cuál, y `getBrief`/`saveBrief` reciben su id y
+comprueban que sea del espacio (`UnknownCreator`). Hasta la ronda 2 la
+pantalla decía «Brief del espacio» y guardaba en el primer creador, así
+que la regla anunciada no se cumplía para los demás. Con varios
+creadores:
+
+- enrolar y el despachador usan el brief del creador del negocio y, si
+  ese creador no tiene brief activo, lo que excluyen TODOS los activos
+  del espacio (en una agencia, un creador sin brief no se salta las
+  reglas de los demás);
+- el radar, que no es de nadie, oculta solo lo que excluyen todos los
+  activos: lo que un creador no acepta, otro del mismo espacio puede
+  aceptarlo. La pantalla lo dice donde se edita la regla («Ana también
+  tiene brief activo…»).
+
+**A escala.** El veredicto corre por cada señal pendiente en la
+cabecera de Ventas, la pestaña, la bandeja y la lista de Empresas. Lee
+los briefs activos una vez por consulta (un CTE `MATERIALIZED`) y
+resuelve la marca de cada señal con tres búsquedas indexadas unidas con
+`UNION ALL` (id, dominio, nombre dentro del CRM), nunca con un `OR`
+sobre `company`. Bajo RLS, Postgres solo usa un índice si la condición
+es leakproof: ni `brand_key(co.name)` ni `citext = citext` lo son, así
+que 0065 agrega `company.name_key` (brand_key(name), calculada por la
+base) y un índice sobre `domain::text`. Medido: con 5 000 empresas en
+el catálogo y 100 señales, `countHiddenSignals` pasó de recorrer el
+catálogo por señal (28,6 s con 10 000) a unos 15 ms
+(`brief.test.ts`).
 
 Un brief en pausa no oculta ni frena nada. Como oculta señales a todo
 el equipo, lo cambian owner y admin (la pantalla, la acción y las
 políticas RESTRICTIVE de 0064 con `outreach_can_manage`) y cada cambio
 deja traza en `audit_log` (`ventas.brief.guardar`, antes y después).
+
+Las frases que dicen un tope del brief («hasta 30», «2.000
+caracteres») lo reciben de `BRIEF_LIMITS` ya formateado con el locale
+del workspace (`brief/limites.ts`): ningún número va escrito a mano en
+`messages.ts`. La moneda del mínimo se elige junto al monto (la del
+workspace si el brief no tiene mínimo) y una inválida es
+`InvalidCurrency`, no un error de presupuesto.
+
+**Para el kit (propuesta a Nicolás).** Dos piezas de Ventas ya tienen
+una segunda copia o piden serlo, y el README del kit dice que a la
+segunda suben a `components/ui/`, con prueba y sección en `/kit`. Es un
+PR de Nicolás (cambia el kit); aquí queda la propuesta:
+
+- `Checkbox`: la casilla con etiqueta y ayuda. Hoy vive dos veces, en
+  `finanzas/gastos/form.tsx` y en `ventas/brief/form.tsx` (`Casilla`),
+  con la misma forma: `name?`, `label`, `help?`, `checked`,
+  `onChange(boolean)`, y el id de la ayuda en `aria-describedby`.
+- `Dialog`: el modal de `ventas/_componentes/dialogo.tsx`. Se pinta con
+  un portal en `<body>`, deja `inert` a sus hermanos y bloquea el scroll
+  de `<body>` mientras está abierto; foco adentro al abrir y de vuelta
+  al cerrar, Tab que da la vuelta, Escape y clic en el fondo cierran.
+  Donde baste una confirmación en línea, `ConfirmInline` del kit sigue
+  siendo la opción; el diálogo es para cuando la pregunta pide un campo
+  (el motivo de pérdida).
 
 ---
 

@@ -391,7 +391,7 @@ export const STORIES: readonly Story[] = [
     desc: "Qué busca el creador (categorías, países, presupuesto mínimo, entregables) y qué no acepta. Filtra la bandeja del radar.",
     done: "Una señal de una categoría excluida no aparece en la bandeja.",
     status: "hecho",
-    note: "/ventas/brief sobre outbound_brief (queries/brief.ts). Lo que no acepta se cumple en cuatro sitios con la misma regla: el radar lo oculta y lo dice («1 señal oculta por tu brief», con «Verlas»), la ficha de la empresa no lo cuenta como «en el radar», enrolar lo salta (brief_excluded) y el despachador cancela lo que ya estaba en la cola. Lo cambian owner y admin, con traza en audit_log. Migración 0064 (un brief activo, CHECK y quién escribe) pendiente de aplicar en Supabase por el integrador.",
+    note: "/ventas/brief sobre outbound_brief (queries/brief.ts), un brief por creador con selector en las agencias. Lo que no acepta se cumple en cuatro sitios con la misma regla: el radar lo oculta y lo dice («1 señal oculta por tu brief», con «Verlas» y la regla que la dejó fuera), la ficha de la empresa no lo cuenta como «en el radar», enrolar lo salta (brief_excluded) y el despachador cancela lo que ya estaba en la cola; un creador sin brief sigue lo que excluyen todos los del espacio. Lo que busca no oculta nada: la tarjeta lo marca («Bajo tu mínimo», «Fuera de tus países»). El veredicto usa búsquedas indexadas (5 000 empresas: ~15 ms). Lo cambian owner y admin, con traza en audit_log. Migraciones 0064 y 0065 pendientes de aplicar en Supabase por el integrador.",
   },
   {
     id: "VEN-8", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-3"],
@@ -399,7 +399,7 @@ export const STORIES: readonly Story[] = [
     desc: "Motivo de pérdida, y tasa de conversión por etapa desde deal_stage_history.",
     done: "La tasa entre etapas aparece en el pipeline con el número de deals que la sostiene.",
     status: "hecho",
-    note: "Perder un negocio pide el motivo en un diálogo, y la base lo exige al COMMIT (0064, por aplicar). Bajo la cabecera de cada columna abierta, en línea, «58 % avanza · de 12 negocios» desde deal_stage_history (queries/conversion.ts), probado contra un recuento independiente; en la vista Lista, el mismo resumen por etapa encima de la tabla.",
+    note: "Perder un negocio pide el motivo en un diálogo modal (la página de detrás queda inerte y sin scroll), y la base lo exige al COMMIT (0064, por aplicar). Bajo la cabecera de cada columna abierta, en línea, «58 % avanza · de 12 negocios» desde deal_stage_history (queries/conversion.ts), con la historia ordenada por (changed_at, id) y probado contra un recuento independiente; en la vista Lista, el mismo resumen por etapa encima de la tabla.",
   },
   // Outreach automático. Diseño en docs/ventas-outreach.md, a partir de CadenceV1.0.
   {
