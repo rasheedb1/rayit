@@ -1,11 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
-import { Dialogo } from "./dialogo";
+import { Dialog } from "./dialog";
 
 /**
- * El diálogo modal (VEN-8, «¿Por qué lo pierdes?»): lo de detrás no se
- * mueve ni se alcanza mientras está abierto, y todo vuelve al cerrar.
+ * El diálogo modal del kit (nació en VEN-8, «¿Por qué lo pierdes?»): lo
+ * de detrás no se mueve ni se alcanza mientras está abierto, y todo
+ * vuelve al cerrar.
  */
 function Pantalla() {
   const [abierto, setAbierto] = useState(false);
@@ -13,15 +14,15 @@ function Pantalla() {
     <main>
       <button onClick={() => setAbierto(true)}>Mover a Perdido</button>
       {abierto && (
-        <Dialogo title="Perder el negocio" onClose={() => setAbierto(false)}>
+        <Dialog title="Perder el negocio" description="Elige el motivo." onClose={() => setAbierto(false)}>
           <button onClick={() => setAbierto(false)}>Cancelar</button>
-        </Dialogo>
+        </Dialog>
       )}
     </main>
   );
 }
 
-describe("Dialogo", () => {
+describe("Dialog", () => {
   it("abierto, la página de detrás queda inerte y quieta; al cerrar vuelve como estaba y el foco regresa", () => {
     const { container } = render(<Pantalla />);
     const abrir = screen.getByRole("button", { name: "Mover a Perdido" });
@@ -42,6 +43,19 @@ describe("Dialogo", () => {
     expect(container).not.toHaveAttribute("inert");
     expect(document.body.style.overflow).toBe("auto");
     expect(document.activeElement).toBe(abrir);
+  });
+
+  it("tiene nombre y descripción, Tab da la vuelta dentro y el clic en el fondo cierra", () => {
+    render(<Pantalla />);
+    fireEvent.click(screen.getByRole("button", { name: "Mover a Perdido" }));
+    const dialogo = screen.getByRole("dialog", { name: "Perder el negocio" });
+    expect(dialogo).toHaveAttribute("aria-modal", "true");
+    expect(dialogo).toHaveAccessibleDescription("Elige el motivo.");
+    const cancelar = screen.getByRole("button", { name: "Cancelar" });
+    fireEvent.keyDown(dialogo, { key: "Tab" });
+    expect(document.activeElement).toBe(cancelar);
+    fireEvent.mouseDown(dialogo.parentElement!);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("no le quita el inert a lo que ya lo tenía antes de abrir", () => {

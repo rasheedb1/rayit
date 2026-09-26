@@ -24,7 +24,8 @@
  */
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { BRIEF_LIMITS, BriefError, saveBrief, type BriefErrorCode } from "@mc/db/queries/brief";
+import { BRIEF_LIMITS, BriefError, saveBrief, searchBriefCompanies, type BriefErrorCode } from "@mc/db/queries/brief";
+import { rejectSignalBrand } from "@mc/db/queries/ventas";
 import { DECIMAL_RE, UUID_RE, firstErrors, formField, type ActionState } from "@/lib/forms";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
@@ -63,7 +64,7 @@ function esquemaDelBrief(l: BriefLimitTexts) {
       excludedCompanies: z
         .array(z.string().regex(UUID_RE, E.CompanyNotInCrm(l, null)))
         .max(BRIEF_LIMITS.companies, E.TooManyCompanies(l, null)),
-      deliverables: z.array(z.string().regex(DELIVERABLE_RE, E.InvalidDeliverable(l, null))).max(20, E.InvalidDeliverable(l, null)),
+      deliverables: z.array(z.string().regex(DELIVERABLE_RE, E.InvalidDeliverable(l, null))).max(BRIEF_LIMITS.deliverables, E.InvalidDeliverable(l, null)),
       minBudget: z
         .string()
         .trim()
@@ -167,4 +168,61 @@ export async function guardarBrief(_prev: BriefState, formData: FormData): Promi
 
   revalidatePath("/ventas", "layout");
   return { ok: true, notice: v.active ? t.saved : t.savedPaused, stamp: Date.now() };
+}
+
+/** Una marca del CRM, como la ofrece la búsqueda de «Marcas que no aceptas». */
+export interface MarcaEncontrada {
+  value: string;
+  label: string;
+}
+
+/**
+ * Busca entre las marcas del CRM las que se pueden excluir (VEN-7 r4):
+ * en el servidor y en todo el CRM, no en una lista de 1 000 que se corta.
+ * Lo mismo que la pantalla: la ve todo el equipo, así que busca
+ * cualquiera que pueda leer el brief. Menos de dos letras útiles no
+ * busca (searchBriefCompanies).
+ */
+export async function buscarMarcas(q: string): Promise<{ results: MarcaEncontrada[] } | { error: string }> {
+  if (typeof q !== "string") return { results: [] };
+  try {
+    const rows = await withWorkspace((tx) => searchBriefCompanies(tx, q));
+    return { results: rows.map((r) => ({ value: r.id, label: r.name })) };
+  } catch (err) {
+    console.error("[ventas] no se pudo buscar marcas para el brief", err);
+    return { error: t.chips.searchError };
+  }
+}
+
+/** Lo que devuelve «No aceptar esta marca». */
+export interface NoAceptarState {
+  ok?: boolean;
+  notice?: string;
+  message?: string;
+}
+
+/**
+ * «No aceptar esta marca», desde su tarjeta en el radar (VEN-7 r4): la
+ * da de alta en el CRM (bloqueada) y la agrega a «Marcas que no aceptas»
+ * de los briefs activos de los creadores elegidos (`creatorIds`, uno por
+ * casilla), o de todos si no se manda ninguno, en la misma transacción
+ * (rejectSignalBrand). Mismo permiso que guardar el brief.
+ */
+export async function noAceptarMarca(_prev: NoAceptarState, formData: FormData): Promise<NoAceptarState> {
+  const r = MESSAGES.radar.reject;
+  if (!(await puedeEditarElBrief())) return { message: t.sinPermiso };
+  const signalId = formField(formData, "signalId");
+  const creatorIds = lista(formData, "creatorIds").map((id) => id.trim()).filter(Boolean);
+  if (!UUID_RE.test(signalId)) return { message: E.SignalNotFound(briefLimitTexts(formatterFor(await getCurrentWorkspace())), null) };
+  if (creatorIds.some((id) => !UUID_RE.test(id))) return { message: t.validacion.creatorUnknown };
+
+  try {
+    const res = await withWorkspace((tx) => rejectSignalBrand(tx, signalId, creatorIds.length > 0 ? { creatorIds } : {}));
+    revalidatePath("/ventas", "layout");
+    return { ok: true, notice: res.hidden ? r.doneHidden(res.companyName) : r.doneVisible(res.companyName) };
+  } catch (err) {
+    if (err instanceof BriefError) return { message: fraseDe(err, briefLimitTexts(formatterFor(await getCurrentWorkspace()))) };
+    console.error("[ventas] no se pudo excluir la marca de la señal", err);
+    return { message: r.error };
+  }
 }

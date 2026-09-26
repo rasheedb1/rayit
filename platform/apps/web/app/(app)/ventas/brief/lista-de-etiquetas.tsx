@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import { categoryKey } from "@mc/core";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/field";
+import { formatInt } from "@/lib/format";
 import { MESSAGES } from "../_lib/messages";
 
 export interface Etiqueta {
@@ -38,17 +39,33 @@ export type ListaDeEtiquetasProps = {
       maxLength: number;
     }
   | {
-      /** Solo lo que está en la lista (países, marcas del CRM). */
+      /** Solo lo que está en la lista (los países). */
       mode: "options";
       options: Etiqueta[];
-      /** Lo que se dice cuando la lista está vacía («Todavía no tienes marcas en tu CRM»). */
+      /** Lo que se dice cuando la lista está vacía. */
       emptyOptions?: string;
+    }
+  | {
+      /**
+       * Lo que devuelve una búsqueda en el servidor (las marcas del CRM,
+       * VEN-7 r4): un combobox que ofrece los resultados bajo el campo.
+       * Hasta la ronda 3 era un <select> con las primeras 1 000 marcas,
+       * que cortaba las demás sin avisar.
+       */
+      mode: "search";
+      search: (q: string) => Promise<{ results: Etiqueta[] } | { error: string }>;
+      /** Letras útiles (sin tildes ni signos) para empezar a buscar. */
+      minChars: number;
+      /** El locale del workspace, para decir las cifras de la búsqueda con Intl (formatInt). */
+      locale: string;
     }
 );
 
 /**
  * Una lista de etiquetas que se agregan y se quitan: las categorías, los
- * países y las marcas del brief. No está en el kit porque solo la usa
+ * países y las marcas del brief. Tres formas de agregar: texto libre con
+ * sugerencias (categorías), un menú cerrado (países) y una búsqueda en el
+ * servidor (marcas del CRM, un combobox: flechas, Enter y Escape). No está en el kit porque solo la usa
  * el brief; sube a components/ui/ si otro módulo la pide (README del kit).
  *
  * Agregar es siempre un acto explícito: «Agregar» o Enter, en los dos
@@ -79,12 +96,25 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
   const botones = useRef<(HTMLButtonElement | null)[]>([]);
   const id = useId();
   const listId = `${id}-sugerencias`;
+  const statusId = `${id}-estado`;
   const lleno = elegidas.length >= max;
+
+  // La búsqueda en el servidor (modo "search"): lo que devolvió, en qué
+  // está, y cuál resultado marcan las flechas.
+  const search = props.mode === "search" ? props.search : null;
+  const minChars = props.mode === "search" ? props.minChars : 0;
+  const cifra = (n: number) => formatInt(n, { locale: props.mode === "search" ? props.locale : undefined });
+  const [resultados, setResultados] = useState<Etiqueta[]>([]);
+  const [busqueda, setBusqueda] = useState<"idle" | "short" | "loading" | "done" | "error">("idle");
+  const [activo, setActivo] = useState(-1);
+  const [abierto, setAbierto] = useState(false);
 
   const yaEsta = (valor: string) => {
     const k = props.mode === "free" ? categoryKey(valor) : valor;
     return !k || elegidas.some((x) => (props.mode === "free" ? categoryKey(x.value) : x.value) === k);
   };
+  /** Los resultados que todavía no están elegidos: lo que ofrece el combobox. */
+  const ofrecidos = resultados.filter((r) => !yaEsta(r.value));
 
   /** Lo escrito o elegido que todavía no es una etiqueta; null si no hay nada que agregar. */
   const pendiente: Etiqueta | null = (() => {
@@ -93,14 +123,32 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
       const limpio = texto.trim().replace(/\s+/g, " ");
       return limpio && !yaEsta(limpio) ? { value: limpio, label: limpio } : null;
     }
+    if (props.mode === "search") {
+      // Solo una marca cuyo nombre es EXACTAMENTE lo escrito (sin tildes ni
+      // mayúsculas): un nombre a medias no excluye «la primera que salga».
+      const k = categoryKey(texto);
+      return (k && ofrecidos.find((r) => categoryKey(r.label) === k)) || null;
+    }
     const o = props.options.find((x) => x.value === eleccion);
     return o && !yaEsta(o.value) ? o : null;
   })();
+
+  function agregar(e: Etiqueta) {
+    if (lleno || disabled || yaEsta(e.value)) return;
+    setElegidas((cur) => [...cur, e]);
+    setTexto("");
+    setResultados([]);
+    setAbierto(false);
+    setActivo(-1);
+  }
 
   function agregarPendiente() {
     if (pendiente) setElegidas((cur) => [...cur, pendiente]);
     setTexto("");
     setEleccion("");
+    setResultados([]);
+    setAbierto(false);
+    setActivo(-1);
   }
 
   function onEnter(event: KeyboardEvent<HTMLElement>) {
@@ -108,6 +156,68 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
     event.preventDefault();
     agregarPendiente();
   }
+
+  /** El teclado del combobox: flechas para moverse, Enter para elegir, Escape para cerrar. */
+  function onComboKey(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (ofrecidos.length === 0) return;
+      event.preventDefault();
+      setAbierto(true);
+      const paso = event.key === "ArrowDown" ? 1 : -1;
+      setActivo((cur) => (cur + paso + ofrecidos.length) % ofrecidos.length);
+      return;
+    }
+    if (event.key === "Escape") {
+      if (abierto) {
+        event.preventDefault();
+        setAbierto(false);
+        setActivo(-1);
+      }
+      return;
+    }
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const marcado = abierto && activo >= 0 ? ofrecidos[activo] : undefined;
+    if (marcado) agregar(marcado);
+    else agregarPendiente();
+  }
+
+  // Busca al dejar de escribir (250 ms), y descarta la respuesta de una
+  // búsqueda vieja si llega después de la nueva.
+  useEffect(() => {
+    if (!search) return;
+    const q = texto.trim();
+    if (categoryKey(q).length < minChars) {
+      setResultados([]);
+      setBusqueda(q ? "short" : "idle");
+      return;
+    }
+    setBusqueda("loading");
+    let vigente = true;
+    const timer = setTimeout(() => {
+      search(q).then(
+        (r) => {
+          if (!vigente) return;
+          if ("error" in r) {
+            setResultados([]);
+            setBusqueda("error");
+          } else {
+            setResultados(r.results);
+            setBusqueda("done");
+            setAbierto(true);
+            setActivo(-1);
+          }
+        },
+        () => {
+          if (vigente) setBusqueda("error");
+        },
+      );
+    }, 250);
+    return () => {
+      vigente = false;
+      clearTimeout(timer);
+    };
+  }, [texto, search, minChars]);
 
   function quitar(indice: number) {
     const quedan = elegidas.length - 1;
@@ -160,6 +270,50 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
                   ))}
               </datalist>
             </>
+          ) : props.mode === "search" ? (
+            <div className="relative min-w-0 flex-1">
+              <Input
+                value={texto}
+                onChange={(e) => setTexto(e.target.value)}
+                onKeyDown={onComboKey}
+                onBlur={() => setAbierto(false)}
+                onFocus={() => ofrecidos.length > 0 && setAbierto(true)}
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={abierto && ofrecidos.length > 0}
+                aria-controls={listId}
+                aria-activedescendant={abierto && activo >= 0 ? `${listId}-${activo}` : undefined}
+                placeholder={placeholder}
+                disabled={apagado}
+                autoComplete="off"
+                maxLength={120}
+              />
+              {abierto && ofrecidos.length > 0 && (
+                <ul
+                  id={listId}
+                  role="listbox"
+                  aria-label={label}
+                  className="absolute inset-x-0 top-full z-20 mt-1 max-h-60 overflow-y-auto rounded-md border border-border bg-surface py-1 shadow-lg"
+                >
+                  {ofrecidos.map((r, i) => (
+                    <li
+                      key={r.value}
+                      id={`${listId}-${i}`}
+                      role="option"
+                      aria-selected={i === activo}
+                      // mousedown y no click: el blur del campo cerraría la lista antes del click.
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        agregar(r);
+                      }}
+                      className={`cursor-pointer truncate px-3 py-1.5 text-sm text-ink ${i === activo ? "bg-hover" : "hover:bg-hover"}`}
+                    >
+                      {r.label}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           ) : (
             <Select
               value={eleccion}
@@ -175,6 +329,22 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
           </Button>
         </div>
       </Field>
+
+      {props.mode === "search" && (
+        <p id={statusId} role="status" aria-live="polite" className="-mt-1 text-xs text-muted">
+          {busqueda === "short"
+            ? t.searchMin(cifra(minChars))
+            : busqueda === "loading"
+              ? t.searching
+              : busqueda === "error"
+                ? t.searchError
+                : busqueda === "done" && texto.trim()
+                  ? ofrecidos.length === 0
+                    ? t.searchNone
+                    : <span className="sr-only">{t.searchResults(cifra(ofrecidos.length), ofrecidos.length)}</span>
+                  : null}
+        </p>
+      )}
 
       {elegidas.length === 0 ? (
         <p className="text-xs text-muted">{t.empty}</p>

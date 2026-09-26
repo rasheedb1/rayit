@@ -1,4 +1,4 @@
-import type { StageConversion } from "@mc/db/queries/conversion";
+import { CONVERSION_WINDOW_DAYS, type StageConversion } from "@mc/db/queries/conversion";
 import type { Formatter } from "@/lib/format";
 import { MESSAGES } from "../_lib/messages";
 
@@ -10,9 +10,9 @@ import { MESSAGES } from "../_lib/messages";
 export interface ConversionView {
   /** «58 % avanza»; null si ningún negocio pasó todavía por la etapa. */
   rate: string | null;
-  /** «de 12 negocios», o «Sin historia todavía». */
+  /** «de 12 negocios en 90 días», o «Nadie entró en 90 días». */
   basis: string;
-  /** La frase entera: «De los 12 negocios que entraron en «Contactado», 7 llegaron más lejos (58 %).» */
+  /** La frase entera: «En los últimos 90 días, de los 12 negocios que entraron en «Contactado», 7 llegaron más lejos (58 %).» */
   label: string;
 }
 
@@ -21,20 +21,26 @@ export interface ConversionView {
  * no se calcula nada: la tasa llega de SQL y solo se formatea con el
  * locale del workspace. Null para las etapas cerradas (Ganado, Perdido),
  * que no tienen a dónde avanzar.
+ *
+ * La cifra es la de un periodo (VEN-8 r4): los negocios que entraron en
+ * la etapa en los últimos CONVERSION_WINDOW_DAYS días, la ventana por
+ * defecto de getStageConversion. La frase lo dice («de 10 negocios en
+ * 90 días»), para que no se lea como la de toda la historia.
  */
 export function conversionView(c: StageConversion | undefined, stageLabel: string, f: Formatter): ConversionView | null {
   const t = MESSAGES.pipeline.conversion;
   if (!c) return null;
+  const days = f.int(CONVERSION_WINDOW_DAYS);
   if (c.entered === 0 || c.rate === null) {
-    return { rate: null, basis: t.none, label: t.labelNone(stageLabel) };
+    return { rate: null, basis: t.none(days), label: t.labelNone(stageLabel, days) };
   }
   const pct = f.pct(Number(c.rate));
   const entered = f.int(c.entered);
   const advanced = f.int(c.advanced);
   return {
     rate: t.rate(pct),
-    basis: t.basis(entered, c.entered),
-    label: t.label(stageLabel, entered, c.entered, advanced, c.advanced, pct),
+    basis: t.basis(entered, c.entered, days),
+    label: t.label(stageLabel, entered, c.entered, advanced, c.advanced, pct, days),
   };
 }
 
@@ -82,13 +88,20 @@ export function StageConversionRow({ view, className = "" }: { view: ConversionV
  * cada columna: las dos formas del pipeline no pueden decir cosas
  * distintas.
  */
-export function ConversionSummary({ stages }: { stages: { id: string; label: string; conversion: ConversionView | null }[] }) {
+export function ConversionSummary({
+  stages,
+  days,
+}: {
+  stages: { id: string; label: string; conversion: ConversionView | null }[];
+  /** La ventana, ya formateada con el locale del workspace («90»). */
+  days: string;
+}) {
   const t = MESSAGES.pipeline.conversion;
   const abiertas = stages.filter((s) => s.conversion !== null);
   if (abiertas.length === 0) return null;
   return (
-    <section aria-label={t.listTitle} className="mb-4">
-      <h3 className="mb-2 text-xs font-medium text-muted">{t.listTitle}</h3>
+    <section aria-label={t.listTitle(days)} className="mb-4">
+      <h3 className="mb-2 text-xs font-medium text-muted">{t.listTitle(days)}</h3>
       <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4" data-testid="conversion-resumen">
         {abiertas.map((s) => (
           <li key={s.id} className="min-w-0 rounded-md border border-border px-3 py-2">

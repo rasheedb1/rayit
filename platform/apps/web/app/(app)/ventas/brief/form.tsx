@@ -3,12 +3,13 @@
 import { startTransition, useActionState, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { BRIEF_LIMITS } from "@mc/db/queries/brief";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { DateInput } from "@/components/ui/date-input";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
 import { Aviso } from "../../_lib/aviso";
 import { MESSAGES } from "../_lib/messages";
-import { guardarBrief, type BriefState } from "./actions";
+import { buscarMarcas, guardarBrief, type BriefState } from "./actions";
 import { ListaDeEtiquetas, type Etiqueta } from "./lista-de-etiquetas";
 
 const t = MESSAGES.brief;
@@ -41,7 +42,10 @@ export interface BriefFormProps {
   countries: Etiqueta[];
   /** Las monedas del mínimo (ISO 4217, con su nombre en el idioma del workspace). */
   currencies: Etiqueta[];
-  companies: Etiqueta[];
+  /** El locale del workspace: las cifras de la búsqueda de marcas van con Intl. */
+  locale: string;
+  /** Cuántas letras pide la búsqueda de marcas (BRIEF_COMPANY_SEARCH_MIN, pasado por el servidor). */
+  companySearchMin: number;
   /**
    * Los topes de @mc/db (BRIEF_LIMITS), pasados por el servidor: un
    * componente de cliente no importa valores de @mc/db, que arrastraría
@@ -73,53 +77,6 @@ function Bloque({ titulo, ayuda, children }: { titulo: string; ayuda: string; ch
 }
 
 /**
- * Una casilla con su etiqueta y su ayuda. Es la segunda vez que un
- * módulo la necesita (la primera es `Casilla` de finanzas/gastos/form.tsx);
- * el README del kit dice que a la segunda sube a components/ui/, y eso
- * es un PR de Nicolás. Mientras, vive aquí con la misma forma.
- */
-function Casilla({
-  name,
-  label,
-  help,
-  checked,
-  onChange,
-}: {
-  /** Sin nombre, la casilla no viaja en el formulario (los entregables mandan su valor aparte). */
-  name?: string;
-  label: string;
-  help?: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  const id = useId();
-  const helpId = help ? `${id}-help` : undefined;
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2">
-        <input
-          type="checkbox"
-          id={id}
-          name={name}
-          checked={checked}
-          onChange={(e) => onChange(e.target.checked)}
-          aria-describedby={helpId}
-          className="size-4 rounded-sm border-border accent-ink"
-        />
-        <label htmlFor={id} className="text-sm font-medium text-ink">
-          {label}
-        </label>
-      </div>
-      {help && (
-        <p id={helpId} className="pl-6 text-xs leading-4 text-muted">
-          {help}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/**
  * El brief: qué buscas, qué no aceptas y si el radar lo aplica.
  *
  * Se envía con onSubmit y no con action={…}: React 19 vacía un
@@ -134,7 +91,8 @@ export function BriefForm({
   categorySuggestions,
   countries,
   currencies,
-  companies,
+  locale,
+  companySearchMin,
   limits,
   editable = true,
 }: BriefFormProps) {
@@ -150,9 +108,23 @@ export function BriefForm({
   const errors = estado.errors ?? {};
   const f = t.fields;
 
-  // Foco al primer campo con error: a 400 px puede quedar fuera de la pantalla.
+  const avisoRef = useRef<HTMLDivElement>(null);
+
+  // Después de guardar, el foco va a lo que hay que leer (VEN-7 r4):
+  //   · con errores de campo, al primero, que a 400 px puede quedar arriba;
+  //   · si no, al aviso, que va junto a «Guardar el brief». Hasta la ronda
+  //     3 el «Guardado» se pintaba arriba de un formulario de ~2 000 px: en
+  //     el móvil quedaba a −1 115 px y quien pulsaba Guardar no veía nada.
   useEffect(() => {
-    if (estado.errors) formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+    if (estado.errors) {
+      formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+      return;
+    }
+    if (!estado.message && !(estado.ok && estado.notice)) return;
+    const aviso = avisoRef.current;
+    // scrollIntoView no existe en todos los entornos (jsdom): opcional.
+    aviso?.scrollIntoView?.({ block: "nearest" });
+    aviso?.focus({ preventScroll: true });
   }, [estado]);
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -175,8 +147,6 @@ export function BriefForm({
           {t.sinPermiso}
         </p>
       )}
-      <Aviso message={estado.message} notice={estado.ok ? estado.notice : undefined} />
-
       <Bloque titulo={t.wants.title} ayuda={t.wants.help}>
         <Field label={f.title} help={f.titleHelp} error={errors.title} required htmlFor="brief-title" className="sm:col-span-2">
           <Input name="title" defaultValue={values.title} maxLength={limits.titleMax} autoComplete="off" />
@@ -222,8 +192,8 @@ export function BriefForm({
             <Select name="currency" value={moneda} onChange={(e) => setMoneda(e.target.value)} options={currencies} />
           </Field>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label={f.availabilityFrom} error={errors.availabilityFrom} htmlFor="brief-desde">
+        <div className="grid grid-cols-2 gap-3 sm:col-span-2">
+          <Field label={f.availabilityFrom} help={f.availabilityHelp} error={errors.availabilityFrom} htmlFor="brief-desde">
             <DateInput name="availabilityFrom" value={desde} onChange={setDesde} />
           </Field>
           <Field label={f.availabilityTo} error={errors.availabilityTo} htmlFor="brief-hasta">
@@ -237,7 +207,7 @@ export function BriefForm({
           </p>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
             {deliverableOptions.map((d) => (
-              <Casilla
+              <Checkbox
                 key={d.value}
                 label={d.label}
                 checked={entregables.includes(d.value)}
@@ -258,16 +228,6 @@ export function BriefForm({
         <Field label={f.notes} help={f.notesHelp} error={errors.notes} htmlFor="brief-notes" className="sm:col-span-2">
           <Textarea name="notes" defaultValue={values.notes} rows={3} maxLength={limits.notesMax} />
         </Field>
-        {/* No filtra marcas: lo usan las cadencias al escribir. Por eso va en «Qué buscas» y no con las reglas. */}
-        <div className="sm:col-span-2">
-          <Casilla
-            name="requiresDisclosure"
-            label={f.requiresDisclosure}
-            help={f.requiresDisclosureHelp}
-            checked={divulgacion}
-            onChange={setDivulgacion}
-          />
-        </div>
       </Bloque>
 
       <Bloque titulo={t.rejects.title} ayuda={t.rejects.help}>
@@ -290,34 +250,57 @@ export function BriefForm({
         <div className="sm:col-span-2">
           <ListaDeEtiquetas
             name="excludedCompanies"
-            mode="options"
+            mode="search"
             label={f.excludedCompanies}
             help={f.excludedCompaniesHelp}
             error={errors.excludedCompanies}
             initial={values.excludedCompanies}
-            options={companies}
-            emptyOptions={t.chips.noCompanies}
+            search={buscarMarcas}
+            minChars={companySearchMin}
+            locale={locale}
             max={limits.companies}
             placeholder={t.chips.companyPlaceholder}
             disabled={!editable}
             saved={estado.stamp}
           />
         </div>
+        {/*
+          Una condición no negociable, como en Passionfroot: va con las
+          demás reglas (VEN-7 r4). No filtra marcas; la cumplen las cadencias
+          al escribir, y el juez rechaza el mensaje que no la lleva.
+        */}
+        <div className="sm:col-span-2">
+          <Checkbox
+            name="requiresDisclosure"
+            label={f.requiresDisclosure}
+            help={f.requiresDisclosureHelp}
+            checked={divulgacion}
+            onChange={setDivulgacion}
+          />
+        </div>
       </Bloque>
 
       <Bloque titulo={t.state.title} ayuda={t.state.help}>
         <div className="sm:col-span-2">
-          <Casilla name="active" label={f.active} help={f.activeHelp} checked={activo} onChange={setActivo} />
+          <Checkbox name="active" label={f.active} help={f.activeHelp} checked={activo} onChange={setActivo} />
         </div>
       </Bloque>
 
-      {editable && (
-        <div>
-          <Button type="submit" variant="primary" loading={pendiente}>
+      {/*
+        El resultado, pegado al botón: se lee donde se pulsó. El contenedor
+        recibe el foco (tabIndex -1) y el Aviso de dentro se anuncia solo
+        (role="status" o, si es un error, role="alert").
+      */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        {editable && (
+          <Button type="submit" variant="primary" loading={pendiente} className="self-start">
             {t.submit}
           </Button>
+        )}
+        <div ref={avisoRef} tabIndex={-1} data-testid="brief-aviso" className="min-w-0 flex-1 rounded-md focus:outline-none">
+          <Aviso message={estado.message} notice={estado.ok ? estado.notice : undefined} />
         </div>
-      )}
+      </div>
       </fieldset>
     </form>
   );

@@ -6,8 +6,11 @@ import { SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Textarea } from "@/components/ui/field";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog } from "@/components/ui/dialog";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import { aceptarSenal, descartarSenal, type VentasState } from "../actions";
+import { noAceptarMarca } from "../brief/actions";
 import { Aviso } from "../../_lib/aviso";
 import { MESSAGES } from "../_lib/messages";
 import type { CountryOption } from "../_lib/paises";
@@ -22,7 +25,12 @@ export interface SignalCardData {
   id: string;
   companyName: string | null;
   headline: string;
-  fit: { kind: PillKind; text: string } | null;
+  /**
+   * El encaje («82 %», o «82 % · alimentos» si es de una categoría que
+   * busca el brief) y, si lo hay, la frase entera para el title y el
+   * lector de pantalla.
+   */
+  fit: { kind: PillKind; text: string; label?: string } | null;
   sourceLabel: string;
   detectedText: string;
   budgetText: string | null;
@@ -41,8 +49,33 @@ export interface SignalCardData {
    * (VEN-7). Null si se ve.
    */
   hiddenReason: string | null;
-  /** Cómo encaja con «Qué buscas» («Bajo tu mínimo», «Fuera de tus países»): Pills neutras, no oculta nada. */
+  /**
+   * Lo que la aparta de «Qué buscas» («Bajo tu mínimo», «Fuera de tus
+   * países», «Fuera de lo que buscas»): Pills neutras, no oculta nada.
+   */
   fitNotes: string[];
+  /** Ofrece «No aceptar esta marca» (VEN-7 r4): quien mira puede cambiar el brief y la señal tiene marca. */
+  canReject: boolean;
+}
+
+/** Los creadores con brief activo, para elegir en cuáles no aceptar la marca (VEN-7 r4). */
+export interface RejectOptions {
+  creators: { id: string; name: string }[];
+}
+
+/**
+ * Una Pill con tope de ancho: corta el texto largo con «…» por CSS y lo
+ * enseña entero al pasar el ratón (title). El lector de pantalla lee el
+ * texto entero, que sigue en el DOM.
+ */
+function PillCorta({ kind, children }: { kind: PillKind; children: string }) {
+  return (
+    <span title={children} className="inline-flex min-w-0 max-w-full">
+      <Pill kind={kind} className="max-w-[16rem]">
+        {children}
+      </Pill>
+    </span>
+  );
 }
 
 /** La línea de las señales que el brief deja fuera, ya escrita en el servidor. */
@@ -71,11 +104,13 @@ export function Radar({
   currency,
   countries,
   hiddenLine = null,
+  reject = null,
 }: {
   cards: SignalCardData[];
   currency: string;
   countries: CountryOption[];
   hiddenLine?: HiddenLine | null;
+  reject?: RejectOptions | null;
 }) {
   const t = MESSAGES.radar;
   const [panel, setPanel] = useState<Panel>("none");
@@ -149,7 +184,7 @@ export function Radar({
           {visibles.length > 0 && (
             <ul className="flex flex-col gap-2">
               {visibles.map((card) => (
-                <SignalCard key={card.id} card={card} onResult={setAviso} />
+                <SignalCard key={card.id} card={card} onResult={setAviso} reject={reject} />
               ))}
             </ul>
           )}
@@ -161,7 +196,7 @@ export function Radar({
               </h3>
               <ul className="flex flex-col gap-2">
                 {ocultas.map((card) => (
-                  <SignalCard key={card.id} card={card} onResult={setAviso} />
+                  <SignalCard key={card.id} card={card} onResult={setAviso} reject={reject} />
                 ))}
               </ul>
             </section>
@@ -177,9 +212,11 @@ export function Radar({
 function SignalCard({
   card,
   onResult,
+  reject,
 }: {
   card: SignalCardData;
   onResult: (aviso: AvisoRadar) => void;
+  reject: RejectOptions | null;
 }) {
   const t = MESSAGES.radar;
   const [discarding, setDiscarding] = useState(false);
@@ -187,6 +224,7 @@ function SignalCard({
   const [cardError, setCardError] = useState<string | undefined>();
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState<"accept" | "discard" | null>(null);
+  const [rejecting, setRejecting] = useState(false);
   const name = card.companyName ?? t.unknownBrand;
 
   function report(res: VentasState, kind: "accept" | "discard") {
@@ -230,12 +268,16 @@ function SignalCard({
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-ink">{name}</span>
             {card.fit && (
-              <span className="inline-flex items-center">
-                <span className="sr-only">{t.fit} </span>
-                <Pill kind={card.fit.kind}>{card.fit.text}</Pill>
+              <span className="inline-flex min-w-0 max-w-full items-center" title={card.fit.label}>
+                <span className="sr-only">{card.fit.label ?? `${t.fit} ${card.fit.text}`}</span>
+                <span aria-hidden="true" className="inline-flex min-w-0 max-w-full">
+                  <Pill kind={card.fit.kind} className="max-w-[16rem]">
+                    {card.fit.text}
+                  </Pill>
+                </span>
               </span>
             )}
-            {card.hiddenReason && <Pill kind="warn">{card.hiddenReason}</Pill>}
+            {card.hiddenReason && <PillCorta kind="warn">{card.hiddenReason}</PillCorta>}
             {card.fitNotes.map((nota) => (
               <Pill key={nota} kind="neutral">
                 {nota}
@@ -289,6 +331,26 @@ function SignalCard({
         )}
       </div>
 
+      {card.canReject && reject && !discarding && (
+        <div className="mt-3 border-t border-border pt-3">
+          <Button variant="ghost" size="sm" onClick={() => setRejecting(true)} disabled={pending} aria-label={t.reject.actionFor(name)}>
+            {t.reject.action}
+          </Button>
+        </div>
+      )}
+      {rejecting && reject && (
+        <NoAceptarDialog
+          signalId={card.id}
+          name={name}
+          creators={reject.creators}
+          onClose={() => setRejecting(false)}
+          onDone={(notice) => {
+            setRejecting(false);
+            onResult({ notice });
+          }}
+        />
+      )}
+
       {discarding && (
         <form onSubmit={discard} noValidate className="mt-4 border-t border-border pt-4" aria-label={`${t.discardTitle} ${name}`}>
           <Field label={t.discardTitle} help={t.discardHelp} error={reasonError} required htmlFor={`reason-${card.id}`}>
@@ -307,5 +369,74 @@ function SignalCard({
 
       {cardError && <Aviso message={cardError} className="mt-3" />}
     </li>
+  );
+}
+
+/**
+ * «¿No aceptar esta marca?» (VEN-7 r4): la da de alta en el CRM como
+ * bloqueada y la agrega a «Marcas que no aceptas» de los briefs activos,
+ * en la misma transacción (rejectSignalBrand). Con un solo brief activo
+ * no hay nada que elegir; con varios, una casilla por creador, todas
+ * marcadas: lo que uno no acepta otro puede aceptarlo, y el radar solo
+ * oculta lo que excluyen todos.
+ */
+function NoAceptarDialog({
+  signalId,
+  name,
+  creators,
+  onClose,
+  onDone,
+}: {
+  signalId: string;
+  name: string;
+  creators: { id: string; name: string }[];
+  onClose: () => void;
+  onDone: (notice: string) => void;
+}) {
+  const t = MESSAGES.radar.reject;
+  const [error, setError] = useState<string | undefined>();
+  const [pending, startTransition] = useTransition();
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    data.set("signalId", signalId);
+    if (creators.length > 1 && data.getAll("creatorIds").length === 0) {
+      setError(t.noCreator);
+      return;
+    }
+    setError(undefined);
+    startTransition(async () => {
+      const res = await noAceptarMarca({}, data);
+      if (res.ok && res.notice) onDone(res.notice);
+      else setError(res.message ?? t.error);
+    });
+  }
+
+  return (
+    <Dialog title={t.title(name)} description={t.description} onClose={onClose}>
+      <form onSubmit={submit} noValidate className="space-y-4" aria-label={t.title(name)}>
+        {creators.length > 1 && (
+          <fieldset className="space-y-2" aria-describedby={`no-aceptar-${signalId}-ayuda`}>
+            <legend className="text-sm font-medium text-ink">{t.creators}</legend>
+            <p id={`no-aceptar-${signalId}-ayuda`} className="text-xs leading-4 text-muted">
+              {t.creatorsHelp}
+            </p>
+            {creators.map((c) => (
+              <Checkbox key={c.id} name="creatorIds" value={c.id} label={c.name} defaultChecked />
+            ))}
+          </fieldset>
+        )}
+        {error && <Aviso message={error} />}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" variant="danger" size="sm" loading={pending}>
+            {t.confirm}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={pending}>
+            {MESSAGES.acciones.cancel}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }

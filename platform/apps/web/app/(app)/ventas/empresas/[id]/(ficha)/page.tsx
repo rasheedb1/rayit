@@ -311,7 +311,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
             ]}
             signalsLinks={[
               ...(company.pendingSignalCount > 0 ? [{ text: t.pendingSignals(company.pendingSignalCount), href: "/ventas" }] : []),
-              ...(company.hiddenSignalCount > 0 ? [{ text: t.hiddenSignals(company.hiddenSignalCount), href: "/ventas?ocultas=1" }] : []),
+              ...(company.hiddenSignalCount > 0 ? [{ text: t.hiddenSignals(f.int(company.hiddenSignalCount), company.hiddenSignalCount), href: "/ventas?ocultas=1" }] : []),
             ]}
           />
           <Bloque id="sabemos" title={x.bloques.known}>

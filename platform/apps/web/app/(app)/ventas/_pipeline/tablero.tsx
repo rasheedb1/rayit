@@ -10,7 +10,7 @@ import { formatMoney } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { moverNegocio } from "../actions";
 import { Aviso } from "../../_lib/aviso";
-import { Dialogo } from "../_componentes/dialogo";
+import { Dialog } from "@/components/ui/dialog";
 import { LOST_REASON_OPTIONS, applyMove } from "../_lib/estado";
 import { MESSAGES } from "../_lib/messages";
 import type { SeguimientoContexto, SiguienteAccionData, UltimoContactoData } from "../_seguimiento/datos";
@@ -308,7 +308,7 @@ function PerderDialogo({
   }
 
   return (
-    <Dialogo title={t.dialogTitle(deal.companyName)} description={t.help} onClose={onCancel}>
+    <Dialog title={t.dialogTitle(deal.companyName)} description={t.help} onClose={onCancel}>
       <form onSubmit={submit} noValidate aria-label={t.formLabel(deal.companyName)}>
         <Field label={t.title} error={error} required htmlFor={selectId}>
           <Select name="lostReason" defaultValue="" placeholder={t.placeholder} options={LOST_REASON_OPTIONS} autoFocus />
@@ -322,7 +322,7 @@ function PerderDialogo({
           </Button>
         </div>
       </form>
-    </Dialogo>
+    </Dialog>
   );
 }
 

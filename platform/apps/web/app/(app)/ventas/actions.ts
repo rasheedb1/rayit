@@ -251,9 +251,11 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
   // repetida no entró, y decir «la marca entró sin país» sería falso
   // (pulido r7). Con created = 0 no queda ninguno.
   const lineWarnings = parsed.warnings.filter((w) => createdRows.has(w.row)).map(({ line, message }) => ({ line, message }));
+  // El conteo de ocultas, con el formato de números del workspace (VEN-7 r4).
+  const ocultas = hiddenByBrief > 0 ? t.hiddenByBrief(formatterFor(await getCurrentWorkspace()).int(hiddenByBrief), hiddenByBrief) : null;
   return {
     ok: true,
-    notice: hiddenByBrief > 0 ? `${t.result(created, duplicated)} ${t.hiddenByBrief(hiddenByBrief)}` : t.result(created, duplicated),
+    notice: ocultas ? `${t.result(created, duplicated)} ${ocultas}` : t.result(created, duplicated),
     lineErrors: parsed.errors.length > 0 ? parsed.errors : undefined,
     lineWarnings: lineWarnings.length > 0 ? lineWarnings : undefined,
     stamp: Date.now(),

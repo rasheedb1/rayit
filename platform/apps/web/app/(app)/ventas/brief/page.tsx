@@ -2,10 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { DELIVERABLES } from "@mc/core";
 import {
+  BRIEF_COMPANY_SEARCH_MIN,
   BRIEF_LIMITS,
   countHiddenSignals,
   getBrief,
-  listBriefCompanyOptions,
   listBriefCreators,
   listCategorySuggestions,
   pickBriefCreator,
@@ -54,7 +54,7 @@ export default async function BriefPage({ searchParams }: { searchParams: Promis
   const params = await searchParams;
   const [workspace, editable] = await Promise.all([getCurrentWorkspace(), puedeEditarElBrief()]);
   const f = formatterFor(workspace);
-  const { creators, creator, brief, suggestions, companies, hidden } = await withWorkspace(async (tx) => {
+  const { creators, creator, brief, suggestions, hidden } = await withWorkspace(async (tx) => {
     const { creators } = await listBriefCreators(tx);
     const creator = pickBriefCreator(creators, params.creador);
     return {
@@ -62,7 +62,8 @@ export default async function BriefPage({ searchParams }: { searchParams: Promis
       creator,
       brief: creator ? await getBrief(tx, creator.id) : null,
       suggestions: await listCategorySuggestions(tx),
-      companies: await listBriefCompanyOptions(tx),
+      // Las marcas del CRM ya no se leen todas aquí: el formulario las busca
+      // en el servidor al escribir (buscarMarcas, VEN-7 r4).
       hidden: await countHiddenSignals(tx),
     };
   });
@@ -172,7 +173,8 @@ export default async function BriefPage({ searchParams }: { searchParams: Promis
         categorySuggestions={suggestions}
         countries={countries}
         currencies={currencies}
-        companies={companies.map((c) => ({ value: c.id, label: c.name }))}
+        locale={f.locale}
+        companySearchMin={BRIEF_COMPANY_SEARCH_MIN}
         limits={BRIEF_LIMITS}
         editable={editable}
       />

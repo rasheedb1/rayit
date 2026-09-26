@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { countHiddenSignals } from "@mc/db/queries/brief";
+import { countHiddenSignals, listBriefCreators } from "@mc/db/queries/brief";
 import { getStageConversion } from "@mc/db/queries/conversion";
 import {
   PIPELINE_SEGUIMIENTOS,
@@ -18,6 +18,7 @@ import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { puedeEditarElBrief } from "../brief/permiso";
 // El (i) de las cifras es de Resumen (lo envuelve sin tocar el Kpi del
 // kit, que es de Nicolás). Ventas lo usa tal cual para explicar el
 // ponderado y el trimestre, en vez de contarlo en la cabecera.
@@ -56,10 +57,15 @@ export default async function VentasPage({
 
   // Una sola transacción para toda la pantalla: los KPI y la vista
   // activa se leen con el mismo workspace fijado y el mismo instante.
-  const { kpis, signals, hidden, deals, stages, conversion, owners, dates, urgentes } = await withWorkspace(async (tx) => ({
+  const [puedeExcluir, leido] = await Promise.all([
+    vista === "radar" ? puedeEditarElBrief() : Promise.resolve(false),
+    withWorkspace(async (tx) => ({
     kpis: await getSalesKpis(tx),
     signals: vista === "radar" ? await listSignals(tx, { status: "pending", brief: verOcultas ? "show_hidden" : "apply" }) : [],
     hidden: vista === "radar" ? await countHiddenSignals(tx) : null,
+    // «No aceptar esta marca» (VEN-7 r4) escribe en los briefs ACTIVOS: la
+    // tarjeta ofrece elegir entre sus creadores.
+    briefCreators: vista === "radar" ? (await listBriefCreators(tx)).creators.filter((c) => c.briefStatus === "active") : [],
     deals: vista === "pipeline" ? await listPipeline(tx, { seguimiento: filtro }) : [],
     stages: vista === "pipeline" ? await getStageTotals(tx) : [],
     conversion: vista === "pipeline" ? await getStageConversion(tx) : [],
@@ -70,7 +76,9 @@ export default async function VentasPage({
     // Los avisos urgentes del outreach de hoy (VEN-15): la web no tiene
     // campana, así que se señalan junto al enlace a la política.
     urgentes: await countUrgentOutreachAlerts(tx),
-  }));
+    })),
+  ]);
+  const { kpis, signals, hidden, briefCreators, deals, stages, conversion, owners, dates, urgentes } = leido;
 
   const workspace = await getCurrentWorkspace();
   const f = formatterFor(workspace);
@@ -142,6 +150,8 @@ export default async function VentasPage({
             f={f}
             currency={workspace.currency}
             hidden={hidden ? { count: hidden.total, showing: verOcultas } : undefined}
+            // Solo quien puede cambiar el brief, y solo si hay alguno activo donde agregarla.
+            reject={puedeExcluir && briefCreators.length > 0 ? { creators: briefCreators.map((c) => ({ id: c.id, name: c.displayName })) } : null}
           />
         ) : (
           <PipelineView

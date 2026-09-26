@@ -13,6 +13,7 @@ export interface BriefLimitTexts {
   titleMax: string;
   categoryMax: string;
   notesMax: string;
+  deliverables: string;
 }
 
 /** Una frase de error del brief: recibe los topes formateados y el dato del error, si lo trae. */
@@ -176,7 +177,37 @@ export const MESSAGES = {
     briefFit: {
       belowMin: "Bajo tu mínimo",
       countryOutside: "Fuera de tus países",
-      wanted: (category: string) => `Buscas «${category}»`,
+      /** El brief busca categorías y la marca no tiene ninguna (VEN-7 r4). */
+      categoryOutside: "Fuera de lo que buscas",
+      /**
+       * La categoría buscada que tiene la marca, fundida en la Pill del
+       * encaje («82 % · alimentos»): sola, en cada tarjeta, no distinguía
+       * nada (VEN-7 r4).
+       */
+      fitWithCategory: (fit: string, category: string) => `${fit} · ${category}`,
+      /** Lo mismo, entero, para el title y el lector de pantalla. */
+      fitWithCategoryLabel: (fit: string, category: string) => `Encaje ${fit}; es de «${category}», que buscas`,
+    },
+    /**
+     * «No aceptar esta marca», desde su tarjeta (VEN-7 r4): la da de alta
+     * en el CRM como bloqueada y la agrega a «Marcas que no aceptas» del
+     * brief, en un paso. Solo lo ve quien puede cambiar el brief.
+     */
+    reject: {
+      action: "No aceptar esta marca",
+      actionFor: (name: string) => `No aceptar la marca ${name}`,
+      title: (name: string) => `¿No aceptar ${name}?`,
+      description:
+        "Entra a tu CRM como bloqueada y a «Marcas que no aceptas» del brief. El radar deja de enseñar sus señales cuando la excluyen todos los briefs activos, y ninguna cadencia le escribe.",
+      creators: "En el brief de",
+      creatorsHelp: "Con varios creadores, elige en qué briefs activos. Lo que uno no acepta, otro puede aceptarlo.",
+      confirm: "No aceptarla",
+      noCreator: "Elige al menos un brief.",
+      /** El resultado, arriba de la bandeja: la tarjeta se va con la revalidación. */
+      doneHidden: (name: string) => `${name} ya no se ve en tu bandeja: está en «Marcas que no aceptas» de tu brief.`,
+      doneVisible: (name: string) =>
+        `${name} está en «Marcas que no aceptas» del brief elegido. Se sigue viendo porque otro brief activo la acepta.`,
+      error: "No se pudo excluir la marca.",
     },
     importCsv: "Cargar una lista",
     toolbar: "Añadir al radar",
@@ -257,9 +288,13 @@ export const MESSAGES = {
               : `; ${duplicated} ya estaban en el radar y no se repitieron`;
         return `${a}${b}.`;
       },
-      /** De las que entraron, las que el brief activo deja fuera de la bandeja (VEN-7). */
-      hiddenByBrief: (n: number) =>
-        n === 1 ? "Una no se ve en la bandeja: tu brief no la acepta." : `${n} no se ven en la bandeja: tu brief no las acepta.`,
+      /**
+       * De las que entraron, las que el brief activo deja fuera de la
+       * bandeja (VEN-7). `n` llega formateado con el locale del workspace;
+       * `count`, el número crudo, elige singular o plural.
+       */
+      hiddenByBrief: (n: string, count: number) =>
+        count === 1 ? "Una no se ve en la bandeja: tu brief no la acepta." : `${n} no se ven en la bandeja: tu brief no las acepta.`,
       lineErrors: "Filas que no entraron",
       /** Filas que sí entraron, pero con algo que se descartó (un país que no se reconoce). */
       lineWarnings: "Entraron con un aviso",
@@ -318,8 +353,11 @@ export const MESSAGES = {
     allRelationships: "Todas",
     back: "Empresas",
     pendingSignals: (n: number) => `${n} ${n === 1 ? "señal" : "señales"} en el radar`,
-    /** Las de la empresa que el brief activo deja fuera de la bandeja (VEN-7); enlaza a «Verlas». */
-    hiddenSignals: (n: number) => `${n} ${n === 1 ? "señal oculta" : "señales ocultas"} por tu brief`,
+    /**
+     * Las de la empresa que el brief activo deja fuera de la bandeja
+     * (VEN-7); enlaza a «Verlas». `n` formateado, `count` para el plural.
+     */
+    hiddenSignals: (n: string, count: number) => `${n} ${count === 1 ? "señal oculta" : "señales ocultas"} por tu brief`,
 
     form: {
       metaTitle: "Nueva empresa · Ventas",
@@ -540,25 +578,31 @@ export const MESSAGES = {
      */
     conversion: {
       rate: (pct: string) => `${pct} avanza`,
-      basis: (n: string, count: number) => `de ${n} ${count === 1 ? "negocio" : "negocios"}`,
-      none: "Sin historia todavía",
+      /**
+       * Sobre cuántos negocios y de cuándo (VEN-8 r4): la tasa es la de los
+       * que entraron en los últimos `days` días, no la de toda la historia.
+       */
+      basis: (n: string, count: number, days: string) => `de ${n} ${count === 1 ? "negocio" : "negocios"} en ${days} días`,
+      none: (days: string) => `Nadie entró en ${days} días`,
       /**
        * Lo que lee un lector de pantalla y el title de la fila. `entered` y
        * `advanced` llegan formateados con el locale del workspace; las
        * cifras crudas (`enteredCount`, `advancedCount`) eligen la forma de
        * la frase: nunca se compara un texto formateado.
        */
-      label: (stage: string, entered: string, enteredCount: number, advanced: string, advancedCount: number, pct: string) => {
+      label: (
+        stage: string, entered: string, enteredCount: number, advanced: string, advancedCount: number, pct: string, days: string,
+      ) => {
         if (enteredCount === 1) {
-          return `Del negocio que entró en «${stage}», ${advancedCount === 1 ? "llegó más lejos" : "no llegó más lejos"} (${pct}).`;
+          return `En los últimos ${days} días, del negocio que entró en «${stage}», ${advancedCount === 1 ? "llegó más lejos" : "no llegó más lejos"} (${pct}).`;
         }
         const cuantos =
           advancedCount === 0 ? "ninguno llegó más lejos" : advancedCount === 1 ? "uno llegó más lejos" : `${advanced} llegaron más lejos`;
-        return `De los ${entered} negocios que entraron en «${stage}», ${cuantos} (${pct}).`;
+        return `En los últimos ${days} días, de los ${entered} negocios que entraron en «${stage}», ${cuantos} (${pct}).`;
       },
-      labelNone: (stage: string) => `Ningún negocio ha pasado todavía por «${stage}».`,
+      labelNone: (stage: string, days: string) => `Ningún negocio entró en «${stage}» en los últimos ${days} días.`,
       /** La vista Lista: la misma fila por etapa, en un resumen encima de la tabla. */
-      listTitle: "Conversión por etapa",
+      listTitle: (days: string) => `Conversión por etapa · últimos ${days} días`,
     },
   },
 
@@ -614,11 +658,11 @@ export const MESSAGES = {
     seeHidden: "Verlas en el radar",
     wants: {
       title: "Qué buscas",
-      help: "Una preferencia, no un filtro: no oculta ninguna señal. El radar marca en cada una lo que no encaja («Bajo tu mínimo», «Fuera de tus países») y la categoría que buscas; las cadencias escriben con el nombre, las notas y la divulgación de este brief.",
+      help: "Una preferencia, no un filtro: no oculta ninguna señal. El radar marca en cada una lo que no encaja («Bajo tu mínimo», «Fuera de tus países», «Fuera de lo que buscas»); las cadencias proponen solo los formatos que ofreces y fechas dentro de tu disponibilidad.",
     },
     rejects: {
       title: "Qué no aceptas",
-      help: "Una regla, no una preferencia: el radar deja fuera de la bandeja las señales de estas categorías y marcas, y las cadencias no les escriben (no se inscriben, y lo que estaba programado se cancela).",
+      help: "Una regla, no una preferencia: el radar deja fuera de la bandeja las señales de estas categorías y marcas, las cadencias no les escriben (no se inscriben, y lo que estaba programado se cancela) y ningún mensaje sale sin la divulgación, si la exiges.",
     },
     state: {
       title: "Estado",
@@ -635,16 +679,18 @@ export const MESSAGES = {
       minBudgetHelp: "Por campaña, sin impuestos. Vacío si no tienes mínimo. El radar marca las señales que estiman menos, en la misma moneda.",
       currency: "Moneda del mínimo",
       deliverables: "Qué entregas",
-      deliverablesHelp: "Los formatos que ofreces a las marcas.",
+      deliverablesHelp: "Los formatos que ofreces. Las cadencias los usan al proponer: el pitch no ofrece ningún otro.",
       availabilityFrom: "Disponible desde",
       availabilityTo: "Hasta",
+      availabilityHelp: "Las cadencias proponen fechas dentro de esta ventana. Vacía, no proponen fechas por su cuenta.",
       excludedCategories: "Categorías que no aceptas",
       excludedCategoriesHelp: "Alcohol, apuestas, suplementos… Sin importar tildes ni mayúsculas.",
       excludedCompanies: "Marcas que no aceptas",
-      excludedCompaniesHelp: "Marcas de tu CRM con las que no trabajas: competencia de un cliente, una mala experiencia.",
+      excludedCompaniesHelp:
+        "Busca entre las marcas de tu CRM: competencia de un cliente, una mala experiencia. Las que aún no están en tu CRM se excluyen desde su señal en el radar, con «No aceptar esta marca».",
       requiresDisclosure: "Divulgación obligatoria",
       requiresDisclosureHelp:
-        "Los mensajes que escriben tus cadencias dicen siempre que el contenido pagado lleva la marca de publicidad de la red.",
+        "No acepto contenido pagado sin la marca de publicidad de la red. Los mensajes de tus cadencias lo dicen siempre.",
       notes: "Notas",
       notesHelp: "Lo que deben saber los mensajes que escriben las cadencias: «siempre con código propio y enlace rastreado».",
       active: "Aplicar el brief",
@@ -657,8 +703,13 @@ export const MESSAGES = {
       empty: "Ninguna todavía.",
       categoryPlaceholder: "Escribe una categoría",
       countryPlaceholder: "Elige un país",
-      companyPlaceholder: "Elige una marca de tu CRM",
-      noCompanies: "Todavía no tienes marcas en tu CRM.",
+      companyPlaceholder: "Escribe el nombre de una marca",
+      /** La búsqueda de marcas del CRM (VEN-7 r4): en el servidor, en todo el CRM. */
+      searchMin: (min: string) => `Escribe al menos ${min} letras para buscar.`,
+      searching: "Buscando…",
+      searchNone: "Ninguna marca de tu CRM se llama así.",
+      searchResults: (n: string, count: number) => (count === 1 ? "1 marca encontrada" : `${n} marcas encontradas`),
+      searchError: "No se pudo buscar. Vuelve a intentarlo.",
       listLabel: (field: string) => `Elegidas en «${field}»`,
     },
     /** Los formatos de entregable (rate_card_item.deliverable y DELIVERABLES de @mc/core). */
@@ -708,12 +759,15 @@ export const MESSAGES = {
     InvalidBudget: () => "Escribe el presupuesto mínimo como un monto, solo con cifras, o déjalo vacío.",
     InvalidCurrency: () => "Elige la moneda del mínimo de la lista.",
     InvalidWindow: () => "La fecha final va después de la inicial.",
-    InvalidDeliverable: () => "Ese formato de entregable no existe.",
+    InvalidDeliverable: (l) => `Ese formato de entregable no existe, o son más de ${l.deliverables}.`,
     InvalidNotes: (l) => `Las notas pasan de ${l.notesMax} caracteres.`,
     CompanyNotInCrm: () => "Una de las marcas ya no está en tu CRM. Vuelve a elegirlas.",
     TooManyCompanies: (l) => `Son demasiadas marcas: hasta ${l.companies}.`,
     NoCreator: () => "Este espacio todavía no tiene un perfil de creador al que colgarle el brief.",
     UnknownCreator: () => "Ese creador no es de este espacio, o ya no existe. Vuelve a elegirlo.",
+    NoActiveBrief: () => "No hay ningún brief activo donde agregarla. Activa el brief primero.",
+    SignalNotFound: () => "Esa señal ya no está en la bandeja.",
+    SignalWithoutBrand: () => "Esta señal no dice de qué marca es: no hay nada que excluir.",
     Forbidden: () =>
       "Solo quien es dueño o administra este espacio puede cambiar el brief: lo que excluye se le oculta a todo el equipo.",
   }),

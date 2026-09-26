@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { StageConversion } from "@mc/db/queries/conversion";
+import { CONVERSION_WINDOW_DAYS, type StageConversion } from "@mc/db/queries/conversion";
 import type { PipelineDealRow, PipelineSeguimiento, StageTotal } from "@mc/db/queries/ventas";
 import { SectionTitle } from "@/components/page-header";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
@@ -142,7 +142,7 @@ export function PipelineView({
       ) : (
         <>
           {/* VEN-8: la conversión por etapa, la misma del tablero; con un filtro de «Para hoy» no se repite. */}
-          {!filtro && <ConversionSummary stages={boardStages} />}
+          {!filtro && <ConversionSummary stages={boardStages} days={f.int(CONVERSION_WINDOW_DAYS)} />}
           <PipelineList deals={boardDeals} ctx={ctx} />
         </>
       )}

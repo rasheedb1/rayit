@@ -16,5 +16,6 @@ export function briefLimitTexts(f: Pick<Formatter, "int">): BriefLimitTexts {
     titleMax: f.int(BRIEF_LIMITS.titleMax),
     categoryMax: f.int(BRIEF_LIMITS.categoryMax),
     notesMax: f.int(BRIEF_LIMITS.notesMax),
+    deliverables: f.int(BRIEF_LIMITS.deliverables),
   };
 }
