@@ -1,0 +1,27 @@
+# Los archivos de @mc/db que TIENEN que pasar contra Postgres 16 real
+# (job contra-postgres-real del CI, paso obligatorio). Los demás corren
+# después en el paso informativo hasta que CIM-2c los ponga en verde:
+# cuando uno pase, se mueve aquí, y la lista solo crece.
+#
+# Medido el 25-sep-2026 con embedded-postgres 16.14, montado como el CI
+# (db/montaje-postgres-real.sql, migrate --seed, mc_app_ci miembro de
+# mc_app y de mc_worker): estos, juntos y en este orden, 404 en verde.
+test/actividad.test.ts
+test/aplicar.test.ts
+test/bandejas.test.ts
+test/cadencias.test.ts
+test/canales.test.ts
+test/conversion.test.ts
+test/esquema.test.ts
+test/outreach-brief.test.ts
+test/outreach-encender.test.ts
+test/outreach-ficha-salidas.test.ts
+test/outreach-pitch.test.ts
+test/outreach-reclamo-reparto.test.ts
+test/outreach-reclamo.test.ts
+test/outreach-respuestas.test.ts
+test/outreach.test.ts
+test/pool.test.ts
+test/queries.test.ts
+test/schema.test.ts
+test/tls.test.ts

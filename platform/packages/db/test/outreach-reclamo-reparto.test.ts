@@ -3,6 +3,9 @@
  * atrasados (al volver a encender el envío) no se lleva las corridas de
  * los demás. Primero sale el más viejo de CADA workspace, después el
  * segundo de cada uno, y así.
+ *
+ * Solo en PGlite: el reclamo sin workspace toma de todos, y contra el
+ * Postgres compartido del CI se llevaría los toques de otros archivos.
  */
 import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
@@ -54,17 +57,17 @@ function espacio(ws: string, n: number, hace: number, ids: string[]): string {
 before(async () => {
   t = await openTestDb({ seeds: false });
   // El grande se atrasó primero (hace 60 minutos); el pequeño, después (hace 5).
-  await t.admin(espacio(GRANDE, N_GRANDE, 60, mias.grande) + espacio(PEQUENO, N_PEQUENO, 5, mias.pequeno));
+  // Solo en la base propia del archivo (ver la cabecera): en un Postgres compartido, ni se siembra.
+  if (t.kind === 'pglite') await t.admin(espacio(GRANDE, N_GRANDE, 60, mias.grande) + espacio(PEQUENO, N_PEQUENO, 5, mias.pequeno));
 }, SETUP_TIMEOUT);
 after(async () => {
-  if (t?.kind === 'postgres') {
-    await t.admin(`DELETE FROM workspace WHERE id IN ('${GRANDE}', '${PEQUENO}');
-                   DELETE FROM company WHERE name LIKE 'Marca % reparto-%'`);
-  }
   await t?.close();
 });
 
-test('con cuatro plazas, los dos del pequeño salen en la primera corrida aunque el grande tenga doce más viejos', async () => {
+test('con cuatro plazas, los dos del pequeño salen en la primera corrida aunque el grande tenga doce más viejos', async (ctx) => {
+  // El reclamo de verdad es de TODOS los workspaces: contra un Postgres compartido con otros archivos (y la demo
+  // sembrada) se llevaría sus toques. La regla es SQL puro y se mide igual en PGlite.
+  if (t.kind !== 'pglite') return ctx.skip('reclamo global: solo en la base propia de este archivo');
   const r = await t.db.asWorker((tx) => claimDueTouches(tx, { now: CLOCK, channels: ['email'], limit: 4 }));
   const ids = r.claimed.map((c) => c.id);
   assert.equal(ids.length, 4);

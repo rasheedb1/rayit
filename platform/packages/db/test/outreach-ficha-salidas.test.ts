@@ -74,6 +74,11 @@ before(async () => {
   `);
 }, SETUP_TIMEOUT);
 after(async () => {
+  // Contra un Postgres que se queda (TEST_DATABASE_URL), se lleva lo suyo: la prueba se puede volver a correr.
+  if (t?.kind === 'postgres') {
+    await t.admin(`DELETE FROM workspace WHERE id = '${WS}'; DELETE FROM company WHERE id = '${CO}';
+                   DELETE FROM app_user WHERE id IN ('${DUENA}', '${CLIENTE}');`);
+  }
   await t?.close();
 });
 

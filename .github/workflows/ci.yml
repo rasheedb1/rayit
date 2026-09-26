@@ -122,29 +122,36 @@ jobs:
         run: |
           psql "postgres://mc:mc@localhost:5432/oncue" -v ON_ERROR_STOP=1 -c \
             "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
-      - name: Límites atómicos, baja y guardia de esquema contra Postgres real (tienen que pasar)
-        # Lo que PGlite no puede probar: «el bloqueo es de verdad» de
-        # outreach.test.ts (dos transacciones que se pisan), los dos
-        # reclamos a la vez de outreach-reclamo.test.ts y la guardia
-        # de esquema.test.ts sobre un Postgres que no es el embebido. Van
-        # en su propio paso para que su rojo se vea: el paso siguiente
-        # todavía no está en verde por razones ajenas a ellas.
+      - name: Lo de @mc/db que ya pasa contra Postgres real (tiene que pasar)
+        # Lo que PGlite no puede probar («el bloqueo es de verdad» de
+        # outreach.test.ts, los dos reclamos a la vez de
+        # outreach-reclamo.test.ts, la guardia de esquema.test.ts sobre un
+        # Postgres que no es el embebido) y todo lo que ya está en verde
+        # aquí: la lista vive en packages/db/test/contra-postgres-real.txt
+        # y solo crece (CIM-2c). Un rojo de estos tumba el job.
+        working-directory: platform/packages/db
         env:
           TEST_DATABASE_URL: postgres://mc_app_ci:ci@localhost:5432/oncue
           TEST_DATABASE_ADMIN_URL: postgres://mc:mc@localhost:5432/oncue
         run: >-
-          pnpm --filter @mc/db exec node --test --experimental-strip-types --test-isolation=none
-          --test-concurrency=1 --test-timeout=120000 test/outreach.test.ts test/outreach-reclamo.test.ts test/esquema.test.ts
+          node --test --experimental-strip-types --test-isolation=none --test-concurrency=1 --test-timeout=120000
+          $(grep -v '^#' test/contra-postgres-real.txt | grep -v '^$')
       - name: El resto de @mc/db contra Postgres real (informativo, CIM-2c)
-        # Pendiente (CIM-2c en backlog.ts): varios archivos miden los
+        # Pendiente (CIM-2c en backlog.ts): estos archivos miden los
         # privilegios de mc_app con un rol de conexión que también hereda
         # los de mc_worker, o cuentan filas sin esperar la demo sembrada.
-        # Mientras tanto no tumba el job; los dos de arriba sí.
+        # El 25-sep-2026: 97 rojas y 7 canceladas en 15 archivos (la nota
+        # de CIM-2c dice cuáles); si el número sube, algo se rompió.
+        # Mientras tanto no tumba el job; el paso de arriba sí.
         continue-on-error: true
+        working-directory: platform/packages/db
         env:
           TEST_DATABASE_URL: postgres://mc_app_ci:ci@localhost:5432/oncue
           TEST_DATABASE_ADMIN_URL: postgres://mc:mc@localhost:5432/oncue
-        run: pnpm --filter @mc/db test
+        run: |
+          obligatorios=$(grep -v '^#' test/contra-postgres-real.txt | grep -v '^$')
+          node --test --experimental-strip-types --test-isolation=none --test-concurrency=1 --test-timeout=120000 \
+            $(ls test/*.test.ts | grep -vxF "$obligatorios")
 
   calidad:
     name: Tipos, lint, pruebas y build

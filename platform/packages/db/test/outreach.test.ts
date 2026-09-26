@@ -36,9 +36,9 @@
  * igual con una función que leyera y luego escribiera. La garantía real
  * (la segunda llamada ESPERA el bloqueo de la fila y ve la plaza gastada)
  * la prueba «el bloqueo es de verdad», que solo corre contra Postgres. El
- * job contra-postgres-real del CI la corre en cada PR en un paso propio
- * («Límites atómicos, baja y guardia de esquema contra Postgres real»),
- * que tumba el job si falla: el resto de @mc/db va después, en un paso
+ * job contra-postgres-real del CI la corre en cada PR en el paso
+ * obligatorio (los archivos de test/contra-postgres-real.txt), que tumba
+ * el job si falla: el resto de @mc/db va después, en un paso
  * informativo que todavía no está en verde (CIM-2c). En local, el mismo
  * montaje (db/montaje-postgres-real.sql antes de migrar) con Docker o
  * con cualquier Postgres 16: packages/db/README.md, «Contra Postgres

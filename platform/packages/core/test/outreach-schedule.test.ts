@@ -240,3 +240,41 @@ test('companyGapSlot: tres días desde el último mensaje a la marca, dentro de 
   const viernes = companyGapSlot(new Date('2026-09-22T15:00:00Z'), new Date('2026-09-25T21:30:00Z'), 1, place)!;
   assert.equal(localDay(viernes, BOGOTA), '2026-09-28', 'un sábado se corre al lunes');
 });
+
+test('los festivos del país no son hábiles: ni se programa en ellos ni se envía', async () => {
+  const { holidaysFor, PUBLIC_HOLIDAYS } = await import('../src/outreach/holidays.ts');
+  const { isBusinessDay, isoDate } = await import('../src/outreach/schedule.ts');
+  const co = holidaysFor('co');
+  assert.equal(holidaysFor('XX').length, 0, 'un país sin tabla: lunes a viernes');
+  assert.equal(holidaysFor(null).length, 0);
+  // Todo festivo de la tabla es un día de verdad, sin repetir; los trasladados (Emiliani) caen en lunes.
+  for (const [pais, dias] of Object.entries(PUBLIC_HOLIDAYS)) {
+    assert.equal(new Set(dias).size, dias.length, pais);
+    for (const d of dias) assert.equal(isoDate({ year: +d.slice(0, 4), month: +d.slice(5, 7), day: +d.slice(8, 10) }), d);
+  }
+  for (const lunes of ['2026-01-12', '2026-03-23', '2026-05-18', '2026-06-08', '2026-06-15', '2026-08-17', '2026-10-12', '2026-11-02', '2026-11-16',
+    '2027-01-11', '2027-03-22', '2027-05-10', '2027-05-31', '2027-06-07', '2027-07-05', '2027-08-16', '2027-10-18', '2027-11-15']) {
+    assert.equal(new Date(`${lunes}T12:00:00Z`).getUTCDay(), 1, lunes);
+  }
+  // Quien planifica a más de un año tiene la tabla del año siguiente.
+  assert.ok(co.some((d) => d.startsWith('2027-')));
+  const W_CO = { ...W, holidays: co };
+  // El viernes 9 de octubre de 2026, más un día hábil, es el martes 13: el lunes 12 es festivo.
+  assert.deepEqual(addBusinessDays({ year: 2026, month: 10, day: 9 }, 1, co), { year: 2026, month: 10, day: 13 });
+  assert.equal(isBusinessDay({ year: 2026, month: 10, day: 12 }, co), false);
+  assert.equal(isBusinessDay({ year: 2026, month: 10, day: 12 }), true, 'sin festivos, un lunes es hábil');
+  // El despachador no envía el lunes festivo: lo manda a la apertura del martes.
+  const lunesFestivo = zonedInstant({ year: 2026, month: 10, day: 12 }, 10 * 3600, BOGOTA);
+  assert.equal(isInsideWindow(lunesFestivo, BOGOTA, W_CO), false);
+  const hueco = nextWindowSlot(lunesFestivo, BOGOTA, W_CO);
+  assert.deepEqual(zonedParts(hueco, BOGOTA).date, { year: 2026, month: 10, day: 13 });
+  assert.equal(localClock(hueco, BOGOTA), '09:00');
+  // Y una cadencia enrolada el viernes: su paso del día 1 sale el martes, no el lunes festivo.
+  const plan = planSteps(
+    [{ id: 'a', dayOffset: 0, orderInDay: 0, scheduledTime: '10:00' }, { id: 'b', dayOffset: 1, orderInDay: 0, scheduledTime: '10:00' }],
+    { enrolledAt: zonedInstant({ year: 2026, month: 10, day: 9 }, 8 * 3600, BOGOTA), timeZone: BOGOTA, window: W_CO, seed: 'e1', spreadMinutes: 0 },
+  );
+  assert.deepEqual(plan.map((p) => zonedParts(p.at, BOGOTA).date.day), [9, 13]);
+  // Navidad no se envía aunque caiga en viernes.
+  assert.equal(isBusinessDay({ year: 2026, month: 12, day: 25 }, co), false);
+});
