@@ -297,6 +297,16 @@ export async function applyIntent(tx: WorkerSql, m: UnclassifiedMessage, d: Inte
         contactId: m.contactId, body: m.body, automatic: false, occurredAt: m.occurredAt, now, fromAddress: m.fromAddress,
       };
       const e = await applyReplyOptOut(tx, input, enrollmentStatus, null);
+      // El detector ve la baja antes de que la respuesta detenga la cadencia;
+      // el modelo, después: la cadencia del hilo ya estaba en 'replied' y
+      // termina igual que con el detector, en 'opted_out'.
+      if (e.optOut && m.enrollmentId) {
+        await tx.query(
+          `UPDATE outbound_enrollment SET status = 'opted_out', finished_at = coalesce(finished_at, $2::timestamptz)
+            WHERE id = $1::uuid AND status IN ('replied', 'completed')`,
+          [m.enrollmentId, now.toISOString()],
+        );
+      }
       out.optOut = e.optOut;
       out.optOutReview = e.optOutReview;
       out.canceled = e.canceled;
