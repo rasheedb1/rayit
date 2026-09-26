@@ -63,7 +63,8 @@ export const PITCH = {
       post_score: "Videos",
       media_kit: "Media kit",
       campaign_result: "Otras campañas",
-      quote: "Cotizaciones",
+      /** Los precios del tarifario vigente (Cotizar): citar el propio precio es normal. */
+      quote: "Tus tarifas",
     },
   },
 
@@ -134,7 +135,7 @@ export const PITCH = {
     media_kit: "Media kit",
     campaign_result: "Campaña",
     signal: "Señal",
-    quote: "Cotización",
+    quote: "Tarifario",
   } satisfies Record<ClaimSource, string>,
 
   vista: {

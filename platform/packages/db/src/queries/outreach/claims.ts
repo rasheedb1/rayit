@@ -149,6 +149,26 @@ export async function listSalesClaims(tx: SqlExecutor, opts: ListSalesClaimsOpti
         if (r.platformId) add({ id: `media_kit:${r.platformId}:followers`, source: 'media_kit', label: L.followers(r.platformId), value: num(r.followers), unit: 'count', ref });
       }
     }
+
+    // Las tarifas vigentes (el tarifario de Cotizar): poner el propio precio en un pitch es normal, y
+    // así «el paquete cuesta $ 3.100.000» cita su origen en vez de salir como cifra sin origen. Van como
+    // 'quote': el vocabulario de outbound_angle.proof_sources, que solo deja citarlas donde toca.
+    const tarifas = (
+      await tx.query<{ id: string; label_es: string; price_low: unknown; price_high: unknown; currency: string }>(
+        `SELECT i.id, i.label_es, i.price_low, i.price_high, rc.currency
+           FROM rate_card rc JOIN rate_card_item i ON i.rate_card_id = rc.id
+          WHERE rc.creator_id = $1::uuid AND rc.is_current AND NOT coalesce(i.is_modifier, false)
+          ORDER BY rc.version DESC, i.position, i.id`,
+        [creator.id],
+      )
+    ).rows;
+    for (const r of tarifas) {
+      const ref = { table: 'rate_card_item', id: r.id };
+      const low = num(r.price_low);
+      const high = num(r.price_high);
+      add({ id: `rate:${r.id}:low`, source: 'quote', label: L.rateLow(r.label_es), value: low, unit: 'money', currency: r.currency, ref });
+      if (high !== low) add({ id: `rate:${r.id}:high`, source: 'quote', label: L.rateHigh(r.label_es), value: high, unit: 'money', currency: r.currency, ref });
+    }
   }
 
   // Las campañas con resultado calculado, con la marca que las respalda: las de ESTE creador (o las del

@@ -427,6 +427,24 @@ test('pulido r1: copiar con cifras sin origen deja el borrador marcado y el edit
   assert.equal((await marca()).held_reason, null);
 });
 
+test('pulido r1: las tarifas vigentes son fichas con origen: citar el propio precio no deja una cifra sin origen', async () => {
+  const c = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => loadPitchComposer(tx, CAFE_ALMA, LOCALE));
+  const tarifas = c.variants['']!.claims.filter((x) => x.id.startsWith('rate:'));
+  assert.ok(tarifas.length >= 4, tarifas.map((x) => x.id).join(' '));
+  for (const x of tarifas) {
+    assert.deepEqual([x.source, x.unit, x.currency, x.ref.table], ['quote', 'money', 'COP', 'rate_card_item'], x.id);
+  }
+  const desde = tarifas[0]!;
+  const body = pitchWith(c.variants['']!.claims.find((x) => x.id === 'baseline:tiktok:median_views')!, c.variants['']!.claims.find((x) => x.id === 'baseline:tiktok:median_views')!.display)
+    .replace('Mis recetas', `El video dedicado arranca en ${desde.display} [claim:${desde.id}]. Mis recetas`);
+  const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    savePitch(tx, { ...base, contactId: VALENTINA, subject: 'Tu cold brew y mi audiencia', body, intent: 'draft', copied: true, now: new Date() }),
+  );
+  assert.ok(r.ok, JSON.stringify(r));
+  const pf = preflight({ stepType: 'email', subject: 'Tu cold brew y mi audiencia', body: renderTemplate(body, { first_name: 'Valentina' })!, claims: c.variants['']!.claims, firstTouch: true });
+  assert.ok(!pf.issues.some((i) => i.code === 'unsourced_figure' || i.code === 'claim_mismatch'), JSON.stringify(pf.issues));
+});
+
 test('pulido r1: savePitch no programa un mensaje que nombra a otra persona de la marca (other_person)', async () => {
   await t.admin(`UPDATE outbound_policy SET postal_address = 'Calle 93 # 11-26, Bogotá' WHERE workspace_id = '${WORKSPACE_LAURA}'`);
   const c = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => loadPitchComposer(tx, CAFE_ALMA, LOCALE));

@@ -45,6 +45,8 @@ export const CLAIM_LABELS = {
     campaignRedemptions: (brand: string) => `Códigos redimidos en la campaña con ${brand}`,
     campaignFollowers: (brand: string) => `Seguidores que ganó ${brand} con la campaña`,
     signalActiveAds: (brand: string) => `Anuncios activos de ${brand}`,
+    rateLow: (item: string) => `Tu tarifa de ${item}: desde`,
+    rateHigh: (item: string) => `Tu tarifa de ${item}: hasta`,
   },
   en: {
     medianViews: (p: string) => `Median 7-day views on ${platformName(p)}`,
@@ -61,6 +63,8 @@ export const CLAIM_LABELS = {
     campaignRedemptions: (brand: string) => `Codes redeemed in the campaign with ${brand}`,
     campaignFollowers: (brand: string) => `Followers ${brand} gained with the campaign`,
     signalActiveAds: (brand: string) => `Active ads by ${brand}`,
+    rateLow: (item: string) => `Your rate for ${item}: from`,
+    rateHigh: (item: string) => `Your rate for ${item}: up to`,
   },
 } as const;
 
