@@ -46,6 +46,7 @@
  * consulta nombra su workspace y sus filas.
  */
 import { detectOptOut, type OptOutResult } from '@mc/core';
+import { INBOX_URLS } from '@mc/core/outreach/intent-messages';
 import { channelLabel, noticeLang, OUTREACH_NOTICE_TEXTS, OUTREACH_URLS } from '@mc/core/outreach/messages';
 import type { SqlExecutor } from '../../client.ts';
 import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
@@ -209,7 +210,7 @@ async function senderIsContact(tx: SqlExecutor, input: InboundEffectsInput): Pro
 interface Who {
   locale: string | null;
   who: string | null;
-  /** La empresa de la ficha: el aviso lleva a su bloque «Mensajes de la cadencia», donde se ve la respuesta. */
+  /** La empresa de la ficha: sin ficha, el aviso lleva a su bloque «Mensajes de la cadencia». */
   company_id: string | null;
 }
 
@@ -256,7 +257,8 @@ async function notifyInbound(
              'outreach_reply', $3, $4, $5, 'outbound_message', $6::uuid, $8, $7::timestamptz)`,
     [
       input.workspaceId, input.enrollmentId, text.severity, text.title, text.body, input.messageId, input.now.toISOString(),
-      w.company_id ? OUTREACH_URLS.companyCadence(w.company_id) : '/ventas',
+      // La conversación en la bandeja unificada (VEN-14); sin ficha, la de la empresa.
+      input.contactId ? INBOX_URLS.thread(input.contactId, input.channel) : w.company_id ? OUTREACH_URLS.companyCadence(w.company_id) : '/ventas',
     ],
   );
 }

@@ -296,8 +296,8 @@ export const OUTREACH_NOTICE_TEXTS = {
     failedBody: (who: string, channel: string, reason: string, company: string) =>
       `El mensaje a ${who} por ${channel} no se envió: ${reason}. Revisa la ficha de ${company}.`,
     heldTitle: (company: string) => `Un mensaje a ${company} espera tu revisión`,
-    heldBody: (who: string, channel: string, reason: string, company: string) =>
-      `El mensaje a ${who} por ${channel} quedó retenido: ${reason}. Lo que sigue de esa cadencia espera; revisa la ficha de ${company}.`,
+    heldBody: (who: string, channel: string, reason: string) =>
+      `El mensaje a ${who} por ${channel} quedó retenido: ${reason}. Lo que sigue de esa cadencia espera; apruébalo, edítalo o sáltalo en Aprobaciones.`,
     replyTitle: (who: string) => `${who} respondió`,
     replyBody: (channel: string, stop: ReplyStop = NO_STOP) =>
       `Llegó una respuesta por ${channel}. Lo pendiente con esa persona se canceló` +
@@ -325,8 +325,8 @@ export const OUTREACH_NOTICE_TEXTS = {
     failedBody: (who: string, channel: string, reason: string, company: string) =>
       `The message to ${who} over ${channel} was not sent: ${reason}. Check ${company}'s page.`,
     heldTitle: (company: string) => `A message to ${company} needs your review`,
-    heldBody: (who: string, channel: string, reason: string, company: string) =>
-      `The message to ${who} over ${channel} is on hold: ${reason}. The rest of that cadence waits; check ${company}'s page.`,
+    heldBody: (who: string, channel: string, reason: string) =>
+      `The message to ${who} over ${channel} is on hold: ${reason}. The rest of that cadence waits; approve, edit or skip it in Approvals.`,
     replyTitle: (who: string) => `${who} replied`,
     replyBody: (channel: string, stop: ReplyStop = NO_STOP) =>
       `A reply came in over ${channel}. Everything pending for that person was canceled` +
