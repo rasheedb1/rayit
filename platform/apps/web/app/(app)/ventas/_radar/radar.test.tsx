@@ -31,6 +31,7 @@ const card: SignalCardData = {
   evidenceUrl: null,
   viaCsv: false,
   crm: null,
+  hiddenReason: null,
 };
 
 beforeEach(() => {

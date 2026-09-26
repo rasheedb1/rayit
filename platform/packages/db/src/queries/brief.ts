@@ -188,6 +188,32 @@ export async function getBrief(tx: WorkspaceTx): Promise<OutboundBrief | null> {
 }
 
 /**
+ * De quién es (o sería) el brief: el creador del brief guardado o, si no
+ * hay, el creador principal del workspace (el primero activo, como
+ * Cotizar). Null si el workspace no tiene ninguno: la pantalla lo dice
+ * en vez de ofrecer un formulario que no podría guardar (NoCreator).
+ */
+export async function getBriefOwner(tx: WorkspaceTx): Promise<{ id: string; displayName: string } | null> {
+  const { rows } = await tx.query<{ id: string; display_name: string }>(
+    `SELECT r.id, r.display_name FROM (
+       SELECT cp.id, cp.display_name, 0 AS o
+         FROM creator_profile cp
+        WHERE cp.id = (SELECT b.creator_id FROM outbound_brief b
+                        ORDER BY (b.status = 'active') DESC, b.updated_at DESC, b.created_at DESC LIMIT 1)
+       UNION ALL
+       (SELECT cp.id, cp.display_name, 1 AS o
+          FROM creator_profile cp
+         WHERE cp.status = 'active' AND cp.deleted_at IS NULL
+         ORDER BY cp.created_at
+         LIMIT 1)
+     ) r
+     ORDER BY r.o
+     LIMIT 1`,
+  );
+  return rows[0] ? { id: rows[0].id, displayName: rows[0].display_name } : null;
+}
+
+/**
  * Las categorías que ya aparecen en este workspace, para sugerirlas al
  * escribir: los sectores y nichos de las empresas del CRM, lo que traen
  * las señales y lo que ya tiene el brief. Sin repetir (por brand_key),

@@ -42,6 +42,7 @@ const vitale: SignalRow = {
   discardReason: null,
   reviewedAt: null,
   via: "manual",
+  hiddenBy: null,
 };
 
 vi.mock("@mc/db/queries/ventas", () => ({
@@ -64,6 +65,10 @@ vi.mock("@mc/db/queries/ventas-ficha", () => ({
 // (_seguimiento/para-hoy.test.tsx); aquí basta con que la portada lo monte.
 vi.mock("./empresas/actions", () => ({ fijarSiguienteAccion: vi.fn(), marcarHecha: vi.fn(), registrarActividad: vi.fn() }));
 vi.mock("./_seguimiento/para-hoy", () => ({ ParaHoy: () => <div data-testid="para-hoy" /> }));
+vi.mock("@mc/db/queries/brief", () => ({
+  countHiddenSignals: async () => ({ total: 0, byCompany: 0, byCategory: 0 }),
+}));
+vi.mock("@mc/db/queries/conversion", () => ({ getStageConversion: async () => [] }));
 vi.mock("@/lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
 vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),

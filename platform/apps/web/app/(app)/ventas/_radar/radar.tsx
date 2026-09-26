@@ -35,6 +35,19 @@ export interface SignalCardData {
    * como la marca.
    */
   crm: { companyHref: string; joinsDeal: boolean; dealName: string | null } | null;
+  /**
+   * Por qué el brief la deja fuera («Tu brief excluye esta categoría»),
+   * solo cuando se están viendo las ocultas (VEN-7). Null si se ve.
+   */
+  hiddenReason: string | null;
+}
+
+/** La línea de las señales que el brief deja fuera, ya escrita en el servidor. */
+export interface HiddenLine {
+  text: string;
+  /** «Verlas» (?ocultas=1) u «Ocultarlas». */
+  toggle: { href: string; label: string };
+  brief: { href: string; label: string };
 }
 
 type Panel = "none" | "manual" | "csv";
@@ -50,7 +63,17 @@ type AvisoRadar = { notice?: string; message?: string; link?: { href: string; la
  * página se revalida y la tarjeta desaparece de la bandeja, y con ella
  * se iría el mensaje que explica adónde fue.
  */
-export function Radar({ cards, currency, countries }: { cards: SignalCardData[]; currency: string; countries: CountryOption[] }) {
+export function Radar({
+  cards,
+  currency,
+  countries,
+  hiddenLine = null,
+}: {
+  cards: SignalCardData[];
+  currency: string;
+  countries: CountryOption[];
+  hiddenLine?: HiddenLine | null;
+}) {
   const t = MESSAGES.radar;
   const [panel, setPanel] = useState<Panel>("none");
   const [aviso, setAviso] = useState<AvisoRadar | null>(null);
@@ -66,6 +89,18 @@ export function Radar({ cards, currency, countries }: { cards: SignalCardData[];
       <SectionTitle meta={cards.length > 0 ? t.meta(cards.length) : undefined}>
         <span id="radar">{t.title}</span>
       </SectionTitle>
+
+      {hiddenLine && (
+        <p className="-mt-2 mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted" data-testid="ocultas-por-brief">
+          <span className="tabular-nums">{hiddenLine.text}</span>
+          <Link href={hiddenLine.toggle.href} className="text-ink underline underline-offset-4 hover:text-ink-2">
+            {hiddenLine.toggle.label}
+          </Link>
+          <Link href={hiddenLine.brief.href} className="text-ink underline underline-offset-4 hover:text-ink-2">
+            {hiddenLine.brief.label}
+          </Link>
+        </p>
+      )}
 
       <div ref={toolbarRef} role="group" aria-label={t.toolbar} className="mb-4 flex flex-wrap gap-2">
         <Button variant={panel === "manual" ? "primary" : "secondary"} size="sm" onClick={() => open("manual")} aria-expanded={panel === "manual"}>
@@ -178,6 +213,7 @@ function SignalCard({
                 <Pill kind={card.fit.kind}>{card.fit.text}</Pill>
               </span>
             )}
+            {card.hiddenReason && <Pill kind="warn">{card.hiddenReason}</Pill>}
             {card.crm && (
               <Link
                 href={card.crm.companyHref}

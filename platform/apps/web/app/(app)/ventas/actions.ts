@@ -174,7 +174,7 @@ export async function anotarSenal(_prev: VentasState, formData: FormData): Promi
   const v = parsed.data;
   if (excedeMontoMaximo(v.budget)) return { errors: { budget: await montoMaximoError() } };
 
-  let res: { duplicate: boolean; reason: SignalDuplicateReason | null; companyId: string | null };
+  let res: { duplicate: boolean; reason: SignalDuplicateReason | null; companyId: string | null; hiddenBy?: string | null };
   try {
     res = await withWorkspace((tx) =>
       createSignal(tx, {
@@ -203,7 +203,9 @@ export async function anotarSenal(_prev: VentasState, formData: FormData): Promi
     return { message: duplicateMessage(res.reason), link };
   }
   revalidateVentas();
-  return { ok: true, notice: MESSAGES.radar.form.created, stamp: Date.now() };
+  // Entró, pero el brief activo la deja fuera de la bandeja (VEN-7):
+  // decir «ya está en la bandeja» sería mandar a buscarla donde no está.
+  return { ok: true, notice: res.hiddenBy ? MESSAGES.radar.form.createdHidden : MESSAGES.radar.form.created, stamp: Date.now() };
 }
 
 // ---------------------------------------------------------------------
@@ -232,11 +234,13 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
 
   let created: number;
   let duplicated: number;
+  let hiddenByBrief: number;
   let createdRows: ReadonlySet<number>;
   try {
     const res = await withWorkspace((tx) => importSignals(tx, parsed.rows, { headline: t.headline }));
     created = res.created;
     duplicated = res.duplicated;
+    hiddenByBrief = res.hiddenByBrief ?? 0;
     createdRows = new Set(res.createdRows);
   } catch (err) {
     return { message: messageOf(err, t.error) };
@@ -248,7 +252,7 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
   const lineWarnings = parsed.warnings.filter((w) => createdRows.has(w.row)).map(({ line, message }) => ({ line, message }));
   return {
     ok: true,
-    notice: t.result(created, duplicated),
+    notice: hiddenByBrief > 0 ? `${t.result(created, duplicated)} ${t.hiddenByBrief(hiddenByBrief)}` : t.result(created, duplicated),
     lineErrors: parsed.errors.length > 0 ? parsed.errors : undefined,
     lineWarnings: lineWarnings.length > 0 ? lineWarnings : undefined,
     stamp: Date.now(),

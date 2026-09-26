@@ -38,6 +38,7 @@ function senal(over: Partial<SignalRow>): SignalRow {
     discardReason: null,
     reviewedAt: null,
     via: "manual",
+    hiddenBy: null,
     ...over,
   };
 }

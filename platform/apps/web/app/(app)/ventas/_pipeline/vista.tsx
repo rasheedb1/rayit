@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { StageConversion } from "@mc/db/queries/conversion";
 import type { PipelineDealRow, PipelineSeguimiento, StageTotal } from "@mc/db/queries/ventas";
 import { SectionTitle } from "@/components/page-header";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
@@ -12,6 +13,7 @@ import { lostReasonText, type PipelineForma } from "../_lib/estado";
 import { siguienteAccionData, ultimoContacto, type SeguimientoContexto } from "../_seguimiento/datos";
 import { SiguienteAccion } from "../_seguimiento/siguiente-accion";
 import { UltimoContacto } from "../_seguimiento/ultimo-contacto";
+import { conversionView } from "./conversion";
 import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 
 /**
@@ -23,7 +25,8 @@ import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
  * Este componente es de servidor: formatea montos y fechas con el
  * formateador del workspace y le pasa al tablero, que es de cliente,
  * los textos ya hechos. Los montos de cada columna llegan de
- * getStageTotals, sumados en SQL.
+ * getStageTotals, sumados en SQL, y la conversión de cada etapa de
+ * getStageConversion (VEN-8), calculada también en SQL.
  *
  * La siguiente acción de cada negocio abierto (VEN-4) se edita en su
  * tarjeta y en su fila. Sale de la misma lectura que el negocio
@@ -34,6 +37,7 @@ import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 export function PipelineView({
   deals,
   stages,
+  conversion = [],
   f,
   forma,
   filtro = null,
@@ -41,6 +45,8 @@ export function PipelineView({
 }: {
   deals: PipelineDealRow[];
   stages: StageTotal[];
+  /** La conversión de cada etapa abierta; las cerradas no vienen. */
+  conversion?: StageConversion[];
   f: Formatter;
   forma: PipelineForma;
   /** La lista filtrada desde «Para hoy» (VEN-4): ya viene filtrada de SQL; aquí se dice y se ofrece quitarlo. */
@@ -107,6 +113,11 @@ export function PipelineView({
     amountText: s.dealCount > 0 ? f.money(s.amount, undefined, { mode: "short" }) : null,
     isLost: s.isLost,
     isWon: s.isWon,
+    conversion: conversionView(
+      conversion.find((c) => c.stageId === s.stageId),
+      s.labelEs,
+      f,
+    ),
   }));
 
   return (

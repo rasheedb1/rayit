@@ -3,8 +3,9 @@ import type { Formatter } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { safeHref } from "@/lib/url";
 import { pillForFit } from "../_lib/estado";
+import { MESSAGES } from "../_lib/messages";
 import { countryOptions } from "../_lib/paises";
-import { Radar, type SignalCardData } from "./radar";
+import { Radar, type HiddenLine, type SignalCardData } from "./radar";
 
 /**
  * La bandeja del radar: las señales por revisar, de mayor a menor
@@ -18,8 +19,23 @@ import { Radar, type SignalCardData } from "./radar";
  * Este componente es de servidor y solo prepara los datos: formatea
  * fechas y montos con el formateador del workspace y se los pasa ya
  * hechos a la bandeja, que es de cliente porque acepta y descarta.
+ *
+ * `hidden` son las pendientes que el brief activo deja fuera (VEN-7):
+ * cuántas y si se están viendo (?ocultas=1). La bandeja lo dice en una
+ * línea bajo el título; sin ninguna oculta, no dice nada.
  */
-export function RadarView({ signals, f, currency }: { signals: SignalRow[]; f: Formatter; currency: string }) {
+export function RadarView({
+  signals,
+  f,
+  currency,
+  hidden,
+}: {
+  signals: SignalRow[];
+  f: Formatter;
+  currency: string;
+  hidden?: { count: number; showing: boolean };
+}) {
+  const h = MESSAGES.radar.hidden;
   const cards: SignalCardData[] = signals.map((s) => ({
     id: s.id,
     companyName: s.companyName,
@@ -41,6 +57,15 @@ export function RadarView({ signals, f, currency }: { signals: SignalRow[]; f: F
             dealName: s.openDealId !== null ? dealLabel(s.companyName, s.openDealName) : null,
           }
         : null,
+    hiddenReason: s.hiddenBy ? h.reason[s.hiddenBy] : null,
   }));
-  return <Radar cards={cards} currency={currency} countries={countryOptions(f.locale)} />;
+  const line: HiddenLine | null =
+    hidden && hidden.count > 0
+      ? {
+          text: hidden.showing ? h.showing(f.int(hidden.count), hidden.count) : h.line(f.int(hidden.count), hidden.count),
+          toggle: hidden.showing ? { href: "/ventas", label: h.hide } : { href: "/ventas?ocultas=1", label: h.show },
+          brief: { href: "/ventas/brief", label: h.editBrief },
+        }
+      : null;
+  return <Radar cards={cards} currency={currency} countries={countryOptions(f.locale)} hiddenLine={line} />;
 }

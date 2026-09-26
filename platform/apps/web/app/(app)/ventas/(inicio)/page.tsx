@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { countHiddenSignals } from "@mc/db/queries/brief";
+import { getStageConversion } from "@mc/db/queries/conversion";
 import {
   PIPELINE_SEGUIMIENTOS,
   getSalesKpis,
@@ -36,7 +38,7 @@ export const dynamic = "force-dynamic";
 export default async function VentasPage({
   searchParams,
 }: {
-  searchParams: Promise<{ vista?: string; forma?: string; seguimiento?: string }>;
+  searchParams: Promise<{ vista?: string; forma?: string; seguimiento?: string; ocultas?: string }>;
 }) {
   const params = await searchParams;
   const vista = tabKey(params.vista);
@@ -49,13 +51,18 @@ export default async function VentasPage({
       ? (params.seguimiento as PipelineSeguimiento)
       : null;
 
+  // «Verlas»: las señales que el brief activo deja fuera, marcadas (VEN-7).
+  const verOcultas = params.ocultas === "1";
+
   // Una sola transacción para toda la pantalla: los KPI y la vista
   // activa se leen con el mismo workspace fijado y el mismo instante.
-  const { kpis, signals, deals, stages, owners, dates, urgentes } = await withWorkspace(async (tx) => ({
+  const { kpis, signals, hidden, deals, stages, conversion, owners, dates, urgentes } = await withWorkspace(async (tx) => ({
     kpis: await getSalesKpis(tx),
-    signals: vista === "radar" ? await listSignals(tx, { status: "pending" }) : [],
+    signals: vista === "radar" ? await listSignals(tx, { status: "pending", brief: verOcultas ? "show_hidden" : "apply" }) : [],
+    hidden: vista === "radar" ? await countHiddenSignals(tx) : null,
     deals: vista === "pipeline" ? await listPipeline(tx, { seguimiento: filtro }) : [],
     stages: vista === "pipeline" ? await getStageTotals(tx) : [],
+    conversion: vista === "pipeline" ? await getStageConversion(tx) : [],
     // La siguiente acción de cada negocio abierto, editable en la tarjeta
     // (VEN-4), sale de listPipeline: aquí solo las personas y el reloj.
     owners: vista === "pipeline" ? await listOwnerOptions(tx) : [],
@@ -130,11 +137,17 @@ export default async function VentasPage({
       <div className="mt-10">
         <ModuleTabs active={vista === "radar" ? "/ventas" : "/ventas?vista=pipeline"} />
         {vista === "radar" ? (
-          <RadarView signals={signals} f={f} currency={workspace.currency} />
+          <RadarView
+            signals={signals}
+            f={f}
+            currency={workspace.currency}
+            hidden={hidden ? { count: hidden.total, showing: verOcultas } : undefined}
+          />
         ) : (
           <PipelineView
             deals={deals}
             stages={stages}
+            conversion={conversion}
             f={f}
             forma={forma}
             filtro={filtro}

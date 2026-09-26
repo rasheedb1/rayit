@@ -24,6 +24,7 @@ import {
   countHiddenSignals,
   getActiveBrief,
   getBrief,
+  getBriefOwner,
   listBriefCompanyOptions,
   listCategorySuggestions,
   saveBrief,
@@ -132,6 +133,8 @@ describe('VEN-7 · sin brief, el radar no oculta nada', () => {
     assert.deepEqual(hidden, { total: 0, byCompany: 0, byCategory: 0 });
     assert.equal(pending, 6);
     assert.equal(b, null, 'el brief de Laura (seed) no se ve desde otro workspace');
+    const owner = await enBrief((tx) => getBriefOwner(tx));
+    assert.deepEqual(owner, { id: CREADORA, displayName: 'Creadora del brief' }, 'sin brief, el creador principal');
   });
 });
 

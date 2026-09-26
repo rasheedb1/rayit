@@ -10,11 +10,13 @@ import { formatMoney } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { moverNegocio } from "../actions";
 import { Aviso } from "../../_lib/aviso";
+import { Dialogo } from "../_componentes/dialogo";
 import { LOST_REASON_OPTIONS, applyMove } from "../_lib/estado";
 import { MESSAGES } from "../_lib/messages";
 import type { SeguimientoContexto, SiguienteAccionData, UltimoContactoData } from "../_seguimiento/datos";
 import { SiguienteAccion } from "../_seguimiento/siguiente-accion";
 import { UltimoContacto } from "../_seguimiento/ultimo-contacto";
+import { StageConversionRow, type ConversionView } from "./conversion";
 
 /** Un negocio listo para pintar: montos y fechas ya formateados en el servidor. */
 export interface BoardDeal {
@@ -61,6 +63,8 @@ export interface BoardStage {
   isLost: boolean;
   /** Una etapa ganada: pasar a ella un negocio sin monto pide el monto. */
   isWon: boolean;
+  /** La conversión de la etapa (VEN-8), ya escrita; null en las cerradas. */
+  conversion: ConversionView | null;
 }
 
 type Move = { dealId: string; toStageId: string; toStageLabel: string };
@@ -81,9 +85,12 @@ const DRAG_TYPE = "application/x-oncue-deal";
  * getStageTotals, y la acción revalida la página para traerlos nuevos.
  *
  * Soltar (o elegir en el menú) una etapa perdida no mueve todavía: abre
- * en la tarjeta la misma pregunta que «Descartar» en el radar, «¿Por qué
- * lo pierdes?», con el motivo obligatorio. Sin motivo el servidor
- * tampoco lo mueve (LostReasonRequired).
+ * un diálogo, «¿Por qué lo pierdes?», con el motivo obligatorio (VEN-8).
+ * Sin motivo el servidor tampoco lo mueve (LostReasonRequired), y la base
+ * no deja llegar al COMMIT un perdido sin motivo (0043).
+ *
+ * Debajo de cada columna abierta va su conversión (StageConversionRow):
+ * qué parte de los negocios que entraron llegó más lejos, y sobre cuántos.
  *
  * Soltar en una etapa ganada un negocio «Sin monto» tampoco mueve
  * todavía: pregunta «¿Por cuánto lo ganaste?» en la tarjeta. Sin monto el
@@ -227,10 +234,10 @@ export function PipelineBoard({
                           }}
                           onMove={(to) => move(deal.id, to)}
                           asking={
-                            pregunta?.dealId === deal.id
+                            pregunta?.dealId === deal.id && pregunta.kind === "won"
                               ? (() => {
                                   const to = stages.find((s) => s.id === pregunta.toStageId);
-                                  return to ? { stage: to, kind: pregunta.kind } : null;
+                                  return to ? { stage: to } : null;
                                 })()
                               : null
                           }
@@ -241,12 +248,78 @@ export function PipelineBoard({
                     </ul>
                   )}
                 </div>
+                <StageConversionRow view={stage.conversion} />
               </li>
             );
           })}
         </ul>
       </div>
+
+      {pregunta?.kind === "lost" &&
+        (() => {
+          const deal = optimistic.find((d) => d.id === pregunta.dealId);
+          const stage = stages.find((s) => s.id === pregunta.toStageId);
+          return deal && stage ? (
+            <PerderDialogo
+              deal={deal}
+              stage={stage}
+              onConfirm={(lostReason) => move(deal.id, stage.id, { lostReason })}
+              onCancel={() => setPregunta(null)}
+            />
+          ) : null;
+        })()}
     </div>
+  );
+}
+
+/**
+ * «¿Por qué lo pierdes?»: el motivo es obligatorio y sale de la lista de
+ * la base (deal.lost_reason). Cancelar, Escape o clic fuera dejan el
+ * negocio donde estaba.
+ */
+function PerderDialogo({
+  deal,
+  stage,
+  onConfirm,
+  onCancel,
+}: {
+  deal: BoardDeal;
+  stage: BoardStage;
+  onConfirm: (lostReason: string) => void;
+  onCancel: () => void;
+}) {
+  const t = MESSAGES.pipeline.lost;
+  const [error, setError] = useState<string | undefined>();
+  const selectId = `perdido-${deal.id}`;
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const reason = String(new FormData(event.currentTarget).get("lostReason") ?? "");
+    if (!reason) {
+      setError(MESSAGES.validacion.lostReason);
+      document.getElementById(selectId)?.focus();
+      return;
+    }
+    setError(undefined);
+    onConfirm(reason);
+  }
+
+  return (
+    <Dialogo title={t.dialogTitle(deal.companyName)} description={t.help} onClose={onCancel}>
+      <form onSubmit={submit} noValidate aria-label={t.formLabel(deal.companyName)}>
+        <Field label={t.title} error={error} required htmlFor={selectId}>
+          <Select name="lostReason" defaultValue="" placeholder={t.placeholder} options={LOST_REASON_OPTIONS} autoFocus />
+        </Field>
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onCancel}>
+            {MESSAGES.acciones.cancel}
+          </Button>
+          <Button type="submit" variant="danger" size="sm">
+            {t.confirm(stage.label)}
+          </Button>
+        </div>
+      </form>
+    </Dialogo>
   );
 }
 
@@ -272,11 +345,12 @@ function DealCard({
   onDragEnd: () => void;
   onMove: (toStageId: string) => void;
   /**
-   * La etapa a la que se quiere pasar mientras se pregunta algo: el
-   * motivo si es perdida («lost»), el monto si es ganada y no tiene («won»).
+   * La etapa ganada a la que se quiere pasar un negocio sin monto,
+   * mientras se pregunta por cuánto. El motivo de pérdida no se pregunta
+   * en la tarjeta: va en su diálogo (PerderDialogo).
    */
-  asking: { stage: BoardStage; kind: "lost" | "won" } | null;
-  onConfirm: (extra: { lostReason?: string; amount?: string }) => void;
+  asking: { stage: BoardStage } | null;
+  onConfirm: (extra: { amount?: string }) => void;
   onCancel: () => void;
 }) {
   const t = MESSAGES.pipeline;
@@ -284,7 +358,7 @@ function DealCard({
   const [askError, setAskError] = useState<string | undefined>();
   const [amount, setAmount] = useState("");
   const amountId = `ganado-${deal.id}`;
-  const askingWon = asking?.kind === "won";
+  const askingWon = asking !== null;
   /** Mientras se escribe la siguiente acción, la tarjeta no se arrastra: seleccionar texto la movía. */
   const [editingNext, setEditingNext] = useState(false);
   const sinAccion = sinSiguienteAccion(deal);
@@ -296,17 +370,6 @@ function DealCard({
   useEffect(() => {
     if (askingWon) document.getElementById(amountId)?.focus();
   }, [askingWon, amountId]);
-
-  function lose(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const reason = String(new FormData(event.currentTarget).get("lostReason") ?? "");
-    if (!reason) {
-      setAskError(MESSAGES.validacion.lostReason);
-      return;
-    }
-    setAskError(undefined);
-    onConfirm({ lostReason: reason });
-  }
 
   function win(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -404,23 +467,7 @@ function DealCard({
           ))}
       </select>
 
-      {asking?.kind === "lost" && (
-        <form onSubmit={lose} noValidate aria-label={t.lost.formLabel(deal.companyName)} className="mt-3 border-t border-border pt-3">
-          <Field label={t.lost.title} help={t.lost.help} error={askError} required htmlFor={`perdido-${deal.id}`}>
-            <Select name="lostReason" defaultValue="" placeholder={t.lost.placeholder} options={LOST_REASON_OPTIONS} autoFocus />
-          </Field>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button type="submit" variant="danger" size="sm">
-              {t.lost.confirm(asking.stage.label)}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={cancel}>
-              {MESSAGES.acciones.cancel}
-            </Button>
-          </div>
-        </form>
-      )}
-
-      {asking?.kind === "won" && (
+      {asking && (
         <form onSubmit={win} noValidate aria-label={t.won.formLabel(deal.companyName)} className="mt-3 border-t border-border pt-3">
           <Field label={t.won.title} help={t.won.help} error={askError} required htmlFor={amountId}>
             <MoneyInput value={amount} currency={deal.currency} onChange={(v) => setAmount(v)} />
