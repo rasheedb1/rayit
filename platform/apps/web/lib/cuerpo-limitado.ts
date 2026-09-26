@@ -10,7 +10,7 @@
  * corta en cuanto se pasa aunque la cabecera mintiera o no estuviera.
  */
 
-export type LimitedBytes = { ok: true; bytes: Uint8Array } | { ok: false; status: 400 | 413 };
+export type LimitedBytes = { ok: true; bytes: Uint8Array<ArrayBuffer> } | { ok: false; status: 400 | 413 };
 export type LimitedBody = { ok: true; value: unknown } | { ok: false; status: 400 | 413 };
 
 /** El cuerpo en bytes, o 413 si pasa de `maxBytes` y 400 si no hay cuerpo. */
