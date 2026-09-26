@@ -35,7 +35,8 @@
  *     había completado sus pasos, la persona se detiene ENTERA
  *     (stopOnReply): ese enrolamiento y los demás suyos del workspace, en
  *     cualquier secuencia, pasan a replied con lo cancelable cancelado
- *     (CANCELABLE_TOUCH_STATUSES: draft, scheduled, held); y, con
+ *     (CANCELABLE_TOUCH_STATUSES: draft, scheduled, held), igual que los
+ *     pitches sueltos a la misma ficha (cancelLoosePitches); y, con
  *     outbound_policy.stop_company_on_reply (0054, encendido por defecto),
  *     las cadencias de las otras personas de la misma marca quedan en
  *     pausa. Se avisa una vez, diciendo qué se detuvo. Si ya había
@@ -362,6 +363,28 @@ export async function applyReplyOptOut(
   };
 }
 
+/**
+ * Cancela lo pendiente de la ficha que no es de ninguna cadencia ni una
+ * respuesta escrita en la bandeja: los pitches sueltos. Con
+ * `receivedMessageId`, solo los creados antes de que llegara ese mensaje: un
+ * pitch que la creadora programó después de leer la respuesta es una
+ * decisión suya, y una clasificación tardía o una corrección no la deshace.
+ */
+export async function cancelLoosePitches(
+  tx: SqlExecutor, workspaceId: string, contactId: string, reason: string, receivedMessageId?: string,
+): Promise<string[]> {
+  return (
+    await tx.query<{ id: string }>(
+      `UPDATE outbound_touch t SET status = 'canceled', blocked_reason = $3
+        WHERE t.contact_id = $1::uuid AND t.workspace_id = $2::uuid AND t.enrollment_id IS NULL AND t.reply_to_message_id IS NULL
+          AND t.status = ANY($4::text[])
+          AND ($5::uuid IS NULL OR t.created_at <= (SELECT m.created_at FROM outbound_message m WHERE m.id = $5::uuid))
+        RETURNING t.id`,
+      [contactId, workspaceId, reason, [...CANCELABLE_TOUCH_STATUSES], receivedMessageId ?? null],
+    )
+  ).rows.map((r) => r.id);
+}
+
 /** ¿Una respuesta detiene este enrolamiento? Si sigue vivo o si ya había completado sus pasos. */
 function isStoppable(status: string | null): boolean {
   return status !== null && ((LIVE_ENROLLMENT_STATUSES as readonly string[]).includes(status) || status === 'completed');
@@ -408,6 +431,11 @@ async function stopOnReply(tx: SqlExecutor, input: InboundEffectsInput, enrollme
     )
   ).rows.map((r) => r.id);
   for (const id of out.otherEnrollments) out.canceled.push(...(await cancelPendingForEnrollment(tx, id, 'replied')));
+  // Un pitch suelto a la misma ficha (sin cadencia) que seguía programado
+  // saldría en frío días después de que la marca contestó, dijera lo que
+  // dijera («ahora no», algo dudoso, un referido). Se cancela y una persona
+  // decide; lo escrito en la bandeja (reply_to_message_id) es la respuesta.
+  out.canceled.push(...(await cancelLoosePitches(tx, input.workspaceId, input.contactId, 'replied')));
 
   const paused = (
     await tx.query<{ id: string; contact_id: string; company: string }>(
