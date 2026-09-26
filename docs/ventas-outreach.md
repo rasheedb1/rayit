@@ -1609,7 +1609,7 @@ las ocho existentes, Ventas completo son 48 a 55 días de una persona.
 Es el módulo más grande del producto, y por eso conviene construirlo
 con agentes en paralelo, con la misma puerta de calidad de 9,5.
 
-#### Cómo quedó la actividad (VEN-16, 25 de septiembre; ronda 4)
+#### Cómo quedó la actividad (VEN-16, 25 de septiembre; ronda 5)
 
 - **Migración `0065_actividad_outreach.sql`** (0064 la tomó VEN-14; no
   dependen una de otra y el runner las aplica en cualquier orden). Una
@@ -1750,6 +1750,53 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
 - **Canales**: `listChannelAccounts` ya no calcula `usedToday` ni
   `usedThisWeek` (nadie los pintaba): el uso sale solo de
   `outbound_usage_daily`.
+
+**Ronda 5** (sin cambiar lo anterior):
+
+- **Migración `0067_actividad_cadencia_en_pausa.sql`** (0065 y 0066 no
+  se tocan): `outbound_queue` añade `sequence_status` al final. Con la
+  cadencia en pausa (o en borrador), o con la inscripción de esa persona
+  en `paused` o `cooldown` (tras un «ahora no»), `decideBeforeSend` aplaza
+  el toque cada día: la fila ya no dice «Sale mañana 8:12» con una fecha
+  que avanza sola, sino «En espera · cadencia en pausa» (con «Ir a la
+  cadencia»), «en pausa para esta persona» o «dijo «ahora no»» (con su
+  cadencia en la ficha). El orden es el del despachador: el envío
+  apagado, la cadencia, el canal.
+- **Permisos**: reintentar y cancelar en masa piden `owner`, `admin` o
+  `member` (`ventas/actividad/_lib/permiso.ts`, `puedeOperarLaCola`, el
+  patrón de la política y del perfil). La RLS de `outbound_touch` es solo
+  por workspace: sin esta guarda un `viewer` o un `client` cancelaba la
+  cola entera. La página no ofrece casillas ni «Reintentar» a quien no
+  puede; las acciones lo vuelven a mirar antes de abrir la transacción.
+- **El envío apagado se dice una vez**: el aviso de arriba lleva al
+  interruptor; la fila dice solo «En espera · envío apagado» junto a la
+  pastilla. La frase entera con su enlace queda para los motivos de esa
+  fila (su canal, su cadencia), que sí varían. Así lo fallido (en rojo)
+  no se pierde entre líneas naranjas iguales.
+- **El embudo es el flujo**: sin el gráfico de barras agrupadas (seis
+  pasos por cuatro series daban barras de 2 px y repetían el flujo). La
+  vista de flujo, con una explicación por cifra, es la pieza principal,
+  como el flow viewer de Chief. «Detenidos» cuenta también lo que se
+  canceló a mano desde la actividad, y su explicación lo dice.
+- **Uso por canal**: la franja de 14 días lleva el primer día y «Hoy»
+  debajo, y un día con algo de uso no baja de 2 px (no se confunde con un
+  cero).
+- **El cursor tiene una sola regla**: la web acepta un cursor de la URL
+  con `isQueueCursorToken` de `@mc/db` (la misma función que lo lee), no
+  con una copia de su formato; `_lib/cursor.test.ts` pasa el token que
+  genera `listOutboundQueue` por `filtrosDe`.
+- **Selección por página**: «Solo los 48 mensajes de esta página; con
+  estos filtros hay 120 que se pueden cancelar» (en plural o singular), y
+  el total es lo cancelable (`getQueueFacets().cancelable`), no la cola
+  entera con lo que se está enviando.
+- **Demo**: antes de sumar los contadores, el seed 0008 anota en cada
+  toque reclamado la cuenta con la que salió (los correos sueltos de 0006
+  no la traían): el widget («Correo 4 de 20 · laura@…») y el historial
+  («Desde laura@…») cuentan lo mismo. verify/0008.sql (e) lo comprueba.
+- **Pruebas**: el reintento por tipo de paso en su caso bueno (vuelve el
+  fallido que puede, con los filtros, y los bloqueados siguen fallidos),
+  la cadencia en pausa en la vista y en la fila, y las acciones con un
+  `viewer`.
 
 ## 7. Cómo entra en el plan por fases
 

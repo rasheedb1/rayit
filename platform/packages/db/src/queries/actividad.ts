@@ -1,7 +1,7 @@
 /**
  * Ventas · actividad y métricas del outreach (VEN-16). Dueño: Rasheed.
  *
- * Lee las vistas de 0065 (outbound_queue, outbound_usage_daily,
+ * Lee las vistas de 0065, 0066 y 0067 (outbound_queue, outbound_usage_daily,
  * outbound_funnel_by_step, outbound_sequence_health) y hace las dos
  * escrituras de la pantalla /ventas/actividad: reintentar lo fallido y
  * cancelar lo que está en cola. Todo con la transacción de la web
