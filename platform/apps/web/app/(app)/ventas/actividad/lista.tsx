@@ -40,6 +40,10 @@ export interface FilaVista {
   bloqueo: string | null;
   /** Fallido por la cuenta del canal, sin ninguna conectada: el enlace a la fila de ese canal en /ventas/canales, en vez del botón. */
   reconectar: string | null;
+  /** Por salir, pero la cola no lo reclama (el envío apagado, el canal sin cuenta o fuera de la política): por qué y adónde ir. */
+  espera: { texto: string; enlace: string; href: string } | null;
+  /** Retenido: adónde ir a revisarlo y aprobarlo (la cadencia de la ficha). */
+  revisar: string | null;
   cancelable: boolean;
   enviando: boolean;
   fichaHref: string;
@@ -87,12 +91,17 @@ function Motivo({ f }: { f: FilaVista }) {
  * (PanelActividad), que lo mantiene a la vista aunque la lista se vacíe.
  */
 export function ListaActividad({
-  filas, seleccionable, caption, locale, onResultado,
+  filas, seleccionable, caption, locale, soloPagina = null, onResultado,
 }: {
   filas: FilaVista[];
   seleccionable: boolean;
   caption: string;
   locale: string;
+  /**
+   * Con más de una página: la frase que dice que la selección es solo de
+   * esta página y cuántos hay con estos filtros. null con una sola página.
+   */
+  soloPagina?: string | null;
   onResultado: (r: ActividadState) => void;
 }) {
   const [seleccion, setSeleccion] = useState<ReadonlySet<string>>(new Set());
@@ -141,7 +150,7 @@ export function ListaActividad({
               checked={todas}
               onChange={() => setSeleccion(todas ? new Set() : new Set(cancelables))}
             />
-            {n > 0 ? t.n(formatInt(n, { locale }), n) : t.todas}
+            {n > 0 ? t.n(formatInt(n, { locale }), n) : soloPagina ? t.pagina : t.todas}
           </label>
           {n > 0 && (
             <ConfirmInline
@@ -155,6 +164,7 @@ export function ListaActividad({
               openWidth="w-full sm:w-96"
             />
           )}
+          {soloPagina && n > 0 && <p className="w-full text-xs text-fg-2">{soloPagina}</p>}
         </div>
       )}
       <ul aria-label={caption} className="divide-y divide-line rounded-md border border-line bg-surface">
@@ -204,10 +214,21 @@ export function ListaActividad({
                   <Link href={f.reconectar} className="font-medium text-fg underline underline-offset-2">{MESSAGES.reintentar.irACanales}</Link>
                 </p>
               )}
+              {f.espera && (
+                <p className="text-xs text-warn">
+                  {f.espera.texto}{" "}
+                  <Link href={f.espera.href} className="font-medium underline underline-offset-2">{f.espera.enlace}</Link>
+                </p>
+              )}
             </div>
             {f.reintentable && (
               <Button size="sm" variant="secondary" loading={ocupada && reintentando === f.id} disabled={ocupada} onClick={() => reintentar(f.id)}>
                 {MESSAGES.reintentar.uno}
+              </Button>
+            )}
+            {f.revisar && (
+              <Button size="sm" variant="secondary" href={f.revisar}>
+                {MESSAGES.fila.revisar}
               </Button>
             )}
           </li>

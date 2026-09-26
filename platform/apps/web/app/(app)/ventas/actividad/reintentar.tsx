@@ -24,11 +24,13 @@ export interface TipoReintentable {
  * vista. Sin tipos, no pinta nada.
  */
 export function ReintentarPorTipo({
-  tipos, sequenceId, contact, onResultado,
+  tipos, sequenceId, contact, ayuda = MESSAGES.reintentar.ayuda, onResultado,
 }: {
   tipos: TipoReintentable[];
   sequenceId: string | null;
   contact: string | null;
+  /** Qué pasa después: «salen en la próxima pasada», o, con el envío apagado, que vuelven pero no salen. */
+  ayuda?: string;
   onResultado: (r: ActividadState) => void;
 }) {
   const [ocupado, empezar] = useTransition();
@@ -48,7 +50,7 @@ export function ReintentarPorTipo({
   return (
     <section aria-labelledby="reintentar-titulo" className="rounded-md border border-line bg-surface p-3 sm:p-4">
       <h2 id="reintentar-titulo" className="text-sm font-semibold">{t.titulo}</h2>
-      <p className="mt-1 text-xs text-fg-2">{t.ayuda}</p>
+      <p className="mt-1 text-xs text-fg-2">{ayuda}</p>
       <div className="mt-3 flex flex-wrap gap-2">
         {tipos.map((tipo) => (
           <Button

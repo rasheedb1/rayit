@@ -127,10 +127,23 @@ describe("formatterFor: el workspace manda (locale, moneda y zona)", () => {
   it("fecha y hora cortas para una fila: sin año, en la zona y el idioma del workspace (VEN-16)", () => {
     // 00:31 UTC del 25 es el 24 por la noche en Nueva York y en Bogotá.
     const iso = "2026-09-25T00:31:00Z";
-    const corta = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }).dateTimeShort(iso);
+    const corta = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }).dateTimeShort(iso, new Date("2026-10-01T12:00:00Z"));
     expect(corta).toMatch(/^24 de sept?\.?, 7:31 p\. m\.$/);
     expect(corta).not.toContain("2026");
-    expect(formatterFor(ESTADOS_UNIDOS).dateTimeShort(iso)).toBe("Sep 24, 8:31 PM");
+    expect(formatterFor(ESTADOS_UNIDOS).dateTimeShort(iso, new Date("2026-10-01T12:00:00Z"))).toBe("Sep 24, 8:31 PM");
+  });
+
+  it("la fecha corta lleva el año cuando el instante no es del año en curso en la zona del workspace", () => {
+    const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
+    const hoy = new Date("2026-09-25T15:00:00Z");
+    // Del año pasado: con año, para no confundirlo con uno de esta semana.
+    expect(f.dateTimeShort("2025-09-25T00:31:00Z", hoy)).toMatch(/^24 de sept?\.? de 2025, 7:31 p\. m\.$/);
+    expect(formatterFor(ESTADOS_UNIDOS).dateTimeShort("2025-09-25T00:31:00Z", hoy)).toBe("Sep 24, 2025, 8:31 PM");
+    // Del año en curso, sin año.
+    expect(f.dateTimeShort("2026-01-02T15:00:00Z", hoy)).not.toContain("2026");
+    // El año es el de la zona: las 00:30 UTC del 1 de enero son todavía el 31 de diciembre en Bogotá.
+    expect(f.dateTimeShort("2027-01-01T00:30:00Z", hoy)).not.toContain("2027");
+    expect(f.dateTimeShort("2027-01-01T00:30:00Z", hoy)).toContain("31");
   });
 
   it("una factura emitida en otra moneda se muestra en la suya, con el locale del workspace", () => {

@@ -28,10 +28,14 @@ export interface VacioVista {
  * ahí.
  */
 export function PanelActividad({
-  tipos, sequenceId, contact, filas, seleccionable, caption, locale, vacio,
+  tipos, ayudaReintento, sequenceId, contact, filas, seleccionable, caption, locale, soloPagina = null, vacio,
 }: {
   /** Los botones de reintento por tipo; null en el historial. */
   tipos: TipoReintentable[] | null;
+  /** La ayuda del reintento por tipo (cambia con el envío apagado). */
+  ayudaReintento?: string;
+  /** Con más de una página, la frase de que la selección es solo de esta (ListaActividad). */
+  soloPagina?: string | null;
   sequenceId: string | null;
   contact: string | null;
   filas: FilaVista[];
@@ -51,7 +55,9 @@ export function PanelActividad({
 
   return (
     <div className="flex flex-col gap-3">
-      {tipos && <ReintentarPorTipo tipos={tipos} sequenceId={sequenceId} contact={contact} onResultado={onResultado} />}
+      {tipos && (
+        <ReintentarPorTipo tipos={tipos} sequenceId={sequenceId} contact={contact} ayuda={ayudaReintento} onResultado={onResultado} />
+      )}
       <p
         ref={avisoRef}
         tabIndex={-1}
@@ -64,7 +70,14 @@ export function PanelActividad({
       {filas.length === 0 ? (
         <EmptyState title={vacio.titulo} description={vacio.descripcion} action={vacio.accion} />
       ) : (
-        <ListaActividad filas={filas} seleccionable={seleccionable} caption={caption} locale={locale} onResultado={onResultado} />
+        <ListaActividad
+          filas={filas}
+          seleccionable={seleccionable}
+          caption={caption}
+          locale={locale}
+          soloPagina={soloPagina}
+          onResultado={onResultado}
+        />
       )}
     </div>
   );

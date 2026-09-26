@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { MESSAGES } from "../messages";
-import { Cifra, type CifraFlujo } from "./cifra-flujo";
+import { CifrasPaso, type CifraFlujo } from "./cifra-flujo";
 
 export type { CifraFlujo };
 
@@ -21,7 +21,9 @@ export interface PasoFlujo {
  * de Chief: los pasos en su orden, unidos por la espera entre ellos, y en
  * cada uno lo que pasó (enviados, abiertos, respondidos, positivos, lo que
  * sigue en cola, lo fallido y lo detenido), con una explicación por cifra
- * (Cifra, un tooltip accesible que se cierra con Escape).
+ * (Cifra, un tooltip accesible que se cierra con Escape). Con el teclado,
+ * cada paso es una sola parada de tabulación y las flechas recorren sus
+ * cifras (CifrasPaso).
  */
 export function FlujoCadencia({ pasos }: { pasos: PasoFlujo[] }) {
   return (
@@ -42,9 +44,7 @@ export function FlujoCadencia({ pasos }: { pasos: PasoFlujo[] }) {
                 <span className="text-fg-3">{p.icono}</span>
                 {p.titulo}
               </p>
-              <ul className="mt-2 flex flex-wrap gap-1.5">
-                {p.cifras.map((c) => <Cifra key={c.key} c={c} id={`flujo-${i}-${c.key}`} />)}
-              </ul>
+              <CifrasPaso cifras={p.cifras} idBase={`flujo-${i}`} />
             </li>
           </Fragment>
         ))}

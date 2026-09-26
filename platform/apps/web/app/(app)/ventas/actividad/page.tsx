@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { getQueueFacets, listOutboundQueue, type QueueBucket } from "@mc/db/queries/actividad";
+import { getQueueBlockers, getQueueFacets, listOutboundQueue, type QueueBucket } from "@mc/db/queries/actividad";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/field";
@@ -11,6 +11,7 @@ import { withWorkspace } from "../_lib/db";
 import { etiquetaTipo } from "../cadencias/_lib/vista";
 import { filaVista } from "./_lib/filas";
 import { ACTIVIDAD_URL, filtrosDe, hayFiltros, hrefDe, type Filtros } from "./_lib/vista";
+import { AvisoApagado } from "./aviso-apagado";
 import { MESSAGES } from "./messages";
 import { PanelActividad, type VacioVista } from "./panel";
 
@@ -125,13 +126,16 @@ function Paginas({ filtros, next, prev }: { filtros: Filtros; next: string | nul
 export default async function ActividadPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const filtros = filtrosDe(await searchParams);
   const base = { sequenceId: filtros.cadencia, stepType: filtros.tipo, contact: filtros.contacto };
-  const { cola, facets } = await withWorkspace(async (tx) => ({
+  const { cola, facets, bloqueos } = await withWorkspace(async (tx) => ({
     cola: await listOutboundQueue(tx, { bucket: filtros.vista, ...base, cursor: filtros.pagina }),
     facets: await getQueueFacets(tx, base),
+    bloqueos: await getQueueBlockers(tx),
   }));
   const f = formatterFor(await getCurrentWorkspace());
-  const filas = cola.rows.map((r) => filaVista(r, f));
+  const filas = cola.rows.map((r) => filaVista(r, f, { bloqueos }));
   const enCola = filtros.vista === "queue";
+  // La casilla de «todo» marca solo esta página: con más de una, lo dice y cuenta cuántos hay con estos filtros.
+  const paginada = enCola && Boolean(cola.next || cola.prev);
   const v = MESSAGES.vacio;
   const vacio: VacioVista = filtros.pagina
     ? { titulo: v.pagina.titulo, descripcion: v.pagina.descripcion }
@@ -146,6 +150,7 @@ export default async function ActividadPage({ searchParams }: { searchParams: Pr
       <PageHeader eyebrow={MESSAGES.header.eyebrow} title={MESSAGES.header.title} description={MESSAGES.header.description} />
       <ModuleTabs active={ACTIVIDAD_URL} />
       <div className="flex flex-col gap-5">
+        {!bloqueos.outreachEnabled && <AvisoApagado />}
         <Pestanas filtros={filtros} counts={facets.counts} int={f.int} />
         <Filtrar filtros={filtros} cadencias={facets.sequences} tipos={facets.stepTypes} />
         <PanelActividad
@@ -157,12 +162,14 @@ export default async function ActividadPage({ searchParams }: { searchParams: Pr
               label: MESSAGES.reintentar.boton(etiquetaTipo(x.stepType), f.int(x.count)),
             }))
             : null}
+          ayudaReintento={bloqueos.outreachEnabled ? MESSAGES.reintentar.ayuda : MESSAGES.reintentar.ayudaApagado}
           sequenceId={filtros.cadencia}
           contact={filtros.contacto}
           filas={filas}
           seleccionable={enCola}
           caption={MESSAGES.fila.lista(enCola ? MESSAGES.pestanas.cola : MESSAGES.pestanas.historial)}
           locale={f.locale}
+          soloPagina={paginada ? MESSAGES.seleccion.soloPagina(f.int(filas.length), f.int(facets.counts.queue)) : null}
           vacio={vacio}
         />
         <Paginas filtros={filtros} next={cola.next} prev={cola.prev} />

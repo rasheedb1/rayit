@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as TeclaEvent } from "react";
 
 /** Una cifra de un paso, ya formateada, con la frase que explica qué cuenta (el tooltip). */
 export interface CifraFlujo {
@@ -30,8 +30,20 @@ const MARGEN = 8;
  *   · no se sale de la ventana: si al abrirse su borde derecho pasa del de
  *     la ventana (la última cifra de una fila a 400 px), se alinea a la
  *     derecha de su cifra.
+ *
+ * Quién es parada de tabulación y qué hacen las flechas lo decide su paso
+ * (CifrasPaso): aquí llegan `tabIndex`, `alEnfocar`, `alTecla` y `enlazar`.
  */
-export function Cifra({ c, id }: { c: CifraFlujo; id: string }) {
+export function Cifra({
+  c, id, tabIndex = 0, alEnfocar, alTecla, enlazar,
+}: {
+  c: CifraFlujo;
+  id: string;
+  tabIndex?: 0 | -1;
+  alEnfocar?: () => void;
+  alTecla?: (e: TeclaEvent<HTMLSpanElement>) => void;
+  enlazar?: (el: HTMLSpanElement | null) => void;
+}) {
   const [hover, setHover] = useState(false);
   const [foco, setFoco] = useState(false);
   const [cerrada, setCerrada] = useState(false);
@@ -70,18 +82,22 @@ export function Cifra({ c, id }: { c: CifraFlujo; id: string }) {
       onMouseLeave={() => setHover(false)}
     >
       <span
-        tabIndex={0}
+        ref={enlazar}
+        tabIndex={tabIndex}
         aria-describedby={id}
         onFocus={() => {
           volver();
           setFoco(true);
+          alEnfocar?.();
         }}
         onBlur={() => setFoco(false)}
         onKeyDown={(e) => {
           if (e.key === "Escape" && abierta) {
             e.stopPropagation();
             setCerrada(true);
+            return;
           }
+          alTecla?.(e);
         }}
         className="inline-flex min-w-16 flex-col rounded-md border border-line bg-surface px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink"
       >
@@ -101,5 +117,54 @@ export function Cifra({ c, id }: { c: CifraFlujo; id: string }) {
         </span>
       </span>
     </li>
+  );
+}
+
+/** Qué cifra enfoca cada tecla, desde la `actual` de `total`; null si la tecla no mueve el foco. */
+export function siguienteCifra(key: string, actual: number, total: number): number | null {
+  if (total <= 0) return null;
+  if (key === "ArrowRight" || key === "ArrowDown") return (actual + 1) % total;
+  if (key === "ArrowLeft" || key === "ArrowUp") return (actual - 1 + total) % total;
+  if (key === "Home") return 0;
+  if (key === "End") return total - 1;
+  return null;
+}
+
+/**
+ * Las cifras de un paso, con UNA sola parada de tabulación por paso
+ * (roving tabindex, como una barra de herramientas): Tab entra en la
+ * cifra activa del paso (la primera, o la última que se enfocó) y sale al
+ * paso siguiente; las flechas, Inicio y Fin recorren las cifras del paso.
+ * Con siete cifras por paso, una cadencia de seis pasos eran 42 paradas
+ * antes de salir de la sección; ahora son seis.
+ */
+export function CifrasPaso({ cifras, idBase }: { cifras: CifraFlujo[]; idBase: string }) {
+  const [activa, setActiva] = useState(0);
+  const nodos = useRef<(HTMLSpanElement | null)[]>([]);
+
+  const alTecla = (i: number) => (e: TeclaEvent<HTMLSpanElement>) => {
+    const destino = siguienteCifra(e.key, i, cifras.length);
+    if (destino === null) return;
+    e.preventDefault();
+    setActiva(destino);
+    nodos.current[destino]?.focus();
+  };
+
+  return (
+    <ul className="mt-2 flex flex-wrap gap-1.5">
+      {cifras.map((c, i) => (
+        <Cifra
+          key={c.key}
+          c={c}
+          id={`${idBase}-${c.key}`}
+          tabIndex={i === activa ? 0 : -1}
+          alEnfocar={() => setActiva(i)}
+          alTecla={alTecla(i)}
+          enlazar={(el) => {
+            nodos.current[i] = el;
+          }}
+        />
+      ))}
+    </ul>
   );
 }

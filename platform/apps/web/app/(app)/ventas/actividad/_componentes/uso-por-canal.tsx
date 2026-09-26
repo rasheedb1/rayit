@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { OUTREACH_URLS } from "@mc/core/outreach/messages";
 import { Suspense, type CSSProperties, type ReactNode } from "react";
 import { listChannelUsage, type ChannelUsage, type UsageLevel } from "@mc/db/queries/actividad";
 import { SectionTitle } from "@/components/page-header";
@@ -68,7 +69,7 @@ export function usoVista(u: ChannelUsage, f: Formatter): UsoVista {
   const sinEnvio = u.offReason === "account"
     ? { ...T.sinEnvio.account, href: canalHref(u.channel) }
     : u.offReason === "disabled"
-      ? { ...T.sinEnvio.disabled, href: T.politicaHref }
+      ? { ...T.sinEnvio.disabled, href: OUTREACH_URLS.policySwitch }
       : null;
   return {
     id: u.accountId,
@@ -125,7 +126,7 @@ function Cuenta({ u }: { u: UsoVista }) {
         aria-valuemax={1}
         aria-valuenow={u.usedShare}
         aria-valuetext={u.medidor}
-        className="relative h-2 w-full overflow-hidden rounded-full bg-surface-2"
+        className="relative h-2 w-full overflow-hidden rounded-full bg-hover"
         style={{ ...fraccion("--usado", u.usedShare), ...fraccion("--blando", u.softShare) }}
       >
         <span className={`absolute inset-y-0 left-0 w-[calc(var(--usado)*100%)] rounded-full ${NIVEL_BARRA[u.nivel]}`} />
@@ -150,9 +151,15 @@ function Cuenta({ u }: { u: UsoVista }) {
         <ul className="sr-only">
           {u.dias.map((d) => <li key={d.key}>{d.label}</li>)}
         </ul>
+        {/*
+          Cada día es un carril con su borde de abajo: un día en cero se lee
+          como una barra vacía, no como un hueco. El carril va en bg-hover
+          (y no en bg-surface-2): en oscuro, surface-2 sobre surface casi no
+          se distinguía del fondo.
+        */}
         <div aria-hidden="true" className="flex h-6 items-end gap-0.5" title={T.historia}>
           {u.dias.map((d) => (
-            <span key={d.key} className="flex h-full flex-1 items-end rounded-sm bg-surface-2" title={d.label}>
+            <span key={d.key} className="flex h-full flex-1 items-end rounded-sm border-b border-line-2 bg-hover" title={d.label}>
               <span
                 className={`block w-full rounded-sm ${NIVEL_DIA[d.nivel]} h-[calc(var(--dia)*100%)]`}
                 style={fraccion("--dia", d.share)}

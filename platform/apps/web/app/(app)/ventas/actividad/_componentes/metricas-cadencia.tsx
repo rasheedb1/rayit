@@ -1,26 +1,24 @@
 import { Suspense } from "react";
-import { getSequenceHealth, listFunnelByStep, type FunnelStep, type SequenceHealth, type SequenceHealthLevel } from "@mc/db/queries/actividad";
+import { getSequenceHealth, listFunnelByStep, type FunnelStep, type SequenceHealth } from "@mc/db/queries/actividad";
 import { SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { ChartCard } from "@/components/ui/chart-card";
 import type { Series } from "@/components/ui/chart-utils";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
-import { Pill, type PillKind } from "@/components/ui/pill";
+import { Pill } from "@/components/ui/pill";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
 import { esperaEntre, etiquetaTipo } from "../../cadencias/_lib/vista";
 import { IconoCanal } from "../../cadencias/canal";
-import { hrefDe } from "../_lib/vista";
+import { hrefDe, SALUD_PILL } from "../_lib/vista";
 import { MESSAGES } from "../messages";
 import { FlujoCadencia, type CifraFlujo, type PasoFlujo } from "./flujo-cadencia";
 import { FronteraWidget } from "./frontera-widget";
 
 const E = MESSAGES.embudo;
 const F = MESSAGES.flujo;
-
-const SALUD_PILL: Record<SequenceHealthLevel, PillKind> = { inactive: "neutral", failing: "bad", attention: "warn", healthy: "good" };
 
 /**
  * Las cuatro series del embudo, en su orden: cada una cabe dentro de la
@@ -35,23 +33,28 @@ export const SERIES_EMBUDO = [
   { key: "positive", color: "good" },
 ] as const satisfies ReadonlyArray<{ key: keyof typeof E.series; color: Series["color"] }>;
 
-/** Las cifras de un paso para la vista de flujo, cada una con su explicación y, si aplica, su tasa. */
+/**
+ * Las cifras de un paso para la vista de flujo, cada una con su
+ * explicación (en plural o en singular según la cifra, con la cifra
+ * formateada en el idioma del espacio) y, si aplica, su tasa.
+ */
 function cifrasDe(s: FunnelStep, f: Formatter): CifraFlujo[] {
   const x = F.explica;
   const tasa = (r: number | null) => (r === null ? null : F.tasa(f.pct(r)));
   const c = (key: keyof typeof F.cifras, n: number, explica: string, extra: Partial<CifraFlujo> = {}): CifraFlujo => ({
     key, valor: f.int(n), etiqueta: F.cifras[key], explica, tasa: null, tono: n === 0 ? "muted" : "fg", ...extra,
   });
+  const dice = (frase: (n: string, count: number) => string, n: number) => frase(f.int(n), n);
   return [
-    c("sent", s.sent, x.sent(f.int(s.sent))),
+    c("sent", s.sent, dice(x.sent, s.sent)),
     s.opensTracked
-      ? c("opened", s.opened, x.opened(f.int(s.opened)), { tasa: tasa(s.openRate) })
+      ? c("opened", s.opened, dice(x.opened, s.opened), { tasa: tasa(s.openRate) })
       : c("opened", 0, x.openedNoTracked, { valor: E.kpis.sinDato, tono: "muted" }),
-    c("replied", s.replied, x.replied(f.int(s.replied)), { tasa: tasa(s.replyRate) }),
-    c("positive", s.positive, x.positive(f.int(s.positive)), { tasa: tasa(s.positiveRate), tono: s.positive > 0 ? "good" : "muted" }),
-    c("pending", s.pending, x.pending(f.int(s.pending))),
-    c("failed", s.failed, x.failed(f.int(s.failed)), { tono: s.failed > 0 ? "bad" : "muted" }),
-    c("stopped", s.stopped, x.stopped(f.int(s.stopped))),
+    c("replied", s.replied, dice(x.replied, s.replied), { tasa: tasa(s.replyRate) }),
+    c("positive", s.positive, dice(x.positive, s.positive), { tasa: tasa(s.positiveRate), tono: s.positive > 0 ? "good" : "muted" }),
+    c("pending", s.pending, dice(x.pending, s.pending)),
+    c("failed", s.failed, dice(x.failed, s.failed), { tono: s.failed > 0 ? "bad" : "muted" }),
+    c("stopped", s.stopped, dice(x.stopped, s.stopped)),
   ];
 }
 

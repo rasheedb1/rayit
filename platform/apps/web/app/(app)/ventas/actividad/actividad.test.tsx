@@ -1,6 +1,6 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelUsage, FunnelStep, SequenceHealth } from "@mc/db/queries/actividad";
+import type { ChannelUsage, FunnelStep, QueueRow, SequenceHealth } from "@mc/db/queries/actividad";
 import { formatterFor } from "@/lib/format";
 
 /**
@@ -25,12 +25,16 @@ vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
 }));
 
+import { AvisoApagado } from "./aviso-apagado";
+import { filaVista } from "./_lib/filas";
 import { ListaActividad, type FilaVista } from "./lista";
 import { PanelActividad } from "./panel";
 import { ReintentarPorTipo } from "./reintentar";
 import { FronteraWidget } from "./_componentes/frontera-widget";
 import { UsoPorCanalVista, usoVista } from "./_componentes/uso-por-canal";
 import { MetricasCadenciaVista, SERIES_EMBUDO } from "./_componentes/metricas-cadencia";
+import { siguienteCifra } from "./_componentes/cifra-flujo";
+import { MESSAGES as MENSAJES } from "./messages";
 
 const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
 const onResultado = vi.fn();
@@ -55,6 +59,8 @@ const fila = (id: string, over: Partial<FilaVista> = {}): FilaVista => ({
   reintentable: false,
   bloqueo: null,
   reconectar: null,
+  espera: null,
+  revisar: null,
   cancelable: true,
   enviando: false,
   fichaHref: "/ventas/empresas/x",
@@ -139,6 +145,54 @@ describe("la lista de la cola", () => {
     expect(screen.getByRole("checkbox", { name: "Seleccionar «Paso 5 · Mensaje en LinkedIn» a Sofía Cárdenas" })).toBeTruthy();
   });
 
+  it("con más de una página, «todo» dice que es de esta página y cuántos hay con los filtros", () => {
+    render(lista({ soloPagina: "Solo las 50 filas de esta página; la cola tiene 120 con estos filtros." }));
+    const todas = screen.getByRole("checkbox", { name: "Seleccionar lo cancelable de esta página" });
+    expect(screen.queryByText("Solo las 50 filas de esta página; la cola tiene 120 con estos filtros.")).toBeNull();
+    fireEvent.click(todas);
+    expect(screen.getByText("Solo las 50 filas de esta página; la cola tiene 120 con estos filtros.")).toBeTruthy();
+    // Con una sola página, la frase de siempre.
+    cleanup();
+    render(lista());
+    expect(screen.getByRole("checkbox", { name: "Seleccionar todo lo cancelable" })).toBeTruthy();
+  });
+
+  it("un retenido lleva «Revisar y aprobar» a la cadencia de su ficha; lo que espera dice por qué y adónde ir", () => {
+    render(lista({
+      filas: [
+        fila("h", { estado: "Retenido", revisar: "/ventas/empresas/x#cadencia" }),
+        fila("w", { cuando: "En espera · envío apagado", espera: { texto: "El envío del espacio está apagado: no sale hasta que lo enciendas.", enlace: "Encender el envío", href: "/ventas/politica#interruptor" } }),
+      ],
+    }));
+    expect(screen.getByRole("link", { name: "Revisar y aprobar" }).getAttribute("href")).toBe("/ventas/empresas/x#cadencia");
+    expect(screen.getByText("En espera · envío apagado")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Encender el envío" }).getAttribute("href")).toBe("/ventas/politica#interruptor");
+  });
+
+  it("de la base a la pantalla: un retenido con hora no dice «Sale», y con el envío apagado nada dice «Sale»", () => {
+    const hoy = new Date("2026-09-25T15:00:00Z");
+    const toque = (over: Partial<QueueRow>): QueueRow => ({
+      touchId: "t1", status: "held", bucket: "queue", channel: "email", subject: "Hola, Sofía", sequenceId: "s1", sequenceName: "Semana",
+      stepId: "p1", stepType: "email", stepPosition: 1, stepDayOffset: 0, enrollmentStatus: "active", contactId: "c1",
+      contactName: "Sofía Cárdenas", contactEmail: "sofia@marca.test", companyId: "co1", companyName: "Marca A", accountName: null,
+      accountStatus: null, attemptCount: 0, dueAt: new Date("2026-09-28T15:30:00Z"), retrying: false,
+      statusChangedAt: new Date("2026-09-24T15:00:00Z"), sentAt: null, openedAt: null, repliedAt: null, reason: "needs_review",
+      retryBlock: null, retryable: false, cancelable: true, ...over,
+    });
+    const libre = { outreachEnabled: true, channelsWithoutAccount: [], channelsNotAllowed: [] };
+    const { container } = render(lista({ filas: [filaVista(toque({}), f, { bloqueos: libre, now: hoy })] }));
+    expect(container.textContent).toContain("Previsto para");
+    expect(container.textContent).not.toMatch(/\bSale\b/);
+    expect(screen.getByRole("link", { name: "Revisar y aprobar" }).getAttribute("href")).toBe("/ventas/empresas/co1#cadencia");
+    cleanup();
+    const apagado = { ...libre, outreachEnabled: false };
+    const filasApagado = [toque({ touchId: "t2", status: "scheduled", reason: null }), toque({ touchId: "t3" })].map((r) =>
+      filaVista(r, f, { bloqueos: apagado, now: hoy }));
+    const otra = render(lista({ filas: filasApagado }));
+    expect(otra.container.textContent).not.toMatch(/\bSale\b/);
+    expect(screen.getAllByText("En espera · envío apagado")).toHaveLength(2);
+  });
+
   it("el historial no lleva casillas", () => {
     render(lista({ filas: [fila("d", { cancelable: false })], seleccionable: false, caption: "Mensajes · Historial" }));
     expect(screen.queryByRole("checkbox")).toBeNull();
@@ -163,12 +217,26 @@ describe("el panel: el aviso sobrevive a que la lista se vacíe", () => {
   });
 });
 
+describe("el aviso del envío apagado", () => {
+  it("dice que nada de la cola sale y lleva al interruptor de la política", () => {
+    render(<AvisoApagado />);
+    expect(screen.getByRole("status").textContent).toContain("El envío está apagado: nada de la cola sale hasta que lo enciendas.");
+    expect(screen.getByRole("link", { name: "Ir a la política de envío" }).getAttribute("href")).toBe("/ventas/politica#interruptor");
+  });
+});
+
 describe("reintentar por tipo de paso", () => {
   it("un botón por tipo, con los filtros de la pantalla; el resultado sube al panel", async () => {
     render(<ReintentarPorTipo tipos={[{ stepType: "email", label: "Correo · 2" }]} sequenceId="s1" contact="sofía" onResultado={onResultado} />);
     fireEvent.click(screen.getByRole("button", { name: /Correo · 2/ }));
     await waitFor(() => expect(reintentarPorTipo).toHaveBeenCalledWith({ stepType: "email", sequenceId: "s1", contact: "sofía" }));
     await waitFor(() => expect(onResultado).toHaveBeenCalledWith({ ok: "2 mensajes volvieron a la cola." }));
+  });
+
+  it("con el envío apagado, la ayuda no promete «la próxima pasada»", () => {
+    render(<ReintentarPorTipo tipos={[{ stepType: "email", label: "Correo · 2" }]} sequenceId={null} contact={null} ayuda={MENSAJES.reintentar.ayudaApagado} onResultado={onResultado} />);
+    expect(screen.queryByText(/próxima pasada/)).toBeNull();
+    expect(screen.getByText(/no salen mientras el envío del espacio esté apagado/)).toBeTruthy();
   });
 
   it("sin nada que reintentar, no pinta nada", () => {
@@ -280,7 +348,7 @@ describe("el embudo y la vista de flujo de la cadencia", () => {
     const respondidos = within(flujo).getAllByText("respondidos")[0]!.closest("[tabindex]") as HTMLElement;
     const tooltip = document.getElementById(respondidos.getAttribute("aria-describedby")!)!;
     expect(tooltip.getAttribute("role")).toBe("tooltip");
-    expect(tooltip.textContent).toContain("2: de los enviados, los que recibieron respuesta");
+    expect(tooltip.textContent).toContain("2 de los enviados recibieron respuesta");
     expect(tooltip.textContent).toContain("40");
     expect(tooltip.className).toContain("hidden");
     act(() => respondidos.focus());
@@ -308,6 +376,45 @@ describe("el embudo y la vista de flujo de la cadencia", () => {
     fireEvent.mouseLeave(enviados.closest("li")!);
     fireEvent.mouseEnter(enviados.closest("li")!);
     expect(tooltip.className).not.toContain("hidden");
+  });
+
+  it("las explicaciones concuerdan con la cifra: una, varias o ninguna", () => {
+    render(<MetricasCadenciaVista sequenceId="s1" health={salud} funnel={[paso(1, { failed: 1, sent: 1, opened: 1, replied: 0, positive: 0, stopped: 0 })]} f={f} />);
+    const flujo = screen.getByRole("region", { name: "Flujo de la cadencia" });
+    const explica = (etiqueta: string) => {
+      const cifra = within(flujo).getByText(etiqueta).closest("[tabindex]")!;
+      return document.getElementById(cifra.getAttribute("aria-describedby")!)!.textContent;
+    };
+    expect(explica("fallidos")).toBe("Un mensaje de este paso falló. Puedes reintentarlo desde la actividad.");
+    expect(explica("enviados")).toBe("Un mensaje de este paso salió.");
+    expect(explica("respondidos")).toContain("Ninguno de los enviados ha recibido respuesta");
+    expect(explica("abiertos")).toMatch(/^Uno de los enviados se abrió\./);
+    expect(explica("en cola")).toBe("No queda nada de este paso en la cola.");
+    // Sin «1:» delante: la cifra se lee dentro de la frase.
+    expect(explica("fallidos")).not.toMatch(/^\d+:/);
+  });
+
+  it("una sola parada de tabulación por paso; las flechas, Inicio y Fin recorren sus cifras", () => {
+    render(<MetricasCadenciaVista sequenceId="s1" health={salud} funnel={[paso(1), paso(2), paso(3)]} f={f} />);
+    const flujo = screen.getByRole("region", { name: "Flujo de la cadencia" });
+    const paradas = within(flujo).getAllByText(/^(enviados|abiertos|respondidos|positivos|en cola|fallidos|detenidos)$/)
+      .map((e) => e.closest("[tabindex]") as HTMLElement);
+    expect(paradas).toHaveLength(21);
+    // Tres pasos, tres paradas (antes eran 21).
+    expect(paradas.filter((p) => p.tabIndex === 0)).toHaveLength(3);
+    const [enviados, abiertos] = paradas as [HTMLElement, HTMLElement];
+    act(() => enviados.focus());
+    fireEvent.keyDown(enviados, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(abiertos);
+    // La parada del paso pasa a la última cifra enfocada.
+    expect([enviados.tabIndex, abiertos.tabIndex]).toEqual([-1, 0]);
+    fireEvent.keyDown(abiertos, { key: "End" });
+    expect(document.activeElement).toBe(paradas[6]);
+    fireEvent.keyDown(paradas[6]!, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(enviados);
+    // Las flechas no saltan al paso siguiente.
+    expect(document.activeElement).not.toBe(paradas[7]);
+    expect([siguienteCifra("ArrowLeft", 0, 7), siguienteCifra("Home", 5, 7), siguienteCifra("Tab", 2, 7)]).toEqual([6, 0, null]);
   });
 
   it("sin envíos todavía, lo dice en vez de un gráfico vacío", () => {

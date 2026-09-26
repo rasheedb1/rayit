@@ -4,8 +4,8 @@
  * motivo de un mensaje y cómo se resume lo que hizo una acción en masa.
  * Puro, con pruebas (vista.test.ts).
  */
-import { FAILURE_REASON_TEXTS, holdReasonText, noticeLang, type NoticeLang } from "@mc/core/outreach/messages";
-import type { BulkReport, QueueBucket, TouchStatus } from "@mc/db/queries/actividad";
+import { FAILURE_REASON_TEXTS, holdReasonText, noticeLang, parseHoldReason, type NoticeLang } from "@mc/core/outreach/messages";
+import type { BulkReport, QueueBucket, SequenceHealthLevel, TouchStatus } from "@mc/db/queries/actividad";
 import type { PillKind } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
 import { IDIOMA_MENSAJES, MESSAGES, motivoTexto } from "../messages";
@@ -23,6 +23,9 @@ export const ESTADO_PILL: Record<TouchStatus, PillKind> = {
   skipped: "neutral",
   canceled: "neutral",
 };
+
+/** El color del semáforo de la salud de una cadencia: el embudo de su detalle y la columna de la lista de /ventas/cadencias. */
+export const SALUD_PILL: Record<SequenceHealthLevel, PillKind> = { inactive: "neutral", failing: "bad", attention: "warn", healthy: "good" };
 
 /** Una página que no es la primera: las filas después (siguiente) o antes (anterior) de un cursor. */
 export interface Pagina {
@@ -89,23 +92,46 @@ export const hayFiltros = (f: Filtros): boolean => Boolean(f.cadencia || f.tipo 
 const mayuscula = (s: string) => (s ? s[0]!.toLocaleUpperCase(IDIOMA_MENSAJES) + s.slice(1) : s);
 
 /**
+ * El idioma de los motivos que vienen de @mc/core (la retención y el
+ * fallo del proveedor): el del archivo de mensajes, no el locale del
+ * espacio. Todo lo demás de la fila («Falló», «Paso 2 · Correo») sale de
+ * messages.ts; si el motivo siguiera el locale del espacio, un espacio
+ * en en-US leería la misma fila mitad en español y mitad en inglés. El
+ * locale del espacio sigue mandando en las cifras y las fechas.
+ */
+const IDIOMA_MOTIVOS: NoticeLang = noticeLang(IDIOMA_MENSAJES);
+
+/**
  * El motivo de un mensaje, en una frase que empieza en mayúscula, o null
  * si no tiene. Un retenido dice por qué espera (holdReasonText, lo mismo
  * que la ficha); un fallido, qué dijo el proveedor (FAILURE_REASON_TEXTS,
  * lo mismo que el aviso); un cancelado o saltado, por qué no salió.
  */
-export function motivoDe(status: TouchStatus, reason: string | null, locale: string): string | null {
+export function motivoDe(status: TouchStatus, reason: string | null): string | null {
   if (!reason) return null;
-  const lang: NoticeLang = noticeLang(locale);
+  const lang = IDIOMA_MOTIVOS;
   if (status === "held") return mayuscula(holdReasonText(lang, reason));
   const code = reason.split(":")[0]!;
   const proveedor = Object.hasOwn(FAILURE_REASON_TEXTS[lang], code) ? FAILURE_REASON_TEXTS[lang][code] : undefined;
   return mayuscula(motivoTexto(code) ?? proveedor ?? MESSAGES.motivoGenerico);
 }
 
-/** El código del motivo, para soporte: «código: account_auth». Va en el detalle que se despliega en la fila. */
-export function codigoDeMotivo(reason: string | null): string | null {
-  return reason ? MESSAGES.fila.detalle.codigo(reason) : null;
+/** La forma de un código del motor: minúsculas y guiones bajos, con su dato opcional tras «:» («quality_low:7.6»). */
+const CODIGO_RE = /^[a-z_]+(:.*)?$/s;
+
+/**
+ * El código del motivo, para soporte: «código: account_auth». Va en el
+ * detalle que se despliega en la fila, y solo cuando `reason` ES un
+ * código: una frase libre (un held_reason escrito a mano, o uno heredado
+ * de antes de HOLD_CODES) ya se lee entera en la fila, y rotularla
+ * «código:» la repetía con un nombre que no es. En lo retenido manda
+ * parseHoldReason, la misma regla con la que holdReasonText decide si lo
+ * traduce.
+ */
+export function codigoDeMotivo(status: TouchStatus, reason: string | null): string | null {
+  if (!reason) return null;
+  const esCodigo = status === "held" ? parseHoldReason(reason) !== null : CODIGO_RE.test(reason);
+  return esCodigo ? MESSAGES.fila.detalle.codigo(reason) : null;
 }
 
 /**

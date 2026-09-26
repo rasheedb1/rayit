@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { RECOMMEND_SIGNAL_KINDS, type RecommendSignalKind } from "@mc/core";
 import Link from "next/link";
+import { listSequenceHealth } from "@mc/db/queries/actividad";
 import { listProposableSignals, listSequences, listSequenceTemplates, type SequenceListRow } from "@mc/db/queries/cadencias";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { CeldaVacia } from "../../_componentes/celda-vacia";
 import { ModuleTabs } from "../../_componentes/pestanas";
 import { withWorkspace } from "../../_lib/db";
+import { columnaSalud } from "../../actividad/_componentes/salud-cadencia";
 import { TODAS_LAS_SENALES } from "../_lib/protocolo";
 import { ESTADO_PILL } from "../_lib/vista";
 import { MESSAGES } from "../messages";
@@ -53,11 +55,16 @@ export default async function CadenciasPage({
   const sp = await searchParams;
   const conArchivadas = sp.archivadas === "1";
   const todas = sp.senales === TODAS_LAS_SENALES;
-  const { senales: propuestas, cadencias, plantillas } = await withWorkspace(async (tx) => ({
-    senales: await listProposableSignals(tx, todas ? {} : { limit: SENALES_ARRIBA }),
-    cadencias: await listSequences(tx, { includeArchived: conArchivadas }),
-    plantillas: await listSequenceTemplates(tx),
-  }));
+  const { senales: propuestas, cadencias, plantillas, salud } = await withWorkspace(async (tx) => {
+    const cadencias = await listSequences(tx, { includeArchived: conArchivadas });
+    return {
+      senales: await listProposableSignals(tx, todas ? {} : { limit: SENALES_ARRIBA }),
+      cadencias,
+      plantillas: await listSequenceTemplates(tx),
+      // El semáforo de cada fila (VEN-16): la misma salud que el detalle de la cadencia.
+      salud: await listSequenceHealth(tx, cadencias.map((c) => c.id)),
+    };
+  });
   const f = formatterFor(await getCurrentWorkspace());
   const t = MESSAGES;
   const senales = propuestas.signals;
@@ -80,6 +87,7 @@ export default async function CadenciasPage({
       header: t.lista.columnas.estado,
       render: (c) => <Pill kind={ESTADO_PILL[c.status]}>{t.estados[c.status] ?? c.status}</Pill>,
     },
+    columnaSalud<SequenceListRow>(salud),
     { key: "pasos", header: t.lista.columnas.pasos, align: "num", render: (c) => f.int(c.steps) },
     { key: "enrolados", header: t.lista.columnas.enrolados, align: "num", render: (c) => f.int(c.enrolledLive) },
     {

@@ -8,8 +8,9 @@
  * blocked_reason, el bloqueo de un reintento, el tope que manda): aquí se
  * convierten en frases. El motivo de una retención y el de un fallo del
  * proveedor son los mismos que dicen la ficha y los avisos
- * (holdReasonText y failureReason de @mc/core/outreach/messages, en el
- * idioma del espacio); lo demás vive aquí.
+ * (holdReasonText y failureReason de @mc/core/outreach/messages), en el
+ * idioma de ESTE archivo (IDIOMA_MENSAJES), no en el locale del espacio:
+ * así una fila nunca mezcla dos idiomas. Lo demás vive aquí.
  *
  * Solo tipos de @mc/db: este archivo lo importan componentes de cliente.
  */
@@ -25,12 +26,18 @@ import type {
 export const IDIOMA_MENSAJES = "es";
 const reglasPlural = new Intl.PluralRules(IDIOMA_MENSAJES);
 
-type Formas = Partial<Record<Intl.LDMLPluralRule, string>> & { other: string };
-/** Una frase con cifra: `n` llega ya formateado y reemplaza «{n}»; la forma la elige Intl.PluralRules con `count`. */
+/**
+ * Las formas de una frase con cifra: las categorías de Intl.PluralRules
+ * del idioma (one, few, many, other…) y, aparte, «=0» para decir el cero
+ * con otras palabras («Ningún mensaje…» en vez de «0 mensajes…»), como el
+ * caso exacto =0 de ICU MessageFormat.
+ */
+type Formas = Partial<Record<Intl.LDMLPluralRule | "=0", string>> & { other: string };
+/** Una frase con cifra: `n` llega ya formateado y reemplaza «{n}»; la forma la elige `count`. */
 const plural =
   (formas: Formas) =>
   (n: string, count: number): string =>
-    (formas[reglasPlural.select(count)] ?? formas.other).replaceAll("{n}", n);
+    ((count === 0 ? formas["=0"] : undefined) ?? formas[reglasPlural.select(count)] ?? formas.other).replaceAll("{n}", n);
 
 /**
  * Los códigos de blocked_reason que se dicen aquí (los de la cadencia y la
@@ -97,7 +104,25 @@ export const MESSAGES = {
     desde: (cuenta: string) => `Desde ${cuenta}`,
     intentos: plural({ one: "{n} intento", other: "{n} intentos" }),
     reintento: (cuando: string) => `Reintento ${cuando}`,
+    /** Solo en lo programado: el despachador lo reclama a esa hora. */
     toca: (cuando: string) => `Sale ${cuando}`,
+    /**
+     * Lo retenido espera a una persona: el despachador no lo reclama. La
+     * hora que dejó el generador es la prevista, no una promesa.
+     */
+    previsto: (cuando: string) => `Previsto para ${cuando} si lo apruebas`,
+    /** Un borrador tampoco sale solo: lo completa y lo programa una persona. */
+    borrador: "Sale cuando lo programes",
+    borradorPrevisto: (cuando: string) => `Previsto para ${cuando}; sale cuando lo programes`,
+    /**
+     * Lo que tendría que salir pero la cola no reclama (el envío apagado, el
+     * canal sin cuenta o fuera de la política): en vez de «Sale …», por qué
+     * espera. La frase entera y su enlace van debajo (espera).
+     */
+    enEspera: (motivo: string) => `En espera · ${motivo}`,
+    esperaPrevisto: (cuando: string) => `Estaba previsto para ${cuando}`,
+    /** El botón de lo que espera a una persona: lleva a la cadencia de la ficha, donde está «Aprobar y enviar». */
+    revisar: "Revisar y aprobar",
     /** Lo que se está enviando, al lado de la pastilla «Enviando»: solo desde cuándo. */
     desdeCorto: (cuando: string) => `Desde ${cuando}`,
     sinHora: "Sin hora todavía",
@@ -154,6 +179,10 @@ export const MESSAGES = {
 
   seleccion: {
     todas: "Seleccionar todo lo cancelable",
+    /** Con más de una página, la casilla solo marca las filas que se ven: lo dice. */
+    pagina: "Seleccionar lo cancelable de esta página",
+    /** Debajo, cuántos hay en la cola con estos filtros, para que nadie crea que canceló «todo». */
+    soloPagina: (enPagina: string, total: string) => `Solo las ${enPagina} filas de esta página; la cola tiene ${total} con estos filtros.`,
     /** Una casilla: qué mensaje y a quién («Seleccionar «Paso 3 · Mensaje en LinkedIn» a Sofía Cárdenas»), para distinguir las de una misma persona. */
     una: (quien: string, que: string) => `Seleccionar «${que}» a ${quien}`,
     n: plural({ one: "{n} seleccionado", other: "{n} seleccionados" }),
@@ -170,6 +199,9 @@ export const MESSAGES = {
     titulo: "Reintentar lo fallido",
     ayuda:
       "Vuelven a la cola y salen en la próxima pasada, dentro de tu horario de envío. Solo cuenta lo que puede salir: lo que rebotó, quedó a medias o ya no tiene sentido enviar no se reintenta.",
+    /** La misma ayuda con el envío del espacio apagado: vuelven a la cola, pero no salen. */
+    ayudaApagado:
+      "Vuelven a la cola, pero no salen mientras el envío del espacio esté apagado. Solo cuenta lo que puede salir: lo que rebotó, quedó a medias o ya no tiene sentido enviar no se reintenta.",
     boton: (tipo: string, n: string) => `${tipo} · ${n}`,
     uno: "Reintentar",
     /** En vez del botón, en un fallido que no se puede reintentar. */
@@ -205,6 +237,31 @@ export const MESSAGES = {
       not_cancelable: "ya salió o se está enviando",
     } satisfies Record<CancelSkipCode, string>,
     conMotivo: (n: string, motivo: string) => `${n} · ${motivo}`,
+  },
+
+  /**
+   * Por qué la cola no sale (getQueueBlockers de @mc/db): el aviso de
+   * arriba y lo que dice cada fila que espera. `corto` va al lado de la
+   * pastilla; `texto`, debajo, con su enlace.
+   */
+  espera: {
+    aviso: "El envío está apagado: nada de la cola sale hasta que lo enciendas.",
+    avisoEnlace: "Ir a la política de envío",
+    disabled: {
+      corto: "envío apagado",
+      texto: "El envío del espacio está apagado: no sale hasta que lo enciendas.",
+      enlace: "Encender el envío",
+    },
+    noAccount: {
+      corto: (canal: string) => `sin cuenta de ${canal}`,
+      texto: (canal: string) => `No hay ninguna cuenta de ${canal} conectada: sale en cuanto conectes una.`,
+      enlace: "Ir a canales",
+    },
+    notAllowed: {
+      corto: (canal: string) => `${canal} no está permitido`,
+      texto: (canal: string) => `Tu política de envío no deja usar ${canal}: no sale hasta que lo permitas.`,
+      enlace: "Ir a la política de envío",
+    },
   },
 
   vacio: {
@@ -308,6 +365,8 @@ export const MESSAGES = {
       healthy: "Sale lo que tiene que salir.",
     } satisfies Record<SequenceHealthLevel, string>,
     verCola: "Ver en la actividad",
+    /** La columna del semáforo en la lista de /ventas/cadencias. */
+    columnaSalud: "Salud",
     kpis: {
       enviados: "Enviados",
       enviadosNota: (n: string) => `${n} en los últimos 7 días`,
@@ -326,7 +385,8 @@ export const MESSAGES = {
 
   flujo: {
     titulo: "Flujo de la cadencia",
-    descripcion: "Cada paso con lo que pasó en él. Pasa el cursor, toca o enfoca una cifra para ver qué cuenta; Escape la cierra.",
+    descripcion:
+      "Cada paso con lo que pasó en él. Pasa el cursor, toca o enfoca una cifra para ver qué cuenta; Escape la cierra. Con el teclado, Tab va de paso en paso y las flechas recorren sus cifras.",
     paso: (n: string, dia: string, tipo: string) => `Paso ${n} · Día ${dia} · ${tipo}`,
     cifras: {
       sent: "enviados",
@@ -337,16 +397,44 @@ export const MESSAGES = {
       failed: "fallidos",
       stopped: "detenidos",
     },
-    /** Lo que explica cada cifra: el tooltip. */
+    /** Lo que explica cada cifra: el tooltip. `n` llega formateado; la forma la elige `count`. */
     explica: {
-      sent: (n: string) => `${n}: mensajes de este paso que salieron.`,
-      opened: (n: string) => `${n}: de los enviados, los que se abrieron. Solo el correo avisa de la apertura, y no siempre.`,
+      sent: plural({
+        "=0": "Ningún mensaje de este paso ha salido todavía.",
+        one: "Un mensaje de este paso salió.",
+        other: "{n} mensajes de este paso salieron.",
+      }),
+      opened: plural({
+        "=0": "Ninguno de los enviados se ha abierto. Solo el correo avisa de la apertura, y no siempre.",
+        one: "Uno de los enviados se abrió. Solo el correo avisa de la apertura, y no siempre.",
+        other: "{n} de los enviados se abrieron. Solo el correo avisa de la apertura, y no siempre.",
+      }),
       openedNoTracked: "Este canal no avisa cuando se abre un mensaje.",
-      replied: (n: string) => `${n}: de los enviados, los que recibieron respuesta (sin contar los «fuera de oficina»).`,
-      positive: (n: string) => `${n}: de los enviados, los que recibieron una respuesta clasificada como «me interesa».`,
-      pending: (n: string) => `${n}: programados, retenidos, borradores o enviándose. Todavía pueden salir.`,
-      failed: (n: string) => `${n}: el envío falló. Puedes reintentarlos desde la actividad.`,
-      stopped: (n: string) => `${n}: cancelados o saltados (la persona respondió, se dio de baja o no tenía dirección).`,
+      replied: plural({
+        "=0": "Ninguno de los enviados ha recibido respuesta (sin contar los «fuera de oficina»).",
+        one: "Uno de los enviados recibió respuesta (sin contar los «fuera de oficina»).",
+        other: "{n} de los enviados recibieron respuesta (sin contar los «fuera de oficina»).",
+      }),
+      positive: plural({
+        "=0": "Ninguna respuesta de este paso dice «me interesa» todavía.",
+        one: "Una de las respuestas de este paso dice «me interesa».",
+        other: "{n} de las respuestas de este paso dicen «me interesa».",
+      }),
+      pending: plural({
+        "=0": "No queda nada de este paso en la cola.",
+        one: "Un mensaje de este paso sigue en la cola (programado, retenido, en borrador o enviándose): todavía puede salir.",
+        other: "{n} mensajes de este paso siguen en la cola (programados, retenidos, en borrador o enviándose): todavía pueden salir.",
+      }),
+      failed: plural({
+        "=0": "Ningún envío de este paso ha fallado.",
+        one: "Un mensaje de este paso falló. Puedes reintentarlo desde la actividad.",
+        other: "{n} mensajes de este paso fallaron. Puedes reintentarlos desde la actividad.",
+      }),
+      stopped: plural({
+        "=0": "Nada de este paso se canceló ni se saltó.",
+        one: "Un mensaje de este paso se canceló o se saltó (la persona respondió, se dio de baja o no tenía dirección).",
+        other: "{n} mensajes de este paso se cancelaron o se saltaron (la persona respondió, se dio de baja o no tenía dirección).",
+      }),
     },
     tasa: (pct: string) => `${pct} de lo enviado`,
   },
