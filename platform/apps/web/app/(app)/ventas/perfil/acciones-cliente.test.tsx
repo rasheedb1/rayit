@@ -55,17 +55,25 @@ describe("una acción que se rechaza no tumba la página", () => {
     recalcularPerfil.mockRejectedValue(new Error("Failed to fetch"));
     render(<Recalcular />);
     fireEvent.click(screen.getByRole("button", { name: "Recalcular" }));
-    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("No se pudo recalcular. Inténtalo de nuevo en un momento."));
-    // El botón sigue ahí: la frontera de error no reemplazó la pantalla. Se
-    // espera a que termine la transición: mientras dura, el botón dice «Calculando…».
-    await waitFor(() => expect(screen.getByRole("button", { name: "Recalcular" })).toBeTruthy());
+    // El mensaje llega antes de que termine la transición (mientras dura, el
+    // botón dice «Calculando…»): las dos cosas se esperan juntas, nunca una
+    // aserción síncrona detrás de un waitFor.
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe("No se pudo recalcular. Inténtalo de nuevo en un momento.");
+      // El botón sigue ahí: la frontera de error no reemplazó la pantalla.
+      expect(screen.getByRole("button", { name: "Recalcular" })).toBeTruthy();
+    });
   });
 
   it("Calcular mi perfil, igual", async () => {
     recalcularPerfil.mockRejectedValue(new Error("timeout"));
     render(<CalcularPrimero />);
     fireEvent.click(screen.getByRole("button", { name: "Calcular mi perfil" }));
-    await waitFor(() => expect(screen.getAllByRole("status").some((s) => s.textContent?.includes("No se pudo recalcular"))).toBe(true));
+    await waitFor(() => {
+      expect(screen.getAllByRole("status").some((s) => s.textContent?.includes("No se pudo recalcular"))).toBe(true);
+      // Y el botón vuelve a ofrecer calcular cuando la transición termina.
+      expect(screen.getByRole("button", { name: "Calcular mi perfil" })).toBeTruthy();
+    });
   });
 
   it("Guardar narrativa: el error se dice en el editor, que sigue abierto con el borrador", async () => {

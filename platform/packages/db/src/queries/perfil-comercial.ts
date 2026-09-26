@@ -22,7 +22,7 @@
  *     que espera a una API retiene una conexión del pooler.
  */
 import type { Decimal, PlatformId } from '@mc/core';
-import { buildPerfil, coverSrcOrNull, OUTLIER_TIERS, type OutlierTier, type PerfilInputs, type PerfilPostInput } from '@mc/core/outreach/perfil';
+import { buildPerfil, CONNECTED_STATUSES, coverSrcOrNull, OUTLIER_TIERS, type OutlierTier, type PerfilInputs, type PerfilPostInput } from '@mc/core/outreach/perfil';
 import { llmCostUsd, type LlmUsage } from '@mc/core/outreach/llm-precios';
 import { verifyNarrative, type NarrativeIssue, type NarrativeOutcome } from '@mc/core/outreach/narrativa';
 import {
@@ -157,9 +157,10 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
           ORDER BY day DESC, captured_at DESC
           LIMIT 1
        ) s ON true
-      WHERE c.creator_id = $1 AND c.deleted_at IS NULL
+      WHERE c.creator_id = $1 AND c.deleted_at IS NULL AND c.status = ANY ($2::text[])
       ORDER BY c.platform_id, c.connected_at`,
-    [creatorId],
+    // Solo las cuentas autenticadas: una revocada o caducada no es una red conectada.
+    [creatorId, CONNECTED_STATUSES],
   );
 
   // La demografía de seguidores del último día de cada cuenta: una fila
@@ -171,13 +172,13 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
     `SELECT DISTINCT ON (a.connection_id, a.dimension, a.bucket)
             a.id, c.platform_id, a.connection_id, a.dimension, a.bucket, a.share, to_char(a.day, 'YYYY-MM-DD') AS day
        FROM audience_breakdown a
-       JOIN social_connection c ON c.id = a.connection_id AND c.deleted_at IS NULL
+       JOIN social_connection c ON c.id = a.connection_id AND c.deleted_at IS NULL AND c.status = ANY ($2::text[])
       WHERE c.creator_id = $1 AND a.scope = 'account' AND a.population = 'followers'
         AND a.dimension IN ('age', 'gender', 'country')
         AND a.day = (SELECT max(b.day) FROM audience_breakdown b
                       WHERE b.connection_id = a.connection_id AND b.scope = 'account' AND b.population = 'followers')
       ORDER BY a.connection_id, a.dimension, a.bucket, a.captured_at DESC`,
-    [creatorId],
+    [creatorId, CONNECTED_STATUSES],
   );
 
   // La mediana de alcance en no seguidores por red, sobre los últimos
