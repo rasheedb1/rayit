@@ -5,7 +5,7 @@
  * Puro, con pruebas (vista.test.ts).
  */
 import { FAILURE_REASON_TEXTS, holdReasonText, noticeLang, parseHoldReason, type NoticeLang } from "@mc/core/outreach/messages";
-import type { BulkReport, QueueBucket, SequenceHealthLevel, TouchStatus } from "@mc/db/queries/actividad";
+import { isQueueCursorToken, type BulkReport, type QueueBucket, type SequenceHealthLevel, type TouchStatus } from "@mc/db/queries/actividad";
 import type { PillKind } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
 import { IDIOMA_MENSAJES, MESSAGES, motivoTexto } from "../messages";
@@ -42,14 +42,6 @@ export interface Filtros {
   pagina?: Pagina | null;
 }
 
-/**
- * La forma de un cursor de @mc/db (listOutboundQueue): el instante en UTC
- * con microsegundos (o «infinity») y el id del toque, con el 0/1 de
- * «fallido primero» delante en la cola. Lo que no tiene esta forma no
- * llega a la base; la base, además, lo vuelve a validar por pestaña.
- */
-const CURSOR_RE = /^(?:[01]_)?(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z|infinity)_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
 type Params = Record<string, string | string[] | undefined>;
 
 const uno = (v: string | string[] | undefined): string | null => {
@@ -68,9 +60,15 @@ export function filtrosDe(params: Params): Filtros {
   };
 }
 
+/**
+ * La página que pide la URL, si su cursor es uno de @mc/db
+ * (isQueueCursorToken: la misma regla con la que listOutboundQueue lo
+ * lee, no una copia de su formato). Lo que no lo es no llega a la base;
+ * la base, además, lo vuelve a validar por pestaña.
+ */
 function paginaDe(siguiente: string | null, anterior: string | null): Pagina | null {
-  if (siguiente && CURSOR_RE.test(siguiente)) return { direction: "next", token: siguiente };
-  if (anterior && CURSOR_RE.test(anterior)) return { direction: "prev", token: anterior };
+  if (siguiente && isQueueCursorToken(siguiente)) return { direction: "next", token: siguiente };
+  if (anterior && isQueueCursorToken(anterior)) return { direction: "prev", token: anterior };
   return null;
 }
 

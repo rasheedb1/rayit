@@ -116,6 +116,8 @@ export interface QueueRow {
   stepPosition: number | null;
   stepDayOffset: number | null;
   enrollmentStatus: EnrollmentStatus | null;
+  /** El estado de su secuencia (0067); null si el toque no tiene. Pausada, el despachador aplaza lo suyo cada día. */
+  sequenceStatus: SequenceStatus | null;
   contactId: string | null;
   contactName: string | null;
   contactEmail: string | null;
@@ -197,6 +199,7 @@ function toQueueRow(r: Record<string, unknown>, i: number): QueueRow {
     stepPosition: intOrNull(fn, p('step_position'), r.step_position),
     stepDayOffset: intOrNull(fn, p('step_day_offset'), r.step_day_offset),
     enrollmentStatus: oneOfOrNull(fn, p('enrollment_status'), r.enrollment_status, ENROLLMENT_STATUSES),
+    sequenceStatus: oneOfOrNull(fn, p('sequence_status'), r.sequence_status, SEQUENCE_STATUSES),
     contactId: textOrNull(fn, p('contact_id'), r.contact_id),
     contactName: textOrNull(fn, p('contact_name'), r.contact_name),
     contactEmail: textOrNull(fn, p('contact_email'), r.contact_email),
@@ -303,6 +306,16 @@ export function parseQueueCursor(bucket: QueueBucket, token: string): CursorKey 
   return INSTANT_RE.test(at) || at === 'infinity' ? { failed: rank === '0', at, id } : null;
 }
 
+/**
+ * ¿Es un cursor de alguna de las dos pestañas? Lo usa la web para no
+ * poner en la URL (ni mandar a la base) lo que no es un cursor, con la
+ * MISMA regla que lo lee aquí: si el formato del token cambia, cambia
+ * para los dos a la vez.
+ */
+export function isQueueCursorToken(token: string): boolean {
+  return QUEUE_BUCKETS.some((bucket) => parseQueueCursor(bucket, token) !== null);
+}
+
 function cursorToken(bucket: QueueBucket, key: CursorKey): string {
   return bucket === 'history' ? `${key.at}_${key.id}` : `${key.failed ? '0' : '1'}_${key.at}_${key.id}`;
 }
@@ -351,7 +364,7 @@ export async function listOutboundQueue(tx: WorkspaceTx, filters: QueueFilters):
     `SELECT q.touch_id, q.status, q.bucket, q.channel, q.subject, q.sequence_id, q.sequence_name, q.step_id, q.step_type,
             q.step_position, q.step_day_offset, q.enrollment_status, q.contact_id, q.contact_name, q.contact_email::text AS contact_email,
             q.company_id, q.company_name, q.account_name, q.account_status, q.attempt_count, q.due_at, q.retrying, q.status_changed_at,
-            q.sent_at, q.opened_at, q.replied_at, q.reason, q.retry_block, ${sortAt} AS sort_at
+            q.sent_at, q.opened_at, q.replied_at, q.reason, q.retry_block, q.sequence_status, ${sortAt} AS sort_at
        FROM outbound_queue q
       WHERE ${conds.join(' AND ')}
       ORDER BY ${order}
@@ -381,6 +394,12 @@ export interface QueueFacets {
   retryableByStepType: { stepType: StepType; count: number }[];
   /** Cuántas filas hay en cada pestaña con los filtros aplicados. */
   counts: Record<QueueBucket, number>;
+  /**
+   * Cuántas filas de la cola se pueden cancelar con los filtros aplicados
+   * (QUEUE_CANCELABLE_STATUSES): la cola cuenta también lo que se está
+   * enviando, que no se cancela.
+   */
+  cancelable: number;
 }
 
 const byStepTypeOrder = (a: StepType, b: StepType) => STEP_TYPES.indexOf(a) - STEP_TYPES.indexOf(b);
@@ -405,11 +424,13 @@ export async function getQueueFacets(tx: WorkspaceTx, filters: ScreenFilters): P
   const ps = new Params();
   const queue = ps.add([...QUEUE_BUCKET_STATUSES.queue]);
   const history = ps.add([...QUEUE_BUCKET_STATUSES.history]);
+  const cancelable = ps.add([...QUEUE_CANCELABLE_STATUSES]);
   const conds = filterConds(filters, TABLE_COLUMNS, ps);
   const counts = await tx.query<Record<string, unknown>>(
     `SELECT st.step_type, GROUPING(st.step_type) = 1 AS total,
             count(*) FILTER (WHERE t.status = ANY(${queue}::text[]))::int AS queue,
             count(*) FILTER (WHERE t.status = ANY(${history}::text[]))::int AS history,
+            count(*) FILTER (WHERE t.status = ANY(${cancelable}::text[]))::int AS cancelable,
             count(*) FILTER (WHERE CASE WHEN t.status = 'failed' THEN outbound_touch_retry_block(t) IS NULL ELSE false END)::int
               AS retryable
        FROM outbound_touch t
@@ -428,6 +449,7 @@ export async function getQueueFacets(tx: WorkspaceTx, filters: ScreenFilters): P
       .map((r) => ({ stepType: oneOf(fn, 'step_type', r.step_type, STEP_TYPES), count: int(fn, 'retryable', r.retryable) }))
       .sort((a, b) => byStepTypeOrder(a.stepType, b.stepType)),
     counts: { queue: total ? int(fn, 'queue', total.queue) : 0, history: total ? int(fn, 'history', total.history) : 0 },
+    cancelable: total ? int(fn, 'cancelable', total.cancelable) : 0,
   };
 }
 

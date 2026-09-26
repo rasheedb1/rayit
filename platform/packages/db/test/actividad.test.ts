@@ -363,15 +363,35 @@ describe('la cola y el historial (outbound_queue)', () => {
     // El fallido de correo de c8 no cuenta: su paso siguiente ya salió (superseded). El botón «Correo · 1» sería un botón muerto.
     assert.deepEqual(facets.retryableByStepType, [{ stepType: 'linkedin_message', count: 1 }]);
     assert.deepEqual(facets.counts, { queue: 10, history: 15 });
+    // Lo cancelable de la cola: todo menos lo que se está enviando (c7, paso 2).
+    assert.equal(facets.cancelable, 9);
     // Con los filtros: los conteos de las pestañas y los reintentables salen de la misma pasada.
     const persona3 = await t.db.withWorkspace(WS_A, (tx) => getQueueFacets(tx, { contact: 'persona 3' }));
     assert.deepEqual(persona3.counts, { queue: 1, history: 2 });
+    assert.equal(persona3.cancelable, 1);
     assert.deepEqual(persona3.retryableByStepType, [{ stepType: 'linkedin_message', count: 1 }]);
     const soloCorreo = await t.db.withWorkspace(WS_A, (tx) => getQueueFacets(tx, { stepType: 'email', sequenceId: SEQ }));
     assert.deepEqual(soloCorreo.retryableByStepType, []);
     assert.deepEqual(soloCorreo.counts, { queue: 3, history: 5 });
+    assert.equal(soloCorreo.cancelable, 3);
     const nada = await t.db.withWorkspace(WS_B, (tx) => getQueueFacets(tx, { sequenceId: SEQ }));
     assert.deepEqual([nada.counts, nada.retryableByStepType], [{ queue: 0, history: 0 }, []], 'lo ajeno no se cuenta');
+    assert.equal(nada.cancelable, 0);
+  });
+
+  test('la cola dice cuándo la cadencia está en pausa (0067): el despachador aplaza lo suyo cada día', async () => {
+    const programado = async () => (await t.db.withWorkspace(WS_A, (tx) =>
+      listOutboundQueue(tx, { bucket: 'queue', statuses: ['scheduled'], sequenceId: SEQ }))).rows.find((r) => r.touchId === touch(5, 3))!;
+    assert.deepEqual([(await programado()).sequenceStatus, (await programado()).enrollmentStatus], ['active', 'active']);
+    await t.admin(`UPDATE outbound_sequence SET status = 'paused' WHERE id = '${SEQ}'`);
+    try {
+      const pausado = await programado();
+      assert.deepEqual([pausado.status, pausado.sequenceStatus, pausado.enrollmentStatus], ['scheduled', 'paused', 'active']);
+      // Solo cambia la columna nueva: lo demás de la fila es lo de siempre.
+      assert.equal(pausado.stepPosition, 3);
+    } finally {
+      await t.admin(`UPDATE outbound_sequence SET status = 'active' WHERE id = '${SEQ}'`);
+    }
   });
 
   test('reintentar el fallido lo devuelve a scheduled y reabre la cadencia que se completó por él', async () => {
@@ -467,6 +487,7 @@ describe('la cola y el historial (outbound_queue)', () => {
     const { rows } = await t.db.withWorkspace(WS_A, (tx) => listOutboundQueue(tx, { bucket: 'queue', statuses: ['failed'] }));
     const lleno = rows.find((r) => r.touchId === id('7c'))!;
     assert.deepEqual([lleno.retryable, lleno.retryBlock, lleno.attemptCount], [false, 'too_many_attempts', 19]);
+    assert.deepEqual([lleno.sequenceStatus, lleno.enrollmentStatus], [null, null], 'un toque suelto no tiene cadencia que pausar');
     const report = await t.db.withWorkspace(WS_A, (tx) => retryFailedTouches(tx, { touchIds: [id('7c'), id('7d')] }));
     assert.deepEqual(report, { done: [id('7d')], skipped: [{ touchId: id('7c'), code: 'too_many_attempts' }] });
     const despues = await t.db.asWorker(async (tx) => (await tx.query<{ id: string; status: string; attempt_count: number }>(
@@ -859,6 +880,35 @@ describe('cada rama del bloqueo del reintento, con filas reales (outbound_touch_
       `SELECT DISTINCT status FROM outbound_touch WHERE id = ANY($1::uuid[])`, [ids],
     )).rows.map((r) => r.status));
     assert.deepEqual(estados, ['failed']);
+  });
+
+  test('reintentar por tipo de paso devuelve a scheduled el fallido que puede, con los filtros de la pantalla, y deja los bloqueados', async () => {
+    const estado = async (ids: string[]) => t.db.asWorker(async (tx) => (await tx.query<{ id: string; status: string }>(
+      `SELECT id, status FROM outbound_touch WHERE id = ANY($1::uuid[]) ORDER BY id`, [ids],
+    )).rows.map((r) => [r.id, r.status]));
+    const bloqueados = Object.keys(ESPERADO);
+    try {
+      // Un contacto que no casa con nadie: la consulta con los filtros de la vista corre y no mueve nada.
+      const nadie = await t.db.withWorkspace(WS_D, (tx) => retryFailedTouches(tx, { stepType: 'email', contact: 'nadie' }));
+      assert.deepEqual(nadie, { done: [], skipped: [] });
+      // Otra cadencia (la archivada): tampoco, aunque sea del mismo tipo.
+      const otra = await t.db.withWorkspace(WS_D, (tx) => retryFailedTouches(tx, { stepType: 'email', sequenceId: SEQ_ARCH }));
+      assert.deepEqual(otra, { done: [], skipped: [] });
+      assert.deepEqual((await estado([F.ok])).map(([, s]) => s), ['failed']);
+      // «Correo · 1»: el único fallido de correo que la base deja volver.
+      const report = await t.db.withWorkspace(WS_D, (tx) =>
+        retryFailedTouches(tx, { stepType: 'email', sequenceId: SEQ_D, contact: 'ok@marca-d' }));
+      assert.deepEqual(report, { done: [F.ok], skipped: [] });
+      const { rows } = await t.db.withWorkspace(WS_D, (tx) => listOutboundQueue(tx, { bucket: 'queue', statuses: ['scheduled'] }));
+      assert.deepEqual(rows.map((r) => [r.touchId, r.status, r.reason]), [[F.ok, 'scheduled', null]], 'vuelve a la cola, sin el motivo viejo');
+      // Y los bloqueados siguen fallidos, uno por uno.
+      assert.deepEqual(new Set((await estado(bloqueados)).map(([, s]) => s)), new Set(['failed']));
+      // Sin filtros, ya no queda nada de correo que reintentar.
+      assert.deepEqual(await t.db.withWorkspace(WS_D, (tx) => retryFailedTouches(tx, { stepType: 'email' })), { done: [], skipped: [] });
+    } finally {
+      // El de control vuelve a fallar, para la prueba del viernes.
+      await t.admin(`UPDATE outbound_touch SET status = 'failed', blocked_reason = 'rejected' WHERE id = '${F.ok}'`);
+    }
   });
 
   test('un reintento un viernes a las 20:00 sale el lunes al abrir la ventana del espacio, no «ahora»', async () => {
