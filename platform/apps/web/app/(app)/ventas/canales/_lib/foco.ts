@@ -23,3 +23,14 @@ export const HEADING_FOCUS =
   "-mx-1 w-fit rounded-sm px-1 outline-none! " +
   "[&:focus-visible:not([data-foco-raton])]:ring-2 [&:focus-visible:not([data-foco-raton])]:ring-inset [&:focus-visible:not([data-foco-raton])]:ring-ink";
 
+
+/**
+ * El id del título de la fila de un canal. Sirve dos cosas: FilaCanal le
+ * lleva el foco después de desconectar, y es el ancla a la que enlazan
+ * otras pantallas para llevar a la persona al botón de reconectar de ESE
+ * canal (canalHref), no al principio de la página.
+ */
+export const canalHeadingId = (channel: string): string => `canal-${channel}-titulo`;
+
+/** El enlace a la fila de un canal en /ventas/canales (su título: el botón de reconectar está debajo). */
+export const canalHref = (channel: string): string => `/ventas/canales#${canalHeadingId(channel)}`;

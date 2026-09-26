@@ -6,6 +6,7 @@ import { Pill, type PillKind } from "@/components/ui/pill";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
+import { canalHref } from "../../canales/_lib/foco";
 import { MESSAGES } from "../messages";
 import { FronteraWidget } from "./frontera-widget";
 
@@ -32,6 +33,8 @@ export interface UsoVista {
   cifra: string;
   blando: string;
   duro: string;
+  /** Lo que lleva la semana contra su tope; null cuando ya lo dice «manda» (la semana es la que manda hoy). */
+  semana: string | null;
   calentando: string | null;
   /** Qué tope manda hoy, si no es el diario de la cuenta. */
   manda: string | null;
@@ -44,16 +47,29 @@ export interface UsoVista {
   dias: { key: string; label: string; share: number; nivel: Exclude<UsageLevel, "off"> }[];
 }
 
+/**
+ * Quién pone el techo del proveedor: el servicio de la cuenta (Gmail) o,
+ * si la cuenta entra por un puente (Unipile), la red a la que llega.
+ */
+function proveedorDe(u: ChannelUsage): string {
+  return T.proveedores[u.provider] ?? T.plataformas[u.channel];
+}
+
 export function usoVista(u: ChannelUsage, f: Formatter): UsoVista {
   const canal = T.canales[u.channel];
   const cuenta = u.accountName ?? canal;
   const nivelTexto = T.niveles[u.level];
   const manda =
     u.limitedBy === "week"
-      ? T.manda.week(f.int(u.weekUsed), f.int(u.weeklyLimit))
+      ? T.manda.week()
       : u.limitedBy === "workspace" && u.workspaceUsed !== null && u.workspaceLimit !== null
         ? T.manda.workspace(f.int(u.workspaceUsed), f.int(u.workspaceLimit))
         : null;
+  const sinEnvio = u.offReason === "account"
+    ? { ...T.sinEnvio.account, href: canalHref(u.channel) }
+    : u.offReason === "disabled"
+      ? { ...T.sinEnvio.disabled, href: T.politicaHref }
+      : null;
   return {
     id: u.accountId,
     canal,
@@ -63,10 +79,11 @@ export function usoVista(u: ChannelUsage, f: Formatter): UsoVista {
     cifra: T.cifra(f.int(u.used), f.int(u.hardLimit)),
     blando: T.blando(f.int(u.softLimit)),
     duro: T.duro(f.int(u.hardLimit)),
+    semana: u.limitedBy === "week" ? null : T.semana(f.int(u.weekUsed), f.int(u.weeklyLimit)),
     calentando: u.warmingUp ? T.calentando(f.int(u.dayLimit), f.int(u.dailyLimit)) : null,
     manda,
-    proveedor: T.proveedor(f.int(u.providerLimit), canal),
-    sinEnvio: u.offReason ? T.sinEnvio[u.offReason] : null,
+    proveedor: T.proveedor(f.int(u.providerLimit), proveedorDe(u)),
+    sinEnvio,
     usedShare: u.usedShare,
     softShare: u.softShare,
     medidor: T.medidor(cuenta, f.int(u.used), f.int(u.hardLimit), nivelTexto),
@@ -117,6 +134,7 @@ function Cuenta({ u }: { u: UsoVista }) {
       <p className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs tabular-nums text-fg-2">
         <span>{u.blando}</span>
         <span>{u.duro}</span>
+        {u.semana && <span>{u.semana}</span>}
         <span className="text-fg-3">{u.proveedor}</span>
       </p>
       {u.manda && <p className="text-xs text-fg-2">{u.manda}</p>}

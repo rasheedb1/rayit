@@ -92,7 +92,13 @@ describe("UsoCuenta", () => {
     expect(comprobada.getAttribute("title")).toBe(f.dateTime(live.lastOkAt.toISOString()));
     expect(comprobada.className).not.toMatch(/nowrap/);
     expect(comprobada.className).toMatch(/break-words/);
-    expect(screen.getByText(MESSAGES.detail.usageToday("3", "20"))).toBeTruthy();
+    // El uso de hoy y de la semana lo dice el widget «Uso de hoy» (VEN-16): la tarjeta no lo repite.
+    expect(container.textContent).not.toMatch(/Hoy|Semana/);
+  });
+
+  it("sin una comprobación todavía, no pinta una línea vacía", () => {
+    const { container } = render(<UsoCuenta live={{ ...live, lastOkAt: null, lastOkAgoS: null }} f={f} />);
+    expect(container.innerHTML).toBe("");
   });
 
   it("en una cuenta caída dice cuándo funcionó por última vez, no que se comprobó", () => {

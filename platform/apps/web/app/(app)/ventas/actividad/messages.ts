@@ -14,7 +14,7 @@
  * Solo tipos de @mc/db: este archivo lo importan componentes de cliente.
  */
 import type {
-  CancelSkipCode, OutboundChannel, RetrySkipCode, SequenceHealthLevel, TouchStatus, UsageLevel, UsageLimitedBy, UsageOffReason,
+  CancelSkipCode, ChannelProvider, OutboundChannel, RetrySkipCode, SequenceHealthLevel, TouchStatus, UsageLevel, UsageOffReason,
 } from "@mc/db/queries/actividad";
 
 /**
@@ -98,9 +98,15 @@ export const MESSAGES = {
     intentos: plural({ one: "{n} intento", other: "{n} intentos" }),
     reintento: (cuando: string) => `Reintento ${cuando}`,
     toca: (cuando: string) => `Sale ${cuando}`,
+    /** Lo que se está enviando, al lado de la pastilla «Enviando»: solo desde cuándo. */
+    desdeCorto: (cuando: string) => `Desde ${cuando}`,
     sinHora: "Sin hora todavía",
     salio: (cuando: string) => `Salió ${cuando}`,
-    /** Lo que ya no va a salir (o se está enviando): el verbo de su estado y cuándo cambió. */
+    /**
+     * Lo que ya no va a salir (o se está enviando): el verbo de su estado y
+     * cuándo cambió. Es la frase larga (title y detalle): en la fila, al
+     * lado de la pastilla que ya dice el verbo, va solo la fecha.
+     */
     cambio: {
       failed: (cuando: string) => `Falló ${cuando}`,
       canceled: (cuando: string) => `Se canceló ${cuando}`,
@@ -115,7 +121,6 @@ export const MESSAGES = {
     verFicha: "Ver la ficha de la empresa",
     /** El detalle del motivo, que se despliega en la fila (con teclado, con el dedo o con el ratón). */
     detalle: {
-      abrir: "Ver el detalle",
       codigo: (codigo: string) => `código: ${codigo}`,
     },
   },
@@ -149,7 +154,8 @@ export const MESSAGES = {
 
   seleccion: {
     todas: "Seleccionar todo lo cancelable",
-    una: (quien: string) => `Seleccionar el mensaje a ${quien}`,
+    /** Una casilla: qué mensaje y a quién («Seleccionar «Paso 3 · Mensaje en LinkedIn» a Sofía Cárdenas»), para distinguir las de una misma persona. */
+    una: (quien: string, que: string) => `Seleccionar «${que}» a ${quien}`,
     n: plural({ one: "{n} seleccionado", other: "{n} seleccionados" }),
     cancelar: "Cancelar seleccionados",
     pregunta: plural({ one: "¿Cancelar {n} mensaje?", other: "¿Cancelar {n} mensajes?" }),
@@ -245,20 +251,33 @@ export const MESSAGES = {
     blando: (n: string) => `Límite blando ${n}`,
     duro: (n: string) => `Límite duro ${n}`,
     calentando: (hoy: string, tope: string) => `Calentando: hoy hasta ${hoy}, luego sube hasta ${tope}`,
+    semana: (usado: string, tope: string) => `Semana ${usado} de ${tope}`,
     proveedor: (n: string, proveedor: string) => `${proveedor} permite hasta ${n} al día`,
+    /**
+     * Quién pone el techo del proveedor: el servicio con el que se conectó
+     * la cuenta. Unipile es un puente: el techo lo pone la red (LinkedIn,
+     * Instagram), así que para él manda el nombre del canal (plataformas).
+     */
+    proveedores: { gmail_oauth: "Gmail", unipile: null } satisfies Record<ChannelProvider, string | null>,
+    plataformas: { email: "Tu proveedor de correo", linkedin: "LinkedIn", instagram_dm: "Instagram", whatsapp: "WhatsApp" } satisfies Record<OutboundChannel, string>,
     /** Cuando el límite duro de hoy no es el diario de la cuenta, qué tope manda. */
     manda: {
-      week: (usado: string, tope: string) => `Manda el tope semanal de la cuenta: ${usado} de ${tope} esta semana`,
+      week: () => "Manda el tope semanal de la cuenta: hoy solo sale lo que le queda a la semana",
       workspace: (usado: string, tope: string) => `Manda el tope de correos del espacio: ${usado} de ${tope} hoy entre todas las cuentas`,
-    } satisfies Record<Exclude<UsageLimitedBy, "day">, (usado: string, tope: string) => string>,
+    },
     medidor: (cuenta: string, usado: string, duro: string, nivel: string) => `${cuenta}: ${usado} de ${duro} hoy, ${nivel}`,
     historia: "Últimos 14 días",
     vacio: "Conecta una cuenta para ver su uso.",
-    /** Por qué una cuenta está «Sin envío», con adónde ir a arreglarlo. */
+    /**
+     * Por qué una cuenta está «Sin envío», con adónde ir a arreglarlo. El
+     * enlace de la cuenta caída lo pone usoVista: lleva a la fila de SU
+     * canal en /ventas/canales (canalHref), donde está el botón de verdad.
+     */
     sinEnvio: {
-      account: { texto: "La cuenta no está conectada: no sale nada por ella hasta que la reconectes.", enlace: "Reconectar", href: "/ventas/canales" },
-      disabled: { texto: "El envío del espacio está apagado: no sale nada hasta que lo enciendas.", enlace: "Ir a la política de envío", href: "/ventas/politica" },
-    } satisfies Record<UsageOffReason, { texto: string; enlace: string; href: string }>,
+      account: { texto: "La cuenta no está conectada: no sale nada por ella hasta que la reconectes.", enlace: "Reconectar" },
+      disabled: { texto: "El envío del espacio está apagado: no sale nada hasta que lo enciendas.", enlace: "Ir a la política de envío" },
+    } satisfies Record<UsageOffReason, { texto: string; enlace: string }>,
+    politicaHref: "/ventas/politica",
     cargando: "Cargando el uso de hoy",
     error: "No pudimos cargar el uso de hoy. El resto de la página sigue funcionando.",
   },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 /** Una cifra de un paso, ya formateada, con la frase que explica qué cuenta (el tooltip). */
 export interface CifraFlujo {
@@ -24,7 +24,9 @@ const MARGEN = 8;
  *     (aria-describedby), aunque esté oculta a la vista;
  *   · se puede pasar el cursor por encima del tooltip sin que se cierre
  *     (el hover es del <li>, que lo contiene);
- *   · Escape lo cierra sin mover el foco;
+ *   · Escape lo cierra sin mover el foco ni el puntero: mientras está
+ *     abierto escucha la tecla en todo el documento, así que también se
+ *     descarta cuando se abrió con el cursor y el foco está en otra parte;
  *   · no se sale de la ventana: si al abrirse su borde derecho pasa del de
  *     la ventana (la última cifra de una fila a 400 px), se alinea a la
  *     derecha de su cifra.
@@ -41,6 +43,16 @@ export function Cifra({ c, id }: { c: CifraFlujo; id: string }) {
     if (!abierta || !tip.current) return;
     const ancho = document.documentElement.clientWidth;
     if (ancho > 0 && tip.current.getBoundingClientRect().right > ancho - MARGEN) setDerecha(true);
+  }, [abierta]);
+
+  // Descartable sin mover el puntero: con el tooltip abierto, Escape lo cierra venga de donde venga.
+  useEffect(() => {
+    if (!abierta) return;
+    const alPulsar = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCerrada(true);
+    };
+    document.addEventListener("keydown", alPulsar);
+    return () => document.removeEventListener("keydown", alPulsar);
   }, [abierta]);
 
   const volver = () => {

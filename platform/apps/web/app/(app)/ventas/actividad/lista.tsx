@@ -17,12 +17,14 @@ export interface FilaVista {
   estadoKind: PillKind;
   /** El asunto del correo, o el paso si no lleva asunto. */
   titulo: string;
+  /** Qué mensaje es (el paso, o el asunto): distingue las casillas de una misma persona para un lector de pantalla. */
+  queEs: string;
   contacto: string;
   /** La marca y la cadencia. */
   contexto: string;
   /** El paso, o null si ya es el título o no tiene (un toque suelto: el contexto dice «Sin cadencia»). */
   paso: string | null;
-  /** Cuándo, corto («Falló 24 de sept, 7:31 p. m.»), y la fecha larga para el detalle. */
+  /** Cuándo, corto (al lado de la pastilla: «24 de sept, 7:31 p. m.» o «Sale lun 28, 8:12 a. m.»), y la frase larga para el title y el detalle. */
   cuando: string;
   cuandoCompleto: string | null;
   /** «Desde laura@marca.test»: la cuenta con la que salió o se intentó. */
@@ -36,29 +38,29 @@ export interface FilaVista {
   reintentable: boolean;
   /** Fallido que no se puede reintentar: por qué, en vez del botón. */
   bloqueo: string | null;
-  /** Fallido por la cuenta del canal, sin ninguna conectada: se ofrece reconectar en vez del botón. */
-  reconectar: boolean;
+  /** Fallido por la cuenta del canal, sin ninguna conectada: el enlace a la fila de ese canal en /ventas/canales, en vez del botón. */
+  reconectar: string | null;
   cancelable: boolean;
   enviando: boolean;
   fichaHref: string;
 }
 
 const TONO = { bad: "text-bad", warn: "text-warn", muted: "text-fg-2" } as const;
-const CANALES_URL = "/ventas/canales";
 
 /**
  * El motivo de una fila: cortado en una línea mientras está cerrado y
  * entero al abrirlo, con su código y su fecha completa. Es un
  * <details>/<summary>: se abre con el ratón, con el dedo (a 400 px no hay
  * cursor) y con Intro o Espacio desde el teclado, y un lector de pantalla
- * lo anuncia como algo que se despliega.
+ * lo anuncia como algo que se despliega. Al pasar el cursor, el title
+ * enseña la frase entera: con ratón no hace falta un clic para leerla.
  */
 function Motivo({ f }: { f: FilaVista }) {
   return (
     <details className="group text-xs">
       <summary
         className={`flex min-w-0 cursor-pointer list-none items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink [&::-webkit-details-marker]:hidden ${TONO[f.motivoTono]}`}
-        title={MESSAGES.fila.detalle.abrir}
+        title={f.motivo ?? undefined}
       >
         <span className="sr-only">{MESSAGES.fila.motivo}: </span>
         <span className="min-w-0 truncate group-open:whitespace-normal">{f.motivo}</span>
@@ -164,7 +166,7 @@ export function ListaActividad({
                   <input
                     type="checkbox"
                     className="h-4 w-4 accent-[var(--accent)]"
-                    aria-label={t.una(f.contacto)}
+                    aria-label={t.una(f.contacto, f.queEs)}
                     checked={seleccion.has(f.id)}
                     onChange={() => alternar(f.id)}
                   />
@@ -199,7 +201,7 @@ export function ListaActividad({
               {f.reconectar && (
                 <p className="text-xs text-fg-2">
                   {MESSAGES.reintentar.reconectar}{" "}
-                  <Link href={CANALES_URL} className="font-medium text-fg underline underline-offset-2">{MESSAGES.reintentar.irACanales}</Link>
+                  <Link href={f.reconectar} className="font-medium text-fg underline underline-offset-2">{MESSAGES.reintentar.irACanales}</Link>
                 </p>
               )}
             </div>

@@ -40,6 +40,7 @@ const fila = (id: string, over: Partial<FilaVista> = {}): FilaVista => ({
   estado: "Programado",
   estadoKind: "neutral",
   titulo: `Mensaje ${id}`,
+  queEs: "Paso 1 · Correo",
   contacto: `Persona ${id}`,
   contexto: "Marca A · Semana de prueba",
   paso: "Paso 1 · Correo",
@@ -53,7 +54,7 @@ const fila = (id: string, over: Partial<FilaVista> = {}): FilaVista => ({
   intentos: null,
   reintentable: false,
   bloqueo: null,
-  reconectar: false,
+  reconectar: null,
   cancelable: true,
   enviando: false,
   fichaHref: "/ventas/empresas/x",
@@ -84,6 +85,8 @@ describe("la lista de la cola", () => {
     render(lista());
     const resumen = screen.getByText("La cuenta del canal perdió el permiso y hay que reconectarla").closest("summary")!;
     expect(resumen.querySelector(".truncate")).not.toBeNull();
+    // Con ratón, el title enseña la frase entera sin hacer clic.
+    expect(resumen.getAttribute("title")).toBe("La cuenta del canal perdió el permiso y hay que reconectarla");
     // Alcanzable por foco: un <summary> es un control nativo, no un title que solo ve un ratón.
     resumen.focus();
     expect(document.activeElement).toBe(resumen);
@@ -97,7 +100,7 @@ describe("la lista de la cola", () => {
 
   it("selecciona lo cancelable (no lo que se está enviando) y cancela en masa tras confirmar", async () => {
     render(lista());
-    expect(screen.queryByRole("checkbox", { name: "Seleccionar el mensaje a Persona c" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "Seleccionar «Paso 1 · Correo» a Persona c" })).toBeNull();
     fireEvent.click(screen.getByRole("checkbox", { name: "Seleccionar todo lo cancelable" }));
     expect(screen.getByText("2 seleccionados")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Cancelar seleccionados" }));
@@ -112,16 +115,28 @@ describe("la lista de la cola", () => {
       filas: [
         ...filas,
         fila("d", { estado: "Falló", cancelable: true, bloqueo: "No se reintenta: ya salió un paso posterior." }),
-        fila("e", { estado: "Falló", cancelable: true, reconectar: true }),
+        fila("e", { estado: "Falló", cancelable: true, reconectar: "/ventas/canales#canal-linkedin-titulo" }),
       ],
     }));
     const reintentar = screen.getAllByRole("button", { name: "Reintentar" });
     expect(reintentar).toHaveLength(1);
     expect(screen.getByText("No se reintenta: ya salió un paso posterior.")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Ir a canales" }).getAttribute("href")).toBe("/ventas/canales");
+    // Lleva a la fila de SU canal, donde está el botón de reconectar, no al principio de la página.
+    expect(screen.getByRole("link", { name: "Ir a canales" }).getAttribute("href")).toBe("/ventas/canales#canal-linkedin-titulo");
     fireEvent.click(reintentar[0]!);
     await waitFor(() => expect(reintentarUno).toHaveBeenCalledWith("a"));
     await waitFor(() => expect(onResultado).toHaveBeenCalledWith({ ok: "1 mensaje volvió a la cola." }));
+  });
+
+  it("las casillas de una misma persona se distinguen por el mensaje", () => {
+    render(lista({
+      filas: [
+        fila("s1", { contacto: "Sofía Cárdenas", queEs: "Paso 1 · Correo" }),
+        fila("s2", { contacto: "Sofía Cárdenas", queEs: "Paso 5 · Mensaje en LinkedIn" }),
+      ],
+    }));
+    expect(screen.getByRole("checkbox", { name: "Seleccionar «Paso 1 · Correo» a Sofía Cárdenas" })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "Seleccionar «Paso 5 · Mensaje en LinkedIn» a Sofía Cárdenas" })).toBeTruthy();
   });
 
   it("el historial no lleva casillas", () => {
@@ -163,7 +178,7 @@ describe("reintentar por tipo de paso", () => {
 });
 
 const uso = (over: Partial<ChannelUsage>): ChannelUsage => ({
-  accountId: "acc", channel: "email", accountName: "laura@marca-a.test", accountStatus: "connected", used: 17, softLimit: 16,
+  accountId: "acc", channel: "email", provider: "gmail_oauth", accountName: "laura@marca-a.test", accountStatus: "connected", used: 17, softLimit: 16,
   hardLimit: 20, limitedBy: "day", dailyLimit: 50, dayLimit: 20, weekUsed: 60, weeklyLimit: 200, workspaceUsed: 17, workspaceLimit: 80,
   providerLimit: 2000, warmingUp: true, level: "near", offReason: null, usedShare: 0.85, softShare: 0.8,
   history: [{ day: "2026-09-25", used: 17, limit: 20, share: 0.85, level: "near" }], ...over,
@@ -171,7 +186,7 @@ const uso = (over: Partial<ChannelUsage>): ChannelUsage => ({
 
 describe("el uso por canal", () => {
   it("cada cuenta con su cifra, su semáforo en palabras, sus dos límites y el calentamiento", () => {
-    render(<UsoPorCanalVista cuentas={[usoVista(uso({}), f), usoVista(uso({ accountId: "li", channel: "linkedin", accountName: "Laura Méndez", used: 25, hardLimit: 25, softLimit: 20, dailyLimit: 25, dayLimit: 25, providerLimit: 100, warmingUp: false, level: "full", usedShare: 1, workspaceUsed: null, workspaceLimit: null }), f)]} />);
+    render(<UsoPorCanalVista cuentas={[usoVista(uso({}), f), usoVista(uso({ accountId: "li", channel: "linkedin", provider: "unipile", accountName: "Laura Méndez", used: 25, hardLimit: 25, softLimit: 20, dailyLimit: 25, dayLimit: 25, providerLimit: 100, warmingUp: false, level: "full", usedShare: 1, workspaceUsed: null, workspaceLimit: null }), f)]} />);
     const meters = screen.getAllByRole("meter");
     expect(meters).toHaveLength(2);
     expect(meters[0]!.getAttribute("aria-valuetext")).toBe("laura@marca-a.test: 17 de 20 hoy, Cerca del límite");
@@ -180,20 +195,28 @@ describe("el uso por canal", () => {
     expect(screen.getByText("Límite blando 16")).toBeTruthy();
     expect(screen.getByText("Límite duro 20")).toBeTruthy();
     expect(screen.getByText("Calentando: hoy hasta 20, luego sube hasta 50")).toBeTruthy();
+    expect(screen.getAllByText("Semana 60 de 200")).toHaveLength(2);
+    // El techo lo pone el servicio (Gmail), no «el correo»; en LinkedIn por Unipile, LinkedIn.
+    expect(screen.getByText("Gmail permite hasta 2.000 al día")).toBeTruthy();
+    expect(screen.getByText("LinkedIn permite hasta 100 al día")).toBeTruthy();
     expect((meters[1]!.getAttribute("style") ?? "").replace(/\s/g, "")).toContain("--usado:1");
   });
 
   it("cuando manda la semana o el espacio, lo dice; y una cuenta sin envío nunca va en verde", () => {
     render(<UsoPorCanalVista cuentas={[
-      usoVista(uso({ accountId: "li", channel: "linkedin", used: 3, hardLimit: 3, limitedBy: "week", weekUsed: 100, weeklyLimit: 100, level: "full", warmingUp: false, workspaceUsed: null, workspaceLimit: null }), f),
+      usoVista(uso({ accountId: "li", channel: "linkedin", provider: "unipile", used: 3, hardLimit: 3, limitedBy: "week", weekUsed: 100, weeklyLimit: 100, level: "full", warmingUp: false, workspaceUsed: null, workspaceLimit: null }), f),
       usoVista(uso({ limitedBy: "workspace", workspaceUsed: 79, workspaceLimit: 80, warmingUp: false }), f),
       usoVista(uso({ accountId: "caida", level: "off", offReason: "account", used: 0, usedShare: 0, warmingUp: false }), f),
     ]} />);
-    expect(screen.getByText("Manda el tope semanal de la cuenta: 100 de 100 esta semana")).toBeTruthy();
+    expect(screen.getByText("Manda el tope semanal de la cuenta: hoy solo sale lo que le queda a la semana")).toBeTruthy();
+    // La cifra de la semana solo va aparte cuando no es la que manda: una vez por cada una de las otras dos cuentas.
+    expect(screen.queryByText("Semana 100 de 100")).toBeNull();
+    expect(screen.getAllByText("Semana 60 de 200")).toHaveLength(2);
     expect(screen.getByText("Manda el tope de correos del espacio: 79 de 80 hoy entre todas las cuentas")).toBeTruthy();
     expect(screen.getByText("Sin envío")).toBeTruthy();
     expect(screen.queryByText("Con margen")).toBeNull();
-    expect(screen.getByRole("link", { name: "Reconectar" }).getAttribute("href")).toBe("/ventas/canales");
+    // En /ventas/canales, «Reconectar» baja a la fila de su canal: no recarga la misma página.
+    expect(screen.getByRole("link", { name: "Reconectar" }).getAttribute("href")).toBe("/ventas/canales#canal-email-titulo");
   });
 
   it("sin cuentas, lo dice", () => {
@@ -269,6 +292,22 @@ describe("el embudo y la vista de flujo de la cadencia", () => {
     // LinkedIn no avisa de la apertura: la cifra no se inventa.
     const abiertos = within(flujo).getAllByText("abiertos")[1]!.closest("[tabindex]")!;
     expect(document.getElementById(abiertos.getAttribute("aria-describedby")!)!.textContent).toBe("Este canal no avisa cuando se abre un mensaje.");
+  });
+
+  it("abierto con el cursor, Escape también lo cierra, sin mover el puntero ni el foco (WCAG 1.4.13)", () => {
+    render(<MetricasCadenciaVista sequenceId="s1" health={salud} funnel={[paso(1)]} f={f} />);
+    const flujo = screen.getByRole("region", { name: "Flujo de la cadencia" });
+    const enviados = within(flujo).getAllByText("enviados")[0]!.closest("[tabindex]") as HTMLElement;
+    const tooltip = document.getElementById(enviados.getAttribute("aria-describedby")!)!;
+    fireEvent.mouseEnter(enviados.closest("li")!);
+    expect(tooltip.className).not.toContain("hidden");
+    expect(document.activeElement).not.toBe(enviados);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(tooltip.className).toContain("hidden");
+    // Al volver a entrar con el cursor, se abre otra vez.
+    fireEvent.mouseLeave(enviados.closest("li")!);
+    fireEvent.mouseEnter(enviados.closest("li")!);
+    expect(tooltip.className).not.toContain("hidden");
   });
 
   it("sin envíos todavía, lo dice en vez de un gráfico vacío", () => {

@@ -51,9 +51,6 @@ export const MESSAGES = {
   },
 
   detail: {
-    /** «Hoy 3 de 20» y «Semana 12 de 100», por separado para que en móvil no se partan a medias. Los límites vienen de la vista (0040). */
-    usageToday: (today: string, dayCap: string) => `Hoy ${today} de ${dayCap}`,
-    usageWeek: (week: string, weekCap: string) => `Semana ${week} de ${weekCap}`,
     /**
      * Cuándo se comprobó por última vez que la cuenta responde (last_ok_at),
      * en relativo como las integraciones de Vercel y Linear («Comprobada

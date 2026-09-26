@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { QueueRow } from "@mc/db/queries/actividad";
+import { retryScheduledFor, type QueueRow } from "@mc/db/queries/actividad";
 import { formatterFor } from "@/lib/format";
 import { MESSAGES } from "../messages";
 import { filaVista } from "./filas";
@@ -114,7 +114,7 @@ describe("el resumen de una acción en masa", () => {
 });
 
 describe("una fila de la cola", () => {
-  it("el fallido: paso, a quién, cuándo falló (corto, con su verbo), intentos, cuenta y su motivo con el código", () => {
+  it("el fallido: paso, a quién, cuándo falló (solo la fecha al lado de la pastilla; el verbo en la larga), intentos, cuenta y su motivo", () => {
     const v = filaVista(fila(), f);
     expect(v.estado).toBe("Falló");
     expect(v.estadoKind).toBe("bad");
@@ -127,8 +127,10 @@ describe("una fila de la cola", () => {
     expect(v.motivo).toBe("Fallaron los cinco intentos");
     expect(v.motivoCodigo).toBe("código: max_attempts");
     expect(v.motivoTono).toBe("bad");
-    expect([v.reintentable, v.bloqueo, v.reconectar]).toEqual([true, null, false]);
-    expect(v.cuando).toBe(`Falló ${f.dateTimeShort("2026-09-23T15:30:00Z")}`);
+    expect([v.reintentable, v.bloqueo, v.reconectar]).toEqual([true, null, null]);
+    // La pastilla ya dice «Falló»: al lado va solo la fecha, sin repetir el verbo.
+    expect(v.cuando).toBe(f.dateTimeShort("2026-09-23T15:30:00Z"));
+    expect(v.queEs).toBe("Paso 3 · Mensaje en LinkedIn");
     expect(v.cuandoCompleto).toBe(`Falló ${f.dateTime("2026-09-23T15:30:00Z")}`);
     expect(v.cuando).not.toContain("2026");
     expect(v.fichaHref).toBe("/ventas/empresas/00000065-0000-4000-8000-0000000000c0");
@@ -136,20 +138,36 @@ describe("una fila de la cola", () => {
 
   it("un fallido bloqueado dice por qué, con la frase del resumen; uno de la cuenta caída lleva a reconectar", () => {
     const rebote = filaVista(fila({ reason: "bounced", retryBlock: "not_retryable", retryable: false }), f);
-    expect([rebote.reintentable, rebote.bloqueo, rebote.reconectar]).toEqual([false, "No se reintenta: rebotó o pudo haber salido.", false]);
+    expect([rebote.reintentable, rebote.bloqueo, rebote.reconectar]).toEqual([false, "No se reintenta: rebotó o pudo haber salido.", null]);
     const lleno = filaVista(fila({ attemptCount: 19, retryBlock: "too_many_attempts", retryable: false }), f);
     expect(lleno.bloqueo).toBe("No se reintenta: ya gastó todos sus intentos.");
     const caida = filaVista(fila({ reason: "account_auth", retryBlock: "account_down", retryable: false, accountStatus: "needs_reconnect" }), f);
-    expect([caida.reintentable, caida.bloqueo, caida.reconectar]).toEqual([false, null, true]);
+    // Lleva a la fila de su canal en /ventas/canales, donde está el botón de reconectar.
+    expect([caida.reintentable, caida.bloqueo, caida.reconectar]).toEqual([false, null, "/ventas/canales#canal-linkedin-titulo"]);
     expect(caida.motivoCodigo).toBe("código: account_auth");
   });
 
-  it("cada estado que ya no sale dice su verbo; lo que se envía, desde cuándo", () => {
+  it("lo que ya no sale: la pastilla dice el verbo, al lado solo la fecha, y la frase entera en la larga; lo que se envía, desde cuándo", () => {
     const at = "2026-09-23T15:30:00Z";
     const base = { reason: null, retryable: false };
-    expect(filaVista(fila({ ...base, status: "canceled", bucket: "history" }), f).cuando).toBe(`Se canceló ${f.dateTimeShort(at)}`);
-    expect(filaVista(fila({ ...base, status: "skipped", bucket: "history" }), f).cuando).toBe(`Se saltó ${f.dateTimeShort(at)}`);
-    expect(filaVista(fila({ ...base, status: "processing" }), f).cuando).toBe(`Enviándose desde ${f.dateTimeShort(at)}`);
+    const cancelado = filaVista(fila({ ...base, status: "canceled", bucket: "history" }), f);
+    expect([cancelado.estado, cancelado.cuando, cancelado.cuandoCompleto]).toEqual(["Cancelado", f.dateTimeShort(at), `Se canceló ${f.dateTime(at)}`]);
+    const saltado = filaVista(fila({ ...base, status: "skipped", bucket: "history" }), f);
+    expect([saltado.cuando, saltado.cuandoCompleto]).toEqual([f.dateTimeShort(at), `Se saltó ${f.dateTime(at)}`]);
+    const enviando = filaVista(fila({ ...base, status: "processing" }), f);
+    expect([enviando.estado, enviando.cuando, enviando.cuandoCompleto]).toEqual([
+      "Enviando", `Desde ${f.dateTimeShort(at)}`, `Enviándose desde ${f.dateTime(at)}`,
+    ]);
+  });
+
+  it("un reintento hecho fuera de horario dice la hora a la que sale de verdad, no la del clic", () => {
+    // retryFailedTouches deja scheduled_for en la apertura de la ventana (retryScheduledFor): un viernes a las 20:00 de
+    // Bogotá, el lunes a las 08:12. La fila dice esa hora, en la zona del espacio.
+    const viernes = new Date("2026-09-26T01:00:00Z");
+    const lunes = retryScheduledFor("00000065-0000-4000-8000-0000000000f1", viernes, "America/Bogota", { start: "08:00", end: "18:00" });
+    const v = filaVista(fila({ status: "scheduled", reason: null, retryable: false, retryBlock: null, dueAt: lunes }), f);
+    expect(v.cuando).toBe(`Sale ${f.dateTimeShort(lunes.toISOString())}`);
+    expect(v.cuandoCompleto).toMatch(/^Sale 28 de septiembre de 2026 a las 8:[0-2]\d a\. m\.$/);
   });
 
   it("un correo programado dice cuándo sale; uno que se reintenta, cuándo es el reintento", () => {
@@ -172,7 +190,7 @@ describe("una fila de la cola", () => {
       f,
     );
     expect(v.marcas).toEqual(["Abierto", "Respondió"]);
-    expect(v.cuando).toBe(`Salió ${f.dateTimeShort(sent.toISOString())}`);
+    expect([v.estado, v.cuando, v.cuandoCompleto]).toEqual(["Enviado", f.dateTimeShort(sent.toISOString()), `Salió ${f.dateTime(sent.toISOString())}`]);
     expect(v.estadoKind).toBe("good");
   });
 
