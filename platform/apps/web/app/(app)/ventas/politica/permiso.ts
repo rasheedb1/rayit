@@ -1,7 +1,9 @@
 import "server-only";
 import { POLICY_MANAGER_ROLES } from "@mc/db/queries/entregabilidad";
-import { authConfig } from "@/lib/auth/config";
-import { getCurrentContext } from "@/lib/workspace/current";
+import type { MembershipRole } from "@mc/db/queries/identidad";
+import { tieneRol } from "@/lib/workspace/rol";
+
+const PUEDEN_CAMBIAR_LA_POLITICA: ReadonlySet<MembershipRole> = new Set<MembershipRole>(POLICY_MANAGER_ROLES);
 
 /**
  * Si quien mira puede cambiar la política de envío y encender o apagar
@@ -10,15 +12,8 @@ import { getCurrentContext } from "@/lib/workspace/current";
  * acciones lo vuelven a mirar antes de escribir; la última palabra es de
  * la base (políticas RESTRICTIVE de outbound_policy).
  *
- * Sin identidad, solo si no hay Supabase Auth (una copia de desarrollo
- * donde no existe ningún usuario): es la misma bandera que lib/db fija
- * en la base (app.auth_disabled), y sin ella la base también dice que no
- * (0038 §7, falla cerrada). Con Supabase Auth, getCurrentContext siempre
- * trae la identidad.
+ * Sin identidad, solo si no hay Supabase Auth (tieneRol): es la misma
+ * bandera que lib/db fija en la base (app.auth_disabled), y sin ella la
+ * base también dice que no (0038 §7, falla cerrada).
  */
-export async function puedeCambiarLaPolitica(): Promise<boolean> {
-  const ctx = await getCurrentContext();
-  if (!ctx.identity) return authConfig() === null;
-  const rol = ctx.workspaces.find((w) => w.id === ctx.workspaceId)?.role;
-  return rol !== undefined && (POLICY_MANAGER_ROLES as readonly string[]).includes(rol);
-}
+export const puedeCambiarLaPolitica = (): Promise<boolean> => tieneRol(PUEDEN_CAMBIAR_LA_POLITICA);

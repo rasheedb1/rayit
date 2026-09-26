@@ -8,7 +8,7 @@ import { UUID_RE } from "@/lib/forms";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { ModuleTabs } from "../_componentes/pestanas";
 import { withWorkspace } from "../_lib/db";
-import { puedeOperarVentas } from "../_lib/permiso";
+import { puedeOperarVentas, puedeVerBandejas } from "../_lib/permiso";
 import { AtajosBandeja, FiltroVista } from "./acciones";
 import { Conversacion } from "./conversacion";
 import { ListaHilos } from "./lista";
@@ -38,6 +38,9 @@ export default async function BandejaPage({
   searchParams,
 }: { searchParams: Promise<{ contacto?: string; canal?: string; vista?: string }> }) {
   const sp = await searchParams;
+  const t = MESSAGES;
+  // Un 'client' (en una agencia, la marca misma) no lee los hilos con otras marcas: ni se cargan.
+  if (!(await puedeVerBandejas())) return <SinAcceso />;
   const vista = vistaDe(sp.vista);
   const contacto = sp.contacto && UUID_RE.test(sp.contacto) ? sp.contacto : null;
   const canal = sp.canal && CANALES.has(sp.canal) ? sp.canal : null;
@@ -53,9 +56,8 @@ export default async function BandejaPage({
     return { hilos, conversacion, clasificador: await outreachClassifierStatus(tx), implicita: !(contacto && canal) };
   });
   const f = formatterFor(await getCurrentWorkspace());
-  // Un 'viewer' o un 'client' lee los hilos; responder, corregir y marcar es de quien opera (las acciones lo vuelven a mirar).
+  // Un 'viewer' lee los hilos; responder, corregir y marcar es de quien opera (las acciones lo vuelven a mirar).
   const puedeOperar = await puedeOperarVentas();
-  const t = MESSAGES;
   const abierto = conversacion ? `${conversacion.contactId}:${conversacion.channel}` : null;
   // La abierta sola (la primera sin leer) solo se ve en escritorio: en un
   // teléfono la lista no la marca como elegida (hiloVista, ListaHilos).
@@ -75,17 +77,7 @@ export default async function BandejaPage({
 
   return (
     <>
-      <PageHeader
-        eyebrow={t.header.eyebrow}
-        title={t.header.title}
-        description={t.header.description}
-        aside={
-          <Button variant="ghost" href="/ventas">
-            {t.header.back}
-          </Button>
-        }
-      />
-      <ModuleTabs active={RUTA_BANDEJA} />
+      <Cabecera />
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
         <div data-columna="lista" className={columnaListaClase(conversacionVisible)}>
@@ -107,7 +99,7 @@ export default async function BandejaPage({
           {conversacion ? (
             <Conversacion
               key={abierto}
-              c={conversacionVista(conversacion, f, { clasificador, implicita, puedeOperar })}
+              c={conversacionVista(conversacion, f, { clasificador, implicita, puedeOperar, vista })}
               volverHref={volver}
               trasHecha={trasHecha}
             />
@@ -116,6 +108,37 @@ export default async function BandejaPage({
           )}
         </div>
       </div>
+    </>
+  );
+}
+
+/** El título y la tira de Ventas, iguales con o sin acceso. */
+function Cabecera() {
+  const t = MESSAGES;
+  return (
+    <>
+      <PageHeader
+        eyebrow={t.header.eyebrow}
+        title={t.header.title}
+        description={t.header.description}
+        aside={
+          <Button variant="ghost" href="/ventas">
+            {t.header.back}
+          </Button>
+        }
+      />
+      <ModuleTabs active={RUTA_BANDEJA} />
+    </>
+  );
+}
+
+/** Lo que ve un rol sin acceso a las bandejas (PUEDEN_VER_BANDEJAS): nada de los hilos. */
+function SinAcceso() {
+  const t = MESSAGES;
+  return (
+    <>
+      <Cabecera />
+      <EmptyState title={t.sinPermisoVer.title} description={t.sinPermisoVer.description} />
     </>
   );
 }

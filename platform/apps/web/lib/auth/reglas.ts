@@ -42,11 +42,20 @@ export const PUEDEN_EDITAR_PERFIL: ReadonlySet<MembershipRole> = new Set<Members
  * respuesta (una baja no se deshace), crear un contacto referido y marcar
  * un hilo como hecho o leído. Cada una escribe a una marca, gasta contra
  * el tope diario de IA o cambia lo que ve el resto del equipo. Un
- * 'viewer' o un 'client' (en una agencia, la marca misma, que no debe
- * leer ni contestar los hilos con otras marcas como si fuera la creadora)
- * ven las bandejas, no las tocan. Mismo grupo que PUEDEN_EDITAR_PERFIL.
+ * 'viewer' lee las bandejas y no las toca; un 'client' ni las lee (ver
+ * PUEDEN_VER_BANDEJAS). Mismo grupo que PUEDEN_EDITAR_PERFIL.
  */
 export const PUEDEN_OPERAR_VENTAS: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
+
+/**
+ * Los roles que pueden LEER las bandejas de Ventas (VEN-14): las
+ * conversaciones con las marcas (/ventas/bandeja) y los mensajes
+ * retenidos (/ventas/aprobaciones). Un 'client' no: en una agencia es la
+ * marca misma, y los hilos y los borradores son con otras marcas, quizá
+ * competidoras. Las páginas ni siquiera cargan los hilos ni la cola para
+ * él: ven un aviso de que no tienen acceso.
+ */
+export const PUEDEN_VER_BANDEJAS: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member", "viewer"]);
 
 /**
  * Los roles que pueden cambiar el brief de outbound (VEN-7). Es el brief

@@ -24,7 +24,7 @@ vi.mock("./actions", () => ({
   corregirIntencion: (...a: unknown[]) => corregirIntencion(...a),
   marcarHecho: (...a: unknown[]) => marcarHecho(...a),
 }));
-const router = { push: vi.fn(), refresh: vi.fn() };
+const router = { push: vi.fn(), replace: vi.fn(), refresh: vi.fn() };
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 import { INBOX_REPLY_MAX_CHARS, type InboxConversation, type InboxMessage, type InboxThread } from "@mc/db/queries/bandejas";
@@ -524,6 +524,36 @@ describe("marcar leído", () => {
     }
     render(<Conversacion c={conversacionVista(conv({ unread: 2 }), f, { clasificador: "model" })} volverHref="/ventas/bandeja" />);
     expect(marcarLeido).toHaveBeenCalledWith({ contactId: CONTACT, channel: "email" });
+  });
+
+  it("la abierta sola, al marcarse leída en escritorio, queda fijada en la URL: el refresco no salta a la siguiente sin leer", async () => {
+    router.replace.mockReset();
+    router.refresh.mockReset();
+    const original = window.matchMedia;
+    window.matchMedia = ((q: string) => ({ matches: true, media: q })) as unknown as typeof window.matchMedia;
+    try {
+      render(
+        <Conversacion
+          c={conversacionVista(conv({ unread: 1 }), f, { clasificador: "model", implicita: true, vista: "todas" })}
+          volverHref="/ventas/bandeja"
+        />,
+      );
+      expect(marcarLeido).toHaveBeenCalledWith({ contactId: CONTACT, channel: "email" });
+      await waitFor(() =>
+        expect(router.replace).toHaveBeenCalledWith(`/ventas/bandeja?contacto=${CONTACT}&canal=email&vista=todas`, { scroll: false }),
+      );
+      expect(router.refresh).not.toHaveBeenCalled();
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
+  it("una elegida a mano solo refresca: ya está en la URL", async () => {
+    router.replace.mockReset();
+    router.refresh.mockReset();
+    render(<Conversacion c={conversacionVista(conv({ unread: 1 }), f, { clasificador: "model" })} volverHref="/ventas/bandeja" />);
+    await waitFor(() => expect(router.refresh).toHaveBeenCalled());
+    expect(router.replace).not.toHaveBeenCalled();
   });
 });
 
