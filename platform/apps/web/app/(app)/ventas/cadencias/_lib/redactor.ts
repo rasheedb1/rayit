@@ -14,7 +14,8 @@ import { GUIDANCE_OUTPUT_SCHEMA, parseGuidanceOutput } from "./redactor-salida";
  * de la misma interfaz (GuidanceWriter).
  *
  * Lo que sale hacia la API: la señal, el nombre de la empresa, el brief
- * del creador y los pasos. Nada de la persona a la que se escribe.
+ * del creador (con los formatos que ofrece y su ventana) y los pasos.
+ * Nada de la persona a la que se escribe.
  */
 
 /** Si el servidor tiene la llave de Anthropic. Sin ella no se llama al modelo. */
@@ -40,6 +41,7 @@ Reescribe la guía de cada paso para esta marca y esta señal, en ${GUIDANCE_PHR
 - No uses marcadores ni huecos como {{nombre}} o [MARCA].
 - No cambies el canal, el día ni el ángulo del paso.
 - Si la señal es la colaboración de un competidor, nunca pidas nombrar esa colaboración ni a la competencia.
+- Si la petición trae "briefOffer", son los formatos que ofrece el creador y su ventana de disponibilidad: no propongas otros formatos ni fechas fuera de esa ventana.
 
 Devuelve un objeto con "steps": un elemento por paso, con su "index" y su "guidance".`;
 }

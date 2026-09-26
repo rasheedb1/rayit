@@ -106,6 +106,10 @@ test('el contexto: la persona por defecto llega por más canales y los canales s
   assert.deepEqual(ctx.creator, { id: LAURA_CREADORA, name: 'Laura Méndez' });
   assert.equal(ctx.brief?.id, BRIEF_LAURA);
   assert.equal(ctx.brief?.requiresDisclosure, true);
+  // VEN-7 r4: los formatos que ofrece (con el nombre del catálogo: «historias» se lee «historia») y su ventana.
+  assert.deepEqual(ctx.brief?.deliverables, ['tiktok', 'reel', 'short', 'historia']);
+  assert.match(ctx.brief?.availabilityFrom ?? '', /^\d{4}-\d{2}-\d{2}$/);
+  assert.ok((ctx.brief?.availabilityTo ?? '') > (ctx.brief?.availabilityFrom ?? ''), 'la ventana del seed se cierra después de abrirse');
   assert.deepEqual(ctx.notes, []);
   assert.equal(ctx.angles.presencia?.label, 'Presencia');
   assert.deepEqual(ctx.policy, { maxTouchesPerCompany: 4, minDaysBetweenTouches: 3 });

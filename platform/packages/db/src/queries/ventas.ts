@@ -40,7 +40,7 @@
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES } from '../schema/ventas.ts';
 import { parseReplyOptOutCode, type ReplyOptOutChannel } from './canales.ts';
-import { briefSignalLateralSql, briefVerdictSql, type BriefVerdict } from './brief.ts';
+import { addExcludedCompany, BriefError, briefSignalLateralSql, briefVerdictSql, type BriefVerdict } from './brief.ts';
 import { WORKSPACE_DEFAULTS } from './cimientos.ts';
 
 export { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES };
@@ -349,6 +349,12 @@ export interface SignalBriefFit {
   countryOutside: boolean;
   /** La primera categoría buscada que tiene la marca, como la escribió el creador; null si ninguna. */
   wantedCategory: string | null;
+  /**
+   * El brief busca categorías y la marca no tiene ninguna de ellas (para
+   * todos los briefs activos que buscan alguna). Es lo que la tarjeta
+   * marca: una señal que encaja no necesita nota, una que no, sí.
+   */
+  categoryOutside: boolean;
 }
 
 export type SignalStatus = (typeof SIGNAL_STATUSES)[number];
@@ -1058,7 +1064,7 @@ export interface ListSignalsParams {
 
 /** Las columnas del veredicto cuando no se aplica el brief (lo que no está pendiente ya se decidió). */
 const SIN_VEREDICTO =
-  'SELECT NULL::text AS hidden_by, NULL::text AS hidden_match, NULL::text AS wanted_match, false AS below_min_budget, false AS country_outside';
+  'SELECT NULL::text AS hidden_by, NULL::text AS hidden_match, NULL::text AS wanted_match, false AS below_min_budget, false AS country_outside, false AS category_outside';
 
 /**
  * La bandeja del radar. Por defecto las pendientes, de mayor a menor
@@ -1091,7 +1097,7 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
             s.dedupe_key, s.status, s.discard_reason, s.reviewed_at,
             COALESCE(s.evidence->>'via', 'manual') AS via,
             veredicto.hidden_by, veredicto.hidden_match, veredicto.wanted_match,
-            veredicto.below_min_budget, veredicto.country_outside
+            veredicto.below_min_budget, veredicto.country_outside, veredicto.category_outside
      FROM signal s
      CROSS JOIN LATERAL (${aplicaBrief ? briefSignalLateralSql('s') : SIN_VEREDICTO}) veredicto
      LEFT JOIN company co        ON co.id = s.company_id
@@ -1622,6 +1628,46 @@ export const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, '')
     FROM workspace WHERE id = current_workspace_id())`;
 
 /**
+ * La empresa de una señal, para aceptarla o para no aceptar su marca:
+ * la que ya conocemos (por id, por dominio o, sin dominio, por nombre
+ * dentro del CRM, resolveCompany) o, si no hay ninguna, una nueva con lo
+ * que la señal guardó en `evidence` (nombre, dominio, país y sector).
+ * Deja la señal enlazada a ella. Null si no hay empresa y la señal
+ * tampoco trae nombre: no hay marca que dar de alta.
+ */
+async function companyOfSignal(
+  tx: WorkspaceTx,
+  sig: { id: string; company_id: string | null; evidence: Record<string, unknown> | null },
+): Promise<{ company: ResolvedCompany; created: boolean } | null> {
+  const ev = sig.evidence ?? {};
+  const evName = typeof ev.company_name === 'string' ? ev.company_name : null;
+  const evDomain = typeof ev.domain === 'string' ? ev.domain : null;
+  const evCountry = typeof ev.country === 'string' ? ev.country : null;
+  const evIndustry = typeof ev.industry === 'string' ? ev.industry : null;
+
+  let company = sig.company_id
+    ? await resolveCompany(tx, { companyId: sig.company_id })
+    : await resolveCompany(tx, { domain: evDomain, name: evName });
+  let created = false;
+  if (!company) {
+    if (!evName) return null;
+    const domain = normalizeDomain(evDomain);
+    const inserted = await tx.query<{ id: string }>(
+      `INSERT INTO company (name, domain, country, industry) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [evName, domain, normalizeCountry(evCountry), evIndustry],
+    );
+    const id = inserted.rows[0]?.id;
+    if (!id) throw new VentasError('CompanyCreateFailed');
+    company = { id, name: evName, domain };
+    created = true;
+  }
+  if (sig.company_id !== company.id) {
+    await tx.query('UPDATE signal SET company_id = $2 WHERE id = $1', [sig.id, company.id]);
+  }
+  return { company, created };
+}
+
+/**
  * Aceptar una señal: resuelve la empresa (la que ya conocemos por id,
  * dominio o, sin dominio, por nombre dentro del CRM; si no, la crea),
  * la vincula y:
@@ -1655,31 +1701,10 @@ export async function acceptSignal(
 
   const ev = sig.evidence ?? {};
   const evName = typeof ev.company_name === 'string' ? ev.company_name : null;
-  const evDomain = typeof ev.domain === 'string' ? ev.domain : null;
-  const evCountry = typeof ev.country === 'string' ? ev.country : null;
-  const evIndustry = typeof ev.industry === 'string' ? ev.industry : null;
-
-  let company = sig.company_id
-    ? await resolveCompany(tx, { companyId: sig.company_id })
-    : await resolveCompany(tx, { domain: evDomain, name: evName });
-  let companyCreated = false;
-
-  if (!company) {
-    if (!evName) throw new VentasError('SignalWithoutCompany');
-    const domain = normalizeDomain(evDomain);
-    const inserted = await tx.query<{ id: string }>(
-      `INSERT INTO company (name, domain, country, industry) VALUES ($1, $2, $3, $4) RETURNING id`,
-      [evName, domain, normalizeCountry(evCountry), evIndustry],
-    );
-    const id = inserted.rows[0]?.id;
-    if (!id) throw new VentasError('CompanyCreateFailed');
-    company = { id, name: evName, domain };
-    companyCreated = true;
-  }
+  const resuelta = await companyOfSignal(tx, sig);
+  if (!resuelta) throw new VentasError('SignalWithoutCompany');
+  const { company, created: companyCreated } = resuelta;
   const companyId = company.id;
-  if (sig.company_id !== companyId) {
-    await tx.query('UPDATE signal SET company_id = $2 WHERE id = $1', [signalId, companyId]);
-  }
 
   // Vincular es idempotente: si ya era una empresa del workspace, se
   // deja la relación como estaba (podía ser cliente) y su responsable.
@@ -1750,6 +1775,69 @@ export async function acceptSignal(
   await markAccepted();
 
   return { dealId, companyId, companyName: company.name, companyCreated, dealCreated: true };
+}
+
+/** Lo que pasó al no aceptar la marca de una señal (rejectSignalBrand). */
+export interface RejectSignalBrandResult {
+  companyId: string;
+  companyName: string;
+  /** La marca no estaba en el CRM y nació aquí (relación 'blocked'). */
+  companyCreated: boolean;
+  /** A cuántos briefs activos se agregó, y cuántos se miraron. */
+  added: number;
+  briefs: number;
+  /** Después de excluirla, la señal ya no se ve en la bandeja (la excluyen todos los briefs activos). */
+  hidden: boolean;
+}
+
+/**
+ * «No aceptar esta marca», desde su tarjeta en el radar (VEN-7 r4).
+ *
+ * Una marca que llega por el catálogo o por una señal automática no se
+ * podía excluir por nombre sin darla antes de alta en el CRM: el brief
+ * solo guarda empresas del CRM (saveBrief, CompanyNotInCrm). Aquí, en la
+ * MISMA transacción:
+ *
+ *   1. se resuelve la empresa de la señal como al aceptarla
+ *      (companyOfSignal): la conocida o una nueva con lo que trae;
+ *   2. se enlaza al CRM con la relación 'blocked' si no estaba (si ya
+ *      estaba, su relación no se toca: un cliente sigue siendo cliente);
+ *   3. se agrega a «Marcas que no aceptas» de los briefs activos de los
+ *      creadores pedidos, o de todos (addExcludedCompany: permiso, tope,
+ *      candado y traza).
+ *
+ * La señal sigue pendiente: si ahora la excluyen todos los briefs
+ * activos, la bandeja la oculta como a cualquier otra (`hidden`); si
+ * otro creador la acepta, se sigue viendo y el resultado lo dice.
+ */
+export async function rejectSignalBrand(
+  tx: WorkspaceTx,
+  signalId: string,
+  opts: { creatorIds?: readonly string[] } = {},
+): Promise<RejectSignalBrandResult> {
+  if (!isUuid(signalId)) throw new BriefError('SignalNotFound');
+  const { rows } = await tx.query<{ id: string; company_id: string | null; status: SignalStatus; evidence: Record<string, unknown> | null }>(
+    'SELECT id, company_id, status, evidence FROM signal WHERE id = $1 FOR UPDATE',
+    [signalId],
+  );
+  const sig = rows[0];
+  if (!sig || sig.status !== 'pending') throw new BriefError('SignalNotFound');
+
+  const resuelta = await companyOfSignal(tx, sig);
+  if (!resuelta) throw new BriefError('SignalWithoutBrand');
+  const { company, created } = resuelta;
+  await tx.query(
+    `INSERT INTO company_link (workspace_id, company_id, owner_user_id, relationship)
+     VALUES (current_workspace_id(), $1, current_user_id(), 'blocked')
+     ON CONFLICT (workspace_id, company_id) DO NOTHING`,
+    [company.id],
+  );
+  const { added, briefs } = await addExcludedCompany(tx, company.id, opts);
+  const { rows: v } = await tx.query<{ verdict: string | null }>(
+    `SELECT ${briefVerdictSql('s')} AS verdict FROM signal s WHERE s.id = $1`,
+    [signalId],
+  );
+  return { companyId: company.id, companyName: company.name, companyCreated: created, added, briefs, hidden: v[0]?.verdict != null };
 }
 
 export interface CreateDealInput {
@@ -2389,7 +2477,7 @@ interface SignalRowSql {
   budget_estimate: string | null; budget_currency: string | null; dedupe_key: string;
   status: SignalStatus; discard_reason: string | null; reviewed_at: string | null; via: string;
   hidden_by: BriefVerdict | null; hidden_match: string | null; wanted_match: string | null;
-  below_min_budget: boolean | null; country_outside: boolean | null;
+  below_min_budget: boolean | null; country_outside: boolean | null; category_outside: boolean | null;
 }
 
 function toSignalRow(r: SignalRowSql): SignalRow {
@@ -2420,6 +2508,7 @@ function toSignalRow(r: SignalRowSql): SignalRow {
       belowMinBudget: r.below_min_budget === true,
       countryOutside: r.country_outside === true,
       wantedCategory: r.wanted_match,
+      categoryOutside: r.category_outside === true,
     },
   };
 }

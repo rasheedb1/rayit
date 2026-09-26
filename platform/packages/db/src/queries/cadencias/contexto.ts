@@ -18,6 +18,7 @@ import {
 } from '@mc/core';
 import type { WorkspaceTx } from '../../client.ts';
 import { isUuid } from '../../client.ts';
+import { briefDeliverableKinds } from '../brief.ts';
 import { assertId, CadenciaError, LIVE_ENROLLMENT_STATUSES } from './comun.ts';
 import { listSequenceTemplates, type TemplateRow } from './lista.ts';
 
@@ -218,8 +219,20 @@ export interface RecommendationContext {
   policy: { maxTouchesPerCompany: number; minDaysBetweenTouches: number };
   /** Los nichos de ESE creador (nunca los de otro del mismo espacio). */
   nicheSlugs: string[];
-  /** El brief activo de ESE creador. */
-  brief: { id: string; title: string; notes: string | null; requiresDisclosure: boolean } | null;
+  /**
+   * El brief activo de ESE creador. Los formatos que ofrece y su ventana
+   * de disponibilidad (AAAA-MM-DD) van al redactor de la guía: la guía no
+   * propone otro formato ni fechas fuera de la ventana (VEN-7 r4).
+   */
+  brief: {
+    id: string;
+    title: string;
+    notes: string | null;
+    requiresDisclosure: boolean;
+    deliverables: string[];
+    availabilityFrom: string | null;
+    availabilityTo: string | null;
+  } | null;
   /** Lo que el contexto ya explica antes de proponer: `no_creator`. */
   notes: ProposalNote[];
   templates: TemplateRow[];
@@ -271,8 +284,13 @@ export async function getRecommendationContext(tx: WorkspaceTx, signalId: string
   const notes: ProposalNote[] = !creator && creators.length > 1 ? [{ code: 'no_creator' }] : [];
   const brief = creator
     ? (
-        await tx.query<{ id: string; title: string; notes: string | null; requires_disclosure: boolean }>(
-          `SELECT id, title, notes, requires_disclosure FROM outbound_brief
+        await tx.query<{
+          id: string; title: string; notes: string | null; requires_disclosure: boolean;
+          deliverables: unknown; availability_from: string | null; availability_to: string | null;
+        }>(
+          `SELECT id, title, notes, requires_disclosure, deliverables,
+                  availability_from::text AS availability_from, availability_to::text AS availability_to
+             FROM outbound_brief
             WHERE status = 'active' AND creator_id = $1::uuid ORDER BY updated_at DESC, id LIMIT 1`,
           [creator.id],
         )
@@ -295,7 +313,11 @@ export async function getRecommendationContext(tx: WorkspaceTx, signalId: string
     policy: { maxTouchesPerCompany: policy.max_touches, minDaysBetweenTouches: policy.min_days },
     nicheSlugs: creator ? [...new Set(creator.niche_slugs)] : [],
     brief: brief
-      ? { id: brief.id, title: brief.title, notes: brief.notes, requiresDisclosure: brief.requires_disclosure }
+      ? {
+          id: brief.id, title: brief.title, notes: brief.notes, requiresDisclosure: brief.requires_disclosure,
+          deliverables: briefDeliverableKinds(brief.deliverables),
+          availabilityFrom: brief.availability_from, availabilityTo: brief.availability_to,
+        }
       : null,
     notes,
     templates: await listSequenceTemplates(tx),

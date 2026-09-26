@@ -17,16 +17,23 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getStageConversion, type StageConversion } from '../src/queries/conversion.ts';
+import { CONVERSION_WINDOW_DAYS, getStageConversion, type StageConversion } from '../src/queries/conversion.ts';
 import { moveDeal } from '../src/queries/ventas.ts';
 import type { WorkspaceTx } from '../src/client.ts';
-import { openTestDb, type TestDb, WORKSPACE_LAURA } from './pglite.ts';
+import { openTestDb, SETUP_TIMEOUT, type TestDb, WORKSPACE_LAURA } from './pglite.ts';
 
 const WS_CONV = '00000009-0000-4000-8000-00000000c801';
 const EMPRESA = '00000009-0000-4000-8000-0000000c8c01';
 const D = (n: number) => `00000009-0000-4000-8000-0000000c8d0${n}`;
 
 let t: TestDb;
+/**
+ * Toda la historia, sin ventana: estas pruebas escriben fechas fijas de
+ * septiembre de 2026, y con la ventana por defecto (90 días desde hoy)
+ * dejarían de contar con el paso del tiempo. La ventana tiene sus propias
+ * pruebas, con fechas relativas a now().
+ */
+const TODA = { since: null };
 const enConv = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WS_CONV, fn);
 const laura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_LAURA, fn);
 
@@ -63,7 +70,7 @@ before(async () => {
         h(5, 'contactado', 'conversacion', 4),
       ].join(',\n      ')};
   `);
-});
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();
@@ -75,7 +82,7 @@ function porEtapa(rows: StageConversion[]): Record<string, Omit<StageConversion,
 
 describe('VEN-8 · conversión por etapa', () => {
   test('cuenta negocios, no movimientos, y solo lo que llegó más lejos sin perderse', async () => {
-    const c = porEtapa(await enConv((tx) => getStageConversion(tx)));
+    const c = porEtapa(await enConv((tx) => getStageConversion(tx, TODA)));
     // Nuevo: entraron 1, 2, 3 y 4 (el 4 al retroceder). Avanzaron 1 y 2
     // (a contactado) y 4 (de nuevo a contactado después de entrar). 3/4.
     assert.deepEqual(c.nuevo, { entered: 4, advanced: 3, rate: '0.7500' });
@@ -96,7 +103,7 @@ describe('VEN-8 · conversión por etapa', () => {
 
   test('en el seed de Laura cuadra con un recuento independiente de deal_stage_history', async () => {
     const { conversion, historia, etapas } = await laura(async (tx) => ({
-      conversion: await getStageConversion(tx),
+      conversion: await getStageConversion(tx, TODA),
       historia: (
         await tx.query<{ id: string; deal_id: string; to_stage_id: string; changed_at: Date | string }>(
           'SELECT id::text AS id, deal_id, to_stage_id, changed_at FROM deal_stage_history',
@@ -153,7 +160,7 @@ describe('VEN-8 · conversión por etapa', () => {
     // vuelve a «Nuevo» (id mayor). Desde «Nuevo» no avanzó: la fila de
     // «En conversación» es anterior, aunque tenga la misma hora.
     const D6 = '00000009-0000-4000-8000-0000000c8d06';
-    const antes = porEtapa(await enConv((tx) => getStageConversion(tx)));
+    const antes = porEtapa(await enConv((tx) => getStageConversion(tx, TODA)));
     await t.admin(`
       INSERT INTO deal (id, workspace_id, company_id, name, stage_id)
       VALUES ('${D6}', '${WS_CONV}', '${EMPRESA}', 'Nace y retrocede en la misma transacción', 'nuevo')
@@ -163,7 +170,7 @@ describe('VEN-8 · conversión por etapa', () => {
         ('${D6}', 'conversacion', 'nuevo', '2026-09-05 12:00:00+00');
     `);
     try {
-      const c = porEtapa(await enConv((tx) => getStageConversion(tx)));
+      const c = porEtapa(await enConv((tx) => getStageConversion(tx, TODA)));
       // «Nuevo»: entra uno más y no avanza.
       assert.deepEqual(c.nuevo, { entered: antes.nuevo!.entered + 1, advanced: antes.nuevo!.advanced, rate: '0.6000' });
       // «En conversación»: entra uno más y tampoco avanza (volvió a nuevo).
@@ -174,8 +181,69 @@ describe('VEN-8 · conversión por etapa', () => {
   });
 
   test('la historia de un workspace no entra en la conversión de otro', async () => {
-    const c = porEtapa(await enConv((tx) => getStageConversion(tx)));
+    const c = porEtapa(await enConv((tx) => getStageConversion(tx, TODA)));
     assert.equal(c.nuevo?.entered, 4, 'los diez de Laura no se suman');
+  });
+});
+
+describe('VEN-8 r4 · la conversión es la de un periodo', () => {
+  const WS_VENTANA = '00000009-0000-4000-8000-00000000c802';
+  const MARCA = '00000009-0000-4000-8000-0000000c8c02';
+  const V = (n: number) => `00000009-0000-4000-8000-0000000c8e0${n}`;
+  const enVentana = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WS_VENTANA, fn);
+
+  before(async () => {
+    // Fechas relativas a now(), en la zona del espacio (Bogotá): la
+    // ventana por defecto son hoy y los 89 días anteriores, desde el
+    // inicio del día local.
+    const dia = (n: number, hora = '12:00') =>
+      `((date_trunc('day', now() AT TIME ZONE 'America/Bogota') - interval '${n} days' + time '${hora}') AT TIME ZONE 'America/Bogota')`;
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name, kind, currency, timezone)
+      VALUES ('${WS_VENTANA}', 'workspace-conversion-ventana', 'Conversión con ventana', 'creator', 'COP', 'America/Bogota')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO company (id, name, domain, owner_workspace_id)
+      VALUES ('${MARCA}', 'Marca Ventana', 'marcaventana.co', '${WS_VENTANA}') ON CONFLICT DO NOTHING;
+      INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_VENTANA}', '${MARCA}') ON CONFLICT DO NOTHING;
+      INSERT INTO deal (id, workspace_id, company_id, name, stage_id) VALUES
+        ('${V(1)}', '${WS_VENTANA}', '${MARCA}', 'Viejo que avanzó hace poco', 'propuesta'),
+        ('${V(2)}', '${WS_VENTANA}', '${MARCA}', 'Nuevo de esta semana', 'nuevo'),
+        ('${V(3)}', '${WS_VENTANA}', '${MARCA}', 'Justo en el borde', 'nuevo')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_at) VALUES
+        ('${V(1)}', NULL, 'nuevo', ${dia(200)}),
+        ('${V(1)}', 'nuevo', 'contactado', ${dia(100)}),
+        ('${V(1)}', 'contactado', 'propuesta', ${dia(5)}),
+        ('${V(2)}', NULL, 'nuevo', ${dia(10)}),
+        -- El primer minuto del día más viejo de la ventana: entra.
+        ('${V(3)}', NULL, 'nuevo', ${dia(89, '00:01')});
+    `);
+  }, SETUP_TIMEOUT);
+  after(async () => {
+    await t.admin(`DELETE FROM workspace WHERE id = '${WS_VENTANA}'`);
+  });
+
+  test('por defecto, los negocios que entraron en los últimos 90 días; lo de antes no pesa', async () => {
+    const c = porEtapa(await enVentana((tx) => getStageConversion(tx)));
+    assert.equal(CONVERSION_WINDOW_DAYS, 90);
+    // Nuevo: el 1 entró hace 200 días (fuera); el 2 y el 3, dentro. Ninguno avanzó.
+    assert.deepEqual(c.nuevo, { entered: 2, advanced: 0, rate: '0.0000' });
+    // Contactado: el 1 entró hace 100 días. Fuera de la ventana: sin tasa, no «100 %».
+    assert.deepEqual(c.contactado, { entered: 0, advanced: 0, rate: null });
+    // Propuesta: el 1 entró hace 5 días y sigue ahí.
+    assert.deepEqual(c.propuesta, { entered: 1, advanced: 0, rate: '0.0000' });
+  });
+
+  test('toda la historia, o desde una fecha: la entrada que queda fuera de la ventana no cuenta', async () => {
+    const toda = porEtapa(await enVentana((tx) => getStageConversion(tx, { since: null })));
+    assert.deepEqual(toda.nuevo, { entered: 3, advanced: 1, rate: '0.3333' });
+    assert.deepEqual(toda.contactado, { entered: 1, advanced: 1, rate: '1.0000' });
+    // Desde el 2 de septiembre de 2026 en el espacio de las fechas fijas:
+    // en «Nuevo» solo cuenta el 4 (entró el 2); los 1, 2 y 3 entraron el 1.
+    const desde = porEtapa(await enConv((tx) => getStageConversion(tx, { since: new Date('2026-09-02T00:00:00Z') })));
+    assert.deepEqual(desde.nuevo, { entered: 1, advanced: 1, rate: '1.0000' });
+    // En «Contactado»: 1 y 2 (el 2), 4 (el 3); el 5 entró el 1. Avanzó el 1.
+    assert.deepEqual(desde.contactado, { entered: 3, advanced: 1, rate: '0.3333' });
   });
 });
 

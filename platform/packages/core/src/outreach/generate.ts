@@ -12,6 +12,7 @@
  * (llm.ts). La regeneración recibe una de las pistas cerradas.
  */
 import { readFileSync } from 'node:fs';
+import { briefOfferLines } from '../brief.ts';
 import type { ClaimSource, SalesClaim } from './claims.ts';
 import { GENERATION_MAX_TOKENS, OUTREACH_MODELS, LlmOutputError, readLlmResponse, type LlmCallOptions, type LlmClient } from './llm.ts';
 import { STEP_LENGTH, type RegenerateHint } from './preflight.ts';
@@ -50,7 +51,20 @@ export interface GenerationInput {
   company: { name: string; industry: string | null; city: string | null; country: string | null };
   contact: { fullName: string | null; roleTitle: string | null } | null;
   signal: { headline: string; source: string | null; detectedAt: Date | null } | null;
-  brief: { title: string; notes: string | null; requiresDisclosure: boolean } | null;
+  /**
+   * El brief activo del creador del negocio. Los formatos que ofrece
+   * (`deliverables`) y su ventana de disponibilidad son opcionales: con
+   * ellos el pitch propone solo esos formatos y fechas dentro de la
+   * ventana (VEN-7 r4, briefOfferLines).
+   */
+  brief: {
+    title: string;
+    notes: string | null;
+    requiresDisclosure: boolean;
+    deliverables?: readonly string[];
+    availabilityFrom?: string | null;
+    availabilityTo?: string | null;
+  } | null;
   claims: readonly SalesClaim[];
   previousTouches: readonly SentTouch[];
   /** Mensajes del mismo tipo a otras personas, enviados o por salir: el nuevo no se les tiene que parecer (compuerta B). */
@@ -190,6 +204,7 @@ export function buildGenerationPrompt(input: GenerationInput, template: string):
       ? `Brief del creador: ${untrusted('brief_del_creador', `${input.brief.title}${input.brief.notes ? `. ${input.brief.notes}` : ''}`)}` +
         `${input.brief.requiresDisclosure ? '. Exige divulgar las colaboraciones pagadas.' : ''}`
       : '',
+    ...(input.brief ? briefOfferLines(input.brief) : []),
     '',
     'Afirmaciones que puedes citar (ID · qué es · se escribe · origen):',
     ...(input.claims.length > 0

@@ -36,11 +36,13 @@ export const PUEDEN_GESTIONAR_CANALES: ReadonlySet<MembershipRole> = new Set<Mem
 export const PUEDEN_EDITAR_PERFIL: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
 
 /**
- * Los roles que pueden cambiar el brief de outbound (VEN-7). El brief es
- * una regla del ESPACIO entero: lo que excluye desaparece del radar de
- * todo el equipo y ninguna cadencia le escribe (0064). Por eso lo
- * cambian los mismos que la política de envío y los canales; un
- * 'member' lo lee y lo aplica, no lo reescribe. La base dice lo mismo
+ * Los roles que pueden cambiar el brief de outbound (VEN-7). Es el brief
+ * de un creador (uno activo por creador, 0064 §1), pero lo que excluye se
+ * oculta del radar de todo el equipo cuando lo excluyen todos los briefs
+ * activos, y frena las cadencias de sus negocios. Por eso lo cambian los
+ * mismos que la política de envío y los canales; un 'member' lo lee y lo
+ * aplica, no lo reescribe. Lo mismo vale para «No aceptar esta marca»
+ * desde el radar, que escribe en el brief. La base dice lo mismo
  * con outreach_can_manage (0064 §5), así que esto solo evita ofrecer lo
  * que se va a rechazar.
  */

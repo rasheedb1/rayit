@@ -37,12 +37,15 @@
  * «SUPLEMENTOS» y «suplementos ».
  *
  * «Qué busca» (categorías, países, presupuesto) NO oculta nada: la
- * bandeja lo MARCA en cada tarjeta («Bajo tu mínimo», «Fuera de tus
- * países», «Buscas cocina»; briefSignalLateralSql). Ocultar por «no
- * encaja del todo» escondería señales que valen la pena; ocultar por
- * «esto no lo acepto» es exactamente lo que el creador pidió. Del brief,
- * el recomendador y el generador usan además el título, las notas y la
- * divulgación (docs/ventas-outreach.md §5.5 y §5.8).
+ * bandeja MARCA en cada tarjeta lo que la aparta del brief («Bajo tu
+ * mínimo», «Fuera de tus países», «Fuera de lo que buscas»;
+ * briefSignalLateralSql). Ocultar por «no encaja del todo» escondería
+ * señales que valen la pena; ocultar por «esto no lo acepto» es
+ * exactamente lo que el creador pidió. Del brief, el recomendador y el
+ * generador usan además el título, las notas, la divulgación, los
+ * formatos que ofrece y su ventana de disponibilidad (docs/ventas-outreach.md
+ * §5.5 y §5.8): el pitch solo propone esos formatos y fechas dentro de
+ * la ventana.
  *
  * Mismas reglas que el resto de queries/: WorkspaceTx, RLS filtra, los
  * INSERT escriben current_workspace_id(), el dinero viaja como string.
@@ -61,6 +64,8 @@ export const BRIEF_LIMITS = {
   titleMax: 120,
   categoryMax: 60,
   notesMax: 2000,
+  /** Formatos de entregable distintos: el catálogo tiene seis (DELIVERABLES de @mc/core); el tope deja sitio a los viejos. */
+  deliverables: 20,
 } as const;
 
 /** Por qué una señal no aparece en la bandeja: la empresa o la categoría están excluidas. */
@@ -86,6 +91,9 @@ export const BRIEF_ERROR_CODES = [
   'TooManyCompanies',
   'NoCreator',
   'UnknownCreator',
+  'NoActiveBrief',
+  'SignalNotFound',
+  'SignalWithoutBrand',
   'Forbidden',
 ] as const;
 export type BriefErrorCode = (typeof BRIEF_ERROR_CODES)[number];
@@ -155,6 +163,23 @@ function canonicalKind(kind: string): string {
   return DELIVERABLE_ALIASES[kind] ?? kind;
 }
 
+/**
+ * Los tipos de entregable de outbound_brief.deliverables (jsonb), con el
+ * nombre del catálogo, sin repetir y en el orden guardado. Lo usan la
+ * pantalla (toBrief) y el contexto de las cadencias (el recomendador y
+ * el generador), para que los tres lean lo mismo.
+ */
+export function briefDeliverableKinds(raw: unknown): string[] {
+  const lista = Array.isArray(raw) ? (raw as BriefDeliverable[]) : [];
+  return [
+    ...new Set(
+      lista
+        .map((d) => (d && typeof d.kind === 'string' ? canonicalKind(d.kind) : null))
+        .filter((k): k is string => k !== null),
+    ),
+  ];
+}
+
 type BriefRowSql = {
   id: string; creator_id: string; creator_name: string; title: string;
   wanted_categories: string[]; wanted_countries: string[]; min_budget: string | null; currency: string;
@@ -185,13 +210,7 @@ function toBrief(r: BriefRowSql): OutboundBrief {
     wantedCountries: r.wanted_countries,
     minBudget: r.min_budget,
     currency: r.currency,
-    deliverables: [
-      ...new Set(
-        (Array.isArray(r.deliverables) ? r.deliverables : [])
-          .map((d) => (d && typeof d.kind === 'string' ? canonicalKind(d.kind) : null))
-          .filter((k): k is string => k !== null),
-      ),
-    ],
+    deliverables: briefDeliverableKinds(r.deliverables),
     availabilityFrom: r.availability_from,
     availabilityTo: r.availability_to,
     excludedCategories: r.excluded_categories,
@@ -325,14 +344,37 @@ export async function listCategorySuggestions(tx: WorkspaceTx): Promise<string[]
   return rows.map((r) => r.category);
 }
 
-/** Las empresas del CRM que se pueden excluir: id y nombre, por nombre. */
-export async function listBriefCompanyOptions(tx: WorkspaceTx): Promise<{ id: string; name: string }[]> {
+/** Cuántas marcas devuelve como mucho una búsqueda de «Marcas que no aceptas». */
+export const BRIEF_COMPANY_SEARCH_LIMIT = 20;
+/** Lo mínimo que hay que escribir para buscar (en caracteres de brand_key: sin tildes ni signos). */
+export const BRIEF_COMPANY_SEARCH_MIN = 2;
+
+/**
+ * Las marcas del CRM que se pueden excluir y cuyo nombre contiene lo
+ * escrito, comparado con brand_key («nutrive» encuentra «Nutrivé»): las
+ * que EMPIEZAN así primero, luego por nombre. Como mucho
+ * BRIEF_COMPANY_SEARCH_LIMIT; con menos de BRIEF_COMPANY_SEARCH_MIN
+ * caracteres útiles no busca.
+ *
+ * Hasta la ronda 3 la pantalla recibía las primeras 1 000 del CRM en un
+ * <select> y cortaba el resto sin avisar: una agencia con un CRM grande
+ * no podía excluir las que quedaban fuera. Ahora busca en el servidor,
+ * en todo el CRM. Las marcas que todavía no están en el CRM se excluyen
+ * desde su señal en el radar (rejectSignalBrand), que la da de alta.
+ */
+export async function searchBriefCompanies(tx: WorkspaceTx, q: string): Promise<{ id: string; name: string }[]> {
+  if (categoryKey(q).length < BRIEF_COMPANY_SEARCH_MIN) return [];
+  // La clave la calcula la base con brand_key, la misma función que llena
+  // company.name_key: lo escrito y lo guardado se normalizan igual.
   const { rows } = await tx.query<{ id: string; name: string }>(
     `SELECT co.id, co.name
        FROM company_link cl
        JOIN company co ON co.id = cl.company_id
-      ORDER BY lower(co.name), co.id
-      LIMIT 1000`,
+       CROSS JOIN (SELECT brand_key($1) AS k) q
+      WHERE q.k IS NOT NULL AND strpos(co.name_key, q.k) > 0
+      ORDER BY (strpos(co.name_key, q.k) = 1) DESC, lower(co.name), co.id
+      LIMIT $2`,
+    [q.slice(0, 200), BRIEF_COMPANY_SEARCH_LIMIT],
   );
   return rows;
 }
@@ -422,8 +464,8 @@ interface VerdictParts {
 /**
  * La consulta del veredicto: UNA fila con hidden_by ('company',
  * 'category' o NULL), hidden_match (la marca o la categoría que lo
- * decidió) y, con `fit`, wanted_match, below_min_budget y
- * country_outside.
+ * decidió) y, con `fit`, wanted_match, below_min_budget,
+ * country_outside y category_outside.
  *
  * Los briefs activos se leen UNA vez por consulta (bv_briefs, un CTE
  * MATERIALIZED que no depende de la fila de fuera: Postgres lo rebobina
@@ -435,8 +477,8 @@ interface VerdictParts {
  * solo si TODOS la excluyen, porque lo que un creador no acepta otro del
  * mismo espacio puede aceptarlo. El motivo es 'company' si alguno la
  * excluye por nombre. El encaje sigue la misma idea: «Bajo tu mínimo» y
- * «Fuera de tus países» solo si lo están para todos, y la categoría
- * buscada basta con que la busque uno.
+ * «Fuera de tus países» y «Fuera de lo que buscas» solo si lo están para
+ * todos, y la categoría buscada basta con que la busque uno.
  */
 function verdictQuery({ briefsWhere, companyRows, signal, fit }: VerdictParts): string {
   const deLaSenal = signal
@@ -455,6 +497,7 @@ function verdictQuery({ briefsWhere, companyRows, signal, fit }: VerdictParts): 
   const porBriefFit = fit
     ? `,
               ${firstCategoryMatchSql('bv_b.wanted_categories')} AS wanted_match,
+              cardinality(bv_b.wanted_categories) > 0 AS has_wanted,
               ${presupuesto} AS below_min,
               (bv_p.country IS NOT NULL AND cardinality(bv_b.wanted_countries) > 0
                 AND NOT (bv_p.country = ANY (bv_b.wanted_countries))) AS outside`
@@ -464,7 +507,8 @@ function verdictQuery({ briefsWhere, companyRows, signal, fit }: VerdictParts): 
     ? `,
             min(bv_pb.wanted_match) AS wanted_match,
             coalesce(count(*) > 0 AND bool_and(bv_pb.below_min), false) AS below_min_budget,
-            coalesce(count(*) > 0 AND bool_and(bv_pb.outside), false) AS country_outside`
+            coalesce(count(*) > 0 AND bool_and(bv_pb.outside), false) AS country_outside,
+            coalesce(count(*) > 0 AND bool_and(bv_pb.has_wanted AND bv_pb.wanted_match IS NULL), false) AS category_outside`
     : '';
   return `WITH bv_briefs AS MATERIALIZED (
          SELECT bv_b.excluded_companies, bv_b.excluded_categories, bv_b.wanted_categories, bv_b.wanted_countries,
@@ -544,6 +588,8 @@ export function briefVerdictSql(s: string): string {
  *                     (misma moneda; con otra moneda no se compara)
  *   country_outside   el país de la señal (evidence.country, o el de su
  *                     empresa) no está entre los buscados
+ *   category_outside  el brief busca categorías y la marca no tiene
+ *                     ninguna («Fuera de lo que buscas»)
  *
  * El encaje NO oculta nada: «Qué buscas» es una preferencia (VEN-7).
  */
@@ -597,16 +643,22 @@ export interface HiddenSignals {
   byCategory: number;
 }
 
-/** Lo que la bandeja dice debajo del título: «3 señales ocultas por tu brief». */
-export async function countHiddenSignals(tx: WorkspaceTx): Promise<HiddenSignals> {
-  const { rows } = await tx.query<{ total: string; by_company: string; by_category: string }>(
-    `SELECT count(*)::text AS total,
+/**
+ * La consulta de countHiddenSignals, exportada para que las pruebas lean
+ * su plan (EXPLAIN) como mc_app: el veredicto tiene que llegar a la
+ * empresa por sus índices (company_name_key_idx, company_domain_text_idx,
+ * la llave primaria) y nunca recorrer company entera.
+ */
+export const HIDDEN_SIGNALS_SQL = `SELECT count(*)::text AS total,
             count(*) FILTER (WHERE v.verdict = 'company')::text  AS by_company,
             count(*) FILTER (WHERE v.verdict = 'category')::text AS by_category
        FROM signal s
       CROSS JOIN LATERAL (SELECT ${briefVerdictSql('s')} AS verdict) v
-      WHERE s.status = 'pending' AND v.verdict IS NOT NULL`,
-  );
+      WHERE s.status = 'pending' AND v.verdict IS NOT NULL`;
+
+/** Lo que la bandeja dice debajo del título: «3 señales ocultas por tu brief». */
+export async function countHiddenSignals(tx: WorkspaceTx): Promise<HiddenSignals> {
+  const { rows } = await tx.query<{ total: string; by_company: string; by_category: string }>(HIDDEN_SIGNALS_SQL);
   const r = rows[0];
   return { total: Number(r?.total ?? 0), byCompany: Number(r?.by_company ?? 0), byCategory: Number(r?.by_category ?? 0) };
 }
@@ -681,13 +733,15 @@ function validDate(v: string | null): boolean {
  * Los entregables conservan lo que ya tenían (la etiqueta y el rango que
  * trae el seed desde el tarifario) si siguen elegidos.
  *
- * El brief es una regla del workspace entero (oculta señales a todo el
- * equipo y frena las cadencias), así que:
+ * Es el brief de un creador: lo que excluye se oculta del radar de todo
+ * el equipo cuando lo excluyen todos los briefs activos, y frena las
+ * cadencias de sus negocios. Así que:
  *   · solo lo escriben owner y admin: lo mira la acción y lo impone la
  *     base (0064 §5); aquí vuelve como BriefError('Forbidden');
  *   · deja traza en audit_log ('ventas.brief.guardar', antes y después)
  *     en la misma transacción;
- *   · dos guardados a la vez se ordenan con un candado por workspace.
+ *   · dos guardados a la vez se ordenan con un candado por workspace y
+ *     creador (el mismo que toma rejectSignalBrand).
  */
 export async function saveBrief(tx: WorkspaceTx, creatorId: string, input: SaveBriefInput): Promise<string> {
   const title = input.title.trim().replace(/\s+/g, ' ');
@@ -716,7 +770,9 @@ export async function saveBrief(tx: WorkspaceTx, creatorId: string, input: SaveB
   }
 
   const kinds = [...new Set(input.deliverables.map((d) => d.trim()).filter(Boolean))];
-  if (kinds.some((k) => !DELIVERABLE_RE.test(k))) throw new BriefError('InvalidDeliverable');
+  if (kinds.some((k) => !DELIVERABLE_RE.test(k)) || kinds.length > BRIEF_LIMITS.deliverables) {
+    throw new BriefError('InvalidDeliverable');
+  }
 
   const notes = input.notes?.trim() || null;
   if (notes !== null && notes.length > BRIEF_LIMITS.notesMax) throw new BriefError('InvalidNotes');
@@ -743,9 +799,7 @@ export async function saveBrief(tx: WorkspaceTx, creatorId: string, input: SaveB
   // los ACTIVOS: sin brief todavía, dos guardados «en pausa» a la vez
   // leían los dos «no hay ninguno» y creaban dos. El candado es de la
   // transacción y lleva el workspace y el creador: no frena a nadie más.
-  await tx.query("SELECT pg_advisory_xact_lock(hashtext('outbound_brief:' || current_workspace_id()::text || ':' || $1))", [
-    creatorId,
-  ]);
+  await lockCreatorBrief(tx, creatorId);
 
   const { rows: actual } = await tx.query<{ id: string; deliverables: BriefDeliverable[]; snapshot: Record<string, unknown> }>(
     `SELECT b.id, b.deliverables, ${AUDIT_SNAPSHOT} AS snapshot
@@ -815,6 +869,95 @@ export async function saveBrief(tx: WorkspaceTx, creatorId: string, input: SaveB
     if (isBriefForbidden(err)) throw new BriefError('Forbidden');
     throw err;
   }
+}
+
+/** El candado de la transacción que ordena las escrituras del brief de un creador (saveBrief y addExcludedCompany). */
+async function lockCreatorBrief(tx: WorkspaceTx, creatorId: string): Promise<void> {
+  await tx.query("SELECT pg_advisory_xact_lock(hashtext('outbound_brief:' || current_workspace_id()::text || ':' || $1))", [
+    creatorId,
+  ]);
+}
+
+/** Lo que cambió al excluir una marca en los briefs activos. */
+export interface AddExcludedCompanyResult {
+  /** Los briefs activos a los que se agregó (los que ya la excluían no cuentan). */
+  added: number;
+  /** Los briefs activos que se miraron: los de los creadores pedidos, o todos. */
+  briefs: number;
+}
+
+/**
+ * Agrega una empresa del CRM a «Marcas que no aceptas» de los briefs
+ * ACTIVOS de los creadores pedidos (todos los activos si no se pide
+ * ninguno), en la transacción de quien llama. Es la mitad del brief de
+ * «No aceptar esta marca» en el radar (rejectSignalBrand, queries/ventas.ts),
+ * que antes da de alta la marca en el CRM.
+ *
+ * Mismas reglas que saveBrief: la empresa tiene que estar en el CRM
+ * (CompanyNotInCrm), el tope de marcas es BRIEF_LIMITS.companies
+ * (TooManyCompanies), solo owner y admin escriben (Forbidden, 0064 §5),
+ * el mismo candado por workspace y creador, y la misma traza en
+ * audit_log ('ventas.brief.excluir_marca', antes y después). Sin ningún
+ * brief activo que la pueda recibir: NoActiveBrief.
+ */
+export async function addExcludedCompany(
+  tx: WorkspaceTx,
+  companyId: string,
+  opts: { creatorIds?: readonly string[] } = {},
+): Promise<AddExcludedCompanyResult> {
+  if (!isUuid(companyId)) throw new BriefError('CompanyNotInCrm');
+  const creatorIds = opts.creatorIds ? [...new Set(opts.creatorIds)] : null;
+  if (creatorIds && (creatorIds.length === 0 || creatorIds.some((id) => !isUuid(id)))) throw new BriefError('UnknownCreator');
+
+  const { rows: enCrm } = await tx.query('SELECT 1 FROM company_link WHERE company_id = $1::uuid', [companyId]);
+  if (enCrm.length === 0) throw new BriefError('CompanyNotInCrm');
+
+  const { rows: activos } = await tx.query<{ creator_id: string }>(
+    `SELECT DISTINCT b.creator_id FROM outbound_brief b
+      WHERE b.status = 'active' AND ($1::uuid[] IS NULL OR b.creator_id = ANY ($1::uuid[]))
+      ORDER BY b.creator_id`,
+    [creatorIds],
+  );
+  if (activos.length === 0) throw new BriefError('NoActiveBrief');
+
+  let added = 0;
+  try {
+    // En orden de creador: dos exclusiones a la vez toman los candados en
+    // el mismo orden y no se esperan en círculo.
+    for (const { creator_id } of activos) {
+      await lockCreatorBrief(tx, creator_id);
+      const { rows: antes } = await tx.query<{ id: string; n: number; tiene: boolean; snapshot: Record<string, unknown> }>(
+        `SELECT b.id, cardinality(b.excluded_companies) AS n, $2::uuid = ANY (b.excluded_companies) AS tiene,
+                ${AUDIT_SNAPSHOT} AS snapshot
+           FROM outbound_brief b
+          WHERE b.status = 'active' AND b.creator_id = $1::uuid
+          ORDER BY b.updated_at DESC, b.id
+          LIMIT 1
+            FOR UPDATE`,
+        [creator_id, companyId],
+      );
+      const b = antes[0];
+      if (!b || b.tiene) continue;
+      if (b.n >= BRIEF_LIMITS.companies) throw new BriefError('TooManyCompanies');
+      const { rows: despues } = await tx.query<{ snapshot: Record<string, unknown> }>(
+        `UPDATE outbound_brief b SET excluded_companies = array_append(b.excluded_companies, $2::uuid)
+          WHERE b.id = $1::uuid
+          RETURNING ${AUDIT_SNAPSHOT} AS snapshot`,
+        [b.id, companyId],
+      );
+      await tx.query(
+        `INSERT INTO audit_log (workspace_id, actor_user_id, actor_kind, action, entity_type, entity_id, before, after)
+         VALUES (current_workspace_id(), current_user_id(), 'user', 'ventas.brief.excluir_marca', 'outbound_brief', $1::uuid,
+                 $2::jsonb, $3::jsonb)`,
+        [b.id, JSON.stringify(b.snapshot), JSON.stringify(despues[0]?.snapshot ?? null)],
+      );
+      added++;
+    }
+  } catch (err) {
+    if (isBriefForbidden(err)) throw new BriefError('Forbidden');
+    throw err;
+  }
+  return { added, briefs: activos.length };
 }
 
 /**

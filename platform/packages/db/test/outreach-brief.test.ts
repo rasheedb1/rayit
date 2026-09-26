@@ -25,6 +25,9 @@ import { createSequenceFromTemplate, setSequenceStatus } from '../src/queries/ca
 import { claimDueTouches } from '../src/queries/outreach.ts';
 import { enrollContacts } from '../src/queries/outreach/enroll.ts';
 import { saveBrief } from '../src/queries/brief.ts';
+import { loadGenerationContext } from '../src/queries/outreach/generation-context.ts';
+import { generationInputFrom } from '../src/queries/outreach/generation-mapping.ts';
+import { buildGenerationPrompt, loadPrompt } from '@mc/core/outreach/generate';
 import { openTestDb, SETUP_TIMEOUT, type TestDb } from './pglite.ts';
 
 const WS = randomUUID();
@@ -215,4 +218,40 @@ test('en una agencia, el negocio de un creador SIN brief sigue lo que excluyen l
   const cola = await t.db.asWorker((tx) => claimDueTouches(tx, { now: CLOCK, channels: ['email'], workspaceId: AG, limit: 5 }));
   assert.equal(cola.canceledBriefExcluded, 1);
   assert.deepEqual(cola.claimed, []);
+});
+
+test('VEN-7 r4 · el pitch de la cadencia propone solo los formatos del brief y fechas dentro de su ventana', async () => {
+  // Una ficha nueva de Café Montaña (alimentos: el brief la acepta), en una
+  // cadencia que lleva el brief de la creadora, con formatos y ventana.
+  const LUCIA = randomUUID();
+  await t.admin(`
+    INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source)
+    VALUES ('${LUCIA}', '${CO_CAFE}', '${WS}', 'Lucía Pardo', 'lucia.${WS.slice(0, 8)}@cafe.test', 'user_provided');
+    UPDATE outbound_brief
+       SET deliverables = '[{"kind": "reel"}, {"kind": "historias", "label": "Historias (3 pantallas)"}]'::jsonb,
+           availability_from = '2026-10-01', availability_to = '2026-12-15'
+     WHERE workspace_id = '${WS}' AND creator_id = '${CREADORA}';
+  `);
+  const id = await enWs((tx) => createSequenceFromTemplate(tx, 'marca-con-campana-activa'));
+  await t.admin(`
+    UPDATE outbound_sequence s SET brief_id = b.id
+      FROM outbound_brief b
+     WHERE s.id = '${id}' AND b.workspace_id = '${WS}' AND b.creator_id = '${CREADORA}';
+  `);
+  await enWs((tx) => setSequenceStatus(tx, id, 'active'));
+  const r = await enWs((tx) => enrollContacts(tx, { sequenceId: id, contactIds: [LUCIA], now: CLOCK }));
+  assert.deepEqual(r.enrolled.map((e) => e.contactId), [LUCIA]);
+  const { rows } = await enWs((tx) =>
+    tx.query<{ id: string }>(
+      `SELECT t.id FROM outbound_touch t JOIN outbound_enrollment e ON e.id = t.enrollment_id
+        WHERE e.sequence_id = $1 AND t.contact_id = $2 ORDER BY t.scheduled_for LIMIT 1`,
+      [id, LUCIA],
+    ),
+  );
+  const ctx = await t.db.asWorker((tx) => loadGenerationContext(tx, rows[0]!.id));
+  assert.deepEqual(ctx.brief?.deliverables, ['reel', 'historia'], 'con el nombre del catálogo');
+  assert.deepEqual([ctx.brief?.availabilityFrom, ctx.brief?.availabilityTo], ['2026-10-01', '2026-12-15']);
+  const { user } = buildGenerationPrompt({ ...generationInputFrom(ctx), attempt: 1, hint: null }, loadPrompt('generate'));
+  assert.ok(user.includes('Formatos que ofrece el creador: reel de Instagram, historias de Instagram. Si propones una colaboración, propón solo estos formatos.'), user);
+  assert.ok(user.includes('Disponible para campañas del 2026-10-01 al 2026-12-15'), user);
 });

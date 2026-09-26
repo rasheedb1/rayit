@@ -11,6 +11,7 @@ import { REGENERATE_HINTS, type RegenerateHint } from '@mc/core/outreach/preflig
 import { bodyFingerprint, SIMILARITY_WINDOW } from '@mc/core/outreach/gates';
 import { DEFAULT_RUBRIC, RUBRIC_DIMENSIONS, type StepRubric } from '@mc/core/outreach/judge';
 import type { WorkerSql } from '../../client.ts';
+import { briefDeliverableKinds } from '../brief.ts';
 import { listSalesClaims } from './claims.ts';
 import { assertIds, OutreachMotorError } from './shared.ts';
 
@@ -40,7 +41,15 @@ export interface GenerationContext {
   company: { name: string; industry: string | null; city: string | null; country: string | null };
   contact: { fullName: string | null; roleTitle: string | null } | null;
   signal: { headline: string; source: string | null; detectedAt: Date | null } | null;
-  brief: { title: string; notes: string | null; requiresDisclosure: boolean } | null;
+  /** El brief de la cadencia, con los formatos que ofrece y su ventana (VEN-7 r4): el pitch solo propone eso. */
+  brief: {
+    title: string;
+    notes: string | null;
+    requiresDisclosure: boolean;
+    deliverables: string[];
+    availabilityFrom: string | null;
+    availabilityTo: string | null;
+  } | null;
   claims: SalesClaim[];
   /** Solo lo ENVIADO a esta persona desde este workspace, del más viejo al más nuevo. */
   previousTouches: SentTouch[];
@@ -88,6 +97,7 @@ interface MainRow {
   contact_name: string | null; role_title: string | null;
   signal_headline: string | null; signal_source: string | null; signal_at: unknown;
   brief_title: string | null; brief_notes: string | null; brief_disclosure: boolean | null; workspace_name: string;
+  brief_deliverables: unknown; brief_from: string | null; brief_to: string | null;
 }
 
 export async function loadGenerationContext(tx: WorkerSql, touchId: string): Promise<GenerationContext> {
@@ -101,7 +111,8 @@ export async function loadGenerationContext(tx: WorkerSql, touchId: string): Pro
               co.name AS company_name, co.industry, co.city, co.country,
               c.full_name AS contact_name, c.role_title,
               sg.headline_es AS signal_headline, sg.source_id AS signal_source, sg.detected_at AS signal_at,
-              b.title AS brief_title, b.notes AS brief_notes, b.requires_disclosure AS brief_disclosure
+              b.title AS brief_title, b.notes AS brief_notes, b.requires_disclosure AS brief_disclosure,
+              b.deliverables AS brief_deliverables, b.availability_from::text AS brief_from, b.availability_to::text AS brief_to
          FROM outbound_touch t
          LEFT JOIN outbound_step st ON st.id = t.step_id
          LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
@@ -226,7 +237,12 @@ export async function loadGenerationContext(tx: WorkerSql, touchId: string): Pro
     company: { name: m.company_name, industry: m.industry, city: m.city, country: m.country },
     contact: m.contact_id ? { fullName: m.contact_name, roleTitle: m.role_title } : null,
     signal: m.signal_headline ? { headline: m.signal_headline, source: m.signal_source, detectedAt: toDate(m.signal_at) } : null,
-    brief: m.brief_title ? { title: m.brief_title, notes: m.brief_notes, requiresDisclosure: m.brief_disclosure ?? true } : null,
+    brief: m.brief_title
+      ? {
+          title: m.brief_title, notes: m.brief_notes, requiresDisclosure: m.brief_disclosure ?? true,
+          deliverables: briefDeliverableKinds(m.brief_deliverables), availabilityFrom: m.brief_from, availabilityTo: m.brief_to,
+        }
+      : null,
     claims,
     previousTouches: sentToContact.map((x) => ({ stepType: x.step_type, channel: x.channel, sentAt: toDate(x.sent_at)!, subject: x.subject, body: x.body })),
     recentSent,

@@ -1,6 +1,6 @@
 import "server-only";
 import {
-  guidanceLocale, recommendSequence, refineGuidance, type GuidanceWriter, type LlmUsage, type Proposal, type ProposalNote,
+  briefOfferLines, guidanceLocale, recommendSequence, refineGuidance, type GuidanceWriter, type LlmUsage, type Proposal, type ProposalNote,
 } from "@mc/core";
 import {
   createSequenceFromProposal, defaultContact, getRecommendationContext, recordRecommendLlmCall, replaceStepsFromProposal,
@@ -85,6 +85,8 @@ export async function proponerCadencia(input: ProponerInput, writer: GuidanceWri
         companyName: ctx.signal.companyName,
         briefTitle: ctx.brief?.title ?? null,
         briefNotes: ctx.brief?.notes ?? null,
+        // Los formatos que ofrece y su ventana (VEN-7 r4): la guía no propone otros ni fechas fuera.
+        briefOffer: ctx.brief ? briefOfferLines(ctx.brief) : [],
         requiresDisclosure: ctx.brief?.requiresDisclosure ?? false,
         angles: ctx.angles,
         locale,
