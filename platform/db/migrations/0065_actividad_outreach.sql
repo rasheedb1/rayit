@@ -92,8 +92,14 @@
 --   enrollment_closed  la persona respondió, se dio de baja o rebotó en
 --                      esa cadencia: el despachador lo cancelaría.
 --   superseded         ya salió un paso posterior de la misma cadencia.
---   opted_out          la ficha pidió la baja, o la dirección está en la
---                      baja global (address_is_suppressed).
+--   opted_out          la ficha pidió la baja, la dirección (la del envío
+--                      o la de la ficha) está en la baja global
+--                      (address_is_suppressed), o está en la baja de ESTE
+--                      espacio (outbound_workspace_optout, 0050 §8.1: el
+--                      enlace de un correo, que en una ficha pública
+--                      compartida no marca contact.opted_out). Son las
+--                      tres fuentes de enforce_outbound_optout: lo que
+--                      esa regla frenaría no se ofrece.
 --   email_invalid      un correo, y el correo de la ficha rebotó.
 --   account_down       el fallo fue de la cuenta del canal
 --                      (account_unavailable, account_auth, token_expired,
@@ -128,6 +134,10 @@ AS $$
     WHEN address_is_suppressed(t.recipient_address::citext)
          OR EXISTS (SELECT 1 FROM contact c
                      WHERE c.id = t.contact_id AND (c.opted_out OR address_is_suppressed(c.email)))
+         OR EXISTS (SELECT 1 FROM outbound_workspace_optout o
+                     WHERE o.workspace_id = t.workspace_id
+                       AND (o.email = t.recipient_address::citext
+                            OR o.email = (SELECT c.email FROM contact c WHERE c.id = t.contact_id)))
       THEN 'opted_out'
     WHEN t.channel = 'email' AND EXISTS (SELECT 1 FROM contact c WHERE c.id = t.contact_id AND c.email_invalid)
       THEN 'email_invalid'
@@ -273,6 +283,16 @@ COMMENT ON VIEW outbound_queue IS
 --                               (claimDueTouches une outbound_policy con
 --                               p.enabled), aunque haya cupo.
 --
+-- Los contadores se leen solo en la ventana que se pinta: los 14 días
+-- (uso_dia, espacio) y las semanas que los contienen (uso_semana: el
+-- lunes de la semana del día más viejo cae, como mucho, 6 días antes, así
+-- que 13 + 6 = 19). Cada CTE lleva su filtro: sin él, el CTE que se usaba
+-- dos veces se materializaba con TODO el historial de outbound_counter
+-- en cada lectura del widget, y crecía sin límite.
+--
+-- provider: el servicio de la cuenta (gmail_oauth, unipile), para decir
+-- quién pone el techo del proveedor.
+--
 -- Los límites son los de HOY aplicados a los 14 días: la base no guarda
 -- el tope que regía cada día (es una foto, no una serie). La semana de un
 -- día pasado es la cifra final de esa semana, no la de ese día.
@@ -281,22 +301,32 @@ WITH dias AS (
   SELECT w.id AS workspace_id, w.timezone AS tz, (outreach_local_date(w.id, now()) - g) AS day, (g = 0) AS is_today
     FROM workspace w CROSS JOIN generate_series(0, 13) AS g
 ),
-uso AS (
-  SELECT c.channel_account_id, c.period, c.period_start, sum(c.count)::int AS used
+uso_dia AS (
+  SELECT c.channel_account_id, c.period_start, sum(c.count)::int AS used
     FROM outbound_counter c
-   WHERE c.channel_account_id IS NOT NULL
-   GROUP BY c.channel_account_id, c.period, c.period_start
+   WHERE c.channel_account_id IS NOT NULL AND c.period = 'day'
+     AND c.period_start >= outreach_local_date(c.workspace_id, now()) - 13
+   GROUP BY c.channel_account_id, c.period_start
+),
+uso_semana AS (
+  SELECT c.channel_account_id, c.period_start, sum(c.count)::int AS used
+    FROM outbound_counter c
+   WHERE c.channel_account_id IS NOT NULL AND c.period = 'week'
+     AND c.period_start >= outreach_local_date(c.workspace_id, now()) - 19
+   GROUP BY c.channel_account_id, c.period_start
 ),
 espacio AS (
   SELECT c.workspace_id, c.period_start, sum(c.count)::int AS used
     FROM outbound_counter c
    WHERE c.channel_account_id IS NULL AND c.period = 'day' AND c.action_type = 'email'
+     AND c.period_start >= outreach_local_date(c.workspace_id, now()) - 13
    GROUP BY c.workspace_id, c.period_start
 )
 SELECT a.id AS channel_account_id,
        a.workspace_id,
        a.channel,
        a.status AS account_status,
+       a.provider,
        coalesce(a.display_name, a.provider_account_id) AS account_name,
        d.day,
        d.is_today,
@@ -315,9 +345,9 @@ SELECT a.id AS channel_account_id,
   FROM outreach_channel_account a
   JOIN outreach_channel_account_limits l ON l.channel_account_id = a.id
   JOIN dias d ON d.workspace_id = a.workspace_id
-  LEFT JOIN uso u ON u.channel_account_id = a.id AND u.period = 'day' AND u.period_start = d.day
-  LEFT JOIN uso wk ON wk.channel_account_id = a.id AND wk.period = 'week'
-                  AND wk.period_start = d.day - (extract(isodow FROM d.day)::int - 1)
+  LEFT JOIN uso_dia u ON u.channel_account_id = a.id AND u.period_start = d.day
+  LEFT JOIN uso_semana wk ON wk.channel_account_id = a.id
+                         AND wk.period_start = d.day - (extract(isodow FROM d.day)::int - 1)
   LEFT JOIN espacio ws ON ws.workspace_id = a.workspace_id AND ws.period_start = d.day
   LEFT JOIN outbound_policy p ON p.workspace_id = a.workspace_id
  WHERE a.status IN ('connected', 'needs_reconnect', 'error');

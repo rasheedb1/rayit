@@ -215,6 +215,8 @@ export const outboundUsageDaily = pgView('outbound_usage_daily', {
   workspaceId: uuid('workspace_id'),
   channel: text('channel'),
   accountStatus: text('account_status'),
+  /** El servicio de la cuenta (gmail_oauth, unipile): quién pone el techo del proveedor. */
+  provider: text('provider'),
   accountName: text('account_name'),
   day: date('day', { mode: 'string' }),
   isToday: boolean('is_today'),

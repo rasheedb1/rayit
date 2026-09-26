@@ -28,7 +28,7 @@ import { warmupDailyLimit, warmupDay } from '@mc/core/outreach/warmup';
 import {
   ACCOUNT_FAILURES, cancelQueuedTouches, getQueueFacets, getSequenceHealth, listChannelUsage, listFunnelByStep, listOutboundQueue,
   listSequenceHealth, MAX_TOUCH_ATTEMPTS, NOT_RETRYABLE_FAILURES, parseQueueCursor, QUEUE_BUCKET_STATUSES, QUEUE_PAGE_SIZE,
-  retryFailedTouches, usageBinding, usageLevel, type QueuePage,
+  retryFailedTouches, retryScheduledFor, usageBinding, usageLevel, type QueuePage,
 } from '../src/queries/actividad.ts';
 import { TOUCH_STATUSES } from '../src/schema/ventas.ts';
 import { openTestDb, SETUP_TIMEOUT, type TestDb } from './pglite.ts';
@@ -634,5 +634,171 @@ describe('el uso por canal (outbound_usage_daily)', () => {
       ['outbound_funnel_by_step', true, false], ['outbound_queue', true, false],
       ['outbound_sequence_health', true, false], ['outbound_usage_daily', true, false],
     ]);
+  });
+});
+
+describe('cada rama del bloqueo del reintento, con filas reales (outbound_touch_retry_block)', () => {
+  // Un espacio aparte, para no mover los números de la semana de prueba.
+  const WS_D = id('d');
+  const CO_D = id('c0d');
+  /** Una marca pública (sin dueño), vinculada al espacio: la de la ficha compartida. */
+  const CO_PUB = id('c0e');
+  const SEQ_D = id('5ed');
+  const SEQ_ARCH = id('5ee');
+  const STEP_D = id('5ed1');
+  const STEP_ARCH = id('5ee1');
+  const P = {
+    ok: id('dd01'), optedOut: id('dd02'), suppressed: id('dd03'), invalid: id('dd04'), replied: id('dd05'), unsubscribed: id('dd06'),
+    bounced: id('dd07'), archived: id('dd08'), pub: id('dd09'),
+  };
+  const E = { ok: id('ed01'), replied: id('ed05'), unsubscribed: id('ed06'), bounced: id('ed07'), archived: id('ed08'), pub: id('ed09') };
+  /** Un fallido por rama, y el que sí se puede reintentar. */
+  const F = {
+    ok: id('fd01'), optedOut: id('fd02'), suppressed: id('fd03'), invalid: id('fd04'), replied: id('fd05'), unsubscribed: id('fd06'),
+    bounced: id('fd07'), archived: id('fd08'), pub: id('fd09'), pubLinkedin: id('fd10'),
+  };
+  /** Lo que la base dice de cada uno, y lo que responde el reintento. */
+  const ESPERADO: Record<string, string> = {
+    [F.optedOut]: 'opted_out',
+    [F.suppressed]: 'opted_out',
+    [F.pub]: 'opted_out',
+    [F.pubLinkedin]: 'opted_out',
+    [F.invalid]: 'email_invalid',
+    [F.archived]: 'sequence_archived',
+    [F.replied]: 'enrollment_closed',
+    [F.unsubscribed]: 'enrollment_closed',
+    [F.bounced]: 'enrollment_closed',
+  };
+
+  before(async () => {
+    const fallido = (tid: string, contactId: string, email: string, opts: { seq?: string; step?: string; enr?: string; channel?: string } = {}) => {
+      const channel = opts.channel ?? 'email';
+      return `('${tid}', '${WS_D}', '${contactId === P.pub ? CO_PUB : CO_D}', '${contactId}', ${q(opts.seq)}, ${q(opts.enr)}, ${q(opts.step)},
+        '${channel}', 'Hola', 'failed', 'rejected', 1, ${q(channel === 'email' ? email : `li-${email}`)}, now() - interval '1 day',
+        now() - interval '1 hour')`;
+    };
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_D}', 'actividad-d', 'Actividad D', '${TZ}');
+      INSERT INTO outbound_policy (workspace_id, postal_address, enabled, send_window_start, send_window_end)
+      VALUES ('${WS_D}', 'Calle 93 # 11-26, Bogotá', true, '08:00', '18:00');
+      INSERT INTO company (id, name, owner_workspace_id) VALUES ('${CO_D}', 'Marca D', '${WS_D}'), ('${CO_PUB}', 'Marca pública', NULL);
+      INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_D}', '${CO_D}'), ('${WS_D}', '${CO_PUB}');
+      INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES
+        ('${P.ok}', '${CO_D}', '${WS_D}', 'Ok', 'ok@marca-d.test', 'user_provided'),
+        ('${P.optedOut}', '${CO_D}', '${WS_D}', 'Se dio de baja', 'baja@marca-d.test', 'user_provided'),
+        ('${P.suppressed}', '${CO_D}', '${WS_D}', 'En la lista global', 'global@marca-d.test', 'user_provided'),
+        ('${P.invalid}', '${CO_D}', '${WS_D}', 'Rebotó', 'rebote@marca-d.test', 'user_provided'),
+        ('${P.replied}', '${CO_D}', '${WS_D}', 'Respondió', 'respondio@marca-d.test', 'user_provided'),
+        ('${P.unsubscribed}', '${CO_D}', '${WS_D}', 'Baja en la cadencia', 'cadencia@marca-d.test', 'user_provided'),
+        ('${P.bounced}', '${CO_D}', '${WS_D}', 'Rebote en la cadencia', 'rebote-cadencia@marca-d.test', 'user_provided'),
+        ('${P.archived}', '${CO_D}', '${WS_D}', 'Archivada', 'archivada@marca-d.test', 'user_provided');
+      INSERT INTO contact (id, company_id, full_name, email, source, source_url, owner_workspace_id) VALUES
+        ('${P.pub}', '${CO_PUB}', 'Prensa', 'prensa@marca-publica.test', 'public_website', 'https://marca-publica.test/prensa', NULL);
+      INSERT INTO outbound_sequence (id, workspace_id, name, channel, status) VALUES
+        ('${SEQ_D}', '${WS_D}', 'La de D', 'email', 'active'), ('${SEQ_ARCH}', '${WS_D}', 'Archivada', 'email', 'active');
+      INSERT INTO outbound_step (id, workspace_id, sequence_id, day_offset, order_in_day, step_type, channel, scheduled_time, body_template)
+      VALUES ('${STEP_D}', '${WS_D}', '${SEQ_D}', 0, 0, 'email', 'email', '10:00', 'Hola'),
+             ('${STEP_ARCH}', '${WS_D}', '${SEQ_ARCH}', 0, 0, 'email', 'email', '10:00', 'Hola');
+      INSERT INTO outbound_enrollment (id, workspace_id, sequence_id, contact_id, status, finished_at) VALUES
+        ('${E.ok}', '${WS_D}', '${SEQ_D}', '${P.ok}', 'active', NULL),
+        ('${E.replied}', '${WS_D}', '${SEQ_D}', '${P.replied}', 'replied', now()),
+        ('${E.unsubscribed}', '${WS_D}', '${SEQ_D}', '${P.unsubscribed}', 'opted_out', now()),
+        ('${E.bounced}', '${WS_D}', '${SEQ_D}', '${P.bounced}', 'bounced', now()),
+        ('${E.archived}', '${WS_D}', '${SEQ_ARCH}', '${P.archived}', 'active', NULL),
+        ('${E.pub}', '${WS_D}', '${SEQ_D}', '${P.pub}', 'active', NULL);
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, sequence_id, enrollment_id, step_id, channel, body, status,
+                                  blocked_reason, attempt_count, recipient_address, scheduled_for, status_changed_at)
+      VALUES ${[
+        fallido(F.ok, P.ok, 'ok@marca-d.test', { seq: SEQ_D, enr: E.ok, step: STEP_D }),
+        fallido(F.optedOut, P.optedOut, 'baja@marca-d.test'),
+        fallido(F.suppressed, P.suppressed, 'global@marca-d.test'),
+        fallido(F.invalid, P.invalid, 'rebote@marca-d.test'),
+        fallido(F.replied, P.replied, 'respondio@marca-d.test', { seq: SEQ_D, enr: E.replied, step: STEP_D }),
+        fallido(F.unsubscribed, P.unsubscribed, 'cadencia@marca-d.test', { seq: SEQ_D, enr: E.unsubscribed, step: STEP_D }),
+        fallido(F.bounced, P.bounced, 'rebote-cadencia@marca-d.test', { seq: SEQ_D, enr: E.bounced, step: STEP_D }),
+        fallido(F.archived, P.archived, 'archivada@marca-d.test', { seq: SEQ_ARCH, enr: E.archived, step: STEP_ARCH }),
+        fallido(F.pub, P.pub, 'prensa@marca-publica.test', { seq: SEQ_D, enr: E.pub, step: STEP_D }),
+        // La baja por enlace es de todos los canales: el LinkedIn de la misma ficha tampoco vuelve.
+        fallido(F.pubLinkedin, P.pub, 'prensa', { channel: 'linkedin' }),
+      ].join(',\n')};
+      -- Lo que cambia después de fallar: la ficha, la lista global, el rebote, la cadencia archivada y el enlace de baja.
+      UPDATE contact SET opted_out = true WHERE id = '${P.optedOut}';
+      INSERT INTO contact_suppression (email, reason) VALUES ('global@marca-d.test', 'complaint');
+      UPDATE contact SET email_invalid = true, email_invalid_at = now(), email_invalid_reason = 'bounced' WHERE id = '${P.invalid}';
+      UPDATE outbound_sequence SET status = 'archived' WHERE id = '${SEQ_ARCH}';
+      -- La ficha pública compartida: el enlace la saca de ESTE espacio y no toca contact.opted_out (0050 §8.1).
+      INSERT INTO outbound_workspace_optout (workspace_id, email, token_hash) VALUES ('${WS_D}', 'prensa@marca-publica.test', repeat('d', 64));
+    `);
+  }, SETUP_TIMEOUT);
+
+  test('la vista dice por qué no vuelve cada uno, y los botones por tipo solo cuentan el que puede', async () => {
+    const { rows } = await t.db.withWorkspace(WS_D, (tx) => listOutboundQueue(tx, { bucket: 'queue', statuses: ['failed'] }));
+    const byId = new Map(rows.map((r) => [r.touchId, r]));
+    assert.equal(rows.length, 10);
+    for (const [tid, code] of Object.entries(ESPERADO)) {
+      assert.deepEqual([byId.get(tid)!.retryBlock, byId.get(tid)!.retryable], [code, false], `${tid}: ${code}`);
+    }
+    assert.deepEqual([byId.get(F.ok)!.retryBlock, byId.get(F.ok)!.retryable], [null, true]);
+    assert.equal(await t.db.asWorker(async (tx) => (await tx.query<{ o: boolean }>(
+      `SELECT opted_out AS o FROM contact WHERE id = $1`, [P.pub],
+    )).rows[0]!.o), false, 'la ficha compartida no está dada de baja para nadie más');
+    // Seis fallidos de correo con paso: solo cuenta el que la base deja volver. Un «Correo · 6» sería un botón que no hace nada.
+    const facets = await t.db.withWorkspace(WS_D, (tx) => getQueueFacets(tx, {}));
+    assert.deepEqual(facets.retryableByStepType, [{ stepType: 'email', count: 1 }]);
+  });
+
+  test('las mismas ramas sobre el toque suelto de A, cambiado en memoria (jsonb_populate_record)', async () => {
+    await t.admin(`
+      INSERT INTO outbound_workspace_optout (workspace_id, email, token_hash) VALUES ('${WS_A}', 'fuera@marca.test', repeat('e', 64));
+      UPDATE outbound_sequence SET status = 'archived' WHERE id = '${SEQ_B}';
+    `);
+    try {
+      const block = (overrides: Record<string, unknown>) => t.db.asWorker(async (tx) => (await tx.query<{ b: string | null }>(
+        `SELECT outbound_touch_retry_block(jsonb_populate_record(t, $2::jsonb)) AS b FROM outbound_touch t WHERE t.id = $1`,
+        [id('7a'), JSON.stringify({ status: 'failed', blocked_reason: 'rejected', ...overrides })],
+      )).rows[0]!.b);
+      assert.equal(await block({}), null, 'el de control');
+      assert.equal(await block({ contact_id: contact(5) }), 'email_invalid', 'correo a una ficha que rebotó');
+      assert.equal(await block({ contact_id: contact(5), channel: 'linkedin', recipient_address: 'li-c5' }), null,
+        'el rebote del correo no frena el LinkedIn');
+      assert.equal(await block({ recipient_address: 'fuera@marca.test' }), 'opted_out', 'la dirección del envío en la baja del espacio');
+      assert.equal(await block({ workspace_id: WS_B, recipient_address: 'fuera@marca.test' }), null, 'la baja es solo de ese espacio');
+      assert.equal(await block({ sequence_id: SEQ_B }), 'sequence_archived');
+      for (const n of [1, 2, 4]) assert.equal(await block({ enrollment_id: enrollment(n) }), 'enrollment_closed', `replied (c${n})`);
+    } finally {
+      await t.admin(`
+        DELETE FROM outbound_workspace_optout WHERE workspace_id = '${WS_A}' AND email = 'fuera@marca.test';
+        UPDATE outbound_sequence SET status = 'active' WHERE id = '${SEQ_B}';
+      `);
+    }
+  });
+
+  test('el reintento responde con el mismo código que la vista, sin tocar ninguno', async () => {
+    const ids = Object.keys(ESPERADO);
+    const report = await t.db.withWorkspace(WS_D, (tx) => retryFailedTouches(tx, { touchIds: ids }));
+    assert.deepEqual(report.done, []);
+    assert.deepEqual(Object.fromEntries(report.skipped.map((s) => [s.touchId, s.code])), ESPERADO);
+    const estados = await t.db.asWorker(async (tx) => (await tx.query<{ status: string }>(
+      `SELECT DISTINCT status FROM outbound_touch WHERE id = ANY($1::uuid[])`, [ids],
+    )).rows.map((r) => r.status));
+    assert.deepEqual(estados, ['failed']);
+  });
+
+  test('un reintento un viernes a las 20:00 sale el lunes al abrir la ventana del espacio, no «ahora»', async () => {
+    // Viernes 25 de septiembre de 2026, 20:00 en Bogotá (UTC-5): fuera de la ventana de 08:00 a 18:00.
+    const viernes = new Date('2026-09-26T01:00:00.000Z');
+    const report = await t.db.withWorkspace(WS_D, (tx) => retryFailedTouches(tx, { touchIds: [F.ok] }, viernes));
+    assert.deepEqual(report, { done: [F.ok], skipped: [] });
+    const { rows } = await t.db.withWorkspace(WS_D, (tx) => listOutboundQueue(tx, { bucket: 'queue', statuses: ['scheduled'] }));
+    const fila = rows.find((r) => r.touchId === F.ok)!;
+    const esperado = retryScheduledFor(F.ok, viernes, TZ, { start: '08:00', end: '18:00' });
+    assert.equal(fila.dueAt!.getTime(), esperado.getTime(), 'la hora de la fila es la del reclamo');
+    assert.equal(fila.retrying, false);
+    // El lunes 28, entre las 08:00 y las 08:30 de Bogotá (la dispersión de la apertura, la misma semilla que el reclamo).
+    const lunes = Date.parse('2026-09-28T13:00:00.000Z');
+    assert.ok(fila.dueAt!.getTime() >= lunes && fila.dueAt!.getTime() < lunes + 30 * 60_000, fila.dueAt!.toISOString());
+    // Dentro de la ventana, sale ya.
+    const martes = new Date('2026-09-29T15:00:00.000Z');
+    assert.equal(retryScheduledFor(F.ok, martes, TZ, { start: '08:00', end: '18:00' }).getTime(), martes.getTime());
   });
 });

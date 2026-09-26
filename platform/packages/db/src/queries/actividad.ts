@@ -23,15 +23,16 @@
  * es el esperado es un OutreachShapeError con la ruta del campo, no un
  * valor que la pantalla pinta a ciegas.
  */
+import { nextWindowSlot, type SendWindow } from '@mc/core/outreach/schedule';
 import { warmupDailyLimit } from '@mc/core/outreach/warmup';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import { OUTBOUND_CHANNELS, type OutboundChannel } from '../schema/_canales.ts';
-import { CHANNEL_ACCOUNT_STATUSES, ENROLLMENT_STATUSES, STEP_TYPES, type StepType } from '../schema/outreach.ts';
+import { CHANNEL_ACCOUNT_STATUSES, CHANNEL_PROVIDERS, ENROLLMENT_STATUSES, STEP_TYPES, type StepType } from '../schema/outreach.ts';
 import { CANCELABLE_TOUCH_STATUSES, SEQUENCE_STATUSES, TOUCH_STATUSES } from '../schema/ventas.ts';
 import { OutreachShapeError } from './outreach.ts';
 import { advanceEnrollment } from './outreach/enroll.ts';
 import { BAD_ADDRESS_CODES } from './outreach/send.ts';
-import { date, int, oneOf, text, textOrNull, toDate } from './outreach/shared.ts';
+import { date, int, oneOf, text, textOrNull, toDate, windowOf } from './outreach/shared.ts';
 
 export type TouchStatus = (typeof TOUCH_STATUSES)[number];
 export type EnrollmentStatus = (typeof ENROLLMENT_STATUSES)[number];
@@ -467,6 +468,9 @@ interface RetryCandidate {
   enrollmentId: string | null;
   enrollmentStatus: EnrollmentStatus | null;
   retryBlock: RetryBlockCode | null;
+  /** La zona y la ventana de envío con las que lo reclamará el despachador (las de claimDueTouches). */
+  timeZone: string;
+  window: SendWindow;
 }
 
 /** Los ids que tocan: los que se pidieron, o los fallidos reintentables de ese tipo con los filtros. */
@@ -498,10 +502,23 @@ function retrySkip(c: RetryCandidate): RetrySkipCode | null {
 }
 
 /**
+ * La hora a la que sale de verdad un toque reintentado en `now`: la misma
+ * que le daría el reclamo (claimDueTouches), con la zona de su cadencia
+ * (o la del espacio), la ventana de la política y la misma semilla de
+ * dispersión (el id del toque). Dentro de la ventana de un día hábil es
+ * `now`; fuera (un viernes a las 20:00), la apertura del siguiente día
+ * hábil. Así la fila no promete una hora a la que no va a salir.
+ */
+export function retryScheduledFor(touchId: string, now: Date, timeZone: string, window: SendWindow): Date {
+  return nextWindowSlot(now, timeZone, window, { seed: touchId });
+}
+
+/**
  * Devuelve fallidos a la cola (failed → scheduled), para que el
- * despachador los reclame en su próxima pasada: la hora pasa a `now`
- * (el reclamo la corre a la ventana laboral si hace falta), sin reintento
- * pendiente y sin el motivo del fallo. attempt_count no vuelve a cero:
+ * despachador los reclame en su próxima pasada: la hora pasa a la
+ * primera que le daría el reclamo (retryScheduledFor: `now` si cae en la
+ * ventana laboral, si no la apertura del siguiente día hábil), sin
+ * reintento pendiente y sin el motivo del fallo. attempt_count no vuelve a cero:
  * cada intento tiene su enlace de baja (único por toque e intento), así
  * que el siguiente reclamo cuenta uno más; por eso un toque que ya no
  * cabe en el techo (MAX_TOUCH_ATTEMPTS) no vuelve.
@@ -522,9 +539,13 @@ export async function retryFailedTouches(tx: WorkspaceTx, target: RetryTarget, n
   if (ids.length === 0) return report;
   const { rows } = await tx.query<Record<string, unknown>>(
     `SELECT t.id, t.status, t.attempt_count, t.enrollment_id, e.status AS enrollment_status,
-            outbound_touch_retry_block(t) AS retry_block
+            outbound_touch_retry_block(t) AS retry_block,
+            coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end
        FROM outbound_touch t
+       JOIN workspace w ON w.id = t.workspace_id
        LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
+       LEFT JOIN outbound_sequence s ON s.id = e.sequence_id
+       LEFT JOIN outbound_policy p ON p.workspace_id = t.workspace_id
       WHERE t.id = ANY($1::uuid[])
       ORDER BY t.id
         FOR UPDATE OF t`,
@@ -540,6 +561,8 @@ export async function retryFailedTouches(tx: WorkspaceTx, target: RetryTarget, n
       enrollmentId: textOrNull(fn, p('enrollment_id'), r.enrollment_id),
       enrollmentStatus: oneOfOrNull(fn, p('enrollment_status'), r.enrollment_status, ENROLLMENT_STATUSES),
       retryBlock: oneOfOrNull(fn, p('retry_block'), r.retry_block, RETRY_BLOCK_CODES),
+      timeZone: text(fn, p('tz'), r.tz),
+      window: windowOf(textOrNull(fn, p('w_start'), r.w_start), textOrNull(fn, p('w_end'), r.w_end)),
     }];
   }));
   const reopened = new Set<string>();
@@ -561,7 +584,7 @@ export async function retryFailedTouches(tx: WorkspaceTx, target: RetryTarget, n
       const moved = await tx.query(
         `UPDATE outbound_touch SET status = 'scheduled', scheduled_for = $2::timestamptz, next_retry_at = NULL, blocked_reason = NULL
           WHERE id = $1::uuid AND status = 'failed' AND attempt_count < $3::int RETURNING id`,
-        [id, now.toISOString(), MAX_TOUCH_ATTEMPTS - 1],
+        [id, retryScheduledFor(id, now, c.timeZone, c.window).toISOString(), MAX_TOUCH_ATTEMPTS - 1],
       );
       await tx.query('RELEASE SAVEPOINT actividad_reintento');
       if (moved.rows.length === 0) {
@@ -654,9 +677,14 @@ export interface ChannelUsageDay {
   level: Exclude<UsageLevel, 'off'>;
 }
 
+/** El servicio con el que está conectada una cuenta (outreach_channel_account.provider). */
+export type ChannelProvider = (typeof CHANNEL_PROVIDERS)[number];
+
 export interface ChannelUsage {
   accountId: string;
   channel: OutboundChannel;
+  /** Con qué servicio está conectada: quién pone el techo del proveedor. */
+  provider: ChannelProvider;
   accountName: string | null;
   accountStatus: ChannelAccountStatus;
   /** Acciones de hoy. */
@@ -733,6 +761,7 @@ const share = (part: number, whole: number) => (whole <= 0 ? (part > 0 ? 1 : 0) 
 interface UsageDayRow {
   accountId: string;
   channel: OutboundChannel;
+  provider: ChannelProvider;
   accountStatus: ChannelAccountStatus;
   accountName: string | null;
   day: string;
@@ -755,6 +784,7 @@ function toUsageDay(r: Record<string, unknown>, i: number): UsageDayRow {
   return {
     accountId: text(fn, p('channel_account_id'), r.channel_account_id),
     channel: oneOf(fn, p('channel'), r.channel, OUTBOUND_CHANNELS),
+    provider: oneOf(fn, p('provider'), r.provider, CHANNEL_PROVIDERS),
     accountStatus: oneOf(fn, p('account_status'), r.account_status, CHANNEL_ACCOUNT_STATUSES),
     accountName: textOrNull(fn, p('account_name'), r.account_name),
     day: text(fn, p('day'), r.day),
@@ -779,7 +809,7 @@ function toUsageDay(r: Record<string, unknown>, i: number): UsageDayRow {
  */
 export async function listChannelUsage(tx: WorkspaceTx): Promise<ChannelUsage[]> {
   const { rows } = await tx.query<Record<string, unknown>>(
-    `SELECT u.channel_account_id, u.channel, u.account_status, u.account_name, u.day::text AS day, u.is_today, u.used,
+    `SELECT u.channel_account_id, u.channel, u.provider, u.account_status, u.account_name, u.day::text AS day, u.is_today, u.used,
             u.daily_limit, u.week_used, u.weekly_limit, u.workspace_used, u.workspace_daily_limit, u.provider_limit,
             u.warmup_day, u.warmup_days, u.outreach_enabled
        FROM outbound_usage_daily u
@@ -797,6 +827,7 @@ export async function listChannelUsage(tx: WorkspaceTx): Promise<ChannelUsage[]>
     out.push({
       accountId,
       channel: today.channel,
+      provider: today.provider,
       accountName: today.accountName,
       accountStatus: today.accountStatus,
       used: today.used,
