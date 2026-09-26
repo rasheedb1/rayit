@@ -28,6 +28,7 @@
     "./queries/canales": "./src/queries/canales.ts",
     "./queries/entregabilidad": "./src/queries/entregabilidad.ts",
     "./queries/perfil-comercial": "./src/queries/perfil-comercial.ts",
+    "./queries/actividad": "./src/queries/actividad.ts",
     "./demo-baja": "./src/demo-baja.ts",
     "./test/pglite": "./test/pglite.ts",
     "./test/membresia": "./test/membresia.ts",

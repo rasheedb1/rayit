@@ -81,7 +81,7 @@ describe("UsoCuenta", () => {
   const live = {
     id: ID, channel: "email", provider: "gmail_oauth", providerAccountId: "a@b.test", displayName: "a@b.test", status: "connected", stale: false,
     dailyCap: null, weeklyCap: null, scopes: [], lastOkAt: new Date("2026-09-24T11:18:00Z"), lastOkAgoS: 2 * 3600 + 5, lastErrorAt: null, lastError: null,
-    lastErrorRecent: false, lastErrorFresh: false, updatedAt: new Date(0), usedToday: 3, usedThisWeek: 12,
+    lastErrorRecent: false, lastErrorFresh: false, updatedAt: new Date(0),
     limits: { effectiveDaily: 20, effectiveWeekly: 140, maxDaily: 20, maxWeekly: 140, dailyLimitedBy: "policy", weeklyLimitedBy: "policy", personalMailbox: false },
   } satisfies ChannelAccountRow;
 
@@ -92,7 +92,13 @@ describe("UsoCuenta", () => {
     expect(comprobada.getAttribute("title")).toBe(f.dateTime(live.lastOkAt.toISOString()));
     expect(comprobada.className).not.toMatch(/nowrap/);
     expect(comprobada.className).toMatch(/break-words/);
-    expect(screen.getByText(MESSAGES.detail.usageToday("3", "20"))).toBeTruthy();
+    // El uso de hoy y de la semana lo dice el widget «Uso de hoy» (VEN-16): la tarjeta no lo repite.
+    expect(container.textContent).not.toMatch(/Hoy|Semana/);
+  });
+
+  it("sin una comprobación todavía, no pinta una línea vacía", () => {
+    const { container } = render(<UsoCuenta live={{ ...live, lastOkAt: null, lastOkAgoS: null }} f={f} />);
+    expect(container.innerHTML).toBe("");
   });
 
   it("en una cuenta caída dice cuándo funcionó por última vez, no que se comprobó", () => {

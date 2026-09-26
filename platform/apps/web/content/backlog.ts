@@ -463,7 +463,8 @@ export const STORIES: readonly Story[] = [
     title: "Actividad y métricas de outreach",
     desc: "Cola visible con reintento por tipo, uso por canal con límite blando y duro, embudo por paso (enviados, abiertos, respondidos, positivos), vista de flujo de la cadencia.",
     done: "Con una semana de envíos de prueba, el embudo cuadra con outbound_touch fila a fila.",
-    status: "pendiente",
+    status: "hecho",
+    note: "/ventas/actividad (cola con reintento por tipo y páginas por cursor), uso por canal con sus tres topes en /ventas/canales y embudo con vista de flujo en /ventas/cadencias/[id]; el embudo cuadra con outbound_touch fila a fila en pglite. Migraciones 0067–0069 (nacieron 0065–0067; renumeradas al integrar la fase 6) y seed 0009 (nació 0008), sin aplicar en Supabase. Detalle por ronda en docs/ventas-outreach.md §6.",
   },
 
   // ---------------------------------------------------------------- COT

@@ -16,7 +16,7 @@ function account(over: Partial<ChannelAccountRow>): ChannelAccountRow {
   return {
     id: "00000000-0000-4000-8000-000000000001", channel: "email", provider: "gmail_oauth", providerAccountId: "a@b.test", displayName: "a@b.test",
     status: "connected", stale: false, dailyCap: null, weeklyCap: null, scopes: [], lastOkAt: null, lastOkAgoS: null, lastErrorAt: null,
-    lastError: null, lastErrorRecent: true, lastErrorFresh: true, updatedAt: new Date(0), usedToday: 0, usedThisWeek: 0,
+    lastError: null, lastErrorRecent: true, lastErrorFresh: true, updatedAt: new Date(0),
     limits: { effectiveDaily: 20, effectiveWeekly: 140, maxDaily: 20, maxWeekly: 140, dailyLimitedBy: "policy", weeklyLimitedBy: "policy", personalMailbox: false },
     ...over,
   };

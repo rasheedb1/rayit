@@ -1867,6 +1867,196 @@ las ocho existentes, Ventas completo son 48 a 55 días de una persona.
 Es el módulo más grande del producto, y por eso conviene construirlo
 con agentes en paralelo, con la misma puerta de calidad de 9,5.
 
+#### Cómo quedó la actividad (VEN-16, 25 de septiembre; ronda 5)
+
+- **Migración `0067_actividad_outreach.sql`** (nació como 0065; en la
+  integración de la fase 6 pasó a 0067, y 0066 y 0067 a 0068 y 0069,
+  porque VEN-14 trajo 0064–0066. No dependen una de otra). Una
+  función y cuatro vistas de solo lectura, con `security_invoker` y sin
+  escritura para `mc_app`:
+  - `outbound_touch_retry_block(outbound_touch)`: por qué un fallido **no**
+    puede volver a la cola (`not_retryable`, `too_many_attempts`,
+    `sequence_archived`, `enrollment_closed`, `superseded`, `opted_out`,
+    `email_invalid`, `account_down`), o NULL si puede. Es la única regla:
+    la usan la vista, los botones por tipo y el propio reintento (dentro
+    de su `FOR UPDATE`). `too_many_attempts` protege al despachador: con
+    `attempt_count` en 19 el siguiente reclamo lo deja en 20, el techo del
+    CHECK de 0037; uno más rompería el UPDATE del reclamo, que es uno por
+    lote y para todos los workspaces. `account_down`: el fallo fue de la
+    cuenta del canal y el espacio no tiene ninguna conectada de ese canal.
+    `opted_out` mira las **tres** fuentes de `enforce_outbound_optout`: la
+    ficha dada de baja, la baja global y la baja por enlace de **este**
+    espacio (`outbound_workspace_optout`, 0050 §8.1), que en una ficha
+    pública compartida no marca `contact.opted_out`. Sin la tercera, el
+    fallido de alguien que pulsó el enlace salía con «Reintentar» y el
+    reintento terminaba en `blocked`: un botón muerto justo con quien pidió
+    la baja (ronda 3).
+  - `outbound_queue`: un toque por fila con su paso, su contacto, su
+    cuenta (y su estado), el código de su motivo y `retry_block`;
+    `bucket` = `queue` o `history`.
+  - `outbound_usage_daily`: uso de cada cuenta viva en 14 días locales
+    contra los **tres topes del reclamo**: el diario de la cuenta, el
+    semanal de la cuenta y el diario de correos del espacio
+    (`max_emails_per_day`, contador sin cuenta), más el techo del
+    proveedor, el servicio de la cuenta (`provider`: «Gmail permite hasta
+    2.000 al día»; en Unipile, la red), el día del calentamiento y el
+    interruptor del outreach. Cada CTE de contadores filtra su ventana (14
+    días, y las semanas que los contienen: 19 días), así que la lectura no
+    crece con el historial de `outbound_counter`.
+  - `outbound_funnel_by_step`: enviados, abiertos, respondidos y positivos
+    **dentro de lo enviado**, más en cola, fallidos y detenidos (cada
+    toque del paso cae en una sola columna).
+  - `outbound_sequence_health`: enrolamientos por estado, cola, 7 días,
+    tasas y un semáforo `inactive`/`failing`/`attention`/`healthy`.
+  «Positivo» es una respuesta entrante del toque con `intent =
+  'interested'` (la clasifica VEN-14, con su `classified_at`).
+- **Las consultas** están en `@mc/db/queries/actividad` y validan cada
+  fila (`oneOf`, `int`, `text` de `queries/outreach/shared`). El
+  semáforo del uso lo pone `listChannelUsage` con `warmupDailyLimit` de
+  `@mc/core`, la misma curva que usa el reclamo: el límite duro es lo
+  usado más el **menor cupo** entre el día (con la curva), la semana y el
+  espacio (`limitedBy` dice cuál manda); el blando, el 80 % de él. Una
+  cuenta que no está conectada, o un espacio con el envío apagado, sale
+  `off` («Sin envío», en gris), nunca verde.
+- **Páginas**: la cola y el historial paginan por cursor (keyset), como
+  la lista de eventos de Stripe: el historial por `(status_changed_at,
+  touch_id)` hacia atrás, la cola por (fallido primero, la hora a la que
+  toca, `touch_id`). El cursor va en la URL (`?siguiente=` o
+  `?anterior=`), con el instante en UTC y microsegundos; 50 filas por
+  página. Los conteos de las pestañas y los reintentables por tipo salen
+  de **una** pasada por `outbound_touch` (`count(*) FILTER` con
+  `GROUPING SETS`), no de la vista; las secuencias, de `outbound_sequence`
+  y los tipos, de `outbound_step`.
+- **Reintentar** (`retryFailedTouches`) devuelve `failed → scheduled` a
+  la hora a la que lo reclamará el despachador (`retryScheduledFor`:
+  `nextWindowSlot` con la zona de la cadencia o del espacio, la ventana de
+  la política y la misma semilla que el reclamo). Dentro de la ventana es
+  ahora; un viernes a las 20:00, el lunes al abrir. La fila dice esa hora,
+  no una que no se cumple. No toca `attempt_count` (cada intento tiene su enlace
+  de baja), y reabre la cadencia que se completó por ese fallo. Lo que
+  `outbound_touch_retry_block` bloquea ni se ofrece ni vuelve; cada toque
+  va en su SAVEPOINT, así que una regla de la base (baja, correo inválido,
+  paso con otro vivo) salta ese y no el lote. **Cancelar**
+  (`cancelQueuedTouches`) cancela borradores, programados y retenidos, y
+  descarta fallidos, con `blocked_reason = 'canceled_by_user'`; la
+  cadencia avanza o se completa como tras un envío.
+- **Pantallas**: `/ventas/actividad` (pestañas Cola e Historial, filtros
+  por cadencia, tipo de paso y contacto, reintento por tipo, cancelación
+  en masa con confirmación en el sitio, el motivo cortado que se
+  **despliega en la fila** con su código —un `<details>`: ratón, dedo o
+  teclado—, el aviso del resultado que sobrevive a que la lista se vacíe
+  y se lleva el foco, y las páginas); `<UsoPorCanal />` montado en
+  `/ventas/canales` (desde la ronda 3 es el único sitio del uso: la
+  tarjeta del canal dice cómo está la conexión y ya no repite «Hoy N de
+  M»; «Reconectar» baja a la fila del canal por su ancla, `canalHref`); `<MetricasCadencia sequenceId />` (KPIs, embudo por
+  paso y vista de flujo con una explicación por cifra que Escape cierra)
+  montado en `/ventas/cadencias/[id]`. Las dos piezas montadas traen su
+  `Suspense` y su frontera de error: si su consulta falla, cae solo la
+  pieza. Los textos, en `ventas/actividad/messages.ts`.
+- **Lo que no se guarda**: el texto del proveedor de un fallo. El detalle
+  de un fallido es su código traducido (§9.2: nunca el texto de un
+  proveedor, nunca una frase en la base).
+- **Demo**: el seed `0009_demo_actividad.sql` deja un LinkedIn fallido con
+  la cuenta caída (se ofrece reconectar), un correo fallido reintentable y
+  los contadores de las cuentas de Laura **sacados de los toques que el
+  reclamo tomó** (verify/0009.sql lo comprueba en los dos sentidos): el
+  widget de uso dice lo mismo que el historial, día por día. La historia
+  de la demo es que el envío salió unas horas (los correos de hoy de
+  0006) y después se apagó.
+- **Prueba**: `packages/db/test/actividad.test.ts`, una semana de envíos
+  en los ocho estados; el embudo cuadra con `outbound_touch` fila a fila,
+  la regla del bloqueo es la misma en la vista, los botones y el
+  reintento, las páginas no repiten filas (también con 205 envíos) y el
+  semáforo sigue a los tres topes.
+
+**Ronda 4** (sin cambiar lo anterior):
+
+- **Migración `0068_actividad_una_regla.sql`** (0067 no se toca): el
+  número de un paso sale de una sola vista, `outbound_step_position`, y
+  «positivo» de una sola función, `outbound_touch_is_positive(t)`
+  (enviado, **con `replied_at`** y con una respuesta entrante
+  `interested`). `outbound_queue`, `outbound_funnel_by_step` y
+  `outbound_sequence_health` se reemplazan con las mismas columnas y las
+  usan: la cola y el embudo ya no pueden numerar distinto, y una
+  clasificación «me interesa» sin `replied_at` (una importación, un
+  reproceso) no hace crecer el embudo hacia abajo. El orden del paso es
+  el de la línea de tiempo (`outbound_step_order_idx` lo hace único).
+- **La cola no promete lo que no va a pasar.** Solo lo programado dice
+  «Sale …»: lo retenido dice «Previsto para … si lo apruebas» y lleva
+  **«Revisar y aprobar»** a la cadencia de su ficha
+  (`OUTREACH_URLS.companyCadence`); el borrador, «Sale cuando lo
+  programes». `getQueueBlockers` (una consulta) dice qué para la cola
+  como la para el reclamo: el envío del espacio apagado, los canales sin
+  ninguna cuenta conectada y los que la política no deja. Con cualquiera,
+  la fila dice «En espera · envío apagado» (o «sin cuenta de LinkedIn»)
+  con su enlace (el interruptor de la política, la fila del canal); con
+  el envío apagado, además, un aviso arriba de las pestañas y la ayuda
+  del reintento deja de decir «en la próxima pasada».
+- **Textos**: el motivo va en el idioma de la interfaz
+  (`IDIOMA_MENSAJES`), no en el locale del espacio: una fila ya no mezcla
+  español e inglés; las cifras y las fechas siguen el locale. El detalle
+  dice «código: …» solo cuando el motivo **es** un código
+  (`parseHoldReason` en lo retenido). Las explicaciones del flujo
+  concuerdan con la cifra («Un mensaje de este paso falló», «Ningún…»).
+  La fecha corta lleva el año cuando no es el del espacio. Con más de
+  una página, la casilla de todo dice «de esta página» y cuántos hay con
+  los filtros.
+- **Teclado**: cada paso del flujo es una sola parada de tabulación
+  (roving tabindex); las flechas, Inicio y Fin recorren sus cifras.
+- **Salud en la lista**: `/ventas/cadencias` pinta el semáforo de cada
+  cadencia con `columnaSalud(salud)` (una línea de montaje) y
+  `listSequenceHealth(tx, ids)`, el mismo color que el detalle.
+- **Canales**: `listChannelAccounts` ya no calcula `usedToday` ni
+  `usedThisWeek` (nadie los pintaba): el uso sale solo de
+  `outbound_usage_daily`.
+
+**Ronda 5** (sin cambiar lo anterior):
+
+- **Migración `0069_actividad_cadencia_en_pausa.sql`** (0067 y 0068 no
+  se tocan): `outbound_queue` añade `sequence_status` al final. Con la
+  cadencia en pausa (o en borrador), o con la inscripción de esa persona
+  en `paused` o `cooldown` (tras un «ahora no»), `decideBeforeSend` aplaza
+  el toque cada día: la fila ya no dice «Sale mañana 8:12» con una fecha
+  que avanza sola, sino «En espera · cadencia en pausa» (con «Ir a la
+  cadencia»), «en pausa para esta persona» o «dijo «ahora no»» (con su
+  cadencia en la ficha). El orden es el del despachador: el envío
+  apagado, la cadencia, el canal.
+- **Permisos**: reintentar y cancelar en masa piden `owner`, `admin` o
+  `member` (`ventas/actividad/_lib/permiso.ts`, `puedeOperarLaCola`, el
+  patrón de la política y del perfil). La RLS de `outbound_touch` es solo
+  por workspace: sin esta guarda un `viewer` o un `client` cancelaba la
+  cola entera. La página no ofrece casillas ni «Reintentar» a quien no
+  puede; las acciones lo vuelven a mirar antes de abrir la transacción.
+- **El envío apagado se dice una vez**: el aviso de arriba lleva al
+  interruptor; la fila dice solo «En espera · envío apagado» junto a la
+  pastilla. La frase entera con su enlace queda para los motivos de esa
+  fila (su canal, su cadencia), que sí varían. Así lo fallido (en rojo)
+  no se pierde entre líneas naranjas iguales.
+- **El embudo es el flujo**: sin el gráfico de barras agrupadas (seis
+  pasos por cuatro series daban barras de 2 px y repetían el flujo). La
+  vista de flujo, con una explicación por cifra, es la pieza principal,
+  como el flow viewer de Chief. «Detenidos» cuenta también lo que se
+  canceló a mano desde la actividad, y su explicación lo dice.
+- **Uso por canal**: la franja de 14 días lleva el primer día y «Hoy»
+  debajo, y un día con algo de uso no baja de 2 px (no se confunde con un
+  cero).
+- **El cursor tiene una sola regla**: la web acepta un cursor de la URL
+  con `isQueueCursorToken` de `@mc/db` (la misma función que lo lee), no
+  con una copia de su formato; `_lib/cursor.test.ts` pasa el token que
+  genera `listOutboundQueue` por `filtrosDe`.
+- **Selección por página**: «Solo los 48 mensajes de esta página; con
+  estos filtros hay 120 que se pueden cancelar» (en plural o singular), y
+  el total es lo cancelable (`getQueueFacets().cancelable`), no la cola
+  entera con lo que se está enviando.
+- **Demo**: antes de sumar los contadores, el seed 0009 anota en cada
+  toque reclamado la cuenta con la que salió (los correos sueltos de 0006
+  no la traían): el widget («Correo 4 de 20 · laura@…») y el historial
+  («Desde laura@…») cuentan lo mismo. verify/0009.sql (e) lo comprueba.
+- **Pruebas**: el reintento por tipo de paso en su caso bueno (vuelve el
+  fallido que puede, con los filtros, y los bloqueados siguen fallidos),
+  la cadencia en pausa en la vista y en la fila, y las acciones con un
+  `viewer`.
+
 ## 7. Cómo entra en el plan por fases
 
 Ventas va después de los cimientos y en paralelo con Cotizar, porque

@@ -44,6 +44,7 @@ export const MESSAGES = {
     cadencias: "Cadencias",
     aprobaciones: "Aprobaciones",
     bandeja: "Bandeja",
+    actividad: "Actividad",
     perfil: "Perfil comercial",
   },
 

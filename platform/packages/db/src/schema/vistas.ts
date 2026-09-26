@@ -9,7 +9,7 @@
  * promedios salen como numeric sin escala, y los count(*) como bigint.
  */
 import { bigint, boolean, char, date, integer, numeric, pgView, text, uuid } from 'drizzle-orm/pg-core';
-import { timestamptz } from './_tipos.ts';
+import { citext, timestamptz } from './_tipos.ts';
 
 const count = (name: string) => bigint(name, { mode: 'number' });
 
@@ -161,4 +161,138 @@ export const outboundTouchRecent = pgView('outbound_touch_recent', {
   companyId: uuid('company_id'),
   touches90d: count('touches_90d'),
   lastTouchAt: timestamptz('last_touch_at'),
+}).existing();
+
+// ---------------------------------------------------------------------
+// Actividad y métricas del outreach (0067, VEN-16). Se leen con
+// @mc/db/queries/actividad, que tipa y valida cada fila (oneOf, int,
+// text de queries/outreach/shared).
+// ---------------------------------------------------------------------
+
+/** El número de cada paso en su secuencia (0068): una sola regla para la cola y el embudo. */
+export const outboundStepPosition = pgView('outbound_step_position', {
+  stepId: uuid('step_id'),
+  workspaceId: uuid('workspace_id'),
+  sequenceId: uuid('sequence_id'),
+  position: integer('position'),
+}).existing();
+
+/** La cola y el historial: un toque por fila con su paso, su contacto y el código de su motivo. */
+export const outboundQueue = pgView('outbound_queue', {
+  touchId: uuid('touch_id'),
+  workspaceId: uuid('workspace_id'),
+  status: text('status'),
+  /** 'queue' (draft, scheduled, processing, held, failed) | 'history' (sent, canceled, skipped) */
+  bucket: text('bucket', { enum: ['queue', 'history'] }),
+  channel: text('channel'),
+  subject: text('subject'),
+  sequenceId: uuid('sequence_id'),
+  sequenceName: text('sequence_name'),
+  stepId: uuid('step_id'),
+  stepType: text('step_type'),
+  stepPosition: integer('step_position'),
+  stepDayOffset: integer('step_day_offset'),
+  enrollmentId: uuid('enrollment_id'),
+  enrollmentStatus: text('enrollment_status'),
+  contactId: uuid('contact_id'),
+  contactName: text('contact_name'),
+  contactEmail: citext('contact_email'),
+  companyId: uuid('company_id'),
+  companyName: text('company_name'),
+  channelAccountId: uuid('channel_account_id'),
+  accountName: text('account_name'),
+  accountStatus: text('account_status'),
+  attemptCount: integer('attempt_count'),
+  scheduledFor: timestamptz('scheduled_for'),
+  nextRetryAt: timestamptz('next_retry_at'),
+  dueAt: timestamptz('due_at'),
+  retrying: boolean('retrying'),
+  statusChangedAt: timestamptz('status_changed_at'),
+  sentAt: timestamptz('sent_at'),
+  openedAt: timestamptz('opened_at'),
+  repliedAt: timestamptz('replied_at'),
+  createdAt: timestamptz('created_at'),
+  reason: text('reason'),
+  /** Solo en lo fallido: por qué no se puede reintentar (outbound_touch_retry_block), NULL si se puede. */
+  retryBlock: text('retry_block'),
+  /** 0069: el estado de la secuencia (draft, active, paused, archived); NULL si el toque no tiene. */
+  sequenceStatus: text('sequence_status'),
+}).existing();
+
+/** El uso diario de cada cuenta viva en 14 días, contra los tres topes del reclamo (día y semana de la cuenta, día del espacio) y el techo del proveedor. */
+export const outboundUsageDaily = pgView('outbound_usage_daily', {
+  channelAccountId: uuid('channel_account_id'),
+  workspaceId: uuid('workspace_id'),
+  channel: text('channel'),
+  accountStatus: text('account_status'),
+  /** El servicio de la cuenta (gmail_oauth, unipile): quién pone el techo del proveedor. */
+  provider: text('provider'),
+  accountName: text('account_name'),
+  day: date('day', { mode: 'string' }),
+  isToday: boolean('is_today'),
+  used: integer('used'),
+  dailyLimit: integer('daily_limit'),
+  weekUsed: integer('week_used'),
+  weeklyLimit: integer('weekly_limit'),
+  workspaceUsed: integer('workspace_used'),
+  workspaceDailyLimit: integer('workspace_daily_limit'),
+  providerLimit: integer('provider_limit'),
+  warmupDay: integer('warmup_day'),
+  warmupDays: integer('warmup_days'),
+  outreachEnabled: boolean('outreach_enabled'),
+}).existing();
+
+/** El embudo de cada paso: enviados, abiertos, respondidos y positivos, dentro de lo enviado. */
+export const outboundFunnelByStep = pgView('outbound_funnel_by_step', {
+  workspaceId: uuid('workspace_id'),
+  sequenceId: uuid('sequence_id'),
+  sequenceName: text('sequence_name'),
+  stepId: uuid('step_id'),
+  stepPosition: integer('step_position'),
+  stepType: text('step_type'),
+  channel: text('channel'),
+  dayOffset: integer('day_offset'),
+  orderInDay: integer('order_in_day'),
+  opensTracked: boolean('opens_tracked'),
+  touches: integer('touches'),
+  sent: integer('sent'),
+  opened: integer('opened'),
+  replied: integer('replied'),
+  positive: integer('positive'),
+  pending: integer('pending'),
+  failed: integer('failed'),
+  stopped: integer('stopped'),
+  openRate: numeric('open_rate'),
+  replyRate: numeric('reply_rate'),
+  positiveRate: numeric('positive_rate'),
+}).existing();
+
+/** La salud de cada secuencia, con su semáforo. */
+export const outboundSequenceHealth = pgView('outbound_sequence_health', {
+  sequenceId: uuid('sequence_id'),
+  workspaceId: uuid('workspace_id'),
+  name: text('name'),
+  status: text('status'),
+  steps: integer('steps'),
+  enrolled: integer('enrolled'),
+  enrolledActive: integer('enrolled_active'),
+  enrolledPaused: integer('enrolled_paused'),
+  enrolledReplied: integer('enrolled_replied'),
+  enrolledCompleted: integer('enrolled_completed'),
+  enrolledStopped: integer('enrolled_stopped'),
+  pending: integer('pending'),
+  held: integer('held'),
+  failed: integer('failed'),
+  sent: integer('sent'),
+  replied: integer('replied'),
+  positive: integer('positive'),
+  sent7d: integer('sent_7d'),
+  failed7d: integer('failed_7d'),
+  lastSentAt: timestamptz('last_sent_at'),
+  nextDueAt: timestamptz('next_due_at'),
+  replyRate: numeric('reply_rate'),
+  positiveRate: numeric('positive_rate'),
+  failureRate7d: numeric('failure_rate_7d'),
+  /** 'inactive' | 'failing' | 'attention' | 'healthy' */
+  health: text('health', { enum: ['inactive', 'failing', 'attention', 'healthy'] }),
 }).existing();

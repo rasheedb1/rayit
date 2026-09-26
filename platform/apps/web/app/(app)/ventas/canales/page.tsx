@@ -9,12 +9,13 @@ import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { Aviso } from "../../_lib/aviso";
 import { ModuleTabs } from "../_componentes/pestanas";
+import { UsoPorCanal } from "../actividad/_componentes/uso-por-canal";
 import { channelBanner } from "./_lib/banner";
 import { channelSetup, isChannel, showAdminDetails, type Channel } from "./_lib/config";
 import { CANALES } from "./_lib/conexion";
 import { AccionFila, connectTarget } from "./accion-fila";
 import { channelRows, pillFor, type ChannelRowView } from "./_lib/filas";
-import { HEADING_FOCUS } from "./_lib/foco";
+import { canalHeadingId, HEADING_FOCUS } from "./_lib/foco";
 import { puedeGestionarCanales } from "./_lib/server";
 import { AvisoConexion } from "./aviso-conexion";
 import { ConectarBoton } from "./conectar-boton";
@@ -31,8 +32,8 @@ export const dynamic = "force-dynamic";
 
 const accountName = (a: ChannelAccountRow) => a.displayName ?? a.providerAccountId ?? "";
 
-/** El id del título de la fila de un canal: FilaCanal le lleva el foco después de desconectar. */
-const headingId = (channel: Channel) => `canal-${channel}-titulo`;
+/** El id del título de la fila de un canal: FilaCanal le lleva el foco después de desconectar, y la actividad enlaza a él (canalHref). */
+const headingId = (channel: Channel) => canalHeadingId(channel);
 
 /**
  * Qué canales ya se registraron como no disponibles en ESTE proceso. La
@@ -211,7 +212,8 @@ function ChannelRow({
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex min-h-7 flex-wrap items-center justify-between gap-x-3 gap-y-1">
             {/* Recibe el foco al desconectar (FilaCanal): con teclado, un anillo dentro del título; tras un clic de ratón, ninguno. */}
-            <h3 id={headingId(row.channel)} tabIndex={-1} className={`text-sm font-semibold ${HEADING_FOCUS}`}>
+            {/* scroll-mt: al llegar por el ancla (canalHref), el título no queda debajo de la cabecera fija del móvil. */}
+            <h3 id={headingId(row.channel)} tabIndex={-1} className={`scroll-mt-16 text-sm font-semibold ${HEADING_FOCUS}`}>
               {channelName}
             </h3>
             {row.addAnother && canManage && (
@@ -280,6 +282,8 @@ export default async function CanalesPage({ searchParams }: { searchParams: Prom
             ))}
           </ul>
         </section>
+        {/* VEN-16: el uso de hoy por cuenta, con su límite blando, su límite duro y su semáforo. */}
+        <UsoPorCanal />
       </div>
     </>
   );

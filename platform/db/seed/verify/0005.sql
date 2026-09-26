@@ -18,7 +18,9 @@ SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', fa
 -- (a) Conteos: dos cuentas (una conectada, una por reconectar), una
 --     secuencia desde la plantilla, tres enrolamientos (uno por
 --     desenlace) y nueve toques en los estados que enseña la pantalla
---     (los de este seed: el 0006 añade el correo que rebotó).
+--     (los de este seed: el 0006 añade el correo que rebotó, el 0008 lo
+--     de la bandeja y el 0009 dos enrolamientos con su fallo, que se
+--     cuentan en verify/0008.sql y verify/0009.sql).
 SELECT 'a_conteos' AS check_id,
        (SELECT count(*) FROM outreach_channel_account WHERE status = 'connected' AND id::text LIKE '00000005-%')       AS conectadas,
        (SELECT count(*) FROM outreach_channel_account WHERE status = 'needs_reconnect' AND id::text LIKE '00000005-%') AS por_reconectar,
