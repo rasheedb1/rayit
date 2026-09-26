@@ -89,6 +89,7 @@ test('el pie lleva la frase de baja con el enlace y la dirección, en texto y HT
   assert.ok(r.ok);
   assert.match(r.footer.text, /date de baja aquí: https:\/\/app\.test\/baja\/v1\.a\.b/);
   assert.match(r.footer.text, /Calle 93 # 11-26, Bogotá <Colombia>$/);
+  assert.ok(r.footer.text.startsWith('-- \n'), 'abre con el separador de firma de RFC 3676 («-- » con espacio)');
   assert.match(r.footer.html, /<a href="https:\/\/app\.test\/baja\/v1\.a\.b">date de baja aquí<\/a>/);
   assert.match(r.footer.html, /Bogotá &lt;Colombia&gt;/);
 });
@@ -449,10 +450,19 @@ test('rebotes duros sobre el 5 % solo con diez envíos o más', () => {
   assert.equal(a?.values.rate, 0.1);
 });
 
-test('3 rebotes blandos sobre 20 no alertan: solo cuentan los duros', () => {
-  // Quien lee la salud pasa solo los duros (outbound.alerts: kind = 'hard');
-  // tres blandos son 0 duros.
-  assert.deepEqual(evaluateOutreachAlerts(entrada({ emailsSent: 20, hardBounces: 0 })), []);
+test('3 rebotes blandos sobre 20 no alertan: cuentan los duros y los bloqueos', () => {
+  // Quien lee la salud pasa los duros y los bloqueos (readAlertSignalCounts);
+  // tres blandos son 0 de los dos.
+  assert.deepEqual(evaluateOutreachAlerts(entrada({ emailsSent: 20, hardBounces: 0, blockedBounces: 0 })), []);
+});
+
+test('una ola de bloqueos (5.7.x, reputación, límite de envío) alerta aunque no haya ni un duro, y dice de qué tipo fue', () => {
+  const [a] = evaluateOutreachAlerts(entrada({ emailsSent: 20, hardBounces: 0, blockedBounces: 3 }));
+  assert.equal(a?.kind, 'bounce_rate');
+  assert.deepEqual(a?.values, { bounces: 3, hard: 0, blocked: 3, attempts: 20, rate: 0.15 });
+  const [mixta] = evaluateOutreachAlerts(entrada({ emailsSent: 20, hardBounces: 1, blockedBounces: 1 }));
+  assert.deepEqual(mixta?.values, { bounces: 2, hard: 1, blocked: 1, attempts: 20, rate: 0.1 });
+  assert.equal(bounceRateStatus({ emailsSent: 20, hardBounces: 0, blockedBounces: 2 }), 'over');
 });
 
 test('la tasa nunca pasa del 100 %', () => {

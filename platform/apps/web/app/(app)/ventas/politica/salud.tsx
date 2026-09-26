@@ -122,14 +122,16 @@ export function Salud({
   // Con pocos envíos la tasa no dice nada (1 de 4 es un 25 %): la cifra
   // grande es la cuenta, «1 de 4», y la tasa sale solo con volumen (r5),
   // como en Instantly y Lemlist. La nota ya no repite la cuenta.
+  // La tasa cuenta los duros y los bloqueos (readAlertSignalCounts): la nota dice cuántos de cada uno.
   const valorRebotes =
-    counts.hardBounceRate === null
+    counts.bounceRate === null
       ? t.sinDato
       : tasa === "too_few"
-        ? t.rebotes.cuenta(f.int(counts.hardBounces), f.int(counts.emailsSent))
-        : f.pct(counts.hardBounceRate, 1);
+        ? t.rebotes.cuenta(f.int(counts.bounces), f.int(counts.emailsSent))
+        : f.pct(counts.bounceRate, 1);
   const notaRebotes = [
     tasa === "too_few" ? null : t.rebotes.note(f.int(counts.hardBounces), f.int(counts.emailsSent), counts.hardBounces),
+    counts.blockedBounces > 0 ? t.rebotes.bloqueados(f.int(counts.blockedBounces), counts.blockedBounces) : null,
     detalleTasa,
   ]
     .filter(Boolean)
@@ -181,7 +183,7 @@ export function Salud({
         <Kpi
           label={t.rebotes.label}
           value={valorRebotes}
-          note={counts.hardBounceRate === null ? t.rebotes.sinEnvios : notaRebotes}
+          note={counts.bounceRate === null ? t.rebotes.sinEnvios : notaRebotes}
         />
         <Kpi
           label={t.cola.label}

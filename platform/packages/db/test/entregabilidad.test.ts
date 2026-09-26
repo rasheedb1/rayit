@@ -840,9 +840,11 @@ describe('las cifras de las alertas (readAlertSignalCounts)', () => {
     `);
   }, SETUP_TIMEOUT);
 
-  test('solo cuentan los rebotes duros de lo que salió en la ventana, una vez por correo', async () => {
+  test('cuentan los rebotes duros y los bloqueos de lo que salió en la ventana, una vez por correo; los blandos no', async () => {
     const c = await t.db.asWorker((tx) => readAlertSignalCounts(tx, WS_A, LUNES));
-    assert.deepEqual(c, { emailsSent: 20, hardBounces: 1, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: 0.05 });
+    assert.deepEqual(c, {
+      emailsSent: 20, hardBounces: 1, blockedBounces: 1, bounces: 2, dueToSend: 0, unreadMailboxes: 0, bounceRate: 0.1,
+    });
   });
 
   test('la pantalla lee lo mismo con el workspace de su transacción', async () => {
@@ -865,7 +867,7 @@ describe('las cifras de las alertas (readAlertSignalCounts)', () => {
 
   test('sin envíos no hay tasa', async () => {
     const c = await t.db.asWorker((tx) => readAlertSignalCounts(tx, WS_A, new Date('2026-09-01T00:00:00Z')));
-    assert.equal(c.hardBounceRate, null);
+    assert.equal(c.bounceRate, null);
   });
 });
 

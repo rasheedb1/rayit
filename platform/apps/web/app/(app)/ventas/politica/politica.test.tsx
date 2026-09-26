@@ -317,7 +317,7 @@ describe("«Salud de hoy»: la cuenta caída", () => {
     byChannel: {}, breakersOpen: [], accountsDown: 1, lastSentAt: null,
     llm: { spentToday: 0, dailyCap: 5, currency: "USD" as const },
   };
-  const counts = { emailsSent: 3, hardBounces: 0, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: 0 };
+  const counts = { emailsSent: 3, hardBounces: 0, blockedBounces: 0, bounces: 0, dueToSend: 0, unreadMailboxes: 0, bounceRate: 0 };
   const caida = {
     id: "c1", channel: "linkedin" as const, name: "Laura · Cocina fácil", status: "needs_reconnect" as const,
     lastError: "unipile_status:CREDENTIALS", lastErrorAt: "2026-09-22T14:00:00Z",
@@ -408,7 +408,7 @@ describe("ronda 4", () => {
     byChannel: {}, breakersOpen: [], accountsDown: 0, lastSentAt: null,
     llm: { spentToday: 0, dailyCap: 5, currency: "USD" as const },
   };
-  const counts = { emailsSent: 40, hardBounces: 1, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: 0.025 };
+  const counts = { emailsSent: 40, hardBounces: 1, blockedBounces: 0, bounces: 1, dueToSend: 0, unreadMailboxes: 0, bounceRate: 0.025 };
 
   it("después de encender se ve «Apagar el envío», no la confirmación de apagar ya abierta; y al revés", async () => {
     enableOutreach.mockResolvedValue(undefined);
@@ -483,7 +483,7 @@ describe("ronda 4", () => {
   });
 
   it("sin correos en la ventana, la nota de rebotes dice «en las últimas 24 horas», no «todavía»", () => {
-    const sinEnvios = { emailsSent: 0, hardBounces: 0, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: null };
+    const sinEnvios = { emailsSent: 0, hardBounces: 0, blockedBounces: 0, bounces: 0, dueToSend: 0, unreadMailboxes: 0, bounceRate: null };
     render(<Salud avisos={[]} lectura={LEIDA} health={health} counts={sinEnvios} rebotes={[]} caidas={[]} f={f} ahora={AHORA} />);
     expect(screen.getByText("Sin envíos en las últimas 24 horas")).toBeInTheDocument();
     expect(screen.queryByText(/todavía/)).toBeNull();
@@ -560,7 +560,7 @@ describe("ronda 4", () => {
   it("con pocos envíos la cifra grande es «1 de 4», no un 25 % que alarma; la tasa sale con volumen (r5)", () => {
     const { container } = render(
       <Salud avisos={[]} lectura={LEIDA} health={health} f={f} ahora={AHORA} rebotes={[]} caidas={[]}
-        counts={{ emailsSent: 4, hardBounces: 1, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: 0.25 }} />,
+        counts={{ emailsSent: 4, hardBounces: 1, blockedBounces: 0, bounces: 1, dueToSend: 0, unreadMailboxes: 0, bounceRate: 0.25 }} />,
     );
     expect(screen.getByText("1 de 4")).toBeInTheDocument();
     expect(screen.getByText(t.salud.rebotes.umbral.pocos("10"))).toBeInTheDocument();
@@ -568,7 +568,7 @@ describe("ronda 4", () => {
     cleanup();
     render(
       <Salud avisos={[]} lectura={LEIDA} health={health} f={f} ahora={AHORA} rebotes={[]} caidas={[]}
-        counts={{ emailsSent: 20, hardBounces: 2, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: 0.1 }} />,
+        counts={{ emailsSent: 20, hardBounces: 2, blockedBounces: 0, bounces: 2, dueToSend: 0, unreadMailboxes: 0, bounceRate: 0.1 }} />,
     );
     expect(screen.getByText(f.pct(0.1, 1))).toBeInTheDocument();
   });
@@ -577,7 +577,7 @@ describe("ronda 4", () => {
     const nota = (emailsSent: number, hardBounces: number) => {
       const { unmount } = render(
         <Salud avisos={[]} lectura={LEIDA} health={health} f={f} ahora={AHORA} rebotes={[]} caidas={[]}
-          counts={{ emailsSent, hardBounces, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: hardBounces / emailsSent }} />,
+          counts={{ emailsSent, hardBounces, blockedBounces: 0, bounces: hardBounces, dueToSend: 0, unreadMailboxes: 0, bounceRate: hardBounces / emailsSent }} />,
       );
       const texto = screen.getByText(new RegExp(`^${hardBounces} de ${emailsSent} no exist`)).textContent;
       unmount();
@@ -585,6 +585,15 @@ describe("ronda 4", () => {
     };
     expect(nota(40, 1)).toBe(`1 de 40 no existe · ${t.salud.rebotes.umbral.bajo(f.pct(0.05, 0))}`);
     expect(nota(20, 2)).toBe(`2 de 20 no existen · ${t.salud.rebotes.umbral.sobre(f.pct(0.05, 0))}`);
+  });
+
+  it("los bloqueos suman a la tasa y la nota dice cuántos fueron", () => {
+    render(
+      <Salud avisos={[]} lectura={LEIDA} health={health} f={f} ahora={AHORA} rebotes={[]} caidas={[]}
+        counts={{ emailsSent: 20, hardBounces: 0, blockedBounces: 3, bounces: 3, dueToSend: 0, unreadMailboxes: 0, bounceRate: 0.15 }} />,
+    );
+    expect(screen.getByText(f.pct(0.15, 1))).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`^0 de 20 no existen · 3 bloqueados por el servidor · `))).toBeInTheDocument();
   });
 
   it("la rampa de calentamiento se pinta con el LineChart del kit, un punto por día", () => {

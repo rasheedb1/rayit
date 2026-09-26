@@ -202,9 +202,16 @@ export const MESSAGES = {
       /** «1 de 40 no existe», «2 de 40 no existen»; `n` es `duros` sin formatear. */
       note: (duros: string, enviados: string, n: number) =>
         plural(n, `${duros} de ${enviados} no existe`, `${duros} de ${enviados} no existen`),
+      /**
+       * Los bloqueos, que también suman a la tasa: el servidor de la marca
+       * rechazó por reputación, spam o un límite de envío. `n` es
+       * `bloqueados` sin formatear.
+       */
+      bloqueados: (bloqueados: string, n: number) =>
+        plural(n, `${bloqueados} bloqueado por el servidor`, `${bloqueados} bloqueados por el servidor`),
       sinEnvios: "Sin envíos en las últimas 24 horas",
-      /** La cifra grande con pocos envíos: «1 de 4». Los dos llegan formateados. */
-      cuenta: (duros: string, enviados: string) => `${duros} de ${enviados}`,
+      /** La cifra grande con pocos envíos: «1 de 4» (duros y bloqueos). Los dos llegan formateados. */
+      cuenta: (rebotes: string, enviados: string) => `${rebotes} de ${enviados}`,
       /**
        * Detrás de la nota, dónde está la tasa respecto del aviso
        * (bounceRateStatus de @mc/core): que un 25 % con cuatro envíos no

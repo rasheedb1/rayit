@@ -92,13 +92,13 @@ export const ALERT_TEXTS_ES: AlertTexts = {
       title: 'Rebotan demasiados correos: {rate}',
       body: {
         by: 'bounces',
-        one: '{bounces} de {attempts} correos enviados en las últimas 24 horas rebotó porque la dirección no existe. Revisa las direcciones antes de seguir: Gmail castiga a quien rebota mucho.',
+        one: '{bounces} de {attempts} correos enviados en las últimas 24 horas rebotó ({hard} porque la dirección no existe, {blocked} bloqueado por el servidor que recibe). Revisa las direcciones y el ritmo antes de seguir: Gmail castiga a quien rebota mucho.',
         other:
-          '{bounces} de {attempts} correos enviados en las últimas 24 horas rebotaron porque la dirección no existe. Revisa las direcciones antes de seguir: Gmail castiga a quien rebota mucho.',
+          '{bounces} de {attempts} correos enviados en las últimas 24 horas rebotaron ({hard} porque la dirección no existe, {blocked} bloqueados por el servidor que recibe). Revisa las direcciones y el ritmo antes de seguir: Gmail castiga a quien rebota mucho.',
       },
     },
     no_sends: {
-      title: 'El outreach no envió nada ayer',
+      title: 'No salió ningún mensaje en las últimas 24 horas',
       body: {
         by: 'dueToSend',
         one: 'Había {dueToSend} mensaje por salir y no salió en 24 horas. Revisa los canales y la cola.',
@@ -147,20 +147,20 @@ export const ALERT_TEXTS_ES: AlertTexts = {
   email: {
     subject: {
       by: 'n',
-      one: 'On Cue · Una alerta del outreach de {workspace}',
-      other: 'On Cue · {n} alertas del outreach de {workspace}',
+      one: 'On Cue · Un aviso del envío automático de {workspace}',
+      other: 'On Cue · {n} avisos del envío automático de {workspace}',
     },
-    intro: 'Esto es lo que vimos en el outreach de {workspace}:',
+    intro: 'Esto es lo que vimos en el envío automático de {workspace}:',
     link: 'Revísalo: {url}',
     whereToSee: 'Lo ves en On Cue, en Ventas → Política de envío.',
     outro: 'Te escribimos una vez al día porque eres dueño de este espacio en On Cue. Si más tarde cae una cuenta o se disparan los rebotes, te escribimos en el momento; lo demás va en el resumen de mañana.',
     urgentSubject: {
       by: 'n',
-      one: 'On Cue · Alerta urgente del outreach de {workspace}',
-      other: 'On Cue · {n} alertas urgentes del outreach de {workspace}',
+      one: 'On Cue · Un aviso urgente del envío automático de {workspace}',
+      other: 'On Cue · {n} avisos urgentes del envío automático de {workspace}',
     },
-    urgentIntro: 'Esto acaba de pasar en el outreach de {workspace} y no espera al resumen de mañana:',
-    urgentOutro: 'Te escribimos porque eres dueño de este espacio en On Cue. Solo las alertas urgentes salen así; lo demás va en el resumen diario.',
+    urgentIntro: 'Esto acaba de pasar en el envío automático de {workspace} y no espera al resumen de mañana:',
+    urgentOutro: 'Te escribimos porque eres dueño de este espacio en On Cue. Solo los avisos urgentes salen así; lo demás va en el resumen diario.',
   },
 };
 
@@ -168,10 +168,10 @@ export const ALERT_TEXTS_EN: AlertTexts = {
   alerts: {
     bounce_rate: {
       title: 'Too many emails are bouncing: {rate}',
-      body: "{bounces} of {attempts} emails sent in the last 24 hours bounced because the address doesn't exist. Check the addresses before sending more: Gmail penalizes senders who bounce a lot.",
+      body: "{bounces} of {attempts} emails sent in the last 24 hours bounced ({hard} because the address doesn't exist, {blocked} blocked by the receiving server). Check the addresses and the pace before sending more: Gmail penalizes senders who bounce a lot.",
     },
     no_sends: {
-      title: 'Outreach sent nothing yesterday',
+      title: 'No messages went out in the last 24 hours',
       body: {
         by: 'dueToSend',
         one: "{dueToSend} message was due and it didn't go out in 24 hours. Check your channels and the queue.",
@@ -216,19 +216,19 @@ export const ALERT_TEXTS_EN: AlertTexts = {
   email: {
     subject: {
       by: 'n',
-      one: 'On Cue · One outreach alert for {workspace}',
-      other: 'On Cue · {n} outreach alerts for {workspace}',
+      one: 'On Cue · One automatic sending alert for {workspace}',
+      other: 'On Cue · {n} automatic sending alerts for {workspace}',
     },
-    intro: "Here's what we saw in {workspace}'s outreach:",
+    intro: "Here's what we saw in {workspace}'s automatic sending:",
     link: 'Review it: {url}',
     whereToSee: 'You can see it in On Cue, under Sales → Sending policy.',
     outro: "We write once a day because you own this workspace on On Cue. If an account goes down or bounces spike later on, we write right away; everything else goes in tomorrow's summary.",
     urgentSubject: {
       by: 'n',
-      one: 'On Cue · Urgent outreach alert for {workspace}',
-      other: 'On Cue · {n} urgent outreach alerts for {workspace}',
+      one: 'On Cue · Urgent automatic sending alert for {workspace}',
+      other: 'On Cue · {n} urgent automatic sending alerts for {workspace}',
     },
-    urgentIntro: "This just happened in {workspace}'s outreach and can't wait for tomorrow's summary:",
+    urgentIntro: "This just happened in {workspace}'s automatic sending and can't wait for tomorrow's summary:",
     urgentOutro: 'We write because you own this workspace on On Cue. Only urgent alerts go out like this; everything else goes in the daily summary.',
   },
 };

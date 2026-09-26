@@ -437,9 +437,13 @@ export async function saveOutboundPolicy(tx: WorkspaceTx, input: OutboundPolicyI
 // alertas (evaluateOutreachAlerts, @mc/core):
 //   emailsSent   correos con sent_at en la ventana;
 //   hardBounces  de ESOS correos, los que tienen un rebote duro en
-//                outbound_bounce: la tasa se mide sobre lo que salió en
-//                la ventana, así que nunca pasa del 100 %, y los rebotes
-//                blandos y los bloqueos no cuentan;
+//                outbound_bounce;
+//   blockedBounces  de ESOS correos, los que tienen un bloqueo (5.7.x,
+//                reputación, límite de envío) y ningún duro;
+//   bounces      los dos juntos: la tasa (bounceRate) se mide sobre lo
+//                que salió en la ventana, así que nunca pasa del 100 %.
+//                Los blandos no cuentan; los bloqueos sí, porque son la
+//                señal de que la cuenta se está quemando;
 //   dueToSend    toques de cualquier canal que tocaba enviar en la
 //                ventana (scheduled_for, o el reintento), vencidos hace
 //                más de NO_SENDS_GRACE_H, y que siguen en 'scheduled' o
@@ -456,9 +460,13 @@ export interface SqlQueryable {
 export interface AlertSignalCounts {
   emailsSent: number;
   hardBounces: number;
+  /** Correos de la ventana con un bloqueo y ningún rebote duro. */
+  blockedBounces: number;
+  /** hardBounces + blockedBounces, contados en SQL: lo que enseña la pantalla. */
+  bounces: number;
   dueToSend: number;
-  /** hardBounces / emailsSent, calculada en SQL; null sin envíos. */
-  hardBounceRate: number | null;
+  /** bounces / emailsSent, calculada en SQL; null sin envíos. */
+  bounceRate: number | null;
   /**
    * Gmail conectados cuyo buzón de rebotes no se leyó nunca o lleva más de
    * BOUNCES_STALE_H horas sin leerse, contado en `now` (r5): la alerta
@@ -492,6 +500,10 @@ export async function readAlertSignalCounts(
           JOIN outbound_bounce b ON b.touch_id = t.id AND b.workspace_id = $1 AND b.kind = 'hard', v
          WHERE t.workspace_id = $1 AND t.channel = 'email' AND t.status = 'sent'
            AND t.sent_at >= v.desde AND t.sent_at < v.hasta)::int AS duros,
+       (SELECT count(DISTINCT t.id) FROM outbound_touch t
+          JOIN outbound_bounce b ON b.touch_id = t.id AND b.workspace_id = $1 AND b.kind IN ('hard', 'blocked'), v
+         WHERE t.workspace_id = $1 AND t.channel = 'email' AND t.status = 'sent'
+           AND t.sent_at >= v.desde AND t.sent_at < v.hasta)::int AS rebotes,
        (SELECT count(*) FROM outbound_touch t, v
          WHERE t.workspace_id = $1 AND t.status IN ('scheduled', 'failed')
            AND coalesce(t.next_retry_at, t.scheduled_for) >= v.desde
@@ -500,16 +512,21 @@ export async function readAlertSignalCounts(
          WHERE a.workspace_id = $1 AND a.channel = 'email' AND a.status = 'connected'
            AND (a.bounces_read_at IS NULL
                 OR a.bounces_read_at < v.hasta - make_interval(hours => $5::int)))::int AS sin_leer)
-     SELECT enviados, duros, debidos, sin_leer, CASE WHEN enviados > 0 THEN duros::float8 / enviados END AS tasa FROM c`,
+     SELECT enviados, duros, rebotes, rebotes - duros AS bloqueados, debidos, sin_leer,
+            CASE WHEN enviados > 0 THEN rebotes::float8 / enviados END AS tasa FROM c`,
     [workspaceId, now.toISOString(), windowHours, NO_SENDS_GRACE_H, BOUNCES_STALE_H],
   );
-  const r = (rows[0] ?? {}) as { enviados?: number; duros?: number; debidos?: number; sin_leer?: number; tasa?: number | null };
+  const r = (rows[0] ?? {}) as {
+    enviados?: number; duros?: number; rebotes?: number; bloqueados?: number; debidos?: number; sin_leer?: number; tasa?: number | null;
+  };
   return {
     emailsSent: Number(r.enviados ?? 0),
     hardBounces: Number(r.duros ?? 0),
+    blockedBounces: Number(r.bloqueados ?? 0),
+    bounces: Number(r.rebotes ?? 0),
     dueToSend: Number(r.debidos ?? 0),
     unreadMailboxes: Number(r.sin_leer ?? 0),
-    hardBounceRate: r.tasa === null || r.tasa === undefined ? null : Number(r.tasa),
+    bounceRate: r.tasa === null || r.tasa === undefined ? null : Number(r.tasa),
   };
 }
 
