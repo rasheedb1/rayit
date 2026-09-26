@@ -2336,8 +2336,11 @@ revisores técnico y de producto y el mismo umbral.
    (VEN-14) o un administrador. **Estado (25 de septiembre): implementado
    así como supuesto declarado**, igual que las decisiones 1 a 5 (el
    workflow avanza con la propuesta y Rasheed puede revertirla). El
-   «terminado cuando» de VEN-15 en `backlog.ts` conserva la frase
-   original y dice el cambio del criterio al lado, como COT-1. **Si
+   «terminado cuando» de VEN-15 en `backlog.ts` es el original, sin
+   tocar: cambiarlo no le toca al constructor. El cambio del criterio va
+   en su `note`, como pendiente del visto bueno de Rasheed (el de esta
+   decisión y el de la 7); al aprobarlas, se escribe aquí «Aprobado por
+   Rasheed, fecha» y la nota deja de decirlo. **Si
    Rasheed lo rechaza**, volver a la baja global al primer clic es una
    línea en `public_optout` (entregabilidad §8.2, el `INSERT` en
    `contact_suppression` y el alcance de los `UPDATE`) más devolverle a
@@ -2354,7 +2357,7 @@ revisores técnico y de producto y el mismo umbral.
    la baja de toda la plataforma, y la ley pide que el enlace funcione al
    menos 30 días), y es la misma forma que ya genera el despachador de
    VEN-10. **Estado: supuesto declarado, como la 6**, con el cambio del
-   criterio escrito junto al «terminado cuando». Si Rasheed prefiere la
+   criterio en la nota de VEN-15, pendiente del visto bueno. Si Rasheed prefiere la
    firma, `createOptoutToken` (`@mc/core/outreach/unsubscribe`) es el único
    sitio que la genera; la base seguiría buscando por el sha256.
 8. **La plantilla recomendada contra la política por defecto**
