@@ -2,8 +2,8 @@
  * «Por qué quedó retenido», en palabras (VEN-14): de dónde viene la
  * retención (la regla de estilo, la revisión automática, el
  * calentamiento, la política, el envío…) y la frase del motor en el
- * idioma del workspace. Puro: lo prueba motivo.test.ts y lo usa la página
- * para darle al cliente solo texto.
+ * idioma del workspace. Puro: lo prueba aprobaciones.test.tsx y lo usa la
+ * página para darle al cliente solo texto.
  */
 import { holdReasonText, noticeLang, parseHoldReason, RISK_TRIGGER_TEXTS, type HoldCode } from "@mc/core/outreach/messages";
 import { PREFLIGHT_CODES, type PreflightCode } from "@mc/core/outreach/preflight";

@@ -19,7 +19,7 @@ const t = MESSAGES;
  */
 export function Fila({
   fila, activa, onActivar, onDone,
-}: { fila: FilaVista; activa: boolean; onActivar: () => void; onDone: (notice: string) => void }) {
+}: { fila: FilaVista; activa: boolean; onActivar: () => void; onDone: (r: Extract<ResultadoAprobacion, { ok: true }>) => void }) {
   const [modo, setModo] = useState<"ver" | "editar" | "regenerar">("ver");
   const [pending, start] = useTransition();
   const [fallo, setFallo] = useState<Extract<ResultadoAprobacion, { ok: false }> | null>(null);
@@ -28,7 +28,7 @@ export function Fila({
   function aprobar() {
     start(async () => {
       const r = await aprobarToque({ touchId: fila.touchId, persona: fila.persona, edicion: null });
-      if (r.ok) onDone(r.notice);
+      if (r.ok) onDone(r);
       else if (r.errors) {
         // Algo del texto no deja aprobarlo tal cual: se abre el editor con el motivo.
         setFallo({ ok: false, message: r.errors.body ?? r.errors.subject });
@@ -39,15 +39,15 @@ export function Fila({
 
   async function saltar() {
     const r = await saltarToque({ touchId: fila.touchId, persona: fila.persona });
-    if (r.ok) onDone(r.notice);
+    if (r.ok) onDone(r);
     else setFallo(r);
   }
 
   // Lo que salió bien cierra el formulario: la fila vuelve a verse (o sale de la lista al revalidar).
-  const terminar = (notice: string) => {
+  const terminar = (r: Extract<ResultadoAprobacion, { ok: true }>) => {
     setModo("ver");
     setFallo(null);
-    onDone(notice);
+    onDone(r);
   };
 
   const volver = () => {
@@ -192,9 +192,9 @@ function Porque({ fila }: { fila: FilaVista }) {
                   <dd className="tabular-nums text-ink">{d.valor}</dd>
                 </div>
               ))}
-              {j.intentos ? <div>{j.intentos}</div> : null}
             </dl>
           ) : null}
+          {j.intentos ? <p className="text-xs text-ink-2">{j.intentos}</p> : null}
           {j.nota ? (
             <p className="leading-6 text-ink-2">
               {t.porque.notaDelJuez}: «{j.nota}»

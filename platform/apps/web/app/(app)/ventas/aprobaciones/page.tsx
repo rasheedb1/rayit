@@ -5,7 +5,6 @@ import { getOutboundPolicy } from "@mc/db/queries/entregabilidad";
 import { outreachWriterStatus } from "@mc/db/queries/outreach";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui/empty-state";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { Aviso } from "../../_lib/aviso";
@@ -31,14 +30,16 @@ const RUTA_APROBACIONES = "/ventas/aprobaciones";
  * con el teclado.
  */
 export default async function AprobacionesPage() {
-  const { items, policy, writer } = await withWorkspace(async (tx) => ({
-    items: await listApprovalQueue(tx),
+  const { cola, policy, writer } = await withWorkspace(async (tx) => ({
+    cola: await listApprovalQueue(tx),
     policy: await getOutboundPolicy(tx),
     writer: await outreachWriterStatus(tx),
   }));
   const f = formatterFor(await getCurrentWorkspace());
   const t = MESSAGES;
-  const filas = items.map((i) => filaVista(i, f));
+  const filas = cola.items.map((i) => filaVista(i, f));
+  const contador =
+    cola.total > filas.length ? t.contadorParcial(f.int(filas.length), f.int(cola.total)) : t.contador(f.int(filas.length), filas.length);
   const regenerables = filas.some((x) => x.regenerable || x.regenerando);
 
   return (
@@ -55,23 +56,20 @@ export default async function AprobacionesPage() {
       />
       <ModuleTabs active={RUTA_APROBACIONES} />
 
-      {filas.length === 0 ? (
-        <EmptyState title={t.vacio.title} description={t.vacio.description} action={{ label: t.vacio.action, href: "/ventas/cadencias" }} />
-      ) : (
-        <div className="grid gap-4">
-          <p className="text-sm text-ink-2 tabular-nums">{t.contador(f.int(filas.length), filas.length)}</p>
-          {!policy.enabled ? (
-            <div className="flex flex-wrap items-center gap-3">
-              <Aviso info={t.avisos.envioApagado} className="flex-1" />
-              <Button size="sm" variant="secondary" href={OUTREACH_URLS.policySwitch}>
-                {t.avisos.irAPolitica}
-              </Button>
-            </div>
-          ) : null}
-          {regenerables && writer === "off" ? <Aviso warning={t.avisos.iaApagada} /> : null}
-          <Cola filas={filas} />
-        </div>
-      )}
+      {/* La cola está siempre montada, también vacía: el aviso de lo último que se aprobó (y su «Deshacer») sigue ahí. */}
+      <div className="grid gap-4">
+        {filas.length > 0 ? <p className="text-sm text-ink-2 tabular-nums">{contador}</p> : null}
+        {filas.length > 0 && !policy.enabled ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <Aviso info={t.avisos.envioApagado} className="flex-1" />
+            <Button size="sm" variant="secondary" href={OUTREACH_URLS.policySwitch}>
+              {t.avisos.irAPolitica}
+            </Button>
+          </div>
+        ) : null}
+        {regenerables && writer === "off" ? <Aviso warning={t.avisos.iaApagada} /> : null}
+        <Cola filas={filas} />
+      </div>
     </>
   );
 }

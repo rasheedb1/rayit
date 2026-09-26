@@ -4,15 +4,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const aprobarToque = vi.fn();
 const regenerarToque = vi.fn();
 const saltarToque = vi.fn();
+const deshacerAprobacion = vi.fn();
 vi.mock("./actions", () => ({
   aprobarToque: (...a: unknown[]) => aprobarToque(...a),
   regenerarToque: (...a: unknown[]) => regenerarToque(...a),
   saltarToque: (...a: unknown[]) => saltarToque(...a),
+  deshacerAprobacion: (...a: unknown[]) => deshacerAprobacion(...a),
 }));
 
 import type { ApprovalItem } from "@mc/db/queries/bandejas";
 import { formatterFor } from "@/lib/format";
-import { Cola } from "./cola";
+import { Cola, DESHACER_MS } from "./cola";
 import { MESSAGES } from "./messages";
 import { motivoDe, reglasDe } from "./motivo";
 import { filaVista } from "./vista";
@@ -48,6 +50,7 @@ beforeEach(() => {
   aprobarToque.mockReset();
   regenerarToque.mockReset();
   saltarToque.mockReset();
+  deshacerAprobacion.mockReset();
 });
 
 describe("por qué quedó retenido", () => {
@@ -151,5 +154,78 @@ describe("la cola", () => {
     expect(screen.getByRole("link", { name: MESSAGES.acciones.resolverEnLaFicha })).toHaveAttribute(
       "href", "/ventas/empresas/00000140-0000-4000-8000-0000000000c1#cadencia",
     );
+  });
+
+  it("al aprobar la ÚLTIMA fila, el aviso sigue arriba del vacío con «Deshacer», y deshacer la devuelve", async () => {
+    const deshacer = { touchId: item(1).touchId, persona: "Persona 1", approvedAt: "2026-09-24T15:00:00.000Z", heldReason: "quality_warmup:3" };
+    aprobarToque.mockResolvedValue({ ok: true, notice: MESSAGES.avisos.aprobado("Persona 1"), deshacer });
+    deshacerAprobacion.mockResolvedValue({ ok: true, notice: MESSAGES.avisos.deshecho("Persona 1") });
+    const { rerender } = render(<Cola filas={[filaVista(item(1), f)]} />);
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "a" });
+    });
+    // revalidatePath deja la cola vacía: la página vuelve a pintar la misma Cola sin filas.
+    rerender(<Cola filas={[]} />);
+    expect(screen.getByText(MESSAGES.avisos.aprobado("Persona 1"))).toBeInTheDocument();
+    expect(screen.getByText(MESSAGES.vacio.title)).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: MESSAGES.avisos.deshacer }));
+    });
+    expect(deshacerAprobacion).toHaveBeenCalledWith(deshacer);
+    expect(await screen.findByText(MESSAGES.avisos.deshecho("Persona 1"))).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: MESSAGES.avisos.deshacer })).toBeNull();
+  });
+
+  it("«Deshacer» se ofrece unos segundos y después se va", async () => {
+    vi.useFakeTimers();
+    try {
+      aprobarToque.mockResolvedValue({
+        ok: true, notice: MESSAGES.avisos.aprobado("Persona 1"),
+        deshacer: { touchId: item(1).touchId, persona: "Persona 1", approvedAt: "2026-09-24T15:00:00.000Z", heldReason: null },
+      });
+      render(<Cola filas={[filaVista(item(1), f)]} />);
+      await act(async () => {
+        fireEvent.keyDown(window, { key: "a" });
+      });
+      expect(screen.getByRole("button", { name: MESSAGES.avisos.deshacer })).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(DESHACER_MS + 10);
+      });
+      expect(screen.queryByRole("button", { name: MESSAGES.avisos.deshacer })).toBeNull();
+      expect(screen.getByText(MESSAGES.avisos.aprobado("Persona 1"))).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("la leyenda de atajos no sale en un teléfono ni anuncia «r» si nada se puede regenerar", () => {
+    render(<Cola filas={[filaVista(item(1, { regenerable: false, stepType: "email_reply" }), f)]} />);
+    const leyenda = screen.getByLabelText(MESSAGES.atajos.label);
+    expect(leyenda.className).toContain("hidden");
+    expect(leyenda.className).toContain("sm:block");
+    expect(leyenda.textContent).not.toContain("regenerar");
+    expect(leyenda.textContent).toContain("aprobar");
+  });
+
+  it("los intentos de la revisión no van dentro de la lista de notas (un dl solo lleva dt y dd)", () => {
+    const { container } = render(
+      <Cola
+        filas={[
+          filaVista(
+            item(1, {
+              review: {
+                totalScore: 6.4, scores: { relevance: 7 }, riskTriggers: [], regenerateHint: null, judgeNote: null, preflight: [], attempts: 3,
+              },
+            }),
+            f,
+          ),
+        ]}
+      />,
+    );
+    const dl = container.querySelector("dl")!;
+    for (const hijo of Array.from(dl.children)) {
+      expect(Array.from(hijo.children).every((x) => x.tagName === "DT" || x.tagName === "DD")).toBe(true);
+    }
+    expect(screen.getByText("3 intentos")).toBeInTheDocument();
   });
 });

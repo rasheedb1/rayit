@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { OUTREACH_URLS } from "@mc/core/outreach/messages";
 import { REGENERATE_HINTS } from "@mc/core/outreach/preflight";
-import { approveQueuedTouch, regenerateQueuedTouch, skipQueuedTouch, type ApproveResult } from "@mc/db/queries/bandejas";
+import { approveQueuedTouch, regenerateQueuedTouch, skipQueuedTouch, undoApproval, type ApproveResult } from "@mc/db/queries/bandejas";
 import { redactarPitchEnLaDemo } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
 import { getCurrentContext } from "@/lib/workspace/current";
@@ -23,8 +23,16 @@ import { MESSAGES } from "./messages";
  * el aviso aunque la fila desaparezca al aprobarla.
  */
 
+/** Lo que hace falta para deshacer una aprobación: el toque, cuándo se aprobó y el motivo con el que estaba retenido. */
+export interface Deshacer {
+  touchId: string;
+  persona: string;
+  approvedAt: string;
+  heldReason: string | null;
+}
+
 export type ResultadoAprobacion =
-  | { ok: true; notice: string }
+  | { ok: true; notice: string; deshacer?: Deshacer | null }
   | { ok: false; errors?: Partial<Record<"subject" | "body", string>>; message?: string; link?: { href: string; label: string } };
 
 const t = MESSAGES;
@@ -82,7 +90,36 @@ export async function aprobarToque(input: z.input<typeof aprobarSchema>): Promis
     return explicar(r);
   }
   revalidatePath(RUTA);
-  return { ok: true, notice: t.avisos.aprobado(v.persona) };
+  return {
+    ok: true,
+    notice: t.avisos.aprobado(v.persona),
+    deshacer: { touchId: v.touchId, persona: v.persona, approvedAt: r.approvedAt.toISOString(), heldReason: r.heldReason },
+  };
+}
+
+const deshacerSchema = z.object({
+  touchId: z.string().regex(UUID_RE),
+  persona: z.string().max(200),
+  approvedAt: z.string().datetime(),
+  heldReason: z.string().max(500).nullable(),
+});
+
+/** «Deshacer» una aprobación: el mensaje vuelve a la cola con su motivo, si todavía no salió. */
+export async function deshacerAprobacion(input: z.input<typeof deshacerSchema>): Promise<ResultadoAprobacion> {
+  const parsed = deshacerSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: t.errores.generico };
+  const v = parsed.data;
+  try {
+    const r = await withWorkspace((tx) =>
+      undoApproval(tx, { touchId: v.touchId, approvedAt: new Date(v.approvedAt), heldReason: v.heldReason }),
+    );
+    revalidatePath(RUTA);
+    if (!r.ok) return { ok: false, message: t.errores[r.code] };
+  } catch (err) {
+    console.error("[ventas/aprobaciones] deshacer", err);
+    return { ok: false, message: t.errores.generico };
+  }
+  return { ok: true, notice: t.avisos.deshecho(v.persona) };
 }
 
 const regenerarSchema = z.object({

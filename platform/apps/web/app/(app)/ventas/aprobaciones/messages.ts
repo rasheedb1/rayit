@@ -41,6 +41,8 @@ export const MESSAGES = {
   error: { eyebrow: "Ventas · aprobaciones", title: "No pudimos cargar la bandeja de aprobación." },
 
   contador: (n: string, cuantos: number) => `${n} ${plural(cuantos, "mensaje espera", "mensajes esperan")} tu aprobación`,
+  /** La cola es más larga que lo que se enseña: «Mostrando 100 de 240 mensajes que esperan tu aprobación». */
+  contadorParcial: (n: string, total: string) => `Mostrando ${n} de ${total} mensajes que esperan tu aprobación. Aprueba o salta para ver los demás.`,
   vacio: {
     title: "Nada por aprobar",
     description: "Cuando la revisión retenga un mensaje de tus cadencias, aparece aquí con el motivo.",
@@ -149,6 +151,8 @@ export const MESSAGES = {
   avisos: {
     aprobado: (persona: string) => `Aprobado: el mensaje a ${persona} sale a su hora.`,
     saltado: (persona: string) => `Saltado: el mensaje a ${persona} no sale y la cadencia sigue.`,
+    deshacer: "Deshacer",
+    deshecho: (persona: string) => `Deshecho: el mensaje a ${persona} vuelve a esperar tu aprobación.`,
     pedido: "Pedimos otra versión. Aparece aquí en cuanto esté lista.",
     iaApagada:
       "La redacción con IA no está encendida en este espacio: la versión nueva no llegará hasta que se configure. Puedes editarlo tú.",
@@ -161,6 +165,7 @@ export const MESSAGES = {
     not_found: "Ese mensaje ya no existe.",
     not_held: "Ese mensaje ya no espera aprobación: alguien lo movió.",
     not_skippable: "Ese mensaje ya no se puede saltar: alguien lo movió.",
+    not_undoable: "Ya no se puede deshacer: el mensaje está saliendo o alguien lo movió.",
     regenerating: "La IA está redactando otra versión: espera a que termine.",
     empty: "Escribe el mensaje.",
     empty_subject: "Escribe el asunto del correo.",

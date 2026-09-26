@@ -28,7 +28,7 @@ import {
   approveQueuedTouch, cancelInboxReply, createReferralContact, listApprovalQueue, listInboxThreads, loadInboxConversation,
   markInboxThreadRead, reclassifyInboxMessage, replyInInboxThread, skipQueuedTouch,
 } from '@mc/db/queries/bandejas';
-import { applyIntent, enrollContacts, INTENT_MAX_ATTEMPTS } from '@mc/db/queries/outreach';
+import { type applyIntent, enrollContacts, INTENT_MAX_ATTEMPTS } from '@mc/db/queries/outreach';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';
 import { runDispatch } from '../src/jobs/ventas/outbound.dispatch.ts';
 import { runIntent } from '../src/jobs/ventas/outbound.intent.ts';

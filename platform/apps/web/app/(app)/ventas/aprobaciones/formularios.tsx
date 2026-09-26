@@ -33,7 +33,7 @@ export function Fallo({ r }: { r: Extract<ResultadoAprobacion, { ok: false }> | 
  */
 export function EditarYAprobar({
   fila, onDone, onCancel,
-}: { fila: FilaVista; onDone: (notice: string) => void; onCancel: () => void }) {
+}: { fila: FilaVista; onDone: (r: Extract<ResultadoAprobacion, { ok: true }>) => void; onCancel: () => void }) {
   const [pending, start] = useTransition();
   const [fallo, setFallo] = useState<Extract<ResultadoAprobacion, { ok: false }> | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -50,7 +50,7 @@ export function EditarYAprobar({
         touchId: fila.touchId, persona: fila.persona,
         edicion: { subject: fila.conAsunto ? String(data.get("subject") ?? "") : null, body: String(data.get("body") ?? "") },
       });
-      if (r.ok) onDone(r.notice);
+      if (r.ok) onDone(r);
       else setFallo(r);
     });
   }
@@ -95,7 +95,7 @@ export function EditarYAprobar({
  */
 export function Regenerar({
   fila, onDone, onCancel,
-}: { fila: FilaVista; onDone: (notice: string) => void; onCancel: () => void }) {
+}: { fila: FilaVista; onDone: (r: Extract<ResultadoAprobacion, { ok: true }>) => void; onCancel: () => void }) {
   const [pending, start] = useTransition();
   const [fallo, setFallo] = useState<Extract<ResultadoAprobacion, { ok: false }> | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -111,7 +111,7 @@ export function Regenerar({
         hint: (REGENERATE_HINTS as readonly string[]).includes(hint) ? (hint as RegenerateHint) : null,
         instructions: String(data.get("instructions") ?? ""),
       });
-      if (r.ok) onDone(r.notice);
+      if (r.ok) onDone(r);
       else setFallo(r);
     });
   }
