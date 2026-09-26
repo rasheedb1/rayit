@@ -12,13 +12,13 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkSequenceAgainstPolicy, recommendSequence, type RecommendInput } from '@mc/core';
+import { checkSequenceAgainstPolicy, DISPATCHABLE_STEP_TYPES, recommendSequence, type RecommendInput } from '@mc/core';
 import {
   addStep, CadenciaError, contactNames, createSequenceFromProposal, createSequenceFromTemplate, defaultContact, deleteStep,
   enrollableContactsOfDeal, liveEnrollmentElsewhere, liveEnrollmentsElsewhere, optedOutAmong, parseSequenceProposal, signalContacts,
   duplicateSequence, getRecommendationContext, getSequenceDetail, listEnrollableDeals, listProposableSignals, reachForSequence,
   listSequences, listSequenceTemplates, recordRecommendLlmCall, renameSequence, reorderSteps, replaceStepsFromProposal,
-  setSequenceStatus, TEXTLESS_STEP_TYPES, updateStep, type RecommendationContext,
+  EDITABLE_STEP_TYPES, setSequenceStatus, TEXTLESS_STEP_TYPES, updateStep, type RecommendationContext,
 } from '../src/queries/cadencias/index.ts';
 import { enrollContacts } from '../src/queries/outreach/enroll.ts';
 import type { WorkspaceTx } from '../src/client.ts';
@@ -153,6 +153,12 @@ test('terminado cuando: seis pasos con guía desde la campaña activa, y se acti
   assert.equal(dc.proposal?.templateSlug, 'cocina-campana-activa');
   assert.deepEqual([dc.proposal?.contactId, dc.proposal?.dealId, dc.proposalContact], [null, null, null]);
   await enLaura((tx) => setSequenceStatus(tx, copia, 'archived'));
+});
+
+test('los pasos sin texto (@mc/core) y los que se despachan parten los tipos editables, sin huecos ni repetidos', () => {
+  const despachables = DISPATCHABLE_STEP_TYPES as readonly string[];
+  assert.ok(TEXTLESS_STEP_TYPES.every((t) => !despachables.includes(t)), 'ninguno está en las dos listas');
+  assert.deepEqual([...EDITABLE_STEP_TYPES].sort(), [...TEXTLESS_STEP_TYPES, ...despachables].sort());
 });
 
 test('lo que hace una persona no se redacta: el comentario y la reacción quedan sin generación en la base (0057)', async () => {

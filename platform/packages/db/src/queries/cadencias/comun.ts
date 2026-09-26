@@ -3,7 +3,7 @@
  * errores con código, el bloqueo de una secuencia y la regla de qué se
  * puede editar. Dueño: Rasheed.
  */
-import { DISPATCHABLE_STEP_TYPES, RECOMMEND_CHANNELS, SEQUENCE_MAX_DAY_OFFSET } from '@mc/core';
+import { DISPATCHABLE_STEP_TYPES, RECOMMEND_CHANNELS, SEQUENCE_MAX_DAY_OFFSET, TEXTLESS_STEP_TYPES } from '@mc/core';
 import type { WorkspaceTx } from '../../client.ts';
 import { isUuid } from '../../client.ts';
 import { STEP_TYPES, type StepType } from '../../schema/outreach.ts';
@@ -40,17 +40,13 @@ export const EDITABLE_STEP_TYPES = STEP_TYPES.filter((s): s is EditableStepType 
 export const EDITABLE_CHANNELS = RECOMMEND_CHANNELS;
 
 /**
- * Los pasos sin texto: ni texto fijo ni generación. Son todos los que el
- * despachador no envía (DISPATCHABLE_STEP_TYPES): un comentario o una
- * reacción públicos y una tarea a mano los hace una persona, y §5.5 dice
- * que no se redactan. La misma regla que la pantalla (sinTexto, en
- * apps/web/.../cadencias/_lib/vista.ts), que «Activar» al contar gestos
- * y que el CHECK de outbound_step desde 0063. WhatsApp (fase 2) no entra:
- * es un mensaje, aunque todavía no haya conector.
+ * Los pasos sin texto (un comentario o una reacción públicos, una tarea a
+ * mano): los hace una persona y §5.5 dice que no se redactan. La lista
+ * vive en @mc/core (sequence-policy), la misma que usan el recomendador y
+ * la pantalla (sinTexto); cadencias.test.ts comprueba que con
+ * DISPATCHABLE_STEP_TYPES parte los tipos editables.
  */
-export const TEXTLESS_STEP_TYPES: readonly string[] = EDITABLE_STEP_TYPES.filter(
-  (t) => !(DISPATCHABLE_STEP_TYPES as readonly string[]).includes(t),
-);
+export { TEXTLESS_STEP_TYPES };
 
 /** Un paso que el despachador envía (un mensaje a la persona); los demás los hace alguien a mano. */
 export function isMessageStep(stepType: string): boolean {

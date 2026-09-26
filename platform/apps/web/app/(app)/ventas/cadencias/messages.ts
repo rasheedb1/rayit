@@ -178,7 +178,10 @@ export const MESSAGES = {
     sinGuia: "Sin guía: el generador solo sigue el ángulo.",
     generacion: "Generación automática",
     textoFijo: "Texto fijo",
-    sinTexto: "Lo hace una persona: no lleva texto.",
+    /** Una reacción o una tarea a mano: la persona la hace y no hay mensaje. */
+    sinTexto: "Lo haces tú a mano: no lleva mensaje.",
+    /** Un comentario público sí lleva texto, pero lo escribe la persona: On Cue no lo redacta ni lo envía. */
+    comentarioAMano: "Lo escribes tú en su publicación: On Cue no lo redacta ni lo envía.",
     activo: { media_kit: "Adjunta el media kit", quote: "Enlaza la cotización" } as Record<string, string>,
     /** La guía la escribió la persona para otro tipo de paso y no se recompuso: que la revise. */
     guiaPorRevisar: (tipo: string) => `Esta guía se escribió para «${tipo}». Revísala y guarda el paso.`,
@@ -207,6 +210,8 @@ export const MESSAGES = {
       angulo: "Ángulo",
       guia: "Guía",
       guiaAyuda: "Qué abrir, qué no mencionar y cómo cerrar. La sigue el generador y la vigila quien revisa.",
+      /** En un paso que hace una persona la guía no va al generador: es lo que hay que hacer. */
+      guiaAyudaAMano: "Qué hacer en este paso.",
       modo: "Texto",
       asunto: "Asunto",
       cuerpo: "Texto del mensaje",

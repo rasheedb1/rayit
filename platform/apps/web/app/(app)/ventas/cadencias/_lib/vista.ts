@@ -4,8 +4,8 @@
  * cada nota del recomendador. Puro y probado; los textos salen de
  * messages.ts y las cifras del Formatter del espacio.
  */
-// La regla de qué se despacha sale del módulo sin dependencias de @mc/core: este archivo también lo usa el editor, en el navegador.
-import { DISPATCHABLE_STEP_TYPES } from "@mc/core/outreach/sequence-policy";
+// La regla de qué no lleva texto sale del módulo sin dependencias de @mc/core: este archivo también lo usa el editor, en el navegador.
+import { isTextlessStep } from "@mc/core/outreach/sequence-policy";
 import type { ProposalNote } from "@mc/core";
 import type {
   ContactOption, EnrollableContact, EnrollableDeal, SequenceDetail, SequenceProposal, SequenceStatus,
@@ -23,18 +23,28 @@ export const ESTADO_PILL: Record<SequenceStatus, PillKind> = {
 
 /**
  * Un paso que no se despacha (un comentario o una reacción públicos, una
- * tarea a mano) lo hace una persona: no lleva texto ni se redacta. La
- * misma regla que TEXTLESS_STEP_TYPES de @mc/db y que «Activar» al contar
- * los gestos a mano: la tarjeta, el editor y el aviso dicen lo mismo.
+ * tarea a mano) lo hace una persona: no se redacta. La regla es
+ * TEXTLESS_STEP_TYPES de @mc/core, la misma que la base y que «Activar»
+ * al contar los gestos a mano: la tarjeta, el editor y el aviso dicen lo mismo.
  */
 export function sinTexto(stepType: string): boolean {
-  return !(DISPATCHABLE_STEP_TYPES as readonly string[]).includes(stepType);
+  return isTextlessStep(stepType);
+}
+
+/** Un comentario público: sí lleva texto, pero lo escribe la persona en la publicación. */
+function esComentario(stepType: string): boolean {
+  return stepType === "linkedin_comment" || stepType === "instagram_comment";
+}
+
+/** Qué dice un paso sin texto: el comentario lo escribe la persona; la reacción y la tarea no llevan mensaje. */
+export function textoSinTexto(stepType: string): string {
+  return esComentario(stepType) ? MESSAGES.paso.comentarioAMano : MESSAGES.paso.sinTexto;
 }
 
 /** Cómo sale el texto de un paso, para su tarjeta: a mano, generación automática o texto fijo. */
 export function modoDePaso(s: { stepType: string; generateWithAi: boolean }): string {
   const t = MESSAGES.paso;
-  return sinTexto(s.stepType) ? t.sinTexto : s.generateWithAi ? t.generacion : t.textoFijo;
+  return sinTexto(s.stepType) ? textoSinTexto(s.stepType) : s.generateWithAi ? t.generacion : t.textoFijo;
 }
 
 export function etiquetaCanal(canal: string): string {

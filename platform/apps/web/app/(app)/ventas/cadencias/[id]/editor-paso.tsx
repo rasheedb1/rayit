@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { Aviso } from "../../../_lib/aviso";
 import { guardarPaso, type PasoCambios } from "../actions";
-import { sinTexto as esSinTexto } from "../_lib/vista";
+import { sinTexto as esSinTexto, textoSinTexto } from "../_lib/vista";
 import { MESSAGES } from "../messages";
 import type { PasoVista } from "./tarjeta-paso";
 
@@ -116,11 +116,11 @@ export function EditorPaso({
       <Field label={c.angulo}>
         <Select name="angulo" options={[{ value: "", label: t.sinAngulo }, ...angulos]} defaultValue={paso.angleKey ?? ""} />
       </Field>
-      <Field label={c.guia} help={c.guiaAyuda}>
+      <Field label={c.guia} help={sinTexto ? c.guiaAyudaAMano : c.guiaAyuda}>
         <Textarea name="guia" rows={4} maxLength={GUIDANCE_MAX} defaultValue={paso.guia ?? ""} />
       </Field>
       {sinTexto ? (
-        <p className="text-xs text-fg-3">{t.sinTexto}</p>
+        <p className="text-xs text-fg-3">{textoSinTexto(tipo)}</p>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label={c.modo}>
