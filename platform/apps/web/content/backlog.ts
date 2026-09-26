@@ -391,7 +391,7 @@ export const STORIES: readonly Story[] = [
     desc: "Qué busca el creador (categorías, países, presupuesto mínimo, entregables) y qué no acepta. Filtra la bandeja del radar.",
     done: "Una señal de una categoría excluida no aparece en la bandeja.",
     status: "hecho",
-    note: "/ventas/brief: un brief por creador; el radar oculta lo que excluye y lo dice, y las marcas fuera del CRM se excluyen por adelantado. 0070 y 0071 (nacieron 0064 y 0065; renumeradas al integrar la fase 6) por aplicar. Detalle en docs/ventas-outreach.md §5.8.",
+    note: "/ventas/brief: un brief por creador; el radar oculta lo que excluye y lo dice, y una marca excluida por su nombre se reconoce aunque la señal traiga dominio o ficha del catálogo. Pendiente humano: aplicar 0070 y 0071. Detalle en docs/ventas-outreach.md §5.8.",
   },
   {
     id: "VEN-8", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-3"],
@@ -399,7 +399,7 @@ export const STORIES: readonly Story[] = [
     desc: "Motivo de pérdida, y tasa de conversión por etapa desde deal_stage_history.",
     done: "La tasa entre etapas aparece en el pipeline con el número de deals que la sostiene.",
     status: "hecho",
-    note: "Motivo obligatorio en un diálogo y en la base (0070, por aplicar); conversión por etapa de 90 días bajo cada columna, con su número de negocios. Detalle en docs/ventas-outreach.md.",
+    note: "Motivo obligatorio en un diálogo y en la base; conversión por etapa de 90 días bajo cada columna, con su número de negocios y la regla de las etapas saltadas a la vista. Pendiente humano: aplicar 0070. Detalle en docs/ventas-outreach.md.",
   },
   // Outreach automático. Diseño en docs/ventas-outreach.md, a partir de CadenceV1.0.
   {
@@ -440,7 +440,7 @@ export const STORIES: readonly Story[] = [
     desc: "Desde el brief, la señal, los canales conectados y los contactos disponibles, una secuencia propuesta con día, canal, ángulo y guía por paso; plantillas por nicho y tipo de señal; línea de tiempo editable.",
     done: "Desde una señal de campaña activa, el creador obtiene una secuencia de seis pasos con guía y la activa en dos clics.",
     status: "hecho",
-    note: "«Proponer cadencia» desde la campaña activa de Fresko da seis pasos con guía dentro de la política, y «Activar y escribir a Camila» la enciende y la enrola; se prueba en packages/db/test/cadencias.test.ts y en /ventas/cadencias. Detalle por ronda en docs/ventas-outreach.md §5.5; 0062 y 0063 (nacieron 0056 y 0057; renumeradas al integrar la fase 5) sin aplicar en Supabase.",
+    note: "«Proponer cadencia» desde la campaña activa de Fresko da seis pasos con guía dentro de la política, y «Activar y escribir a Camila» la enciende y la enrola; el modelo solo reescribe la guía de los pasos de mensaje. Pendiente humano: ANTHROPIC_API_KEY y aplicar 0062 y 0063. Detalle en docs/ventas-outreach.md §5.5.",
   },
   {
     id: "VEN-14", module: "VEN", owner: "rasheed", size: "L", sprint: 5, deps: ["VEN-12"],

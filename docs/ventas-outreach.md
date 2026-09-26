@@ -1160,7 +1160,15 @@ campaña activa, temporada).
   donde el texto no sirve. Sin `ANTHROPIC_API_KEY`, o con el tope diario
   gastado, no se llama. Cada llamada deja su fila en `outbound_llm_call`
   (`recommend`) con el costo de `llmCostUsd`. Al modelo no le llega nada
-  de la persona a la que se escribe.
+  de la persona a la que se escribe. Solo le llegan los pasos de
+  mensaje: un comentario, una reacción o una tarea a mano
+  (`TEXTLESS_STEP_TYPES`, una sola lista en `@mc/core`) conservan su guía
+  de plantilla o de reglas, y lo que el modelo devolviera para ellos se
+  descarta. Si la llamada se corta después de salir (tiempo de espera o
+  red), `GuidanceWriterError` lleva una cota de lo que pudo cobrarse y
+  también queda en `outbound_llm_call`: el tope diario no cuenta de menos.
+  Reordenar la línea de tiempo recompone la guía de plantilla o del
+  modelo de los pasos que cambian de puesto (`guidanceAfterMove`).
 - **Tipos de señal**: `signal_source.kind` → `ads`, `marketplace` y
   `jobs` son campaña activa; `press`, lanzamiento; `season`, temporada;
   `collab`, colaboración de un competidor (nunca se nombra); lo demás,
