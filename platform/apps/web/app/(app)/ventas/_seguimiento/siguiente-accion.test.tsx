@@ -58,7 +58,9 @@ beforeEach(() => {
 describe("siguienteAccionData", () => {
   it("formatea en la zona del espacio y reprograma lo vencido para mañana", () => {
     const d = siguienteAccionData(vencida, f, ctx, LABEL);
-    expect(d.dueText).toBe(`${f.date(vencida.dueAt!)} · ${f.time(vencida.dueAt!)}`);
+    // El mismo formato de fecha y hora que la actividad y la ficha (pulido r2).
+    expect(d.dueText).toBe("22 sep, 10:00 a. m.");
+    expect(d.dueText).toBe(f.dateTimeShort(vencida.dueAt!));
     expect(d.due).toEqual({ kind: "bad", text: "Vencido" });
     expect(d.form).toEqual({ dueDate: "2026-09-24", dueTime: "10:00", responsibleUserId: ANA });
   });
@@ -185,7 +187,7 @@ describe("SiguienteAccion", () => {
   });
 
   it("«Cambiar» avisa antes de abrir (onTouch) y, al guardar, entrega el aviso de dónde quedó", async () => {
-    fijarSiguienteAccion.mockResolvedValue({ ok: true, notice: "Guardada para el 24 sep · 10:00 a. m.", stamp: 1 });
+    fijarSiguienteAccion.mockResolvedValue({ ok: true, notice: "Guardada para el 24 sep, 10:00 a. m.", stamp: 1 });
     const onTouch = vi.fn();
     const onEditingChange = vi.fn();
     render(<SiguienteAccion data={siguienteAccionData(vencida, f, ctx, LABEL)} ctx={ctx} onTouch={onTouch} onEditingChange={onEditingChange} />);
@@ -195,7 +197,7 @@ describe("SiguienteAccion", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
     });
-    expect(onEditingChange).toHaveBeenLastCalledWith(false, "Guardada para el 24 sep · 10:00 a. m.");
+    expect(onEditingChange).toHaveBeenLastCalledWith(false, "Guardada para el 24 sep, 10:00 a. m.");
   });
 
   it("«Hecha» la deja en la historia y abre la siguiente, vacía y para mañana", async () => {

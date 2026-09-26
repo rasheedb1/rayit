@@ -62,6 +62,7 @@ export const MODULE_LINKS: { href: string; label: string; exact: boolean }[] = [
   { href: "/ventas/bandeja", label: MESSAGES.tabs.bandeja, exact: false },
   { href: "/ventas/actividad", label: MESSAGES.tabs.actividad, exact: false },
   { href: "/ventas/canales", label: MESSAGES.tabs.canales, exact: false },
+  { href: "/ventas/politica", label: MESSAGES.tabs.politica, exact: true },
   { href: "/ventas/perfil", label: MESSAGES.tabs.perfil, exact: false },
   { href: "/ventas/brief", label: MESSAGES.tabs.brief, exact: true },
 ];

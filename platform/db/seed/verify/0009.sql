@@ -4,7 +4,7 @@
 -- Cómo correrlo:
 --   Postgres embebido, sin tocar Supabase:
 --     node db/seed/verify/run.mjs 0009
---   Contra una base con 0067 y los seeds, como quien migra:
+--   Contra una base con 0072 y los seeds, como quien migra:
 --     node db/sql.mjs --admin -f db/seed/verify/0009.sql
 --
 -- Cada consulta con columna `ok` es una prueba: un false hace fallar

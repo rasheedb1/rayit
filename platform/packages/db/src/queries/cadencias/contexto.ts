@@ -53,7 +53,7 @@ export interface ContactOption {
  * Si la persona `c` está de baja: la ficha, la lista global de
  * direcciones, un enrolamiento que terminó en baja o el enlace de baja de
  * un correo de este espacio (outbound_workspace_optout, la que el
- * disparador de 0050 hace cumplir al enrolar). Una sola expresión para la
+ * disparador de 0055 hace cumplir al enrolar). Una sola expresión para la
  * etiqueta de la pantalla y para la comprobación de «Activar» y «Enrolar».
  */
 const OPTED_OUT_EXPR = (ws: string) => `(c.opted_out OR address_is_suppressed(c.email)
@@ -117,7 +117,7 @@ export async function channelStates(tx: WorkspaceTx): Promise<Record<RecommendCh
 
 interface PolicyRow { allowed: string[]; max_touches: number; min_days: number }
 
-/** outbound_policy del espacio; sin fila, sus valores por defecto (0007 y 0045). */
+/** outbound_policy del espacio; sin fila, sus valores por defecto (0007 y 0054). */
 async function readPolicy(tx: WorkspaceTx): Promise<PolicyRow> {
   return (
     await tx.query<PolicyRow>(
@@ -445,7 +445,7 @@ export async function contactNames(tx: WorkspaceTx, ids: readonly string[]): Pro
  * De `contactIds`, las que están de baja (la misma expresión que la
  * etiqueta de la pantalla). «Activar» y «Enrolar» las dejan fuera antes de
  * llamar a enrollContacts: la baja puede llegar entre «Proponer» y
- * «Activar», o después de abrir el formulario, y el disparador de 0050
+ * «Activar», o después de abrir el formulario, y el disparador de 0055
  * rechazaría el INSERT y con él la transacción entera.
  */
 export async function optedOutAmong(tx: WorkspaceTx, contactIds: readonly string[]): Promise<Set<string>> {

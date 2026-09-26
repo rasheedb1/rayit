@@ -2,7 +2,7 @@
  * Outreach · el reclamo del despachador (VEN-10).
  *
  * En UNA transacción, que quien llama confirma antes de tocar ningún
- * proveedor (0037 §4.5):
+ * proveedor (0046 §4.5):
  *   0. toma el candado del reclamo (CLAIM_LOCK_KEY): dos reclamos a la vez
  *      no leen el mismo estado de la marca ni el mismo ritmo de la cuenta;
  *   1. cancela lo vencido de quien se dio de baja, de una marca que el
@@ -35,12 +35,12 @@
  *        de correos del workspace) → al siguiente día hábil DEL WORKSPACE
  *        (el de los contadores, r5), y los pasos de detrás se corren con él;
  *      · la cuenta ya sacó su ritmo por hora, o su último envío fue
- *        hace menos de su separación mínima (0052 §1) → cuando quepa, sin
+ *        hace menos de su separación mínima (0057 §1) → cuando quepa, sin
  *        quedarse con la plaza del día;
  *   4. pasa los que quedan a processing con UPDATE … WHERE status =
  *      'scheduled' … RETURNING: hora del reclamo, intento, dirección y
  *      cuenta; la plaza del tope queda reservada;
- *   5. escribe el enlace de baja de cada correo reclamado (0037 §4.5).
+ *   5. escribe el enlace de baja de cada correo reclamado (0046 §4.5).
  *
  * Lo reclamado que no se llega a intentar (timeout, apagado) vuelve a la
  * cola con releaseUnattempted; un reclamo que se cayó sin llegar al
@@ -124,7 +124,7 @@ export interface ClaimReport {
   /**
    * Movidos sin gastar intento ni plaza por el ritmo: la separación
    * mínima con la marca (company_gap, min_days_between_touches), o el
-   * ritmo por hora de la cuenta (account_hour, account_gap: 0052 §1).
+   * ritmo por hora de la cuenta (account_hour, account_gap: 0057 §1).
    */
   paced: Array<{ touchId: string; until: Date; reason: 'company_gap' | 'account_hour' | 'account_gap' }>;
 }
@@ -164,7 +164,7 @@ interface CandidateRow {
   w_end: string | null;
   tz: string;
   ws_tz: string;
-  /** La respuesta de la bandeja (0064): el mensaje al que responde y la cuenta que lo recibió. */
+  /** La respuesta de la bandeja (0069): el mensaje al que responde y la cuenta que lo recibió. */
   reply_to_message_id: string | null;
   reply_account_id: string | null;
 }
@@ -190,7 +190,7 @@ interface Candidate {
   /** La zona del workspace: la de los contadores y la del calentamiento (VEN-15 cuenta sus días ahí). */
   workspaceTimeZone: string;
   /**
-   * Una respuesta escrita en la bandeja (0064, VEN-14): la marca escribió
+   * Una respuesta escrita en la bandeja (0069, VEN-14): la marca escribió
    * primero, así que no cuenta para la política de la marca (el tope de
    * mensajes y los días entre uno y otro son para escribir en frío), y sale
    * solo por la cuenta que recibió el mensaje, la única que tiene su hilo.
@@ -337,7 +337,7 @@ interface SenderAccount {
  *     último envío, y solo si sigue conectada: el siguiente mensaje va en
  *     el mismo hilo o el mismo chat, que no existen en otro buzón. Vacío
  *     si está caída: el toque espera a que vuelva;
- *   · una respuesta de la bandeja (0064), solo la cuenta que recibió el
+ *   · una respuesta de la bandeja (0069), solo la cuenta que recibió el
  *     mensaje al que responde, por la misma razón;
  *   · si no, las conectadas del canal: primero la del propio toque (la de
  *     un intento anterior), después por orden de alta.
@@ -398,7 +398,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   // LinkedIn. El candado es de la transacción: se suelta al confirmar el
   // reclamo, antes de hablar con ningún proveedor, así que serializa
   // milisegundos, no envíos. Los topes diarios y semanales ya eran
-  // atómicos (contadores en la base). 0055 deja además max_concurrency = 1.
+  // atómicos (contadores en la base). 0060 deja además max_concurrency = 1.
   await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [CLAIM_LOCK_KEY]);
 
   // Los enrolamientos que se quedan sin un toque vivo por lo que el
@@ -427,7 +427,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
 
   // (con VEN-15) Un correo a una dirección que rebotó para siempre
   // (contact.email_invalid) no se reclama: la base impide programarlo
-  // (0050 §2), pero no mira lo que ya estaba en la cola ni un reintento.
+  // (0055 §2), pero no mira lo que ya estaba en la cola ni un reintento.
   // Solo si el toque va a ESA dirección: si va a otra, esa no rebotó.
   const emailInvalidRows = (await tx.query<{ enrollment_id: string | null }>(
       `UPDATE outbound_touch t
@@ -544,7 +544,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   const companies = new Map<string, CompanyState>();
   const paces = new Map<string, AccountPace>();
   for (const c of candidates) {
-    // La dirección se valida con la regla de los CHECK de 0037 ANTES del
+    // La dirección se valida con la regla de los CHECK de 0046 ANTES del
     // UPDATE en lote: si no, una sola ficha mal escrita lo haría fallar
     // entero, en cada corrida, para todos los workspaces.
     const address = checkRecipient(c.channel, c.address);
@@ -576,7 +576,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     //     toque (un reintento), después en orden de alta; se prueba el tope
     //     de cada una antes de reprogramar.
     // El tope de cada cuenta es el que rige hoy según outreach_channel_account_limits
-    // (VEN-9, 0040): el suyo, nunca por encima del del proveedor ni del de la política.
+    // (VEN-9, 0049): el suyo, nunca por encima del del proveedor ni del de la política.
     const accounts = await senderAccounts(tx, c);
     if (accounts.length === 0) {
       // La cuenta está caída (needs_reconnect) o no existe: el mensaje no
@@ -633,7 +633,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
         await tx.query('ROLLBACK TO SAVEPOINT motor_cap');
         await tx.query('RELEASE SAVEPOINT motor_cap');
       };
-      // Los contadores cuentan el día del reloj del despachador (0052 §3).
+      // Los contadores cuentan el día del reloj del despachador (0057 §3).
       let cap: ClaimReport['rescheduled'][number]['cap'] | null = null;
       if (!(await incrementIfUnderCap(tx, { workspaceId: c.workspaceId, accountId: acct.id, actionType: action, cap: dayCap, at: now }))) {
         cap = 'account_day';
@@ -654,7 +654,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
         capHit ??= cap;
         continue;
       }
-      // El ritmo de la cuenta (0052 §1): tantos por hora, y separados.
+      // El ritmo de la cuenta (0057 §1): tantos por hora, y separados.
       // Después de los topes del día y la semana: lo que ya no cabe hoy va
       // directo a mañana; lo que cabe hoy pero no ahora, espera su turno sin
       // quedarse con la plaza (o sale por otra cuenta que sí tenga turno).
@@ -706,7 +706,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   const claimed = (
     await tx.query<{ id: string; workspace_id: string; contact_id: string; attempt_count: number; caps_reserved_on: string }>(
       // caps_reserved_on se calcula como outbound_counter_bump_at, con el mismo
-      // reloj (0052 §3): es el día de la fila del contador que se sumó.
+      // reloj (0057 §3): es el día de la fila del contador que se sumó.
       `UPDATE outbound_touch t
           SET status = 'processing', claimed_at = $1::timestamptz, attempt_count = t.attempt_count + 1,
               recipient_address = x.addr, channel_account_id = x.acct, send_started_at = NULL,
@@ -798,7 +798,7 @@ export interface ZombieReport {
  *   · con send_started_at: el proveedor pudo haberlo enviado sin que nadie
  *     lo confirmara. No se reenvía (un correo repetido a una marca es peor
  *     que uno perdido): failed y aviso; o canceled si la persona se dio
- *     de baja entretanto (0037 §4.1, punto 4).
+ *     de baja entretanto (0046 §4.1, punto 4).
  */
 export async function rescueZombies(tx: WorkerSql, now: Date, workspaceId?: string): Promise<ZombieReport> {
   if (workspaceId) assertIds('rescueZombies', [workspaceId]);

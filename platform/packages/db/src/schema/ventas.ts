@@ -44,7 +44,7 @@ export const ACTIVITY_KINDS = [
 ] as const;
 export const BRIEF_STATUSES = ['draft', 'active', 'paused', 'closed'] as const;
 /**
- * La máquina de estados de la cola (0037 §4). Los de 0007 que no están
+ * La máquina de estados de la cola (0046 §4). Los de 0007 que no están
  * aquí (bounced, replied, opted_out, blocked, cancelled) los tradujo la
  * migración.
  */
@@ -61,7 +61,7 @@ export const LIVE_TOUCH_STATUSES = ['draft', 'scheduled', 'processing', 'held'] 
  * Lo que cancelan una baja (public_optout), una respuesta (VEN-14) o el
  * cambio de cadencia (VEN-10): todo lo vivo menos 'processing', que es
  * del despachador que lo reclamó; él lo cancela antes de llamar al
- * proveedor, o lo registra como enviado si ya lo llamó (0037 §4.1).
+ * proveedor, o lo registra como enviado si ya lo llamó (0046 §4.1).
  * public_optout cancela exactamente estos. disable_outreach deja además
  * los borradores ('draft'): son trabajo de una persona y no salen solos.
  */
@@ -108,7 +108,7 @@ export const company = pgTable('company', {
   createdAt: createdAt(),
   updatedAt: updatedAt(),
   /**
-   * brand_key(name), calculada por la base (0071): «Nutrivé» y «NUTRIVE»
+   * brand_key(name), calculada por la base (0074): «Nutrivé» y «NUTRIVE»
    * dan lo mismo. Existe para el índice: bajo RLS, Postgres no usa un
    * índice de expresión sobre brand_key(name) porque regexp_replace no es
    * leakproof, y sí usa uno sobre esta columna. Nadie la escribe.
@@ -142,13 +142,13 @@ export const contact = pgTable('contact', {
   optedOut: boolean('opted_out').default(false).notNull(),
   optedOutAt: timestamptz('opted_out_at'),
   optedOutReason: text('opted_out_reason'),
-  /** reply_optout:<canal> si se dio de baja respondiendo por ese canal (0043); la pantalla lo traduce. */
+  /** reply_optout:<canal> si se dio de baja respondiendo por ese canal (0052); la pantalla lo traduce. */
   optedOutCode: text('opted_out_code'),
   bounced: boolean('bounced').default(false).notNull(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
   /**
-   * El correo rebotó con un error permanente (0038, VEN-15). No se le
+   * El correo rebotó con un error permanente (0055, VEN-15). No se le
    * programan correos (outbound_touch_email_invalid); los otros canales
    * siguen. Cambiar el correo de la ficha lo borra.
    */
@@ -246,7 +246,7 @@ export const deal = pgTable('deal', {
   nextActionKind: text('next_action_kind', { enum: NEXT_ACTION_KINDS }),
   nextActionDue: timestamptz('next_action_due'),
   nextActionUserId: uuid('next_action_user_id').references(() => appUser.id, { onDelete: 'set null' }),
-  /** Cuándo cambió por última vez el texto o el vencimiento de la acción; lo pone un disparador (0036). NULL: antes de 0036. */
+  /** Cuándo cambió por última vez el texto o el vencimiento de la acción; lo pone un disparador (0045). NULL: antes de 0045. */
   nextActionSetAt: timestamptz('next_action_set_at'),
   lastContactAt: timestamptz('last_contact_at'),
   wonAt: timestamptz('won_at'),
@@ -314,13 +314,13 @@ export const outboundPolicy = pgTable('outbound_policy', {
   cooldownDaysAfterNo: integer('cooldown_days_after_no').default(180).notNull(),
   requireOptoutLink: boolean('require_optout_link').default(true).notNull(),
   requireHumanReview: boolean('require_human_review').default(true).notNull(),
-  /** Si una persona de la marca responde, se pausan las cadencias de las demás personas de esa marca (0054). */
+  /** Si una persona de la marca responde, se pausan las cadencias de las demás personas de esa marca (0059). */
   stopCompanyOnReply: boolean('stop_company_on_reply').default(true).notNull(),
   claimsMustBeSourced: boolean('claims_must_be_sourced').default(true).notNull(),
-  /** Instagram es opcional y nace apagado (0045, §5.1). */
+  /** Instagram es opcional y nace apagado (0054, §5.1). */
   allowedChannels: text('allowed_channels').array().default(['email', 'linkedin']).notNull(),
   updatedAt: updatedAt(),
-  /** El interruptor de apagado (0037 §6.1). Nace apagado; sin postal_address no se puede encender (CHECK). */
+  /** El interruptor de apagado (0046 §6.1). Nace apagado; sin postal_address no se puede encender (CHECK). */
   enabled: boolean('enabled').default(false).notNull(),
   disabledReason: text('disabled_reason'),
   disabledAt: timestamptz('disabled_at'),
@@ -331,7 +331,7 @@ export const outboundPolicy = pgTable('outbound_policy', {
   postalAddress: text('postal_address'),
   /** Contrapresión: con más toques en cola, should_pause_outreach dice que se pare. */
   maxPendingTouches: integer('max_pending_touches').default(200).notNull(),
-  /** La ventana laboral local en la que sale un toque (0051 §1), en la zona de la cadencia. */
+  /** La ventana laboral local en la que sale un toque (0056 §1), en la zona de la cadencia. */
   sendWindowStart: localTime('send_window_start').default('09:00').notNull(),
   sendWindowEnd: localTime('send_window_end').default('17:00').notNull(),
 });
@@ -342,26 +342,26 @@ export const outboundSequence = pgTable('outbound_sequence', {
   briefId: uuid('brief_id').references(() => outboundBrief.id, { onDelete: 'set null' }),
   name: text('name').notNull(),
   channel: text('channel', { enum: OUTBOUND_CHANNELS }).notNull(),
-  /** Pasos de 0007 en jsonb. El motor lee outbound_step (0037). */
+  /** Pasos de 0007 en jsonb. El motor lee outbound_step (0046). */
   steps: jsonb('steps').default([]).notNull(),
   /**
-   * @deprecated Sombra de status (0037 §3.1): la base la recalcula en
+   * @deprecated Sombra de status (0046 §3.1): la base la recalcula en
    * cada alta y cada cambio (outbound_sequence_sync_active), active ⇔
    * status = 'active'. Escribe status. Un alta que solo diga active nace
    * en 'draft' y con active = false, de ahí el default.
    */
   active: boolean('active').default(false).notNull(),
   createdAt: createdAt(),
-  /** Zona IANA de la cadencia; NULL = la del workspace (0037 §3.1). */
+  /** Zona IANA de la cadencia; NULL = la del workspace (0046 §3.1). */
   timezone: text('timezone'),
   automationMode: text('automation_mode', { enum: AUTOMATION_MODES }).default('review').notNull(),
   status: text('status', { enum: SEQUENCE_STATUSES }).default('draft').notNull(),
   templateId: uuid('template_id').references(() => outboundSequenceTemplate.id, { onDelete: 'set null' }),
   updatedAt: updatedAt(),
-  /** La señal del radar desde la que se propuso (0056, VEN-13). */
+  /** La señal del radar desde la que se propuso (0061, VEN-13). */
   signalId: uuid('signal_id').references(() => signal.id, { onDelete: 'set null' }),
   /**
-   * Lo que decidió el recomendador, en códigos (0056): se lee con
+   * Lo que decidió el recomendador, en códigos (0061): se lee con
    * parseSequenceProposal de @mc/db/queries/cadencias. NULL = no salió
    * del recomendador.
    */
@@ -390,7 +390,7 @@ export const outboundTouch = pgTable('outbound_touch', {
   blockedReason: text('blocked_reason'),
   externalRef: text('external_ref'),
   createdAt: createdAt(),
-  // La cola (0037 §4).
+  // La cola (0046 §4).
   enrollmentId: uuid('enrollment_id').references(() => outboundEnrollment.id, { onDelete: 'set null' }),
   stepId: uuid('step_id').references(() => outboundStep.id, { onDelete: 'set null' }),
   attemptCount: integer('attempt_count').default(0).notNull(),
@@ -406,7 +406,7 @@ export const outboundTouch = pgTable('outbound_touch', {
   /**
    * La dirección exacta a la que sale el mensaje, escrita por el worker al
    * reclamarlo (un correo en processing o con providerMessageId la exige).
-   * La regla de la baja la compara con la lista global (0037 §4.1). Con
+   * La regla de la baja la compara con la lista global (0046 §4.1). Con
    * pruebas de envío, contactId y companyId ya no cambian desde la web, y
    * un toque en 'sent' no vuelve atrás ni se borra. El enlace de baja
    * vive aparte, en outbound_optout_link.
@@ -416,30 +416,30 @@ export const outboundTouch = pgTable('outbound_touch', {
   statusChangedAt: timestamptz('status_changed_at').defaultNow().notNull(),
   updatedAt: updatedAt(),
   /**
-   * La cuenta que envía el toque (0041 §3 y 0051 §2): la fija el
+   * La cuenta que envía el toque (0050 §3 y 0056 §2): la fija el
    * despachador al reclamarlo, y es del mismo workspace y canal
    * (disparador). Una respuesta solo se guarda si su hilo es el de un toque
    * de ESA cuenta.
    */
   channelAccountId: uuid('channel_account_id').references(() => outreachChannelAccount.id, { onDelete: 'set null' }),
-  /** Cuándo el despachador llamó al proveedor en este intento (0051 §6): sin ella, un reclamo caído nunca salió. */
+  /** Cuándo el despachador llamó al proveedor en este intento (0056 §6): sin ella, un reclamo caído nunca salió. */
   sendStartedAt: timestamptz('send_started_at'),
-  /** El intento cuyo resultado no se sabe (timeout después de enviar): se comprueba antes de reenviar (0051 §6). */
+  /** El intento cuyo resultado no se sabe (timeout después de enviar): se comprueba antes de reenviar (0056 §6). */
   unconfirmedAttempt: integer('unconfirmed_attempt'),
-  /** Cuándo leyó el hilo el lector de respuestas: el turno de la lectura (0051 §10). */
+  /** Cuándo leyó el hilo el lector de respuestas: el turno de la lectura (0056 §10). */
   repliesCheckedAt: timestamptz('replies_checked_at'),
-  /** El día local en que el reclamo reservó la plaza de los topes: a él vuelve si no sale (0051 §8). */
+  /** El día local en que el reclamo reservó la plaza de los topes: a él vuelve si no sale (0056 §8). */
   capsReservedOn: date('caps_reserved_on', { mode: 'string' }),
-  /** El día en que el intento AMBIGUO reservó su plaza: vuelve ahí si el proveedor dice que no salió (0052 §2). */
+  /** El día en que el intento AMBIGUO reservó su plaza: vuelve ahí si el proveedor dice que no salió (0057 §2). */
   unconfirmedCapsOn: date('unconfirmed_caps_on', { mode: 'string' }),
   /**
-   * El mensaje entrante al que responde (0064, VEN-14): la respuesta escrita
+   * El mensaje entrante al que responde (0069, VEN-14): la respuesta escrita
    * en la bandeja unificada, sin enrolamiento ni paso. El despachador la
    * envía en el hilo de ese mensaje y por la cuenta que lo recibió.
    */
   replyToMessageId: uuid('reply_to_message_id').references((): AnyPgColumn => outboundMessage.id, { onDelete: 'set null' }),
-  /** Una respuesta de la bandeja que no salió y la persona ya vio (0065). */
+  /** Una respuesta de la bandeja que no salió y la persona ya vio (0070). */
   inboxDismissedAt: timestamptz('inbox_dismissed_at'),
-  /** El motivo con el que estaba retenido cuando una persona lo aprobó: «Deshacer» lo restaura (0066). */
+  /** El motivo con el que estaba retenido cuando una persona lo aprobó: «Deshacer» lo restaura (0071). */
   approvedFromReason: text('approved_from_reason'),
 });

@@ -141,7 +141,7 @@ test('ida y vuelta: guardar un borrador a mano y reabrirlo conserva las marcas, 
   const again = await compose();
   assert.equal(again.draft?.touchId, r.touchId);
   assert.ok(again.draft!.body.includes(`${mediana.display} [claim:${mediana.id}]`), again.draft!.body);
-  // Y sus variables, tal cual las escribió (0058): el editor las rellena según a quién le escribe.
+  // Y sus variables, tal cual las escribió (0063): el editor las rellena según a quién le escribe.
   assert.ok(again.draft!.body.startsWith('Hola {{first_name}},'), again.draft!.body);
   assert.equal(again.draft!.pending, null);
   assert.equal(again.draft!.generationStamp, null, 'lo guardó una persona: no hay sello de la IA');
@@ -190,7 +190,7 @@ test('savePitch dice si el envío está encendido; la función de la redacción 
   );
   assert.ok(r.ok && typeof r.sendingEnabled === 'boolean', JSON.stringify(r));
   assert.equal(r.ok && r.sendingEnabled, c.policy.enabled);
-  // Valentina pulsa el enlace de baja de un correo de este espacio: ya no se le redacta nada (0058), aunque la llamen directo.
+  // Valentina pulsa el enlace de baja de un correo de este espacio: ya no se le redacta nada (0063), aunque la llamen directo.
   await t.admin(
     `INSERT INTO outbound_workspace_optout (workspace_id, email, token_hash) VALUES ('${WORKSPACE_LAURA}', 'valentina@cafealma.co', repeat('b', 64))`,
   );
@@ -384,7 +384,7 @@ test('la base no guarda un marcado a mano sobre un correo que ya no se edita (pr
   );
 });
 
-test('ronda 5: quién pidió el borrador lo dice la sesión (0060), no lo que mande quien llama', async () => {
+test('ronda 5: quién pidió el borrador lo dice la sesión (0065), no lo que mande quien llama', async () => {
   const LAURA_USER = '00000002-0000-4000-8000-000000000002';
   const AJENO = '00000612-0000-4000-8000-00000000abcd';
   const r = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => savePitch(tx, { ...base, subject: null, body: '', intent: 'draft', now: new Date() }));

@@ -1,8 +1,8 @@
 /**
  * outbound.generate · redacta los borradores de las cadencias (VEN-12).
  *
- * Cada dos minutos (0056): reclama primero lo que una persona pidió desde
- * el editor del pitch (0057: un borrador nuevo o regenerar con una pista
+ * Cada dos minutos (0061): reclama primero lo que una persona pidió desde
+ * el editor del pitch (0062: un borrador nuevo o regenerar con una pista
  * cerrada y sus instrucciones) y después los toques en 'draft' de un paso
  * con generate_with_ai cuya hora cae en el próximo día y cuyos pasos
  * anteriores ya salieron (claimTouchesToGenerate), nunca para quien pidió
@@ -18,7 +18,7 @@
  * con sus tokens y su costo, en su propia transacción: lo pagado cuenta
  * aunque después algo falle.
  *
- * Un fallo no se reintenta en bucle (0058): el toque espera 2, 8, 30 y
+ * Un fallo no se reintenta en bucle (0063): el toque espera 2, 8, 30 y
  * 120 minutos tras cada fallo seguido, y tras tres respuestas ilegibles
  * del modelo la IA se rinde (releaseGenerationLease): el borrador de una
  * cadencia queda retenido para que lo escriba una persona. La señal del
@@ -102,7 +102,7 @@ export async function runGenerate(db: MotorDb, deps: GenerateDeps): Promise<Gene
     let reservationId: string | null = null;
     try {
       const ctx = await db.transaction((tx) => loadGenerationContext(tx, lease.touchId));
-      // Comprobar el tope y apartar la estimación en una sola transacción con candado (0072): outbound.review
+      // Comprobar el tope y apartar la estimación en una sola transacción con candado (0075): outbound.review
       // puede estar gastando del mismo tope a la vez, y los dos no pueden pasar con el mismo saldo.
       const estimateUsd = estimateCallUsd(generator.model, ESTIMATED_PROMPT_CHARS, GENERATION_MAX_TOKENS[ctx.stepType] ?? 600);
       reservationId = await db.transaction((tx) => reserveLlmBudget(tx, { workspaceId: lease.workspaceId, purpose: 'generate', estimateUsd }));
@@ -114,7 +114,7 @@ export async function runGenerate(db: MotorDb, deps: GenerateDeps): Promise<Gene
       let draft: GeneratedMessage;
       try {
         // Lo que pidió una persona: su pista y, para «más corto» o «otro ángulo», la versión anterior. El
-        // marcado de un pitch a mano lleva sus {{variables}} (0058): entonces va el texto del toque, ya rellenado.
+        // marcado de un pitch a mano lleva sus {{variables}} (0063): entonces va el texto del toque, ya rellenado.
         const hint = ctx.generation?.requestedHint ?? null;
         const marked = ctx.generation?.bodyMarked ?? null;
         const previousDraft = hint ? ((marked && !marked.includes('{{') ? marked : null) ?? (ctx.touchBody.trim() || null)) : null;

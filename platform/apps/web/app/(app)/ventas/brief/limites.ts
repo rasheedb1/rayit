@@ -3,7 +3,7 @@ import type { Formatter } from "@/lib/format";
 import type { BriefLimitTexts } from "../_lib/messages";
 
 /**
- * Los topes del brief (BRIEF_LIMITS, los mismos CHECK de 0070) con el
+ * Los topes del brief (BRIEF_LIMITS, los mismos CHECK de 0073) con el
  * formato de números del workspace, para las frases que los dicen
  * («hasta 30», «2.000 caracteres»). La acción y la página los pasan a
  * MESSAGES.briefErrores: el número de la frase es siempre el del tope.

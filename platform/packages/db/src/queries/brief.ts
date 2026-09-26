@@ -17,7 +17,7 @@
  *   3. Las cadencias lo RESPETAN: enrollContacts no inscribe y el
  *      despachador cancela lo de una marca excluida (briefCompanyVerdictSql).
  *
- * Un brief es de UN creador, con uno activo por creador (0070 §1), y la
+ * Un brief es de UN creador, con uno activo por creador (0073 §1), y la
  * pantalla edita el de un creador concreto (getBrief y saveBrief reciben
  * su id). Con varios creadores en el espacio:
  *   · las cadencias usan el del creador del negocio y, si ese creador no
@@ -56,7 +56,7 @@ import type { BRIEF_STATUSES } from '../schema/ventas.ts';
 
 export type BriefStatus = (typeof BRIEF_STATUSES)[number];
 
-/** Topes de las listas: los mismos CHECK de 0070 (outbound_brief_list_sizes). */
+/** Topes de las listas: los mismos CHECK de 0073 (outbound_brief_list_sizes). */
 export const BRIEF_LIMITS = {
   categories: 30,
   countries: 30,
@@ -256,7 +256,7 @@ export async function getActiveBrief(tx: WorkspaceTx, creatorId: string): Promis
  * workspace (RLS no deja ver el de otro).
  *
  * Un brief es de UN creador (outbound_brief.creator_id, uno activo por
- * creador, 0070 §1): el recomendador y el generador leen el del creador
+ * creador, 0073 §1): el recomendador y el generador leen el del creador
  * del negocio. Por eso la pantalla elige creador y no hay «el brief del
  * espacio»: con dos creadores, editar «el último tocado» sobrescribía el
  * de otro sin saberlo.
@@ -434,9 +434,9 @@ const EMP_COLS =
  * Son búsquedas SEPARADAS unidas con UNION ALL, cada una con su índice:
  * la llave primaria; el de (domain::text); y company_link, que ya acota
  * al CRM, con el de name_key (brand_key(name) calculada por la base). Los
- * dos últimos son de 0071, y la comparación es text = text a propósito:
+ * dos últimos son de 0074, y la comparación es text = text a propósito:
  * bajo RLS Postgres solo usa un índice si la condición es leakproof, y ni
- * brand_key(co.name) (regexp_replace) ni citext = citext lo son (0071
+ * brand_key(co.name) (regexp_replace) ni citext = citext lo son (0074
  * explica la medición). Hasta la ronda 2 era una sola condición con OR
  * sobre company entera, que ningún índice sirve: con 10 000 empresas en
  * el catálogo y 100 señales, countHiddenSignals tardaba 28,6 s.
@@ -504,7 +504,7 @@ interface VerdictParts {
  * compara contra las marcas que el creador excluyó, nunca contra todo el
  * catálogo.
  *
- * Varios briefs activos (uno por creador, 0070 §1): la marca queda fuera
+ * Varios briefs activos (uno por creador, 0073 §1): la marca queda fuera
  * solo si TODOS la excluyen, porque lo que un creador no acepta otro del
  * mismo espacio puede aceptarlo. El motivo es 'company' si alguno la
  * excluye por nombre. El encaje sigue la misma idea: «Bajo tu mínimo» y
@@ -762,7 +762,7 @@ function validDate(v: string | null): boolean {
  * ver) o que está borrado es UnknownCreator: nunca se escribe el brief
  * de otro creador que el pedido.
  *
- * Valida aquí lo mismo que los CHECK de 0070 y algo más que la base no
+ * Valida aquí lo mismo que los CHECK de 0073 y algo más que la base no
  * puede saber: que una categoría no esté a la vez en «busco» y en «no
  * acepto» (CategoryConflict), y que las empresas excluidas sean del CRM
  * de este workspace (CompanyNotInCrm): un uuid ajeno no oculta nada,
@@ -775,7 +775,7 @@ function validDate(v: string | null): boolean {
  * el equipo cuando lo excluyen todos los briefs activos, y frena las
  * cadencias de sus negocios. Así que:
  *   · solo lo escriben owner y admin: lo mira la acción y lo impone la
- *     base (0070 §5); aquí vuelve como BriefError('Forbidden');
+ *     base (0073 §5); aquí vuelve como BriefError('Forbidden');
  *   · deja traza en audit_log ('ventas.brief.guardar', antes y después)
  *     en la misma transacción;
  *   · dos guardados a la vez se ordenan con un candado por workspace y
@@ -833,7 +833,7 @@ export async function saveBrief(tx: WorkspaceTx, creatorId: string, input: SaveB
   );
   if (!creador[0]) throw new BriefError('UnknownCreator');
 
-  // Un guardado a la vez por creador. El índice único de 0070 solo cubre
+  // Un guardado a la vez por creador. El índice único de 0073 solo cubre
   // los ACTIVOS: sin brief todavía, dos guardados «en pausa» a la vez
   // leían los dos «no hay ninguno» y creaban dos. El candado es de la
   // transacción y lleva el workspace y el creador: no frena a nadie más.
@@ -902,7 +902,7 @@ export async function saveBrief(tx: WorkspaceTx, creatorId: string, input: SaveB
     );
     return saved.id;
   } catch (err) {
-    // Las políticas RESTRICTIVE de 0070 §5: solo owner o admin escriben
+    // Las políticas RESTRICTIVE de 0073 §5: solo owner o admin escriben
     // el brief. La acción ya lo mira antes; esto es por si no.
     if (isBriefForbidden(err)) throw new BriefError('Forbidden');
     throw err;
@@ -933,7 +933,7 @@ export interface AddExcludedCompanyResult {
  *
  * Mismas reglas que saveBrief: la empresa tiene que estar en el CRM
  * (CompanyNotInCrm), el tope de marcas es BRIEF_LIMITS.companies
- * (TooManyCompanies), solo owner y admin escriben (Forbidden, 0070 §5),
+ * (TooManyCompanies), solo owner y admin escriben (Forbidden, 0073 §5),
  * el mismo candado por workspace y creador, y la misma traza en
  * audit_log ('ventas.brief.excluir_marca', antes y después). Sin ningún
  * brief activo que la pueda recibir: NoActiveBrief.
@@ -1005,7 +1005,7 @@ export async function addExcludedCompany(
  */
 const AUDIT_SNAPSHOT = `(to_jsonb(b) - 'workspace_id' - 'created_at' - 'updated_at')`;
 
-/** Un 42501 de las políticas de outbound_brief (0070 §5): quien guarda no es owner ni admin. */
+/** Un 42501 de las políticas de outbound_brief (0073 §5): quien guarda no es owner ni admin. */
 export function isBriefForbidden(err: unknown): boolean {
   const e = err as { code?: string; message?: string } | null;
   return e?.code === '42501' && /outbound_brief/.test(e.message ?? '');

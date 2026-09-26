@@ -556,7 +556,7 @@ export async function savePerfilComercial(
 
 /**
  * Una fila de outbound_llm_call por llamada, con propósito 'profile'
- * (0060) y su costo en USD. También las que el verificador rechazó: se
+ * (0065) y su costo en USD. También las que el verificador rechazó: se
  * pagaron, y el tope diario (outbound_health) tiene que verlas.
  */
 export async function recordProfileLlmCalls(tx: WorkspaceTx, calls: readonly LlmUsage[]): Promise<void> {

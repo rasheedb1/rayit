@@ -164,12 +164,12 @@ export const outboundTouchRecent = pgView('outbound_touch_recent', {
 }).existing();
 
 // ---------------------------------------------------------------------
-// Actividad y métricas del outreach (0067, VEN-16). Se leen con
+// Actividad y métricas del outreach (0072, VEN-16). Se leen con
 // @mc/db/queries/actividad, que tipa y valida cada fila (oneOf, int,
 // text de queries/outreach/shared).
 // ---------------------------------------------------------------------
 
-/** El número de cada paso en su secuencia (0067 §1b): una sola regla para la cola y el embudo. */
+/** El número de cada paso en su secuencia (0072 §1b): una sola regla para la cola y el embudo. */
 export const outboundStepPosition = pgView('outbound_step_position', {
   stepId: uuid('step_id'),
   workspaceId: uuid('workspace_id'),

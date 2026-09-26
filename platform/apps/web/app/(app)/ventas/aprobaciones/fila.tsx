@@ -33,6 +33,8 @@ export function Fila({
   /** Lo que no dejó aprobarlo tal cual: el editor lo abre en su campo (aria-invalid, con el foco), no en un aviso aparte. */
   const [errorInicial, setErrorInicial] = useState<Extract<ResultadoAprobacion, { ok: false }> | null>(null);
   const bloqueada = fila.regenerando || fila.motivo?.intentoSinConfirmar === true;
+  /** Las cifras sin origen que no dejan aprobarlo tal cual; null si se puede. */
+  const cifras = bloqueada ? null : fila.cifrasSinOrigen;
   const enfocarFila = () => document.getElementById(`fila-${fila.touchId}`)?.focus();
 
   async function aprobarAhora() {
@@ -48,6 +50,18 @@ export function Fila({
 
   function aprobar() {
     start(aprobarAhora);
+  }
+
+  /**
+   * Con una cifra sin origen el texto tal cual no sale: «Editar y aprobar»
+   * (y la a) abre el editor con el motivo en su campo y la cifra señalada,
+   * lo mismo que diría el servidor, sin pasar por una pregunta que promete
+   * algo que no puede pasar.
+   */
+  function editarConCifras(lista: string[]) {
+    setFallo(null);
+    setErrorInicial({ ok: false, errors: { body: t.errores.unsourced_figure(lista) }, cifras: lista });
+    setModo("editar");
   }
 
   async function saltar() {
@@ -146,7 +160,17 @@ export function Fila({
             </div>
           ) : null}
           <div className="flex flex-wrap items-start gap-2">
-            {!bloqueada ? (
+            {cifras ? (
+              // Sin «Aprobar»: la a y la e llevan al editor, con la cifra señalada.
+              <span data-accion="a" className="inline-flex">
+                <span data-accion="e" className="inline-flex">
+                  <Button variant="primary" onClick={() => editarConCifras(cifras)}>
+                    {t.acciones.editar}
+                  </Button>
+                </span>
+              </span>
+            ) : null}
+            {!bloqueada && !cifras ? (
               <>
                 <span data-accion="a" className="inline-flex">
                   {fila.aprobarBajo ? (
@@ -196,6 +220,7 @@ export function Fila({
               </span>
             ) : null}
           </div>
+          {cifras ? <p className="text-xs text-ink-2">{t.acciones.cifraSinOrigenAyuda(cifras.length)}</p> : null}
         </div>
       ) : null}
     </article>

@@ -123,7 +123,7 @@ VALUES
    now() - interval '3 hours', now() - interval '4 hours')
 ON CONFLICT (id) DO NOTHING;
 
--- Sus enlaces de baja, como los deja el despachador al reclamar (0037 §4.5).
+-- Sus enlaces de baja, como los deja el despachador al reclamar (0046 §4.5).
 INSERT INTO outbound_optout_link
   (token_hash, workspace_id, touch_id, contact_id, attempt, recipient_address, claimed_at, sent_at)
 SELECT encode(sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'UTF8')), 'hex'),

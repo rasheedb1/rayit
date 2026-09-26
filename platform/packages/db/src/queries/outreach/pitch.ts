@@ -5,7 +5,7 @@
  *
  * El editor abre el último borrador de la empresa con sus marcas
  * [claim:id] (de outbound_generation: el que redactó la IA o el que la
- * persona guardó, 0057) o uno vacío; ofrece los claims del creador que
+ * persona guardó, 0062) o uno vacío; ofrece los claims del creador que
  * firma como fichas insertables y corre el pre-vuelo en línea. Guardar
  * deja un outbound_touch en 'draft' y el marcado en outbound_generation
  * (outcome 'manual': ningún job escribe encima); programar, en
@@ -15,7 +15,7 @@
  *
  * «Redactar con IA» y las pistas («Más corto», «Más específico», «Otro
  * ángulo») no llaman al modelo desde la web: dejan la petición en
- * outbound_generation (outbound_generation_request, 0057) y el worker la
+ * outbound_generation (outbound_generation_request, 0062) y el worker la
  * redacta y la juzga; el toque vuelve a 'draft' con la nota del juez.
  *
  * Con la RLS del workspace (WorkspaceTx): la pantalla nunca fija el workspace.
@@ -57,7 +57,7 @@ export interface PitchDraft {
   /**
    * La nota de la revisión automática del texto que se abre: la del
    * intento ELEGIDO (el que pasó, el mejor o el que se retuvo), no la del
-   * último intento (0058). null si el texto no es el de la IA.
+   * último intento (0063). null si el texto no es el de la IA.
    */
   review: { total: number | null; note: string | null; attempt: number | null } | null;
   /**
@@ -73,7 +73,7 @@ export interface PitchDraft {
    * 'llm_output', 'error'): la pantalla lo traduce, nunca lo enseña crudo.
    */
   pending: { stage: string; hint: RegenerateHint | null; lastError: string | null } | null;
-  /** La IA se rindió con este borrador (el modelo no devolvió nada legible, 0058): lo escribe la persona o pide otra versión. */
+  /** La IA se rindió con este borrador (el modelo no devolvió nada legible, 0063): lo escribe la persona o pide otra versión. */
   failed: boolean;
   /** Se copió con tantas cifras sin origen (UNSOURCED_COPY_MARK): el editor lo dice. null si no. */
   unsourcedCopy: number | null;
@@ -82,7 +82,7 @@ export interface PitchDraft {
 /**
  * La marca que deja «Copiar» en un borrador con cifras sin origen:
  * held_reason = 'unsourced_copy:<n>' con el toque en 'draft' (la CHECK de
- * 0037 solo exige motivo cuando está retenido; en un borrador es una nota).
+ * 0046 solo exige motivo cuando está retenido; en un borrador es una nota).
  * No es un código de retención (HOLD_CODES): nada lo detiene por ella, y
  * guardar o programar el borrador la limpia con el texto nuevo.
  */
@@ -330,7 +330,7 @@ export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise
   const cited = JSON.stringify(claimsCitedIn(claims, subject, body));
   const approved = input.intent === 'schedule';
   // Primero el toque queda en borrador con el texto nuevo; luego se guarda el marcado de la persona (la
-  // función de la base solo lo acepta sobre un correo en draft o held, 0059); y al final, si se programa,
+  // función de la base solo lo acepta sobre un correo en draft o held, 0064); y al final, si se programa,
   // pasa a 'scheduled' con su aprobación. Todo en la misma transacción.
   let touchId = input.touchId;
   if (touchId) {
@@ -354,7 +354,7 @@ export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise
   }
   // El marcado de la persona TAL CUAL lo escribió, con sus {{variables}} y
   // sus [claim:id]: el editor lo vuelve a abrir así (si cambia «Para», el
-  // saludo cambia con la persona) y ningún job lo pisa (0057, 0058). Lo que
+  // saludo cambia con la persona) y ningún job lo pisa (0062, 0063). Lo que
   // sale, ya rellenado, está en outbound_touch.
   const saved = (
     await tx.query<{ r: string }>('SELECT outbound_generation_save_manual($1::uuid, $2, $3) AS r', [touchId, input.subject, input.body])
@@ -383,7 +383,7 @@ export type RequestPitchDraftResult = { ok: true } | { ok: false; code: 'not_fou
 /**
  * Pide a la IA un borrador del pitch, o regenerarlo con una pista cerrada
  * y, si la persona quiere, sus instrucciones (tono, qué destacar). No
- * llama al modelo: deja la petición para outbound.generate (0057).
+ * llama al modelo: deja la petición para outbound.generate (0062).
  */
 export async function requestPitchDraft(
   tx: WorkspaceTx,
@@ -398,7 +398,7 @@ export async function requestPitchDraft(
   return r === 'ok' ? { ok: true } : { ok: false, code: r as 'not_found' | 'not_editable' | 'opted_out' | 'busy' };
 }
 
-/** ¿El worker redacta con IA? 'anthropic' o 'fake' sí; 'off' le falta la llave; 'unknown' no corrió en el último día (0057). */
+/** ¿El worker redacta con IA? 'anthropic' o 'fake' sí; 'off' le falta la llave; 'unknown' no corrió en el último día (0062). */
 export type WriterStatus = 'anthropic' | 'fake' | 'off' | 'unknown';
 
 export async function outreachWriterStatus(tx: WorkspaceTx): Promise<WriterStatus> {

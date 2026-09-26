@@ -128,7 +128,7 @@ export interface NextActionRow {
   dueDate: string | null;
   /** La hora en que vence, en la zona del espacio: «15:00». */
   dueTime: string | null;
-  /** 'vencido', 'hoy', 'futuro' o 'sin_fecha', contados en la zona del espacio (0034). */
+  /** 'vencido', 'hoy', 'futuro' o 'sin_fecha', contados en la zona del espacio (0043). */
   dueState: 'sin_fecha' | 'vencido' | 'hoy' | 'futuro';
   /** Quien la tiene que hacer (deal.next_action_user_id). */
   responsibleUserId: string | null;
@@ -154,7 +154,7 @@ const HAS_ACTION = `nullif(btrim(d.next_action), '') IS NOT NULL`;
 /**
  * La parte común de las dos lecturas de siguiente acción. `w` es la fila
  * de WORKSPACE_TZ y `p` la de deal_pipeline, de donde sale el estado del
- * vencimiento: desde 0034 la vista lo cuenta en la zona del espacio, así
+ * vencimiento: desde 0043 la vista lo cuenta en la zona del espacio, así
  * que el tablero, la ficha y «Para hoy» lo leen de una sola definición.
  * La única copia de ese CASE fuera de la vista es la del job
  * (apps/worker/src/jobs/ventas/seguimientos.ts), que cuenta con el

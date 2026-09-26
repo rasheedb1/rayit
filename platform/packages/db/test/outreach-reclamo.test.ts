@@ -109,7 +109,7 @@ test('dos reclamos a la vez: uno sale y el otro se pospone por la separación co
   assert.deepEqual({ ...pedro }, { status: 'scheduled', attempt_count: 0 }, 'pospuesto, sin gastar un intento');
 });
 
-test('outbound.dispatch declara una sola corrida a la vez (0055)', async () => {
+test('outbound.dispatch declara una sola corrida a la vez (0060)', async () => {
   const fila = await t.db.asWorker(async (tx) =>
     (await tx.query<{ max_concurrency: number }>(`SELECT max_concurrency FROM job_definition WHERE id = 'outbound.dispatch'`)).rows[0],
   );

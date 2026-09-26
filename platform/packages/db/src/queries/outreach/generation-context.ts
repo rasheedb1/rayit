@@ -72,11 +72,11 @@ export interface GenerationContext {
   approvedOfStepType: number;
   generation: {
     stage: string; subject: string | null; bodyMarked: string | null; model: string | null; attempts: number;
-    /** Lo que pidió una persona desde el editor (0057): la pista, sus instrucciones y cuándo. null = un borrador de cadencia. */
+    /** Lo que pidió una persona desde el editor (0062): la pista, sus instrucciones y cuándo. null = un borrador de cadencia. */
     requestedHint: RegenerateHint | null;
     requestedInstructions: string | null;
     requestedAt: Date | null;
-    /** Lo que costó el borrador de outbound.generate (0057). */
+    /** Lo que costó el borrador de outbound.generate (0062). */
     usage: { inputTokens: number; outputTokens: number; costUsd: number };
   } | null;
   /** El asunto y el cuerpo que tiene ahora el toque (sin marcas). */

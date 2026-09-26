@@ -1091,14 +1091,17 @@ VALUES
   -- trae de fuera). Las otras cuatro son de marcas con negocio abierto, y
   -- sin esta la demo no enseñaba el camino principal de VEN-2: aceptar
   -- una marca nueva crea la empresa y el negocio con «Enviar pitch»
-  -- (pulido r8). Molino Andino es inventada, como todas las del seed.
+  -- (pulido r8). Harinas La Sabana es inventada, como todas las del seed.
+  -- Hasta el pulido r2 era Molino Andino, pero el seed 0008 la metió en
+  -- el CRM (molinoandino.test) y la señal, con molinoandino.co, ya no era
+  -- «fuera del CRM»: aceptarla creaba una segunda Molino Andino.
   ('00000002-0000-4000-8000-00000005e013', '00000002-0000-4000-8000-000000000001', NULL, 'meta_ad_library',
    '5 anuncios nuevos en Meta desde el ' || to_char(CURRENT_DATE - 4, 'FMDD') || ' '
      || (SELECT m.corto[extract(month FROM CURRENT_DATE - 4)::int] FROM meses m) || ' · harinas',
-   now() - interval '6 hours', 'https://www.facebook.com/ads/library/?q=molinoandino',
-   jsonb_build_object('company_name', 'Molino Andino', 'domain', 'molinoandino.co', 'industry', 'Alimentos', 'active_ads', 5, 'country', 'CO', 'category', 'harinas',
+   now() - interval '6 hours', 'https://www.facebook.com/ads/library/?q=harinaslasabana',
+   jsonb_build_object('company_name', 'Harinas La Sabana', 'domain', 'harinaslasabana.co', 'industry', 'Alimentos', 'active_ads', 5, 'country', 'CO', 'category', 'harinas',
                       'since', to_char(CURRENT_DATE - 4, 'YYYY-MM-DD')), 0.8000, 7000000.00, 'COP',
-   'meta_ad_library:molinoandino.co:' || to_char(CURRENT_DATE - 4, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
+   'meta_ad_library:harinaslasabana.co:' || to_char(CURRENT_DATE - 4, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
   -- Pendiente, pero el brief de Laura la deja fuera (VEN-7 r2): es de
   -- suplementos, una categoría que su brief no acepta (sección 12). La
   -- bandeja sigue enseñando las cinco del mock y dice «1 señal oculta por

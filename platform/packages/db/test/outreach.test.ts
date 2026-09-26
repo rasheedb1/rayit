@@ -1,5 +1,5 @@
 /**
- * VEN-9 · la migración de outreach (0037) en Postgres embebido.
+ * VEN-9 · la migración de outreach (0046) en Postgres embebido.
  *
  *   · los catálogos que trae: seis ángulos, la rúbrica por defecto (con
  *     pesos que la base comprueba) y la plantilla «Marca con campaña
@@ -214,7 +214,7 @@ before(async () => {
     INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_C}', 'outreach-c', 'Outreach C', 'America/Mexico_City');
     INSERT INTO company (id, name, owner_workspace_id) VALUES ('${COMPANY_C}', 'Empresa de C', '${WS_C}');
     INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_C}', '${COMPANY_C}');
-    -- Desde 0038 §8 (VEN-15) la baja por enlace vale para el workspace
+    -- Desde 0055 §8 (VEN-15) la baja por enlace vale para el workspace
     -- que envió ese correo, en todos sus canales, y nunca para toda la
     -- plataforma: estas pruebas miden eso. Lo que ve la página y el
     -- sabotaje entre inquilinos se prueban en entregabilidad.test.ts.
@@ -272,7 +272,7 @@ const baja = (token: string) =>
 /** Los permisos de mc_app solo se miden en PGlite: en el CI el rol de conexión también es miembro de mc_worker. */
 const soloEmbebido = () => t.kind === 'pglite';
 
-describe('0037 · catálogos', () => {
+describe('0046 · catálogos', () => {
   test('los seis ángulos de §5.3, globales, se leen desde cualquier workspace', async () => {
     const keys = await t.db.withWorkspace(WS_B, async (tx) =>
       (await tx.query<{ key: string }>('SELECT key FROM outbound_angle ORDER BY position')).rows.map((r) => r.key),
@@ -549,7 +549,7 @@ describe('0037 · catálogos', () => {
   });
 });
 
-describe('0037 · límites atómicos', () => {
+describe('0046 · límites atómicos', () => {
   /** Los envoltorios de queries/outreach.ts, por el nombre de la función SQL. */
   const envoltorio = { increment_if_under_cap: incrementIfUnderCap, increment_weekly: incrementWeekly } as const;
   type Fn = keyof typeof envoltorio;
@@ -689,7 +689,7 @@ describe('0037 · límites atómicos', () => {
   });
 });
 
-describe('0037 · public_optout, la baja desde el enlace', () => {
+describe('0046 · public_optout, la baja desde el enlace', () => {
   test('un token inventado, corto, o de un correo que no dejó enlace no encuentra nada', async () => {
     for (const token of ['', 'corto', 'x'.repeat(40), 'token-que-no-salio-nunca-0001', TOKEN_SIN_ID]) {
       const { r } = await baja(token);
@@ -803,7 +803,7 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
       [
         [CONTACT_A, true, true],
         [CONTACT_OTRO, false, false],
-        // La ficha de B con la misma dirección no es de A: un enlace de A no la toca (0038 §8).
+        // La ficha de B con la misma dirección no es de A: un enlace de A no la toca (0055 §8).
         [CONTACT_B, false, false],
       ],
     );
@@ -813,7 +813,7 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
       [TOUCH_PENDING_A]: ['canceled', 'opted_out'],
       [TOUCH_PENDING_B]: ['scheduled', null],
       [TOUCH_OTRO]: ['scheduled', null],
-      // Lo reclamado es del despachador: la baja no lo toca (0037 §4.1).
+      // Lo reclamado es del despachador: la baja no lo toca (0046 §4.1).
       [TOUCH_EN_VUELO]: ['processing', null],
     };
     for (const [id, [status, motivo]] of Object.entries(esperado)) {
@@ -834,7 +834,7 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
       'la baja termina los enrolamientos de quien envió y dice cuándo',
     );
 
-    // Un enlace nunca escribe la lista de toda la plataforma (0038 §8); sí la del workspace que envió.
+    // Un enlace nunca escribe la lista de toda la plataforma (0055 §8); sí la del workspace que envió.
     assert.deepEqual(await sinRls("SELECT 1 FROM contact_suppression WHERE email = 'marta@cafe.test'"), []);
     const listas = await sinRls<{ workspace_id: string }>(
       "SELECT workspace_id FROM outbound_workspace_optout WHERE email = 'marta@cafe.test'",
@@ -935,7 +935,7 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
       (await sinRls(`SELECT 1 FROM outbound_workspace_optout WHERE workspace_id = '${WS_A}' AND email = 'borrada@cafe.test'`)).length,
       1,
     );
-    // La misma persona en B: B no envió ese correo, así que lo suyo sigue (0038 §8).
+    // La misma persona en B: B no envió ese correo, así que lo suyo sigue (0055 §8).
     const [enB] = await sinRls<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '${CONTACT_BORRADA_B}'`);
     assert.equal(enB?.opted_out, false);
     assert.equal((await toque(TOUCH_BORRADA_B)).status, 'scheduled');
@@ -952,7 +952,7 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
     const T3 = '00000037-0000-4000-8000-0000000070c3';
     const TK = { [T1]: 'c-uno-0123456789abcdefghij', [T2]: 'c-dos-0123456789abcdefghij', [T3]: 'c-tres-0123456789abcdefghi' };
     const c = (sql: string, params: unknown[] = []) => t.db.withWorkspace(WS_C, (tx) => tx.query(sql, params));
-    /** C ya no le escribe a esa dirección (0038 §8): la baja del workspace que envió. */
+    /** C ya no le escribe a esa dirección (0055 §8): la baja del workspace que envió. */
     const suprimido = async (correo: string) =>
       (await sinRls(`SELECT 1 FROM outbound_workspace_optout WHERE workspace_id = '${WS_C}' AND email = '${correo}'`))
         .length === 1;
@@ -1074,7 +1074,7 @@ describe('0037 · public_optout, la baja desde el enlace', () => {
   });
 });
 
-describe('0037 · la regla de la baja, en las transiciones', () => {
+describe('0046 · la regla de la baja, en las transiciones', () => {
   test('tras la baja se sigue anotando lo que pasó en un toque enviado: respuesta, apertura, hilo', async () => {
     await t.db.asWorker((tx) =>
       tx.query(
@@ -1219,7 +1219,7 @@ describe('0037 · la regla de la baja, en las transiciones', () => {
   });
 });
 
-describe('0037 · el interruptor, la salud y los días hábiles', () => {
+describe('0046 · el interruptor, la salud y los días hábiles', () => {
   const pausa = (ws: string) => t.db.withWorkspace(ws, (tx) => shouldPauseOutreach(tx));
 
   test('sin dirección postal no se enciende; con ella, sí, y apagar cancela lo que está en cola', async () => {
@@ -1387,7 +1387,7 @@ describe('0037 · el interruptor, la salud y los días hábiles', () => {
   });
 });
 
-describe('0037 · coherencia de la cola, lista global en la regla y tope de gasto (D)', () => {
+describe('0046 · coherencia de la cola, lista global en la regla y tope de gasto (D)', () => {
   const WS_D = '00000037-0000-4000-8000-00000000000d';
   const COMPANY_D = '00000037-0000-4000-8000-0000000000d0';
   const D1 = '00000037-0000-4000-8000-0000000000d1';
@@ -1617,7 +1617,7 @@ describe('0037 · coherencia de la cola, lista global en la regla y tope de gast
   });
 });
 
-describe('0037 · techo por canal, processing del despachador, baja global al enrolar y enlace al reclamar (E)', () => {
+describe('0046 · techo por canal, processing del despachador, baja global al enrolar y enlace al reclamar (E)', () => {
   const WS_E = '00000037-0000-4000-8000-00000000000e';
   const COMPANY_E = '00000037-0000-4000-8000-0000000000e0';
   /** Dada de baja solo en la lista global: su ficha no lo dice. */

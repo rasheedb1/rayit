@@ -5,7 +5,7 @@
  *     que mira; otro espacio no ve nada, no aprueba, no salta, no marca
  *     leído y no responde;
  *   · la respuesta de la bandeja solo apunta a un mensaje entrante de la
- *     misma ficha, canal y espacio (outbound_touch_reply_check, 0064):
+ *     misma ficha, canal y espacio (outbound_touch_reply_check, 0069):
  *     escribir el toque a mano con un mensaje ajeno o saliente se rechaza;
  *   · aprobar, responder y crear el referido funcionan como mc_app.
  */
@@ -165,7 +165,7 @@ test('deshacer una aprobación la devuelve a la cola con el motivo que guardó e
   const r = await t.db.withWorkspace(WS_A, (tx) => approveQueuedTouch(tx, { touchId: HELD, userId: null, now }));
   assert.equal(r.ok, true);
   if (!r.ok) return;
-  // El motivo no viaja al navegador: lo guarda el toque (0066).
+  // El motivo no viaja al navegador: lo guarda el toque (0071).
   assert.ok(!('heldReason' in r));
   const guardado = await t.db.withWorkspace(WS_A, (tx) =>
     tx.query<{ held_reason: string | null; approved_from_reason: string | null }>(

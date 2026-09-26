@@ -9,7 +9,7 @@ import { tieneRol } from "@/lib/workspace/rol";
  * vuelve a mandar. Quien trabaja las cadencias ('owner', 'admin',
  * 'member') la opera; un 'viewer' o un 'client' (en una agencia, la
  * marca misma) ven la cola, no la tocan. La base dice lo mismo
- * (outbound_touch_guard_operator, 0067): esto solo evita ofrecer lo que
+ * (outbound_touch_guard_operator, 0072): esto solo evita ofrecer lo que
  * se va a rechazar.
  */
 export const PUEDEN_OPERAR_LA_COLA: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);

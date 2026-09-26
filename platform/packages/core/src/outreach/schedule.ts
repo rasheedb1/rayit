@@ -9,7 +9,7 @@
  *
  *   · Días hábiles: lunes a viernes, menos los festivos que traiga la
  *     ventana (SendWindow.holidays: los del país del workspace, de
- *     holidays.ts). Sin festivos, lo mismo que next_business_day de 0037.
+ *     holidays.ts). Sin festivos, lo mismo que next_business_day de 0046.
  *   · day_offset se cuenta en DÍAS HÁBILES desde el día del enrolamiento
  *     (o el siguiente hábil si se enroló en fin de semana): el paso del
  *     día 9 nunca cae en sábado, y el orden de los pasos se conserva.
@@ -47,7 +47,7 @@ export interface SendWindow {
   holidays?: readonly string[];
 }
 
-/** La ventana por defecto (la de outbound_policy.send_window_*, 0051). */
+/** La ventana por defecto (la de outbound_policy.send_window_*, 0056). */
 export const DEFAULT_SEND_WINDOW: SendWindow = { start: '09:00', end: '17:00' };
 
 /** Minutos de dispersión por defecto sobre la hora del paso. */
@@ -315,7 +315,7 @@ export function planSteps(steps: readonly PlanStep[], opts: PlanOptions): Array<
  * El siguiente hueco para algo que hoy no pudo salir (el límite diario se
  * agotó): el siguiente día hábil local, estrictamente después del día de
  * `at`, a la misma hora de reloj si cae en la ventana, o encerrada en
- * ella si no. Es next_business_day de 0037 con la ventana del workspace.
+ * ella si no. Es next_business_day de 0046 con la ventana del workspace.
  */
 export function nextBusinessSlot(at: Date, timeZone: string, window: SendWindow = DEFAULT_SEND_WINDOW): Date {
   assertTimeZone(timeZone);

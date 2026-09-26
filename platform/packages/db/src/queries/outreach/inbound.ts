@@ -37,7 +37,7 @@
  *     cualquier secuencia, pasan a replied con lo cancelable cancelado
  *     (CANCELABLE_TOUCH_STATUSES: draft, scheduled, held), igual que los
  *     pitches sueltos a la misma ficha (cancelLoosePitches); y, con
- *     outbound_policy.stop_company_on_reply (0054, encendido por defecto),
+ *     outbound_policy.stop_company_on_reply (0059, encendido por defecto),
  *     las cadencias de las otras personas de la misma marca quedan en
  *     pausa. Se avisa una vez, diciendo qué se detuvo. Si ya había
  *     respondido, el mensaje queda en la conversación sin otro aviso.
@@ -79,7 +79,7 @@ export interface InboundEffectsInput {
   /**
    * contact.opted_out_reason si pide la baja. Por defecto ninguna: en un
    * canal con código (correo, LinkedIn, Instagram) la ficha guarda
-   * reply_optout:<canal> en opted_out_code (0043, VEN-9) y la pantalla lo
+   * reply_optout:<canal> en opted_out_code (0052, VEN-9) y la pantalla lo
    * traduce; en otro canal, la frase de @mc/core en el idioma del workspace.
    */
   optOutReason?: string;
@@ -107,7 +107,7 @@ export interface InboundEffects {
   optOutReview: boolean;
   /** Otros enrolamientos de la misma ficha que la respuesta detuvo (pasaron a replied). */
   otherEnrollmentsStopped: string[];
-  /** Enrolamientos de otras personas de la misma marca que quedaron en pausa (stop_company_on_reply, 0054). */
+  /** Enrolamientos de otras personas de la misma marca que quedaron en pausa (stop_company_on_reply, 0059). */
   companyPaused: string[];
 }
 
@@ -129,13 +129,13 @@ export async function applyContactOptOut(
   reason: string,
   now: Date,
 ): Promise<string[]> {
-  return (await optOutContact(tx, contactId, workspaceId, reason, now)).canceled;
+  return (await optOutContact(tx, contactId, workspaceId, reason, now, null, 'manual')).canceled;
 }
 
-/** Los canales con código de baja por respuesta: los del CHECK de contact.opted_out_code (0043). */
+/** Los canales con código de baja por respuesta: los del CHECK de contact.opted_out_code (0052). */
 const REPLY_OPT_OUT_CODE_CHANNELS: ReadonlySet<string> = new Set(['email', 'linkedin', 'instagram_dm']);
 
-/** El código de 0043 para una baja que llega respondiendo por ese canal, o null si el canal no tiene. */
+/** El código de 0052 para una baja que llega respondiendo por ese canal, o null si el canal no tiene. */
 export function replyOptOutCodeFor(channel: string): string | null {
   return REPLY_OPT_OUT_CODE_CHANNELS.has(channel) ? `reply_optout:${channel}` : null;
 }
@@ -147,6 +147,7 @@ async function optOutContact(
   reason: string | null,
   now: Date,
   code: string | null = null,
+  source: WorkspaceOptOutSource = 'reply',
 ): Promise<{ canceled: string[]; stopped: string[]; marked: string[] }> {
   assertIds('applyContactOptOut', [contactId, workspaceId]);
   const ids = (
@@ -181,7 +182,41 @@ async function optOutContact(
       [ids, workspaceId, now.toISOString(), reason?.slice(0, 500) ?? null, code],
     )
   ).rows.map((r) => r.id);
+  await recordWorkspaceOptOut(tx, contactId, workspaceId, source);
   return { canceled, stopped, marked };
+}
+
+/** De dónde viene una baja que no es la del enlace: una respuesta o una persona en la ficha. */
+export type WorkspaceOptOutSource = 'reply' | 'manual';
+
+/**
+ * La baja vive también en la dirección (entregabilidad §8.4): el correo
+ * de la ficha entra en outbound_workspace_optout del workspace, que
+ * sobrevive a la ficha. Sin esto, borrarla y crearla otra vez con el
+ * mismo correo la dejaba contactable. mc_app no tiene INSERT en la lista
+ * y pasa por outbound_workspace_optout_record (SECURITY DEFINER, solo el
+ * workspace de la transacción); el worker (mc_worker, sin workspace
+ * fijado) escribe la fila directo, con la misma regla de visibilidad.
+ */
+export async function recordWorkspaceOptOut(
+  tx: SqlExecutor,
+  contactId: string,
+  workspaceId: string,
+  source: WorkspaceOptOutSource,
+): Promise<void> {
+  assertIds('recordWorkspaceOptOut', [contactId, workspaceId]);
+  const role = (await tx.query<{ r: string }>('SELECT current_user::text AS r')).rows[0]?.r;
+  if (role === 'mc_app') {
+    await tx.query('SELECT outbound_workspace_optout_record($1::uuid, $2)', [contactId, source]);
+    return;
+  }
+  await tx.query(
+    `INSERT INTO outbound_workspace_optout (workspace_id, email, source)
+     SELECT $2::uuid, c.email, $3 FROM contact c
+      WHERE c.id = $1::uuid AND c.email IS NOT NULL AND contact_visible_to(c.id, $2::uuid)
+     ON CONFLICT (workspace_id, email) DO NOTHING`,
+    [contactId, workspaceId, source],
+  );
 }
 
 /** Una dirección de correo comparable: sin «Nombre <…>», sin espacios, en minúsculas. */
@@ -348,7 +383,7 @@ export async function applyReplyOptOut(
       otherEnrollmentsStopped: stop.otherEnrollments, companyPaused: stop.companyPaused,
     };
   }
-  // En la base, un código que la pantalla traduce (0043); la frase solo en un canal sin código.
+  // En la base, un código que la pantalla traduce (0052); la frase solo en un canal sin código.
   const lang = noticeLang(w.locale);
   const code = replyOptOutCodeFor(input.channel);
   const reason = input.optOutReason ?? (code ? null : OUTREACH_NOTICE_TEXTS[lang].optOutReason(channelLabel(lang, input.channel)));
@@ -409,7 +444,7 @@ interface ReplyStopResult {
  *   · TODOS los enrolamientos vivos de la misma ficha en el workspace
  *     también, en cualquier secuencia: ya contestó, lo que sigue lo
  *     decide una persona (como optOutContact con la baja);
- *   · con outbound_policy.stop_company_on_reply (0054, encendido por
+ *   · con outbound_policy.stop_company_on_reply (0059, encendido por
  *     defecto), los enrolamientos vivos de las OTRAS fichas de la misma
  *     marca quedan en pausa (paused, sin resume_at): el reclamo no toma
  *     nada de un enrolamiento pausado y el despachador pospone lo que ya

@@ -171,7 +171,7 @@ type TouchRow = {
 /**
  * El correo que rebotó: el toque 'sent' de ESTE workspace cuyo
  * Message-ID trae el aviso, enviado antes del aviso. outbound_touch no
- * guarda la cuenta que lo envió (0037), así que la prueba es esa: solo
+ * guarda la cuenta que lo envió (0046), así que la prueba es esa: solo
  * quien recibió el correo, o quien lo envió, conoce su Message-ID, y un
  * aviso no puede llegar antes que el correo. Sin Message-ID no se adivina
  * por la dirección: el aviso queda anotado sin efectos.
@@ -254,7 +254,7 @@ async function registrar(
     }
     // Los correos pendientes de ESTE workspace a esa dirección y los
     // enrolamientos que ya no tienen por dónde seguir, en la misma
-    // transacción. Lo que 'processing' tiene es del despachador (0037
+    // transacción. Lo que 'processing' tiene es del despachador (0046
     // §4.1): si lo devuelve a la cola, la base lo cancela (entregabilidad §2).
     const barrido = await sweepInvalidEmail(tx, ws, now);
     return { inserted: true, verified, invalidated, canceled: barrido.canceled, paused: barrido.paused };
@@ -316,7 +316,7 @@ export async function sweepInvalidEmail(q: Queryable, workspaceId: string | null
     [workspaceId],
   );
   // Quien pidió la baja no se pausa: su enrolamiento es de la regla de la
-  // baja (0037 §3.3, entregabilidad §8), y pausarlo la haría saltar.
+  // baja (0046 §3.3, entregabilidad §8), y pausarlo la haría saltar.
   const pause = await q.query(
     `UPDATE outbound_enrollment e
         SET status = 'paused',

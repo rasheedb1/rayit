@@ -114,7 +114,7 @@ export const OPEN_THREADS_PAGE = 200;
  *
  * El orden es el turno: primero los que nunca se leyeron, después
  * los que hace más que no se leen (outbound_touch.replies_checked_at del
- * último toque, 0051 §10), y a igualdad lo enviado más reciente. Con
+ * último toque, 0056 §10), y a igualdad lo enviado más reciente. Con
  * markThreadsChecked después de cada lectura, dos corridas de 200 leen
  * 400 hilos distintos, y ninguno se queda sin leer más de
  * ceil(hilos / 200) corridas. `excludeTouchIds` deja fuera lo ya leído
@@ -170,7 +170,7 @@ export async function listOpenThreads(
 
 /**
  * Anota que el lector miró estos hilos (por su último toque): pasan al
- * final del turno (0051 §10). Se anota también lo que no se pudo leer
+ * final del turno (0056 §10). Se anota también lo que no se pudo leer
  * (cuenta caída, error del proveedor): si no, un buzón roto se quedaría
  * delante para siempre y tapaba a los demás.
  */
@@ -235,7 +235,7 @@ export async function recordInbound(tx: WorkerSql, thread: OpenThread, msg: Inbo
         thread.workspaceId, thread.account.id, thread.enrollmentId, thread.touchId, thread.contactId, thread.dealId,
         thread.channel, thread.threadRef, msg.providerMessageId, msg.messageIdRfc ?? null, msg.inReplyTo ?? null,
         msg.fromAddress ?? null, msg.subject ?? null, msg.body, msg.occurredAt.toISOString(),
-        // Lo que dijeron las cabeceras (0065): el clasificador lo recibe; sin dato, null.
+        // Lo que dijeron las cabeceras (0070): el clasificador lo recibe; sin dato, null.
         typeof msg.automatic === 'boolean' ? msg.automatic : null,
       ],
     )
@@ -254,7 +254,7 @@ export async function recordInbound(tx: WorkerSql, thread: OpenThread, msg: Inbo
 // ---------------------------------------------------------------------
 
 /**
- * Un correo que una persona marcó «Sí, salió» (0053, blocked_reason
+ * Un correo que una persona marcó «Sí, salió» (0058, blocked_reason
  * 'sent_confirmed_by_user') queda enviado sin las pruebas del proveedor:
  * sin thread_ref, el lector no puede leer su hilo (una respuesta a ESE
  * correo no detendría la cadencia) y la respuesta en el hilo del paso

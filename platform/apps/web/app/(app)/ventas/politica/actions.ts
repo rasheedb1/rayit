@@ -16,7 +16,7 @@ import { puedeCambiarLaPolitica } from "./permiso";
 /**
  * Las acciones de /ventas/politica. El workspace lo fija withWorkspace;
  * aquí no llega ni sale ningún id. El interruptor va por las funciones
- * de 0037 (enable_outreach / disable_outreach), que además cancelan la
+ * de 0046 (enable_outreach / disable_outreach), que además cancelan la
  * cola al apagar.
  *
  * Las tres piden ser 'owner' o 'admin' del workspace (entregabilidad §7): la base
@@ -52,7 +52,7 @@ function politicaSchema(rango: (c: Campo) => string, direccionLarga: string) {
     claimsMustBeSourced: z.enum(["si", "no"]).transform((v) => v === "si"),
     stopCompanyOnReply: z.enum(["si", "no"]).transform((v) => v === "si"),
     postalAddress: z.string().trim().max(POSTAL_ADDRESS_MAX, direccionLarga),
-    // La ventana laboral: 'HH:MM', y el fin después del inicio (el CHECK de 0051 §1).
+    // La ventana laboral: 'HH:MM', y el fin después del inicio (el CHECK de 0056 §1).
     sendWindowStart: z.string().regex(HORA, t.campos.sendWindow.invalida),
     sendWindowEnd: z.string().regex(HORA, t.campos.sendWindow.invalida),
   }).refine((v) => v.sendWindowEnd > v.sendWindowStart, { path: ["sendWindowEnd"], message: t.campos.sendWindow.error });
@@ -127,7 +127,7 @@ export async function encenderEnvio(): Promise<InterruptorResultado> {
     if (isPolicyForbidden(err)) return { ok: false, message: t.interruptor.sinPermiso };
     if (e.code !== "23514") console.error("[ventas/politica] no se pudo encender", err);
     if (e.code !== "23514") return { ok: false, message: t.interruptor.errorEncender };
-    // enable_outreach (0037 §8.5) da 23514 por la dirección (con su CONSTRAINT) o por no tener un canal conectado.
+    // enable_outreach (0046 §8.5) da 23514 por la dirección (con su CONSTRAINT) o por no tener un canal conectado.
     return { ok: false, message: e.constraint === "outbound_policy_enabled_needs_address" ? t.interruptor.sinDireccion : t.interruptor.sinCanal };
   }
   revalidatePath("/ventas/politica");

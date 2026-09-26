@@ -128,16 +128,24 @@ describe("formatterFor: el workspace manda (locale, moneda y zona)", () => {
     // 00:31 UTC del 25 es el 24 por la noche en Nueva York y en Bogotá.
     const iso = "2026-09-25T00:31:00Z";
     const corta = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }).dateTimeShort(iso, new Date("2026-10-01T12:00:00Z"));
-    expect(corta).toMatch(/^24 de sept?\.?, 7:31 p\. m\.$/);
+    expect(corta).toBe("24 sep, 7:31 p. m.");
     expect(corta).not.toContain("2026");
     expect(formatterFor(ESTADOS_UNIDOS).dateTimeShort(iso, new Date("2026-10-01T12:00:00Z"))).toBe("Sep 24, 8:31 PM");
+  });
+
+  it("una fecha con hora en una fila dice el mes como formatDate: «25 sep, 9:40 a. m.», no «25 de sept» (pulido r2)", () => {
+    const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
+    const iso = "2026-09-25T14:40:00Z";
+    expect(f.dateTimeShort(iso, new Date("2026-09-26T12:00:00Z"))).toBe("25 sep, 9:40 a. m.");
+    // El mismo mes que la fecha sola: «25 sep».
+    expect(f.dateTimeShort(iso, new Date("2026-09-26T12:00:00Z")).startsWith(`${f.date(iso)},`)).toBe(true);
   });
 
   it("la fecha corta lleva el año cuando el instante no es del año en curso en la zona del workspace", () => {
     const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
     const hoy = new Date("2026-09-25T15:00:00Z");
     // Del año pasado: con año, para no confundirlo con uno de esta semana.
-    expect(f.dateTimeShort("2025-09-25T00:31:00Z", hoy)).toMatch(/^24 de sept?\.? de 2025, 7:31 p\. m\.$/);
+    expect(f.dateTimeShort("2025-09-25T00:31:00Z", hoy)).toBe("24 sep 2025, 7:31 p. m.");
     expect(formatterFor(ESTADOS_UNIDOS).dateTimeShort("2025-09-25T00:31:00Z", hoy)).toBe("Sep 24, 2025, 8:31 PM");
     // Del año en curso, sin año.
     expect(f.dateTimeShort("2026-01-02T15:00:00Z", hoy)).not.toContain("2026");

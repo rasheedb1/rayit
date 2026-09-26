@@ -42,6 +42,7 @@ import { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL
 import { parseReplyOptOutCode, type ReplyOptOutChannel } from './canales.ts';
 import { addExcludedCompany, BRIEF_LIMITS, BriefError, briefSignalLateralSql, briefVerdictSql, type BriefVerdict } from './brief.ts';
 import { WORKSPACE_DEFAULTS } from './cimientos.ts';
+import { recordWorkspaceOptOut } from './outreach/inbound.ts';
 
 export { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES };
 
@@ -268,14 +269,14 @@ export interface ContactRow {
   optedOutReason: string | null;
   /**
    * Se dio de baja al responder pidiéndolo por ese canal (contact.opted_out_code,
-   * 0043). La pantalla lo traduce; opted_out_reason, si lo hay, manda.
+   * 0052). La pantalla lo traduce; opted_out_reason, si lo hay, manda.
    */
   optedOutByReply: ReplyOptOutChannel | null;
   bounced: boolean;
   /**
-   * Por qué y cuándo rebotó (contact.email_invalid_reason y _at, 0038):
+   * Por qué y cuándo rebotó (contact.email_invalid_reason y _at, 0055):
    * el diagnóstico del servidor que lo rechazó. Null si no rebotó, o si
-   * rebotó antes de 0038 (solo bounced, sin motivo).
+   * rebotó antes de 0055 (solo bounced, sin motivo).
    */
   bouncedReason: string | null;
   bouncedAt: string | null;
@@ -862,7 +863,7 @@ export async function listOwnerOptions(tx: WorkspaceTx): Promise<OwnerOption[]> 
 export async function listContacts(tx: WorkspaceTx, companyId: string): Promise<ContactRow[]> {
   if (!isUuid(companyId)) return [];
   // Una ficha compartida (fuente pública, sin dueño) no lleva las marcas
-  // de UN workspace (0038 §2 y §8, VEN-15 r3): su rebote verificado y su
+  // de UN workspace (0055 §2 y §8, VEN-15 r3): su rebote verificado y su
   // baja por enlace viven en outbound_bounce y outbound_workspace_optout,
   // con la RLS de este workspace. Aquí se suman para que la ficha diga
   // lo mismo que la regla que frena el envío.
@@ -1030,7 +1031,10 @@ async function updateContactRow(
 /**
  * Registra la baja de un contacto propio. Es de una sola dirección: un
  * trigger impide que `opted_out` vuelva a false, así que esta capa no
- * ofrece lo contrario y la pantalla lo pide con confirmación.
+ * ofrece lo contrario y la pantalla lo pide con confirmación. Su correo
+ * entra además en la lista del workspace (outbound_workspace_optout,
+ * entregabilidad §8.4): borrar la ficha y crearla otra vez con el mismo
+ * correo no deshace la baja.
  */
 export async function optOutContact(tx: WorkspaceTx, contactId: string, reason: string | null): Promise<void> {
   if (!isUuid(contactId)) throw new ContactNotFound();
@@ -1048,6 +1052,7 @@ export async function optOutContact(tx: WorkspaceTx, contactId: string, reason: 
     const exists = await tx.query('SELECT 1 FROM contact WHERE id = $1', [contactId]);
     throw exists.rows.length > 0 ? new ContactNotOwned() : new ContactNotFound();
   }
+  await recordWorkspaceOptOut(tx, contactId, tx.workspaceId, 'manual');
 }
 
 // ---------------------------------------------------------------------
@@ -1268,6 +1273,13 @@ interface ResolvedCompany {
   name: string;
   domain: string | null;
 }
+
+/**
+ * Qué hacer con una empresa del CRM que se llama igual y tiene otro
+ * dominio: preguntar (aceptar una señal, con la respuesta si ya la hay)
+ * o usarla (no aceptar una marca desde el brief).
+ */
+type SameNamePolicy = { ask: true; choice?: SameNameChoice | null } | { ask: false };
 
 /**
  * La empresa que ya conocemos detrás de un id, un dominio o un nombre.
@@ -1534,7 +1546,20 @@ export interface AcceptSignalOptions {
   pendingDealName?: string;
   /** Desde cuándo se cuentan los días hábiles del pitch. Por defecto, now() de la base; lo fijan las pruebas. */
   now?: Date;
+  /**
+   * La respuesta a «¿Es la misma X de tu CRM?» (pulido r2). La señal trae
+   * un dominio que nadie tiene y el CRM ya tiene una empresa con el mismo
+   * nombre y OTRO dominio (marca.com y marca.co): sin respuesta,
+   * acceptSignal lanza DuplicateCompanyName y la tarjeta pregunta.
+   * `useCompanyId`: es la misma, la señal se suma a esa empresa (solo si
+   * es una del CRM con ese nombre). `createAnyway`: es otra marca, con el
+   * nombre por el que se preguntó, como allowSameNameAs en createCompany.
+   */
+  sameName?: SameNameChoice | null;
 }
+
+/** Qué dijo la persona de una marca que se llama como una del CRM con otro dominio. */
+export type SameNameChoice = { useCompanyId: string } | { createAnyway: string };
 
 /**
  * El título de un negocio que nace de una señal sin nada propio que
@@ -1599,7 +1624,7 @@ export const PITCH_DUE_HOUR = 15;
  * «Seguimiento a la cotización»): el N-ésimo día HÁBIL después del de
  * `desde`, a las HOUR en la zona del workspace (no en UTC: en Bogotá las
  * 15:00 UTC son las 10:00). Espera la fila `w` de WORKSPACE_TZ en el
- * FROM, cuya zona siempre es una que Postgres conoce (0035).
+ * FROM, cuya zona siempre es una que Postgres conoce (0044).
  *
  * Es UNA sola expresión para el pitch y para el seguimiento: antes el
  * pitch contaba días de calendario y el seguimiento hábiles, y la misma
@@ -1627,11 +1652,11 @@ function dueInBusinessDays(desde: string, dias: string, hora: string): string {
  * definición de «la zona del espacio».
  *
  * La zona se usa tal cual en `AT TIME ZONE` sin validarla aquí: la
- * migración 0035 corrigió las que estaban mal escritas y su disparador
+ * migración 0044 corrigió las que estaban mal escritas y su disparador
  * (workspace_timezone_check) no deja guardar ninguna que Postgres no
  * conozca. Validar en cada lectura contra pg_timezone_names costaría un
  * recorrido del catálogo de zonas por consulta. Vacía cae en UTC, como
- * en Cotizar (sendQuote), aunque 0035 tampoco deja guardarla.
+ * en Cotizar (sendQuote), aunque 0044 tampoco deja guardarla.
  */
 export const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, ''), 'UTC') AS tz
     FROM workspace WHERE id = current_workspace_id())`;
@@ -1647,12 +1672,35 @@ export const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, '')
 async function findOrCreateCompany(
   tx: WorkspaceTx,
   input: { name: string | null; domain: string | null; country?: string | null; industry?: string | null },
+  sameName: SameNamePolicy = { ask: false },
 ): Promise<{ company: ResolvedCompany; created: boolean } | null> {
   const existente = await resolveCompany(tx, { domain: input.domain, name: input.name });
   if (existente) return { company: existente, created: false };
   const name = input.name?.trim();
   if (!name) return null;
   const domain = normalizeDomain(input.domain);
+  // resolveCompany no casa un nombre del CRM que tiene OTRO dominio (dos
+  // «Alma» de dos países no son la misma). Pero crear en silencio una
+  // segunda «Molino Andino» porque la señal trae molinoandino.co y la
+  // ficha molinoandino.test deja la ficha real sin su negocio (pulido r2).
+  // Con `ask`, se pregunta; sin él (no aceptar una marca desde el brief),
+  // se usa la del CRM: excluir por nombre excluye a esa.
+  const choice = sameName.ask ? (sameName.choice ?? null) : null;
+  const { rows: mismoNombre } = await tx.query<ResolvedCompany & { confirmed: boolean | null }>(
+    `SELECT co.id, co.name, co.domain::text AS domain, brand_key(co.name) = brand_key($2::text) AS confirmed
+       FROM company_link cl
+       JOIN company co ON co.id = cl.company_id
+      WHERE co.name_key = brand_key($1)
+      ORDER BY cl.created_at ASC`,
+    [name, choice && 'createAnyway' in choice ? choice.createAnyway.trim() || null : null],
+  );
+  const primera = mismoNombre[0];
+  if (primera) {
+    const elegida = choice && 'useCompanyId' in choice ? mismoNombre.find((c) => c.id === choice.useCompanyId) : undefined;
+    const usar = elegida ?? (sameName.ask ? undefined : primera);
+    if (usar) return { company: { id: usar.id, name: usar.name, domain: usar.domain }, created: false };
+    if (primera.confirmed !== true) throw new DuplicateCompanyName(primera.name, primera.id);
+  }
   const inserted = await tx.query<{ id: string }>(
     `INSERT INTO company (name, domain, country, industry) VALUES ($1, $2, $3, $4) RETURNING id`,
     [name, domain, normalizeCountry(input.country), input.industry ?? null],
@@ -1692,6 +1740,7 @@ async function linkBlocked(tx: WorkspaceTx, companyId: string): Promise<string |
 async function companyOfSignal(
   tx: WorkspaceTx,
   sig: { id: string; company_id: string | null; evidence: Record<string, unknown> | null },
+  sameName: SameNamePolicy = { ask: false },
 ): Promise<{ company: ResolvedCompany; created: boolean } | null> {
   const ev = sig.evidence ?? {};
   const texto = (k: string) => (typeof ev[k] === 'string' ? (ev[k] as string) : null);
@@ -1704,7 +1753,7 @@ async function companyOfSignal(
         domain: texto('domain'),
         country: texto('country'),
         industry: texto('industry'),
-      });
+      }, sameName);
   if (!resuelta) return null;
   if (sig.company_id !== resuelta.company.id) {
     await tx.query('UPDATE signal SET company_id = $2 WHERE id = $1', [sig.id, resuelta.company.id]);
@@ -1746,7 +1795,7 @@ export async function acceptSignal(
 
   const ev = sig.evidence ?? {};
   const evName = typeof ev.company_name === 'string' ? ev.company_name : null;
-  const resuelta = await companyOfSignal(tx, sig);
+  const resuelta = await companyOfSignal(tx, sig, { ask: true, choice: opts.sameName ?? null });
   if (!resuelta) throw new VentasError('SignalWithoutCompany');
   const { company, created: companyCreated } = resuelta;
   const companyId = company.id;
@@ -1910,7 +1959,7 @@ export interface RejectBrandByNameResult {
  * excluida (briefVerdictSql la reconoce por nombre dentro del CRM).
  *
  * Mismo permiso que el brief: solo owner y admin (outreach_can_manage,
- * la regla de 0070 §5); si no, Forbidden y no queda nada. Deja traza en
+ * la regla de 0073 §5); si no, Forbidden y no queda nada. Deja traza en
  * audit_log ('ventas.brief.no_aceptar_marca', la relación antes y después).
  */
 export async function rejectBrandByName(

@@ -19,7 +19,7 @@
  *
  * Hasta entonces el job se prueba en Postgres embebido
  * (apps/worker/test/seguimientos.test.ts) o contra un Postgres local.
- * Además, sales.follow_ups necesita 0034 aplicada para que el runner lo
+ * Además, sales.follow_ups necesita 0043 aplicada para que el runner lo
  * programe (este comando no la necesita: no lee job_definition).
  *
  * Salidas: 0 corrió; 1 la base dijo que no (el mensaje, sin la pila:

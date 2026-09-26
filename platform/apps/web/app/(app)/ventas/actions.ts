@@ -270,12 +270,22 @@ export async function aceptarSenal(_prev: VentasState, formData: FormData): Prom
   const t = MESSAGES.radar;
   const signalId = field(formData, "signalId");
   if (!UUID_RE.test(signalId)) return { message: t.acceptError };
+  // La respuesta a «¿Es la misma X de tu CRM?», si ya se preguntó.
+  const useCompanyId = field(formData, "useCompanyId");
+  const createAnyway = field(formData, "createAnyway").slice(0, 200);
+  const sameName = UUID_RE.test(useCompanyId) ? { useCompanyId } : createAnyway ? { createAnyway } : null;
   let res: Awaited<ReturnType<typeof acceptSignal>>;
   try {
     res = await withWorkspace((tx) =>
-      acceptSignal(tx, signalId, { nextAction: t.pitchAction, activityBody: t.acceptedActivity, pendingDealName: t.pendingDealName }),
+      acceptSignal(tx, signalId, {
+        nextAction: t.pitchAction, activityBody: t.acceptedActivity, pendingDealName: t.pendingDealName, sameName,
+      }),
     );
   } catch (err) {
+    // Una empresa del CRM se llama igual y tiene otra web: no es un error, la tarjeta pregunta.
+    if (err instanceof VentasError && err.code === "DuplicateCompanyName" && err.params.companyId && err.params.name) {
+      return { sameName: { id: err.params.companyId, name: err.params.name } };
+    }
     return { message: messageOf(err, t.acceptError) };
   }
   revalidateVentas(res.companyId);

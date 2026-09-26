@@ -1,5 +1,5 @@
 /**
- * VEN-10 · lo que la migración 0051 le pone al esquema del motor,
+ * VEN-10 · lo que la migración 0056 le pone al esquema del motor,
  * probado contra la base (embebida, o TEST_DATABASE_URL en el CI):
  *
  *   · los avisos de notification son la UNIÓN de las ramas y coinciden
@@ -113,7 +113,7 @@ test('send_started_at y unconfirmed_attempt los escribe solo el despachador', as
  * El día de hoy en la zona del workspace. Esta prueba usa las variantes
  * sin instante de increment_if_under_cap/increment_weekly, que cuentan con
  * now() de la base; el despachador pasa su reloj (p_at) y cuenta el día de
- * ese reloj (0052 §3).
+ * ese reloj (0057 §3).
  */
 const HOY = 'outreach_local_date($1, now())';
 

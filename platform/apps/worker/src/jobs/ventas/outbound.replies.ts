@@ -1,7 +1,7 @@
 /**
  * outbound.replies · las respuestas de los hilos abiertos (VEN-10).
  *
- * Cada cinco minutos (0051), como respaldo del webhook de Unipile
+ * Cada cinco minutos (0056), como respaldo del webhook de Unipile
  * (VEN-9, /api/webhooks/unipile) y como ÚNICA vía del correo, que no
  * tiene aviso: lee los hilos a los que se escribió en los últimos
  * treinta días, todos y por turno (primero los nunca leídos), también
@@ -24,7 +24,7 @@
  *     se vuelve a avisar.
  *
  * Antes de leer, busca el hilo de los correos que una persona confirmó a
- * mano («Sí, salió», 0053): quedaron enviados sin las pruebas del
+ * mano («Sí, salió», 0058): quedaron enviados sin las pruebas del
  * proveedor y, sin su hilo, una respuesta a ellos no se vería
  * (recoverConfirmedThreads).
  *

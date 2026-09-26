@@ -20,7 +20,7 @@ import { assertIds } from './shared.ts';
 /**
  * Quién recibe el aviso: quien enroló (si sigue siendo del equipo), o todo
  * el espacio (user_id NULL). «Del equipo» lo decide la base
- * (membership_is_team, 0055), con y sin los roles de 0034_access_control.
+ * (membership_is_team, 0060), con y sin los roles de 0034_access_control.
  */
 const RECIPIENT_SQL = `CASE WHEN membership_is_team(t.workspace_id, e.enrolled_by) THEN e.enrolled_by END`;
 
@@ -81,7 +81,7 @@ export async function notifyTouchFailed(tx: SqlExecutor, touchId: string, reason
  * enviados), sí: el texto del aviso lleva el motivo, y se compara por él.
  * Es un 'outreach_failed' de
  * severidad info con entity_type 'outbound_touch_held' (no hace falta un
- * aviso nuevo en el CHECK de 0051 §9), y lleva al bloque «Mensajes de la
+ * aviso nuevo en el CHECK de 0056 §9), y lleva al bloque «Mensajes de la
  * cadencia» de la ficha, donde el mensaje se revisa y se aprueba
  * (releaseHeldTouch).
  * `reason` es el código de held_reason; la frase sale de holdReasonText.

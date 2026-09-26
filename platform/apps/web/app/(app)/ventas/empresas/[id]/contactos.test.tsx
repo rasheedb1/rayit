@@ -43,7 +43,7 @@ beforeEach(() => {
 });
 
 describe("Contactos", () => {
-  it("un correo que rebotó dice cuándo y por qué, junto a la píldora (0038)", () => {
+  it("un correo que rebotó dice cuándo y por qué, junto a la píldora (0055)", () => {
     const rebotado = { ...base, bounced: true, bouncedReason: "550 5.1.1 The email account does not exist.", bouncedAt: "2026-09-23T13:10:00Z" };
     const nota = "Rebotó el 23 de septiembre de 2026: 550 5.1.1 The email account does not exist.";
     render(<Contactos companyId={COMPANY} contacts={[rebotado]} bouncedNotes={{ [rebotado.id]: nota }} />);

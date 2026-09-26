@@ -120,7 +120,7 @@ before(async () => {
   // Como el worker: information_schema.columns solo enseña las columnas
   // sobre las que quien pregunta tiene algún privilegio, y hay tablas del
   // esquema Drizzle que mc_app no toca a propósito (outbound_optout_link y
-  // outbound_optout_event, 0037 §4.5 y §4.6) pero el worker sí escribe.
+  // outbound_optout_event, 0046 §4.5 y §4.6) pero el worker sí escribe.
   const cols = await t.db.asWorker((tx) =>
     tx.query<ColumnRow>(`
       SELECT table_name, column_name, data_type, udt_name, character_maximum_length,

@@ -48,7 +48,7 @@ function enlaceDeAviso(url: string): string {
 /**
  * «Salud de hoy»: adonde llevan las alertas diarias del outreach
  * (outbound.alerts). Las cifras de las últimas 24 horas, sacadas de
- * outbound_health (0037) y de readAlertSignalCounts (la misma consulta que
+ * outbound_health (0046) y de readAlertSignalCounts (la misma consulta que
  * decide las alertas), y los últimos rebotes leídos del Gmail
  * (outbound_bounce, entregabilidad). La pantalla no calcula nada: la tasa llega
  * hecha.

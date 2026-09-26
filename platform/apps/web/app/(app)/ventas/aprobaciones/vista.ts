@@ -6,6 +6,7 @@
  */
 import type { ApprovalItem } from "@mc/db/queries/bandejas";
 import { channelLabel, noticeLang } from "@mc/core/outreach/messages";
+import { FIGURE_RISK_CODES, type PreflightCode } from "@mc/core/outreach/preflight";
 import type { Formatter } from "@/lib/format";
 import { SOURCE_META } from "../_lib/estado";
 import { MESSAGES } from "./messages";
@@ -50,6 +51,13 @@ export interface FilaVista {
   regenerable: boolean;
   /** La nota del juez no llega al mínimo: «Aprobar» pregunta antes, con la nota y el mínimo. */
   aprobarBajo: { pregunta: string; consecuencia: string } | null;
+  /**
+   * Las cifras que el pre-vuelo marcó sin origen en el perfil («23 %»), o
+   * null. Con ellas el texto tal cual no se puede aprobar (releaseHeldTouch
+   * lo rechaza): la fila no ofrece «Aprobar», sino «Editar y aprobar» con
+   * las cifras señaladas en el editor.
+   */
+  cifrasSinOrigen: string[] | null;
   /** «Por qué quedó retenido», o, en una versión nueva, «La revisión de la versión nueva». */
   porqueTitulo: string;
 }
@@ -75,6 +83,7 @@ export function filaVista(item: ApprovalItem, f: Formatter): FilaVista {
   const regenerado = item.status === "draft" && !item.regenerating;
   const nota = r?.totalScore ?? null;
   const bajo = nota !== null && minimo !== null && nota < minimo;
+  const cifras = cifrasSinOrigenDe(r?.preflight ?? []);
   return {
     touchId: item.touchId,
     etiqueta: t.fila.label(item.companyName, persona, paso, canal),
@@ -83,7 +92,7 @@ export function filaVista(item: ApprovalItem, f: Formatter): FilaVista {
     fichaHref: `/ventas/empresas/${item.companyId}#cadencia`,
     paso,
     canal,
-    sale: item.scheduledFor ? t.fila.sale(f.dateTime(item.scheduledFor.toISOString())) : null,
+    sale: item.scheduledFor ? t.fila.sale(f.dateTimeShort(item.scheduledFor.toISOString())) : null,
     procedencia: item.contactSource ? t.fila.procedencia(SOURCE_META[item.contactSource].label) : null,
     subject: item.subject,
     body: item.body,
@@ -107,10 +116,25 @@ export function filaVista(item: ApprovalItem, f: Formatter): FilaVista {
         }
       : null,
     regenerable: item.regenerable,
+    cifrasSinOrigen: cifras,
+    // Con una cifra sin origen no hay «Aprobar» que preguntar: la nota ya no decide.
     aprobarBajo:
-      bajo && nota !== null && minimo !== null
+      !cifras && bajo && nota !== null && minimo !== null
         ? { pregunta: t.acciones.aprobarBajoPregunta(f.decimal(nota, 1)), consecuencia: t.acciones.aprobarBajoConsecuencia(f.decimal(minimo, 1)) }
         : null,
     porqueTitulo: regenerado ? t.porque.titleRegenerado : t.porque.title,
   };
+}
+
+/** Las cifras de las reglas del pre-vuelo que impiden aprobar el texto tal cual, sin repetir; null si no hay. */
+function cifrasSinOrigenDe(issues: ReadonlyArray<{ code: string; detail: string | null }>): string[] | null {
+  const cifras = [
+    ...new Set(
+      issues
+        .filter((i) => (FIGURE_RISK_CODES as readonly string[]).includes(i.code as PreflightCode))
+        .map((i) => i.detail?.trim() ?? "")
+        .filter(Boolean),
+    ),
+  ];
+  return cifras.length > 0 ? cifras : null;
 }

@@ -295,7 +295,7 @@ export function holdReasonText(
 // ---------------------------------------------------------------------
 
 /**
- * Lo que detuvo una respuesta además de su cadencia (0054): los otros
+ * Lo que detuvo una respuesta además de su cadencia (0059): los otros
  * enrolamientos de la misma persona y las personas de la misma marca
  * cuya cadencia quedó en pausa.
  */

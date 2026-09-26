@@ -1,4 +1,5 @@
-import type { MediaKitSnapshot, MediaKitSnapshotAudiencia } from "@mc/db/queries/cotizar";
+import type { MediaKitSnapshot, MediaKitSnapshotAudiencia, MediaKitSnapshotPost } from "@mc/db/queries/cotizar";
+import { cutOf } from "@mc/core/outreach/perfil";
 import { PLATFORM_LABEL, PlatformPill, isPlatformId } from "@/components/ui/platform-pill";
 import { formatCountry, formatterFor, type Formatter } from "@/lib/format";
 import { idiomaDocumento, MESSAGES, nombreModificador } from "../messages";
@@ -117,12 +118,7 @@ export function MediaKitVista({ snapshot }: { snapshot: MediaKitSnapshot }) {
                   </span>
                   {p.caption && <span className="mt-1 block truncate text-sm text-ink-2">{p.caption}</span>}
                 </span>
-                <span className="text-right">
-                  {p.views !== null && <span className="block font-mono text-sm tabular-nums">{f.compact(p.views)}</span>}
-                  {p.viewsVsMedian && (
-                    <span className="block text-xs tabular-nums text-muted">{t.vsMediana(f.multiple(Number(p.viewsVsMedian)))}</span>
-                  )}
-                </span>
+                <PostCifras post={p} f={f} />
               </li>
             ))}
           </ul>
@@ -221,4 +217,30 @@ function nombreSegmento(dimension: string, bucket: string, locale: string): stri
   if (dimension === "gender") return t.generos[bucket] ?? bucket;
   if (dimension === "country" && /^[A-Z]{2}$/.test(bucket)) return formatCountry(bucket, { locale });
   return bucket;
+}
+
+/**
+ * Las cifras de un video: sus views y cuántas veces su mediana. Desde el
+ * pulido r2 van medidas a una edad, como en el perfil comercial («views a
+ * los 3 días de publicado», «3,7× su mediana a esa edad (106,7 mil)»), y
+ * con la mediana contra la que se midió: una marca que divida las dos
+ * cifras encuentra el múltiplo. Un kit congelado antes (sin la edad)
+ * se lee como se generó.
+ */
+function PostCifras({ post: p, f }: { post: MediaKitSnapshotPost; f: Formatter }) {
+  const t = MESSAGES.publico.kit;
+  const corte = p.ageHoursCut === null || p.ageHoursCut === undefined ? null : cutOf(p.ageHoursCut);
+  const edad = corte ? t.edad(corte.unit, f.int(corte.amount)) : null;
+  const multiplo = p.viewsVsMedian ? f.multiple(Number(p.viewsVsMedian)) : null;
+  return (
+    <span className="text-right">
+      {p.views !== null && <span className="block font-mono text-sm tabular-nums">{f.compact(p.views)}</span>}
+      {edad && p.views !== null && <span className="block text-xs text-muted">{t.viewsA(edad)}</span>}
+      {multiplo && (
+        <span className="block text-xs tabular-nums text-muted">
+          {edad && p.medianAtCut ? t.vsMedianaA(multiplo, f.compact(p.medianAtCut)) : t.vsMediana(multiplo)}
+        </span>
+      )}
+    </span>
+  );
 }

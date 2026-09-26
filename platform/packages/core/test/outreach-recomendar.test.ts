@@ -1,8 +1,8 @@
 /**
  * VEN-13 · el recomendador de cadencia, sin base ni red.
  *
- * Las plantillas del fixture son las de 0037 («Marca con campaña
- * activa») y 0062 (cocina), copiadas con sus mismos pasos: la prueba
+ * Las plantillas del fixture son las de 0046 («Marca con campaña
+ * activa») y 0067 (cocina), copiadas con sus mismos pasos: la prueba
  * contra la base (packages/db/test/cadencias.test.ts) lee las de verdad.
  */
 import { test } from 'node:test';
@@ -187,7 +187,7 @@ test('sin LinkedIn conectado ni Instagram permitido, el gesto público queda com
   assert.equal(p.steps[0]!.stepType, 'manual_task');
   assert.match(p.steps[0]!.guidanceEs, /^Hazlo a mano/);
   assert.ok(p.notes.some((n) => n.code === 'rerouted' && n.step === 1 && n.manual && n.reason === 'channel_not_connected'));
-  // Instagram está conectado pero la política no lo deja (0045 lo apaga por defecto).
+  // Instagram está conectado pero la política no lo deja (0054 lo apaga por defecto).
   assert.equal(p.steps[2]!.channel, 'email');
 });
 

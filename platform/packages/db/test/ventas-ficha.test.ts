@@ -411,7 +411,7 @@ describe('VEN-4 · la siguiente acción', () => {
     assert.ok(!ids.includes(DEAL_AJENO), 'el vencido del vecino no aparece');
     assert.ok(hoy.rows.every((r) => r.dueState === 'vencido' || r.dueState === 'hoy'));
 
-    // Con 0034, el tablero cuenta «Hoy» igual, en la zona del espacio.
+    // Con 0043, el tablero cuenta «Hoy» igual, en la zona del espacio.
     const tablero = await laura((tx) => listPipeline(tx));
     assert.equal(tablero.find((d) => d.id === DEAL_VITALE_SNACKS)?.dueState, 'hoy');
 
@@ -523,16 +523,16 @@ describe('VEN-5 · lo que sabemos y la cadena', () => {
   });
 });
 
-describe('0035 · las zonas mal escritas que ya estaban se corrigen al migrar', () => {
+describe('0044 · las zonas mal escritas que ya estaban se corrigen al migrar', () => {
   test('«Bogota» pasa a America/Bogota, una ambigua o inventada a UTC, y ninguna lectura con AT TIME ZONE vuelve a fallar', async (ctx) => {
-    // Sin esto, la vista deal_pipeline (0034) y WORKSPACE_TZ hacían
+    // Sin esto, la vista deal_pipeline (0043) y WORKSPACE_TZ hacían
     // `AT TIME ZONE` con la zona tal cual, y un espacio en 'Bogota' perdía
     // el tablero, «Para hoy» y la ficha enteros. La base se reconstruye tal
-    // como estaba antes de 0035, se siembran las zonas malas y se migra con
+    // como estaba antes de 0044, se siembran las zonas malas y se migra con
     // el mismo rol que en Supabase (dueño de la tabla, con RLS forzada).
     if (t.kind !== 'pglite') return ctx.skip('reconstruir una base a medio migrar solo se puede sobre pglite');
     const { createEmbeddedDb } = await import('../src/embedded.ts');
-    const antes = await createEmbeddedDb({ seeds: false, hasta: '0034_seguimientos.sql' });
+    const antes = await createEmbeddedDb({ seeds: false, hasta: '0043_seguimientos.sql' });
     try {
       const casos: Record<string, [string, string]> = {
         'zona-sin-region': ['Bogota', 'America/Bogota'],
@@ -548,13 +548,13 @@ describe('0035 · las zonas mal escritas que ya estaban se corrigen al migrar', 
           .map(([slug, [zona]]) => `('${slug}', '${slug}', '${zona}')`)
           .join(', ')}`,
       );
-      // Antes de 0035, así fallaban las pantallas de Ventas.
+      // Antes de 0044, así fallaban las pantallas de Ventas.
       await assert.rejects(
         antes.queryAsSuperuser(`SELECT now() AT TIME ZONE timezone FROM workspace WHERE slug = 'zona-sin-region'`),
         /time zone "Bogota" not recognized/,
       );
 
-      assert.deepEqual(await antes.migrar('0035_zona_del_espacio_valida.sql'), ['0035_zona_del_espacio_valida.sql']);
+      assert.deepEqual(await antes.migrar('0044_zona_del_espacio_valida.sql'), ['0044_zona_del_espacio_valida.sql']);
       const { rows } = await antes.queryAsSuperuser<{ slug: string; timezone: string }>(
         `SELECT slug, timezone FROM workspace WHERE slug LIKE 'zona-%' ORDER BY slug`,
       );

@@ -8,7 +8,7 @@ import { FICHA } from "../messages";
 
 /**
  * Una cadencia en pausa porque otra persona de la marca respondió
- * (0054): lo dice, y ofrece «Reanudar la cadencia». Reanudar no manda
+ * (0059): lo dice, y ofrece «Reanudar la cadencia». Reanudar no manda
  * nada en el acto: lo vencido sale en la próxima pasada, dentro del
  * horario y de los topes, así que no pide confirmación.
  */

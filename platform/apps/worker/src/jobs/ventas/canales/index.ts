@@ -22,7 +22,7 @@
  *
  * El enlace de baja necesita la URL pública de la web (APP_URL, o la de
  * producción de Vercel). Sin ella el correo real no se reclama: un correo
- * sin enlace de baja válido no sale (0037 §4.5).
+ * sin enlace de baja válido no sale (0046 §4.5).
  */
 import {
   GoogleOAuth, loadGoogleOAuthConfig, loadUnipileConfig, NULL_OUTREACH_CALL_LOG, UnipileClient, type FetchLike,

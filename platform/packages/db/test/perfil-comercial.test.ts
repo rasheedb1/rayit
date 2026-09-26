@@ -6,7 +6,7 @@
  *   - con el seed, el perfil trae los cinco mejores videos con sus cifras
  *     y cada cifra lleva su fila de origen;
  *   - una narrativa con un claim inventado no se guarda;
- *   - cada llamada al modelo deja su fila en outbound_llm_call (0060);
+ *   - cada llamada al modelo deja su fila en outbound_llm_call (0065);
  *   - nada cruza de un workspace a otro.
  */
 import { after, before, test } from 'node:test';

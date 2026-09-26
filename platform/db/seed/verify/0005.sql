@@ -4,7 +4,7 @@
 -- Cómo correrlo:
 --   Postgres embebido, sin tocar Supabase:
 --     node db/seed/verify/run.mjs 0005
---   Contra una base con 0037 y los seeds, como quien migra (mc_app no
+--   Contra una base con 0046 y los seeds, como quien migra (mc_app no
 --   lee los enlaces de baja):
 --     node db/sql.mjs --admin -f db/seed/verify/0005.sql
 --
@@ -109,7 +109,7 @@ SELECT 'f_desenlaces' AS check_id,
  ORDER BY e.status;
 
 -- (g) En last_error solo hay CÓDIGOS (docs/ventas-outreach.md §9.2), con
---     la forma que fija 0044: 'provider_error', 'unipile_status:CREDENTIALS'.
+--     la forma que fija 0053: 'provider_error', 'unipile_status:CREDENTIALS'.
 --     Una frase aquí sale en la pantalla como el motivo genérico y la demo
 --     pierde su historia. Que cada código sea uno que la pantalla traduce
 --     lo comprueba la prueba de la web (canales.test.ts, «la demo

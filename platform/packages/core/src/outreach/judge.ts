@@ -36,7 +36,7 @@ export interface StepRubric {
   maxChars: number | null;
 }
 
-/** La rúbrica por defecto de 0037 §1.2, para un tipo de paso sin fila. */
+/** La rúbrica por defecto de 0046 §1.2, para un tipo de paso sin fila. */
 export const DEFAULT_RUBRIC: StepRubric = {
   threshold: 8,
   minAcceptable: 4.5,

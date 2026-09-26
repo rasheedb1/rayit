@@ -1,16 +1,16 @@
 /**
  * Ventas · actividad y métricas del outreach (VEN-16). Dueño: Rasheed.
  *
- * Lee las vistas de 0067 (outbound_queue, outbound_usage_daily,
+ * Lee las vistas de 0072 (outbound_queue, outbound_usage_daily,
  * outbound_funnel_by_step, outbound_sequence_health) y hace las dos
  * escrituras de la pantalla /ventas/actividad: reintentar lo fallido y
  * cancelar lo que está en cola. Todo con la transacción de la web
  * (WorkspaceTx): la RLS limita cada consulta al workspace, y los
- * disparadores de 0037 y 0050 deciden, como siempre, qué puede volver a
+ * disparadores de 0046 y 0055 deciden, como siempre, qué puede volver a
  * la cola.
  *
  * Qué fallido se puede reintentar lo decide la base, en un solo sitio
- * (outbound_touch_retry_block de 0067): la vista lo expone por fila, los
+ * (outbound_touch_retry_block de 0072): la vista lo expone por fila, los
  * botones por tipo lo cuentan con él y el reintento lo vuelve a mirar
  * dentro de su FOR UPDATE.
  *
@@ -60,7 +60,7 @@ export const CANCELED_BY_USER = 'canceled_by_user';
  *     fallar, y en correo la base lo rechaza (email_invalid);
  *   · un zombi: el envío quedó a medias con el proveedor ya llamado. Pudo
  *     haber salido; reintentarlo a ciegas puede duplicarlo.
- * La regla vive en outbound_touch_retry_block (0067); la prueba comprueba
+ * La regla vive en outbound_touch_retry_block (0072); la prueba comprueba
  * que la lista de la base es esta.
  */
 export const NOT_RETRYABLE_FAILURES = [...BAD_ADDRESS_CODES, 'zombie'] as const;
@@ -73,7 +73,7 @@ export const NOT_RETRYABLE_FAILURES = [...BAD_ADDRESS_CODES, 'zombie'] as const;
 export const ACCOUNT_FAILURES = ['account_unavailable', 'account_auth', 'token_expired', 'secret_missing', 'not_configured'] as const;
 
 /**
- * El techo de attempt_count (el CHECK de 0037: 0..20). Un reintento deja
+ * El techo de attempt_count (el CHECK de 0046: 0..20). Un reintento deja
  * el toque en scheduled y el reclamo le suma uno; por eso se reintenta
  * solo por debajo de MAX_TOUCH_ATTEMPTS - 1. Con uno más, el UPDATE del
  * reclamo, que es uno solo por lote y para todos los workspaces, violaría
@@ -83,7 +83,7 @@ export const MAX_TOUCH_ATTEMPTS = 20;
 
 /**
  * Por qué un fallido no puede volver a la cola (outbound_touch_retry_block
- * de 0067, en su orden):
+ * de 0072, en su orden):
  *   not_retryable       rebotó, la dirección no vale, o quedó a medias
  *                       con el proveedor (NOT_RETRYABLE_FAILURES)
  *   too_many_attempts   ya gastó los intentos que caben (MAX_TOUCH_ATTEMPTS)
@@ -116,7 +116,7 @@ export interface QueueRow {
   stepPosition: number | null;
   stepDayOffset: number | null;
   enrollmentStatus: EnrollmentStatus | null;
-  /** El estado de su secuencia (0067); null si el toque no tiene. Pausada, el despachador aplaza lo suyo cada día. */
+  /** El estado de su secuencia (0072); null si el toque no tiene. Pausada, el despachador aplaza lo suyo cada día. */
   sequenceStatus: SequenceStatus | null;
   contactId: string | null;
   contactName: string | null;

@@ -13,13 +13,13 @@ import { createHash, randomBytes } from 'node:crypto';
 //
 // Un token OPACO: 32 bytes al azar en base64url (43 caracteres), uno por
 // intento de envío. No lleva ningún dato dentro. La base guarda solo su
-// sha256 en outbound_optout_link (0037 §4.5), escrito por el despachador
+// sha256 en outbound_optout_link (0046 §4.5), escrito por el despachador
 // al reclamar el envío, y todo lo demás se resuelve desde ese hash:
 //   · public_optout_preview (entregabilidad) dice a quién va el enlace (la
 //     dirección enmascarada), quién lo envió (el nombre del workspace) y
 //     si quien lo abre con sesión es de ese workspace, para rechazar el
 //     clic desde la carpeta de enviados (docs/ventas-outreach.md §5.2);
-//   · public_optout (0037 §9) da de baja.
+//   · public_optout (0046 §9) da de baja.
 //
 // Por qué no firmado (la ronda 1 lo firmaba con OUTREACH_OPTOUT_SECRET y
 // llevaba los uuid del workspace y de la ficha en claro):
@@ -35,7 +35,7 @@ import { createHash, randomBytes } from 'node:crypto';
 
 /** Bytes al azar de cada token: 256 bits. */
 export const OPTOUT_TOKEN_BYTES = 32;
-/** Lo que public_optout acepta buscar (0037 §9): de 16 a 200 caracteres. */
+/** Lo que public_optout acepta buscar (0046 §9): de 16 a 200 caracteres. */
 export const OPTOUT_TOKEN_MIN_LENGTH = 16;
 export const OPTOUT_TOKEN_MAX_LENGTH = 200;
 /**

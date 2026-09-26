@@ -1,7 +1,7 @@
 /**
  * Outreach · la generación de los toques de una cadencia (VEN-12): el
  * turno de los jobs outbound.generate y outbound.review sobre
- * outbound_generation (0056) y todo lo que el generador y el juez leen.
+ * outbound_generation (0061) y todo lo que el generador y el juez leen.
  *
  * Reglas que esto hace cumplir:
  *   · se genera un toque cuando le toca: su hora cae en las próximas
@@ -13,7 +13,7 @@
  *     mismo tipo de paso en el MISMO workspace (Chief filtraba por un
  *     owner_id escrito a mano);
  *   · un fallo no se reintenta en bucle: espera creciente y, tras tres
- *     respuestas ilegibles del modelo, lo escribe una persona (0058).
+ *     respuestas ilegibles del modelo, lo escribe una persona (0063).
  *
  * Todo con WorkerSql: lo corre el worker, nombrando el workspace.
  */
@@ -55,15 +55,15 @@ export interface LeasedTouch {
 /**
  * La persona del toque no recibe nada: pidió la baja, su correo rebotó,
  * está en la lista global o pulsó el enlace de baja de un correo de ESTE
- * espacio (outbound_workspace_optout, 0050). La misma regla que savePitch
- * y que outbound_generation_request (0058): no se gasta en un mensaje que
+ * espacio (outbound_workspace_optout, 0055). La misma regla que savePitch
+ * y que outbound_generation_request (0063): no se gasta en un mensaje que
  * el despachador bloquearía después.
  */
 const CONTACT_BLOCKED_SQL = (t: string) => `EXISTS (SELECT 1 FROM contact c WHERE c.id = ${t}.contact_id
   AND (c.opted_out OR coalesce(c.email_invalid, false) OR address_is_suppressed(c.email)
        OR EXISTS (SELECT 1 FROM outbound_workspace_optout wo WHERE wo.workspace_id = ${t}.workspace_id AND wo.email = c.email)))`;
 
-/** La fila no se toma antes de su hora (la espera tras un fallo o sin presupuesto, 0058). */
+/** La fila no se toma antes de su hora (la espera tras un fallo o sin presupuesto, 0063). */
 const DUE_SQL = (g: string) => `(${g}.next_attempt_at IS NULL OR ${g}.next_attempt_at <= $1::timestamptz)`;
 
 /**
@@ -310,7 +310,7 @@ export const LLM_RESERVATION_TTL_MIN = 10;
 /**
  * Lo que le queda hoy al workspace de su tope de gasto en el modelo (el
  * mismo día local que cuenta outbound_health), descontando lo que otras
- * llamadas en curso ya apartaron (outbound_llm_reservation, 0072).
+ * llamadas en curso ya apartaron (outbound_llm_reservation, 0075).
  */
 export async function llmBudgetLeftUsd(tx: WorkerSql, workspaceId: string): Promise<number> {
   const r = (await tx.query<{ h: { llm?: { spentToday?: unknown; dailyCap?: unknown } }; reserved: string | null }>(

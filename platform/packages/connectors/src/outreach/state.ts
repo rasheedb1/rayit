@@ -73,7 +73,7 @@ export function channelStateKey(master: Uint8Array): Uint8Array {
  * 32 bytes al azar en hexadecimal en minúsculas (64 caracteres). En
  * minúsculas porque la fila 'pending' de un Gmail lleva 'pending:<nonce>'
  * como provider_account_id, y los buzones de Gmail viven bajo un CHECK de
- * minúsculas (0037, outreach_channel_account_gmail_lower_check).
+ * minúsculas (0046, outreach_channel_account_gmail_lower_check).
  */
 export function newNonce(random: (bytes: number) => Uint8Array = (n) => new Uint8Array(randomBytes(n))): string {
   return Buffer.from(random(32)).toString('hex');

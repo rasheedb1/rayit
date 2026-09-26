@@ -147,7 +147,7 @@ Reglas:
 ## Motor de cadencias (Ventas, VEN-10)
 
 Dos jobs de `src/jobs/ventas/`, programados por `job_definition` en la
-migración 0051 (grupo `sales`). Las consultas viven en
+migración 0056 (grupo `sales`). Las consultas viven en
 `packages/db/src/queries/outreach/` (`enroll`, `claim`, `send`,
 `replies`), la programación pura en `packages/core/src/outreach/`.
 
@@ -156,9 +156,9 @@ migración 0051 (grupo `sales`). Las consultas viven en
 | `outbound.dispatch` | 2 min | Rescata zombis, reclama hasta 50 toques vencidos y los envía uno por uno (ver «El despachador», abajo). |
 | `outbound.replies` | 5 min | Lee las respuestas de todos los hilos abiertos y aplica su efecto: respuesta, baja o fuera de oficina (ver «El lector de respuestas»). |
 | `outbound.bounces` | 30 min | Los rebotes de Gmail (VEN-15), buzón por buzón con el `GmailChannel` del despachador: un rebote duro marca `contact.email_invalid`, cancela sus correos y cierra la cadencia en `bounced`. Sin llaves de Google, «canal no configurado». |
-| `outbound.generate` | 2 min | Redacta con IA, primero, lo que una persona pidió desde el editor del pitch (con su pista y sus instrucciones) y después los borradores de los pasos con `generate_with_ai` cuya hora cae en el próximo día y cuyos pasos anteriores ya salieron; nunca para quien pidió la baja (también la de este espacio) o tiene el correo rebotado (VEN-12). Tras un fallo, espera 2, 8, 30 y 120 minutos; tras tres respuestas ilegibles del modelo se rinde y el toque de la cadencia queda retenido con `llm_error` (0058). La señal del job llega a la llamada al modelo y no empieza otro toque con menos de 90 s de plazo. Sin `ANTHROPIC_API_KEY`, esperan: «redacción con IA no configurada», y la web lo lee de `job_run` (`outreach_writer_status`). |
-| `outbound.review` | 2 min (al minuto impar) | La puerta de calidad de cada borrador redactado: pre-vuelo, juez con la rúbrica del paso, hasta cinco regeneraciones y «enviar el mejor»; deja el toque en `scheduled` o `held` con su motivo (o en `draft` si lo pidió una persona), y cada intento en `outbound_review` con nota y lo que costó escribirlo y juzgarlo, numerado dentro de su corrida (`run`, 0058). Toma tres por corrida; si el plazo se acaba a mitad, escribe los intentos ya pagados antes de soltar el turno. No toma ni pisa un borrador cuyo texto escribió una persona (VEN-12). |
-| `outbound.intent` | 3 min | La intención de cada respuesta nueva (VEN-14): primero devuelve lo que tenía fecha de vuelta (una pausa por «fuera de la oficina» a `active`; un «ahora no» de hace noventa días a la bandeja de aprobación, retenido con `cooldown_over`, nunca enviado solo). Después clasifica lo entrante sin clasificar con `claude-haiku-4-5-20251001` (o el clasificador falso con `OUTREACH_WRITER=fake`) y aplica sus efectos: interesado mueve el negocio a «En conversación» con «Responder hoy»; ahora no enfría el enrolamiento noventa días; fuera de oficina pausa hasta la fecha; baja marca las fichas del espacio; referido lo propone en la bandeja; ambigua (o confianza menor de 0,7) avisa para que una persona la lea. Cada llamada va a `outbound_llm_call` (`classify`) con la decisión guardada en la misma transacción, y mira el tope diario antes de gastar; el lote se reparte entre workspaces (cinco de cada uno como mucho) y uno sin presupuesto no entra. Nada se paga dos veces: una respuesta ilegible queda ambigua, y si aplicar los efectos falla se reintentan solo los efectos; al tercer fallo queda ambigua con un aviso. Sin `ANTHROPIC_API_KEY`, no clasifica y lo dice (la bandeja lo lee con `outreach_classifier_status`, 0065). |
+| `outbound.generate` | 2 min | Redacta con IA, primero, lo que una persona pidió desde el editor del pitch (con su pista y sus instrucciones) y después los borradores de los pasos con `generate_with_ai` cuya hora cae en el próximo día y cuyos pasos anteriores ya salieron; nunca para quien pidió la baja (también la de este espacio) o tiene el correo rebotado (VEN-12). Tras un fallo, espera 2, 8, 30 y 120 minutos; tras tres respuestas ilegibles del modelo se rinde y el toque de la cadencia queda retenido con `llm_error` (0063). La señal del job llega a la llamada al modelo y no empieza otro toque con menos de 90 s de plazo. Sin `ANTHROPIC_API_KEY`, esperan: «redacción con IA no configurada», y la web lo lee de `job_run` (`outreach_writer_status`). |
+| `outbound.review` | 2 min (al minuto impar) | La puerta de calidad de cada borrador redactado: pre-vuelo, juez con la rúbrica del paso, hasta cinco regeneraciones y «enviar el mejor»; deja el toque en `scheduled` o `held` con su motivo (o en `draft` si lo pidió una persona), y cada intento en `outbound_review` con nota y lo que costó escribirlo y juzgarlo, numerado dentro de su corrida (`run`, 0063). Toma tres por corrida; si el plazo se acaba a mitad, escribe los intentos ya pagados antes de soltar el turno. No toma ni pisa un borrador cuyo texto escribió una persona (VEN-12). |
+| `outbound.intent` | 3 min | La intención de cada respuesta nueva (VEN-14): primero devuelve lo que tenía fecha de vuelta (una pausa por «fuera de la oficina» a `active`; un «ahora no» de hace noventa días a la bandeja de aprobación, retenido con `cooldown_over`, nunca enviado solo). Después clasifica lo entrante sin clasificar con `claude-haiku-4-5-20251001` (o el clasificador falso con `OUTREACH_WRITER=fake`) y aplica sus efectos: interesado mueve el negocio a «En conversación» con «Responder hoy»; ahora no enfría el enrolamiento noventa días; fuera de oficina pausa hasta la fecha; baja marca las fichas del espacio; referido lo propone en la bandeja; ambigua (o confianza menor de 0,7) avisa para que una persona la lea. Cada llamada va a `outbound_llm_call` (`classify`) con la decisión guardada en la misma transacción, y mira el tope diario antes de gastar; el lote se reparte entre workspaces (cinco de cada uno como mucho) y uno sin presupuesto no entra. Nada se paga dos veces: una respuesta ilegible queda ambigua, y si aplicar los efectos falla se reintentan solo los efectos; al tercer fallo queda ambigua con un aviso. Sin `ANTHROPIC_API_KEY`, no clasifica y lo dice (la bandeja lo lee con `outreach_classifier_status`, 0070). |
 
 **El despachador** (`outbound.dispatch`), en este orden:
 
@@ -189,7 +189,7 @@ migración 0051 (grupo `sales`). Las consultas viven en
      calentamiento de VEN-15, el mismo número que enseña
      `/ventas/politica`;
    - cabe hoy pero no respeta el ritmo de la cuenta (`effective_hourly`,
-     `min_gap_seconds`, 0052 §1) → espera su turno.
+     `min_gap_seconds`, 0057 §1) → espera su turno.
 3. **Envío**, uno por uno, en tres transacciones: la relectura (toque,
    enrolamiento, ficha, lista global, interruptor, cuenta) y la decisión;
    `send_started_at`, solo si toca enviar; y otra relectura con la
@@ -205,7 +205,7 @@ migración 0051 (grupo `sales`). Las consultas viven en
    de la ventana, hasta 5; ambiguo (corte después de enviar) → antes de
    reintentar se pregunta al proveedor si salió (`findSent`), y si no lo
    sabe decir se retiene (`unconfirmed_attempt`) para que una persona
-   diga en la ficha «Sí, salió» o «No salió: enviarlo» (0053); rebote →
+   diga en la ficha «Sí, salió» o «No salió: enviarlo» (0058); rebote →
    se cancela ese canal y la cadencia termina en `bounced`; cuenta caída
    o sin su token → espera sin gastar intento.
 5. **Lo no intentado** (timeout, apagado) vuelve a la cola con su intento
@@ -221,7 +221,7 @@ decide `applyInboundEffects` de `@mc/db`, la misma función del webhook:
 
 1. una respuesta detiene a la persona en TODAS sus secuencias del
    workspace (`replied`, lo pendiente cancelado) y, con
-   `stop_company_on_reply` (0054, encendido por defecto), pone en pausa
+   `stop_company_on_reply` (0059, encendido por defecto), pone en pausa
    las cadencias de las demás personas de la misma marca;
 2. una baja marca las fichas PROPIAS del workspace del hilo con ese
    correo y cancela lo suyo en cualquier secuencia de ese workspace,
@@ -236,7 +236,7 @@ decide `applyInboundEffects` de `@mc/db`, la misma función del webhook:
    igual que por el webhook.
 
 Antes de leer, busca el hilo de los correos que una persona confirmó a
-mano («Sí, salió», 0053): con él, el lector lee ese hilo y la respuesta
+mano («Sí, salió», 0058): con él, el lector lee ese hilo y la respuesta
 del paso siguiente, que esperaba retenida, vuelve a la cola.
 
 **El interruptor.** Apagar (`disable_outreach`) cancela lo programado y
@@ -288,9 +288,9 @@ pnpm --filter @mc/worker run job:dispatch -- --canal-falso --workspace $W     # 
 `--canal-falso` se niega contra una base que no es local salvo con
 `--workspace` de la demo: deja como enviados mensajes que nadie recibió.
 Contra Supabase necesita, como `job:seguimientos`, `GRANT mc_worker TO
-mc_migrator` y las migraciones de outreach aplicadas (0037 y las de
-VEN-9-canales, VEN-15 y 0051, con los números que les dé el integrador
-detrás de la serie de main: ver la cabecera de `0051_motor_cadencias.sql`). El runner
+mc_migrator` y las migraciones de outreach aplicadas (0046 a 0060: las de
+VEN-9-canales, VEN-15 y el motor, detrás de la serie de main; ver
+docs/ventas-outreach.md §5.2). El runner
 (`src/runner/`) es el de CON-2: el motor no le cambia nada, solo suma sus
 dos jobs en `src/jobs/ventas/index.ts`.
 

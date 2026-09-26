@@ -43,7 +43,7 @@ export interface EditorData {
     score: string | null;
     note: string | null;
     pending: PendingDraft | null;
-    /** La IA se rindió con este borrador (0058): se dice, y se puede pedir otra versión. */
+    /** La IA se rindió con este borrador (0063): se dice, y se puede pedir otra versión. */
     failed: boolean;
     /** Se copió con N cifras sin origen (savePitch lo marcó): se dice junto a los botones. Opcional: null si no. */
     copiedUnsourced?: number | null;

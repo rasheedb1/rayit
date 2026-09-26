@@ -66,7 +66,7 @@ const usageOf = (u: LlmUsage | null) =>
 /**
  * Los intentos de UNA corrida como filas de outbound_review: el número de
  * intento es el de la corrida (1 a 10) y la corrida la pone quien escribe
- * (0058). Tokens y costo son los de ESCRIBIR y JUZGAR el intento (un
+ * (0063). Tokens y costo son los de ESCRIBIR y JUZGAR el intento (un
  * intento que el pre-vuelo rechazó también se pagó), con el desglose en
  * gates.usage.
  */
@@ -128,7 +128,7 @@ export function generationFinalFrom(ctx: GenerationContext, outcome: QualityGate
     claims: chosen?.claims ?? [],
     model,
     attempts: (ctx.generation?.attempts ?? 0) + outcome.attempts.filter((a) => a.attempt > 1).length,
-    // La nota que enseña el editor es la del texto que queda en el toque, no la del último intento (0058).
+    // La nota que enseña el editor es la del texto que queda en el toque, no la del último intento (0063).
     chosen: chosen ? { attempt: chosen.attempt, note: chosen.note, total: chosen.total } : null,
   };
 }

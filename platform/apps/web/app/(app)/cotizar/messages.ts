@@ -630,6 +630,14 @@ export const MESSAGES = {
       tarifasIncluyen: (condiciones: readonly string[]) => `Estos rangos ya incluyen: ${condiciones.join(", ")}.`,
       congelado: (fecha: string) => `Cifras congeladas el ${fecha}`,
       vsMediana: (multiplo: string) => `${multiplo} su mediana`,
+      /**
+       * Un video medido a una edad (pulido r2): la misma frase y las mismas
+       * cifras que «Tus cinco mejores videos» del perfil comercial. `edad`
+       * es «a los 3 días de publicado»; `mediana`, la de su red a esa edad.
+       */
+      edad: (unidad: "hours" | "days", n: string) => (unidad === "hours" ? `a las ${n} horas de publicado` : `a los ${n} días de publicado`),
+      viewsA: (edad: string) => `views ${edad}`,
+      vsMedianaA: (multiplo: string, mediana: string) => `${multiplo} su mediana a esa edad (${mediana})`,
       password: {
         title: "Este media kit pide contraseña",
         description: "Quien te compartió el enlace también te dio la contraseña.",

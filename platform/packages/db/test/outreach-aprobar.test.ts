@@ -8,10 +8,10 @@
  *     de LinkedIn, asunto, dirección postal, baja) y devuelve el mensaje
  *     a la cola con el texto que dejó la persona;
  *   · aprobar un retenido por un intento sin comprobar borra esa marca
- *     (0052 §2 se lo deja a mc_app solo desde 'held'); fuera de esa
+ *     (0057 §2 se lo deja a mc_app solo desde 'held'); fuera de esa
  *     transición la columna sigue siendo del despachador;
  *   · otro workspace no puede aprobar lo ajeno;
- *   · (0053) «sí salió» con la RLS de la web: outreach_resolve_unconfirmed
+ *   · (0058) «sí salió» con la RLS de la web: outreach_resolve_unconfirmed
  *     deja el toque enviado y anota el enlace de ese intento, que la web
  *     sola no puede escribir.
  */
@@ -115,7 +115,7 @@ test('aprobar un retenido por un intento sin comprobar borra esa marca; fuera de
   );
 });
 
-test('«sí salió» con la RLS de la web: el toque queda enviado y el enlace de ese intento cuenta; otro workspace no lo ve (0053)', async () => {
+test('«sí salió» con la RLS de la web: el toque queda enviado y el enlace de ese intento cuenta; otro workspace no lo ve (0058)', async () => {
   const toque = id('76');
   await t.admin(`
     INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, sequence_id, step_index, enrollment_id, channel, subject, body,

@@ -27,9 +27,9 @@ import {
   type SenderProvider,
 } from './shared.ts';
 
-/** Los estados de un toque (CHECK de 0037 §4.3). */
+/** Los estados de un toque (CHECK de 0046 §4.3). */
 const TOUCH_STATUSES = ['draft', 'scheduled', 'processing', 'held', 'sent', 'failed', 'skipped', 'canceled'] as const;
-/** Los de una cuenta de envío (CHECK de 0037 §2). */
+/** Los de una cuenta de envío (CHECK de 0046 §2). */
 const ACCOUNT_STATUSES = ['pending', 'connected', 'needs_reconnect', 'error', 'disconnected'] as const;
 
 /** Todo lo que el despachador relee de un toque reclamado, bloqueado (FOR UPDATE), antes de enviarlo. */
@@ -48,9 +48,9 @@ export interface SendContext {
   stepDayOffset: number | null;
   stepOrderInDay: number | null;
   attempt: number;
-  /** El intento cuyo resultado no se supo (0051 §6): se comprueba antes de reenviar. */
+  /** El intento cuyo resultado no se supo (0056 §6): se comprueba antes de reenviar. */
   unconfirmedAttempt: number | null;
-  /** El día en que ese intento reservó su plaza (0052 §2): vuelve ahí si el proveedor dice que no salió. */
+  /** El día en que ese intento reservó su plaza (0057 §2): vuelve ahí si el proveedor dice que no salió. */
   unconfirmedCapsOn: string | null;
   subject: string | null;
   body: string;
@@ -142,7 +142,7 @@ function parseSendContext(r: SendContextRow, previous: SendContext['previous']):
     scheduledFor: toDate(r.scheduled_for),
     capsReservedOn: textOrNull(fn, '$.caps_reserved_on', r.caps_reserved_on),
     channel,
-    // Una respuesta de la bandeja (0064) no tiene paso: en correo es una respuesta en el hilo.
+    // Una respuesta de la bandeja (0069) no tiene paso: en correo es una respuesta en el hilo.
     stepType: r.step_type !== null
       ? oneOf(fn, '$.step_type', r.step_type, DISPATCHABLE_STEP_TYPES)
       : r.reply_to_message_id !== null && channel === 'email' ? 'email_reply' : stepTypeForChannel(channel)!,
@@ -234,7 +234,7 @@ export async function loadSendContext(tx: WorkerSql, touchId: string): Promise<S
   ).rows[0];
   if (!r) return null;
   // El hilo: el del mensaje al que responde (una respuesta de la bandeja,
-  // 0064) o el del último envío del mismo enrolamiento y canal.
+  // 0069) o el del último envío del mismo enrolamiento y canal.
   const prev = r.reply_to_message_id
     ? (
         await tx.query<{ subject: string | null; thread_ref: string | null; message_id_rfc: string | null; provider_message_id: string | null }>(
@@ -265,7 +265,7 @@ export async function loadSendContext(tx: WorkerSql, touchId: string): Promise<S
 }
 
 /**
- * «Voy a llamar al proveedor» (0051 §6), en su propia transacción, justo
+ * «Voy a llamar al proveedor» (0056 §6), en su propia transacción, justo
  * antes de la del envío. Solo si el toque sigue siendo de ESTE reclamo.
  * Devuelve false si ya no lo es (otro lo movió): no se envía.
  */
@@ -484,7 +484,7 @@ export interface SentProof {
  * intento anota sent_at; lo enviado se copia a outbound_message (la
  * conversación); la cuenta anota last_ok_at; el enrolamiento avanza.
  * processing → sent siempre se puede, aunque la baja haya llegado en
- * medio (la base lo marca opted_out_in_flight, 0037 §4.1).
+ * medio (la base lo marca opted_out_in_flight, 0046 §4.1).
  *
  * `confirmedAttempt`: el proveedor confirmó que salió un intento ANTERIOR
  * cuyo resultado no se supo (unconfirmed_attempt). El enlace que se anota
@@ -634,7 +634,7 @@ export async function recordFailure(tx: WorkerSql, ctx: SendContext, failure: Se
  * La dirección rebotó o no existe: no se le vuelve a escribir por ESE
  * canal desde este workspace. Se cancela lo pendiente del canal para la
  * ficha, y cada enrolamiento suyo que se quede sin nada vivo termina en
- * 'bounced' (0051 §7). No es una baja (la persona no pidió nada): los
+ * 'bounced' (0056 §7). No es una baja (la persona no pidió nada): los
  * otros canales siguen.
  *
  * Si es un correo, la ficha queda además con contact.email_invalid,

@@ -14,7 +14,7 @@
  *                          «ningún rebote» no quiere decir «todo llegó» (r5)
  *
  * Qué está mal lo decide evaluateOutreachAlerts (@mc/core, puro); las
- * cifras salen de outbound_health (0037) y de readAlertSignalCounts
+ * cifras salen de outbound_health (0046) y de readAlertSignalCounts
  * (@mc/db, la misma consulta que enseña /ventas/politica): ninguna resta
  * se hace en una pantalla.
  *
@@ -25,7 +25,7 @@
  * propio enlace (messages.ts, ALERTAS_URL).
  *
  * Después, UN correo de resumen por workspace y por DÍA LOCAL (r4), a
- * todos sus dueños (membership_is_owner, 0055) a la vez, con las alertas
+ * todos sus dueños (membership_is_owner, 0060) a la vez, con las alertas
  * que todavía no salieron por correo; al enviarlo se anota
  * notification.emailed_at, y esa misma columna dice si hoy ya salió uno.
  * Sale en la primera corrida del día que tenga algo que contar. Lo que
@@ -93,7 +93,7 @@ function cifras(alerta: OutreachAlert, locale: string): Record<string, string> {
 /** Las entradas de evaluateOutreachAlerts para un workspace. Se inyecta en las pruebas con fixtures. */
 export type ReadSignals = (tx: Queryable, workspaceId: string, now: Date) => Promise<AlertInput>;
 
-/** outbound_health (0037) y las cifras de la ventana (readAlertSignalCounts), leídas de la base. */
+/** outbound_health (0046) y las cifras de la ventana (readAlertSignalCounts), leídas de la base. */
 export const readSignalsFromDb: ReadSignals = async (tx, workspaceId, now) => {
   const { rows } = await tx.query<{ h: unknown }>('SELECT outbound_health($1::uuid, $2::int) AS h', [
     workspaceId,

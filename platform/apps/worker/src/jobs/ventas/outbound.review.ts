@@ -1,7 +1,7 @@
 /**
  * outbound.review · la puerta de calidad de los borradores generados (VEN-12).
  *
- * Cada dos minutos, desfasado un minuto de outbound.generate (0056):
+ * Cada dos minutos, desfasado un minuto de outbound.generate (0061):
  * reclama los borradores en 'generated' y corre la puerta completa
  * (runQualityGate, @mc/core): el borrador del generador es el intento 1;
  * pre-vuelo y compuertas A y B sin tokens; el juez con la rúbrica del
@@ -15,7 +15,7 @@
  * programa ella. La compuerta C la aplica applyGenerationOutcome al
  * escribir, y no se toma un borrador cuyo texto escribió una persona.
  *
- * El plazo (0058): un toque puede costar hasta nueve llamadas, así que la
+ * El plazo (0063): un toque puede costar hasta nueve llamadas, así que la
  * corrida toma pocos (REVIEW_BATCH_SIZE), no empieza otro si queda menos
  * de MIN_REMAINING_MS, y la señal del job corta la llamada en curso. Si se
  * corta a mitad, los intentos ya hechos (y pagados) se escriben en
@@ -95,7 +95,7 @@ export async function runReview(db: MotorDb, deps: ReviewDeps): Promise<ReviewRe
         {
           generator, judge, signal: deps.signal,
           remainingBudgetUsd: () => db.transaction((tx) => llmBudgetLeftUsd(tx, lease.workspaceId)),
-          // Comprobar y apartar a la vez (0072): outbound.generate puede estar gastando del mismo tope.
+          // Comprobar y apartar a la vez (0075): outbound.generate puede estar gastando del mismo tope.
           reserveBudget: (purpose, estimateUsd) =>
             db.transaction((tx) => reserveLlmBudget(tx, { workspaceId: lease.workspaceId, purpose, estimateUsd })),
           releaseReservation: (id) => db.transaction((tx) => releaseLlmReservation(tx, id)),

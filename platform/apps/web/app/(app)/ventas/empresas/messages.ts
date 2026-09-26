@@ -372,7 +372,7 @@ export const FICHA = {
     },
     /**
      * Una cadencia en pausa porque otra persona de la marca respondió
-     * (0054): si esa conversación no llegó a nada, se reanuda aquí.
+     * (0059): si esa conversación no llegó a nada, se reanuda aquí.
      */
     pausa: {
       aviso: (persona: string) =>

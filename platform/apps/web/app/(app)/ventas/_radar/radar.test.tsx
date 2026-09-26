@@ -124,6 +124,39 @@ describe("Radar", () => {
     expect(screen.queryByRole("link", { name: "Ver en el pipeline" })).not.toBeInTheDocument();
   });
 
+  it("si el CRM tiene una marca con el mismo nombre y otra web, pregunta si es la misma en vez de crear otra (pulido r2)", async () => {
+    const FICHA = "00000008-0000-4000-8000-0000000000e1";
+    aceptarSenal
+      .mockResolvedValueOnce({ sameName: { id: FICHA, name: "Molino Andino" } })
+      .mockResolvedValueOnce({ ok: true, notice: "Ya tienes un negocio con Molino Andino: la señal quedó anotada en él." });
+    render(<Radar cards={[{ ...card, companyName: "Molino Andino" }]} currency="COP" countries={PAISES} />);
+    fireEvent.click(screen.getByRole("button", { name: "Aceptar: Molino Andino" }));
+
+    const pregunta = await screen.findByRole("group", { name: MESSAGES.radar.sameBrand.question("Molino Andino") });
+    expect(within(pregunta).getByRole("link", { name: MESSAGES.radar.sameBrand.see })).toHaveAttribute("href", `/ventas/empresas/${FICHA}`);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(within(pregunta).getByRole("button", { name: MESSAGES.radar.sameBrand.same }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Ya tienes un negocio con Molino Andino");
+    const data = aceptarSenal.mock.calls[1]?.[1] as FormData;
+    expect(data.get("useCompanyId")).toBe(FICHA);
+    expect(data.get("createAnyway")).toBeNull();
+  });
+
+  it("«No, es otra marca» acepta creando una empresa nueva con el nombre por el que se preguntó", async () => {
+    aceptarSenal
+      .mockResolvedValueOnce({ sameName: { id: "00000008-0000-4000-8000-0000000000e1", name: "Molino Andino" } })
+      .mockResolvedValueOnce({ ok: true, notice: "Abriste un negocio con Molino Andino." });
+    render(<Radar cards={[{ ...card, companyName: "Molino Andino" }]} currency="COP" countries={PAISES} />);
+    fireEvent.click(screen.getByRole("button", { name: "Aceptar: Molino Andino" }));
+    fireEvent.click(await screen.findByRole("button", { name: MESSAGES.radar.sameBrand.other }));
+
+    await screen.findByRole("status");
+    const data = aceptarSenal.mock.calls[1]?.[1] as FormData;
+    expect(data.get("createAnyway")).toBe("Molino Andino");
+    expect(data.get("useCompanyId")).toBeNull();
+  });
+
   it("descartar pide el motivo y muestra el error del servidor en su campo", async () => {
     descartarSenal.mockResolvedValue({ errors: { reason: "Di por qué la descartas: es lo que afina el radar." } });
     render(<Radar cards={[card]} currency="COP" countries={PAISES} />);

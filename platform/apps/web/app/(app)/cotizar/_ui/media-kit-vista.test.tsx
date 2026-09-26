@@ -71,6 +71,17 @@ describe("MediaKitVista", () => {
     expect(screen.getByText("3,6× su mediana")).toBeInTheDocument();
   });
 
+  it("un video medido a una edad dice cuál y con qué mediana, como el perfil comercial (pulido r2)", () => {
+    const post = {
+      platformId: "tiktok" as const, url: "https://www.tiktok.com/@laura/video/d06", caption: "La arepa sin plancha",
+      publishedAt: "2026-09-19T19:00:00.000Z", views: 395810, viewsVsMedian: "3.709", ageHoursCut: 72, medianAtCut: 106700,
+    };
+    render(<MediaKitVista snapshot={{ ...SNAPSHOT, topPosts: [post] }} />);
+    const top = screen.getByRole("region", { name: "Lo que mejor funciona" });
+    expect(within(top).getByText("views a los 3 días de publicado")).toBeInTheDocument();
+    expect(within(top).getByText("3,7× su mediana a esa edad (106,7 mil)")).toBeInTheDocument();
+  });
+
   it("la audiencia va por dimensión y con su red, sin pastillas repetidas", () => {
     render(<MediaKitVista snapshot={SNAPSHOT} />);
     const audiencia = screen.getByRole("region", { name: "Audiencia" });

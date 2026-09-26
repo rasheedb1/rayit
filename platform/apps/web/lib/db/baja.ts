@@ -12,7 +12,7 @@ import { withIdentity, withPublicShare } from "./cliente";
  * Como los enlaces de Cotizar, quien abre esto no tiene por qué tener
  * sesión, y todo va por funciones SECURITY DEFINER de mc_public_share:
  * public_optout_preview (entregabilidad §5) para lo que se enseña antes del clic y
- * public_optout (0037 §9, con quien envió desde entregabilidad §8) para la baja. El
+ * public_optout (0046 §9, con quien envió desde entregabilidad §8) para la baja. El
  * token es opaco y lo decide su sha256 en la base: no hay secreto que
  * configurar ni que rotar, así que un error de configuración no puede
  * apagar la baja de la plataforma.

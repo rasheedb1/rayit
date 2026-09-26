@@ -186,7 +186,7 @@ export {
  * dice su firma. Es una operación con nombre, como acceptQuoteFromLink,
  * y recibe la prueba, no un workspace: la web sigue sin poder abrir el
  * workspace que quiera. Lo que puede hacer dentro es lo de cualquier
- * withWorkspace (mc_app y RLS) más las funciones de 0039 y 0040.
+ * withWorkspace (mc_app y RLS) más las funciones de 0048 y 0049.
  */
 export async function withProviderCallback<T>(proof: ProviderCallbackProof, fn: (tx: WorkspaceTx) => Promise<T>): Promise<T> {
   return withWorkspaceId(proofWorkspace(proof), fn);

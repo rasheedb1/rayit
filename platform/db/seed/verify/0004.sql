@@ -121,26 +121,28 @@ SELECT 'f_tarifas' AS check_id,
 FROM media_kit k
 WHERE k.id = '00000004-0000-4000-8000-000000d0c001';
 
--- (g) El «N× su mediana» de cada post del media kit cuadra con la
---     mediana que el MISMO kit publica de su red (pulido r8). Una marca
---     que divide las dos cifras de la página tiene que encontrar el
---     mismo número: buildMediaKitSnapshot lo calcula así al congelar
---     (round(views / mediana, 1)), y el kit del seed, escrito a mano,
---     no puede decir otra cosa.
+-- (g) «Lo que mejor funciona» dice lo mismo que el perfil comercial
+--     (pulido r2): cada video lleva su edad y la mediana de su red A ESA
+--     EDAD, views / esa mediana da el múltiplo que enseña (una marca que
+--     divide las dos cifras encuentra el mismo número), y el múltiplo es
+--     el de post_score, el que cita «Tus cinco mejores videos».
 SELECT 'g_multiplos_del_kit' AS check_id,
        count(*) AS posts,
-       count(*) FILTER (WHERE r.mediana IS NULL OR r.mediana = 0) AS sin_mediana,
-       count(*) FILTER (WHERE abs((p->>'viewsVsMedian')::numeric - (p->>'views')::numeric / r.mediana) >= 0.05) AS descuadrados,
+       count(*) FILTER (WHERE (p->>'medianAtCut') IS NULL OR (p->>'ageHoursCut') IS NULL) AS sin_edad,
+       count(*) FILTER (WHERE abs((p->>'viewsVsMedian')::numeric - (p->>'views')::numeric / nullif((p->>'medianAtCut')::numeric, 0)) >= 0.05) AS descuadrados,
+       count(*) FILTER (WHERE ps.views_vs_median IS DISTINCT FROM (p->>'viewsVsMedian')::numeric) AS distintos_del_perfil,
        count(*) > 0
-         AND count(*) FILTER (WHERE r.mediana IS NULL OR r.mediana = 0) = 0
-         AND count(*) FILTER (WHERE abs((p->>'viewsVsMedian')::numeric - (p->>'views')::numeric / r.mediana) >= 0.05) = 0 AS ok
+         AND count(*) FILTER (WHERE (p->>'medianAtCut') IS NULL OR (p->>'ageHoursCut') IS NULL) = 0
+         AND count(*) FILTER (WHERE abs((p->>'viewsVsMedian')::numeric - (p->>'views')::numeric / nullif((p->>'medianAtCut')::numeric, 0)) >= 0.05) = 0
+         AND count(*) FILTER (WHERE ps.views_vs_median IS DISTINCT FROM (p->>'viewsVsMedian')::numeric) = 0 AS ok
 FROM media_kit k
 CROSS JOIN LATERAL jsonb_array_elements(k.snapshot->'topPosts') p
 LEFT JOIN LATERAL (
-  SELECT (red->>'medianViews')::numeric AS mediana
-    FROM jsonb_array_elements(k.snapshot->'redes') red
-   WHERE red->>'platformId' = p->>'platformId'
-) r ON true
+  SELECT s.views_vs_median
+    FROM post po JOIN post_score s ON s.post_id = po.id
+   WHERE po.creator_id = k.creator_id AND coalesce(po.permalink, po.url) = p->>'url'
+   LIMIT 1
+) ps ON true
 WHERE k.id = '00000004-0000-4000-8000-000000d0c001';
 
 -- (h) Las tarifas son las del tarifario, cifra por cifra y en su orden,

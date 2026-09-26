@@ -8,7 +8,7 @@
  * le llegó ya a esa persona), una fila
  * de outbound_review por intento (nota, pista, riesgos, decisión, y tokens y
  * costo de escribirlo y juzgarlo), numerada dentro de su corrida (run,
- * 0058: ningún intento se queda sin fila por muchas versiones que se
+ * 0063: ningún intento se queda sin fila por muchas versiones que se
  * pidan), la nota del intento ELEGIDO en outbound_generation (la que ve
  * el editor), y el toque en scheduled o held (o de
  * vuelta en draft, si lo pidió una persona desde el editor) con el texto sin marcas
@@ -54,13 +54,13 @@ export interface GenerationFinal {
   outcome: 'approved' | 'held';
   model: string | null;
   attempts: number;
-  /** El intento cuyo texto queda en el toque, con SU nota: lo que enseña el editor (0058). null = ninguno legible. */
+  /** El intento cuyo texto queda en el toque, con SU nota: lo que enseña el editor (0063). null = ninguno legible. */
   chosen: { attempt: number; note: string | null; total: number | null } | null;
 }
 
 export type ApplyResult = { applied: true; status: 'scheduled' | 'held' | 'draft' } | { applied: false; codes: string[] };
 
-/** Los intentos de una corrida van del 1 al 10 (CHECK de 0037, y el tope de outbound_step_rubric.max_attempts). */
+/** Los intentos de una corrida van del 1 al 10 (CHECK de 0046, y el tope de outbound_step_rubric.max_attempts). */
 export const MAX_REVIEW_ATTEMPT = 10;
 
 /**

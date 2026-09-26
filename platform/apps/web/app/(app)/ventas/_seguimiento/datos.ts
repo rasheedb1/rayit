@@ -43,9 +43,13 @@ export interface GuardadaVista {
   dueText: string;
 }
 
-/** «24 sep · 9:30 a. m.»: el vencimiento en la zona del espacio. Uno solo para la línea y para el aviso de guardado. */
+/**
+ * «24 sep, 9:30 a. m.»: el vencimiento en la zona del espacio, con el mismo
+ * formato de fecha y hora que la actividad y la ficha (f.dateTimeShort,
+ * pulido r2). Uno solo para la línea y para el aviso de guardado.
+ */
 export function textoDeVencimiento(dueAt: string, f: Formatter): string {
-  return `${f.date(dueAt)} · ${f.time(dueAt)}`;
+  return f.dateTimeShort(dueAt);
 }
 
 /**

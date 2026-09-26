@@ -20,7 +20,7 @@
  *   · volver a encenderlo devuelve lo cancelado a la cola: las cadencias
  *     siguen donde iban, con sus días entre pasos y sus textos.
  *
- * Los contadores cuentan el día del reloj del despachador (p_at, 0052
+ * Los contadores cuentan el día del reloj del despachador (p_at, 0057
  * §3), no el now() de la base: cuando el reloj falso cambia de día, la
  * plaza del día nuevo es una fila nueva de outbound_counter, como con el
  * calendario real. La prueba no los toca a mano.
@@ -148,7 +148,7 @@ after(async () => {
   await db?.close();
 });
 
-test('los dos jobs están registrados con su cron (0051)', async () => {
+test('los dos jobs están registrados con su cron (0056)', async () => {
   for (const id of [DISPATCH_JOB_ID, REPLIES_JOB_ID]) assert.ok(allJobs.some((j) => j.id === id), id);
   const { rows } = await db.raw.query<{ id: string; default_cron: string }>(
     `SELECT id, default_cron FROM job_definition WHERE id IN ('outbound.dispatch', 'outbound.replies') ORDER BY id`,
@@ -268,7 +268,7 @@ test('el límite diario reprograma al siguiente día hábil', async () => {
   const r = await motor.transaction((tx) => enrollContacts(tx, { sequenceId: SEQ, contactIds: [CAROLINA, PEDRO], now: clock }));
   for (const e of r.enrolled) enrollments.set(e.contactId, e.enrollmentId);
   // La cuenta con un solo envío al día. El viernes es un día nuevo para los
-  // contadores sin tocarlos: cuentan el día del reloj (0052 §3).
+  // contadores sin tocarlos: cuentan el día del reloj (0057 §3).
   await db.raw.exec(`UPDATE outreach_channel_account SET daily_cap = 1 WHERE id = '${GMAIL}';`);
   clock = bogota('2026-09-25', '12:00');
   const sentBefore = fake.email.sent.length;
@@ -330,7 +330,7 @@ test('un reclamo caído: lo que nunca llegó al proveedor vuelve a la cola; lo q
     'un aviso, el del zombi; ninguno por lo devuelto',
   );
   // El lunes es una fila nueva del contador, con lo que salió ese día; la
-  // del viernes sigue como quedó (0052 §3: el día es el del reloj).
+  // del viernes sigue como quedó (0057 §3: el día es el del reloj).
   const plazas = await plazasDelDia();
   assert.deepEqual(plazas[0], ['2026-09-25', 1]);
   assert.equal(plazas[1]?.[0], '2026-09-28');

@@ -12,7 +12,7 @@
 --     primer paso, el comentario en LinkedIn, FALLÓ con account_auth: la
 --     cuenta de LinkedIn perdió el permiso. Como no hay otro LinkedIn
 --     conectado, la actividad no ofrece «Reintentar» sino reconectar
---     (outbound_touch_retry_block = account_down, 0067);
+--     (outbound_touch_retry_block = account_down, 0072);
 --   * Laura Quintero (Granos del Valle) recibió el comentario hace tres
 --     días hábiles (antes de que LinkedIn cayera) y su correo del paso 2
 --     FALLÓ ayer con rejected: se puede reintentar, y el botón «Correo · 1»
@@ -32,7 +32,7 @@
 --   * Nada real: direcciones y ids de la demo. La política de envío sigue
 --     APAGADA (0002): el widget pinta estas cuentas «Sin envío», que es la
 --     verdad de la demo, y sembrar en Supabase no manda nada.
---   * Requiere 0037, 0052 y 0067, y los seeds 0002 y 0005.
+--   * Requiere 0046, 0057 y 0072, y los seeds 0002 y 0005.
 --
 -- Y el paso 1 de Daniel y de Carolina (seed 0005), que empezaban la
 -- cadencia en el paso 2: el embudo de la vista de flujo crecía hacia
@@ -169,7 +169,7 @@ ON CONFLICT (id) DO NOTHING;
 -- Gmail de Laura para el correo, su LinkedIn para LinkedIn) y, en el
 -- correo, también en la fila del espacio (channel_account_id NULL: una
 -- sola cuenta de correo, la misma cifra). La semana de cada cuenta es la
--- suma de sus días. Como lo suma outbound_counter_bump_at (0052).
+-- suma de sus días. Como lo suma outbound_counter_bump_at (0057).
 --
 -- Así el widget de uso de /ventas/canales casa con el historial de
 -- /ventas/actividad, barra por barra: cada día es lo que salió o se

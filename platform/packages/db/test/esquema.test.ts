@@ -257,7 +257,7 @@ describe('estadoDelEsquema contra una base recién migrada', () => {
     assert.deepEqual((await estadoDelEsquema(t.db)).funcionesQueFaltan, []);
   });
 
-  test('un candado desactivado o borrado (0037 §4.2) no da verde: ningún GRANT lo sustituye', async () => {
+  test('un candado desactivado o borrado (0046 §4.2) no da verde: ningún GRANT lo sustituye', async () => {
     // DISABLE TRIGGER no deja rastro en schema_migrations: la comparación
     // de archivos lo vería todo en orden y el sabotaje de la baja volvería.
     assert.ok('outbound_touch.outbound_touch_worker_columns' in DISPARADORES_DE_CANDADO);
@@ -1266,7 +1266,7 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
   const DEAL_PUBLIC_SHARE =
     "EXISTS (SELECT 1 FROM quote q WHERE q.deal_id = deal.id AND q.slug = nullif(current_setting('app.public_share', true), ''))";
 
-  test('el inventario declarado es el de 0030, 0031, 0037 y 0038, y la base recién migrada lo cumple', async () => {
+  test('el inventario declarado es el de 0030, 0031, 0046 y 0055, y la base recién migrada lo cumple', async () => {
     assert.deepEqual(Object.keys(PRIVILEGIOS_DEL_ENLACE_PUBLICO).sort(), [
       'company', 'company_link', 'contact', 'deal', 'deal_stage_history',
       'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'membership', 'outbound_enrollment',
@@ -1276,21 +1276,21 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
     assert.equal(
       Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length,
       20,
-      'las siete de 0030, la aceptada del negocio de 0033, las nueve de la baja de 0037 (una, la de las fichas por ' +
-        'dirección, rehecha en 0038 §8), la de quién envía de 0038 y las dos de la baja con quien envió (0038 §8)',
+      'las siete de 0030, la aceptada del negocio de 0033, las nueve de la baja de 0046 (una, la de las fichas por ' +
+        'dirección, rehecha en 0055 §8), la de quién envía de 0055 y las dos de la baja con quien envió (0055 §8)',
     );
-    // La baja nunca escribe la lista de toda la plataforma (0038 §8): mc_public_share ni la nombra.
+    // La baja nunca escribe la lista de toda la plataforma (0055 §8): mc_public_share ni la nombra.
     assert.equal(PRIVILEGIOS_DEL_ENLACE_PUBLICO.contact_suppression, undefined);
-    // La baja con quien envió (0038 §8) anota la de ESE workspace y lee si ya estaba; no la borra ni la cambia.
+    // La baja con quien envió (0055 §8) anota la de ESE workspace y lee si ya estaba; no la borra ni la cambia.
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_workspace_optout!.tabla, ['INSERT']);
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_workspace_optout!.columnas, { SELECT: ['email', 'workspace_id'] });
-    // La vista previa de la baja (0038 §5) lee el nombre y el idioma (r5) de quien envía, por columna, y nada más del workspace.
+    // La vista previa de la baja (0055 §5) lee el nombre y el idioma (r5) de quien envía, por columna, y nada más del workspace.
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.workspace!.tabla, []);
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.workspace!.columnas, { SELECT: ['id', 'locale', 'name'] });
-    // La baja (0037 §9) lee el enlace y anota el clic; no escribe el enlace ni lee los clics.
+    // La baja (0046 §9) lee el enlace y anota el clic; no escribe el enlace ni lee los clics.
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_optout_link!.tabla, ['SELECT']);
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_optout_event!.tabla, ['INSERT']);
-    // La baja (0037 §9) escribe la baja del contacto, nunca su correo.
+    // La baja (0046 §9) escribe la baja del contacto, nunca su correo.
     assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.contact!.columnas!.UPDATE!.includes('email'));
     assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.quote!.columnas!.UPDATE!.includes('total'));
     assert.deepEqual((await estadoDelEsquema(t.db)).enlacePublico, []);
@@ -1302,7 +1302,7 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
     );
   });
 
-  test('SELECT de una tabla que 0030 y 0037 no le dan (payment) se reporta', async () => {
+  test('SELECT de una tabla que 0030 y 0046 no le dan (payment) se reporta', async () => {
     await con('GRANT SELECT ON payment TO mc_public_share', 'REVOKE SELECT ON payment FROM mc_public_share', (e) =>
       dice(e, /^payment: SELECT de la relación entera$/),
     );
@@ -1339,7 +1339,7 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
     assert.deepEqual((await estadoDelEsquema(t.db)).enlacePublico, [], 'y al deshacerlo vuelve a verde');
   });
 
-  test('la política de alta del clic de baja (0037 §9) se mira por su WITH CHECK', async () => {
+  test('la política de alta del clic de baja (0046 §9) se mira por su WITH CHECK', async () => {
     const CLIC = "token_hash = nullif(current_setting('app.public_optout', true), '')";
     await con(
       'ALTER POLICY outbound_optout_event_public_optout ON outbound_optout_event WITH CHECK (true)',
