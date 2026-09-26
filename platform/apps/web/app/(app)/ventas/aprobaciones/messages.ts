@@ -66,11 +66,17 @@ export const MESSAGES = {
   },
 
   fila: {
-    /** La etiqueta de la fila para un lector de pantalla. */
-    label: (empresa: string, persona: string) => `Mensaje a ${persona}, de ${empresa}`,
+    /**
+     * La etiqueta de la fila para un lector de pantalla, con el paso y el
+     * canal: dos filas de la misma persona (correo paso 2, LinkedIn paso 3)
+     * no se leen igual al moverse con j y k.
+     */
+    label: (empresa: string, persona: string, paso: string, canal: string) => `Mensaje a ${persona}, de ${empresa} · ${paso} · ${canal}`,
     paso: (secuencia: string, n: string, total: string) => `${secuencia} · paso ${n} de ${total}`,
     pasoSinTotal: (secuencia: string, n: string) => `${secuencia} · paso ${n}`,
     pasoSuelto: "Mensaje suelto",
+    /** Una respuesta escrita en /ventas/bandeja que el envío retuvo: no es un pitch, va en la conversación. */
+    respuestaBandeja: "Tu respuesta desde la bandeja",
     sinNombre: "Sin nombre",
     sale: (cuando: string) => `Sale ${cuando}`,
     /** De dónde salió el contacto, con la etiqueta de la ficha («Web de la empresa», «Te escribió»…). */
@@ -85,6 +91,8 @@ export const MESSAGES = {
 
   porque: {
     title: "Por qué quedó retenido",
+    /** En un borrador que se pidió de nuevo, lo que se ve es la revisión de la versión nueva, no por qué se retuvo. */
+    titleRegenerado: "La revisión de la versión nueva",
     categorias: {
       preflight: "Reglas de estilo y cifras",
       juez: "Revisión automática",
@@ -96,7 +104,10 @@ export const MESSAGES = {
       persona: "Nota",
     } satisfies Record<MotivoCategoria, string>,
     notaDelJuez: "La revisión dice",
-    total: (nota: string) => `${nota} de 10`,
+    /** «7,4 de 10 · mínimo 8»: la nota y lo que pide la rúbrica del paso (Stripe Radar: el dato y el umbral). */
+    total: (nota: string, minimo: string | null) => (minimo ? `${nota} de 10 · mínimo ${minimo}` : `${nota} de 10`),
+    /** Para un lector de pantalla, junto a la dimensión que queda por debajo del mínimo. */
+    bajoMinimo: "por debajo del mínimo",
     intentos: (n: string, cuantos: number) => `${n} ${plural(cuantos, "intento", "intentos")}`,
     dimensiones: { relevance: "Relevancia", quality: "Calidad", structure: "Estructura", voice: "Voz" },
     riesgos: "Lo que obliga a revisarlo",
@@ -150,6 +161,8 @@ export const MESSAGES = {
     saltarConsecuencia: "Este mensaje no sale y la cadencia sigue con el siguiente paso. No se puede deshacer.",
     saltarConfirmar: "Sí, saltar",
     resolverEnLaFicha: "Resolver en la ficha",
+    /** Debajo del mensaje, las frases con la cifra sin origen señalada. */
+    dondeEsta: "Dónde está en el mensaje",
     resolverAyuda: "No sabemos si el intento anterior salió: dilo en la ficha para no mandarlo dos veces.",
   },
 
@@ -161,6 +174,8 @@ export const MESSAGES = {
     deshacer: "Deshacer",
     deshecho: (persona: string) => `Deshecho: el mensaje a ${persona} vuelve a esperar tu aprobación.`,
     pedido: "Pedimos otra versión. Aparece aquí en cuanto esté lista.",
+    /** En la demo la versión nueva se redacta en el momento: ya está en su fila. */
+    lista: "Versión nueva lista: revísala en su fila.",
     iaApagada:
       "La redacción con IA no está encendida en este espacio: la versión nueva no llegará hasta que se configure. Puedes editarlo tú.",
     envioApagado: "El envío está apagado: lo que apruebes sale cuando lo enciendas en la política de envío.",
@@ -178,10 +193,10 @@ export const MESSAGES = {
     empty_subject: "Escribe el asunto del correo.",
     placeholders: (huecos: string) => `Quedan huecos sin rellenar: ${huecos}.`,
     note_too_long: (n: string) => `La nota de la invitación tiene ${n} caracteres; LinkedIn permite 300.`,
-    unsourced_figure: (cifras: string) =>
-      cifras.includes(",")
-        ? `Las cifras ${cifras} no salen de tu perfil: cámbialas por cifras tuyas o quítalas.`
-        : `La cifra ${cifras} no sale de tu perfil: cámbiala por una de tus cifras o quítala.`,
+    unsourced_figure: (cifras: readonly string[]) =>
+      cifras.length > 1
+        ? `Las cifras ${cifras.map((c) => `«${c}»`).join(", ")} no salen de tu perfil: cámbialas por cifras tuyas o quítalas.`
+        : `La cifra «${cifras[0] ?? ""}» no sale de tu perfil: cámbiala por una de tus cifras o quítala.`,
     opted_out: "Esa persona pidió no ser contactada: el mensaje no puede salir.",
     no_postal_address: "Falta tu dirección postal para el pie de los correos: guárdala en la política de envío.",
     not_editable: "Este mensaje no se puede pedir de nuevo a la IA.",

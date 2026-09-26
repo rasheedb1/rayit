@@ -12,8 +12,12 @@ import { MESSAGES } from "./messages";
 import { motivoDe, reglasDe, riesgosDe, type Motivo } from "./motivo";
 
 export interface JuezVista {
+  /** «7,4 de 10 · mínimo 8». */
   total: string | null;
-  dimensiones: Array<{ key: string; label: string; valor: string }>;
+  /** La nota total no llega al mínimo de la rúbrica. */
+  totalBajo: boolean;
+  /** Cada dimensión; `bajo`: la que queda por debajo del mínimo (la que tiró la nota). */
+  dimensiones: Array<{ key: string; label: string; valor: string; bajo: boolean }>;
   nota: string | null;
   intentos: string | null;
   riesgos: string[];
@@ -22,6 +26,8 @@ export interface JuezVista {
 
 export interface FilaVista {
   touchId: string;
+  /** La etiqueta de la fila para un lector de pantalla: persona, marca, paso y canal. */
+  etiqueta: string;
   persona: string;
   empresa: string;
   fichaHref: string;
@@ -42,6 +48,8 @@ export interface FilaVista {
   motivo: Motivo | null;
   juez: JuezVista | null;
   regenerable: boolean;
+  /** «Por qué quedó retenido», o, en una versión nueva, «La revisión de la versión nueva». */
+  porqueTitulo: string;
 }
 
 const DIMENSIONES = ["relevance", "quality", "structure", "voice"] as const;
@@ -49,20 +57,28 @@ const DIMENSIONES = ["relevance", "quality", "structure", "voice"] as const;
 export function filaVista(item: ApprovalItem, f: Formatter): FilaVista {
   const t = MESSAGES;
   const n = item.stepIndex === null ? null : f.int(item.stepIndex);
-  const paso = item.sequenceName && n
+  const paso = item.inboxReply
+    ? t.fila.respuestaBandeja
+    : item.sequenceName && n
     ? item.stepCount
       ? t.fila.paso(item.sequenceName, n, f.int(item.stepCount))
       : t.fila.pasoSinTotal(item.sequenceName, n)
     : t.fila.pasoSuelto;
-  const esRespuesta = item.stepType === "email_reply";
+  // Una respuesta en el hilo: el paso email_reply o la escrita en la bandeja (sin asunto propio: sale como «Re: …»).
+  const esRespuesta = item.stepType === "email_reply" || item.inboxReply;
   const r = item.review;
+  const persona = item.contactName ?? t.fila.sinNombre;
+  const canal = channelLabel(noticeLang(f.locale), item.channel);
+  const minimo = r?.threshold ?? null;
+  const regenerado = item.status === "draft" && !item.regenerating;
   return {
     touchId: item.touchId,
-    persona: item.contactName ?? t.fila.sinNombre,
+    etiqueta: t.fila.label(item.companyName, persona, paso, canal),
+    persona,
     empresa: item.companyName,
     fichaHref: `/ventas/empresas/${item.companyId}#cadencia`,
     paso,
-    canal: channelLabel(noticeLang(f.locale), item.channel),
+    canal,
     sale: item.scheduledFor ? t.fila.sale(f.dateTime(item.scheduledFor.toISOString())) : null,
     procedencia: item.contactSource ? t.fila.procedencia(SOURCE_META[item.contactSource].label) : null,
     subject: item.subject,
@@ -70,13 +86,15 @@ export function filaVista(item: ApprovalItem, f: Formatter): FilaVista {
     hilo: esRespuesta ? (item.threadSubject ? t.fila.enElHilo(item.threadSubject) : t.fila.enElHiloSinAsunto) : null,
     conAsunto: item.channel === "email" && !esRespuesta,
     regenerando: item.regenerating,
-    regenerado: item.status === "draft" && !item.regenerating,
+    regenerado,
     motivo: motivoDe(item.heldReason, f.locale, item.regenerable),
     juez: r
       ? {
-          total: r.totalScore === null ? null : t.porque.total(f.decimal(r.totalScore, 1)),
+          total: r.totalScore === null ? null : t.porque.total(f.decimal(r.totalScore, 1), minimo === null ? null : f.decimal(minimo, 1)),
+          totalBajo: r.totalScore !== null && minimo !== null && r.totalScore < minimo,
+          // La rúbrica tiene un mínimo para la nota; una dimensión por debajo de él es la que la tiró.
           dimensiones: DIMENSIONES.filter((d) => r.scores[d] !== undefined).map((d) => ({
-            key: d, label: t.porque.dimensiones[d], valor: f.decimal(r.scores[d]!, 1),
+            key: d, label: t.porque.dimensiones[d], valor: f.decimal(r.scores[d]!, 1), bajo: minimo !== null && r.scores[d]! < minimo,
           })),
           nota: r.judgeNote,
           intentos: r.attempts > 1 ? t.porque.intentos(f.int(r.attempts), r.attempts) : null,
@@ -85,5 +103,6 @@ export function filaVista(item: ApprovalItem, f: Formatter): FilaVista {
         }
       : null,
     regenerable: item.regenerable,
+    porqueTitulo: regenerado ? t.porque.titleRegenerado : t.porque.title,
   };
 }

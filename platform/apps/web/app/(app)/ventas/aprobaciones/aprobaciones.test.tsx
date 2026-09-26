@@ -43,6 +43,7 @@ function item(n: number, extra: Partial<ApprovalItem> = {}): ApprovalItem {
     statusChangedAt: new Date("2026-09-23T15:30:00Z"),
     review: null,
     regenerable: true,
+    inboxReply: false,
     ...extra,
   };
 }
@@ -112,16 +113,18 @@ describe("por qué quedó retenido", () => {
       item(1, {
         heldReason: "quality_risk:unsourced_figure",
         review: {
-          totalScore: 6.4, scores: { relevance: 7, quality: 6.5 }, riskTriggers: ["unsourced_figure"], regenerateHint: "add_proof",
-          judgeNote: "Cita una cifra sin fuente.", preflight: [], attempts: 3,
+          totalScore: 6.4, scores: { relevance: 8.5, quality: 6.5 }, riskTriggers: ["unsourced_figure"], regenerateHint: "add_proof",
+          judgeNote: "Cita una cifra sin fuente.", preflight: [], attempts: 3, threshold: 8,
         },
       }),
       f,
     );
-    expect(v.juez?.total).toBe("6,4 de 10");
+    // Stripe Radar: la nota con el mínimo que pide la rúbrica, y la dimensión que la tiró señalada.
+    expect(v.juez?.total).toBe("6,4 de 10 · mínimo 8");
+    expect(v.juez?.totalBajo).toBe(true);
     expect(v.juez?.dimensiones).toEqual([
-      { key: "relevance", label: "Relevancia", valor: "7" },
-      { key: "quality", label: "Calidad", valor: "6,5" },
+      { key: "relevance", label: "Relevancia", valor: "8,5", bajo: false },
+      { key: "quality", label: "Calidad", valor: "6,5", bajo: true },
     ]);
     expect(v.juez?.intentos).toBe("3 intentos");
     expect(v.juez?.riesgos).toEqual(["una cifra sin origen en tu perfil"]);
@@ -143,7 +146,7 @@ describe("la cola", () => {
     await act(async () => {
       fireEvent.keyDown(window, { key: "a" });
     });
-    expect(aprobarToque).toHaveBeenCalledWith({ touchId: item(2).touchId, persona: "Persona 2", edicion: null });
+    expect(aprobarToque).toHaveBeenCalledWith({ touchId: item(2).touchId, edicion: null });
     expect(await screen.findByText(MESSAGES.avisos.aprobado("Persona 2"))).toBeInTheDocument();
   });
 
@@ -161,7 +164,7 @@ describe("la cola", () => {
       fireEvent.click(screen.getByRole("button", { name: MESSAGES.acciones.aprobarCambios }));
     });
     expect(aprobarToque).toHaveBeenCalledWith({
-      touchId: item(1).touchId, persona: "Persona 1", edicion: { subject: "Asunto 1", body: "Hola, {{first_name}}" },
+      touchId: item(1).touchId, edicion: { subject: "Asunto 1", body: "Hola, {{first_name}}" },
     });
     expect(await screen.findByText(MESSAGES.errores.placeholders("{{first_name}}"))).toBeInTheDocument();
   });
@@ -197,15 +200,78 @@ describe("la cola", () => {
     expect(screen.getByText(MESSAGES.acciones.saltarPregunta)).toBeInTheDocument();
   });
 
-  it("una cifra sin origen no se aprueba tal cual: «a» abre el editor con el motivo", async () => {
-    const motivo = MESSAGES.errores.unsourced_figure("40 %");
-    aprobarToque.mockResolvedValue({ ok: false, errors: { body: motivo } });
-    render(<Cola filas={[filaVista(item(1, { heldReason: "quality_risk:unsourced_figure" }), f)]} />);
+  it("una cifra sin origen no se aprueba tal cual: «a» abre el editor con el motivo en el campo, una vez, y la cifra señalada", async () => {
+    const motivo = MESSAGES.errores.unsourced_figure(["40 %"]);
+    aprobarToque.mockResolvedValue({ ok: false, errors: { body: motivo }, cifras: ["40 %"] });
+    const body = "Hola, Persona 1. El 40 % de mis videos termina en compra. ¿Hablamos?";
+    render(<Cola filas={[filaVista(item(1, { heldReason: "quality_risk:unsourced_figure", body }), f)]} />);
     await act(async () => {
       fireEvent.keyDown(window, { key: "a" });
     });
-    expect(screen.getByLabelText(MESSAGES.acciones.mensaje)).toBeInTheDocument();
-    expect(screen.getByText(motivo)).toBeInTheDocument();
+    const cuerpo = screen.getByLabelText(MESSAGES.acciones.mensaje);
+    expect(cuerpo).toHaveAttribute("aria-invalid", "true");
+    await waitFor(() => expect(document.activeElement).toBe(cuerpo));
+    expect(screen.getAllByText(motivo)).toHaveLength(1);
+    const marca = screen.getByText("40 %", { selector: "mark" });
+    expect(marca.parentElement?.textContent).toBe("El 40 % de mis videos termina en compra.");
+    // Reenviarlo y que vuelva a fallar no lo repite: sigue en su campo, una vez.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: MESSAGES.acciones.aprobarCambios }));
+    });
+    expect(screen.getAllByText(motivo)).toHaveLength(1);
+    // Corregida la cifra, deja de señalarse.
+    fireEvent.change(cuerpo, { target: { value: "Hola, Persona 1. Te dejo una idea. ¿Hablamos?" } });
+    expect(screen.queryByText("40 %", { selector: "mark" })).toBeNull();
+  });
+
+  it("cada fila dice a un lector de pantalla su paso y su canal: dos de la misma persona no se leen igual", () => {
+    render(<Cola filas={[filaVista(item(1), f), filaVista(item(1, { touchId: item(2).touchId, stepIndex: 2, channel: "linkedin" }), f)]} />);
+    const [a, b] = screen.getAllByRole("article");
+    expect(a).toHaveAccessibleName("Mensaje a Persona 1, de Marca 1 · Marca con campaña activa · paso 1 de 3 · correo");
+    expect(b!.getAttribute("aria-label")).not.toBe(a!.getAttribute("aria-label"));
+  });
+
+  it("el foco del teclado se ve a cualquier ancho: el anillo de focus-visible no lleva sm", () => {
+    render(<Cola filas={[filaVista(item(1), f)]} />);
+    const clases = screen.getByRole("article").className.split(" ");
+    expect(clases).toContain("focus-visible:ring-2");
+    expect(clases).toContain("focus-visible:border-ink");
+  });
+
+  it("una versión nueva enseña «La revisión de la versión nueva», no «Por qué quedó retenido»", () => {
+    const v = filaVista(
+      item(1, {
+        status: "draft", heldReason: null,
+        review: { totalScore: 8.4, scores: {}, riskTriggers: [], regenerateHint: null, judgeNote: "Mejor.", preflight: [], attempts: 1, threshold: 8 },
+      }),
+      f,
+    );
+    expect(v.porqueTitulo).toBe(MESSAGES.porque.titleRegenerado);
+    render(<Cola filas={[v]} />);
+    expect(screen.getByRole("heading", { name: MESSAGES.porque.titleRegenerado })).toBeInTheDocument();
+  });
+
+  it("una respuesta de la bandeja retenida va en el hilo: sin asunto, sin «Regenerar», y no se llama «Mensaje suelto»", () => {
+    const v = filaVista(
+      item(1, { inboxReply: true, stepType: "email_reply", subject: null, sequenceName: null, stepIndex: null, stepCount: null, regenerable: false, threadSubject: "Hola, Persona" }),
+      f,
+    );
+    expect([v.paso, v.conAsunto, v.hilo]).toEqual([MESSAGES.fila.respuestaBandeja, false, MESSAGES.fila.enElHilo("Hola, Persona")]);
+    render(<Cola filas={[v]} />);
+    expect(screen.queryByRole("button", { name: MESSAGES.acciones.regenerar })).toBeNull();
+    fireEvent.keyDown(window, { key: "e" });
+    expect(screen.queryByLabelText(MESSAGES.acciones.asunto)).toBeNull();
+  });
+
+  it("después de pedir otra versión, el foco vuelve a la fila (j y k siguen desde ella)", async () => {
+    regenerarToque.mockResolvedValue({ ok: true, notice: MESSAGES.avisos.lista });
+    render(<Cola filas={[filaVista(item(1), f), filaVista(item(2), f)]} />);
+    fireEvent.keyDown(window, { key: "r" });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: MESSAGES.acciones.pedir }));
+    });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getAllByRole("article")[0]));
+    expect(screen.getByText(MESSAGES.avisos.lista)).toBeInTheDocument();
   });
 
   it("en un teléfono la fila activa no se marca: el borde y el anillo son solo desde sm", () => {
@@ -243,7 +309,7 @@ describe("la cola", () => {
   });
 
   it("al aprobar la ÚLTIMA fila, el aviso sigue arriba del vacío con «Deshacer», y deshacer la devuelve", async () => {
-    const deshacer = { touchId: item(1).touchId, persona: "Persona 1", approvedAt: "2026-09-24T15:00:00.000Z" };
+    const deshacer = { touchId: item(1).touchId, approvedAt: "2026-09-24T15:00:00.000Z" };
     aprobarToque.mockResolvedValue({ ok: true, notice: MESSAGES.avisos.aprobado("Persona 1"), deshacer });
     deshacerAprobacion.mockResolvedValue({ ok: true, notice: MESSAGES.avisos.deshecho("Persona 1") });
     const { rerender } = render(<Cola filas={[filaVista(item(1), f)]} />);
@@ -265,7 +331,7 @@ describe("la cola", () => {
   it("con el envío apagado, el aviso de aprobado no promete la hora", async () => {
     aprobarToque.mockResolvedValue({
       ok: true, notice: MESSAGES.avisos.aprobadoApagado("Persona 1"),
-      deshacer: { touchId: item(1).touchId, persona: "Persona 1", approvedAt: "2026-09-24T15:00:00.000Z" },
+      deshacer: { touchId: item(1).touchId, approvedAt: "2026-09-24T15:00:00.000Z" },
     });
     render(<Cola filas={[filaVista(item(1), f)]} />);
     await act(async () => {
@@ -280,7 +346,7 @@ describe("la cola", () => {
     try {
       aprobarToque.mockResolvedValue({
         ok: true, notice: MESSAGES.avisos.aprobado("Persona 1"),
-        deshacer: { touchId: item(1).touchId, persona: "Persona 1", approvedAt: "2026-09-24T15:00:00.000Z" },
+        deshacer: { touchId: item(1).touchId, approvedAt: "2026-09-24T15:00:00.000Z" },
       });
       render(<Cola filas={[filaVista(item(1), f)]} />);
       await act(async () => {
@@ -313,7 +379,7 @@ describe("la cola", () => {
           filaVista(
             item(1, {
               review: {
-                totalScore: 6.4, scores: { relevance: 7 }, riskTriggers: [], regenerateHint: null, judgeNote: null, preflight: [], attempts: 3,
+                totalScore: 6.4, scores: { relevance: 7 }, riskTriggers: [], regenerateHint: null, judgeNote: null, preflight: [], attempts: 3, threshold: null,
               },
             }),
             f,

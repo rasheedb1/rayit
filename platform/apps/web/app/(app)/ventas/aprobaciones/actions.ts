@@ -26,7 +26,9 @@ import { MESSAGES } from "./messages";
  *
  * Se llaman desde el cliente como funciones, con un objeto y no con un
  * FormData: la fila decide qué mostrar con el resultado y la lista guarda
- * el aviso aunque la fila desaparezca al aprobarla.
+ * el aviso aunque la fila desaparezca al aprobarla. El nombre del aviso
+ * («Aprobado: el mensaje a Paula…») lo devuelve la base con el toque: el
+ * navegador no manda texto que acabe en la pantalla.
  */
 
 /**
@@ -36,13 +38,19 @@ import { MESSAGES } from "./messages";
  */
 export interface Deshacer {
   touchId: string;
-  persona: string;
   approvedAt: string;
 }
 
 export type ResultadoAprobacion =
   | { ok: true; notice: string; deshacer?: Deshacer | null }
-  | { ok: false; errors?: Partial<Record<"subject" | "body", string>>; message?: string; link?: { href: string; label: string } };
+  | {
+      ok: false;
+      errors?: Partial<Record<"subject" | "body", string>>;
+      message?: string;
+      link?: { href: string; label: string };
+      /** Las cifras sin origen tal como están en el texto («23 %»): el editor las señala donde están. */
+      cifras?: string[];
+    };
 
 const t = MESSAGES;
 const RUTA = "/ventas/aprobaciones";
@@ -50,7 +58,6 @@ const SIN_PERMISO: ResultadoAprobacion = { ok: false, message: t.sinPermiso };
 
 const aprobarSchema = z.object({
   touchId: z.string().regex(UUID_RE),
-  persona: z.string().max(200),
   /** Sin edición, se aprueba con el texto que tiene. */
   edicion: z.object({ subject: z.string().max(300).nullable(), body: z.string().max(20000) }).nullable(),
 });
@@ -66,8 +73,11 @@ function explicar(r: Extract<ApproveResult, { ok: false }>): ResultadoAprobacion
       return { ok: false, errors: { body: e.placeholders(r.detail ?? "") } };
     case "note_too_long":
       return { ok: false, errors: { body: e.note_too_long(r.detail ?? "") } };
-    case "unsourced_figure":
-      return { ok: false, errors: { body: e.unsourced_figure(r.detail ?? "") } };
+    case "unsourced_figure": {
+      // releaseHeldTouch las junta con «, » (una cifra como «1,5 %» no lleva espacio tras la coma).
+      const cifras = (r.detail ?? "").split(", ").map((c) => c.trim()).filter(Boolean);
+      return { ok: false, errors: { body: e.unsourced_figure(cifras) }, cifras };
+    }
     case "no_postal_address":
       return { ok: false, message: e.no_postal_address, link: { href: OUTREACH_URLS.policyPostalAddress, label: t.avisos.irAPolitica } };
     default:
@@ -107,14 +117,13 @@ export async function aprobarToque(input: z.input<typeof aprobarSchema>): Promis
   revalidatePath(RUTA);
   return {
     ok: true,
-    notice: r.sendingOff ? t.avisos.aprobadoApagado(v.persona) : t.avisos.aprobado(v.persona),
-    deshacer: { touchId: v.touchId, persona: v.persona, approvedAt: r.approvedAt.toISOString() },
+    notice: r.sendingOff ? t.avisos.aprobadoApagado(r.recipientName) : t.avisos.aprobado(r.recipientName),
+    deshacer: { touchId: v.touchId, approvedAt: r.approvedAt.toISOString() },
   };
 }
 
 const deshacerSchema = z.object({
   touchId: z.string().regex(UUID_RE),
-  persona: z.string().max(200),
   approvedAt: z.string().datetime(),
 });
 
@@ -130,11 +139,11 @@ export async function deshacerAprobacion(input: z.input<typeof deshacerSchema>):
     );
     revalidatePath(RUTA);
     if (!r.ok) return { ok: false, message: t.errores[r.code] };
+    return { ok: true, notice: t.avisos.deshecho(r.recipientName) };
   } catch (err) {
     console.error("[ventas/aprobaciones] deshacer", err);
     return { ok: false, message: t.errores.generico };
   }
-  return { ok: true, notice: t.avisos.deshecho(v.persona) };
 }
 
 const regenerarSchema = z.object({
@@ -162,16 +171,18 @@ export async function regenerarToque(input: z.input<typeof regenerarSchema>): Pr
     return { ok: false, message: t.errores.generico };
   }
   // En la demo embebida no hay worker que tome la petición: la redacta el redactor falso ahora mismo.
+  let lista = false;
   try {
-    await redactarPitchEnLaDemo(v.touchId);
+    lista = await redactarPitchEnLaDemo(v.touchId);
   } catch (err) {
     console.error("[ventas/aprobaciones] redacción de la demo", err);
   }
   revalidatePath(RUTA);
-  return { ok: true, notice: t.avisos.pedido };
+  // Si ya está (la demo), no se promete «aparece en cuanto esté lista»: ya está en su fila.
+  return { ok: true, notice: lista ? t.avisos.lista : t.avisos.pedido };
 }
 
-const saltarSchema = z.object({ touchId: z.string().regex(UUID_RE), persona: z.string().max(200) });
+const saltarSchema = z.object({ touchId: z.string().regex(UUID_RE) });
 
 /** «Saltar»: el paso no sale y la cadencia sigue. */
 export async function saltarToque(input: z.input<typeof saltarSchema>): Promise<ResultadoAprobacion> {
@@ -181,14 +192,11 @@ export async function saltarToque(input: z.input<typeof saltarSchema>): Promise<
   const v = parsed.data;
   try {
     const r = await withWorkspace((tx) => skipQueuedTouch(tx, v.touchId, new Date()));
-    if (!r.ok) {
-      revalidatePath(RUTA);
-      return { ok: false, message: t.errores[r.code] };
-    }
+    revalidatePath(RUTA);
+    if (!r.ok) return { ok: false, message: t.errores[r.code] };
+    return { ok: true, notice: t.avisos.saltado(r.recipientName) };
   } catch (err) {
     console.error("[ventas/aprobaciones] saltar", err);
     return { ok: false, message: t.errores.generico };
   }
-  revalidatePath(RUTA);
-  return { ok: true, notice: t.avisos.saltado(v.persona) };
 }

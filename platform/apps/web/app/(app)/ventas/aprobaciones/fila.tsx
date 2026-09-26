@@ -30,47 +30,60 @@ export function Fila({
   const [modo, setModo] = useState<"ver" | "editar" | "regenerar">("ver");
   const [pending, start] = useTransition();
   const [fallo, setFallo] = useState<Extract<ResultadoAprobacion, { ok: false }> | null>(null);
+  /** Lo que no dejó aprobarlo tal cual: el editor lo abre en su campo (aria-invalid, con el foco), no en un aviso aparte. */
+  const [errorInicial, setErrorInicial] = useState<Extract<ResultadoAprobacion, { ok: false }> | null>(null);
   const bloqueada = fila.regenerando || fila.motivo?.intentoSinConfirmar === true;
+  const enfocarFila = () => document.getElementById(`fila-${fila.touchId}`)?.focus();
 
   function aprobar() {
     start(async () => {
-      const r = await aprobarToque({ touchId: fila.touchId, persona: fila.persona, edicion: null });
+      const r = await aprobarToque({ touchId: fila.touchId, edicion: null });
       if (r.ok) onDone(r);
       else if (r.errors) {
-        // Algo del texto no deja aprobarlo tal cual: se abre el editor con el motivo.
-        setFallo({ ok: false, message: r.errors.body ?? r.errors.subject });
+        // Algo del texto no deja aprobarlo tal cual: se abre el editor con el motivo en su campo.
+        setFallo(null);
+        setErrorInicial(r);
         setModo("editar");
       } else setFallo(r);
     });
   }
 
   async function saltar() {
-    const r = await saltarToque({ touchId: fila.touchId, persona: fila.persona });
+    const r = await saltarToque({ touchId: fila.touchId });
     if (r.ok) onDone(r);
     else setFallo(r);
   }
 
-  // Lo que salió bien cierra el formulario: la fila vuelve a verse (o sale de la lista al revalidar).
+  // Lo que salió bien cierra el formulario y el foco vuelve a la fila (j y k siguen desde ella): la fila vuelve a
+  // verse, o sale de la lista al revalidar y la cola pasa el foco a la que ocupa su lugar.
   const terminar = (r: Extract<ResultadoAprobacion, { ok: true }>) => {
     setModo("ver");
     setFallo(null);
+    setErrorInicial(null);
     onDone(r);
+    // Después de desmontar el formulario (el foco cayó en <body>); si otro lo tomó entretanto, no se le quita.
+    requestAnimationFrame(() => {
+      const activo = document.activeElement;
+      if (!activo || activo === document.body) enfocarFila();
+    });
   };
 
   const volver = () => {
     setModo("ver");
-    document.getElementById(`fila-${fila.touchId}`)?.focus();
+    setErrorInicial(null);
+    enfocarFila();
   };
 
   return (
     <article
       id={`fila-${fila.touchId}`}
       tabIndex={-1}
-      aria-label={t.fila.label(fila.empresa, fila.persona)}
+      aria-label={fila.etiqueta}
       aria-current={activa ? "true" : undefined}
       onFocus={onActivar}
-      // La activa solo se marca desde sm: sin teclado (un teléfono) no hay atajos y la primera parecía elegida.
-      className={`scroll-mt-24 rounded-md border border-border bg-surface p-4 outline-none transition-colors sm:p-5 ${
+      // La activa solo se marca desde sm: sin teclado (un teléfono) no hay atajos y la primera parecía elegida. El
+      // foco del teclado (j, k) se ve siempre, a cualquier ancho y con zoom: el anillo de focus-visible no lleva sm.
+      className={`scroll-mt-24 rounded-md border border-border bg-surface p-4 outline-none transition-colors focus-visible:border-ink focus-visible:ring-2 focus-visible:ring-ink/20 sm:p-5 ${
         activa ? "sm:border-ink sm:ring-2 sm:ring-ink/10" : ""
       }`}
     >
@@ -95,8 +108,8 @@ export function Fila({
 
       {modo === "editar" ? (
         <div className="mt-4">
-          <Fallo r={fallo} />
-          <EditarYAprobar fila={fila} onDone={terminar} onCancel={volver} />
+          {/* El motivo va en el campo del editor (errorInicial), no repetido encima. */}
+          <EditarYAprobar fila={fila} onDone={terminar} onCancel={volver} errorInicial={errorInicial} />
         </div>
       ) : (
         <div className="mt-4 rounded-md border border-border bg-surface-2 p-3 text-sm">
@@ -179,8 +192,8 @@ function Porque({ fila }: { fila: FilaVista }) {
   const j = fila.juez;
   if (!m && !j) return null;
   return (
-    <section aria-label={t.porque.title} className="mt-4 grid gap-2 text-sm">
-      <h3 className="text-xs font-medium uppercase tracking-wide text-ink-2">{t.porque.title}</h3>
+    <section aria-label={fila.porqueTitulo} className="mt-4 grid gap-2 text-sm">
+      <h3 className="text-xs font-medium uppercase tracking-wide text-ink-2">{fila.porqueTitulo}</h3>
       {m ? (
         <p className="leading-6 text-ink">
           {m.etiqueta ? <span className="font-medium">{m.etiqueta}. </span> : null}
@@ -194,13 +207,17 @@ function Porque({ fila }: { fila: FilaVista }) {
               {j.total ? (
                 <div className="flex gap-1">
                   <dt className="sr-only">{t.porque.notaDelJuez}</dt>
-                  <dd className="font-medium tabular-nums text-ink">{j.total}</dd>
+                  <dd className={`font-medium tabular-nums ${j.totalBajo ? "text-warn" : "text-ink"}`}>{j.total}</dd>
                 </div>
               ) : null}
+              {/* La que queda por debajo del mínimo se señala (Stripe Radar: qué regla tiró la nota). */}
               {j.dimensiones.map((d) => (
-                <div key={d.key} className="flex gap-1">
+                <div key={d.key} data-bajo={d.bajo ? "" : undefined} className={`flex gap-1 ${d.bajo ? "text-warn" : ""}`}>
                   <dt>{d.label}</dt>
-                  <dd className="tabular-nums text-ink">{d.valor}</dd>
+                  <dd className={`tabular-nums ${d.bajo ? "font-medium text-warn" : "text-ink"}`}>
+                    {d.valor}
+                    {d.bajo ? <span className="sr-only">, {t.porque.bajoMinimo}</span> : null}
+                  </dd>
                 </div>
               ))}
             </dl>

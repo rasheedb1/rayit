@@ -39,21 +39,43 @@ beforeEach(() => {
 
 describe("aprobar", () => {
   it("con el envío encendido sale a su hora; apagado, el aviso dice que sale cuando se encienda", async () => {
-    approveQueuedTouch.mockResolvedValue({ ok: true, approvedAt: APROBADO, sendingOff: false });
-    const encendido = await aprobarToque({ touchId: TOUCH, persona: "Sofía", edicion: null });
+    approveQueuedTouch.mockResolvedValue({ ok: true, approvedAt: APROBADO, sendingOff: false, recipientName: "Sofía" });
+    const encendido = await aprobarToque({ touchId: TOUCH, edicion: null });
     expect(encendido).toEqual({
-      ok: true, notice: t.avisos.aprobado("Sofía"), deshacer: { touchId: TOUCH, persona: "Sofía", approvedAt: APROBADO.toISOString() },
+      ok: true, notice: t.avisos.aprobado("Sofía"), deshacer: { touchId: TOUCH, approvedAt: APROBADO.toISOString() },
     });
-    approveQueuedTouch.mockResolvedValue({ ok: true, approvedAt: APROBADO, sendingOff: true });
-    const apagado = await aprobarToque({ touchId: TOUCH, persona: "Sofía", edicion: null });
+    approveQueuedTouch.mockResolvedValue({ ok: true, approvedAt: APROBADO, sendingOff: true, recipientName: "Sofía" });
+    const apagado = await aprobarToque({ touchId: TOUCH, edicion: null });
     expect(apagado.ok && apagado.notice).toBe(t.avisos.aprobadoApagado("Sofía"));
   });
 
+  it("el nombre del aviso sale de la base: uno que mande el navegador no llega a la pantalla", async () => {
+    approveQueuedTouch.mockResolvedValue({ ok: true, approvedAt: APROBADO, sendingOff: false, recipientName: "Sofía" });
+    const alterada = { touchId: TOUCH, persona: "<b>Otra</b>", edicion: null };
+    const r = await aprobarToque(alterada as never);
+    expect(r.ok && r.notice).toBe(t.avisos.aprobado("Sofía"));
+    skipQueuedTouch.mockResolvedValue({ ok: true, recipientName: "Sofía" });
+    expect(await saltarToque({ touchId: TOUCH, persona: "<b>Otra</b>" } as never)).toEqual({ ok: true, notice: t.avisos.saltado("Sofía") });
+  });
+
+  it("una cifra sin origen vuelve al campo con las cifras, para señalarlas en el texto", async () => {
+    approveQueuedTouch.mockResolvedValue({ ok: false, code: "unsourced_figure", detail: "23 %, 1,5 %" });
+    expect(await aprobarToque({ touchId: TOUCH, edicion: null })).toEqual({
+      ok: false, errors: { body: t.errores.unsourced_figure(["23 %", "1,5 %"]) }, cifras: ["23 %", "1,5 %"],
+    });
+    expect(t.errores.unsourced_figure(["1,5 %"])).toContain("La cifra «1,5 %»");
+  });
+
   it("«Deshacer» no lleva el motivo: el navegador no lo manda y uno de más no llega a la base", async () => {
-    undoApproval.mockResolvedValue({ ok: true });
-    const alterada = { touchId: TOUCH, persona: "Sofía", approvedAt: APROBADO.toISOString(), heldReason: "unconfirmed_attempt:1" };
+    undoApproval.mockResolvedValue({ ok: true, recipientName: "Sofía" });
+    const alterada = { touchId: TOUCH, approvedAt: APROBADO.toISOString(), heldReason: "unconfirmed_attempt:1" };
     expect(await deshacerAprobacion(alterada as never)).toEqual({ ok: true, notice: t.avisos.deshecho("Sofía") });
     expect(undoApproval.mock.calls[0]![1]).toEqual({ touchId: TOUCH, approvedAt: APROBADO });
+  });
+
+  it("pedir otra versión: en la demo, que la redacta en el momento, dice que ya está", async () => {
+    regenerateQueuedTouch.mockResolvedValue({ ok: true });
+    expect(await regenerarToque({ touchId: TOUCH, hint: "shorter", instructions: "" })).toEqual({ ok: true, notice: t.avisos.pedido });
   });
 });
 
@@ -61,10 +83,10 @@ describe("un rol que solo mira ('viewer' o 'client')", () => {
   it("no aprueba, no deshace, no regenera (no gasta contra el tope de IA) ni salta: ninguna llega a la base", async () => {
     puedeOperarVentas.mockResolvedValue(false);
     const no = { ok: false, message: t.sinPermiso };
-    expect(await aprobarToque({ touchId: TOUCH, persona: "Sofía", edicion: null })).toEqual(no);
-    expect(await deshacerAprobacion({ touchId: TOUCH, persona: "Sofía", approvedAt: APROBADO.toISOString() })).toEqual(no);
+    expect(await aprobarToque({ touchId: TOUCH, edicion: null })).toEqual(no);
+    expect(await deshacerAprobacion({ touchId: TOUCH, approvedAt: APROBADO.toISOString() })).toEqual(no);
     expect(await regenerarToque({ touchId: TOUCH, hint: "shorter", instructions: "" })).toEqual(no);
-    expect(await saltarToque({ touchId: TOUCH, persona: "Sofía" })).toEqual(no);
+    expect(await saltarToque({ touchId: TOUCH })).toEqual(no);
     for (const m of [approveQueuedTouch, undoApproval, regenerateQueuedTouch, skipQueuedTouch]) expect(m).not.toHaveBeenCalled();
   });
 });
