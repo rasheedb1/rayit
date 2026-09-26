@@ -7,19 +7,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 const approveQueuedTouch = vi.fn();
 const undoApproval = vi.fn();
+const regenerateQueuedTouch = vi.fn();
+const skipQueuedTouch = vi.fn();
 const revalidatePath = vi.fn();
+const puedeOperarVentas = vi.fn();
 
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => revalidatePath(...a) }));
 vi.mock("../_lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
 vi.mock("@/lib/workspace/current", () => ({ getCurrentContext: async () => ({ identity: { userId: null } }) }));
 vi.mock("@/lib/db", () => ({ redactarPitchEnLaDemo: async () => undefined }));
+vi.mock("../_lib/permiso", () => ({ puedeOperarVentas: () => puedeOperarVentas() }));
 vi.mock("@mc/db/queries/bandejas", async (original) => ({
   ...(await original<typeof import("@mc/db/queries/bandejas")>()),
   approveQueuedTouch: (...a: unknown[]) => approveQueuedTouch(...a),
   undoApproval: (...a: unknown[]) => undoApproval(...a),
+  regenerateQueuedTouch: (...a: unknown[]) => regenerateQueuedTouch(...a),
+  skipQueuedTouch: (...a: unknown[]) => skipQueuedTouch(...a),
 }));
 
-import { aprobarToque, deshacerAprobacion } from "./actions";
+import { aprobarToque, deshacerAprobacion, regenerarToque, saltarToque } from "./actions";
 import { MESSAGES } from "./messages";
 
 const t = MESSAGES;
@@ -27,7 +33,8 @@ const TOUCH = "00000140-0000-4000-8000-000000000071";
 const APROBADO = new Date("2026-09-24T15:00:00.000Z");
 
 beforeEach(() => {
-  for (const m of [approveQueuedTouch, undoApproval, revalidatePath]) m.mockReset();
+  for (const m of [approveQueuedTouch, undoApproval, regenerateQueuedTouch, skipQueuedTouch, revalidatePath, puedeOperarVentas]) m.mockReset();
+  puedeOperarVentas.mockResolvedValue(true);
 });
 
 describe("aprobar", () => {
@@ -47,5 +54,17 @@ describe("aprobar", () => {
     const alterada = { touchId: TOUCH, persona: "Sofía", approvedAt: APROBADO.toISOString(), heldReason: "unconfirmed_attempt:1" };
     expect(await deshacerAprobacion(alterada as never)).toEqual({ ok: true, notice: t.avisos.deshecho("Sofía") });
     expect(undoApproval.mock.calls[0]![1]).toEqual({ touchId: TOUCH, approvedAt: APROBADO });
+  });
+});
+
+describe("un rol que solo mira ('viewer' o 'client')", () => {
+  it("no aprueba, no deshace, no regenera (no gasta contra el tope de IA) ni salta: ninguna llega a la base", async () => {
+    puedeOperarVentas.mockResolvedValue(false);
+    const no = { ok: false, message: t.sinPermiso };
+    expect(await aprobarToque({ touchId: TOUCH, persona: "Sofía", edicion: null })).toEqual(no);
+    expect(await deshacerAprobacion({ touchId: TOUCH, persona: "Sofía", approvedAt: APROBADO.toISOString() })).toEqual(no);
+    expect(await regenerarToque({ touchId: TOUCH, hint: "shorter", instructions: "" })).toEqual(no);
+    expect(await saltarToque({ touchId: TOUCH, persona: "Sofía" })).toEqual(no);
+    for (const m of [approveQueuedTouch, undoApproval, regenerateQueuedTouch, skipQueuedTouch]) expect(m).not.toHaveBeenCalled();
   });
 });

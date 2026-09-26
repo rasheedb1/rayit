@@ -8,6 +8,7 @@ import { UUID_RE } from "@/lib/forms";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { ModuleTabs } from "../_componentes/pestanas";
 import { withWorkspace } from "../_lib/db";
+import { puedeOperarVentas } from "../_lib/permiso";
 import { AtajosBandeja, FiltroVista } from "./acciones";
 import { Conversacion } from "./conversacion";
 import { ListaHilos } from "./lista";
@@ -52,6 +53,8 @@ export default async function BandejaPage({
     return { hilos, conversacion, clasificador: await outreachClassifierStatus(tx), implicita: !(contacto && canal) };
   });
   const f = formatterFor(await getCurrentWorkspace());
+  // Un 'viewer' o un 'client' lee los hilos; responder, corregir y marcar es de quien opera (las acciones lo vuelven a mirar).
+  const puedeOperar = await puedeOperarVentas();
   const t = MESSAGES;
   const abierto = conversacion ? `${conversacion.contactId}:${conversacion.channel}` : null;
   // La abierta sola (la primera sin leer) solo se ve en escritorio: en un
@@ -90,6 +93,7 @@ export default async function BandejaPage({
             activo={vistas.findIndex((h) => h.activo)}
             activoSoloEscritorio={implicita}
             listaHref={volver}
+            puedeOperar={puedeOperar}
           />
           {hilos.length === 0 ? (
             <EmptyState title={vacio.title} description={vacio.description} action={vacio.action} />
@@ -101,7 +105,7 @@ export default async function BandejaPage({
           {conversacion ? (
             <Conversacion
               key={abierto}
-              c={conversacionVista(conversacion, f, { clasificador, implicita })}
+              c={conversacionVista(conversacion, f, { clasificador, implicita, puedeOperar })}
               volverHref={volver}
             />
           ) : (

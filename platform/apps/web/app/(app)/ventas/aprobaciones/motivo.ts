@@ -30,7 +30,12 @@ const CATEGORIA: Record<HoldCode, MotivoCategoria> = {
 
 export interface Motivo {
   categoria: MotivoCategoria;
-  etiqueta: string;
+  /**
+   * La categoría en palabras («Calentamiento»), o null si la frase del
+   * motor ya empieza por ella: «Revisión automática. La revisión automática
+   * le dio 7,4 de 10…» se leía dos veces.
+   */
+  etiqueta: string | null;
   /** La frase del motor, con su punto. */
   texto: string;
   /** El intento anterior no se sabe si salió: no se aprueba desde aquí, se resuelve en la ficha. */
@@ -49,12 +54,24 @@ export function motivoDe(heldReason: string | null, locale: string, regenerable 
   const parsed = parseHoldReason(heldReason);
   const categoria: MotivoCategoria = parsed ? CATEGORIA[parsed.code] : "persona";
   const frase = holdReasonText(noticeLang(locale), heldReason, regenerable ? "queue_regenerable" : "queue_edit_only");
+  const etiqueta = MESSAGES.porque.categorias[categoria];
   return {
     categoria,
-    etiqueta: MESSAGES.porque.categorias[categoria],
+    etiqueta: repite(frase, etiqueta) ? null : etiqueta,
     texto: `${frase.charAt(0).toUpperCase()}${frase.slice(1)}.`,
     intentoSinConfirmar: parsed?.code === "unconfirmed_attempt",
   };
+}
+
+/** Minúsculas y sin tildes: «La revisión automática» y «Revisión automática» se comparan igual. */
+function plano(s: string): string {
+  return s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim();
+}
+
+/** ¿La frase empieza por la etiqueta (con o sin artículo delante)? */
+function repite(frase: string, etiqueta: string): boolean {
+  const f = plano(frase).replace(/^(la|el|los|las|the)\s+/u, "");
+  return f.startsWith(plano(etiqueta));
 }
 
 /** Los disparadores de riesgo en palabras; uno desconocido, tal cual. */

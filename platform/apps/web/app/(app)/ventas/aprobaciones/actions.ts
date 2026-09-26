@@ -9,6 +9,7 @@ import { redactarPitchEnLaDemo } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { withWorkspace } from "../_lib/db";
+import { puedeOperarVentas } from "../_lib/permiso";
 import { MESSAGES } from "./messages";
 
 /**
@@ -17,6 +18,11 @@ import { MESSAGES } from "./messages";
  * ajeno es «no existe»). Aprobar pasa por las reglas de releaseHeldTouch,
  * regenerar deja la petición para outbound.generate (en la demo embebida
  * la redacta el redactor falso en el mismo proceso) y saltar no se deshace.
+ *
+ * Todas exigen el rol (puedeOperarVentas: owner, admin o member) ANTES de
+ * validar nada o de tocar la base: un 'viewer' o un 'client' del espacio
+ * ve la cola, no aprueba en nombre de la creadora ni gasta contra el tope
+ * diario de IA.
  *
  * Se llaman desde el cliente como funciones, con un objeto y no con un
  * FormData: la fila decide qué mostrar con el resultado y la lista guarda
@@ -40,6 +46,7 @@ export type ResultadoAprobacion =
 
 const t = MESSAGES;
 const RUTA = "/ventas/aprobaciones";
+const SIN_PERMISO: ResultadoAprobacion = { ok: false, message: t.sinPermiso };
 
 const aprobarSchema = z.object({
   touchId: z.string().regex(UUID_RE),
@@ -74,6 +81,7 @@ function explicar(r: Extract<ApproveResult, { ok: false }>): ResultadoAprobacion
  * que sale cuando se encienda.
  */
 export async function aprobarToque(input: z.input<typeof aprobarSchema>): Promise<ResultadoAprobacion> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = aprobarSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: t.errores.generico };
   const v = parsed.data;
@@ -112,6 +120,7 @@ const deshacerSchema = z.object({
 
 /** «Deshacer» una aprobación: el mensaje vuelve a la cola con el motivo que guardó el servidor, si todavía no salió. */
 export async function deshacerAprobacion(input: z.input<typeof deshacerSchema>): Promise<ResultadoAprobacion> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = deshacerSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: t.errores.generico };
   const v = parsed.data;
@@ -136,6 +145,7 @@ const regenerarSchema = z.object({
 
 /** «Regenerar con una pista»: la versión nueva vuelve a esta bandeja cuando la IA termina. */
 export async function regenerarToque(input: z.input<typeof regenerarSchema>): Promise<ResultadoAprobacion> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = regenerarSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: t.errores.generico };
   const v = parsed.data;
@@ -165,6 +175,7 @@ const saltarSchema = z.object({ touchId: z.string().regex(UUID_RE), persona: z.s
 
 /** «Saltar»: el paso no sale y la cadencia sigue. */
 export async function saltarToque(input: z.input<typeof saltarSchema>): Promise<ResultadoAprobacion> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = saltarSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: t.errores.generico };
   const v = parsed.data;

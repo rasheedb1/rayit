@@ -3,13 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
-  BANDEJA_CHANNELS, cancelInboxReply, createReferralContact, dismissInboxReply, markInboxThreadDone, markInboxThreadRead,
-  reclassifyInboxMessage, replyInInboxThread, type ReplyResult,
+  BANDEJA_CHANNELS, cancelInboxReply, createReferralContact, dismissInboxReply, INBOX_REPLY_MAX_CHARS, markInboxThreadDone,
+  markInboxThreadRead, reclassifyInboxMessage, replyInInboxThread, type ReplyResult,
 } from "@mc/db/queries/bandejas";
 import { VentasError } from "@mc/db/queries/ventas";
 import { UUID_RE } from "@/lib/forms";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { withWorkspace } from "../_lib/db";
+import { puedeOperarVentas } from "../_lib/permiso";
 import { INTENCIONES, MESSAGES } from "./messages";
 
 /**
@@ -18,12 +19,20 @@ import { INTENCIONES, MESSAGES } from "./messages";
  * Responder no envía nada: deja UN toque programado que el motor envía por
  * la cuenta y el hilo del mensaje (replyInInboxThread); el id lo trae el
  * formulario, así que el mismo envío repetido no crea otro mensaje.
+ *
+ * Todas exigen el rol (puedeOperarVentas: owner, admin o member) ANTES de
+ * validar nada o de tocar la base: un 'viewer' o un 'client' del espacio
+ * lee los hilos, no responde en nombre de la creadora, no corrige una
+ * intención (a «baja» no se deshace) ni marca nada como leído o hecho
+ * para el resto del equipo.
  */
 
 const t = MESSAGES;
 const RUTA = "/ventas/bandeja";
 
 export type ResultadoBandeja = { ok: true; notice: string } | { ok: false; error: string; field?: string };
+
+const SIN_PERMISO = { ok: false, error: t.sinPermiso } as const;
 
 const hiloSchema = z.object({
   contactId: z.string().regex(UUID_RE),
@@ -32,6 +41,8 @@ const hiloSchema = z.object({
 
 /** Al abrir un hilo, sus mensajes quedan leídos. */
 export async function marcarLeido(input: z.input<typeof hiloSchema>): Promise<void> {
+  // Quien solo mira no cambia lo que el equipo tiene sin leer.
+  if (!(await puedeOperarVentas())) return;
   const parsed = hiloSchema.safeParse(input);
   if (!parsed.success) return;
   try {
@@ -46,6 +57,7 @@ const hechoSchema = hiloSchema.extend({ done: z.boolean() });
 
 /** «Marcar como hecha» y «Reabrir»: el hilo sale de los pendientes (o vuelve). */
 export async function marcarHecho(input: z.input<typeof hechoSchema>): Promise<ResultadoBandeja> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = hechoSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: t.errores.accion };
   const v = parsed.data;
@@ -59,7 +71,8 @@ export async function marcarHecho(input: z.input<typeof hechoSchema>): Promise<R
   return { ok: true, notice: v.done ? t.conversacion.hechaAviso : t.conversacion.reabiertaAviso };
 }
 
-const responderSchema = hiloSchema.extend({ touchId: z.string().regex(UUID_RE), body: z.string().max(20000) });
+/** El tope es el de @mc/db (INBOX_REPLY_MAX_CHARS): el mismo que el campo y que replyInInboxThread. */
+const responderSchema = hiloSchema.extend({ touchId: z.string().regex(UUID_RE), body: z.string().max(INBOX_REPLY_MAX_CHARS) });
 
 function explicar(r: Extract<ReplyResult, { ok: false }>): ResultadoBandeja {
   switch (r.code) {
@@ -78,8 +91,12 @@ function explicar(r: Extract<ReplyResult, { ok: false }>): ResultadoBandeja {
 
 /** «Enviar respuesta»: el motor la envía en el mismo hilo, por la cuenta que recibió el mensaje. */
 export async function responder(input: z.input<typeof responderSchema>): Promise<ResultadoBandeja> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = responderSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: t.errores.generico };
+  if (!parsed.success) {
+    const largo = parsed.error.issues.some((i) => i.path[0] === "body" && i.code === "too_big");
+    return largo ? explicar({ ok: false, code: "too_long", detail: String(INBOX_REPLY_MAX_CHARS) }) : { ok: false, error: t.errores.generico };
+  }
   const v = parsed.data;
   let r: ReplyResult;
   try {
@@ -105,10 +122,14 @@ export type ResultadoCancelar = { ok: true; notice: string; body: string } | { o
 
 /** «Cancelar» (y «Editar», que cancela y devuelve el texto): la respuesta en cola no sale. */
 export async function cancelarRespuesta(input: z.input<typeof toqueSchema> & { editar?: boolean }): Promise<ResultadoCancelar> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = toqueSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: t.errores.accion };
   try {
-    const r = await withWorkspace((tx) => cancelInboxReply(tx, parsed.data.touchId));
+    // «Editar» es transparente (Superhuman): la respuesta vuelve al campo y no queda en «no salió».
+    const r = await withWorkspace((tx) =>
+      cancelInboxReply(tx, parsed.data.touchId, input.editar ? { dismissAt: new Date() } : {}),
+    );
     revalidatePath(RUTA);
     if (!r.ok) return { ok: false, error: r.code === "not_cancelable" ? t.errores.not_cancelable : t.errores.not_found };
     return { ok: true, notice: input.editar ? t.responder.aEditar : t.responder.cancelada, body: r.body };
@@ -118,15 +139,23 @@ export async function cancelarRespuesta(input: z.input<typeof toqueSchema> & { e
   }
 }
 
-/** «Descartar» una respuesta que no salió: deja de verse en el hilo. */
-export async function descartarRespuesta(input: z.input<typeof toqueSchema>): Promise<void> {
+/**
+ * «Descartar» una respuesta que no salió: deja de verse en el hilo. Si ya
+ * no estaba (otra pestaña la descartó), también es un «listo»: lo que se
+ * pedía ya pasó.
+ */
+export async function descartarRespuesta(input: z.input<typeof toqueSchema>): Promise<ResultadoBandeja> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = toqueSchema.safeParse(input);
-  if (!parsed.success) return;
+  if (!parsed.success) return { ok: false, error: t.errores.accion };
   try {
-    if (await withWorkspace((tx) => dismissInboxReply(tx, parsed.data.touchId, new Date()))) revalidatePath(RUTA);
+    await withWorkspace((tx) => dismissInboxReply(tx, parsed.data.touchId, new Date()));
   } catch (err) {
     console.error("[ventas/bandeja] descartar respuesta", err);
+    return { ok: false, error: t.errores.accion };
   }
+  revalidatePath(RUTA);
+  return { ok: true, notice: t.responder.descartada };
 }
 
 const corregirSchema = z.object({
@@ -142,6 +171,7 @@ const corregirSchema = z.object({
  * escribió la persona o, sin ella, la que dice el mensaje.
  */
 export async function corregirIntencion(input: z.input<typeof corregirSchema>): Promise<ResultadoBandeja> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = corregirSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: t.errores.accion };
   const v = parsed.data;
@@ -170,6 +200,7 @@ const referidoSchema = z.object({
 
 /** «Crear contacto» desde un referido: una ficha nueva de la misma marca, con procedencia 'inbound'. */
 export async function crearReferido(input: z.input<typeof referidoSchema>): Promise<ResultadoBandeja> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = referidoSchema.safeParse(input);
   if (!parsed.success) {
     const correo = parsed.error.issues.some((i) => i.path[0] === "email");

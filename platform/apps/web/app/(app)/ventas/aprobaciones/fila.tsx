@@ -18,8 +18,15 @@ const t = MESSAGES;
  * lleva `data-accion` (a, e, r, s): los atajos de la lista la pulsan.
  */
 export function Fila({
-  fila, activa, onActivar, onDone,
-}: { fila: FilaVista; activa: boolean; onActivar: () => void; onDone: (r: Extract<ResultadoAprobacion, { ok: true }>) => void }) {
+  fila, activa, onActivar, onDone, puedeOperar = true,
+}: {
+  fila: FilaVista;
+  activa: boolean;
+  onActivar: () => void;
+  onDone: (r: Extract<ResultadoAprobacion, { ok: true }>) => void;
+  /** Sin PUEDEN_OPERAR_VENTAS la fila se lee: ni botones ni atajos (el servidor lo vuelve a mirar). */
+  puedeOperar?: boolean;
+}) {
   const [modo, setModo] = useState<"ver" | "editar" | "regenerar">("ver");
   const [pending, start] = useTransition();
   const [fallo, setFallo] = useState<Extract<ResultadoAprobacion, { ok: false }> | null>(null);
@@ -62,8 +69,9 @@ export function Fila({
       aria-label={t.fila.label(fila.empresa, fila.persona)}
       aria-current={activa ? "true" : undefined}
       onFocus={onActivar}
-      className={`scroll-mt-24 rounded-md border bg-surface p-4 outline-none transition-colors sm:p-5 ${
-        activa ? "border-ink ring-2 ring-ink/10" : "border-border"
+      // La activa solo se marca desde sm: sin teclado (un teléfono) no hay atajos y la primera parecía elegida.
+      className={`scroll-mt-24 rounded-md border border-border bg-surface p-4 outline-none transition-colors sm:p-5 ${
+        activa ? "sm:border-ink sm:ring-2 sm:ring-ink/10" : ""
       }`}
     >
       <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -78,6 +86,8 @@ export function Fila({
             {fila.paso} · {fila.canal}
             {fila.sale ? ` · ${fila.sale}` : ""}
           </p>
+          {/* §8, decisión 5: de dónde salió el contacto, siempre a la vista antes de aprobar un primer mensaje. */}
+          {fila.procedencia ? <p className="text-xs text-ink-2">{fila.procedencia}</p> : null}
         </div>
         {fila.regenerando ? <Pill kind="neutral">{t.fila.regenerando}</Pill> : null}
         {fila.regenerado ? <Pill kind="good">{t.fila.regenerado}</Pill> : null}
@@ -109,7 +119,7 @@ export function Fila({
         </div>
       ) : null}
 
-      {modo === "ver" ? (
+      {modo === "ver" && puedeOperar ? (
         <div className="mt-4 grid gap-3">
           <Fallo r={fallo} />
           {fila.motivo?.intentoSinConfirmar ? (
@@ -173,7 +183,8 @@ function Porque({ fila }: { fila: FilaVista }) {
       <h3 className="text-xs font-medium uppercase tracking-wide text-ink-2">{t.porque.title}</h3>
       {m ? (
         <p className="leading-6 text-ink">
-          <span className="font-medium">{m.etiqueta}.</span> {m.texto}
+          {m.etiqueta ? <span className="font-medium">{m.etiqueta}. </span> : null}
+          {m.texto}
         </p>
       ) : null}
       {j ? (

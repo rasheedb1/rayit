@@ -29,6 +29,7 @@ function item(n: number, extra: Partial<ApprovalItem> = {}): ApprovalItem {
     companyId: "00000140-0000-4000-8000-0000000000c1",
     companyName: `Marca ${n}`,
     contactName: `Persona ${n}`,
+    contactSource: "public_website",
     channel: "email",
     stepType: "email",
     stepIndex: 1,
@@ -74,6 +75,26 @@ describe("por qué quedó retenido", () => {
     const fila = filaVista(item(1, { heldReason: "quality_low:6.2", stepType: "email_reply", regenerable: false }), f);
     expect(fila.motivo!.texto).toBe(sinRegenerar);
     expect(motivoDe("quality_low:6.2", "en-US", true)!.texto).toContain("«Regenerate»");
+  });
+
+  it("la etiqueta no repite el principio de la frase del motor", () => {
+    const baja = motivoDe("quality_low:7.4", "es-CO", true)!;
+    expect(baja.etiqueta).toBeNull();
+    expect(baja.texto).toMatch(/^La revisión automática le dio 7,4 de 10/);
+    expect(motivoDe("quality_risk:unsourced_figure", "es-CO")!.etiqueta).toBeNull();
+    // Cuando no se repite, la categoría se queda: «Calentamiento. Pasó la revisión automática…».
+    expect(motivoDe("quality_warmup:3", "es-CO")!.etiqueta).toBe("Calentamiento");
+    render(<Cola filas={[filaVista(item(1, { heldReason: "quality_low:7.4" }), f)]} />);
+    const porque = screen.getByRole("region", { name: MESSAGES.porque.title });
+    expect(porque.textContent).not.toMatch(/Revisión automática\.\s*La revisión automática/);
+  });
+
+  it("la procedencia del contacto está siempre a la vista (§8, decisión 5)", () => {
+    expect(filaVista(item(1), f).procedencia).toBe(MESSAGES.fila.procedencia("Web de la empresa"));
+    expect(filaVista(item(1, { contactSource: "inbound" }), f).procedencia).toBe(MESSAGES.fila.procedencia("Te escribió"));
+    expect(filaVista(item(1, { contactSource: null }), f).procedencia).toBeNull();
+    render(<Cola filas={[filaVista(item(1), f)]} />);
+    expect(screen.getByText(MESSAGES.fila.procedencia("Web de la empresa"))).toBeInTheDocument();
   });
 
   it("las reglas del pre-vuelo con su dato, sin repetir", () => {
@@ -158,6 +179,59 @@ describe("la cola", () => {
     fireEvent.keyDown(window, { key: "s" });
     expect(screen.getByText(MESSAGES.acciones.saltarPregunta)).toBeInTheDocument();
     expect(saltarToque).not.toHaveBeenCalled();
+  });
+
+  it("con «¿Saltar este paso?» abierto, a, e, r y s no hacen nada: la persona iba a saltarlo", async () => {
+    render(<Cola filas={[filaVista(item(1), f), filaVista(item(2), f)]} />);
+    fireEvent.keyDown(window, { key: "s" });
+    expect(screen.getByText(MESSAGES.acciones.saltarPregunta)).toBeInTheDocument();
+    for (const key of ["a", "e", "r", "s"]) {
+      await act(async () => {
+        fireEvent.keyDown(window, { key });
+      });
+    }
+    expect(aprobarToque).not.toHaveBeenCalled();
+    expect(saltarToque).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText(MESSAGES.acciones.mensaje)).toBeNull();
+    expect(screen.queryByLabelText(MESSAGES.acciones.pista)).toBeNull();
+    expect(screen.getByText(MESSAGES.acciones.saltarPregunta)).toBeInTheDocument();
+  });
+
+  it("una cifra sin origen no se aprueba tal cual: «a» abre el editor con el motivo", async () => {
+    const motivo = MESSAGES.errores.unsourced_figure("40 %");
+    aprobarToque.mockResolvedValue({ ok: false, errors: { body: motivo } });
+    render(<Cola filas={[filaVista(item(1, { heldReason: "quality_risk:unsourced_figure" }), f)]} />);
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "a" });
+    });
+    expect(screen.getByLabelText(MESSAGES.acciones.mensaje)).toBeInTheDocument();
+    expect(screen.getByText(motivo)).toBeInTheDocument();
+  });
+
+  it("en un teléfono la fila activa no se marca: el borde y el anillo son solo desde sm", () => {
+    render(<Cola filas={[filaVista(item(1), f), filaVista(item(2), f)]} />);
+    const [primera] = screen.getAllByRole("article");
+    const clases = primera!.className.split(" ");
+    expect(clases).toContain("sm:border-ink");
+    expect(clases).toContain("sm:ring-2");
+    expect(clases).not.toContain("border-ink");
+    expect(clases).not.toContain("ring-2");
+  });
+
+  it("un rol que solo mira lee la cola con j y k, sin botones ni atajos de acción", async () => {
+    render(<Cola filas={[filaVista(item(1), f), filaVista(item(2), f)]} puedeOperar={false} />);
+    for (const nombre of [MESSAGES.acciones.aprobar, MESSAGES.acciones.editar, MESSAGES.acciones.regenerar, MESSAGES.acciones.saltar]) {
+      expect(screen.queryByRole("button", { name: nombre })).toBeNull();
+    }
+    const leyenda = screen.getByLabelText(MESSAGES.atajos.label);
+    expect(leyenda.textContent).toContain("siguiente");
+    expect(leyenda.textContent).not.toContain("aprobar");
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "a" });
+    });
+    expect(aprobarToque).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "j" });
+    expect(screen.getAllByRole("article")[1]).toHaveAttribute("aria-current", "true");
   });
 
   it("un intento sin confirmar no se aprueba aquí: se resuelve en la ficha", () => {

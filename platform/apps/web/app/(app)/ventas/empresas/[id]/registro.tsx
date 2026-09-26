@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
 import { Field, Select, Textarea } from "@/components/ui/field";
 import { Segmented } from "@/components/ui/segmented";
+import { escribiendo } from "@/lib/teclado";
 import { Aviso } from "../../../_lib/aviso";
 import { useVentasForm } from "../../_lib/use-ventas-form";
 import { CerrarPendiente } from "../../_seguimiento/cerrar-pendiente";
@@ -25,12 +26,6 @@ const TECLAS = new Map(ORDEN.map((k) => [FICHA.actividad.teclas[k].toLowerCase()
 /** «N nota · L llamada · C correo · R reunión», construido con las mismas teclas. */
 const TECLAS_TEXTO = ORDEN.map((k) => `${FICHA.actividad.teclas[k].toUpperCase()} ${FICHA.tiposManuales[k].toLowerCase()}`).join(" · ");
 const TECLAS_ARIA = ORDEN.map((k) => FICHA.actividad.teclas[k].toUpperCase()).join(" ");
-
-/** ¿El foco está en un sitio donde la letra se escribe? Entonces no es un atajo. */
-function escribiendo(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
-}
 
 /**
  * El registro rápido de la ficha (VEN-5): nota, llamada, correo o

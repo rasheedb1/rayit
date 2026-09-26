@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition, type FormEvent, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
@@ -59,7 +58,7 @@ export function MarcarLeido({
  * (reintentar no crea otro mensaje).
  */
 export function Respuestas({
-  contactId, channel, ayuda, porSalir, noSalieron, puedeResponder,
+  contactId, channel, ayuda, porSalir, noSalieron, puedeResponder, puedeOperar = true, maxCaracteres,
 }: {
   contactId: string;
   channel: "email" | "linkedin" | "instagram_dm";
@@ -67,6 +66,10 @@ export function Respuestas({
   porSalir: PendienteVista[];
   noSalieron: PendienteVista[];
   puedeResponder: boolean;
+  /** Su rol deja operar la bandeja (PUEDEN_OPERAR_VENTAS): sin él, se lee y no se ofrece nada. */
+  puedeOperar?: boolean;
+  /** El tope de la respuesta (INBOX_REPLY_MAX_CHARS de @mc/db): el mismo que mira el servidor. */
+  maxCaracteres: number;
 }) {
   const [touchId, setTouchId] = useState(nuevoId);
   const [texto, setTexto] = useState("");
@@ -98,12 +101,17 @@ export function Respuestas({
     });
   }
 
+  // «Descartar» con su estado de carga y su error, como «Cancelar» y «Editar»: un clic, una vez.
+  function descartar(p: PendienteVista) {
+    start(async () => setResultado(await descartarRespuesta({ touchId: p.touchId })));
+  }
+
   const error = resultado && !resultado.ok ? resultado : null;
   return (
     <div className="grid gap-4">
       <Lista titulo={t.responder.porSalir(porSalir.length)} items={porSalir}>
         {(p) =>
-          p.cancelable ? (
+          p.cancelable && puedeOperar ? (
             <>
               <Button size="sm" variant="secondary" onClick={() => cancelar(p, true)} disabled={pending}>
                 {t.responder.editar}
@@ -116,20 +124,24 @@ export function Respuestas({
         }
       </Lista>
       <Lista titulo={t.responder.noSalieron(noSalieron.length)} items={noSalieron}>
-        {(p) => (
-          <Button size="sm" variant="ghost" onClick={() => void descartarRespuesta({ touchId: p.touchId })}>
-            {t.responder.descartar}
-          </Button>
-        )}
+        {(p) =>
+          puedeOperar ? (
+            <Button size="sm" variant="ghost" onClick={() => descartar(p)} disabled={pending}>
+              {t.responder.descartar}
+            </Button>
+          ) : null
+        }
       </Lista>
-      {puedeResponder ? (
+      {!puedeOperar ? (
+        <Aviso info={t.sinPermiso} />
+      ) : puedeResponder ? (
         <form onSubmit={enviar} className="grid gap-3">
           <Field label={t.responder.label} help={ayuda} error={error?.field ? error.error : undefined} htmlFor={RESPUESTA_ID}>
             <Textarea
               id={RESPUESTA_ID}
               name="body"
               rows={4}
-              maxLength={5000}
+              maxLength={maxCaracteres}
               placeholder={t.responder.placeholder}
               value={texto}
               onChange={(e) => setTexto(e.target.value)}
@@ -173,11 +185,13 @@ function Lista({
 /**
  * «Crear contacto» desde un referido: el nombre, el correo y el cargo que
  * leyó el clasificador, editables. Nada se crea sin que una persona lo
- * pida. Creada la ficha, se propone enrolarla en una cadencia (§5.7).
+ * pida. Creada la ficha, la acción revalida la página y el mensaje la
+ * pinta con «Enrolar en una cadencia» y el enlace a la ficha
+ * (conversacion.tsx): esa línea es la que queda, no este formulario.
  */
 export function CrearReferido({
-  messageId, nombre, correo, cargo, enrolarHref,
-}: { messageId: string; nombre: string | null; correo: string | null; cargo: string | null; enrolarHref: string }) {
+  messageId, nombre, correo, cargo,
+}: { messageId: string; nombre: string | null; correo: string | null; cargo: string | null }) {
   const [abierto, setAbierto] = useState(false);
   const [pending, start] = useTransition();
   const [resultado, setResultado] = useState<ResultadoBandeja | null>(null);
@@ -186,18 +200,7 @@ export function CrearReferido({
     if (abierto) formRef.current?.querySelector<HTMLInputElement>("input")?.focus();
   }, [abierto]);
 
-  if (resultado?.ok) {
-    return (
-      <div className="grid gap-2">
-        <Aviso notice={resultado.notice} size="xs" />
-        <div>
-          <Link href={enrolarHref} className="text-sm text-ink underline underline-offset-4 hover:text-ink-2">
-            {t.referido.enrolar}
-          </Link>
-        </div>
-      </div>
-    );
-  }
+  if (resultado?.ok) return <Aviso notice={resultado.notice} size="xs" />;
   if (!abierto) {
     return (
       <Button size="sm" variant="secondary" onClick={() => setAbierto(true)}>

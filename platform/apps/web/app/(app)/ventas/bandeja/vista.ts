@@ -4,8 +4,9 @@
  * la página con los datos de @mc/db/queries/bandejas; aquí no se consulta
  * nada. Puro: lo prueba bandeja.test.tsx.
  */
-import type {
-  ClassifierStatus, InboxConversation, InboxFilter, InboxThread, PendingReply, ReplyBlock,
+import {
+  INBOX_REPLY_MAX_CHARS, type ClassifierStatus, type InboxConversation, type InboxFilter, type InboxThread, type PendingReply,
+  type ReplyBlock,
 } from "@mc/db/queries/bandejas";
 import type { MessageIntent } from "@mc/core/outreach/intent";
 import { channelLabel, noticeLang } from "@mc/core/outreach/messages";
@@ -112,6 +113,13 @@ export interface ReferidoVista {
   correo: string | null;
   cargo: string | null;
   creado: boolean;
+  /**
+   * Creada la ficha (§5.7: «se crea el contacto y se propone enrolarlo»):
+   * adónde lleva «Enrolar en una cadencia», con el negocio y la persona
+   * nueva elegidos, y el enlace a su ficha. null mientras no se creó.
+   */
+  enrolarHref: string | null;
+  contactoHref: string | null;
 }
 
 export interface MensajeVista {
@@ -149,8 +157,6 @@ export interface ConversacionVista {
   empresa: string;
   canal: string;
   fichaHref: string;
-  /** Adónde lleva «Enrolar en una cadencia» tras crear un referido. */
-  enrolarHref: string;
   negocio: string | null;
   siguiente: string | null;
   mensajes: MensajeVista[];
@@ -167,6 +173,24 @@ export interface ConversacionVista {
   implicita: boolean;
   /** Las opciones de «Corregir», en palabras. */
   opcionesIntencion: Array<{ value: Intencion; label: string }>;
+  /** Su rol deja responder, corregir y marcar (PUEDEN_OPERAR_VENTAS); sin él, la conversación se lee. */
+  puedeOperar: boolean;
+  /** El tope de «Tu respuesta»: el de @mc/db, el mismo que mira el servidor. */
+  maxCaracteres: number;
+}
+
+/**
+ * Adónde lleva «Enrolar en una cadencia»: la cadencia del hilo con el
+ * negocio (y, si ya existe, la persona referida) elegidos; sin cadencia,
+ * los negocios de la ficha de la empresa.
+ */
+export function enrolarHrefDe(c: Pick<InboxConversation, "sequenceId" | "companyId" | "deal">, contactoId: string | null = null): string {
+  if (!c.sequenceId) return `/ventas/empresas/${c.companyId}#negocios`;
+  const q = new URLSearchParams();
+  if (c.deal) q.set("negocio", c.deal.id);
+  if (contactoId) q.set("contacto", contactoId);
+  const qs = q.toString();
+  return `/ventas/cadencias/${c.sequenceId}${qs ? `?${qs}` : ""}#enrolar`;
 }
 
 function pendienteVista(p: PendingReply): PendienteVista {
@@ -184,7 +208,7 @@ function pendienteVista(p: PendingReply): PendienteVista {
 export function conversacionVista(
   c: InboxConversation,
   f: Formatter,
-  opts: { clasificador: ClassifierStatus; implicita?: boolean },
+  opts: { clasificador: ClassifierStatus; implicita?: boolean; puedeOperar?: boolean },
 ): ConversacionVista {
   const t = MESSAGES;
   const apagado = opts.clasificador === "off";
@@ -195,9 +219,6 @@ export function conversacionVista(
     empresa: c.companyName,
     canal: channelLabel(noticeLang(f.locale), c.channel),
     fichaHref: `/ventas/empresas/${c.companyId}`,
-    enrolarHref: c.sequenceId
-      ? `/ventas/cadencias/${c.sequenceId}${c.deal ? `?negocio=${c.deal.id}` : ""}#enrolar`
-      : `/ventas/empresas/${c.companyId}#negocios`,
     negocio: c.deal ? t.conversacion.negocio(c.deal.stageLabel) : null,
     siguiente: c.deal?.nextAction ? t.conversacion.siguiente(c.deal.nextAction) : null,
     mensajes: c.messages.map((m): MensajeVista => {
@@ -238,6 +259,8 @@ export function conversacionVista(
                 correo: r?.email ?? null,
                 cargo: r?.role ?? null,
                 creado: m.referralContactId !== null,
+                enrolarHref: m.referralContactId ? enrolarHrefDe(c, m.referralContactId) : null,
+                contactoHref: m.referralContactId ? `/ventas/empresas/${c.companyId}#contactos` : null,
               }
             : null,
         corregible: entrante && m.intent !== "unsubscribe",
@@ -255,5 +278,7 @@ export function conversacionVista(
     sinLeer: c.unread,
     implicita: opts.implicita === true,
     opcionesIntencion: INTENCIONES.map((i) => ({ value: i, label: t.intenciones[i].label })),
+    puedeOperar: opts.puedeOperar !== false,
+    maxCaracteres: INBOX_REPLY_MAX_CHARS,
   };
 }

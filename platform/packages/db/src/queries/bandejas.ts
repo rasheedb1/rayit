@@ -38,13 +38,13 @@ import type { RegenerateHint } from '@mc/core/outreach/preflight';
 import type { WorkspaceTx } from '../client.ts';
 import { OUTBOUND_CHANNELS, type OutboundChannel } from '../schema/_canales.ts';
 import { INTENT_SOURCES, MESSAGE_INTENTS, STEP_TYPES } from '../schema/outreach.ts';
-import { TOUCH_STATUSES } from '../schema/ventas.ts';
+import { CONTACT_SOURCES, TOUCH_STATUSES } from '../schema/ventas.ts';
 import { advanceEnrollment } from './outreach/enroll.ts';
 import { loadIntentMessage, reapplyIntent } from './outreach/intent.ts';
 import { requestPitchDraft, type RequestPitchDraftResult } from './outreach/pitch.ts';
 import { releaseHeldTouch, type ReleaseHeldCode } from './outreach/review.ts';
 import { assertIds, date, int, oneOf, text, textOrNull, toDate } from './outreach/shared.ts';
-import { createContact } from './ventas.ts';
+import { createContact, type ContactSource } from './ventas.ts';
 
 /** Quién puso la intención de una respuesta (0064). */
 export type IntentSource = (typeof INTENT_SOURCES)[number];
@@ -76,6 +76,12 @@ export interface ApprovalItem {
   companyId: string;
   companyName: string;
   contactName: string | null;
+  /**
+   * De dónde salió el contacto (contact.source). §8, decisión 5: siempre a
+   * la vista en el mensaje retenido, para aprobar un primer mensaje en frío
+   * sabiendo si se le puede escribir (habeas data, CAN-SPAM, GDPR).
+   */
+  contactSource: ContactSource | null;
   channel: OutboundChannel;
   stepType: StepType | null;
   stepIndex: number | null;
@@ -96,7 +102,8 @@ export interface ApprovalItem {
 }
 
 interface ApprovalRow {
-  id: string; status: string; company_id: string; company_name: string; contact_name: string | null; channel: string;
+  id: string; status: string; company_id: string; company_name: string; contact_name: string | null; contact_source: string | null;
+  channel: string;
   step_type: string | null; step_index: number | null; step_count: number | null; sequence_name: string | null;
   subject: string | null; body: string | null; held_reason: string | null; thread_subject: string | null;
   scheduled_for: unknown; status_changed_at: unknown; stage: string | null; requested_at: unknown;
@@ -139,7 +146,8 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
   const fn = 'listApprovalQueue';
   const rows = (
     await tx.query<ApprovalRow>(
-      `SELECT t.id, t.status, t.company_id, co.name AS company_name, c.full_name AS contact_name, t.channel, st.step_type,
+      `SELECT t.id, t.status, t.company_id, co.name AS company_name, c.full_name AS contact_name, c.source AS contact_source,
+              t.channel, st.step_type,
               t.step_index, (SELECT count(*)::int FROM outbound_step x WHERE x.sequence_id = t.sequence_id) AS step_count,
               s.name AS sequence_name, t.subject, t.body, t.held_reason, hilo.subject AS thread_subject, t.scheduled_for,
               t.status_changed_at, g.stage, g.requested_at, g.total_score::text AS total_score, g.judge_note, r.scores,
@@ -176,6 +184,7 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
       companyId: text(fn, `$[${i}].company_id`, r.company_id),
       companyName: text(fn, `$[${i}].company_name`, r.company_name),
       contactName: textOrNull(fn, `$[${i}].contact_name`, r.contact_name),
+      contactSource: r.contact_source === null ? null : oneOf(fn, `$[${i}].contact_source`, r.contact_source, CONTACT_SOURCES),
       channel: oneOf(fn, `$[${i}].channel`, r.channel, OUTBOUND_CHANNELS),
       stepType: r.step_type === null ? null : oneOf(fn, `$[${i}].step_type`, r.step_type, STEP_TYPES),
       stepIndex: r.step_index === null ? null : int(fn, `$[${i}].step_index`, r.step_index),
@@ -736,15 +745,24 @@ export type CancelReplyResult = { ok: true; body: string } | { ok: false; code: 
  * 'held'); una que el despachador ya tomó ('processing') sale. Queda
  * 'canceled' con blocked_reason 'canceled_by_person' y el motor no la
  * envía. Devuelve el texto, para «Editar» (cancelar y volver a escribirla).
+ *
+ * `dismissAt`: «Editar» es transparente, como en Superhuman: la respuesta
+ * vuelve al campo y no se queda además en «Respuesta que no salió» con
+ * «Descartar» (se descarta en el mismo UPDATE). Sin él, la cancelación
+ * explícita sí queda a la vista, con su motivo.
  */
-export async function cancelInboxReply(tx: WorkspaceTx, touchId: string): Promise<CancelReplyResult> {
+export async function cancelInboxReply(
+  tx: WorkspaceTx,
+  touchId: string,
+  opts: { dismissAt?: Date } = {},
+): Promise<CancelReplyResult> {
   assertIds('cancelInboxReply', [touchId]);
   const r = (
     await tx.query<{ body: string }>(
-      `UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'canceled_by_person'
+      `UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'canceled_by_person', inbox_dismissed_at = $2::timestamptz
         WHERE id = $1::uuid AND reply_to_message_id IS NOT NULL AND status IN ('scheduled', 'held')
         RETURNING body`,
-      [touchId],
+      [touchId, opts.dismissAt?.toISOString() ?? null],
     )
   ).rows[0];
   if (r) return { ok: true, body: r.body };

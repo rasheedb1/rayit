@@ -7,6 +7,7 @@
 import type { ApprovalItem } from "@mc/db/queries/bandejas";
 import { channelLabel, noticeLang } from "@mc/core/outreach/messages";
 import type { Formatter } from "@/lib/format";
+import { SOURCE_META } from "../_lib/estado";
 import { MESSAGES } from "./messages";
 import { motivoDe, reglasDe, riesgosDe, type Motivo } from "./motivo";
 
@@ -28,6 +29,8 @@ export interface FilaVista {
   canal: string;
   /** «Sale el 24 sep, 10:30». */
   sale: string | null;
+  /** «Procedencia del contacto: Web de la empresa» (§8, decisión 5); null si el mensaje no tiene ficha. */
+  procedencia: string | null;
   subject: string | null;
   body: string;
   /** Una respuesta en el hilo: en qué hilo responde (sin campo de asunto). */
@@ -61,6 +64,7 @@ export function filaVista(item: ApprovalItem, f: Formatter): FilaVista {
     paso,
     canal: channelLabel(noticeLang(f.locale), item.channel),
     sale: item.scheduledFor ? t.fila.sale(f.dateTime(item.scheduledFor.toISOString())) : null,
+    procedencia: item.contactSource ? t.fila.procedencia(SOURCE_META[item.contactSource].label) : null,
     subject: item.subject,
     body: item.body,
     hilo: esRespuesta ? (item.threadSubject ? t.fila.enElHilo(item.threadSubject) : t.fila.enElHiloSinAsunto) : null,

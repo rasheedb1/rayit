@@ -7,19 +7,13 @@ import { ConfirmInline } from "@/components/ui/confirm-inline";
 import { DateInput } from "@/components/ui/date-input";
 import { Field, Select } from "@/components/ui/field";
 import { Segmented } from "@/components/ui/segmented";
+import { escribiendo } from "@/lib/teclado";
 import { Aviso } from "../../_lib/aviso";
 import { corregirIntencion, marcarHecho, type ResultadoBandeja } from "./actions";
 import { MESSAGES, VISTAS, type Intencion, type VistaBandeja } from "./messages";
 import { enfocarRespuesta, ESCRITORIO } from "./responder";
 
 const t = MESSAGES;
-
-/** ¿La tecla viene de un campo de texto? Ahí escribir «j» es escribir una j. */
-function escribiendo(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
-}
 
 /**
  * El teclado de la bandeja, el de Superhuman: j y k abren el hilo
@@ -31,8 +25,15 @@ function escribiendo(target: EventTarget | null): boolean {
  * primero de la lista, no el segundo.
  */
 export function AtajosBandeja({
-  hrefs, activo, listaHref, activoSoloEscritorio = false,
-}: { hrefs: string[]; activo: number; listaHref: string; activoSoloEscritorio?: boolean }) {
+  hrefs, activo, listaHref, activoSoloEscritorio = false, puedeOperar = true,
+}: {
+  hrefs: string[];
+  activo: number;
+  listaHref: string;
+  activoSoloEscritorio?: boolean;
+  /** Sin el rol (PUEDEN_OPERAR_VENTAS) no hay respuesta ni «hecha»: la leyenda no ofrece r ni e. */
+  puedeOperar?: boolean;
+}) {
   const router = useRouter();
   const estado = useRef({ hrefs, activo, listaHref, activoSoloEscritorio });
   useLayoutEffect(() => {
@@ -79,9 +80,10 @@ export function AtajosBandeja({
     return () => window.removeEventListener("keydown", onKey);
   }, [router]);
 
+  const atajos = t.atajos.items.filter((a) => puedeOperar || (a.key !== "r" && a.key !== "e"));
   return (
     <p className="hidden text-xs text-ink-2 sm:block" aria-label={t.atajos.label}>
-      {t.atajos.items.map((a, n) => (
+      {atajos.map((a, n) => (
         <span key={a.key}>
           {n > 0 ? " · " : ""}
           <kbd className="rounded border border-border bg-surface-2 px-1 font-mono text-[11px] text-ink">{a.key}</kbd> {a.text}

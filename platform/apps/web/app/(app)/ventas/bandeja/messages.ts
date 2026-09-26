@@ -147,6 +147,7 @@ export const MESSAGES = {
     cancelar: "Cancelar",
     listo: (quien: string) => `${quien} ya es contacto de la marca.`,
     enrolar: "Enrolar en una cadencia",
+    verContacto: "Ver en la ficha",
   },
 
   responder: {
@@ -178,6 +179,7 @@ export const MESSAGES = {
     editar: "Editar",
     descartar: "Descartar",
     cancelada: "Respuesta cancelada: no sale.",
+    descartada: "Descartada: ya no se ve en la conversación.",
     aEditar: "Respuesta cancelada: su texto está en «Tu respuesta» para que la corrijas.",
     /** Por qué no salió, del blocked_reason del toque. */
     motivos: {
@@ -188,6 +190,10 @@ export const MESSAGES = {
     } as Record<string, string>,
     motivoGenerico: "No pudo salir. Escríbela otra vez si todavía hace falta.",
   },
+
+  /** Un 'viewer' o un 'client' del espacio: lee los hilos, no los opera (PUEDEN_OPERAR_VENTAS). */
+  sinPermiso:
+    "Solo quien es dueño, administra o es miembro de este espacio puede responder, corregir o marcar estas conversaciones. Puedes leerlas; para cambiarlas, pídeselo.",
 
   errores: {
     generico: "No pudimos guardar tu respuesta. Inténtalo de nuevo.",

@@ -29,7 +29,7 @@ export function Conversacion({ c, volverHref }: { c: ConversacionVista; volverHr
   const canal = c.channel as Canal;
   return (
     <section key={`${c.contactId}:${c.channel}`} aria-labelledby="conversacion-titulo" className="grid gap-4">
-      <MarcarLeido contactId={c.contactId} channel={canal} sinLeer={c.sinLeer} implicita={c.implicita} />
+      {c.puedeOperar ? <MarcarLeido contactId={c.contactId} channel={canal} sinLeer={c.sinLeer} implicita={c.implicita} /> : null}
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-4">
         <div className="min-w-0">
           <Link href={volverHref} className="mb-2 inline-block text-xs text-ink-2 hover:text-ink lg:hidden">
@@ -46,7 +46,7 @@ export function Conversacion({ c, volverHref }: { c: ConversacionVista; volverHr
           ) : null}
         </div>
         <div className="flex flex-wrap items-start gap-2">
-          <MarcarHecha contactId={c.contactId} channel={canal} hecha={c.hecha} />
+          {c.puedeOperar ? <MarcarHecha contactId={c.contactId} channel={canal} hecha={c.hecha} /> : null}
           <Button size="sm" variant="secondary" href={c.fichaHref}>
             {t.conversacion.verFicha}
           </Button>
@@ -58,13 +58,13 @@ export function Conversacion({ c, volverHref }: { c: ConversacionVista; volverHr
       <ol className="grid gap-3" role="list">
         {c.mensajes.map((m) => (
           <li key={m.id} className={`flex ${m.deNosotros ? "justify-end" : "justify-start"}`}>
-            <Mensaje m={m} opciones={c.opcionesIntencion} enrolarHref={c.enrolarHref} />
+            <Mensaje m={m} opciones={c.opcionesIntencion} puedeOperar={c.puedeOperar} />
           </li>
         ))}
       </ol>
 
       <div className="border-t border-border pt-4">
-        {c.bloqueo ? (
+        {c.bloqueo && c.puedeOperar ? (
           <div className="mb-3 grid gap-2">
             <Aviso info={t.responder.bloqueos[c.bloqueo]} />
             {c.bloqueo === "no_account" ? (
@@ -75,7 +75,7 @@ export function Conversacion({ c, volverHref }: { c: ConversacionVista; volverHr
               </div>
             ) : null}
           </div>
-        ) : c.envioApagado ? (
+        ) : c.envioApagado && c.puedeOperar ? (
           <div className="mb-3 flex flex-wrap items-center gap-3">
             <Aviso info={t.responder.envioApagado} className="flex-1" />
             <Button size="sm" variant="secondary" href={OUTREACH_URLS.policySwitch}>
@@ -90,6 +90,8 @@ export function Conversacion({ c, volverHref }: { c: ConversacionVista; volverHr
           porSalir={c.porSalir}
           noSalieron={c.noSalieron}
           puedeResponder={c.bloqueo === null}
+          puedeOperar={c.puedeOperar}
+          maxCaracteres={c.maxCaracteres}
         />
       </div>
     </section>
@@ -97,8 +99,8 @@ export function Conversacion({ c, volverHref }: { c: ConversacionVista; volverHr
 }
 
 function Mensaje({
-  m, opciones, enrolarHref,
-}: { m: MensajeVista; opciones: Array<{ value: Intencion; label: string }>; enrolarHref: string }) {
+  m, opciones, puedeOperar,
+}: { m: MensajeVista; opciones: Array<{ value: Intencion; label: string }>; puedeOperar: boolean }) {
   const intencion = m.intencion ? t.intenciones[m.intencion] : null;
   return (
     <article
@@ -130,22 +132,29 @@ function Mensaje({
             <div className="grid gap-2">
               <p className="text-xs text-ink">{m.referido.propuesta}</p>
               {m.referido.creado ? (
-                <p className="text-xs text-good">{t.referido.creado}</p>
-              ) : (
+                // Creada la ficha, se propone enrolarla (§5.7): la línea queda aunque la página se vuelva a pintar.
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                  <p className="text-good">{t.referido.creado}</p>
+                  {m.referido.enrolarHref && puedeOperar ? (
+                    <Link href={m.referido.enrolarHref} className="text-ink underline underline-offset-4 hover:text-ink-2">
+                      {t.referido.enrolar}
+                    </Link>
+                  ) : null}
+                  {m.referido.contactoHref ? (
+                    <Link href={m.referido.contactoHref} className="text-ink-2 underline underline-offset-4 hover:text-ink">
+                      {t.referido.verContacto}
+                    </Link>
+                  ) : null}
+                </div>
+              ) : puedeOperar ? (
                 // En un div, como «Corregir»: suelto en la rejilla, el botón se estiraba a todo el ancho.
                 <div>
-                  <CrearReferido
-                    messageId={m.id}
-                    nombre={m.referido.nombre}
-                    correo={m.referido.correo}
-                    cargo={m.referido.cargo}
-                    enrolarHref={enrolarHref}
-                  />
+                  <CrearReferido messageId={m.id} nombre={m.referido.nombre} correo={m.referido.correo} cargo={m.referido.cargo} />
                 </div>
-              )}
+              ) : null}
             </div>
           ) : null}
-          {m.corregible ? (
+          {!puedeOperar ? null : m.corregible ? (
             <div>
               <CorregirIntencion
                 messageId={m.id}

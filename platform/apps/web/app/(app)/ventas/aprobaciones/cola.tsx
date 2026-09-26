@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { escribiendo } from "@/lib/teclado";
 import { Aviso } from "../../_lib/aviso";
 import { deshacerAprobacion, type Deshacer, type ResultadoAprobacion } from "./actions";
 import { Fila } from "./fila";
@@ -16,26 +17,34 @@ const TECLAS_DE_ACCION: ReadonlySet<string> = new Set(["a", "e", "r", "s"]);
 /** Cuánto tiempo se ofrece «Deshacer» después de aprobar. */
 export const DESHACER_MS = 10_000;
 
-/** ¿La tecla viene de un campo de texto? Ahí escribir «a» es escribir una a. */
-function escribiendo(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
-}
-
 /** Lo último que pasó: el aviso y, si fue una aprobación, cómo deshacerla. */
 type Ultimo = { notice: string; deshacer: Deshacer | null } | { error: string };
 
 /**
+ * ¿La fila tiene algo abierto que espera una respuesta: la pregunta de
+ * «Saltar», el editor o la pista de «Regenerar»? Los tres son un form
+ * (ConfirmInline del kit pinta el suyo al abrirse; mirarlo desde fuera
+ * evita cambiar su API). Entonces una letra no es un atajo: con «¿Saltar
+ * este paso?» abierto, la «a» aprobaba el mensaje que se iba a saltar, y
+ * la «s» pulsaba «Sí, saltar».
+ */
+function filaOcupada(touchId: string): boolean {
+  return document.querySelector(`#fila-${touchId} form`) !== null;
+}
+
+/**
  * La lista de la bandeja de aprobación, con el teclado de Linear y
  * Superhuman: j y k mueven la fila activa (y el foco), a aprueba, e abre
- * el editor, r pide otra versión y s pregunta si saltar. La lista está
+ * el editor, r pide otra versión y s pregunta si saltar. Con una
+ * confirmación o un formulario abiertos en la fila activa, a, e, r y s no
+ * hacen nada: se responde lo que está abierto (o se cierra con Escape).
+ * Quien solo mira (sin PUEDEN_OPERAR_VENTAS) tiene j y k. La lista está
  * siempre montada, también vacía: el aviso de lo último que pasó queda
  * arriba aunque su fila ya no esté (al aprobar la última, la cola pasa a
  * «Nada por aprobar» y el aviso sigue ahí), con «Deshacer» durante unos
  * segundos. El foco pasa a la fila que ocupa el lugar de la que salió.
  */
-export function Cola({ filas }: { filas: FilaVista[] }) {
+export function Cola({ filas, puedeOperar = true }: { filas: FilaVista[]; puedeOperar?: boolean }) {
   const [activa, setActiva] = useState<string | null>(filas[0]?.touchId ?? null);
   const [ultimo, setUltimo] = useState<Ultimo | null>(null);
   const [puedeDeshacer, setPuedeDeshacer] = useState(false);
@@ -46,10 +55,12 @@ export function Cola({ filas }: { filas: FilaVista[] }) {
   const idsRef = useRef(ids);
   const activaRef = useRef(activa);
   const huboAviso = useRef(false);
+  const operarRef = useRef(puedeOperar);
   useLayoutEffect(() => {
     idsRef.current = ids;
     activaRef.current = activa;
     huboAviso.current = ultimo !== null;
+    operarRef.current = puedeOperar;
   });
 
   const enfocar = useCallback((id: string | undefined) => {
@@ -79,7 +90,8 @@ export function Cola({ filas }: { filas: FilaVista[] }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const lista = idsRef.current;
-      if (e.metaKey || e.ctrlKey || e.altKey || escribiendo(e.target) || lista.length === 0) return;
+      // Lo que ya atendió otro (Escape en una confirmación abierta) no es un atajo.
+      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || escribiendo(e.target) || lista.length === 0) return;
       const actual = activaRef.current;
       const i = actual ? Math.max(0, lista.indexOf(actual)) : 0;
       if (e.key === "j" || e.key === "k") {
@@ -87,7 +99,8 @@ export function Cola({ filas }: { filas: FilaVista[] }) {
         enfocar(lista[e.key === "j" ? Math.min(i + 1, lista.length - 1) : Math.max(i - 1, 0)]);
         return;
       }
-      if (!TECLAS_DE_ACCION.has(e.key) || !actual) return;
+      if (!TECLAS_DE_ACCION.has(e.key) || !actual || !operarRef.current) return;
+      if (filaOcupada(actual)) return;
       const boton = document.querySelector<HTMLElement>(`#fila-${actual} [data-accion="${e.key}"] button`);
       if (!boton) return;
       e.preventDefault();
@@ -118,7 +131,9 @@ export function Cola({ filas }: { filas: FilaVista[] }) {
   }
 
   const regenerables = filas.some((f) => f.regenerable);
-  const atajos = t.atajos.items.filter((a) => a.key !== "r" || regenerables);
+  const atajos = t.atajos.items.filter((a) =>
+    puedeOperar ? a.key !== "r" || regenerables : a.key === "j" || a.key === "k",
+  );
   const deshacible = ultimo && "notice" in ultimo && puedeDeshacer ? ultimo.deshacer : null;
 
   return (
@@ -157,6 +172,7 @@ export function Cola({ filas }: { filas: FilaVista[] }) {
               <Fila
                 fila={f}
                 activa={f.touchId === activa}
+                puedeOperar={puedeOperar}
                 onActivar={() => {
                   indice.current = ids.indexOf(f.touchId);
                   setActiva(f.touchId);

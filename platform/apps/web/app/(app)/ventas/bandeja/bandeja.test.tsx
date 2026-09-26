@@ -27,7 +27,7 @@ vi.mock("./actions", () => ({
 const router = { push: vi.fn(), refresh: vi.fn() };
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
-import type { InboxConversation, InboxMessage, InboxThread } from "@mc/db/queries/bandejas";
+import { INBOX_REPLY_MAX_CHARS, type InboxConversation, type InboxMessage, type InboxThread } from "@mc/db/queries/bandejas";
 import { formatterFor } from "@/lib/format";
 import { AtajosBandeja } from "./acciones";
 import { Conversacion } from "./conversacion";
@@ -35,7 +35,7 @@ import { ListaHilos } from "./lista";
 import { MESSAGE_INTENTS } from "@mc/core/outreach/intent";
 import { INTENCIONES, MESSAGES } from "./messages";
 import { CrearReferido, Respuestas } from "./responder";
-import { columnaListaClase, conversacionVista, hiloHref, hiloVista, intencionClave } from "./vista";
+import { columnaListaClase, conversacionVista, enrolarHrefDe, hiloHref, hiloVista, intencionClave } from "./vista";
 
 const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
 const t = MESSAGES;
@@ -151,7 +151,13 @@ describe("la vista", () => {
     const [conCorreo, sinDatos, creado, baja] = vista(c).mensajes;
     expect(conCorreo!.referido).toMatchObject({ propuesta: t.referido.propone("Ana · ana@vitale.test"), creado: false });
     expect(sinDatos!.referido?.propuesta).toBe(t.referido.proponeSinDatos);
-    expect(creado!.referido?.creado).toBe(true);
+    expect(creado!.referido).toMatchObject({
+      creado: true,
+      // §5.7: creada la ficha, se propone enrolarla con el negocio y la persona elegidos.
+      enrolarHref: `/ventas/cadencias/${SEQ}?negocio=${DEAL}&contacto=${CONTACT}#enrolar`,
+      contactoHref: `/ventas/empresas/${COMPANY}#contactos`,
+    });
+    expect(conCorreo!.referido).toMatchObject({ enrolarHref: null, contactoHref: null });
     expect(baja!.corregible).toBe(false);
     expect(conCorreo!.corregible).toBe(true);
   });
@@ -163,8 +169,9 @@ describe("la vista", () => {
     const v = vista(conv({ pending: [r("t1", "scheduled", null)], notSent: [r("t2", "canceled", "canceled_by_person"), r("t3", "failed", "raro")] }));
     expect(v.porSalir.map((p) => [p.estado, p.cancelable, p.motivo])).toEqual([["En cola", true, null]]);
     expect(v.noSalieron.map((p) => p.motivo)).toEqual([t.responder.motivos["canceled_by_person"], t.responder.motivoGenerico]);
-    expect(v.enrolarHref).toBe(`/ventas/cadencias/${SEQ}?negocio=${DEAL}#enrolar`);
-    expect(vista(conv({ sequenceId: null })).enrolarHref).toBe(`/ventas/empresas/${COMPANY}#negocios`);
+    expect(enrolarHrefDe(conv())).toBe(`/ventas/cadencias/${SEQ}?negocio=${DEAL}#enrolar`);
+    expect(enrolarHrefDe(conv({ sequenceId: null }), CONTACT)).toBe(`/ventas/empresas/${COMPANY}#negocios`);
+    expect(v.maxCaracteres).toBe(INBOX_REPLY_MAX_CHARS);
   });
 });
 
@@ -276,7 +283,10 @@ describe("el teclado", () => {
 });
 
 describe("responder", () => {
-  const props = { contactId: CONTACT, channel: "email" as const, ayuda: "Sale desde laura", porSalir: [], noSalieron: [], puedeResponder: true };
+  const props = {
+    contactId: CONTACT, channel: "email" as const, ayuda: "Sale desde laura", porSalir: [], noSalieron: [], puedeResponder: true,
+    maxCaracteres: INBOX_REPLY_MAX_CHARS,
+  };
 
   async function enviar(texto: string) {
     fireEvent.change(screen.getByLabelText(t.responder.label), { target: { value: texto } });
@@ -333,14 +343,46 @@ describe("responder", () => {
     expect(screen.getByText(t.responder.aEditar)).toBeInTheDocument();
   });
 
-  it("las que no salieron dicen por qué y se descartan; una que ya está saliendo no se cancela", () => {
+  it("las que no salieron dicen por qué y se descartan; una que ya está saliendo no se cancela", async () => {
     const saliendo = { touchId: "t1", estado: "Enviándose", cuerpo: "Ya va", cancelable: false, motivo: null };
     const cancelada = { touchId: "t2", estado: "Cancelada", cuerpo: "No", cancelable: false, motivo: t.responder.motivos["canceled_by_person"]! };
+    descartarRespuesta.mockResolvedValue({ ok: true, notice: t.responder.descartada });
     render(<Respuestas {...props} porSalir={[saliendo]} noSalieron={[cancelada]} />);
     expect(screen.queryByRole("button", { name: t.responder.cancelar })).toBeNull();
     expect(screen.getByText(t.responder.motivos["canceled_by_person"]!)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: t.responder.descartar }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.responder.descartar }));
+    });
     expect(descartarRespuesta).toHaveBeenCalledWith({ touchId: "t2" });
+    expect(screen.getByText(t.responder.descartada)).toBeInTheDocument();
+  });
+
+  it("«Descartar» espera su respuesta (no se pulsa dos veces) y, si falla, lo dice", async () => {
+    const cancelada = { touchId: "t2", estado: "Cancelada", cuerpo: "No", cancelable: false, motivo: null };
+    let soltar: (r: unknown) => void = () => {};
+    descartarRespuesta.mockReturnValue(new Promise((r) => (soltar = r)));
+    render(<Respuestas {...props} noSalieron={[cancelada]} />);
+    const boton = screen.getByRole("button", { name: t.responder.descartar });
+    fireEvent.click(boton);
+    await waitFor(() => expect(boton).toBeDisabled());
+    fireEvent.click(boton);
+    expect(descartarRespuesta).toHaveBeenCalledTimes(1);
+    await act(async () => soltar({ ok: false, error: t.errores.accion }));
+    expect(screen.getByText(t.errores.accion)).toBeInTheDocument();
+  });
+
+  it("el tope del campo es el de @mc/db, el mismo del servidor", () => {
+    render(<Respuestas {...props} />);
+    expect(screen.getByLabelText(t.responder.label)).toHaveAttribute("maxLength", String(INBOX_REPLY_MAX_CHARS));
+  });
+
+  it("un rol que solo lee no ve la caja ni los botones: se le dice por qué", () => {
+    const enCola = { touchId: "t1", estado: "En cola", cuerpo: "Hola", cancelable: true, motivo: null };
+    const cancelada = { touchId: "t2", estado: "Cancelada", cuerpo: "No", cancelable: false, motivo: null };
+    render(<Respuestas {...props} porSalir={[enCola]} noSalieron={[cancelada]} puedeOperar={false} />);
+    expect(screen.queryByLabelText(t.responder.label)).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByText(t.sinPermiso)).toBeInTheDocument();
   });
 });
 
@@ -367,9 +409,9 @@ describe("corregir la intención", () => {
 });
 
 describe("el referido", () => {
-  it("el error de correo va a su campo; creado, propone enrolarlo en una cadencia", async () => {
+  it("el error de correo va a su campo; creado, lo dice", async () => {
     crearReferido.mockResolvedValueOnce({ ok: false, error: t.errores.DuplicateEmail, field: "email" });
-    render(<CrearReferido messageId={mensaje(1).id} nombre="Ana" correo="ana@vitale.test" cargo={null} enrolarHref="/ventas/cadencias/x#enrolar" />);
+    render(<CrearReferido messageId={mensaje(1).id} nombre="Ana" correo="ana@vitale.test" cargo={null} />);
     fireEvent.click(screen.getByRole("button", { name: t.referido.crear }));
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: t.referido.guardar }));
@@ -383,7 +425,44 @@ describe("el referido", () => {
       fireEvent.click(screen.getByRole("button", { name: t.referido.guardar }));
     });
     expect(screen.getByText(t.referido.listo("Ana"))).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: t.referido.enrolar })).toHaveAttribute("href", "/ventas/cadencias/x#enrolar");
+  });
+
+  it("después de crearlo (la página se vuelve a pintar), el mensaje propone enrolarlo y lleva a su ficha", () => {
+    const NUEVO = "00000140-0000-4000-8000-0000000000d7";
+    const c = conv({
+      messages: [
+        mensaje(1, {
+          intent: "referral", intentSource: "model", referral: { name: "Mariana López", email: "mariana@vitale.test", role: null },
+          referralContactId: NUEVO,
+        }),
+      ],
+    });
+    render(<Conversacion c={vista(c)} volverHref="/ventas/bandeja" />);
+    expect(screen.getByText(t.referido.creado)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: t.referido.enrolar })).toHaveAttribute(
+      "href", `/ventas/cadencias/${SEQ}?negocio=${DEAL}&contacto=${NUEVO}#enrolar`,
+    );
+    expect(screen.getByRole("link", { name: t.referido.verContacto })).toHaveAttribute("href", `/ventas/empresas/${COMPANY}#contactos`);
+    expect(screen.queryByRole("button", { name: t.referido.crear })).toBeNull();
+  });
+});
+
+describe("un rol que solo lee", () => {
+  it("lee la conversación entera, sin «Marcar como hecha», «Corregir», «Crear contacto» ni marcarla leída", () => {
+    const c = conv({
+      unread: 2,
+      messages: [
+        mensaje(1, { intent: "ambiguous", intentSource: "model", intentConfidence: 0.4 }),
+        mensaje(2, { intent: "referral", intentSource: "model", referral: { name: "Ana", email: "ana@vitale.test", role: null } }),
+      ],
+    });
+    render(<Conversacion c={conversacionVista(c, f, { clasificador: "model", puedeOperar: false })} volverHref="/ventas/bandeja" />);
+    expect(screen.getByText("Mensaje 1")).toBeInTheDocument();
+    for (const nombre of [t.conversacion.marcarHecha, t.corregir.abrir, t.referido.crear, t.responder.enviar]) {
+      expect(screen.queryByRole("button", { name: nombre })).toBeNull();
+    }
+    expect(screen.getByText(t.sinPermiso)).toBeInTheDocument();
+    expect(marcarLeido).not.toHaveBeenCalled();
   });
 });
 
