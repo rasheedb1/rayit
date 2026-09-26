@@ -462,7 +462,8 @@ export const STORIES: readonly Story[] = [
     title: "Actividad y métricas de outreach",
     desc: "Cola visible con reintento por tipo, uso por canal con límite blando y duro, embudo por paso (enviados, abiertos, respondidos, positivos), vista de flujo de la cadencia.",
     done: "Con una semana de envíos de prueba, el embudo cuadra con outbound_touch fila a fila.",
-    status: "pendiente",
+    status: "hecho",
+    note: "Migración 0064_actividad_outreach (cuatro vistas: outbound_queue, outbound_usage_daily, outbound_funnel_by_step, outbound_sequence_health), sin aplicar en Supabase. Probado en pglite con una semana de envíos en los ocho estados: el embudo cuadra con outbound_touch fila a fila y con la tabla escrita a mano, un fallido vuelve a scheduled al reintentarlo (y reabre su cadencia), y lo que un reintento no arregla (rebote, zombi, paso posterior ya enviado) no vuelve. Pantalla /ventas/actividad; uso por canal montado en /ventas/canales y embudo con vista de flujo en /ventas/cadencias/[id].",
   },
 
   // ---------------------------------------------------------------- COT

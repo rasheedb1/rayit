@@ -1609,6 +1609,46 @@ las ocho existentes, Ventas completo son 48 a 55 días de una persona.
 Es el módulo más grande del producto, y por eso conviene construirlo
 con agentes en paralelo, con la misma puerta de calidad de 9,5.
 
+#### Cómo quedó la actividad (VEN-16, 25 de septiembre)
+
+- **Migración `0064_actividad_outreach.sql`**: cuatro vistas de solo
+  lectura, con `security_invoker` y sin escritura para `mc_app`.
+  `outbound_queue` (un toque por fila con su paso, su contacto, su cuenta
+  y el código de su motivo; `bucket` = `queue` o `history`),
+  `outbound_usage_daily` (uso de cada cuenta viva en 14 días locales,
+  contra el tope que rige y el techo del proveedor, con el día del
+  calentamiento), `outbound_funnel_by_step` (enviados, abiertos,
+  respondidos y positivos **dentro de lo enviado**, más en cola, fallidos
+  y detenidos: cada toque del paso cae en una sola columna) y
+  `outbound_sequence_health` (enrolamientos por estado, cola, 7 días,
+  tasas y un semáforo `inactive`/`failing`/`attention`/`healthy`).
+  «Positivo» es una respuesta entrante del toque con `intent =
+  'interested'` (la clasifica VEN-14).
+- **Las consultas** están en `@mc/db/queries/actividad`. El semáforo del
+  uso lo pone `listChannelUsage` con `warmupDailyLimit` de `@mc/core`,
+  la misma curva que usa el reclamo: la vista no copia la regla. El
+  límite duro es lo que el despachador deja salir hoy; el blando, el 80 %
+  de él.
+- **Reintentar** (`retryFailedTouches`) devuelve `failed → scheduled` a
+  la hora actual, sin tocar `attempt_count` (cada intento tiene su enlace
+  de baja), y reabre la cadencia que se completó por ese fallo. No
+  reintenta un rebote, una dirección inválida ni un zombi (pudo haber
+  salido), ni un paso cuyo siguiente ya salió; cada toque va en su
+  SAVEPOINT, así que una regla de la base (baja, correo inválido, paso
+  con otro vivo) salta ese y no el lote. **Cancelar**
+  (`cancelQueuedTouches`) cancela borradores, programados y retenidos, y
+  descarta fallidos, con `blocked_reason = 'canceled_by_user'`; la
+  cadencia avanza o se completa como tras un envío.
+- **Pantallas**: `/ventas/actividad` (pestañas Cola e Historial, filtros
+  por cadencia, tipo de paso y contacto, reintento por tipo, cancelación
+  en masa con confirmación en el sitio, motivo cortado con el detalle al
+  pasar el cursor); `<UsoPorCanal />` montado en `/ventas/canales`;
+  `<MetricasCadencia sequenceId />` (KPIs, embudo por paso y vista de
+  flujo con una explicación por cifra) montado en
+  `/ventas/cadencias/[id]`. Los textos, en `ventas/actividad/messages.ts`.
+- **Prueba**: `packages/db/test/actividad.test.ts`, una semana de envíos
+  en los ocho estados; el embudo cuadra con `outbound_touch` fila a fila.
+
 ## 7. Cómo entra en el plan por fases
 
 Ventas va después de los cimientos y en paralelo con Cotizar, porque
