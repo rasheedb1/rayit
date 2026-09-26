@@ -24,8 +24,8 @@
  */
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { BRIEF_LIMITS, BriefError, saveBrief, searchBriefCompanies, type BriefErrorCode } from "@mc/db/queries/brief";
-import { rejectSignalBrand } from "@mc/db/queries/ventas";
+import { BRIEF_LIMITS, BRIEF_PATTERNS, BriefError, saveBrief, searchBriefCompanies, type BriefErrorCode } from "@mc/db/queries/brief";
+import { rejectBrandByName, rejectSignalBrand } from "@mc/db/queries/ventas";
 import { DECIMAL_RE, UUID_RE, firstErrors, formField, type ActionState } from "@/lib/forms";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
@@ -44,8 +44,9 @@ export interface BriefState extends ActionState {
   stamp?: number;
 }
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const DELIVERABLE_RE = /^[a-z_]{1,40}$/;
+/** Las mismas formas que valida la consulta (BRIEF_PATTERNS): la acción no deja pasar lo que la base rechaza, ni al revés. */
+const DATE_RE = BRIEF_PATTERNS.date;
+const DELIVERABLE_RE = BRIEF_PATTERNS.deliverable;
 
 /** Lo que llega del formulario, validado con las frases de MESSAGES y los topes ya formateados. */
 function esquemaDelBrief(l: BriefLimitTexts) {
@@ -226,5 +227,33 @@ export async function noAceptarMarca(_prev: NoAceptarState, formData: FormData):
     if (err instanceof BriefError) return { message: fraseDe(err, briefLimitTexts(formatterFor(await getCurrentWorkspace()))) };
     console.error("[ventas] no se pudo excluir la marca de la señal", err);
     return { message: r.error };
+  }
+}
+
+/** Algo que se escribe como un dominio («cafemonte.co», «https://www.cafemonte.co/tienda»). */
+const DOMINIO_RE = /^(https?:\/\/)?(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i;
+
+/**
+ * «No aceptar «…»», desde «Marcas que no aceptas» del brief (VEN-7 r5):
+ * cuando la búsqueda no encuentra la marca en el CRM, la da de alta como
+ * bloqueada con lo escrito (rejectBrandByName) y devuelve la etiqueta que
+ * el formulario agrega. Lo escrito es el nombre; si tiene forma de
+ * dominio, también es el dominio, y la marca se reconoce por él.
+ *
+ * Mismo permiso que guardar el brief (puedeEditarElBrief) y, en la base,
+ * la misma regla (outreach_can_manage) y su traza en audit_log.
+ */
+export async function noAceptarMarcaNueva(texto: string): Promise<{ result: MarcaEncontrada } | { error: string }> {
+  if (!(await puedeEditarElBrief())) return { error: t.sinPermiso };
+  const nombre = typeof texto === "string" ? texto.trim() : "";
+  const dominio = DOMINIO_RE.test(nombre) ? nombre : null;
+  try {
+    const marca = await withWorkspace((tx) => rejectBrandByName(tx, { name: nombre, domain: dominio }));
+    revalidatePath("/ventas", "layout");
+    return { result: { value: marca.id, label: marca.name } };
+  } catch (err) {
+    if (err instanceof BriefError) return { error: fraseDe(err, briefLimitTexts(formatterFor(await getCurrentWorkspace()))) };
+    console.error("[ventas] no se pudo dar de alta la marca que no se acepta", err);
+    return { error: t.chips.createError };
   }
 }

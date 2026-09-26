@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type InputHTMLAttributes, type KeyboardEvent } from "react";
 import { X } from "lucide-react";
 import { categoryKey } from "@mc/core";
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select } from "@/components/ui/field";
+import { CONTROL, Field, Input, Select, useFieldControl } from "@/components/ui/field";
 import { formatInt } from "@/lib/format";
 import { MESSAGES } from "../_lib/messages";
 
@@ -31,6 +31,12 @@ export type ListaDeEtiquetasProps = {
    * (ver `pendiente`); con esto pasa también a la lista en pantalla.
    */
   saved?: number;
+  /**
+   * Avisa cuando el campo tiene texto escrito que no es ninguna etiqueta
+   * (modo "search": un nombre a medias). El formulario no se envía así
+   * (VEN-7 r5): la marca no viajaría y el creador creería haberla excluido.
+   */
+  onUnresolvedChange?: (unresolved: boolean) => void;
 } & (
   | {
       /** Texto libre, con sugerencias (<datalist>) de lo que ya hay en el workspace. */
@@ -58,8 +64,29 @@ export type ListaDeEtiquetasProps = {
       minChars: number;
       /** El locale del workspace, para decir las cifras de la búsqueda con Intl (formatInt). */
       locale: string;
+      /**
+       * Si la búsqueda no encuentra nada, ofrece «No aceptar «…»», que da
+       * de alta lo escrito y devuelve la etiqueta (VEN-7 r5). Sin ella,
+       * solo se elige lo que ya está.
+       */
+      create?: (texto: string) => Promise<{ result: Etiqueta } | { error: string }>;
     }
 );
+
+/** Una opción del combobox: una marca encontrada, o dar de alta lo escrito. */
+type Opcion = { kind: "result"; etiqueta: Etiqueta } | { kind: "create" };
+
+/**
+ * El campo del combobox. Es un <input> con el estilo del kit (CONTROL) y
+ * las props de accesibilidad del Field (useFieldControl), más el estado
+ * de la búsqueda en aria-describedby: el Input del kit pone el suyo
+ * encima del que se le pase, y cambiar su API pide revisión.
+ */
+function ComboInput({ statusId, ...rest }: InputHTMLAttributes<HTMLInputElement> & { statusId: string }) {
+  const a11y = useFieldControl({});
+  const describedBy = [a11y["aria-describedby"], statusId].filter(Boolean).join(" ");
+  return <input {...rest} {...a11y} aria-describedby={describedBy} className={`${CONTROL} h-9`} />;
+}
 
 /**
  * Una lista de etiquetas que se agregan y se quitan: las categorías, los
@@ -80,6 +107,16 @@ export type ListaDeEtiquetasProps = {
  * en una regla de exclusión, el radar seguía enseñando lo que el creador
  * creía haber dejado fuera.
  *
+ * En las marcas (modo "search") lo escrito solo viaja si es EXACTAMENTE
+ * una marca de la lista. Un nombre a medias no se pierde nunca en
+ * silencio (VEN-7 r5):
+ *   · Enter sin opción marcada agrega la única que se ofrece; con varias,
+ *     abre la lista en la primera y deja lo escrito;
+ *   · al guardar, el formulario no se envía y el campo dice por qué
+ *     (onUnresolvedChange);
+ *   · sin ninguna en el CRM, ofrece «No aceptar «…»» (`create`), que la da
+ *     de alta bloqueada y la agrega.
+ *
  * Accesibilidad: el campo para agregar lleva la etiqueta del Field; cada
  * etiqueta elegida es un elemento de lista con su botón «Quitar …», y la
  * lista tiene nombre propio. Al quitar una, el foco pasa a la siguiente
@@ -88,7 +125,7 @@ export type ListaDeEtiquetasProps = {
  */
 export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
   const t = MESSAGES.brief.chips;
-  const { name, label, help, error, initial, max, placeholder, disabled = false, saved } = props;
+  const { name, label, help, error, initial, max, placeholder, disabled = false, saved, onUnresolvedChange } = props;
   const [elegidas, setElegidas] = useState<Etiqueta[]>(initial);
   const [texto, setTexto] = useState("");
   const [eleccion, setEleccion] = useState("");
@@ -108,6 +145,10 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
   const [busqueda, setBusqueda] = useState<"idle" | "short" | "loading" | "done" | "error">("idle");
   const [activo, setActivo] = useState(-1);
   const [abierto, setAbierto] = useState(false);
+  const create = props.mode === "search" ? props.create : undefined;
+  const [creando, setCreando] = useState(false);
+  /** Lo que pasó al dar de alta una marca con «No aceptar «…»»: se dice en la línea de estado. */
+  const [alta, setAlta] = useState<{ ok: boolean; text: string } | null>(null);
 
   const yaEsta = (valor: string) => {
     const k = props.mode === "free" ? categoryKey(valor) : valor;
@@ -133,22 +174,79 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
     return o && !yaEsta(o.value) ? o : null;
   })();
 
-  function agregar(e: Etiqueta) {
-    if (lleno || disabled || yaEsta(e.value)) return;
-    setElegidas((cur) => [...cur, e]);
-    setTexto("");
-    setResultados([]);
-    setAbierto(false);
-    setActivo(-1);
-  }
+  const apagado = disabled || lleno;
+  const escrito = texto.trim();
+  /**
+   * «No aceptar «…»»: solo cuando la búsqueda terminó y no hay ninguna
+   * marca en el CRM que contenga lo escrito. Si hay alguna, se elige esa:
+   * dar de alta un duplicado de «Nutrivé» por escribir «nutri» ensuciaría
+   * el CRM.
+   */
+  const puedeCrear =
+    Boolean(create) && !apagado && busqueda === "done" && resultados.length === 0 && categoryKey(escrito).length >= minChars;
+  const opciones: Opcion[] = [
+    ...ofrecidos.map((etiqueta): Opcion => ({ kind: "result", etiqueta })),
+    ...(puedeCrear ? [{ kind: "create" } as const] : []),
+  ];
+  const listaAbierta = abierto && opciones.length > 0;
+  /** Texto en el combobox que no es ninguna marca: guardar no puede tragárselo (VEN-7 r5). */
+  const sinResolver = props.mode === "search" && !apagado && escrito !== "" && pendiente === null;
 
-  function agregarPendiente() {
-    if (pendiente) setElegidas((cur) => [...cur, pendiente]);
+  // El formulario se entera de si hay algo sin resolver. Por ref: quien
+  // lo pide suele pasar una función nueva en cada render.
+  const avisar = useRef(onUnresolvedChange);
+  avisar.current = onUnresolvedChange;
+  useEffect(() => {
+    avisar.current?.(sinResolver);
+  }, [sinResolver]);
+
+  function limpiar() {
     setTexto("");
     setEleccion("");
     setResultados([]);
     setAbierto(false);
     setActivo(-1);
+  }
+
+  function agregar(e: Etiqueta) {
+    if (lleno || disabled || yaEsta(e.value)) return;
+    setElegidas((cur) => [...cur, e]);
+    setAlta(null);
+    limpiar();
+  }
+
+  /**
+   * «Agregar», Enter y el guardado. Sin nada que agregar, lo escrito se
+   * queda en el campo (VEN-7 r5): borrarlo sin agregar nada hacía creer
+   * que la marca estaba excluida. Solo una categoría que ya está (en otra
+   * grafía) se limpia: no hay nada pendiente, ya está en la lista.
+   */
+  function agregarPendiente() {
+    if (pendiente) {
+      agregar(pendiente);
+      return;
+    }
+    if (props.mode === "free" && escrito && yaEsta(escrito)) setTexto("");
+  }
+
+  /** Da de alta lo escrito como marca bloqueada y la agrega (`create`, VEN-7 r5). */
+  async function crear() {
+    if (!create || creando || !escrito) return;
+    setCreando(true);
+    setAlta(null);
+    const r = await create(escrito).catch(() => ({ error: t.createError }));
+    setCreando(false);
+    if ("error" in r) {
+      setAlta({ ok: false, text: r.error });
+      return;
+    }
+    agregar(r.result);
+    setAlta({ ok: true, text: t.created(r.result.label) });
+  }
+
+  function elegir(o: Opcion) {
+    if (o.kind === "create") void crear();
+    else agregar(o.etiqueta);
   }
 
   function onEnter(event: KeyboardEvent<HTMLElement>) {
@@ -160,11 +258,11 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
   /** El teclado del combobox: flechas para moverse, Enter para elegir, Escape para cerrar. */
   function onComboKey(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      if (ofrecidos.length === 0) return;
+      if (opciones.length === 0) return;
       event.preventDefault();
       setAbierto(true);
       const paso = event.key === "ArrowDown" ? 1 : -1;
-      setActivo((cur) => (cur + paso + ofrecidos.length) % ofrecidos.length);
+      setActivo((cur) => (cur + paso + opciones.length) % opciones.length);
       return;
     }
     if (event.key === "Escape") {
@@ -177,9 +275,18 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
     }
     if (event.key !== "Enter") return;
     event.preventDefault();
-    const marcado = abierto && activo >= 0 ? ofrecidos[activo] : undefined;
-    if (marcado) agregar(marcado);
-    else agregarPendiente();
+    const marcada = listaAbierta && activo >= 0 ? opciones[activo] : undefined;
+    if (marcada) return elegir(marcada);
+    if (pendiente) return agregar(pendiente);
+    // Un nombre a medias con una sola marca que lo contiene: es esa. Con
+    // varias (o con «No aceptar…»), se abre la lista en la primera y lo
+    // escrito se queda: Enter no decide por nadie ni borra nada.
+    const unica = ofrecidos.length === 1 ? ofrecidos[0] : undefined;
+    if (unica) return agregar(unica);
+    if (opciones.length > 0) {
+      setAbierto(true);
+      setActivo(0);
+    }
   }
 
   // Busca al dejar de escribir (250 ms), y descarta la respuesta de una
@@ -244,7 +351,23 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
   }, [saved]);
 
   const disponibles = props.mode === "options" ? props.options.filter((o) => !elegidas.some((e) => e.value === o.value)) : [];
-  const apagado = disabled || lleno;
+
+  /** La línea de estado del combobox: lo que pasó al dar de alta, o en qué va la búsqueda. */
+  const estado: { text: string; visible: boolean; bad?: boolean } | null = creando
+    ? { text: t.creating, visible: true }
+    : alta
+      ? { text: alta.text, visible: true, bad: !alta.ok }
+      : busqueda === "short"
+        ? { text: t.searchMin(cifra(minChars)), visible: true }
+        : busqueda === "loading"
+          ? { text: t.searching, visible: true }
+          : busqueda === "error"
+            ? { text: t.searchError, visible: true, bad: true }
+            : busqueda === "done" && escrito
+              ? ofrecidos.length > 0
+                ? { text: t.searchResults(cifra(ofrecidos.length), ofrecidos.length), visible: false }
+                : { text: puedeCrear ? t.createHint : t.searchNone, visible: true }
+              : null;
 
   return (
     <div className="flex flex-col gap-2">
@@ -272,47 +395,60 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
             </>
           ) : props.mode === "search" ? (
             <div className="relative min-w-0 flex-1">
-              <Input
+              <ComboInput
+                statusId={statusId}
                 value={texto}
-                onChange={(e) => setTexto(e.target.value)}
+                onChange={(e) => {
+                  setTexto(e.target.value);
+                  setAlta(null);
+                }}
                 onKeyDown={onComboKey}
                 onBlur={() => setAbierto(false)}
-                onFocus={() => ofrecidos.length > 0 && setAbierto(true)}
+                onFocus={() => opciones.length > 0 && setAbierto(true)}
                 role="combobox"
                 aria-autocomplete="list"
-                aria-expanded={abierto && ofrecidos.length > 0}
+                aria-expanded={listaAbierta}
                 aria-controls={listId}
-                aria-activedescendant={abierto && activo >= 0 ? `${listId}-${activo}` : undefined}
+                aria-activedescendant={listaAbierta && activo >= 0 ? `${listId}-${activo}` : undefined}
+                aria-busy={creando || undefined}
+                data-unresolved={sinResolver || undefined}
                 placeholder={placeholder}
                 disabled={apagado}
+                readOnly={creando}
                 autoComplete="off"
                 maxLength={120}
               />
-              {abierto && ofrecidos.length > 0 && (
-                <ul
-                  id={listId}
-                  role="listbox"
-                  aria-label={label}
-                  className="absolute inset-x-0 top-full z-20 mt-1 max-h-60 overflow-y-auto rounded-md border border-border bg-surface py-1 shadow-lg"
-                >
-                  {ofrecidos.map((r, i) => (
+              {/*
+                La lista existe siempre (oculta si no hay nada que ofrecer):
+                aria-controls no puede apuntar a un id que no está en la página.
+              */}
+              <ul
+                id={listId}
+                role="listbox"
+                aria-label={label}
+                hidden={!listaAbierta}
+                className="absolute inset-x-0 top-full z-20 mt-1 max-h-60 overflow-y-auto rounded-md border border-border bg-surface py-1 shadow-lg"
+              >
+                {listaAbierta &&
+                  opciones.map((o, i) => (
                     <li
-                      key={r.value}
+                      key={o.kind === "create" ? "__crear" : o.etiqueta.value}
                       id={`${listId}-${i}`}
                       role="option"
                       aria-selected={i === activo}
                       // mousedown y no click: el blur del campo cerraría la lista antes del click.
                       onMouseDown={(e) => {
                         e.preventDefault();
-                        agregar(r);
+                        elegir(o);
                       }}
-                      className={`cursor-pointer truncate px-3 py-1.5 text-sm text-ink ${i === activo ? "bg-hover" : "hover:bg-hover"}`}
+                      className={`cursor-pointer truncate px-3 py-1.5 text-sm ${o.kind === "create" ? "text-bad" : "text-ink"} ${
+                        i === activo ? "bg-hover" : "hover:bg-hover"
+                      }`}
                     >
-                      {r.label}
+                      {o.kind === "create" ? t.createOption(escrito) : o.etiqueta.label}
                     </li>
                   ))}
-                </ul>
-              )}
+              </ul>
             </div>
           ) : (
             <Select
@@ -331,18 +467,8 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
       </Field>
 
       {props.mode === "search" && (
-        <p id={statusId} role="status" aria-live="polite" className="-mt-1 text-xs text-muted">
-          {busqueda === "short"
-            ? t.searchMin(cifra(minChars))
-            : busqueda === "loading"
-              ? t.searching
-              : busqueda === "error"
-                ? t.searchError
-                : busqueda === "done" && texto.trim()
-                  ? ofrecidos.length === 0
-                    ? t.searchNone
-                    : <span className="sr-only">{t.searchResults(cifra(ofrecidos.length), ofrecidos.length)}</span>
-                  : null}
+        <p id={statusId} role="status" aria-live="polite" className={`-mt-1 text-xs ${estado?.bad ? "text-bad" : "text-muted"}`}>
+          {estado && (estado.visible ? estado.text : <span className="sr-only">{estado.text}</span>)}
         </p>
       )}
 

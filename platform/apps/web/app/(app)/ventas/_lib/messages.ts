@@ -197,8 +197,15 @@ export const MESSAGES = {
       action: "No aceptar esta marca",
       actionFor: (name: string) => `No aceptar la marca ${name}`,
       title: (name: string) => `¿No aceptar ${name}?`,
+      /**
+       * Dos variantes (VEN-7 r5): con un solo brief activo no se habla de
+       * «todos los briefs», una regla de agencias que a una creadora sola
+       * la confunde.
+       */
       description:
-        "Entra a tu CRM como bloqueada y a «Marcas que no aceptas» del brief. El radar deja de enseñar sus señales cuando la excluyen todos los briefs activos, y ninguna cadencia le escribe.",
+        "Entra a tu CRM como bloqueada y a «Marcas que no aceptas»: deja de aparecer en tu bandeja y ninguna cadencia le escribe.",
+      descriptionMany:
+        "Entra a tu CRM como bloqueada y a «Marcas que no aceptas» de los briefs que elijas. El radar deja de enseñar sus señales cuando la excluyen todos los briefs activos, y ninguna cadencia de esos briefs le escribe.",
       creators: "En el brief de",
       creatorsHelp: "Con varios creadores, elige en qué briefs activos. Lo que uno no acepta, otro puede aceptarlo.",
       confirm: "No aceptarla",
@@ -687,10 +694,10 @@ export const MESSAGES = {
       excludedCategoriesHelp: "Alcohol, apuestas, suplementos… Sin importar tildes ni mayúsculas.",
       excludedCompanies: "Marcas que no aceptas",
       excludedCompaniesHelp:
-        "Busca entre las marcas de tu CRM: competencia de un cliente, una mala experiencia. Las que aún no están en tu CRM se excluyen desde su señal en el radar, con «No aceptar esta marca».",
+        "Busca entre las marcas de tu CRM: competencia de un cliente, una mala experiencia. Si no está, escribe su nombre o su dominio y elige «No aceptar…»: entra a tu CRM como bloqueada.",
       requiresDisclosure: "Divulgación obligatoria",
       requiresDisclosureHelp:
-        "No acepto contenido pagado sin la marca de publicidad de la red. Los mensajes de tus cadencias lo dicen siempre.",
+        "No aceptas contenido pagado sin la marca de publicidad de la red: tus cadencias lo dicen siempre.",
       notes: "Notas",
       notesHelp: "Lo que deben saber los mensajes que escriben las cadencias: «siempre con código propio y enlace rastreado».",
       active: "Aplicar el brief",
@@ -711,6 +718,17 @@ export const MESSAGES = {
       searchResults: (n: string, count: number) => (count === 1 ? "1 marca encontrada" : `${n} marcas encontradas`),
       searchError: "No se pudo buscar. Vuelve a intentarlo.",
       listLabel: (field: string) => `Elegidas en «${field}»`,
+      /**
+       * Lo escrito en «Marcas que no aceptas» que no es ninguna marca de la
+       * lista (VEN-7 r5): guardar no lo pierde en silencio, lo dice aquí.
+       */
+      unresolved: "Elige la marca de la lista o borra lo escrito.",
+      /** La marca no está en el CRM: se da de alta bloqueada con lo escrito (VEN-7 r5). */
+      createOption: (texto: string) => `No aceptar «${texto}»`,
+      createHint: "No está en tu CRM: elige «No aceptar…» para darla de alta como bloqueada.",
+      creating: "Dando de alta la marca…",
+      created: (name: string) => `${name} entró a tu CRM como bloqueada. Guarda el brief para aplicarlo.`,
+      createError: "No se pudo dar de alta la marca.",
     },
     /** Los formatos de entregable (rate_card_item.deliverable y DELIVERABLES de @mc/core). */
     deliverables: {
@@ -765,6 +783,7 @@ export const MESSAGES = {
     TooManyCompanies: (l) => `Son demasiadas marcas: hasta ${l.companies}.`,
     NoCreator: () => "Este espacio todavía no tiene un perfil de creador al que colgarle el brief.",
     UnknownCreator: () => "Ese creador no es de este espacio, o ya no existe. Vuelve a elegirlo.",
+    InvalidBrandName: () => "Escribe el nombre de la marca, con letras, en 120 caracteres o menos.",
     NoActiveBrief: () => "No hay ningún brief activo donde agregarla. Activa el brief primero.",
     SignalNotFound: () => "Esa señal ya no está en la bandeja.",
     SignalWithoutBrand: () => "Esta señal no dice de qué marca es: no hay nada que excluir.",

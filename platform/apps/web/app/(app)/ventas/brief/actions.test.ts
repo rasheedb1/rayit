@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const saveBrief = vi.fn();
 const searchBriefCompanies = vi.fn();
 const rejectSignalBrand = vi.fn();
+const rejectBrandByName = vi.fn();
 const revalidatePath = vi.fn();
 const puedeEditarElBrief = vi.fn();
 
@@ -23,12 +24,15 @@ vi.mock("@mc/db/queries/brief", async (original) => ({
   saveBrief: (...a: unknown[]) => saveBrief(...a),
   searchBriefCompanies: (...a: unknown[]) => searchBriefCompanies(...a),
 }));
-vi.mock("@mc/db/queries/ventas", () => ({ rejectSignalBrand: (...a: unknown[]) => rejectSignalBrand(...a) }));
+vi.mock("@mc/db/queries/ventas", () => ({
+  rejectSignalBrand: (...a: unknown[]) => rejectSignalBrand(...a),
+  rejectBrandByName: (...a: unknown[]) => rejectBrandByName(...a),
+}));
 
 import { BriefError } from "@mc/db/queries/brief";
 import { formatterFor } from "@/lib/format";
 import { MESSAGES } from "../_lib/messages";
-import { buscarMarcas, guardarBrief, noAceptarMarca } from "./actions";
+import { buscarMarcas, guardarBrief, noAceptarMarca, noAceptarMarcaNueva } from "./actions";
 import { briefLimitTexts } from "./limites";
 
 const LICORES = "00000009-0000-4000-8000-0000000b7c01";
@@ -208,5 +212,35 @@ describe("noAceptarMarca (VEN-7 r4)", () => {
     expect(await noAceptarMarca({}, fd({ signalId: "x" }))).toEqual({ message: E.SignalNotFound(L, null) });
     expect(await noAceptarMarca({}, fd({ signalId: SENAL, creatorIds: ["x"] }))).toEqual({ message: MESSAGES.brief.validacion.creatorUnknown });
     expect(rejectSignalBrand).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("noAceptarMarcaNueva (VEN-7 r5)", () => {
+  const NUEVA = "00000009-0000-4000-8000-0000000b7c09";
+
+  it("sin permiso no da de alta nada", async () => {
+    puedeEditarElBrief.mockResolvedValue(false);
+    expect(await noAceptarMarcaNueva("Bebidas Nube")).toEqual({ error: MESSAGES.brief.sinPermiso });
+    expect(rejectBrandByName).not.toHaveBeenCalled();
+  });
+
+  it("da de alta lo escrito y devuelve la etiqueta; si parece un dominio, también va como dominio", async () => {
+    puedeEditarElBrief.mockResolvedValue(true);
+    rejectBrandByName.mockReset().mockResolvedValue({ id: NUEVA, name: "Bebidas Nube", created: true, previousRelationship: null });
+    expect(await noAceptarMarcaNueva("  Bebidas Nube ")).toEqual({ result: { value: NUEVA, label: "Bebidas Nube" } });
+    expect(rejectBrandByName).toHaveBeenLastCalledWith({}, { name: "Bebidas Nube", domain: null });
+    await noAceptarMarcaNueva("https://www.bebidasnube.co");
+    expect(rejectBrandByName).toHaveBeenLastCalledWith({}, { name: "https://www.bebidasnube.co", domain: "https://www.bebidasnube.co" });
+    expect(revalidatePath).toHaveBeenCalledWith("/ventas", "layout");
+  });
+
+  it("un error de dominio vuelve con su frase; otro, con la genérica", async () => {
+    puedeEditarElBrief.mockResolvedValue(true);
+    rejectBrandByName.mockReset().mockRejectedValueOnce(new BriefError("InvalidBrandName"));
+    expect(await noAceptarMarcaNueva("¡!")).toEqual({ error: E.InvalidBrandName(L, null) });
+    rejectBrandByName.mockRejectedValueOnce(new Error("se cayó la base"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await noAceptarMarcaNueva("Bebidas Nube")).toEqual({ error: MESSAGES.brief.chips.createError });
+    log.mockRestore();
   });
 });

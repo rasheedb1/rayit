@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const guardarBrief = vi.fn();
 const buscarMarcas = vi.fn();
+const noAceptarMarcaNueva = vi.fn();
 vi.mock("./actions", () => ({
   guardarBrief: (...a: unknown[]) => guardarBrief(...a),
   buscarMarcas: (...a: unknown[]) => buscarMarcas(...a),
+  noAceptarMarcaNueva: (...a: unknown[]) => noAceptarMarcaNueva(...a),
 }));
 
 import { BRIEF_LIMITS } from "@mc/db/queries/brief";
@@ -79,6 +81,7 @@ beforeEach(() => {
   buscarMarcas.mockReset().mockImplementation(async (q: string) => ({
     results: CRM.filter((m) => m.label.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().includes(q.toLowerCase())),
   }));
+  noAceptarMarcaNueva.mockReset();
 });
 
 describe("BriefForm", () => {
@@ -93,7 +96,9 @@ describe("BriefForm", () => {
     const casilla = screen.getByRole("checkbox", { name: t.fields.requiresDisclosure });
     expect(within(screen.getByRole("region", { name: t.rejects.title })).getByRole("checkbox", { name: t.fields.requiresDisclosure })).toBe(casilla);
     expect(within(screen.getByRole("region", { name: t.wants.title })).queryByRole("checkbox", { name: t.fields.requiresDisclosure })).toBeNull();
-    expect(casilla).toHaveAccessibleDescription(/^No acepto contenido pagado sin la marca de publicidad de la red/);
+    expect(casilla).toHaveAccessibleDescription(t.fields.requiresDisclosureHelp);
+    // Le habla al creador de tú, como el resto del formulario (VEN-7 r5).
+    expect(t.fields.requiresDisclosureHelp).toMatch(/^No aceptas contenido pagado/);
   });
 
   it("los formatos y la disponibilidad dicen para qué sirven: las cadencias los usan al proponer (VEN-7 r4)", () => {
@@ -160,14 +165,15 @@ describe("BriefForm", () => {
     expect(screen.queryByRole("option", { name: "Licores del Sur" })).toBeNull();
   });
 
-  it("buscar marcas: con una letra lo pide, sin resultados lo dice, y el nombre exacto escrito viaja al guardar", async () => {
+  it("buscar marcas: con una letra lo pide, sin resultados ofrece darla de alta, y el nombre exacto escrito viaja al guardar", async () => {
     pintar();
     const marcas = screen.getByRole("combobox", { name: t.fields.excludedCompanies });
     fireEvent.change(marcas, { target: { value: "c" } });
     expect(screen.getByText(t.chips.searchMin("2"))).toBeInTheDocument();
     expect(buscarMarcas).not.toHaveBeenCalled();
     fireEvent.change(marcas, { target: { value: "zzz" } });
-    expect(await screen.findByText(t.chips.searchNone)).toBeInTheDocument();
+    // Sin ninguna en el CRM, lo dice y ofrece darla de alta (VEN-7 r5).
+    expect(await screen.findByText(t.chips.createHint)).toBeInTheDocument();
     // Escrito entero, sin tildes, y sin pulsar «Agregar»: viaja igual.
     fireEvent.change(marcas, { target: { value: "cafe montana" } });
     await screen.findByRole("option", { name: "Café Montaña" });
@@ -294,5 +300,101 @@ describe("BriefForm", () => {
     expect(screen.queryByRole("button", { name: t.chips.remove("alcohol") })).toBeNull();
     expect(screen.getByLabelText(t.fields.excludedCategories)).toBeDisabled();
     expect(screen.getByRole("list", { name: t.chips.listLabel(t.fields.excludedCategories) })).toHaveTextContent("alcohol");
+  });
+});
+
+describe("BriefForm: «Marcas que no aceptas» no pierde nada en silencio (VEN-7 r5)", () => {
+  const combo = () => screen.getByRole("combobox", { name: t.fields.excludedCompanies });
+  const elegidas = () =>
+    screen.queryByRole("list", { name: t.chips.listLabel(t.fields.excludedCompanies) })?.querySelectorAll("li") ?? [];
+
+  it("escribir «cafe mon» y pulsar Guardar: no se envía, el campo dice por qué, se lleva el foco y lo escrito se queda", async () => {
+    pintar();
+    fireEvent.change(combo(), { target: { value: "cafe mon" } });
+    await screen.findByRole("option", { name: "Café Montaña" });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.submit }));
+    });
+    expect(guardarBrief).not.toHaveBeenCalled();
+    expect(combo()).toHaveAttribute("aria-invalid", "true");
+    expect(combo()).toHaveAccessibleDescription(new RegExp(t.chips.unresolved.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    expect(screen.getByRole("alert")).toHaveTextContent(t.chips.unresolved);
+    expect(document.activeElement).toBe(combo());
+    expect(combo()).toHaveValue("cafe mon");
+
+    // Borrado lo escrito, el error se va y ya se puede guardar.
+    fireEvent.change(combo(), { target: { value: "" } });
+    expect(combo()).not.toHaveAttribute("aria-invalid");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.submit }));
+    });
+    expect(enviado().getAll("excludedCompanies")).toEqual([]);
+  });
+
+  it("nombre a medias + Enter no pierde lo escrito: con una sola marca la agrega; con varias abre la lista y no borra nada", async () => {
+    pintar();
+    fireEvent.change(combo(), { target: { value: "lic" } });
+    await screen.findByRole("option", { name: "Licores del Sur" });
+    fireEvent.keyDown(combo(), { key: "Enter" });
+    expect([...elegidas()].map((li) => li.textContent)).toEqual(["Licores del Sur"]);
+    expect(combo()).toHaveValue("");
+
+    // Dos marcas contienen «ma»: Enter no elige por nadie.
+    buscarMarcas.mockResolvedValueOnce({ results: [{ value: CAFE, label: "Café Montaña" }, { value: "otra", label: "Maíz Dorado" }] });
+    fireEvent.change(combo(), { target: { value: "ma" } });
+    const primera = await screen.findByRole("option", { name: "Café Montaña" });
+    fireEvent.keyDown(combo(), { key: "Escape" });
+    fireEvent.keyDown(combo(), { key: "Enter" });
+    expect(combo()).toHaveValue("ma");
+    expect(combo()).toHaveAttribute("aria-expanded", "true");
+    expect(combo()).toHaveAttribute("aria-activedescendant", primera.id);
+    expect([...elegidas()].map((li) => li.textContent)).toEqual(["Licores del Sur"]);
+    expect(guardarBrief).not.toHaveBeenCalled();
+  });
+
+  it("una marca que no está en el CRM se da de alta con «No aceptar «…»», entra como etiqueta y viaja al guardar", async () => {
+    const NUEVA = "00000009-0000-4000-8000-0000000b7c09";
+    noAceptarMarcaNueva.mockResolvedValue({ result: { value: NUEVA, label: "Bebidas Nube" } });
+    pintar();
+    fireEvent.change(combo(), { target: { value: "Bebidas Nube" } });
+    const crear = await screen.findByRole("option", { name: t.chips.createOption("Bebidas Nube") });
+    expect(screen.getByText(t.chips.createHint)).toBeInTheDocument();
+    // Enter sin marcar nada no la da de alta: solo la señala. El segundo Enter decide.
+    fireEvent.keyDown(combo(), { key: "Escape" });
+    fireEvent.keyDown(combo(), { key: "Enter" });
+    expect(noAceptarMarcaNueva).not.toHaveBeenCalled();
+    expect(combo()).toHaveAttribute("aria-activedescendant", crear.id);
+    await act(async () => {
+      fireEvent.keyDown(combo(), { key: "Enter" });
+    });
+    expect(noAceptarMarcaNueva).toHaveBeenCalledWith("Bebidas Nube");
+    expect([...elegidas()].map((li) => li.textContent)).toEqual(["Bebidas Nube"]);
+    expect(screen.getByText(t.chips.created("Bebidas Nube"))).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.submit }));
+    });
+    expect(enviado().getAll("excludedCompanies")).toEqual([NUEVA]);
+  });
+
+  it("si la marca no se puede dar de alta, lo dice y lo escrito se queda", async () => {
+    noAceptarMarcaNueva.mockResolvedValue({ error: t.chips.createError });
+    pintar();
+    fireEvent.change(combo(), { target: { value: "Bebidas Nube" } });
+    const crear = await screen.findByRole("option", { name: t.chips.createOption("Bebidas Nube") });
+    await act(async () => {
+      fireEvent.mouseDown(crear);
+    });
+    expect(screen.getByText(t.chips.createError)).toBeInTheDocument();
+    expect(combo()).toHaveValue("Bebidas Nube");
+    expect(elegidas()).toHaveLength(0);
+  });
+
+  it("el combobox apunta a una lista que existe y lo enlaza con el estado de la búsqueda", async () => {
+    pintar();
+    const lista = document.getElementById(combo().getAttribute("aria-controls") ?? "");
+    expect(lista).not.toBeNull();
+    expect(lista).toHaveAttribute("role", "listbox");
+    fireEvent.change(combo(), { target: { value: "c" } });
+    expect(combo()).toHaveAccessibleDescription(new RegExp(`${t.fields.excludedCompaniesHelp.slice(0, 20)}.*${t.chips.searchMin("2")}`));
   });
 });

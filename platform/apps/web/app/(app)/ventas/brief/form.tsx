@@ -9,7 +9,7 @@ import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
 import { Aviso } from "../../_lib/aviso";
 import { MESSAGES } from "../_lib/messages";
-import { buscarMarcas, guardarBrief, type BriefState } from "./actions";
+import { buscarMarcas, guardarBrief, noAceptarMarcaNueva, type BriefState } from "./actions";
 import { ListaDeEtiquetas, type Etiqueta } from "./lista-de-etiquetas";
 
 const t = MESSAGES.brief;
@@ -107,6 +107,14 @@ export function BriefForm({
   const [activo, setActivo] = useState(values.active);
   const errors = estado.errors ?? {};
   const f = t.fields;
+  /**
+   * «Marcas que no aceptas» con un nombre a medias (VEN-7 r5): no se
+   * envía, porque la marca no viajaría y «Guardado» haría creer que quedó
+   * excluida. El error se va solo cuando lo escrito se resuelve o se borra.
+   */
+  const [marcasSinResolver, setMarcasSinResolver] = useState(false);
+  const [marcasError, setMarcasError] = useState<string | undefined>();
+  const marcasRef = useRef<HTMLDivElement>(null);
 
   const avisoRef = useRef<HTMLDivElement>(null);
 
@@ -129,6 +137,11 @@ export function BriefForm({
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (marcasSinResolver) {
+      setMarcasError(t.chips.unresolved);
+      marcasRef.current?.querySelector<HTMLElement>('[role="combobox"]')?.focus();
+      return;
+    }
     const data = new FormData(event.currentTarget);
     startTransition(() => dispatch(data));
   }
@@ -247,15 +260,20 @@ export function BriefForm({
               saved={estado.stamp}
             />
           </div>
-          <div className="sm:col-span-2">
+          <div className="sm:col-span-2" ref={marcasRef}>
             <ListaDeEtiquetas
               name="excludedCompanies"
               mode="search"
               label={f.excludedCompanies}
               help={f.excludedCompaniesHelp}
-              error={errors.excludedCompanies}
+              error={marcasError ?? errors.excludedCompanies}
               initial={values.excludedCompanies}
               search={buscarMarcas}
+              create={noAceptarMarcaNueva}
+              onUnresolvedChange={(sinResolver) => {
+                setMarcasSinResolver(sinResolver);
+                if (!sinResolver) setMarcasError(undefined);
+              }}
               minChars={companySearchMin}
               locale={locale}
               max={limits.companies}
