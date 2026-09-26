@@ -28,7 +28,7 @@ const values: BriefFormValues = {
   active: true,
 };
 
-function pintar(over: Partial<BriefFormValues> = {}) {
+function pintar(over: Partial<BriefFormValues> = {}, editable = true) {
   return render(
     <BriefForm
       values={{ ...values, ...over }}
@@ -46,6 +46,7 @@ function pintar(over: Partial<BriefFormValues> = {}) {
         { value: CAFE, label: "Café Montaña" },
       ]}
       limits={BRIEF_LIMITS}
+      editable={editable}
     />,
   );
 }
@@ -90,7 +91,9 @@ describe("BriefForm", () => {
     pintar();
     fireEvent.click(screen.getByRole("button", { name: t.chips.remove("alimentos") }));
     fireEvent.change(screen.getByLabelText(t.fields.excludedCompanies), { target: { value: LICORES } });
+    fireEvent.click(screen.getByRole("button", { name: t.chips.addTo(t.fields.excludedCompanies) }));
     fireEvent.change(screen.getByLabelText(t.fields.wantedCountries), { target: { value: "MX" } });
+    fireEvent.keyDown(screen.getByLabelText(t.fields.wantedCountries), { key: "Enter" });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: t.submit }));
     });
@@ -141,5 +144,67 @@ describe("BriefForm", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(t.saved);
     // El nombre no se vació al guardar.
     expect(screen.getByLabelText(new RegExp(t.fields.title))).toHaveValue("Marcas de cocina");
+  });
+
+  it("lo escrito sin pulsar «Agregar» ni Enter viaja al guardar y pasa a la lista", async () => {
+    pintar();
+    // El caso del hallazgo: «bebidas» en «no aceptas», y directo a «Guardar».
+    fireEvent.change(screen.getByLabelText(t.fields.excludedCategories), { target: { value: " bebidas " } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.submit }));
+    });
+    expect(enviado().getAll("excludedCategories")).toEqual(["alcohol", "bebidas"]);
+    // Guardado: ya no es texto a medio escribir, es una etiqueta más.
+    const lista = screen.getByRole("list", { name: t.chips.listLabel(t.fields.excludedCategories) });
+    expect(within(lista).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["alcohol", "bebidas"]);
+    expect(screen.getByLabelText(t.fields.excludedCategories)).toHaveValue("");
+  });
+
+  it("lo escrito que ya está (en otra grafía) no se manda dos veces", async () => {
+    pintar();
+    fireEvent.change(screen.getByLabelText(t.fields.excludedCategories), { target: { value: "ALCOHOL" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.submit }));
+    });
+    expect(enviado().getAll("excludedCategories")).toEqual(["alcohol"]);
+  });
+
+  it("en un menú, recorrer las opciones no agrega nada: agrega «Agregar» o Enter", async () => {
+    pintar();
+    const paises = screen.getByLabelText(t.fields.wantedCountries);
+    const lista = () => screen.getByRole("list", { name: t.chips.listLabel(t.fields.wantedCountries) });
+    // Así llegan las flechas sobre un <select> cerrado en Windows y Linux: un change por opción.
+    fireEvent.change(paises, { target: { value: "MX" } });
+    fireEvent.change(paises, { target: { value: "" } });
+    fireEvent.change(paises, { target: { value: "MX" } });
+    expect(within(lista()).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["Colombia"]);
+
+    fireEvent.click(screen.getByRole("button", { name: t.chips.addTo(t.fields.wantedCountries) }));
+    expect(within(lista()).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["Colombia", "México"]);
+    expect(paises).toHaveValue("");
+    expect(screen.getByRole("button", { name: t.chips.addTo(t.fields.wantedCountries) })).toBeDisabled();
+  });
+
+  it("al quitar una etiqueta el foco pasa a la siguiente, y sin ninguna, al campo", () => {
+    pintar({ excludedCategories: ["alcohol", "apuestas"] });
+    fireEvent.click(screen.getByRole("button", { name: t.chips.remove("alcohol") }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: t.chips.remove("apuestas") }));
+    fireEvent.click(screen.getByRole("button", { name: t.chips.remove("apuestas") }));
+    expect(document.activeElement).toBe(screen.getByLabelText(t.fields.excludedCategories));
+  });
+
+  it("al quitar la última de varias, el foco va a la anterior", () => {
+    pintar({ excludedCategories: ["alcohol", "apuestas"] });
+    fireEvent.click(screen.getByRole("button", { name: t.chips.remove("apuestas") }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: t.chips.remove("alcohol") }));
+  });
+
+  it("sin permiso se ve entero, apagado y sin «Guardar», y dice por qué", () => {
+    pintar({}, false);
+    expect(screen.getByRole("note")).toHaveTextContent(t.sinPermiso);
+    expect(screen.queryByRole("button", { name: t.submit })).toBeNull();
+    expect(screen.queryByRole("button", { name: t.chips.remove("alcohol") })).toBeNull();
+    expect(screen.getByLabelText(t.fields.excludedCategories)).toBeDisabled();
+    expect(screen.getByRole("list", { name: t.chips.listLabel(t.fields.excludedCategories) })).toHaveTextContent("alcohol");
   });
 });

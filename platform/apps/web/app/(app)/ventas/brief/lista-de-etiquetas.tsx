@@ -176,9 +176,6 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
         </div>
       </Field>
 
-      {/* Lo que quedó escrito o elegido sin «Agregar» viaja igual al guardar. */}
-      {pendiente && <input type="hidden" name={name} value={pendiente.value} />}
-
       {elegidas.length === 0 ? (
         <p className="text-xs text-muted">{t.empty}</p>
       ) : (
@@ -207,6 +204,9 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
           ))}
         </ul>
       )}
+
+      {/* Lo que quedó escrito o elegido sin «Agregar» viaja igual al guardar, detrás de las elegidas. */}
+      {pendiente && <input type="hidden" name={name} value={pendiente.value} />}
     </div>
   );
 }

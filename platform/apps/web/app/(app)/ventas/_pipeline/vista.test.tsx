@@ -168,3 +168,27 @@ describe("PipelineView con la siguiente acción (VEN-4)", () => {
     expect(screen.queryByText(/Último contacto:|Sin contacto todavía|hace 3 días/)).toBeNull();
   });
 });
+
+describe("PipelineView con la conversión por etapa (VEN-8)", () => {
+  const conversion = [{ stageId: "propuesta", entered: 3, advanced: 1, rate: "0.3333" }];
+
+  it("en el tablero va bajo la cabecera de la columna abierta; la cerrada no lleva", () => {
+    render(<PipelineView deals={deals} stages={stages} conversion={conversion} f={f} forma="tablero" ctx={ctx} />);
+    const filas = screen.getAllByTestId("conversion-etapa");
+    expect(filas).toHaveLength(1);
+    expect(filas[0]).toHaveTextContent("de 3 negocios");
+    expect(filas[0]).toHaveAttribute("title", expect.stringMatching(/, uno llegó más lejos \(33\s?%\)\.$/));
+  });
+
+  it("en la lista también se ve, en un resumen por etapa encima de la tabla", () => {
+    render(<PipelineView deals={deals} stages={stages} conversion={conversion} f={f} forma="lista" ctx={ctx} />);
+    const resumen = screen.getByRole("region", { name: MESSAGES.pipeline.conversion.listTitle });
+    expect(within(resumen).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(resumen).getByTestId("conversion-etapa")).toHaveTextContent("de 3 negocios");
+  });
+
+  it("filtrada desde «Para hoy» no repite el resumen: la conversión es de todo el pipeline", () => {
+    render(<PipelineView deals={[deals[1]!]} stages={stages} conversion={conversion} f={f} forma="lista" filtro="sin_accion" ctx={ctx} />);
+    expect(screen.queryByTestId("conversion-resumen")).toBeNull();
+  });
+});

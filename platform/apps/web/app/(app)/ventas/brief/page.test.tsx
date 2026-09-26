@@ -10,7 +10,12 @@ import type { HiddenSignals, OutboundBrief } from "@mc/db/queries/brief";
  */
 const estado = vi.hoisted(() => ({
   brief: null as OutboundBrief | null,
-  owner: { id: "c1", displayName: "Laura Gómez" } as { id: string; displayName: string } | null,
+  owner: { id: "c1", displayName: "Laura Gómez", workspaceKind: "creator" } as {
+    id: string;
+    displayName: string;
+    workspaceKind: "creator" | "agency";
+  } | null,
+  editable: true,
   hidden: { total: 0, byCompany: 0, byCategory: 0 } as HiddenSignals,
 }));
 const formProps = vi.hoisted(() => ({ last: null as Record<string, unknown> | null }));
@@ -27,7 +32,7 @@ vi.mock("@/lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn
 vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ currency: "COP", locale: "es-CO", timezone: "America/Bogota" }),
 }));
-vi.mock("@/lib/permisos/modulo", () => ({ requirePagePermission: async () => {} }));
+vi.mock("./permiso", () => ({ puedeEditarElBrief: async () => estado.editable }));
 vi.mock("./form", () => ({
   BriefForm: (props: Record<string, unknown>) => {
     formProps.last = props;
@@ -62,7 +67,8 @@ const BRIEF: OutboundBrief = {
 
 beforeEach(() => {
   estado.brief = null;
-  estado.owner = { id: "c1", displayName: "Laura Gómez" };
+  estado.owner = { id: "c1", displayName: "Laura Gómez", workspaceKind: "creator" };
+  estado.editable = true;
   estado.hidden = { total: 0, byCompany: 0, byCategory: 0 };
   formProps.last = null;
 });
@@ -103,5 +109,24 @@ describe("la página del brief", () => {
     render(await BriefPage());
     expect(screen.getByText(t.noCreator.title)).toBeInTheDocument();
     expect(screen.queryByTestId("formulario")).toBeNull();
+  });
+
+  it("en una agencia el brief es del espacio, no de su primer creador", async () => {
+    estado.owner = { id: "c1", displayName: "Laura Gómez", workspaceKind: "agency" };
+    render(await BriefPage());
+    expect(screen.getByText(t.ofSpace)).toBeInTheDocument();
+    expect(screen.queryByText(t.of("Laura Gómez"))).toBeNull();
+  });
+
+  it("a quien no es owner ni admin le pasa el formulario de solo lectura", async () => {
+    estado.editable = false;
+    render(await BriefPage());
+    expect(formProps.last?.editable).toBe(false);
+  });
+
+  it("el texto no promete lo que no se cumple: ni «pitch», ni que «Qué buscas» filtre", () => {
+    const textos = [t.description, t.wants.help, t.rejects.help, t.fields.notesHelp, t.state.help].join(" ");
+    expect(textos).not.toMatch(/pitch/i);
+    expect(t.wants.help).toMatch(/no oculta ninguna señal/);
   });
 });
