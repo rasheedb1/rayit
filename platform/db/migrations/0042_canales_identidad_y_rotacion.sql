@@ -73,16 +73,31 @@ BEGIN
     IF NEW.secret_ref IS NOT NULL THEN escribe := escribe || 'secret_ref'::text; END IF;
     IF cardinality(NEW.scopes) > 0 THEN escribe := escribe || 'scopes'::text; END IF;
     IF NEW.provider_identity IS NOT NULL THEN escribe := escribe || 'provider_identity'::text; END IF;
+    IF NEW.warmup_started_at IS NOT NULL THEN escribe := escribe || 'warmup_started_at'::text; END IF;
+    IF NEW.last_ok_at IS NOT NULL THEN escribe := escribe || 'last_ok_at'::text; END IF;
   ELSE
-    IF NEW.status IS DISTINCT FROM OLD.status AND NEW.status NOT IN ('pending', 'disconnected') THEN
+    -- Desde la web el estado solo va a 'disconnected': volver a
+    -- 'pending' una cuenta que ya se autenticó la dejaría borrable
+    -- (outreach_channel_account_keep_live) y con ella sus contadores.
+    IF NEW.status IS DISTINCT FROM OLD.status AND NEW.status <> 'disconnected' THEN
       escribe := escribe || 'status'::text;
     END IF;
+    -- channel y provider son la identidad de la cuenta: cambiarlos saca
+    -- el buzón del índice global (provider, provider_account_id) con la
+    -- credencial de otro proveedor dentro.
+    IF NEW.channel IS DISTINCT FROM OLD.channel THEN escribe := escribe || 'channel'::text; END IF;
+    IF NEW.provider IS DISTINCT FROM OLD.provider THEN escribe := escribe || 'provider'::text; END IF;
     IF NEW.provider_account_id IS DISTINCT FROM OLD.provider_account_id THEN
       escribe := escribe || 'provider_account_id'::text;
     END IF;
     IF NEW.secret_ref IS DISTINCT FROM OLD.secret_ref THEN escribe := escribe || 'secret_ref'::text; END IF;
     IF NEW.scopes IS DISTINCT FROM OLD.scopes THEN escribe := escribe || 'scopes'::text; END IF;
     IF NEW.provider_identity IS DISTINCT FROM OLD.provider_identity THEN escribe := escribe || 'provider_identity'::text; END IF;
+    -- El calentamiento y la última vez que el proveedor respondió bien los
+    -- escribe quien habló con él: moverlos saltaba el calentamiento de
+    -- VEN-15 o pintaba sana una cuenta que no lo está.
+    IF NEW.warmup_started_at IS DISTINCT FROM OLD.warmup_started_at THEN escribe := escribe || 'warmup_started_at'::text; END IF;
+    IF NEW.last_ok_at IS DISTINCT FROM OLD.last_ok_at THEN escribe := escribe || 'last_ok_at'::text; END IF;
   END IF;
   IF cardinality(escribe) = 0 OR outreach_is_dispatcher() THEN
     RETURN NEW;
@@ -98,7 +113,8 @@ $$;
 
 DROP TRIGGER outreach_channel_account_worker_columns ON outreach_channel_account;
 CREATE TRIGGER outreach_channel_account_worker_columns
-  BEFORE INSERT OR UPDATE OF status, provider_account_id, secret_ref, scopes, provider_identity ON outreach_channel_account
+  BEFORE INSERT OR UPDATE OF status, provider_account_id, secret_ref, scopes, provider_identity, channel, provider, warmup_started_at, last_ok_at
+  ON outreach_channel_account
   FOR EACH ROW EXECUTE FUNCTION outreach_channel_account_worker_columns();
 
 

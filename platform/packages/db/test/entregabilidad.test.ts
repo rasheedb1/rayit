@@ -544,6 +544,9 @@ describe('la política editable', () => {
   });
 
   test('encendida, no se puede quitar la dirección postal', async () => {
+    // Sin un canal conectado no se enciende (0037 §8.5): el callback conecta el Gmail del creador.
+    await t.admin(`INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, status)
+                   VALUES ('${WS_O}', 'email', 'gmail_oauth', 'otro@creador.test', 'connected')`);
     await t.db.withWorkspace(WS_O, (tx) => enableOutreach(tx));
     const p = await t.db.withWorkspace(WS_O, (tx) => getOutboundPolicy(tx));
     assert.equal(p.enabled, true);
@@ -646,7 +649,7 @@ describe('la política editable', () => {
       await t.admin(`
         INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, display_name, status,
                                               last_error, last_error_at) VALUES
-          ('${WS_O}', 'email', 'gmail_oauth', 'otro@creador.test', NULL, 'connected', NULL, NULL),
+          -- El Gmail conectado ya está: lo conectó «encendida, no se puede quitar la dirección postal».
           ('${WS_O}', 'linkedin', 'unipile', 'unipile-otro', 'Otro creador (LinkedIn)', 'needs_reconnect',
            'unipile_status:CREDENTIALS', now() - interval '1 hour');
       `);

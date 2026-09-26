@@ -60,7 +60,9 @@ export const LIVE_CHANNEL_ACCOUNT_STATUSES = ['connected', 'needs_reconnect', 'e
  * 'disconnected'; el disparador outreach_channel_account_worker_columns
  * rechaza lo demás con 42501.
  */
-export const WORKER_ONLY_CHANNEL_ACCOUNT_COLUMNS = ['status', 'provider_account_id', 'secret_ref', 'scopes'] as const;
+export const WORKER_ONLY_CHANNEL_ACCOUNT_COLUMNS = [
+  'status', 'provider_account_id', 'secret_ref', 'scopes', 'channel', 'provider', 'warmup_started_at', 'last_ok_at',
+] as const;
 /**
  * El techo de daily_cap y weekly_cap por canal (§5.1): lo que el
  * proveedor aguanta antes de castigar la cuenta. La base lo exige a
@@ -69,11 +71,21 @@ export const WORKER_ONLY_CHANNEL_ACCOUNT_COLUMNS = ['status', 'provider_account_
  * debajo, el tope es de la persona.
  */
 export const CHANNEL_CAP_LIMITS = {
+  /** El de Google Workspace. Un Gmail personal tiene el suyo: PERSONAL_EMAIL_CAP_LIMITS. */
   email: { daily: 2000, weekly: 10000 },
   linkedin: { daily: 100, weekly: 200 },
   instagram_dm: { daily: 100, weekly: 700 },
   whatsapp: { daily: 100, weekly: 700 },
 } as const satisfies Record<(typeof OUTBOUND_CHANNELS)[number], { daily: number; weekly: number }>;
+/**
+ * El techo de un Gmail PERSONAL (@gmail.com, @googlemail.com): 500 al
+ * día, el cupo oficial de Google para una cuenta gratuita, y siete días
+ * de eso a la semana. El mismo CHECK de 0037 §2 y la misma regla que la
+ * vista outreach_channel_account_limits (personal_mailbox).
+ */
+export const PERSONAL_EMAIL_CAP_LIMITS = { daily: 500, weekly: 3500 } as const;
+/** Los dominios de un buzón personal de Google, en minúsculas. */
+export const PERSONAL_EMAIL_DOMAINS = ['gmail.com', 'googlemail.com'] as const;
 /** 'bounced' (0051 §7): la dirección rebotó al enviar y no le quedaba nada vivo. Terminal, como completed. */
 export const ENROLLMENT_STATUSES = ['active', 'paused', 'completed', 'replied', 'opted_out', 'cooldown', 'bounced'] as const;
 export const MESSAGE_DIRECTIONS = ['inbound', 'outbound'] as const;
