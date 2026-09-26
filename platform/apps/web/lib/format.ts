@@ -348,17 +348,23 @@ export function formatDateTime(iso: string, opts: LocaleOpts = {}): string {
 
 /**
  * Fecha y hora cortas de un instante, en el locale y la zona pedidos:
- * "25 sept, 7:31 p. m." en es-CO, "Sep 25, 7:31 PM" en en-US. Para una
+ * "25 sep, 7:31 p. m." en es-CO, "Sep 25, 7:31 PM" en en-US. Para una
  * fila de lista a 400 px, donde el formato largo ("25 de septiembre de
  * 2026, 7:31 p. m.") parte la hora en dos líneas; el largo va en el
  * `title` o en el detalle.
  *
+ * El mes es el mismo de formatDate("short"): tres letras sin punto
+ * ("sep", no "sept." ni "sept"), y sin el "de" que Intl pone en español
+ * entre el día y el mes (pulido r2: la actividad decía "25 de sept", el
+ * radar "25 sep" y la ficha otra cosa para el mismo instante). El orden
+ * y la hora siguen siendo los del locale.
+ *
  * Sin año mientras el instante es del año en curso EN LA ZONA pedida;
- * con él ("25 sept 2025, 7:31 p. m.") si es de otro: una lista que se
+ * con él ("25 sep 2025, 7:31 p. m.") si es de otro: una lista que se
  * pagina hacia atrás sin límite no puede enseñar igual un envío de esta
  * semana y uno del año pasado. `now` es el reloj con el que se compara
  * (por defecto, el de ahora; las pruebas lo fijan). Añadido por la
- * actividad del outreach (VEN-16); no cambia nada de lo que ya había.
+ * actividad del outreach (VEN-16).
  */
 export function formatDateTimeShort(iso: string, opts: LocaleOpts & { now?: Date } = {}): string {
   const locale = opts.locale ?? DEFAULT_LOCALE;
@@ -366,11 +372,21 @@ export function formatDateTimeShort(iso: string, opts: LocaleOpts & { now?: Date
   const at = utcDate(iso);
   const yearOf = (d: Date) => dateFormat("en-US", { year: "numeric", timeZone }).format(d);
   const otherYear = yearOf(at) !== yearOf(opts.now ?? new Date());
-  return plain(
-    dateFormat(locale, {
-      day: "numeric", month: "short", ...(otherYear ? { year: "numeric" } : {}), hour: "numeric", minute: "2-digit", timeZone,
-    }).format(at),
-  );
+  const parts = dateFormat(locale, {
+    day: "numeric", month: "short", ...(otherYear ? { year: "numeric" } : {}), hour: "numeric", minute: "2-digit", timeZone,
+  }).formatToParts(at);
+  const fecha = new Set<string>(["day", "month", "year"]);
+  const texto = parts
+    .map((part, i) => {
+      if (part.type === "month") return part.value.replace(".", "").slice(0, 3);
+      // «24 de sept de 2025» → «24 sep 2025»: el "de" solo entre partes de la fecha.
+      const antes = parts[i - 1]?.type;
+      const despues = parts[i + 1]?.type;
+      if (part.type === "literal" && part.value.trim() === "de" && antes && despues && fecha.has(antes) && fecha.has(despues)) return " ";
+      return part.value;
+    })
+    .join("");
+  return plain(texto);
 }
 
 /**

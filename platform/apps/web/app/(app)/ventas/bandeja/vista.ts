@@ -303,7 +303,7 @@ export function conversacionVista(
         noEsLaFicha: tercero ? t.conversacion.noEsLaFicha(persona) : null,
         asunto: m.subject,
         cuerpo: m.body,
-        cuando: f.dateTime(m.occurredAt.toISOString()),
+        cuando: f.dateTimeShort(m.occurredAt.toISOString()),
         intencion: entrante ? intencionClave(m.intent) : null,
         clasificacion,
         porque: entrante && m.intentReason ? t.conversacion.porque(m.intentReason) : null,

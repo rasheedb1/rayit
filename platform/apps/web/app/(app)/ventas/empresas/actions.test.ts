@@ -148,7 +148,7 @@ describe("fijarSiguienteAccion", () => {
     const r = await fijarSiguienteAccion({}, form(accion));
     // Dice dónde quedó, en la zona del espacio: 14:30 UTC son las 9:30 en Bogotá.
     const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
-    const dueText = `${f.date("2026-09-24T14:30:00Z")} · ${f.time("2026-09-24T14:30:00Z")}`;
+    const dueText = f.dateTimeShort("2026-09-24T14:30:00Z");
     expect(r).toMatchObject({ ok: true, notice: FICHA.siguiente.savedFor(dueText) });
     // Y lo que quedó, escrito como lo pinta la línea: el aviso se enseña solo mientras la línea pinte eso.
     expect(r.saved).toEqual({ action: "Llamar a Sofía", dueText });

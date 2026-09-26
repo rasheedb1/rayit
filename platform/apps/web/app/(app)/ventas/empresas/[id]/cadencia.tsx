@@ -56,7 +56,7 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
 
   const canal = (x: CadenceTouch) => t.canales[x.channel] ?? x.channel;
   const cuando = (x: CadenceTouch) =>
-    x.sentAt ? t.salio(f.dateTime(x.sentAt.toISOString())) : x.scheduledFor ? t.sale(f.dateTime(x.scheduledFor.toISOString())) : "";
+    x.sentAt ? t.salio(f.dateTimeShort(x.sentAt.toISOString())) : x.scheduledFor ? t.sale(f.dateTimeShort(x.scheduledFor.toISOString())) : "";
 
   // Dos columnas, para que a 400 px se lea sin mover la tabla: quién, por
   // dónde y cuándo en la primera (lo primero que busca la creadora), y el
@@ -92,7 +92,7 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
             </span>
             {x.reply && (
               <p className="text-xs text-ink-2">
-                {t.respondio(f.dateTime(x.reply.occurredAt.toISOString()))}{" "}
+                {t.respondio(f.dateTimeShort(x.reply.occurredAt.toISOString()))}{" "}
                 <q className="text-ink">{recortar(x.reply.body)}</q>
               </p>
             )}

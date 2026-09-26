@@ -183,7 +183,7 @@ describe("MensajesDeCadencia", () => {
   it("a 400 px se lee sin mover la tabla: canal y hora bajo el nombre, en dos columnas", () => {
     render(<MensajesDeCadencia companyId={COMPANY} f={f} touches={[toque({})]} />);
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([t.columnas.persona, t.columnas.estado]);
-    expect(screen.getByText(t.linea("Correo", t.sale(f.dateTime("2026-09-25T15:30:00.000Z"))))).toBeInTheDocument();
+    expect(screen.getByText(t.linea("Correo", t.sale(f.dateTimeShort("2026-09-25T15:30:00.000Z"))))).toBeInTheDocument();
   });
 
   it("«Revisar y aprobar» lleva el foco al asunto y, al cerrar, lo devuelve al botón", () => {

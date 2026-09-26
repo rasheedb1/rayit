@@ -92,7 +92,7 @@ export function filaVista(item: ApprovalItem, f: Formatter): FilaVista {
     fichaHref: `/ventas/empresas/${item.companyId}#cadencia`,
     paso,
     canal,
-    sale: item.scheduledFor ? t.fila.sale(f.dateTime(item.scheduledFor.toISOString())) : null,
+    sale: item.scheduledFor ? t.fila.sale(f.dateTimeShort(item.scheduledFor.toISOString())) : null,
     procedencia: item.contactSource ? t.fila.procedencia(SOURCE_META[item.contactSource].label) : null,
     subject: item.subject,
     body: item.body,

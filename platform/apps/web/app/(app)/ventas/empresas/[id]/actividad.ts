@@ -63,7 +63,7 @@ export function vistaDeActividad(rows: ActivityRow[], companyName: string, f: Fo
       subject: a.subject,
       author: autorDeActividad(a.kind, a.userName),
       occurredAt: a.occurredAt,
-      when: a.meta.timeUnknown ? f.date(a.occurredAt) : `${f.date(a.occurredAt)} · ${f.time(a.occurredAt)}`,
+      when: a.meta.timeUnknown ? f.date(a.occurredAt) : f.dateTimeShort(a.occurredAt),
       detail: detalle.length > 0 ? detalle.join(" · ") : null,
       body: a.body,
       reason: motivo(a.meta.lostReason),
