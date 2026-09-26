@@ -38,7 +38,7 @@ export const MESSAGES = {
     back: "Volver a Ventas",
   },
   loading: { label: "Cargando la bandeja de aprobación" },
-  error: "No pudimos cargar la bandeja de aprobación.",
+  error: { eyebrow: "Ventas · aprobaciones", title: "No pudimos cargar la bandeja de aprobación." },
 
   contador: (n: string, cuantos: number) => `${n} ${plural(cuantos, "mensaje espera", "mensajes esperan")} tu aprobación`,
   vacio: {
@@ -120,7 +120,6 @@ export const MESSAGES = {
 
   acciones: {
     aprobar: "Aprobar",
-    aprobarLabel: (persona: string) => `Aprobar el mensaje a ${persona}`,
     editar: "Editar y aprobar",
     regenerar: "Regenerar",
     saltar: "Saltar",
@@ -145,8 +144,6 @@ export const MESSAGES = {
     saltarConfirmar: "Sí, saltar",
     resolverEnLaFicha: "Resolver en la ficha",
     resolverAyuda: "No sabemos si el intento anterior salió: dilo en la ficha para no mandarlo dos veces.",
-    verFicha: "Ver la ficha",
-    noRegenerable: "Solo los correos de una cadencia se pueden pedir de nuevo a la IA.",
   },
 
   avisos: {
