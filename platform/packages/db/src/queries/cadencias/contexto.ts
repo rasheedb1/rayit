@@ -50,13 +50,6 @@ export interface ContactOption {
 }
 
 /**
- * Las columnas de una persona para elegirla: qué direcciones tiene, si
- * está de baja y en qué otra cadencia sigue viva. `ws` es el espacio de
- * la transacción (lo pone quien llama, nunca la pantalla); `except`, la
- * cadencia que no cuenta como «otra» (o NULL). Una sola definición para
- * la propuesta y para enrolar.
- */
-/**
  * Si la persona `c` está de baja: la ficha, la lista global de
  * direcciones, un enrolamiento que terminó en baja o el enlace de baja de
  * un correo de este espacio (outbound_workspace_optout, la que el
@@ -68,6 +61,13 @@ const OPTED_OUT_EXPR = (ws: string) => `(c.opted_out OR address_is_suppressed(c.
               OR EXISTS (SELECT 1 FROM outbound_workspace_optout o
                           WHERE o.workspace_id = ${ws} AND o.email = c.email))`;
 
+/**
+ * Las columnas de una persona para elegirla: qué direcciones tiene, si
+ * está de baja y en qué otra cadencia sigue viva. `ws` es el espacio de
+ * la transacción (lo pone quien llama, nunca la pantalla); `except`, la
+ * cadencia que no cuenta como «otra» (o NULL). Una sola definición para
+ * la propuesta y para enrolar.
+ */
 const CONTACT_OPTION_COLUMNS = (ws: string, except: string, live: string) => `c.id, c.full_name, c.role_title,
             (c.email IS NOT NULL AND NOT c.email_invalid) AS has_email,
             (c.linkedin_url IS NOT NULL AND c.linkedin_url <> '') AS has_linkedin,

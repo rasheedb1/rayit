@@ -5,7 +5,7 @@
  * regla que el recomendador, y la guía de cada paso que cambió de tipo
  * recompuesta si no la escribió la persona.
  */
-import { composeStepGuidance, DISPATCHABLE_STEP_TYPES, type GuidanceSource } from '@mc/core';
+import { composeStepGuidance, DISPATCHABLE_STEP_TYPES, guidanceAfterMove, type GuidanceSource, type StepGuidance } from '@mc/core';
 import type { WorkspaceTx } from '../../client.ts';
 import type { StepType } from '../../schema/outreach.ts';
 import {
@@ -296,6 +296,11 @@ export async function deleteStep(tx: WorkspaceTx, stepId: string): Promise<void>
  * ninguno final: (día, 20 − orden). Los órdenes finales son los de
  * siempre (0–8, MAX_STEPS_PER_DAY los deja en 0–3) y los provisionales
  * quedan en 12–20.
+ *
+ * La guía de cada paso que cambió de puesto se recompone si la escribió
+ * la plantilla o el modelo (guidanceAfterMove): sabían qué iba antes, y
+ * un directo que dice «No repitas la audiencia del correo» arrastrado al
+ * día 0 hablaría de un correo que no ha salido. La de la persona se queda.
  */
 export async function reorderSteps(tx: WorkspaceTx, sequenceId: string, orderedIds: readonly string[]): Promise<void> {
   const seq = await lockSequence(tx, sequenceId);
@@ -310,11 +315,21 @@ export async function reorderSteps(tx: WorkspaceTx, sequenceId: string, orderedI
     `UPDATE outbound_step SET order_in_day = 20 - order_in_day WHERE sequence_id = $1::uuid`,
     [sequenceId],
   );
+  const byId = new Map(current.map((s) => [s.id, s]));
+  let ctx: Awaited<ReturnType<typeof guidanceContextOf>> | null = null;
   for (const [k, id] of orderedIds.entries()) {
     const slot = current[k]!;
+    const step = byId.get(id)!;
+    let g: StepGuidance = { guidance: step.guidanceEs, source: step.guidanceSource, writtenFor: step.guidanceWrittenFor };
+    if (slot.id !== id) {
+      ctx ??= await guidanceContextOf(tx, sequenceId);
+      g = guidanceAfterMove({ ...g, angleKey: step.angleKey }, step.stepType, ctx);
+    }
     await tx.query(
-      `UPDATE outbound_step SET day_offset = $2::int, order_in_day = $3::int WHERE id = $1::uuid`,
-      [id, slot.dayOffset, slot.orderInDay],
+      `UPDATE outbound_step SET day_offset = $2::int, order_in_day = $3::int, guidance_es = $4, guidance_source = $5,
+              guidance_for_type = $6
+        WHERE id = $1::uuid`,
+      [id, slot.dayOffset, slot.orderInDay, g.guidance, g.guidance === null ? null : g.source, g.guidance === null ? null : g.writtenFor],
     );
   }
   // El paso que abría el hilo puede quedar segundo, y una respuesta primera: el hilo y su guía se rehacen.

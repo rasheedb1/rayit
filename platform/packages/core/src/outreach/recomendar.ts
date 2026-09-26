@@ -51,7 +51,7 @@ import { GUIDANCE_PHRASES, type GuidanceLocale } from './guidance-phrases.ts';
 import {
   RECOMMEND_CHANNELS, type ProposalNote, type RecommendChannel, type RecommendSignalKind, type RerouteReason,
 } from './proposal-notes.ts';
-import { DISPATCHABLE_STEP_TYPES, type SequencePolicy } from './sequence-policy.ts';
+import { DISPATCHABLE_STEP_TYPES, isTextlessStep, type SequencePolicy } from './sequence-policy.ts';
 import { normalizeThread } from './thread.ts';
 
 /** El último día al que se puede poner un paso (CHECK de outbound_step.day_offset, 0037). */
@@ -477,6 +477,24 @@ export function guidanceAfterRetype(
   };
 }
 
+/**
+ * La guía de un paso que cambió de puesto en la secuencia (se reordenó).
+ * La de la plantilla y la del modelo se escribieron sabiendo qué iba
+ * antes («No repitas la audiencia del correo»): en otro puesto pueden
+ * hablar de un mensaje que todavía no salió, así que se recomponen con
+ * las reglas, que no dependen del puesto. La de las reglas queda igual
+ * (se recompone a lo mismo) y la de la persona no se toca.
+ */
+export function guidanceAfterMove(
+  current: StepGuidance & { angleKey: string | null },
+  stepType: string,
+  ctx: { signalKind: RecommendSignalKind; locale?: GuidanceLocale; requiresDisclosure: boolean },
+): StepGuidance {
+  const { guidance, source, writtenFor } = current;
+  if (guidance === null || source === 'person' || source === null) return { guidance, source, writtenFor };
+  return { guidance: composeStepGuidance(current.angleKey, stepType, ctx), source: 'rules', writtenFor: stepType };
+}
+
 /** La guía se escribió para otro tipo de paso y nadie la ha revisado desde entonces. */
 export function guidanceIsStale(g: Pick<StepGuidance, 'guidance' | 'writtenFor'>, stepType: string): boolean {
   return g.guidance !== null && g.writtenFor !== null && g.writtenFor !== stepType;
@@ -718,6 +736,22 @@ export interface GuidanceWriterResult {
 
 export type GuidanceWriter = (req: GuidanceRequest) => Promise<GuidanceWriterResult>;
 
+/**
+ * El redactor falló, pero la API pudo haber procesado (y cobrado) la
+ * petición: un tiempo de espera del cliente o un corte de red mientras
+ * llegaba la respuesta. `usage` es una cota superior de lo gastado, para
+ * que el tope diario (llm_daily_cap_usd) nunca cuente de menos; null si
+ * la petición seguro no se cobró.
+ */
+export class GuidanceWriterError extends Error {
+  readonly usage: LlmUsage | null;
+  constructor(message: string, usage: LlmUsage | null, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'GuidanceWriterError';
+    this.usage = usage;
+  }
+}
+
 /** Por qué una guía del modelo no sirve, o null si sirve. */
 export function guidanceProblem(text: string): 'too_short' | 'too_long' | 'placeholders' | null {
   const t = text.trim();
@@ -731,18 +765,33 @@ export interface RefineResult {
   proposal: Proposal;
   /** 'llm' si al menos un paso quedó con la guía del modelo. */
   source: 'llm' | 'rules';
-  /** La llamada que hay que registrar (null si no hubo). */
+  /**
+   * La llamada que hay que registrar (null si no hubo). Si el redactor
+   * falló después de que la API pudo cobrar, la cota que dio
+   * GuidanceWriterError: el tope diario no cuenta de menos.
+   */
   usage: LlmUsage | null;
-  /** Cuántos pasos se quedaron con la guía de reglas porque la del modelo no servía o no llegó. */
+  /**
+   * Cuántos pasos de mensaje se quedaron con la guía de reglas porque la
+   * del modelo no servía o no llegó. Los pasos sin texto no cuentan: al
+   * modelo no se le piden.
+   */
   keptRules: number;
   /** El redactor lanzó (red, API caída): todo queda con reglas. */
   failed: boolean;
 }
 
 /**
- * Pide al redactor la guía de cada paso y se queda con la que sirve.
- * Los días, los canales y los ángulos no cambian; la divulgación del
- * brief se vuelve a añadir aunque el modelo la haya olvidado.
+ * Pide al redactor la guía de cada paso de mensaje y se queda con la que
+ * sirve. Los días, los canales y los ángulos no cambian; la divulgación
+ * del brief se vuelve a añadir aunque el modelo la haya olvidado.
+ *
+ * Los pasos que hace una persona (TEXTLESS_STEP_TYPES: comentario,
+ * reacción, tarea a mano) no se le mandan al modelo y conservan su guía
+ * de plantilla o de reglas: «lo que hace una persona no lleva texto, en
+ * ninguna capa» (§5.5), y un modelo que le añade «cierra con una
+ * pregunta» a una reacción le da una orden imposible a quien la hace. Si
+ * un redactor devolviera texto para uno de esos pasos, se descarta.
  */
 export async function refineGuidance(
   proposal: Proposal,
@@ -763,7 +812,7 @@ export async function refineGuidance(
     briefNotes: ctx.briefNotes,
     ...(ctx.briefOffer && ctx.briefOffer.length > 0 ? { briefOffer: ctx.briefOffer } : {}),
     requiresDisclosure: ctx.requiresDisclosure,
-    steps: proposal.steps.map((s, index) => ({
+    steps: proposal.steps.flatMap((s, index) => isTextlessStep(s.stepType) ? [] : [{
       index,
       dayOffset: s.dayOffset,
       stepType: s.stepType,
@@ -772,14 +821,18 @@ export async function refineGuidance(
       angleLabel: (s.angleKey && ctx.angles[s.angleKey]?.label) || null,
       forbidden: (s.angleKey && ctx.angles[s.angleKey]?.forbidden) || [],
       draft: s.guidanceEs,
-    })),
+    }]),
   };
+  const asked = request.steps.length;
+  // Sin pasos de mensaje no hay nada que pedirle al modelo: ni llamada ni gasto.
+  if (asked === 0) return { proposal, source: 'rules', usage: null, keptRules: 0, failed: false };
 
   let result: GuidanceWriterResult;
   try {
     result = await writer(request);
-  } catch {
-    return { proposal, source: 'rules', usage: null, keptRules: proposal.steps.length, failed: true };
+  } catch (e) {
+    const usage = e instanceof GuidanceWriterError ? e.usage : null;
+    return { proposal, source: 'rules', usage, keptRules: asked, failed: true };
   }
 
   const byIndex = new Map<number, string>();
@@ -788,6 +841,7 @@ export async function refineGuidance(
   }
   let keptRules = 0;
   const steps = proposal.steps.map((s, i) => {
+    if (isTextlessStep(s.stepType)) return s;
     const text = byIndex.get(i);
     if (text === undefined || guidanceProblem(text) !== null) {
       keptRules++;
@@ -801,7 +855,7 @@ export async function refineGuidance(
   });
   return {
     proposal: { ...proposal, steps },
-    source: keptRules < proposal.steps.length ? 'llm' : 'rules',
+    source: keptRules < asked ? 'llm' : 'rules',
     usage: result.usage,
     keptRules,
     failed: false,

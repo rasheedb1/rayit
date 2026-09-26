@@ -24,7 +24,8 @@ vi.mock("@mc/db/queries/brief", async (original) => ({
   saveBrief: (...a: unknown[]) => saveBrief(...a),
   searchBriefCompanies: (...a: unknown[]) => searchBriefCompanies(...a),
 }));
-vi.mock("@mc/db/queries/ventas", () => ({
+vi.mock("@mc/db/queries/ventas", async (original) => ({
+  normalizeDomain: (await original<typeof import("@mc/db/queries/ventas")>()).normalizeDomain,
   rejectSignalBrand: (...a: unknown[]) => rejectSignalBrand(...a),
   rejectBrandByName: (...a: unknown[]) => rejectBrandByName(...a),
 }));
@@ -229,8 +230,10 @@ describe("noAceptarMarcaNueva (VEN-7 r5)", () => {
     rejectBrandByName.mockReset().mockResolvedValue({ id: NUEVA, name: "Bebidas Nube", created: true, previousRelationship: null });
     expect(await noAceptarMarcaNueva("  Bebidas Nube ")).toEqual({ result: { value: NUEVA, label: "Bebidas Nube" } });
     expect(rejectBrandByName).toHaveBeenLastCalledWith({}, { name: "Bebidas Nube", domain: null });
-    await noAceptarMarcaNueva("https://www.bebidasnube.co");
-    expect(rejectBrandByName).toHaveBeenLastCalledWith({}, { name: "https://www.bebidasnube.co", domain: "https://www.bebidasnube.co" });
+    // Una URL: el dominio limpio es el dominio y también el nombre visible, no «https://www…/tienda».
+    rejectBrandByName.mockResolvedValueOnce({ id: NUEVA, name: "cafemonte.co", created: true, previousRelationship: null });
+    expect(await noAceptarMarcaNueva("https://www.cafemonte.co/tienda")).toEqual({ result: { value: NUEVA, label: "cafemonte.co" } });
+    expect(rejectBrandByName).toHaveBeenLastCalledWith({}, { name: "cafemonte.co", domain: "cafemonte.co" });
     expect(revalidatePath).toHaveBeenCalledWith("/ventas", "layout");
   });
 

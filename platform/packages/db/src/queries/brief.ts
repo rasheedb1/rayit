@@ -411,7 +411,8 @@ function assertRef(fn: string, ref: string, param = false): void {
 }
 
 /** Las columnas de la empresa que el veredicto mira, en el orden de bv_emp. */
-const EMP_COLS = 'bv_co.id, bv_co.name, bv_co.industry, bv_co.niche_slugs, bv_co.country::text AS country';
+const EMP_COLS =
+  'bv_co.id, bv_co.name, bv_co.name_key, bv_co.domain::text AS domain, bv_co.industry, bv_co.niche_slugs, bv_co.country::text AS country';
 
 /**
  * La empresa de la señal `s`, con la regla de resolveCompany
@@ -421,10 +422,14 @@ const EMP_COLS = 'bv_co.id, bv_co.name, bv_co.industry, bv_co.niche_slugs, bv_co
  *   · si no, por dominio, si la señal trae uno (el dominio es único en el
  *     catálogo y dentro de cada dueño: es la misma marca; normalizeDomain
  *     lo guarda en minúsculas y así se busca);
- *   · si tampoco, por nombre (brand_key: «Nutrivé» = «NUTRIVE»), pero
- *     solo entre las empresas del CRM de este workspace (company_link):
- *     fuera del CRM un nombre no basta, dos «Alma» de dos países no son
- *     la misma marca.
+ *   · por nombre (brand_key: «Nutrivé» = «NUTRIVE»), pero solo entre
+ *     las empresas del CRM de este workspace (company_link): fuera del
+ *     CRM un nombre no basta, dos «Alma» de dos países no son la misma
+ *     marca. Si la señal trae dominio, el nombre solo casa con una
+ *     empresa del CRM SIN dominio (la regla de findBrandSignal: dos
+ *     dominios distintos son dos marcas). Así una marca que se excluyó
+ *     por su nombre («No aceptar «Marca Rival»», que nace sin dominio)
+ *     se reconoce en la señal de Meta o TikTok que sí trae uno.
  *
  * Son búsquedas SEPARADAS unidas con UNION ALL, cada una con su índice:
  * la llave primaria; el de (domain::text); y company_link, que ya acota
@@ -449,7 +454,7 @@ function signalCompanyRowsSql(s: string): string {
           WHERE ${s}.company_id IS NULL AND bv_co.domain::text = ${dominio} AND EXISTS (SELECT 1 FROM bv_briefs)
          UNION ALL
          SELECT ${EMP_COLS} FROM company_link bv_l JOIN company bv_co ON bv_co.id = bv_l.company_id
-          WHERE ${s}.company_id IS NULL AND ${dominio} IS NULL
+          WHERE ${s}.company_id IS NULL AND (${dominio} IS NULL OR bv_co.domain IS NULL)
             AND bv_co.name_key = brand_key(${s}.evidence->>'company_name') AND EXISTS (SELECT 1 FROM bv_briefs)`;
 }
 
@@ -487,6 +492,17 @@ interface VerdictParts {
  * en vez de recalcularlo). La empresa y las categorías de la marca, una
  * vez por señal (bv_emp, bv_cats), y cada brief se compara contra esas
  * dos listas cortas.
+ *
+ * Una marca excluida se reconoce por su identidad, no solo por su id
+ * (bv_excl, las fichas excluidas de los briefs activos, como mucho 100
+ * por brief): la empresa de la señal casa con una excluida si es la
+ * misma fila, si comparten dominio, o si comparten nombre (brand_key) y
+ * a una de las dos le falta el dominio. «No aceptar «Bebidas Luna»» crea
+ * una ficha propia sin dominio; la señal de Meta enlazada a la ficha
+ * «Bebidas Luna» del catálogo (con dominio) es la misma marca. Dos
+ * fichas con el mismo nombre y dominios distintos no: el nombre solo se
+ * compara contra las marcas que el creador excluyó, nunca contra todo el
+ * catálogo.
  *
  * Varios briefs activos (uno por creador, 0070 §1): la marca queda fuera
  * solo si TODOS la excluyen, porque lo que un creador no acepta otro del
@@ -531,6 +547,10 @@ function verdictQuery({ briefsWhere, companyRows, signal, fit }: VerdictParts): 
            FROM outbound_brief bv_b
           WHERE bv_b.status = 'active' AND ${briefsWhere}
        ),
+       bv_excl AS MATERIALIZED (
+         SELECT DISTINCT bv_xc.id, bv_xc.name, bv_xc.name_key, bv_xc.domain::text AS domain
+           FROM bv_briefs bv_bx JOIN company bv_xc ON bv_xc.id = ANY (bv_bx.excluded_companies)
+       ),
        bv_emp AS (${companyRows}
        ),
        bv_cats AS (
@@ -541,8 +561,11 @@ function verdictQuery({ briefsWhere, companyRows, signal, fit }: VerdictParts): 
           WHERE brand_key(bv_x.cat) IS NOT NULL
        ),
        bv_pb AS (
-         SELECT (SELECT bv_e.name FROM bv_emp bv_e WHERE bv_e.id = ANY (bv_b.excluded_companies)
-                  ORDER BY bv_e.name LIMIT 1) AS company_match,
+         SELECT (SELECT bv_x.name FROM bv_excl bv_x JOIN bv_emp bv_e
+                    ON bv_x.id = bv_e.id OR bv_x.domain = bv_e.domain
+                       OR (bv_x.name_key = bv_e.name_key AND (bv_x.domain IS NULL OR bv_e.domain IS NULL))
+                  WHERE bv_x.id = ANY (bv_b.excluded_companies)
+                  ORDER BY bv_x.name LIMIT 1) AS company_match,
                 ${firstCategoryMatchSql('bv_b.excluded_categories')} AS category_match${porBriefFit}
            FROM bv_briefs bv_b${fit ? `, (SELECT ${pais} AS country) bv_p` : ''}
        )

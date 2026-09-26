@@ -8,8 +8,9 @@
 -- rebasó sobre integracion y se renumeró antes de aplicarse en ningún
 -- sitio. En la integración de la fase 6 pasó de 0064 a 0070 (y su
 -- compañera de 0065 a 0071), porque VEN-14 trajo 0064–0066 y VEN-16
--- 0067–0069; tampoco estaba aplicada. No depende de ninguna migración de outreach (0037–0063): solo
--- toca outbound_brief (0007) y deal (0007, 0031).
+-- 0067–0069; tampoco estaba aplicada. Toca outbound_brief (0007) y
+-- deal (0007, 0031), y depende de 0050: la política de §5 usa
+-- outreach_can_manage (0050 §7).
 --
 -- Mediciones en Supabase antes de aplicarla (25-sep, como mc_migrator):
 --   · Un brief activo por creador (§1). La tabla tiene FORCE RLS, así
@@ -60,9 +61,11 @@
 -- con OLD): un negocio perdido antes de que el motivo existiera no se
 -- vuelve intocable, y por eso la migración no depende de cuántos haya.
 --
--- VEN-7 · Quién cambia el brief. Es una regla del ESPACIO entero: lo que
--- excluye se le oculta a todo el equipo en el radar y ninguna cadencia
--- le escribe. Hasta aquí cualquier miembro con mc_app lo reescribía. Lo
+-- VEN-7 · Quién cambia el brief. El brief es de UN creador (§1), pero
+-- lo que excluye pesa en todo el espacio: el radar del equipo lo oculta
+-- cuando lo excluyen todos los briefs activos, y las cadencias de los
+-- negocios de ese creador no le escriben. Hasta aquí cualquier miembro
+-- con mc_app lo reescribía. Lo
 -- cambian los mismos que la política de envío: owner o admin, con la
 -- misma función outreach_can_manage (0050 §7) y el mismo tipo de
 -- política (RESTRICTIVE, TO mc_app). Leer sigue igual: lo lee todo el

@@ -229,6 +229,14 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
     if (props.mode === "free" && escrito && yaEsta(escrito)) setTexto("");
   }
 
+  /**
+   * Las marcas que «No aceptar «…»» dio de alta en esta visita. El alta se
+   * escribe al elegirla (queda en el CRM como bloqueada aunque no se
+   * guarde el brief): si luego se quita la etiqueta, la línea de estado lo
+   * dice, para que nadie crea que la marca desapareció del CRM.
+   */
+  const creadasAqui = useRef(new Set<string>());
+
   /** Da de alta lo escrito como marca bloqueada y la agrega (`create`, VEN-7 r5). */
   async function crear() {
     if (!create || creando || !escrito) return;
@@ -241,6 +249,7 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
       return;
     }
     agregar(r.result);
+    creadasAqui.current.add(r.result.value);
     setAlta({ ok: true, text: t.created(r.result.label) });
   }
 
@@ -328,6 +337,8 @@ export function ListaDeEtiquetas(props: ListaDeEtiquetasProps) {
 
   function quitar(indice: number) {
     const quedan = elegidas.length - 1;
+    const quitada = elegidas[indice];
+    if (quitada && creadasAqui.current.has(quitada.value)) setAlta({ ok: true, text: t.removedStillBlocked(quitada.label) });
     setElegidas((cur) => cur.filter((_, i) => i !== indice));
     setFocoEn(quedan === 0 ? "campo" : Math.min(indice, quedan - 1));
   }

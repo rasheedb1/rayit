@@ -10,7 +10,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { ModuleTabs } from "../../../_componentes/pestanas";
 import { withWorkspace } from "../../../_lib/db";
 import {
-  alcance, avisoDePolitica, esperaEntre, ESTADO_PILL, etiquetaActivar, etiquetaCanal, etiquetaTipo, horaDePaso, modoDePaso,
+  alcance, avisoDePolitica, descripcionDeSenal, esperaEntre, ESTADO_PILL, etiquetaActivar, etiquetaCanal, etiquetaTipo, horaDePaso, modoDePaso,
   personaParaEnrolar, resumenFlujo,
 } from "../../_lib/vista";
 import { IconoCanal } from "../../canal";
@@ -99,7 +99,7 @@ export default async function CadenciaPage({
   const nombresAngulo = new Map(angulos.map((a) => [a.key, a.label]));
 
   const descripcion = d.signal
-    ? t.detalle.desdeSenal(t.senalTipos[d.signal.kind], d.signal.headline, d.signal.companyName)
+    ? descripcionDeSenal(d.name, d.signal, f)
     : d.templateName
       ? t.detalle.plantilla(d.templateName)
       : undefined;
@@ -185,12 +185,14 @@ export default async function CadenciaPage({
               elegida={d.proposalContact?.id ?? null}
               personas={personas
                 .filter((c) => !c.optedOut)
-                .map((c) => ({
-                  value: c.id,
-                  label: [c.name ?? t.proponer.sinPersona, alcance(c), c.liveElsewhere ? t.proponer.ocupada(c.liveElsewhere) : null]
-                    .filter(Boolean)
-                    .join(" · "),
-                }))}
+                .map((c) => {
+                  const nombre = c.name ?? t.proponer.sinPersona;
+                  return {
+                    value: c.id,
+                    label: c.liveElsewhere ? t.proponer.ocupadaCorto(nombre) : nombre,
+                    detalle: [alcance(c), c.liveElsewhere ? t.proponer.ocupada(c.liveElsewhere) : null].filter(Boolean).join(" · "),
+                  };
+                })}
             />
           )}
           {!archivada && (

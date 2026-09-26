@@ -6,6 +6,7 @@ vi.mock("../actions", () => ({ moverNegocio: (...a: unknown[]) => moverNegocio(.
 vi.mock("../empresas/actions", () => ({ fijarSiguienteAccion: vi.fn(), marcarHecha: vi.fn() }));
 
 import type { SeguimientoContexto, SiguienteAccionData } from "../_seguimiento/datos";
+import { MESSAGES } from "../_lib/messages";
 import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 
 const DEAL = "00000006-0000-4000-8000-000000000001";
@@ -335,7 +336,7 @@ describe("PipelineBoard", () => {
     const nuevo = within(screen.getByRole("listitem", { name: "Nuevo" })).getByTestId("conversion-etapa");
     expect(nuevo).toHaveTextContent("58 % avanza");
     expect(nuevo).toHaveTextContent("de 12 negocios");
-    expect(nuevo).toHaveAttribute("title", "De los 12 negocios que entraron en «Nuevo», 7 llegaron más lejos (58 %).");
+    expect(nuevo).toHaveAttribute("title", `De los 12 negocios que entraron en «Nuevo», 7 llegaron más lejos (58 %). ${MESSAGES.pipeline.conversion.note}`);
     expect(within(screen.getByRole("listitem", { name: "Perdido" })).queryByTestId("conversion-etapa")).toBeNull();
     // Arriba, junto al monto, y no al pie: antes de las tarjetas, para que
     // las tasas de todas las columnas queden a la misma altura.

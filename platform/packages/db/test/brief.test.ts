@@ -23,6 +23,7 @@ import {
   addExcludedCompany,
   BriefError,
   briefCompanyVerdictSql,
+  briefSignalLateralSql,
   countHiddenSignals,
   getActiveBrief,
   getBrief,
@@ -35,7 +36,7 @@ import {
   type SaveBriefInput,
 } from '../src/queries/brief.ts';
 import {
-  countPendingSignals, createSignal, getCompany, getSalesKpis, importSignals, listCompanies, listSignals, rejectBrandByName, rejectSignalBrand,
+  acceptSignal, countPendingSignals, createSignal, getCompany, getSalesKpis, importSignals, listCompanies, listSignals, rejectBrandByName, rejectSignalBrand,
 } from '../src/queries/ventas.ts';
 import type { WorkspaceTx } from '../src/client.ts';
 import { membershipSql } from './membresia.ts';
@@ -996,5 +997,94 @@ describe('VEN-7 r5 · «No aceptar «…»» desde el brief: una marca que aún 
     assert.equal(await codigoDe(enBrief((tx) => rejectBrandByName(tx, { name: '   ' }))), 'InvalidBrandName');
     assert.equal(await codigoDe(enBrief((tx) => rejectBrandByName(tx, { name: '¡¡!!' }))), 'InvalidBrandName');
     assert.equal(await codigoDe(enBrief((tx) => rejectBrandByName(tx, { name: 'x'.repeat(121) }))), 'InvalidBrandName');
+  });
+});
+
+describe('VEN-7 pulido · una marca excluida por su nombre se reconoce aunque la señal traiga dominio o ficha del catálogo', () => {
+  const S_RIVAL = '00000009-0000-4000-8000-0000000b75c1';
+  const S_LUNA = '00000009-0000-4000-8000-0000000b75c2';
+  const S_ALMA_MX = '00000009-0000-4000-8000-0000000b75c3';
+  const CO_LUNA_CATALOGO = '00000009-0000-4000-8000-0000000b7cc1';
+  const CO_ALMA_CO = '00000009-0000-4000-8000-0000000b7cc2';
+  const creadas: string[] = [];
+  const hiddenBy = async (id: string) => {
+    const fila = (await enBrief((tx) => listSignals(tx, { brief: 'show_hidden' }))).find((s) => s.id === id);
+    return fila ? fila.hiddenBy : 'no está';
+  };
+
+  before(async () => {
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
+    const rival = await enBrief((tx) => rejectBrandByName(tx, { name: 'Marca Rival' }));
+    const luna = await enBrief((tx) => rejectBrandByName(tx, { name: 'Bebidas Luna' }));
+    creadas.push(rival.id, luna.id);
+    await t.admin(`
+      -- La ficha del catálogo compartido, con dominio: la misma marca que la ficha propia sin dominio.
+      INSERT INTO company (id, name, domain, owner_workspace_id) VALUES
+        ('${CO_LUNA_CATALOGO}', 'Bebidas Luna', 'bebidasluna-pulido.test', NULL)
+      ON CONFLICT DO NOTHING;
+      -- Una «Alma» de Colombia en el CRM, con su dominio.
+      INSERT INTO company (id, name, domain, owner_workspace_id) VALUES
+        ('${CO_ALMA_CO}', 'Alma', 'alma-co-pulido.test', '${WS_BRIEF}')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS_BRIEF}', '${CO_ALMA_CO}', 'blocked')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO signal (id, workspace_id, company_id, source_id, headline_es, evidence, fit_score, dedupe_key, status) VALUES
+        -- Meta trae el nombre y un dominio que ninguna ficha tiene.
+        ('${S_RIVAL}', '${WS_BRIEF}', NULL, 'meta_ad_library', '4 anuncios activos',
+         '{"company_name": "Marca Rival", "domain": "marcarival-pulido.test"}', 0.80, 'pulido:rival', 'pending'),
+        -- Enlazada a la ficha del catálogo.
+        ('${S_LUNA}', '${WS_BRIEF}', '${CO_LUNA_CATALOGO}', 'meta_ad_library', 'Anuncios de agua con gas', '{}', 0.80, 'pulido:luna', 'pending'),
+        -- Otra «Alma», de México, con otro dominio: otra marca.
+        ('${S_ALMA_MX}', '${WS_BRIEF}', NULL, 'meta_ad_library', 'Alma abre en CDMX',
+         '{"company_name": "Alma", "domain": "alma-mx-pulido.test"}', 0.70, 'pulido:alma-mx', 'pending')
+      ON CONFLICT DO NOTHING;
+      -- Otra corrida contra la misma base la dejó aceptada: vuelve a la bandeja.
+      UPDATE signal SET status = 'pending', company_id = NULL WHERE id = '${S_RIVAL}';
+    `);
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief({ excludedCompanyIds: [rival.id, luna.id, CO_ALMA_CO] })));
+  }, SETUP_TIMEOUT);
+  after(async () => {
+    // Las fichas y el negocio se quedan (ids fijos, ON CONFLICT): con TEST_DATABASE_URL la prueba se puede repetir.
+    await enBrief((tx) => saveBrief(tx, CREADORA, brief()));
+  });
+
+  const veredictoDeEmpresa = (companyId: string) =>
+    enBrief(async (tx) => {
+      const { rows } = await tx.query<{ v: string | null }>(
+        `SELECT ${briefCompanyVerdictSql('$1::uuid', '$2::uuid')} AS v`,
+        [companyId, WS_BRIEF],
+      );
+      return rows[0]?.v ?? null;
+    });
+
+  test('la señal con dominio y el mismo nombre queda oculta por la empresa', async () => {
+    assert.equal(await hiddenBy(S_RIVAL), 'company');
+    assert.ok(!(await visibles()).includes(S_RIVAL));
+  });
+
+  test('la señal enlazada a la ficha del catálogo del mismo nombre queda oculta, y la tarjeta nombra la excluida', async () => {
+    assert.equal(await hiddenBy(S_LUNA), 'company');
+    const tarjeta = await enBrief(async (tx) => {
+      const { rows } = await tx.query<{ hidden_match: string | null }>(
+        `SELECT bv.hidden_match FROM signal s CROSS JOIN LATERAL (${briefSignalLateralSql('s')}) bv WHERE s.id = $1`,
+        [S_LUNA],
+      );
+      return rows[0]?.hidden_match;
+    });
+    assert.equal(tarjeta, 'Bebidas Luna');
+  });
+
+  test('las cadencias tampoco le escriben a la ficha del catálogo', async () => {
+    assert.equal(await veredictoDeEmpresa(CO_LUNA_CATALOGO), 'company');
+  });
+
+  test('dos «Alma» con dominios distintos son dos marcas: excluir una no oculta la otra', async () => {
+    assert.equal(await hiddenBy(S_ALMA_MX), null);
+  });
+
+  test('aceptar la señal oculta no crea una marca duplicada fuera del brief', async () => {
+    const r = await enBrief((tx) => acceptSignal(tx, S_RIVAL));
+    assert.equal(r.companyId, creadas[0], 'se enlaza a la ficha excluida, no a una nueva con dominio');
+    assert.equal(await veredictoDeEmpresa(r.companyId), 'company', 'y las cadencias no le escriben');
   });
 });

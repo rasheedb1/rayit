@@ -1,6 +1,8 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
-import { GUIDANCE_PHRASES, RECOMMEND_MODEL, type GuidanceLocale, type GuidanceRequest, type GuidanceWriter } from "@mc/core";
+import {
+  GUIDANCE_PHRASES, GuidanceWriterError, RECOMMEND_MODEL, type GuidanceLocale, type GuidanceRequest, type GuidanceWriter, type LlmUsage,
+} from "@mc/core";
 import { GUIDANCE_OUTPUT_SCHEMA, parseGuidanceOutput } from "./redactor-salida";
 
 /**
@@ -32,11 +34,12 @@ export function redactorConfigurado(env: NodeJS.ProcessEnv = process.env): boole
 export function instruccionDeSistema(locale: GuidanceLocale): string {
   return `Eres el editor de cadencias de On Cue, una plataforma para creadores de contenido que les escriben a marcas para conseguir campañas pagadas.
 
-Recibes una secuencia de pasos ya decidida (día, canal, ángulo) y un borrador de guía para cada paso. La guía NO es el mensaje: es la instrucción que seguirá quien redacte el mensaje de ese paso.
+Recibes una secuencia de pasos ya decidida (día, canal, ángulo) y un borrador de guía para cada paso de mensaje. La guía NO es el mensaje: es la instrucción que seguirá quien redacte el mensaje de ese paso. Solo recibes los pasos que llevan mensaje: una reacción, un comentario público o una tarea a mano los hace una persona, no se escribe nada para ellos y no devuelves guía para ellos.
 
 Reescribe la guía de cada paso para esta marca y esta señal, en ${GUIDANCE_PHRASES[locale].promptLanguage} (idioma «${locale}»), en segunda persona («abre con…»):
 - Una o dos frases, entre 60 y 280 caracteres.
-- Di con qué abrir, qué no mencionar (respeta lo prohibido del ángulo) y cómo cerrar (una sola pregunta, salvo en comentarios públicos y en el cierre).
+- Di con qué abrir, qué no mencionar (respeta lo prohibido del ángulo) y cómo cerrar (una sola pregunta, salvo en el cierre).
+- Devuelve guía solo para los "index" que recibiste.
 - No inventes cifras, clientes ni resultados. Si hace falta una cifra, di de dónde sale («una cifra de tu perfil»).
 - No uses marcadores ni huecos como {{nombre}} o [MARCA].
 - No cambies el canal, el día ni el ángulo del paso.
@@ -46,19 +49,56 @@ Reescribe la guía de cada paso para esta marca y esta señal, en ${GUIDANCE_PHR
 Devuelve un objeto con "steps": un elemento por paso, con su "index" y su "guidance".`;
 }
 
+/** Lo que se le pide a la API por intento: hasta cuántos tokens puede devolver. */
+const MAX_TOKENS = 4000;
+/** Reintentos del cliente: un tiempo de espera se reintenta una vez, y cada intento pudo cobrarse. */
+const MAX_RETRIES = 1;
+
+/**
+ * Una cota superior de lo que costó una petición que falló después de
+ * salir: la entrada estimada por su tamaño (unos tres caracteres por
+ * token, de más para el español) y la salida completa, por cada intento.
+ * Sobrestima a propósito: el tope diario no puede contar de menos.
+ */
+export function usoEstimado(system: string, user: string): LlmUsage {
+  const intentos = MAX_RETRIES + 1;
+  return {
+    model: RECOMMEND_MODEL,
+    inputTokens: Math.ceil((system.length + user.length) / 3) * intentos,
+    outputTokens: MAX_TOKENS * intentos,
+  };
+}
+
+/**
+ * Si el error deja la duda de que la API procesó la petición: un tiempo
+ * de espera o un corte de conexión. Un 4xx (llave, cuota, petición mal
+ * hecha) o un 5xx no se cobran.
+ */
+function pudoCobrarse(e: unknown): boolean {
+  return e instanceof Anthropic.APIConnectionError;
+}
+
 /** El redactor real, con el cliente de la API. */
 export function redactorAnthropic(client: Anthropic = new Anthropic()): GuidanceWriter {
   return async (req: GuidanceRequest) => {
-    const response = await client.messages.create(
-      {
-        model: RECOMMEND_MODEL,
-        max_tokens: 4000,
-        system: instruccionDeSistema(req.locale),
-        messages: [{ role: "user", content: JSON.stringify(req) }],
-        output_config: { effort: "low", format: { type: "json_schema", schema: { ...GUIDANCE_OUTPUT_SCHEMA } } },
-      },
-      { timeout: 45_000, maxRetries: 1 },
-    );
+    const system = instruccionDeSistema(req.locale);
+    const user = JSON.stringify(req);
+    let response: Anthropic.Message;
+    try {
+      response = await client.messages.create(
+        {
+          model: RECOMMEND_MODEL,
+          max_tokens: MAX_TOKENS,
+          system,
+          messages: [{ role: "user", content: user }],
+          output_config: { effort: "low", format: { type: "json_schema", schema: { ...GUIDANCE_OUTPUT_SCHEMA } } },
+        },
+        { timeout: 45_000, maxRetries: MAX_RETRIES },
+      );
+    } catch (e) {
+      // Un tiempo de espera o un corte mientras llegaba la respuesta: la llamada pudo cobrarse y se registra con su cota.
+      throw new GuidanceWriterError("el redactor de la guía falló", pudoCobrarse(e) ? usoEstimado(system, user) : null, { cause: e });
+    }
     const usage = { model: RECOMMEND_MODEL, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens };
     // Una negativa o un corte por longitud se cobran igual: la llamada se registra y la guía se queda con las reglas.
     if (response.stop_reason !== "end_turn") return { steps: [], usage };

@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  chooseTemplate, composeGuidance, DISCLOSURE_GUIDANCE, guidanceProblem, primaryChannelOf, recommendSequence, RecommendError, refineGuidance,
+  chooseTemplate, composeGuidance, DISCLOSURE_GUIDANCE, guidanceProblem, GuidanceWriterError, primaryChannelOf, recommendSequence, RecommendError, refineGuidance,
   signalKindOfSource, type GuidanceRequest, type GuidanceWriter, type RecommendInput, type RecommendTemplate, type RecommendTemplateStep,
 } from '../src/outreach/recomendar.ts';
 import { GUIDANCE_PHRASES, guidanceLocale } from '../src/outreach/guidance-phrases.ts';
@@ -287,9 +287,12 @@ test('refineGuidance: se queda con la guía del modelo que sirve y con la regla 
     writer,
   );
   assert.equal(r.source, 'llm');
+  // Cinco pasos de mensaje pedidos (el comentario no), uno aceptado.
   assert.equal(r.keptRules, 4);
   assert.deepEqual(r.usage, { model: 'claude-sonnet-5', inputTokens: 900, outputTokens: 300 });
-  assert.match(r.proposal.steps[0]!.guidanceEs, /^Comenta la receta/);
+  assert.deepEqual((vistos[0] as GuidanceRequest).steps.map((s) => s.index), [1, 2, 3, 4, 5], 'el comentario no se le pide al modelo');
+  assert.equal(r.proposal.steps[0]!.guidanceEs, base.steps[0]!.guidanceEs, 'el comentario lo escribe una persona: su guía no la reescribe el modelo');
+  assert.notEqual(r.proposal.steps[0]!.guidanceSource, 'llm');
   assert.equal(r.proposal.steps[1]!.guidanceEs, base.steps[1]!.guidanceEs, 'con huecos, se queda la regla');
   assert.equal(r.proposal.steps[2]!.guidanceEs, base.steps[2]!.guidanceEs, 'demasiado corta, se queda la regla');
   assert.ok(r.proposal.steps[5]!.guidanceEs.endsWith(DISCLOSURE_GUIDANCE), 'la divulgación vuelve aunque el modelo la olvide');
@@ -322,7 +325,67 @@ test('refineGuidance: si el redactor falla, todo queda con reglas y sin llamada 
       throw new Error('red caída');
     },
   );
-  assert.deepEqual(r, { proposal: base, source: 'rules', usage: null, keptRules: 6, failed: true });
+  assert.deepEqual(r, { proposal: base, source: 'rules', usage: null, keptRules: 5, failed: true });
+});
+
+test('refineGuidance: si el redactor falla después de que la API pudo cobrar, la cota se registra', async () => {
+  const base = recommendSequence(entrada());
+  const cota = { model: 'claude-sonnet-5', inputTokens: 2000, outputTokens: 8000 };
+  const r = await refineGuidance(
+    base,
+    { signalHeadline: null, companyName: null, briefTitle: null, briefNotes: null, requiresDisclosure: false, angles: {} },
+    async () => {
+      throw new GuidanceWriterError('tiempo de espera', cota);
+    },
+  );
+  assert.equal(r.failed, true);
+  assert.deepEqual(r.usage, cota, 'el tope diario ve la llamada aunque no haya respuesta');
+  assert.equal(r.proposal, base);
+});
+
+test('refineGuidance: una reacción, un comentario y una tarea a mano no reciben texto del modelo aunque lo devuelva', async () => {
+  // Con la política por defecto la prueba social pasa a ser una reacción en LinkedIn (Granos del Valle, paso 5).
+  const base = recommendSequence(entrada({ policy: POR_DEFECTO }));
+  const reaccion = base.steps.findIndex((s) => s.stepType === 'linkedin_like');
+  assert.ok(reaccion > 0, 'la propuesta tiene una reacción');
+  const vistos: GuidanceRequest[] = [];
+  const writer: GuidanceWriter = async (req) => {
+    vistos.push(req);
+    // Un redactor que desobedece: devuelve guía para todos los pasos, también los que no pidió.
+    return {
+      steps: base.steps.map((_, index) => ({ index, guidance: 'Comenta algo concreto de su último post y cierra con una pregunta.' })),
+      usage: { model: 'claude-sonnet-5', inputTokens: 10, outputTokens: 10 },
+    };
+  };
+  const r = await refineGuidance(
+    base,
+    { signalHeadline: null, companyName: null, briefTitle: null, briefNotes: null, requiresDisclosure: false, angles: {} },
+    writer,
+  );
+  const pedidos = vistos[0]!.steps.map((s) => s.stepType);
+  assert.ok(!pedidos.includes('linkedin_like') && !pedidos.includes('linkedin_comment'), 'al modelo solo le llegan los mensajes');
+  const like = r.proposal.steps[reaccion]!;
+  assert.equal(like.guidanceEs, base.steps[reaccion]!.guidanceEs);
+  assert.equal(like.guidanceEs, composeGuidance('presencia', 'linkedin_like', 'active_campaign'));
+  assert.notEqual(like.guidanceSource, 'llm');
+  assert.equal(r.proposal.steps[0]!.guidanceEs, base.steps[0]!.guidanceEs);
+  for (const s of r.proposal.steps) assert.equal(s.guidanceSource === 'llm', !['linkedin_comment', 'linkedin_like'].includes(s.stepType), s.stepType);
+});
+
+test('refineGuidance: sin pasos de mensaje no se llama al modelo', async () => {
+  const base = recommendSequence(entrada());
+  const soloGestos = { ...base, steps: base.steps.filter((s) => s.stepType === 'linkedin_comment') };
+  let llamado = false;
+  const r = await refineGuidance(
+    soloGestos,
+    { signalHeadline: null, companyName: null, briefTitle: null, briefNotes: null, requiresDisclosure: false, angles: {} },
+    async () => {
+      llamado = true;
+      return { steps: [], usage: { model: 'claude-sonnet-5', inputTokens: 1, outputTokens: 1 } };
+    },
+  );
+  assert.equal(llamado, false);
+  assert.deepEqual({ source: r.source, usage: r.usage, keptRules: r.keptRules, failed: r.failed }, { source: 'rules', usage: null, keptRules: 0, failed: false });
 });
 
 test('guidanceProblem y llmCostUsd', () => {

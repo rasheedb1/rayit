@@ -78,6 +78,14 @@ export const MESSAGES = {
     contactadas: (respondidas: string, contactadas: string) => `${respondidas} de ${contactadas} contactadas`,
     sinContactar: "Sin envíos",
     desde: (senal: string) => `Desde: ${senal}`,
+    /**
+     * En un teléfono, las cifras de las columnas que no caben (pasos,
+     * dentro, respuesta) van bajo el nombre: la creadora ve cómo va cada
+     * cadencia sin desplazar la tabla.
+     */
+    pasosCorto: plural({ one: "{n} paso", other: "{n} pasos" }),
+    dentroCorto: (n: string) => `${n} dentro`,
+    respuestaCorto: (pct: string) => `${pct} respuesta`,
     vacio: {
       titulo: "Todavía no tienes cadencias",
       descripcion: "Pide una propuesta desde una señal de arriba o empieza desde una plantilla.",
@@ -116,8 +124,11 @@ export const MESSAGES = {
   detalle: {
     volver: "Todas las cadencias",
     metaTitle: (nombre: string) => `${nombre} · Cadencias`,
-    desdeSenal: (tipo: string, titular: string, empresa: string | null) =>
-      empresa ? `${tipo} · ${empresa}: ${titular}` : `${tipo}: ${titular}`,
+    /** Bajo el nombre: la señal de la que salió y cuándo. Si el nombre no dice el tipo y la marca (se renombró), también van. */
+    desdeSenal: (tipo: string, titular: string, empresa: string | null, fecha: string) =>
+      empresa ? `${tipo} · ${empresa}: ${titular} · ${fecha}` : `${tipo}: ${titular} · ${fecha}`,
+    /** El nombre ya dice la marca y el tipo («Granos del Valle · Campaña activa»): solo el titular y la fecha. */
+    senalYFecha: (titular: string, fecha: string) => `${titular} · ${fecha}`,
     plantilla: (nombre: string) => `Plantilla: ${nombre}`,
     dentro: plural({ one: "{n} persona dentro", other: "{n} personas dentro" }),
     renombrar: "Cambiar el nombre",
@@ -178,7 +189,10 @@ export const MESSAGES = {
     sinGuia: "Sin guía: el generador solo sigue el ángulo.",
     generacion: "Generación automática",
     textoFijo: "Texto fijo",
-    sinTexto: "Lo hace una persona: no lleva texto.",
+    /** Una reacción o una tarea a mano: la persona la hace y no hay mensaje. */
+    sinTexto: "Lo haces tú a mano: no lleva mensaje.",
+    /** Un comentario público sí lleva texto, pero lo escribe la persona: On Cue no lo redacta ni lo envía. */
+    comentarioAMano: "Lo escribes tú en su publicación: On Cue no lo redacta ni lo envía.",
     activo: { media_kit: "Adjunta el media kit", quote: "Enlaza la cotización" } as Record<string, string>,
     /** La guía la escribió la persona para otro tipo de paso y no se recompuso: que la revise. */
     guiaPorRevisar: (tipo: string) => `Esta guía se escribió para «${tipo}». Revísala y guarda el paso.`,
@@ -207,6 +221,8 @@ export const MESSAGES = {
       angulo: "Ángulo",
       guia: "Guía",
       guiaAyuda: "Qué abrir, qué no mencionar y cómo cerrar. La sigue el generador y la vigila quien revisa.",
+      /** En un paso que hace una persona la guía no va al generador: es lo que hay que hacer. */
+      guiaAyudaAMano: "Qué hacer en este paso.",
       modo: "Texto",
       asunto: "Asunto",
       cuerpo: "Texto del mensaje",
@@ -233,6 +249,10 @@ export const MESSAGES = {
     deBaja: "Pidió no recibir mensajes",
     /** Detrás de su nombre en «Para»: ya está viva en otra cadencia, y Activar no la enrolará. */
     ocupada: (cadencia: string) => `ya está en «${cadencia}»`,
+    /** En la opción de «Para», detrás del nombre: la marca corta; el detalle va debajo del campo. */
+    ocupadaCorto: (nombre: string) => `${nombre} · en otra cadencia`,
+    /** Debajo de «Para» cuando no se elige a nadie. */
+    sinPersonaAyuda: "Se planea sin nadie: Activar no enrola a nadie hasta que elijas.",
   },
 
   notas: {

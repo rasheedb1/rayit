@@ -50,10 +50,11 @@ vi.mock("@mc/db/queries/outreach", async (original) => ({
   outboundHealth: (...a: unknown[]) => outboundHealth(...a),
 }));
 
-import { checkSequenceAgainstPolicy } from "@mc/core";
+import { checkSequenceAgainstPolicy, GuidanceWriterError } from "@mc/core";
 import { CadenciaError } from "@mc/db/queries/cadencias";
 import { proponerCadencia } from "./_lib/proponer";
 import { SIN_PERSONA } from "./_lib/protocolo";
+import { sinTexto } from "./_lib/vista";
 import { activarCadencia, anadirPaso, enrolarDesdeNegocio, guardarPaso, proponerDesdeSenal } from "./actions";
 import { MESSAGES } from "./messages";
 
@@ -148,7 +149,24 @@ describe("proponer", () => {
     expect(q.recordRecommendLlmCall).toHaveBeenCalledWith(expect.anything(), { model: "claude-sonnet-5", inputTokens: 800, outputTokens: 200 });
     const [, input] = q.createSequenceFromProposal.mock.calls[0]!;
     expect(input.meta).toMatchObject({ guidance: "llm", model: "claude-sonnet-5" });
-    expect(input.proposal.steps[0].guidanceEs).toMatch(/^Guía redactada/);
+    // Al modelo solo le llegan los pasos de mensaje; el comentario y la reacción los hace una persona y conservan su guía.
+    const pasos = input.proposal.steps as Array<{ stepType: string; guidanceEs: string; guidanceSource: string }>;
+    const pedidos = writer.mock.calls[0]![0].steps.map((s) => s.index);
+    expect(pedidos).toEqual(pasos.flatMap((p, i) => (sinTexto(p.stepType) ? [] : [i])));
+    expect(pasos[0]!.stepType).toBe("linkedin_comment");
+    expect(pasos[0]!.guidanceSource).not.toBe("llm");
+    expect(pasos[1]!.guidanceEs).toMatch(/^Guía redactada/);
+    for (const p of pasos) expect(p.guidanceSource === "llm").toBe(!sinTexto(p.stepType));
+  });
+
+  it("si el redactor se corta después de salir la petición, la llamada queda registrada con su cota y la guía es de reglas", async () => {
+    const cota = { model: "claude-sonnet-5", inputTokens: 1200, outputTokens: 8000 };
+    const writer = vi.fn(async () => {
+      throw new GuidanceWriterError("tiempo de espera", cota);
+    });
+    await proponerCadencia({ signalId: SIGNAL, contactId: CAMILA }, writer);
+    expect(q.recordRecommendLlmCall).toHaveBeenCalledWith(expect.anything(), cota);
+    expect(q.createSequenceFromProposal.mock.calls[0]![1].meta).toMatchObject({ guidance: "rules", guidanceWhyRules: "failed" });
   });
 
   it("la propuesta nace dentro de la política del espacio: seis pasos y ninguno cortado ni corrido", async () => {
@@ -442,5 +460,29 @@ describe("el redactor con Claude, sin red", () => {
     expect(body.system).toContain("en español neutro (idioma «es»)");
     expect(JSON.parse(body.messages[0]!.content).locale).toBe("es");
     expect(r.steps).toEqual([{ index: 0, guidance: "Abre con su campaña y una cifra de tu perfil." }]);
+  });
+
+  it("un tiempo de espera deja una cota de lo que pudo cobrarse; un error de la API (4xx) no", async () => {
+    const { redactorAnthropic, usoEstimado } = await import("./_lib/redactor");
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const req = {
+      signalKind: "launch" as const, locale: "es" as const, signalHeadline: null, companyName: null, briefTitle: null, briefNotes: null,
+      requiresDisclosure: false, steps: [],
+    };
+    const tiempo = redactorAnthropic({ messages: { create: vi.fn(async () => { throw new Anthropic.APIConnectionTimeoutError(); }) } } as never);
+    const e1 = await tiempo(req).catch((e: unknown) => e);
+    expect(e1).toBeInstanceOf(GuidanceWriterError);
+    const cota = (e1 as GuidanceWriterError).usage!;
+    expect(cota.model).toBe("claude-sonnet-5");
+    expect(cota.inputTokens).toBeGreaterThan(0);
+    expect(cota.outputTokens).toBeGreaterThanOrEqual(4000);
+    expect(usoEstimado("abc", "def")).toEqual({ model: "claude-sonnet-5", inputTokens: 4, outputTokens: 8000 });
+
+    const rechazo = redactorAnthropic({
+      messages: { create: vi.fn(async () => { throw new Anthropic.APIError(401, undefined, "sin llave", undefined); }) },
+    } as never);
+    const e2 = await rechazo(req).catch((e: unknown) => e);
+    expect(e2).toBeInstanceOf(GuidanceWriterError);
+    expect((e2 as GuidanceWriterError).usage).toBeNull();
   });
 });

@@ -12,15 +12,16 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkSequenceAgainstPolicy, recommendSequence, type RecommendInput } from '@mc/core';
+import { checkSequenceAgainstPolicy, composeStepGuidance, DISPATCHABLE_STEP_TYPES, recommendSequence, type RecommendInput } from '@mc/core';
 import {
   addStep, CadenciaError, contactNames, createSequenceFromProposal, createSequenceFromTemplate, defaultContact, deleteStep,
   enrollableContactsOfDeal, liveEnrollmentElsewhere, liveEnrollmentsElsewhere, optedOutAmong, parseSequenceProposal, signalContacts,
   duplicateSequence, getRecommendationContext, getSequenceDetail, listEnrollableDeals, listProposableSignals, reachForSequence,
   listSequences, listSequenceTemplates, recordRecommendLlmCall, renameSequence, reorderSteps, replaceStepsFromProposal,
-  setSequenceStatus, TEXTLESS_STEP_TYPES, updateStep, type RecommendationContext,
+  EDITABLE_STEP_TYPES, setSequenceStatus, TEXTLESS_STEP_TYPES, updateStep, type RecommendationContext,
 } from '../src/queries/cadencias/index.ts';
 import { enrollContacts } from '../src/queries/outreach/enroll.ts';
+import { guidanceContextOf } from '../src/queries/cadencias/pasos.ts';
 import type { WorkspaceTx } from '../src/client.ts';
 import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
@@ -153,6 +154,12 @@ test('terminado cuando: seis pasos con guía desde la campaña activa, y se acti
   assert.equal(dc.proposal?.templateSlug, 'cocina-campana-activa');
   assert.deepEqual([dc.proposal?.contactId, dc.proposal?.dealId, dc.proposalContact], [null, null, null]);
   await enLaura((tx) => setSequenceStatus(tx, copia, 'archived'));
+});
+
+test('los pasos sin texto (@mc/core) y los que se despachan parten los tipos editables, sin huecos ni repetidos', () => {
+  const despachables = DISPATCHABLE_STEP_TYPES as readonly string[];
+  assert.ok(TEXTLESS_STEP_TYPES.every((t) => !despachables.includes(t)), 'ninguno está en las dos listas');
+  assert.deepEqual([...EDITABLE_STEP_TYPES].sort(), [...TEXTLESS_STEP_TYPES, ...despachables].sort());
 });
 
 test('lo que hace una persona no se redacta: el comentario y la reacción quedan sin generación en la base (0057)', async () => {
@@ -308,6 +315,30 @@ test('reordenar pone al primer correo como correo nuevo, no como respuesta sin h
   const e = (await enLaura((tx) => getSequenceDetail(tx, id)))!;
   assert.equal(e.steps[1]!.id, ids[3]);
   assert.equal(e.steps[1]!.stepType, 'email');
+});
+
+test('reordenar recompone la guía de la plantilla que cambió de puesto; la de la persona se queda', async () => {
+  const id = await enLaura((tx) => createSequenceFromTemplate(tx, 'marca-con-campana-activa'));
+  const d = (await enLaura((tx) => getSequenceDetail(tx, id)))!;
+  const ids = d.steps.map((s) => s.id);
+  const directo = d.steps[2]!;
+  assert.equal(directo.stepType, 'linkedin_message');
+  assert.equal(directo.guidanceSource, 'template');
+  // La persona escribe la guía del correo del día 1: esa es suya y no se recompone al moverla.
+  await enLaura((tx) => updateStep(tx, ids[1]!, { guidanceEs: 'Abre con su cliente de 25 a 34. No menciones precio.' }));
+  // El directo de LinkedIn (paso 3) arrastrado al primer puesto, antes de ningún correo.
+  await enLaura((tx) => reorderSteps(tx, id, [ids[2]!, ids[0]!, ids[1]!, ...ids.slice(3)]));
+  const e = (await enLaura((tx) => getSequenceDetail(tx, id)))!;
+  const movido = e.steps.find((s) => s.id === ids[2])!;
+  const ctx = await enLaura((tx) => guidanceContextOf(tx, id));
+  assert.equal(movido.position, 1);
+  assert.equal(movido.guidanceSource, 'rules', 'la guía de la plantilla sabía qué iba antes: se recompone');
+  assert.equal(movido.guidanceEs, composeStepGuidance(movido.angleKey, movido.stepType, ctx));
+  assert.notEqual(movido.guidanceEs, directo.guidanceEs);
+  const correo = e.steps.find((s) => s.id === ids[1])!;
+  assert.deepEqual([correo.guidanceSource, correo.guidanceEs], ['person', 'Abre con su cliente de 25 a 34. No menciones precio.']);
+  // Lo que no cambió de puesto conserva la guía de la plantilla.
+  assert.deepEqual(e.steps.slice(3).map((s) => s.guidanceSource), d.steps.slice(3).map((s) => s.guidanceSource));
 });
 
 test('quitar, añadir o editar tampoco deja una respuesta sin hilo como primer correo', async () => {

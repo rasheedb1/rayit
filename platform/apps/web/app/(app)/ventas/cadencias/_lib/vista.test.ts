@@ -4,10 +4,11 @@ import { parseGuidanceOutput } from "./redactor-salida";
 import { MESSAGES, plural } from "../messages";
 import type { EnrollableContact, SequenceDetail } from "@mc/db/queries/cadencias";
 import {
-  avisoDePolitica, esperaEntre, etiquetaActivar, horaDePaso, modoDePaso, partesDeEnrolamiento, personaParaEnrolar, resumenFlujo,
+  avisoDePolitica, descripcionDeSenal, esperaEntre, etiquetaActivar, horaDePaso, modoDePaso, partesDeEnrolamiento, personaParaEnrolar, resumenFlujo,
   sinTexto, textoDeGuia, textoDeNota,
 } from "./vista";
-import { TEXTLESS_STEP_TYPES } from "@mc/db/queries/cadencias";
+import { EDITABLE_STEP_TYPES, TEXTLESS_STEP_TYPES } from "@mc/db/queries/cadencias";
+import { DISPATCHABLE_STEP_TYPES } from "@mc/core/outreach/sequence-policy";
 
 const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
 const plantillas = new Map([["cocina-campana-activa", "Cocina · marca con campaña activa"]]);
@@ -26,17 +27,34 @@ describe("cadencias · lo que la pantalla decide sin base", () => {
     ).toEqual(["Día 0: Comentario en LinkedIn", "Día 1: Correo", "Día 5: Respuesta en el hilo"]);
   });
 
-  it("un comentario público lo hace una persona: la tarjeta no dice «Generación automática» aunque la fila lo diga", () => {
+  it("un comentario público lo escribe una persona y una reacción no lleva mensaje: la tarjeta no dice «Generación automática»", () => {
     // El paso 1 de Fresko: un comentario en LinkedIn. «Activar» lo cuenta como gesto a mano; la tarjeta dice lo mismo.
-    expect(modoDePaso({ stepType: "linkedin_comment", generateWithAi: true })).toBe("Lo hace una persona: no lleva texto.");
-    expect(modoDePaso({ stepType: "instagram_like", generateWithAi: false })).toBe(MESSAGES.paso.sinTexto);
+    expect(modoDePaso({ stepType: "linkedin_comment", generateWithAi: true })).toBe(
+      "Lo escribes tú en su publicación: On Cue no lo redacta ni lo envía.",
+    );
+    expect(modoDePaso({ stepType: "instagram_comment", generateWithAi: false })).toBe(MESSAGES.paso.comentarioAMano);
+    expect(modoDePaso({ stepType: "instagram_like", generateWithAi: false })).toBe("Lo haces tú a mano: no lleva mensaje.");
+    expect(modoDePaso({ stepType: "manual_task", generateWithAi: false })).toBe(MESSAGES.paso.sinTexto);
     expect(modoDePaso({ stepType: "email", generateWithAi: true })).toBe(MESSAGES.paso.generacion);
     expect(modoDePaso({ stepType: "linkedin_message", generateWithAi: false })).toBe(MESSAGES.paso.textoFijo);
-    // Una sola regla para la pantalla y para la base: los pasos sin texto son los que no se despachan.
-    const tipos = ["email", "email_reply", "linkedin_connect", "linkedin_message", "linkedin_comment", "linkedin_like",
-      "instagram_dm", "instagram_comment", "instagram_like", "manual_task"];
+    // Una sola regla para la pantalla y para la base: TEXTLESS_STEP_TYPES, que parte los tipos editables con los que se despachan.
+    const tipos = [...EDITABLE_STEP_TYPES];
     expect(tipos.filter(sinTexto)).toEqual(tipos.filter((t) => TEXTLESS_STEP_TYPES.includes(t)));
     expect(tipos.filter(sinTexto)).toEqual(["linkedin_comment", "linkedin_like", "instagram_comment", "instagram_like", "manual_task"]);
+    expect(tipos.filter((t) => !sinTexto(t))).toEqual(tipos.filter((t) => (DISPATCHABLE_STEP_TYPES as readonly string[]).includes(t)));
+  });
+
+  it("bajo el nombre de la propuesta va solo la señal y su fecha; si se renombró, también el tipo y la marca", () => {
+    const senal = {
+      kind: "active_campaign" as const, headline: "Top Ads en TikTok Creative Center · Colombia · 7 días", companyName: "Granos del Valle",
+      detectedAt: "2026-09-01T15:00:00Z",
+    };
+    const corto = descripcionDeSenal("Granos del Valle · Campaña activa", senal, f);
+    expect(corto).toBe(`Top Ads en TikTok Creative Center · Colombia · 7 días · ${f.date(senal.detectedAt)}`);
+    expect(corto).not.toMatch(/Granos del Valle|Campaña activa/);
+    expect(descripcionDeSenal("Café Q4", senal, f)).toBe(
+      `Campaña activa · Granos del Valle: Top Ads en TikTok Creative Center · Colombia · 7 días · ${f.date(senal.detectedAt)}`,
+    );
   });
 
   it("la hora de un paso es una hora de reloj en el idioma del espacio, no un instante", () => {

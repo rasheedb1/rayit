@@ -177,7 +177,7 @@ describe("PipelineView con la conversión por etapa (VEN-8)", () => {
     const filas = screen.getAllByTestId("conversion-etapa");
     expect(filas).toHaveLength(1);
     expect(filas[0]).toHaveTextContent("de 3 negocios");
-    expect(filas[0]).toHaveAttribute("title", expect.stringMatching(/, uno llegó más lejos \(33\s?%\)\.$/));
+    expect(filas[0]).toHaveAttribute("title", expect.stringMatching(/, uno llegó más lejos \(33\s?%\)\. Cuenta los negocios que pasaron por cada etapa/));
   });
 
   it("en la lista también se ve, una línea discreta por etapa: el periodo va en el título y no se repite (VEN-8 r5)", () => {

@@ -25,7 +25,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { BRIEF_LIMITS, BRIEF_PATTERNS, BriefError, saveBrief, searchBriefCompanies, type BriefErrorCode } from "@mc/db/queries/brief";
-import { rejectBrandByName, rejectSignalBrand } from "@mc/db/queries/ventas";
+import { normalizeDomain, rejectBrandByName, rejectSignalBrand } from "@mc/db/queries/ventas";
 import { DECIMAL_RE, UUID_RE, firstErrors, formField, type ActionState } from "@/lib/forms";
 import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
@@ -238,15 +238,18 @@ const DOMINIO_RE = /^(https?:\/\/)?(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i;
  * cuando la búsqueda no encuentra la marca en el CRM, la da de alta como
  * bloqueada con lo escrito (rejectBrandByName) y devuelve la etiqueta que
  * el formulario agrega. Lo escrito es el nombre; si tiene forma de
- * dominio, también es el dominio, y la marca se reconoce por él.
+ * dominio, también es el dominio, y la marca se reconoce por él. Entonces
+ * el nombre visible es el dominio limpio («https://www.cafemonte.co/tienda»
+ * → «cafemonte.co»): así sale en la etiqueta, en Empresas y en la traza.
  *
  * Mismo permiso que guardar el brief (puedeEditarElBrief) y, en la base,
  * la misma regla (outreach_can_manage) y su traza en audit_log.
  */
 export async function noAceptarMarcaNueva(texto: string): Promise<{ result: MarcaEncontrada } | { error: string }> {
   if (!(await puedeEditarElBrief())) return { error: t.sinPermiso };
-  const nombre = typeof texto === "string" ? texto.trim() : "";
-  const dominio = DOMINIO_RE.test(nombre) ? nombre : null;
+  const escrito = typeof texto === "string" ? texto.trim() : "";
+  const dominio = DOMINIO_RE.test(escrito) ? normalizeDomain(escrito) : null;
+  const nombre = dominio ?? escrito;
   try {
     const marca = await withWorkspace((tx) => rejectBrandByName(tx, { name: nombre, domain: dominio }));
     revalidatePath("/ventas", "layout");

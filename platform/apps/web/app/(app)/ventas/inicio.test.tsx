@@ -29,6 +29,7 @@ const vitale: SignalRow = {
   companyLinked: true,
   openDealId: "00000002-0000-4000-8000-0000000d0001",
   openDealName: "Snacks de temporada",
+  openDealCount: 1,
   sourceId: "meta_ad_library",
   sourceLabel: "Biblioteca de anuncios de Meta",
   headlineEs: "4 anuncios nuevos en Meta · snacks",

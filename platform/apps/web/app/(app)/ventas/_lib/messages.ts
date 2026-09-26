@@ -174,6 +174,14 @@ export const MESSAGES = {
         company: (name: string) => `Tu brief no acepta a ${name}`,
         category: (category: string) => `Tu brief no acepta «${category}»`,
       },
+      /**
+       * Aceptar una señal oculta pide confirmación: el negocio se abre, pero
+       * enrollContacts la deja fuera (brief_excluded) mientras siga en el brief.
+       */
+      acceptTitle: (name: string) => `¿Aceptar ${name}?`,
+      acceptDescription: (reason: string) =>
+        `${reason}. Si la aceptas, el negocio se abre, pero las cadencias no le escriben mientras siga fuera de tu brief.`,
+      acceptConfirm: "Aceptar igual",
     },
     /**
      * Cómo encaja la señal con «Qué buscas» del brief activo (VEN-7). No
@@ -200,7 +208,8 @@ export const MESSAGES = {
      */
     reject: {
       action: "No aceptar esta marca",
-      actionFor: (name: string) => `No aceptar la marca ${name}`,
+      /** El nombre accesible empieza por el texto visible (WCAG 2.5.3): quien dice «No aceptar esta marca» lo activa. */
+      actionFor: (name: string) => `No aceptar esta marca: ${name}`,
       title: (name: string) => `¿No aceptar ${name}?`,
       /**
        * Dos variantes (VEN-7 r5): con un solo brief activo no se habla de
@@ -211,6 +220,20 @@ export const MESSAGES = {
         "Entra a tu CRM como bloqueada y a «Marcas que no aceptas»: deja de aparecer en tu radar y ninguna cadencia le escribe.",
       descriptionMany:
         "Entra a tu CRM como bloqueada y a «Marcas que no aceptas» de los briefs que elijas. El radar deja de enseñar sus señales cuando la excluyen todos los briefs activos, y ninguna cadencia de esos briefs le escribe.",
+      /** La marca ya estaba en el CRM: su relación no se toca (un cliente sigue siendo cliente). */
+      descriptionInCrm:
+        "Pasa a «Marcas que no aceptas»: deja de aparecer en tu radar y ninguna cadencia le escribe. Su relación en tu CRM no cambia.",
+      descriptionManyInCrm:
+        "Pasa a «Marcas que no aceptas» de los briefs que elijas; su relación en tu CRM no cambia. El radar deja de enseñar sus señales cuando la excluyen todos los briefs activos, y ninguna cadencia de esos briefs le escribe.",
+      /**
+       * La marca tiene negocios abiertos: lo que sus cadencias tenían
+       * programado se cancela (brief_excluded). `n` formateado, `count`
+       * para el plural.
+       */
+      openDeals: (n: string, count: number, name: string) =>
+        count === 1
+          ? `Tienes un negocio abierto con ${name}: los toques que sus cadencias tenían programados se cancelan.`
+          : `Tienes ${n} negocios abiertos con ${name}: los toques que sus cadencias tenían programados se cancelan.`,
       creators: "En el brief de",
       creatorsHelp: "Con varios creadores, elige en qué briefs activos. Lo que uno no acepta, otro puede aceptarlo.",
       confirm: "No aceptarla",
@@ -622,6 +645,12 @@ export const MESSAGES = {
       labelNone: (stage: string, days: string) => `Ningún negocio entró en «${stage}» en los últimos ${days} días.`,
       /** La vista Lista: la misma fila por etapa, en un resumen encima de la tabla. */
       listTitle: (days: string) => `Conversión por etapa · últimos ${days} días`,
+      /**
+       * La regla de «entró», dicha en la pantalla: un negocio que salta una
+       * etapa (Contactado → Propuesta) no cuenta en la que saltó, así que
+       * una columna puede tener más negocios que la anterior.
+       */
+      note: "Cuenta los negocios que pasaron por cada etapa: uno que se la salta no cuenta en ella.",
     },
   },
 
@@ -689,7 +718,7 @@ export const MESSAGES = {
     },
     fields: {
       title: "Nombre del brief",
-      titleHelp: "Para ti: «Marcas de cocina · Q4».",
+      titleHelp: "Solo lo ves tú. Por ejemplo: «Marcas de cocina · Q4».",
       wantedCategories: "Categorías que buscas",
       wantedCategoriesHelp: "Sectores o nichos de marca: alimentos, cocina, hogar.",
       wantedCountries: "Países",
@@ -741,6 +770,8 @@ export const MESSAGES = {
       creating: "Dando de alta la marca…",
       created: (name: string) => `${name} entró a tu CRM como bloqueada. Guarda el brief para aplicarlo.`,
       createError: "No se pudo dar de alta la marca.",
+      /** Se quitó la etiqueta de una marca que se dio de alta aquí: el alta ya se escribió. */
+      removedStillBlocked: (name: string) => `${name} sigue en tu CRM como bloqueada. Puedes cambiar su relación desde Empresas.`,
     },
     /** Los formatos de entregable (rate_card_item.deliverable y DELIVERABLES de @mc/core). */
     deliverables: {

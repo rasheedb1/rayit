@@ -35,6 +35,7 @@ const card: SignalCardData = {
   hiddenReason: null,
   fitNotes: [],
   canReject: false,
+  rejectWarning: null,
 };
 
 beforeEach(() => {
@@ -162,6 +163,42 @@ describe("Radar", () => {
     expect(pais).toHaveValue("PE");
     expect(screen.getByRole("option", { name: "Perú" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "XX" })).toBeNull();
+  });
+
+  it("una señal oculta por el brief no se acepta con un clic: Aceptar es secundario y pide confirmación", async () => {
+    aceptarSenal.mockResolvedValue({ ok: true, notice: "Negocio abierto." });
+    const oculta = { ...card, hiddenReason: "Tu brief no acepta «harinas»" };
+    render(<Radar cards={[oculta]} currency="COP" countries={PAISES} />);
+    const aceptar = screen.getByRole("button", { name: "Aceptar: Café Alma" });
+    expect(aceptar.className).not.toMatch(/bg-accent/);
+    expect(aceptar.className).toMatch(/bg-surface/);
+    fireEvent.click(aceptar);
+    const dialogo = screen.getByRole("dialog", { name: MESSAGES.radar.hidden.acceptTitle("Café Alma") });
+    expect(dialogo).toHaveTextContent("Tu brief no acepta «harinas». Si la aceptas, el negocio se abre");
+    expect(aceptarSenal).not.toHaveBeenCalled();
+    fireEvent.click(within(dialogo).getByRole("button", { name: MESSAGES.radar.hidden.acceptConfirm }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Negocio abierto.");
+    expect(aceptarSenal).toHaveBeenCalledTimes(1);
+  });
+
+  it("«¿No aceptar…?» de una marca del CRM con negocios abiertos lo avisa y no dice que entra como bloqueada", () => {
+    const r = MESSAGES.radar.reject;
+    const enCrm: SignalCardData = {
+      ...card,
+      companyName: "Nutrivé",
+      canReject: true,
+      crm: { companyHref: "/ventas/empresas/x", joinsDeal: true, dealName: null },
+      rejectWarning: r.openDeals("2", 2, "Nutrivé"),
+    };
+    render(<Radar cards={[enCrm]} currency="COP" countries={PAISES} reject={{ creators: [{ id: "c1", name: "Laura" }] }} />);
+    // El nombre accesible empieza por lo que se ve (WCAG 2.5.3).
+    const boton = screen.getByRole("button", { name: r.actionFor("Nutrivé") });
+    expect(boton.getAttribute("aria-label")?.startsWith(boton.textContent ?? "")).toBe(true);
+    fireEvent.click(boton);
+    const dialogo = screen.getByRole("dialog", { name: r.title("Nutrivé") });
+    expect(dialogo).toHaveTextContent(r.descriptionInCrm);
+    expect(dialogo).not.toHaveTextContent("Entra a tu CRM como bloqueada");
+    expect(dialogo).toHaveTextContent("Tienes 2 negocios abiertos con Nutrivé");
   });
 
   it("vacía, la bandeja ofrece anotar una marca y abre el formulario", () => {

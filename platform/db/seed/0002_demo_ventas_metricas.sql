@@ -1192,14 +1192,18 @@ WHERE signal.status = 'pending';
 -- Las dos que vencen HOY vencen a una hora local creíble, las 15:00 de
 -- Bogotá (PITCH_DUE_HOUR, la hora de las que pone el producto) y no a
 -- las 23:59 UTC, que la pantalla enseñaba como «6:59 p. m.». Si el seed
--- corre después de las 15:00 locales, a la próxima hora en punto (hasta
--- las 23:30), como hace setNextAction sin hora: tienen que seguir siendo
--- «de hoy» y no nacer vencidas (verify (i) cuenta dos de hoy).
+-- corre después de las 15:00 locales, a la próxima hora en punto, como
+-- hace setNextAction sin hora, y nunca después de las 23:59:59 locales:
+-- tienen que seguir siendo «de hoy» y no nacer vencidas (verify (i3)
+-- cuenta dos de hoy). Hasta el pulido el tope era las 23:30, y un seed
+-- corrido entre las 23:30 y la medianoche de Bogotá las dejaba vencidas
+-- y ponía roja la puerta de calidad (db/seed/verify/hoy.test.mjs lo
+-- prueba hora por hora).
 WITH meses AS (SELECT ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'] AS largo),
      hoy AS (
        SELECT CASE
                 WHEN now() < ((l.dia + time '15:00') AT TIME ZONE 'America/Bogota') THEN (l.dia + time '15:00') AT TIME ZONE 'America/Bogota'
-                ELSE least(date_trunc('hour', l.ahora) + interval '1 hour', l.dia + time '23:30') AT TIME ZONE 'America/Bogota'
+                ELSE least(date_trunc('hour', l.ahora) + interval '1 hour', l.dia + time '23:59:59') AT TIME ZONE 'America/Bogota'
               END AS vence
          FROM (SELECT now() AT TIME ZONE 'America/Bogota' AS ahora, (now() AT TIME ZONE 'America/Bogota')::date AS dia) l
      )

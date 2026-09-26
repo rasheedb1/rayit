@@ -27,6 +27,7 @@ function senal(over: Partial<SignalRow>): SignalRow {
     companyLinked: false,
     openDealId: null,
     openDealName: null,
+    openDealCount: 0,
     sourceId: "meta_ad_library",
     sourceLabel: "Biblioteca de anuncios de Meta",
     headlineEs: "4 anuncios nuevos en Meta · snacks",
@@ -188,7 +189,7 @@ describe("RadarView: «No aceptar esta marca» (VEN-7 r4)", () => {
         reject={{ creators: [{ id: CREADORA, name: "Laura" }] }}
       />,
     );
-    expect(screen.getAllByRole("button", { name: /^No aceptar la marca/ })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /^No aceptar esta marca:/ })).toHaveLength(1);
     expect(screen.getByRole("button", { name: r.actionFor("Vitalé") })).toBeInTheDocument();
   });
 
