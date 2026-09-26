@@ -52,7 +52,7 @@ export function tabHref(key: TabKey): string {
   return key === "radar" ? "/ventas" : `/ventas?vista=${key}`;
 }
 
-/** La tira de navegación del módulo: las dos vistas más la ruta de Empresas. */
+/** La tira de navegación del módulo: las dos vistas y las rutas de Empresas, Cadencias, Canales, Perfil y Brief (VEN-7). */
 export const MODULE_LINKS: { href: string; label: string; exact: boolean }[] = [
   { href: tabHref("radar"), label: TAB_LABELS.radar, exact: true },
   { href: tabHref("pipeline"), label: TAB_LABELS.pipeline, exact: true },
@@ -63,6 +63,7 @@ export const MODULE_LINKS: { href: string; label: string; exact: boolean }[] = [
   { href: "/ventas/actividad", label: MESSAGES.tabs.actividad, exact: false },
   { href: "/ventas/canales", label: MESSAGES.tabs.canales, exact: false },
   { href: "/ventas/perfil", label: MESSAGES.tabs.perfil, exact: false },
+  { href: "/ventas/brief", label: MESSAGES.tabs.brief, exact: true },
 ];
 
 // ---------------------------------------------------------------------

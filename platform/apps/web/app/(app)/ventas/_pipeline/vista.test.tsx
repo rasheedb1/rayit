@@ -168,3 +168,39 @@ describe("PipelineView con la siguiente acción (VEN-4)", () => {
     expect(screen.queryByText(/Último contacto:|Sin contacto todavía|hace 3 días/)).toBeNull();
   });
 });
+
+describe("PipelineView con la conversión por etapa (VEN-8)", () => {
+  const conversion = [{ stageId: "propuesta", entered: 3, advanced: 1, rate: "0.3333" }];
+
+  it("en el tablero va bajo la cabecera de la columna abierta; la cerrada no lleva", () => {
+    render(<PipelineView deals={deals} stages={stages} conversion={conversion} f={f} forma="tablero" ctx={ctx} />);
+    const filas = screen.getAllByTestId("conversion-etapa");
+    expect(filas).toHaveLength(1);
+    expect(filas[0]).toHaveTextContent("de 3 negocios");
+    expect(filas[0]).toHaveAttribute("title", expect.stringMatching(/, uno llegó más lejos \(33\s?%\)\.$/));
+  });
+
+  it("en la lista también se ve, una línea discreta por etapa: el periodo va en el título y no se repite (VEN-8 r5)", () => {
+    render(<PipelineView deals={deals} stages={stages} conversion={conversion} f={f} forma="lista" ctx={ctx} />);
+    const resumen = screen.getByRole("region", { name: MESSAGES.pipeline.conversion.listTitle("90") });
+    const filas = within(resumen).getAllByTestId("conversion-etapa");
+    expect(filas).toHaveLength(1);
+    expect(within(filas[0]!).getByRole("term")).toHaveTextContent("Propuesta");
+    const cifra = within(filas[0]!).getByRole("definition");
+    expect(cifra).toHaveTextContent(/33\s?% avanza · de 3 negocios/);
+    // «en 90 días» solo lo dice la frase entera del lector de pantalla, no lo que se ve.
+    expect(cifra.querySelector('[aria-hidden="true"]')).not.toHaveTextContent("90 días");
+    expect(within(resumen).queryByRole("listitem")).toBeNull();
+  });
+
+  it("filtrada desde «Para hoy» no repite el resumen: la conversión es de todo el pipeline", () => {
+    render(<PipelineView deals={[deals[1]!]} stages={stages} conversion={conversion} f={f} forma="lista" filtro="sin_accion" ctx={ctx} />);
+    expect(screen.queryByTestId("conversion-resumen")).toBeNull();
+  });
+
+  it("en el tablero, con el filtro de «Para hoy», tampoco: las columnas filtradas no llevan la conversión de todo el embudo (VEN-8 r5)", () => {
+    render(<PipelineView deals={[deals[1]!]} stages={stages} conversion={conversion} f={f} forma="tablero" filtro="sin_accion" ctx={ctx} />);
+    expect(screen.getByTestId("columna-propuesta")).toBeInTheDocument();
+    expect(screen.queryByTestId("conversion-etapa")).toBeNull();
+  });
+});

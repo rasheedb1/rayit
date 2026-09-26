@@ -33,6 +33,7 @@ import {
   updateContact,
   type SignalDuplicateReason,
 } from "@mc/db/queries/ventas";
+import type { BriefVerdict } from "@mc/db/queries/brief";
 import { MONTO_MAXIMO, excedeMontoMaximo } from "@mc/core";
 import { decodificarCsv } from "@/lib/csv";
 import { formatterFor } from "@/lib/format";
@@ -174,7 +175,7 @@ export async function anotarSenal(_prev: VentasState, formData: FormData): Promi
   const v = parsed.data;
   if (excedeMontoMaximo(v.budget)) return { errors: { budget: await montoMaximoError() } };
 
-  let res: { duplicate: boolean; reason: SignalDuplicateReason | null; companyId: string | null };
+  let res: { duplicate: boolean; reason: SignalDuplicateReason | null; companyId: string | null; hiddenBy: BriefVerdict | null };
   try {
     res = await withWorkspace((tx) =>
       createSignal(tx, {
@@ -203,7 +204,9 @@ export async function anotarSenal(_prev: VentasState, formData: FormData): Promi
     return { message: duplicateMessage(res.reason), link };
   }
   revalidateVentas();
-  return { ok: true, notice: MESSAGES.radar.form.created, stamp: Date.now() };
+  // Entró, pero el brief activo la deja fuera de la bandeja (VEN-7):
+  // decir «ya está en la bandeja» sería mandar a buscarla donde no está.
+  return { ok: true, notice: res.hiddenBy ? MESSAGES.radar.form.createdHidden : MESSAGES.radar.form.created, stamp: Date.now() };
 }
 
 // ---------------------------------------------------------------------
@@ -232,11 +235,13 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
 
   let created: number;
   let duplicated: number;
+  let hiddenByBrief: number;
   let createdRows: ReadonlySet<number>;
   try {
     const res = await withWorkspace((tx) => importSignals(tx, parsed.rows, { headline: t.headline }));
     created = res.created;
     duplicated = res.duplicated;
+    hiddenByBrief = res.hiddenByBrief;
     createdRows = new Set(res.createdRows);
   } catch (err) {
     return { message: messageOf(err, t.error) };
@@ -246,9 +251,11 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
   // repetida no entró, y decir «la marca entró sin país» sería falso
   // (pulido r7). Con created = 0 no queda ninguno.
   const lineWarnings = parsed.warnings.filter((w) => createdRows.has(w.row)).map(({ line, message }) => ({ line, message }));
+  // El conteo de ocultas, con el formato de números del workspace (VEN-7 r4).
+  const ocultas = hiddenByBrief > 0 ? t.hiddenByBrief(formatterFor(await getCurrentWorkspace()).int(hiddenByBrief), hiddenByBrief) : null;
   return {
     ok: true,
-    notice: t.result(created, duplicated),
+    notice: ocultas ? `${t.result(created, duplicated)} ${ocultas}` : t.result(created, duplicated),
     lineErrors: parsed.errors.length > 0 ? parsed.errors : undefined,
     lineWarnings: lineWarnings.length > 0 ? lineWarnings : undefined,
     stamp: Date.now(),

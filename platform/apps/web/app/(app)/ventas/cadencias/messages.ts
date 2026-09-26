@@ -318,6 +318,8 @@ export const MESSAGES = {
       email_invalid: "su correo rebotó",
       no_address: "no tiene dirección en ningún canal de la cadencia",
       invalid_address: "su dirección está mal escrita",
+      /** VEN-7: la marca es de una categoría o está en la lista que el brief no acepta. */
+      brief_excluded: "tu brief no acepta su marca",
     } as Record<string, string>,
     saltadaGenerica: "no se pudo enrolar",
     /** Motivo de una saltada: ya está viva en otra cadencia del espacio. */

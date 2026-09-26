@@ -1844,6 +1844,214 @@ persona.
   está; un borrador regenerado que no se puede aprobar tal cual sigue
   como estaba (SAVEPOINT) y no queda retenido por «Revisión humana».
 
+### 5.8 El brief como regla (VEN-7, 25 de septiembre)
+
+El brief (`outbound_brief`, `/ventas/brief`) tiene dos mitades que no
+pesan igual. **Qué buscas** (categorías, países, presupuesto, formatos,
+fechas) es una preferencia: no oculta nada, pero el radar MARCA en cada
+tarjeta lo que la aparta del brief, calculado en SQL
+(`briefSignalLateralSql`): «Bajo tu mínimo» (presupuesto estimado por
+debajo del mínimo, en la misma moneda), «Fuera de tus países» (el país
+de la señal o de su marca no está entre los buscados) y «Fuera de lo
+que buscas» (el brief busca categorías y la marca no tiene ninguna).
+Con varios briefs activos, cada marca solo si lo está para todos. La
+categoría buscada que SÍ tiene va dentro de la Pill del encaje («82 %
+· alimentos»): hasta la ronda 3 era una Pill aparte («Buscas
+«alimentos»») y, en la demo, la llevaban las cinco tarjetas, así que no
+distinguía ninguna. Los formatos y la ventana de disponibilidad los
+usan las cadencias (VEN-7 r4): el contexto del recomendador y el del
+generador los traen (`getRecommendationContext`,
+`loadGenerationContext`), y el prompt dice «Formatos que ofrece el
+creador: … Si propones una colaboración, propón solo estos formatos» y
+«Disponible para campañas del … al …; nunca fuera de esa ventana»
+(`briefOfferLines` de `@mc/core`). Hasta la ronda 3 se guardaban y no
+los leía nadie. **Qué no aceptas** (categorías y marcas excluidas, y la
+divulgación obligatoria) es una regla. La divulgación pasó a este bloque
+en la ronda 4, como en Passionfroot, donde las condiciones no
+negociables van juntas: no filtra marcas, pero es algo que el creador
+no acepta («No acepto contenido pagado sin la marca de publicidad de la
+red») y la cumplen los mensajes. Las exclusiones se cumplen en cuatro
+sitios con la misma definición de «esta marca» y de «esta categoría»
+(`packages/db/src/queries/brief.ts`):
+
+- **El radar** (`briefVerdictSql`): la señal no entra en la bandeja, y
+  la bandeja dice cuántas dejó fuera, con «Verlas». Vistas, van al final
+  en su propio grupo («Ocultas por tu brief») y cada una dice la regla
+  que la dejó fuera, como la escribió el creador («Tu brief no acepta
+  «harinas»», «… a Molino Andino»). La marca de la señal se reconoce por
+  id, por dominio o, sin dominio, por nombre entre las del CRM; la
+  categoría, por el sector y los nichos de esa marca y por lo que trae la
+  señal en `evidence`. KPI, pestaña, bandeja y la ficha de la empresa
+  cuentan igual.
+- **Enrolar** (`enrollContacts`): una ficha de una marca excluida sale
+  como `brief_excluded` y no nace ningún toque.
+- **El despachador** (`claimDueTouches`): cancela con `brief_excluded`
+  lo que ya estaba en la cola cuando el brief cambió.
+- Las dos últimas corren en el worker, sin RLS: usan
+  `briefCompanyVerdictSql` con el workspace del toque o de la secuencia
+  explícito, para que el brief de un espacio nunca frene a otro.
+
+Cada brief es de un creador, con uno activo por creador (0070 §1),
+porque el recomendador ya lee el del creador del negocio (§5.5, r4). La
+pantalla edita el brief de UN creador: en una agencia, un selector
+(`?creador=id`) elige cuál, y `getBrief`/`saveBrief` reciben su id y
+comprueban que sea del espacio (`UnknownCreator`). Hasta la ronda 2 la
+pantalla decía «Brief del espacio» y guardaba en el primer creador, así
+que la regla anunciada no se cumplía para los demás. Con varios
+creadores:
+
+- enrolar y el despachador usan el brief del creador del negocio y, si
+  ese creador no tiene brief activo, lo que excluyen TODOS los activos
+  del espacio (en una agencia, un creador sin brief no se salta las
+  reglas de los demás);
+- el radar, que no es de nadie, oculta solo lo que excluyen todos los
+  activos: lo que un creador no acepta, otro del mismo espacio puede
+  aceptarlo. La pantalla lo dice donde se edita la regla («Ana también
+  tiene brief activo…»).
+
+**Excluir una marca que no está en el CRM (ronda 4).** «Marcas que no
+aceptas» solo guarda empresas del CRM (`CompanyNotInCrm`). Hasta la
+ronda 3 se elegían en un `<select>` con las primeras 1 000 del CRM, que
+cortaba las demás sin avisar, y una marca que llegaba al radar por el
+catálogo o por una señal automática no se podía excluir sin darla antes
+de alta. Ahora:
+
+- en el brief, las marcas se BUSCAN en el servidor, en todo el CRM
+  (`searchBriefCompanies`, por `name_key`, sin tildes ni mayúsculas;
+  un combobox con flechas, Enter y Escape);
+- en la tarjeta del radar, «No aceptar esta marca» (solo para owner y
+  admin, y solo con algún brief activo) hace en UNA transacción
+  (`rejectSignalBrand`): resuelve la marca de la señal como al aceptarla
+  (la conocida o una nueva con lo que trae), la enlaza al CRM con la
+  relación `blocked` si no estaba (si estaba, su relación no se toca) y
+  la agrega a los briefs activos elegidos (`addExcludedCompany`: mismo
+  tope, mismo candado por workspace y creador, traza
+  `ventas.brief.excluir_marca`). Con varios briefs activos, el diálogo
+  pregunta en cuáles; el aviso dice si la bandeja ya no la enseña o si
+  otro brief la sigue aceptando.
+
+**A escala.** El veredicto corre por cada señal pendiente en la
+cabecera de Ventas, la pestaña, la bandeja y la lista de Empresas. Lee
+los briefs activos una vez por consulta (un CTE `MATERIALIZED`) y
+resuelve la marca de cada señal con tres búsquedas indexadas unidas con
+`UNION ALL` (id, dominio, nombre dentro del CRM), nunca con un `OR`
+sobre `company`. Bajo RLS, Postgres solo usa un índice si la condición
+es leakproof: ni `brand_key(co.name)` ni `citext = citext` lo son, así
+que 0071 agrega `company.name_key` (brand_key(name), calculada por la
+base) y un índice sobre `domain::text`. Medido: con 5 000 empresas en
+el catálogo y 100 señales, `countHiddenSignals` pasó de recorrer el
+catálogo por señal (28,6 s con 10 000) a unos 15 ms. Desde la ronda 4
+la prueba (`brief.test.ts`) no mide el reloj, que dependía de la carga
+de la máquina: lee el PLAN de `HIDDEN_SIGNALS_SQL` como `mc_app`
+(`EXPLAIN (FORMAT JSON)`, con 2 000 empresas y `ANALYZE`) y exige que
+toda lectura de `company` vaya por índice (llave primaria,
+`company_domain_text_idx` y, por nombre, `company_name_key_idx` o la
+llave de `company_link` cuando el CRM es chico), sin un solo `Seq Scan`.
+La medición de tiempo queda detrás de `MC_PERF=1`.
+
+Un brief en pausa no oculta ni frena nada. Es el brief de un creador,
+pero lo que excluye se oculta del radar de todo el equipo cuando lo
+excluyen todos los briefs activos, y frena las cadencias de sus
+negocios; por eso lo cambian owner y admin (la pantalla, la acción y las
+políticas RESTRICTIVE de 0070 con `outreach_can_manage`) y cada cambio
+deja traza en `audit_log` (`ventas.brief.guardar`, antes y después).
+
+Las frases que dicen un tope del brief («hasta 30», «2.000
+caracteres») lo reciben de `BRIEF_LIMITS` ya formateado con el locale
+del workspace (`brief/limites.ts`): ningún número va escrito a mano en
+`messages.ts`. La moneda del mínimo se elige junto al monto (la del
+workspace si el brief no tiene mínimo) y una inválida es
+`InvalidCurrency`, no un error de presupuesto.
+
+**Corrección a los comentarios de 0070 (ronda 4).** Los comentarios de
+la migración 0070 (§5 y la cabecera de VEN-7) dicen que el brief es
+«una regla del ESPACIO entero». Desde la ronda 3 es el brief de UN
+creador (uno activo por creador): lo que excluye se oculta del radar de
+todo el equipo solo cuando lo excluyen todos los briefs activos, y frena
+las cadencias de los negocios de su creador. 0070 no se reescribe
+(una migración escrita no se toca); lo que cuenta es esto, `lib/auth/reglas.ts` y el JSDoc de
+`saveBrief`, que ya lo dicen así.
+
+**La conversión es la de un periodo (VEN-8 r4).** `getStageConversion`
+cuenta por defecto los negocios que ENTRARON por primera vez en la etapa
+en los últimos 90 días (`CONVERSION_WINDOW_DAYS`), contados en la zona
+del workspace desde el inicio del día, y la fila lo dice («58 % avanza ·
+de 12 negocios en 90 días»; en la Lista, «Conversión por etapa ·
+últimos 90 días»). Lo que pasó después de esa entrada cuenta aunque sea
+de hoy. `since` cambia el inicio y `since: null` vuelve a toda la
+historia. Hasta la ronda 3 era toda la historia: lo de hace un año
+pesaba igual que lo de esta semana, y la cifra no decía de cuándo era.
+
+**El aviso de guardado va junto al botón (ronda 4).** El brief mide unos
+2 000 px a 400 px: el «Guardado» arriba quedaba a −1 115 px y quien
+pulsaba «Guardar el brief» en el móvil no veía nada. Ahora el aviso va
+pegado al botón y se lleva el foco (y el scroll, `block: "nearest"`).
+
+**Checkbox y Dialog, en el kit (ronda 4).** Lo que era propuesta ya está
+en `components/ui/` con su prueba, su sección en `/kit` y su fila en el
+README: `Checkbox` (casilla nativa con etiqueta y ayuda) y `Dialog` (el
+modal del pipeline, ahora también el de «No aceptar esta marca»).
+Agregar al kit es libre, y ninguno existente cambió: la regla larga de
+una tarjeta va en `TruncatedPill` (nuevo, en `pill.tsx`), que corta el
+texto con «…» por CSS y lo deja entero en `title`, en vez de recortar la
+cadena a mano, que podía partir un emoji. Meter el `truncate` dentro de
+`Pill` rompía a quien parte su frase en dos líneas (el asistente de
+importación de Resumen). La copia de `Casilla` en
+`finanzas/gastos/form.tsx` no existe en `rasheed/integracion`: cuando
+llegue, puede usar el `Checkbox` del kit.
+
+**Para el kit (propuesta a Nicolás, ronda 3; hecha en la ronda 4).** Dos piezas de Ventas ya tienen
+una segunda copia o piden serlo, y el README del kit dice que a la
+segunda suben a `components/ui/`, con prueba y sección en `/kit`. Es un
+PR de Nicolás (cambia el kit); aquí queda la propuesta:
+
+- `Checkbox`: la casilla con etiqueta y ayuda. Hoy vive dos veces, en
+  `finanzas/gastos/form.tsx` y en `ventas/brief/form.tsx` (`Casilla`),
+  con la misma forma: `name?`, `label`, `help?`, `checked`,
+  `onChange(boolean)`, y el id de la ayuda en `aria-describedby`.
+- `Dialog`: el modal de `ventas/_componentes/dialogo.tsx`. Se pinta con
+  un portal en `<body>`, deja `inert` a sus hermanos y bloquea el scroll
+  de `<body>` mientras está abierto; foco adentro al abrir y de vuelta
+  al cerrar, Tab que da la vuelta, Escape y clic en el fondo cierran.
+  Donde baste una confirmación en línea, `ConfirmInline` del kit sigue
+  siendo la opción; el diálogo es para cuando la pregunta pide un campo
+  (el motivo de pérdida).
+
+**Ronda 5: nada se pierde en silencio en «Marcas que no aceptas».**
+
+- **Un nombre a medias no se guarda como si nada.** Lo escrito en el
+  combobox solo viaja si es exactamente una marca de la lista. Si queda
+  texto sin resolver («cafe mon»), «Guardar el brief» no envía: el campo
+  dice «Elige la marca de la lista o borra lo escrito» y se lleva el
+  foco. Enter sin opción marcada agrega la única que se ofrece; con
+  varias, abre la lista en la primera y deja lo escrito. Hasta la ronda 4
+  el texto se borraba y el aviso decía «Guardado» con la marca fuera.
+- **Excluir por adelantado una marca que no está en el CRM**, como en el
+  formulario de preferencias de Passionfroot (la competencia de un
+  cliente): si la búsqueda no encuentra nada, el combobox ofrece «No
+  aceptar «…»». La Server Action `noAceptarMarcaNueva` llama a
+  `rejectBrandByName` (queries/ventas.ts), que reutiliza el alta de
+  `rejectSignalBrand` (`findOrCreateCompany` + `linkBlocked`: la conocida
+  por dominio o por nombre en el CRM, o una nueva; enlazada como
+  `blocked`), exige owner o admin en la base (`outreach_can_manage`) y
+  deja traza (`ventas.brief.no_aceptar_marca`). Lo escrito es el nombre y,
+  si tiene forma de dominio, también el dominio. La marca entra como
+  etiqueta y viaja al guardar; desde entonces una señal con ese nombre o
+  ese dominio queda oculta (probado en db/test/brief.test.ts). Sin esquema
+  nuevo.
+- **Los dos diálogos, un solo pie.** «¿No aceptar esta marca?» usa el de
+  «¿Por qué lo pierdes?»: a la derecha, Cancelar primero y la acción
+  destructiva al final; con un solo brief el foco inicial cae en
+  Cancelar. El orden queda escrito en la fila de `Dialog` del README del
+  kit. Con una sola creadora la descripción ya no habla de «todos los
+  briefs activos». Al confirmar, el foco va al aviso del radar (la
+  tarjeta se desmonta con la revalidación y el foco caía en `<body>`).
+  La acción está junto a «Descartar», no en una franja propia.
+- **La conversión no habla de lo que no se ve.** Con el filtro «Para
+  hoy», ni el tablero ni la Lista la ponen (`conversion: null`). En la
+  Lista es una línea por etapa sin caja, y «en 90 días» solo va en el
+  título.
+
 ---
 
 ## 6. Las historias nuevas de Ventas

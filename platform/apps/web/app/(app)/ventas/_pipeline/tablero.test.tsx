@@ -10,9 +10,22 @@ import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 
 const DEAL = "00000006-0000-4000-8000-000000000001";
 const stages: BoardStage[] = [
-  { id: "nuevo", label: "Nuevo", countText: "1", amountText: "COP 3 M", isLost: false, isWon: false },
-  { id: "ganado", label: "Ganado", countText: "0", amountText: "COP 0", isLost: false, isWon: true },
-  { id: "perdido", label: "Perdido", countText: "0", amountText: "COP 0", isLost: true, isWon: false },
+  {
+    id: "nuevo",
+    label: "Nuevo",
+    countText: "1",
+    amountText: "COP 3 M",
+    isLost: false,
+    isWon: false,
+    conversion: {
+      rate: "58 % avanza",
+      basis: "de 12 negocios",
+      basisShort: "de 12 negocios",
+      label: "De los 12 negocios que entraron en «Nuevo», 7 llegaron más lejos (58 %).",
+    },
+  },
+  { id: "ganado", label: "Ganado", countText: "0", amountText: "COP 0", isLost: false, isWon: true, conversion: null },
+  { id: "perdido", label: "Perdido", countText: "0", amountText: "COP 0", isLost: true, isWon: false, conversion: null },
 ];
 const ctx: SeguimientoContexto = {
   owners: [],
@@ -125,7 +138,7 @@ describe("PipelineBoard", () => {
     expect(options).toEqual(["Mover a…", "Ganado", "Perdido"]);
   });
 
-  it("pasar a «Perdido» pregunta por qué y no mueve sin motivo", async () => {
+  it("pasar a «Perdido» pregunta por qué en un diálogo y no mueve sin motivo (VEN-8)", async () => {
     moverNegocio.mockResolvedValue({ ok: true });
     render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
     await act(async () => {
@@ -134,7 +147,11 @@ describe("PipelineBoard", () => {
     // Todavía no se movió: la tarjeta sigue en su columna y pregunta.
     expect(moverNegocio).not.toHaveBeenCalled();
     expect(within(screen.getByTestId("columna-nuevo")).getByText("Café Alma")).toBeInTheDocument();
-    const form = screen.getByRole("form", { name: "Por qué pierdes el negocio con Café Alma" });
+    const dialogo = screen.getByRole("dialog", { name: "Perder el negocio con Café Alma" });
+    expect(dialogo).toHaveAttribute("aria-modal", "true");
+    const form = within(dialogo).getByRole("form", { name: "Por qué pierdes el negocio con Café Alma" });
+    // El foco entra al diálogo, en el motivo.
+    expect(document.activeElement).toBe(within(form).getByLabelText(/¿Por qué lo pierdes\?/));
 
     // Sin motivo, el error va en el campo y nada llega al servidor.
     fireEvent.click(within(form).getByRole("button", { name: "Pasar a «Perdido»" }));
@@ -147,7 +164,21 @@ describe("PipelineBoard", () => {
     });
     expect(moverNegocio).toHaveBeenCalledWith(DEAL, "perdido", { lostReason: "precio" });
     expect(await screen.findByRole("status")).toHaveTextContent("Café Alma pasó a «Perdido».");
-    expect(screen.queryByRole("form", { name: /Por qué pierdes/ })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("Escape cierra el diálogo sin mover, y el foco vuelve al menú de la tarjeta", async () => {
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
+    const menu = screen.getByLabelText("Mover «Café Alma» a otra etapa");
+    menu.focus();
+    await act(async () => {
+      fireEvent.change(menu, { target: { value: "perdido" } });
+    });
+    const dialogo = screen.getByRole("dialog", { name: "Perder el negocio con Café Alma" });
+    fireEvent.keyDown(dialogo, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(moverNegocio).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(menu);
   });
 
   it("perder un negocio con cotización enviada avisa de que se cerró", async () => {
@@ -156,8 +187,9 @@ describe("PipelineBoard", () => {
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Mover «Café Alma» a otra etapa"), { target: { value: "perdido" } });
     });
-    const form = screen.getByRole("form", { name: "Por qué pierdes el negocio con Café Alma" });
-    expect(within(form).getByText(/Si le enviaste una cotización, se cierra/)).toBeInTheDocument();
+    const dialogo = screen.getByRole("dialog", { name: "Perder el negocio con Café Alma" });
+    expect(dialogo).toHaveAccessibleDescription(/Si le enviaste una cotización, se cierra/);
+    const form = within(dialogo).getByRole("form", { name: "Por qué pierdes el negocio con Café Alma" });
     fireEvent.change(within(form).getByLabelText(/¿Por qué lo pierdes\?/), { target: { value: "precio" } });
     await act(async () => {
       fireEvent.click(within(form).getByRole("button", { name: "Pasar a «Perdido»" }));
@@ -184,7 +216,7 @@ describe("PipelineBoard", () => {
     });
     const form = screen.getByRole("form", { name: "Por qué pierdes el negocio con Café Alma" });
     fireEvent.click(within(form).getByRole("button", { name: "Cancelar" }));
-    expect(screen.queryByRole("form", { name: /Por qué pierdes/ })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(moverNegocio).not.toHaveBeenCalled();
   });
 
@@ -294,5 +326,20 @@ describe("PipelineBoard", () => {
       />,
     );
     expect(within(screen.getByTestId("columna-perdido")).getByText("Por el precio")).toBeInTheDocument();
+  });
+
+  it("bajo la cabecera de cada columna abierta va su conversión con el número de negocios; las cerradas no llevan (VEN-8)", () => {
+    render(<PipelineBoard deals={deals} stages={stages} ctx={ctx} />);
+    const filas = screen.getAllByTestId("conversion-etapa");
+    expect(filas).toHaveLength(1);
+    const nuevo = within(screen.getByRole("listitem", { name: "Nuevo" })).getByTestId("conversion-etapa");
+    expect(nuevo).toHaveTextContent("58 % avanza");
+    expect(nuevo).toHaveTextContent("de 12 negocios");
+    expect(nuevo).toHaveAttribute("title", "De los 12 negocios que entraron en «Nuevo», 7 llegaron más lejos (58 %).");
+    expect(within(screen.getByRole("listitem", { name: "Perdido" })).queryByTestId("conversion-etapa")).toBeNull();
+    // Arriba, junto al monto, y no al pie: antes de las tarjetas, para que
+    // las tasas de todas las columnas queden a la misma altura.
+    const tarjetas = screen.getByTestId("columna-nuevo");
+    expect(nuevo.compareDocumentPosition(tarjetas) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { requireModule } from "@/content/modules";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { Pill } from "@/components/ui/pill";
+import { Pill, TruncatedPill } from "@/components/ui/pill";
 import { PlatformPill } from "@/components/ui/platform-pill";
 import { EmptyState } from "@/components/ui/empty-state";
 import { DataAsOf } from "@/components/ui/data-as-of";
@@ -18,6 +18,7 @@ import { brandFollowers, CASH, followersByNetwork, weeklyViews } from "./data";
 import { FormDemo, FormDisabledDemo } from "./form-demo";
 import { Section, Variant } from "./section";
 import { ConfirmToggleDemo } from "./confirm-toggle-demo";
+import { CheckboxDemo, DialogDemo } from "./dialog-demo";
 import { ArrowRight } from "lucide-react";
 
 export const metadata: Metadata = { title: "Kit de interfaz" };
@@ -27,8 +28,10 @@ const SECTIONS = [
   ["pill", "Pill"],
   ["platform-pill", "PlatformPill"],
   ["form", "Formulario"],
+  ["checkbox", "Checkbox"],
   ["segmented", "Segmented"],
   ["confirm-inline", "ConfirmInline"],
+  ["dialog", "Dialog"],
   ["empty-state", "EmptyState"],
   ["data-as-of", "DataAsOf"],
   ["kpi", "Kpi / KpiRow"],
@@ -108,6 +111,9 @@ export default function Page() {
         <Variant label="Texto largo">
           <Pill kind="warn">Esperando aprobación de Distribuidora Nacional de Alimentos</Pill>
         </Variant>
+        <Variant label="TruncatedPill: texto largo con tope de ancho, cortado con «…» y entero en el title">
+          <TruncatedPill kind="warn">Tu brief no acepta a Distribuidora Nacional de Alimentos y Bebidas del Pacífico</TruncatedPill>
+        </Variant>
       </Section>
 
       <Section id="platform-pill" title="PlatformPill" usage={`<PlatformPill platformId="tiktok" />`}>
@@ -135,6 +141,16 @@ export default function Page() {
         </Variant>
       </Section>
 
+      <Section
+        id="checkbox"
+        title="Checkbox"
+        usage={`<Checkbox name="active" label="Aplicar el brief" help="En pausa no oculta nada." checked={on} onChange={setOn} />`}
+      >
+        <Variant label="Controlada, no controlada, con etiqueta larga y deshabilitada">
+          <CheckboxDemo />
+        </Variant>
+      </Section>
+
       <Section id="segmented" title="Segmented" usage={`<Segmented label="Red" value={net} onChange={setNet} options={[{ value: "all", label: "Todas" }, { value: "tiktok", label: "TikTok" }]} />`}>
         <Variant label="Filtro por red y orden (Tab entra al grupo, flechas cambian de opción)">
           <SegmentedDemo />
@@ -154,6 +170,19 @@ export default function Page() {
         </Variant>
         <Variant label="Dos acciones en el mismo sitio, con una key por estado">
           <ConfirmToggleDemo />
+        </Variant>
+      </Section>
+
+      <Section
+        id="dialog"
+        title="Dialog"
+        usage={`{abierto && (\n  <Dialog title="Perder el negocio" description="Elige por qué." onClose={() => setAbierto(false)}>\n    <form>…</form>\n  </Dialog>\n)}`}
+      >
+        <Variant label="Modal: el foco entra, Tab da la vuelta dentro, Escape o el fondo cierran y el foco vuelve al botón">
+          <DialogDemo />
+        </Variant>
+        <Variant label="Título y descripción largos, con casillas (a 400 px se apoya abajo como una hoja)">
+          <DialogDemo long />
         </Variant>
       </Section>
 

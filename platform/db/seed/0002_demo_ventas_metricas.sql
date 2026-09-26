@@ -1002,7 +1002,7 @@ ON CONFLICT DO NOTHING;
 
 
 -- =====================================================================
--- 9 · Radar: doce señales en estados mixtos
+-- 9 · Radar: catorce señales en estados mixtos
 -- ---------------------------------------------------------------------
 -- Las de la bandeja (pending, duplicate, discarded) son de estos días y
 -- van relativas a CURRENT_DATE; las aceptadas son las que originaron un
@@ -1059,20 +1059,24 @@ VALUES
    jsonb_build_object('active_ads', 4, 'country', 'CO', 'category', 'bienestar', 'since', to_char(CURRENT_DATE - 32, 'YYYY-MM-DD')), 0.7300, 9800000.00, 'COP',
    'meta_ad_library:vitale.co:' || to_char(CURRENT_DATE - 32, 'YYYY-MM-DD'), 'accepted', '00000002-0000-4000-8000-000000000002', (CURRENT_DATE - 31 + time '12:00') AT TIME ZONE 'UTC', NULL),
   -- Por revisar: la bandeja de hoy.
+  -- VEN-7 r4: la de Vitalé es de su campaña en Perú, fuera de los países
+  -- del brief de Laura (CO y MX): la tarjeta enseña «Fuera de tus países».
   ('00000002-0000-4000-8000-00000005e007', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e7', 'meta_ad_library',
    '4 anuncios nuevos en Meta desde el ' || to_char(CURRENT_DATE - 7, 'FMDD') || ' '
      || (SELECT m.corto[extract(month FROM CURRENT_DATE - 7)::int] FROM meses m) || ' · snacks',
    now() - interval '2 hours', 'https://www.facebook.com/ads/library/?q=vitale',
-   jsonb_build_object('active_ads', 4, 'country', 'CO', 'category', 'snacks', 'since', to_char(CURRENT_DATE - 7, 'YYYY-MM-DD')), 0.7200, 5000000.00, 'COP',
+   jsonb_build_object('active_ads', 4, 'country', 'PE', 'category', 'snacks', 'since', to_char(CURRENT_DATE - 7, 'YYYY-MM-DD')), 0.7200, 5000000.00, 'COP',
    'meta_ad_library:vitale.co:' || to_char(CURRENT_DATE - 7, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
   ('00000002-0000-4000-8000-00000005e008', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e2', 'press_launches',
    'Anuncia línea de desayunos para ' || (SELECT m.largo[extract(month FROM CURRENT_DATE + 30)::int] FROM meses m),
    (CURRENT_DATE - 2 + time '15:00') AT TIME ZONE 'UTC', 'https://www.larepublica.co/empresas/fresko-market-lanza-linea-de-desayunos',
    jsonb_build_object('launch', 'línea de desayunos', 'month', to_char(CURRENT_DATE + 30, 'YYYY-MM')), 0.7500, 6000000.00, 'COP',
    'press_launches:freskomarket.co:desayunos-' || to_char(CURRENT_DATE + 30, 'YYYY-MM'), 'pending', NULL, NULL, NULL),
+  -- VEN-7 r4: una vacante estima poco presupuesto, por debajo del mínimo
+  -- del brief de Laura (3 M): la tarjeta enseña «Bajo tu mínimo».
   ('00000002-0000-4000-8000-00000005e009', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e6', 'job_posts',
    'Vacante "coordinador de influencer marketing"', now() - interval '1 day' - interval '3 hours', 'https://www.linkedin.com/jobs/view/demo-granosdelvalle-influencer',
-   '{"title": "Coordinador de influencer marketing", "board": "linkedin", "city": "Cali"}', 0.6100, 8000000.00, 'COP',
+   '{"title": "Coordinador de influencer marketing", "board": "linkedin", "city": "Cali"}', 0.6100, 2500000.00, 'COP',
    'job_posts:granosdelvalle.co:influencer-marketing:' || to_char(CURRENT_DATE - 1, 'YYYY-MM'), 'pending', NULL, NULL, NULL),
   ('00000002-0000-4000-8000-00000005e010', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e4', 'tiktok_top_ads',
    'Top Ads en TikTok · Colombia · 7 días', now() - interval '2 days', 'https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/es',
@@ -1095,6 +1099,20 @@ VALUES
    jsonb_build_object('company_name', 'Molino Andino', 'domain', 'molinoandino.co', 'industry', 'Alimentos', 'active_ads', 5, 'country', 'CO', 'category', 'harinas',
                       'since', to_char(CURRENT_DATE - 4, 'YYYY-MM-DD')), 0.8000, 7000000.00, 'COP',
    'meta_ad_library:molinoandino.co:' || to_char(CURRENT_DATE - 4, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
+  -- Pendiente, pero el brief de Laura la deja fuera (VEN-7 r2): es de
+  -- suplementos, una categoría que su brief no acepta (sección 12). La
+  -- bandeja sigue enseñando las cinco del mock y dice «1 señal oculta por
+  -- tu brief», con «Verlas»; sin ella la demo nunca enseñaba el brief
+  -- funcionando. Como la quinta, de una marca que no está en el CRM:
+  -- la categoría llega en evidence, como la deja la Biblioteca de
+  -- anuncios de Meta. Proteína Cumbre es inventada.
+  ('00000002-0000-4000-8000-00000005e014', '00000002-0000-4000-8000-000000000001', NULL, 'meta_ad_library',
+   '3 anuncios nuevos en Meta desde el ' || to_char(CURRENT_DATE - 3, 'FMDD') || ' '
+     || (SELECT m.corto[extract(month FROM CURRENT_DATE - 3)::int] FROM meses m) || ' · suplementos',
+   now() - interval '5 hours', 'https://www.facebook.com/ads/library/?q=proteinacumbre',
+   jsonb_build_object('company_name', 'Proteína Cumbre', 'domain', 'proteinacumbre.co', 'industry', 'Suplementos', 'active_ads', 3, 'country', 'CO',
+                      'category', 'suplementos', 'since', to_char(CURRENT_DATE - 3, 'YYYY-MM-DD')), 0.6800, 5000000.00, 'COP',
+   'meta_ad_library:proteinacumbre.co:' || to_char(CURRENT_DATE - 3, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
   -- Duplicada: la misma colaboración, detectada otra vez.
   ('00000002-0000-4000-8000-00000005e011', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e8', 'watchlist_collab',
    'Colaboración pagada con @la.olla.facil', now() - interval '2 days', 'https://www.instagram.com/reel/demo-laollafacil-ollafacil/',
@@ -1115,12 +1133,16 @@ VALUES
 -- sembrada antes del pulido r8, con la quinta todavía de Sabores
 -- Caseros, pasa a la marca nueva al volver a sembrar.
 ON CONFLICT (id) DO UPDATE SET
-  company_id   = EXCLUDED.company_id,
-  headline_es  = EXCLUDED.headline_es,
-  detected_at  = EXCLUDED.detected_at,
-  evidence_url = EXCLUDED.evidence_url,
-  evidence     = EXCLUDED.evidence,
-  dedupe_key   = EXCLUDED.dedupe_key
+  company_id      = EXCLUDED.company_id,
+  headline_es     = EXCLUDED.headline_es,
+  detected_at     = EXCLUDED.detected_at,
+  evidence_url    = EXCLUDED.evidence_url,
+  evidence        = EXCLUDED.evidence,
+  dedupe_key      = EXCLUDED.dedupe_key,
+  -- VEN-7 r4: el presupuesto de la vacante bajó a 2,5 M; una base ya
+  -- sembrada lo recoge al volver a sembrar.
+  budget_estimate = EXCLUDED.budget_estimate,
+  budget_currency = EXCLUDED.budget_currency
 WHERE signal.status = 'pending';
 
 
@@ -1680,8 +1702,9 @@ UPDATE app_user
 --   company                      8
 --   company_link                 8
 --   contact                     12  (1 con opted_out)
---   signal                      13  (6 accepted, 5 pending —las cinco del mock, una
---                                    de una marca fuera del CRM—, 1 duplicate, 1 discarded)
+--   signal                      14  (6 accepted, 6 pending —las cinco del mock, una
+--                                    de una marca fuera del CRM, y una de suplementos que
+--                                    el brief oculta—, 1 duplicate, 1 discarded)
 --   deal                        15  (10 abiertos, 4 ganados, 1 perdido)
 --   deal_stage_history          47
 --   activity                    49  (40 históricas —3 de ellas cambios de etapa— + 9 de seguimiento, sección 11b)

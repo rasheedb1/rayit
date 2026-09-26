@@ -35,6 +35,7 @@ const recienCreada: CompanyListRow = {
   openDealAmount: null,
   lastActivityAt: null,
   pendingSignalCount: 0,
+  hiddenSignalCount: 0,
   linkedAt: "2026-09-22T15:00:00.000Z",
 };
 

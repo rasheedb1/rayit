@@ -19,6 +19,8 @@
     "./queries/resumen-constantes": "./src/queries/resumen-constantes.ts",
     "./queries/ventas": "./src/queries/ventas.ts",
     "./queries/ventas-ficha": "./src/queries/ventas-ficha.ts",
+    "./queries/brief": "./src/queries/brief.ts",
+    "./queries/conversion": "./src/queries/conversion.ts",
     "./queries/cotizar": "./src/queries/cotizar.ts",
     "./queries/campanas": "./src/queries/campanas.ts",
     "./queries/finanzas": "./src/queries/finanzas.ts",

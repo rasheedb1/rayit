@@ -40,6 +40,7 @@
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES } from '../schema/ventas.ts';
 import { parseReplyOptOutCode, type ReplyOptOutChannel } from './canales.ts';
+import { addExcludedCompany, BRIEF_LIMITS, BriefError, briefSignalLateralSql, briefVerdictSql, type BriefVerdict } from './brief.ts';
 import { WORKSPACE_DEFAULTS } from './cimientos.ts';
 
 export { CONTACT_SOURCES, LOST_REASONS, NEXT_ACTION_KINDS, RELATIONSHIPS, SIGNAL_STATUSES };
@@ -228,8 +229,10 @@ export interface CompanyListRow {
   openDealAmount: string | null;
   /** Última actividad registrada para la empresa, ISO o null. */
   lastActivityAt: string | null;
-  /** Señales pendientes de revisar de esta empresa. */
+  /** Señales pendientes de revisar de esta empresa que se ven en la bandeja. */
   pendingSignalCount: number;
+  /** Las pendientes que el brief activo deja fuera de la bandeja (VEN-7): se ven con «Verlas» (/ventas?ocultas=1). */
+  hiddenSignalCount: number;
   linkedAt: string;
 }
 
@@ -319,6 +322,39 @@ export interface SignalRow {
   reviewedAt: string | null;
   /** 'csv' si entró por una lista importada; 'manual' si la escribió alguien. */
   via: SignalVia;
+  /**
+   * Por qué el brief activo la deja fuera de la bandeja (VEN-7): su
+   * empresa o su categoría están excluidas. Null si se ve. Solo llega
+   * distinto de null en las pendientes pedidas con `brief: 'show_hidden'`.
+   */
+  hiddenBy: BriefVerdict | null;
+  /**
+   * La regla que la oculta, como la escribió el creador: la categoría
+   * excluida («harinas») o el nombre de la marca excluida. Null si se ve.
+   */
+  hiddenMatch: string | null;
+  /** Cómo encaja con «Qué buscas» del brief activo (VEN-7). No oculta nada: la tarjeta lo dice. */
+  briefFit: SignalBriefFit;
+}
+
+/**
+ * El encaje de una señal pendiente con lo que busca el brief activo,
+ * calculado en SQL (briefSignalLateralSql). Todo en falso y null sin
+ * brief activo, y en las que no están pendientes.
+ */
+export interface SignalBriefFit {
+  /** El presupuesto estimado está por debajo del mínimo del brief, en la misma moneda. */
+  belowMinBudget: boolean;
+  /** El país de la señal (o de su empresa) no está entre los que busca el brief. */
+  countryOutside: boolean;
+  /** La primera categoría buscada que tiene la marca, como la escribió el creador; null si ninguna. */
+  wantedCategory: string | null;
+  /**
+   * El brief busca categorías y la marca no tiene ninguna de ellas (para
+   * todos los briefs activos que buscan alguna). Es lo que la tarjeta
+   * marca: una señal que encaja no necesita nota, una que no, sí.
+   */
+  categoryOutside: boolean;
 }
 
 export type SignalStatus = (typeof SIGNAL_STATUSES)[number];
@@ -1017,15 +1053,31 @@ export interface ListSignalsParams {
   status?: SignalStatus;
   /** 1..200. Por defecto 100. */
   limit?: number;
+  /**
+   * Qué hacer con las pendientes que el brief activo no acepta (VEN-7):
+   * 'apply' (por defecto) las deja fuera; 'show_hidden' las trae todas,
+   * con `hiddenBy` diciendo por qué se ocultarían. En los demás estados
+   * no se filtra nada: lo aceptado y lo descartado ya se decidió.
+   */
+  brief?: 'apply' | 'show_hidden';
 }
+
+/** Las columnas del veredicto cuando no se aplica el brief (lo que no está pendiente ya se decidió). */
+const SIN_VEREDICTO =
+  'SELECT NULL::text AS hidden_by, NULL::text AS hidden_match, NULL::text AS wanted_match, false AS below_min_budget, false AS country_outside, false AS category_outside';
 
 /**
  * La bandeja del radar. Por defecto las pendientes, de mayor a menor
- * encaje: es el orden en que se revisan.
+ * encaje: es el orden en que se revisan. Las pendientes que el brief
+ * activo excluye no vienen (VEN-7), salvo con `brief: 'show_hidden'`,
+ * que las trae al final. Cada una dice cómo encaja con «Qué buscas»
+ * (briefFit) sin que eso oculte ninguna.
  */
 export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {}): Promise<SignalRow[]> {
   const status = params.status ?? 'pending';
   const limit = safeLimit(params.limit, 100, 200);
+  const aplicaBrief = status === 'pending';
+  const ocultar = aplicaBrief && (params.brief ?? 'apply') === 'apply';
   const { rows } = await tx.query<SignalRowSql>(
     // Una señal manual o de CSV no tiene company_id hasta que se acepta:
     // el nombre y el dominio que se escribieron viven en `evidence`.
@@ -1043,8 +1095,11 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
             s.headline_es, s.detected_at, s.evidence_url, s.fit_score::text AS fit_score,
             s.budget_estimate::text AS budget_estimate, s.budget_currency::text AS budget_currency,
             s.dedupe_key, s.status, s.discard_reason, s.reviewed_at,
-            COALESCE(s.evidence->>'via', 'manual') AS via
+            COALESCE(s.evidence->>'via', 'manual') AS via,
+            veredicto.hidden_by, veredicto.hidden_match, veredicto.wanted_match,
+            veredicto.below_min_budget, veredicto.country_outside, veredicto.category_outside
      FROM signal s
+     CROSS JOIN LATERAL (${aplicaBrief ? briefSignalLateralSql('s') : SIN_VEREDICTO}) veredicto
      LEFT JOIN company co        ON co.id = s.company_id
      LEFT JOIN LATERAL (
             SELECT r.id FROM (
@@ -1052,7 +1107,7 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
                  FROM company c
                 WHERE s.company_id IS NULL
                   AND nullif(s.evidence->>'domain', '') IS NOT NULL
-                  AND lower(c.domain::text) = lower(s.evidence->>'domain')
+                  AND c.domain::text = lower(s.evidence->>'domain')
                 LIMIT 1)
               UNION ALL
               (SELECT c.id, 1 AS o
@@ -1060,7 +1115,7 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
                  JOIN company c ON c.id = l.company_id
                 WHERE s.company_id IS NULL
                   AND nullif(s.evidence->>'domain', '') IS NULL
-                  AND brand_key(c.name) = brand_key(s.evidence->>'company_name')
+                  AND c.name_key = brand_key(s.evidence->>'company_name')
                 ORDER BY (c.domain IS NULL) ASC, l.created_at ASC
                 LIMIT 1)
             ) r
@@ -1078,18 +1133,23 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
              LIMIT 1
           ) abierto ON true
      LEFT JOIN signal_source src ON src.id = s.source_id
-     WHERE s.status = $1
-     ORDER BY s.fit_score DESC NULLS LAST, s.detected_at DESC
+     WHERE s.status = $1${ocultar ? ' AND veredicto.hidden_by IS NULL' : ''}
+     -- Con «Verlas», las ocultas van al final, en su propio grupo: no
+     -- mezcladas por encaje con las que sí se ven.
+     ORDER BY (veredicto.hidden_by IS NOT NULL), s.fit_score DESC NULLS LAST, s.detected_at DESC
      LIMIT $2`,
     [status, limit],
   );
   return rows.map(toSignalRow);
 }
 
-/** Cuántas señales esperan revisión. Lo pinta el KPI y la pestaña. */
+/**
+ * Cuántas señales esperan revisión. Lo pinta el KPI y la pestaña. Las
+ * que el brief activo oculta no cuentan (VEN-7): son las de la bandeja.
+ */
 export async function countPendingSignals(tx: WorkspaceTx): Promise<number> {
   const { rows } = await tx.query<{ n: string }>(
-    "SELECT count(*)::text AS n FROM signal WHERE status = 'pending'",
+    `SELECT count(*)::text AS n FROM signal s WHERE s.status = 'pending' AND ${briefVerdictSql('s')} IS NULL`,
   );
   return Number(rows[0]?.n ?? 0);
 }
@@ -1187,6 +1247,12 @@ export interface CreateSignalResult {
    * no entró.
    */
   companyId: string | null;
+  /**
+   * Entró, pero el brief activo la deja fuera de la bandeja (VEN-7): la
+   * pantalla lo dice en vez de anunciar «ya está en la bandeja». Null si
+   * se ve, o si no entró.
+   */
+  hiddenBy: BriefVerdict | null;
 }
 
 export type SignalDuplicateReason = 'same_key' | 'pending' | 'discarded' | 'accepted';
@@ -1231,7 +1297,7 @@ async function resolveCompany(
     `SELECT co.id, co.name, co.domain::text AS domain
        FROM company_link cl
        JOIN company co ON co.id = cl.company_id
-      WHERE brand_key(co.name) = brand_key($1)
+      WHERE co.name_key = brand_key($1)
       ORDER BY (co.domain IS NULL) ASC, cl.created_at ASC
       LIMIT 1`,
     [name],
@@ -1314,7 +1380,7 @@ export async function createSignal(tx: WorkspaceTx, input: CreateSignalInput): P
     domain: brandDomain,
     name: companyName ?? company?.name ?? null,
   });
-  if (previa) return { id: null, duplicate: true, reason: previa, dedupeKey, companyId: company?.id ?? null };
+  if (previa) return { id: null, duplicate: true, reason: previa, dedupeKey, companyId: company?.id ?? null, hiddenBy: null };
 
   const evidence = {
     company_name: companyName ?? company?.name ?? null,
@@ -1345,7 +1411,13 @@ export async function createSignal(tx: WorkspaceTx, input: CreateSignalInput): P
     ],
   );
   const id = rows[0]?.id ?? null;
-  if (id) return { id, duplicate: false, reason: null, dedupeKey, companyId: company?.id ?? null };
+  if (id) {
+    const { rows: veredicto } = await tx.query<{ hidden_by: BriefVerdict | null }>(
+      `SELECT ${briefVerdictSql('s')} AS hidden_by FROM signal s WHERE s.id = $1`,
+      [id],
+    );
+    return { id, duplicate: false, reason: null, dedupeKey, companyId: company?.id ?? null, hiddenBy: veredicto[0]?.hidden_by ?? null };
+  }
 
   // La clave chocó: ¿con qué? La fila que ya la ocupa dice si esa misma
   // señal se aceptó (la marca es un negocio), sigue en la bandeja o se
@@ -1359,7 +1431,7 @@ export async function createSignal(tx: WorkspaceTx, input: CreateSignalInput): P
     previaClave?.status === 'accepted' || previaClave?.status === 'pending' || previaClave?.status === 'discarded'
       ? previaClave.status
       : 'same_key';
-  return { id: null, duplicate: true, reason, dedupeKey, companyId: previaClave?.company_id ?? company?.id ?? null };
+  return { id: null, duplicate: true, reason, dedupeKey, companyId: previaClave?.company_id ?? company?.id ?? null, hiddenBy: null };
 }
 
 export interface ImportSignalRow {
@@ -1381,6 +1453,8 @@ export interface ImportSignalsResult {
    * fila repetida que no entró (pulido r7).
    */
   createdRows: number[];
+  /** De las que entraron, cuántas deja fuera de la bandeja el brief activo (VEN-7). */
+  hiddenByBrief: number;
 }
 
 export interface ImportSignalsOptions {
@@ -1405,6 +1479,7 @@ export async function importSignals(
 ): Promise<ImportSignalsResult> {
   const createdRows: number[] = [];
   const duplicatedKeys: string[] = [];
+  let hiddenByBrief = 0;
   for (const [i, row] of rows.entries()) {
     const name = row.name.trim();
     const res = await createSignal(tx, {
@@ -1418,8 +1493,9 @@ export async function importSignals(
     });
     if (res.duplicate) duplicatedKeys.push(res.dedupeKey);
     else createdRows.push(i);
+    if (res.hiddenBy) hiddenByBrief++;
   }
-  return { created: createdRows.length, duplicated: duplicatedKeys.length, duplicatedKeys, createdRows };
+  return { created: createdRows.length, duplicated: duplicatedKeys.length, duplicatedKeys, createdRows, hiddenByBrief };
 }
 
 export interface AcceptSignalResult {
@@ -1552,6 +1628,82 @@ export const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, '')
     FROM workspace WHERE id = current_workspace_id())`;
 
 /**
+ * La empresa que ya conocemos por dominio o, sin dominio, por nombre
+ * dentro del CRM (resolveCompany), o una nueva con lo que se sabe de ella
+ * (nombre, dominio, país y sector). Null si no la conocemos y tampoco
+ * hay nombre: no hay marca que dar de alta. La usan la señal
+ * (companyOfSignal) y «No aceptar «…»» desde el brief (rejectBrandByName):
+ * una sola forma de dar de alta una marca.
+ */
+async function findOrCreateCompany(
+  tx: WorkspaceTx,
+  input: { name: string | null; domain: string | null; country?: string | null; industry?: string | null },
+): Promise<{ company: ResolvedCompany; created: boolean } | null> {
+  const existente = await resolveCompany(tx, { domain: input.domain, name: input.name });
+  if (existente) return { company: existente, created: false };
+  const name = input.name?.trim();
+  if (!name) return null;
+  const domain = normalizeDomain(input.domain);
+  const inserted = await tx.query<{ id: string }>(
+    `INSERT INTO company (name, domain, country, industry) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [name, domain, normalizeCountry(input.country), input.industry ?? null],
+  );
+  const id = inserted.rows[0]?.id;
+  if (!id) throw new VentasError('CompanyCreateFailed');
+  return { company: { id, name, domain }, created: true };
+}
+
+/**
+ * Enlaza la marca al CRM con la relación 'blocked' si no estaba. Si ya
+ * estaba, su relación no se toca: un cliente sigue siendo cliente.
+ * Devuelve la relación que tenía antes (null si no estaba en el CRM).
+ */
+async function linkBlocked(tx: WorkspaceTx, companyId: string): Promise<string | null> {
+  const { rows: antes } = await tx.query<{ relationship: string }>(
+    'SELECT relationship FROM company_link WHERE company_id = $1',
+    [companyId],
+  );
+  await tx.query(
+    `INSERT INTO company_link (workspace_id, company_id, owner_user_id, relationship)
+     VALUES (current_workspace_id(), $1, current_user_id(), 'blocked')
+     ON CONFLICT (workspace_id, company_id) DO NOTHING`,
+    [companyId],
+  );
+  return antes[0]?.relationship ?? null;
+}
+
+/**
+ * La empresa de una señal, para aceptarla o para no aceptar su marca:
+ * la que ya conocemos (por id, por dominio o, sin dominio, por nombre
+ * dentro del CRM, resolveCompany) o, si no hay ninguna, una nueva con lo
+ * que la señal guardó en `evidence` (nombre, dominio, país y sector).
+ * Deja la señal enlazada a ella. Null si no hay empresa y la señal
+ * tampoco trae nombre: no hay marca que dar de alta.
+ */
+async function companyOfSignal(
+  tx: WorkspaceTx,
+  sig: { id: string; company_id: string | null; evidence: Record<string, unknown> | null },
+): Promise<{ company: ResolvedCompany; created: boolean } | null> {
+  const ev = sig.evidence ?? {};
+  const texto = (k: string) => (typeof ev[k] === 'string' ? (ev[k] as string) : null);
+
+  const conocida = sig.company_id ? await resolveCompany(tx, { companyId: sig.company_id }) : null;
+  const resuelta = conocida
+    ? { company: conocida, created: false }
+    : await findOrCreateCompany(tx, {
+        name: texto('company_name'),
+        domain: texto('domain'),
+        country: texto('country'),
+        industry: texto('industry'),
+      });
+  if (!resuelta) return null;
+  if (sig.company_id !== resuelta.company.id) {
+    await tx.query('UPDATE signal SET company_id = $2 WHERE id = $1', [sig.id, resuelta.company.id]);
+  }
+  return resuelta;
+}
+
+/**
  * Aceptar una señal: resuelve la empresa (la que ya conocemos por id,
  * dominio o, sin dominio, por nombre dentro del CRM; si no, la crea),
  * la vincula y:
@@ -1585,31 +1737,10 @@ export async function acceptSignal(
 
   const ev = sig.evidence ?? {};
   const evName = typeof ev.company_name === 'string' ? ev.company_name : null;
-  const evDomain = typeof ev.domain === 'string' ? ev.domain : null;
-  const evCountry = typeof ev.country === 'string' ? ev.country : null;
-  const evIndustry = typeof ev.industry === 'string' ? ev.industry : null;
-
-  let company = sig.company_id
-    ? await resolveCompany(tx, { companyId: sig.company_id })
-    : await resolveCompany(tx, { domain: evDomain, name: evName });
-  let companyCreated = false;
-
-  if (!company) {
-    if (!evName) throw new VentasError('SignalWithoutCompany');
-    const domain = normalizeDomain(evDomain);
-    const inserted = await tx.query<{ id: string }>(
-      `INSERT INTO company (name, domain, country, industry) VALUES ($1, $2, $3, $4) RETURNING id`,
-      [evName, domain, normalizeCountry(evCountry), evIndustry],
-    );
-    const id = inserted.rows[0]?.id;
-    if (!id) throw new VentasError('CompanyCreateFailed');
-    company = { id, name: evName, domain };
-    companyCreated = true;
-  }
+  const resuelta = await companyOfSignal(tx, sig);
+  if (!resuelta) throw new VentasError('SignalWithoutCompany');
+  const { company, created: companyCreated } = resuelta;
   const companyId = company.id;
-  if (sig.company_id !== companyId) {
-    await tx.query('UPDATE signal SET company_id = $2 WHERE id = $1', [signalId, companyId]);
-  }
 
   // Vincular es idempotente: si ya era una empresa del workspace, se
   // deja la relación como estaba (podía ser cliente) y su responsable.
@@ -1680,6 +1811,122 @@ export async function acceptSignal(
   await markAccepted();
 
   return { dealId, companyId, companyName: company.name, companyCreated, dealCreated: true };
+}
+
+/** Lo que pasó al no aceptar la marca de una señal (rejectSignalBrand). */
+export interface RejectSignalBrandResult {
+  companyId: string;
+  companyName: string;
+  /** La marca no estaba en el CRM y nació aquí (relación 'blocked'). */
+  companyCreated: boolean;
+  /** A cuántos briefs activos se agregó, y cuántos se miraron. */
+  added: number;
+  briefs: number;
+  /** Después de excluirla, la señal ya no se ve en la bandeja (la excluyen todos los briefs activos). */
+  hidden: boolean;
+}
+
+/**
+ * «No aceptar esta marca», desde su tarjeta en el radar (VEN-7 r4).
+ *
+ * Una marca que llega por el catálogo o por una señal automática no se
+ * podía excluir por nombre sin darla antes de alta en el CRM: el brief
+ * solo guarda empresas del CRM (saveBrief, CompanyNotInCrm). Aquí, en la
+ * MISMA transacción:
+ *
+ *   1. se resuelve la empresa de la señal como al aceptarla
+ *      (companyOfSignal): la conocida o una nueva con lo que trae;
+ *   2. se enlaza al CRM con la relación 'blocked' si no estaba (si ya
+ *      estaba, su relación no se toca: un cliente sigue siendo cliente);
+ *   3. se agrega a «Marcas que no aceptas» de los briefs activos de los
+ *      creadores pedidos, o de todos (addExcludedCompany: permiso, tope,
+ *      candado y traza).
+ *
+ * La señal sigue pendiente: si ahora la excluyen todos los briefs
+ * activos, la bandeja la oculta como a cualquier otra (`hidden`); si
+ * otro creador la acepta, se sigue viendo y el resultado lo dice.
+ */
+export async function rejectSignalBrand(
+  tx: WorkspaceTx,
+  signalId: string,
+  opts: { creatorIds?: readonly string[] } = {},
+): Promise<RejectSignalBrandResult> {
+  if (!isUuid(signalId)) throw new BriefError('SignalNotFound');
+  const { rows } = await tx.query<{ id: string; company_id: string | null; status: SignalStatus; evidence: Record<string, unknown> | null }>(
+    'SELECT id, company_id, status, evidence FROM signal WHERE id = $1 FOR UPDATE',
+    [signalId],
+  );
+  const sig = rows[0];
+  if (!sig || sig.status !== 'pending') throw new BriefError('SignalNotFound');
+
+  const resuelta = await companyOfSignal(tx, sig);
+  if (!resuelta) throw new BriefError('SignalWithoutBrand');
+  const { company, created } = resuelta;
+  await linkBlocked(tx, company.id);
+  const { added, briefs } = await addExcludedCompany(tx, company.id, opts);
+  const { rows: v } = await tx.query<{ verdict: string | null }>(
+    `SELECT ${briefVerdictSql('s')} AS verdict FROM signal s WHERE s.id = $1`,
+    [signalId],
+  );
+  return { companyId: company.id, companyName: company.name, companyCreated: created, added, briefs, hidden: (v[0]?.verdict ?? null) !== null };
+}
+
+/** Lo que pasó al no aceptar una marca por su nombre, desde el brief (rejectBrandByName). */
+export interface RejectBrandByNameResult {
+  id: string;
+  name: string;
+  /** La marca no existía y nació aquí. */
+  created: boolean;
+  /** La relación que tenía en el CRM antes; null si no estaba (ahora es 'blocked'). */
+  previousRelationship: string | null;
+}
+
+/**
+ * «No aceptar «…»», desde «Marcas que no aceptas» del brief (VEN-7 r5):
+ * una marca que el creador no acepta y que todavía no está en el CRM —la
+ * competencia de un cliente, como en el formulario de preferencias de
+ * Passionfroot— se da de alta por su nombre (y su dominio, si lo hay)
+ * para poder excluirla por adelantado, sin esperar a que llegue una
+ * señal suya al radar.
+ *
+ * Es la misma alta que la de rejectSignalBrand, sin la señal:
+ *   1. la marca conocida por dominio o, sin dominio, por nombre en el CRM
+ *      (findOrCreateCompany), o una nueva;
+ *   2. enlazada al CRM como 'blocked' si no estaba (linkBlocked: si ya
+ *      estaba, su relación no se toca).
+ *
+ * No toca el brief: la pantalla la agrega como etiqueta y viaja al
+ * guardar (saveBrief, con su propia traza). Desde ese momento una señal
+ * con ese nombre o ese dominio queda oculta, como cualquier marca
+ * excluida (briefVerdictSql la reconoce por nombre dentro del CRM).
+ *
+ * Mismo permiso que el brief: solo owner y admin (outreach_can_manage,
+ * la regla de 0070 §5); si no, Forbidden y no queda nada. Deja traza en
+ * audit_log ('ventas.brief.no_aceptar_marca', la relación antes y después).
+ */
+export async function rejectBrandByName(
+  tx: WorkspaceTx,
+  input: { name: string; domain?: string | null },
+): Promise<RejectBrandByNameResult> {
+  const name = input.name.trim().replace(/\s+/g, ' ');
+  if (!name || name.length > BRIEF_LIMITS.brandNameMax || !nameKey(name)) throw new BriefError('InvalidBrandName');
+  const { rows: permiso } = await tx.query<{ ok: boolean }>('SELECT outreach_can_manage(current_workspace_id()) AS ok');
+  if (!permiso[0]?.ok) throw new BriefError('Forbidden');
+
+  const resuelta = await findOrCreateCompany(tx, { name, domain: input.domain ?? null });
+  if (!resuelta) throw new BriefError('InvalidBrandName');
+  const { company, created } = resuelta;
+  const previa = await linkBlocked(tx, company.id);
+  await tx.query(
+    `INSERT INTO audit_log (workspace_id, actor_user_id, actor_kind, action, entity_type, entity_id, before, after)
+     VALUES (current_workspace_id(), current_user_id(), 'user', 'ventas.brief.no_aceptar_marca', 'company', $1::uuid, $2::jsonb, $3::jsonb)`,
+    [
+      company.id,
+      JSON.stringify(previa ? { relationship: previa } : null),
+      JSON.stringify({ name: company.name, domain: company.domain, relationship: previa ?? 'blocked', created }),
+    ],
+  );
+  return { id: company.id, name: company.name, created, previousRelationship: previa };
 }
 
 export interface CreateDealInput {
@@ -1855,7 +2102,8 @@ export async function getSalesKpis(tx: WorkspaceTx): Promise<SalesKpis> {
           desde AS (SELECT coalesce((SELECT date_trunc('quarter', now() AT TIME ZONE w.tz) AT TIME ZONE w.tz FROM w),
                                     date_trunc('quarter', now())) AS inicio)
      SELECT
-       (SELECT count(*) FROM signal WHERE status = 'pending')::text                      AS pending_signals,
+       (SELECT count(*) FROM signal s
+         WHERE s.status = 'pending' AND ${briefVerdictSql('s')} IS NULL)::text            AS pending_signals,
        (SELECT count(*) FROM deal_pipeline WHERE NOT is_won AND NOT is_lost)::text        AS open_deals,
        (SELECT COALESCE(sum(amount), 0) FROM deal_pipeline
          WHERE NOT is_won AND NOT is_lost)::text                                          AS open_amount,
@@ -2237,7 +2485,7 @@ interface CompanyRowSql {
   relationship: Relationship; fit_score: string | null; owner_user_id: string | null;
   owner_name: string | null; notes: string | null; linked_at: string;
   contact_count: string; opted_out_count: string; open_deal_count: string; open_deal_amount: string | null;
-  pending_signal_count: string; last_activity_at: string | null;
+  pending_signal_count: string; hidden_signal_count: string; last_activity_at: string | null;
 }
 
 interface CompanyDetailSql {
@@ -2266,6 +2514,7 @@ function toCompanyRow(r: CompanyRowSql): CompanyListRow {
     openDealCount: Number(r.open_deal_count),
     openDealAmount: r.open_deal_amount,
     pendingSignalCount: Number(r.pending_signal_count),
+    hiddenSignalCount: Number(r.hidden_signal_count),
     lastActivityAt: r.last_activity_at,
     linkedAt: r.linked_at,
   };
@@ -2316,6 +2565,8 @@ interface SignalRowSql {
   detected_at: string; evidence_url: string | null; fit_score: string | null;
   budget_estimate: string | null; budget_currency: string | null; dedupe_key: string;
   status: SignalStatus; discard_reason: string | null; reviewed_at: string | null; via: string;
+  hidden_by: BriefVerdict | null; hidden_match: string | null; wanted_match: string | null;
+  below_min_budget: boolean | null; country_outside: boolean | null; category_outside: boolean | null;
 }
 
 function toSignalRow(r: SignalRowSql): SignalRow {
@@ -2340,6 +2591,14 @@ function toSignalRow(r: SignalRowSql): SignalRow {
     discardReason: r.discard_reason,
     reviewedAt: r.reviewed_at,
     via: r.via === 'csv' ? 'csv' : 'manual',
+    hiddenBy: r.hidden_by,
+    hiddenMatch: r.hidden_match,
+    briefFit: {
+      belowMinBudget: r.below_min_budget === true,
+      countryOutside: r.country_outside === true,
+      wantedCategory: r.wanted_match,
+      categoryOutside: r.category_outside === true,
+    },
   };
 }
 
@@ -2444,9 +2703,20 @@ const DEAL_COUNTS = `
   (SELECT sum(dp.amount) FROM deal_pipeline dp
     WHERE dp.company_id = co.id AND NOT dp.is_won AND NOT dp.is_lost)::text               AS open_deal_amount`;
 
+/**
+ * Las señales pendientes de la empresa, partidas como las parte el radar
+ * (VEN-7): las que se ven en la bandeja y las que el brief activo deja
+ * fuera. Con la misma expresión que listSignals (briefVerdictSql): la
+ * ficha no puede decir «1 señal en el radar» y enlazar a una bandeja
+ * donde esa señal no está.
+ */
 const PENDING_SIGNALS = `
   (SELECT count(*) FROM signal s
-    WHERE s.company_id = co.id AND s.status = 'pending')::text                            AS pending_signal_count`;
+    WHERE s.company_id = co.id AND s.status = 'pending'
+      AND ${briefVerdictSql('s')} IS NULL)::text                                          AS pending_signal_count,
+  (SELECT count(*) FROM signal s
+    WHERE s.company_id = co.id AND s.status = 'pending'
+      AND ${briefVerdictSql('s')} IS NOT NULL)::text                                      AS hidden_signal_count`;
 
 const LAST_ACTIVITY = `
   (SELECT max(a.occurred_at) FROM activity a WHERE a.company_id = co.id)                  AS last_activity_at`;

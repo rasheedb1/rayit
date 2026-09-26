@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { DELIVERABLES } from "@mc/core";
+import { BRIEF_ERROR_CODES, BRIEF_LIMITS } from "@mc/db/queries/brief";
+import { formatterFor } from "@/lib/format";
+import { briefLimitTexts } from "../brief/limites";
 import { LOST_REASONS, VENTAS_ERROR_CODES } from "@mc/db/queries/ventas";
 import { MESSAGES } from "./messages";
+
+const LIMITES = briefLimitTexts(formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }));
 
 describe("los textos de Ventas", () => {
   it("cada código de error de @mc/db tiene su frase aquí, y no hay frases huérfanas", () => {
@@ -32,5 +38,47 @@ describe("los textos de Ventas", () => {
 
   it("la cabecera habla con la creadora, no de la base", () => {
     expect(MESSAGES.header.description).not.toMatch(/deal_pipeline|vista|SQL|pantalla/i);
+  });
+
+  it("cada código de error del brief tiene su frase, y las que llevan dato lo usan (VEN-7)", () => {
+    expect(Object.keys(MESSAGES.briefErrores).sort()).toEqual([...BRIEF_ERROR_CODES].sort());
+    expect(MESSAGES.briefErrores.CategoryConflict(LIMITES, "Alcohol")).toContain("«Alcohol»");
+    expect(MESSAGES.briefErrores.InvalidCountry(LIMITES, "ZZ")).toContain("«ZZ»");
+  });
+
+  it("los topes del brief no van escritos a mano: salen de BRIEF_LIMITS con el formato del workspace (VEN-7 r3)", () => {
+    const l = briefLimitTexts(formatterFor({ locale: "en-US", currency: "USD", timezone: "UTC" }));
+    expect(l.notesMax).toBe(new Intl.NumberFormat("en-US").format(BRIEF_LIMITS.notesMax));
+    expect(MESSAGES.briefErrores.InvalidNotes(l, null)).toContain(l.notesMax);
+    expect(MESSAGES.briefErrores.TooManyCategories(l, null)).toContain(String(BRIEF_LIMITS.categories));
+    expect(MESSAGES.briefErrores.TooManyCompanies(l, null)).toContain(String(BRIEF_LIMITS.companies));
+    expect(MESSAGES.briefErrores.InvalidTitle(l, null)).toContain(String(BRIEF_LIMITS.titleMax));
+    expect(MESSAGES.brief.validacion.categoryTooLong(l)).toContain(String(BRIEF_LIMITS.categoryMax));
+    // Ninguna frase del brief lleva una cifra propia: todas las dicen los topes.
+    const sinTopes = { categories: "X", countries: "X", companies: "X", titleMax: "X", categoryMax: "X", notesMax: "X", deliverables: "X", brandNameMax: "X" };
+    for (const frase of Object.values(MESSAGES.briefErrores)) expect(frase(sinTopes, null)).not.toMatch(/\d/);
+  });
+
+  it("cada formato de entregable del catálogo tiene su nombre en el brief", () => {
+    for (const d of DELIVERABLES) expect(MESSAGES.brief.deliverables[d], d).toBeTruthy();
+  });
+
+  it("la conversión y las ocultas hablan en singular cuando es una", () => {
+    expect(MESSAGES.pipeline.conversion.basis("1", 1, "90")).toBe("de 1 negocio en 90 días");
+    expect(MESSAGES.pipeline.conversion.basis("12", 12, "90")).toBe("de 12 negocios en 90 días");
+    expect(MESSAGES.radar.hidden.line("1", 1)).toBe("1 señal oculta por tu brief");
+  });
+
+  it("los conteos de ocultas llegan formateados; el número crudo solo elige el plural (VEN-7 r4)", () => {
+    const en = formatterFor({ locale: "en-US", currency: "USD", timezone: "UTC" });
+    expect(MESSAGES.empresas.hiddenSignals(en.int(1200), 1200)).toBe("1,200 señales ocultas por tu brief");
+    expect(MESSAGES.empresas.hiddenSignals("1", 1)).toBe("1 señal oculta por tu brief");
+    expect(MESSAGES.radar.csv.hiddenByBrief(en.int(1200), 1200)).toBe("1,200 no se ven en el radar: tu brief no las acepta.");
+    expect(MESSAGES.radar.csv.hiddenByBrief("1", 1)).toBe("Una no se ve en el radar: tu brief no la acepta.");
+  });
+
+  it("el tope de formatos de entregable sale de BRIEF_LIMITS (VEN-7 r4)", () => {
+    expect(LIMITES.deliverables).toBe(String(BRIEF_LIMITS.deliverables));
+    expect(MESSAGES.briefErrores.InvalidDeliverable(LIMITES, null)).toContain(LIMITES.deliverables);
   });
 });

@@ -27,14 +27,17 @@ export function DatosEmpresa({
   company,
   countries,
   filas,
-  signalsLink,
+  signalsLinks,
 }: {
   company: EmpresaEditable;
   /** Las opciones de país del formulario, con el nombre en el idioma del workspace. */
   countries: CountryOption[];
   filas: DatoFila[];
-  /** «2 señales en el radar», si las hay. */
-  signalsLink: string | null;
+  /**
+   * «2 señales en el radar» → /ventas y, si el brief deja alguna fuera,
+   * «1 señal oculta por tu brief» → /ventas?ocultas=1. Vacío si no hay.
+   */
+  signalsLinks: { text: string; href: string }[];
 }) {
   const t = MESSAGES.empresas.detail;
   const [editing, setEditing] = useState(false);
@@ -85,14 +88,16 @@ export function DatosEmpresa({
                   <dd className="min-w-0 break-words text-right text-ink">{f.value ?? t.empty}</dd>
                 </div>
               ))}
-              {signalsLink && (
+              {signalsLinks.length > 0 && (
                 <div>
                   <dt className="sr-only">{MESSAGES.tabs.radar}</dt>
-                  <dd>
-                    <Link href="/ventas" className="text-xs text-ink underline underline-offset-4 hover:text-ink-2">
-                      {signalsLink}
-                    </Link>
-                  </dd>
+                  {signalsLinks.map((l) => (
+                    <dd key={l.href}>
+                      <Link href={l.href} className="text-xs text-ink underline underline-offset-4 hover:text-ink-2">
+                        {l.text}
+                      </Link>
+                    </dd>
+                  ))}
                 </div>
               )}
             </dl>

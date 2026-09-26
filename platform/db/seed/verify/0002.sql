@@ -38,7 +38,7 @@ SELECT 'a_conteos' AS check_id,
          AND (SELECT count(*) FROM creator_baseline) = 16
          AND (SELECT count(*) FROM company_link WHERE company_id::text LIKE '00000002-%') = 8
          AND (SELECT count(*) FROM contact WHERE opted_out) = 1
-         AND (SELECT count(*) FROM signal) = 13
+         AND (SELECT count(*) FROM signal) = 14
          AND (SELECT count(*) FROM deal) = 15
          AND (SELECT count(*) FROM activity) = 49 AS ok;
 
@@ -359,14 +359,22 @@ SELECT 'i2_tablero' AS check_id, stage_position AS pos, stage_label, company_nam
 FROM deal_pipeline
 ORDER BY stage_position, amount DESC;
 
--- (j) Radar: 5 por revisar —las cinco del mock, que su Resumen cita
---     con todas las letras («Hay 5 señales por revisar»), y una de ellas
---     de una marca que no está en el CRM (sin company_id), para enseñar
---     aceptar una marca nueva (pulido r8)—, 6 aceptadas (cada una con su
---     deal), 1 duplicada, 1 descartada con motivo. dedupe_key única.
+-- (j) Radar: 6 pendientes. 5 por revisar —las cinco del mock, que su
+--     Resumen cita con todas las letras («Hay 5 señales por revisar»), y
+--     una de ellas de una marca que no está en el CRM (sin company_id),
+--     para enseñar aceptar una marca nueva (pulido r8)— y 1 que el brief
+--     de Laura deja fuera (suplementos, VEN-7 r2), también sin empresa:
+--     la bandeja dice «1 señal oculta por tu brief». De las que se ven,
+--     una por debajo del mínimo del brief (3 M) y una fuera de sus países
+--     (CO, MX), para que la demo enseñe las dos marcas de «Qué buscas»
+--     (VEN-7 r4). 6 aceptadas (cada una con su deal), 1 duplicada, 1
+--     descartada con motivo. dedupe_key única.
 SELECT 'j_radar' AS check_id, status, count(*) AS senales,
        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM deal d WHERE d.origin_signal_id = s.id)) AS con_deal,
-       CASE status WHEN 'pending' THEN count(*) = 5 AND count(*) FILTER (WHERE s.company_id IS NULL) = 1
+       CASE status WHEN 'pending' THEN count(*) = 6 AND count(*) FILTER (WHERE s.company_id IS NULL) = 2
+                                       AND count(*) FILTER (WHERE s.evidence->>'category' = 'suplementos') = 1
+                                       AND count(*) FILTER (WHERE s.budget_currency = 'COP' AND s.budget_estimate < 3000000) = 1
+                                       AND count(*) FILTER (WHERE upper(s.evidence->>'country') NOT IN ('CO', 'MX')) = 1
                    WHEN 'accepted' THEN count(*) = 6 AND count(*) FILTER (WHERE EXISTS (SELECT 1 FROM deal d WHERE d.origin_signal_id = s.id)) = 6
                    WHEN 'duplicate' THEN count(*) = 1
                    WHEN 'discarded' THEN count(*) = 1 AND bool_and(discard_reason IS NOT NULL)

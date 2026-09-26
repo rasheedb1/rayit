@@ -1,13 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Textarea } from "@/components/ui/field";
-import { Pill, type PillKind } from "@/components/ui/pill";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog } from "@/components/ui/dialog";
+import { Pill, TruncatedPill, type PillKind } from "@/components/ui/pill";
 import { aceptarSenal, descartarSenal, type VentasState } from "../actions";
+import { noAceptarMarca } from "../brief/actions";
 import { Aviso } from "../../_lib/aviso";
 import { MESSAGES } from "../_lib/messages";
 import type { CountryOption } from "../_lib/paises";
@@ -22,7 +25,12 @@ export interface SignalCardData {
   id: string;
   companyName: string | null;
   headline: string;
-  fit: { kind: PillKind; text: string } | null;
+  /**
+   * El encaje («82 %», o «82 % · alimentos» si es de una categoría que
+   * busca el brief) y, si lo hay, la frase entera para el title y el
+   * lector de pantalla.
+   */
+  fit: { kind: PillKind; text: string; label?: string } | null;
   sourceLabel: string;
   detectedText: string;
   budgetText: string | null;
@@ -35,6 +43,32 @@ export interface SignalCardData {
    * como la marca.
    */
   crm: { companyHref: string; joinsDeal: boolean; dealName: string | null } | null;
+  /**
+   * Por qué el brief la deja fuera, con la regla que lo decidió («Tu
+   * brief no acepta «harinas»»), solo cuando se están viendo las ocultas
+   * (VEN-7). Null si se ve.
+   */
+  hiddenReason: string | null;
+  /**
+   * Lo que la aparta de «Qué buscas» («Bajo tu mínimo», «Fuera de tus
+   * países», «Fuera de lo que buscas»): Pills neutras, no oculta nada.
+   */
+  fitNotes: string[];
+  /** Ofrece «No aceptar esta marca» (VEN-7 r4): quien mira puede cambiar el brief y la señal tiene marca. */
+  canReject: boolean;
+}
+
+/** Los creadores con brief activo, para elegir en cuáles no aceptar la marca (VEN-7 r4). */
+export interface RejectOptions {
+  creators: { id: string; name: string }[];
+}
+
+/** La línea de las señales que el brief deja fuera, ya escrita en el servidor. */
+export interface HiddenLine {
+  text: string;
+  /** «Verlas» (?ocultas=1) u «Ocultarlas». */
+  toggle: { href: string; label: string };
+  brief: { href: string; label: string };
 }
 
 type Panel = "none" | "manual" | "csv";
@@ -50,11 +84,41 @@ type AvisoRadar = { notice?: string; message?: string; link?: { href: string; la
  * página se revalida y la tarjeta desaparece de la bandeja, y con ella
  * se iría el mensaje que explica adónde fue.
  */
-export function Radar({ cards, currency, countries }: { cards: SignalCardData[]; currency: string; countries: CountryOption[] }) {
+export function Radar({
+  cards,
+  currency,
+  countries,
+  hiddenLine = null,
+  reject = null,
+}: {
+  cards: SignalCardData[];
+  currency: string;
+  countries: CountryOption[];
+  hiddenLine?: HiddenLine | null;
+  reject?: RejectOptions | null;
+}) {
   const t = MESSAGES.radar;
   const [panel, setPanel] = useState<Panel>("none");
+  const visibles = cards.filter((c) => c.hiddenReason === null);
+  const ocultas = cards.filter((c) => c.hiddenReason !== null);
   const [aviso, setAviso] = useState<AvisoRadar | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const avisoRef = useRef<HTMLDivElement>(null);
+  /**
+   * Aceptar, descartar o no aceptar la marca quitan la tarjeta de la
+   * bandeja (la revalidación la desmonta) y con ella el botón que tenía el
+   * foco, que caía en <body> (VEN-7 r5). El foco pasa al aviso, que dice
+   * qué pasó: quien usa teclado o lector de pantalla no pierde su sitio.
+   */
+  const [focoAviso, setFocoAviso] = useState(0);
+  useEffect(() => {
+    if (focoAviso > 0) avisoRef.current?.focus();
+  }, [focoAviso]);
+
+  function resultado(a: AvisoRadar) {
+    setAviso(a);
+    setFocoAviso((n) => n + 1);
+  }
 
   function open(next: Panel) {
     setPanel((cur) => (cur === next ? "none" : next));
@@ -66,6 +130,18 @@ export function Radar({ cards, currency, countries }: { cards: SignalCardData[];
       <SectionTitle meta={cards.length > 0 ? t.meta(cards.length) : undefined}>
         <span id="radar">{t.title}</span>
       </SectionTitle>
+
+      {hiddenLine && (
+        <p className="-mt-2 mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted" data-testid="ocultas-por-brief">
+          <span className="tabular-nums">{hiddenLine.text}</span>
+          <Link href={hiddenLine.toggle.href} className="text-ink underline underline-offset-4 hover:text-ink-2">
+            {hiddenLine.toggle.label}
+          </Link>
+          <Link href={hiddenLine.brief.href} className="text-ink underline underline-offset-4 hover:text-ink-2">
+            {hiddenLine.brief.label}
+          </Link>
+        </p>
+      )}
 
       <div ref={toolbarRef} role="group" aria-label={t.toolbar} className="mb-4 flex flex-wrap gap-2">
         <Button variant={panel === "manual" ? "primary" : "secondary"} size="sm" onClick={() => open("manual")} aria-expanded={panel === "manual"}>
@@ -88,7 +164,12 @@ export function Radar({ cards, currency, countries }: { cards: SignalCardData[];
       )}
 
       {aviso && (
-        <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div
+          ref={avisoRef}
+          tabIndex={-1}
+          data-testid="radar-aviso"
+          className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md focus:outline-none"
+        >
           <Aviso message={aviso.message} notice={aviso.notice} className="flex-1" />
           {aviso.link && (
             <Link href={aviso.link.href} className="text-sm text-ink underline underline-offset-4 hover:text-ink-2">
@@ -105,11 +186,28 @@ export function Radar({ cards, currency, countries }: { cards: SignalCardData[];
           action={panel === "none" ? { label: t.empty.action, onClick: () => open("manual") } : undefined}
         />
       ) : (
-        <ul className="flex flex-col gap-2">
-          {cards.map((card) => (
-            <SignalCard key={card.id} card={card} onResult={setAviso} />
-          ))}
-        </ul>
+        <>
+          {visibles.length > 0 && (
+            <ul className="flex flex-col gap-2">
+              {visibles.map((card) => (
+                <SignalCard key={card.id} card={card} onResult={resultado} reject={reject} />
+              ))}
+            </ul>
+          )}
+          {/* Con «Verlas», las ocultas van aparte, al final: no mezcladas por encaje con las que se ven. */}
+          {ocultas.length > 0 && (
+            <section aria-labelledby="radar-ocultas" className={visibles.length > 0 ? "mt-6" : undefined}>
+              <h3 id="radar-ocultas" className="mb-2 border-t border-border pt-4 text-xs font-medium uppercase tracking-wide text-muted">
+                {t.hidden.group}
+              </h3>
+              <ul className="flex flex-col gap-2">
+                {ocultas.map((card) => (
+                  <SignalCard key={card.id} card={card} onResult={resultado} reject={reject} />
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
       )}
 
       <p className="mt-6 text-xs leading-5 text-muted">{t.manualOnly}</p>
@@ -120,9 +218,11 @@ export function Radar({ cards, currency, countries }: { cards: SignalCardData[];
 function SignalCard({
   card,
   onResult,
+  reject,
 }: {
   card: SignalCardData;
   onResult: (aviso: AvisoRadar) => void;
+  reject: RejectOptions | null;
 }) {
   const t = MESSAGES.radar;
   const [discarding, setDiscarding] = useState(false);
@@ -130,6 +230,7 @@ function SignalCard({
   const [cardError, setCardError] = useState<string | undefined>();
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState<"accept" | "discard" | null>(null);
+  const [rejecting, setRejecting] = useState(false);
   const name = card.companyName ?? t.unknownBrand;
 
   function report(res: VentasState, kind: "accept" | "discard") {
@@ -169,15 +270,24 @@ function SignalCard({
   return (
     <li className="rounded-md border border-border bg-surface p-4" aria-busy={pending || undefined}>
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
+        {/* Con base de 18rem: si no caben el texto y las tres acciones, las acciones bajan a su propia línea en vez de exprimir el texto. */}
+        <div className="min-w-0 flex-1 basis-72">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-ink">{name}</span>
             {card.fit && (
-              <span className="inline-flex items-center">
-                <span className="sr-only">{t.fit} </span>
-                <Pill kind={card.fit.kind}>{card.fit.text}</Pill>
+              <span className="inline-flex min-w-0 max-w-full items-center">
+                <span className="sr-only">{card.fit.label ?? `${t.fit} ${card.fit.text}`}</span>
+                <span aria-hidden="true" className="inline-flex min-w-0 max-w-full">
+                  <TruncatedPill kind={card.fit.kind}>{card.fit.text}</TruncatedPill>
+                </span>
               </span>
             )}
+            {card.hiddenReason && <TruncatedPill kind="warn">{card.hiddenReason}</TruncatedPill>}
+            {card.fitNotes.map((nota) => (
+              <Pill key={nota} kind="neutral">
+                {nota}
+              </Pill>
+            ))}
             {card.crm && (
               <Link
                 href={card.crm.companyHref}
@@ -214,17 +324,41 @@ function SignalCard({
           </p>
         </div>
 
+        {/*
+          «No aceptar esta marca» va junto a Descartar, como tercera acción
+          y más discreta (ghost), no en una franja propia (VEN-7 r5): es
+          secundaria, como en Passionfroot y Pipedrive. A 400 px el grupo
+          envuelve en vez de desbordar.
+        */}
         {!discarding && (
-          <div className="flex shrink-0 gap-2">
+          <div className="flex min-w-0 flex-wrap gap-2">
             <Button variant="primary" size="sm" onClick={accept} loading={busy === "accept"} disabled={pending} aria-label={`${t.accept}: ${name}`}>
               {t.accept}
             </Button>
             <Button variant="secondary" size="sm" onClick={() => setDiscarding(true)} disabled={pending} aria-label={`${t.discard}: ${name}`}>
               {t.discard}
             </Button>
+            {card.canReject && reject && (
+              <Button variant="ghost" size="sm" onClick={() => setRejecting(true)} disabled={pending} aria-label={t.reject.actionFor(name)}>
+                {t.reject.action}
+              </Button>
+            )}
           </div>
         )}
       </div>
+
+      {rejecting && reject && (
+        <NoAceptarDialog
+          signalId={card.id}
+          name={name}
+          creators={reject.creators}
+          onClose={() => setRejecting(false)}
+          onDone={(notice) => {
+            setRejecting(false);
+            onResult({ notice });
+          }}
+        />
+      )}
 
       {discarding && (
         <form onSubmit={discard} noValidate className="mt-4 border-t border-border pt-4" aria-label={`${t.discardTitle} ${name}`}>
@@ -244,5 +378,82 @@ function SignalCard({
 
       {cardError && <Aviso message={cardError} className="mt-3" />}
     </li>
+  );
+}
+
+/**
+ * «¿No aceptar esta marca?» (VEN-7 r4): la da de alta en el CRM como
+ * bloqueada y la agrega a «Marcas que no aceptas» de los briefs activos,
+ * en la misma transacción (rejectSignalBrand). Con un solo brief activo
+ * no hay nada que elegir; con varios, una casilla por creador, todas
+ * marcadas: lo que uno no acepta otro puede aceptarlo, y el radar solo
+ * oculta lo que excluyen todos.
+ */
+function NoAceptarDialog({
+  signalId,
+  name,
+  creators,
+  onClose,
+  onDone,
+}: {
+  signalId: string;
+  name: string;
+  creators: { id: string; name: string }[];
+  onClose: () => void;
+  onDone: (notice: string) => void;
+}) {
+  const t = MESSAGES.radar.reject;
+  const [error, setError] = useState<string | undefined>();
+  const [pending, startTransition] = useTransition();
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    data.set("signalId", signalId);
+    if (creators.length > 1 && data.getAll("creatorIds").length === 0) {
+      setError(t.noCreator);
+      return;
+    }
+    setError(undefined);
+    startTransition(async () => {
+      const res = await noAceptarMarca({}, data);
+      if (res.ok && res.notice) onDone(res.notice);
+      else setError(res.message ?? t.error);
+    });
+  }
+
+  return (
+    <Dialog title={t.title(name)} description={creators.length > 1 ? t.descriptionMany : t.description} onClose={onClose}>
+      <form onSubmit={submit} noValidate className="space-y-4" aria-label={t.title(name)}>
+        {creators.length > 1 && (
+          <fieldset className="space-y-2" aria-describedby={`no-aceptar-${signalId}-ayuda`}>
+            <legend className="text-sm font-medium text-ink">{t.creators}</legend>
+            <p id={`no-aceptar-${signalId}-ayuda`} className="text-xs leading-4 text-muted">
+              {t.creatorsHelp}
+            </p>
+            {creators.map((c) => (
+              <Checkbox key={c.id} name="creatorIds" value={c.id} label={c.name} defaultChecked />
+            ))}
+          </fieldset>
+        )}
+        {error && <Aviso message={error} />}
+        {/*
+          El mismo pie que «¿Por qué lo pierdes?» (PerderDialogo) y que el
+          README del kit pide a todo Dialog: a la derecha, Cancelar primero y
+          la acción que no se deshace al final. Con un solo brief no hay
+          casillas y Cancelar es el primer control: el foco inicial cae ahí,
+          y dos Enter seguidos ya no excluyen la marca (VEN-7 r5). Con
+          varios, cae en la primera casilla.
+        */}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={pending}>
+            {MESSAGES.acciones.cancel}
+          </Button>
+          <Button type="submit" variant="danger" size="sm" loading={pending}>
+            {t.confirm}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }

@@ -61,13 +61,13 @@ test('job:dispatch y job:replies leen sus argumentos y rechazan lo que no conoce
 test('job:dispatch cuenta los cancelados como la metadata del job, y un argumento desconocido enseña el uso', () => {
   const r = {
     zombies: { failed: 0, canceled: 0, released: 0 },
-    claim: { ...emptyClaimReport(), claimed: 0, canceledOptedOut: 1, canceledEmailInvalid: 2, canceledFinished: 3, skippedNoAddress: 4, canceledCompanyCap: 5 },
+    claim: { ...emptyClaimReport(), claimed: 0, canceledOptedOut: 1, canceledEmailInvalid: 2, canceledFinished: 3, skippedNoAddress: 4, canceledCompanyCap: 5, canceledBriefExcluded: 6 },
     sent: [], confirmed: [], retried: [], failed: [], waiting: [], canceled: [{ touchId: 'x', reason: 'opted_out' }], postponed: [], held: [],
     released: [], warnings: [], errors: [], notConfigured: [],
   };
-  assert.equal(canceledCount(r), 12);
+  assert.equal(canceledCount(r), 18);
   const texto = resumenDespacho(r);
-  assert.match(texto, /Cancelados: 12 \(2 por correo rebotado, 5 por el tope de la marca\)\. Sin dirección: 4\./);
+  assert.match(texto, /Cancelados: 18 \(2 por correo rebotado, 5 por el tope de la marca, 6 porque el brief no acepta la marca\)\. Sin dirección: 4\./);
   assert.match(texto, /^Despacho: 0 reclamados, 0 enviados, 0 a reintento, 0 fallidos\./, 'con su plural, sin «(s)»');
   assert.match(resumenDespacho({ ...r, claim: { ...r.claim, claimed: 1 }, sent: ['t'] }), /^Despacho: 1 reclamado, 1 enviado,/);
   assert.throws(() => parseArgs(['dispatch', '--foo'], {}), /Argumento desconocido: --foo\. Uso: correr-motor\.ts dispatch\|replies/);

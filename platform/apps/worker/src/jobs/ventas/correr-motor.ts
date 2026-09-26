@@ -137,7 +137,8 @@ export function resumenDespacho(r: DispatchReport): string {
     `  Reprogramados por tope: ${r.claim.rescheduled.length}. Fuera de la ventana: ${r.claim.outsideWindow.length}. ` +
       `Esperando cuenta: ${r.claim.waitingAccount.length + r.waiting.length}. Retenidos: ${r.held.length}. Pospuestos: ${r.postponed.length}. ` +
       `Movidos por el ritmo (marca o cuenta): ${r.claim.paced.length}.`,
-    `  Cancelados: ${canceledCount(r)} (${r.claim.canceledEmailInvalid} por correo rebotado, ${r.claim.canceledCompanyCap} por el tope de la marca). ` +
+    `  Cancelados: ${canceledCount(r)} (${r.claim.canceledEmailInvalid} por correo rebotado, ${r.claim.canceledCompanyCap} por el tope de la marca, ` +
+      `${r.claim.canceledBriefExcluded} porque el brief no acepta la marca). ` +
       `Sin dirección: ${r.claim.skippedNoAddress}. Dirección mal escrita: ${r.claim.skippedInvalidAddress}. ` +
       `Zombis: ${r.zombies.failed} a fallido, ${r.zombies.released} de vuelta a la cola. Sin intentar, de vuelta: ${r.released.length}.`,
   ];

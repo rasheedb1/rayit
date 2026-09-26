@@ -12,6 +12,7 @@ vi.mock("../actions", () => ({
   anotarSenal: (...a: unknown[]) => anotarSenal(...a),
   cargarLista: vi.fn(async () => ({})),
 }));
+vi.mock("../brief/actions", () => ({ noAceptarMarca: vi.fn(async () => ({})) }));
 
 import { MESSAGES } from "../_lib/messages";
 import { countryOptions } from "../_lib/paises";
@@ -31,6 +32,9 @@ const card: SignalCardData = {
   evidenceUrl: null,
   viaCsv: false,
   crm: null,
+  hiddenReason: null,
+  fitNotes: [],
+  canReject: false,
 };
 
 beforeEach(() => {

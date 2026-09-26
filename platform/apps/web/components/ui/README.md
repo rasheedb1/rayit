@@ -8,11 +8,14 @@ Componentes compartidos de On Cue. Galería en `/kit` (bandera `kit`, encendida 
 |---|---|---|
 | `Button` | `button.tsx` | Acción con variant, size, loading (aria-busy) y `href` para enlaces. Cliente. |
 | `Pill` | `pill.tsx` | Estado corto con punto de color: good, warn, bad, neutral. Texto obligatorio. |
+| `TruncatedPill` | `pill.tsx` | La misma Pill para un texto que puede ser largo: tope de ancho (`maxWidth`, 16rem), «…» por CSS y el texto entero en `title` y en el DOM. Desde VEN-7 r4. |
 | `PlatformPill` | `platform-pill.tsx` | Red (TikTok, Instagram, Facebook, YouTube) con el punto en `--s-<red>` y el texto en tinta normal. |
 | `Field`, `Input`, `Select`, `Textarea` | `field.tsx` | Etiqueta, ayuda y error; el control toma id, aria-describedby y aria-invalid por contexto. La validación la hace el formulario (zod). Cliente. |
 | `MoneyInput` | `money-input.tsx` | Dinero como string decimal + moneda; miles es-CO, acepta pegar «5.200.000,50»; nunca `type=number`. Cliente. |
 | `DateInput` | `date-input.tsx` | Fecha nativa con valor ISO de solo fecha. Cliente. |
 | `Segmented` | `segmented.tsx` | Grupo de opciones excluyentes con aria-pressed y flechas: el filtro por red de Resumen. Cliente. |
+| `Checkbox` | `checkbox.tsx` | Casilla nativa con etiqueta y ayuda (aria-describedby); controlada (`checked` + `onChange(bool)`) o no. Sin `name` no viaja en el formulario. Nació en Finanzas y en el brief de Ventas; en el kit desde VEN-7 r4. Cliente. |
+| `Dialog` | `dialog.tsx` | Modal con portal en `<body>`: el foco entra y vuelve, Tab da la vuelta, Escape y el fondo cierran, lo de detrás queda `inert` y quieto. Quien lo abre lo monta y lo desmonta (`onClose`). Pie de botones: `flex flex-wrap justify-end gap-2`, **Cancelar primero y la acción después** (`variant="danger"` si no se deshace): la destructiva cae siempre en el mismo sitio y el foco inicial nunca en ella. Nació en el pipeline (VEN-8); en el kit desde VEN-7 r4. Cliente. |
 | `ConfirmInline` | `confirm-inline.tsx` | Acción que no se deshace en dos pasos y en el mismo sitio: el primer botón pregunta con su consecuencia (foco en la pregunta), el segundo ejecuta; Escape o Cancelar devuelven el foco. Si el mismo sitio alterna dos acciones (encender/apagar), dale una `key` por estado. Nació en Cotizar (ConfirmarAccion); en el kit desde VEN-10. Cliente. |
 | `EmptyState` | `empty-state.tsx` | Título, descripción y acción cuando no hay datos. |
 | `DataAsOf` | `data-as-of.tsx` | «datos hasta el 20 sep · Instagram», con `<time>` y fecha en UTC. |

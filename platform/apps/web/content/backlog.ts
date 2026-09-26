@@ -390,16 +390,16 @@ export const STORIES: readonly Story[] = [
     title: "Brief de outbound",
     desc: "Qué busca el creador (categorías, países, presupuesto mínimo, entregables) y qué no acepta. Filtra la bandeja del radar.",
     done: "Una señal de una categoría excluida no aparece en la bandeja.",
-    status: "pendiente",
-    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4: es S y no es parte del ciclo que se demuestra.",
+    status: "hecho",
+    note: "/ventas/brief: un brief por creador; el radar oculta lo que excluye y lo dice, y las marcas fuera del CRM se excluyen por adelantado. 0070 y 0071 (nacieron 0064 y 0065; renumeradas al integrar la fase 6) por aplicar. Detalle en docs/ventas-outreach.md §5.8.",
   },
   {
     id: "VEN-8", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-3"],
     title: "Deal perdido y conversión por etapa",
     desc: "Motivo de pérdida, y tasa de conversión por etapa desde deal_stage_history.",
     done: "La tasa entre etapas aparece en el pipeline con el número de deals que la sostiene.",
-    status: "pendiente",
-    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4: es S y no es parte del ciclo que se demuestra.",
+    status: "hecho",
+    note: "Motivo obligatorio en un diálogo y en la base (0070, por aplicar); conversión por etapa de 90 días bajo cada columna, con su número de negocios. Detalle en docs/ventas-outreach.md.",
   },
   // Outreach automático. Diseño en docs/ventas-outreach.md, a partir de CadenceV1.0.
   {
@@ -448,7 +448,7 @@ export const STORIES: readonly Story[] = [
     desc: "Aprobar, editar o regenerar lo propuesto; hilos de correo, LinkedIn e Instagram en un solo lugar; clasificación de la intención de la respuesta (interesado, ahora no, fuera de oficina, baja, referido) y su efecto en el deal y el enrolamiento.",
     done: "Un mensaje retenido se aprueba desde la bandeja y sale; una respuesta «me interesa» mueve el deal y aparece en la bandeja con la conversación completa.",
     status: "hecho",
-    note: "/ventas/aprobaciones (aprobar con «Deshacer», editar, regenerar con pista y saltar, con j/k/a/e/r/s y «por qué quedó retenido») y /ventas/bandeja (pendientes y hechas, j/k/r/e/Esc, conversación completa, respuesta por el motor que se cancela o edita mientras espera, corregir la intención con sus efectos, el porqué de la IA y el referido que se propone enrolar). El job outbound.intent reparte el lote entre workspaces, no paga dos veces y al tercer fallo deja la respuesta a una persona. Ronda 3: la demo en fichas propias (pnpm verificar en verde), la lista cabe en su columna y en 400 px (medido con scripts/ancho-movil.mjs), cada hilo con su estado, «Deshacer» con el motivo guardado en el servidor, saltar solo lo de la cola y «fuera de la oficina» con su fecha. Ronda 4: una cifra que la IA dejó sin origen no se aprueba tal cual ni tocando una coma (el seed 0008 lo enseña con un «23 %»), un «me interesa» sin negocio abre uno en «En conversación», solo owner, admin y member operan las bandejas (PUEDEN_OPERAR_VENTAS), el teclado no atraviesa una confirmación abierta, la procedencia del contacto en cada retenido y «Enrolar» tras crear un referido. Ronda 5: la baja que pide un tercero en copia se decide en la bandeja (la ficha no queda de baja, se dice quién la pidió y «Corregir» deja darla de baja), cada mensaje dice quién lo escribió, «me interesa» cancela el pitch suelto que quedaba programado, el clasificador falso ve la negación («no me interesa» es ahora no, igual que en el prompt), la respuesta que el envío retiene entra a la cola como respuesta en el hilo (sin asunto ni «Regenerar») y sin dirección postal no se escribe, el borrador de cada hilo se guarda y j, k, e y Esc avisan antes de dejarlo, «e» pasa a la siguiente, la nota del juez con el mínimo de la rúbrica y la dimensión que la tiró, y la cifra sin origen señalada en su frase. Supuesto por confirmar con Rasheed antes de mergear (docs/ventas-outreach.md §8, decisión 9; el criterio de arriba no cambia): sin ANTHROPIC_API_KEY en producción las respuestas no se clasifican solas; el clasificador falso corre en pruebas, en la demo y con OUTREACH_WRITER=fake, y la bandeja dice que falta la clasificación para corregirla a mano con los mismos efectos. Probado en apps/worker/test/outreach-bandejas.test.ts, con la RLS en packages/db/test/bandejas.test.ts y la pantalla en bandeja.test.tsx y aprobaciones.test.tsx; 0064, 0065, 0066 y el seed 0008 sin aplicar en Supabase.",
+    note: "/ventas/aprobaciones (aprobar con «Deshacer», editar, regenerar con pista, saltar; teclado) y /ventas/bandeja (conversación completa, respuesta por el motor que se cancela o edita mientras espera, corregir la intención con sus efectos, referido que se propone enrolar). El job outbound.intent reparte el lote entre workspaces, no paga dos veces y al tercer fallo deja la respuesta a una persona. Supuesto por confirmar con Rasheed (docs/ventas-outreach.md §8, decisión 9): sin ANTHROPIC_API_KEY las respuestas no se clasifican solas y la bandeja lo dice para corregirlas a mano. 0064–0066 y el seed 0008 sin aplicar en Supabase. Detalle por ronda en docs/ventas-outreach.md §5.7.",
   },
   {
     id: "VEN-15", module: "VEN", owner: "rasheed", size: "M", sprint: 4, deps: ["VEN-10"],

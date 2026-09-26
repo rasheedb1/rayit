@@ -107,6 +107,13 @@ export const company = pgTable('company', {
   ownerWorkspaceId: uuid('owner_workspace_id').references(() => workspace.id, { onDelete: 'set null' }).default(sql`current_workspace_id()`),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+  /**
+   * brand_key(name), calculada por la base (0071): «Nutrivé» y «NUTRIVE»
+   * dan lo mismo. Existe para el índice: bajo RLS, Postgres no usa un
+   * índice de expresión sobre brand_key(name) porque regexp_replace no es
+   * leakproof, y sí usa uno sobre esta columna. Nadie la escribe.
+   */
+  nameKey: text('name_key').generatedAlwaysAs(sql`brand_key(name)`),
 });
 
 export const contact = pgTable('contact', {

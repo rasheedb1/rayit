@@ -17,6 +17,7 @@ import { checkSequenceAgainstPolicy, findPlaceholders, planSteps, renderTemplate
 import { formatHoldReason, inviteNoteOverflow } from '@mc/core/outreach/messages';
 import type { SqlExecutor, WorkerSql, WorkspaceTx } from '../../client.ts';
 import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
+import { briefCompanyVerdictSql } from '../brief.ts';
 import { assertIds, checkRecipient, DISPATCHABLE_STEP_TYPES, OutreachMotorError, windowOf } from './shared.ts';
 import { loadTemplateSources } from './template-sources.ts';
 
@@ -42,8 +43,12 @@ export interface EnrollInput {
  * (un correo sin arroba). Antes se enrolaban con todo saltado y
  * el enrolamiento quedaba 'active' para siempre; la de correo rebotado,
  * peor: el disparador de 0050 abortaba el lote entero.
+ * brief_excluded: la marca de la ficha es una que el brief activo del
+ * workspace no acepta, por nombre o por categoría (VEN-7): el radar ya
+ * la oculta y ninguna cadencia le escribe.
  */
-export type EnrollSkipReason = 'not_found' | 'opted_out' | 'already_enrolled' | 'email_invalid' | 'no_address' | 'invalid_address';
+export type EnrollSkipReason =
+  | 'not_found' | 'opted_out' | 'already_enrolled' | 'email_invalid' | 'no_address' | 'invalid_address' | 'brief_excluded';
 
 /**
  * Lo que la secuencia no va a poder cumplir con la política del
@@ -103,6 +108,8 @@ interface ContactRow {
   email_invalid: boolean;
   /** Pidió la baja a ESTE workspace (un enrolamiento suyo en opted_out), aunque la ficha sea pública. */
   ws_opted_out: boolean;
+  /** Por qué el brief activo del workspace de la secuencia no acepta su marca (VEN-7), o null. */
+  brief_verdict: 'company' | 'category' | null;
   company: string;
 }
 
@@ -185,6 +192,7 @@ export function sequenceWarnings(
  * (WorkerSql: el filtro contact_visible_to limita al de la secuencia).
  * Un contacto de otro workspace o que no existe sale como not_found; uno
  * dado de baja (su ficha o su correo en la lista global) como opted_out;
+ * uno de una marca que el brief activo no acepta, como brief_excluded;
  * uno que ya está en la secuencia, como already_enrolled; uno al que
  * no le llega ningún paso, como email_invalid (su correo rebotó) o
  * no_address. Una ficha que no se puede enrolar nunca tumba el lote.
@@ -230,10 +238,11 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
       `SELECT c.id, c.company_id, c.full_name, c.role_title, c.email::text AS email, c.linkedin_url, c.instagram_handle,
               c.opted_out, address_is_suppressed(c.email) AS suppressed, c.email_invalid, co.name AS company,
               EXISTS (SELECT 1 FROM outbound_enrollment e
-                       WHERE e.contact_id = c.id AND e.workspace_id = $2::uuid AND e.status = 'opted_out') AS ws_opted_out
+                       WHERE e.contact_id = c.id AND e.workspace_id = $2::uuid AND e.status = 'opted_out') AS ws_opted_out,
+              ${briefCompanyVerdictSql('c.company_id', '$2::uuid', '$3::uuid')} AS brief_verdict
          FROM contact c JOIN company co ON co.id = c.company_id
         WHERE c.id = ANY($1::uuid[]) AND contact_visible_to(c.id, $2::uuid)`,
-      [[...input.contactIds], seq.workspace_id],
+      [[...input.contactIds], seq.workspace_id, input.dealId ?? null],
     )
   ).rows;
   const byId = new Map(contacts.map((c) => [c.id, c]));
@@ -252,6 +261,14 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
     }
     if (c.opted_out || c.suppressed || c.ws_opted_out) {
       result.skipped.push({ contactId, reason: 'opted_out' });
+      continue;
+    }
+    // Lo que el brief no acepta no se escribe (VEN-7): ni por nombre de
+    // la marca ni por su categoría. El brief es el del creador del
+    // negocio (o, sin negocio, el de todos los del espacio), en el
+    // workspace de la SECUENCIA, explícito: el worker corre sin RLS.
+    if (c.brief_verdict) {
+      result.skipped.push({ contactId, reason: 'brief_excluded' });
       continue;
     }
     // Los estados de cada paso primero: una ficha a la que no le

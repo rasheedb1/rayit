@@ -106,7 +106,10 @@ export function dispatchableChannels(deps: Pick<DispatchDeps, 'senders' | 'appUr
 
 /** Cuántos canceló una pasada, en el reclamo y al enviar: lo mismo en la metadata del job y en job:dispatch. */
 export function canceledCount(r: DispatchReport): number {
-  return r.canceled.length + r.claim.canceledOptedOut + r.claim.canceledEmailInvalid + r.claim.canceledFinished + r.claim.canceledCompanyCap;
+  return (
+    r.canceled.length + r.claim.canceledOptedOut + r.claim.canceledEmailInvalid + r.claim.canceledBriefExcluded +
+    r.claim.canceledFinished + r.claim.canceledCompanyCap
+  );
 }
 
 /** Cuántos toques reclamar: el tope de la corrida, o los que caben en el tiempo que queda. */
@@ -353,7 +356,8 @@ export const dispatchJob = defineJob(
       canceledEmailInvalid: report.claim.canceledEmailInvalid, skippedNoAddress: report.claim.skippedNoAddress,
       skippedInvalidAddress: report.claim.skippedInvalidAddress,
       held: report.held.length, rescheduled: report.claim.rescheduled.length, outsideWindow: report.claim.outsideWindow.length,
-      canceledCompanyCap: report.claim.canceledCompanyCap, paced: report.claim.paced.length,
+      canceledCompanyCap: report.claim.canceledCompanyCap, canceledBriefExcluded: report.claim.canceledBriefExcluded,
+      paced: report.claim.paced.length,
       released: report.released.length, zombies: report.zombies.failed, zombiesReleased: report.zombies.released,
       errors: report.errors.length, notConfigured: report.notConfigured,
     };

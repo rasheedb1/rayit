@@ -42,6 +42,9 @@ const vitale: SignalRow = {
   discardReason: null,
   reviewedAt: null,
   via: "manual",
+  hiddenBy: null,
+  hiddenMatch: null,
+  briefFit: { belowMinBudget: false, countryOutside: false, wantedCategory: null, categoryOutside: false },
 };
 
 vi.mock("@mc/db/queries/ventas", () => ({
@@ -64,6 +67,14 @@ vi.mock("@mc/db/queries/ventas-ficha", () => ({
 // (_seguimiento/para-hoy.test.tsx); aquí basta con que la portada lo monte.
 vi.mock("./empresas/actions", () => ({ fijarSiguienteAccion: vi.fn(), marcarHecha: vi.fn(), registrarActividad: vi.fn() }));
 vi.mock("./_seguimiento/para-hoy", () => ({ ParaHoy: () => <div data-testid="para-hoy" /> }));
+vi.mock("@mc/db/queries/brief", () => ({
+  countHiddenSignals: async () => ({ total: 0, byCompany: 0, byCategory: 0 }),
+  listBriefCreators: async () => ({ workspaceKind: "creator", creators: [] }),
+}));
+// «No aceptar esta marca» (VEN-7 r4) mira el permiso del brief y su acción.
+vi.mock("./brief/permiso", () => ({ puedeEditarElBrief: async () => true }));
+vi.mock("./brief/actions", () => ({ noAceptarMarca: vi.fn() }));
+vi.mock("@mc/db/queries/conversion", () => ({ CONVERSION_WINDOW_DAYS: 90, getStageConversion: async () => [] }));
 vi.mock("@/lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
 vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),

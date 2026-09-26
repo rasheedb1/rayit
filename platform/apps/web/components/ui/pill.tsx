@@ -23,3 +23,32 @@ export function Pill({ kind, children, className = "" }: PillProps) {
     </span>
   );
 }
+
+export type TruncatedPillProps = PillProps & {
+  /** Ancho máximo, como utilidad de Tailwind. Por defecto, 16rem. */
+  maxWidth?: string;
+};
+
+/**
+ * La misma Pill para un texto que puede ser largo (VEN-7 r4: la regla
+ * del brief que deja fuera una señal, «Tu brief no acepta a …»): con
+ * tope de ancho, corta el texto con «…» por CSS y lo enseña entero en
+ * `title`. El texto entero sigue en el DOM, así que el lector de
+ * pantalla lo lee completo. Cortar la cadena a mano podía partir un
+ * emoji (dos unidades UTF-16).
+ *
+ * Es un componente aparte y no una opción de Pill: la API de Pill no
+ * cambia, y quien parte la frase de una Pill en dos líneas
+ * (`whitespace-normal!`) sigue igual.
+ */
+export function TruncatedPill({ kind, children, className = "", maxWidth = "max-w-[16rem]" }: TruncatedPillProps) {
+  return (
+    <span
+      title={children}
+      className={`inline-flex min-w-0 ${maxWidth} items-center gap-1.5 whitespace-nowrap rounded-full border py-0.5 pl-2 pr-2.5 text-[11.5px] font-medium ${KIND[kind]} ${className}`}
+    >
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />
+      <span className="min-w-0 truncate">{children}</span>
+    </span>
+  );
+}

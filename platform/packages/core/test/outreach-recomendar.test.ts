@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   chooseTemplate, composeGuidance, DISCLOSURE_GUIDANCE, guidanceProblem, primaryChannelOf, recommendSequence, RecommendError, refineGuidance,
-  signalKindOfSource, type GuidanceWriter, type RecommendInput, type RecommendTemplate, type RecommendTemplateStep,
+  signalKindOfSource, type GuidanceRequest, type GuidanceWriter, type RecommendInput, type RecommendTemplate, type RecommendTemplateStep,
 } from '../src/outreach/recomendar.ts';
 import { GUIDANCE_PHRASES, guidanceLocale } from '../src/outreach/guidance-phrases.ts';
 import { llmCostUsd, UnknownModelPriceError } from '../src/outreach/llm-cost.ts';
@@ -296,6 +296,21 @@ test('refineGuidance: se queda con la guía del modelo que sirve y con la regla 
   assert.deepEqual(r.proposal.steps.map((s) => s.channel), base.steps.map((s) => s.channel), 'los canales no cambian');
   // Al redactor no le llega nada de la persona: solo el paso, la señal y el brief.
   assert.doesNotMatch(JSON.stringify(vistos), /hasEmail|@/);
+});
+
+test('refineGuidance: al redactor le llega lo que ofrece el brief (formatos y ventana), y nada si no ofrece nada', async () => {
+  const base = recommendSequence(entrada());
+  const vistos: GuidanceRequest[] = [];
+  const writer: GuidanceWriter = async (req) => {
+    vistos.push(req);
+    return { steps: [], usage: { model: 'claude-sonnet-5', inputTokens: 10, outputTokens: 10 } };
+  };
+  const oferta = ['Formatos que ofrece el creador: reel de Instagram. Si propones una colaboración, propón solo estos formatos.'];
+  const ctx = { signalHeadline: null, companyName: null, briefTitle: 'Cocina', briefNotes: null, requiresDisclosure: false, angles: {} };
+  await refineGuidance(base, { ...ctx, briefOffer: oferta }, writer);
+  await refineGuidance(base, { ...ctx, briefOffer: [] }, writer);
+  assert.deepEqual(vistos[0]?.briefOffer, oferta);
+  assert.equal(vistos[1]?.briefOffer, undefined, 'sin oferta, el campo no viaja');
 });
 
 test('refineGuidance: si el redactor falla, todo queda con reglas y sin llamada que registrar', async () => {

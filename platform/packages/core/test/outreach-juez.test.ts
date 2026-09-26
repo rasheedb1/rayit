@@ -388,3 +388,22 @@ test('si el job se aborta a mitad, la llamada en curso recibe la señal y el buc
   assert.equal(r.attempts.length, 1);
   assert.deepEqual(calls.map((c) => c.purpose), ['generate']);
 });
+
+test('VEN-7 r4 · el pitch propone solo los formatos del brief y fechas dentro de su ventana', () => {
+  const brief = {
+    title: 'Marcas de cocina', notes: null, requiresDisclosure: true,
+    deliverables: ['reel', 'historias'], availabilityFrom: '2026-10-01', availabilityTo: '2026-12-15',
+  };
+  const { user } = buildGenerationPrompt({ ...generation({ brief }), attempt: 1, hint: null }, loadPrompt('generate'));
+  assert.ok(
+    user.includes('Formatos que ofrece el creador: reel de Instagram, historias de Instagram. Si propones una colaboración, propón solo estos formatos.'),
+    user,
+  );
+  assert.ok(user.includes('Disponible para campañas del 2026-10-01 al 2026-12-15'), user);
+  const formatos = user.split('\n').find((l) => l.startsWith('Formatos que ofrece')) ?? '';
+  assert.doesNotMatch(formatos, /TikTok|YouTube/, 'ningún formato que el brief no ofrece');
+  // Sin formatos ni ventana, el prompt no inventa ninguna de las dos frases.
+  const vacio = { ...brief, deliverables: [], availabilityFrom: null, availabilityTo: null };
+  const sin = buildGenerationPrompt({ ...generation({ brief: vacio }), attempt: 1, hint: null }, loadPrompt('generate')).user;
+  assert.doesNotMatch(sin, /Formatos que ofrece|Disponible para campañas/);
+});

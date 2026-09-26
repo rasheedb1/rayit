@@ -695,6 +695,13 @@ export interface GuidanceRequest {
   companyName: string | null;
   briefTitle: string | null;
   briefNotes: string | null;
+  /**
+   * Lo que el brief ofrece (VEN-7 r4), en frases para el modelo
+   * (briefOfferLines de @mc/core): los formatos, solo esos, y la ventana
+   * de disponibilidad. Vacío si el brief no dice nada de eso. La guía de
+   * cada paso no propone otro formato ni fechas fuera de la ventana.
+   */
+  briefOffer?: string[];
   requiresDisclosure: boolean;
   steps: GuidanceRequestStep[];
 }
@@ -754,6 +761,7 @@ export async function refineGuidance(
     companyName: ctx.companyName,
     briefTitle: ctx.briefTitle,
     briefNotes: ctx.briefNotes,
+    ...(ctx.briefOffer && ctx.briefOffer.length > 0 ? { briefOffer: ctx.briefOffer } : {}),
     requiresDisclosure: ctx.requiresDisclosure,
     steps: proposal.steps.map((s, index) => ({
       index,

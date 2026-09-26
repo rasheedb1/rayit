@@ -1,0 +1,137 @@
+"use client";
+
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+
+/** Lo que se puede enfocar dentro del diálogo, para que Tab no se salga. */
+const ENFOCABLES =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Un diálogo modal: una pregunta que hay que contestar antes de seguir
+ * («¿Por qué lo pierdes?», «¿No aceptar esta marca?»). Nació en el
+ * tablero de Ventas (VEN-8) y sube al kit en VEN-7 r4, cuando el radar lo
+ * pidió también.
+ *
+ * Es un div con role="dialog" y aria-modal, no un <dialog> nativo: el
+ * showModal() de jsdom no existe y las pruebas tienen que poder abrirlo.
+ * Lo que el nativo daba gratis se hace a mano:
+ *   · el foco entra al abrir (al primer control, o al que lleve
+ *     autoFocus) y vuelve a donde estaba al cerrar;
+ *   · Tab y Mayús+Tab dan la vuelta dentro;
+ *   · Escape cierra, igual que «Cancelar»;
+ *   · clic en el fondo cierra; clic dentro, no;
+ *   · lo de detrás no se mueve ni se alcanza: el diálogo se pinta con un
+ *     portal directamente en <body>, sus hermanos (la aplicación entera)
+ *     quedan `inert` —ni foco, ni clic, ni cursor virtual del lector de
+ *     pantalla— y <body> deja de desplazarse (a 400 px, la hoja de abajo
+ *     ya no arrastra la página). Todo vuelve como estaba al cerrar.
+ *
+ * Solo props: el título, la descripción y el contenido llegan escritos
+ * por quien lo abre, que decide cuándo montarlo (`{abierto && <Dialog …/>}`).
+ *
+ * Estilo: el fondo es el color de la página velado (bg-bg/70), así que
+ * funciona igual en el tema claro y en el oscuro sin un color nuevo.
+ * A 400 px el panel se apoya abajo y ocupa el ancho, como una hoja.
+ */
+export type DialogProps = {
+  title: string;
+  description?: string;
+  /** Escape, clic en el fondo o el «Cancelar» de dentro: quien lo abrió lo desmonta. */
+  onClose: () => void;
+  children: ReactNode;
+};
+
+export function Dialog({ title, description, onClose, children }: DialogProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const descId = useId();
+  // Dónde estaba el foco ANTES de abrir. Se toma al primer render y no en
+  // el efecto: para entonces el autoFocus de un control del diálogo ya lo
+  // movió adentro, y al cerrar no habría a dónde volver.
+  const [previo] = useState<HTMLElement | null>(() =>
+    typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  );
+
+  const fondoRef = useRef<HTMLDivElement>(null);
+
+  // Lo de detrás, inerte y quieto mientras el diálogo esté abierto.
+  useEffect(() => {
+    const fondo = fondoRef.current;
+    if (!fondo) return;
+    const apagados: Element[] = [];
+    for (const hermano of Array.from(document.body.children)) {
+      if (hermano === fondo || hermano.hasAttribute("inert")) continue;
+      hermano.setAttribute("inert", "");
+      apagados.push(hermano);
+    }
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      for (const el of apagados) el.removeAttribute("inert");
+      document.body.style.overflow = overflow;
+    };
+  }, []);
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    const primero = panel?.querySelector<HTMLElement>("[autofocus]") ?? panel?.querySelector<HTMLElement>(ENFOCABLES);
+    (primero ?? panel)?.focus();
+    return () => {
+      if (previo && document.contains(previo)) previo.focus();
+    };
+  }, [previo]);
+
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      onClose();
+      return;
+    }
+    if (event.key !== "Tab" || !panelRef.current) return;
+    const items = [...panelRef.current.querySelectorAll<HTMLElement>(ENFOCABLES)];
+    if (items.length === 0) return;
+    const first = items[0]!;
+    const last = items[items.length - 1]!;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      ref={fondoRef}
+      className="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-4 backdrop-blur-[2px] sm:items-center"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={description ? descId : undefined}
+        tabIndex={-1}
+        onKeyDown={onKeyDown}
+        className="w-full max-w-md rounded-md border border-border bg-surface p-5 shadow-lg focus:outline-none"
+      >
+        <h2 id={titleId} className="text-base font-semibold text-ink">
+          {title}
+        </h2>
+        {description && (
+          <p id={descId} className="mt-1 text-sm leading-5 text-ink-2">
+            {description}
+          </p>
+        )}
+        <div className="mt-4">{children}</div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
