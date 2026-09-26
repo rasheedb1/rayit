@@ -215,6 +215,8 @@ export const outboundQueue = pgView('outbound_queue', {
   reason: text('reason'),
   /** Solo en lo fallido: por qué no se puede reintentar (outbound_touch_retry_block), NULL si se puede. */
   retryBlock: text('retry_block'),
+  /** 0067: el estado de la secuencia (draft, active, paused, archived); NULL si el toque no tiene. */
+  sequenceStatus: text('sequence_status'),
 }).existing();
 
 /** El uso diario de cada cuenta viva en 14 días, contra los tres topes del reclamo (día y semana de la cuenta, día del espacio) y el techo del proveedor. */
