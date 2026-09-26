@@ -51,6 +51,8 @@ export interface EditorData {
   /** ¿El worker redacta con IA? Lo dice su última corrida, no la web. */
   ai: AiStatus;
   sendingOn: boolean;
+  /** Cuántas señales vivas tiene la empresa: con más de una, la IA ofrece «Otra señal». Opcional: 0 si no se sabe. */
+  signalCount?: number;
   /**
    * Lo que impide programar o retrasa el envío aunque el mensaje esté
    * bien (loadPitchComposer): sin dirección postal el servidor no deja
@@ -248,6 +250,7 @@ export function EditorDePitch({
             hasBody={body.trim() !== ""}
             hasContact={contact !== null}
             signalHeadline={deal?.signalHeadline ?? null}
+            manySignals={(data.signalCount ?? 0) > 1}
             busy={aiPending}
             onRequest={requestAi}
           />

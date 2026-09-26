@@ -112,6 +112,8 @@ export interface PitchComposer {
   policy: { enabled: boolean; hasEmailAccount: boolean; hasPostalAddress: boolean };
   /** Las personas de la empresa a las que este espacio ya les envió algo: para ellas no es el primer correo. */
   contactedIds: string[];
+  /** Cuántas señales vivas tiene la empresa (ni descartadas ni duplicadas): con más de una, el editor ofrece «Otra señal». */
+  signalCount: number;
 }
 
 export interface LoadPitchOptions {
@@ -182,8 +184,15 @@ export async function loadPitchComposer(tx: WorkspaceTx, companyId: string, loca
       [companyId],
     )
   ).rows.map((r) => r.contact_id);
+  const signalCount = (
+    await tx.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM signal WHERE company_id = $1::uuid AND status NOT IN ('discarded', 'duplicate')`,
+      [companyId],
+    )
+  ).rows[0]!.n;
   return {
     contactedIds: contacted,
+    signalCount,
     deals: deals.map((x) => ({ id: x.id, name: x.name, signalHeadline: x.headline, open: x.open })),
     variants,
     draft: d ? draftFrom(d, draftValues) : null,

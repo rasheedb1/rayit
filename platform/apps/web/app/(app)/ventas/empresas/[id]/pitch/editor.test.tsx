@@ -269,11 +269,33 @@ describe("la redacción con IA en el editor", () => {
     pedirRedaccion.mockReset();
     pedirRedaccion.mockResolvedValue({});
     render(<EditorDePitch data={datos({ ai: "on", draft: { ...BORRADOR, body: BUENO } })} />);
-    for (const pista of Object.values(PITCH.ia.pistas)) expect(screen.getByRole("button", { name: PITCH.ia.pistaLabel(pista) })).toBeTruthy();
+    for (const h of ["shorter", "more_specific", "other_angle"] as const) {
+      expect(screen.getByRole("button", { name: PITCH.ia.pistaLabel(PITCH.ia.pistas[h]) })).toBeTruthy();
+    }
     fireEvent.click(screen.getByRole("button", { name: PITCH.ia.pistaLabel(PITCH.ia.pistas.shorter) }));
     const corto = pedirRedaccion.mock.calls[0]![1] as FormData;
     // Va el texto marcado, con sus fichas como marcas: el servidor lo guarda tal cual.
     expect([corto.get("hint"), corto.get("touchId"), corto.get("body")]).toEqual(["shorter", BORRADOR.touchId, BUENO]);
+  });
+
+  it("«Más» abre las otras pistas (suavizar, añadir prueba); «Otra señal» solo si la empresa tiene más de una", () => {
+    pedirRedaccion.mockResolvedValue({});
+    const { unmount } = render(<EditorDePitch data={datos({ ai: "on", signalCount: 1, draft: { ...BORRADOR, body: BUENO } })} />);
+    const nombre = (h: keyof typeof PITCH.ia.pistas) => PITCH.ia.pistaLabel(PITCH.ia.pistas[h]);
+    expect(screen.queryByRole("button", { name: nombre("soften") })).toBeNull();
+    const mas = screen.getByRole("button", { name: PITCH.ia.mas });
+    expect(mas.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(mas);
+    expect(screen.getByRole("button", { name: PITCH.ia.menos }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: nombre("soften") })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: nombre("other_signal") })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: nombre("add_proof") }));
+    expect((pedirRedaccion.mock.calls[0]![1] as FormData).get("hint")).toBe("add_proof");
+    unmount();
+
+    render(<EditorDePitch data={datos({ ai: "on", signalCount: 2, draft: { ...BORRADOR, body: BUENO } })} />);
+    fireEvent.click(screen.getByRole("button", { name: PITCH.ia.mas }));
+    expect(screen.getByRole("button", { name: nombre("other_signal") })).toBeTruthy();
   });
 
   it("mientras la IA redacta lo dice, no deja pedir otra vez y la página se actualiza sola", () => {

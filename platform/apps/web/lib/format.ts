@@ -15,7 +15,7 @@
 // El dinero entra como string decimal ("5200000.50"), nunca como number:
 // es la regla del repo para no perder centavos por el camino.
 
-import { formatShare } from "@mc/core/outreach/claim-labels";
+import { formatShare } from "@mc/core/format/share";
 
 /** Valores por defecto de `workspace` (migración 0001). No son constantes del producto. */
 export const DEFAULT_LOCALE = "es-CO";

@@ -81,7 +81,14 @@ export const PITCH = {
       shorter: "Más corto",
       more_specific: "Más específico",
       other_angle: "Otro ángulo",
-    } satisfies Partial<Record<RegenerateHint, string>>,
+      soften: "Suavizar",
+      add_proof: "Añadir prueba",
+      other_signal: "Otra señal",
+    } satisfies Record<RegenerateHint, string>,
+    /** Las otras tres pistas, plegadas bajo «Más». */
+    mas: "Más",
+    menos: "Menos",
+    masLabel: "Más pistas para otra versión",
     pistaLabel: (pista: string) => `Pedir otra versión: ${pista.toLowerCase()}`,
     redactando: "Redactando… La IA escribe y revisa el borrador; esta página se actualiza sola.",
     pendienteDe: {

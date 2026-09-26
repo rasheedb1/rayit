@@ -6,8 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Field, Textarea } from "@/components/ui/field";
 import { PITCH } from "./messages";
 
-/** Las tres pistas que ofrece el editor, como los tres botones del generador de Chief. */
+/** Las tres pistas a la vista, como los tres botones del generador de Chief. */
 export const EDITOR_HINTS = ["shorter", "more_specific", "other_angle"] as const satisfies readonly RegenerateHint[];
+/**
+ * Las otras tres, en «Más»: las que se usan después de leer la nota de la
+ * revisión automática. «Otra señal» solo si la empresa tiene más de una.
+ * Entre las dos listas están las seis pistas cerradas (REGENERATE_HINTS).
+ */
+export const MORE_HINTS = ["soften", "add_proof", "other_signal"] as const satisfies readonly RegenerateHint[];
 
 export type AiStatus = "on" | "off" | "unknown";
 
@@ -34,6 +40,7 @@ export function PanelIA({
   hasBody,
   hasContact,
   signalHeadline,
+  manySignals = false,
   busy,
   onRequest,
 }: {
@@ -44,12 +51,16 @@ export function PanelIA({
   hasBody: boolean;
   hasContact: boolean;
   signalHeadline: string | null;
+  /** La empresa tiene más de una señal viva: «Otra señal» tiene de dónde sacar. */
+  manySignals?: boolean;
   /** Una petición en vuelo desde esta pantalla. */
   busy: boolean;
   onRequest: (hint: RegenerateHint | null, instructions: string) => void;
 }) {
   const t = PITCH.ia;
   const [instructions, setInstructions] = useState("");
+  const [more, setMore] = useState(false);
+  const moreHints = MORE_HINTS.filter((h) => h !== "other_signal" || manySignals);
   const off = status !== "on";
   const disabled = off || !hasContact || pending !== null || busy;
   return (
@@ -87,7 +98,21 @@ export function PanelIA({
                   {t.pistas[h]}
                 </Button>
               ))}
+            {hasBody && (
+              <Button type="button" size="sm" variant="ghost" aria-expanded={more} aria-controls="pitch-mas-pistas" onClick={() => setMore(!more)}>
+                {more ? t.menos : t.mas}
+              </Button>
+            )}
           </div>
+          {hasBody && more && (
+            <div id="pitch-mas-pistas" role="group" aria-label={t.masLabel} className="flex flex-wrap items-center gap-2">
+              {moreHints.map((h) => (
+                <Button key={h} type="button" size="sm" disabled={disabled} aria-label={t.pistaLabel(t.pistas[h])} onClick={() => onRequest(h, instructions)}>
+                  {t.pistas[h]}
+                </Button>
+              ))}
+            </div>
+          )}
           {!hasContact && <p className="text-xs text-muted">{t.necesitaContacto}</p>}
         </>
       )}
