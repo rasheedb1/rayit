@@ -7,6 +7,8 @@ import type { Formatter } from "@/lib/format";
 import { FICHA } from "../messages";
 import { AprobarMensaje } from "./aprobar";
 import { ResolverIntento } from "./intento";
+import { ReanudarCadencia } from "./reanudar";
+import { SaltarMensaje } from "./saltar";
 import { Bloque } from "./bloque";
 
 /** Lo primero de una respuesta, en una línea: la conversación entera es de VEN-16. */
@@ -32,8 +34,9 @@ const KIND: Record<string, PillKind> = {
  * «Mensajes de la cadencia» (VEN-10): los mensajes de las secuencias
  * para esta empresa, con los retenidos arriba (después, cada secuencia en
  * el orden en que salen sus mensajes), su motivo en palabras y
- * «Revisar y aprobar» (o, si no se supo si un intento salió, «Sí, salió» /
- * «No salió: enviarlo»). Es adonde llevan los avisos del motor («Un mensaje
+ * «Revisar y aprobar» con «Saltar este paso» (o, si no se supo si un
+ * intento salió, «Sí, salió» / «No salió: enviarlo»), y «Reanudar la
+ * cadencia» en la primera fila de una cadencia en pausa. Es adonde llevan los avisos del motor («Un mensaje
  * a X espera tu revisión»); la bandeja completa de todas las empresas es
  * VEN-16. Server Component: el formulario de aprobar es el único cliente.
  */
@@ -42,6 +45,14 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
   const lang = noticeLang(f.locale);
   const pendientes = touches.filter((x) => x.status === "held").length;
   const persona = (x: CadenceTouch) => x.contactName ?? t.sinNombre;
+  // «Reanudar» una vez por cadencia en pausa (0054): en la primera fila de su enrolamiento.
+  const vistos = new Set<string>();
+  const reanudarEn = new Set<string>();
+  for (const x of touches) {
+    if (x.enrollmentStatus !== "paused" || !x.enrollmentId || vistos.has(x.enrollmentId)) continue;
+    vistos.add(x.enrollmentId);
+    reanudarEn.add(x.id);
+  }
 
   const canal = (x: CadenceTouch) => t.canales[x.channel] ?? x.channel;
   const cuando = (x: CadenceTouch) =>
@@ -98,7 +109,11 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
                   subject={x.subject}
                   body={x.body}
                 />
+                <SaltarMensaje companyId={companyId} touchId={x.id} />
               </>
+            )}
+            {reanudarEn.has(x.id) && x.enrollmentId && (
+              <ReanudarCadencia companyId={companyId} enrollmentId={x.enrollmentId} persona={persona(x)} />
             )}
             {sinConfirmar && (
               <ResolverIntento

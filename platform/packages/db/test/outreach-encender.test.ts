@@ -7,6 +7,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { WorkerSql, WorkspaceTx } from '../src/client.ts';
+import { readSendReadiness } from '../src/queries/entregabilidad.ts';
 import { disableOutreach, enableOutreach } from '../src/queries/outreach.ts';
 import { openTestDb, SETUP_TIMEOUT, type TestDb } from './pglite.ts';
 
@@ -65,6 +66,10 @@ async function estado(touch: string): Promise<{ status: string; held_reason: str
 test('desde la web, encender devuelve lo que el apagado canceló, en su estado y con su texto', async () => {
   assert.equal(await t.db.withWorkspace(WS_A, (tx) => disableOutreach(tx, 'vacaciones')), 2);
   assert.equal((await estado(T.retenido)).blocked_reason, 'outreach_disabled');
+  // Lo que la confirmación de /ventas/politica dice antes de encender es lo que vuelve.
+  const antes = await t.db.withWorkspace(WS_A, (tx) => readSendReadiness(tx));
+  assert.deepEqual(antes.replannable, { touches: 2, people: 1 });
+  assert.deepEqual((await t.db.withWorkspace(WS_B, (tx) => readSendReadiness(tx))).replannable, { touches: 0, people: 0 });
 
   const plan = await t.db.withWorkspace(WS_A, (tx) => enableOutreach(tx));
   assert.deepEqual(plan, { enrollments: 1, scheduled: 1, held: 1 });
@@ -72,6 +77,7 @@ test('desde la web, encender devuelve lo que el apagado canceló, en su estado y
   assert.deepEqual({ ...(await estado(T.retenido)) }, {
     status: 'held', held_reason: 'needs_review', blocked_reason: null, body: 'Lo escribí yo.',
   });
+  assert.deepEqual((await t.db.withWorkspace(WS_A, (tx) => readSendReadiness(tx))).replannable, { touches: 0, people: 0 });
   // Encender otra vez no cambia nada: ya no hay nada cancelado por el apagado.
   assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => enableOutreach(tx)), { enrollments: 0, scheduled: 0, held: 0 });
 });

@@ -348,7 +348,9 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'una persona resuelve en la ficha un mensaje retenido porque no se supo si un intento salió (0053, VEN-10): ' +
     'was_sent lo anota como enviado y marca el enlace de baja de ese intento; resend lo devuelve a la cola, borra ese ' +
     'enlace y devuelve su plaza. Solo el toque held con unconfirmed_attempt del workspace de la transacción; las ' +
-    'columnas del intento y outbound_optout_link son del despachador. EXECUTE a mc_app y mc_worker. No es de ningún disparador',
+    'columnas del intento y outbound_optout_link son del despachador. Pide ser del equipo (membership_is_team, 0055; ' +
+    'sin identidad, solo con app.auth_disabled): las políticas no frenan a una SECURITY DEFINER. EXECUTE a mc_app y ' +
+    'mc_worker. No es de ningún disparador',
   // La redacción que pide una persona y el pitch a mano (0057, VEN-12).
   'outbound_generation_request(uuid,text,text,uuid)':
     'una persona pide desde el editor del pitch que la IA redacte o regenere con una pista cerrada (0057, VEN-12): ' +

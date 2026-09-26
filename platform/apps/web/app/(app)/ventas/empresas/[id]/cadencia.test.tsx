@@ -10,9 +10,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 const aprobarMensaje = vi.fn();
 const resolverIntento = vi.fn();
+const saltarMensaje = vi.fn();
+const reanudarCadencia = vi.fn();
 vi.mock("../actions", () => ({
   aprobarMensaje: (...a: unknown[]) => aprobarMensaje(...a),
   resolverIntento: (...a: unknown[]) => resolverIntento(...a),
+  saltarMensaje: (...a: unknown[]) => saltarMensaje(...a),
+  reanudarCadencia: (...a: unknown[]) => reanudarCadencia(...a),
 }));
 
 import type { CadenceTouch } from "@mc/db/queries/outreach";
@@ -30,13 +34,59 @@ function toque(over: Partial<CadenceTouch>): CadenceTouch {
     sequenceName: "Tres correos", status: "scheduled", heldReason: null, blockedReason: null,
     scheduledFor: new Date("2026-09-25T15:30:00Z"), sentAt: null, subject: "Una idea para Vitalé", body: "Hola, Sofía.",
     statusChangedAt: new Date("2026-09-24T15:00:00Z"), reply: null, accountName: "laura@cocina-facil.test", unconfirmedDay: null,
-    threadSubject: null, ...over,
+    threadSubject: null, enrollmentId: "00000005-0000-4000-8000-0000000e0001", enrollmentStatus: "active", ...over,
   };
 }
 
 beforeEach(() => {
   aprobarMensaje.mockReset();
   resolverIntento.mockReset();
+  saltarMensaje.mockReset().mockResolvedValue({ ok: true, notice: FICHA.cadencia.saltar.hecho, stamp: 1 });
+  reanudarCadencia.mockReset().mockResolvedValue({ ok: true, notice: FICHA.cadencia.pausa.hecho, stamp: 1 });
+});
+
+describe("las salidas de una cadencia parada (VEN-10)", () => {
+  it("un retenido se puede saltar, con confirmación", async () => {
+    render(
+      <MensajesDeCadencia
+        companyId={COMPANY}
+        f={f}
+        touches={[toque({ status: "held", heldReason: "reply_without_thread", stepType: "email_reply", subject: null })]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: t.saltar.label }));
+    expect(screen.getByRole("group", { name: t.saltar.pregunta })).toHaveAccessibleDescription(t.saltar.consecuencia);
+    expect(saltarMensaje).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.saltar.si }));
+    });
+    expect(saltarMensaje).toHaveBeenCalledTimes(1);
+    const datos = saltarMensaje.mock.calls[0]![1] as FormData;
+    expect(Object.fromEntries(datos)).toEqual({ companyId: COMPANY, touchId: "00000005-0000-4000-8000-000000070001" });
+  });
+
+  it("una cadencia en pausa ofrece «Reanudar» una sola vez, en su primera fila", async () => {
+    const ENR = "00000005-0000-4000-8000-0000000e0009";
+    render(
+      <MensajesDeCadencia
+        companyId={COMPANY}
+        f={f}
+        touches={[
+          toque({ id: "00000005-0000-4000-8000-000000070011", enrollmentId: ENR, enrollmentStatus: "paused" }),
+          toque({ id: "00000005-0000-4000-8000-000000070012", enrollmentId: ENR, enrollmentStatus: "paused", stepIndex: 2 }),
+          toque({ id: "00000005-0000-4000-8000-000000070013" }),
+        ]}
+      />,
+    );
+    const botones = screen.getAllByRole("button", { name: t.pausa.reanudarDe("Sofía Cárdenas") });
+    expect(botones).toHaveLength(1);
+    expect(screen.getByText(t.pausa.aviso("Sofía Cárdenas"))).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(botones[0]!);
+    });
+    const datos = reanudarCadencia.mock.calls[0]![1] as FormData;
+    expect(Object.fromEntries(datos)).toEqual({ companyId: COMPANY, enrollmentId: ENR });
+  });
 });
 
 describe("MensajesDeCadencia", () => {

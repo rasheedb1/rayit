@@ -92,6 +92,12 @@ export default async function PoliticaPage() {
         puedeCambiar={puedeCambiar}
         cuentasConectadas={listo.connectedAccounts}
         aprobadosHoy={{ n: f.int(listo.approvedDueToday), cuantos: listo.approvedDueToday }}
+        vuelven={{
+          mensajes: f.int(listo.replannable.touches),
+          cuantos: listo.replannable.touches,
+          personas: f.int(listo.replannable.people),
+          cuantasPersonas: listo.replannable.people,
+        }}
       />
 
       <Salud

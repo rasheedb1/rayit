@@ -15,7 +15,8 @@ import { MESSAGES } from "./messages";
  * producto (ConfirmInline del kit, nacida en Cotizar: el primer botón enseña qué va a
  * pasar, el segundo es el que actúa). Apagar, porque cancela la cola;
  * encender, porque es lo que empieza a escribir a marcas en nombre del
- * creador, y dice cuántos mensajes aprobados salen hoy.
+ * creador, y dice cuántos mensajes aprobados salen hoy y cuántos de los
+ * que el apagado canceló vuelven a la cola (y de cuántas personas).
  *
  * Encender se ofrece deshabilitado, con su motivo en una línea, mientras
  * falte algo: el rol (owner o admin, 0038 §7), una cuenta de envío
@@ -46,6 +47,7 @@ export function Interruptor({
   puedeCambiar,
   cuentasConectadas,
   aprobadosHoy,
+  vuelven,
 }: {
   enabled: boolean;
   hasAddress: boolean;
@@ -57,6 +59,8 @@ export function Interruptor({
   cuentasConectadas: number;
   /** Los mensajes aprobados que salen hoy al encender: `n` formateado, `cuantos` sin formatear. */
   aprobadosHoy: { n: string; cuantos: number };
+  /** Lo que el apagado canceló y vuelve a la cola al encender (countReplannable), formateado y crudo. */
+  vuelven?: { mensajes: string; cuantos: number; personas: string; cuantasPersonas: number };
 }) {
   const t = MESSAGES.interruptor;
   const [error, setError] = useState<string | null>(null);
@@ -148,7 +152,7 @@ export function Interruptor({
             label={t.encender}
             variant="primary"
             question={t.confirmarEncender}
-            consequence={t.consecuenciaEncender(aprobadosHoy.n, aprobadosHoy.cuantos)}
+            consequence={t.consecuenciaEncender(aprobadosHoy.n, aprobadosHoy.cuantos, vuelven)}
             confirmLabel={t.siEncender}
             cancelLabel={t.cancelar}
             openWidth="w-full sm:w-80"

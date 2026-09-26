@@ -123,10 +123,12 @@ export async function encenderEnvio(): Promise<InterruptorResultado> {
     });
     if (!listo) return { ok: false, message: t.interruptor.sinCanal };
   } catch (err) {
-    const e = err as { code?: string };
+    const e = err as { code?: string; constraint?: string };
     if (isPolicyForbidden(err)) return { ok: false, message: t.interruptor.sinPermiso };
     if (e.code !== "23514") console.error("[ventas/politica] no se pudo encender", err);
-    return { ok: false, message: e.code === "23514" ? t.interruptor.sinDireccion : t.interruptor.errorEncender };
+    if (e.code !== "23514") return { ok: false, message: t.interruptor.errorEncender };
+    // enable_outreach (0037 §8.5) da 23514 por la dirección (con su CONSTRAINT) o por no tener un canal conectado.
+    return { ok: false, message: e.constraint === "outbound_policy_enabled_needs_address" ? t.interruptor.sinDireccion : t.interruptor.sinCanal };
   }
   revalidatePath("/ventas/politica");
   return { ok: true };

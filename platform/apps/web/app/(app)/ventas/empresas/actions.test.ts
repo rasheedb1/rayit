@@ -13,6 +13,9 @@ const listCompanyActivity = vi.fn();
 const getCompanyName = vi.fn();
 const revalidatePath = vi.fn();
 const releaseHeldTouch = vi.fn();
+const resumeEnrollment = vi.fn();
+const skipQueuedTouch = vi.fn();
+const puedeOperarVentas = vi.fn();
 
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => revalidatePath(...a) }));
 vi.mock("../_lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
@@ -27,7 +30,10 @@ vi.mock("@mc/db/queries/ventas-ficha", async (original) => ({
 vi.mock("@mc/db/queries/outreach", async (original) => ({
   ...(await original<typeof import("@mc/db/queries/outreach")>()),
   releaseHeldTouch: (...a: unknown[]) => releaseHeldTouch(...a),
+  resumeEnrollment: (...a: unknown[]) => resumeEnrollment(...a),
 }));
+vi.mock("@mc/db/queries/bandejas", () => ({ skipQueuedTouch: (...a: unknown[]) => skipQueuedTouch(...a) }));
+vi.mock("../_lib/permiso", () => ({ puedeOperarVentas: () => puedeOperarVentas() }));
 vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
 }));
@@ -36,7 +42,9 @@ import { FichaError } from "@mc/db/queries/ventas-ficha";
 import { DealNotFound } from "@mc/db/queries/ventas";
 import { formatterFor } from "@/lib/format";
 import { OUTREACH_URLS } from "@mc/core/outreach/messages";
-import { aprobarMensaje, fijarSiguienteAccion, marcarHecha, registrarActividad, verMasActividad } from "./actions";
+import {
+  aprobarMensaje, fijarSiguienteAccion, marcarHecha, reanudarCadencia, registrarActividad, resolverIntento, saltarMensaje, verMasActividad,
+} from "./actions";
 import { FICHA } from "./messages";
 
 const COMPANY = "00000002-0000-4000-8000-0000000000e1";
@@ -57,6 +65,7 @@ beforeEach(() => {
   getCompanyName.mockReset().mockResolvedValue("Café Alma");
   completeNextAction.mockReset().mockResolvedValue({ companyId: COMPANY });
   revalidatePath.mockReset();
+  puedeOperarVentas.mockReset().mockResolvedValue(true);
 });
 
 describe("registrarActividad", () => {
@@ -269,5 +278,52 @@ describe("aprobarMensaje", () => {
     expect(r).toEqual({ errors: { body: FICHA.cadencia.errores.unsourced_figure("987.654") } });
     expect(FICHA.cadencia.errores.unsourced_figure("987.654")).toContain("La cifra 987.654 no sale de tu perfil");
     expect(FICHA.cadencia.errores.unsourced_figure("987.654, x3")).toContain("Las cifras 987.654, x3 no salen");
+  });
+});
+
+describe("saltar un paso y reanudar una cadencia (VEN-10)", () => {
+  const TOUCH = "00000010-0000-4000-8000-000000000071";
+  const ENR = "00000010-0000-4000-8000-0000000000e1";
+
+  it("una respuesta sin hilo no se aprueba: dice que hay que saltarla", async () => {
+    releaseHeldTouch.mockReset().mockResolvedValue({ ok: false, code: "no_thread" });
+    const r = await aprobarMensaje({}, form({ companyId: COMPANY, touchId: TOUCH, subject: "", body: "Sigo." }));
+    expect(r).toEqual({ message: FICHA.cadencia.errores.no_thread });
+  });
+
+  it("saltar llega a skipQueuedTouch y revalida la ficha", async () => {
+    skipQueuedTouch.mockReset().mockResolvedValue({ ok: true, recipientName: "Ana" });
+    const r = await saltarMensaje({}, form({ companyId: COMPANY, touchId: TOUCH }));
+    expect(r).toMatchObject({ ok: true, notice: FICHA.cadencia.saltar.hecho });
+    expect(skipQueuedTouch).toHaveBeenCalledWith({}, TOUCH, expect.any(Date));
+    expect(revalidatePath).toHaveBeenCalledWith(`/ventas/empresas/${COMPANY}`);
+    skipQueuedTouch.mockResolvedValue({ ok: false, code: "not_skippable" });
+    expect(await saltarMensaje({}, form({ companyId: COMPANY, touchId: TOUCH }))).toEqual({
+      message: FICHA.cadencia.saltar.errores.not_skippable,
+    });
+  });
+
+  it("reanudar llega a resumeEnrollment con el enrolamiento, y sus errores vuelven en palabras", async () => {
+    resumeEnrollment.mockReset().mockResolvedValue({ ok: true, rescheduled: 2 });
+    const r = await reanudarCadencia({}, form({ companyId: COMPANY, enrollmentId: ENR }));
+    expect(r).toMatchObject({ ok: true, notice: FICHA.cadencia.pausa.hecho });
+    expect(resumeEnrollment).toHaveBeenCalledWith({}, ENR, expect.any(Date));
+    resumeEnrollment.mockResolvedValue({ ok: false, code: "opted_out" });
+    expect(await reanudarCadencia({}, form({ companyId: COMPANY, enrollmentId: ENR }))).toEqual({
+      message: FICHA.cadencia.pausa.errores.opted_out,
+    });
+  });
+
+  it("quien no es del equipo no aprueba, ni resuelve, ni salta, ni reanuda, y no toca la base", async () => {
+    puedeOperarVentas.mockResolvedValue(false);
+    releaseHeldTouch.mockReset();
+    skipQueuedTouch.mockReset();
+    resumeEnrollment.mockReset();
+    const sin = { message: FICHA.cadencia.sinPermiso };
+    expect(await aprobarMensaje({}, form({ companyId: COMPANY, touchId: TOUCH, subject: "Hola", body: "Una idea." }))).toEqual(sin);
+    expect(await resolverIntento({}, form({ companyId: COMPANY, touchId: TOUCH, outcome: "resend" }))).toEqual(sin);
+    expect(await saltarMensaje({}, form({ companyId: COMPANY, touchId: TOUCH }))).toEqual(sin);
+    expect(await reanudarCadencia({}, form({ companyId: COMPANY, enrollmentId: ENR }))).toEqual(sin);
+    for (const m of [releaseHeldTouch, skipQueuedTouch, resumeEnrollment]) expect(m).not.toHaveBeenCalled();
   });
 });

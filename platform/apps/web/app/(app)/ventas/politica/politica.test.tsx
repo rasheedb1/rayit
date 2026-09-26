@@ -155,7 +155,9 @@ describe("guardarPolitica", () => {
 
 describe("el interruptor", () => {
   it("encender sin dirección dice qué falta", async () => {
-    enableOutreach.mockRejectedValue(Object.assign(new Error("check"), { code: "23514" }));
+    enableOutreach.mockRejectedValue(
+      Object.assign(new Error("check"), { code: "23514", constraint: "outbound_policy_enabled_needs_address" }),
+    );
     expect(await encenderEnvio()).toEqual({ ok: false, message: t.interruptor.sinDireccion });
   });
 
@@ -202,6 +204,27 @@ describe("el interruptor", () => {
     );
     expect(screen.getByRole("button", { name: t.interruptor.siEncender })).toBeInTheDocument();
     expect(enableOutreach).not.toHaveBeenCalled();
+  });
+
+  it("encender dice cuántos mensajes, y de cuántas personas, vuelven a la cola desde el apagado", () => {
+    const vuelven = { mensajes: "23", cuantos: 23, personas: "9", cuantasPersonas: 9 };
+    render(interruptor({ vuelven }));
+    fireEvent.click(screen.getByRole("button", { name: t.interruptor.encender }));
+    const texto = t.interruptor.consecuenciaEncender("0", 0, vuelven);
+    expect(texto).toMatch(/^Vuelven a la cola 23 mensajes de 9 personas que el apagado había parado/);
+    expect(screen.getByRole("group", { name: t.interruptor.confirmarEncender })).toHaveAccessibleDescription(texto);
+    expect(t.interruptor.consecuenciaEncender("0", 0, { mensajes: "1", cuantos: 1, personas: "1", cuantasPersonas: 1 })).toMatch(
+      /^Vuelve a la cola 1 mensaje de 1 persona que/,
+    );
+  });
+
+  it("si la base no enciende por falta de canal (23514 sin la restricción de la dirección), lo dice", async () => {
+    enableOutreach.mockRejectedValue(Object.assign(new Error("Sin un canal conectado"), { code: "23514" }));
+    expect(await encenderEnvio()).toEqual({ ok: false, message: t.interruptor.sinCanal });
+    enableOutreach.mockRejectedValue(
+      Object.assign(new Error("Sin dirección postal"), { code: "23514", constraint: "outbound_policy_enabled_needs_address" }),
+    );
+    expect(await encenderEnvio()).toEqual({ ok: false, message: t.interruptor.sinDireccion });
   });
 
   it("sin ninguna cuenta de envío conectada no se ofrece encender, y dice por qué", async () => {
