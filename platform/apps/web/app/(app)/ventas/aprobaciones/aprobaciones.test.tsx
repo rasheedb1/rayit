@@ -242,6 +242,39 @@ describe("la cola", () => {
     expect(screen.queryByText("40 %", { selector: "mark" })).toBeNull();
   });
 
+  it("con una cifra sin origen del pre-vuelo no hay «Aprobar» ni su pregunta: la a y «Editar y aprobar» llevan al editor", async () => {
+    const body = "Hola, Persona 1. El 23 % de mi audiencia cocina en casa. ¿Hablamos?";
+    const v = filaVista(
+      item(1, {
+        heldReason: "quality_low:7.6",
+        body,
+        review: {
+          totalScore: 7.6, scores: { relevance: 8, quality: 7.6 }, riskTriggers: ["unsourced_figure"], regenerateHint: "add_proof",
+          judgeNote: null, preflight: [{ code: "unsourced_figure", detail: "23 %" }], attempts: 1, threshold: 8,
+        },
+      }),
+      f,
+    );
+    // La nota ya no decide: el texto tal cual no puede salir.
+    expect(v.cifrasSinOrigen).toEqual(["23 %"]);
+    expect(v.aprobarBajo).toBeNull();
+    render(<Cola filas={[v]} />);
+    expect(screen.queryByRole("button", { name: MESSAGES.acciones.aprobar })).toBeNull();
+    expect(screen.queryByText(MESSAGES.acciones.aprobarBajoPregunta("7,6"))).toBeNull();
+    expect(screen.getByRole("button", { name: MESSAGES.acciones.editar })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: MESSAGES.acciones.regenerar })).toBeInTheDocument();
+    expect(screen.getByText(MESSAGES.acciones.cifraSinOrigenAyuda(1))).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "a" });
+    });
+    // Directo al editor, sin preguntar al servidor: el motivo en su campo y la cifra señalada en su frase.
+    expect(aprobarToque).not.toHaveBeenCalled();
+    const cuerpo = screen.getByLabelText(MESSAGES.acciones.mensaje);
+    expect(cuerpo).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getAllByText(MESSAGES.errores.unsourced_figure(["23 %"]))).toHaveLength(1);
+    expect(screen.getByText("23 %", { selector: "mark" }).parentElement?.textContent).toBe("El 23 % de mi audiencia cocina en casa.");
+  });
+
   it("cada fila dice a un lector de pantalla su paso y su canal: dos de la misma persona no se leen igual", () => {
     render(<Cola filas={[filaVista(item(1), f), filaVista(item(1, { touchId: item(2).touchId, stepIndex: 2, channel: "linkedin" }), f)]} />);
     const [a, b] = screen.getAllByRole("article");

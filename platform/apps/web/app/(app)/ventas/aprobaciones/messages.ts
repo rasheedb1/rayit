@@ -175,6 +175,11 @@ export const MESSAGES = {
     /** Debajo del mensaje, las frases con la cifra sin origen señalada. */
     dondeEsta: "Dónde está en el mensaje",
     resolverAyuda: "No sabemos si el intento anterior salió: dilo en la ficha para no mandarlo dos veces.",
+    /** Junto a «Editar y aprobar» cuando el texto tal cual no puede salir. */
+    cifraSinOrigenAyuda: (n: number) =>
+      n > 1
+        ? "Cita cifras que no salen de tu perfil: edítalas para aprobarlo."
+        : "Cita una cifra que no sale de tu perfil: edítala para aprobarlo.",
   },
 
   avisos: {
