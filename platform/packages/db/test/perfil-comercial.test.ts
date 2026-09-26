@@ -145,6 +145,26 @@ test('un recálculo a la vez: la marca se toma, se niega a un segundo, vence y s
   assert.equal(await marca(), null);
 });
 
+test('un recálculo que pasó del TTL no pisa al que tomó su marca vencida', async () => {
+  const ahora = new Date('2026-09-26T12:00:00Z');
+  const lento = await laura((tx) => claimPerfilRecalc(tx, CREADORA_LAURA, ahora));
+  const nuevo = await laura((tx) => claimPerfilRecalc(tx, CREADORA_LAURA, new Date(ahora.getTime() + (PERFIL_RECALCULO_TTL_S + 1) * 1000)));
+  const guardado = await laura(async (tx) => {
+    const perfil = await computePerfil(tx, CREADORA_LAURA);
+    return savePerfilComercial(tx, perfil, plantilla(perfil), { recalcToken: nuevo.token, now: new Date('2026-09-26T12:02:00Z') });
+  });
+  // El lento termina después: su guardado se rechaza y el del nuevo se queda.
+  await assert.rejects(
+    laura(async (tx) => {
+      const perfil = await computePerfil(tx, CREADORA_LAURA);
+      return savePerfilComercial(tx, perfil, plantilla(perfil), { recalcToken: lento.token, now: new Date('2026-09-26T12:03:00Z') });
+    }),
+    (e: unknown) => e instanceof PerfilComercialError && e.code === 'recalc_in_progress',
+  );
+  const vigente = await laura((tx) => getPerfilComercial(tx, CREADORA_LAURA));
+  assert.equal(vigente?.narrative.writtenAt, guardado.narrative.writtenAt);
+});
+
 test('recalcular no pisa una edición guardada mientras tanto', async () => {
   const doc = await laura(async (tx) => {
     const perfil = await computePerfil(tx, CREADORA_LAURA);

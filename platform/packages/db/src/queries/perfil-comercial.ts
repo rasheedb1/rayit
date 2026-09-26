@@ -402,15 +402,32 @@ export async function readPostCovers(tx: WorkspaceTx, postIds: readonly string[]
   return Object.fromEntries(rows.map((r) => [r.id, coverSrcOrNull(r.cover_url)]));
 }
 
-async function escribir(tx: WorkspaceTx, creatorId: string, doc: StoredPerfil): Promise<void> {
+async function escribir(tx: WorkspaceTx, creatorId: string, doc: StoredPerfil, recalcToken?: string): Promise<void> {
+  if (recalcToken === undefined) {
+    const { rows } = await tx.query<{ id: string }>(
+      `UPDATE creator_profile
+          SET media_kit = jsonb_set(coalesce(media_kit, '{}'::jsonb), ARRAY[$2::text], $3::jsonb, true)
+        WHERE id = $1 AND deleted_at IS NULL
+        RETURNING id`,
+      [creatorId, PERFIL_MEDIA_KIT_KEY, JSON.stringify(doc)],
+    );
+    if (!rows[0]) throw new PerfilComercialError('creator_not_found', 'Ese creador no existe en este espacio de trabajo.');
+    return;
+  }
+  // Con marca: se escribe solo si la marca sigue siendo la suya, y se
+  // suelta en el mismo UPDATE. Un recálculo que pasó del TTL y cuya marca
+  // ya tomó otro no pisa el resultado del otro.
   const { rows } = await tx.query<{ id: string }>(
     `UPDATE creator_profile
-        SET media_kit = jsonb_set(coalesce(media_kit, '{}'::jsonb), ARRAY[$2::text], $3::jsonb, true)
-      WHERE id = $1 AND deleted_at IS NULL
+        SET media_kit = jsonb_set(media_kit - $4::text, ARRAY[$2::text], $3::jsonb, true)
+      WHERE id = $1 AND deleted_at IS NULL AND media_kit -> $4::text ->> 'token' = $5
       RETURNING id`,
-    [creatorId, PERFIL_MEDIA_KIT_KEY, JSON.stringify(doc)],
+    [creatorId, PERFIL_MEDIA_KIT_KEY, JSON.stringify(doc), PERFIL_RECALCULO_KEY, recalcToken],
   );
-  if (!rows[0]) throw new PerfilComercialError('creator_not_found', 'Ese creador no existe en este espacio de trabajo.');
+  if (rows[0]) return;
+  const { rows: existe } = await tx.query(`SELECT 1 FROM creator_profile WHERE id = $1 AND deleted_at IS NULL`, [creatorId]);
+  if (!existe[0]) throw new PerfilComercialError('creator_not_found', 'Ese creador no existe en este espacio de trabajo.');
+  throw new PerfilComercialError('recalc_in_progress', 'Otro recálculo tomó la marca mientras este corría: se guarda el suyo.');
 }
 
 // ---------------------------------------------------------------------
@@ -482,7 +499,10 @@ export interface SavePerfilOptions {
    * tanto: no se pisa (stale_edit). undefined = no comprobar.
    */
   expectedWrittenAt?: string | null;
-  /** La marca de recálculo que se suelta al guardar, en la misma transacción. */
+  /**
+   * La marca de recálculo: se guarda solo si sigue siendo la de quien
+   * guarda (si no, recalc_in_progress) y se suelta en el mismo UPDATE.
+   */
   recalcToken?: string;
   now?: Date;
 }
@@ -530,8 +550,7 @@ export async function savePerfilComercial(
       fallback: narrative.fallback,
     },
   };
-  await escribir(tx, perfil.creatorId, doc);
-  if (opts.recalcToken) await releasePerfilRecalc(tx, perfil.creatorId, opts.recalcToken);
+  await escribir(tx, perfil.creatorId, doc, opts.recalcToken || undefined);
   return doc;
 }
 
