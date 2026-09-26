@@ -436,6 +436,30 @@ function grupoDe(key: Claim["key"]): GrupoFuente {
 /** Cuántos videos de un agregado se enlazan por fila; el resto se cuenta. */
 const VIDEOS_POR_FILA = 5;
 
+const DIMENSION_DE: Partial<Record<Claim["key"], "age" | "gender" | "country">> = {
+  "audience.age": "age",
+  "audience.gender": "gender",
+  "audience.country": "country",
+};
+
+/**
+ * Lo que la fila de una cifra de demografía dice además de lo del globo:
+ * de qué informe sale (la red, solo seguidores) y el resto del reparto en
+ * esa misma lectura, cada segmento con su cifra. Así la fila no repite el
+ * globo: enseña contra qué se lee ese porcentaje.
+ */
+function repartoDe(c: Claim, perfil: PerfilComercial, cifras: Cifras, f: Formatter): { informe: string; resto: string | null } | null {
+  const dim = DIMENSION_DE[c.key];
+  if (!dim || !c.params.platform) return null;
+  const t = MESSAGES.fuentes;
+  const nombre = (b: string) =>
+    dim === "gender" ? MESSAGES.audiencia.generos[genderCode(b)] : dim === "country" ? f.country(b) : b;
+  const otros = perfil.audience.lines
+    .filter((l) => l.dimension === dim && l.claimId !== c.id && cifras[l.claimId])
+    .map((l) => t.segmento(nombre(l.bucket), cifras[l.claimId]!.valor));
+  return { informe: t.informe(PLATFORM_LABEL[c.params.platform]), resto: otros.length ? t.reparto(otros.join(", ")) : null };
+}
+
 /**
  * La fila de origen de cada cifra que no tiene otra pantalla a la que ir
  * (línea base, demografía, alcance en no seguidores, los agregados de
@@ -467,6 +491,7 @@ export function Fuentes({ perfil, cifras, f }: { perfil: PerfilComercial; cifras
                 {claims.map((c) => {
                   const v = cifras[c.id]!;
                   const filas = (c.source.rows ?? []).map((id) => posts.get(id)).filter((p) => p !== undefined);
+                  const reparto = repartoDe(c, perfil, cifras, f);
                   const fuera = (c.source.rows?.length ?? 0) - Math.min(filas.length, VIDEOS_POR_FILA);
                   return (
                     <li
@@ -480,8 +505,14 @@ export function Fuentes({ perfil, cifras, f }: { perfil: PerfilComercial; cifras
                         <span className="shrink-0 font-medium tabular-nums text-fg">{v.valor}</span>
                       </p>
                       <p className="mt-0.5 text-xs text-fg-3">{v.origen}</p>
+                      {reparto && (
+                        <p className="mt-1 text-xs leading-5 text-fg-3" data-detalle-origen>
+                          {reparto.informe}
+                          {reparto.resto && <> {reparto.resto}</>}
+                        </p>
+                      )}
                       {filas.length > 0 && (
-                        <p className="mt-1 text-xs leading-5 text-fg-3">
+                        <p className="mt-1 text-xs leading-5 text-fg-3" data-detalle-origen>
                           {t.videos}{" "}
                           {filas.slice(0, VIDEOS_POR_FILA).map((p, i) => (
                             <span key={p.postId}>

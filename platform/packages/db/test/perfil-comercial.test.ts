@@ -109,6 +109,17 @@ test('con el seed, el porqué nunca se demuestra con el mismo video y cada agreg
   const indice = new Map(perfil.posts.map((p) => [p.postId, p]));
   const captions = claim('captions-leidos');
   for (const id of captions.source.rows!) assert.ok(indice.get(id)?.title, id);
+  // La mediana de cada red enseña los videos que la forman: tantos como su muestra, de su red.
+  for (const m of perfil.performance.medians) {
+    const rows = claim(m.claimId).source.rows;
+    assert.ok(rows && rows.length === m.sampleSize, `${m.platformId}: ${rows?.length} de ${m.sampleSize}`);
+    for (const id of rows) assert.equal(indice.get(id)?.platformId, m.platformId, id);
+  }
+  // Y la mediana contra la que se midió cada uno de los mejores, también.
+  for (const v of perfil.performance.top) {
+    const base = claim(v.baselineClaimId!);
+    assert.ok(base.source.rows && base.source.rows.length > 0, v.title);
+  }
 });
 
 test('un recálculo a la vez: la marca se toma, se niega a un segundo, vence y se suelta al guardar', async () => {

@@ -299,6 +299,15 @@ export interface PerfilInputs {
   /** Las campañas con resultado medido, reportadas o cerradas. */
   campaigns: PerfilCampaignInput[];
   rateCard: { id: string; currency: string; computedAt: string; items: PerfilRateItemInput[] } | null;
+  /**
+   * Los videos que forman cada línea base, por su id: los últimos
+   * `window_posts` de la red con lectura a su corte, publicados antes del
+   * cálculo menos el corte (la regla de creator_baseline). Solo trae las
+   * que cuadran con su sample_size: si se importaron videos después, mejor
+   * ninguno que otros. La mediana de la red y la de cada uno de los
+   * mejores videos los llevan en source.rows.
+   */
+  baselinePosts?: Readonly<Record<string, readonly string[]>>;
   /** El corte de edad de las medianas (168 h, el del tarifario y el media kit). */
   cutHours: number;
   /** El instante del cálculo, ISO. Entra como dato para que el resultado sea determinista. */
@@ -796,6 +805,10 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
     }));
 
   // Desempeño: la mediana por red, cada una con su corte.
+  const filasDeBase = (id: string): { rows?: string[] } => {
+    const rows = input.baselinePosts?.[id];
+    return rows && rows.length > 0 ? { rows: [...rows] } : {};
+  };
   const conMediana = input.baselines.filter((b) => b.medianViews !== null).sort(porRed);
   const medianaDeRed = new Map(conMediana.map((b) => [b.platformId, b.id]));
   const medians: MedianLine[] = conMediana.map((b) => ({
@@ -810,7 +823,10 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
       params: { platform: b.platformId, cutHours: b.ageHoursCut },
       value: Math.round(b.medianViews!),
       unit: 'views',
-      source: { table: 'creator_baseline', id: b.id, field: 'median_views', asOf: b.computedAt },
+      source: {
+        table: 'creator_baseline', id: b.id, field: 'median_views', asOf: b.computedAt,
+        ...filasDeBase(b.id),
+      },
     }),
   }));
 
@@ -918,7 +934,7 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
                 params: { platform: p.platformId, cutHours: bl.ageHoursCut },
                 value: Math.round(bl.medianViews),
                 unit: 'views',
-                source: { table: 'creator_baseline', id: bl.id, field: 'median_views', asOf: bl.computedAt },
+                source: { table: 'creator_baseline', id: bl.id, field: 'median_views', asOf: bl.computedAt, ...filasDeBase(bl.id) },
               })
             : null,
         durationClaimId:

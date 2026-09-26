@@ -378,6 +378,10 @@ export const MESSAGES = {
       captions: "Lo que se lee en tus captions",
     },
     videos: "Videos que la forman:",
+    /** Las cifras de demografía: de qué informe salen y el resto del reparto de esa lectura. */
+    informe: (red: string) => `Del informe de audiencia que da ${red}, solo sobre tus seguidores.`,
+    reparto: (lista: string) => `En la misma lectura: ${lista}.`,
+    segmento: (nombre: string, valor: string) => `${nombre} ${valor}`,
     yMas: (n: string) => `y ${n} más`,
     /** Para soporte, solo en el title de la fila: la tabla, la columna y la fila tal cual. */
     soporte: (tabla: string, campo: string, fila: string) => `${tabla}.${campo} · ${fila}`,

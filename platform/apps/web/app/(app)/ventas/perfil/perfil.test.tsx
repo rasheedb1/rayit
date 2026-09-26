@@ -478,6 +478,27 @@ describe("la edición de la narrativa", () => {
     expect(saveNarrativeEdit).not.toHaveBeenCalled();
   });
 
+  it("ninguna fila de «De dónde sale cada cifra» repite el globo: enseña sus videos o su informe", async () => {
+    const e = entradas();
+    // Las líneas base con los videos que las forman (readBaselinePosts) y un reparto de género de dos segmentos.
+    e.baselinePosts = {
+      "00000002-0000-4000-8000-0000000b0001": [post(1).id, post(3).id, post(5).id],
+      "00000002-0000-4000-8000-0000000b0002": [post(0).id, post(2).id, post(4).id],
+    };
+    e.audience = [...e.audience, { id: "00000002-0000-4000-8000-0000000a0002", platformId: "tiktok", connectionId: "c1", dimension: "gender", bucket: "M", share: 0.36, day: "2026-09-24" }];
+    getPerfilComercial.mockResolvedValue(guardado("template", e));
+    render(await PerfilPage());
+    const fuentes = screen.getByText("De dónde sale cada cifra").closest("section")!;
+    const filas = [...fuentes.querySelectorAll("li[id^='origen-']")];
+    expect(filas.length).toBeGreaterThan(0);
+    for (const fila of filas) expect(fila.querySelector("[data-detalle-origen]"), fila.id).not.toBeNull();
+    // La mediana lista sus videos; la demografía, su informe y el resto del reparto.
+    expect(document.getElementById("origen-mediana-tiktok")!.textContent).toContain("Videos que la forman: La arepa sin plancha");
+    const mujeres = document.getElementById("origen-audiencia-tiktok-genero-f")!.textContent;
+    expect(mujeres).toContain("Del informe de audiencia que da TikTok, solo sobre tus seguidores.");
+    expect(mujeres).toContain("En la misma lectura: Hombres 36");
+  });
+
   it("«De dónde sale cada cifra» empieza plegado y la cifra que lleva a una fila lo abre", async () => {
     getPerfilComercial.mockResolvedValue(guardado());
     render(await PerfilPage());

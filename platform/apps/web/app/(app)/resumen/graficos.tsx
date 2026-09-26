@@ -113,30 +113,30 @@ export async function Graficos({ filtro }: { filtro: Filtro }) {
     <div className="grid gap-4 xl:grid-cols-2">
       {/* #seguidores: el ancla a la que lleva cada cifra de seguidores del perfil comercial (VEN-11), con ?red=. */}
       <div id="seguidores" className="min-w-0 scroll-mt-24">
-      <ChartCard
-        title={t.seguidores.title}
-        subtitle={t.seguidores.subtitle(seguidores.labels.length)}
-        ariaLabel={t.seguidores.aria}
-        chart="line"
-        // El eje arranca SIEMPRE en cero, también con una sola red.
-        // Arrancando en el mínimo, las marcas dejan de ser redondas
-        // —«216,1 mil»— y no caben en los 48 px de margen del eje del
-        // kit: se cortaban por la izquierda. En cero salen «100 mil»,
-        // «200 mil», y la curva enseña el tamaño y no solo el movimiento.
-        line={{ fromZero: true }}
-        labels={seguidores.labels.map(etiqueta)}
-        labelsHeader={t.seguidores.labelsHeader}
-        series={aSeries(seguidores.series)}
-        format="int"
-        axisFormat="compact"
-        // Solo si se ven varias redes a la vez: una que empezó a medirse
-        // dentro del periodo aparece en cero hasta su primera lectura.
-        note={filtro.platform === null && seguidores.series.length > 1 ? t.seguidores.notaRedes : undefined}
-        asOf={hasta ? { date: hasta } : undefined}
-        emptyState={
-          seguidores.labels.length > 0 ? undefined : seguidores.hasAccountSeries ? <SinDatos filtro={filtro} /> : <SinCuenta />
-        }
-      />
+        <ChartCard
+          title={t.seguidores.title}
+          subtitle={t.seguidores.subtitle(seguidores.labels.length)}
+          ariaLabel={t.seguidores.aria}
+          chart="line"
+          // El eje arranca SIEMPRE en cero, también con una sola red.
+          // Arrancando en el mínimo, las marcas dejan de ser redondas
+          // —«216,1 mil»— y no caben en los 48 px de margen del eje del
+          // kit: se cortaban por la izquierda. En cero salen «100 mil»,
+          // «200 mil», y la curva enseña el tamaño y no solo el movimiento.
+          line={{ fromZero: true }}
+          labels={seguidores.labels.map(etiqueta)}
+          labelsHeader={t.seguidores.labelsHeader}
+          series={aSeries(seguidores.series)}
+          format="int"
+          axisFormat="compact"
+          // Solo si se ven varias redes a la vez: una que empezó a medirse
+          // dentro del periodo aparece en cero hasta su primera lectura.
+          note={filtro.platform === null && seguidores.series.length > 1 ? t.seguidores.notaRedes : undefined}
+          asOf={hasta ? { date: hasta } : undefined}
+          emptyState={
+            seguidores.labels.length > 0 ? undefined : seguidores.hasAccountSeries ? <SinDatos filtro={filtro} /> : <SinCuenta />
+          }
+        />
       </div>
       <ChartCard
         title={t.views.title}

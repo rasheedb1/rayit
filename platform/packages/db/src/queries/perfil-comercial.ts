@@ -123,6 +123,38 @@ const isTier = (v: string | null): v is OutlierTier => v !== null && (OUTLIER_TI
 // ---------------------------------------------------------------------
 
 /**
+ * Los videos que forman cada línea base, con la regla con que se calcula
+ * creator_baseline: los últimos window_posts de su red con lectura a su
+ * corte (post_metrics_at_cut), publicados antes de computed_at menos el
+ * corte. Solo vuelven las que cuadran con su sample_size: si después se
+ * importaron videos más viejos, la reconstrucción ya no es la muestra de
+ * verdad, y no se enseña ninguno antes que enseñar otros.
+ */
+export async function readBaselinePosts(tx: WorkspaceTx, baselineIds: readonly string[]): Promise<Record<string, string[]>> {
+  const ids = [...new Set(baselineIds)].filter(isUuid);
+  if (!ids.length) return {};
+  const { rows } = await tx.query<{ id: string; post_ids: string[] | null; sample_size: number }>(
+    `SELECT bl.id, bl.sample_size, w.post_ids
+       FROM creator_baseline bl
+       LEFT JOIN LATERAL (
+         SELECT array_agg(x.id::text ORDER BY x.published_at DESC, x.id) AS post_ids
+           FROM (SELECT p.id, p.published_at
+                   FROM post p
+                  WHERE p.creator_id = bl.creator_id AND p.platform_id = bl.platform_id
+                    AND p.published_at <= bl.computed_at - make_interval(hours => bl.age_hours_cut)
+                    AND EXISTS (SELECT 1 FROM post_metrics_at_cut m WHERE m.post_id = p.id AND m.cut_hours = bl.age_hours_cut)
+                  ORDER BY p.published_at DESC, p.id
+                  LIMIT bl.window_posts) x
+       ) w ON true
+      WHERE bl.id = ANY ($1::uuid[])`,
+    [ids],
+  );
+  return Object.fromEntries(
+    rows.filter((r) => r.post_ids && r.post_ids.length > 0 && r.post_ids.length === r.sample_size).map((r) => [r.id, r.post_ids!]),
+  );
+}
+
+/**
  * Las filas que alimentan el perfil de un creador, ya tipadas. null si
  * el creador no existe en este workspace (la RLS lo esconde igual que si
  * no existiera).
@@ -267,6 +299,16 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
   const tarifario = await getCurrentRateCard(tx, creatorId);
   const iso = isoDe;
 
+  // Los videos que forman cada línea base que el perfil cita: la vigente
+  // de cada red y la de cada uno de los mejores (su «× tu mediana»).
+  const mejores = [...puntuados]
+    .sort((a, b) => Number(b.views_vs_median) - Number(a.views_vs_median) || Number(b.views_at_cut ?? 0) - Number(a.views_at_cut ?? 0) || a.id.localeCompare(b.id))
+    .slice(0, PERFIL_MEJORES);
+  const baselinePosts = await readBaselinePosts(tx, [
+    ...bases.map((b) => b.id),
+    ...mejores.map((p) => p.baseline_id).filter((id): id is string => id !== null),
+  ]);
+
   return {
     creator: {
       id: c.id,
@@ -295,6 +337,7 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
     })),
     posts: posts.map(postInput),
     scoredPosts: puntuados.map(postInput),
+    baselinePosts,
     campaigns: campanas.map((r) => ({
       id: r.id, name: r.name, companyName: r.company_name, status: r.status,
       result: {
