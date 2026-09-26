@@ -695,3 +695,54 @@ describe('con el adaptador, de Gmail a la ficha (pglite)', () => {
     assert.equal(gmail.pedidos.length, antes3, 'ningún messages.get de un aviso ya guardado');
   });
 });
+
+describe('el límite diario de Gmail (5.4.5) no es un correo inválido', () => {
+  const WS_L = '0000015b-0000-4000-8000-0000000005a0';
+  const ACC_L = '0000015b-0000-4000-8000-00000000a5a0';
+  const MARCA_L = '0000015b-0000-4000-8000-0000000005c1';
+  const C_BUENA = '0000015b-0000-4000-8000-0000000005d1';
+  const T_L_ENVIADO = '0000015b-0000-4000-8000-0000000075a1';
+  const T_L_PENDIENTE = '0000015b-0000-4000-8000-0000000075a2';
+  const BUENA = 'alianzas@marca-buena.test';
+
+  before(async () => {
+    await db.raw.exec(`
+      INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_L}', 'limite', 'Creadora con límite', 'America/Bogota');
+      INSERT INTO company (id, name, owner_workspace_id) VALUES ('${MARCA_L}', 'Marca buena', '${WS_L}');
+      INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_L}', '${MARCA_L}');
+      INSERT INTO contact (id, company_id, full_name, email, source, owner_workspace_id)
+      VALUES ('${C_BUENA}', '${MARCA_L}', 'Alianzas', '${BUENA}', 'user_provided', '${WS_L}');
+      INSERT INTO outreach_channel_account (id, workspace_id, channel, provider, provider_account_id, status)
+      VALUES ('${ACC_L}', '${WS_L}', 'email', 'gmail_oauth', 'limite@gmail.com', 'connected');
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for,
+                                  sent_at, provider_message_id, message_id_rfc, recipient_address, attempt_count) VALUES
+        ('${T_L_ENVIADO}', '${WS_L}', '${MARCA_L}', '${C_BUENA}', 'email', 'Hola', 'sent', '2026-09-23T12:00:00Z',
+         '2026-09-23T12:00:00Z', 'gmail-l-1', '<CAF=limite001@mail.gmail.com>', '${BUENA}', 1),
+        ('${T_L_PENDIENTE}', '${WS_L}', '${MARCA_L}', '${C_BUENA}', 'email', 'Sigo', 'scheduled', '2026-09-26T13:00:00Z',
+         NULL, NULL, NULL, NULL, 0);
+    `);
+  });
+
+  test('un 5.4.5 verificado (trae el Message-ID de un correo enviado) se anota como bloqueo y no marca la ficha', async () => {
+    const aviso: BounceMessage = {
+      id: 'limite-1',
+      from: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
+      subject: 'Delivery Status Notification (Failure)',
+      body: `Final-Recipient: rfc822; ${BUENA}\nAction: failed\nStatus: 5.4.5\nDiagnostic-Code: smtp; 550 5.4.5 Daily user sending limit exceeded.`,
+      headers: { 'in-reply-to': '<CAF=limite001@mail.gmail.com>' },
+      receivedAt: new Date('2026-09-23T13:30:00Z'),
+    };
+    const r = await runBounces(db, NOW, (a) => (a.id === ACC_L ? new BuzonGrabado([aviso]) : null));
+    assert.deepEqual(
+      { bounces: r.bounces, hard: r.hard, invalidated: r.contactsInvalidated, canceled: r.touchesCanceled },
+      { bounces: 1, hard: 0, invalidated: 0, canceled: 0 },
+    );
+    const { rows: [b] } = await db.raw.query<{ kind: string; verified: boolean }>(
+      `SELECT kind, verified FROM outbound_bounce WHERE provider_message_id = 'limite-1'`,
+    );
+    assert.equal(b?.kind, 'blocked');
+    const { rows: [c] } = await db.raw.query<{ email_invalid: boolean }>(`SELECT email_invalid FROM contact WHERE id = '${C_BUENA}'`);
+    assert.equal(c?.email_invalid, false, 'la dirección de la marca sigue siendo buena');
+    assert.deepEqual(await toque(T_L_PENDIENTE), { status: 'scheduled', blocked_reason: null });
+  });
+});

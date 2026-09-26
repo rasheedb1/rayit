@@ -241,6 +241,40 @@ test('buzón lleno y 4xx son blandos; 5.7.1 es bloqueo, no correo inválido', ()
   assert.equal(bloqueo?.recipient, 'compras@marca.com');
 });
 
+/** Un DSN de Gmail con su Status y su Diagnostic-Code, como llegan al buzón. */
+const dsn = (status: string, diagnostico: string) => ({
+  from: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
+  subject: 'Delivery Status Notification (Failure)',
+  body: [
+    'Final-Recipient: rfc822; compras@marca.com',
+    'Action: failed',
+    `Status: ${status}`,
+    `Diagnostic-Code: smtp; ${diagnostico}`,
+    '',
+    'Message-ID: <CAF=original@mail.gmail.com>',
+  ].join('\n'),
+});
+
+test('solo 5.1.x es duro: el límite de envío de Gmail y los fallos del mensaje no marcan la dirección', () => {
+  // El aviso que Gmail manda por CADA correo que se pasa del límite diario: habla de quien envía.
+  const limite = detectBounce(dsn('5.4.5', '550 5.4.5 Daily user sending limit exceeded. For more information on Gmail sending limits go to https://support.google.com/a/answer/166852'));
+  assert.equal(limite?.kind, 'blocked');
+  assert.equal(limite?.statusCode, '5.4.5');
+  assert.equal(limite?.originalMessageId, 'CAF=original@mail.gmail.com', 'el aviso trae el Message-ID: por eso no puede ser duro');
+  assert.equal(detectBounce(dsn('5.0.0', '550 5.0.0 Rate limit exceeded, too many messages'))?.kind, 'blocked');
+  assert.equal(detectBounce(dsn('5.3.4', '552 5.3.4 Message size exceeds fixed maximum message size'))?.kind, 'soft');
+  assert.equal(detectBounce(dsn('5.6.0', '550 5.6.0 Content rejected'))?.kind, 'soft');
+  assert.equal(detectBounce(dsn('5.4.6', '554 5.4.6 Routing loop detected'))?.kind, 'soft');
+  assert.equal(detectBounce(dsn('5.5.0', '550 5.5.0 Requested action not taken'))?.kind, 'soft');
+  assert.equal(detectBounce(dsn('5.2.1', '550 5.2.1 The email account that you tried to reach is inactive'))?.kind, 'soft');
+  assert.equal(detectBounce(dsn('5.6.0', '550 5.6.0 Message blocked as spam'))?.kind, 'blocked', 'con frase de bloqueo, bloqueo');
+  // Lo que sí es duro, por código o por la frase del servidor cuando el código no la dice.
+  assert.equal(detectBounce(dsn('5.1.10', '550 5.1.10 RESOLVER.ADR.RecipientNotFound; Recipient not found by SMTP address lookup'))?.kind, 'hard');
+  assert.equal(detectBounce(dsn('5.0.0', '550 5.0.0 <compras@marca.com>: Recipient address rejected: User unknown'))?.kind, 'hard');
+  assert.equal(detectBounce(dsn('5.4.4', '550 5.4.4 Unrouteable address'))?.kind, 'hard');
+  assert.equal(detectBounce(dsn('5.4.4', '550 5.4.4 Unable to route'))?.kind, 'soft', '5.4.4 sin frase de dirección: no se marca');
+});
+
 test('un aviso en español también se reconoce', () => {
   const r = detectBounce({
     from: 'Sistema de entrega de correo <mailer-daemon@googlemail.com>',

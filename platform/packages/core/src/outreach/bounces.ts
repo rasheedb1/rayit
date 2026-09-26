@@ -11,11 +11,20 @@
 // Gmail no avisa de un rebote por API: llega al buzón del creador un
 // correo de mailer-daemon (un DSN, RFC 3464, o un texto libre del
 // servidor que rechazó). Aquí se reconoce y se clasifica:
-//   hard     la dirección no existe (5.1.x, «user unknown»…): se marca
-//            la ficha con el correo inválido y no se le escribe más.
-//   soft     algo pasajero (4.x.x, buzón lleno 5.2.2): se registra, no se marca.
-//   blocked  el servidor rechazó por política o reputación (5.7.x): dice
-//            algo de quien envía, no de la dirección; se registra.
+//   hard     la dirección no existe: se marca la ficha con el correo
+//            inválido y no se le escribe más. SOLO 5.1.x (dirección
+//            mala), 5.4.4 (dominio sin ruta) cuando el servidor lo dice
+//            en palabras, o un 5xx sin código extendido (o 5.0.0) cuyo
+//            texto dice que la dirección no existe («user unknown»…).
+//   blocked  dice algo de QUIEN ENVÍA, no de la dirección: el servidor
+//            rechazó por política o reputación (5.7.x) o se pasó un
+//            límite de envío (5.4.5, «Daily user sending limit
+//            exceeded» de Gmail, «rate limit»); se registra y cuenta
+//            para la tasa de rebotes, nunca marca la ficha.
+//   soft     algo pasajero o del mensaje, no de la dirección: 4.x.x, el
+//            buzón lleno (5.2.x), el mensaje demasiado grande (5.3.4),
+//            la red o un bucle (5.4.x), el protocolo (5.5.x) o el
+//            contenido (5.6.x). Se registra, no se marca.
 
 /**
  * Si el job outbound.bounces lee de verdad los buzones de Gmail. Sí desde
@@ -86,8 +95,7 @@ const SUJETO_DURO =
   '(address|mailbox|user|recipient|account|e-?mail|domain|direcci[oó]n|buz[oó]n|usuario|cuenta|destinatario|dominio)';
 /**
  * «El dominio no existe»: un rebote tan permanente como un buzón que no
- * existe. El nombre del dominio lleva puntos, así que no cabe en el
- * `[^.\n]` de arriba y va con \S+ («the domain marca.co couldn't be
+ * existe. El nombre del dominio va con \S+ («the domain marca.co couldn't be
  * found»). Lo dice Gmail en prosa, Postfix («Host or domain name not
  * found»), Exim («unrouteable address») y cualquier resolvedor (NXDOMAIN,
  * sin registro MX).
@@ -110,7 +118,7 @@ const TEXTO_DURO = new RegExp(
     'unknown (user|recipient)',
     'no such (user|mailbox|recipient|address)',
     'mailbox (not found|unavailable)',
-    `${SUJETO_DURO}[^.\\n]{0,60}(does not exist|doesn'?t exist|no existe|not found|couldn'?t be found|could not be found|unable to be found)`,
+    `${SUJETO_DURO}(?:[^.\\n]|\\.(?=\\S)){0,60}(does not exist|doesn'?t exist|no existe|not found|couldn'?t be found|could not be found|unable to be found)`,
     'recipient address rejected',
     'invalid (recipient|address|mailbox)',
     'account (has been )?disabled',
@@ -121,6 +129,14 @@ const TEXTO_DURO = new RegExp(
 );
 const TEXTO_LLENO = /(mailbox (is )?full|quota exceeded|over quota|insufficient storage|buz[oó]n lleno)/i;
 const TEXTO_BLOQUEO = /(blocked|blacklist|spam|policy|reputation|rejected for policy|not authorized|unauthenticated)/i;
+/**
+ * Un límite de ENVÍO: habla de quien envía, no de la dirección. Gmail
+ * manda «550 5.4.5 Daily user sending limit exceeded» por CADA correo que
+ * se pasa, con su Message-ID: si eso fuera duro, las direcciones buenas
+ * de las marcas quedarían marcadas como inválidas.
+ */
+const TEXTO_LIMITE =
+  /(sending (limit|quota)|rate[- ]limit|too many (messages|emails|recipients|connections)|limit exceeded|quota exceeded for (the )?sender|l[ií]mite de env[ií]o)/i;
 const TEXTO_TEMPORAL = /(temporar|try again later|deferred|retry|timed out|timeout)/i;
 
 const ESTADO_RE = /(?:^|\n)\s*Status:\s*([245]\.\d{1,3}\.\d{1,3})/i;
@@ -159,6 +175,27 @@ const DESTINO_GMAIL_RE = new RegExp(
 const CORREO_RE = /<?([A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>?/;
 const MESSAGE_ID_RE = /(?:^|\n)\s*Message-ID:\s*<([^>\s]+)>/i;
 const REFERENCIA_RE = /<([^>\s]+@[^>\s]+)>/;
+
+/**
+ * La clase de un aviso por su código extendido (RFC 3463) y, cuando el
+ * código no lo dice todo, por lo que dijo el servidor. El orden importa:
+ * lo pasajero y lo que habla de quien envía van antes que lo duro, porque
+ * un rebote duro marca la ficha y cancela todo lo suyo.
+ */
+function clasificar(statusCode: string | null, smtpCode: number | null, texto: string): BounceKind {
+  if (statusCode?.startsWith('4') || (smtpCode !== null && smtpCode < 500)) return 'soft';
+  if (statusCode === '5.4.5' || TEXTO_LIMITE.test(texto)) return 'blocked';
+  if (statusCode?.startsWith('5.2') || TEXTO_LLENO.test(texto)) return 'soft';
+  if (statusCode?.startsWith('5.7')) return 'blocked';
+  if (statusCode?.startsWith('5.1')) return 'hard';
+  // Sin código extendido (o el genérico 5.0.0), la frase del servidor decide.
+  const sinDetalle = statusCode === null || statusCode === '5.0.0';
+  if ((sinDetalle || statusCode === '5.4.4') && TEXTO_DURO.test(texto)) return 'hard';
+  if (TEXTO_TEMPORAL.test(texto)) return 'soft';
+  if (TEXTO_BLOQUEO.test(texto)) return 'blocked';
+  // 5.3.x, 5.4.x, 5.5.x, 5.6.x y un 5xx sin frase de dirección: del mensaje o de la red, no de la dirección.
+  return 'soft';
+}
 
 function limpiar(s: string): string {
   return s.replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -205,14 +242,7 @@ export function detectBounce(mail: InboundMail): BounceDetection | null {
   const smtpCode = smtpTexto ? Number(smtpTexto) : null;
   const texto = `${servidor}\n${subject}`;
 
-  let kind: BounceKind;
-  if (statusCode?.startsWith('4') || (smtpCode !== null && smtpCode < 500)) kind = 'soft';
-  else if (statusCode === '5.2.2' || TEXTO_LLENO.test(texto)) kind = 'soft';
-  else if (statusCode?.startsWith('5.7')) kind = 'blocked';
-  else if (statusCode?.startsWith('5.1') || TEXTO_DURO.test(texto)) kind = 'hard';
-  else if (statusCode?.startsWith('5') || (smtpCode !== null && smtpCode >= 500)) {
-    kind = TEXTO_BLOQUEO.test(texto) ? 'blocked' : 'hard';
-  } else kind = TEXTO_TEMPORAL.test(texto) ? 'soft' : TEXTO_BLOQUEO.test(texto) ? 'blocked' : 'soft';
+  const kind = clasificar(statusCode, smtpCode, texto);
 
   const recipientRaw =
     DESTINO_RE.exec(body)?.[1] ?? (fallido ? CORREO_RE.exec(fallido)?.[1] : undefined) ?? DESTINO_GMAIL_RE.exec(body)?.[1] ?? null;
