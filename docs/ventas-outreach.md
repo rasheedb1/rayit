@@ -1609,7 +1609,7 @@ las ocho existentes, Ventas completo son 48 a 55 días de una persona.
 Es el módulo más grande del producto, y por eso conviene construirlo
 con agentes en paralelo, con la misma puerta de calidad de 9,5.
 
-#### Cómo quedó la actividad (VEN-16, 25 de septiembre; ronda 2)
+#### Cómo quedó la actividad (VEN-16, 25 de septiembre; ronda 3)
 
 - **Migración `0065_actividad_outreach.sql`** (0064 la tomó VEN-14; no
   dependen una de otra y el runner las aplica en cualquier orden). Una
@@ -1625,6 +1625,13 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
     CHECK de 0037; uno más rompería el UPDATE del reclamo, que es uno por
     lote y para todos los workspaces. `account_down`: el fallo fue de la
     cuenta del canal y el espacio no tiene ninguna conectada de ese canal.
+    `opted_out` mira las **tres** fuentes de `enforce_outbound_optout`: la
+    ficha dada de baja, la baja global y la baja por enlace de **este**
+    espacio (`outbound_workspace_optout`, 0050 §8.1), que en una ficha
+    pública compartida no marca `contact.opted_out`. Sin la tercera, el
+    fallido de alguien que pulsó el enlace salía con «Reintentar» y el
+    reintento terminaba en `blocked`: un botón muerto justo con quien pidió
+    la baja (ronda 3).
   - `outbound_queue`: un toque por fila con su paso, su contacto, su
     cuenta (y su estado), el código de su motivo y `retry_block`;
     `bucket` = `queue` o `history`.
@@ -1632,7 +1639,11 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
     contra los **tres topes del reclamo**: el diario de la cuenta, el
     semanal de la cuenta y el diario de correos del espacio
     (`max_emails_per_day`, contador sin cuenta), más el techo del
-    proveedor, el día del calentamiento y el interruptor del outreach.
+    proveedor, el servicio de la cuenta (`provider`: «Gmail permite hasta
+    2.000 al día»; en Unipile, la red), el día del calentamiento y el
+    interruptor del outreach. Cada CTE de contadores filtra su ventana (14
+    días, y las semanas que los contienen: 19 días), así que la lectura no
+    crece con el historial de `outbound_counter`.
   - `outbound_funnel_by_step`: enviados, abiertos, respondidos y positivos
     **dentro de lo enviado**, más en cola, fallidos y detenidos (cada
     toque del paso cae en una sola columna).
@@ -1658,7 +1669,11 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
   `GROUPING SETS`), no de la vista; las secuencias, de `outbound_sequence`
   y los tipos, de `outbound_step`.
 - **Reintentar** (`retryFailedTouches`) devuelve `failed → scheduled` a
-  la hora actual, sin tocar `attempt_count` (cada intento tiene su enlace
+  la hora a la que lo reclamará el despachador (`retryScheduledFor`:
+  `nextWindowSlot` con la zona de la cadencia o del espacio, la ventana de
+  la política y la misma semilla que el reclamo). Dentro de la ventana es
+  ahora; un viernes a las 20:00, el lunes al abrir. La fila dice esa hora,
+  no una que no se cumple. No toca `attempt_count` (cada intento tiene su enlace
   de baja), y reabre la cadencia que se completó por ese fallo. Lo que
   `outbound_touch_retry_block` bloquea ni se ofrece ni vuelve; cada toque
   va en su SAVEPOINT, así que una regla de la base (baja, correo inválido,
@@ -1672,7 +1687,9 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
   **despliega en la fila** con su código —un `<details>`: ratón, dedo o
   teclado—, el aviso del resultado que sobrevive a que la lista se vacíe
   y se lleva el foco, y las páginas); `<UsoPorCanal />` montado en
-  `/ventas/canales`; `<MetricasCadencia sequenceId />` (KPIs, embudo por
+  `/ventas/canales` (desde la ronda 3 es el único sitio del uso: la
+  tarjeta del canal dice cómo está la conexión y ya no repite «Hoy N de
+  M»; «Reconectar» baja a la fila del canal por su ancla, `canalHref`); `<MetricasCadencia sequenceId />` (KPIs, embudo por
   paso y vista de flujo con una explicación por cifra que Escape cierra)
   montado en `/ventas/cadencias/[id]`. Las dos piezas montadas traen su
   `Suspense` y su frontera de error: si su consulta falla, cae solo la
