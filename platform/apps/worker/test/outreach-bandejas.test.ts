@@ -152,3 +152,78 @@ test('terminado cuando: un retenido se aprueba desde la bandeja, queda programad
   assert.equal(fake.email.sent[1]!.content, 'Te dejo una idea concreta para la temporada.', 'sale el texto editado, en el hilo');
   assert.equal(fake.email.sent[1]!.reply?.threadRef, fake.email.sent[0]!.threadRef);
 });
+
+test('terminado cuando: «me interesa» mueve el negocio, aparece en la bandeja con la conversación y la respuesta sale una vez', async () => {
+  // Con tres días entre mensajes a la marca: escribir en frío espera; responder a quien escribió, no.
+  const w = await workspace(3, { contacts: 1, minDaysBetweenTouches: 3 });
+  const deal = await negocio(w);
+  assert.equal(F.me_interesa!.intent, 'interested');
+  const { contact, thread, fake } = await conversacion(w, F.me_interesa!.body, { deal });
+
+  const rep = await runIntent(motor, { classifier: fakeClassifier, now: () => bogota('2026-09-23', '15:06'), workspaceId: w.id });
+  assert.deepEqual(rep.classified.map((c) => [c.intent, c.dealMoved]), [['interested', true]]);
+  assert.equal(rep.notConfigured, false);
+
+  const d = (await db.raw.query<{ stage_id: string; next_action: string; due: string; history: number }>(
+    `SELECT stage_id, next_action, to_char(next_action_due AT TIME ZONE 'America/Bogota', 'YYYY-MM-DD HH24:MI') AS due,
+            (SELECT count(*)::int FROM deal_stage_history h WHERE h.deal_id = deal.id AND h.to_stage_id = 'conversacion') AS history
+       FROM deal WHERE id = $1`, [deal],
+  )).rows[0]!;
+  assert.equal(d.stage_id, 'conversacion', 'el negocio pasa a «En conversación»');
+  assert.equal(d.next_action, 'Responder hoy');
+  assert.equal(d.due, '2026-09-23 23:59', 'vence al final del día local');
+  assert.equal(d.history, 1, 'con su historial de etapa');
+  const aviso = (await db.raw.query<{ title_es: string; action_url: string; severity: string }>(
+    `SELECT title_es, action_url, severity FROM notification WHERE workspace_id = $1 AND entity_type = 'outbound_message_intent'`, [w.id],
+  )).rows;
+  assert.equal(aviso.length, 1);
+  assert.equal(aviso[0]!.title_es, 'Persona 1 Prueba quiere seguir la conversación');
+  assert.equal(aviso[0]!.action_url, `/ventas/bandeja?contacto=${contact}&canal=email`);
+
+  // Una segunda corrida no vuelve a clasificar ni a avisar.
+  const otra = await runIntent(motor, { classifier: fakeClassifier, now: () => bogota('2026-09-23', '15:09'), workspaceId: w.id });
+  assert.equal(otra.classified.length, 0);
+
+  // La bandeja: el hilo sin leer arriba, con la intención; la conversación completa, en orden.
+  const hilos = await comoLaWeb(w.id, (tx) => listInboxThreads(tx));
+  assert.deepEqual(hilos.map((h) => [h.contactId, h.channel, h.unread, h.lastIntent, h.lastDirection]), [
+    [contact, 'email', 1, 'interested', 'inbound'],
+  ]);
+  const conv = (await comoLaWeb(w.id, (tx) => loadInboxConversation(tx, contact, 'email')))!;
+  assert.deepEqual(conv.messages.map((m) => m.direction), ['outbound', 'inbound']);
+  assert.equal(conv.messages[0]!.body, 'Hola, Persona: te escribo por Marca 3.');
+  assert.equal(conv.messages[1]!.body, F.me_interesa!.body);
+  assert.deepEqual([conv.messages[1]!.intent, conv.messages[1]!.intentSource], ['interested', 'fake']);
+  assert.equal(conv.deal?.stageId, 'conversacion');
+  assert.equal(conv.replyBlock, null);
+  assert.equal(await comoLaWeb(w.id, (tx) => markInboxThreadRead(tx, contact, 'email', bogota('2026-09-23', '15:10'))), 1);
+  assert.equal((await comoLaWeb(w.id, (tx) => listInboxThreads(tx)))[0]!.unread, 0);
+
+  // Responder desde la bandeja: un toque, aunque el formulario llegue dos veces.
+  const touchId = randomUUID();
+  const responder = () =>
+    comoLaWeb(w.id, (tx) =>
+      replyInInboxThread(tx, {
+        touchId, contactId: contact, channel: 'email', body: '¡Qué bien! El jueves a las 10 me sirve. Te mando las tarifas hoy.',
+        userId: null, now: bogota('2026-09-23', '15:12'),
+      }),
+    );
+  assert.deepEqual(await responder(), { ok: true, touchId, duplicate: false });
+  assert.deepEqual(await responder(), { ok: true, touchId, duplicate: true });
+  assert.equal(await scalar<number>('SELECT count(*)::int AS v FROM outbound_touch WHERE reply_to_message_id IS NOT NULL AND contact_id = $1', [contact]), 1);
+  assert.equal((await comoLaWeb(w.id, (tx) => loadInboxConversation(tx, contact, 'email')))!.pending.length, 1, 'se ve «enviando»');
+
+  const r = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '15:14')));
+  assert.deepEqual(r.sent, [touchId], 'sale por el motor, sin esperar los días entre mensajes a la marca');
+  const salida = fake.email.sent.at(-1)!;
+  assert.equal(salida.reply?.threadRef, thread, 'en el mismo hilo');
+  assert.equal(salida.subject, 'Re: Hola, Persona');
+  assert.equal(salida.account.id, w.gmail, 'por la cuenta que recibió el mensaje');
+  assert.ok(salida.body.includes('Calle 93'), 'con el pie de baja del correo');
+  const r2 = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '15:20')));
+  assert.deepEqual(r2.sent, [], 'una sola vez');
+
+  const final = (await comoLaWeb(w.id, (tx) => loadInboxConversation(tx, contact, 'email')))!;
+  assert.deepEqual(final.messages.map((m) => m.direction), ['outbound', 'inbound', 'outbound']);
+  assert.deepEqual(final.pending, []);
+});
