@@ -5,8 +5,9 @@
  * proveedor (0037 §4.5):
  *   0. toma el candado del reclamo (CLAIM_LOCK_KEY): dos reclamos a la vez
  *      no leen el mismo estado de la marca ni el mismo ritmo de la cuenta;
- *   1. cancela lo vencido de quien se dio de baja, o de un enrolamiento
- *      que ya terminó (la base rechazaría reclamarlo);
+ *   1. cancela lo vencido de quien se dio de baja, de una marca que el
+ *      brief activo no acepta (VEN-7), o de un enrolamiento que ya
+ *      terminó (la base rechazaría reclamarlo);
  *   2. toma hasta `limit` toques vencidos de workspaces con el
  *      interruptor encendido, de un canal configurado y permitido, de
  *      enrolamientos y secuencias activas, sin disyuntor abierto, y sin
@@ -51,6 +52,7 @@ import {
 import { createOptoutToken, optoutTokenHash, warmupDailyLimit, warmupDay } from '@mc/core/outreach/deliverability';
 import type { WorkerSql } from '../../client.ts';
 import { incrementIfUnderCap, incrementWeekly } from '../outreach.ts';
+import { briefCompanyVerdictSql } from '../brief.ts';
 import { finishBouncedEnrollments } from './bounce.ts';
 import { advanceEnrollment } from './enroll.ts';
 import { notifyAccountDown, notifyTouchFailed } from './notices.ts';
@@ -93,6 +95,12 @@ export interface ClaimReport {
   canceledOptedOut: number;
   /** Cancelados antes de reclamar: el correo de la ficha rebotó para siempre (contact.email_invalid, VEN-15). */
   canceledEmailInvalid: number;
+  /**
+   * Cancelados antes de reclamar: la marca es una que el brief activo
+   * del workspace no acepta, por nombre o por categoría (VEN-7). Lo que
+   * se enroló antes de cambiar el brief tampoco sale.
+   */
+  canceledBriefExcluded: number;
   /** Cancelados antes de reclamar: el enrolamiento terminó (respondió, baja, completo, rebote) o la secuencia se archivó. */
   canceledFinished: number;
   /** Saltados: el contacto no tiene dirección en ese canal. */
@@ -128,7 +136,7 @@ export interface ClaimReport {
  */
 export function emptyClaimReport(): ClaimReport {
   return {
-    claimed: [], canceledOptedOut: 0, canceledEmailInvalid: 0, canceledFinished: 0, skippedNoAddress: 0, skippedInvalidAddress: 0, outsideWindow: [], waitingAccount: [],
+    claimed: [], canceledOptedOut: 0, canceledEmailInvalid: 0, canceledBriefExcluded: 0, canceledFinished: 0, skippedNoAddress: 0, skippedInvalidAddress: 0, outsideWindow: [], waitingAccount: [],
     accountDownNotices: 0, rescheduled: [], canceledCompanyCap: 0, paced: [],
   };
 }
@@ -412,6 +420,22 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   report.canceledEmailInvalid = note(emailInvalidRows);
   // Sin nada vivo por un rebote, el enrolamiento termina en 'bounced', no en 'completed'.
   await finishBouncedEnrollments(tx, emailInvalidRows.flatMap((r) => (r.enrollment_id ? [r.enrollment_id] : [])), now);
+
+  // (con VEN-7) Una marca que el brief activo del workspace no acepta —por
+  // nombre o por categoría— no recibe mensajes, aunque su enrolamiento
+  // sea de antes del brief: enrollContacts ya no la deja entrar, y esto
+  // cubre lo que estaba en la cola cuando el brief cambió. Con el
+  // workspace del toque, explícito: aquí no hay RLS.
+  report.canceledBriefExcluded = note(
+    (await tx.query<{ enrollment_id: string | null }>(
+      `UPDATE outbound_touch t
+          SET status = 'canceled', blocked_reason = 'brief_excluded'
+        WHERE t.status = 'scheduled' AND ${DUE} AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
+          AND ${briefCompanyVerdictSql('t.company_id', 't.workspace_id')} IS NOT NULL
+        RETURNING t.id, t.enrollment_id`,
+      [now.toISOString(), ws],
+    )).rows,
+  );
 
   report.canceledFinished = note(
     (await tx.query<{ enrollment_id: string | null }>(

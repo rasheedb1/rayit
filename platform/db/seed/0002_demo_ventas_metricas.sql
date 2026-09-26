@@ -1002,7 +1002,7 @@ ON CONFLICT DO NOTHING;
 
 
 -- =====================================================================
--- 9 · Radar: doce señales en estados mixtos
+-- 9 · Radar: catorce señales en estados mixtos
 -- ---------------------------------------------------------------------
 -- Las de la bandeja (pending, duplicate, discarded) son de estos días y
 -- van relativas a CURRENT_DATE; las aceptadas son las que originaron un
@@ -1095,6 +1095,20 @@ VALUES
    jsonb_build_object('company_name', 'Molino Andino', 'domain', 'molinoandino.co', 'industry', 'Alimentos', 'active_ads', 5, 'country', 'CO', 'category', 'harinas',
                       'since', to_char(CURRENT_DATE - 4, 'YYYY-MM-DD')), 0.8000, 7000000.00, 'COP',
    'meta_ad_library:molinoandino.co:' || to_char(CURRENT_DATE - 4, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
+  -- Pendiente, pero el brief de Laura la deja fuera (VEN-7 r2): es de
+  -- suplementos, una categoría que su brief no acepta (sección 12). La
+  -- bandeja sigue enseñando las cinco del mock y dice «1 señal oculta por
+  -- tu brief», con «Verlas»; sin ella la demo nunca enseñaba el brief
+  -- funcionando. Como la quinta, de una marca que no está en el CRM:
+  -- la categoría llega en evidence, como la deja la Biblioteca de
+  -- anuncios de Meta. Proteína Cumbre es inventada.
+  ('00000002-0000-4000-8000-00000005e014', '00000002-0000-4000-8000-000000000001', NULL, 'meta_ad_library',
+   '3 anuncios nuevos en Meta desde el ' || to_char(CURRENT_DATE - 3, 'FMDD') || ' '
+     || (SELECT m.corto[extract(month FROM CURRENT_DATE - 3)::int] FROM meses m) || ' · suplementos',
+   now() - interval '5 hours', 'https://www.facebook.com/ads/library/?q=proteinacumbre',
+   jsonb_build_object('company_name', 'Proteína Cumbre', 'domain', 'proteinacumbre.co', 'industry', 'Suplementos', 'active_ads', 3, 'country', 'CO',
+                      'category', 'suplementos', 'since', to_char(CURRENT_DATE - 3, 'YYYY-MM-DD')), 0.6800, 5000000.00, 'COP',
+   'meta_ad_library:proteinacumbre.co:' || to_char(CURRENT_DATE - 3, 'YYYY-MM-DD'), 'pending', NULL, NULL, NULL),
   -- Duplicada: la misma colaboración, detectada otra vez.
   ('00000002-0000-4000-8000-00000005e011', '00000002-0000-4000-8000-000000000001', '00000002-0000-4000-8000-0000000000e8', 'watchlist_collab',
    'Colaboración pagada con @la.olla.facil', now() - interval '2 days', 'https://www.instagram.com/reel/demo-laollafacil-ollafacil/',
@@ -1680,8 +1694,9 @@ UPDATE app_user
 --   company                      8
 --   company_link                 8
 --   contact                     12  (1 con opted_out)
---   signal                      13  (6 accepted, 5 pending —las cinco del mock, una
---                                    de una marca fuera del CRM—, 1 duplicate, 1 discarded)
+--   signal                      14  (6 accepted, 6 pending —las cinco del mock, una
+--                                    de una marca fuera del CRM, y una de suplementos que
+--                                    el brief oculta—, 1 duplicate, 1 discarded)
 --   deal                        15  (10 abiertos, 4 ganados, 1 perdido)
 --   deal_stage_history          47
 --   activity                    49  (40 históricas —3 de ellas cambios de etapa— + 9 de seguimiento, sección 11b)
