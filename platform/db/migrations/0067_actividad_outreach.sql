@@ -661,12 +661,21 @@ LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  IF current_user = 'mc_app' AND current_user_id() IS NOT NULL
-     AND ((NEW.status = 'canceled' AND OLD.status IS DISTINCT FROM 'canceled')
-          OR (OLD.status = 'failed' AND NEW.status = 'scheduled'))
-     AND NOT outreach_can_operate(NEW.workspace_id) THEN
-    RAISE EXCEPTION 'Solo quien opera Ventas en este espacio (owner, admin o member) puede cancelar o reintentar mensajes.'
-      USING ERRCODE = 'insufficient_privilege';
+  -- En dos pasos: una sola expresión no garantiza el orden de evaluación, y
+  -- quien no es mc_app (el enlace de baja, mc_public_share) no puede llamar
+  -- a outreach_can_operate.
+  IF current_user <> 'mc_app' THEN
+    RETURN NEW;
+  END IF;
+  IF current_user_id() IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF ((NEW.status = 'canceled' AND OLD.status IS DISTINCT FROM 'canceled')
+      OR (OLD.status = 'failed' AND NEW.status = 'scheduled')) THEN
+    IF NOT outreach_can_operate(NEW.workspace_id) THEN
+      RAISE EXCEPTION 'Solo quien opera Ventas en este espacio (owner, admin o member) puede cancelar o reintentar mensajes.'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
   END IF;
   RETURN NEW;
 END;
