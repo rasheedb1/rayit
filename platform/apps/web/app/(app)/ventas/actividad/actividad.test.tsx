@@ -206,6 +206,12 @@ describe("la lista de la cola", () => {
     expect(tercera.container.textContent).not.toMatch(/\bSale\b/);
     expect(screen.getByText("En espera · cadencia en pausa")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Ir a la cadencia" }).getAttribute("href")).toBe("/ventas/cadencias/s1");
+    cleanup();
+    // Envío apagado Y cadencia en pausa: encender el envío no basta, y la fila lo dice con adónde ir.
+    const ambas = filaVista(toque({ touchId: "t5", status: "scheduled", reason: null, sequenceStatus: "paused" }), f, { bloqueos: apagado, now: hoy });
+    render(lista({ filas: [ambas] }));
+    expect(screen.getByText("En espera · envío apagado · cadencia en pausa")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Ir a la cadencia" }).getAttribute("href")).toBe("/ventas/cadencias/s1");
   });
 
   it("el historial no lleva casillas", () => {
@@ -241,15 +247,21 @@ describe("el aviso del envío apagado", () => {
 });
 
 describe("reintentar por tipo de paso", () => {
-  it("un botón por tipo, con los filtros de la pantalla; el resultado sube al panel", async () => {
-    render(<ReintentarPorTipo tipos={[{ stepType: "email", label: "Correo · 2" }]} sequenceId="s1" contact="sofía" onResultado={onResultado} />);
+  it("un botón por tipo, que pregunta antes (es en masa); con los filtros de la pantalla; el resultado sube al panel", async () => {
+    const pregunta = MENSAJES.reintentar.pregunta("Correo", "2", 2);
+    expect(pregunta).toBe("¿Volver a enviar 2 mensajes de Correo?");
+    render(<ReintentarPorTipo tipos={[{ stepType: "email", label: "Correo · 2", pregunta }]} sequenceId="s1" contact="sofía" onResultado={onResultado} />);
     fireEvent.click(screen.getByRole("button", { name: /Correo · 2/ }));
+    expect(screen.getByText(pregunta)).toBeTruthy();
+    expect(screen.getByText(MENSAJES.reintentar.consecuencia)).toBeTruthy();
+    expect(reintentarPorTipo).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: MENSAJES.reintentar.confirmar }));
     await waitFor(() => expect(reintentarPorTipo).toHaveBeenCalledWith({ stepType: "email", sequenceId: "s1", contact: "sofía" }));
     await waitFor(() => expect(onResultado).toHaveBeenCalledWith({ ok: "2 mensajes volvieron a la cola." }));
   });
 
   it("con el envío apagado, la ayuda no promete «la próxima pasada»", () => {
-    render(<ReintentarPorTipo tipos={[{ stepType: "email", label: "Correo · 2" }]} sequenceId={null} contact={null} ayuda={MENSAJES.reintentar.ayudaApagado} onResultado={onResultado} />);
+    render(<ReintentarPorTipo tipos={[{ stepType: "email", label: "Correo · 2", pregunta: "¿Volver a enviar 2 mensajes de Correo?" }]} sequenceId={null} contact={null} ayuda={MENSAJES.reintentar.ayudaApagado} onResultado={onResultado} />);
     expect(screen.queryByText(/próxima pasada/)).toBeNull();
     expect(screen.getByText(/no salen mientras el envío del espacio esté apagado/)).toBeTruthy();
   });

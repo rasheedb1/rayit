@@ -1,8 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { RotateCcw } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { ConfirmInline } from "@/components/ui/confirm-inline";
 import { reintentarPorTipo, type ActividadState } from "./actions";
 import { MESSAGES } from "./messages";
 
@@ -10,6 +8,8 @@ export interface TipoReintentable {
   stepType: string;
   /** «Correo · 3», ya con la cifra formateada. */
   label: string;
+  /** «¿Volver a enviar 3 mensajes de Correo?»: lo que pregunta antes de reintentar. */
+  pregunta: string;
 }
 
 /**
@@ -19,31 +19,28 @@ export interface TipoReintentable {
  * así que ningún botón queda muerto), con la cadencia y el contacto que
  * filtra la pantalla.
  *
- * El resultado sube a `onResultado` (PanelActividad): después de
- * reintentar lo último este bloque desaparece, y el aviso sigue a la
- * vista. Sin tipos, no pinta nada.
+ * Es una acción en masa (hasta BULK_MAX mensajes a marcas de un clic),
+ * así que pregunta antes, como «Cancelar seleccionados»: cuántos y de qué
+ * tipo, y cuándo salen. El resultado sube a `onResultado`
+ * (PanelActividad): después de reintentar lo último este bloque
+ * desaparece, y el aviso sigue a la vista. Sin tipos, no pinta nada.
  */
 export function ReintentarPorTipo({
-  tipos, sequenceId, contact, ayuda = MESSAGES.reintentar.ayuda, onResultado,
+  tipos, sequenceId, contact, ayuda = MESSAGES.reintentar.ayuda, consecuencia = MESSAGES.reintentar.consecuencia, onResultado,
 }: {
   tipos: TipoReintentable[];
   sequenceId: string | null;
   contact: string | null;
   /** Qué pasa después: «salen en la próxima pasada», o, con el envío apagado, que vuelven pero no salen. */
   ayuda?: string;
+  /** Lo que dice la pregunta: salen en la próxima pasada o, con el envío apagado, que no salen. */
+  consecuencia?: string;
   onResultado: (r: ActividadState) => void;
 }) {
-  const [ocupado, empezar] = useTransition();
-  const [cual, setCual] = useState<string | null>(null);
   const t = MESSAGES.reintentar;
 
-  function reintentar(stepType: string) {
-    setCual(stepType);
-    empezar(async () => {
-      const r = await reintentarPorTipo({ stepType, sequenceId, contact });
-      setCual(null);
-      onResultado(r);
-    });
+  async function reintentar(stepType: string) {
+    onResultado(await reintentarPorTipo({ stepType, sequenceId, contact }));
   }
 
   if (tipos.length === 0) return null;
@@ -53,17 +50,17 @@ export function ReintentarPorTipo({
       <p className="mt-1 text-xs text-fg-2">{ayuda}</p>
       <div className="mt-3 flex flex-wrap gap-2">
         {tipos.map((tipo) => (
-          <Button
+          <ConfirmInline
             key={tipo.stepType}
-            size="sm"
+            action={() => reintentar(tipo.stepType)}
+            label={tipo.label}
             variant="secondary"
-            icon={<RotateCcw size={13} aria-hidden />}
-            loading={ocupado && cual === tipo.stepType}
-            disabled={ocupado}
-            onClick={() => reintentar(tipo.stepType)}
-          >
-            {tipo.label}
-          </Button>
+            question={tipo.pregunta}
+            consequence={consecuencia}
+            confirmLabel={t.confirmar}
+            cancelLabel={t.volver}
+            openWidth="w-full sm:w-96"
+          />
         ))}
       </div>
     </section>

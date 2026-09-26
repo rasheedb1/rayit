@@ -213,6 +213,16 @@ export const MESSAGES = {
     ayudaApagado:
       "Vuelven a la cola, pero no salen mientras el envío del espacio esté apagado. Solo cuenta lo que puede salir: lo que rebotó, quedó a medias o ya no tiene sentido enviar no se reintenta.",
     boton: (tipo: string, n: string) => `${tipo} · ${n}`,
+    /** Es en masa: pregunta antes, como «Cancelar seleccionados». */
+    pregunta: (tipo: string, n: string, count: number) =>
+      plural({ one: "¿Volver a enviar {n} mensaje de {tipo}?", other: "¿Volver a enviar {n} mensajes de {tipo}?" })(n, count).replaceAll(
+        "{tipo}",
+        tipo,
+      ),
+    consecuencia: "Vuelven a la cola y salen en la próxima pasada del envío, dentro de tu horario.",
+    consecuenciaApagado: "Vuelven a la cola, pero no salen mientras el envío del espacio esté apagado.",
+    confirmar: "Sí, reintentar",
+    volver: "No, volver",
     uno: "Reintentar",
     /** En vez del botón, en un fallido que no se puede reintentar. */
     bloqueo: (motivo: string) => `No se reintenta: ${motivo}.`,
