@@ -65,11 +65,26 @@ export const MESSAGES = {
     /** Quien no es dueño ni administra el espacio (0038 §7). */
     sinPermiso: "Solo quien es dueño o administra este espacio puede encender o apagar el envío.",
     confirmarEncender: "¿Encender el envío?",
-    /** `n` es el número de mensajes aprobados para hoy, ya formateado; `cuantos`, el mismo sin formatear. */
-    consecuenciaEncender: (n: string, cuantos: number) =>
-      cuantos > 0
+    /**
+     * `n` es el número de mensajes aprobados para hoy, ya formateado;
+     * `cuantos`, el mismo sin formatear. `vuelven` es lo que el apagado
+     * canceló y encender devuelve a la cola (mensajes y personas, cada
+     * cifra formateada y cruda): tras semanas apagado, un clic reanuda
+     * cadencias viejas, y eso se dice antes.
+     */
+    consecuenciaEncender: (
+      n: string,
+      cuantos: number,
+      vuelven: { mensajes: string; cuantos: number; personas: string; cuantasPersonas: number } = {
+        mensajes: "0", cuantos: 0, personas: "0", cuantasPersonas: 0,
+      },
+    ) =>
+      (vuelven.cuantos > 0
+        ? `${plural(vuelven.cuantos, `Vuelve a la cola ${vuelven.mensajes} mensaje`, `Vuelven a la cola ${vuelven.mensajes} mensajes`)} ${plural(vuelven.cuantasPersonas, `de ${vuelven.personas} persona`, `de ${vuelven.personas} personas`)} que el apagado había parado; salen dentro de tu horario. `
+        : "") +
+      (cuantos > 0
         ? `${plural(cuantos, `Hoy sale ${n} mensaje aprobado`, `Hoy salen ${n} mensajes aprobados`)}, dentro de tus límites, y desde ahí lo que apruebes sale solo, en tu nombre.`
-        : "Hoy no hay mensajes aprobados en cola. Desde ahora, lo que apruebes sale solo, en tu nombre y dentro de tus límites.",
+        : "Hoy no hay mensajes aprobados en cola. Desde ahora, lo que apruebes sale solo, en tu nombre y dentro de tus límites."),
     siEncender: "Sí, encender",
     /** Lo que anuncia la región role=status después de encender o apagar (r5). */
     anuncioEncendido: "Envío encendido.",

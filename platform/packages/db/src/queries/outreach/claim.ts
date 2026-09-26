@@ -159,6 +159,8 @@ interface CandidateRow {
   max_emails_per_day: number;
   warmup_days: number;
   w_start: string | null;
+  /** workspace.country: sus festivos no son hábiles (holidaysFor). */
+  w_country?: string | null;
   w_end: string | null;
   tz: string;
   ws_tz: string;
@@ -219,7 +221,7 @@ function parseCandidate(r: CandidateRow, i: number): Candidate {
     address: { email: r.email, linkedin_url: r.linkedin_url, instagram_handle: r.instagram_handle },
     maxEmailsPerDay: int(fn, `$[${i}].max_emails_per_day`, r.max_emails_per_day),
     warmupDays: int(fn, `$[${i}].warmup_days`, r.warmup_days),
-    window: windowOf(r.w_start, r.w_end),
+    window: windowOf(r.w_start, r.w_end, r.w_country),
     timeZone: text(fn, `$[${i}].tz`, r.tz),
     workspaceTimeZone: text(fn, `$[${i}].ws_tz`, r.ws_tz),
     isReply,
@@ -484,7 +486,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
               t.channel, t.channel_account_id, t.enrollment_id,
               st.step_type, st.day_offset, st.order_in_day,
               c.email::text AS email, c.linkedin_url, c.instagram_handle,
-              p.max_emails_per_day, p.warmup_days, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end,
+              p.max_emails_per_day, p.warmup_days, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end, w.country AS w_country,
               coalesce(s.timezone, w.timezone) AS tz, w.timezone AS ws_tz,
               t.reply_to_message_id, rm.channel_account_id AS reply_account_id
          FROM outbound_touch t
@@ -516,7 +518,18 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
                    AND (pt.status IN ('scheduled', 'processing', 'held')
                         OR (pt.status = 'draft' AND ps.step_type = ANY($4::text[])))
                    AND (ps.day_offset, ps.order_in_day) < (st.day_offset, st.order_in_day))
-        ORDER BY coalesce(t.next_retry_at, t.scheduled_for), t.id
+        -- Reparto entre workspaces: primero el más viejo de CADA workspace, después el
+        -- segundo de cada uno… (su puesto en la cola de su workspace, contado hasta $5).
+        -- Por orden de llegada a secas, un workspace con cientos de atrasados (al
+        -- volver a encender) se llevaba las corridas de todos los demás. Una ventana
+        -- (ROW_NUMBER) no se puede combinar con FOR UPDATE; esta subconsulta sí.
+        ORDER BY (SELECT count(*) FROM (
+                    SELECT 1 FROM outbound_touch o
+                     WHERE o.workspace_id = t.workspace_id AND o.status = 'scheduled'
+                       AND coalesce(o.next_retry_at, o.scheduled_for) <= $1::timestamptz
+                       AND (coalesce(o.next_retry_at, o.scheduled_for), o.id) < (coalesce(t.next_retry_at, t.scheduled_for), t.id)
+                     LIMIT $5) antes),
+                 coalesce(t.next_retry_at, t.scheduled_for), t.id
         LIMIT $5
         FOR UPDATE OF t SKIP LOCKED`,
       [now.toISOString(), ws, channels, [...DISPATCHABLE_STEP_TYPES], limit],

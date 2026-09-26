@@ -348,7 +348,9 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'una persona resuelve en la ficha un mensaje retenido porque no se supo si un intento salió (0053, VEN-10): ' +
     'was_sent lo anota como enviado y marca el enlace de baja de ese intento; resend lo devuelve a la cola, borra ese ' +
     'enlace y devuelve su plaza. Solo el toque held con unconfirmed_attempt del workspace de la transacción; las ' +
-    'columnas del intento y outbound_optout_link son del despachador. EXECUTE a mc_app y mc_worker. No es de ningún disparador',
+    'columnas del intento y outbound_optout_link son del despachador. Pide ser del equipo (membership_is_team, 0055; ' +
+    'sin identidad, solo con app.auth_disabled): las políticas no frenan a una SECURITY DEFINER. EXECUTE a mc_app y ' +
+    'mc_worker. No es de ningún disparador',
   // La redacción que pide una persona y el pitch a mano (0057, VEN-12).
   'outbound_generation_request(uuid,text,text,uuid)':
     'una persona pide desde el editor del pitch que la IA redacte o regenere con una pista cerrada (0057, VEN-12): ' +
@@ -485,12 +487,22 @@ export const DISPARADORES_DE_CANDADO: Readonly<Record<string, string>> = {
     '§4.4). Sin él, un toque del enrolamiento de X con contact_id Y se saltaba la regla de la baja, que mira ' +
     'el contacto del toque',
   'outreach_channel_account.outreach_channel_account_worker_columns':
-    'el estado autenticado, provider_account_id, secret_ref y scopes de una cuenta de canal los escribe solo el ' +
-    'callback del proveedor (0037 §2.1). Sin él, un workspace ocupaba el buzón de otra persona en toda la ' +
-    'plataforma (outreach_channel_account_live_idx) con una fila «connected» sin OAuth',
+    'el estado autenticado, provider_account_id, secret_ref, scopes, warmup_started_at y last_ok_at de una cuenta ' +
+    'de canal los escribe solo el callback del proveedor, y channel y provider no cambian desde la web (0037 §2.1, ' +
+    '0042). Sin él, un workspace ocupaba el buzón de otra persona en toda la plataforma ' +
+    '(outreach_channel_account_live_idx) con una fila «connected» sin OAuth, sacaba un buzón conectado del índice ' +
+    'global cambiándole el canal, o se saltaba el calentamiento de VEN-15',
+  'outreach_channel_account.outreach_channel_account_keep_live':
+    'desde la web solo se borra la fila pendiente de un intento de conexión (0037 §2.1): una cuenta que ya envió se ' +
+    'desconecta. Sin él, borrar la cuenta se llevaba en cascada sus contadores del día y de la semana, y reconectar ' +
+    'el mismo buzón devolvía la plaza que 7.4 le quita a la aplicación',
   'outbound_policy.outbound_policy_llm_cap':
     'llm_daily_cap_usd lo fija la plataforma (0037 §6.1): la llave de Anthropic es de On Cue, y con un UPDATE un ' +
     'workspace se quitaba su propio techo de gasto',
+  'outbound_policy.outbound_policy_optout_link':
+    'require_optout_link no lo apaga el workspace (0037 §6.1): es lo único que hace obligatorio el enlace de baja ' +
+    'de cada correo (outbound_touch_optout_link_required). Sin él, el mismo workspace que envía se quitaba ' +
+    'public_optout y el pie que pide CAN-SPAM con un UPDATE',
   'outbound_enrollment.outbound_enrollment_optout':
     'no se enrola ni se reanuda a quien pidió la baja, por su ficha o por su correo en la lista global (0037 §3.3): ' +
     'sin él, el alta quedaba viva y el motor chocaba con la regla de outbound_touch en cada vuelta',

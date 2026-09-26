@@ -278,3 +278,42 @@ test('las peticiones de baja corteses y a secas del español, cada una con su co
     assert.equal(detectOptOut(texto).optOut, true, texto);
   }
 });
+
+test('la guardia para el hueco vacío y deja pasar direcciones y enlaces entre ángulos', () => {
+  for (const hueco of ['Hola {{ }},', 'Hola {{}},', 'Hola ${ },', 'Hola ${}.']) {
+    assert.equal(hasPlaceholders(hueco), true, hueco);
+  }
+  for (const limpio of ['Laura <laura@marca.co>', 'Más en <https://oncue.co/kit>.', 'Escríbeme a <mailto:ana@x.com>']) {
+    assert.equal(hasPlaceholders(limpio), false, limpio);
+  }
+  assert.deepEqual(findPlaceholders('Hola <nombre>, soy Laura <laura@marca.co>').map((h) => h.match), ['<nombre>']);
+});
+
+test('las bajas en español que se escapaban, cada una con su contracara', () => {
+  const bajas = [
+    'No me envíen correos, por favor.',
+    'Favor no enviarme más correos.',
+    'Por favor no enviar más correos.',
+    'Por favor no escribirnos.',
+    'Por favor, retírenme de su lista.',
+    'Por favor abstenerse de contactarnos.',
+    'Paren de escribirme',
+    'Parar de escribirnos, por favor.',
+    'No me interesa. Eliminen mi correo.',
+    'Borren mi email, gracias.',
+    'Dejen de enviarme correos',
+    'Please stop.',
+  ];
+  for (const t of bajas) assert.equal(detectOptOut(t).optOut, true, t);
+  const noBajas = [
+    'no me envíen el contrato todavía',
+    'por favor no enviar el brief hasta el lunes',
+    'Por favor, no enviar la muestra todavía.',
+    'Dejen de enviarme facturas en PDF, mándenlas en XML',
+    'Dejen de enviarme el PDF, ya lo tengo.',
+    'Paren de escribir el brief, ya lo tengo.',
+    'Eliminen mi correo anterior del hilo, este es el bueno.',
+    'Please stop by our office tomorrow.',
+  ];
+  for (const t of noBajas) assert.equal(detectOptOut(t).optOut, false, t);
+});

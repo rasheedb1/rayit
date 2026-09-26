@@ -40,7 +40,8 @@
  */
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import {
-  CHANNEL_CAP_LIMITS, LIVE_CHANNEL_ACCOUNT_STATUSES, type CHANNEL_ACCOUNT_STATUSES, type CHANNEL_PROVIDERS,
+  CHANNEL_CAP_LIMITS, LIVE_CHANNEL_ACCOUNT_STATUSES, PERSONAL_EMAIL_CAP_LIMITS, PERSONAL_EMAIL_DOMAINS,
+  type CHANNEL_ACCOUNT_STATUSES, type CHANNEL_PROVIDERS,
 } from '../schema/outreach.ts';
 import type { OUTBOUND_CHANNELS } from '../schema/_canales.ts';
 import { applyInboundEffects } from './outreach/inbound.ts';
@@ -319,8 +320,17 @@ export class ChannelCapError extends Error {
   }
 }
 
-/** El techo del CHECK de 0037 por canal. El máximo de una cuenta concreta es el de la vista (getChannelLimits). */
-export function channelCapLimits(channel: OutreachChannel): { daily: number; weekly: number } {
+/**
+ * El techo del CHECK de 0037 por canal y, para el correo, por dirección:
+ * un Gmail personal (@gmail.com, @googlemail.com) tiene el suyo. Sin
+ * dirección, el de Google Workspace. El máximo de una cuenta concreta,
+ * con la política, es el de la vista (getChannelLimits).
+ */
+export function channelCapLimits(channel: OutreachChannel, address?: string | null): { daily: number; weekly: number } {
+  if (channel === 'email' && address) {
+    const domain = address.trim().toLowerCase().split('@')[1] ?? '';
+    if ((PERSONAL_EMAIL_DOMAINS as readonly string[]).includes(domain)) return PERSONAL_EMAIL_CAP_LIMITS;
+  }
   return CHANNEL_CAP_LIMITS[channel];
 }
 

@@ -917,6 +917,29 @@ VEN-10), un comando por paso, desde `platform/`, con
    Esperado: `Despacho: 1 reclamado, 1 enviado` y el toque en `sent` con
    `provider_message_id = fake-linkedin-…`.
 7. Pegar las salidas de 4 y 6 en la nota de VEN-10 y pasarla a hecho.
+8. Al mezclar con los permisos de main (ACC, `requirePermission`): añadir
+   al catálogo de `@mc/core/permisos` `ventas.outreach.aprobar` y
+   `ventas.outreach.politica`, abrir con `await requirePermission(...)`
+   `aprobarMensaje`, `resolverIntento`, `saltarMensaje` y
+   `reanudarCadencia` (ficha) y `encenderEnvio` y `apagarEnvio`
+   (/ventas/politica), y añadir `ventas` a `MODULOS_CON_CONVENCION`.
+   Hasta entonces las acciones de la ficha piden `puedeOperarVentas`
+   (owner, admin, member) y las del interruptor `puedeCambiarLaPolitica`
+   (owner, admin); en la base, `outreach_resolve_unconfirmed` exige
+   `membership_is_team` (0053, pulido r1), que con la serie de main deja
+   fuera al rol `viewer`.
+
+**Pulido r1 (25-sep-2026), lo que cambió en el esquema de esta serie**
+(0037, 0042, 0051 y 0053, todas sin aplicar): la web no cambia `channel`,
+`provider`, `warmup_started_at` ni `last_ok_at` de una cuenta, ni la
+vuelve a `pending`, ni borra una que se autenticó (sus contadores del día
+cuelgan de ella); no apaga `require_optout_link`; un Gmail personal tiene
+techo de 500 al día y 3.500 a la semana; un toque en `scheduled` tiene
+hora; al crear un toque la web no elige `status_changed_at`; el costo del
+modelo va solo en USD; `enable_outreach` pide un canal conectado; y los
+días hábiles saltan los festivos del país del workspace
+(`@mc/core/outreach/holidays`, Colombia 2026–2027; un país sin tabla
+trabaja de lunes a viernes).
 
 La prueba `outreach-demo.test.ts` corre los pasos 3 a 6 sobre Postgres
 embebido con las mismas migraciones y el mismo seed. El 25-sep-2026

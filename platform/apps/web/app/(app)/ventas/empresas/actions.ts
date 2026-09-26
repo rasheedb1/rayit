@@ -16,11 +16,14 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX, isClockTime, isIsoDate } from "@mc/core";
 import { OUTREACH_URLS } from "@mc/core/outreach/messages";
+import { skipQueuedTouch, type SkipResult } from "@mc/db/queries/bandejas";
 import {
   releaseHeldTouch,
   resolveUnconfirmedTouch,
+  resumeEnrollment,
   type ReleaseHeldResult,
   type ResolveUnconfirmedResult,
+  type ResumeEnrollmentResult,
 } from "@mc/db/queries/outreach";
 import { VentasError } from "@mc/db/queries/ventas";
 import {
@@ -39,6 +42,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import type { VentasState } from "../actions";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "../_lib/messages";
+import { puedeOperarVentas } from "../_lib/permiso";
 import { textoDeVencimiento, type GuardadaVista } from "../_seguimiento/datos";
 import { vistaDeActividad, type ActividadVista } from "./[id]/actividad";
 import { FICHA } from "./messages";
@@ -289,6 +293,8 @@ const aprobarSchema = z.object({
  */
 export async function aprobarMensaje(_prev: VentasState, formData: FormData): Promise<VentasState> {
   const t = FICHA.cadencia;
+  // Aprobar manda un mensaje a una marca: es del equipo (owner, admin, member), no de un cliente ni de un lector.
+  if (!(await puedeOperarVentas())) return { message: t.sinPermiso };
   const parsed = aprobarSchema.safeParse({
     companyId: field(formData, "companyId"),
     touchId: field(formData, "touchId"),
@@ -348,6 +354,7 @@ const intentoSchema = z.object({
  */
 export async function resolverIntento(_prev: VentasState, formData: FormData): Promise<VentasState> {
   const t = FICHA.cadencia.intento;
+  if (!(await puedeOperarVentas())) return { message: FICHA.cadencia.sinPermiso };
   const parsed = intentoSchema.safeParse({
     companyId: field(formData, "companyId"),
     touchId: field(formData, "touchId"),
@@ -365,4 +372,60 @@ export async function resolverIntento(_prev: VentasState, formData: FormData): P
   revalidate(v.companyId);
   if (!result.ok) return { message: t.errores[result.code] };
   return { ok: true, notice: v.outcome === "was_sent" ? t.registrado : t.reenviado, stamp: Date.now() };
+}
+
+// ---------------------------------------------------------------------
+// VEN-10 · Saltar un paso retenido y reanudar una cadencia en pausa
+// ---------------------------------------------------------------------
+
+const saltarSchema = z.object({ companyId: z.string().regex(UUID_RE), touchId: z.string().regex(UUID_RE) });
+
+/**
+ * «Saltar este paso» en la ficha: el retenido no sale y la cadencia sigue
+ * con el siguiente (skipQueuedTouch, el mismo de /ventas/aprobaciones).
+ * Es la salida de una respuesta en el hilo a un correo que no salió
+ * (no_thread): aprobarla la devolvía a la cola y el despachador la
+ * retenía otra vez, con la cadencia parada para siempre.
+ */
+export async function saltarMensaje(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = FICHA.cadencia;
+  if (!(await puedeOperarVentas())) return { message: t.sinPermiso };
+  const parsed = saltarSchema.safeParse({ companyId: field(formData, "companyId"), touchId: field(formData, "touchId") });
+  if (!parsed.success) return { message: t.saltar.error };
+  const v = parsed.data;
+  let result: SkipResult;
+  try {
+    result = await withWorkspace((tx) => skipQueuedTouch(tx, v.touchId, new Date()));
+  } catch (err) {
+    console.error("[ventas/ficha] saltar mensaje", err);
+    return { message: t.saltar.error };
+  }
+  revalidate(v.companyId);
+  if (!result.ok) return { message: t.saltar.errores[result.code] };
+  return { ok: true, notice: t.saltar.hecho, stamp: Date.now() };
+}
+
+const reanudarSchema = z.object({ companyId: z.string().regex(UUID_RE), enrollmentId: z.string().regex(UUID_RE) });
+
+/**
+ * «Reanudar la cadencia» en la ficha, para una cadencia que el motor pausó
+ * porque otra persona de la marca respondió (0054). resumeEnrollment la
+ * vuelve a 'active' y corre lo vencido desde ahora.
+ */
+export async function reanudarCadencia(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = FICHA.cadencia;
+  if (!(await puedeOperarVentas())) return { message: t.sinPermiso };
+  const parsed = reanudarSchema.safeParse({ companyId: field(formData, "companyId"), enrollmentId: field(formData, "enrollmentId") });
+  if (!parsed.success) return { message: t.pausa.error };
+  const v = parsed.data;
+  let result: ResumeEnrollmentResult;
+  try {
+    result = await withWorkspace((tx) => resumeEnrollment(tx, v.enrollmentId, new Date()));
+  } catch (err) {
+    console.error("[ventas/ficha] reanudar cadencia", err);
+    return { message: t.pausa.error };
+  }
+  revalidate(v.companyId);
+  if (!result.ok) return { message: t.pausa.errores[result.code] };
+  return { ok: true, notice: t.pausa.hecho, stamp: Date.now() };
 }

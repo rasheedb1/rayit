@@ -9,8 +9,10 @@
  *
  * TBD y TODO solo en MAYÚSCULAS y como palabra entera: «todo» en español
  * es una palabra normal («todo bien»), y «TODOS» no es una marca de
- * pendiente. Lo demás, cualquier contenido entre los delimitadores que
- * no esté vacío ni sea solo espacios.
+ * pendiente. Entre llaves dobles o en ${…}, cualquier contenido, también
+ * vacío: nadie escribe «{{ }}» a propósito. Entre llave simple, corchetes
+ * o ángulos, un contenido que no sea solo espacios (un «[ ]» suelto no es
+ * un hueco), y en ángulos, nunca una dirección de correo ni un enlace.
  */
 
 export interface PlaceholderHit {
@@ -23,11 +25,15 @@ export interface PlaceholderHit {
 }
 
 const PATTERNS: ReadonlyArray<{ kind: PlaceholderHit['kind']; re: RegExp }> = [
-  { kind: 'template_literal', re: /\$\{[^{}\n]*\S[^{}\n]*\}/g },
-  { kind: 'double_brace', re: /\{\{[^{}\n]*\S[^{}\n]*\}\}/g },
+  // ${x} y también ${} vacío: la variable que se rellenó con una cadena vacía.
+  { kind: 'template_literal', re: /\$\{[^{}\n]*\}/g },
+  // {{x}} y también {{ }} o {{}}: «Hola {{ }},» es el hueco que se quedó sin nombre.
+  { kind: 'double_brace', re: /\{\{[^{}\n]*\}\}/g },
   { kind: 'single_brace', re: /(?<![{$])\{[^{}\n]*\S[^{}\n]*\}(?!\})/g },
   { kind: 'bracket', re: /\[[^[\]\n]*\S[^[\]\n]*\]/g },
-  { kind: 'angle', re: /<[^<>\n]*\S[^<>\n]*>/g },
+  // <x>, salvo una dirección o un enlace entre ángulos, que es como se
+  // escriben en texto plano: «Laura <laura@marca.co>», «<https://…>».
+  { kind: 'angle', re: /<(?![^<>\s]+@[^<>\s]+>)(?!https?:\/\/[^<>\s]+>)(?!mailto:[^<>\s]+>)[^<>\n]*\S[^<>\n]*>/g },
   { kind: 'tbd', re: /\bTBD\b/g },
   { kind: 'todo', re: /\bTODO\b/g },
 ];

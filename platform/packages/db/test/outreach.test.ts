@@ -36,9 +36,9 @@
  * igual con una función que leyera y luego escribiera. La garantía real
  * (la segunda llamada ESPERA el bloqueo de la fila y ve la plaza gastada)
  * la prueba «el bloqueo es de verdad», que solo corre contra Postgres. El
- * job contra-postgres-real del CI la corre en cada PR en un paso propio
- * («Límites atómicos, baja y guardia de esquema contra Postgres real»),
- * que tumba el job si falla: el resto de @mc/db va después, en un paso
+ * job contra-postgres-real del CI la corre en cada PR en el paso
+ * obligatorio (los archivos de test/contra-postgres-real.txt), que tumba
+ * el job si falla: el resto de @mc/db va después, en un paso
  * informativo que todavía no está en verde (CIM-2c). En local, el mismo
  * montaje (db/montaje-postgres-real.sql antes de migrar) con Docker o
  * con cualquier Postgres 16: packages/db/README.md, «Contra Postgres
@@ -58,9 +58,10 @@ import {
   OutreachShapeError, parseOutboundHealth, parsePublicOptout, publicOptout, shouldPauseOutreach,
 } from '../src/queries/outreach.ts';
 import {
-  CHANNEL_CAP_LIMITS, DEFAULT_LLM_DAILY_CAP_USD, OUTREACH_FUNCTIONS, WORKER_ONLY_CHANNEL_ACCOUNT_COLUMNS,
-  WORKER_ONLY_TOUCH_COLUMNS, WORKER_ONLY_TOUCH_STATUS,
+  CHANNEL_CAP_LIMITS, DEFAULT_LLM_DAILY_CAP_USD, OUTREACH_FUNCTIONS, PERSONAL_EMAIL_CAP_LIMITS,
+  WORKER_ONLY_CHANNEL_ACCOUNT_COLUMNS, WORKER_ONLY_TOUCH_COLUMNS, WORKER_ONLY_TOUCH_STATUS,
 } from '../src/schema/outreach.ts';
+import { channelCapLimits } from '../src/queries/canales.ts';
 import { CANCELABLE_TOUCH_STATUSES, LIVE_TOUCH_STATUSES } from '../src/schema/ventas.ts';
 import { openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
@@ -446,7 +447,9 @@ describe('0037 · catálogos', () => {
     );
 
     // Desde la web, B no se autentica sola: ni al crear ni al cambiar.
-    assert.deepEqual([...WORKER_ONLY_CHANNEL_ACCOUNT_COLUMNS], ['status', 'provider_account_id', 'secret_ref', 'scopes']);
+    assert.deepEqual([...WORKER_ONLY_CHANNEL_ACCOUNT_COLUMNS], [
+      'status', 'provider_account_id', 'secret_ref', 'scopes', 'channel', 'provider', 'warmup_started_at', 'last_ok_at',
+    ]);
     for (const status of ['connected', 'needs_reconnect', 'error']) {
       await assert.rejects(
         b(
@@ -481,6 +484,68 @@ describe('0037 · catálogos', () => {
       `SELECT status, provider_account_id FROM outreach_channel_account WHERE id = '${pendiente}'`,
     );
     assert.deepEqual({ ...fila }, { status: 'disconnected', provider_account_id: 'laura.real@gmail.com' });
+  });
+
+  test('sabotaje: una cuenta conectada no cambia de canal, de calentamiento ni se borra desde la web', async () => {
+    const soloElCallback = (e: { code?: string; message?: string }) =>
+      e.code === '42501' && /la autentica el callback del proveedor/.test(e.message ?? '');
+    const noSeBorra = (e: { code?: string; message?: string }) =>
+      e.code === '42501' && /no se borra desde la aplicación/.test(e.message ?? '');
+    const b = (sql: string, params: unknown[] = []) => t.db.withWorkspace(WS_B, (tx) => tx.query(sql, params));
+    // El callback conecta el Gmail de B, y el despachador gasta sus dos plazas de hoy.
+    const { id: gmail } = (
+      await t.db.asWorker((tx) =>
+        tx.query(
+          `INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, status,
+                                                 warmup_started_at, last_ok_at)
+           VALUES ($1, 'email', 'gmail_oauth', 'buzon.b@gmail.com', 'connected', now(), now()) RETURNING id`,
+          [WS_B],
+        ),
+      )
+    ).rows[0] as { id: string };
+    const plaza = () =>
+      t.db.asWorker((tx) => incrementIfUnderCap(tx, { workspaceId: WS_B, accountId: gmail, actionType: 'email', cap: 2 }));
+    assert.deepEqual([await plaza(), await plaza(), await plaza()], [true, true, false]);
+
+    // La identidad: un Gmail conectado no se reescribe como LinkedIn (saldría del índice global).
+    await assert.rejects(
+      b(`UPDATE outreach_channel_account SET channel = 'linkedin', provider = 'unipile' WHERE id = $1`, [gmail]),
+      soloElCallback,
+    );
+    // El calentamiento y la última respuesta buena son del proveedor.
+    await assert.rejects(
+      b(`UPDATE outreach_channel_account SET warmup_started_at = now() - interval '400 days' WHERE id = $1`, [gmail]),
+      soloElCallback,
+    );
+    await assert.rejects(b(`UPDATE outreach_channel_account SET last_ok_at = now() WHERE id = $1`, [gmail]), soloElCallback);
+    await assert.rejects(
+      b(
+        `INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, warmup_started_at)
+         VALUES ($1, 'linkedin', 'unipile', 'unipile-calentada', now() - interval '5 years')`,
+        [WS_B],
+      ),
+      soloElCallback,
+    );
+    // Volver a 'pending' la dejaría borrable: tampoco.
+    await assert.rejects(b(`UPDATE outreach_channel_account SET status = 'pending' WHERE id = $1`, [gmail]), soloElCallback);
+    // Borrarla y reconectar devolvería las plazas de hoy: no se borra, ni conectada ni desconectada.
+    await assert.rejects(b(`DELETE FROM outreach_channel_account WHERE id = $1`, [gmail]), noSeBorra);
+    await b(`UPDATE outreach_channel_account SET status = 'disconnected' WHERE id = $1`, [gmail]);
+    await assert.rejects(b(`DELETE FROM outreach_channel_account WHERE id = $1`, [gmail]), noSeBorra);
+    const [contador] = await sinRls<{ count: number }>(
+      `SELECT count FROM outbound_counter WHERE channel_account_id = '${gmail}' AND period = 'day'`,
+    );
+    assert.equal(contador?.count, 2, 'el contador del día sigue');
+    // Lo que sí: el motivo de un intento, y borrar la fila pendiente de un intento que no terminó.
+    await b(`UPDATE outreach_channel_account SET last_error = 'oauth_denied', last_error_at = now() WHERE id = $1`, [gmail]);
+    const { id: intento } = (
+      await b(
+        `INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id)
+         VALUES ($1, 'linkedin', 'unipile', 'pending:intento-borrable') RETURNING id`,
+        [WS_B],
+      )
+    ).rows[0] as { id: string };
+    await b(`DELETE FROM outreach_channel_account WHERE id = $1`, [intento]);
   });
 });
 
@@ -1477,6 +1542,66 @@ describe('0037 · coherencia de la cola, lista global en la regla y tope de gast
     assert.deepEqual({ ...pol }, { cap: '20.00', defecto: DEFAULT_LLM_DAILY_CAP_USD });
   });
 
+  test('el enlace de baja es obligatorio: la web no apaga require_optout_link; el despachador sí', async () => {
+    const obligatorio = (e: { code?: string; message?: string }) =>
+      e.code === '42501' && /enlace de baja es obligatorio/.test(e.message ?? '');
+    await assert.rejects(d(`UPDATE outbound_policy SET require_optout_link = false WHERE workspace_id = $1`, [WS_D]), obligatorio);
+    await w(`UPDATE outbound_policy SET require_optout_link = false WHERE workspace_id = $1`, [WS_D]);
+    // Con el enlace apagado por un operador, la persona sigue cambiando lo suyo, y puede volver a encenderlo.
+    await d(`UPDATE outbound_policy SET warmup_days = 14 WHERE workspace_id = $1`, [WS_D]);
+    await d(`UPDATE outbound_policy SET require_optout_link = true WHERE workspace_id = $1`, [WS_D]);
+    const [pol] = await sinRls<{ r: boolean }>(`SELECT require_optout_link AS r FROM outbound_policy WHERE workspace_id = '${WS_D}'`);
+    assert.equal(pol?.r, true);
+  });
+
+  test('un toque en cola tiene hora, y al crearlo la web no elige su status_changed_at', async () => {
+    const D4 = '00000037-0000-4000-8000-0000000000d4';
+    await t.admin(`INSERT INTO contact (id, company_id, full_name, email, source, owner_workspace_id)
+                   VALUES ('${D4}', '${COMPANY_D}', 'D cuatro', 'd4@d.outreach.test', 'user_provided', '${WS_D}')`);
+    await assert.rejects(
+      d(alta(toqueD({ contact_id: D4, status: 'scheduled' })), [WS_D, COMPANY_D, 'email', 'Hola', D4, 'scheduled']),
+      incoherente(/outbound_touch_scheduled_for_check/),
+    );
+    const { id } = (
+      await d(`${alta(toqueD({ contact_id: D4, status: 'failed', status_changed_at: '2036-01-01T00:00:00Z' }))} RETURNING id`, [
+        WS_D, COMPANY_D, 'email', 'Hola', D4, 'failed', '2036-01-01T00:00:00Z',
+      ])
+    ).rows[0] as { id: string };
+    const [fila] = await sinRls<{ ahora: boolean }>(
+      `SELECT status_changed_at BETWEEN now() - interval '1 minute' AND now() + interval '1 minute' AS ahora
+         FROM outbound_touch WHERE id = '${id}'`,
+    );
+    assert.equal(fila?.ahora, true, 'un fallo «de 2036» no se queda diez años en la ventana de la salud');
+  });
+
+  test('el costo de una llamada al modelo va en USD, la moneda del tope', async () => {
+    await assert.rejects(
+      d(
+        `INSERT INTO outbound_llm_call (workspace_id, purpose, model, input_tokens, output_tokens, cost, cost_currency)
+         VALUES ($1, 'classify', 'claude-haiku-4-5-20251001', 10, 1, 3, 'EUR')`,
+        [WS_D],
+      ),
+      (e: { code?: string }) => e.code === '23514',
+    );
+  });
+
+  test('sin un canal conectado el envío no se enciende', async () => {
+    await d(`UPDATE outbound_policy SET postal_address = 'Rua 1, Lisboa' WHERE workspace_id = $1`, [WS_D]);
+    await assert.rejects(
+      t.db.withWorkspace(WS_D, (tx) => enableOutreach(tx)),
+      (e: { code?: string; message?: string }) => e.code === '23514' && /Sin un canal conectado/.test(e.message ?? ''),
+    );
+    await w(
+      `INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, status)
+       VALUES ($1, 'email', 'gmail_oauth', 'envio@d.outreach.test', 'connected')`,
+      [WS_D],
+    );
+    await t.db.withWorkspace(WS_D, (tx) => enableOutreach(tx));
+    const [pol] = await sinRls<{ enabled: boolean }>(`SELECT enabled FROM outbound_policy WHERE workspace_id = '${WS_D}'`);
+    assert.equal(pol?.enabled, true);
+    await t.db.withWorkspace(WS_D, (tx) => disableOutreach(tx, 'fin de la prueba'));
+  });
+
   test('WorkerTx lleva marca: los límites no compilan con la transacción de la web ni la del enlace', () => {
     // Solo tipos: la función no se llama. Sin la marca, estas líneas
     // compilaban y fallaban en ejecución con 42501.
@@ -1569,6 +1694,21 @@ describe('0037 · techo por canal, processing del despachador, baja global al en
     );
     // Por debajo, el tope es de la persona.
     await e('UPDATE outreach_channel_account SET daily_cap = 40, weekly_cap = 150 WHERE id = $1', [li]);
+
+    // Un Gmail personal no es un Google Workspace: 500 al día y 3500 a la semana (§5.1).
+    assert.deepEqual(channelCapLimits('email', 'Otra@Gmail.com'), PERSONAL_EMAIL_CAP_LIMITS);
+    assert.deepEqual(channelCapLimits('email', 'ventas@marca.co'), CHANNEL_CAP_LIMITS.email);
+    for (const buzon of ['techo-personal@gmail.com', 'techo-personal@googlemail.com']) {
+      const { id } = (
+        await w(
+          `INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, daily_cap, weekly_cap)
+           VALUES ($1, 'email', 'gmail_oauth', $2, $3, $4) RETURNING id`,
+          [WS_E, buzon, PERSONAL_EMAIL_CAP_LIMITS.daily, PERSONAL_EMAIL_CAP_LIMITS.weekly],
+        )
+      ).rows[0] as { id: string };
+      await assert.rejects(w('UPDATE outreach_channel_account SET daily_cap = 501 WHERE id = $1', [id]), fuera, buzon);
+      await assert.rejects(w('UPDATE outreach_channel_account SET weekly_cap = 3501 WHERE id = $1', [id]), fuera, buzon);
+    }
   });
 
   test('processing es del despachador: la web no pone un toque en él, no lo saca y no lo borra', async () => {
@@ -1737,5 +1877,32 @@ describe('0037 · techo por canal, processing del despachador, baja global al en
     const mes = await t.db.withWorkspace(WS_E, (tx) => outboundHealth(tx, 720));
     assert.equal(mes.window.sent, 2);
     assert.equal(mes.window.failed, 0);
+
+    // Una baja de hoy en OTRO workspace, a quien ese workspace sí le escribió, no cuenta en la de E.
+    const OTRO_WS = '00000037-0000-4000-8000-0000000000f0';
+    const OTRA_EMPRESA = '00000037-0000-4000-8000-0000000000f1';
+    const OTRA = '00000037-0000-4000-8000-0000000000f2';
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name, timezone) VALUES ('${OTRO_WS}', 'outreach-f', 'Outreach F', 'UTC');
+      INSERT INTO company (id, name, owner_workspace_id) VALUES ('${OTRA_EMPRESA}', 'Empresa de F', '${OTRO_WS}');
+      INSERT INTO company_link (workspace_id, company_id) VALUES ('${OTRO_WS}', '${OTRA_EMPRESA}');
+      INSERT INTO contact (id, company_id, full_name, email, source, owner_workspace_id)
+      VALUES ('${OTRA}', '${OTRA_EMPRESA}', 'Baja de F', 'baja-hoy@f.outreach.test', 'user_provided', '${OTRO_WS}');
+      INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, sent_at, recipient_address,
+                                  provider_message_id, attempt_count)
+      VALUES ('${OTRO_WS}', '${OTRA_EMPRESA}', '${OTRA}', 'email', 'Hola', 'sent', now() - interval '1 hour',
+              'baja-hoy@f.outreach.test', 'gmail-f-baja-hoy', 1);
+      UPDATE contact SET opted_out = true, opted_out_at = now() WHERE id = '${OTRA}';
+    `);
+    try {
+      const despues = await t.db.withWorkspace(WS_E, (tx) => outboundHealth(tx, 24));
+      assert.equal(despues.window.optedOut, h.window.optedOut);
+      const deF = await t.db.asWorker((tx) => outboundHealth(tx, 24, OTRO_WS));
+      assert.equal(deF.window.optedOut, 1, 'en F sí cuenta');
+    } finally {
+      if (t.kind === 'postgres') {
+        await t.admin(`DELETE FROM workspace WHERE id = '${OTRO_WS}'; DELETE FROM company WHERE id = '${OTRA_EMPRESA}';`);
+      }
+    }
   });
 });

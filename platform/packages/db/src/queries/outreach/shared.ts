@@ -17,7 +17,7 @@
  * pruebas avanzan uno falso. Los contadores de los topes cuentan el día
  * de ese mismo reloj (0052 §3).
  */
-import { DEFAULT_SEND_WINDOW, DISPATCHABLE_STEP_TYPES, shiftFollowingSteps, type DispatchableStepType, type SendWindow } from '@mc/core';
+import { DEFAULT_SEND_WINDOW, DISPATCHABLE_STEP_TYPES, holidaysFor, shiftFollowingSteps, type DispatchableStepType, type SendWindow } from '@mc/core';
 import { isUuid, type SqlExecutor, type WorkerSql } from '../../client.ts';
 import { OutreachShapeError } from '../outreach.ts';
 
@@ -90,9 +90,15 @@ export function toDate(v: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** 'HH:MM:SS' de Postgres a la ventana de @mc/core, con la de siempre si no hay política. */
-export function windowOf(start: string | null, end: string | null): SendWindow {
-  return typeof start === 'string' && typeof end === 'string' ? { start, end } : DEFAULT_SEND_WINDOW;
+/**
+ * 'HH:MM:SS' de Postgres a la ventana de @mc/core, con la de siempre si no
+ * hay política, y con los festivos del país del workspace (holidaysFor):
+ * en ellos ni se programa ni se envía.
+ */
+export function windowOf(start: string | null, end: string | null, country?: string | null): SendWindow {
+  const base = typeof start === 'string' && typeof end === 'string' ? { start, end } : DEFAULT_SEND_WINDOW;
+  const holidays = holidaysFor(country);
+  return holidays.length > 0 ? { ...base, holidays } : base;
 }
 
 // ---------------------------------------------------------------------

@@ -217,6 +217,8 @@ export const MESSAGES = {
     badForm: "Formulario inválido.",
     tooLarge: "Aviso demasiado grande.",
     providerDown: "Unipile no respondió.",
+    /** El envío tenía bloqueada la cadencia más de lo que el aviso espera: Unipile lo reintenta. */
+    busy: "Ocupado: reintenta en unos segundos.",
     /** Por qué un aviso autenticado no cambió nada (va en el JSON de la respuesta a Unipile). */
     ignored: {
       unknownAccount: "cuenta desconocida o desconectada",

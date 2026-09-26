@@ -115,6 +115,8 @@ interface SendContextRow {
   postal_address: string | null;
   require_optout_link: boolean;
   w_start: string | null;
+  /** workspace.country: sus festivos no son hábiles (holidaysFor). */
+  w_country?: string | null;
   w_end: string | null;
   workspace_name: string;
   locale: string | null;
@@ -167,7 +169,7 @@ function parseSendContext(r: SendContextRow, previous: SendContext['previous']):
     workspaceName: text(fn, '$.workspace_name', r.workspace_name),
     locale: textOrNull(fn, '$.locale', r.locale) ?? 'es-CO',
     timeZone: text(fn, '$.tz', r.tz),
-    window: windowOf(r.w_start, r.w_end),
+    window: windowOf(r.w_start, r.w_end, r.w_country),
     account: r.account_id
       ? {
           id: r.account_id,
@@ -212,7 +214,7 @@ export async function loadSendContext(tx: WorkerSql, touchId: string): Promise<S
               (coalesce(c.opted_out, false) OR address_is_suppressed(c.email)
                  OR address_is_suppressed(t.recipient_address)) AS opted_out,
               coalesce(p.enabled, false) AS enabled, p.postal_address, coalesce(p.require_optout_link, true) AS require_optout_link,
-              p.send_window_start::text AS w_start, p.send_window_end::text AS w_end,
+              p.send_window_start::text AS w_start, p.send_window_end::text AS w_end, w.country AS w_country,
               w.name AS workspace_name, w.locale, coalesce(s.timezone, w.timezone) AS tz,
               a.id AS account_id, a.status AS account_status, a.provider, a.provider_account_id, a.secret_ref, a.display_name,
               t.reply_to_message_id

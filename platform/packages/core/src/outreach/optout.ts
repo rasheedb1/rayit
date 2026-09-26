@@ -66,6 +66,8 @@ const ES_CONTACT_SUBJ = '(escriba[ns]?|contacte[ns]?|envie[ns]?|mande[ns]?)';
  * «No me vuelvan a escribir» no lo necesita: ya es la petición entera.
  */
 const ES_TAIL = '(\\s+(mas|nunca|nada|otra\\s+vez|de\\s+nuevo)\\b|\\s*(,?\\s*(por\\s+favor|porfa|gracias))?\\s*([.!;,]|$))';
+/** Lo que mandamos, como objeto de «no me envíen…», «dejen de enviarme…». */
+const ES_OUR_MESSAGES = '(correos|mensajes|e-?mails|informacion|publicidad|propuestas|comunicaciones)';
 const EN_TAIL = '(\\s+(again|anymore|any\\s+more|ever|further|in\\s+the\\s+future)\\b|\\s*(,?\\s*(please|thanks|thank\\s+you))?\\s*([.!;,]|$))';
 
 /**
@@ -109,7 +111,19 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
     re: new RegExp(
       `\\bno\\s+((me|nos)\\s+)?(vuelva[ns]?|volver)\\s+a\\s+(escribir|contactar|enviar|mandar)(me|nos|le|les)?\\b`
         + `|\\bno\\s+(me|nos)\\s+${ES_CONTACT_SUBJ}${ES_TAIL}`
-        + `|\\bno\\s+${ES_CONTACT_SUBJ}\\s+(mas|nunca)\\b`,
+        + `|\\bno\\s+${ES_CONTACT_SUBJ}\\s+(mas|nunca)\\b`
+        // Con el objeto que es lo nuestro: «No me envíen correos, por
+        // favor», «no nos manden más mensajes». «No me envíen el contrato
+        // todavía» sigue sin serlo: el objeto es otra cosa.
+        + `|\\bno\\s+(me|nos)\\s+${ES_CONTACT_SUBJ}\\s+(mas\\s+)?${ES_OUR_MESSAGES}\\b`
+        // El infinitivo de los avisos: «Favor no enviarme más correos», «Por
+        // favor no escribirnos». «Por favor no enviar el brief hasta el
+        // lunes» no: detrás del verbo viene otra cosa. «Favor no contactar»
+        // es de es_no_contactar.
+        + `|\\b(por\\s+)?favor,?\\s+(de\\s+)?no\\s+(enviar|mandar|escribir)(me|nos)?`
+        + `(\\s+(mas\\s+)?${ES_OUR_MESSAGES}\\b|${ES_TAIL})`
+        // «Abstenerse de contactarnos», «absténganse de escribirme».
+        + '|\\b(abstener(se)?|abstenganse|abstengase)\\s+de\\s+(contactar|escribir)(me|nos|le|les)?\\b',
       'm',
     ),
   },
@@ -119,7 +133,18 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
     // («Por favor eliminen mi correo de su base de datos») y los datos a
     // secas («Por favor eliminen mis datos.»), no «no eliminen mis datos».
     id: 'es_quitar_de_lista', lang: 'es',
-    re: /\b(quit|saqu|sac|elimin|borr)[a-z]*(me|nos)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|\b(me|nos)\s+(quite[ns]?|saque[ns]?|elimine[ns]?|borre[ns]?)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|\b(quit|saqu|sac|elimin|borr)[a-z]*\s+(mi|mis|nuestro|nuestros)\s+(correo|correos|e-?mail|e-?mails|contacto|datos|direccion)\s+de\s+(la|su|tu|esta|vuestra)s?\s+(lista|base)|(?<!\bno\s)\b(eliminen|borren)\s+(mis|nuestros)\s+datos\b/,
+    // También «Retírenme de su lista» y el correo a secas como frase
+    // entera: «No me interesa. Eliminen mi correo.», «Borren mi email,
+    // gracias.»; no «Eliminen mi correo anterior del hilo».
+    re: new RegExp(
+      '\\b(quit|saqu|sac|elimin|borr|retir)[a-z]*(me|nos)\\s+de\\s+(la|su|tu|esta|vuestra)s?\\s+(lista|base)'
+        + '|\\b(me|nos)\\s+(quite[ns]?|saque[ns]?|elimine[ns]?|borre[ns]?|retire[ns]?)\\s+de\\s+(la|su|tu|esta|vuestra)s?\\s+(lista|base)'
+        + '|\\b(quit|saqu|sac|elimin|borr|retir)[a-z]*\\s+(mi|mis|nuestro|nuestros)\\s+(correo|correos|e-?mail|e-?mails|contacto|datos|direccion)\\s+de\\s+(la|su|tu|esta|vuestra)s?\\s+(lista|base)'
+        + '|(?<!\\bno\\s)\\b(eliminen|borren)\\s+(mis|nuestros)\\s+datos\\b'
+        + '|(?<!\\bno\\s)\\b(eliminen|borren|elimine|borre|elimina|borra)\\s+(mi|nuestro)\\s+(correo|e-?mail|contacto|direccion)'
+        + '\\s*(,?\\s*(por\\s+favor|porfa|gracias))?\\s*([.!;,]|$)',
+      'm',
+    ),
   },
   {
     // también «No quiero más correos», sin «recibir», con el posesivo
@@ -137,7 +162,18 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
       'm',
     ),
   },
-  { id: 'es_dejar_de_escribir', lang: 'es', re: /\bdej(a|e|en|ar)\s+de\s+(escribir|enviar|mandar|contactar)(me|nos)\b/ },
+  {
+    // «Dejen de escribirme», «paren de escribirnos». Con enviar o mandar,
+    // el objeto tiene que ser lo nuestro, o nada: «Dejen de enviarme
+    // facturas en PDF, mándenlas en XML» no es baja.
+    id: 'es_dejar_de_escribir', lang: 'es',
+    re: new RegExp(
+      '\\b(dej(a|e|en|ar)|paren|parar|pare)\\s+de\\s+('
+        + '(escribir|contactar)(me|nos)\\b'
+        + `|(enviar|mandar)(me|nos)(\\s+(mas\\s+)?${ES_OUR_MESSAGES}\\b|${ES_TAIL}))`,
+      'm',
+    ),
+  },
   { id: 'es_cancelar_suscripcion', lang: 'es', re: /\b(cancelar|anular)\s+(la\s+|mi\s+)?suscripcion\b/ },
   // «Favor no contactar», no «¿por qué no contactar a nuestra agencia?».
   { id: 'es_no_contactar', lang: 'es', re: /(?<!\bpor\s?que\s)(?<!\bpara\s)\bno\s+contactar(me|nos)?\b(?!\s+(a|al|con)\b)/ },
@@ -162,7 +198,7 @@ export const OPT_OUT_RULES: readonly OptOutRule[] = [
     // «STOP» como respuesta entera (la convención de los SMS), no «Stop by our office».
     id: 'en_stop_contacting', lang: 'en',
     re: /\bstop\s+(emailing|contacting|messaging|spamming|writing\s+to\s+(me|us)|sending\s+(me|us))\b/,
-    head: /^\s*stop\s*[.!]*\s*$/m,
+    head: /^\s*(please\s+)?stop(\s+please)?\s*[.!]*\s*$/m,
   },
   { id: 'en_do_not_contact', lang: 'en', re: new RegExp(`\\b(do\\s+not|don't|dont)\\s+(contact|email|message|write\\s+to)\\s+(me|us)${EN_TAIL}`, 'm') },
   {

@@ -7,8 +7,9 @@
  * IANA que se pasa, con Intl (zonas.ts): el cambio de horario lo
  * resuelve el motor de Intl, sin tablas a mano.
  *
- *   · Días hábiles: lunes a viernes. Los festivos no están (dependen del
- *     país y no hay tabla); es lo mismo que next_business_day de 0037.
+ *   · Días hábiles: lunes a viernes, menos los festivos que traiga la
+ *     ventana (SendWindow.holidays: los del país del workspace, de
+ *     holidays.ts). Sin festivos, lo mismo que next_business_day de 0037.
  *   · day_offset se cuenta en DÍAS HÁBILES desde el día del enrolamiento
  *     (o el siguiente hábil si se enroló en fin de semana): el paso del
  *     día 9 nunca cae en sábado, y el orden de los pasos se conserva.
@@ -38,6 +39,12 @@ export interface SendWindow {
   start: string;
   /** 'HH:MM' o 'HH:MM:SS'; exclusivo. */
   end: string;
+  /**
+   * Los días locales sin envío ('YYYY-MM-DD'): los festivos del país del
+   * workspace (holidaysFor). No son hábiles: ni se programa en ellos ni
+   * el despachador envía en ellos.
+   */
+  holidays?: readonly string[];
 }
 
 /** La ventana por defecto (la de outbound_policy.send_window_*, 0051). */
@@ -120,27 +127,33 @@ export function isoWeekday(date: LocalDate): number {
   return dow === 0 ? 7 : dow;
 }
 
-export function isBusinessDay(date: LocalDate): boolean {
-  return isoWeekday(date) <= 5;
+/** 'YYYY-MM-DD' de un día local. */
+export function isoDate(date: LocalDate): string {
+  return `${String(date.year).padStart(4, '0')}-${String(date.month).padStart(2, '0')}-${String(date.day).padStart(2, '0')}`;
 }
 
-/** El mismo día si es hábil; si no, el lunes siguiente. */
-export function businessDayOnOrAfter(date: LocalDate): LocalDate {
+/** Lunes a viernes, y no un festivo de `holidays` ('YYYY-MM-DD'). */
+export function isBusinessDay(date: LocalDate, holidays: readonly string[] = []): boolean {
+  return isoWeekday(date) <= 5 && (holidays.length === 0 || !holidays.includes(isoDate(date)));
+}
+
+/** El mismo día si es hábil; si no, el siguiente hábil (el lunes, o el martes tras un lunes festivo). */
+export function businessDayOnOrAfter(date: LocalDate, holidays: readonly string[] = []): LocalDate {
   let d = date;
-  while (!isBusinessDay(d)) d = addLocalDays(d, 1);
+  while (!isBusinessDay(d, holidays)) d = addLocalDays(d, 1);
   return d;
 }
 
 /** El siguiente día hábil, estrictamente después de `date`. */
-export function nextBusinessDate(date: LocalDate): LocalDate {
-  return businessDayOnOrAfter(addLocalDays(date, 1));
+export function nextBusinessDate(date: LocalDate, holidays: readonly string[] = []): LocalDate {
+  return businessDayOnOrAfter(addLocalDays(date, 1), holidays);
 }
 
 /** `days` días hábiles después de `date` (que se lleva antes al hábil más cercano). */
-export function addBusinessDays(date: LocalDate, days: number): LocalDate {
+export function addBusinessDays(date: LocalDate, days: number, holidays: readonly string[] = []): LocalDate {
   if (!Number.isInteger(days) || days < 0) throw new RangeError(`addBusinessDays: días inválidos (${days}).`);
-  let d = businessDayOnOrAfter(date);
-  for (let i = 0; i < days; i++) d = nextBusinessDate(d);
+  let d = businessDayOnOrAfter(date, holidays);
+  for (let i = 0; i < days; i++) d = nextBusinessDate(d, holidays);
   return d;
 }
 
@@ -198,7 +211,7 @@ export function clampToWindow(seconds: number, window: SendWindow): number {
 export function isInsideWindow(at: Date, timeZone: string, window: SendWindow = DEFAULT_SEND_WINDOW): boolean {
   const { date, seconds } = zonedParts(at, timeZone);
   const { start, end } = windowSeconds(window);
-  return isBusinessDay(date) && seconds >= start && seconds < end;
+  return isBusinessDay(date, window.holidays) && seconds >= start && seconds < end;
 }
 
 // ---------------------------------------------------------------------
@@ -279,11 +292,11 @@ export function planSteps(steps: readonly PlanStep[], opts: PlanOptions): Array<
   const window = opts.window ?? DEFAULT_SEND_WINDOW;
   const instantOf = (step: PlanStep, day0: LocalDate): number => {
     const clock = stepClock(step, opts);
-    return zonedInstant(addBusinessDays(day0, step.dayOffset + (clock.nextDay ? 1 : 0)), clock.seconds, opts.timeZone).getTime();
+    return zonedInstant(addBusinessDays(day0, step.dayOffset + (clock.nextDay ? 1 : 0), window.holidays), clock.seconds, opts.timeZone).getTime();
   };
   const first = ordered[0]!;
-  let start = businessDayOnOrAfter(today);
-  if (instantOf(first, start) <= opts.enrolledAt.getTime()) start = nextBusinessDate(start);
+  let start = businessDayOnOrAfter(today, window.holidays);
+  if (instantOf(first, start) <= opts.enrolledAt.getTime()) start = nextBusinessDate(start, window.holidays);
 
   const out: Array<{ stepId: string; at: Date }> = [];
   let prev = opts.enrolledAt.getTime();
@@ -307,7 +320,7 @@ export function planSteps(steps: readonly PlanStep[], opts: PlanOptions): Array<
 export function nextBusinessSlot(at: Date, timeZone: string, window: SendWindow = DEFAULT_SEND_WINDOW): Date {
   assertTimeZone(timeZone);
   const { date, seconds } = zonedParts(at, timeZone);
-  return zonedInstant(nextBusinessDate(date), clampToWindow(seconds, window), timeZone);
+  return zonedInstant(nextBusinessDate(date, window.holidays), clampToWindow(seconds, window), timeZone);
 }
 
 /** Minutos de dispersión por defecto al abrir la ventana (lo que se acumuló de noche no sale todo a las 09:00:00). */
@@ -338,7 +351,7 @@ export function nextWindowSlot(
   const { start } = windowSeconds(window);
   if (isInsideWindow(at, timeZone, window)) return at;
   const { date, seconds } = zonedParts(at, timeZone);
-  const day = isBusinessDay(date) && seconds < start ? date : nextBusinessDate(date);
+  const day = isBusinessDay(date, window.holidays) && seconds < start ? date : nextBusinessDate(date, window.holidays);
   // La dispersión de la apertura se queda dentro de la ventana, sin dar la vuelta.
   const { end } = windowSeconds(window);
   const spreadMinutes = opts.spreadMinutes ?? DEFAULT_OPENING_SPREAD_MINUTES;
@@ -381,7 +394,9 @@ export function shiftFollowingSteps(
   let prev = moved.at.getTime();
   for (const s of ordered) {
     const { seconds } = zonedParts(s.at, timeZone);
-    let at = zonedInstant(addBusinessDays(anchor, s.dayOffset - moved.dayOffset), clampToWindow(seconds, window), timeZone).getTime();
+    let at = zonedInstant(
+      addBusinessDays(anchor, s.dayOffset - moved.dayOffset, window.holidays), clampToWindow(seconds, window), timeZone,
+    ).getTime();
     if (at < prev + MIN_STEP_GAP_MS) at = nextWindowSlot(new Date(prev + MIN_STEP_GAP_MS), timeZone, window).getTime();
     if (at > s.at.getTime()) {
       out.push({ id: s.id, at: new Date(at) });

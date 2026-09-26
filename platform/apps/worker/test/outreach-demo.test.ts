@@ -9,7 +9,9 @@ import { nextWindowSlot } from '@mc/core';
 import { emptyClaimReport, enableOutreach } from '@mc/db/queries/outreach';
 import { buildChannels, channelModeFrom, databaseUrlFrom, fakeAllowed, jobScope } from '../src/jobs/ventas/canales/index.ts';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';
-import { assertFakeAllowed, isLocalDatabase, parseArgs, resumenDespacho, resumenPreparacion } from '../src/jobs/ventas/correr-motor.ts';
+import {
+  assertFakeAllowed, isLocalDatabase, parseArgs, pideAyuda, resumenDespacho, resumenPreparacion, USO,
+} from '../src/jobs/ventas/correr-motor.ts';
 import { DEMO_WORKSPACE_ID } from '../src/jobs/ventas/demo-ids.ts';
 import { resumenDemo, runDemoMotor } from '../src/jobs/ventas/demo-motor.ts';
 import { prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
@@ -55,7 +57,17 @@ test('job:dispatch y job:replies leen sus argumentos y rechazan lo que no conoce
   assert.throws(() => parseArgs(['enviar'], {}), ConfigError);
   assert.throws(() => parseArgs(['dispatch', '--workspace', 'laura'], {}), ConfigError);
   assert.throws(() => parseArgs(['dispatch', '--rapido'], {}), ConfigError);
-  assert.throws(() => parseArgs(['replies', '--demo'], {}), ConfigError);
+  assert.throws(() => parseArgs(['replies', '--demo'], {}), /va dentro de job:dispatch -- --demo/);
+});
+
+test('--ayuda y --help enseñan el uso con los comandos de pnpm, no el nombre del archivo', () => {
+  for (const argv of [['dispatch', '--', '--ayuda'], ['replies', '--help'], ['--ayuda'], ['-h']]) assert.equal(pideAyuda(argv), true, argv.join(' '));
+  assert.equal(pideAyuda(['dispatch', '--canal-falso']), false);
+  assert.match(USO, /pnpm --filter @mc\/worker run job:dispatch --/);
+  assert.match(USO, /pnpm --filter @mc\/worker run job:replies --/);
+  assert.doesNotMatch(USO, /correr-motor\.ts/);
+  // Un argumento desconocido sigue siendo un error, con el uso.
+  assert.throws(() => parseArgs(['dispatch', '--rapido'], {}), (e: Error) => e instanceof ConfigError && e.message.includes('job:dispatch'));
 });
 
 test('job:dispatch cuenta los cancelados como la metadata del job, y un argumento desconocido enseña el uso', () => {
@@ -70,7 +82,7 @@ test('job:dispatch cuenta los cancelados como la metadata del job, y un argument
   assert.match(texto, /Cancelados: 18 \(2 por correo rebotado, 5 por el tope de la marca, 6 porque el brief no acepta la marca\)\. Sin dirección: 4\./);
   assert.match(texto, /^Despacho: 0 reclamados, 0 enviados, 0 a reintento, 0 fallidos\./, 'con su plural, sin «(s)»');
   assert.match(resumenDespacho({ ...r, claim: { ...r.claim, claimed: 1 }, sent: ['t'] }), /^Despacho: 1 reclamado, 1 enviado,/);
-  assert.throws(() => parseArgs(['dispatch', '--foo'], {}), /Argumento desconocido: --foo\. Uso: correr-motor\.ts dispatch\|replies/);
+  assert.throws(() => parseArgs(['dispatch', '--foo'], {}), /Argumento desconocido: --foo\. Uso:\n  pnpm --filter @mc\/worker run job:dispatch/);
 });
 
 test('el canal falso contra una base compartida solo corre sobre el workspace de la demo', () => {

@@ -199,6 +199,7 @@ export const MESSAGES = {
         : `La cifra «${cifras[0] ?? ""}» no sale de tu perfil: cámbiala por una de tus cifras o quítala.`,
     opted_out: "Esa persona pidió no ser contactada: el mensaje no puede salir.",
     no_postal_address: "Falta tu dirección postal para el pie de los correos: guárdala en la política de envío.",
+    no_thread: "El correo al que responde no salió, así que no hay hilo en el que responder: sáltalo y la cadencia sigue.",
     not_editable: "Este mensaje no se puede pedir de nuevo a la IA.",
     busy: "La IA ya está redactando este mensaje.",
   },

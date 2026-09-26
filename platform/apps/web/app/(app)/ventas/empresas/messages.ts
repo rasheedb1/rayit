@@ -348,6 +348,44 @@ export const FICHA = {
           : `La cifra ${cifras} no sale de tu perfil: cámbiala por una de tus cifras o quítala.`,
       opted_out: "Esa persona pidió no ser contactada: el mensaje no puede salir.",
       no_postal_address: "Falta tu dirección postal: guárdala en la política de envío y vuelve a aprobarlo.",
+      no_thread:
+        "El correo al que responde no salió, así que no hay hilo en el que responder. Salta este paso y la cadencia sigue con el siguiente.",
+    },
+    /** Quien no puede operar Ventas (un cliente o un lector) ve los mensajes, pero no los aprueba ni los mueve. */
+    sinPermiso: "Solo el equipo del espacio puede aprobar, saltar o reanudar mensajes.",
+    /**
+     * «Saltar este paso»: el mensaje retenido no sale y la cadencia sigue
+     * con el siguiente. Pide confirmación: no se deshace.
+     */
+    saltar: {
+      label: "Saltar este paso",
+      pregunta: "¿Saltar este paso?",
+      consecuencia: "Este mensaje no sale y la cadencia sigue con el siguiente. No se deshace.",
+      si: "Sí, saltar",
+      cancelar: "Cancelar",
+      hecho: "Saltado. La cadencia sigue con el paso siguiente.",
+      error: "No se pudo saltar. Inténtalo de nuevo.",
+      errores: {
+        not_found: "Ese mensaje ya no existe.",
+        not_skippable: "Ese mensaje ya no espera aprobación: alguien lo movió.",
+      },
+    },
+    /**
+     * Una cadencia en pausa porque otra persona de la marca respondió
+     * (0054): si esa conversación no llegó a nada, se reanuda aquí.
+     */
+    pausa: {
+      aviso: (persona: string) =>
+        `La cadencia de ${persona} está en pausa porque otra persona de la marca respondió. Si esa conversación no llegó a nada, puedes reanudarla.`,
+      reanudar: "Reanudar la cadencia",
+      reanudarDe: (persona: string) => `Reanudar la cadencia de ${persona}`,
+      hecho: "Reanudada. Lo que venció durante la pausa sale desde ahora, dentro de tu horario.",
+      error: "No se pudo reanudar. Inténtalo de nuevo.",
+      errores: {
+        not_found: "Esa cadencia ya no existe.",
+        not_paused: "Esa cadencia ya no está en pausa.",
+        opted_out: "Esa persona pidió no ser contactada: su cadencia no se reanuda.",
+      },
     },
     /** El enlace del aviso de no_postal_address. */
     irAPolitica: "Ir a la política de envío",

@@ -74,8 +74,12 @@ export async function notifyTouchFailed(tx: SqlExecutor, touchId: string, reason
  * sin comprobar, una respuesta en el hilo sin correo previo, sin texto,
  * sin dirección postal, una nota de LinkedIn demasiado larga): sin él, un
  * mensaje retenido desaparecía en silencio, porque la cola que los
- * muestra (VEN-16) todavía no existe. Uno por mensaje: si el mismo
- * mensaje se retiene otra vez, no se repite. Es un 'outreach_failed' de
+ * muestra (VEN-16) todavía no existe. Uno por mensaje y motivo: si el
+ * mismo mensaje se retiene otra vez por lo mismo, no se repite; si se
+ * aprobó y se retiene por OTRO motivo (una dirección postal que faltaba y
+ * después un intento sin confirmar, que pide mirar la carpeta de
+ * enviados), sí: el texto del aviso lleva el motivo, y se compara por él.
+ * Es un 'outreach_failed' de
  * severidad info con entity_type 'outbound_touch_held' (no hace falta un
  * aviso nuevo en el CHECK de 0051 §9), y lleva al bloque «Mensajes de la
  * cadencia» de la ficha, donde el mensaje se revisa y se aprueba
@@ -94,7 +98,8 @@ export async function notifyTouchHeld(tx: SqlExecutor, touchId: string, reason: 
        FROM outbound_touch t LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
       WHERE t.id = $1::uuid
         AND NOT EXISTS (SELECT 1 FROM notification n
-                         WHERE n.workspace_id = t.workspace_id AND n.entity_type = 'outbound_touch_held' AND n.entity_id = t.id)
+                         WHERE n.workspace_id = t.workspace_id AND n.entity_type = 'outbound_touch_held' AND n.entity_id = t.id
+                           AND n.body_es = $3)
      RETURNING id`,
     [
       touchId, m.heldTitle(r.company),

@@ -19,7 +19,7 @@ import { checkFigures, FIGURE_RISK_CODES, markFiguresByValue, unsourcedFigures }
 import type { WorkspaceTx } from '../../client.ts';
 import { listSalesClaims } from './claims.ts';
 import { advanceEnrollment } from './enroll.ts';
-import { assertIds, date, int, text, textOrNull, toDate } from './shared.ts';
+import { assertIds, date, int, shiftFollowing, text, textOrNull, toDate, windowOf } from './shared.ts';
 
 /** Un mensaje de una cadencia, como lo pinta la ficha. */
 export interface CadenceTouch {
@@ -56,6 +56,9 @@ export interface CadenceTouch {
    * null si no es una respuesta o todavía no salió ningún correo.
    */
   threadSubject: string | null;
+  /** El enrolamiento del mensaje y su estado: la ficha ofrece «Reanudar» a una cadencia en pausa (0054). */
+  enrollmentId: string | null;
+  enrollmentStatus: string | null;
 }
 
 /** Cuántos mensajes enseña la ficha como mucho: primero los retenidos, después lo que viene y lo último que pasó. */
@@ -76,14 +79,15 @@ export async function listCompanyCadenceTouches(tx: WorkspaceTx, companyId: stri
       sequence_name: string | null; status: string; held_reason: string | null; blocked_reason: string | null;
       scheduled_for: unknown; sent_at: unknown; subject: string | null; body: string | null; status_changed_at: unknown;
       reply_body: string | null; reply_at: unknown; account_name: string | null; unconfirmed_day: string | null;
-      thread_subject: string | null;
+      thread_subject: string | null; enrollment_id: string | null; enrollment_status: string | null;
     }>(
       `SELECT t.id, c.full_name AS contact_name, t.channel, st.step_type, t.step_index, s.name AS sequence_name, t.status,
               t.held_reason, t.blocked_reason, t.scheduled_for, t.sent_at, t.subject, t.body, t.status_changed_at,
               r.body AS reply_body, r.occurred_at AS reply_at,
               coalesce(a.display_name, a.provider_account_id) AS account_name, t.unconfirmed_caps_on::text AS unconfirmed_day,
-              hilo.subject AS thread_subject
+              hilo.subject AS thread_subject, t.enrollment_id, e.status AS enrollment_status
          FROM outbound_touch t
+         LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
          LEFT JOIN LATERAL (
                 SELECT m.body, m.occurred_at FROM outbound_message m
                  WHERE m.touch_id = t.id AND m.direction = 'inbound'
@@ -125,13 +129,15 @@ export async function listCompanyCadenceTouches(tx: WorkspaceTx, companyId: stri
     accountName: textOrNull(fn, `$[${i}].account_name`, r.account_name),
     unconfirmedDay: textOrNull(fn, `$[${i}].unconfirmed_day`, r.unconfirmed_day),
     threadSubject: textOrNull(fn, `$[${i}].thread_subject`, r.thread_subject),
+    enrollmentId: textOrNull(fn, `$[${i}].enrollment_id`, r.enrollment_id),
+    enrollmentStatus: textOrNull(fn, `$[${i}].enrollment_status`, r.enrollment_status),
   }));
 }
 
 /** Por qué no se pudo aprobar un mensaje retenido. */
 export type ReleaseHeldCode =
   | 'not_found' | 'not_held' | 'empty' | 'empty_subject' | 'placeholders' | 'note_too_long' | 'unsourced_figure' | 'opted_out'
-  | 'no_postal_address';
+  | 'no_postal_address' | 'no_thread';
 
 export type ReleaseHeldResult = { ok: true } | { ok: false; code: ReleaseHeldCode; detail?: string };
 
@@ -167,10 +173,19 @@ export async function releaseHeldTouch(
   const row = (
     await tx.query<{
       status: string; channel: string; step_type: string | null; opted_out: boolean; needs_postal: boolean; unconfirmed: boolean;
-      in_thread: boolean;
+      in_thread: boolean; no_thread: boolean;
     }>(
       `SELECT t.status, t.channel, st.step_type, t.unconfirmed_attempt IS NOT NULL AS unconfirmed,
               (st.step_type = 'email_reply' OR t.reply_to_message_id IS NOT NULL) AS in_thread,
+              -- Retenida porque el correo al que responde no salió, y en su cadencia no salió ningún
+              -- correo: aprobarla la devolvería a la cola y el despachador la retendría otra vez.
+              -- Solo el paso de una cadencia: una respuesta escrita en la bandeja (reply_to_message_id)
+              -- responde al mensaje que llegó, y ese hilo existe aunque no haya salido ningún correo.
+              (split_part(coalesce(t.held_reason, ''), ':', 1) = 'reply_without_thread'
+               AND t.enrollment_id IS NOT NULL AND t.reply_to_message_id IS NULL
+               AND NOT EXISTS (SELECT 1 FROM outbound_touch pt
+                                WHERE pt.enrollment_id = t.enrollment_id AND pt.channel = t.channel
+                                  AND pt.status = 'sent' AND pt.id <> t.id)) AS no_thread,
               (coalesce(c.opted_out, false) OR address_is_suppressed(c.email) OR address_is_suppressed(t.recipient_address)) AS opted_out,
               (t.channel = 'email' AND coalesce(p.require_optout_link, true) AND nullif(btrim(p.postal_address), '') IS NULL) AS needs_postal
          FROM outbound_touch t
@@ -184,6 +199,8 @@ export async function releaseHeldTouch(
   ).rows[0];
   if (!row) return { ok: false, code: 'not_found' };
   if (row.status !== 'held') return { ok: false, code: 'not_held' };
+  // Sin hilo al que responder no hay aprobación que valga: la salida es saltar el paso (skipQueuedTouch).
+  if (row.no_thread) return { ok: false, code: 'no_thread' };
   // Un correo nuevo necesita asunto. Una respuesta en el hilo (el paso email_reply, o la escrita en la bandeja
   // con reply_to_message_id) no: sin uno propio, el despachador pone el del hilo («Re: …», replySubject).
   const subject = row.channel === 'email' ? (input.subject?.trim() || null) : null;
@@ -306,4 +323,72 @@ export async function resolveUnconfirmedTouch(
     if (enrollmentId) await advanceEnrollment(tx, enrollmentId, now);
   }
   return { ok: true };
+}
+
+export type ResumeEnrollmentResult =
+  | { ok: true; rescheduled: number }
+  | { ok: false; code: 'not_found' | 'not_paused' | 'opted_out' };
+
+/**
+ * «Reanudar» una cadencia en pausa (0054): otra persona de la marca
+ * respondió y el motor pausó ésta (status 'paused', sin resume_at). Si
+ * la conversación no llegó a nada, la persona la reanuda desde la ficha.
+ *
+ * Vuelve a 'active', y lo que venció mientras estaba en pausa se corre
+ * desde ahora: el primer mensaje pendiente sale en la próxima pasada
+ * (dentro de la ventana y los topes, que aplica el reclamo) y los de
+ * detrás conservan su separación en días hábiles (shiftFollowing). A
+ * quien pidió la baja no se la reanuda: la base tampoco lo deja
+ * (outbound_enrollment_optout).
+ */
+export async function resumeEnrollment(tx: WorkspaceTx, enrollmentId: string, now: Date): Promise<ResumeEnrollmentResult> {
+  assertIds('resumeEnrollment', [enrollmentId]);
+  const row = (
+    await tx.query<{ status: string; opted_out: boolean; tz: string; w_start: string | null; w_end: string | null; w_country: string | null }>(
+      `SELECT e.status,
+              (coalesce(c.opted_out, false) OR address_is_suppressed(c.email)) AS opted_out,
+              coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end, w.country AS w_country
+         FROM outbound_enrollment e
+         JOIN outbound_sequence s ON s.id = e.sequence_id
+         JOIN workspace w ON w.id = e.workspace_id
+         LEFT JOIN contact c ON c.id = e.contact_id
+         LEFT JOIN outbound_policy p ON p.workspace_id = e.workspace_id
+        WHERE e.id = $1::uuid
+        FOR UPDATE OF e`,
+      [enrollmentId],
+    )
+  ).rows[0];
+  if (!row) return { ok: false, code: 'not_found' };
+  if (row.status !== 'paused') return { ok: false, code: 'not_paused' };
+  if (row.opted_out) return { ok: false, code: 'opted_out' };
+  await tx.query(`UPDATE outbound_enrollment SET status = 'active', resume_at = NULL WHERE id = $1::uuid AND status = 'paused'`, [
+    enrollmentId,
+  ]);
+  // El primer mensaje pendiente que venció durante la pausa sale ya; los de detrás, corridos con él.
+  const first = (
+    await tx.query<{ id: string; day_offset: number; order_in_day: number }>(
+      `SELECT t.id, st.day_offset, st.order_in_day
+         FROM outbound_touch t JOIN outbound_step st ON st.id = t.step_id
+        WHERE t.enrollment_id = $1::uuid AND t.status IN ('draft', 'scheduled', 'held')
+        ORDER BY st.day_offset, st.order_in_day LIMIT 1`,
+      [enrollmentId],
+    )
+  ).rows[0];
+  let rescheduled = 0;
+  if (first) {
+    const moved = await tx.query(
+      `UPDATE outbound_touch SET scheduled_for = $2::timestamptz, next_retry_at = NULL
+        WHERE id = $1::uuid AND status = 'scheduled' AND coalesce(next_retry_at, scheduled_for) < $2::timestamptz RETURNING id`,
+      [first.id, now.toISOString()],
+    );
+    rescheduled += moved.rows.length;
+    rescheduled += await shiftFollowing(
+      tx,
+      { enrollmentId, dayOffset: first.day_offset, orderInDay: first.order_in_day, at: now },
+      row.tz,
+      windowOf(row.w_start, row.w_end, row.w_country),
+    );
+  }
+  await advanceEnrollment(tx, enrollmentId, now);
+  return { ok: true, rescheduled };
 }

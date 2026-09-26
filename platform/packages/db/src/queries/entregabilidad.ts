@@ -18,6 +18,7 @@ import { looksLikeOptoutToken, NO_SENDS_GRACE_H } from '@mc/core/outreach/delive
 import { WARMUP_MAX_DAYS } from '@mc/core/outreach/warmup';
 import { isUuid, type PublicShareTx, type WorkspaceTx } from '../client.ts';
 import { OutreachShapeError } from './outreach.ts';
+import { countReplannable } from './outreach/enroll.ts';
 
 // ---------------------------------------------------------------------
 // La baja desde el enlace de un correo
@@ -492,10 +493,22 @@ export async function readAlertSignalCounts(
           JOIN outbound_bounce b ON b.touch_id = t.id AND b.workspace_id = $1 AND b.kind = 'hard', v
          WHERE t.workspace_id = $1 AND t.channel = 'email' AND t.status = 'sent'
            AND t.sent_at >= v.desde AND t.sent_at < v.hasta)::int AS duros,
+       -- Lo que el despachador DEBERÍA haber enviado: no cuenta lo de una
+       -- cadencia en pausa (una respuesta de la marca, 0054) ni lo que
+       -- espera detrás de un paso retenido: eso espera a una persona, no
+       -- al envío, y daría un outreach_no_sends falso.
        (SELECT count(*) FROM outbound_touch t, v
          WHERE t.workspace_id = $1 AND t.status IN ('scheduled', 'failed')
            AND coalesce(t.next_retry_at, t.scheduled_for) >= v.desde
-           AND coalesce(t.next_retry_at, t.scheduled_for) < v.vencido)::int AS debidos,
+           AND coalesce(t.next_retry_at, t.scheduled_for) < v.vencido
+           AND (t.enrollment_id IS NULL
+                OR EXISTS (SELECT 1 FROM outbound_enrollment e WHERE e.id = t.enrollment_id AND e.status = 'active'))
+           AND NOT EXISTS (
+                 SELECT 1 FROM outbound_touch h
+                   JOIN outbound_step hs ON hs.id = h.step_id
+                   JOIN outbound_step ts ON ts.id = t.step_id
+                  WHERE h.enrollment_id = t.enrollment_id AND h.status = 'held'
+                    AND (hs.day_offset, hs.order_in_day) < (ts.day_offset, ts.order_in_day)))::int AS debidos,
        (SELECT count(*) FROM outreach_channel_account a, v
          WHERE a.workspace_id = $1 AND a.channel = 'email' AND a.status = 'connected'
            AND (a.bounces_read_at IS NULL
@@ -635,6 +648,12 @@ export interface SendReadiness {
    */
   approvedDueToday: number;
   /**
+   * Lo que el apagado canceló y encender devuelve a la cola
+   * (replanOutreach): mensajes y personas. Tras semanas apagado, un clic
+   * reanuda cadencias viejas: la confirmación lo dice con la cifra.
+   */
+  replannable: { touches: number; people: number };
+  /**
    * Si los rebotes del correo se están leyendo (job outbound.bounces), por
    * el cursor de las cuentas de Gmail conectadas (bounces_read_at, 0038 §6):
    *   'no_email'  no hay ningún Gmail conectado: no hay nada que leer;
@@ -704,5 +723,6 @@ export async function readSendReadiness(tx: WorkspaceTx): Promise<SendReadiness>
         lastErrorAt: iso(c.last_error_at),
       })),
     approvedDueToday: Number(hoy?.n ?? 0),
+    replannable: await countReplannable(tx, tx.workspaceId),
   };
 }

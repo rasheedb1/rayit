@@ -439,14 +439,23 @@ CREATE TABLE outreach_channel_account (
   -- tope es de la persona (VEN-15 lo baja durante el calentamiento).
   -- Los mismos números en CHANNEL_CAP_LIMITS (src/schema/outreach.ts),
   -- que la pantalla de canales usa como máximo del campo.
-  --   email         2000 / día, 10000 / semana (el cupo de Google Workspace)
+  --   email          500 / día,  3500 / semana en un Gmail personal
+  --                  (@gmail.com, @googlemail.com: el cupo oficial de
+  --                  Google para una cuenta gratuita)
+  --                 2000 / día, 10000 / semana en Google Workspace
   --   linkedin       100 / día,   200 / semana (invitaciones en cuenta activa)
   --   instagram_dm   100 / día,   700 / semana (100 acciones al día)
   --   whatsapp       100 / día,   700 / semana (fase 2; el mismo techo
   --                  que Instagram hasta medir el de Unipile)
+  -- La regla del buzón personal es la misma de la vista
+  -- outreach_channel_account_limits (0040, 0052): el dominio de la
+  -- dirección, en minúsculas por el CHECK de arriba.
   CONSTRAINT outreach_channel_account_channel_caps_check CHECK (
     CASE channel
-      WHEN 'email'        THEN coalesce(daily_cap, 0) <= 2000 AND coalesce(weekly_cap, 0) <= 10000
+      WHEN 'email'        THEN CASE WHEN split_part(provider_account_id, '@', 2) IN ('gmail.com', 'googlemail.com')
+                                    THEN coalesce(daily_cap, 0) <= 500 AND coalesce(weekly_cap, 0) <= 3500
+                                    ELSE coalesce(daily_cap, 0) <= 2000 AND coalesce(weekly_cap, 0) <= 10000
+                               END
       WHEN 'linkedin'     THEN coalesce(daily_cap, 0) <= 100  AND coalesce(weekly_cap, 0) <= 200
       WHEN 'instagram_dm' THEN coalesce(daily_cap, 0) <= 100  AND coalesce(weekly_cap, 0) <= 700
       WHEN 'whatsapp'     THEN coalesce(daily_cap, 0) <= 100  AND coalesce(weekly_cap, 0) <= 700
@@ -470,9 +479,15 @@ CREATE TRIGGER outreach_channel_account_updated BEFORE UPDATE ON outreach_channe
 --   · al crear: status solo 'pending' o 'disconnected', sin secret_ref
 --     y sin scopes (provider_account_id sí: es la dirección que la
 --     persona escribió, y en 'pending' no ocupa nada);
---   · al cambiar: provider_account_id, secret_ref y scopes no se tocan,
---     y status solo va a 'pending' o 'disconnected' (desconectar es de
---     la persona; conectar, del proveedor).
+--   · al crear, tampoco warmup_started_at ni last_ok_at;
+--   · al cambiar: provider_account_id, secret_ref, scopes, channel,
+--     provider, warmup_started_at y last_ok_at no se tocan, y status solo
+--     va a 'disconnected' (desconectar es de la persona; conectar, del
+--     proveedor). last_error y last_error_at sí: son el código del
+--     intento de conexión que la web anota (0044), y la salud de la
+--     cuenta la dice status.
+--   · y no borra una cuenta que ya se autenticó
+--     (outreach_channel_account_keep_live, abajo).
 CREATE FUNCTION outreach_channel_account_worker_columns()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -485,15 +500,30 @@ BEGIN
     IF NEW.status NOT IN ('pending', 'disconnected') THEN escribe := escribe || 'status'::text; END IF;
     IF NEW.secret_ref IS NOT NULL THEN escribe := escribe || 'secret_ref'::text; END IF;
     IF cardinality(NEW.scopes) > 0 THEN escribe := escribe || 'scopes'::text; END IF;
+    IF NEW.warmup_started_at IS NOT NULL THEN escribe := escribe || 'warmup_started_at'::text; END IF;
+    IF NEW.last_ok_at IS NOT NULL THEN escribe := escribe || 'last_ok_at'::text; END IF;
   ELSE
-    IF NEW.status IS DISTINCT FROM OLD.status AND NEW.status NOT IN ('pending', 'disconnected') THEN
+    -- Desde la web el estado solo va a 'disconnected': volver a
+    -- 'pending' una cuenta que ya se autenticó la dejaría borrable
+    -- (outreach_channel_account_keep_live) y con ella sus contadores.
+    IF NEW.status IS DISTINCT FROM OLD.status AND NEW.status <> 'disconnected' THEN
       escribe := escribe || 'status'::text;
     END IF;
+    -- channel y provider son la identidad de la cuenta: cambiarlos saca
+    -- el buzón del índice global (provider, provider_account_id) con la
+    -- credencial de otro proveedor dentro.
+    IF NEW.channel IS DISTINCT FROM OLD.channel THEN escribe := escribe || 'channel'::text; END IF;
+    IF NEW.provider IS DISTINCT FROM OLD.provider THEN escribe := escribe || 'provider'::text; END IF;
     IF NEW.provider_account_id IS DISTINCT FROM OLD.provider_account_id THEN
       escribe := escribe || 'provider_account_id'::text;
     END IF;
     IF NEW.secret_ref IS DISTINCT FROM OLD.secret_ref THEN escribe := escribe || 'secret_ref'::text; END IF;
     IF NEW.scopes IS DISTINCT FROM OLD.scopes THEN escribe := escribe || 'scopes'::text; END IF;
+    -- El calentamiento y la última vez que el proveedor respondió bien los
+    -- escribe quien habló con él: moverlos saltaba el calentamiento de
+    -- VEN-15 o pintaba sana una cuenta que no lo está.
+    IF NEW.warmup_started_at IS DISTINCT FROM OLD.warmup_started_at THEN escribe := escribe || 'warmup_started_at'::text; END IF;
+    IF NEW.last_ok_at IS DISTINCT FROM OLD.last_ok_at THEN escribe := escribe || 'last_ok_at'::text; END IF;
   END IF;
   IF cardinality(escribe) = 0 OR outreach_is_dispatcher() THEN
     RETURN NEW;
@@ -507,8 +537,37 @@ END;
 $$;
 
 CREATE TRIGGER outreach_channel_account_worker_columns
-  BEFORE INSERT OR UPDATE OF status, provider_account_id, secret_ref, scopes ON outreach_channel_account
+  BEFORE INSERT OR UPDATE OF status, provider_account_id, secret_ref, scopes, channel, provider, warmup_started_at, last_ok_at
+  ON outreach_channel_account
   FOR EACH ROW EXECUTE FUNCTION outreach_channel_account_worker_columns();
+
+-- Borrar una cuenta desde la web: solo la fila 'pending' de un intento
+-- de conexión, que nadie autenticó y que no tiene contadores. Una cuenta
+-- que ya envió se desconecta y se queda: outbound_counter cuelga de ella
+-- en cascada (6.2), y borrarla y volver a conectar el mismo buzón le
+-- devolvía la plaza del día y de la semana, justo lo que 7.4 le quita a
+-- la aplicación. El callback reutiliza la fila al reconectar (§2), así
+-- que no hace falta borrarla. Las cascadas del workspace o del creador
+-- (pg_trigger_depth() > 1) y el despachador (sales.channels_release,
+-- outreach_channel_connect) sí pasan.
+CREATE FUNCTION outreach_channel_account_keep_live()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF OLD.status = 'pending' OR pg_trigger_depth() > 1 OR outreach_is_dispatcher() THEN
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION 'Una cuenta de canal que se autenticó no se borra desde la aplicación: se desconecta (rol %).', current_user
+    USING ERRCODE = 'insufficient_privilege',
+          HINT = 'Sus contadores del día y de la semana cuelgan de la fila: borrarla y reconectar reiniciaría los topes.';
+END;
+$$;
+
+CREATE TRIGGER outreach_channel_account_keep_live
+  BEFORE DELETE ON outreach_channel_account
+  FOR EACH ROW EXECUTE FUNCTION outreach_channel_account_keep_live();
 
 
 -- =====================================================================
@@ -1171,7 +1230,12 @@ CREATE TRIGGER outbound_touch_keep_sent
   FOR EACH ROW EXECUTE FUNCTION outbound_touch_keep_sent();
 
 -- status_changed_at solo se mueve cuando cambia el estado; lo que venga
--- escrito en un UPDATE que no lo cambia se ignora. Se crea después de
+-- escrito en un UPDATE que no lo cambia se ignora. Al crear el toque, la
+-- aplicación no elige la hora: es now(). Si pudiera, un 'failed' con
+-- status_changed_at en 2036 entraba en la ventana de fallos de
+-- outbound_health (8.6) durante diez años. El despachador (y el seed,
+-- que corre como dueño) sí la escribe, para sembrar una historia. Y lo
+-- que vuelve a 'scheduled' sin hora sale ya. Se crea después de
 -- rellenar las filas que ya existen (abajo).
 CREATE FUNCTION outbound_touch_status_changed()
 RETURNS trigger
@@ -1179,8 +1243,18 @@ LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  IF NEW.status IS DISTINCT FROM OLD.status THEN
+  IF TG_OP = 'INSERT' THEN
+    IF NOT outreach_is_dispatcher() THEN
+      NEW.status_changed_at := now();
+    END IF;
+  ELSIF NEW.status IS DISTINCT FROM OLD.status THEN
     NEW.status_changed_at := now();
+    -- Volver a la cola sin hora (aprobar un borrador o un retenido que
+    -- nunca la tuvo) es volver para ya: sin ella nadie lo reclamaría
+    -- (outbound_touch_scheduled_for_check, 4.3).
+    IF NEW.status = 'scheduled' AND NEW.scheduled_for IS NULL THEN
+      NEW.scheduled_for := now();
+    END IF;
   ELSE
     NEW.status_changed_at := OLD.status_changed_at;
   END IF;
@@ -1222,6 +1296,9 @@ BEGIN
   ALTER TABLE outbound_touch ADD CONSTRAINT outbound_touch_status_check
     CHECK (status IN ('draft','scheduled','processing','held','sent','failed','skipped','canceled'));
   UPDATE outbound_touch SET status_changed_at = coalesce(sent_at, created_at);
+  -- Un 'scheduled' sin hora no lo ve nadie (outbound_touch_scheduled_for_check,
+  -- abajo): los que hubiera salen en la hora de su alta.
+  UPDATE outbound_touch SET scheduled_for = created_at WHERE status = 'scheduled' AND scheduled_for IS NULL;
   ALTER TABLE outbound_touch ENABLE TRIGGER outbound_touch_optout;
 
   IF forzada THEN
@@ -1229,11 +1306,15 @@ BEGIN
   END IF;
 END $$;
 
-CREATE TRIGGER outbound_touch_status_changed BEFORE UPDATE OF status, status_changed_at ON outbound_touch
+CREATE TRIGGER outbound_touch_status_changed BEFORE INSERT OR UPDATE OF status, status_changed_at ON outbound_touch
   FOR EACH ROW EXECUTE FUNCTION outbound_touch_status_changed();
 
 ALTER TABLE outbound_touch
   ADD CONSTRAINT outbound_touch_held_reason_check CHECK (status <> 'held' OR held_reason IS NOT NULL),
+  -- Un toque en cola tiene hora: sin ella, coalesce(next_retry_at,
+  -- scheduled_for) es NULL, outbound_touch_due_idx no lo ve, la salud no
+  -- lo cuenta como vencido y se queda en la cola para siempre.
+  ADD CONSTRAINT outbound_touch_scheduled_for_check CHECK (status <> 'scheduled' OR scheduled_for IS NOT NULL),
   ADD CONSTRAINT outbound_touch_processing_claimed_check CHECK (status <> 'processing' OR claimed_at IS NOT NULL),
   -- Reclamar es un intento: el despachador sube attempt_count en la
   -- misma sentencia, y el enlace de baja de ese intento lleva el número
@@ -1645,7 +1726,10 @@ CREATE TABLE outbound_review (
   input_tokens        int NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
   output_tokens       int NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
   cost                numeric(14,6) NOT NULL DEFAULT 0 CHECK (cost >= 0),
-  cost_currency       char(3) NOT NULL DEFAULT 'USD',
+  -- Siempre USD: la factura de Anthropic es en dólares y el tope
+  -- llm_daily_cap_usd (6.1) suma esta columna. Una fila en otra moneda
+  -- no la vería la salud (8.6) y el tope se saltaría en silencio.
+  cost_currency       char(3) NOT NULL DEFAULT 'USD' CHECK (cost_currency = 'USD'),
   created_at          timestamptz NOT NULL DEFAULT now(),
   UNIQUE (touch_id, attempt)
 );
@@ -1672,7 +1756,10 @@ CREATE TABLE outbound_llm_call (
   input_tokens        int NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
   output_tokens       int NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
   cost                numeric(14,6) NOT NULL DEFAULT 0 CHECK (cost >= 0),
-  cost_currency       char(3) NOT NULL DEFAULT 'USD',
+  -- Siempre USD: la factura de Anthropic es en dólares y el tope
+  -- llm_daily_cap_usd (6.1) suma esta columna. Una fila en otra moneda
+  -- no la vería la salud (8.6) y el tope se saltaría en silencio.
+  cost_currency       char(3) NOT NULL DEFAULT 'USD' CHECK (cost_currency = 'USD'),
   touch_id            uuid REFERENCES outbound_touch(id) ON DELETE SET NULL,
   message_id          uuid REFERENCES outbound_message(id) ON DELETE SET NULL,
   created_at          timestamptz NOT NULL DEFAULT now()
@@ -1770,6 +1857,35 @@ $$;
 CREATE TRIGGER outbound_policy_llm_cap
   BEFORE INSERT OR UPDATE OF llm_daily_cap_usd ON outbound_policy
   FOR EACH ROW EXECUTE FUNCTION outbound_policy_llm_cap();
+
+-- El enlace de baja en cada correo tampoco lo apaga el workspace:
+-- require_optout_link es lo único que hace obligatorio el enlace de 4.5
+-- (outbound_touch_optout_link_required lo mira al reclamar), y con un
+-- UPDATE el mismo workspace que envía se quitaba public_optout y el pie
+-- que pide CAN-SPAM. La web puede crear su política y dejarlo en true;
+-- ponerlo en false, al crear o al cambiar, es del despachador (un
+-- operador con asWorker, para un caso que lo justifique).
+CREATE FUNCTION outbound_policy_optout_link()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF NEW.require_optout_link OR outreach_is_dispatcher() THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE' AND NOT OLD.require_optout_link THEN
+    RETURN NEW;
+  END IF;
+  RAISE EXCEPTION 'El enlace de baja es obligatorio: el workspace no lo apaga (rol %).', current_user
+    USING ERRCODE = 'insufficient_privilege',
+          HINT = 'require_optout_link lo fija la plataforma: cada correo lleva su enlace de baja (0037 §4.5).';
+END;
+$$;
+
+CREATE TRIGGER outbound_policy_optout_link
+  BEFORE INSERT OR UPDATE OF require_optout_link ON outbound_policy
+  FOR EACH ROW EXECUTE FUNCTION outbound_policy_optout_link();
 
 -- ---------------------------------------------------------------------
 -- 6.2 · outbound_counter: contadores atómicos por periodo y acción
@@ -2266,6 +2382,16 @@ BEGIN
             CONSTRAINT = 'outbound_policy_enabled_needs_address',
             HINT = 'Guarda outbound_policy.postal_address antes de encender el outreach.';
   END IF;
+  -- Sin un canal conectado, «encendido» no enviaría nada (§6.1 y la
+  -- decisión 2 de §8: se enciende con un canal conectado y la política
+  -- aceptada). Se comprueba después de la política para que el error de
+  -- la dirección, que es el primer paso de la persona, salga antes.
+  IF NOT EXISTS (SELECT 1 FROM outreach_channel_account a
+                  WHERE a.workspace_id = p_workspace AND a.status = 'connected') THEN
+    RAISE EXCEPTION 'Sin un canal conectado no se puede encender el envío (workspace %).', p_workspace
+      USING ERRCODE = 'check_violation',
+            HINT = 'Conecta tu Gmail o tu LinkedIn antes de encender el envío.';
+  END IF;
 END;
 $$;
 
@@ -2358,12 +2484,15 @@ BEGIN
                          WHERE workspace_id = p_workspace AND opened_at >= desde),
            'replied',  (SELECT count(*) FROM outbound_touch
                          WHERE workspace_id = p_workspace AND replied_at >= desde),
-           'optedOut', (SELECT count(*)
-                          FROM contact c
-                         WHERE c.opted_out AND c.opted_out_at >= desde
-                           AND EXISTS (SELECT 1 FROM outbound_touch s
-                                        WHERE s.workspace_id = p_workspace AND s.contact_id = c.id
-                                          AND s.status = 'sent')),
+           -- Desde los envíos del workspace (outbound_touch_sent_idx) y no
+           -- desde contact: como worker (BYPASSRLS), filtrar contact por
+           -- opted_out recorría todas las bajas de la plataforma desde
+           -- siempre en cada llamada.
+           'optedOut', (SELECT count(DISTINCT c.id)
+                          FROM outbound_touch s
+                          JOIN contact c ON c.id = s.contact_id
+                         WHERE s.workspace_id = p_workspace AND s.status = 'sent'
+                           AND c.opted_out AND c.opted_out_at >= desde),
            'sentAfterOptOut', (SELECT count(*) FROM outbound_touch
                                 WHERE workspace_id = p_workspace AND status = 'sent' AND sent_at >= desde
                                   AND blocked_reason = 'opted_out_in_flight'))

@@ -65,8 +65,25 @@ interface Opciones {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const USO =
-  'Uso: correr-motor.ts dispatch|replies [--canal-falso] [--workspace <uuid>] [--demo] [--preparar-demo | --encender] (las dos últimas, con --workspace de la demo)';
+/** El uso, con los comandos que escribe quien lo corre (no el nombre de este archivo). Sale con --ayuda o --help. */
+export const USO = [
+  'Uso:',
+  '  pnpm --filter @mc/worker run job:dispatch -- [opciones]   despacha lo vencido',
+  '  pnpm --filter @mc/worker run job:replies -- [opciones]    lee los hilos abiertos y registra las respuestas',
+  '',
+  'Opciones:',
+  '  --canal-falso          por el buzón en memoria: nada sale de la máquina',
+  '  --workspace <uuid>     solo ese workspace',
+  '  --demo                 (job:dispatch) el recorrido con el seed en Postgres embebido; incluye la lectura de respuestas',
+  '  --preparar-demo        (job:dispatch, con --workspace de la demo) deja la demo lista, con el envío apagado',
+  '  --encender             (job:dispatch, con --workspace de la demo) enciende el envío de la demo',
+  '  --ayuda, --help        esta ayuda',
+].join('\n');
+
+/** ¿Pide la ayuda? Se mira antes de validar nada: `job:dispatch -- --ayuda` no es un error. */
+export function pideAyuda(argv: readonly string[]): boolean {
+  return argv.some((a) => a === '--ayuda' || a === '--help' || a === '-h');
+}
 
 /** Lee los argumentos. Lanza ConfigError con el uso si algo no cuadra. */
 export function parseArgs(argv: readonly string[], env: Readonly<Record<string, string | undefined>>): Opciones {
@@ -91,7 +108,9 @@ export function parseArgs(argv: readonly string[], env: Readonly<Record<string, 
       workspaceId = v;
     } else throw new ConfigError(`Argumento desconocido: ${a}. ${USO}`);
   }
-  if (demo && pasada !== 'dispatch') throw new ConfigError('--demo solo existe para dispatch.');
+  if (demo && pasada !== 'dispatch') {
+    throw new ConfigError('La demo de respuestas va dentro de job:dispatch -- --demo (paso 5 del recorrido).');
+  }
   if (acciones.length > 1) throw new ConfigError('--preparar-demo y --encender van en comandos separados, uno por paso.');
   const accion = acciones[0] ?? 'pasada';
   if (accion !== 'pasada') {
@@ -187,6 +206,10 @@ async function main(): Promise<void> {
   let opciones: Opciones;
   let config: WorkerConfig;
   let db: PostgresDatabase;
+  if (pideAyuda(process.argv.slice(2))) {
+    process.stdout.write(`${USO}\n`);
+    return;
+  }
   try {
     opciones = parseArgs(process.argv.slice(2), process.env);
   } catch (err) {

@@ -85,6 +85,18 @@ BEGIN
     RAISE EXCEPTION 'outreach_resolve_unconfirmed necesita un workspace fijado en la transacción.'
       USING ERRCODE = 'insufficient_privilege';
   END IF;
+  -- Es SECURITY DEFINER: las políticas no la frenan, así que el permiso
+  -- se mira aquí. Resolverlo manda (o anota) un mensaje a una marca: es
+  -- del equipo (membership_is_team, 0055: ni 'client' ni 'viewer'). Falla
+  -- CERRADA como outreach_can_manage (0050 §7): sin identidad, solo con
+  -- app.auth_disabled = 'on' (desarrollo sin Supabase Auth, pruebas).
+  -- membership_is_team la crea 0055, que siempre se aplica después; el
+  -- cuerpo se resuelve al llamar, no al crear.
+  IF NOT ((current_user_id() IS NULL AND coalesce(current_setting('app.auth_disabled', true), '') = 'on')
+          OR (current_user_id() IS NOT NULL AND membership_is_team(ws, current_user_id()))) THEN
+    RAISE EXCEPTION 'Resolver un intento sin confirmar es del equipo del workspace, no de un cliente ni de un lector.'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
   IF p_outcome IS NULL OR p_outcome NOT IN ('was_sent', 'resend') THEN
     RAISE EXCEPTION 'Resultado desconocido: %. Es was_sent o resend.', p_outcome USING ERRCODE = 'invalid_parameter_value';
   END IF;

@@ -35,15 +35,15 @@
 --      minutos, y outbound.replies (el respaldo del webhook) cada cinco.
 --   4. Dos avisos nuevos: un toque que falló para siempre (rebote, cuenta
 --      caída) y una respuesta que llegó.
---   5. (r2) El contacto de un enrolamiento o de un toque es uno que su
+--   5. El contacto de un enrolamiento o de un toque es uno que su
 --      workspace puede ver, también para el worker (BYPASSRLS).
---   6. (r2) send_started_at y unconfirmed_attempt: qué llegó de verdad al
+--   6. send_started_at y unconfirmed_attempt: qué llegó de verdad al
 --      proveedor y qué intento quedó sin confirmar (duplicados y zombis).
---   7. (r2) outbound_enrollment.status 'bounced': la dirección rebotó.
---   8. (r2) outbound_counter_release: devolver la plaza de un tope que se
+--   7. outbound_enrollment.status 'bounced': la dirección rebotó.
+--   8. outbound_counter_release: devolver la plaza de un tope que se
 --      reservó al reclamar y no se gastó.
---   9. (r2) notification_kind_check con la unión de todos los avisos.
---  10. (r3) outbound_touch.replies_checked_at: el lector de respuestas
+--   9. notification_kind_check con la unión de todos los avisos.
+--  10. outbound_touch.replies_checked_at: el lector de respuestas
 --      recorre todos los hilos, empezando por el que hace más que no lee.
 --
 -- Idempotente donde se puede (IF NOT EXISTS, ON CONFLICT), como las
@@ -123,10 +123,12 @@ CREATE TRIGGER outbound_touch_account_check
 -- ---------------------------------------------------------------------
 -- El despachador toma hasta cincuenta toques vencidos cada dos minutos;
 -- 110 s de tiempo máximo para que una corrida no pise a la siguiente
--- (la cola es 'stately' de todos modos). Las respuestas se leen cada
--- cinco minutos como respaldo del webhook de Unipile y de Gmail.
+-- (la cola es 'stately' de todos modos). Una corrida a la vez
+-- (max_concurrency = 1): el reclamo se serializa, 0055 §2. Las
+-- respuestas se leen cada cinco minutos como respaldo del webhook de
+-- Unipile y de Gmail.
 UPDATE job_definition
-   SET default_cron = '*/2 * * * *', timeout_s = 110, max_attempts = 1, max_concurrency = 4
+   SET default_cron = '*/2 * * * *', timeout_s = 110, max_attempts = 1, max_concurrency = 1
  WHERE id = 'outbound.dispatch';
 
 INSERT INTO job_definition (id, label_es, queue, default_cron, timeout_s, max_attempts, max_concurrency)
@@ -145,7 +147,7 @@ ON CONFLICT (id) DO UPDATE
 -- La lista entera va en §9, con la de las otras ramas.
 
 -- ---------------------------------------------------------------------
--- 5 · El contacto es del workspace que le escribe (r2)
+-- 5 · El contacto es del workspace que le escribe
 -- ---------------------------------------------------------------------
 -- La RLS de contact (0029 §4) deja ver a un workspace sus fichas y las
 -- públicas. Pero el worker corre con BYPASSRLS, y 0037 §3.4 y §4.4 solo
@@ -211,7 +213,7 @@ CREATE TRIGGER outbound_touch_workspace_contact
   EXECUTE FUNCTION outreach_contact_of_workspace();
 
 -- ---------------------------------------------------------------------
--- 6 · Qué llegó al proveedor (r2)
+-- 6 · Qué llegó al proveedor
 -- ---------------------------------------------------------------------
 --   send_started_at      el despachador lo confirma JUSTO antes de
 --                        llamar al proveedor. Un reclamo que se cae sin
@@ -226,9 +228,9 @@ CREATE TRIGGER outbound_touch_workspace_contact
 ALTER TABLE outbound_touch
   ADD COLUMN IF NOT EXISTS send_started_at timestamptz,
   ADD COLUMN IF NOT EXISTS unconfirmed_attempt int CHECK (unconfirmed_attempt BETWEEN 1 AND 20),
-  -- (r3) cuándo leyó el hilo el lector de respuestas: ver §10.
+  -- cuándo leyó el hilo el lector de respuestas: ver §10.
   ADD COLUMN IF NOT EXISTS replies_checked_at timestamptz,
-  -- (r3) el día local en que el reclamo reservó la plaza de los topes: ver §8.
+  -- el día local en que el reclamo reservó la plaza de los topes: ver §8.
   ADD COLUMN IF NOT EXISTS caps_reserved_on date;
 
 CREATE OR REPLACE FUNCTION outbound_touch_dispatch_columns()
@@ -260,7 +262,7 @@ CREATE TRIGGER outbound_touch_dispatch_columns
   FOR EACH ROW EXECUTE FUNCTION outbound_touch_dispatch_columns();
 
 -- ---------------------------------------------------------------------
--- 7 · Un enrolamiento cuya dirección rebotó (r2)
+-- 7 · Un enrolamiento cuya dirección rebotó
 -- ---------------------------------------------------------------------
 -- Un rebote o un destinatario inválido al enviar cancela lo pendiente de
 -- ese canal; si no le queda nada vivo, el enrolamiento termina en
@@ -272,7 +274,7 @@ ALTER TABLE outbound_enrollment ADD CONSTRAINT outbound_enrollment_status_check
   CHECK (status IN ('active','paused','completed','replied','opted_out','cooldown','bounced'));
 
 -- ---------------------------------------------------------------------
--- 8 · Devolver una plaza de un tope (r2, r3)
+-- 8 · Devolver una plaza de un tope
 -- ---------------------------------------------------------------------
 -- El despachador reserva la plaza al reclamar (increment_if_under_cap e
 -- increment_weekly, 0037 §8.3): así dos despachadores no pasan del tope.
@@ -280,7 +282,7 @@ ALTER TABLE outbound_enrollment ADD CONSTRAINT outbound_enrollment_status_check
 -- transitorio o se devuelve a la cola sin intentarlo), la plaza vuelve.
 -- Nunca baja de cero.
 --
--- (r3) Vuelve al día y a la semana en que se RESERVÓ, no a los de hoy:
+-- Vuelve al día y a la semana en que se RESERVÓ, no a los de hoy:
 -- un zombi reclamado anoche y rescatado esta mañana devolvía una plaza
 -- de hoy que nunca se gastó, y el tope diario se pasaba en uno. El día lo
 -- anota el reclamo en outbound_touch.caps_reserved_on, calculado igual
@@ -312,7 +314,7 @@ COMMENT ON FUNCTION outbound_counter_release(uuid, uuid, text, date) IS
   'con p_account NULL) que el despachador reservó al reclamar y no gastó (0051 §8).';
 
 -- ---------------------------------------------------------------------
--- 9 · Todos los avisos (r2)
+-- 9 · Todos los avisos
 -- ---------------------------------------------------------------------
 -- La unión de lo que declaran las ramas que se aplican juntas, para que
 -- ninguna borre los avisos de otra: 0030 (base), main 0038
@@ -332,7 +334,7 @@ ALTER TABLE notification ADD CONSTRAINT notification_kind_check CHECK (kind IN
    'outreach_failed','outreach_reply'));
 
 -- ---------------------------------------------------------------------
--- 10 · Cuándo se leyó por última vez un hilo (r3)
+-- 10 · Cuándo se leyó por última vez un hilo
 -- ---------------------------------------------------------------------
 -- El lector de respuestas (outbound.replies) leía siempre los mismos 200
 -- hilos: los primeros por thread_ref. Un creador con más hilos abiertos

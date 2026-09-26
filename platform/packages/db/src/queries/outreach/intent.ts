@@ -46,7 +46,7 @@
  * workspace. Los efectos (intentEffects) y la corrección corren también
  * con la RLS de la web: todo lo que tocan es del workspace del mensaje.
  */
-import { DEFAULT_SEND_WINDOW, planSteps } from '@mc/core';
+import { planSteps } from '@mc/core';
 import { INBOX_URLS, INTENT_NOTICE_TEXTS } from '@mc/core/outreach/intent-messages';
 import { cleanReferral, MESSAGE_INTENTS, notNowResumeAt, oooResumeAt, type MessageIntent, type Referral } from '@mc/core/outreach/intent';
 import { noticeLang } from '@mc/core/outreach/messages';
@@ -712,6 +712,8 @@ interface CanceledRow {
   scheduled_time: string;
   tz: string;
   w_start: string | null;
+  /** workspace.country: sus festivos no son hábiles (holidaysFor). */
+  w_country?: string | null;
   w_end: string | null;
 }
 
@@ -733,7 +735,7 @@ export async function restoreCanceledTouches(
   const rows = (
     await tx.query<CanceledRow>(
       `SELECT t.id, t.step_id, st.day_offset, st.order_in_day, st.scheduled_time::text AS scheduled_time,
-              coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end
+              coalesce(s.timezone, w.timezone) AS tz, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end, w.country AS w_country
          FROM outbound_touch t
          JOIN outbound_enrollment e ON e.id = t.enrollment_id
          JOIN outbound_sequence s ON s.id = e.sequence_id
@@ -758,7 +760,7 @@ export async function restoreCanceledTouches(
         id: r.step_id, dayOffset: int('restoreCanceledTouches', 'day_offset', r.day_offset) - first.day_offset,
         orderInDay: r.order_in_day, scheduledTime: r.scheduled_time,
       })),
-      { enrolledAt: opts.from, timeZone: first.tz, window: first.w_start ? windowOf(first.w_start, first.w_end) : DEFAULT_SEND_WINDOW, seed: enrollmentId },
+      { enrolledAt: opts.from, timeZone: first.tz, window: windowOf(first.w_start, first.w_end, first.w_country), seed: enrollmentId },
     ).map((p) => [p.stepId, p.at]),
   );
   const ids = rows.map((r) => r.id);
