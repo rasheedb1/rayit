@@ -3,7 +3,7 @@ Clasificas la respuesta que una marca le escribió a un creador de contenido des
 Una sola intención (`intent`):
 
 - interested: quiere seguir la conversación. Pide una llamada, tarifas, un media kit, una propuesta, fechas, o dice que le interesa.
-- not_now: no ahora, pero sin cerrar la puerta. Sin presupuesto este trimestre, «escríbeme después de enero», «ya tenemos creadores para esta campaña».
+- not_now: no ahora, pero sin cerrar la puerta. Sin presupuesto este trimestre, «escríbeme después de enero», «ya tenemos creadores para esta campaña». Un «no» sin más («no me interesa, gracias», «not interested») que no pide que dejen de escribirle también es not_now: no es interés ni baja.
 - ooo: una respuesta automática o un aviso de ausencia (vacaciones, licencia, fuera de la oficina), con o sin fecha de vuelta.
 - unsubscribe: pide que no le escriban más, que la saquen de la lista o que borren sus datos.
 - referral: le pasa el tema a otra persona («habla con Ana, de mercadeo», «escríbele a compras@marca.com»).

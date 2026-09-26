@@ -40,6 +40,7 @@ import { OUTBOUND_CHANNELS, type OutboundChannel } from '../schema/_canales.ts';
 import { INTENT_SOURCES, MESSAGE_INTENTS, STEP_TYPES } from '../schema/outreach.ts';
 import { CONTACT_SOURCES, TOUCH_STATUSES } from '../schema/ventas.ts';
 import { advanceEnrollment } from './outreach/enroll.ts';
+import { normalizeAddress } from './outreach/inbound.ts';
 import { loadIntentMessage, reapplyIntent } from './outreach/intent.ts';
 import { requestPitchDraft, type RequestPitchDraftResult } from './outreach/pitch.ts';
 import { releaseHeldTouch, type ReleaseHeldCode } from './outreach/review.ts';
@@ -65,6 +66,12 @@ export interface ApprovalReview {
   preflight: Array<{ code: string; detail: string | null }>;
   /** Cuántos intentos hizo la puerta de calidad en esa corrida. */
   attempts: number;
+  /**
+   * La nota que pide la rúbrica del paso (outbound_step_rubric.threshold,
+   * la misma que usó outbound.review): «7,4 de 10 · mínimo 8», y la
+   * dimensión que queda por debajo se señala. null si no hay rúbrica.
+   */
+  threshold: number | null;
 }
 
 export interface ApprovalItem {
@@ -99,6 +106,12 @@ export interface ApprovalItem {
   review: ApprovalReview | null;
   /** Se puede pedir otra versión a la IA: un correo de una cadencia (outbound_generation_request). */
   regenerable: boolean;
+  /**
+   * Una respuesta escrita en /ventas/bandeja que el despachador retuvo
+   * (reply_to_message_id): va en el hilo de la conversación, sin asunto
+   * propio y sin «Regenerar» (no es un pitch en frío).
+   */
+  inboxReply: boolean;
 }
 
 interface ApprovalRow {
@@ -109,6 +122,7 @@ interface ApprovalRow {
   scheduled_for: unknown; status_changed_at: unknown; stage: string | null; requested_at: unknown;
   total_score: string | null; judge_note: string | null; scores: Record<string, unknown> | null; risk_triggers: string[] | null;
   regenerate_hint: string | null; gates: Record<string, unknown> | null; attempts: number | null; unconfirmed: boolean;
+  inbox_reply: boolean; threshold: string | null;
   total: number;
 }
 
@@ -127,6 +141,12 @@ function scoresOf(v: Record<string, unknown> | null): ApprovalReview['scores'] {
     if (v && k in v && Number.isFinite(n)) out[k] = n;
   }
   return out;
+}
+
+/** El asunto de un hilo sin los «Re:» y «Fwd:» de delante: la pantalla lo cita como «Responde en el hilo «…»». */
+export function threadSubjectOf(subject: string | null): string | null {
+  const s = subject?.replace(/^(\s*(re|rv|fw|fwd|aw|res)\s*:\s*)+/iu, '').trim();
+  return s ? s : null;
 }
 
 /** La cola de aprobación: lo que se enseña y cuántos esperan en total (la cola puede ser más larga que el tope). */
@@ -149,7 +169,15 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
       `SELECT t.id, t.status, t.company_id, co.name AS company_name, c.full_name AS contact_name, c.source AS contact_source,
               t.channel, st.step_type,
               t.step_index, (SELECT count(*)::int FROM outbound_step x WHERE x.sequence_id = t.sequence_id) AS step_count,
-              s.name AS sequence_name, t.subject, t.body, t.held_reason, hilo.subject AS thread_subject, t.scheduled_for,
+              s.name AS sequence_name, t.subject, t.body, t.held_reason,
+              -- El del paso email_reply, o el del hilo de la bandeja como lo pone el despachador (send.ts): el de la
+              -- respuesta o el de nuestro último correo en ese hilo.
+              coalesce(hilo.subject, rm.subject,
+                       (SELECT o.subject FROM outbound_message o
+                         WHERE rm.id IS NOT NULL AND o.workspace_id = rm.workspace_id AND o.thread_ref = rm.thread_ref
+                           AND o.direction = 'outbound' AND o.subject IS NOT NULL
+                         ORDER BY o.occurred_at DESC LIMIT 1)) AS thread_subject,
+              t.scheduled_for, t.reply_to_message_id IS NOT NULL AS inbox_reply, rub.threshold::text AS threshold,
               t.status_changed_at, g.stage, g.requested_at, g.total_score::text AS total_score, g.judge_note, r.scores,
               r.risk_triggers, r.regenerate_hint, r.gates,
               (SELECT count(*)::int FROM outbound_review rr WHERE rr.touch_id = t.id AND rr.run = g.review_run) AS attempts,
@@ -161,6 +189,14 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
          LEFT JOIN outbound_sequence s ON s.id = t.sequence_id
          LEFT JOIN outbound_generation g ON g.touch_id = t.id
          LEFT JOIN outbound_review r ON r.touch_id = t.id AND r.run = g.review_run AND r.attempt = g.chosen_attempt
+         LEFT JOIN outbound_message rm ON rm.id = t.reply_to_message_id
+         -- La rúbrica que usó outbound.review (loadGenerationContext): la del workspace gana a la global, con día a sin día.
+         LEFT JOIN LATERAL (
+                SELECT ru.threshold FROM outbound_step_rubric ru
+                 WHERE ru.step_type = coalesce(st.step_type, CASE t.channel WHEN 'linkedin' THEN 'linkedin_message' ELSE t.channel END)
+                   AND (ru.workspace_id IS NULL OR ru.workspace_id = current_workspace_id())
+                   AND (ru.day_offset IS NULL OR ru.day_offset = coalesce(st.day_offset, 0))
+                 ORDER BY (ru.workspace_id IS NOT NULL) DESC, (ru.day_offset IS NOT NULL) DESC LIMIT 1) rub ON g.touch_id IS NOT NULL
          LEFT JOIN LATERAL (
                 SELECT pt.subject FROM outbound_touch pt
                  WHERE st.step_type = 'email_reply' AND pt.enrollment_id = t.enrollment_id AND pt.channel = t.channel
@@ -176,7 +212,10 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
   const items = rows.map((r, i): ApprovalItem => {
     const regenerating = r.status === 'draft' && r.stage !== null && r.stage !== 'reviewed' && r.stage !== 'failed';
     const judged = r.stage === 'reviewed' && (r.total_score !== null || r.judge_note !== null || r.gates !== null);
-    const emailStep = r.channel === 'email' && (r.step_type === null || r.step_type === 'email');
+    const inboxReply = r.inbox_reply === true;
+    // Una respuesta de la bandeja va en el hilo: en correo es un «Re:» (email_reply), sin asunto propio ni «Regenerar».
+    const stepType = r.step_type === null ? (inboxReply && r.channel === 'email' ? 'email_reply' : null) : oneOf(fn, `$[${i}].step_type`, r.step_type, STEP_TYPES);
+    const emailStep = r.channel === 'email' && !inboxReply && (r.step_type === null || r.step_type === 'email');
     return {
       touchId: text(fn, `$[${i}].id`, r.id),
       status: r.status === 'draft' ? 'draft' : 'held',
@@ -186,14 +225,14 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
       contactName: textOrNull(fn, `$[${i}].contact_name`, r.contact_name),
       contactSource: r.contact_source === null ? null : oneOf(fn, `$[${i}].contact_source`, r.contact_source, CONTACT_SOURCES),
       channel: oneOf(fn, `$[${i}].channel`, r.channel, OUTBOUND_CHANNELS),
-      stepType: r.step_type === null ? null : oneOf(fn, `$[${i}].step_type`, r.step_type, STEP_TYPES),
+      stepType,
       stepIndex: r.step_index === null ? null : int(fn, `$[${i}].step_index`, r.step_index),
       stepCount: r.step_count === null || r.step_count === 0 ? null : int(fn, `$[${i}].step_count`, r.step_count),
       sequenceName: textOrNull(fn, `$[${i}].sequence_name`, r.sequence_name),
       subject: textOrNull(fn, `$[${i}].subject`, r.subject),
       body: textOrNull(fn, `$[${i}].body`, r.body) ?? '',
       heldReason: textOrNull(fn, `$[${i}].held_reason`, r.held_reason),
-      threadSubject: textOrNull(fn, `$[${i}].thread_subject`, r.thread_subject),
+      threadSubject: threadSubjectOf(textOrNull(fn, `$[${i}].thread_subject`, r.thread_subject)),
       scheduledFor: toDate(r.scheduled_for),
       statusChangedAt: date(fn, `$[${i}].status_changed_at`, r.status_changed_at),
       review: judged
@@ -205,9 +244,11 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
             judgeNote: r.judge_note,
             preflight: preflightIssues(r.gates),
             attempts: r.attempts ?? 0,
+            threshold: r.threshold === null ? null : Number(r.threshold),
           }
         : null,
       regenerable: emailStep && !r.unconfirmed && !regenerating,
+      inboxReply,
     };
   });
   return { items, total: rows[0] ? int(fn, 'total', rows[0].total) : 0 };
@@ -223,15 +264,25 @@ export type ApproveCode = ReleaseHeldCode | 'regenerating';
  * todavía no es verdad; la pantalla lo dice.
  */
 export type ApproveResult =
-  | { ok: true; approvedAt: Date; sendingOff: boolean }
+  | { ok: true; approvedAt: Date; sendingOff: boolean; recipientName: string }
   | { ok: false; code: ApproveCode; detail?: string };
+
+/**
+ * A quién va un toque, para el aviso («Aprobado: el mensaje a Paula…»):
+ * el nombre de la ficha o, sin él, la marca. Sale de la base, nunca del
+ * navegador: el aviso no repite un texto que controla el cliente.
+ */
+const RECIPIENT_NAME_SQL = (t: string) =>
+  `(SELECT coalesce(nullif(btrim(c.full_name), ''), co.name) FROM company co LEFT JOIN contact c ON c.id = ${t}.contact_id WHERE co.id = ${t}.company_id)`;
 
 /**
  * Aprueba un toque de la cola: pasa a 'scheduled' (el despachador lo
  * reclama a su hora). Sin texto nuevo, con el que tiene; con texto, el
  * editado. Un borrador regenerado entra por la misma puerta que un
  * retenido: se retiene y se libera en la misma transacción, así pasa por
- * las mismas reglas. Anota quién y cuándo lo aprobó.
+ * las mismas reglas; si alguna no lo deja (una cifra sin origen, un
+ * hueco), el paso a retenido se deshace (SAVEPOINT) y el borrador sigue
+ * como estaba, con su «Versión nueva». Anota quién y cuándo lo aprobó.
  */
 export async function approveQueuedTouch(
   tx: WorkspaceTx,
@@ -241,18 +292,20 @@ export async function approveQueuedTouch(
   const row = (
     await tx.query<{
       status: string; subject: string | null; body: string; stage: string | null; requested_at: unknown; enrollment_id: string | null;
-      held_reason: string | null;
+      held_reason: string | null; recipient_name: string;
     }>(
-      `SELECT t.status, t.subject, t.body, g.stage, g.requested_at, t.enrollment_id, t.held_reason
+      `SELECT t.status, t.subject, t.body, g.stage, g.requested_at, t.enrollment_id, t.held_reason, ${RECIPIENT_NAME_SQL('t')} AS recipient_name
          FROM outbound_touch t LEFT JOIN outbound_generation g ON g.touch_id = t.id
         WHERE t.id = $1::uuid FOR UPDATE OF t`,
       [input.touchId],
     )
   ).rows[0];
   if (!row) return { ok: false, code: 'not_found' };
-  if (row.status === 'draft') {
+  const fromDraft = row.status === 'draft';
+  if (fromDraft) {
     if (row.enrollment_id === null || row.requested_at === null) return { ok: false, code: 'not_held' };
     if (row.stage !== 'reviewed' && row.stage !== 'failed') return { ok: false, code: 'regenerating' };
+    await tx.query('SAVEPOINT aprobar_regenerado');
     await tx.query(
       `UPDATE outbound_touch SET status = 'held', held_reason = 'needs_review' WHERE id = $1::uuid AND status = 'draft'`,
       [input.touchId],
@@ -261,6 +314,10 @@ export async function approveQueuedTouch(
   const subject = input.subject === undefined ? row.subject : input.subject;
   const body = input.body === undefined || input.body === null ? row.body : input.body;
   const r = await releaseHeldTouch(tx, input.touchId, { subject, body });
+  if (fromDraft) {
+    // Sin aprobar, el borrador vuelve a ser el que era: ni retenido por «Revisión humana» ni sin su «Versión nueva».
+    await tx.query(r.ok ? 'RELEASE SAVEPOINT aprobar_regenerado' : 'ROLLBACK TO SAVEPOINT aprobar_regenerado');
+  }
   if (!r.ok) return r;
   const heldReason = row.status === 'draft' ? 'needs_review' : row.held_reason;
   const enabled = (
@@ -271,10 +328,10 @@ export async function approveQueuedTouch(
       [input.touchId, input.userId, input.now.toISOString(), heldReason?.slice(0, 500) ?? null],
     )
   ).rows[0]?.enabled;
-  return { ok: true, approvedAt: input.now, sendingOff: enabled !== true };
+  return { ok: true, approvedAt: input.now, sendingOff: enabled !== true, recipientName: row.recipient_name };
 }
 
-export type UndoApprovalResult = { ok: true } | { ok: false; code: 'not_found' | 'not_undoable' };
+export type UndoApprovalResult = { ok: true; recipientName: string } | { ok: false; code: 'not_found' | 'not_undoable' };
 
 /**
  * «Deshacer» una aprobación (el aviso de la bandeja, a la manera de
@@ -291,20 +348,20 @@ export async function undoApproval(
   input: { touchId: string; approvedAt: Date },
 ): Promise<UndoApprovalResult> {
   assertIds('undoApproval', [input.touchId]);
-  const r = await tx.query(
+  const r = await tx.query<{ recipient_name: string }>(
     `UPDATE outbound_touch
         SET status = 'held', held_reason = coalesce(approved_from_reason, 'needs_review'), approved_from_reason = NULL,
             approved_at = NULL, approved_by = NULL
       WHERE id = $1::uuid AND status = 'scheduled' AND approved_at = $2::timestamptz
-      RETURNING id`,
+      RETURNING ${RECIPIENT_NAME_SQL('outbound_touch')} AS recipient_name`,
     [input.touchId, input.approvedAt.toISOString()],
   );
-  if (r.rows.length > 0) return { ok: true };
+  if (r.rows[0]) return { ok: true, recipientName: r.rows[0].recipient_name };
   const exists = await tx.query('SELECT 1 FROM outbound_touch WHERE id = $1::uuid', [input.touchId]);
   return { ok: false, code: exists.rows.length > 0 ? 'not_undoable' : 'not_found' };
 }
 
-export type SkipResult = { ok: true } | { ok: false; code: 'not_found' | 'not_skippable' };
+export type SkipResult = { ok: true; recipientName: string } | { ok: false; code: 'not_found' | 'not_skippable' };
 
 /**
  * «Saltar»: el paso no sale y la cadencia sigue con el siguiente (un paso
@@ -317,13 +374,13 @@ export type SkipResult = { ok: true } | { ok: false; code: 'not_found' | 'not_sk
 export async function skipQueuedTouch(tx: WorkspaceTx, touchId: string, now: Date): Promise<SkipResult> {
   assertIds('skipQueuedTouch', [touchId]);
   const r = (
-    await tx.query<{ enrollment_id: string | null }>(
+    await tx.query<{ enrollment_id: string | null; recipient_name: string }>(
       `UPDATE outbound_touch SET status = 'skipped', blocked_reason = 'skipped_by_person', held_reason = NULL
         WHERE id = $1::uuid
           AND (status = 'held'
                OR (status = 'draft' AND enrollment_id IS NOT NULL
                    AND EXISTS (SELECT 1 FROM outbound_generation g WHERE g.touch_id = outbound_touch.id AND g.requested_at IS NOT NULL)))
-        RETURNING enrollment_id`,
+        RETURNING enrollment_id, ${RECIPIENT_NAME_SQL('outbound_touch')} AS recipient_name`,
       [touchId],
     )
   ).rows[0];
@@ -332,7 +389,7 @@ export async function skipQueuedTouch(tx: WorkspaceTx, touchId: string, now: Dat
     return { ok: false, code: exists.rows.length > 0 ? 'not_skippable' : 'not_found' };
   }
   if (r.enrollment_id) await advanceEnrollment(tx, r.enrollment_id, now);
-  return { ok: true };
+  return { ok: true, recipientName: r.recipient_name };
 }
 
 /** «Regenerar con una pista»: la petición la toma outbound.generate; la versión nueva vuelve a la cola. */
@@ -457,6 +514,13 @@ export interface InboxMessage {
   occurredAt: Date;
   readAt: Date | null;
   fromAddress: string | null;
+  /**
+   * Lo escribió la ficha: su correo o la dirección a la que le escribimos.
+   * En un correo con varias personas (un colega que responde, un tercero
+   * en copia) puede no serlo; en LinkedIn e Instagram el chat es con ella,
+   * y sin remitente conocido vale lo que diga el hilo (senderIsContact).
+   */
+  fromContact: boolean;
   intent: MessageIntent | null;
   intentConfidence: number | null;
   intentSource: IntentSource | null;
@@ -486,6 +550,14 @@ export interface PendingReply {
 /** Por qué no se puede responder desde aquí, si no se puede. */
 export type ReplyBlock = 'opted_out' | 'no_inbound' | 'no_account';
 
+/**
+ * La ficha de baja, como la mira el despachador: su marca, su correo
+ * suprimido o dado de baja en el workspace. `c` es el alias de contact.
+ */
+const CONTACT_OPTED_OUT_SQL = (c: string) =>
+  `(${c}.opted_out OR address_is_suppressed(${c}.email)
+    OR EXISTS (SELECT 1 FROM outbound_workspace_optout wo WHERE wo.workspace_id = current_workspace_id() AND wo.email = ${c}.email))`;
+
 export interface InboxConversation {
   contactId: string;
   channel: BandejaChannel;
@@ -504,6 +576,14 @@ export interface InboxConversation {
   /** La cuenta por la que sale (la que recibió ese mensaje). */
   accountName: string | null;
   replyBlock: ReplyBlock | null;
+  /**
+   * La ficha está de baja (o su correo suprimido): una baja de verdad, que
+   * no se corrige. Una baja que pidió un tercero en copia deja el mensaje
+   * como 'unsubscribe' con la ficha sin baja: eso lo decide una persona.
+   */
+  contactOptedOut: boolean;
+  /** Un correo sale con el pie de baja: sin la dirección postal de la política, la respuesta no sale. */
+  postalAddressMissing: boolean;
   /** El envío del espacio está apagado: la respuesta espera a que se encienda. */
   sendingOff: boolean;
   /** La persona dio el hilo por atendido. */
@@ -534,6 +614,14 @@ function pendingFrom(fn: string, p: { id: string; status: string; body: string; 
   };
 }
 
+/** ¿Lo escribió la ficha? La misma comparación que senderIsContact (inbound.ts) para la baja. */
+function isFromContact(channel: string, from: string | null, contactEmail: string | null, recipient: string | null): boolean {
+  if (channel !== 'email') return true;
+  const addr = normalizeAddress(from);
+  if (!addr) return true;
+  return [contactEmail, recipient].some((a) => normalizeAddress(a) === addr);
+}
+
 /** La conversación completa con una ficha por un canal, o null si no hay ninguna. */
 export async function loadInboxConversation(tx: WorkspaceTx, contactId: string, channel: string): Promise<InboxConversation | null> {
   assertIds('loadInboxConversation', [contactId]);
@@ -542,14 +630,16 @@ export async function loadInboxConversation(tx: WorkspaceTx, contactId: string, 
   const canal = channel as BandejaChannel;
   const head = (
     await tx.query<{
-      contact_name: string | null; company_id: string; company_name: string; opted_out: boolean;
+      contact_name: string | null; company_id: string; company_name: string; opted_out: boolean; contact_email: string | null;
       deal_id: string | null; stage_id: string | null; stage_label: string | null; next_action: string | null; enabled: boolean;
+      needs_postal: boolean;
     }>(
-      `SELECT c.full_name AS contact_name, co.id AS company_id, co.name AS company_name,
-              (c.opted_out OR address_is_suppressed(c.email)
-               OR EXISTS (SELECT 1 FROM outbound_workspace_optout wo WHERE wo.workspace_id = current_workspace_id() AND wo.email = c.email)) AS opted_out,
+      `SELECT c.full_name AS contact_name, co.id AS company_id, co.name AS company_name, c.email::text AS contact_email,
+              ${CONTACT_OPTED_OUT_SQL('c')} AS opted_out,
               d.id AS deal_id, d.stage_id, ps.label_es AS stage_label, d.next_action,
-              coalesce((SELECT p.enabled FROM outbound_policy p WHERE p.workspace_id = current_workspace_id()), false) AS enabled
+              coalesce((SELECT p.enabled FROM outbound_policy p WHERE p.workspace_id = current_workspace_id()), false) AS enabled,
+              coalesce((SELECT coalesce(p.require_optout_link, true) AND nullif(btrim(p.postal_address), '') IS NULL
+                          FROM outbound_policy p WHERE p.workspace_id = current_workspace_id()), true) AS needs_postal
          FROM contact c
          JOIN company co ON co.id = c.company_id
          LEFT JOIN LATERAL (
@@ -567,16 +657,17 @@ export async function loadInboxConversation(tx: WorkspaceTx, contactId: string, 
       id: string; direction: string; subject: string | null; body: string; occurred_at: unknown; read_at: unknown;
       from_address: string | null; intent: string | null; intent_confidence: string | null; intent_source: string | null;
       intent_reason: string | null; resume_at: unknown; referral: unknown; referral_contact_id: string | null; account: string | null;
-      account_status: string | null; done_at: unknown; sequence_id: string | null; cooldown_until: unknown;
+      account_status: string | null; done_at: unknown; sequence_id: string | null; cooldown_until: unknown; recipient: string | null;
     }>(
       `SELECT m.id, m.direction, m.subject, m.body, m.occurred_at, m.read_at, m.from_address, m.intent,
               m.intent_confidence::text AS intent_confidence, m.intent_source, m.intent_reason, m.resume_at, m.referral,
               m.referral_contact_id, coalesce(a.display_name, a.provider_account_id) AS account, a.status AS account_status,
-              m.done_at, e.sequence_id,
+              m.done_at, e.sequence_id, rt.recipient_address::text AS recipient,
               CASE WHEN m.intent = 'not_now' AND e.status = 'cooldown' THEN e.resume_at END AS cooldown_until
          FROM outbound_message m
          LEFT JOIN outreach_channel_account a ON a.id = m.channel_account_id
          LEFT JOIN outbound_enrollment e ON e.id = m.enrollment_id
+         LEFT JOIN outbound_touch rt ON rt.id = m.touch_id
         WHERE m.contact_id = $1::uuid AND m.channel = $2 AND m.workspace_id = current_workspace_id()
         ORDER BY m.occurred_at, m.created_at, m.id`,
       [contactId, canal],
@@ -627,6 +718,7 @@ export async function loadInboxConversation(tx: WorkspaceTx, contactId: string, 
       occurredAt: date(fn, `$[${i}].occurred_at`, m.occurred_at),
       readAt: toDate(m.read_at),
       fromAddress: textOrNull(fn, `$[${i}].from_address`, m.from_address),
+      fromContact: isFromContact(canal, m.from_address, head.contact_email, m.recipient),
       intent: m.intent === null ? null : oneOf(fn, `$[${i}].intent`, m.intent, MESSAGE_INTENTS),
       intentConfidence: m.intent_confidence === null ? null : Number(m.intent_confidence),
       intentSource: m.intent_source === null ? null : oneOf(fn, `$[${i}].intent_source`, m.intent_source, INTENT_SOURCES),
@@ -641,6 +733,8 @@ export async function loadInboxConversation(tx: WorkspaceTx, contactId: string, 
     replyToMessageId: lastInbound?.id ?? null,
     accountName: lastInbound?.account ?? null,
     replyBlock,
+    contactOptedOut: head.opted_out,
+    postalAddressMissing: canal === 'email' && head.needs_postal,
     sendingOff: !head.enabled,
     done: inbound.length > 0 && inbound.every((m) => m.done_at !== null),
     unread: inbound.filter((m) => m.read_at === null).length,
@@ -688,7 +782,7 @@ export async function markInboxThreadDone(
 
 export type ReplyResult =
   | { ok: true; touchId: string; duplicate: boolean; sendingOff: boolean }
-  | { ok: false; code: 'empty' | 'too_long' | 'placeholders' | ReplyBlock | 'not_found'; detail?: string };
+  | { ok: false; code: 'empty' | 'too_long' | 'placeholders' | ReplyBlock | 'no_postal_address' | 'not_found'; detail?: string };
 
 /**
  * Responder desde la bandeja: un toque programado para ya, sin
@@ -721,6 +815,9 @@ export async function replyInInboxThread(
     return same ? { ok: true, touchId: input.touchId, duplicate: true, sendingOff: conv.sendingOff } : { ok: false, code: 'not_found' };
   }
   if (conv.replyBlock) return { ok: false, code: conv.replyBlock };
+  // Un correo sale con el pie de baja y su dirección postal (VEN-15): sin ella, el despachador la retenía
+  // ('no_postal_address') y la respuesta acababa en la cola de aprobación. Se dice antes de escribir nada.
+  if (conv.postalAddressMissing) return { ok: false, code: 'no_postal_address' };
   const inserted = await tx.query(
     `INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, deal_id, channel, subject, body, status, scheduled_for,
                                  approved_by, approved_at, reply_to_message_id)
@@ -823,8 +920,12 @@ export type ReclassifyResult =
  * pone «Responder hoy», ahora no enfría la cadencia, fuera de la oficina
  * la pausa, baja da de baja a la ficha. Queda intent_source 'person'.
  *
- * Una baja no se corrige: la ficha ya quedó de baja y eso es de una sola
- * dirección ('opted_out'). La etapa del negocio no retrocede sola.
+ * Una baja no se corrige cuando la ficha quedó de baja: eso es de una sola
+ * dirección ('opted_out'). Una baja que pidió un tercero en copia deja el
+ * mensaje como 'unsubscribe' y la ficha sin baja (applyReplyOptOut): esa
+ * sí se corrige, a otra intención o a «baja», que entonces da de baja a la
+ * ficha porque lo decide una persona. La etapa del negocio no retrocede
+ * sola.
  *
  * Fuera de la oficina: la fecha de vuelta es la que la persona escribe
  * (returnDate, AAAA-MM-DD) o, si no escribe ninguna, la que dice el propio
@@ -840,7 +941,12 @@ export async function reclassifyInboxMessage(
   const intent = oneOf('reclassifyInboxMessage', 'intent', input.intent, MESSAGE_INTENTS);
   const m = await loadIntentMessage(tx, input.messageId);
   if (!m || m.workspaceId !== tx.workspaceId) return { ok: false, code: 'not_found' };
-  if (m.intent === 'unsubscribe') return { ok: false, code: 'opted_out' };
+  if (m.intent === 'unsubscribe' && m.contactId) {
+    const out = (
+      await tx.query<{ opted_out: boolean }>(`SELECT ${CONTACT_OPTED_OUT_SQL('c')} AS opted_out FROM contact c WHERE c.id = $1::uuid`, [m.contactId])
+    ).rows[0]?.opted_out;
+    if (out !== false) return { ok: false, code: 'opted_out' };
+  }
   let returnDate: string | null = null;
   if (intent === 'ooo') {
     const escrita = parseLocalDate(input.returnDate ?? null);

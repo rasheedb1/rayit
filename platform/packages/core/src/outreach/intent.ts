@@ -309,6 +309,16 @@ const REFERRAL_RE =
   /escr[ií]bele a|escr[ií]bale a|habla con|hable con|contacta a|contacte a|la persona indicada|el encargado es|la encargada es|te paso (el )?contacto|reach out to|talk to|get in touch with|the right person|fale com|entre em contato com/u;
 const NOT_NOW_RE =
   /ahora no|por ahora no|no por ahora|m[aá]s adelante|el pr[oó]ximo (a[nñ]o|trimestre|mes)|despu[eé]s de|no tenemos presupuesto|sin presupuesto|ya cerramos|ya tenemos (creadores|agencia)|este trimestre no|not right now|not at the moment|maybe later|next (quarter|year|month)|no budget|agora n[aã]o|mais para frente/u;
+/**
+ * Un «no» rotundo que no pide la baja: «No me interesa, gracias», «No, no
+ * nos interesa», «Not interested». Va antes de INTERESTED_RE, que sin esto
+ * leía «me interesa» dentro de «no me interesa» y abría un negocio en «En
+ * conversación» con «Responder hoy». Es 'not_now' (la puerta no queda
+ * cerrada por escrito: la cadencia se enfría y vuelve a la bandeja de
+ * aprobación, nada sale solo), con la misma línea que el prompt del modelo.
+ */
+const REJECTION_RE =
+  /\bno (me|nos|le|les) interesa|\bno (estamos|estoy) interesad|\bno (tenemos|tengo) inter[eé]s|not interested|n[aã]o (me|nos) interessa|n[aã]o (temos|tenho) interesse/u;
 const INTERESTED_RE =
   /me interesa|nos interesa|hablemos|agend(a|emos)|una llamada|reuni[oó]n|cu[eé]ntame m[aá]s|m[aá]ndame|env[ií]ame (tu|el|la|las)|tarifas|cotizaci[oó]n|media ?kit|propuesta|precios?|me encanta|interested|let'?s talk|sounds (good|great)|send (me|over)|rates|pricing|a call|tenho interesse|vamos conversar/u;
 
@@ -356,6 +366,9 @@ export function createFakeIntentClassifier(): IntentClassifier {
       }
       if (NOT_NOW_RE.test(lower)) {
         return done({ intent: 'not_now', confidence: 0.85, returnDate: null, referral: null, reason: 'No es el momento, sin cerrar la puerta.' });
+      }
+      if (REJECTION_RE.test(lower)) {
+        return done({ intent: 'not_now', confidence: 0.8, returnDate: null, referral: null, reason: 'Dice que no le interesa, sin pedir la baja.' });
       }
       if (INTERESTED_RE.test(lower)) {
         return done({ intent: 'interested', confidence: 0.9, returnDate: null, referral: null, reason: 'Quiere seguir la conversación.' });

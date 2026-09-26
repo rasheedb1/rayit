@@ -25,6 +25,19 @@
     "body": "Yo no manejo colaboraciones. Habla con Ana Gómez, de mercadeo: ana.gomez@marca.test",
     "intent": "referral"
   },
+  "rechazo": {
+    "body": "No me interesa, gracias.",
+    "intent": "not_now",
+    "_nota": "Un «no» que no pide la baja: ni interés ni baja (el clasificador falso veía «me interesa» dentro de «no me interesa»)."
+  },
+  "rechazo_plural": {
+    "body": "No, no nos interesa. Saludos.",
+    "intent": "not_now"
+  },
+  "rechazo_en": {
+    "body": "Not interested, thanks.",
+    "intent": "not_now"
+  },
   "ambigua": {
     "body": "Ok",
     "intent": "ambiguous"

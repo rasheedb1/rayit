@@ -167,8 +167,10 @@ export async function releaseHeldTouch(
   const row = (
     await tx.query<{
       status: string; channel: string; step_type: string | null; opted_out: boolean; needs_postal: boolean; unconfirmed: boolean;
+      in_thread: boolean;
     }>(
       `SELECT t.status, t.channel, st.step_type, t.unconfirmed_attempt IS NOT NULL AS unconfirmed,
+              (st.step_type = 'email_reply' OR t.reply_to_message_id IS NOT NULL) AS in_thread,
               (coalesce(c.opted_out, false) OR address_is_suppressed(c.email) OR address_is_suppressed(t.recipient_address)) AS opted_out,
               (t.channel = 'email' AND coalesce(p.require_optout_link, true) AND nullif(btrim(p.postal_address), '') IS NULL) AS needs_postal
          FROM outbound_touch t
@@ -182,11 +184,12 @@ export async function releaseHeldTouch(
   ).rows[0];
   if (!row) return { ok: false, code: 'not_found' };
   if (row.status !== 'held') return { ok: false, code: 'not_held' };
+  // Un correo nuevo necesita asunto. Una respuesta en el hilo (el paso email_reply, o la escrita en la bandeja
+  // con reply_to_message_id) no: sin uno propio, el despachador pone el del hilo («Re: …», replySubject).
   const subject = row.channel === 'email' ? (input.subject?.trim() || null) : null;
   const body = input.body.trim();
   if (!body) return { ok: false, code: 'empty' };
-  // Un correo nuevo necesita asunto; la respuesta en el hilo toma el del anterior («Re: …»).
-  if (row.channel === 'email' && row.step_type !== 'email_reply' && !subject) return { ok: false, code: 'empty_subject' };
+  if (row.channel === 'email' && !row.in_thread && !subject) return { ok: false, code: 'empty_subject' };
   const hits = [...findPlaceholders(subject), ...findPlaceholders(body)];
   if (hits.length > 0) return { ok: false, code: 'placeholders', detail: hits.map((h) => h.match).join(' ') };
   if (row.step_type === 'linkedin_connect') {

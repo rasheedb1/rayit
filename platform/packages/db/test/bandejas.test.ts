@@ -130,9 +130,9 @@ test('como mc_app: aprobar, marcar leído, responder una vez y crear el referido
   const now = new Date();
   // La política de A no está encendida: aprobado, pero no sale hasta que se encienda (y la pantalla lo dice).
   assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => approveQueuedTouch(tx, { touchId: HELD, userId: null, now })), {
-    ok: true, approvedAt: now, sendingOff: true,
+    ok: true, approvedAt: now, sendingOff: true, recipientName: 'Sofía Cárdenas',
   });
-  assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => skipQueuedTouch(tx, HELD2, now)), { ok: true });
+  assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => skipQueuedTouch(tx, HELD2, now)), { ok: true, recipientName: 'Sofía Cárdenas' });
   assert.equal(await t.db.withWorkspace(WS_A, (tx) => markInboxThreadRead(tx, CONTACT, 'email', now)), 1);
   const touchId = id('98');
   const responder = () =>
@@ -183,7 +183,7 @@ test('deshacer una aprobación la devuelve a la cola con el motivo que guardó e
   );
   // Una petición con un motivo inventado no lo cuela: la función ya no lo acepta, y uno de más se ignora.
   const alterada = { touchId: HELD, approvedAt: r.approvedAt, heldReason: 'unconfirmed_attempt:1' } as Parameters<typeof undoApproval>[1];
-  assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => undoApproval(tx, alterada)), { ok: true });
+  assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => undoApproval(tx, alterada)), { ok: true, recipientName: 'Sofía Cárdenas' });
   const cola = await t.db.withWorkspace(WS_A, (tx) => listApprovalQueue(tx));
   assert.deepEqual(cola.items.map((x) => [x.touchId, x.heldReason]), [[HELD, 'quality_risk:unsourced_figure']]);
   const limpio = await t.db.withWorkspace(WS_A, (tx) =>
@@ -207,7 +207,7 @@ test('saltar solo lo que la cola ofrece: un borrador de cadencia sin petición d
     INSERT INTO outbound_generation (touch_id, workspace_id, requested_at) VALUES ('${PEDIDO}', '${WS_A}', now());
   `);
   assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => skipQueuedTouch(tx, BORRADOR, now)), { ok: false, code: 'not_skippable' });
-  assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => skipQueuedTouch(tx, PEDIDO, now)), { ok: true });
+  assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => skipQueuedTouch(tx, PEDIDO, now)), { ok: true, recipientName: 'Sofía Cárdenas' });
   const estados = await t.db.withWorkspace(WS_A, (tx) =>
     tx.query<{ id: string; status: string }>('SELECT id, status FROM outbound_touch WHERE id IN ($1, $2) ORDER BY id', [BORRADOR, PEDIDO]),
   );
@@ -369,4 +369,50 @@ test('como mc_app: corregir a «interesada» la respuesta de una marca sin negoc
   await t.db.withWorkspace(WS_B, (tx) => reclassifyInboxMessage(tx, { messageId: INBOUND_B, intent: 'interested', now }));
   const n = (await t.db.asWorker((tx) => tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM deal WHERE company_id = $1`, [CO_B]))).rows[0]!.n;
   assert.equal(n, 1);
+});
+
+test('un borrador regenerado que no se puede aprobar tal cual sigue siendo el borrador de antes: ni retenido ni sin su «Versión nueva»', async () => {
+  const now = new Date();
+  const SEQ = id('5e2');
+  const ENR = id('e2');
+  const NUEVO = id('76');
+  const MARIA = id('d9');
+  await t.admin(`
+    INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source)
+    VALUES ('${MARIA}', '${CO}', '${WS_A}', 'María Vitalé', 'maria@vitale.test', 'user_provided');
+    INSERT INTO outbound_sequence (id, workspace_id, name, channel) VALUES ('${SEQ}', '${WS_A}', 'Regenerados', 'email');
+    INSERT INTO outbound_enrollment (id, workspace_id, sequence_id, contact_id, status) VALUES ('${ENR}', '${WS_A}', '${SEQ}', '${MARIA}', 'active');
+    INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, sequence_id, enrollment_id, channel, subject, body, status) VALUES
+      ('${NUEVO}', '${WS_A}', '${CO}', '${MARIA}', '${SEQ}', '${ENR}', 'email', 'Versión nueva', 'Hola, {{first_name}}: otra versión.', 'draft');
+    INSERT INTO outbound_generation (touch_id, workspace_id, requested_at, stage) VALUES ('${NUEVO}', '${WS_A}', now(), 'failed');
+  `);
+  const antes = await t.db.withWorkspace(WS_A, (tx) =>
+    tx.query<{ status_changed_at: Date }>('SELECT status_changed_at FROM outbound_touch WHERE id = $1', [NUEVO]),
+  );
+  assert.deepEqual(
+    await t.db.withWorkspace(WS_A, (tx) => approveQueuedTouch(tx, { touchId: NUEVO, userId: null, now })),
+    { ok: false, code: 'placeholders', detail: '{{first_name}}' },
+  );
+  const fila = await t.db.withWorkspace(WS_A, (tx) =>
+    tx.query<{ status: string; held_reason: string | null; approved_from_reason: string | null; status_changed_at: Date }>(
+      'SELECT status, held_reason, approved_from_reason, status_changed_at FROM outbound_touch WHERE id = $1', [NUEVO],
+    ),
+  );
+  assert.deepEqual(
+    [fila.rows[0]!.status, fila.rows[0]!.held_reason, fila.rows[0]!.approved_from_reason], ['draft', null, null],
+    'el paso a retenido se deshace con la aprobación que no fue',
+  );
+  assert.equal(new Date(fila.rows[0]!.status_changed_at).getTime(), new Date(antes.rows[0]!.status_changed_at).getTime());
+  const cola = await t.db.withWorkspace(WS_A, (tx) => listApprovalQueue(tx));
+  const item = cola.items.find((x) => x.touchId === NUEVO)!;
+  assert.deepEqual([item.status, item.regenerating, item.heldReason], ['draft', false, null], 'sigue en la cola como versión nueva');
+  // Con el hueco rellenado, sí: y el motivo de la aprobación es la revisión humana del borrador.
+  const ok = await t.db.withWorkspace(WS_A, (tx) =>
+    approveQueuedTouch(tx, { touchId: NUEVO, body: 'Hola, María: otra versión.', userId: null, now }),
+  );
+  assert.equal(ok.ok, true);
+  const aprobado = await t.db.withWorkspace(WS_A, (tx) =>
+    tx.query<{ status: string; approved_from_reason: string | null }>('SELECT status, approved_from_reason FROM outbound_touch WHERE id = $1', [NUEVO]),
+  );
+  assert.deepEqual([aprobado.rows[0]!.status, aprobado.rows[0]!.approved_from_reason], ['scheduled', 'needs_review']);
 });

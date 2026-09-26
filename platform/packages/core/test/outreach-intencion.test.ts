@@ -14,6 +14,7 @@ import {
   buildClassifyPrompt, CLASSIFY_SCHEMA, createFakeIntentClassifier, finalIntent, findReturnDate, INTENT_CONFIDENCE_MIN,
   LlmIntentClassifier, notNowResumeAt, oooResumeAt, parseClassification, type IntentInput,
 } from '../src/outreach/intent.ts';
+import { loadPrompt } from '../src/outreach/generate.ts';
 import { llmCostUsd, LlmOutputError, OUTREACH_MODELS, type LlmClient, type LlmRequest } from '../src/outreach/llm.ts';
 
 const NOW = new Date('2026-09-25T15:00:00Z');
@@ -35,6 +36,13 @@ const GRABADAS: Array<{ body: string; intent: string; automatic?: boolean }> = [
   { body: 'Por favor no me escribas más.', intent: 'unsubscribe' },
   { body: 'Yo no manejo eso, habla con Ana Gómez de mercadeo: ana.gomez@vitale.co', intent: 'referral' },
   { body: 'Ok', intent: 'ambiguous' },
+  // Un «no» que no pide la baja: ni interés (dentro de «no me interesa» está «me interesa») ni baja.
+  { body: 'No me interesa, gracias.', intent: 'not_now' },
+  { body: 'No, no nos interesa.', intent: 'not_now' },
+  { body: 'No nos interesa por ahora.', intent: 'not_now' },
+  { body: 'Not interested, thanks.', intent: 'not_now' },
+  { body: 'Não nos interessa, obrigado.', intent: 'not_now' },
+  { body: 'No estamos interesados en colaboraciones pagadas.', intent: 'not_now' },
 ];
 
 for (const g of GRABADAS) {
@@ -44,6 +52,11 @@ for (const g of GRABADAS) {
     assert.equal(r.usage, null, 'el falso no gasta');
   });
 }
+
+test('el prompt del modelo dice adónde va un «no» sin baja: not_now, como el falso', () => {
+  const { system } = buildClassifyPrompt(input('No me interesa.'), loadPrompt('classify'));
+  assert.match(system, /no me interesa, gracias.*not_now/su);
+});
 
 test('el referido trae el nombre y el correo que dice el mensaje, nunca uno inventado', async () => {
   const r = await createFakeIntentClassifier().classify(input('Habla con Ana Gómez de mercadeo: Ana.Gomez@Vitale.co'));

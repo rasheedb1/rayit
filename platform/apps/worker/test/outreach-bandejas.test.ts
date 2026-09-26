@@ -85,7 +85,7 @@ async function negocio(w: Ws): Promise<string> {
  * Devuelve el hilo y la ficha.
  */
 async function conversacion(
-  w: Ws, body: string, opts: { deal?: string; at?: Date; automatic?: boolean } = {},
+  w: Ws, body: string, opts: { deal?: string; at?: Date; automatic?: boolean; from?: string } = {},
 ): Promise<{ contact: string; thread: string; fake: ReturnType<typeof fakeChannels> }> {
   const contact = w.contacts[0]!;
   await motor.transaction((tx) =>
@@ -96,7 +96,7 @@ async function conversacion(
   assert.equal(sent.sent.length, 1, 'salió el primer correo');
   const thread = fake.email.sent[0]!.threadRef;
   const at = opts.at ?? bogota('2026-09-23', '15:00');
-  fake.email.reply(thread, body, at, undefined, { automatic: opts.automatic === true });
+  fake.email.reply(thread, body, at, opts.from, { automatic: opts.automatic === true });
   await runReplies(motor, { readers: fake, now: () => new Date(at.getTime() + 5 * 60_000), workspaceId: w.id });
   return { contact, thread, fake };
 }
@@ -124,7 +124,7 @@ test('terminado cuando: un retenido se aprueba desde la bandeja, queda programad
   // Aprobar tal cual: queda programado, con quién y cuándo. El envío del espacio está encendido (sendingOff: false).
   const ahora = bogota('2026-09-23', '08:00');
   assert.deepEqual(await comoLaWeb(w.id, (tx) => approveQueuedTouch(tx, { touchId: primero!.id, userId: null, now: ahora })), {
-    ok: true, approvedAt: ahora, sendingOff: false,
+    ok: true, approvedAt: ahora, sendingOff: false, recipientName: 'Persona 1 Prueba',
   });
   // Editar y aprobar: sale lo que dejó la persona; lo que rompe una regla no se aprueba.
   assert.deepEqual(
@@ -135,10 +135,10 @@ test('terminado cuando: un retenido se aprueba desde la bandeja, queda programad
     await comoLaWeb(w.id, (tx) =>
       approveQueuedTouch(tx, { touchId: segundo!.id, subject: null, body: 'Te dejo una idea concreta para la temporada.', userId: null, now: ahora }),
     ),
-    { ok: true, approvedAt: ahora, sendingOff: false },
+    { ok: true, approvedAt: ahora, sendingOff: false, recipientName: 'Persona 1 Prueba' },
   );
   // Saltar: el tercero no sale y no frena a nadie.
-  assert.deepEqual(await comoLaWeb(w.id, (tx) => skipQueuedTouch(tx, tercero!.id, ahora)), { ok: true });
+  assert.deepEqual(await comoLaWeb(w.id, (tx) => skipQueuedTouch(tx, tercero!.id, ahora)), { ok: true, recipientName: 'Persona 1 Prueba' });
   assert.deepEqual(await comoLaWeb(w.id, (tx) => skipQueuedTouch(tx, tercero!.id, ahora)), { ok: false, code: 'not_skippable' });
 
   const despues = await touches(c);
@@ -629,4 +629,110 @@ test('una respuesta de la bandeja cancelada no sale', async () => {
   assert.deepEqual(sale.sent, [], 'la cancelada no sale');
   const conv = (await comoLaWeb(w.id, (tx) => loadInboxConversation(tx, contact, 'email')))!;
   assert.deepEqual(conv.notSent.map((p) => [p.touchId, p.blockedReason]), [[touchId, 'canceled_by_person']]);
+});
+
+test('una baja que pide un tercero en copia no da de baja a la ficha: la bandeja deja decidir, y «baja» desde ahí sí la da', async () => {
+  const w = await workspace(31, { contacts: 1 });
+  const { contact } = await conversacion(w, F.baja_explicita!.body, { from: 'Otra Persona <otra@marca.test>' });
+  assert.equal(await scalar<boolean>('SELECT opted_out AS v FROM contact WHERE id = $1', [contact]), false, 'la ficha no queda de baja');
+  const conv = (await comoLaWeb(w.id, (tx) => loadInboxConversation(tx, contact, 'email')))!;
+  const m = conv.messages.find((x) => x.direction === 'inbound')!;
+  assert.deepEqual([m.intent, m.fromContact, conv.contactOptedOut, conv.replyBlock], ['unsubscribe', false, false, null]);
+  assert.equal(conv.messages[0]!.fromContact, true, 'lo nuestro no es de un tercero');
+  // Se corrige: una persona decide que la baja vale para la ficha.
+  const r = await comoLaWeb(w.id, (tx) => reclassifyInboxMessage(tx, { messageId: m.id, intent: 'unsubscribe', now: bogota('2026-09-23', '16:00') }));
+  assert.equal(r.ok && r.optOut, true);
+  assert.equal(await scalar<boolean>('SELECT opted_out AS v FROM contact WHERE id = $1', [contact]), true, 'ahora sí, de baja');
+  // Y ya de baja, no se corrige más.
+  assert.deepEqual(
+    await comoLaWeb(w.id, (tx) => reclassifyInboxMessage(tx, { messageId: m.id, intent: 'interested', now: bogota('2026-09-23', '16:05') })),
+    { ok: false, code: 'opted_out' },
+  );
+
+  // La otra salida: no era una baja de la ficha, y se corrige a otra intención.
+  const w2 = await workspace(32, { contacts: 1 });
+  const { contact: c2 } = await conversacion(w2, F.baja_explicita!.body, { from: 'otra@marca.test' });
+  const m2 = await scalar<string>(`SELECT id AS v FROM outbound_message WHERE contact_id = $1 AND direction = 'inbound'`, [c2]);
+  const r2 = await comoLaWeb(w2.id, (tx) => reclassifyInboxMessage(tx, { messageId: m2, intent: 'not_now', now: bogota('2026-09-23', '16:00') }));
+  assert.equal(r2.ok, true);
+  assert.equal(await scalar<string>('SELECT intent AS v FROM outbound_message WHERE id = $1', [m2]), 'not_now');
+  assert.equal(await scalar<boolean>('SELECT opted_out AS v FROM contact WHERE id = $1', [c2]), false);
+});
+
+test('«me interesa» cancela lo que quedaba programado para la ficha fuera de la cadencia; la respuesta de la bandeja, no', async () => {
+  const w = await workspace(33, { contacts: 1 });
+  const pitch = await pitchPendiente(w, w.contacts[0]!);
+  const { contact } = await conversacion(w, F.me_interesa!.body);
+  assert.equal(await scalar<string>('SELECT status AS v FROM outbound_touch WHERE id = $1', [pitch]), 'scheduled', 'la respuesta sola no lo toca');
+  // Una respuesta escrita en la bandeja antes de que se clasifique: esa sí sale.
+  const touchId = randomUUID();
+  await comoLaWeb(w.id, (tx) =>
+    replyInInboxThread(tx, { touchId, contactId: contact, channel: 'email', body: '¡Hablemos el jueves!', userId: null, now: bogota('2026-09-23', '15:05') }),
+  );
+  const rep = await runIntent(motor, { classifier: fakeClassifier, now: () => bogota('2026-09-23', '15:06'), workspaceId: w.id });
+  assert.deepEqual(rep.classified.map((c) => c.intent), ['interested']);
+  assert.equal(
+    await scalar<string>("SELECT status || ':' || blocked_reason AS v FROM outbound_touch WHERE id = $1", [pitch]), 'canceled:replied_interested',
+    'el pitch en frío no sale encima de la conversación',
+  );
+  assert.equal(await scalar<string>('SELECT status AS v FROM outbound_touch WHERE id = $1', [touchId]), 'scheduled');
+});
+
+test('el falso no lee «no me interesa» como interés: ahora no, sin abrir negocio', async () => {
+  const w = await workspace(34, { contacts: 1 });
+  assert.equal(F.rechazo!.intent, 'not_now');
+  await conversacion(w, F.rechazo!.body);
+  const rep = await runIntent(motor, { classifier: fakeClassifier, now: () => bogota('2026-09-23', '15:06'), workspaceId: w.id });
+  assert.deepEqual(rep.classified.map((c) => [c.intent, c.dealMoved]), [['not_now', false]]);
+  assert.equal(await scalar<number>('SELECT count(*)::int AS v FROM deal WHERE company_id = $1', [w.company]), 0, 'ningún negocio');
+  for (const k of ['rechazo_plural', 'rechazo_en'] as const) {
+    const r = await fakeClassifier.classify({
+      body: F[k]!.body, subject: null, channel: 'email', previousOutbound: null, automatic: false, occurredAt: new Date(), timeZone: 'America/Bogota',
+    });
+    assert.equal(r.final, F[k]!.intent, k);
+  }
+});
+
+test('una respuesta de la bandeja retenida va a la cola como respuesta en el hilo: sin asunto propio ni «Regenerar», y se aprueba tal cual', async () => {
+  const w = await workspace(35, { contacts: 1 });
+  const { contact, fake } = await conversacion(w, F.me_interesa!.body);
+  // Sin dirección postal (un espacio nuevo, con el envío apagado), la bandeja no deja escribirla: lo dice antes de crear nada.
+  await db.raw.query(`UPDATE outbound_policy SET enabled = false, postal_address = NULL WHERE workspace_id = $1`, [w.id]);
+  const antes = randomUUID();
+  assert.deepEqual(
+    await comoLaWeb(w.id, (tx) =>
+      replyInInboxThread(tx, { touchId: antes, contactId: contact, channel: 'email', body: 'Hola', userId: null, now: bogota('2026-09-23', '15:10') }),
+    ),
+    { ok: false, code: 'no_postal_address' },
+  );
+  assert.equal(await scalar<number>('SELECT count(*)::int AS v FROM outbound_touch WHERE id = $1', [antes]), 0);
+  const conv0 = (await comoLaWeb(w.id, (tx) => loadInboxConversation(tx, contact, 'email')))!;
+  assert.equal(conv0.postalAddressMissing, true);
+
+  // Escrita con la dirección, y retenida por el despachador (aquí, a mano: un intento que no se pudo comprobar,
+  // un hilo que se perdió): entra a la cola de aprobación.
+  await db.raw.query(`UPDATE outbound_policy SET enabled = true, postal_address = 'Calle 93 # 11-26, Bogotá' WHERE workspace_id = $1`, [w.id]);
+  const touchId = randomUUID();
+  const r = await comoLaWeb(w.id, (tx) =>
+    replyInInboxThread(tx, { touchId, contactId: contact, channel: 'email', body: 'El jueves me sirve.', userId: null, now: bogota('2026-09-23', '15:12') }),
+  );
+  assert.equal(r.ok, true);
+  await db.raw.query(`UPDATE outbound_touch SET status = 'held', held_reason = 'reply_without_thread' WHERE id = $1`, [touchId]);
+
+  const { items } = await comoLaWeb(w.id, (tx) => listApprovalQueue(tx));
+  const item = items.find((x) => x.touchId === touchId)!;
+  assert.deepEqual(
+    [item.inboxReply, item.stepType, item.regenerable, item.threadSubject, item.subject],
+    [true, 'email_reply', false, 'Hola, Persona', null],
+    'en el hilo, sin asunto y sin pedirle a la IA un pitch en frío',
+  );
+  const conv = (await comoLaWeb(w.id, (tx) => loadInboxConversation(tx, contact, 'email')))!;
+  assert.deepEqual(conv.pending.map((p) => [p.status, p.heldReason]), [['held', 'reply_without_thread']]);
+
+  // Se aprueba tal cual: sin inventarle un asunto.
+  const ok = await comoLaWeb(w.id, (tx) => approveQueuedTouch(tx, { touchId, userId: null, now: bogota('2026-09-23', '15:20') }));
+  assert.equal(ok.ok, true);
+  const sale = await runDispatch(motor, deps(w, fake, () => bogota('2026-09-23', '15:22')));
+  assert.deepEqual(sale.sent, [touchId]);
+  assert.equal(fake.email.sent.at(-1)!.subject, 'Re: Hola, Persona', 'en el hilo');
 });

@@ -84,6 +84,12 @@ export interface InboundEffectsInput {
   optOutReason?: string;
   /** Quien escribió, tal como lo dio el proveedor. En un correo, la baja solo vale si es la ficha. */
   fromAddress?: string | null;
+  /**
+   * Una persona decidió que la baja vale para la ficha aunque la pidiera
+   * otro (la corrección de la bandeja, VEN-14: «Dar de baja a la ficha»):
+   * no se compara el remitente.
+   */
+  senderConfirmed?: boolean;
 }
 
 export interface InboundEffects {
@@ -193,7 +199,7 @@ export function normalizeAddress(value: string | null | undefined): string | nul
  * es con esa persona.
  */
 async function senderIsContact(tx: SqlExecutor, input: InboundEffectsInput): Promise<boolean> {
-  if (input.channel !== 'email' || !input.contactId) return true;
+  if (input.senderConfirmed === true || input.channel !== 'email' || !input.contactId) return true;
   const from = normalizeAddress(input.fromAddress);
   if (!from) return true;
   const known = (

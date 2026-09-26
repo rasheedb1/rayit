@@ -9,7 +9,10 @@
  *                solo hacia delante: un negocio en «Propuesta enviada» no
  *                retrocede), la siguiente acción es «Responder hoy» con
  *                vencimiento al final del día local, y un aviso. Lo
- *                pendiente ya lo canceló la respuesta (applyInboundEffects);
+ *                pendiente de sus cadencias ya lo canceló la respuesta
+ *                (applyInboundEffects); lo que quedaba programado fuera de
+ *                ellas para la ficha (un pitch suelto) se cancela aquí
+ *                ('replied_interested'), salvo las respuestas de la bandeja;
  *   not_now      el enrolamiento del hilo pasa a 'cooldown' con resume_at a
  *                noventa días, y un aviso con la fecha;
  *   ooo          el mensaje guarda su fecha de vuelta (resume_at). Si la
@@ -50,6 +53,7 @@ import { noticeLang } from '@mc/core/outreach/messages';
 import { zonedInstant, zonedParts } from '@mc/core/outreach/schedule';
 import type { SqlExecutor, WorkerSql } from '../../client.ts';
 import { advanceEnrollment, cancelPendingForEnrollment } from './enroll.ts';
+import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
 import { applyReplyOptOut, type InboundEffectsInput } from './inbound.ts';
 import { assertIds, date, int, oneOf, text, textOrNull, windowOf } from './shared.ts';
 
@@ -467,6 +471,23 @@ async function intentEffects(
           out.dealMoved = true;
         }
       }
+      // §5.7: «Interesado: se cancelan los toques pendientes». La respuesta
+      // ya detuvo sus cadencias (stopOnReply), pero un pitch suelto a la
+      // misma ficha (sin enrolamiento) seguía programado y salía días
+      // después, en frío, encima de la conversación. Lo que se escribió
+      // en la bandeja (reply_to_message_id) no se toca: es la respuesta.
+      if (m.contactId) {
+        const canceled = (
+          await tx.query<{ id: string }>(
+            `UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'replied_interested'
+              WHERE contact_id = $1::uuid AND workspace_id = $2::uuid AND reply_to_message_id IS NULL
+                AND status = ANY($3::text[])
+              RETURNING id`,
+            [m.contactId, m.workspaceId, [...CANCELABLE_TOUCH_STATUSES]],
+          )
+        ).rows.map((r) => r.id);
+        out.canceled.push(...canceled);
+      }
       out.notified = await notify({
         severity: 'success', title: t.interestedTitle(who),
         body: out.dealCreated ? t.interestedBodyCreated(s.company) : t.interestedBody(s.company, out.dealMoved),
@@ -505,6 +526,8 @@ async function intentEffects(
       const input: InboundEffectsInput = {
         workspaceId: m.workspaceId, messageId: m.id, channel: m.channel, touchId: m.touchId, enrollmentId: m.enrollmentId,
         contactId: m.contactId, body: m.body, automatic: false, occurredAt: m.occurredAt, now, fromAddress: m.fromAddress,
+        // Una persona que corrige a «baja» decide por la ficha, la pidiera ella o un tercero en copia.
+        senderConfirmed: d.source === 'person',
       };
       const e = await applyReplyOptOut(tx, input, ctx.enrollmentStatus, null);
       // El detector ve la baja antes de que la respuesta detenga la cadencia;
