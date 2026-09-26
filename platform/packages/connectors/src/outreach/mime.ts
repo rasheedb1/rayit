@@ -81,10 +81,13 @@ export function encodeHeaderWord(value: string): string {
   return words.map((w) => `=?UTF-8?B?${Buffer.from(w, 'utf8').toString('base64')}?=`).join(`${CRLF} `);
 }
 
+/** Una addr-spec sin nada que cierre un corchete ni separe entradas de una cabecera: ni <>(),;" ni espacios. */
+const ADDR_SPEC_RE = /^[^\s@<>()",;]+@[^\s@<>()",;]+$/;
+
 function formatAddress(a: MailAddress, header: string): string {
   const address = a.address.trim();
   assertHeaderSafe(header, address);
-  if (!/^[^\s@<>()",;]+@[^\s@<>()",;]+$/.test(address)) throw new MimeError(`Dirección inválida en ${header}.`);
+  if (!ADDR_SPEC_RE.test(address)) throw new MimeError(`Dirección inválida en ${header}.`);
   const name = a.name?.trim();
   if (!name) return address;
   assertHeaderSafe(header, name);
@@ -155,6 +158,30 @@ export interface BuildMimeOptions {
   boundary?: (n: number) => string;
 }
 
+/**
+ * El mailto de baja, validado como la dirección de From y To: una
+ * addr-spec, con un `?subject=` opcional que se vuelve a codificar con
+ * encodeURIComponent. Un valor con «>» o «,» («x@y.com>, <https://otro»)
+ * cerraría el corchete y metería otra entrada en List-Unsubscribe.
+ */
+export function unsubscribeMailtoUri(value: string): string {
+  const raw = value.trim().replace(/^mailto:/i, '');
+  assertHeaderSafe('List-Unsubscribe', raw);
+  const q = raw.indexOf('?');
+  const address = q < 0 ? raw : raw.slice(0, q);
+  if (!ADDR_SPEC_RE.test(address)) throw new MimeError('El mailto de baja no es una dirección válida.');
+  if (q < 0) return `mailto:${address}`;
+  const m = /^subject=(.*)$/i.exec(raw.slice(q + 1));
+  if (!m) throw new MimeError('El mailto de baja solo admite ?subject=.');
+  let subject: string;
+  try {
+    subject = decodeURIComponent(m[1] ?? '');
+  } catch {
+    throw new MimeError('El asunto del mailto de baja no está bien codificado.');
+  }
+  return `mailto:${address}?subject=${encodeURIComponent(subject)}`;
+}
+
 /** El mensaje entero, con CRLF, listo para base64url en `raw`. */
 export function buildMime(msg: OutgoingEmail, opts: BuildMimeOptions = {}): string {
   const boundary = opts.boundary ?? ((n: number) => `oncue_${n}_${randomBytes(12).toString('hex')}`);
@@ -176,10 +203,7 @@ export function buildMime(msg: OutgoingEmail, opts: BuildMimeOptions = {}): stri
     assertHeaderSafe('List-Unsubscribe', url);
     if (!/^https:\/\/\S+$/.test(url)) throw new MimeError('La URL de baja tiene que ser https.');
     const entries = [`<${url}>`];
-    if (msg.unsubscribeMailto) {
-      assertHeaderSafe('List-Unsubscribe', msg.unsubscribeMailto);
-      entries.push(`<${msg.unsubscribeMailto.startsWith('mailto:') ? msg.unsubscribeMailto : `mailto:${msg.unsubscribeMailto}`}>`);
-    }
+    if (msg.unsubscribeMailto) entries.push(`<${unsubscribeMailtoUri(msg.unsubscribeMailto)}>`);
     headers.push(`List-Unsubscribe: ${entries.join(', ')}`, 'List-Unsubscribe-Post: List-Unsubscribe=One-Click');
   }
 
