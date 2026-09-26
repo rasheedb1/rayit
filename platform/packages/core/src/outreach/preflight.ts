@@ -21,7 +21,8 @@
  */
 import { findPlaceholders } from './placeholder-guard.ts';
 import {
-  figureMatchesClaim, findClaimMarkers, findFigures, stripClaimMarkers, type ClaimSource, type FigureHit, type SalesClaim,
+  figureMatchesClaim, findClaimMarkers, findFigures, stripClaimMarkers, type ClaimSource, type ClaimUnit, type FigureHit,
+  type SalesClaim,
 } from './claims.ts';
 
 // ---------------------------------------------------------------------
@@ -244,20 +245,67 @@ function markerFor(text: string, markers: readonly ReturnType<typeof findClaimMa
  * mensaje retenido en la ficha): allí no hay fichas, pero una cifra que
  * coincide con una del perfil sí tiene origen. Una cifra que no coincide
  * con ninguna se queda sin marca y el pre-vuelo la sigue viendo.
+ *
+ * Dos guardas (VEN-14 r4), porque coincidir en el número no es decir lo
+ * mismo:
+ *   · la unidad tiene que encajar: un porcentaje solo lo respalda una
+ *     proporción del perfil, un «x3» un múltiplo, un número suelto un
+ *     conteo o un monto. «El 40 % de mis videos terminan en una compra»
+ *     no lo respalda un conteo de 40;
+ *   · `skip`: las cifras que la IA dejó SIN marca en su versión (su
+ *     revisión ya dijo que no tienen origen) no se marcan por valor
+ *     aunque coincidan con otra cifra del perfil. Si no, basta con tocar
+ *     una coma para que el «40 %» de una tasa de compra quedara
+ *     respaldado por el 40 % de la audiencia de 25 a 34 años.
  */
-export function markFiguresByValue(text: string, claims: readonly SalesClaim[]): string {
+export function markFiguresByValue(
+  text: string,
+  claims: readonly SalesClaim[],
+  opts: { skip?: readonly string[] } = {},
+): string {
   const markers = findClaimMarkers(text);
   const figures = findFigures(maskMarkers(text), claims);
+  const skip = new Set((opts.skip ?? []).map(sameFigure));
   let out = text;
   // De atrás hacia delante: insertar una marca no mueve las cifras anteriores.
   for (let i = figures.length - 1; i >= 0; i--) {
     const f = figures[i]!;
     if (markerFor(text, markers, f, figures[i + 1])) continue;
-    const exact = claims.find((c) => c.display === f.raw && figureMatchesClaim(f, c));
-    const c = exact ?? claims.find((x) => figureMatchesClaim(f, x));
+    if (skip.has(sameFigure(f.raw))) continue;
+    const fits = (c: SalesClaim) => unitFits(f, c) && figureMatchesClaim(f, c);
+    const exact = claims.find((c) => c.display === f.raw && fits(c));
+    const c = exact ?? claims.find(fits);
     if (c) out = `${out.slice(0, f.end)} [claim:${c.id}]${out.slice(f.end)}`;
   }
   return out;
+}
+
+/** Las unidades del perfil que respaldan cada tipo de cifra del texto. Un claim sin unidad no se descarta por ella. */
+const UNITS_BY_KIND: Record<FigureHit['kind'], readonly ClaimUnit[]> = {
+  percent: ['share'],
+  multiple: ['multiple'],
+  plain: ['count', 'money'],
+  scaled: ['count', 'money'],
+  rank: [],
+};
+
+function unitFits(f: FigureHit, c: SalesClaim): boolean {
+  return c.unit === null || UNITS_BY_KIND[f.kind].includes(c.unit);
+}
+
+/** «40 %», «40%» y « 40 % » son la misma cifra escrita. */
+function sameFigure(raw: string): string {
+  return raw.replace(/\s+/gu, '').toLowerCase();
+}
+
+/**
+ * Las cifras de un texto marcado que no tienen marca: las que el pre-vuelo
+ * ve como «cifra sin origen». Es el `skip` de markFiguresByValue cuando una
+ * persona edita lo que redactó la IA.
+ */
+export function unsourcedFigures(markedText: string | null | undefined, claims: readonly SalesClaim[]): string[] {
+  if (!markedText) return [];
+  return figureIssueSpans(markedText, claims).filter((i) => i.code === 'unsourced_figure').map((i) => i.detail ?? '').filter(Boolean);
 }
 
 const HINT_BY_CODE: Partial<Record<PreflightCode, RegenerateHint>> = {

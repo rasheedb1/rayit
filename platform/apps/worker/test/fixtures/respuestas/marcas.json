@@ -1,0 +1,45 @@
+{
+  "_origen": "Respuestas de marcas a correos de prospección, reescritas a partir de hilos reales (sin nombres ni correos reales). La clave es la intención que deben tener (VEN-14, docs/ventas-outreach.md §5.7).",
+  "me_interesa": {
+    "body": "Hola, Laura. Sí, me interesa: justo estamos armando la temporada de fin de año. ¿Te sirve una llamada el jueves a las 10? Mándame también tus tarifas.",
+    "intent": "interested"
+  },
+  "ahora_no": {
+    "body": "Gracias por escribir. Este trimestre no tenemos presupuesto para creadores; escríbeme después de enero y lo miramos.",
+    "intent": "not_now"
+  },
+  "fuera_de_oficina": {
+    "body": "Estoy fuera de la oficina hasta el 6 de octubre, sin acceso al correo. A mi regreso te respondo.",
+    "intent": "ooo"
+  },
+  "baja_explicita": {
+    "body": "Gracias, pero por favor no nos escriban más.",
+    "intent": "unsubscribe"
+  },
+  "baja_implicita": {
+    "body": "Preferimos no seguir recibiendo propuestas de creadores. Que te vaya muy bien.",
+    "intent": "unsubscribe",
+    "_nota": "El detector de VEN-10 no la ve: la clasifica el modelo."
+  },
+  "referido": {
+    "body": "Yo no manejo colaboraciones. Habla con Ana Gómez, de mercadeo: ana.gomez@marca.test",
+    "intent": "referral"
+  },
+  "rechazo": {
+    "body": "No me interesa, gracias.",
+    "intent": "not_now",
+    "_nota": "Un «no» que no pide la baja: ni interés ni baja (el clasificador falso veía «me interesa» dentro de «no me interesa»)."
+  },
+  "rechazo_plural": {
+    "body": "No, no nos interesa. Saludos.",
+    "intent": "not_now"
+  },
+  "rechazo_en": {
+    "body": "Not interested, thanks.",
+    "intent": "not_now"
+  },
+  "ambigua": {
+    "body": "Ok",
+    "intent": "ambiguous"
+  }
+}

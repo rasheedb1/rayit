@@ -104,9 +104,15 @@ const STEPS = [
     body: 'Cierro por aquí para no llenarte el correo. Si en algún momento te sirve, aquí estoy.' },
 ] as const;
 
-export async function runDemoMotor(): Promise<DemoMotorReport> {
+/**
+ * `snapshot`: abrir la base desde la foto del proceso (migrada y sembrada
+ * una vez, @mc/db/embedded) en vez de migrar y sembrar otra vez. Lo piden
+ * las pruebas: con la máquina cargada, migrar y sembrar dentro de la
+ * prueba pasaba de su tope de 120 s.
+ */
+export async function runDemoMotor(opts: { snapshot?: boolean } = {}): Promise<DemoMotorReport> {
   const { createEmbeddedDb } = await import('@mc/db/embedded');
-  const db = await createEmbeddedDb();
+  const db = await createEmbeddedDb({ snapshot: opts.snapshot === true });
   try {
     const motor = motorDbFromClient(db);
     const fake = fakeChannels();

@@ -36,6 +36,19 @@ export const PUEDEN_GESTIONAR_CANALES: ReadonlySet<MembershipRole> = new Set<Mem
 export const PUEDEN_EDITAR_PERFIL: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
 
 /**
+ * Los roles que operan Ventas en nombre de la creadora (VEN-14): aprobar,
+ * editar, regenerar o saltar un mensaje retenido, responder a una marca
+ * desde la bandeja, cancelar esa respuesta, corregir la intención de una
+ * respuesta (una baja no se deshace), crear un contacto referido y marcar
+ * un hilo como hecho o leído. Cada una escribe a una marca, gasta contra
+ * el tope diario de IA o cambia lo que ve el resto del equipo. Un
+ * 'viewer' o un 'client' (en una agencia, la marca misma, que no debe
+ * leer ni contestar los hilos con otras marcas como si fuera la creadora)
+ * ven las bandejas, no las tocan. Mismo grupo que PUEDEN_EDITAR_PERFIL.
+ */
+export const PUEDEN_OPERAR_VENTAS: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
+
+/**
  * Cuántos espacios puede tener una persona como propietaria. Sin tope,
  * un script con sesión crea miles de workspaces con su creator_profile.
  * Veinte cubre de sobra a una creadora que separa marcas; una agencia

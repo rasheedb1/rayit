@@ -377,3 +377,4 @@ export * from './outreach/generation-outcome.ts';
 export * from './outreach/generation-mapping.ts';
 export * from './outreach/generation-in-process.ts';
 export * from './outreach/pitch.ts';
+export * from './outreach/intent.ts';

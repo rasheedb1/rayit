@@ -20,15 +20,16 @@ SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', fa
 --     desenlace) y nueve toques en los estados que enseña la pantalla
 --     (los de este seed: el 0006 añade el correo que rebotó).
 SELECT 'a_conteos' AS check_id,
-       (SELECT count(*) FROM outreach_channel_account WHERE status = 'connected')       AS conectadas,
-       (SELECT count(*) FROM outreach_channel_account WHERE status = 'needs_reconnect') AS por_reconectar,
-       (SELECT string_agg(status, ',' ORDER BY status) FROM outbound_enrollment)        AS enrolamientos,
+       (SELECT count(*) FROM outreach_channel_account WHERE status = 'connected' AND id::text LIKE '00000005-%')       AS conectadas,
+       (SELECT count(*) FROM outreach_channel_account WHERE status = 'needs_reconnect' AND id::text LIKE '00000005-%') AS por_reconectar,
+       (SELECT string_agg(status, ',' ORDER BY status) FROM outbound_enrollment WHERE id::text LIKE '00000005-%')        AS enrolamientos,
        (SELECT string_agg(status || '=' || n, ',' ORDER BY status)
           FROM (SELECT status, count(*) AS n FROM outbound_touch
                  WHERE id::text LIKE '00000005-%' GROUP BY status) x)   AS toques,
-       (SELECT count(*) FROM outreach_channel_account WHERE status = 'connected') = 1
-         AND (SELECT count(*) FROM outreach_channel_account WHERE status = 'needs_reconnect') = 1
-         AND (SELECT string_agg(status, ',' ORDER BY status) FROM outbound_enrollment) = 'active,cooldown,replied'
+       -- Los de ESTE seed: el 0008 (VEN-14) añade el Instagram y dos cadencias con sus retenidos.
+       (SELECT count(*) FROM outreach_channel_account WHERE status = 'connected' AND id::text LIKE '00000005-%') = 1
+         AND (SELECT count(*) FROM outreach_channel_account WHERE status = 'needs_reconnect' AND id::text LIKE '00000005-%') = 1
+         AND (SELECT string_agg(status, ',' ORDER BY status) FROM outbound_enrollment WHERE id::text LIKE '00000005-%') = 'active,cooldown,replied'
          AND (SELECT string_agg(status || '=' || n, ',' ORDER BY status)
                 FROM (SELECT status, count(*) AS n FROM outbound_touch
                  WHERE id::text LIKE '00000005-%' GROUP BY status) x)
@@ -73,7 +74,10 @@ SELECT 'c_correos_con_pruebas_y_enlace' AS check_id,
 SELECT 'd_salud' AS check_id,
        h->'queue' AS cola, h->'accountsDown' AS cuentas_caidas, h->'enabled' AS encendido,
        (h->'queue'->>'draft')::int = 1 AND (h->'queue'->>'scheduled')::int = 1
-         AND (h->'queue'->>'held')::int = 1 AND (h->'queue'->>'processing')::int = 0
+         -- El retenido de este seed y los del 0008: la salud cuenta lo que hay en la tabla.
+         AND (h->'queue'->>'held')::int = (SELECT count(*) FROM outbound_touch
+                                           WHERE workspace_id = '00000002-0000-4000-8000-000000000001' AND status = 'held')
+         AND (h->'queue'->>'held')::int >= 1 AND (h->'queue'->>'processing')::int = 0
          AND (h->>'accountsDown')::int = 1
          -- Sembrar la demo no enciende el envío: la política de 0002 sigue apagada.
          AND NOT (h->>'enabled')::boolean AS ok

@@ -23,7 +23,7 @@
  * nextBusinessDay y publicOptout. Sus firmas SQL están en
  * OUTREACH_FUNCTIONS, que la prueba compara con la base.
  */
-import { boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
+import { boolean, date, integer, jsonb, numeric, pgTable, primaryKey, smallint, text, uuid } from 'drizzle-orm/pg-core';
 import { citext, createdAt, currency, localTime, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts';
 import { OUTBOUND_CHANNELS } from './_canales.ts';
@@ -78,6 +78,8 @@ export const CHANNEL_CAP_LIMITS = {
 export const ENROLLMENT_STATUSES = ['active', 'paused', 'completed', 'replied', 'opted_out', 'cooldown', 'bounced'] as const;
 export const MESSAGE_DIRECTIONS = ['inbound', 'outbound'] as const;
 export const MESSAGE_INTENTS = ['interested', 'not_now', 'ooo', 'unsubscribe', 'referral', 'ambiguous'] as const;
+/** Quién puso la intención de un mensaje entrante (0064). */
+export const INTENT_SOURCES = ['detector', 'model', 'fake', 'person'] as const;
 export const REGENERATE_HINTS = ['shorter', 'more_specific', 'other_angle', 'other_signal', 'soften', 'add_proof'] as const;
 export const RISK_TRIGGERS = [
   'unsourced_figure', 'invented_client', 'false_urgency', 'pressure', 'competitor_mention', 'missing_disclosure',
@@ -374,6 +376,22 @@ export const outboundMessage = pgTable('outbound_message', {
   occurredAt: timestamptz('occurred_at').defaultNow().notNull(),
   readAt: timestamptz('read_at'),
   createdAt: createdAt(),
+  /** Quién puso la intención (0064): la regla de bajas, el modelo, el clasificador falso o una persona. */
+  intentSource: text('intent_source', { enum: INTENT_SOURCES }),
+  /** El contacto que la respuesta propone («escríbele a …»), para que una persona lo cree (0064). */
+  referral: jsonb('referral').$type<{ name?: string | null; email?: string | null; role?: string | null }>(),
+  /** La ficha creada desde esa propuesta (0064). */
+  referralContactId: uuid('referral_contact_id').references(() => contact.id, { onDelete: 'set null' }),
+  /** Llegó con cabeceras de respuesta automática; NULL, el canal no lo dice (0065). */
+  automatic: boolean('automatic'),
+  /** La frase del clasificador que explica la intención (0065). */
+  intentReason: text('intent_reason'),
+  /** La clasificación ya pagada que falta aplicar (0065). */
+  intentDecision: jsonb('intent_decision').$type<Record<string, unknown>>(),
+  /** Cuántas veces falló aplicar la intención (0065). */
+  intentAttempts: smallint('intent_attempts').default(0).notNull(),
+  /** La persona dio por atendida esta respuesta en la bandeja (0065). */
+  doneAt: timestamptz('done_at'),
 });
 
 /** Una fila por intento de la puerta de calidad. Bitácora: se inserta, no se corrige. */

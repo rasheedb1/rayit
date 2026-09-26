@@ -24,6 +24,14 @@
  *
  *   DENTRO='[data-acciones-fila] button' node apps/web/scripts/ancho-movil.mjs http://localhost:3457 /cotizar
  *
+ * TOPE='<selector CSS>=<px>' añade otra: cada elemento que case mide a lo
+ * sumo esos píxeles de ancho. Nació en VEN-14 (ronda 3): la lista de
+ * /ventas/bandeja medía 894 px en su columna de 20rem y quedaba debajo de
+ * la conversación, que se comía los clics. Con ANCHO de escritorio (desde
+ * 1024) la pantalla se emula como escritorio, no como teléfono.
+ *
+ *   ANCHO=1400 TOPE='nav[aria-label=Conversaciones]=320' node apps/web/scripts/ancho-movil.mjs http://localhost:3457 /ventas/bandeja
+ *
  * Nació en COT-1 (ronda 2): un `sr-only` es `position: absolute`, y sin
  * un ancestro posicionado dentro de la tabla escapa del scroll de
  * DataTable y ensancha la página entera.
@@ -40,6 +48,11 @@ if (!base || rutas.length === 0) {
 }
 const ANCHO = Number(process.env.ANCHO ?? 400);
 const DENTRO = process.env.DENTRO ?? '';
+const [TOPE_SEL, TOPE_PX] = (() => {
+  const t = process.env.TOPE ?? '';
+  const i = t.lastIndexOf('=');
+  return i > 0 ? [t.slice(0, i), Number(t.slice(i + 1))] : ['', 0];
+})();
 const CHROME = process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PUERTO = 9300 + Math.floor(Math.random() * 500);
 const perfil = mkdtempSync(join(tmpdir(), 'ancho-movil-'));
@@ -67,7 +80,7 @@ try {
   });
   const enviar = (method, params = {}) => new Promise((r) => { const id = ++n; pendientes.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
   await enviar('Page.enable');
-  await enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: 900, deviceScaleFactor: 1, mobile: true });
+  await enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: 900, deviceScaleFactor: 1, mobile: ANCHO < 1024 });
 
   for (const ruta of rutas) {
     const cargada = new Promise((r) => { const o = (m) => { if (m.method === 'Page.loadEventFired') { oyentes.delete(o); r(); } }; oyentes.add(o); });
@@ -89,10 +102,12 @@ try {
           .filter((e) => !e.parentElement || e.parentElement.getBoundingClientRect().right <= cw + 1)
           .slice(0, 5)
           .map((e) => e.tagName.toLowerCase() + (e.className ? '.' + String(e.className).trim().split(/\\s+/).slice(0, 4).join('.') : ''));
-        return { cw, sw, fuera, dentro: casan.length, afuera };
+        const topeSel = ${JSON.stringify(TOPE_SEL)};
+        const topes = topeSel ? [...document.querySelectorAll(topeSel)].map((e) => Math.round(e.getBoundingClientRect().width)) : [];
+        return { cw, sw, fuera, dentro: casan.length, afuera, topes };
       })()`,
     });
-    const { cw, sw, fuera, dentro, afuera } = result.result.value;
+    const { cw, sw, fuera, dentro, afuera, topes } = result.result.value;
     const ok = sw <= cw;
     if (!ok) malas++;
     console.log(`${ok ? '✓' : '✗'} ${ruta}  ${sw} px de ${cw}${ok ? '' : `  · empieza en: ${fuera.join(', ')}`}`);
@@ -102,6 +117,13 @@ try {
       if (!bien) malas++;
       console.log(
         `${bien ? '✓' : '✗'} ${ruta}  ${dentro} × «${DENTRO}» ${bien ? 'dentro de la pantalla' : dentro === 0 ? 'no aparece' : `fuera: ${afuera.join(', ')}`}`,
+      );
+    }
+    if (TOPE_SEL) {
+      const bien = topes.length > 0 && topes.every((w) => w <= TOPE_PX);
+      if (!bien) malas++;
+      console.log(
+        `${bien ? '✓' : '✗'} ${ruta}  «${TOPE_SEL}» ${topes.length === 0 ? 'no aparece' : `mide ${topes.join(', ')} px (tope ${TOPE_PX})`}`,
       );
     }
   }

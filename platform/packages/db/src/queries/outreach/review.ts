@@ -15,7 +15,7 @@
 import { findPlaceholders } from '@mc/core';
 import { claimsCitedIn, stripClaimMarkers, type SalesClaim } from '@mc/core/outreach/claims';
 import { inviteNoteOverflow } from '@mc/core/outreach/messages';
-import { checkFigures, FIGURE_RISK_CODES, markFiguresByValue } from '@mc/core/outreach/preflight';
+import { checkFigures, FIGURE_RISK_CODES, markFiguresByValue, unsourcedFigures } from '@mc/core/outreach/preflight';
 import type { WorkspaceTx } from '../../client.ts';
 import { listSalesClaims } from './claims.ts';
 import { advanceEnrollment } from './enroll.ts';
@@ -167,8 +167,10 @@ export async function releaseHeldTouch(
   const row = (
     await tx.query<{
       status: string; channel: string; step_type: string | null; opted_out: boolean; needs_postal: boolean; unconfirmed: boolean;
+      in_thread: boolean;
     }>(
       `SELECT t.status, t.channel, st.step_type, t.unconfirmed_attempt IS NOT NULL AS unconfirmed,
+              (st.step_type = 'email_reply' OR t.reply_to_message_id IS NOT NULL) AS in_thread,
               (coalesce(c.opted_out, false) OR address_is_suppressed(c.email) OR address_is_suppressed(t.recipient_address)) AS opted_out,
               (t.channel = 'email' AND coalesce(p.require_optout_link, true) AND nullif(btrim(p.postal_address), '') IS NULL) AS needs_postal
          FROM outbound_touch t
@@ -182,11 +184,12 @@ export async function releaseHeldTouch(
   ).rows[0];
   if (!row) return { ok: false, code: 'not_found' };
   if (row.status !== 'held') return { ok: false, code: 'not_held' };
+  // Un correo nuevo necesita asunto. Una respuesta en el hilo (el paso email_reply, o la escrita en la bandeja
+  // con reply_to_message_id) no: sin uno propio, el despachador pone el del hilo («Re: …», replySubject).
   const subject = row.channel === 'email' ? (input.subject?.trim() || null) : null;
   const body = input.body.trim();
   if (!body) return { ok: false, code: 'empty' };
-  // Un correo nuevo necesita asunto; la respuesta en el hilo toma el del anterior («Re: …»).
-  if (row.channel === 'email' && row.step_type !== 'email_reply' && !subject) return { ok: false, code: 'empty_subject' };
+  if (row.channel === 'email' && !row.in_thread && !subject) return { ok: false, code: 'empty_subject' };
   const hits = [...findPlaceholders(subject), ...findPlaceholders(body)];
   if (hits.length > 0) return { ok: false, code: 'placeholders', detail: hits.map((h) => h.match).join(' ') };
   if (row.step_type === 'linkedin_connect') {
@@ -223,10 +226,20 @@ export async function releaseHeldTouch(
 /**
  * El origen de cada cifra del texto que se aprueba. Las cifras que se
  * pueden citar son las del creador que firma el negocio del toque (las
- * mismas que vio el generador). El texto se marca con lo que la IA marcó
- * —si la persona no lo cambió— y cada cifra que siga sin marca y coincida
- * con una del perfil recibe la suya. Lo que quede sin origen, o con un
- * origen que dice otra cosa, impide aprobarlo.
+ * mismas que vio el generador).
+ *
+ *   · Si la persona no cambió lo que redactó la IA, mandan las marcas de
+ *     la IA, tal cual: una cifra que la IA dejó sin marca sigue sin origen
+ *     (su revisión ya lo dijo y por eso quedó retenido) y no se aprueba.
+ *     Antes se volvía a marcar por valor y el «40 %» de una tasa de compra
+ *     salía respaldado por el 40 % de la audiencia de 25 a 34 años.
+ *   · Si la editó (o no la redactó la IA: una plantilla, un texto a mano),
+ *     cada cifra sin marca que coincida en valor Y en unidad con una del
+ *     perfil recibe la suya, salvo las que la IA había dejado sin origen:
+ *     tocar una coma no las respalda (markFiguresByValue, `skip`).
+ *
+ * Lo que quede sin origen, o con un origen que dice otra cosa, impide
+ * aprobarlo ('unsourced_figure', con cuáles).
  */
 async function sourceFigures(
   tx: WorkspaceTx,
@@ -244,11 +257,12 @@ async function sourceFigures(
     )
   ).rows[0];
   const claims = await listSalesClaims(tx, { locale: t?.locale ?? 'es-CO', dealId: t?.deal_id ?? null });
-  // El marcado de la IA vale si dice lo mismo que lo que se aprueba; si la persona lo editó, se marca por valor.
-  const sameAs = (marked: string | null | undefined, clean: string | null) =>
+  const sameAs = (marked: string | null | undefined, clean: string | null): marked is string =>
     marked !== null && marked !== undefined && stripClaimMarkers(marked).trim() === (clean ?? '').trim();
-  const markedSubject = markFiguresByValue(sameAs(t?.g_subject, subject) ? t!.g_subject! : (subject ?? ''), claims);
-  const markedBody = markFiguresByValue(sameAs(t?.g_body, body) ? t!.g_body! : body, claims);
+  const mark = (marked: string | null | undefined, clean: string | null): string =>
+    sameAs(marked, clean) ? marked : markFiguresByValue(clean ?? '', claims, { skip: unsourcedFigures(marked, claims) });
+  const markedSubject = mark(t?.g_subject, subject);
+  const markedBody = mark(t?.g_body, body);
   const issues = checkFigures(`${markedSubject}\n${markedBody}`, claims).filter((i) => FIGURE_RISK_CODES.includes(i.code));
   if (issues.length > 0) return { ok: false, unsourced: [...new Set(issues.map((i) => i.detail ?? ''))].filter(Boolean) };
   return { ok: true, cited: claimsCitedIn(claims, markedSubject, markedBody) };

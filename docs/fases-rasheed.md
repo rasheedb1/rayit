@@ -215,6 +215,19 @@ Cuando Rasheed confirme el alcance y las cinco decisiones del
 documento, las piezas entran al catálogo del workflow como fases 3 a
 6, con los mismos revisores y el mismo umbral.
 
+Tres de esas decisiones las tomó el workflow como **supuestos
+declarados** que Rasheed tiene que ratificar o revertir (cada una dice
+cómo revertirla y qué se pierde, en §8 de
+[ventas-outreach.md](ventas-outreach.md#8-decisiones-que-necesita-tomar-rasheed)):
+la baja por enlace solo con quien envió (decisión 6, VEN-15), el token
+de baja opaco en vez de firmado (decisión 7, VEN-15) y que sin
+`ANTHROPIC_API_KEY` las respuestas no se clasifiquen solas, con el
+clasificador falso solo en pruebas, en la demo y con
+`OUTREACH_WRITER=fake` fuera de producción (decisión 9, VEN-14). En
+VEN-14 el criterio de aceptación de `backlog.ts` quedó con su texto
+original: el supuesto va en la nota, y Rasheed lo confirma antes de
+mergear.
+
 ## 8. Resumen (RES-1, RES-2): las decisiones que importan
 
 El detalle ronda a ronda está en los commits de la rama; aquí queda lo

@@ -138,6 +138,7 @@ export function failureReason(lang: NoticeLang, code: string): string {
 export const HOLD_CODES = [
   'no_postal_address', 'no_body', 'placeholders', 'reply_without_thread', 'unconfirmed_attempt', 'note_too_long', 'needs_review',
   'no_subject', 'quality_warmup', 'quality_risk', 'quality_low', 'quality_preflight', 'quality_duplicate', 'llm_budget', 'llm_error',
+  'cooldown_over',
 ] as const;
 
 /** Los disparadores de riesgo en palabras (outbound_review.risk_triggers). */
@@ -219,6 +220,7 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     quality_duplicate: () => 'es igual a un mensaje que esta persona ya recibió',
     llm_budget: () => 'se acabó el presupuesto de redacción con IA de hoy; revísalo o escríbelo tú',
     llm_error: () => 'la redacción con IA no devolvió un mensaje legible; escríbelo tú',
+    cooldown_over: () => 'la marca dijo «ahora no» hace noventa días; la cadencia vuelve solo si tú lo apruebas',
   },
   en: {
     no_postal_address: () => 'the postal address for the email footer is missing; add it in the sending policy',
@@ -239,6 +241,7 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
     quality_duplicate: () => 'it is the same as a message this person already got',
     llm_budget: () => "today's AI writing budget ran out; review it or write it yourself",
     llm_error: () => 'AI writing did not return a readable message; write it yourself',
+    cooldown_over: () => 'the brand said "not now" ninety days ago; the cadence only comes back if you approve it',
   },
 };
 
@@ -249,10 +252,40 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
  * persona) se devuelve tal cual, sin su punto final, para no pintarlo con
  * dos.
  */
-export function holdReasonText(lang: NoticeLang, value: string): string {
+/**
+ * La nota baja dicha desde la bandeja de aprobación (VEN-14): allí la
+ * acción está en la propia fila. Con «Regenerar», se la nombra; sin él (una
+ * respuesta en el hilo, un mensaje de LinkedIn), solo se edita. La frase de
+ * HOLD_REASON_TEXTS remite a «Redactar pitch», que es la de la ficha.
+ */
+const QUALITY_LOW_IN_QUEUE: Record<NoticeLang, Record<'regenerable' | 'edit_only', (d: string) => string>> = {
+  es: {
+    regenerable: (d) =>
+      `la revisión automática le dio ${score('es', d) ?? 'una nota'} de 10, por debajo del mínimo; edítalo o pide otra versión con «Regenerar»`,
+    edit_only: (d) => `la revisión automática le dio ${score('es', d) ?? 'una nota'} de 10, por debajo del mínimo; edítalo antes de aprobarlo`,
+  },
+  en: {
+    regenerable: (d) =>
+      `the automatic review scored it ${score('en', d) ?? 'low'} out of 10, under the minimum; edit it or ask for another version with «Regenerate»`,
+    edit_only: (d) => `the automatic review scored it ${score('en', d) ?? 'low'} out of 10, under the minimum; edit it before approving it`,
+  },
+};
+
+/**
+ * held_reason en palabras. `where` dice desde dónde se lee: la ficha
+ * (por defecto, remite a «Redactar pitch») o una fila de la bandeja de
+ * aprobación, con o sin «Regenerar».
+ */
+export function holdReasonText(
+  lang: NoticeLang, value: string, where: 'record' | 'queue_regenerable' | 'queue_edit_only' = 'record',
+): string {
   const r = parseHoldReason(value);
   if (!r) return value.trim().replace(/[.!?…]+$/u, '');
-  return HOLD_REASON_TEXTS[lang][r.code](r.detail === undefined ? '' : String(r.detail));
+  const detail = r.detail === undefined ? '' : String(r.detail);
+  if (r.code === 'quality_low' && where !== 'record') {
+    return QUALITY_LOW_IN_QUEUE[lang][where === 'queue_regenerable' ? 'regenerable' : 'edit_only'](detail);
+  }
+  return HOLD_REASON_TEXTS[lang][r.code](detail);
 }
 
 // ---------------------------------------------------------------------
@@ -293,8 +326,8 @@ export const OUTREACH_NOTICE_TEXTS = {
     failedBody: (who: string, channel: string, reason: string, company: string) =>
       `El mensaje a ${who} por ${channel} no se envió: ${reason}. Revisa la ficha de ${company}.`,
     heldTitle: (company: string) => `Un mensaje a ${company} espera tu revisión`,
-    heldBody: (who: string, channel: string, reason: string, company: string) =>
-      `El mensaje a ${who} por ${channel} quedó retenido: ${reason}. Lo que sigue de esa cadencia espera; revisa la ficha de ${company}.`,
+    heldBody: (who: string, channel: string, reason: string) =>
+      `El mensaje a ${who} por ${channel} quedó retenido: ${reason}. Lo que sigue de esa cadencia espera; apruébalo, edítalo o sáltalo en Aprobaciones.`,
     replyTitle: (who: string) => `${who} respondió`,
     replyBody: (channel: string, stop: ReplyStop = NO_STOP) =>
       `Llegó una respuesta por ${channel}. Lo pendiente con esa persona se canceló` +
@@ -322,8 +355,8 @@ export const OUTREACH_NOTICE_TEXTS = {
     failedBody: (who: string, channel: string, reason: string, company: string) =>
       `The message to ${who} over ${channel} was not sent: ${reason}. Check ${company}'s page.`,
     heldTitle: (company: string) => `A message to ${company} needs your review`,
-    heldBody: (who: string, channel: string, reason: string, company: string) =>
-      `The message to ${who} over ${channel} is on hold: ${reason}. The rest of that cadence waits; check ${company}'s page.`,
+    heldBody: (who: string, channel: string, reason: string) =>
+      `The message to ${who} over ${channel} is on hold: ${reason}. The rest of that cadence waits; approve, edit or skip it in Approvals.`,
     replyTitle: (who: string) => `${who} replied`,
     replyBody: (channel: string, stop: ReplyStop = NO_STOP) =>
       `A reply came in over ${channel}. Everything pending for that person was canceled` +

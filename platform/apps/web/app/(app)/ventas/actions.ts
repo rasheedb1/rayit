@@ -46,7 +46,7 @@ import { isCountryCode } from "./_lib/paises";
 
 /** Lo que devuelven las acciones de Ventas: lo común más un aviso de éxito. */
 export interface VentasState extends ActionState {
-  /** Qué pasó, cuando salió bien («Anotada. Ya está en la bandeja.»). */
+  /** Qué pasó, cuando salió bien («Anotada. Ya está en el radar.»). */
   notice?: string;
   /** Un enlace para seguir desde el aviso («Ver el negocio»). */
   link?: { href: string; label: string };

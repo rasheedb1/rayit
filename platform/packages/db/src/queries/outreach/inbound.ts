@@ -46,6 +46,7 @@
  * consulta nombra su workspace y sus filas.
  */
 import { detectOptOut, type OptOutResult } from '@mc/core';
+import { INBOX_URLS } from '@mc/core/outreach/intent-messages';
 import { channelLabel, noticeLang, OUTREACH_NOTICE_TEXTS, OUTREACH_URLS } from '@mc/core/outreach/messages';
 import type { SqlExecutor } from '../../client.ts';
 import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
@@ -83,6 +84,12 @@ export interface InboundEffectsInput {
   optOutReason?: string;
   /** Quien escribió, tal como lo dio el proveedor. En un correo, la baja solo vale si es la ficha. */
   fromAddress?: string | null;
+  /**
+   * Una persona decidió que la baja vale para la ficha aunque la pidiera
+   * otro (la corrección de la bandeja, VEN-14: «Dar de baja a la ficha»):
+   * no se compara el remitente.
+   */
+  senderConfirmed?: boolean;
 }
 
 export interface InboundEffects {
@@ -192,7 +199,7 @@ export function normalizeAddress(value: string | null | undefined): string | nul
  * es con esa persona.
  */
 async function senderIsContact(tx: SqlExecutor, input: InboundEffectsInput): Promise<boolean> {
-  if (input.channel !== 'email' || !input.contactId) return true;
+  if (input.senderConfirmed === true || input.channel !== 'email' || !input.contactId) return true;
   const from = normalizeAddress(input.fromAddress);
   if (!from) return true;
   const known = (
@@ -209,7 +216,7 @@ async function senderIsContact(tx: SqlExecutor, input: InboundEffectsInput): Pro
 interface Who {
   locale: string | null;
   who: string | null;
-  /** La empresa de la ficha: el aviso lleva a su bloque «Mensajes de la cadencia», donde se ve la respuesta. */
+  /** La empresa de la ficha: sin ficha, el aviso lleva a su bloque «Mensajes de la cadencia». */
   company_id: string | null;
 }
 
@@ -256,7 +263,8 @@ async function notifyInbound(
              'outreach_reply', $3, $4, $5, 'outbound_message', $6::uuid, $8, $7::timestamptz)`,
     [
       input.workspaceId, input.enrollmentId, text.severity, text.title, text.body, input.messageId, input.now.toISOString(),
-      w.company_id ? OUTREACH_URLS.companyCadence(w.company_id) : '/ventas',
+      // La conversación en la bandeja unificada (VEN-14); sin ficha, la de la empresa.
+      input.contactId ? INBOX_URLS.thread(input.contactId, input.channel) : w.company_id ? OUTREACH_URLS.companyCadence(w.company_id) : '/ventas',
     ],
   );
 }
@@ -277,35 +285,10 @@ export async function applyInboundEffects(tx: SqlExecutor, input: InboundEffects
   const verdict = inboundVerdict(input.body);
   if (verdict.optOut) {
     await tx.query(
-      `UPDATE outbound_message SET intent = 'unsubscribe', classified_at = $2::timestamptz WHERE id = $1::uuid`,
+      `UPDATE outbound_message SET intent = 'unsubscribe', intent_confidence = 1, intent_source = 'detector', classified_at = $2::timestamptz WHERE id = $1::uuid`,
       [input.messageId, input.now.toISOString()],
     );
-    if (!input.contactId) return { ...none, optOut: true, optOutRule: verdict.ruleId };
-    const w = await whoAndLocale(tx, input.workspaceId, input.contactId);
-    // Un tercero en copia que pide «sáquenme de su lista» no da de baja
-    // a la ficha: la cadencia se detiene (nadie quiere seguir escribiendo en
-    // ese hilo) y una persona decide.
-    if (!(await senderIsContact(tx, input))) {
-      const stop = await stopOnReply(tx, input, enrollmentStatus);
-      await notifyInbound(tx, input, 'optout_review', w);
-      return {
-        ...none, optOutRule: verdict.ruleId, canceled: stop.canceled, enrollmentStopped: stop.threadStopped, notified: true, optOutReview: true,
-        otherEnrollmentsStopped: stop.otherEnrollments, companyPaused: stop.companyPaused,
-      };
-    }
-    // En la base, un código que la pantalla traduce (0043); la frase solo en un canal sin código.
-    const lang = noticeLang(w.locale);
-    const code = replyOptOutCodeFor(input.channel);
-    const reason = input.optOutReason ?? (code ? null : OUTREACH_NOTICE_TEXTS[lang].optOutReason(channelLabel(lang, input.channel)));
-    const { canceled, stopped, marked } = await optOutContact(tx, input.contactId, input.workspaceId, reason, input.now, code);
-    // Avisa si la baja cambió algo en este workspace: una ficha marcada o
-    // una cadencia detenida. Quien ya estaba de baja y vuelve a escribir, no.
-    const changed = marked.length > 0 || stopped.length > 0;
-    if (changed) await notifyInbound(tx, input, 'optout', w);
-    return {
-      ...none, optOut: true, optOutRule: verdict.ruleId, canceled,
-      enrollmentStopped: input.enrollmentId !== null && stopped.includes(input.enrollmentId), notified: changed,
-    };
+    return applyReplyOptOut(tx, input, enrollmentStatus, verdict.ruleId);
   }
   // Un «estoy de vacaciones hasta el lunes» no es una respuesta: ni cancela,
   // ni avisa, ni marca replied_at (el embudo de VEN-16 lo contaría).
@@ -329,6 +312,53 @@ export async function applyInboundEffects(tx: SqlExecutor, input: InboundEffects
   return {
     ...none, canceled: stop.canceled, enrollmentStopped: stop.threadStopped, notified: true,
     otherEnrollmentsStopped: stop.otherEnrollments, companyPaused: stop.companyPaused,
+  };
+}
+
+/**
+ * La baja que pide una respuesta, ya anotada como 'unsubscribe' en su
+ * mensaje: la del detector (arriba) y la del clasificador de VEN-14
+ * (intent.ts), con las mismas reglas. En un correo la baja la pide la
+ * ficha: si la escribe un tercero en copia, la cadencia se detiene y una
+ * persona decide; si es la ficha, sus fichas del workspace quedan de baja
+ * y lo suyo cancelado. `enrollmentStatus` es el del enrolamiento del hilo,
+ * ya bloqueado por quien llama.
+ */
+export async function applyReplyOptOut(
+  tx: SqlExecutor,
+  input: InboundEffectsInput,
+  enrollmentStatus: string | null,
+  ruleId: string | null,
+): Promise<InboundEffects> {
+  const none: InboundEffects = {
+    optOut: false, optOutRule: ruleId, canceled: [], enrollmentStopped: false, notified: false, automatic: input.automatic,
+    optOutReview: false, otherEnrollmentsStopped: [], companyPaused: [],
+  };
+  if (!input.contactId) return { ...none, optOut: true };
+  const w = await whoAndLocale(tx, input.workspaceId, input.contactId);
+  // Un tercero en copia que pide «sáquenme de su lista» no da de baja
+  // a la ficha: la cadencia se detiene (nadie quiere seguir escribiendo en
+  // ese hilo) y una persona decide.
+  if (!(await senderIsContact(tx, input))) {
+    const stop = await stopOnReply(tx, input, enrollmentStatus);
+    await notifyInbound(tx, input, 'optout_review', w);
+    return {
+      ...none, canceled: stop.canceled, enrollmentStopped: stop.threadStopped, notified: true, optOutReview: true,
+      otherEnrollmentsStopped: stop.otherEnrollments, companyPaused: stop.companyPaused,
+    };
+  }
+  // En la base, un código que la pantalla traduce (0043); la frase solo en un canal sin código.
+  const lang = noticeLang(w.locale);
+  const code = replyOptOutCodeFor(input.channel);
+  const reason = input.optOutReason ?? (code ? null : OUTREACH_NOTICE_TEXTS[lang].optOutReason(channelLabel(lang, input.channel)));
+  const { canceled, stopped, marked } = await optOutContact(tx, input.contactId, input.workspaceId, reason, input.now, code);
+  // Avisa si la baja cambió algo en este workspace: una ficha marcada o
+  // una cadencia detenida. Quien ya estaba de baja y vuelve a escribir, no.
+  const changed = marked.length > 0 || stopped.length > 0;
+  if (changed) await notifyInbound(tx, input, 'optout', w);
+  return {
+    ...none, optOut: true, canceled,
+    enrollmentStopped: input.enrollmentId !== null && stopped.includes(input.enrollmentId), notified: changed,
   };
 }
 

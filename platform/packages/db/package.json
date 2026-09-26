@@ -24,6 +24,7 @@
     "./queries/finanzas": "./src/queries/finanzas.ts",
     "./queries/conexiones": "./src/queries/conexiones.ts",
     "./queries/outreach": "./src/queries/outreach.ts",
+    "./queries/bandejas": "./src/queries/bandejas.ts",
     "./queries/canales": "./src/queries/canales.ts",
     "./queries/entregabilidad": "./src/queries/entregabilidad.ts",
     "./queries/perfil-comercial": "./src/queries/perfil-comercial.ts",

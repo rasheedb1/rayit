@@ -2,7 +2,7 @@
  * VEN-10 · los comandos job:dispatch y job:replies, y la demo del motor
  * contra el seed del repositorio en Postgres embebido. Sin red.
  */
-import { test } from 'node:test';
+import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemorySecretStore } from '@mc/connectors';
 import { nextWindowSlot } from '@mc/core';
@@ -16,6 +16,23 @@ import { prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
 import { motorDbFromClient } from '../src/jobs/ventas/motor-db.ts';
 import { canceledCount, runDispatch } from '../src/jobs/ventas/outbound.dispatch.ts';
 import { ConfigError } from '../src/runner/config.ts';
+import { SETUP_TIMEOUT } from './helpers/harness.ts';
+
+/**
+ * Las dos pruebas de la demo abren una base con TODOS los seeds. Migrar y
+ * sembrar se hace una vez, aquí, con el tiempo del arranque
+ * (SETUP_TIMEOUT); cada prueba abre su copia desde esa foto en décimas
+ * de segundo. Antes, cada una migraba y sembraba dentro de su propio tope
+ * de 120 s y, con la máquina cargada, la primera corrida de `pnpm
+ * verificar` se pasó (123 s; sola tarda 3 s).
+ */
+before(async () => {
+  const { createEmbeddedDb } = await import('@mc/db/embedded');
+  await (await createEmbeddedDb({ snapshot: true })).close();
+}, SETUP_TIMEOUT);
+
+/** El tope de las pruebas de la demo: abrir la foto y correr el motor, con margen para una máquina cargada. */
+const DEMO_TIMEOUT = { timeout: 240_000 } as const;
 
 test('job:dispatch y job:replies leen sus argumentos y rechazan lo que no conocen', () => {
   assert.deepEqual(parseArgs(['dispatch'], {}), { pasada: 'dispatch', canalFalso: false, demo: false, workspaceId: undefined, accion: 'pasada' });
@@ -88,8 +105,8 @@ test('el worker programado sigue la misma regla: con Supabase y NODE_ENV=develop
   assert.equal(channelModeFrom({ NODE_ENV: 'production', DATABASE_URL_DIRECT: supabase }, { databaseUrl: supabase }), 'real');
 });
 
-test('demo con el seed: apagada no envía nada; encendida, la cadencia de tres correos sale, una respuesta la corta y la otra sigue', async () => {
-  const r = await runDemoMotor();
+test('demo con el seed: apagada no envía nada; encendida, la cadencia de tres correos sale, una respuesta la corta y la otra sigue', DEMO_TIMEOUT, async () => {
+  const r = await runDemoMotor({ snapshot: true });
 
   // Mismo reloj, el toque ya vencido: lo único distinto es el interruptor.
   assert.equal(r.off.claim.claimed, 0);
@@ -144,9 +161,9 @@ test('demo con el seed: apagada no envía nada; encendida, la cadencia de tres c
   assert.doesNotMatch(texto, /sin asunto/);
 });
 
-test('--preparar-demo deja la demo lista con el reloj de verdad, sin SQL a mano: apagada no sale nada; con --encender sale el mensaje del seed', async () => {
+test('--preparar-demo deja la demo lista con el reloj de verdad, sin SQL a mano: apagada no sale nada; con --encender sale el mensaje del seed', DEMO_TIMEOUT, async () => {
   const { createEmbeddedDb } = await import('@mc/db/embedded');
-  const db = await createEmbeddedDb();
+  const db = await createEmbeddedDb({ snapshot: true });
   try {
     const motor = motorDbFromClient(db);
     // El reloj de quien integra, dentro del horario de envío (en la prueba, la próxima apertura si ahora no lo es).

@@ -5,6 +5,7 @@ import { alertasJob } from './outbound.alerts.ts';
 import { bouncesJob } from './outbound.bounces.ts';
 import { dispatchJob } from './outbound.dispatch.ts';
 import { generateJob } from './outbound.generate.ts';
+import { intentJob } from './outbound.intent.ts';
 import { repliesJob } from './outbound.replies.ts';
 import { reviewJob } from './outbound.review.ts';
 import { seguimientosJob } from './seguimientos.ts';
@@ -19,4 +20,5 @@ export const ventasJobs = [
   alertasJob,
   generateJob,
   reviewJob,
+  intentJob,
 ];

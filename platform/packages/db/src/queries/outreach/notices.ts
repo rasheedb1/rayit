@@ -13,6 +13,7 @@
 import {
   channelLabel, failureReason, holdReasonText, noticeLang, OUTREACH_NOTICE_TEXTS, OUTREACH_URLS,
 } from '@mc/core/outreach/messages';
+import { INBOX_URLS } from '@mc/core/outreach/intent-messages';
 import type { SqlExecutor } from '../../client.ts';
 import { assertIds } from './shared.ts';
 
@@ -97,8 +98,9 @@ export async function notifyTouchHeld(tx: SqlExecutor, touchId: string, reason: 
      RETURNING id`,
     [
       touchId, m.heldTitle(r.company),
-      m.heldBody(r.contact ?? r.company, channelLabel(lang, r.channel), holdReasonText(lang, reason), r.company),
-      now.toISOString(), OUTREACH_URLS.companyCadence(r.company_id),
+      m.heldBody(r.contact ?? r.company, channelLabel(lang, r.channel), holdReasonText(lang, reason)),
+      // La bandeja de aprobación (VEN-14), abierta en su fila.
+      now.toISOString(), `${INBOX_URLS.approvals}#fila-${touchId}`,
     ],
   );
   return ins.rows.length > 0;

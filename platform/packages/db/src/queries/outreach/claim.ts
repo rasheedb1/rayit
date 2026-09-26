@@ -154,6 +154,9 @@ interface CandidateRow {
   w_end: string | null;
   tz: string;
   ws_tz: string;
+  /** La respuesta de la bandeja (0064): el mensaje al que responde y la cuenta que lo recibió. */
+  reply_to_message_id: string | null;
+  reply_account_id: string | null;
 }
 
 interface Candidate {
@@ -176,12 +179,23 @@ interface Candidate {
   timeZone: string;
   /** La zona del workspace: la de los contadores y la del calentamiento (VEN-15 cuenta sus días ahí). */
   workspaceTimeZone: string;
+  /**
+   * Una respuesta escrita en la bandeja (0064, VEN-14): la marca escribió
+   * primero, así que no cuenta para la política de la marca (el tope de
+   * mensajes y los días entre uno y otro son para escribir en frío), y sale
+   * solo por la cuenta que recibió el mensaje, la única que tiene su hilo.
+   */
+  isReply: boolean;
+  replyAccountId: string | null;
 }
 
 function parseCandidate(r: CandidateRow, i: number): Candidate {
   const fn = 'claimDueTouches';
   const channel = oneOf(fn, `$[${i}].channel`, r.channel, DISPATCH_CHANNELS);
-  const stepType = r.step_type === null ? stepTypeForChannel(channel)! : oneOf(fn, `$[${i}].step_type`, r.step_type, DISPATCHABLE_STEP_TYPES);
+  const isReply = r.reply_to_message_id !== null;
+  const stepType = r.step_type !== null
+    ? oneOf(fn, `$[${i}].step_type`, r.step_type, DISPATCHABLE_STEP_TYPES)
+    : isReply && channel === 'email' ? 'email_reply' : stepTypeForChannel(channel)!;
   return {
     id: text(fn, `$[${i}].id`, r.id),
     workspaceId: text(fn, `$[${i}].workspace_id`, r.workspace_id),
@@ -200,6 +214,8 @@ function parseCandidate(r: CandidateRow, i: number): Candidate {
     window: windowOf(r.w_start, r.w_end),
     timeZone: text(fn, `$[${i}].tz`, r.tz),
     workspaceTimeZone: text(fn, `$[${i}].ws_tz`, r.ws_tz),
+    isReply,
+    replyAccountId: textOrNull(fn, `$[${i}].reply_account_id`, r.reply_account_id),
   };
 }
 
@@ -311,12 +327,16 @@ interface SenderAccount {
  *     último envío, y solo si sigue conectada: el siguiente mensaje va en
  *     el mismo hilo o el mismo chat, que no existen en otro buzón. Vacío
  *     si está caída: el toque espera a que vuelva;
+ *   · una respuesta de la bandeja (0064), solo la cuenta que recibió el
+ *     mensaje al que responde, por la misma razón;
  *   · si no, las conectadas del canal: primero la del propio toque (la de
  *     un intento anterior), después por orden de alta.
  */
 async function senderAccounts(tx: WorkerSql, c: Candidate): Promise<SenderAccount[]> {
   const fn = 'claimDueTouches';
-  const pinned = c.enrollmentId
+  const pinned = c.isReply
+    ? c.replyAccountId
+    : c.enrollmentId
     ? (
         await tx.query<{ channel_account_id: string }>(
           `SELECT channel_account_id FROM outbound_touch
@@ -440,8 +460,10 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
               st.step_type, st.day_offset, st.order_in_day,
               c.email::text AS email, c.linkedin_url, c.instagram_handle,
               p.max_emails_per_day, p.warmup_days, p.send_window_start::text AS w_start, p.send_window_end::text AS w_end,
-              coalesce(s.timezone, w.timezone) AS tz, w.timezone AS ws_tz
+              coalesce(s.timezone, w.timezone) AS tz, w.timezone AS ws_tz,
+              t.reply_to_message_id, rm.channel_account_id AS reply_account_id
          FROM outbound_touch t
+         LEFT JOIN outbound_message rm ON rm.id = t.reply_to_message_id
          JOIN outbound_policy p ON p.workspace_id = t.workspace_id AND p.enabled
          JOIN workspace w ON w.id = t.workspace_id
          JOIN contact c ON c.id = t.contact_id
@@ -540,7 +562,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     const companyKey = `${c.workspaceId}:${c.companyId}`;
     const company = companies.get(companyKey) ?? (await companyState(tx, c, now));
     companies.set(companyKey, company);
-    if (company.recent >= c.maxTouchesPerCompany) {
+    if (!c.isReply && company.recent >= c.maxTouchesPerCompany) {
       const r = await tx.query<{ enrollment_id: string | null }>(
         `UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'company_cap'
           WHERE id = $1::uuid AND status = 'scheduled' RETURNING enrollment_id`,
@@ -549,7 +571,9 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
       report.canceledCompanyCap += note(r.rows);
       continue;
     }
-    const gapUntil = companyGapSlot(now, company.last, c.minDaysBetweenTouches, { timeZone: c.timeZone, window: c.window, seed: c.id });
+    const gapUntil = c.isReply
+      ? null
+      : companyGapSlot(now, company.last, c.minDaysBetweenTouches, { timeZone: c.timeZone, window: c.window, seed: c.id });
     if (gapUntil) {
       await moveScheduled(tx, c, gapUntil);
       report.paced.push({ touchId: c.id, until: gapUntil, reason: 'company_gap' });

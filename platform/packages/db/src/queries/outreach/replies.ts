@@ -226,15 +226,17 @@ export async function recordInbound(tx: WorkerSql, thread: OpenThread, msg: Inbo
     await tx.query<{ id: string }>(
       `INSERT INTO outbound_message
          (workspace_id, channel_account_id, enrollment_id, touch_id, contact_id, deal_id, direction, channel, thread_ref,
-          provider_message_id, message_id_rfc, in_reply_to, from_address, subject, body, occurred_at)
+          provider_message_id, message_id_rfc, in_reply_to, from_address, subject, body, occurred_at, automatic)
        VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid, 'inbound', $7, $8, $9, $10, $11, $12, $13, $14,
-               $15::timestamptz)
+               $15::timestamptz, $16::boolean)
        ON CONFLICT (workspace_id, channel, provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING
        RETURNING id`,
       [
         thread.workspaceId, thread.account.id, thread.enrollmentId, thread.touchId, thread.contactId, thread.dealId,
         thread.channel, thread.threadRef, msg.providerMessageId, msg.messageIdRfc ?? null, msg.inReplyTo ?? null,
         msg.fromAddress ?? null, msg.subject ?? null, msg.body, msg.occurredAt.toISOString(),
+        // Lo que dijeron las cabeceras (0065): el clasificador lo recibe; sin dato, null.
+        typeof msg.automatic === 'boolean' ? msg.automatic : null,
       ],
     )
   ).rows[0];

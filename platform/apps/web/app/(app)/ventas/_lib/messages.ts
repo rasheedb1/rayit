@@ -42,12 +42,14 @@ export const MESSAGES = {
     empresas: "Empresas",
     canales: "Canales",
     cadencias: "Cadencias",
+    aprobaciones: "Aprobaciones",
+    bandeja: "Bandeja",
     perfil: "Perfil comercial",
   },
 
   kpis: {
     pending: "Señales por revisar",
-    pendingNoteZero: "Bandeja al día",
+    pendingNoteZero: "Radar al día",
     open: "Negocios abiertos",
     weighted: "Cierre ponderado",
     weightedNote: "Monto × probabilidad de la etapa",
@@ -112,7 +114,7 @@ export const MESSAGES = {
     discardHelp:
       "Queda anotado y esa señal no vuelve a entrar. El motivo es lo que afina el radar para la próxima.",
     discardReason: "Motivo",
-    discarded: "Señal descartada. No volverá a la bandeja.",
+    discarded: "Señal descartada. No volverá al radar.",
     fit: "Encaje",
     budget: "Presupuesto estimado",
     evidence: "Ver la evidencia",
@@ -141,7 +143,7 @@ export const MESSAGES = {
 
     form: {
       title: "Anotar una marca",
-      help: "Lo que viste tú: una pauta, un lanzamiento, una marca que te escribió. Entra a la bandeja como cualquier señal.",
+      help: "Lo que viste tú: una pauta, un lanzamiento, una marca que te escribió. Entra al radar como cualquier señal.",
       company: "Marca",
       companyHelp: "Su nombre, como la conoces.",
       domain: "Web o dominio",
@@ -158,9 +160,9 @@ export const MESSAGES = {
       industry: "Sector",
       note: "Nota",
       submit: "Anotar",
-      created: "Anotada. Ya está en la bandeja.",
+      created: "Anotada. Ya está en el radar.",
       duplicate: "Esa misma señal ya estaba en el radar, así que no se repite.",
-      duplicatePending: "Esa marca ya está en tu bandeja: revísala ahí.",
+      duplicatePending: "Esa marca ya está en tu radar: revísala ahí.",
       duplicateDiscarded: "Esa marca la descartaste antes, así que no vuelve a entrar.",
       /** La misma señal ya se aceptó: la marca es un negocio. Una señal con otro titular sí entra. */
       duplicateAccepted: "Esa señal ya la aceptaste y la marca es un negocio tuyo. Si viste algo nuevo, anótalo con otro titular.",
@@ -589,8 +591,8 @@ export const MESSAGES = {
     LostReasonRequired: "Di por qué lo pierdes antes de pasarlo a «Perdido».",
     AmountRequired: "Di por cuánto lo ganaste: un negocio ganado sin monto no suma en «Ganado este trimestre».",
     DuplicateCompanyName: (p: Readonly<Record<string, string>>) => `Ya tienes una empresa llamada «${p.name ?? ""}».`,
-    SignalAlreadyReviewed: "Esa señal ya la revisaste. Recarga la bandeja para ver cómo quedó.",
-    SignalNotFound: "Esa señal ya no está en tu bandeja.",
+    SignalAlreadyReviewed: "Esa señal ya la revisaste. Recarga el radar para ver cómo quedó.",
+    SignalNotFound: "Esa señal ya no está en tu radar.",
     SignalWithoutCompany: "La señal no dice de qué marca es. Edítala antes de aceptarla.",
   } satisfies Record<VentasErrorCode, string | ((p: Readonly<Record<string, string>>) => string)>,
 

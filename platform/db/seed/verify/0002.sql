@@ -25,7 +25,8 @@ SELECT 'a_conteos' AS check_id,
        (SELECT count(*) FROM account_metric_snapshot)                    AS dias_cuenta,
        (SELECT count(*) FROM audience_breakdown)                         AS audiencia,
        (SELECT count(*) FROM creator_baseline)                           AS lineas_base,
-       (SELECT count(*) FROM company_link)                               AS empresas,
+       -- Las de ESTE seed: el 0008 (VEN-14) añade cinco marcas suyas para la demo de bandejas.
+       (SELECT count(*) FROM company_link WHERE company_id::text LIKE '00000002-%') AS empresas,
        (SELECT count(*) FROM contact WHERE opted_out)                    AS bajas,
        (SELECT count(*) FROM signal)                                     AS senales,
        (SELECT count(*) FROM deal)                                       AS deals,
@@ -35,7 +36,7 @@ SELECT 'a_conteos' AS check_id,
          AND (SELECT count(*) FROM account_metric_snapshot) = 360
          AND (SELECT count(*) FROM audience_breakdown) = 60
          AND (SELECT count(*) FROM creator_baseline) = 16
-         AND (SELECT count(*) FROM company_link) = 8
+         AND (SELECT count(*) FROM company_link WHERE company_id::text LIKE '00000002-%') = 8
          AND (SELECT count(*) FROM contact WHERE opted_out) = 1
          AND (SELECT count(*) FROM signal) = 13
          AND (SELECT count(*) FROM deal) = 15
