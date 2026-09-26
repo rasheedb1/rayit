@@ -1963,14 +1963,29 @@ del workspace (`brief/limites.ts`): ningún número va escrito a mano en
 workspace si el brief no tiene mínimo) y una inválida es
 `InvalidCurrency`, no un error de presupuesto.
 
-**Corrección a los comentarios de 0070 (ronda 4).** Los comentarios de
-la migración 0070 (§5 y la cabecera de VEN-7) dicen que el brief es
-«una regla del ESPACIO entero». Desde la ronda 3 es el brief de UN
-creador (uno activo por creador): lo que excluye se oculta del radar de
-todo el equipo solo cuando lo excluyen todos los briefs activos, y frena
-las cadencias de los negocios de su creador. 0070 no se reescribe
-(una migración escrita no se toca); lo que cuenta es esto, `lib/auth/reglas.ts` y el JSDoc de
-`saveBrief`, que ya lo dicen así.
+**El brief es de un creador (ronda 3).** Uno activo por creador: lo
+que excluye se oculta del radar de todo el equipo solo cuando lo
+excluyen todos los briefs activos, y frena las cadencias de los negocios
+de su creador. 0070 lo dice así en sus comentarios (corregidos en el
+pulido, antes de aplicarse), igual que `lib/auth/reglas.ts` y el JSDoc
+de `saveBrief`.
+
+**Pulido: una marca excluida se reconoce por su identidad, no por su
+id.** «No aceptar «Bebidas Luna»» crea una ficha propia sin dominio, y
+las señales automáticas casi siempre traen dominio o una ficha del
+catálogo. El veredicto (`briefVerdictSql`, `briefCompanyVerdictSql`)
+compara la empresa de la señal con las excluidas por id, por dominio o
+por nombre (`brand_key`) cuando a una de las dos le falta el dominio, y
+la búsqueda por nombre dentro del CRM corre también cuando la señal trae
+un dominio que nadie tiene (contra fichas sin dominio). `resolveCompany`
+sigue la misma regla, así que aceptar esa señal no crea una marca
+duplicada fuera del brief. Dos marcas con el mismo nombre y dominios
+distintos siguen siendo dos («dos Alma de dos países»).
+
+**La conversión cuenta a quien pasó por la etapa.** Un negocio que salta
+de Contactado a Propuesta no cuenta en «En conversación», así que una
+columna puede tener más negocios que la anterior; la pantalla lo dice
+bajo el título de la Lista y en el `title` de cada fila.
 
 **La conversión es la de un periodo (VEN-8 r4).** `getStageConversion`
 cuenta por defecto los negocios que ENTRARON por primera vez en la etapa
@@ -2000,22 +2015,8 @@ importación de Resumen). La copia de `Casilla` en
 `finanzas/gastos/form.tsx` no existe en `rasheed/integracion`: cuando
 llegue, puede usar el `Checkbox` del kit.
 
-**Para el kit (propuesta a Nicolás, ronda 3; hecha en la ronda 4).** Dos piezas de Ventas ya tienen
-una segunda copia o piden serlo, y el README del kit dice que a la
-segunda suben a `components/ui/`, con prueba y sección en `/kit`. Es un
-PR de Nicolás (cambia el kit); aquí queda la propuesta:
-
-- `Checkbox`: la casilla con etiqueta y ayuda. Hoy vive dos veces, en
-  `finanzas/gastos/form.tsx` y en `ventas/brief/form.tsx` (`Casilla`),
-  con la misma forma: `name?`, `label`, `help?`, `checked`,
-  `onChange(boolean)`, y el id de la ayuda en `aria-describedby`.
-- `Dialog`: el modal de `ventas/_componentes/dialogo.tsx`. Se pinta con
-  un portal en `<body>`, deja `inert` a sus hermanos y bloquea el scroll
-  de `<body>` mientras está abierto; foco adentro al abrir y de vuelta
-  al cerrar, Tab que da la vuelta, Escape y clic en el fondo cierran.
-  Donde baste una confirmación en línea, `ConfirmInline` del kit sigue
-  siendo la opción; el diálogo es para cuando la pregunta pide un campo
-  (el motivo de pérdida).
+**Para el kit (ronda 3):** hecha en la ronda 4; `Checkbox`, `Dialog` y
+`TruncatedPill` viven en `components/ui/` (ver arriba).
 
 **Ronda 5: nada se pierde en silencio en «Marcas que no aceptas».**
 
