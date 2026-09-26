@@ -62,17 +62,20 @@ function pasosVista(d: SequenceDetail, f: Formatter, angulos: ReadonlyMap<string
  * lo que decidió y lo que la política no dejará cumplir. Luego, los
  * pasos, editables en el sitio; al lado, proponer otra vez y enrolar.
  * Con ?negocio=<id> (el enlace «Enrolar en una cadencia» de un referido
- * en la bandeja, VEN-14), «Enrolar» abre con ese negocio elegido.
+ * en la bandeja, VEN-14), «Enrolar» abre con ese negocio elegido; con
+ * &contacto=<id>, además con esa persona (la referida) marcada.
  */
 export default async function CadenciaPage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<{ negocio?: string }>;
+  searchParams?: Promise<{ negocio?: string; contacto?: string }>;
 }) {
   const { id } = await params;
-  const negocioPedido = (await searchParams)?.negocio ?? null;
+  const pedido = await searchParams;
+  const negocioPedido = pedido?.negocio ?? null;
+  const contactoPedido = pedido?.contacto ?? null;
   const datos = await withWorkspace(async (tx) => {
     const d = await getSequenceDetail(tx, id);
     if (!d) return null;
@@ -190,7 +193,7 @@ export default async function CadenciaPage({
             />
           )}
           {!archivada && (
-            <Enrolar sequenceId={d.id} negocios={negociosVista} activa={d.status === "active"} inicial={negocioPedido ?? d.proposal?.dealId ?? null} />
+            <Enrolar sequenceId={d.id} negocios={negociosVista} activa={d.status === "active"} inicial={negocioPedido ?? d.proposal?.dealId ?? null} contactoInicial={contactoPedido} />
           )}
         </aside>
       </div>

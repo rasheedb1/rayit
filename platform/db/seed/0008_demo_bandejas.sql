@@ -159,7 +159,7 @@ VALUES
    '00000005-0000-4000-8000-0000005e0001', 2, '00000008-0000-4000-8000-0000000e0001',
    '00000005-0000-4000-8000-0000005e0102', 'email', 'Granos para el desayuno de mi audiencia',
    'Hola, Paula: quienes me siguen desayunan en casa entre semana y buscan recetas con granos enteros, '
-   'justo lo que vende Molino Andino. El 40 % de mis videos de desayuno terminan en una compra. '
+   'justo lo que vende Molino Andino. El 23 % de mis videos de desayuno terminan en una compra. '
    '¿Te muestro cómo quedaría una receta con su avena?',
    'held', NULL, 'quality_risk:unsourced_figure', NULL, now() - interval '3 hours', now() - interval '1 day'),
   ('00000008-0000-4000-8000-000000070003', '00000002-0000-4000-8000-000000000001',
@@ -201,7 +201,7 @@ VALUES
   ('00000008-0000-4000-8000-000000070002', '00000002-0000-4000-8000-000000000001', 'reviewed',
    'Granos para el desayuno de mi audiencia',
    'Hola, Paula: quienes me siguen desayunan en casa entre semana y buscan recetas con granos enteros, '
-   'justo lo que vende Molino Andino. El 40 % de mis videos de desayuno terminan en una compra. '
+   'justo lo que vende Molino Andino. El 23 % de mis videos de desayuno terminan en una compra. '
    '¿Te muestro cómo quedaría una receta con su avena?',
    'claude-sonnet-5', 2, 'held', now() - interval '3 hours', now() - interval '3 hours', 1, 2,
    'Suena a persona y abre con ellos, pero cita una cifra de compras que no sale de tu perfil.', 7.60),
@@ -224,16 +224,16 @@ INSERT INTO outbound_review
    decision, model, input_tokens, output_tokens, cost, created_at)
 VALUES
   ('00000002-0000-4000-8000-000000000001', '00000008-0000-4000-8000-000000070002', 1, 1,
-   'Granos para el desayuno', 'Hola, Paula: sinergia entre mi audiencia y Molino Andino. El 40 % de mis videos venden.',
-   '{"preflight": {"issues": [{"code": "banned_word", "detail": "sinergia"}, {"code": "unsourced_figure", "detail": "40 %"}]}}'::jsonb,
+   'Granos para el desayuno', 'Hola, Paula: sinergia entre mi audiencia y Molino Andino. El 23 % de mis videos venden.',
+   '{"preflight": {"issues": [{"code": "banned_word", "detail": "sinergia"}, {"code": "unsourced_figure", "detail": "23 %"}]}}'::jsonb,
    '{"relevance": 6.5, "quality": 5.5, "structure": 6.0, "voice": 6.0}'::jsonb, 6.00, 'more_specific', '{unsourced_figure}',
    'regenerate', 'claude-sonnet-5', 1850, 240, 0.009150, now() - interval '3 hours 1 minute'),
   ('00000002-0000-4000-8000-000000000001', '00000008-0000-4000-8000-000000070002', 1, 2,
    'Granos para el desayuno de mi audiencia',
    'Hola, Paula: quienes me siguen desayunan en casa entre semana y buscan recetas con granos enteros, '
-   'justo lo que vende Molino Andino. El 40 % de mis videos de desayuno terminan en una compra. '
+   'justo lo que vende Molino Andino. El 23 % de mis videos de desayuno terminan en una compra. '
    '¿Te muestro cómo quedaría una receta con su avena?',
-   '{"preflight": {"issues": [{"code": "unsourced_figure", "detail": "40 %"}]}}'::jsonb,
+   '{"preflight": {"issues": [{"code": "unsourced_figure", "detail": "23 %"}]}}'::jsonb,
    '{"relevance": 8.0, "quality": 7.5, "structure": 7.5, "voice": 7.5}'::jsonb, 7.60, NULL, '{unsourced_figure}',
    'hold', 'claude-sonnet-5', 1920, 260, 0.009660, now() - interval '3 hours'),
   ('00000002-0000-4000-8000-000000000001', '00000008-0000-4000-8000-000000070005', 1, 1,

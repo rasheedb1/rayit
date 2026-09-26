@@ -543,6 +543,79 @@ test('corregir un «fuera de la oficina» que no lo era: la cadencia no vuelve s
   );
 });
 
+test('«me interesa» de una marca sin negocio abierto (cadencia en frío) abre uno en «En conversación» con «Responder hoy»', async () => {
+  const w = await workspace(29, { contacts: 1 });
+  const { contact } = await conversacion(w, F.me_interesa!.body);
+  assert.equal(await scalar<number>('SELECT count(*)::int AS v FROM deal WHERE company_id = $1', [w.company]), 0, 'sin negocio');
+  const rep = await runIntent(motor, { classifier: fakeClassifier, now: () => bogota('2026-09-23', '15:06'), workspaceId: w.id });
+  assert.deepEqual(rep.classified.map((c) => [c.intent, c.dealMoved]), [['interested', true]]);
+  const d = (await db.raw.query<{
+    id: string; stage_id: string; next_action: string; due: string; owner: string | null; currency: string; history: number; name: string;
+  }>(
+    `SELECT id, stage_id, next_action, to_char(next_action_due AT TIME ZONE 'America/Bogota', 'YYYY-MM-DD HH24:MI') AS due,
+            owner_user_id AS owner, currency, name,
+            (SELECT count(*)::int FROM deal_stage_history h WHERE h.deal_id = deal.id AND h.to_stage_id = 'conversacion') AS history
+       FROM deal WHERE company_id = $1`, [w.company],
+  )).rows;
+  assert.equal(d.length, 1, 'un negocio, uno solo');
+  assert.deepEqual([d[0]!.stage_id, d[0]!.next_action, d[0]!.due, d[0]!.history], ['conversacion', 'Responder hoy', '2026-09-23 23:59', 1]);
+  assert.equal(d[0]!.name, 'Conversación con Marca 29');
+  assert.equal(d[0]!.currency.trim(), 'COP', 'en la moneda del espacio');
+  assert.equal(
+    await scalar<string | null>('SELECT enrolled_by AS v FROM outbound_enrollment WHERE contact_id = $1', [contact]), d[0]!.owner,
+    'el dueño es quien enroló',
+  );
+  assert.equal(await scalar<string>('SELECT deal_id AS v FROM outbound_enrollment WHERE contact_id = $1', [contact]), d[0]!.id, 'la cadencia queda enlazada');
+  assert.equal(
+    await scalar<string>(`SELECT body_es AS v FROM notification WHERE workspace_id = $1 AND entity_type = 'outbound_message_intent'`, [w.id]),
+    'Abrimos un negocio con Marca 29 en «En conversación» y la siguiente acción es responder hoy. Tienes la conversación en la bandeja.',
+  );
+  // La bandeja lo enseña con el negocio.
+  const conv = (await comoLaWeb(w.id, (tx) => loadInboxConversation(tx, contact, 'email')))!;
+  assert.equal(conv.deal?.stageId, 'conversacion');
+  assert.equal(conv.deal?.nextAction, 'Responder hoy');
+});
+
+test('«ahora no» sin cadencia que enfriar no promete que se enfría: dice cuándo volver a escribir', async () => {
+  const w = await workspace(30, { contacts: 1 });
+  await pitchPendiente(w, w.contacts[0]!);
+  await entrante(w, F.ahora_no!.body, 1);
+  const r = await runIntent(motor, { classifier: fakeClassifier, now: () => new Date(), workspaceId: w.id });
+  assert.deepEqual(r.classified.map((c) => c.intent), ['not_now']);
+  const aviso = await scalar<string>(
+    `SELECT body_es AS v FROM notification WHERE workspace_id = $1 AND entity_type = 'outbound_message_intent'`, [w.id],
+  );
+  assert.match(aviso, /^Dice que ahora no\. Si quieres, escríbele de nuevo después del \d+ de \p{L}+ de \d{4}\.$/u);
+  assert.doesNotMatch(aviso, /se enfría|bandeja de aprobación/);
+});
+
+test('el retenido del seed 0008 con una cifra sin origen no se aprueba tal cual, ni tocando una coma; con una cifra del perfil, sí', async () => {
+  const { createEmbeddedDb } = await import('@mc/db/embedded');
+  const demo = await createEmbeddedDb({ snapshot: true });
+  try {
+    const WS = '00000002-0000-4000-8000-000000000001';
+    const TOQUE = '00000008-0000-4000-8000-000000070002';
+    const aprobar = (body?: string) =>
+      demo.withWorkspace(WS, (tx) => approveQueuedTouch(tx, { touchId: TOQUE, ...(body ? { body } : {}), userId: null, now: new Date() }));
+    const cola = await demo.withWorkspace(WS, (tx) => listApprovalQueue(tx));
+    const item = cola.items.find((x) => x.touchId === TOQUE)!;
+    assert.equal(item.heldReason, 'quality_risk:unsourced_figure');
+    assert.equal(item.contactSource, 'public_website', 'con la procedencia del contacto a la vista');
+    assert.deepEqual(await aprobar(), { ok: false, code: 'unsourced_figure', detail: '23 %' });
+    // Tocar una coma no respalda la cifra que la IA dejó sin origen.
+    assert.deepEqual(await aprobar(item.body.replace('entre semana y', 'entre semana, y')), { ok: false, code: 'unsourced_figure', detail: '23 %' });
+    // Con una cifra del perfil (el 37 % de su audiencia de TikTok tiene de 25 a 34 años), sale y queda citada.
+    const conCifra = item.body.replace(
+      'El 23 % de mis videos de desayuno terminan en una compra.', 'El 37 % de quienes me siguen en TikTok tiene entre 25 y 34 años.',
+    );
+    assert.equal((await aprobar(conCifra)).ok, true);
+    const claims = (await demo.queryAsSuperuser<{ claims: Array<{ id: string }> }>(`SELECT claims FROM outbound_touch WHERE id = $1`, [TOQUE])).rows[0]!;
+    assert.deepEqual(claims.claims.map((c) => c.id), ['audience:tiktok:age:25-34']);
+  } finally {
+    await demo.close();
+  }
+});
+
 test('una respuesta de la bandeja cancelada no sale', async () => {
   const w = await workspace(27, { contacts: 1 });
   const { contact, fake } = await conversacion(w, F.me_interesa!.body);

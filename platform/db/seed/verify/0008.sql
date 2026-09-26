@@ -85,3 +85,25 @@ SELECT 'f_filas_propias' AS check_id,
      + (SELECT count(*) FROM outbound_enrollment WHERE id::text LIKE '00000008-%' AND contact_id::text NOT LIKE '00000008-%')
      + (SELECT count(*) FROM outbound_message WHERE id::text LIKE '00000008-%' AND contact_id::text NOT LIKE '00000008-%') = 0
          AND (SELECT count(*) FROM company_link WHERE company_id::text LIKE '00000008-%') = 5 AS ok;
+
+-- (g) El retenido de Molino Andino enseña la regla de las cifras (ronda 4):
+--     su «23 %» no lo respalda NINGUNA proporción de la audiencia de Laura
+--     (el «40 %» de antes casaba por valor con la de 25 a 34 años), la IA
+--     lo dejó sin marca y el texto del toque es el suyo. Así «Aprobar» tal
+--     cual devuelve unsourced_figure y abre el editor. La llamada de verdad
+--     a releaseHeldTouch (con todas las cifras del perfil, no solo la
+--     audiencia) la hace apps/worker/test/outreach-bandejas.test.ts.
+SELECT 'g_cifra_sin_origen' AS check_id,
+       position('23 %' IN g.body_marked) > 0 AS cita_la_cifra,
+       position('[claim:' IN g.body_marked) = 0 AS sin_marca,
+       (SELECT count(*) FROM audience_breakdown a
+         WHERE a.workspace_id = t.workspace_id AND a.share BETWEEN 0.23 AND 0.23 / 0.95) AS audiencias_que_casan,
+       position('23 %' IN g.body_marked) > 0
+         AND position('[claim:' IN g.body_marked) = 0
+         AND t.body = g.body_marked
+         AND t.held_reason = 'quality_risk:unsourced_figure'
+         AND NOT EXISTS (SELECT 1 FROM audience_breakdown a
+                          WHERE a.workspace_id = t.workspace_id AND a.share BETWEEN 0.23 AND 0.23 / 0.95) AS ok
+  FROM outbound_touch t
+  JOIN outbound_generation g ON g.touch_id = t.id
+ WHERE t.id = '00000008-0000-4000-8000-000000070002';

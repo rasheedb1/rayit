@@ -14,7 +14,7 @@ type FigureKind = FigureHit['kind'];
 import {
   bodyFingerprint, idempotencyGate, jaccard, shingles, similarityGate, similarityThreshold, subjectGate, textSimilarity,
 } from '../src/outreach/gates.ts';
-import { checkFigures, markFiguresByValue, preflight, questionCloses, shoutingIn } from '../src/outreach/preflight.ts';
+import { checkFigures, markFiguresByValue, preflight, questionCloses, shoutingIn, unsourcedFigures } from '../src/outreach/preflight.ts';
 import { formatClaimValue, formatShare } from '../src/outreach/claim-labels.ts';
 import {
   PERSON_VARIABLES, renderTemplate, TEMPLATE_VARIABLES, templateValuesFrom, templateVariablesIn, templatizeKnownValues,
@@ -188,6 +188,31 @@ test('una cifra que coincide con una del perfil recibe su marca; la que no coinc
   // Lo que ya tenía marca no se marca dos veces.
   const ya = 'Tengo 115.446 views [claim:baseline:tiktok:median_views].';
   assert.equal(markFiguresByValue(ya, CLAIMS), ya);
+});
+
+test('por valor, la unidad tiene que encajar, y lo que la IA dejó sin origen no se respalda tocando una coma', () => {
+  const conMultiplo: SalesClaim[] = [
+    ...CLAIMS,
+    { id: 'post:d02:views_vs_median', source: 'post_score', label: 'Views frente a la mediana', value: 1.24, unit: 'multiple', display: '1,2×', ref: { table: 'post_score', id: 'd02' } },
+    { id: 'campaign:c1:brand_followers', source: 'campaign_result', label: 'Seguidores nuevos de la marca', value: 1240, unit: 'count', display: '1.240', ref: { table: 'campaign_report', id: 'c1' } },
+  ];
+  // «1.240» se lee 1240 o 1,24: un número suelto lo respalda el conteo, nunca el múltiplo de 1,24×.
+  assert.equal(
+    markFiguresByValue('Gané 1.240 seguidores.', conMultiplo.filter((c) => c.unit === 'multiple')),
+    'Gané 1.240 seguidores.',
+  );
+  assert.equal(markFiguresByValue('Gané 1.240 seguidores.', conMultiplo), 'Gané 1.240 [claim:campaign:c1:brand_followers] seguidores.');
+  // Un 37 % coincide con la audiencia de 25 a 34 años, pero si la IA lo dejó sin marca, sigue sin origen.
+  const ia = 'El 37 % de mis videos termina en una compra.';
+  assert.deepEqual(unsourcedFigures(ia, CLAIMS), ['37 %']);
+  const editado = 'El 37% de mis videos termina en una compra, de verdad.';
+  assert.equal(markFiguresByValue(editado, CLAIMS, { skip: unsourcedFigures(ia, CLAIMS) }), editado);
+  assert.deepEqual(checkFigures(editado, CLAIMS).map((i) => i.code), ['unsourced_figure']);
+  // Una cifra nueva que escribió la persona sí se respalda por valor.
+  assert.equal(
+    markFiguresByValue('Mi mediana es 115.446 views.', CLAIMS, { skip: ['37 %'] }),
+    'Mi mediana es 115.446 [claim:baseline:tiktok:median_views] views.',
+  );
 });
 
 test('una cifra sin marca, con marca desconocida o con otro valor no pasa', () => {

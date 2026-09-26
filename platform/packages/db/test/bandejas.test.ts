@@ -330,3 +330,43 @@ test('el estado del clasificador sale de la última corrida de outbound.intent',
                  VALUES ('outbound.intent', 'ok', now() + interval '1 second', now(), '{"notConfigured": false, "classifier": "model"}'::jsonb)`);
   assert.equal(await t.db.withWorkspace(WS_B, (tx) => outreachClassifierStatus(tx)), 'model');
 });
+
+test('«Editar» una respuesta en cola la devuelve al campo sin dejarla además en «no salió»', async () => {
+  const now = new Date();
+  const touchId = id('94');
+  const r = await t.db.withWorkspace(WS_A, (tx) =>
+    replyInInboxThread(tx, { touchId, contactId: CONTACT, channel: 'email', body: 'Para corregir', userId: null, now }),
+  );
+  assert.equal(r.ok, true);
+  assert.deepEqual(
+    await t.db.withWorkspace(WS_A, (tx) => cancelInboxReply(tx, touchId, { dismissAt: now })), { ok: true, body: 'Para corregir' },
+  );
+  const conv = (await t.db.withWorkspace(WS_A, (tx) => loadInboxConversation(tx, CONTACT, 'email')))!;
+  assert.ok(!conv.pending.some((p) => p.touchId === touchId), 'no sale');
+  assert.ok(!conv.notSent.some((p) => p.touchId === touchId), 'y no se ve dos veces: el texto está en «Tu respuesta»');
+  const fila = (await t.db.asWorker((tx) =>
+    tx.query<{ status: string; blocked_reason: string }>(`SELECT status, blocked_reason FROM outbound_touch WHERE id = $1`, [touchId]),
+  )).rows[0]!;
+  assert.deepEqual([fila.status, fila.blocked_reason], ['canceled', 'canceled_by_person']);
+});
+
+test('como mc_app: corregir a «interesada» la respuesta de una marca sin negocio abre uno en «En conversación», en su espacio', async () => {
+  const now = new Date();
+  const r = await t.db.withWorkspace(WS_B, (tx) => reclassifyInboxMessage(tx, { messageId: INBOUND_B, intent: 'interested', now }));
+  assert.equal(r.ok && r.dealMoved, true);
+  const deals = (await t.db.asWorker((tx) =>
+    tx.query<{ workspace_id: string; stage_id: string; next_action: string; history: number }>(
+      `SELECT workspace_id, stage_id, next_action,
+              (SELECT count(*)::int FROM deal_stage_history h WHERE h.deal_id = d.id) AS history
+         FROM deal d WHERE company_id = $1`,
+      [CO_B],
+    ),
+  )).rows;
+  assert.deepEqual(deals.map((d) => [d.workspace_id, d.stage_id, d.next_action, d.history]), [[WS_B, 'conversacion', 'Responder hoy', 1]]);
+  const conv = (await t.db.withWorkspace(WS_B, (tx) => loadInboxConversation(tx, CONTACT_B, 'email')))!;
+  assert.equal(conv.deal?.stageId, 'conversacion');
+  // Una segunda corrección no abre otro: ya hay uno abierto con la marca.
+  await t.db.withWorkspace(WS_B, (tx) => reclassifyInboxMessage(tx, { messageId: INBOUND_B, intent: 'interested', now }));
+  const n = (await t.db.asWorker((tx) => tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM deal WHERE company_id = $1`, [CO_B]))).rows[0]!.n;
+  assert.equal(n, 1);
+});

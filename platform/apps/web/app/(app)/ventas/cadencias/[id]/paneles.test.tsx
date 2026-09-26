@@ -97,6 +97,23 @@ describe("enrolar", () => {
     expect(screen.getByRole("button", { name: MESSAGES.enrolar.boton })).toBeEnabled();
     expect(screen.queryByText(MESSAGES.enrolar.nadieDisponible)).not.toBeInTheDocument();
   });
+
+  it("desde un referido de la bandeja (?contacto=), la persona nueva llega marcada y las demás no", () => {
+    render(
+      <Enrolar
+        sequenceId={SEQ}
+        activa
+        inicial="d1"
+        contactoInicial="c2"
+        negocios={negocio([
+          { id: "c1", nombre: "Laura", detalle: "Correo", disponible: true, dentro: false },
+          { id: "c2", nombre: "Mariana", detalle: "Correo", disponible: true, dentro: false },
+        ])}
+      />,
+    );
+    expect(screen.getByRole("checkbox", { name: /Mariana/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Laura/ })).not.toBeChecked();
+  });
 });
 
 describe("por qué esta propuesta", () => {

@@ -255,8 +255,14 @@ export interface IntentEffects {
   applied: boolean;
   intent: MessageIntent;
   dealId: string | null;
-  /** El negocio pasó a «En conversación». */
+  /** El negocio pasó a «En conversación» (también uno que se abrió así). */
   dealMoved: boolean;
+  /**
+   * Un «me interesa» de una marca sin negocio abierto (la prospección en
+   * frío, enrolada sin negocio) abrió uno en «En conversación»: sin él,
+   * el interesado no llegaba nunca al pipeline.
+   */
+  dealCreated: boolean;
   /** La cadencia del hilo quedó en enfriamiento o en pausa hasta esta fecha. */
   resumeAt: Date | null;
   /** Toques devueltos a la cola por un «fuera de la oficina» que había detenido la cadencia. */
@@ -271,6 +277,7 @@ export interface IntentEffects {
 /** Lo que rodea al mensaje: su negocio, su marca, quién recibe el aviso. */
 interface Surroundings {
   deal_id: string | null;
+  company_id: string | null;
   company: string | null;
   who: string | null;
   recipient: string | null;
@@ -288,7 +295,7 @@ async function surroundings(tx: SqlExecutor, m: UnclassifiedMessage): Promise<Su
                          WHERE d.workspace_id = m.workspace_id AND d.company_id = c.company_id
                            AND d.won_at IS NULL AND d.lost_at IS NULL
                          ORDER BY d.updated_at DESC, d.id LIMIT 1)) AS deal_id,
-              co.name AS company, coalesce(c.full_name, co.name) AS who, e.status AS enrollment_status,
+              c.company_id, co.name AS company, coalesce(c.full_name, co.name) AS who, e.status AS enrollment_status,
               CASE WHEN e.enrolled_by IS NOT NULL AND membership_is_team(m.workspace_id, e.enrolled_by) THEN e.enrolled_by END AS recipient
          FROM outbound_message m
          LEFT JOIN outbound_enrollment e ON e.id = m.enrollment_id
@@ -298,7 +305,40 @@ async function surroundings(tx: SqlExecutor, m: UnclassifiedMessage): Promise<Su
         WHERE m.id = $1::uuid`,
       [m.id],
     )
-  ).rows[0] ?? { deal_id: null, company: null, who: null, recipient: null, enrollment_status: null };
+  ).rows[0] ?? { deal_id: null, company_id: null, company: null, who: null, recipient: null, enrollment_status: null };
+}
+
+/**
+ * Abre el negocio de un «me interesa» que llegó sin negocio abierto con la
+ * marca: nace en «En conversación», en la moneda del workspace, con
+ * «Responder hoy» y su vencimiento, su primera fila de historial y el
+ * dueño que enroló (si sigue en el equipo). La cadencia y el mensaje del
+ * hilo quedan enlazados a él: la siguiente respuesta ya lo encuentra.
+ */
+async function openDealFromReply(
+  tx: SqlExecutor, m: UnclassifiedMessage, s: Surroundings, name: string, nextAction: string, due: Date,
+): Promise<string | null> {
+  if (!s.company_id) return null;
+  const id = (
+    await tx.query<{ id: string }>(
+      `INSERT INTO deal (workspace_id, company_id, owner_user_id, name, stage_id, currency, next_action, next_action_due,
+                         last_contact_at)
+       SELECT w.id, $2::uuid, $3::uuid, $4, 'conversacion', w.currency, $5, $6::timestamptz, $7::timestamptz
+         FROM workspace w WHERE w.id = $1::uuid
+       RETURNING id`,
+      [m.workspaceId, s.company_id, s.recipient, name.slice(0, 120), nextAction, due.toISOString(), m.occurredAt.toISOString()],
+    )
+  ).rows[0]?.id;
+  if (!id) return null;
+  await tx.query(
+    `INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_by) VALUES ($1::uuid, NULL, 'conversacion', current_user_id())`,
+    [id],
+  );
+  if (m.enrollmentId) {
+    await tx.query(`UPDATE outbound_enrollment SET deal_id = $2::uuid WHERE id = $1::uuid AND deal_id IS NULL`, [m.enrollmentId, id]);
+  }
+  await tx.query(`UPDATE outbound_message SET deal_id = $2::uuid WHERE id = $1::uuid AND deal_id IS NULL`, [m.id, id]);
+  return id;
 }
 
 /** Un aviso por mensaje y efecto, que lleva a su hilo en la bandeja. Idempotente. */
@@ -335,8 +375,8 @@ function longDate(at: Date, locale: string, timeZone: string): string {
 
 function emptyEffects(d: IntentDecision): IntentEffects {
   return {
-    applied: false, intent: d.intent, dealId: null, dealMoved: false, resumeAt: null, restored: [], canceled: [], optOut: false,
-    optOutReview: false, notified: false,
+    applied: false, intent: d.intent, dealId: null, dealMoved: false, dealCreated: false, resumeAt: null, restored: [], canceled: [],
+    optOut: false, optOutReview: false, notified: false,
   };
 }
 
@@ -415,8 +455,22 @@ async function intentEffects(
             WHERE id = $1::uuid AND won_at IS NULL AND lost_at IS NULL`,
           [s.deal_id, t.replyToday, endOfLocalDay(now, m.timeZone).toISOString(), m.occurredAt.toISOString()],
         );
+      } else {
+        // Sin negocio abierto con la marca (el caso normal de una cadencia en frío): se abre en «En conversación».
+        const created = await openDealFromReply(
+          tx, m, s, t.dealName(s.company ?? who), t.replyToday, endOfLocalDay(now, m.timeZone),
+        );
+        if (created) {
+          s.deal_id = created;
+          out.dealId = created;
+          out.dealCreated = true;
+          out.dealMoved = true;
+        }
       }
-      out.notified = await notify({ severity: 'success', title: t.interestedTitle(who), body: t.interestedBody(s.company, out.dealMoved) });
+      out.notified = await notify({
+        severity: 'success', title: t.interestedTitle(who),
+        body: out.dealCreated ? t.interestedBodyCreated(s.company) : t.interestedBody(s.company, out.dealMoved),
+      });
       break;
     }
     case 'not_now': {
@@ -434,8 +488,12 @@ async function intentEffects(
           out.canceled = await cancelPendingForEnrollment(tx, m.enrollmentId, 'not_now');
         }
       }
-      const until = out.resumeAt ?? notNowResumeAt(m.occurredAt);
-      out.notified = await notify({ severity: 'info', title: t.notNowTitle(who), body: t.notNowBody(longDate(until, m.locale, m.timeZone)) });
+      // «Se enfría» y «vuelve a tu bandeja» solo si de verdad se enfrió una cadencia; si no (un pitch suelto, una ficha
+      // de baja), el aviso no promete nada que no pasó: solo cuándo volver a escribir.
+      const body = out.resumeAt
+        ? t.notNowBody(longDate(out.resumeAt, m.locale, m.timeZone))
+        : t.notNowBodyNoCadence(longDate(notNowResumeAt(m.occurredAt), m.locale, m.timeZone));
+      out.notified = await notify({ severity: 'info', title: t.notNowTitle(who), body });
       break;
     }
     case 'ooo': {

@@ -22,12 +22,14 @@ export interface NegocioVista {
  * puede marcar; si nadie del negocio puede entrar, «Enrolar» se apaga y
  * lo dice. Tras enrolar, cada persona que entró dice qué le queda.
  */
-export function Enrolar({ sequenceId, negocios, activa, inicial }: {
+export function Enrolar({ sequenceId, negocios, activa, inicial, contactoInicial = null }: {
   sequenceId: string;
   negocios: NegocioVista[];
   activa: boolean;
   /** El negocio de la señal, si la cadencia salió de una. */
   inicial: string | null;
+  /** La persona que llega marcada (un referido recién creado en la bandeja, VEN-14), si puede entrar. */
+  contactoInicial?: string | null;
 }) {
   const t = MESSAGES.enrolar;
   const [negocio, setNegocio] = useState(inicial && negocios.some((n) => n.id === inicial) ? inicial : "");
@@ -67,7 +69,9 @@ export function Enrolar({ sequenceId, negocios, activa, inicial }: {
                     name="contactId"
                     value={p.id}
                     disabled={!p.disponible}
-                    defaultChecked={p.disponible && elegido.personas.filter((x) => x.disponible).length === 1}
+                    defaultChecked={
+                      p.disponible && (p.id === contactoInicial || elegido.personas.filter((x) => x.disponible).length === 1)
+                    }
                     className="mt-0.5 size-4 accent-[var(--accent)]"
                   />
                   <span className="min-w-0">
