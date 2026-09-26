@@ -1114,7 +1114,7 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
                  FROM company_link l
                  JOIN company c ON c.id = l.company_id
                 WHERE s.company_id IS NULL
-                  AND nullif(s.evidence->>'domain', '') IS NULL
+                  AND (nullif(s.evidence->>'domain', '') IS NULL OR c.domain IS NULL)
                   AND c.name_key = brand_key(s.evidence->>'company_name')
                 ORDER BY (c.domain IS NULL) ASC, l.created_at ASC
                 LIMIT 1)
@@ -1270,11 +1270,15 @@ interface ResolvedCompany {
  *   - Por id: la visible (la mía o la del catálogo compartido).
  *   - Por dominio: cualquiera visible con ese dominio. El dominio es
  *     único en el catálogo, así que es la misma marca.
- *   - Por nombre, solo si no hay dominio: entre las empresas de MI CRM
- *     (company_link), comparando brand_key (sin tildes, mayúsculas ni
- *     signos: «Nutrivé» = «NUTRIVE»). Fuera de mi CRM un nombre no
- *     basta: dos «Alma» de dos países no son la misma marca, y ni
- *     siquiera se ven.
+ *   - Por nombre: entre las empresas de MI CRM (company_link),
+ *     comparando brand_key (sin tildes, mayúsculas ni signos: «Nutrivé»
+ *     = «NUTRIVE»). Fuera de mi CRM un nombre no basta: dos «Alma» de
+ *     dos países no son la misma marca, y ni siquiera se ven. Si vino un
+ *     dominio que nadie tiene, el nombre solo casa con una empresa de mi
+ *     CRM SIN dominio (la misma regla que el veredicto del brief,
+ *     signalCompanyRowsSql): la marca que se excluyó por su nombre
+ *     («No aceptar «Marca Rival»») es la de la señal que llega con
+ *     marcarival.co, y aceptarla no crea un duplicado fuera del brief.
  */
 async function resolveCompany(
   tx: WorkspaceTx,
@@ -1289,7 +1293,7 @@ async function resolveCompany(
   const domain = normalizeDomain(input.domain);
   if (domain) {
     const { rows } = await tx.query<Row>('SELECT id, name, domain::text AS domain FROM company WHERE domain = $1 LIMIT 1', [domain]);
-    return rows[0] ?? null;
+    if (rows[0]) return rows[0];
   }
   const name = input.name?.trim();
   if (!name) return null;
@@ -1297,10 +1301,10 @@ async function resolveCompany(
     `SELECT co.id, co.name, co.domain::text AS domain
        FROM company_link cl
        JOIN company co ON co.id = cl.company_id
-      WHERE co.name_key = brand_key($1)
+      WHERE co.name_key = brand_key($1) AND ($2::text IS NULL OR co.domain IS NULL)
       ORDER BY (co.domain IS NULL) ASC, cl.created_at ASC
       LIMIT 1`,
-    [name],
+    [name, domain],
   );
   return rows[0] ?? null;
 }

@@ -105,6 +105,42 @@ test('enrolar: una marca excluida por nombre tampoco entra, y con el brief en pa
   await t.admin(`UPDATE outbound_brief SET status = 'active', excluded_categories = '{alcohol}', excluded_companies = '{}' WHERE workspace_id = '${WS}'`);
 });
 
+test('enrolar: una marca excluida por su nombre (ficha propia, sin dominio) tampoco entra por la ficha del catálogo', async () => {
+  // «No aceptar «Bebidas Luna»» crea una ficha propia sin dominio; la persona es de la ficha del catálogo, con dominio.
+  const propia = randomUUID();
+  const catalogo = randomUUID();
+  const lucia = randomUUID();
+  const otraAlma = randomUUID();
+  const ana = randomUUID();
+  const slug = WS.slice(0, 8);
+  await t.admin(`
+    INSERT INTO company (id, name, owner_workspace_id) VALUES ('${propia}', 'Bebidas Luna', '${WS}');
+    INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS}', '${propia}', 'blocked');
+    INSERT INTO company (id, name, domain, owner_workspace_id) VALUES
+      ('${catalogo}', 'BEBIDAS LUNA', 'luna-${slug}.test', NULL),
+      ('${otraAlma}', 'Alma', 'alma-mx-${slug}.test', NULL);
+    INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES
+      ('${lucia}', '${catalogo}', '${WS}', 'Lucía Luna', 'lucia@luna-${slug}.test', 'user_provided'),
+      ('${ana}', '${otraAlma}', '${WS}', 'Ana Alma', 'ana@alma-mx-${slug}.test', 'user_provided');
+  `);
+  const almaExcluida = randomUUID();
+  await t.admin(`
+    INSERT INTO company (id, name, domain, owner_workspace_id) VALUES ('${almaExcluida}', 'Alma', 'alma-co-${slug}.test', '${WS}');
+    INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS}', '${almaExcluida}', 'blocked');
+    UPDATE outbound_brief SET excluded_categories = '{}', excluded_companies = '{${propia},${almaExcluida}}' WHERE workspace_id = '${WS}';
+  `);
+  try {
+    const id = await enWs((tx) => createSequenceFromTemplate(tx, 'marca-con-campana-activa'));
+    await enWs((tx) => setSequenceStatus(tx, id, 'active'));
+    const r = await enWs((tx) => enrollContacts(tx, { sequenceId: id, contactIds: [lucia, ana], now: CLOCK }));
+    assert.deepEqual(r.skipped, [{ contactId: lucia, reason: 'brief_excluded' }], 'la misma marca por su nombre');
+    // Dos «Alma» con dominios distintos son dos marcas: excluir la de Colombia no frena a la de México.
+    assert.deepEqual(r.enrolled.map((e) => e.contactId), [ana]);
+  } finally {
+    await t.admin(`UPDATE outbound_brief SET excluded_categories = '{alcohol}', excluded_companies = '{}' WHERE workspace_id = '${WS}'`);
+  }
+});
+
 test('el despachador cancela lo que ya estaba en la cola de una marca que el brief no acepta', async () => {
   // Los toques de las pruebas de arriba no cuentan: se cancelan para que el reclamo solo vea estos dos.
   await t.admin(`UPDATE outbound_touch SET status = 'canceled', blocked_reason = 'prueba' WHERE workspace_id = '${WS}'`);
