@@ -32,7 +32,7 @@ import { PanelActividad } from "./panel";
 import { ReintentarPorTipo } from "./reintentar";
 import { FronteraWidget } from "./_componentes/frontera-widget";
 import { UsoPorCanalVista, usoVista } from "./_componentes/uso-por-canal";
-import { MetricasCadenciaVista, SERIES_EMBUDO } from "./_componentes/metricas-cadencia";
+import { MetricasCadenciaVista } from "./_componentes/metricas-cadencia";
 import { siguienteCifra } from "./_componentes/cifra-flujo";
 import { columnaSalud } from "./_componentes/salud-cadencia";
 import { MESSAGES as MENSAJES } from "./messages";
@@ -285,6 +285,22 @@ describe("el uso por canal", () => {
     expect((meters[1]!.getAttribute("style") ?? "").replace(/\s/g, "")).toContain("--usado:1");
   });
 
+  it("los 14 días llevan sus puntas a la vista, y un día con poco uso no se confunde con uno en cero", () => {
+    const historia = [
+      { day: "2026-09-12", used: 0, limit: 20, share: 0, level: "ok" as const },
+      { day: "2026-09-13", used: 1, limit: 20, share: 0.05, level: "ok" as const },
+      { day: "2026-09-25", used: 17, limit: 20, share: 0.85, level: "near" as const },
+    ];
+    const vista = usoVista(uso({ history: historia }), f);
+    expect(vista.eje).toEqual({ desde: f.dayMonth("2026-09-12"), hasta: "Hoy" });
+    expect(vista.dias.map((d) => d.conUso)).toEqual([false, true, true]);
+    const { container } = render(<UsoPorCanalVista cuentas={[vista]} />);
+    expect(screen.getByText(f.dayMonth("2026-09-12"))).toBeTruthy();
+    expect(screen.getByText("Hoy")).toBeTruthy();
+    const barras = [...container.querySelectorAll("[style*='--dia']")];
+    expect(barras.map((b) => b.className.includes("min-h-0.5"))).toEqual([false, true, true]);
+  });
+
   it("cuando manda la semana o el espacio, lo dice; y una cuenta sin envío nunca va en verde", () => {
     render(<UsoPorCanalVista cuentas={[
       usoVista(uso({ accountId: "li", channel: "linkedin", provider: "unipile", used: 3, hardLimit: 3, limitedBy: "week", weekUsed: 100, weeklyLimit: 100, level: "full", warmingUp: false, workspaceUsed: null, workspaceLimit: null }), f),
@@ -353,8 +369,16 @@ describe("el embudo y la vista de flujo de la cadencia", () => {
     ]);
   });
 
-  it("«Respondidos» no va en el color de alerta: solo «Positivos» lleva un color semántico", () => {
-    expect(SERIES_EMBUDO.map((s) => s.color)).toEqual(["deemph", "accent", "tiktok", "good"]);
+  it("el embudo es el flujo: sin barras agrupadas de 2 px; «Positivos» en verde y «Respondidos» nunca en color de alerta", () => {
+    render(<MetricasCadenciaVista sequenceId="s1" health={salud} funnel={[1, 2, 3, 4, 5, 6].map((n) => paso(n))} f={f} />);
+    // Ni el gráfico ni su «Ver tabla»: seis pasos por cuatro series no se leían como un embudo.
+    expect(screen.queryByText("Embudo por paso")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Ver tabla/ })).toBeNull();
+    expect(within(screen.getByRole("region", { name: "Flujo de la cadencia" })).getAllByRole("listitem", { name: /^Paso \d/ })).toHaveLength(6);
+    const flujo = screen.getByRole("region", { name: "Flujo de la cadencia" });
+    const valor = (etiqueta: string) => within(flujo).getAllByText(etiqueta)[0]!.previousElementSibling!.className;
+    expect(valor("positivos")).toContain("text-good");
+    expect(valor("respondidos")).not.toMatch(/text-(warn|bad)/);
   });
 
   it("cada cifra se explica: el tooltip es su descripción, aparece con el foco y Escape lo cierra", () => {

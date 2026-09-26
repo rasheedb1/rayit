@@ -2,8 +2,6 @@ import { Suspense } from "react";
 import { getSequenceHealth, listFunnelByStep, type FunnelStep, type SequenceHealth } from "@mc/db/queries/actividad";
 import { SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { ChartCard } from "@/components/ui/chart-card";
-import type { Series } from "@/components/ui/chart-utils";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Kpi, KpiRow } from "@/components/ui/kpi";
 import { Pill } from "@/components/ui/pill";
@@ -19,19 +17,6 @@ import { FronteraWidget } from "./frontera-widget";
 
 const E = MESSAGES.embudo;
 const F = MESSAGES.flujo;
-
-/**
- * Las cuatro series del embudo, en su orden: cada una cabe dentro de la
- * anterior. Colores categóricos del kit (los de DEFAULT_ORDER de
- * chart-utils) salvo «Positivos», el único que es bueno por definición:
- * «Respondidos» no va en ámbar, que en esta app es alerta.
- */
-export const SERIES_EMBUDO = [
-  { key: "sent", color: "deemph" },
-  { key: "opened", color: "accent" },
-  { key: "replied", color: "tiktok" },
-  { key: "positive", color: "good" },
-] as const satisfies ReadonlyArray<{ key: keyof typeof E.series; color: Series["color"] }>;
 
 /**
  * Las cifras de un paso para la vista de flujo, cada una con su
@@ -69,10 +54,16 @@ export function pasosFlujo(funnel: FunnelStep[], f: Formatter): PasoFlujo[] {
 }
 
 /**
- * El embudo por paso y la vista de flujo de una cadencia, con los números
- * ya leídos: arriba, la salud con su semáforo y cuatro cifras; después, el
- * gráfico de barras por paso (con su tabla) y el flujo con una
- * explicación por cifra.
+ * El embudo por paso de una cadencia, con los números ya leídos: arriba,
+ * la salud con su semáforo y cuatro cifras; debajo, la vista de flujo,
+ * que ES el embudo: cada paso con sus enviados, abiertos, respondidos y
+ * positivos (y la tasa de cada uno sobre lo enviado), lo que sigue en
+ * cola, lo fallido y lo detenido, con una explicación por cifra.
+ *
+ * Hasta la ronda 4 había además un gráfico de barras agrupadas (pasos ×
+ * cuatro series): con seis pasos, cada barra medía 2 o 3 px, los pasos
+ * sin envíos dejaban huecos y repetía lo que el flujo ya dice con cifras.
+ * Como en el flow viewer de Chief, el flujo es la pieza principal.
  */
 export function MetricasCadenciaVista({
   sequenceId, health, funnel, f,
@@ -80,7 +71,6 @@ export function MetricasCadenciaVista({
   if (funnel.length === 0) return <p className="text-sm text-fg-2">{E.sinPasos}</p>;
   const k = E.kpis;
   const pct = (r: number | null) => (r === null ? k.sinDato : f.pct(r, 1));
-  const series: Series[] = SERIES_EMBUDO.map((s) => ({ name: E.series[s.key], color: s.color, data: funnel.map((p) => p[s.key]) }));
   const actividad = hrefDe({ vista: "queue", cadencia: sequenceId, tipo: null, contacto: null });
   return (
     <section aria-labelledby="resultados-cadencia" className="flex flex-col gap-4">
@@ -107,26 +97,13 @@ export function MetricasCadenciaVista({
         <Kpi label={k.positivos} value={f.int(health.positive)} note={k.positivosNota(pct(health.positiveRate))} />
         <Kpi label={k.fallidos} value={f.int(health.failed)} note={k.fallidosNota(f.int(health.failed7d))} />
       </KpiRow>
-      {health.sent === 0 ? (
-        <EmptyState title={E.vacio.titulo} description={E.vacio.descripcion} />
-      ) : (
-        <ChartCard
-          title={E.grafico}
-          chart="bar"
-          bar={{ mode: "group", axisLabels: funnel.map((s) => E.eje(f.int(s.position))) }}
-          series={series}
-          labels={funnel.map((s) => F.paso(f.int(s.position), f.int(s.dayOffset), etiquetaTipo(s.stepType)))}
-          labelsHeader={E.columnaPaso}
-          format="int"
-          ariaLabel={E.grafico}
-        />
-      )}
+      {health.sent === 0 && <EmptyState title={E.vacio.titulo} description={E.vacio.descripcion} />}
       <FlujoCadencia pasos={pasosFlujo(funnel, f)} />
     </section>
   );
 }
 
-/** Mientras la consulta responde: el título, cuatro cifras y el flujo en gris. */
+/** Mientras la consulta responde: el título, cuatro cifras y tres pasos del flujo en gris. */
 function MetricasCadenciaEsqueleto() {
   return (
     <div aria-busy="true" aria-label={E.cargando} className="flex flex-col gap-4">
@@ -134,7 +111,7 @@ function MetricasCadenciaEsqueleto() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[0, 1, 2, 3].map((i) => <span key={i} className="block h-16 animate-pulse rounded-md bg-hover" />)}
       </div>
-      <span className="block h-40 animate-pulse rounded-md bg-hover" />
+      {[0, 1, 2].map((i) => <span key={i} className="block h-20 animate-pulse rounded-md bg-hover" />)}
     </div>
   );
 }

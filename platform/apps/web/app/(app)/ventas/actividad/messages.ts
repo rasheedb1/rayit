@@ -352,6 +352,8 @@ export const MESSAGES = {
     },
     medidor: (cuenta: string, usado: string, duro: string, nivel: string) => `${cuenta}: ${usado} de ${duro} hoy, ${nivel}`,
     historia: "Últimos 14 días",
+    /** La punta derecha del eje de los 14 días. */
+    hoy: "Hoy",
     vacio: "Conecta una cuenta para ver su uso.",
     /**
      * Por qué una cuenta está «Sin envío», con adónde ir a arreglarlo. El
@@ -371,10 +373,6 @@ export const MESSAGES = {
   embudo: {
     titulo: "Resultados por paso",
     descripcion: "Enviados, abiertos, respondidos y positivos de cada paso. Abiertos y respondidos cuentan solo lo que salió.",
-    grafico: "Embudo por paso",
-    series: { sent: "Enviados", opened: "Abiertos", replied: "Respondidos", positive: "Positivos" },
-    eje: (n: string) => `Paso ${n}`,
-    columnaPaso: "Paso",
     vacio: {
       titulo: "Todavía no sale nada de esta cadencia",
       descripcion: "Cuando salgan los primeros mensajes, aquí verás cuántos se abren, cuántos responden y cuántos dicen que sí.",

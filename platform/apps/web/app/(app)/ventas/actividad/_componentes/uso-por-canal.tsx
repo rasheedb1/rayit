@@ -45,7 +45,10 @@ export interface UsoVista {
   usedShare: number;
   softShare: number;
   medidor: string;
-  dias: { key: string; label: string; share: number; nivel: Exclude<UsageLevel, "off"> }[];
+  /** Los 14 días, del más viejo a hoy. `conUso`: salió algo ese día (su barra no baja de 2 px, para no confundirse con un cero). */
+  dias: { key: string; label: string; share: number; nivel: Exclude<UsageLevel, "off">; conUso: boolean }[];
+  /** Las dos puntas del eje, debajo de la franja: el primer día y «Hoy». */
+  eje: { desde: string; hasta: string } | null;
 }
 
 /**
@@ -93,7 +96,9 @@ export function usoVista(u: ChannelUsage, f: Formatter): UsoVista {
       label: `${f.dayMonth(d.day)}: ${T.cifra(f.int(d.used), f.int(d.limit))}`,
       share: d.share,
       nivel: d.level,
+      conUso: d.used > 0,
     })),
+    eje: u.history.length > 1 ? { desde: f.dayMonth(u.history[0]!.day), hasta: T.hoy } : null,
   };
 }
 
@@ -103,8 +108,11 @@ const fraccion = (name: string, value: number): CSSProperties => ({ [name]: Stri
 /**
  * El medidor de una cuenta: la barra de hoy contra el límite duro, con la
  * marca del límite blando; debajo, los 14 días como barras finas (el alto
- * es lo usado sobre el límite de ese día). Para un lector de pantalla,
- * el medidor es un `meter` con su frase, y los días, una lista.
+ * es lo usado sobre el límite de ese día), con el primer día y «Hoy» en
+ * las puntas: con el dedo, a 400 px, no hay title que leer. Un día con
+ * algo de uso nunca baja de 2 px, para no confundirse con uno en cero.
+ * Para un lector de pantalla, el medidor es un `meter` con su frase, y
+ * los días, una lista.
  */
 function Cuenta({ u }: { u: UsoVista }) {
   return (
@@ -161,12 +169,18 @@ function Cuenta({ u }: { u: UsoVista }) {
           {u.dias.map((d) => (
             <span key={d.key} className="flex h-full flex-1 items-end rounded-sm border-b border-line-2 bg-hover" title={d.label}>
               <span
-                className={`block w-full rounded-sm ${NIVEL_DIA[d.nivel]} h-[calc(var(--dia)*100%)]`}
+                className={`block w-full rounded-sm ${NIVEL_DIA[d.nivel]} h-[calc(var(--dia)*100%)] ${d.conUso ? "min-h-0.5" : ""}`}
                 style={fraccion("--dia", d.share)}
               />
             </span>
           ))}
         </div>
+        {u.eje && (
+          <p aria-hidden="true" className="mt-1 flex justify-between text-[11px] leading-4 tabular-nums text-fg-3">
+            <span>{u.eje.desde}</span>
+            <span>{u.eje.hasta}</span>
+          </p>
+        )}
       </div>
     </li>
   );
