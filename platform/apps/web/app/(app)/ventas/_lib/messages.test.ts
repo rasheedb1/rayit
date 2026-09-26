@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { DELIVERABLES } from "@mc/core";
-import { BRIEF_ERROR_CODES } from "@mc/db/queries/brief";
+import { BRIEF_ERROR_CODES, BRIEF_LIMITS } from "@mc/db/queries/brief";
+import { formatterFor } from "@/lib/format";
+import { briefLimitTexts } from "../brief/limites";
 import { LOST_REASONS, VENTAS_ERROR_CODES } from "@mc/db/queries/ventas";
 import { MESSAGES } from "./messages";
+
+const LIMITES = briefLimitTexts(formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }));
 
 describe("los textos de Ventas", () => {
   it("cada código de error de @mc/db tiene su frase aquí, y no hay frases huérfanas", () => {
@@ -38,8 +42,21 @@ describe("los textos de Ventas", () => {
 
   it("cada código de error del brief tiene su frase, y las que llevan dato lo usan (VEN-7)", () => {
     expect(Object.keys(MESSAGES.briefErrores).sort()).toEqual([...BRIEF_ERROR_CODES].sort());
-    expect(MESSAGES.briefErrores.CategoryConflict("Alcohol")).toContain("«Alcohol»");
-    expect(MESSAGES.briefErrores.InvalidCountry("ZZ")).toContain("«ZZ»");
+    expect(MESSAGES.briefErrores.CategoryConflict(LIMITES, "Alcohol")).toContain("«Alcohol»");
+    expect(MESSAGES.briefErrores.InvalidCountry(LIMITES, "ZZ")).toContain("«ZZ»");
+  });
+
+  it("los topes del brief no van escritos a mano: salen de BRIEF_LIMITS con el formato del workspace (VEN-7 r3)", () => {
+    const l = briefLimitTexts(formatterFor({ locale: "en-US", currency: "USD", timezone: "UTC" }));
+    expect(l.notesMax).toBe(new Intl.NumberFormat("en-US").format(BRIEF_LIMITS.notesMax));
+    expect(MESSAGES.briefErrores.InvalidNotes(l, null)).toContain(l.notesMax);
+    expect(MESSAGES.briefErrores.TooManyCategories(l, null)).toContain(String(BRIEF_LIMITS.categories));
+    expect(MESSAGES.briefErrores.TooManyCompanies(l, null)).toContain(String(BRIEF_LIMITS.companies));
+    expect(MESSAGES.briefErrores.InvalidTitle(l, null)).toContain(String(BRIEF_LIMITS.titleMax));
+    expect(MESSAGES.brief.validacion.categoryTooLong(l)).toContain(String(BRIEF_LIMITS.categoryMax));
+    // Ninguna frase del brief lleva una cifra propia: todas las dicen los topes.
+    const sinTopes = { categories: "X", countries: "X", companies: "X", titleMax: "X", categoryMax: "X", notesMax: "X" };
+    for (const frase of Object.values(MESSAGES.briefErrores)) expect(frase(sinTopes, null)).not.toMatch(/\d/);
   });
 
   it("cada formato de entregable del catálogo tiene su nombre en el brief", () => {

@@ -36,10 +36,13 @@ export interface SignalCardData {
    */
   crm: { companyHref: string; joinsDeal: boolean; dealName: string | null } | null;
   /**
-   * Por qué el brief la deja fuera («Tu brief excluye esta categoría»),
-   * solo cuando se están viendo las ocultas (VEN-7). Null si se ve.
+   * Por qué el brief la deja fuera, con la regla que lo decidió («Tu
+   * brief no acepta «harinas»»), solo cuando se están viendo las ocultas
+   * (VEN-7). Null si se ve.
    */
   hiddenReason: string | null;
+  /** Cómo encaja con «Qué buscas» («Bajo tu mínimo», «Fuera de tus países»): Pills neutras, no oculta nada. */
+  fitNotes: string[];
 }
 
 /** La línea de las señales que el brief deja fuera, ya escrita en el servidor. */
@@ -76,6 +79,8 @@ export function Radar({
 }) {
   const t = MESSAGES.radar;
   const [panel, setPanel] = useState<Panel>("none");
+  const visibles = cards.filter((c) => c.hiddenReason === null);
+  const ocultas = cards.filter((c) => c.hiddenReason !== null);
   const [aviso, setAviso] = useState<AvisoRadar | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
 
@@ -140,11 +145,28 @@ export function Radar({
           action={panel === "none" ? { label: t.empty.action, onClick: () => open("manual") } : undefined}
         />
       ) : (
-        <ul className="flex flex-col gap-2">
-          {cards.map((card) => (
-            <SignalCard key={card.id} card={card} onResult={setAviso} />
-          ))}
-        </ul>
+        <>
+          {visibles.length > 0 && (
+            <ul className="flex flex-col gap-2">
+              {visibles.map((card) => (
+                <SignalCard key={card.id} card={card} onResult={setAviso} />
+              ))}
+            </ul>
+          )}
+          {/* Con «Verlas», las ocultas van aparte, al final: no mezcladas por encaje con las que se ven. */}
+          {ocultas.length > 0 && (
+            <section aria-labelledby="radar-ocultas" className={visibles.length > 0 ? "mt-6" : undefined}>
+              <h3 id="radar-ocultas" className="mb-2 border-t border-border pt-4 text-xs font-medium uppercase tracking-wide text-muted">
+                {t.hidden.group}
+              </h3>
+              <ul className="flex flex-col gap-2">
+                {ocultas.map((card) => (
+                  <SignalCard key={card.id} card={card} onResult={setAviso} />
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
       )}
 
       <p className="mt-6 text-xs leading-5 text-muted">{t.manualOnly}</p>
@@ -214,6 +236,11 @@ function SignalCard({
               </span>
             )}
             {card.hiddenReason && <Pill kind="warn">{card.hiddenReason}</Pill>}
+            {card.fitNotes.map((nota) => (
+              <Pill key={nota} kind="neutral">
+                {nota}
+              </Pill>
+            ))}
             {card.crm && (
               <Link
                 href={card.crm.companyHref}

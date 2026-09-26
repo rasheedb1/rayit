@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 /** Lo que se puede enfocar dentro del diálogo, para que Tab no se salga. */
 const ENFOCABLES =
@@ -19,7 +20,15 @@ const ENFOCABLES =
  *     autoFocus) y vuelve a donde estaba al cerrar;
  *   · Tab y Mayús+Tab dan la vuelta dentro;
  *   · Escape cierra, igual que «Cancelar»;
- *   · clic en el fondo cierra; clic dentro, no.
+ *   · clic en el fondo cierra; clic dentro, no;
+ *   · lo de detrás no se mueve ni se alcanza: el diálogo se pinta con un
+ *     portal directamente en <body>, sus hermanos (la aplicación entera)
+ *     quedan `inert` —ni foco, ni clic, ni cursor virtual del lector de
+ *     pantalla— y <body> deja de desplazarse (a 400 px, la hoja de abajo
+ *     ya no arrastra el tablero). Todo vuelve como estaba al cerrar.
+ *
+ * Checkbox y Dialog están propuestos para el kit (docs/ventas-outreach.md,
+ * «Para el kit»): subirlos es un PR de Nicolás. Hasta entonces vive aquí.
  *
  * Estilo: el fondo es el color de la página velado (bg-bg/70), así que
  * funciona igual en el tema claro y en el oscuro sin un color nuevo.
@@ -45,6 +54,26 @@ export function Dialogo({
   const [previo] = useState<HTMLElement | null>(() =>
     typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null,
   );
+
+  const fondoRef = useRef<HTMLDivElement>(null);
+
+  // Lo de detrás, inerte y quieto mientras el diálogo esté abierto.
+  useEffect(() => {
+    const fondo = fondoRef.current;
+    if (!fondo) return;
+    const apagados: Element[] = [];
+    for (const hermano of Array.from(document.body.children)) {
+      if (hermano === fondo || hermano.hasAttribute("inert")) continue;
+      hermano.setAttribute("inert", "");
+      apagados.push(hermano);
+    }
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      for (const el of apagados) el.removeAttribute("inert");
+      document.body.style.overflow = overflow;
+    };
+  }, []);
 
   useEffect(() => {
     const panel = panelRef.current;
@@ -75,8 +104,10 @@ export function Dialogo({
     }
   }
 
-  return (
+  if (typeof document === "undefined") return null;
+  return createPortal(
     <div
+      ref={fondoRef}
       className="fixed inset-0 z-50 flex items-end justify-center bg-bg/70 p-4 backdrop-blur-[2px] sm:items-center"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -102,6 +133,7 @@ export function Dialogo({
         )}
         <div className="mt-4">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

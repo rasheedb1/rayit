@@ -32,6 +32,7 @@ const card: SignalCardData = {
   viaCsv: false,
   crm: null,
   hiddenReason: null,
+  fitNotes: [],
 };
 
 beforeEach(() => {

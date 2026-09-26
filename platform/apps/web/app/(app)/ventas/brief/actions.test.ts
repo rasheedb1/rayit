@@ -13,20 +13,30 @@ const puedeEditarElBrief = vi.fn();
 vi.mock("./permiso", () => ({ puedeEditarElBrief: () => puedeEditarElBrief() }));
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => revalidatePath(...a) }));
 vi.mock("../_lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
+vi.mock("@/lib/workspace/settings", () => ({
+  getCurrentWorkspace: async () => ({ currency: "COP", locale: "es-CO", timezone: "America/Bogota" }),
+}));
 vi.mock("@mc/db/queries/brief", async (original) => ({
   ...(await original<typeof import("@mc/db/queries/brief")>()),
   saveBrief: (...a: unknown[]) => saveBrief(...a),
 }));
 
 import { BriefError } from "@mc/db/queries/brief";
+import { formatterFor } from "@/lib/format";
 import { MESSAGES } from "../_lib/messages";
 import { guardarBrief } from "./actions";
+import { briefLimitTexts } from "./limites";
 
 const LICORES = "00000009-0000-4000-8000-0000000b7c01";
+const BETO = "00000009-0000-4000-8000-00000000b706";
+const E = MESSAGES.briefErrores;
+/** Los topes como los formatea el workspace (es-CO): lo mismo que usa la acción. */
+const L = briefLimitTexts(formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }));
 
 /** El formulario como lo manda la pantalla: las listas, una entrada por valor. */
 function datos(cambios: Record<string, string | string[] | null> = {}): FormData {
   const base: Record<string, string | string[] | null> = {
+    creatorId: BETO,
     title: " Marcas de cocina · Q4 ",
     wantedCategories: ["alimentos", "cocina"],
     wantedCountries: ["co", "MX"],
@@ -56,10 +66,10 @@ beforeEach(() => {
 });
 
 describe("guardarBrief", () => {
-  it("manda a la base el brief entero, con las listas y sin espacios de más", async () => {
+  it("manda a la base el brief entero del creador elegido, con las listas y sin espacios de más", async () => {
     const r = await guardarBrief({}, datos());
     expect(r).toMatchObject({ ok: true, notice: MESSAGES.brief.saved });
-    expect(saveBrief).toHaveBeenCalledWith({}, {
+    expect(saveBrief).toHaveBeenCalledWith({}, BETO, {
       title: "Marcas de cocina · Q4",
       wantedCategories: ["alimentos", "cocina"],
       excludedCategories: ["alcohol", "apuestas"],
@@ -82,6 +92,7 @@ describe("guardarBrief", () => {
     expect(r.notice).toBe(MESSAGES.brief.savedPaused);
     expect(saveBrief).toHaveBeenCalledWith(
       {},
+      BETO,
       expect.objectContaining({ active: false, requiresDisclosure: false, minBudget: null, availabilityTo: null }),
     );
   });
@@ -89,23 +100,44 @@ describe("guardarBrief", () => {
   it("valida antes de llegar a la base", async () => {
     const r = await guardarBrief({}, datos({ title: "  ", wantedCountries: ["Colombia"], availabilityTo: "2026-09-01" }));
     expect(r.errors).toEqual({
-      title: MESSAGES.briefErrores.InvalidTitle,
+      title: E.InvalidTitle(L, null),
       wantedCountries: MESSAGES.brief.validacion.countryUnknown,
-      availabilityTo: MESSAGES.briefErrores.InvalidWindow,
+      availabilityTo: E.InvalidWindow(L, null),
     });
     expect(saveBrief).not.toHaveBeenCalled();
+  });
+
+  it("una moneda que no es un código ISO es un error de moneda, no de presupuesto", async () => {
+    const r = await guardarBrief({}, datos({ currency: "pesos" }));
+    expect(r.errors).toEqual({ currency: E.InvalidCurrency(L, null) });
+    saveBrief.mockRejectedValue(new BriefError("InvalidCurrency"));
+    expect((await guardarBrief({}, datos())).errors).toEqual({ currency: E.InvalidCurrency(L, null) });
+  });
+
+  it("sin creador, o con uno que no es un id, no escribe nada y lo dice arriba", async () => {
+    expect(await guardarBrief({}, datos({ creatorId: null }))).toEqual({ message: MESSAGES.brief.validacion.creatorUnknown });
+    expect(await guardarBrief({}, datos({ creatorId: "ana" }))).toEqual({ message: MESSAGES.brief.validacion.creatorUnknown });
+    expect(saveBrief).not.toHaveBeenCalled();
+    saveBrief.mockRejectedValue(new BriefError("UnknownCreator"));
+    expect(await guardarBrief({}, datos())).toEqual({ message: E.UnknownCreator(L, null) });
+  });
+
+  it("los topes de las frases salen de BRIEF_LIMITS con el formato del workspace", async () => {
+    const r = await guardarBrief({}, datos({ notes: "x".repeat(2001) }));
+    expect(r.errors?.notes).toBe(E.InvalidNotes(L, null));
+    expect(r.errors?.notes).toContain("2.000");
   });
 
   it("un error de dominio vuelve en su campo, con el dato que lo explica", async () => {
     saveBrief.mockRejectedValue(new BriefError("CategoryConflict", "Bienestar"));
     const r = await guardarBrief({}, datos());
-    expect(r.errors).toEqual({ excludedCategories: MESSAGES.briefErrores.CategoryConflict("Bienestar") });
+    expect(r.errors).toEqual({ excludedCategories: E.CategoryConflict(L, "Bienestar") });
     expect(r.errors?.excludedCategories).toContain("«Bienestar»");
   });
 
   it("uno sin campo va arriba, y uno que no es de dominio no enseña SQL", async () => {
     saveBrief.mockRejectedValue(new BriefError("NoCreator"));
-    expect(await guardarBrief({}, datos())).toEqual({ message: MESSAGES.briefErrores.NoCreator });
+    expect(await guardarBrief({}, datos())).toEqual({ message: E.NoCreator(L, null) });
 
     const consola = vi.spyOn(console, "error").mockImplementation(() => {});
     saveBrief.mockRejectedValue(new Error('duplicate key value violates unique constraint "outbound_brief_one_active"'));
@@ -121,6 +153,6 @@ describe("guardarBrief", () => {
 
   it("si la base lo rechaza por el rol (0064 §5), lo dice igual, sin SQL", async () => {
     saveBrief.mockRejectedValue(new BriefError("Forbidden"));
-    expect(await guardarBrief({}, datos())).toEqual({ message: MESSAGES.briefErrores.Forbidden });
+    expect(await guardarBrief({}, datos())).toEqual({ message: E.Forbidden(L, null) });
   });
 });

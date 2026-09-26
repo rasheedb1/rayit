@@ -22,8 +22,22 @@ import { Radar, type HiddenLine, type SignalCardData } from "./radar";
  *
  * `hidden` son las pendientes que el brief activo deja fuera (VEN-7):
  * cuántas y si se están viendo (?ocultas=1). La bandeja lo dice en una
- * línea bajo el título; sin ninguna oculta, no dice nada.
+ * línea bajo el título; sin ninguna oculta, no dice nada. Vistas, cada
+ * una dice qué regla la dejó fuera («Tu brief no acepta «harinas»») y
+ * van al final, en su grupo.
+ *
+ * `briefFit` (de listSignals, en SQL) es cómo encaja con «Qué buscas»:
+ * se pinta como Pill neutral y no oculta nada.
  */
+/**
+ * Una categoría o una marca dentro de una Pill, que no parte línea: a
+ * 400 px una de 60 caracteres empujaría la tarjeta más allá del ancho.
+ */
+function corto(texto: string, max = 28): string {
+  const limpio = texto.trim();
+  return limpio.length > max ? `${limpio.slice(0, max - 1).trimEnd()}…` : limpio;
+}
+
 export function RadarView({
   signals,
   f,
@@ -57,7 +71,12 @@ export function RadarView({
             dealName: s.openDealId !== null ? dealLabel(s.companyName, s.openDealName) : null,
           }
         : null,
-    hiddenReason: s.hiddenBy ? h.reason[s.hiddenBy] : null,
+    hiddenReason: s.hiddenBy ? h.reason[s.hiddenBy](corto(s.hiddenMatch ?? s.companyName ?? "")) : null,
+    fitNotes: [
+      ...(s.briefFit.wantedCategory ? [MESSAGES.radar.briefFit.wanted(corto(s.briefFit.wantedCategory))] : []),
+      ...(s.briefFit.belowMinBudget ? [MESSAGES.radar.briefFit.belowMin] : []),
+      ...(s.briefFit.countryOutside ? [MESSAGES.radar.briefFit.countryOutside] : []),
+    ],
   }));
   const line: HiddenLine | null =
     hidden && hidden.count > 0

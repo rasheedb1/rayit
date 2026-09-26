@@ -39,6 +39,8 @@ function senal(over: Partial<SignalRow>): SignalRow {
     reviewedAt: null,
     via: "manual",
     hiddenBy: null,
+    hiddenMatch: null,
+    briefFit: { belowMinBudget: false, countryOutside: false, wantedCategory: null },
     ...over,
   };
 }
@@ -84,20 +86,67 @@ describe("RadarView: las señales que el brief deja fuera (VEN-7)", () => {
     expect(screen.queryByTestId("ocultas-por-brief")).toBeNull();
   });
 
-  it("al verlas, cada oculta dice por qué y el enlace vuelve a ocultarlas", () => {
+  it("al verlas, cada oculta dice qué regla la dejó fuera, van al final en su grupo y el enlace vuelve a ocultarlas", () => {
+    // listSignals ya las trae al final; la vista las agrupa bajo «Ocultas por tu brief».
     render(
       <RadarView
-        signals={[senal({ hiddenBy: "category" }), senal({ id: "s2", companyName: "Licores del Sur", hiddenBy: "company" }), senal({ id: "s3", companyName: "Café Montaña" })]}
+        signals={[
+          senal({ id: "s3", companyName: "Café Montaña" }),
+          senal({ hiddenBy: "category", hiddenMatch: "harinas" }),
+          senal({ id: "s2", companyName: "Molino Andino", hiddenBy: "company", hiddenMatch: "Molino Andino" }),
+        ]}
         f={f}
         currency="COP"
         hidden={{ count: 2, showing: true }}
       />,
     );
-    expect(screen.getByTestId("ocultas-por-brief")).toHaveTextContent(h.showing("2", 2));
+    expect(screen.getByTestId("ocultas-por-brief")).toHaveTextContent("Estás viendo también las 2 señales que tu brief no acepta.");
     expect(screen.getByRole("link", { name: h.hide })).toHaveAttribute("href", "/ventas");
-    const [categoria, marca, visible] = screen.getAllByRole("listitem");
-    expect(categoria).toHaveTextContent(h.reason.category);
-    expect(marca).toHaveTextContent(h.reason.company);
-    expect(visible).not.toHaveTextContent(h.reason.category);
+    const grupo = screen.getByRole("region", { name: h.group });
+    const [categoria, marca] = within(grupo).getAllByRole("listitem");
+    expect(categoria).toHaveTextContent("Tu brief no acepta «harinas»");
+    expect(marca).toHaveTextContent("Tu brief no acepta a Molino Andino");
+    const [visible] = screen.getAllByRole("listitem");
+    expect(visible).toHaveTextContent("Café Montaña");
+    expect(grupo).not.toContainElement(visible!);
+    expect(visible).not.toHaveTextContent("Tu brief no acepta");
+  });
+
+  it("una regla larga no ensancha la tarjeta: se corta con puntos suspensivos", () => {
+    const larga = "categoría de nombre larguísimo que no cabe en una píldora";
+    render(<RadarView signals={[senal({ hiddenBy: "category", hiddenMatch: larga })]} f={f} currency="COP" hidden={{ count: 1, showing: true }} />);
+    const item = screen.getByRole("listitem");
+    expect(item).toHaveTextContent(/Tu brief no acepta «categoría de nombre larguís…»/);
+  });
+});
+
+describe("RadarView: cómo encaja cada señal con «Qué buscas» (VEN-7 r3)", () => {
+  const b = MESSAGES.radar.briefFit;
+
+  it("marca bajo tu mínimo, fuera de tus países y la categoría que buscas, sin ocultar ninguna", () => {
+    render(
+      <RadarView
+        signals={[
+          senal({
+            id: "bajo",
+            companyName: "Postres Andes",
+            budgetEstimate: "1500000.00",
+            budgetCurrency: "COP",
+            briefFit: { belowMinBudget: true, countryOutside: false, wantedCategory: "alimentos" },
+          }),
+          senal({ id: "mx", companyName: "Tacos Norte", briefFit: { belowMinBudget: false, countryOutside: true, wantedCategory: null } }),
+          senal({ id: "ok", companyName: "Café Alma" }),
+        ]}
+        f={f}
+        currency="COP"
+      />,
+    );
+    const [bajo, mx, ok] = screen.getAllByRole("listitem");
+    expect(bajo).toHaveTextContent(b.belowMin);
+    expect(bajo).toHaveTextContent(b.wanted("alimentos"));
+    expect(mx).toHaveTextContent(b.countryOutside);
+    expect(mx).not.toHaveTextContent(b.belowMin);
+    expect(ok).not.toHaveTextContent(b.belowMin);
+    expect(ok).not.toHaveTextContent(b.countryOutside);
   });
 });

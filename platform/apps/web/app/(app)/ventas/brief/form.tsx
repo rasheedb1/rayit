@@ -4,7 +4,7 @@ import { startTransition, useActionState, useEffect, useId, useRef, useState, ty
 import type { BRIEF_LIMITS } from "@mc/db/queries/brief";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
-import { Field, Input, Textarea } from "@/components/ui/field";
+import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
 import { Aviso } from "../../_lib/aviso";
 import { MESSAGES } from "../_lib/messages";
@@ -16,6 +16,8 @@ const INICIAL: BriefState = {};
 
 /** Lo que el formulario necesita del brief guardado, ya en forma de pantalla. */
 export interface BriefFormValues {
+  /** De quién es el brief: viaja en una entrada oculta y saveBrief comprueba que sea del espacio. */
+  creatorId: string;
   title: string;
   wantedCategories: string[];
   wantedCountries: Etiqueta[];
@@ -37,6 +39,8 @@ export interface BriefFormProps {
   deliverableOptions: Etiqueta[];
   categorySuggestions: string[];
   countries: Etiqueta[];
+  /** Las monedas del mínimo (ISO 4217, con su nombre en el idioma del workspace). */
+  currencies: Etiqueta[];
   companies: Etiqueta[];
   /**
    * Los topes de @mc/db (BRIEF_LIMITS), pasados por el servidor: un
@@ -129,6 +133,7 @@ export function BriefForm({
   deliverableOptions,
   categorySuggestions,
   countries,
+  currencies,
   companies,
   limits,
   editable = true,
@@ -136,6 +141,7 @@ export function BriefForm({
   const [estado, dispatch, pendiente] = useActionState<BriefState, FormData>(guardarBrief, INICIAL);
   const formRef = useRef<HTMLFormElement>(null);
   const [minBudget, setMinBudget] = useState(values.minBudget);
+  const [moneda, setMoneda] = useState(values.currency);
   const [desde, setDesde] = useState(values.availabilityFrom);
   const [hasta, setHasta] = useState(values.availabilityTo);
   const [entregables, setEntregables] = useState<string[]>(values.deliverables);
@@ -161,6 +167,7 @@ export function BriefForm({
 
   return (
     <form ref={formRef} onSubmit={onSubmit} noValidate className="max-w-3xl">
+      <input type="hidden" name="creatorId" value={values.creatorId} />
       {/* Sin permiso, todo se ve y nada se toca: un fieldset apagado, como la política de envío. */}
       <fieldset disabled={!editable} className="grid min-w-0 gap-6">
       {!editable && (
@@ -205,11 +212,16 @@ export function BriefForm({
             saved={estado.stamp}
           />
         </div>
-        <Field label={f.minBudget} help={f.minBudgetHelp} error={errors.minBudget} htmlFor="brief-min-budget">
-          <MoneyInput value={minBudget} currency={values.currency} onChange={(v) => setMinBudget(v)} />
-          <input type="hidden" name="minBudget" value={minBudget} />
-          <input type="hidden" name="currency" value={values.currency} />
-        </Field>
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,9rem)] gap-3 sm:col-span-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,14rem)]">
+          <Field label={f.minBudget} help={f.minBudgetHelp} error={errors.minBudget} htmlFor="brief-min-budget">
+            <MoneyInput value={minBudget} currency={moneda} onChange={(v) => setMinBudget(v)} />
+            <input type="hidden" name="minBudget" value={minBudget} />
+          </Field>
+          {/* La moneda se elige: si el workspace cambia de moneda, el mínimo no queda atado a la vieja. */}
+          <Field label={f.currency} error={errors.currency} htmlFor="brief-moneda">
+            <Select name="currency" value={moneda} onChange={(e) => setMoneda(e.target.value)} options={currencies} />
+          </Field>
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label={f.availabilityFrom} error={errors.availabilityFrom} htmlFor="brief-desde">
             <DateInput name="availabilityFrom" value={desde} onChange={setDesde} />
@@ -246,6 +258,16 @@ export function BriefForm({
         <Field label={f.notes} help={f.notesHelp} error={errors.notes} htmlFor="brief-notes" className="sm:col-span-2">
           <Textarea name="notes" defaultValue={values.notes} rows={3} maxLength={limits.notesMax} />
         </Field>
+        {/* No filtra marcas: lo usan las cadencias al escribir. Por eso va en «Qué buscas» y no con las reglas. */}
+        <div className="sm:col-span-2">
+          <Casilla
+            name="requiresDisclosure"
+            label={f.requiresDisclosure}
+            help={f.requiresDisclosureHelp}
+            checked={divulgacion}
+            onChange={setDivulgacion}
+          />
+        </div>
       </Bloque>
 
       <Bloque titulo={t.rejects.title} ayuda={t.rejects.help}>
@@ -279,15 +301,6 @@ export function BriefForm({
             placeholder={t.chips.companyPlaceholder}
             disabled={!editable}
             saved={estado.stamp}
-          />
-        </div>
-        <div className="sm:col-span-2">
-          <Casilla
-            name="requiresDisclosure"
-            label={f.requiresDisclosure}
-            help={f.requiresDisclosureHelp}
-            checked={divulgacion}
-            onChange={setDivulgacion}
           />
         </div>
       </Bloque>

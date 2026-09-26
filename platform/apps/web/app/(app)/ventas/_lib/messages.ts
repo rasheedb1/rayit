@@ -1,6 +1,29 @@
 import type { VentasErrorCode } from "@mc/db/queries/ventas";
 
 /**
+ * Los topes del brief (BRIEF_LIMITS de @mc/db) ya formateados con el
+ * locale del workspace («2.000» o «2,000»). Las frases que dicen un tope
+ * lo reciben así, en vez de llevarlo escrito: si cambia el tope o el
+ * idioma, el texto no miente. Los arma brief/limites.ts.
+ */
+export interface BriefLimitTexts {
+  categories: string;
+  countries: string;
+  companies: string;
+  titleMax: string;
+  categoryMax: string;
+  notesMax: string;
+}
+
+/** Una frase de error del brief: recibe los topes formateados y el dato del error, si lo trae. */
+export type BriefErrorPhrase = (limits: BriefLimitTexts, detail: string | null) => string;
+
+/** Tipa las frases de briefErrores con la misma firma, sin perder sus nombres. */
+function briefPhrases<K extends string>(phrases: Record<K, BriefErrorPhrase>): Record<K, BriefErrorPhrase> {
+  return phrases;
+}
+
+/**
  * Todos los textos de interfaz del módulo Ventas, en un solo archivo.
  *
  * No es purismo: el producto se vende fuera de Colombia y traducirlo no
@@ -131,13 +154,29 @@ export const MESSAGES = {
       show: "Verlas",
       hide: "Ocultarlas",
       showing: (n: string, count: number) =>
-        count === 1 ? `Estás viendo ${n} señal que tu brief no acepta.` : `Estás viendo ${n} señales que tu brief no acepta.`,
+        count === 1
+          ? "Estás viendo también la señal que tu brief no acepta."
+          : `Estás viendo también las ${n} señales que tu brief no acepta.`,
       editBrief: "Editar el brief",
-      /** En la tarjeta, cuando se están viendo las ocultas: por qué lo está. */
+      /** El separador que abre el grupo de las ocultas, al final de la bandeja. */
+      group: "Ocultas por tu brief",
+      /**
+       * En la tarjeta, cuando se están viendo las ocultas: la regla que la
+       * deja fuera, como la escribió el creador, para saber cuál quitar.
+       */
       reason: {
-        company: "Tu brief excluye esta marca",
-        category: "Tu brief excluye esta categoría",
+        company: (name: string) => `Tu brief no acepta a ${name}`,
+        category: (category: string) => `Tu brief no acepta «${category}»`,
       },
+    },
+    /**
+     * Cómo encaja la señal con «Qué buscas» del brief activo (VEN-7). No
+     * oculta nada: la tarjeta lo marca para decidir con el dato a la vista.
+     */
+    briefFit: {
+      belowMin: "Bajo tu mínimo",
+      countryOutside: "Fuera de tus países",
+      wanted: (category: string) => `Buscas «${category}»`,
     },
     importCsv: "Cargar una lista",
     toolbar: "Añadir al radar",
@@ -535,9 +574,30 @@ export const MESSAGES = {
     title: "Qué buscas y qué no aceptas",
     description:
       "Tu brief dice a qué marcas quieres venderles y a cuáles no. Lo que no aceptas es una regla: el radar deja fuera esas señales y ninguna cadencia les escribe.",
+    /** Cada creador tiene su brief (uno activo por creador): la pantalla dice de quién es. */
     of: (name: string) => `Brief de ${name}`,
-    /** En una agencia el brief es la regla de todo el espacio, no de un solo creador. */
-    ofSpace: "Brief del espacio",
+    /** El selector de creador, cuando el espacio tiene más de uno (una agencia). */
+    creator: {
+      label: "Creador",
+      submit: "Ver su brief",
+      /** En la opción del selector: el estado del brief de cada creador. */
+      option: (name: string, status: string | null) => (status ? `${name} · ${status}` : `${name} · sin brief`),
+    },
+    /**
+     * Con varios creadores, cómo se combinan los briefs. El radar es del
+     * espacio (una señal no tiene creador todavía): oculta solo lo que
+     * excluyen TODOS los activos. Las cadencias escriben en nombre del
+     * creador del negocio y usan su brief.
+     */
+    others: (names: string, count: number) =>
+      count === 1
+        ? `${names} también tiene brief activo. El radar oculta solo lo que excluyen todos los briefs activos: lo que este no acepta pero ${names} sí, se sigue viendo.`
+        : `${names} también tienen brief activo. El radar oculta solo lo que excluyen todos los briefs activos: lo que este no acepta pero otro sí, se sigue viendo.`,
+    cadencesRule:
+      "Las cadencias de cada negocio usan el brief de su creador; si ese creador no tiene brief activo, lo que excluyen todos los del espacio.",
+    /** Une los nombres de «others»: «Ana y Beto», «Ana, Beto y Carla». */
+    joinNames: (names: string[]) =>
+      names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} y ${names[names.length - 1]}`,
     savedAt: (date: string) => `Guardado el ${date}`,
     none: "Todavía no tienes brief. Guárdalo y el radar empieza a aplicarlo.",
     /** El nombre con el que nace el primero, para no abrir el formulario con un campo obligatorio vacío. */
@@ -546,10 +606,15 @@ export const MESSAGES = {
     /** Cuántas señales de la bandeja oculta hoy, con el enlace a verlas. */
     hidingNow: (n: string, count: number) =>
       count === 1 ? `Hoy deja fuera ${n} señal de tu bandeja.` : `Hoy deja fuera ${n} señales de tu bandeja.`,
+    /** Lo mismo con varios briefs activos: lo que queda fuera es lo que excluyen todos, no solo este. */
+    hidingNowAll: (n: string, count: number) =>
+      count === 1
+        ? `Entre todos los briefs activos, hoy queda fuera ${n} señal de la bandeja.`
+        : `Entre todos los briefs activos, hoy quedan fuera ${n} señales de la bandeja.`,
     seeHidden: "Verlas en el radar",
     wants: {
       title: "Qué buscas",
-      help: "Una preferencia, no un filtro: no oculta ninguna señal. Las cadencias que propone Ventas escriben con el nombre, las notas y la divulgación de este brief; lo demás queda como referencia para ti y tu equipo.",
+      help: "Una preferencia, no un filtro: no oculta ninguna señal. El radar marca en cada una lo que no encaja («Bajo tu mínimo», «Fuera de tus países») y la categoría que buscas; las cadencias escriben con el nombre, las notas y la divulgación de este brief.",
     },
     rejects: {
       title: "Qué no aceptas",
@@ -565,9 +630,10 @@ export const MESSAGES = {
       wantedCategories: "Categorías que buscas",
       wantedCategoriesHelp: "Sectores o nichos de marca: alimentos, cocina, hogar.",
       wantedCountries: "Países",
-      wantedCountriesHelp: "Donde está la marca o su campaña.",
+      wantedCountriesHelp: "Donde está la marca o su campaña. El radar marca las de otros países.",
       minBudget: "Presupuesto mínimo",
-      minBudgetHelp: "Por campaña, sin impuestos. Vacío si no tienes mínimo.",
+      minBudgetHelp: "Por campaña, sin impuestos. Vacío si no tienes mínimo. El radar marca las señales que estiman menos, en la misma moneda.",
+      currency: "Moneda del mínimo",
       deliverables: "Qué entregas",
       deliverablesHelp: "Los formatos que ofreces a las marcas.",
       availabilityFrom: "Disponible desde",
@@ -577,7 +643,8 @@ export const MESSAGES = {
       excludedCompanies: "Marcas que no aceptas",
       excludedCompaniesHelp: "Marcas de tu CRM con las que no trabajas: competencia de un cliente, una mala experiencia.",
       requiresDisclosure: "Divulgación obligatoria",
-      requiresDisclosureHelp: "Todo contenido pagado lleva la marca de publicidad de la red. Una marca que no lo acepte no es para ti.",
+      requiresDisclosureHelp:
+        "Los mensajes que escriben tus cadencias dicen siempre que el contenido pagado lleva la marca de publicidad de la red.",
       notes: "Notas",
       notesHelp: "Lo que deben saber los mensajes que escriben las cadencias: «siempre con código propio y enlace rastreado».",
       active: "Aplicar el brief",
@@ -605,8 +672,9 @@ export const MESSAGES = {
     },
     /** Lo que valida el formulario antes de llegar a la base (zod, en brief/actions.ts). */
     validacion: {
-      categoryTooLong: "Cada categoría va en 60 caracteres o menos.",
+      categoryTooLong: (l: BriefLimitTexts) => `Cada categoría va en ${l.categoryMax} caracteres o menos.`,
       countryUnknown: "Elige los países de la lista.",
+      creatorUnknown: "Elige de quién es el brief.",
     },
     submit: "Guardar el brief",
     saved: "Guardado. El radar y las cadencias ya aplican tu brief.",
@@ -624,24 +692,31 @@ export const MESSAGES = {
     },
   },
 
-  /** Los errores de dominio del brief (BriefError.code de @mc/db), en español. */
-  briefErrores: {
-    InvalidTitle: "Ponle un nombre al brief, de hasta 120 caracteres.",
-    InvalidCategory: (detail: string | null) => `La categoría «${detail ?? ""}» pasa de 60 caracteres.`,
-    TooManyCategories: "Son demasiadas categorías: hasta 30 por lista.",
-    CategoryConflict: (detail: string | null) => `«${detail ?? ""}» está en lo que buscas y en lo que no aceptas. Déjala en una sola.`,
-    InvalidCountry: (detail: string | null) => `«${detail ?? ""}» no es un país que reconozcamos.`,
-    TooManyCountries: "Son demasiados países: hasta 30.",
-    InvalidBudget: "Escribe el presupuesto mínimo como un monto, solo con cifras, o déjalo vacío.",
-    InvalidWindow: "La fecha final va después de la inicial.",
-    InvalidDeliverable: "Ese formato de entregable no existe.",
-    InvalidNotes: "Las notas pasan de 2.000 caracteres.",
-    CompanyNotInCrm: "Una de las marcas ya no está en tu CRM. Vuelve a elegirlas.",
-    TooManyCompanies: "Son demasiadas marcas: hasta 100.",
-    NoCreator: "Este espacio todavía no tiene un perfil de creador al que colgarle el brief.",
-    Forbidden:
+  /**
+   * Los errores de dominio del brief (BriefError.code de @mc/db), en
+   * español. Todas reciben los topes ya formateados (BriefLimitTexts) y el
+   * dato del error, si lo trae: ningún número va escrito a mano.
+   */
+  briefErrores: briefPhrases({
+    InvalidTitle: (l) => `Ponle un nombre al brief, de hasta ${l.titleMax} caracteres.`,
+    InvalidCategory: (l, detail) => `La categoría «${detail ?? ""}» pasa de ${l.categoryMax} caracteres.`,
+    TooManyCategories: (l) => `Son demasiadas categorías: hasta ${l.categories} por lista.`,
+    CategoryConflict: (_l, detail) =>
+      `«${detail ?? ""}» está en lo que buscas y en lo que no aceptas. Déjala en una sola.`,
+    InvalidCountry: (_l, detail) => `«${detail ?? ""}» no es un país que reconozcamos.`,
+    TooManyCountries: (l) => `Son demasiados países: hasta ${l.countries}.`,
+    InvalidBudget: () => "Escribe el presupuesto mínimo como un monto, solo con cifras, o déjalo vacío.",
+    InvalidCurrency: () => "Elige la moneda del mínimo de la lista.",
+    InvalidWindow: () => "La fecha final va después de la inicial.",
+    InvalidDeliverable: () => "Ese formato de entregable no existe.",
+    InvalidNotes: (l) => `Las notas pasan de ${l.notesMax} caracteres.`,
+    CompanyNotInCrm: () => "Una de las marcas ya no está en tu CRM. Vuelve a elegirlas.",
+    TooManyCompanies: (l) => `Son demasiadas marcas: hasta ${l.companies}.`,
+    NoCreator: () => "Este espacio todavía no tiene un perfil de creador al que colgarle el brief.",
+    UnknownCreator: () => "Ese creador no es de este espacio, o ya no existe. Vuelve a elegirlo.",
+    Forbidden: () =>
       "Solo quien es dueño o administra este espacio puede cambiar el brief: lo que excluye se le oculta a todo el equipo.",
-  },
+  }),
 
   /** Por qué se perdió un negocio (deal.lost_reason), en la tarjeta y en la ficha: «Perdido · Por el precio». */
   motivosPerdida: {

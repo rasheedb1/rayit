@@ -43,6 +43,8 @@ const vitale: SignalRow = {
   reviewedAt: null,
   via: "manual",
   hiddenBy: null,
+  hiddenMatch: null,
+  briefFit: { belowMinBudget: false, countryOutside: false, wantedCategory: null },
 };
 
 vi.mock("@mc/db/queries/ventas", () => ({

@@ -12,7 +12,12 @@ const t = MESSAGES.brief;
 const LICORES = "00000009-0000-4000-8000-0000000b7c01";
 const CAFE = "00000009-0000-4000-8000-0000000b7c02";
 
+const BETO = "00000009-0000-4000-8000-00000000b706";
+/** Los topes formateados, como los arma la acción. */
+const L = { categories: "30", countries: "30", companies: "100", titleMax: "120", categoryMax: "60", notesMax: "2.000" };
+
 const values: BriefFormValues = {
+  creatorId: BETO,
   title: "Marcas de cocina",
   wantedCategories: ["alimentos"],
   wantedCountries: [{ value: "CO", label: "Colombia" }],
@@ -45,6 +50,10 @@ function pintar(over: Partial<BriefFormValues> = {}, editable = true) {
         { value: LICORES, label: "Licores del Sur" },
         { value: CAFE, label: "Café Montaña" },
       ]}
+      currencies={[
+        { value: "COP", label: "COP · peso colombiano" },
+        { value: "USD", label: "USD · dólar estadounidense" },
+      ]}
       limits={BRIEF_LIMITS}
       editable={editable}
     />,
@@ -67,6 +76,24 @@ describe("BriefForm", () => {
     pintar();
     expect(screen.getByRole("region", { name: t.wants.title })).toHaveTextContent(t.wants.help);
     expect(screen.getByRole("region", { name: t.rejects.title })).toHaveTextContent(t.rejects.help);
+  });
+
+  it("la divulgación va en «Qué buscas»: no es una regla que filtre marcas (VEN-7 r3)", () => {
+    pintar();
+    const casilla = screen.getByLabelText(t.fields.requiresDisclosure);
+    expect(within(screen.getByRole("region", { name: t.wants.title })).getByLabelText(t.fields.requiresDisclosure)).toBe(casilla);
+    expect(within(screen.getByRole("region", { name: t.rejects.title })).queryByLabelText(t.fields.requiresDisclosure)).toBeNull();
+    expect(t.fields.requiresDisclosureHelp).not.toMatch(/no es para ti|filtra|oculta/i);
+  });
+
+  it("manda el creador del brief y la moneda elegida junto al mínimo (VEN-7 r3)", async () => {
+    pintar({ minBudget: "" });
+    fireEvent.change(screen.getByLabelText(t.fields.currency), { target: { value: "USD" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.submit }));
+    });
+    expect(enviado().get("creatorId")).toBe(BETO);
+    expect(enviado().get("currency")).toBe("USD");
   });
 
   it("agrega una categoría excluida con Enter, sin enviar, y no la repite por mayúsculas", async () => {
@@ -130,13 +157,13 @@ describe("BriefForm", () => {
   });
 
   it("el error de un campo se pinta en él, y el aviso de guardado arriba", async () => {
-    guardarBrief.mockResolvedValueOnce({ errors: { excludedCategories: MESSAGES.briefErrores.CategoryConflict("alimentos") } });
+    guardarBrief.mockResolvedValueOnce({ errors: { excludedCategories: MESSAGES.briefErrores.CategoryConflict(L, "alimentos") } });
     pintar();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: t.submit }));
     });
     expect(screen.getByLabelText(t.fields.excludedCategories)).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByText(MESSAGES.briefErrores.CategoryConflict("alimentos"))).toBeInTheDocument();
+    expect(screen.getByText(MESSAGES.briefErrores.CategoryConflict(L, "alimentos"))).toBeInTheDocument();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: t.submit }));
