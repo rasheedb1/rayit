@@ -66,5 +66,22 @@ SELECT 'e_hilos_por_canal' AS check_id,
                        AND intent_source = 'model' AND intent_reason IS NOT NULL)
          AND EXISTS (SELECT 1 FROM outbound_message WHERE intent = 'ooo' AND resume_at IS NOT NULL AND automatic)
          AND EXISTS (SELECT 1 FROM outbound_message WHERE intent = 'ambiguous' AND channel = 'instagram_dm' AND read_at IS NULL)
-         AND EXISTS (SELECT 1 FROM outreach_channel_account WHERE channel = 'instagram_dm' AND status = 'connected' AND secret_ref IS NULL)
+         -- El Instagram está desconectado y ya soltado: el recomendador no lo cuenta y nadie lo suelta otra vez.
+         AND EXISTS (SELECT 1 FROM outreach_channel_account WHERE channel = 'instagram_dm' AND status = 'disconnected'
+                       AND released_at IS NOT NULL AND secret_ref IS NULL)
+         AND NOT EXISTS (SELECT 1 FROM outreach_channel_account WHERE channel = 'instagram_dm' AND status = 'connected')
          AS ok;
+
+-- (f) Lo de este seed vive en fichas suyas (ronda 3): ni un retenido, ni
+--     un enrolamiento, ni un hilo nuevo cuelga de una ficha de otro seed.
+--     Las pruebas del recomendador y de la baja por respuesta miran
+--     Fresko, Granos del Valle y compañía: esto no las toca.
+SELECT 'f_filas_propias' AS check_id,
+       (SELECT count(*) FROM outbound_touch WHERE id::text LIKE '00000008-%' AND contact_id::text NOT LIKE '00000008-%')
+     + (SELECT count(*) FROM outbound_enrollment WHERE id::text LIKE '00000008-%' AND contact_id::text NOT LIKE '00000008-%')
+     + (SELECT count(*) FROM outbound_message WHERE id::text LIKE '00000008-%' AND contact_id::text NOT LIKE '00000008-%') AS ajenas,
+       (SELECT count(*) FROM company_link WHERE company_id::text LIKE '00000008-%') AS marcas,
+       (SELECT count(*) FROM outbound_touch WHERE id::text LIKE '00000008-%' AND contact_id::text NOT LIKE '00000008-%')
+     + (SELECT count(*) FROM outbound_enrollment WHERE id::text LIKE '00000008-%' AND contact_id::text NOT LIKE '00000008-%')
+     + (SELECT count(*) FROM outbound_message WHERE id::text LIKE '00000008-%' AND contact_id::text NOT LIKE '00000008-%') = 0
+         AND (SELECT count(*) FROM company_link WHERE company_id::text LIKE '00000008-%') = 5 AS ok;

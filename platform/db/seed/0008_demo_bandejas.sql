@@ -51,15 +51,30 @@ UPDATE outbound_message
 -- Radar. Y aprobar pedía antes ir a la política a guardar la dirección
 -- postal. La bandeja solo tenía dos hilos de correo.
 --
+-- Ronda 3 · Lo de las bandejas va en filas SUYAS. La ronda 2 colgaba los
+-- retenidos y los hilos de fichas que ya usan otras pruebas (Fresko,
+-- Granos del Valle, Café Alma, Nutrivé, Hogar Lindo) y conectaba el
+-- Instagram de Laura: el recomendador (VEN-13) veía Instagram conectado y
+-- a Andrés alcanzable, y la baja por respuesta de canales (VEN-9)
+-- cancelaba cuatro toques de Laura Quintero en vez de dos. Ahora:
+--   * cinco marcas propias de esta demo, con su ficha y su persona, que
+--     ninguna otra prueba nombra ni busca;
+--   * el Instagram de Laura está DESCONECTADO (y ya soltado, released_at):
+--     el recomendador lo cuenta como que no hay cuenta, el despachador no
+--     lo suelta otra vez, y el hilo de Instagram enseña «reconéctala para
+--     responder», como el de LinkedIn.
+--
 -- Mapa de identificadores nuevos (00000008-…, solo dígitos hexadecimales):
---   …-0000000ac003          outreach_channel_account  (el Instagram, conectado)
---   …-0000000e0001..002     outbound_enrollment       (Granos del Valle, Hogar Lindo)
+--   …-0000000000e1..e5      company y company_link (las cinco marcas)
+--   …-0000000c0001..005     contact                (una persona por marca)
+--   …-0000000ac003          outreach_channel_account  (el Instagram, desconectado)
+--   …-0000000e0001..002     outbound_enrollment       (Molino Andino, Casa Olivo)
 --   …-000000070001..005     outbound_touch
 --   …-0000000a6001..006     outbound_message          (los hilos de LinkedIn, Instagram y el «fuera de la oficina»)
 --
 -- Mismas reglas: idempotente (ON CONFLICT DO NOTHING, lo que pasó se
--- congela en la primera siembra), nada real (.test, sin secretos: el
--- Instagram no tiene secret_ref y no puede enviar) y la política sigue
+-- congela en la primera siembra), nada real (dominios .test, sin
+-- secretos: el Instagram no tiene secret_ref) y la política sigue
 -- APAGADA.
 -- =====================================================================
 
@@ -68,28 +83,64 @@ UPDATE outbound_policy
    SET postal_address = 'Calle 85 # 11-53, oficina 402, Bogotá, Colombia'
  WHERE workspace_id = '00000002-0000-4000-8000-000000000001' AND postal_address IS NULL;
 
--- 2 · El Instagram de Laura, conectado por Unipile (sin secreto: no envía).
+-- 2 · El Instagram de Laura: se conectó por Unipile hace veinte días y ya
+--     está desconectado y soltado. Sus conversaciones quedan en la bandeja.
 INSERT INTO outreach_channel_account
   (id, workspace_id, creator_id, channel, provider, provider_account_id, display_name, status,
-   daily_cap, weekly_cap, warmup_started_at, last_ok_at, scopes)
+   daily_cap, weekly_cap, warmup_started_at, last_ok_at, released_at, scopes)
 VALUES
   ('00000008-0000-4000-8000-0000000ac003', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-000000000003', 'instagram_dm', 'unipile', 'unipile-demo-laura-instagram',
-   'Laura Méndez', 'connected', 20, 100, now() - interval '20 days', now() - interval '2 hours', '{}')
+   'Laura Méndez', 'disconnected', 20, 100, now() - interval '20 days', now() - interval '12 hours',
+   now() - interval '6 hours', '{}')
 ON CONFLICT (id) DO NOTHING;
 
--- 3 · Dos cadencias más, con lo que espera a Laura en la bandeja de aprobación.
+-- 3 · Las cinco marcas de la demo de bandejas, cada una con su persona.
+INSERT INTO company (id, name, legal_name, domain, country, city, industry, niche_slugs, size_bucket, socials, runs_ads)
+VALUES
+  ('00000008-0000-4000-8000-0000000000e1', 'Molino Andino',      'Molino Andino S.A.S.',      'molinoandino.test',      'CO', 'Manizales', 'alimentos', '{cocina}', 'mediana', '{"instagram": "molinoandino"}',      true),
+  ('00000008-0000-4000-8000-0000000000e2', 'Casa Olivo',         'Casa Olivo Ltda.',          'casaolivo.test',         'CO', 'Medellín',  'hogar',     '{hogar}',  'pyme',    '{"instagram": "casaolivo"}',         false),
+  ('00000008-0000-4000-8000-0000000000e3', 'Tostadores del Sur', 'Tostadores del Sur S.A.S.', 'tostadoresdelsur.test',  'CO', 'Pasto',     'alimentos', '{cocina}', 'pyme',    '{"instagram": "tostadoresdelsur"}',  false),
+  ('00000008-0000-4000-8000-0000000000e4', 'Huerta Viva',        'Huerta Viva S.A.S.',        'huertaviva.test',        'CO', 'Bogotá',    'alimentos', '{cocina}', 'pyme',    '{"instagram": "huertaviva"}',        true),
+  ('00000008-0000-4000-8000-0000000000e5', 'Cereal Aurora',      'Cereal Aurora S.A.S.',      'cerealaurora.test',      'CO', 'Cali',      'alimentos', '{cocina}', 'mediana', '{"instagram": "cerealaurora"}',      true)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO company_link (workspace_id, company_id, owner_user_id, relationship, fit_score, fit_explain, notes)
+SELECT '00000002-0000-4000-8000-000000000001', c.id, '00000002-0000-4000-8000-000000000002', 'contacted', 0.7500,
+       '{"audience_overlap": 0.75, "niche": "cocina", "country": "CO"}'::jsonb, 'Marca de la demo de bandejas (seed 0008).'
+  FROM company c
+ WHERE c.id IN ('00000008-0000-4000-8000-0000000000e1', '00000008-0000-4000-8000-0000000000e2', '00000008-0000-4000-8000-0000000000e3',
+                '00000008-0000-4000-8000-0000000000e4', '00000008-0000-4000-8000-0000000000e5')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO contact (id, company_id, full_name, role_title, email, linkedin_url, instagram_handle, source, source_url)
+VALUES
+  ('00000008-0000-4000-8000-0000000c0001', '00000008-0000-4000-8000-0000000000e1', 'Paula Restrepo', 'Brand manager',
+   'paula.restrepo@molinoandino.test', 'https://www.linkedin.com/in/paula-restrepo-molinoandino', NULL,
+   'public_website', 'https://molinoandino.test/prensa'),
+  ('00000008-0000-4000-8000-0000000c0002', '00000008-0000-4000-8000-0000000000e2', 'Mónica Villa', 'Coordinadora de marketing',
+   'monica.villa@casaolivo.test', NULL, NULL, 'public_website', 'https://casaolivo.test/contacto'),
+  ('00000008-0000-4000-8000-0000000c0003', '00000008-0000-4000-8000-0000000000e3', 'Felipe Ortega', 'Marketing digital',
+   'felipe.ortega@tostadoresdelsur.test', 'https://www.linkedin.com/in/felipe-ortega-tostadores', NULL,
+   'public_profile', 'https://www.linkedin.com/in/felipe-ortega-tostadores'),
+  ('00000008-0000-4000-8000-0000000c0004', '00000008-0000-4000-8000-0000000000e4', 'Tomás Arango', 'Community manager',
+   NULL, NULL, 'tomas.huertaviva', 'public_profile', 'https://www.instagram.com/huertaviva'),
+  ('00000008-0000-4000-8000-0000000c0005', '00000008-0000-4000-8000-0000000000e5', 'Esteban Mora', 'Gerente de mercadeo',
+   'esteban.mora@cerealaurora.test', NULL, NULL, 'public_website', 'https://cerealaurora.test/equipo')
+ON CONFLICT (id) DO NOTHING;
+
+-- 4 · Dos cadencias más, con lo que espera a Laura en la bandeja de aprobación.
 INSERT INTO outbound_enrollment
   (id, workspace_id, sequence_id, contact_id, current_step_id, status, resume_at, context, enrolled_by, started_at, finished_at)
 VALUES
-  -- Granos del Valle: el comentario se saltó (no hay LinkedIn que funcione) y el correo lo retuvo el juez.
+  -- Molino Andino: el comentario se saltó (no hay LinkedIn que funcione) y el correo lo retuvo el juez.
   ('00000008-0000-4000-8000-0000000e0001', '00000002-0000-4000-8000-000000000001',
-   '00000005-0000-4000-8000-0000005e0001', '00000002-0000-4000-8000-0000000c0009',
+   '00000005-0000-4000-8000-0000005e0001', '00000008-0000-4000-8000-0000000c0001',
    '00000005-0000-4000-8000-0000005e0102', 'active', NULL, '{"angles_used": []}'::jsonb,
    '00000002-0000-4000-8000-000000000002', now() - interval '1 day', NULL),
-  -- Hogar Lindo: el correo pasó la revisión, pero es de los diez primeros de su tipo.
+  -- Casa Olivo: el correo pasó la revisión, pero es de los diez primeros de su tipo.
   ('00000008-0000-4000-8000-0000000e0002', '00000002-0000-4000-8000-000000000001',
-   '00000005-0000-4000-8000-0000005e0001', '00000002-0000-4000-8000-0000000c0007',
+   '00000005-0000-4000-8000-0000005e0001', '00000008-0000-4000-8000-0000000c0002',
    '00000005-0000-4000-8000-0000005e0102', 'active', NULL, '{"angles_used": []}'::jsonb,
    '00000002-0000-4000-8000-000000000002', now() - interval '1 day', NULL)
 ON CONFLICT (id) DO NOTHING;
@@ -99,45 +150,47 @@ INSERT INTO outbound_touch
    status, scheduled_for, held_reason, blocked_reason, status_changed_at, created_at)
 VALUES
   ('00000008-0000-4000-8000-000000070001', '00000002-0000-4000-8000-000000000001',
-   '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000c0009',
+   '00000008-0000-4000-8000-0000000000e1', '00000008-0000-4000-8000-0000000c0001',
    '00000005-0000-4000-8000-0000005e0001', 1, '00000008-0000-4000-8000-0000000e0001',
    '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL, '', 'skipped', NULL, NULL, 'skipped_by_person',
    now() - interval '20 hours', now() - interval '1 day'),
   ('00000008-0000-4000-8000-000000070002', '00000002-0000-4000-8000-000000000001',
-   '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000c0009',
+   '00000008-0000-4000-8000-0000000000e1', '00000008-0000-4000-8000-0000000c0001',
    '00000005-0000-4000-8000-0000005e0001', 2, '00000008-0000-4000-8000-0000000e0001',
    '00000005-0000-4000-8000-0000005e0102', 'email', 'Granos para el desayuno de mi audiencia',
-   'Hola, Laura: quienes me siguen desayunan en casa entre semana y buscan recetas con granos enteros, '
-   'justo lo que vende Granos del Valle. El 40 % de mis videos de desayuno terminan en una compra. '
+   'Hola, Paula: quienes me siguen desayunan en casa entre semana y buscan recetas con granos enteros, '
+   'justo lo que vende Molino Andino. El 40 % de mis videos de desayuno terminan en una compra. '
    '¿Te muestro cómo quedaría una receta con su avena?',
    'held', NULL, 'quality_risk:unsourced_figure', NULL, now() - interval '3 hours', now() - interval '1 day'),
   ('00000008-0000-4000-8000-000000070003', '00000002-0000-4000-8000-000000000001',
-   '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000c0009',
+   '00000008-0000-4000-8000-0000000000e1', '00000008-0000-4000-8000-0000000c0001',
    '00000005-0000-4000-8000-0000005e0001', 3, '00000008-0000-4000-8000-0000000e0001',
    '00000005-0000-4000-8000-0000005e0103', 'linkedin', NULL,
-   'Laura, te dejo el video de la avena horneada con frutos rojos: una receta así con Granos del Valle '
+   'Paula, te dejo el video de la avena horneada con frutos rojos: una receta así con Molino Andino '
    'tendría el producto en el centro. ¿Te lo mando?',
    'held', NULL, 'needs_review', NULL, now() - interval '2 hours', now() - interval '1 day'),
   ('00000008-0000-4000-8000-000000070004', '00000002-0000-4000-8000-000000000001',
-   '00000002-0000-4000-8000-0000000000e3', '00000002-0000-4000-8000-0000000c0007',
+   '00000008-0000-4000-8000-0000000000e2', '00000008-0000-4000-8000-0000000c0002',
    '00000005-0000-4000-8000-0000005e0001', 1, '00000008-0000-4000-8000-0000000e0002',
    '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL, '', 'skipped', NULL, NULL, 'skipped_by_person',
    now() - interval '20 hours', now() - interval '1 day'),
   ('00000008-0000-4000-8000-000000070005', '00000002-0000-4000-8000-000000000001',
-   '00000002-0000-4000-8000-0000000000e3', '00000002-0000-4000-8000-0000000c0007',
+   '00000008-0000-4000-8000-0000000000e2', '00000008-0000-4000-8000-0000000c0002',
    '00000005-0000-4000-8000-0000005e0001', 2, '00000008-0000-4000-8000-0000000e0002',
    '00000005-0000-4000-8000-0000005e0102', 'email', 'Tu cocina en mis videos',
-   'Hola, Andrea: grabo en una cocina pequeña, como la de quien me sigue, y siempre me preguntan por los '
-   'utensilios. Hogar Lindo encaja en ese momento del video. ¿Hablamos de una receta con sus ollas?',
+   'Hola, Mónica: grabo en una cocina pequeña, como la de quien me sigue, y siempre me preguntan por los '
+   'utensilios. Casa Olivo encaja en ese momento del video. ¿Hablamos de una receta con sus ollas?',
    'held', NULL, 'quality_warmup:3', NULL, now() - interval '1 hour', now() - interval '1 day')
 ON CONFLICT (id) DO NOTHING;
+
 
 -- El retenido de Vitalé decía su motivo en una frase suelta: pasa al código del motor.
 UPDATE outbound_touch
    SET held_reason = 'quality_low:7.4'
  WHERE id = '00000005-0000-4000-8000-000000070004' AND held_reason LIKE 'El juez dejó%';
 
--- 4 · Lo que dijo la revisión automática de cada correo que redactó la IA:
+
+-- 5 · Lo que dijo la revisión automática de cada correo que redactó la IA:
 --     una fila de outbound_review por intento (nota por dimensión, riesgos
 --     y lo que el pre-vuelo no dejó pasar) y el intento elegido en
 --     outbound_generation. Es lo que enseña «Por qué quedó retenido».
@@ -147,15 +200,15 @@ INSERT INTO outbound_generation
 VALUES
   ('00000008-0000-4000-8000-000000070002', '00000002-0000-4000-8000-000000000001', 'reviewed',
    'Granos para el desayuno de mi audiencia',
-   'Hola, Laura: quienes me siguen desayunan en casa entre semana y buscan recetas con granos enteros, '
-   'justo lo que vende Granos del Valle. El 40 % de mis videos de desayuno terminan en una compra. '
+   'Hola, Paula: quienes me siguen desayunan en casa entre semana y buscan recetas con granos enteros, '
+   'justo lo que vende Molino Andino. El 40 % de mis videos de desayuno terminan en una compra. '
    '¿Te muestro cómo quedaría una receta con su avena?',
    'claude-sonnet-5', 2, 'held', now() - interval '3 hours', now() - interval '3 hours', 1, 2,
    'Suena a persona y abre con ellos, pero cita una cifra de compras que no sale de tu perfil.', 7.60),
   ('00000008-0000-4000-8000-000000070005', '00000002-0000-4000-8000-000000000001', 'reviewed',
    'Tu cocina en mis videos',
-   'Hola, Andrea: grabo en una cocina pequeña, como la de quien me sigue, y siempre me preguntan por los '
-   'utensilios. Hogar Lindo encaja en ese momento del video. ¿Hablamos de una receta con sus ollas?',
+   'Hola, Mónica: grabo en una cocina pequeña, como la de quien me sigue, y siempre me preguntan por los '
+   'utensilios. Casa Olivo encaja en ese momento del video. ¿Hablamos de una receta con sus ollas?',
    'claude-sonnet-5', 1, 'held', now() - interval '1 hour', now() - interval '1 hour', 1, 1,
    'Concreto y corto; la pregunta del cierre es una sola.', 8.70),
   ('00000005-0000-4000-8000-000000070004', '00000002-0000-4000-8000-000000000001', 'reviewed',
@@ -171,22 +224,22 @@ INSERT INTO outbound_review
    decision, model, input_tokens, output_tokens, cost, created_at)
 VALUES
   ('00000002-0000-4000-8000-000000000001', '00000008-0000-4000-8000-000000070002', 1, 1,
-   'Granos para el desayuno', 'Hola, Laura: sinergia entre mi audiencia y Granos del Valle. El 40 % de mis videos venden.',
+   'Granos para el desayuno', 'Hola, Paula: sinergia entre mi audiencia y Molino Andino. El 40 % de mis videos venden.',
    '{"preflight": {"issues": [{"code": "banned_word", "detail": "sinergia"}, {"code": "unsourced_figure", "detail": "40 %"}]}}'::jsonb,
    '{"relevance": 6.5, "quality": 5.5, "structure": 6.0, "voice": 6.0}'::jsonb, 6.00, 'more_specific', '{unsourced_figure}',
    'regenerate', 'claude-sonnet-5', 1850, 240, 0.009150, now() - interval '3 hours 1 minute'),
   ('00000002-0000-4000-8000-000000000001', '00000008-0000-4000-8000-000000070002', 1, 2,
    'Granos para el desayuno de mi audiencia',
-   'Hola, Laura: quienes me siguen desayunan en casa entre semana y buscan recetas con granos enteros, '
-   'justo lo que vende Granos del Valle. El 40 % de mis videos de desayuno terminan en una compra. '
+   'Hola, Paula: quienes me siguen desayunan en casa entre semana y buscan recetas con granos enteros, '
+   'justo lo que vende Molino Andino. El 40 % de mis videos de desayuno terminan en una compra. '
    '¿Te muestro cómo quedaría una receta con su avena?',
    '{"preflight": {"issues": [{"code": "unsourced_figure", "detail": "40 %"}]}}'::jsonb,
    '{"relevance": 8.0, "quality": 7.5, "structure": 7.5, "voice": 7.5}'::jsonb, 7.60, NULL, '{unsourced_figure}',
    'hold', 'claude-sonnet-5', 1920, 260, 0.009660, now() - interval '3 hours'),
   ('00000002-0000-4000-8000-000000000001', '00000008-0000-4000-8000-000000070005', 1, 1,
    'Tu cocina en mis videos',
-   'Hola, Andrea: grabo en una cocina pequeña, como la de quien me sigue, y siempre me preguntan por los '
-   'utensilios. Hogar Lindo encaja en ese momento del video. ¿Hablamos de una receta con sus ollas?',
+   'Hola, Mónica: grabo en una cocina pequeña, como la de quien me sigue, y siempre me preguntan por los '
+   'utensilios. Casa Olivo encaja en ese momento del video. ¿Hablamos de una receta con sus ollas?',
    '{"preflight": {"issues": []}}'::jsonb,
    '{"relevance": 8.5, "quality": 9.0, "structure": 8.5, "voice": 8.5}'::jsonb, 8.70, NULL, '{}',
    'pass', 'claude-sonnet-5', 1790, 220, 0.008670, now() - interval '1 hour'),
@@ -199,7 +252,7 @@ VALUES
    'hold', 'claude-sonnet-5', 2010, 250, 0.009780, now() - interval '3 hours')
 ON CONFLICT (touch_id, run, attempt) DO NOTHING;
 
--- 5 · Los hilos de LinkedIn e Instagram y un «fuera de la oficina», con lo que
+-- 6 · Los hilos de LinkedIn e Instagram y un «fuera de la oficina», con lo que
 --     leyó el clasificador (§5.7). Lo nuestro, como lo deja recordSent; lo
 --     suyo, como lo deja el lector o el webhook, ya clasificado.
 INSERT INTO outbound_message
@@ -207,38 +260,39 @@ INSERT INTO outbound_message
    subject, body, intent, intent_confidence, intent_source, intent_reason, classified_at, resume_at, referral,
    automatic, occurred_at, read_at, created_at)
 VALUES
-  -- LinkedIn · Camilo (Café Alma) nos remite a Mariana, de alianzas. La cuenta de LinkedIn está caída:
+  -- LinkedIn · Felipe (Tostadores del Sur) nos remite a Mariana, de alianzas. La cuenta de LinkedIn está caída:
   -- el hilo enseña «reconéctala para responder».
   ('00000008-0000-4000-8000-0000000a6001', '00000002-0000-4000-8000-000000000001', '00000005-0000-4000-8000-0000000ac002',
-   '00000002-0000-4000-8000-0000000c0004', 'outbound', 'linkedin', 'unipile-chat-demo-0004', 'unipile-demo-msg-0004-1', NULL,
-   NULL, 'Camilo, vi el lanzamiento del café de origen en su cuenta: una receta de postre con él funcionaría muy bien con mi audiencia. ¿Quién ve las alianzas con creadores?',
+   '00000008-0000-4000-8000-0000000c0003', 'outbound', 'linkedin', 'unipile-chat-demo-0004', 'unipile-demo-msg-0004-1', NULL,
+   NULL, 'Felipe, vi el lanzamiento del café de origen en su cuenta: una receta de postre con él funcionaría muy bien con mi audiencia. ¿Quién ve las alianzas con creadores?',
    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, now() - interval '4 days', NULL, now() - interval '4 days'),
   ('00000008-0000-4000-8000-0000000a6002', '00000002-0000-4000-8000-000000000001', '00000005-0000-4000-8000-0000000ac002',
-   '00000002-0000-4000-8000-0000000c0004', 'inbound', 'linkedin', 'unipile-chat-demo-0004', 'unipile-demo-msg-0004-2', NULL,
-   NULL, 'Hola, Laura. Gracias por escribir. Las alianzas las lleva Mariana López, de mercadeo: mariana.lopez@cafealma.test. Escríbele de mi parte.',
+   '00000008-0000-4000-8000-0000000c0003', 'inbound', 'linkedin', 'unipile-chat-demo-0004', 'unipile-demo-msg-0004-2', NULL,
+   NULL, 'Hola, Laura. Gracias por escribir. Las alianzas las lleva Mariana López, de mercadeo: mariana.lopez@tostadoresdelsur.test. Escríbele de mi parte.',
    'referral', 0.910, 'model', 'Remite a Mariana López, de mercadeo, y da su correo.', now() - interval '3 days', NULL,
-   '{"name": "Mariana López", "email": "mariana.lopez@cafealma.test", "role": "Mercadeo"}'::jsonb,
+   '{"name": "Mariana López", "email": "mariana.lopez@tostadoresdelsur.test", "role": "Mercadeo"}'::jsonb,
    NULL, now() - interval '3 days', NULL, now() - interval '3 days'),
-  -- Instagram · Andrés (Fresko) contesta con un «ok»: no se sabe qué pide.
+  -- Instagram · Tomás (Huerta Viva) contesta con un «ok»: no se sabe qué pide. El Instagram ya
+  -- está desconectado: el hilo enseña «reconéctala para responder».
   ('00000008-0000-4000-8000-0000000a6003', '00000002-0000-4000-8000-000000000001', '00000008-0000-4000-8000-0000000ac003',
-   '00000002-0000-4000-8000-0000000c0002', 'outbound', 'instagram_dm', 'unipile-ig-demo-0002', 'unipile-demo-ig-0002-1', NULL,
-   NULL, 'Andrés, me encantó el reel del mercado de los sábados. Tengo una idea de receta con sus frutas de temporada para mi cuenta. ¿Te la cuento?',
+   '00000008-0000-4000-8000-0000000c0004', 'outbound', 'instagram_dm', 'unipile-ig-demo-0002', 'unipile-demo-ig-0002-1', NULL,
+   NULL, 'Tomás, me encantó el reel del mercado de los sábados. Tengo una idea de receta con sus frutas de temporada para mi cuenta. ¿Te la cuento?',
    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, now() - interval '2 days', NULL, now() - interval '2 days'),
   ('00000008-0000-4000-8000-0000000a6004', '00000002-0000-4000-8000-000000000001', '00000008-0000-4000-8000-0000000ac003',
-   '00000002-0000-4000-8000-0000000c0002', 'inbound', 'instagram_dm', 'unipile-ig-demo-0002', 'unipile-demo-ig-0002-2', NULL,
+   '00000008-0000-4000-8000-0000000c0004', 'inbound', 'instagram_dm', 'unipile-ig-demo-0002', 'unipile-demo-ig-0002-2', NULL,
    NULL, 'Ok 👍',
    'ambiguous', 0.420, 'model', 'Solo dice «ok»: no queda claro si quiere seguir.', now() - interval '1 day', NULL, NULL,
    NULL, now() - interval '1 day', NULL, now() - interval '1 day'),
-  -- Correo · Julián (Nutrive) está de vacaciones: la respuesta automática trae su fecha de vuelta.
+  -- Correo · Esteban (Cereal Aurora) está de vacaciones: la respuesta automática trae su fecha de vuelta.
   ('00000008-0000-4000-8000-0000000a6005', '00000002-0000-4000-8000-000000000001', '00000005-0000-4000-8000-0000000ac001',
-   '00000002-0000-4000-8000-0000000c0005', 'outbound', 'email', 'gmail-thread-demo-0005', 'gmail-demo-0005-1', NULL,
-   'Una receta de temporada con Nutrive',
-   'Hola, Julián: quienes me siguen cocinan para la familia entre semana, el cliente de Nutrive. ¿Te interesa ver una receta de temporada con sus cereales?',
+   '00000008-0000-4000-8000-0000000c0005', 'outbound', 'email', 'gmail-thread-demo-0005', 'gmail-demo-0005-1', NULL,
+   'Una receta de temporada con Cereal Aurora',
+   'Hola, Esteban: quienes me siguen cocinan para la familia entre semana, el cliente de Cereal Aurora. ¿Te interesa ver una receta de temporada con sus cereales?',
    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, now() - interval '2 days', NULL, now() - interval '2 days'),
   ('00000008-0000-4000-8000-0000000a6006', '00000002-0000-4000-8000-000000000001', '00000005-0000-4000-8000-0000000ac001',
-   '00000002-0000-4000-8000-0000000c0005', 'inbound', 'email', 'gmail-thread-demo-0005', 'gmail-demo-0005-r1',
-   'julian.mesa@nutrive.co', 'Respuesta automática: Una receta de temporada con Nutrive',
-   'Gracias por tu correo. Estoy de vacaciones y vuelvo a la oficina en diez días. Para temas urgentes, escribe a mercadeo@nutrive.co.',
+   '00000008-0000-4000-8000-0000000c0005', 'inbound', 'email', 'gmail-thread-demo-0005', 'gmail-demo-0005-r1',
+   'esteban.mora@cerealaurora.test', 'Respuesta automática: Una receta de temporada con Cereal Aurora',
+   'Gracias por tu correo. Estoy de vacaciones y vuelvo a la oficina en diez días. Para temas urgentes, escribe a mercadeo@cerealaurora.test.',
    'ooo', 0.950, 'model', 'Es una respuesta automática de vacaciones con la fecha de vuelta.', now() - interval '2 days',
    date_trunc('day', now()) + interval '10 days', NULL, true, now() - interval '2 days', now() - interval '1 day',
    now() - interval '2 days')
