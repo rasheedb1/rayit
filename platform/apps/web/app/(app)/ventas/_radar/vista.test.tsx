@@ -206,6 +206,41 @@ describe("RadarView: «No aceptar esta marca» (VEN-7 r4)", () => {
     expect(data.getAll("creatorIds")).toEqual([]);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("status")).toHaveTextContent(r.doneHidden("Vitalé"));
+    // La tarjeta se va con la revalidación: el foco no cae en <body>, va al aviso (VEN-7 r5).
+    expect(document.activeElement).toBe(screen.getByTestId("radar-aviso"));
+    expect(screen.getByTestId("radar-aviso")).toContainElement(screen.getByRole("status"));
+  });
+
+  it("con un brief, el diálogo habla de tu bandeja, pone Cancelar primero a la derecha y el foco en él (VEN-7 r5)", () => {
+    render(<RadarView signals={[senal({})]} f={f} currency="COP" reject={{ creators: [{ id: CREADORA, name: "Laura" }] }} />);
+    // «No aceptar esta marca» va junto a Descartar, en el mismo grupo de acciones.
+    const descartar = screen.getByRole("button", { name: `${MESSAGES.radar.discard}: Vitalé` });
+    const noAceptar = screen.getByRole("button", { name: r.actionFor("Vitalé") });
+    expect(descartar.parentElement).toBe(noAceptar.parentElement);
+    fireEvent.click(noAceptar);
+    const dialogo = screen.getByRole("dialog", { name: r.title("Vitalé") });
+    expect(dialogo).toHaveAccessibleDescription(r.description);
+    expect(r.description).not.toMatch(/todos los briefs/);
+    const cancelar = within(dialogo).getByRole("button", { name: MESSAGES.acciones.cancel });
+    const confirmar = within(dialogo).getByRole("button", { name: r.confirm });
+    expect(cancelar.nextElementSibling).toBe(confirmar);
+    expect(cancelar.parentElement).toHaveClass("justify-end");
+    expect(document.activeElement).toBe(cancelar);
+  });
+
+  it("con varios briefs, la descripción explica la regla de todos y el foco va a la primera casilla", () => {
+    render(
+      <RadarView
+        signals={[senal({})]}
+        f={f}
+        currency="COP"
+        reject={{ creators: [{ id: CREADORA, name: "Laura" }, { id: BETO, name: "Beto" }] }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: r.actionFor("Vitalé") }));
+    const dialogo = screen.getByRole("dialog");
+    expect(dialogo).toHaveAccessibleDescription(r.descriptionMany);
+    expect(document.activeElement).toBe(within(dialogo).getByRole("checkbox", { name: "Laura" }));
   });
 
   it("con varios, una casilla por creador; sin ninguna no envía, y el error se queda en el diálogo", async () => {

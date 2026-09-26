@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { SectionTitle } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -103,6 +103,22 @@ export function Radar({
   const ocultas = cards.filter((c) => c.hiddenReason !== null);
   const [aviso, setAviso] = useState<AvisoRadar | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const avisoRef = useRef<HTMLDivElement>(null);
+  /**
+   * Aceptar, descartar o no aceptar la marca quitan la tarjeta de la
+   * bandeja (la revalidación la desmonta) y con ella el botón que tenía el
+   * foco, que caía en <body> (VEN-7 r5). El foco pasa al aviso, que dice
+   * qué pasó: quien usa teclado o lector de pantalla no pierde su sitio.
+   */
+  const [focoAviso, setFocoAviso] = useState(0);
+  useEffect(() => {
+    if (focoAviso > 0) avisoRef.current?.focus();
+  }, [focoAviso]);
+
+  function resultado(a: AvisoRadar) {
+    setAviso(a);
+    setFocoAviso((n) => n + 1);
+  }
 
   function open(next: Panel) {
     setPanel((cur) => (cur === next ? "none" : next));
@@ -148,7 +164,12 @@ export function Radar({
       )}
 
       {aviso && (
-        <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div
+          ref={avisoRef}
+          tabIndex={-1}
+          data-testid="radar-aviso"
+          className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md focus:outline-none"
+        >
           <Aviso message={aviso.message} notice={aviso.notice} className="flex-1" />
           {aviso.link && (
             <Link href={aviso.link.href} className="text-sm text-ink underline underline-offset-4 hover:text-ink-2">
@@ -169,7 +190,7 @@ export function Radar({
           {visibles.length > 0 && (
             <ul className="flex flex-col gap-2">
               {visibles.map((card) => (
-                <SignalCard key={card.id} card={card} onResult={setAviso} reject={reject} />
+                <SignalCard key={card.id} card={card} onResult={resultado} reject={reject} />
               ))}
             </ul>
           )}
@@ -181,7 +202,7 @@ export function Radar({
               </h3>
               <ul className="flex flex-col gap-2">
                 {ocultas.map((card) => (
-                  <SignalCard key={card.id} card={card} onResult={setAviso} reject={reject} />
+                  <SignalCard key={card.id} card={card} onResult={resultado} reject={reject} />
                 ))}
               </ul>
             </section>
@@ -249,7 +270,8 @@ function SignalCard({
   return (
     <li className="rounded-md border border-border bg-surface p-4" aria-busy={pending || undefined}>
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
+        {/* Con base de 18rem: si no caben el texto y las tres acciones, las acciones bajan a su propia línea en vez de exprimir el texto. */}
+        <div className="min-w-0 flex-1 basis-72">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-ink">{name}</span>
             {card.fit && (
@@ -302,25 +324,29 @@ function SignalCard({
           </p>
         </div>
 
+        {/*
+          «No aceptar esta marca» va junto a Descartar, como tercera acción
+          y más discreta (ghost), no en una franja propia (VEN-7 r5): es
+          secundaria, como en Passionfroot y Pipedrive. A 400 px el grupo
+          envuelve en vez de desbordar.
+        */}
         {!discarding && (
-          <div className="flex shrink-0 gap-2">
+          <div className="flex min-w-0 flex-wrap gap-2">
             <Button variant="primary" size="sm" onClick={accept} loading={busy === "accept"} disabled={pending} aria-label={`${t.accept}: ${name}`}>
               {t.accept}
             </Button>
             <Button variant="secondary" size="sm" onClick={() => setDiscarding(true)} disabled={pending} aria-label={`${t.discard}: ${name}`}>
               {t.discard}
             </Button>
+            {card.canReject && reject && (
+              <Button variant="ghost" size="sm" onClick={() => setRejecting(true)} disabled={pending} aria-label={t.reject.actionFor(name)}>
+                {t.reject.action}
+              </Button>
+            )}
           </div>
         )}
       </div>
 
-      {card.canReject && reject && !discarding && (
-        <div className="mt-3 border-t border-border pt-3">
-          <Button variant="ghost" size="sm" onClick={() => setRejecting(true)} disabled={pending} aria-label={t.reject.actionFor(name)}>
-            {t.reject.action}
-          </Button>
-        </div>
-      )}
       {rejecting && reject && (
         <NoAceptarDialog
           signalId={card.id}
@@ -397,7 +423,7 @@ function NoAceptarDialog({
   }
 
   return (
-    <Dialog title={t.title(name)} description={t.description} onClose={onClose}>
+    <Dialog title={t.title(name)} description={creators.length > 1 ? t.descriptionMany : t.description} onClose={onClose}>
       <form onSubmit={submit} noValidate className="space-y-4" aria-label={t.title(name)}>
         {creators.length > 1 && (
           <fieldset className="space-y-2" aria-describedby={`no-aceptar-${signalId}-ayuda`}>
@@ -411,12 +437,20 @@ function NoAceptarDialog({
           </fieldset>
         )}
         {error && <Aviso message={error} />}
-        <div className="flex flex-wrap gap-2">
-          <Button type="submit" variant="danger" size="sm" loading={pending}>
-            {t.confirm}
-          </Button>
+        {/*
+          El mismo pie que «¿Por qué lo pierdes?» (PerderDialogo) y que el
+          README del kit pide a todo Dialog: a la derecha, Cancelar primero y
+          la acción que no se deshace al final. Con un solo brief no hay
+          casillas y Cancelar es el primer control: el foco inicial cae ahí,
+          y dos Enter seguidos ya no excluyen la marca (VEN-7 r5). Con
+          varios, cae en la primera casilla.
+        */}
+        <div className="flex flex-wrap justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={pending}>
             {MESSAGES.acciones.cancel}
+          </Button>
+          <Button type="submit" variant="danger" size="sm" loading={pending}>
+            {t.confirm}
           </Button>
         </div>
       </form>
