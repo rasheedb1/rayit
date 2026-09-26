@@ -15,7 +15,7 @@
  */
 import { warmupDailyLimit } from '@mc/core/outreach/warmup';
 import { isUuid, type WorkspaceTx } from '../client.ts';
-import { CANCELABLE_TOUCH_STATUSES, TOUCH_STATUSES } from '../schema/ventas.ts';
+import { CANCELABLE_TOUCH_STATUSES, type TOUCH_STATUSES } from '../schema/ventas.ts';
 import { STEP_TYPES } from '../schema/outreach.ts';
 import { advanceEnrollment } from './outreach/enroll.ts';
 import { BAD_ADDRESS_CODES } from './outreach/send.ts';

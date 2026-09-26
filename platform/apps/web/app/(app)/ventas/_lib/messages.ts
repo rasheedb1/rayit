@@ -42,6 +42,7 @@ export const MESSAGES = {
     empresas: "Empresas",
     canales: "Canales",
     cadencias: "Cadencias",
+    actividad: "Actividad",
     perfil: "Perfil comercial",
   },
 
