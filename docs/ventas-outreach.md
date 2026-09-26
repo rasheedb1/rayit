@@ -1670,6 +1670,58 @@ una marca en la política. Las otras cadencias de la misma marca que una
 respuesta pausó (`stop_company_on_reply`) no se tocan: las reanuda una
 persona.
 
+#### Ronda 2 (0065)
+
+- **El lote es justo y nada se paga dos veces.** `listUnclassifiedInbound`
+  reparte el lote entre workspaces (`INTENT_PER_WORKSPACE`, cinco de cada
+  uno, alternados) y deja fuera, en SQL, a los que hoy no tienen
+  presupuesto: uno con cien respuestas y sin tope ya no deja a los demás
+  sin «interesado → mover el negocio». La llamada al modelo y su decisión
+  se guardan en UNA transacción (`recordClassification`,
+  `outbound_message.intent_decision`); si aplicar los efectos falla, la
+  corrida siguiente reintenta solo los efectos, y al tercer fallo
+  (`INTENT_MAX_ATTEMPTS`, `intent_attempts`) la respuesta queda ambigua
+  con confianza 0 y un aviso. El lector del correo guarda si la respuesta
+  llegó con cabeceras automáticas (`outbound_message.automatic`) y el
+  clasificador lo recibe; la frase del modelo queda en `intent_reason` y
+  la bandeja la enseña («Por qué: …»).
+- **Una persona corrige la intención** (`reclassifyInboxMessage`, con la
+  RLS de la web): «Corregir» junto a cada respuesta aplica los mismos
+  efectos que el job (`reapplyIntent`) con `intent_source = 'person'`.
+  Antes deshace lo que la intención anterior dejó en la cadencia (un
+  «fuera de la oficina» o un «ahora no» corregidos devuelven el
+  enrolamiento a `replied` y cancelan lo que se había devuelto a la cola).
+  Una baja no se corrige (es de una sola dirección) y pide confirmación;
+  la etapa del negocio no retrocede sola.
+- **La bandeja unificada**: «Pendientes», «Hechas» y «Todas» (`done_at`:
+  «Marcar como hecha», que vuelve sola a pendientes si responden); el
+  teclado de Superhuman (j/k entre hilos, r a la respuesta, e hecha, Esc a
+  la lista; la leyenda solo con teclado); en escritorio abre el primero
+  sin leer, que en un teléfono no se marca leído. Una respuesta en cola se
+  **cancela o se edita** mientras el despachador no la tome
+  (`cancelInboxReply`, `canceled_by_person`); las que no salieron se ven
+  aparte con su motivo hasta que se descartan
+  (`outbound_touch.inbox_dismissed_at`). Con el envío apagado el aviso dice
+  que queda en cola, no que sale en la próxima pasada. Sin clasificador
+  (`outreach_classifier_status`, como el del redactor) la conversación lo
+  dice en vez de prometer «la IA la lee en unos minutos». Un «ahora no»
+  enseña hasta cuándo se enfría la cadencia, y un referido creado propone
+  «Enrolar en una cadencia» (la de su hilo, con el negocio elegido). Una
+  respuesta con un id que ya es de otro workspace es `not_found`, y el
+  referido solo se crea desde un mensaje que lo es.
+- **La bandeja de aprobación**: la cola está siempre montada (el aviso de
+  aprobar la última no se pierde) y ofrece «Deshacer» diez segundos
+  (`undoApproval`: vuelve a `held` con su motivo si sigue programado con
+  esa aprobación); el contador dice «Mostrando 100 de N» cuando la cola es
+  más larga; la leyenda de atajos solo sale con teclado y sin «r» si nada
+  se puede regenerar.
+- **La demo cuenta la historia** (seed 0008): cuatro retenidos con su
+  código (revisión automática con nota por dimensión, riesgos y
+  pre-vuelo; calentamiento; revisión humana en LinkedIn), la dirección
+  postal en la política, un Instagram conectado sin secreto y los hilos de
+  un referido (LinkedIn, con la cuenta caída), una ambigua (Instagram) y
+  un «fuera de la oficina» automático (correo).
+
 ---
 
 ## 6. Las historias nuevas de Ventas

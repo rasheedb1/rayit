@@ -32,7 +32,16 @@
  * cooldown_over), replanificados desde hoy: nada sale sin una persona.
  * Nada queda pausado para siempre.
  *
- * Todo corre como mc_worker (WorkerSql): cada consulta nombra su workspace.
+ * Nada se paga dos veces (0065): la decisión del clasificador se guarda
+ * con su gasto (recordClassification) antes de aplicar los efectos; si
+ * aplicarlos falla, la corrida siguiente solo reintenta los efectos, y al
+ * tercer fallo (failIntentAttempt) la respuesta queda ambigua para una
+ * persona. Una persona puede corregir la intención desde la bandeja
+ * (reapplyIntent): los mismos efectos, con intent_source 'person'.
+ *
+ * Lo del job corre como mc_worker (WorkerSql): cada consulta nombra su
+ * workspace. Los efectos (intentEffects) y la corrección corren también
+ * con la RLS de la web: todo lo que tocan es del workspace del mensaje.
  */
 import { DEFAULT_SEND_WINDOW, planSteps } from '@mc/core';
 import { INBOX_URLS, INTENT_NOTICE_TEXTS } from '@mc/core/outreach/intent-messages';

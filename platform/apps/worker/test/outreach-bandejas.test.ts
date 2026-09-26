@@ -509,6 +509,24 @@ test('una persona corrige la intención desde la bandeja: la ambigua pasa a inte
   assert.equal(await scalar<boolean>(`SELECT read_at IS NOT NULL AS v FROM notification WHERE entity_id = $1 AND entity_type = 'outbound_message_intent'`, [m.id]), true, 'el aviso de revisarla queda leído');
 });
 
+test('una ambigua corregida a baja deja la ficha de baja y cancela lo pendiente; una baja ya no se corrige', async () => {
+  const w = await workspace(28, { contacts: 1 });
+  const pitch = await pitchPendiente(w, w.contacts[0]!);
+  const { contact } = await conversacion(w, F.ambigua!.body);
+  const dudoso = new LlmIntentClassifier(scriptedModel('{"intent":"interested","confidence":0.5,"return_date":null,"referral":null,"reason":"Solo dice ok."}'));
+  await runIntent(motor, { classifier: dudoso, now: () => bogota('2026-09-23', '15:06'), workspaceId: w.id });
+  const m = await scalar<string>(`SELECT id AS v FROM outbound_message WHERE contact_id = $1 AND direction = 'inbound'`, [contact]);
+  const r = await comoLaWeb(w.id, (tx) => reclassifyInboxMessage(tx, { messageId: m, intent: 'unsubscribe', now: bogota('2026-09-23', '16:00') }));
+  assert.equal(r.ok && r.optOut, true);
+  assert.equal(await scalar<boolean>('SELECT opted_out AS v FROM contact WHERE id = $1', [contact]), true);
+  assert.equal(await scalar<string>("SELECT status || ':' || blocked_reason AS v FROM outbound_touch WHERE id = $1", [pitch]), 'canceled:opted_out');
+  assert.equal(await scalar<string>('SELECT status AS v FROM outbound_enrollment WHERE contact_id = $1', [contact]), 'opted_out');
+  assert.deepEqual(
+    await comoLaWeb(w.id, (tx) => reclassifyInboxMessage(tx, { messageId: m, intent: 'interested', now: bogota('2026-09-23', '16:05') })),
+    { ok: false, code: 'opted_out' },
+  );
+});
+
 test('corregir un «fuera de la oficina» que no lo era: la cadencia no vuelve sola', async () => {
   const w = await workspace(26, { contacts: 1 });
   const { contact } = await conversacion(w, F.fuera_de_oficina!.body);

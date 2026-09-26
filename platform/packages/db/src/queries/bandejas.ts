@@ -26,6 +26,10 @@
  * al último mensaje entrante (reply_to_message_id, 0064): lo envía el mismo
  * motor, con sus topes, su pie de baja y su hilo. El id del toque lo pone
  * el formulario: enviar dos veces el mismo formulario no crea dos mensajes.
+ * Mientras espera, se cancela (o se edita: cancelar y volver a escribir);
+ * lo que no salió se ve con su motivo hasta que se descarta. Un hilo se
+ * marca hecho (done_at, 0065) y una persona corrige la intención de una
+ * respuesta con sus efectos (reclassifyInboxMessage).
  */
 import { findPlaceholders } from '@mc/core';
 import { cleanReferral, type MessageIntent, type Referral } from '@mc/core/outreach/intent';

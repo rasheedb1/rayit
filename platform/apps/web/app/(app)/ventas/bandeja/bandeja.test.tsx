@@ -32,7 +32,8 @@ import { formatterFor } from "@/lib/format";
 import { AtajosBandeja } from "./acciones";
 import { Conversacion } from "./conversacion";
 import { ListaHilos } from "./lista";
-import { MESSAGES } from "./messages";
+import { MESSAGE_INTENTS } from "@mc/core/outreach/intent";
+import { INTENCIONES, MESSAGES } from "./messages";
 import { CrearReferido, Respuestas } from "./responder";
 import { conversacionVista, hiloHref, hiloVista, intencionClave } from "./vista";
 
@@ -96,6 +97,10 @@ beforeEach(() => {
 });
 
 describe("la vista", () => {
+  it("las intenciones de la pantalla son las de @mc/core, ni una más ni una menos", () => {
+    expect([...INTENCIONES].sort()).toEqual([...MESSAGE_INTENTS].sort());
+  });
+
   it("una intención desconocida o sin clasificar es «pendiente»", () => {
     expect(intencionClave(null)).toBe("pendiente");
     expect(intencionClave("otra")).toBe("pendiente");

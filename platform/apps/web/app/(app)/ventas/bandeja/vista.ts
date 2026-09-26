@@ -7,9 +7,19 @@
 import type {
   ClassifierStatus, InboxConversation, InboxFilter, InboxThread, PendingReply, ReplyBlock,
 } from "@mc/db/queries/bandejas";
+import type { MessageIntent } from "@mc/core/outreach/intent";
 import { channelLabel, noticeLang } from "@mc/core/outreach/messages";
 import type { Formatter } from "@/lib/format";
 import { INTENCIONES, MESSAGES, VISTAS, type Intencion, type IntencionClave, type VistaBandeja } from "./messages";
+
+/**
+ * INTENCIONES (messages.ts, que llega al cliente y no puede importar
+ * @mc/core/outreach/intent) es la lista de MESSAGE_INTENTS en el orden en
+ * que se ofrece «Corregir». Si una de las dos cambia, esto no compila; la
+ * prueba compara además los valores.
+ */
+type Iguales<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+export const INTENCIONES_AL_DIA: Iguales<Intencion, MessageIntent> = true;
 
 const CONOCIDAS: ReadonlySet<string> = new Set(INTENCIONES);
 
