@@ -1791,6 +1791,59 @@ persona.
   respuesta es uno solo, `INBOX_REPLY_MAX_CHARS`, en el campo y en la
   acción. La clasificación sin llave es la decisión 9 de §8.
 
+#### Ronda 5 (sin migración nueva)
+
+- **La baja de un tercero se decide en la bandeja.** Si la pide alguien
+  en copia (`applyReplyOptOut`: el remitente no es la ficha), el mensaje
+  queda `unsubscribe` y la ficha sin baja. La bandeja ya no dice «la
+  ficha ya no recibe mensajes»: dice quién la pidió («Lo pidió
+  otra@marca.test, no la ficha») y deja «Corregir»; elegir «Pidió la
+  baja: dar de baja a la ficha» (con su confirmación en rojo) sí la da de
+  baja, porque lo decide una persona (`senderConfirmed`), y corregirla a
+  otra intención quita la marca. `reclassifyInboxMessage` solo se niega
+  cuando la ficha está de baja de verdad (la misma condición que el
+  despachador: su marca, su correo suprimido o dado de baja en el
+  espacio).
+- **Quién escribió cada mensaje.** Cada mensaje dice «Tú», el nombre de
+  la ficha o la dirección de quien respondió, y «no es Paula» si no es
+  ella (`fromContact`, la misma comparación que la baja).
+- **«Me interesa» cancela lo pendiente** (lo que pide esta sección): la
+  respuesta ya detenía sus cadencias, pero un pitch suelto programado a
+  la misma ficha salía días después, en frío. Ahora se cancela
+  (`replied_interested`); una respuesta escrita en la bandeja, no.
+- **El falso ve la negación.** «No me interesa», «No, no nos interesa»,
+  «Not interested», «Não nos interessa» dan `not_now` con 0,8 (antes
+  `interested` con 0,9: abrían un negocio). El prompt del modelo dice lo
+  mismo: un «no» que no pide la baja es `not_now`. Fixtures `rechazo*` en
+  `marcas.json`.
+- **La respuesta retenida es una respuesta.** Una respuesta de la bandeja
+  que el despachador retiene entra a la cola de aprobación como «Tu
+  respuesta desde la bandeja»: en el hilo (`email_reply`, «Responde en el
+  hilo «…»»), sin campo de asunto y sin «Regenerar»; se aprueba tal cual
+  (`releaseHeldTouch` no pide asunto con `reply_to_message_id`). En la
+  bandeja se ve «Retenida» con el motivo y el enlace a aprobaciones. Sin
+  la dirección postal del pie, la bandeja no deja escribir una respuesta
+  por correo y lleva a guardarla (`no_postal_address`).
+- **El borrador no se pierde.** «Tu respuesta» se guarda por hilo
+  (sessionStorage, ficha y canal) y vuelve al volver; con texto sin
+  enviar, j, k, e y Esc avisan la primera vez y siguen a la segunda.
+- **«e» pasa a la siguiente** en «Pendientes» (la de detrás, la de
+  delante si era la última, o la lista), como en Superhuman.
+- **Stripe Radar de verdad.** La nota dice el mínimo de la rúbrica del
+  paso («7,4 de 10 · mínimo 8») y la dimensión que queda por debajo va en
+  ámbar; en una versión nueva el título es «La revisión de la versión
+  nueva». Una cifra sin origen al aprobar va en el campo del mensaje
+  (aria-invalid, con el foco, una sola vez) y su frase se enseña debajo
+  con la cifra subrayada: un `<textarea>` no se puede resaltar por dentro
+  con la API del editor del pitch.
+- **Detalles.** El nombre de los avisos («Aprobado: el mensaje a Paula…»)
+  lo devuelve la base; `editar` pasa por zod; el canal es
+  `BandejaChannel`; la fila dice paso y canal a un lector de pantalla; el
+  anillo de foco no depende de `sm`; tras «Pedir otra versión» el foco
+  vuelve a la fila y, en la demo, el aviso dice que la versión nueva ya
+  está; un borrador regenerado que no se puede aprobar tal cual sigue
+  como estaba (SAVEPOINT) y no queda retenido por «Revisión humana».
+
 ---
 
 ## 6. Las historias nuevas de Ventas
@@ -1929,8 +1982,14 @@ revisores técnico y de producto y el mismo umbral.
    negocios, enfría cadencias noventa días y da de baja a una persona
    (irreversible); hacerlo en un espacio de verdad sin que nadie lo sepa
    es peor que no hacerlo. **Estado (25 de septiembre): supuesto
-   declarado, como la 6 y la 7**, con el cambio del criterio escrito en
-   la nota de VEN-14 en `backlog.ts`. **Si Rasheed lo rechaza**, basta con
+   declarado, pendiente de que Rasheed lo confirme antes de mergear.**
+   El criterio de aceptación de VEN-14 (`done` en `backlog.ts`) sigue
+   siendo el original: cambiarlo no le toca al constructor; el supuesto
+   está en la `note` de la historia. En la ronda 5 el falso dejó de leer
+   «no me interesa» como interés (la regla de la negación va antes y da
+   «ahora no», igual que el prompt del modelo), así que lo que sigue en
+   pie de este supuesto es solo la pregunta de si un espacio de verdad
+   sin llave debe clasificar con palabras. **Si Rasheed lo rechaza**, basta con
    que `intentClassifierFrom` (`apps/worker/src/jobs/ventas/outbound.intent.ts`)
    devuelva `createFakeIntentClassifier()` cuando no hay llave (y la
    bandeja deje de avisar: `outreach_classifier_status` diría `fake`). Lo
