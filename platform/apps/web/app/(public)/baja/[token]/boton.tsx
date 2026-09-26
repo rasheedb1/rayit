@@ -42,7 +42,7 @@ export function DejarDeRecibir({
     const texto =
       resultado.status === "ok"
         ? resultado.alreadyOptedOut
-          ? t.yaEstaba
+          ? { title: t.yaEstaba.title, body: t.yaEstaba.body(quien) }
           : { title: t.listo.title(quien), body: t.listo.body(soporte) }
         : resultado.status === "sender"
           ? t.remitente

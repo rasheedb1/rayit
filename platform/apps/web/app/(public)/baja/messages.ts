@@ -25,8 +25,9 @@ export interface BajaTexts {
     title: string;
     /**
      * Una sola frase con quién escribe y a qué dirección (enmascarada),
-     * como la baja de Substack: «Laura no volverá a escribirte: ni a
-     * v•••@marca.com ni por ningún otro canal». Quién va PRIMERO, porque es
+     * como la baja de Substack, dicha como CONSECUENCIA de confirmar
+     * (todavía no ha pasado nada): «Si confirmas, Laura no volverá a
+     * escribirte: ni a v•••@marca.com ni por ningún otro canal». Quién va PRIMERO, porque es
      * lo que limita la promesa: la baja es de quien envió este correo, en
      * todos sus canales, y no de toda la plataforma (0038 §8): cada creador
      * responde de su propio envío. Antes eran dos frases y la
@@ -51,7 +52,8 @@ export interface BajaTexts {
      */
     body: (soporte: string | null) => string;
   };
-  yaEstaba: { title: string; body: string };
+  /** Con el nombre de quien escribía, si la página lo sabe. */
+  yaEstaba: { title: string; body: (quien: string | null) => string };
   /**
    * Un enlace que no es de ningún correo enviado: /baja/<token>/not-found
    * con un 404 de verdad (los monitores y los proveedores que prueban el
@@ -74,7 +76,7 @@ export const MESSAGES_ES: BajaTexts = {
   pregunta: {
     title: "¿Dejar de recibir estos mensajes?",
     frase: (quien, direccion) =>
-      `${quien ?? "Quien te escribió"} no volverá a escribirte: ni a ${direccion} ni por ningún otro canal.`,
+      `Si confirmas, ${quien ?? "quien te escribió"} no volverá a escribirte: ni a ${direccion} ni por ningún otro canal.`,
     boton: "Dejar de recibir mensajes",
     enviando: "Un momento…",
   },
@@ -87,7 +89,7 @@ export const MESSAGES_ES: BajaTexts = {
   },
   yaEstaba: {
     title: "Ya estabas fuera de sus envíos",
-    body: "No hace falta hacer nada: quien te escribió ya no envía mensajes a esta dirección.",
+    body: (quien) => `No hace falta hacer nada: ${quien ?? "quien te escribió"} ya no te escribe a esta dirección.`,
   },
   noExiste: {
     title: "Este enlace no es válido",
@@ -112,7 +114,7 @@ export const MESSAGES_EN: BajaTexts = {
   pregunta: {
     title: "Stop getting these messages?",
     frase: (quien, direccion) =>
-      `${quien ?? "The sender"} won't write to you again: not at ${direccion}, and not on any other channel.`,
+      `If you confirm, ${quien ?? "the sender"} won't write to you again: not at ${direccion}, and not on any other channel.`,
     boton: "Unsubscribe",
     enviando: "One moment…",
   },
@@ -125,7 +127,7 @@ export const MESSAGES_EN: BajaTexts = {
   },
   yaEstaba: {
     title: "You were already off their list",
-    body: "Nothing else to do: the sender no longer writes to this address.",
+    body: (quien) => `Nothing else to do: ${quien ?? "the sender"} no longer writes to this address.`,
   },
   noExiste: {
     title: "This link isn't valid",
