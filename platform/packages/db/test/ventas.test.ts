@@ -608,6 +608,44 @@ describe('VEN-2 · radar', () => {
     assert.equal(nuevo?.dueState, 'futuro');
   });
 
+  test('aceptar una señal con el mismo nombre y otro dominio no crea una segunda empresa en silencio: pregunta (pulido r2)', async () => {
+    // El caso de Molino Andino: la ficha tiene molinoandino.test y la señal
+    // trae molinoandino.co. Antes nacía una segunda empresa con su negocio
+    // y la ficha real se quedaba sin él.
+    const ficha = await laura((tx) => createCompany(tx, { name: 'Harinera del Sur', domain: 'harineradelsur.test' }));
+    const cuantas = async () =>
+      (await t.db.asWorker((tx) => tx.query<{ n: number }>("SELECT count(*)::int AS n FROM company WHERE name_key = brand_key('Harinera del Sur')"))).rows[0]?.n;
+    const primera = await laura((tx) =>
+      createSignal(tx, { companyName: 'Harinera del Sur', domain: 'harineradelsur.co', headlineEs: '5 anuncios nuevos en Meta' }));
+    assert.ok(primera.id);
+
+    await assert.rejects(
+      () => laura((tx) => acceptSignal(tx, primera.id!)),
+      (err: unknown) => err instanceof DuplicateCompanyName && err.params?.['companyId'] === ficha,
+    );
+    // «Es la misma» con otra empresa que no se llama así no vale: se vuelve a preguntar.
+    await assert.rejects(
+      () => laura((tx) => acceptSignal(tx, primera.id!, { sameName: { useCompanyId: COMPANY_CAFE_ALMA } })),
+      DuplicateCompanyName,
+    );
+    assert.equal(await cuantas(), 1, 'preguntar no crea nada');
+
+    // «Sí, es la misma»: la señal se suma a la ficha que ya estaba.
+    const misma = await laura((tx) => acceptSignal(tx, primera.id!, { sameName: { useCompanyId: ficha } }));
+    assert.equal(misma.companyId, ficha);
+    assert.equal(misma.companyCreated, false);
+    assert.equal(await cuantas(), 1);
+
+    // «No, es otra marca», con el nombre por el que se preguntó: entonces sí nace otra.
+    const segunda = await laura((tx) =>
+      createSignal(tx, { companyName: 'Harinera del Sur', domain: 'harineradelsur.co', headlineEs: 'Abre planta en Cali' }));
+    assert.ok(segunda.id);
+    const otra = await laura((tx) => acceptSignal(tx, segunda.id!, { sameName: { createAnyway: 'HARINERA DEL SUR' } }));
+    assert.equal(otra.companyCreated, true);
+    assert.notEqual(otra.companyId, ficha);
+    assert.equal(await cuantas(), 2);
+  });
+
   test('el negocio que abre una señal nunca se llama como la marca: su titular, o «Por definir»', async () => {
     // A mano, con titular: el negocio toma el titular.
     const aMano = await laura((tx) => createSignal(tx, { companyName: 'Panadería Aurora', headlineEs: 'Abre 3 tiendas en Bogotá' }));

@@ -1275,6 +1275,13 @@ interface ResolvedCompany {
 }
 
 /**
+ * Qué hacer con una empresa del CRM que se llama igual y tiene otro
+ * dominio: preguntar (aceptar una señal, con la respuesta si ya la hay)
+ * o usarla (no aceptar una marca desde el brief).
+ */
+type SameNamePolicy = { ask: true; choice?: SameNameChoice | null } | { ask: false };
+
+/**
  * La empresa que ya conocemos detrás de un id, un dominio o un nombre.
  *
  *   - Por id: la visible (la mía o la del catálogo compartido).
@@ -1539,7 +1546,20 @@ export interface AcceptSignalOptions {
   pendingDealName?: string;
   /** Desde cuándo se cuentan los días hábiles del pitch. Por defecto, now() de la base; lo fijan las pruebas. */
   now?: Date;
+  /**
+   * La respuesta a «¿Es la misma X de tu CRM?» (pulido r2). La señal trae
+   * un dominio que nadie tiene y el CRM ya tiene una empresa con el mismo
+   * nombre y OTRO dominio (marca.com y marca.co): sin respuesta,
+   * acceptSignal lanza DuplicateCompanyName y la tarjeta pregunta.
+   * `useCompanyId`: es la misma, la señal se suma a esa empresa (solo si
+   * es una del CRM con ese nombre). `createAnyway`: es otra marca, con el
+   * nombre por el que se preguntó, como allowSameNameAs en createCompany.
+   */
+  sameName?: SameNameChoice | null;
 }
+
+/** Qué dijo la persona de una marca que se llama como una del CRM con otro dominio. */
+export type SameNameChoice = { useCompanyId: string } | { createAnyway: string };
 
 /**
  * El título de un negocio que nace de una señal sin nada propio que
@@ -1652,12 +1672,35 @@ export const WORKSPACE_TZ = `(SELECT id, currency, coalesce(nullif(timezone, '')
 async function findOrCreateCompany(
   tx: WorkspaceTx,
   input: { name: string | null; domain: string | null; country?: string | null; industry?: string | null },
+  sameName: SameNamePolicy = { ask: false },
 ): Promise<{ company: ResolvedCompany; created: boolean } | null> {
   const existente = await resolveCompany(tx, { domain: input.domain, name: input.name });
   if (existente) return { company: existente, created: false };
   const name = input.name?.trim();
   if (!name) return null;
   const domain = normalizeDomain(input.domain);
+  // resolveCompany no casa un nombre del CRM que tiene OTRO dominio (dos
+  // «Alma» de dos países no son la misma). Pero crear en silencio una
+  // segunda «Molino Andino» porque la señal trae molinoandino.co y la
+  // ficha molinoandino.test deja la ficha real sin su negocio (pulido r2).
+  // Con `ask`, se pregunta; sin él (no aceptar una marca desde el brief),
+  // se usa la del CRM: excluir por nombre excluye a esa.
+  const choice = sameName.ask ? (sameName.choice ?? null) : null;
+  const { rows: mismoNombre } = await tx.query<ResolvedCompany & { confirmed: boolean | null }>(
+    `SELECT co.id, co.name, co.domain::text AS domain, brand_key(co.name) = brand_key($2::text) AS confirmed
+       FROM company_link cl
+       JOIN company co ON co.id = cl.company_id
+      WHERE co.name_key = brand_key($1)
+      ORDER BY cl.created_at ASC`,
+    [name, choice && 'createAnyway' in choice ? choice.createAnyway.trim() || null : null],
+  );
+  const primera = mismoNombre[0];
+  if (primera) {
+    const elegida = choice && 'useCompanyId' in choice ? mismoNombre.find((c) => c.id === choice.useCompanyId) : undefined;
+    const usar = elegida ?? (sameName.ask ? undefined : primera);
+    if (usar) return { company: { id: usar.id, name: usar.name, domain: usar.domain }, created: false };
+    if (primera.confirmed !== true) throw new DuplicateCompanyName(primera.name, primera.id);
+  }
   const inserted = await tx.query<{ id: string }>(
     `INSERT INTO company (name, domain, country, industry) VALUES ($1, $2, $3, $4) RETURNING id`,
     [name, domain, normalizeCountry(input.country), input.industry ?? null],
@@ -1697,6 +1740,7 @@ async function linkBlocked(tx: WorkspaceTx, companyId: string): Promise<string |
 async function companyOfSignal(
   tx: WorkspaceTx,
   sig: { id: string; company_id: string | null; evidence: Record<string, unknown> | null },
+  sameName: SameNamePolicy = { ask: false },
 ): Promise<{ company: ResolvedCompany; created: boolean } | null> {
   const ev = sig.evidence ?? {};
   const texto = (k: string) => (typeof ev[k] === 'string' ? (ev[k] as string) : null);
@@ -1709,7 +1753,7 @@ async function companyOfSignal(
         domain: texto('domain'),
         country: texto('country'),
         industry: texto('industry'),
-      });
+      }, sameName);
   if (!resuelta) return null;
   if (sig.company_id !== resuelta.company.id) {
     await tx.query('UPDATE signal SET company_id = $2 WHERE id = $1', [sig.id, resuelta.company.id]);
@@ -1751,7 +1795,7 @@ export async function acceptSignal(
 
   const ev = sig.evidence ?? {};
   const evName = typeof ev.company_name === 'string' ? ev.company_name : null;
-  const resuelta = await companyOfSignal(tx, sig);
+  const resuelta = await companyOfSignal(tx, sig, { ask: true, choice: opts.sameName ?? null });
   if (!resuelta) throw new VentasError('SignalWithoutCompany');
   const { company, created: companyCreated } = resuelta;
   const companyId = company.id;

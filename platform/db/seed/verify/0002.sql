@@ -372,11 +372,18 @@ ORDER BY stage_position, amount DESC;
 --     una por debajo del mínimo del brief (3 M) y una fuera de sus países
 --     (CO, MX), para que la demo enseñe las dos marcas de «Qué buscas»
 --     (VEN-7 r4). 6 aceptadas (cada una con su deal), 1 duplicada, 1
---     descartada con motivo. dedupe_key única.
+--     descartada con motivo. dedupe_key única. Y «fuera del CRM» es
+--     verdad con TODOS los seeds: ninguna de las dos sin empresa se llama
+--     como una empresa del CRM (pulido r2: la quinta era Molino Andino, y
+--     el seed 0008 metió a Molino Andino en el CRM con otro dominio).
 SELECT 'j_radar' AS check_id, status, count(*) AS senales,
        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM deal d WHERE d.origin_signal_id = s.id)) AS con_deal,
        CASE status WHEN 'pending' THEN count(*) = 6 AND count(*) FILTER (WHERE s.company_id IS NULL) = 2
                                        AND count(*) FILTER (WHERE s.evidence->>'category' = 'suplementos') = 1
+                                       AND count(*) FILTER (WHERE s.company_id IS NULL AND EXISTS (
+                                             SELECT 1 FROM company_link cl JOIN company c ON c.id = cl.company_id
+                                              WHERE cl.workspace_id = s.workspace_id
+                                                AND c.name_key = brand_key(s.evidence->>'company_name'))) = 0
                                        AND count(*) FILTER (WHERE s.budget_currency = 'COP' AND s.budget_estimate < 3000000) = 1
                                        AND count(*) FILTER (WHERE upper(s.evidence->>'country') NOT IN ('CO', 'MX')) = 1
                    WHEN 'accepted' THEN count(*) = 6 AND count(*) FILTER (WHERE EXISTS (SELECT 1 FROM deal d WHERE d.origin_signal_id = s.id)) = 6

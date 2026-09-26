@@ -238,23 +238,32 @@ function SignalCard({
   const [busy, setBusy] = useState<"accept" | "discard" | null>(null);
   const [rejecting, setRejecting] = useState(false);
   const [confirmingAccept, setConfirmingAccept] = useState(false);
+  /** El CRM ya tiene una empresa con este nombre y otra web: se pregunta si es la misma (pulido r2). */
+  const [mismaMarca, setMismaMarca] = useState<{ id: string; name: string } | null>(null);
   const name = card.companyName ?? t.unknownBrand;
   // Una oculta por el brief no se acepta con un clic: el negocio se abriría, pero ninguna cadencia le escribiría.
   const oculta = card.hiddenReason !== null;
 
   function report(res: VentasState, kind: "accept" | "discard") {
     if (res.ok) {
+      setMismaMarca(null);
       onResult({ notice: res.notice, link: res.link });
+      return;
+    }
+    if (kind === "accept" && res.sameName) {
+      setMismaMarca(res.sameName);
       return;
     }
     if (res.errors?.reason) setReasonError(res.errors.reason);
     else setCardError(res.message ?? res.errors?.signalId ?? (kind === "accept" ? t.acceptError : t.discardError));
   }
 
-  function accept() {
+  function accept(respuesta?: { useCompanyId: string } | { createAnyway: string }) {
     const data = new FormData();
     data.set("signalId", card.id);
     data.set("companyName", card.companyName ?? "");
+    if (respuesta && "useCompanyId" in respuesta) data.set("useCompanyId", respuesta.useCompanyId);
+    if (respuesta && "createAnyway" in respuesta) data.set("createAnyway", respuesta.createAnyway);
     setCardError(undefined);
     setBusy("accept");
     startTransition(async () => {
@@ -344,7 +353,7 @@ function SignalCard({
             <Button
               variant={oculta ? "secondary" : "primary"}
               size="sm"
-              onClick={oculta ? () => setConfirmingAccept(true) : accept}
+              onClick={oculta ? () => setConfirmingAccept(true) : () => accept()}
               loading={busy === "accept"}
               disabled={pending}
               aria-label={`${t.accept}: ${name}`}
@@ -415,6 +424,27 @@ function SignalCard({
             </Button>
           </div>
         </form>
+      )}
+
+      {mismaMarca && (
+        <div role="group" aria-label={t.sameBrand.question(mismaMarca.name)} className="mt-4 border-t border-border pt-4">
+          <p className="text-sm font-medium text-ink">{t.sameBrand.question(mismaMarca.name)}</p>
+          <p className="mt-1 text-sm leading-5 text-ink-2">{t.sameBrand.help}</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button variant="primary" size="sm" onClick={() => accept({ useCompanyId: mismaMarca.id })} loading={busy === "accept"}>
+              {t.sameBrand.same}
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => accept({ createAnyway: mismaMarca.name })} disabled={pending}>
+              {t.sameBrand.other}
+            </Button>
+            <Link
+              href={`/ventas/empresas/${mismaMarca.id}`}
+              className="text-sm text-ink underline underline-offset-4 hover:text-ink-2"
+            >
+              {t.sameBrand.see}
+            </Link>
+          </div>
+        </div>
       )}
 
       {cardError && <Aviso message={cardError} className="mt-3" />}

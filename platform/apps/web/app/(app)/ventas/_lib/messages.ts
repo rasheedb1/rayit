@@ -265,6 +265,18 @@ export const MESSAGES = {
     joinsDeal: (deal: string) => `Al aceptarla se sumará a «${deal}», el negocio abierto: no abre otro.`,
     /** Lo mismo cuando el negocio se llama como la marca (los viejos del radar). */
     joinsOpenDeal: "Al aceptarla se sumará al negocio abierto con esta marca: no abre otro.",
+    /**
+     * Al aceptar: el CRM ya tiene una empresa con ese nombre y otro
+     * dominio (marca.com y marca.co). Se pregunta en vez de crear una
+     * segunda en silencio (pulido r2).
+     */
+    sameBrand: {
+      question: (name: string) => `¿Es la misma ${name} de tu CRM?`,
+      help: "Tu CRM ya tiene una empresa con este nombre y otra web. Si es la misma, la señal se suma a su ficha; si es otra marca, se crea una empresa nueva.",
+      same: "Sí, es la misma",
+      other: "No, es otra marca",
+      see: "Ver la ficha",
+    },
 
     form: {
       title: "Anotar una marca",
