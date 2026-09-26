@@ -147,6 +147,18 @@ export const MESSAGES_EN: BajaTexts = {
   },
 };
 
+/**
+ * Las respuestas de POST /baja/<token>/un-clic (RFC 8058). No las lee una
+ * persona sino el proveedor de correo (Gmail, Yahoo, Apple Mail) que hace
+ * el POST sin cookies ni Accept-Language: por eso no van por idioma.
+ */
+export const MESSAGES = {
+  unClic: {
+    faltaCuerpo: "Falta List-Unsubscribe=One-Click (RFC 8058).",
+    demasiadoGrande: "El cuerpo pasa del tope de la baja de un clic (RFC 8058).",
+  },
+} as const;
+
 const TEXTOS: Readonly<Record<BajaIdioma, BajaTexts>> = { es: MESSAGES_ES, en: MESSAGES_EN };
 
 /** Los textos de un idioma. */

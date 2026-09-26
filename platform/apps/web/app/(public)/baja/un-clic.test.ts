@@ -18,6 +18,7 @@ vi.mock("@/lib/db/baja", () => ({
 }));
 
 import { POST } from "./[token]/un-clic/route";
+import { MESSAGES } from "./messages";
 
 const TOKEN = "k2Jd8sQ0pX4vN7bW1eR5tY9uI3oP6aS0dF2gH4jK6lZ";
 const pedir = (init: RequestInit) =>
@@ -58,6 +59,56 @@ describe("POST /baja/<token>/un-clic con los cuerpos de un proveedor", () => {
     vacio.set("otra", "cosa");
     expect((await pedir({ body: vacio })).status).toBe(400);
     expect((await pedir({ headers: { "content-type": "multipart/form-data; boundary=x" }, body: "roto" })).status).toBe(400);
+    expect(darDeBajaDesdeEnlace).not.toHaveBeenCalled();
+  });
+
+  it("sin cuerpo responde 400 con el texto de messages.ts", async () => {
+    const r = await pedir({});
+    expect(r.status).toBe(400);
+    expect(await r.text()).toBe(MESSAGES.unClic.faltaCuerpo);
+  });
+});
+
+/** Un POST con el cuerpo en flujo, como llega uno de verdad. */
+const pedirFlujo = (cuerpo: ReadableStream<Uint8Array>, headers: Record<string, string>) =>
+  POST(
+    new Request("http://app.test/baja/t/un-clic", { method: "POST", headers, body: cuerpo, duplex: "half" } as RequestInit),
+    { params: Promise.resolve({ token: TOKEN }) },
+  );
+
+describe("POST /baja/<token>/un-clic con un cuerpo de más (tope de 8 KiB)", () => {
+  it("un Content-Length de más: 413 sin leer el cuerpo", async () => {
+    const cuerpo = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error("no se debía leer ni un byte");
+      },
+    });
+    const r = await pedirFlujo(cuerpo, {
+      "content-type": "application/x-www-form-urlencoded",
+      "content-length": String(8 * 1024 + 1),
+    });
+    expect(r.status).toBe(413);
+    expect(await r.text()).toBe(MESSAGES.unClic.demasiadoGrande);
+    expect(darDeBajaDesdeEnlace).not.toHaveBeenCalled();
+  });
+
+  it("sin Content-Length, el flujo se corta al pasar el tope aunque el par vaya al principio", async () => {
+    const trozo = new TextEncoder().encode("x".repeat(1024));
+    let enviados = 0;
+    const cuerpo = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode("List-Unsubscribe=One-Click&relleno="));
+      },
+      pull(c) {
+        enviados += 1;
+        if (enviados > 1000) c.close();
+        else c.enqueue(trozo);
+      },
+    });
+    const r = await pedirFlujo(cuerpo, { "content-type": "application/x-www-form-urlencoded" });
+    expect(r.status).toBe(413);
+    // Se cortó cerca de los 8 KiB, no después de leer el mega entero.
+    expect(enviados).toBeLessThan(20);
     expect(darDeBajaDesdeEnlace).not.toHaveBeenCalled();
   });
 });

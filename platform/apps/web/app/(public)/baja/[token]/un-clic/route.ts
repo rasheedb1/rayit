@@ -1,5 +1,7 @@
 import { looksLikeOptoutToken } from "@mc/core/outreach/deliverability";
+import { readLimitedBytes } from "@/lib/cuerpo-limitado";
 import { darDeBajaDesdeEnlace } from "@/lib/db/baja";
+import { MESSAGES } from "../../messages";
 
 /**
  * POST /baja/<token>/un-clic · el «Darse de baja» de un clic de Gmail,
@@ -23,9 +25,9 @@ import { darDeBajaDesdeEnlace } from "@/lib/db/baja";
  */
 export async function POST(request: Request, { params }: { params: Promise<{ token: string }> }): Promise<Response> {
   const { token } = await params;
-  if (!(await pideLaBajaDeUnClic(request))) {
-    return new Response("Falta List-Unsubscribe=One-Click (RFC 8058).", { status: 400 });
-  }
+  const pide = await pideLaBajaDeUnClic(request);
+  if (pide === "grande") return new Response(MESSAGES.unClic.demasiadoGrande, { status: 413 });
+  if (pide === "no") return new Response(MESSAGES.unClic.faltaCuerpo, { status: 400 });
   if (!looksLikeOptoutToken(token)) return new Response(null, { status: 404 });
   try {
     const r = await darDeBajaDesdeEnlace(token);
@@ -38,21 +40,31 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
   }
 }
 
-/** Tope del cuerpo que se mira: el de la RFC tiene 26 bytes. */
+/**
+ * Tope del cuerpo: el de la RFC tiene 26 bytes, y un multipart con él
+ * cabe en unos cientos. Es una ruta pública sin sesión, así que el tope
+ * se cuenta sobre el flujo (readLimitedBytes) ANTES de leer nada entero:
+ * `request.formData()` o `request.text()` se tragarían el cuerpo completo.
+ */
 const CUERPO_MAX = 8 * 1024;
 
 /**
  * Si el cuerpo dice List-Unsubscribe=One-Click, en cualquiera de las dos
  * formas de formulario. Con un Content-Type que no es de formulario (o
  * sin él), se busca el par en el texto: la RFC no deja otra lectura.
+ * «grande» si el cuerpo pasa de CUERPO_MAX (413); sin cuerpo, «no».
  */
-async function pideLaBajaDeUnClic(request: Request): Promise<boolean> {
-  const tipo = (request.headers.get("content-type") ?? "").toLowerCase();
-  if (tipo.startsWith("multipart/form-data") || tipo.startsWith("application/x-www-form-urlencoded")) {
-    const fd = await request.formData().catch(() => null);
-    return fd?.get("List-Unsubscribe") === "One-Click";
+async function pideLaBajaDeUnClic(request: Request): Promise<"si" | "no" | "grande"> {
+  const cuerpo = await readLimitedBytes(request, CUERPO_MAX);
+  if (!cuerpo.ok) return cuerpo.status === 413 ? "grande" : "no";
+  const tipo = request.headers.get("content-type") ?? "";
+  const minusculas = tipo.toLowerCase();
+  if (minusculas.startsWith("multipart/form-data") || minusculas.startsWith("application/x-www-form-urlencoded")) {
+    // Los bytes ya leídos (y ya acotados) se vuelven a parsear como el formulario que dicen ser.
+    const fd = await new Response(cuerpo.bytes, { headers: { "content-type": tipo } }).formData().catch(() => null);
+    return fd?.get("List-Unsubscribe") === "One-Click" ? "si" : "no";
   }
-  const texto = (await request.text().catch(() => "")).slice(0, CUERPO_MAX);
-  if (new URLSearchParams(texto.trim()).get("List-Unsubscribe") === "One-Click") return true;
-  return /(^|[\s&;"])List-Unsubscribe=One-Click(\s|$|&|;)/.test(texto);
+  const texto = new TextDecoder().decode(cuerpo.bytes);
+  if (new URLSearchParams(texto.trim()).get("List-Unsubscribe") === "One-Click") return "si";
+  return /(^|[\s&;"])List-Unsubscribe=One-Click(\s|$|&|;)/.test(texto) ? "si" : "no";
 }

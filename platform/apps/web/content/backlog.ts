@@ -464,7 +464,7 @@ export const STORIES: readonly Story[] = [
     desc: "Pie de baja con página pública, cabecera List-Unsubscribe de un clic, rebotes asíncronos, calentamiento progresivo por cuenta, baja respetada en todos los canales, alertas diarias por correo.",
     done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud.",
     status: "hecho",
-    note: "Probado en pglite de punta a punta con el conector de VEN-9. Solo 5.1.x es rebote duro; los bloqueos (5.7.x, 5.4.5) suman a la tasa. Pulido r1: la web no apaga require_optout_link (candado outbound_policy_optout_link); encender pide un canal conectado y dice cuántos mensajes y personas vuelven a la cola; la alerta de «no sale nada» no cuenta lo que espera a una persona. Pendiente humano: visto bueno de Rasheed a las decisiones 6 y 7 (§8: la baja vale para quien envió; token opaco) y aplicar 0050_entregabilidad.",
+    note: "Probado en pglite de punta a punta con el conector de VEN-9. Solo 5.1.x es rebote duro; los bloqueos (5.7.x, 5.4.5) suman a la tasa. Pulido r1: la web no apaga require_optout_link (candado outbound_policy_optout_link); encender pide un canal conectado y dice cuántos mensajes y personas vuelven a la cola; la alerta de «no sale nada» no cuenta lo que espera a una persona. Pulido r2: la baja de un clic cuenta su tope de 8 KiB sobre el flujo (413), con el lector compartido del webhook (lib/cuerpo-limitado.ts). Pendiente humano: visto bueno de Rasheed a las decisiones 6 y 7 (§8: la baja vale para quien envió; token opaco) y aplicar 0050_entregabilidad.",
   },
   {
     id: "VEN-16", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-10"],
