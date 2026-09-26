@@ -55,13 +55,14 @@
  * con el reloj a +N días (CURRENT_DATE y now() desplazados en los seeds
  * Y en los verify; la tercera pasada va a +N+1 y la cuarta a +N+41). Es
  * la prueba de que la demo es la misma sembrada cualquier día. Solo se
- * toleran dos comprobaciones, y se dice cuáles: i_pipeline_vencimientos
- * y l_conexiones_frescura comparan contra el now() y CURRENT_DATE
- * internos de las vistas deal_pipeline (due_state) y connection_health
- * (hours_since_sync, token_expiring_soon), que no se pueden desplazar
- * desde fuera. Las cifras del pipeline y el recuento de posts por
- * conexión están en consultas aparte (i_pipeline_cifras,
- * l_conexiones_cuentas) que NO se toleran: una regresión en el
+ * toleran tres comprobaciones, y se dice cuáles: i_pipeline_vencimientos,
+ * l_conexiones_frescura y d_uso_casa_con_el_historial comparan contra el
+ * now() y CURRENT_DATE internos de las vistas deal_pipeline (due_state),
+ * connection_health (hours_since_sync, token_expiring_soon) y
+ * outbound_usage_daily (sus 14 días), que no se pueden desplazar desde
+ * fuera. Las cifras del pipeline, el recuento de posts por conexión y los
+ * contadores del uso están en consultas aparte (i_pipeline_cifras,
+ * l_conexiones_cuentas, c_contadores_de_los_toques) que NO se toleran: una regresión en el
  * ponderado o en el total tiene que hacer fallar también la corrida con
  * --dias. CI lo corre con --dias 40.
  *
@@ -88,7 +89,6 @@ const CRECEN_CON_EL_RELOJ = {
   post_score: 'el video que cumplió 24 h desde la última corrida se puntúa',
   account_metric_snapshot: 'la serie de cada conexión llega hasta ayer: +4 por día',
   creator_baseline: 'una línea base nueva por red y corte en cada día distinto: +16',
-  outbound_counter: 'el uso del Gmail de la demo (seed 0008): cada día hábil nuevo, su fila de la cuenta y la del espacio (+2), y una semana nueva, la suya',
 };
 
 /** Invariantes de las lecturas que la tercera pasada no puede romper. */
@@ -110,12 +110,16 @@ const INVARIANTES_DEL_RELOJ = `
 
 /**
  * Comprobaciones que con `--dias N` no pueden pasar, y por qué: las
- * vistas calculan due_state y la frescura con su propio now(), que el
- * desplazamiento textual de los seeds y los verify no alcanza.
+ * vistas calculan due_state, la frescura y la ventana de 14 días del uso
+ * con su propio now(), que el desplazamiento textual de los seeds y los
+ * verify no alcanza. La parte del uso que no depende de ese now() (cada
+ * contador igual a sus toques) está aparte, en c_contadores_de_los_toques,
+ * y esa no se tolera.
  */
 const TOLERADAS_CON_DIAS = {
   i_pipeline_vencimientos: 'deal_pipeline.due_state usa el now() real de la vista',
   l_conexiones_frescura: 'connection_health usa el now() real de la vista',
+  d_uso_casa_con_el_historial: 'outbound_usage_daily mira los 14 días hasta el now() real de la vista',
 };
 
 /** El workspace de la demo (seed 0002): lo fija el propio seed, y las

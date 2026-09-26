@@ -38,30 +38,69 @@ SELECT 'b_enrolamientos_terminados' AS check_id,
   FROM outbound_enrollment e
  WHERE e.id::text LIKE '00000008-%';
 
--- (c) Los contadores del Gmail cuadran como los suma el reclamo: cada día
---     dentro del tope de la cuenta, la fila del espacio igual a la de la
---     cuenta (una sola cuenta de correo) y cada semana igual a la suma de
---     sus días. Y ningún día de fin de semana.
-SELECT 'c_contadores_del_gmail' AS check_id,
-       count(*) FILTER (WHERE c.period = 'day') AS dias,
-       count(*) FILTER (WHERE c.period = 'day') >= 5
-         AND bool_and(c.count BETWEEN 0 AND 20) FILTER (WHERE c.period = 'day')
-         AND bool_and(extract(isodow FROM c.period_start) < 6) FILTER (WHERE c.period = 'day')
-         AND bool_and(c.count = (SELECT w.count FROM outbound_counter w
-                                  WHERE w.channel_account_id IS NULL AND w.workspace_id = c.workspace_id
-                                    AND w.period = 'day' AND w.period_start = c.period_start AND w.action_type = 'email'))
-               FILTER (WHERE c.period = 'day')
-         AND bool_and(c.count = (SELECT sum(d.count) FROM outbound_counter d
-                                  WHERE d.channel_account_id = c.channel_account_id AND d.period = 'day'
-                                    AND d.period_start BETWEEN c.period_start AND c.period_start + 6))
-               FILTER (WHERE c.period = 'week') AS ok
-  FROM outbound_counter c
- WHERE c.channel_account_id = '00000005-0000-4000-8000-0000000ac001';
+-- (c) Los contadores de las cuentas de Laura son lo que el reclamo sumó
+--     por los toques que la demo enseña: cada día, en la cuenta de su
+--     canal, tantas acciones como toques reclamados (enviados o
+--     fallidos) ese día local; en el correo, la fila del espacio igual a
+--     la de la cuenta; cada semana, la suma de sus días; ningún día de
+--     fin de semana. Ni una acción que no esté en el historial.
+WITH reclamados AS (
+  SELECT CASE t.channel WHEN 'email' THEN '00000005-0000-4000-8000-0000000ac001'::uuid
+                        ELSE '00000005-0000-4000-8000-0000000ac002'::uuid END AS cuenta,
+         (t.claimed_at AT TIME ZONE w.timezone)::date AS dia, count(*)::int AS n
+    FROM outbound_touch t JOIN workspace w ON w.id = t.workspace_id
+   WHERE t.workspace_id = '00000002-0000-4000-8000-000000000001'
+     AND t.status IN ('sent', 'failed') AND t.claimed_at IS NOT NULL AND t.channel IN ('email', 'linkedin')
+   GROUP BY 1, 2
+),
+dias AS (
+  SELECT c.channel_account_id AS cuenta, c.period_start AS dia, c.count
+    FROM outbound_counter c
+   WHERE c.channel_account_id IN ('00000005-0000-4000-8000-0000000ac001', '00000005-0000-4000-8000-0000000ac002')
+     AND c.period = 'day'
+)
+SELECT 'c_contadores_de_los_toques' AS check_id,
+       (SELECT count(*) FROM dias) AS dias_con_uso,
+       (SELECT sum(count) FROM dias) AS acciones,
+       (SELECT count(*) FROM dias) > 0
+         -- Los mismos días con las mismas cifras, en los dos sentidos.
+         AND NOT EXISTS (SELECT cuenta, dia, count FROM dias EXCEPT SELECT cuenta, dia, n FROM reclamados)
+         AND NOT EXISTS (SELECT cuenta, dia, n FROM reclamados EXCEPT SELECT cuenta, dia, count FROM dias)
+         AND (SELECT bool_and(extract(isodow FROM dia) < 6) FROM dias)
+         AND (SELECT bool_and(d.count = (SELECT w.count FROM outbound_counter w
+                                          WHERE w.channel_account_id IS NULL
+                                            AND w.workspace_id = '00000002-0000-4000-8000-000000000001'
+                                            AND w.period = 'day' AND w.period_start = d.dia AND w.action_type = 'email'))
+                FROM dias d WHERE d.cuenta = '00000005-0000-4000-8000-0000000ac001')
+         AND (SELECT bool_and(c.count = (SELECT sum(d.count) FROM dias d
+                                          WHERE d.cuenta = c.channel_account_id
+                                            AND d.dia BETWEEN c.period_start AND c.period_start + 6))
+                FROM outbound_counter c
+               WHERE c.channel_account_id IN ('00000005-0000-4000-8000-0000000ac001', '00000005-0000-4000-8000-0000000ac002')
+                 AND c.period = 'week') AS ok;
 
--- (d) El widget de uso tiene historia: en los 14 días de
---     outbound_usage_daily del Gmail hay uso, y un día llegó al tope.
-SELECT 'd_uso_con_historia' AS check_id,
-       sum(u.used) AS usado_14_dias, max(u.used) AS maximo,
-       sum(u.used) > 0 AND max(u.used) = 20 AS ok
-  FROM outbound_usage_daily u
- WHERE u.channel_account_id = '00000005-0000-4000-8000-0000000ac001';
+-- (d) El widget de uso casa con el historial: lo de hoy y lo de los 14
+--     días de outbound_usage_daily es exactamente lo que el historial
+--     enseña como reclamado esos días (hoy, los correos de 0006, que
+--     salieron antes de que se apagara el envío), y las cuentas dicen que
+--     el envío está apagado (outreach_enabled = false: «Sin envío»).
+WITH reclamados AS (
+  SELECT (t.claimed_at AT TIME ZONE w.timezone)::date AS dia
+    FROM outbound_touch t JOIN workspace w ON w.id = t.workspace_id
+   WHERE t.workspace_id = '00000002-0000-4000-8000-000000000001'
+     AND t.status IN ('sent', 'failed') AND t.claimed_at IS NOT NULL AND t.channel IN ('email', 'linkedin')
+),
+uso AS (
+  SELECT u.day, u.is_today, u.used, u.outreach_enabled
+    FROM outbound_usage_daily u
+   WHERE u.channel_account_id IN ('00000005-0000-4000-8000-0000000ac001', '00000005-0000-4000-8000-0000000ac002')
+)
+SELECT 'd_uso_casa_con_el_historial' AS check_id,
+       (SELECT sum(used) FROM uso WHERE is_today) AS hoy,
+       (SELECT sum(used) FROM uso) AS usado_14_dias,
+       (SELECT sum(used) FROM uso WHERE is_today)
+           = (SELECT count(*) FROM reclamados WHERE dia = (SELECT day FROM uso WHERE is_today LIMIT 1))
+         AND (SELECT sum(used) FROM uso)
+           = (SELECT count(*) FROM reclamados WHERE dia BETWEEN (SELECT min(day) FROM uso) AND (SELECT max(day) FROM uso))
+         AND (SELECT sum(used) FROM uso) > 0
+         AND (SELECT bool_and(NOT outreach_enabled) FROM uso) AS ok;

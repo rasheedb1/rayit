@@ -20,18 +20,14 @@
 --   * los dos enrolamientos quedaron 'completed', como los deja el motor
 --     cuando falla el único toque vivo (advanceEnrollment); reintentar el
 --     correo de Laura reabre el suyo;
---   * los contadores del Gmail de Laura en sus últimos días hábiles: el
---     día de la cuenta, el día del espacio (una sola cuenta de correo: la
---     misma cifra) y la semana de la cuenta (la suma de sus días), como
---     los suma outbound_counter_bump_at (0052). Así el widget de uso tiene
---     barra hoy y una historia de 14 días con un día lleno y uno cerca.
+--   * los contadores de las cuentas de Laura, sacados de los toques que
+--     el despachador reclamó (§3): el widget de uso dice lo mismo que el
+--     historial, día por día.
 --
 -- Reglas del archivo (las de 0002, 0004, 0005 y 0006):
 --   * Idempotente. UUID fijos y ON CONFLICT. Lo que ya pasó se congela en
---     la primera corrida (DO NOTHING). Un día nuevo añade su fila de
---     contador (outbound_counter crece con el reloj, y verify/run.mjs lo
---     sabe: CRECEN_CON_EL_RELOJ); la semana se recalcula como la suma de
---     sus días, nunca por debajo de lo que ya tenía.
+--     la primera corrida (DO NOTHING), y los contadores salen de ello:
+--     no crecen con el reloj.
 --   * Nada real: direcciones y ids de la demo. La política de envío sigue
 --     APAGADA (0002): el widget pinta estas cuentas «Sin envío», que es la
 --     verdad de la demo, y sembrar en Supabase no manda nada.
@@ -127,33 +123,60 @@ ON CONFLICT (id) DO NOTHING;
 
 
 -- =====================================================================
--- 3 · Los contadores del Gmail de Laura
+-- 3 · Los contadores de las cuentas de Laura
 -- ---------------------------------------------------------------------
--- Los últimos siete días locales, solo los hábiles (el motor no envía en
--- fin de semana), con cifras dentro del tope de la cuenta (20): hoy 12,
--- y hacia atrás 17 (cerca del límite), 20 (lleno), 9, 14, 11 y 8. Cada
--- día va dos veces, como lo suma el reclamo: en la fila de la cuenta y en
--- la del espacio (channel_account_id NULL: una sola cuenta de correo, la
--- misma cifra). La semana de la cuenta es la suma de sus días.
+-- Lo que sumó el reclamo, sacado de lo que la demo enseña: una acción por
+-- cada toque que el despachador reclamó (enviado o fallido, con su
+-- claimed_at) en el día local de su reclamo, en la cuenta de su canal (el
+-- Gmail de Laura para el correo, su LinkedIn para LinkedIn) y, en el
+-- correo, también en la fila del espacio (channel_account_id NULL: una
+-- sola cuenta de correo, la misma cifra). La semana de cada cuenta es la
+-- suma de sus días. Como lo suma outbound_counter_bump_at (0052).
+--
+-- Así el widget de uso de /ventas/canales casa con el historial de
+-- /ventas/actividad, barra por barra: cada día es lo que salió o se
+-- intentó ese día. La historia de la demo es que el envío salió unas
+-- horas (los correos de hoy de 0006) y después se apagó (0002: «Sin
+-- envío»); el uso de hoy es el de esos correos, y nada más. Antes el
+-- seed inventaba cifras (12 hoy, 72 en la semana) que no casaban con
+-- ningún envío: un creador que recorría la demo veía un uso que no había
+-- salido.
+--
+-- Idempotente y quieto con el reloj: los toques enviados y fallidos se
+-- congelan en la primera corrida, así que los contadores son siempre los
+-- mismos (DO UPDATE los deja en la cifra que sale de los toques, también
+-- sobre una base sembrada por una versión anterior de este archivo).
 -- =====================================================================
-WITH hoy AS (SELECT (now() AT TIME ZONE 'America/Bogota')::date AS d),
-uso AS (
-  SELECT hoy.d - k AS dia, (ARRAY[12, 17, 20, 9, 14, 11, 8])[k + 1] AS n
-    FROM hoy, generate_series(0, 6) AS k
-   WHERE extract(isodow FROM hoy.d - k) < 6
+WITH reclamados AS (
+  SELECT t.workspace_id, t.channel, (t.claimed_at AT TIME ZONE w.timezone)::date AS dia, count(*)::int AS n
+    FROM outbound_touch t
+    JOIN workspace w ON w.id = t.workspace_id
+   WHERE t.workspace_id = '00000002-0000-4000-8000-000000000001'
+     AND t.status IN ('sent', 'failed') AND t.claimed_at IS NOT NULL
+     AND t.channel IN ('email', 'linkedin')
+   GROUP BY t.workspace_id, t.channel, (t.claimed_at AT TIME ZONE w.timezone)::date
+),
+filas AS (
+  SELECT r.workspace_id,
+         CASE r.channel WHEN 'email' THEN '00000005-0000-4000-8000-0000000ac001'::uuid
+                        ELSE '00000005-0000-4000-8000-0000000ac002'::uuid END AS cuenta,
+         r.dia, r.channel AS accion, r.n
+    FROM reclamados r
+  UNION ALL
+  SELECT r.workspace_id, NULL::uuid, r.dia, 'email', r.n FROM reclamados r WHERE r.channel = 'email'
 )
 INSERT INTO outbound_counter (workspace_id, channel_account_id, period, period_start, action_type, count)
-SELECT '00000002-0000-4000-8000-000000000001', cuenta.id, 'day', uso.dia, 'email', uso.n
-  FROM uso, (VALUES ('00000005-0000-4000-8000-0000000ac001'::uuid), (NULL::uuid)) AS cuenta(id)
-ON CONFLICT (workspace_id, channel_account_id, period, period_start, action_type) DO NOTHING;
+SELECT workspace_id, cuenta, 'day', dia, accion, n FROM filas
+ON CONFLICT (workspace_id, channel_account_id, period, period_start, action_type)
+DO UPDATE SET count = EXCLUDED.count;
 
 INSERT INTO outbound_counter (workspace_id, channel_account_id, period, period_start, action_type, count)
-SELECT c.workspace_id, c.channel_account_id, 'week', c.period_start - (extract(isodow FROM c.period_start)::int - 1), 'email',
+SELECT c.workspace_id, c.channel_account_id, 'week', c.period_start - (extract(isodow FROM c.period_start)::int - 1), c.action_type,
        sum(c.count)::int
   FROM outbound_counter c
  WHERE c.workspace_id = '00000002-0000-4000-8000-000000000001'
-   AND c.channel_account_id = '00000005-0000-4000-8000-0000000ac001'
-   AND c.period = 'day' AND c.action_type = 'email'
- GROUP BY c.workspace_id, c.channel_account_id, c.period_start - (extract(isodow FROM c.period_start)::int - 1)
+   AND c.channel_account_id IN ('00000005-0000-4000-8000-0000000ac001', '00000005-0000-4000-8000-0000000ac002')
+   AND c.period = 'day'
+ GROUP BY c.workspace_id, c.channel_account_id, c.action_type, c.period_start - (extract(isodow FROM c.period_start)::int - 1)
 ON CONFLICT (workspace_id, channel_account_id, period, period_start, action_type)
-DO UPDATE SET count = greatest(outbound_counter.count, EXCLUDED.count);
+DO UPDATE SET count = EXCLUDED.count;

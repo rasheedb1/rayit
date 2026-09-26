@@ -34,6 +34,7 @@ import { FronteraWidget } from "./_componentes/frontera-widget";
 import { UsoPorCanalVista, usoVista } from "./_componentes/uso-por-canal";
 import { MetricasCadenciaVista, SERIES_EMBUDO } from "./_componentes/metricas-cadencia";
 import { siguienteCifra } from "./_componentes/cifra-flujo";
+import { columnaSalud } from "./_componentes/salud-cadencia";
 import { MESSAGES as MENSAJES } from "./messages";
 
 const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
@@ -415,6 +416,15 @@ describe("el embudo y la vista de flujo de la cadencia", () => {
     // Las flechas no saltan al paso siguiente.
     expect(document.activeElement).not.toBe(paradas[7]);
     expect([siguienteCifra("ArrowLeft", 0, 7), siguienteCifra("Home", 5, 7), siguienteCifra("Tab", 2, 7)]).toEqual([6, 0, null]);
+  });
+
+  it("la lista de cadencias lee la misma salud: el semáforo en palabras, y una raya en la que no está activa", () => {
+    const col = columnaSalud<{ id: string }>(new Map([["s1", salud], ["s2", { ...salud, sequenceId: "s2", health: "inactive" as const }]]));
+    expect(col.header).toBe("Salud");
+    const { container } = render(<div>{col.render!({ id: "s1" })}{col.render!({ id: "s2" })}{col.render!({ id: "s3" })}</div>);
+    expect(screen.getByText("Fallando")).toBeTruthy();
+    expect(container.querySelector("[title]")?.getAttribute("title")).toBe("Falla al menos uno de cada cinco envíos de la última semana. Revisa la cola.");
+    expect(screen.getAllByText("—")).toHaveLength(2);
   });
 
   it("sin envíos todavía, lo dice en vez de un gráfico vacío", () => {
