@@ -168,10 +168,10 @@ github.check: ## Pregunta a GitHub: qué usuario, qué permisos, cuándo expira
 vercel.set: ## Guarda o rota el token de Vercel (lo pide sin mostrarlo)
 	@./scripts/vercel.sh set
 
-vercel.dir: ## Qué directorio se despliega.  make vercel.dir DIR=.   (Root Directory apps/web en Vercel)
+vercel.dir: ## Qué app construye Vercel (su Root Directory).  make vercel.dir DIR=apps/web   (se sube siempre platform/)
 	@./scripts/vercel.sh dir $(DIR)
 
-vercel.link: ## Crea o adopta el proyecto y lo enlaza en ESTE clon
+vercel.link: ## Crea o adopta el proyecto, fija su Root Directory (VERCEL_APP_DIR) y lo enlaza en ESTE clon
 	@./scripts/vercel.sh link $(NOMBRE)
 
 vercel.rename: ## Renombra el proyecto en Vercel y conserva la URL vieja.  make vercel.rename NOMBRE=on-cue-web
@@ -186,7 +186,7 @@ vercel.status: ## Qué hay guardado y cómo está este clon, sin revelar el toke
 vercel.check: ## Pregunta a Vercel: qué cuenta, qué equipo, cuándo expira
 	@./scripts/vercel.sh check
 
-vercel.deploy: ## Despliega apps/web. Vista previa, o PROD=1 para producción
+vercel.deploy: ## Sube platform/ (--cwd) y construye apps/web. Vista previa, o PROD=1 para producción
 	@./scripts/vercel.sh deploy $(if $(PROD),--prod,)
 
 vercel.run: ## Cualquier comando de la CLI.  make vercel.run ARGS="logs --follow"

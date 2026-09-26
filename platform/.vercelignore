@@ -23,3 +23,12 @@ apps/media/
 **/*.test.tsx
 node_modules/
 .next/
+# Nada que no sea código (fase 6: se sube platform/ entero con
+# `vercel deploy --cwd platform`; ver scripts/vercel.sh).
+.env
+.env.*
+*.env
+*.log
+*.tsbuildinfo
+coverage/
+.turbo/
