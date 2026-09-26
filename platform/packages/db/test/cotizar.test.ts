@@ -31,6 +31,7 @@ import {
   type TextosCotizar,
 } from '../src/queries/cotizar.ts';
 import { DealLocked, FOLLOW_UP_ACTION, FOLLOW_UP_BUSINESS_DAYS, PITCH_ACTION, createCompany, createDeal, getCompany, getSalesKpis, moveDeal } from '../src/queries/ventas.ts';
+import { computePerfil } from '../src/queries/perfil-comercial.ts';
 import { openTestDb, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 const WS_VECINO = '0000000c-0000-4000-8000-0000000000c1';
@@ -1266,17 +1267,35 @@ describe('ronda 4 · moneda del CPM, cifras del media kit y kit adjunto', () => 
     assert.equal(snap.totales.followers, suma);
   });
 
-  test('el «N× su mediana» de cada post cuadra con la mediana que el media kit publica de su red', async () => {
+  test('el «N× su mediana» de cada post cuadra con la mediana a esa edad que el media kit publica con él', async () => {
     const snap = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => buildMediaKitSnapshot(tx, creadora));
     const conMultiplo = snap.topPosts.filter((p) => p.viewsVsMedian !== null);
     assert.ok(conMultiplo.length > 0, 'el seed trae posts con múltiplo');
     for (const p of conMultiplo) {
-      const red = snap.redes.find((r) => r.platformId === p.platformId);
-      assert.ok(red?.medianViews, `la red ${p.platformId} publica su mediana`);
-      // La cuenta que haría la marca con las dos cifras de la página.
-      const esperado = Math.round((p.views! / red.medianViews) * 10) / 10;
-      assert.equal(Number(p.viewsVsMedian), esperado, `${p.platformId}: ${p.views} / ${red.medianViews}`);
+      assert.ok(p.ageHoursCut && p.medianAtCut, `${p.url}: lleva su edad y la mediana contra la que se midió`);
+      // La cuenta que haría la marca con las dos cifras de la fila.
+      const cociente = p.views! / p.medianAtCut;
+      assert.ok(Math.abs(Number(p.viewsVsMedian) - cociente) < 0.05, `${p.url}: ${p.viewsVsMedian}× y ${p.views} / ${p.medianAtCut}`);
     }
+  });
+
+  test('el media kit y el perfil comercial dicen lo mismo de cada video: views, edad y veces su mediana (pulido r2)', async () => {
+    const ahora = new Date();
+    const { snap, perfil } = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => ({
+      snap: await buildMediaKitSnapshot(tx, creadora),
+      perfil: await computePerfil(tx, creadora, ahora),
+    }));
+    const cifra = (id: string | null) => (id === null ? null : perfil.claims.find((c) => c.id === id)?.value ?? null);
+    let comparados = 0;
+    for (const v of perfil.performance.top) {
+      const p = snap.topPosts.find((x) => x.url === v.url);
+      assert.ok(p, `«${v.title}» está entre los mejores del perfil y también del media kit`);
+      assert.equal(Number(p.viewsVsMedian), cifra(v.multipleClaimId), `«${v.title}»: el mismo múltiplo`);
+      assert.equal(p.views, cifra(v.viewsClaimId), `«${v.title}»: las mismas views`);
+      assert.equal(p.ageHoursCut, v.cutHours, `«${v.title}»: a la misma edad`);
+      comparados++;
+    }
+    assert.ok(comparados >= 3, `se compararon ${comparados} videos`);
   });
 
   test('el media kit del seed 0004 dice lo que diría uno real: N× contra su mediana y tarifas de @mc/core (pulido r8)', async () => {
@@ -1301,13 +1320,14 @@ describe('ronda 4 · moneda del CPM, cifras del media kit y kit adjunto', () => 
     assert.ok(kit, 'el seed trae su media kit');
     const snap = kit.snapshot;
 
+    // Sus videos salen de post_score al sembrar (pulido r2): cada uno con su
+    // edad y la mediana a esa edad, y el múltiplo cuadra con las dos.
+    assert.ok(snap.topPosts.length > 0, 'el kit del seed trae sus videos');
     for (const p of snap.topPosts) {
-      const red = snap.redes.find((r) => r.platformId === p.platformId);
-      assert.ok(red?.medianViews && p.views !== null && p.viewsVsMedian !== null, `${p.platformId}: post con views y mediana`);
-      const cociente = p.views / red.medianViews;
+      assert.ok(p.medianAtCut && p.ageHoursCut && p.views !== null && p.viewsVsMedian !== null, `${p.url}: post con views, edad y mediana`);
+      const cociente = p.views / p.medianAtCut;
       assert.ok(Math.abs(Number(p.viewsVsMedian) - cociente) < 0.05,
-        `${p.url}: dice ${p.viewsVsMedian}×, y ${p.views} / ${red.medianViews} = ${cociente.toFixed(2)}`);
-      assert.equal(p.viewsVsMedian, (Math.round(cociente * 10) / 10).toFixed(1), 'con el decimal de buildMediaKitSnapshot');
+        `${p.url}: dice ${p.viewsVsMedian}×, y ${p.views} / ${p.medianAtCut} = ${cociente.toFixed(2)}`);
     }
 
     assert.equal(items.length, 5);

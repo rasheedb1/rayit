@@ -32,8 +32,18 @@ export interface MediaKitSnapshotPost {
   url: string | null;
   caption: string | null;
   publishedAt: string;
+  /**
+   * Las views del video a la edad de su puntaje (post_score.views_at_cut,
+   * `ageHoursCut`), las mismas que cita el perfil comercial. En un kit
+   * congelado antes del pulido r2 (sin `ageHoursCut`): las de ese día.
+   */
   views: number | null;
+  /** Veces la mediana de su red A ESA EDAD (post_score.views_vs_median): la misma cifra del perfil comercial. */
   viewsVsMedian: string | null;
+  /** La edad a la que se midieron las views y el múltiplo, en horas (72 = «a los 3 días»). Ausente en kits de antes del pulido r2. */
+  ageHoursCut?: number | null;
+  /** La mediana de su red a esa edad contra la que se midió (creator_baseline del puntaje), redondeada: views / esto ≈ el múltiplo. */
+  medianAtCut?: number | null;
 }
 
 export interface MediaKitSnapshotTarifa {
@@ -132,30 +142,29 @@ export async function buildMediaKitSnapshot(tx: WorkspaceTx, creatorId: string):
   );
   const porRed = new Map(baselines.map((b) => [b.platform_id, b]));
 
-  // El «N× su mediana» de cada post se calcula AQUÍ, contra la misma
-  // línea base que el media kit publica en la lista por red (el corte
-  // del tarifario, la mediana redondeada que se enseña). No sale de
-  // post_score.views_vs_median: esa se calculó contra la base vigente
-  // cuando se puntuó el post, y una marca que dividiera las dos cifras
-  // de la página encontraría otro número.
+  // «Lo que mejor funciona» son los mismos videos, con las mismas cifras,
+  // que «Tus cinco mejores videos» del perfil comercial (pulido r2): las
+  // views a la edad de su puntaje, las veces la mediana de su red A ESA
+  // EDAD y esa mediana (post_score y su creator_baseline), en el mismo
+  // orden (readPerfilInputs y buildPerfil). Antes el kit dividía las views
+  // de hoy entre la mediana a 7 días y el mismo video decía 3,4× aquí y
+  // 3,7× en un correo generado desde el perfil. La edad viaja con el
+  // post: la página dice «a los 3 días» y con qué mediana se midió, así
+  // que views / mediana sigue dando el múltiplo que enseña.
   const { rows: posts } = await tx.query<{
-    platform_id: PlatformId; url: string | null; caption: string | null;
-    published_at: string; views: string | null; views_vs_median: string | null;
+    platform_id: PlatformId; url: string | null; caption: string | null; published_at: string;
+    views: string | null; views_vs_median: string | null; age_hours_cut: number | null; median_at_cut: string | null;
   }>(
-    `WITH base AS (
-       SELECT DISTINCT ON (platform_id) platform_id, round(median_views) AS median_views
-         FROM creator_baseline
-        WHERE creator_id = $1
-        ORDER BY platform_id, (age_hours_cut = $2) DESC, age_hours_cut DESC, computed_at DESC
-     )
-     SELECT p.platform_id, p.url, p.caption, p.published_at, p.views,
-            round(p.views / NULLIF(b.median_views, 0), 1)::text AS views_vs_median
-       FROM creator_post_board p
-       LEFT JOIN base b USING (platform_id)
-      WHERE p.creator_id = $1 AND p.views IS NOT NULL
-      ORDER BY p.views DESC
+    `SELECT p.platform_id, coalesce(p.permalink, p.url) AS url, p.caption, p.published_at,
+            s.views_at_cut AS views, s.views_vs_median::text AS views_vs_median, s.age_hours_cut,
+            round(bl.median_views)::text AS median_at_cut
+       FROM post p
+       JOIN post_score s ON s.post_id = p.id AND s.views_vs_median IS NOT NULL
+       LEFT JOIN creator_baseline bl ON bl.id = s.baseline_id
+      WHERE p.creator_id = $1 AND NOT p.deleted_on_platform AND p.published_at IS NOT NULL
+      ORDER BY s.views_vs_median DESC, s.views_at_cut DESC NULLS LAST, p.id
       LIMIT 6`,
-    [creatorId, CORTE_TARIFARIO_HORAS],
+    [creatorId],
   );
 
   // La audiencia de la red principal (la de más seguidores que tenga
@@ -283,6 +292,8 @@ export async function buildMediaKitSnapshot(tx: WorkspaceTx, creatorId: string):
       publishedAt: p.published_at,
       views: p.views === null ? null : Number(p.views),
       viewsVsMedian: p.views_vs_median,
+      ageHoursCut: p.age_hours_cut,
+      medianAtCut: p.median_at_cut === null ? null : Number(p.median_at_cut),
     })),
     audiencia: audienciaAgrupada,
     tarifas: tarifasDelKit.map((i) => ({
