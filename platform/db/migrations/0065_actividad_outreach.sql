@@ -1,17 +1,26 @@
 -- =====================================================================
--- 0064 · Actividad y métricas del outreach (VEN-16)
+-- 0065 · Actividad y métricas del outreach (VEN-16)
 -- ---------------------------------------------------------------------
--- Cuatro vistas de solo lectura sobre la cola (outbound_touch), para que
--- ninguna pantalla sume ni divida (docs/ventas-outreach.md §6, VEN-16):
+-- Una función y cuatro vistas de solo lectura sobre la cola
+-- (outbound_touch), para que ninguna pantalla sume, divida ni decida
+-- (docs/ventas-outreach.md §6, VEN-16):
 --
+--   outbound_touch_retry_block  por qué un fallido NO puede volver a la
+--                             cola, o NULL si puede. La usan la vista de
+--                             la cola (qué fila ofrece «Reintentar»), el
+--                             conteo de los botones por tipo y el propio
+--                             reintento, dentro de su FOR UPDATE: una
+--                             sola regla, en un solo sitio.
 --   outbound_queue            un toque por fila, con su estado, su paso,
---                             su contacto, su cuenta y su motivo (el de la
---                             retención o el de por qué no salió), y si
---                             está en la cola o ya en el historial.
+--                             su contacto, su cuenta, su motivo (el de la
+--                             retención o el de por qué no salió) y su
+--                             bloqueo de reintento; y si está en la cola
+--                             o ya en el historial.
 --   outbound_usage_daily      el uso de cada cuenta de canal viva en los
 --                             últimos 14 días locales del workspace,
---                             contra el tope que rige y el techo del
---                             proveedor.
+--                             contra los TRES topes que aplica el
+--                             despachador: el diario y el semanal de la
+--                             cuenta, y el diario de correos del espacio.
 --   outbound_funnel_by_step   por secuencia y paso: enviados, abiertos,
 --                             respondidos y positivos (y lo que sigue en
 --                             cola, lo fallido y lo detenido), con sus
@@ -20,19 +29,24 @@
 --                             la cola viva, lo enviado y lo fallido en 7
 --                             días, las tasas y un semáforo.
 --
--- Número: el siguiente libre detrás de 0063 en rasheed/integracion. Si
--- otra pieza de la misma fase toma 0064, el integrador renumera: esta
--- migración solo crea vistas y no depende de ninguna otra de la fase.
+-- Número: 0064 la tomó VEN-14 (0064_bandejas.sql, en su rama). Esta
+-- migración no depende de ella ni ella de esta: el runner aplica en orden
+-- alfabético lo que no está registrado, así que entran en cualquier orden.
 --
--- Reglas que respetan las cuatro:
---   · security_invoker = on (la prueba de esquema lo exige): leen con la
---     RLS de quien consulta, así que cada workspace ve solo lo suyo;
---   · sin escritura para mc_app (REVOKE, como outreach_channel_account_limits);
+-- Reglas que respetan todas:
+--   · security_invoker = on en las vistas (la prueba de esquema lo exige)
+--     y SECURITY INVOKER en la función: leen con la RLS de quien consulta,
+--     así que cada workspace ve solo lo suyo;
+--   · sin escritura para mc_app en las vistas (REVOKE, como
+--     outreach_channel_account_limits);
 --   · solo nombran estados que existen en los CHECK de 0037 y 0051:
 --     outbound_touch  draft, scheduled, processing, held, sent, failed,
 --                     skipped, canceled;
 --     outbound_enrollment  active, paused, completed, replied, opted_out,
 --                     cooldown, bounced;
+--     outbound_sequence  draft, active, paused, archived;
+--     outreach_channel_account  pending, connected, needs_reconnect,
+--                     error, disconnected;
 --     outbound_message.intent  interested es el «positivo»;
 --   · «enviado» es status = 'sent'. Abierto, respondido y positivo se
 --     cuentan DENTRO de lo enviado, para que el embudo nunca crezca hacia
@@ -45,12 +59,94 @@
 --     calentamiento (warmup_day) y el tope sin curva (daily_limit); la
 --     consulta tipada de @mc/db (listChannelUsage) pasa la curva con la
 --     misma función que el despachador y decide el semáforo;
+--   · el texto del proveedor de un fallo: docs/ventas-outreach.md §9.2
+--     («nunca el texto de un proveedor, y nunca una frase en la base»).
+--     El detalle de un fallido es su código, traducido en la pantalla;
 --   · el reintento y la cancelación: son escrituras de la web con su RLS
 --     y los disparadores de siempre (@mc/db/queries/actividad).
+--
+-- Índices: ninguno nuevo. El historial pagina por (status_changed_at,
+-- touch_id) dentro de (workspace_id, status), que ya cubre
+-- outbound_touch_status_changed_idx (0037); la cola, por la hora a la que
+-- toca, que cubre outbound_touch_due_idx.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
--- 1 · outbound_queue
+-- 1 · outbound_touch_retry_block
+-- ---------------------------------------------------------------------
+-- Por qué un fallido no vuelve a la cola, en este orden (el primero que
+-- aplica es el que se dice). NULL: se puede reintentar. Un toque que no
+-- está fallido también da NULL (no hay nada que bloquear).
+--
+--   not_retryable      la dirección no sirve (bounced, invalid_recipient)
+--                      o el envío quedó a medias con el proveedor ya
+--                      llamado (zombie): volvería a fallar o podría salir
+--                      dos veces. Es NOT_RETRYABLE_FAILURES de
+--                      @mc/db/queries/actividad; la prueba compara las dos.
+--   too_many_attempts  attempt_count ya está en 19: el siguiente reclamo
+--                      lo sube a 20, el techo del CHECK de 0037. Uno más
+--                      violaría el CHECK en el UPDATE del reclamo, que es
+--                      uno solo por lote y para todos los workspaces: el
+--                      despachador se pararía para todos.
+--   sequence_archived  la secuencia está archivada.
+--   enrollment_closed  la persona respondió, se dio de baja o rebotó en
+--                      esa cadencia: el despachador lo cancelaría.
+--   superseded         ya salió un paso posterior de la misma cadencia.
+--   opted_out          la ficha pidió la baja, o la dirección está en la
+--                      baja global (address_is_suppressed).
+--   email_invalid      un correo, y el correo de la ficha rebotó.
+--   account_down       el fallo fue de la cuenta del canal
+--                      (account_unavailable, account_auth, token_expired,
+--                      secret_missing, not_configured) y el espacio no
+--                      tiene ninguna cuenta conectada de ese canal: el
+--                      reclamo no encontraría con qué enviarlo. Primero
+--                      hay que reconectar.
+CREATE FUNCTION outbound_touch_retry_block(t outbound_touch)
+RETURNS text
+LANGUAGE sql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+  SELECT CASE
+    WHEN t.status <> 'failed' THEN NULL
+    WHEN split_part(coalesce(t.blocked_reason, ''), ':', 1) IN ('bounced', 'invalid_recipient', 'zombie')
+      THEN 'not_retryable'
+    WHEN t.attempt_count >= 19 THEN 'too_many_attempts'
+    WHEN EXISTS (SELECT 1 FROM outbound_sequence s WHERE s.id = t.sequence_id AND s.status = 'archived')
+      THEN 'sequence_archived'
+    WHEN EXISTS (SELECT 1 FROM outbound_enrollment e
+                  WHERE e.id = t.enrollment_id AND e.status IN ('replied', 'opted_out', 'bounced'))
+      THEN 'enrollment_closed'
+    WHEN t.enrollment_id IS NOT NULL AND EXISTS (
+           SELECT 1
+             FROM outbound_step st
+             JOIN outbound_touch o ON o.enrollment_id = t.enrollment_id AND o.status = 'sent'
+             JOIN outbound_step so ON so.id = o.step_id
+            WHERE st.id = t.step_id
+              AND (so.day_offset, so.order_in_day) > (st.day_offset, st.order_in_day))
+      THEN 'superseded'
+    WHEN address_is_suppressed(t.recipient_address::citext)
+         OR EXISTS (SELECT 1 FROM contact c
+                     WHERE c.id = t.contact_id AND (c.opted_out OR address_is_suppressed(c.email)))
+      THEN 'opted_out'
+    WHEN t.channel = 'email' AND EXISTS (SELECT 1 FROM contact c WHERE c.id = t.contact_id AND c.email_invalid)
+      THEN 'email_invalid'
+    WHEN split_part(coalesce(t.blocked_reason, ''), ':', 1)
+           IN ('account_unavailable', 'account_auth', 'token_expired', 'secret_missing', 'not_configured')
+         AND NOT EXISTS (SELECT 1 FROM outreach_channel_account a
+                          WHERE a.workspace_id = t.workspace_id AND a.channel = t.channel AND a.status = 'connected')
+      THEN 'account_down'
+  END;
+$$;
+
+REVOKE ALL ON FUNCTION outbound_touch_retry_block(outbound_touch) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION outbound_touch_retry_block(outbound_touch) TO mc_app, mc_worker;
+COMMENT ON FUNCTION outbound_touch_retry_block(outbound_touch) IS
+  'Por qué un toque fallido no puede volver a la cola (VEN-16, 0065), o NULL si puede: not_retryable, too_many_attempts, '
+  'sequence_archived, enrollment_closed, superseded, opted_out, email_invalid, account_down. Con la RLS de quien llama.';
+
+-- ---------------------------------------------------------------------
+-- 2 · outbound_queue
 -- ---------------------------------------------------------------------
 -- bucket:
 --   queue    lo que todavía puede salir o espera a una persona: draft,
@@ -64,6 +160,11 @@
 --   confirmación a mano (sent_confirmed_by_user). En la cola, un
 --   programado no lleva motivo: un blocked_reason viejo de antes del
 --   reintento no se enseña.
+-- retry_block: outbound_touch_retry_block (§1), solo en lo fallido. Un
+--   fallido con retry_block NULL se puede reintentar; la pantalla no
+--   ofrece el botón a uno bloqueado y dice por qué.
+-- account_status: el estado de la cuenta del canal con la que se intentó
+--   (NULL si no llegó a tener una).
 -- due_at: cuándo toca (el reintento manda sobre la hora original), como
 --   el índice outbound_touch_due_idx y el reclamo del despachador.
 -- step_position: el número del paso dentro de su secuencia, en el orden
@@ -96,6 +197,7 @@ SELECT t.id AS touch_id,
        co.name AS company_name,
        t.channel_account_id,
        coalesce(a.display_name, a.provider_account_id) AS account_name,
+       a.status AS account_status,
        t.attempt_count,
        t.scheduled_for,
        t.next_retry_at,
@@ -112,7 +214,8 @@ SELECT t.id AS touch_id,
          WHEN 'canceled' THEN t.blocked_reason
          WHEN 'skipped' THEN t.blocked_reason
          WHEN 'sent' THEN t.blocked_reason
-       END AS reason
+       END AS reason,
+       CASE WHEN t.status = 'failed' THEN outbound_touch_retry_block(t) END AS retry_block
   FROM outbound_touch t
   LEFT JOIN outbound_sequence s ON s.id = t.sequence_id
   LEFT JOIN pasos p ON p.id = t.step_id
@@ -123,52 +226,72 @@ SELECT t.id AS touch_id,
 
 REVOKE INSERT, UPDATE, DELETE ON outbound_queue FROM mc_app;
 COMMENT ON VIEW outbound_queue IS
-  'La cola y el historial del outreach (VEN-16, 0064): un toque por fila con su estado, su paso, su contacto, su cuenta '
-  'y el código de su motivo (reason). bucket = queue (draft, scheduled, processing, held, failed) o history (sent, '
+  'La cola y el historial del outreach (VEN-16, 0065): un toque por fila con su estado, su paso, su contacto, su cuenta '
+  '(y el estado de esa cuenta), el código de su motivo (reason) y, en lo fallido, por qué no se puede reintentar '
+  '(retry_block, NULL si se puede). bucket = queue (draft, scheduled, processing, held, failed) o history (sent, '
   'canceled, skipped). La pantalla /ventas/actividad lee de aquí; nadie recalcula.';
 
 -- ---------------------------------------------------------------------
--- 2 · outbound_usage_daily
+-- 3 · outbound_usage_daily
 -- ---------------------------------------------------------------------
 -- Una fila por cuenta viva (connected, needs_reconnect, error) y por día
 -- local del workspace, de hoy a 13 días atrás (el día de hoy es is_today).
--- El día y la zona son los de increment_if_under_cap (0037 §6.2, 0052 §3)
--- y los de listChannelAccounts: la zona del workspace si Postgres la
--- conoce, si no UTC.
+-- El día es el de los contadores: outreach_local_date, la misma función
+-- con la que outbound_counter_bump_at (0052 §3) elige la fila que suma.
+-- La zona del workspace es siempre una zona IANA válida (0035), así que
+-- aquí no se consulta pg_timezone_names.
 --
---   used            acciones de la cuenta ese día (outbound_counter, period
---                   'day', la fila de la cuenta, todas sus acciones): lo
---                   que el despachador reservó. Un día sin fila es 0.
---   daily_limit     el tope diario que rige (effective_daily de
---                   outreach_channel_account_limits): el propio de la
---                   cuenta o el máximo que permiten la política y el
---                   proveedor. SIN la curva de calentamiento.
---   provider_limit  el techo del proveedor (provider_daily): por encima,
---                   el proveedor castiga la cuenta.
---   warmup_day      el día del calentamiento en ese día local (el día de la
---                   conexión es el 1, nunca menos), como warmupDay de
---                   @mc/core; NULL si la cuenta no calienta
---                   (warmup_started_at vacío). La prueba de VEN-16 lo
---                   compara con warmupDay.
---   warmup_days     outbound_policy.warmup_days (14 sin política).
+-- Los tres topes del reclamo (claimDueTouches, 0052), en el mismo orden:
+--   used / daily_limit          el día de la cuenta: outbound_counter
+--                               period 'day' de la cuenta (todas sus
+--                               acciones) contra effective_daily de
+--                               outreach_channel_account_limits, SIN la
+--                               curva de calentamiento. Un día sin fila
+--                               es 0.
+--   week_used / weekly_limit    la semana de la cuenta que contiene ese
+--                               día (period 'week', el lunes local, como
+--                               la fila que suma el reclamo) contra
+--                               effective_weekly.
+--   workspace_used /            solo el correo: el contador del espacio
+--   workspace_daily_limit       entero (channel_account_id NULL, acción
+--                               'email', ese día) contra
+--                               outbound_policy.max_emails_per_day (20,
+--                               el valor por defecto de la tabla, si no
+--                               hay política). NULL en los demás canales.
+--   provider_limit              el techo del proveedor (provider_daily):
+--                               por encima, el proveedor castiga la cuenta.
+--   warmup_day                  el día del calentamiento en ese día local
+--                               (el día de la conexión es el 1, nunca
+--                               menos), como warmupDay de @mc/core; NULL
+--                               si la cuenta no calienta
+--                               (warmup_started_at vacío). La prueba de
+--                               VEN-16 lo compara con warmupDay.
+--   warmup_days                 outbound_policy.warmup_days (14 sin
+--                               política).
+--   outreach_enabled            el interruptor del outreach del espacio:
+--                               apagado, el reclamo no toma nada
+--                               (claimDueTouches une outbound_policy con
+--                               p.enabled), aunque haya cupo.
 --
 -- Los límites son los de HOY aplicados a los 14 días: la base no guarda
--- el tope que regía cada día (es una foto, no una serie).
+-- el tope que regía cada día (es una foto, no una serie). La semana de un
+-- día pasado es la cifra final de esa semana, no la de ese día.
 CREATE VIEW outbound_usage_daily WITH (security_invoker = on) AS
-WITH zona AS (
-  SELECT w.id AS workspace_id,
-         coalesce((SELECT z.name FROM pg_timezone_names z WHERE z.name = w.timezone), 'UTC') AS tz
-    FROM workspace w
-),
-dias AS (
-  SELECT z.workspace_id, z.tz, ((now() AT TIME ZONE z.tz)::date - g) AS day, (g = 0) AS is_today
-    FROM zona z CROSS JOIN generate_series(0, 13) AS g
+WITH dias AS (
+  SELECT w.id AS workspace_id, w.timezone AS tz, (outreach_local_date(w.id, now()) - g) AS day, (g = 0) AS is_today
+    FROM workspace w CROSS JOIN generate_series(0, 13) AS g
 ),
 uso AS (
-  SELECT c.channel_account_id, c.period_start, sum(c.count)::int AS used
+  SELECT c.channel_account_id, c.period, c.period_start, sum(c.count)::int AS used
     FROM outbound_counter c
-   WHERE c.period = 'day' AND c.channel_account_id IS NOT NULL
-   GROUP BY c.channel_account_id, c.period_start
+   WHERE c.channel_account_id IS NOT NULL
+   GROUP BY c.channel_account_id, c.period, c.period_start
+),
+espacio AS (
+  SELECT c.workspace_id, c.period_start, sum(c.count)::int AS used
+    FROM outbound_counter c
+   WHERE c.channel_account_id IS NULL AND c.period = 'day' AND c.action_type = 'email'
+   GROUP BY c.workspace_id, c.period_start
 )
 SELECT a.id AS channel_account_id,
        a.workspace_id,
@@ -179,26 +302,36 @@ SELECT a.id AS channel_account_id,
        d.is_today,
        coalesce(u.used, 0) AS used,
        l.effective_daily AS daily_limit,
+       coalesce(wk.used, 0) AS week_used,
+       l.effective_weekly AS weekly_limit,
+       CASE WHEN a.channel = 'email' THEN coalesce(ws.used, 0) END AS workspace_used,
+       CASE WHEN a.channel = 'email' THEN coalesce(p.max_emails_per_day, 20) END AS workspace_daily_limit,
        l.provider_daily AS provider_limit,
        CASE WHEN a.warmup_started_at IS NOT NULL
             THEN greatest(1, d.day - (a.warmup_started_at AT TIME ZONE d.tz)::date + 1)
        END AS warmup_day,
-       coalesce(p.warmup_days, 14) AS warmup_days
+       coalesce(p.warmup_days, 14) AS warmup_days,
+       coalesce(p.enabled, false) AS outreach_enabled
   FROM outreach_channel_account a
   JOIN outreach_channel_account_limits l ON l.channel_account_id = a.id
   JOIN dias d ON d.workspace_id = a.workspace_id
-  LEFT JOIN uso u ON u.channel_account_id = a.id AND u.period_start = d.day
+  LEFT JOIN uso u ON u.channel_account_id = a.id AND u.period = 'day' AND u.period_start = d.day
+  LEFT JOIN uso wk ON wk.channel_account_id = a.id AND wk.period = 'week'
+                  AND wk.period_start = d.day - (extract(isodow FROM d.day)::int - 1)
+  LEFT JOIN espacio ws ON ws.workspace_id = a.workspace_id AND ws.period_start = d.day
   LEFT JOIN outbound_policy p ON p.workspace_id = a.workspace_id
  WHERE a.status IN ('connected', 'needs_reconnect', 'error');
 
 REVOKE INSERT, UPDATE, DELETE ON outbound_usage_daily FROM mc_app;
 COMMENT ON VIEW outbound_usage_daily IS
-  'El uso de cada cuenta de canal viva en los últimos 14 días locales del workspace (VEN-16, 0064): acciones del día '
-  '(outbound_counter), el tope que rige sin calentamiento (daily_limit), el techo del proveedor (provider_limit) y el día '
-  'del calentamiento (warmup_day). La curva y el semáforo los pone listChannelUsage con warmupDailyLimit de @mc/core.';
+  'El uso de cada cuenta de canal viva en los últimos 14 días locales del workspace (VEN-16, 0065), contra los tres topes '
+  'del reclamo: el diario de la cuenta sin calentamiento (used, daily_limit), el semanal de la cuenta (week_used, '
+  'weekly_limit) y, en el correo, el diario del espacio (workspace_used, workspace_daily_limit); más el techo del '
+  'proveedor, el día del calentamiento y el interruptor del outreach. La curva y el semáforo los pone listChannelUsage '
+  'con warmupDailyLimit de @mc/core.';
 
 -- ---------------------------------------------------------------------
--- 3 · outbound_funnel_by_step
+-- 4 · outbound_funnel_by_step
 -- ---------------------------------------------------------------------
 -- Una fila por paso de cada secuencia (también los pasos sin toques, en
 -- cero), en el orden de la línea de tiempo. Cuenta los toques del paso
@@ -270,12 +403,12 @@ SELECT p.workspace_id,
 
 REVOKE INSERT, UPDATE, DELETE ON outbound_funnel_by_step FROM mc_app;
 COMMENT ON VIEW outbound_funnel_by_step IS
-  'El embudo de cada paso de cada secuencia (VEN-16, 0064): enviados, abiertos, respondidos y positivos (dentro de lo '
+  'El embudo de cada paso de cada secuencia (VEN-16, 0065): enviados, abiertos, respondidos y positivos (dentro de lo '
   'enviado), lo que sigue en cola, lo fallido y lo detenido, con las tasas sobre lo enviado. Cuadra con outbound_touch '
   'fila a fila.';
 
 -- ---------------------------------------------------------------------
--- 4 · outbound_sequence_health
+-- 5 · outbound_sequence_health
 -- ---------------------------------------------------------------------
 -- Una fila por secuencia. Cuenta los toques por outbound_touch.sequence_id
 -- (todos, tengan paso o no) y los enrolamientos por su estado.
@@ -369,6 +502,6 @@ SELECT t.*,
 
 REVOKE INSERT, UPDATE, DELETE ON outbound_sequence_health FROM mc_app;
 COMMENT ON VIEW outbound_sequence_health IS
-  'La salud de cada secuencia (VEN-16, 0064): enrolamientos por estado, la cola viva, lo retenido y lo fallido, lo '
+  'La salud de cada secuencia (VEN-16, 0065): enrolamientos por estado, la cola viva, lo retenido y lo fallido, lo '
   'enviado y lo fallido en 7 días, las tasas sobre lo enviado y un semáforo (health: inactive, failing, attention, '
   'healthy).';
