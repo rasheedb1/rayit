@@ -142,7 +142,7 @@ export const STORIES: readonly Story[] = [
     desc: "El job contra-postgres-real del CI corre @mc/db contra un Postgres 16 montado como Supabase (db/montaje-postgres-real.sql). outreach.test.ts y esquema.test.ts ya pasan ahí y tienen su propio paso; el resto de archivos todavía no: miden los privilegios de mc_app con mc_app_ci, que también hereda los de mc_worker, o cuentan filas sin esperar la demo sembrada (rls, ventas, ventas-ficha, resumen, cotizar, identidad, queries, cuentas-publicas).",
     done: "pnpm --filter @mc/db test pasa en el job contra-postgres-real y el paso deja de ser continue-on-error.",
     status: "pendiente",
-    note: "Abierta en la ronda 5 de VEN-9 (23-sep): 72 pruebas rojas medidas con embedded-postgres 16.14, ninguna de outreach ni de la guardia. Camino probable: un segundo rol de conexión solo miembro de mc_app para lo que mide GRANT, como soloEmbebido en outreach.test.ts, y sembrar sin --seed o con workspaces propios.",
+    note: "Pulido r1 (25-sep, embedded-postgres 16.14 montado como el CI): 20 archivos ya pasan y van al paso obligatorio (packages/db/test/contra-postgres-real.txt, solo crece). El paso informativo corre el resto: 97 rojas y 7 canceladas en brief, cotizar, cuentas-publicas, entregabilidad, finanzas, identidad, outreach-aprobar, outreach-motor, perfil-comercial, resumen, rls, ventas-ficha y ventas. Casi todas miden GRANT de mc_app con mc_app_ci, que hereda mc_worker; camino: un rol de conexión solo miembro de mc_app.",
   },
   {
     id: "CIM-12", module: "CIM", owner: "rasheed", size: "S", sprint: 4, deps: ["CIM-2"],
@@ -217,6 +217,14 @@ export const STORIES: readonly Story[] = [
     done: "apps/worker y packages/connectors no definen un bucle de migraciones propio; sus pruebas siguen en verde.",
     status: "pendiente",
     note: "Abierta por Rasheed en la ronda 3 de CIM-2 (22 de septiembre). En la ronda 4 se cerró la parte que sí era un camino de seguridad: apps/worker/src/runner/db.ts importa tlsFor, hostOf y resolveTls de @mc/db y borró sus copias (una línea de montaje en carpeta de Nicolás), con lo que el worker hereda además la guardia contra ?sslmode= en la URL. Queda solo la unificación del bucle de migraciones de PGlite.",
+  },
+  {
+    id: "CON-2d", module: "CON", owner: "nicolas", size: "S", sprint: 5, deps: ["CON-2"],
+    title: "La prueba del reintento de oauth.refresh sin tiempos",
+    desc: "apps/worker/test/oauth-refresh.test.ts («el reintento solo toca lo que quedó pendiente») compara cuántos job_run hay con un tiempo de espera, y con la máquina cargada sale 1 !== 2 una de cada varias corridas de pnpm verificar. Esperar al segundo job_run por su estado, o fijar el reloj del runner.",
+    done: "Veinte corridas seguidas de pnpm verificar con la máquina cargada sin ese rojo.",
+    status: "pendiente",
+    note: "Abierta por Rasheed en el pulido r1 (25-sep): la carpeta es de Nicolás.",
   },
   {
     id: "CON-3", module: "CON", owner: "nicolas", size: "L", sprint: 2, deps: ["CON-1", "CIM-3"],
@@ -408,7 +416,7 @@ export const STORIES: readonly Story[] = [
     desc: "Migración 0037_outreach con las tablas de outreach, conector de Unipile con hosted auth y webhook firmado para LinkedIn e Instagram, OAuth de Google con gmail.send y gmail.modify, pantalla de canales con estado y límites, keepalive diario del token.",
     done: "Un creador conecta su Gmail y su LinkedIn; el token de Google se refresca solo; una cuenta caída se ve en rojo con el botón de reconectar.",
     status: "bloqueada",
-    note: "Integrada en rasheed/integracion (fase 4). Bloqueada por llaves externas, no por código. Hecho: conectar Gmail, LinkedIn e Instagram con estado firmado (la cuenta nueva se ata al intento por su name), avisos con secreto y ruta firmada, keepalive, límites por cuenta que dicen quién los fija, Instagram apagado por defecto en la política, y lectura de respuestas y rebotes de correo real (charset, solo HTML, DSN). Falta: grabar una sesión real contra Google y Unipile (docs/ventas-outreach.md §9.3): Rasheed crea un cliente OAuth de Google en modo Prueba y una cuenta de prueba de Unipile, guarda sus llaves en .env.local y corre `pnpm --filter @mc/connectors record:outreach -- google | avisos | unipile`; grabados.test.ts no deja marcarla «hecho» sin las once grabaciones y su fecha en esta nota. Y aplicar en Supabase el esquema 0038 a 0045.",
+    note: "Pulido r1: la cuenta autenticada no cambia de canal ni de proveedor, ni de warmup_started_at o last_ok_at desde la web, y no se borra (0037/0042, keep_live); techo de Gmail personal 500/3500; el webhook de Unipile espera 5 s a una fila bloqueada y responde 503 para que reintente. Pendiente humano: llaves de Google y Unipile, grabar las once sesiones (docs/ventas-outreach.md §9.3) y aplicar 0037-0045 en Supabase.",
   },
   {
     id: "VEN-10", module: "VEN", owner: "rasheed", size: "L", sprint: 4, deps: ["VEN-9", "CON-2", "VEN-15"],
@@ -416,7 +424,7 @@ export const STORIES: readonly Story[] = [
     desc: "Pasos normalizados, enrolamiento, cola en outbound_touch con reclamo atómico, despachador por canal con interfaz común, días hábiles y zona horaria del workspace, límites diarios y semanales, reintentos con espera creciente, interruptor de apagado, cancelación al responder con relectura del estado antes de enviar.",
     done: "Una secuencia de tres pasos con plantillas fijas se ejecuta sola contra un buzón de prueba; una respuesta cancela lo pendiente; el límite diario reprograma al día siguiente.",
     status: "bloqueada",
-    note: "Integrada en rasheed/integracion (fase 4) con VEN-9 r5 y VEN-15 r5: verificar y build en verde, migraciones 0038-0055 sin aplicar. Hecho y probado sin red, también sobre la serie integrada (main 0034-0042 + renumeración + 0055): las 123 pruebas del motor pasan y, en un Postgres 16 local con el seed, los pasos 3-6 de §5.2 dan «Despacho: 0 reclamados, 0 enviados» apagado y «Despacho: 1 reclamado, 1 enviado» encendido (status=sent, provider_message_id=fake-linkedin-0001). Falta lo del integrador: renumerar, pnpm verificar, db.migrate hasta 0055 en Supabase y pegar aquí las salidas de los pasos 4 y 6 contra Supabase (docs/ventas-outreach.md §5.2).",
+    note: "Pulido r1: una respuesta sin hilo no se aprueba (no_thread) y la ficha ofrece «Saltar este paso»; «Reanudar la cadencia» para lo que 0054 pausó; aprobar, resolver, saltar y reanudar piden ser del equipo (y outreach_resolve_unconfirmed en la base); el reclamo reparte entre workspaces; festivos por país (CO 2026-2027) en toda ventana; aviso de retenido por motivo; --ayuda en job:dispatch. Pendiente del integrador: renumerar, db.migrate hasta 0055 y pegar aquí las salidas de los pasos 4 y 6 de §5.2 contra Supabase.",
   },
   {
     id: "VEN-11", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["CON-6", "COT-1"],
@@ -456,7 +464,7 @@ export const STORIES: readonly Story[] = [
     desc: "Pie de baja con página pública, cabecera List-Unsubscribe de un clic, rebotes asíncronos, calentamiento progresivo por cuenta, baja respetada en todos los canales, alertas diarias por correo.",
     done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud. Cambio del criterio (supuestos declarados, docs/ventas-outreach.md §8, decisiones 6 y 7; Rasheed puede revertirlos): el clic da de baja con quien envió, en todos sus canales, y nunca en toda la plataforma; el enlace es un token opaco atado al contacto y al workspace en la base.",
     status: "hecho",
-    note: "Probado en pglite de punta a punta: baja por enlace (ni el remitente sin sesión ni dos registros nuevos suprimen a nadie para los demás), rebote de fixture que marca y cancela, y alertas una vez por tipo y día con resumen en Cco. Integrada en la fase 4 con VEN-9 y VEN-10: el job de rebotes lee Gmail con el GmailChannel del despachador (gmailMailboxes), BOUNCE_READING_CONNECTED en true y las cuentas caídas llevan a /ventas/canales. Su migración es 0050_entregabilidad, sin aplicar en Supabase.",
+    note: "Pulido r1: la web no apaga require_optout_link (candado outbound_policy_optout_link); encender pide un canal conectado y dice cuántos mensajes y de cuántas personas vuelven a la cola; el costo del modelo solo en USD; la salud cuenta las bajas desde los envíos del workspace; la alerta de «no sale nada» no cuenta lo que espera a una persona; más formas de baja en español con su contracara. Su migración 0050 sigue sin aplicar en Supabase.",
   },
   {
     id: "VEN-16", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-10"],
