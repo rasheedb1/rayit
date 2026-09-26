@@ -22,7 +22,8 @@
 --     correo de Laura reabre el suyo;
 --   * los contadores de las cuentas de Laura, sacados de los toques que
 --     el despachador reclamó (§3): el widget de uso dice lo mismo que el
---     historial, día por día.
+--     historial, día por día, y cada uno de esos toques dice desde qué
+--     cuenta salió.
 --
 -- Reglas del archivo (las de 0002, 0004, 0005 y 0006):
 --   * Idempotente. UUID fijos y ON CONFLICT. Lo que ya pasó se congela en
@@ -146,7 +147,22 @@ ON CONFLICT (id) DO NOTHING;
 -- congelan en la primera corrida, así que los contadores son siempre los
 -- mismos (DO UPDATE los deja en la cifra que sale de los toques, también
 -- sobre una base sembrada por una versión anterior de este archivo).
+--
+-- Antes de sumar, cada toque reclamado lleva la cuenta con la que salió
+-- (r5): los correos sueltos de 0005 y 0006 no la traían, y el widget
+-- decía «Correo 4 de 20 · laura@cocina-facil.test» mientras esas filas
+-- del historial no llevaban «Desde laura@…». El despachador la anota al
+-- reclamar (claimDueTouches); aquí se anota la única cuenta de ese canal
+-- en la demo, solo donde falta: idempotente, y no pisa la de nadie.
 -- =====================================================================
+UPDATE outbound_touch t
+   SET channel_account_id = CASE t.channel WHEN 'email' THEN '00000005-0000-4000-8000-0000000ac001'::uuid
+                                           ELSE '00000005-0000-4000-8000-0000000ac002'::uuid END
+ WHERE t.workspace_id = '00000002-0000-4000-8000-000000000001'
+   AND t.status IN ('sent', 'failed') AND t.claimed_at IS NOT NULL
+   AND t.channel IN ('email', 'linkedin')
+   AND t.channel_account_id IS NULL;
+
 WITH reclamados AS (
   SELECT t.workspace_id, t.channel, (t.claimed_at AT TIME ZONE w.timezone)::date AS dia, count(*)::int AS n
     FROM outbound_touch t

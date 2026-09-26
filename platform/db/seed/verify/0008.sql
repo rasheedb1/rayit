@@ -104,3 +104,23 @@ SELECT 'd_uso_casa_con_el_historial' AS check_id,
            = (SELECT count(*) FROM reclamados WHERE dia BETWEEN (SELECT min(day) FROM uso) AND (SELECT max(day) FROM uso))
          AND (SELECT sum(used) FROM uso) > 0
          AND (SELECT bool_and(NOT outreach_enabled) FROM uso) AS ok;
+
+-- (e) Cada toque que cuenta en el uso dice desde qué cuenta salió, y es
+--     la cuenta del contador en que cuenta: el widget («Correo 4 de 20 ·
+--     laura@…») y el historial («Desde laura@…») cuentan la misma
+--     historia. Ninguno reclamado sin cuenta, ninguno con la de otro canal.
+SELECT 'e_toques_con_su_cuenta' AS check_id,
+       count(*) AS reclamados,
+       count(*) FILTER (WHERE t.channel_account_id IS NULL) AS sin_cuenta,
+       count(*) > 0
+         AND bool_and(t.channel_account_id = CASE t.channel WHEN 'email' THEN '00000005-0000-4000-8000-0000000ac001'::uuid
+                                                            ELSE '00000005-0000-4000-8000-0000000ac002'::uuid END)
+         -- Y la cola lo enseña con el nombre de la cuenta (el «Desde …» de la fila).
+         AND NOT EXISTS (SELECT 1 FROM outbound_queue q
+                          WHERE q.workspace_id = '00000002-0000-4000-8000-000000000001'
+                            AND q.status IN ('sent', 'failed') AND q.channel IN ('email', 'linkedin')
+                            AND q.touch_id IN (SELECT x.id FROM outbound_touch x WHERE x.claimed_at IS NOT NULL)
+                            AND q.account_name IS NULL) AS ok
+  FROM outbound_touch t
+ WHERE t.workspace_id = '00000002-0000-4000-8000-000000000001'
+   AND t.status IN ('sent', 'failed') AND t.claimed_at IS NOT NULL AND t.channel IN ('email', 'linkedin');
