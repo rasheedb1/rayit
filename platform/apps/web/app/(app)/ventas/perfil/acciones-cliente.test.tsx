@@ -56,8 +56,9 @@ describe("una acción que se rechaza no tumba la página", () => {
     render(<Recalcular />);
     fireEvent.click(screen.getByRole("button", { name: "Recalcular" }));
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("No se pudo recalcular. Inténtalo de nuevo en un momento."));
-    // El botón sigue ahí: la frontera de error no reemplazó la pantalla.
-    expect(screen.getByRole("button", { name: "Recalcular" })).toBeTruthy();
+    // El botón sigue ahí: la frontera de error no reemplazó la pantalla. Se
+    // espera a que termine la transición: mientras dura, el botón dice «Calculando…».
+    await waitFor(() => expect(screen.getByRole("button", { name: "Recalcular" })).toBeTruthy());
   });
 
   it("Calcular mi perfil, igual", async () => {
