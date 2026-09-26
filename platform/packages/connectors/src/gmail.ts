@@ -382,6 +382,14 @@ export interface GmailClientOptions extends GmailHttpOptions {
 }
 
 const REPLY_EXCLUDE = '-from:me -from:mailer-daemon -from:postmaster';
+/**
+ * Dónde buscar respuestas sin hilo: todo el buzón menos lo enviado, los
+ * borradores y los chats. NO `in:inbox`: una respuesta de la marca que la
+ * persona archivó desde el móvil, o que una regla de Gmail etiquetó y
+ * sacó de la bandeja, también detiene la cadencia (el error 8 de Chief,
+ * docs/ventas-outreach.md §4). Gmail ya deja fuera el spam y la papelera.
+ */
+const REPLY_SCOPE = '-in:sent -in:drafts -in:chats';
 
 export class GmailClient implements GmailApi {
   readonly #http: OutreachHttp;
@@ -458,7 +466,7 @@ export class GmailClient implements GmailApi {
    * (sin la etiqueta SENT), que no son rebotes y que llegaron desde `since`.
    */
   async searchReplies(opts: { since: Date; threadId?: string; max?: number }): Promise<GmailMessageRef[]> {
-    if (!opts.threadId) return this.#search(`in:inbox ${REPLY_EXCLUDE} after:${epoch(opts.since)}`, opts.max);
+    if (!opts.threadId) return this.#search(`${REPLY_SCOPE} ${REPLY_EXCLUDE} after:${epoch(opts.since)}`, opts.max);
     const b = await this.#get('gmail.threads.get', `/threads/${encodeURIComponent(opts.threadId)}`, {
       format: 'metadata', metadataHeaders: 'From',
     });

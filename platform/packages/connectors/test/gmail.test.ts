@@ -216,11 +216,17 @@ test('searchReplies con threadId lee ESE hilo: sin lo enviado, sin rebotes y des
   assert.deepEqual(await g2.searchReplies({ since: new Date(1790009999999), threadId: '18c1f0a0b0c0d0e1' }), []);
 });
 
-test('searchReplies sin hilo busca en la bandeja con los filtros', async () => {
+test('searchReplies sin hilo busca en todo el buzón menos lo enviado: una respuesta archivada también cuenta', async () => {
   const { http, oauth, fetch } = await setup([['messages.list', 'replies.ok']]);
   const gmail = new GmailClient({ ...http, oauth, channelAccountId: CA, tokens: TOKENS });
-  assert.equal((await gmail.searchReplies({ since: NOW })).length > 0, true);
-  assert.match(decodeURIComponent(fetch.calls[0]!.url), /-from:mailer-daemon/);
+  const refs = await gmail.searchReplies({ since: NOW });
+  // El segundo del fixture es una respuesta que la persona archivó (sin la etiqueta INBOX).
+  assert.deepEqual(refs.map((r) => r.id), ['18c1f0a0b0c0d0f2', '18c1f0a0b0c0d0f9']);
+  const q = new URL(fetch.calls[0]!.url).searchParams.get('q') ?? '';
+  assert.doesNotMatch(q, /in:inbox/, 'sin in:inbox: lo archivado se lee');
+  for (const filtro of ['-in:sent', '-in:drafts', '-in:chats', '-from:me', '-from:mailer-daemon', '-from:postmaster']) {
+    assert.ok(q.split(' ').includes(filtro), filtro);
+  }
 });
 
 test('revoke: manda el refresh token a /revoke sin dejarlo en la bitácora; invalid_token cuenta como revocado', async () => {
