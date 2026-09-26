@@ -28,10 +28,24 @@ export const MESSAGES = {
   },
   tabs: { canales: "Canales" },
   section: "Tus canales",
-  policyOff: "Los envíos automáticos a marcas están apagados en este espacio. Conectar un canal no envía nada todavía.",
+  /**
+   * Con el envío apagado en el espacio: qué implica y dónde se enciende
+   * (el interruptor de la política de envío, OUTREACH_URLS.policySwitch).
+   */
+  policyOff: {
+    text: "Los envíos automáticos a marcas están apagados en este espacio: conectar un canal no envía nada todavía.",
+    link: "Se encienden en la política de envío",
+  },
 
   channels: {
-    email: { name: "Correo", provider: "Gmail", blurb: "El canal principal: las marcas leen su buzón de alianzas." },
+    /**
+     * Hoy el correo es solo de Google: el texto lo dice antes de llegar a
+     * la pantalla de Google. Si se suma Outlook, la frase cambia aquí.
+     */
+    email: {
+      name: "Correo", provider: "Gmail",
+      blurb: "Tu Gmail o Google Workspace. Es el canal principal: las marcas revisan su buzón de alianzas.",
+    },
     linkedin: { name: "LinkedIn", provider: "LinkedIn", blurb: "Para llegar a la persona de marketing de la marca." },
     instagram_dm: { name: "Instagram", provider: "Instagram", blurb: "Opcional: mensajes directos cuando la marca no tiene otro contacto." },
   },
@@ -46,7 +60,7 @@ export const MESSAGES = {
     notConfigured: "No disponible",
     /** Una cuenta conectada que hoy no puede enviar porque el canal no está disponible en la plataforma o está apagado en el espacio. */
     paused: "En pausa",
-    /** El canal no está en outbound_policy.allowed_channels: Instagram nace así (0045, §5.1). */
+    /** El canal no está en outbound_policy.allowed_channels: Instagram nace así (canales_instagram_apagado_y_semana, §5.1). */
     off: "Apagado en este espacio",
   },
 
@@ -113,6 +127,8 @@ export const MESSAGES = {
     reasons: {
       transient: "No pudimos comprobar la cuenta. Lo volvemos a intentar en unas horas.",
       duplicado: "Ese perfil ya estaba conectado en este espacio: seguimos usando esa conexión.",
+      /** El aviso de Unipile trajo una cuenta que no es la de este intento (not_this_attempt): no se ligó nada. */
+      notThisAttempt: (service: string) => `No pudimos confirmar la cuenta que conectaste en ${service}. Vuelve a intentarlo.`,
     },
     /** Quien no puede gestionar los canales (un miembro, un invitado): ve la pantalla, no la toca. */
     readOnly: "Solo quien administra este espacio puede conectar, desconectar o cambiar los límites de los canales.",
@@ -120,6 +136,8 @@ export const MESSAGES = {
 
   actions: {
     connect: "Conectar",
+    /** El nombre accesible de «Conectar» del correo: dice adónde lleva (a Google), como las integraciones de Vercel y Linear. */
+    connectEmail: "Conectar con Google",
     /** Un canal que ya tiene una cuenta viva: conectar una más (dos buzones, dos LinkedIn), como «Add another» de Vercel. */
     connectAnother: "Conectar otra cuenta",
     reconnect: "Reconectar",
@@ -146,14 +164,18 @@ export const MESSAGES = {
     legend: (account: string) => `Límites de ${account}`,
     daily: "Por día",
     weekly: "Por semana",
-    /** El máximo de la cuenta y quién lo fija, igual para el diario y el semanal (daily_limited_by y weekly_limited_by, 0045). */
+    /** El máximo de la cuenta y quién lo fija, igual para el diario y el semanal (daily_limited_by y weekly_limited_by, canales_instagram_apagado_y_semana). */
     max: {
       policy: (n: string) => `Máximo ${n} (política del espacio)`,
       personal: (n: string) => `Máximo ${n} (Gmail personal)`,
       provider: (n: string, provider: string) => `Máximo ${n} (${provider})`,
     },
-    /** Vacío = sin tope propio: rige el máximo, que va de marcador en el campo. */
-    emptyMeansMax: "Vacío: el máximo.",
+    /**
+     * La ayuda de cada campo: el máximo, quién lo fija y qué pasa si se
+     * deja vacío (sin tope propio: rige el máximo, que va de marcador en
+     * el campo). Pegada al campo, no debajo del botón.
+     */
+    help: (max: string) => `${max}. Vacío = el máximo.`,
     saved: "Límites guardados.",
     invalid: (n: string) => `Tiene que ser un número entero entre 0 y ${n}.`,
     dailyAboveWeekly: (n: string) => `El tope diario no puede pasar del semanal (${n}).`,
@@ -191,7 +213,7 @@ export const MESSAGES = {
       canal_equivocado: "La cuenta que conectaste no es de ese canal.",
       otro_espacio: "Esta conexión se empezó en otro espacio de On Cue. Cambia a ese espacio y vuelve a intentarlo.",
       soltando: "Todavía estábamos desconectando esa cuenta. Espera un minuto y vuelve a intentarlo.",
-      /** El mismo perfil ya está conectado en este espacio (0042): la cuenta nueva se soltó en Unipile. */
+      /** El mismo perfil ya está conectado en este espacio (canales_identidad_y_rotacion): la cuenta nueva se soltó en Unipile. */
       duplicado: "Ese perfil ya está conectado en este espacio. Seguimos usando esa conexión.",
       /** Un inicio de conexión de un canal fuera de la política del espacio (la fila no ofrece el botón; esto es un POST a mano). */
       apagado: (service: string) => `${service} está apagado en este espacio: los envíos a marcas no lo usan.`,
@@ -236,6 +258,8 @@ export const MESSAGES = {
     },
     /** Lo que se registra en el servidor (console.warn) cuando falta configuración. */
     serverMissing: (channel: string, vars: string) => `[canales] ${channel} no está disponible: faltan ${vars} (ver platform/.env.example).`,
+    /** Producción sin APP_URL: los enlaces de vuelta de Google y de Unipile no tienen a qué origen apuntar. */
+    originMissing: "[canales] no se puede conectar: producción sin APP_URL ni VERCEL_PROJECT_PRODUCTION_URL (ver platform/.env.example).",
   },
 
   /**

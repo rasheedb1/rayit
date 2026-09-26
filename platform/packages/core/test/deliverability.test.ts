@@ -89,6 +89,7 @@ test('el pie lleva la frase de baja con el enlace y la dirección, en texto y HT
   assert.ok(r.ok);
   assert.match(r.footer.text, /date de baja aquí: https:\/\/app\.test\/baja\/v1\.a\.b/);
   assert.match(r.footer.text, /Calle 93 # 11-26, Bogotá <Colombia>$/);
+  assert.ok(r.footer.text.startsWith('-- \n'), 'abre con el separador de firma de RFC 3676 («-- » con espacio)');
   assert.match(r.footer.html, /<a href="https:\/\/app\.test\/baja\/v1\.a\.b">date de baja aquí<\/a>/);
   assert.match(r.footer.html, /Bogotá &lt;Colombia&gt;/);
 });
@@ -239,6 +240,40 @@ test('buzón lleno y 4xx son blandos; 5.7.1 es bloqueo, no correo inválido', ()
   });
   assert.equal(bloqueo?.kind, 'blocked');
   assert.equal(bloqueo?.recipient, 'compras@marca.com');
+});
+
+/** Un DSN de Gmail con su Status y su Diagnostic-Code, como llegan al buzón. */
+const dsn = (status: string, diagnostico: string) => ({
+  from: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
+  subject: 'Delivery Status Notification (Failure)',
+  body: [
+    'Final-Recipient: rfc822; compras@marca.com',
+    'Action: failed',
+    `Status: ${status}`,
+    `Diagnostic-Code: smtp; ${diagnostico}`,
+    '',
+    'Message-ID: <CAF=original@mail.gmail.com>',
+  ].join('\n'),
+});
+
+test('solo 5.1.x es duro: el límite de envío de Gmail y los fallos del mensaje no marcan la dirección', () => {
+  // El aviso que Gmail manda por CADA correo que se pasa del límite diario: habla de quien envía.
+  const limite = detectBounce(dsn('5.4.5', '550 5.4.5 Daily user sending limit exceeded. For more information on Gmail sending limits go to https://support.google.com/a/answer/166852'));
+  assert.equal(limite?.kind, 'blocked');
+  assert.equal(limite?.statusCode, '5.4.5');
+  assert.equal(limite?.originalMessageId, 'CAF=original@mail.gmail.com', 'el aviso trae el Message-ID: por eso no puede ser duro');
+  assert.equal(detectBounce(dsn('5.0.0', '550 5.0.0 Rate limit exceeded, too many messages'))?.kind, 'blocked');
+  assert.equal(detectBounce(dsn('5.3.4', '552 5.3.4 Message size exceeds fixed maximum message size'))?.kind, 'soft');
+  assert.equal(detectBounce(dsn('5.6.0', '550 5.6.0 Content rejected'))?.kind, 'soft');
+  assert.equal(detectBounce(dsn('5.4.6', '554 5.4.6 Routing loop detected'))?.kind, 'soft');
+  assert.equal(detectBounce(dsn('5.5.0', '550 5.5.0 Requested action not taken'))?.kind, 'soft');
+  assert.equal(detectBounce(dsn('5.2.1', '550 5.2.1 The email account that you tried to reach is inactive'))?.kind, 'soft');
+  assert.equal(detectBounce(dsn('5.6.0', '550 5.6.0 Message blocked as spam'))?.kind, 'blocked', 'con frase de bloqueo, bloqueo');
+  // Lo que sí es duro, por código o por la frase del servidor cuando el código no la dice.
+  assert.equal(detectBounce(dsn('5.1.10', '550 5.1.10 RESOLVER.ADR.RecipientNotFound; Recipient not found by SMTP address lookup'))?.kind, 'hard');
+  assert.equal(detectBounce(dsn('5.0.0', '550 5.0.0 <compras@marca.com>: Recipient address rejected: User unknown'))?.kind, 'hard');
+  assert.equal(detectBounce(dsn('5.4.4', '550 5.4.4 Unrouteable address'))?.kind, 'hard');
+  assert.equal(detectBounce(dsn('5.4.4', '550 5.4.4 Unable to route'))?.kind, 'soft', '5.4.4 sin frase de dirección: no se marca');
 });
 
 test('un aviso en español también se reconoce', () => {
@@ -415,10 +450,19 @@ test('rebotes duros sobre el 5 % solo con diez envíos o más', () => {
   assert.equal(a?.values.rate, 0.1);
 });
 
-test('3 rebotes blandos sobre 20 no alertan: solo cuentan los duros', () => {
-  // Quien lee la salud pasa solo los duros (outbound.alerts: kind = 'hard');
-  // tres blandos son 0 duros.
-  assert.deepEqual(evaluateOutreachAlerts(entrada({ emailsSent: 20, hardBounces: 0 })), []);
+test('3 rebotes blandos sobre 20 no alertan: cuentan los duros y los bloqueos', () => {
+  // Quien lee la salud pasa los duros y los bloqueos (readAlertSignalCounts);
+  // tres blandos son 0 de los dos.
+  assert.deepEqual(evaluateOutreachAlerts(entrada({ emailsSent: 20, hardBounces: 0, blockedBounces: 0 })), []);
+});
+
+test('una ola de bloqueos (5.7.x, reputación, límite de envío) alerta aunque no haya ni un duro, y dice de qué tipo fue', () => {
+  const [a] = evaluateOutreachAlerts(entrada({ emailsSent: 20, hardBounces: 0, blockedBounces: 3 }));
+  assert.equal(a?.kind, 'bounce_rate');
+  assert.deepEqual(a?.values, { bounces: 3, hard: 0, blocked: 3, attempts: 20, rate: 0.15 });
+  const [mixta] = evaluateOutreachAlerts(entrada({ emailsSent: 20, hardBounces: 1, blockedBounces: 1 }));
+  assert.deepEqual(mixta?.values, { bounces: 2, hard: 1, blocked: 1, attempts: 20, rate: 0.1 });
+  assert.equal(bounceRateStatus({ emailsSent: 20, hardBounces: 0, blockedBounces: 2 }), 'over');
 });
 
 test('la tasa nunca pasa del 100 %', () => {

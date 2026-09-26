@@ -1,9 +1,9 @@
 -- =====================================================================
--- 0044 · Canales de outreach: last_error solo guarda códigos
+-- canales_last_error_codigo · Canales de outreach: last_error solo guarda códigos
 --        (VEN-9, ronda 4 de canales)
 -- ---------------------------------------------------------------------
--- Número: detrás de 0043, que tampoco está aplicada en Supabase. El
--- integrador las renumera juntas (0038 a 0044).
+-- Número: detrás de contacto_codigo_de_baja, que tampoco está aplicada en Supabase. El
+-- integrador las renumera juntas (canales_outreach a canales_last_error_codigo).
 --
 -- La regla de la pieza (docs/ventas-outreach.md §9.2) es que en
 -- outreach_channel_account.last_error van CÓDIGOS, nunca frases: la web,
@@ -33,7 +33,7 @@
 --     pantalla traduce igual;
 --   · cualquier otra frase pasa a 'unknown' (la pantalla dice el motivo
 --     genérico, como ya hacía con una frase). En Supabase no debería
---     haber ninguna: 0038 a 0043 no se aplicaron, y la web de 0037 no
+--     haber ninguna: canales_outreach a contacto_codigo_de_baja no se aplicaron, y la web de 0037 no
 --     escribía frases en esta columna.
 --
 -- La tabla tiene RLS forzada y la migración corre sin workspace: se

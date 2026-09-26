@@ -2,8 +2,8 @@
  * Qué canales se pueden conectar en este entorno y qué falta para los
  * demás. Solo nombres de variables: ningún valor sale de aquí.
  *
- *   correo     GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET (la redirección
- *              sale de GOOGLE_REDIRECT_URI o del origen de la app)
+ *   correo     GOOGLE_OUTREACH_CLIENT_ID y GOOGLE_OUTREACH_CLIENT_SECRET (la redirección
+ *              sale de GOOGLE_OUTREACH_REDIRECT_URI o del origen de la app)
  *   LinkedIn   UNIPILE_DSN, UNIPILE_ACCESS_TOKEN y UNIPILE_WEBHOOK_SECRET
  *   Instagram  (lo mismo: los dos van por Unipile)
  *   todos      TOKEN_ENCRYPTION_KEY: firma el estado de la conexión y

@@ -111,11 +111,11 @@ test('los plurales salen de Intl.PluralRules del locale, con 1 y con 2 (r4)', ()
   assert.match(fillTemplate(noSends, { dueToSend: '1' }, { dueToSend: 1 }, 'es-CO'), /^Había 1 mensaje por salir y no salió en 24 horas/);
   assert.match(fillTemplate(noSends, { dueToSend: '2' }, { dueToSend: 2 }, 'es-CO'), /^Había 2 mensajes por salir/);
   const bounces = ALERT_TEXTS_ES.alerts.bounce_rate.body;
-  assert.match(fillTemplate(bounces, { bounces: '1', attempts: '12' }, { bounces: 1 }, 'es-CO'), /^1 de 12 correos .* rebotó porque/);
-  assert.match(fillTemplate(bounces, { bounces: '2', attempts: '12' }, { bounces: 2 }, 'es-CO'), /^2 de 12 correos .* rebotaron porque/);
+  assert.match(fillTemplate(bounces, { bounces: '1', attempts: '12', hard: '1', blocked: '0' }, { bounces: 1 }, 'es-CO'), /^1 de 12 correos .* rebotó \(1 porque la dirección no existe, 0 bloqueado/);
+  assert.match(fillTemplate(bounces, { bounces: '2', attempts: '12', hard: '1', blocked: '1' }, { bounces: 2 }, 'es-CO'), /^2 de 12 correos .* rebotaron \(1 porque la dirección no existe, 1 bloqueados/);
   const subject = ALERT_TEXTS_ES.email.subject;
-  assert.equal(fillTemplate(subject, { n: '1', workspace: 'X' }, { n: 1 }, 'es-CO'), 'On Cue · Una alerta del outreach de X');
-  assert.equal(fillTemplate(subject, { n: '2', workspace: 'X' }, { n: 2 }, 'es-CO'), 'On Cue · 2 alertas del outreach de X');
+  assert.equal(fillTemplate(subject, { n: '1', workspace: 'X' }, { n: 1 }, 'es-CO'), 'On Cue · Un aviso del envío automático de X');
+  assert.equal(fillTemplate(subject, { n: '2', workspace: 'X' }, { n: 2 }, 'es-CO'), 'On Cue · 2 avisos del envío automático de X');
 });
 
 test('el texto de un aviso no manda a la política de envío: se lee ahí mismo, y el correo ya lleva su enlace (r5)', () => {
@@ -129,7 +129,7 @@ test('el texto de un aviso no manda a la política de envío: se lee ahí mismo,
   }
 });
 
-test('el job está registrado y corre cada hora (0038)', async () => {
+test('el job está registrado y corre cada hora (entregabilidad)', async () => {
   assert.ok(allJobs.some((j) => j.id === ALERTAS_JOB_ID));
   const { rows } = await db.raw.query<{ default_cron: string }>('SELECT default_cron FROM job_definition WHERE id = $1', [ALERTAS_JOB_ID]);
   assert.equal(rows[0]?.default_cron, '25 * * * *');
@@ -169,7 +169,7 @@ test('la corrida siguiente, con cartero, no repite avisos y manda el resumen una
   assert.equal(cartero.enviados.length, 1);
   const [correo] = cartero.enviados;
   assert.deepEqual(correo?.recipients, ['laura@alertas.test']);
-  assert.equal(correo?.subject, 'On Cue · 2 alertas del outreach de Laura Creadora');
+  assert.equal(correo?.subject, 'On Cue · 2 avisos del envío automático de Laura Creadora');
   assert.match(correo?.text ?? '', /3 de 20 correos enviados/);
   assert.ok((correo?.text ?? '').includes(`http://localhost:3100${SALUD_URL}`), 'el enlace de cada alerta, no uno fijo');
   assert.ok((await avisos(WS_MAL)).every((a) => a.emailed_at !== null));
@@ -226,7 +226,7 @@ test('con dos dueños: si el correo falla nadie lo recibe dos veces, y sale al d
   const deDos = cartero.enviados.filter((m) => m.subject.includes('Dos Dueños'));
   assert.equal(deDos.length, 1);
   assert.deepEqual(deDos[0]?.recipients, ['dos@alertas.test', 'uno@alertas.test']);
-  assert.equal(deDos[0]?.subject, 'On Cue · 4 alertas del outreach de Dos Dueños');
+  assert.equal(deDos[0]?.subject, 'On Cue · 4 avisos del envío automático de Dos Dueños');
   const dos = await avisos(WS_DOS);
   assert.equal(dos.length, 4);
   assert.ok(dos.every((a) => a.emailed_at !== null));
@@ -243,7 +243,7 @@ test('un workspace en inglés recibe los avisos y el correo en inglés', async (
   // 10:00 en Nueva York.
   await runAlertas(db, new Date('2026-09-27T14:00:00Z'), { mailer: cartero, appUrl: 'https://app.test', readSignals: desdeFixture });
   const [correo] = cartero.enviados.filter((m) => m.subject.includes('Creator EN'));
-  assert.equal(correo?.subject, 'On Cue · 2 outreach alerts for Creator EN');
+  assert.equal(correo?.subject, 'On Cue · 2 automatic sending alerts for Creator EN');
   assert.match(correo?.text ?? '', /3 of 20 emails sent in the last 24 hours bounced/);
   const en = await avisos(WS_EN);
   assert.ok(en.some((a) => /^Too many emails are bouncing: 15\s?%$/.test(a.title_es)));
@@ -342,7 +342,7 @@ test('todo mal (r4, r5): el fixture da las seis notificaciones, con su gravedad,
 
   // El correo de resumen lista las seis, cada una con su enlace.
   const [correo] = cartero.enviados.filter((m) => m.subject.includes('Todo Mal'));
-  assert.equal(correo?.subject, 'On Cue · 6 alertas del outreach de Todo Mal');
+  assert.equal(correo?.subject, 'On Cue · 6 avisos del envío automático de Todo Mal');
   for (const a of todo) {
     assert.ok(correo?.text.includes(`· ${a.title_es}`), `el correo lista «${a.title_es}»`);
     assert.ok(correo?.text.includes(`https://app.test${a.action_url}`));
@@ -366,7 +366,7 @@ test('un resumen por día (r4), y lo urgente no espera a mañana (r5)', async ()
   const manana = new CarteroFalso();
   await runAlertas(db, new Date('2026-10-03T13:00:00Z'), { mailer: manana, appUrl: 'https://app.test', readSignals: leer });
   assert.equal(deTarde(manana).length, 1);
-  assert.equal(deTarde(manana)[0]?.subject, 'On Cue · Una alerta del outreach de Por La Tarde');
+  assert.equal(deTarde(manana)[0]?.subject, 'On Cue · Un aviso del envío automático de Por La Tarde');
 
   // 15:00: cae una cuenta y se atasca un mensaje. La cuenta caída es urgente:
   // sale ya, en un correo corto aparte. El atasco espera al resumen de mañana.
@@ -379,7 +379,7 @@ test('un resumen por día (r4), y lo urgente no espera a mañana (r5)', async ()
   assert.ok(r.emailDeferred >= 1, 'el atasco espera');
   const [urgente] = deTarde(tarde);
   assert.equal(deTarde(tarde).length, 1);
-  assert.equal(urgente?.subject, 'On Cue · Alerta urgente del outreach de Por La Tarde');
+  assert.equal(urgente?.subject, 'On Cue · Un aviso urgente del envío automático de Por La Tarde');
   assert.match(urgente?.text ?? '', /Una cuenta de envío necesita atención/);
   assert.doesNotMatch(urgente?.text ?? '', /atascado/, 'solo lo urgente');
   assert.deepEqual(
@@ -401,7 +401,7 @@ test('un resumen por día (r4), y lo urgente no espera a mañana (r5)', async ()
   const otroDia = new CarteroFalso();
   await runAlertas(db, new Date('2026-10-04T13:00:00Z'), { mailer: otroDia, appUrl: 'https://app.test', readSignals: leer });
   assert.equal(deTarde(otroDia).length, 1);
-  assert.equal(deTarde(otroDia)[0]?.subject, 'On Cue · 2 alertas del outreach de Por La Tarde');
+  assert.equal(deTarde(otroDia)[0]?.subject, 'On Cue · 2 avisos del envío automático de Por La Tarde');
   assert.ok((await avisos(WS_TARDE)).every((a) => a.emailed_at !== null));
 });
 

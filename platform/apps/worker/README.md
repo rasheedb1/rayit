@@ -65,7 +65,7 @@ make worker.humo                        # = pnpm --filter @mc/worker humo: lista
 | `PGSSLROOTCERT` | Ruta al CA de Supabase; relativa a `platform/`. | `db/certs/supabase-root-2021.crt` |
 | `LOG_LEVEL` / `LOG_FORMAT` | `debug|info|warn|error` · `json|pretty`. | `info` / `json` |
 | `INSTAGRAM_HOUSE_TOKEN`, `GOOGLE_API_KEY` | `collect.account_metrics` (CON-10): el token de la cuenta profesional de On Cue para `business_discovery` y la API key de YouTube. Sin ellas la plataforma se salta y se avisa. | — |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | El adaptador de Gmail del motor de cadencias (VEN-10) las usa para renovar un token de buzón vencido; las usará también el refresher de YouTube (CON-8). Sin ellas, un correo con el token vencido queda como fallo transitorio. | — |
+| `GOOGLE_OUTREACH_CLIENT_ID`, `GOOGLE_OUTREACH_CLIENT_SECRET` | El cliente OAuth de Google SOLO del outreach (no el de YouTube, `GOOGLE_CLIENT_ID`): el adaptador de Gmail del motor de cadencias (VEN-10) lo usa para renovar un token de buzón vencido, y la liberación para revocarlo. Sin ellas, un correo con el token vencido queda como fallo transitorio. | — |
 | `UNIPILE_DSN`, `UNIPILE_ACCESS_TOKEN` | LinkedIn e Instagram del motor de cadencias. Sin ellas esos canales no se reclaman: sus toques esperan en la cola. | — |
 | `OUTREACH_CHANNELS` | `real` (Gmail y Unipile) o `fake` (buzón en memoria, nada sale de la máquina). `fake` solo contra Postgres embebido o una base local: contra Supabase, o con `NODE_ENV=production`, el worker no arranca. | `real` |
 | `APP_URL` | Origen público de la web, para el enlace de baja de cada correo. Sin él (ni `VERCEL_PROJECT_PRODUCTION_URL`) el correo real no se reclama. | — |
@@ -251,7 +251,7 @@ Adaptadores en `src/jobs/ventas/canales/` con una sola interfaz
 Instagram) son adaptadores finos sobre los clientes de VEN-9 en
 `@mc/connectors` (`GmailApi`, `UnipileApi`: su HTTP, su MIME, su
 bitácora en `api_call_log` y sus errores), y `fake` para las pruebas y
-la demo. Sin `GOOGLE_CLIENT_ID/SECRET` el correo está «no configurado»
+la demo. Sin `GOOGLE_OUTREACH_CLIENT_ID/SECRET` el correo está «no configurado»
 (no se reclama, no gasta intentos); sin `UNIPILE_DSN` y
 `UNIPILE_ACCESS_TOKEN`, LinkedIn e Instagram. La guardia de
 placeholders (`@mc/core`) corre en el punto de envío, sobre el mensaje

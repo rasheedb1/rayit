@@ -294,19 +294,21 @@ export const outreachChannelAccount = pgTable('outreach_channel_account', {
   lastErrorAt: timestamptz('last_error_at'),
   lastError: text('last_error'),
   scopes: text('scopes').array().default([]).notNull(),
-  /** Los avisos de Unipile de la cuenta, para borrarlos al soltarla (0040). Solo el despachador. */
+  /** Los avisos de Unipile de la cuenta, para borrarlos al soltarla (canales_liberar_y_limites). Solo el despachador. */
   providerWebhookIds: text('provider_webhook_ids').array().default([]).notNull(),
-  /** Cuándo se soltó en el proveedor tras desconectarla; NULL en una desconectada = pendiente (0040). */
+  /** Cuándo se soltó en el proveedor tras desconectarla; NULL en una desconectada = pendiente (canales_liberar_y_limites). */
   releasedAt: timestamptz('released_at'),
-  /** sales.channels_release la reclamó para soltarla (0041): mientras dure, reconectar espera. */
+  /** sales.channels_release la reclamó para soltarla (canales_reclamar_al_soltar): mientras dure, reconectar espera. */
   releaseClaimedAt: timestamptz('release_claimed_at'),
-  /** Quién es la persona en el proveedor (connection_params.im.id de Unipile), única entre las vivas (0042). */
+  /** Quién es la persona en el proveedor (connection_params.im.id de Unipile), única entre las vivas (canales_identidad_y_rotacion). */
   providerIdentity: text('provider_identity'),
-  /** La huella del secreto con el que se dieron de alta los avisos (0042). Solo el despachador. */
+  /** La huella del secreto con el que se dieron de alta los avisos (canales_identidad_y_rotacion). Solo el despachador. */
   providerWebhookSecretFp: text('provider_webhook_secret_fp'),
-  /** El cursor de los lotes del keepalive (0042). */
+  /** El cursor de los lotes del keepalive (canales_identidad_y_rotacion). */
   keepaliveCheckedAt: timestamptz('keepalive_checked_at'),
-  /** Hasta cuándo se leyeron los avisos de rebote de su buzón (0038 §6). Solo la escribe el worker. */
+  /** La cuenta de Unipile que trajo el aviso de cuenta creada de este intento (canales_identidad_y_rotacion §8): la conciliación la reconoce por aquí. */
+  notifiedAccountId: text('notified_account_id'),
+  /** Hasta cuándo se leyeron los avisos de rebote de su buzón (entregabilidad §6). Solo la escribe el worker. */
   bouncesReadAt: timestamptz('bounces_read_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -571,7 +573,7 @@ export const outboundOptoutLink = pgTable('outbound_optout_link', {
  * originaron (0037 §4.6): la baja global es atribuible y reversible. La
  * escribe public_optout; la web no la ve. Bitácora.
  */
-/** El alcance de un clic de baja (0038 §8). */
+/** El alcance de un clic de baja (entregabilidad §8). */
 export const OPTOUT_SCOPES = ['workspace', 'global'] as const;
 
 export const outboundOptoutEvent = pgTable('outbound_optout_event', {
@@ -585,15 +587,15 @@ export const outboundOptoutEvent = pgTable('outbound_optout_event', {
   sentAt: timestamptz('sent_at'),
   alreadyOptedOut: boolean('already_opted_out').notNull(),
   createdAt: createdAt(),
-  /** workspace: la baja valió solo para quien envió; global: pasó a contact_suppression (0038 §8). */
+  /** workspace: la baja valió solo para quien envió; global: pasó a contact_suppression (entregabilidad §8). */
   scope: text('scope', { enum: OPTOUT_SCOPES }).default('global').notNull(),
 });
 
-/** Los tipos de rebote (0038): la dirección no existe, algo pasajero, o un rechazo por política del receptor. */
+/** Los tipos de rebote (entregabilidad): la dirección no existe, algo pasajero, o un rechazo por política del receptor. */
 export const BOUNCE_KINDS = ['hard', 'soft', 'blocked'] as const;
 
 /**
- * Rebotes leídos del buzón del creador (0038, VEN-15, job
+ * Rebotes leídos del buzón del creador (entregabilidad, VEN-15, job
  * outbound.bounces). Append-only; la escribe el worker y la web solo la
  * lee. Única por (workspace_id, provider_message_id): el id del aviso en
  * el buzón.
@@ -617,7 +619,7 @@ export const outboundBounce = pgTable('outbound_bounce', {
 });
 
 /**
- * A quién no le vuelve a escribir un workspace (0038 §8, VEN-15 r3): la
+ * A quién no le vuelve a escribir un workspace (entregabilidad §8, VEN-15 r3): la
  * dirección pulsó el enlace de baja de un correo suyo. La escribe solo
  * public_optout; con dos workspaces para la misma dirección, la baja pasa
  * a contact_suppression (toda la plataforma).

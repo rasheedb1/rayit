@@ -28,6 +28,19 @@ export const DEFAULT_WARMUP_DAYS = 14;
 /** El calentamiento más largo que se acepta (POLICY_LIMITS.warmupDays.max de @mc/db). */
 export const WARMUP_MAX_DAYS = 90;
 
+/**
+ * Cuántos correos al día aguanta un Gmail sin llamar la atención, según
+ * el tipo de cuenta: la guía que enseña la ayuda del tope diario en
+ * /ventas/politica (la pantalla los formatea con el locale del espacio).
+ */
+export const GMAIL_DAILY_GUIDANCE = {
+  personal: { from: 50, to: 100 },
+  workspace: { from: 100, to: 150 },
+} as const;
+
+/** Desde cuántos mensajes a una marca en la ventana suele sentirse insistente (la ayuda de «Mensajes por marca»). */
+export const INSISTENT_TOUCHES_PER_COMPANY = 4;
+
 const FECHA_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 function diaJuliano(fecha: string): number {

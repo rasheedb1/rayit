@@ -28,13 +28,13 @@ import { countReplannable } from './outreach/enroll.ts';
 // por aquí. El token es opaco (32 bytes al azar, @mc/core): TODO se
 // decide por su sha256 en la base, sin secretos. En orden:
 //   1. lo que no tiene forma de token no llega a la base;
-//   2. public_optout_preview (0038 §5) dice si el enlace existe, para qué
+//   2. public_optout_preview (entregabilidad §5) dice si el enlace existe, para qué
 //      dirección (enmascarada), quién la escribe y si quien lo abre con
 //      sesión es miembro del workspace que envió: el enlace también queda
 //      en la carpeta de enviados del Gmail del creador, y su clic lo
 //      daría de baja a él mismo (docs/ventas-outreach.md §5.2,
 //      «Obligatorio para VEN-15»);
-//   3. public_optout, sin sesión (0038 §8): vale para el workspace que
+//   3. public_optout, sin sesión (entregabilidad §8): vale para el workspace que
 //      envió ese correo, en todos sus canales (su ficha, sus toques, sus
 //      enrolamientos) y nunca para toda la plataforma. Así el remitente
 //      que pulsa su propio enlace sin sesión solo se da de baja a sí
@@ -47,7 +47,7 @@ export interface OptoutGates {
   sessionWorkspaceIds(): Promise<readonly string[]>;
 }
 
-/** Lo que responde public_optout_preview (0038 §5), comprobado. */
+/** Lo que responde public_optout_preview (entregabilidad §5), comprobado. */
 export type OptoutPreview =
   | { status: 'not_found' }
   | {
@@ -107,7 +107,7 @@ export type OptoutLinkCheck =
   | { status: 'sender' };
 
 /**
- * El alcance de una baja por enlace (0038 §8): el workspace que envió
+ * El alcance de una baja por enlace (entregabilidad §8): el workspace que envió
  * ese correo, en todos sus canales. Siempre ese: un enlace nunca suprime
  * a la persona para toda la plataforma (eso lo hace una respuesta
  * verificada o un administrador). La base lo sigue diciendo en la
@@ -120,12 +120,12 @@ export type OptoutFromLinkResult =
   | { status: 'not_found' }
   | { status: 'sender' };
 
-/** Lo que responde public_optout desde 0038 §8, comprobado. */
+/** Lo que responde public_optout desde entregabilidad §8, comprobado. */
 export type LinkOptoutResult =
   | { status: 'not_found' }
   | { status: 'ok'; alreadyOptedOut: boolean; scope: OptoutScope; workspaceId: string | null; touchId: string | null };
 
-/** Comprueba la forma del jsonb de public_optout (0037 §9 con el alcance de 0038 §8). */
+/** Comprueba la forma del jsonb de public_optout (0037 §9 con el alcance de entregabilidad §8). */
 export function parseLinkOptout(value: unknown): LinkOptoutResult {
   const fn = 'public_optout';
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new OutreachShapeError(fn, '$', 'se esperaba un objeto');
@@ -150,7 +150,7 @@ export function parseLinkOptout(value: unknown): LinkOptoutResult {
 }
 
 /**
- * public_optout (0038 §8): la baja vale para el workspace que envió el
+ * public_optout (entregabilidad §8): la baja vale para el workspace que envió el
  * correo del enlace, en todos sus canales. Sin sesión (withPublicShare).
  */
 export async function linkOptout(tx: PublicShareTx, token: string): Promise<LinkOptoutResult> {
@@ -185,7 +185,7 @@ export async function checkOptoutLink(gates: OptoutGates, token: string): Promis
  *
  * Sin sesión, la base no sabe quién pulsa: puede ser el propio remitente
  * en una ventana privada o con un POST a mano, o una sola persona con dos
- * registros. Por eso public_optout vale para quien envió (0038 §8) y
+ * registros. Por eso public_optout vale para quien envió (entregabilidad §8) y
  * ningún clic suprime a la persona para los demás creadores.
  */
 export async function optoutFromLink(gates: OptoutGates, token: string): Promise<OptoutFromLinkResult> {
@@ -356,7 +356,7 @@ export class PolicyNeedsAddressError extends Error {
 /**
  * Quien está en la transacción no es 'owner' ni 'admin' del workspace: la
  * base no le deja escribir la política ni encender o apagar el envío
- * (0038 §7, políticas RESTRICTIVE de outbound_policy).
+ * (entregabilidad §7, políticas RESTRICTIVE de outbound_policy).
  */
 export class PolicyForbiddenError extends Error {
   constructor() {
@@ -365,10 +365,10 @@ export class PolicyForbiddenError extends Error {
   }
 }
 
-/** Los roles que pueden cambiar la política y el interruptor (0038 §7). La pantalla lo usa para no ofrecerlo. */
+/** Los roles que pueden cambiar la política y el interruptor (entregabilidad §7). La pantalla lo usa para no ofrecerlo. */
 export const POLICY_MANAGER_ROLES = ['owner', 'admin'] as const;
 
-/** El rechazo de 0038 §7: la fila nueva de outbound_policy no pasa las políticas por rol (42501). */
+/** El rechazo de entregabilidad §7: la fila nueva de outbound_policy no pasa las políticas por rol (42501). */
 export function isPolicyForbidden(err: unknown): boolean {
   const e = err as { code?: string; message?: string } | null;
   return e?.code === '42501' && /outbound_policy/.test(e.message ?? '');
@@ -438,9 +438,13 @@ export async function saveOutboundPolicy(tx: WorkspaceTx, input: OutboundPolicyI
 // alertas (evaluateOutreachAlerts, @mc/core):
 //   emailsSent   correos con sent_at en la ventana;
 //   hardBounces  de ESOS correos, los que tienen un rebote duro en
-//                outbound_bounce: la tasa se mide sobre lo que salió en
-//                la ventana, así que nunca pasa del 100 %, y los rebotes
-//                blandos y los bloqueos no cuentan;
+//                outbound_bounce;
+//   blockedBounces  de ESOS correos, los que tienen un bloqueo (5.7.x,
+//                reputación, límite de envío) y ningún duro;
+//   bounces      los dos juntos: la tasa (bounceRate) se mide sobre lo
+//                que salió en la ventana, así que nunca pasa del 100 %.
+//                Los blandos no cuentan; los bloqueos sí, porque son la
+//                señal de que la cuenta se está quemando;
 //   dueToSend    toques de cualquier canal que tocaba enviar en la
 //                ventana (scheduled_for, o el reintento), vencidos hace
 //                más de NO_SENDS_GRACE_H, y que siguen en 'scheduled' o
@@ -457,9 +461,13 @@ export interface SqlQueryable {
 export interface AlertSignalCounts {
   emailsSent: number;
   hardBounces: number;
+  /** Correos de la ventana con un bloqueo y ningún rebote duro. */
+  blockedBounces: number;
+  /** hardBounces + blockedBounces, contados en SQL: lo que enseña la pantalla. */
+  bounces: number;
   dueToSend: number;
-  /** hardBounces / emailsSent, calculada en SQL; null sin envíos. */
-  hardBounceRate: number | null;
+  /** bounces / emailsSent, calculada en SQL; null sin envíos. */
+  bounceRate: number | null;
   /**
    * Gmail conectados cuyo buzón de rebotes no se leyó nunca o lleva más de
    * BOUNCES_STALE_H horas sin leerse, contado en `now` (r5): la alerta
@@ -493,6 +501,10 @@ export async function readAlertSignalCounts(
           JOIN outbound_bounce b ON b.touch_id = t.id AND b.workspace_id = $1 AND b.kind = 'hard', v
          WHERE t.workspace_id = $1 AND t.channel = 'email' AND t.status = 'sent'
            AND t.sent_at >= v.desde AND t.sent_at < v.hasta)::int AS duros,
+       (SELECT count(DISTINCT t.id) FROM outbound_touch t
+          JOIN outbound_bounce b ON b.touch_id = t.id AND b.workspace_id = $1 AND b.kind IN ('hard', 'blocked'), v
+         WHERE t.workspace_id = $1 AND t.channel = 'email' AND t.status = 'sent'
+           AND t.sent_at >= v.desde AND t.sent_at < v.hasta)::int AS rebotes,
        -- Lo que el despachador DEBERÍA haber enviado: no cuenta lo de una
        -- cadencia en pausa (una respuesta de la marca, 0054) ni lo que
        -- espera detrás de un paso retenido: eso espera a una persona, no
@@ -513,16 +525,21 @@ export async function readAlertSignalCounts(
          WHERE a.workspace_id = $1 AND a.channel = 'email' AND a.status = 'connected'
            AND (a.bounces_read_at IS NULL
                 OR a.bounces_read_at < v.hasta - make_interval(hours => $5::int)))::int AS sin_leer)
-     SELECT enviados, duros, debidos, sin_leer, CASE WHEN enviados > 0 THEN duros::float8 / enviados END AS tasa FROM c`,
+     SELECT enviados, duros, rebotes, rebotes - duros AS bloqueados, debidos, sin_leer,
+            CASE WHEN enviados > 0 THEN rebotes::float8 / enviados END AS tasa FROM c`,
     [workspaceId, now.toISOString(), windowHours, NO_SENDS_GRACE_H, BOUNCES_STALE_H],
   );
-  const r = (rows[0] ?? {}) as { enviados?: number; duros?: number; debidos?: number; sin_leer?: number; tasa?: number | null };
+  const r = (rows[0] ?? {}) as {
+    enviados?: number; duros?: number; rebotes?: number; bloqueados?: number; debidos?: number; sin_leer?: number; tasa?: number | null;
+  };
   return {
     emailsSent: Number(r.enviados ?? 0),
     hardBounces: Number(r.duros ?? 0),
+    blockedBounces: Number(r.bloqueados ?? 0),
+    bounces: Number(r.rebotes ?? 0),
     dueToSend: Number(r.debidos ?? 0),
     unreadMailboxes: Number(r.sin_leer ?? 0),
-    hardBounceRate: r.tasa === null || r.tasa === undefined ? null : Number(r.tasa),
+    bounceRate: r.tasa === null || r.tasa === undefined ? null : Number(r.tasa),
   };
 }
 
@@ -534,7 +551,7 @@ export interface RecentBounce {
   detectedAt: string;
 }
 
-/** Los últimos rebotes del workspace de la transacción (outbound_bounce, 0038), los más recientes primero. */
+/** Los últimos rebotes del workspace de la transacción (outbound_bounce, entregabilidad), los más recientes primero. */
 export async function listRecentBounces(tx: WorkspaceTx, limit = 10): Promise<RecentBounce[]> {
   const n = Math.max(1, Math.min(50, Math.trunc(limit)));
   const { rows } = await tx.query<{
@@ -655,7 +672,7 @@ export interface SendReadiness {
   replannable: { touches: number; people: number };
   /**
    * Si los rebotes del correo se están leyendo (job outbound.bounces), por
-   * el cursor de las cuentas de Gmail conectadas (bounces_read_at, 0038 §6):
+   * el cursor de las cuentas de Gmail conectadas (bounces_read_at, entregabilidad §6):
    *   'no_email'  no hay ningún Gmail conectado: no hay nada que leer;
    *   'never'     hay Gmail, pero su buzón no se leyó nunca (el conector de
    *               VEN-9 todavía no está registrado en el job, o sus llaves

@@ -6,7 +6,7 @@
  *   · la pantalla lee sus cuentas con el uso ya sumado y no ve las de otro
  *     workspace; los topes no pasan el techo del canal;
  *   · la web crea la fila pendiente y desconecta, pero no autentica;
- *   · el callback del proveedor (las funciones de 0039, como mc_app)
+ *   · el callback del proveedor (las funciones de callback_de_canales, como mc_app)
  *     conecta Gmail con una sola fila por concesión, completa la conexión
  *     de Unipile por su nonce (una sola vez, solo en su espacio), y no
  *     deja que un buzón conectado en otro espacio se conecte aquí;
@@ -70,7 +70,7 @@ describe('canales', () => {
       for (const r of rows) assert.equal('usedToday' in r, false);
       const otro = await t.db.withWorkspace(WS_OTRO, (tx) => listChannelAccounts(tx));
       assert.deepEqual(otro, [], 'otro workspace no ve las cuentas de Laura');
-      // Sin fila de política, los valores por defecto de la tabla: Instagram nace apagado (0045).
+      // Sin fila de política, los valores por defecto de la tabla: Instagram nace apagado (canales_instagram_apagado_y_semana).
       assert.deepEqual(await t.db.withWorkspace(WS_OTRO, (tx) => getChannelPolicyCaps(tx)), { emailPerDay: 20, enabled: false, allowedChannels: ['email', 'linkedin'] });
       assert.deepEqual((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getChannelPolicyCaps(tx))).allowedChannels, ['email', 'linkedin', 'instagram_dm'], 'la demo lo tiene encendido');
     });
@@ -135,7 +135,7 @@ describe('canales', () => {
       await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`UPDATE outreach_channel_account SET provider_webhook_ids = '{wh_x}' WHERE id = $1`, [LINKEDIN_LAURA])), es42501);
       await assert.rejects(t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`UPDATE outreach_channel_account SET released_at = now() WHERE id = $1`, [LINKEDIN_LAURA])), es42501);
       await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
-        // Por la función de 0040, solo en una cuenta viva de este espacio.
+        // Por la función de canales_liberar_y_limites, solo en una cuenta viva de este espacio.
         assert.equal(await setChannelWebhooks(tx, LINKEDIN_LAURA, ['wh_a', 'wh_b'], 'a1b2c3d4e5f60718'), true);
         assert.equal(await setChannelWebhooks(tx, LINKEDIN_LAURA, ['wh_b'], 'a1b2c3d4e5f60718'), true);
         assert.equal(await channelWebhookCount(tx, LINKEDIN_LAURA), 2);
@@ -189,7 +189,7 @@ describe('canales', () => {
     });
   });
 
-  describe('el callback del proveedor, desde la web (0039)', () => {
+  describe('el callback del proveedor, desde la web (callback_de_canales)', () => {
     test('Unipile: la pendiente del nonce pasa al account_id de Unipile, una sola vez', async () => {
       const pendingId = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createPendingChannelAccount(tx, { channel: 'linkedin', creatorId: CREATOR_LAURA, nonce: NONCE }));
       const input = { channel: 'linkedin' as const, nonce: NONCE, providerAccountId: 'acc_li_nueva', displayName: 'Laura Gómez', secretRef: null, scopes: null };
@@ -317,7 +317,7 @@ describe('canales', () => {
       const c = await sel<{ opted_out: boolean; opted_out_reason: string | null; opted_out_code: string | null }>(
         `SELECT opted_out, opted_out_reason, opted_out_code FROM contact WHERE id = '${CONTACTO}'`,
       );
-      // Un código que la ficha traduce (0043), nunca una frase en español congelada en la base.
+      // Un código que la ficha traduce (contacto_codigo_de_baja), nunca una frase en español congelada en la base.
       assert.deepEqual(c[0], { opted_out: true, opted_out_reason: null, opted_out_code: 'reply_optout:linkedin' });
       const e = await sel<{ status: string }>(`SELECT status FROM outbound_enrollment WHERE contact_id = '${CONTACTO}'`);
       assert.ok(e.every((x) => x.status === 'opted_out'), 'todos sus enrolamientos');
@@ -382,7 +382,7 @@ describe('canales', () => {
         ...aviso, account: { id: GMAIL_LAURA, channel: 'email' }, providerMessageId: 'gm-a1', threadRef: 'hilo-inventado', senderProviderId: 'ACoAAB_laura_quintero',
       }));
       assert.equal(correo.matched, false);
-      // El código y su lectura: solo los tres canales del CHECK de 0043.
+      // El código y su lectura: solo los tres canales del CHECK de contacto_codigo_de_baja.
       assert.equal(replyOptOutCode('instagram_dm'), 'reply_optout:instagram_dm');
       assert.equal(replyOptOutCode('whatsapp'), null);
       assert.equal(parseReplyOptOutCode('reply_optout:email'), 'email');
@@ -416,7 +416,7 @@ describe('canales', () => {
     });
   });
 
-  describe('reconectar mientras el worker suelta la cuenta (0041)', () => {
+  describe('reconectar mientras el worker suelta la cuenta (canales_reclamar_al_soltar)', () => {
     const REF_VIEJA = 'enc:gmail:00000000-0000-4000-8000-00000000be01';
     const REF_NUEVA = 'enc:gmail:00000000-0000-4000-8000-00000000be02';
     const secreto = (ref: string) => `INSERT INTO connection_secret (secret_ref, workspace_id, ciphertext, iv, tag)
@@ -460,7 +460,7 @@ describe('canales', () => {
     });
   });
 
-  describe('un perfil es una cuenta: la identidad de Unipile (0042)', () => {
+  describe('un perfil es una cuenta: la identidad de Unipile (canales_identidad_y_rotacion)', () => {
     const ID_PERFIL = 'ACoAAB_perfil_0042';
     const conectar = (ws: string, creator: string, nonce: string, accountId: string, identity: string | null = ID_PERFIL) =>
       t.db.withWorkspace(ws, async (tx) => {
@@ -548,9 +548,9 @@ describe('canales', () => {
       assert.equal(parseUnipileStatusCode('taken'), null);
     });
 
-    test('0044: last_error solo acepta códigos, y todos los que escribe el código tienen esa forma', async () => {
+    test('canales_last_error_codigo: last_error solo acepta códigos, y todos los que escribe el código tienen esa forma', async () => {
       for (const code of [...Object.values(CHANNEL_ERROR_CODES), unipileStatusCode('CREDENTIALS'), unipileStatusCode('<b>x</b>'), unipileStatusCode(null)]) {
-        assert.match(code, CHANNEL_ERROR_CODE_RE, `«${code}» cabe en el CHECK de 0044`);
+        assert.match(code, CHANNEL_ERROR_CODE_RE, `«${code}» cabe en el CHECK de canales_last_error_codigo`);
       }
       // Ni siquiera el despachador escribe una frase: la base lo impide (23514).
       await assert.rejects(
@@ -565,12 +565,12 @@ describe('canales', () => {
   });
 });
 
-describe('0044 · last_error de antes, en frase', () => {
+describe('canales_last_error_codigo · last_error de antes, en frase', () => {
   test('la frase del seed viejo pasa a su código, cualquier otra a «unknown», y una fila vieja se puede seguir actualizando', { timeout: 120_000 }, async () => {
     const antes = await createEmbeddedDb({ seeds: false, hasta: '0043_contacto_codigo_de_baja.sql' });
     try {
       await antes.execAsSuperuser(`
-        INSERT INTO workspace (id, slug, name) VALUES ('${WS_OTRO}', 'ws-0044', 'ws 0044');
+        INSERT INTO workspace (id, slug, name) VALUES ('${WS_OTRO}', 'ws-0044', 'ws canales_last_error_codigo');
         INSERT INTO creator_profile (id, workspace_id, display_name) VALUES ('${CREATOR_OTRO}', '${WS_OTRO}', 'Otro');
         INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, status, last_error) VALUES
           ('00000009-0000-4000-8000-0000000a4401', '${WS_OTRO}', '${CREATOR_OTRO}', 'linkedin', 'unipile', 'acc_frase_seed', 'needs_reconnect',

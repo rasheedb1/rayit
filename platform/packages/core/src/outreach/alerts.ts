@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------
 //
 // Con la salud de un workspace (outbound_health, 24 h) y lo que ella no
-// trae (rebotes duros de lo enviado, toques que tocaban y no salieron),
+// trae (rebotes duros y bloqueos de lo enviado, toques que tocaban y no salieron),
 // qué está mal hoy. Una alerta por tipo; el job decide si ya se avisó hoy.
 
 export type OutreachAlertKind =
@@ -31,7 +31,12 @@ export const OUTREACH_ALERT_KINDS: readonly OutreachAlertKind[] = [
  */
 export const URGENT_ALERT_KINDS: readonly OutreachAlertKind[] = ['bounce_rate', 'account_down'];
 
-/** Sobre esta proporción de rebotes DUROS, alerta… */
+/**
+ * Sobre esta proporción de rebotes, alerta… Cuentan los duros (la
+ * dirección no existe) y los bloqueos (el servidor rechazó por política,
+ * reputación o un límite de envío: la cuenta se está quemando), como en
+ * Lemlist e Instantly. Los blandos no.
+ */
 export const BOUNCE_RATE_THRESHOLD = 0.05;
 /** …pero solo con al menos estos correos enviados en la ventana: 1 de 3 no dice nada. */
 export const BOUNCE_MIN_ATTEMPTS = 10;
@@ -57,11 +62,17 @@ export interface AlertInput {
   emailsSent: number;
   /**
    * Rebotes DUROS de esos mismos correos: toques enviados en la ventana
-   * con al menos un rebote 'hard' en outbound_bounce. Los blandos y los
-   * bloqueos no cuentan (no dicen que la lista esté mal), y uno de un
-   * correo de otro día tampoco: así la tasa nunca pasa del 100 %.
+   * con al menos un rebote 'hard' en outbound_bounce. Uno de un correo de
+   * otro día no cuenta: así la tasa nunca pasa del 100 %.
    */
   hardBounces: number;
+  /**
+   * Bloqueos de esos mismos correos (toques con un rebote 'blocked' y
+   * ninguno 'hard'): Spamhaus, reputación, marcado como spam, el límite
+   * diario de Gmail. No dicen que la dirección esté mal, pero sí que la
+   * cuenta se está quemando: suman a la tasa. Sin el dato, 0.
+   */
+  blockedBounces?: number;
   /**
    * Toques (cualquier canal) que tocaba enviar en la ventana y no
    * salieron: scheduled_for (o el reintento) dentro de la ventana, vencido
@@ -97,22 +108,28 @@ export interface OutreachAlert {
  */
 export type BounceRateStatus = 'no_data' | 'too_few' | 'over' | 'under';
 
-export function bounceRateStatus(input: { emailsSent: number; hardBounces: number }): BounceRateStatus {
+export function bounceRateStatus(input: { emailsSent: number; hardBounces: number; blockedBounces?: number }): BounceRateStatus {
   if (input.emailsSent <= 0) return 'no_data';
   if (input.emailsSent < BOUNCE_MIN_ATTEMPTS) return 'too_few';
-  const duros = Math.min(input.hardBounces, input.emailsSent);
-  return duros / input.emailsSent > BOUNCE_RATE_THRESHOLD ? 'over' : 'under';
+  return rebotesDeLaTasa(input) / input.emailsSent > BOUNCE_RATE_THRESHOLD ? 'over' : 'under';
+}
+
+/** Duros más bloqueos, nunca más que lo enviado. */
+function rebotesDeLaTasa(input: { emailsSent: number; hardBounces: number; blockedBounces?: number }): number {
+  return Math.min(input.hardBounces + (input.blockedBounces ?? 0), input.emailsSent);
 }
 
 export function evaluateOutreachAlerts(input: AlertInput): OutreachAlert[] {
   const { health } = input;
   const alertas: OutreachAlert[] = [];
-  const duros = Math.min(input.hardBounces, input.emailsSent);
   if (bounceRateStatus(input) === 'over') {
+    const rebotes = rebotesDeLaTasa(input);
+    const duros = Math.min(input.hardBounces, rebotes);
     alertas.push({
       kind: 'bounce_rate',
       severity: 'critical',
-      values: { bounces: duros, attempts: input.emailsSent, rate: duros / input.emailsSent },
+      // hard y blocked: el aviso dice qué tipo fue.
+      values: { bounces: rebotes, hard: duros, blocked: rebotes - duros, attempts: input.emailsSent, rate: rebotes / input.emailsSent },
     });
   }
   // Con el envío apagado, cero envíos es lo esperado; y sin nada que

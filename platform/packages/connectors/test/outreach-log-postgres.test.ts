@@ -17,7 +17,7 @@ before(async () => {
 });
 after(async () => { await db.close(); });
 
-test('api_call_log guarda las llamadas de outreach con provider y cuenta de canal (0038)', async () => {
+test('api_call_log guarda las llamadas de outreach con provider y cuenta de canal (canales_outreach)', async () => {
   const sink = new PostgresOutreachCallLog(executor(db));
   await sink.record({
     provider: 'unipile', channel_account_id: ACCOUNT, endpoint: 'unipile.users.invite', http_status: 422, ok: false,

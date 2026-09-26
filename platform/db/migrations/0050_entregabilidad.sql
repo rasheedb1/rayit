@@ -1,10 +1,10 @@
 -- =====================================================================
 -- 0050 · Entregabilidad y cumplimiento del correo saliente (VEN-15)
 -- ---------------------------------------------------------------------
--- Número: nació como 0038 en la rama de VEN-15; en rasheed/integracion
--- es 0050, detrás de los canales de VEN-9 (0038–0045) y delante del
+-- Número: nació como entregabilidad en la rama de VEN-15; en rasheed/integracion
+-- es 0050, detrás de los canales de VEN-9 (entregabilidad–canales_instagram_apagado_y_semana) y delante del
 -- motor de VEN-10 (0051–0055), que se apoya en ella. Las referencias
--- «0038 §n» del código y de las pruebas de VEN-15 apuntan a ESTE archivo
+-- «entregabilidad §n» del código y de las pruebas de VEN-15 apuntan a ESTE archivo
 -- (integración de la fase 4). No depende de ninguna de main y solo
 -- necesita ir después de 0037.
 --
@@ -62,9 +62,9 @@
 -- ('unsubscribe_link') en contact.opted_out_reason en vez de una frase:
 -- la pantalla lo traduce en el idioma del espacio.
 --
--- Esta migración no está aplicada en ningún sitio (en Supabase, la 0038
--- es la de main), así que la ronda 3 la corrige en su sitio en vez de
--- apilar una 0039 encima.
+-- Esta migración no está aplicada en ningún sitio (en Supabase, el
+-- número que tenía es de otra migración de main), así que la ronda 3 la
+-- corrige en su sitio en vez de apilar otra encima.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -435,7 +435,7 @@ $$;
 COMMENT ON FUNCTION public_optout_preview(text, uuid[]) IS
   'Lo que la página de baja enseña antes del clic (VEN-15): la dirección enmascarada a la que salió el correo del '
   'enlace, el nombre y el idioma del workspace que lo envió, si ya estaba de baja, y si quien lo abre (sus workspaces) es de '
-  'ese workspace. Solo lee, por el sha256 del token. SECURITY DEFINER de mc_public_share (0037 §9, 0038 §5).';
+  'ese workspace. Solo lee, por el sha256 del token. SECURITY DEFINER de mc_public_share (0037 §9, entregabilidad §5).';
 
 REVOKE ALL ON FUNCTION public_optout_preview(text, uuid[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public_optout_preview(text, uuid[]) TO mc_app;
@@ -637,7 +637,7 @@ REVOKE INSERT, UPDATE, DELETE ON outbound_workspace_optout FROM mc_app;
 
 COMMENT ON TABLE outbound_workspace_optout IS
   'La baja por enlace: a quién no le vuelve a escribir el workspace que envió el correo, por ningún canal (VEN-15). '
-  'La escribe public_optout y nadie más; un enlace nunca pasa a contact_suppression (0038 §8).';
+  'La escribe public_optout y nadie más; un enlace nunca pasa a contact_suppression (entregabilidad §8).';
 
 -- Lo que la baja lee y escribe aquí, con la misma cerradura que 0037 §9:
 -- la fila del workspace y la dirección que fija la función (para decir
@@ -662,8 +662,8 @@ ALTER TABLE outbound_optout_event
   ADD COLUMN scope text NOT NULL DEFAULT 'global' CHECK (scope IN ('workspace', 'global'));
 ALTER TABLE outbound_optout_event ALTER COLUMN scope SET DEFAULT 'workspace';
 COMMENT ON COLUMN outbound_optout_event.scope IS
-  'workspace: la baja valió para el workspace que envió el correo, en todos sus canales (desde 0038, todos los clics); '
-  'global: un clic de antes de 0038, cuando public_optout (0037) suprimía la dirección para toda la plataforma.';
+  'workspace: la baja valió para el workspace que envió el correo, en todos sus canales (desde entregabilidad, todos los clics); '
+  'global: un clic de antes de entregabilidad, cuando public_optout (0037) suprimía la dirección para toda la plataforma.';
 
 -- ---------------------------------------------------------------------
 -- 8.2 · public_optout: la baja con quien envió
@@ -799,7 +799,7 @@ $$;
 COMMENT ON FUNCTION public_optout(text) IS
   'Baja desde el enlace de un correo (VEN-9, VEN-15): vale para el workspace que envió ese correo, en todos sus '
   'canales (outbound_workspace_optout, su ficha propia, sus toques y enrolamientos). Nunca escribe contact_suppression: '
-  'la baja de toda la plataforma sale de una respuesta verificada o de un administrador (0038 §8). Busca el sha256 del '
+  'la baja de toda la plataforma sale de una respuesta verificada o de un administrador (entregabilidad §8). Busca el sha256 del '
   'token en outbound_optout_link y deja el clic en outbound_optout_event. SECURITY DEFINER de mc_public_share.';
 
 REVOKE ALL ON FUNCTION public_optout(text) FROM PUBLIC;

@@ -2,11 +2,11 @@
   "meta": {
     "source": "docs",
     "recordedAt": "2026-09-23",
-    "notes": "GET messages?q=in:inbox -from:me …"
+    "notes": "GET messages?q=-in:sent -in:drafts -in:chats -from:me … (sin in:inbox: una respuesta que la persona archivó, o que una regla sacó de la bandeja, también cuenta). El segundo mensaje es uno archivado: sin la etiqueta INBOX (messages.list no trae etiquetas; se ve en messages.get)."
   },
   "request": {
     "method": "GET",
-    "urlPattern": "^https://gmail\\.googleapis\\.com/gmail/v1/users/me/messages\\?q=in%3Ainbox"
+    "urlPattern": "^https://gmail\\.googleapis\\.com/gmail/v1/users/me/messages\\?q=-in%3Asent"
   },
   "response": {
     "status": 200,
@@ -15,9 +15,13 @@
         {
           "id": "18c1f0a0b0c0d0f2",
           "threadId": "18c1f0a0b0c0d0e1"
+        },
+        {
+          "id": "18c1f0a0b0c0d0f9",
+          "threadId": "18c1f0a0b0c0d0e5"
         }
       ],
-      "resultSizeEstimate": 1
+      "resultSizeEstimate": 2
     }
   }
 }

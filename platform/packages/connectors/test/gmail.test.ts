@@ -36,14 +36,14 @@ async function failure(p: Promise<unknown>): Promise<OutreachApiError> {
 }
 
 test('loadGoogleOAuthConfig: dice qué falta y deduce la redirección del origen', () => {
-  assert.deepEqual(loadGoogleOAuthConfig({}, 'https://app.test'), { missing: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'] });
-  const ok = loadGoogleOAuthConfig({ GOOGLE_CLIENT_ID: 'a', GOOGLE_CLIENT_SECRET: 'b' }, 'https://app.test/');
+  assert.deepEqual(loadGoogleOAuthConfig({}, 'https://app.test'), { missing: ['GOOGLE_OUTREACH_CLIENT_ID', 'GOOGLE_OUTREACH_CLIENT_SECRET'] });
+  const ok = loadGoogleOAuthConfig({ GOOGLE_OUTREACH_CLIENT_ID: 'a', GOOGLE_OUTREACH_CLIENT_SECRET: 'b' }, 'https://app.test/');
   assert.deepEqual(ok, { config: { clientId: 'a', clientSecret: 'b', redirectUri: 'https://app.test/api/oauth/google/callback' } });
 });
 
-test('loadGoogleTokenConfig: el worker refresca sin APP_URL ni GOOGLE_REDIRECT_URI, y no puede iniciar una conexión', async () => {
-  assert.deepEqual(loadGoogleTokenConfig({}), { missing: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'] });
-  const cfg = loadGoogleTokenConfig({ GOOGLE_CLIENT_ID: 'a', GOOGLE_CLIENT_SECRET: 'b' });
+test('loadGoogleTokenConfig: el worker refresca sin APP_URL ni GOOGLE_OUTREACH_REDIRECT_URI, y no puede iniciar una conexión', async () => {
+  assert.deepEqual(loadGoogleTokenConfig({}), { missing: ['GOOGLE_OUTREACH_CLIENT_ID', 'GOOGLE_OUTREACH_CLIENT_SECRET'] });
+  const cfg = loadGoogleTokenConfig({ GOOGLE_OUTREACH_CLIENT_ID: 'a', GOOGLE_OUTREACH_CLIENT_SECRET: 'b' });
   assert.ok('config' in cfg);
   assert.equal(cfg.config.redirectUri, null);
   const log = new InMemoryOutreachCallLog();
@@ -63,6 +63,8 @@ test('authorizationUrl: offline, consent, los tres alcances y el state', async (
   assert.equal(u.origin + u.pathname, 'https://accounts.google.com/o/oauth2/v2/auth');
   assert.equal(u.searchParams.get('access_type'), 'offline');
   assert.equal(u.searchParams.get('prompt'), 'consent');
+  // Sin include_granted_scopes: una concesión combinada se revoca entera al desconectar el correo.
+  assert.equal(u.searchParams.get('include_granted_scopes'), null);
   assert.equal(u.searchParams.get('state'), 'ESTADO');
   assert.deepEqual(u.searchParams.get('scope')!.split(' ').map(shortScope), ['gmail.send', 'gmail.modify', 'userinfo.email']);
   assert.ok(!u.toString().includes(CFG.clientSecret));
@@ -216,11 +218,17 @@ test('searchReplies con threadId lee ESE hilo: sin lo enviado, sin rebotes y des
   assert.deepEqual(await g2.searchReplies({ since: new Date(1790009999999), threadId: '18c1f0a0b0c0d0e1' }), []);
 });
 
-test('searchReplies sin hilo busca en la bandeja con los filtros', async () => {
+test('searchReplies sin hilo busca en todo el buzón menos lo enviado: una respuesta archivada también cuenta', async () => {
   const { http, oauth, fetch } = await setup([['messages.list', 'replies.ok']]);
   const gmail = new GmailClient({ ...http, oauth, channelAccountId: CA, tokens: TOKENS });
-  assert.equal((await gmail.searchReplies({ since: NOW })).length > 0, true);
-  assert.match(decodeURIComponent(fetch.calls[0]!.url), /-from:mailer-daemon/);
+  const refs = await gmail.searchReplies({ since: NOW });
+  // El segundo del fixture es una respuesta que la persona archivó (sin la etiqueta INBOX).
+  assert.deepEqual(refs.map((r) => r.id), ['18c1f0a0b0c0d0f2', '18c1f0a0b0c0d0f9']);
+  const q = new URL(fetch.calls[0]!.url).searchParams.get('q') ?? '';
+  assert.doesNotMatch(q, /in:inbox/, 'sin in:inbox: lo archivado se lee');
+  for (const filtro of ['-in:sent', '-in:drafts', '-in:chats', '-from:me', '-from:mailer-daemon', '-from:postmaster']) {
+    assert.ok(q.split(' ').includes(filtro), filtro);
+  }
 });
 
 test('revoke: manda el refresh token a /revoke sin dejarlo en la bitácora; invalid_token cuenta como revocado', async () => {

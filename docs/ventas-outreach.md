@@ -177,7 +177,7 @@ Esto es lo que hay que construir de verdad, y donde va el tiempo.
 |---|---|---|---|---|
 | **Correo (Gmail del creador)** | OAuth de Google, alcances `gmail.send` y `gmail.modify` (leer respuestas y rebotes) | Enviar, responder en el mismo hilo, adjuntar el media kit, leer respuestas | Cuenta personal: 500 al día oficial, recomendados 50–100; Workspace: 2.000, recomendados 100–150; cuenta nueva: empezar con 20–50 | **Principal.** Las marcas leen `partnerships@`; SPF y DKIM son de Google |
 | **LinkedIn** | Unipile hosted auth (enlace de un uso, webhook de creación con estado firmado) | Solicitud de conexión con nota de 300 caracteres, mensaje, ver perfil, comentar y reaccionar a posts, buscar personas | 80–100 invitaciones al día y 200 por semana en cuenta activa; ~100 perfiles al día; espaciar al azar en horario laboral | **Secundario.** Sirve para llegar al responsable de marketing de la marca |
-| **Instagram DM** | Unipile con usuario y contraseña; reto 2FA de cinco minutos | Mensaje directo, leer bandeja | 100 acciones al día, 10 por hora; empezar bajo | **Opcional, apagado por defecto** (`outbound_policy.allowed_channels` nace con correo y LinkedIn, 0045). Se enciende por workspace cuando la marca no tiene otro contacto |
+| **Instagram DM** | Unipile con usuario y contraseña; reto 2FA de cinco minutos | Mensaje directo, leer bandeja | 100 acciones al día, 10 por hora; empezar bajo | **Opcional, apagado por defecto** (`outbound_policy.allowed_channels` nace con correo y LinkedIn, canales_instagram_apagado_y_semana). Se enciende por workspace cuando la marca no tiene otro contacto |
 | **WhatsApp** | Unipile | Mensaje | Esperar 24 h tras conectar; intervalos cortos entre mensajes | **Fase 2.** Solo para contactos que ya respondieron |
 
 Unipile cobra por cuenta conectada al mes. Es el costo variable
@@ -318,7 +318,7 @@ Decisiones que las piezas siguientes tienen que conocer:
 - `public_optout` es de `mc_public_share`, como los enlaces de Cotizar.
   En 0037 daba de baja a la persona en toda la plataforma
   (`contact_suppression`, todas las fichas con esa dirección en cualquier
-  workspace). **Desde 0038 §8 (VEN-15) vale para el workspace que envió
+  workspace). **Desde entregabilidad §8 (VEN-15) vale para el workspace que envió
   ese correo, en todos sus canales, y nunca para toda la plataforma** (ver
   «La baja por enlace vale para quien envió», más abajo): la dirección
   entra en `outbound_workspace_optout`, se marca la ficha que recibió el
@@ -376,14 +376,14 @@ Decisiones que las piezas siguientes tienen que conocer:
   `contact.email`. La excepción es `processing → sent` (lo que ya salió
   se registra, marcado `opted_out_in_flight`). La consulta de reclamo de
   VEN-10 tiene que filtrar esas filas y pasarlas a `canceled`, porque la
-  base rechaza el reclamo entero. **Desde VEN-15 r5 (0038 §8.3) es una
+  base rechaza el reclamo entero. **Desde VEN-15 r5 (entregabilidad §8.3) es una
   sola regla con una fuente más:** `enforce_outbound_optout` mira también
   `outbound_workspace_optout` (la baja por enlace de ESE workspace, que en
   un contacto global no marca la ficha), con las mismas transiciones. Así
   que el reclamo de VEN-10 filtra además `outbound_workspace_optout` (por
   `workspace_id` y por la dirección de la ficha o la del envío) y, en
   correo, `contact.email_invalid` y los rebotes duros verificados del
-  workspace (`outbound_touch_email_invalid`, 0038 §2). **La vuelta a la
+  workspace (`outbound_touch_email_invalid`, entregabilidad §2). **La vuelta a la
   cola desde `processing`** (el reintento, o el rescate del zombi) de
   alguien dado de baja **no se rechaza: la base la cancela en el sitio**
   (`canceled`, `blocked_reason = 'opted_out'`), igual que la del correo
@@ -467,7 +467,7 @@ Decisiones que las piezas siguientes tienen que conocer:
   una sesión de un miembro del workspace que envió** (el servidor lo
   sabe antes de llamar a `publicOptout`: `outbound_optout_link` no se
   lee desde la web, así que se lo pregunta a `public_optout_preview`
-  (0038 §5) por el sha256 del token, sin `asWorker`), pide una
+  (entregabilidad §5) por el sha256 del token, sin `asWorker`), pide una
   confirmación que un clic automático no dé, y el despachador no vuelve
   a mostrar el enlace en la aplicación.
   Lo que se escape queda en `outbound_optout_event` para la alerta y
@@ -492,7 +492,7 @@ que el despachador de VEN-10 tiene que usar, todo en
   `@mc/core/outreach/optout.ts`) ya no existen. Un token de la ronda 2 da
   de baja igual (probado en `packages/db/test/entregabilidad.test.ts`).
 - **La página de baja** (`/baja/<token>`, sin sesión) pregunta a
-  `public_optout_preview(token, espacios de quien la abre)` (0038 §5,
+  `public_optout_preview(token, espacios de quien la abre)` (entregabilidad §5,
   SECURITY DEFINER de `mc_public_share`): si el enlace es de un correo
   que salió, la dirección enmascarada («v•••@marca.com»), el nombre y el
   idioma (r5) del espacio que escribe, si ya estaba de baja y si quien la
@@ -515,7 +515,7 @@ que el despachador de VEN-10 tiene que usar, todo en
   de Gmail va a `/baja/<token>/un-clic`, que acepta el cuerpo en
   `multipart/form-data` (el SHOULD de la RFC 8058 §3.1) y en
   `application/x-www-form-urlencoded` (lo que manda Gmail).
-- **La baja por enlace vale para quien envió (0038 §8; alcance cerrado
+- **La baja por enlace vale para quien envió (entregabilidad §8; alcance cerrado
   el 25 de septiembre).** Sin sesión nadie sabe quién pulsa: el propio
   creador, en una ventana privada o con un `curl` a `/un-clic`, suprimía
   a la marca para toda la plataforma. El clic vale para el espacio que
@@ -538,7 +538,7 @@ que el despachador de VEN-10 tiene que usar, todo en
   desde el worker) o un administrador. `mc_public_share` ya no tiene
   `INSERT` sobre `contact_suppression`, y de las fichas por dirección
   solo lee las propias del espacio que envió (`contact_public_optout_email`
-  rehecha en 0038 §8). Probado en pglite: dos espacios recién creados por
+  rehecha en entregabilidad §8). Probado en pglite: dos espacios recién creados por
   dos usuarios nuevos pulsan sus enlaces y el creador de verdad le sigue
   escribiendo. La base guarda el motivo como código
   (`contact.opted_out_reason = 'unsubscribe_link'`,
@@ -563,7 +563,7 @@ que el despachador de VEN-10 tiene que usar, todo en
   (`gmailMailboxes` en `outbound.bounces.ts`, registrado como
   `bouncesMailboxSource`); `gmailMailboxFor` y `GmailSourceFor` quedan
   para armar un buzón desde otra fuente (las pruebas). Sin
-  `GOOGLE_CLIENT_ID/SECRET`, o con el canal falso, cada cuenta sale como
+  `GOOGLE_OUTREACH_CLIENT_ID/SECRET`, o con el canal falso, cada cuenta sale como
   «canal no configurado». `BOUNCE_READING_CONNECTED`
   (`@mc/core/outreach/bounces`) está en `true`, y la prueba de
   `outbound-bounces.test.ts` impide volver a un job que no lee mientras
@@ -651,7 +651,7 @@ que el despachador de VEN-10 tiene que usar, todo en
   «en tu política de envío ves qué pasó»: se lee dentro de esa misma
   página, y el correo ya lleva su enlace. Los avisos guardan su frase ya en el idioma del espacio en
   `notification.title_es` y `body_es` (columnas de 0009, cuando todo era
-  español; 0038 §4 lo dice en su `COMMENT`). Renombrarlas —`title`,
+  español; entregabilidad §4 lo dice en su `COMMENT`). Renombrarlas —`title`,
   `body` y un `locale`, o `kind` y los valores en `jsonb` para traducir al
   leer— toca a todos los que escriben avisos y queda para una migración
   propia. `last_error` guarda códigos
@@ -665,7 +665,7 @@ que el despachador de VEN-10 tiene que usar, todo en
   remitente `.invalid` rebota) y el resultado lo cuenta en
   `emailSkipped` con su motivo.
 - La política y la **salud de hoy** se ven en `/ventas/politica`. Solo
-  la cambian 'owner' y 'admin' del espacio (0038 §7: políticas
+  la cambian 'owner' y 'admin' del espacio (entregabilidad §7: políticas
   RESTRICTIVE de `outbound_policy`, y la pantalla lo dice); encender pide
   además una cuenta de envío conectada y confirmación con los mensajes
   aprobados que salen hoy.
@@ -2359,10 +2359,13 @@ revisores técnico y de producto y el mismo umbral.
    (VEN-14) o un administrador. **Estado (25 de septiembre): implementado
    así como supuesto declarado**, igual que las decisiones 1 a 5 (el
    workflow avanza con la propuesta y Rasheed puede revertirla). El
-   «terminado cuando» de VEN-15 en `backlog.ts` conserva la frase
-   original y dice el cambio del criterio al lado, como COT-1. **Si
+   «terminado cuando» de VEN-15 en `backlog.ts` es el original, sin
+   tocar: cambiarlo no le toca al constructor. El cambio del criterio va
+   en su `note`, como pendiente del visto bueno de Rasheed (el de esta
+   decisión y el de la 7); al aprobarlas, se escribe aquí «Aprobado por
+   Rasheed, fecha» y la nota deja de decirlo. **Si
    Rasheed lo rechaza**, volver a la baja global al primer clic es una
-   línea en `public_optout` (0038 §8.2, el `INSERT` en
+   línea en `public_optout` (entregabilidad §8.2, el `INSERT` en
    `contact_suppression` y el alcance de los `UPDATE`) más devolverle a
    `mc_public_share` ese `INSERT`; las pruebas de sabotaje de
    `entregabilidad.test.ts` dicen qué se pierde.
@@ -2377,7 +2380,7 @@ revisores técnico y de producto y el mismo umbral.
    la baja de toda la plataforma, y la ley pide que el enlace funcione al
    menos 30 días), y es la misma forma que ya genera el despachador de
    VEN-10. **Estado: supuesto declarado, como la 6**, con el cambio del
-   criterio escrito junto al «terminado cuando». Si Rasheed prefiere la
+   criterio en la nota de VEN-15, pendiente del visto bueno. Si Rasheed prefiere la
    firma, `createOptoutToken` (`@mc/core/outreach/unsubscribe`) es el único
    sitio que la genera; la base seguiría buscando por el sha256.
 8. **La plantilla recomendada contra la política por defecto**
@@ -2434,18 +2437,18 @@ dueño aquí:
 | El webhook de LinkedIn no valida firma: cualquiera puede pausar cadencias | Secreto compartido y verificación en el webhook | VEN-9 |
 | `In-Reply-To` con el id del hilo de Gmail en vez del `Message-ID` | Se guarda y se usa el `Message-ID` real | VEN-9 |
 | El refresh token de Google en cuatro sitios; el keepalive deja uno caducado | Una fila por concesión, token en el vault | VEN-9 |
-| Desconectar una cuenta la deja viva en el proveedor, cobrando y recibiendo avisos | Desconectar la deja pendiente de soltar (0040) y `sales.channels_release` revoca el permiso de Google o borra la cuenta y sus avisos en Unipile, sin tocar lo que siga vivo en otro espacio | VEN-9 |
-| Topes por canal que solo miran el techo del proveedor | La vista `outreach_channel_account_limits` (0040): el máximo de cada cuenta es el menor entre la política del espacio y el proveedor (500 en un Gmail personal) | VEN-9 |
+| Desconectar una cuenta la deja viva en el proveedor, cobrando y recibiendo avisos | Desconectar la deja pendiente de soltar (canales_liberar_y_limites) y `sales.channels_release` revoca el permiso de Google o borra la cuenta y sus avisos en Unipile, sin tocar lo que siga vivo en otro espacio | VEN-9 |
+| Topes por canal que solo miran el techo del proveedor | La vista `outreach_channel_account_limits` (canales_liberar_y_limites): el máximo de cada cuenta es el menor entre la política del espacio y el proveedor (500 en un Gmail personal) | VEN-9 |
 | Un envío que falla por red se reintenta a ciegas y la marca recibe el mensaje dos veces | Los POST que mandan algo a una persona (correo, DM, invitación, comentario, reacción) no se reintentan dentro del conector (`idempotent: false`): el error sube como `transient` y el despachador decide tras mirar el hilo | VEN-9 · VEN-10 |
-| Todos los DM del creador (amigos, fans) entran a la base y al clasificador | Una respuesta solo se guarda si es de un toque `sent` de ESA cuenta (`outbound_touch.channel_account_id`, 0041): por su hilo o, en LinkedIn e Instagram, porque quien escribe es a quien se le envió (`recipient_address` = su provider_id: la invitación aceptada contesta en un chat nuevo); lo demás se ignora sin guardar el cuerpo | VEN-9 |
-| El DM que acabamos de enviar vuelve por el aviso de mensajes y entra como respuesta: la cadencia se detiene sola | Es eco si el aviso trae `account_info.user_id` = quien escribe **o** si quien escribe es la identidad de la cuenta (`provider_identity`, 0042); un mensaje sin remitente se descarta antes que arriesgar la cadencia | VEN-9 |
-| La baja pedida al aceptar una invitación de LinkedIn se pierde: la respuesta llega en un chat que no es el del toque | El segundo paso de arriba la reconoce, da de baja la ficha (código `reply_optout:linkedin` en `contact.opted_out_code`, 0043) y cancela lo pendiente en todos los canales | VEN-9 |
-| Soltar una cuenta y reconectarla a la vez deja un permiso revocado en una fila «Conectado» | El job reclama la fila antes de hablar con el proveedor (`release_claimed_at`, 0041) y la conexión responde «espera un minuto» mientras dure; una fila desconectada no presta su ref del vault | VEN-9 |
-| El mismo LinkedIn conectado dos veces con dos account_id (cada hosted auth estrena uno): topes sumados y doble cobro | `provider_identity` (connection_params.im.id) único entre las filas vivas de todos los espacios (0042): conectado aquí → la cuenta nueva se borra; caído → su fila adopta la nueva; vivo en otro espacio → «ocupada» | VEN-9 |
-| Una hosted auth que termina bien en Unipile pero no se conecta aquí (canal equivocado, perfil ocupado, doble clic) deja una cuenta huérfana cobrando | La web la borra en Unipile si nadie la usa (`in_use` de outreach_channel_connect, 0042); si el borrado falla, el keepalive concilia `listAccounts` contra la base y borra las cuentas de NUESTRA hosted auth sin fila y con más de un día | VEN-9 |
+| Todos los DM del creador (amigos, fans) entran a la base y al clasificador | Una respuesta solo se guarda si es de un toque `sent` de ESA cuenta (`outbound_touch.channel_account_id`, canales_reclamar_al_soltar): por su hilo o, en LinkedIn e Instagram, porque quien escribe es a quien se le envió (`recipient_address` = su provider_id: la invitación aceptada contesta en un chat nuevo); lo demás se ignora sin guardar el cuerpo | VEN-9 |
+| El DM que acabamos de enviar vuelve por el aviso de mensajes y entra como respuesta: la cadencia se detiene sola | Es eco si el aviso trae `account_info.user_id` = quien escribe **o** si quien escribe es la identidad de la cuenta (`provider_identity`, canales_identidad_y_rotacion); un mensaje sin remitente se descarta antes que arriesgar la cadencia | VEN-9 |
+| La baja pedida al aceptar una invitación de LinkedIn se pierde: la respuesta llega en un chat que no es el del toque | El segundo paso de arriba la reconoce, da de baja la ficha (código `reply_optout:linkedin` en `contact.opted_out_code`, contacto_codigo_de_baja) y cancela lo pendiente en todos los canales | VEN-9 |
+| Soltar una cuenta y reconectarla a la vez deja un permiso revocado en una fila «Conectado» | El job reclama la fila antes de hablar con el proveedor (`release_claimed_at`, canales_reclamar_al_soltar) y la conexión responde «espera un minuto» mientras dure; una fila desconectada no presta su ref del vault | VEN-9 |
+| El mismo LinkedIn conectado dos veces con dos account_id (cada hosted auth estrena uno): topes sumados y doble cobro | `provider_identity` (connection_params.im.id) único entre las filas vivas de todos los espacios (canales_identidad_y_rotacion): conectado aquí → la cuenta nueva se borra; caído → su fila adopta la nueva; vivo en otro espacio → «ocupada» | VEN-9 |
+| Una hosted auth que termina bien en Unipile pero no se conecta aquí (canal equivocado, perfil ocupado, doble clic) deja una cuenta huérfana cobrando | La web la borra en Unipile si nadie la usa (`in_use` de outreach_channel_connect, canales_identidad_y_rotacion); si el borrado falla, el keepalive concilia `listAccounts` contra la base y borra las cuentas de NUESTRA hosted auth sin fila y con más de un día | VEN-9 |
 | El aviso de cuenta creada confía en el account_id del cuerpo | Al crear, el `name` de la cuenta (que Unipile guarda tal cual) tiene que ser un estado nuestro con el MISMO nonce y espacio que el del aviso, y la cuenta tiene que haber nacido después de firmarlo; al reconectar, tiene que ser la que se firmó en él. Con un estado válido propio y el account_id de una cuenta ajena del tenant no se liga nada | VEN-9 |
 | Un formulario de otra página puede empezar conexiones (crear pendientes y enlaces de hosted auth), sobre todo en modo demo, sin sesión | Los dos inicios por POST rechazan con 403 un `Origin` que no es el de la app ni el de la petición, o un `Sec-Fetch-Site` distinto de `same-origin` | VEN-9 |
-| Se ofrece conectar un canal que el espacio no usa, y el proveedor lo cobra cada mes | `outbound_policy.allowed_channels` nace sin Instagram (0045); la fila de un canal fuera de la lista dice «Apagado en este espacio» con el botón deshabilitado, y el inicio lo rechaza también en el servidor | VEN-9 |
+| Se ofrece conectar un canal que el espacio no usa, y el proveedor lo cobra cada mes | `outbound_policy.allowed_channels` nace sin Instagram (canales_instagram_apagado_y_semana); la fila de un canal fuera de la lista dice «Apagado en este espacio» con el botón deshabilitado, y el inicio lo rechaza también en el servidor | VEN-9 |
 | Una respuesta de Outlook en windows-1252 llega con caracteres rotos; una solo en HTML, vacía; un rebote de otro servidor, sin destinatario | El cuerpo se decodifica con el charset de su parte, sin text/plain se lee el HTML sin la cita (o el snippet), y `Final-Recipient` se busca en la parte `message/delivery-status` del DSN | VEN-9 · VEN-15 |
 | «No me escribas por LinkedIn, escríbeme a partnerships@…» da de baja en todos los canales | Con un correo o un «escríbeme» en la misma respuesta no se marca la baja: queda para el clasificador; y la baja se lee sin la cita ni la firma | VEN-9 · VEN-14 |
 | Una concesión de Google canjeada y deshecha se queda viva en la cuenta de la persona | Se revoca si nadie usa ese buzón; si vive en otro espacio, NO (revocar tumbaría la concesión entera, también la de ese espacio) | VEN-9 |
@@ -2483,7 +2486,7 @@ ya está:
 
 **Rotar el secreto sin perder avisos.** Cada aviso lleva
 UNIPILE_WEBHOOK_SECRET en su cabecera, y la fila guarda la HUELLA del
-secreto con el que se dio de alta (`provider_webhook_secret_fp`, 0042).
+secreto con el que se dio de alta (`provider_webhook_secret_fp`, canales_identidad_y_rotacion).
 Para rotarlo (se filtró, o toca por calendario):
 
 1. En la web y en el worker: `UNIPILE_WEBHOOK_SECRET_PREVIOUS` = el
@@ -2509,7 +2512,7 @@ Para rotarlo (se filtró, o toca por calendario):
 
 **El keepalive, por lotes.** Corre cada hora y toma, por proveedor, las
 cuentas vivas que no se comprobaron en veinte horas
-(`keepalive_checked_at`, 0042), de la más vieja a la más nueva, 200
+(`keepalive_checked_at`, canales_identidad_y_rotacion), de la más vieja a la más nueva, 200
 como mucho y cuatro a la vez. Si el job se queda sin tiempo deja de
 tomar cuentas y las que quedan van primero en la hora siguiente: cada
 cuenta se mira una vez al día aunque haya miles.
@@ -2518,7 +2521,7 @@ cuenta se mira una vez al día aunque haya miles.
 global por fuente (sin `account_ids`), con el secreto compartido y sin
 ruta firmada. El webhook, tras validar el secreto, resuelve
 `account_id` → fila por una función `SECURITY DEFINER` (como las de
-0039) que devuelve SOLO el workspace y el id de la fila viva con ese
+callback_de_canales) que devuelve SOLO el workspace y el id de la fila viva con ese
 `provider_account_id` (el índice global de cuentas vivas ya garantiza
 que es una), y con eso abre la transacción del espacio. Pasar a ese
 modo es una migración (la función) y un cambio en `aviso.ts`; las
@@ -2527,7 +2530,7 @@ cuentas existentes se migran borrando sus avisos por cuenta.
 ### 9.2 Lo que la pantalla de canales le dice al creador
 
 - **Nunca el texto de un proveedor, y nunca una frase en la base.** En
-  `last_error` solo van códigos (desde 0044, un `CHECK` con la forma
+  `last_error` solo van códigos (desde canales_last_error_codigo, un `CHECK` con la forma
   `^[a-z_]+(:[A-Z_]+)?$` lo impone a todos los roles; el seed de la demo
   también siembra un código) (`CHANNEL_ERROR_CODES` de `@mc/db`:
   `cancelled`, `provider_error`, `gmail_revoked`, `transient`…, y
@@ -2542,7 +2545,7 @@ cuentas existentes se migran borrando sus avisos por cuenta.
   Unipile o el `message` de Google, en inglés, quedan en
   `api_call_log.error_message`.
 - **Tampoco en la ficha del contacto.** Una baja pedida al responder
-  queda como código en `contact.opted_out_code` (0043:
+  queda como código en `contact.opted_out_code` (contacto_codigo_de_baja:
   `reply_optout:<canal>`), y la ficha de Ventas lo traduce. La columna
   `opted_out_reason` sigue siendo del texto de la persona (el «Motivo»
   que escribe al registrar la baja a mano) y de las bajas de 0026 y 0037.
@@ -2589,7 +2592,7 @@ cuentas existentes se migran borrando sus avisos por cuenta.
   constructivo, tampoco a 400 px.
 - **Cada máximo dice quién lo fija**, el diario y el semanal por igual:
   «Máximo 140 (política del espacio)», «Máximo 200 (LinkedIn)»
-  (`daily_limited_by` y `weekly_limited_by` de la vista, 0045).
+  (`daily_limited_by` y `weekly_limited_by` de la vista, canales_instagram_apagado_y_semana).
 - **Un canal apagado en el espacio** (fuera de `allowed_channels`: así
   nace Instagram) sale «Apagado en este espacio», con el botón
   deshabilitado y el motivo en su nombre accesible; una cuenta que ya
@@ -2616,26 +2619,56 @@ cuentas existentes se migran borrando sus avisos por cuenta.
 Todo lo anterior está probado contra dobles (`FakeGmail`, `FakeUnipile`)
 y contra fixtures armados de la documentación de Google y de Unipile
 (`meta.source = 'docs'`). Eso prueba NUESTRA lógica, no que el servicio
-responda así. Tres cosas solo se saben con el servicio de verdad: si
-Unipile acepta y devuelve sin cortar el `name` de la hosted auth (el
-estado firmado: binario y cifrado, ~180 caracteres, ~210 al reconectar;
-la versión 1 medía ~500 y se acortó para dejarle margen a un recorte),
-la forma real del aviso de
-`notify_url` y del de mensajes (en especial `sender.attendee_provider_id`
-y `account_info`, de los que dependen casar la invitación aceptada y
-reconocer el eco), y la del canje de Google. Por eso VEN-9 queda
-**bloqueada** hasta grabarlas.
+responda así. Tres cosas solo se saben con el servicio de verdad:
+
+1. **Que `GET /accounts/{id}` devuelve en `name` el mismo `name` que se
+   mandó al pedir el enlace de hosted auth** (el estado firmado: binario
+   y cifrado, ~180 caracteres, ~210 al reconectar; la versión 1 medía
+   ~500 y se acortó para dejarle margen a un recorte). La documentación
+   de Unipile solo promete que `name` vuelve en el aviso de `notify_url`,
+   no en el objeto Account, y el fixture `accounts.get.hosted_auth.json`
+   se escribió suponiéndolo. De esto depende ligar una cuenta NUEVA por
+   la prueba estricta (`matchAttempt` en `ventas/canales/_lib/aviso.ts`:
+   el `name` de la cuenta es un estado nuestro con el mismo nonce). **El
+   plan B ya está en el código** por si el supuesto es falso: una cuenta
+   cuyo `name` no tiene forma de estado (vacío, el nombre de la persona,
+   uno recortado) se liga si nació durante el intento, es del proveedor
+   del canal y ninguna fila viva de ningún espacio la nombra
+   (`outreach_channel_connect` responde `taken` si no); el registro dice
+   «se liga por el plan B». Al recibir el aviso, la cuenta queda anotada
+   en la pendiente (`notified_account_id`, migración
+   `canales_identidad_y_rotacion` §8), y la conciliación del keepalive
+   reconoce por ahí una cuenta nuestra sin mirar su `name`. Lo que el
+   plan B pierde frente a la prueba estricta: quien conociera el
+   `account_id` de una cuenta ajena recién creada (solo lo ven Unipile y
+   nuestro servidor) podría ligarla antes que su dueño. Un `name` con
+   forma de estado que no abre nunca cae al plan B. Y una cuenta que no
+   es de ese intento no se liga ni se borra: la pendiente de ese nonce
+   pasa a «No pudimos confirmar la cuenta que conectaste» (`not_this_attempt`).
+2. La forma real del aviso de `notify_url` y del de mensajes (en especial
+   `sender.attendee_provider_id` y `account_info`, de los que dependen
+   casar la invitación aceptada y reconocer el eco).
+3. La del canje de Google.
+
+Por eso VEN-9 queda **bloqueada** hasta grabarlas. La puerta de la
+grabación (`outreach-grabacion.test.ts`) mira justo esto: la cuenta
+grabada tiene que traer en `name` el estado entero, y el aviso de cuenta
+creada tiene que haber LIGADO la cuenta (la respuesta de la web, en
+`meta.appReply`, sin `ignored`; un 200 solo no basta: la web también
+responde 200 cuando ignora un aviso).
 
 Qué hace falta (Rasheed; ninguna llave se inventa ni pasa por un chat):
 
-1. Un cliente OAuth de Google en modo **Prueba** con la Gmail API, los
+1. Un cliente OAuth de Google **propio del outreach** (`GOOGLE_OUTREACH_CLIENT_ID`,
+   no el `GOOGLE_CLIENT_ID` de YouTube: una concesión compartida se
+   revoca entera al desconectar el correo) en modo **Prueba** con la Gmail API, los
    alcances `gmail.send`, `gmail.modify` y `userinfo.email`, un buzón de
    pruebas como usuario de prueba y dos URI de redirección:
    `<APP_URL>/api/oauth/google/callback` y `http://localhost:8788/callback`.
 2. Una cuenta de pruebas de Unipile (tiene periodo gratuito) y un
    LinkedIn de pruebas.
-3. Las llaves en `platform/.env.local` (`GOOGLE_CLIENT_ID`,
-   `GOOGLE_CLIENT_SECRET`, `UNIPILE_DSN`, `UNIPILE_ACCESS_TOKEN`,
+3. Las llaves en `platform/.env.local` (`GOOGLE_OUTREACH_CLIENT_ID`,
+   `GOOGLE_OUTREACH_CLIENT_SECRET`, `UNIPILE_DSN`, `UNIPILE_ACCESS_TOKEN`,
    `UNIPILE_WEBHOOK_SECRET`, más `TOKEN_ENCRYPTION_KEY` de `make
    db.unlock`) y un túnel público hacia la web local.
 
@@ -2659,8 +2692,9 @@ estable. Después:
 
 - `pnpm --filter @mc/connectors test` pasa cada grabación por el
   normalizador de producción (`outreach-grabacion.test.ts`): la cuenta
-  trae `connection_params.im.id` y `created_at`, el aviso de cuenta
-  creada trae el estado entero y la web lo verificó (`appStatus` 200),
+  trae `connection_params.im.id`, `created_at` y el estado entero en
+  `name`, el aviso de cuenta creada trae el estado entero y la web lo
+  verificó y ligó la cuenta (`appStatus` 200 y `appReply` sin `ignored`),
   el de mensajes trae quién escribe, el canje trae `refresh_token` y los
   dos alcances, el Message-ID tiene su forma. Si algo no casa, se ajusta
   `parseUnipileWebhook`, `normalizeUnipileAccount` o `normalizeGmailMessage`
@@ -2670,6 +2704,16 @@ estable. Después:
   deja antes: exige las once de `REQUIRED_OUTREACH_RECORDINGS`.
 
 ### 9.4 Decisiones y cruces de carpeta
+
+**Las migraciones se citan por su nombre.** Las de canales (de
+`canales_outreach` a `canales_instagram_apagado_y_semana`) y la de
+entregabilidad nacieron con números que main ya usó con otro contenido,
+y el integrador las renumera. Por eso el código, sus pruebas y este
+documento las nombran por lo que va detrás del número
+(`canales_identidad_y_rotacion §8`, `entregabilidad §2`): el nombre
+sobrevive a la renumeración y el número no. Las citas por número que
+quedan en archivos de otras piezas (el motor, la guardia de pruebas,
+Ventas) las ajusta el integrador al renumerar.
 
 La pieza de canales tocó, a propósito y de forma aditiva, archivos que
 no son de Ventas. Ninguno cambia el comportamiento de lo que ya estaba:

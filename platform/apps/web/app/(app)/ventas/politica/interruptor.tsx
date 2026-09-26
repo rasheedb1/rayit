@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { OUTREACH_URLS } from "@mc/core/outreach/messages";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
 import { ConfirmInline } from "@/components/ui/confirm-inline";
@@ -19,7 +20,7 @@ import { MESSAGES } from "./messages";
  * que el apagado canceló vuelven a la cola (y de cuántas personas).
  *
  * Encender se ofrece deshabilitado, con su motivo en una línea, mientras
- * falte algo: el rol (owner o admin, 0038 §7), una cuenta de envío
+ * falte algo: el rol (owner o admin, entregabilidad §7), una cuenta de envío
  * conectada o la dirección postal. La acción y la base lo vuelven a mirar.
  *
  * `motivo` llega ya armado por la página («Apagado el 23 de septiembre: …»);
@@ -53,7 +54,7 @@ export function Interruptor({
   hasAddress: boolean;
   motivo: string | null;
   nuncaEncendido: boolean;
-  /** owner o admin del workspace (0038 §7). */
+  /** owner o admin del workspace (entregabilidad §7). */
   puedeCambiar: boolean;
   /** Cuentas de envío conectadas: sin ninguna, encender no enviaría nada. */
   cuentasConectadas: number;
@@ -103,6 +104,13 @@ export function Interruptor({
         : cuentasConectadas === 0
           ? t.sinCanal
           : null;
+  // Y adónde ir a arreglarlo: la dirección está al final de una página larga (en el móvil, muy abajo).
+  const arreglo =
+    falta === t.sinDireccion
+      ? { href: "#postalAddress", label: t.irADireccion, foco: "postalAddress" }
+      : falta === t.sinCanal
+        ? { href: OUTREACH_URLS.channels, label: t.irACanales, foco: null }
+        : null;
   // Si falta algo, la línea de abajo dice el paso concreto: la de arriba no lo repite (r4).
   const ayuda = enabled
     ? t.onHelp
@@ -122,6 +130,21 @@ export function Interruptor({
           {falta && (
             <p id="interruptor-falta" className="mt-1 text-xs text-muted">
               {falta}
+              {arreglo && (
+                <>
+                  {" "}
+                  <a
+                    href={arreglo.href}
+                    className="font-medium text-accent underline-offset-2 hover:underline"
+                    onClick={() => {
+                      // El ancla lleva la página al campo; el foco deja a quien usa teclado o lector escribiendo ahí.
+                      if (arreglo.foco) document.getElementById(arreglo.foco)?.focus();
+                    }}
+                  >
+                    {arreglo.label}
+                  </a>
+                </>
+              )}
             </p>
           )}
         </div>

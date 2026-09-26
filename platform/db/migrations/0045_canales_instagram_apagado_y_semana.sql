@@ -1,9 +1,9 @@
 -- =====================================================================
--- 0045 · Canales de outreach: Instagram nace apagado y el tope semanal
+-- canales_instagram_apagado_y_semana · Canales de outreach: Instagram nace apagado y el tope semanal
 --        dice quién lo fija (VEN-9, ronda 5 de canales)
 -- ---------------------------------------------------------------------
--- Número: detrás de 0044, que tampoco está aplicada en Supabase. El
--- integrador las renumera juntas (0038 a 0045).
+-- Número: detrás de canales_last_error_codigo, que tampoco está aplicada en Supabase. El
+-- integrador las renumera juntas (canales_outreach a canales_instagram_apagado_y_semana).
 --
 -- 1 · outbound_policy.allowed_channels nace sin Instagram
 --
@@ -21,20 +21,20 @@
 --
 -- 2 · outreach_channel_account_limits.weekly_limited_by
 --
---     La vista de 0040 decía quién fija el máximo diario
+--     La vista de canales_liberar_y_limites decía quién fija el máximo diario
 --     (daily_limited_by) pero no el semanal, y la pantalla decía
 --     «Máximo 140» sin explicar de dónde sale. El semanal es
 --     least(proveedor semanal, 7 × máximo diario): si manda el segundo,
 --     lo fija quien fija el diario (la política, en un correo con
 --     max_emails_per_day = 20: 140); si no, el proveedor. Se añade al
 --     FINAL de la vista (CREATE OR REPLACE VIEW solo admite columnas
---     nuevas al final) y el resto queda idéntico a 0040.
+--     nuevas al final) y el resto queda idéntico a canales_liberar_y_limites.
 -- =====================================================================
 
 ALTER TABLE outbound_policy ALTER COLUMN allowed_channels SET DEFAULT '{email,linkedin}';
 
 COMMENT ON COLUMN outbound_policy.allowed_channels IS
-  'Los canales que el despachador puede usar en este espacio. Nace con correo y LinkedIn (0045): Instagram es opcional '
+  'Los canales que el despachador puede usar en este espacio. Nace con correo y LinkedIn (canales_instagram_apagado_y_semana): Instagram es opcional '
   'y se enciende por workspace (docs/ventas-outreach.md §5.1). La pantalla de canales no ofrece conectar uno que no esté.';
 
 CREATE OR REPLACE VIEW outreach_channel_account_limits WITH (security_invoker = on) AS
@@ -82,5 +82,5 @@ SELECT q.id AS channel_account_id,
 
 REVOKE INSERT, UPDATE, DELETE ON outreach_channel_account_limits FROM mc_app;
 COMMENT ON VIEW outreach_channel_account_limits IS
-  'Los límites de cada cuenta de canal (0040, 0045): el techo del proveedor, el de la política, lo que la persona puede '
+  'Los límites de cada cuenta de canal (canales_liberar_y_limites, canales_instagram_apagado_y_semana): el techo del proveedor, el de la política, lo que la persona puede '
   'poner, lo que rige hoy y quién fija cada máximo. La pantalla de canales y el despachador leen de aquí; nadie recalcula.';

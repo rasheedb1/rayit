@@ -65,7 +65,8 @@ export function buildEmailFooter(input: ComplianceInput & { texts?: FooterTexts 
   const texts = input.texts ?? FOOTER_TEXTS[OUTREACH_FALLBACK_LANGUAGE];
   const url = input.unsubscribeUrl as string;
   const direccion = (input.postalAddress as string).trim().replace(/\s*\n\s*/g, ', ');
-  const text = `--\n${texts.unsubscribeText.replace('{url}', url)}\n${direccion}`;
+  // «-- » con espacio: el separador de firma de RFC 3676 §4.3, que los clientes pliegan y quitan al citar.
+  const text = `-- \n${texts.unsubscribeText.replace('{url}', url)}\n${direccion}`;
   const html =
     '<p style="margin-top:24px;font-size:12px;color:#6b7280;line-height:1.5">' +
     `${escapeHtml(texts.unsubscribeHtmlLead)} <a href="${escapeHtml(url)}">${escapeHtml(texts.unsubscribeLinkLabel)}</a>.` +

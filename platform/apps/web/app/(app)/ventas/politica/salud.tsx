@@ -50,7 +50,7 @@ function enlaceDeAviso(url: string): string {
  * (outbound.alerts). Las cifras de las últimas 24 horas, sacadas de
  * outbound_health (0037) y de readAlertSignalCounts (la misma consulta que
  * decide las alertas), y los últimos rebotes leídos del Gmail
- * (outbound_bounce, 0038). La pantalla no calcula nada: la tasa llega
+ * (outbound_bounce, entregabilidad). La pantalla no calcula nada: la tasa llega
  * hecha.
  *
  * Si nadie está leyendo los rebotes de un Gmail conectado, lo dice encima
@@ -122,14 +122,16 @@ export function Salud({
   // Con pocos envíos la tasa no dice nada (1 de 4 es un 25 %): la cifra
   // grande es la cuenta, «1 de 4», y la tasa sale solo con volumen (r5),
   // como en Instantly y Lemlist. La nota ya no repite la cuenta.
+  // La tasa cuenta los duros y los bloqueos (readAlertSignalCounts): la nota dice cuántos de cada uno.
   const valorRebotes =
-    counts.hardBounceRate === null
+    counts.bounceRate === null
       ? t.sinDato
       : tasa === "too_few"
-        ? t.rebotes.cuenta(f.int(counts.hardBounces), f.int(counts.emailsSent))
-        : f.pct(counts.hardBounceRate, 1);
+        ? t.rebotes.cuenta(f.int(counts.bounces), f.int(counts.emailsSent))
+        : f.pct(counts.bounceRate, 1);
   const notaRebotes = [
     tasa === "too_few" ? null : t.rebotes.note(f.int(counts.hardBounces), f.int(counts.emailsSent), counts.hardBounces),
+    counts.blockedBounces > 0 ? t.rebotes.bloqueados(f.int(counts.blockedBounces), counts.blockedBounces) : null,
     detalleTasa,
   ]
     .filter(Boolean)
@@ -181,7 +183,7 @@ export function Salud({
         <Kpi
           label={t.rebotes.label}
           value={valorRebotes}
-          note={counts.hardBounceRate === null ? t.rebotes.sinEnvios : notaRebotes}
+          note={counts.bounceRate === null ? t.rebotes.sinEnvios : notaRebotes}
         />
         <Kpi
           label={t.cola.label}

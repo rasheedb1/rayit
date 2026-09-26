@@ -1,7 +1,7 @@
 /**
  * sales.channels_keepalive · mantiene vivos los canales de outreach (VEN-9).
  *
- * Cada hora (job_definition, 0038 y 0042), POR LOTES: cada corrida toma
+ * Cada hora (job_definition, canales_outreach y canales_identidad_y_rotacion), POR LOTES: cada corrida toma
  * las cuentas vivas que no se comprobaron en las últimas veinte horas
  * (keepalive_checked_at, de la más vieja a la más nueva, KEEPALIVE_BATCH
  * como mucho) y las recorre de cuatro en cuatro (max_concurrency). Cada
@@ -69,7 +69,7 @@ export const KEEPALIVE_MARGIN_MS = 25 * 60 * 60 * 1000;
 export const KEEPALIVE_BATCH = 200;
 /** Una cuenta comprobada hace menos de esto no vuelve al lote: una visita al día. */
 export const KEEPALIVE_RECHECK_HOURS = 20;
-/** Cuántas a la vez, si job_definition no dice otra cosa (max_concurrency, 0042). */
+/** Cuántas a la vez, si job_definition no dice otra cosa (max_concurrency, canales_identidad_y_rotacion). */
 export const KEEPALIVE_CONCURRENCY = 4;
 /** Una fila 'pending' de más de dos días ya no la va a terminar nadie. */
 export const PENDING_MAX_AGE_HOURS = 48;
@@ -101,7 +101,7 @@ export interface KeepaliveDeps {
   db: Queryable;
   /** El vault de tokens (EncryptedSecretStore en producción). */
   secrets: SecretStore;
-  /** null = GOOGLE_CLIENT_ID/SECRET no están: los Gmail no se tocan. */
+  /** null = GOOGLE_OUTREACH_CLIENT_ID/SECRET no están: los Gmail no se tocan. */
   google: Pick<GoogleOAuthApi, 'refresh' | 'revoke'> | null;
   /** null = UNIPILE_DSN/ACCESS_TOKEN no están: los LinkedIn e Instagram no se tocan. */
   unipile: Pick<UnipileApi, 'getAccount' | 'deleteAccount' | 'deleteWebhook' | 'createWebhook'> & Partial<Pick<UnipileApi, 'listAccounts'>> | null;
@@ -254,7 +254,7 @@ async function dueAccounts(db: Queryable, provider: AccountRow['provider'], stat
 /**
  * Las cuentas de Unipile conectadas cuyos avisos no están al día: les
  * falta alguno, o se dieron de alta con otro secreto (la huella no es la
- * del actual: el secreto se rotó, o son de antes de 0042). A una recién
+ * del actual: el secreto se rotó, o son de antes de canales_identidad_y_rotacion). A una recién
  * conectada no se la toca: la web le está dando de alta los suyos.
  *
  * Por cada una: los dos avisos con el secreto actual; si salen los dos,
@@ -331,10 +331,13 @@ async function refreshWebhooks(
 /**
  * Las cuentas de Unipile que ninguna fila nombra (ni viva, ni pendiente
  * de soltar), con más de ORPHAN_MIN_AGE_HOURS y nacidas de NUESTRA hosted
- * auth (el `name` abre con nuestra llave de estado), se borran. Es la red
- * del borrado que hace la web cuando una conexión no se completa (canal
- * equivocado, perfil duplicado u ocupado, la pendiente ya usada): si ese
- * borrado falló, la cuenta no se queda cobrando.
+ * auth, se borran. Nuestra quiere decir: el `name` abre con nuestra llave
+ * de estado, o un aviso de cuenta creada la anotó en la pendiente de su
+ * intento (notified_account_id, canales_identidad_y_rotacion §8), que es lo que la reconoce si
+ * Unipile no devuelve el `name` en la cuenta (el plan B de §9.3). Es la
+ * red del borrado que hace la web cuando una conexión no se completa
+ * (canal equivocado, perfil duplicado u ocupado, la pendiente ya usada):
+ * si ese borrado falló, la cuenta no se queda cobrando.
  */
 async function reconcileOrphans(
   db: Queryable,
@@ -346,9 +349,15 @@ async function reconcileOrphans(
 ): Promise<void> {
   const all = await unipile.listAccounts();
   const cutoff = now.getTime() - ORPHAN_MIN_AGE_HOURS * 3600_000;
-  const ours = all.filter((a) =>
-    a.createdAt !== null && a.createdAt.getTime() < cutoff
-    && verifyChannelState(a.hostedAuthName, stateKeys, now, Number.MAX_SAFE_INTEGER).ok);
+  const old = all.filter((a) => a.createdAt !== null && a.createdAt.getTime() < cutoff);
+  if (old.length === 0) return;
+  const { rows: notified } = await db.query<{ notified_account_id: string }>(
+    `SELECT DISTINCT notified_account_id FROM outreach_channel_account
+      WHERE provider = 'unipile' AND notified_account_id = ANY($1::text[])`,
+    [old.map((a) => a.id)],
+  );
+  const seen = new Set(notified.map((x) => x.notified_account_id));
+  const ours = old.filter((a) => seen.has(a.id) || verifyChannelState(a.hostedAuthName, stateKeys, now, Number.MAX_SAFE_INTEGER).ok);
   if (ours.length === 0) return;
   const { rows } = await db.query<{ provider_account_id: string }>(
     `SELECT DISTINCT provider_account_id FROM outreach_channel_account

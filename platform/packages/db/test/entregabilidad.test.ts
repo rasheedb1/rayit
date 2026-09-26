@@ -5,7 +5,7 @@
  *     manda, sin secreto), lo que la página enseña antes del clic
  *     (public_optout_preview: dirección enmascarada, quién escribe), el
  *     rechazo del clic de quien envió con sesión (sin tocar nada), la baja
- *     con quien envió (0038 §8: el clic vale para el workspace que envió,
+ *     con quien envió (entregabilidad §8: el clic vale para el workspace que envió,
  *     en todos sus canales, y nunca para toda la plataforma: ni el
  *     remitente sin sesión, ni un segundo creador, ni una sola persona con
  *     dos registros nuevos suprimen a nadie para los demás; el enlace no
@@ -17,7 +17,7 @@
  *     con dirección postal, que no se puede quitar la dirección con el
  *     envío encendido, y que solo owner y admin la cambian (r3); sin
  *     identidad la regla falla cerrada salvo con app.auth_disabled (r4);
- *   · contact.email_invalid (0038): no se programa un correo a un correo
+ *   · contact.email_invalid (entregabilidad): no se programa un correo a un correo
  *     que rebotó, los otros canales siguen, y cambiar el correo borra la
  *     marca y también contact.bounced;
  *   · outbound_bounce: la web la lee aislada por workspace y no la escribe.
@@ -313,7 +313,7 @@ describe('la baja desde el enlace', () => {
     // espacios sin miembros en común) le escribe a la marca desde cada
     // uno y pulsa los dos enlaces sin sesión. Hasta r4 eso bastaba para
     // meterla en contact_suppression: «dos creadores distintos». Desde
-    // 0038 §8 ningún enlace lo hace.
+    // entregabilidad §8 ningún enlace lo hace.
     await t.admin(`
       INSERT INTO workspace (id, slug, name, timezone) VALUES
         ('${WS_AG1}', 'nuevo-uno', 'Recién creado · Uno', 'America/Bogota'),
@@ -367,7 +367,7 @@ describe('la baja desde el enlace', () => {
     assert.deepEqual(clics.map((c) => c.scope), ['workspace']);
   });
 
-  test('el rol de la baja no puede escribir la lista de toda la plataforma, ni leer fichas de otro workspace (0038 §8)', async () => {
+  test('el rol de la baja no puede escribir la lista de toda la plataforma, ni leer fichas de otro workspace (entregabilidad §8)', async () => {
     // public_optout corre como mc_public_share (SECURITY DEFINER): lo que
     // ese rol no puede, la función tampoco, ni con un error en su cuerpo.
     const [p] = await sinRls<{ insertar: boolean; leer: boolean }>(
@@ -565,7 +565,7 @@ describe('la política editable', () => {
     );
   });
 
-  describe('solo quien administra el espacio (0038 §7, r3)', () => {
+  describe('solo quien administra el espacio (entregabilidad §7, r3)', () => {
     const DUENA = '00000038-0000-4000-8000-0000000000d1';
     const ADMIN = '00000038-0000-4000-8000-0000000000d2';
     const LECTORA = '00000038-0000-4000-8000-0000000000d3';
@@ -656,7 +656,7 @@ describe('la política editable', () => {
       const r = await t.db.withWorkspace(WS_O, (tx) => readSendReadiness(tx));
       assert.equal(r.connectedAccounts, 1);
       assert.deepEqual(r.downAccounts.map((a) => [a.channel, a.name, a.status, a.lastError]), [
-        // last_error guarda un código desde 0044 (VEN-9): la pantalla lo traduce.
+        // last_error guarda un código desde canales_last_error_codigo (VEN-9): la pantalla lo traduce.
         ['linkedin', 'Otro creador (LinkedIn)', 'needs_reconnect', 'unipile_status:CREDENTIALS'],
       ]);
       // TOUCH_PENDING_O está programado para mañana: hoy no sale nada.
@@ -692,9 +692,9 @@ describe('la política editable', () => {
   });
 });
 
-describe('el correo inválido (0038)', () => {
+describe('el correo inválido (entregabilidad)', () => {
   test('no se programa un correo a una ficha cuyo correo rebotó; LinkedIn sí', async () => {
-    // Como lo deja el job outbound.bounces: las dos marcas, la de 0038 y la de 0007.
+    // Como lo deja el job outbound.bounces: las dos marcas, la de entregabilidad y la de 0007.
     await t.admin(`UPDATE contact SET email_invalid = true, email_invalid_at = now(), email_invalid_reason = '550 5.1.1',
                           bounced = true
                    WHERE id = '${CONTACT_REBOTE}'`);
@@ -793,7 +793,7 @@ describe('outbound_bounce', () => {
     );
   });
 
-  test('la web no mueve el cursor de rebotes de una cuenta: esconder avisos no se puede (0038 §6)', async () => {
+  test('la web no mueve el cursor de rebotes de una cuenta: esconder avisos no se puede (entregabilidad §6)', async () => {
     await t.admin(`INSERT INTO outreach_channel_account (workspace_id, channel, provider, provider_account_id, status)
                    VALUES ('${WS_S}', 'email', 'gmail_oauth', 'cursor@creador.test', 'connected')`);
     await assert.rejects(
@@ -843,9 +843,11 @@ describe('las cifras de las alertas (readAlertSignalCounts)', () => {
     `);
   }, SETUP_TIMEOUT);
 
-  test('solo cuentan los rebotes duros de lo que salió en la ventana, una vez por correo', async () => {
+  test('cuentan los rebotes duros y los bloqueos de lo que salió en la ventana, una vez por correo; los blandos no', async () => {
     const c = await t.db.asWorker((tx) => readAlertSignalCounts(tx, WS_A, LUNES));
-    assert.deepEqual(c, { emailsSent: 20, hardBounces: 1, dueToSend: 0, unreadMailboxes: 0, hardBounceRate: 0.05 });
+    assert.deepEqual(c, {
+      emailsSent: 20, hardBounces: 1, blockedBounces: 1, bounces: 2, dueToSend: 0, unreadMailboxes: 0, bounceRate: 0.1,
+    });
   });
 
   test('la pantalla lee lo mismo con el workspace de su transacción', async () => {
@@ -868,7 +870,7 @@ describe('las cifras de las alertas (readAlertSignalCounts)', () => {
 
   test('sin envíos no hay tasa', async () => {
     const c = await t.db.asWorker((tx) => readAlertSignalCounts(tx, WS_A, new Date('2026-09-01T00:00:00Z')));
-    assert.equal(c.hardBounceRate, null);
+    assert.equal(c.bounceRate, null);
   });
 });
 

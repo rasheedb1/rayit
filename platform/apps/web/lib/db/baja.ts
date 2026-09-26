@@ -11,8 +11,8 @@ import { withIdentity, withPublicShare } from "./cliente";
  *
  * Como los enlaces de Cotizar, quien abre esto no tiene por qué tener
  * sesión, y todo va por funciones SECURITY DEFINER de mc_public_share:
- * public_optout_preview (0038 §5) para lo que se enseña antes del clic y
- * public_optout (0037 §9, con quien envió desde 0038 §8) para la baja. El
+ * public_optout_preview (entregabilidad §5) para lo que se enseña antes del clic y
+ * public_optout (0037 §9, con quien envió desde entregabilidad §8) para la baja. El
  * token es opaco y lo decide su sha256 en la base: no hay secreto que
  * configurar ni que rotar, así que un error de configuración no puede
  * apagar la baja de la plataforma.
@@ -26,7 +26,7 @@ import { withIdentity, withPublicShare } from "./cliente";
  *
  * SIN sesión (una ventana privada, o un POST a mano a /un-clic) nadie
  * sabe quién pulsa. Por eso la baja vale para el workspace que envió ese
- * correo, en todos sus canales, y nunca para toda la plataforma (0038
+ * correo, en todos sus canales, y nunca para toda la plataforma (entregabilidad
  * §8): el remitente que pulsa su propio enlace solo se da de baja a sí
  * mismo, y dos registros de la misma persona tampoco suman.
  */
@@ -61,7 +61,7 @@ const puertas: OptoutGates = {
  */
 export const estadoDelEnlaceDeBaja = cache((token: string): Promise<EstadoEnlace> => checkOptoutLink(puertas, token));
 
-/** El clic: vale para quien envió el correo, en todos sus canales (0038 §8). */
+/** El clic: vale para quien envió el correo, en todos sus canales (entregabilidad §8). */
 export function darDeBajaDesdeEnlace(token: string): Promise<ResultadoBaja> {
   return optoutFromLink(puertas, token);
 }

@@ -57,7 +57,7 @@ describe("/baja/<token>", () => {
     expect(screen.getByRole("heading", { name: t.pregunta.title })).toBeInTheDocument();
     // Una sola frase: quién primero (lo que limita la promesa) y la dirección.
     expect(
-      screen.getByText("Laura · Cocina fácil no volverá a escribirte: ni a v•••@marca.com ni por ningún otro canal."),
+      screen.getByText("Si confirmas, Laura · Cocina fácil no volverá a escribirte: ni a v•••@marca.com ni por ningún otro canal."),
     ).toBeInTheDocument();
     expect(screen.getByText("On Cue")).toBeInTheDocument();
     expect(screen.getAllByRole("button")).toHaveLength(1);
@@ -68,13 +68,15 @@ describe("/baja/<token>", () => {
     estadoDelEnlaceDeBaja.mockResolvedValue({ ...VALIDO, senderName: null });
     await pagina();
     expect(screen.getByText(t.pregunta.frase(null, "v•••@marca.com"))).toBeInTheDocument();
-    expect(t.pregunta.frase(null, "v•••@marca.com")).toMatch(/^Quien te escribió no volverá a escribirte/);
+    expect(t.pregunta.frase(null, "v•••@marca.com")).toMatch(/^Si confirmas, quien te escribió no volverá a escribirte/);
   });
 
   it("quien ya estaba fuera lo sabe sin pulsar nada", async () => {
     estadoDelEnlaceDeBaja.mockResolvedValue({ ...VALIDO, alreadyOptedOut: true });
     await pagina();
     expect(screen.getByRole("heading", { name: t.yaEstaba.title })).toBeInTheDocument();
+    // Con el nombre de quien escribía, no «quien te escribió».
+    expect(screen.getByText(t.yaEstaba.body(VALIDO.senderName))).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
@@ -178,7 +180,7 @@ describe("los textos (r4)", () => {
 
   it("la promesa no se contradice (r5): ni «a este correo» junto a «por ningún canal», ni la plataforma por dentro", () => {
     expect(t.pregunta.frase("Laura", "l•••@granosdelvalle.co")).toBe(
-      "Laura no volverá a escribirte: ni a l•••@granosdelvalle.co ni por ningún otro canal.",
+      "Si confirmas, Laura no volverá a escribirte: ni a l•••@granosdelvalle.co ni por ningún otro canal.",
     );
     // Quién va primero: la frase no empieza sonando a una baja total, ni repite «un clic» encima del botón.
     expect(t.pregunta.frase("Laura", "l•••@x.co")).not.toMatch(/^Dejarás|Un clic/);

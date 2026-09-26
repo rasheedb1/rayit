@@ -122,6 +122,7 @@ const REASON_BY_CODE: Record<string, (service: string) => string> = {
   [CHANNEL_ERROR_CODES.gmailNoSecret]: () => H.gmailNoSecret,
   [CHANNEL_ERROR_CODES.unipileGone]: (service) => H.unipileGone(service),
   [CHANNEL_ERROR_CODES.transient]: () => MESSAGES.detail.reasons.transient,
+  [CHANNEL_ERROR_CODES.notThisAttempt]: (service) => MESSAGES.detail.reasons.notThisAttempt(service),
 };
 
 /**
@@ -130,7 +131,9 @@ const REASON_BY_CODE: Record<string, (service: string) => string> = {
  * horas (lastErrorRecent). El keepalive borra el intento a los 7 días, y
  * hasta entonces la fila no tiene que repetirlo.
  */
-const EXPIRING_CODES: ReadonlySet<string> = new Set([CHANNEL_ERROR_CODES.cancelled, CHANNEL_ERROR_CODES.authFailed]);
+const EXPIRING_CODES: ReadonlySet<string> = new Set([
+  CHANNEL_ERROR_CODES.cancelled, CHANNEL_ERROR_CODES.authFailed, CHANNEL_ERROR_CODES.notThisAttempt,
+]);
 
 /**
  * Los fallos pasajeros del servicio (no respondió al empezar la conexión,

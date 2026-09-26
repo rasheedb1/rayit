@@ -62,7 +62,13 @@ export const MESSAGES = {
     sinDireccion: "Para encender el envío guarda primero tu dirección postal.",
     /** Sin ninguna cuenta de envío conectada, encender no enviaría nada. */
     sinCanal: "Para encender el envío conecta primero una cuenta de envío (Gmail, LinkedIn o Instagram).",
-    /** Quien no es dueño ni administra el espacio (0038 §7). */
+    /**
+     * El enlace que va detrás de la línea de lo que falta: al campo de la
+     * dirección (que además recibe el foco) o a /ventas/canales.
+     */
+    irADireccion: "Ir a la dirección postal",
+    irACanales: "Conectar una cuenta",
+    /** Quien no es dueño ni administra el espacio (entregabilidad §7). */
     sinPermiso: "Solo quien es dueño o administra este espacio puede encender o apagar el envío.",
     confirmarEncender: "¿Encender el envío?",
     /**
@@ -93,7 +99,7 @@ export const MESSAGES = {
     errorApagar: "No se pudo apagar. Inténtalo de nuevo.",
   },
 
-  /** El formulario, para quien no es dueño ni administra el espacio (0038 §7). */
+  /** El formulario, para quien no es dueño ni administra el espacio (entregabilidad §7). */
   sinPermiso: "Solo quien es dueño o administra este espacio puede cambiar estas reglas. Puedes verlas; para cambiarlas, pídeselo.",
 
   secciones: {
@@ -106,9 +112,13 @@ export const MESSAGES = {
   campos: {
     maxTouchesPerCompany: {
       label: "Mensajes por marca",
-      /** `dias` es la ventana en la que se cuentan (COMPANY_CAP_WINDOW_DAYS de @mc/db), ya formateada. */
-      help: (dias: string) =>
-        `Cuántas veces, como mucho, se le escribe a una marca en ${dias} días, sumando todas tus secuencias. Los de más no salen. Más de cuatro suele sentirse insistente.`,
+      /**
+       * `dias` es la ventana en la que se cuentan (COMPANY_CAP_WINDOW_DAYS
+       * de @mc/db) e `insistente` INSISTENT_TOUCHES_PER_COMPANY
+       * (@mc/core/outreach/warmup), los dos ya formateados.
+       */
+      help: (dias: string, insistente: string) =>
+        `Cuántas veces, como mucho, se le escribe a una marca en ${dias} días, sumando todas tus secuencias. Los de más no salen. Más de ${insistente} suele sentirse insistente.`,
     },
     minDaysBetweenTouches: {
       label: "Días entre mensajes",
@@ -125,7 +135,9 @@ export const MESSAGES = {
     },
     maxEmailsPerDay: {
       label: "Correos al día",
-      help: "El tope diario de tu Gmail. Una cuenta personal aguanta 50 a 100 sin llamar la atención; Workspace, 100 a 150.",
+      /** Las cifras de GMAIL_DAILY_GUIDANCE (@mc/core/outreach/warmup), ya formateadas. */
+      help: (personalDesde: string, personalHasta: string, workspaceDesde: string, workspaceHasta: string) =>
+        `El tope diario de tu Gmail. Una cuenta personal aguanta ${personalDesde} a ${personalHasta} sin llamar la atención; Workspace, ${workspaceDesde} a ${workspaceHasta}.`,
     },
     cooldownDaysAfterNo: {
       label: "Días de espera tras un «no»",
@@ -217,9 +229,16 @@ export const MESSAGES = {
       /** «1 de 40 no existe», «2 de 40 no existen»; `n` es `duros` sin formatear. */
       note: (duros: string, enviados: string, n: number) =>
         plural(n, `${duros} de ${enviados} no existe`, `${duros} de ${enviados} no existen`),
+      /**
+       * Los bloqueos, que también suman a la tasa: el servidor de la marca
+       * rechazó por reputación, spam o un límite de envío. `n` es
+       * `bloqueados` sin formatear.
+       */
+      bloqueados: (bloqueados: string, n: number) =>
+        plural(n, `${bloqueados} bloqueado por el servidor`, `${bloqueados} bloqueados por el servidor`),
       sinEnvios: "Sin envíos en las últimas 24 horas",
-      /** La cifra grande con pocos envíos: «1 de 4». Los dos llegan formateados. */
-      cuenta: (duros: string, enviados: string) => `${duros} de ${enviados}`,
+      /** La cifra grande con pocos envíos: «1 de 4» (duros y bloqueos). Los dos llegan formateados. */
+      cuenta: (rebotes: string, enviados: string) => `${rebotes} de ${enviados}`,
       /**
        * Detrás de la nota, dónde está la tasa respecto del aviso
        * (bounceRateStatus de @mc/core): que un 25 % con cuatro envíos no

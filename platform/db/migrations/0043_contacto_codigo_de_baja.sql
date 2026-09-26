@@ -1,9 +1,9 @@
 -- =====================================================================
--- 0043 · Canales de outreach: el motivo de una baja por respuesta es un
+-- contacto_codigo_de_baja · Canales de outreach: el motivo de una baja por respuesta es un
 --        código, no una frase (VEN-9, ronda 3 de canales)
 -- ---------------------------------------------------------------------
--- Número: detrás de 0042, que tampoco está aplicada en Supabase. El
--- integrador las renumera juntas (0038 a 0043).
+-- Número: detrás de canales_identidad_y_rotacion, que tampoco está aplicada en Supabase. El
+-- integrador las renumera juntas (canales_outreach a contacto_codigo_de_baja).
 --
 -- Cuando una respuesta de LinkedIn, Instagram o correo pide la baja
 -- («no me escribas más»), recordInboundMessage (@mc/db, canales.ts) da

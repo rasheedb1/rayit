@@ -4,7 +4,7 @@
  * Cada hora, por workspace, desde las ALERTAS_HORA_LOCAL de su zona
  * (como sales.follow_ups), con la salud de las últimas 24 h:
  *
- *   outreach_bounce_rate   rebotes DUROS de lo enviado sobre el 5 %, con diez envíos o más
+ *   outreach_bounce_rate   rebotes duros y bloqueos de lo enviado sobre el 5 %, con diez envíos o más
  *   outreach_no_sends      cero envíos con el envío encendido y toques que tocaba enviar
  *   outreach_queue_stuck   toques reclamados hace más de cinco minutos
  *   outreach_account_down  una cuenta de canal caída o por reconectar
@@ -105,6 +105,7 @@ export const readSignalsFromDb: ReadSignals = async (tx, workspaceId, now) => {
     health,
     emailsSent: c.emailsSent,
     hardBounces: c.hardBounces,
+    blockedBounces: c.blockedBounces,
     dueToSend: c.dueToSend,
     unreadMailboxes: c.unreadMailboxes,
   };

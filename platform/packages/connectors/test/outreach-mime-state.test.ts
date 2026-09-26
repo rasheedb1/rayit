@@ -35,6 +35,15 @@ test('buildMime: texto plano en base64 UTF-8, remitente con acento, hilo con el 
   assert.ok(!/threadId|18c1f/.test(head!), 'el threadId de Gmail no entra en el MIME');
 });
 
+test('buildMime: el mailto de baja se valida como una dirección; un «>» o una «,» no meten otra entrada', () => {
+  const base = { from: { address: 'yo@gmail.com' }, to: { address: 'marca@marca.test' }, subject: 'Hola', text: 'Hola', unsubscribeUrl: 'https://app.test/baja/abc' };
+  for (const malo of ['x@y.com>, <https://otro.test', 'x@y.com, <mailto:otro@z.test>', 'no-es-direccion', 'a b@c.test', 'x@y.com?cc=otro@z.test']) {
+    assert.throws(() => buildMime({ ...base, unsubscribeMailto: malo }), MimeError, malo);
+  }
+  const conAsunto = buildMime({ ...base, unsubscribeMailto: 'mailto:baja@app.test?subject=Dar de baja' });
+  assert.match(conAsunto, /^List-Unsubscribe: <https:\/\/app\.test\/baja\/abc>, <mailto:baja@app\.test\?subject=Dar%20de%20baja>\r$/m);
+});
+
 test('buildMime: List-Unsubscribe de un clic con URL y mailto', () => {
   const mime = buildMime({
     from: { address: 'a@b.test' }, to: { address: 'c@d.test' }, subject: 'x', text: 'y',

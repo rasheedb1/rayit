@@ -1,11 +1,11 @@
 -- =====================================================================
--- 0041 · Canales de outreach: soltar una cuenta sin pisar su
+-- canales_reclamar_al_soltar · Canales de outreach: soltar una cuenta sin pisar su
 --        reconexión (VEN-9, ronda 3)
 -- ---------------------------------------------------------------------
--- Número: detrás de 0040, que tampoco está aplicada en Supabase. El
--- integrador las renumera juntas (0038 a 0041).
+-- Número: detrás de canales_liberar_y_limites, que tampoco está aplicada en Supabase. El
+-- integrador las renumera juntas (canales_outreach a canales_reclamar_al_soltar).
 --
--- La carrera. sales.channels_release (0040) leía la fila desconectada,
+-- La carrera. sales.channels_release (canales_liberar_y_limites) leía la fila desconectada,
 -- leía su token y revocaba en Google (o borraba la cuenta en Unipile),
 -- y solo DESPUÉS comprobaba que la fila siguiera desconectada. Si la
 -- persona reconectaba el mismo Gmail entre medias:
@@ -28,7 +28,7 @@
 --       RETURNING la ref y los avisos que va a soltar). Si el proveedor
 --       falla, suelta el reclamo; si sale bien, marca released_at. Un
 --       reclamo de más de 15 minutos es de un job que murió: otro lo
---       puede tomar. Es columna del despachador, como las de 0040.
+--       puede tomar. Es columna del despachador, como las de canales_liberar_y_limites.
 --   2 · outreach_channel_connect se niega a revivir una fila reclamada:
 --       devuelve 'releasing' y no escribe nada (la web deshace su
 --       transacción, token incluido, y dice «vuelve a intentarlo en un
@@ -48,10 +48,10 @@
 
 ALTER TABLE outreach_channel_account ADD COLUMN release_claimed_at timestamptz;
 COMMENT ON COLUMN outreach_channel_account.release_claimed_at IS
-  'sales.channels_release reclamó la fila para soltarla en el proveedor (0041). Mientras dure (15 min como mucho), '
+  'sales.channels_release reclamó la fila para soltarla en el proveedor (canales_reclamar_al_soltar). Mientras dure (15 min como mucho), '
   'outreach_channel_connect no la revive. Solo lo escribe el despachador.';
 
--- El disparador de 0040, con la columna nueva entre las del despachador.
+-- El disparador de canales_liberar_y_limites, con la columna nueva entre las del despachador.
 CREATE OR REPLACE FUNCTION outreach_channel_account_release_columns()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -88,7 +88,7 @@ CREATE TRIGGER outreach_channel_account_release_columns
   BEFORE INSERT OR UPDATE OF status, provider_webhook_ids, released_at, release_claimed_at ON outreach_channel_account
   FOR EACH ROW EXECUTE FUNCTION outreach_channel_account_release_columns();
 
--- 2 · outreach_channel_connect (0039), con 'releasing'. Misma firma, mismo
+-- 2 · outreach_channel_connect (callback_de_canales), con 'releasing'. Misma firma, mismo
 -- dueño, mismos permisos: CREATE OR REPLACE los conserva.
 CREATE OR REPLACE FUNCTION outreach_channel_connect(
   p_channel text,
@@ -182,7 +182,7 @@ BEGIN
 END;
 $$;
 COMMENT ON FUNCTION outreach_channel_connect(text, text, text, text, text, text[]) IS
-  'El callback de un canal de outreach desde la web (0039, 0041): la fila pending de ese nonce, en el workspace de la '
+  'El callback de un canal de outreach desde la web (callback_de_canales, canales_reclamar_al_soltar): la fila pending de ese nonce, en el workspace de la '
   'transacción, pasa a connected con la cuenta que devolvió el proveedor. taken si el buzón vive en otro espacio; '
   'releasing si sales.channels_release está soltando esa misma cuenta (no escribe nada).';
 

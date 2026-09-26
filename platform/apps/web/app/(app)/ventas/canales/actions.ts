@@ -24,7 +24,7 @@ const deps = (): ActionDeps => ({
   format: async () => formatterFor(await getCurrentWorkspace()),
 });
 
-/** Guarda los límites de una cuenta, nunca por encima de su máximo (la vista de 0040). */
+/** Guarda los límites de una cuenta, nunca por encima de su máximo (la vista de canales_liberar_y_limites). */
 export async function guardarLimites(_prev: LimitesState, formData: FormData): Promise<LimitesState> {
   const { saved, ...state } = await saveCaps(deps(), formData);
   if (saved) revalidatePath("/ventas/canales");
@@ -50,7 +50,7 @@ export async function reactivarAvisos(formData: FormData): Promise<AvisosState> 
 
 /**
  * Desconectar es de quien administra el espacio: la fila queda
- * 'disconnected' y pendiente de soltar (0040); el worker la suelta en el
+ * 'disconnected' y pendiente de soltar (canales_liberar_y_limites); el worker la suelta en el
  * proveedor. La confirmación la anuncia la fila del canal.
  */
 export async function desconectar(formData: FormData): Promise<AvisosState> {

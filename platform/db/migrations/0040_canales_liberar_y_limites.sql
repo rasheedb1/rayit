@@ -1,8 +1,8 @@
 -- =====================================================================
--- 0040 · Canales de outreach: soltar lo que se desconecta y los límites
+-- canales_liberar_y_limites · Canales de outreach: soltar lo que se desconecta y los límites
 --        de cada cuenta (VEN-9, ronda 2)
 -- ---------------------------------------------------------------------
--- Número: detrás de 0039, que tampoco está aplicada en Supabase. El
+-- Número: detrás de callback_de_canales, que tampoco está aplicada en Supabase. El
 -- integrador las renumera juntas.
 --
 --   1 · desconectar suelta la cuenta en el proveedor
@@ -43,9 +43,9 @@ ALTER TABLE outreach_channel_account
   ADD COLUMN released_at timestamptz;
 
 COMMENT ON COLUMN outreach_channel_account.provider_webhook_ids IS
-  'Los avisos de Unipile de la cuenta (0040): se borran al soltarla. Solo los escribe el despachador o outreach_channel_set_webhooks.';
+  'Los avisos de Unipile de la cuenta (canales_liberar_y_limites): se borran al soltarla. Solo los escribe el despachador o outreach_channel_set_webhooks.';
 COMMENT ON COLUMN outreach_channel_account.released_at IS
-  'Cuándo se soltó la cuenta en el proveedor tras desconectarla (0040). NULL en una fila disconnected = pendiente para sales.channels_release.';
+  'Cuándo se soltó la cuenta en el proveedor tras desconectarla (canales_liberar_y_limites). NULL en una fila disconnected = pendiente para sales.channels_release.';
 
 -- La cola del job: pocas filas, siempre las mismas condiciones.
 CREATE INDEX outreach_channel_account_release_idx ON outreach_channel_account (updated_at)
@@ -86,7 +86,7 @@ CREATE TRIGGER outreach_channel_account_release_columns
 
 -- Los avisos que la web acaba de dar de alta en Unipile para una cuenta
 -- que ESTE espacio tiene conectada. Mismo dueño y misma cerradura que las
--- funciones de 0039: FORCE ROW LEVEL SECURITY la ata al workspace de la
+-- funciones de callback_de_canales: FORCE ROW LEVEL SECURITY la ata al workspace de la
 -- transacción. Solo añade: nunca quita ni reemplaza.
 CREATE FUNCTION outreach_channel_set_webhooks(p_account_id uuid, p_webhook_ids text[])
 RETURNS boolean
@@ -120,7 +120,7 @@ $$;
 REVOKE ALL ON FUNCTION outreach_channel_set_webhooks(uuid, text[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION outreach_channel_set_webhooks(uuid, text[]) TO mc_app;
 COMMENT ON FUNCTION outreach_channel_set_webhooks(uuid, text[]) IS
-  'Los avisos de Unipile de una cuenta conectada del workspace de la transacción (0040): la web los da de alta al '
+  'Los avisos de Unipile de una cuenta conectada del workspace de la transacción (canales_liberar_y_limites): la web los da de alta al '
   'conectar y los anota aquí para que sales.channels_release los borre al desconectar. Solo añade.';
 
 
@@ -194,7 +194,7 @@ SELECT s.id AS channel_account_id,
 
 REVOKE INSERT, UPDATE, DELETE ON outreach_channel_account_limits FROM mc_app;
 COMMENT ON VIEW outreach_channel_account_limits IS
-  'Los límites de cada cuenta de canal (0040): el techo del proveedor, el de la política, lo que la persona puede '
+  'Los límites de cada cuenta de canal (canales_liberar_y_limites): el techo del proveedor, el de la política, lo que la persona puede '
   'poner y lo que rige hoy. La pantalla de canales y el despachador leen de aquí; nadie recalcula.';
 
 
@@ -205,7 +205,7 @@ COMMENT ON VIEW outreach_channel_account_limits IS
 -- (status 'disconnected', released_at NULL): revoca el permiso de Google
 -- y borra el token del vault; borra en Unipile la cuenta y sus avisos.
 -- Cada llamada queda en api_call_log. Lo que falla se reintenta en la
--- siguiente vuelta; el keepalive diario (0038) pasa por lo mismo.
+-- siguiente vuelta; el keepalive diario (canales_outreach) pasa por lo mismo.
 -- Lo hace apps/worker/src/jobs/ventas/canales.release.ts.
 -- =====================================================================
 INSERT INTO job_definition (id, label_es, queue, default_cron, timeout_s, max_attempts, max_concurrency)

@@ -62,7 +62,7 @@ export default async function BajaPage({ params }: { params: Promise<{ token: st
       <Marca />
       {estado.status === "valid" &&
         (estado.alreadyOptedOut ? (
-          <Aviso title={t.yaEstaba.title} body={t.yaEstaba.body} />
+          <Aviso title={t.yaEstaba.title} body={t.yaEstaba.body(estado.senderName)} />
         ) : (
           <DejarDeRecibir
             token={token}

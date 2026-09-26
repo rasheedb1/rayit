@@ -20,13 +20,19 @@
  *   · el de cuenta creada o reconectada de la hosted auth (notify_url):
  *     Unipile no deja poner cabeceras ahí, así que lo autentica el `name`,
  *     nuestro estado firmado. La cuenta se lee en Unipile con nuestra
- *     llave y, antes de ligarla a nada, tiene que ser la de ESTE intento:
- *     al reconectar, el account_id que se firmó en el estado; al crear,
- *     una cuenta cuyo `name` es un estado nuestro con el MISMO nonce (la
- *     de otro enlace no se liga, aunque quien avisa tenga un estado válido
- *     propio y su account_id) y nacida después de firmarlo. Después,
- *     del canal pedido, y se conecta por outreach_channel_connect (0042:
- *     un perfil es una fila). Si no se conecta (canal equivocado, perfil
+ *     llave y, antes de ligarla a nada, tiene que ser la de ESTE intento
+ *     (matchAttempt): al reconectar, el account_id que se firmó en el
+ *     estado; al crear, una cuenta nacida durante el intento cuyo `name`
+ *     es un estado nuestro con el MISMO nonce (la de otro enlace no se
+ *     liga, aunque quien avisa tenga un estado válido propio y su
+ *     account_id). Si Unipile no devuelve ese `name` en la cuenta (nadie
+ *     lo ha comprobado todavía: §9.3), el plan B la liga por la fecha, el
+ *     proveedor y que ninguna fila viva la nombre. Una que no es de este
+ *     intento no se liga ni se borra, y la pendiente de ese nonce dice
+ *     que no se pudo confirmar. La cuenta queda anotada en la pendiente
+ *     (notified_account_id) para la conciliación. Después, del canal
+ *     pedido, y se conecta por outreach_channel_connect (un perfil es una
+ *     fila). Si no se conecta (canal equivocado, perfil
  *     duplicado u ocupado, fila soltándose, pendiente ya usada), la cuenta
  *     recién creada en Unipile se BORRA, salvo que alguien la use: Unipile
  *     cobra cada cuenta cada mes. Si el borrado falla, la conciliación del
@@ -42,14 +48,14 @@
 import {
   acceptedWebhookSecrets, InMemoryOutreachCallLog, INTERACTIVE_BUDGET, isOutreachApiError, isUnipileDownStatus, isUnipileOkStatus, matchSharedSecret,
   parseUnipileWebhook, PostgresOutreachCallLog, registerAccountWebhooks, UNIPILE_ACCOUNT_WEBHOOK_SOURCES, UNIPILE_PROVIDER_BY_CHANNEL,
-  UNIPILE_ROUTE_HEADER, UNIPILE_SECRET_HEADER, UNIPILE_STATE_TTL_MS, UNIPILE_WEBHOOK_SECRET_ENV, verifyChannelState,
+  UNIPILE_ROUTE_HEADER, UNIPILE_SECRET_HEADER, UNIPILE_STATE_TTL_MS, UNIPILE_WEBHOOK_SECRET_ENV, looksLikeChannelState, verifyChannelState,
   type ChannelState, type UnipileAccount, type UnipileApi, type UnipileWebhookEvent,
 } from "@mc/connectors";
 import { channelHealthName } from "@mc/core";
 import { inboundBody } from "@mc/core/outreach/messages";
 import {
   CHANNEL_ERROR_CODES, channelWebhookCount, clearChannelAccountIssue, completeChannelConnection, failPendingChannelAccount,
-  findUnipileAccountForWebhook, getConnectedUnipileAccount, markChannelAccountDown, markChannelAccountOk, noteChannelAccountIssue,
+  findUnipileAccountForWebhook, getConnectedUnipileAccount, markChannelAccountDown, markChannelAccountOk, noteChannelAccountIssue, noteNotifiedAccount,
   recordInboundMessage, setChannelWebhooks, unipileAccountInUseHere, unipileStatusCode,
 } from "@mc/db/queries/canales";
 import type { WorkspaceTx } from "@mc/db";
@@ -155,7 +161,7 @@ async function recordWebhookEvent(
     if (event.kind === "message") {
       // Sin quién escribe no se sabe si es el eco de un envío propio: se descarta antes que detener una cadencia.
       if (!event.senderProviderId) return MESSAGES.routes.ignored.noSender;
-      // El eco de un envío propio: por account_info del aviso o, si no viene, porque escribe la persona de esta cuenta (0042).
+      // El eco de un envío propio: por account_info del aviso o, si no viene, porque escribe la persona de esta cuenta (canales_identidad_y_rotacion).
       if (event.fromSelf || isOwnAccount(event.senderProviderId, account.providerIdentity)) return MESSAGES.routes.ignored.echo;
       // Con quién escribe: una respuesta en un chat nuevo (la invitación aceptada) casa con el toque enviado a esa persona.
       const r = await recordInboundMessage(tx, {
@@ -188,8 +194,8 @@ async function recordWebhookEvent(
 /**
  * ¿Escribe la propia cuenta? El id que Unipile pone en
  * `sender.attendee_provider_id` es el mismo que `connection_params.im.id`
- * de la cuenta (provider_identity, 0042). Sin identidad guardada (una
- * cuenta conectada antes de 0042) no se puede afirmar: decide el
+ * de la cuenta (provider_identity, canales_identidad_y_rotacion). Sin identidad guardada (una
+ * cuenta conectada antes de canales_identidad_y_rotacion) no se puede afirmar: decide el
  * `account_info` del aviso.
  */
 export function isOwnAccount(senderProviderId: string, providerIdentity: string | null): boolean {
@@ -213,32 +219,63 @@ async function accountNotify(req: Request, deps: ChannelDeps, now: Date): Promis
 }
 
 /**
- * ¿Es la cuenta de ESTE intento? Al reconectar, la que se firmó en el
- * estado. Al crear, dos pruebas, y las dos hacen falta:
+ * ¿Es la cuenta de ESTE intento?
  *
- *   · la criptográfica: el `name` de la cuenta es el que mandamos al
- *     pedir el enlace (Unipile lo guarda tal cual), es decir, un estado
- *     firmado por nosotros con el MISMO nonce y el mismo espacio que el
- *     del aviso. Una cuenta nacida de otro enlace (de otro cliente del
- *     tenant, o de otro intento de la misma persona) no la trae, aunque
- *     quien avisa tenga un estado válido propio y su account_id. Sin
- *     caducidad: el estado del aviso ya la pasó y el `name` es su gemelo;
- *   · la de fecha: una nacida después de firmar el estado (con un margen
- *     por la diferencia de relojes). Sin fecha de alta no se liga: la
- *     documentación de Account la trae siempre.
+ *   'this'     sí. Al reconectar, la que se firmó en el estado. Al crear,
+ *              una nacida durante el intento (desde que se firmó el estado,
+ *              con un margen por la diferencia de relojes, hasta ahora)
+ *              cuyo `name` es el que mandamos al pedir el enlace: un estado
+ *              firmado por nosotros con el MISMO nonce y el mismo espacio.
+ *              Una cuenta de otro enlace (de otro cliente del tenant, o de
+ *              otro intento de la misma persona) no lo trae, aunque quien
+ *              avisa tenga un estado válido propio y su account_id. Sin
+ *              caducidad: el estado del aviso ya la pasó y el `name` es su
+ *              gemelo.
+ *   'unnamed'  el plan B (§9.3): la cuenta nació durante el intento y es
+ *              del proveedor del canal, pero su `name` NO tiene la forma de
+ *              un estado (vacío, el nombre de la persona, uno recortado):
+ *              Unipile no nos lo devuelve en la cuenta, cosa que solo la
+ *              sesión real dirá. Se liga si ninguna fila viva de ningún
+ *              espacio la nombra (el índice global de outreach_channel_connect
+ *              responde 'taken'). Lo que se pierde frente a 'this': quien
+ *              conociera el account_id de una cuenta ajena recién creada
+ *              (un id que solo ven Unipile y nuestro servidor) podría
+ *              ligarla antes que su dueño.
+ *   'other'    no: otra que ya existía, la de otro intento, la de otro
+ *              proveedor sin `name`, o un `name` con forma de estado que
+ *              no es el de este intento. Sin fecha de alta tampoco se liga:
+ *              la documentación de Account la trae siempre.
  */
+export type AttemptMatch = "this" | "unnamed" | "other";
+
+export function matchAttempt(
+  account: Pick<UnipileAccount, "id" | "createdAt" | "hostedAuthName" | "provider">,
+  state: ChannelState,
+  issuedAt: Date,
+  stateKeys: Uint8Array | readonly Uint8Array[],
+  now: Date,
+): AttemptMatch {
+  if (state.reconnectAccountId !== undefined) return account.id === state.reconnectAccountId ? "this" : "other";
+  if (!account.createdAt) return "other";
+  const born = account.createdAt.getTime();
+  if (born < issuedAt.getTime() - CREATED_CLOCK_SKEW_MS || born > now.getTime() + CREATED_CLOCK_SKEW_MS) return "other";
+  if (looksLikeChannelState(account.hostedAuthName)) {
+    const named = verifyChannelState(account.hostedAuthName, stateKeys, now, Number.MAX_SAFE_INTEGER);
+    return named.ok && named.payload.nonce === state.nonce && named.payload.workspaceId === state.workspaceId ? "this" : "other";
+  }
+  const channel = state.channel as "linkedin" | "instagram_dm";
+  return account.provider === UNIPILE_PROVIDER_BY_CHANNEL[channel] ? "unnamed" : "other";
+}
+
+/** La prueba estricta, sin plan B: solo 'this'. */
 export function isAccountOfThisAttempt(
-  account: Pick<UnipileAccount, "id" | "createdAt" | "hostedAuthName">,
+  account: Pick<UnipileAccount, "id" | "createdAt" | "hostedAuthName" | "provider">,
   state: ChannelState,
   issuedAt: Date,
   stateKeys: Uint8Array | readonly Uint8Array[],
   now: Date,
 ): boolean {
-  if (state.reconnectAccountId !== undefined) return account.id === state.reconnectAccountId;
-  const named = verifyChannelState(account.hostedAuthName, stateKeys, now, Number.MAX_SAFE_INTEGER);
-  if (!named.ok || named.payload.nonce !== state.nonce || named.payload.workspaceId !== state.workspaceId) return false;
-  if (!account.createdAt) return false;
-  return account.createdAt.getTime() >= issuedAt.getTime() - CREATED_CLOCK_SKEW_MS;
+  return matchAttempt(account, state, issuedAt, stateKeys, now) === "this";
 }
 
 async function accountConnected(
@@ -264,14 +301,29 @@ async function accountConnected(
     return json(200, { ok: true, ignored: MESSAGES.routes.ignored.unknownInUnipile });
   }
   // Un estado válido no sirve para ligar OTRA cuenta del tenant: ni una que ya existía ni otra que la reconectada.
-  if (!isAccountOfThisAttempt(account, state, issuedAt, channelKeys(deps.env)!.verify.state, now)) {
-    await flush();
+  const match = matchAttempt(account, state, issuedAt, channelKeys(deps.env)!.verify.state, now);
+  if (match === "other") {
+    // Ni se liga ni se borra (puede ser de otro). La pendiente de ESTE intento (su nonce viene firmado) deja de decir
+    // «Conectando»: la persona vuelve de Unipile y ve que no se pudo confirmar, con el botón de volver a intentarlo.
+    await deps.withProviderCallback(proof, async (tx) => {
+      await log.flushTo(new PostgresOutreachCallLog(tx), null);
+      await failPendingChannelAccount(tx, { channel, nonce: state.nonce, code: CHANNEL_ERROR_CODES.notThisAttempt });
+    });
     console.warn("[canales] aviso de cuenta creada con una cuenta que no es de ese intento", { channel, reconnect: state.reconnectAccountId !== undefined });
     return json(200, { ok: true, ignored: MESSAGES.routes.ignored.notThisAttempt });
+  }
+  if (match === "unnamed") {
+    // Solo el largo del name, nunca su valor: si esto sale en producción, Unipile no devuelve el estado en la cuenta (§9.3).
+    console.warn("[canales] la cuenta creada no trae el estado en su name: se liga por el plan B", {
+      channel, nameLength: account.hostedAuthName?.length ?? 0,
+    });
   }
 
   const outcome = await deps.withProviderCallback(proof, async (tx) => {
     const fail = (code: string) => failPendingChannelAccount(tx, { channel, nonce: state.nonce, code });
+    // La cuenta queda anotada en la pendiente ANTES de ligarla: si no se liga y el borrado falla, la conciliación la
+    // reconoce como nuestra aunque su name no diga nada (canales_identidad_y_rotacion §8).
+    await noteNotifiedAccount(tx, { channel, nonce: state.nonce, providerAccountId: account.id });
     let out: { status: string; accountId?: string; webhooks?: number; release: boolean; replaced?: { providerAccountId: string; webhookIds: string[] } | null };
     if (account.provider !== UNIPILE_PROVIDER_BY_CHANNEL[channel]) {
       await fail(CHANNEL_ERROR_CODES.wrongProvider);

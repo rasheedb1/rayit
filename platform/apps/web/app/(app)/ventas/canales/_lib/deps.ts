@@ -28,7 +28,7 @@ export interface ChannelDeps {
    * dos verificaciones de firma: aquí no se puede pasar un workspace.
    */
   withProviderCallback: <T>(proof: ProviderCallbackProof, fn: (tx: WorkspaceTx) => Promise<T>) => Promise<T>;
-  /** null = faltan GOOGLE_CLIENT_ID/SECRET. Recibe la bitácora de la petición. */
+  /** null = faltan GOOGLE_OUTREACH_CLIENT_ID/SECRET. Recibe la bitácora de la petición. */
   google: ((log: OutreachCallLogSink, origin: string) => GoogleOAuthApi) | null;
   /** null = faltan UNIPILE_DSN/ACCESS_TOKEN. */
   unipile: ((log: OutreachCallLogSink) => UnipileApi) | null;

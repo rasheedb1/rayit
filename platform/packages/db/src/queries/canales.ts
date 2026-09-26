@@ -6,7 +6,7 @@
  *   La pantalla /ventas/canales
  *     listChannelAccounts        una fila por cuenta, con su uso de hoy y de
  *                                la semana ya sumado (la pantalla no suma)
- *                                y sus límites (la vista outreach_channel_account_limits, 0040)
+ *                                y sus límites (la vista outreach_channel_account_limits, canales_liberar_y_limites)
  *     getChannelPolicyCaps       lo que dice outbound_policy
  *     updateChannelAccountCaps   los topes de la persona, nunca por encima
  *                                del máximo de la vista (proveedor y política)
@@ -16,25 +16,25 @@
  *
  *   Los callbacks de los proveedores (rutas de la web, tras verificar el
  *   estado firmado y hablar con el proveedor)
- *     completeChannelConnection  pending → connected, por outreach_channel_connect (0039)
+ *     completeChannelConnection  pending → connected, por outreach_channel_connect (callback_de_canales)
  *     failPendingChannelAccount  la conexión no se completó: el motivo, a la fila
  *     noteChannelAccountIssue    un aviso sobre una cuenta que sigue conectada
  *     existingGmailSecretRef     la ref del token al reconectar un Gmail
  *     findUnipileAccountForWebhook  la cuenta de un aviso de Unipile
- *     markChannelAccountDown     el proveedor dice que cayó, por outreach_channel_mark_down (0039)
- *     markChannelAccountOk       el proveedor dice que volvió, por outreach_channel_mark_ok (0042)
+ *     markChannelAccountDown     el proveedor dice que cayó, por outreach_channel_mark_down (callback_de_canales)
+ *     markChannelAccountOk       el proveedor dice que volvió, por outreach_channel_mark_ok (canales_identidad_y_rotacion)
  *     unipileAccountInUseHere    antes de borrar en Unipile una cuenta que no se conectó
  *     getReconnectableGmail      el buzón que Google tiene que proponer al reconectar
  *     recordInboundMessage       una respuesta nueva, a outbound_message; su
  *                                enrolamiento deja de enviar y una baja explícita se respeta
- *     setChannelWebhooks         los avisos de Unipile de la cuenta (0040)
+ *     setChannelWebhooks         los avisos de Unipile de la cuenta (canales_liberar_y_limites)
  *     getConnectedUnipileAccount la cuenta de «Volver a intentar» sus avisos
  *     clearChannelAccountIssue   quita un código de last_error que ya no aplica
  *
  * A un estado autenticado (connected, needs_reconnect, error) solo llega
  * quien habló con el proveedor: el disparador
  * outreach_channel_account_worker_columns (0037 §2.1) lo exige con 42501.
- * La web escribe esos estados solo por las dos funciones de 0039, que no
+ * La web escribe esos estados solo por las dos funciones de callback_de_canales, que no
  * ven más que el espacio de la transacción y piden la fila 'pending' del
  * nonce. El worker (keepalive) escribe directo con asWorker.
  */
@@ -86,7 +86,7 @@ export const CHANNEL_ERROR_CODES = {
   cancelled: 'cancelled',
   /** La cuenta que conectó en Unipile no es del canal que se pidió (un Instagram donde se pidió LinkedIn). */
   wrongProvider: 'wrong_provider',
-  /** Se reconectó mientras sales.channels_release soltaba esa misma cuenta (0041): hay que esperar un minuto. */
+  /** Se reconectó mientras sales.channels_release soltaba esa misma cuenta (canales_reclamar_al_soltar): hay que esperar un minuto. */
   releasing: 'releasing',
   /**
    * Conectada, pero sin los avisos de Unipile (mensajes y salud): no nos
@@ -110,7 +110,7 @@ export const CHANNEL_ERROR_CODES = {
   authFailed: 'auth_failed',
   /**
    * El perfil de LinkedIn o de Instagram ya está conectado en este espacio
-   * con otra cuenta de Unipile (0042): la nueva se borró en Unipile.
+   * con otra cuenta de Unipile (canales_identidad_y_rotacion): la nueva se borró en Unipile.
    */
   duplicate: 'duplicate',
   /** Google ya no acepta el refresh token (la persona quitó el acceso, o venció sin uso). Lo escribe el keepalive. */
@@ -121,10 +121,16 @@ export const CHANNEL_ERROR_CODES = {
   unipileGone: 'unipile_gone',
   /** No se pudo comprobar la cuenta (red, 5xx, nuestra llave): la cuenta no cambia de estado. */
   transient: 'transient',
+  /**
+   * El aviso de cuenta creada trajo una cuenta que no es la de ese intento
+   * (otra que ya existía, la de otro enlace, o nacida fuera del intento).
+   * No se liga ni se borra; la pendiente deja de decir «Conectando».
+   */
+  notThisAttempt: 'not_this_attempt',
 } as const;
 
 /**
- * La forma de todo código de last_error: la misma del CHECK de 0044
+ * La forma de todo código de last_error: la misma del CHECK de canales_last_error_codigo
  * (minúsculas y guion bajo, y opcionalmente ':' y un estado en
  * mayúsculas). Una frase no cabe: la base la rechaza.
  */
@@ -160,7 +166,7 @@ export interface ChannelAccountRow {
   /** Los topes que puso la persona (NULL = sin tope propio). */
   dailyCap: number | null;
   weeklyCap: number | null;
-  /** Los límites de la vista outreach_channel_account_limits (0040): lo que rige y lo más que se puede poner. */
+  /** Los límites de la vista outreach_channel_account_limits (canales_liberar_y_limites): lo que rige y lo más que se puede poner. */
   limits: ChannelLimits;
   scopes: string[];
   lastOkAt: Date | null;
@@ -179,7 +185,7 @@ export interface ChannelAccountRow {
   updatedAt: Date;
 }
 
-/** Una fila de outreach_channel_account_limits (0040). */
+/** Una fila de outreach_channel_account_limits (canales_liberar_y_limites). */
 export interface ChannelLimits {
   /** Lo que rige hoy: el tope propio o el máximo, nunca por encima del máximo. */
   effectiveDaily: number;
@@ -189,7 +195,7 @@ export interface ChannelLimits {
   maxWeekly: number;
   /** Qué fija el máximo diario: la política del espacio o el proveedor. */
   dailyLimitedBy: 'policy' | 'provider';
-  /** Qué fija el máximo semanal (0045): quien fija el diario si manda 7 × el diario, o el proveedor. */
+  /** Qué fija el máximo semanal (canales_instagram_apagado_y_semana): quien fija el diario si manda 7 × el diario, o el proveedor. */
   weeklyLimitedBy: 'policy' | 'provider';
   /** Un buzón @gmail.com o @googlemail.com (Google corta en 500 al día). */
   personalMailbox: boolean;
@@ -283,7 +289,7 @@ export interface ChannelPolicyCaps {
   allowedChannels: readonly OutreachChannel[];
 }
 
-/** El valor por defecto de allowed_channels desde 0045: Instagram es opcional y nace apagado (§5.1). */
+/** El valor por defecto de allowed_channels desde canales_instagram_apagado_y_semana: Instagram es opcional y nace apagado (§5.1). */
 export const DEFAULT_ALLOWED_CHANNELS: readonly OutreachChannel[] = ['email', 'linkedin'];
 
 /** Sin fila de política valen los valores por defecto de la tabla: 20 correos al día, apagado, correo y LinkedIn. */
@@ -334,7 +340,7 @@ export function channelCapLimits(channel: OutreachChannel, address?: string | nu
   return CHANNEL_CAP_LIMITS[channel];
 }
 
-/** Los límites de UNA cuenta del espacio (outreach_channel_account_limits, 0040). null si no es de este workspace. */
+/** Los límites de UNA cuenta del espacio (outreach_channel_account_limits, canales_liberar_y_limites). null si no es de este workspace. */
 export async function getChannelLimits(tx: WorkspaceTx, accountId: string): Promise<ChannelLimits | null> {
   if (!isUuid(accountId)) return null;
   const { rows } = await tx.query<RawLimits & Record<string, unknown>>(
@@ -437,16 +443,16 @@ export async function createPendingChannelAccount(
 }
 
 // ---------------------------------------------------------------------
-// El callback del proveedor, desde la web (0039)
+// El callback del proveedor, desde la web (callback_de_canales)
 // ---------------------------------------------------------------------
 // La web es mc_app y no puede escribir un estado autenticado (el
 // disparador de 0037 §2.1). Lo hace por las dos operaciones con nombre
-// de 0039, que solo ven el workspace de la transacción. Quien llama ya
+// de callback_de_canales, que solo ven el workspace de la transacción. Quien llama ya
 // verificó el estado firmado y habló con el proveedor con su llave.
 
 export type ConnectResult =
   /**
-   * `replaced`: la fila del mismo perfil adoptó la cuenta nueva (0042) y
+   * `replaced`: la fila del mismo perfil adoptó la cuenta nueva (canales_identidad_y_rotacion) y
    * esta es la cuenta VIEJA de Unipile con sus avisos, para borrarlos.
    */
   | { status: 'connected'; accountId: string; reconnected: boolean; replaced: { providerAccountId: string; webhookIds: string[] } | null }
@@ -458,9 +464,9 @@ export type ConnectResult =
   | { status: 'taken'; inUse: boolean }
   /** No hay pendiente para ese nonce. `inUse`: la cuenta ya está viva (un aviso repetido): no se suelta. */
   | { status: 'unknown_state'; inUse: boolean }
-  /** sales.channels_release está soltando esa misma cuenta en el proveedor (0041): no se escribió nada. */
+  /** sales.channels_release está soltando esa misma cuenta en el proveedor (canales_reclamar_al_soltar): no se escribió nada. */
   | { status: 'releasing'; inUse: boolean }
-  /** El perfil ya está conectado en este espacio con otra cuenta de Unipile (0042): no se escribió nada. */
+  /** El perfil ya está conectado en este espacio con otra cuenta de Unipile (canales_identidad_y_rotacion): no se escribió nada. */
   | { status: 'duplicate'; accountId: string };
 
 export interface ChannelConnection {
@@ -480,7 +486,7 @@ export interface ChannelConnection {
 
 /**
  * Pasa la fila 'pending' del nonce a 'connected' (outreach_channel_connect,
- * 0042). Si el espacio ya tenía fila para esa cuenta (reconectar), revive
+ * canales_identidad_y_rotacion). Si el espacio ya tenía fila para esa cuenta (reconectar), revive
  * esa y borra la pendiente; si tenía el mismo PERFIL con otra cuenta de
  * Unipile, caído o desconectado, esa fila adopta la cuenta nueva
  * (`replaced`); conectado, responde 'duplicate'. 'taken' si la cuenta o el
@@ -566,13 +572,36 @@ export async function failPendingChannelAccount(
 }
 
 /**
+ * Al recibir el aviso de cuenta creada de un intento (su nonce firmado):
+ * la cuenta de Unipile queda anotada en la pendiente (canales_identidad_y_rotacion §8), antes de
+ * ligarla. Si la conexión no se completa y el borrado en Unipile falla,
+ * la conciliación del keepalive la reconoce como nuestra por aquí, sin
+ * mirar su `name`. Solo la pendiente de ese nonce, en el espacio de la
+ * transacción.
+ */
+export async function noteNotifiedAccount(
+  tx: WorkspaceTx,
+  input: { channel: ConnectableChannel; nonce: string; providerAccountId: string },
+): Promise<boolean> {
+  if (!NONCE_RE.test(input.nonce) || input.channel === 'email') return false;
+  const id = input.providerAccountId.trim();
+  if (id === '' || id.length > 256) return false;
+  const res = await tx.query(
+    `UPDATE outreach_channel_account SET notified_account_id = $3
+      WHERE provider = 'unipile' AND channel = $1 AND provider_account_id = $2 AND status = 'pending' RETURNING id`,
+    [input.channel, `${PENDING_ACCOUNT_PREFIX}${input.nonce}`, id],
+  );
+  return res.rows.length === 1;
+}
+
+/**
  * La ref del token de un Gmail VIVO del espacio (conectado, por
  * reconectar o con error), para reescribir el token nuevo en la MISMA ref
  * al reconectar: una fila por concesión.
  *
  * Una fila desconectada no presta su ref: puede estar en la cola de
  * sales.channels_release, que lee esa ref para revocar. El token nuevo va
- * a una ref nueva y outreach_channel_connect (0041) borra el viejo al
+ * a una ref nueva y outreach_channel_connect (canales_reclamar_al_soltar) borra el viejo al
  * revivir la fila.
  */
 export async function existingGmailSecretRef(tx: WorkspaceTx, email: string): Promise<string | null> {
@@ -635,7 +664,7 @@ export interface LiveChannelAccount {
   status: ChannelAccountStatus;
   displayName: string | null;
   /**
-   * Quién es la persona en el proveedor (connection_params.im.id, 0042):
+   * Quién es la persona en el proveedor (connection_params.im.id, canales_identidad_y_rotacion):
    * el webhook la compara con quien escribe para reconocer el eco de un
    * envío propio aunque el aviso no traiga account_info.
    */
@@ -692,7 +721,7 @@ export type ChannelBackNotice = ChannelDownNotice;
 /**
  * Unipile dice que la sesión volvió (OK, RECONNECTED: la persona resolvió
  * el reto): needs_reconnect o error → connected, por
- * outreach_channel_mark_ok (0042), y un aviso de éxito en la campana. Una
+ * outreach_channel_mark_ok (canales_identidad_y_rotacion), y un aviso de éxito en la campana. Una
  * cuenta que ya estaba conectada no se toca ni avisa.
  */
 export async function markChannelAccountOk(tx: WorkspaceTx, accountId: string, notice?: ChannelBackNotice): Promise<boolean> {
@@ -729,12 +758,12 @@ export interface InboundMessage {
   senderProviderId?: string | null;
 }
 
-/** Los canales con código de baja por respuesta: los mismos del CHECK de contact.opted_out_code (0043). */
+/** Los canales con código de baja por respuesta: los mismos del CHECK de contact.opted_out_code (contacto_codigo_de_baja). */
 export const REPLY_OPT_OUT_CHANNELS = ['email', 'linkedin', 'instagram_dm'] as const satisfies readonly ConnectableChannel[];
 export type ReplyOptOutChannel = (typeof REPLY_OPT_OUT_CHANNELS)[number];
 
 /**
- * El código que queda en contact.opted_out_code (0043) cuando una
+ * El código que queda en contact.opted_out_code (contacto_codigo_de_baja) cuando una
  * respuesta por ese canal pide la baja; null en un canal sin código (la
  * baja se aplica igual, solo sin motivo).
  */
@@ -792,7 +821,7 @@ export interface InboundResult {
  *     una respuesta que pide otro camino), los mismos estados cancelados
  *     (CANCELABLE_TOUCH_STATUSES), el mismo trato a un enrolamiento
  *     completo (pasa a replied) y el mismo aviso. Una baja deja en la
- *     ficha el código reply_optout:<canal> (0043: un código, nunca una
+ *     ficha el código reply_optout:<canal> (contacto_codigo_de_baja: un código, nunca una
  *     frase; la ficha lo traduce). Una misma respuesta deja la misma base
  *     llegue por el webhook o por el job. Lo que el despachador ya reclamó
  *     (processing) no se toca: él relee el enrolamiento en la transacción
@@ -859,7 +888,7 @@ export async function recordInboundMessage(tx: WorkspaceTx, m: InboundMessage): 
 /**
  * Los avisos que la web acaba de dar de alta en Unipile para una cuenta
  * conectada, con la huella del secreto que llevan, por
- * outreach_channel_set_webhooks (0040, 0042): las columnas son del
+ * outreach_channel_set_webhooks (canales_liberar_y_limites, canales_identidad_y_rotacion): las columnas son del
  * despachador, que los borra al soltar la cuenta y los renueva al rotar
  * el secreto.
  */
@@ -882,7 +911,7 @@ export async function channelWebhookCount(tx: WorkspaceTx, accountId: string): P
 
 /**
  * Desconectar: la fila queda en 'disconnected' y, por el disparador de
- * 0040, pendiente de soltar (released_at NULL). sales.channels_release
+ * canales_liberar_y_limites, pendiente de soltar (released_at NULL). sales.channels_release
  * (worker, mc_worker) revoca el permiso de Google y borra el token, o
  * borra la cuenta y sus avisos en Unipile, con la bitácora en
  * api_call_log. La web no puede: secret_ref y los avisos son del

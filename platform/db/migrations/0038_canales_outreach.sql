@@ -1,5 +1,5 @@
 -- =====================================================================
--- 0038 · Canales de outreach: bitácora de llamadas y keepalive (VEN-9)
+-- canales_outreach · Canales de outreach: bitácora de llamadas y keepalive (VEN-9)
 -- ---------------------------------------------------------------------
 -- Número: va detrás de 0037_outreach, que tampoco está aplicada en
 -- Supabase. El integrador las renumera juntas detrás de lo que main ya

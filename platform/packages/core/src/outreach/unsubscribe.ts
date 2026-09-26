@@ -15,7 +15,7 @@ import { createHash, randomBytes } from 'node:crypto';
 // intento de envío. No lleva ningún dato dentro. La base guarda solo su
 // sha256 en outbound_optout_link (0037 §4.5), escrito por el despachador
 // al reclamar el envío, y todo lo demás se resuelve desde ese hash:
-//   · public_optout_preview (0038) dice a quién va el enlace (la
+//   · public_optout_preview (entregabilidad) dice a quién va el enlace (la
 //     dirección enmascarada), quién lo envió (el nombre del workspace) y
 //     si quien lo abre con sesión es de ese workspace, para rechazar el
 //     clic desde la carpeta de enviados (docs/ventas-outreach.md §5.2);
@@ -75,7 +75,7 @@ export function optoutTokenHash(token: string): string {
  * Dice a quien abre el enlace para qué correo es, sin regalarle la
  * dirección entera a quien lo reciba reenviado. El dominio va entero: es
  * lo que la persona reconoce. La misma regla que public_optout_preview
- * (0038); esta es la referencia para las pruebas y para quien la necesite
+ * (entregabilidad); esta es la referencia para las pruebas y para quien la necesite
  * sin base.
  */
 export function maskEmailAddress(address: string): string {

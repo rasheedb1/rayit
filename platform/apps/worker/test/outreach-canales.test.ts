@@ -114,7 +114,7 @@ test('Gmail: el correo lleva el pie con la página de baja y la cabecera de UN C
   assert.match(sent.mime, new RegExp(`^List-Unsubscribe: <https://oncue\\.test/baja/${TOKEN}/un-clic>\\r$`, 'm'));
   assert.match(sent.mime, /^List-Unsubscribe-Post: List-Unsubscribe=One-Click\r$/m);
   // El pie es el de VEN-15: la PÁGINA de baja (un GET no da de baja a nadie) y la dirección postal.
-  assert.ok(sent.message.text.startsWith('Hola, Sofía.\n\n--\n'));
+  assert.ok(sent.message.text.startsWith('Hola, Sofía.\n\n-- \n'), 'el pie abre con el separador de firma «-- »');
   assert.ok(sent.message.text.includes(`https://oncue.test/baja/${TOKEN}`));
   assert.ok(!sent.message.text.includes('/un-clic'));
   assert.ok(sent.message.text.endsWith('Calle 93 # 11-26, Bogotá'));
@@ -140,11 +140,11 @@ test('Gmail: la respuesta en el hilo va al threadId con el Message-ID real en In
   assert.match(fake.sent[0]!.mime, /^In-Reply-To: <m1@mail\.gmail\.com>\r$/m);
 });
 
-test('Gmail sin GOOGLE_CLIENT_ID/SECRET: «canal no configurado», y sin gastar la cuenta', async () => {
+test('Gmail sin GOOGLE_OUTREACH_CLIENT_ID/SECRET: «canal no configurado», y sin gastar la cuenta', async () => {
   const real = buildChannels({ env: { APP_URL: 'https://oncue.test' }, secrets: new InMemorySecretStore() });
   assert.equal(real.senders.email!.configured(), false);
   assert.equal(real.readers.email!.configured(), false);
-  const conLlaves = buildChannels({ env: { APP_URL: 'https://oncue.test', GOOGLE_CLIENT_ID: 'x', GOOGLE_CLIENT_SECRET: 'y' }, secrets: new InMemorySecretStore() });
+  const conLlaves = buildChannels({ env: { APP_URL: 'https://oncue.test', GOOGLE_OUTREACH_CLIENT_ID: 'x', GOOGLE_OUTREACH_CLIENT_SECRET: 'y' }, secrets: new InMemorySecretStore() });
   assert.equal(conLlaves.senders.email!.configured(), true);
   // Si igual le llega un correo, espera como cuenta no disponible, sin tocar la cuenta.
   const r = await new GmailChannel({ secrets: secrets(NOW), oauth: null }).send(email());

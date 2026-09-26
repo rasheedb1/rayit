@@ -19,7 +19,7 @@ import { puedeCambiarLaPolitica } from "./permiso";
  * de 0037 (enable_outreach / disable_outreach), que además cancelan la
  * cola al apagar.
  *
- * Las tres piden ser 'owner' o 'admin' del workspace (0038 §7): la base
+ * Las tres piden ser 'owner' o 'admin' del workspace (entregabilidad §7): la base
  * lo exige igual, pero así el rechazo se explica en vez de ser un error.
  */
 
