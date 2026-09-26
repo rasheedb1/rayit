@@ -1586,6 +1586,90 @@ ficha: si la escribe un tercero en copia, la cadencia se detiene y una
 persona decide. Referido: se crea el contacto y se propone enrolarlo.
 Nada queda pausado para siempre.
 
+#### Cómo quedó (VEN-14)
+
+Migración `0064_bandejas.sql` (sin aplicar en Supabase: la aplica el
+integrador), seed `0008_demo_bandejas.sql` con su verify, y tres piezas:
+
+- **La intención** (`@mc/core/outreach/intent`, prompt en
+  `outreach/prompts/classify.md`). `LlmIntentClassifier` pide a
+  `claude-haiku-4-5-20251001` una salida estructurada (intención,
+  confianza, fecha de vuelta, referido y una frase), con temperatura 0 y
+  sin pensamiento extendido, sobre el mismo `LlmClient` del generador;
+  lo de fuera va entre etiquetas neutralizadas. Una sola regla de
+  confianza (`finalIntent`): por debajo de 0,7, `ambiguous`. Sin llave no
+  se clasifica (la bandeja dice «sin clasificar»); el clasificador falso
+  (`createFakeIntentClassifier`, reglas de palabras en español, inglés y
+  portugués, y el mismo detector de bajas de VEN-10) es para las pruebas,
+  la demo y `OUTREACH_WRITER=fake`.
+- **El job `outbound.intent`** (cada tres minutos, 0064). Primero devuelve
+  lo que tenía fecha: una pausa por «fuera de la oficina» vuelve a
+  `active`; un enfriamiento que terminó devuelve sus mensajes cancelados a
+  la bandeja de aprobación, replanificados desde ese día y retenidos con
+  `cooldown_over` (nada sale sin una persona; sin nada que devolver, la
+  cadencia queda completa y se avisa). Después clasifica lo entrante sin
+  clasificar y aplica los efectos en una transacción por mensaje
+  (`applyIntent`, `@mc/db`): **interesado** → el negocio pasa a «En
+  conversación» con `deal_move_stage` solo hacia delante, siguiente acción
+  «Responder hoy» con vencimiento al final del día local y aviso;
+  **ahora no** → el enrolamiento del hilo a `cooldown` con `resume_at` a
+  noventa días (`NOT_NOW_COOLDOWN_DAYS`) y aviso con la fecha; **fuera de
+  oficina** → `outbound_message.resume_at` con la fecha leída (sin fecha, a
+  la semana; tope de 120 días) y la cadencia en pausa hasta entonces; si
+  la respuesta llegó sin cabecera de respuesta automática y la había
+  detenido, sus pasos cancelados vuelven replanificados desde la fecha de
+  vuelta y el toque deja de contar como respondido; **baja** → la misma
+  baja que el detector (`applyReplyOptOut`, que ahora comparten las dos
+  puertas): las fichas del espacio de baja con `reply_optout:<canal>`, lo
+  suyo cancelado, y un tercero en copia no da de baja a nadie; **referido**
+  → `outbound_message.referral` con nombre, correo y cargo, y aviso; nada
+  se crea solo; **ambigua** → aviso para que una persona la lea. Cada
+  llamada deja su fila en `outbound_llm_call` (`classify`, con el
+  mensaje) y antes mira el tope diario; una respuesta ilegible del modelo
+  se registra, queda ambigua con confianza 0 y no se vuelve a pagar.
+  `outbound_message.intent_source` dice quién clasificó (`detector`,
+  `model`, `fake`, `person`).
+- **Las bandejas** (`@mc/db/queries/bandejas`, con la RLS de la web y el
+  workspace nombrado en cada lectura):
+  - `/ventas/aprobaciones`: los retenidos, uno por fila, con la empresa,
+    la persona, el paso y el canal, el mensaje completo y **por qué quedó
+    retenido** (la categoría —reglas de estilo y cifras, revisión
+    automática, calentamiento, revisión humana, enfriamiento, envío— con
+    la frase del motor, y si lo redactó la IA la nota del intento elegido
+    por dimensión, los riesgos y lo que el pre-vuelo no dejó pasar).
+    Aprobar y «editar y aprobar» van por `releaseHeldTouch` (las mismas
+    reglas de la ficha) y anotan quién y cuándo; «regenerar» deja la
+    petición con una pista cerrada para `outbound.generate` (en la demo la
+    redacta el redactor falso en el proceso) y la versión nueva vuelve a
+    la cola; «saltar» pide confirmación, deja el paso en `skipped` y la
+    cadencia sigue. Un intento sin confirmar se resuelve en la ficha, no
+    aquí. Teclado: j/k mueven la fila activa, a aprueba, e edita, r
+    regenera, s salta; en un campo de texto las teclas escriben. Los
+    avisos de un retenido llevan aquí (`/ventas/aprobaciones#fila-<id>`).
+  - `/ventas/bandeja`: los hilos (una ficha por un canal) con al menos una
+    respuesta, sin leer primero; la conversación completa con la
+    intención de cada respuesta y quién la clasificó, la fecha de vuelta
+    de un «fuera de la oficina» y «Crear contacto» para un referido.
+    Abrir el hilo lo marca leído. **Responder no envía desde la web**: deja
+    UN toque programado sin enrolamiento con `reply_to_message_id` (0064),
+    con el id que trae el formulario (el mismo envío repetido no crea otro
+    mensaje). El despachador lo envía en el hilo de ese mensaje (en correo,
+    como `email_reply` con In-Reply-To y «Re:»), solo por la cuenta que lo
+    recibió, con el pie de baja, y sin la política de la marca (el tope
+    de mensajes y los días entre uno y otro son para escribir en frío).
+    Los avisos de una respuesta llevan a su hilo.
+
+Decisiones que la integración tiene que conocer: `0064` pone
+`assert_reference_visible` en sus dos claves nuevas
+(`reply_to_message_id`, `referral_contact_id`) y un disparador que exige
+que la respuesta apunte a un mensaje entrante de la misma ficha, canal y
+espacio. `outbound_message` tiene un CHECK nuevo: una intención lleva
+`classified_at`. El enfriamiento usa los noventa días de §5.7, no
+`outbound_policy.cooldown_days_after_no`, que sigue siendo del «no» de
+una marca en la política. Las otras cadencias de la misma marca que una
+respuesta pausó (`stop_company_on_reply`) no se tocan: las reanuda una
+persona.
+
 ---
 
 ## 6. Las historias nuevas de Ventas
