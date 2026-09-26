@@ -49,7 +49,10 @@ test('una cifra con dígitos fuera de una marca se rechaza, aunque sea verdad', 
 
 test('los términos del perfil pueden llevar dígitos; sueltos, no', () => {
   assert.ok(perfilTerms(perfil).includes('Cold brew en casa en 3 pasos'));
-  assert.ok(perfilTerms(perfil).includes('25-34'));
+  // La franja de edad es término dicha como edad, no suelta.
+  assert.ok(perfilTerms(perfil).includes('25-34 años'));
+  assert.ok(perfilTerms(perfil).includes('franja de 25-34'));
+  assert.ok(!perfilTerms(perfil).includes('25-34'));
   assert.ok(!perfilTerms(perfil).includes('3'));
   const suelto = verifyNarrative(BUENA.replace('«Cold brew en casa en 3 pasos»', 'mi video de 3 pasos'), perfil);
   assert.deepEqual(suelto.issues, [{ code: 'bare_number', text: '3' }]);
@@ -117,6 +120,15 @@ test('la palabra pegada a una marca tiene que ser lo que esa cifra mide', () => 
   // Lo que no es una palabra de unidad no se juzga: «mi mediana», «de quienes me siguen».
   assert.equal(con('Hice [claim:video-000000000d01-x] mi mediana.').ok, true);
   assert.equal(con('[claim:audiencia-tiktok-genero-f] de mis seguidores son mujeres.').ok, true);
+  // Con relleno de por medio («de», «nuevos», «más») se juzga igual, en una ventana de tres palabras.
+  assert.deepEqual(con('Tengo [claim:mediana-tiktok] de seguidores.').issues, [
+    { code: 'unit_mismatch', id: 'mediana-tiktok', word: 'seguidores', unit: 'views' },
+  ]);
+  assert.deepEqual(con('Gané [claim:mediana-tiktok] nuevos seguidores.').issues.map((i) => i.code), ['unit_mismatch']);
+  assert.deepEqual(con('Sumé [claim:mediana-tiktok] más de seguidores.').issues.map((i) => i.code), ['unit_mismatch']);
+  assert.equal(con(`Gané [claim:${seguidores.id}] nuevos seguidores.`).ok, true);
+  // Pasada la ventana, o con un determinante en medio, ya no es la unidad de la cifra.
+  assert.equal(con('Hice [claim:mediana-tiktok] de de de seguidores.').ok, true);
   // La vista previa subraya la palabra, no la marca.
   const texto = 'Tengo [claim:mediana-tiktok] seguidores.';
   const [sp] = narrativeIssueSpans(texto, verifierContext(perfil));
@@ -124,11 +136,36 @@ test('la palabra pegada a una marca tiene que ser lo que esa cifra mide', () => 
   assert.equal(sp!.claimId, 'mediana-tiktok');
 });
 
+test('lo pegado a una marca sin espacio multiplica la cifra: se rechaza', () => {
+  const con = (frase: string) => verifyNarrative(BUENA.replace('Soy Laura y cocino fácil.', frase), perfil, { paragraphs: null });
+  assert.deepEqual(con('Tengo [claim:mediana-tiktok]k views.').issues, [{ code: 'glued_suffix', id: 'mediana-tiktok', text: 'k' }]);
+  assert.deepEqual(con('Tengo [claim:mediana-tiktok]M de views.').issues, [{ code: 'glued_suffix', id: 'mediana-tiktok', text: 'M' }]);
+  // «x2» es un solo problema, no también un dígito suelto.
+  assert.deepEqual(con('Mis views son [claim:mediana-tiktok]x2.').issues, [{ code: 'glued_suffix', id: 'mediana-tiktok', text: 'x2' }]);
+  // La puntuación sí puede ir pegada.
+  assert.equal(con('Mi mediana: [claim:mediana-tiktok], en TikTok.').ok, true);
+  const texto = 'Tengo [claim:mediana-tiktok]k views.';
+  const [sp] = narrativeIssueSpans(texto, verifierContext(perfil));
+  assert.equal(texto.slice(sp!.start, sp!.end), 'k');
+});
+
+test('una franja de edad solo es término dicha como edad; «puesto uno» es un puesto', () => {
+  const con = (frase: string) => verifyNarrative(BUENA.replace('Soy Laura y cocino fácil.', frase), perfil, { paragraphs: null });
+  assert.deepEqual(con('Tengo 18-24 campañas cerradas con marcas grandes.').issues, [
+    { code: 'bare_number', text: '18' }, { code: 'bare_number', text: '24' },
+  ]);
+  assert.equal(con('Me sigue sobre todo la franja de 18-24 años.').ok, true);
+  assert.equal(con('Hablo con gente de 18-24 años.').ok, true);
+  for (const f of ['Estoy en el puesto uno.', 'Quedé en el lugar uno.', 'Llegué a la posición uno.']) {
+    assert.deepEqual(con(f).issues.map((i) => i.code), ['number_word'], f);
+  }
+});
+
 test('los verbos que multiplican y los puestos de ranking también son cifras sin marca', () => {
   const con = (frase: string) => verifyNarrative(BUENA.replace('Soy Laura y cocino fácil.', frase), perfil, { paragraphs: null });
   // Lo que pasó en la edición real de r2.
   assert.deepEqual(con('Este año cuadrupliqué mis views.').issues, [{ code: 'number_word', text: 'cuadrupliqué' }]);
-  for (const verbo of ['dupliqué', 'triplicó', 'duplicar', 'multipliqué', 'Multiplicamos', 'quintuplicaron']) {
+  for (const verbo of ['dupliqué', 'triplicó', 'duplicar', 'multipliqué', 'Multiplicamos', 'quintuplicaron', 'cuadriplicó', 'cuadripliqué']) {
     assert.deepEqual(con(`Mis views se ${verbo} en un mes.`).issues.map((i) => i.code), ['number_word'], verbo);
   }
   assert.deepEqual(con('Soy la número uno de Colombia en recetas.').issues, [{ code: 'number_word', text: 'número uno' }]);

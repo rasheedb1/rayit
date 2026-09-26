@@ -30,8 +30,13 @@
  *     suya («[claim:mediana-tiktok] seguidores», cuando es una mediana de
  *     views) → rechazada (unit_mismatch). La cifra es real, pero el texto
  *     que se copia a un correo no lleva el globo que dice qué es. Se mira
- *     solo la palabra pegada a la marca, contra un vocabulario cerrado
- *     por idioma (UNIDADES): «[claim:x] de mis seguidores» no se juzga.
+ *     la primera palabra que no sea un relleno de SALTOS_TRAS_MARCA
+ *     («de», «nuevos», «más»), en una ventana de tres palabras, contra un
+ *     vocabulario cerrado por idioma (UNIDADES): «[claim:x] de
+ *     seguidores» se juzga, «[claim:x] de mis seguidores» no;
+ *   · una letra o un número pegado a una marca, sin espacio
+ *     («[claim:x]k», «[claim:x]M», «[claim:x]x2») → rechazado
+ *     (glued_suffix): multiplica la cifra y el globo no lo dice.
  *
  * Lo que sigue sin poder comprobar: una afirmación sin número («soy la
  * más vista de Colombia»). El prompt la prohíbe y el juez de VEN-12 la
@@ -132,13 +137,13 @@ export const CANTIDADES: Readonly<Record<NarrativeLanguage, {
   es: {
     words: [...NUMBER_WORDS_ES, ...ORDINALES_ES, ...NUMERALES_EN],
     stems: [
-      'dupli(?:c|qu)', 'tripli(?:c|qu)', 'cuadrupli(?:c|qu)', 'quintupli(?:c|qu)', 'sextupli(?:c|qu)', 'multipli(?:c|qu)', 'dobl',
+      'dupli(?:c|qu)', 'tripli(?:c|qu)', 'cuadrupli(?:c|qu)', 'cuadripli(?:c|qu)', 'quintupli(?:c|qu)', 'sextupli(?:c|qu)', 'multipli(?:c|qu)', 'dobl',
       'doubl', 'tripl', 'quadrupl',
       '(?:treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa)(?:y|i)',
     ],
     phrases: [
       'por ciento', 'número uno', 'numero uno', 'primer lugar', 'primer puesto', 'primera posición', 'primera posicion',
-      'primer sitio', 'top', 'un par', 'cuarta parte', 'tercera parte', 'quinta parte', 'décima parte', 'decima parte', 'tres cuartos',
+      'primer sitio', 'puesto uno', 'lugar uno', 'posición uno', 'posicion uno', 'top', 'un par', 'cuarta parte', 'tercera parte', 'quinta parte', 'décima parte', 'decima parte', 'tres cuartos',
     ],
     allowed: ['primera persona', 'segunda persona', 'tercera persona'],
   },
@@ -172,8 +177,24 @@ export const UNIDADES: Readonly<Record<NarrativeLanguage, Readonly<Record<string
   },
 };
 
-/** La palabra que va justo después de una marca, separada solo por espacios. */
+/** Una palabra detrás de una marca (o de la palabra anterior), separada solo por espacios. */
 const PALABRA_TRAS_MARCA_RE = /^[ \t\u00a0]+(\p{L}+)/u;
+
+/**
+ * Las palabras de relleno que pueden ir entre una marca y su unidad sin
+ * cambiar lo que la cifra dice que es: «[claim:x] de seguidores»,
+ * «[claim:x] nuevos seguidores». Lista cerrada por idioma. Un
+ * determinante («mis», «las») corta la ventana: «[claim:x] de mis
+ * seguidores» habla de una parte, no de la unidad de la cifra.
+ */
+export const SALTOS_TRAS_MARCA: Readonly<Record<NarrativeLanguage, readonly string[]>> = {
+  es: ['de', 'nuevos', 'nuevas', 'más', 'mas'],
+};
+/** Cuántas palabras detrás de la marca se miran, contando las de relleno. */
+const VENTANA_UNIDAD = 3;
+
+/** Letras o números pegados a una marca, sin espacio: «[claim:x]k». */
+const PEGADO_RE = /^[\p{L}\p{N}]+/u;
 
 const numberWordRes = new Map<NarrativeLanguage, RegExp>();
 /**
@@ -212,6 +233,8 @@ export type NarrativeIssue =
   | { code: 'placeholder'; text: string }
   /** `word` va pegada a [claim:id], pero la cifra mide `unit` (Claim.unit). */
   | { code: 'unit_mismatch'; id: string; word: string; unit: string }
+  /** `text` va pegado a [claim:id] sin espacio: «k», «M», «x2». */
+  | { code: 'glued_suffix'; id: string; text: string }
   | { code: 'no_claims' };
 
 export interface VerifyOptions {
@@ -275,7 +298,13 @@ export function perfilTerms(perfil: PerfilComercial): string[] {
     add(c.companyName);
   }
   perfil.rates?.lines.forEach((l) => add(l.label));
-  for (const a of perfil.audience.lines) if (a.dimension === 'age') add(a.bucket);
+  // Una franja de edad solo es término dicha como edad («18-24 años», «la
+  // franja de 18-24»): suelta, «18-24 campañas» sería una cifra inventada.
+  for (const a of perfil.audience.lines) {
+    if (a.dimension !== 'age') continue;
+    add(`${a.bucket} años`);
+    add(`franja de ${a.bucket}`);
+  }
   for (const h of [...perfil.performance.medians.map((m) => m.cutHours), ...perfil.performance.top.map((v) => v.cutHours)]) {
     add(CUT_PHRASE_ES[h]);
   }
@@ -319,10 +348,10 @@ export function verifierContext(perfil: PerfilComercial, language: NarrativeLang
 export interface IssueSpan {
   start: number;
   end: number;
-  code: 'unknown_claim' | 'malformed_marker' | 'bare_number' | 'number_word' | 'placeholder' | 'unit_mismatch';
-  /** El texto tal cual (para unknown_claim, el id; para unit_mismatch, la palabra). */
+  code: 'unknown_claim' | 'malformed_marker' | 'bare_number' | 'number_word' | 'placeholder' | 'unit_mismatch' | 'glued_suffix';
+  /** El texto tal cual (para unknown_claim, el id; para unit_mismatch, la palabra; para glued_suffix, lo pegado). */
   text: string;
-  /** Solo unit_mismatch: la marca a la que va pegada la palabra y la unidad que de verdad mide. */
+  /** unit_mismatch y glued_suffix: la marca a la que va pegada la palabra; unit_mismatch, la unidad que de verdad mide. */
   claimId?: string;
   unit?: string;
 }
@@ -345,6 +374,8 @@ export function narrativeIssueSpans(text: string, ctx: VerifierContext): IssueSp
   const ids = new Set(ctx.ids);
   const lang = ctx.language ?? DEFAULT_NARRATIVE_LANGUAGE;
   const unidades = UNIDADES[lang];
+  const saltos = SALTOS_TRAS_MARCA[lang];
+  const pegados: [number, number][] = [];
   for (const m of text.matchAll(CLAIM_MARKER_RE)) {
     const id = m[1]!;
     const fin = m.index + m[0].length;
@@ -352,18 +383,36 @@ export function narrativeIssueSpans(text: string, ctx: VerifierContext): IssueSp
       spans.push({ start: m.index, end: fin, code: 'unknown_claim', text: id });
       continue;
     }
-    // La palabra pegada a la marca: si es de unidad, tiene que ser la de la cifra.
-    const tras = PALABRA_TRAS_MARCA_RE.exec(text.slice(fin));
-    const palabra = tras?.[1];
-    if (!palabra) continue;
-    const suya = ctx.units[id];
-    const dice = Object.hasOwn(unidades, palabra.toLowerCase()) ? unidades[palabra.toLowerCase()] : undefined;
-    if (dice !== undefined && dice !== suya) {
-      const start = fin + tras![0].length - palabra.length;
-      spans.push({ start, end: start + palabra.length, code: 'unit_mismatch', text: palabra, claimId: id, unit: suya ?? '' });
+    // Lo pegado a la marca sin espacio («k», «M», «x2») multiplica la cifra.
+    const pegado = PEGADO_RE.exec(text.slice(fin));
+    if (pegado) {
+      spans.push({ start: fin, end: fin + pegado[0].length, code: 'glued_suffix', text: pegado[0], claimId: id });
+      pegados.push([fin, fin + pegado[0].length]);
+      continue;
+    }
+    // La primera palabra que no es de relleno, en una ventana de tres: si
+    // es de unidad, tiene que ser la de la cifra.
+    let pos = fin;
+    for (let n = 0; n < VENTANA_UNIDAD; n++) {
+      const tras = PALABRA_TRAS_MARCA_RE.exec(text.slice(pos));
+      const palabra = tras?.[1];
+      if (!tras || !palabra) break;
+      pos += tras[0].length;
+      const baja = palabra.toLowerCase();
+      if (saltos.includes(baja)) continue;
+      const suya = ctx.units[id];
+      const dice = Object.hasOwn(unidades, baja) ? unidades[baja] : undefined;
+      if (dice !== undefined && dice !== suya) {
+        spans.push({ start: pos - palabra.length, end: pos, code: 'unit_mismatch', text: palabra, claimId: id, unit: suya ?? '' });
+      }
+      break;
     }
   }
-  const sinMarcas = tapar(text, CLAIM_MARKER_RE);
+  // Lo pegado ya es un problema: no se cuenta otra vez como dígito o cantidad.
+  const sinMarcas = pegados.reduce(
+    (t, [a, b]) => t.slice(0, a) + ' '.repeat(b - a) + t.slice(b),
+    tapar(text, CLAIM_MARKER_RE),
+  );
   for (const m of sinMarcas.matchAll(MARKER_LIKE_RE)) {
     spans.push({ start: m.index, end: m.index + m[0].length, code: 'malformed_marker', text: m[0] });
   }
@@ -410,10 +459,10 @@ export function verifyNarrativeWith(text: string, ctx: VerifierContext, opts: Ve
   }
   // Un problema por texto distinto, agrupados por tipo en el orden de siempre.
   const spans = narrativeIssueSpans(t, ctx);
-  for (const code of ['unknown_claim', 'malformed_marker', 'unit_mismatch', 'bare_number', 'number_word', 'placeholder'] as const) {
+  for (const code of ['unknown_claim', 'malformed_marker', 'unit_mismatch', 'glued_suffix', 'bare_number', 'number_word', 'placeholder'] as const) {
     const vistos = new Set<string>();
     for (const sp of spans) {
-      const clave = code === 'unit_mismatch' ? `${sp.claimId} ${sp.text.toLowerCase()}` : sp.text;
+      const clave = code === 'unit_mismatch' || code === 'glued_suffix' ? `${sp.claimId} ${sp.text.toLowerCase()}` : sp.text;
       if (sp.code !== code || vistos.has(clave)) continue;
       vistos.add(clave);
       issues.push(
@@ -421,7 +470,9 @@ export function verifyNarrativeWith(text: string, ctx: VerifierContext, opts: Ve
           ? { code, id: sp.text }
           : code === 'unit_mismatch'
             ? { code, id: sp.claimId!, word: sp.text, unit: sp.unit! }
-            : { code, text: sp.text },
+            : code === 'glued_suffix'
+              ? { code, id: sp.claimId!, text: sp.text }
+              : { code, text: sp.text },
       );
     }
   }
@@ -849,6 +900,8 @@ export function describeIssues(issues: readonly NarrativeIssue[]): string {
         case 'placeholder': return `Quedó un hueco sin llenar: «${i.text}».`;
         case 'unit_mismatch':
           return `Después de [claim:${i.id}] escribiste «${i.word}», que no es lo que mide esa cifra (mira su etiqueta en CIFRAS): cámbialo por lo que dice la etiqueta o quítalo.`;
+        case 'glued_suffix':
+          return `Pegaste «${i.text}» a [claim:${i.id}] sin espacio: la marca ya es la cifra entera. Quítalo o sepáralo con un espacio.`;
         case 'no_claims': return 'No citaste ninguna cifra: usa las marcas de la lista.';
       }
     })

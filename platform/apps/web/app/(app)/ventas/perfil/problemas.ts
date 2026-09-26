@@ -33,6 +33,11 @@ export function describirProblemas(
         out.add(e.unit_mismatch(i.word, ficha ? `${FICHA_ABRE}${ficha}${FICHA_CIERRA}` : e.cifraAnterior, mide));
         break;
       }
+      case "glued_suffix": {
+        const ficha = fichaDe?.(i.id);
+        out.add(e.glued_suffix(i.text, ficha ? `${FICHA_ABRE}${ficha}${FICHA_CIERRA}` : e.cifraAnterior));
+        break;
+      }
       case "too_long": out.add(e.too_long(maxTexto)); break;
       default: out.add(e[i.code]);
     }

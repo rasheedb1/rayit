@@ -167,6 +167,9 @@ export const MESSAGES = {
        */
       unit_mismatch: (palabra: string, cifra: string, mide: string) =>
         `«${palabra}» no es lo que mide ${cifra}: esa cifra es ${mide}. Cambia la palabra por lo que la cifra mide o quítala.`,
+      /** `texto` va pegado a la cifra sin espacio («k», «M», «x2»); `cifra`, como en unit_mismatch. */
+      glued_suffix: (texto: string, cifra: string) =>
+        `«${texto}» va pegado a ${cifra} y cambia lo que dice: esa cifra ya está entera. Quítalo o sepáralo con un espacio.`,
       cifraAnterior: "la cifra que va antes",
       /** Qué mide una cifra, por su unidad (Claim.unit); una moneda ISO-4217 es `dinero`. */
       mide: {
