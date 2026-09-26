@@ -121,10 +121,10 @@ test('terminado cuando: un retenido se aprueba desde la bandeja, queda programad
   assert.equal(cola[1]!.regenerable, false, 'una respuesta en el hilo no: la redacta el paso');
   // Lo ajeno (otro espacio no ve ni aprueba) se prueba con la RLS de verdad en packages/db/test/bandejas.test.ts.
 
-  // Aprobar tal cual: queda programado, con quién y cuándo.
+  // Aprobar tal cual: queda programado, con quién y cuándo. El envío del espacio está encendido (sendingOff: false).
   const ahora = bogota('2026-09-23', '08:00');
   assert.deepEqual(await comoLaWeb(w.id, (tx) => approveQueuedTouch(tx, { touchId: primero!.id, userId: null, now: ahora })), {
-    ok: true, approvedAt: ahora, heldReason: 'needs_review',
+    ok: true, approvedAt: ahora, sendingOff: false,
   });
   // Editar y aprobar: sale lo que dejó la persona; lo que rompe una regla no se aprueba.
   assert.deepEqual(
@@ -135,7 +135,7 @@ test('terminado cuando: un retenido se aprueba desde la bandeja, queda programad
     await comoLaWeb(w.id, (tx) =>
       approveQueuedTouch(tx, { touchId: segundo!.id, subject: null, body: 'Te dejo una idea concreta para la temporada.', userId: null, now: ahora }),
     ),
-    { ok: true, approvedAt: ahora, heldReason: 'needs_review' },
+    { ok: true, approvedAt: ahora, sendingOff: false },
   );
   // Saltar: el tercero no sale y no frena a nadie.
   assert.deepEqual(await comoLaWeb(w.id, (tx) => skipQueuedTouch(tx, tercero!.id, ahora)), { ok: true });

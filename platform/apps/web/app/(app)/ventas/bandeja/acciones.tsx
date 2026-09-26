@@ -4,12 +4,13 @@ import { useRouter } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmInline } from "@/components/ui/confirm-inline";
+import { DateInput } from "@/components/ui/date-input";
 import { Field, Select } from "@/components/ui/field";
 import { Segmented } from "@/components/ui/segmented";
 import { Aviso } from "../../_lib/aviso";
 import { corregirIntencion, marcarHecho, type ResultadoBandeja } from "./actions";
 import { MESSAGES, VISTAS, type Intencion, type VistaBandeja } from "./messages";
-import { enfocarRespuesta } from "./responder";
+import { enfocarRespuesta, ESCRITORIO } from "./responder";
 
 const t = MESSAGES;
 
@@ -25,20 +26,26 @@ function escribiendo(target: EventTarget | null): boolean {
  * siguiente y el anterior de la lista, r lleva a «Tu respuesta», e marca
  * el hilo como hecho y Escape vuelve a la lista (y, dentro de la
  * respuesta, suelta el campo). En un campo de texto las letras escriben.
- * La leyenda solo se ve con teclado (desde sm).
+ * La leyenda solo se ve con teclado (desde sm). Si la página abrió el
+ * hilo sola (activoSoloEscritorio), en un teléfono no se ve: j abre el
+ * primero de la lista, no el segundo.
  */
-export function AtajosBandeja({ hrefs, activo, listaHref }: { hrefs: string[]; activo: number; listaHref: string }) {
+export function AtajosBandeja({
+  hrefs, activo, listaHref, activoSoloEscritorio = false,
+}: { hrefs: string[]; activo: number; listaHref: string; activoSoloEscritorio?: boolean }) {
   const router = useRouter();
-  const estado = useRef({ hrefs, activo, listaHref });
+  const estado = useRef({ hrefs, activo, listaHref, activoSoloEscritorio });
   useLayoutEffect(() => {
-    estado.current = { hrefs, activo, listaHref };
+    estado.current = { hrefs, activo, listaHref, activoSoloEscritorio };
   });
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       // Lo que ya atendió otro (Escape en una confirmación abierta) no es un atajo.
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
-      const { hrefs: lista, activo: i, listaHref: volver } = estado.current;
+      const { hrefs: lista, listaHref: volver, activoSoloEscritorio: soloEscritorio } = estado.current;
+      const enEscritorio = typeof window.matchMedia === "function" && window.matchMedia(ESCRITORIO).matches;
+      const i = soloEscritorio && !enEscritorio ? -1 : estado.current.activo;
       if (e.key === "Escape") {
         if (escribiendo(e.target)) {
           (e.target as HTMLElement).blur();
@@ -60,6 +67,8 @@ export function AtajosBandeja({ hrefs, activo, listaHref }: { hrefs: string[]; a
         return;
       }
       if (e.key === "e") {
+        // La conversación que no se ve (abierta sola, en un teléfono) no se marca a ciegas.
+        if (i < 0) return;
         const boton = document.querySelector<HTMLElement>('[data-accion="hecho"] button');
         if (!boton) return;
         e.preventDefault();
@@ -122,13 +131,16 @@ export function MarcarHecha({
 /**
  * «Corregir» la intención de una respuesta: la persona dice qué pide (la
  * ambigua, o una que la IA leyó mal) y se aplican los mismos efectos que
- * aplica el job. Una baja pide confirmación antes: no se deshace.
+ * aplica el job. Una baja pide confirmación antes: no se deshace. A «fuera
+ * de la oficina», con la fecha de vuelta (opcional: vacía, se lee del
+ * mensaje).
  */
 export function CorregirIntencion({
   messageId, actual, opciones,
 }: { messageId: string; actual: Intencion | null; opciones: Array<{ value: Intencion; label: string }> }) {
   const [abierto, setAbierto] = useState(false);
   const [elegida, setElegida] = useState<Intencion>(actual && actual !== "ambiguous" ? actual : "interested");
+  const [vuelta, setVuelta] = useState("");
   const [pending, start] = useTransition();
   const [resultado, setResultado] = useState<ResultadoBandeja | null>(null);
   // Un div y no un form: la confirmación de la baja (ConfirmInline) es su propio formulario.
@@ -139,7 +151,7 @@ export function CorregirIntencion({
 
   function aplicar(intent: Intencion) {
     start(async () => {
-      const r = await corregirIntencion({ messageId, intent });
+      const r = await corregirIntencion({ messageId, intent, ...(intent === "ooo" ? { returnDate: vuelta } : {}) });
       setResultado(r);
       if (r.ok) setAbierto(false);
     });
@@ -173,6 +185,11 @@ export function CorregirIntencion({
       <Field label={t.corregir.label} help={t.corregir.ayuda}>
         <Select name="intent" value={elegida} onChange={(e) => setElegida(e.target.value as Intencion)} options={opciones} />
       </Field>
+      {elegida === "ooo" ? (
+        <Field label={t.corregir.vuelta} help={t.corregir.vueltaAyuda}>
+          <DateInput name="returnDate" value={vuelta} onChange={setVuelta} />
+        </Field>
+      ) : null}
       <Aviso size="xs" message={error} />
       <div className="flex flex-wrap items-start gap-2">
         {elegida === "unsubscribe" ? (

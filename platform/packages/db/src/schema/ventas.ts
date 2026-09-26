@@ -433,4 +433,6 @@ export const outboundTouch = pgTable('outbound_touch', {
   replyToMessageId: uuid('reply_to_message_id').references((): AnyPgColumn => outboundMessage.id, { onDelete: 'set null' }),
   /** Una respuesta de la bandeja que no salió y la persona ya vio (0065). */
   inboxDismissedAt: timestamptz('inbox_dismissed_at'),
+  /** El motivo con el que estaba retenido cuando una persona lo aprobó: «Deshacer» lo restaura (0066). */
+  approvedFromReason: text('approved_from_reason'),
 });

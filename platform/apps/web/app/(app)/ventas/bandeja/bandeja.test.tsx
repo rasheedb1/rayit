@@ -35,7 +35,7 @@ import { ListaHilos } from "./lista";
 import { MESSAGE_INTENTS } from "@mc/core/outreach/intent";
 import { INTENCIONES, MESSAGES } from "./messages";
 import { CrearReferido, Respuestas } from "./responder";
-import { conversacionVista, hiloHref, hiloVista, intencionClave } from "./vista";
+import { columnaListaClase, conversacionVista, hiloHref, hiloVista, intencionClave } from "./vista";
 
 const f = formatterFor({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" });
 const t = MESSAGES;
@@ -81,13 +81,14 @@ function conv(extra: Partial<InboxConversation> = {}): InboxConversation {
     replyBlock: null,
     sendingOff: false,
     done: false,
+    unread: 0,
     sequenceId: SEQ,
     ...extra,
   };
 }
 
 const vista = (c: InboxConversation, clasificador: "model" | "fake" | "off" | "unknown" = "model") =>
-  conversacionVista(c, f, { sinLeer: 0, clasificador });
+  conversacionVista(c, f, { clasificador });
 
 beforeEach(() => {
   for (const m of [responder, marcarLeido, crearReferido, cancelarRespuesta, descartarRespuesta, corregirIntencion, marcarHecho]) m.mockReset();
@@ -187,7 +188,64 @@ describe("la lista", () => {
   });
 });
 
+describe("la lista no se estira ni se esconde debajo de la conversación", () => {
+  const hilo = (n: number, extra: Partial<InboxThread> = {}): InboxThread => ({
+    contactId: `00000140-0000-4000-8000-0000000000d${n}`, channel: "email", contactName: `Persona ${n}`, companyId: COMPANY,
+    companyName: "Vitalé", lastAt: new Date("2026-09-23T20:00:00Z"), lastDirection: "inbound",
+    lastSnippet: "Un extracto larguísimo ".repeat(40), unread: 1, lastIntent: null, done: false, ...extra,
+  });
+
+  it("la columna es una rejilla con una columna que puede encogerse, en el teléfono y en escritorio", () => {
+    // jsdom no mide cajas: el ancho real lo mide scripts/ancho-movil.mjs (TOPE). Aquí se fija la regla.
+    expect(columnaListaClase(false).split(" ")).toContain("grid-cols-[minmax(0,1fr)]");
+    expect(columnaListaClase(true).split(" ")).toContain("lg:grid-cols-[minmax(0,1fr)]");
+    for (const visible of [false, true]) expect(columnaListaClase(visible).split(" ")).toContain("min-w-0");
+  });
+
+  it("la lista, cada fila y cada enlace pueden encogerse, así que el extracto se corta", () => {
+    const { container } = render(<ListaHilos hilos={[hiloVista(hilo(1), f, false)]} />);
+    const nav = screen.getByRole("navigation", { name: t.lista.label });
+    expect(nav.className).toContain("min-w-0");
+    for (const el of [container.querySelector("ul")!, container.querySelector("li")!, screen.getByRole("link")]) {
+      expect(el.className.split(" ")).toContain("min-w-0");
+    }
+    expect(screen.getByText(/Un extracto larguísimo/).className).toContain("truncate");
+  });
+
+  it("la que la página abrió sola solo se marca en escritorio; la elegida, siempre", () => {
+    render(
+      <ListaHilos hilos={[hiloVista(hilo(1), f, true, "pendientes", true), hiloVista(hilo(2), f, false, "pendientes", true)]} />,
+    );
+    const [sola, otra] = screen.getAllByRole("link");
+    expect(sola).not.toHaveAttribute("aria-current");
+    expect(sola!.className).toContain("lg:bg-hover");
+    expect(sola!.className.split(" ")).not.toContain("bg-hover");
+    expect(otra).not.toHaveAttribute("aria-current");
+  });
+});
+
 describe("el teclado", () => {
+  it("en un teléfono, con el hilo abierto solo, j abre el primero de la lista y e no marca a ciegas", async () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((q: string) => ({ matches: false, media: q })) as unknown as typeof window.matchMedia;
+    try {
+      render(
+        <>
+          <AtajosBandeja hrefs={["/a", "/b"]} activo={0} activoSoloEscritorio listaHref="/ventas/bandeja" />
+          <Conversacion c={vista(conv())} volverHref="/ventas/bandeja" />
+        </>,
+      );
+      fireEvent.keyDown(window, { key: "j" });
+      expect(router.push).toHaveBeenLastCalledWith("/a");
+      await act(async () => {
+        fireEvent.keyDown(window, { key: "e" });
+      });
+      expect(marcarHecho).not.toHaveBeenCalled();
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
   it("j y k abren el hilo siguiente y el anterior; r lleva a la respuesta; e marca hecha; Esc vuelve a la lista", async () => {
     marcarHecho.mockResolvedValue({ ok: true, notice: t.conversacion.hechaAviso });
     render(
@@ -329,17 +387,55 @@ describe("el referido", () => {
   });
 });
 
+describe("cada hilo tiene su propio estado", () => {
+  it("pasar a otro hilo no arrastra el borrador, el id del envío ni los avisos", async () => {
+    marcarHecho.mockResolvedValue({ ok: true, notice: t.conversacion.hechaAviso });
+    const { rerender } = render(<Conversacion c={vista(conv())} volverHref="/ventas/bandeja" />);
+    fireEvent.change(screen.getByLabelText(t.responder.label), { target: { value: "Borrador para Sofía" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.conversacion.marcarHecha }));
+    });
+    expect(screen.getByText(t.conversacion.hechaAviso)).toBeInTheDocument();
+
+    const OTRO = "00000140-0000-4000-8000-0000000000d9";
+    rerender(<Conversacion c={vista(conv({ contactId: OTRO, contactName: "Julián Mesa" }))} volverHref="/ventas/bandeja" />);
+    expect(screen.getByLabelText(t.responder.label)).toHaveValue("");
+    expect(screen.queryByText(t.conversacion.hechaAviso)).toBeNull();
+
+    responder.mockResolvedValue({ ok: true, notice: t.responder.enviada });
+    fireEvent.change(screen.getByLabelText(t.responder.label), { target: { value: "Hola, Julián" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.responder.enviar }));
+    });
+    expect(responder).toHaveBeenCalledWith(expect.objectContaining({ contactId: OTRO, body: "Hola, Julián" }));
+  });
+
+  it("los no leídos salen de la propia conversación, no de la fila de la lista", () => {
+    expect(vista(conv({ unread: 3 })).sinLeer).toBe(3);
+  });
+
+  it("«Crear contacto» guarda su ancho: no se estira como un campo", () => {
+    const c = conv({
+      messages: [mensaje(1, { intent: "referral", intentSource: "model", referral: { name: "Ana", email: "ana@vitale.test", role: null } })],
+    });
+    render(<Conversacion c={vista(c)} volverHref="/ventas/bandeja" />);
+    const boton = screen.getByRole("button", { name: t.referido.crear });
+    expect(boton.parentElement!.tagName).toBe("DIV");
+    expect(boton.parentElement!.className).not.toContain("grid");
+  });
+});
+
 describe("marcar leído", () => {
   it("una conversación abierta sola (la primera sin leer) no se marca leída si no se ve", () => {
     const original = window.matchMedia;
     window.matchMedia = ((q: string) => ({ matches: false, media: q })) as unknown as typeof window.matchMedia;
     try {
-      render(<Conversacion c={conversacionVista(conv(), f, { sinLeer: 2, clasificador: "model", implicita: true })} volverHref="/ventas/bandeja" />);
+      render(<Conversacion c={conversacionVista(conv({ unread: 2 }), f, { clasificador: "model", implicita: true })} volverHref="/ventas/bandeja" />);
       expect(marcarLeido).not.toHaveBeenCalled();
     } finally {
       window.matchMedia = original;
     }
-    render(<Conversacion c={conversacionVista(conv(), f, { sinLeer: 2, clasificador: "model" })} volverHref="/ventas/bandeja" />);
+    render(<Conversacion c={conversacionVista(conv({ unread: 2 }), f, { clasificador: "model" })} volverHref="/ventas/bandeja" />);
     expect(marcarLeido).toHaveBeenCalledWith({ contactId: CONTACT, channel: "email" });
   });
 });

@@ -128,8 +128,9 @@ test('la respuesta de la bandeja solo apunta a un mensaje entrante de la misma f
 
 test('como mc_app: aprobar, marcar leído, responder una vez y crear el referido', async () => {
   const now = new Date();
+  // La política de A no está encendida: aprobado, pero no sale hasta que se encienda (y la pantalla lo dice).
   assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => approveQueuedTouch(tx, { touchId: HELD, userId: null, now })), {
-    ok: true, approvedAt: now, heldReason: 'needs_review',
+    ok: true, approvedAt: now, sendingOff: true,
   });
   assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => skipQueuedTouch(tx, HELD2, now)), { ok: true });
   assert.equal(await t.db.withWorkspace(WS_A, (tx) => markInboxThreadRead(tx, CONTACT, 'email', now)), 1);
@@ -156,30 +157,61 @@ test('como mc_app: aprobar, marcar leído, responder una vez y crear el referido
   assert.equal(again!.messages[1]!.referralContactId, creado.ok ? creado.contactId : null);
 });
 
-test('deshacer una aprobación la devuelve a la cola con su motivo, solo si sigue programada con esa aprobación', async () => {
+test('deshacer una aprobación la devuelve a la cola con el motivo que guardó el servidor, solo si sigue programada con esa aprobación', async () => {
   const now = new Date('2026-09-24T15:00:00Z');
-  const ok = await t.db.withWorkspace(WS_A, (tx) =>
+  await t.db.withWorkspace(WS_A, (tx) =>
     tx.query(`UPDATE outbound_touch SET status = 'held', held_reason = 'quality_risk:unsourced_figure', approved_at = NULL WHERE id = $1`, [HELD]),
   );
-  assert.ok(ok);
   const r = await t.db.withWorkspace(WS_A, (tx) => approveQueuedTouch(tx, { touchId: HELD, userId: null, now }));
   assert.equal(r.ok, true);
   if (!r.ok) return;
-  assert.equal(r.heldReason, 'quality_risk:unsourced_figure');
+  // El motivo no viaja al navegador: lo guarda el toque (0066).
+  assert.ok(!('heldReason' in r));
+  const guardado = await t.db.withWorkspace(WS_A, (tx) =>
+    tx.query<{ held_reason: string | null; approved_from_reason: string | null }>(
+      'SELECT held_reason, approved_from_reason FROM outbound_touch WHERE id = $1', [HELD],
+    ),
+  );
+  assert.deepEqual(guardado.rows[0], { held_reason: null, approved_from_reason: 'quality_risk:unsourced_figure' });
   assert.deepEqual(
-    await t.db.withWorkspace(WS_B, (tx) => undoApproval(tx, { touchId: HELD, approvedAt: r.approvedAt, heldReason: r.heldReason })),
+    await t.db.withWorkspace(WS_B, (tx) => undoApproval(tx, { touchId: HELD, approvedAt: r.approvedAt })),
     { ok: false, code: 'not_found' }, 'otro espacio no deshace',
   );
   assert.deepEqual(
-    await t.db.withWorkspace(WS_A, (tx) => undoApproval(tx, { touchId: HELD, approvedAt: new Date(now.getTime() + 1000), heldReason: null })),
+    await t.db.withWorkspace(WS_A, (tx) => undoApproval(tx, { touchId: HELD, approvedAt: new Date(now.getTime() + 1000) })),
     { ok: false, code: 'not_undoable' }, 'otra aprobación no se deshace',
   );
-  assert.deepEqual(
-    await t.db.withWorkspace(WS_A, (tx) => undoApproval(tx, { touchId: HELD, approvedAt: r.approvedAt, heldReason: r.heldReason })),
-    { ok: true },
-  );
+  // Una petición con un motivo inventado no lo cuela: la función ya no lo acepta, y uno de más se ignora.
+  const alterada = { touchId: HELD, approvedAt: r.approvedAt, heldReason: 'unconfirmed_attempt:1' } as Parameters<typeof undoApproval>[1];
+  assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => undoApproval(tx, alterada)), { ok: true });
   const cola = await t.db.withWorkspace(WS_A, (tx) => listApprovalQueue(tx));
   assert.deepEqual(cola.items.map((x) => [x.touchId, x.heldReason]), [[HELD, 'quality_risk:unsourced_figure']]);
+  const limpio = await t.db.withWorkspace(WS_A, (tx) =>
+    tx.query<{ approved_from_reason: string | null }>('SELECT approved_from_reason FROM outbound_touch WHERE id = $1', [HELD]),
+  );
+  assert.equal(limpio.rows[0]!.approved_from_reason, null, 'al deshacer se vacía');
+});
+
+test('saltar solo lo que la cola ofrece: un borrador de cadencia sin petición de regenerar no se salta', async () => {
+  const now = new Date();
+  const SEQ = id('5e1');
+  const ENR = id('e1');
+  const BORRADOR = id('74');
+  const PEDIDO = id('75');
+  await t.admin(`
+    INSERT INTO outbound_sequence (id, workspace_id, name, channel) VALUES ('${SEQ}', '${WS_A}', 'Saltos', 'email');
+    INSERT INTO outbound_enrollment (id, workspace_id, sequence_id, contact_id, status) VALUES ('${ENR}', '${WS_A}', '${SEQ}', '${CONTACT}', 'active');
+    INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, sequence_id, enrollment_id, channel, subject, body, status) VALUES
+      ('${BORRADOR}', '${WS_A}', '${CO}', '${CONTACT}', '${SEQ}', '${ENR}', 'email', 'Borrador', 'La IA lo redacta.', 'draft'),
+      ('${PEDIDO}', '${WS_A}', '${CO}', '${CONTACT}', '${SEQ}', '${ENR}', 'email', 'Pedido', 'Otra versión, por favor.', 'draft');
+    INSERT INTO outbound_generation (touch_id, workspace_id, requested_at) VALUES ('${PEDIDO}', '${WS_A}', now());
+  `);
+  assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => skipQueuedTouch(tx, BORRADOR, now)), { ok: false, code: 'not_skippable' });
+  assert.deepEqual(await t.db.withWorkspace(WS_A, (tx) => skipQueuedTouch(tx, PEDIDO, now)), { ok: true });
+  const estados = await t.db.withWorkspace(WS_A, (tx) =>
+    tx.query<{ id: string; status: string }>('SELECT id, status FROM outbound_touch WHERE id IN ($1, $2) ORDER BY id', [BORRADOR, PEDIDO]),
+  );
+  assert.deepEqual(estados.rows.map((x) => [x.id, x.status]), [[BORRADOR, 'draft'], [PEDIDO, 'skipped']]);
 });
 
 test('responder con un id que ya es de otro espacio no finge que salió; cancelar y descartar solo lo propio', async () => {
@@ -256,6 +288,37 @@ test('como mc_app: una persona corrige la intención y se aplican sus efectos; u
     await t.db.withWorkspace(WS_A, (tx) => reclassifyInboxMessage(tx, { messageId: INTERESADA, intent: 'interested', now })),
     { ok: false, code: 'opted_out' },
   );
+});
+
+test('corregir a «fuera de la oficina» lee la fecha de vuelta del mensaje, o usa la que escribe la persona', async () => {
+  const now = new Date('2026-09-24T15:00:00Z');
+  const CONTACT_3 = id('d4');
+  const OOO = id('aa');
+  const OOO2 = id('ab');
+  await t.admin(`INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source)
+                 VALUES ('${CONTACT_3}', '${CO}', '${WS_A}', 'Marta Vitalé', 'marta@vitale.test', 'user_provided')`);
+  await t.db.asWorker((tx) =>
+    tx.query(
+      `INSERT INTO outbound_message (id, workspace_id, contact_id, direction, channel, thread_ref, provider_message_id, body, occurred_at,
+                                     intent, intent_confidence, intent_source, classified_at)
+       VALUES ($1, $2, $3, 'inbound', 'email', 'hilo-3', 'resp-ooo-1', 'Hola. Estoy fuera y vuelvo el 6 de octubre.', '2026-09-24T14:00:00Z',
+               'ambiguous', 0.4, 'model', now()),
+              ($4, $2, $3, 'inbound', 'email', 'hilo-3', 'resp-ooo-2', 'Hola. Estoy fuera unos días.', '2026-09-24T14:30:00Z',
+               'ambiguous', 0.4, 'model', now())`,
+      [OOO, WS_A, CONTACT_3, OOO2],
+    ),
+  );
+  const leida = await t.db.withWorkspace(WS_A, (tx) => reclassifyInboxMessage(tx, { messageId: OOO, intent: 'ooo', now }));
+  assert.equal(leida.ok, true);
+  const escrita = await t.db.withWorkspace(WS_A, (tx) =>
+    reclassifyInboxMessage(tx, { messageId: OOO2, intent: 'ooo', now, returnDate: '2026-10-20' }),
+  );
+  assert.equal(escrita.ok, true);
+  const conv = (await t.db.withWorkspace(WS_A, (tx) => loadInboxConversation(tx, CONTACT_3, 'email')))!;
+  const vuelve = (mid: string) => conv.messages.find((m) => m.id === mid)!.resumeAt?.toISOString();
+  // El comienzo del día de vuelta en Bogotá (UTC-5), no los siete días por defecto.
+  assert.equal(vuelve(OOO), '2026-10-06T05:00:00.000Z', 'la fecha del mensaje');
+  assert.equal(vuelve(OOO2), '2026-10-20T05:00:00.000Z', 'la fecha que escribió la persona');
 });
 
 test('el estado del clasificador sale de la última corrida de outbound.intent', async () => {

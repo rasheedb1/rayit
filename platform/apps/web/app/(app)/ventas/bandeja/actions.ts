@@ -129,15 +129,28 @@ export async function descartarRespuesta(input: z.input<typeof toqueSchema>): Pr
   }
 }
 
-const corregirSchema = z.object({ messageId: z.string().regex(UUID_RE), intent: z.enum(INTENCIONES) });
+const corregirSchema = z.object({
+  messageId: z.string().regex(UUID_RE),
+  intent: z.enum(INTENCIONES),
+  /** Solo «fuera de la oficina»: la fecha de vuelta que escribió la persona. Vacía, se lee del mensaje. */
+  returnDate: z.union([z.literal(""), z.string().regex(/^\d{4}-\d{2}-\d{2}$/)]).optional(),
+});
 
-/** «Corregir» la intención de una respuesta: se aplican sus efectos como si hubiera llegado así. */
+/**
+ * «Corregir» la intención de una respuesta: se aplican sus efectos como si
+ * hubiera llegado así. A «fuera de la oficina», con la fecha de vuelta que
+ * escribió la persona o, sin ella, la que dice el mensaje.
+ */
 export async function corregirIntencion(input: z.input<typeof corregirSchema>): Promise<ResultadoBandeja> {
   const parsed = corregirSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: t.errores.accion };
   const v = parsed.data;
   try {
-    const r = await withWorkspace((tx) => reclassifyInboxMessage(tx, { messageId: v.messageId, intent: v.intent, now: new Date() }));
+    const r = await withWorkspace((tx) =>
+      reclassifyInboxMessage(tx, {
+        messageId: v.messageId, intent: v.intent, now: new Date(), returnDate: v.intent === "ooo" && v.returnDate ? v.returnDate : null,
+      }),
+    );
     revalidatePath(RUTA);
     if (!r.ok) return { ok: false, error: t.errores[r.code] };
     const etiqueta = t.intenciones[v.intent].label.toLowerCase();

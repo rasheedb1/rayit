@@ -32,7 +32,8 @@
  * respuesta con sus efectos (reclassifyInboxMessage).
  */
 import { findPlaceholders } from '@mc/core';
-import { cleanReferral, type MessageIntent, type Referral } from '@mc/core/outreach/intent';
+import { cleanReferral, findReturnDate, formatLocalDate, parseLocalDate, type MessageIntent, type Referral } from '@mc/core/outreach/intent';
+import { zonedParts } from '@mc/core/outreach/schedule';
 import type { RegenerateHint } from '@mc/core/outreach/preflight';
 import type { WorkspaceTx } from '../client.ts';
 import { OUTBOUND_CHANNELS, type OutboundChannel } from '../schema/_canales.ts';
@@ -206,11 +207,14 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
 /** Lo que no deja aprobar desde la bandeja, además de lo de releaseHeldTouch. */
 export type ApproveCode = ReleaseHeldCode | 'regenerating';
 /**
- * Aprobado: `approvedAt` y el motivo con el que estaba retenido son lo que
- * pide undoApproval para devolverlo a la cola («Deshacer»).
+ * Aprobado: `approvedAt` es la versión que pide undoApproval para devolverlo
+ * a la cola («Deshacer»); el motivo con el que estaba retenido lo guarda el
+ * servidor (approved_from_reason, 0066), nunca lo manda el navegador.
+ * `sendingOff`: el envío del espacio está apagado, así que «sale a su hora»
+ * todavía no es verdad; la pantalla lo dice.
  */
 export type ApproveResult =
-  | { ok: true; approvedAt: Date; heldReason: string | null }
+  | { ok: true; approvedAt: Date; sendingOff: boolean }
   | { ok: false; code: ApproveCode; detail?: string };
 
 /**
@@ -249,32 +253,42 @@ export async function approveQueuedTouch(
   const body = input.body === undefined || input.body === null ? row.body : input.body;
   const r = await releaseHeldTouch(tx, input.touchId, { subject, body });
   if (!r.ok) return r;
-  await tx.query(`UPDATE outbound_touch SET approved_by = $2::uuid, approved_at = $3::timestamptz WHERE id = $1::uuid`, [
-    input.touchId, input.userId, input.now.toISOString(),
-  ]);
-  return { ok: true, approvedAt: input.now, heldReason: row.status === 'draft' ? 'needs_review' : row.held_reason };
+  const heldReason = row.status === 'draft' ? 'needs_review' : row.held_reason;
+  const enabled = (
+    await tx.query<{ enabled: boolean }>(
+      `UPDATE outbound_touch SET approved_by = $2::uuid, approved_at = $3::timestamptz, approved_from_reason = $4
+        WHERE id = $1::uuid
+        RETURNING coalesce((SELECT p.enabled FROM outbound_policy p WHERE p.workspace_id = current_workspace_id()), false) AS enabled`,
+      [input.touchId, input.userId, input.now.toISOString(), heldReason?.slice(0, 500) ?? null],
+    )
+  ).rows[0]?.enabled;
+  return { ok: true, approvedAt: input.now, sendingOff: enabled !== true };
 }
 
 export type UndoApprovalResult = { ok: true } | { ok: false; code: 'not_found' | 'not_undoable' };
 
 /**
  * «Deshacer» una aprobación (el aviso de la bandeja, a la manera de
- * Linear y Superhuman): el toque vuelve a la cola retenido con su motivo,
- * solo si sigue programado con ESA aprobación (el despachador no lo
- * reclamó y nadie lo aprobó otra vez). El texto editado se queda: lo que se
- * deshace es la aprobación, no la edición.
+ * Linear y Superhuman): el toque vuelve a la cola retenido con el motivo
+ * que guardó approveQueuedTouch (approved_from_reason, 0066), solo si
+ * sigue programado con ESA aprobación (el despachador no lo reclamó y
+ * nadie lo aprobó otra vez). El motivo no llega del navegador: una
+ * petición alterada no puede dejar en la cola un motivo inventado. El
+ * texto editado se queda: lo que se deshace es la aprobación, no la
+ * edición.
  */
 export async function undoApproval(
   tx: WorkspaceTx,
-  input: { touchId: string; approvedAt: Date; heldReason: string | null },
+  input: { touchId: string; approvedAt: Date },
 ): Promise<UndoApprovalResult> {
   assertIds('undoApproval', [input.touchId]);
   const r = await tx.query(
     `UPDATE outbound_touch
-        SET status = 'held', held_reason = coalesce($3, 'needs_review'), approved_at = NULL, approved_by = NULL
+        SET status = 'held', held_reason = coalesce(approved_from_reason, 'needs_review'), approved_from_reason = NULL,
+            approved_at = NULL, approved_by = NULL
       WHERE id = $1::uuid AND status = 'scheduled' AND approved_at = $2::timestamptz
       RETURNING id`,
-    [input.touchId, input.approvedAt.toISOString(), input.heldReason?.trim().slice(0, 500) || null],
+    [input.touchId, input.approvedAt.toISOString()],
   );
   if (r.rows.length > 0) return { ok: true };
   const exists = await tx.query('SELECT 1 FROM outbound_touch WHERE id = $1::uuid', [input.touchId]);
@@ -286,14 +300,20 @@ export type SkipResult = { ok: true } | { ok: false; code: 'not_found' | 'not_sk
 /**
  * «Saltar»: el paso no sale y la cadencia sigue con el siguiente (un paso
  * saltado no frena a los de detrás). No se deshace: para otro mensaje,
- * otro toque.
+ * otro toque. Solo salta lo que la cola ofrece (listApprovalQueue): un
+ * retenido, o un borrador de cadencia que una persona mandó regenerar
+ * desde aquí. Un borrador que la IA todavía redacta por su cuenta no se
+ * salta con un id: la pantalla nunca lo ofreció.
  */
 export async function skipQueuedTouch(tx: WorkspaceTx, touchId: string, now: Date): Promise<SkipResult> {
   assertIds('skipQueuedTouch', [touchId]);
   const r = (
     await tx.query<{ enrollment_id: string | null }>(
       `UPDATE outbound_touch SET status = 'skipped', blocked_reason = 'skipped_by_person', held_reason = NULL
-        WHERE id = $1::uuid AND (status = 'held' OR (status = 'draft' AND enrollment_id IS NOT NULL))
+        WHERE id = $1::uuid
+          AND (status = 'held'
+               OR (status = 'draft' AND enrollment_id IS NOT NULL
+                   AND EXISTS (SELECT 1 FROM outbound_generation g WHERE g.touch_id = outbound_touch.id AND g.requested_at IS NOT NULL)))
         RETURNING enrollment_id`,
       [touchId],
     )
@@ -479,6 +499,12 @@ export interface InboxConversation {
   sendingOff: boolean;
   /** La persona dio el hilo por atendido. */
   done: boolean;
+  /**
+   * Cuántos mensajes entrantes del hilo nadie ha leído. Sale de la propia
+   * conversación, no de la lista: un hilo abierto por URL que no está en
+   * la vista actual también se marca leído.
+   */
+  unread: number;
   /** La cadencia del hilo (la del último mensaje entrante): adónde enrolar a un referido. */
   sequenceId: string | null;
 }
@@ -608,6 +634,7 @@ export async function loadInboxConversation(tx: WorkspaceTx, contactId: string, 
     replyBlock,
     sendingOff: !head.enabled,
     done: inbound.length > 0 && inbound.every((m) => m.done_at !== null),
+    unread: inbound.filter((m) => m.read_at === null).length,
     sequenceId: [...inbound].reverse().find((m) => m.sequence_id !== null)?.sequence_id ?? null,
   };
 }
@@ -780,18 +807,30 @@ export type ReclassifyResult =
  *
  * Una baja no se corrige: la ficha ya quedó de baja y eso es de una sola
  * dirección ('opted_out'). La etapa del negocio no retrocede sola.
+ *
+ * Fuera de la oficina: la fecha de vuelta es la que la persona escribe
+ * (returnDate, AAAA-MM-DD) o, si no escribe ninguna, la que dice el propio
+ * mensaje («vuelvo el 6 de octubre», findReturnDate, la misma lectura del
+ * clasificador falso). Sin ninguna de las dos, la cadencia vuelve a los
+ * siete días (oooResumeAt).
  */
 export async function reclassifyInboxMessage(
   tx: WorkspaceTx,
-  input: { messageId: string; intent: MessageIntent; now: Date },
+  input: { messageId: string; intent: MessageIntent; now: Date; returnDate?: string | null },
 ): Promise<ReclassifyResult> {
   assertIds('reclassifyInboxMessage', [input.messageId]);
   const intent = oneOf('reclassifyInboxMessage', 'intent', input.intent, MESSAGE_INTENTS);
   const m = await loadIntentMessage(tx, input.messageId);
   if (!m || m.workspaceId !== tx.workspaceId) return { ok: false, code: 'not_found' };
   if (m.intent === 'unsubscribe') return { ok: false, code: 'opted_out' };
+  let returnDate: string | null = null;
+  if (intent === 'ooo') {
+    const escrita = parseLocalDate(input.returnDate ?? null);
+    const today = zonedParts(m.occurredAt, m.timeZone).date;
+    returnDate = escrita ? formatLocalDate(escrita) : findReturnDate(m.body, today) ?? (m.subject ? findReturnDate(m.subject, today) : null);
+  }
   const fx = await reapplyIntent(
-    tx, m, { intent, confidence: 1, returnDate: null, referral: null, source: 'person', reason: null }, input.now,
+    tx, m, { intent, confidence: 1, returnDate, referral: null, source: 'person', reason: null }, input.now,
   );
   return { ok: true, intent, dealMoved: fx.dealMoved, optOut: fx.optOut, optOutReview: fx.optOutReview };
 }

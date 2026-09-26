@@ -252,10 +252,40 @@ export const HOLD_REASON_TEXTS: Record<NoticeLang, Record<HoldCode, (detail: str
  * persona) se devuelve tal cual, sin su punto final, para no pintarlo con
  * dos.
  */
-export function holdReasonText(lang: NoticeLang, value: string): string {
+/**
+ * La nota baja dicha desde la bandeja de aprobación (VEN-14): allí la
+ * acción está en la propia fila. Con «Regenerar», se la nombra; sin él (una
+ * respuesta en el hilo, un mensaje de LinkedIn), solo se edita. La frase de
+ * HOLD_REASON_TEXTS remite a «Redactar pitch», que es la de la ficha.
+ */
+const QUALITY_LOW_IN_QUEUE: Record<NoticeLang, Record<'regenerable' | 'edit_only', (d: string) => string>> = {
+  es: {
+    regenerable: (d) =>
+      `la revisión automática le dio ${score('es', d) ?? 'una nota'} de 10, por debajo del mínimo; edítalo o pide otra versión con «Regenerar»`,
+    edit_only: (d) => `la revisión automática le dio ${score('es', d) ?? 'una nota'} de 10, por debajo del mínimo; edítalo antes de aprobarlo`,
+  },
+  en: {
+    regenerable: (d) =>
+      `the automatic review scored it ${score('en', d) ?? 'low'} out of 10, under the minimum; edit it or ask for another version with «Regenerate»`,
+    edit_only: (d) => `the automatic review scored it ${score('en', d) ?? 'low'} out of 10, under the minimum; edit it before approving it`,
+  },
+};
+
+/**
+ * held_reason en palabras. `where` dice desde dónde se lee: la ficha
+ * (por defecto, remite a «Redactar pitch») o una fila de la bandeja de
+ * aprobación, con o sin «Regenerar».
+ */
+export function holdReasonText(
+  lang: NoticeLang, value: string, where: 'record' | 'queue_regenerable' | 'queue_edit_only' = 'record',
+): string {
   const r = parseHoldReason(value);
   if (!r) return value.trim().replace(/[.!?…]+$/u, '');
-  return HOLD_REASON_TEXTS[lang][r.code](r.detail === undefined ? '' : String(r.detail));
+  const detail = r.detail === undefined ? '' : String(r.detail);
+  if (r.code === 'quality_low' && where !== 'record') {
+    return QUALITY_LOW_IN_QUEUE[lang][where === 'queue_regenerable' ? 'regenerable' : 'edit_only'](detail);
+  }
+  return HOLD_REASON_TEXTS[lang][r.code](detail);
 }
 
 // ---------------------------------------------------------------------

@@ -23,12 +23,15 @@ import { MESSAGES } from "./messages";
  * el aviso aunque la fila desaparezca al aprobarla.
  */
 
-/** Lo que hace falta para deshacer una aprobación: el toque, cuándo se aprobó y el motivo con el que estaba retenido. */
+/**
+ * Lo que hace falta para deshacer una aprobación: el toque y cuándo se
+ * aprobó (la versión). El motivo con el que vuelve a la cola lo guarda el
+ * servidor al aprobar (approved_from_reason): el navegador no lo manda.
+ */
 export interface Deshacer {
   touchId: string;
   persona: string;
   approvedAt: string;
-  heldReason: string | null;
 }
 
 export type ResultadoAprobacion =
@@ -65,7 +68,11 @@ function explicar(r: Extract<ApproveResult, { ok: false }>): ResultadoAprobacion
   }
 }
 
-/** «Aprobar» y «Aprobar con cambios»: el toque pasa a programado y sale a su hora. */
+/**
+ * «Aprobar» y «Aprobar con cambios»: el toque pasa a programado y sale a su
+ * hora. Con el envío del espacio apagado, el aviso no promete la hora: dice
+ * que sale cuando se encienda.
+ */
 export async function aprobarToque(input: z.input<typeof aprobarSchema>): Promise<ResultadoAprobacion> {
   const parsed = aprobarSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: t.errores.generico };
@@ -92,8 +99,8 @@ export async function aprobarToque(input: z.input<typeof aprobarSchema>): Promis
   revalidatePath(RUTA);
   return {
     ok: true,
-    notice: t.avisos.aprobado(v.persona),
-    deshacer: { touchId: v.touchId, persona: v.persona, approvedAt: r.approvedAt.toISOString(), heldReason: r.heldReason },
+    notice: r.sendingOff ? t.avisos.aprobadoApagado(v.persona) : t.avisos.aprobado(v.persona),
+    deshacer: { touchId: v.touchId, persona: v.persona, approvedAt: r.approvedAt.toISOString() },
   };
 }
 
@@ -101,17 +108,16 @@ const deshacerSchema = z.object({
   touchId: z.string().regex(UUID_RE),
   persona: z.string().max(200),
   approvedAt: z.string().datetime(),
-  heldReason: z.string().max(500).nullable(),
 });
 
-/** «Deshacer» una aprobación: el mensaje vuelve a la cola con su motivo, si todavía no salió. */
+/** «Deshacer» una aprobación: el mensaje vuelve a la cola con el motivo que guardó el servidor, si todavía no salió. */
 export async function deshacerAprobacion(input: z.input<typeof deshacerSchema>): Promise<ResultadoAprobacion> {
   const parsed = deshacerSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: t.errores.generico };
   const v = parsed.data;
   try {
     const r = await withWorkspace((tx) =>
-      undoApproval(tx, { touchId: v.touchId, approvedAt: new Date(v.approvedAt), heldReason: v.heldReason }),
+      undoApproval(tx, { touchId: v.touchId, approvedAt: new Date(v.approvedAt) }),
     );
     revalidatePath(RUTA);
     if (!r.ok) return { ok: false, message: t.errores[r.code] };

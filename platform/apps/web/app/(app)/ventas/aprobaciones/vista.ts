@@ -67,7 +67,7 @@ export function filaVista(item: ApprovalItem, f: Formatter): FilaVista {
     conAsunto: item.channel === "email" && !esRespuesta,
     regenerando: item.regenerating,
     regenerado: item.status === "draft" && !item.regenerating,
-    motivo: motivoDe(item.heldReason, f.locale),
+    motivo: motivoDe(item.heldReason, f.locale, item.regenerable),
     juez: r
       ? {
           total: r.totalScore === null ? null : t.porque.total(f.decimal(r.totalScore, 1)),

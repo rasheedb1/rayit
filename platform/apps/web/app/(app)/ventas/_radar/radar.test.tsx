@@ -130,7 +130,7 @@ describe("Radar", () => {
   });
 
   it("descartar con motivo envía el texto y avisa que no vuelve", async () => {
-    descartarSenal.mockResolvedValue({ ok: true, notice: "Señal descartada. No volverá a la bandeja." });
+    descartarSenal.mockResolvedValue({ ok: true, notice: "Señal descartada. No volverá al radar." });
     render(<Radar cards={[card]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Descartar: Café Alma" }));
     fireEvent.change(screen.getByRole("textbox", { name: /¿Por qué la descartas\?/ }), { target: { value: "No encaja con mi nicho" } });
@@ -143,7 +143,7 @@ describe("Radar", () => {
   });
 
   it("un error al aceptar se queda en la tarjeta", async () => {
-    aceptarSenal.mockResolvedValue({ message: "Esa señal ya la revisaste. Recarga la bandeja para ver cómo quedó." });
+    aceptarSenal.mockResolvedValue({ message: "Esa señal ya la revisaste. Recarga el radar para ver cómo quedó." });
     render(<Radar cards={[card]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Aceptar: Café Alma" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("ya la revisaste"));

@@ -131,6 +131,8 @@ export const MESSAGES = {
     listo: (intencion: string) => `Intención corregida: ${intencion}.`,
     listoMovido: (intencion: string) => `Intención corregida: ${intencion}. El negocio pasó a «En conversación».`,
     bajaNoSeCorrige: "Una baja no se corrige: la ficha ya no recibe mensajes.",
+    vuelta: "Vuelve el",
+    vueltaAyuda: "Opcional. Vacía, se lee del mensaje; sin fecha en el mensaje, la cadencia sigue en 7 días.",
   },
 
   referido: {

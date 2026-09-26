@@ -64,6 +64,18 @@ describe("por qué quedó retenido", () => {
     expect(motivoDe(null, "es-CO")).toBeNull();
   });
 
+  it("una nota baja remite al botón de la fila, nunca a otra pantalla", () => {
+    const conRegenerar = motivoDe("quality_low:6.2", "es-CO", true)!.texto;
+    const sinRegenerar = motivoDe("quality_low:6.2", "es-CO", false)!.texto;
+    expect(conRegenerar).toContain("«Regenerar»");
+    expect(sinRegenerar).toContain("edítalo antes de aprobarlo");
+    for (const texto of [conRegenerar, sinRegenerar]) expect(texto).not.toContain("Redactar pitch");
+    // Una respuesta en el hilo no se regenera: la fila tampoco lo promete.
+    const fila = filaVista(item(1, { heldReason: "quality_low:6.2", stepType: "email_reply", regenerable: false }), f);
+    expect(fila.motivo!.texto).toBe(sinRegenerar);
+    expect(motivoDe("quality_low:6.2", "en-US", true)!.texto).toContain("«Regenerate»");
+  });
+
   it("las reglas del pre-vuelo con su dato, sin repetir", () => {
     expect(
       reglasDe([
@@ -157,7 +169,7 @@ describe("la cola", () => {
   });
 
   it("al aprobar la ÚLTIMA fila, el aviso sigue arriba del vacío con «Deshacer», y deshacer la devuelve", async () => {
-    const deshacer = { touchId: item(1).touchId, persona: "Persona 1", approvedAt: "2026-09-24T15:00:00.000Z", heldReason: "quality_warmup:3" };
+    const deshacer = { touchId: item(1).touchId, persona: "Persona 1", approvedAt: "2026-09-24T15:00:00.000Z" };
     aprobarToque.mockResolvedValue({ ok: true, notice: MESSAGES.avisos.aprobado("Persona 1"), deshacer });
     deshacerAprobacion.mockResolvedValue({ ok: true, notice: MESSAGES.avisos.deshecho("Persona 1") });
     const { rerender } = render(<Cola filas={[filaVista(item(1), f)]} />);
@@ -176,12 +188,25 @@ describe("la cola", () => {
     expect(screen.queryByRole("button", { name: MESSAGES.avisos.deshacer })).toBeNull();
   });
 
+  it("con el envío apagado, el aviso de aprobado no promete la hora", async () => {
+    aprobarToque.mockResolvedValue({
+      ok: true, notice: MESSAGES.avisos.aprobadoApagado("Persona 1"),
+      deshacer: { touchId: item(1).touchId, persona: "Persona 1", approvedAt: "2026-09-24T15:00:00.000Z" },
+    });
+    render(<Cola filas={[filaVista(item(1), f)]} />);
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "a" });
+    });
+    expect(screen.getByText(MESSAGES.avisos.aprobadoApagado("Persona 1"))).toBeInTheDocument();
+    expect(MESSAGES.avisos.aprobadoApagado("Persona 1")).toContain("cuando enciendas el envío");
+  });
+
   it("«Deshacer» se ofrece unos segundos y después se va", async () => {
     vi.useFakeTimers();
     try {
       aprobarToque.mockResolvedValue({
         ok: true, notice: MESSAGES.avisos.aprobado("Persona 1"),
-        deshacer: { touchId: item(1).touchId, persona: "Persona 1", approvedAt: "2026-09-24T15:00:00.000Z", heldReason: null },
+        deshacer: { touchId: item(1).touchId, persona: "Persona 1", approvedAt: "2026-09-24T15:00:00.000Z" },
       });
       render(<Cola filas={[filaVista(item(1), f)]} />);
       await act(async () => {

@@ -150,6 +150,8 @@ export const MESSAGES = {
 
   avisos: {
     aprobado: (persona: string) => `Aprobado: el mensaje a ${persona} sale a su hora.`,
+    /** Con el envío del espacio apagado: «a su hora» todavía no es verdad. */
+    aprobadoApagado: (persona: string) => `Aprobado: el mensaje a ${persona} sale cuando enciendas el envío.`,
     saltado: (persona: string) => `Saltado: el mensaje a ${persona} no sale y la cadencia sigue.`,
     deshacer: "Deshacer",
     deshecho: (persona: string) => `Deshecho: el mensaje a ${persona} vuelve a esperar tu aprobación.`,

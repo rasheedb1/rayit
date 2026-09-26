@@ -12,7 +12,7 @@ import { AtajosBandeja, FiltroVista } from "./acciones";
 import { Conversacion } from "./conversacion";
 import { ListaHilos } from "./lista";
 import { MESSAGES } from "./messages";
-import { conversacionVista, FILTRO, hiloVista, listaHref, vistaDe } from "./vista";
+import { columnaListaClase, conversacionVista, FILTRO, hiloVista, listaHref, vistaDe } from "./vista";
 
 export const metadata: Metadata = { title: MESSAGES.metaTitle };
 export const dynamic = "force-dynamic";
@@ -54,8 +54,9 @@ export default async function BandejaPage({
   const f = formatterFor(await getCurrentWorkspace());
   const t = MESSAGES;
   const abierto = conversacion ? `${conversacion.contactId}:${conversacion.channel}` : null;
-  const vistas = hilos.map((h) => hiloVista(h, f, `${h.contactId}:${h.channel}` === abierto, vista));
-  const sinLeer = vistas.find((h) => h.activo)?.sinLeer ?? 0;
+  // La abierta sola (la primera sin leer) solo se ve en escritorio: en un
+  // teléfono la lista no la marca como elegida (hiloVista, ListaHilos).
+  const vistas = hilos.map((h) => hiloVista(h, f, `${h.contactId}:${h.channel}` === abierto, vista, implicita));
   const volver = listaHref(vista);
   // Elegida a mano, en un teléfono se ve la conversación; abierta sola, la lista.
   const conversacionVisible = conversacion !== null && !implicita;
@@ -82,9 +83,14 @@ export default async function BandejaPage({
       <ModuleTabs active={RUTA_BANDEJA} />
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
-        <div className={conversacionVisible ? "hidden min-w-0 lg:grid lg:content-start lg:gap-3" : "grid min-w-0 content-start gap-3"}>
+        <div data-columna="lista" className={columnaListaClase(conversacionVisible)}>
           <FiltroVista vista={vista} />
-          <AtajosBandeja hrefs={vistas.map((h) => h.href)} activo={vistas.findIndex((h) => h.activo)} listaHref={volver} />
+          <AtajosBandeja
+            hrefs={vistas.map((h) => h.href)}
+            activo={vistas.findIndex((h) => h.activo)}
+            activoSoloEscritorio={implicita}
+            listaHref={volver}
+          />
           {hilos.length === 0 ? (
             <EmptyState title={vacio.title} description={vacio.description} action={vacio.action} />
           ) : (
@@ -94,7 +100,8 @@ export default async function BandejaPage({
         <div className={conversacionVisible ? "min-w-0" : "hidden min-w-0 lg:block"}>
           {conversacion ? (
             <Conversacion
-              c={conversacionVista(conversacion, f, { sinLeer, clasificador, implicita })}
+              key={abierto}
+              c={conversacionVista(conversacion, f, { clasificador, implicita })}
               volverHref={volver}
             />
           ) : (

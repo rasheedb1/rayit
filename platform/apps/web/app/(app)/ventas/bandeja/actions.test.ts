@@ -85,6 +85,17 @@ describe("las demás acciones", () => {
     expect(await corregirIntencion({ messageId: MSG, intent: "interested" })).toEqual({ ok: false, error: t.errores.opted_out });
   });
 
+  it("corregir a «fuera de la oficina» lleva la fecha de vuelta escrita; vacía o en otra intención, ninguna", async () => {
+    reclassifyInboxMessage.mockResolvedValue({ ok: true, intent: "ooo", dealMoved: false, optOut: false, optOutReview: false });
+    await corregirIntencion({ messageId: MSG, intent: "ooo", returnDate: "2026-10-06" });
+    expect(reclassifyInboxMessage.mock.calls[0]![1]).toMatchObject({ intent: "ooo", returnDate: "2026-10-06" });
+    await corregirIntencion({ messageId: MSG, intent: "ooo", returnDate: "" });
+    expect(reclassifyInboxMessage.mock.calls[1]![1]).toMatchObject({ intent: "ooo", returnDate: null });
+    await corregirIntencion({ messageId: MSG, intent: "not_now", returnDate: "2026-10-06" });
+    expect(reclassifyInboxMessage.mock.calls[2]![1]).toMatchObject({ intent: "not_now", returnDate: null });
+    expect(await corregirIntencion({ messageId: MSG, intent: "ooo", returnDate: "6 de octubre" })).toEqual({ ok: false, error: t.errores.accion });
+  });
+
   it("marcar hecha y reabrir", async () => {
     markInboxThreadDone.mockResolvedValue(1);
     expect(await marcarHecho({ contactId: CONTACT, channel: "linkedin", done: true })).toEqual({ ok: true, notice: t.conversacion.hechaAviso });

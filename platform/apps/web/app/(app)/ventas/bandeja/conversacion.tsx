@@ -18,11 +18,17 @@ type Canal = "email" | "linkedin" | "instagram_dm";
  * los suyos a la izquierda y los tuyos a la derecha, con la intención de
  * cada respuesta, su porqué y «Corregir»; abajo, lo que está por salir, lo
  * que no salió y la respuesta.
+ *
+ * Cada hilo tiene su propio estado: la raíz lleva la ficha y el canal como
+ * key (y la página se la pone también al montarla). Sin eso, al pasar de un
+ * hilo a otro con j o k, React conservaba el borrador de «Tu respuesta», su
+ * id de envío y los avisos: el texto escrito para una marca aparecía en el
+ * hilo de otra y «Enviar respuesta» se lo mandaba.
  */
 export function Conversacion({ c, volverHref }: { c: ConversacionVista; volverHref: string }) {
   const canal = c.channel as Canal;
   return (
-    <section aria-labelledby="conversacion-titulo" className="grid gap-4">
+    <section key={`${c.contactId}:${c.channel}`} aria-labelledby="conversacion-titulo" className="grid gap-4">
       <MarcarLeido contactId={c.contactId} channel={canal} sinLeer={c.sinLeer} implicita={c.implicita} />
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-4">
         <div className="min-w-0">
@@ -126,13 +132,16 @@ function Mensaje({
               {m.referido.creado ? (
                 <p className="text-xs text-good">{t.referido.creado}</p>
               ) : (
-                <CrearReferido
-                  messageId={m.id}
-                  nombre={m.referido.nombre}
-                  correo={m.referido.correo}
-                  cargo={m.referido.cargo}
-                  enrolarHref={enrolarHref}
-                />
+                // En un div, como «Corregir»: suelto en la rejilla, el botón se estiraba a todo el ancho.
+                <div>
+                  <CrearReferido
+                    messageId={m.id}
+                    nombre={m.referido.nombre}
+                    correo={m.referido.correo}
+                    cargo={m.referido.cargo}
+                    enrolarHref={enrolarHref}
+                  />
+                </div>
               )}
             </div>
           ) : null}

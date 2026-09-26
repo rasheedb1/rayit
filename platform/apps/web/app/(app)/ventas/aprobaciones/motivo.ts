@@ -37,12 +37,18 @@ export interface Motivo {
   intentoSinConfirmar: boolean;
 }
 
-/** El motivo de held_reason (un código del motor o lo que escribió una persona), en el idioma del workspace. */
-export function motivoDe(heldReason: string | null, locale: string): Motivo | null {
+/**
+ * El motivo de held_reason (un código del motor o lo que escribió una
+ * persona), en el idioma del workspace. `regenerable`: la fila ofrece
+ * «Regenerar»; la frase de una nota baja remite a ese botón, y si la fila
+ * no lo tiene (una respuesta en el hilo, un LinkedIn), solo a editarlo.
+ * Nunca a otra pantalla.
+ */
+export function motivoDe(heldReason: string | null, locale: string, regenerable = false): Motivo | null {
   if (!heldReason?.trim()) return null;
   const parsed = parseHoldReason(heldReason);
   const categoria: MotivoCategoria = parsed ? CATEGORIA[parsed.code] : "persona";
-  const frase = holdReasonText(noticeLang(locale), heldReason);
+  const frase = holdReasonText(noticeLang(locale), heldReason, regenerable ? "queue_regenerable" : "queue_edit_only");
   return {
     categoria,
     etiqueta: MESSAGES.porque.categorias[categoria],

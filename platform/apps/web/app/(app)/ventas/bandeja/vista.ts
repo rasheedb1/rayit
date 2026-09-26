@@ -60,10 +60,34 @@ export interface HiloVista {
   sinLeerTexto: string | null;
   intencion: IntencionClave;
   hecha: boolean;
+  /** Es el hilo de la conversación abierta (j y k cuentan desde aquí). */
   activo: boolean;
+  /**
+   * La página lo abrió sola (la primera sin leer): la conversación solo se
+   * ve en escritorio, así que solo ahí se marca como elegida. En un
+   * teléfono se ve la lista y ninguna fila parece abierta.
+   */
+  soloEscritorio: boolean;
 }
 
-export function hiloVista(h: InboxThread, f: Formatter, activo: boolean, vista: VistaBandeja = "pendientes"): HiloVista {
+/**
+ * Las clases de la columna de la lista. Una rejilla con UNA columna que
+ * puede encogerse (minmax(0,1fr)): con la pista implícita «auto», los
+ * extractos con `truncate` la estiraban hasta su ancho sin cortar (894 px
+ * en vez de 20rem), la lista quedaba debajo de la conversación, que se
+ * comía los clics, y a 400 px la página se desplazaba de lado. jsdom no
+ * mide cajas: lo mide scripts/ancho-movil.mjs (TOPE) y esta función lo
+ * fija en bandeja.test.tsx.
+ */
+export function columnaListaClase(conversacionVisible: boolean): string {
+  return conversacionVisible
+    ? "hidden min-w-0 lg:grid lg:grid-cols-[minmax(0,1fr)] lg:content-start lg:gap-3"
+    : "grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-3";
+}
+
+export function hiloVista(
+  h: InboxThread, f: Formatter, activo: boolean, vista: VistaBandeja = "pendientes", implicita = false,
+): HiloVista {
   return {
     key: `${h.contactId}:${h.channel}`,
     href: hiloHref(h.contactId, h.channel, vista),
@@ -78,6 +102,7 @@ export function hiloVista(h: InboxThread, f: Formatter, activo: boolean, vista: 
     intencion: intencionClave(h.lastIntent),
     hecha: h.done,
     activo,
+    soloEscritorio: activo && implicita,
   };
 }
 
@@ -159,7 +184,7 @@ function pendienteVista(p: PendingReply): PendienteVista {
 export function conversacionVista(
   c: InboxConversation,
   f: Formatter,
-  opts: { sinLeer: number; clasificador: ClassifierStatus; implicita?: boolean },
+  opts: { clasificador: ClassifierStatus; implicita?: boolean },
 ): ConversacionVista {
   const t = MESSAGES;
   const apagado = opts.clasificador === "off";
@@ -225,7 +250,9 @@ export function conversacionVista(
     envioApagado: c.sendingOff,
     clasificadorApagado: apagado,
     hecha: c.done,
-    sinLeer: opts.sinLeer,
+    // Los de la propia conversación, no los de la fila de la lista: un hilo
+    // abierto por URL que no está en la vista actual también se marca leído.
+    sinLeer: c.unread,
     implicita: opts.implicita === true,
     opcionesIntencion: INTENCIONES.map((i) => ({ value: i, label: t.intenciones[i].label })),
   };
