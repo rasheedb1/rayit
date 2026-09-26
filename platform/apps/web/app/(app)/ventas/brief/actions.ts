@@ -64,7 +64,9 @@ function esquemaDelBrief(l: BriefLimitTexts) {
       excludedCompanies: z
         .array(z.string().regex(UUID_RE, E.CompanyNotInCrm(l, null)))
         .max(BRIEF_LIMITS.companies, E.TooManyCompanies(l, null)),
-      deliverables: z.array(z.string().regex(DELIVERABLE_RE, E.InvalidDeliverable(l, null))).max(BRIEF_LIMITS.deliverables, E.InvalidDeliverable(l, null)),
+      deliverables: z
+        .array(z.string().regex(DELIVERABLE_RE, E.InvalidDeliverable(l, null)))
+        .max(BRIEF_LIMITS.deliverables, E.InvalidDeliverable(l, null)),
       minBudget: z
         .string()
         .trim()

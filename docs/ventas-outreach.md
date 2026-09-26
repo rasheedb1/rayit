@@ -1590,18 +1590,30 @@ Nada queda pausado para siempre.
 
 El brief (`outbound_brief`, `/ventas/brief`) tiene dos mitades que no
 pesan igual. **Qué buscas** (categorías, países, presupuesto, formatos,
-fechas, divulgación) es una preferencia: no oculta nada, pero el radar
-la MARCA en cada tarjeta, calculado en SQL (`briefSignalLateralSql`):
-«Bajo tu mínimo» (presupuesto estimado por debajo del mínimo, en la
-misma moneda), «Fuera de tus países» (el país de la señal o de su
-marca no está entre los buscados) y «Buscas «cocina»» (la categoría
-buscada que tiene la marca). Con varios briefs activos, «bajo» y
-«fuera» solo si lo están para todos. El recomendador y el generador
-usan además el nombre, las notas y la divulgación (§5.5); la
-divulgación va en «Qué buscas» porque no filtra marcas: la dicen los
-mensajes. **Qué no aceptas** (categorías
-y marcas excluidas) es una regla, y se cumple en cuatro sitios con la
-misma definición de «esta marca» y de «esta categoría»
+fechas) es una preferencia: no oculta nada, pero el radar MARCA en cada
+tarjeta lo que la aparta del brief, calculado en SQL
+(`briefSignalLateralSql`): «Bajo tu mínimo» (presupuesto estimado por
+debajo del mínimo, en la misma moneda), «Fuera de tus países» (el país
+de la señal o de su marca no está entre los buscados) y «Fuera de lo
+que buscas» (el brief busca categorías y la marca no tiene ninguna).
+Con varios briefs activos, cada marca solo si lo está para todos. La
+categoría buscada que SÍ tiene va dentro de la Pill del encaje («82 %
+· alimentos»): hasta la ronda 3 era una Pill aparte («Buscas
+«alimentos»») y, en la demo, la llevaban las cinco tarjetas, así que no
+distinguía ninguna. Los formatos y la ventana de disponibilidad los
+usan las cadencias (VEN-7 r4): el contexto del recomendador y el del
+generador los traen (`getRecommendationContext`,
+`loadGenerationContext`), y el prompt dice «Formatos que ofrece el
+creador: … Si propones una colaboración, propón solo estos formatos» y
+«Disponible para campañas del … al …; nunca fuera de esa ventana»
+(`briefOfferLines` de `@mc/core`). Hasta la ronda 3 se guardaban y no
+los leía nadie. **Qué no aceptas** (categorías y marcas excluidas, y la
+divulgación obligatoria) es una regla. La divulgación pasó a este bloque
+en la ronda 4, como en Passionfroot, donde las condiciones no
+negociables van juntas: no filtra marcas, pero es algo que el creador
+no acepta («No acepto contenido pagado sin la marca de publicidad de la
+red») y la cumplen los mensajes. Las exclusiones se cumplen en cuatro
+sitios con la misma definición de «esta marca» y de «esta categoría»
 (`packages/db/src/queries/brief.ts`):
 
 - **El radar** (`briefVerdictSql`): la señal no entra en la bandeja, y
@@ -1639,6 +1651,27 @@ creadores:
   aceptarlo. La pantalla lo dice donde se edita la regla («Ana también
   tiene brief activo…»).
 
+**Excluir una marca que no está en el CRM (ronda 4).** «Marcas que no
+aceptas» solo guarda empresas del CRM (`CompanyNotInCrm`). Hasta la
+ronda 3 se elegían en un `<select>` con las primeras 1 000 del CRM, que
+cortaba las demás sin avisar, y una marca que llegaba al radar por el
+catálogo o por una señal automática no se podía excluir sin darla antes
+de alta. Ahora:
+
+- en el brief, las marcas se BUSCAN en el servidor, en todo el CRM
+  (`searchBriefCompanies`, por `name_key`, sin tildes ni mayúsculas;
+  un combobox con flechas, Enter y Escape);
+- en la tarjeta del radar, «No aceptar esta marca» (solo para owner y
+  admin, y solo con algún brief activo) hace en UNA transacción
+  (`rejectSignalBrand`): resuelve la marca de la señal como al aceptarla
+  (la conocida o una nueva con lo que trae), la enlaza al CRM con la
+  relación `blocked` si no estaba (si estaba, su relación no se toca) y
+  la agrega a los briefs activos elegidos (`addExcludedCompany`: mismo
+  tope, mismo candado por workspace y creador, traza
+  `ventas.brief.excluir_marca`). Con varios briefs activos, el diálogo
+  pregunta en cuáles; el aviso dice si la bandeja ya no la enseña o si
+  otro brief la sigue aceptando.
+
 **A escala.** El veredicto corre por cada señal pendiente en la
 cabecera de Ventas, la pestaña, la bandeja y la lista de Empresas. Lee
 los briefs activos una vez por consulta (un CTE `MATERIALIZED`) y
@@ -1649,11 +1682,19 @@ es leakproof: ni `brand_key(co.name)` ni `citext = citext` lo son, así
 que 0065 agrega `company.name_key` (brand_key(name), calculada por la
 base) y un índice sobre `domain::text`. Medido: con 5 000 empresas en
 el catálogo y 100 señales, `countHiddenSignals` pasó de recorrer el
-catálogo por señal (28,6 s con 10 000) a unos 15 ms
-(`brief.test.ts`).
+catálogo por señal (28,6 s con 10 000) a unos 15 ms. Desde la ronda 4
+la prueba (`brief.test.ts`) no mide el reloj, que dependía de la carga
+de la máquina: lee el PLAN de `HIDDEN_SIGNALS_SQL` como `mc_app`
+(`EXPLAIN (FORMAT JSON)`, con 2 000 empresas y `ANALYZE`) y exige que
+toda lectura de `company` vaya por índice (llave primaria,
+`company_domain_text_idx` y, por nombre, `company_name_key_idx` o la
+llave de `company_link` cuando el CRM es chico), sin un solo `Seq Scan`.
+La medición de tiempo queda detrás de `MC_PERF=1`.
 
-Un brief en pausa no oculta ni frena nada. Como oculta señales a todo
-el equipo, lo cambian owner y admin (la pantalla, la acción y las
+Un brief en pausa no oculta ni frena nada. Es el brief de un creador,
+pero lo que excluye se oculta del radar de todo el equipo cuando lo
+excluyen todos los briefs activos, y frena las cadencias de sus
+negocios; por eso lo cambian owner y admin (la pantalla, la acción y las
 políticas RESTRICTIVE de 0064 con `outreach_can_manage`) y cada cambio
 deja traza en `audit_log` (`ventas.brief.guardar`, antes y después).
 
@@ -1664,7 +1705,44 @@ del workspace (`brief/limites.ts`): ningún número va escrito a mano en
 workspace si el brief no tiene mínimo) y una inválida es
 `InvalidCurrency`, no un error de presupuesto.
 
-**Para el kit (propuesta a Nicolás).** Dos piezas de Ventas ya tienen
+**Corrección a los comentarios de 0064 (ronda 4).** Los comentarios de
+la migración 0064 (§5 y la cabecera de VEN-7) dicen que el brief es
+«una regla del ESPACIO entero». Desde la ronda 3 es el brief de UN
+creador (uno activo por creador): lo que excluye se oculta del radar de
+todo el equipo solo cuando lo excluyen todos los briefs activos, y frena
+las cadencias de los negocios de su creador. 0064 está aplicada y no se
+toca; lo que cuenta es esto, `lib/auth/reglas.ts` y el JSDoc de
+`saveBrief`, que ya lo dicen así.
+
+**La conversión es la de un periodo (VEN-8 r4).** `getStageConversion`
+cuenta por defecto los negocios que ENTRARON por primera vez en la etapa
+en los últimos 90 días (`CONVERSION_WINDOW_DAYS`), contados en la zona
+del workspace desde el inicio del día, y la fila lo dice («58 % avanza ·
+de 12 negocios en 90 días»; en la Lista, «Conversión por etapa ·
+últimos 90 días»). Lo que pasó después de esa entrada cuenta aunque sea
+de hoy. `since` cambia el inicio y `since: null` vuelve a toda la
+historia. Hasta la ronda 3 era toda la historia: lo de hace un año
+pesaba igual que lo de esta semana, y la cifra no decía de cuándo era.
+
+**El aviso de guardado va junto al botón (ronda 4).** El brief mide unos
+2 000 px a 400 px: el «Guardado» arriba quedaba a −1 115 px y quien
+pulsaba «Guardar el brief» en el móvil no veía nada. Ahora el aviso va
+pegado al botón y se lleva el foco (y el scroll, `block: "nearest"`).
+
+**Checkbox y Dialog, en el kit (ronda 4).** Lo que era propuesta ya está
+en `components/ui/` con su prueba, su sección en `/kit` y su fila en el
+README: `Checkbox` (casilla nativa con etiqueta y ayuda) y `Dialog` (el
+modal del pipeline, ahora también el de «No aceptar esta marca»).
+Agregar al kit es libre; lo único que se tocó de uno existente es
+`Pill`, sin cambiar su API: el texto va en un `<span>` con `truncate`
+para que una Pill con `max-w-*` lo corte con «…» (la regla larga de una
+tarjeta) en vez de recortar la cadena a mano, que podía partir un emoji.
+Ese cambio y su prueba (`pill.test.tsx` busca ahora la Pill por su
+contenedor) piden la revisión de Nicolás. La copia de `Casilla` en
+`finanzas/gastos/form.tsx` no existe en `rasheed/integracion`: cuando
+llegue, puede usar el `Checkbox` del kit.
+
+**Para el kit (propuesta a Nicolás, ronda 3; hecha en la ronda 4).** Dos piezas de Ventas ya tienen
 una segunda copia o piden serlo, y el README del kit dice que a la
 segunda suben a `components/ui/`, con prueba y sección en `/kit`. Es un
 PR de Nicolás (cambia el kit); aquí queda la propuesta:

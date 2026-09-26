@@ -57,9 +57,7 @@ export default async function VentasPage({
 
   // Una sola transacción para toda la pantalla: los KPI y la vista
   // activa se leen con el mismo workspace fijado y el mismo instante.
-  const [puedeExcluir, leido] = await Promise.all([
-    vista === "radar" ? puedeEditarElBrief() : Promise.resolve(false),
-    withWorkspace(async (tx) => ({
+  const { kpis, signals, hidden, briefCreators, deals, stages, conversion, owners, dates, urgentes } = await withWorkspace(async (tx) => ({
     kpis: await getSalesKpis(tx),
     signals: vista === "radar" ? await listSignals(tx, { status: "pending", brief: verOcultas ? "show_hidden" : "apply" }) : [],
     hidden: vista === "radar" ? await countHiddenSignals(tx) : null,
@@ -76,9 +74,9 @@ export default async function VentasPage({
     // Los avisos urgentes del outreach de hoy (VEN-15): la web no tiene
     // campana, así que se señalan junto al enlace a la política.
     urgentes: await countUrgentOutreachAlerts(tx),
-    })),
-  ]);
-  const { kpis, signals, hidden, briefCreators, deals, stages, conversion, owners, dates, urgentes } = leido;
+  }));
+  // «No aceptar esta marca» solo para quien puede cambiar el brief (owner o admin).
+  const puedeExcluir = vista === "radar" && briefCreators.length > 0 ? await puedeEditarElBrief() : false;
 
   const workspace = await getCurrentWorkspace();
   const f = formatterFor(workspace);
