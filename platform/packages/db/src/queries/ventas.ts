@@ -1837,7 +1837,7 @@ export async function rejectSignalBrand(
     `SELECT ${briefVerdictSql('s')} AS verdict FROM signal s WHERE s.id = $1`,
     [signalId],
   );
-  return { companyId: company.id, companyName: company.name, companyCreated: created, added, briefs, hidden: v[0]?.verdict != null };
+  return { companyId: company.id, companyName: company.name, companyCreated: created, added, briefs, hidden: (v[0]?.verdict ?? null) !== null };
 }
 
 export interface CreateDealInput {

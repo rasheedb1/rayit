@@ -27,7 +27,6 @@ vi.mock("@mc/db/queries/brief", async (original) => ({
   },
   listBriefCreators: async () => ({ workspaceKind: estado.kind, creators: estado.creators }),
   listCategorySuggestions: async () => ["alimentos"],
-  listBriefCompanyOptions: async () => [{ id: "e1", name: "Café Alma" }],
   countHiddenSignals: async () => estado.hidden,
 }));
 vi.mock("@/lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
@@ -105,7 +104,13 @@ describe("la página del brief", () => {
     const props = formProps.last as {
       values: { wantedCountries: { value: string; label: string }[]; excludedCompanies: unknown[] };
       deliverableOptions: { value: string; label: string }[];
+      locale: string;
+      companySearchMin: number;
+      companies?: unknown;
     };
+    // Las marcas del CRM ya no viajan todas: el formulario las busca en el servidor (VEN-7 r4).
+    expect(props.companies).toBeUndefined();
+    expect([props.locale, props.companySearchMin]).toEqual(["es-CO", 2]);
     expect(props.values.wantedCountries).toEqual([
       { value: "CO", label: "Colombia" },
       { value: "MX", label: "México" },

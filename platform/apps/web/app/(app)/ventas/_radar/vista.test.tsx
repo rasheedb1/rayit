@@ -120,8 +120,9 @@ describe("RadarView: las señales que el brief deja fuera (VEN-7)", () => {
     render(<RadarView signals={[senal({ hiddenBy: "category", hiddenMatch: larga })]} f={f} currency="COP" hidden={{ count: 1, showing: true }} />);
     const regla = screen.getByText(h.reason.category(larga));
     expect(regla.className).toContain("truncate");
-    expect(regla.closest("span.rounded-full")?.className).toContain("max-w-[16rem]");
-    expect(regla.closest("[title]")).toHaveAttribute("title", h.reason.category(larga));
+    const pill = regla.closest("[title]");
+    expect(pill).toHaveAttribute("title", h.reason.category(larga));
+    expect(pill?.className).toContain("max-w-[16rem]");
   });
 });
 

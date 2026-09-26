@@ -1733,12 +1733,12 @@ pegado al botón y se lleva el foco (y el scroll, `block: "nearest"`).
 en `components/ui/` con su prueba, su sección en `/kit` y su fila en el
 README: `Checkbox` (casilla nativa con etiqueta y ayuda) y `Dialog` (el
 modal del pipeline, ahora también el de «No aceptar esta marca»).
-Agregar al kit es libre; lo único que se tocó de uno existente es
-`Pill`, sin cambiar su API: el texto va en un `<span>` con `truncate`
-para que una Pill con `max-w-*` lo corte con «…» (la regla larga de una
-tarjeta) en vez de recortar la cadena a mano, que podía partir un emoji.
-Ese cambio y su prueba (`pill.test.tsx` busca ahora la Pill por su
-contenedor) piden la revisión de Nicolás. La copia de `Casilla` en
+Agregar al kit es libre, y ninguno existente cambió: la regla larga de
+una tarjeta va en `TruncatedPill` (nuevo, en `pill.tsx`), que corta el
+texto con «…» por CSS y lo deja entero en `title`, en vez de recortar la
+cadena a mano, que podía partir un emoji. Meter el `truncate` dentro de
+`Pill` rompía a quien parte su frase en dos líneas (el asistente de
+importación de Resumen). La copia de `Casilla` en
 `finanzas/gastos/form.tsx` no existe en `rasheed/integracion`: cuando
 llegue, puede usar el `Checkbox` del kit.
 

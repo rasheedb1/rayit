@@ -1,28 +1,29 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { Pill } from "./pill";
-
-/** La Pill entera (el texto va en su propio span, para poder cortarlo con «…»). */
-const pillDe = (texto: string) => screen.getByText(texto).closest("span.rounded-full") as HTMLElement;
+import { Pill, TruncatedPill } from "./pill";
 
 describe("Pill", () => {
   it("muestra el texto con la clase de su tipo", () => {
     render(<Pill kind="bad">Vencida · 41 días</Pill>);
-    expect(pillDe("Vencida · 41 días").className).toContain("text-bad");
+    const p = screen.getByText("Vencida · 41 días");
+    expect(p.className).toContain("text-bad");
   });
   it("neutral no usa color de estado", () => {
     render(<Pill kind="neutral">Borrador</Pill>);
-    expect(pillDe("Borrador").className).toContain("text-ink-2");
+    expect(screen.getByText("Borrador").className).toContain("text-ink-2");
   });
-  it("con un tope de ancho, el texto largo se corta con «…» y sigue entero en el DOM", () => {
-    const largo = "Tu brief no acepta a Distribuidora de Alimentos y Bebidas del Pacífico S.A.S.";
-    render(
-      <Pill kind="warn" className="max-w-[14rem]">
-        {largo}
-      </Pill>,
-    );
-    expect(pillDe(largo).className).toContain("max-w-[14rem]");
-    expect(screen.getByText(largo).className).toContain("truncate");
-    expect(screen.getByText(largo).textContent).toBe(largo);
+});
+
+describe("TruncatedPill", () => {
+  it("con tope de ancho, corta el texto largo con «…» por CSS y lo deja entero en el DOM y en el title", () => {
+    const largo = "Tu brief no acepta a Distribuidora de Alimentos y Bebidas del Pacífico S.A.S. 🍫";
+    render(<TruncatedPill kind="warn">{largo}</TruncatedPill>);
+    const texto = screen.getByText(largo);
+    expect(texto.className).toContain("truncate");
+    expect(texto.textContent).toBe(largo);
+    const pill = texto.closest("[title]") as HTMLElement;
+    expect(pill).toHaveAttribute("title", largo);
+    expect(pill.className).toContain("max-w-[16rem]");
+    expect(pill.className).toContain("text-warn");
   });
 });

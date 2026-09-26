@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { requireModule } from "@/content/modules";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { Pill } from "@/components/ui/pill";
+import { Pill, TruncatedPill } from "@/components/ui/pill";
 import { PlatformPill } from "@/components/ui/platform-pill";
 import { EmptyState } from "@/components/ui/empty-state";
 import { DataAsOf } from "@/components/ui/data-as-of";
@@ -111,12 +111,8 @@ export default function Page() {
         <Variant label="Texto largo">
           <Pill kind="warn">Esperando aprobación de Distribuidora Nacional de Alimentos</Pill>
         </Variant>
-        <Variant label="Texto largo con tope (max-w en className): se corta con «…»; el title del contenedor lo enseña entero">
-          <span title="Tu brief no acepta a Distribuidora Nacional de Alimentos y Bebidas del Pacífico" className="inline-flex max-w-full">
-            <Pill kind="warn" className="max-w-[14rem]">
-              Tu brief no acepta a Distribuidora Nacional de Alimentos y Bebidas del Pacífico
-            </Pill>
-          </span>
+        <Variant label="TruncatedPill: texto largo con tope de ancho, cortado con «…» y entero en el title">
+          <TruncatedPill kind="warn">Tu brief no acepta a Distribuidora Nacional de Alimentos y Bebidas del Pacífico</TruncatedPill>
         </Variant>
       </Section>
 

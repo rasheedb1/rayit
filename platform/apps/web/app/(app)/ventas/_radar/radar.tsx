@@ -8,7 +8,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field, Textarea } from "@/components/ui/field";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog } from "@/components/ui/dialog";
-import { Pill, type PillKind } from "@/components/ui/pill";
+import { Pill, TruncatedPill, type PillKind } from "@/components/ui/pill";
 import { aceptarSenal, descartarSenal, type VentasState } from "../actions";
 import { noAceptarMarca } from "../brief/actions";
 import { Aviso } from "../../_lib/aviso";
@@ -61,21 +61,6 @@ export interface SignalCardData {
 /** Los creadores con brief activo, para elegir en cuáles no aceptar la marca (VEN-7 r4). */
 export interface RejectOptions {
   creators: { id: string; name: string }[];
-}
-
-/**
- * Una Pill con tope de ancho: corta el texto largo con «…» por CSS y lo
- * enseña entero al pasar el ratón (title). El lector de pantalla lee el
- * texto entero, que sigue en el DOM.
- */
-function PillCorta({ kind, children }: { kind: PillKind; children: string }) {
-  return (
-    <span title={children} className="inline-flex min-w-0 max-w-full">
-      <Pill kind={kind} className="max-w-[16rem]">
-        {children}
-      </Pill>
-    </span>
-  );
 }
 
 /** La línea de las señales que el brief deja fuera, ya escrita en el servidor. */
@@ -268,16 +253,14 @@ function SignalCard({
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-ink">{name}</span>
             {card.fit && (
-              <span className="inline-flex min-w-0 max-w-full items-center" title={card.fit.label}>
+              <span className="inline-flex min-w-0 max-w-full items-center">
                 <span className="sr-only">{card.fit.label ?? `${t.fit} ${card.fit.text}`}</span>
                 <span aria-hidden="true" className="inline-flex min-w-0 max-w-full">
-                  <Pill kind={card.fit.kind} className="max-w-[16rem]">
-                    {card.fit.text}
-                  </Pill>
+                  <TruncatedPill kind={card.fit.kind}>{card.fit.text}</TruncatedPill>
                 </span>
               </span>
             )}
-            {card.hiddenReason && <PillCorta kind="warn">{card.hiddenReason}</PillCorta>}
+            {card.hiddenReason && <TruncatedPill kind="warn">{card.hiddenReason}</TruncatedPill>}
             {card.fitNotes.map((nota) => (
               <Pill key={nota} kind="neutral">
                 {nota}

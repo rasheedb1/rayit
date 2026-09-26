@@ -7,7 +7,8 @@ Componentes compartidos de On Cue. Galería en `/kit` (bandera `kit`, encendida 
 | Componente | Archivo | Una línea |
 |---|---|---|
 | `Button` | `button.tsx` | Acción con variant, size, loading (aria-busy) y `href` para enlaces. Cliente. |
-| `Pill` | `pill.tsx` | Estado corto con punto de color: good, warn, bad, neutral. Texto obligatorio. Con un `max-w-*` en `className`, el texto largo se corta con «…» (lleva su `truncate` dentro); el texto entero sigue en el DOM. |
+| `Pill` | `pill.tsx` | Estado corto con punto de color: good, warn, bad, neutral. Texto obligatorio. |
+| `TruncatedPill` | `pill.tsx` | La misma Pill para un texto que puede ser largo: tope de ancho (`maxWidth`, 16rem), «…» por CSS y el texto entero en `title` y en el DOM. Desde VEN-7 r4. |
 | `PlatformPill` | `platform-pill.tsx` | Red (TikTok, Instagram, Facebook, YouTube) con el punto en `--s-<red>` y el texto en tinta normal. |
 | `Field`, `Input`, `Select`, `Textarea` | `field.tsx` | Etiqueta, ayuda y error; el control toma id, aria-describedby y aria-invalid por contexto. La validación la hace el formulario (zod). Cliente. |
 | `MoneyInput` | `money-input.tsx` | Dinero como string decimal + moneda; miles es-CO, acepta pegar «5.200.000,50»; nunca `type=number`. Cliente. |
