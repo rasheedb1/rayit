@@ -213,6 +213,16 @@ export const MESSAGES = {
     ayudaApagado:
       "Vuelven a la cola, pero no salen mientras el envío del espacio esté apagado. Solo cuenta lo que puede salir: lo que rebotó, quedó a medias o ya no tiene sentido enviar no se reintenta.",
     boton: (tipo: string, n: string) => `${tipo} · ${n}`,
+    /** Es en masa: pregunta antes, como «Cancelar seleccionados». */
+    pregunta: (tipo: string, n: string, count: number) =>
+      plural({ one: "¿Volver a enviar {n} mensaje de {tipo}?", other: "¿Volver a enviar {n} mensajes de {tipo}?" })(n, count).replaceAll(
+        "{tipo}",
+        tipo,
+      ),
+    consecuencia: "Vuelven a la cola y salen en la próxima pasada del envío, dentro de tu horario.",
+    consecuenciaApagado: "Vuelven a la cola, pero no salen mientras el envío del espacio esté apagado.",
+    confirmar: "Sí, reintentar",
+    volver: "No, volver",
     uno: "Reintentar",
     /** En vez del botón, en un fallido que no se puede reintentar. */
     bloqueo: (motivo: string) => `No se reintenta: ${motivo}.`,
@@ -456,6 +466,17 @@ export const MESSAGES = {
         one: "Un mensaje de este paso falló. Puedes reintentarlo desde la actividad.",
         other: "{n} mensajes de este paso fallaron. Puedes reintentarlos desde la actividad.",
       }),
+      /** Ninguno de los fallidos se puede reintentar: la actividad no ofrece «Reintentar» (rebote, cuenta caída…). */
+      failedNinguno: plural({
+        one: "Un mensaje de este paso falló y no se puede reintentar: rebotó, la cuenta del canal está caída o ya no tiene sentido enviarlo.",
+        other: "{n} mensajes de este paso fallaron y no se pueden reintentar: rebotaron, la cuenta del canal está caída o ya no tiene sentido enviarlos.",
+      }),
+      /** Solo algunos se pueden reintentar. `m` y `mCount`: cuántos sí. */
+      failedAlgunos: (n: string, count: number, m: string, mCount: number) =>
+        `${plural({ one: "Un mensaje de este paso falló", other: "{n} mensajes de este paso fallaron" })(n, count)}; ${plural({
+          one: "uno se puede reintentar desde la actividad.",
+          other: "{n} se pueden reintentar desde la actividad.",
+        })(m, mCount)}`,
       stopped: plural({
         "=0": "Nada de este paso se canceló ni se saltó.",
         one: "Un mensaje de este paso no salió ni va a salir: se canceló o se saltó (la persona respondió, se dio de baja, no tenía dirección o lo cancelaste tú desde la actividad).",
@@ -463,6 +484,16 @@ export const MESSAGES = {
       }),
     },
     tasa: (pct: string) => `${pct} de lo enviado`,
+    /** Las barras de cada paso: cuánto de lo enviado en el primero llega hasta aquí (la caída de paso a paso). */
+    barras: {
+      titulo: "Sobre lo enviado en el paso 1",
+      sent: "Enviados",
+      opened: "Abiertos",
+      replied: "Respondidos",
+      label: (que: string, pct: string) => `${que}: ${pct} de lo enviado en el paso 1`,
+    },
+    /** Debajo de las cifras, con fallidos que sí se pueden reintentar: a la cola de la actividad, con este tipo de paso. */
+    reintentar: plural({ one: "Reintentar el fallido en la actividad", other: "Reintentar los {n} fallidos en la actividad" }),
   },
 
   /** El aviso de una pieza montada en otra pantalla que no pudo cargar (su frontera propia). */

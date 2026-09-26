@@ -64,7 +64,10 @@ function cadenciaParada(
  * Por qué no va a salir aunque llegue su hora, o null. En este orden:
  *   · el envío del espacio apagado: para todo. La fila dice solo el
  *     corto («envío apagado»); la frase y el enlace están UNA vez en el
- *     aviso de arriba (AvisoApagado), no repetidos en cada fila;
+ *     aviso de arriba (AvisoApagado), no repetidos en cada fila. Si
+ *     además su cadencia está parada, la fila lo suma («envío apagado ·
+ *     cadencia en pausa») con el enlace a la cadencia: encender el envío
+ *     no bastaría;
  *   · su cadencia en pausa, o esta persona en pausa o tras un «ahora
  *     no» (cadenciaParada): el despachador lo aplaza cada día;
  *   · el canal fuera de la política o sin ninguna cuenta conectada: el
@@ -77,8 +80,12 @@ export function esperaDe(
   bloqueos: QueueBlockers | null | undefined,
 ): Espera | null {
   if (!POR_SALIR.has(r.status)) return null;
-  if (bloqueos && !bloqueos.outreachEnabled) return { corto: W.disabled.corto, detalle: null };
   const cadencia = cadenciaParada(r);
+  if (bloqueos && !bloqueos.outreachEnabled) {
+    // El envío apagado ya lo dice el aviso de arriba: si además la cadencia está parada, eso es lo que la fila
+    // tiene que contar («envío apagado · cadencia en pausa», con «Ir a la cadencia»). Encender el envío no la hace salir.
+    return cadencia ? { corto: `${W.disabled.corto} · ${cadencia.corto}`, detalle: cadencia.detalle } : { corto: W.disabled.corto, detalle: null };
+  }
   if (cadencia) return cadencia;
   if (!bloqueos) return null;
   const canal = MESSAGES.uso.canales[r.channel];

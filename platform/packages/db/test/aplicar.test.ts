@@ -42,6 +42,11 @@ const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
   '0047': 'VEN-9-canales 0038_canales_outreach.sql al mezclar con main',
   '0048': 'VEN-9-canales 0039_callback_de_canales.sql al mezclar con main',
   '0049': 'VEN-9-canales 0040_canales_liberar_y_limites.sql al mezclar con main',
+  // VEN-16 (pulido r1): las rondas 4 y 5 de la actividad se fundieron en
+  // 0067_actividad_outreach.sql; ninguna estaba aplicada en ningún sitio.
+  // El integrador puede cerrar el hueco renumerando 0070 en adelante.
+  '0068': 'fundida en 0067_actividad_outreach.sql (VEN-16, pulido r1; nunca aplicada)',
+  '0069': 'fundida en 0067_actividad_outreach.sql (VEN-16, pulido r1; nunca aplicada)',
 };
 
 let dir = '';

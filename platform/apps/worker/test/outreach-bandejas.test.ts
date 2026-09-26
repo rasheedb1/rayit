@@ -26,14 +26,17 @@ import { createFakeIntentClassifier, LlmIntentClassifier, type IntentClassifier,
 import { llmCostUsd, type LlmClient } from '@mc/core/outreach/llm';
 import {
   approveQueuedTouch, cancelInboxReply, createReferralContact, listApprovalQueue, listInboxThreads, loadInboxConversation,
-  markInboxThreadRead, reclassifyInboxMessage, replyInInboxThread, skipQueuedTouch,
+  markInboxThreadRead, reclassifyInboxMessage, regenerateQueuedTouch, replyInInboxThread, skipQueuedTouch,
 } from '@mc/db/queries/bandejas';
 import { type applyIntent, enrollContacts, INTENT_MAX_ATTEMPTS } from '@mc/db/queries/outreach';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';
+import { createFakeGenerator, createFakeJudge } from '@mc/core/outreach/fake';
 import { runDispatch } from '../src/jobs/ventas/outbound.dispatch.ts';
+import { runGenerate } from '../src/jobs/ventas/outbound.generate.ts';
+import { runReview } from '../src/jobs/ventas/outbound.review.ts';
 import { runIntent } from '../src/jobs/ventas/outbound.intent.ts';
 import { runReplies } from '../src/jobs/ventas/outbound.replies.ts';
-import { motorDbFromJob, type MotorDb } from '../src/jobs/ventas/motor-db.ts';
+import { motorDbFromClient, motorDbFromJob, type MotorDb } from '../src/jobs/ventas/motor-db.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
 import { bogota, motorKit, type Ws } from './helpers/motor-kit.ts';
@@ -118,7 +121,7 @@ test('terminado cuando: un retenido se aprueba desde la bandeja, queda programad
   assert.equal(item.subject, 'Hola, Persona');
   assert.equal(item.heldReason, 'needs_review');
   assert.equal(item.regenerable, true, 'un correo se puede regenerar');
-  assert.equal(cola[1]!.regenerable, false, 'una respuesta en el hilo no: la redacta el paso');
+  assert.equal(cola[1]!.regenerable, true, 'un seguimiento en el hilo (email_reply) también');
   // Lo ajeno (otro espacio no ve ni aprueba) se prueba con la RLS de verdad en packages/db/test/bandejas.test.ts.
 
   // Aprobar tal cual: queda programado, con quién y cuándo. El envío del espacio está encendido (sendingOff: false).
@@ -231,11 +234,16 @@ test('terminado cuando: «me interesa» mueve el negocio, aparece en la bandeja 
   assert.deepEqual(final.pending, []);
 });
 
-/** Un pitch programado a la misma ficha fuera de la cadencia: lo pendiente que solo una baja cancela. */
+/**
+ * Un pitch programado a la misma ficha fuera de la cadencia, desde hace una
+ * hora (antes de que llegue la respuesta): cualquier respuesta de la ficha
+ * lo detiene y una persona decide.
+ */
 async function pitchPendiente(w: Ws, contact: string): Promise<string> {
   return scalar<string>(
-    `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, subject, body, status, scheduled_for)
-     VALUES ($1, $2, $3, 'email', 'Otra idea', 'Te escribo con otra idea.', 'scheduled', now() + interval '3 days') RETURNING id AS v`,
+    `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, subject, body, status, scheduled_for, created_at)
+     VALUES ($1, $2, $3, 'email', 'Otra idea', 'Te escribo con otra idea.', 'scheduled', now() + interval '3 days', now() - interval '1 hour')
+     RETURNING id AS v`,
     [w.id, w.company, contact],
   );
 }
@@ -261,13 +269,16 @@ test('terminado cuando: una baja marca a la ficha y cancela lo pendiente, la vea
   const pitchB = await pitchPendiente(b, b.contacts[0]!);
   const { contact: cb } = await conversacion(b, F.baja_implicita!.body);
   assert.equal(await scalar<boolean>('SELECT opted_out AS v FROM contact WHERE id = $1', [cb]), false, 'el detector no la vio');
-  assert.equal(await scalar<string>('SELECT status AS v FROM outbound_touch WHERE id = $1', [pitchB]), 'scheduled', 'una respuesta sola no lo cancela');
+  assert.equal(
+    await scalar<string>("SELECT status || ':' || blocked_reason AS v FROM outbound_touch WHERE id = $1", [pitchB]), 'canceled:replied',
+    'la respuesta ya detuvo el pitch suelto',
+  );
   const baja = new LlmIntentClassifier(scriptedModel('{"intent":"unsubscribe","confidence":0.93,"return_date":null,"referral":null,"reason":"No quiere más propuestas."}'));
   const r2 = await runIntent(motor, { classifier: baja, now: () => bogota('2026-09-23', '15:06'), workspaceId: b.id });
   assert.deepEqual(r2.classified.map((c) => c.intent), ['unsubscribe']);
   assert.equal(await scalar<boolean>('SELECT opted_out AS v FROM contact WHERE id = $1', [cb]), true, 'la ficha queda de baja');
   assert.equal(await scalar<string>('SELECT opted_out_code AS v FROM contact WHERE id = $1', [cb]), 'reply_optout:email');
-  assert.equal(await scalar<string>('SELECT status || \':\' || blocked_reason AS v FROM outbound_touch WHERE id = $1', [pitchB]), 'canceled:opted_out');
+  assert.equal(await scalar<string>('SELECT status || \':\' || blocked_reason AS v FROM outbound_touch WHERE id = $1', [pitchB]), 'canceled:replied', 'sigue cancelado');
   assert.equal(
     await scalar<number>(`SELECT count(*)::int AS v FROM outbound_touch WHERE contact_id = $1 AND status IN ('draft', 'scheduled', 'held')`, [cb]), 0,
     'nada pendiente',
@@ -519,7 +530,7 @@ test('una ambigua corregida a baja deja la ficha de baja y cancela lo pendiente;
   const r = await comoLaWeb(w.id, (tx) => reclassifyInboxMessage(tx, { messageId: m, intent: 'unsubscribe', now: bogota('2026-09-23', '16:00') }));
   assert.equal(r.ok && r.optOut, true);
   assert.equal(await scalar<boolean>('SELECT opted_out AS v FROM contact WHERE id = $1', [contact]), true);
-  assert.equal(await scalar<string>("SELECT status || ':' || blocked_reason AS v FROM outbound_touch WHERE id = $1", [pitch]), 'canceled:opted_out');
+  assert.equal(await scalar<string>("SELECT status || ':' || blocked_reason AS v FROM outbound_touch WHERE id = $1", [pitch]), 'canceled:replied', 'lo detuvo la respuesta');
   assert.equal(await scalar<string>('SELECT status AS v FROM outbound_enrollment WHERE contact_id = $1', [contact]), 'opted_out');
   assert.deepEqual(
     await comoLaWeb(w.id, (tx) => reclassifyInboxMessage(tx, { messageId: m, intent: 'interested', now: bogota('2026-09-23', '16:05') })),
@@ -578,15 +589,35 @@ test('«me interesa» de una marca sin negocio abierto (cadencia en frío) abre 
 
 test('«ahora no» sin cadencia que enfriar no promete que se enfría: dice cuándo volver a escribir', async () => {
   const w = await workspace(30, { contacts: 1 });
-  await pitchPendiente(w, w.contacts[0]!);
+  const pitch = await pitchPendiente(w, w.contacts[0]!);
   await entrante(w, F.ahora_no!.body, 1);
   const r = await runIntent(motor, { classifier: fakeClassifier, now: () => new Date(), workspaceId: w.id });
   assert.deepEqual(r.classified.map((c) => c.intent), ['not_now']);
+  assert.equal(
+    await scalar<string>("SELECT status || ':' || blocked_reason AS v FROM outbound_touch WHERE id = $1", [pitch]), 'canceled:not_now',
+    'el pitch suelto no sale en frío después de «ahora no»',
+  );
   const aviso = await scalar<string>(
     `SELECT body_es AS v FROM notification WHERE workspace_id = $1 AND entity_type = 'outbound_message_intent'`, [w.id],
   );
   assert.match(aviso, /^Dice que ahora no\. Si quieres, escríbele de nuevo después del \d+ de \p{L}+ de \d{4}\.$/u);
   assert.doesNotMatch(aviso, /se enfría|bandeja de aprobación/);
+});
+
+test('una respuesta dudosa sin cadencia detiene el pitch suelto; uno programado después de leerla, no', async () => {
+  const w = await workspace(37, { contacts: 1 });
+  const antes = await pitchPendiente(w, w.contacts[0]!);
+  await entrante(w, F.ambigua!.body, 1);
+  const despues = await scalar<string>(
+    `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, subject, body, status, scheduled_for)
+     VALUES ($1, $2, $3, 'email', 'Lo hablamos', 'Te escribo de nuevo.', 'scheduled', now() + interval '3 days') RETURNING id AS v`,
+    [w.id, w.company, w.contacts[0]],
+  );
+  const dudoso = new LlmIntentClassifier(scriptedModel('{"intent":"interested","confidence":0.5,"return_date":null,"referral":null,"reason":"Solo dice ok."}'));
+  const r = await runIntent(motor, { classifier: dudoso, now: () => new Date(), workspaceId: w.id });
+  assert.deepEqual(r.classified.map((c) => c.intent), ['ambiguous']);
+  assert.equal(await scalar<string>("SELECT status || ':' || blocked_reason AS v FROM outbound_touch WHERE id = $1", [antes]), 'canceled:replied');
+  assert.equal(await scalar<string>('SELECT status AS v FROM outbound_touch WHERE id = $1', [despues]), 'scheduled', 'la decisión de la persona se respeta');
 });
 
 test('el retenido del seed 0008 con una cifra sin origen no se aprueba tal cual, ni tocando una coma; con una cifra del perfil, sí', async () => {
@@ -611,6 +642,33 @@ test('el retenido del seed 0008 con una cifra sin origen no se aprueba tal cual,
     assert.equal((await aprobar(conCifra)).ok, true);
     const claims = (await demo.queryAsSuperuser<{ claims: Array<{ id: string }> }>(`SELECT claims FROM outbound_touch WHERE id = $1`, [TOQUE])).rows[0]!;
     assert.deepEqual(claims.claims.map((c) => c.id), ['audience:tiktok:age:25-34']);
+  } finally {
+    await demo.close();
+  }
+});
+
+test('el seguimiento en el hilo retenido del seed (Vitalé, 7,4 de 10) se regenera y vuelve a la cola sin asunto propio', async () => {
+  const { createEmbeddedDb } = await import('@mc/db/embedded');
+  const demo = await createEmbeddedDb({ snapshot: true });
+  try {
+    const WS = '00000002-0000-4000-8000-000000000001';
+    const VITALE = '00000005-0000-4000-8000-000000070004';
+    const enCola = async () => (await demo.withWorkspace(WS, (tx) => listApprovalQueue(tx))).items.find((x) => x.touchId === VITALE)!;
+    const antes = await enCola();
+    assert.deepEqual([antes.stepType, antes.heldReason, antes.regenerable], ['email_reply', 'quality_low:7.4', true]);
+    assert.deepEqual(
+      await demo.withWorkspace(WS, (tx) => regenerateQueuedTouch(tx, { touchId: VITALE, hint: 'other_angle', instructions: null, userId: null })),
+      { ok: true },
+    );
+    const writers = { mode: 'fake' as const, generator: createFakeGenerator(), judge: createFakeJudge() };
+    const m = motorDbFromClient(demo);
+    const g = await runGenerate(m, { writers, now: () => new Date(), workspaceId: WS });
+    assert.ok(g.generated.includes(VITALE), JSON.stringify(g));
+    await runReview(m, { writers, now: () => new Date(), workspaceId: WS });
+    const despues = await enCola();
+    assert.equal(despues.stepType, 'email_reply', 'sigue siendo una respuesta en el hilo');
+    assert.equal(despues.subject, null, 'sin asunto propio: sale como «Re:» del hilo');
+    assert.ok(despues.body.trim().length > 0 && despues.body !== antes.body, 'con la versión nueva');
   } finally {
     await demo.close();
   }
@@ -659,11 +717,14 @@ test('una baja que pide un tercero en copia no da de baja a la ficha: la bandeja
   assert.equal(await scalar<boolean>('SELECT opted_out AS v FROM contact WHERE id = $1', [c2]), false);
 });
 
-test('«me interesa» cancela lo que quedaba programado para la ficha fuera de la cadencia; la respuesta de la bandeja, no', async () => {
+test('una respuesta cancela lo que quedaba programado para la ficha fuera de la cadencia; la respuesta de la bandeja, no', async () => {
   const w = await workspace(33, { contacts: 1 });
   const pitch = await pitchPendiente(w, w.contacts[0]!);
   const { contact } = await conversacion(w, F.me_interesa!.body);
-  assert.equal(await scalar<string>('SELECT status AS v FROM outbound_touch WHERE id = $1', [pitch]), 'scheduled', 'la respuesta sola no lo toca');
+  assert.equal(
+    await scalar<string>("SELECT status || ':' || blocked_reason AS v FROM outbound_touch WHERE id = $1", [pitch]), 'canceled:replied',
+    'la respuesta lo detiene antes de clasificarla',
+  );
   // Una respuesta escrita en la bandeja antes de que se clasifique: esa sí sale.
   const touchId = randomUUID();
   await comoLaWeb(w.id, (tx) =>
@@ -672,7 +733,7 @@ test('«me interesa» cancela lo que quedaba programado para la ficha fuera de l
   const rep = await runIntent(motor, { classifier: fakeClassifier, now: () => bogota('2026-09-23', '15:06'), workspaceId: w.id });
   assert.deepEqual(rep.classified.map((c) => c.intent), ['interested']);
   assert.equal(
-    await scalar<string>("SELECT status || ':' || blocked_reason AS v FROM outbound_touch WHERE id = $1", [pitch]), 'canceled:replied_interested',
+    await scalar<string>("SELECT status || ':' || blocked_reason AS v FROM outbound_touch WHERE id = $1", [pitch]), 'canceled:replied',
     'el pitch en frío no sale encima de la conversación',
   );
   assert.equal(await scalar<string>('SELECT status AS v FROM outbound_touch WHERE id = $1', [touchId]), 'scheduled');

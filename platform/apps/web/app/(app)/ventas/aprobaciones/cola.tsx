@@ -42,7 +42,8 @@ function filaOcupada(touchId: string): boolean {
  * siempre montada, también vacía: el aviso de lo último que pasó queda
  * arriba aunque su fila ya no esté (al aprobar la última, la cola pasa a
  * «Nada por aprobar» y el aviso sigue ahí), con «Deshacer» durante unos
- * segundos. El foco pasa a la fila que ocupa el lugar de la que salió.
+ * segundos. El foco pasa a la fila que ocupa el lugar de la que salió, y
+ * a la que «Deshacer» devolvió cuando la lista la vuelve a traer.
  */
 export function Cola({ filas, puedeOperar = true }: { filas: FilaVista[]; puedeOperar?: boolean }) {
   const [activa, setActiva] = useState<string | null>(filas[0]?.touchId ?? null);
@@ -56,6 +57,8 @@ export function Cola({ filas, puedeOperar = true }: { filas: FilaVista[]; puedeO
   const activaRef = useRef(activa);
   const huboAviso = useRef(false);
   const operarRef = useRef(puedeOperar);
+  /** La fila que «Deshacer» devolvió a la cola: cuando vuelve a la lista, toma el foco (Superhuman, Linear). */
+  const devuelta = useRef<string | null>(null);
   useLayoutEffect(() => {
     idsRef.current = ids;
     activaRef.current = activa;
@@ -78,6 +81,13 @@ export function Cola({ filas, puedeOperar = true }: { filas: FilaVista[]; puedeO
   useEffect(() => {
     const lista = idsRef.current;
     const actual = activaRef.current;
+    if (devuelta.current && lista.includes(devuelta.current)) {
+      const id = devuelta.current;
+      devuelta.current = null;
+      indice.current = lista.indexOf(id);
+      enfocar(id);
+      return;
+    }
     if (actual && lista.includes(actual)) {
       indice.current = lista.indexOf(actual);
       return;
@@ -126,6 +136,11 @@ export function Cola({ filas, puedeOperar = true }: { filas: FilaVista[]; puedeO
     startDeshacer(async () => {
       const r = await deshacerAprobacion(d);
       setPuedeDeshacer(false);
+      // Vuelve a su lugar (la cola ordena por hora y antigüedad) y, cuando la lista la traiga, con el foco.
+      if (r.ok) {
+        if (idsRef.current.includes(d.touchId)) enfocar(d.touchId);
+        else devuelta.current = d.touchId;
+      }
       setUltimo(r.ok ? { notice: r.notice, deshacer: null } : { error: r.message ?? t.errores.generico });
     });
   }

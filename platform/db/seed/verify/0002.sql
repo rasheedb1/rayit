@@ -29,7 +29,8 @@ SELECT 'a_conteos' AS check_id,
        (SELECT count(*) FROM company_link WHERE company_id::text LIKE '00000002-%') AS empresas,
        (SELECT count(*) FROM contact WHERE opted_out)                    AS bajas,
        (SELECT count(*) FROM signal)                                     AS senales,
-       (SELECT count(*) FROM deal)                                       AS deals,
+       -- Los de ESTE seed: el 0008 (VEN-14) añade el negocio de su hilo «me interesa».
+       (SELECT count(*) FROM deal WHERE id::text LIKE '00000002-%')      AS deals,
        (SELECT count(*) FROM activity)                                   AS actividades,
        (SELECT count(*) FROM social_connection WHERE deleted_at IS NULL) = 4
          AND (SELECT count(*) FROM post) = 60
@@ -39,7 +40,7 @@ SELECT 'a_conteos' AS check_id,
          AND (SELECT count(*) FROM company_link WHERE company_id::text LIKE '00000002-%') = 8
          AND (SELECT count(*) FROM contact WHERE opted_out) = 1
          AND (SELECT count(*) FROM signal) = 14
-         AND (SELECT count(*) FROM deal) = 15
+         AND (SELECT count(*) FROM deal WHERE id::text LIKE '00000002-%') = 15
          AND (SELECT count(*) FROM activity) = 49 AS ok;
 
 -- (a2) La línea de tiempo de la demo enseña cambios de etapa (VEN-5):
@@ -324,7 +325,9 @@ SELECT 'i_pipeline_cifras' AS check_id,
          AND sum(p.amount) FILTER (WHERE p.is_won AND EXTRACT(QUARTER FROM d.won_at) = 3 AND EXTRACT(YEAR FROM d.won_at) = 2026) = 10924369.75
          AND count(*) FILTER (WHERE p.is_lost) = 1 AS ok
 FROM deal_pipeline p
-JOIN deal d ON d.id = p.id;
+JOIN deal d ON d.id = p.id
+-- Los negocios de ESTE seed (el 0008 añade uno suyo, sin monto).
+WHERE p.id::text LIKE '00000002-%';
 
 -- (i3) Lo único del pipeline que depende del reloj de la vista: 2
 --      seguimientos vencidos, 2 para hoy, 1 sin fecha. deal_pipeline
@@ -340,7 +343,7 @@ SELECT 'i_pipeline_vencimientos' AS check_id,
          AND count(*) FILTER (WHERE due_state = 'hoy') = 2
          AND count(*) FILTER (WHERE due_state = 'sin_fecha') = 1 AS ok
 FROM deal_pipeline
-WHERE NOT is_won AND NOT is_lost;
+WHERE NOT is_won AND NOT is_lost AND id::text LIKE '00000002-%';
 
 -- (i2) El tablero: cada deal con su etapa, valor, próxima acción y
 --      estado, tal como lo pinta Ventas. No es un volcado: se exige que
@@ -355,8 +358,9 @@ SELECT 'i2_tablero' AS check_id, stage_position AS pos, stage_label, company_nam
                                       WHEN 'perdido' THEN 7 END
          AND weighted_amount = round(amount * probability, 2)
          AND (is_won OR is_lost OR next_action IS NOT NULL)
-         AND (SELECT count(*) FROM deal_pipeline) = 15 AS ok
+         AND (SELECT count(*) FROM deal_pipeline WHERE id::text LIKE '00000002-%') = 15 AS ok
 FROM deal_pipeline
+WHERE id::text LIKE '00000002-%'
 ORDER BY stage_position, amount DESC;
 
 -- (j) Radar: 6 pendientes. 5 por revisar —las cinco del mock, que su
@@ -536,7 +540,7 @@ SELECT 'q_ultimo_contacto' AS check_id,
 FROM deal d
 JOIN pipeline_stage st ON st.id = d.stage_id
 CROSS JOIN LATERAL (SELECT max(a.occurred_at) AS ultima FROM activity a WHERE a.deal_id = d.id) u
-WHERE NOT st.is_won AND NOT st.is_lost AND d.last_contact_at IS NOT NULL;
+WHERE NOT st.is_won AND NOT st.is_lost AND d.last_contact_at IS NOT NULL AND d.id::text LIKE '00000002-%';
 
 -- (p) Lo que el tablero mira hoy no envejece: ningún deal abierto tiene
 --     el cierre esperado en el pasado (los planes van relativos a
@@ -550,12 +554,12 @@ SELECT 'p_planes_vivos' AS check_id,
        (SELECT count(*) FROM deal d JOIN pipeline_stage st ON st.id = d.stage_id
          WHERE NOT st.is_won AND NOT st.is_lost AND d.expected_close_date < CURRENT_DATE)    AS cierres_en_el_pasado,
        (SELECT count(*) FROM deal d JOIN pipeline_stage st ON st.id = d.stage_id
-         WHERE NOT st.is_won AND NOT st.is_lost AND d.expected_close_date IS NULL)           AS abiertos_sin_cierre,
+         WHERE NOT st.is_won AND NOT st.is_lost AND d.expected_close_date IS NULL AND d.id::text LIKE '00000002-%') AS abiertos_sin_cierre,
        (SELECT count(*) FROM signal WHERE status = 'pending' AND detected_at < now() - interval '14 days') AS senales_viejas,
        (SELECT count(*) FROM outbound_brief WHERE status = 'active' AND availability_to < CURRENT_DATE)    AS briefs_vencidos,
        (SELECT count(*) FROM deal d JOIN pipeline_stage st ON st.id = d.stage_id
          WHERE NOT st.is_won AND NOT st.is_lost AND d.expected_close_date < CURRENT_DATE) = 0
          AND (SELECT count(*) FROM deal d JOIN pipeline_stage st ON st.id = d.stage_id
-               WHERE NOT st.is_won AND NOT st.is_lost AND d.expected_close_date IS NULL) = 1
+               WHERE NOT st.is_won AND NOT st.is_lost AND d.expected_close_date IS NULL AND d.id::text LIKE '00000002-%') = 1
          AND (SELECT count(*) FROM signal WHERE status = 'pending' AND detected_at < now() - interval '14 days') = 0
          AND (SELECT count(*) FROM outbound_brief WHERE status = 'active' AND availability_to < CURRENT_DATE) = 0 AS ok;

@@ -28,12 +28,14 @@ export interface VacioVista {
  * ahí.
  */
 export function PanelActividad({
-  tipos, ayudaReintento, sequenceId, contact, filas, seleccionable, caption, locale, soloPagina = null, vacio,
+  tipos, ayudaReintento, consecuenciaReintento, sequenceId, contact, filas, seleccionable, caption, locale, soloPagina = null, vacio,
 }: {
   /** Los botones de reintento por tipo; null en el historial. */
   tipos: TipoReintentable[] | null;
   /** La ayuda del reintento por tipo (cambia con el envío apagado). */
   ayudaReintento?: string;
+  /** Lo que dice la pregunta del reintento por tipo (cambia con el envío apagado). */
+  consecuenciaReintento?: string;
   /** Con más de una página, la frase de que la selección es solo de esta (ListaActividad). */
   soloPagina?: string | null;
   sequenceId: string | null;
@@ -56,7 +58,8 @@ export function PanelActividad({
   return (
     <div className="flex flex-col gap-3">
       {tipos && (
-        <ReintentarPorTipo tipos={tipos} sequenceId={sequenceId} contact={contact} ayuda={ayudaReintento} onResultado={onResultado} />
+        <ReintentarPorTipo tipos={tipos} sequenceId={sequenceId} contact={contact} ayuda={ayudaReintento}
+          consecuencia={consecuenciaReintento} onResultado={onResultado} />
       )}
       <p
         ref={avisoRef}

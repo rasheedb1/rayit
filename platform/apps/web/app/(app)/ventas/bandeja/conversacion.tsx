@@ -34,7 +34,9 @@ export function Conversacion({
   const canal = c.channel;
   return (
     <section key={`${c.contactId}:${c.channel}`} aria-labelledby="conversacion-titulo" className="grid gap-4">
-      {c.puedeOperar ? <MarcarLeido contactId={c.contactId} channel={canal} sinLeer={c.sinLeer} implicita={c.implicita} /> : null}
+      {c.puedeOperar ? (
+        <MarcarLeido contactId={c.contactId} channel={canal} sinLeer={c.sinLeer} implicita={c.implicita} fijarHref={c.href} />
+      ) : null}
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-4">
         <div className="min-w-0">
           <Link href={volverHref} className="mb-2 inline-block text-xs text-ink-2 hover:text-ink lg:hidden">

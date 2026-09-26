@@ -21,8 +21,11 @@ const T = MESSAGES.uso;
  */
 const NIVEL_PILL: Record<UsageLevel, PillKind> = { ok: "good", near: "warn", full: "bad", off: "neutral" };
 const NIVEL_BARRA: Record<UsageLevel, string> = { ok: "bg-good", near: "bg-warn", full: "bg-bad", off: "bg-fg-3" };
-/** Los días pasados, en gris salvo los que llegaron cerca o al límite. */
-const NIVEL_DIA: Record<Exclude<UsageLevel, "off">, string> = { ok: "bg-fg-3", near: "bg-warn", full: "bg-bad" };
+/**
+ * Los días pasados, en el acento suave salvo los que llegaron cerca o al límite. En gris (bg-fg-3) sobre el carril
+ * bg-hover, con 2 a 5 px de alto, la serie casi no se distinguía del borde del carril (pulido r1).
+ */
+const NIVEL_DIA: Record<Exclude<UsageLevel, "off">, string> = { ok: "bg-accent/60", near: "bg-warn", full: "bg-bad" };
 
 /** Lo que pinta una cuenta, ya formateado. Las fracciones van a CSS como variables: aquí no se multiplica nada. */
 export interface UsoVista {
@@ -165,7 +168,7 @@ function Cuenta({ u }: { u: UsoVista }) {
           (y no en bg-surface-2): en oscuro, surface-2 sobre surface casi no
           se distinguía del fondo.
         */}
-        <div aria-hidden="true" className="flex h-6 items-end gap-0.5" title={T.historia}>
+        <div aria-hidden="true" className="flex h-8 items-end gap-0.5" title={T.historia}>
           {u.dias.map((d) => (
             <span key={d.key} className="flex h-full flex-1 items-end rounded-sm border-b border-line-2 bg-hover" title={d.label}>
               <span

@@ -124,3 +124,17 @@ SELECT 'e_toques_con_su_cuenta' AS check_id,
   FROM outbound_touch t
  WHERE t.workspace_id = '00000002-0000-4000-8000-000000000001'
    AND t.status IN ('sent', 'failed') AND t.claimed_at IS NOT NULL AND t.channel IN ('email', 'linkedin');
+
+-- (x) El embudo de la cadencia de la demo no crece hacia abajo (pulido
+--     r1): quien tiene un toque en el paso N lo tuvo en el paso N-1, así
+--     que ningún paso sale a más gente que el anterior.
+SELECT 'x_embudo_no_crece' AS check_id,
+       (SELECT string_agg(f.touches::text, ',' ORDER BY f.step_position) FROM outbound_funnel_by_step f
+         WHERE f.sequence_id = '00000005-0000-4000-8000-0000005e0001') AS por_paso,
+       count(*) AS saltos,
+       count(*) = 0 AS ok
+  FROM outbound_touch t
+  JOIN outbound_step_position p ON p.step_id = t.step_id
+ WHERE t.sequence_id = '00000005-0000-4000-8000-0000005e0001' AND t.enrollment_id IS NOT NULL AND p.position > 1
+   AND NOT EXISTS (SELECT 1 FROM outbound_touch a JOIN outbound_step_position pa ON pa.step_id = a.step_id
+                    WHERE a.enrollment_id = t.enrollment_id AND pa.position = p.position - 1);

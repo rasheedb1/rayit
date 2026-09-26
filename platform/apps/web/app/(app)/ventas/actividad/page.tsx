@@ -171,9 +171,11 @@ export default async function ActividadPage({ searchParams }: { searchParams: Pr
             ? facets.retryableByStepType.map((x) => ({
               stepType: x.stepType,
               label: MESSAGES.reintentar.boton(etiquetaTipo(x.stepType), f.int(x.count)),
+              pregunta: MESSAGES.reintentar.pregunta(etiquetaTipo(x.stepType), f.int(x.count), x.count),
             }))
             : null}
           ayudaReintento={bloqueos.outreachEnabled ? MESSAGES.reintentar.ayuda : MESSAGES.reintentar.ayudaApagado}
+          consecuenciaReintento={bloqueos.outreachEnabled ? MESSAGES.reintentar.consecuencia : MESSAGES.reintentar.consecuenciaApagado}
           sequenceId={filtros.cadencia}
           contact={filtros.contacto}
           filas={filas}

@@ -104,7 +104,7 @@ export interface ApprovalItem {
   statusChangedAt: Date;
   /** La nota de la puerta de calidad, si lo redactó la IA. */
   review: ApprovalReview | null;
-  /** Se puede pedir otra versión a la IA: un correo de una cadencia (outbound_generation_request). */
+  /** Se puede pedir otra versión a la IA: un correo de una cadencia, también un seguimiento en el hilo (outbound_generation_request). */
   regenerable: boolean;
   /**
    * Una respuesta escrita en /ventas/bandeja que el despachador retuvo
@@ -204,7 +204,7 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
                  ORDER BY pt.sent_at DESC NULLS LAST LIMIT 1) hilo ON true
         WHERE t.workspace_id = current_workspace_id()
           AND (t.status = 'held' OR (t.status = 'draft' AND t.enrollment_id IS NOT NULL AND g.requested_at IS NOT NULL))
-        ORDER BY t.scheduled_for NULLS LAST, t.status_changed_at, t.step_index NULLS LAST, t.id
+        ORDER BY t.scheduled_for NULLS LAST, t.created_at, t.step_index NULLS LAST, t.id
         LIMIT $1`,
       [Math.max(1, Math.min(opts.limit ?? APPROVAL_QUEUE_LIMIT, 500))],
     )
@@ -215,7 +215,9 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
     const inboxReply = r.inbox_reply === true;
     // Una respuesta de la bandeja va en el hilo: en correo es un «Re:» (email_reply), sin asunto propio ni «Regenerar».
     const stepType = r.step_type === null ? (inboxReply && r.channel === 'email' ? 'email_reply' : null) : oneOf(fn, `$[${i}].step_type`, r.step_type, STEP_TYPES);
-    const emailStep = r.channel === 'email' && !inboxReply && (r.step_type === null || r.step_type === 'email');
+    // Un correo de la cadencia, nuevo o de seguimiento en el hilo (email_reply: outbound.generate lo redacta como «Re:»,
+    // sin asunto propio), o un pitch suelto. Lo escrito en la bandeja no: es la voz de la persona, no un borrador.
+    const emailStep = r.channel === 'email' && !inboxReply && (r.step_type === null || r.step_type === 'email' || r.step_type === 'email_reply');
     return {
       touchId: text(fn, `$[${i}].id`, r.id),
       status: r.status === 'draft' ? 'draft' : 'held',

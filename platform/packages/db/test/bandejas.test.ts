@@ -416,3 +416,22 @@ test('un borrador regenerado que no se puede aprobar tal cual sigue siendo el bo
   );
   assert.deepEqual([aprobado.rows[0]!.status, aprobado.rows[0]!.approved_from_reason], ['scheduled', 'needs_review']);
 });
+
+test('«Deshacer» devuelve el mensaje a su lugar en la cola, no al final', async () => {
+  const PRIMERO = id('7a');
+  const SEGUNDO = id('7b');
+  await t.admin(`
+    INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, subject, body, status, held_reason, created_at) VALUES
+      ('${PRIMERO}', '${WS_A}', '${CO}', '${CONTACT}', 'email', 'Uno', 'El primero en la cola.', 'held', 'needs_review', now() - interval '1 hour'),
+      ('${SEGUNDO}', '${WS_A}', '${CO}', '${CONTACT}', 'email', 'Dos', 'El segundo en la cola.', 'held', 'needs_review', now() - interval '30 minutes');
+  `);
+  const orden = async () =>
+    (await t.db.withWorkspace(WS_A, (tx) => listApprovalQueue(tx))).items.map((x) => x.touchId).filter((x) => x === PRIMERO || x === SEGUNDO);
+  assert.deepEqual(await orden(), [PRIMERO, SEGUNDO]);
+  const r = await t.db.withWorkspace(WS_A, (tx) => approveQueuedTouch(tx, { touchId: PRIMERO, userId: null, now: new Date() }));
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.deepEqual(await orden(), [SEGUNDO]);
+  assert.equal((await t.db.withWorkspace(WS_A, (tx) => undoApproval(tx, { touchId: PRIMERO, approvedAt: r.approvedAt }))).ok, true);
+  assert.deepEqual(await orden(), [PRIMERO, SEGUNDO], 'vuelve delante, donde estaba');
+});

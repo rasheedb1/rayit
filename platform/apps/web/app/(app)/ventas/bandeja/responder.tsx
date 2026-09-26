@@ -75,16 +75,23 @@ function nuevoId(): string {
  * se refresca para quitarles la negrita). Uno abierto sin pedirlo (el
  * primero sin leer, que la página abre en escritorio) solo se marca si se
  * ve: en un teléfono la conversación está escondida. No pinta nada.
+ *
+ * La abierta sola, al marcarse, queda fijada en la URL (`fijarHref`, con
+ * router.replace) en vez de solo refrescar: si no, el siguiente render ya
+ * la ve leída, abre la siguiente sin leer, la marca, y así en cascada
+ * hasta dejar la bandeja entera leída sin que nadie la mirara.
  */
 export function MarcarLeido({
-  contactId, channel, sinLeer, implicita = false,
-}: { contactId: string; channel: BandejaChannel; sinLeer: number; implicita?: boolean }) {
+  contactId, channel, sinLeer, implicita = false, fijarHref = null,
+}: { contactId: string; channel: BandejaChannel; sinLeer: number; implicita?: boolean; fijarHref?: string | null }) {
   const router = useRouter();
   useEffect(() => {
     if (sinLeer === 0) return;
     if (implicita && !(typeof window.matchMedia === "function" && window.matchMedia(ESCRITORIO).matches)) return;
-    void marcarLeido({ contactId, channel }).then(() => router.refresh());
-  }, [contactId, channel, sinLeer, implicita, router]);
+    void marcarLeido({ contactId, channel }).then(() =>
+      implicita && fijarHref ? router.replace(fijarHref, { scroll: false }) : router.refresh(),
+    );
+  }, [contactId, channel, sinLeer, implicita, fijarHref, router]);
   return null;
 }
 

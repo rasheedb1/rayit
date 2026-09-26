@@ -276,9 +276,12 @@ describe("cuando la cola está parada, la fila lo dice en vez de «Sale …»", 
     expect(v.cuandoCompleto).toBe(`Estaba previsto para ${f.dateTime(due.toISOString())}`);
     // El bloqueo es del espacio entero: la frase y el enlace al interruptor están una vez, en AvisoApagado.
     expect(v.espera).toBeNull();
-    // Manda sobre la cadencia en pausa y el canal sin cuenta: apagado, nada sale.
-    expect(vista(programado({ sequenceStatus: "paused", enrollmentStatus: "active" }), { ...apagado, channelsWithoutAccount: ["linkedin"] }))
+    // Manda sobre el canal sin cuenta: apagado, nada sale.
+    expect(vista(programado({}), { ...apagado, channelsWithoutAccount: ["linkedin"] }))
       .toMatchObject({ cuando: "En espera · envío apagado", espera: null });
+    // Con la cadencia además en pausa, la fila lo suma: encender el envío no la haría salir (pulido r1).
+    expect(vista(programado({ sequenceStatus: "paused", enrollmentStatus: "active" }), { ...apagado, channelsWithoutAccount: ["linkedin"] }))
+      .toMatchObject({ cuando: "En espera · envío apagado · cadencia en pausa", espera: { enlace: "Ir a la cadencia" } });
     // También lo retenido y el borrador (aprobarlo no lo haría salir) y un reintento recién hecho.
     expect(vista(fila({ status: "held", reason: "needs_review", retryable: false, dueAt: due }), apagado).cuando).toBe("En espera · envío apagado");
     expect(vista(fila({ status: "draft", reason: null, retryable: false }), apagado).cuando).toBe("En espera · envío apagado");

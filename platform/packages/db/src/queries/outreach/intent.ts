@@ -14,7 +14,10 @@
  *                ellas para la ficha (un pitch suelto) se cancela aquí
  *                ('replied_interested'), salvo las respuestas de la bandeja;
  *   not_now      el enrolamiento del hilo pasa a 'cooldown' con resume_at a
- *                noventa días, y un aviso con la fecha;
+ *                noventa días, y un aviso con la fecha. Un pitch suelto a
+ *                la ficha, programado antes de la respuesta, se cancela
+ *                ('not_now'), igual que con referral y ambiguous
+ *                ('replied'): nada sale en frío después de que contestó;
  *   ooo          el mensaje guarda su fecha de vuelta (resume_at). Si la
  *                cadencia seguía activa (la respuesta automática no la
  *                detuvo), queda en pausa hasta esa fecha. Si ESTE mensaje
@@ -54,7 +57,7 @@ import { zonedInstant, zonedParts } from '@mc/core/outreach/schedule';
 import type { SqlExecutor, WorkerSql } from '../../client.ts';
 import { advanceEnrollment, cancelPendingForEnrollment } from './enroll.ts';
 import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
-import { applyReplyOptOut, type InboundEffectsInput } from './inbound.ts';
+import { applyReplyOptOut, cancelLoosePitches, type InboundEffectsInput } from './inbound.ts';
 import { assertIds, date, int, oneOf, text, textOrNull, windowOf } from './shared.ts';
 
 /** Cuántos mensajes clasifica una corrida como mucho. */
@@ -509,6 +512,8 @@ async function intentEffects(
           out.canceled = await cancelPendingForEnrollment(tx, m.enrollmentId, 'not_now');
         }
       }
+      // Un pitch suelto a la ficha no sale en frío después de un «ahora no».
+      if (m.contactId) out.canceled.push(...(await cancelLoosePitches(tx, m.workspaceId, m.contactId, 'not_now', m.id)));
       // «Se enfría» y «vuelve a tu bandeja» solo si de verdad se enfrió una cadencia; si no (un pitch suelto, una ficha
       // de baja), el aviso no promete nada que no pasó: solo cuándo volver a escribir.
       const body = out.resumeAt
@@ -547,6 +552,8 @@ async function intentEffects(
       break;
     }
     case 'referral': {
+      // Remite a otra persona: lo que iba a salir a esta ficha fuera de una cadencia lo decide una persona.
+      if (m.contactId) out.canceled.push(...(await cancelLoosePitches(tx, m.workspaceId, m.contactId, 'replied', m.id)));
       const name = d.referral?.name ?? d.referral?.email ?? null;
       out.notified = await notify({
         severity: 'info', title: t.referralTitle(who), body: name ? t.referralBody(name) : t.referralBodyUnknown(),
@@ -554,6 +561,8 @@ async function intentEffects(
       break;
     }
     case 'ambiguous': {
+      // Lo dudoso lo lee una persona antes de que salga nada más a la ficha.
+      if (m.contactId) out.canceled.push(...(await cancelLoosePitches(tx, m.workspaceId, m.contactId, 'replied', m.id)));
       out.notified = await notify({ severity: 'warning', title: t.ambiguousTitle(who), body: t.ambiguousBody() });
       break;
     }

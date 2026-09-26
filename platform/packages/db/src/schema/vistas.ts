@@ -169,7 +169,7 @@ export const outboundTouchRecent = pgView('outbound_touch_recent', {
 // text de queries/outreach/shared).
 // ---------------------------------------------------------------------
 
-/** El número de cada paso en su secuencia (0068): una sola regla para la cola y el embudo. */
+/** El número de cada paso en su secuencia (0067 §1b): una sola regla para la cola y el embudo. */
 export const outboundStepPosition = pgView('outbound_step_position', {
   stepId: uuid('step_id'),
   workspaceId: uuid('workspace_id'),
@@ -215,7 +215,7 @@ export const outboundQueue = pgView('outbound_queue', {
   reason: text('reason'),
   /** Solo en lo fallido: por qué no se puede reintentar (outbound_touch_retry_block), NULL si se puede. */
   retryBlock: text('retry_block'),
-  /** 0069: el estado de la secuencia (draft, active, paused, archived); NULL si el toque no tiene. */
+  /** El estado de la secuencia (draft, active, paused, archived); NULL si el toque no tiene. */
   sequenceStatus: text('sequence_status'),
 }).existing();
 
@@ -265,6 +265,12 @@ export const outboundFunnelByStep = pgView('outbound_funnel_by_step', {
   openRate: numeric('open_rate'),
   replyRate: numeric('reply_rate'),
   positiveRate: numeric('positive_rate'),
+  /** De lo fallido, lo que outbound_touch_retry_block deja volver a la cola. */
+  failedRetryable: integer('failed_retryable'),
+  /** Lo enviado, abierto y respondido de este paso sobre lo enviado en el primero (0 a 1; NULL si el primero no envió). */
+  sentShareOfFirst: numeric('sent_share_of_first'),
+  openedShareOfFirst: numeric('opened_share_of_first'),
+  repliedShareOfFirst: numeric('replied_share_of_first'),
 }).existing();
 
 /** La salud de cada secuencia, con su semáforo. */

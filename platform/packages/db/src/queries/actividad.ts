@@ -1,7 +1,7 @@
 /**
  * Ventas · actividad y métricas del outreach (VEN-16). Dueño: Rasheed.
  *
- * Lee las vistas de 0067, 0068 y 0069 (outbound_queue, outbound_usage_daily,
+ * Lee las vistas de 0067 (outbound_queue, outbound_usage_daily,
  * outbound_funnel_by_step, outbound_sequence_health) y hace las dos
  * escrituras de la pantalla /ventas/actividad: reintentar lo fallido y
  * cancelar lo que está en cola. Todo con la transacción de la web
@@ -116,7 +116,7 @@ export interface QueueRow {
   stepPosition: number | null;
   stepDayOffset: number | null;
   enrollmentStatus: EnrollmentStatus | null;
-  /** El estado de su secuencia (0069); null si el toque no tiene. Pausada, el despachador aplaza lo suyo cada día. */
+  /** El estado de su secuencia (0067); null si el toque no tiene. Pausada, el despachador aplaza lo suyo cada día. */
   sequenceStatus: SequenceStatus | null;
   contactId: string | null;
   contactName: string | null;
@@ -953,6 +953,13 @@ export interface FunnelStep {
   openRate: number | null;
   replyRate: number | null;
   positiveRate: number | null;
+  /** De lo fallido, lo que se puede reintentar desde la actividad (outbound_touch_retry_block, la misma regla). */
+  failedRetryable: number;
+  /**
+   * Lo enviado, abierto y respondido de este paso como fracción de lo enviado en el primero de la secuencia (0 a 1),
+   * para la barra de la vista de flujo; null si el primer paso no envió nada. La calcula la vista, no la pantalla.
+   */
+  shareOfFirst: { sent: number | null; opened: number | null; replied: number | null };
 }
 
 const FUNNEL_COUNTS = ['touches', 'sent', 'opened', 'replied', 'positive', 'pending', 'failed', 'stopped'] as const;
@@ -964,7 +971,9 @@ export async function listFunnelByStep(tx: WorkspaceTx, sequenceId: string): Pro
   const { rows } = await tx.query<Record<string, unknown>>(
     `SELECT f.step_id, f.step_position, f.step_type, f.channel, f.day_offset, f.opens_tracked, f.touches, f.sent, f.opened,
             f.replied, f.positive, f.pending, f.failed, f.stopped, f.open_rate::text AS open_rate,
-            f.reply_rate::text AS reply_rate, f.positive_rate::text AS positive_rate
+            f.reply_rate::text AS reply_rate, f.positive_rate::text AS positive_rate, f.failed_retryable,
+            f.sent_share_of_first::text AS sent_share_of_first, f.opened_share_of_first::text AS opened_share_of_first,
+            f.replied_share_of_first::text AS replied_share_of_first
        FROM outbound_funnel_by_step f
       WHERE f.sequence_id = $1::uuid
       ORDER BY f.step_position`,
@@ -984,6 +993,12 @@ export async function listFunnelByStep(tx: WorkspaceTx, sequenceId: string): Pro
       openRate: rate(fn, p('open_rate'), r.open_rate),
       replyRate: rate(fn, p('reply_rate'), r.reply_rate),
       positiveRate: rate(fn, p('positive_rate'), r.positive_rate),
+      failedRetryable: int(fn, p('failed_retryable'), r.failed_retryable),
+      shareOfFirst: {
+        sent: rate(fn, p('sent_share_of_first'), r.sent_share_of_first),
+        opened: rate(fn, p('opened_share_of_first'), r.opened_share_of_first),
+        replied: rate(fn, p('replied_share_of_first'), r.replied_share_of_first),
+      },
     };
   });
 }

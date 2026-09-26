@@ -40,9 +40,15 @@ export const MESSAGES = {
   loading: { label: "Cargando la bandeja de aprobación" },
   error: { eyebrow: "Ventas · aprobaciones", title: "No pudimos cargar la bandeja de aprobación." },
 
-  /** Un 'viewer' o un 'client' del espacio: ve la cola, no la opera (PUEDEN_OPERAR_VENTAS). */
+  /** Un 'viewer' del espacio: ve la cola, no la opera (PUEDEN_OPERAR_VENTAS). */
   sinPermiso:
     "Solo quien es dueño, administra o es miembro de este espacio puede aprobar, editar, regenerar o saltar estos mensajes. Puedes verlos; para cambiarlos, pídeselo.",
+  /** Un 'client' del espacio (en una agencia, la marca misma): no ve los mensajes a otras marcas (PUEDEN_VER_BANDEJAS). */
+  sinPermisoVer: {
+    title: "Esta bandeja no está a tu alcance",
+    description:
+      "Los mensajes que esperan aprobación van a otras marcas y son del equipo de este espacio. Si necesitas ver alguno, pídeselo a quien lo administra.",
+  },
   contador: (n: string, cuantos: number) => `${n} ${plural(cuantos, "mensaje espera", "mensajes esperan")} tu aprobación`,
   /** La cola es más larga que lo que se enseña: «Mostrando 100 de 240 mensajes que esperan tu aprobación». */
   contadorParcial: (n: string, total: string) => `Mostrando ${n} de ${total} mensajes que esperan tu aprobación. Aprueba o salta para ver los demás.`,
@@ -160,6 +166,11 @@ export const MESSAGES = {
     saltarPregunta: "¿Saltar este paso?",
     saltarConsecuencia: "Este mensaje no sale y la cadencia sigue con el siguiente paso. No se puede deshacer.",
     saltarConfirmar: "Sí, saltar",
+    /** La nota del juez no llega al mínimo: «Aprobar» pregunta antes (Stripe Radar al aprobar un pago de riesgo). */
+    aprobarBajoPregunta: (nota: string) => `¿Aprobar con ${nota} de 10?`,
+    aprobarBajoConsecuencia: (minimo: string) =>
+      `La revisión automática lo dejó por debajo del mínimo (${minimo}). Sale tal cual, a su hora; si prefieres, edítalo antes.`,
+    aprobarBajoConfirmar: "Sí, aprobar",
     resolverEnLaFicha: "Resolver en la ficha",
     /** Debajo del mensaje, las frases con la cifra sin origen señalada. */
     dondeEsta: "Dónde está en el mensaje",

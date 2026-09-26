@@ -29,10 +29,29 @@
 --                             la cola viva, lo enviado y lo fallido en 7
 --                             días, las tasas y un semáforo.
 --
+-- Y dos reglas que las vistas comparten, en un solo sitio (1b):
+--   outbound_step_position    el número de cada paso en su secuencia;
+--   outbound_touch_is_positive  enviado, respondido (replied_at) y con
+--                             una respuesta entrante «interested». Por
+--                             construcción, positivo ⊆ respondido ⊆
+--                             enviado: el embudo nunca crece hacia abajo.
+--
 -- Número: nació como 0065 en su rama; en la integración de la fase 6 pasó
 -- a 0067 porque VEN-14 trajo 0064–0066 (bandejas). No depende de ellas
 -- ni ellas de esta: el runner aplica en orden alfabético lo que no está
 -- registrado.
+--
+-- Una sola migración (pulido r1): las rondas 4 y 5 de VEN-16 habían
+-- dejado dos más, 0068 (una sola regla para el número del paso y para
+-- «positivo») y 0069 (la cola dice si la cadencia está en pausa), que
+-- reemplazaban enteras estas vistas invocando que «una migración aplicada
+-- es inmutable». Ninguna de las tres estaba aplicada en ningún sitio, así
+-- que aquí van fundidas con su definición final: el historial del esquema
+-- tiene una definición de cada vista y el integrador aplica un archivo.
+-- Lo que decían sus cabeceras vive en las secciones 1b, 2, 4 y 5. Y de
+-- esa misma ronda: el embudo cuenta los fallidos que SÍ se pueden
+-- reintentar y la fracción de cada paso sobre el primero (4), y la base
+-- rechaza que un rol de solo lectura cancele o reintente la cola (6).
 --
 -- Reglas que respetan todas:
 --   · security_invoker = on en las vistas (la prueba de esquema lo exige)
@@ -157,6 +176,53 @@ COMMENT ON FUNCTION outbound_touch_retry_block(outbound_touch) IS
   'sequence_archived, enrollment_closed, superseded, opted_out, email_invalid, account_down. Con la RLS de quien llama.';
 
 -- ---------------------------------------------------------------------
+-- 1b · Una sola regla para el número del paso y para «positivo»
+-- ---------------------------------------------------------------------
+-- El número de un paso (row_number por sequence_id, en el orden
+-- day_offset, order_in_day, id) y «positivo» estaban copiados en varias
+-- vistas: si alguien cambiaba el orden en una, la cola decía «Paso 3» de
+-- un toque que el embudo contaba como paso 2, y un «me interesa» sin
+-- replied_at contaba como positivo sin contar como respondido.
+-- outbound_step_order_idx (0037) hace única la pareja (sequence_id,
+-- day_offset, order_in_day), así que el id solo desempata en teoría; el
+-- orden es el de «un paso posterior» de outbound_touch_retry_block y el
+-- de la línea de tiempo de /ventas/cadencias.
+CREATE VIEW outbound_step_position WITH (security_invoker = on) AS
+SELECT st.id AS step_id,
+       st.workspace_id,
+       st.sequence_id,
+       row_number() OVER (PARTITION BY st.sequence_id ORDER BY st.day_offset, st.order_in_day, st.id)::int AS position
+  FROM outbound_step st;
+
+REVOKE INSERT, UPDATE, DELETE ON outbound_step_position FROM mc_app;
+COMMENT ON VIEW outbound_step_position IS
+  'El número de cada paso dentro de su secuencia (VEN-16), en el orden de la línea de tiempo: day_offset, '
+  'order_in_day, id. Una sola definición: la usan outbound_queue y outbound_funnel_by_step.';
+
+-- Positivo = enviado (status 'sent'), respondido (replied_at, que marca
+-- la primera respuesta de verdad; un «fuera de oficina» no) y con al
+-- menos una respuesta ENTRANTE de ese toque clasificada como interested
+-- (outbound_message.intent). Pedir replied_at es lo que garantiza que el
+-- embudo no crezca hacia abajo aunque una clasificación llegue sin él.
+CREATE FUNCTION outbound_touch_is_positive(t outbound_touch)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+  SELECT t.status = 'sent'
+     AND t.replied_at IS NOT NULL
+     AND EXISTS (SELECT 1 FROM outbound_message m
+                  WHERE m.touch_id = t.id AND m.direction = 'inbound' AND m.intent = 'interested');
+$$;
+
+REVOKE ALL ON FUNCTION outbound_touch_is_positive(outbound_touch) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION outbound_touch_is_positive(outbound_touch) TO mc_app, mc_worker;
+COMMENT ON FUNCTION outbound_touch_is_positive(outbound_touch) IS
+  'Un toque positivo (VEN-16, 0067): enviado, respondido (replied_at) y con una respuesta entrante clasificada como '
+  'interested. Positivo ⊆ respondido ⊆ enviado. Con la RLS de quien llama.';
+
+-- ---------------------------------------------------------------------
 -- 2 · outbound_queue
 -- ---------------------------------------------------------------------
 -- bucket:
@@ -181,12 +247,12 @@ COMMENT ON FUNCTION outbound_touch_retry_block(outbound_touch) IS
 -- step_position: el número del paso dentro de su secuencia, en el orden
 --   de la línea de tiempo (día, orden en el día, id), igual que
 --   listSequenceSteps de @mc/db/queries/cadencias.
+--
+-- sequence_status (al final): el despachador no manda lo de una cadencia
+-- en pausa o en borrador (decideBeforeSend lo aplaza cada día), así que la
+-- fila no promete «Sale mañana»; junto con enrollment_status ('paused',
+-- 'cooldown') dice por qué espera.
 CREATE VIEW outbound_queue WITH (security_invoker = on) AS
-WITH pasos AS (
-  SELECT st.id, st.step_type, st.day_offset, st.order_in_day,
-         row_number() OVER (PARTITION BY st.sequence_id ORDER BY st.day_offset, st.order_in_day, st.id)::int AS position
-    FROM outbound_step st
-)
 SELECT t.id AS touch_id,
        t.workspace_id,
        t.status,
@@ -196,9 +262,9 @@ SELECT t.id AS touch_id,
        t.sequence_id,
        s.name AS sequence_name,
        t.step_id,
-       p.step_type,
-       p.position AS step_position,
-       p.day_offset AS step_day_offset,
+       st.step_type,
+       sp.position AS step_position,
+       st.day_offset AS step_day_offset,
        t.enrollment_id,
        e.status AS enrollment_status,
        t.contact_id,
@@ -226,10 +292,13 @@ SELECT t.id AS touch_id,
          WHEN 'skipped' THEN t.blocked_reason
          WHEN 'sent' THEN t.blocked_reason
        END AS reason,
-       CASE WHEN t.status = 'failed' THEN outbound_touch_retry_block(t) END AS retry_block
+       CASE WHEN t.status = 'failed' THEN outbound_touch_retry_block(t) END AS retry_block,
+       -- El estado de la secuencia (draft, active, paused, archived); NULL si el toque no tiene.
+       s.status AS sequence_status
   FROM outbound_touch t
   LEFT JOIN outbound_sequence s ON s.id = t.sequence_id
-  LEFT JOIN pasos p ON p.id = t.step_id
+  LEFT JOIN outbound_step st ON st.id = t.step_id
+  LEFT JOIN outbound_step_position sp ON sp.step_id = t.step_id
   LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
   LEFT JOIN contact c ON c.id = t.contact_id
   LEFT JOIN company co ON co.id = t.company_id
@@ -237,10 +306,11 @@ SELECT t.id AS touch_id,
 
 REVOKE INSERT, UPDATE, DELETE ON outbound_queue FROM mc_app;
 COMMENT ON VIEW outbound_queue IS
-  'La cola y el historial del outreach (VEN-16, 0067): un toque por fila con su estado, su paso, su contacto, su cuenta '
-  '(y el estado de esa cuenta), el código de su motivo (reason) y, en lo fallido, por qué no se puede reintentar '
-  '(retry_block, NULL si se puede). bucket = queue (draft, scheduled, processing, held, failed) o history (sent, '
-  'canceled, skipped). La pantalla /ventas/actividad lee de aquí; nadie recalcula.';
+  'La cola y el historial del outreach (VEN-16, 0067): un toque por fila con su estado, su paso, su '
+  'contacto, su cuenta (y el estado de esa cuenta), el estado de su secuencia (sequence_status) y de su inscripción '
+  '(enrollment_status), el código de su motivo (reason) y, en lo fallido, por qué no se puede reintentar (retry_block, '
+  'NULL si se puede). bucket = queue (draft, scheduled, processing, held, failed) o history (sent, canceled, skipped). '
+  'La pantalla /ventas/actividad lee de aquí; nadie recalcula.';
 
 -- ---------------------------------------------------------------------
 -- 3 · outbound_usage_daily
@@ -383,40 +453,39 @@ COMMENT ON VIEW outbound_usage_daily IS
 --              (0 de 0 no es 0 %)
 --
 -- pending + failed + stopped + sent = touches: cada toque cae en uno.
+--
+-- failed_retryable: de lo fallido, lo que outbound_touch_retry_block deja
+-- volver a la cola (un rebote o una cuenta caída no): el embudo no promete
+-- un «Reintentar» que la actividad no ofrece.
+-- sent_share_of_first, opened_share_of_first, replied_share_of_first: lo
+-- de este paso sobre lo enviado en el primero, para la barra de la vista
+-- de flujo (cuánto retiene cada paso), sin aritmética en la pantalla.
 CREATE VIEW outbound_funnel_by_step WITH (security_invoker = on) AS
-WITH pasos AS (
-  SELECT st.id, st.workspace_id, st.sequence_id, st.step_type, st.channel, st.day_offset, st.order_in_day,
-         row_number() OVER (PARTITION BY st.sequence_id ORDER BY st.day_offset, st.order_in_day, st.id)::int AS position
-    FROM outbound_step st
-),
-toques AS (
+WITH toques AS (
   SELECT t.step_id,
          count(*)::int AS touches,
          count(*) FILTER (WHERE t.status = 'sent')::int AS sent,
          count(*) FILTER (WHERE t.status = 'sent' AND t.opened_at IS NOT NULL)::int AS opened,
          count(*) FILTER (WHERE t.status = 'sent' AND t.replied_at IS NOT NULL)::int AS replied,
-         count(*) FILTER (
-           WHERE t.status = 'sent'
-             AND EXISTS (SELECT 1 FROM outbound_message m
-                          WHERE m.touch_id = t.id AND m.direction = 'inbound' AND m.intent = 'interested')
-         )::int AS positive,
+         count(*) FILTER (WHERE outbound_touch_is_positive(t))::int AS positive,
          count(*) FILTER (WHERE t.status IN ('draft', 'scheduled', 'processing', 'held'))::int AS pending,
          count(*) FILTER (WHERE t.status = 'failed')::int AS failed,
-         count(*) FILTER (WHERE t.status IN ('canceled', 'skipped'))::int AS stopped
+         count(*) FILTER (WHERE t.status IN ('canceled', 'skipped'))::int AS stopped,
+         count(*) FILTER (WHERE t.status = 'failed' AND outbound_touch_retry_block(t) IS NULL)::int AS failed_retryable
     FROM outbound_touch t
    WHERE t.step_id IS NOT NULL
    GROUP BY t.step_id
 )
-SELECT p.workspace_id,
-       p.sequence_id,
+SELECT st.workspace_id,
+       st.sequence_id,
        s.name AS sequence_name,
-       p.id AS step_id,
-       p.position AS step_position,
-       p.step_type,
-       p.channel,
-       p.day_offset,
-       p.order_in_day,
-       (p.channel = 'email') AS opens_tracked,
+       st.id AS step_id,
+       sp.position AS step_position,
+       st.step_type,
+       st.channel,
+       st.day_offset,
+       st.order_in_day,
+       (st.channel = 'email') AS opens_tracked,
        coalesce(x.touches, 0) AS touches,
        coalesce(x.sent, 0) AS sent,
        coalesce(x.opened, 0) AS opened,
@@ -427,16 +496,30 @@ SELECT p.workspace_id,
        coalesce(x.stopped, 0) AS stopped,
        CASE WHEN coalesce(x.sent, 0) > 0 THEN round(x.opened::numeric / x.sent, 4) END AS open_rate,
        CASE WHEN coalesce(x.sent, 0) > 0 THEN round(x.replied::numeric / x.sent, 4) END AS reply_rate,
-       CASE WHEN coalesce(x.sent, 0) > 0 THEN round(x.positive::numeric / x.sent, 4) END AS positive_rate
-  FROM pasos p
-  JOIN outbound_sequence s ON s.id = p.sequence_id
-  LEFT JOIN toques x ON x.step_id = p.id;
+       CASE WHEN coalesce(x.sent, 0) > 0 THEN round(x.positive::numeric / x.sent, 4) END AS positive_rate,
+       coalesce(x.failed_retryable, 0) AS failed_retryable,
+       -- La caída de un paso al siguiente: lo enviado, abierto y respondido de ESTE paso como fracción de lo
+       -- enviado en el primero de su secuencia (entre 0 y 1; NULL si el primero no envió nada). La pantalla lo
+       -- pinta como una barra fina sin hacer la división.
+       CASE WHEN first_value(coalesce(x.sent, 0)) OVER w > 0
+            THEN least(1, round(coalesce(x.sent, 0)::numeric / first_value(coalesce(x.sent, 0)) OVER w, 4)) END AS sent_share_of_first,
+       CASE WHEN first_value(coalesce(x.sent, 0)) OVER w > 0
+            THEN least(1, round(coalesce(x.opened, 0)::numeric / first_value(coalesce(x.sent, 0)) OVER w, 4)) END AS opened_share_of_first,
+       CASE WHEN first_value(coalesce(x.sent, 0)) OVER w > 0
+            THEN least(1, round(coalesce(x.replied, 0)::numeric / first_value(coalesce(x.sent, 0)) OVER w, 4)) END AS replied_share_of_first
+  FROM outbound_step st
+  JOIN outbound_step_position sp ON sp.step_id = st.id
+  JOIN outbound_sequence s ON s.id = st.sequence_id
+  LEFT JOIN toques x ON x.step_id = st.id
+WINDOW w AS (PARTITION BY st.sequence_id ORDER BY sp.position ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING);
 
-REVOKE INSERT, UPDATE, DELETE ON outbound_funnel_by_step FROM mc_app;
 COMMENT ON VIEW outbound_funnel_by_step IS
-  'El embudo de cada paso de cada secuencia (VEN-16, 0067): enviados, abiertos, respondidos y positivos (dentro de lo '
-  'enviado), lo que sigue en cola, lo fallido y lo detenido, con las tasas sobre lo enviado. Cuadra con outbound_touch '
-  'fila a fila.';
+  'El embudo de cada paso de cada secuencia (VEN-16, 0067): enviados, abiertos, respondidos y positivos (dentro '
+  'de lo enviado; positivo = outbound_touch_is_positive, siempre dentro de lo respondido), lo que sigue en cola, lo '
+  'fallido (y cuánto de eso se puede reintentar, failed_retryable) y lo detenido, con las tasas sobre lo enviado y la '
+  'fracción de lo enviado, abierto y respondido sobre lo enviado en el primer paso (*_share_of_first, entre 0 y 1). '
+  'El número del paso sale de outbound_step_position. Cuadra con outbound_touch fila a fila.';
+REVOKE INSERT, UPDATE, DELETE ON outbound_funnel_by_step FROM mc_app;
 
 -- ---------------------------------------------------------------------
 -- 5 · outbound_sequence_health
@@ -468,11 +551,7 @@ WITH toques AS (
          count(*) FILTER (WHERE t.status = 'failed')::int AS failed,
          count(*) FILTER (WHERE t.status = 'sent')::int AS sent,
          count(*) FILTER (WHERE t.status = 'sent' AND t.replied_at IS NOT NULL)::int AS replied,
-         count(*) FILTER (
-           WHERE t.status = 'sent'
-             AND EXISTS (SELECT 1 FROM outbound_message m
-                          WHERE m.touch_id = t.id AND m.direction = 'inbound' AND m.intent = 'interested')
-         )::int AS positive,
+         count(*) FILTER (WHERE outbound_touch_is_positive(t))::int AS positive,
          count(*) FILTER (WHERE t.status = 'sent' AND t.sent_at >= now() - interval '7 days')::int AS sent_7d,
          count(*) FILTER (WHERE t.status = 'failed' AND t.status_changed_at >= now() - interval '7 days')::int AS failed_7d,
          max(t.sent_at) FILTER (WHERE t.status = 'sent') AS last_sent_at,
@@ -531,8 +610,80 @@ SELECT t.*,
        END AS health
   FROM todo t;
 
-REVOKE INSERT, UPDATE, DELETE ON outbound_sequence_health FROM mc_app;
 COMMENT ON VIEW outbound_sequence_health IS
-  'La salud de cada secuencia (VEN-16, 0067): enrolamientos por estado, la cola viva, lo retenido y lo fallido, lo '
-  'enviado y lo fallido en 7 días, las tasas sobre lo enviado y un semáforo (health: inactive, failing, attention, '
-  'healthy).';
+  'La salud de cada secuencia (VEN-16, 0067): enrolamientos por estado, la cola viva, lo retenido y lo fallido, '
+  'lo enviado y lo fallido en 7 días, las tasas sobre lo enviado (positivo = outbound_touch_is_positive, lo mismo que '
+  'el embudo) y un semáforo (health: inactive, failing, attention, healthy).';
+REVOKE INSERT, UPDATE, DELETE ON outbound_sequence_health FROM mc_app;
+
+-- ---------------------------------------------------------------------
+-- 6 · La base también dice quién opera la cola
+-- ---------------------------------------------------------------------
+-- Cancelar mensajes a marcas o devolver a la cola lo fallido es de quien
+-- trabaja las cadencias ('owner', 'admin', 'member'). La web lo mira en
+-- cada Server Action (PUEDEN_OPERAR_LA_COLA, PUEDEN_OPERAR_VENTAS), pero
+-- la RLS de outbound_touch es por workspace: otro camino de escritura con
+-- la sesión de un 'viewer' o un 'client' (una acción futura, una ruta
+-- API) podía mover la cola. Como la política de envío (0050,
+-- outreach_can_manage), la base falla cerrada:
+--
+--   · solo mira a mc_app con una persona en la sesión (app.user_id). El
+--     worker (mc_worker), el enlace de baja (mc_public_share) y quien
+--     migra no cambian; sin sesión, la bandera app.auth_disabled
+--     (desarrollo sin Supabase Auth, pruebas) tampoco;
+--   · rechaza (42501) pasar un toque a 'canceled' y devolver a
+--     'scheduled' uno 'failed' si esa persona no es owner, admin o member
+--     del workspace del toque.
+-- ---------------------------------------------------------------------
+CREATE FUNCTION outreach_can_operate(p_workspace uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+  SELECT (current_user_id() IS NULL AND coalesce(current_setting('app.auth_disabled', true), '') = 'on')
+      OR EXISTS (SELECT 1 FROM membership m
+                  WHERE m.workspace_id = p_workspace
+                    AND m.user_id = current_user_id()
+                    AND m.role IN ('owner', 'admin', 'member'));
+$$;
+
+REVOKE ALL ON FUNCTION outreach_can_operate(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION outreach_can_operate(uuid) TO mc_app, mc_worker;
+COMMENT ON FUNCTION outreach_can_operate(uuid) IS
+  'Si quien está en la transacción puede operar la cola del outreach del workspace: owner, admin o member (VEN-16). '
+  'Sin identidad responde que no, salvo con app.auth_disabled = ''on'' (desarrollo sin Supabase Auth, pruebas). '
+  'Corre con los privilegios de quien llama: mc_app solo ve las membresías del workspace fijado y las suyas.';
+
+CREATE FUNCTION outbound_touch_guard_operator()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  -- En dos pasos: una sola expresión no garantiza el orden de evaluación, y
+  -- quien no es mc_app (el enlace de baja, mc_public_share) no puede llamar
+  -- a outreach_can_operate.
+  IF current_user <> 'mc_app' THEN
+    RETURN NEW;
+  END IF;
+  IF current_user_id() IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF ((NEW.status = 'canceled' AND OLD.status IS DISTINCT FROM 'canceled')
+      OR (OLD.status = 'failed' AND NEW.status = 'scheduled')) THEN
+    IF NOT outreach_can_operate(NEW.workspace_id) THEN
+      RAISE EXCEPTION 'Solo quien opera Ventas en este espacio (owner, admin o member) puede cancelar o reintentar mensajes.'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION outbound_touch_guard_operator() IS
+  'Rechaza (42501) que mc_app, con una persona en la sesión, cancele un toque o devuelva a la cola uno fallido si esa '
+  'persona no es owner, admin o member del workspace (VEN-16, pulido r1). El worker y el enlace de baja no pasan por aquí.';
+
+CREATE TRIGGER outbound_touch_guard_operator BEFORE UPDATE OF status ON outbound_touch
+  FOR EACH ROW EXECUTE FUNCTION outbound_touch_guard_operator();

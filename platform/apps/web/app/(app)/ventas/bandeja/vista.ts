@@ -185,6 +185,8 @@ export interface ConversacionVista {
   persona: string;
   empresa: string;
   canal: string;
+  /** La URL de este hilo en la vista actual: donde queda fijada la abierta sola al marcarse leída. */
+  href: string;
   fichaHref: string;
   negocio: string | null;
   siguiente: string | null;
@@ -257,7 +259,7 @@ function pendienteVista(p: PendingReply, lang: NoticeLang): PendienteVista {
 export function conversacionVista(
   c: InboxConversation,
   f: Formatter,
-  opts: { clasificador: ClassifierStatus; implicita?: boolean; puedeOperar?: boolean },
+  opts: { clasificador: ClassifierStatus; implicita?: boolean; puedeOperar?: boolean; vista?: VistaBandeja },
 ): ConversacionVista {
   const t = MESSAGES;
   const apagado = opts.clasificador === "off";
@@ -269,6 +271,7 @@ export function conversacionVista(
     persona,
     empresa: c.companyName,
     canal: channelLabel(lang, c.channel),
+    href: hiloHref(c.contactId, c.channel, opts.vista),
     fichaHref: `/ventas/empresas/${c.companyId}`,
     negocio: c.deal ? t.conversacion.negocio(c.deal.stageLabel) : null,
     siguiente: c.deal?.nextAction ? t.conversacion.siguiente(c.deal.nextAction) : null,

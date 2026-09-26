@@ -213,9 +213,15 @@ export const MESSAGES = {
     motivoGenerico: "No pudo salir. Escríbela otra vez si todavía hace falta.",
   },
 
-  /** Un 'viewer' o un 'client' del espacio: lee los hilos, no los opera (PUEDEN_OPERAR_VENTAS). */
+  /** Un 'viewer' del espacio: lee los hilos, no los opera (PUEDEN_OPERAR_VENTAS). */
   sinPermiso:
     "Solo quien es dueño, administra o es miembro de este espacio puede responder, corregir o marcar estas conversaciones. Puedes leerlas; para cambiarlas, pídeselo.",
+  /** Un 'client' del espacio (en una agencia, la marca misma): no lee las conversaciones con otras marcas (PUEDEN_VER_BANDEJAS). */
+  sinPermisoVer: {
+    title: "Esta bandeja no está a tu alcance",
+    description:
+      "Las conversaciones con las marcas son del equipo de este espacio. Si necesitas ver alguna, pídesela a quien lo administra.",
+  },
 
   errores: {
     generico: "No pudimos guardar tu respuesta. Inténtalo de nuevo.",

@@ -38,18 +38,49 @@ function cifrasDe(s: FunnelStep, f: Formatter): CifraFlujo[] {
     c("replied", s.replied, dice(x.replied, s.replied), { tasa: tasa(s.replyRate) }),
     c("positive", s.positive, dice(x.positive, s.positive), { tasa: tasa(s.positiveRate), tono: s.positive > 0 ? "good" : "muted" }),
     c("pending", s.pending, dice(x.pending, s.pending)),
-    c("failed", s.failed, dice(x.failed, s.failed), { tono: s.failed > 0 ? "bad" : "muted" }),
+    c("failed", s.failed, fallidos(s, f), { tono: s.failed > 0 ? "bad" : "muted" }),
     c("stopped", s.stopped, dice(x.stopped, s.stopped)),
   ];
 }
 
-export function pasosFlujo(funnel: FunnelStep[], f: Formatter): PasoFlujo[] {
+/**
+ * Lo que explica «fallidos»: si todos se pueden reintentar, «puedes
+ * reintentarlos»; si ninguno (un rebote, la cuenta caída), que no; si solo
+ * algunos, cuántos. El conteo de los reintentables sale de la vista, con la
+ * misma regla que el botón de la actividad (outbound_touch_retry_block).
+ */
+function fallidos(s: FunnelStep, f: Formatter): string {
+  const x = F.explica;
+  if (s.failed === 0 || s.failedRetryable >= s.failed) return x.failed(f.int(s.failed), s.failed);
+  if (s.failedRetryable === 0) return x.failedNinguno(f.int(s.failed), s.failed);
+  return x.failedAlgunos(f.int(s.failed), s.failed, f.int(s.failedRetryable), s.failedRetryable);
+}
+
+/** Las barras de un paso sobre lo enviado en el primero; sin envíos en el primero, ninguna. */
+function barrasDe(s: FunnelStep, f: Formatter): PasoFlujo["barras"] {
+  const b = F.barras;
+  const filas = (["sent", "opened", "replied"] as const)
+    .filter((k) => k !== "opened" || s.opensTracked)
+    .map((k) => ({ key: k, etiqueta: b[k], fraccion: s.shareOfFirst[k], valor: "" }));
+  if (filas.some((r) => r.fraccion === null)) return null;
+  return filas.map((r) => ({ ...r, fraccion: r.fraccion!, valor: f.pct(r.fraccion!) }));
+}
+
+export function pasosFlujo(funnel: FunnelStep[], f: Formatter, sequenceId: string | null = null): PasoFlujo[] {
   return funnel.map((s, i) => ({
     id: s.stepId,
     titulo: F.paso(f.int(s.position), f.int(s.dayOffset), etiquetaTipo(s.stepType)),
     espera: esperaEntre(funnel[i - 1], s, f),
     icono: <IconoCanal canal={s.channel} tipo={s.stepType} size={13} />,
     cifras: cifrasDe(s, f),
+    barras: barrasDe(s, f),
+    reintentar:
+      sequenceId && s.failedRetryable > 0
+        ? {
+          texto: F.reintentar(f.int(s.failedRetryable), s.failedRetryable),
+          href: hrefDe({ vista: "queue", cadencia: sequenceId, tipo: s.stepType, contacto: null }),
+        }
+        : null,
   }));
 }
 
@@ -98,7 +129,7 @@ export function MetricasCadenciaVista({
         <Kpi label={k.fallidos} value={f.int(health.failed)} note={k.fallidosNota(f.int(health.failed7d))} />
       </KpiRow>
       {health.sent === 0 && <EmptyState title={E.vacio.titulo} description={E.vacio.descripcion} />}
-      <FlujoCadencia pasos={pasosFlujo(funnel, f)} />
+      <FlujoCadencia pasos={pasosFlujo(funnel, f, sequenceId)} />
     </section>
   );
 }

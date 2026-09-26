@@ -84,7 +84,7 @@ SELECT 'f_filas_propias' AS check_id,
        (SELECT count(*) FROM outbound_touch WHERE id::text LIKE '00000008-%' AND contact_id::text NOT LIKE '00000008-%')
      + (SELECT count(*) FROM outbound_enrollment WHERE id::text LIKE '00000008-%' AND contact_id::text NOT LIKE '00000008-%')
      + (SELECT count(*) FROM outbound_message WHERE id::text LIKE '00000008-%' AND contact_id::text NOT LIKE '00000008-%') = 0
-         AND (SELECT count(*) FROM company_link WHERE company_id::text LIKE '00000008-%') = 5 AS ok;
+         AND (SELECT count(*) FROM company_link WHERE company_id::text LIKE '00000008-%') = 6 AS ok;
 
 -- (g) El retenido de Molino Andino enseña la regla de las cifras (ronda 4):
 --     su «23 %» no lo respalda NINGUNA proporción de la audiencia de Laura
@@ -107,3 +107,41 @@ SELECT 'g_cifra_sin_origen' AS check_id,
   FROM outbound_touch t
   JOIN outbound_generation g ON g.touch_id = t.id
  WHERE t.id = '00000008-0000-4000-8000-000000070002';
+
+-- (h) La demo enseña «me interesa → En conversación» (criterio de VEN-14):
+--     la respuesta de Juliana (Frutos del Páramo) está clasificada como
+--     interesada por el modelo, su negocio pasó de «Contactado» a «En
+--     conversación» con «Responder hoy» y vence hoy (hora local), su
+--     cadencia quedó 'replied' con el paso siguiente cancelado, y nada de
+--     eso está en el futuro.
+SELECT 'h_me_interesa_mueve_el_negocio' AS check_id,
+       d.stage_id, d.next_action, p.due_state,
+       (SELECT string_agg(coalesce(s.from_stage_id, '-') || '>' || s.to_stage_id, ',' ORDER BY s.changed_at)
+          FROM deal_stage_history s WHERE s.deal_id = d.id) AS etapas,
+       d.stage_id = 'conversacion' AND d.next_action = 'Responder hoy' AND p.due_state = 'hoy'
+         AND (SELECT string_agg(coalesce(s.from_stage_id, '-') || '>' || s.to_stage_id, ',' ORDER BY s.changed_at)
+                FROM deal_stage_history s WHERE s.deal_id = d.id) = '->contactado,contactado>conversacion'
+         AND EXISTS (SELECT 1 FROM outbound_message m WHERE m.deal_id = d.id AND m.direction = 'inbound'
+                       AND m.intent = 'interested' AND m.intent_source = 'model' AND m.occurred_at <= now()
+                       AND m.classified_at <= now() AND m.read_at IS NULL)
+         AND (SELECT e.status FROM outbound_enrollment e WHERE e.deal_id = d.id) = 'replied'
+         AND (SELECT string_agg(t.status || coalesce(':' || t.blocked_reason, ''), ',' ORDER BY t.step_index)
+                FROM outbound_touch t WHERE t.deal_id = d.id) = 'sent,sent,canceled:replied'
+         AND d.last_contact_at <= now() AS ok
+  FROM deal d
+  JOIN deal_pipeline p ON p.id = d.id
+ WHERE d.id = '00000008-0000-4000-8000-0000000dea01';
+
+-- (i) Las horas de la bandeja (pulido r1): cada mensaje de este seed a una
+--     hora de oficina del día local, no a la hora a la que se sembró; nada
+--     en el futuro; y el «fuera de la oficina» de Esteban vuelve diez días
+--     después del día en que respondió.
+SELECT 'i_horas_de_la_bandeja' AS check_id,
+       string_agg(to_char(m.occurred_at AT TIME ZONE 'America/Bogota', 'HH24:MI'), ',' ORDER BY m.id) AS horas,
+       bool_and(m.occurred_at <= now()) AND bool_and(m.classified_at IS NULL OR m.classified_at >= m.occurred_at)
+         AND bool_and(m.id = '00000008-0000-4000-8000-0000000a6008'
+                      OR (m.occurred_at AT TIME ZONE 'America/Bogota')::time BETWEEN time '08:00' AND time '19:00')
+         AND (SELECT (r.resume_at AT TIME ZONE 'America/Bogota')::date - (r.occurred_at AT TIME ZONE 'America/Bogota')::date
+                FROM outbound_message r WHERE r.id = '00000008-0000-4000-8000-0000000a6006') = 10 AS ok
+  FROM outbound_message m
+ WHERE m.id::text LIKE '00000008-%';
