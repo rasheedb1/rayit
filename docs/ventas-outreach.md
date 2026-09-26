@@ -552,6 +552,18 @@ que el despachador de VEN-10 tiene que usar, todo en
   (`contact.opted_out_reason = 'unsubscribe_link'`,
   `outbound_policy.disabled_reason = 'manual'`) y la pantalla lo traduce.
   Es la decisión 6 de §8, tomada como supuesto declarado.
+- **La baja no se apaga (entregabilidad §8.4, pulido r2).** La baja por
+  respuesta (intención `unsubscribe`) o marcada a mano en la ficha
+  también entra en `outbound_workspace_optout`, con `source` `reply` o
+  `manual` (la del enlace es `link` y es la única con token): antes solo
+  quedaba en `contact.opted_out`, y borrar la ficha y crearla otra vez con
+  el mismo correo la dejaba contactable. La anota
+  `outbound_workspace_optout_record` (SECURITY DEFINER, solo el workspace
+  de la transacción) desde los dos `optOutContact`; el worker escribe la
+  fila directo. `mc_app` no borra una ficha de baja
+  (`contact_optout_no_delete`), y si se borra por otra vía (la cascada de
+  su empresa), `contact_optout_keep` guarda su correo en la lista de su
+  workspace. Prueba: `entregabilidad.test.ts`, «la baja no se apaga».
 - **Cada correo** lleva `buildEmailFooter` (frase de baja con
   `optoutUrl` y la dirección postal de la política; sin dirección no hay
   pie y el correo no está listo) y `listUnsubscribeHeaders`.
