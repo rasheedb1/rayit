@@ -1014,10 +1014,22 @@ el recomendador.
   (`WHY_MIN_LIFT = 1,5`); de los ejes que pasan, se dice solo el de mayor
   contraste (`WHY_MAX_REASONS = 1`). Las dos medianas son claims por
   video (`porque-<video>-<eje>-<grupo>` y `…-resto`) con las filas que
-  las forman. Con el seed de Laura ningún rasgo alcanza, y la pantalla y
-  la plantilla describen el video sin inventarle una causa. Lo que se
-  lee de los captions sigue en `perfil-captions.ts`; si
+  las forman. Cuando ningún rasgo alcanza, la pantalla y la plantilla
+  describen el video sin inventarle una causa. En la demo, el seed
+  `0010_demo_porque.sql` deja lo que dejaría el laboratorio de video
+  tras analizar cinco videos de Laura que abren con un reto
+  (`hook.type = 'challenge'`): dos de los cinco mejores (la arepa sin
+  plancha y la pasta en cuatro minutos) muestran «Lo distingue» con un
+  contraste de 1,7 veces (verify/0010.sql y
+  `packages/db/test/perfil-comercial.test.ts` lo exigen). Lo que se lee
+  de los captions sigue en `perfil-captions.ts`; si
   `creator_post_board.hook_type` existe, gana.
+- **De dónde sale cada cifra**: la mediana de cada red y la de cada uno
+  de los mejores listan los videos que la forman (`readBaselinePosts`:
+  la regla de `creator_baseline`, y solo si cuadra con su
+  `sample_size`); la demografía dice de qué informe sale y el resto del
+  reparto de esa lectura. Resumen no tiene sección de demografía, así
+  que no hay otra pantalla a la que enlazarla.
 - **Guardado**: `creator_profile.media_kit → perfil_comercial`
   (`StoredPerfil`, versión 3, con `computedAt`), escrito con
   `jsonb_set` sin tocar las demás claves. Trae la portada de cada uno de

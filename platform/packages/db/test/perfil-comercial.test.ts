@@ -105,6 +105,14 @@ test('con el seed, el porqué nunca se demuestra con el mismo video y cada agreg
       assert.ok(Number(grupo.value) >= 1.5 * Number(resto.value), v.title);
     }
   }
+  // Con el seed 0010 (el laboratorio de video marcó cinco videos que abren
+  // con un reto), la demo enseña «Lo distingue» en al menos uno de los cinco.
+  const conRazon = perfil.performance.top.filter((v) => v.why.reasons.length > 0);
+  assert.ok(conRazon.length >= 1, 'ninguno de los cinco mejores tiene porqué');
+  for (const v of conRazon) {
+    assert.equal(v.why.hookSource, 'video_analysis', v.title);
+    assert.deepEqual(v.why.reasons.map((r) => [r.axis, r.group]), [['hook', 'reto']], v.title);
+  }
   // Los posts de los agregados vienen con título y enlace para «De dónde sale cada cifra».
   const indice = new Map(perfil.posts.map((p) => [p.postId, p]));
   const captions = claim('captions-leidos');

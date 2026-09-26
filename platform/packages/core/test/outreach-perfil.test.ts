@@ -86,7 +86,7 @@ test('el perfil es determinista: las mismas filas dan los mismos ids y el mismo 
   assert.deepEqual(buildPerfil(entradasLaura()), buildPerfil(entradasLaura()));
 });
 
-test('con el seed, ningún rasgo alcanza: el porqué no se inventa y describe el video', () => {
+test('con siete videos (el fixture), ningún rasgo alcanza: el porqué no se inventa y describe el video', () => {
   const p = buildPerfil(entradasLaura());
   // Siete videos con puntaje: ningún grupo tiene tres OTROS videos y tres del otro lado con la mitad más de rendimiento.
   for (const v of p.performance.top) assert.deepEqual(v.why.reasons, [], v.title);
