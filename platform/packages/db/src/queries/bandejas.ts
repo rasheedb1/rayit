@@ -1,7 +1,9 @@
 /**
  * Las bandejas de Ventas (VEN-14): lo que leen y escriben
  * /ventas/aprobaciones y /ventas/bandeja. Corre con la RLS del workspace
- * (WorkspaceTx): la pantalla nunca fija el workspace.
+ * (WorkspaceTx): la pantalla nunca fija el workspace. Las lecturas nombran
+ * además current_workspace_id(): la RLS es el candado y el filtro es una
+ * segunda llave (y lo que hace que el worker, que la salta, lea lo mismo).
  *
  * La bandeja de aprobación es la cola de lo que espera a una persona:
  *
@@ -105,7 +107,8 @@ function scoresOf(v: Record<string, unknown> | null): ApprovalReview['scores'] {
 }
 
 /**
- * La cola de aprobación: primero lo que lleva más tiempo esperando. Los
+ * La cola de aprobación: primero lo que sale antes (su hora), y lo que
+ * lleva más tiempo esperando para desempatar. Los
  * retenidos de cualquier origen (cadencia, pitch) y los borradores de
  * cadencia que una persona mandó regenerar.
  */
@@ -132,9 +135,9 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
                  WHERE st.step_type = 'email_reply' AND pt.enrollment_id = t.enrollment_id AND pt.channel = t.channel
                    AND pt.status = 'sent' AND pt.id <> t.id
                  ORDER BY pt.sent_at DESC NULLS LAST LIMIT 1) hilo ON true
-        WHERE t.status = 'held'
-           OR (t.status = 'draft' AND t.enrollment_id IS NOT NULL AND g.requested_at IS NOT NULL)
-        ORDER BY t.status_changed_at, t.id
+        WHERE t.workspace_id = current_workspace_id()
+          AND (t.status = 'held' OR (t.status = 'draft' AND t.enrollment_id IS NOT NULL AND g.requested_at IS NOT NULL))
+        ORDER BY t.scheduled_for NULLS LAST, t.status_changed_at, t.step_index NULLS LAST, t.id
         LIMIT $1`,
       [Math.max(1, Math.min(opts.limit ?? APPROVAL_QUEUE_LIMIT, 500))],
     )
@@ -292,19 +295,19 @@ export async function listInboxThreads(tx: WorkspaceTx, opts: { limit?: number }
       `WITH ultimo AS (
               SELECT DISTINCT ON (m.contact_id, m.channel) m.contact_id, m.channel, m.body, m.direction, m.occurred_at
                 FROM outbound_message m
-               WHERE m.contact_id IS NOT NULL
+               WHERE m.contact_id IS NOT NULL AND m.workspace_id = current_workspace_id()
                ORDER BY m.contact_id, m.channel, m.occurred_at DESC, m.id DESC),
             cuenta AS (
               SELECT m.contact_id, m.channel,
                      count(*) FILTER (WHERE m.direction = 'inbound' AND m.read_at IS NULL)::int AS unread,
                      count(*) FILTER (WHERE m.direction = 'inbound')::int AS inbound
                 FROM outbound_message m
-               WHERE m.contact_id IS NOT NULL
+               WHERE m.contact_id IS NOT NULL AND m.workspace_id = current_workspace_id()
                GROUP BY m.contact_id, m.channel),
             intencion AS (
               SELECT DISTINCT ON (m.contact_id, m.channel) m.contact_id, m.channel, m.intent
                 FROM outbound_message m
-               WHERE m.contact_id IS NOT NULL AND m.direction = 'inbound'
+               WHERE m.contact_id IS NOT NULL AND m.direction = 'inbound' AND m.workspace_id = current_workspace_id()
                ORDER BY m.contact_id, m.channel, m.occurred_at DESC, m.id DESC)
        SELECT u.contact_id, u.channel, c.full_name AS contact_name, co.id AS company_id, co.name AS company_name,
               u.occurred_at AS last_at, u.direction AS last_direction, u.body AS last_body, k.unread, i.intent AS last_intent
@@ -405,7 +408,7 @@ export async function loadInboxConversation(tx: WorkspaceTx, contactId: string, 
          JOIN company co ON co.id = c.company_id
          LEFT JOIN LATERAL (
                 SELECT d.id, d.stage_id, d.next_action FROM deal d
-                 WHERE d.company_id = co.id AND d.won_at IS NULL AND d.lost_at IS NULL
+                 WHERE d.company_id = co.id AND d.workspace_id = current_workspace_id() AND d.won_at IS NULL AND d.lost_at IS NULL
                  ORDER BY d.updated_at DESC, d.id LIMIT 1) d ON true
          LEFT JOIN pipeline_stage ps ON ps.id = d.stage_id
         WHERE c.id = $1::uuid`,
@@ -425,7 +428,7 @@ export async function loadInboxConversation(tx: WorkspaceTx, contactId: string, 
               coalesce(a.display_name, a.provider_account_id) AS account, a.status AS account_status
          FROM outbound_message m
          LEFT JOIN outreach_channel_account a ON a.id = m.channel_account_id
-        WHERE m.contact_id = $1::uuid AND m.channel = $2
+        WHERE m.contact_id = $1::uuid AND m.channel = $2 AND m.workspace_id = current_workspace_id()
         ORDER BY m.occurred_at, m.created_at, m.id`,
       [contactId, channel],
     )
@@ -436,7 +439,7 @@ export async function loadInboxConversation(tx: WorkspaceTx, contactId: string, 
       `SELECT t.id, t.status, t.body, t.scheduled_for, t.held_reason, t.blocked_reason
          FROM outbound_touch t
          JOIN outbound_message m ON m.id = t.reply_to_message_id
-        WHERE t.contact_id = $1::uuid AND t.channel = $2
+        WHERE t.contact_id = $1::uuid AND t.channel = $2 AND t.workspace_id = current_workspace_id()
           AND (t.status IN ('scheduled', 'processing', 'held') OR (t.status IN ('failed', 'canceled') AND t.sent_at IS NULL))
           AND NOT EXISTS (SELECT 1 FROM outbound_message o WHERE o.touch_id = t.id)
         ORDER BY t.created_at, t.id`,
@@ -498,6 +501,7 @@ export async function markInboxThreadRead(tx: WorkspaceTx, contactId: string, ch
   const r = await tx.query(
     `UPDATE outbound_message SET read_at = $3::timestamptz
       WHERE contact_id = $1::uuid AND channel = $2 AND direction = 'inbound' AND read_at IS NULL
+        AND workspace_id = current_workspace_id()
       RETURNING id`,
     [contactId, channel, now.toISOString()],
   );

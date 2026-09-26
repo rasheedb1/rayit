@@ -236,7 +236,13 @@ export async function loadSendContext(tx: WorkerSql, touchId: string): Promise<S
   const prev = r.reply_to_message_id
     ? (
         await tx.query<{ subject: string | null; thread_ref: string | null; message_id_rfc: string | null; provider_message_id: string | null }>(
-          `SELECT subject, thread_ref, message_id_rfc, provider_message_id FROM outbound_message WHERE id = $1::uuid`,
+          // El asunto del hilo: el de la respuesta, o el de nuestro último correo en ese hilo (sale como «Re: …»).
+          `SELECT coalesce(m.subject, (SELECT o.subject FROM outbound_message o
+                                        WHERE o.workspace_id = m.workspace_id AND o.thread_ref = m.thread_ref
+                                          AND o.direction = 'outbound' AND o.subject IS NOT NULL
+                                        ORDER BY o.occurred_at DESC LIMIT 1)) AS subject,
+                  m.thread_ref, m.message_id_rfc, m.provider_message_id
+             FROM outbound_message m WHERE m.id = $1::uuid`,
           [r.reply_to_message_id],
         )
       ).rows[0]
