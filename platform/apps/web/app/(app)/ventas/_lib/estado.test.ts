@@ -65,7 +65,7 @@ describe("etiquetas de la base", () => {
   it("solo el radar y el pipeline viajan en la URL; Empresas, Cadencias, Canales, Perfil y Brief son su propia ruta", () => {
     expect(TABS).toEqual(["radar", "pipeline"]);
     expect(tabKey("empresas")).toBe("radar");
-    expect(MODULE_LINKS.map((l) => l.href)).toEqual(["/ventas", "/ventas?vista=pipeline", "/ventas/empresas", "/ventas/cadencias", "/ventas/aprobaciones", "/ventas/bandeja", "/ventas/actividad", "/ventas/canales", "/ventas/perfil", "/ventas/brief"]);
+    expect(MODULE_LINKS.map((l) => l.href)).toEqual(["/ventas", "/ventas?vista=pipeline", "/ventas/empresas", "/ventas/cadencias", "/ventas/aprobaciones", "/ventas/bandeja", "/ventas/actividad", "/ventas/canales", "/ventas/politica", "/ventas/perfil", "/ventas/brief"]);
   });
 });
 

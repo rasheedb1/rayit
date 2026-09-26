@@ -67,6 +67,8 @@ export const MESSAGES = {
     pipeline: "Pipeline",
     empresas: "Empresas",
     canales: "Canales",
+    /** /ventas/politica: dónde se enciende el envío y se ven la salud y los topes (VEN-15). */
+    politica: "Política",
     cadencias: "Cadencias",
     aprobaciones: "Aprobaciones",
     bandeja: "Bandeja",

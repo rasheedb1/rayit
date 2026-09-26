@@ -12,6 +12,8 @@ export default function PoliticaLoading() {
         <span className="mt-3 block h-7 w-3/4 animate-pulse rounded-sm bg-hover" />
         <span className="mt-3 block h-4 w-full animate-pulse rounded-sm bg-hover" />
       </div>
+      {/* La tira de pestañas de Ventas. */}
+      <span className="mb-6 block h-9 w-full max-w-md animate-pulse rounded-md bg-hover" />
       <div className="mb-10 h-20 animate-pulse rounded-md border border-line bg-hover" />
       <div className="mb-10 grid gap-px sm:grid-cols-2 lg:grid-cols-4">
         {Array.from({ length: 4 }, (_, i) => (

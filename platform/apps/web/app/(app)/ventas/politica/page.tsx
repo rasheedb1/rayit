@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { formatTime, formatterFor } from "@/lib/format";
 import { correoDeSoporte } from "@/lib/soporte";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { ModuleTabs } from "../_componentes/pestanas";
 import { withWorkspace } from "../_lib/db";
 import { PoliticaForm, type PoliticaFormProps } from "./form";
 import { Interruptor } from "./interruptor";
@@ -83,6 +84,7 @@ export default async function PoliticaPage() {
           </Button>
         }
       />
+      <ModuleTabs active="/ventas/politica" />
 
       <Interruptor
         enabled={policy.enabled}
