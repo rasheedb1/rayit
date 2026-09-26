@@ -9,6 +9,7 @@ import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { Aviso } from "../../_lib/aviso";
 import { ModuleTabs } from "../_componentes/pestanas";
+import { UsoPorCanal } from "../actividad/_componentes/uso-por-canal";
 import { channelBanner } from "./_lib/banner";
 import { channelSetup, isChannel, showAdminDetails, type Channel } from "./_lib/config";
 import { CANALES } from "./_lib/conexion";
@@ -280,6 +281,8 @@ export default async function CanalesPage({ searchParams }: { searchParams: Prom
             ))}
           </ul>
         </section>
+        {/* VEN-16: el uso de hoy por cuenta, con su límite blando, su límite duro y su semáforo. */}
+        <UsoPorCanal />
       </div>
     </>
   );

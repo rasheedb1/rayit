@@ -17,6 +17,10 @@ export interface TipoReintentable {
  * Chief: un botón por tipo con cuántos fallidos reintentables tiene, con
  * la cadencia y el contacto que filtra la pantalla. El resultado se
  * anuncia (qué volvió a la cola y qué no, con su motivo).
+ *
+ * La pantalla lo monta siempre en la cola, también sin nada que
+ * reintentar: así, después de reintentar lo último, el resultado sigue a
+ * la vista. Sin tipos y sin resultado, no pinta nada.
  */
 export function ReintentarPorTipo({
   tipos, sequenceId, contact,
@@ -34,29 +38,26 @@ export function ReintentarPorTipo({
     });
   }
 
+  if (tipos.length === 0 && !estado.ok && !estado.error) return null;
   return (
     <section aria-labelledby="reintentar-titulo" className="rounded-md border border-line bg-surface p-3 sm:p-4">
       <h2 id="reintentar-titulo" className="text-sm font-semibold">{t.titulo}</h2>
       <p className="mt-1 text-xs text-fg-2">{t.ayuda}</p>
-      {tipos.length === 0 ? (
-        <p className="mt-3 text-xs text-fg-3">{t.nada}</p>
-      ) : (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {tipos.map((tipo) => (
-            <Button
-              key={tipo.stepType}
-              size="sm"
-              variant="secondary"
-              icon={<RotateCcw size={13} aria-hidden />}
-              loading={ocupado && cual === tipo.stepType}
-              disabled={ocupado}
-              onClick={() => reintentar(tipo.stepType)}
-            >
-              {tipo.label}
-            </Button>
-          ))}
-        </div>
-      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {tipos.map((tipo) => (
+          <Button
+            key={tipo.stepType}
+            size="sm"
+            variant="secondary"
+            icon={<RotateCcw size={13} aria-hidden />}
+            loading={ocupado && cual === tipo.stepType}
+            disabled={ocupado}
+            onClick={() => reintentar(tipo.stepType)}
+          >
+            {tipo.label}
+          </Button>
+        ))}
+      </div>
       <p role="status" aria-live="polite" className={`mt-2 text-xs ${estado.error ? "text-bad" : "text-fg-2"}`}>
         {estado.error ?? estado.ok ?? ""}
       </p>

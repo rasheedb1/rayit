@@ -39,7 +39,7 @@ function Pestanas({ filtros, counts, int }: { filtros: Filtros; counts: Record<Q
             title={it.ayuda}
             className={`rounded-full border px-3 py-1 text-xs tabular-nums transition-colors ${on ? "border-fg bg-fg text-bg" : "border-line text-fg-2 hover:border-line-2 hover:text-fg"}`}
           >
-            {it.label} · {int(counts[it.vista])}
+            {t.conCifra(it.label, int(counts[it.vista]))}
           </Link>
         );
       })}
@@ -110,7 +110,7 @@ export default async function ActividadPage({ searchParams }: { searchParams: Pr
       <div className="flex flex-col gap-5">
         <Pestanas filtros={filtros} counts={facets.counts} int={f.int} />
         <Filtrar filtros={filtros} cadencias={facets.sequences} tipos={facets.stepTypes} />
-        {enCola && facets.retryableByStepType.length > 0 && (
+        {enCola && (
           <ReintentarPorTipo
             tipos={facets.retryableByStepType.map((x) => ({
               stepType: x.stepType,

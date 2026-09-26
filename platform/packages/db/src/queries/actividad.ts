@@ -490,6 +490,10 @@ export interface ChannelUsageDay {
   used: number;
   /** El límite duro de ese día (con la curva de calentamiento de ese día). */
   limit: number;
+  /** used / limit, entre 0 y 1: el alto de la barra del día. */
+  share: number;
+  /** El semáforo de ese día contra su límite. */
+  level: UsageLevel;
 }
 
 export interface ChannelUsage {
@@ -593,7 +597,10 @@ export async function listChannelUsage(tx: WorkspaceTx): Promise<ChannelUsage[]>
       level: usageLevel(today.used, softLimit, hardLimit),
       usedShare: share(today.used, hardLimit),
       softShare: share(softLimit, hardLimit),
-      history: days.map((d) => ({ day: d.day, used: d.used, limit: usageHardLimit(d.daily_limit, d.warmup_day, d.warmup_days) })),
+      history: days.map((d) => {
+        const limit = usageHardLimit(d.daily_limit, d.warmup_day, d.warmup_days);
+        return { day: d.day, used: d.used, limit, share: share(d.used, limit), level: usageLevel(d.used, usageSoftLimit(limit), limit) };
+      }),
     });
   }
   return out;

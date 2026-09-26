@@ -45,7 +45,8 @@ export const MESSAGES = {
     historial: "Historial",
     colaAyuda: "Programados, retenidos, borradores y fallidos",
     historialAyuda: "Enviados, cancelados y saltados",
-    conteo: plural({ one: "{n} mensaje", other: "{n} mensajes" }),
+    /** «Cola · 12»: la cifra llega formateada. */
+    conCifra: (vista: string, n: string) => `${vista} · ${n}`,
   },
 
   filtros: {
@@ -139,7 +140,6 @@ export const MESSAGES = {
     ayuda: "Vuelven a la cola y salen en la próxima pasada, dentro de tu horario de envío. Lo que rebotó o quedó a medias no se reintenta.",
     boton: (tipo: string, n: string) => `${tipo} · ${n}`,
     uno: "Reintentar",
-    nada: "No hay nada que reintentar con estos filtros.",
     noReintentable: "No se reintenta: volvería a fallar o podría duplicarse",
   },
 
@@ -216,6 +216,7 @@ export const MESSAGES = {
     grafico: "Embudo por paso",
     series: { sent: "Enviados", opened: "Abiertos", replied: "Respondidos", positive: "Positivos" },
     eje: (n: string) => `Paso ${n}`,
+    columnaPaso: "Paso",
     vacio: {
       titulo: "Todavía no sale nada de esta cadencia",
       descripcion: "Cuando salgan los primeros mensajes, aquí verás cuántos se abren, cuántos responden y cuántos dicen que sí.",
@@ -240,7 +241,7 @@ export const MESSAGES = {
       respuesta: "Respuesta",
       respuestaNota: (n: string, de: string) => `${n} de ${de} enviados`,
       positivos: "Positivos",
-      positivosNota: (n: string) => `${n} «me interesa»`,
+      positivosNota: (pct: string) => `«Me interesa»: ${pct} de lo enviado`,
       fallidos: "Fallidos",
       fallidosNota: (n: string) => `${n} en los últimos 7 días`,
       sinDato: "—",
@@ -252,8 +253,6 @@ export const MESSAGES = {
     titulo: "Flujo de la cadencia",
     descripcion: "Cada paso con lo que pasó en él. Pasa el cursor o enfoca una cifra para ver qué cuenta.",
     paso: (n: string, dia: string, tipo: string) => `Paso ${n} · Día ${dia} · ${tipo}`,
-    espera: plural({ one: "{n} día después", other: "{n} días después" }),
-    mismoDia: "El mismo día",
     cifras: {
       sent: "enviados",
       opened: "abiertos",

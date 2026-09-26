@@ -15,6 +15,7 @@ import {
 } from "../../_lib/vista";
 import { IconoCanal } from "../../canal";
 import { MESSAGES } from "../../messages";
+import { MetricasCadencia } from "../../../actividad/_componentes/metricas-cadencia";
 import { Controles } from "../controles";
 import { Enrolar, type NegocioVista } from "../enrolar";
 import { LineaDeTiempo } from "../linea-de-tiempo";
@@ -147,6 +148,9 @@ export default async function CadenciaPage({ params }: { params: Promise<{ id: s
       <div className="mb-6">
         <Notas d={d} f={f} plantillas={nombresPlantilla} angulos={nombresAngulo} />
       </div>
+
+      {/* VEN-16: el embudo por paso, la salud y la vista de flujo de solo lectura. */}
+      <div className="mb-8"><MetricasCadencia sequenceId={d.id} /></div>
 
       {(archivada || d.locked) && (
         <p className="mb-4 max-w-3xl rounded-md border border-line bg-surface-2 px-3 py-2 text-sm text-fg-2">
