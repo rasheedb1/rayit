@@ -8,7 +8,7 @@
  */
 import type { GenerationInput } from '@mc/core/outreach/generate';
 import type { HoldCode } from '@mc/core/outreach/messages';
-import { PERSON_VARIABLES, templateValuesFrom, templatizeKnownValues } from '@mc/core/outreach/render';
+import { templateValuesFrom, templatizePeople } from '@mc/core/outreach/render';
 import type { AttemptRecord, LlmUsage, QualityGateOutcome } from '@mc/core/outreach/quality-gate';
 import type { GenerationContext } from './generation-context.ts';
 import { WARMUP_TOUCHES_PER_STEP_TYPE } from './generation.ts';
@@ -106,10 +106,13 @@ export function reviewRowsFrom(attempts: readonly AttemptRecord[]): ReviewRow[] 
  * rellenado, sigue en outbound_touch; rellenado con la persona del toque,
  * el marcado dice exactamente lo mismo.
  */
-export function personalizedMarkup(ctx: GenerationContext, marked: string | null): string | null {
+export function personalizedMarkup(ctx: GenerationContext, marked: string | null, part: 'subject' | 'body' = 'body'): string | null {
   if (marked === null) return null;
+  // El asunto se guarda tal cual: si nombra a alguien, la revisión lo avisa al cambiar «Para».
+  if (part === 'subject') return marked;
   const values = templateValuesFrom({ contact: ctx.contact, creator: { senderName: ctx.creator.name } });
-  return templatizeKnownValues(marked, values, PERSON_VARIABLES);
+  // Solo en el saludo y en la firma, y nunca un nombre que también es de la creadora o de la marca (templatizePeople).
+  return templatizePeople(marked, values, [ctx.creator.name, ctx.company.name]);
 }
 
 /** Todo lo que se escribe del resultado: el estado, el texto sin marcas y el marcado, los claims. */
@@ -120,7 +123,7 @@ export function generationFinalFrom(ctx: GenerationContext, outcome: QualityGate
     ...state,
     subject: chosen?.cleanSubject ?? null,
     body: chosen?.cleanBody ?? '',
-    subjectMarked: chosen ? personalizedMarkup(ctx, chosen.subject) : (ctx.generation?.subject ?? null),
+    subjectMarked: chosen ? personalizedMarkup(ctx, chosen.subject, 'subject') : (ctx.generation?.subject ?? null),
     bodyMarked: personalizedMarkup(ctx, chosen?.body ?? null),
     claims: chosen?.claims ?? [],
     model,
