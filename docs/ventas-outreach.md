@@ -279,6 +279,14 @@ Decisiones que las piezas siguientes tienen que conocer:
   cambie o cree la política con otro valor que el de
   `outreach_default_llm_daily_cap()` (5,00 USD). Sin política,
   `outbound_health` devuelve ese mismo valor, no 0.
+- Antes de cada llamada, outbound.generate y outbound.review apartan su
+  estimación en `outbound_llm_reservation` (0072) con un candado de
+  transacción por espacio (`reserveLlmBudget`): comprobar el saldo y
+  apartarlo son una sola cosa, y dos jobs a la vez ya no gastan el mismo
+  saldo. Registrar la llamada (`recordOutreachLlmCall` con su
+  `reservationId`) suelta la reserva en la misma transacción; una que
+  nadie soltó deja de contar a los diez minutos. `outbound_llm_call`
+  sigue siendo la bitácora append-only con el costo real.
 - `outbound_sequence.status` manda; `active` se deriva de él con un
   disparador hasta que VEN-13 retire la columna.
 - En `outbound_touch`, `held_reason` es por qué está retenido y
@@ -1125,6 +1133,30 @@ el recomendador.
   revise Nicolás. Todavía no se recalcula solo al conectar
   una cuenta o importar un CSV: la pantalla avisa cuando hay datos más
   nuevos que el cálculo.
+- **Historial de rondas** (lo que antes vivía en la nota de VEN-11 en
+  `backlog.ts`):
+  - r3: el porqué deja fuera al video que explica y la vista previa
+    subraya lo que el verificador rechaza; la narrativa solo se redacta
+    en español y la pantalla lo dice.
+  - r4: el verificador rechaza ordinales («la segunda»), «doblé»,
+    proporciones («la mayoría», «la cuarta parte»), numerales en inglés
+    y cualquier número Unicode («²³», «⅔»). Los cinco mejores salen de
+    todo el historial con puntaje. Enlaces y portadas se sanean al
+    calcular; las portadas se leen vivas al pintar y la demo trae las
+    suyas (seed 0007). El editor muestra fichas legibles (⟦115,4 mil⟧).
+  - r5: el verificador rechaza la palabra de unidad que no es la de la
+    cifra y las cantidades que se colaban («veintiún», «treintaitrés»,
+    «un par»); portadas solo https o de la demo; cada cifra es una parada
+    de Tab; una prueba ata los nombres de las redes del kit a los de
+    @mc/core (unificación en `rasheed/kit-plataformas-desde-core`).
+  - Pulido r1: dos cuentas en la misma red no rompen el cálculo (la de
+    más seguidores lleva `seguidores-<red>`, las demás el id de su
+    cuenta) y solo cuentan las cuentas autenticadas; el verificador
+    rechaza lo pegado a una marca («[claim:x]k»), mira la unidad tras
+    «de», «nuevos» o «más», acepta la franja de edad solo dicha como
+    edad y rechaza «puesto uno» y «se cuadriplicó»; guardar exige que la
+    marca de recálculo siga siendo suya; la mediana lista sus videos y
+    la demografía su informe; el seed 0010 enseña el porqué en la demo.
 
 ### 5.5 El recomendador de cadencia
 
