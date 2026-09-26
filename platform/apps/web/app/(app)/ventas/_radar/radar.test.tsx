@@ -69,9 +69,9 @@ describe("Radar", () => {
     render(
       <Radar
         cards={[
-          { ...card, id: "s1", companyName: "Vitalé", crm: { companyHref: ficha, joinsDeal: true, dealName: "Snacks de temporada", openDeals: 1 } },
-          { ...card, id: "s2", companyName: "Nutrivé", crm: { companyHref: ficha, joinsDeal: true, dealName: null, openDeals: 1 } },
-          { ...card, id: "s3", companyName: "Granos del Valle", crm: { companyHref: ficha, joinsDeal: false, dealName: null, openDeals: 0 } },
+          { ...card, id: "s1", companyName: "Vitalé", crm: { companyHref: ficha, joinsDeal: true, dealName: "Snacks de temporada" } },
+          { ...card, id: "s2", companyName: "Nutrivé", crm: { companyHref: ficha, joinsDeal: true, dealName: null } },
+          { ...card, id: "s3", companyName: "Granos del Valle", crm: { companyHref: ficha, joinsDeal: false, dealName: null } },
           { ...card, id: "s4", companyName: "Marca Nueva" },
         ]}
         currency="COP"
