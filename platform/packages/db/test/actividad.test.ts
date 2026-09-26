@@ -8,25 +8,32 @@
  *   · otro workspace no ve nada de esto;
  *   · la cola enseña el fallido con su motivo, y reintentarlo lo devuelve
  *     a scheduled (y reabre la cadencia que se completó por él); lo que un
- *     reintento no arregla (rebote, zombi, un paso posterior ya enviado)
- *     no vuelve;
+ *     reintento no arregla (rebote, zombi, un paso posterior ya enviado,
+ *     los intentos agotados, la cuenta caída) ni se ofrece ni vuelve, y la
+ *     regla es la misma en la vista, en los botones por tipo y en el
+ *     reintento (outbound_touch_retry_block);
+ *   · la cola y el historial se recorren por páginas con cursor, sin
+ *     repetir ni saltar filas (también 205 envíos con horas repetidas);
  *   · cancelar en masa cancela lo cancelable y avanza la cadencia;
  *   · el uso por canal: el límite duro pasa por la curva de calentamiento
  *     de @mc/core, el día del calentamiento de la vista es el de warmupDay,
- *     y el semáforo dice ok, near o full;
+ *     manda el tope con menos cupo (el día, la semana o el espacio, como
+ *     el reclamo) y el semáforo dice ok, near, full u off (cuenta caída o
+ *     envío apagado);
  *   · la salud de la secuencia cuadra con el embudo.
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { warmupDailyLimit, warmupDay } from '@mc/core/outreach/warmup';
 import {
-  cancelQueuedTouches, getQueueFacets, getSequenceHealth, listChannelUsage, listFunnelByStep, listOutboundQueue,
-  listSequenceHealth, QUEUE_BUCKET_STATUSES, retryFailedTouches, usageLevel,
+  ACCOUNT_FAILURES, cancelQueuedTouches, getQueueFacets, getSequenceHealth, listChannelUsage, listFunnelByStep, listOutboundQueue,
+  listSequenceHealth, MAX_TOUCH_ATTEMPTS, NOT_RETRYABLE_FAILURES, parseQueueCursor, QUEUE_BUCKET_STATUSES, QUEUE_PAGE_SIZE,
+  retryFailedTouches, usageBinding, usageLevel, type QueuePage,
 } from '../src/queries/actividad.ts';
 import { TOUCH_STATUSES } from '../src/schema/ventas.ts';
 import { openTestDb, SETUP_TIMEOUT, type TestDb } from './pglite.ts';
 
-const id = (kind: string) => `00000064-0000-4000-8000-${kind.padStart(12, '0')}`;
+const id = (kind: string) => `00000065-0000-4000-8000-${kind.padStart(12, '0')}`;
 const WS_A = id('a');
 const WS_B = id('b');
 const CO = id('c0');
@@ -110,8 +117,8 @@ before(async () => {
   await t.admin(`
     INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_A}', 'actividad-a', 'Actividad A', '${TZ}'),
                                                           ('${WS_B}', 'actividad-b', 'Actividad B', '${TZ}');
-    INSERT INTO outbound_policy (workspace_id, postal_address, max_emails_per_day, warmup_days)
-    VALUES ('${WS_A}', 'Calle 93 # 11-26, Bogotá', 80, 14);
+    INSERT INTO outbound_policy (workspace_id, postal_address, max_emails_per_day, warmup_days, enabled)
+    VALUES ('${WS_A}', 'Calle 93 # 11-26, Bogotá', 80, 14, true);
     INSERT INTO outreach_channel_account (id, workspace_id, channel, provider, provider_account_id, display_name, status, daily_cap,
                                           weekly_cap, warmup_started_at, last_ok_at)
     VALUES ('${ACC.email}', '${WS_A}', 'email', 'gmail_oauth', 'laura@marca-a.test', 'laura@marca-a.test', 'connected', 50, 200,
@@ -162,16 +169,17 @@ before(async () => {
   for (const n of PEOPLE) {
     WEEK[n].forEach((f, i) => (f.intents ?? []).forEach((intent, k) => {
       const tid = touch(n, (i + 1) as 1 | 2 | 3);
+      // Clasificada como la deja el clasificador: con su intención y su hora (classified_at).
       inbound.push(`('${WS_A}', '${tid}', '${contact(n)}', '${enrollment(n)}', 'inbound', 'email', 'hilo-${n}', 'resp-${n}-${i}-${k}',
-        'Respuesta ${k}', '${intent}', ${ts(f.ago)} + interval '6 hours')`);
+        'Respuesta ${k}', '${intent}', ${ts(f.ago)} + interval '7 hours', ${ts(f.ago)} + interval '6 hours')`);
     }));
   }
   await t.admin(`
     INSERT INTO outbound_message (workspace_id, touch_id, contact_id, enrollment_id, direction, channel, thread_ref, provider_message_id,
-                                  body, intent, occurred_at)
+                                  body, intent, classified_at, occurred_at)
     VALUES ${inbound.join(',\n')},
            ('${WS_B}', '${id('7b')}', '${contact(9)}', '${enrollment(9)}', 'inbound', 'email', 'hilo-b', 'resp-b', 'Sí', 'interested',
-            now() - interval '1 day');
+            now() - interval '23 hours', now() - interval '1 day');
   `);
 }, SETUP_TIMEOUT);
 
@@ -284,8 +292,13 @@ describe('la cola y el historial (outbound_queue)', () => {
         maxAttempts.sequenceName],
       ['max_attempts', true, 'linkedin_message', 3, 'Persona 3', 'Semana de prueba'],
     );
-    assert.equal(byId.get(touch(5, 1))!.retryable, false, 'un rebote no se reintenta');
-    assert.equal(byId.get(touch(7, 1))!.retryable, false, 'un zombi no se reintenta: pudo haber salido');
+    assert.equal(maxAttempts.retryBlock, null);
+    assert.deepEqual([byId.get(touch(5, 1))!.retryable, byId.get(touch(5, 1))!.retryBlock], [false, 'not_retryable'], 'un rebote no se reintenta');
+    assert.deepEqual([byId.get(touch(7, 1))!.retryable, byId.get(touch(7, 1))!.retryBlock], [false, 'not_retryable'],
+      'un zombi no se reintenta: pudo haber salido');
+    // c8 falló en el paso 1, pero su paso 2 ya salió: la fila no ofrece un «Reintentar» que nunca haría nada.
+    assert.deepEqual([byId.get(touch(8, 1))!.retryable, byId.get(touch(8, 1))!.retryBlock], [false, 'superseded']);
+    assert.equal(byId.get(touch(3, 3))!.accountStatus, 'connected', 'el estado de la cuenta con la que se intentó');
     assert.equal(byId.get(touch(6, 2))!.reason, 'needs_review', 'el retenido lleva su held_reason');
     assert.equal(byId.get(touch(7, 2))!.cancelable, false, 'lo reclamado es del despachador');
     assert.equal(rows.some((r) => r.status === 'sent'), false, 'lo enviado va al historial');
@@ -302,8 +315,18 @@ describe('la cola y el historial (outbound_queue)', () => {
     const facets = await t.db.withWorkspace(WS_A, (tx) => getQueueFacets(tx, {}));
     assert.deepEqual(facets.sequences, [{ id: SEQ, name: 'Semana de prueba' }]);
     assert.deepEqual(facets.stepTypes, ['email', 'email_reply', 'linkedin_message']);
-    assert.deepEqual(facets.retryableByStepType, [{ stepType: 'email', count: 1 }, { stepType: 'linkedin_message', count: 1 }]);
+    // El fallido de correo de c8 no cuenta: su paso siguiente ya salió (superseded). El botón «Correo · 1» sería un botón muerto.
+    assert.deepEqual(facets.retryableByStepType, [{ stepType: 'linkedin_message', count: 1 }]);
     assert.deepEqual(facets.counts, { queue: 10, history: 15 });
+    // Con los filtros: los conteos de las pestañas y los reintentables salen de la misma pasada.
+    const persona3 = await t.db.withWorkspace(WS_A, (tx) => getQueueFacets(tx, { contact: 'persona 3' }));
+    assert.deepEqual(persona3.counts, { queue: 1, history: 2 });
+    assert.deepEqual(persona3.retryableByStepType, [{ stepType: 'linkedin_message', count: 1 }]);
+    const soloCorreo = await t.db.withWorkspace(WS_A, (tx) => getQueueFacets(tx, { stepType: 'email', sequenceId: SEQ }));
+    assert.deepEqual(soloCorreo.retryableByStepType, []);
+    assert.deepEqual(soloCorreo.counts, { queue: 3, history: 5 });
+    const nada = await t.db.withWorkspace(WS_B, (tx) => getQueueFacets(tx, { sequenceId: SEQ }));
+    assert.deepEqual([nada.counts, nada.retryableByStepType], [{ queue: 0, history: 0 }, []], 'lo ajeno no se cuenta');
   });
 
   test('reintentar el fallido lo devuelve a scheduled y reabre la cadencia que se completó por él', async () => {
@@ -347,10 +370,10 @@ describe('la cola y el historial (outbound_queue)', () => {
     assert.deepEqual(b, { done: [], skipped: [] }, 'B no alcanza los fallidos de A');
   });
 
-  test('reintentar por tipo de paso toma los fallidos reintentables de ese tipo con los filtros', async () => {
+  test('reintentar por tipo de paso toma solo los fallidos que la base deja volver', async () => {
     const report = await t.db.withWorkspace(WS_A, (tx) => retryFailedTouches(tx, { stepType: 'email', sequenceId: SEQ }));
-    // El único fallido reintentable de correo es el de c8, y ya salió su paso siguiente.
-    assert.deepEqual(report, { done: [], skipped: [{ touchId: touch(8, 1), code: 'superseded' }] });
+    // Los tres fallidos de correo están bloqueados (rebote, zombi y c8, cuyo paso siguiente ya salió): no se toca ninguno.
+    assert.deepEqual(report, { done: [], skipped: [] });
   });
 
   test('cancelar en masa cancela lo cancelable, deja lo demás con su motivo y avanza la cadencia', async () => {
@@ -369,6 +392,133 @@ describe('la cola y el historial (outbound_queue)', () => {
     const { rows } = await t.db.withWorkspace(WS_A, (tx) => listOutboundQueue(tx, { bucket: 'history', statuses: ['canceled'] }));
     assert.equal(rows.find((r) => r.touchId === touch(6, 2))?.reason, 'canceled_by_user');
   });
+
+  test('el bloqueo de la base usa las mismas listas que @mc/db (NOT_RETRYABLE_FAILURES, ACCOUNT_FAILURES, MAX_TOUCH_ATTEMPTS)', async () => {
+    // Sobre el enviado suelto de c6 (sin cadencia), cambiado en memoria con jsonb_populate_record: nada se escribe.
+    const block = (overrides: Record<string, unknown>) => t.db.withWorkspace(WS_A, async (tx) => (await tx.query<{ b: string | null }>(
+      `SELECT outbound_touch_retry_block(jsonb_populate_record(t, $2::jsonb)) AS b FROM outbound_touch t WHERE t.id = $1`,
+      [id('7a'), JSON.stringify({ status: 'failed', ...overrides })],
+    )).rows[0]!.b);
+    for (const code of NOT_RETRYABLE_FAILURES) assert.equal(await block({ blocked_reason: code }), 'not_retryable', code);
+    for (const code of ACCOUNT_FAILURES) {
+      assert.equal(await block({ blocked_reason: code }), null, `${code}: hay un correo conectado`);
+      assert.equal(await block({ blocked_reason: code, channel: 'whatsapp' }), 'account_down', `${code}: ningún WhatsApp conectado`);
+    }
+    assert.equal(await block({ blocked_reason: 'rejected', channel: 'whatsapp' }), null, 'un fallo del mensaje no es de la cuenta');
+    assert.equal(await block({ blocked_reason: 'rejected', attempt_count: MAX_TOUCH_ATTEMPTS - 2 }), null);
+    assert.equal(await block({ blocked_reason: 'rejected', attempt_count: MAX_TOUCH_ATTEMPTS - 1 }), 'too_many_attempts');
+    assert.equal(await block({ status: 'scheduled', blocked_reason: 'bounced' }), null, 'lo que no está fallido no se bloquea');
+  });
+
+  test('un fallido que ya gastó los intentos no vuelve: el reclamo lo subiría por encima del CHECK de 0037', async () => {
+    await t.admin(`
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, subject, body, status, blocked_reason,
+                                  attempt_count, scheduled_for, status_changed_at)
+      VALUES ('${id('7c')}', '${WS_A}', '${CO}', '${contact(4)}', 'email', 'Sin techo', 'Hola.', 'failed', 'max_attempts',
+              ${MAX_TOUCH_ATTEMPTS - 1}, now() - interval '1 day', now() - interval '1 hour'),
+             ('${id('7d')}', '${WS_A}', '${CO}', '${contact(4)}', 'email', 'Con uno de margen', 'Hola.', 'failed', 'max_attempts',
+              ${MAX_TOUCH_ATTEMPTS - 2}, now() - interval '1 day', now() - interval '1 hour');
+    `);
+    const { rows } = await t.db.withWorkspace(WS_A, (tx) => listOutboundQueue(tx, { bucket: 'queue', statuses: ['failed'] }));
+    const lleno = rows.find((r) => r.touchId === id('7c'))!;
+    assert.deepEqual([lleno.retryable, lleno.retryBlock, lleno.attemptCount], [false, 'too_many_attempts', 19]);
+    const report = await t.db.withWorkspace(WS_A, (tx) => retryFailedTouches(tx, { touchIds: [id('7c'), id('7d')] }));
+    assert.deepEqual(report, { done: [id('7d')], skipped: [{ touchId: id('7c'), code: 'too_many_attempts' }] });
+    const despues = await t.db.asWorker(async (tx) => (await tx.query<{ id: string; status: string; attempt_count: number }>(
+      `SELECT id, status, attempt_count FROM outbound_touch WHERE id = ANY($1::uuid[]) ORDER BY id`, [[id('7c'), id('7d')]],
+    )).rows.map((r) => [r.status, r.attempt_count]));
+    assert.deepEqual(despues, [['failed', 19], ['scheduled', 18]], 'el que cabe vuelve; su reclamo lo dejará en 19, dentro del CHECK');
+  });
+
+  test('un fallo de la cuenta no se ofrece mientras el canal no tenga ninguna cuenta conectada', async () => {
+    await t.admin(`
+      INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, blocked_reason, attempt_count,
+                                  scheduled_for, status_changed_at, channel_account_id)
+      VALUES ('${id('7e')}', '${WS_A}', '${CO}', '${contact(6)}', 'linkedin', 'Hola por aquí.', 'failed', 'account_auth', 1,
+              now() - interval '1 day', now() - interval '2 hours', '${ACC.linkedin}');
+    `);
+    const fila = async () => (await t.db.withWorkspace(WS_A, (tx) => listOutboundQueue(tx, { bucket: 'queue', statuses: ['failed'] })))
+      .rows.find((r) => r.touchId === id('7e'))!;
+    assert.deepEqual([(await fila()).retryable, (await fila()).accountStatus], [true, 'connected'], 'con LinkedIn conectado, sí');
+    await t.admin(`UPDATE outreach_channel_account SET status = 'needs_reconnect' WHERE id = '${ACC.linkedin}'`);
+    try {
+      const caida = await fila();
+      assert.deepEqual([caida.retryable, caida.retryBlock, caida.accountStatus], [false, 'account_down', 'needs_reconnect']);
+      const report = await t.db.withWorkspace(WS_A, (tx) => retryFailedTouches(tx, { touchIds: [id('7e')] }));
+      assert.deepEqual(report, { done: [], skipped: [{ touchId: id('7e'), code: 'account_down' }] });
+    } finally {
+      await t.admin(`UPDATE outreach_channel_account SET status = 'connected' WHERE id = '${ACC.linkedin}'`);
+    }
+  });
+});
+
+describe('las páginas de la cola y del historial (cursor)', () => {
+  /** Todas las páginas de una pestaña, siguiendo el cursor «siguiente» desde la primera. */
+  async function pages(ws: string, bucket: 'queue' | 'history', limit?: number) {
+    const out: QueuePage[] = [];
+    let cursor: { direction: 'next'; token: string } | null = null;
+    for (let i = 0; i < 20; i++) {
+      const page: QueuePage = await t.db.withWorkspace(ws, (tx) => listOutboundQueue(tx, { bucket, limit, cursor }));
+      out.push(page);
+      if (!page.next) break;
+      cursor = { direction: 'next', token: page.next };
+    }
+    return out;
+  }
+
+  test('de dos en dos, la cola y el historial se recorren enteros, sin repetir ni saltar, y «anterior» vuelve a la página de antes', async () => {
+    for (const bucket of ['queue', 'history'] as const) {
+      const todo = (await t.db.withWorkspace(WS_A, (tx) => listOutboundQueue(tx, { bucket }))).rows.map((r) => r.touchId);
+      const paginas = await pages(WS_A, bucket, 2);
+      const ids = paginas.flatMap((p) => p.rows.map((r) => r.touchId));
+      assert.deepEqual(ids, todo, `${bucket}: el mismo orden que la lista entera`);
+      assert.equal(new Set(ids).size, ids.length, `${bucket}: ninguna fila dos veces`);
+      assert.ok(paginas.slice(0, -1).every((p) => p.rows.length === 2), `${bucket}: páginas llenas hasta la última`);
+      assert.equal(paginas[0]!.prev, null, 'la primera no tiene anterior');
+      const atras = await t.db.withWorkspace(WS_A, (tx) =>
+        listOutboundQueue(tx, { bucket, limit: 2, cursor: { direction: 'prev', token: paginas[2]!.prev! } }));
+      assert.deepEqual(atras.rows.map((r) => r.touchId), paginas[1]!.rows.map((r) => r.touchId), `${bucket}: anterior de la 3 es la 2`);
+      assert.equal(atras.next, paginas[1]!.next);
+      const primera = await t.db.withWorkspace(WS_A, (tx) =>
+        listOutboundQueue(tx, { bucket, limit: 2, cursor: { direction: 'prev', token: paginas[1]!.prev! } }));
+      assert.deepEqual([primera.rows.map((r) => r.touchId), primera.prev], [paginas[0]!.rows.map((r) => r.touchId), null]);
+    }
+  });
+
+  test('un cursor que no es de esta pestaña, o que no se entiende, empieza por la primera página', async () => {
+    const primera = await t.db.withWorkspace(WS_A, (tx) => listOutboundQueue(tx, { bucket: 'history', limit: 2 }));
+    for (const token of ['nada', `${new Date().toISOString()}_${id('7a')}`, `0_infinity_${id('7a')}`, `1_2026-09-25T10:00:00.000000Z_x`]) {
+      const p = await t.db.withWorkspace(WS_A, (tx) => listOutboundQueue(tx, { bucket: 'history', limit: 2, cursor: { direction: 'next', token } }));
+      assert.deepEqual(p.rows.map((r) => r.touchId), primera.rows.map((r) => r.touchId), token);
+    }
+    assert.equal(parseQueueCursor('queue', `0_infinity_${id('7a')}`)?.at, 'infinity');
+    assert.equal(parseQueueCursor('history', `0_infinity_${id('7a')}`), null);
+  });
+
+  test('205 envíos, con horas repetidas: cinco páginas de 50, sin repetir ninguno', async () => {
+    const WS_C = id('c');
+    const CO_C = id('c0c');
+    // Tres envíos por minuto: el cursor desempata por touch_id cuando la hora es la misma.
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name, timezone) VALUES ('${WS_C}', 'actividad-c', 'Actividad C', '${TZ}');
+      INSERT INTO company (id, name, owner_workspace_id) VALUES ('${CO_C}', 'Marca C', '${WS_C}');
+      INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS_C}', '${CO_C}');
+      INSERT INTO outbound_touch (id, workspace_id, company_id, channel, subject, body, status, sent_at, recipient_address,
+                                  provider_message_id, status_changed_at)
+      SELECT ('00000065-0000-4000-8000-' || lpad(to_hex(1000 + g), 12, '0'))::uuid, '${WS_C}', '${CO_C}', 'email', 'Envío ' || g, 'Hola.',
+             'sent', date_trunc('minute', now()) - (g / 3) * interval '1 minute', 'c' || g || '@marca-c.test', 'prov-c-' || g,
+             date_trunc('minute', now()) - (g / 3) * interval '1 minute'
+        FROM generate_series(1, 205) AS g;
+    `);
+    const paginas = await pages(WS_C, 'history');
+    assert.deepEqual(paginas.map((p) => p.rows.length), [QUEUE_PAGE_SIZE, QUEUE_PAGE_SIZE, QUEUE_PAGE_SIZE, QUEUE_PAGE_SIZE, 5]);
+    const ids = paginas.flatMap((p) => p.rows.map((r) => r.touchId));
+    assert.equal(new Set(ids).size, 205, 'ninguno dos veces y ninguno fuera');
+    const horas = paginas.flatMap((p) => p.rows.map((r) => r.statusChangedAt.getTime()));
+    assert.ok(horas.every((h, i) => i === 0 || h <= horas[i - 1]!), 'de lo último a lo primero');
+    const facets = await t.db.withWorkspace(WS_C, (tx) => getQueueFacets(tx, {}));
+    assert.deepEqual(facets.counts, { queue: 0, history: 205 });
+  });
 });
 
 describe('el uso por canal (outbound_usage_daily)', () => {
@@ -381,7 +531,8 @@ describe('el uso por canal (outbound_usage_daily)', () => {
     assert.equal(email.dailyLimit, 50);
     assert.equal(email.hardLimit, warmupDailyLimit({ day, policyLimit: 50, warmupDays: 14 }));
     assert.equal(email.hardLimit, 20);
-    assert.deepEqual([email.used, email.softLimit, email.level, email.warmingUp], [17, 16, 'near', true]);
+    assert.deepEqual([email.used, email.softLimit, email.level, email.warmingUp, email.limitedBy], [17, 16, 'near', true, 'day']);
+    assert.deepEqual([email.workspaceUsed, email.workspaceLimit], [17, 80], 'el tope de correos del espacio, solo en el correo');
     assert.equal(email.providerLimit, 2000);
     assert.equal(email.history.length, 14);
     assert.equal(email.history.at(-1)!.used, 17, 'el último día es hoy');
@@ -389,9 +540,10 @@ describe('el uso por canal (outbound_usage_daily)', () => {
     assert.equal(email.history.reduce((n, d) => n + d.used, 0), 26, 'la fila del workspace entero no cuenta en la cuenta');
     // LinkedIn: sin calentamiento, 25 de 25.
     assert.deepEqual(
-      [linkedin.used, linkedin.hardLimit, linkedin.level, linkedin.warmingUp, linkedin.usedShare],
-      [25, 25, 'full', false, 1],
+      [linkedin.used, linkedin.hardLimit, linkedin.level, linkedin.warmingUp, linkedin.usedShare, linkedin.limitedBy],
+      [25, 25, 'full', false, 1, 'day'],
     );
+    assert.deepEqual([linkedin.workspaceUsed, linkedin.workspaceLimit, linkedin.offReason], [null, null, null]);
     assert.deepEqual(await t.db.withWorkspace(WS_B, (tx) => listChannelUsage(tx)), [], 'B no tiene cuentas');
   });
 
@@ -403,6 +555,63 @@ describe('el uso por canal (outbound_usage_daily)', () => {
       `SELECT warmup_started_at AS w FROM outreach_channel_account WHERE id = $1`, [ACC.email],
     )).rows[0]!.w);
     assert.equal(rows.rows[0]!.warmup_day, warmupDay(new Date(started), new Date(), TZ));
+  });
+
+  test('los tres topes del reclamo: la semana de la cuenta y el día del espacio también llenan la barra', async () => {
+    const hoy = `(now() AT TIME ZONE '${TZ}')::date`;
+    const lunes = `${hoy} - (extract(isodow FROM ${hoy})::int - 1)`;
+    // LinkedIn: 3 hoy, pero la semana ya va en su tope. El despachador no reclama nada: la barra no puede decir «con margen».
+    await t.admin(`
+      UPDATE outbound_counter SET count = 3 WHERE channel_account_id = '${ACC.linkedin}' AND period = 'day';
+      INSERT INTO outbound_counter (workspace_id, channel_account_id, period, period_start, action_type, count)
+      SELECT '${WS_A}', a.id, 'week', ${lunes}, 'linkedin', l.effective_weekly
+        FROM outreach_channel_account a JOIN outreach_channel_account_limits l ON l.channel_account_id = a.id WHERE a.id = '${ACC.linkedin}';
+      -- Otro buzón del espacio ya mandó 62 hoy: el espacio va en 79 de sus 80.
+      UPDATE outbound_counter SET count = 79 WHERE workspace_id = '${WS_A}' AND channel_account_id IS NULL AND period = 'day';
+    `);
+    try {
+      const [email, linkedin] = await t.db.withWorkspace(WS_A, (tx) => listChannelUsage(tx));
+      assert.deepEqual(
+        [linkedin!.used, linkedin!.limitedBy, linkedin!.hardLimit, linkedin!.level, linkedin!.weekUsed === linkedin!.weeklyLimit],
+        [3, 'week', 3, 'full', true],
+      );
+      // El correo: 17 de 20 en el día, pero el espacio entero ya va en 79 de 80: le queda uno.
+      assert.deepEqual(
+        [email!.limitedBy, email!.hardLimit, email!.softLimit, email!.level, email!.workspaceUsed, email!.workspaceLimit],
+        ['workspace', 18, 15, 'near', 79, 80],
+      );
+    } finally {
+      await t.admin(`
+        UPDATE outbound_counter SET count = 25 WHERE channel_account_id = '${ACC.linkedin}' AND period = 'day';
+        DELETE FROM outbound_counter WHERE channel_account_id = '${ACC.linkedin}' AND period = 'week';
+        UPDATE outbound_counter SET count = 17 WHERE workspace_id = '${WS_A}' AND channel_account_id IS NULL AND period = 'day';
+      `);
+    }
+  });
+
+  test('sin envío: la cuenta caída o el espacio apagado es «off», nunca verde', async () => {
+    await t.admin(`UPDATE outreach_channel_account SET status = 'needs_reconnect' WHERE id = '${ACC.linkedin}'`);
+    try {
+      const usage = await t.db.withWorkspace(WS_A, (tx) => listChannelUsage(tx));
+      assert.deepEqual(usage.map((u) => [u.channel, u.level, u.offReason]), [['email', 'near', null], ['linkedin', 'off', 'account']]);
+      await t.admin(`UPDATE outbound_policy SET enabled = false WHERE workspace_id = '${WS_A}'`);
+      const apagado = await t.db.withWorkspace(WS_A, (tx) => listChannelUsage(tx));
+      assert.deepEqual(apagado.map((u) => [u.level, u.offReason]), [['off', 'disabled'], ['off', 'account']]);
+    } finally {
+      await t.admin(`
+        UPDATE outreach_channel_account SET status = 'connected' WHERE id = '${ACC.linkedin}';
+        UPDATE outbound_policy SET enabled = true WHERE workspace_id = '${WS_A}';
+      `);
+    }
+  });
+
+  test('el tope que manda es el de menos cupo; con cupos iguales, el primero en el orden del reclamo', () => {
+    const base = { used: 10, dayLimit: 20, weekUsed: 40, weeklyLimit: 100, workspaceUsed: null, workspaceLimit: null };
+    assert.deepEqual(usageBinding(base), { limitedBy: 'day', hardLimit: 20 });
+    assert.deepEqual(usageBinding({ ...base, weekUsed: 95 }), { limitedBy: 'week', hardLimit: 15 });
+    assert.deepEqual(usageBinding({ ...base, weekUsed: 90 }), { limitedBy: 'day', hardLimit: 20 }, 'empate: el día');
+    assert.deepEqual(usageBinding({ ...base, workspaceUsed: 79, workspaceLimit: 80 }), { limitedBy: 'workspace', hardLimit: 11 });
+    assert.deepEqual(usageBinding({ ...base, weekUsed: 120 }), { limitedBy: 'week', hardLimit: 10 }, 'pasado el tope, nada más');
   });
 
   test('el semáforo: ok por debajo del blando, near hasta el duro, full en el duro', () => {

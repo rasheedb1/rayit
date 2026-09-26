@@ -164,8 +164,9 @@ export const outboundTouchRecent = pgView('outbound_touch_recent', {
 }).existing();
 
 // ---------------------------------------------------------------------
-// Actividad y métricas del outreach (0064, VEN-16). Se leen con
-// @mc/db/queries/actividad, que tipa y valida cada fila.
+// Actividad y métricas del outreach (0065, VEN-16). Se leen con
+// @mc/db/queries/actividad, que tipa y valida cada fila (oneOf, int,
+// text de queries/outreach/shared).
 // ---------------------------------------------------------------------
 
 /** La cola y el historial: un toque por fila con su paso, su contacto y el código de su motivo. */
@@ -192,6 +193,7 @@ export const outboundQueue = pgView('outbound_queue', {
   companyName: text('company_name'),
   channelAccountId: uuid('channel_account_id'),
   accountName: text('account_name'),
+  accountStatus: text('account_status'),
   attemptCount: integer('attempt_count'),
   scheduledFor: timestamptz('scheduled_for'),
   nextRetryAt: timestamptz('next_retry_at'),
@@ -203,9 +205,11 @@ export const outboundQueue = pgView('outbound_queue', {
   repliedAt: timestamptz('replied_at'),
   createdAt: timestamptz('created_at'),
   reason: text('reason'),
+  /** Solo en lo fallido: por qué no se puede reintentar (outbound_touch_retry_block), NULL si se puede. */
+  retryBlock: text('retry_block'),
 }).existing();
 
-/** El uso diario de cada cuenta viva en 14 días, contra el tope que rige (sin calentamiento) y el techo del proveedor. */
+/** El uso diario de cada cuenta viva en 14 días, contra los tres topes del reclamo (día y semana de la cuenta, día del espacio) y el techo del proveedor. */
 export const outboundUsageDaily = pgView('outbound_usage_daily', {
   channelAccountId: uuid('channel_account_id'),
   workspaceId: uuid('workspace_id'),
@@ -216,9 +220,14 @@ export const outboundUsageDaily = pgView('outbound_usage_daily', {
   isToday: boolean('is_today'),
   used: integer('used'),
   dailyLimit: integer('daily_limit'),
+  weekUsed: integer('week_used'),
+  weeklyLimit: integer('weekly_limit'),
+  workspaceUsed: integer('workspace_used'),
+  workspaceDailyLimit: integer('workspace_daily_limit'),
   providerLimit: integer('provider_limit'),
   warmupDay: integer('warmup_day'),
   warmupDays: integer('warmup_days'),
+  outreachEnabled: boolean('outreach_enabled'),
 }).existing();
 
 /** El embudo de cada paso: enviados, abiertos, respondidos y positivos, dentro de lo enviado. */
