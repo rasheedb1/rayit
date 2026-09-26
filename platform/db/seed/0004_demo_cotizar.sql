@@ -21,9 +21,14 @@
 --   deal.amount     = quote.total − quote.tax  (el NETO: subtotal − descuento)
 --   campaign.amount = quote.total              (con IVA: lo que se cobra)
 --   invoice         = subtotal (neto) + tax → total (el de la campaña)
--- Las cuatro aceptadas cuadran al peso con las facturas de 0003
--- (FV-2026-007, 009, 010 y 011): el IVA del 19 % sobre el neto da el
--- total redondo de la campaña. Las abiertas llevan como neto el monto
+-- Las cuatro aceptadas cuadran con las facturas de 0003 (FV-2026-007,
+-- 009, 010 y 011): el IVA del 19 % sobre el neto da el total redondo
+-- de la campaña. Una cotización en COP no lleva centavos (pulido r2):
+-- neto al peso y su IVA redondeado al peso, como lo deja
+-- calcularTotalesCotizacion (2.605.042 + 494.958 = 3.100.000). La
+-- factura sí va al centavo, porque Finanzas saca su neto del total con
+-- subtotalFromTotal (2.605.042,02 + 494.957,98): el total es el mismo
+-- y el neto difiere en menos de un peso. Las abiertas llevan como neto el monto
 -- que el negocio tiene en 0002, que es lo que enviar una cotización
 -- deja en el negocio (sendQuote → deal_move_stage).
 --
@@ -177,22 +182,22 @@ SELECT v.id, '00000002-0000-4000-8000-000000000001', v.deal_id, v.company_id, '0
        v.sent_at, v.viewed_at, v.accepted_at, v.signer_name, v.signer_email, v.view_count, v.sent_at - interval '1 day'
 FROM (VALUES
   ('00000004-0000-4000-8000-0000000c0701'::uuid, '00000002-0000-4000-8000-0000000dea12'::uuid, '00000002-0000-4000-8000-0000000000e3'::uuid,
-   'COT-2026-001', 924369.75::numeric, 175630.25::numeric, '{views,reach,code_redemptions}'::text[],
+   'COT-2026-001', 924370.00::numeric, 175630.00::numeric, '{views,reach,code_redemptions}'::text[],
    NULL::int, NULL::int, NULL::text, DATE '2026-06-05', DATE '2026-06-06', 'accepted', DATE '2026-06-10',
    '2026-05-26 15:00:00+00'::timestamptz, '2026-05-27 13:00:00+00'::timestamptz, '2026-06-01 15:00:00+00'::timestamptz,
    NULL::text, NULL::text, 2),
   ('00000004-0000-4000-8000-0000000c0702', '00000002-0000-4000-8000-0000000dea10', '00000002-0000-4000-8000-0000000000e4',
-   'COT-2026-002', 3949579.83, 750420.17, '{views,reach,interactions}',
+   'COT-2026-002', 3949580.00, 750420.00, '{views,reach,interactions}',
    NULL, NULL, NULL, DATE '2026-07-15', DATE '2026-07-22', 'accepted', DATE '2026-07-08',
    '2026-06-24 15:00:00+00', '2026-06-25 14:00:00+00', '2026-07-01 14:00:00+00',
    NULL, NULL, 3),
   ('00000004-0000-4000-8000-0000000c0703', '00000002-0000-4000-8000-0000000dea11', '00000002-0000-4000-8000-0000000000e1',
-   'COT-2026-003', 2605042.02, 494957.98, '{views,reach,link_clicks,code_redemptions}',
+   'COT-2026-003', 2605042.00, 494958.00, '{views,reach,link_clicks,code_redemptions}',
    NULL, NULL, NULL, DATE '2026-08-10', DATE '2026-08-17', 'accepted', DATE '2026-08-07',
    '2026-07-23 14:00:00+00', '2026-07-24 15:30:00+00', '2026-07-29 16:00:00+00',
    'Valentina Ortiz', 'valentina@cafealma.co', 4),
   ('00000004-0000-4000-8000-0000000c0704', '00000002-0000-4000-8000-0000000dea09', '00000002-0000-4000-8000-0000000000e2',
-   'COT-2026-004', 4369747.90, 830252.10, '{views,link_clicks}',
+   'COT-2026-004', 4369748.00, 830252.00, '{views,link_clicks}',
    NULL, NULL, NULL, DATE '2026-09-02', DATE '2026-09-09', 'accepted', DATE '2026-09-08',
    '2026-08-25 15:00:00+00', '2026-08-26 13:00:00+00', '2026-08-27 17:30:00+00',
    'Camila Rojas', 'camila.rojas@freskomarket.co', 3),
@@ -235,12 +240,12 @@ WHERE quote.status IN ('sent', 'viewed');
 INSERT INTO quote_item (id, quote_id, deliverable, platform_id, description, quantity, unit_price, total, position)
 SELECT i.id, i.quote_id, i.deliverable, i.platform_id, i.description, i.quantity, i.unit_price, i.quantity * i.unit_price, i.position
 FROM (VALUES
-  ('00000004-0000-4000-8000-0000c0700101'::uuid, '00000004-0000-4000-8000-0000000c0701'::uuid, 'historias', 'instagram', '3 historias con código LAURAHOGAR', 1, 924369.75::numeric, 0),
-  ('00000004-0000-4000-8000-0000c0700201', '00000004-0000-4000-8000-0000000c0702', 'youtube',   'youtube',   'Video dedicado en YouTube (10 min, mención integrada)', 1, 3949579.83, 0),
+  ('00000004-0000-4000-8000-0000c0700101'::uuid, '00000004-0000-4000-8000-0000000c0701'::uuid, 'historias', 'instagram', '3 historias con código LAURAHOGAR', 1, 924370.00::numeric, 0),
+  ('00000004-0000-4000-8000-0000c0700201', '00000004-0000-4000-8000-0000000c0702', 'youtube',   'youtube',   'Video dedicado en YouTube (10 min, mención integrada)', 1, 3949580.00, 0),
   ('00000004-0000-4000-8000-0000c0700301', '00000004-0000-4000-8000-0000000c0703', 'reel',      'instagram', 'Reel del cold brew en casa', 1, 1200000.00, 0),
-  ('00000004-0000-4000-8000-0000c0700302', '00000004-0000-4000-8000-0000000c0703', 'tiktok',    'tiktok',    'TikTok del cold brew', 1, 1005042.02, 1),
+  ('00000004-0000-4000-8000-0000c0700302', '00000004-0000-4000-8000-0000000c0703', 'tiktok',    'tiktok',    'TikTok del cold brew', 1, 1005042.00, 1),
   ('00000004-0000-4000-8000-0000c0700303', '00000004-0000-4000-8000-0000000c0703', 'historias', 'instagram', '3 historias con código LAURA15', 1, 400000.00, 2),
-  ('00000004-0000-4000-8000-0000c0700401', '00000004-0000-4000-8000-0000000c0704', 'tiktok',    'tiktok',    'TikTok con enlace a la caja de desayunos', 2, 2184873.95, 0),
+  ('00000004-0000-4000-8000-0000c0700401', '00000004-0000-4000-8000-0000000c0704', 'tiktok',    'tiktok',    'TikTok con enlace a la caja de desayunos', 2, 2184874.00, 0),
   ('00000004-0000-4000-8000-0000c0700501', '00000004-0000-4000-8000-0000000c0705', 'tiktok',    'tiktok',    'TikTok del lanzamiento de desayunos', 1, 6200000.00, 0),
   ('00000004-0000-4000-8000-0000c0700502', '00000004-0000-4000-8000-0000000c0705', 'reel',      'instagram', 'Reel del lanzamiento de desayunos', 1, 4800000.00, 1),
   ('00000004-0000-4000-8000-0000c0700503', '00000004-0000-4000-8000-0000000c0705', 'historias', 'instagram', '3 historias con código y enlace propios', 1, 3200000.00, 2),
@@ -252,6 +257,32 @@ FROM (VALUES
 ) AS i(id, quote_id, deliverable, platform_id, description, quantity, unit_price, position)
 WHERE EXISTS (SELECT 1 FROM quote q WHERE q.id = i.quote_id)
 ON CONFLICT (id) DO NOTHING;
+
+-- Una base sembrada antes del pulido r2 tiene las cuatro aceptadas con
+-- centavos (2.605.042,02 y su IVA 494.957,98) y el enlace público de
+-- Café Alma decía «COP 1.005.042,02». Se pasan al peso solo si siguen
+-- con la cifra vieja: el total no cambia, y una cotización que alguien
+-- tocó en la demo no se pisa. Idempotente: la segunda corrida no
+-- encuentra nada.
+UPDATE quote q
+   SET subtotal = v.subtotal, tax = v.tax, total = v.subtotal + v.tax
+  FROM (VALUES
+    ('00000004-0000-4000-8000-0000000c0701'::uuid,  924369.75::numeric,  924370.00::numeric, 175630.00::numeric),
+    ('00000004-0000-4000-8000-0000000c0702',       3949579.83,          3949580.00,          750420.00),
+    ('00000004-0000-4000-8000-0000000c0703',       2605042.02,          2605042.00,          494958.00),
+    ('00000004-0000-4000-8000-0000000c0704',       4369747.90,          4369748.00,          830252.00)
+  ) AS v(id, viejo, subtotal, tax)
+ WHERE q.id = v.id AND q.subtotal = v.viejo AND q.discount = 0;
+
+UPDATE quote_item i
+   SET unit_price = v.unit_price, total = i.quantity * v.unit_price
+  FROM (VALUES
+    ('00000004-0000-4000-8000-0000c0700101'::uuid,  924369.75::numeric,  924370.00::numeric),
+    ('00000004-0000-4000-8000-0000c0700201',       3949579.83,          3949580.00),
+    ('00000004-0000-4000-8000-0000c0700302',       1005042.02,          1005042.00),
+    ('00000004-0000-4000-8000-0000c0700401',       2184873.95,          2184874.00)
+  ) AS v(id, viejo, unit_price)
+ WHERE i.id = v.id AND i.unit_price = v.viejo;
 
 -- Lo que la marca ve en el enlace: el documento congelado al enviarlo
 -- (QuotePublicSnapshot de cotizacion.ts), armado con las filas de
@@ -291,7 +322,9 @@ UPDATE quote q
                 '00000004-0000-4000-8000-0000000c0705', '00000004-0000-4000-8000-0000000c0706',
                 '00000004-0000-4000-8000-0000000c0707', '00000004-0000-4000-8000-0000000c0708')
    AND w.id = q.workspace_id AND co.id = q.company_id AND cp.id = q.creator_id
-   AND (q.public_snapshot IS NULL OR q.status IN ('sent', 'viewed'));
+   AND (q.public_snapshot IS NULL OR q.status IN ('sent', 'viewed')
+        -- el documento de una base sembrada con centavos (pulido r2)
+        OR q.public_snapshot->>'subtotal' IS DISTINCT FROM q.subtotal::text);
 
 
 -- =====================================================================

@@ -51,25 +51,37 @@ WHERE d.stage_id IN ('propuesta', 'negociacion')
 --       quote.subtotal = Σ quote_item.total
 --       deal.amount     = quote.total − quote.tax  (neto)
 --       campaign.amount = quote.total              (con IVA)
---       invoice.subtotal = deal.amount y invoice.total = campaign.amount
+--       invoice.total = campaign.amount
+--     El IVA de la cotización va a la unidad de su moneda (al peso en
+--     COP, como calcularTotalesCotizacion); la factura va al centavo y
+--     saca su neto del total (subtotalFromTotal de Finanzas), así que
+--     su subtotal y el neto del negocio difieren en menos de una
+--     unidad: 2.605.042 frente a 2.605.042,02, con el mismo 3.100.000.
 SELECT 'c_convencion_de_montos' AS check_id,
        count(*) AS cotizaciones,
        count(*) FILTER (WHERE q.total <> q.subtotal - q.discount + q.tax)                         AS total_descuadrado,
        count(*) FILTER (WHERE q.subtotal <> (SELECT sum(i.total) FROM quote_item i WHERE i.quote_id = q.id)) AS lineas_descuadradas,
-       count(*) FILTER (WHERE q.tax <> round((q.subtotal - q.discount) * q.tax_rate, 2))          AS iva_descuadrado,
+       count(*) FILTER (WHERE q.tax <> round((q.subtotal - q.discount) * q.tax_rate, m.decimales))          AS iva_descuadrado,
        count(*) FILTER (WHERE d.amount <> q.total - q.tax)                                        AS deal_no_neto,
        count(*) FILTER (WHERE c.id IS NOT NULL AND c.amount <> q.total)                           AS campana_no_total,
-       count(*) FILTER (WHERE inv.id IS NOT NULL AND (inv.subtotal <> d.amount OR inv.total <> c.amount)) AS factura_descuadrada,
+       count(*) FILTER (WHERE inv.id IS NOT NULL AND (abs(inv.subtotal - d.amount) >= m.unidad OR inv.total <> c.amount)) AS factura_descuadrada,
        count(*) FILTER (WHERE q.total <> q.subtotal - q.discount + q.tax) = 0
          AND count(*) FILTER (WHERE q.subtotal <> (SELECT sum(i.total) FROM quote_item i WHERE i.quote_id = q.id)) = 0
-         AND count(*) FILTER (WHERE q.tax <> round((q.subtotal - q.discount) * q.tax_rate, 2)) = 0
+         AND count(*) FILTER (WHERE q.tax <> round((q.subtotal - q.discount) * q.tax_rate, m.decimales)) = 0
          AND count(*) FILTER (WHERE d.amount <> q.total - q.tax) = 0
          AND count(*) FILTER (WHERE c.id IS NOT NULL AND c.amount <> q.total) = 0
-         AND count(*) FILTER (WHERE inv.id IS NOT NULL AND (inv.subtotal <> d.amount OR inv.total <> c.amount)) = 0 AS ok
+         AND count(*) FILTER (WHERE inv.id IS NOT NULL AND (abs(inv.subtotal - d.amount) >= m.unidad OR inv.total <> c.amount)) = 0 AS ok
 FROM quote q
 JOIN deal d ON d.id = q.deal_id
 LEFT JOIN campaign c ON c.quote_id = q.id
-LEFT JOIN invoice inv ON inv.campaign_id = c.id;
+LEFT JOIN invoice inv ON inv.campaign_id = c.id
+-- MONEDAS_SIN_CENTAVOS de @mc/core (tarifas.ts): la misma lista que (i).
+CROSS JOIN LATERAL (
+  SELECT CASE WHEN upper(q.currency::text) IN ('CLP', 'COP', 'HUF', 'ISK', 'JPY', 'KRW', 'PYG', 'UGX', 'VND', 'XAF', 'XOF')
+              THEN 0 ELSE 2 END AS decimales,
+         CASE WHEN upper(q.currency::text) IN ('CLP', 'COP', 'HUF', 'ISK', 'JPY', 'KRW', 'PYG', 'UGX', 'VND', 'XAF', 'XOF')
+              THEN 1.00 ELSE 0.01 END AS unidad
+) m;
 
 -- (d) La cadena de cada aceptada: cotización aceptada → negocio ganado
 --     → campaña enlazada por quote_id y por deal_id al MISMO negocio.
@@ -172,3 +184,41 @@ LEFT JOIN LATERAL (
   OFFSET x.n - 1 LIMIT 1
 ) i ON true
 WHERE k.id = '00000004-0000-4000-8000-000000d0c001';
+
+-- (i) Una cotización en una moneda sin centavos no lleva centavos en
+--     ninguna cifra (pulido r2): el enlace público de COT-2026-003
+--     decía «TikTok del cold brew COP 1.005.042,02» y «Impuesto (19 %)
+--     COP 494.957,98», y es el documento que ve la marca. Se mira la
+--     fila y el documento congelado (public_snapshot), línea por línea.
+--     La lista es MONEDAS_SIN_CENTAVOS de @mc/core (tarifas.ts).
+WITH sin_centavos AS (
+  SELECT q.* FROM quote q
+   WHERE upper(q.currency::text) IN ('CLP', 'COP', 'HUF', 'ISK', 'JPY', 'KRW', 'PYG', 'UGX', 'VND', 'XAF', 'XOF')
+)
+SELECT 'i_sin_centavos' AS check_id,
+       (SELECT count(*) FROM sin_centavos) AS cotizaciones,
+       (SELECT count(*) FROM sin_centavos q
+         WHERE q.subtotal <> trunc(q.subtotal) OR q.discount <> trunc(q.discount)
+            OR q.tax <> trunc(q.tax) OR q.total <> trunc(q.total)) AS con_centavos,
+       (SELECT count(*) FROM quote_item i JOIN sin_centavos q ON q.id = i.quote_id
+         WHERE i.unit_price <> trunc(i.unit_price) OR i.total <> trunc(i.total)) AS lineas_con_centavos,
+       (SELECT count(*) FROM sin_centavos q
+         WHERE q.public_snapshot IS NOT NULL
+           AND (EXISTS (SELECT 1 FROM unnest(ARRAY['subtotal', 'discount', 'tax', 'total']) AS k(campo)
+                         WHERE (q.public_snapshot->>k.campo)::numeric <> trunc((q.public_snapshot->>k.campo)::numeric))
+             OR EXISTS (SELECT 1 FROM jsonb_array_elements(q.public_snapshot->'items') it
+                         WHERE (it->>'unitPrice')::numeric <> trunc((it->>'unitPrice')::numeric)
+                            OR (it->>'total')::numeric <> trunc((it->>'total')::numeric)))) AS documentos_con_centavos,
+       (SELECT count(*) FROM sin_centavos) > 0
+         AND (SELECT count(*) FROM sin_centavos q
+               WHERE q.subtotal <> trunc(q.subtotal) OR q.discount <> trunc(q.discount)
+                  OR q.tax <> trunc(q.tax) OR q.total <> trunc(q.total)) = 0
+         AND (SELECT count(*) FROM quote_item i JOIN sin_centavos q ON q.id = i.quote_id
+               WHERE i.unit_price <> trunc(i.unit_price) OR i.total <> trunc(i.total)) = 0
+         AND (SELECT count(*) FROM sin_centavos q
+               WHERE q.public_snapshot IS NOT NULL
+                 AND (EXISTS (SELECT 1 FROM unnest(ARRAY['subtotal', 'discount', 'tax', 'total']) AS k(campo)
+                               WHERE (q.public_snapshot->>k.campo)::numeric <> trunc((q.public_snapshot->>k.campo)::numeric))
+                   OR EXISTS (SELECT 1 FROM jsonb_array_elements(q.public_snapshot->'items') it
+                               WHERE (it->>'unitPrice')::numeric <> trunc((it->>'unitPrice')::numeric)
+                                  OR (it->>'total')::numeric <> trunc((it->>'total')::numeric)))) = 0 AS ok;
