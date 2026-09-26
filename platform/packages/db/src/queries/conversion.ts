@@ -10,9 +10,10 @@
  *             (to_stage_id). Desde VEN-3 todo negocio nace con su fila
  *             (from_stage_id NULL), así que «entró» incluye al que se
  *             creó directamente ahí.
- *   avanzaron de esos, los que DESPUÉS de entrar por primera vez llegaron
- *             a una etapa de posición mayor que no es perdida (la
- *             siguiente, una más adelante saltándose alguna, o
+ *   avanzaron de esos, los que DESPUÉS de entrar por primera vez (en el
+ *             orden de la historia: changed_at y, a igual hora, el id)
+ *             llegaron a una etapa de posición mayor que no es perdida
+ *             (la siguiente, una más adelante saltándose alguna, o
  *             «Ganado»). Retroceder y volver no cuenta dos veces: se
  *             cuentan negocios, no movimientos.
  *   tasa      avanzaron / entraron, en SQL, con cuatro decimales. Null si
@@ -42,10 +43,18 @@ export interface StageConversion {
 /** La conversión de cada etapa abierta, en el orden del embudo. */
 export async function getStageConversion(tx: WorkspaceTx): Promise<StageConversion[]> {
   const { rows } = await tx.query<{ stage_id: string; entered: string; advanced: string; rate: string | null }>(
+    // La primera entrada de cada negocio en cada etapa, ordenada por
+    // (changed_at, id) y no solo por la hora: un negocio que se crea y se
+    // mueve en la misma transacción deja dos filas con el mismo now(), y
+    // solo el id (bigserial, crece con cada INSERT) dice cuál fue antes.
+    // Con «changed_at >=» un negocio que nace en «En conversación» y en la
+    // misma transacción vuelve a «Nuevo» contaba como que avanzó desde
+    // «Nuevo»: la fila de «En conversación» tiene la misma hora.
     `WITH entradas AS (
-       SELECT h.deal_id, h.to_stage_id AS stage_id, min(h.changed_at) AS entro
+       SELECT DISTINCT ON (h.deal_id, h.to_stage_id)
+              h.deal_id, h.to_stage_id AS stage_id, h.changed_at AS entro, h.id AS primer_id
          FROM deal_stage_history h
-        GROUP BY h.deal_id, h.to_stage_id
+        ORDER BY h.deal_id, h.to_stage_id, h.changed_at, h.id
      ),
      resultado AS (
        SELECT e.stage_id, e.deal_id,
@@ -55,7 +64,7 @@ export async function getStageConversion(tx: WorkspaceTx): Promise<StageConversi
                   JOIN pipeline_stage t2 ON t2.id = h2.to_stage_id
                   JOIN pipeline_stage t1 ON t1.id = e.stage_id
                  WHERE h2.deal_id = e.deal_id
-                   AND h2.changed_at >= e.entro
+                   AND (h2.changed_at, h2.id) > (e.entro, e.primer_id)
                    AND t2.position > t1.position
                    AND NOT t2.is_lost
               ) AS avanzo

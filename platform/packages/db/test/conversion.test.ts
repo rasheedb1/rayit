@@ -98,8 +98,8 @@ describe('VEN-8 · conversión por etapa', () => {
     const { conversion, historia, etapas } = await laura(async (tx) => ({
       conversion: await getStageConversion(tx),
       historia: (
-        await tx.query<{ deal_id: string; to_stage_id: string; changed_at: Date | string }>(
-          'SELECT deal_id, to_stage_id, changed_at FROM deal_stage_history',
+        await tx.query<{ id: string; deal_id: string; to_stage_id: string; changed_at: Date | string }>(
+          'SELECT id::text AS id, deal_id, to_stage_id, changed_at FROM deal_stage_history',
         )
       ).rows,
       etapas: (
@@ -111,20 +111,23 @@ describe('VEN-8 · conversión por etapa', () => {
     assert.ok(historia.length >= 40, 'el seed trae la historia de los negocios de Laura');
     const etapa = new Map(etapas.map((e) => [e.id, e]));
     const ms = (v: Date | string) => new Date(v).getTime();
+    /** El orden de la historia: la hora y, a igual hora, el id (bigserial). */
+    const antes = (a: { changed_at: Date | string; id: string }, b: { changed_at: Date | string; id: string }) =>
+      ms(a.changed_at) < ms(b.changed_at) || (ms(a.changed_at) === ms(b.changed_at) && BigInt(a.id) < BigInt(b.id));
 
     const esperado: Record<string, { entered: number; advanced: number }> = {};
     for (const st of etapas.filter((e) => !e.is_won && !e.is_lost)) {
-      const entradas = new Map<string, number>();
+      const entradas = new Map<string, (typeof historia)[number]>();
       for (const fila of historia) {
         if (fila.to_stage_id !== st.id) continue;
-        const antes = entradas.get(fila.deal_id);
-        if (antes === undefined || ms(fila.changed_at) < antes) entradas.set(fila.deal_id, ms(fila.changed_at));
+        const primera = entradas.get(fila.deal_id);
+        if (primera === undefined || antes(fila, primera)) entradas.set(fila.deal_id, fila);
       }
       let advanced = 0;
       for (const [deal, entro] of entradas) {
         const llego = historia.some((f) => {
           const a = etapa.get(f.to_stage_id);
-          return f.deal_id === deal && ms(f.changed_at) >= entro && a !== undefined && a.position > st.position && !a.is_lost;
+          return f.deal_id === deal && antes(entro, f) && a !== undefined && a.position > st.position && !a.is_lost;
         });
         if (llego) advanced++;
       }
@@ -142,6 +145,32 @@ describe('VEN-8 · conversión por etapa', () => {
     // embebido: con TEST_DATABASE_URL la base se comparte y otras pruebas
     // le suman negocios a Laura.
     if (t.kind === 'pglite') assert.deepEqual(obtenido.nuevo, { entered: 10, advanced: 9 });
+  });
+
+  test('dos filas con la misma hora se ordenan por id: nacer en conversación y volver a nuevo no es avanzar', async () => {
+    // Un negocio que se crea y se mueve en la MISMA transacción: now() es
+    // el mismo en las dos filas. Nace en «En conversación» (id menor) y
+    // vuelve a «Nuevo» (id mayor). Desde «Nuevo» no avanzó: la fila de
+    // «En conversación» es anterior, aunque tenga la misma hora.
+    const D6 = '00000009-0000-4000-8000-0000000c8d06';
+    const antes = porEtapa(await enConv((tx) => getStageConversion(tx)));
+    await t.admin(`
+      INSERT INTO deal (id, workspace_id, company_id, name, stage_id)
+      VALUES ('${D6}', '${WS_CONV}', '${EMPRESA}', 'Nace y retrocede en la misma transacción', 'nuevo')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_at) VALUES
+        ('${D6}', NULL, 'conversacion', '2026-09-05 12:00:00+00'),
+        ('${D6}', 'conversacion', 'nuevo', '2026-09-05 12:00:00+00');
+    `);
+    try {
+      const c = porEtapa(await enConv((tx) => getStageConversion(tx)));
+      // «Nuevo»: entra uno más y no avanza.
+      assert.deepEqual(c.nuevo, { entered: antes.nuevo!.entered + 1, advanced: antes.nuevo!.advanced, rate: '0.6000' });
+      // «En conversación»: entra uno más y tampoco avanza (volvió a nuevo).
+      assert.deepEqual(c.conversacion, { entered: antes.conversacion!.entered + 1, advanced: 0, rate: '0.0000' });
+    } finally {
+      await t.admin(`DELETE FROM deal WHERE id = '${D6}'`);
+    }
   });
 
   test('la historia de un workspace no entra en la conversión de otro', async () => {
