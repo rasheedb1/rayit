@@ -72,10 +72,12 @@ export default async function PitchPage({ params }: { params: Promise<{ id: stri
           note: draft.review?.note ?? null,
           pending: draft.pending ? { stage: draft.pending.stage, hint: draft.pending.hint, error: draft.pending.lastError } : null,
           failed: draft.failed,
+          copiedUnsourced: draft.unsourcedCopy,
         }
       : null,
     ai: writer === "anthropic" || writer === "fake" ? "on" : writer,
     sendingOn: composer.policy.enabled,
+    signalCount: composer.signalCount,
     policy: { hasPostalAddress: composer.policy.hasPostalAddress, hasEmailAccount: composer.policy.hasEmailAccount },
   };
   // El editor se vuelve a montar solo cuando la IA trae un borrador nuevo (montaje.tsx): ni en cada refresco

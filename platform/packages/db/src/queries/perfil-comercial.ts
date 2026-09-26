@@ -22,7 +22,7 @@
  *     que espera a una API retiene una conexión del pooler.
  */
 import type { Decimal, PlatformId } from '@mc/core';
-import { buildPerfil, coverSrcOrNull, OUTLIER_TIERS, type OutlierTier, type PerfilInputs, type PerfilPostInput } from '@mc/core/outreach/perfil';
+import { buildPerfil, CONNECTED_STATUSES, coverSrcOrNull, OUTLIER_TIERS, type OutlierTier, type PerfilInputs, type PerfilPostInput } from '@mc/core/outreach/perfil';
 import { llmCostUsd, type LlmUsage } from '@mc/core/outreach/llm-precios';
 import { verifyNarrative, type NarrativeIssue, type NarrativeOutcome } from '@mc/core/outreach/narrativa';
 import {
@@ -123,6 +123,38 @@ const isTier = (v: string | null): v is OutlierTier => v !== null && (OUTLIER_TI
 // ---------------------------------------------------------------------
 
 /**
+ * Los videos que forman cada línea base, con la regla con que se calcula
+ * creator_baseline: los últimos window_posts de su red con lectura a su
+ * corte (post_metrics_at_cut), publicados antes de computed_at menos el
+ * corte. Solo vuelven las que cuadran con su sample_size: si después se
+ * importaron videos más viejos, la reconstrucción ya no es la muestra de
+ * verdad, y no se enseña ninguno antes que enseñar otros.
+ */
+export async function readBaselinePosts(tx: WorkspaceTx, baselineIds: readonly string[]): Promise<Record<string, string[]>> {
+  const ids = [...new Set(baselineIds)].filter(isUuid);
+  if (!ids.length) return {};
+  const { rows } = await tx.query<{ id: string; post_ids: string[] | null; sample_size: number }>(
+    `SELECT bl.id, bl.sample_size, w.post_ids
+       FROM creator_baseline bl
+       LEFT JOIN LATERAL (
+         SELECT array_agg(x.id::text ORDER BY x.published_at DESC, x.id) AS post_ids
+           FROM (SELECT p.id, p.published_at
+                   FROM post p
+                  WHERE p.creator_id = bl.creator_id AND p.platform_id = bl.platform_id
+                    AND p.published_at <= bl.computed_at - make_interval(hours => bl.age_hours_cut)
+                    AND EXISTS (SELECT 1 FROM post_metrics_at_cut m WHERE m.post_id = p.id AND m.cut_hours = bl.age_hours_cut)
+                  ORDER BY p.published_at DESC, p.id
+                  LIMIT bl.window_posts) x
+       ) w ON true
+      WHERE bl.id = ANY ($1::uuid[])`,
+    [ids],
+  );
+  return Object.fromEntries(
+    rows.filter((r) => r.post_ids && r.post_ids.length > 0 && r.post_ids.length === r.sample_size).map((r) => [r.id, r.post_ids!]),
+  );
+}
+
+/**
  * Las filas que alimentan el perfil de un creador, ya tipadas. null si
  * el creador no existe en este workspace (la RLS lo esconde igual que si
  * no existiera).
@@ -157,9 +189,10 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
           ORDER BY day DESC, captured_at DESC
           LIMIT 1
        ) s ON true
-      WHERE c.creator_id = $1 AND c.deleted_at IS NULL
+      WHERE c.creator_id = $1 AND c.deleted_at IS NULL AND c.status = ANY ($2::text[])
       ORDER BY c.platform_id, c.connected_at`,
-    [creatorId],
+    // Solo las cuentas autenticadas: una revocada o caducada no es una red conectada.
+    [creatorId, CONNECTED_STATUSES],
   );
 
   // La demografía de seguidores del último día de cada cuenta: una fila
@@ -171,13 +204,13 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
     `SELECT DISTINCT ON (a.connection_id, a.dimension, a.bucket)
             a.id, c.platform_id, a.connection_id, a.dimension, a.bucket, a.share, to_char(a.day, 'YYYY-MM-DD') AS day
        FROM audience_breakdown a
-       JOIN social_connection c ON c.id = a.connection_id AND c.deleted_at IS NULL
+       JOIN social_connection c ON c.id = a.connection_id AND c.deleted_at IS NULL AND c.status = ANY ($2::text[])
       WHERE c.creator_id = $1 AND a.scope = 'account' AND a.population = 'followers'
         AND a.dimension IN ('age', 'gender', 'country')
         AND a.day = (SELECT max(b.day) FROM audience_breakdown b
                       WHERE b.connection_id = a.connection_id AND b.scope = 'account' AND b.population = 'followers')
       ORDER BY a.connection_id, a.dimension, a.bucket, a.captured_at DESC`,
-    [creatorId],
+    [creatorId, CONNECTED_STATUSES],
   );
 
   // La mediana de alcance en no seguidores por red, sobre los últimos
@@ -266,6 +299,16 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
   const tarifario = await getCurrentRateCard(tx, creatorId);
   const iso = isoDe;
 
+  // Los videos que forman cada línea base que el perfil cita: la vigente
+  // de cada red y la de cada uno de los mejores (su «× tu mediana»).
+  const mejores = [...puntuados]
+    .sort((a, b) => Number(b.views_vs_median) - Number(a.views_vs_median) || Number(b.views_at_cut ?? 0) - Number(a.views_at_cut ?? 0) || a.id.localeCompare(b.id))
+    .slice(0, PERFIL_MEJORES);
+  const baselinePosts = await readBaselinePosts(tx, [
+    ...bases.map((b) => b.id),
+    ...mejores.map((p) => p.baseline_id).filter((id): id is string => id !== null),
+  ]);
+
   return {
     creator: {
       id: c.id,
@@ -294,6 +337,7 @@ export async function readPerfilInputs(tx: WorkspaceTx, creatorId: string, now: 
     })),
     posts: posts.map(postInput),
     scoredPosts: puntuados.map(postInput),
+    baselinePosts,
     campaigns: campanas.map((r) => ({
       id: r.id, name: r.name, companyName: r.company_name, status: r.status,
       result: {
@@ -358,15 +402,32 @@ export async function readPostCovers(tx: WorkspaceTx, postIds: readonly string[]
   return Object.fromEntries(rows.map((r) => [r.id, coverSrcOrNull(r.cover_url)]));
 }
 
-async function escribir(tx: WorkspaceTx, creatorId: string, doc: StoredPerfil): Promise<void> {
+async function escribir(tx: WorkspaceTx, creatorId: string, doc: StoredPerfil, recalcToken?: string): Promise<void> {
+  if (recalcToken === undefined) {
+    const { rows } = await tx.query<{ id: string }>(
+      `UPDATE creator_profile
+          SET media_kit = jsonb_set(coalesce(media_kit, '{}'::jsonb), ARRAY[$2::text], $3::jsonb, true)
+        WHERE id = $1 AND deleted_at IS NULL
+        RETURNING id`,
+      [creatorId, PERFIL_MEDIA_KIT_KEY, JSON.stringify(doc)],
+    );
+    if (!rows[0]) throw new PerfilComercialError('creator_not_found', 'Ese creador no existe en este espacio de trabajo.');
+    return;
+  }
+  // Con marca: se escribe solo si la marca sigue siendo la suya, y se
+  // suelta en el mismo UPDATE. Un recálculo que pasó del TTL y cuya marca
+  // ya tomó otro no pisa el resultado del otro.
   const { rows } = await tx.query<{ id: string }>(
     `UPDATE creator_profile
-        SET media_kit = jsonb_set(coalesce(media_kit, '{}'::jsonb), ARRAY[$2::text], $3::jsonb, true)
-      WHERE id = $1 AND deleted_at IS NULL
+        SET media_kit = jsonb_set(media_kit - $4::text, ARRAY[$2::text], $3::jsonb, true)
+      WHERE id = $1 AND deleted_at IS NULL AND media_kit -> $4::text ->> 'token' = $5
       RETURNING id`,
-    [creatorId, PERFIL_MEDIA_KIT_KEY, JSON.stringify(doc)],
+    [creatorId, PERFIL_MEDIA_KIT_KEY, JSON.stringify(doc), PERFIL_RECALCULO_KEY, recalcToken],
   );
-  if (!rows[0]) throw new PerfilComercialError('creator_not_found', 'Ese creador no existe en este espacio de trabajo.');
+  if (rows[0]) return;
+  const { rows: existe } = await tx.query(`SELECT 1 FROM creator_profile WHERE id = $1 AND deleted_at IS NULL`, [creatorId]);
+  if (!existe[0]) throw new PerfilComercialError('creator_not_found', 'Ese creador no existe en este espacio de trabajo.');
+  throw new PerfilComercialError('recalc_in_progress', 'Otro recálculo tomó la marca mientras este corría: se guarda el suyo.');
 }
 
 // ---------------------------------------------------------------------
@@ -438,7 +499,10 @@ export interface SavePerfilOptions {
    * tanto: no se pisa (stale_edit). undefined = no comprobar.
    */
   expectedWrittenAt?: string | null;
-  /** La marca de recálculo que se suelta al guardar, en la misma transacción. */
+  /**
+   * La marca de recálculo: se guarda solo si sigue siendo la de quien
+   * guarda (si no, recalc_in_progress) y se suelta en el mismo UPDATE.
+   */
   recalcToken?: string;
   now?: Date;
 }
@@ -486,8 +550,7 @@ export async function savePerfilComercial(
       fallback: narrative.fallback,
     },
   };
-  await escribir(tx, perfil.creatorId, doc);
-  if (opts.recalcToken) await releasePerfilRecalc(tx, perfil.creatorId, opts.recalcToken);
+  await escribir(tx, perfil.creatorId, doc, opts.recalcToken || undefined);
   return doc;
 }
 

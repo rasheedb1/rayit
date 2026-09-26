@@ -1059,6 +1059,12 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'el borrador generado con sus marcas [claim:id] y el turno de los jobs de VEN-12 (0056): lo escribe el worker y ' +
       'la web lo lee para el editor del pitch. Con escritura, un workspace se fabricaría un borrador «revisado»',
   },
+  outbound_llm_reservation: {
+    permite: ['SELECT'],
+    motivo:
+      'lo apartado del tope diario del modelo mientras una llamada está en curso (0072): lo escribe y lo borra el ' +
+      'worker. Con escritura, un workspace se borraría las reservas y dos jobs volverían a gastar el mismo saldo',
+  },
   outbound_llm_call: {
     permite: ['SELECT', 'INSERT'],
     motivo:

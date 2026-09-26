@@ -63,7 +63,8 @@ export const PITCH = {
       post_score: "Videos",
       media_kit: "Media kit",
       campaign_result: "Otras campañas",
-      quote: "Cotizaciones",
+      /** Los precios del tarifario vigente (Cotizar): citar el propio precio es normal. */
+      quote: "Tus tarifas",
     },
   },
 
@@ -80,7 +81,14 @@ export const PITCH = {
       shorter: "Más corto",
       more_specific: "Más específico",
       other_angle: "Otro ángulo",
-    } satisfies Partial<Record<RegenerateHint, string>>,
+      soften: "Suavizar",
+      add_proof: "Añadir prueba",
+      other_signal: "Otra señal",
+    } satisfies Record<RegenerateHint, string>,
+    /** Las otras tres pistas, plegadas bajo «Más». */
+    mas: "Más",
+    menos: "Menos",
+    masLabel: "Más pistas para otra versión",
     pistaLabel: (pista: string) => `Pedir otra versión: ${pista.toLowerCase()}`,
     redactando: "Redactando… La IA escribe y revisa el borrador; esta página se actualiza sola.",
     pendienteDe: {
@@ -134,7 +142,7 @@ export const PITCH = {
     media_kit: "Media kit",
     campaign_result: "Campaña",
     signal: "Señal",
-    quote: "Cotización",
+    quote: "Tarifario",
   } satisfies Record<ClaimSource, string>,
 
   vista: {
@@ -164,8 +172,16 @@ export const PITCH = {
     sinCorreo: "Todavía no hay un correo conectado: lo que programes saldrá cuando conectes uno.",
     conectarCorreo: "Conectar un correo",
     retenido: (reason: string) => `Retenido: ${reason}.`,
+    /** El borrador se copió con cifras sin origen (savePitch lo marcó): se dice al volver a abrirlo. */
+    copiadoSinOrigen: (n: number) =>
+      n === 1 ? "Se copió con una cifra sin origen en tu perfil." : `Se copió con ${n} cifras sin origen en tu perfil.`,
     /** La línea junto a los botones cuando «Programar» está apagado. */
-    resumen: (n: number, first: string) => (n === 1 ? `Esto impide programarlo: ${first}` : `${n} cosas impiden programarlo. La primera: ${first}`),
+    /**
+     * La línea junto a los botones: solo cuántas cosas lo impiden. El detalle
+     * va en «Antes de enviar» (a 400 px las dos quedan en la misma columna y
+     * repetirlo era ruido); el primero va además para lectores de pantalla.
+     */
+    resumen: (n: number) => (n === 1 ? "Una cosa impide programarlo." : `${n} cosas impiden programarlo.`),
     empezar: "Escribe el asunto y el mensaje para poder programarlo.",
     verRevision: "Ver la revisión",
     vacioNeutro: "Cuando escribas, aquí verás si el correo está listo para programar.",
@@ -212,6 +228,14 @@ export const PITCH = {
     /** El navegador no dejó copiar (permiso, contexto no seguro): se dice, en vez de «Copiado». */
     noSeCopio: "No se pudo copiar: selecciona el texto de la vista previa y cópialo a mano. El borrador sí quedó guardado.",
     /** Por qué «Copiar» está apagado, con el motivo exacto (vista.ts, copyBlockedBy). Con el mensaje vacío no se dice nada. */
+    /** «Copiar» con cifras sin origen: se confirma en línea antes de copiar. */
+    confirmarCopia: (n: number) =>
+      n === 1
+        ? "Este correo tiene una cifra sin origen en tu perfil. ¿Copiarlo igual?"
+        : `Este correo tiene ${n} cifras sin origen en tu perfil. ¿Copiarlo igual?`,
+    confirmarCopiaConsecuencia: "La marca la leerá como un dato tuyo, y On Cue no puede decir de dónde sale. El borrador quedará marcado.",
+    copiarIgual: "Copiar igual",
+    noCopiar: "Cancelar",
     copiarBloqueado: {
       holes: "Antes de copiarlo, rellena los huecos.",
       figures: "Antes de copiarlo, quita las cifras cuyo origen no coincide.",

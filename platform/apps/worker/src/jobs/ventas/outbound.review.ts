@@ -25,6 +25,7 @@
 import { runQualityGate } from '@mc/core/outreach/quality-gate';
 import {
   applyGenerationOutcome, claimGeneratedForReview, llmBudgetLeftUsd, loadGenerationContext, recordInterruptedReview, recordOutreachLlmCall,
+  releaseLlmReservation, reserveLlmBudget,
   releaseGenerationLease, type GenerationReleaseReason, type LeasedTouch,
 } from '@mc/db/queries/outreach';
 import type { Logger } from '../../runner/logger.ts';
@@ -94,6 +95,10 @@ export async function runReview(db: MotorDb, deps: ReviewDeps): Promise<ReviewRe
         {
           generator, judge, signal: deps.signal,
           remainingBudgetUsd: () => db.transaction((tx) => llmBudgetLeftUsd(tx, lease.workspaceId)),
+          // Comprobar y apartar a la vez (0072): outbound.generate puede estar gastando del mismo tope.
+          reserveBudget: (purpose, estimateUsd) =>
+            db.transaction((tx) => reserveLlmBudget(tx, { workspaceId: lease.workspaceId, purpose, estimateUsd })),
+          releaseReservation: (id) => db.transaction((tx) => releaseLlmReservation(tx, id)),
           recordLlmCall: (c) => db.transaction((tx) => recordOutreachLlmCall(tx, { ...c, workspaceId: lease.workspaceId, touchId: lease.touchId })),
         },
       );

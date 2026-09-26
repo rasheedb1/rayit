@@ -169,6 +169,13 @@ export interface PerfilCreatorInput {
   nicheNames: string[];
 }
 
+/**
+ * Los estados de social_connection que cuentan como red conectada: la
+ * cuenta sigue autenticada. 'expired', 'needs_reauth', 'error', 'revoked'
+ * y 'disabled' no entran en el perfil hasta que se reconecten.
+ */
+export const CONNECTED_STATUSES: readonly string[] = ['active'];
+
 export interface PerfilConnectionInput {
   id: string;
   platformId: PlatformId;
@@ -292,6 +299,15 @@ export interface PerfilInputs {
   /** Las campañas con resultado medido, reportadas o cerradas. */
   campaigns: PerfilCampaignInput[];
   rateCard: { id: string; currency: string; computedAt: string; items: PerfilRateItemInput[] } | null;
+  /**
+   * Los videos que forman cada línea base, por su id: los últimos
+   * `window_posts` de la red con lectura a su corte, publicados antes del
+   * cálculo menos el corte (la regla de creator_baseline). Solo trae las
+   * que cuadran con su sample_size: si se importaron videos después, mejor
+   * ninguno que otros. La mediana de la red y la de cada uno de los
+   * mejores videos los llevan en source.rows.
+   */
+  baselinePosts?: Readonly<Record<string, readonly string[]>>;
   /** El corte de edad de las medianas (168 h, el del tarifario y el media kit). */
   cutHours: number;
   /** El instante del cálculo, ISO. Entra como dato para que el resultado sea determinista. */
@@ -701,15 +717,29 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
   const porRed = <T extends { platformId: PlatformId }>(a: T, b: T) =>
     PLATFORM_ORDER.indexOf(a.platformId) - PLATFORM_ORDER.indexOf(b.platformId);
 
-  // Identidad: una línea por cuenta conectada, con sus seguidores.
-  const networks: NetworkLine[] = [...input.connections].sort(porRed).map((c) => ({
+  // Identidad: una línea por cuenta conectada, con sus seguidores. Solo
+  // cuentan las que siguen autenticadas (CONNECTED_STATUSES): una revocada
+  // o caducada no es una red «conectada», y sus seguidores son de otro día.
+  // Un creador puede tener dos cuentas en la misma red (social_connection
+  // solo es única por red y cuenta externa): la de más seguidores lleva el
+  // id corto `seguidores-<red>` y las demás el de su cuenta, igual que las
+  // medianas de otra línea base.
+  const conectadas = input.connections.filter((c) => CONNECTED_STATUSES.includes(c.status));
+  const ordenadas = [...conectadas].sort((a, b) => porRed(a, b) || (b.followers ?? -1) - (a.followers ?? -1) || a.id.localeCompare(b.id));
+  const conId = new Set<PlatformId>();
+  const idSeguidores = (c: PerfilConnectionInput): string => {
+    if (conId.has(c.platformId)) return `seguidores-${c.platformId}-${shortId(c.id)}`;
+    conId.add(c.platformId);
+    return `seguidores-${c.platformId}`;
+  };
+  const networks: NetworkLine[] = ordenadas.map((c) => ({
     platformId: c.platformId,
     handle: c.handle,
     followersDay: c.followersDay,
     followersClaimId:
       c.followers !== null && c.followersSnapshotId
         ? claims.add({
-            id: `seguidores-${c.platformId}`,
+            id: idSeguidores(c),
             kind: 'count',
             key: 'followers',
             params: { platform: c.platformId },
@@ -722,7 +752,7 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
 
   // Audiencia de la red principal: la de más seguidores con demografía.
   const conDemografia = new Set(input.audience.map((a) => a.connectionId));
-  const principal = [...input.connections]
+  const principal = conectadas
     .filter((c) => conDemografia.has(c.id))
     .sort((a, b) => (b.followers ?? -1) - (a.followers ?? -1) || porRed(a, b))[0];
   const audienceLines: AudienceLine[] = [];
@@ -775,6 +805,10 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
     }));
 
   // Desempeño: la mediana por red, cada una con su corte.
+  const filasDeBase = (id: string): { rows?: string[] } => {
+    const rows = input.baselinePosts?.[id];
+    return rows && rows.length > 0 ? { rows: [...rows] } : {};
+  };
   const conMediana = input.baselines.filter((b) => b.medianViews !== null).sort(porRed);
   const medianaDeRed = new Map(conMediana.map((b) => [b.platformId, b.id]));
   const medians: MedianLine[] = conMediana.map((b) => ({
@@ -789,7 +823,10 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
       params: { platform: b.platformId, cutHours: b.ageHoursCut },
       value: Math.round(b.medianViews!),
       unit: 'views',
-      source: { table: 'creator_baseline', id: b.id, field: 'median_views', asOf: b.computedAt },
+      source: {
+        table: 'creator_baseline', id: b.id, field: 'median_views', asOf: b.computedAt,
+        ...filasDeBase(b.id),
+      },
     }),
   }));
 
@@ -897,7 +934,7 @@ export function buildPerfil(input: PerfilInputs): PerfilComercial {
                 params: { platform: p.platformId, cutHours: bl.ageHoursCut },
                 value: Math.round(bl.medianViews),
                 unit: 'views',
-                source: { table: 'creator_baseline', id: bl.id, field: 'median_views', asOf: bl.computedAt },
+                source: { table: 'creator_baseline', id: bl.id, field: 'median_views', asOf: bl.computedAt, ...filasDeBase(bl.id) },
               })
             : null,
         durationClaimId:

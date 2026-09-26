@@ -17,7 +17,7 @@ import {
 import { checkFigures, markFiguresByValue, preflight, questionCloses, shoutingIn, unsourcedFigures } from '../src/outreach/preflight.ts';
 import { formatClaimValue, formatShare } from '../src/outreach/claim-labels.ts';
 import {
-  PERSON_VARIABLES, renderTemplate, TEMPLATE_VARIABLES, templateValuesFrom, templateVariablesIn, templatizeKnownValues,
+  PERSON_VARIABLES, renderTemplate, TEMPLATE_VARIABLES, templateValuesFrom, templateVariablesIn, templatizeKnownValues, templatizePeople,
 } from '../src/outreach/render.ts';
 
 const CLAIMS: SalesClaim[] = [
@@ -352,6 +352,9 @@ test('las siglas y la marca en mayúsculas no son gritar; la pregunta de cierre 
   // Una marca de varias palabras vale palabra por palabra.
   assert.deepEqual(shoutingIn('Una idea para CAFÉ ALMA en Bogotá', ['Café Alma']), []);
   assert.deepEqual(shoutingIn('Es GRATIS y YA'), ['GRATIS']);
+  // Un tramo de mayúsculas seguidas es un solo aviso, con el tramo entero (pulido r1).
+  assert.deepEqual(shoutingIn('¡SÚPER OFERTA SOLO HOY! Escríbeme.'), ['SÚPER OFERTA SOLO HOY']);
+  assert.deepEqual(shoutingIn('Mira ESTO YA y luego OTRA COSA'), ['ESTO YA', 'OTRA COSA']);
   assert.equal(questionCloses('Idea.\n\n¿Te sirve?\n\nLaura'), true);
   assert.equal(questionCloses('¿Te sirve?\n\nUna idea larga que sigue después de la pregunta y no es una firma para nada.'), false);
   // Un comentario público no necesita pregunta y no lleva asunto.
@@ -589,13 +592,26 @@ test('ronda 5: el porcentaje de un claim se escribe con la regla de la app («58
   assert.equal(formatClaimValue(0.053, 'share', 'en-US'), '5.3 %');
 });
 
+test('pulido r1: un precio del tarifario citado con su marca pasa; escrito a mano sigue siendo una cifra sin origen', () => {
+  for (const locale of ['es-CO', 'en-US']) {
+    const display = formatClaimValue(3_100_000, 'money', locale, 'COP');
+    const tarifa = {
+      id: 'rate:00000004-0000-4000-8000-0000007a1101:low', source: 'quote' as const, label: 'Tu tarifa de TikTok dedicado: desde',
+      value: 3_100_000, unit: 'money' as const, currency: 'COP', display, ref: { table: 'rate_card_item', id: '00000004-0000-4000-8000-0000007a1101' },
+    };
+    assert.deepEqual(checkFigures(`El paquete cuesta ${display} [claim:${tarifa.id}].`, [tarifa]), [], `${locale}: ${display}`);
+    assert.deepEqual(checkFigures('El paquete cuesta 3.100.000 pesos.', [tarifa]).map((i) => i.code), ['unsourced_figure'], locale);
+  }
+});
+
 test('ronda 5: lo que escribe la IA guarda a la persona como variable: si cambia «Para», cambia el saludo', () => {
   const values = templateValuesFrom({ contact: { fullName: 'Camilo Herrera', roleTitle: null }, creator: { senderName: 'Laura Méndez' } });
   const ia = 'Hola Camilo,\n\nCamilo Herrera me recomendó escribirte. Mi mediana es de 115.446 [claim:baseline:tiktok:median_views] views.\n\n¿Te cuento?\n\nLaura Méndez';
-  const marked = templatizeKnownValues(ia, values, PERSON_VARIABLES);
+  const marked = templatizePeople(ia, values, ['Laura Méndez', 'Café Alma']);
+  // Solo el saludo y la firma: el nombre en medio del texto se queda escrito (pulido r1).
   assert.equal(
     marked,
-    'Hola {{first_name}},\n\n{{full_name}} me recomendó escribirte. Mi mediana es de 115.446 [claim:baseline:tiktok:median_views] views.\n\n¿Te cuento?\n\n{{sender_name}}',
+    'Hola {{first_name}},\n\nCamilo Herrera me recomendó escribirte. Mi mediana es de 115.446 [claim:baseline:tiktok:median_views] views.\n\n¿Te cuento?\n\n{{sender_name}}',
   );
   // Rellenado con la misma persona, dice lo mismo; con otra, saluda a la otra.
   assert.equal(renderTemplate(marked, values), ia);
@@ -605,5 +621,25 @@ test('ronda 5: lo que escribe la IA guarda a la persona como variable: si cambia
   assert.equal(templatizeKnownValues('Camilonga y camilo', values, PERSON_VARIABLES), 'Camilonga y camilo');
   // Una persona con un solo nombre: first_name, no full_name.
   const solo = templateValuesFrom({ contact: { fullName: 'Camilo', roleTitle: null } });
-  assert.equal(templatizeKnownValues('Hola Camilo,', solo, PERSON_VARIABLES), 'Hola {{first_name}},');
+  assert.equal(templatizePeople('Hola Camilo,', solo), 'Hola {{first_name}},');
+});
+
+test('pulido r1: un nombre que también es de la creadora o de la marca no se vuelve variable', () => {
+  // La creadora es Laura Méndez y la contacto de Granos del Valle es Laura Quintero.
+  const lauras = templateValuesFrom({ contact: { fullName: 'Laura Quintero', roleTitle: null }, creator: { senderName: 'Laura Méndez' } });
+  const ia = 'Hola Laura,\n\nSoy Laura, hago recetas fáciles y vi lo nuevo de Granos del Valle.\n\n¿Te cuento una idea?\n\nLaura Méndez';
+  const marked = templatizePeople(ia, lauras, ['Laura Méndez', 'Granos del Valle']);
+  assert.ok(marked.includes('Soy Laura,'), marked);
+  assert.ok(!marked.includes('{{first_name}}'), marked);
+  assert.ok(marked.endsWith('{{sender_name}}'), marked);
+  // Con otra persona en «Para», la creadora sigue siendo Laura.
+  const andrea = templateValuesFrom({ contact: { fullName: 'Andrea Ruiz', roleTitle: null }, creator: { senderName: 'Laura Méndez' } });
+  assert.ok(renderTemplate(marked, andrea)!.includes('Soy Laura,'));
+  // Una contacto que se llama Alma, en Café Alma: la marca no se toca.
+  const alma = templateValuesFrom({ contact: { fullName: 'Alma Rojas', roleTitle: null }, creator: { senderName: 'Laura Méndez' } });
+  const cafe = templatizePeople('Hola Alma,\n\nMe encanta el cold brew de Café Alma.\n\nLaura Méndez', alma, ['Laura Méndez', 'Café Alma']);
+  assert.ok(cafe.includes('Café Alma'), cafe);
+  assert.ok(cafe.startsWith('Hola Alma,'), cafe);
+  // El nombre completo sí es de la persona: en el saludo se vuelve variable.
+  assert.equal(templatizePeople('Hola Alma Rojas,\n\nTexto.', alma, ['Café Alma']), 'Hola {{full_name}},\n\nTexto.');
 });

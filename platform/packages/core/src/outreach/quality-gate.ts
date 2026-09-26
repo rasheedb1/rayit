@@ -32,6 +32,8 @@ export interface LlmCallRecord {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  /** La reserva que se apartó para esta llamada (reserveBudget): quien registra la suelta en la misma transacción. */
+  reservationId?: string | null;
 }
 
 export interface QualityGateDeps {
@@ -41,6 +43,15 @@ export interface QualityGateDeps {
   remainingBudgetUsd(): Promise<number>;
   /** Registra una llamada en outbound_llm_call (en su propia transacción: lo pagado se cuenta aunque después algo falle). */
   recordLlmCall(call: LlmCallRecord): Promise<void>;
+  /**
+   * Aparta la estimación de la llamada del tope diario, si alcanza, y
+   * devuelve el id de la reserva (null si no alcanza). Con ella, dos jobs
+   * que corren a la vez no gastan el mismo saldo (0072). Opcional: sin
+   * ella, se pregunta remainingBudgetUsd como antes.
+   */
+  reserveBudget?(purpose: LlmCallRecord['purpose'], estimateUsd: number): Promise<string | null>;
+  /** Suelta una reserva que no llegó a registrarse (la llamada falló sin uso, o se cortó). */
+  releaseReservation?(reservationId: string): Promise<void>;
   signal?: AbortSignal;
 }
 
@@ -134,6 +145,16 @@ function finish(attempts: AttemptRecord[], rubric: StepRubric, reason: { code: H
 const aborted = (attempts: AttemptRecord[]): QualityGateOutcome => ({ status: 'aborted', chosen: null, attempts, hold: null });
 
 export async function runQualityGate(input: QualityGateInput, deps: QualityGateDeps): Promise<QualityGateOutcome> {
+  // La reserva abierta de la llamada en curso: se entrega al registrar la llamada y, si no se llegó a registrar, se suelta.
+  const reserva: { id: string | null } = { id: null };
+  try {
+    return await qualityLoop(input, deps, reserva);
+  } finally {
+    if (reserva.id && deps.releaseReservation) await deps.releaseReservation(reserva.id);
+  }
+}
+
+async function qualityLoop(input: QualityGateInput, deps: QualityGateDeps, reserva: { id: string | null }): Promise<QualityGateOutcome> {
   const { rubric } = input;
   const stepType = input.generation.stepType;
   const attempts: AttemptRecord[] = [];
@@ -141,10 +162,22 @@ export async function runQualityGate(input: QualityGateInput, deps: QualityGateD
   let lastReason: { code: HoldCodeFromGate; detail?: string } = { code: 'quality_low' };
   const maxAttempts = Math.max(1, rubric.maxAttempts);
 
-  // Con el tope agotado no se llama a nadie, ni a un modelo que no cobra.
-  const canSpend = async (model: string, maxTokens: number) => {
+  // Con el tope agotado no se llama a nadie, ni a un modelo que no cobra. Con reserveBudget, comprobar y apartar
+  // son una sola cosa: lo apartado se entrega al registrar la llamada (record) o se suelta.
+  const canSpend = async (purpose: LlmCallRecord['purpose'], model: string, maxTokens: number) => {
+    const estimate = estimateCallUsd(model, ESTIMATED_PROMPT_CHARS, maxTokens);
+    if (deps.reserveBudget) {
+      if (reserva.id && deps.releaseReservation) await deps.releaseReservation(reserva.id);
+      reserva.id = await deps.reserveBudget(purpose, estimate);
+      return reserva.id !== null;
+    }
     const left = await deps.remainingBudgetUsd();
-    return left > 0 && left >= estimateCallUsd(model, ESTIMATED_PROMPT_CHARS, maxTokens);
+    return left > 0 && left >= estimate;
+  };
+  const record = async (call: LlmCallRecord) => {
+    const reservationId = reserva.id;
+    reserva.id = null;
+    await deps.recordLlmCall(reservationId ? { ...call, reservationId } : call);
   };
 
   const opts = deps.signal ? { signal: deps.signal } : undefined;
@@ -155,7 +188,7 @@ export async function runQualityGate(input: QualityGateInput, deps: QualityGateD
     if (attempt === 1 && input.initial) {
       gen = input.initial;
     } else {
-      if (!(await canSpend(deps.generator.model, GENERATION_MAX_TOKENS[stepType] ?? 600))) {
+      if (!(await canSpend('generate', deps.generator.model, GENERATION_MAX_TOKENS[stepType] ?? 600))) {
         return finish(attempts, rubric, { code: 'llm_budget' });
       }
       try {
@@ -165,12 +198,12 @@ export async function runQualityGate(input: QualityGateInput, deps: QualityGateD
         // Cortada por el plazo del job: lo hecho hasta aquí se registra; esta llamada no llegó a cobrarse entera.
         if (deps.signal?.aborted) return aborted(attempts);
         if (!(e instanceof LlmOutputError)) throw e;
-        if (e.usage) await deps.recordLlmCall({ purpose: 'generate', ...e.usage });
+        if (e.usage) await record({ purpose: 'generate', ...e.usage });
         lastReason = { code: 'llm_error', detail: e.stopReason ?? 'invalid_output' };
         hint = 'more_specific';
         continue;
       }
-      await deps.recordLlmCall({ purpose: 'generate', model: gen.model, inputTokens: gen.inputTokens, outputTokens: gen.outputTokens, costUsd: gen.costUsd });
+      await record({ purpose: 'generate', model: gen.model, inputTokens: gen.inputTokens, outputTokens: gen.outputTokens, costUsd: gen.costUsd });
     }
 
     // 2 · pre-vuelo y compuertas A y B, sin tokens
@@ -197,7 +230,7 @@ export async function runQualityGate(input: QualityGateInput, deps: QualityGateD
     }
 
     // 3 · el juez
-    if (!(await canSpend(deps.judge.model, JUDGE_MAX_TOKENS))) return finish(attempts, rubric, { code: 'llm_budget' });
+    if (!(await canSpend('judge', deps.judge.model, JUDGE_MAX_TOKENS))) return finish(attempts, rubric, { code: 'llm_budget' });
     let verdict;
     try {
       verdict = await deps.judge.judge({
@@ -212,13 +245,13 @@ export async function runQualityGate(input: QualityGateInput, deps: QualityGateD
         return aborted(attempts);
       }
       if (!(e instanceof LlmOutputError)) throw e;
-      if (e.usage) await deps.recordLlmCall({ purpose: 'judge', ...e.usage });
+      if (e.usage) await record({ purpose: 'judge', ...e.usage });
       lastReason = { code: 'llm_error', detail: e.stopReason ?? 'invalid_output' };
       rec.hint = 'more_specific';
       hint = rec.hint;
       continue;
     }
-    await deps.recordLlmCall({ purpose: 'judge', model: verdict.model, inputTokens: verdict.inputTokens, outputTokens: verdict.outputTokens, costUsd: verdict.costUsd });
+    await record({ purpose: 'judge', model: verdict.model, inputTokens: verdict.inputTokens, outputTokens: verdict.outputTokens, costUsd: verdict.costUsd });
     rec.judge = { model: verdict.model, inputTokens: verdict.inputTokens, outputTokens: verdict.outputTokens, costUsd: verdict.costUsd };
     rec.scores = verdict.scores;
     rec.total = weightedScore(verdict.scores, rubric.weights);

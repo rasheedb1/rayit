@@ -29,7 +29,8 @@ import { estimateCallUsd, GENERATION_MAX_TOKENS, LlmOutputError } from '@mc/core
 import type { GeneratedMessage } from '@mc/core/outreach/generate';
 import { ESTIMATED_PROMPT_CHARS } from '@mc/core/outreach/quality-gate';
 import {
-  claimTouchesToGenerate, llmBudgetLeftUsd, loadGenerationContext, recordOutreachLlmCall, releaseGenerationLease, saveGeneratedDraft,
+  claimTouchesToGenerate, loadGenerationContext, recordOutreachLlmCall, releaseGenerationLease, releaseLlmReservation, reserveLlmBudget,
+  saveGeneratedDraft,
   type GenerationReleaseReason, type LeasedTouch,
 } from '@mc/db/queries/outreach';
 import type { Logger } from '../../runner/logger.ts';
@@ -97,10 +98,15 @@ export async function runGenerate(db: MotorDb, deps: GenerateDeps): Promise<Gene
       report.deferred.push(lease.touchId);
       continue;
     }
+    // La reserva del tope que se apartó para la llamada de este toque: se entrega al registrarla o se suelta.
+    let reservationId: string | null = null;
     try {
       const ctx = await db.transaction((tx) => loadGenerationContext(tx, lease.touchId));
-      const left = await db.transaction((tx) => llmBudgetLeftUsd(tx, lease.workspaceId));
-      if (left <= 0 || left < estimateCallUsd(generator.model, ESTIMATED_PROMPT_CHARS, GENERATION_MAX_TOKENS[ctx.stepType] ?? 600)) {
+      // Comprobar el tope y apartar la estimación en una sola transacción con candado (0072): outbound.review
+      // puede estar gastando del mismo tope a la vez, y los dos no pueden pasar con el mismo saldo.
+      const estimateUsd = estimateCallUsd(generator.model, ESTIMATED_PROMPT_CHARS, GENERATION_MAX_TOKENS[ctx.stepType] ?? 600);
+      reservationId = await db.transaction((tx) => reserveLlmBudget(tx, { workspaceId: lease.workspaceId, purpose: 'generate', estimateUsd }));
+      if (!reservationId) {
         await release(lease, 'llm_budget');
         report.overBudget.push(lease.touchId);
         continue;
@@ -116,14 +122,20 @@ export async function runGenerate(db: MotorDb, deps: GenerateDeps): Promise<Gene
       } catch (e) {
         if (e instanceof LlmOutputError && e.usage) {
           const usage = e.usage;
-          await db.transaction((tx) => recordOutreachLlmCall(tx, { workspaceId: lease.workspaceId, touchId: lease.touchId, purpose: 'generate', ...usage }));
+          const id = reservationId;
+          reservationId = null;
+          await db.transaction((tx) =>
+            recordOutreachLlmCall(tx, { workspaceId: lease.workspaceId, touchId: lease.touchId, purpose: 'generate', ...usage, reservationId: id }),
+          );
         }
         throw e;
       }
+      const id = reservationId;
+      reservationId = null;
       await db.transaction((tx) =>
         recordOutreachLlmCall(tx, {
           workspaceId: lease.workspaceId, touchId: lease.touchId, purpose: 'generate', model: draft.model,
-          inputTokens: draft.inputTokens, outputTokens: draft.outputTokens, costUsd: draft.costUsd,
+          inputTokens: draft.inputTokens, outputTokens: draft.outputTokens, costUsd: draft.costUsd, reservationId: id,
         }),
       );
       const saved = await db.transaction((tx) =>
@@ -140,6 +152,10 @@ export async function runGenerate(db: MotorDb, deps: GenerateDeps): Promise<Gene
       deps.logger?.warn('no se pudo redactar un mensaje de la cadencia', { touchId: lease.touchId, error });
       const r = await release(lease, releaseReasonFor(e, deps.signal));
       if (r.gaveUp) report.gaveUp.push(lease.touchId);
+    } finally {
+      // La llamada no llegó a registrarse (falló sin uso o se cortó): lo apartado vuelve al tope.
+      const pendiente = reservationId;
+      if (pendiente) await db.transaction((tx) => releaseLlmReservation(tx, pendiente));
     }
   }
   return report;

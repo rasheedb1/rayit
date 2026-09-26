@@ -167,6 +167,9 @@ export const MESSAGES = {
        */
       unit_mismatch: (palabra: string, cifra: string, mide: string) =>
         `«${palabra}» no es lo que mide ${cifra}: esa cifra es ${mide}. Cambia la palabra por lo que la cifra mide o quítala.`,
+      /** `texto` va pegado a la cifra sin espacio («k», «M», «x2»); `cifra`, como en unit_mismatch. */
+      glued_suffix: (texto: string, cifra: string) =>
+        `«${texto}» va pegado a ${cifra} y cambia lo que dice: esa cifra ya está entera. Quítalo o sepáralo con un espacio.`,
       cifraAnterior: "la cifra que va antes",
       /** Qué mide una cifra, por su unidad (Claim.unit); una moneda ISO-4217 es `dinero`. */
       mide: {
@@ -375,6 +378,10 @@ export const MESSAGES = {
       captions: "Lo que se lee en tus captions",
     },
     videos: "Videos que la forman:",
+    /** Las cifras de demografía: de qué informe salen y el resto del reparto de esa lectura. */
+    informe: (red: string) => `Del informe de audiencia que da ${red}, solo sobre tus seguidores.`,
+    reparto: (lista: string) => `En la misma lectura: ${lista}.`,
+    segmento: (nombre: string, valor: string) => `${nombre} ${valor}`,
     yMas: (n: string) => `y ${n} más`,
     /** Para soporte, solo en el title de la fila: la tabla, la columna y la fila tal cual. */
     soporte: (tabla: string, campo: string, fila: string) => `${tabla}.${campo} · ${fila}`,

@@ -90,6 +90,8 @@ function explain(r: Exclude<SavePitchResult, { ok: true }>): PitchState {
       return { message: e.no_postal_address, link: { href: OUTREACH_URLS.policyPostalAddress, label: PITCH.acciones.irAPolitica } };
     case "not_editable":
       return { message: e.not_editable };
+    case "other_person":
+      return { message: PITCH.revision.otraPersona(r.person ?? "") };
   }
 }
 
@@ -120,6 +122,8 @@ export async function guardarPitch(_prev: PitchState, formData: FormData): Promi
       savePitch(tx, {
         companyId: v.companyId, contactId: v.contactId, dealId: v.dealId || null, touchId: v.touchId || null,
         subject: v.subject.trim() || null, body: v.body, intent: v.intent === "schedule" ? "schedule" : "draft",
+        // Copiar es enviarlo desde el correo de la creadora: si lleva cifras sin origen, el borrador queda marcado.
+        copied: v.intent === "copy",
         userId: ctx.identity?.userId ?? null, locale: workspace.locale, appUrl, now: new Date(),
       }),
     );

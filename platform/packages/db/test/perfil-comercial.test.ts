@@ -105,10 +105,29 @@ test('con el seed, el porqué nunca se demuestra con el mismo video y cada agreg
       assert.ok(Number(grupo.value) >= 1.5 * Number(resto.value), v.title);
     }
   }
+  // Con el seed 0010 (el laboratorio de video marcó cinco videos que abren
+  // con un reto), la demo enseña «Lo distingue» en al menos uno de los cinco.
+  const conRazon = perfil.performance.top.filter((v) => v.why.reasons.length > 0);
+  assert.ok(conRazon.length >= 1, 'ninguno de los cinco mejores tiene porqué');
+  for (const v of conRazon) {
+    assert.equal(v.why.hookSource, 'video_analysis', v.title);
+    assert.deepEqual(v.why.reasons.map((r) => [r.axis, r.group]), [['hook', 'reto']], v.title);
+  }
   // Los posts de los agregados vienen con título y enlace para «De dónde sale cada cifra».
   const indice = new Map(perfil.posts.map((p) => [p.postId, p]));
   const captions = claim('captions-leidos');
   for (const id of captions.source.rows!) assert.ok(indice.get(id)?.title, id);
+  // La mediana de cada red enseña los videos que la forman: tantos como su muestra, de su red.
+  for (const m of perfil.performance.medians) {
+    const rows = claim(m.claimId).source.rows;
+    assert.ok(rows && rows.length === m.sampleSize, `${m.platformId}: ${rows?.length} de ${m.sampleSize}`);
+    for (const id of rows) assert.equal(indice.get(id)?.platformId, m.platformId, id);
+  }
+  // Y la mediana contra la que se midió cada uno de los mejores, también.
+  for (const v of perfil.performance.top) {
+    const base = claim(v.baselineClaimId!);
+    assert.ok(base.source.rows && base.source.rows.length > 0, v.title);
+  }
 });
 
 test('un recálculo a la vez: la marca se toma, se niega a un segundo, vence y se suelta al guardar', async () => {
@@ -132,6 +151,26 @@ test('un recálculo a la vez: la marca se toma, se niega a un segundo, vence y s
     return savePerfilComercial(tx, perfil, plantilla(perfil), { recalcToken: segunda.token });
   });
   assert.equal(await marca(), null);
+});
+
+test('un recálculo que pasó del TTL no pisa al que tomó su marca vencida', async () => {
+  const ahora = new Date('2026-09-26T12:00:00Z');
+  const lento = await laura((tx) => claimPerfilRecalc(tx, CREADORA_LAURA, ahora));
+  const nuevo = await laura((tx) => claimPerfilRecalc(tx, CREADORA_LAURA, new Date(ahora.getTime() + (PERFIL_RECALCULO_TTL_S + 1) * 1000)));
+  const guardado = await laura(async (tx) => {
+    const perfil = await computePerfil(tx, CREADORA_LAURA);
+    return savePerfilComercial(tx, perfil, plantilla(perfil), { recalcToken: nuevo.token, now: new Date('2026-09-26T12:02:00Z') });
+  });
+  // El lento termina después: su guardado se rechaza y el del nuevo se queda.
+  await assert.rejects(
+    laura(async (tx) => {
+      const perfil = await computePerfil(tx, CREADORA_LAURA);
+      return savePerfilComercial(tx, perfil, plantilla(perfil), { recalcToken: lento.token, now: new Date('2026-09-26T12:03:00Z') });
+    }),
+    (e: unknown) => e instanceof PerfilComercialError && e.code === 'recalc_in_progress',
+  );
+  const vigente = await laura((tx) => getPerfilComercial(tx, CREADORA_LAURA));
+  assert.equal(vigente?.narrative.writtenAt, guardado.narrative.writtenAt);
 });
 
 test('recalcular no pisa una edición guardada mientras tanto', async () => {

@@ -22,6 +22,7 @@
  */
 import { claimsCitedIn, stripClaimMarkers, type SalesClaim } from '@mc/core/outreach/claims';
 import { subjectGate } from '@mc/core/outreach/gates';
+import { namesOtherPerson } from '@mc/core/outreach/people';
 import { preflight, type PreflightIssue, type RegenerateHint } from '@mc/core/outreach/preflight';
 import { renderTemplate, templateValuesFrom, type TemplateSources, type TemplateValues } from '@mc/core/outreach/render';
 import type { WorkspaceTx } from '../../client.ts';
@@ -74,7 +75,19 @@ export interface PitchDraft {
   pending: { stage: string; hint: RegenerateHint | null; lastError: string | null } | null;
   /** La IA se rindió con este borrador (el modelo no devolvió nada legible, 0058): lo escribe la persona o pide otra versión. */
   failed: boolean;
+  /** Se copió con tantas cifras sin origen (UNSOURCED_COPY_MARK): el editor lo dice. null si no. */
+  unsourcedCopy: number | null;
 }
+
+/**
+ * La marca que deja «Copiar» en un borrador con cifras sin origen:
+ * held_reason = 'unsourced_copy:<n>' con el toque en 'draft' (la CHECK de
+ * 0037 solo exige motivo cuando está retenido; en un borrador es una nota).
+ * No es un código de retención (HOLD_CODES): nada lo detiene por ella, y
+ * guardar o programar el borrador la limpia con el texto nuevo.
+ */
+export const UNSOURCED_COPY_MARK = 'unsourced_copy';
+const UNSOURCED_COPY_RE = new RegExp(`^${UNSOURCED_COPY_MARK}:(\\d+)$`);
 
 /** Lo que cambia según el negocio elegido: quién firma, qué cifras puede citar y con qué se rellenan las variables. */
 export interface PitchVariant {
@@ -99,6 +112,8 @@ export interface PitchComposer {
   policy: { enabled: boolean; hasEmailAccount: boolean; hasPostalAddress: boolean };
   /** Las personas de la empresa a las que este espacio ya les envió algo: para ellas no es el primer correo. */
   contactedIds: string[];
+  /** Cuántas señales vivas tiene la empresa (ni descartadas ni duplicadas): con más de una, el editor ofrece «Otra señal». */
+  signalCount: number;
 }
 
 export interface LoadPitchOptions {
@@ -169,8 +184,15 @@ export async function loadPitchComposer(tx: WorkspaceTx, companyId: string, loca
       [companyId],
     )
   ).rows.map((r) => r.contact_id);
+  const signalCount = (
+    await tx.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM signal WHERE company_id = $1::uuid AND status NOT IN ('discarded', 'duplicate')`,
+      [companyId],
+    )
+  ).rows[0]!.n;
   return {
     contactedIds: contacted,
+    signalCount,
     deals: deals.map((x) => ({ id: x.id, name: x.name, signalHeadline: x.headline, open: x.open })),
     variants,
     draft: d ? draftFrom(d, draftValues) : null,
@@ -200,12 +222,14 @@ function draftFrom(d: DraftRow, values: TemplateValues): PitchDraft {
   const touchBody = d.body.trim();
   const marked = d.g_body !== null && (touchBody === '' || outgoing(d.g_body, values) === touchBody);
   const byAi = d.g_outcome !== null && d.g_outcome !== 'manual';
+  const copia = UNSOURCED_COPY_RE.exec(d.held_reason ?? '');
   const reviewedAt = d.g_reviewed_at === null || d.g_reviewed_at === undefined ? null : new Date(d.g_reviewed_at as string);
   return {
     touchId: d.id, status: d.status, contactId: d.contact_id, dealId: d.deal_id,
     subject: marked ? (d.g_subject ?? d.subject) : d.subject,
     body: marked ? d.g_body! : d.body,
-    heldReason: d.held_reason,
+    heldReason: copia ? null : d.held_reason,
+    unsourcedCopy: copia ? Number(copia[1]) : null,
     review: byAi && marked && (d.g_note !== null || d.g_total !== null)
       ? { total: d.g_total === null ? null : Number(d.g_total), note: d.g_note, attempt: d.g_chosen }
       : null,
@@ -227,6 +251,12 @@ export interface SavePitchInput {
   /** Con sus marcas [claim:id]: aquí se comprueban y se quitan. */
   body: string;
   intent: 'draft' | 'schedule';
+  /**
+   * Se guarda porque la persona lo copió para enviarlo desde su correo.
+   * Si el texto lleva cifras sin origen, el borrador queda marcado
+   * (UNSOURCED_COPY_MARK) para que el editor lo diga al volver.
+   */
+  copied?: boolean;
   userId: string | null;
   locale: string;
   /**
@@ -243,16 +273,19 @@ export type SavePitchResult =
   | { ok: true; touchId: string; status: 'draft' | 'scheduled'; sendingEnabled: boolean }
   | {
       ok: false;
-      code: 'contact' | 'deal' | 'no_email' | 'opted_out' | 'preflight' | 'not_editable' | 'no_postal_address';
+      code: 'contact' | 'deal' | 'no_email' | 'opted_out' | 'preflight' | 'not_editable' | 'no_postal_address' | 'other_person';
       issues?: PreflightIssue[];
       subjectCodes?: string[];
+      /** other_person: el nombre de pila de la otra persona de la marca que el mensaje nombra. */
+      person?: string;
     };
 
 export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise<SavePitchResult> {
   assertIds('savePitch', [input.companyId, input.contactId, ...(input.dealId ? [input.dealId] : []), ...(input.touchId ? [input.touchId] : [])]);
   const c = (
-    await tx.query<{ email: string | null; blocked: boolean; company: string }>(
-      `SELECT c.email::text AS email, co.name AS company,
+    await tx.query<{ email: string | null; blocked: boolean; company: string; full_name: string | null; others: (string | null)[] }>(
+      `SELECT c.email::text AS email, co.name AS company, c.full_name,
+              ARRAY(SELECT o.full_name FROM contact o WHERE o.company_id = c.company_id AND o.id <> c.id ORDER BY o.created_at, o.id) AS others,
               (c.opted_out OR coalesce(c.email_invalid, false) OR address_is_suppressed(c.email)
                OR EXISTS (SELECT 1 FROM outbound_workspace_optout wo WHERE wo.workspace_id = current_workspace_id() AND wo.email = c.email)) AS blocked
          FROM contact c JOIN company co ON co.id = c.company_id WHERE c.id = $1::uuid AND c.company_id = $2::uuid`,
@@ -289,6 +322,9 @@ export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise
   if (input.intent === 'schedule') {
     if (!pf.ok || !sg.ok) return { ok: false, code: 'preflight', issues: pf.issues, subjectCodes: sg.codes };
     if (!policy.postal) return { ok: false, code: 'no_postal_address' };
+    // El mismo aviso que la revisión del editor: un mensaje que nombra a otra persona de la marca no se programa.
+    const person = namesOtherPerson(`${subject ?? ''}\n${body}`, c.full_name, c.others, src.sources.creator?.senderName ?? null);
+    if (person) return { ok: false, code: 'other_person', person };
   }
   const status = input.intent === 'schedule' ? 'scheduled' : 'draft';
   const cited = JSON.stringify(claimsCitedIn(claims, subject, body));
@@ -324,6 +360,12 @@ export async function savePitch(tx: WorkspaceTx, input: SavePitchInput): Promise
     await tx.query<{ r: string }>('SELECT outbound_generation_save_manual($1::uuid, $2, $3) AS r', [touchId, input.subject, input.body])
   ).rows[0]!.r;
   if (saved !== 'ok') return { ok: false, code: 'not_editable' };
+  const unsourced = new Set(pf.issues.filter((i) => i.code === 'unsourced_figure').map((i) => i.detail ?? '')).size;
+  if (input.copied && !approved && unsourced > 0) {
+    await tx.query(`UPDATE outbound_touch SET held_reason = $2 WHERE id = $1::uuid AND status = 'draft'`, [
+      touchId, `${UNSOURCED_COPY_MARK}:${unsourced}`,
+    ]);
+  }
   if (approved) {
     await tx.query(
       `UPDATE outbound_touch

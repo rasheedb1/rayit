@@ -163,18 +163,28 @@ function withoutUrls(text: string): string {
   return text.replace(/\b(?:https?:\/\/|www\.)\S+/gi, ' ');
 }
 
-/** Mayúsculas sostenidas: una palabra de cinco letras o más en mayúsculas, o dos seguidas. */
+/**
+ * Mayúsculas sostenidas: una palabra de cinco letras o más en mayúsculas,
+ * o dos seguidas. Las palabras en mayúsculas contiguas son UN tramo y
+ * salen como un solo aviso con el tramo entero: «¡SÚPER OFERTA SOLO HOY!»
+ * es «SÚPER OFERTA SOLO HOY», no cuatro avisos que se pisan.
+ */
 export function shoutingIn(text: string, allowed: readonly string[] = []): string[] {
   // Un nombre de varias palabras («CAFÉ ALMA») vale palabra por palabra.
   const ok = new Set([...ALLOWED_UPPERCASE, ...allowed.flatMap((a) => a.toUpperCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean))]);
   const words = withoutUrls(text).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   const isCaps = (w: string) => /\p{Lu}/u.test(w) && w === w.toUpperCase() && /^\p{L}{2,}$/u.test(w) && !ok.has(w);
   const hits: string[] = [];
-  words.forEach((w, i) => {
-    if (!isCaps(w)) return;
-    if ([...w].length >= 5) hits.push(w);
-    else if (i > 0 && isCaps(words[i - 1]!)) hits.push(`${words[i - 1]} ${w}`);
-  });
+  let tramo: string[] = [];
+  const cerrar = () => {
+    if (tramo.length >= 2 || tramo.some((w) => [...w].length >= 5)) hits.push(tramo.join(' '));
+    tramo = [];
+  };
+  for (const w of words) {
+    if (isCaps(w)) tramo.push(w);
+    else cerrar();
+  }
+  cerrar();
   return [...new Set(hits)];
 }
 

@@ -13,6 +13,7 @@ import {
 } from '../src/outreach/perfil-captions.ts';
 import { median, medianOrNull } from '../src/scoring.ts';
 import { parseStoredPerfil, type StoredPerfil } from '../src/outreach/perfil-guardado.ts';
+import { templateNarrative, verifyNarrative } from '../src/outreach/narrativa.ts';
 import { entradasConVideosLargos, entradasLaura } from './fixtures/perfil-entradas.ts';
 
 /** Todos los ids que citan las secciones: cada uno tiene que estar en claims. */
@@ -85,7 +86,7 @@ test('el perfil es determinista: las mismas filas dan los mismos ids y el mismo 
   assert.deepEqual(buildPerfil(entradasLaura()), buildPerfil(entradasLaura()));
 });
 
-test('con el seed, ningún rasgo alcanza: el porqué no se inventa y describe el video', () => {
+test('con siete videos (el fixture), ningún rasgo alcanza: el porqué no se inventa y describe el video', () => {
   const p = buildPerfil(entradasLaura());
   // Siete videos con puntaje: ningún grupo tiene tres OTROS videos y tres del otro lado con la mitad más de rendimiento.
   for (const v of p.performance.top) assert.deepEqual(v.why.reasons, [], v.title);
@@ -193,6 +194,31 @@ test('la audiencia es la de la red con más seguidores que tenga demografía, si
   assert.equal(claimById(p, 'no-seguidores-tiktok')!.source.asOf, '2026-09-24T06:00:00.000Z');
   // La mediana de no seguidores que no existe no se inventa.
   assert.deepEqual(p.audience.nonFollowers.map((n) => n.platformId), ['tiktok']);
+});
+
+test('dos cuentas en la misma red y una revocada: el perfil se arma, con ids únicos y la plantilla verificada', () => {
+  const e = entradasLaura();
+  e.connections = [
+    ...e.connections,
+    // Una segunda cuenta de TikTok, más chica: su id lleva el de la cuenta.
+    { id: '00000002-0000-4000-8000-0000000000c9', platformId: 'tiktok', handle: 'laura.recetas', status: 'active', followers: 12000, followersSnapshotId: '909', followersDay: '2026-09-24' },
+    // Una vieja revocada, con más seguidores: no es una red conectada.
+    { id: '00000002-0000-4000-8000-0000000000ca', platformId: 'tiktok', handle: 'laura.vieja', status: 'revoked', followers: 900000, followersSnapshotId: '910', followersDay: '2025-01-01' },
+  ];
+  // Su demografía tampoco entra.
+  e.audience = [...e.audience, { id: 'a99', platformId: 'tiktok', connectionId: '00000002-0000-4000-8000-0000000000ca', dimension: 'gender', bucket: 'M', share: 0.9, day: '2025-01-01' }];
+  const p = buildPerfil(e);
+  const ids = p.claims.map((c) => c.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.deepEqual(
+    p.identity.networks.filter((n) => n.platformId === 'tiktok').map((n) => [n.handle, n.followersClaimId]),
+    [['laura.cocinafacil', 'seguidores-tiktok'], ['laura.recetas', 'seguidores-tiktok-0000000000c9']],
+  );
+  assert.ok(!p.identity.networks.some((n) => n.handle === 'laura.vieja'));
+  assert.equal(claimById(p, 'seguidores-tiktok')!.value, 243000);
+  assert.ok(!p.audience.lines.some((a) => claimById(p, a.claimId)!.source.id === 'a99'));
+  for (const id of idsCitados(p)) assert.ok(ids.includes(id), id);
+  assert.equal(verifyNarrative(templateNarrative(p), p).ok, true);
 });
 
 test('identidad, medianas por red y tarifas llevan su fila de origen', () => {

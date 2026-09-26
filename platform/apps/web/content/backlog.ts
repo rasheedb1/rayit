@@ -432,7 +432,7 @@ export const STORIES: readonly Story[] = [
     desc: "Identidad, audiencia, desempeño (mediana y mejores videos con su porqué), formatos, prueba social de campañas reportadas y tarifas, más una narrativa generada cuyas cifras enlazan a su origen. Es el análisis del perfil y los videos del creador que alimenta el outreach.",
     done: "Con el seed, el perfil muestra los cinco mejores videos con sus cifras y cada cifra de la narrativa lleva a su origen.",
     status: "hecho",
-    note: "r5: el verificador rechaza la palabra de unidad que no es la de la cifra («[claim:mediana] seguidores») y las cantidades que se colaban («veintiún», «treintaitrés», «una veintena», «un par»); portadas solo https o de la demo; con el teclado cada cifra es una parada de Tab; la vista previa enseña las marcas desconocidas como fichas; una prueba ata los nombres de las redes del kit a los de @mc/core (unificación en la rama rasheed/kit-plataformas-desde-core, para Nicolás). r4: el verificador también rechaza ordinales («la segunda», «la primera en…»), «doblé», proporciones («la mayoría», «la cuarta parte»), numerales en inglés y cualquier número Unicode («²³», «⅔»). Los cinco mejores salen de todo el historial con puntaje, no solo de los 200 recientes. Enlaces y portadas se sanean al calcular (una url sin esquema del CSV ya no deja el perfil «sin calcular»); las portadas se leen vivas al pintar, una rota o ausente cambia a un marcador con la red y la duración, y la demo trae portadas (seed 0007). El editor muestra fichas legibles (⟦115,4 mil⟧) en vez de ids; «Narrativa guardada.» deja de verse cuando un recálculo la reemplaza; países de la narrativa en su idioma; tarifas alineadas a 400 px. r3: el porqué deja fuera al video que explica y la vista previa subraya lo que el verificador rechaza. La narrativa solo se redacta en español y la pantalla lo dice. Pendiente del integrador: aplicar la 0061 (nació 0060; renumerada al integrar la fase 5) en Supabase y correr el seed 0007 (make db.seed), con el próximo deploy.",
+    note: "Hecha; el historial de rondas está en docs/ventas-outreach.md §5.4. Pendiente del integrador: aplicar 0061 en Supabase y correr los seeds 0007 y 0010 (make db.seed) con el próximo deploy.",
   },
   {
     id: "VEN-12", module: "VEN", owner: "rasheed", size: "L", sprint: 5, deps: ["VEN-10", "VEN-11"],
@@ -440,7 +440,7 @@ export const STORIES: readonly Story[] = [
     desc: "Generador con perfil del creador, señal de la marca, ángulo del día y toques realmente enviados; pre-vuelo determinista, juez con rúbrica por paso en tabla, regeneración con pistas cerradas, disparadores de riesgo y revisión humana con calentamiento por tipo de paso.",
     done: "Un mensaje con una cifra sin origen no pasa; dos marcas del mismo nicho reciben correos con similitud menor de 0,65; el juez registra nota, tokens y costo.",
     status: "hecho",
-    note: "Hecha: generación con cifras trazables, pre-vuelo, compuertas A-B-C, juez con nota y costo, y jobs outbound.generate/outbound.review. Para el integrador: aplicar 0056–0060 (sin aplicar en Supabase tras la fase 5) y poner ANTHROPIC_API_KEY en el worker. Detalle en docs/ventas-outreach.md.",
+    note: "Hecha: cifras trazables, pre-vuelo, compuertas A-B-C, juez con nota y costo, y tope diario reservado antes de cada llamada (0072). Pendiente del integrador: aplicar 0056–0060 y 0072 en Supabase y poner ANTHROPIC_API_KEY en el worker. Detalle en docs/ventas-outreach.md.",
   },
   {
     id: "VEN-13", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-12"],

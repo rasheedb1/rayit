@@ -190,6 +190,50 @@ test('el tope diario de gasto: sin presupuesto no se genera; si se acaba a mitad
   assert.deepEqual([aMitad.status, aMitad.hold?.code, aMitad.attempts.length], ['hold', 'llm_budget', 1]);
 });
 
+test('pulido r1: con reserveBudget, cada llamada aparta su estimación antes y la entrega al registrarse; nada queda apartado', async () => {
+  // Un tope compartido entre dos «jobs»: lo apartado cuenta como gastado hasta que se registra.
+  let spent = 0;
+  const open = new Map<string, number>();
+  let n = 0;
+  const shared = {
+    reserveBudget: async (_purpose: LlmCallRecord['purpose'], estimateUsd: number) => {
+      const reserved = [...open.values()].reduce((a, b) => a + b, 0);
+      if (5 - spent - reserved < estimateUsd) return null;
+      const id = `r${++n}`;
+      open.set(id, estimateUsd);
+      return id;
+    },
+    releaseReservation: async (id: string) => {
+      open.delete(id);
+    },
+  };
+  const calls: LlmCallRecord[] = [];
+  const d = {
+    generator: createFakeGenerator(), judge: judgeWith({ relevance: 9, quality: 9, structure: 9, voice: 9 }),
+    remainingBudgetUsd: async () => assert.fail('con reserveBudget no se pregunta el saldo suelto'),
+    recordLlmCall: async (c: LlmCallRecord) => {
+      calls.push(c);
+      spent += c.costUsd;
+      if (c.reservationId) open.delete(c.reservationId);
+    },
+    ...shared,
+  };
+  const r = await runQualityGate(gateInput(), d);
+  assert.equal(r.status, 'approved');
+  // Cada llamada registrada llevó su reserva, y al terminar no queda nada apartado.
+  assert.ok(calls.length >= 2 && calls.every((c) => typeof c.reservationId === 'string'), JSON.stringify(calls));
+  assert.equal(open.size, 0);
+
+  // Con otro job que ya apartó casi todo el tope, el juez de sonnet no se llama (el redactor falso no cuesta):
+  // se retiene por presupuesto, igual que si el saldo se hubiera gastado.
+  open.set('otro-job', 5 - spent - 0.0001);
+  const antes = calls.length;
+  const sinSaldo = await runQualityGate(gateInput(), d);
+  assert.deepEqual([sinSaldo.status, sinSaldo.hold?.code], ['hold', 'llm_budget']);
+  assert.ok(calls.slice(antes).every((c) => c.purpose === 'generate'), 'el juez no se llamó');
+  assert.deepEqual([...open.keys()], ['otro-job']);
+});
+
 test('dos marcas del mismo nicho reciben correos con similitud menor de 0,65', async () => {
   const a = await runQualityGate(gateInput(), deps(createFakeGenerator(), createFakeJudge()).deps);
   const enviadoA = a.chosen!.body;

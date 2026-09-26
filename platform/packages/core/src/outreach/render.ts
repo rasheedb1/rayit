@@ -137,3 +137,42 @@ export function templatizeKnownValues(text: string, values: TemplateValues, vars
 
 /** Las variables de las personas que la IA escribe por su nombre: quién recibe y quién firma. */
 export const PERSON_VARIABLES = ['first_name', 'full_name', 'sender_name'] as const satisfies readonly TemplateVariable[];
+
+/** Cuántas líneas con texto del final de un correo se leen como firma. */
+export const SIGNATURE_LINES = 3;
+
+const palabraRe = (v: string) => new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRe(v)}(?![\\p{L}\\p{N}_])`, 'u');
+
+/**
+ * templatizeKnownValues para el cuerpo que escribe la IA, solo donde es
+ * seguro. Un nombre de pila no dice de quién es: la creadora puede
+ * llamarse igual que la contacto (Laura Méndez escribe a Laura Quintero)
+ * y el nombre de la contacto puede estar dentro de la marca (Alma, de
+ * Café Alma). Convertir cada aparición dejaba «Soy {{first_name}}» o
+ * «Café {{first_name}}», y al cambiar «Para» el correo decía «Soy Andrea».
+ *
+ *   · first_name y full_name, solo en el saludo: la primera línea con texto;
+ *   · sender_name, solo en la firma: las últimas SIGNATURE_LINES líneas;
+ *   · y nunca un valor que también sea una palabra de otro nombre que el
+ *     correo lleva (`protect`: la creadora, quien firma, la marca), ni el
+ *     de quien firma si está en el de quien recibe.
+ *
+ * El asunto no se toca: si nombra a alguien, la revisión lo avisa al
+ * cambiar «Para» (namesOtherPerson).
+ */
+export function templatizePeople(body: string, values: TemplateValues, protect: ReadonlyArray<string | null | undefined> = []): string {
+  const lines = body.split('\n');
+  const llenas = lines.flatMap((l, i) => (l.trim() ? [i] : []));
+  if (llenas.length === 0) return body;
+  const saludo = llenas[0]!;
+  const firma = new Set(llenas.slice(-SIGNATURE_LINES).filter((i) => i !== saludo));
+  const libre = (v: string | null | undefined, otros: ReadonlyArray<string | null | undefined>) => {
+    const x = v?.trim();
+    return Boolean(x) && !otros.some((o) => o && o.trim() !== '' && palabraRe(x!).test(o));
+  };
+  const contacto = (['first_name', 'full_name'] as const).filter((n) => libre(values[n], [values.sender_name, ...protect]));
+  const remitente = libre(values.sender_name, [values.full_name]) ? (['sender_name'] as const) : [];
+  return lines
+    .map((l, i) => (i === saludo ? templatizeKnownValues(l, values, contacto) : firma.has(i) ? templatizeKnownValues(l, values, remitente) : l))
+    .join('\n');
+}
