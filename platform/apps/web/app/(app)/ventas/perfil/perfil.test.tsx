@@ -109,7 +109,7 @@ function entradas(): PerfilInputs {
     nonFollowers: [],
     baselines: [{ id: "00000002-0000-4000-8000-0000000b0001", platformId: "tiktok", ageHoursCut: 168, medianViews: 115446, sampleSize: 17, isReliable: true, computedAt: "2026-09-25T00:00:00.000Z" }],
     posts: TITULOS.map((_, i) => post(i)),
-    campaigns: [{ id: CAMPANA, name: "Lanzamiento cold brew", companyName: "Café Alma", status: "reported", result: { views: 712000, brandFollowersGained: 1240, codeRedemptions: null, attributedRevenue: null, currency: "COP", viewsVsMedian: null } }],
+    campaigns: [{ id: CAMPANA, name: "Lanzamiento cold brew", companyName: "Café Alma", status: "reported", result: { views: 712000, brandFollowersGained: 1240, codeRedemptions: null, attributedRevenue: null, currency: "COP", viewsVsMedian: null, computedAt: "2026-09-20T15:00:00.000Z" } }],
     rateCard: { id: "00000004-0000-4000-8000-0000007a1f01", currency: "COP", computedAt: "2026-09-20T00:00:00.000Z", items: [{ id: "00000004-0000-4000-8000-0000007a1101", labelEs: "TikTok dedicado", platformId: "tiktok", priceLow: "5200000.00", priceHigh: "8080000.00" }] },
     cutHours: 168,
     computedAt: "2026-09-25T10:00:00.000Z",
@@ -159,6 +159,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("la pantalla", () => {
+  it("las cifras de una campaña dicen que son las del reporte, con su fecha (pulido r3)", async () => {
+    getPerfilComercial.mockResolvedValue(guardado());
+    render(await PerfilPage());
+    const prueba = screen.getByText("Con quién has trabajado").closest("section")!;
+    expect(within(prueba).getByText(/^Al cierre del reporte, .*20/)).toBeTruthy();
+    expect(screen.getByText(/^Las cifras de campañas son al cierre de su reporte \(Café Alma, .*20.*\); en Campañas ves las de hoy\.$/)).toBeTruthy();
+  });
+
   it("muestra los cinco mejores videos con su portada, sus cifras, su corte, su mediana y cómo son", async () => {
     getPerfilComercial.mockResolvedValue(guardado());
     render(await PerfilPage());

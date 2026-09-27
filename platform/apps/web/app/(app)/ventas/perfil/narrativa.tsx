@@ -57,6 +57,20 @@ function subrayar(text: string, desde: number, spans: readonly IssueSpan[], clav
  * lo que el verificador rechazaría: una marca inventada, una cifra a
  * mano, una cantidad en letras.
  */
+/**
+ * De cuándo son las cifras de campañas que cita la narrativa: «Café Alma,
+ * 20 sep y Nutrivé, 5 sep», o null si no cita ninguna. Son las del
+ * reporte, no las de hoy que enseña Campañas (pulido r3).
+ */
+function cortesDeCampanas(texto: string, cifras: Record<string, CifraVista>): string[] | null {
+  const vistos = new Map<string, string>();
+  for (const [, id] of texto.matchAll(/\[claim:([^\]]+)\]/g)) {
+    const corte = id ? cifras[id]?.corte : null;
+    if (corte && !vistos.has(corte.marca)) vistos.set(corte.marca, MESSAGES.narrativa.corteCampana(corte.marca, corte.fecha));
+  }
+  return vistos.size === 0 ? null : [...vistos.values()];
+}
+
 function Parrafos({
   texto, cifras, prefijo, verificador,
 }: { texto: string; cifras: Record<string, CifraVista>; prefijo: string; verificador?: VerifierContext }) {
@@ -151,6 +165,7 @@ export function Narrativa({
     if (estado && !estado.vale.includes(escritaEl)) setEstado(null);
   }
   const avisoGuardado = estado && estado.vale.includes(escritaEl) ? estado.texto : null;
+  const cortes = cortesDeCampanas(texto, cifras);
 
   function insertar() {
     if (!elegida) return;
@@ -260,7 +275,8 @@ export function Narrativa({
   return (
     <div>
       {texto.trim() ? <Parrafos texto={texto} cifras={cifras} prefijo="narrativa" /> : <p className="text-sm text-fg-2">{t.vacia}</p>}
-      <p className="mt-4 text-xs text-fg-3">{fuente}</p>
+      {cortes && <p className="mt-4 text-xs text-fg-3">{t.cortesCampanas(cortes)}</p>}
+      <p className={`${cortes ? "mt-1" : "mt-4"} text-xs text-fg-3`}>{fuente}</p>
       {aviso && <p className="mt-1 text-xs text-fg-3">{aviso}</p>}
       <p className="mt-1 text-xs text-fg-3">{idioma}</p>
       <div className="mt-3 flex flex-wrap items-center gap-3">
