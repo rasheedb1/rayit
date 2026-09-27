@@ -85,7 +85,7 @@ export function LoQueSabemos({
                   </p>
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     <Pill kind={estado.kind}>{estado.label}</Pill>
-                    {encaje && <Pill kind={encaje.kind}>{`${t.fit} ${encaje.text}`}</Pill>}
+                    {encaje && <Pill kind={encaje.kind}>{`${t.fitSignal} ${encaje.text}`}</Pill>}
                   </div>
                   {s.budgetEstimate && (
                     <p className="mt-2 text-xs tabular-nums text-ink-2">
