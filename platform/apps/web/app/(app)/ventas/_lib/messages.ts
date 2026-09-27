@@ -1016,4 +1016,12 @@ export const MESSAGES = {
     saving: "Guardando…",
     close: "Cerrar",
   },
+
+  /**
+   * Un 'viewer' o un 'client' (en una agencia, la marca misma) ve el
+   * radar, las empresas y el pipeline, pero no los cambia
+   * (PUEDEN_OPERAR_VENTAS). Lo dicen las acciones del CRM.
+   */
+  sinPermiso:
+    "Tu rol en este espacio puede ver el CRM, pero no cambiarlo. Pídeselo a quien es dueño, administra o es miembro del espacio.",
 } as const;

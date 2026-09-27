@@ -544,6 +544,9 @@ export const MESSAGES = {
     formularioIlegible: "No pudimos leer el formulario. Recarga la página e inténtalo otra vez.",
     tarifarioIlegible: "No pudimos leer los cambios del tarifario. Recarga la página e inténtalo otra vez.",
     generico: "No se pudo completar la acción. Vuelve a intentarlo; si sigue igual, avísanos.",
+    /** Un 'viewer' o un 'client' ve Cotizar, no lo cambia (PUEDEN_OPERAR_COTIZAR). */
+    sinPermiso:
+      "Tu rol en este espacio puede ver el tarifario, los media kits y las cotizaciones, pero no cambiarlos. Pídeselo a quien es dueño, administra o es miembro del espacio.",
   } as Record<string, string>,
 
   /** Los mensajes de validación de los formularios del panel. */

@@ -48,6 +48,24 @@ export const PUEDEN_EDITAR_PERFIL: ReadonlySet<MembershipRole> = new Set<Members
 export const PUEDEN_OPERAR_VENTAS: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
 
 /**
+ * Los roles que operan Cotizar (COT-1..4): guardar el tarifario, generar,
+ * publicar o desbloquear un media kit, crear, editar, enviar, aceptar,
+ * rechazar o borrar una cotización, y crear su campaña. Cada una fija un
+ * precio, un documento que ve una marca o un ingreso del espacio. Un
+ * 'viewer' lo lee; un 'client' (en una agencia, la marca misma) nunca
+ * reescribe tarifas ni acepta cotizaciones. Mismo grupo que
+ * PUEDEN_OPERAR_VENTAS.
+ */
+export const PUEDEN_OPERAR_COTIZAR: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
+
+/**
+ * Los roles que pueden importar métricas desde un CSV (RES-6): escribe
+ * posts y métricas del espacio, que luego ven Resumen y Campañas. Un
+ * 'viewer' o un 'client' las leen, no las cargan.
+ */
+export const PUEDEN_IMPORTAR_METRICAS: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
+
+/**
  * Los roles que pueden LEER las bandejas de Ventas (VEN-14): las
  * conversaciones con las marcas (/ventas/bandeja) y los mensajes
  * retenidos (/ventas/aprobaciones). Un 'client' no: en una agencia es la

@@ -14,10 +14,12 @@ const createCompany = vi.fn();
 const createDeal = vi.fn();
 const createSignal = vi.fn();
 const revalidatePath = vi.fn();
+const puedeOperarVentas = vi.fn();
 
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => revalidatePath(...a) }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 vi.mock("./_lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
+vi.mock("./_lib/permiso", () => ({ puedeOperarVentas: () => puedeOperarVentas() }));
 vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
 }));
@@ -34,7 +36,10 @@ vi.mock("@mc/db/queries/ventas", async (original) => ({
 
 import { CompanyNotEditable, ContactNotOwned, DuplicateCompanyName, DuplicateDomain, VentasError } from "@mc/db/queries/ventas";
 import { MESSAGES } from "./_lib/messages";
-import { anotarSenal, cambiarRelacion, cargarLista, crearEmpresa, crearNegocio, editarContacto, editarEmpresa, moverNegocio } from "./actions";
+import {
+  aceptarSenal, anotarSenal, cambiarRelacion, cargarLista, crearContacto, crearEmpresa, crearNegocio, darDeBaja, descartarSenal,
+  editarContacto, editarEmpresa, moverNegocio,
+} from "./actions";
 
 const COMPANY = "00000002-0000-4000-8000-0000000000e1";
 const CONTACT = "00000007-0000-4000-8000-000000000001";
@@ -59,6 +64,7 @@ beforeEach(() => {
   createDeal.mockReset().mockResolvedValue(DEAL);
   createSignal.mockReset().mockResolvedValue({ duplicate: false, reason: null, companyId: null });
   revalidatePath.mockReset();
+  puedeOperarVentas.mockReset().mockResolvedValue(true);
 });
 
 describe("editarEmpresa", () => {
@@ -285,5 +291,28 @@ describe("el tope de los montos de Ventas (pulido r8)", () => {
     const r = await anotarSenal({}, form({ companyName: "Fresko", headline: "Pauta en TikTok", fit: "", budget: "99999999999999" }));
     expect(r.errors).toEqual({ budget: "El monto no puede pasar de COP 999.999.999.999,99." });
     expect(createSignal).not.toHaveBeenCalled();
+  });
+});
+
+describe("el rol (pulido r3)", () => {
+  it("un 'viewer' no escribe nada en el CRM: cada acción vuelve con el aviso antes de tocar la base", async () => {
+    puedeOperarVentas.mockResolvedValue(false);
+    const aviso = { message: MESSAGES.sinPermiso };
+    const signal = "00000009-0000-4000-8000-000000000001";
+    await expect(anotarSenal({}, form({ companyName: "Vitalé", headline: "Lanza una línea", fit: "70" }))).resolves.toEqual(aviso);
+    await expect(cargarLista({}, form({ pasted: "empresa\nVitalé" }))).resolves.toEqual(aviso);
+    await expect(aceptarSenal({}, form({ signalId: signal }))).resolves.toEqual(aviso);
+    await expect(descartarSenal({}, form({ signalId: signal, reason: "No encaja" }))).resolves.toEqual(aviso);
+    await expect(crearEmpresa({}, form({ ...ficha, relationship: "prospect" }))).resolves.toEqual(aviso);
+    await expect(editarEmpresa({}, form(ficha))).resolves.toEqual(aviso);
+    await expect(cambiarRelacion({}, form({ companyId: COMPANY, relationship: "client" }))).resolves.toEqual(aviso);
+    await expect(crearNegocio({}, form({ companyId: COMPANY, name: "Lanzamiento" }))).resolves.toEqual(aviso);
+    await expect(crearContacto({}, form(contacto))).resolves.toEqual(aviso);
+    await expect(editarContacto({}, form(contacto))).resolves.toEqual(aviso);
+    await expect(darDeBaja({}, form({ contactId: CONTACT, companyId: COMPANY }))).resolves.toEqual(aviso);
+    await expect(moverNegocio(DEAL, "propuesta")).resolves.toEqual({ ok: false, message: MESSAGES.sinPermiso });
+    for (const fn of [updateCompany, updateContact, moveDeal, importSignals, createCompany, createDeal, createSignal, revalidatePath]) {
+      expect(fn).not.toHaveBeenCalled();
+    }
   });
 });

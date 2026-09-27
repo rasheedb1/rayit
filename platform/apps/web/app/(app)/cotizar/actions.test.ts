@@ -7,15 +7,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 const withWorkspace = vi.fn();
 const revalidatePath = vi.fn();
+const puedeOperarCotizar = vi.fn();
+/** redirect de Next corta la acción lanzando; aquí también, con la URL a la vista. */
+const redirect = vi.fn((url: string) => {
+  throw new Error(`redirect:${url}`);
+});
 
 vi.mock("next/cache", () => ({ revalidatePath: (...a: unknown[]) => revalidatePath(...a) }));
-vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
+vi.mock("next/navigation", () => ({ redirect: (url: string) => redirect(url) }));
+vi.mock("./_lib/permiso", () => ({ puedeOperarCotizar: () => puedeOperarCotizar() }));
 vi.mock("@/lib/db", () => ({ withWorkspace: (...a: unknown[]) => withWorkspace(...a) }));
 vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
 }));
 
-import { guardarTarifario } from "./actions";
+import {
+  aceptarCotizacion, cambiarPublicacionMediaKit, crearCampanaConVentana, crearCampanaDeCotizacion, crearCotizacion,
+  desbloquearMediaKit, editarCotizacion, eliminarBorrador, enviarCotizacion, generarMediaKit, guardarTarifario,
+  marcarAvisoBloqueoVisto, marcarAvisoVisto, rechazarCotizacion,
+} from "./actions";
+import { MESSAGES } from "./messages";
 import { BASIS_VACIO, type BasisTarifario } from "./_lib/tarifario";
 
 const CREADORA = "00000002-0000-4000-8000-000000000003";
@@ -30,6 +41,7 @@ function datos(basis: BasisTarifario): FormData {
 beforeEach(() => {
   withWorkspace.mockReset();
   revalidatePath.mockReset();
+  puedeOperarCotizar.mockReset().mockResolvedValue(true);
 });
 
 describe("guardarTarifario", () => {
@@ -50,5 +62,30 @@ describe("guardarTarifario", () => {
     );
     expect(r).toEqual({ ok: true });
     expect(withWorkspace).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("el rol (pulido r3)", () => {
+  const QUOTE = "00000005-0000-4000-8000-000000000001";
+  const KIT = "00000005-0000-4000-8000-0000000000a1";
+  const aviso = { message: MESSAGES.errores.sinPermiso };
+
+  it("un 'viewer' no escribe nada en Cotizar: cada acción vuelve con el aviso antes de tocar la base", async () => {
+    puedeOperarCotizar.mockResolvedValue(false);
+    await expect(guardarTarifario({}, datos(BASIS_VACIO))).resolves.toEqual(aviso);
+    await expect(generarMediaKit({}, new FormData())).resolves.toEqual(aviso);
+    await expect(crearCotizacion({}, new FormData())).resolves.toEqual(aviso);
+    await expect(editarCotizacion(QUOTE, {}, new FormData())).resolves.toEqual(aviso);
+    await expect(crearCampanaConVentana(QUOTE, {}, new FormData())).resolves.toEqual(aviso);
+    await expect(enviarCotizacion(QUOTE)).resolves.toEqual({ status: "error", message: MESSAGES.errores.sinPermiso });
+    await expect(desbloquearMediaKit(KIT)).rejects.toThrow("redirect:/cotizar/media-kit?error=sinPermiso");
+    await expect(cambiarPublicacionMediaKit(KIT, true)).rejects.toThrow("redirect:/cotizar/media-kit?error=sinPermiso");
+    for (const accion of [aceptarCotizacion, rechazarCotizacion, crearCampanaDeCotizacion, eliminarBorrador]) {
+      await expect(accion(QUOTE)).rejects.toThrow(`redirect:/cotizar/cotizaciones/${QUOTE}?error=sinPermiso`);
+    }
+    // «Entendido» en un aviso vuelve a su lista sin cerrarlo para todo el equipo.
+    await expect(marcarAvisoVisto(QUOTE)).rejects.toThrow("redirect:/cotizar/cotizaciones");
+    await expect(marcarAvisoBloqueoVisto(KIT, "/cotizar/media-kit")).rejects.toThrow("redirect:/cotizar/media-kit");
+    expect(withWorkspace).not.toHaveBeenCalled();
   });
 });
