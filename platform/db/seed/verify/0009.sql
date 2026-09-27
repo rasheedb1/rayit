@@ -81,8 +81,9 @@ SELECT 'c_contadores_de_los_toques' AS check_id,
 
 -- (d) El widget de uso casa con el historial: lo de hoy y lo de los 14
 --     días de outbound_usage_daily es exactamente lo que el historial
---     enseña como reclamado esos días (hoy, los correos de 0006, que
---     salieron antes de que se apagara el envío), y las cuentas dicen que
+--     enseña como reclamado esos días (los correos de 0006, del último
+--     día hábil: hoy entre semana por la tarde, cero en fin de semana), y
+--     las cuentas dicen que
 --     el envío está apagado (outreach_enabled = false: «Sin envío»).
 WITH reclamados AS (
   SELECT (t.claimed_at AT TIME ZONE w.timezone)::date AS dia

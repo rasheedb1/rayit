@@ -135,5 +135,5 @@ SELECT 'h_en_la_ventana' AS check_id,
                                       WHERE m.touch_id = t.id AND m.direction = 'inbound'), true) AS antes_de_la_respuesta
           FROM outbound_touch t
          WHERE t.workspace_id = '00000002-0000-4000-8000-000000000001' AND t.status IN ('sent', 'canceled', 'scheduled')
-           -- Los toques de ESTE seed: los de 0006 (VEN-15) salieron «en las últimas 24 horas» del reloj de verdad.
+           -- Los toques de ESTE seed: los de 0006 (VEN-15) los comprueba verify/0006.sql (e).
            AND t.id::text LIKE '00000005-%') x;

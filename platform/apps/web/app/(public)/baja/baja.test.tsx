@@ -111,7 +111,14 @@ describe("/baja/<token>", () => {
     await pagina();
     fireEvent.click(screen.getByRole("button", { name: t.pregunta.boton }));
     expect(await screen.findByRole("alert")).toHaveTextContent(t.error);
-    expect(screen.getByRole("button", { name: t.pregunta.boton })).toBeInTheDocument();
+    // El botón vuelve a decir «Dejar de recibir» (no «Enviando…») y se puede pulsar otra vez.
+    const boton = await screen.findByRole("button", { name: t.pregunta.boton });
+    expect(boton).toBeEnabled();
+    expect(screen.queryByRole("button", { name: t.pregunta.enviando })).not.toBeInTheDocument();
+    // Y el reintento funciona.
+    darDeBajaDesdeEnlace.mockResolvedValue({ status: "ok", alreadyOptedOut: false, scope: "workspace" });
+    fireEvent.click(boton);
+    expect(await screen.findByRole("heading", { name: t.listo.title(VALIDO.senderName) })).toBeInTheDocument();
   });
 
   it("quien envió el correo no ve el botón", async () => {

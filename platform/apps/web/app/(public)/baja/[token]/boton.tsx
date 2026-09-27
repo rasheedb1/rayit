@@ -65,7 +65,16 @@ export function DejarDeRecibir({
         <Button
           variant="primary"
           loading={pending}
-          onClick={() => startTransition(async () => setResultado(await dejarDeRecibir(token)))}
+          onClick={() =>
+            startTransition(async () => {
+              const r = await dejarDeRecibir(token);
+              // Lo que va después de un await ya no es parte de la
+              // transición: sin envolverlo, el aviso de error se pintaba
+              // un instante junto a un botón que aún decía «Enviando…».
+              // Así el resultado y el botón habilitado llegan en el mismo render.
+              startTransition(() => setResultado(r));
+            })
+          }
         >
           {pending ? t.pregunta.enviando : t.pregunta.boton}
         </Button>

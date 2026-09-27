@@ -2290,8 +2290,12 @@ con agentes en paralelo, con la misma puerta de calidad de 9,5.
   los contadores de las cuentas de Laura **sacados de los toques que el
   reclamo tomó** (verify/0009.sql lo comprueba en los dos sentidos): el
   widget de uso dice lo mismo que el historial, día por día. La historia
-  de la demo es que el envío salió unas horas (los correos de hoy de
-  0006) y después se apagó.
+  de la demo es que el envío salió unas horas (los cuatro correos de
+  0006) y después se apagó. Esos correos salen el último día hábil, en
+  la ventana de envío y la zona del espacio (pulido r3): sembrada un
+  sábado, la demo no envía en sábado, y `pnpm test` corre
+  `db/seed/verify` con el reloj en sábado y en domingo
+  (`fin-de-semana.test.mjs`, y `ancla.test.mjs` para las horas).
 - **Prueba**: `packages/db/test/actividad.test.ts`, una semana de envíos
   en los ocho estados; el embudo cuadra con `outbound_touch` fila a fila,
   la regla del bloqueo es la misma en la vista, los botones y el
