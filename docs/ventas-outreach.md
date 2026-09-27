@@ -564,6 +564,21 @@ que el despachador de VEN-10 tiene que usar, todo en
   (`contact_optout_no_delete`), y si se borra por otra vía (la cascada de
   su empresa), `contact_optout_keep` guarda su correo en la lista de su
   workspace. Prueba: `entregabilidad.test.ts`, «la baja no se apaga».
+- **Una baja de un espacio no tumba el reclamo de los demás (pulido r3).**
+  Hasta r3 el descarte de `claimDueTouches` miraba la ficha y la lista
+  global, pero no `outbound_workspace_optout` (lo que este documento ya
+  decía que hacía). Bastaba con cambiarle a una ficha con un toque
+  programado el correo por uno de la lista de su espacio para que el
+  `UPDATE` en lote a `processing` lanzara 23514 en cada corrida, y los
+  toques de TODOS los workspaces se quedaran en la cola. Ahora: el
+  descarte mira las tres fuentes de `enforce_outbound_optout` (y, en
+  correo, los rebotes duros verificados); si aun así la base rechaza el
+  lote, se reclama fila por fila con un punto de guardado y la rechazada
+  se cancela con su motivo (`opted_out`, `email_invalid`, o `failed` con
+  `claim_rejected` y aviso) devolviendo su plaza; y cambiarle el correo a
+  una ficha por uno de la lista cancela lo que tenía en la cola en ese
+  espacio y termina sus enrolamientos vivos (entregabilidad §8.5).
+  Prueba: `outreach-reclamo.test.ts`, «pulido r3».
 - **Cada correo** lleva `buildEmailFooter` (frase de baja con
   `optoutUrl` y la dirección postal de la política; sin dirección no hay
   pie y el correo no está listo) y `listUnsubscribeHeaders`.
