@@ -15,12 +15,25 @@ export function ProponerBoton({
   signalId,
   label = MESSAGES.senales.proponer,
   variant = "primary",
+  bloqueo,
 }: {
   signalId: string;
   label?: string;
   variant?: "primary" | "secondary" | "ghost";
+  /** Por qué no se puede proponer (todas las personas de la marca de baja): el botón queda deshabilitado con el motivo. */
+  bloqueo?: string;
 }) {
   const [state, action, pending] = useActionState<CadenciaState, FormData>(proponerDesdeSenal, {});
+  if (bloqueo) {
+    return (
+      <div className="grid gap-2">
+        <Button size="sm" variant={variant} disabled>
+          {label}
+        </Button>
+        <p className="max-w-xs text-xs text-fg-3">{bloqueo}</p>
+      </div>
+    );
+  }
   return (
     <form action={action} className="grid gap-2">
       <input type="hidden" name="signalId" value={signalId} />

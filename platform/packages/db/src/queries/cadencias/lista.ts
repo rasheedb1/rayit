@@ -6,7 +6,7 @@
  */
 import { signalKindOfSource, type RecommendSignalKind, type RecommendTemplate } from '@mc/core';
 import type { WorkspaceTx } from '../../client.ts';
-import { assertId, LIVE_ENROLLMENT_STATUSES, type SequenceStatus } from './comun.ts';
+import { assertId, CONTACT_OPTED_OUT_EXPR, LIVE_ENROLLMENT_STATUSES, type SequenceStatus } from './comun.ts';
 
 export interface SequenceListRow {
   id: string;
@@ -95,6 +95,13 @@ export interface ProposableSignal {
   dealName: string;
   /** La cadencia que ya salió de esta señal, si hay una sin archivar. */
   sequenceId: string | null;
+  /**
+   * La marca tiene personas y TODAS pidieron no recibir mensajes (la
+   * misma definición de baja que la etiqueta de «Para» y que «Activar»):
+   * no hay a quién escribirle, así que la pantalla no ofrece proponer.
+   * Sin personas todavía es false: se propone y se elige después.
+   */
+  allOptedOut: boolean;
 }
 
 /** Las señales que se pueden proponer, y cuántas hay en total (para «Ver todas»). */
@@ -120,13 +127,17 @@ export async function listProposableSignals(
   const limit = Math.min(PROPOSABLE_SIGNALS_MAX, Math.max(1, Math.floor(opts.limit ?? PROPOSABLE_SIGNALS_MAX)));
   const { rows } = await tx.query<{
     signal_id: string; headline: string; source_kind: string; detected_at: Date; company_name: string | null;
-    deal_id: string; deal_name: string; sequence_id: string | null; total: number;
+    deal_id: string; deal_name: string; sequence_id: string | null; total: number; all_opted_out: boolean;
   }>(
     `SELECT x.*, count(*) OVER ()::int AS total,
             (SELECT s.id FROM outbound_sequence s WHERE s.signal_id = x.signal_id AND s.status <> 'archived'
-              ORDER BY s.updated_at DESC LIMIT 1) AS sequence_id
+              ORDER BY s.updated_at DESC LIMIT 1) AS sequence_id,
+            (EXISTS (SELECT 1 FROM contact c WHERE c.company_id = x.company_id AND contact_visible_to(c.id, $3::uuid))
+             AND NOT EXISTS (SELECT 1 FROM contact c
+                              WHERE c.company_id = x.company_id AND contact_visible_to(c.id, $3::uuid)
+                                AND NOT ${CONTACT_OPTED_OUT_EXPR('$3::uuid')})) AS all_opted_out
        FROM (SELECT DISTINCT ON (sg.id) sg.id AS signal_id, sg.headline_es AS headline, src.kind AS source_kind,
-                    sg.detected_at, co.name AS company_name, d.id AS deal_id, d.name AS deal_name
+                    sg.detected_at, co.name AS company_name, sg.company_id, d.id AS deal_id, d.name AS deal_name
                FROM signal sg
                JOIN signal_source src ON src.id = sg.source_id
                JOIN deal d ON d.origin_signal_id = sg.id
@@ -137,13 +148,13 @@ export async function listProposableSignals(
               ORDER BY sg.id, d.updated_at DESC) x
       ORDER BY x.detected_at DESC, x.signal_id
       LIMIT $1::int`,
-    [limit, opts.companyId ?? null],
+    [limit, opts.companyId ?? null, tx.workspaceId],
   );
   return {
     signals: rows.map((r) => ({
       signalId: r.signal_id, headline: r.headline, signalKind: signalKindOfSource(r.source_kind),
       detectedAt: r.detected_at.toISOString(), companyName: r.company_name, dealId: r.deal_id, dealName: r.deal_name,
-      sequenceId: r.sequence_id,
+      sequenceId: r.sequence_id, allOptedOut: r.all_opted_out === true,
     })),
     total: rows[0]?.total ?? 0,
   };

@@ -111,6 +111,8 @@ export function textoDeNota(
   angulos: ReadonlyMap<string, string> = new Map(),
   /** El nombre de la persona para la que se propuso (la nota contact_busy habla de ella). */
   persona: string | null = null,
+  /** Todas las personas de la marca están de baja HOY: no_contact no es «falta elegir», es «no hay a quién». */
+  todasDeBaja = false,
 ): string | null {
   const t = MESSAGES.notas;
   switch (n.code) {
@@ -125,7 +127,7 @@ export function textoDeNota(
     case "channel_down":
       return t.channelDown(etiquetaCanal(n.channel));
     case "no_contact":
-      return t.noContact;
+      return todasDeBaja ? t.todasDeBaja : t.noContact;
     case "disclosure":
       return t.disclosure;
     case "contact_busy":

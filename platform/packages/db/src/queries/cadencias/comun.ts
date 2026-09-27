@@ -53,6 +53,19 @@ export function isMessageStep(stepType: string): boolean {
   return (DISPATCHABLE_STEP_TYPES as readonly string[]).includes(stepType);
 }
 
+/**
+ * Si la persona `c` está de baja: la ficha, la lista global de
+ * direcciones, un enrolamiento que terminó en baja o el enlace de baja de
+ * un correo de este espacio (outbound_workspace_optout, la que el
+ * disparador de 0055 hace cumplir al enrolar). Una sola expresión para la
+ * etiqueta de la pantalla, la comprobación de «Activar» y «Enrolar» y la
+ * cuenta de personas alcanzables de listProposableSignals.
+ */
+export const CONTACT_OPTED_OUT_EXPR = (ws: string) => `(c.opted_out OR address_is_suppressed(c.email)
+              OR EXISTS (SELECT 1 FROM outbound_enrollment e WHERE e.contact_id = c.id AND e.status = 'opted_out')
+              OR EXISTS (SELECT 1 FROM outbound_workspace_optout o
+                          WHERE o.workspace_id = ${ws} AND o.email = c.email))`;
+
 // ---------------------------------------------------------------------
 // Errores
 // ---------------------------------------------------------------------
@@ -66,7 +79,9 @@ export type CadenciaErrorCode =
   | 'day_full'
   | 'invalid'
   | 'no_template'
-  | 'no_signal';
+  | 'no_signal'
+  /** Todas las personas de la marca de la señal pidieron no recibir mensajes: no se propone (pulido r3). */
+  | 'all_opted_out';
 
 /** Un error con código: la pantalla lo traduce en su messages.ts. */
 export class CadenciaError extends Error {

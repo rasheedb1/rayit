@@ -19,7 +19,7 @@ import {
 import type { WorkspaceTx } from '../../client.ts';
 import { isUuid } from '../../client.ts';
 import { briefDeliverableKinds } from '../brief.ts';
-import { assertId, CadenciaError, LIVE_ENROLLMENT_STATUSES } from './comun.ts';
+import { assertId, CadenciaError, CONTACT_OPTED_OUT_EXPR, LIVE_ENROLLMENT_STATUSES } from './comun.ts';
 import { listSequenceTemplates, type TemplateRow } from './lista.ts';
 
 // ---------------------------------------------------------------------
@@ -49,17 +49,8 @@ export interface ContactOption {
   reachChannels: RecommendChannel[];
 }
 
-/**
- * Si la persona `c` está de baja: la ficha, la lista global de
- * direcciones, un enrolamiento que terminó en baja o el enlace de baja de
- * un correo de este espacio (outbound_workspace_optout, la que el
- * disparador de 0055 hace cumplir al enrolar). Una sola expresión para la
- * etiqueta de la pantalla y para la comprobación de «Activar» y «Enrolar».
- */
-const OPTED_OUT_EXPR = (ws: string) => `(c.opted_out OR address_is_suppressed(c.email)
-              OR EXISTS (SELECT 1 FROM outbound_enrollment e WHERE e.contact_id = c.id AND e.status = 'opted_out')
-              OR EXISTS (SELECT 1 FROM outbound_workspace_optout o
-                          WHERE o.workspace_id = ${ws} AND o.email = c.email))`;
+/** Si la persona `c` está de baja (CONTACT_OPTED_OUT_EXPR de comun.ts). */
+const OPTED_OUT_EXPR = CONTACT_OPTED_OUT_EXPR;
 
 /**
  * Las columnas de una persona para elegirla: qué direcciones tiene, si

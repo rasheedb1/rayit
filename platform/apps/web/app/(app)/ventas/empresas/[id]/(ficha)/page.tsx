@@ -229,7 +229,11 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                               {CADENCIAS.senales.verCadencia}
                             </Button>
                           ) : (
-                            <ProponerBoton signalId={senal.signalId} variant="secondary" />
+                            <ProponerBoton
+                              signalId={senal.signalId}
+                              variant="secondary"
+                              bloqueo={senal.allOptedOut ? CADENCIAS.senales.todasDeBaja : undefined}
+                            />
                           )}
                         </div>
                       )}

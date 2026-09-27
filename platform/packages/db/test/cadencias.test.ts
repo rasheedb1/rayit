@@ -95,6 +95,7 @@ test('la señal de campaña activa del seed está entre las que se proponen, con
   assert.ok(fresko);
   assert.equal(fresko.signalKind, 'active_campaign');
   assert.equal(fresko.dealId, DEAL_FRESKO);
+  assert.equal(fresko.allOptedOut, false, 'Fresko tiene a quién escribirle');
 });
 
 test('el contexto: la persona por defecto llega por más canales y los canales salen de las cuentas', async () => {
@@ -603,6 +604,16 @@ test('la baja del espacio (el enlace de un correo) cuenta como baja antes de enr
   } finally {
     await t.admin(`DELETE FROM outbound_workspace_optout WHERE email = 'lucia.parra@fresko.test'`);
   }
+});
+
+// La baja no se deshace (0020): esta prueba va al final, antes de la que cierra el negocio.
+test('con todas las personas de la marca de baja, la señal lo dice y no se ofrece proponer (pulido r3)', async () => {
+  await t.admin(`UPDATE contact SET opted_out = true, opted_out_at = now() WHERE company_id = '${COMPANY_FRESKO}'`);
+  const [fresko] = (await enLaura((tx) => listProposableSignals(tx, { companyId: COMPANY_FRESKO }))).signals;
+  assert.equal(fresko?.allOptedOut, true);
+  const ctx = await enLaura((tx) => getRecommendationContext(tx, SIGNAL_FRESKO));
+  assert.ok(ctx.contacts.length > 0 && ctx.contacts.every((c) => c.optedOut), 'el recomendador ve a todas de baja');
+  assert.equal(defaultContact(ctx.contacts), null);
 });
 
 test('un negocio cerrado no se guarda en la propuesta ni recibe a nadie', async () => {

@@ -3,8 +3,8 @@ import {
   briefOfferLines, guidanceLocale, recommendSequence, refineGuidance, type GuidanceWriter, type LlmUsage, type Proposal, type ProposalNote,
 } from "@mc/core";
 import {
-  createSequenceFromProposal, defaultContact, getRecommendationContext, recordRecommendLlmCall, replaceStepsFromProposal,
-  type ProposalMeta,
+  CadenciaError, createSequenceFromProposal, defaultContact, getRecommendationContext, recordRecommendLlmCall,
+  replaceStepsFromProposal, type ProposalMeta,
 } from "@mc/db/queries/cadencias";
 import { outboundHealth } from "@mc/db/queries/outreach";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
@@ -51,6 +51,12 @@ export async function proponerCadencia(input: ProponerInput, writer: GuidanceWri
   const locale = guidanceLocale((await getCurrentWorkspace()).locale);
   const leido = await withWorkspace(async (tx) => {
     const ctx = await getRecommendationContext(tx, input.signalId);
+    // Todas las personas de la marca pidieron no recibir mensajes: una
+    // secuencia para ella no le llegaría a nadie (pulido r3). La pantalla
+    // ya no ofrece el botón; esto cubre un POST a mano o una baja reciente.
+    if (ctx.contacts.length > 0 && ctx.contacts.every((c) => c.optedOut)) {
+      throw new CadenciaError("all_opted_out", `Todas las personas de la marca de la señal ${input.signalId} están de baja.`);
+    }
     const elegida = input.sinPersona
       ? null
       : (ctx.contacts.find((c) => c.id === input.contactId && !c.optedOut) ?? defaultContact(ctx.contacts));
