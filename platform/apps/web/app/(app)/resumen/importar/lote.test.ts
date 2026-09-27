@@ -35,7 +35,7 @@ vi.mock("@/lib/workspace/settings", () => ({
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 import { buscarPostsConocidos } from "./actions";
-import { MAX_BYTES } from "./_lib/csv";
+import { diaEnZona, MAX_BYTES } from "./_lib/csv";
 import { importarLote as importarCsv, leerCuerpoConTope, MAX_CUERPO } from "./_lib/lote";
 import { POST } from "./lote/route";
 
@@ -121,6 +121,34 @@ describe("importarLote, la escritura", () => {
     });
     expect(r).toMatchObject({ ok: true, resultado: { newPosts: 3, readings: 3, staleReadings: 0 } });
     expect(r.ok && Date.parse(r.resultado.capturedAt)).toBe(Date.parse("2026-09-16T17:00:00Z"));
+  }, 60_000);
+
+  it("el mismo archivo dos veces con la fecha de hoy no escribe una segunda lectura idéntica", async () => {
+    // Hoy la base pone now() al microsegundo: «nunca hacia atrás» no veía
+    // el duplicado y la pantalla lo presentaba como «se les añadió una lectura».
+    const hoy = diaEnZona(Date.now(), "America/Bogota");
+    const entrada = {
+      texto: fixture("instagram-insights.csv"),
+      red: "instagram",
+      handleNuevo: "accion.dos.veces",
+      mapeo: MAPEO_IG,
+      fechaExportacion: hoy,
+    };
+    const primera = await importarCsv(entrada);
+    expect(primera).toMatchObject({ ok: true, resultado: { newPosts: 3, readings: 3, unchangedReadings: 0 } });
+
+    // Antes de escribir, la previsualización ya recibe las cifras guardadas.
+    const cuenta = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      ensureCsvConnection(tx, { platform: "instagram", handle: "accion.dos.veces" }),
+    );
+    const conocidos = await buscarPostsConocidos({ connectionId: cuenta.connectionId, ids: ["ig_18001122334455001"] });
+    expect(conocidos).toMatchObject({ ok: true, conocidos: [{ id: "ig_18001122334455001", cifras: { views: 12480, reach: 9310, saves: 318 } }] });
+
+    const segunda = await importarCsv(entrada);
+    expect(segunda).toMatchObject({
+      ok: true,
+      resultado: { newPosts: 0, knownPosts: 3, knownPostsWithReading: 0, readings: 0, staleReadings: 0, unchangedReadings: 3 },
+    });
   }, 60_000);
 
   it("una red que no está en PLATFORMS no pasa del esquema", async () => {

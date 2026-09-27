@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { listKnownPosts } from "@mc/db/queries/resumen";
+import { listKnownPosts, type CsvReadingFigures } from "@mc/db/queries/resumen";
 import { withWorkspace } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
 import { MAX_FILAS, MAX_ID } from "./_lib/csv";
@@ -21,14 +21,15 @@ const esquemaConocidos = z.object({
 });
 
 export type ResultadoConocidos =
-  | { ok: true; conocidos: { id: string; ultimaLectura: string | null }[] }
+  | { ok: true; conocidos: { id: string; ultimaLectura: string | null; cifras: CsvReadingFigures | null }[] }
   | { ok: false };
 
 /**
  * Solo lectura: de estos identificadores, cuáles YA existen en la
- * cuenta de destino y cuándo se leyeron por última vez. La usa el paso 3
- * para avisar ANTES de escribir si un video recibe una lectura nueva o
- * si ya tiene una de esa fecha o posterior (y esta no se guardará). Si
+ * cuenta de destino, cuándo se leyeron por última vez y con qué cifras.
+ * La usa el paso 3 para avisar ANTES de escribir si un video recibe una
+ * lectura nueva, si ya tiene una de esa fecha o posterior, o si ya tiene
+ * esa misma lectura del mismo día (y esta no se guardará). Si
  * falla, la previsualización sigue siendo válida, solo pierde ese aviso,
  * así que devuelve `{ ok: false }` y no lanza.
  *
@@ -40,7 +41,7 @@ export async function buscarPostsConocidos(entrada: unknown): Promise<ResultadoC
   if (!parsed.success) return { ok: false };
   try {
     const posts = await withWorkspace((tx) => listKnownPosts(tx, parsed.data.connectionId, parsed.data.ids));
-    return { ok: true, conocidos: posts.map((p) => ({ id: p.externalPostId, ultimaLectura: p.lastCapturedAt })) };
+    return { ok: true, conocidos: posts.map((p) => ({ id: p.externalPostId, ultimaLectura: p.lastCapturedAt, cifras: p.lastReading })) };
   } catch (err) {
     console.error("[resumen/importar] no se pudo mirar qué videos ya estaban", err);
     return { ok: false };

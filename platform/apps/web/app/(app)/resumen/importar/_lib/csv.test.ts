@@ -19,6 +19,8 @@ import {
   revisar,
   urlSegura,
   validarFechaExportacion,
+  repiteLectura,
+  type LecturaConocida,
 } from "./csv";
 import type { CsvReading } from "@mc/db/queries/resumen";
 import { mapearPorAlias, normalizar } from "./formatos";
@@ -456,7 +458,7 @@ describe("una exportación cuyas fechas sirven en los dos órdenes", () => {
 
 describe("filas sucias", () => {
   const { tabla, mapeo } = analizar(fixture("sucio.csv"));
-  const r = revisar(tabla, mapeo, { timeZone: BOGOTA, yaConocidos: new Map([["ig_ok_1", null]]) });
+  const r = revisar(tabla, mapeo, { timeZone: BOGOTA, yaConocidos: new Map([["ig_ok_1", { ultima: null, cifras: null }]]) });
 
   const problemasDe = (fila: number) => r.filas.find((f) => f.fila === fila)!.problemas;
 
@@ -500,10 +502,10 @@ describe("filas sucias", () => {
     // base no escribirá nada (nunca hacia atrás), y el paso 3 tiene que
     // decirlo antes, no el paso 4 después.
     const instante = Date.parse("2026-09-12T17:00:00.000Z");
-    const conocidos = new Map<string, string | null>([
-      ["ig_ok_1", "2026-09-12T17:00:00.000000Z"], // la misma
-      ["ig_numero_raro", "2026-09-20T10:00:00.000000Z"], // posterior
-      ["ig_nofol_alto", "2026-09-01T10:00:00.000000Z"], // anterior: esta sí entra
+    const conocidos = new Map<string, LecturaConocida>([
+      ["ig_ok_1", { ultima: "2026-09-12T17:00:00.000000Z", cifras: null }], // la misma
+      ["ig_numero_raro", { ultima: "2026-09-20T10:00:00.000000Z", cifras: null }], // posterior
+      ["ig_nofol_alto", { ultima: "2026-09-01T10:00:00.000000Z", cifras: null }], // anterior: esta sí entra
     ]);
     const otra = revisar(tabla, mapeo, { timeZone: BOGOTA, yaConocidos: conocidos, instanteCaptura: instante });
     const codigos = (id: string) => otra.filas.find((f) => f.lectura?.externalPostId === id)!.problemas.map((p) => p.codigo);
@@ -516,6 +518,56 @@ describe("filas sucias", () => {
     expect(otra.conNovedad).toBe(1);
     // Se siguen enviando: quien decide es la base, y los cuenta en staleReadings.
     expect(otra.listas).toHaveLength(3);
+  });
+
+  it("el mismo archivo subido dos veces el mismo día se marca «sin cambios», no «ya estaba»", () => {
+    // La base guardó esta mañana las cifras exactas de ig_ok_1. Subir el
+    // mismo archivo otra vez con la fecha de hoy no trae nada: el paso 3
+    // lo dice como «Sin cambios» y no lo cuenta entre las que traen algo.
+    const hoy = "2026-09-22";
+    const ok1 = r.listas.find((l) => l.externalPostId === "ig_ok_1")!;
+    const mismas = {
+      views: ok1.views, reach: ok1.reach, likes: ok1.likes, comments: ok1.comments, shares: ok1.shares,
+      saves: ok1.saves, followsFromPost: ok1.followsFromPost, reachNonFollowers: ok1.reachNonFollowers,
+    };
+    const conocidos = new Map<string, LecturaConocida>([
+      ["ig_ok_1", { ultima: "2026-09-22T14:00:00.000000Z", cifras: mismas }], // 9:00 en Bogotá
+      ["ig_numero_raro", { ultima: "2026-09-22T14:00:00.000000Z", cifras: { ...mismas, views: 1 } }], // otra cifra
+    ]);
+    const otra = revisar(tabla, mapeo, {
+      timeZone: BOGOTA,
+      yaConocidos: conocidos,
+      instanteCaptura: Date.parse("2026-09-22T20:00:00.000Z"),
+      diaExportacion: hoy,
+    });
+    const codigos = (id: string) => otra.filas.find((f) => f.lectura?.externalPostId === id)!.problemas.map((p) => p.codigo);
+    expect(codigos("ig_ok_1")).toEqual(["sinCambios"]);
+    expect(codigos("ig_numero_raro")).toContain("yaImportado");
+    expect({ sinCambios: otra.sinCambios, sinNovedad: otra.sinNovedad, yaEstaban: otra.yaEstaban }).toEqual({
+      sinCambios: 1,
+      sinNovedad: 0,
+      yaEstaban: 1,
+    });
+    expect(otra.conNovedad).toBe(otra.listas.length - 1);
+  });
+
+  it("repiteLectura: solo el mismo día de exportación, en la zona del workspace, y las mismas cifras", () => {
+    const ok1 = r.listas.find((l) => l.externalPostId === "ig_ok_1")!;
+    const cifras = {
+      views: ok1.views, reach: ok1.reach, likes: ok1.likes, comments: ok1.comments, shares: ok1.shares,
+      saves: ok1.saves, followsFromPost: ok1.followsFromPost, reachNonFollowers: ok1.reachNonFollowers,
+    };
+    // 23:30 del 21 en Bogotá es el 22 en UTC: manda la zona del workspace.
+    expect(repiteLectura(ok1, { ultima: "2026-09-22T04:30:00.000Z", cifras }, "2026-09-21", BOGOTA)).toBe(true);
+    expect(repiteLectura(ok1, { ultima: "2026-09-22T04:30:00.000Z", cifras }, "2026-09-22", BOGOTA)).toBe(false);
+    // «Sin dato» cuenta como un valor: este archivo no trae compartidos, y
+    // null frente a 0 es una cifra distinta.
+    expect(ok1.shares).toBeNull();
+    expect(repiteLectura(ok1, { ultima: "2026-09-22T04:30:00.000Z", cifras: { ...cifras, shares: 0 } }, "2026-09-21", BOGOTA)).toBe(false);
+    // Sin lectura previa, sin cifras o sin día de exportación, nunca repite.
+    expect(repiteLectura(ok1, undefined, "2026-09-21", BOGOTA)).toBe(false);
+    expect(repiteLectura(ok1, { ultima: null, cifras: null }, "2026-09-21", BOGOTA)).toBe(false);
+    expect(repiteLectura(ok1, { ultima: "2026-09-22T04:30:00.000Z", cifras }, undefined, BOGOTA)).toBe(false);
   });
 
   it("guarda la celda cruda de las filas que no entran, para poder buscarlas en el archivo", () => {

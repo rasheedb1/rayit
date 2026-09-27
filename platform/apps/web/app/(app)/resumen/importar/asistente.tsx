@@ -38,6 +38,7 @@ import {
   type AnalisisFechas,
   type Codificacion,
   type FilaRevisada,
+  type LecturaConocida,
   type OrdenFecha,
   type Problema,
   type ProblemaFechaExportacion,
@@ -83,12 +84,20 @@ const TITULO_PASO = "text-sm font-semibold text-ink outline-none!";
  */
 const PILL_AVISO = "whitespace-normal! max-w-full *:shrink-0";
 
+/**
+ * El resultado de la importación, tal como lo devolvió la base: cada
+ * cifra viene contada de importCsvReadings y aquí solo se formatea.
+ */
 interface Resultado {
   videos: number;
   nuevos: number;
-  conocidos: number;
+  /** Los que ya estaban Y recibieron una lectura (knownPostsWithReading). */
+  conLectura: number;
   lecturas: number;
+  /** Ya tenían una lectura igual de reciente o más (staleReadings). */
   antiguas: number;
+  /** Ya tenían esa misma lectura, del mismo día (unchangedReadings). */
+  sinCambios: number;
   /** 'YYYY-MM-DD': el día de la exportación con el que quedaron. */
   fecha: string;
 }
@@ -143,10 +152,10 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
   const [error, setError] = useState<string | null>(null);
   const [resultado, setResultado] = useState<Resultado | null>(null);
   /**
-   * Los videos que la cuenta de destino ya tiene, con el instante de su
-   * última lectura. null = todavía no se ha preguntado.
+   * Los videos que la cuenta de destino ya tiene, con el instante y las
+   * cifras de su última lectura. null = todavía no se ha preguntado.
    */
-  const [yaConocidos, setYaConocidos] = useState<ReadonlyMap<string, string | null> | null>(null);
+  const [yaConocidos, setYaConocidos] = useState<ReadonlyMap<string, LecturaConocida> | null>(null);
   /** Cómo venía escrito el archivo: si no era UTF-8, el paso 2 lo dice. */
   const [codificacion, setCodificacion] = useState<Codificacion>("utf-8");
 
@@ -199,7 +208,7 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
     void buscarPostsConocidos({ connectionId: cuenta, ids }).then(
       (r) => {
         if (vivo && r.ok && r.conocidos.length > 0) {
-          setYaConocidos(new Map(r.conocidos.map((c) => [c.id, c.ultimaLectura] as const)));
+          setYaConocidos(new Map(r.conocidos.map((c) => [c.id, { ultima: c.ultimaLectura, cifras: c.cifras }] as const)));
         }
       },
       // Si la consulta falla, la previsualización sigue valiendo: solo
@@ -238,14 +247,16 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
     return iso ? Date.parse(iso) : Date.now();
   }, [problemaFecha, fechaExportacion, workspace.timezone, listasBase]);
 
-  // La segunda pasada, con lo que dijo la base: qué videos ya están y si
-  // esta lectura es más nueva que la última que tienen.
+  // La segunda pasada, con lo que dijo la base: qué videos ya están, si
+  // esta lectura es más nueva que la última que tienen y si no la repite
+  // tal cual el mismo día de exportación.
+  const diaExportacion = problemaFecha === null && fechaExportacion ? fechaExportacion : undefined;
   const revision: Revision | null = useMemo(
     () =>
       tabla && revisionBase && yaConocidos
-        ? revisar(tabla, mapeo, { ...opciones, yaConocidos, instanteCaptura })
+        ? revisar(tabla, mapeo, { ...opciones, yaConocidos, instanteCaptura, diaExportacion })
         : revisionBase,
-    [tabla, mapeo, opciones, revisionBase, yaConocidos, instanteCaptura],
+    [tabla, mapeo, opciones, revisionBase, yaConocidos, instanteCaptura, diaExportacion],
   );
 
   // Al cambiar de paso, el título del nuevo recibe el foco: sin esto el
@@ -348,9 +359,10 @@ export function Asistente({ cuentas, workspace }: AsistenteProps) {
         setResultado({
           videos: r.resultado.newPosts + r.resultado.knownPosts,
           nuevos: r.resultado.newPosts,
-          conocidos: r.resultado.knownPosts,
+          conLectura: r.resultado.knownPostsWithReading,
           lecturas: r.resultado.readings,
           antiguas: r.resultado.staleReadings,
+          sinCambios: r.resultado.unchangedReadings,
           fecha: fechaExportacion,
         });
         setPaso(3);
@@ -891,12 +903,18 @@ function PasoRevisar({ revision, mapeo, f }: { revision: Revision; mapeo: Mapeo;
         </h2>
         <p className="flex flex-wrap items-center gap-2 text-xs text-muted">
           <span className="text-ink-2">
-            {t.resumen(revision.conNovedad, f.int(revision.conNovedad), f.int(revision.filas.length), revision.sinNovedad > 0)}
+            {t.resumen(
+              revision.conNovedad,
+              f.int(revision.conNovedad),
+              f.int(revision.filas.length),
+              revision.sinNovedad > 0 || revision.sinCambios > 0,
+            )}
           </span>
           {noEntran > 0 && <Pill kind="bad" className={PILL_AVISO}>{t.errores(noEntran, f.int(noEntran))}</Pill>}
           {revision.avisos > 0 && <Pill kind="warn" className={PILL_AVISO}>{t.avisos(revision.avisos, f.int(revision.avisos))}</Pill>}
           {revision.yaEstaban > 0 && <span>{t.yaEstaban(revision.yaEstaban, f.int(revision.yaEstaban))}</span>}
           {revision.sinNovedad > 0 && <Pill kind="warn" className={PILL_AVISO}>{t.sinNovedad(revision.sinNovedad, f.int(revision.sinNovedad))}</Pill>}
+          {revision.sinCambios > 0 && <Pill kind="warn" className={PILL_AVISO}>{t.sinCambios(revision.sinCambios, f.int(revision.sinCambios))}</Pill>}
           {revision.duplicadasEnArchivo > 0 && (
             <span>{t.duplicadas(revision.duplicadasEnArchivo, f.int(revision.duplicadasEnArchivo))}</span>
           )}
@@ -971,10 +989,6 @@ function PasoHecho({
   f: Formatter;
 }) {
   const t = MESSAGES.importar.hecho;
-  // Los que ya estaban Y recibieron lectura: los que no traían nada más
-  // reciente los cuenta `antiguas`. Contarlos en las dos líneas decía a
-  // la vez «se les añadió una lectura» y «no se guardaron».
-  const conLectura = Math.max(0, resultado.conocidos - resultado.antiguas);
   return (
     <section className="mt-6" aria-labelledby="paso-hecho">
       <div className="rounded-md border border-border bg-surface px-5 py-6">
@@ -986,8 +1000,12 @@ function PasoHecho({
         </p>
         <ul className="mt-2 space-y-0.5 text-sm text-ink-2">
           {resultado.nuevos > 0 && <li>{t.nuevos(resultado.nuevos, f.int(resultado.nuevos))}</li>}
-          {conLectura > 0 && <li>{t.conocidos(conLectura, f.int(conLectura))}</li>}
+          {/* Cada línea cuenta un grupo distinto, ya separado por la base:
+              los que recibieron lectura, los que no traían nada más
+              reciente y los que repetían la misma lectura del mismo día. */}
+          {resultado.conLectura > 0 && <li>{t.conocidos(resultado.conLectura, f.int(resultado.conLectura))}</li>}
           {resultado.antiguas > 0 && <li>{t.antiguas(resultado.antiguas, f.int(resultado.antiguas))}</li>}
+          {resultado.sinCambios > 0 && <li>{t.sinCambios(resultado.sinCambios, f.int(resultado.sinCambios))}</li>}
           <li className="text-muted">{t.fecha(f.date(resultado.fecha, "long"))}</li>
         </ul>
         <div className="mt-5 flex flex-wrap gap-2">
