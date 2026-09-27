@@ -302,7 +302,7 @@ export const STORIES: readonly Story[] = [
     desc: "Los cuatro KPIs (seguidores, views en 30 días, alcance en no seguidores, guardados por mil), seguidores por red en 90 días, views por semana y red en 12 semanas. Filtro por red. Aviso «datos hasta el {fecha}» por conexión.",
     done: "Con el seed, la pantalla coincide con el mock; con una conexión sin datos, muestra el estado vacío y no un cero.",
     status: "hecho",
-    note: "Pantalla real con toda la aritmética en SQL: KPIs con delta y sparkline (las explicaciones, detrás de un (i)), seguidores por día y visualizaciones en 12 semanas como el mock, frescura por conexión y vacío en vez de ceros. Sin comparación bajo 3 videos. Detalle en docs/fases-rasheed.md §8. Pendiente humano: el visto bueno de Nicolás a Kpi.deltaText y BarChart.axisLabels (rama rasheed/kit-axislabels-deltatext).",
+    note: "Pantalla real con toda la aritmética en SQL: KPIs con delta y sparkline (las explicaciones, detrás de un (i)), seguidores por día y visualizaciones en 12 semanas como el mock, frescura por conexión y vacío en vez de ceros. Sin comparación bajo 3 videos; «Guardados por 1.000» con el locale del workspace. Detalle en docs/fases-rasheed.md §8. Pendiente humano: el visto bueno de Nicolás a Kpi.deltaText y BarChart.axisLabels (rama rasheed/kit-axislabels-deltatext).",
   },
   {
     id: "RES-2", module: "RES", owner: "rasheed", size: "M", sprint: 2, deps: ["CIM-5"],
@@ -310,7 +310,7 @@ export const STORIES: readonly Story[] = [
     desc: "El creador exporta desde TikTok Studio, Instagram Insights o YouTube Studio y sube el archivo; se convierte en snapshots con source = csv_import. Es la vía mientras no hay aprobaciones.",
     done: "Un CSV real de Instagram Insights llena post_metric_snapshot y aparece en Resumen.",
     status: "hecho",
-    note: "Asistente de 4 pasos en /resumen/importar: guarda con la fecha de exportación y nunca hacia atrás (el paso 3 ya avisa qué no se guardará), lee Windows-1252 y no duplica una cuenta que ya existe. El mapeo manual es el camino: ninguna plataforma documenta su cabecera (docs/fases-rasheed.md §8). Pulido r4: el paso 3 cuenta solo las filas con algo nuevo y, con cero, el botón dice «No hay nada nuevo que importar»; la columna Video tiene ancho mínimo y cada aviso es una pastilla bajo el título. Pulido r8: esas pastillas parten la frase a 400 px.",
+    note: "Asistente de 4 pasos en /resumen/importar: guarda con la fecha de exportación y nunca hacia atrás (el paso 3 ya avisa qué no se guardará), lee Windows-1252 y no duplica una cuenta que ya existe. El mapeo manual es el camino: ninguna plataforma documenta su cabecera (docs/fases-rasheed.md §8). El paso 3 cuenta solo las filas con algo nuevo; con cero, el botón lo dice. Pulido r3: el mismo archivo subido dos veces el mismo día sale «Sin cambios» y la base no repite la lectura (unchangedReadings); el paso 4 enseña los conteos de la base sin restar.",
   },
   {
     id: "RES-5", module: "RES", owner: "rasheed", size: "S", sprint: 3, deps: ["RES-1", "CIM-5"],
