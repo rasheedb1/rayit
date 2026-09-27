@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useId, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
+import { useActionState, useEffect, useId, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import {
   calcularTotalesCotizacion, compareDecimal, pctToRate, plazoConIncluido, terminosDeModificadores, type PlatformId,
 } from "@mc/core";
@@ -130,6 +130,19 @@ export function CotizacionForm({
   const [pendingEnvio, startTransition] = useTransition();
   const pending = pendingAccion || pendingEnvio;
   const errors = state.errors ?? {};
+  const formRef = useRef<HTMLFormElement>(null);
+
+  // Tras un envío con errores, el foco va al primer campo inválido, como
+  // en Ventas y Finanzas: el botón queda deshabilitado mientras envía y
+  // el foco caía en <body>, lejos del error. Si el error no es de un
+  // campo (el bloque de entregables, o un aviso general), va a ese texto.
+  useEffect(() => {
+    if (!state.errors && !state.message) return;
+    const form = formRef.current;
+    const destino =
+      form?.querySelector<HTMLElement>('[aria-invalid="true"]') ?? form?.querySelector<HTMLElement>("[data-foco-error]");
+    destino?.focus();
+  }, [state]);
 
   const base = useId();
   const n = useRef(0);
@@ -283,6 +296,7 @@ export function CotizacionForm({
     // En escritorio el total va a la derecha, fijo; en el teléfono va
     // ANTES de «Guardar borrador», para que nadie guarde sin haberlo visto.
     <form
+      ref={formRef}
       onSubmit={enviar}
       noValidate
       className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-x-8"
@@ -291,7 +305,11 @@ export function CotizacionForm({
       <input type="hidden" name="payload" value={JSON.stringify(payload)} />
 
       <div className="min-w-0 space-y-6 lg:col-start-1 lg:row-start-1">
-        <Aviso message={state.message} />
+        {state.message && (
+          <div tabIndex={-1} data-foco-error className="focus:outline-none">
+            <Aviso message={state.message} />
+          </div>
+        )}
 
         {deals && (
           <Field label={t.negocio} required help={ayudaNegocio} error={errors.dealId} htmlFor={`${base}deal`}>
@@ -322,7 +340,7 @@ export function CotizacionForm({
             </p>
           )}
           {errors.items && (
-            <p role="alert" className="mt-2 text-sm text-bad">
+            <p role="alert" tabIndex={-1} data-foco-error className="mt-2 text-sm text-bad focus:outline-none">
               {errors.items}
             </p>
           )}
@@ -424,7 +442,7 @@ export function CotizacionForm({
         </section>
 
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-3" aria-label={t.total}>
-          <Field label={t.descuento} htmlFor={`${base}discount`}>
+          <Field label={t.descuento} error={errors.discount} htmlFor={`${base}discount`}>
             <MoneyInput value={discount} currency={currency} onChange={setDiscount} />
           </Field>
           <Field label={t.impuesto} help={t.impuestoAyuda} error={errors.taxPct} htmlFor={`${base}taxPct`}>
@@ -506,7 +524,7 @@ export function CotizacionForm({
           </fieldset>
 
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label={t.derechos} htmlFor={`${base}usage`}>
+            <Field label={t.derechos} error={errors.usageRightsDays} htmlFor={`${base}usage`}>
               <Input
                 inputMode="numeric"
                 value={usageRightsDays}
@@ -514,14 +532,14 @@ export function CotizacionForm({
                 placeholder="0"
               />
             </Field>
-            <Field label={t.pago} htmlFor={`${base}payment`}>
+            <Field label={t.pago} error={errors.paymentTermsDays} htmlFor={`${base}payment`}>
               <Input
                 inputMode="numeric"
                 value={paymentTermsDays}
                 onChange={(e) => setPaymentTermsDays(e.target.value.replace(/\D/g, ""))}
               />
             </Field>
-            <Field label={t.exclusividad} htmlFor={`${base}exclusivity`}>
+            <Field label={t.exclusividad} error={errors.exclusivityDays} htmlFor={`${base}exclusivity`}>
               <Input
                 inputMode="numeric"
                 value={exclusivityDays}
@@ -529,7 +547,7 @@ export function CotizacionForm({
                 placeholder="0"
               />
             </Field>
-            <Field label={t.exclusividadAmbito} htmlFor={`${base}scope`}>
+            <Field label={t.exclusividadAmbito} error={errors.exclusivityScope} htmlFor={`${base}scope`}>
               <Input
                 value={exclusivityScope}
                 maxLength={120}

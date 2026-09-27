@@ -308,4 +308,41 @@ describe("CotizacionForm", () => {
     expect(within(cuanto as HTMLElement).getByLabelText("Cantidad")).toBeInTheDocument();
     expect(within(cuanto as HTMLElement).getByRole("button", { name: "Quitar" })).toBeInTheDocument();
   });
+
+  it("enviado con errores, el foco va al primer campo inválido y no se queda en <body> (pulido r3)", async () => {
+    const action = vi.fn(async () => ({ errors: { dealId: "Elige el negocio que estás cotizando.", taxPct: "El impuesto es un porcentaje entre 0 y 100." } }));
+    render(formulario(action));
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+    const negocio = screen.getByLabelText(/Negocio/);
+    await waitFor(() => expect(negocio).toHaveFocus());
+    expect(negocio).toHaveAttribute("aria-invalid", "true");
+    expect(negocio).toHaveAccessibleDescription(/Elige el negocio que estás cotizando/);
+  });
+
+  it("un error de los entregables, que no es de un campo, se lleva el foco a su texto", async () => {
+    const action = vi.fn(async () => ({ errors: { items: "Cada entregable necesita una descripción." } }));
+    render(formulario(action));
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveFocus());
+    expect(screen.getByRole("alert")).toHaveTextContent("Cada entregable necesita una descripción.");
+  });
+
+  it("un aviso general (sin campo) también se lleva el foco, para que se lea", async () => {
+    const action = vi.fn(async () => ({ message: "No se pudo completar la acción." }));
+    render(formulario(action));
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+    await waitFor(() => expect(screen.getByRole("alert").closest("[data-foco-error]")).toHaveFocus());
+  });
+
+  it("los errores del descuento y de los plazos se ven en su campo", async () => {
+    const action = vi.fn(async () => ({
+      errors: { discount: "El descuento tiene que ser un número.", paymentTermsDays: "El plazo de pago va de 0 a 365 días." },
+    }));
+    render(formulario(action));
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+    const descuento = screen.getByLabelText("Descuento");
+    await waitFor(() => expect(descuento).toHaveFocus());
+    expect(descuento).toHaveAccessibleDescription(/El descuento tiene que ser un número/);
+    expect(screen.getByText("El plazo de pago va de 0 a 365 días.")).toBeInTheDocument();
+  });
 });
