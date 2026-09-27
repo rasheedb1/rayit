@@ -55,8 +55,9 @@
  * con el reloj a +N días (CURRENT_DATE y now() desplazados en los seeds
  * Y en los verify; la tercera pasada va a +N+1 y la cuarta a +N+41). Es
  * la prueba de que la demo es la misma sembrada cualquier día. Solo se
- * toleran tres comprobaciones, y se dice cuáles: i_pipeline_vencimientos,
- * l_conexiones_frescura y d_uso_casa_con_el_historial comparan contra el
+ * toleran cuatro comprobaciones, y se dice cuáles: i_pipeline_vencimientos,
+ * h_me_interesa_vence_hoy, l_conexiones_frescura y
+ * d_uso_casa_con_el_historial comparan contra el
  * now() y CURRENT_DATE internos de las vistas deal_pipeline (due_state),
  * connection_health (hours_since_sync, token_expiring_soon) y
  * outbound_usage_daily (sus 14 días), que no se pueden desplazar desde
@@ -64,7 +65,10 @@
  * contadores del uso están en consultas aparte (i_pipeline_cifras,
  * l_conexiones_cuentas, c_contadores_de_los_toques) que NO se toleran: una regresión en el
  * ponderado o en el total tiene que hacer fallar también la corrida con
- * --dias. CI lo corre con --dias 40.
+ * --dias. CI lo corre con --dias 40, y `pnpm test` con el reloj en el
+ * próximo sábado y el próximo domingo (fin-de-semana.test.mjs): la demo
+ * no envía en fin de semana, y sembrarla un sábado no puede dejar la
+ * puerta en rojo.
  *
  * Es deliberadamente independiente de db/migrate.mjs (que corre como
  * superusuario y no ejecuta los seeds dos veces). No necesita red.
@@ -118,6 +122,7 @@ const INVARIANTES_DEL_RELOJ = `
  */
 const TOLERADAS_CON_DIAS = {
   i_pipeline_vencimientos: 'deal_pipeline.due_state usa el now() real de la vista',
+  h_me_interesa_vence_hoy: 'deal_pipeline.due_state usa el now() real de la vista',
   l_conexiones_frescura: 'connection_health usa el now() real de la vista',
   d_uso_casa_con_el_historial: 'outbound_usage_daily mira los 14 días hasta el now() real de la vista',
 };

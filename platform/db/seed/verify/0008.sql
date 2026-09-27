@@ -118,7 +118,7 @@ SELECT 'h_me_interesa_mueve_el_negocio' AS check_id,
        d.stage_id, d.next_action, p.due_state,
        (SELECT string_agg(coalesce(s.from_stage_id, '-') || '>' || s.to_stage_id, ',' ORDER BY s.changed_at)
           FROM deal_stage_history s WHERE s.deal_id = d.id) AS etapas,
-       d.stage_id = 'conversacion' AND d.next_action = 'Responder hoy' AND p.due_state = 'hoy'
+       d.stage_id = 'conversacion' AND d.next_action = 'Responder hoy'
          AND (SELECT string_agg(coalesce(s.from_stage_id, '-') || '>' || s.to_stage_id, ',' ORDER BY s.changed_at)
                 FROM deal_stage_history s WHERE s.deal_id = d.id) = '->contactado,contactado>conversacion'
          AND EXISTS (SELECT 1 FROM outbound_message m WHERE m.deal_id = d.id AND m.direction = 'inbound'
@@ -131,6 +131,15 @@ SELECT 'h_me_interesa_mueve_el_negocio' AS check_id,
   FROM deal d
   JOIN deal_pipeline p ON p.id = d.id
  WHERE d.id = '00000008-0000-4000-8000-0000000dea01';
+
+-- (h') Y vence hoy: deal_pipeline.due_state = 'hoy'. Va aparte de (h)
+--      porque due_state sale del now() interno de la vista, que el reloj
+--      desplazado de `run.mjs --dias N` no alcanza: con --dias se tolera
+--      solo esta (TOLERADAS_CON_DIAS) y el resto de (h) sigue contando.
+SELECT 'h_me_interesa_vence_hoy' AS check_id, p.due_state,
+       p.due_state = 'hoy' AS ok
+  FROM deal_pipeline p
+ WHERE p.id = '00000008-0000-4000-8000-0000000dea01';
 
 -- (i) Las horas de la bandeja (pulido r1): cada mensaje de este seed a una
 --     hora de oficina del día local, no a la hora a la que se sembró; nada

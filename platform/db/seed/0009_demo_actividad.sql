@@ -174,8 +174,9 @@ ON CONFLICT (id) DO NOTHING;
 -- Así el widget de uso de /ventas/canales casa con el historial de
 -- /ventas/actividad, barra por barra: cada día es lo que salió o se
 -- intentó ese día. La historia de la demo es que el envío salió unas
--- horas (los correos de hoy de 0006) y después se apagó (0002: «Sin
--- envío»); el uso de hoy es el de esos correos, y nada más. Antes el
+-- horas (los correos del último día hábil de 0006) y después se apagó
+-- (0002: «Sin envío»); el uso de ese día es el de esos correos, y nada
+-- más, y ningún día de fin de semana tiene uso. Antes el
 -- seed inventaba cifras (12 hoy, 72 en la semana) que no casaban con
 -- ningún envío: un creador que recorría la demo veía un uso que no había
 -- salido.

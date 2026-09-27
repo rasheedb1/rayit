@@ -65,19 +65,54 @@ SELECT 'd_alerta_del_dia' AS check_id,
   FROM notification n
  WHERE n.id = '00000006-0000-4000-8000-0000000a1001';
 
--- (e) La ventana de «Salud de hoy» tiene cifras (r4): los correos que
---     salieron en las últimas 24 horas, y el rebote duro de Natalia entre
---     ellos. Es la misma cuenta que hace readAlertSignalCounts.
-SELECT 'e_salud_de_hoy' AS check_id, x.enviados, x.duros,
-       x.enviados >= 4 AND x.duros = 1 AS ok
-  FROM (SELECT
-          (SELECT count(*) FROM outbound_touch t
-            WHERE t.channel = 'email' AND t.status = 'sent'
-              AND t.sent_at >= now() - interval '24 hours' AND t.sent_at < now()) AS enviados,
-          (SELECT count(DISTINCT t.id) FROM outbound_touch t
-             JOIN outbound_bounce b ON b.touch_id = t.id AND b.kind = 'hard'
-            WHERE t.channel = 'email' AND t.status = 'sent'
-              AND t.sent_at >= now() - interval '24 hours' AND t.sent_at < now()) AS duros) x;
+-- (e) Los cuatro correos salieron el último día hábil, dentro de la
+--     ventana de envío del espacio y en su zona (pulido r3): ninguno en
+--     sábado ni domingo, ninguno fuera de send_window, ninguno en el
+--     futuro, y ningún día hábil posterior en el que ya hubieran pasado.
+--     Antes salían «hace 3 a 9 horas» del reloj, y sembrada un domingo la
+--     demo enviaba en domingo. Si ese día es hoy, «Salud de hoy» los
+--     cuenta: cuatro enviados en las últimas 24 horas y el rebote duro de
+--     Natalia entre ellos (la cuenta de readAlertSignalCounts).
+WITH ws AS (
+  SELECT w.timezone AS tz,
+         coalesce(p.send_window_start, time '09:00') AS ini,
+         coalesce(p.send_window_end, time '17:00') AS fin
+    FROM workspace w LEFT JOIN outbound_policy p ON p.workspace_id = w.id
+   WHERE w.id = '00000002-0000-4000-8000-000000000001'
+),
+t AS (
+  SELECT x.id, x.sent_at, x.claimed_at, (x.sent_at AT TIME ZONE ws.tz) AS local, ws.*
+    FROM outbound_touch x, ws
+   WHERE x.id IN ('00000006-0000-4000-8000-000000070001', '00000006-0000-4000-8000-000000070002',
+                  '00000006-0000-4000-8000-000000070003', '00000006-0000-4000-8000-000000070004')
+),
+salud AS (
+  SELECT (SELECT count(*) FROM outbound_touch x
+           WHERE x.channel = 'email' AND x.status = 'sent'
+             AND x.sent_at >= now() - interval '24 hours' AND x.sent_at < now()) AS enviados,
+         (SELECT count(DISTINCT x.id) FROM outbound_touch x
+            JOIN outbound_bounce b ON b.touch_id = x.id AND b.kind = 'hard'
+           WHERE x.channel = 'email' AND x.status = 'sent'
+             AND x.sent_at >= now() - interval '24 hours' AND x.sent_at < now()) AS duros
+)
+SELECT 'e_ultimo_dia_habil' AS check_id,
+       min(t.local::date) AS dia, to_char(min(t.local), 'Dy HH24:MI') AS primero, to_char(max(t.local), 'Dy HH24:MI') AS ultimo,
+       (SELECT enviados FROM salud) AS enviados_24h, (SELECT duros FROM salud) AS duros_24h,
+       count(*) = 4
+         AND count(DISTINCT t.local::date) = 1
+         AND bool_and(extract(isodow FROM t.local) < 6)
+         AND bool_and(t.local::time BETWEEN t.ini AND t.fin)
+         AND bool_and((t.claimed_at AT TIME ZONE t.tz)::date = t.local::date)
+         AND bool_and(t.sent_at < now())
+         -- Ningún día hábil posterior, hasta hoy, en que los cuatro ya hubieran salido.
+         AND NOT EXISTS (
+           SELECT 1 FROM ws, generate_series(min(t.local::date) + 1, (now() AT TIME ZONE ws.tz)::date, interval '1 day') g
+            WHERE extract(isodow FROM g) < 6
+              AND ((g::date + max(t.local::time) + interval '30 minutes') AT TIME ZONE ws.tz) <= now())
+         -- Si el día es hoy, «Salud de hoy» tiene cifras.
+         AND (min(t.local::date) <> (now() AT TIME ZONE min(t.tz))::date
+              OR ((SELECT enviados FROM salud) >= 4 AND (SELECT duros FROM salud) = 1)) AS ok
+  FROM t;
 
 -- (f) La política de la demo tiene una rampa que pintar (r4): un tope por
 --     encima del inicio del calentamiento (20, @mc/core/outreach/warmup) y
