@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-27",
+    "notes": "Facebook Login: graph.facebook.com/{id de la cuenta casa}, token de Facebook (EAA…). Mismo cuerpo que con Instagram Login según la referencia ig-user/business_discovery."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.facebook\\.com/v25\\.0/17841400000000999\\?fields=business_discovery\\.username%28(?![^&]*media\\.limit%28)"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "business_discovery": {
+        "id": "17841400000000e01",
+        "username": "cafealma",
+        "followers_count": 267793,
+        "media_count": 1205
+      },
+      "id": "17841400000000123"
+    }
+  }
+}

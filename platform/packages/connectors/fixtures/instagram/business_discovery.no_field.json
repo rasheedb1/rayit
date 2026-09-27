@@ -1,0 +1,22 @@
+{
+  "meta": {
+    "source": "production",
+    "recordedAt": "2026-09-27",
+    "notes": "Respuesta real en producción con el token casa de Instagram Login (IGAA…): business_discovery no existe en graph.instagram.com. Por eso la cuenta casa va por Facebook Login (INSTAGRAM_HOUSE_IG_USER_ID)."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=business_discovery\\.username%28"
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": {
+        "message": "Tried accessing nonexisting field (business_discovery)",
+        "type": "IGApiException",
+        "code": 100,
+        "fbtrace_id": "A1PvE2-DGLJ_Q3RKaNdONla"
+      }
+    }
+  }
+}

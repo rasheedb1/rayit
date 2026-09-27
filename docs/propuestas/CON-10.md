@@ -127,25 +127,42 @@ un error de CHECK.
 Ninguna requiere trámite ni revisión, ni redirect URIs, ni OAuth en
 nuestra web.
 
-**`INSTAGRAM_HOUSE_TOKEN` (Instagram por @).**
+**`INSTAGRAM_HOUSE_TOKEN` + `INSTAGRAM_HOUSE_IG_USER_ID` (Instagram por @).**
 
-1. Tu cuenta de Instagram tiene que ser **profesional** (Creador o
-   Empresa) y pública.
-2. En https://developers.facebook.com → Mis apps → Crear app → tipo
-   **Negocios** → nombre «On Cue».
-3. Agregar producto **Instagram** → **«API setup with Instagram business
-   login»**.
-4. En el paso **«Generate access tokens»** → **Add account** → inicia
-   sesión con tu Instagram y autoriza. Aparece tu cuenta con un botón
-   **Generate token**: cópialo. Es un token de larga duración (60 días).
-5. Guárdalo en Vercel sin pegarlo a mano (con el token copiado, en la
-   terminal):
-   ```bash
-   pbpaste | tr -d '\r\n' | /Users/nicolasduarte/Documents/influ/rayit-con3/platform/scripts/vercel.sh run env add INSTAGRAM_HOUSE_TOKEN production --sensitive --force
-   ```
-6. Cada 60 días se repite el paso 4. Cuando venza, la pantalla lo dice:
-   «La credencial de Instagram de On Cue venció». La renovación
-   automática es una historia aparte.
+> **Corrección del 27-sep-2026, probada en producción.** La primera
+> versión de esta sección sacaba el token con «API setup with Instagram
+> business login» (token `IGAA…`, `graph.instagram.com`). Con ese token
+> Meta responde `100 · Tried accessing nonexisting field
+> (business_discovery)` para **cualquier** @: `business_discovery` solo
+> existe en «Instagram API with **Facebook** Login». El código ahora va a
+> `graph.facebook.com/{INSTAGRAM_HOUSE_IG_USER_ID}` cuando esa variable
+> existe, y si el token casa es de Instagram Login lo dice con esas
+> palabras (código propio `no_business_discovery` en `api_call_log`), en
+> vez de «cuenta personal, privada o inexistente».
+
+1. La cuenta casa (@oncue__) tiene que ser **profesional** y estar
+   **vinculada a una página de Facebook** (Meta Business Suite →
+   Configuración → Cuentas de Instagram, o desde la página → Cuentas
+   vinculadas → Instagram).
+2. En la app «On Cue» de developers.facebook.com, abrir el **Explorador
+   de la API Graph** (developers.facebook.com/tools/explorer): app «On
+   Cue», «Token de usuario», permisos `instagram_basic`,
+   `pages_show_list`, `pages_read_engagement` y `business_management` →
+   **Generate Access Token** → elegir la página y la cuenta de Instagram.
+3. Ese token dura una hora: en el **Depurador de tokens**
+   (developers.facebook.com/tools/debug/accesstoken) → **Ampliar token
+   de acceso** → copiar el token de 60 días (`EAA…`).
+4. `bash ~/Documents/influ/desbloqueo/3-instagram.sh` lo pide pegado,
+   saca solo el id de la cuenta de Instagram
+   (`me/accounts?fields=instagram_business_account`), prueba una lectura
+   por @ y guarda las dos variables en Vercel, GitHub y el vault. Luego
+   hay que redesplegar la web.
+5. Cada 60 días se repiten los pasos 2 a 4. Cuando venza, la pantalla lo
+   dice: «La credencial de Instagram de On Cue venció».
+
+La app puede seguir en modo desarrollo: el token es de un administrador
+de la app, y `business_discovery` lee cualquier cuenta profesional
+pública con él.
 
 **`GOOGLE_API_KEY` (YouTube por @).**
 

@@ -86,3 +86,24 @@ test('YouTube con API key: suscriptores y videos, y las vistas acumuladas NO com
   const empty = await sources([['youtube', 'channels.list', 'handle.empty']]);
   await assert.rejects(empty.src.youtube!.lookup('nadie'), (e: unknown) => e instanceof PublicLookupError && e.code === 'not_found');
 });
+
+test('Instagram por Facebook Login (27-sep): con INSTAGRAM_HOUSE_IG_USER_ID va a graph.facebook.com/{id}; token de Facebook sin id → falta la variable; token de Instagram Login → lo dice en vez de «cuenta personal»', async () => {
+  const FB = { INSTAGRAM_HOUSE_TOKEN: 'EAA-house-token-SECRETO-0002', INSTAGRAM_HOUSE_IG_USER_ID: '17841400000000999' };
+  const { src, log, fetch } = await sources([['instagram', 'business_discovery', 'fb.ok']], FB);
+  assert.deepEqual(src.instagram!.missing, []);
+  const p = await src.instagram!.lookup('cafealma');
+  assert.equal(p.profile.handle, 'cafealma');
+  assert.equal(p.metrics!.followers, 267793);
+  assert.match(fetch.calls[0]!.url, /^https:\/\/graph\.facebook\.com\/v25\.0\/17841400000000999\?/);
+  assert.equal(log.entries[0]!.endpoint, 'instagram.business_discovery');
+  assert.ok(!JSON.stringify(fetch.calls).includes(FB.INSTAGRAM_HOUSE_TOKEN) && !JSON.stringify(log.entries).includes(FB.INSTAGRAM_HOUSE_TOKEN));
+
+  const sinId = await sources([], { INSTAGRAM_HOUSE_TOKEN: FB.INSTAGRAM_HOUSE_TOKEN });
+  assert.deepEqual(sinId.src.instagram!.missing, ['INSTAGRAM_HOUSE_IG_USER_ID']);
+  await assert.rejects(sinId.src.instagram!.lookup('cafealma'), (e: unknown) => e instanceof PublicLookupError && e.code === 'not_configured' && /INSTAGRAM_HOUSE_IG_USER_ID/.test(e.messageEs));
+  assert.equal(sinId.fetch.calls.length, 0, 'sin el id no se llama');
+
+  const igLogin = await sources([['instagram', 'business_discovery', 'no_field']]);
+  await assert.rejects(igLogin.src.instagram!.lookup('oncue__'), (e: unknown) => e instanceof PublicLookupError && e.code === 'not_configured' && /Instagram Login/.test(e.messageEs) && /INSTAGRAM_HOUSE_IG_USER_ID/.test(e.messageEs));
+  assert.equal(igLogin.log.entries[0]!.error_code, 'no_business_discovery');
+});

@@ -33,6 +33,14 @@ import { ConnectorUsageError, DEFAULT_MAX_PAGES, type CallOptions, type Connecti
 
 export const INSTAGRAM_GRAPH_VERSION = 'v25.0';
 export const INSTAGRAM_BASE_URL = `https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}`;
+/**
+ * business_discovery solo existe en «Instagram API with Facebook Login»:
+ * en graph.instagram.com un token de Instagram Login responde 100
+ * «Tried accessing nonexisting field (business_discovery)» (probado en
+ * producción el 27-sep-2026). Con Facebook Login el nodo es el id de la
+ * cuenta profesional, no `me`.
+ */
+export const FACEBOOK_GRAPH_BASE_URL = `https://graph.facebook.com/${INSTAGRAM_GRAPH_VERSION}`;
 export const INSTAGRAM_MEDIA_PAGE_MAX = 100;
 
 export const INSTAGRAM_USER_FIELDS: readonly string[] = ['id', 'user_id', 'username', 'name', 'account_type', 'profile_picture_url', 'followers_count', 'follows_count', 'media_count'];
@@ -79,10 +87,17 @@ export type InstagramBreakdown = 'age' | 'gender' | 'country' | 'city';
  */
 export const INSTAGRAM_NOT_ENOUGH_FOLLOWERS_SUBCODE = '2108006';
 
+/** Código propio para «business_discovery no existe con este tipo de token» (ver parseInstagramError). */
+export const INSTAGRAM_NO_DISCOVERY_CODE = 'no_business_discovery';
+
 export function parseInstagramError(status: number, body: unknown): ParsedApiError | null {
   const error = asRecord(asRecord(body)['error']);
   if (error['code'] !== undefined || error['message'] !== undefined) {
-    const code = error['code'] === undefined ? `http_${status}` : String(error['code']);
+    // Con un token de Instagram Login, graph.instagram.com no expone
+    // business_discovery (solo Facebook Login): code 100 como una cuenta
+    // personal, pero no es un problema de la cuenta sino del token casa.
+    const noDiscovery = String(error['code']) === '100' && /nonexisting field \(business_discovery\)/.test(String(error['message'] ?? ''));
+    const code = noDiscovery ? INSTAGRAM_NO_DISCOVERY_CODE : error['code'] === undefined ? `http_${status}` : String(error['code']);
     const sub = error['error_subcode'] === undefined ? '' : ` (subcódigo ${String(error['error_subcode'])})`;
     const subcode = error['error_subcode'] === undefined ? undefined : String(error['error_subcode']);
     return { code, message: `${strOrNull(error['message']) ?? ''}${sub}`.trim() || undefined, requestId: strOrNull(error['fbtrace_id']) ?? undefined, subcode };
@@ -92,6 +107,8 @@ export function parseInstagramError(status: number, body: unknown): ParsedApiErr
 
 export interface InstagramOptions {
   baseUrl?: string;
+  /** Nodo de business_discovery: `me` con Instagram Login (por defecto), el id de la cuenta profesional con Facebook Login. */
+  discoveryNode?: string;
 }
 
 export interface InstagramMe {
@@ -104,11 +121,15 @@ export class InstagramClient {
   readonly #core: HttpCore;
   readonly #auth: ConnectionAuth;
   readonly #base: string;
+  readonly #discoveryNode: string;
 
   constructor(core: HttpCore, auth: ConnectionAuth, opts: InstagramOptions = {}) {
     this.#core = core;
     this.#auth = auth;
     this.#base = opts.baseUrl ?? INSTAGRAM_BASE_URL;
+    const node = opts.discoveryNode ?? 'me';
+    if (node !== 'me' && !/^\d+$/.test(node)) throw new ConnectorUsageError('discoveryNode debe ser «me» o el id numérico de la cuenta profesional');
+    this.#discoveryNode = node;
   }
 
   #get(endpoint: string, path: string, query: Record<string, string | number | undefined>, signal?: AbortSignal) {
@@ -186,7 +207,7 @@ export class InstagramClient {
   /** Cuenta pública de una marca: seguidores y número de medios (CAM-3). */
   async businessDiscovery(username: string, opts: CallOptions = {}): Promise<ConnectorResult<BrandAccountSnapshot>> {
     const clean = assertDiscoveryUsername(username);
-    const res = await this.#get('instagram.business_discovery', 'me', { fields: `business_discovery.username(${clean}){id,username,followers_count,media_count}` }, opts.signal);
+    const res = await this.#get('instagram.business_discovery', this.#discoveryNode, { fields: `business_discovery.username(${clean}){id,username,followers_count,media_count}` }, opts.signal);
     const bd = asRecord(res.body['business_discovery']);
     return {
       data: { platform_id: 'instagram', external_account_id: strOrNull(bd['id']), handle: strOrNull(bd['username']) ?? clean, followers_count: intOrNull(bd['followers_count']), media_count: intOrNull(bd['media_count']) },
@@ -217,7 +238,7 @@ export class InstagramClient {
     if (limit < 1 || limit > INSTAGRAM_DISCOVERY_MEDIA_MAX) throw new ConnectorUsageError(`limit debe estar entre 1 y ${INSTAGRAM_DISCOVERY_MEDIA_MAX}`);
     const after = opts.after ? `.after(${assertDiscoveryCursor(opts.after)})` : '';
     const media = `media${after}.limit(${limit}){${INSTAGRAM_DISCOVERY_MEDIA_FIELDS.join(',')}}`;
-    const res = await this.#get('instagram.business_discovery.media', 'me', { fields: `business_discovery.username(${clean}){id,username,followers_count,media_count,${media}}` }, opts.signal);
+    const res = await this.#get('instagram.business_discovery.media', this.#discoveryNode, { fields: `business_discovery.username(${clean}){id,username,followers_count,media_count,${media}}` }, opts.signal);
     const bd = asRecord(res.body['business_discovery']);
     const found = strOrNull(bd['id']) !== null;
     const edge = asRecord(bd['media']);
