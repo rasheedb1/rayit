@@ -117,6 +117,15 @@ export const MESSAGES = {
   narrativa: {
     title: "Narrativa",
     meta: "Tres párrafos para presentarte. Cada cifra lleva a su origen.",
+    /**
+     * Debajo de la narrativa si cita cifras de campañas: son las del
+     * reporte (campaign_result.computed_at), no las de hoy que enseña
+     * Campañas. Cada corte ya viene armado con corteCampana; la lista se
+     * une en el idioma de estos textos: «Café Alma, 20 sep y Nutrivé, 5 sep».
+     */
+    cortesCampanas: (cortes: readonly string[]) =>
+      `Las cifras de campañas son al cierre de su reporte (${new Intl.ListFormat("es", { type: "conjunction" }).format(cortes)}); en Campañas ves las de hoy.`,
+    corteCampana: (marca: string, fecha: string) => `${marca}, ${fecha}`,
     /** Lo que de verdad se garantiza: las cifras marcadas salen del perfil (el verificador rechaza cualquier otra). */
     fuente: {
       llm: (modelo: string) => `Redactada por ${modelo}. Las cifras marcadas salen de este perfil; el verificador rechaza cualquier otra.`,
@@ -234,11 +243,12 @@ export const MESSAGES = {
       formatContent: (contenido: ContentKind) => `Publicaciones que son ${CONTENIDOS_PLURAL[contenido]}`,
       tone: (rasgo: ToneTrait) => `Parte de tus captions ${TONO_CAPTIONS[rasgo]}`,
       captionsRead: "Captions leídos para inferir formatos y tono",
-      campaignViews: (marca: string) => `Views de la campaña con ${marca}`,
-      campaignMultiple: (marca: string) => `Veces tu mediana que hizo la campaña con ${marca}`,
-      campaignBrandFollowers: (marca: string) => `Seguidores que ganó ${marca} con la campaña`,
-      campaignRedemptions: (marca: string) => `Canjes del código de ${marca}`,
-      campaignRevenue: (marca: string) => `Ventas atribuidas a la campaña con ${marca}`,
+      // Las de campaña son las del reporte (campaign_result), no las de hoy: Campañas enseña las vivas (pulido r3).
+      campaignViews: (marca: string) => `Views de la campaña con ${marca}, al cierre del reporte`,
+      campaignMultiple: (marca: string) => `Veces tu mediana que hizo la campaña con ${marca}, al cierre del reporte`,
+      campaignBrandFollowers: (marca: string) => `Seguidores que ganó ${marca} con la campaña, al cierre del reporte`,
+      campaignRedemptions: (marca: string) => `Canjes del código de ${marca}, al cierre del reporte`,
+      campaignRevenue: (marca: string) => `Ventas atribuidas a la campaña con ${marca}, al cierre del reporte`,
       rateLow: (item: string) => `Tu tarifa de «${item}», desde`,
       rateHigh: (item: string) => `Tu tarifa de «${item}», hasta`,
     },
@@ -349,6 +359,8 @@ export const MESSAGES = {
     title: "Con quién has trabajado",
     meta: "Campañas reportadas o cerradas, con resultado medido",
     sinDatos: "Todavía no tienes campañas con resultado medido. Aparecen aquí cuando reportas una en Campañas.",
+    /** Junto a cada campaña: sus cifras son las del reporte, no las de hoy que enseña Campañas. */
+    corte: (fecha: string) => `Al cierre del reporte, ${fecha}`,
     /** Lo que acompaña a cada cifra de campaña, por la clave de su claim. */
     etiquetas: {
       "campaign.views": "views",

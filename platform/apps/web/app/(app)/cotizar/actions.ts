@@ -19,12 +19,18 @@ import {
   construirFilas, construirPaquetes, modificadoresActivos, motivoCpmManual, precioDe, type BasisTarifario,
 } from "./_lib/tarifario";
 import { TEXTOS_COTIZAR } from "./_lib/textos";
+import { puedeOperarCotizar } from "./_lib/permiso";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Un porcentaje de 0 a 100, con coma o punto y hasta dos decimales. 999 no pasa. */
 const PCT_RE = /^(100([.,]0{1,2})?|\d{1,2}([.,]\d{1,2})?)$/;
 const FRACCION_RE = /^(0(\.\d{1,6})?|1(\.0{1,6})?)$/;
 const E = MESSAGES.errores;
+
+// Cada acción de escritura exige el rol (puedeOperarCotizar: owner, admin
+// o member) ANTES de validar o de tocar la base: un 'viewer' o un
+// 'client' ven Cotizar, no reescriben tarifas ni aceptan cotizaciones.
+// Las que vuelven con redirect llevan el código en la URL (?error=sinPermiso).
 const V = MESSAGES.validacion;
 
 /**
@@ -102,6 +108,7 @@ const basisSchema = z.object({
  * `adjustments`.
  */
 export async function guardarTarifario(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!(await puedeOperarCotizar())) return { message: E.sinPermiso };
   const creatorId = formField(formData, "creatorId");
   if (!UUID_RE.test(creatorId)) return { message: E.CreatorNotFound };
 
@@ -204,6 +211,7 @@ const mediaKitSchema = z.object({
 });
 
 export async function generarMediaKit(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!(await puedeOperarCotizar())) return { message: E.sinPermiso };
   const parsed = mediaKitSchema.safeParse({
     creatorId: formField(formData, "creatorId"),
     password: formField(formData, "password").trim(),
@@ -243,6 +251,7 @@ export async function generarMediaKit(_prev: ActionState, formData: FormData): P
  * bind, desde la lista.
  */
 export async function desbloquearMediaKit(id: string): Promise<void> {
+  if (!(await puedeOperarCotizar())) redirect("/cotizar/media-kit?error=sinPermiso");
   if (!UUID_RE.test(id)) redirect("/cotizar/media-kit");
   let error: string | null = null;
   try {
@@ -256,6 +265,7 @@ export async function desbloquearMediaKit(id: string): Promise<void> {
 
 /** Publicar o despublicar un enlace, desde la lista. Se usa con bind. */
 export async function cambiarPublicacionMediaKit(id: string, isPublic: boolean): Promise<void> {
+  if (!(await puedeOperarCotizar())) redirect("/cotizar/media-kit?error=sinPermiso");
   if (!UUID_RE.test(id)) redirect("/cotizar/media-kit");
   let error: string | null = null;
   try {
@@ -350,6 +360,7 @@ function aConsulta(v: Cotizacion) {
 }
 
 export async function crearCotizacion(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!(await puedeOperarCotizar())) return { message: E.sinPermiso };
   const leida = leerCotizacion(nuevaCotizacionSchema, formData);
   if (!leida.ok) return leida.state;
   const v = leida.value;
@@ -371,6 +382,7 @@ export async function crearCotizacion(_prev: ActionState, formData: FormData): P
 
 /** Guarda los cambios de un borrador. Se usa con bind(null, id). */
 export async function editarCotizacion(id: string, _prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!(await puedeOperarCotizar())) return { message: E.sinPermiso };
   if (!UUID_RE.test(id)) return { message: E.QuoteNotFound };
   const leida = leerCotizacion(cotizacionSchema, formData);
   if (!leida.ok) return leida.state;
@@ -392,6 +404,7 @@ export type EnviarResultado = { status: "ok"; path: string } | { status: "error"
  * portapapeles: el texto del botón promete «copiar enlace».
  */
 export async function enviarCotizacion(id: string): Promise<EnviarResultado> {
+  if (!(await puedeOperarCotizar())) return { status: "error", message: E.sinPermiso! };
   if (!UUID_RE.test(id)) return { status: "error", message: E.QuoteNotFound! };
   try {
     const quote = await withWorkspace((tx) => sendQuote(tx, id, TEXTOS_COTIZAR));
@@ -437,6 +450,7 @@ const ventanaSchema = z.object({
  * edita. Se usa con bind(null, id) y useActionState.
  */
 export async function crearCampanaConVentana(id: string, _prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!(await puedeOperarCotizar())) return { message: E.sinPermiso };
   if (!UUID_RE.test(id)) return { message: E.QuoteNotFound };
   const parsed = ventanaSchema.safeParse({
     startsOn: formField(formData, "startsOn"),
@@ -457,7 +471,8 @@ export async function crearCampanaConVentana(id: string, _prev: ActionState, for
 
 /** «Entendido» en un aviso de aceptación de la lista. Se usa con bind. */
 export async function marcarAvisoVisto(id: string): Promise<void> {
-  if (UUID_RE.test(id)) {
+  // El aviso es de todo el equipo: quien no opera Cotizar lo lee, no lo cierra.
+  if (UUID_RE.test(id) && (await puedeOperarCotizar())) {
     try {
       await withWorkspace((tx) => markAcceptanceNoticeRead(tx, id));
     } catch (err) {
@@ -477,7 +492,7 @@ export type VueltaAvisoBloqueo = (typeof VUELTA_AVISO_BLOQUEO)[number];
  * desbloquea: para eso está «Desbloquear». Se usa con bind(null, id, vuelta).
  */
 export async function marcarAvisoBloqueoVisto(id: string, vuelta: VueltaAvisoBloqueo): Promise<void> {
-  if (UUID_RE.test(id)) {
+  if (UUID_RE.test(id) && (await puedeOperarCotizar())) {
     try {
       await withWorkspace((tx) => markMediaKitLockNoticeRead(tx, id));
     } catch (err) {
@@ -492,6 +507,7 @@ export async function marcarAvisoBloqueoVisto(id: string, vuelta: VueltaAvisoBlo
 /** Borra un borrador y vuelve a la lista. */
 export async function eliminarBorrador(id: string): Promise<void> {
   if (!UUID_RE.test(id)) redirect("/cotizar/cotizaciones");
+  if (!(await puedeOperarCotizar())) redirect(`/cotizar/cotizaciones/${id}?error=sinPermiso`);
   let error: string | null = null;
   try {
     await withWorkspace((tx) => deleteQuoteDraft(tx, id));
@@ -504,6 +520,7 @@ export async function eliminarBorrador(id: string): Promise<void> {
 
 async function transicion(id: string, fn: Parameters<typeof withWorkspace>[0]): Promise<never> {
   if (!UUID_RE.test(id)) redirect("/cotizar/cotizaciones");
+  if (!(await puedeOperarCotizar())) redirect(`/cotizar/cotizaciones/${id}?error=sinPermiso`);
   let error: string | null = null;
   try {
     await withWorkspace(fn);

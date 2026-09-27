@@ -357,6 +357,16 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'mc_app no tiene INSERT en outbound_workspace_optout. Solo el workspace de la transacción (sin él, 42501), solo el ' +
     'correo de una ficha que ese workspace ve (contact_visible_to), y nunca borra ni cambia una fila: lo peor que ' +
     'hace un workspace con ella es dejar de escribirse a sí mismo. EXECUTE solo para mc_app. No es de ningún disparador',
+  // La reserva del tope del modelo de «Recalcular» del perfil (0075, pulido r3 de VEN-11).
+  'outbound_llm_reserve_profile(numeric)':
+    'la web aparta el costo estimado de una llamada de «Recalcular» del perfil comercial antes de hacerla (0075): ' +
+    'mc_app no tiene INSERT en outbound_llm_reservation. Solo una fila purpose profile del workspace de la ' +
+    'transacción (sin él, 42501), de 0 a 1000 USD; la cuenta y el candado por espacio los pone quien llama. Lo peor ' +
+    'que hace un workspace con ella es apartarse su propio presupuesto. EXECUTE solo para mc_app. No es de ningún disparador',
+  'outbound_llm_release_profile(uuid)':
+    'suelta la reserva de «Recalcular» del perfil al registrar la llamada, o si no se hizo (0075): solo una fila ' +
+    'purpose profile del workspace de la transacción; las del worker (generate, judge) no las toca. Lo peor que hace ' +
+    'un workspace con ella es soltarse su propia reserva. EXECUTE solo para mc_app. No es de ningún disparador',
   'contact_optout_keep()':
     'la función del disparador contact.contact_optout_keep (entregabilidad §8.4): al borrarse una ficha de baja, por ' +
     'la vía que sea, su correo queda en outbound_workspace_optout de su workspace. Solo inserta con ON CONFLICT DO ' +
@@ -1081,7 +1091,9 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
     permite: ['SELECT'],
     motivo:
       'lo apartado del tope diario del modelo mientras una llamada está en curso (0075): lo escribe y lo borra el ' +
-      'worker. Con escritura, un workspace se borraría las reservas y dos jobs volverían a gastar el mismo saldo',
+      'worker; la web, solo las suyas de «Recalcular» del perfil y por outbound_llm_reserve_profile y ' +
+      'outbound_llm_release_profile. Con escritura, un workspace se borraría las reservas del worker y dos jobs ' +
+      'volverían a gastar el mismo saldo',
   },
   outbound_llm_call: {
     permite: ['SELECT', 'INSERT'],

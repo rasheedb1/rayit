@@ -23,6 +23,12 @@ export interface CifraVista {
   href: string;
   /** true si el enlace sale de On Cue (el post en su red). */
   externo: boolean;
+  /**
+   * Solo las de campaña: la marca y la fecha del reporte del que salen
+   * (campaign_result.computed_at), ya escrita. Campañas enseña las views
+   * de hoy; aquí se dice de cuándo es cada cifra (pulido r3).
+   */
+  corte?: { marca: string; fecha: string } | null;
 }
 
 /** Desde aquí un conteo se abrevia («412 mil»): por debajo se lee entero. */
@@ -142,6 +148,10 @@ export function cifraVista(c: Claim, f: Formatter): CifraVista {
     origen: claimOrigin(c, f),
     href: destino.href,
     externo: destino.externo,
+    corte:
+      c.source.table === "campaign_result" && c.source.asOf
+        ? { marca: c.params.company ?? "", fecha: f.date(c.source.asOf) }
+        : null,
   };
 }
 

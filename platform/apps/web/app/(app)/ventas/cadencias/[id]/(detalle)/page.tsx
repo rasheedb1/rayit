@@ -97,6 +97,8 @@ export default async function CadenciaPage({
   const archivada = d.status === "archived";
   const nombresPlantilla = new Map(plantillas.map((p) => [p.slug, p.nameEs]));
   const nombresAngulo = new Map(angulos.map((a) => [a.key, a.label]));
+  // La marca tiene personas y todas pidieron no recibir mensajes: ni se vuelve a proponer ni la nota dice «falta elegir».
+  const todasDeBaja = personas.length > 0 && personas.every((c) => c.optedOut);
 
   const descripcion = d.signal
     ? descripcionDeSenal(d.name, d.signal, f)
@@ -158,7 +160,7 @@ export default async function CadenciaPage({
       )}
 
       <div className="mb-6">
-        <Notas d={d} f={f} plantillas={nombresPlantilla} angulos={nombresAngulo} />
+        <Notas d={d} f={f} plantillas={nombresPlantilla} angulos={nombresAngulo} todasDeBaja={todasDeBaja} />
       </div>
 
       {(archivada || d.locked) && (
@@ -182,6 +184,7 @@ export default async function CadenciaPage({
             <ProponerOtraVez
               sequenceId={d.id}
               signalId={d.signal.id}
+              bloqueo={todasDeBaja ? t.senales.todasDeBaja : undefined}
               elegida={d.proposalContact?.id ?? null}
               personas={personas
                 .filter((c) => !c.optedOut)

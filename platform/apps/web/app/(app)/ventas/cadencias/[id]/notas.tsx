@@ -17,16 +17,19 @@ export function Notas({
   f,
   plantillas,
   angulos,
+  todasDeBaja = false,
 }: {
   d: SequenceDetail;
   f: Formatter;
   plantillas: ReadonlyMap<string, string>;
   angulos: ReadonlyMap<string, string>;
+  /** Todas las personas de la marca de la señal están de baja: la nota sin persona lo dice. */
+  todasDeBaja?: boolean;
 }) {
   const t = MESSAGES.notas;
   const notas = d.proposal
     ? d.proposal.notes
-        .map((n) => textoDeNota(n, f, plantillas, angulos, d.proposalContact?.name ?? null))
+        .map((n) => textoDeNota(n, f, plantillas, angulos, d.proposalContact?.name ?? null, todasDeBaja))
         .filter((x): x is string => x !== null)
     : [];
   // «Ir a Canales» solo si alguna nota se arregla ahí: una cuenta por reconectar o una que no está conectada.

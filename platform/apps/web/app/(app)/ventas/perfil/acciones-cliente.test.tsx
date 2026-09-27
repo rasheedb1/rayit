@@ -139,12 +139,13 @@ describe("el aviso de guardado y Recalcular", () => {
     const avisos = () => screen.getAllByRole("status").map((s) => s.textContent).filter(Boolean);
     await waitFor(() => expect(avisos()).toEqual(["Narrativa guardada."]));
     act(() => rerender(pagina("Editada: [claim:mediana-tiktok].", "2026-09-25T10:05:00.000Z")));
-    expect(avisos()).toEqual(["Narrativa guardada."]);
+    await waitFor(() => expect(avisos()).toEqual(["Narrativa guardada."]));
     // Recalcular (con su confirmación, porque la narrativa está editada) la reemplaza por la de la plantilla.
     fireEvent.click(screen.getByRole("button", { name: "Recalcular" }));
     fireEvent.click(await screen.findByRole("button", { name: "Sí, recalcular" }));
     await waitFor(() => expect(avisos()).toContain("Perfil recalculado."));
     act(() => rerender(pagina("De plantilla: [claim:mediana-tiktok].", "2026-09-25T10:10:00.000Z")));
-    expect(avisos()).toEqual(["Perfil recalculado."]);
+    // Con waitFor: con la máquina cargada, la transición del guardado puede terminar después del rerender.
+    await waitFor(() => expect(avisos()).toEqual(["Perfil recalculado."]));
   });
 });

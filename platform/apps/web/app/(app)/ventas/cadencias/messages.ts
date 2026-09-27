@@ -46,6 +46,8 @@ export const MESSAGES = {
     proponer: "Proponer cadencia",
     proponiendo: "Proponiendo…",
     verCadencia: "Ver su cadencia",
+    /** Todas las personas de la marca de la señal están de baja: «Proponer cadencia» se deshabilita. */
+    todasDeBaja: "Todas las personas de esta marca pidieron no recibir mensajes.",
     negocio: (nombre: string) => `Negocio: ${nombre}`,
     /** Hay más señales que las que caben arriba: el enlace a la lista entera. */
     verTodas: plural({ one: "Ver la señal ({n})", other: "Ver todas las señales ({n})" }),
@@ -273,6 +275,8 @@ export const MESSAGES = {
     channelDown: (canal: string) => `Tu cuenta de ${canal} pide reconectar: hazlo antes del primer mensaje por ahí.`,
     reconectar: "Ir a Canales",
     noContact: "Sin persona elegida: se planeó como si tuviera todas las direcciones.",
+    /** En vez de noContact cuando nadie de la marca puede recibir mensajes: no es que falte elegir. */
+    todasDeBaja: "Todas las personas de esta marca pidieron no recibir mensajes: esta cadencia no le llegará a nadie.",
     disclosure: "Tu brief pide divulgación: el cierre lo menciona.",
     contactBusy: (persona: string, cadencia: string) => `${persona} ya está en «${cadencia}»: Activar no la enrolará aquí.`,
     noCreator:
@@ -363,6 +367,7 @@ export const MESSAGES = {
     invalid: "Revisa los datos del paso.",
     no_template: "No hay ninguna plantilla para esta señal todavía.",
     no_signal: "Esa señal ya no existe o no es de este espacio.",
+    all_opted_out: "Todas las personas de esta marca pidieron no recibir mensajes: no hay a quién proponerle una cadencia.",
     sequence_not_active: "Activa la cadencia para enrolar.",
     generico: "No pudimos guardar el cambio. Inténtalo otra vez.",
   } as Record<string, string>,

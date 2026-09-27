@@ -19,9 +19,12 @@ export function ProponerOtraVez({
   signalId,
   personas,
   elegida,
+  bloqueo,
 }: {
   sequenceId: string;
   signalId: string;
+  /** Por qué no se puede volver a proponer (todas las personas de la marca de baja): en vez del formulario. */
+  bloqueo?: string;
   /**
    * Las personas de la marca que se pueden elegir: en la opción, el nombre
    * (y una marca corta si ya está en otra cadencia); en `detalle`, por
@@ -41,24 +44,28 @@ export function ProponerOtraVez({
         {t.titulo}
       </h2>
       <p className="mt-1 text-xs text-fg-2">{t.descripcion}</p>
-      <form action={action} className="mt-3 grid gap-3">
-        <input type="hidden" name="signalId" value={signalId} />
-        <input type="hidden" name="sequenceId" value={sequenceId} />
-        <Field label={t.persona} help={ayuda}>
-          <Select
-            name="contactId"
-            options={[{ value: SIN_PERSONA, label: t.sinPersona }, ...personas.map(({ value, label }) => ({ value, label }))]}
-            value={valor}
-            onChange={(e) => setValor(e.target.value)}
-          />
-        </Field>
-        <div>
-          <Button type="submit" size="sm" variant="secondary" loading={pending}>
-            {pending ? MESSAGES.senales.proponiendo : t.boton}
-          </Button>
-        </div>
-        <Aviso message={state.error} size="xs" />
-      </form>
+      {bloqueo ? (
+        <p className="mt-3 text-xs text-fg-3">{bloqueo}</p>
+      ) : (
+        <form action={action} className="mt-3 grid gap-3">
+          <input type="hidden" name="signalId" value={signalId} />
+          <input type="hidden" name="sequenceId" value={sequenceId} />
+          <Field label={t.persona} help={ayuda}>
+            <Select
+              name="contactId"
+              options={[{ value: SIN_PERSONA, label: t.sinPersona }, ...personas.map(({ value, label }) => ({ value, label }))]}
+              value={valor}
+              onChange={(e) => setValor(e.target.value)}
+            />
+          </Field>
+          <div>
+            <Button type="submit" size="sm" variant="secondary" loading={pending}>
+              {pending ? MESSAGES.senales.proponiendo : t.boton}
+            </Button>
+          </div>
+          <Aviso message={state.error} size="xs" />
+        </form>
+      )}
     </section>
   );
 }

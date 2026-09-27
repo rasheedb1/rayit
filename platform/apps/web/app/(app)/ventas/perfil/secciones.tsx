@@ -358,6 +358,15 @@ function etiquetaCampana(key: Claim["key"] | undefined): string {
   return key !== undefined && esClaveCampana(key) ? MESSAGES.pruebaSocial.etiquetas[key] : "";
 }
 
+/** La fecha del reporte de una campaña: la de sus cifras (todas salen de la misma fila de campaign_result). */
+function corteDe(ids: readonly string[], cifras: Cifras): string | null {
+  for (const id of ids) {
+    const fecha = cifras[id]?.corte?.fecha;
+    if (fecha) return fecha;
+  }
+  return null;
+}
+
 export function PruebaSocial({ perfil, cifras }: { perfil: PerfilComercial; cifras: Cifras }) {
   const t = MESSAGES.pruebaSocial;
   return (
@@ -375,6 +384,7 @@ export function PruebaSocial({ perfil, cifras }: { perfil: PerfilComercial; cifr
                   {c.name}
                 </Link>
               </p>
+              {corteDe(c.claimIds, cifras) && <p className="mt-0.5 text-xs text-fg-3">{t.corte(corteDe(c.claimIds, cifras)!)}</p>}
               <p className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-sm text-fg-2">
                 {c.claimIds.map((id) => (
                   <span key={id}>

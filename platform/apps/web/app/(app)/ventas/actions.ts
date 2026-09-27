@@ -11,6 +11,10 @@
  * MESSAGES.errores —el mismo patrón que codigoDe() de Cotizar—. Cualquier
  * otro error se registra y se resume: un mensaje de Postgres no es algo
  * que se le enseñe a una creadora.
+ *
+ * Todas exigen el rol (puedeOperarVentas: owner, admin o member) ANTES de
+ * validar o de tocar la base, como las de bandeja, cadencias y empresas:
+ * un 'viewer' o un 'client' ven el CRM, no lo cambian (MESSAGES.sinPermiso).
  */
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -40,6 +44,7 @@ import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { DECIMAL_RE, UUID_RE, firstErrors, formField as field, type ActionState } from "@/lib/forms";
 import { withWorkspace } from "./_lib/db";
+import { puedeOperarVentas } from "./_lib/permiso";
 import { parseBrandCsv, type CsvLineError } from "./_lib/csv";
 import { fitFromPercent } from "./_lib/estado";
 import { MESSAGES } from "./_lib/messages";
@@ -160,6 +165,7 @@ function duplicateMessage(reason: SignalDuplicateReason | null): string {
 }
 
 export async function anotarSenal(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const parsed = senalSchema.safeParse({
     companyName: field(formData, "companyName"),
     domain: field(formData, "domain"),
@@ -214,6 +220,7 @@ export async function anotarSenal(_prev: VentasState, formData: FormData): Promi
 // ---------------------------------------------------------------------
 
 export async function cargarLista(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.radar.csv;
   let text = field(formData, "pasted");
   const file = formData.get("file");
@@ -267,6 +274,7 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
 // ---------------------------------------------------------------------
 
 export async function aceptarSenal(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.radar;
   const signalId = field(formData, "signalId");
   if (!UUID_RE.test(signalId)) return { message: t.acceptError };
@@ -315,6 +323,7 @@ const descartarSchema = z.object({
 });
 
 export async function descartarSenal(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const parsed = descartarSchema.safeParse({ signalId: field(formData, "signalId"), reason: field(formData, "reason") });
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   try {
@@ -365,6 +374,7 @@ function empresaError(err: unknown, fallback: string): VentasState {
  * que reenvía lo mismo con `sameName=X`: el permiso es para ese nombre.
  */
 export async function crearEmpresa(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const parsed = empresaSchema.safeParse({
     name: field(formData, "name"),
     domain: field(formData, "domain"),
@@ -413,6 +423,7 @@ export async function crearEmpresa(_prev: VentasState, formData: FormData): Prom
  * CompanyNotEditable, que aquí se dice en la pantalla.
  */
 export async function editarEmpresa(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.empresas.form;
   const companyId = field(formData, "companyId");
   if (!UUID_RE.test(companyId)) return { message: t.editError };
@@ -462,6 +473,7 @@ export async function editarEmpresa(_prev: VentasState, formData: FormData): Pro
  * lo comprueba updateCompany (InvalidOwner).
  */
 export async function cambiarRelacion(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.empresas.detail;
   const companyId = field(formData, "companyId");
   const relationship = field(formData, "relationship");
@@ -499,6 +511,7 @@ const negocioSchema = z.object({
  * de negocios con su atajo a Cotizar.
  */
 export async function crearNegocio(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.empresas.detail.newDeal;
   const parsed = negocioSchema.safeParse({
     companyId: field(formData, "companyId"),
@@ -573,6 +586,7 @@ function contactoError(err: unknown, fallback: string): VentasState {
 }
 
 export async function crearContacto(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const parsed = contactoSchema.safeParse(contactoForm(formData));
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const v = parsed.data;
@@ -604,6 +618,7 @@ export async function crearContacto(_prev: VentasState, formData: FormData): Pro
  * (ContactNotOwned; la pantalla ni siquiera ofrece el botón).
  */
 export async function editarContacto(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.contacto;
   const contactId = field(formData, "contactId");
   if (!UUID_RE.test(contactId)) return { message: t.editError };
@@ -631,6 +646,7 @@ export async function editarContacto(_prev: VentasState, formData: FormData): Pr
 }
 
 export async function darDeBaja(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const contactId = field(formData, "contactId");
   const companyId = field(formData, "companyId");
   const reason = field(formData, "reason").trim().slice(0, 280);
@@ -687,6 +703,7 @@ export async function moverNegocio(
   // puede fabricar: los tipos de TypeScript no los protegen. Un `opts`
   // null o un monto numérico no pueden ser un TypeError (500 y traza en
   // el log): se rechazan como cualquier otro movimiento inválido.
+  if (!(await puedeOperarVentas())) return { ok: false, message: MESSAGES.sinPermiso };
   const shape = moverOptsSchema.safeParse(opts);
   if (
     typeof dealId !== "string" ||

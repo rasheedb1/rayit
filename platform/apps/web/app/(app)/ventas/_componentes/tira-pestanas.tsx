@@ -43,7 +43,7 @@ export function TiraPestanas({ label, children }: { label: string; children: Rea
 
   return (
     <div className="relative mb-6">
-      <nav ref={ref} aria-label={label} className="flex flex-nowrap gap-1 overflow-x-auto border-b border-border pb-px sm:gap-1.5">
+      <nav ref={ref} aria-label={label} className="flex flex-nowrap gap-1 overflow-x-auto border-b border-border pb-px sm:gap-1.5 lg:gap-0.5">
         {children}
       </nav>
       {mas.antes ? (

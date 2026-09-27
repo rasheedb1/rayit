@@ -145,7 +145,12 @@ export const MESSAGES = {
       "Queda anotado y esa señal no vuelve a entrar. El motivo es lo que afina el radar para la próxima.",
     discardReason: "Motivo",
     discarded: "Señal descartada. No volverá al radar.",
-    fit: "Encaje",
+    /**
+     * El encaje de ESTA señal (signal.fit_score). No es el de la marca en
+     * el CRM (company_link.fit_score, «Encaje de la marca» en su ficha):
+     * con la misma palabra, las dos cifras se contradecían (pulido r3).
+     */
+    fit: "Encaje de la señal",
     budget: "Presupuesto estimado",
     evidence: "Ver la evidencia",
     source: "Fuente",
@@ -201,7 +206,7 @@ export const MESSAGES = {
        */
       fitWithCategory: (fit: string, category: string) => `${fit} · ${category}`,
       /** Lo mismo, entero, para el title y el lector de pantalla. */
-      fitWithCategoryLabel: (fit: string, category: string) => `Encaje ${fit}; es de «${category}», que buscas`,
+      fitWithCategoryLabel: (fit: string, category: string) => `Encaje de la señal ${fit}; es de «${category}», que buscas`,
     },
     /**
      * «No aceptar esta marca», desde su tarjeta (VEN-7 r4): la da de alta
@@ -288,7 +293,7 @@ export const MESSAGES = {
       headline: "Qué viste",
       headlineHelp: "Una línea: «Lanzó cold brew y está pautando en Meta».",
       evidence: "Enlace a la evidencia",
-      fit: "Encaje %",
+      fit: "Encaje de la señal (%)",
       fitHelp: "De 0 a 100. Vacío si todavía no lo sabes.",
       budget: "Presupuesto estimado",
       country: "País",
@@ -1016,4 +1021,12 @@ export const MESSAGES = {
     saving: "Guardando…",
     close: "Cerrar",
   },
+
+  /**
+   * Un 'viewer' o un 'client' (en una agencia, la marca misma) ve el
+   * radar, las empresas y el pipeline, pero no los cambia
+   * (PUEDEN_OPERAR_VENTAS). Lo dicen las acciones del CRM.
+   */
+  sinPermiso:
+    "Tu rol en este espacio puede ver el CRM, pero no cambiarlo. Pídeselo a quien es dueño, administra o es miembro del espacio.",
 } as const;

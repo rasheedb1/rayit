@@ -25,6 +25,8 @@ const WS_VECINO = "0000000c-0000-4000-8000-000000000052";
 
 let t: TestDb;
 let workspaceActual = WORKSPACE_LAURA;
+/** El rol de quien importa: owner, admin o member sí; viewer o client no (pulido r3). */
+let puedeImportar = true;
 
 vi.mock("@/lib/db", () => ({
   withWorkspace: <T,>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(workspaceActual, fn),
@@ -33,11 +35,13 @@ vi.mock("@/lib/workspace/settings", () => ({
   getCurrentWorkspace: async () => ({ locale: "es-CO", currency: "COP", timezone: "America/Bogota" }),
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("./_lib/permiso", () => ({ puedeImportar: async () => puedeImportar }));
 
 import { buscarPostsConocidos } from "./actions";
 import { MAX_BYTES } from "./_lib/csv";
 import { importarLote as importarCsv, leerCuerpoConTope, MAX_CUERPO } from "./_lib/lote";
 import { POST } from "./lote/route";
+import { MESSAGES } from "../messages";
 
 const fixture = (nombre: string) => readFileSync(join(__dirname, "../../../../test/fixtures/csv", nombre), "utf8");
 
@@ -69,9 +73,25 @@ afterAll(async () => {
 
 beforeEach(() => {
   workspaceActual = WORKSPACE_LAURA;
+  puedeImportar = true;
 });
 
 describe("importarLote, la escritura", () => {
+  it("un 'viewer' no importa: vuelve con el aviso de su rol y no escribe nada", async () => {
+    puedeImportar = false;
+    const r = await importarCsv({
+      texto: fixture("instagram-insights.csv"),
+      red: "instagram",
+      handleNuevo: "rol.viewer",
+      mapeo: MAPEO_IG,
+    });
+    expect(r).toEqual({ ok: false, error: MESSAGES.importar.error.sinPermiso });
+    const cuentas = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM social_connection WHERE handle = 'rol.viewer'`),
+    );
+    expect(cuentas.rows[0]?.n).toBe(0);
+  });
+
   it("con el texto del fixture y una cuenta nueva, escribe y cuenta", async () => {
     const r = await importarCsv({
       texto: fixture("instagram-insights.csv"),

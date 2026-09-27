@@ -259,7 +259,10 @@ export const FICHA = {
     } as Record<string, string>,
     adsYes: (platforms: string) => (platforms ? `Anuncia en ${platforms}` : "Anuncia"),
     adsNo: "No se le ve pauta",
-    fit: "Encaje",
+    /** El de la marca en tu CRM (company_link.fit_score). */
+    fit: "Encaje de la marca",
+    /** El de cada señal de la lista (signal.fit_score): el mismo que enseña su tarjeta del radar. */
+    fitSignal: "Encaje de la señal",
     signals: "Señales",
     noSignals: "El radar todavía no ha visto nada de esta marca.",
     noFacts: "Sin datos de enriquecimiento todavía.",

@@ -19,7 +19,8 @@ const getPrimaryCreator = vi.fn();
 const readPerfilDataAsOf = vi.fn();
 const readPostCovers = vi.fn();
 const computePerfil = vi.fn();
-const llmBudgetExhausted = vi.fn();
+const reserveProfileLlmBudget = vi.fn();
+const releaseProfileLlmReservation = vi.fn();
 const recordProfileLlmCalls = vi.fn();
 const savePerfilComercial = vi.fn();
 const saveNarrativeEdit = vi.fn();
@@ -55,7 +56,9 @@ vi.mock("@mc/db/queries/perfil-comercial", async () => {
     readPerfilDataAsOf: (...a: unknown[]) => readPerfilDataAsOf(...a),
     readPostCovers: (...a: unknown[]) => readPostCovers(...a),
     computePerfil: (...a: unknown[]) => computePerfil(...a),
-    llmBudgetExhausted: (...a: unknown[]) => llmBudgetExhausted(...a),
+    reserveProfileLlmBudget: (...a: unknown[]) => reserveProfileLlmBudget(...a),
+    releaseProfileLlmReservation: (...a: unknown[]) => releaseProfileLlmReservation(...a),
+    estimateProfileCallUsd: () => 0.044,
     recordProfileLlmCalls: (...a: unknown[]) => recordProfileLlmCalls(...a),
     savePerfilComercial: (...a: unknown[]) => savePerfilComercial(...a),
     saveNarrativeEdit: (...a: unknown[]) => saveNarrativeEdit(...a),
@@ -106,7 +109,7 @@ function entradas(): PerfilInputs {
     nonFollowers: [],
     baselines: [{ id: "00000002-0000-4000-8000-0000000b0001", platformId: "tiktok", ageHoursCut: 168, medianViews: 115446, sampleSize: 17, isReliable: true, computedAt: "2026-09-25T00:00:00.000Z" }],
     posts: TITULOS.map((_, i) => post(i)),
-    campaigns: [{ id: CAMPANA, name: "Lanzamiento cold brew", companyName: "Café Alma", status: "reported", result: { views: 712000, brandFollowersGained: 1240, codeRedemptions: null, attributedRevenue: null, currency: "COP", viewsVsMedian: null } }],
+    campaigns: [{ id: CAMPANA, name: "Lanzamiento cold brew", companyName: "Café Alma", status: "reported", result: { views: 712000, brandFollowersGained: 1240, codeRedemptions: null, attributedRevenue: null, currency: "COP", viewsVsMedian: null, computedAt: "2026-09-20T15:00:00.000Z" } }],
     rateCard: { id: "00000004-0000-4000-8000-0000007a1f01", currency: "COP", computedAt: "2026-09-20T00:00:00.000Z", items: [{ id: "00000004-0000-4000-8000-0000007a1101", labelEs: "TikTok dedicado", platformId: "tiktok", priceLow: "5200000.00", priceHigh: "8080000.00" }] },
     cutHours: 168,
     computedAt: "2026-09-25T10:00:00.000Z",
@@ -142,7 +145,9 @@ beforeEach(() => {
   // Por defecto, ningún post trae portada viva: se usa la guardada.
   readPostCovers.mockResolvedValue({});
   puedeEditarElPerfil.mockResolvedValue(true);
-  llmBudgetExhausted.mockResolvedValue(false);
+  let n = 0;
+  reserveProfileLlmBudget.mockImplementation(async () => `reserva-${++n}`);
+  releaseProfileLlmReservation.mockResolvedValue(undefined);
   recordProfileLlmCalls.mockResolvedValue(undefined);
   claimPerfilRecalc.mockResolvedValue({ token: "marca-1", narrativeWrittenAt: "2026-09-25T10:00:01.000Z" });
   releasePerfilRecalc.mockResolvedValue(undefined);
@@ -154,6 +159,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("la pantalla", () => {
+  it("las cifras de una campaña dicen que son las del reporte, con su fecha (pulido r3)", async () => {
+    getPerfilComercial.mockResolvedValue(guardado());
+    render(await PerfilPage());
+    const prueba = screen.getByText("Con quién has trabajado").closest("section")!;
+    expect(within(prueba).getByText(/^Al cierre del reporte, .*20/)).toBeTruthy();
+    expect(screen.getByText(/^Las cifras de campañas son al cierre de su reporte \(Café Alma, .*20.*\); en Campañas ves las de hoy\.$/)).toBeTruthy();
+  });
+
   it("muestra los cinco mejores videos con su portada, sus cifras, su corte, su mediana y cómo son", async () => {
     getPerfilComercial.mockResolvedValue(guardado());
     render(await PerfilPage());
@@ -547,18 +560,39 @@ describe("las acciones", () => {
     expect(releasePerfilRecalc).toHaveBeenCalledWith({}, CREADORA, "marca-1");
   });
 
-  it("con modelo, cada llamada se registra apenas responde y el tope se mira antes de cada intento", async () => {
+  it("con modelo, cada intento aparta su costo antes de llamar y lo suelta al registrarse la llamada", async () => {
     const perfil = buildPerfil(entradas());
     computePerfil.mockResolvedValue(perfil);
     const respuestas = ["Uno sin marcas.\n\nDos.\n\nTres.", templateNarrative(perfil)];
     modelo = { model: "claude-sonnet-5", complete: async () => ({ text: respuestas.shift()!, inputTokens: 3000, outputTokens: 400 }) };
     expect((await recalcularPerfil()).ok).toBe(true);
-    expect(llmBudgetExhausted).toHaveBeenCalledTimes(NARRATIVE_ATTEMPTS);
-    expect(recordProfileLlmCalls.mock.calls.map((c) => c[1])).toEqual([
-      [{ model: "claude-sonnet-5", inputTokens: 3000, outputTokens: 400 }],
-      [{ model: "claude-sonnet-5", inputTokens: 3000, outputTokens: 400 }],
+    expect(reserveProfileLlmBudget).toHaveBeenCalledTimes(NARRATIVE_ATTEMPTS);
+    expect(reserveProfileLlmBudget).toHaveBeenCalledWith({}, 0.044);
+    expect(recordProfileLlmCalls.mock.calls.map((c) => [c[1], c[2]])).toEqual([
+      [[{ model: "claude-sonnet-5", inputTokens: 3000, outputTokens: 400 }], "reserva-1"],
+      [[{ model: "claude-sonnet-5", inputTokens: 3000, outputTokens: 400 }], "reserva-2"],
     ]);
+    // Cada reserva la soltó su registro: no queda ninguna por soltar.
+    expect(releaseProfileLlmReservation).not.toHaveBeenCalled();
     expect(savePerfilComercial.mock.calls[0]![2]).toMatchObject({ source: "llm", model: "claude-sonnet-5" });
+  });
+
+  it("sin saldo (contando lo que el worker ya apartó) no llama al modelo: guarda la plantilla", async () => {
+    const perfil = buildPerfil(entradas());
+    computePerfil.mockResolvedValue(perfil);
+    reserveProfileLlmBudget.mockResolvedValue(null);
+    modelo = { model: "claude-sonnet-5", complete: vi.fn() };
+    expect((await recalcularPerfil()).ok).toBe(true);
+    expect(modelo.complete).not.toHaveBeenCalled();
+    expect(savePerfilComercial.mock.calls[0]![2]).toMatchObject({ source: "template", fallback: "budget" });
+  });
+
+  it("si el modelo falla, la reserva de ese intento se suelta", async () => {
+    computePerfil.mockResolvedValue(buildPerfil(entradas()));
+    modelo = { model: "claude-sonnet-5", complete: async () => { throw new Error("529"); } };
+    expect((await recalcularPerfil()).ok).toBe(true);
+    expect(recordProfileLlmCalls).not.toHaveBeenCalled();
+    expect(releaseProfileLlmReservation).toHaveBeenCalledWith({}, "reserva-1");
   });
 
   it("recalcular que falla lo dice sin tumbar la página", async () => {

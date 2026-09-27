@@ -174,7 +174,11 @@ export default async function CadenciasPage({
                     </Button>
                   ) : (
                     // Secundario: aquí hay hasta seis a la vez; el primario de la cadencia es «Activar», en su línea de tiempo.
-                    <ProponerBoton signalId={s.signalId} variant="secondary" />
+                    <ProponerBoton
+                      signalId={s.signalId}
+                      variant="secondary"
+                      bloqueo={s.allOptedOut ? t.senales.todasDeBaja : undefined}
+                    />
                   )}
                 </div>
               </li>

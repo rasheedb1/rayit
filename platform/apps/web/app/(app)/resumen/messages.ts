@@ -491,6 +491,8 @@ export const MESSAGES = {
     },
     error: {
       generico: "No se pudo importar. Vuelve a intentarlo y, si sigue igual, avísanos.",
+      /** Un 'viewer' o un 'client' ve Resumen, no importa (PUEDEN_IMPORTAR_METRICAS). */
+      sinPermiso: "Tu rol en este espacio puede ver las métricas, pero no importarlas. Pídeselo a quien es dueño, administra o es miembro del espacio.",
       sinCuenta: "Elige la cuenta a la que pertenece el archivo.",
       sinFilas: "No hay ninguna fila que se pueda importar.",
       sinMapeo: "Falta decir qué columna es la fecha de publicación o el identificador. Vuelve al paso 2.",

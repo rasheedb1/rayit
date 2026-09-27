@@ -75,6 +75,12 @@ describe("cadencias · lo que la pantalla decide sin base", () => {
     expect(textoDeNota({ code: "channel_down", channel: "linkedin" }, f, plantillas)).toMatch(/LinkedIn pide reconectar/);
   });
 
+  it("sin persona: «falta elegir» si hay a quién; si todas pidieron la baja, lo dice (pulido r3)", () => {
+    const plantillas = new Map<string, string>();
+    expect(textoDeNota({ code: "no_contact" }, f, plantillas)).toBe(MESSAGES.notas.noContact);
+    expect(textoDeNota({ code: "no_contact" }, f, plantillas, new Map(), null, true)).toBe(MESSAGES.notas.todasDeBaja);
+  });
+
   it("el ajuste a la política se dice con los nombres de los ángulos y la cifra del espacio", () => {
     const angulos = new Map([["prueba_social", "Prueba social"], ["concepto_creativo", "Concepto creativo"]]);
     expect(

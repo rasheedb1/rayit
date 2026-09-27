@@ -13,6 +13,7 @@ import { UUID_RE } from "@/lib/forms";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "../../messages";
 import { CAMPOS, type Campo, type Mapeo } from "./formatos";
+import { puedeImportar } from "./permiso";
 import {
   ErrorCsv,
   faltantesDelMapeo,
@@ -119,6 +120,8 @@ function mensajeDe(err: unknown): string {
 /** Valida, vuelve a leer el archivo y escribe. Nunca lanza. */
 export async function importarLote(entrada: unknown): Promise<ResultadoLote> {
   const t = MESSAGES.importar.error;
+  // Un 'viewer' o un 'client' ve Resumen, no le carga métricas.
+  if (!(await puedeImportar())) return { ok: false, error: t.sinPermiso };
   const parsed = esquema.safeParse(entrada);
   if (!parsed.success) return { ok: false, error: t.generico };
   const { texto, red, connectionId, handleNuevo, ordenFechas, fechaExportacion } = parsed.data;
