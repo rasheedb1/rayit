@@ -39,6 +39,8 @@ export const meta = {
     { title: 'Fase 6 · operación', detail: 'bandejas · métricas · cierre' },
     { title: 'Integración 6', detail: 'merge, CI y Vercel en modo monorepo' },
     { title: 'Revisión final', detail: 'producto integrado en bucle hasta el umbral' },
+    { title: 'Fase 8 · worker en Vercel', detail: 'worker por turnos + pg_cron' },
+    { title: 'Integración 8', detail: 'merge y CI, sin migrar' },
     { title: 'Pulido', detail: 'lo integrado que quedó bajo el umbral, sin migrar Supabase' },
   ],
 }
@@ -386,6 +388,22 @@ QUÉ CONSTRUYES: el brief de outbound y el cierre de deals.
 TERMINADO CUANDO: una señal de una categoría excluida no aparece en la bandeja (prueba); marcar un deal perdido exige motivo; la tasa entre etapas aparece con su número de deals y cuadra con deal_stage_history (prueba); typecheck, lint, test y build en verde.
 `,
   },
+  // ------------------------------------------------------------ Fase 8
+  tick: {
+    id: 'tick', historias: 'CIM-7 (worker en Vercel)', branch: 'rasheed/CIM-7-worker-por-turnos',
+    brief: `
+QUÉ CONSTRUYES: el worker de On Cue corriendo en Vercel, sin un proceso siempre encendido. Decisión de Rasheed (27-sep): «opción B» ahora —Vercel Hobby + pg_cron de Supabase que llama a una ruta cada minuto—; más adelante migrará a Vercel Pro con Vercel Cron («opción A»), así que el diseño debe servir para las dos cambiando solo QUIÉN llama.
+CONTEXTO REAL: apps/worker hoy es un proceso Node con el runner de pg-boss de Nicolás (apps/worker/src/runner, catálogo job_definition con cola, reintentos y cron) y los jobs de apps/worker/src/jobs (conexiones: oauth-refresh, collect-account-metrics; ventas: outbound.dispatch cada 2 min, outbound.replies, outbound.generate, outbound.review, outbound.intent, outbound.bounces, outbound.alerts, canales.keepalive, canales.release, seguimientos…). No corre en ningún sitio: hoy no sale ningún correo.
+LO QUE HAY QUE HACER:
+- Un modo «por turnos» del worker: una función \`runTick({ db, now, budgetMs, env })\` (en apps/worker, exportada para la web) que en cada llamada: (1) programa lo que el cron del catálogo diga que toca desde la última vuelta (idempotente: dos turnos a la vez o un turno repetido no duplican nada; usa un advisory lock o el mecanismo de singleton/cron de pg-boss), (2) procesa trabajos de la cola hasta agotar el presupuesto de tiempo (corta con holgura antes de budgetMs y deja lo no terminado en la cola, sin perderlo ni dejar zombis), y (3) devuelve un resumen (qué corrió, cuánto, qué quedó). Reutiliza los MISMOS handlers y el mismo SET ROLE mc_worker: nada de lógica duplicada. Si tocar apps/worker/src/runner (carpeta de Nicolás) es inevitable, hazlo mínimo y dilo en decisions. El modo proceso (\`pnpm --filter @mc/worker start\`) debe seguir funcionando igual.
+- Ruta apps/web/app/api/cron/tick/route.ts (runtime nodejs, export const maxDuration = 60 y budgetMs ~45 s): acepta POST (y GET para Vercel Cron) SOLO con \`Authorization: Bearer <CRON_SECRET>\` comparado en tiempo constante; sin él, 401 sin revelar nada. Sin trabajo pendiente, sale en milisegundos (Hobby cobra CPU activa: nada de esperas ociosas). Una línea de log con el resumen. Conecta a la base con la misma URL y rol que el worker; documenta qué variable es y cómo se pone en Vercel.
+- El disparador de la opción B: platform/db/ops/cron-tick.sql (NO es una migración: lo corre el dueño con supabase-admin porque pg_cron y pg_net piden superusuario) que crea las extensiones pg_cron y pg_net si faltan, guarda el secreto en Supabase Vault (vault.create_secret; nunca en claro en cron.job) y programa \`cron.schedule('on-cue-tick', '* * * * *', …)\` con net.http_post a APP_URL/api/cron/tick y el Bearer leído de vault.decrypted_secrets; idempotente (unschedule si ya existe). Más \`make cron.install\`, \`make cron.status\` y \`make cron.uninstall\` en platform/Makefile, vía ./scripts/supabase-admin.sh. Deja escrito en apps/worker/README.md cómo pasar a la opción A (vercel.json "crons" + make cron.uninstall).
+- CRON_SECRET: documéntalo en .env.example (openssl rand -hex 32). NO lo generes ni lo subas a Vercel: lo hace el integrador humano.
+- Pruebas sin red: runTick en pglite con un job falso y con outbound.dispatch sobre el seed de outreach: respeta el presupuesto, no duplica con dos turnos concurrentes, retoma lo que quedó; la ruta rechaza sin Bearer y con Bearer malo y devuelve el resumen con el bueno. El SQL de ops no se puede probar en pglite: comprueba al menos que no lleva secretos en claro.
+- Backlog: nota corta en CIM-7 con el estado y el pendiente humano (make cron.install, CRON_SECRET en Vercel y en el Vault de Supabase).
+TERMINADO CUANDO: un turno procesa lo vencido y termina a tiempo; la ruta está protegida; el SQL del cron es idempotente y sin secretos en claro; el modo proceso sigue igual; \`pnpm verificar\` y el build en verde.
+`,
+  },
 }
 
 // Conflicto conocido de la fase 1, con su resolución ya decidida.
@@ -408,6 +426,7 @@ const FASES_DEF = [
   { n: 4, titulo: 'Fase 4 · tubería de outreach', primero: ['esquema'], paralelo: ['canales', 'motor', 'entregabilidad'] },
   { n: 5, titulo: 'Fase 5 · inteligencia', primero: [], paralelo: ['perfil', 'generacion', 'recomendador'] },
   { n: 6, titulo: 'Fase 6 · operación', primero: [], paralelo: ['bandejas', 'metricas', 'cierre'] },
+  { n: 8, titulo: 'Fase 8 · worker en Vercel', primero: [], paralelo: ['tick'] },
 ]
 
 // ---------------------------------------------------------------------
