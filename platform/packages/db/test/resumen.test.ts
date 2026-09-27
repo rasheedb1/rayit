@@ -652,6 +652,76 @@ describe('Resumen · importación por CSV', () => {
     assert.equal(Number(ultima?.views), 1500);
   });
 
+  test('el mismo archivo subido dos veces hoy no escribe una segunda lectura idéntica', async () => {
+    // Sin fecha de exportación (hoy) el instante es now() al microsegundo,
+    // así que «nunca hacia atrás» no veía el duplicado: cada video recibía
+    // una segunda lectura exacta y la pantalla lo contaba como éxito.
+    const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'tiktok', handle: 'mismo.archivo.hoy' }));
+    const lote = [fila('hoy_1'), fila('hoy_2'), fila('hoy_3', { views: null, reach: null })];
+    const primera = await enLaura((tx) =>
+      importCsvReadings(tx, { connectionId: cuenta.connectionId, platform: 'tiktok', rows: lote }),
+    );
+    assert.equal(primera.readings, 3);
+    assert.equal(primera.knownPostsWithReading, 0);
+    assert.equal(primera.unchangedReadings, 0);
+
+    // El mismo archivo otra vez, y un video con una cifra distinta: ese sí
+    // trae algo nuevo del mismo día y se escribe.
+    const segunda = await enLaura((tx) =>
+      importCsvReadings(tx, {
+        connectionId: cuenta.connectionId,
+        platform: 'tiktok',
+        rows: [lote[0]!, lote[1]!, { ...lote[2]!, views: 50 }, fila('hoy_4')],
+      }),
+    );
+    assert.deepEqual(
+      {
+        newPosts: segunda.newPosts,
+        knownPosts: segunda.knownPosts,
+        knownPostsWithReading: segunda.knownPostsWithReading,
+        readings: segunda.readings,
+        staleReadings: segunda.staleReadings,
+        unchangedReadings: segunda.unchangedReadings,
+      },
+      { newPosts: 1, knownPosts: 3, knownPostsWithReading: 1, readings: 2, staleReadings: 0, unchangedReadings: 2 },
+    );
+    const [conteo] = await enLaura((tx) =>
+      tx.query<{ lecturas: number }>(
+        `SELECT count(*)::int AS lecturas FROM post_metric_snapshot s JOIN post p ON p.id = s.post_id
+          WHERE p.connection_id = $1`,
+        [cuenta.connectionId],
+      ).then((r) => r.rows),
+    );
+    assert.equal(conteo!.lecturas, 5);
+
+    // La previsualización recibe las cifras de la última lectura para
+    // avisar «Sin cambios» antes de escribir.
+    const conocidos = await enLaura((tx) => listKnownPosts(tx, cuenta.connectionId, ['hoy_1', 'hoy_3']));
+    const porId = new Map(conocidos.map((c) => [c.externalPostId, c.lastReading] as const));
+    assert.deepEqual(porId.get('hoy_1'), {
+      views: 1000, reach: 900, likes: 80, comments: 4, shares: 9, saves: 22, followsFromPost: 3, reachNonFollowers: 600,
+    });
+    assert.equal(porId.get('hoy_3')!.views, 50);
+  });
+
+  test('una lectura igual de OTRO día sí se escribe: la regla de «sin cambios» es por día de exportación', async () => {
+    const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'tiktok', handle: 'igual.otro.dia' }));
+    await enLaura((tx) =>
+      importCsvReadings(tx, {
+        connectionId: cuenta.connectionId,
+        platform: 'tiktok',
+        rows: [fila('od_1', { publishedAt: haceDias(10) })],
+        capturedAt: haceDias(3),
+      }),
+    );
+    const r = await enLaura((tx) =>
+      importCsvReadings(tx, { connectionId: cuenta.connectionId, platform: 'tiktok', rows: [fila('od_1', { publishedAt: haceDias(10) })] }),
+    );
+    assert.equal(r.readings, 1);
+    assert.equal(r.knownPostsWithReading, 1);
+    assert.equal(r.unchangedReadings, 0);
+  });
+
   test('un lote con el mismo video dos veces se rechaza entero y no escribe nada', async () => {
     const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'instagram', handle: 'repetidos' }));
     await assert.rejects(
