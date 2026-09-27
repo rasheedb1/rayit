@@ -380,6 +380,35 @@ async function senderAccounts(tx: WorkerSql, c: Candidate): Promise<SenderAccoun
   }));
 }
 
+/**
+ * Si la persona de un toque pidió la baja, con la misma definición que
+ * enforce_outbound_optout (0046 §4.1 y 0055 §8.3): la ficha dada de baja,
+ * su correo o la dirección del envío en la lista global, o cualquiera de
+ * los dos en la lista del workspace del toque. Aquí no hay RLS: el
+ * workspace es el del toque, explícito.
+ */
+const OPTED_OUT_SQL = (t: string) => `(
+  address_is_suppressed(${t}.recipient_address)
+  OR EXISTS (SELECT 1 FROM contact c WHERE c.id = ${t}.contact_id AND (c.opted_out OR address_is_suppressed(c.email)))
+  OR EXISTS (SELECT 1 FROM outbound_workspace_optout o
+              WHERE o.workspace_id = ${t}.workspace_id
+                AND (o.email = ${t}.recipient_address
+                     OR o.email = (SELECT c.email FROM contact c WHERE c.id = ${t}.contact_id))))`;
+
+/**
+ * Si un correo va a una dirección que rebotó, con la definición de
+ * outbound_touch_email_invalid (0055 §2): la ficha marcada email_invalid
+ * (si el toque va a ESA dirección), o un rebote duro verificado a esa
+ * dirección en el workspace del toque.
+ */
+const EMAIL_INVALID_SQL = (t: string) => `(${t}.channel = 'email' AND (
+  EXISTS (SELECT 1 FROM contact c WHERE c.id = ${t}.contact_id AND c.email_invalid
+           AND (${t}.recipient_address IS NULL OR ${t}.recipient_address = c.email))
+  OR EXISTS (SELECT 1 FROM outbound_bounce b
+              WHERE b.workspace_id = ${t}.workspace_id AND b.kind = 'hard' AND b.verified
+                AND b.recipient_address = coalesce(${t}.recipient_address,
+                                                   (SELECT c.email FROM contact c WHERE c.id = ${t}.contact_id)))))`;
+
 /** El reclamo del despachador (ver la cabecera). */
 export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promise<ClaimReport> {
   const now = opts.now;
@@ -412,14 +441,18 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     return rows.length;
   };
 
+  // Las tres fuentes de la baja de enforce_outbound_optout (0055 §8.3):
+  // la ficha, la lista global y la lista de ESTE workspace
+  // (outbound_workspace_optout), de cualquier canal. Sin la tercera, una
+  // ficha a la que se le cambió el correo por uno de la lista del espacio
+  // llegaba al UPDATE en lote de abajo, la base lo rechazaba y el reclamo
+  // entero abortaba en cada corrida, para todos los workspaces.
   report.canceledOptedOut = note(
     (await tx.query<{ enrollment_id: string | null }>(
       `UPDATE outbound_touch t
           SET status = 'canceled', blocked_reason = CASE WHEN t.contact_id IS NULL THEN 'no_contact' ELSE 'opted_out' END
         WHERE t.status = 'scheduled' AND ${DUE} AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
-          AND (t.contact_id IS NULL
-               OR address_is_suppressed(t.recipient_address)
-               OR EXISTS (SELECT 1 FROM contact c WHERE c.id = t.contact_id AND (c.opted_out OR address_is_suppressed(c.email))))
+          AND (t.contact_id IS NULL OR ${OPTED_OUT_SQL('t')})
         RETURNING t.id, t.enrollment_id`,
       [now.toISOString(), ws],
     )).rows,
@@ -429,12 +462,13 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   // (contact.email_invalid) no se reclama: la base impide programarlo
   // (0055 §2), pero no mira lo que ya estaba en la cola ni un reintento.
   // Solo si el toque va a ESA dirección: si va a otra, esa no rebotó.
+  // Tampoco a una dirección con un rebote duro verificado en el workspace
+  // del toque (la otra mitad de la regla de 0055 §2): la base también
+  // rechazaría ese reclamo.
   const emailInvalidRows = (await tx.query<{ enrollment_id: string | null }>(
       `UPDATE outbound_touch t
           SET status = 'canceled', blocked_reason = 'email_invalid'
-         FROM contact c
-        WHERE c.id = t.contact_id AND c.email_invalid AND t.channel = 'email'
-          AND (t.recipient_address IS NULL OR t.recipient_address = c.email)
+        WHERE ${EMAIL_INVALID_SQL('t')}
           AND t.status = 'scheduled' AND ${DUE} AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
         RETURNING t.id, t.enrollment_id`,
       [now.toISOString(), ws],
@@ -703,20 +737,7 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
   await advanceTouched();
   if (toClaim.length === 0) return report;
 
-  const claimed = (
-    await tx.query<{ id: string; workspace_id: string; contact_id: string; attempt_count: number; caps_reserved_on: string }>(
-      // caps_reserved_on se calcula como outbound_counter_bump_at, con el mismo
-      // reloj (0057 §3): es el día de la fila del contador que se sumó.
-      `UPDATE outbound_touch t
-          SET status = 'processing', claimed_at = $1::timestamptz, attempt_count = t.attempt_count + 1,
-              recipient_address = x.addr, channel_account_id = x.acct, send_started_at = NULL,
-              caps_reserved_on = outreach_local_date(t.workspace_id, $1::timestamptz)
-         FROM unnest($2::uuid[], $3::text[], $4::uuid[]) AS x(id, addr, acct)
-        WHERE t.id = x.id AND t.status = 'scheduled'
-        RETURNING t.id, t.workspace_id, t.contact_id, t.attempt_count, t.caps_reserved_on::text AS caps_reserved_on`,
-      [now.toISOString(), toClaim.map((x) => x.c.id), toClaim.map((x) => x.recipient), toClaim.map((x) => x.accountId)],
-    )
-  ).rows;
+  const claimed = await claimRows(tx, now, toClaim, report);
   const meta = new Map(toClaim.map((x) => [x.c.id, x]));
   for (const row of claimed) {
     const m = meta.get(row.id)!;
@@ -739,6 +760,95 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
     });
   }
   return report;
+}
+
+interface ClaimedRow { id: string; workspace_id: string; contact_id: string; attempt_count: number; caps_reserved_on: string }
+
+/** El UPDATE en lote scheduled → processing de claimDueTouches. */
+const CLAIM_SQL = `UPDATE outbound_touch t
+    SET status = 'processing', claimed_at = $1::timestamptz, attempt_count = t.attempt_count + 1,
+        recipient_address = x.addr, channel_account_id = x.acct, send_started_at = NULL,
+        caps_reserved_on = outreach_local_date(t.workspace_id, $1::timestamptz)
+   FROM unnest($2::uuid[], $3::text[], $4::uuid[]) AS x(id, addr, acct)
+  WHERE t.id = x.id AND t.status = 'scheduled'
+  RETURNING t.id, t.workspace_id, t.contact_id, t.attempt_count, t.caps_reserved_on::text AS caps_reserved_on`;
+
+const isCheckViolation = (e: unknown) => (e as { code?: unknown } | null)?.code === '23514';
+
+/**
+ * Reclama lo elegido (scheduled → processing). caps_reserved_on se
+ * calcula como outbound_counter_bump_at, con el mismo reloj (0057 §3): es
+ * el día de la fila del contador que se sumó.
+ *
+ * Primero en lote. Si la base rechaza el lote (check_violation: una
+ * baja o un rebote que llegó entre el descarte de arriba y este UPDATE,
+ * o una fuente que el descarte no mire), se vuelve al punto de guardado y
+ * se reclama fila por fila, cada una con el suyo: la que la base rechaza
+ * se cancela con su motivo (opted_out o email_invalid, con las mismas
+ * reglas que los disparadores) y devuelve la plaza que se le reservó. Un
+ * solo toque nunca aborta el reclamo de los demás, de ningún workspace.
+ * Lo que la base rechace por otra razón pasa a 'failed' con aviso
+ * ('claim_rejected'), en vez de quedarse en la cola para siempre.
+ */
+async function claimRows(
+  tx: WorkerSql,
+  now: Date,
+  toClaim: ReadonlyArray<{ c: Candidate; recipient: string; accountId: string }>,
+  report: ClaimReport,
+): Promise<ClaimedRow[]> {
+  const params = (xs: typeof toClaim) => [now.toISOString(), xs.map((x) => x.c.id), xs.map((x) => x.recipient), xs.map((x) => x.accountId)];
+  await tx.query('SAVEPOINT motor_claim');
+  try {
+    const rows = (await tx.query<ClaimedRow>(CLAIM_SQL, params(toClaim))).rows;
+    await tx.query('RELEASE SAVEPOINT motor_claim');
+    return rows;
+  } catch (e) {
+    await tx.query('ROLLBACK TO SAVEPOINT motor_claim');
+    await tx.query('RELEASE SAVEPOINT motor_claim');
+    if (!isCheckViolation(e)) throw e;
+  }
+  const claimed: ClaimedRow[] = [];
+  const ended = new Set<string>();
+  for (const x of toClaim) {
+    await tx.query('SAVEPOINT motor_claim_one');
+    try {
+      claimed.push(...(await tx.query<ClaimedRow>(CLAIM_SQL, params([x]))).rows);
+      await tx.query('RELEASE SAVEPOINT motor_claim_one');
+      continue;
+    } catch (e) {
+      await tx.query('ROLLBACK TO SAVEPOINT motor_claim_one');
+      await tx.query('RELEASE SAVEPOINT motor_claim_one');
+      if (!isCheckViolation(e)) throw e;
+    }
+    // La razón, con la dirección con la que se iba a reclamar.
+    const why = (
+      await tx.query<{ opted_out: boolean; email_invalid: boolean; reserved_on: string }>(
+        `SELECT ${OPTED_OUT_SQL('t')} AS opted_out, ${EMAIL_INVALID_SQL('t')} AS email_invalid,
+                outreach_local_date(t.workspace_id, $3::timestamptz)::text AS reserved_on
+           FROM (SELECT o.id, o.workspace_id, o.contact_id, o.channel, $2::citext AS recipient_address
+                   FROM outbound_touch o WHERE o.id = $1::uuid) t`,
+        [x.c.id, x.recipient, now.toISOString()],
+      )
+    ).rows[0];
+    const status = why?.opted_out || why?.email_invalid ? 'canceled' : 'failed';
+    const reason = why?.opted_out ? 'opted_out' : why?.email_invalid ? 'email_invalid' : 'claim_rejected';
+    const r = await tx.query<{ enrollment_id: string | null }>(
+      `UPDATE outbound_touch SET status = $2, blocked_reason = $3 WHERE id = $1::uuid AND status = 'scheduled' RETURNING enrollment_id`,
+      [x.c.id, status, reason],
+    );
+    if (r.rows.length === 0) continue;
+    if (reason === 'opted_out') report.canceledOptedOut++;
+    else if (reason === 'email_invalid') report.canceledEmailInvalid++;
+    else await notifyTouchFailed(tx, x.c.id, reason, now);
+    await releaseCaps(tx, {
+      workspaceId: x.c.workspaceId, accountId: x.accountId, channel: x.c.channel,
+      stepType: x.c.stepType, reservedOn: why?.reserved_on ?? null,
+    });
+    const e = r.rows[0]?.enrollment_id;
+    if (e) ended.add(e);
+  }
+  for (const e of ended) await advanceEnrollment(tx, e, now);
+  return claimed;
 }
 
 /**
@@ -811,9 +921,7 @@ export async function rescueZombies(tx: WorkerSql, now: Date, workspaceId?: stri
       `SELECT z.id, z.workspace_id, z.channel, z.channel_account_id, st.step_type, z.attempt_count, z.claimed_at,
               z.caps_reserved_on::text AS caps_reserved_on,
               z.send_started_at IS NOT NULL AS started,
-              (address_is_suppressed(z.recipient_address)
-               OR EXISTS (SELECT 1 FROM contact c WHERE c.id = z.contact_id AND (c.opted_out OR address_is_suppressed(c.email))))
-                AS opted_out
+              ${OPTED_OUT_SQL('z')} AS opted_out
          FROM outbound_touch z LEFT JOIN outbound_step st ON st.id = z.step_id
         WHERE z.status = 'processing'
           AND z.claimed_at < $1::timestamptz - make_interval(mins => $2::int)

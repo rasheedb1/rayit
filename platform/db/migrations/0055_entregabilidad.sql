@@ -43,6 +43,9 @@
 --      o la que marca una persona también entra en
 --      outbound_workspace_optout, y una ficha de baja no se borra desde
 --      la aplicación; si se borra por otra vía, su dirección se queda.
+--  11. Un correo nuevo que ya pidió la baja (pulido r3, §8.5): cambiarle
+--      a una ficha el correo por uno de la lista del espacio cancela lo
+--      que tenía en la cola allí y termina sus enrolamientos vivos.
 --
 -- Después de la última revisión, en su sitio: la vuelta desde 'processing' de
 -- alguien dado de baja (de este workspace o de toda la plataforma) se
@@ -1113,3 +1116,53 @@ CREATE TRIGGER contact_optout_no_delete
 -- ROW LEVEL SECURITY, quien migra no ve las fichas de ningún workspace.
 -- No hace falta: mc_app no las puede borrar (contact_optout_no_delete) y
 -- cualquier otro borrado pasa por contact_optout_keep.
+
+-- ---------------------------------------------------------------------
+-- 8.5 · Un correo nuevo que ya pidió la baja (pulido r3)
+-- ---------------------------------------------------------------------
+-- La lista del espacio vive en la dirección, no en la ficha. Si a una
+-- ficha con mensajes en la cola se le pone un correo que ya está en
+-- outbound_workspace_optout (el de otra ficha que se dio de baja y a la
+-- que después se le cambió el correo, por ejemplo), esos mensajes ya no
+-- pueden salir: enforce_outbound_optout (§8.3) rechaza su reclamo. Hasta
+-- aquí se quedaban en la cola, y el reclamo en lote del despachador
+-- chocaba con ellos. Ahora, al cambiar el correo:
+--
+--   · lo que la ficha tiene sin salir (draft, scheduled, held) en un
+--     workspace que tiene el correo nuevo en su lista se cancela con
+--     blocked_reason = 'opted_out', como hace public_optout;
+--   · sus enrolamientos vivos en ese workspace terminan en 'opted_out'.
+--
+-- Lo reclamado (processing) no se toca: el despachador lo resuelve con
+-- las transiciones de §8.3. Corre como quien edita: mc_app solo ve, y
+-- solo cancela, lo de su workspace (RLS); el worker, todo. El reclamo de
+-- VEN-10 mira además outbound_workspace_optout y, si algo se le escapa,
+-- reclama fila por fila (docs/ventas-outreach.md §5.2).
+CREATE FUNCTION contact_email_workspace_optout()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  UPDATE outbound_touch t
+     SET status = 'canceled', blocked_reason = 'opted_out'
+   WHERE t.contact_id = NEW.id
+     AND t.status IN ('draft', 'scheduled', 'held')
+     AND EXISTS (SELECT 1 FROM outbound_workspace_optout o
+                  WHERE o.workspace_id = t.workspace_id AND o.email = NEW.email);
+  UPDATE outbound_enrollment e
+     SET status = 'opted_out', finished_at = coalesce(e.finished_at, now())
+   WHERE e.contact_id = NEW.id
+     AND e.status IN ('active', 'paused', 'cooldown')
+     AND EXISTS (SELECT 1 FROM outbound_workspace_optout o
+                  WHERE o.workspace_id = e.workspace_id AND o.email = NEW.email);
+  RETURN NULL;
+END;
+$$;
+COMMENT ON FUNCTION contact_email_workspace_optout() IS
+  'Disparador AFTER UPDATE OF email de contact: si el correo nuevo está en outbound_workspace_optout de un workspace, '
+  'cancela lo que la ficha tiene sin salir allí y termina sus enrolamientos vivos (entregabilidad §8.5).';
+CREATE TRIGGER contact_email_workspace_optout
+  AFTER UPDATE OF email ON contact
+  FOR EACH ROW WHEN (NEW.email IS NOT NULL AND NEW.email IS DISTINCT FROM OLD.email)
+  EXECUTE FUNCTION contact_email_workspace_optout();
