@@ -4,8 +4,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { NARRATIVE_MAX_CHARS, writeNarrative } from "@mc/core/outreach/narrativa";
 import {
-  claimPerfilRecalc, computePerfil, getPrimaryCreator, llmBudgetExhausted, PerfilComercialError, recordProfileLlmCalls,
-  releasePerfilRecalc, saveNarrativeEdit, savePerfilComercial,
+  claimPerfilRecalc, computePerfil, estimateProfileCallUsd, getPrimaryCreator, PerfilComercialError, recordProfileLlmCalls,
+  releasePerfilRecalc, releaseProfileLlmReservation, reserveProfileLlmBudget, saveNarrativeEdit, savePerfilComercial,
 } from "@mc/db/queries/perfil-comercial";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { narrativeModelFromEnv } from "@/lib/llm/narrativa";
@@ -36,9 +36,13 @@ import { describirProblemas } from "./problemas";
  *      la plantilla si no (red, SIN transacción abierta: una transacción
  *      que espera a una API retiene una conexión del pooler). Cada
  *      llamada se registra en outbound_llm_call apenas responde (su
- *      propia transacción), y el tope se vuelve a consultar antes de
- *      cada intento: si la acción se corta después, lo pagado ya está en
- *      la bitácora y el tope lo ve;
+ *      propia transacción). Antes de cada intento se APARTA su costo
+ *      estimado del tope diario (reserveProfileLlmBudget, el mismo
+ *      candado por espacio y la misma cuenta que el worker: tope −
+ *      gastado − reservas abiertas); sin saldo, la plantilla. Registrar
+ *      la llamada suelta su reserva en la misma transacción, y una que no
+ *      se usó (el modelo falló) se suelta al final. Si la acción se corta
+ *      después, lo pagado ya está en la bitácora y el tope lo ve;
  *   3. guardar y soltar la marca (otra transacción). Si mientras tanto
  *      alguien guardó una edición de la narrativa, no se pisa
  *      (stale_edit): la confirmación de «Recalcular» se pidió antes.
@@ -66,6 +70,8 @@ async function formateador(): Promise<Formatter> {
 export async function recalcularPerfil(): Promise<ResultadoAccion> {
   if (!(await puedeEditarElPerfil())) return { ok: false, message: t.sinPermiso, detalles: [] };
   let marca: { creatorId: string; token: string } | null = null;
+  // La reserva del intento en curso: la suelta registrar la llamada, o el finally si no se usó.
+  let reserva: string | null = null;
   try {
     const leido = await withWorkspace(async (tx) => {
       const creador = await getPrimaryCreator(tx);
@@ -77,14 +83,25 @@ export async function recalcularPerfil(): Promise<ResultadoAccion> {
     marca = { creatorId: leido.creatorId, token: leido.claim.token };
 
     const f = await formateador();
+    const modelo = narrativeModelFromEnv();
+    const estimado = modelo ? estimateProfileCallUsd(modelo.model) : 0;
     const narrativa = await writeNarrative(leido.perfil, {
-      model: narrativeModelFromEnv(),
+      model: modelo,
       formatClaim: (c) => formatClaim(c, f),
       locale: f.locale,
-      // Antes de cada intento: el primero pudo haber llevado el gasto del día al tope.
-      budgetExhausted: () => withWorkspace((tx) => llmBudgetExhausted(tx)),
-      // Apenas responde, antes de verificarla: lo pagado queda en la bitácora aunque la acción se corte.
-      onCall: (uso) => withWorkspace((tx) => recordProfileLlmCalls(tx, [uso])),
+      // Antes de cada intento se aparta su costo: sin saldo (contando lo que
+      // el worker ya apartó), no se llama al modelo.
+      budgetExhausted: async () => {
+        reserva = await withWorkspace((tx) => reserveProfileLlmBudget(tx, estimado));
+        return reserva === null;
+      },
+      // Apenas responde, antes de verificarla: lo pagado queda en la bitácora
+      // aunque la acción se corte, y lo apartado se suelta con ella.
+      onCall: (uso) => {
+        const id = reserva;
+        reserva = null;
+        return withWorkspace((tx) => recordProfileLlmCalls(tx, [uso], id));
+      },
     });
     const token = marca.token;
     await withWorkspace((tx) =>
@@ -102,6 +119,12 @@ export async function recalcularPerfil(): Promise<ResultadoAccion> {
     console.error("[ventas/perfil] recalcular", error);
     return { ok: false, message: t.recalcular.error, detalles: [] };
   } finally {
+    const sobra = reserva;
+    if (sobra) {
+      await withWorkspace((tx) => releaseProfileLlmReservation(tx, sobra)).catch((e: unknown) =>
+        console.error("[ventas/perfil] soltar la reserva del modelo", e),
+      );
+    }
     const suelta = marca;
     if (suelta) {
       await withWorkspace((tx) => releasePerfilRecalc(tx, suelta.creatorId, suelta.token)).catch((e: unknown) =>

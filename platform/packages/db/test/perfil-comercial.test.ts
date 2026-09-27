@@ -16,8 +16,10 @@ import type { WorkspaceTx } from '../src/client.ts';
 import {
   claimPerfilRecalc, computePerfil, getPerfilComercial, getPrimaryCreator, llmBudgetExhausted, PERFIL_RECALCULO_KEY,
   PERFIL_MAX_POSTS, PERFIL_RECALCULO_TTL_S, PerfilComercialError, readPerfilDataAsOf, readPerfilInputs, readPostCovers,
-  recordProfileLlmCalls, releasePerfilRecalc, saveNarrativeEdit, savePerfilComercial,
+  recordProfileLlmCalls, releasePerfilRecalc, releaseProfileLlmReservation, reserveProfileLlmBudget, saveNarrativeEdit,
+  savePerfilComercial,
 } from '../src/queries/perfil-comercial.ts';
+import { outboundHealth } from '../src/queries/outreach.ts';
 import { CAMPAIGN_CAFE_ALMA, POST_D01_REEL_CAFE_ALMA, WORKSPACE_LAURA, openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 const CREADORA_LAURA = '00000002-0000-4000-8000-000000000003';
@@ -243,6 +245,37 @@ test('cada llamada al modelo deja su fila en outbound_llm_call con propósito pr
     { model: 'claude-sonnet-5', input_tokens: 3100, cost: '0.010000' },
   ]);
   assert.equal(await laura((tx) => llmBudgetExhausted(tx)), false);
+});
+
+test('«Recalcular» aparta su costo como el worker: cuenta las reservas abiertas y suelta la suya al registrar', async () => {
+  const { llm } = await laura((tx) => outboundHealth(tx, 24));
+  const libre = llm.dailyCap - llm.spentToday;
+  assert.ok(libre > 0.05, 'la prueba necesita saldo');
+  // El worker ya apartó casi todo: queda un centavo.
+  const WORKER = '0000000f-0000-4000-8000-00000000a001';
+  await t.admin(`INSERT INTO outbound_llm_reservation (id, workspace_id, purpose, amount)
+                 VALUES ('${WORKER}', '${WORKSPACE_LAURA}', 'generate', ${(libre - 0.01).toFixed(6)})`);
+  try {
+    assert.equal(await laura((tx) => reserveProfileLlmBudget(tx, 0.044)), null, 'con un centavo no se llama al modelo');
+    assert.equal(await laura((tx) => llmBudgetExhausted(tx)), false, 'un centavo todavía no es el tope');
+    // La web no suelta las del worker: solo las suyas (purpose profile).
+    await laura((tx) => releaseProfileLlmReservation(tx, WORKER));
+    const siguen = await laura(async (tx) => (await tx.query(`SELECT 1 FROM outbound_llm_reservation WHERE id = $1`, [WORKER])).rows.length);
+    assert.equal(siguen, 1);
+    // Y no escribe la tabla a mano.
+    await assert.rejects(laura((tx) => tx.query(
+      `INSERT INTO outbound_llm_reservation (workspace_id, purpose, amount) VALUES (current_workspace_id(), 'profile', 0)`)));
+  } finally {
+    await t.admin(`DELETE FROM outbound_llm_reservation WHERE id = '${WORKER}'`);
+  }
+  const id = await laura((tx) => reserveProfileLlmBudget(tx, 0.044));
+  assert.ok(id, 'con saldo aparta');
+  const fila = await laura(async (tx) =>
+    (await tx.query<{ purpose: string; amount: string }>(`SELECT purpose, amount::text AS amount FROM outbound_llm_reservation WHERE id = $1`, [id])).rows[0]);
+  assert.deepEqual({ ...fila }, { purpose: 'profile', amount: '0.044000' });
+  await laura((tx) => recordProfileLlmCalls(tx, [{ model: 'claude-sonnet-5', inputTokens: 10, outputTokens: 10 }], id));
+  const quedan = await laura(async (tx) => (await tx.query(`SELECT 1 FROM outbound_llm_reservation WHERE id = $1`, [id])).rows.length);
+  assert.equal(quedan, 0, 'registrar la llamada suelta su reserva');
 });
 
 test('la edición a mano pasa el mismo verificador y no pisa una versión más nueva', async () => {

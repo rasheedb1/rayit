@@ -24,13 +24,14 @@
 import type { Decimal, PlatformId } from '@mc/core';
 import { buildPerfil, CONNECTED_STATUSES, coverSrcOrNull, OUTLIER_TIERS, type OutlierTier, type PerfilInputs, type PerfilPostInput } from '@mc/core/outreach/perfil';
 import { llmCostUsd, type LlmUsage } from '@mc/core/outreach/llm-precios';
-import { verifyNarrative, type NarrativeIssue, type NarrativeOutcome } from '@mc/core/outreach/narrativa';
+import { NARRATIVE_MAX_TOKENS, verifyNarrative, type NarrativeIssue, type NarrativeOutcome } from '@mc/core/outreach/narrativa';
 import {
   parseStoredPerfil, PERFIL_MEDIA_KIT_KEY, type StoredPerfil,
 } from '@mc/core/outreach/perfil-guardado';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import { CORTE_TARIFARIO_HORAS, getCurrentRateCard } from './cotizar/tarifario.ts';
 import { outboundHealth } from './outreach.ts';
+import { LLM_RESERVATION_TTL_MIN } from './outreach/generation.ts';
 
 export { getPrimaryCreator } from './cotizar/tarifario.ts';
 
@@ -557,9 +558,16 @@ export async function savePerfilComercial(
 /**
  * Una fila de outbound_llm_call por llamada, con propósito 'profile'
  * (0065) y su costo en USD. También las que el verificador rechazó: se
- * pagaron, y el tope diario (outbound_health) tiene que verlas.
+ * pagaron, y el tope diario (outbound_health) tiene que verlas. Con
+ * `reservationId`, suelta en la MISMA transacción la reserva que la
+ * llamada apartó (reserveProfileLlmBudget): lo apartado pasa a gastado
+ * sin contarse dos veces ni ninguna, como en el worker.
  */
-export async function recordProfileLlmCalls(tx: WorkspaceTx, calls: readonly LlmUsage[]): Promise<void> {
+export async function recordProfileLlmCalls(
+  tx: WorkspaceTx,
+  calls: readonly LlmUsage[],
+  reservationId?: string | null,
+): Promise<void> {
   for (const c of calls) {
     await tx.query(
       `INSERT INTO outbound_llm_call (workspace_id, purpose, model, input_tokens, output_tokens, cost, cost_currency)
@@ -567,6 +575,59 @@ export async function recordProfileLlmCalls(tx: WorkspaceTx, calls: readonly Llm
       [c.model, c.inputTokens, c.outputTokens, llmCostUsd(c)],
     );
   }
+  if (reservationId) await releaseProfileLlmReservation(tx, reservationId);
+}
+
+/**
+ * Lo que se aparta antes de una llamada de «Recalcular»: la entrada de un
+ * perfil típico (unos seis mil caracteres, un token cada tres) y la
+ * salida al tope de la narrativa (NARRATIVE_MAX_TOKENS). Por arriba, a
+ * propósito: una reserva corta deja pasar el tope; una larga, no.
+ */
+export function estimateProfileCallUsd(model: string): number {
+  return Number(llmCostUsd({ model, inputTokens: 2_000, outputTokens: NARRATIVE_MAX_TOKENS }));
+}
+
+/** El candado del presupuesto del modelo de un espacio: el MISMO que reserveLlmBudget del worker. */
+const BUDGET_LOCK_SQL = `SELECT pg_advisory_xact_lock(hashtextextended('outbound_llm_budget:' || current_workspace_id()::text, 0))`;
+
+/** Lo que le queda hoy al workspace: tope − gastado hoy − reservas abiertas (las del worker y las de la web). */
+async function llmBudgetLeft(tx: WorkspaceTx): Promise<number> {
+  const { llm } = await outboundHealth(tx, 24);
+  const { rows } = await tx.query<{ reserved: string | null }>(
+    `SELECT coalesce(sum(amount), 0)::text AS reserved FROM outbound_llm_reservation
+      WHERE workspace_id = current_workspace_id() AND created_at > now() - make_interval(mins => $1::int)`,
+    [LLM_RESERVATION_TTL_MIN],
+  );
+  const left = llm.dailyCap - llm.spentToday - Number(rows[0]?.reserved ?? 0);
+  return Number.isFinite(left) ? left : 0;
+}
+
+/**
+ * Aparta del tope diario lo que va a costar una llamada de «Recalcular»,
+ * si alcanza, igual que el worker (reserveLlmBudget, 0075): con el mismo
+ * candado por espacio, la comprobación y la reserva son una sola cosa y
+ * generate, review y «Recalcular» a la vez ya no pasan los tres con el
+ * mismo saldo. Devuelve el id de la reserva, o null si no alcanza (y
+ * entonces no se llama al modelo). El candado dura esta transacción,
+ * nunca lo que tarda el modelo; la reserva que nadie suelta vence sola.
+ */
+export async function reserveProfileLlmBudget(tx: WorkspaceTx, estimateUsd: number): Promise<string | null> {
+  await tx.query(BUDGET_LOCK_SQL);
+  const left = await llmBudgetLeft(tx);
+  const estimate = Math.max(0, estimateUsd);
+  if (!(left > 0) || left < estimate) return null;
+  const { rows } = await tx.query<{ id: string }>(
+    'SELECT outbound_llm_reserve_profile($1::numeric) AS id',
+    [estimate.toFixed(6)],
+  );
+  return rows[0]?.id ?? null;
+}
+
+/** Suelta una reserva de «Recalcular»: la llamada se registró, o no se hizo. */
+export async function releaseProfileLlmReservation(tx: WorkspaceTx, reservationId: string): Promise<void> {
+  if (!isUuid(reservationId)) return;
+  await tx.query('SELECT outbound_llm_release_profile($1::uuid)', [reservationId]);
 }
 
 /**
@@ -637,8 +698,12 @@ export async function readPerfilDataAsOf(tx: WorkspaceTx, creatorId: string): Pr
   return at === null ? null : (at instanceof Date ? at : new Date(at)).toISOString();
 }
 
-/** Si el gasto del día en el modelo ya llegó al tope del workspace (outbound_health, llm_daily_cap_usd). */
+/**
+ * Si al workspace ya no le queda tope del modelo hoy (outbound_health,
+ * llm_daily_cap_usd), descontando lo que las llamadas en curso ya
+ * apartaron (outbound_llm_reservation). Solo para decirlo en la pantalla:
+ * antes de llamar, «Recalcular» aparta con reserveProfileLlmBudget.
+ */
 export async function llmBudgetExhausted(tx: WorkspaceTx): Promise<boolean> {
-  const { llm } = await outboundHealth(tx, 24);
-  return llm.spentToday >= llm.dailyCap;
+  return (await llmBudgetLeft(tx)) <= 0;
 }
