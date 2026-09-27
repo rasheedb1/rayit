@@ -140,6 +140,16 @@ export function Narrativa({
   const fichas = useMemo(() => fichasDe(cifras), [cifras]);
   /** Lo escrito en el editor con sus marcas [claim:id]: lo que se verifica y se guarda. */
   const conMarcas = aMarcas(borrador, fichas);
+  // Cuando llega por props otra narrativa (un «Recalcular», otra pestaña)
+  // que no es ninguna de las del aviso, el aviso se borra EN ESTE RENDER
+  // (el patrón de React para ajustar estado cuando cambian los props), sin
+  // depender de en qué orden terminen la transición del guardado y el
+  // rerender de la página.
+  const [vista, setVista] = useState(escritaEl);
+  if (vista !== escritaEl) {
+    setVista(escritaEl);
+    if (estado && !estado.vale.includes(escritaEl)) setEstado(null);
+  }
   const avisoGuardado = estado && estado.vale.includes(escritaEl) ? estado.texto : null;
 
   function insertar() {

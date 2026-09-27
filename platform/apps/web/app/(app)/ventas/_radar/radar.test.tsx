@@ -20,6 +20,15 @@ import { Radar, type SignalCardData } from "./radar";
 
 const PAISES = countryOptions("es-CO");
 
+/**
+ * Lo que tarda una acción mockeada más su transición de React con la
+ * máquina cargada (`pnpm verificar` en paralelo con otros agentes): los
+ * 5 s de vitest.setup.ts se agotaron alguna vez sin que nada estuviera
+ * mal. 15 s sigue por debajo del testTimeout (20 s): una espera que
+ * nunca se cumple sigue fallando.
+ */
+const LENTO = { timeout: 15_000 };
+
 const SIGNAL = "00000005-0000-4000-8000-000000000001";
 const card: SignalCardData = {
   id: SIGNAL,
@@ -58,7 +67,7 @@ describe("Radar", () => {
     fireEvent.change(screen.getByLabelText(/Qué viste/), { target: { value: "Lanzó cold brew" } });
     fireEvent.click(screen.getByRole("button", { name: MESSAGES.radar.form.submit }));
 
-    const alerta = await screen.findByRole("alert");
+    const alerta = await screen.findByRole("alert", undefined, LENTO);
     expect(alerta).toHaveTextContent("ya la aceptaste");
     expect(alerta).not.toHaveTextContent(/descart/i);
     expect(screen.getByRole("link", { name: MESSAGES.radar.form.seeCompany })).toHaveAttribute("href", empresa);
@@ -103,7 +112,7 @@ describe("Radar", () => {
     render(<Radar cards={[card]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Aceptar: Café Alma" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("Enviar pitch");
+    expect(await screen.findByRole("status", undefined, LENTO)).toHaveTextContent("Enviar pitch");
     expect(screen.getByRole("link", { name: "Ver en el pipeline" })).toHaveAttribute("href", "/ventas?vista=pipeline");
     const data = aceptarSenal.mock.calls[0]?.[1] as FormData;
     expect(data.get("signalId")).toBe(SIGNAL);
@@ -119,7 +128,7 @@ describe("Radar", () => {
     render(<Radar cards={[card]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Aceptar: Café Alma" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("Ya tienes un negocio con Café Alma");
+    expect(await screen.findByRole("status", undefined, LENTO)).toHaveTextContent("Ya tienes un negocio con Café Alma");
     expect(screen.getByRole("link", { name: "Ver el negocio" })).toHaveAttribute("href", empresa);
     expect(screen.queryByRole("link", { name: "Ver en el pipeline" })).not.toBeInTheDocument();
   });
@@ -132,12 +141,12 @@ describe("Radar", () => {
     render(<Radar cards={[{ ...card, companyName: "Molino Andino" }]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Aceptar: Molino Andino" }));
 
-    const pregunta = await screen.findByRole("group", { name: MESSAGES.radar.sameBrand.question("Molino Andino") });
+    const pregunta = await screen.findByRole("group", { name: MESSAGES.radar.sameBrand.question("Molino Andino") }, LENTO);
     expect(within(pregunta).getByRole("link", { name: MESSAGES.radar.sameBrand.see })).toHaveAttribute("href", `/ventas/empresas/${FICHA}`);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     fireEvent.click(within(pregunta).getByRole("button", { name: MESSAGES.radar.sameBrand.same }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("Ya tienes un negocio con Molino Andino");
+    expect(await screen.findByRole("status", undefined, LENTO)).toHaveTextContent("Ya tienes un negocio con Molino Andino");
     const data = aceptarSenal.mock.calls[1]?.[1] as FormData;
     expect(data.get("useCompanyId")).toBe(FICHA);
     expect(data.get("createAnyway")).toBeNull();
@@ -149,9 +158,9 @@ describe("Radar", () => {
       .mockResolvedValueOnce({ ok: true, notice: "Abriste un negocio con Molino Andino." });
     render(<Radar cards={[{ ...card, companyName: "Molino Andino" }]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Aceptar: Molino Andino" }));
-    fireEvent.click(await screen.findByRole("button", { name: MESSAGES.radar.sameBrand.other }));
+    fireEvent.click(await screen.findByRole("button", { name: MESSAGES.radar.sameBrand.other }, LENTO));
 
-    await screen.findByRole("status");
+    await screen.findByRole("status", undefined, LENTO);
     const data = aceptarSenal.mock.calls[1]?.[1] as FormData;
     expect(data.get("createAnyway")).toBe("Molino Andino");
     expect(data.get("useCompanyId")).toBeNull();
@@ -163,7 +172,7 @@ describe("Radar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Descartar: Café Alma" }));
     fireEvent.click(screen.getByRole("button", { name: "Descartar señal" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Di por qué la descartas");
+    expect(await screen.findByRole("alert", undefined, LENTO)).toHaveTextContent("Di por qué la descartas");
     expect(screen.getByRole("textbox", { name: /¿Por qué la descartas\?/ })).toHaveAttribute("aria-invalid", "true");
   });
 
@@ -174,7 +183,7 @@ describe("Radar", () => {
     fireEvent.change(screen.getByRole("textbox", { name: /¿Por qué la descartas\?/ }), { target: { value: "No encaja con mi nicho" } });
     fireEvent.click(screen.getByRole("button", { name: "Descartar señal" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("No volverá");
+    expect(await screen.findByRole("status", undefined, LENTO)).toHaveTextContent("No volverá");
     const data = descartarSenal.mock.calls[0]?.[1] as FormData;
     expect(data.get("reason")).toBe("No encaja con mi nicho");
     expect(data.get("signalId")).toBe(SIGNAL);
@@ -184,7 +193,7 @@ describe("Radar", () => {
     aceptarSenal.mockResolvedValue({ message: "Esa señal ya la revisaste. Recarga el radar para ver cómo quedó." });
     render(<Radar cards={[card]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Aceptar: Café Alma" }));
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("ya la revisaste"));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("ya la revisaste"), LENTO);
   });
 
   it("el país de «Anotar una marca» se elige de la lista, no se escribe (pulido r6)", () => {
@@ -210,7 +219,7 @@ describe("Radar", () => {
     expect(dialogo).toHaveTextContent("Tu brief no acepta «harinas». Si la aceptas, el negocio se abre");
     expect(aceptarSenal).not.toHaveBeenCalled();
     fireEvent.click(within(dialogo).getByRole("button", { name: MESSAGES.radar.hidden.acceptConfirm }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Negocio abierto.");
+    expect(await screen.findByRole("status", undefined, LENTO)).toHaveTextContent("Negocio abierto.");
     expect(aceptarSenal).toHaveBeenCalledTimes(1);
   });
 
