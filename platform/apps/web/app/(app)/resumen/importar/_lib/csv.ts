@@ -1,5 +1,5 @@
 import Papa from "papaparse";
-import type { CsvMediaType, CsvReading } from "@mc/db/queries/resumen";
+import type { CsvMediaType, CsvReading, CsvReadingFigures } from "@mc/db/queries/resumen";
 import {
   ALIAS_DIA_INFORME,
   CAMPOS_METRICA,
@@ -440,6 +440,7 @@ export type ProblemaCodigo =
   | "repetidaEnArchivo"
   | "yaImportado"
   | "sinNovedad"
+  | "sinCambios"
   | "casiVacia";
 
 export interface Problema {
@@ -491,8 +492,15 @@ export interface Revision {
    */
   sinNovedad: number;
   /**
+   * Las que ya están y cuya última lectura es del MISMO día de
+   * exportación con exactamente las mismas cifras (`sinCambios`): subir
+   * dos veces el mismo archivo con la fecha de hoy. Se envían, pero la
+   * base no las guardará (las cuenta en `unchangedReadings`).
+   */
+  sinCambios: number;
+  /**
    * Las filas que SÍ van a escribir algo: las listas menos las
-   * `sinNovedad`. Es lo que resume el paso 3 y lo que decide si hay algo
+   * `sinNovedad` y las `sinCambios`. Es lo que resume el paso 3 y lo que decide si hay algo
    * que importar: al subir el mismo archivo dos veces, las tres filas
    * están «listas» pero ninguna trae nada nuevo, y el botón no puede
    * prometer una importación que la base va a descartar entera.
@@ -520,11 +528,17 @@ export interface OpcionesRevision {
    */
   ordenFechas?: OrdenFecha;
   /**
-   * Los videos que ya existen en la cuenta de destino: id → instante ISO
-   * de su última lectura (null si aún no tiene ninguna). La fila se
-   * envía igual; lo que cambia es el aviso.
+   * Los videos que ya existen en la cuenta de destino: id → su última
+   * lectura (instante ISO y cifras; null si aún no tiene ninguna). La
+   * fila se envía igual; lo que cambia es el aviso.
    */
-  yaConocidos?: ReadonlyMap<string, string | null>;
+  yaConocidos?: ReadonlyMap<string, LecturaConocida>;
+  /**
+   * El día de la exportación, 'YYYY-MM-DD' en `timeZone`. Con él, una
+   * fila cuyo video ya tiene una lectura de ese mismo día con las mismas
+   * cifras se marca `sinCambios`: la misma regla que importCsvReadings.
+   */
+  diaExportacion?: string;
   /**
    * El instante (ms) con el que se guardará esta importación: la fecha
    * de exportación del paso 2 (ver instanteDeCaptura). Un video que ya
@@ -534,6 +548,43 @@ export interface OpcionesRevision {
    * hecho que la lectura es nueva.
    */
   instanteCaptura?: number;
+}
+
+/** La última lectura de un video que ya está en la cuenta de destino. */
+export interface LecturaConocida {
+  /** ISO en UTC, o null si el video aún no tiene ninguna lectura. */
+  ultima: string | null;
+  cifras: CsvReadingFigures | null;
+}
+
+/** Las cifras que se comparan para decidir si una lectura repite la anterior. */
+const CIFRAS_COMPARADAS = [
+  "views",
+  "reach",
+  "likes",
+  "comments",
+  "shares",
+  "saves",
+  "followsFromPost",
+  "reachNonFollowers",
+] as const satisfies readonly (keyof CsvReadingFigures)[];
+
+/**
+ * ¿Repite esta lectura la última guardada del video? Solo si la última es
+ * del MISMO día de exportación (en la zona del workspace) y trae
+ * exactamente las mismas cifras, contando «sin dato» como un valor más.
+ * Es la regla que aplica importCsvReadings en la base (unchangedReadings).
+ */
+export function repiteLectura(
+  lectura: CsvReading,
+  conocida: LecturaConocida | undefined,
+  diaExportacion: string | undefined,
+  timeZone: string,
+): boolean {
+  if (!conocida?.ultima || !conocida.cifras || !diaExportacion) return false;
+  if (diaEnZona(conocida.ultima, timeZone) !== diaExportacion) return false;
+  const cifras = conocida.cifras;
+  return CIFRAS_COMPARADAS.every((c) => lectura[c] === cifras[c]);
 }
 
 /** Campos obligatorios que faltan en el mapeo. Vacío = se puede importar. */
@@ -585,6 +636,7 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
   let filasTotales = 0;
   let yaEstaban = 0;
   let sinNovedad = 0;
+  let sinCambios = 0;
   const analisis = analizarFechas(celdasDeFecha(tabla, mapeo));
   const ordenFechas = analisis.orden ?? opts.ordenFechas ?? ordenPorLocale(opts.locale);
 
@@ -685,11 +737,17 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
       }
       vistos.add(lectura.externalPostId);
       if (opts.yaConocidos?.has(lectura.externalPostId)) {
-        const ultima = opts.yaConocidos.get(lectura.externalPostId);
-        // La misma regla que la base (captured_at >= el de esta importación).
+        const conocida = opts.yaConocidos.get(lectura.externalPostId);
+        const ultima = conocida?.ultima;
+        // Las mismas reglas que la base, en el mismo orden: primero
+        // «nunca hacia atrás» (captured_at >= el de esta importación) y
+        // después «la misma lectura del mismo día».
         if (ultima && opts.instanteCaptura !== undefined && Date.parse(ultima) >= opts.instanteCaptura) {
           sinNovedad++;
           aviso(null, "sinNovedad");
+        } else if (repiteLectura(lectura, conocida, opts.diaExportacion, opts.timeZone)) {
+          sinCambios++;
+          aviso(null, "sinCambios");
         } else {
           yaEstaban++;
           aviso(null, "yaImportado");
@@ -744,7 +802,8 @@ export function revisar(tabla: Tabla, mapeo: Mapeo, opts: OpcionesRevision): Rev
     filasTotales,
     yaEstaban,
     sinNovedad,
-    conNovedad: escribibles.length - sinNovedad,
+    sinCambios,
+    conNovedad: escribibles.length - sinNovedad - sinCambios,
     ordenFechas,
     ordenAlternativo,
   };

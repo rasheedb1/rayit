@@ -61,7 +61,12 @@ export const MESSAGES = {
       label: "Alcance en no seguidores",
     },
     savesPer1k: {
-      label: "Guardados por 1 000 visualizaciones",
+      /**
+       * `mil` es 1000 formateado con el locale del workspace (formatInt):
+       * escrito a mano, el separador no cambiaba con el idioma y no se
+       * parecía al del resto de cifras de la app («2.000» en es-CO).
+       */
+      label: (mil: string) => `Guardados por ${mil} visualizaciones`,
     },
     /** Lo que se lee al pulsar (i). Frases completas, en palabras de creador. */
     info: {
@@ -226,7 +231,11 @@ export const MESSAGES = {
   },
   loading: {
     label: "Cargando tu resumen",
-    kpis: ["Seguidores en total", "Visualizaciones", "Alcance en no seguidores", "Guardados por 1 000"],
+    /**
+     * El esqueleto se pinta antes de saber el workspace, así que no lleva
+     * cifras que dependan del locale: «por mil» en palabras.
+     */
+    kpis: ["Seguidores en total", "Visualizaciones", "Alcance en no seguidores", "Guardados por mil"],
     graficos: ["Seguidores por red", "Visualizaciones por semana"],
     frescura: "Cargando hasta cuándo llegan los datos",
   },
@@ -379,6 +388,7 @@ export const MESSAGES = {
       repetidaEnArchivo: () => "Repetida en este mismo archivo: se queda la primera.",
       yaImportado: () => "Este video ya está: se añade una lectura nueva, no se reemplaza nada.",
       sinNovedad: () => "Este video ya tiene una lectura de esta fecha o posterior: esta no se guardará.",
+      sinCambios: () => "Este video ya tiene esta misma lectura, con las mismas cifras y del mismo día: no se repetirá.",
       casiVacia: () => "Sin visualizaciones ni alcance: la lectura entra casi vacía.",
     } satisfies Record<ProblemaCodigo, (p: { valor?: string; campo?: string }) => string>,
     revisar: {
@@ -416,6 +426,7 @@ export const MESSAGES = {
         repetidaEnArchivo: "Repetida",
         yaImportado: "Ya estaba",
         sinNovedad: "Nada nuevo",
+        sinCambios: "Sin cambios",
         casiVacia: "Casi vacía",
       } satisfies Record<ProblemaCodigo, string>,
       errores: (n: number, txt: string) =>
@@ -438,6 +449,11 @@ export const MESSAGES = {
         n === 1
           ? "1 ya tiene una lectura de esta fecha o posterior: no se guardará"
           : `${txt} ya tienen una lectura de esta fecha o posterior: no se guardarán`,
+      /** Las que repiten, el mismo día de exportación, las cifras ya guardadas: tampoco se guardan. */
+      sinCambios: (n: number, txt: string) =>
+        n === 1
+          ? "1 sin cambios desde la lectura de este mismo día: no se repetirá"
+          : `${txt} sin cambios desde la lectura de este mismo día: no se repetirán`,
       /** El <caption> de la tabla: dice qué es, sin repetir el título del paso. */
       caption: "Filas del archivo, con su estado y las cifras que se guardarán",
       columnas: {
@@ -473,7 +489,7 @@ export const MESSAGES = {
       resumen: (videos: number, videosTxt: string, lecturas: number, lecturasTxt: string) =>
         `${contar(videos, videosTxt, "video", "videos")}, ${contar(lecturas, lecturasTxt, "lectura", "lecturas")}.`,
       nuevos: (n: number, txt: string) => contar(n, txt, "video nuevo", "videos nuevos"),
-      /** Solo los conocidos que SÍ recibieron lectura: los demás los cuenta `antiguas`. */
+      /** Solo los conocidos que SÍ recibieron lectura: los demás los cuentan `antiguas` y `sinCambios`. */
       conocidos: (n: number, txt: string) =>
         n === 1 ? "1 ya estaba: se le añadió una lectura" : `${txt} ya estaban: se les añadió una lectura`,
       /**
@@ -485,6 +501,11 @@ export const MESSAGES = {
         n === 1
           ? "1 video no traía nada más reciente que lo que ya había: no se guardó"
           : `${txt} videos no traían nada más reciente que lo que ya había: no se guardaron`,
+      /** Lecturas idénticas a la última del mismo día de exportación: no se repitieron. */
+      sinCambios: (n: number, txt: string) =>
+        n === 1
+          ? "1 video sin cambios desde la lectura de este mismo día: no se repitió"
+          : `${txt} videos sin cambios desde la lectura de este mismo día: no se repitieron`,
       /** La fecha con la que quedaron las lecturas. */
       fecha: (fecha: string) => `Con fecha de exportación ${fecha}.`,
       ver: "Ver el resumen",

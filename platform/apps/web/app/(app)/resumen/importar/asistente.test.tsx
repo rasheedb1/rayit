@@ -146,7 +146,7 @@ describe("el asistente de importación", () => {
 
     importarCsv.mockResolvedValue({
       ok: true,
-      resultado: { newPosts: 3, knownPosts: 0, readings: 3, staleReadings: 0, capturedAt: "2026-09-22T16:00:00.000000Z" },
+      resultado: { newPosts: 3, knownPosts: 0, knownPostsWithReading: 0, readings: 3, staleReadings: 0, unchangedReadings: 0, capturedAt: "2026-09-22T16:00:00.000000Z" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Importar" }));
 
@@ -217,7 +217,7 @@ describe("el asistente de importación", () => {
     await screen.findByText("2 de 2 filas listas");
     importarCsv.mockResolvedValue({
       ok: true,
-      resultado: { newPosts: 2, knownPosts: 0, readings: 2, staleReadings: 0, capturedAt: "2026-09-22T16:00:00.000000Z" },
+      resultado: { newPosts: 2, knownPosts: 0, knownPostsWithReading: 0, readings: 2, staleReadings: 0, unchangedReadings: 0, capturedAt: "2026-09-22T16:00:00.000000Z" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Importar" }));
     await waitFor(() => expect(importarCsv).toHaveBeenCalledTimes(1));
@@ -254,8 +254,8 @@ describe("el asistente de importación", () => {
     buscarPostsConocidos.mockResolvedValue({
       ok: true,
       conocidos: [
-        { id: "ig_18001122334455001", ultimaLectura: "2026-09-01T12:00:00.000000Z" },
-        { id: "ig_18001122334455002", ultimaLectura: null },
+        { id: "ig_18001122334455001", ultimaLectura: "2026-09-01T12:00:00.000000Z", cifras: null },
+        { id: "ig_18001122334455002", ultimaLectura: null, cifras: null },
       ],
     });
     render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
@@ -330,7 +330,7 @@ describe("la fecha de la exportación", () => {
 
     importarCsv.mockResolvedValue({
       ok: true,
-      resultado: { newPosts: 1, knownPosts: 2, readings: 1, staleReadings: 2, capturedAt: "2026-09-16T17:00:00.000Z" },
+      resultado: { newPosts: 1, knownPosts: 2, knownPostsWithReading: 0, readings: 1, staleReadings: 2, unchangedReadings: 0, capturedAt: "2026-09-16T17:00:00.000Z" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Importar" }));
     await waitFor(() => expect(importarCsv).toHaveBeenCalledTimes(1));
@@ -351,9 +351,9 @@ describe("la fecha de la exportación", () => {
     buscarPostsConocidos.mockResolvedValue({
       ok: true,
       conocidos: [
-        { id: "ig_18001122334455001", ultimaLectura: mismaFecha },
-        { id: "ig_18001122334455002", ultimaLectura: mismaFecha },
-        { id: "ig_18001122334455003", ultimaLectura: mismaFecha },
+        { id: "ig_18001122334455001", ultimaLectura: mismaFecha, cifras: null },
+        { id: "ig_18001122334455002", ultimaLectura: mismaFecha, cifras: null },
+        { id: "ig_18001122334455003", ultimaLectura: mismaFecha, cifras: null },
       ],
     });
     render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
@@ -385,10 +385,10 @@ describe("la fecha de la exportación", () => {
     buscarPostsConocidos.mockResolvedValue({
       ok: true,
       conocidos: [
-        { id: "ig_18001122334455001", ultimaLectura: mismaFecha },
-        { id: "ig_18001122334455002", ultimaLectura: mismaFecha },
+        { id: "ig_18001122334455001", ultimaLectura: mismaFecha, cifras: null },
+        { id: "ig_18001122334455002", ultimaLectura: mismaFecha, cifras: null },
         // Anterior a esta exportación: esta sí recibe lectura.
-        { id: "ig_18001122334455003", ultimaLectura: "2026-09-10T17:00:00.000000Z" },
+        { id: "ig_18001122334455003", ultimaLectura: "2026-09-10T17:00:00.000000Z", cifras: null },
       ],
     });
     render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
@@ -399,6 +399,53 @@ describe("la fecha de la exportación", () => {
 
     expect(await screen.findByText("1 de 3 filas trae algo nuevo")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Importar" })).toBeEnabled();
+  });
+
+  it("el mismo archivo otra vez, el mismo día: marca «Sin cambios» antes y lo cuenta después", async () => {
+    // Las cifras de la primera fila, tal como vienen en el fixture: la base
+    // ya tiene esa misma lectura de ese mismo día y no la repetirá.
+    const cifras = (views: number, reach: number, likes: number, comments: number, shares: number, saves: number, follows: number) => ({
+      views, reach, likes, comments, shares, saves, followsFromPost: follows, reachNonFollowers: null,
+    });
+    buscarPostsConocidos.mockResolvedValue({
+      ok: true,
+      conocidos: [
+        // Mismo día (9:00 en Bogotá), mismas cifras: sin cambios.
+        { id: "ig_18001122334455001", ultimaLectura: "2026-09-16T14:00:00.000000Z", cifras: cifras(12480, 9310, 1104, 54, 87, 318, 63) },
+        // Mismo día, otra cifra: trae algo nuevo.
+        { id: "ig_18001122334455002", ultimaLectura: "2026-09-16T14:00:00.000000Z", cifras: cifras(8000, 7004, 802, 31, 44, 241, 29) },
+        // Mismas cifras, pero del día anterior: también es una lectura nueva.
+        { id: "ig_18001122334455003", ultimaLectura: "2026-09-15T17:00:00.000000Z", cifras: cifras(2140, 1980, 214, 12, 9, 77, 4) },
+      ],
+    });
+    render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);
+    await subir("instagram-insights.csv");
+    await waitFor(() => expect(buscarPostsConocidos).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Fecha de la exportación"), { target: { value: "2026-09-16" } });
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+
+    expect(await screen.findByText("2 de 3 filas traen algo nuevo")).toBeInTheDocument();
+    expect(screen.getByText("1 sin cambios desde la lectura de este mismo día: no se repetirá")).toBeInTheDocument();
+    expect(screen.getByText("2 ya estaban: se les añade una lectura")).toBeInTheDocument();
+    expect(within(screen.getByRole("table")).getAllByText("Sin cambios")).toHaveLength(1);
+
+    // El paso 4 enseña lo que contó la base, sin restar nada.
+    importarCsv.mockResolvedValue({
+      ok: true,
+      resultado: {
+        newPosts: 0,
+        knownPosts: 3,
+        knownPostsWithReading: 2,
+        readings: 2,
+        staleReadings: 0,
+        unchangedReadings: 1,
+        capturedAt: "2026-09-16T17:00:00.000Z",
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Importar" }));
+    expect(await screen.findByText("2 ya estaban: se les añadió una lectura")).toBeInTheDocument();
+    expect(screen.getByText("1 video sin cambios desde la lectura de este mismo día: no se repitió")).toBeInTheDocument();
+    expect(screen.queryByText(/no traían nada más reciente/)).not.toBeInTheDocument();
   });
 
   it("la columna Video tiene un ancho mínimo y el título no pasa de dos líneas", async () => {
@@ -452,7 +499,7 @@ describe("teclado y lector de pantalla", () => {
 
     importarCsv.mockResolvedValue({
       ok: true,
-      resultado: { newPosts: 3, knownPosts: 0, readings: 3, staleReadings: 0, capturedAt: "2026-09-22T16:00:00.000Z" },
+      resultado: { newPosts: 3, knownPosts: 0, knownPostsWithReading: 0, readings: 3, staleReadings: 0, unchangedReadings: 0, capturedAt: "2026-09-22T16:00:00.000Z" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Importar" }));
     await screen.findByText("3 videos, 3 lecturas.");
@@ -493,9 +540,9 @@ describe("teclado y lector de pantalla", () => {
       buscarPostsConocidos.mockResolvedValue({
         ok: true,
         conocidos: [
-          { id: "ig_18001122334455001", ultimaLectura: mismaFecha },
-          { id: "ig_18001122334455002", ultimaLectura: mismaFecha },
-          { id: "ig_18001122334455003", ultimaLectura: mismaFecha },
+          { id: "ig_18001122334455001", ultimaLectura: mismaFecha, cifras: null },
+          { id: "ig_18001122334455002", ultimaLectura: mismaFecha, cifras: null },
+          { id: "ig_18001122334455003", ultimaLectura: mismaFecha, cifras: null },
         ],
       });
       render(<Asistente cuentas={[CUENTA_IG]} workspace={WORKSPACE} />);

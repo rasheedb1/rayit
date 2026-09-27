@@ -1102,10 +1102,26 @@ export async function listExternalPostIds(
   return rows.map((r) => r.external_post_id);
 }
 
+/**
+ * Las cifras de una lectura que un CSV puede traer: las que se comparan
+ * para saber si una lectura nueva es idéntica a la última guardada.
+ */
+export type CsvReadingFigures = Pick<
+  CsvReading,
+  'views' | 'reach' | 'likes' | 'comments' | 'shares' | 'saves' | 'followsFromPost' | 'reachNonFollowers'
+>;
+
 export interface KnownPost {
   externalPostId: string;
   /** ISO en UTC de la lectura más reciente del video, o null si aún no tiene ninguna. */
   lastCapturedAt: string | null;
+  /**
+   * Las cifras de esa última lectura (null si no tiene ninguna). Con
+   * ellas el paso 3 marca «Sin cambios» la fila que repite, el mismo día
+   * de exportación, exactamente lo que ya estaba guardado: la misma regla
+   * que aplica importCsvReadings al escribir.
+   */
+  lastReading: CsvReadingFigures | null;
 }
 
 /**
@@ -1128,16 +1144,55 @@ export async function listKnownPosts(
 ): Promise<KnownPost[]> {
   if (!isUuid(connectionId)) throw new CsvImportError('invalid_connection', connectionId);
   if (ids.length === 0) return [];
-  const { rows } = await tx.query<{ external_post_id: string; ultima: string | null }>(
+  type Cifra = number | null;
+  const { rows } = await tx.query<{
+    external_post_id: string;
+    ultima: string | null;
+    views: Cifra;
+    reach: Cifra;
+    likes: Cifra;
+    comments: Cifra;
+    shares: Cifra;
+    saves: Cifra;
+    follows_from_post: Cifra;
+    reach_non_followers: Cifra;
+  }>(
+    // bigint llega como texto desde pg; float8 llega como número y es
+    // exacto hasta 2^53, muy por encima del techo de una cifra de CSV.
     `SELECT p.external_post_id,
-            to_char(max(s.captured_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS ultima
+            to_char(u.captured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS ultima,
+            u.views::float8 AS views, u.reach::float8 AS reach, u.likes::float8 AS likes,
+            u.comments::float8 AS comments, u.shares::float8 AS shares, u.saves::float8 AS saves,
+            u.follows_from_post::float8 AS follows_from_post, u.reach_non_followers::float8 AS reach_non_followers
        FROM post p
-       LEFT JOIN post_metric_snapshot s ON s.post_id = p.id
-      WHERE p.connection_id = $1 AND p.external_post_id = ANY($2::text[])
-      GROUP BY p.external_post_id`,
+       LEFT JOIN LATERAL (
+         SELECT s.captured_at, s.views, s.reach, s.likes, s.comments, s.shares, s.saves,
+                s.follows_from_post, s.reach_non_followers
+           FROM post_metric_snapshot s
+          WHERE s.post_id = p.id
+          ORDER BY s.captured_at DESC, s.id DESC
+          LIMIT 1
+       ) u ON true
+      WHERE p.connection_id = $1 AND p.external_post_id = ANY($2::text[])`,
     [connectionId, [...new Set(ids)]],
   );
-  return rows.map((r) => ({ externalPostId: r.external_post_id, lastCapturedAt: r.ultima }));
+  return rows.map((r) => ({
+    externalPostId: r.external_post_id,
+    lastCapturedAt: r.ultima,
+    lastReading:
+      r.ultima === null
+        ? null
+        : {
+            views: r.views,
+            reach: r.reach,
+            likes: r.likes,
+            comments: r.comments,
+            shares: r.shares,
+            saves: r.saves,
+            followsFromPost: r.follows_from_post,
+            reachNonFollowers: r.reach_non_followers,
+          },
+  }));
 }
 
 /**
@@ -1268,8 +1323,14 @@ export interface CsvReading {
 export interface CsvImportResult {
   /** Posts creados por esta importación. */
   newPosts: number;
-  /** Posts que ya existían y solo recibieron una lectura más. */
+  /** Posts que ya existían (recibieran o no una lectura). */
   knownPosts: number;
+  /**
+   * De los `knownPosts`, los que SÍ recibieron una lectura. Los demás
+   * son `staleReadings` o `unchangedReadings`. La pantalla lo enseña tal
+   * cual: no resta nada.
+   */
+  knownPostsWithReading: number;
   /** Filas escritas en post_metric_snapshot. */
   readings: number;
   /**
@@ -1278,6 +1339,14 @@ export interface CsvImportResult {
    * que se subió, o una conexión OAuth que ya leyó ese video después.
    */
   staleReadings: number;
+  /**
+   * Filas que NO se escribieron porque la última lectura del video es
+   * del MISMO día de exportación (en la zona del workspace) y trae
+   * exactamente las mismas cifras: subir dos veces el mismo archivo con
+   * la fecha de hoy. Escribirla sería un duplicado exacto en una tabla
+   * append-only.
+   */
+  unchangedReadings: number;
   /** ISO del captured_at con el que entraron todas. */
   capturedAt: string;
 }
@@ -1294,7 +1363,8 @@ export interface CsvImportResult {
  * exportado hoy— vale now() de la base, al microsegundo.
  *
  * Una lectura que llega más vieja que la última del video NO se
- * escribe: se cuenta en `staleReadings`. Las lecturas son append-only y
+ * escribe: se cuenta en `staleReadings`. Tampoco la que repite, el mismo
+ * día de exportación, las cifras exactas de la última (`unchangedReadings`). Las lecturas son append-only y
  * post_metrics_latest se queda con la de captured_at más alto, así que
  * escribirla no cambiaría la «última», pero sí contaría como importada
  * algo que no aporta nada. Y el reloj del módulo nunca retrocede.
@@ -1387,22 +1457,53 @@ export async function importCsvReadings(
     [creador, input.connectionId, input.platform, datos],
   );
 
-  // El NOT EXISTS es la regla de «nunca hacia atrás»: si el video ya
-  // tiene una lectura de este instante o posterior, esta no entra. El
-  // conteo de `emparejadas` ve la tabla ANTES del INSERT (así funcionan
-  // las CTE que escriben), que es justo lo que se quiere comparar.
-  const { rows: escritas } = await tx.query<{ n: number; emparejadas: number }>(
-    `WITH entrada AS (
+  // Cada fila emparejada con su post se clasifica ANTES de escribir
+  // (las CTE que escriben ven la tabla como estaba antes del INSERT):
+  //   - `antigua`: el video ya tiene una lectura de este instante o
+  //     posterior. Es la regla de «nunca hacia atrás».
+  //   - `igual`: su última lectura es del mismo día de exportación, en
+  //     la zona del workspace, y trae las mismas cifras. Sin fecha de
+  //     exportación el instante es now() al microsegundo, así que la
+  //     regla anterior nunca veía repetido el mismo archivo subido dos
+  //     veces hoy: se escribía un duplicado exacto.
+  // Solo se escribe la que no es ni una cosa ni la otra.
+  const { rows: escritas } = await tx.query<{ n: number; conocidas: number; antiguas: number; iguales: number }>(
+    `WITH zona AS (
+       SELECT coalesce((SELECT nullif(timezone, '') FROM workspace WHERE id = current_workspace_id()), 'UTC') AS tz
+     ),
+     entrada AS (
        SELECT * FROM jsonb_to_recordset($3::jsonb) AS f(
          external_post_id text, published_at timestamptz, views bigint, reach bigint, likes bigint,
          comments bigint, shares bigint, saves bigint, follows_from_post bigint, reach_non_followers bigint)
+     ),
+     clasificadas AS (
+       SELECT e.*, p.id AS post_id, p.published_at AS post_published_at,
+              EXISTS (
+                SELECT 1 FROM post_metric_snapshot s WHERE s.post_id = p.id AND s.captured_at >= $2::timestamptz
+              ) AS antigua,
+              EXISTS (
+                SELECT 1
+                  FROM (SELECT s.* FROM post_metric_snapshot s WHERE s.post_id = p.id
+                         ORDER BY s.captured_at DESC, s.id DESC LIMIT 1) u, zona z
+                 WHERE (u.captured_at AT TIME ZONE z.tz)::date = ($2::timestamptz AT TIME ZONE z.tz)::date
+                   AND u.views IS NOT DISTINCT FROM e.views
+                   AND u.reach IS NOT DISTINCT FROM e.reach
+                   AND u.likes IS NOT DISTINCT FROM e.likes
+                   AND u.comments IS NOT DISTINCT FROM e.comments
+                   AND u.shares IS NOT DISTINCT FROM e.shares
+                   AND u.saves IS NOT DISTINCT FROM e.saves
+                   AND u.follows_from_post IS NOT DISTINCT FROM e.follows_from_post
+                   AND u.reach_non_followers IS NOT DISTINCT FROM e.reach_non_followers
+              ) AS igual
+         FROM entrada e
+         JOIN post p ON p.connection_id = $1 AND p.external_post_id = e.external_post_id
      ),
      escritas AS (
        INSERT INTO post_metric_snapshot
          (post_id, workspace_id, captured_at, age_hours, views, reach, likes, comments, shares, saves,
           total_interactions, follows_from_post, reach_followers, reach_non_followers, source)
-       SELECT p.id, current_workspace_id(), $2::timestamptz,
-              round(EXTRACT(EPOCH FROM ($2::timestamptz - p.published_at)) / 3600.0, 2),
+       SELECT e.post_id, current_workspace_id(), $2::timestamptz,
+              round(EXTRACT(EPOCH FROM ($2::timestamptz - e.post_published_at)) / 3600.0, 2),
               e.views, e.reach, e.likes, e.comments, e.shares, e.saves,
               -- «No lo sabemos» no es «fue cero»: un archivo sin ninguna
               -- columna de interacción deja NULL, no una interacción de 0
@@ -1415,19 +1516,19 @@ export async function importCsvReadings(
                    THEN e.reach - e.reach_non_followers END,
               e.reach_non_followers,
               'csv_import'
-       FROM entrada e
-       JOIN post p ON p.connection_id = $1 AND p.external_post_id = e.external_post_id
-       WHERE NOT EXISTS (
-         SELECT 1 FROM post_metric_snapshot s WHERE s.post_id = p.id AND s.captured_at >= $2::timestamptz
-       )
-       RETURNING 1
+       FROM clasificadas e
+       WHERE NOT e.antigua AND NOT e.igual
+       RETURNING post_id
      )
      SELECT (SELECT count(*) FROM escritas)::int AS n,
-            (SELECT count(*) FROM entrada e
-               JOIN post p ON p.connection_id = $1 AND p.external_post_id = e.external_post_id)::int AS emparejadas`,
-    [input.connectionId, capturedAt, datos],
+            -- Los que ya estaban y recibieron lectura: los escritos que no
+            -- son posts recién creados por este mismo lote.
+            (SELECT count(*) FROM escritas WHERE post_id <> ALL($4::uuid[]))::int AS conocidas,
+            (SELECT count(*) FROM clasificadas WHERE antigua)::int AS antiguas,
+            (SELECT count(*) FROM clasificadas WHERE NOT antigua AND igual)::int AS iguales`,
+    [input.connectionId, capturedAt, datos, nuevos.map((x) => x.id)],
   );
-  const escritasN = escritas[0]?.n ?? 0;
+  const conteo = escritas[0] ?? { n: 0, conocidas: 0, antiguas: 0, iguales: 0 };
 
   // Solo una cuenta importada queda "sincronizada" al momento del
   // archivo. Una conexión OAuth NO: su last_synced_at es la última vez
@@ -1445,8 +1546,10 @@ export async function importCsvReadings(
   return {
     newPosts: nuevos.length,
     knownPosts: ids.length - nuevos.length,
-    readings: escritasN,
-    staleReadings: (escritas[0]?.emparejadas ?? 0) - escritasN,
+    knownPostsWithReading: conteo.conocidas,
+    readings: conteo.n,
+    staleReadings: conteo.antiguas,
+    unchangedReadings: conteo.iguales,
     capturedAt,
   };
 }

@@ -93,6 +93,7 @@ export async function Kpis({ filtro }: { filtro: Filtro }) {
 
   const seguidores = filtro.platform ? t.followers.labelRed(PLATFORM_LABEL[filtro.platform]) : t.followers.label;
   const vistas = t.views.label(filtro.days);
+  const guardados = t.savesPer1k.label(f.int(1000));
 
   return (
     <KpiRow>
@@ -134,8 +135,8 @@ export async function Kpis({ filtro }: { filtro: Filtro }) {
         {...comparacion(kpis.nonFollowerReach, t.deltaLabel(filtro.days), f)}
       />
       <KpiConInfo
-        label={t.savesPer1k.label}
-        infoLabel={ti.boton(t.savesPer1k.label)}
+        label={guardados}
+        infoLabel={ti.boton(guardados)}
         info={info(ti.savesPer1k, base(kpis.savesPer1k))}
         value={valor(kpis.savesPer1k, (v) => f.compact(v))}
         sparkline={spark(kpis.savesPer1k)}

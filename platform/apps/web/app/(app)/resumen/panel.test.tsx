@@ -102,7 +102,7 @@ describe("los KPIs", () => {
     expect(abrirInfo("Visualizaciones en 30 días")).toHaveTextContent("La suma de 2 videos publicados en el periodo");
     expect(abrirInfo("Seguidores en total")).toHaveTextContent("un CSV trae métricas por video");
     // La base, con el número formateado con el locale.
-    expect(abrirInfo("Guardados por 1 000 visualizaciones")).toHaveTextContent("Calculado sobre 1.234 videos publicados");
+    expect(abrirInfo("Guardados por 1.000 visualizaciones")).toHaveTextContent("Calculado sobre 1.234 videos publicados");
     expect(abrirInfo("Alcance en no seguidores")).toHaveTextContent("Calculado sobre 2 videos publicados");
   });
 
