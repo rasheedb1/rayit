@@ -19,7 +19,7 @@ import { lastTick } from '../src/runner/cron.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { loadJobDefinitions } from '../src/runner/definitions.ts';
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
-import { MAX_TICK_CUTS, NO_RETRY_KEY, onceExitCode, runOnce, TICK_CUT_KEY, type OnceSummary } from '../src/runner/once.ts';
+import { MAX_TICK_CUTS, NO_RETRY_KEY, onceExitCode, retryBackoffFrom, retryDelayMs, runOnce, TICK_CUT_KEY, type OnceSummary } from '../src/runner/once.ts';
 import { defineJob } from '../src/runner/registry.ts';
 import { formatHealth } from '../src/runner/salud.ts';
 import { jobRuns, openTestDatabase, testConfig } from './helpers/harness.ts';
@@ -323,4 +323,28 @@ test(`12 · un job que no cabe en el turno (${MAX_TICK_CUTS} cortes o más sin t
     `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at) VALUES ('test.once_vacio', 'ok', 1, now() + interval '200 seconds', now() + interval '201 seconds')`,
   );
   assert.equal((await getWorkerHealth(db)).find((x) => x.jobId === 'test.once_vacio')?.cutsSinceOk, 0);
+});
+
+test('13 · RunOnceOptions.backoff (lo pide el turno, CIM-7): un fallo espera su backoff; sin él, --once reintenta en la pasada siguiente', async () => {
+  await db.raw.exec(`INSERT INTO job_definition (id, label_es, queue, default_cron, timeout_s, max_attempts, max_concurrency)
+                     VALUES ('test.once_espera', 'Prueba once: espera', 'test_espera', '${ANUAL}', 5, 4, 1)`);
+  const espera = defineJob('test.once_espera', async () => { count('espera'); throw new Error('proveedor caído (429)'); });
+  const config = testConfig({ groups: ['test_espera'], retryDelayS: 60, retryDelayMaxS: 900 });
+  const t0 = Date.now();
+  const en = (s: number, conEspera: boolean) => runOnce({
+    config, db, logger, jobs: [espera], env: {},
+    secrets: new InMemorySecretStore(), refreshers: refresherRegistry([new FakeTokenRefresher('tiktok')]),
+    now: () => new Date(t0 + s * 1000),
+    ...(conEspera ? { backoff: retryBackoffFrom(config) } : {}),
+  });
+  assert.deepEqual((await en(0, true)).runs.map((r) => [r.reason, r.status]), [['due', 'failed']]);
+  assert.equal(reasons(await en(30, true))['test.once_espera'], 'backoff', 'con backoff, a los 30 s todavía espera (60 s)');
+  assert.deepEqual((await en(30, false)).runs.map((r) => [r.reason, r.status]), [['retry', 'failed']], 'sin él (--once), reintenta ya');
+  // Dos fallos: la espera se dobla (120 s) desde que empezó el segundo, a los 30 s.
+  assert.equal(reasons(await en(140, true))['test.once_espera'], 'backoff');
+  assert.deepEqual((await en(150, true)).runs.map((r) => r.reason), ['retry']);
+  assert.equal(calls['espera'], 3);
+  assert.equal(retryDelayMs(1, { delayS: 60, maxS: 900 }), 60_000);
+  assert.equal(retryDelayMs(5, { delayS: 60, maxS: 900 }), 900_000, 'con techo');
+  assert.equal(retryDelayMs(0, { delayS: 60, maxS: 900 }), 0);
 });
