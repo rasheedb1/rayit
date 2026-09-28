@@ -9,28 +9,23 @@
  * Cada llamada devuelve sus tokens y su costo en dólares: la regla del
  * proyecto es registrarlos todos (outbound_llm_call), y el tope diario del
  * workspace (outbound_policy.llm_daily_cap_usd) se mide contra esa suma.
+ * El costo y la estimación los calcula llm-precios.ts (llmCostUsd,
+ * estimateCallUsd), la única tabla de precios.
  */
+import { MODEL_CLASSIFIER, MODEL_WRITER } from './llm-precios.ts';
 
 /** Para qué es la llamada: el CHECK de outbound_llm_call.purpose. */
 export type LlmPurpose = 'generate' | 'judge' | 'classify' | 'recommend';
 
 /**
  * Los modelos. claude-sonnet-5 genera y juzga; claude-haiku-4-5 clasifica
- * (VEN-14). Los ids son los de la documentación de Anthropic, sin fecha
- * salvo el de Haiku, que la pieza pide con su fecha.
+ * (VEN-14). Los ids y sus precios viven en llm-precios.ts, la única tabla.
  */
 export const OUTREACH_MODELS = {
-  generate: 'claude-sonnet-5',
-  judge: 'claude-sonnet-5',
-  classify: 'claude-haiku-4-5-20251001',
+  generate: MODEL_WRITER,
+  judge: MODEL_WRITER,
+  classify: MODEL_CLASSIFIER,
 } as const;
-
-/** Precio por millón de tokens, en dólares (tarifa de la API de Anthropic, septiembre de 2026). */
-export const MODEL_PRICES_USD_PER_MTOK: Readonly<Record<string, { input: number; output: number }>> = {
-  'claude-sonnet-5': { input: 2, output: 10 },
-  'claude-haiku-4-5': { input: 1, output: 5 },
-  'claude-haiku-4-5-20251001': { input: 1, output: 5 },
-};
 
 /**
  * La temperatura que pide la pieza: 0,7 para generar y 0 para juzgar.
@@ -64,18 +59,6 @@ export const GENERATION_MAX_TOKENS: Readonly<Record<string, number>> = {
   instagram_comment: 250,
 };
 export const JUDGE_MAX_TOKENS = 700;
-
-/** Lo que cuesta una llamada, en dólares, con seis decimales (numeric(14,6) en la base). Un modelo sin precio conocido cuesta 0. */
-export function llmCostUsd(model: string, inputTokens: number, outputTokens: number): number {
-  const p = MODEL_PRICES_USD_PER_MTOK[model];
-  if (!p) return 0;
-  return Math.round(((inputTokens * p.input + outputTokens * p.output) / 1_000_000) * 1e6) / 1e6;
-}
-
-/** Lo que se estima que costará una llamada antes de hacerla: la entrada por caracteres y la salida al tope. */
-export function estimateCallUsd(model: string, promptChars: number, maxTokens: number): number {
-  return llmCostUsd(model, Math.ceil(promptChars / 3), maxTokens);
-}
 
 export interface LlmRequest {
   purpose: LlmPurpose;

@@ -191,7 +191,8 @@ export type WorkspaceOptOutSource = 'reply' | 'manual';
 
 /**
  * La baja vive también en la dirección (entregabilidad §8.4): el correo
- * de la ficha entra en outbound_workspace_optout del workspace, que
+ * de la ficha entra en outbound_workspace_optout del workspace, y su
+ * LinkedIn y su Instagram en outbound_workspace_optout_handle (0077), que
  * sobrevive a la ficha. Sin esto, borrarla y crearla otra vez con el
  * mismo correo la dejaba contactable. mc_app no tiene INSERT en la lista
  * y pasa por outbound_workspace_optout_record (SECURITY DEFINER, solo el
@@ -215,6 +216,17 @@ export async function recordWorkspaceOptOut(
      SELECT $2::uuid, c.email, $3 FROM contact c
       WHERE c.id = $1::uuid AND c.email IS NOT NULL AND contact_visible_to(c.id, $2::uuid)
      ON CONFLICT (workspace_id, email) DO NOTHING`,
+    [contactId, workspaceId, source],
+  );
+  // Y su LinkedIn y su Instagram (0077): sin ellos, la baja de alguien sin
+  // correo se esquivaba con una segunda ficha con la misma URL.
+  await tx.query(
+    `INSERT INTO outbound_workspace_optout_handle (workspace_id, channel, address_key, source)
+     SELECT $2::uuid, v.channel, v.address_key, $3 FROM contact c
+      CROSS JOIN LATERAL (VALUES ('linkedin', outreach_handle_key('linkedin', c.linkedin_url)),
+                                 ('instagram_dm', outreach_handle_key('instagram_dm', c.instagram_handle))) AS v(channel, address_key)
+      WHERE c.id = $1::uuid AND v.address_key IS NOT NULL AND contact_visible_to(c.id, $2::uuid)
+     ON CONFLICT (workspace_id, channel, address_key) DO NOTHING`,
     [contactId, workspaceId, source],
   );
 }

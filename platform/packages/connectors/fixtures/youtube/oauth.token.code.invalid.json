@@ -1,0 +1,5 @@
+{
+  "meta": { "source": "docs", "recordedAt": "2026-09-23", "notes": "code vencido, ya usado o de otra app. El endpoint de token responde OAuth 2.0 a secas: { error, error_description }, sin el sobre { error: { code, errors } } de las APIs de datos." },
+  "request": { "method": "POST", "urlPattern": "^https://oauth2\\.googleapis\\.com/token$", "body": { "grant_type": "authorization_code" } },
+  "response": { "status": 400, "body": { "error": "invalid_grant", "error_description": "Bad Request" } }
+}

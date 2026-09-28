@@ -45,6 +45,8 @@ import type { FetchLike } from './http/client.ts';
 import type { RetryPolicy, SleepFn } from './http/retry.ts';
 import { kindFromStatus, OutreachApiError, type OutreachErrorKind, type ParsedOutreachError } from './outreach/errors.ts';
 import { OutreachHttp } from './outreach/http.ts';
+// El mismo endpoint de tokens que el refresher de YouTube (CON-8): una sola constante, en oauth/google.ts.
+import { GOOGLE_TOKEN_URL } from './oauth/google.ts';
 import type { OutreachCallLogSink } from './outreach/log.ts';
 import { buildMime, toGmailRaw, type BuildMimeOptions, type OutgoingEmail } from './outreach/mime.ts';
 import type { OAuthTokens } from './types.ts';
@@ -62,7 +64,6 @@ export function shortScope(scope: string): string {
 }
 
 export const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
-export const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 export const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
 export const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 export const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';

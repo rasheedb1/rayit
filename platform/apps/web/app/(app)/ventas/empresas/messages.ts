@@ -320,6 +320,10 @@ export const FICHA = {
     linea: (canal: string, cuando: string) => (cuando ? `${canal} · ${cuando}` : canal),
     sale: (fecha: string) => `sale el ${fecha}`,
     salio: (fecha: string) => `salió el ${fecha}`,
+    /** Un mensaje que ya no va a salir (falló, se canceló o se saltó): la hora a la que iba, en pasado. */
+    iba: (fecha: string) => `iba a salir el ${fecha}`,
+    /** Por qué no salió, con el mismo texto de /ventas/actividad («Pidió no recibir más mensajes»). */
+    motivo: (texto: string) => `${texto}.`,
     porQue: (motivo: string) => `Retenido: ${motivo}.`,
     respondio: (fecha: string) => `Respondió ${fecha}:`,
     vacio: {

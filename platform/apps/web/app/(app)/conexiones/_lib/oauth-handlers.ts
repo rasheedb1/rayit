@@ -14,7 +14,17 @@
  *                    data_consent por finalidad, api_call_log → 303 a
  *                    /conexiones?conectada=<id>.
  *
+ * Una red sin sus variables en este entorno (YouTube sin GOOGLE_CLIENT_*,
+ * por ejemplo) está apagada: start y callback responden 404 con la frase
+ * que nombra lo que falta, y la pantalla no ofrece su botón.
+ *
  * Ni el code ni los tokens tocan logs, errores, URLs nuestras ni la cookie.
+ *
+ * Consentimiento delegado (ACC-8): start comprueba el permiso
+ * conexiones.cuenta.conectar antes de mandar a la plataforma; el
+ * callback lo vuelve a comprobar como primera sentencia de la
+ * transacción, deja la evidencia v2 (onBehalfOf el creador, actedBy si
+ * actúa un tercero), la bitácora y el aviso al titular.
  */
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
@@ -24,10 +34,12 @@ import {
   TokenCipher, type FetchLike, type OAuthProviderId, type OAuthTokens,
 } from "@mc/connectors";
 import {
-  CreatorNotInWorkspace, findConnectionByAccount, findPublicAccountByHandle, getDefaultCreatorId, NoCreatorProfile, recordConsent, upgradePublicAccountToOAuth,
-  upsertConnection, type ConsentPurpose, type WorkspaceTx,
+  CreatorNotInWorkspace, findConnectionByAccount, findPublicAccountByHandle, getConsentCreator, NoCreatorProfile, recordConsent,
+  ScopeError, upgradePublicAccountToOAuth, upsertConnection, type ConsentPurpose, type WorkspaceTx,
 } from "@mc/db";
-import { CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL, purposesFor } from "./consent";
+import { buildConsentEvidence, CONSENT_POLICY_VERSION, consentText, PLATFORM_LABEL, purposesFor } from "./consent";
+import { notifyOwner } from "./owner-notice";
+import { requireConexionesPermission, SinPermisoError } from "./permisos";
 
 export const OAUTH_COOKIE = "oc_oauth";
 export const OAUTH_COOKIE_PATH = "/conexiones/oauth";
@@ -40,10 +52,13 @@ export const OAUTH_ERROR_MESSAGES = {
   plataforma: "La plataforma devolvió un error al autorizar. Inténtalo de nuevo en unos minutos.",
   consentimiento: "Para conectar una cuenta tienes que aceptar el tratamiento de datos.",
   sin_creador: "Este workspace no tiene un perfil de creador; no se puede conectar una cuenta.",
-  no_configurada: "Esa red todavía no está configurada en este entorno.",
   intercambio: "La plataforma no aceptó el código de autorización. Vuelve a intentar conectar la cuenta.",
   temporal: "La plataforma no respondió. Inténtalo de nuevo en unos minutos.",
   identidad: "La plataforma no nos dijo qué cuenta autorizaste. Vuelve a intentar conectar la cuenta.",
+  sin_permiso: new SinPermisoError("conexiones.cuenta.conectar").message,
+  sin_canal: "Esa cuenta de Google no tiene ningún canal de YouTube. Entra a YouTube con ella, crea el canal y vuelve a intentarlo.",
+  sin_renovacion: "Google no entregó el permiso de renovación para este canal, así que la conexión caducaría en una hora. Vuelve a conectarlo; si se repite, avísanos.",
+  fuera_de_alcance: "Tu acceso a este espacio no alcanza a ese creador o a esa cuenta: no la puedes conectar desde aquí.",
 } as const;
 export type OAuthErrorCode = keyof typeof OAUTH_ERROR_MESSAGES;
 
@@ -128,25 +143,38 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
   }
 
   const clear = cookieHeader("", 0, secure);
+  /** La frase de una red sin app en este entorno: nombra las variables que faltan, nunca sus valores. */
+  const notConfigured = (provider: OAuthProviderId) =>
+    `${PLATFORM_LABEL[provider]} no está configurado en este entorno: faltan ${(missing[provider] ?? []).join(", ")}. Vuelve a /conexiones.`;
 
   return {
     async start(req, providerRaw) {
       if (req.method !== "POST") return text(405, "Usa el botón «Conectar» de /conexiones: el inicio del flujo va por POST con tu consentimiento.", { Allow: "POST" });
       if (!isOAuthProviderId(providerRaw)) return text(404, "Esa red no existe.");
       const provider = providerRaw;
-      if ("error" in keys) return text(503, keys.error);
       const cfg = apps[provider];
-      if (!cfg) return text(503, `${PLATFORM_LABEL[provider]} no está configurado en este entorno: faltan ${(missing[provider] ?? []).join(", ")}.`);
+      if (!cfg) return text(404, notConfigured(provider));
+      if ("error" in keys) return text(503, keys.error);
 
-      const form = await req.formData();
+      // Un POST sin formulario (sin cuerpo, JSON, un robot) hace lanzar a
+      // formData(): sin esto era un 500. Es lo mismo que no consentir.
+      const form = await req.formData().catch(() => null);
+      if (!form) return redirect(req, "/conexiones?error=consentimiento");
       const parsed = startSchema.safeParse({ acepto: form.get("acepto"), policy_version: form.get("policy_version") });
       if (!parsed.success) return redirect(req, "/conexiones?error=consentimiento");
 
       let creatorId: string;
       try {
-        creatorId = await deps.withWorkspace((tx) => getDefaultCreatorId(tx));
+        creatorId = await deps.withWorkspace(async (tx) => {
+          // Un route handler no es una Server Action: esta es su comprobación de permiso (ver _lib/permisos.ts). A quien no puede conectar no se le manda a la plataforma.
+          await requireConexionesPermission(tx, "conexiones.cuenta.conectar");
+          return (await getConsentCreator(tx)).id;
+        });
       } catch (err) {
         if (err instanceof NoCreatorProfile) return redirect(req, "/conexiones?error=sin_creador");
+        if (err instanceof SinPermisoError) return redirect(req, "/conexiones?error=sin_permiso");
+        // ACC-6: hay creador, pero no en el alcance de quien conecta. A la plataforma no se le manda.
+        if (err instanceof ScopeError) return redirect(req, "/conexiones?error=fuera_de_alcance");
         throw err;
       }
 
@@ -161,6 +189,9 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       const headers = { "Set-Cookie": clear };
       if (!isOAuthProviderId(providerRaw)) return text(404, "Esa red no existe.", headers);
       const provider = providerRaw;
+      // Una red apagada (sin sus variables, p. ej. YouTube sin GOOGLE_CLIENT_*) no tiene callback vivo: la frase y 404, nunca un 500.
+      const cfg = apps[provider];
+      if (!cfg) return text(404, notConfigured(provider), headers);
       const params = new URL(req.url).searchParams;
 
       // El creador canceló (Instagram: error=access_denied&error_reason=user_denied; TikTok: error + error_description).
@@ -183,9 +214,16 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       const code = params.get("code");
       if (!code) return text(400, "La plataforma no devolvió un código de autorización.", headers);
 
-      const cfg = apps[provider];
-      if (!cfg) return redirect(req, "/conexiones?error=no_configurada", headers);
       const prov = OAUTH_PROVIDERS[provider];
+
+      // Antes de canjear el code: quien ya no puede conectar (su rol cambió desde start, o la cookie es de otra sesión)
+      // no obtiene tokens que luego habría que tirar. La transacción que escribe lo vuelve a comprobar.
+      try {
+        await deps.withWorkspace((tx) => requireConexionesPermission(tx, "conexiones.cuenta.conectar"));
+      } catch (err) {
+        if (err instanceof SinPermisoError) return redirect(req, "/conexiones?error=sin_permiso", headers);
+        throw err;
+      }
 
       // Fase HTTP fuera de la transacción; el log se acumula y se escribe con la fila.
       const callLog = new InMemoryCallLogSink();
@@ -202,7 +240,11 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
         externalAccountId = profile.external_account_id ?? exchanged.externalAccountId;
       } catch (err) {
         await flushCallLog(deps, callLog).catch(() => undefined);
-        const codeOut: OAuthErrorCode = isPlatformApiError(err) && (err.kind === "transient" || err.kind === "quota") ? "temporal" : "intercambio";
+        // Una cuenta de Google sin canal, o sin refresh token, no es un code malo ni una caída: se dice con esas palabras (CON-8).
+        const codeOut: OAuthErrorCode = isPlatformApiError(err) && err.code === "no_channel"
+          ? "sin_canal"
+          : isPlatformApiError(err) && err.code === "no_refresh_token" ? "sin_renovacion"
+          : isPlatformApiError(err) && (err.kind === "transient" || err.kind === "quota") ? "temporal" : "intercambio";
         return redirect(req, `/conexiones?error=${codeOut}`, headers);
       }
       if (!externalAccountId) {
@@ -210,15 +252,22 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
         return redirect(req, "/conexiones?error=identidad", headers);
       }
 
-      const at = now().toISOString();
-      const evidence = redactSecrets({
-        ip: clientIp(req), userAgent: req.headers.get("user-agent"), textShown: saved.textShown, policyVersion: saved.policyVersion,
-        scopesRequested: saved.scopesRequested, scopesGranted, at,
-      }) as Record<string, unknown>;
+      const at = now();
+      const ip = clientIp(req);
+      const userAgent = req.headers.get("user-agent");
       const cipher = keys.cipher;
       let connectionId: string;
       try {
         connectionId = await deps.withWorkspace(async (tx) => {
+        // Primera sentencia, antes de guardar nada: el permiso de quien vuelve de la plataforma (ver _lib/permisos.ts).
+        const actor = await requireConexionesPermission(tx, "conexiones.cuenta.conectar");
+        // El titular es el perfil del workspace, el mismo que start guardó en la cookie; si no coincide, alguien cambió de espacio a mitad del flujo.
+        const creator = await getConsentCreator(tx);
+        if (creator.id !== saved.creatorId) throw new CreatorNotInWorkspace(saved.creatorId);
+        const evidence = redactSecrets(buildConsentEvidence({
+          method: "oauth", declaredOwner: false, ip, userAgent, textShown: saved.textShown, policyVersion: saved.policyVersion, at,
+          creatorId: creator.id, creatorUserId: creator.userId, actor, extra: { scopesRequested: saved.scopesRequested, scopesGranted },
+        })) as Record<string, unknown>;
         const existing = await findConnectionByAccount(tx, prov.platformId, externalAccountId);
         // Híbrido CON-10: si la cuenta ya se agregó por @, «Autorizar» convierte ESA fila (mismo id, mismo historial).
         const publicRow = provider !== "tiktok-business" && profile.handle ? await findPublicAccountByHandle(tx, prov.platformId, profile.handle) : null;
@@ -234,15 +283,16 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
           });
         } else {
           id = (await upsertConnection(tx, {
-            creatorId: saved.creatorId, platformId: prov.platformId, externalAccountId,
+            creatorId: creator.id, platformId: prov.platformId, externalAccountId,
             handle: profile.handle, displayName: profile.display_name, avatarUrl: profile.avatar_url, profileUrl: profile.profile_url, accountType: profile.account_type,
             secretRef, scopes: scopesGranted, accessExpiresAt: tokens.accessExpiresAt, refreshExpiresAt: tokens.refreshExpiresAt ?? null, connectedAt: now(),
           })).id;
         }
         const purposes: ConsentPurpose[] = purposesFor(provider, scopesGranted);
         for (const purpose of purposes) {
-          await recordConsent(tx, { connectionId: id, creatorId: saved.creatorId, purpose, policyVersion: saved.policyVersion, evidence });
+          await recordConsent(tx, { connectionId: id, creatorId: creator.id, purpose, policyVersion: saved.policyVersion, evidence });
         }
+        await notifyOwner(tx, { creator, actor, connectionId: id, network: PLATFORM_LABEL[provider], handle: profile.handle ?? externalAccountId, at });
         const sink = new PostgresCallLogSink(tx);
         for (const entry of callLog.entries) await sink.record({ ...entry, connection_id: entry.connection_id ?? id });
         return id;
@@ -250,7 +300,10 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
       } catch (err) {
         // El code ya se consumió: se registra lo que se llamó y se vuelve con un mensaje; la plataforma dará otro code al reintentar.
         await flushCallLog(deps, callLog).catch(() => undefined);
-        const codeOut: OAuthErrorCode = err instanceof CreatorNotInWorkspace || err instanceof NoCreatorProfile ? "sin_creador" : "temporal";
+        const codeOut: OAuthErrorCode = err instanceof CreatorNotInWorkspace || err instanceof NoCreatorProfile ? "sin_creador"
+          : err instanceof SinPermisoError ? "sin_permiso"
+          // ACC-6: la cuenta autorizada ya es de otro creador del espacio, fuera del alcance de quien conecta.
+          : err instanceof ScopeError ? "fuera_de_alcance" : "temporal";
         return redirect(req, `/conexiones?error=${codeOut}`, headers);
       }
       return redirect(req, `/conexiones?conectada=${encodeURIComponent(connectionId)}`, headers);

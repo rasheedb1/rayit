@@ -33,6 +33,11 @@ fixture nuevo y sus nombres de columna entran en `ALIAS`.
 | `ambiguo.csv` | Fechas numéricas que sirven en los dos órdenes (ningún número pasa de 12): el asistente pregunta, con el orden del workspace como propuesta. |
 | `excel-windows-1252.csv` | Un CSV abierto y vuelto a guardar en **Excel para Windows en español**: codificado en Windows-1252 (no UTF-8), con punto y coma y CRLF. Leído a la fuerza como UTF-8, «Duración» salía «Duraci�n» y los alias no casaban; `decodificarCsv` lo reconoce y el paso 2 lo dice. **No lo abras y lo guardes con un editor en UTF-8**: dejaría de probar lo que prueba. |
 
+Los CSV de **ingresos de plataformas** (AdSense, Creator Rewards) son
+otra cosa y viven en [`ingresos/`](ingresos/README.md), con su propio
+README: no son métricas de contenido, sino dinero por periodo, y los
+lee `app/(app)/finanzas/ingresos/_lib/csv.ts` (FIN-7).
+
 ## Lo que no está documentado con certeza
 
 - El orden mes/día de Meta en `Publish time` es lo que se sabe de
@@ -59,3 +64,16 @@ elegido —el del formato reconocido si lo tiene (Meta: mes/día), si no
 el del locale del workspace— y una fecha del archivo leída en ese
 orden. El paso 3 avisa si en el otro orden las fechas se juntarían en
 unos días en vez de repartirse en meses.
+
+## El CSV de ventas de la marca (CAM-4)
+
+Distinto de las exportaciones de arriba: no lo escribe una plataforma
+sino la marca, a mano, con una fila por día. Lo lee
+`campanas/[id]/_lib/csv-ventas.ts` y las cabeceras válidas son
+`día`/`fecha`/`date`, `ventas`/`ingresos`/`sales`, y opcionales
+`pedidos`/`orders` y `canjes`/`redemptions`.
+
+| Archivo | Qué prueba |
+|---|---|
+| `ventas-marca.csv` | Para Fresko (2 al 9 de septiembre, ventana del 26 de agosto al 8 de noviembre): fechas ISO y día/mes/año mezcladas, un importe con miles («1.100.000»), una fila sin pedidos ni canjes, y cinco que se rechazan cada una por un motivo distinto (fuera de rango, fecha ilegible, día repetido, sin ventas, ventas ilegibles). Es el que se importa en dev sobre Fresko. |
+| `ventas-marca-excel.csv` | El mismo tipo de archivo guardado desde Excel en español: punto y coma, coma decimal, comillas y CRLF. |

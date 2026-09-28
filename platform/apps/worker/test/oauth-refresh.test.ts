@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { FakeTokenRefresher } from '@mc/connectors';
 import { allJobs } from '../src/jobs/index.ts';
 import { mapLimit } from '../src/jobs/conexiones/oauth-refresh.ts';
-import { jobRuns, startHarness, waitFor, type Harness, SETUP_TIMEOUT } from './helpers/harness.ts';
+import { jobRuns, startHarness, waitFor, type Harness, type JobRunRow, SETUP_TIMEOUT } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 
 const NOW = new Date('2026-09-21T12:00:00Z');
@@ -67,6 +67,10 @@ async function seedConnections(db: PgliteDatabase): Promise<void> {
 }
 
 let h: Harness;
+/** El envío de la prueba 5: la prueba del reintento mira el segundo intento de ESE job. */
+let primerJobId = '';
+
+const deEsteJob = (runs: JobRunRow[], jobId: string) => runs.filter((r) => r.metadata['bossJobId'] === jobId);
 
 before(async () => {
   h = await startHarness({
@@ -100,13 +104,14 @@ async function conn(id: string): Promise<ConnRow> {
 }
 
 test('5 · renueva la que vence pronto, deja intacta la lejana y marca needs_reauth la revocada', async () => {
-  const jobId = await h.worker.boss.send('oauth.refresh', { source: 'test' });
-  // max_attempts = 5 con fallos transitorios: esperamos la primera corrida (partial) y paramos ahí. La de ESTE
-  // job y su primer intento, no la primera que termine: con la máquina cargada se cuela otra corrida en medio.
-  const run = await waitFor(
-    async () => (await jobRuns(h.db, 'oauth.refresh')).find((r) => r.metadata?.['bossJobId'] === jobId && r.attempt === 1 && r.status !== 'running'),
-    { label: 'primera corrida' },
-  );
+  const jobId = await h.worker.boss.send('oauth.refresh', { source: 'test' }, { singletonKey: 'prueba-5' });
+  assert.ok(jobId, 'encolado');
+  primerJobId = jobId;
+  // max_attempts = 5 con fallos transitorios: esperamos la primera corrida (partial) y paramos ahí.
+  // Se filtra por bossJobId: el cron real (*/15) del arnés también encola
+  // oauth.refresh, y si la suite pasa por un cuarto de hora su corrida
+  // sería «la primera».
+  const run = await waitFor(async () => deEsteJob(await jobRuns(h.db, 'oauth.refresh'), jobId).find((r) => r.status !== 'running'), { label: 'primera corrida' });
 
   assert.equal(run.status, 'partial', 'renovó unas y una falló transitoriamente');
   assert.equal(run.items_processed, 3, 'near + other renovadas, revoked resuelta como needs_reauth');
@@ -192,11 +197,11 @@ test('5 · renueva la que vence pronto, deja intacta la lejana y marca needs_rea
 });
 
 test('el reintento solo toca lo que quedó pendiente (flaky), porque near ya no vence pronto', async () => {
-  // Por su número de intento y no por su posición: con la máquina cargada, otra corrida puede colarse en medio.
-  const second = await waitFor(async () => {
-    const r = await jobRuns(h.db, 'oauth.refresh');
-    return r.find((x) => x.attempt === 2 && x.status !== 'running') ?? null;
+  const runs = await waitFor(async () => {
+    const r = deEsteJob(await jobRuns(h.db, 'oauth.refresh'), primerJobId);
+    return r.length >= 2 && r[1]!.status !== 'running' ? r : null;
   }, { timeoutMs: 20_000, label: 'segundo intento' });
+  const second = runs[1]!;
   assert.equal(second.attempt, 2);
   const md = second.metadata as { due: number; renewed: string[]; needsReauth: string[]; transient: string[] };
   assert.equal(md.due, 1, 'solo flaky sigue dentro del margen y activa');
@@ -208,7 +213,9 @@ test('el reintento solo toca lo que quedó pendiente (flaky), porque near ya no 
 
 test('payload con connectionId renueva esa conexión aunque no esté dentro del margen', async () => {
   const before = (await jobRuns(h.db, 'oauth.refresh')).length;
-  await h.worker.boss.send('oauth.refresh', { connectionId: seed.far, workspaceId: seed.workspaceId });
+  // Con su singletonKey: en una cola 'stately' un envío manual sin clave se
+  // descarta si ya hay uno en cola (el reintento de la prueba 5 o del cron).
+  await h.worker.boss.send('oauth.refresh', { connectionId: seed.far, workspaceId: seed.workspaceId }, { singletonKey: `conexion:${seed.far}` });
   const run = await waitFor(async () => {
     const r = await jobRuns(h.db, 'oauth.refresh');
     const mine = r.filter((x) => x.metadata['due'] === 1 && (x.metadata['renewed'] as string[])?.includes(seed.far));
@@ -235,7 +242,7 @@ test('refresh_expires_at vencido pasa a needs_reauth sin llamar a la plataforma'
     `SELECT count(*)::int AS n FROM api_call_log WHERE connection_id = $1 OR platform_id = 'youtube'`, [id],
   )).rows[0]!.n);
   const callsBefore = await calls();
-  await h.worker.boss.send('oauth.refresh', { connectionId: id });
+  await h.worker.boss.send('oauth.refresh', { connectionId: id }, { singletonKey: `conexion:${id}` });
   await waitFor(async () => (await conn(id)).status === 'needs_reauth', { timeoutMs: 20_000, label: 'old' });
   const row = await conn(id);
   assert.match(row.status_detail!, /permiso de renovación venció/);
@@ -258,7 +265,7 @@ test('sin credencial en el SecretStore la cuenta NO cambia de estado: es un prob
   // los reintentos del cron de la primera prueba, que también la ven.
   const mine = (rows: Awaited<ReturnType<typeof jobRuns>>) =>
     rows.filter((x) => x.metadata['due'] === 1 && (x.metadata['transient'] as string[] | undefined)?.includes(id));
-  await h.worker.boss.send('oauth.refresh', { connectionId: id });
+  await h.worker.boss.send('oauth.refresh', { connectionId: id }, { singletonKey: `conexion:${id}` });
   const run = await waitFor(async () => mine(await jobRuns(h.db, 'oauth.refresh')).find((x) => x.status !== 'running'), { timeoutMs: 20_000, label: 'sin secreto' });
   assert.equal(run.status, 'failed');
   assert.deepEqual(run.metadata['transient'], [id]);

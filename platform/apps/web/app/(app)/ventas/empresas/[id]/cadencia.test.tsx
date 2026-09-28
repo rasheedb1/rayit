@@ -45,6 +45,33 @@ beforeEach(() => {
   reanudarCadencia.mockReset().mockResolvedValue({ ok: true, notice: FICHA.cadencia.pausa.hecho, stamp: 1 });
 });
 
+describe("lo que ya no va a salir (pulido r5)", () => {
+  it("un cancelado o un fallido dice a qué hora iba a salir, en pasado, y por qué no salió", () => {
+    render(
+      <MensajesDeCadencia
+        companyId={COMPANY}
+        f={f}
+        touches={[
+          toque({ id: "00000005-0000-4000-8000-000000070021", status: "canceled", blockedReason: "opted_out" }),
+          toque({ id: "00000005-0000-4000-8000-000000070022", status: "failed", blockedReason: "rejected", stepIndex: 2 }),
+          toque({ id: "00000005-0000-4000-8000-000000070023", status: "canceled", blockedReason: "deal_won", stepIndex: 3 }),
+          toque({ id: "00000005-0000-4000-8000-000000070024", stepIndex: 4 }),
+        ]}
+      />,
+    );
+    const fecha = f.dateTimeShort("2026-09-25T15:30:00Z");
+    const filas = screen.getAllByRole("row").slice(1);
+    expect(within(filas[0]!).getByText(t.linea("Correo", t.iba(fecha)))).toBeInTheDocument();
+    expect(within(filas[0]!).queryByText(t.linea("Correo", t.sale(fecha)))).toBeNull();
+    expect(within(filas[0]!).getByText("Pidió no recibir más mensajes.")).toBeInTheDocument();
+    expect(within(filas[1]!).getByText(t.linea("Correo", t.iba(fecha)))).toBeInTheDocument();
+    expect(within(filas[1]!).getByText("El proveedor lo rechazó.")).toBeInTheDocument();
+    expect(within(filas[2]!).getByText("La marca ya firmó: el negocio se ganó.")).toBeInTheDocument();
+    // Lo programado sigue en futuro y sin motivo.
+    expect(within(filas[3]!).getByText(t.linea("Correo", t.sale(fecha)))).toBeInTheDocument();
+  });
+});
+
 describe("las salidas de una cadencia parada (VEN-10)", () => {
   it("un retenido se puede saltar, con confirmación", async () => {
     render(

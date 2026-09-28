@@ -6,16 +6,25 @@
  *
  *   instagram  business_discovery con INSTAGRAM_HOUSE_TOKEN
  *   youtube    Data API con GOOGLE_API_KEY
- *   tiktok     oEmbed: sin métricas; la cuenta queda anotada, no falla
+ *   tiktok     con ENSEMBLEDATA_TOKEN, el proveedor de datos (CON-12):
+ *              seguidores y número de videos, source 'aggregator'. Sin
+ *              esa variable, oEmbed: sin métricas; la cuenta queda
+ *              anotada, no falla.
+ *
+ * `views` es la columna de las vistas DEL DÍA (Resumen la suma por día):
+ * ninguna fuente de cuenta las da, así que YouTube (acumulado del canal) y
+ * TikTok la dejan en null y las vistas llegan por video (CON-5).
  *
  * Errores: fuente sin configurar → la plataforma se salta y se avisa una
  * vez; not_found / not_discoverable → status 'error' con el detalle en
  * español; transitorio → cuenta como failed y pg-boss reintenta.
  * ctx.db corre como mc_worker: cada escritura filtra por workspace_id.
- * Las cuentas autorizadas (direct_oauth, CON-3) se leen con su token: userInfo /
- * me, source 'api'. Los videos y sus métricas son de CON-5.
+ * Las cuentas autorizadas (direct_oauth, CON-3 y CON-8) se leen con su
+ * token: userInfo / me / channels.list?mine=true, source 'api'. Los
+ * videos y sus métricas son de CON-5.
  */
 import { createPublicProfileSources, isPlatformApiError, isPlatformId, PublicLookupError, type PublicProfileSources } from '@mc/connectors';
+import { auditAsJob } from '@mc/db';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
 import { mapLimit } from './oauth-refresh.ts';
 
@@ -41,7 +50,13 @@ interface Metrics {
   views: number | null;
 }
 
-/** Una cuenta autorizada (CON-3) se lee con su propio token: userInfo de TikTok, me de Instagram. null = red sin lectura todavía (YouTube, CON-8). */
+/**
+ * Una cuenta autorizada (CON-3, CON-8) se lee con su propio token:
+ * userInfo de TikTok, me de Instagram, channels.list?mine=true de YouTube.
+ * YouTube da el acumulado de vistas del canal, no las del día, así que sus
+ * vistas van en null (ver PublicAccountMetrics.views en @mc/connectors).
+ * null = red sin lectura de cuenta con token.
+ */
 async function readAuthorized(ctx: JobContext, acc: AccountRow): Promise<{ metrics: Metrics; raw: unknown } | null> {
   const tokens = await ctx.secrets.get(acc.secret_ref);
   if (!tokens) throw new PublicLookupError('not_configured', 'El almacén no tiene el permiso de esta cuenta; hay que volver a autorizarla.');
@@ -54,16 +69,19 @@ async function readAuthorized(ctx: JobContext, acc: AccountRow): Promise<{ metri
     const { data, raw } = await ctx.connectors.instagram(auth).me({ signal: ctx.signal });
     return { metrics: { followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count, views: data.metrics.views }, raw };
   }
+  if (acc.platform_id === 'youtube') {
+    const { data, raw } = await ctx.connectors.youtube(auth).channelMine({ signal: ctx.signal });
+    if (!data) throw new PublicLookupError('not_found', 'La cuenta de Google autorizada ya no tiene canal de YouTube; hay que volver a autorizarla.');
+    return { metrics: { followers: data.metrics.followers, following: null, mediaCount: data.metrics.media_count, views: null }, raw };
+  }
   return null;
 }
-
-export const PUBLIC_SNAPSHOT_SOURCE = 'public_profile';
 
 export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>('collect.account_metrics', async (payload, ctx) => {
   const { rows } = await ctx.db.query<AccountRow>(
     `SELECT id, workspace_id, platform_id, handle, external_account_id, access_mode, secret_ref
        FROM social_connection
-      WHERE access_mode IN ('public_profile', 'direct_oauth') AND deleted_at IS NULL AND status IN ('active', 'error')
+      WHERE access_mode IN ('public_profile', 'aggregator', 'direct_oauth') AND deleted_at IS NULL AND status IN ('active', 'error')
         AND ($1::uuid IS NULL OR id = $1) AND ($2::uuid IS NULL OR workspace_id = $2)
       ORDER BY platform_id, connected_at`,
     [payload.connectionId ?? null, payload.workspaceId ?? null],
@@ -73,6 +91,8 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
   const noMetrics: string[] = [];
   const errored: string[] = [];
   const transient: string[] = [];
+  /** Filas que cambiaron de fuente (autorizadas o quitadas) mientras esta corrida las leía por @: no se tocan. */
+  const superseded: string[] = [];
   const skipped: Record<string, string> = {};
   const day = ctx.now().toISOString().slice(0, 10);
 
@@ -82,7 +102,7 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
   await Promise.all(
     [...byPlatform.entries()].map(async ([platform, accounts]) => {
       const source = isPlatformId(platform) ? sources[platform] : undefined;
-      const publicOnes = accounts.filter((a) => a.access_mode === 'public_profile');
+      const publicOnes = accounts.filter((a) => a.access_mode !== 'direct_oauth');
       if (publicOnes.length > 0 && (!source || source.missing.length > 0)) {
         skipped[platform] = source ? `faltan ${source.missing.join(', ')}` : 'sin fuente pública';
         ctx.logger.warn('fuente pública sin configurar; se saltan las cuentas por @ de la plataforma', { platform, missing: source?.missing ?? [], accounts: publicOnes.length });
@@ -102,7 +122,43 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
             m = read.metrics; raw = read.raw; note = null; sourceName = 'api';
           } else {
             const profile = await source!.lookup(acc.handle ?? acc.external_account_id, { signal: ctx.signal });
-            m = profile.metrics; raw = profile.raw; note = profile.metricsNote; sourceName = PUBLIC_SNAPSHOT_SOURCE;
+            m = profile.metrics; raw = profile.raw; note = profile.metricsNote;
+            // El source del snapshot es el access_mode de la fuente que lo leyó
+            // ('public_profile' o 'aggregator'): la columna dice de dónde salió la cifra.
+            sourceName = source!.accessMode;
+            // Contratar o dar de baja el proveedor mueve la cuenta de fuente
+            // sin perder su id ni su historia (CON-12 §0.4).
+            if (acc.access_mode !== source!.accessMode) {
+              const changed = await ctx.db.transaction(async (tx) => {
+                // Con la misma guarda que setAccountAccessMode (@mc/db): solo
+                // entre las dos fuentes por @ y sobre una fila viva. Si el
+                // dueño autorizó la cuenta mientras esta corrida leía, la fila
+                // ya es direct_oauth y NO se degrada; el «antes» de la
+                // bitácora es el de la base, no el que se leyó al empezar.
+                const { rows: prev } = await tx.query<{ access_mode: string }>(
+                  `UPDATE social_connection SET access_mode = $3
+                    WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL AND access_mode <> $3
+                      AND access_mode IN ('public_profile', 'aggregator')
+                    RETURNING (SELECT c.access_mode FROM social_connection c WHERE c.id = $1) AS access_mode`,
+                  [acc.id, acc.workspace_id, source!.accessMode],
+                );
+                if (!prev[0]) return false;
+                // La misma fila de bitácora que deja la pantalla (ACC-2), pero como job.
+                await auditAsJob(tx, {
+                  workspaceId: acc.workspace_id, job: { id: ctx.jobId, runId: ctx.runId },
+                  action: 'connection.source_changed', entityType: 'social_connection', entityId: acc.id,
+                  before: { accessMode: prev[0].access_mode }, after: { accessMode: source!.accessMode },
+                });
+                return true;
+              });
+              if (!changed) {
+                // La fila cambió bajo nuestros pies (autorizada o quitada): esta lectura por @ ya no le toca.
+                superseded.push(acc.id);
+                log.info('la cuenta ya no es de una fuente por @; no se guarda esta lectura', { leida: acc.access_mode });
+                return;
+              }
+              log.info('la cuenta cambió de fuente pública', { de: acc.access_mode, a: source!.accessMode });
+            }
           }
           if (m) {
             await ctx.db.transaction(async (tx) => {
@@ -158,9 +214,9 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
   );
 
   return {
-    processed: snapshots.length + noMetrics.length + errored.length,
+    processed: snapshots.length + noMetrics.length + errored.length + superseded.length,
     failed: transient.length,
-    metadata: { day, accounts: rows.length, snapshots, noMetrics, errored, transient, skipped },
+    metadata: { day, accounts: rows.length, snapshots, noMetrics, errored, transient, superseded, skipped },
   };
 });
 

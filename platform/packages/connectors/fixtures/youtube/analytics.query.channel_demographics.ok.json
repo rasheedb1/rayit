@@ -1,0 +1,32 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "viewerPercentage por ageGroup × gender de TODO el canal (sin filters). Los porcentajes no suman 100: Analytics omite los tramos con muy pocas vistas, y CON-7 los guarda tal cual."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "metrics=viewerPercentage&dimensions=ageGroup%2Cgender$"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "youtubeAnalytics#resultTable",
+      "columnHeaders": [
+        { "name": "ageGroup", "columnType": "DIMENSION", "dataType": "STRING" },
+        { "name": "gender", "columnType": "DIMENSION", "dataType": "STRING" },
+        { "name": "viewerPercentage", "columnType": "METRIC", "dataType": "FLOAT" }
+      ],
+      "rows": [
+        ["age18-24", "female", 18.4],
+        ["age18-24", "male", 11.2],
+        ["age25-34", "female", 27.9],
+        ["age25-34", "male", 14.6],
+        ["age35-44", "female", 10.1],
+        ["age35-44", "male", 6.3],
+        ["age45-54", "female", 2.8],
+        ["age65-", "user_specified", 0.5]
+      ]
+    }
+  }
+}

@@ -10,7 +10,7 @@ import type { WorkerDatabase } from './db.ts';
 import { loadJobDefinitions } from './definitions.ts';
 import type { Logger } from './logger.ts';
 import { JobRegistry, type JobDefinition, type JobRegistration } from './registry.ts';
-import { executeRun, JobItemsFailedError } from './run.ts';
+import { CHAIN_SOURCE, executeRun, JobItemsFailedError, payloadContext } from './run.ts';
 
 export interface StartWorkerOptions {
   config: WorkerConfig;
@@ -88,17 +88,14 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
   const { config, db, logger, secrets, refreshers } = opts;
   const env = opts.env ?? process.env;
   const registry = new JobRegistry(opts.jobs);
-  const quota = opts.quota ?? new QuotaManager({
-    limits: await loadPlatformLimits(db, logger),
-    store: new PostgresQuotaUsageStore(db),
-    logger,
-    now: opts.now,
-    sleep: opts.http?.sleep,
-  });
+  const quota = opts.quota ?? await createQuota(db, logger, opts.now, opts.http);
   const all = await loadJobDefinitions(db);
   const definitions = config.groups ? all.filter((d) => config.groups!.includes(d.queue)) : all;
   const summary: JobSummary[] = [];
   let scheduled = 0;
+  // Se mira `all` y no `definitions`: con WORKER_GROUPS, el job de abajo
+  // puede vivir en otro proceso; su cola existe igual en pg-boss.
+  const enabledIds = new Set(all.filter((d) => d.enabled).map((d) => d.id));
 
   for (const def of definitions) {
     const registration = registry.get(def.id);
@@ -112,7 +109,7 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
       continue;
     }
 
-    const options = registration?.options ?? { instances: 1 as const, retryOnItemFailure: true };
+    const options = registration?.options ?? { instances: 1 as const, retryOnItemFailure: true, after: [] };
     const queueOptions = queueOptionsFor(def, config, options);
     if (await boss.getQueue(def.id)) await boss.updateQueue(def.id, updatableQueueOptions(queueOptions));
     else await boss.createQueue(def.id, queueOptions);
@@ -129,6 +126,10 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
               { definition: def, registration, payload: job.data, attempt: job.retryCount + 1, bossJobId: job.id, signal: job.signal },
               { db, logger, secrets, refreshers, quota, http: opts.http, env, now: opts.now },
             );
+            // Hubo datos nuevos (terminó y procesó algo): lo que corre DESPUÉS de este job se encola ya.
+            if (outcome.status !== 'failed' && (outcome.result?.processed ?? 0) > 0) {
+              await enqueueChained(boss, registry.next(def.id).filter((id) => enabledIds.has(id)), def.id, job.data, outcome.runId, logger);
+            }
             if (outcome.status === 'ok') continue;
             // Lanzar es lo que hace que pg-boss reintente hasta max_attempts.
             const itemFailure = outcome.status === 'partial' || outcome.error instanceof JobItemsFailedError;
@@ -159,12 +160,49 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
 }
 
 /**
+ * La cuota compartida del proceso (CON-1): api_quota_usage y
+ * platform.limits. La usan el proceso largo y la pasada de --once.
+ */
+export async function createQuota(db: WorkerDatabase, logger: Logger, now?: () => Date, http?: ConnectorHttpOverrides): Promise<QuotaManager> {
+  return new QuotaManager({
+    limits: await loadPlatformLimits(db, logger),
+    store: new PostgresQuotaUsageStore(db),
+    logger,
+    now,
+    sleep: http?.sleep,
+  });
+}
+
+/**
+ * Encola los jobs que corren después de `desde` (JobOptions.after), con
+ * el mismo workspaceId. Solo se llama si `desde` terminó ok o partial Y
+ * procesó algo: una recolección vacía no trae nada que recalcular. El singletonKey es por alcance: en una cola
+ * 'stately' dos encadenamientos del mismo workspace colapsan en uno
+ * (el que ya está en cola corre después y ve los datos nuevos), sin
+ * colapsar con el cron ni con el de otro workspace. Un fallo al encolar
+ * no tumba el job de arriba, que ya terminó: se anota y el cron cubre.
+ */
+async function enqueueChained(boss: PgBoss, destinos: readonly string[], desde: string, payload: unknown, runId: number, logger: Logger): Promise<void> {
+  if (destinos.length === 0) return;
+  const { workspaceId } = payloadContext(payload);
+  const alcance = workspaceId ?? 'todos';
+  for (const destino of destinos) {
+    try {
+      const encolado = await boss.send(destino, { source: CHAIN_SOURCE, after: desde, ...(workspaceId ? { workspaceId } : {}) }, { singletonKey: `tras:${alcance}` });
+      logger.info(encolado ? 'encadenado' : 'encadenado: ya había uno en cola', { job: destino, tras: desde, runId, alcance });
+    } catch (err) {
+      logger.warn('no se pudo encadenar; lo cubre su cron', { job: destino, tras: desde, runId, err });
+    }
+  }
+}
+
+/**
  * Una definición habilitada sin handler queda constando en job_run como
  * `skipped` / "sin handler", para que se vea desde SQL y no solo en el
  * log. Una sola fila mientras siga sin handler: si la última fila del
  * job ya dice eso, no se repite en cada reinicio.
  */
-async function recordSkipped(db: WorkerDatabase, jobId: string): Promise<void> {
+export async function recordSkipped(db: WorkerDatabase, jobId: string): Promise<void> {
   const { rows } = await db.query<{ status: string; error: string | null }>(
     'SELECT status, error FROM job_run WHERE job_id = $1 ORDER BY id DESC LIMIT 1',
     [jobId],
@@ -199,7 +237,7 @@ async function reconcileSchedule(boss: PgBoss, def: JobDefinition, logger: Logge
   return true;
 }
 
-async function assertRole(db: WorkerDatabase, config: WorkerConfig, logger: Logger): Promise<void> {
+export async function assertRole(db: WorkerDatabase, config: WorkerConfig, logger: Logger): Promise<void> {
   const who = await db.whoAmI();
   if (config.setRole) {
     if (who.currentUser !== config.setRole) {

@@ -175,6 +175,35 @@ export function checkRecipient(channel: string, c: ContactAddresses): RecipientC
   return { ok: true, address };
 }
 
+/** Por qué un toque de cadencia no sale porque su negocio se cerró (0076). */
+export const DEAL_CLOSED_REASONS = ['deal_won', 'deal_lost'] as const;
+export type DealClosedReason = (typeof DEAL_CLOSED_REASONS)[number];
+
+/**
+ * Si el negocio de un toque de CADENCIA se cerró, con la regla del
+ * disparador deal_closed_stops_outreach (0076): 'deal_won' si su negocio
+ * (el del toque o el de su enrolamiento) está en una etapa ganada, o si
+ * la marca ganó cualquier negocio en ese workspace después de que empezó
+ * la cadencia; 'deal_lost' si su negocio está en una etapa perdida; NULL
+ * si nada de eso. El disparador cancela lo que está en la cola al ganar o
+ * perder; esto es la red de seguridad del reclamo y de la relectura antes
+ * de enviar, para lo que ya estaba reclamado o volvió a la cola después.
+ * Un toque sin enrolamiento (una respuesta escrita en la bandeja) es la
+ * voz de una persona y no se toca. `t` es el alias de outbound_touch y
+ * `e` el de su outbound_enrollment; el workspace es el del toque,
+ * explícito: el worker no tiene RLS.
+ */
+export const DEAL_CLOSED_SQL = (t: string, e: string) => `(CASE
+  WHEN ${t}.enrollment_id IS NULL THEN NULL
+  WHEN EXISTS (SELECT 1 FROM deal d JOIN pipeline_stage ps ON ps.id = d.stage_id
+                WHERE d.workspace_id = ${t}.workspace_id AND ps.is_won
+                  AND (d.id = coalesce(${t}.deal_id, ${e}.deal_id)
+                       OR (d.company_id = ${t}.company_id AND d.won_at >= ${e}.started_at))) THEN 'deal_won'
+  WHEN EXISTS (SELECT 1 FROM deal d JOIN pipeline_stage ps ON ps.id = d.stage_id
+                WHERE d.workspace_id = ${t}.workspace_id AND ps.is_lost
+                  AND d.id = coalesce(${t}.deal_id, ${e}.deal_id)) THEN 'deal_lost'
+END)`;
+
 /** La dirección a la que sale un toque según su canal, o null si la ficha no la tiene o no sirve. */
 export function recipientFor(channel: string, c: ContactAddresses): string | null {
   const r = checkRecipient(channel, c);

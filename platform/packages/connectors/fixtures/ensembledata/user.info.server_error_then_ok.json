@@ -1,0 +1,44 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "500 del proveedor y luego 200: transitorio, se reintenta dentro de la misma llamada."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://ensembledata\\.com/apis/tt/user/info\\?"
+  },
+  "response": [
+    {
+      "status": 500,
+      "body": {
+        "detail": "Internal error"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "data": {
+          "user": {
+            "id": "6700000000000000d01",
+            "secUid": "MS4wLjABAAAA-anonimo-d01",
+            "uniqueId": "laura.cocinafacil",
+            "nickname": "Laura · Cocina fácil",
+            "signature": "Recetas de 30 segundos",
+            "verified": false,
+            "region": "CO",
+            "avatarLarger": "https://p16-sign.tiktokcdn-us.com/demo/avatar-d01.jpeg"
+          },
+          "stats": {
+            "followingCount": 312,
+            "followerCount": 128400,
+            "heartCount": 2310000,
+            "videoCount": 3,
+            "diggCount": 4102
+          }
+        },
+        "units_charged": 1
+      }
+    }
+  ]
+}

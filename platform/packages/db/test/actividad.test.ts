@@ -34,6 +34,7 @@ import {
   retryFailedTouches, retryScheduledFor, usageBinding, usageLevel, type QueuePage,
 } from '../src/queries/actividad.ts';
 import { TOUCH_STATUSES } from '../src/schema/ventas.ts';
+import { membershipSql } from './membresia.ts';
 import { openTestDb, SETUP_TIMEOUT, type TestDb } from './pglite.ts';
 
 const id = (kind: string) => `00000065-0000-4000-8000-${kind.padStart(12, '0')}`;
@@ -976,9 +977,10 @@ describe('la base también dice quién opera la cola (0072 §6, pulido r1)', () 
       INSERT INTO app_user (id, email, name) VALUES
         ('${DUENA}', 'duena@guardia.test', 'Dueña'), ('${LECTORA}', 'lectora@guardia.test', 'Lectora'),
         ('${CLIENTE}', 'cliente@guardia.test', 'Cliente'), ('${MIEMBRO}', 'miembro@guardia.test', 'Miembro');
-      INSERT INTO membership (workspace_id, user_id, role) VALUES
-        ('${WS_G}', '${DUENA}', 'owner'), ('${WS_G}', '${LECTORA}', 'viewer'), ('${WS_G}', '${CLIENTE}', 'client'),
-        ('${WS_G}', '${MIEMBRO}', 'member');
+      ${membershipSql([
+        { workspaceId: WS_G, userId: DUENA, kind: 'owner' }, { workspaceId: WS_G, userId: LECTORA, kind: 'viewer' },
+        { workspaceId: WS_G, userId: CLIENTE, kind: 'client' }, { workspaceId: WS_G, userId: MIEMBRO, kind: 'member' },
+      ])}
       INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, subject, body, status, scheduled_for,
                                   blocked_reason, attempt_count, recipient_address)
       VALUES ('${PROG}', '${WS_G}', '${CO_G}', '${P_G}', 'email', 'Hola', 'Una idea.', 'scheduled', now() + interval '1 day', NULL, 0, NULL),

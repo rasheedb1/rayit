@@ -23,7 +23,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createFakeIntentClassifier, LlmIntentClassifier, type IntentClassifier, type IntentInput } from '@mc/core/outreach/intent';
-import { llmCostUsd, type LlmClient } from '@mc/core/outreach/llm';
+import type { LlmClient } from '@mc/core/outreach/llm';
+import { llmCostUsd } from '@mc/core/outreach/llm-precios';
 import {
   approveQueuedTouch, cancelInboxReply, createReferralContact, listApprovalQueue, listInboxThreads, loadInboxConversation,
   markInboxThreadRead, reclassifyInboxMessage, regenerateQueuedTouch, replyInInboxThread, skipQueuedTouch,
@@ -69,7 +70,7 @@ function scriptedModel(answer: string): LlmClient {
   return {
     name: 'guion',
     async complete(req) {
-      return { text: answer, model: req.model, inputTokens: 640, outputTokens: 38, costUsd: llmCostUsd(req.model, 640, 38), stopReason: 'end_turn' };
+      return { text: answer, model: req.model, inputTokens: 640, outputTokens: 38, costUsd: Number(llmCostUsd({ model: req.model, inputTokens: 640, outputTokens: 38 })), stopReason: 'end_turn' };
     },
   };
 }
@@ -288,7 +289,7 @@ test('terminado cuando: una baja marca a la ficha y cancela lo pendiente, la vea
     `SELECT purpose, model, input_tokens, cost::text AS cost, message_id IS NOT NULL AS tied FROM outbound_llm_call WHERE workspace_id = $1`, [b.id],
   )).rows;
   assert.deepEqual(llamada.map((l) => [l.purpose, l.model, l.input_tokens, l.tied]), [['classify', 'claude-haiku-4-5-20251001', 640, true]]);
-  assert.equal(Number(llamada[0]!.cost), llmCostUsd('claude-haiku-4-5-20251001', 640, 38), 'con su costo');
+  assert.equal(Number(llamada[0]!.cost), Number(llmCostUsd({ model: 'claude-haiku-4-5-20251001', inputTokens: 640, outputTokens: 38 })), 'con su costo');
   const origen = await scalar<string>(`SELECT intent_source AS v FROM outbound_message WHERE contact_id = $1 AND direction = 'inbound'`, [cb]);
   assert.equal(origen, 'model');
 });

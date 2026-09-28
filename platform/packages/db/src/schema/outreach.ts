@@ -637,3 +637,23 @@ export const outboundWorkspaceOptout = pgTable(
   },
   (t) => [primaryKey({ columns: [t.workspaceId, t.email] })],
 );
+
+/**
+ * La hermana de outbound_workspace_optout para los perfiles (0077, VEN-15
+ * pulido r5): el LinkedIn o el Instagram al que el workspace no vuelve a
+ * escribir, en su forma comparable (outreach_handle_key). Sin ella, una
+ * baja de alguien sin correo se esquivaba con una segunda ficha con la
+ * misma URL. La escriben outbound_workspace_optout_record, el disparador
+ * contact_optout_handles y el worker; mc_app solo la lee.
+ */
+export const outboundWorkspaceOptoutHandle = pgTable(
+  'outbound_workspace_optout_handle',
+  {
+    workspaceId: workspaceId(),
+    channel: text('channel', { enum: ['linkedin', 'instagram_dm'] }).notNull(),
+    addressKey: text('address_key').notNull(),
+    source: text('source', { enum: ['reply', 'manual', 'contact'] }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.channel, t.addressKey] })],
+);

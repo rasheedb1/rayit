@@ -11,6 +11,16 @@
  */
 import type { MembershipRole } from "@mc/db/queries/identidad";
 
+/**
+ * Quien trabaja Ventas, Cotizar y el Resumen, con los roles de
+ * 0034_access_control (ACC-3): 'owner', 'admin' (agencia), 'manager' y
+ * 'editor'. Son los que el relleno de 0034 dio a los antiguos 'owner',
+ * 'admin' y 'member', así que nadie gana ni pierde nada al mezclar; y es
+ * el mismo grupo que la base acepta como operador (0072,
+ * outbound_touch_guard_operator). 'finance' y 'viewer' leen.
+ */
+export const OPERAN: readonly MembershipRole[] = ["owner", "admin", "manager", "editor"];
+
 /** Tope de un nombre de persona o de espacio, en caracteres. */
 export const MAX_NOMBRE = 80;
 
@@ -33,7 +43,7 @@ export const PUEDEN_GESTIONAR_CANALES: ReadonlySet<MembershipRole> = new Set<Mem
  * marcas: un 'viewer' o un 'client' (en una agencia, la marca misma) la
  * leen, no la reescriben.
  */
-export const PUEDEN_EDITAR_PERFIL: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
+export const PUEDEN_EDITAR_PERFIL: ReadonlySet<MembershipRole> = new Set<MembershipRole>(OPERAN);
 
 /**
  * Los roles que operan Ventas en nombre de la creadora (VEN-14): aprobar,
@@ -45,7 +55,7 @@ export const PUEDEN_EDITAR_PERFIL: ReadonlySet<MembershipRole> = new Set<Members
  * 'viewer' lee las bandejas y no las toca; un 'client' ni las lee (ver
  * PUEDEN_VER_BANDEJAS). Mismo grupo que PUEDEN_EDITAR_PERFIL.
  */
-export const PUEDEN_OPERAR_VENTAS: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
+export const PUEDEN_OPERAR_VENTAS: ReadonlySet<MembershipRole> = new Set<MembershipRole>(OPERAN);
 
 /**
  * Los roles que operan Cotizar (COT-1..4): guardar el tarifario, generar,
@@ -56,24 +66,25 @@ export const PUEDEN_OPERAR_VENTAS: ReadonlySet<MembershipRole> = new Set<Members
  * reescribe tarifas ni acepta cotizaciones. Mismo grupo que
  * PUEDEN_OPERAR_VENTAS.
  */
-export const PUEDEN_OPERAR_COTIZAR: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
+export const PUEDEN_OPERAR_COTIZAR: ReadonlySet<MembershipRole> = new Set<MembershipRole>(OPERAN);
 
 /**
  * Los roles que pueden importar métricas desde un CSV (RES-6): escribe
  * posts y métricas del espacio, que luego ven Resumen y Campañas. Un
  * 'viewer' o un 'client' las leen, no las cargan.
  */
-export const PUEDEN_IMPORTAR_METRICAS: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member"]);
+export const PUEDEN_IMPORTAR_METRICAS: ReadonlySet<MembershipRole> = new Set<MembershipRole>(OPERAN);
 
 /**
  * Los roles que pueden LEER las bandejas de Ventas (VEN-14): las
  * conversaciones con las marcas (/ventas/bandeja) y los mensajes
- * retenidos (/ventas/aprobaciones). Un 'client' no: en una agencia es la
- * marca misma, y los hilos y los borradores son con otras marcas, quizá
- * competidoras. Las páginas ni siquiera cargan los hilos ni la cola para
- * él: ven un aviso de que no tienen acceso.
+ * retenidos (/ventas/aprobaciones). Todos los roles de 0034_access_control:
+ * desde ACC-3 la marca no tiene cuenta, tiene un enlace (backlog §7,
+ * decisión 8), y el antiguo 'client' pasó a 'viewer', que en la matriz ve
+ * el pipeline (ventas.negocio.ver). Quien no esté aquí ve un aviso de que
+ * no tiene acceso, y las páginas ni siquiera cargan los hilos ni la cola.
  */
-export const PUEDEN_VER_BANDEJAS: ReadonlySet<MembershipRole> = new Set<MembershipRole>(["owner", "admin", "member", "viewer"]);
+export const PUEDEN_VER_BANDEJAS: ReadonlySet<MembershipRole> = new Set<MembershipRole>([...OPERAN, "finance", "viewer"]);
 
 /**
  * Los roles que pueden cambiar el brief de outbound (VEN-7). Es el brief

@@ -174,11 +174,11 @@ describe("la pantalla", () => {
     const items = within(lista).getAllByRole("listitem").filter((li) => li.parentElement === lista);
     expect(items).toHaveLength(5);
     expect(items.map((li) => within(li).getAllByRole("link")[0]!.textContent)).toEqual(TITULOS.slice(0, 5));
-    // La primera: 6,0× su mediana, 400 mil views a los 7 días, 30 s, «Fuera de serie» y la mediana contra la que se midió.
+    // La primera: 6,0× su mediana, 400 mil visualizaciones a los 7 días, 30 s, «Fuera de serie» y la mediana contra la que se midió.
     const primero = within(items[0]!);
     expect(primero.getByRole("button", { name: /^6,0×/ })).toBeTruthy();
     expect(primero.getByRole("button", { name: /^400 mil/ })).toBeTruthy();
-    expect(primero.getByText(/views a los 7 días de publicado/)).toBeTruthy();
+    expect(primero.getByText(/visualizaciones a los 7 días de publicado/)).toBeTruthy();
     expect(primero.getByRole("button", { name: /^30 s/ })).toBeTruthy();
     expect(primero.getByText("Fuera de serie")).toBeTruthy();
     expect(within(items[1]!).getByText("Muy por encima")).toBeTruthy();

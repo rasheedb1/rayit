@@ -402,6 +402,9 @@ test('decideBeforeSend relee todo en la transacción del envío', () => {
   assert.deepEqual(decideBeforeSend(ctx({ optedOut: true }), CLAIMED_AT, NOW), { kind: 'cancel', reason: 'opted_out' });
   assert.deepEqual(decideBeforeSend(ctx({ enabled: false }), CLAIMED_AT, NOW), { kind: 'cancel', reason: 'outreach_disabled' });
   assert.deepEqual(decideBeforeSend(ctx({ enrollmentStatus: 'replied' }), CLAIMED_AT, NOW), { kind: 'cancel', reason: 'replied' });
+  // La marca firmó o el negocio se perdió entre el reclamo y el envío (0076).
+  assert.deepEqual(decideBeforeSend(ctx({ dealClosed: 'deal_won' }), CLAIMED_AT, NOW), { kind: 'cancel', reason: 'deal_won' });
+  assert.deepEqual(decideBeforeSend(ctx({ dealClosed: 'deal_lost' }), CLAIMED_AT, NOW), { kind: 'cancel', reason: 'deal_lost' });
   assert.equal(decideBeforeSend(ctx({ enrollmentStatus: 'paused' }), CLAIMED_AT, NOW).kind, 'postpone');
   // La cuenta cayó entre el reclamo y el envío: el mensaje espera, no falla.
   const caida = decideBeforeSend(ctx({ account: { ...ctx().account!, status: 'needs_reconnect' } }), CLAIMED_AT, NOW);

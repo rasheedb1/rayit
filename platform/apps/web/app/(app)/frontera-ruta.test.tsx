@@ -20,7 +20,8 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { closeDb, getDbMode } from "@/lib/db";
 import AppError from "./error";
 import FinanzasError from "./finanzas/error";
-import FinanzasPage from "./finanzas/page";
+import CobrosPage from "./finanzas/(inicio)/page";
+import FacturasPage from "./finanzas/facturas/(lista)/page";
 import VentasError from "./ventas/error";
 import VentasPage from "./ventas/(inicio)/page";
 import EmpresasError from "./ventas/empresas/error";
@@ -71,8 +72,16 @@ const pintar = (Frontera: typeof AppError, error: Error) =>
 describe("con un DEMO_WORKSPACE_ID que no existe, la frontera dice la verdad", () => {
   const casos = [
     {
-      nombre: "Finanzas",
-      pantalla: () => FinanzasPage({ searchParams: Promise.resolve({}) }),
+      // FIN-3 partió Finanzas en dos rutas; las dos leen la base y las
+      // dos caen en la MISMA frontera, la del segmento.
+      nombre: "Finanzas · cuentas por cobrar",
+      pantalla: () => CobrosPage({ searchParams: Promise.resolve({}) }),
+      Frontera: FinanzasError,
+      titulo: FINANZAS.error.title,
+    },
+    {
+      nombre: "Finanzas · archivo de facturas",
+      pantalla: () => FacturasPage({ searchParams: Promise.resolve({}) }),
       Frontera: FinanzasError,
       titulo: FINANZAS.error.title,
     },

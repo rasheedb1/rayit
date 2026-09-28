@@ -1266,17 +1266,17 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
   const DEAL_PUBLIC_SHARE =
     "EXISTS (SELECT 1 FROM quote q WHERE q.deal_id = deal.id AND q.slug = nullif(current_setting('app.public_share', true), ''))";
 
-  test('el inventario declarado es el de 0030, 0031, 0046 y 0055, y la base recién migrada lo cumple', async () => {
+  test('el inventario declarado es el de 0030, 0031, 0033, 0037, 0046 y 0055, y la base recién migrada lo cumple', async () => {
     assert.deepEqual(Object.keys(PRIVILEGIOS_DEL_ENLACE_PUBLICO).sort(), [
       'company', 'company_link', 'contact', 'deal', 'deal_stage_history',
       'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'membership', 'outbound_enrollment',
       'outbound_optout_event', 'outbound_optout_link', 'outbound_touch', 'outbound_workspace_optout', 'pipeline_stage', 'quote',
-      'workspace',
+      'report', 'workspace',
     ]);
     assert.equal(
       Object.keys(POLITICAS_DEL_ENLACE_PUBLICO).length,
-      20,
-      'las siete de 0030, la aceptada del negocio de 0033, las nueve de la baja de 0046 (una, la de las fichas por ' +
+      22,
+      'las siete de 0030, la aceptada del negocio de 0033, las dos del reporte de 0037, las nueve de la baja de 0046 (una, la de las fichas por ' +
         'dirección, rehecha en 0055 §8), la de quién envía de 0055 y las dos de la baja con quien envió (0055 §8)',
     );
     // La baja nunca escribe la lista de toda la plataforma (0055 §8): mc_public_share ni la nombra.
@@ -1292,6 +1292,8 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
     assert.deepEqual(PRIVILEGIOS_DEL_ENLACE_PUBLICO.outbound_optout_event!.tabla, ['INSERT']);
     // La baja (0046 §9) escribe la baja del contacto, nunca su correo.
     assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.contact!.columnas!.UPDATE!.includes('email'));
+    // El reporte (CAM-6): nunca el payload congelado.
+    assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.report!.columnas!.UPDATE!.includes('payload'));
     assert.ok(!PRIVILEGIOS_DEL_ENLACE_PUBLICO.quote!.columnas!.UPDATE!.includes('total'));
     assert.deepEqual((await estadoDelEsquema(t.db)).enlacePublico, []);
   });

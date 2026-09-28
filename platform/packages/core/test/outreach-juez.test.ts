@@ -9,7 +9,8 @@ import { createFakeGenerator, createFakeJudge } from '../src/outreach/fake.ts';
 import { buildGenerationPrompt, loadPrompt, LlmMessageGenerator, type GenerationInput, type MessageGenerator } from '../src/outreach/generate.ts';
 import { textSimilarity } from '../src/outreach/gates.ts';
 import { buildJudgePrompt, DEFAULT_RUBRIC, LlmMessageJudge, weightedScore, type JudgeVerdict, type MessageJudge } from '../src/outreach/judge.ts';
-import { llmCostUsd, temperatureFor, type LlmClient, type LlmRequest, type LlmResponse } from '../src/outreach/llm.ts';
+import { temperatureFor, type LlmClient, type LlmRequest, type LlmResponse } from '../src/outreach/llm.ts';
+import { estimateCallUsd, llmCostUsd, UnknownModelPriceError } from '../src/outreach/llm-precios.ts';
 import { runQualityGate, type LlmCallRecord, type QualityGateInput } from '../src/outreach/quality-gate.ts';
 
 const CLAIMS: SalesClaim[] = [
@@ -68,15 +69,20 @@ function scriptedLlm(texts: string[], usage = { input: 1200, output: 150 }): Llm
     async complete(req: LlmRequest): Promise<LlmResponse> {
       requests.push(req);
       const text = texts[Math.min(requests.length - 1, texts.length - 1)]!;
-      return { text, model: req.model, inputTokens: usage.input, outputTokens: usage.output, costUsd: llmCostUsd(req.model, usage.input, usage.output), stopReason: 'end_turn' };
+      return { text, model: req.model, inputTokens: usage.input, outputTokens: usage.output, costUsd: Number(llmCostUsd({ model: req.model, inputTokens: usage.input, outputTokens: usage.output })), stopReason: 'end_turn' };
     },
   };
 }
 
 test('los precios y la temperatura: sonnet-5 no recibe temperatura (la rechaza), haiku sí', () => {
-  assert.equal(llmCostUsd('claude-sonnet-5', 1_000_000, 0), 2);
-  assert.equal(llmCostUsd('claude-sonnet-5', 1200, 150), 0.0039);
-  assert.equal(llmCostUsd('modelo-desconocido', 1000, 1000), 0);
+  assert.equal(llmCostUsd({ model: 'claude-sonnet-5', inputTokens: 1_000_000, outputTokens: 0 }), '2.000000');
+  assert.equal(llmCostUsd({ model: 'claude-sonnet-5', inputTokens: 1200, outputTokens: 150 }), '0.003900');
+  // Un modelo sin precio lanza, también al estimar antes de llamar: un costo 0 dejaría el tope sin efecto (pulido r5).
+  assert.throws(() => llmCostUsd({ model: 'modelo-desconocido', inputTokens: 1000, outputTokens: 1000 }), UnknownModelPriceError);
+  assert.throws(() => estimateCallUsd('modelo-desconocido', 3000, 700), UnknownModelPriceError);
+  assert.equal(estimateCallUsd('claude-sonnet-5', 3000, 700), 0.009);
+  // Los dobles (on-cue-fake-…) no llaman a nadie: cuestan 0 por regla explícita, no por faltar en la tabla.
+  assert.equal(llmCostUsd({ model: 'on-cue-fake-generator', inputTokens: 1000, outputTokens: 1000 }), '0.000000');
   assert.equal(temperatureFor('claude-sonnet-5', 'generate'), undefined);
   assert.equal(temperatureFor('claude-haiku-4-5-20251001', 'classify'), 0);
 });
@@ -139,7 +145,7 @@ test('con el generador y el juez falsos, un buen correo pasa al primer intento y
 function generatorThatLiesFirst(): MessageGenerator {
   const fake = createFakeGenerator();
   return {
-    name: 'mentiroso', model: 'guion',
+    name: 'mentiroso', model: 'on-cue-fake-guion',
     async generate(input) {
       const out = await fake.generate(input);
       if (input.attempt > 1) return out;
@@ -152,7 +158,7 @@ function judgeWith(scores: JudgeVerdict['scores'], riskTriggers: JudgeVerdict['r
   return {
     name: 'guion', model: 'claude-sonnet-5',
     async judge() {
-      return { scores, riskTriggers, hint: null, note: 'Nota del guion.', model: 'claude-sonnet-5', inputTokens: 1000, outputTokens: 100, costUsd: llmCostUsd('claude-sonnet-5', 1000, 100) };
+      return { scores, riskTriggers, hint: null, note: 'Nota del guion.', model: 'claude-sonnet-5', inputTokens: 1000, outputTokens: 100, costUsd: Number(llmCostUsd({ model: 'claude-sonnet-5', inputTokens: 1000, outputTokens: 100 })) };
     },
   };
 }
@@ -381,11 +387,11 @@ test('el redactor falso no habla de cocina fuera de la cocina y escribe en ingl�
  */
 function copycatGenerator(): MessageGenerator {
   return {
-    name: 'copion', model: 'guion',
+    name: 'copion', model: 'on-cue-fake-guion',
     async generate(input) {
       const base = input.avoid[0] ?? '';
       const body = base.replaceAll('Café Alma', input.company.name).replaceAll('Valentina', input.contact?.fullName?.split(' ')[0] ?? '');
-      return { subject: `Una idea para ${input.company.name}`, body, model: 'guion', inputTokens: 10, outputTokens: 10, costUsd: 0 };
+      return { subject: `Una idea para ${input.company.name}`, body, model: 'on-cue-fake-guion', inputTokens: 10, outputTokens: 10, costUsd: 0 };
     },
   };
 }

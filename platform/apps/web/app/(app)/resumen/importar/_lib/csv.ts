@@ -55,7 +55,8 @@ export class ErrorCsv extends Error {
 // en lib/csv.ts: los comparte con la lista de marcas de Ventas, que
 // tenía su propio lector y rompía las tildes de un CSV de Excel. La
 // pantalla dice cuál se usó.
-export { decodificarCsv, type Codificacion } from "@/lib/csv";
+export { decodificarCsv, normalizarNumeroDeHoja, type Codificacion } from "@/lib/csv";
+import { normalizarNumeroDeHoja } from "@/lib/csv";
 
 /**
  * Papaparse con `header: true` y el delimitador autodetectado: Meta
@@ -94,25 +95,12 @@ export function leerCsv(texto: string): Tabla {
  * no hay ningún campo que sea un porcentaje.
  */
 export function aNumero(celda: string): number | null {
-  const s = celda.trim().replace(/\s|%|\u00A0|\u202F/g, "");
-  if (!s || s === "-" || s === "—") return null;
-  const cuerpo = s.replace(/^[^\d,.-]+/, "");
-  if (!/^-?[\d.,]+$/.test(cuerpo)) return null;
-  const ultimaComa = cuerpo.lastIndexOf(",");
-  const ultimoPunto = cuerpo.lastIndexOf(".");
-  let normalizado: string;
-  if (ultimaComa >= 0 && ultimoPunto >= 0) {
-    const dec = Math.max(ultimaComa, ultimoPunto);
-    normalizado = cuerpo.slice(0, dec).replace(/[.,]/g, "") + "." + cuerpo.slice(dec + 1);
-  } else if (ultimaComa >= 0 || ultimoPunto >= 0) {
-    const dec = Math.max(ultimaComa, ultimoPunto);
-    const detras = cuerpo.length - dec - 1;
-    const signo = cuerpo[dec]!;
-    const repetido = cuerpo.split(signo).length > 2;
-    normalizado = detras === 3 || repetido ? cuerpo.replace(/[.,]/g, "") : cuerpo.replace(/[.,]/g, ".");
-  } else {
-    normalizado = cuerpo;
-  }
+  // La normalización de los separadores vive en lib/csv.ts desde FIN-7:
+  // Finanzas necesita la MISMA lectura pero como string, porque el
+  // dinero no puede pasar por un double. Aquí sí es un double: son
+  // métricas, y todo lo que sigue las trata como número.
+  const normalizado = normalizarNumeroDeHoja(celda);
+  if (normalizado === null) return null;
   const n = Number(normalizado);
   return Number.isFinite(n) ? n : null;
 }

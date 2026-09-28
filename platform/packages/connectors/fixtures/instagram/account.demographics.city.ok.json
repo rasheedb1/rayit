@@ -1,0 +1,64 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "breakdown=city: Meta devuelve 'Ciudad, Región' como una sola cadena. CON-7 la guarda tal cual en audience_breakdown.bucket."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me/insights\\?metric=follower_demographics.*breakdown=city"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": [
+        {
+          "name": "follower_demographics",
+          "period": "lifetime",
+          "title": "Follower demographics",
+          "description": "",
+          "total_value": {
+            "breakdowns": [
+              {
+                "dimension_keys": [
+                  "city"
+                ],
+                "results": [
+                  {
+                    "dimension_values": [
+                      "Bogotá, Bogota"
+                    ],
+                    "value": 141000
+                  },
+                  {
+                    "dimension_values": [
+                      "Medellín, Antioquia"
+                    ],
+                    "value": 58000
+                  },
+                  {
+                    "dimension_values": [
+                      "Cali, Valle del Cauca"
+                    ],
+                    "value": 31000
+                  },
+                  {
+                    "dimension_values": [
+                      "Ciudad de México, Distrito Federal"
+                    ],
+                    "value": 12000
+                  }
+                ]
+              }
+            ]
+          },
+          "id": "x"
+        }
+      ],
+      "paging": {
+        "previous": "",
+        "next": ""
+      }
+    }
+  }
+}

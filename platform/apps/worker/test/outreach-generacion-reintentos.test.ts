@@ -295,7 +295,7 @@ test('si el job se corta mientras el juez piensa, el intento ya pagado queda en 
 /** Un generador de plantilla: el mismo correo para todas, con la marca y la persona cambiadas. */
 function plantilla(): MessageGenerator {
   return {
-    name: 'plantilla', model: 'guion',
+    name: 'plantilla', model: 'on-cue-fake-guion',
     async generate(input) {
       const quien = input.contact?.fullName?.split(' ')[0] ?? 'equipo';
       const body = [
@@ -307,7 +307,7 @@ function plantilla(): MessageGenerator {
         '',
         input.creator.name,
       ].join('\n');
-      return { subject: `Una idea para ${input.company.name}`, body, model: 'guion', inputTokens: 10, outputTokens: 10, costUsd: 0 };
+      return { subject: `Una idea para ${input.company.name}`, body, model: 'on-cue-fake-guion', inputTokens: 10, outputTokens: 10, costUsd: 0 };
     },
   };
 }

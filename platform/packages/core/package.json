@@ -9,11 +9,13 @@
     ".": "./src/index.ts",
     "./outreach/*": "./src/outreach/*.ts",
     "./format/*": "./src/format/*.ts",
-    "./plataformas": "./src/plataformas.ts"
+    "./plataformas": "./src/plataformas.ts",
+    "./scripts/*": "./scripts/*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "permisos:sql": "node --experimental-strip-types scripts/permisos-sql.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

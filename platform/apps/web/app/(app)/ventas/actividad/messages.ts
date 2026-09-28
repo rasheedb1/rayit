@@ -46,7 +46,7 @@ const plural =
 export type MotivoCode =
   | "replied" | "not_now" | "opted_out" | "opted_out_in_flight" | "outreach_disabled" | "sequence_archived" | "completed"
   | "bounced" | "email_invalid" | "no_address" | "invalid_address" | "no_contact" | "company_cap" | "canceled_by_user"
-  | "sent_confirmed_by_user" | "paused" | "cooldown";
+  | "sent_confirmed_by_user" | "paused" | "cooldown" | "deal_won" | "deal_lost";
 
 export const MESSAGES = {
   metaTitle: "Actividad",
@@ -176,6 +176,8 @@ export const MESSAGES = {
     sent_confirmed_by_user: "confirmaste a mano que salió",
     paused: "la cadencia está en pausa",
     cooldown: "la cadencia está en espera",
+    deal_won: "la marca ya firmó: el negocio se ganó",
+    deal_lost: "el negocio se marcó como perdido",
   } satisfies Record<MotivoCode, string>,
   motivoGenerico: "no salió",
 

@@ -1,0 +1,39 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "Lo que falta NO es cero: like_count se omite cuando el dueño oculta los «me gusta»; view_count solo existe en reels; media_product_type está marcado «Facebook Login API only» y puede no llegar por graph.instagram.com."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=business_discovery\\.username%28sinlikes%29[^&]*media\\.limit%28"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "business_discovery": {
+        "id": "17841400000000e10",
+        "username": "sinlikes",
+        "followers_count": 8400,
+        "media_count": 2,
+        "media": {
+          "data": [
+            {
+              "id": "1800000000000000c01",
+              "caption": null,
+              "media_type": "VIDEO",
+              "media_url": "https://scontent.cdninstagram.com/demo/c01.mp4",
+              "permalink": "https://www.instagram.com/reel/demo-c01/",
+              "thumbnail_url": null,
+              "timestamp": "2026-09-19T09:00:00+0000",
+              "username": "sinlikes",
+              "comments_count": 0
+            }
+          ],
+          "paging": { "cursors": { "before": "QVFIU_c_before", "after": "QVFIU_c_after" } }
+        }
+      },
+      "id": "17841400000000123"
+    }
+  }
+}

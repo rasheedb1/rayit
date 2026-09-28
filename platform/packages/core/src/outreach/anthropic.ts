@@ -21,7 +21,8 @@
  *     propio tiempo límite.
  */
 import Anthropic from '@anthropic-ai/sdk';
-import { llmCostUsd, temperatureFor, type LlmCallOptions, type LlmClient, type LlmRequest, type LlmResponse } from './llm.ts';
+import { temperatureFor, type LlmCallOptions, type LlmClient, type LlmRequest, type LlmResponse } from './llm.ts';
+import { llmCostUsd } from './llm-precios.ts';
 
 export const ANTHROPIC_TIMEOUT_MS = 60_000;
 /** Los reintentos del SDK por defecto (429, 5xx, red). */
@@ -60,7 +61,8 @@ export class AnthropicLlm implements LlmClient {
       model: res.model,
       inputTokens,
       outputTokens,
-      costUsd: llmCostUsd(req.model, inputTokens, outputTokens),
+      // El precio del modelo que se PIDIÓ (el que la reserva estimó); uno sin precio ya lanzó en estimateCallUsd.
+      costUsd: Number(llmCostUsd({ model: req.model, inputTokens, outputTokens })),
       stopReason: res.stop_reason ?? null,
     };
   }

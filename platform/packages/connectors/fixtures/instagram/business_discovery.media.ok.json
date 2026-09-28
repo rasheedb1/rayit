@@ -1,0 +1,71 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "instagram-platform/reference/instagram-media + instagram-api-with-facebook-login/business-discovery, leídas el 23-sep-2026. Un reel (con view_count), una foto de feed (sin view_count: Instagram no publica vistas de feed) y un carrusel."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=business_discovery\\.username%28cafealma%29[^&]*media\\.limit%28"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "business_discovery": {
+        "id": "17841400000000e01",
+        "username": "cafealma",
+        "followers_count": 267793,
+        "media_count": 1205,
+        "media": {
+          "data": [
+            {
+              "id": "1800000000000000b01",
+              "caption": "Cold brew en casa en 3 pasos ☕ con @cafealma #coldbrew #cafe",
+              "media_type": "VIDEO",
+              "media_product_type": "REELS",
+              "media_url": "https://scontent.cdninstagram.com/demo/b01.mp4",
+              "permalink": "https://www.instagram.com/reel/demo-b01/",
+              "thumbnail_url": "https://scontent.cdninstagram.com/demo/b01.jpg",
+              "timestamp": "2026-09-20T17:00:00+0000",
+              "username": "cafealma",
+              "like_count": 5120,
+              "comments_count": 208,
+              "view_count": 141200
+            },
+            {
+              "id": "1800000000000000b02",
+              "caption": "El grano de la semana viene del Huila #cafedecolombia",
+              "media_type": "IMAGE",
+              "media_product_type": "FEED",
+              "media_url": "https://scontent.cdninstagram.com/demo/b02.jpg",
+              "permalink": "https://www.instagram.com/p/demo-b02/",
+              "timestamp": "2026-09-18T14:30:00+0000",
+              "username": "cafealma",
+              "like_count": 1830,
+              "comments_count": 44
+            },
+            {
+              "id": "1800000000000000b03",
+              "caption": "Cuatro métodos de filtrado, uno por foto #v60 #chemex",
+              "media_type": "CAROUSEL_ALBUM",
+              "media_product_type": "FEED",
+              "media_url": "https://scontent.cdninstagram.com/demo/b03.jpg",
+              "permalink": "https://www.instagram.com/p/demo-b03/",
+              "timestamp": "2026-09-15T12:00:00+0000",
+              "username": "cafealma",
+              "like_count": 2044,
+              "comments_count": 71
+            }
+          ],
+          "paging": {
+            "cursors": {
+              "before": "QVFIU_bd_before",
+              "after": "QVFIU_bd_after_1"
+            }
+          }
+        }
+      },
+      "id": "17841400000000123"
+    }
+  }
+}

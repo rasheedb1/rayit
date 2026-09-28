@@ -58,7 +58,7 @@ import { advanceEnrollment } from './enroll.ts';
 import { notifyAccountDown, notifyTouchFailed } from './notices.ts';
 import {
   accountActionType, ACCOUNT_WAIT_MS, assertIds, date, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS,
-  checkRecipient, DISPATCHABLE_STEP_TYPES, int, oneOf, releaseCaps, shiftFollowing, stepTypeForChannel, text,
+  checkRecipient, DEAL_CLOSED_SQL, DISPATCHABLE_STEP_TYPES, int, oneOf, releaseCaps, shiftFollowing, stepTypeForChannel, text,
   textOrNull, toDate, windowOf, ZOMBIE_AFTER_MINUTES, type DispatchableStepType, type DispatchChannel,
 } from './shared.ts';
 
@@ -101,7 +101,10 @@ export interface ClaimReport {
    * se enroló antes de cambiar el brief tampoco sale.
    */
   canceledBriefExcluded: number;
-  /** Cancelados antes de reclamar: el enrolamiento terminó (respondió, baja, completo, rebote) o la secuencia se archivó. */
+  /**
+   * Cancelados antes de reclamar: el enrolamiento terminó (respondió, baja, completo, rebote), la secuencia se
+   * archivó, o el negocio se cerró (deal_won, deal_lost: la marca firmó o se perdió, 0076).
+   */
   canceledFinished: number;
   /** Saltados: el contacto no tiene dirección en ese canal. */
   skippedNoAddress: number;
@@ -384,7 +387,8 @@ async function senderAccounts(tx: WorkerSql, c: Candidate): Promise<SenderAccoun
  * Si la persona de un toque pidió la baja, con la misma definición que
  * enforce_outbound_optout (0046 §4.1 y 0055 §8.3): la ficha dada de baja,
  * su correo o la dirección del envío en la lista global, o cualquiera de
- * los dos en la lista del workspace del toque. Aquí no hay RLS: el
+ * los dos en la lista del workspace del toque, o su LinkedIn, su
+ * Instagram o la dirección del envío en la de perfiles (0077). Aquí no hay RLS: el
  * workspace es el del toque, explícito.
  */
 const OPTED_OUT_SQL = (t: string) => `(
@@ -393,7 +397,8 @@ const OPTED_OUT_SQL = (t: string) => `(
   OR EXISTS (SELECT 1 FROM outbound_workspace_optout o
               WHERE o.workspace_id = ${t}.workspace_id
                 AND (o.email = ${t}.recipient_address
-                     OR o.email = (SELECT c.email FROM contact c WHERE c.id = ${t}.contact_id))))`;
+                     OR o.email = (SELECT c.email FROM contact c WHERE c.id = ${t}.contact_id)))
+  OR outreach_handles_opted_out(${t}.workspace_id, ${t}.contact_id, ${t}.channel, ${t}.recipient_address))`;
 
 /**
  * Si un correo va a una dirección que rebotó, con la definición de
@@ -502,6 +507,23 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
         WHERE e.id = t.enrollment_id AND t.status = 'scheduled' AND ${DUE}
           AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
           AND (e.status IN ('replied', 'opted_out', 'completed', 'bounced') OR s.status = 'archived')
+        RETURNING t.id, t.enrollment_id`,
+      [now.toISOString(), ws],
+    )).rows,
+  );
+  // (0076) Una marca que acaba de firmar, o un negocio perdido con su
+  // motivo, no recibe el pitch en frío. El disparador de 0076 cancela lo
+  // que estaba en la cola al ganar o perder; esto cubre lo que volvió a
+  // ella después (un reintento, un zombi) o se programó sobre un negocio
+  // ya cerrado.
+  report.canceledFinished += note(
+    (await tx.query<{ enrollment_id: string | null }>(
+      `UPDATE outbound_touch t
+          SET status = 'canceled', blocked_reason = ${DEAL_CLOSED_SQL('t', 'e')}
+         FROM outbound_enrollment e
+        WHERE e.id = t.enrollment_id AND t.status = 'scheduled' AND ${DUE}
+          AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
+          AND ${DEAL_CLOSED_SQL('t', 'e')} IS NOT NULL
         RETURNING t.id, t.enrollment_id`,
       [now.toISOString(), ws],
     )).rows,

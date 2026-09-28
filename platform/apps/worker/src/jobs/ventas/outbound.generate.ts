@@ -25,7 +25,8 @@
  * job llega a la llamada al modelo, y no se toma otro toque si queda
  * menos de MIN_REMAINING_MS del plazo.
  */
-import { estimateCallUsd, GENERATION_MAX_TOKENS, LlmOutputError } from '@mc/core/outreach/llm';
+import { GENERATION_MAX_TOKENS, LlmOutputError } from '@mc/core/outreach/llm';
+import { estimateCallUsd } from '@mc/core/outreach/llm-precios';
 import type { GeneratedMessage } from '@mc/core/outreach/generate';
 import { ESTIMATED_PROMPT_CHARS } from '@mc/core/outreach/quality-gate';
 import {

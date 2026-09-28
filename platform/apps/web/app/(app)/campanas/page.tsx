@@ -10,6 +10,7 @@ import { formatDate, formatDateRange, formatInt, formatMoney } from "@/lib/forma
 import { withWorkspace } from "@/lib/db";
 import { StatusFilter } from "./_lib/filtro-estado";
 import { LIST_FILTERS, filterKey, pillForCampaign } from "./_lib/estado";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: "Campañas" };
 // Lee la base en cada petición: nada de esto se prerenderiza.
@@ -81,6 +82,9 @@ const COLUMNS: Column<CampaignListRow>[] = [
 ];
 
 export default async function CampanasPage({ searchParams }: { searchParams: Promise<{ estado?: string }> }) {
+  // ACC-5: la página también cierra, no solo el layout: en una navegación parcial
+  // Next puede no volver a ejecutar el layout del módulo.
+  await requireModuleAccess("campanas");
   const params = await searchParams;
   const filter = filterKey(params.estado);
   const status = LIST_FILTERS[filter].status;

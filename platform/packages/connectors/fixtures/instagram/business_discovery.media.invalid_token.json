@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "code 190: el token de la cuenta casa venció. No es culpa de la cuenta del creador: la fuente queda como not_configured y hay que regenerar la credencial."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://graph\\.instagram\\.com/v25\\.0/me\\?fields=business_discovery\\.username%28sintoken%29[^&]*media\\.limit%28"
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": {
+        "message": "Error validating access token: Session has expired.",
+        "type": "OAuthException",
+        "code": 190,
+        "error_subcode": 463,
+        "fbtrace_id": "AbCdEf190"
+      }
+    }
+  }
+}

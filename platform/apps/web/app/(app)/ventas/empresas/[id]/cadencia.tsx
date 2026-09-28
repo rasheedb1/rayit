@@ -4,6 +4,8 @@ import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
+import type { TouchStatus } from "@mc/db/queries/actividad";
+import { motivoDe } from "../../actividad/_lib/vista";
 import { FICHA } from "../messages";
 import { AprobarMensaje } from "./aprobar";
 import { ResolverIntento } from "./intento";
@@ -55,8 +57,15 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
   }
 
   const canal = (x: CadenceTouch) => t.canales[x.channel] ?? x.channel;
-  const cuando = (x: CadenceTouch) =>
-    x.sentAt ? t.salio(f.dateTimeShort(x.sentAt.toISOString())) : x.scheduledFor ? t.sale(f.dateTimeShort(x.scheduledFor.toISOString())) : "";
+  // Lo que falló, se canceló o se saltó ya no va a salir: su hora se dice en pasado («iba a salir el…»), con el motivo.
+  const terminado = (x: CadenceTouch) => x.status === "failed" || x.status === "canceled" || x.status === "skipped";
+  const cuando = (x: CadenceTouch) => {
+    if (x.sentAt) return t.salio(f.dateTimeShort(x.sentAt.toISOString()));
+    if (!x.scheduledFor) return "";
+    const fecha = f.dateTimeShort(x.scheduledFor.toISOString());
+    return terminado(x) ? t.iba(fecha) : t.sale(fecha);
+  };
+  const motivo = (x: CadenceTouch) => (terminado(x) ? motivoDe(x.status as TouchStatus, x.blockedReason) : null);
 
   // Dos columnas, para que a 400 px se lea sin mover la tabla: quién, por
   // dónde y cuándo en la primera (lo primero que busca la creadora), y el
@@ -90,6 +99,7 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
             <span>
               <Pill kind={KIND[x.status] ?? "neutral"}>{t.estados[x.status] ?? x.status}</Pill>
             </span>
+            {motivo(x) && <p className="text-xs text-ink-2">{t.motivo(motivo(x)!)}</p>}
             {x.reply && (
               <p className="text-xs text-ink-2">
                 {t.respondio(f.dateTimeShort(x.reply.occurredAt.toISOString()))}{" "}

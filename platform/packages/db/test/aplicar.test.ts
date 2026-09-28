@@ -43,8 +43,9 @@ const MIGRACIONES_DE_MAIN: readonly string[] = [
  * y la entrada sobra (no rompe nada, pero bórrala).
  */
 const NUMEROS_DE_OTRAS_RAMAS: Readonly<Record<string, string>> = {
-  '0023': 'reservada en main para ACC-3 (accesos y roles)',
-  ...Object.fromEntries(MIGRACIONES_DE_MAIN.map((f) => [f.slice(0, 4), `main (${f}, aplicada en Supabase)`])),
+  '0023':
+    'reservada en main para ACC-3 y sin usar: 0024–0033 llegaron antes y ACC-3 se escribió como ' +
+    '0034_access_control.sql (cabecera de 0034). Queda como hueco declarado; rellenarlo con un archivo vacío es decisión de Nicolás',
 };
 
 /**
