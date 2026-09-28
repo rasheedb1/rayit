@@ -79,6 +79,12 @@ export interface TestDb {
   /** SQL como el rol de la aplicación, fuera de cualquier transacción (para comprobar qué queda en la sesión). */
   raw<T = Record<string, unknown>>(sql: string): Promise<T[]>;
   close(): Promise<void>;
+  /**
+   * Solo contra Postgres real: la URL de la copia (con el rol de
+   * TEST_DATABASE_URL), para abrir otros pools contra la MISMA base, como
+   * dos invocaciones de Vercel (apps/worker/test/tick-postgres.test.ts).
+   */
+  readonly url?: string;
 }
 
 /**
@@ -128,6 +134,7 @@ export async function openTestDb(opts: TestDbOptions = {}): Promise<TestDb> {
     const db = createPgDb(pool, dbOpts);
     return {
       kind: 'postgres',
+      url: copia.url,
       db,
       admin: async (sql) => {
         await adminPool.query(sql);
