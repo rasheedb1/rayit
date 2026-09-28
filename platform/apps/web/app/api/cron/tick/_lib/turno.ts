@@ -16,6 +16,13 @@ import type { TickSummary } from "@mc/worker/tick";
 
 /** Lo que dura un turno: por debajo de maxDuration (60 s en route.ts) con margen para cerrar el pool y responder. */
 export const TICK_BUDGET_MS = 45_000;
+/**
+ * Lo que el turno se da para cerrar su pool antes de responder: el
+ * TICK_CLOSE_MS de @mc/worker/tick, copiado aquí para que route.ts no
+ * cargue el worker antes de comprobar el Bearer (turno.test.ts falla si
+ * los dos se separan).
+ */
+export const TICK_CLOSE_MS = 3_000;
 /** Un secreto más corto no se acepta (`openssl rand -hex 32` da 64 caracteres). */
 export const CRON_SECRET_MIN_LENGTH = 32;
 

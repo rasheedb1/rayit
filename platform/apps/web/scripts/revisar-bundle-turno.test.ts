@@ -1,11 +1,11 @@
 // @vitest-environment node
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 // @ts-expect-error: script .mjs sin tipos (corre con node después de next build).
-import { chunksDe, PAQUETES_FUERA, PERMITIDOS, revisarBundle, RUTA_TURNO } from "./revisar-bundle-turno.mjs";
+import { chunksDe, chunksDinamicosDe, HUELLA_WORKER, PAQUETES_FUERA, PERMITIDOS, revisarBundle, RUTA_TURNO } from "./revisar-bundle-turno.mjs";
 
 /**
  * CIM-7 · la revisión del bundle del turno, sobre un .next/server de
@@ -76,6 +76,29 @@ describe("la revisión del bundle del turno (CIM-7)", () => {
     const conBoss = bundle(raiz, { "7": `class PgBoss extends EventEmitter{}throw new Error("pg-boss is not installed")` });
     expect(revisarBundle(conBoss, raiz).paquetes).toEqual(["pg-boss"]);
     expect((PAQUETES_FUERA as Record<string, { motivo: string }>)["pg-boss"]!.motivo).toMatch(/comun\.ts/);
+  });
+
+  test("sigue los import() dinámicos de la ruta (y los de sus chunks): el worker, que se carga tras el Bearer, también se revisa", () => {
+    expect(chunksDinamicosDe("Promise.all([c.e(6829),c.e(454)]).then(c.bind(c,1)); c.e(454)")).toEqual(["6829", "454"]);
+    const server = bundle(raiz, { "1": "runtime" });
+    writeFileSync(join(server, RUTA_TURNO), `var a=t=>t.X(0,[1],()=>t(1));const run=async()=>(await Promise.all([c.e(20)]).then(c.bind(c,5))).runTickFromEnv();`);
+    writeFileSync(join(server, "chunks", "20.js"), `"${HUELLA_WORKER} …";c.e(21)`);
+    writeFileSync(join(server, "chunks", "21.js"), `new URL("./x.md","${url("packages/core/src/outreach/generate.ts")}")`);
+    const r = revisarBundle(server, raiz);
+    expect(r.archivos).toBe(4);
+    expect(r.estaticos).toBe(2);
+    expect(r.workerSiempre, "el worker va en un chunk dinámico").toBe(false);
+    expect(r.prohibidos, "lo de los chunks dinámicos también se revisa").toEqual(["packages/core/src/outreach/generate.ts"]);
+  });
+
+  test("el worker en los chunks que se cargan siempre lo tumba (un 401 pagaría su arranque en frío)", () => {
+    const server = bundle(raiz, { "1": `throw new ConfigError("${HUELLA_WORKER} en el despliegue de producción")` });
+    expect(revisarBundle(server, raiz).workerSiempre).toBe(true);
+  });
+
+  test("la huella del worker sigue estando en src/tick.ts", () => {
+    const tick = readFileSync(join(__dirname, "..", "..", "worker", "src", "tick.ts"), "utf8");
+    expect(tick).toContain(HUELLA_WORKER);
   });
 
   test("cada permitido lleva su motivo", () => {
