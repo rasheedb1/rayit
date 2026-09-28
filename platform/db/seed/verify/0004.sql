@@ -222,3 +222,46 @@ SELECT 'i_sin_centavos' AS check_id,
                    OR EXISTS (SELECT 1 FROM jsonb_array_elements(q.public_snapshot->'items') it
                                WHERE (it->>'unitPrice')::numeric <> trunc((it->>'unitPrice')::numeric)
                                   OR (it->>'total')::numeric <> trunc((it->>'total')::numeric)))) = 0 AS ok;
+
+-- (j) El kit dice «cifras congeladas el …» y tiene que ser verdad (pulido
+--     r4): ninguna cifra puede ser posterior a la foto. Cada video de «Lo
+--     que mejor funciona» alcanzó su corte (publishedAt + ageHoursCut)
+--     antes de capturedAt; los seguidores son de un día ya cerrado en esa
+--     fecha y cuadran con la serie de su cuenta ese día (y su suma con la
+--     cabecera); created_at es la foto, y el tarifario del que salen las
+--     tarifas es anterior. Antes el kit decía «22 de septiembre» y,
+--     sembrado el 27, enseñaba un TikTok del 23 con «395,8 mil views a los
+--     3 días». run.mjs lo corre también con --dias 40 y con el reloj en
+--     sábado y en domingo (fin-de-semana.test.mjs).
+WITH kit AS (
+  SELECT k.*, (k.snapshot->>'capturedAt')::timestamptz AS foto
+    FROM media_kit k
+   WHERE k.id = '00000004-0000-4000-8000-000000d0c001'
+), cifras AS (
+  SELECT k.id,
+         (SELECT count(*) FROM jsonb_array_elements(k.snapshot->'topPosts')) AS videos,
+         (SELECT count(*) FROM jsonb_array_elements(k.snapshot->'topPosts') p
+           WHERE (p->>'ageHoursCut') IS NULL
+              OR (p->>'publishedAt')::timestamptz + (p->>'ageHoursCut')::int * interval '1 hour' > k.foto) AS videos_despues_de_la_foto,
+         (SELECT count(*) FROM jsonb_array_elements(k.snapshot->'redes') r
+           WHERE (r->>'followersAsOf') IS NULL
+              OR (r->>'followersAsOf')::date >= (k.foto AT TIME ZONE 'UTC')::date
+              OR (r->>'followers')::bigint IS DISTINCT FROM (
+                   SELECT s.followers FROM social_connection c
+                     JOIN account_metric_snapshot s ON s.connection_id = c.id AND s.source = 'api'
+                    WHERE c.creator_id = k.creator_id AND c.platform_id = r->>'platformId'
+                      AND s.day = (r->>'followersAsOf')::date
+                    LIMIT 1)) AS seguidores_mal_fechados,
+         (k.snapshot->'totales'->>'followers')::bigint
+           IS NOT DISTINCT FROM (SELECT sum((r->>'followers')::bigint)
+                                   FROM jsonb_array_elements(k.snapshot->'redes') r) AS total_cuadra,
+         k.created_at = k.foto AS creado_en_la_foto,
+         (SELECT rc.computed_at FROM rate_card rc WHERE rc.id = k.rate_card_id) <= k.foto AS tarifario_anterior,
+         k.foto <= now() AS foto_no_futura
+    FROM kit k
+)
+SELECT 'j_kit_congelado_de_verdad' AS check_id, k.foto, c.videos, c.videos_despues_de_la_foto,
+       c.seguidores_mal_fechados, c.total_cuadra, c.creado_en_la_foto, c.tarifario_anterior,
+       c.videos > 0 AND c.videos_despues_de_la_foto = 0 AND c.seguidores_mal_fechados = 0
+         AND c.total_cuadra AND c.creado_en_la_foto AND c.tarifario_anterior AND c.foto_no_futura AS ok
+FROM kit k JOIN cifras c ON c.id = k.id;

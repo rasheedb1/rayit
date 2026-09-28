@@ -15,6 +15,7 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   calcularItem, calcularPaquete, redondearParaNegociar,
   type ComponentePaquete, type FuenteViews, type PasoCalculo, type PlatformId,
@@ -54,6 +55,26 @@ const TEXTOS: TextosCotizar = {
 
 let t: TestDb;
 let creadora = '';
+
+/**
+ * «Cifras congeladas el …» tiene que ser verdad (pulido r4): ningún video
+ * del kit alcanzó su corte después de la foto, los seguidores son de un
+ * día ya cerrado en esa fecha y el kit se creó en la foto.
+ */
+function assertFotoCoherente(kit: NonNullable<Awaited<ReturnType<typeof getMediaKitById>>>): void {
+  const foto = Date.parse(kit.snapshot.capturedAt);
+  assert.ok(Number.isFinite(foto), `capturedAt es un instante: ${kit.snapshot.capturedAt}`);
+  assert.equal(new Date(kit.createdAt).getTime(), foto, 'created_at es la foto');
+  for (const p of kit.snapshot.topPosts) {
+    assert.ok(p.ageHoursCut, `${p.url}: lleva su edad`);
+    const alcanzado = Date.parse(p.publishedAt) + p.ageHoursCut * 3_600_000;
+    assert.ok(alcanzado <= foto, `${p.url}: ${p.views} views a ${p.ageHoursCut} h, medidas después de la foto del ${kit.snapshot.capturedAt}`);
+  }
+  const diaDeLaFoto = kit.snapshot.capturedAt.slice(0, 10);
+  for (const r of kit.snapshot.redes) {
+    assert.ok(r.followersAsOf && r.followersAsOf < diaDeLaFoto, `${r.platformId}: seguidores del ${r.followersAsOf}, antes de la foto`);
+  }
+}
 
 before(async () => {
   t = await openTestDb();
@@ -1300,7 +1321,8 @@ describe('ronda 4 · moneda del CPM, cifras del media kit y kit adjunto', () => 
 
   test('el media kit del seed 0004 dice lo que diría uno real: N× contra su mediana y tarifas de @mc/core (pulido r8)', async () => {
     // El seed 0004 no puede congelar su kit con buildMediaKitSnapshot
-    // (la demo es relativa al reloj y el kit está fechado el 22-sep),
+    // (la demo es relativa al reloj y el kit está fechado el día de la
+    // primera siembra),
     // así que lo escribe a mano. Esta prueba es la que impide que lo
     // escrito a mano contradiga a la fórmula: cada tarifa se vuelve a
     // calcular con calcularItem/calcularPaquete desde sus propias
@@ -1323,6 +1345,7 @@ describe('ronda 4 · moneda del CPM, cifras del media kit y kit adjunto', () => 
     // Sus videos salen de post_score al sembrar (pulido r2): cada uno con su
     // edad y la mediana a esa edad, y el múltiplo cuadra con las dos.
     assert.ok(snap.topPosts.length > 0, 'el kit del seed trae sus videos');
+    assertFotoCoherente(kit);
     for (const p of snap.topPosts) {
       assert.ok(p.medianAtCut && p.ageHoursCut && p.views !== null && p.viewsVsMedian !== null, `${p.url}: post con views, edad y mediana`);
       const cociente = p.views / p.medianAtCut;
@@ -1369,6 +1392,35 @@ describe('ronda 4 · moneda del CPM, cifras del media kit y kit adjunto', () => 
       items.map((i) => [i.price_low, i.price_high]),
       'el kit ofrece las tarifas del tarifario, las mismas cifras',
     );
+  });
+
+  test('un kit del seed con videos posteriores a su foto se vuelve a sacar al resembrar, con su mismo slug (pulido r4)', async () => {
+    // Lo que tenía una base sembrada antes del pulido r4 después del
+    // 22-sep: la foto fija en ese día y los videos de los días siguientes.
+    const KIT = '00000004-0000-4000-8000-000000d0c001';
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getMediaKitById(tx, KIT));
+    assert.ok(antes, 'el seed trae su media kit');
+    const viejaFoto = new Date(Date.parse(antes.snapshot.topPosts[0]!.publishedAt) - 86_400_000).toISOString();
+    await t.admin(`UPDATE media_kit
+                      SET snapshot = jsonb_set(snapshot, '{capturedAt}', to_jsonb('${viejaFoto}'::text)),
+                          created_at = '${viejaFoto}'
+                    WHERE id = '${KIT}'`);
+    const sql = await readFile(new URL('../../../db/seed/0004_demo_cotizar.sql', import.meta.url), 'utf8');
+    await t.admin(`${sql}
+      SELECT set_config('app.workspace_id', '', false);
+      SELECT set_config('app.user_id', '', false);`);
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getMediaKitById(tx, KIT));
+    assert.ok(despues);
+    assert.equal(despues.slug, antes.slug, 'el enlace que ya circula sigue abriendo');
+    assert.notEqual(despues.snapshot.capturedAt, viejaFoto, 'la foto que mentía se rehízo');
+    assertFotoCoherente(despues);
+
+    // Y uno coherente no se toca: volver a sembrar deja el mismo documento.
+    await t.admin(`${sql}
+      SELECT set_config('app.workspace_id', '', false);
+      SELECT set_config('app.user_id', '', false);`);
+    const otraVez = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getMediaKitById(tx, KIT));
+    assert.deepEqual(otraVez?.snapshot, despues.snapshot, 'el documento no cambia al volver a sembrar');
   });
 
   test('en la audiencia por país, «Otros» va al final aunque pese más que el último país', async () => {
