@@ -287,7 +287,8 @@ describe('canales', () => {
         `SELECT id, status, blocked_reason FROM outbound_touch WHERE enrollment_id = '00000005-0000-4000-8000-0000000e0001' ORDER BY step_index`,
       );
       assert.deepEqual(touches.map((x) => [x.status, x.blocked_reason]), [
-        ['sent', null], ['sent', null], ['canceled', 'replied'], ['canceled', 'replied'], ['canceled', 'replied'],
+        // El paso 1, el comentario, es un gesto a mano: «Hecho a mano» en la demo (pulido r6), no enviado.
+        ['skipped', 'done_by_hand'], ['sent', null], ['canceled', 'replied'], ['canceled', 'replied'], ['canceled', 'replied'],
       ]);
       const c = await sel<{ opted_out: boolean }>(`SELECT opted_out FROM contact WHERE id = '00000002-0000-4000-8000-0000000c0011'`);
       assert.equal(c[0]?.opted_out, false, 'una respuesta sin baja no da de baja');
