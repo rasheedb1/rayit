@@ -28,29 +28,23 @@
 -- consulta, nunca el valor. Rotarlo es volver a correr
 -- `make cron.install` con el nuevo (y ponerlo igual en Vercel).
 --
--- Idempotente: crea las extensiones si faltan y retira la tarea
--- `on-cue-tick` si ya existía antes de programarla otra vez. Correrlo dos
--- veces deja una sola tarea.
+-- Orden de `make cron.install` (scripts/cron-tick.sh), para que la tarea
+-- nunca dispare sin secreto: 1) cron-tick-vault.sql comprueba que Vault
+-- está (sin secretos), 2) cron-tick-secreto.sql lo guarda, 3) este lote
+-- programa la tarea. Y aun así la tarea no llama si el secreto falta
+-- (WHERE EXISTS abajo): un Vault borrado a mano no deja peticiones sin
+-- Authorization ni 401 cada minuto en cron.status.
+--
+-- Idempotente: crea las extensiones si faltan y retira las tareas
+-- `on-cue-tick` y `on-cue-tick-purga` si ya existían antes de
+-- programarlas otra vez. Correrlo dos veces deja una de cada.
 -- =====================================================================
 
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 CREATE EXTENSION IF NOT EXISTS pg_net;
 
 -- ---------------------------------------------------------------------
--- 1 · Vault tiene que estar (Supabase lo trae): lo comprueba este lote,
---     que no lleva secretos, para que la llamada del secreto no tenga de
---     qué fallar.
--- ---------------------------------------------------------------------
-DO $$
-BEGIN
-  IF to_regproc('vault.create_secret') IS NULL OR to_regproc('vault.update_secret') IS NULL THEN
-    RAISE EXCEPTION 'Supabase Vault no está instalado (extensión supabase_vault): el secreto del turno no tiene dónde guardarse';
-  END IF;
-END
-$$;
-
--- ---------------------------------------------------------------------
--- 2 · La tarea: fuera la anterior (si la hay) y otra vez, cada minuto.
+-- 1 · La tarea: fuera la anterior (si la hay) y otra vez, cada minuto.
 --     timeout_milliseconds cubre el maxDuration de la ruta (60 s): el
 --     turno dura 45 s y pg_net no se queda esperando más que eso.
 -- ---------------------------------------------------------------------
@@ -68,6 +62,24 @@ SELECT cron.schedule(
     ),
     body := '{}'::jsonb,
     timeout_milliseconds := 60000
-  );
+  )
+  WHERE EXISTS (SELECT 1 FROM vault.decrypted_secrets WHERE name = 'on_cue_cron_secret' AND decrypted_secret IS NOT NULL);
   $tick$
+);
+
+-- ---------------------------------------------------------------------
+-- 2 · La purga del historial de pg_cron. Cada disparo deja una fila en
+--     cron.job_run_details (1.440 al día con la tarea de arriba) y nadie
+--     la borra: crece sin límite y ocupa el disco del plan gratuito.
+--     Supabase recomienda purgarla; se guarda una semana, que es lo que
+--     mira `make cron.status`. Borra el historial de TODAS las tareas de
+--     pg_cron (hoy solo existen estas dos). net._http_response ya caduca
+--     sola (pg_net la limpia a las 6 h).
+-- ---------------------------------------------------------------------
+SELECT cron.unschedule(jobid) FROM cron.job WHERE jobname = 'on-cue-tick-purga';
+
+SELECT cron.schedule(
+  'on-cue-tick-purga',
+  '17 3 * * *',
+  $purga$DELETE FROM cron.job_run_details WHERE end_time < now() - interval '7 days'$purga$
 );

@@ -9,6 +9,10 @@ SELECT jsonb_build_object(
   'tarea', (
     SELECT jsonb_agg(jsonb_build_object('jobid', jobid, 'schedule', schedule, 'active', active, 'command', command))
       FROM cron.job WHERE jobname = 'on-cue-tick'),
+  'purga', (
+    SELECT jsonb_agg(jsonb_build_object('jobid', jobid, 'schedule', schedule, 'active', active))
+      FROM cron.job WHERE jobname = 'on-cue-tick-purga'),
+  'filas_en_historial', (SELECT count(*) FROM cron.job_run_details),
   'secreto_en_vault', (
     SELECT jsonb_agg(jsonb_build_object('name', name, 'created_at', created_at, 'updated_at', updated_at))
       FROM vault.secrets WHERE name = 'on_cue_cron_secret'),

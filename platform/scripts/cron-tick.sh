@@ -71,17 +71,22 @@ install() {
     printf '\n'
   fi
   export CRON_SECRET
-  local sql
-  # render.mjs valida cada valor y lo lee del entorno. Dos llamadas: la
-  # tarea (con la URL, sin el secreto) y, aparte, el secreto en Vault
-  # (dos SELECT sin nada más; ver db/ops/cron-tick-secreto.sql).
+  local sql tarea
+  # render.mjs valida cada valor y lo lee del entorno; los dos se validan
+  # antes de tocar nada. Tres llamadas, en este orden, para que la tarea
+  # nunca dispare sin secreto (pg_cron mandaría 'Bearer ' || NULL):
+  #   1. ¿está Vault? (cron-tick-vault.sql, sin secretos)
+  #   2. el secreto en Vault (dos SELECT sin nada más; cron-tick-secreto.sql)
+  #   3. la tarea y su purga (con la URL, sin el secreto; cron-tick.sql)
   node db/ops/render.mjs db/ops/cron-tick-secreto.sql >/dev/null || exit 2
-  sql="$(CRON_SECRET= node db/ops/render.mjs db/ops/cron-tick.sql)" || exit 2
-  admin_sql "$sql" >/dev/null
+  tarea="$(CRON_SECRET= node db/ops/render.mjs db/ops/cron-tick.sql)" || exit 2
+  admin_sql "$(cat db/ops/cron-tick-vault.sql)" >/dev/null
   sql="$(APP_URL= node db/ops/render.mjs db/ops/cron-tick-secreto.sql)" || exit 2
   admin_sql "$sql" >/dev/null
   unset sql CRON_SECRET
-  verde "Tarea on-cue-tick programada cada minuto contra $APP_URL/api/cron/tick; secreto en Vault (on_cue_cron_secret)."
+  admin_sql "$tarea" >/dev/null
+  unset tarea
+  verde "Secreto en Vault (on_cue_cron_secret); tarea on-cue-tick programada cada minuto contra $APP_URL/api/cron/tick, y on-cue-tick-purga a diario."
   status
 }
 
@@ -100,7 +105,7 @@ uninstall() {
     return 0
   fi
   admin_sql "$(cat db/ops/cron-tick-quitar.sql)"
-  verde "Tarea on-cue-tick retirada y secreto borrado de Vault."
+  verde "Tareas on-cue-tick y on-cue-tick-purga retiradas y secreto borrado de Vault."
 }
 
 case "${1:-}" in

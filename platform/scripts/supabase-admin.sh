@@ -29,21 +29,35 @@ token() {
   printf '%s' "$t"
 }
 
+# Una llamada a la API de administración: api MÉTODO RUTA [más argumentos de curl].
+# El token va en la configuración de curl por un descriptor (--config
+# <(printf …)), no en la línea de comandos: un `-H "Authorization: …"`
+# sale en `ps` mientras dura la llamada, y este token puede borrar el
+# proyecto. printf es interno de bash: tampoco crea un proceso que lo lleve.
+api() {
+  local t m="$1" p="$2"
+  shift 2
+  t="$(token)" || exit 1
+  curl -s -X "$m" --config <(printf 'header = "Authorization: Bearer %s"\n' "$t") "$@" "$API$p"
+}
+
+# La consulta por la entrada estándar, nunca en un argumento de curl.
+sql_stdin() {
+  python3 -c 'import json,sys;print(json.dumps({"query":sys.stdin.read()}))' \
+    | api POST "/projects/$REF/database/query" -H 'Content-Type: application/json' --data-binary @- \
+    | python3 -m json.tool 2>/dev/null || true
+}
+
 case "${1:-}" in
   sql)
     [[ -n "${2:-}" ]] || { echo 'Uso: supabase-admin.sh sql "SELECT ..."' >&2; exit 1; }
-    curl -s -X POST -H "Authorization: Bearer $(token)" -H 'Content-Type: application/json' \
-      -d "$(python3 -c 'import json,sys;print(json.dumps({"query":sys.argv[1]}))' "$2")" \
-      "$API/projects/$REF/database/query" | python3 -m json.tool 2>/dev/null || true
+    printf '%s' "$2" | sql_stdin
     ;;
   sql-stdin)
     # La consulta por la entrada estándar y no como argumento: un
     # argumento sale en `ps`. Lo usa make cron.install, que lleva dentro
     # el CRON_SECRET (scripts/cron-tick.sh).
-    t="$(token)" || exit 1
-    python3 -c 'import json,sys;print(json.dumps({"query":sys.stdin.read()}))' \
-      | curl -s -X POST -H "Authorization: Bearer $t" -H 'Content-Type: application/json' --data-binary @- \
-          "$API/projects/$REF/database/query" | python3 -m json.tool 2>/dev/null || true
+    sql_stdin
     ;;
   recover)
     # Romper el cristal: las llaves que NO se pueden regenerar, guardadas
@@ -51,13 +65,12 @@ case "${1:-}" in
     # Usa esto si perdiste el Llavero de esta maquina.
     printf '\033[33m  Esto imprime secretos en la terminal. Ctrl-C si no estas solo.\033[0m\n' >&2
     printf '  Enter para continuar... ' >&2; read -r _
-    curl -s -X POST -H "Authorization: Bearer $(token)" -H 'Content-Type: application/json' \
+    api POST "/projects/$REF/database/query" -H 'Content-Type: application/json' \
       -d '{"query":"select nombre, valor, para_que from recuperacion.llaves order by nombre"}' \
-      "$API/projects/$REF/database/query" \
       | python3 "$(dirname "${BASH_SOURCE[0]}")/_formato_recover.py"
     ;;
 
-  info) curl -s -H "Authorization: Bearer $(token)" "$API/projects/$REF" | python3 -m json.tool ;;
-  keys) curl -s -H "Authorization: Bearer $(token)" "$API/projects/$REF/api-keys" | python3 -m json.tool ;;
+  info) api GET "/projects/$REF" | python3 -m json.tool ;;
+  keys) api GET "/projects/$REF/api-keys" | python3 -m json.tool ;;
   *)    sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
 esac

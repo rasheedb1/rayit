@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const OPS = fileURLToPath(new URL('../../../db/ops/', import.meta.url));
 const leer = (f: string) => readFileSync(`${OPS}${f}`, 'utf8');
-const PLANTILLAS = ['cron-tick.sql', 'cron-tick-secreto.sql', 'cron-tick-estado.sql', 'cron-tick-quitar.sql', 'cron-tick-huellas.sql'] as const;
+const PLANTILLAS = ['cron-tick.sql', 'cron-tick-vault.sql', 'cron-tick-secreto.sql', 'cron-tick-estado.sql', 'cron-tick-quitar.sql', 'cron-tick-huellas.sql'] as const;
 const SECRETO = 'f0e1d2c3b4a5968778695a4b3c2d1e0f'.repeat(2); // 64, como `openssl rand -hex 32`
 
 /** Lo que va entre $tick$ y $tick$: el comando que queda guardado en cron.job. */
@@ -70,16 +70,23 @@ test('el secreto va en su propia llamada, con dos SELECT de nivel superior y nad
   // La tarea lo lee de Vault al disparar: en cron.job no queda el valor.
   assert.match(comandoDeLaTarea(tarea), /'Bearer ' \|\| \(SELECT decrypted_secret FROM vault\.decrypted_secrets WHERE name = 'on_cue_cron_secret'\)/);
   assert.match(comandoDeLaTarea(tarea), /net\.http_post\(\s*url := '\{\{APP_URL\}\}\/api\/cron\/tick'/);
-  // El lote de la tarea comprueba que Vault está, para que la llamada del secreto no tenga de qué fallar.
-  assert.match(tarea, /to_regproc\('vault\.create_secret'\) IS NULL/);
+  // Vault se comprueba en su propio lote, sin secretos, para que la llamada del secreto no tenga de qué fallar.
+  assert.match(leer('cron-tick-vault.sql'), /to_regproc\('vault\.create_secret'\) IS NULL/);
+  assert.doesNotMatch(leer('cron-tick-vault.sql'), /\{\{[A-Z_]+\}\}/, 'sin marcadores: se manda tal cual');
+  // Y si aun así falta, la tarea no dispara: nada de peticiones con 'Bearer ' || NULL.
+  assert.match(comandoDeLaTarea(tarea), /\)\s*WHERE EXISTS \(SELECT 1 FROM vault\.decrypted_secrets WHERE name = 'on_cue_cron_secret' AND decrypted_secret IS NOT NULL\);\s*$/);
 });
 
-test('install manda la tarea y el secreto en dos llamadas, valida el secreto antes de tocar nada y mira pg_stat_statements', () => {
+test('install valida todo antes de tocar nada, y guarda el secreto ANTES de programar la tarea; y mira pg_stat_statements', () => {
   const sh = readFileSync(fileURLToPath(new URL('../../../scripts/cron-tick.sh', import.meta.url)), 'utf8');
   const validar = sh.indexOf('node db/ops/render.mjs db/ops/cron-tick-secreto.sql >/dev/null');
-  const tarea = sh.indexOf('CRON_SECRET= node db/ops/render.mjs db/ops/cron-tick.sql');
+  const rellenarTarea = sh.indexOf('tarea="$(CRON_SECRET= node db/ops/render.mjs db/ops/cron-tick.sql)"');
+  const vault = sh.indexOf('admin_sql "$(cat db/ops/cron-tick-vault.sql)"');
   const secreto = sh.indexOf('APP_URL= node db/ops/render.mjs db/ops/cron-tick-secreto.sql');
-  assert.ok(validar > 0 && tarea > validar && secreto > tarea, 'validar, la tarea (sin el secreto en su entorno), y el secreto aparte');
+  const programar = sh.indexOf('admin_sql "$tarea"');
+  assert.ok(validar > 0 && rellenarTarea > validar, 'los dos rellenos (y sus validaciones) antes de la primera llamada');
+  assert.ok(vault > rellenarTarea && secreto > vault && programar > secreto,
+    'Vault, luego el secreto y al final la tarea: en una primera instalación pg_cron nunca dispara sin secreto');
   assert.match(sh, /huellas\(\)/);
   assert.match(sh, /db\/ops\/cron-tick-huellas\.sql/);
   assert.match(leer('cron-tick-huellas.sql'), /pg_stat_statements_reset\(\)/, 'y dice cómo limpiarlo');
@@ -93,6 +100,17 @@ test('idempotente: extensiones si faltan y la tarea anterior fuera antes de prog
   const programar = sql.indexOf("SELECT cron.schedule(\n  'on-cue-tick',\n  '* * * * *',");
   assert.ok(quitar > 0 && programar > quitar, 'unschedule (si existe) antes de schedule: dos corridas dejan una tarea');
   assert.match(leer('cron-tick-quitar.sql'), /cron\.unschedule\(jobid\) FROM cron\.job WHERE jobname = 'on-cue-tick'/);
+});
+
+test('la purga del historial de pg_cron: una semana, a diario, idempotente, y se retira con la tarea', () => {
+  const sql = leer('cron-tick.sql');
+  const quitar = sql.indexOf("SELECT cron.unschedule(jobid) FROM cron.job WHERE jobname = 'on-cue-tick-purga';");
+  const programar = sql.indexOf("SELECT cron.schedule(\n  'on-cue-tick-purga',\n  '17 3 * * *',");
+  assert.ok(quitar > 0 && programar > quitar, 'unschedule antes de schedule: dos installs dejan una purga');
+  assert.match(sql, /\$purga\$DELETE FROM cron\.job_run_details WHERE end_time < now\(\) - interval '7 days'\$purga\$/);
+  assert.match(leer('cron-tick-quitar.sql'), /cron\.unschedule\(jobid\) FROM cron\.job WHERE jobname = 'on-cue-tick-purga'/);
+  assert.match(leer('cron-tick-quitar.sql'), /jobname IN \('on-cue-tick', 'on-cue-tick-purga'\)/);
+  assert.match(leer('cron-tick-estado.sql'), /'purga'/);
 });
 
 test('el relleno: la URL solo en la tarea, el secreto solo en su lote', () => {
@@ -127,4 +145,12 @@ test('el relleno rechaza lo que no cabe en un literal, y al fallar no repite el 
     assert.match(r.stderr, motivo);
     if (env['CRON_SECRET']) assert.ok(!r.stderr.includes(env['CRON_SECRET']), 'el mensaje no repite el secreto');
   }
+});
+
+test('supabase-admin.sh no pone el token de administración en la línea de comandos de curl (saldría en `ps`)', () => {
+  const sh = readFileSync(fileURLToPath(new URL('../../../scripts/supabase-admin.sh', import.meta.url)), 'utf8');
+  const codigo = sh.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  assert.doesNotMatch(codigo, /-H\s+["']Authorization/, 'ninguna cabecera Authorization como argumento');
+  assert.match(codigo, /--config <\(printf 'header = "Authorization: Bearer %s"\\n' "\$t"\)/, 'va por un descriptor, con printf (interno de bash)');
+  assert.equal([...codigo.matchAll(/\bcurl\b/g)].length, 1, 'una sola llamada a curl, la de api()');
 });
