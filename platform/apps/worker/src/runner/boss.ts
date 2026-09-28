@@ -22,9 +22,10 @@ import type { WorkerConfig } from './config.ts';
 import type { WorkerDatabase } from './db.ts';
 import type { Logger } from './logger.ts';
 import type { JobDefinition, JobOptions } from './registry.ts';
+import { EXPIRE_MARGIN_S } from './comun.ts';
 
-/** Margen entre nuestro timeout y el de pg-boss: el nuestro manda; el suyo es red de seguridad. */
-export const EXPIRE_MARGIN_S = 30;
+// El margen vive en comun.ts: once.ts lo usa sin importar pg-boss (CIM-7).
+export { EXPIRE_MARGIN_S };
 
 export function defaultPolicy(def: JobDefinition): QueuePolicy {
   return def.defaultCron ? 'stately' : 'standard';

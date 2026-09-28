@@ -2,9 +2,10 @@
  * Arranque del worker: conecta, comprueba el rol, lee job_definition,
  * registra colas, crons y handlers, y deja pg-boss corriendo.
  */
-import { loadPlatformLimits, PostgresQuotaUsageStore, QuotaManager, type ConnectorHttpOverrides, type SecretStore, type TokenRefresherRegistry } from '@mc/connectors';
+import type { ConnectorHttpOverrides, QuotaManager, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
 import type { PgBoss } from 'pg-boss';
 import { bossSchemaExists, createBoss, localConcurrencyFor, queueOptionsFor, updatableQueueOptions } from './boss.ts';
+import { assertRole, createQuota, recordSkipped } from './comun.ts';
 import type { Env, WorkerConfig } from './config.ts';
 import type { WorkerDatabase } from './db.ts';
 import { loadJobDefinitions } from './definitions.ts';
@@ -44,22 +45,9 @@ export interface RunningWorker {
   stop(): Promise<void>;
 }
 
-export class RoleError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'RoleError';
-  }
-}
-
 export const CRON_SCHEDULE_KEY = 'cron';
-export const SKIPPED_NO_HANDLER = 'sin handler';
-/**
- * Prefijo del candado por job (pg_advisory_xact_lock(hashtextextended(
- * prefijo || id, 0))). Lo toman el reclamo de una corrida de --once y del
- * modo por turnos (once.ts) y recordSkipped: dura lo que su transacción,
- * así que un proceso muerto no lo deja tomado.
- */
-export const JOB_LOCK_PREFIX = 'mc-worker/job:';
+// Viven en comun.ts (sin pg-boss, para el bundle del turno de CIM-7); se reexportan con sus nombres de siempre.
+export { assertRole, createQuota, JOB_LOCK_PREFIX, recordSkipped, RoleError, SKIPPED_NO_HANDLER } from './comun.ts';
 
 export async function startWorker(opts: StartWorkerOptions): Promise<RunningWorker> {
   const { config, db, logger } = opts;
@@ -167,20 +155,6 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
 }
 
 /**
- * La cuota compartida del proceso (CON-1): api_quota_usage y
- * platform.limits. La usan el proceso largo y la pasada de --once.
- */
-export async function createQuota(db: WorkerDatabase, logger: Logger, now?: () => Date, http?: ConnectorHttpOverrides): Promise<QuotaManager> {
-  return new QuotaManager({
-    limits: await loadPlatformLimits(db, logger),
-    store: new PostgresQuotaUsageStore(db),
-    logger,
-    now,
-    sleep: http?.sleep,
-  });
-}
-
-/**
  * Encola los jobs que corren después de `desde` (JobOptions.after), con
  * el mismo workspaceId. Solo se llama si `desde` terminó ok o partial Y
  * procesó algo: una recolección vacía no trae nada que recalcular. El singletonKey es por alcance: en una cola
@@ -204,31 +178,6 @@ async function enqueueChained(boss: PgBoss, destinos: readonly string[], desde: 
 }
 
 /**
- * Una definición habilitada sin handler queda constando en job_run como
- * `skipped` / "sin handler", para que se vea desde SQL y no solo en el
- * log. Una sola fila mientras siga sin handler: si la última fila del
- * job ya dice eso, no se repite en cada reinicio. La lectura y la
- * escritura van bajo el mismo candado que el reclamo de una corrida
- * (JOB_LOCK_PREFIX): dos turnos a la vez (CIM-7) no dejan dos filas.
- */
-export async function recordSkipped(db: WorkerDatabase, jobId: string): Promise<void> {
-  await db.transaction(async (tx) => {
-    await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${JOB_LOCK_PREFIX}${jobId}`]);
-    const { rows } = await tx.query<{ status: string; error: string | null }>(
-      'SELECT status, error FROM job_run WHERE job_id = $1 ORDER BY id DESC LIMIT 1',
-      [jobId],
-    );
-    const last = rows[0];
-    if (last && last.status === 'skipped' && last.error === SKIPPED_NO_HANDLER) return;
-    await tx.query(
-      `INSERT INTO job_run (job_id, status, attempt, finished_at, duration_ms, error)
-       VALUES ($1, 'skipped', 1, now(), 0, $2)`,
-      [jobId, SKIPPED_NO_HANDLER],
-    );
-  });
-}
-
-/**
  * pg-boss guarda los schedules en su tabla, así que reiniciar el worker
  * no los duplica. Aquí solo se comprueba que el cron coincida con
  * job_definition y se corrige si cambió. Los ticks no se apilan porque
@@ -247,19 +196,6 @@ async function reconcileSchedule(boss: PgBoss, def: JobDefinition, logger: Logge
   await boss.schedule(def.id, def.defaultCron, { job: def.id, source: 'cron' }, { key: CRON_SCHEDULE_KEY, tz: 'UTC', missed: 'skip' });
   logger.info(existing ? 'schedule actualizado' : 'schedule creado', { job: def.id, cron: def.defaultCron, previous: existing?.cron });
   return true;
-}
-
-export async function assertRole(db: WorkerDatabase, config: WorkerConfig, logger: Logger): Promise<void> {
-  const who = await db.whoAmI();
-  if (config.setRole) {
-    if (who.currentUser !== config.setRole) {
-      throw new RoleError(`Las consultas corren como ${who.currentUser}, no como ${config.setRole}. Revisa WORKER_SET_ROLE y los GRANTs de docs/propuestas/CON-2.md.`);
-    }
-    if (!who.bypassRls) {
-      throw new RoleError(`${config.setRole} no tiene BYPASSRLS: los jobs no verían ningún workspace. El rol lo crea la migración 0010.`);
-    }
-  }
-  logger.info('rol comprobado', { sessionUser: who.sessionUser, currentUser: who.currentUser, bypassRls: who.bypassRls });
 }
 
 async function shutdown(boss: PgBoss, db: WorkerDatabase, config: WorkerConfig): Promise<void> {
