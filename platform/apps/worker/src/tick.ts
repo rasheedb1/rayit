@@ -15,7 +15,7 @@
  *
  *   1. Programa: por cada job_definition habilitada con cron y handler,
  *      su último tick y las corridas globales de job_run desde ahí dicen
- *      si está vencido (la cola es job_run, sin pg-boss). Cada corrida se
+ *      si está vencido (sin pg-boss: job_run es el registro, no una cola). Cada corrida se
  *      RECLAMA con un candado por job antes de empezar: dos turnos a la
  *      vez, o uno repetido, no corren dos veces lo mismo.
  *   2. Procesa lo vencido, outbound.dispatch primero (TICK_FIRST), hasta
@@ -24,7 +24,9 @@
  *      tiene como timeout_s lo que queda del turno: la que se mide por su
  *      timeout (outbound.dispatch) termina sola y devuelve a su cola lo
  *      que no intentó; la que se pasa termina `failed` con `tickCut`, que
- *      no gasta un intento, y el turno siguiente la retoma. Nada queda
+ *      no gasta un intento, y el turno siguiente la retoma. Lo encadenado
+ *      no empieza antes que su job de arriba, y un fallo espera su
+ *      backoff (el del proceso largo) antes del reintento. Nada queda
  *      `running` para siempre: una fila de un turno muerto deja de estar
  *      viva a los sliceS + 30 s (el timeout que tuvo en el turno, que
  *      queda en su metadata), no a los timeout_s de su definición.
@@ -38,11 +40,14 @@
  * El turno no se corre a la vez que el proceso largo (`pnpm --filter
  * @mc/worker start`): pg-boss no mira job_run y correrían dos veces.
  *
- * La cola del turno es job_run, NO pg-boss: un `boss.send(...)` (un
- * «Recalcular» desde una pantalla, el encadenado del proceso largo) no lo
- * procesa nadie en este modo. Un trabajo a demanda se pide con una fila
- * en job_run o se deja a su cron. Para que no pase en silencio, el turno
- * cuenta lo que espera en pgboss.job y lo devuelve en
+ * En modo por turnos NO hay trabajo a demanda: el turno solo corre lo que
+ * el cron de job_definition dice que está vencido. Un `boss.send(...)`
+ * (un «Recalcular» desde una pantalla) no lo procesa nadie, y una fila
+ * escrita a mano en job_run tampoco lo pide (job_run no tiene estado de
+ * cola; una fila ok o skipped daría el tick por cubierto y SALTARÍA la
+ * corrida). A demanda: esperar al cron o `pnpm --filter @mc/worker once`
+ * a mano (README, «Por turnos»). Para que un boss.send no pase en
+ * silencio, el turno cuenta lo que espera en pgboss.job y lo devuelve en
  * `orphanedBossJobs`, con un aviso en el log si es mayor que 0.
  */
 import type { ConnectorHttpOverrides, QuotaManager, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
@@ -227,7 +232,7 @@ export async function runTick(opts: RunTickOptions): Promise<TickSummary> {
   });
   const orphaned = await countOrphanedBossJobs(opts.db, logger);
   if (orphaned !== null && orphaned > 0) {
-    logger.warn('hay trabajos en pgboss.job que el modo por turnos no procesa: pídelos con una fila en job_run o déjalos a su cron', { orphanedBossJobs: orphaned });
+    logger.warn('hay trabajos en pgboss.job que el modo por turnos no procesa: espera a su cron o corre `pnpm --filter @mc/worker once`', { orphanedBossJobs: orphaned });
   }
   return toTickSummary(summary, opts.budgetMs, Date.now() - started, orphaned);
 }

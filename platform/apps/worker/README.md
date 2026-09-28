@@ -98,7 +98,14 @@ corre **un turno** de 45 s con `runTick` (`src/tick.ts`, exportado como
    (arriba): dos turnos solapados, o uno repetido, no duplican nada.
 2. **Procesa** lo vencido, `outbound.dispatch` primero (`TICK_FIRST`: un
    toque atrasado es lo único que nota un cliente), hasta tres corridas a
-   la vez, y no empieza ninguna si quedan menos de 10 s. Cada corrida recibe como `timeout_s`
+   la vez, y no empieza ninguna si quedan menos de 10 s. Lo encadenado no
+   se adelanta a lo de arriba: si `collect.post_metrics` y
+   `compute.baseline` están vencidos a la vez, el segundo espera a que el
+   primero termine y corre como su encadenado, con los datos nuevos. Un
+   fallo espera su backoff antes del reintento, el mismo que el proceso
+   largo (`WORKER_RETRY_DELAY_S`·2^(intentos−1), con techo
+   `WORKER_RETRY_DELAY_MAX_S`): un proveedor caído no recibe un golpe por
+   minuto; mientras espera, el resumen lo deja en `left` con `backoff`. Cada corrida recibe como `timeout_s`
    lo que queda del turno: la que se mide por su timeout termina sola
    (`outbound.dispatch` deja de reclamar y devuelve a su cola lo que no
    intentó); la que se pasa termina `failed`, `error = timeout`,
@@ -140,14 +147,27 @@ Lo que conviene saber de un turno de 45 s:
   palanca es la opción A (Pro: `maxDuration` y `TICK_BUDGET_MS` más
   largos).
 - Un job que tarde más de lo que da el turno tiene que poder retomarse
-  (revisar `ctx.signal` y saltarse lo ya hecho), como los de CON-5.
-- **La cola del turno es `job_run`, no pg-boss.** Un `boss.send(...)` (un
-  «Recalcular» desde una pantalla, como el previsto para
-  `campaign.compute`) no lo procesa nadie en este modo. Un trabajo a
-  demanda se pide con una fila en `job_run` o se deja a su cron. Para que
-  no pase en silencio, cada turno cuenta lo que espera en `pgboss.job`
-  (`created` o `retry`), lo devuelve en `orphanedBossJobs` y avisa en el
-  log si es más de 0.
+  (revisar `ctx.signal` y saltarse lo ya hecho), como los de CON-5. El
+  runner no puede matar un handler: si no mira la señal, sigue vivo con
+  su conexión después del corte. Por eso todos los de Ventas la miran
+  (`sales.follow_ups`, `outbound.alerts` y `sales.channels_release`
+  desde CIM-7 r3; el primero, que es una transacción, lleva además un
+  `statement_timeout` para que la base corte lo que siga vivo,
+  `src/jobs/ventas/plazo.ts`).
+- **En modo por turnos no hay trabajo a demanda.** El turno solo corre lo
+  que el cron de `job_definition` dice que está vencido: un
+  `boss.send(...)` (un «Recalcular» desde una pantalla, como el previsto
+  para `campaign.compute`) no lo procesa nadie, y **una fila escrita a
+  mano en `job_run` no lo pide**: `job_run` no tiene un estado de cola
+  (su CHECK es `running/ok/failed/skipped/partial`) y una fila `ok` o
+  `skipped` dejaría el tick por cubierto y SALTARÍA la corrida del cron.
+  Para algo a demanda: esperar al cron, o correr
+  `pnpm --filter @mc/worker once` a mano con la base de producción. Si
+  hace falta de verdad, es una historia aparte: una tabla (o estado) de
+  peticiones que `runOnce` consuma con el mismo `claimRun`. Para que un
+  `boss.send` no pase en silencio, cada turno cuenta lo que espera en
+  `pgboss.job` (`created` o `retry`), lo devuelve en `orphanedBossJobs` y
+  avisa en el log si es más de 0.
 - **Conexiones.** El pool del turno es `2 × TICK_CONCURRENCY + 1` = 7:
   una corrida puede tener una transacción abierta y pedir otra conexión
   a la vez (`api_call_log` se escribe con `ctx.db`). Dos turnos
@@ -168,13 +188,17 @@ Los cambios:
 | `once.ts` | `claimRun`: candado por job (`pg_advisory_xact_lock`) + relectura del estado + fila `running`, en una transacción | Dos turnos solapados no corren dos veces lo mismo. Sin él, en Postgres real, las dos pasadas reclaman (`test/tick-postgres.test.ts`, `test/once-reclamo.test.ts`) |
 | `once.ts` | `budget`, `concurrency`, `first` en `RunOnceOptions`; `sliceS` en el reclamo; `tickCut` | El presupuesto del turno. Sin `budget` (`--once`), todo igual que antes |
 | `once.ts` | `tickStates`: el estado de todos los ticks en una consulta | Un turno vacío, una conexión y no una por definición |
+| `once.ts` | `verdict` con `backoff` (`lastFailedAt` en `tickStates`, `retryDelayMs`) | La espera entre reintentos del proceso largo (pg-boss): antes `--once` reintentaba en la pasada siguiente, fuera cuando fuera; cada minuto, un proveedor caído recibía `max_attempts` golpes seguidos |
+| `once.ts` | Los recorredores no sacan un job cuyo `after` sigue pendiente o corriendo (`blockedBy`) | Con tres a la vez, `compute.baseline` se adelantaba a `collect.post_metrics` y se calculaba con los datos de ayer |
 | `run.ts` | `RunInput.runId` y `RunInput.closeMetadata` | Abrir la fila en el reclamo y marcar `tickCut`/`noRetry` en la escritura que la cierra |
 | `worker.ts` | `JOB_LOCK_PREFIX` y `recordSkipped` bajo ese candado | Dos turnos no dejan dos filas «sin handler» |
 
 El proceso largo (`pnpm --filter @mc/worker start`) no pasa por nada de
 esto salvo `recordSkipped`, que hace lo mismo que antes dentro de una
 transacción. **Pendiente: la revisión de Nicolás antes del merge a
-`main`.**
+`main`.** El pull request hacia `main` lleva esta tabla en la
+descripción y a Nicolás como revisor obligatorio; lo abre quien integra
+`rasheed/integracion` (los agentes no empujan ni abren PR).
 
 **Variables en Vercel** (production), además de las que ya tiene la web:
 
@@ -188,12 +212,18 @@ transacción. **Pendiente: la revisión de Nicolás antes del merge a
 Tras cambiar variables, `make vercel.deploy PROD=1`.
 
 **Opción B, hoy (Vercel Hobby + pg_cron de Supabase).** Hobby no deja un
-Vercel Cron por minuto, así que llama Supabase: `db/ops/cron-tick.sql`
-crea `pg_cron` y `pg_net` si faltan, comprueba que Vault está y programa
-`on-cue-tick` cada minuto con `net.http_post`; aparte, en su propia
-llamada, `db/ops/cron-tick-secreto.sql` guarda el secreto en **Supabase
-Vault** (`on_cue_cron_secret`; la tarea lo lee de
-`vault.decrypted_secrets` al disparar, en `cron.job` no queda el valor).
+Vercel Cron por minuto, así que llama Supabase. `make cron.install` hace
+tres llamadas, en este orden, para que la tarea nunca dispare sin
+secreto: `db/ops/cron-tick-vault.sql` comprueba que Vault está (sin
+secretos); `db/ops/cron-tick-secreto.sql` guarda el secreto en
+**Supabase Vault** (`on_cue_cron_secret`; la tarea lo lee de
+`vault.decrypted_secrets` al disparar, en `cron.job` no queda el valor);
+y `db/ops/cron-tick.sql` crea `pg_cron` y `pg_net` si faltan y programa
+`on-cue-tick` cada minuto con `net.http_post`, que además no llama si el
+secreto falta (`WHERE EXISTS`). Programa también `on-cue-tick-purga`, a
+diario a las 03:17 UTC, que borra de `cron.job_run_details` lo de más
+de 7 días: pg_cron deja una fila por disparo (1.440 al día) y nadie la
+purga; `net._http_response` caduca sola.
 El secreto va solo y en dos `SELECT` de nivel superior, sin bloque `DO`:
 `pg_stat_statements` normaliza sus literales a `$1`, y un fallo del lote
 de pg_cron no puede arrastrarlo al log de Postgres. Lo corre el dueño,
@@ -221,8 +251,8 @@ $CRON_SECRET` solo, y la ruta acepta GET igual que POST:
    { "crons": [{ "path": "/api/cron/tick", "schedule": "* * * * *" }] }
    ```
 2. `make vercel.deploy PROD=1` y comprobar en Vercel → Cron Jobs que corre.
-3. `make cron.uninstall`: retira la tarea de pg_cron y borra su secreto
-   del Vault. Con los dos encendidos no se duplica nada (cada corrida se
+3. `make cron.uninstall`: retira las tareas de pg_cron (`on-cue-tick` y
+   su purga) y borra su secreto del Vault. Con los dos encendidos no se duplica nada (cada corrida se
    reclama), pero se paga el doble de invocaciones.
 4. Con Pro, si hace falta más aire: subir `maxDuration` en `route.ts` y
    `TICK_BUDGET_MS` en `app/api/cron/tick/_lib/turno.ts` a la par
@@ -815,12 +845,28 @@ pnpm --filter @mc/worker typecheck lint
 
 El modo por turnos (CIM-7) tiene las suyas: `test/tick.test.ts` (sobre
 la foto con los seeds: respeta el presupuesto, corta y retoma sin gastar
-intentos, dos turnos a la vez no duplican, el tope de cortes, y
-`outbound.dispatch` sacando el mensaje de la demo por el canal falso),
-`test/cron-tick-sql.test.ts` (el SQL de `db/ops/` sin secretos en claro,
-idempotente, y su relleno) y, en la web,
+intentos, dos turnos a la vez no duplican, el tope de cortes, lo
+encadenado espera a lo de arriba con tres recorredores, el backoff entre
+reintentos, y `outbound.dispatch` sacando el mensaje de la demo por el
+canal falso), `test/senal-turno.test.ts` (los jobs de Ventas dejan de
+trabajar con la señal disparada), `test/cron-tick-sql.test.ts` (el SQL
+de `db/ops/` sin secretos en claro, idempotente, el orden de
+`make cron.install`, la purga, y el token de administración fuera de la
+línea de comandos de curl) y, en la web,
 `app/api/cron/tick/_lib/turno.test.ts` (401 sin Bearer o con uno malo,
-el resumen con el bueno, por GET y POST).
+el resumen con el bueno, por GET y POST, el esquema `bearer` sin
+mayúsculas, solo `/api/cron/tick` sin sesión, y que toda
+`app/api/cron/**/route.ts` exija el Bearer).
+
+El turno corre DENTRO del bundle de Next, y webpack congela
+`import.meta.url` en la ruta de la máquina del build: un `readFileSync`
+relativo al módulo da ENOENT en Vercel. Por eso los prompts de outreach
+van incrustados (`packages/core/src/outreach/prompts.gen.ts`, que
+regenera `make core.prompts` y vigila `test/outreach-prompts.test.ts` de
+`@mc/core`), y el `build` de `@mc/web` termina con
+`apps/web/scripts/revisar-bundle-turno.mjs`, que falla si el bundle de
+`/api/cron/tick` lleva un `file:///` fuera de los permitidos (cada uno
+con el motivo por el que esa ruta no se lee en producción).
 
 Las de integración aplican TODAS las migraciones reales con el runner
 de `@mc/db` (`test/migraciones.test.ts` falla si una no queda en

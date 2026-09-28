@@ -22,8 +22,10 @@
  * docs/propuestas/CAM-5.md §0.3.6). OJO: en el modo por turnos (CIM-7,
  * src/tick.ts, el worker en Vercel) nadie procesa pg-boss: un boss.send
  * se queda en pgboss.job (el turno lo cuenta en orphanedBossJobs y avisa).
- * Ahí un recálculo a demanda se pide con una fila en job_run o se deja
- * al cron de la mañana (README, «Por turnos»).
+ * Ahí no hay recálculo a demanda: se espera al cron de la mañana o se
+ * corre `pnpm --filter @mc/worker once` a mano (README, «Por turnos»).
+ * Una fila escrita a mano en job_run NO lo pide: daría el tick por
+ * cubierto y saltaría la corrida.
  */
 import { computeCampaignResult, listCampaignsToCompute, type ResultExecutor } from '@mc/db';
 import { defineJob, type JobPayload } from '../../runner/registry.ts';
