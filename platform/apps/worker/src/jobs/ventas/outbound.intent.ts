@@ -49,8 +49,8 @@ export const INTENT_JOB_ID = 'outbound.intent';
 /**
  * El clasificador de esta corrida, o null si no está configurado (ver la
  * cabecera). Sin llave y sin OUTREACH_WRITER=fake no hay clasificador: es
- * un supuesto declarado (docs/ventas-outreach.md §8, decisión 9). Si
- * Rasheed lo revierte, aquí se devolvería createFakeIntentClassifier()
+ * la decisión 9 (docs/ventas-outreach.md §5.7 y §8), tomada en el pulido
+ * r5. Si se revierte, aquí se devolvería createFakeIntentClassifier()
  * cuando anthropicLlmFromEnv no da cliente.
  */
 export function intentClassifierFrom(env: Env, scope: ChannelScope): IntentClassifier | null {

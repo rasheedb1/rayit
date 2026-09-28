@@ -458,8 +458,8 @@ export const STORIES: readonly Story[] = [
     title: "Bandeja de aprobación y bandeja unificada",
     desc: "Aprobar, editar o regenerar lo propuesto; hilos de correo, LinkedIn e Instagram en un solo lugar; clasificación de la intención de la respuesta (interesado, ahora no, fuera de oficina, baja, referido) y su efecto en el deal y el enrolamiento.",
     done: "Un mensaje retenido se aprueba desde la bandeja y sale; una respuesta «me interesa» mueve el deal y aparece en la bandeja con la conversación completa.",
-    status: "en_curso",
-    note: "/ventas/aprobaciones y /ventas/bandeja, outbound.intent y la corrección a mano. Pulido r5: aprobaciones no ofrece lo de un negocio ya ganado o perdido; la bandeja fecha «23 sep». Pendiente de Rasheed: la decisión 9 (sin llave de Anthropic no se clasifica). Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
+    status: "hecho",
+    note: "/ventas/aprobaciones y /ventas/bandeja, el job outbound.intent y la corrección a mano; pruebas en apps/worker/test/outreach-bandejas.test.ts y packages/db/test/bandejas.test.ts. Pulido r5: aprobaciones no ofrece lo de un negocio ya ganado o perdido; la bandeja fecha «23 sep». Decisión 9 tomada: sin llave no se clasifica solo, una persona corrige con los mismos efectos. Pendiente humano: ANTHROPIC_API_KEY. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds). Detalle en §5.7.",
   },
   {
     id: "VEN-15", module: "VEN", owner: "rasheed", size: "M", sprint: 4, deps: ["VEN-10"],
