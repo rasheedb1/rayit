@@ -29,9 +29,11 @@ import { JOB_LOCK_PREFIX } from '../src/runner/comun.ts';
 import type { Queryable, WorkerDatabase } from '../src/runner/db.ts';
 import { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
-import { claimRun, MAX_TICK_CUTS, TICK_CUT_KEY, type Claim } from '../src/runner/once.ts';
+import { claimRun, MAX_TICK_CUTS, TICK_CUT_KEY, TICK_RUN_PREFIX, type Claim } from '../src/runner/once.ts';
+import { ALLOW_WITH_TICK_ENV, assertNoRecentTicks, LONG_PROCESS_LOCK, RECENT_TICK_WINDOW_MS } from '../src/runner/exclusion.ts';
+import { startWorker } from '../src/runner/worker.ts';
 import { defineJob, type JobDefinition, type JobRegistration } from '../src/runner/registry.ts';
-import { ConfigError } from '../src/runner/config.ts';
+import { ConfigError, loadConfig } from '../src/runner/config.ts';
 import {
   assertTickTarget, BOSS_READ_GRANT, forgetTickInstanceState, runTick, runTickFromEnv, TICK_CLOSE_MS, TICK_CONNECT_TIMEOUT_MS, tickBudget,
   type RunTickOptions, type TickSummary,
@@ -390,7 +392,7 @@ test('outbound.dispatch sobre el seed de outreach: dos turnos a la vez sacan el 
   const [corrida, ...otras] = await jobRuns(db, DISPATCH_JOB_ID);
   assert.deepEqual(otras, [], 'una sola fila en job_run');
   assert.equal(corrida?.metadata['sent'], 1);
-  assert.match(String(corrida?.metadata['bossJobId']), /^once:[0-9a-f-]{36}$/);
+  assert.match(String(corrida?.metadata['bossJobId']), /^tick:[0-9a-f-]{36}$/, 'la marca de turno (TICK_RUN_PREFIX): startWorker la busca');
   // Con 45 s de turno el job tiene ~40 s y un margen del 25 % (plazo.ts): ~15 toques por pasada.
   // Con el margen fijo de 30 s eran 10 s y 5 toques, nueve veces menos que el proceso largo.
   assert.ok(Number(corrida?.metadata['claimBudget']) >= 10, `presupuesto de la pasada: ${String(corrida?.metadata['claimBudget'])} toques`);
@@ -488,4 +490,72 @@ test('con el canal falso pedido contra una base que no es local, el turno no arr
 test('un presupuesto sin sentido se rechaza antes de tocar la base', async () => {
   await assert.rejects(turno('test_carrera', [contado], { budgetMs: 10 }), RangeError);
   await assert.rejects(turno('test_carrera', [contado], { budgetMs: Number.NaN }), RangeError);
+});
+
+/**
+ * CIM-7 · exclusión mutua con el proceso largo (src/runner/exclusion.ts).
+ * PGlite tiene una sola sesión: el candado de otra sesión se simula
+ * respondiendo la consulta a pg_locks. Con dos sesiones de verdad lo
+ * prueba test/tick-postgres.test.ts.
+ */
+const candado = defineJob('test.tick_candado', async () => { count('candado'); return { processed: 1, failed: 0 }; });
+
+/** La base del turno, con la consulta a pg_locks respondida como si otra sesión tuviera el candado. */
+function conCandadoAjeno(base: WorkerDatabase): WorkerDatabase {
+  return new Proxy(base, {
+    get(target, prop) {
+      if (prop === 'query') {
+        return (text: string, params?: readonly unknown[]) =>
+          text.includes('pg_locks') ? Promise.resolve({ rows: [{ held: true }], rowCount: 1 }) : target.query(text, params);
+      }
+      const v = Reflect.get(target, prop, target) as unknown;
+      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+    },
+  }) as WorkerDatabase;
+}
+
+test('con el candado del proceso largo en otra sesión, el turno no corre nada y lo dice; sin él, corre y marca sus filas como de turno', async () => {
+  await web.execAsSuperuser(`
+    INSERT INTO job_definition (id, label_es, queue, default_cron, timeout_s, max_attempts, max_concurrency)
+    VALUES ('test.tick_candado', 'Prueba turno: candado', 'test_candado', '${ANUAL}', 60, 1, 1)`);
+  const antes = sink.records().length;
+  const bloqueado = await runTick({
+    db: conCandadoAjeno(db), budgetMs: 4_000, now: () => RELOJ, env: { WORKER_GROUPS: 'test_candado' }, jobs: [candado], logger,
+    secrets: new InMemorySecretStore(), refreshers: refresherRegistry([new FakeTokenRefresher('tiktok')]),
+  });
+  assert.deepEqual(bloqueado.ran, []);
+  assert.deepEqual(bloqueado.left, [{ job: '*', reason: 'running' }]);
+  assert.equal(calls['candado'], undefined, 'ni lo reclamó');
+  assert.deepEqual(await jobRuns(db, 'test.tick_candado'), [], 'ni una fila en job_run');
+  const aviso = sink.records().slice(antes).find((r) => r['level'] === 'warn' && String(r['msg']).includes('proceso largo'));
+  assert.equal(aviso?.['lock'], LONG_PROCESS_LOCK, 'el log dice por qué no corrió');
+
+  // En PGlite el candado propio no cuenta como de otra sesión: el turno corre.
+  const libre = await turno('test_candado', [candado]);
+  assert.deepEqual(libre.ran.map((r) => [r.job, r.status]), [['test.tick_candado', 'ok']]);
+  const [fila] = await jobRuns(db, 'test.tick_candado');
+  assert.match(String(fila?.metadata['bossJobId']), new RegExp(`^${TICK_RUN_PREFIX}[0-9a-f-]{36}$`), 'la fila lleva la marca de turno');
+});
+
+test('el proceso largo no arranca con turnos en los últimos 5 min, salvo WORKER_ALLOW_WITH_TICK=1', async () => {
+  // La prueba de arriba dejó una corrida de turno con started_at = RELOJ.
+  await assert.rejects(assertNoRecentTicks(db, {}, RELOJ), (err: unknown) => err instanceof ConfigError && /modo por turnos/.test(err.message) && /cron\.uninstall/.test(err.message));
+  await assertNoRecentTicks(db, { [ALLOW_WITH_TICK_ENV]: '1' }, RELOJ);
+  // Pasada la ventana (con un reloj posterior a todas las corridas de este archivo, que usan relojes propios), arranca.
+  const { rows } = await db.query<{ ultima: Date }>(`SELECT max(started_at) AS ultima FROM job_run`);
+  await assertNoRecentTicks(db, {}, new Date(new Date(rows[0]!.ultima).getTime() + RECENT_TICK_WINDOW_MS + 1_000));
+  // Las filas de --once (bossJobId once:…, sin sliceS) no cuentan como turno.
+  await web.execAsSuperuser(`
+    INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, metadata)
+    VALUES ('test.tick_candado', 'ok', 1, '${new Date(new Date(rows[0]!.ultima).getTime() + 60_000).toISOString()}', now(), '{"bossJobId": "once:manual"}'::jsonb)`);
+  await assertNoRecentTicks(db, {}, new Date(new Date(rows[0]!.ultima).getTime() + RECENT_TICK_WINDOW_MS + 2_000));
+
+  // Y startWorker lo aplica antes de arrancar pg-boss.
+  await assert.rejects(
+    startWorker({
+      config: loadConfig({}, { mode: 'pglite' }), db, logger, jobs: [], env: {}, now: () => RELOJ,
+      secrets: new InMemorySecretStore(), refreshers: refresherRegistry([]),
+    }),
+    ConfigError,
+  );
 });

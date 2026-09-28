@@ -38,7 +38,11 @@
  * esperar a nada: Vercel Hobby cobra la CPU activa.
  *
  * El turno no se corre a la vez que el proceso largo (`pnpm --filter
- * @mc/worker start`): pg-boss no mira job_run y correrían dos veces.
+ * @mc/worker start`): pg-boss no mira job_run y correrían dos veces. No
+ * es solo una regla: el proceso largo retiene un candado de sesión y el
+ * turno, si lo ve en pg_locks, sale sin correr nada con
+ * `left: [{ job: '*', reason: 'running' }]`; y el proceso largo no
+ * arranca si hubo turnos hace menos de 5 min (runner/exclusion.ts).
  *
  * En modo por turnos NO hay trabajo a demanda: el turno solo corre lo que
  * el cron de job_definition dice que está vencido. Un `boss.send(...)`
@@ -67,6 +71,7 @@ import { buildRefreshers, buildSecrets } from './recursos.ts';
 import { assertRole } from './runner/comun.ts';
 import { ConfigError, loadConfig, type Env, type WorkerConfig } from './runner/config.ts';
 import { PostgresDatabase, type WorkerDatabase } from './runner/db.ts';
+import { LONG_PROCESS_LOCK, longProcessHoldsLock } from './runner/exclusion.ts';
 import { createLogger, isLogLevel, type Logger } from './runner/logger.ts';
 import { retryBackoffFrom, runOnce, type OnceReason, type OnceSummary } from './runner/once.ts';
 import type { JobRegistration } from './runner/registry.ts';
@@ -291,6 +296,22 @@ export function tickLogger(env: Env): Logger {
   return createLogger({ level: isLogLevel(env['LOG_LEVEL']) ? env['LOG_LEVEL'] : 'warn', bindings: { app: 'mc-worker', mode: 'tick' } });
 }
 
+/** El resumen de un turno que no corrió nada porque el proceso largo tiene el candado: todo queda para después, `running` por otro. */
+function longProcessSummary(opts: RunTickOptions, started: number): TickSummary {
+  return {
+    at: (opts.now?.() ?? new Date()).toISOString(),
+    budgetMs: opts.budgetMs,
+    elapsedMs: Date.now() - started,
+    ran: [],
+    left: [{ job: '*', reason: 'running' }],
+    upToDate: 0,
+    exhausted: [],
+    failedRuns: 0,
+    planMs: 0,
+    orphanedBossJobs: null,
+  };
+}
+
 /** Un turno sobre una base ya abierta. No la cierra. */
 export async function runTick(opts: RunTickOptions): Promise<TickSummary> {
   const started = Date.now();
@@ -302,6 +323,11 @@ export async function runTick(opts: RunTickOptions): Promise<TickSummary> {
   const logger = opts.logger ?? tickLogger(env);
   // La misma guardia que el arranque del proceso (src/index.ts): el canal falso nunca contra la base compartida.
   channelModeFrom(env, { databaseUrl: config.databaseUrl, embedded: config.mode === 'pglite' });
+  // Con el proceso largo vivo contra esta base, el turno no corre nada: pg-boss no mira job_run (runner/exclusion.ts).
+  if (await longProcessHoldsLock(opts.db)) {
+    logger.warn('el proceso largo del worker tiene el candado de esta base: el turno no corre nada. Si no debería estar encendido, apágalo (¿un `pnpm --filter @mc/worker start` con el .env.local de producción?)', { lock: LONG_PROCESS_LOCK });
+    return longProcessSummary(opts, started);
+  }
   await assertRole(opts.db, config, logger);
 
   const summary = await runOnce({

@@ -9,6 +9,7 @@ import { assertRole, createQuota, recordSkipped } from './comun.ts';
 import type { Env, WorkerConfig } from './config.ts';
 import type { WorkerDatabase } from './db.ts';
 import { loadJobDefinitions } from './definitions.ts';
+import { assertNoRecentTicks, holdLongProcessLock, type LongProcessLock } from './exclusion.ts';
 import type { Logger } from './logger.ts';
 import { JobRegistry, type JobDefinition, type JobRegistration } from './registry.ts';
 import { CHAIN_SOURCE, executeRun, JobItemsFailedError, payloadContext } from './run.ts';
@@ -28,6 +29,12 @@ export interface StartWorkerOptions {
   http?: ConnectorHttpOverrides;
   /** Solo instalar/migrar el esquema pgboss y volver, sin registrar colas. */
   installOnly?: boolean;
+  /**
+   * Se perdió la conexión del candado del proceso largo (runner/exclusion.ts):
+   * el turno ya no lo ve. Por defecto, el worker se detiene; src/index.ts
+   * además sale con 1.
+   */
+  onLockLost?: (err: Error) => void;
 }
 
 export interface JobSummary {
@@ -54,19 +61,41 @@ export async function startWorker(opts: StartWorkerOptions): Promise<RunningWork
 
   await assertRole(db, config, logger);
 
-  const schemaExists = await bossSchemaExists(db, config.bossSchema);
+  // CIM-7: el proceso largo y el turno no corren a la vez (runner/exclusion.ts).
   const install = opts.installOnly === true;
+  let lock: LongProcessLock | null = null;
+  let stopWorker: (() => Promise<void>) | null = null;
+  if (!install) {
+    await assertNoRecentTicks(db, opts.env ?? process.env, opts.now?.());
+    if (db.kind === 'postgres') {
+      lock = await holdLongProcessLock({
+        connection: db.bossConnection(), applicationName: `${config.applicationName}:candado`, logger,
+        onLost: (err) => (opts.onLockLost ? opts.onLockLost(err) : void stopWorker?.().catch(() => undefined)),
+      });
+    }
+  }
+  const releaseLock = () => lock?.release() ?? Promise.resolve();
+
+  const schemaExists = await bossSchemaExists(db, config.bossSchema);
   if (!install && db.kind === 'postgres' && !schemaExists) {
+    await releaseLock();
     throw new Error(
       `No existe el esquema ${config.bossSchema}. En Supabase lo crea Rasheed (docs/propuestas/CON-2.md) y luego se corre ` +
       '`pnpm --filter @mc/worker install-schema`. En Docker local basta con `install-schema`.',
     );
   }
   const boss = createBoss(db, config, logger, { install, schemaExists });
-  await boss.start();
+  try {
+    await boss.start();
+  } catch (err) {
+    await releaseLock();
+    throw err;
+  }
   logger.info('pg-boss arrancado', { schema: config.bossSchema, version: await boss.schemaVersion(), mode: db.kind, install });
 
-  const stop = () => shutdown(boss, db, config);
+  let stopping: Promise<void> | null = null;
+  const stop = () => (stopping ??= shutdown(boss, db, config).finally(releaseLock));
+  stopWorker = stop;
   if (install) return { boss, definitions: [], summary: [], stop };
 
   try {
@@ -75,6 +104,7 @@ export async function startWorker(opts: StartWorkerOptions): Promise<RunningWork
   } catch (err) {
     // pg-boss ya tiene timers y conexiones abiertas: no se puede dejar huérfano.
     await boss.stop({ graceful: false, timeout: 5000, close: db.kind === 'postgres' }).catch(() => undefined);
+    await releaseLock();
     throw err;
   }
 }

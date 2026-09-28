@@ -211,6 +211,12 @@ export const NO_BACKOFF: RetryBackoff = { delayS: 0, maxS: 0 };
 
 /** La marca en la metadata del reclamo: el timeout que de verdad tiene la corrida en un turno (CIM-7). */
 export const SLICE_KEY = 'sliceS';
+/**
+ * El prefijo del bossJobId de las corridas que abre un turno (CIM-7);
+ * las de --once llevan `once:`. startWorker lo busca en job_run para no
+ * arrancar el proceso largo con el turno instalado (runner/exclusion.ts).
+ */
+export const TICK_RUN_PREFIX = 'tick:';
 
 interface StateQuery {
   def: JobDefinition;
@@ -541,7 +547,7 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
 
   const run = async (next: PendingRun, deadline?: number): Promise<void> => {
     ran.add(next.def.id); // antes de cualquier await: otro recorredor ya no lo toma
-    const bossJobId = `once:${randomUUID()}`;
+    const bossJobId = `${deadline !== undefined ? TICK_RUN_PREFIX : 'once:'}${randomUUID()}`;
     const runQuota = await getQuota();
     // En un turno, el job tiene lo que queda del presupuesto como timeout_s:
     // el que se mide por su timeout (outbound.dispatch) termina solo, a tiempo.

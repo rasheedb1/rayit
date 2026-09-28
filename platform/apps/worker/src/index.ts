@@ -127,9 +127,21 @@ async function main(): Promise<void> {
 
   let worker: RunningWorker;
   try {
-    worker = await startWorker({ config, db, logger, jobs: allJobs, secrets, refreshers, installOnly: install, now: demoRed?.now, http: demoRed?.http, env: demoRed?.env });
+    worker = await startWorker({
+      config, db, logger, jobs: allJobs, secrets, refreshers, installOnly: install, now: demoRed?.now, http: demoRed?.http, env: demoRed?.env,
+      // Sin el candado el turno ya no ve este proceso (runner/exclusion.ts): mejor parar que correr lo mismo dos veces.
+      onLockLost: () => {
+        logger.error('sin el candado del proceso largo no se sigue: deteniendo el worker');
+        void worker.stop().catch(() => undefined).finally(() => process.exit(1));
+      },
+    });
   } catch (err) {
     await db.close().catch(() => undefined);
+    // Otro proceso largo, o el turno corriendo contra esta base: el mensaje dice qué hacer.
+    if (err instanceof ConfigError) {
+      process.stderr.write(`${err.message}\n`);
+      process.exit(2);
+    }
     throw err;
   }
 
