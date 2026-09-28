@@ -20,6 +20,8 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MAX_TICK_CUTS, TICK_CUT_KEY } from '@mc/db/queries/worker';
+import { openTestDatabase } from './helpers/harness.ts';
 
 const OPS = fileURLToPath(new URL('../../../db/ops/', import.meta.url));
 const leer = (f: string) => readFileSync(`${OPS}${f}`, 'utf8');
@@ -264,4 +266,61 @@ test('el estado cuenta la cola de pg_net (donde espera la cabecera con el secret
   assert.match(estado, /'dispatch_ultimo_ok'/);
   assert.match(estado, /'ahora', now\(\)/);
   assert.match(leer('cron-tick.sql'), /net\.http_request_queue/, 'y la plantilla dice dónde queda la cabecera hasta que sale');
+});
+
+test(`jobs que no caben en el turno: ${MAX_TICK_CUTS} cortes seguidos sin terminar bien ponen el veredicto en rojo`, async () => {
+  const m = (await import(`${OPS}cron-tick-veredicto.mjs`)) as { veredicto: (e: unknown) => Veredicto };
+  const v = m.veredicto({ ...SANO, no_caben: [{ job_id: 'compute.baseline', cortes: 40 }] });
+  assert.equal(v.sano, false);
+  assert.ok(v.lineas.some((l) => l.nivel === 'error' && /No caben en el turno.*compute\.baseline \(40\).*opción A/.test(l.texto)), JSON.stringify(v.lineas));
+  assert.equal(m.veredicto({ ...SANO, no_caben: null }).sano, true, 'la lista vacía (jsonb_agg de nada es null) no es un problema');
+
+  // La consulta de verdad, contra Postgres embebido: el mismo tope que el runner, y solo los cortes desde la última buena.
+  const estado = leer('cron-tick-estado.sql');
+  assert.ok(estado.includes(`HAVING count(*) >= ${MAX_TICK_CUTS}`), 'el tope del SQL es MAX_TICK_CUTS');
+  assert.ok(estado.includes(`'${TICK_CUT_KEY}'`), 'y la marca, TICK_CUT_KEY');
+  const fragmento = /-- no_caben:inicio\n([\s\S]*?)\n\s*-- no_caben:fin/.exec(estado)?.[1];
+  assert.ok(fragmento, 'las marcas del fragmento están en su sitio');
+  const db = await openTestDatabase();
+  try {
+    await db.raw.exec(`
+      INSERT INTO job_definition (id, label_es, queue, default_cron, timeout_s, max_attempts, max_concurrency) VALUES
+        ('test.nocabe', 'No cabe', 'test', '0 0 1 1 *', 60, 1, 1),
+        ('test.retoma', 'Se retoma', 'test', '0 0 1 1 *', 60, 1, 1);
+      -- test.nocabe: una buena y después ${MAX_TICK_CUTS} cortes. test.retoma: ${MAX_TICK_CUTS} cortes viejos y una buena después.
+      INSERT INTO job_run (job_id, status, attempt, started_at, finished_at) VALUES
+        ('test.nocabe', 'ok', 1, now() - interval '2 days', now() - interval '2 days'),
+        ('test.retoma', 'ok', 1, now() - interval '1 minute', now() - interval '1 minute');
+      INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, error, metadata)
+      SELECT j, 'failed', 1, now() - interval '1 day' + make_interval(mins => g), now(), 'timeout', '{"${TICK_CUT_KEY}": true}'::jsonb
+        FROM unnest(ARRAY['test.nocabe', 'test.retoma']) j, generate_series(1, ${MAX_TICK_CUTS}) g;
+      -- Un fallo de verdad no cuenta como corte del turno.
+      INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, error) VALUES ('test.retoma', 'failed', 1, now(), now(), 'Error: x');
+    `);
+    const { rows } = await db.raw.query<{ no_caben: unknown }>(`SELECT (${fragmento}) AS no_caben`);
+    assert.deepEqual(rows[0]?.no_caben, [{ job_id: 'test.nocabe', cortes: MAX_TICK_CUTS }]);
+  } finally {
+    await db.close();
+  }
+});
+
+test('la proyección contra los cupos de Hobby: avisa por encima de ~250 GB-h al mes y lo dice en verde por debajo', async () => {
+  const m = (await import(`${OPS}cron-tick-veredicto.mjs`)) as {
+    veredicto: (e: unknown) => Veredicto; gbhMes: (ms: number) => number; HOBBY: { invocacionesMes: number; cupoGbh: number; avisoGbh: number };
+  };
+  assert.equal(m.HOBBY.invocacionesMes, 43_200, 'una llamada por minuto, 30 días');
+  assert.equal(m.gbhMes(10_000), 240, '10 s de media a 2 GB: 240 GB-h al mes');
+  assert.equal(Math.round(m.gbhMes(15_000)), m.HOBBY.cupoGbh, 'a 15 s de media se agota el cupo');
+
+  const holgado = m.veredicto({ ...SANO, turno_medio: { respuestas: 300, elapsed_ms: 400 } });
+  assert.equal(holgado.sano, true);
+  assert.ok(holgado.lineas.some((l) => l.nivel === 'ok' && /400 ms por turno.*unos 10 GB-h al mes de los 360/.test(l.texto)), JSON.stringify(holgado.lineas));
+
+  const justo = m.veredicto({ ...SANO, turno_medio: { respuestas: 300, elapsed_ms: 12_000 } });
+  assert.equal(justo.sano, true, 'es un aviso, no tumba el chequeo');
+  assert.ok(justo.lineas.some((l) => l.nivel === 'aviso' && /288 GB-h.*pausa el proyecto entero.*opción A.*no comercial/.test(l.texto)), JSON.stringify(justo.lineas));
+
+  // Sin la media larga, la de los últimos 5 min.
+  assert.ok(m.veredicto(SANO).lineas.some((l) => /150 ms por turno/.test(l.texto)));
+  assert.match(leer('cron-tick-estado.sql'), /'turno_medio'/);
 });

@@ -23,6 +23,27 @@ export const COLA_ATASCADA = 5;
 /** Sin una pasada buena de outbound.dispatch en este tiempo (con el turno respondiendo), algo lo frena. */
 export const DISPATCH_PARADO_MS = 30 * 60_000;
 
+/**
+ * Los cupos de Vercel Hobby que el turno gasta (apps/worker/README.md,
+ * «Cupos de Hobby»). Pasarse de uno pausa el proyecto entero —la web del
+ * cliente incluida— hasta el mes siguiente.
+ */
+export const HOBBY = {
+  /** Una llamada por minuto, 30 días. */
+  invocacionesMes: 1_440 * 30,
+  /** La memoria de la función (Vercel, por defecto). */
+  memoriaGb: 2,
+  /** El cupo de memoria aprovisionada al mes. */
+  cupoGbh: 360,
+  /** A partir de aquí se avisa: queda poco margen para el resto de la web. */
+  avisoGbh: 250,
+};
+
+/** Los GB-h al mes que gastaría el turno con `elapsedMs` de media (una llamada por minuto). */
+export function gbhMes(elapsedMs) {
+  return (elapsedMs / 1000) * HOBBY.invocacionesMes * HOBBY.memoriaGb / 3_600;
+}
+
 /** La fila `cron_tick` de la respuesta de la API ([{ cron_tick: {...} }]), o el objeto tal cual. */
 export function estadoDe(respuesta) {
   const fila = Array.isArray(respuesta) ? respuesta[0] : respuesta;
@@ -68,6 +89,12 @@ export function veredicto(estado) {
   const otros = [...new Set(codigos.filter((c) => typeof c === 'number' && c !== 200 && ![401, 500, 504].includes(c)))];
   if (otros.length) error(`La ruta respondió ${otros.join(', ')}: mira APP_URL (make cron.install) y los logs de Vercel.`);
 
+  const noCaben = estado?.no_caben ?? [];
+  if (noCaben.length) {
+    error(`No caben en el turno (20 o más cortes seguidos sin terminar bien): ${noCaben.map((j) => `${j.job_id} (${j.cortes})`).join(', ')}. ` +
+      'No se van a retomar: pártelos (que miren ctx.signal y se salten lo hecho) o pasa a la opción A (Pro, turnos más largos).');
+  }
+
   const cola = Number(estado?.cola_pg_net ?? 0);
   if (cola >= COLA_ATASCADA) aviso(`pg_net tiene ${cola} petición(es) sin enviar: está atascado, y la cabecera con el secreto sigue en net.http_request_queue.`);
 
@@ -76,6 +103,18 @@ export function veredicto(estado) {
     const tiempos = recientes.map((r) => Number(/"elapsedMs":(\d+)/.exec(r.content ?? '')?.[1])).filter(Number.isFinite);
     const medio = tiempos.length ? Math.round(tiempos.reduce((a, b) => a + b, 0) / tiempos.length) : null;
     lineas.unshift({ nivel: 'ok', texto: `El turno responde: ${recientes.length} respuesta(s) 200 en 5 min${medio === null ? '' : `, ${medio} ms de media`}.` });
+    // La proyección del mes, con la media de lo que guarda pg_net (unas 6 h) si la hay; si no, la de 5 min.
+    const largo = Number(estado?.turno_medio?.elapsed_ms);
+    const base = Number.isFinite(largo) && Number(estado?.turno_medio?.respuestas) > 0 ? largo : medio;
+    if (base !== null && Number.isFinite(base)) {
+      const gbh = Math.round(gbhMes(base));
+      const texto = `Al ritmo de ${Math.round(base)} ms por turno, el turno gasta unos ${gbh} GB-h al mes de los ${HOBBY.cupoGbh} de Hobby`;
+      if (gbh > HOBBY.avisoGbh) {
+        aviso(`${texto}: pasarse pausa el proyecto entero (la web incluida) hasta el mes siguiente. Toca la opción A (Pro), README del worker, «Cupos de Hobby»; y Hobby, según los términos de Vercel, es para uso personal y no comercial.`);
+      } else {
+        lineas.push({ nivel: 'ok', texto: `${texto}.` });
+      }
+    }
     const dispatch = ms(estado?.dispatch_ultimo_ok);
     if (!Number.isFinite(dispatch)) aviso('outbound.dispatch no ha terminado bien nunca en esta base: ¿hay algún workspace con outreach encendido?');
     else if (ahora - dispatch > DISPATCH_PARADO_MS) aviso(`La última pasada buena de outbound.dispatch fue hace ${Math.round((ahora - dispatch) / 60_000)} min (corre cada 2): mira job_run.`);

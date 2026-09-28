@@ -41,5 +41,33 @@ SELECT jsonb_build_object(
   -- pero esto no avanza, el despacho no está corriendo.
   'dispatch_ultimo_ok', (
     SELECT max(started_at) FROM public.job_run
-     WHERE job_id = 'outbound.dispatch' AND status = 'ok' AND workspace_id IS NULL)
+     WHERE job_id = 'outbound.dispatch' AND status = 'ok' AND workspace_id IS NULL),
+  -- Lo que dura un turno de media en lo que guarda pg_net (unas 6 h): con
+  -- esto el veredicto proyecta la memoria del mes contra el cupo de Hobby.
+  'turno_medio', (
+    SELECT jsonb_build_object('respuestas', count(*), 'elapsed_ms', round(avg((substring(content FROM '"elapsedMs":([0-9]+)'))::numeric)))
+      FROM net._http_response
+     WHERE status_code = 200 AND content ~ '"elapsedMs":[0-9]+'),
+  -- Jobs que no caben en el turno: 20 o más cortes (MAX_TICK_CUTS de
+  -- @mc/db/queries/worker, metadata.tickCut) desde su última corrida
+  -- buena. Cada tick del cron agotan sus cortes y esperan al siguiente,
+  -- sin terminar nunca: hay que partirlos o pasar a Pro (opción A).
+  -- Lo que va entre las marcas lo corre también la prueba contra
+  -- Postgres embebido (apps/worker/test/cron-tick-sql.test.ts).
+  'no_caben', (
+    -- no_caben:inicio
+    SELECT jsonb_agg(jsonb_build_object('job_id', x.job_id, 'cortes', x.cortes) ORDER BY x.job_id)
+      FROM (
+        SELECT c.job_id, count(*) AS cortes
+          FROM public.job_run c
+         WHERE c.workspace_id IS NULL AND c.status = 'failed'
+           AND (c.metadata->>'tickCut')::boolean IS TRUE
+           AND c.started_at > coalesce((
+                 SELECT max(b.started_at) FROM public.job_run b
+                  WHERE b.job_id = c.job_id AND b.workspace_id IS NULL AND b.status IN ('ok', 'partial')),
+               '-infinity'::timestamptz)
+         GROUP BY c.job_id
+        HAVING count(*) >= 20) x
+    -- no_caben:fin
+  )
 ) AS cron_tick;
