@@ -464,3 +464,31 @@ test('el plazo del despachador: margen fijo con el timeout largo, proporcional c
   assert.equal(toques(10), 3, 'el mínimo para empezar en un turno (10 s) no deja la pasada vacía');
   assert.ok(toques(40) > 5);
 });
+
+test('el proceso largo con un APP_URL https público reclama igual que antes de CIM-7: la misma URL, los mismos canales, sin aviso', () => {
+  // Antes de publicAppUrl, buildChannels devolvía appUrlFrom(env) tal cual. Con un origen https
+  // público (el caso de producción, también por VERCEL_PROJECT_PRODUCTION_URL) no cambia nada.
+  const s = new InMemorySecretStore();
+  const llaves = { GOOGLE_OUTREACH_CLIENT_ID: 'x', GOOGLE_OUTREACH_CLIENT_SECRET: 'y', UNIPILE_DSN: 'api1.unipile.com:13111', UNIPILE_ACCESS_TOKEN: 'k' };
+  const entornos = [
+    { APP_URL: 'https://on-cue-web.vercel.app' },
+    { APP_URL: 'https://app.oncue.example/ruta?x=1' },
+    { VERCEL_PROJECT_PRODUCTION_URL: 'on-cue-web.vercel.app' },
+  ];
+  for (const env of entornos) {
+    const avisos: string[] = [];
+    const real = buildChannels({ env: { ...env, ...llaves }, secrets: s, logger: { warn: (msg) => avisos.push(msg) } });
+    assert.equal(real.mode, 'real');
+    assert.equal(real.appUrl, appUrlFrom(env), `${JSON.stringify(env)}: la URL del enlace de baja es la de siempre`);
+    // Lo que reclamaba antes: los mismos remitentes con appUrlFrom(env) sin filtrar.
+    assert.deepEqual(dispatchableChannels(real), dispatchableChannels({ senders: real.senders, appUrl: appUrlFrom(env) }), 'reclama lo mismo que antes');
+    assert.ok(dispatchableChannels(real).ready.includes('email'), 'el correo incluido');
+    assert.deepEqual(avisos, [], 'y no avisa de nada');
+  }
+  // Sin APP_URL, como antes: el correo espera («no configurado»); LinkedIn no depende de la URL.
+  const sinUrl = buildChannels({ env: llaves, secrets: s });
+  assert.equal(sinUrl.appUrl, null);
+  assert.deepEqual(dispatchableChannels(sinUrl), dispatchableChannels({ senders: sinUrl.senders, appUrl: appUrlFrom(llaves) }));
+  assert.ok(dispatchableChannels(sinUrl).notConfigured.includes('email'));
+  assert.ok(dispatchableChannels(sinUrl).ready.includes('linkedin'));
+});
