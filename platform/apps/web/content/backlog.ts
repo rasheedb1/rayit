@@ -354,7 +354,7 @@ export const STORIES: readonly Story[] = [
     desc: "Crear, editar, buscar por nombre (el índice trigram ya existe), company_link con relationship y dueño. Un contacto exige source; sin procedencia no se guarda.",
     done: "Se crea una empresa con dos contactos y aparece en la búsqueda al tercer carácter.",
     status: "hecho",
-    note: "Empresas con búsqueda sin tildes, ficha y contactos con procedencia y baja de una sola dirección. Pulido r5: «Editar» empresa y contactos, responsable elegible, país por su nombre. Pulido r6: el país se elige de una lista ISO (Select, _lib/paises.ts; «XX» ya no pasa) y borrar la búsqueda bajo tres letras vuelve a la lista entera. Pulido r7: un nombre ya en el CRM avisa con «Crear igual»; las fichas (empresa, cotización, media kit) tienen esqueleto y siguen dando 404 de verdad (layout.tsx comprueba el id). Pulido r8: la lista no desborda a 400 px con empresas vacías; «Crear igual» vale solo para el nombre del aviso; la pestaña de la ficha dice la empresa. Pulido r3: cada acción del CRM exige el rol (puedeOperarVentas); un viewer o un client recibe «sinPermiso». Pendiente humano: la cola única de la nota de CIM-2 y visto bueno de Nicolás a los loading.tsx de campanas/ y conexiones/, a ThemeSync en app/layout.tsx y al enlace de las tarjetas del Plan a /plan/<módulo> (app/(app)/page.tsx), las dos del marco de CIM-4 tocadas en el pulido r8.",
+    note: "Empresas con búsqueda sin tildes, ficha y contactos con procedencia y baja de una sola dirección. Pulido r5: «Editar» empresa y contactos, responsable elegible, país por su nombre. Pulido r6: el país se elige de una lista ISO (Select, _lib/paises.ts; «XX» ya no pasa) y borrar la búsqueda bajo tres letras vuelve a la lista entera. Pulido r7: un nombre ya en el CRM avisa con «Crear igual»; las fichas (empresa, cotización, media kit) tienen esqueleto y siguen dando 404 de verdad (layout.tsx comprueba el id). Pulido r8: la lista no desborda a 400 px con empresas vacías; «Crear igual» vale solo para el nombre del aviso; la pestaña de la ficha dice la empresa. Pulido r3: cada acción del CRM exige el rol (puedeOperarVentas); un viewer o un client recibe «sinPermiso». Pulido r6 (28-sep): queries/ventas.ts partido en queries/ventas/, con la misma API. Pendiente humano: la cola única de la nota de CIM-2 y visto bueno de Nicolás a los loading.tsx de campanas/ y conexiones/, a ThemeSync en app/layout.tsx y al enlace de las tarjetas del Plan a /plan/<módulo> (app/(app)/page.tsx), las dos del marco de CIM-4 tocadas en el pulido r8.",
   },
   {
     id: "VEN-2", module: "VEN", owner: "rasheed", size: "M", sprint: 1, deps: ["VEN-1"],
@@ -427,7 +427,7 @@ export const STORIES: readonly Story[] = [
     desc: "Pasos normalizados, enrolamiento, cola en outbound_touch con reclamo atómico, despachador por canal con interfaz común, días hábiles y zona horaria del workspace, límites diarios y semanales, reintentos con espera creciente, interruptor de apagado, cancelación al responder con relectura del estado antes de enviar.",
     done: "Una secuencia de tres pasos con plantillas fijas se ejecuta sola contra un buzón de prueba; una respuesta cancela lo pendiente; el límite diario reprograma al día siguiente.",
     status: "hecho",
-    note: "Motor de cadencias con aprobar, resolver, saltar y reanudar, festivos por país y reclamo fila a fila. Pulido r5: origin/main mezclado (roles por role_id, seeds y alta en verde); ganar o perder un negocio detiene su cadencia (0076); la ficha dice «iba a salir» y por qué. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds) y pegar aquí las salidas de los pasos 4 y 6.",
+    note: "Motor de cadencias con aprobar, resolver, saltar y reanudar, festivos por país y reclamo fila a fila. Pulido r5: origin/main mezclado (roles por role_id, seeds y alta en verde); ganar o perder un negocio detiene su cadencia (0076); la ficha dice «iba a salir» y por qué. Pulido r6 (28-sep): en la ficha, un gesto a mano dice «A mano · el 28 sep» y se marca «Hecho». Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds) y pegar aquí las salidas de los pasos 4 y 6.",
   },
   {
     id: "VEN-11", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["CON-6", "COT-1"],
@@ -435,7 +435,7 @@ export const STORIES: readonly Story[] = [
     desc: "Identidad, audiencia, desempeño (mediana y mejores videos con su porqué), formatos, prueba social de campañas reportadas y tarifas, más una narrativa generada cuyas cifras enlazan a su origen. Es el análisis del perfil y los videos del creador que alimenta el outreach.",
     done: "Con el seed, el perfil muestra los cinco mejores videos con sus cifras y cada cifra de la narrativa lleva a su origen.",
     status: "hecho",
-    note: "Perfil comercial con narrativa trazable; «Recalcular» aparta su costo del tope (0075). Pulido r5: dice «visualizaciones», no «views». Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds). Historial en docs/ventas-outreach.md §5.4.",
+    note: "Perfil comercial con narrativa trazable; «Recalcular» aparta su costo del tope (0075). Pulido r5: dice «visualizaciones», no «views». Pulido r6 (28-sep): «visualizaciones» también en el perfil, la narrativa y la guía de pasos. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds). Historial en docs/ventas-outreach.md §5.4.",
   },
   {
     id: "VEN-12", module: "VEN", owner: "rasheed", size: "L", sprint: 5, deps: ["VEN-10", "VEN-11"],
@@ -443,7 +443,7 @@ export const STORIES: readonly Story[] = [
     desc: "Generador con perfil del creador, señal de la marca, ángulo del día y toques realmente enviados; pre-vuelo determinista, juez con rúbrica por paso en tabla, regeneración con pistas cerradas, disparadores de riesgo y revisión humana con calentamiento por tipo de paso.",
     done: "Un mensaje con una cifra sin origen no pasa; dos marcas del mismo nicho reciben correos con similitud menor de 0,65; el juez registra nota, tokens y costo.",
     status: "hecho",
-    note: "Cifras trazables, pre-vuelo, compuertas A-B-C, juez con costo y tope reservado antes de cada llamada (0075). Pulido r5: una sola tabla de precios (llm-precios.ts); un modelo sin precio lanza antes de llamar. Pendiente humano: ANTHROPIC_API_KEY en el worker. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
+    note: "Cifras trazables, pre-vuelo, compuertas A-B-C, juez con costo y tope reservado antes de cada llamada (0075). Pulido r5: una sola tabla de precios (llm-precios.ts); un modelo sin precio lanza antes de llamar. Pulido r6 (28-sep): la plantilla y el redactor falso dicen «visualizaciones». Pendiente humano: ANTHROPIC_API_KEY en el worker. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
   },
   {
     id: "VEN-13", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-12"],
@@ -459,7 +459,7 @@ export const STORIES: readonly Story[] = [
     desc: "Aprobar, editar o regenerar lo propuesto; hilos de correo, LinkedIn e Instagram en un solo lugar; clasificación de la intención de la respuesta (interesado, ahora no, fuera de oficina, baja, referido) y su efecto en el deal y el enrolamiento.",
     done: "Un mensaje retenido se aprueba desde la bandeja y sale; una respuesta «me interesa» mueve el deal y aparece en la bandeja con la conversación completa.",
     status: "hecho",
-    note: "/ventas/aprobaciones y /ventas/bandeja, el job outbound.intent y la corrección a mano; pruebas en apps/worker/test/outreach-bandejas.test.ts y packages/db/test/bandejas.test.ts. Pulido r5: aprobaciones no ofrece lo de un negocio ya ganado o perdido; la bandeja fecha «23 sep». Decisión 9 tomada: sin llave no se clasifica solo, una persona corrige con los mismos efectos. Pendiente humano: ANTHROPIC_API_KEY. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds). Detalle en §5.7.",
+    note: "/ventas/aprobaciones y /ventas/bandeja, el job outbound.intent y la corrección a mano; pruebas en apps/worker/test/outreach-bandejas.test.ts y packages/db/test/bandejas.test.ts. Pulido r5: aprobaciones no ofrece lo de un negocio ya ganado o perdido; la bandeja fecha «23 sep». Decisión 9 tomada: sin llave no se clasifica solo, una persona corrige con los mismos efectos. Pulido r6 (28-sep): la lista no se reordena al marcar leído; j, k y «hecha» siguen el orden que se ve. Pendiente humano: ANTHROPIC_API_KEY. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds). Detalle en §5.7.",
   },
   {
     id: "VEN-15", module: "VEN", owner: "rasheed", size: "M", sprint: 4, deps: ["VEN-10"],
@@ -467,7 +467,7 @@ export const STORIES: readonly Story[] = [
     desc: "Pie de baja con página pública, cabecera List-Unsubscribe de un clic, rebotes asíncronos, calentamiento progresivo por cuenta, baja respetada en todos los canales, alertas diarias por correo.",
     done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud.",
     status: "hecho",
-    note: "Rebotes, calentamiento, baja de un clic con quien envió y candados de la política, probado en pglite de punta a punta. Pulido r5: la baja por LinkedIn o Instagram vive en el perfil (0077): otra ficha con la misma URL no se enrola ni recibe. Pendiente humano: visto bueno de Rasheed a las decisiones 6 y 7 (§8). Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
+    note: "Rebotes, calentamiento, baja de un clic con quien envió y candados de la política, probado en pglite de punta a punta. Pulido r5: la baja por LinkedIn o Instagram vive en el perfil (0077): otra ficha con la misma URL no se enrola ni recibe. Pulido r6 (28-sep): la clave de LinkedIn junta m. y es., la tilde codificada y «/es» (0077). Pendiente humano: visto bueno de Rasheed a las decisiones 6 y 7 (§8). Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
   },
   {
     id: "VEN-16", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-10"],
@@ -475,7 +475,7 @@ export const STORIES: readonly Story[] = [
     desc: "Cola visible con reintento por tipo, uso por canal con límite blando y duro, embudo por paso (enviados, abiertos, respondidos, positivos), vista de flujo de la cadencia.",
     done: "Con una semana de envíos de prueba, el embudo cuadra con outbound_touch fila a fila.",
     status: "hecho",
-    note: "/ventas/actividad con cola, reintento por tipo y cursor; uso por canal y embudo por paso (0072). Pulido r5: los motivos «la marca ya firmó» y «el negocio se marcó como perdido». Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
+    note: "/ventas/actividad con cola, reintento por tipo y cursor; uso por canal y embudo por paso (0072). Pulido r5: los motivos «la marca ya firmó» y «el negocio se marcó como perdido». Pulido r6 (28-sep): los gestos a mano van «A mano», fuera de «Cola», con «Hecho»; «Uso de hoy» no ofrece «Reconectar» sin llaves; pestañas «X · Ventas»; la demo no siembra comentarios enviados. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
   },
 
   // ---------------------------------------------------------------- COT

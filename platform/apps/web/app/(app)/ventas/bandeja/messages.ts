@@ -9,6 +9,7 @@
  * Este archivo llega al cliente: no importa nada de @mc/db.
  */
 import type { PillKind } from "@/components/ui/pill";
+import { tituloDeVentas } from "../_lib/titulo";
 
 const reglas = new Intl.PluralRules("es");
 function plural(n: number, one: string, other: string): string {
@@ -26,7 +27,7 @@ export const VISTAS = ["pendientes", "hechas", "todas"] as const;
 export type VistaBandeja = (typeof VISTAS)[number];
 
 export const MESSAGES = {
-  metaTitle: "Bandeja",
+  metaTitle: tituloDeVentas("Bandeja"),
   header: {
     eyebrow: "Ventas · bandeja",
     title: "Las conversaciones con las marcas",

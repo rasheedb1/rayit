@@ -14,7 +14,9 @@
  *   · una ficha que queda de baja por otra vía (contact_optout_handles)
  *     anota sus perfiles, y el reclamo cancela lo que otra ficha con el
  *     mismo perfil ya tenía en la cola;
- *   · la lista es del workspace: otro espacio sigue pudiendo escribirle.
+ *   · la lista es del workspace: otro espacio sigue pudiendo escribirle;
+ *   · (pulido r6) las formas de una misma URL —m., es., sin esquema, con la
+ *     tilde codificada o sin ella, con «/es» detrás— dan una sola clave.
  *
  * Ids nuevos en cada corrida: contra un Postgres que se queda, la prueba
  * se puede repetir.
@@ -187,4 +189,65 @@ test('el reclamo cancela lo que otra ficha con el mismo perfil ya tenía en la c
     tx.query<{ status: string; blocked_reason: string | null }>('SELECT status, blocked_reason FROM outbound_touch WHERE id = $1', [toque]),
   );
   assert.deepEqual({ ...rows[0] }, { status: 'canceled', blocked_reason: 'opted_out' });
+});
+
+test('pulido r6: las formas de una misma URL de LinkedIn dan una sola clave, y ninguna variante se enrola ni recibe', async () => {
+  const slug = `perfil-${WS.slice(0, 8)}`;
+  // La forma que muestra el navegador (con tildes) y las que se copian de él.
+  const base = `https://www.linkedin.com/in/sofía-cárdenas-${slug}`;
+  const variantes = [
+    `https://m.linkedin.com/in/sofía-cárdenas-${slug}`,
+    `linkedin.com/in/sofía-cárdenas-${slug}`,
+    `https://www.linkedin.com/in/sof%C3%ADa-c%C3%A1rdenas-${slug}/`,
+    `https://es.linkedin.com/in/sofía-cárdenas-${slug}/es`,
+  ];
+  const { rows: ks } = await t.db.asWorker((tx) =>
+    tx.query<{ k: string }>(`SELECT outreach_handle_key('linkedin', a) AS k FROM unnest($1::text[]) AS a`, [[base, ...variantes]]),
+  );
+  assert.deepEqual(
+    [...new Set(ks.map((r) => r.k))],
+    [`linkedin.com/in/sofía-cárdenas-${slug}`],
+    'una sola clave: sin subdominio, decodificada y sin lo que sigue al slug',
+  );
+  // Un % suelto o bytes que no son UTF-8 no rompen la clave; de una página, solo /company/<slug>.
+  const { rows: raras } = await t.db.asWorker((tx) =>
+    tx.query<{ a: string; b: string; c: string }>(
+      `SELECT outreach_handle_key('linkedin', 'linkedin.com/in/ana%') AS a,
+              outreach_handle_key('linkedin', 'linkedin.com/in/ana%FF') AS b,
+              outreach_handle_key('linkedin', 'https://www.linkedin.com/company/vitale/posts/?x=1') AS c`,
+    ),
+  );
+  assert.deepEqual({ ...raras[0] }, { a: 'linkedin.com/in/ana%', b: 'linkedin.com/in/ana%ff', c: 'linkedin.com/company/vitale' });
+
+  // Queda de baja la ficha con la forma del navegador.
+  const original = randomUUID();
+  await t.admin(`
+    INSERT INTO contact (id, company_id, owner_workspace_id, full_name, linkedin_url, source)
+    VALUES ('${original}', '${MARCA}', '${WS}', 'Sofía Cárdenas (tildes)', '${base}', 'user_provided');
+  `);
+  await t.db.asWorker((tx) => applyContactOptOut(tx, original, WS, 'Pidió no recibir más mensajes', CLOCK));
+
+  // Cada variante, en otra ficha: no se enrola, y su toque de LinkedIn no entra.
+  for (const url of variantes) {
+    const bis = randomUUID();
+    await enWs((tx) =>
+      tx.query(
+        `INSERT INTO contact (id, company_id, owner_workspace_id, full_name, linkedin_url, source)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, 'Sofía (otra ficha)', $4, 'user_provided')`,
+        [bis, MARCA, WS, url],
+      ),
+    );
+    const r = await enWs((tx) => enrollContacts(tx, { sequenceId: seq, contactIds: [bis], now: CLOCK }));
+    assert.deepEqual(r.skipped, [{ contactId: bis, reason: 'opted_out' }], url);
+    await rechaza(
+      enWs((tx) =>
+        tx.query(
+          `INSERT INTO outbound_touch (workspace_id, company_id, contact_id, channel, body, status, scheduled_for)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, 'linkedin', 'Hola, Sofía.', 'scheduled', $4::timestamptz)`,
+          [WS, MARCA, bis, CLOCK.toISOString()],
+        ),
+      ),
+      `el toque de LinkedIn a ${url}`,
+    );
+  }
 });

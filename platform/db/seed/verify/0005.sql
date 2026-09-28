@@ -35,7 +35,8 @@ SELECT 'a_conteos' AS check_id,
          AND (SELECT string_agg(status || '=' || n, ',' ORDER BY status)
                 FROM (SELECT status, count(*) AS n FROM outbound_touch
                  WHERE id::text LIKE '00000005-%' GROUP BY status) x)
-             = 'canceled=2,draft=1,held=1,scheduled=1,sent=4' AS ok;
+             -- El comentario del paso 1 es un gesto a mano: «Hecho a mano» (skipped), no enviado (pulido r6).
+             = 'canceled=2,draft=1,held=1,scheduled=1,sent=3,skipped=1' AS ok;
 
 -- (b) La secuencia es la plantilla «Marca con campaña activa» copiada:
 --     los mismos seis pasos, en el mismo orden, con su ángulo resuelto.

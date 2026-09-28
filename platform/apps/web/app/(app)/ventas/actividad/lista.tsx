@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmInline } from "@/components/ui/confirm-inline";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import { formatInt } from "@/lib/format";
-import { cancelarSeleccion, reintentarUno, type ActividadState } from "./actions";
+import { cancelarSeleccion, marcarGestoHecho, reintentarUno, type ActividadState } from "./actions";
 import { MESSAGES } from "./messages";
 
 /** Una fila ya formateada en el servidor: aquí no se calcula ni se formatea nada. */
@@ -51,6 +51,8 @@ export interface FilaVista {
   /** Retenido: adónde ir a revisarlo y aprobarlo (la cadencia de la ficha). */
   revisar: string | null;
   cancelable: boolean;
+  /** Un gesto a mano por hacer (comentario, reacción, tarea): lleva «Hecho», que lo saca de la cola. */
+  hecho: boolean;
   enviando: boolean;
   fichaHref: string;
 }
@@ -141,6 +143,15 @@ export function ListaActividad({
     setReintentando(id);
     empezar(async () => {
       const r = await reintentarUno(id);
+      setReintentando(null);
+      onResultado(r);
+    });
+  }
+
+  function hecho(id: string) {
+    setReintentando(id);
+    empezar(async () => {
+      const r = await marcarGestoHecho(id);
       setReintentando(null);
       onResultado(r);
     });
@@ -239,6 +250,18 @@ export function ListaActividad({
             {f.revisar && (
               <Button size="sm" variant="secondary" href={f.revisar}>
                 {MESSAGES.fila.revisar}
+              </Button>
+            )}
+            {f.hecho && (
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={ocupada && reintentando === f.id}
+                disabled={ocupada}
+                aria-label={MESSAGES.fila.aMano.botonLabel(f.queEs, f.contacto)}
+                onClick={() => hecho(f.id)}
+              >
+                {MESSAGES.fila.aMano.boton}
               </Button>
             )}
           </li>

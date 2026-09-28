@@ -240,14 +240,28 @@ test('la plantilla es determinista, tiene tres párrafos y pasa el verificador',
   assert.match(t, /«Cold brew en casa en 3 pasos»/);
 });
 
+test('pulido r6: el texto español de la plantilla, el prompt y las etiquetas dicen «visualizaciones», nunca «views»', () => {
+  // El anglicismo terminaba en el pitch que se manda a las marcas; Cotizar, el media kit y Resumen ya decían «visualizaciones».
+  // Las marcas [claim:…] llevan «views» en su id: se quitan antes de mirar el texto.
+  const sinMarcas = (x: string) => x.replace(/\[claim:[^\]]+\]/g, '[claim]');
+  for (const p of [perfil, buildPerfil(entradasConVideosLargos())]) {
+    assert.doesNotMatch(sinMarcas(templateNarrative(p)), /\bviews\b/i);
+    // El valor tal cual (el formateador de la prueba le pega la unidad técnica, que no es texto de la narrativa).
+    const q = buildNarrativePrompt(p, (c) => String(c.value));
+    assert.doesNotMatch(sinMarcas(q.system), /\bviews\b/i);
+    assert.doesNotMatch(sinMarcas(q.user), /\bviews\b/i);
+    for (const c of p.claims) assert.doesNotMatch(claimLabelEs(c), /\bviews\b/i, c.id);
+  }
+});
+
 test('la plantilla compara cifras comparables: la mediana de la red del mejor video, y la de su corte', () => {
   const t = templateNarrative(perfil);
   // La mediana que se cita es la de Instagram, la red del mejor video, con su corte en palabras.
-  assert.match(t, /En Instagram, a la semana de publicado, mis videos tienen una mediana de \[claim:mediana-instagram\] views\./);
+  assert.match(t, /En Instagram, a la semana de publicado, mis videos tienen una mediana de \[claim:mediana-instagram\] visualizaciones\./);
   // El «× mi mediana» nombra la red, y como se midió a los treinta días, cita esa mediana (412 000 ≈ 5,97 × 69 000).
   assert.match(
     t,
-    /llegó a \[claim:video-000000000d01-views\] views al mes de publicado: \[claim:video-000000000d01-x\] mi mediana de Instagram, que a esa edad es de \[claim:mediana-instagram-ba5207200001\] views\./,
+    /llegó a \[claim:video-000000000d01-views\] visualizaciones al mes de publicado: \[claim:video-000000000d01-x\] mi mediana de Instagram, que a esa edad es de \[claim:mediana-instagram-ba5207200001\] visualizaciones\./,
   );
   // Con el seed ningún rasgo alcanza: la plantilla describe el video y no le inventa una causa.
   assert.match(t, /Ese video abre con una promesa concreta de resultado y es una colaboración con una marca\./);
@@ -318,7 +332,7 @@ test('el prompt lleva cada claim con su valor y las reglas de la marca', () => {
   );
   // Las etiquetas del prompt salen de la clave y los parámetros, con el país en el idioma de la narrativa.
   assert.equal(claimLabelEs(perfil.claims.find((c) => c.id === 'audiencia-tiktok-pais-mx')!), 'Parte de los seguidores de TikTok que vive en México');
-  assert.equal(claimLabelEs(perfil.claims.find((c) => c.id === 'mediana-instagram-ba5207200001')!), 'Views medianas por video en Instagram al mes de publicado');
+  assert.equal(claimLabelEs(perfil.claims.find((c) => c.id === 'mediana-instagram-ba5207200001')!), 'Visualizaciones medianas por video en Instagram al mes de publicado');
 });
 
 /** Un modelo falso: devuelve las respuestas en orden y guarda los prompts. */

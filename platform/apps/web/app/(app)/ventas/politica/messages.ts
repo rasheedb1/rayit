@@ -12,6 +12,7 @@
  */
 // Solo el tipo: este archivo llega al cliente (interruptor.tsx) y @mc/db no.
 import type { DisabledReasonCode } from "@mc/db/queries/entregabilidad";
+import { tituloDeVentas } from "../_lib/titulo";
 
 const reglas = new Intl.PluralRules("es");
 /** La forma de una frase según la cifra: «1 atascado», «3 atascados». */
@@ -20,7 +21,7 @@ function plural(n: number, one: string, other: string): string {
 }
 
 export const MESSAGES = {
-  metaTitle: "Política de envío",
+  metaTitle: tituloDeVentas("Política de envío"),
   header: {
     eyebrow: "Ventas · política de envío",
     title: "Las reglas que respeta cada mensaje",

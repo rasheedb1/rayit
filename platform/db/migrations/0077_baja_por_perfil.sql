@@ -19,10 +19,14 @@
 -- Lo que deja esta migración:
 --
 --   1 · outreach_handle_key(canal, dirección): la forma comparable de un
---       perfil. LinkedIn: sin esquema, sin «www.» ni subdominio de país,
---       sin parámetros ni barra final, en minúsculas
+--       perfil. LinkedIn: con los %XX decodificados, sin esquema, sin
+--       ningún subdominio («www.», «co.», «m.»), sin parámetros, y solo
+--       «/in/<slug>» o «/company/<slug>» (lo que sigue, como «/es» o
+--       «/details/…», se corta), en minúsculas
 --       («linkedin.com/in/sofia-cardenas»). Instagram: el usuario sin @
 --       ni «instagram.com/», en minúsculas. NULL si no queda nada.
+--       (Pulido r6: la forma que copia el navegador, con la tilde
+--       codificada, y la que muestra, con la tilde, dan la misma clave.)
 --   2 · outbound_workspace_optout_handle: la hermana de
 --       outbound_workspace_optout para los perfiles, por (workspace,
 --       canal, clave). La escriben solo las funciones de abajo y el
@@ -57,6 +61,52 @@
 -- ---------------------------------------------------------------------
 -- 1 · La forma comparable de un perfil
 -- ---------------------------------------------------------------------
+-- 1.1 · Los %XX de una URL, decodificados como UTF-8. El navegador
+-- muestra «/in/sofía-cárdenas» y copia «/in/sof%C3%ADa-c%C3%A1rdenas»:
+-- las dos son la misma persona. Un % que no forma un byte se queda
+-- como está; si los bytes no son UTF-8 válido, vuelve el texto tal cual.
+CREATE OR REPLACE FUNCTION outreach_percent_decode(p_text text)
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  bytes bytea := ''::bytea;
+  i int := 1;
+  n int;
+  ch text;
+BEGIN
+  IF p_text IS NULL OR strpos(p_text, '%') = 0 THEN
+    RETURN p_text;
+  END IF;
+  n := length(p_text);
+  WHILE i <= n LOOP
+    ch := substr(p_text, i, 1);
+    IF ch = '%' AND substr(p_text, i + 1, 2) ~ '^[0-9A-Fa-f]{2}$' THEN
+      bytes := bytes || decode(substr(p_text, i + 1, 2), 'hex');
+      i := i + 3;
+    ELSE
+      bytes := bytes || convert_to(ch, 'UTF8');
+      i := i + 1;
+    END IF;
+  END LOOP;
+  RETURN convert_from(bytes, 'UTF8');
+EXCEPTION WHEN OTHERS THEN
+  RETURN p_text;
+END;
+$$;
+
+COMMENT ON FUNCTION outreach_percent_decode(text) IS
+  'Los %XX de una URL decodificados como UTF-8 (0077, pulido r6). Un % suelto se queda; bytes que no son UTF-8 '
+  'válido devuelven el texto tal cual.';
+
+-- 1.2 · La clave. LinkedIn, en este orden: decodificar, minúsculas,
+-- sin esquema, sin subdominio alguno (www., co., m., es.), sin
+-- parámetros ni ancla, y de un perfil o una página solo
+-- «/in/<slug>» o «/company/<slug>»: «/in/sofia-cardenas/es» y
+-- «/in/sofia-cardenas/details/experience» son la misma persona.
 CREATE OR REPLACE FUNCTION outreach_handle_key(p_channel text, p_address text)
 RETURNS text
 LANGUAGE sql
@@ -70,9 +120,11 @@ AS $$
         regexp_replace(
           regexp_replace(
             regexp_replace(
-              regexp_replace(lower(btrim(p_address)), '^https?://', ''),
-              '^(www\.|[a-z]{2}\.)(linkedin\.com)', '\2'),
-            '[?#].*$', ''),
+              regexp_replace(
+                regexp_replace(lower(btrim(outreach_percent_decode(btrim(p_address)))), '^https?://', ''),
+                '^([a-z0-9-]+\.)*(linkedin\.com)(/|$)', '\2\3'),
+              '[?#].*$', ''),
+            '^(linkedin\.com/(in|company|school|showcase)/[^/]+)/.*$', '\1'),
           '/+$', '')
       WHEN 'instagram_dm' THEN
         regexp_replace(
@@ -85,7 +137,8 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION outreach_handle_key(text, text) IS
-  'La forma comparable de un perfil (0077): LinkedIn sin esquema, www., subdominio de país, parámetros ni barra final; '
+  'La forma comparable de un perfil (0077): LinkedIn con los %XX decodificados, sin esquema, subdominio, parámetros '
+  'ni barra final, y solo /in/<slug> o /company/<slug>; '
   'Instagram, el usuario sin @ ni instagram.com/. En minúsculas. NULL para otro canal o si no queda nada.';
 
 

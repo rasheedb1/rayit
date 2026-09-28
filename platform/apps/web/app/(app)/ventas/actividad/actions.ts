@@ -2,8 +2,8 @@
 
 /**
  * Las Server Actions de /ventas/actividad (VEN-16): reintentar lo fallido
- * (uno, o todos los de un tipo de paso con los filtros de la pantalla) y
- * cancelar lo seleccionado.
+ * (uno, o todos los de un tipo de paso con los filtros de la pantalla),
+ * cancelar lo seleccionado y marcar «Hecho» un gesto a mano.
  *
  * La misma forma que el resto de Ventas: zod valida lo que llega, las
  * consultas de @mc/db/queries/actividad hacen el trabajo dentro de
@@ -11,14 +11,14 @@
  * lo que vuelve es una frase ya resumida. Un error de Postgres se registra
  * y no se le enseña a nadie.
  *
- * Las tres miran el rol antes de abrir la transacción
+ * Todas miran el rol antes de abrir la transacción
  * (puedeOperarLaCola): la RLS de outbound_touch es solo por workspace, y
  * un 'viewer' o un 'client' no pueden cancelar la cola ni volver a mandar
  * lo fallido.
  */
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { BULK_MAX, cancelQueuedTouches, CONTACT_SEARCH_MAX, retryFailedTouches, type RetryTarget } from "@mc/db/queries/actividad";
+import { BULK_MAX, cancelQueuedTouches, CONTACT_SEARCH_MAX, markManualTouchDone, retryFailedTouches, type RetryTarget } from "@mc/db/queries/actividad";
 import { STEP_TYPES } from "@mc/db/schema";
 import { formatterFor } from "@/lib/format";
 import { UUID_RE } from "@/lib/forms";
@@ -91,6 +91,25 @@ export async function cancelarSeleccion(touchIds: string[]): Promise<ActividadSt
     return { ok: resumenDe(report, R.cancelados, R.cancelacion, f) };
   } catch (err) {
     console.error("[ventas/actividad] cancelar", err);
+    return { error: R.generico };
+  }
+}
+
+/**
+ * «Hecho» en un gesto a mano (pulido r6): el comentario, la reacción o la
+ * tarea que la persona hizo por su cuenta sale de la cola y la cadencia
+ * sigue (markManualTouchDone).
+ */
+export async function marcarGestoHecho(touchId: string): Promise<ActividadState> {
+  const id = uuid.safeParse(touchId);
+  if (!id.success) return { error: R.generico };
+  if (!(await puedeOperarLaCola())) return SIN_PERMISO;
+  try {
+    const r = await withWorkspace((tx) => markManualTouchDone(tx, id.data));
+    await refrescar();
+    return r.ok ? { ok: R.aMano.hecho } : { error: R.aMano[r.code] };
+  } catch (err) {
+    console.error("[ventas/actividad] marcar hecho", err);
     return { error: R.generico };
   }
 }

@@ -16,7 +16,7 @@ const empresaEnMiCrm = cache((id: string) => withWorkspace((tx) => companyNameIn
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params;
   const name = await empresaEnMiCrm(id);
-  return { title: name ? PITCH.metaTitle(name) : PITCH.eyebrow };
+  return { title: name ? PITCH.metaTitle(name) : PITCH.metaTitleFallback };
 }
 
 /**

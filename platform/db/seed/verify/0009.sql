@@ -139,3 +139,21 @@ SELECT 'x_embudo_no_crece' AS check_id,
  WHERE t.sequence_id = '00000005-0000-4000-8000-0000005e0001' AND t.enrollment_id IS NOT NULL AND p.position > 1
    AND NOT EXISTS (SELECT 1 FROM outbound_touch a JOIN outbound_step_position pa ON pa.step_id = a.step_id
                     WHERE a.enrollment_id = t.enrollment_id AND pa.position = p.position - 1);
+
+-- (f) Un gesto a mano no se envía (pulido r6): los pasos que hace una
+--     persona (TEXTLESS_STEP_TYPES de @mc/core: comentario o reacción en
+--     una red, tarea a mano) no están en DISPATCHABLE_STEP_TYPES, así que
+--     ningún toque suyo sale ni falla por el despachador, ni lleva cuenta
+--     ni id del proveedor. Los de la demo quedan «por hacer» o «Hecho a
+--     mano» (skipped, done_by_hand).
+SELECT 'f_gestos_a_mano_no_se_envian' AS check_id,
+       count(*) AS gestos,
+       count(*) FILTER (WHERE t.status IN ('sent', 'failed', 'processing') OR t.provider_message_id IS NOT NULL
+                          OR t.channel_account_id IS NOT NULL OR t.claimed_at IS NOT NULL) AS imposibles,
+       count(*) FILTER (WHERE t.status = 'skipped' AND t.blocked_reason = 'done_by_hand') AS hechos_a_mano,
+       count(*) FILTER (WHERE t.status IN ('sent', 'failed', 'processing') OR t.provider_message_id IS NOT NULL
+                          OR t.channel_account_id IS NOT NULL OR t.claimed_at IS NOT NULL) = 0
+         AND count(*) FILTER (WHERE t.status = 'skipped' AND t.blocked_reason = 'done_by_hand') > 0 AS ok
+  FROM outbound_touch t
+  JOIN outbound_step st ON st.id = t.step_id
+ WHERE st.step_type IN ('linkedin_comment', 'linkedin_like', 'instagram_comment', 'instagram_like', 'manual_task');

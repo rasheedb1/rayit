@@ -22,6 +22,7 @@ import { z } from "zod";
 import { ACTIVITY_BODY_MAX, NEXT_ACTION_MAX, isClockTime, isIsoDate } from "@mc/core";
 import { OUTREACH_URLS } from "@mc/core/outreach/messages";
 import { skipQueuedTouch, type SkipResult } from "@mc/db/queries/bandejas";
+import { markManualTouchDone, type ManualDoneResult } from "@mc/db/queries/actividad";
 import {
   releaseHeldTouch,
   resolveUnconfirmedTouch,
@@ -411,6 +412,28 @@ export async function saltarMensaje(_prev: VentasState, formData: FormData): Pro
   revalidate(v.companyId);
   if (!result.ok) return { message: t.saltar.errores[result.code] };
   return { ok: true, notice: t.saltar.hecho, stamp: Date.now() };
+}
+
+/**
+ * «Hecho» en un gesto a mano de la cadencia (comentario, reacción, tarea):
+ * sale de la cola y la cadencia sigue (markManualTouchDone, pulido r6).
+ */
+export async function marcarGestoHecho(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  const t = FICHA.cadencia;
+  if (!(await puedeOperarVentas())) return { message: t.sinPermiso };
+  const parsed = saltarSchema.safeParse({ companyId: field(formData, "companyId"), touchId: field(formData, "touchId") });
+  if (!parsed.success) return { message: t.aMano.error };
+  const v = parsed.data;
+  let result: ManualDoneResult;
+  try {
+    result = await withWorkspace((tx) => markManualTouchDone(tx, v.touchId, new Date()));
+  } catch (err) {
+    console.error("[ventas/ficha] marcar gesto hecho", err);
+    return { message: t.aMano.error };
+  }
+  revalidate(v.companyId);
+  if (!result.ok) return { message: t.aMano.errores[result.code] };
+  return { ok: true, notice: t.aMano.aviso, stamp: Date.now() };
 }
 
 const reanudarSchema = z.object({ companyId: z.string().regex(UUID_RE), enrollmentId: z.string().regex(UUID_RE) });

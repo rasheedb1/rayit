@@ -140,8 +140,8 @@ export default async function ActividadPage({ searchParams }: { searchParams: Pr
   const opera = await puedeOperarLaCola();
   const filas = cola.rows.map((r) => {
     const fila = filaVista(r, f, { bloqueos });
-    // Sin permiso, la fila no lleva «Reintentar»: la acción lo negaría.
-    return opera ? fila : { ...fila, reintentable: false };
+    // Sin permiso, la fila no lleva «Reintentar» ni «Hecho»: la acción lo negaría.
+    return opera ? fila : { ...fila, reintentable: false, hecho: false };
   });
   const enCola = filtros.vista === "queue";
   // La casilla de «todo» marca solo esta página: con más de una, lo dice y cuenta cuánto hay que cancelar con estos filtros.

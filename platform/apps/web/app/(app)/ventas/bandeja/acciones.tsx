@@ -12,6 +12,7 @@ import { escribiendo } from "@/lib/teclado";
 import { Aviso } from "../../_lib/aviso";
 import { corregirIntencion, marcarHecho, type ResultadoBandeja } from "./actions";
 import { MESSAGES, VISTAS, type Intencion, type VistaBandeja } from "./messages";
+import { useSiguienteTrasHecha } from "./orden-contexto";
 import { avisarBorrador, enfocarRespuesta, ESCRITORIO, hayRespuestaSinEnviar } from "./responder";
 
 const t = MESSAGES;
@@ -139,6 +140,8 @@ export function MarcarHecha({
   contactId, channel, hecha, siguienteHref = null,
 }: { contactId: string; channel: BandejaChannel; hecha: boolean; siguienteHref?: string | null }) {
   const router = useRouter();
+  // La siguiente en el orden que se ve (OrdenBandeja), no en el del servidor tras marcarla leída.
+  const siguiente = useSiguienteTrasHecha(siguienteHref);
   const [pending, start] = useTransition();
   const [resultado, setResultado] = useState<ResultadoBandeja | null>(null);
   return (
@@ -152,7 +155,7 @@ export function MarcarHecha({
             start(async () => {
               const r = await marcarHecho({ contactId, channel, done: !hecha });
               setResultado(r);
-              if (r.ok && !hecha && siguienteHref) router.push(siguienteHref);
+              if (r.ok && !hecha && siguiente) router.push(siguiente);
             })
           }
         >

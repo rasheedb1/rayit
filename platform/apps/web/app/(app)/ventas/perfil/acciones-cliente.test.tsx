@@ -23,7 +23,7 @@ const { Narrativa } = await import("./narrativa");
 const VERIFICADOR: VerifierContext = { ids: ["mediana-tiktok"], units: { "mediana-tiktok": "views" }, terms: [], language: "es" };
 const CIFRAS = {
   "mediana-tiktok": {
-    id: "mediana-tiktok", key: "median" as const, valor: "115,4 mil", que: "Views medianas por video en TikTok",
+    id: "mediana-tiktok", key: "median" as const, valor: "115,4 mil", que: "Visualizaciones medianas por video en TikTok",
     origen: "Línea base del creador · TikTok", href: "#origen-mediana-tiktok", externo: false,
   },
 };

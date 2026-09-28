@@ -9,6 +9,7 @@
  * por aquí.
  */
 import type { RerouteReason, RecommendSignalKind } from "@mc/core";
+import { tituloDeVentas } from "../_lib/titulo";
 
 /**
  * El idioma de estos textos. Sus reglas de plural son las del idioma en
@@ -30,7 +31,7 @@ export const plural =
     (formas[reglasPlural.select(count)] ?? formas.other).replaceAll("{n}", n);
 
 export const MESSAGES = {
-  metaTitle: "Cadencias",
+  metaTitle: tituloDeVentas("Cadencias"),
   header: {
     eyebrow: "Ventas",
     title: "Cadencias",
@@ -125,7 +126,7 @@ export const MESSAGES = {
 
   detalle: {
     volver: "Todas las cadencias",
-    metaTitle: (nombre: string) => `${nombre} · Cadencias`,
+    metaTitle: (nombre: string) => tituloDeVentas(`${nombre} · Cadencias`),
     /** Bajo el nombre: la señal de la que salió y cuándo. Si el nombre no dice el tipo y la marca (se renombró), también van. */
     desdeSenal: (tipo: string, titular: string, empresa: string | null, fecha: string) =>
       empresa ? `${tipo} · ${empresa}: ${titular} · ${fecha}` : `${tipo}: ${titular} · ${fecha}`,

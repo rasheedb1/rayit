@@ -48,7 +48,7 @@ function lower(s: string): string {
 
 /**
  * La cifra dicha como la diría la creadora, según qué es: «Mis videos de
- * TikTok tienen una mediana de 115.446 [claim:…] views». Lo que no tiene
+ * TikTok tienen una mediana de 115.446 [claim:…] visualizaciones». Lo que no tiene
  * frase propia cae en una genérica con su etiqueta.
  */
 function claimSentence(c: SalesClaim, k: number, lang: 'es' | 'en', companyName: string): string {
@@ -62,14 +62,14 @@ function claimSentence(c: SalesClaim, k: number, lang: 'es' | 'en', companyName:
   if (kind === 'baseline' && b === 'median_views') {
     return en
       ? pick([`My ${P} videos get a median of ${m} views in their first week.`, `On ${P}, a typical video of mine reaches ${m} views in its first week.`], k)
-      : pick([`Mis videos de ${P} tienen una mediana de ${m} views en su primera semana.`, `En ${P}, un video mío típico llega a ${m} views en su primera semana.`], k);
+      : pick([`Mis videos de ${P} tienen una mediana de ${m} visualizaciones en su primera semana.`, `En ${P}, un video mío típico llega a ${m} visualizaciones en su primera semana.`], k);
   }
   if (kind === 'baseline' && b === 'median_engagement') {
     return en ? `On ${P}, the median engagement on my videos is ${m}.` : `En ${P}, la interacción mediana de mis videos es del ${m}.`;
   }
   if (kind === 'campaign' && brand && same) {
     const byMetric: Record<string, [string, string]> = {
-      views: [`That campaign reached ${m} views.`, `Esa campaña sumó ${m} views.`],
+      views: [`That campaign reached ${m} views.`, `Esa campaña sumó ${m} visualizaciones.`],
       redemptions: [`In that campaign, ${m} codes were redeemed.`, `En esa campaña se redimieron ${m} códigos.`],
       non_followers: [`In that campaign, ${m} of the reach came from people who did not follow me yet.`, `En esa campaña, el ${m} del alcance fue gente que todavía no me seguía.`],
       brand_followers: [`With that campaign, you gained ${m} followers.`, `Con esa campaña ganaron ${m} seguidores.`],
@@ -79,7 +79,7 @@ function claimSentence(c: SalesClaim, k: number, lang: 'es' | 'en', companyName:
   }
   if (kind === 'campaign' && brand) {
     const byMetric: Record<string, [string, string]> = {
-      views: [`The campaign I did with ${brand} reached ${m} views.`, `La campaña que hice con ${brand} sumó ${m} views.`],
+      views: [`The campaign I did with ${brand} reached ${m} views.`, `La campaña que hice con ${brand} sumó ${m} visualizaciones.`],
       redemptions: [`In the campaign with ${brand}, ${m} codes were redeemed.`, `En la campaña con ${brand} se redimieron ${m} códigos.`],
       non_followers: [
         `In the campaign with ${brand}, ${m} of the reach came from people who did not follow me yet.`,

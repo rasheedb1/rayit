@@ -28,7 +28,7 @@ export interface SalesClaim {
   /** Estable y legible: 'baseline:tiktok:median_views', 'campaign:<uuid>:views'… Solo [a-z0-9:_-]. */
   id: string;
   source: ClaimSource;
-  /** Qué es, en el idioma del workspace («Mediana de views en TikTok a 7 días»). */
+  /** Qué es, en el idioma del workspace («Mediana de visualizaciones en TikTok a 7 días»). */
   label: string;
   /** El número tal cual está en la base (una proporción va de 0 a 1). null = un hecho sin cifra (una marca cliente). */
   value: number | null;

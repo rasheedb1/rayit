@@ -24,6 +24,7 @@
  * valor que la pantalla pinta a ciegas.
  */
 import { nextWindowSlot, type SendWindow } from '@mc/core/outreach/schedule';
+import { TEXTLESS_STEP_TYPES } from '@mc/core/outreach/sequence-policy';
 import { warmupDailyLimit } from '@mc/core/outreach/warmup';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import { OUTBOUND_CHANNELS, type OutboundChannel } from '../schema/_canales.ts';
@@ -53,6 +54,14 @@ export const QUEUE_CANCELABLE_STATUSES = [...CANCELABLE_TOUCH_STATUSES, 'failed'
 
 /** El blocked_reason de lo que una persona canceló o descartó desde /ventas/actividad. */
 export const CANCELED_BY_USER = 'canceled_by_user';
+
+/**
+ * El blocked_reason de un gesto a mano (TEXTLESS_STEP_TYPES: comentario o
+ * reacción en una red, tarea a mano) que la persona marcó «Hecho»
+ * (markManualTouchDone). El toque queda 'skipped' con su fecha en
+ * status_changed_at: On Cue no lo envió, y la cadencia sigue.
+ */
+export const DONE_BY_HAND = 'done_by_hand';
 
 /**
  * Los fallos que un reintento no arregla y que la cola no reintenta:
@@ -425,10 +434,14 @@ export async function getQueueFacets(tx: WorkspaceTx, filters: ScreenFilters): P
   const queue = ps.add([...QUEUE_BUCKET_STATUSES.queue]);
   const history = ps.add([...QUEUE_BUCKET_STATUSES.history]);
   const cancelable = ps.add([...QUEUE_CANCELABLE_STATUSES]);
+  const textless = ps.add([...TEXTLESS_STEP_TYPES]);
   const conds = filterConds(filters, TABLE_COLUMNS, ps);
+  // «Cola · N» cuenta lo que On Cue envía o espera a salir: un gesto a mano por hacer (un borrador de un paso
+  // TEXTLESS_STEP_TYPES) se ve en la lista, pero no cuenta (pulido r6).
   const counts = await tx.query<Record<string, unknown>>(
     `SELECT st.step_type, GROUPING(st.step_type) = 1 AS total,
-            count(*) FILTER (WHERE t.status = ANY(${queue}::text[]))::int AS queue,
+            count(*) FILTER (WHERE t.status = ANY(${queue}::text[])
+                               AND NOT (t.status = 'draft' AND st.step_type = ANY(${textless}::text[])))::int AS queue,
             count(*) FILTER (WHERE t.status = ANY(${history}::text[]))::int AS history,
             count(*) FILTER (WHERE t.status = ANY(${cancelable}::text[]))::int AS cancelable,
             count(*) FILTER (WHERE CASE WHEN t.status = 'failed' THEN outbound_touch_retry_block(t) IS NULL ELSE false END)::int
@@ -703,6 +716,39 @@ export async function cancelQueuedTouches(tx: WorkspaceTx, touchIds: readonly st
   const enrollments = new Set(rows.map((r, i) => textOrNull(fn, `done[${i}].enrollment_id`, r.enrollment_id)).filter((x): x is string => x !== null));
   for (const enrollmentId of enrollments) await advanceEnrollment(tx, enrollmentId, now);
   return report;
+}
+
+export type ManualDoneResult = { ok: true } | { ok: false; code: 'not_found' | 'not_manual' };
+
+/**
+ * «Hecho» en un gesto a mano (pulido r6): un paso que hace la persona en
+ * la red, sin texto de la cadencia (TEXTLESS_STEP_TYPES: comentario o
+ * reacción en LinkedIn o Instagram, tarea a mano). El enrolamiento los
+ * crea como 'draft' que el despachador nunca reclama (no están en
+ * DISPATCHABLE_STEP_TYPES); sin esto se quedaban para siempre en la cola y
+ * la cadencia no se completaba nunca (advanceEnrollment los cuenta como
+ * pendientes). Pasa a 'skipped' con blocked_reason DONE_BY_HAND y la fecha
+ * en status_changed_at, y la cadencia avanza o se completa. Solo un
+ * borrador de un paso de esos: un mensaje que On Cue envía no se marca a
+ * mano (para eso está «Sí, salió» del intento sin confirmar).
+ */
+export async function markManualTouchDone(tx: WorkspaceTx, touchId: string, now: Date = new Date()): Promise<ManualDoneResult> {
+  const fn = 'markManualTouchDone';
+  if (!isUuid(touchId)) return { ok: false, code: 'not_found' };
+  const { rows } = await tx.query<Record<string, unknown>>(
+    `UPDATE outbound_touch t SET status = 'skipped', blocked_reason = $2
+       FROM outbound_step st
+      WHERE t.id = $1::uuid AND st.id = t.step_id AND t.status = 'draft' AND st.step_type = ANY($3::text[])
+      RETURNING t.enrollment_id`,
+    [touchId, DONE_BY_HAND, [...TEXTLESS_STEP_TYPES]],
+  );
+  if (rows.length === 0) {
+    const seen = await tx.query('SELECT 1 FROM outbound_touch WHERE id = $1::uuid', [touchId]);
+    return { ok: false, code: seen.rows.length > 0 ? 'not_manual' : 'not_found' };
+  }
+  const enrollmentId = textOrNull(fn, 'enrollment_id', rows[0]!.enrollment_id);
+  if (enrollmentId) await advanceEnrollment(tx, enrollmentId, now);
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------

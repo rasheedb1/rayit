@@ -9,9 +9,9 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { ModuleTabs } from "../_componentes/pestanas";
 import { withWorkspace } from "../_lib/db";
 import { puedeOperarVentas, puedeVerBandejas } from "../_lib/permiso";
-import { AtajosBandeja, FiltroVista } from "./acciones";
+import { FiltroVista } from "./acciones";
 import { Conversacion } from "./conversacion";
-import { ListaHilos } from "./lista";
+import { ListaEnOrden, OrdenBandeja } from "./orden-bandeja";
 import { MESSAGES } from "./messages";
 import { columnaListaClase, conversacionVista, FILTRO, hiloVista, listaHref, siguienteTrasHecha, vistaDe } from "./vista";
 
@@ -79,35 +79,28 @@ export default async function BandejaPage({
     <>
       <Cabecera />
 
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
-        <div data-columna="lista" className={columnaListaClase(conversacionVisible)}>
-          <FiltroVista vista={vista} />
-          <AtajosBandeja
-            hrefs={vistas.map((h) => h.href)}
-            activo={vistas.findIndex((h) => h.activo)}
-            activoSoloEscritorio={implicita}
-            listaHref={volver}
-            puedeOperar={puedeOperar}
-          />
-          {hilos.length === 0 ? (
-            <EmptyState title={vacio.title} description={vacio.description} action={vacio.action} />
-          ) : (
-            <ListaHilos hilos={vistas} />
-          )}
+      {/* El orden de la lista no se mueve mientras dura la visita (pulido r6): la lista, j y k y «hecha» lo leen. */}
+      <OrdenBandeja hilos={vistas} vista={vista} listaHref={volver}>
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
+          <div data-columna="lista" className={columnaListaClase(conversacionVisible)}>
+            <FiltroVista vista={vista} />
+            <ListaEnOrden activoSoloEscritorio={implicita} puedeOperar={puedeOperar} />
+            {hilos.length === 0 ? <EmptyState title={vacio.title} description={vacio.description} action={vacio.action} /> : null}
+          </div>
+          <div className={conversacionVisible ? "min-w-0" : "hidden min-w-0 lg:block"}>
+            {conversacion ? (
+              <Conversacion
+                key={abierto}
+                c={conversacionVista(conversacion, f, { clasificador, implicita, puedeOperar, vista })}
+                volverHref={volver}
+                trasHecha={trasHecha}
+              />
+            ) : (
+              <EmptyState title={t.conversacion.elige.title} description={t.conversacion.elige.description} />
+            )}
+          </div>
         </div>
-        <div className={conversacionVisible ? "min-w-0" : "hidden min-w-0 lg:block"}>
-          {conversacion ? (
-            <Conversacion
-              key={abierto}
-              c={conversacionVista(conversacion, f, { clasificador, implicita, puedeOperar, vista })}
-              volverHref={volver}
-              trasHecha={trasHecha}
-            />
-          ) : (
-            <EmptyState title={t.conversacion.elige.title} description={t.conversacion.elige.description} />
-          )}
-        </div>
-      </div>
+      </OrdenBandeja>
     </>
   );
 }

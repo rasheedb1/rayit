@@ -1,6 +1,7 @@
 import type { ClaimSource } from "@mc/core/outreach/claims";
 import type { PreflightCode, RegenerateHint } from "@mc/core/outreach/preflight";
 import type { TemplateVariable } from "@mc/core/outreach/render";
+import { tituloDeVentas } from "../../../_lib/titulo";
 
 /**
  * Los textos del editor del pitch (VEN-6 dentro de VEN-12), en un solo
@@ -8,7 +9,9 @@ import type { TemplateVariable } from "@mc/core/outreach/render";
  * escribe a una marca; «cifra» y «origen», nunca «claim» ni «toque».
  */
 export const PITCH = {
-  metaTitle: (company: string) => `Pitch para ${company} · Ventas`,
+  metaTitle: (company: string) => tituloDeVentas(`Pitch para ${company}`),
+  /** La pestaña si la empresa no se pudo leer. */
+  metaTitleFallback: tituloDeVentas("Pitch"),
   eyebrow: "Ventas · Pitch",
   title: (company: string) => `Pitch para ${company}`,
   description:

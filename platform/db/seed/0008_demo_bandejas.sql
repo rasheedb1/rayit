@@ -468,13 +468,13 @@ SELECT v.id, '00000002-0000-4000-8000-000000000001', '00000008-0000-4000-8000-00
        CASE WHEN v.status = 'sent' THEN v.cuando END,
        CASE WHEN v.status = 'sent' THEN 1 ELSE 0 END,
        v.recipient, v.provider_id, v.rfc, v.thread,
-       CASE WHEN v.status = 'canceled' THEN 'replied' END,
+       CASE v.status WHEN 'canceled' THEN 'replied' WHEN 'skipped' THEN 'done_by_hand' END,
        CASE WHEN v.status = 'canceled' THEN h.respuesta ELSE v.cuando END,
        h.paso_1 - interval '1 hour', v.cuenta
   FROM h, LATERAL (VALUES
+    -- El comentario es un gesto a mano (TEXTLESS_STEP_TYPES): lo hizo Laura en LinkedIn y lo marcó «Hecho» (pulido r6).
     ('00000008-0000-4000-8000-000000070006'::uuid, 1, '00000005-0000-4000-8000-0000005e0101'::uuid, 'linkedin', NULL::text,
-     'Qué buena la cosecha de uchuvas que mostraron esta semana. El video del empaque a mano dice mucho de la marca.',
-     'sent', h.paso_1, NULL::text, 'unipile-demo-comment-0008-6', NULL::text, NULL::text, '00000005-0000-4000-8000-0000000ac002'::uuid),
+     '', 'skipped', h.paso_1, NULL::text, NULL::text, NULL::text, NULL::text, NULL::uuid),
     ('00000008-0000-4000-8000-000000070007', 2, '00000005-0000-4000-8000-0000005e0102', 'email', 'Uchuvas en el desayuno de mi audiencia',
      'Hola, Juliana: quienes me siguen desayunan en casa y buscan fruta de temporada para sus recetas. Las uchuvas de Frutos del '
      'Páramo encajan en una serie de desayunos de cinco minutos. ¿Te muestro cómo quedaría la primera receta?',

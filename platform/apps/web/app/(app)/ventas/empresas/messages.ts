@@ -394,6 +394,26 @@ export const FICHA = {
         opted_out: "Esa persona pidió no ser contactada: su cadencia no se reanuda.",
       },
     },
+    /**
+     * Un gesto a mano (comentario o reacción en una red, tarea a mano):
+     * On Cue no lo redacta ni lo envía, así que no «sale»: te toca ese día,
+     * y «Hecho» lo saca de la cola y deja seguir la cadencia (pulido r6).
+     */
+    aMano: {
+      estado: "A mano",
+      hecho: "Hecho a mano",
+      cuando: (fecha: string) => `a mano · el ${fecha}`,
+      hechoEl: (fecha: string) => `hecho el ${fecha}`,
+      nota: "Lo haces tú en la red: On Cue no lo redacta ni lo envía.",
+      boton: "Hecho",
+      botonLabel: (persona: string) => `Marcar como hecho el paso a mano de ${persona}`,
+      aviso: "Marcado como hecho. La cadencia sigue con el paso siguiente.",
+      error: "No se pudo marcar. Inténtalo de nuevo.",
+      errores: {
+        not_found: "Ese paso ya no existe.",
+        not_manual: "Ese paso ya no está por hacer.",
+      },
+    },
     /** El enlace del aviso de no_postal_address. */
     irAPolitica: "Ir a la política de envío",
     /**

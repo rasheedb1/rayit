@@ -168,7 +168,7 @@ describe("el título de la pestaña del detalle dice de qué es", () => {
 
   test("una cadencia: su nombre y el módulo", async () => {
     // La del seed 0005, copiada de la plantilla «Marca con campaña activa».
-    expect((await tituloCadencia(id("00000005-0000-4000-8000-0000005e0001"))).title).toBe("Marca con campaña activa · Cadencias");
-    expect((await tituloCadencia(id(ID_INEXISTENTE))).title).toBe("Cadencias");
+    expect((await tituloCadencia(id("00000005-0000-4000-8000-0000005e0001"))).title).toBe("Marca con campaña activa · Cadencias · Ventas");
+    expect((await tituloCadencia(id(ID_INEXISTENTE))).title).toBe("Cadencias · Ventas");
   }, 120_000);
 });
