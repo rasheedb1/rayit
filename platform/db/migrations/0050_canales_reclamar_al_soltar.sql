@@ -58,7 +58,7 @@ COMMENT ON COLUMN outreach_channel_account.release_claimed_at IS
 CREATE OR REPLACE FUNCTION outreach_channel_account_release_columns()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   desconecta boolean := TG_OP = 'UPDATE' AND NEW.status = 'disconnected' AND OLD.status IS DISTINCT FROM 'disconnected';
@@ -105,7 +105,7 @@ RETURNS TABLE (result text, account_id uuid, reconnected boolean)
 LANGUAGE plpgsql
 VOLATILE
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   ws uuid := current_workspace_id();
@@ -224,7 +224,7 @@ END $$;
 CREATE OR REPLACE FUNCTION outbound_touch_account_check()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   a record;

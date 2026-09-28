@@ -131,7 +131,7 @@ CREATE FUNCTION outbound_touch_retry_block(t outbound_touch)
 RETURNS text
 LANGUAGE sql
 STABLE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT CASE
     WHEN t.status <> 'failed' THEN NULL
@@ -208,7 +208,7 @@ CREATE FUNCTION outbound_touch_is_positive(t outbound_touch)
 RETURNS boolean
 LANGUAGE sql
 STABLE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT t.status = 'sent'
      AND t.replied_at IS NOT NULL
@@ -648,7 +648,7 @@ BEGIN
       RETURNS boolean
       LANGUAGE sql
       STABLE
-      SET search_path = public, pg_temp
+      SET search_path = public, extensions, pg_temp
       AS $b$
         SELECT (current_user_id() IS NULL AND coalesce(current_setting('app.auth_disabled', true), '') = 'on')
             OR EXISTS (SELECT 1 FROM membership m JOIN role r ON r.id = m.role_id
@@ -663,7 +663,7 @@ BEGIN
       RETURNS boolean
       LANGUAGE sql
       STABLE
-      SET search_path = public, pg_temp
+      SET search_path = public, extensions, pg_temp
       AS $b$
         SELECT (current_user_id() IS NULL AND coalesce(current_setting('app.auth_disabled', true), '') = 'on')
             OR EXISTS (SELECT 1 FROM membership m
@@ -686,7 +686,7 @@ COMMENT ON FUNCTION outreach_can_operate(uuid) IS
 CREATE FUNCTION outbound_touch_guard_operator()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   -- En dos pasos: una sola expresión no garantiza el orden de evaluación, y

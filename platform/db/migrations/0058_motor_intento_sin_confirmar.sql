@@ -73,7 +73,7 @@ RETURNS text
 LANGUAGE plpgsql
 VOLATILE
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   ws uuid := current_workspace_id();

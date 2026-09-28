@@ -75,7 +75,7 @@ CREATE TRIGGER outbound_generation_updated BEFORE UPDATE ON outbound_generation
 CREATE FUNCTION outbound_generation_touch_check()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   ws uuid;

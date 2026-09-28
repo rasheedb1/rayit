@@ -81,7 +81,7 @@ CREATE INDEX outreach_channel_account_keepalive_idx
 CREATE OR REPLACE FUNCTION outreach_channel_account_worker_columns()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   escribe text[] := '{}';
@@ -151,7 +151,7 @@ CREATE TRIGGER outreach_channel_account_worker_columns
 CREATE OR REPLACE FUNCTION outreach_channel_account_release_columns()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   desconecta boolean := TG_OP = 'UPDATE' AND NEW.status = 'disconnected' AND OLD.status IS DISTINCT FROM 'disconnected';
@@ -214,7 +214,7 @@ CREATE FUNCTION outreach_channel_live_elsewhere(p_ws uuid, p_channel text, p_pro
 RETURNS boolean
 LANGUAGE plpgsql
 VOLATILE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   mine outreach_channel_account%ROWTYPE;
@@ -297,7 +297,7 @@ RETURNS TABLE (result text, account_id uuid, reconnected boolean, in_use boolean
 LANGUAGE plpgsql
 VOLATILE
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   ws uuid := current_workspace_id();
@@ -448,7 +448,7 @@ RETURNS boolean
 LANGUAGE plpgsql
 VOLATILE
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   ws uuid := current_workspace_id();
@@ -488,7 +488,7 @@ RETURNS boolean
 LANGUAGE plpgsql
 VOLATILE
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   ws uuid := current_workspace_id();

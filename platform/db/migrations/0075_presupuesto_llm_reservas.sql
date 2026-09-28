@@ -108,7 +108,7 @@ CREATE OR REPLACE FUNCTION outbound_llm_reserve_web(p_purpose text, p_amount num
 RETURNS uuid
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   ws uuid := current_workspace_id();
@@ -143,7 +143,7 @@ CREATE OR REPLACE FUNCTION outbound_llm_release_web(p_id uuid)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   DELETE FROM outbound_llm_reservation r

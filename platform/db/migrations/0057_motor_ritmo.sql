@@ -127,7 +127,7 @@ ALTER TABLE outbound_touch
 CREATE OR REPLACE FUNCTION outbound_touch_dispatch_columns()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF outreach_is_dispatcher() THEN
@@ -183,7 +183,7 @@ CREATE OR REPLACE FUNCTION outbound_counter_bump_at(p_workspace uuid, p_account 
 RETURNS boolean
 LANGUAGE plpgsql
 VOLATILE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   hoy date;
@@ -217,23 +217,23 @@ CREATE OR REPLACE FUNCTION outbound_counter_bump(p_workspace uuid, p_account uui
 RETURNS boolean
 LANGUAGE sql
 VOLATILE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT outbound_counter_bump_at(p_workspace, p_account, p_period, p_action_type, p_cap, now());
 $$;
 
 CREATE OR REPLACE FUNCTION increment_if_under_cap(p_workspace uuid, p_account uuid, p_action_type text, p_cap int, p_at timestamptz)
-RETURNS boolean LANGUAGE sql VOLATILE SET search_path = public, pg_temp
+RETURNS boolean LANGUAGE sql VOLATILE SET search_path = public, extensions, pg_temp
 AS $$ SELECT outbound_counter_bump_at(p_workspace, p_account, 'day', p_action_type, p_cap, p_at); $$;
 
 CREATE OR REPLACE FUNCTION increment_if_under_cap(p_workspace uuid, p_action_type text, p_cap int, p_at timestamptz)
-RETURNS boolean LANGUAGE sql VOLATILE SET search_path = public, pg_temp
+RETURNS boolean LANGUAGE sql VOLATILE SET search_path = public, extensions, pg_temp
 AS $$ SELECT outbound_counter_bump_at(p_workspace, NULL, 'day', p_action_type, p_cap, p_at); $$;
 
 CREATE OR REPLACE FUNCTION increment_weekly(p_workspace uuid, p_account uuid, p_action_type text, p_cap int, p_at timestamptz)
-RETURNS boolean LANGUAGE sql VOLATILE SET search_path = public, pg_temp
+RETURNS boolean LANGUAGE sql VOLATILE SET search_path = public, extensions, pg_temp
 AS $$ SELECT outbound_counter_bump_at(p_workspace, p_account, 'week', p_action_type, p_cap, p_at); $$;
 
 CREATE OR REPLACE FUNCTION increment_weekly(p_workspace uuid, p_action_type text, p_cap int, p_at timestamptz)
-RETURNS boolean LANGUAGE sql VOLATILE SET search_path = public, pg_temp
+RETURNS boolean LANGUAGE sql VOLATILE SET search_path = public, extensions, pg_temp
 AS $$ SELECT outbound_counter_bump_at(p_workspace, NULL, 'week', p_action_type, p_cap, p_at); $$;

@@ -82,7 +82,7 @@ END $$;
 CREATE OR REPLACE FUNCTION outbound_touch_account_check()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   a record;
@@ -154,7 +154,7 @@ CREATE OR REPLACE FUNCTION contact_visible_to(p_contact uuid, p_workspace uuid)
 RETURNS boolean
 LANGUAGE sql
 STABLE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT EXISTS (
     SELECT 1 FROM contact c
@@ -174,7 +174,7 @@ COMMENT ON FUNCTION contact_visible_to(uuid, uuid) IS
 CREATE OR REPLACE FUNCTION outreach_contact_of_workspace()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF NEW.contact_id IS NULL OR NOT EXISTS (SELECT 1 FROM contact c WHERE c.id = NEW.contact_id) THEN
@@ -226,7 +226,7 @@ ALTER TABLE outbound_touch
 CREATE OR REPLACE FUNCTION outbound_touch_dispatch_columns()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF outreach_is_dispatcher() THEN
@@ -283,7 +283,7 @@ CREATE OR REPLACE FUNCTION outbound_counter_release(p_workspace uuid, p_account 
 RETURNS void
 LANGUAGE plpgsql
 VOLATILE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   lunes date := p_day - (extract(isodow FROM p_day)::int - 1);

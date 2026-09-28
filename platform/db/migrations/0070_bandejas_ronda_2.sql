@@ -97,7 +97,7 @@ RETURNS text
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT CASE
            WHEN r.classifier IN ('model', 'fake') THEN r.classifier

@@ -101,7 +101,7 @@ CREATE INDEX contact_email_invalid_idx ON contact (id) WHERE email_invalid;
 CREATE FUNCTION contact_email_invalid_reset()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF NEW.email IS DISTINCT FROM OLD.email AND NOT (NEW.email_invalid AND NOT OLD.email_invalid) THEN
@@ -160,7 +160,7 @@ CREATE TRIGGER contact_email_invalid_reset
 CREATE FUNCTION outbound_touch_email_invalid()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   c record;
@@ -373,7 +373,7 @@ CREATE FUNCTION public_optout_preview(p_token text, p_viewer_workspaces uuid[] D
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   antes_token     text := coalesce(current_setting('app.public_optout', true), '');
@@ -474,7 +474,7 @@ COMMENT ON COLUMN outreach_channel_account.bounces_read_at IS
 CREATE FUNCTION outreach_channel_account_bounces_cursor()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF ((TG_OP = 'INSERT' AND NEW.bounces_read_at IS NOT NULL)
@@ -536,7 +536,7 @@ BEGIN
       RETURNS boolean
       LANGUAGE sql
       STABLE
-      SET search_path = public, pg_temp
+      SET search_path = public, extensions, pg_temp
       AS $b$
         SELECT (current_user_id() IS NULL AND coalesce(current_setting('app.auth_disabled', true), '') = 'on')
             OR EXISTS (SELECT 1 FROM membership m JOIN role r ON r.id = m.role_id
@@ -552,7 +552,7 @@ BEGIN
       RETURNS boolean
       LANGUAGE sql
       STABLE
-      SET search_path = public, pg_temp
+      SET search_path = public, extensions, pg_temp
       AS $b$
         SELECT (current_user_id() IS NULL AND coalesce(current_setting('app.auth_disabled', true), '') = 'on')
             OR EXISTS (SELECT 1 FROM membership m
@@ -726,7 +726,7 @@ CREATE OR REPLACE FUNCTION public_optout(p_token text)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   antes_token     text := coalesce(current_setting('app.public_optout', true), '');
@@ -886,7 +886,7 @@ REVOKE CREATE ON SCHEMA public FROM mc_public_share;
 CREATE OR REPLACE FUNCTION enforce_outbound_optout()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   is_out     boolean := false;
@@ -966,7 +966,7 @@ $$;
 CREATE FUNCTION outbound_workspace_optout_check()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   correo citext;
@@ -1032,7 +1032,7 @@ CREATE FUNCTION outbound_workspace_optout_record(p_contact uuid, p_source text)
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   ws uuid := current_workspace_id();
@@ -1068,7 +1068,7 @@ CREATE FUNCTION contact_optout_keep()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF OLD.opted_out AND OLD.email IS NOT NULL AND OLD.owner_workspace_id IS NOT NULL THEN
@@ -1097,7 +1097,7 @@ CREATE TRIGGER contact_optout_keep
 CREATE FUNCTION contact_optout_no_delete()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF OLD.opted_out AND current_user = 'mc_app' THEN
@@ -1141,7 +1141,7 @@ CREATE TRIGGER contact_optout_no_delete
 CREATE FUNCTION contact_email_workspace_optout()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   UPDATE outbound_touch t

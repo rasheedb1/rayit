@@ -70,7 +70,7 @@ RETURNS text
 LANGUAGE plpgsql
 IMMUTABLE
 PARALLEL SAFE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   bytes bytea := ''::bytea;
@@ -112,7 +112,7 @@ RETURNS text
 LANGUAGE sql
 IMMUTABLE
 PARALLEL SAFE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT nullif(
     CASE p_channel
@@ -191,7 +191,7 @@ CREATE OR REPLACE FUNCTION outreach_handles_opted_out(p_workspace uuid, p_contac
 RETURNS boolean
 LANGUAGE sql
 STABLE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT EXISTS (
     SELECT 1 FROM outbound_workspace_optout_handle h
@@ -219,7 +219,7 @@ CREATE OR REPLACE FUNCTION outbound_workspace_optout_record(p_contact uuid, p_so
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   ws uuid := current_workspace_id();
@@ -276,7 +276,7 @@ CREATE OR REPLACE FUNCTION contact_optout_handles()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   origen text := CASE WHEN NEW.opted_out_code LIKE 'reply_optout:%' THEN 'reply' ELSE 'contact' END;
@@ -321,7 +321,7 @@ CREATE TRIGGER contact_optout_handles
 CREATE OR REPLACE FUNCTION enforce_outbound_optout()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   is_out     boolean := false;
@@ -393,7 +393,7 @@ $$;
 CREATE OR REPLACE FUNCTION outbound_workspace_optout_check()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   correo citext;

@@ -55,7 +55,7 @@ CREATE OR REPLACE FUNCTION deal_closed_stops_outreach()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   antes   text := current_setting('app.workspace_id', true);

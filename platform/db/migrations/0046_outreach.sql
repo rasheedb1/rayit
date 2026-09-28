@@ -108,7 +108,7 @@ CREATE FUNCTION outbound_rubric_weights_valid(p_weights jsonb)
 RETURNS boolean
 LANGUAGE sql
 IMMUTABLE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   -- CASE y no AND: Postgres no promete el orden de un AND, y el cast a
   -- numeric de algo que no es un número lanzaría en vez de decir false.
@@ -390,7 +390,7 @@ CREATE FUNCTION outreach_is_dispatcher()
 RETURNS boolean
 LANGUAGE sql
 STABLE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT coalesce((SELECT current_user = 'mc_worker' OR r.rolsuper OR r.rolbypassrls
                           OR pg_has_role(current_user, c.relowner, 'MEMBER')
@@ -491,7 +491,7 @@ CREATE TRIGGER outreach_channel_account_updated BEFORE UPDATE ON outreach_channe
 CREATE FUNCTION outreach_channel_account_worker_columns()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   escribe text[] := '{}';
@@ -553,7 +553,7 @@ CREATE TRIGGER outreach_channel_account_worker_columns
 CREATE FUNCTION outreach_channel_account_keep_live()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF OLD.status = 'pending' OR pg_trigger_depth() > 1 OR outreach_is_dispatcher() THEN
@@ -641,7 +641,7 @@ END $$;
 CREATE FUNCTION outbound_sequence_sync_active()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF TG_OP = 'UPDATE'
@@ -661,7 +661,7 @@ CREATE TRIGGER outbound_sequence_sync_active
 CREATE FUNCTION outbound_sequence_timezone_check()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF NEW.timezone IS NULL THEN
@@ -787,7 +787,7 @@ CREATE TRIGGER outbound_enrollment_updated BEFORE UPDATE ON outbound_enrollment
 CREATE FUNCTION enforce_enrollment_optout()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   is_out boolean;
@@ -837,7 +837,7 @@ CREATE TRIGGER outbound_enrollment_optout
 CREATE FUNCTION outbound_sequence_member_check()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   espacio uuid;
@@ -1041,7 +1041,7 @@ RETURNS boolean
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT p_email IS NOT NULL AND EXISTS (SELECT 1 FROM contact_suppression s WHERE s.email = p_email);
 $$;
@@ -1054,7 +1054,7 @@ COMMENT ON FUNCTION address_is_suppressed(citext) IS
 CREATE OR REPLACE FUNCTION enforce_outbound_optout()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   is_out boolean := false;
@@ -1143,7 +1143,7 @@ $$;
 CREATE FUNCTION outbound_touch_worker_columns()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   pruebas boolean;
@@ -1209,7 +1209,7 @@ CREATE TRIGGER outbound_touch_worker_columns
 CREATE FUNCTION outbound_touch_keep_sent()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF (OLD.provider_message_id IS NULL AND OLD.message_id_rfc IS NULL AND OLD.recipient_address IS NULL
@@ -1240,7 +1240,7 @@ CREATE TRIGGER outbound_touch_keep_sent
 CREATE FUNCTION outbound_touch_status_changed()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF TG_OP = 'INSERT' THEN
@@ -1375,7 +1375,7 @@ CREATE INDEX outbound_touch_replied_idx ON outbound_touch (workspace_id, replied
 CREATE FUNCTION outbound_touch_enrollment_check()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   e_espacio uuid;
@@ -1504,7 +1504,7 @@ CREATE INDEX ON outbound_optout_link (workspace_id, claimed_at);
 CREATE FUNCTION outbound_optout_link_check()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   t record;
@@ -1565,7 +1565,7 @@ CREATE TRIGGER outbound_optout_link_check
 CREATE FUNCTION outbound_touch_optout_link_required()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   x record;
@@ -1806,7 +1806,7 @@ CREATE FUNCTION outreach_default_llm_daily_cap()
 RETURNS numeric
 LANGUAGE sql
 IMMUTABLE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT 5.00::numeric(14,2);
 $$;
@@ -1836,7 +1836,7 @@ CREATE TRIGGER outbound_policy_updated BEFORE UPDATE ON outbound_policy
 CREATE FUNCTION outbound_policy_llm_cap()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF TG_OP = 'INSERT' AND NEW.llm_daily_cap_usd = outreach_default_llm_daily_cap() THEN
@@ -1868,7 +1868,7 @@ CREATE TRIGGER outbound_policy_llm_cap
 CREATE FUNCTION outbound_policy_optout_link()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF NEW.require_optout_link OR outreach_is_dispatcher() THEN
@@ -2160,7 +2160,7 @@ CREATE FUNCTION outreach_local_date(p_workspace uuid, p_at timestamptz)
 RETURNS date
 LANGUAGE sql
 STABLE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT (p_at AT TIME ZONE coalesce((SELECT w.timezone FROM workspace w WHERE w.id = p_workspace), 'UTC'))::date;
 $$;
@@ -2181,7 +2181,7 @@ CREATE FUNCTION next_business_day(p_ts timestamptz, p_tz text)
 RETURNS timestamptz
 LANGUAGE plpgsql
 STABLE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   local_ts timestamp;
@@ -2226,7 +2226,7 @@ CREATE FUNCTION outbound_counter_bump(p_workspace uuid, p_account uuid, p_period
 RETURNS boolean
 LANGUAGE plpgsql
 VOLATILE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   hoy date;
@@ -2258,7 +2258,7 @@ CREATE FUNCTION increment_if_under_cap(p_workspace uuid, p_account uuid, p_actio
 RETURNS boolean
 LANGUAGE sql
 VOLATILE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT outbound_counter_bump(p_workspace, p_account, 'day', p_action_type, p_cap);
 $$;
@@ -2267,7 +2267,7 @@ CREATE FUNCTION increment_if_under_cap(p_workspace uuid, p_action_type text, p_c
 RETURNS boolean
 LANGUAGE sql
 VOLATILE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT outbound_counter_bump(p_workspace, NULL, 'day', p_action_type, p_cap);
 $$;
@@ -2276,7 +2276,7 @@ CREATE FUNCTION increment_weekly(p_workspace uuid, p_account uuid, p_action_type
 RETURNS boolean
 LANGUAGE sql
 VOLATILE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT outbound_counter_bump(p_workspace, p_account, 'week', p_action_type, p_cap);
 $$;
@@ -2285,7 +2285,7 @@ CREATE FUNCTION increment_weekly(p_workspace uuid, p_action_type text, p_cap int
 RETURNS boolean
 LANGUAGE sql
 VOLATILE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT outbound_counter_bump(p_workspace, NULL, 'week', p_action_type, p_cap);
 $$;
@@ -2305,7 +2305,7 @@ CREATE FUNCTION should_pause_outreach(p_workspace uuid)
 RETURNS boolean
 LANGUAGE sql
 STABLE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
   SELECT NOT coalesce(p.enabled, false)
          OR (SELECT count(*) FROM outbound_touch t
@@ -2341,7 +2341,7 @@ CREATE FUNCTION disable_outreach(p_workspace uuid, p_reason text)
 RETURNS int
 LANGUAGE plpgsql
 VOLATILE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   motivo text := coalesce(nullif(btrim(p_reason), ''), 'manual');
@@ -2365,7 +2365,7 @@ CREATE FUNCTION enable_outreach(p_workspace uuid)
 RETURNS void
 LANGUAGE plpgsql
 VOLATILE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   -- UPDATE y no INSERT … ON CONFLICT: Postgres comprueba los CHECK de la
@@ -2436,7 +2436,7 @@ CREATE FUNCTION outbound_health(p_workspace uuid, p_hours int)
 RETURNS jsonb
 LANGUAGE plpgsql
 STABLE
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   horas int := greatest(1, least(coalesce(p_hours, 24), 720));
@@ -2702,7 +2702,7 @@ CREATE FUNCTION public_optout(p_token text)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   antes_token    text := coalesce(current_setting('app.public_optout', true), '');

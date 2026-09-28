@@ -121,7 +121,7 @@ CREATE TRIGGER outbound_brief_updated BEFORE UPDATE ON outbound_brief
 CREATE OR REPLACE FUNCTION deal_lost_reason_required()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   IF EXISTS (SELECT 1 FROM deal d

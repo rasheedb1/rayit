@@ -58,7 +58,7 @@ COMMENT ON COLUMN outbound_touch.reply_to_message_id IS
 CREATE FUNCTION outbound_touch_reply_check()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
   m record;
