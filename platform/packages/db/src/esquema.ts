@@ -373,6 +373,11 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'suelta una reserva de la web al registrar la llamada, o si no se hizo (0075): solo purpose profile o recommend ' +
     'del workspace de la transacción; las del worker (generate, judge) no las toca. Lo peor que hace un workspace con ' +
     'ella es soltarse su propia reserva. EXECUTE solo para mc_app. No es de ningún disparador',
+  'deal_closed_stops_outreach()':
+    'la función del disparador deal.deal_closed_stops_outreach (0076, VEN-10): al ganar un negocio cierra las ' +
+    'cadencias vivas de ese negocio y de su marca y cancela sus toques pendientes; al perderlo, las de ese negocio. ' +
+    'Definer porque la aceptación pública corre como mc_public_share; fija app.workspace_id al del negocio mientras ' +
+    'dura y lo devuelve, solo cancela y cierra (nunca programa ni reabre). EXECUTE revocado',
   'contact_optout_keep()':
     'la función del disparador contact.contact_optout_keep (entregabilidad §8.4): al borrarse una ficha de baja, por ' +
     'la vía que sea, su correo queda en outbound_workspace_optout de su workspace. Solo inserta con ON CONFLICT DO ' +
@@ -490,6 +495,10 @@ export const DISPARADORES_DEFINER_DECLARADOS: Readonly<Record<string, string>> =
   'contact.contact_optout_keep':
     'guarda la baja en la dirección cuando se borra una ficha de baja (entregabilidad §8.4): borrarla y crearla otra ' +
     'vez con el mismo correo no la deja contactable. Solo inserta su correo en la lista de SU workspace, si existe',
+  'deal.deal_closed_stops_outreach':
+    'ganar o perder un negocio detiene su cadencia (0076, VEN-10): la aceptación desde el enlace público corre como ' +
+    'mc_public_share, sin privilegios en outbound_*. Solo el workspace del negocio, y solo cancela toques pendientes ' +
+    'y cierra enrolamientos vivos: lo peor que hace quien mueve un negocio es dejar de escribirle a esa marca',
   'contact.contact_suppression_apply':
     'aplica la baja global al contacto que nace o cambia de correo (0029 §1). Lee contact_suppression, que solo ' +
     'escribe el worker; lo que aprende quien escribe es que ese correo pidió no ser contactado, que es justo lo que ' +

@@ -44,7 +44,7 @@ import { normalizeAddress } from './outreach/inbound.ts';
 import { loadIntentMessage, reapplyIntent } from './outreach/intent.ts';
 import { requestPitchDraft, type RequestPitchDraftResult } from './outreach/pitch.ts';
 import { releaseHeldTouch, type ReleaseHeldCode } from './outreach/review.ts';
-import { assertIds, date, int, oneOf, text, textOrNull, toDate } from './outreach/shared.ts';
+import { assertIds, date, DEAL_CLOSED_SQL, int, oneOf, text, textOrNull, toDate } from './outreach/shared.ts';
 import { createContact, type ContactSource } from './ventas.ts';
 
 /** Quién puso la intención de una respuesta (0069). */
@@ -190,6 +190,7 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
          LEFT JOIN outbound_generation g ON g.touch_id = t.id
          LEFT JOIN outbound_review r ON r.touch_id = t.id AND r.run = g.review_run AND r.attempt = g.chosen_attempt
          LEFT JOIN outbound_message rm ON rm.id = t.reply_to_message_id
+         LEFT JOIN outbound_enrollment e ON e.id = t.enrollment_id
          -- La rúbrica que usó outbound.review (loadGenerationContext): la del workspace gana a la global, con día a sin día.
          LEFT JOIN LATERAL (
                 SELECT ru.threshold FROM outbound_step_rubric ru
@@ -204,6 +205,8 @@ export async function listApprovalQueue(tx: WorkspaceTx, opts: { limit?: number 
                  ORDER BY pt.sent_at DESC NULLS LAST LIMIT 1) hilo ON true
         WHERE t.workspace_id = current_workspace_id()
           AND (t.status = 'held' OR (t.status = 'draft' AND t.enrollment_id IS NOT NULL AND g.requested_at IS NOT NULL))
+          -- Nada que aprobar de una marca que ya firmó o de un negocio perdido (0076): no saldría.
+          AND ${DEAL_CLOSED_SQL('t', 'e')} IS NULL
         ORDER BY t.scheduled_for NULLS LAST, t.created_at, t.step_index NULLS LAST, t.id
         LIMIT $1`,
       [Math.max(1, Math.min(opts.limit ?? APPROVAL_QUEUE_LIMIT, 500))],

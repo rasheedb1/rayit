@@ -58,7 +58,7 @@ import { advanceEnrollment } from './enroll.ts';
 import { notifyAccountDown, notifyTouchFailed } from './notices.ts';
 import {
   accountActionType, ACCOUNT_WAIT_MS, assertIds, date, DISPATCH_BATCH_SIZE, DISPATCH_CHANNELS,
-  checkRecipient, DISPATCHABLE_STEP_TYPES, int, oneOf, releaseCaps, shiftFollowing, stepTypeForChannel, text,
+  checkRecipient, DEAL_CLOSED_SQL, DISPATCHABLE_STEP_TYPES, int, oneOf, releaseCaps, shiftFollowing, stepTypeForChannel, text,
   textOrNull, toDate, windowOf, ZOMBIE_AFTER_MINUTES, type DispatchableStepType, type DispatchChannel,
 } from './shared.ts';
 
@@ -101,7 +101,10 @@ export interface ClaimReport {
    * se enroló antes de cambiar el brief tampoco sale.
    */
   canceledBriefExcluded: number;
-  /** Cancelados antes de reclamar: el enrolamiento terminó (respondió, baja, completo, rebote) o la secuencia se archivó. */
+  /**
+   * Cancelados antes de reclamar: el enrolamiento terminó (respondió, baja, completo, rebote), la secuencia se
+   * archivó, o el negocio se cerró (deal_won, deal_lost: la marca firmó o se perdió, 0076).
+   */
   canceledFinished: number;
   /** Saltados: el contacto no tiene dirección en ese canal. */
   skippedNoAddress: number;
@@ -502,6 +505,23 @@ export async function claimDueTouches(tx: WorkerSql, opts: ClaimOptions): Promis
         WHERE e.id = t.enrollment_id AND t.status = 'scheduled' AND ${DUE}
           AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
           AND (e.status IN ('replied', 'opted_out', 'completed', 'bounced') OR s.status = 'archived')
+        RETURNING t.id, t.enrollment_id`,
+      [now.toISOString(), ws],
+    )).rows,
+  );
+  // (0076) Una marca que acaba de firmar, o un negocio perdido con su
+  // motivo, no recibe el pitch en frío. El disparador de 0076 cancela lo
+  // que estaba en la cola al ganar o perder; esto cubre lo que volvió a
+  // ella después (un reintento, un zombi) o se programó sobre un negocio
+  // ya cerrado.
+  report.canceledFinished += note(
+    (await tx.query<{ enrollment_id: string | null }>(
+      `UPDATE outbound_touch t
+          SET status = 'canceled', blocked_reason = ${DEAL_CLOSED_SQL('t', 'e')}
+         FROM outbound_enrollment e
+        WHERE e.id = t.enrollment_id AND t.status = 'scheduled' AND ${DUE}
+          AND ($2::uuid IS NULL OR t.workspace_id = $2::uuid)
+          AND ${DEAL_CLOSED_SQL('t', 'e')} IS NOT NULL
         RETURNING t.id, t.enrollment_id`,
       [now.toISOString(), ws],
     )).rows,

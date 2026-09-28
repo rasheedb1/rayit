@@ -295,6 +295,28 @@ WHERE outbound_touch.status = 'scheduled';
 
 
 -- =====================================================================
+-- 4b · La cadencia de Vitalé es la del segundo frente (pulido r5)
+-- ---------------------------------------------------------------------
+-- Vitalé tiene dos negocios en 0002: «2 Reels + derechos 90 d» (dea08,
+-- en propuesta, con COT-2026-007 enviada) y «Paquete snacks» (dea14,
+-- contactado: el segundo frente abierto por la línea de snacks). La
+-- cadencia de Sofía es la de ese segundo frente, no una prospección en
+-- frío a una marca con la que ya se negocia: el enrolamiento y sus
+-- toques llevan el negocio de snacks. Y si Sofía acepta COT-2026-007
+-- desde el enlace, ganar ese negocio cierra también esta cadencia (0076:
+-- una marca que firmó no recibe más prospección). Un UPDATE aparte, y
+-- solo si aún no tiene negocio: los INSERT de arriba no reescriben lo
+-- que ya pasó (DO NOTHING), y así llega también a una demo ya sembrada.
+-- =====================================================================
+UPDATE outbound_enrollment
+   SET deal_id = '00000002-0000-4000-8000-0000000dea14'
+ WHERE id = '00000005-0000-4000-8000-0000000e0001' AND deal_id IS NULL;
+UPDATE outbound_touch
+   SET deal_id = '00000002-0000-4000-8000-0000000dea14'
+ WHERE enrollment_id = '00000005-0000-4000-8000-0000000e0001' AND deal_id IS NULL;
+
+
+-- =====================================================================
 -- 5 · Los enlaces de baja de los tres correos enviados
 -- ---------------------------------------------------------------------
 -- Uno por intento, como los deja el despachador al reclamar (0046 §4.5):

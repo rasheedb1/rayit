@@ -22,9 +22,9 @@ import { finishBouncedEnrollments, markContactEmailInvalid } from './bounce.ts';
 import { advanceEnrollment } from './enroll.ts';
 import { notifyAccountDown, notifyTouchFailed, notifyTouchHeld } from './notices.ts';
 import {
-  ACCOUNT_WAIT_MS, assertIds, DISPATCH_CHANNELS, DISPATCHABLE_STEP_TYPES, int, oneOf, releaseCaps, SENDER_PROVIDERS,
+  ACCOUNT_WAIT_MS, assertIds, DEAL_CLOSED_REASONS, DEAL_CLOSED_SQL, DISPATCH_CHANNELS, DISPATCHABLE_STEP_TYPES, int, oneOf, releaseCaps, SENDER_PROVIDERS,
   shiftFollowing, stepTypeForChannel, text, textOrNull, toDate, windowOf, type DispatchableStepType, type DispatchChannel,
-  type SenderProvider,
+  type DealClosedReason, type SenderProvider,
 } from './shared.ts';
 
 /** Los estados de un toque (CHECK de 0046 §4.3). */
@@ -65,6 +65,8 @@ export interface SendContext {
   sequenceStatus: string | null;
   /** La ficha, su correo o la dirección del envío están dados de baja. */
   optedOut: boolean;
+  /** El negocio de la cadencia se cerró (DEAL_CLOSED_SQL, 0076): la marca firmó o se perdió. */
+  dealClosed?: DealClosedReason | null;
   enabled: boolean;
   postalAddress: string | null;
   requireOptoutLink: boolean;
@@ -111,6 +113,7 @@ interface SendContextRow {
   resume_at: unknown;
   sequence_status: string | null;
   opted_out: boolean;
+  deal_closed?: string | null;
   enabled: boolean;
   postal_address: string | null;
   require_optout_link: boolean;
@@ -163,6 +166,7 @@ function parseSendContext(r: SendContextRow, previous: SendContext['previous']):
     resumeAt: toDate(r.resume_at),
     sequenceStatus: textOrNull(fn, '$.sequence_status', r.sequence_status),
     optedOut: r.opted_out === true,
+    dealClosed: r.deal_closed == null ? null : oneOf(fn, '$.deal_closed', r.deal_closed, DEAL_CLOSED_REASONS),
     enabled: r.enabled === true,
     postalAddress: textOrNull(fn, '$.postal_address', r.postal_address),
     requireOptoutLink: r.require_optout_link !== false,
@@ -213,6 +217,7 @@ export async function loadSendContext(tx: WorkerSql, touchId: string): Promise<S
               e.status AS enrollment_status, e.resume_at, s.status AS sequence_status,
               (coalesce(c.opted_out, false) OR address_is_suppressed(c.email)
                  OR address_is_suppressed(t.recipient_address)) AS opted_out,
+              ${DEAL_CLOSED_SQL('t', 'e')} AS deal_closed,
               coalesce(p.enabled, false) AS enabled, p.postal_address, coalesce(p.require_optout_link, true) AS require_optout_link,
               p.send_window_start::text AS w_start, p.send_window_end::text AS w_end, w.country AS w_country,
               w.name AS workspace_name, w.locale, coalesce(s.timezone, w.timezone) AS tz,
@@ -315,6 +320,8 @@ export function decideBeforeSend(ctx: SendContext, claimedAt: Date, now: Date): 
   if (ctx.status !== 'processing' || ctx.claimedAt?.getTime() !== claimedAt.getTime()) return { kind: 'gone' };
   if (ctx.optedOut) return { kind: 'cancel', reason: 'opted_out' };
   if (!ctx.enabled) return { kind: 'cancel', reason: 'outreach_disabled' };
+  // La marca firmó o el negocio se perdió mientras el toque estaba reclamado (0076).
+  if (ctx.dealClosed) return { kind: 'cancel', reason: ctx.dealClosed };
   if (ctx.enrollmentId) {
     if (ctx.enrollmentStatus === 'replied' || ctx.enrollmentStatus === 'opted_out' || ctx.enrollmentStatus === 'completed'
       || ctx.enrollmentStatus === 'bounced') {
