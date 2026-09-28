@@ -77,6 +77,17 @@ export interface TestDb {
   close(): Promise<void>;
 }
 
+/**
+ * El rol que migra en la base de la prueba, para `SET ROLE` antes de
+ * volver a correr una migración: en PGlite, mc_migrator_embedded (como
+ * mc_migrator en Supabase); contra un Postgres real, el usuario de
+ * TEST_DATABASE_ADMIN_URL, que es quien corrió `db/migrate.mjs` (CIM-2c).
+ */
+export function migratorRole(t: Pick<TestDb, 'kind'>): string {
+  if (t.kind === 'pglite') return 'mc_migrator_embedded';
+  return decodeURIComponent(new URL(process.env.TEST_DATABASE_ADMIN_URL || process.env.TEST_DATABASE_URL || '').username);
+}
+
 export interface TestDbOptions extends DbOptions {
   /** Cargar db/seed/*.sql. Por defecto, sí. Solo aplica al embebido. */
   seeds?: boolean;
@@ -100,8 +111,16 @@ export async function openTestDb(opts: TestDbOptions = {}): Promise<TestDb> {
       }
     }
     const { createPgDb, createPool } = await import('../src/client.ts');
-    const pool = createPool(url, { max: 5, applicationName: 'mc-db:test' });
-    const adminPool = createPool(adminUrl, { max: 1, applicationName: 'mc-db:test:admin' });
+    // Cada apertura trabaja sobre su PROPIA copia de la base (CIM-2c): la
+    // misma foto que el embebido le da a cada archivo. Sin esto los
+    // archivos compartían una base, lo que uno escribía lo contaba otro y
+    // el resultado dependía del orden (171 rojas el 28-sep-2026).
+    const copia = await copiarBase(url, adminUrl);
+    // Ociosas fuera enseguida: con --test-isolation=none los `before` de
+    // todos los archivos abren su copia antes de la primera prueba, y un
+    // Postgres de pruebas trae 100 conexiones.
+    const pool = createPool(copia.url, { max: 5, applicationName: 'mc-db:test', idleTimeoutMillis: 1_000 });
+    const adminPool = createPool(copia.adminUrl, { max: 1, applicationName: 'mc-db:test:admin', idleTimeoutMillis: 1_000 });
     const db = createPgDb(pool, dbOpts);
     return {
       kind: 'postgres',
@@ -113,6 +132,7 @@ export async function openTestDb(opts: TestDbOptions = {}): Promise<TestDb> {
       close: async () => {
         await db.close();
         await adminPool.end();
+        await copia.borrar();
       },
     };
   }
@@ -125,5 +145,44 @@ export async function openTestDb(opts: TestDbOptions = {}): Promise<TestDb> {
     admin: (sql) => db.execAsSuperuser(sql),
     raw: <T>(sql: string) => db.raw(async (p) => (await p.query<T>(sql)).rows),
     close: () => db.close(),
+  };
+}
+
+let copias = 0;
+
+/**
+ * Una base nueva, copia de la de TEST_DATABASE_URL (`CREATE DATABASE …
+ * TEMPLATE`), para una sola apertura de openTestDb; `borrar` la tira al
+ * cerrar. La de TEST_DATABASE_URL es el molde, ya migrado y sembrado: nadie
+ * se conecta a ella mientras corren las pruebas (Postgres no copia una
+ * base con sesiones abiertas). Crear y borrar van por la base `postgres`
+ * con el usuario de TEST_DATABASE_ADMIN_URL, que necesita CREATEDB (el
+ * superusuario del CI y de `make up` lo tiene).
+ */
+async function copiarBase(url: string, adminUrl: string): Promise<{ url: string; adminUrl: string; borrar(): Promise<void> }> {
+  const pg = (await import('pg')).default;
+  const molde = decodeURIComponent(new URL(url).pathname.slice(1));
+  const nombre = `${molde}_prueba_${process.pid}_${++copias}`.slice(0, 63);
+  const en = (base: string, db: string) => {
+    const u = new URL(base);
+    u.pathname = `/${encodeURIComponent(db)}`;
+    return u.toString();
+  };
+  const ident = (x: string) => `"${x.replaceAll('"', '""')}"`;
+  const mantenimiento = async (sql: string) => {
+    const c = new pg.Client({ connectionString: en(adminUrl, 'postgres') });
+    await c.connect();
+    try {
+      await c.query(sql);
+    } finally {
+      await c.end();
+    }
+  };
+  await mantenimiento(`DROP DATABASE IF EXISTS ${ident(nombre)} WITH (FORCE)`);
+  await mantenimiento(`CREATE DATABASE ${ident(nombre)} TEMPLATE ${ident(molde)}`);
+  return {
+    url: en(url, nombre),
+    adminUrl: en(adminUrl, nombre),
+    borrar: () => mantenimiento(`DROP DATABASE IF EXISTS ${ident(nombre)} WITH (FORCE)`),
   };
 }

@@ -418,6 +418,9 @@ describe('membership y contact: las dos tablas que 0019 cerró', () => {
   });
 
   test('membership: desde ningún workspace se edita ni se borra una membresía', async () => {
+    // Antes y después, no un número fijo: contra Postgres real (CIM-2c) la
+    // base trae la demo sembrada y hay más membresías que las dos de aquí.
+    const antes = await t.db.asWorker((tx) => countRows(tx, 'membership'));
     for (const ws of [WS_A, WS_B]) {
       await assert.rejects(
         t.db.withWorkspace(ws, (tx) => tx.db.update(membership).set({ roleId: sql`system_role_id('creator', 'owner')` }).where(eq(membership.userId, USER_A))),
@@ -428,7 +431,7 @@ describe('membership y contact: las dos tablas que 0019 cerró', () => {
         isRechazada,
       );
     }
-    assert.equal(await t.db.asWorker((tx) => countRows(tx, 'membership')).catch(() => 2), 2);
+    assert.equal(await t.db.asWorker((tx) => countRows(tx, 'membership')), antes);
   });
 
   test('membership: mc_worker las ve todas (es como CIM-3 leerá "a qué workspaces pertenezco")', async (ctx) => {

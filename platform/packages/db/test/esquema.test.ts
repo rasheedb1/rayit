@@ -18,7 +18,7 @@ import {
   PRIVILEGIOS_DEL_ENLACE_PUBLICO, type EstadoDelEsquema,
 } from '../src/esquema.ts';
 import type { CatalogDb } from '../src/client.ts';
-import { openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
+import { migratorRole, openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 let t: TestDb;
 
@@ -37,10 +37,7 @@ after(async () => {
  * y las migraciones (sus DEFAULT PRIVILEGES le dan a mc_app lo mismo que
  * en Supabase).
  */
-const migrador = () =>
-  t.kind === 'pglite'
-    ? 'mc_migrator_embedded'
-    : decodeURIComponent(new URL(process.env.TEST_DATABASE_ADMIN_URL || process.env.TEST_DATABASE_URL || '').username);
+const migrador = () => migratorRole(t);
 
 const AL_DIA: EstadoDelEsquema = { ...ESQUEMA_AL_DIA, aplicadas: 22, ultima: '0024_x.sql' };
 

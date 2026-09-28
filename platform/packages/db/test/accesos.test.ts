@@ -35,7 +35,7 @@ import { MIGRATIONS_DIR } from '../../../db/lib/aplicar.mjs';
 import type { BaseTx, WorkspaceTx } from '../src/client.ts';
 import { createEmbeddedDb } from '../src/embedded.ts';
 import { listMyWorkspaces } from '../src/queries/identidad.ts';
-import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { migratorRole, openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 import { PERMISOS, ROLES_SISTEMA } from '@mc/core';
 import { generarSemillaSql } from '@mc/core/scripts/permisos-sql.ts';
 
@@ -470,7 +470,7 @@ describe('0034: el archivo, dos veces y al revés', { timeout: TIEMPO_BLOQUE }, 
       );
     const antes = await foto();
     assert.equal(antes.rows[0]?.roles, 10);
-    await t.admin(`SET ROLE mc_migrator_embedded;\n${sqlMigracion}\nRESET ROLE;`);
+    await t.admin(`SET ROLE ${migratorRole(t)};\n${sqlMigracion}\nRESET ROLE;`);
     const despues = await foto();
     assert.deepEqual(despues.rows, antes.rows);
     // La membresía del seed sigue con su rol: el relleno no volvió a correr.
