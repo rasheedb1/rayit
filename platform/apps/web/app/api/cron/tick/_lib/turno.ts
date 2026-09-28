@@ -1,0 +1,81 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+import type { TickSummary } from "@mc/worker/tick";
+
+/**
+ * La ruta del turno del worker (CIM-7), separada de route.ts para poder
+ * probarla sin base ni worker: quién llama, qué se le contesta y qué se
+ * escribe en el log.
+ *
+ * Solo entra quien trae `Authorization: Bearer <CRON_SECRET>`: el cron
+ * de Supabase (pg_net, POST; db/ops/cron-tick.sql) o Vercel Cron (GET,
+ * que manda esa misma cabecera cuando el proyecto tiene CRON_SECRET).
+ * Lo demás recibe un 401 vacío, igual si falta la cabecera, si no
+ * coincide o si el servidor no tiene secreto: desde fuera no se
+ * distingue un caso de otro.
+ */
+
+/** Lo que dura un turno: por debajo de maxDuration (60 s en route.ts) con margen para cerrar el pool y responder. */
+export const TICK_BUDGET_MS = 45_000;
+/** Un secreto más corto no se acepta (`openssl rand -hex 32` da 64 caracteres). */
+export const CRON_SECRET_MIN_LENGTH = 32;
+
+const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest();
+
+/**
+ * ¿Trae el Bearer correcto? En tiempo constante: se comparan los SHA-256
+ * de las dos cadenas (misma longitud siempre) con timingSafeEqual, así
+ * que ni el contenido ni la longitud del secreto se filtran por el
+ * tiempo de respuesta.
+ */
+export function bearerMatches(authorization: string | null, secret: string | undefined): boolean {
+  const configured = typeof secret === "string" && secret.length >= CRON_SECRET_MIN_LENGTH;
+  const given = /^Bearer (\S+)$/.exec(authorization ?? "")?.[1] ?? "";
+  const same = timingSafeEqual(sha256(given), sha256(configured ? secret : ""));
+  return configured && given.length > 0 && same;
+}
+
+/** La línea del log: qué corrió, cuánto tardó y qué quedó, sin ids de filas ni datos de nadie. */
+export function tickLogLine(s: TickSummary): string {
+  return JSON.stringify({
+    at: s.at,
+    elapsedMs: s.elapsedMs,
+    budgetMs: s.budgetMs,
+    ran: s.ran.map((r) => `${r.job}:${r.status}${r.cut ? "(cortado)" : ""}:${r.processed}/${r.failed}:${r.durationMs}ms`),
+    left: s.left.map((l) => `${l.job}:${l.reason}`),
+    upToDate: s.upToDate,
+    exhausted: s.exhausted,
+    failedRuns: s.failedRuns,
+  });
+}
+
+export interface TickRouteDeps {
+  /** CRON_SECRET del entorno. Se lee en cada petición: rotarlo no pide redesplegar el código. */
+  secret: () => string | undefined;
+  /** Un turno con la base del worker (runTickFromEnv de @mc/worker/tick). */
+  run: (budgetMs: number) => Promise<TickSummary>;
+  log?: (line: string) => void;
+  logError?: (message: string, err?: unknown) => void;
+}
+
+const NO_STORE = { "cache-control": "no-store" } as const;
+
+export function createTickHandler(deps: TickRouteDeps): (req: Request) => Promise<Response> {
+  const log = deps.log ?? ((line: string) => console.info("[cron/tick]", line));
+  const logError = deps.logError ?? ((message: string, err?: unknown) => console.error("[cron/tick]", message, err ?? ""));
+  return async function tick(req: Request): Promise<Response> {
+    const secret = deps.secret();
+    if (!bearerMatches(req.headers.get("authorization"), secret)) {
+      if (!secret || secret.length < CRON_SECRET_MIN_LENGTH) logError("CRON_SECRET falta o es corto: ningún turno puede entrar (apps/worker/README.md, «Por turnos»)");
+      return new Response(null, { status: 401, headers: NO_STORE });
+    }
+    try {
+      const summary = await deps.run(TICK_BUDGET_MS);
+      log(tickLogLine(summary));
+      return Response.json(summary, { headers: NO_STORE });
+    } catch (err) {
+      // El detalle va al log; al que llama (pg_net guarda la respuesta) no se le cuenta nada de la base.
+      logError("el turno no pudo correr", err);
+      return Response.json({ ok: false }, { status: 500, headers: NO_STORE });
+    }
+  };
+}

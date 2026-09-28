@@ -4,7 +4,9 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   // Los paquetes del monorepo se importan como TypeScript sin compilar.
-  transpilePackages: ["@mc/connectors", "@mc/core", "@mc/db"],
+  // @mc/worker entra solo por @mc/worker/tick: el turno del worker que
+  // corre /api/cron/tick (CIM-7), con los mismos handlers del proceso.
+  transpilePackages: ["@mc/connectors", "@mc/core", "@mc/db", "@mc/worker"],
   // Drivers de base de datos: se cargan en tiempo de ejecución, no se
   // empaquetan (pg usa módulos nativos opcionales; PGlite carga WASM).
   serverExternalPackages: ["pg", "@electric-sql/pglite"],
