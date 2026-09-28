@@ -59,8 +59,8 @@
  * Modo por turnos (CIM-7, src/tick.ts): la misma pasada, recorrida por
  * src/turno/recorrer.ts (presupuesto, varios recorredores) a través de
  * `walk`. Aquí queda solo lo que comparte con --once: el reclamo, el
- * estado de los ticks en una consulta, el backoff del reintento y el
- * corte. A la corrida que empieza el turno le da como timeout_s lo que
+ * estado de los ticks en una consulta, el backoff del reintento (que
+ * solo pide el turno) y el corte. A la corrida que empieza el turno le da como timeout_s lo que
  * le queda (`deadline`); la que aun así se pasa termina `failed` con
  * `timeout` y `metadata.tickCut`, en la misma escritura que cierra la
  * fila (RunInput.closeMetadata). Un corte no gasta un intento: el turno
