@@ -11,7 +11,8 @@
 --   * un tarifario guardado (v1) con los rangos que da la fórmula de
 --     @mc/core sobre la línea base del seed (TikTok, Reel, 3 historias,
 --     YouTube y un paquete de lanzamiento con −10 %);
---   * un media kit público, congelado el 22-sep-2026;
+--   * un media kit público, congelado el día de la primera siembra con
+--     las cifras que existían ese día (sección 2);
 --   * ocho cotizaciones, COT-2026-001 … 008, una por negocio en
 --     propuesta, negociación o ganado con campaña, con quote.deal_id y
 --     campaign.quote_id enlazados.
@@ -106,9 +107,21 @@ ON CONFLICT (id) DO NOTHING;
 -- =====================================================================
 -- 2 · El media kit (COT-2)
 -- ---------------------------------------------------------------------
--- Congelado el 22-sep-2026, después del tarifario (sus tarifas son las
--- de la sección 1). Es un documento: no cambia al volver a sembrar,
--- como no cambia uno que la creadora generó y ya mandó.
+-- Congelado en la primera siembra, con el reloj del seed (la medianoche
+-- UTC de ese día, la misma de post_score y la línea base de 0002),
+-- después del tarifario (sus tarifas son las de la sección 1). Es un
+-- documento: no cambia al volver a sembrar, como no cambia uno que la
+-- creadora generó y ya mandó.
+--
+-- La foto sale del MISMO reloj que las cifras que congela (pulido r4).
+-- Antes decía «22 de septiembre» con fecha fija mientras los videos eran
+-- relativos al día de la siembra: sembrado el 27, el kit enseñaba un
+-- TikTok del 23 con «395,8 mil views a los 3 días», cifras que no podían
+-- existir el día de la foto. Ahora capturedAt y created_at son la foto,
+-- cada video entra solo si su corte (published_at + age_hours_cut) llegó
+-- antes, y los seguidores son los de la serie de la cuenta el último día
+-- cerrado. verify/0004.sql (j) lo exige, también con --dias 40 y en fin
+-- de semana.
 --
 -- Se escribe a mano porque la demo es relativa al reloj y el kit está
 -- fechado, pero con las reglas de buildMediaKitSnapshot (pulido r8):
@@ -116,21 +129,31 @@ ON CONFLICT (id) DO NOTHING;
 --     buildMediaKitSnapshot desde el pulido r2: las views a la edad de su
 --     puntaje, las veces la mediana de su red A ESA EDAD y esa mediana,
 --     las mismas cifras que «Tus cinco mejores videos» del perfil
---     comercial (antes, 3,4× aquí y 3,7× en el perfil para la misma arepa).
---     Un kit sembrado antes lo recoge una vez al volver a sembrar;
+--     comercial (antes, 3,4× aquí y 3,7× en el perfil para la misma arepa);
 --   * las tarifas son las de la sección 1, ya redondeadas a tres cifras.
--- verify/0004.sql (g, h) y packages/db/test/cotizar.test.ts lo exigen.
+-- Un kit sembrado antes (sin ageHoursCut, o con un video posterior a su
+-- foto) se vuelve a sacar una vez al volver a sembrar, con su mismo slug.
+-- verify/0004.sql (g, h, j) y packages/db/test/cotizar.test.ts lo exigen.
 -- =====================================================================
+WITH foto AS (
+  -- El reloj del seed (0002): la medianoche UTC de hoy, la hora del job
+  -- nocturno, y el último día que ese job tiene cerrado (ayer).
+  SELECT date_trunc('day', now()) AS instante, CURRENT_DATE - 1 AS dia
+)
 INSERT INTO media_kit (id, workspace_id, creator_id, rate_card_id, slug, snapshot, theme, is_public, created_at)
 SELECT '00000004-0000-4000-8000-000000d0c001', '00000002-0000-4000-8000-000000000001',
        '00000002-0000-4000-8000-000000000003',
        (SELECT id FROM rate_card WHERE id = '00000004-0000-4000-8000-0000007a1f01'),
        translate(substr(replace(gen_random_uuid()::text, '-', ''), 1, 26), '01', 'mn'),
-       jsonb_set(
-         '{"version": 2, "capturedAt": "2026-09-22T12:00:00.000Z", "creator": {"displayName": "Laura Méndez", "handle": "laura.cocinafacil", "bio": "Cocina fácil para más de 400 mil personas en Colombia. Recetas de menos de diez minutos con lo que ya tienes en casa.", "country": "CO", "nicheSlugs": ["cocina"]}, "currency": "COP", "locale": "es-CO", "timezone": "America/Bogota", "redes": [{"platformId": "facebook", "handle": "lauracocinafacil", "followers": 21000, "followersAsOf": "2026-09-22", "medianViews": 19698, "engagement": "0.067243", "sampleSize": 10, "isReliable": true}, {"platformId": "instagram", "handle": "laura.cocinafacil", "followers": 128000, "followersAsOf": "2026-09-22", "medianViews": 62177, "engagement": "0.070793", "sampleSize": 16, "isReliable": true}, {"platformId": "tiktok", "handle": "laura.cocinafacil", "followers": 214000, "followersAsOf": "2026-09-22", "medianViews": 115446, "engagement": "0.068798", "sampleSize": 17, "isReliable": true}, {"platformId": "youtube", "handle": "LauraCocinaFacil", "followers": 49000, "followersAsOf": "2026-09-22", "medianViews": 41310, "engagement": "0.068786", "sampleSize": 11, "isReliable": true}], "totales": {"followers": 412000, "medianViewsMax": 115446, "medianViewsMaxPlatform": "tiktok"}, "topPosts": [], "audiencia": [{"platformId": "tiktok", "dimension": "age", "buckets": [{"bucket": "13-17", "share": "0.040000"}, {"bucket": "18-24", "share": "0.340000"}, {"bucket": "25-34", "share": "0.370000"}, {"bucket": "35-44", "share": "0.150000"}, {"bucket": "45-54", "share": "0.070000"}, {"bucket": "55+", "share": "0.030000"}]}, {"platformId": "tiktok", "dimension": "gender", "buckets": [{"bucket": "F", "share": "0.610000"}, {"bucket": "M", "share": "0.390000"}]}, {"platformId": "tiktok", "dimension": "country", "buckets": [{"bucket": "CO", "share": "0.690000"}, {"bucket": "MX", "share": "0.130000"}, {"bucket": "US", "share": "0.060000"}, {"bucket": "ES", "share": "0.040000"}, {"bucket": "PE", "share": "0.030000"}, {"bucket": "EC", "share": "0.020000"}, {"bucket": "OTHER", "share": "0.030000"}]}], "tarifas": [{"labelEs": "TikTok dedicado", "platformId": "tiktok", "priceLow": "5200000.00", "priceHigh": "8080000.00"}, {"labelEs": "Reel de Instagram", "platformId": "instagram", "priceLow": "3420000.00", "priceHigh": "5290000.00"}, {"labelEs": "Historias (3)", "platformId": "instagram", "priceLow": "2150000.00", "priceHigh": "3320000.00"}, {"labelEs": "Video en YouTube", "platformId": "youtube", "priceLow": "2480000.00", "priceHigh": "3920000.00"}, {"labelEs": "Paquete: 1 × TikTok dedicado + 1 × Reel de Instagram + 1 × Historias (3)", "platformId": null, "priceLow": "9690000.00", "priceHigh": "15000000.00"}], "tarifasIncluyen": []}'::jsonb,
-         '{topPosts}',
+       doc.base || jsonb_build_object(
+         'capturedAt', to_char(f.instante AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+         'redes', r.redes,
+         'totales', (doc.base->'totales') || jsonb_build_object('followers', r.followers),
          -- «Lo que mejor funciona» con las cifras del perfil comercial (pulido r2):
-         -- las mismas que escribe buildMediaKitSnapshot.
+         -- las mismas que escribe buildMediaKitSnapshot, y solo las que ya
+         -- existían en la foto (pulido r4): el corte de cada puntaje llegó
+         -- antes de capturedAt.
+         'topPosts',
          (SELECT coalesce(jsonb_agg(x.post ORDER BY x.ord), '[]'::jsonb)
             FROM (SELECT row_number() OVER (ORDER BY s.views_vs_median DESC, s.views_at_cut DESC NULLS LAST, p.id) AS ord,
                          jsonb_build_object(
@@ -143,13 +166,50 @@ SELECT '00000004-0000-4000-8000-000000d0c001', '00000002-0000-4000-8000-00000000
                     LEFT JOIN creator_baseline bl ON bl.id = s.baseline_id
                    WHERE p.creator_id = '00000002-0000-4000-8000-000000000003'
                      AND NOT p.deleted_on_platform AND p.published_at IS NOT NULL
+                     AND p.published_at + s.age_hours_cut * interval '1 hour' <= f.instante
                    ORDER BY ord
                    LIMIT 6) x)),
-       'studio', true, '2026-09-22 12:00:00+00'
--- El documento no cambia al volver a sembrar, salvo una vez: el kit de
--- antes del pulido r2 (sus videos sin ageHoursCut) toma los de ahora.
-ON CONFLICT (id) DO UPDATE SET snapshot = jsonb_set(media_kit.snapshot, '{topPosts}', EXCLUDED.snapshot->'topPosts')
-WHERE NOT coalesce((media_kit.snapshot->'topPosts'->0) ? 'ageHoursCut', false);
+       'studio', true, f.instante
+FROM foto f
+-- Lo que no depende del reloj: la creadora, las medianas y el reparto de
+-- la audiencia de la línea base con la que se hizo el tarifario, y sus
+-- tarifas. capturedAt y los seguidores se ponen arriba y abajo.
+CROSS JOIN (SELECT
+         '{"version": 2, "capturedAt": null, "creator": {"displayName": "Laura Méndez", "handle": "laura.cocinafacil", "bio": "Cocina fácil para más de 400 mil personas en Colombia. Recetas de menos de diez minutos con lo que ya tienes en casa.", "country": "CO", "nicheSlugs": ["cocina"]}, "currency": "COP", "locale": "es-CO", "timezone": "America/Bogota", "redes": [{"platformId": "facebook", "handle": "lauracocinafacil", "followers": 21000, "followersAsOf": null, "medianViews": 19698, "engagement": "0.067243", "sampleSize": 10, "isReliable": true}, {"platformId": "instagram", "handle": "laura.cocinafacil", "followers": 128000, "followersAsOf": null, "medianViews": 62177, "engagement": "0.070793", "sampleSize": 16, "isReliable": true}, {"platformId": "tiktok", "handle": "laura.cocinafacil", "followers": 214000, "followersAsOf": null, "medianViews": 115446, "engagement": "0.068798", "sampleSize": 17, "isReliable": true}, {"platformId": "youtube", "handle": "LauraCocinaFacil", "followers": 49000, "followersAsOf": null, "medianViews": 41310, "engagement": "0.068786", "sampleSize": 11, "isReliable": true}], "totales": {"followers": 412000, "medianViewsMax": 115446, "medianViewsMaxPlatform": "tiktok"}, "topPosts": [], "audiencia": [{"platformId": "tiktok", "dimension": "age", "buckets": [{"bucket": "13-17", "share": "0.040000"}, {"bucket": "18-24", "share": "0.340000"}, {"bucket": "25-34", "share": "0.370000"}, {"bucket": "35-44", "share": "0.150000"}, {"bucket": "45-54", "share": "0.070000"}, {"bucket": "55+", "share": "0.030000"}]}, {"platformId": "tiktok", "dimension": "gender", "buckets": [{"bucket": "F", "share": "0.610000"}, {"bucket": "M", "share": "0.390000"}]}, {"platformId": "tiktok", "dimension": "country", "buckets": [{"bucket": "CO", "share": "0.690000"}, {"bucket": "MX", "share": "0.130000"}, {"bucket": "US", "share": "0.060000"}, {"bucket": "ES", "share": "0.040000"}, {"bucket": "PE", "share": "0.030000"}, {"bucket": "EC", "share": "0.020000"}, {"bucket": "OTHER", "share": "0.030000"}]}], "tarifas": [{"labelEs": "TikTok dedicado", "platformId": "tiktok", "priceLow": "5200000.00", "priceHigh": "8080000.00"}, {"labelEs": "Reel de Instagram", "platformId": "instagram", "priceLow": "3420000.00", "priceHigh": "5290000.00"}, {"labelEs": "Historias (3)", "platformId": "instagram", "priceLow": "2150000.00", "priceHigh": "3320000.00"}, {"labelEs": "Video en YouTube", "platformId": "youtube", "priceLow": "2480000.00", "priceHigh": "3920000.00"}, {"labelEs": "Paquete: 1 × TikTok dedicado + 1 × Reel de Instagram + 1 × Historias (3)", "platformId": null, "priceLow": "9690000.00", "priceHigh": "15000000.00"}], "tarifasIncluyen": []}'::jsonb AS base) doc
+-- Los seguidores de cada red el último día cerrado en la foto, de la
+-- misma serie que enseña Resumen (0002, sección 5), y su suma en la
+-- cabecera: sembrando en limpio son los 214 000 · 128 000 · 49 000 ·
+-- 21 000 del mock, y una base más vieja dice los suyos, no esos.
+CROSS JOIN LATERAL (
+  SELECT jsonb_agg(e.red || CASE WHEN a.day IS NULL THEN '{}'::jsonb
+                                 ELSE jsonb_build_object('followers', a.followers,
+                                                         'followersAsOf', to_char(a.day, 'YYYY-MM-DD')) END
+                   ORDER BY e.n) AS redes,
+         sum(coalesce(a.followers, (e.red->>'followers')::bigint)) AS followers
+    FROM jsonb_array_elements(doc.base->'redes') WITH ORDINALITY AS e(red, n)
+    LEFT JOIN LATERAL (
+      SELECT s.day, s.followers
+        FROM social_connection c
+        JOIN account_metric_snapshot s ON s.connection_id = c.id AND s.source = 'api'
+       WHERE c.creator_id = '00000002-0000-4000-8000-000000000003'
+         AND c.platform_id = e.red->>'platformId' AND c.deleted_at IS NULL
+         AND s.day <= f.dia
+       ORDER BY s.day DESC
+       LIMIT 1
+    ) a ON true
+) r
+-- El documento no cambia al volver a sembrar, salvo cuando miente: el
+-- kit de antes del pulido r2 (sus videos sin ageHoursCut) o uno con algún
+-- video medido DESPUÉS de su foto (el de antes del pulido r4, congelado
+-- el 22-sep y sembrado días más tarde con videos de esos días). Ese se
+-- vuelve a sacar entero, una vez, con la foto de hoy; conserva su slug,
+-- así que el enlace que ya circula sigue abriendo.
+ON CONFLICT (id) DO UPDATE SET snapshot = EXCLUDED.snapshot, created_at = EXCLUDED.created_at
+WHERE NOT coalesce((media_kit.snapshot->'topPosts'->0) ? 'ageHoursCut', false)
+   OR EXISTS (SELECT 1 FROM jsonb_array_elements(media_kit.snapshot->'topPosts') p
+               WHERE (p->>'publishedAt')::timestamptz
+                     + coalesce((p->>'ageHoursCut')::int, 0) * interval '1 hour'
+                     > (media_kit.snapshot->>'capturedAt')::timestamptz);
 
 
 -- =====================================================================
