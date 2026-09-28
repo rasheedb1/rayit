@@ -125,6 +125,11 @@ db.cert: ## Vuelve a bajar el certificado raíz de Supabase (y la copia embebida
 	  -o db/certs/supabase-root-2021.crt && echo "  certificado actualizado"
 	@node db/scripts/embed-ca.mjs && echo "  packages/db/src/supabase-ca.ts regenerado"
 
+# Los prompts de outreach van incrustados en packages/core/src/outreach/prompts.gen.ts,
+# como la CA de arriba: en el bundle de Next no se leen por ruta. Tras editar un .md, regenerar.
+core.prompts: ## Regenera la copia incrustada de los prompts de outreach (tras editar packages/core/src/outreach/prompts/*.md)
+	@node packages/core/scripts/embed-prompts.mjs
+
 # =====================================================================
 # El worker por turnos (CIM-7, opción B): pg_cron de Supabase llama cada
 # minuto a /api/cron/tick de la web con el Bearer CRON_SECRET, guardado
@@ -134,13 +139,10 @@ db.cert: ## Vuelve a bajar el certificado raíz de Supabase (y la copia embebida
 # Detalle y cómo pasar a Vercel Cron: apps/worker/README.md, «Por turnos».
 # =====================================================================
 
-core.prompts: ## Regenera la copia incrustada de los prompts de outreach (tras editar packages/core/src/outreach/prompts/*.md)
-	@node packages/core/scripts/embed-prompts.mjs
-
 cron.install: ## Programa el turno del worker cada minuto (pg_cron -> /api/cron/tick). Idempotente
 	@./scripts/cron-tick.sh install
 
-cron.status: ## La tarea del turno, su secreto en Vault (sin el valor) y las últimas corridas
+cron.status: ## El estado del turno y un veredicto (sale con 1 si no está sano: secreto distinto, 500, pg_cron parado)
 	@./scripts/cron-tick.sh status
 
 cron.uninstall: ## Retira la tarea y su secreto (para pasar a Vercel Cron, opción A)

@@ -174,6 +174,34 @@ Lo que conviene saber de un turno de 45 s:
   solapados son 14, dentro de las 15 de modo sesión que el pooler de
   Supabase da por usuario. `WORKER_JOB_POOL_MAX` lo cambia; por debajo de
   7 un turno puede quedarse esperando conexión hasta el corte.
+- **Nada espera para siempre** (`openTickDatabase` en `src/tick.ts`).
+  Una conexión nueva se espera como mucho 5 s
+  (`TICK_CONNECT_TIMEOUT_MS`): con el pooler colgado o sin clientes, el
+  turno falla con su motivo en vez de quedarse hasta que Vercel mate la
+  función. Cada conexión del turno fija, junto al `SET ROLE` y en la
+  misma ida y vuelta, `statement_timeout` e
+  `idle_in_transaction_session_timeout` iguales al presupuesto (45 s): un
+  job cortado que no mira la señal, o metido en una sentencia larga
+  (`compute.trait_lift`, `compute.baseline`), suelta su conexión de modo
+  sesión a más tardar 45 s después, aunque la función quede congelada.
+  Y la ruta no espera al turno más de `TICK_BUDGET_MS + TICK_CLOSE_MS`
+  (48 s): si no respondió, contesta **504** y deja en el log «el turno
+  no respondió a tiempo», que `make cron.status` traduce.
+- **En local, el turno no toca producción.** `pnpm --filter @mc/web dev`
+  carga el `.env.local` de `make db.unlock`, que apunta al Supabase de
+  producción: un `curl` a la ruta correría el turno de verdad, en
+  paralelo con el cron, con correo real. Por eso `runTickFromEnv` se
+  niega (`ConfigError`) a correr contra una base que no es de esta
+  máquina fuera del despliegue de producción de Vercel
+  (`VERCEL_ENV=production`), salvo `TICK_ALLOW_REMOTE=1` a sabiendas.
+  Para probar la ruta en local, `WORKER_DATABASE_URL` a tu Postgres de
+  Docker. Y en modo real el correo no se reclama si `APP_URL` no es un
+  origen https público (`publicAppUrl` en `jobs/ventas/canales`): con
+  `http://localhost:3100`, el enlace de baja no abriría.
+- **La salud** (`pnpm --filter @mc/worker salud`) no cuenta un corte como
+  fallo: `failedSinceOk` los salta y, si la última corrida fue un corte,
+  dice «cortado por el turno, se retoma» (`lastCut` en
+  `@mc/db/queries/worker`).
 
 **Lo que se tocó en `src/runner/` (carpeta de Nicolás), y por qué.** El
 turno es la misma pasada que `--once`: la pila de pendientes, el
@@ -181,21 +209,27 @@ encadenado, la regla de reintento y el reclamo tenían que ser los mismos,
 y envolver `runOnce` desde `src/tick.ts` no bastaba (el presupuesto y el
 reclamo atómico ocurren entre corrida y corrida, dentro del bucle).
 Copiarlo en `tick.ts` era duplicar la lógica, que el enunciado prohíbe.
-Los cambios:
+Lo que `--once` no usa vive FUERA de `runner/`, en
+`src/turno/recorrer.ts` (el presupuesto, los tres recorredores con
+`blockedBy`, `outbound.dispatch` primero), y entra en `runOnce` por un
+punto de extensión pequeño, `walk`; `--once` usa `sequentialWalk`, el
+bucle de siempre. En `runner/` queda lo que de verdad comparten:
 
 | Archivo | Qué | Por qué |
 |---|---|---|
 | `once.ts` | `claimRun`: candado por job (`pg_advisory_xact_lock`) + relectura del estado + fila `running`, en una transacción | Dos turnos solapados no corren dos veces lo mismo. Sin él, en Postgres real, las dos pasadas reclaman (`test/tick-postgres.test.ts`, `test/once-reclamo.test.ts`) |
-| `once.ts` | `budget`, `concurrency`, `first` en `RunOnceOptions`; `sliceS` en el reclamo; `tickCut` | El presupuesto del turno. Sin `budget` (`--once`), todo igual que antes |
+| `once.ts` | `walk` en `RunOnceOptions` (`WalkControl`: la pila, `run(item, deadline?)`, `skip`), `sequentialWalk`; `sliceS` en el reclamo; `tickCut` en `closeMetadata` | El punto de extensión del turno (`src/turno/recorrer.ts`). Sin `walk` (`--once`), el mismo bucle que antes |
 | `once.ts` | `tickStates`: el estado de todos los ticks en una consulta | Un turno vacío, una conexión y no una por definición |
 | `once.ts` | `verdict` con `backoff` (`lastFailedAt` en `tickStates`, `retryDelayMs`) | La espera entre reintentos del proceso largo (pg-boss): antes `--once` reintentaba en la pasada siguiente, fuera cuando fuera; cada minuto, un proveedor caído recibía `max_attempts` golpes seguidos |
-| `once.ts` | Los recorredores no sacan un job cuyo `after` sigue pendiente o corriendo (`blockedBy`) | Con tres a la vez, `compute.baseline` se adelantaba a `collect.post_metrics` y se calculaba con los datos de ayer |
+| `comun.ts` (nuevo) | `EXPIRE_MARGIN_S`, `JOB_LOCK_PREFIX`, `SKIPPED_NO_HANDLER`, `RoleError`, `assertRole`, `createQuota`, `recordSkipped`, **movidos tal cual**; `worker.ts` y `boss.ts` los reexportan con sus nombres | El turno los usa sin importar `worker.ts`/`boss.ts`, que arrastraban pg-boss entero al bundle de la ruta (de 1,15 MB a 0,59 MB; el build falla si vuelve: `apps/web/scripts/revisar-bundle-turno.mjs`) |
+| `db.ts` | `connectionTimeoutMillis` y `sessionTimeoutMs` opcionales en `PostgresDatabaseOptions`; el `SET ROLE` y los timeouts en una sola consulta | Solo los pasa el turno; sin ellos, el proceso largo queda igual |
+| `salud.ts` | «cortado por el turno, se retoma» cuando la última corrida es un corte | La salud no enseña como fallo un job sano que se retoma |
 | `run.ts` | `RunInput.runId` y `RunInput.closeMetadata` | Abrir la fila en el reclamo y marcar `tickCut`/`noRetry` en la escritura que la cierra |
 | `worker.ts` | `JOB_LOCK_PREFIX` y `recordSkipped` bajo ese candado | Dos turnos no dejan dos filas «sin handler» |
 
 El proceso largo (`pnpm --filter @mc/worker start`) no pasa por nada de
 esto salvo `recordSkipped`, que hace lo mismo que antes dentro de una
-transacción. **Pendiente: la revisión de Nicolás antes del merge a
+transacción, y los imports movidos a `comun.ts`. **Pendiente: la revisión de Nicolás antes del merge a
 `main`.** El pull request hacia `main` lleva esta tabla en la
 descripción y a Nicolás como revisor obligatorio; lo abre quien integra
 `rasheed/integracion` (los agentes no empujan ni abren PR).
@@ -226,14 +260,34 @@ de 7 días: pg_cron deja una fila por disparo (1.440 al día) y nadie la
 purga; `net._http_response` caduca sola.
 El secreto va solo y en dos `SELECT` de nivel superior, sin bloque `DO`:
 `pg_stat_statements` normaliza sus literales a `$1`, y un fallo del lote
-de pg_cron no puede arrastrarlo al log de Postgres. Lo corre el dueño,
-con el token de administración:
+de pg_cron no puede arrastrarlo al log de Postgres. Si la API rechaza
+ese lote, `scripts/cron-tick.sh` no copia su respuesta (Postgres cita la
+sentencia, `LINE 1: … update_secret(id, '<secreto>')`): imprime la
+primera línea con el valor cambiado por `***`. Un matiz propio de
+pg_net: `net.http_post` deja la petición, con su cabecera
+`Authorization` en claro, en `net.http_request_queue` hasta que su
+worker la manda (milisegundos); esa tabla solo la lee `postgres`, y
+`make cron.status` cuenta sus filas (`cola_pg_net`) y avisa si crece
+(pg_net atascado). Lo corre el dueño, con el token de administración:
 
 ```bash
 cd platform
 make cron.install      # pide CRON_SECRET sin mostrarlo (el mismo de Vercel); APP_URL=https://… para otra URL
-make cron.status       # la tarea, el secreto (sin su valor), las últimas corridas y respuestas (200 = bien)
+make cron.status       # el estado en JSON y un veredicto en verde o en rojo (sale con 1 si no está sano)
 ```
+
+`make cron.status` termina con **una línea de veredicto**
+(`db/ops/cron-tick-veredicto.mjs`, sobre las respuestas de pg_net de los
+últimos 5 min): todo 200 → «el turno responde» con su `elapsedMs` medio;
+un **401** → el `CRON_SECRET` del Vault no es el de Vercel
+(`make cron.install` con el de Vercel); un **500** → el turno falla,
+mira los logs de Vercel (`[cron/tick]`; lo típico es que falte
+`WORKER_DATABASE_URL`); un **504** → el turno no respondió a tiempo
+(pooler colgado); `timed_out` → la ruta tarda más de 60 s; ninguna
+respuesta → pg_cron no está disparando. Avisa además si `outbound.dispatch`
+lleva más de 30 min sin una pasada buena, o si la cola de pg_net crece.
+Sale con 1 si no está sano: sirve de chequeo (a mano tras integrar, o
+desde cualquier cron que avise).
 
 Es idempotente: correrlo otra vez actualiza el secreto y deja una sola
 tarea. Rotar el secreto es `make cron.install` con el nuevo y el mismo
@@ -855,8 +909,35 @@ de `db/ops/` sin secretos en claro, idempotente, el orden de
 línea de comandos de curl) y, en la web,
 `app/api/cron/tick/_lib/turno.test.ts` (401 sin Bearer o con uno malo,
 el resumen con el bueno, por GET y POST, el esquema `bearer` sin
-mayúsculas, solo `/api/cron/tick` sin sesión, y que toda
-`app/api/cron/**/route.ts` exija el Bearer).
+mayúsculas, solo `/api/cron/tick` sin sesión, que toda
+`app/api/cron/**/route.ts` exija el Bearer, y el 504 cuando el turno no
+responde). `tick.test.ts` cubre además `outbound.dispatch` con más
+toques vencidos de los que caben en una pasada (el turno corto envía
+los que caben, el siguiente tick de `*/2` el resto, ninguno dos veces),
+la guardia contra una base remota fuera de Vercel y la espera de
+conexión acotada con un «pooler» que no contesta.
+
+**Lo que PGlite no puede probar** está en `test/tick-postgres.test.ts`:
+dos turnos con dos pools en el peor orden (el candado por job de
+`claimRun` es lo único que evita la corrida doble; en PGlite las
+transacciones se serializan y no se distingue), `outbound.dispatch` con
+dos turnos a la vez, el pool de 7 conexiones y el `statement_timeout`
+que corta la sentencia larga de un job cortado. Sin `TEST_DATABASE_URL`
+se salta (`﹣ skipped` en `pnpm verificar`); en el CI corre siempre
+(paso «El worker por turnos con dos pools»). En local, con Docker
+(desde `platform/`):
+
+```bash
+make up && make seed      # Postgres 16, db/montaje-postgres-real.sql y las migraciones con seed
+cd apps/worker && TEST_DATABASE_URL=postgres://mc_app_ci:ci@localhost:5432/oncue \
+  TEST_DATABASE_ADMIN_URL=postgres://mc:mc@localhost:5432/oncue \
+  node --test --experimental-strip-types --test-timeout=120000 test/tick-postgres.test.ts
+```
+
+Sin Docker, cualquier Postgres 16: el de `embedded-postgres`, con el
+montaje y la migración que explica `packages/db/README.md` («Contra
+Postgres real, en local»), y las mismas dos variables con su puerto.
+Así se corrió el 28-sep-2026 (Postgres 16.14): 5 de 5 en verde.
 
 El turno corre DENTRO del bundle de Next, y webpack congela
 `import.meta.url` en la ruta de la máquina del build: un `readFileSync`
