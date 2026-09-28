@@ -29,7 +29,8 @@ const sha256 = (value: string) => createHash("sha256").update(value, "utf8").dig
  */
 export function bearerMatches(authorization: string | null, secret: string | undefined): boolean {
   const configured = typeof secret === "string" && secret.length >= CRON_SECRET_MIN_LENGTH;
-  const given = /^Bearer (\S+)$/.exec(authorization ?? "")?.[1] ?? "";
+  // El esquema no distingue mayúsculas (RFC 9110 §11.1): «bearer …» de un proxy también vale.
+  const given = /^Bearer (\S+)$/i.exec(authorization ?? "")?.[1] ?? "";
   const same = timingSafeEqual(sha256(given), sha256(configured ? secret : ""));
   return configured && given.length > 0 && same;
 }

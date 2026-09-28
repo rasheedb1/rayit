@@ -1,4 +1,7 @@
 // @vitest-environment node
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 import type { TickSummary } from "@mc/worker/tick";
 import { esRutaPublica } from "@/lib/auth/rutas";
@@ -65,6 +68,16 @@ describe("la ruta del turno (CIM-7)", () => {
     expect(JSON.parse(linea)).toMatchObject({ ran: ["outbound.dispatch:ok:3/0:640ms"], left: ["outbound.generate:budget"], upToDate: 12 });
   });
 
+  test("el esquema no distingue mayúsculas (RFC 9110 §11.1): «bearer» o «BEARER» de un proxy también entran", async () => {
+    const { handler, run } = montar(SECRETO);
+    for (const auth of [`bearer ${SECRETO}`, `BEARER ${SECRETO}`]) {
+      expect((await handler(pedir("POST", auth))).status, auth).toBe(200);
+    }
+    expect(run).toHaveBeenCalledTimes(2);
+    // El secreto sí distingue: solo el esquema es insensible.
+    expect(bearerMatches(`bearer ${SECRETO.toUpperCase()}`, SECRETO)).toBe(false);
+  });
+
   test("sin CRON_SECRET en el servidor, o con uno corto, nadie entra: ni con la cadena vacía", async () => {
     for (const secret of [undefined, "", "corto"]) {
       const { handler, run, logError } = montar(secret);
@@ -95,9 +108,39 @@ describe("la ruta del turno (CIM-7)", () => {
 
   test("la ruta no pide sesión (la protege su Bearer) y el resumen del log es una línea", () => {
     expect(esRutaPublica("/api/cron/tick")).toBe(true);
+    // Solo el turno: otra ruta bajo /api/cron nace protegida por la sesión.
+    expect(esRutaPublica("/api/cron")).toBe(false);
+    expect(esRutaPublica("/api/cron/otra")).toBe(false);
     expect(tickLogLine({ ...RESUMEN, ran: [{ ...RESUMEN.ran[0]!, cut: true, status: "failed" }] })).toContain("outbound.dispatch:failed(cortado)");
     expect(JSON.parse(tickLogLine(RESUMEN))).toMatchObject({ planMs: 41 });
     expect(JSON.parse(tickLogLine(RESUMEN))).not.toHaveProperty("orphanedBossJobs");
     expect(JSON.parse(tickLogLine({ ...RESUMEN, orphanedBossJobs: 2 }))).toMatchObject({ orphanedBossJobs: 2 });
+  });
+});
+
+/** Las route.ts bajo app/api/cron, relativas a esa carpeta. */
+function rutasDeCron(): string[] {
+  const raiz = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const out: string[] = [];
+  const recorrer = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) recorrer(p);
+      else if (e.name === "route.ts") out.push(p);
+    }
+  };
+  recorrer(raiz);
+  return out.map((p) => relative(raiz, p));
+}
+
+describe("las rutas de cron", () => {
+  test("cada app/api/cron/**/route.ts pasa por el guard del Bearer (createTickHandler o bearerMatches)", () => {
+    const raiz = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const rutas = rutasDeCron();
+    expect(rutas).toContain(join("tick", "route.ts"));
+    for (const r of rutas) {
+      const fuente = readFileSync(join(raiz, r), "utf8");
+      expect(/\b(createTickHandler|bearerMatches)\b/.test(fuente), `${r} no exige el Bearer de CRON_SECRET`).toBe(true);
+    }
   });
 });
