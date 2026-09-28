@@ -1331,7 +1331,8 @@ describe('ronda 4 · moneda del CPM, cifras del media kit y kit adjunto', () => 
       const k = await getMediaKitById(tx, '00000004-0000-4000-8000-000000d0c001');
       const { rows } = await tx.query<{
         deliverable: string; platform_id: PlatformId | null; price_low: string; price_high: string;
-        avg_views: number | null; cpm_low: string | null; cpm_high: string | null;
+        // bigint: node-postgres lo entrega como texto, PGlite como número (CIM-2c).
+        avg_views: string | number | null; cpm_low: string | null; cpm_high: string | null;
         adjustments: Record<string, unknown>;
       }>(
         `SELECT deliverable, platform_id, price_low::text, price_high::text, avg_views,
@@ -1373,7 +1374,7 @@ describe('ronda 4 · moneda del CPM, cifras del media kit y kit adjunto', () => 
         assert.ok(views?.tipo === 'views' && cpm?.tipo === 'cpm', `${it.deliverable}: guarda sus entradas`);
         calculado = calcularItem({
           deliverable: it.deliverable, platformId: it.platform_id, cantidad: adj.cantidad ?? 1,
-          views: it.avg_views ?? 0, viewsSource: adj.viewsSource ?? views.fuente,
+          views: Number(it.avg_views ?? 0), viewsSource: adj.viewsSource ?? views.fuente,
           ...(views.muestra === undefined ? {} : { viewsSample: views.muestra }),
           ...(views.corteHoras === undefined ? {} : { viewsCutHours: views.corteHoras }),
           cpmLow: it.cpm_low ?? '0', cpmHigh: it.cpm_high ?? '0', cpmSource: adj.cpmSource ?? cpm.fuente,

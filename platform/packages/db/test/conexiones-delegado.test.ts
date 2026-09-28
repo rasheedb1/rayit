@@ -11,7 +11,7 @@ import {
   addPublicAccount, disconnectConnection, getConnectionCreator, getConsentCreator, getSessionMember, listAccounts, listConsents, notifyConnectionAdded,
   recordConsent, sessionHasPermission,
 } from '../src/index.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-00000000ac08';
 const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
@@ -50,7 +50,7 @@ before(async () => {
     ON CONFLICT DO NOTHING;
     UPDATE membership SET role_id = '${ROLE_MANAGER_CONECTA}' WHERE workspace_id = '${WORKSPACE_LAURA}' AND user_id = '${USER_MANAGER}';
   `);
-}, { timeout: 600_000 }); // Postgres embebido con migraciones y seeds: con la máquina cargada pasa de los dos minutos.
+}, SETUP_TIMEOUT); // Postgres embebido con migraciones y seeds: con la máquina cargada pasa de los dos minutos.
 after(async () => { await t.close(); });
 
 const asManager = <T,>(fn: Parameters<typeof t.db.withWorkspace<T>>[1]) => t.db.withWorkspace(WORKSPACE_LAURA, fn, { userId: USER_MANAGER });

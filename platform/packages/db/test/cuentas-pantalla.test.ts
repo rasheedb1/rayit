@@ -10,7 +10,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addPublicAccount, listAccounts, recordAccountSnapshot, upgradePublicAccountToOAuth } from '../src/index.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000004';
 const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
@@ -19,7 +19,7 @@ let t: TestDb;
 before(async () => {
   t = await openTestDb();
   await t.admin(`INSERT INTO workspace (id, slug, name) VALUES ('${WORKSPACE_AJENO}', 'ajeno-pantalla', 'Ajeno') ON CONFLICT DO NOTHING;`);
-});
+}, SETUP_TIMEOUT);
 after(async () => { await t.close(); });
 
 const base = { creatorId: CREATOR_LAURA, displayName: null, avatarUrl: null, profileUrl: null, accountType: 'unknown' as const };

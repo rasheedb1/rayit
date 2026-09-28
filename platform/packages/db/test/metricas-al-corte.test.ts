@@ -10,7 +10,7 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { openTestDb, POST_D02_TIKTOK_CAFE_ALMA, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, POST_D02_TIKTOK_CAFE_ALMA, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 let t: TestDb;
 const POST = '0000000c-0000-4000-8000-0000000042d1';
@@ -28,7 +28,7 @@ before(async () => {
     INSERT INTO post_metric_snapshot (post_id, workspace_id, captured_at, age_hours, views, completion_rate, source)
     VALUES ('${POST}', '${WORKSPACE_LAURA}', '2026-08-31T12:00:00Z', 720, 1000, 0.07, 'api');
   `);
-}, { timeout: 300_000 });
+}, SETUP_TIMEOUT);
 after(async () => { await t?.close(); });
 
 async function alCorte(postId: string): Promise<{ views: string; completion_rate: string | null }> {

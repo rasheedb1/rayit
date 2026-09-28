@@ -10,11 +10,15 @@
  *     se serializan.
  *   - TEST_DATABASE_URL=postgres://…: un Postgres real ya migrado y con
  *     seed (por ejemplo, el Docker de `make up` + `make seed`, o el
- *     Postgres 16 del CI). Aquí sí hay concurrencia real y se ejercita
- *     el runner de pg. El rol de conexión no debe tener BYPASSRLS ni ser
- *     dueño de las tablas, o RLS no aplica; `admin(sql)` usa
- *     TEST_DATABASE_ADMIN_URL (superusuario o dueño) y, si falta,
- *     la misma URL. NUNCA apuntarlas a Supabase: el helper se niega.
+ *     Postgres 16 del CI). Es el MOLDE: cada apertura trabaja sobre su
+ *     propia copia (CREATE DATABASE … TEMPLATE) y la borra al cerrar.
+ *     Aquí sí hay concurrencia real y se ejercita el runner de pg. El
+ *     rol de conexión no debe tener BYPASSRLS ni ser dueño de las
+ *     tablas, o RLS no aplica (el del CI, mc_app_ci, lo crea
+ *     db/montaje-postgres-real.sql); `admin(sql)` y las copias usan
+ *     TEST_DATABASE_ADMIN_URL (superusuario, o dueño con CREATEDB) y,
+ *     si falta, la misma URL. NUNCA apuntarlas a Supabase: el helper se
+ *     niega.
  *
  * Para las pruebas de otros paquetes (connectors, worker): abrir aquí y
  * usar `db` (withWorkspace / asWorker) o `admin(sql)` para sembrar, en
@@ -59,6 +63,11 @@ export const POST_D05_YOUTUBE_NUTRIVE = '00000002-0000-4000-8000-000000000d05';
  * 40-60), migrar pasaba de dos minutos y, como con --test-isolation=none
  * todos los archivos comparten la raíz y sus `before` corren antes de la
  * primera prueba, uno lento tumbaba a todos (falsos rojos masivos).
+ *
+ * Es el ÚNICO techo del arranque (CIM-12, pulido r6): todo `before` que
+ * abre la base lo usa, sin un número propio. El primero en orden
+ * alfabético (accesos-sesion) paga además la foto compartida de migrar y
+ * sembrar, y con 120 s propios canceló la suite entera bajo carga.
  */
 export const SETUP_TIMEOUT = { timeout: 900_000 } as const;
 
@@ -70,6 +79,17 @@ export interface TestDb {
   /** SQL como el rol de la aplicación, fuera de cualquier transacción (para comprobar qué queda en la sesión). */
   raw<T = Record<string, unknown>>(sql: string): Promise<T[]>;
   close(): Promise<void>;
+}
+
+/**
+ * El rol que migra en la base de la prueba, para `SET ROLE` antes de
+ * volver a correr una migración: en PGlite, mc_migrator_embedded (como
+ * mc_migrator en Supabase); contra un Postgres real, el usuario de
+ * TEST_DATABASE_ADMIN_URL, que es quien corrió `db/migrate.mjs` (CIM-2c).
+ */
+export function migratorRole(t: Pick<TestDb, 'kind'>): string {
+  if (t.kind === 'pglite') return 'mc_migrator_embedded';
+  return decodeURIComponent(new URL(process.env.TEST_DATABASE_ADMIN_URL || process.env.TEST_DATABASE_URL || '').username);
 }
 
 export interface TestDbOptions extends DbOptions {
@@ -95,8 +115,16 @@ export async function openTestDb(opts: TestDbOptions = {}): Promise<TestDb> {
       }
     }
     const { createPgDb, createPool } = await import('../src/client.ts');
-    const pool = createPool(url, { max: 5, applicationName: 'mc-db:test' });
-    const adminPool = createPool(adminUrl, { max: 1, applicationName: 'mc-db:test:admin' });
+    // Cada apertura trabaja sobre su PROPIA copia de la base (CIM-2c): la
+    // misma foto que el embebido le da a cada archivo. Sin esto los
+    // archivos compartían una base, lo que uno escribía lo contaba otro y
+    // el resultado dependía del orden (171 rojas el 28-sep-2026).
+    const copia = await copiarBase(url, adminUrl);
+    // Ociosas fuera enseguida: con --test-isolation=none los `before` de
+    // todos los archivos abren su copia antes de la primera prueba, y un
+    // Postgres de pruebas trae 100 conexiones.
+    const pool = createPool(copia.url, { max: 5, applicationName: 'mc-db:test', idleTimeoutMillis: 1_000 });
+    const adminPool = createPool(copia.adminUrl, { max: 1, applicationName: 'mc-db:test:admin', idleTimeoutMillis: 1_000 });
     const db = createPgDb(pool, dbOpts);
     return {
       kind: 'postgres',
@@ -108,6 +136,7 @@ export async function openTestDb(opts: TestDbOptions = {}): Promise<TestDb> {
       close: async () => {
         await db.close();
         await adminPool.end();
+        await copia.borrar();
       },
     };
   }
@@ -120,5 +149,44 @@ export async function openTestDb(opts: TestDbOptions = {}): Promise<TestDb> {
     admin: (sql) => db.execAsSuperuser(sql),
     raw: <T>(sql: string) => db.raw(async (p) => (await p.query<T>(sql)).rows),
     close: () => db.close(),
+  };
+}
+
+let copias = 0;
+
+/**
+ * Una base nueva, copia de la de TEST_DATABASE_URL (`CREATE DATABASE …
+ * TEMPLATE`), para una sola apertura de openTestDb; `borrar` la tira al
+ * cerrar. La de TEST_DATABASE_URL es el molde, ya migrado y sembrado: nadie
+ * se conecta a ella mientras corren las pruebas (Postgres no copia una
+ * base con sesiones abiertas). Crear y borrar van por la base `postgres`
+ * con el usuario de TEST_DATABASE_ADMIN_URL, que necesita CREATEDB (el
+ * superusuario del CI y de `make up` lo tiene).
+ */
+async function copiarBase(url: string, adminUrl: string): Promise<{ url: string; adminUrl: string; borrar(): Promise<void> }> {
+  const pg = (await import('pg')).default;
+  const molde = decodeURIComponent(new URL(url).pathname.slice(1));
+  const nombre = `${molde}_prueba_${process.pid}_${++copias}`.slice(0, 63);
+  const en = (base: string, db: string) => {
+    const u = new URL(base);
+    u.pathname = `/${encodeURIComponent(db)}`;
+    return u.toString();
+  };
+  const ident = (x: string) => `"${x.replaceAll('"', '""')}"`;
+  const mantenimiento = async (sql: string) => {
+    const c = new pg.Client({ connectionString: en(adminUrl, 'postgres') });
+    await c.connect();
+    try {
+      await c.query(sql);
+    } finally {
+      await c.end();
+    }
+  };
+  await mantenimiento(`DROP DATABASE IF EXISTS ${ident(nombre)} WITH (FORCE)`);
+  await mantenimiento(`CREATE DATABASE ${ident(nombre)} TEMPLATE ${ident(molde)}`);
+  return {
+    url: en(url, nombre),
+    adminUrl: en(adminUrl, nombre),
+    borrar: () => mantenimiento(`DROP DATABASE IF EXISTS ${ident(nombre)} WITH (FORCE)`),
   };
 }

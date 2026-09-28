@@ -196,7 +196,10 @@ divergieron, y la salida es una migración nueva, nunca editar la vieja.
   aislamiento del padre (0018). `packages/db/test/schema.test.ts` exige
   RLS en toda tabla de tenant o hija de una. El CI corre además esas
   pruebas contra Postgres 16 con un rol `mc_app_ci` sin BYPASSRLS
-  (`TEST_DATABASE_URL`), que es lo que ejercita el runner de `pg`.
+  (`TEST_DATABASE_URL`), que es lo que ejercita el runner de `pg`: su
+  sesión es `mc_app` y no hereda nada de `mc_worker`, y desde CIM-2c
+  corre `@mc/db` entero y un rojo tumba el job
+  (`db/montaje-postgres-real.sql`).
   Quedan por aplicar en Supabase **0017, 0018, 0019 y 0020**, en ese
   orden (`make db.migrate`, en la integración de CIM-2). Hasta
   entonces, en la Supabase viva, `outbound_policy`, `quote_item`,

@@ -36,10 +36,8 @@
  * igual con una función que leyera y luego escribiera. La garantía real
  * (la segunda llamada ESPERA el bloqueo de la fila y ve la plaza gastada)
  * la prueba «el bloqueo es de verdad», que solo corre contra Postgres. El
- * job contra-postgres-real del CI la corre en cada PR en el paso
- * obligatorio (los archivos de test/contra-postgres-real.txt), que tumba
- * el job si falla: el resto de @mc/db va después, en un paso
- * informativo que todavía no está en verde (CIM-2c). En local, el mismo
+ * job contra-postgres-real del CI la corre en cada PR, con @mc/db entero,
+ * y un rojo tumba el job (CIM-2c). En local, el mismo
  * montaje (db/montaje-postgres-real.sql antes de migrar) con Docker o
  * con cualquier Postgres 16: packages/db/README.md, «Contra Postgres
  * real, en local». Contra una base que se queda, el archivo se lleva lo
@@ -269,9 +267,6 @@ const baja = (token: string) =>
     return { r, quedan };
   });
 
-/** Los permisos de mc_app solo se miden en PGlite: en el CI el rol de conexión también es miembro de mc_worker. */
-const soloEmbebido = () => t.kind === 'pglite';
-
 describe('0046 · catálogos', () => {
   test('los seis ángulos de §5.3, globales, se leen desde cualquier workspace', async () => {
     const keys = await t.db.withWorkspace(WS_B, async (tx) =>
@@ -333,12 +328,11 @@ describe('0046 · catálogos', () => {
     for (const s of p!.steps) assert.ok(angulos.some((a) => a.key === s.angle_key), s.angle_key);
   });
 
-  test('la aplicación no escribe los catálogos globales ni sus contadores', async (ctx) => {
+  test('la aplicación no escribe los catálogos globales ni sus contadores', async () => {
     const r = await t.db.withWorkspace(WS_A, (tx) =>
       tx.query("UPDATE outbound_angle SET label_es = 'x' WHERE key = 'presencia' RETURNING id"),
     );
     assert.equal(r.rows.length, 0, 'la política de escritura no alcanza la fila global');
-    if (!soloEmbebido()) return ctx.skip('los GRANT de mc_app se miden en PGlite: en el CI el rol hereda los de mc_worker');
     await assert.rejects(
       t.db.withWorkspace(WS_A, (tx) => tx.query("INSERT INTO outbound_sequence_template (slug, name_es, description_es, steps) VALUES ('x-y', 'x', 'x', '[{}]')")),
       /permission denied/,
@@ -708,8 +702,8 @@ describe('0046 · public_optout, la baja desde el enlace', () => {
       return (await tx.query(`SELECT id FROM outbound_touch WHERE workspace_id = '${WS_A}'`)).rows.length;
     });
     assert.equal(vistas, 0);
-    // Y los enlaces no los lee nadie desde la web: en PGlite, sin privilegio;
-    // en el CI (el rol hereda los de mc_worker), la RLS no enseña los de A.
+    // Y los enlaces no los lee nadie desde la web: sin privilegio (en PGlite
+    // y contra Postgres real, donde la sesión es mc_app desde CIM-2c r6).
     const enlaces = await t.db
       .withWorkspace(WS_B, async (tx) => {
         await tx.query("SELECT set_config('app.public_optout', $1, true)", [sha256(TOKEN)]);
@@ -727,9 +721,8 @@ describe('0046 · public_optout, la baja desde el enlace', () => {
     const soloElDespachador = (e: { code?: string; message?: string }) =>
       e.code === '42501' && /los escribe solo el despachador/.test(e.message ?? '');
 
-    // Un enlace propio no se escribe: la tabla es del despachador (en PGlite
-    // falta el privilegio; en el CI, que hereda los de mc_worker, no hay
-    // ninguna política que deje escribir).
+    // Un enlace propio no se escribe: la tabla es del despachador (a mc_app le
+    // falta el privilegio, y tampoco hay ninguna política que deje escribir).
     await assert.rejects(
       sabotaje(
         `INSERT INTO outbound_optout_link (token_hash, workspace_id, contact_id, recipient_address, sent_at)
@@ -1356,8 +1349,7 @@ describe('0046 · el interruptor, la salud y los días hábiles', () => {
     await assert.rejects(t.db.asWorker((tx) => shouldPauseOutreach(tx as never)), /hay que decir el workspace/);
   });
 
-  test('las llamadas al modelo son una bitácora: la web las anota y no las borra', async (ctx) => {
-    if (!soloEmbebido()) return ctx.skip('los GRANT de mc_app se miden en PGlite: en el CI el rol hereda los de mc_worker');
+  test('las llamadas al modelo son una bitácora: la web las anota y no las borra', async () => {
     await assert.rejects(
       t.db.withWorkspace(WS_A, (tx) => tx.query(`DELETE FROM outbound_llm_call WHERE workspace_id = $1`, [WS_A])),
       /permission denied/,
@@ -1715,7 +1707,7 @@ describe('0046 · techo por canal, processing del despachador, baja global al en
     const despachador = (err: { code?: string; message?: string }) =>
       err.code === '42501' && /processing es del despachador/.test(err.message ?? '');
     assert.equal(WORKER_ONLY_TOUCH_STATUS, 'processing');
-    // Quién cuenta como despachador: el worker sí; la web no (ni con el mc_app_ci del CI, que hereda mc_worker).
+    // Quién cuenta como despachador: el worker sí; la web no (tampoco el mc_app_ci del CI, que puede asumir mc_worker).
     const esDespachador = async (q: typeof e) =>
       ((await q('SELECT outreach_is_dispatcher() AS si')).rows[0] as { si: boolean }).si;
     assert.equal(await esDespachador(e), false);

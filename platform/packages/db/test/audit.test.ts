@@ -11,7 +11,7 @@ import {
   audit, auditAsJob, assertAuditAction, AUDIT_ACTIONS, CORREO_OMITIDO, InvalidAuditActionError, isForbiddenAuditKey,
   sanitizeForAudit, type AuditAction,
 } from '../src/audit.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 /** app_user del seed (0002/0003): Laura Méndez. */
 const USER_LAURA = '00000002-0000-4000-8000-000000000002';
@@ -37,7 +37,7 @@ before(async () => {
     VALUES ('${WORKSPACE_AJENO}', 'workspace-ajeno-bitacora', 'Workspace ajeno', 'creator', 'COP')
     ON CONFLICT DO NOTHING;
   `);
-}, { timeout: 600_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();

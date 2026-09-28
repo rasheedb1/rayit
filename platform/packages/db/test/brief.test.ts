@@ -796,9 +796,14 @@ describe('VEN-7 r3 · el veredicto no recorre el catálogo: 2 000 empresas y 100
     // es chico, la llave de company_link y luego la de company. Las dos
     // son búsquedas por índice; lo que no puede aparecer es el Seq Scan de
     // arriba (hasta la ronda 2, brand_key(co.name) bajo RLS no usaba ninguno).
+    // Contra Postgres 16 real (CIM-2c) el planificador lee company_link
+    // entera cuando es chica (la del CRM de la prueba) y de ahí va a
+    // company por su llave: también es entrar por el CRM, no por el
+    // catálogo. Lo que se prohíbe sigue siendo el Seq Scan sobre company.
+    const porElCrm = plan.some((n) => n['Relation Name'] === 'company_link');
     assert.ok(
-      indices.has('company_name_key_idx') || indices.has('company_link_pkey'),
-      `por nombre usa company_name_key_idx o company_link_pkey (usó: ${usados})`,
+      indices.has('company_name_key_idx') || indices.has('company_link_pkey') || porElCrm,
+      `por nombre usa company_name_key_idx o entra por company_link (usó: ${usados})`,
     );
   });
 

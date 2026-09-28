@@ -230,49 +230,56 @@ const filas = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => …);
 await t.close();
 ```
 
-`openTestDb({ seeds: false })` deja la base vacía. Con
-`TEST_DATABASE_URL` corre contra un Postgres real ya migrado y con seed
-(nunca Supabase: el helper se niega), con el rol de la aplicación; para
-`admin()` hace falta `TEST_DATABASE_ADMIN_URL` con un superusuario o el
-dueño de las tablas. Así corre el CI (`.github/workflows/ci.yml`, job
-«contra-postgres-real»): un rol `mc_app_ci` miembro de `mc_app` y de
-`mc_worker`, y `mc` como administrador. Es lo que ejercita el runner de
-`pg` (BEGIN/COMMIT/ROLLBACK, `set_config` sobre un cliente prestado, la
-devolución al pool) que PGlite no toca. Los paquetes con su propia copia
-del bucle de migraciones (`connectors/test/helpers/pglite.ts`,
-`worker/src/runner/db-pglite.ts`) pueden reemplazarla por este helper
-(CON-2b).
+`openTestDb({ seeds: false })` deja la base vacía (solo en el embebido).
+Con `TEST_DATABASE_URL` corre contra un Postgres real ya migrado y con
+seed (nunca Supabase: el helper se niega). Esa base es el **molde**:
+cada `openTestDb` crea su propia copia con `CREATE DATABASE … TEMPLATE`
+y la borra al cerrar, igual que el embebido le da a cada archivo su
+foto; así ningún archivo cuenta lo que escribió otro y el orden no
+importa. Para crear y borrar las copias, y para `admin()`, hace falta
+`TEST_DATABASE_ADMIN_URL` con un superusuario (o un rol con CREATEDB
+dueño de las tablas), y nadie conectado al molde mientras corren. Así
+corre el CI (`.github/workflows/ci.yml`, job «contra-postgres-real»),
+con `mc_app_ci` como rol de conexión y `mc` como administrador. Es lo
+que ejercita el runner de `pg` (BEGIN/COMMIT/ROLLBACK, `set_config`
+sobre un cliente prestado, la devolución al pool) que PGlite no toca.
+Los paquetes con su propia copia del bucle de migraciones
+(`connectors/test/helpers/pglite.ts`, `worker/src/runner/db-pglite.ts`)
+pueden reemplazarla por este helper (CON-2b).
 
 #### Contra Postgres real, en local
 
 Lo que PGlite no puede probar —dos transacciones que se pisan de
-verdad, como «el bloqueo es de verdad» de `test/outreach.test.ts`, y la
-guardia de `test/esquema.test.ts` fuera del embebido— se corre contra
-un Postgres 16 con el mismo montaje que el CI:
+verdad, como «el bloqueo es de verdad» de `test/outreach.test.ts`, la
+guardia de `test/esquema.test.ts` fuera del embebido, y los GRANT y la
+RLS medidos por el motor de verdad— se corre contra un Postgres 16 con
+el mismo montaje que el CI:
 
 1. `db/montaje-postgres-real.sql`, como superusuario y **antes de
    migrar**: crea mc_app, mc_worker y mc_public_share y le da a mc_app
    las DEFAULT PRIVILEGES que en Supabase tiene mc_migrator. Sin él, las
    tablas las crea el superusuario, mc_app nace sin ningún privilegio y
    la guardia da por cerradas las excepciones declaradas («sobran
-   excepciones declaradas»): no era la guardia, era la base. `make up`
-   lo corre solo; una base de Docker migrada antes de este archivo se
-   rehace con `docker compose down -v && make up`.
+   excepciones declaradas»): no era la guardia, era la base. También
+   crea el rol de conexión de las pruebas, `mc_app_ci`: cada sesión
+   arranca como mc_app (igual que la web en Supabase), y puede asumir
+   mc_worker con `SET ROLE` (asWorker) sin heredar sus privilegios
+   (`WITH INHERIT FALSE`, Postgres 16). `make up` lo corre solo; una
+   base de Docker migrada antes de este archivo se rehace con
+   `docker compose down -v && make up`.
 2. `node db/migrate.mjs <url> --seed`.
-3. El rol de conexión del CI, `mc_app_ci`, miembro de mc_app y de
-   mc_worker (para ejercitar también asWorker).
+3. La base tiene que ser UTF8 con un locale de verdad (`en_US.UTF-8`,
+   como Supabase y la imagen de Docker): con `SQL_ASCII`/`C`, `lower()`
+   no baja las tildes y la búsqueda por nombre de Ventas falla.
 
 Con Docker, desde `platform/`:
 
 ```bash
 make up      # corre db/montaje-postgres-real.sql antes de migrar
 make seed
-docker compose exec -T db psql -U mc -d oncue -c \
-  "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
 TEST_DATABASE_URL=postgres://mc_app_ci:ci@localhost:5432/oncue \
 TEST_DATABASE_ADMIN_URL=postgres://mc:mc@localhost:5432/oncue \
-  pnpm --filter @mc/db exec node --test --experimental-strip-types \
-    --test-isolation=none --test-concurrency=1 test/outreach.test.ts test/esquema.test.ts
+  pnpm --filter @mc/db test
 ```
 
 Sin Docker, cualquier Postgres 16 sirve. El paquete `embedded-postgres`
@@ -282,27 +289,27 @@ temporal, `npm i embedded-postgres@16.14.0-beta.17`):
 ```js
 // arranca.mjs, en esa carpeta: Postgres 16 en el puerto 55437, usuario mc
 import EmbeddedPostgres from 'embedded-postgres';
-const pg = new EmbeddedPostgres({ databaseDir: './data', user: 'mc', password: 'mc', port: 55437, persistent: false });
+const pg = new EmbeddedPostgres({
+  databaseDir: './data', user: 'mc', password: 'mc', port: 55437, persistent: false,
+  initdbFlags: ['--encoding=UTF8', '--locale=en_US.UTF-8'],
+});
 await pg.initialise(); await pg.start(); await pg.createDatabase('oncue');
 setInterval(() => {}, 1 << 30);   // Ctrl+C lo apaga
 ```
 
-y después los tres pasos de arriba con cualquier cliente (no hay psql
-en todas las máquinas: `pg` de este paquete basta) y las variables con
-el puerto 55437. Así se corrió el 23 de septiembre de 2026 (Postgres
-16.14, VEN-9 ronda 5): `outreach.test.ts` 48 en verde y 2 saltadas (las
-de GRANT, que solo se miden en PGlite), dos veces seguidas sobre la
-misma base (los enlaces de baja no se van con su workspace, así que la
-prueba los borra al terminar); `esquema.test.ts` 68 en verde y 8
-saltadas (las que reconstruyen una base a medio migrar o tocan roles).
+y después los dos primeros pasos con cualquier cliente (no hay psql en
+todas las máquinas: `pg` de este paquete basta) y las variables con el
+puerto 55437. Así se corrió el 28 de septiembre de 2026 (Postgres 16.14,
+CIM-2c): `@mc/db` entero, 1 444 pruebas, 0 rojas, en 80 s. Las que se
+saltan contra Postgres real son las que reconstruyen una base a medio
+migrar, crean o tocan roles (son del clúster, no de la copia), crean
+tablas de prueba con el rol que migra en PGlite, o cuentan filas de una
+base sin la demo (`seeds: false`, que el molde no puede dar).
 
-**En el CI** el job `contra-postgres-real` hace lo mismo y corre esos
-dos archivos en su propio paso, que tiene que pasar. El resto de
-`@mc/db` corre después como paso informativo (`continue-on-error`):
-todavía no está en verde contra Postgres real por razones ajenas a
-outreach y a la guardia (mide privilegios de mc_app con un rol que
-hereda los de mc_worker, o cuenta filas sin esperar la demo sembrada).
-Es la historia CIM-2c del backlog.
+**En el CI** el job `contra-postgres-real` hace lo mismo y corre
+`pnpm test` de `@mc/db` entero en un paso que tiene que pasar (CIM-2c,
+pulido r6; antes solo una lista de archivos, con el resto en un paso
+informativo).
 
 ### 7. Bitácora: `audit()` en toda escritura de dinero, publicación o cuenta conectada
 

@@ -91,8 +91,7 @@ after(async () => {
 });
 
 describe('aislamiento por workspace', () => {
-  test('las consultas corren como mc_app, sin BYPASSRLS', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('el rol lo decide TEST_DATABASE_URL');
+  test('las consultas corren como mc_app, sin BYPASSRLS', async () => {
     const { rows } = await t.db.withCatalogs((tx) => tx.query<Who>(WHO_SQL));
     assert.equal(rows[0]?.current_user, 'mc_app');
     assert.equal(rows[0]?.bypass_rls, false);
@@ -153,21 +152,23 @@ describe('aislamiento por workspace', () => {
     assert.equal(pipelineRows[0]?.dueState, 'sin_fecha');
   });
 
-  test('asWorker cruza workspaces (jobs globales) y vuelve a mc_app al terminar', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+  test('asWorker cruza workspaces (jobs globales) y vuelve a mc_app al terminar', async () => {
     const allDeals = await t.db.asWorker(async (tx) => {
       const { rows } = await tx.query<Who>(WHO_SQL);
       assert.equal(rows[0]?.current_user, 'mc_worker');
       assert.equal(rows[0]?.bypass_rls, true);
       return tx.db.select({ id: deal.id }).from(deal);
     });
-    assert.deepEqual(allDeals.map((r) => r.id).sort(), [dealA, dealB].sort());
+    const vistos = allDeals.map((r) => r.id);
+    assert.ok(vistos.includes(dealA) && vistos.includes(dealB), 've los negocios de A y de B');
+    // Contra Postgres real la copia trae además la demo sembrada.
+    if (t.kind === 'pglite') assert.deepEqual(vistos.sort(), [dealA, dealB].sort());
     const { rows } = await t.db.withCatalogs((tx) => tx.query<Who>(WHO_SQL));
     assert.equal(rows[0]?.current_user, 'mc_app', 'SET LOCAL ROLE muere con la transacción');
   });
 
   test('asWorker se niega si el rol de conexión no es miembro de mc_worker (mc_app en producción)', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+    if (t.kind !== 'pglite') return ctx.skip('mc_app_ci puede asumir mc_worker: lo necesita asWorker (db/montaje-postgres-real.sql)');
     // La sesión de PGlite es el superusuario con SET ROLE mc_app, y un
     // superusuario asume cualquier rol: el caso positivo de arriba no
     // demuestra nada sobre mc_app. Aquí la sesión pasa a SER mc_app
@@ -280,7 +281,7 @@ describe('las tablas hijas heredan el aislamiento del padre (0018)', () => {
   });
 
   test('mc_worker sigue viendo las hijas de todos (jobs globales)', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+    if (t.kind !== 'pglite') return ctx.skip('cuenta filas de una base sin la demo (seeds: false); la copia de TEST_DATABASE_URL la trae sembrada');
     assert.equal(await t.db.asWorker((tx) => countRows(tx, 'quote_item')), 1);
   });
 });
@@ -418,6 +419,9 @@ describe('membership y contact: las dos tablas que 0019 cerró', () => {
   });
 
   test('membership: desde ningún workspace se edita ni se borra una membresía', async () => {
+    // Antes y después, no un número fijo: contra Postgres real (CIM-2c) la
+    // base trae la demo sembrada y hay más membresías que las dos de aquí.
+    const antes = await t.db.asWorker((tx) => countRows(tx, 'membership'));
     for (const ws of [WS_A, WS_B]) {
       await assert.rejects(
         t.db.withWorkspace(ws, (tx) => tx.db.update(membership).set({ roleId: sql`system_role_id('creator', 'owner')` }).where(eq(membership.userId, USER_A))),
@@ -428,11 +432,11 @@ describe('membership y contact: las dos tablas que 0019 cerró', () => {
         isRechazada,
       );
     }
-    assert.equal(await t.db.asWorker((tx) => countRows(tx, 'membership')).catch(() => 2), 2);
+    assert.equal(await t.db.asWorker((tx) => countRows(tx, 'membership')), antes);
   });
 
   test('membership: mc_worker las ve todas (es como CIM-3 leerá "a qué workspaces pertenezco")', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+    if (t.kind !== 'pglite') return ctx.skip('cuenta filas de una base sin la demo (seeds: false); la copia de TEST_DATABASE_URL la trae sembrada');
     assert.equal(await t.db.asWorker((tx) => countRows(tx, 'membership')), 2);
   });
 
@@ -625,16 +629,14 @@ describe('contact: la PII tiene dueño, y la baja es definitiva (0020)', () => {
     assert.equal(deB?.email, 'beto@hogarlindo.co');
   });
 
-  test('…y el worker sí, porque salta RLS (es como el outreach respeta la baja)', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+  test('…y el worker sí, porque salta RLS (es como el outreach respeta la baja)', async () => {
     const [victima] = (await contactosDe(WS_B)).filter((r) => r.email === 'beto@hogarlindo.co');
     await t.db.asWorker((tx) => tx.query('UPDATE contact SET opted_out = true, opted_out_at = now() WHERE id = $1', [victima!.id]));
     const deB = (await contactosDe(WS_B)).find((r) => r.id === victima!.id);
     assert.equal(deB?.optedOut, true);
   });
 
-  test('mc_worker sigue viendo y escribiendo los de todos (rebotes, bajas globales)', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+  test('mc_worker sigue viendo y escribiendo los de todos (rebotes, bajas globales)', async () => {
     const n = await t.db.asWorker((tx) => countRows(tx, 'contact'));
     assert.ok(n >= 3, `el worker ve ${n} contactos, de todos los workspaces`);
     await t.db.asWorker((tx) => tx.query('UPDATE contact SET bounced = true WHERE id = $1', [contactoDeA]));
@@ -1214,8 +1216,7 @@ describe('endurecimiento (0024): workspace, app_user, company, catálogos y la b
       );
     });
 
-    test('mc_worker las sigue viendo todas: es como se mide la cuota global', async (ctx) => {
-      if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+    test('mc_worker las sigue viendo todas: es como se mide la cuota global', async () => {
       assert.ok((await t.db.asWorker((tx) => countRows(tx, 'api_call_log'))) >= 4);
       assert.equal(await t.db.asWorker((tx) => countRows(tx, 'api_quota_usage')), 3);
     });
@@ -1356,8 +1357,7 @@ describe('las hijas con clave ajena opcional (0024 §6)', () => {
     }
   });
 
-  test('mc_worker las sigue viendo todas: es como el radar compara', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('requiere membresía en mc_worker');
+  test('mc_worker las sigue viendo todas: es como el radar compara', async () => {
     const n = await t.db.asWorker((tx) => countRows(tx, 'external_post'));
     assert.equal(n, 2);
   });
@@ -1845,8 +1845,7 @@ describe('las métricas propias y la auditoría no se reescriben desde la aplica
     await assert.rejects(insertar(WS_B), isReferenciaInvisible);
   });
 
-  test('y el worker las sigue escribiendo, con sus propios GRANT (0014)', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+  test('y el worker las sigue escribiendo, con sus propios GRANT (0014)', async () => {
     await t.db.asWorker((tx) =>
       tx.query("INSERT INTO job_run (job_id, status, attempt) SELECT id, 'skipped', 1 FROM job_definition LIMIT 1"),
     );
@@ -2037,8 +2036,7 @@ describe('la baja global la llena solo una baja verificada, no el CRM de un work
     assert.deepEqual(rows, [{ opted_out: true }]);
   });
 
-  test('una baja VERIFICADA la registra el worker, y entonces el contacto que cualquiera guarde nace dado de baja', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+  test('una baja VERIFICADA la registra el worker, y entonces el contacto que cualquiera guarde nace dado de baja', async () => {
     // El enlace de baja lo pulsó la persona: el worker lo procesa.
     await t.db.asWorker((tx) =>
       tx.query("INSERT INTO contact_suppression (email, reason) VALUES ($1, 'unsubscribe_link')", [VERIFICADO]),
@@ -2050,8 +2048,7 @@ describe('la baja global la llena solo una baja verificada, no el CRM de un work
     }
   });
 
-  test('la lista no acepta una baja sin procedencia verificable, ni siquiera del worker', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+  test('la lista no acepta una baja sin procedencia verificable, ni siquiera del worker', async () => {
     await assert.rejects(
       t.db.asWorker((tx) =>
         tx.query("INSERT INTO contact_suppression (email, reason) VALUES ('alguien@marca-0029.co', 'opted_out')"),
@@ -2060,8 +2057,7 @@ describe('la baja global la llena solo una baja verificada, no el CRM de un work
     );
   });
 
-  test('y el correo que B marcó en su CRM no está en la lista: la llenó solo el worker', async (ctx) => {
-    if (t.kind !== 'pglite') return ctx.skip('la membresía en mc_worker la decide TEST_DATABASE_URL');
+  test('y el correo que B marcó en su CRM no está en la lista: la llenó solo el worker', async () => {
     const { rows } = await t.db.asWorker((tx) =>
       tx.query<{ email: string }>("SELECT email::text AS email FROM contact_suppression WHERE email LIKE '%marca-0029.co' ORDER BY 1"),
     );

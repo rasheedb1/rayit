@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { assertScopeAllows, assertUnscoped, getScopeKinds, ScopeError, scopeFilter, type WorkspaceTx } from '../src/index.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 import { CAMPAIGN_SOFIA, CREATOR_LAURA, CREATOR_SOFIA, EMPRESA_SOFIA, sembrarAlcance, USER_LAURA, USER_MIEMBRO } from './alcance.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-00000000a1ca';
@@ -35,7 +35,7 @@ before(async () => {
     INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
     VALUES ('${WORKSPACE_AJENO}', '${USER_AJENO}', 'creator', '${CREATOR_SOFIA}') ON CONFLICT DO NOTHING;
   `);
-}, { timeout: 600_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();

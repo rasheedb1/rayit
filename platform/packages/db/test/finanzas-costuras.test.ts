@@ -55,7 +55,7 @@ import {
 } from '../src/queries/finanzas.ts';
 import { getDefaultTaxRate } from '../src/queries/cotizar/cotizacion.ts';
 import {
-  openTestDb, type TestDb,
+  openTestDb, SETUP_TIMEOUT, type TestDb,
   WORKSPACE_LAURA, CAMPAIGN_FRESKO, COMPANY_CAFE_ALMA, INVOICE_FV_2026_010,
 } from './pglite.ts';
 
@@ -70,7 +70,7 @@ let t: TestDb;
 
 before(async () => {
   t = await openTestDb();
-}, { timeout: 300_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t?.close();
