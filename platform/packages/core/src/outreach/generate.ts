@@ -11,12 +11,12 @@
  * El prompt se arma aquí, puro y probado; el modelo va detrás de LlmClient
  * (llm.ts). La regeneración recibe una de las pistas cerradas.
  */
-import { readFileSync } from 'node:fs';
 import { briefOfferLines } from '../brief.ts';
 import type { ClaimSource, SalesClaim } from './claims.ts';
 import { GENERATION_MAX_TOKENS, OUTREACH_MODELS, LlmOutputError, readLlmResponse, type LlmCallOptions, type LlmClient } from './llm.ts';
 import { STEP_LENGTH, type RegenerateHint } from './preflight.ts';
 import { SUBJECT_MAX_WORDS, SUBJECT_MIN_WORDS } from './gates.ts';
+import { PROMPTS, type PromptName } from './prompts.gen.ts';
 
 export type GenerationLang = 'es' | 'en';
 
@@ -108,16 +108,16 @@ export interface MessageGenerator {
 // Los prompts
 // ---------------------------------------------------------------------
 
-const promptCache = new Map<string, string>();
-
-/** Lee un prompt de prompts/*.md (solo en el servidor: el worker). */
-export function loadPrompt(name: 'generate' | 'judge' | 'classify'): string {
-  let p = promptCache.get(name);
-  if (p === undefined) {
-    p = readFileSync(new URL(`./prompts/${name}.md`, import.meta.url), 'utf8');
-    promptCache.set(name, p);
-  }
-  return p;
+/**
+ * Un prompt de prompts/*.md. Se lee de la copia incrustada
+ * (prompts.gen.ts), no del archivo: dentro del bundle de Next (el turno
+ * del worker en Vercel, CIM-7) import.meta.url apunta a la máquina del
+ * build y un readFileSync daría ENOENT. Los .md siguen siendo la fuente;
+ * `make core.prompts` regenera la copia y test/outreach-prompts.test.ts
+ * falla si divergen.
+ */
+export function loadPrompt(name: PromptName): string {
+  return PROMPTS[name];
 }
 
 /** Sustituye los %%nombre%% de un prompt. */

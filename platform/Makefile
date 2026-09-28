@@ -7,7 +7,7 @@ DB_URL ?= postgres://mc:mc@localhost:5432/oncue
         github.set github.install github.install-forzado github.mine github.uninstall \
         github.status github.check \
         vercel.set vercel.dir vercel.link vercel.rename vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
-        cron.install cron.status cron.uninstall \
+        cron.install cron.status cron.uninstall core.prompts \
         verificar arranque
 
 help: ## Muestra esta ayuda
@@ -133,6 +133,9 @@ db.cert: ## Vuelve a bajar el certificado raíz de Supabase (y la copia embebida
 # si no está en el entorno; APP_URL, por defecto la de producción.
 # Detalle y cómo pasar a Vercel Cron: apps/worker/README.md, «Por turnos».
 # =====================================================================
+
+core.prompts: ## Regenera la copia incrustada de los prompts de outreach (tras editar packages/core/src/outreach/prompts/*.md)
+	@node packages/core/scripts/embed-prompts.mjs
 
 cron.install: ## Programa el turno del worker cada minuto (pg_cron -> /api/cron/tick). Idempotente
 	@./scripts/cron-tick.sh install
