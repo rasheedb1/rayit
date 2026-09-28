@@ -26,7 +26,7 @@ import {
 } from '../src/index.ts';
 import { LARGO_SLUG } from '../src/queries/cotizar.ts';
 import {
-  openTestDb, type TestDb,
+  openTestDb, SETUP_TIMEOUT, type TestDb,
   WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO, CAMPAIGN_HOGAR_LINDO, POST_D01_REEL_CAFE_ALMA,
 } from './pglite.ts';
 
@@ -56,7 +56,7 @@ before(async () => {
            ('${CAMPAIGN_CANCELADA}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', 'Cancelada', 'cancelled', DATE '2026-05-01', DATE '2026-05-08')
     ON CONFLICT DO NOTHING;
   `);
-});
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t.close();

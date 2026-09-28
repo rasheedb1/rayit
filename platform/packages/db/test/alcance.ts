@@ -33,7 +33,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { WorkspaceTx } from '../src/client.ts';
-import { openTestDb, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, type TestDb } from './pglite.ts';
+import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, type TestDb } from './pglite.ts';
 
 export const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
 /** La persona del seed: dueña del workspace, sin alcance. */
@@ -269,7 +269,7 @@ export function definirPruebasDeAlcance(
       await sembrarAlcance(t);
       if (sembrarExtra) await sembrarExtra(t);
       antes = await huella(t);
-    }, { timeout: 600_000 });
+    }, SETUP_TIMEOUT);
 
     after(async () => {
       await t.close();

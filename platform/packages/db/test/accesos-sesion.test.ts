@@ -15,7 +15,7 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { permisosDeRol, type RoleKey, type WorkspaceKind } from '@mc/core';
 import { getSessionPermissions } from '../src/queries/accesos.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 /** Laura Méndez, dueña del espacio del seed (db/seed/0002). */
 const LAURA = '00000002-0000-4000-8000-000000000002';
@@ -46,7 +46,7 @@ before(async () => {
     INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS_AGENCIA}', '${AGENTE}', system_role_id('agency', 'admin'));
     SELECT set_config('app.workspace_id', '', false);
   `);
-}, { timeout: 120_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await t?.close();

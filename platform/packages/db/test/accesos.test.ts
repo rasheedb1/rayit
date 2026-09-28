@@ -35,7 +35,7 @@ import { MIGRATIONS_DIR } from '../../../db/lib/aplicar.mjs';
 import type { BaseTx, WorkspaceTx } from '../src/client.ts';
 import { createEmbeddedDb } from '../src/embedded.ts';
 import { listMyWorkspaces } from '../src/queries/identidad.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 import { PERMISOS, ROLES_SISTEMA } from '@mc/core';
 import { generarSemillaSql } from '@mc/core/scripts/permisos-sql.ts';
 
@@ -76,9 +76,9 @@ const conteo = (tx: BaseTx, sql: string) => tx.query<Fila>(sql).then((r) => r.ro
  * primer archivo del paquete en abrirla: paga el arranque en frío del
  * WASM de PGlite. Con la máquina cargada eso pasa de los 120 s de
  * --test-timeout y, con --test-isolation=none, la cancelación arrastra
- * la suite entera. Diez minutos por bloque, como el `before`.
+ * la suite entera. El mismo techo que el arranque de todos (SETUP_TIMEOUT).
  */
-const TIEMPO_BLOQUE = 600_000;
+const TIEMPO_BLOQUE = SETUP_TIMEOUT.timeout;
 
 let t: TestDb;
 let sqlMigracion = '';

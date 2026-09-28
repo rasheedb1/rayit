@@ -10,7 +10,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getAccountAudience, listAccountAudience } from '../src/index.ts';
-import { openTestDb, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const WORKSPACE_VECINO = '00000007-0000-4000-8000-0000000000c1';
 const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
@@ -46,7 +46,7 @@ before(async () => {
     INSERT INTO metric_gap (workspace_id, connection_id, metric_group, requirement_id, day) VALUES
       ('${WORKSPACE_LAURA}', '${CONN_TT}', 'demografia_de_cuenta', 'tt.audience.auth', '2026-09-23');
   `);
-});
+}, SETUP_TIMEOUT);
 after(async () => { await t.close(); });
 
 describe('la última demografía de una cuenta', () => {

@@ -59,6 +59,11 @@ export const POST_D05_YOUTUBE_NUTRIVE = '00000002-0000-4000-8000-000000000d05';
  * 40-60), migrar pasaba de dos minutos y, como con --test-isolation=none
  * todos los archivos comparten la raíz y sus `before` corren antes de la
  * primera prueba, uno lento tumbaba a todos (falsos rojos masivos).
+ *
+ * Es el ÚNICO techo del arranque (CIM-12, pulido r6): todo `before` que
+ * abre la base lo usa, sin un número propio. El primero en orden
+ * alfabético (accesos-sesion) paga además la foto compartida de migrar y
+ * sembrar, y con 120 s propios canceló la suite entera bajo carga.
  */
 export const SETUP_TIMEOUT = { timeout: 900_000 } as const;
 
