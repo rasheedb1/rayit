@@ -216,7 +216,8 @@ export async function loadSendContext(tx: WorkerSql, touchId: string): Promise<S
               c.full_name AS contact_name, co.name AS company_name,
               e.status AS enrollment_status, e.resume_at, s.status AS sequence_status,
               (coalesce(c.opted_out, false) OR address_is_suppressed(c.email)
-                 OR address_is_suppressed(t.recipient_address)) AS opted_out,
+                 OR address_is_suppressed(t.recipient_address)
+                 OR outreach_handles_opted_out(t.workspace_id, t.contact_id, t.channel, t.recipient_address)) AS opted_out,
               ${DEAL_CLOSED_SQL('t', 'e')} AS deal_closed,
               coalesce(p.enabled, false) AS enabled, p.postal_address, coalesce(p.require_optout_link, true) AS require_optout_link,
               p.send_window_start::text AS w_start, p.send_window_end::text AS w_end, w.country AS w_country,

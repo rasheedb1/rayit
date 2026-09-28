@@ -387,7 +387,8 @@ async function senderAccounts(tx: WorkerSql, c: Candidate): Promise<SenderAccoun
  * Si la persona de un toque pidió la baja, con la misma definición que
  * enforce_outbound_optout (0046 §4.1 y 0055 §8.3): la ficha dada de baja,
  * su correo o la dirección del envío en la lista global, o cualquiera de
- * los dos en la lista del workspace del toque. Aquí no hay RLS: el
+ * los dos en la lista del workspace del toque, o su LinkedIn, su
+ * Instagram o la dirección del envío en la de perfiles (0077). Aquí no hay RLS: el
  * workspace es el del toque, explícito.
  */
 const OPTED_OUT_SQL = (t: string) => `(
@@ -396,7 +397,8 @@ const OPTED_OUT_SQL = (t: string) => `(
   OR EXISTS (SELECT 1 FROM outbound_workspace_optout o
               WHERE o.workspace_id = ${t}.workspace_id
                 AND (o.email = ${t}.recipient_address
-                     OR o.email = (SELECT c.email FROM contact c WHERE c.id = ${t}.contact_id))))`;
+                     OR o.email = (SELECT c.email FROM contact c WHERE c.id = ${t}.contact_id)))
+  OR outreach_handles_opted_out(${t}.workspace_id, ${t}.contact_id, ${t}.channel, ${t}.recipient_address))`;
 
 /**
  * Si un correo va a una dirección que rebotó, con la definición de

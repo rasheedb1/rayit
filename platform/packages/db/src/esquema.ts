@@ -359,8 +359,9 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
   'outbound_workspace_optout_record(uuid,text)':
     'la baja por respuesta (reply) o marcada a mano (manual) queda también en la dirección (entregabilidad §8.4): ' +
     'mc_app no tiene INSERT en outbound_workspace_optout. Solo el workspace de la transacción (sin él, 42501), solo el ' +
-    'correo de una ficha que ese workspace ve (contact_visible_to), y nunca borra ni cambia una fila: lo peor que ' +
-    'hace un workspace con ella es dejar de escribirse a sí mismo. EXECUTE solo para mc_app. No es de ningún disparador',
+    'correo, y desde 0077 el LinkedIn y el Instagram (outbound_workspace_optout_handle), de una ficha que ese ' +
+    'workspace ve (contact_visible_to), y nunca borra ni cambia una fila: lo peor que hace un workspace con ella es ' +
+    'dejar de escribirse a sí mismo. EXECUTE solo para mc_app. No es de ningún disparador',
   // La reserva del tope del modelo desde la web: «Recalcular» del perfil (0075, pulido r3 de VEN-11) y
   // «Proponer cadencia» (pulido r4 de VEN-13).
   'outbound_llm_reserve_web(text,numeric)':
@@ -373,6 +374,10 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'suelta una reserva de la web al registrar la llamada, o si no se hizo (0075): solo purpose profile o recommend ' +
     'del workspace de la transacción; las del worker (generate, judge) no las toca. Lo peor que hace un workspace con ' +
     'ella es soltarse su propia reserva. EXECUTE solo para mc_app. No es de ningún disparador',
+  'contact_optout_handles()':
+    'la función del disparador contact.contact_optout_handles (0077, VEN-15): al quedar de baja una ficha propia, por ' +
+    'la vía que sea (también el enlace con mc_public_share), su LinkedIn y su Instagram entran en ' +
+    'outbound_workspace_optout_handle de su workspace. Solo inserta a partir de NEW; nunca borra. EXECUTE revocado',
   'deal_closed_stops_outreach()':
     'la función del disparador deal.deal_closed_stops_outreach (0076, VEN-10): al ganar un negocio cierra las ' +
     'cadencias vivas de ese negocio y de su marca y cancela sus toques pendientes; al perderlo, las de ese negocio. ' +
@@ -447,6 +452,11 @@ export const FUNCIONES_QUE_USA_EL_CODIGO: Readonly<Record<string, string>> = {
     '0040_scope_allows: el alcance por creador, marca o campaña que compone cada consulta de Campañas, Finanzas y ' +
     'Conexiones (src/scope.ts, ACC-6)',
   'scope_allows(text,uuid[])': '0040_scope_allows: la misma pregunta para una relación uno-a-muchos (las campañas de un post)',
+  'outreach_handle_key(text,text)':
+    '0077_baja_por_perfil: la forma comparable de un LinkedIn o un Instagram, para la baja por perfil (inbound.ts)',
+  'outreach_handles_opted_out(uuid,uuid,text,text)':
+    '0077_baja_por_perfil: el reclamo, la relectura antes de enviar, enrollContacts y la etiqueta «de baja» de Ventas ' +
+    'miran la baja por perfil con la misma regla que los disparadores',
 };
 
 /**
@@ -495,6 +505,10 @@ export const DISPARADORES_DEFINER_DECLARADOS: Readonly<Record<string, string>> =
   'contact.contact_optout_keep':
     'guarda la baja en la dirección cuando se borra una ficha de baja (entregabilidad §8.4): borrarla y crearla otra ' +
     'vez con el mismo correo no la deja contactable. Solo inserta su correo en la lista de SU workspace, si existe',
+  'contact.contact_optout_handles':
+    'la baja de una ficha sin correo vive también en su perfil (0077, VEN-15): quien escribe la ficha (mc_app, ' +
+    'mc_public_share en el enlace) no tiene INSERT en outbound_workspace_optout_handle. Solo inserta el LinkedIn y el ' +
+    'Instagram de NEW en la lista de su propio workspace: lo peor que hace es dejar de escribirle a esa persona',
   'deal.deal_closed_stops_outreach':
     'ganar o perder un negocio detiene su cadencia (0076, VEN-10): la aceptación desde el enlace público corre como ' +
     'mc_public_share, sin privilegios en outbound_*. Solo el workspace del negocio, y solo cancela toques pendientes ' +
@@ -1151,6 +1165,13 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'a quién no le vuelve a escribir este workspace porque pulsó el enlace de baja de uno de sus correos, pidió la baja ' +
       'respondiendo o se la marcaron a mano (entregabilidad §8 y §8.4). La escriben solo public_optout y ' +
       'outbound_workspace_optout_record: con escritura, un workspace se quitaría una baja o se la pondría a otro',
+  },
+  outbound_workspace_optout_handle: {
+    permite: ['SELECT'],
+    motivo:
+      'el LinkedIn o el Instagram al que este workspace no vuelve a escribir (0077): la hermana de ' +
+      'outbound_workspace_optout. La escriben outbound_workspace_optout_record, contact_optout_handles y el worker: con ' +
+      'escritura, un workspace se quitaría una baja o se la pondría a otro',
   },
   outbound_generation: {
     permite: ['SELECT'],

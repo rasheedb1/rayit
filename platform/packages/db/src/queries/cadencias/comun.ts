@@ -57,14 +57,16 @@ export function isMessageStep(stepType: string): boolean {
  * Si la persona `c` está de baja: la ficha, la lista global de
  * direcciones, un enrolamiento que terminó en baja o el enlace de baja de
  * un correo de este espacio (outbound_workspace_optout, la que el
- * disparador de 0055 hace cumplir al enrolar). Una sola expresión para la
+ * disparador de 0055 hace cumplir al enrolar), o su LinkedIn o su
+ * Instagram en la de perfiles (0077). Una sola expresión para la
  * etiqueta de la pantalla, la comprobación de «Activar» y «Enrolar» y la
  * cuenta de personas alcanzables de listProposableSignals.
  */
 export const CONTACT_OPTED_OUT_EXPR = (ws: string) => `(c.opted_out OR address_is_suppressed(c.email)
               OR EXISTS (SELECT 1 FROM outbound_enrollment e WHERE e.contact_id = c.id AND e.status = 'opted_out')
               OR EXISTS (SELECT 1 FROM outbound_workspace_optout o
-                          WHERE o.workspace_id = ${ws} AND o.email = c.email))`;
+                          WHERE o.workspace_id = ${ws} AND o.email = c.email)
+              OR outreach_handles_opted_out(${ws}, c.id, NULL, NULL))`;
 
 // ---------------------------------------------------------------------
 // Errores

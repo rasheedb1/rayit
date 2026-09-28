@@ -240,7 +240,8 @@ export async function enrollContacts(tx: WorkspaceTx | WorkerSql, input: EnrollI
       `SELECT c.id, c.company_id, c.full_name, c.role_title, c.email::text AS email, c.linkedin_url, c.instagram_handle,
               c.opted_out, address_is_suppressed(c.email) AS suppressed, c.email_invalid, co.name AS company,
               EXISTS (SELECT 1 FROM outbound_enrollment e
-                       WHERE e.contact_id = c.id AND e.workspace_id = $2::uuid AND e.status = 'opted_out') AS ws_opted_out,
+                       WHERE e.contact_id = c.id AND e.workspace_id = $2::uuid AND e.status = 'opted_out')
+                OR outreach_handles_opted_out($2::uuid, c.id, NULL, NULL) AS ws_opted_out,
               ${briefCompanyVerdictSql('c.company_id', '$2::uuid', '$3::uuid')} AS brief_verdict
          FROM contact c JOIN company co ON co.id = c.company_id
         WHERE c.id = ANY($1::uuid[]) AND contact_visible_to(c.id, $2::uuid)`,
