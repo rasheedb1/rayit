@@ -11,6 +11,7 @@
  * Este archivo llega al cliente: no importa nada de @mc/db.
  */
 import type { PreflightCode, RegenerateHint } from "@mc/core/outreach/preflight";
+import { tituloDeVentas } from "../_lib/titulo";
 
 const reglas = new Intl.PluralRules("es");
 function plural(n: number, one: string, other: string): string {
@@ -29,7 +30,7 @@ export type MotivoCategoria =
   | "persona";
 
 export const MESSAGES = {
-  metaTitle: "Aprobaciones",
+  metaTitle: tituloDeVentas("Aprobaciones"),
   header: {
     eyebrow: "Ventas · aprobaciones",
     title: "Lo que espera tu visto bueno",

@@ -17,6 +17,7 @@
 import type {
   CancelSkipCode, ChannelProvider, OutboundChannel, RetrySkipCode, SequenceHealthLevel, TouchStatus, UsageLevel, UsageOffReason,
 } from "@mc/db/queries/actividad";
+import { tituloDeVentas } from "../_lib/titulo";
 
 /**
  * El idioma de estos textos. Sus reglas de plural son las del idioma en
@@ -49,7 +50,7 @@ export type MotivoCode =
   | "sent_confirmed_by_user" | "paused" | "cooldown" | "deal_won" | "deal_lost";
 
 export const MESSAGES = {
-  metaTitle: "Actividad",
+  metaTitle: tituloDeVentas("Actividad"),
   header: {
     eyebrow: "Ventas",
     title: "Actividad",

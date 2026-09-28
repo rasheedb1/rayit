@@ -1,4 +1,5 @@
 import type { VentasErrorCode } from "@mc/db/queries/ventas";
+import { MODULO_VENTAS, tituloDeVentas } from "./titulo";
 
 /**
  * Los topes del brief (BRIEF_LIMITS de @mc/db) ya formateados con el
@@ -49,7 +50,7 @@ export const MESSAGES = {
     description:
       "El radar te trae marcas que encajan con lo que haces; el tablero dice en qué etapa está cada negocio y qué toca hacer hoy.",
     /** El título de la pestaña del navegador. */
-    metaTitle: "Ventas",
+    metaTitle: MODULO_VENTAS,
     /** El enlace a /ventas/politica (VEN-15). */
     politica: "Política de envío",
     /**
@@ -372,7 +373,7 @@ export const MESSAGES = {
 
   empresas: {
     title: "Empresas",
-    metaTitle: "Empresas · Ventas",
+    metaTitle: tituloDeVentas("Empresas"),
     searchPlaceholder: "Café Alma, cafealma.co",
     meta: (n: number) => `${n} ${n === 1 ? "empresa" : "empresas"}`,
     search: "Buscar por nombre o dominio",
@@ -414,7 +415,7 @@ export const MESSAGES = {
     hiddenSignals: (n: string, count: number) => `${n} ${count === 1 ? "señal oculta" : "señales ocultas"} por tu brief`,
 
     form: {
-      metaTitle: "Nueva empresa · Ventas",
+      metaTitle: tituloDeVentas("Nueva empresa"),
       domainPlaceholder: "cafealma.co",
       title: "Nueva empresa",
       help: "Una marca con la que hablas o quieres hablar. Si su dominio ya está en el catálogo, se vincula esa en vez de crear otra.",
@@ -448,9 +449,9 @@ export const MESSAGES = {
 
     detail: {
       /** Solo si la empresa no se pudo leer; la pestaña lleva su nombre (metaTitleOf). */
-      metaTitle: "Empresa · Ventas",
+      metaTitle: tituloDeVentas("Empresa"),
       /** Con varias fichas abiertas, cada pestaña dice de quién es (pulido r8). */
-      metaTitleOf: (name: string) => `${name} · Ventas`,
+      metaTitleOf: (name: string) => tituloDeVentas(name),
       breadcrumb: "Ruta",
       empty: "—",
       data: "Datos",
@@ -680,7 +681,7 @@ export const MESSAGES = {
    * una preferencia.
    */
   brief: {
-    metaTitle: "Brief · Ventas",
+    metaTitle: tituloDeVentas("Brief"),
     eyebrow: "Ventas",
     title: "Qué buscas y qué no aceptas",
     description:

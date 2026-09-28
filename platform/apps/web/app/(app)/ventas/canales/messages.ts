@@ -17,9 +17,10 @@
  * traduce aquí al pintar (_lib/filas.ts, REASON_BY_CODE).
  */
 import { CANALES_TEXTOS } from "@mc/core";
+import { tituloDeVentas } from "../_lib/titulo";
 
 export const MESSAGES = {
-  meta: { title: "Canales para escribir a marcas" },
+  meta: { title: tituloDeVentas("Canales para escribir a marcas") },
   header: {
     eyebrow: "Ventas",
     title: "Canales",

@@ -18,6 +18,7 @@ import type {
 } from "@mc/core/outreach/perfil";
 import type { NarrativeFallback } from "@mc/core/outreach/narrativa";
 import type { NarrativeSource } from "@mc/core/outreach/perfil-guardado";
+import { tituloDeVentas } from "../_lib/titulo";
 
 const reglas = new Intl.PluralRules("es");
 /** La forma de una frase según la cifra, con las reglas del idioma de estos textos. */
@@ -73,7 +74,7 @@ const SIN_RASGO: Record<WhyAxis, Record<string, string>> = {
 export type CampaignClaimKey = Extract<ClaimKey, `campaign.${string}`>;
 
 export const MESSAGES = {
-  metaTitle: "Perfil comercial",
+  metaTitle: tituloDeVentas("Perfil comercial"),
   header: {
     eyebrow: "Ventas · perfil comercial",
     title: "Cómo te presentas ante una marca",
