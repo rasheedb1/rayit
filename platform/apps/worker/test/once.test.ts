@@ -19,7 +19,7 @@ import { lastTick } from '../src/runner/cron.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { loadJobDefinitions } from '../src/runner/definitions.ts';
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
-import { NO_RETRY_KEY, onceExitCode, runOnce, TICK_CUT_KEY, type OnceSummary } from '../src/runner/once.ts';
+import { MAX_TICK_CUTS, NO_RETRY_KEY, onceExitCode, runOnce, TICK_CUT_KEY, type OnceSummary } from '../src/runner/once.ts';
 import { defineJob } from '../src/runner/registry.ts';
 import { formatHealth } from '../src/runner/salud.ts';
 import { jobRuns, openTestDatabase, testConfig } from './helpers/harness.ts';
@@ -120,15 +120,11 @@ test('1 · la primera pasada corre lo vencido, encadena lo de abajo y anota el f
   assert.doesNotMatch(JSON.stringify(arribaRun?.metadata), /NO-DEBE-GUARDARSE/, 'el redactor también corre en --once');
 });
 
-test('2 · la segunda pasada no repite lo ya corrido y reintenta lo que falló (pasada su espera)', async () => {
+test('2 · la segunda pasada no repite lo ya corrido y reintenta lo que falló, sin esperar backoff (--once no lo pide)', async () => {
   const antes = { ...calls };
-  // Enseguida, el fallo espera su backoff (WORKER_RETRY_DELAY_S=1 en testConfig): nada corre.
-  const pronto = await pasada();
-  assert.deepEqual(pronto.runs.map((r) => r.job), []);
-  assert.equal(reasons(pronto)['test.once_falla'], 'backoff');
-  assert.equal(reasons(pronto)['test.once_parcial'], 'backoff');
-  // Dos segundos después, sí.
-  const s = await pasada({ now: () => new Date(Date.now() + 2_000) });
+  // Enseguida, aunque WORKER_RETRY_DELAY_S=1 en testConfig: --once reintenta en la pasada siguiente,
+  // como antes de CIM-7. La espera entre reintentos solo la pide el turno (test/tick.test.ts).
+  const s = await pasada();
   assert.deepEqual(s.runs.map((r) => [r.job, r.reason, r.status]), [['test.once_falla', 'retry', 'failed'], ['test.once_parcial', 'retry', 'partial']],
     'partial se reintenta (retryOnItemFailure por defecto), como en pg-boss');
   assert.equal(reasons(s)['test.once_cuota'], 'up_to_date', 'retry: false no se reintenta: la pasada lo da por cubierto');
@@ -298,4 +294,33 @@ test('11 · la salud no cuenta como fallo un corte del turno (CIM-7): se retoma,
   const despues = (await getWorkerHealth(db)).find((x) => x.jobId === 'test.once_arriba');
   assert.equal(despues?.failedSinceOk, 1);
   assert.equal(despues?.lastCut, false);
+});
+
+test(`12 · un job que no cabe en el turno (${MAX_TICK_CUTS} cortes o más sin terminar bien) se enseña como tal, no como «se retoma»`, async () => {
+  // test.once_vacio terminó bien en la pasada 1; después, cortes seguidos del turno, como los de compute.baseline
+  // con una sentencia de más de 45 s que statement_timeout corta siempre.
+  const cortes = (n: number, desde: number) => db.raw.query(
+    `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, error, metadata)
+     SELECT 'test.once_vacio', 'failed', 1, now() + make_interval(secs => $2 + g), now() + make_interval(secs => $2 + g), 'timeout', $1::jsonb
+       FROM generate_series(1, $3::int) g`,
+    [JSON.stringify({ [TICK_CUT_KEY]: true }), desde, n],
+  );
+  await cortes(MAX_TICK_CUTS - 1, 10);
+  let h = (await getWorkerHealth(db)).find((x) => x.jobId === 'test.once_vacio')!;
+  assert.equal(h.cutsSinceOk, MAX_TICK_CUTS - 1);
+  assert.match(formatHealth([h], new Date()), /test\.once_vacio\s+cortado por el turno, se retoma /, 'por debajo del tope, todavía se retoma');
+
+  await cortes(1, 100);
+  h = (await getWorkerHealth(db)).find((x) => x.jobId === 'test.once_vacio')!;
+  assert.equal(h.cutsSinceOk, MAX_TICK_CUTS);
+  assert.equal(h.failedSinceOk, 0, 'siguen sin ser fallos del job');
+  const texto = formatHealth([h], new Date());
+  assert.match(texto, new RegExp(`test\\.once_vacio\\s+no cabe en el turno \\(${MAX_TICK_CUTS} cortes\\): súbelo a Pro o pártelo · último corte `));
+  assert.doesNotMatch(texto, /se retoma/);
+
+  // Una corrida buena pone la cuenta a cero.
+  await db.raw.query(
+    `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at) VALUES ('test.once_vacio', 'ok', 1, now() + interval '200 seconds', now() + interval '201 seconds')`,
+  );
+  assert.equal((await getWorkerHealth(db)).find((x) => x.jobId === 'test.once_vacio')?.cutsSinceOk, 0);
 });

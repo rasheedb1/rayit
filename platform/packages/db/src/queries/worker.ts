@@ -49,6 +49,13 @@ export interface WorkerJobHealth {
   failedSinceOk: number;
   /** La última corrida la cortó el presupuesto de un turno (CIM-7): se retoma, no falló. */
   lastCut: boolean;
+  /**
+   * Cortes del turno desde lastOkAt (todos, si nunca terminó bien). Uno
+   * que se retoma y avanza termina bien en unos pocos; con MAX_TICK_CUTS
+   * o más, el job no cabe en el turno y no se va a retomar: cada tick del
+   * cron agota sus cortes y espera al siguiente, sin terminar nunca.
+   */
+  cutsSinceOk: number;
 }
 
 /**
@@ -58,6 +65,15 @@ export interface WorkerJobHealth {
  * que la reexporta) y la leen su planificación y esta salud.
  */
 export const TICK_CUT_KEY = 'tickCut';
+
+/**
+ * Cortes por presupuesto que el turno tolera dentro de un mismo tick del
+ * cron (apps/worker/src/runner/once.ts): pasado el tope, el job espera a
+ * su próximo tick, como con max_attempts. Aquí porque la salud lo usa
+ * para decir «no cabe en el turno» y db/ops/cron-tick-estado.sql para
+ * ponerlo en rojo (el mismo número: test/cron-tick-sql.test.ts).
+ */
+export const MAX_TICK_CUTS = 20;
 
 const TS = (col: string) => `to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
 
@@ -70,7 +86,11 @@ export async function getWorkerHealth(q: HealthExecutor): Promise<WorkerJobHealt
             (SELECT count(*) FROM job_run f
               WHERE f.job_id = d.id AND f.workspace_id IS NULL AND f.status = 'failed'
                 AND (f.metadata->>'${TICK_CUT_KEY}')::boolean IS NOT TRUE
-                AND (buena.started_at IS NULL OR f.started_at > buena.started_at))::int AS failed_since_ok
+                AND (buena.started_at IS NULL OR f.started_at > buena.started_at))::int AS failed_since_ok,
+            (SELECT count(*) FROM job_run c
+              WHERE c.job_id = d.id AND c.workspace_id IS NULL AND c.status = 'failed'
+                AND (c.metadata->>'${TICK_CUT_KEY}')::boolean IS TRUE
+                AND (buena.started_at IS NULL OR c.started_at > buena.started_at))::int AS cuts_since_ok
        FROM job_definition d
        LEFT JOIN LATERAL (
          SELECT started_at, status, error, metadata FROM job_run r WHERE r.job_id = d.id AND r.workspace_id IS NULL ORDER BY r.started_at DESC, r.id DESC LIMIT 1
@@ -92,6 +112,7 @@ export async function getWorkerHealth(q: HealthExecutor): Promise<WorkerJobHealt
     lastOkAt: (r['last_ok_at'] as string | null) ?? null,
     failedSinceOk: Number(r['failed_since_ok'] ?? 0),
     lastCut: r['last_cut'] === true,
+    cutsSinceOk: Number(r['cuts_since_ok'] ?? 0),
   }));
 }
 

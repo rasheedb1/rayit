@@ -16,7 +16,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type AddressInfo, type Socket } from 'node:net';
 import type { PGlite } from '@electric-sql/pglite';
-import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, withoutNetwork, type NetworkGuard } from '@mc/connectors';
+import { FakeTokenRefresher, InMemorySecretStore, loadPlatformLimits, refresherRegistry, withoutNetwork, type NetworkGuard } from '@mc/connectors';
 import { nextWindowSlot } from '@mc/core';
 import { createEmbeddedDb, type EmbeddedDb } from '@mc/db/embedded';
 import { enableOutreach } from '@mc/db/queries/outreach';
@@ -25,13 +25,17 @@ import { prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
 import { motorDbFromJob } from '../src/jobs/ventas/motor-db.ts';
 import { dispatchJob, DISPATCH_JOB_ID } from '../src/jobs/ventas/outbound.dispatch.ts';
 import { lastTick } from '../src/runner/cron.ts';
-import type { WorkerDatabase } from '../src/runner/db.ts';
+import { JOB_LOCK_PREFIX } from '../src/runner/comun.ts';
+import type { Queryable, WorkerDatabase } from '../src/runner/db.ts';
 import { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
 import { claimRun, MAX_TICK_CUTS, TICK_CUT_KEY, type Claim } from '../src/runner/once.ts';
 import { defineJob, type JobDefinition, type JobRegistration } from '../src/runner/registry.ts';
 import { ConfigError } from '../src/runner/config.ts';
-import { assertTickTarget, runTick, runTickFromEnv, TICK_CLOSE_MS, TICK_CONNECT_TIMEOUT_MS, tickBudget, type RunTickOptions, type TickSummary } from '../src/tick.ts';
+import {
+  assertTickTarget, BOSS_READ_GRANT, forgetTickInstanceState, runTick, runTickFromEnv, TICK_CLOSE_MS, TICK_CONNECT_TIMEOUT_MS, tickBudget,
+  type RunTickOptions, type TickSummary,
+} from '../src/tick.ts';
 import { jobRuns, SETUP_TIMEOUT } from './helpers/harness.ts';
 import { bogota, motorKit } from './helpers/motor-kit.ts';
 
@@ -75,6 +79,8 @@ const suelto = defineJob('test.tick_orden_suelto', medido('suelto', 10));
 const falla = defineJob('test.tick_falla', async () => { count('falla'); throw new Error('proveedor caído (429)'); });
 const muerto = defineJob('test.tick_muerto', async () => { count('muerto'); return { processed: 1, failed: 0 }; });
 const vivo = defineJob('test.tick_vivo', async () => { count('vivo'); return { processed: 1, failed: 0 }; });
+const reclamoRoto = defineJob('test.tick_err_reclamo', async () => { count('err_reclamo'); return { processed: 1, failed: 0 }; });
+const medioSegundo = defineJob('test.tick_err_lento', async () => { await sleep(500); count('err_lento'); return { processed: 1, failed: 0 }; });
 
 let web: EmbeddedDb;
 let db: PgliteDatabase;
@@ -116,8 +122,12 @@ before(async () => {
       ('test.tick_orden_arriba', 'Prueba turno: arriba', 'test_orden',    '${ANUAL}', 60,  1, 1),
       ('test.tick_orden_abajo',  'Prueba turno: abajo',  'test_orden',    '${ANUAL}', 60,  1, 1),
       ('test.tick_orden_suelto', 'Prueba turno: suelto', 'test_orden',    '${ANUAL}', 60,  1, 1),
-      ('test.tick_falla',    'Prueba turno: falla',   'test_backoff',     '${ANUAL}', 60,  4, 1);
+      ('test.tick_falla',    'Prueba turno: falla',   'test_backoff',     '${ANUAL}', 60,  4, 1),
+      ('test.tick_err_reclamo', 'Prueba turno: reclamo roto', 'test_error', '${ANUAL}', 60, 1, 1),
+      ('test.tick_err_lento',   'Prueba turno: medio segundo', 'test_error', '${ANUAL}', 60, 1, 1);
   `);
+  // Lo que el turno guarda por instancia (platform.limits, avisos ya dados) no viene de otro archivo de pruebas.
+  forgetTickInstanceState();
 }, SETUP_TIMEOUT);
 
 after(async () => {
@@ -277,20 +287,85 @@ test('los trabajos que esperan en pgboss.job se cuentan y se avisan: el turno no
   const sinBoss = await turno('test_carrera', [contado]);
   assert.equal(sinBoss.orphanedBossJobs, null, 'sin esquema pgboss, nada que contar');
   assert.equal(typeof sinBoss.planMs, 'number');
+  // Como lo deja `--install`: el esquema es del rol de conexión, y mc_worker no tiene permiso.
   await web.execAsSuperuser(`
     CREATE SCHEMA pgboss;
     CREATE TABLE pgboss.job (id serial PRIMARY KEY, name text, state text);
     INSERT INTO pgboss.job (name, state) VALUES ('campaign.compute', 'created'), ('collect.posts', 'completed');
-    GRANT USAGE ON SCHEMA pgboss TO mc_worker;
-    GRANT SELECT ON pgboss.job TO mc_worker;
   `);
   try {
+    const desde = sink.records().length;
+    const ciego = await turno('test_carrera', [contado]);
+    assert.equal(ciego.orphanedBossJobs, 'unreadable', 'hay esquema pero no se puede leer: no es lo mismo que no tenerlo');
+    await turno('test_carrera', [contado]);
+    const avisos = sink.records().slice(desde).filter((r) => r['level'] === 'warn' && String(r['msg']).includes('pgboss.job existe'));
+    assert.equal(avisos.length, 1, 'el aviso sale una vez por instancia, no cada minuto');
+    assert.equal(avisos[0]?.['grant'], BOSS_READ_GRANT, 'y dice el GRANT que falta');
+
+    await web.execAsSuperuser(BOSS_READ_GRANT);
     const conBoss = await turno('test_carrera', [contado]);
     assert.equal(conBoss.orphanedBossJobs, 1);
     assert.ok(sink.records().some((r) => r['level'] === 'warn' && String(r['msg']).includes('pgboss.job') && r['orphanedBossJobs'] === 1));
   } finally {
     await web.execAsSuperuser('DROP SCHEMA pgboss CASCADE');
   }
+});
+
+test('una corrida que lanza fuera de su job (la base falla al reclamarla) no tumba el turno: los demás terminan y el resumen llega con los dos', async () => {
+  // Una base que falla solo en el reclamo de test.tick_err_reclamo (su candado): un timeout del pooler, por ejemplo.
+  const candado = `${JOB_LOCK_PREFIX}test.tick_err_reclamo`;
+  const bind = (t: object, p: string | symbol) => {
+    const v = Reflect.get(t, p, t) as unknown;
+    return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+  };
+  const txRota = (tx: Queryable): Queryable => new Proxy(tx, {
+    get(t, p) {
+      if (p !== 'query') return bind(t, p);
+      return async (text: string, params: readonly unknown[] = []) => {
+        if (params[0] === candado) throw new Error('timeout exceeded when trying to connect');
+        return t.query(text, params);
+      };
+    },
+  });
+  const rota = new Proxy(db, {
+    get(t, p) {
+      if (p !== 'transaction') return bind(t, p);
+      return <T>(fn: (tx: Queryable) => Promise<T>) => t.transaction((tx) => fn(txRota(tx)));
+    },
+  }) as WorkerDatabase;
+
+  const desde = sink.records().length;
+  const s = await turno('test_error', [reclamoRoto, medioSegundo], { db: rota, concurrency: 3 });
+  assert.deepEqual(s.ran.map((r) => [r.job, r.status]), [['test.tick_err_lento', 'ok']], 'el que seguía corriendo terminó');
+  assert.deepEqual(s.left, [{ job: 'test.tick_err_reclamo', reason: 'error' }]);
+  assert.ok(s.elapsedMs >= 500, `el turno esperó al otro recorredor (${s.elapsedMs} ms), no respondió a los pocos ms`);
+  assert.equal(calls['err_reclamo'], undefined, 'sin reclamo, el job no corrió');
+  assert.equal(calls['err_lento'], 1);
+  const { rows } = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM job_run WHERE status = 'running' AND job_id LIKE 'test.tick_err_%'`);
+  assert.equal(rows[0]?.n, 0, 'ninguna fila running');
+  assert.ok(sink.records().slice(desde).some((r) => r['level'] === 'error' && r['job'] === 'test.tick_err_reclamo' && /timeout exceeded/.test(JSON.stringify(r['err']))),
+    'el error queda en el log con su job');
+
+  // Con la base ya bien, el turno siguiente lo corre: seguía vencido.
+  const despues = await turno('test_error', [reclamoRoto, medioSegundo]);
+  assert.deepEqual(despues.ran.map((r) => [r.job, r.reason, r.status]), [['test.tick_err_reclamo', 'due', 'ok']]);
+});
+
+test('platform.limits con entradas que no se aplican (las de la migración 0011): un turno no las escribe a warn, solo un aviso por instancia', async () => {
+  const directo = new MemorySink();
+  await loadPlatformLimits(db, createLogger({ level: 'warn', sink: directo }));
+  const porEntrada = directo.records().filter((r) => r['msg'] === 'platform.limits: entrada ignorada').length;
+  assert.ok(porEntrada > 0, 'la base de pruebas trae las mismas entradas que producción');
+
+  forgetTickInstanceState();
+  const avisos = new MemorySink();
+  const enWarn = createLogger({ level: 'warn', sink: avisos });
+  for (let i = 0; i < 3; i++) await turno('test_carrera', [contado], { logger: enWarn });
+  const mensajes = avisos.records().map((r) => String(r['msg']));
+  assert.equal(mensajes.filter((m) => m.includes('entrada ignorada')).length, 0, `ninguna línea por entrada: ${mensajes.join(' | ')}`);
+  const resumen = avisos.records().filter((r) => String(r['msg']).startsWith('platform.limits'));
+  assert.equal(resumen.length, 1, 'tres turnos, un solo aviso');
+  assert.equal(resumen[0]?.['ignored'], porEntrada);
 });
 
 test('outbound.dispatch sobre el seed de outreach: dos turnos a la vez sacan el mensaje vencido UNA vez, con presupuesto para más de 5 toques, y el siguiente no lo repite', async () => {

@@ -18,17 +18,20 @@
  *       pidió no reintentar (retry: false)   → al día, no corre
  *     intentos ≥ max_attempts                → reintentos agotados hasta
  *                                              el próximo tick (se avisa)
- *     el último intento empezó hace menos
- *       de su backoff                        → espera (`backoff`)
+ *     solo en el turno (CIM-7): el último
+ *       intento empezó hace menos de su
+ *       backoff                              → espera (`backoff`)
  *     si no                                  → corre, attempt = intentos + 1
  *   (intentos = partial o failed reintentables + running colgadas;
  *    backoff = WORKER_RETRY_DELAY_S·2^(intentos−1), con techo
  *    WORKER_RETRY_DELAY_MAX_S: el de pg-boss en el proceso largo)
  *
  * Así una pasada corre lo vencido, la siguiente no repite lo ya corrido
- * y un fallo se reintenta en una pasada posterior, pasada su espera,
- * hasta max_attempts: la misma regla de reintento que el proceso largo
- * (worker.ts, queueOptionsFor en boss.ts), sin el jitter de pg-boss.
+ * y un fallo se reintenta en la pasada siguiente hasta max_attempts, con
+ * la misma regla de reintento que el proceso largo (worker.ts). --once
+ * no espera el backoff (`RunOnceOptions.backoff`, por defecto ninguno):
+ * sus pasadas van separadas por horas. El turno, que pasa cada minuto,
+ * sí lo pide.
  *
  * Encadenamiento (JobOptions.after): igual que en el proceso largo, si
  * un job termina ok o partial con processed > 0, lo que corre después
@@ -70,7 +73,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { QuotaManager, ConnectorHttpOverrides, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
-import { TICK_CUT_KEY } from '@mc/db/queries/worker';
+import { MAX_TICK_CUTS, TICK_CUT_KEY } from '@mc/db/queries/worker';
 import { createQuota, EXPIRE_MARGIN_S, JOB_LOCK_PREFIX, recordSkipped, SKIPPED_NO_HANDLER } from './comun.ts';
 import type { Env, WorkerConfig } from './config.ts';
 import { CronError, lastTick } from './cron.ts';
@@ -98,6 +101,13 @@ export interface RunOnceOptions {
   signal?: AbortSignal;
   /** Cómo se recorre lo pendiente. Por defecto, --once: sequentialWalk. El turno (CIM-7) pone el suyo. */
   walk?: Walk;
+  /**
+   * La espera antes de reintentar un fallo (retryBackoffFrom(config)). Por
+   * defecto ninguna: --once reintenta en la pasada siguiente, como
+   * siempre. La pasa el turno (CIM-7), que corre cada minuto: sin ella, un
+   * proveedor caído recibiría max_attempts golpes en max_attempts minutos.
+   */
+  backoff?: RetryBackoff;
 }
 
 /** due: vencida · retry: tras un fallo · resume: tras un corte del turno · chained: tras el job de arriba. */
@@ -119,9 +129,10 @@ export interface OnceRun {
 
 /**
  * budget: vencido pero sin tiempo en el turno para empezarlo; sigue vencido para el siguiente.
- * backoff: falló hace menos de su espera de reintento (retryDelayFor); la pasada que llegue después lo reintenta.
+ * backoff: falló hace menos de su espera de reintento (retryDelayMs); la pasada que llegue después lo reintenta.
+ * error: el turno (src/turno/recorrer.ts) no pudo reclamarla o cerrarla (la base falló); sigue vencida.
  */
-export type OnceSkipReason = 'up_to_date' | 'running' | 'retries_exhausted' | 'backoff' | 'no_handler' | 'no_cron' | 'disabled' | 'shutting_down' | 'budget';
+export type OnceSkipReason = 'up_to_date' | 'running' | 'retries_exhausted' | 'backoff' | 'no_handler' | 'no_cron' | 'disabled' | 'shutting_down' | 'budget' | 'error';
 
 export interface OnceSummary {
   /** ISO del reloj con el que se calcularon los ticks. */
@@ -143,15 +154,15 @@ export function onceExitCode(s: OnceSummary): 0 | 1 {
 
 /** Marca en job_run.metadata de una corrida que el job pidió no reintentar (`retry: false`). */
 export const NO_RETRY_KEY = 'noRetry';
-/** Marca en job_run.metadata de una corrida que cortó el presupuesto del turno (CIM-7): no cuenta como intento. La lee también la salud (@mc/db/queries/worker). */
-export { TICK_CUT_KEY };
 /**
- * Cortes por presupuesto que se toleran dentro de un mismo tick del cron.
- * Un job que se retoma avanza en cada turno; uno que nunca cabe no puede
- * gastar CPU cada minuto para siempre: pasado este tope espera a su
- * próximo tick, como con max_attempts.
+ * TICK_CUT_KEY: la marca en job_run.metadata de una corrida que cortó el
+ * presupuesto del turno (CIM-7), que no cuenta como intento.
+ * MAX_TICK_CUTS: los cortes que se toleran dentro de un mismo tick del
+ * cron; pasado el tope, el job espera a su próximo tick, como con
+ * max_attempts. Viven en @mc/db/queries/worker porque también los lee la
+ * salud («no cabe en el turno»).
  */
-export const MAX_TICK_CUTS = 20;
+export { MAX_TICK_CUTS, TICK_CUT_KEY };
 
 interface DueJob {
   def: JobDefinition;
@@ -195,8 +206,8 @@ export function retryDelayMs(attempts: number, backoff: RetryBackoff): number {
   return Math.max(0, s) * 1000;
 }
 
-/** Sin espera entre reintentos: lo que usa claimRun si quien llama no pasa la de su configuración. */
-const NO_BACKOFF: RetryBackoff = { delayS: 0, maxS: 0 };
+/** Sin espera entre reintentos: la de --once, y la de claimRun si quien llama no pasa otra. */
+export const NO_BACKOFF: RetryBackoff = { delayS: 0, maxS: 0 };
 
 /** La marca en la metadata del reclamo: el timeout que de verdad tiene la corrida en un turno (CIM-7). */
 export const SLICE_KEY = 'sliceS';
@@ -346,7 +357,7 @@ async function recordUnhandled(db: WorkerDatabase, ids: readonly string[]): Prom
  * Qué toca correr ahora: lo de arriba antes que lo encadenado, y luego por tick. Deja constancia de los que no tienen handler, como el proceso largo.
  * El estado de todos los ticks sale de una sola consulta (tickStates): un turno sin nada vencido (CIM-7) son tres consultas por una conexión.
  */
-export async function planOnce(db: WorkerDatabase, config: WorkerConfig, registry: JobRegistry, now: Date, logger: Logger): Promise<{ due: DueJob[]; skipped: OnceSummary['skipped']; definitions: JobDefinition[] }> {
+export async function planOnce(db: WorkerDatabase, config: WorkerConfig, registry: JobRegistry, now: Date, logger: Logger, backoff: RetryBackoff = NO_BACKOFF): Promise<{ due: DueJob[]; skipped: OnceSummary['skipped']; definitions: JobDefinition[] }> {
   const all = await loadJobDefinitions(db);
   const allById = new Map(all.map((d) => [d.id, d]));
   const definitions = config.groups ? all.filter((d) => config.groups!.includes(d.queue)) : all;
@@ -377,7 +388,6 @@ export async function planOnce(db: WorkerDatabase, config: WorkerConfig, registr
   await recordUnhandled(db, unhandled);
 
   const states = await tickStates(db, candidates, now);
-  const backoff = retryBackoffFrom(config);
   for (const c of candidates) {
     const state = states.get(c.def.id) ?? EMPTY_STATE;
     const v = verdict(state, c.def, now, backoff);
@@ -510,13 +520,13 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
   const clock = opts.now ?? (() => new Date());
   const now = clock();
   const registry = new JobRegistry(opts.jobs);
-  const backoff = retryBackoffFrom(config);
+  const backoff = opts.backoff ?? NO_BACKOFF;
   // La cuota (platform.limits) se lee solo si algo va a correr: un turno sin nada vencido no la necesita.
   let quota: Promise<QuotaManager> | null = opts.quota ? Promise.resolve(opts.quota) : null;
   const getQuota = () => (quota ??= createQuota(db, logger, opts.now, opts.http));
 
   const planStarted = Date.now();
-  const { due, skipped, definitions } = await planOnce(db, config, registry, now, logger);
+  const { due, skipped, definitions } = await planOnce(db, config, registry, now, logger, backoff);
   const planMs = Date.now() - planStarted;
   const byId = new Map(definitions.map((d) => [d.id, d]));
   const enabledIds = new Set(definitions.filter((d) => d.enabled).map((d) => d.id));

@@ -7,7 +7,10 @@
  *     `minSliceMs`, y a la que empieza le pasa `deadline`, así su
  *     timeout_s es lo que queda del turno (`budget` si no empieza);
  *   · varios recorredores (`concurrency`) sobre la misma pila;
- *   · lo urgente primero (`first`: outbound.dispatch).
+ *   · lo urgente primero (`first`: outbound.dispatch);
+ *   · una corrida que lanza fuera de su job (el reclamo, la cuota, el
+ *     cierre de su fila) queda como `error` y el turno sigue: nunca se
+ *     responde sin el resumen de lo que sí corrió.
  *
  * Con más de un recorredor, el orden «lo de arriba antes que lo de
  * abajo» de planOnce no basta: si collect.post_metrics y compute.baseline
@@ -19,6 +22,7 @@
  * (blockedBy): toma el siguiente que no lo esté o, si no queda ninguno,
  * espera a que termine una corrida (settled).
  */
+import type { Logger } from '../runner/logger.ts';
 import type { PendingRun, Walk } from '../runner/once.ts';
 
 export interface TurnoBudget {
@@ -38,6 +42,8 @@ export interface TurnoWalkOptions {
    * Solo reordena lo que no corre después de nada.
    */
   first?: readonly string[];
+  /** Donde queda el error de una corrida que lanzó (reclamo, cuota o cierre de su fila). */
+  logger: Logger;
 }
 
 export function turnoWalk(opts: TurnoWalkOptions): Walk {
@@ -91,6 +97,15 @@ export function turnoWalk(opts: TurnoWalkOptions): Walk {
         inFlight.add(next.def.id);
         try {
           await c.run(next, opts.budget.deadline);
+        } catch (err) {
+          // Una corrida que lanza (el reclamo, la cuota o el cierre de su
+          // fila, con la base caída o el pooler lleno) no tumba el turno:
+          // con Promise.all, los demás recorredores seguirían corriendo
+          // jobs mientras el turno ya respondió 500 sin su resumen, y el
+          // pool se cerraría con sus filas todavía abiertas. Queda en el
+          // resumen (`error`) y el recorredor sigue con el siguiente.
+          opts.logger.error('una corrida del turno falló fuera de su job: el turno sigue con lo demás', { job: next.def.id, err });
+          c.skip(next, 'error');
         } finally {
           inFlight.delete(next.def.id);
           notify();

@@ -48,9 +48,18 @@
  * corrida). A demanda: esperar al cron o `pnpm --filter @mc/worker once`
  * a mano (README, «Por turnos»). Para que un boss.send no pase en
  * silencio, el turno cuenta lo que espera en pgboss.job y lo devuelve en
- * `orphanedBossJobs`, con un aviso en el log si es mayor que 0.
+ * `orphanedBossJobs`, con un aviso en el log si es mayor que 0 (o si el
+ * esquema existe y mc_worker no puede leerlo: 'unreadable').
+ *
+ * El log de Vercel Hobby guarda poco: el turno escribe una línea por
+ * llamada (la ruta) y avisos solo cuando algo pide atención. Lo que se
+ * repetiría cada minuto sin cambiar nada (platform.limits con entradas
+ * que no se aplican, pgboss.job ilegible) sale una vez por instancia.
  */
-import type { ConnectorHttpOverrides, QuotaManager, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
+import {
+  loadPlatformLimits, PostgresQuotaUsageStore, QuotaManager,
+  type ConnectorHttpOverrides, type ConnectorLogger, type LimitsTable, type SecretStore, type TokenRefresherRegistry,
+} from '@mc/connectors';
 import { allJobs } from './jobs/index.ts';
 import { channelModeFrom, isLocalDatabase } from './jobs/ventas/canales/index.ts';
 import { DISPATCH_JOB_ID } from './jobs/ventas/outbound.dispatch.ts';
@@ -59,7 +68,7 @@ import { assertRole } from './runner/comun.ts';
 import { ConfigError, loadConfig, type Env, type WorkerConfig } from './runner/config.ts';
 import { PostgresDatabase, type WorkerDatabase } from './runner/db.ts';
 import { createLogger, isLogLevel, type Logger } from './runner/logger.ts';
-import { runOnce, type OnceReason, type OnceSummary } from './runner/once.ts';
+import { retryBackoffFrom, runOnce, type OnceReason, type OnceSummary } from './runner/once.ts';
 import type { JobRegistration } from './runner/registry.ts';
 import type { RunStatus } from './runner/run.ts';
 import { turnoWalk, type TurnoBudget } from './turno/recorrer.ts';
@@ -133,9 +142,11 @@ export interface TickRun {
 /**
  * Por qué un job vencido quedó para después: sin tiempo para empezarlo,
  * cortado a medias, lo tiene otro turno, o falló hace menos que su
- * espera de reintento (backoff, la misma que el proceso largo).
+ * espera de reintento (backoff, la misma que el proceso largo); o
+ * `error`: la base falló al reclamarla o al cerrar su fila (el log dice
+ * cuál), y sigue vencida para el turno siguiente.
  */
-export type TickLeftReason = 'budget' | 'cut' | 'running' | 'backoff' | 'shutting_down';
+export type TickLeftReason = 'budget' | 'cut' | 'running' | 'backoff' | 'shutting_down' | 'error';
 
 export interface TickSummary {
   /** El reloj del turno, ISO. */
@@ -155,9 +166,11 @@ export interface TickSummary {
   /**
    * Trabajos esperando en pgboss.job ('created' o 'retry'). El turno no
    * los procesa (su cola es job_run): mayor que 0 es un boss.send que
-   * nadie va a atender. null si no hay esquema pgboss o no se puede leer.
+   * nadie va a atender. null si no hay esquema pgboss; 'unreadable' si lo
+   * hay pero mc_worker no puede leerlo (falta el GRANT de
+   * docs/propuestas/CON-2.md, y el aviso sale en el log).
    */
-  orphanedBossJobs: number | null;
+  orphanedBossJobs: number | 'unreadable' | null;
 }
 
 /** El presupuesto de la pasada: el margen y el mínimo para empezar, acotados para presupuestos cortos. */
@@ -166,9 +179,9 @@ export function tickBudget(budgetMs: number, startedAt: number = Date.now()): Tu
   return { deadline: startedAt + budgetMs - marginMs, minSliceMs: Math.min(TICK_MIN_SLICE_MS, Math.floor(budgetMs * 0.25)) };
 }
 
-const LEFT_REASONS: ReadonlySet<string> = new Set<TickLeftReason>(['budget', 'running', 'backoff', 'shutting_down']);
+const LEFT_REASONS: ReadonlySet<string> = new Set<TickLeftReason>(['budget', 'running', 'backoff', 'shutting_down', 'error']);
 
-export function toTickSummary(s: OnceSummary, budgetMs: number, elapsedMs: number, orphanedBossJobs: number | null = null): TickSummary {
+export function toTickSummary(s: OnceSummary, budgetMs: number, elapsedMs: number, orphanedBossJobs: TickSummary['orphanedBossJobs'] = null): TickSummary {
   return {
     at: s.at,
     budgetMs,
@@ -186,23 +199,91 @@ export function toTickSummary(s: OnceSummary, budgetMs: number, elapsedMs: numbe
   };
 }
 
+/** El GRANT que le falta a mc_worker para leer pgboss.job (docs/propuestas/CON-2.md, «El turno y pgboss.job»). */
+export const BOSS_READ_GRANT = 'GRANT USAGE ON SCHEMA pgboss TO mc_worker; GRANT SELECT ON pgboss.job TO mc_worker;';
+
+/** El aviso de pgboss.job ilegible sale una vez por instancia: cada minuto sería ruido. */
+let bossUnreadableWarned = false;
+
 /**
- * Cuántos trabajos esperan en pgboss.job. Sin esquema pgboss (el modo por
- * turnos no lo instala) o sin permiso para leerlo, null tras una sola
- * consulta; si existe, una segunda que cuenta.
+ * Cuántos trabajos esperan en pgboss.job, en una consulta. Sin esquema
+ * pgboss (el modo por turnos no lo instala), null. Con esquema pero sin
+ * permiso para leerlo, 'unreadable' y un aviso (una vez por instancia)
+ * con el GRANT que falta: pg-boss crea su esquema con el rol de conexión
+ * de `--install`, no con mc_worker, y sin el GRANT la red de seguridad
+ * quedaría ciega sin decirlo. Si existe y se puede leer, una segunda
+ * consulta que cuenta.
  */
-export async function countOrphanedBossJobs(db: WorkerDatabase, logger: Logger): Promise<number | null> {
+export async function countOrphanedBossJobs(db: WorkerDatabase, logger: Logger): Promise<number | 'unreadable' | null> {
   try {
-    const { rows } = await db.query<{ readable: boolean }>(
-      `SELECT coalesce(has_table_privilege(to_regclass('pgboss.job'), 'SELECT'), false) AS readable`,
+    // Por el catálogo y no con to_regclass('pgboss.job'): sin USAGE en el
+    // esquema, to_regclass no devuelve null, lanza «permission denied».
+    const { rows } = await db.query<{ exists: boolean; readable: boolean }>(
+      `SELECT count(*) > 0 AS exists,
+              coalesce(bool_and(has_schema_privilege(n.oid, 'USAGE') AND has_table_privilege(c.oid, 'SELECT')), false) AS readable
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'pgboss' AND c.relname = 'job'`,
     );
-    if (!rows[0]?.readable) return null;
+    if (!rows[0]?.exists) return null;
+    if (!rows[0].readable) {
+      if (!bossUnreadableWarned) {
+        bossUnreadableWarned = true;
+        logger.warn('pgboss.job existe pero el rol del turno no puede leerlo: los boss.send huérfanos no se ven. Como postgres (supabase-admin), corre el GRANT', { grant: BOSS_READ_GRANT });
+      }
+      return 'unreadable';
+    }
     const counted = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM pgboss.job WHERE state IN ('created', 'retry')`);
     return Number(counted.rows[0]?.n ?? 0);
   } catch (err) {
-    logger.debug('no se pudo contar pgboss.job', { err });
+    logger.warn('no se pudo contar pgboss.job', { err });
     return null;
   }
+}
+
+/**
+ * Cuánto dura en una instancia la lectura de platform.limits. Cambia
+ * muy de vez en cuando (a mano, docs/propuestas/CON-1.md); releerla en
+ * cada turno era una consulta más por minuto y, con las entradas que no
+ * se aplican de la migración 0011, siete avisos por turno en el log.
+ */
+export const TICK_LIMITS_TTL_MS = 5 * 60_000;
+
+let limitsCache: { limits: LimitsTable; at: number } | null = null;
+let limitsIgnoredWarned = false;
+
+/**
+ * La cuota del turno: la misma que createQuota (runner/comun.ts) da al
+ * proceso largo y a --once —platform.limits sobre api_quota_usage—, con
+ * dos diferencias que solo tienen sentido llamando cada minuto:
+ * platform.limits se lee como mucho cada TICK_LIMITS_TTL_MS por
+ * instancia, y sus «entrada ignorada» van a debug, con UN aviso por
+ * instancia que dice cuántas son. El QuotaManager es nuevo en cada
+ * turno (su store va sobre la base de ese turno).
+ */
+export async function tickQuota(db: WorkerDatabase, logger: Logger, now?: () => Date, http?: ConnectorHttpOverrides): Promise<QuotaManager> {
+  if (!limitsCache || Date.now() - limitsCache.at > TICK_LIMITS_TTL_MS) {
+    let ignored = 0;
+    const quiet: ConnectorLogger = {
+      debug: (msg, fields) => logger.debug(msg, fields),
+      info: (msg, fields) => logger.info(msg, fields),
+      warn: (msg, fields) => { ignored++; logger.debug(msg, fields); },
+      error: (msg, fields) => logger.error(msg, fields),
+    };
+    const limits = await loadPlatformLimits(db, quiet);
+    if (ignored > 0 && !limitsIgnoredWarned) {
+      limitsIgnoredWarned = true;
+      logger.warn('platform.limits tiene entradas que no se aplican (el detalle, con LOG_LEVEL=debug; sale una vez por instancia)', { ignored });
+    }
+    limitsCache = { limits, at: Date.now() };
+  }
+  return new QuotaManager({ limits: limitsCache.limits, store: new PostgresQuotaUsageStore(db), logger, now, sleep: http?.sleep });
+}
+
+/** Solo para las pruebas: olvida lo que el turno guarda por instancia (platform.limits y los avisos que ya salieron). */
+export function forgetTickInstanceState(): void {
+  limitsCache = null;
+  limitsIgnoredWarned = false;
+  bossUnreadableWarned = false;
 }
 
 /** El logger de un turno: JSON por línea y, sin LOG_LEVEL, solo avisos y errores (el resumen lo escribe quien llama). */
@@ -232,12 +313,14 @@ export async function runTick(opts: RunTickOptions): Promise<TickSummary> {
     refreshers: opts.refreshers ?? buildRefreshers(config, logger, env, { missingAppsLevel: 'debug' }),
     env,
     now: opts.now,
-    quota: opts.quota,
+    quota: opts.quota ?? await tickQuota(opts.db, logger, opts.now, opts.http),
     http: opts.http,
-    walk: turnoWalk({ budget: tickBudget(opts.budgetMs, started), concurrency: opts.concurrency ?? TICK_CONCURRENCY, first: TICK_FIRST }),
+    // Cada minuto, un fallo espera su backoff (el de pg-boss en el proceso largo): --once no lo pide.
+    backoff: retryBackoffFrom(config),
+    walk: turnoWalk({ budget: tickBudget(opts.budgetMs, started), concurrency: opts.concurrency ?? TICK_CONCURRENCY, first: TICK_FIRST, logger }),
   });
   const orphaned = await countOrphanedBossJobs(opts.db, logger);
-  if (orphaned !== null && orphaned > 0) {
+  if (typeof orphaned === 'number' && orphaned > 0) {
     logger.warn('hay trabajos en pgboss.job que el modo por turnos no procesa: espera a su cron o corre `pnpm --filter @mc/worker once`', { orphanedBossJobs: orphaned });
   }
   return toTickSummary(summary, opts.budgetMs, Date.now() - started, orphaned);
