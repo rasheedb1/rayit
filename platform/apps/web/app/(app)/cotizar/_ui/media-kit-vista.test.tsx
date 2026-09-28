@@ -82,6 +82,33 @@ describe("MediaKitVista", () => {
     expect(within(top).getByText("3,7× su mediana a esa edad (106,7 mil)")).toBeInTheDocument();
   });
 
+  it("a 400 px el título del video va entero arriba y sus cifras debajo; desde sm, a la derecha (pulido r5)", () => {
+    const post = {
+      platformId: "tiktok" as const, url: "https://www.tiktok.com/@laura/video/d07", caption: "Reto: arepa sin plancha en la cocina de una residencia",
+      publishedAt: "2026-08-20T19:00:00.000Z", views: 412_000, viewsVsMedian: "6.000", ageHoursCut: 720, medianAtCut: 68_700,
+    };
+    render(<MediaKitVista snapshot={{ ...SNAPSHOT, topPosts: [post] }} />);
+    const top = screen.getByRole("region", { name: "Lo que mejor funciona" });
+    // jsdom no mide cajas: se comprueba la regla. En móvil la fila es una
+    // columna (antes, flex-wrap con el título en flex-1 nunca bajaba la
+    // cifra y el título quedaba en quince letras); desde sm, en fila.
+    const fila = top.querySelector("[data-post-top]")!;
+    expect(fila).toHaveClass("flex-col", "sm:flex-row");
+    expect(fila).not.toHaveClass("flex-wrap");
+    // El título se corta en dos líneas, no en una con puntos suspensivos.
+    const titulo = within(top).getByText(post.caption);
+    expect(titulo).toHaveClass("line-clamp-2");
+    expect(titulo).not.toHaveClass("truncate");
+    // Las cifras: a la izquierda en móvil y con ancho tope desde sm; la
+    // cifra y su edad en una línea, la mediana en la suya.
+    const cifras = top.querySelector("[data-post-cifras]")!;
+    expect(cifras).toHaveClass("text-left", "sm:text-right", "sm:max-w-60");
+    const views = within(cifras as HTMLElement).getByText("412 mil");
+    expect(views.parentElement).toContainElement(within(cifras as HTMLElement).getByText("views a los 30 días de publicado"));
+    const mediana = within(cifras as HTMLElement).getByText("6× su mediana a esa edad (68,7 mil)");
+    expect(mediana.parentElement).toBe(cifras);
+  });
+
   it("la audiencia va por dimensión y con su red, sin pastillas repetidas", () => {
     render(<MediaKitVista snapshot={SNAPSHOT} />);
     const audiencia = screen.getByRole("region", { name: "Audiencia" });

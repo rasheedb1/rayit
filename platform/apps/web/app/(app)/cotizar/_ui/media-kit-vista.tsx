@@ -109,14 +109,27 @@ export function MediaKitVista({ snapshot }: { snapshot: MediaKitSnapshot }) {
             {t.topPosts}
           </h2>
           <ul className="mt-3 divide-y divide-border rounded-md border border-border">
+            {/* Pulido r5: a 400 px el video va arriba a todo lo ancho y sus
+                cifras debajo. En fila, la columna de la cifra («412 mil ·
+                views a los 30 días… · 6× su mediana…») se comía media fila y
+                el título quedaba en quince letras. Desde sm vuelven a ir a la
+                derecha, con un ancho tope para que el título siga leyéndose. */}
             {snapshot.topPosts.map((p, i) => (
-              <li key={`${p.url ?? "post"}-${i}`} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                <span className="min-w-0 flex-1">
+              <li
+                key={`${p.url ?? "post"}-${i}`}
+                data-post-top
+                className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+              >
+                <span className="min-w-0 sm:flex-1">
                   <span className="flex items-center gap-2">
                     <PlatformPill platformId={p.platformId} />
                     <span className="text-xs text-muted">{f.date(p.publishedAt)}</span>
                   </span>
-                  {p.caption && <span className="mt-1 block truncate text-sm text-ink-2">{p.caption}</span>}
+                  {p.caption && (
+                    <span data-post-titulo className="mt-1 line-clamp-2 break-words text-sm text-ink-2">
+                      {p.caption}
+                    </span>
+                  )}
                 </span>
                 <PostCifras post={p} f={f} />
               </li>
@@ -233,9 +246,16 @@ function PostCifras({ post: p, f }: { post: MediaKitSnapshotPost; f: Formatter }
   const edad = corte ? t.edad(corte.unit, f.int(corte.amount)) : null;
   const multiplo = p.viewsVsMedian ? f.multiple(Number(p.viewsVsMedian)) : null;
   return (
-    <span className="text-right">
-      {p.views !== null && <span className="block font-mono text-sm tabular-nums">{f.compact(p.views)}</span>}
-      {edad && p.views !== null && <span className="block text-xs text-muted">{t.viewsA(edad)}</span>}
+    <span data-post-cifras className="block text-left sm:max-w-60 sm:shrink-0 sm:text-right">
+      {/* En móvil, la cifra y su edad en una línea corta («412 mil views a
+          los 30 días de publicado»); la mediana, en la suya. Desde sm, cada
+          una en su línea y a la derecha. */}
+      {p.views !== null && (
+        <span className="flex flex-wrap items-baseline gap-x-1.5 sm:block">
+          <span className="font-mono text-sm tabular-nums sm:block">{f.compact(p.views)}</span>
+          {edad && <span className="text-xs text-muted sm:block">{t.viewsA(edad)}</span>}
+        </span>
+      )}
       {multiplo && (
         <span className="block text-xs tabular-nums text-muted">
           {edad && p.medianAtCut ? t.vsMedianaA(multiplo, f.compact(p.medianAtCut)) : t.vsMediana(multiplo)}
