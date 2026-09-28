@@ -179,10 +179,10 @@ export const STORIES: readonly Story[] = [
   {
     id: "CIM-7", module: "CIM", owner: "rasheed", size: "S", sprint: 1, deps: ["CIM-1"],
     title: "Despliegue continuo",
-    desc: "El repositorio de GitHub conectado al proyecto de Vercel para que cada merge a main publique solo; el worker corre en Railway o Fly con las variables del vault.",
+    desc: "El repositorio de GitHub conectado al proyecto de Vercel para que cada merge a main publique solo; el worker corre por turnos en la propia web (/api/cron/tick), llamado cada minuto por pg_cron de Supabase (Hobby) y, con Vercel Pro, por Vercel Cron.",
     done: "Un merge a main aparece en la URL sin correr ningún comando.",
     status: "en_curso",
-    note: "La web ya despliega con make vercel.deploy PROD=1. Falta conectar GitHub al proyecto de Vercel y desplegar el worker. Variables en Vercel: DATABASE_URL, TOKEN_ENCRYPTION_KEY y APP_URL en production, y DEMO_WORKSPACE_ID (el workspace del seed) añadida el 22 de septiembre en production y preview. Hacía falta: desde la ronda 4 de CIM-2, en producción la web LANZA si falta —mismo criterio que DATABASE_URL en from-env.ts— en vez de servir en silencio un workspace codificado leyendo la Supabase real. Para servir el del seed a propósito, ALLOW_SEED_WORKSPACE=1. Ver docs/base-de-datos.md.",
+    note: "27-sep: el worker por turnos está hecho y probado sin red (runTick en @mc/worker/tick, reclamo atómico por job, presupuesto de 45 s que corta y retoma sin gastar intentos; /api/cron/tick con Bearer en tiempo constante; db/ops/cron-tick.sql con el secreto en Vault y make cron.install/status/uninstall). Pendiente humano, en este orden: crear mc_worker_login (WRK.md §1.1) y ponerlo como WORKER_DATABASE_URL en Vercel; openssl rand -hex 32 como CRON_SECRET en Vercel y make vercel.deploy PROD=1; make cron.install con el mismo secreto (Vault) y make cron.status. Sigue pendiente conectar GitHub a Vercel (hoy la web se publica con make vercel.deploy PROD=1; en Vercel ya están DATABASE_URL, TOKEN_ENCRYPTION_KEY, APP_URL y DEMO_WORKSPACE_ID). Detalle: apps/worker/README.md, «Por turnos».",
   },
   {
     id: "CIM-8", module: "CIM", owner: "nicolas", size: "S", sprint: 1, deps: ["CIM-2"],

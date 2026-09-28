@@ -61,9 +61,15 @@ cubre su propio tick. Sale con 1 si alguna corrida terminó `failed` o si
 una señal dejó jobs sin empezar. Al terminar
 imprime la salud (`getWorkerHealth` de `@mc/db/queries/worker`) con
 «Datos al <fecha>». No necesita el esquema `pgboss`, solo que el rol de
-conexión pueda hacer `SET ROLE mc_worker`. Es el camino recomendado para
-producción: `.github/workflows/worker-once.yml`, cada hora, hoy apagado.
-Por qué, costos y cómo encenderlo: [docs/propuestas/WRK.md](../../../docs/propuestas/WRK.md).
+conexión pueda hacer `SET ROLE mc_worker`. Cada corrida se **reclama**
+antes de empezar (CIM-7): con un candado por job
+(`pg_advisory_xact_lock`, solo lo que dura una transacción corta) se
+relee el estado de su tick y se abre ahí mismo la fila `running`, así
+que dos pasadas a la vez no corren dos veces lo mismo. Era la
+recomendación de [docs/propuestas/WRK.md](../../../docs/propuestas/WRK.md)
+(`.github/workflows/worker-once.yml`, cada hora, apagado); el 27-sep
+Rasheed eligió el modo **por turnos** (abajo), que es esta misma pasada
+con un presupuesto de tiempo, cada minuto, desde la web.
 No se corre a la vez que el proceso largo.
 
 Contra Supabase el worker arranca **solo cuando Rasheed aplique
@@ -78,6 +84,90 @@ y salen con 0 en vez de caerse en bucle; `start` (producción) no degrada.
 ```bash
 make worker.humo                        # = pnpm --filter @mc/worker humo: lista job_definition por DATABASE_URL
 ```
+
+### Por turnos: el worker en Vercel (CIM-7)
+
+Sin un proceso siempre encendido: alguien llama cada minuto a
+`POST /api/cron/tick` de la web con `Authorization: Bearer <CRON_SECRET>`,
+y la ruta (`apps/web/app/api/cron/tick/route.ts`, `maxDuration` 60 s)
+corre **un turno** de 45 s con `runTick` (`src/tick.ts`, exportado como
+`@mc/worker/tick`):
+
+1. **Programa** lo que toca: la pasada de `--once`, con los mismos crons
+   de `job_definition` y `job_run` como cola. Cada corrida se reclama
+   (arriba): dos turnos solapados, o uno repetido, no duplican nada.
+2. **Procesa** lo vencido, hasta cuatro corridas a la vez, y no empieza
+   ninguna si quedan menos de 10 s. Cada corrida recibe como `timeout_s`
+   lo que queda del turno: la que se mide por su timeout termina sola
+   (`outbound.dispatch` deja de reclamar y devuelve a su cola lo que no
+   intentó); la que se pasa termina `failed`, `error = timeout`,
+   `metadata.tickCut = true`, que **no gasta un intento**: el turno
+   siguiente la retoma (`reason: resume`), hasta 20 cortes por tick del
+   cron (`MAX_TICK_CUTS`). Lo que no llegó a empezar sigue vencido. Una
+   fila de un turno muerto deja de estar viva a los `timeout_s + 30 s`:
+   no hay zombis.
+3. **Responde** con el resumen (`TickSummary`: qué corrió, con qué
+   estado, cuánto tardó, qué quedó y por qué) y deja **una línea** en el
+   log de Vercel (`[cron/tick] {…}`). El logger del worker, sin
+   `LOG_LEVEL`, solo escribe avisos y errores.
+
+Sin nada vencido, el turno son unas pocas consultas en paralelo y sale:
+Vercel Hobby cobra la CPU activa y aquí no se espera a nada. Los
+handlers, el `SET ROLE mc_worker`, los secretos y los refreshers son los
+del proceso (`src/recursos.ts`). **El turno y el proceso largo no se
+encienden a la vez**: pg-boss no mira `job_run` y correrían dos veces.
+
+Lo que conviene saber de un turno de 45 s: `outbound.dispatch` se guarda
+30 s de margen antes de su timeout (`DEADLINE_MARGIN_MS`), así que en un
+turno envía durante unos 10 s, cinco toques por pasada cada dos minutos
+(unos 150 por hora). Un job que tarde más de lo que da el turno tiene que
+poder retomarse (revisar `ctx.signal` y saltarse lo ya hecho), como los
+de CON-5.
+
+**Variables en Vercel** (production), además de las que ya tiene la web:
+
+| Variable | Qué es | Cómo se pone |
+|---|---|---|
+| `CRON_SECRET` | El Bearer de la ruta. **El mismo valor** que en el Vault de Supabase. Sin él (o con menos de 32 caracteres) la ruta responde 401 a todos. | `openssl rand -hex 32` en tu terminal (a un gestor de contraseñas, no a un archivo) y `make vercel.run ARGS="env add CRON_SECRET production"`, que lo pide por teclado (nunca como argumento: saldría en `ps` y en el historial) |
+| `WORKER_DATABASE_URL` | La conexión del worker: pooler en **modo sesión** (`:5432`, el turno rechaza `:6543`), rol miembro de `mc_worker`. La buena es `mc_worker_login` de [WRK §1.1](../../../docs/propuestas/WRK.md): `DATABASE_URL_DIRECT` (`mc_migrator`) también sirve, pero puede hacer DDL y no debe vivir en Vercel. | `make vercel.run ARGS="env add WORKER_DATABASE_URL production"` |
+| `TOKEN_ENCRYPTION_KEY`, `APP_URL` | Ya están: descifrar tokens y el enlace de baja. | — |
+| `GOOGLE_OUTREACH_CLIENT_ID/SECRET`, `UNIPILE_DSN`, `UNIPILE_ACCESS_TOKEN`, `ANTHROPIC_API_KEY` | Los canales y el modelo del outreach. Sin ellas su canal queda «no configurado» y sus toques esperan. | `.env.example` dice de dónde sale cada una |
+
+Tras cambiar variables, `make vercel.deploy PROD=1`.
+
+**Opción B, hoy (Vercel Hobby + pg_cron de Supabase).** Hobby no deja un
+Vercel Cron por minuto, así que llama Supabase: `db/ops/cron-tick.sql`
+crea `pg_cron` y `pg_net` si faltan, guarda el secreto en **Supabase
+Vault** (`on_cue_cron_secret`; la tarea lo lee de
+`vault.decrypted_secrets` al disparar, en `cron.job` no queda el valor)
+y programa `on-cue-tick` cada minuto con `net.http_post`. Lo corre el
+dueño, con el token de administración:
+
+```bash
+cd platform
+make cron.install      # pide CRON_SECRET sin mostrarlo (el mismo de Vercel); APP_URL=https://… para otra URL
+make cron.status       # la tarea, el secreto (sin su valor), las últimas corridas y respuestas (200 = bien)
+```
+
+Es idempotente: correrlo otra vez actualiza el secreto y deja una sola
+tarea. Rotar el secreto es `make cron.install` con el nuevo y el mismo
+valor en Vercel.
+
+**Opción A, después (Vercel Pro + Vercel Cron).** Cambia solo quién
+llama. Vercel Cron llama por **GET** y manda `Authorization: Bearer
+$CRON_SECRET` solo, y la ruta acepta GET igual que POST:
+
+1. `apps/web/vercel.json`:
+   ```json
+   { "crons": [{ "path": "/api/cron/tick", "schedule": "* * * * *" }] }
+   ```
+2. `make vercel.deploy PROD=1` y comprobar en Vercel → Cron Jobs que corre.
+3. `make cron.uninstall`: retira la tarea de pg_cron y borra su secreto
+   del Vault. Con los dos encendidos no se duplica nada (cada corrida se
+   reclama), pero se paga el doble de invocaciones.
+4. Con Pro, si hace falta más aire: subir `maxDuration` en `route.ts` y
+   `TICK_BUDGET_MS` en `app/api/cron/tick/_lib/turno.ts` a la par
+   (el turno debe acabar unos 15 s antes).
 
 ## Variables de entorno (nombres, no valores)
 
@@ -664,6 +754,15 @@ pnpm --filter @mc/connectors test    # conectores: unitarias con fetch falso y p
 pnpm --filter @mc/worker typecheck lint
 ```
 
+El modo por turnos (CIM-7) tiene las suyas: `test/tick.test.ts` (sobre
+la foto con los seeds: respeta el presupuesto, corta y retoma sin gastar
+intentos, dos turnos a la vez no duplican, el tope de cortes, y
+`outbound.dispatch` sacando el mensaje de la demo por el canal falso),
+`test/cron-tick-sql.test.ts` (el SQL de `db/ops/` sin secretos en claro,
+idempotente, y su relleno) y, en la web,
+`app/api/cron/tick/_lib/turno.test.ts` (401 sin Bearer o con uno malo,
+el resumen con el bueno, por GET y POST).
+
 Las de integración aplican TODAS las migraciones reales con el runner
 de `@mc/db` (`test/migraciones.test.ts` falla si una no queda en
 `schema_migrations`), y los seeds con `applyRepoSeeds()` del arnés (la `0014` da
@@ -685,6 +784,9 @@ puedes, mete varios casos en el mismo arnés en vez de abrir otro. No tocan Supa
 
 ```
 src/index.ts                 arranque, --install, --pglite, --demo, apagado limpio
+src/tick.ts                  el modo por turnos (CIM-7): runTick y runTickFromEnv, exportados como @mc/worker/tick
+src/recursos.ts              secretos y refreshers: los mismos para el proceso, --once y los turnos
+src/runner/once.ts           una pasada: lo vencido, el reclamo por job y el presupuesto de un turno
 src/runner/config.ts         variables de entorno
 src/runner/logger.ts         JSON por línea + redactor
 src/runner/db.ts             pool de pg + SET ROLE mc_worker (Postgres real)
