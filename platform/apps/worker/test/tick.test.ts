@@ -23,10 +23,12 @@ import { DEMO_WORKSPACE_ID } from '../src/jobs/ventas/demo-ids.ts';
 import { prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
 import { motorDbFromJob } from '../src/jobs/ventas/motor-db.ts';
 import { dispatchJob, DISPATCH_JOB_ID } from '../src/jobs/ventas/outbound.dispatch.ts';
+import { lastTick } from '../src/runner/cron.ts';
+import type { WorkerDatabase } from '../src/runner/db.ts';
 import { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
-import { MAX_TICK_CUTS, TICK_CUT_KEY } from '../src/runner/once.ts';
-import { defineJob, type JobRegistration } from '../src/runner/registry.ts';
+import { claimRun, MAX_TICK_CUTS, TICK_CUT_KEY, type Claim } from '../src/runner/once.ts';
+import { defineJob, type JobDefinition, type JobRegistration } from '../src/runner/registry.ts';
 import { runTick, tickBudget, type RunTickOptions, type TickSummary } from '../src/tick.ts';
 import { jobRuns, SETUP_TIMEOUT } from './helpers/harness.ts';
 
@@ -52,6 +54,12 @@ const eterno = defineJob('test.tick_eterno', async (_p, ctx) => {
   while (!ctx.signal.aborted) await sleep(20);
   return { processed: 0, failed: 0 };
 });
+const corte = defineJob('test.tick_corte', async (_p, ctx) => {
+  while (!ctx.signal.aborted) await sleep(20);
+  return { processed: 0, failed: 0 };
+});
+const muerto = defineJob('test.tick_muerto', async () => { count('muerto'); return { processed: 1, failed: 0 }; });
+const vivo = defineJob('test.tick_vivo', async () => { count('vivo'); return { processed: 1, failed: 0 }; });
 
 let web: EmbeddedDb;
 let db: PgliteDatabase;
@@ -83,7 +91,10 @@ before(async () => {
       ('test.tick_a_lento',  'Prueba turno: lento',   'test_presupuesto', '${ANUAL}', 300, 1, 1),
       ('test.tick_b_rapido', 'Prueba turno: rápido',  'test_presupuesto', '${ANUAL}', 60,  1, 1),
       ('test.tick_contado',  'Prueba turno: contado', 'test_carrera',     '${ANUAL}', 60,  1, 1),
-      ('test.tick_eterno',   'Prueba turno: eterno',  'test_eterno',      '${ANUAL}', 300, 1, 1);
+      ('test.tick_eterno',   'Prueba turno: eterno',  'test_eterno',      '${ANUAL}', 300, 1, 1),
+      ('test.tick_corte',    'Prueba turno: corte',   'test_corte',       '${ANUAL}', 300, 1, 1),
+      ('test.tick_muerto',   'Prueba turno: muerto',  'test_muerto',      '${ANUAL}', 600, 2, 1),
+      ('test.tick_vivo',     'Prueba turno: vivo',    'test_muerto',      '${ANUAL}', 600, 2, 1);
   `);
 }, SETUP_TIMEOUT);
 
@@ -156,7 +167,81 @@ test(`un job que nunca cabe se deja de retomar tras ${MAX_TICK_CUTS} cortes, has
   assert.equal(calls['eterno'], 1);
 });
 
-test('outbound.dispatch sobre el seed de outreach: un turno saca el mensaje vencido de la demo y el siguiente no lo repite', async () => {
+test('el corte se marca en la misma escritura que cierra la fila: quien reclama justo después ya lo ve como corte', async () => {
+  const DEF_CORTE: JobDefinition = {
+    id: 'test.tick_corte', labelEs: 'Prueba turno: corte', queue: 'test_corte', defaultCron: ANUAL, timeoutS: 300, maxAttempts: 1, maxConcurrency: 1, enabled: true,
+  };
+  const updates: string[] = [];
+  let cierre: Record<string, unknown> | null = null;
+  let visto: Claim | null = null;
+  const ROLLBACK = new Error('rollback');
+  // Una base espía: tras la escritura que cierra la fila del job, y antes de
+  // que el turno haga nada más, otra pasada intenta reclamarlo (y deshace).
+  const espia = new Proxy(db, {
+    get(target, prop) {
+      if (prop === 'query') {
+        return async (text: string, params: readonly unknown[] = []) => {
+          const r = await target.query(text, params);
+          if (/^\s*UPDATE job_run/.test(text)) updates.push(text);
+          if (/UPDATE job_run\s+SET status = \$2/.test(text) && cierre === null) {
+            cierre = JSON.parse(String(params[6])) as Record<string, unknown>;
+            await target.transaction(async (tx) => {
+              const enTx = { transaction: <T>(fn: (q: typeof tx) => Promise<T>) => fn(tx) } as unknown as WorkerDatabase;
+              visto = await claimRun(enTx, { def: DEF_CORTE, registration: corte, payload: {}, coverFrom: lastTick(ANUAL, RELOJ)!, reason: 'due' }, RELOJ, 'once:espia');
+              throw ROLLBACK;
+            }).catch((err: unknown) => { if (err !== ROLLBACK) throw err; });
+          }
+          return r;
+        };
+      }
+      const v = Reflect.get(target, prop, target) as unknown;
+      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+    },
+  }) as WorkerDatabase;
+
+  const s = await turno('test_corte', [corte], { db: espia, budgetMs: 1_500 });
+  assert.deepEqual(s.ran.map((r) => [r.job, r.cut]), [['test.tick_corte', true]]);
+  assert.equal(cierre?.[TICK_CUT_KEY], true, 'la fila se cerró ya con tickCut');
+  assert.equal(updates.length, 1, `una sola escritura sobre job_run, sin un UPDATE de marca después: ${updates.join(' | ')}`);
+  assert.deepEqual(visto && { reason: (visto as { reason?: string }).reason, attempt: (visto as { attempt?: number }).attempt }, { reason: 'resume', attempt: 2 },
+    'max_attempts es 1: si el corte hubiera contado como intento, sería retries_exhausted');
+});
+
+test('una fila running de un turno muerto deja de estar viva a su sliceS + 30 s, no a los timeout_s de la definición', async () => {
+  const hace2min = new Date(RELOJ.getTime() - 120_000).toISOString();
+  await web.execAsSuperuser(`
+    INSERT INTO job_run (job_id, status, attempt, started_at, metadata) VALUES
+      ('test.tick_muerto', 'running', 1, '${hace2min}', '{"bossJobId": "once:muerto", "sliceS": 40}'::jsonb),
+      ('test.tick_vivo',   'running', 1, '${hace2min}', '{"bossJobId": "once:vivo"}'::jsonb);
+  `);
+  const s = await turno('test_muerto', [muerto, vivo]);
+  assert.deepEqual(s.ran.map((r) => [r.job, r.reason, r.status]), [['test.tick_muerto', 'retry', 'ok']],
+    'la del turno (sliceS 40) murió hace 50 s: cuenta como intento y se reintenta');
+  assert.deepEqual(s.left, [{ job: 'test.tick_vivo', reason: 'running' }], 'sin sliceS, 600 s de timeout: sigue viva');
+  assert.equal(calls['vivo'], undefined);
+});
+
+test('los trabajos que esperan en pgboss.job se cuentan y se avisan: el turno no los procesa', async () => {
+  const sinBoss = await turno('test_carrera', [contado]);
+  assert.equal(sinBoss.orphanedBossJobs, null, 'sin esquema pgboss, nada que contar');
+  assert.equal(typeof sinBoss.planMs, 'number');
+  await web.execAsSuperuser(`
+    CREATE SCHEMA pgboss;
+    CREATE TABLE pgboss.job (id serial PRIMARY KEY, name text, state text);
+    INSERT INTO pgboss.job (name, state) VALUES ('campaign.compute', 'created'), ('collect.posts', 'completed');
+    GRANT USAGE ON SCHEMA pgboss TO mc_worker;
+    GRANT SELECT ON pgboss.job TO mc_worker;
+  `);
+  try {
+    const conBoss = await turno('test_carrera', [contado]);
+    assert.equal(conBoss.orphanedBossJobs, 1);
+    assert.ok(sink.records().some((r) => r['level'] === 'warn' && String(r['msg']).includes('pgboss.job') && r['orphanedBossJobs'] === 1));
+  } finally {
+    await web.execAsSuperuser('DROP SCHEMA pgboss CASCADE');
+  }
+});
+
+test('outbound.dispatch sobre el seed de outreach: dos turnos a la vez sacan el mensaje vencido UNA vez, con presupuesto para más de 5 toques, y el siguiente no lo repite', async () => {
   // Dentro del horario de envío de la demo (Bogotá): ahora, o la próxima apertura.
   const reloj = nextWindowSlot(new Date(), 'America/Bogota');
   const motor = motorDbFromJob(db);
@@ -164,16 +249,24 @@ test('outbound.dispatch sobre el seed de outreach: un turno saca el mensaje venc
   await motor.transaction((tx) => enableOutreach(tx, { workspaceId: DEMO_WORKSPACE_ID, now: reloj }));
   const env = { WORKER_GROUPS: 'sales', OUTREACH_CHANNELS: 'fake', APP_URL: 'https://oncue.test' };
 
-  const s = await turno('sales', [dispatchJob], { now: () => reloj, env, budgetMs: 45_000 });
-  assert.deepEqual(s.ran.map((r) => [r.job, r.status, r.processed]), [[DISPATCH_JOB_ID, 'ok', 1]]);
-  assert.ok(s.elapsedMs < 15_000, `no espera a agotar los 45 s: ${s.elapsedMs} ms`);
+  const [a, b] = await Promise.all([
+    turno('sales', [dispatchJob], { now: () => reloj, env, budgetMs: 45_000 }),
+    turno('sales', [dispatchJob], { now: () => reloj, env, budgetMs: 45_000 }),
+  ]);
+  const corridas = [...a.ran, ...b.ran].filter((r) => r.job === DISPATCH_JOB_ID);
+  assert.deepEqual(corridas.map((r) => [r.status, r.processed]), [['ok', 1]], 'un solo turno lo reclamó y envió');
+  for (const s of [a, b]) assert.ok(s.elapsedMs < 15_000, `no espera a agotar los 45 s: ${s.elapsedMs} ms`);
   const { rows } = await db.query<{ status: string; provider_message_id: string | null }>(
     'SELECT status, provider_message_id FROM outbound_touch WHERE id = $1', [prep.touchId]);
   assert.equal(rows[0]?.status, 'sent');
   assert.match(rows[0]?.provider_message_id ?? '', /^fake-linkedin-/);
-  const [corrida] = await jobRuns(db, DISPATCH_JOB_ID);
+  const [corrida, ...otras] = await jobRuns(db, DISPATCH_JOB_ID);
+  assert.deepEqual(otras, [], 'una sola fila en job_run');
   assert.equal(corrida?.metadata['sent'], 1);
   assert.match(String(corrida?.metadata['bossJobId']), /^once:[0-9a-f-]{36}$/);
+  // Con 45 s de turno el job tiene ~40 s y un margen del 25 % (plazo.ts): ~15 toques por pasada.
+  // Con el margen fijo de 30 s eran 10 s y 5 toques, nueve veces menos que el proceso largo.
+  assert.ok(Number(corrida?.metadata['claimBudget']) >= 10, `presupuesto de la pasada: ${String(corrida?.metadata['claimBudget'])} toques`);
 
   const again = await turno('sales', [dispatchJob], { now: () => reloj, env, budgetMs: 45_000 });
   assert.deepEqual(again.ran, [], 'el mismo tick de */2 ya está cubierto');
