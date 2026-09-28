@@ -13,7 +13,8 @@
 docs/
 docker-compose.yml
 Makefile
-apps/worker/
+# apps/worker NO se excluye desde CIM-7: la ruta /api/cron/tick importa
+# @mc/worker/tick (el turno del worker corre dentro de la web).
 apps/media/
 # packages/connectors NO se excluye desde CON-3: la web lo importa (OAuth,
 # cifrado y configuración de las apps). Sus fixtures pesan poco y sus
