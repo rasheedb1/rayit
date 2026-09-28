@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import {
   llmBudgetLeftUsd, LLM_RESERVATION_TTL_MIN, recordOutreachLlmCall, releaseLlmReservation, reserveLlmBudget,
 } from '../src/queries/outreach.ts';
+import { recordRecommendLlmCall, releaseRecommendLlmReservation, reserveRecommendLlmBudget } from '../src/queries/cadencias/index.ts';
 import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 let t: TestDb;
@@ -72,4 +73,32 @@ test('la web no escribe reservas: mc_app solo las lee, las de su espacio', async
   );
   const leidas = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query('SELECT id FROM outbound_llm_reservation'));
   assert.ok(Array.isArray(leidas.rows));
+});
+
+test('«Proponer cadencia» (VEN-13, pulido r4): dos propuestas a la vez con saldo para una sola, pasa una', async () => {
+  await t.admin(`DELETE FROM outbound_llm_reservation WHERE workspace_id = '${WORKSPACE_LAURA}'`);
+  const antes = await saldo();
+  // Cada una aparta un poco más de la mitad de lo que queda: cabe una, no dos.
+  const estimado = antes / 2 + 0.01;
+  const proponer = () => t.db.withWorkspace(WORKSPACE_LAURA, (tx) => reserveRecommendLlmBudget(tx, estimado));
+  const [a, b] = await Promise.all([proponer(), proponer()]);
+  assert.equal([a, b].filter(Boolean).length, 1, JSON.stringify([a, b]));
+  const id = (a ?? b)!;
+  const fila = await t.db.asWorker(async (tx) =>
+    (await tx.query<{ purpose: string }>(`SELECT purpose FROM outbound_llm_reservation WHERE id = $1`, [id])).rows[0]);
+  assert.equal(fila?.purpose, 'recommend');
+  // Con el worker a la vez tampoco: la cuenta es la misma para todos.
+  assert.equal(await reservar(estimado), null, 'el worker ve la reserva de la web');
+  // Registrar la llamada suelta la reserva en la misma transacción.
+  await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+    recordRecommendLlmCall(tx, { model: 'claude-sonnet-5', inputTokens: 1000, outputTokens: 100 }, id));
+  const abiertas = await t.db.asWorker((tx) => tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM outbound_llm_reservation`));
+  assert.equal(abiertas.rows[0]!.n, 0);
+  // La web no suelta las del worker: solo las suyas.
+  const delWorker = await reservar(0.01);
+  assert.ok(delWorker);
+  await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => releaseRecommendLlmReservation(tx, delWorker!));
+  const siguen = await t.db.asWorker((tx) => tx.query(`SELECT 1 FROM outbound_llm_reservation WHERE id = $1`, [delWorker]));
+  assert.equal(siguen.rows.length, 1);
+  await t.db.asWorker((tx) => releaseLlmReservation(tx, delWorker!));
 });

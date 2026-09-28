@@ -262,6 +262,9 @@ export const PITCH = {
     not_editable: "Ese borrador ya cambió (salió, se aprobó o se canceló). Recarga la página.",
     deal: "Ese negocio no es de esta empresa. Elige otro o ninguno.",
     no_postal_address: "Falta la dirección postal que va en el pie de los correos.",
+    /** Un 'viewer' o un 'client' (en una agencia, la marca misma) ve el pitch, no lo guarda, programa ni redacta (PUEDEN_OPERAR_VENTAS). */
+    sinPermiso:
+      "Tu rol en este espacio puede ver el pitch, pero no guardarlo, programarlo ni pedirle un borrador a la IA. Pídeselo a quien es dueño, administra o es miembro del espacio.",
   },
 
   cargando: "Cargando el pitch",

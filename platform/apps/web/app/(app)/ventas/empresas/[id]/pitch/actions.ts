@@ -18,6 +18,10 @@
  * petición para el worker (requestPitchDraft): la web no llama al modelo.
  * En la demo embebida (sin worker) la redacta en el momento el redactor
  * falso, por el mismo camino (redactarPitchEnLaDemo).
+ *
+ * Las dos exigen el rol (puedeOperarVentas: owner, admin o member) ANTES
+ * de validar o tocar la base: programar es un envío real a la marca y
+ * pedir un borrador gasta modelo. Un 'viewer' o un 'client' no pueden.
  */
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
@@ -30,6 +34,7 @@ import { UUID_RE, formField as field, type ActionState } from "@/lib/forms";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../../_lib/db";
+import { puedeOperarVentas } from "../../../_lib/permiso";
 import { PITCH } from "./messages";
 
 export interface PitchState extends ActionState {
@@ -112,6 +117,7 @@ function invalid(error: z.ZodError): PitchState {
 }
 
 export async function guardarPitch(_prev: PitchState, formData: FormData): Promise<PitchState> {
+  if (!(await puedeOperarVentas())) return { message: PITCH.errores.sinPermiso };
   const parsed = schema.safeParse({ ...fields(formData), intent: field(formData, "intent") });
   if (!parsed.success) return invalid(parsed.error);
   const v = parsed.data;
@@ -146,6 +152,7 @@ export async function guardarPitch(_prev: PitchState, formData: FormData): Promi
  * pista y las instrucciones. El worker la toma en su siguiente pasada.
  */
 export async function pedirRedaccion(_prev: PitchState, formData: FormData): Promise<PitchState> {
+  if (!(await puedeOperarVentas())) return { message: PITCH.errores.sinPermiso };
   const parsed = aiSchema.safeParse({ ...fields(formData), hint: field(formData, "hint"), instructions: field(formData, "instructions") });
   if (!parsed.success) {
     const contacto = parsed.error.issues.some((i) => i.path[0] === "contactId");

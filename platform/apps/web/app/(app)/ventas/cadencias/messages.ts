@@ -370,6 +370,9 @@ export const MESSAGES = {
     all_opted_out: "Todas las personas de esta marca pidieron no recibir mensajes: no hay a quién proponerle una cadencia.",
     sequence_not_active: "Activa la cadencia para enrolar.",
     generico: "No pudimos guardar el cambio. Inténtalo otra vez.",
+    /** Un 'viewer' o un 'client' (en una agencia, la marca misma) ve las cadencias, no las cambia (PUEDEN_OPERAR_VENTAS). */
+    sinPermiso:
+      "Tu rol en este espacio puede ver las cadencias, pero no proponerlas, cambiarlas ni enrolar a nadie. Pídeselo a quien es dueño, administra o es miembro del espacio.",
   } as Record<string, string>,
 
   /** Los errores que dicen un límite: reciben la cifra ya formateada (MAX_STEPS, MAX_STEPS_PER_DAY de @mc/db). */

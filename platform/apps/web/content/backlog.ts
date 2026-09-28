@@ -149,8 +149,8 @@ export const STORIES: readonly Story[] = [
     title: "pnpm verificar determinista",
     desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
     done: "Veinte corridas seguidas de pnpm verificar en una máquina cargada, sin una sola prueba cancelada.",
-    status: "hecho",
-    note: "Cerrada en VEN-15 r5 (25-sep): openTestDb abre cada base desde una foto migrada una vez por proceso y verificar corre con --continue; veinte corridas con carga, sin pruebas canceladas.",
+    status: "en_curso",
+    note: "Pulido r4: el interruptor, el perfil y el radar esperan a que la transición de ConfirmInline suelte el botón antes del rerender; canales abre su base con 180 s. Con dos verificar a la vez aún fallan pruebas de Nicolás (oauth-refresh del worker, guard.attempts; cuentas-service con hook de 60 s): en curso hasta 20 corridas en verde.",
   },
   {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],
@@ -375,7 +375,7 @@ export const STORIES: readonly Story[] = [
     desc: "Cada deal abierto tiene acción, fecha y responsable. Lista «vencidos hoy» arriba del pipeline. El job ventas/seguimientos.ts crea la notification de tipo deal_due y deal_overdue cada mañana.",
     done: "Un deal sin siguiente acción se ve marcado; uno vencido aparece en la lista y en la campana.",
     status: "hecho",
-    note: "Siguiente acción en una línea editable (qué, cuándo y quién) en la ficha, el tablero, la lista y «Para hoy»; «Hecha» comprueba que la acción no haya cambiado (ActionChanged), y el job sales.follow_ups avisa una vez por vencimiento en la mañana de cada espacio. Pruebas en packages/db/test/ventas-ficha.test.ts y apps/worker/test/seguimientos.test.ts; detalle en docs/propuestas/VEN-4.md. Pendiente humano: la cola única del integrador en docs/ventas-outreach.md §5.2 (mezclar main; db.migrate aplica 0043…0075 en orden; db.guardia; seeds) y GRANT mc_worker TO mc_migrator (supabase-admin.sh).",
+    note: "Siguiente acción en una línea editable (qué, cuándo y quién) en ficha, tablero, lista y «Para hoy»; job sales.follow_ups. Pulido r4: quien acepta la señal o abre el negocio es su responsable y el de «Enviar pitch»; fijar y marcar hecha exigen el rol. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2.",
   },
   {
     id: "VEN-5", module: "VEN", owner: "rasheed", size: "L", sprint: 3, deps: ["VEN-3"],
@@ -383,7 +383,7 @@ export const STORIES: readonly Story[] = [
     desc: "Cabecera, contactos, línea de tiempo de activity (nota, correo, llamada, reunión, cambio de etapa), «lo que sabemos» (señales), y la cadena deal → cotización → campaña → factura con enlaces.",
     done: "Registrar una llamada la pone en la línea de tiempo y actualiza last_contact_at.",
     status: "hecho",
-    note: "Ficha en bloques plegables: cabecera, negocios con su cadena cotización → campaña → factura, actividad con registro rápido por teclado (una llamada mueve last_contact_at), contactos con procedencia y baja, y «lo que sabemos» con enlaces externos solo http(s). Pruebas en packages/db/test/ventas-ficha.test.ts y empresas/[id]/*.test.tsx; detalle en docs/propuestas/VEN-5.md. Pendiente humano: la cola única del integrador en docs/ventas-outreach.md §5.2 (mezclar main; db.migrate aplica 0043…0075 en orden; db.guardia; seeds).",
+    note: "Ficha en bloques plegables con cadena cotización → campaña → factura, registro rápido y contactos con su baja. Pulido r4: registrar actividad exige el rol (un viewer o un client solo ven). Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2.",
   },
   {
     id: "VEN-6", module: "VEN", owner: "rasheed", size: "M", sprint: 4, deps: ["COT-2", "VEN-5"],
@@ -424,7 +424,7 @@ export const STORIES: readonly Story[] = [
     desc: "Pasos normalizados, enrolamiento, cola en outbound_touch con reclamo atómico, despachador por canal con interfaz común, días hábiles y zona horaria del workspace, límites diarios y semanales, reintentos con espera creciente, interruptor de apagado, cancelación al responder con relectura del estado antes de enviar.",
     done: "Una secuencia de tres pasos con plantillas fijas se ejecuta sola contra un buzón de prueba; una respuesta cancela lo pendiente; el límite diario reprograma al día siguiente.",
     status: "bloqueada",
-    note: "Pulido r1: una respuesta sin hilo no se aprueba (no_thread) y la ficha ofrece «Saltar este paso»; «Reanudar la cadencia» para lo que 0059 pausó; aprobar, resolver, saltar y reanudar piden ser del equipo (y outreach_resolve_unconfirmed en la base); el reclamo reparte entre workspaces; festivos por país (CO 2026-2027) en toda ventana; aviso de retenido por motivo; --ayuda en job:dispatch. Pulido r2: la serie va entera detrás de la 0042 de main (0043…0075, sin renumerar al integrar) y se aplica sobre ella en embebido. Pulido r3: el reclamo descarta también la baja del espacio y, si la base rechaza el lote, reclama fila por fila: un toque ya no deja la cola de todos los workspaces parada. Pendiente del integrador: la cola única del integrador en docs/ventas-outreach.md §5.2 (mezclar main; db.migrate aplica 0043…0075 en orden; db.guardia; seeds), y pegar aquí las salidas de los pasos 4 y 6 de §5.2 contra Supabase.",
+    note: "Motor de cadencias con aprobar, resolver, saltar y reanudar del equipo, festivos por país y reclamo fila a fila. Pulido r4: seeds y alta pendientes de adaptar a 0034 (membership.role → role_id; con 0034–0042 de main, seed 0002 falla). Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2. Pegar aquí las salidas de sus pasos 4 y 6.",
   },
   {
     id: "VEN-11", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["CON-6", "COT-1"],
@@ -440,7 +440,7 @@ export const STORIES: readonly Story[] = [
     desc: "Generador con perfil del creador, señal de la marca, ángulo del día y toques realmente enviados; pre-vuelo determinista, juez con rúbrica por paso en tabla, regeneración con pistas cerradas, disparadores de riesgo y revisión humana con calentamiento por tipo de paso.",
     done: "Un mensaje con una cifra sin origen no pasa; dos marcas del mismo nicho reciben correos con similitud menor de 0,65; el juez registra nota, tokens y costo.",
     status: "hecho",
-    note: "Hecha: cifras trazables, pre-vuelo, compuertas A-B-C, juez con nota y costo, y tope diario reservado antes de cada llamada (0075). Pendiente del integrador: la cola única del integrador en docs/ventas-outreach.md §5.2 (mezclar main; db.migrate aplica 0043…0075 en orden; db.guardia; seeds), y ANTHROPIC_API_KEY en el worker. Detalle en docs/ventas-outreach.md.",
+    note: "Cifras trazables, pre-vuelo, compuertas A-B-C, juez con costo y tope reservado antes de cada llamada (0075). Pulido r4: guardar, programar y «Redactar con IA» del pitch exigen el rol. Pendiente humano: ANTHROPIC_API_KEY en el worker. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2.",
   },
   {
     id: "VEN-13", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-12"],
@@ -448,7 +448,7 @@ export const STORIES: readonly Story[] = [
     desc: "Desde el brief, la señal, los canales conectados y los contactos disponibles, una secuencia propuesta con día, canal, ángulo y guía por paso; plantillas por nicho y tipo de señal; línea de tiempo editable.",
     done: "Desde una señal de campaña activa, el creador obtiene una secuencia de seis pasos con guía y la activa en dos clics.",
     status: "hecho",
-    note: "«Proponer cadencia» desde la campaña activa de Fresko da seis pasos con guía dentro de la política, y «Activar y escribir a Camila» la enciende y la enrola; el modelo solo reescribe la guía de los pasos de mensaje. Pulido r3: una marca con todas sus personas de baja no se ofrece para proponer (all_opted_out). Pendiente humano: ANTHROPIC_API_KEY y la cola única del integrador en docs/ventas-outreach.md §5.2 (mezclar main; db.migrate aplica 0043…0075 en orden; db.guardia; seeds). Detalle en docs/ventas-outreach.md §5.5.",
+    note: "Proponer y activar cadencias con guía dentro de la política. Pulido r4: las once acciones exigen el rol; «Proponer cadencia» reserva el tope del modelo (purpose recommend en 0075) y el redactor usa el cliente de @mc/core. Pendiente humano: ANTHROPIC_API_KEY. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2.",
   },
   {
     id: "VEN-14", module: "VEN", owner: "rasheed", size: "L", sprint: 5, deps: ["VEN-12"],
@@ -472,7 +472,7 @@ export const STORIES: readonly Story[] = [
     desc: "Cola visible con reintento por tipo, uso por canal con límite blando y duro, embudo por paso (enviados, abiertos, respondidos, positivos), vista de flujo de la cadencia.",
     done: "Con una semana de envíos de prueba, el embudo cuadra con outbound_touch fila a fila.",
     status: "hecho",
-    note: "/ventas/actividad (cola con reintento por tipo que pregunta antes y páginas por cursor), uso por canal con sus tres topes en /ventas/canales y embudo con vista de flujo en /ventas/cadencias/[id]; el embudo cuadra con outbound_touch fila a fila en pglite; pulido r2: una sola forma de fecha y hora en las filas de Ventas («25 sep, 9:40 a. m.»). Una sola migración, 0072 (la base rechaza que un rol de lectura opere la cola, con y sin los roles de main), y seed 0009, en la cola única de docs/ventas-outreach.md §5.2. Pulido r3: ningún contador de la demo cae en fin de semana y `pnpm test` verifica los seeds con el reloj en sábado y en domingo. Detalle en docs/ventas-outreach.md §6.",
+    note: "/ventas/actividad con cola, reintento por tipo y cursor; uso por canal y embudo por paso (0072, seed 0009). Pulido r4: un correo de cadencia por redactar dice «Paso N · Correo · por redactar», no «Sin asunto». Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2.",
   },
 
   // ---------------------------------------------------------------- COT

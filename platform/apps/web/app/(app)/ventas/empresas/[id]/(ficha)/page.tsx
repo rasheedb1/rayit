@@ -21,6 +21,7 @@ import { dealLabel } from "@/lib/negocio";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { ModuleTabs } from "../../../_componentes/pestanas";
 import { withWorkspace } from "../../../_lib/db";
+import { puedeOperarVentas } from "../../../_lib/permiso";
 import { RELATIONSHIP_META, lostReasonText } from "../../../_lib/estado";
 import { MESSAGES } from "../../../_lib/messages";
 import { countryOptions } from "../../../_lib/paises";
@@ -101,6 +102,8 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
 
   const workspace = await getCurrentWorkspace();
   const f = formatterFor(workspace);
+  // «Proponer cadencia» gasta modelo y crea una cadencia: un 'viewer' o un 'client' no lo ven (la acción lo vuelve a mirar).
+  const puedeOperar = await puedeOperarVentas();
   const rel = RELATIONSHIP_META[company.relationship];
   // «Colombia · Bogotá»: el país por su nombre, en el idioma del espacio.
   const location = [company.country ? f.country(company.country) : null, company.city].filter(Boolean).join(" · ");
@@ -228,7 +231,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                             <Button href={`/ventas/cadencias/${senal.sequenceId}`} size="sm" variant="secondary">
                               {CADENCIAS.senales.verCadencia}
                             </Button>
-                          ) : (
+                          ) : !puedeOperar ? null : (
                             <ProponerBoton
                               signalId={senal.signalId}
                               variant="secondary"

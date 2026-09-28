@@ -286,7 +286,11 @@ Decisiones que las piezas siguientes tienen que conocer:
   saldo. Registrar la llamada (`recordOutreachLlmCall` con su
   `reservationId`) suelta la reserva en la misma transacción; una que
   nadie soltó deja de contar a los diez minutos. `outbound_llm_call`
-  sigue siendo la bitácora append-only con el costo real.
+  sigue siendo la bitácora append-only con el costo real. La web aparta
+  igual, con el mismo candado y la misma cuenta, cuando llama al modelo:
+  «Recalcular» del perfil (purpose `profile`) y «Proponer cadencia»
+  (purpose `recommend`), por `outbound_llm_reserve_web` y
+  `outbound_llm_release_web` (queries/presupuesto-web.ts de @mc/db).
 - `outbound_sequence.status` manda; `active` se deriva de él con un
   disparador hasta que VEN-13 retire la columna.
 - En `outbound_touch`, `held_reason` es por qué está retenido y

@@ -1,8 +1,9 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
 import {
-  GUIDANCE_PHRASES, GuidanceWriterError, RECOMMEND_MODEL, type GuidanceLocale, type GuidanceRequest, type GuidanceWriter, type LlmUsage,
+  GUIDANCE_PHRASES, GuidanceWriterError, RECOMMEND_MODEL, type GuidanceLocale, type GuidanceRequest, type GuidanceWriter,
 } from "@mc/core";
+import { AnthropicLlm, billedUpperBound, mayHaveBeenBilled } from "@mc/core/outreach/anthropic";
+import type { LlmClient, LlmRequest } from "@mc/core/outreach/llm";
 import { GUIDANCE_OUTPUT_SCHEMA, parseGuidanceOutput } from "./redactor-salida";
 
 /**
@@ -18,6 +19,11 @@ import { GUIDANCE_OUTPUT_SCHEMA, parseGuidanceOutput } from "./redactor-salida";
  * Lo que sale hacia la API: la señal, el nombre de la empresa, el brief
  * del creador (con los formatos que ofrece y su ventana) y los pasos.
  * Nada de la persona a la que se escribe.
+ *
+ * El cliente es el de @mc/core/outreach/anthropic (AnthropicLlm), el mismo
+ * del generador y del juez: la misma petición, la misma cuenta de tokens
+ * y la misma cota de lo que pudo cobrarse (billedUpperBound). Aquí solo
+ * viven el prompt y el esquema de salida (redactor-salida.ts).
  */
 
 /** Si el servidor tiene la llave de Anthropic. Sin ella no se llama al modelo. */
@@ -50,59 +56,52 @@ Devuelve un objeto con "steps": un elemento por paso, con su "index" y su "guida
 }
 
 /** Lo que se le pide a la API por intento: hasta cuántos tokens puede devolver. */
-const MAX_TOKENS = 4000;
+export const MAX_TOKENS = 4000;
 /** Reintentos del cliente: un tiempo de espera se reintenta una vez, y cada intento pudo cobrarse. */
 const MAX_RETRIES = 1;
+/** Cuántas veces puede salir una petición del redactor: con eso se aparta del tope y se acota lo que un corte pudo cobrar. */
+export const REDACTOR_ATTEMPTS = MAX_RETRIES + 1;
+/** Menos que el del worker: quien espera es una persona delante de «Proponer cadencia». */
+const TIMEOUT_MS = 45_000;
 
-/**
- * Una cota superior de lo que costó una petición que falló después de
- * salir: la entrada estimada por su tamaño (unos tres caracteres por
- * token, de más para el español) y la salida completa, por cada intento.
- * Sobrestima a propósito: el tope diario no puede contar de menos.
- */
-export function usoEstimado(system: string, user: string): LlmUsage {
-  const intentos = MAX_RETRIES + 1;
+/** El cliente del redactor: el de @mc/core con la llave del servidor, un reintento y su tiempo límite. */
+function clienteDelRedactor(): AnthropicLlm {
+  return new AnthropicLlm({ apiKey: process.env.ANTHROPIC_API_KEY?.trim() ?? "", timeoutMs: TIMEOUT_MS, maxRetries: MAX_RETRIES });
+}
+
+/** La petición al modelo para una guía: el prompt de aquí y el esquema de redactor-salida.ts. */
+export function peticionDeGuia(req: GuidanceRequest): LlmRequest {
   return {
+    purpose: "recommend",
     model: RECOMMEND_MODEL,
-    inputTokens: Math.ceil((system.length + user.length) / 3) * intentos,
-    outputTokens: MAX_TOKENS * intentos,
+    system: instruccionDeSistema(req.locale),
+    user: JSON.stringify(req),
+    maxTokens: MAX_TOKENS,
+    jsonSchema: { ...GUIDANCE_OUTPUT_SCHEMA },
   };
 }
 
 /**
- * Si el error deja la duda de que la API procesó la petición: un tiempo
- * de espera o un corte de conexión. Un 4xx (llave, cuota, petición mal
- * hecha) o un 5xx no se cobran.
+ * El redactor real. `llm` es el cliente de @mc/core (en las pruebas, uno
+ * falso detrás de la misma interfaz) y `attempts`, cuántas veces puede
+ * salir una petición: con eso se acota lo que un corte pudo cobrar.
  */
-function pudoCobrarse(e: unknown): boolean {
-  return e instanceof Anthropic.APIConnectionError;
-}
-
-/** El redactor real, con el cliente de la API. */
-export function redactorAnthropic(client: Anthropic = new Anthropic()): GuidanceWriter {
+export function redactorAnthropic(llm: LlmClient = clienteDelRedactor(), attempts = REDACTOR_ATTEMPTS): GuidanceWriter {
   return async (req: GuidanceRequest) => {
-    const system = instruccionDeSistema(req.locale);
-    const user = JSON.stringify(req);
-    let response: Anthropic.Message;
+    const peticion = peticionDeGuia(req);
+    let response: Awaited<ReturnType<LlmClient["complete"]>>;
     try {
-      response = await client.messages.create(
-        {
-          model: RECOMMEND_MODEL,
-          max_tokens: MAX_TOKENS,
-          system,
-          messages: [{ role: "user", content: user }],
-          output_config: { effort: "low", format: { type: "json_schema", schema: { ...GUIDANCE_OUTPUT_SCHEMA } } },
-        },
-        { timeout: 45_000, maxRetries: MAX_RETRIES },
-      );
+      response = await llm.complete(peticion);
     } catch (e) {
       // Un tiempo de espera o un corte mientras llegaba la respuesta: la llamada pudo cobrarse y se registra con su cota.
-      throw new GuidanceWriterError("el redactor de la guía falló", pudoCobrarse(e) ? usoEstimado(system, user) : null, { cause: e });
+      throw new GuidanceWriterError("el redactor de la guía falló", mayHaveBeenBilled(e) ? billedUpperBound(peticion, attempts) : null, {
+        cause: e,
+      });
     }
-    const usage = { model: RECOMMEND_MODEL, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens };
+    // El modelo de la petición (el que tiene precio), no el alias que devuelva la API.
+    const usage = { model: RECOMMEND_MODEL, inputTokens: response.inputTokens, outputTokens: response.outputTokens };
     // Una negativa o un corte por longitud se cobran igual: la llamada se registra y la guía se queda con las reglas.
-    if (response.stop_reason !== "end_turn") return { steps: [], usage };
-    const texto = response.content.find((b) => b.type === "text");
-    return { steps: parseGuidanceOutput(texto?.type === "text" ? texto.text : null), usage };
+    if (response.stopReason !== "end_turn") return { steps: [], usage };
+    return { steps: parseGuidanceOutput(response.text || null), usage };
   };
 }

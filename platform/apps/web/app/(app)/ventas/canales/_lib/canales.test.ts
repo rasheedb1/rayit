@@ -80,13 +80,16 @@ function deps(over: Partial<ChannelDeps> = {}): ChannelDeps {
 const count = async (sql: string) => (await db.queryAsSuperuser<{ n: number }>(sql)).rows[0]!.n;
 const accounts = () => withWorkspace((tx) => listChannelAccounts(tx));
 
+// Migrar y sembrar una base embebida entera: con dos `pnpm verificar` a la vez pasó de 60 s (pulido r4, CIM-12).
+// 180 s, como las demás pruebas de la web que abren Postgres embebido; una base que nunca abre sigue fallando.
 beforeAll(async () => {
   guard = withoutNetwork();
   db = await createEmbeddedDb({ seeds: true });
-}, 60_000);
+}, 180_000);
 
 afterAll(async () => {
-  await db.close();
+  // Si la base no llegó a abrir, el error que cuenta es el del beforeAll, no un «undefined.close».
+  await db?.close();
   guard.restore();
   expect(guard.attempts, "ninguna prueba de canales salió a la red").toBe(0);
 });

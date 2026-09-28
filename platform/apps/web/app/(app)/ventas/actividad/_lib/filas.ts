@@ -153,8 +153,13 @@ export function filaVista(r: QueueRow, f: Formatter, ctx: ContextoFila = {}): Fi
   const tipo = r.stepType ? etiquetaTipo(r.stepType) : null;
   // Sin paso, el contexto ya dice «Sin cadencia»: la fila no repite «Fuera de una cadencia».
   const paso = r.stepPosition !== null && tipo ? T.paso(f.int(r.stepPosition), tipo) : tipo;
-  const titulo = r.subject?.trim()
-    || (r.channel === "email" && r.stepType !== "email_reply" ? T.sinAsunto : (paso ?? T.suelto(MESSAGES.uso.canales[r.channel])));
+  const asunto = r.subject?.trim() || null;
+  // Un borrador de una cadencia que todavía no se redacta no es un correo vacío a punto de salir: dice su paso
+  // («Paso 2 · Correo») y «por redactar», como las filas de LinkedIn; el asunto, cuando exista.
+  const porRedactar = !asunto && r.status === "draft" && paso !== null;
+  const titulo = asunto
+    ?? (porRedactar ? paso
+      : r.channel === "email" && r.stepType !== "email_reply" ? T.sinAsunto : (paso ?? T.suelto(MESSAGES.uso.canales[r.channel])));
   const marcas: string[] = [];
   if (r.status === "sent" && r.openedAt) marcas.push(T.abierto);
   if (r.status === "sent" && r.repliedAt) marcas.push(T.respondido);
@@ -171,6 +176,7 @@ export function filaVista(r: QueueRow, f: Formatter, ctx: ContextoFila = {}): Fi
     contacto: r.contactName ?? r.contactEmail ?? T.sinContacto,
     contexto: [r.companyName, r.sequenceName ?? T.sinCadencia].filter(Boolean).join(" · "),
     paso: paso !== titulo ? paso : null,
+    nota: porRedactar ? T.porRedactar : null,
     cuando: momento.corto,
     cuandoCompleto: momento.largo,
     cuenta: r.accountName ? T.desde(r.accountName) : null,

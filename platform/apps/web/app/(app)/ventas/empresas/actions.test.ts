@@ -46,6 +46,7 @@ import {
   aprobarMensaje, fijarSiguienteAccion, marcarHecha, reanudarCadencia, registrarActividad, resolverIntento, saltarMensaje, verMasActividad,
 } from "./actions";
 import { FICHA } from "./messages";
+import { MESSAGES } from "../_lib/messages";
 
 const COMPANY = "00000002-0000-4000-8000-0000000000e1";
 const DEAL = "00000006-0000-4000-8000-000000000001";
@@ -66,6 +67,21 @@ beforeEach(() => {
   completeNextAction.mockReset().mockResolvedValue({ companyId: COMPANY });
   revalidatePath.mockReset();
   puedeOperarVentas.mockReset().mockResolvedValue(true);
+});
+
+describe("el rol, en las escrituras del CRM (VEN-4, VEN-5)", () => {
+  it("un 'viewer' o un 'client' no registra actividad ni fija o cierra la siguiente acción, y no toca la base", async () => {
+    puedeOperarVentas.mockResolvedValue(false);
+    const sin = { message: MESSAGES.sinPermiso };
+    expect(
+      await registrarActividad({}, form({ companyId: COMPANY, kind: "call", body: "Llamada", dealId: DEAL, contactId: CONTACT, occurredOn: "" })),
+    ).toEqual(sin);
+    expect(
+      await fijarSiguienteAccion({}, form({ dealId: DEAL, action: "Enviar propuesta", dueDate: "2026-09-30", dueTime: "", responsibleUserId: LAURA })),
+    ).toEqual(sin);
+    expect(await marcarHecha({}, form({ dealId: DEAL }))).toEqual(sin);
+    for (const m of [logActivity, setNextAction, completeNextAction, revalidatePath]) expect(m).not.toHaveBeenCalled();
+  });
 });
 
 describe("registrarActividad", () => {

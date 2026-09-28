@@ -3,13 +3,13 @@ import {
   briefOfferLines, guidanceLocale, recommendSequence, refineGuidance, type GuidanceWriter, type LlmUsage, type Proposal, type ProposalNote,
 } from "@mc/core";
 import {
-  CadenciaError, createSequenceFromProposal, defaultContact, getRecommendationContext, recordRecommendLlmCall,
-  replaceStepsFromProposal, type ProposalMeta,
+  CadenciaError, createSequenceFromProposal, defaultContact, estimateRecommendCallUsd, getRecommendationContext, recordRecommendLlmCall,
+  releaseRecommendLlmReservation, replaceStepsFromProposal, reserveRecommendLlmBudget, type ProposalMeta,
 } from "@mc/db/queries/cadencias";
-import { outboundHealth } from "@mc/db/queries/outreach";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
 import { MESSAGES } from "../messages";
+import { MAX_TOKENS, REDACTOR_ATTEMPTS } from "./redactor";
 
 /**
  * Pedir una propuesta al recomendador y guardarla (VEN-13).
@@ -17,14 +17,21 @@ import { MESSAGES } from "../messages";
  * Tres tiempos, para no tener una transacción abierta mientras el modelo
  * piensa:
  *   1. se leen los datos (señal, personas, canales, política, el creador
- *      del negocio con su nicho y su brief, plantillas) y el gasto de
- *      hoy, y las reglas deciden los pasos;
- *   2. si hay redactor y queda presupuesto, el modelo reescribe la guía
- *      (refineGuidance se queda con la regla donde su texto no sirve);
- *   3. si hubo llamada, su fila en outbound_llm_call (en su propia
- *      transacción: se cobró pase lo que pase después), y se guarda la
- *      secuencia (con el brief del que sale) o se reemplazan los pasos
- *      del borrador.
+ *      del negocio con su nicho y su brief, plantillas), las reglas
+ *      deciden los pasos y, si hay redactor, se APARTA del tope diario lo
+ *      que puede costar la llamada (reserveRecommendLlmBudget: el mismo
+ *      candado por espacio y la misma cuenta, tope − gastado − reservas
+ *      abiertas, que el worker y «Recalcular» del perfil). Dos propuestas
+ *      a la vez, o una junto a outbound.generate, no pasan con el mismo
+ *      saldo;
+ *   2. si hubo reserva, el modelo reescribe la guía (refineGuidance se
+ *      queda con la regla donde su texto no sirve);
+ *   3. si hubo llamada, su fila en outbound_llm_call, que suelta la
+ *      reserva en la misma transacción (en la suya propia: se cobró pase
+ *      lo que pase después), y se guarda la secuencia (con el brief del
+ *      que sale) o se reemplazan los pasos del borrador. Una reserva que
+ *      no se usó (el modelo falló sin cobrar, o algo se rompió) se suelta
+ *      al final; si ni eso se puede, vence sola a los diez minutos.
  *
  * A las notas del recomendador se suman las del contexto: `no_creator`
  * (el negocio no tiene creador y el espacio tiene varios) y
@@ -71,16 +78,53 @@ export async function proponerCadencia(input: ProponerInput, writer: GuidanceWri
       policy: ctx.policy,
       locale,
     });
-    const llm = writer ? (await outboundHealth(tx, 24)).llm : null;
-    return { ctx, elegida, proposal, conPresupuesto: llm ? llm.spentToday < llm.dailyCap : false };
+    const reserva = writer ? await reserveRecommendLlmBudget(tx, estimateRecommendCallUsd(MAX_TOKENS, REDACTOR_ATTEMPTS)) : null;
+    return { ctx, elegida, proposal, reserva };
   });
+  // La reserva que queda por soltar: la suelta registrar la llamada, o el finally si no se usó.
+  let reserva = leido.reserva;
+  try {
+    return await guardarPropuesta(input, writer, leido, ahora, locale, (uso) => {
+      const id = reserva;
+      reserva = null;
+      return withWorkspace((tx) => recordRecommendLlmCall(tx, uso, id));
+    });
+  } finally {
+    const sobra = reserva;
+    if (sobra) {
+      try {
+        await withWorkspace((tx) => releaseRecommendLlmReservation(tx, sobra));
+      } catch (e) {
+        // No se pudo soltar: vence sola a los diez minutos (LLM_RESERVATION_TTL_MIN).
+        console.error("[ventas/cadencias] soltar la reserva del modelo", e);
+      }
+    }
+  }
+}
+
+type Leido = {
+  ctx: Awaited<ReturnType<typeof getRecommendationContext>>;
+  elegida: Awaited<ReturnType<typeof getRecommendationContext>>["contacts"][number] | null;
+  proposal: Proposal;
+  reserva: string | null;
+};
+
+/** Los tiempos 2 y 3: la guía del modelo (si hubo reserva), el registro de la llamada y la secuencia guardada. */
+async function guardarPropuesta(
+  input: ProponerInput,
+  writer: GuidanceWriter | null,
+  leido: Leido,
+  ahora: Date,
+  locale: ReturnType<typeof guidanceLocale>,
+  registrarLlamada: (uso: LlmUsage) => Promise<void>,
+): Promise<string> {
 
   let proposal: Proposal = leido.proposal;
   let meta: Omit<ProposalMeta, "signalId" | "contactId" | "dealId" | "briefId"> = {
     guidance: "rules", guidanceWhyRules: "no_key", model: null,
   };
   let usage: LlmUsage | null = null;
-  if (writer && !leido.conPresupuesto) {
+  if (writer && !leido.reserva) {
     meta = { guidance: "rules", guidanceWhyRules: "budget", model: null };
   } else if (writer) {
     const { ctx } = leido;
@@ -124,9 +168,8 @@ export async function proponerCadencia(input: ProponerInput, writer: GuidanceWri
   ];
   proposal = { ...proposal, notes: [...proposal.notes, ...notasDelContexto] };
   const nombre = `${leido.ctx.signal.companyName ?? leido.proposal.templateName} · ${MESSAGES.senalTipos[proposal.signalKind]}`;
-  // La llamada se registra aparte: se cobró aunque guardar la secuencia falle después.
-  const llamada = usage;
-  if (llamada) await withWorkspace((tx) => recordRecommendLlmCall(tx, llamada));
+  // La llamada se registra aparte (y suelta su reserva): se cobró aunque guardar la secuencia falle después.
+  if (usage) await registrarLlamada(usage);
   return withWorkspace(async (tx) => {
     if (input.sequenceId) {
       await replaceStepsFromProposal(tx, input.sequenceId, { proposal, meta: fullMeta });

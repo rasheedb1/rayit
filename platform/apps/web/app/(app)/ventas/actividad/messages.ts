@@ -101,6 +101,8 @@ export const MESSAGES = {
     sinContacto: "Sin contacto",
     sinCadencia: "Sin cadencia",
     sinAsunto: "Sin asunto",
+    /** Un borrador de cadencia que todavía no se redacta: el título es su paso y esto va al lado, en neutro. */
+    porRedactar: "por redactar",
     desde: (cuenta: string) => `Desde ${cuenta}`,
     intentos: plural({ one: "{n} intento", other: "{n} intentos" }),
     reintento: (cuando: string) => `Reintento ${cuando}`,

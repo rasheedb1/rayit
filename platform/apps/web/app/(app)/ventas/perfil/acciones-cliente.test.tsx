@@ -135,17 +135,37 @@ describe("el aviso de guardado y Recalcular", () => {
     const { rerender } = render(pagina("Mi mediana es [claim:mediana-tiktok].", "2026-09-25T10:00:01.000Z"));
     fireEvent.click(screen.getByRole("button", { name: "Editar" }));
     fireEvent.change(screen.getByLabelText("Texto de la narrativa"), { target: { value: "Editada: ⟦115,4 mil⟧." } });
-    fireEvent.click(screen.getByRole("button", { name: "Guardar narrativa" }));
+    // Pulido r4 (CIM-12): cada clic que dispara una acción va dentro de act, y antes del rerender (la página
+    // revalidada) se espera a que la acción se llame y a que su botón deje de estar ocupado: un rerender en medio
+    // de la transición de ConfirmInline se quedaba con la confirmación abierta y el aviso viejo a la vista.
+    const espera = { timeout: 10_000 };
+    const libre = (nombre: string) =>
+      waitFor(() => {
+        for (const b of screen.queryAllByRole("button", { name: nombre })) expect(b).not.toHaveAttribute("aria-busy");
+      }, espera);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Guardar narrativa" }));
+    });
     const avisos = () => screen.getAllByRole("status").map((s) => s.textContent).filter(Boolean);
-    await waitFor(() => expect(avisos()).toEqual(["Narrativa guardada."]));
-    act(() => rerender(pagina("Editada: [claim:mediana-tiktok].", "2026-09-25T10:05:00.000Z")));
-    await waitFor(() => expect(avisos()).toEqual(["Narrativa guardada."]));
+    await waitFor(() => expect(guardarNarrativa).toHaveBeenCalledTimes(1), espera);
+    await waitFor(() => expect(avisos()).toEqual(["Narrativa guardada."]), espera);
+    await libre("Guardar narrativa");
+    await act(async () => {
+      rerender(pagina("Editada: [claim:mediana-tiktok].", "2026-09-25T10:05:00.000Z"));
+    });
+    await waitFor(() => expect(avisos()).toEqual(["Narrativa guardada."]), espera);
     // Recalcular (con su confirmación, porque la narrativa está editada) la reemplaza por la de la plantilla.
     fireEvent.click(screen.getByRole("button", { name: "Recalcular" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Sí, recalcular" }));
-    await waitFor(() => expect(avisos()).toContain("Perfil recalculado."));
-    act(() => rerender(pagina("De plantilla: [claim:mediana-tiktok].", "2026-09-25T10:10:00.000Z")));
-    // Con waitFor: con la máquina cargada, la transición del guardado puede terminar después del rerender.
-    await waitFor(() => expect(avisos()).toEqual(["Perfil recalculado."]));
-  });
+    const si = await screen.findByRole("button", { name: "Sí, recalcular" }, espera);
+    await act(async () => {
+      fireEvent.click(si);
+    });
+    await waitFor(() => expect(recalcularPerfil).toHaveBeenCalledTimes(1), espera);
+    await waitFor(() => expect(avisos()).toContain("Perfil recalculado."), espera);
+    await libre("Sí, recalcular");
+    await act(async () => {
+      rerender(pagina("De plantilla: [claim:mediana-tiktok].", "2026-09-25T10:10:00.000Z"));
+    });
+    await waitFor(() => expect(avisos()).toEqual(["Perfil recalculado."]), espera);
+  }, 30_000);
 });

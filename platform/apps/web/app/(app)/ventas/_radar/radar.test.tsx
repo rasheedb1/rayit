@@ -144,9 +144,14 @@ describe("Radar", () => {
     const pregunta = await screen.findByRole("group", { name: MESSAGES.radar.sameBrand.question("Molino Andino") }, LENTO);
     expect(within(pregunta).getByRole("link", { name: MESSAGES.radar.sameBrand.see })).toHaveAttribute("href", `/ventas/empresas/${FICHA}`);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    fireEvent.click(within(pregunta).getByRole("button", { name: MESSAGES.radar.sameBrand.same }));
+    // La pregunta se pinta en cuanto la acción responde, pero la transición sigue unos ticks con el botón ocupado:
+    // un clic en ese hueco se pierde (pulido r4, CIM-12). Se espera a que el botón se suelte.
+    const misma = within(pregunta).getByRole("button", { name: MESSAGES.radar.sameBrand.same });
+    await waitFor(() => expect(misma).toBeEnabled(), LENTO);
+    fireEvent.click(misma);
 
-    expect(await screen.findByRole("status", undefined, LENTO)).toHaveTextContent("Ya tienes un negocio con Molino Andino");
+    await waitFor(() => expect(aceptarSenal).toHaveBeenCalledTimes(2), LENTO);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Ya tienes un negocio con Molino Andino"), LENTO);
     const data = aceptarSenal.mock.calls[1]?.[1] as FormData;
     expect(data.get("useCompanyId")).toBe(FICHA);
     expect(data.get("createAnyway")).toBeNull();
@@ -158,9 +163,14 @@ describe("Radar", () => {
       .mockResolvedValueOnce({ ok: true, notice: "Abriste un negocio con Molino Andino." });
     render(<Radar cards={[{ ...card, companyName: "Molino Andino" }]} currency="COP" countries={PAISES} />);
     fireEvent.click(screen.getByRole("button", { name: "Aceptar: Molino Andino" }));
-    fireEvent.click(await screen.findByRole("button", { name: MESSAGES.radar.sameBrand.other }, LENTO));
+    // El botón nace deshabilitado mientras la transición del primer clic termina: se espera a que se suelte
+    // antes de pulsarlo, y a la segunda llamada antes de leerla (pulido r4, CIM-12).
+    const otra = await screen.findByRole("button", { name: MESSAGES.radar.sameBrand.other }, LENTO);
+    await waitFor(() => expect(otra).toBeEnabled(), LENTO);
+    fireEvent.click(otra);
 
-    await screen.findByRole("status", undefined, LENTO);
+    await waitFor(() => expect(aceptarSenal).toHaveBeenCalledTimes(2), LENTO);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Abriste un negocio con Molino Andino"), LENTO);
     const data = aceptarSenal.mock.calls[1]?.[1] as FormData;
     expect(data.get("createAnyway")).toBe("Molino Andino");
     expect(data.get("useCompanyId")).toBeNull();
