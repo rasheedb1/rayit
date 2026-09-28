@@ -16,30 +16,27 @@ sección 6, sin editar.
 `@mc/db` abre cada transacción con el workspace (y la persona) fijados
 por el cliente, y la guardia de `packages/db/src/esquema.ts` le pregunta
 a la base, en cada arranque, si TODO lo que hay en `public` está aislado
-o declarado con su motivo. Sobre el esquema completo (0001–0030, en
-Postgres embebido) la guardia está en verde. Supabase va por
-`0022_public_profile_access`: faltan 0024–0030.
+o declarado con su motivo. Sobre el esquema completo (0001–0077, en
+Postgres embebido) la guardia está en verde. Supabase está en
+`0042_metricas_al_corte_desempate` (la serie de main; comprobado el
+28-sep-2026): faltan 0043–0077.
 
 ## 2. Qué aplica el integrador, y en qué orden
 
-Nada de esto se aplicó desde las ramas de trabajo.
+Hay **una sola cola**, y vive en `docs/ventas-outreach.md` §5.2 («Lo que
+hace el integrador contra Supabase»); la nota de CIM-2 en
+`content/backlog.ts` la resume y las demás historias remiten a ella. La
+lista que había aquí (crear `mc_public_share`, aplicar 0024…0030) quedó
+cumplida: esas migraciones están en Supabase, y el rol también (0030 no
+corre sin él).
 
-1. **El rol de los enlaces públicos** (antes de 0030; `mc_migrator` no
-   tiene CREATEROLE, a propósito):
-   `./scripts/supabase-admin.sh sql "CREATE ROLE mc_public_share NOLOGIN NOINHERIT; GRANT mc_public_share TO mc_migrator; GRANT USAGE, CREATE ON SCHEMA public TO mc_public_share"`
-2. **`make db.migrate`**, que aplica en orden 0024_aislamiento_por_defecto,
-   0025_referencias_visibles, 0026_duenos_unicos_secuencias,
-   0027_sesion_correo_verificado, 0028_membership_alta_propia,
-   0029_supresion_verificada_filas_que_nombran y 0030_public_share. El
-   orden importa: 0024 §7 revoca el INSERT de membership y 0028 lo
-   devuelve; 0028 se niega a correr sin 0024.
-3. **`make db.guardia`** (nuevo en el pulido): corre `estadoDelEsquema`
-   contra Supabase como mc_app, solo lectura, y sale con 1 si reporta
-   algo. Tiene que dar verde **antes** de `make vercel.deploy PROD=1`:
-   en producción la web no arranca si la guardia reporta algo
-   (`createDbFromEnv` lanza). La única salida es `ALLOW_STALE_SCHEMA=1`,
-   que deja el aviso en cada arranque; no es para quedarse.
-4. Pegar la salida de `make db.guardia` en la nota de CIM-2.
+Lo que esta historia añade a esa cola es **`make db.guardia`**: corre
+`estadoDelEsquema` contra Supabase como mc_app, solo lectura, y sale con
+1 si reporta algo. Va después de `make db.migrate` y tiene que dar verde
+**antes** de `make vercel.deploy PROD=1`: en producción la web no
+arranca si la guardia reporta algo (`createDbFromEnv` lanza). La única
+salida es `ALLOW_STALE_SCHEMA=1`, que deja el aviso en cada arranque; no
+es para quedarse. Su salida se pega en la nota de CIM-2.
 
 ## 3. Lo que queda abierto, con dueño
 
