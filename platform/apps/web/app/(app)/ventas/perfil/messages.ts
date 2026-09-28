@@ -182,7 +182,7 @@ export const MESSAGES = {
       cifraAnterior: "la cifra que va antes",
       /** Qué mide una cifra, por su unidad (Claim.unit); una moneda ISO-4217 es `dinero`. */
       mide: {
-        views: "un número de views",
+        views: "un número de visualizaciones",
         seguidores: "un número de seguidores",
         videos: "un número de videos",
         canjes: "un número de canjes",
@@ -284,8 +284,8 @@ export const MESSAGES = {
     mejoresMeta: (n: string) => `Frente a tu mediana, entre ${n} videos con puntaje`,
     sinVideos: "Todavía no hay videos con puntaje. Aparecen cuando la línea base de una red tiene suficientes videos.",
     veces: "tu mediana",
-    views: (corte: string) => `views ${corte}`,
-    viewsPalabra: "views",
+    views: (corte: string) => `visualizaciones ${corte}`,
+    viewsPalabra: "visualizaciones",
     duracion: "duración",
     frenteA: (red: string) => `Tu mediana de ${red} a esa edad:`,
     tier: {
@@ -363,7 +363,7 @@ export const MESSAGES = {
     corte: (fecha: string) => `Al cierre del reporte, ${fecha}`,
     /** Lo que acompaña a cada cifra de campaña, por la clave de su claim. */
     etiquetas: {
-      "campaign.views": "views",
+      "campaign.views": "visualizaciones",
       "campaign.multiple": "veces tu mediana",
       "campaign.brand_followers": "seguidores nuevos para la marca",
       "campaign.redemptions": "canjes del código",

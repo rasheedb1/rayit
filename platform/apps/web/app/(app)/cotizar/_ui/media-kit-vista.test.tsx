@@ -78,7 +78,7 @@ describe("MediaKitVista", () => {
     };
     render(<MediaKitVista snapshot={{ ...SNAPSHOT, topPosts: [post] }} />);
     const top = screen.getByRole("region", { name: "Lo que mejor funciona" });
-    expect(within(top).getByText("views a los 3 días de publicado")).toBeInTheDocument();
+    expect(within(top).getByText("visualizaciones a los 3 días de publicado")).toBeInTheDocument();
     expect(within(top).getByText("3,7× su mediana a esa edad (106,7 mil)")).toBeInTheDocument();
   });
 

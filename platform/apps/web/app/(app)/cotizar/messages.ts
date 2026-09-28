@@ -642,7 +642,7 @@ export const MESSAGES = {
        * es «a los 3 días de publicado»; `mediana`, la de su red a esa edad.
        */
       edad: (unidad: "hours" | "days", n: string) => (unidad === "hours" ? `a las ${n} horas de publicado` : `a los ${n} días de publicado`),
-      viewsA: (edad: string) => `views ${edad}`,
+      viewsA: (edad: string) => `visualizaciones ${edad}`,
       vsMedianaA: (multiplo: string, mediana: string) => `${multiplo} su mediana a esa edad (${mediana})`,
       password: {
         title: "Este media kit pide contraseña",

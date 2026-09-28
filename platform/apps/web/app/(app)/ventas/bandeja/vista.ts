@@ -95,7 +95,8 @@ export function hiloVista(
     persona: h.contactName ?? h.companyName,
     empresa: h.companyName,
     canal: channelLabel(noticeLang(f.locale), h.channel),
-    cuando: f.dayMonth(h.lastAt.toISOString()),
+    // «27 sep», la misma forma corta de fecha que el resto de Ventas (pulido r2 y r5), no «27/9».
+    cuando: f.date(h.lastAt.toISOString()),
     extracto: h.lastSnippet,
     deNosotros: h.lastDirection === "outbound",
     sinLeer: h.unread,

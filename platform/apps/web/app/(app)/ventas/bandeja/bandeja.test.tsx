@@ -201,6 +201,13 @@ describe("la lista", () => {
     expect(screen.getByText("2 sin leer")).toBeInTheDocument();
     expect(screen.getByText(t.lista.hecha)).toBeInTheDocument();
   });
+
+  it("la fecha de cada hilo es «23 sep», la forma corta del resto de Ventas, no «23/9» (pulido r5)", () => {
+    const v = hiloVista(hilo(1), f, false);
+    expect(v.cuando).toBe(f.date("2026-09-23T20:00:00Z"));
+    expect(v.cuando).toMatch(/^23 sep/);
+    expect(v.cuando).not.toContain("/");
+  });
 });
 
 describe("la lista no se estira ni se esconde debajo de la conversación", () => {
