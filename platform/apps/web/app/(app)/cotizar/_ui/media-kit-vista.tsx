@@ -111,7 +111,7 @@ export function MediaKitVista({ snapshot }: { snapshot: MediaKitSnapshot }) {
           <ul className="mt-3 divide-y divide-border rounded-md border border-border">
             {/* Pulido r5: a 400 px el video va arriba a todo lo ancho y sus
                 cifras debajo. En fila, la columna de la cifra («412 mil ·
-                views a los 30 días… · 6× su mediana…») se comía media fila y
+                visualizaciones a los 30 días… · 6× su mediana…») se comía media fila y
                 el título quedaba en quince letras. Desde sm vuelven a ir a la
                 derecha, con un ancho tope para que el título siga leyéndose. */}
             {snapshot.topPosts.map((p, i) => (

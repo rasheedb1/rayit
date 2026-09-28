@@ -104,7 +104,7 @@ describe("MediaKitVista", () => {
     const cifras = top.querySelector("[data-post-cifras]")!;
     expect(cifras).toHaveClass("text-left", "sm:text-right", "sm:max-w-60");
     const views = within(cifras as HTMLElement).getByText("412 mil");
-    expect(views.parentElement).toContainElement(within(cifras as HTMLElement).getByText("views a los 30 días de publicado"));
+    expect(views.parentElement).toContainElement(within(cifras as HTMLElement).getByText("visualizaciones a los 30 días de publicado"));
     const mediana = within(cifras as HTMLElement).getByText("6× su mediana a esa edad (68,7 mil)");
     expect(mediana.parentElement).toBe(cifras);
   });
