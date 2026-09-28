@@ -12,7 +12,9 @@ import { formatterFor } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { CeldaVacia } from "../../_componentes/celda-vacia";
 import { ModuleTabs } from "../../_componentes/pestanas";
+import { Aviso } from "../../../_lib/aviso";
 import { withWorkspace } from "../../_lib/db";
+import { puedeOperarVentas } from "../../_lib/permiso";
 import { columnaSalud } from "../../actividad/_componentes/salud-cadencia";
 import { TODAS_LAS_SENALES } from "../_lib/protocolo";
 import { ESTADO_PILL } from "../_lib/vista";
@@ -46,6 +48,10 @@ function listaHref(opts: { todas: boolean; archivadas: boolean }): string {
  * empresa ofrece lo mismo junto a cada negocio. En medio, las cadencias con su estado, sus personas dentro y
  * su tasa de respuesta, todo contado en SQL. Abajo, empezar desde una
  * plantilla sin señal.
+ *
+ * Quien no puede operar Ventas (un 'viewer' o un 'client') ve las señales
+ * y las cadencias, pero no «Proponer cadencia» ni las plantillas: un
+ * aviso dice por qué. Las acciones lo vuelven a mirar en el servidor.
  */
 export default async function CadenciasPage({
   searchParams,
@@ -66,6 +72,7 @@ export default async function CadenciasPage({
     };
   });
   const f = formatterFor(await getCurrentWorkspace());
+  const puedeOperar = await puedeOperarVentas();
   const t = MESSAGES;
   const senales = propuestas.signals;
   const hayMas = propuestas.total > senales.length;
@@ -127,6 +134,7 @@ export default async function CadenciasPage({
     <>
       <PageHeader eyebrow={t.header.eyebrow} title={t.header.title} description={t.header.description} />
       <ModuleTabs active={CADENCIAS} />
+      {!puedeOperar && <Aviso info={t.errores.sinPermiso!} className="mb-6 max-w-3xl" />}
 
       <section aria-labelledby="senales" className="mb-10">
         <SectionTitle
@@ -172,7 +180,7 @@ export default async function CadenciasPage({
                     <Button href={`${CADENCIAS}/${s.sequenceId}`} size="sm" variant="secondary">
                       {t.senales.verCadencia}
                     </Button>
-                  ) : (
+                  ) : !puedeOperar ? null : (
                     // Secundario: aquí hay hasta seis a la vez; el primario de la cadencia es «Activar», en su línea de tiempo.
                     <ProponerBoton
                       signalId={s.signalId}
@@ -209,6 +217,7 @@ export default async function CadenciasPage({
         />
       </section>
 
+      {puedeOperar && (
       <section aria-labelledby="plantillas" className="max-w-2xl">
         <SectionTitle>
           <span id="plantillas">{t.plantillas.titulo}</span>
@@ -228,6 +237,7 @@ export default async function CadenciasPage({
           })}
         />
       </section>
+      )}
     </>
   );
 }

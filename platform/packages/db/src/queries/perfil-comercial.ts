@@ -30,8 +30,7 @@ import {
 } from '@mc/core/outreach/perfil-guardado';
 import { isUuid, type WorkspaceTx } from '../client.ts';
 import { CORTE_TARIFARIO_HORAS, getCurrentRateCard } from './cotizar/tarifario.ts';
-import { outboundHealth } from './outreach.ts';
-import { LLM_RESERVATION_TTL_MIN } from './outreach/generation.ts';
+import { releaseWebLlmReservation, reserveWebLlmBudget, webLlmBudgetLeft } from './presupuesto-web.ts';
 
 export { getPrimaryCreator } from './cotizar/tarifario.ts';
 
@@ -588,21 +587,6 @@ export function estimateProfileCallUsd(model: string): number {
   return Number(llmCostUsd({ model, inputTokens: 2_000, outputTokens: NARRATIVE_MAX_TOKENS }));
 }
 
-/** El candado del presupuesto del modelo de un espacio: el MISMO que reserveLlmBudget del worker. */
-const BUDGET_LOCK_SQL = `SELECT pg_advisory_xact_lock(hashtextextended('outbound_llm_budget:' || current_workspace_id()::text, 0))`;
-
-/** Lo que le queda hoy al workspace: tope − gastado hoy − reservas abiertas (las del worker y las de la web). */
-async function llmBudgetLeft(tx: WorkspaceTx): Promise<number> {
-  const { llm } = await outboundHealth(tx, 24);
-  const { rows } = await tx.query<{ reserved: string | null }>(
-    `SELECT coalesce(sum(amount), 0)::text AS reserved FROM outbound_llm_reservation
-      WHERE workspace_id = current_workspace_id() AND created_at > now() - make_interval(mins => $1::int)`,
-    [LLM_RESERVATION_TTL_MIN],
-  );
-  const left = llm.dailyCap - llm.spentToday - Number(rows[0]?.reserved ?? 0);
-  return Number.isFinite(left) ? left : 0;
-}
-
 /**
  * Aparta del tope diario lo que va a costar una llamada de «Recalcular»,
  * si alcanza, igual que el worker (reserveLlmBudget, 0075): con el mismo
@@ -612,22 +596,13 @@ async function llmBudgetLeft(tx: WorkspaceTx): Promise<number> {
  * entonces no se llama al modelo). El candado dura esta transacción,
  * nunca lo que tarda el modelo; la reserva que nadie suelta vence sola.
  */
-export async function reserveProfileLlmBudget(tx: WorkspaceTx, estimateUsd: number): Promise<string | null> {
-  await tx.query(BUDGET_LOCK_SQL);
-  const left = await llmBudgetLeft(tx);
-  const estimate = Math.max(0, estimateUsd);
-  if (!(left > 0) || left < estimate) return null;
-  const { rows } = await tx.query<{ id: string }>(
-    'SELECT outbound_llm_reserve_profile($1::numeric) AS id',
-    [estimate.toFixed(6)],
-  );
-  return rows[0]?.id ?? null;
+export function reserveProfileLlmBudget(tx: WorkspaceTx, estimateUsd: number): Promise<string | null> {
+  return reserveWebLlmBudget(tx, 'profile', estimateUsd);
 }
 
 /** Suelta una reserva de «Recalcular»: la llamada se registró, o no se hizo. */
-export async function releaseProfileLlmReservation(tx: WorkspaceTx, reservationId: string): Promise<void> {
-  if (!isUuid(reservationId)) return;
-  await tx.query('SELECT outbound_llm_release_profile($1::uuid)', [reservationId]);
+export function releaseProfileLlmReservation(tx: WorkspaceTx, reservationId: string): Promise<void> {
+  return releaseWebLlmReservation(tx, reservationId);
 }
 
 /**
@@ -705,5 +680,5 @@ export async function readPerfilDataAsOf(tx: WorkspaceTx, creatorId: string): Pr
  * antes de llamar, «Recalcular» aparta con reserveProfileLlmBudget.
  */
 export async function llmBudgetExhausted(tx: WorkspaceTx): Promise<boolean> {
-  return (await llmBudgetLeft(tx)) <= 0;
+  return (await webLlmBudgetLeft(tx)) <= 0;
 }

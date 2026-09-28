@@ -46,6 +46,7 @@
  * pantalla los traduce en su messages.ts.
  */
 import type { LlmUsage } from './llm-cost.ts';
+import { MODEL_WRITER } from './llm-precios.ts';
 import { findPlaceholders } from './placeholder-guard.ts';
 import { GUIDANCE_PHRASES, type GuidanceLocale } from './guidance-phrases.ts';
 import {
@@ -678,8 +679,8 @@ export function primaryChannelOf(steps: ReadonlyArray<{ channel: string; stepTyp
 // 6 · La guía redactada por el modelo
 // ---------------------------------------------------------------------
 
-/** El modelo que redacta la guía (docs/ventas-outreach.md §5: sonnet genera y juzga). */
-export const RECOMMEND_MODEL = 'claude-sonnet-5';
+/** El modelo que redacta la guía (docs/ventas-outreach.md §5: sonnet genera y juzga): el mismo que escribe. */
+export const RECOMMEND_MODEL = MODEL_WRITER;
 export const GUIDANCE_MIN_CHARS = 20;
 export const GUIDANCE_MAX_CHARS = 400;
 

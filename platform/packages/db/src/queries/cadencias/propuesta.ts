@@ -8,8 +8,9 @@
  * códigos: su forma y su lectura viven en @mc/core (proposal-notes.ts,
  * con zod).
  */
-import { llmCostUsd, type LlmUsage, type Proposal, type SequenceProposal } from '@mc/core';
+import { llmCostUsd, RECOMMEND_MODEL, type LlmUsage, type Proposal, type SequenceProposal } from '@mc/core';
 import type { WorkspaceTx } from '../../client.ts';
+import { releaseWebLlmReservation, reserveWebLlmBudget } from '../presupuesto-web.ts';
 import { assertEditable, assertId, CadenciaError, cleanName, lockSequence, TEXTLESS_STEP_TYPES } from './comun.ts';
 import { listSequenceTemplates } from './lista.ts';
 import { insertSteps, normalizeSequenceThread, type StepInsert } from './pasos.ts';
@@ -144,12 +145,43 @@ export async function replaceStepsFromProposal(
 /**
  * Registra una llamada del recomendador al modelo (outbound_llm_call,
  * propósito 'recommend'), con su costo: outbound_health la suma contra el
- * tope diario. Es una bitácora: se inserta y no se corrige.
+ * tope diario. Es una bitácora: se inserta y no se corrige. Con
+ * `reservationId`, suelta en la MISMA transacción la reserva que la
+ * llamada apartó (reserveRecommendLlmBudget): lo apartado pasa a gastado
+ * sin contarse dos veces ni ninguna, como en el worker.
  */
-export async function recordRecommendLlmCall(tx: WorkspaceTx, usage: LlmUsage): Promise<void> {
+export async function recordRecommendLlmCall(tx: WorkspaceTx, usage: LlmUsage, reservationId?: string | null): Promise<void> {
   await tx.query(
     `INSERT INTO outbound_llm_call (workspace_id, purpose, model, input_tokens, output_tokens, cost, cost_currency)
      VALUES ($1::uuid, 'recommend', $2, $3::int, $4::int, $5::numeric, 'USD')`,
     [tx.workspaceId, usage.model, usage.inputTokens, usage.outputTokens, llmCostUsd(usage)],
   );
+  if (reservationId) await releaseWebLlmReservation(tx, reservationId);
+}
+
+/**
+ * Lo que se aparta antes de una llamada del redactor de la guía: una
+ * entrada generosa (la instrucción, la señal, el brief y seis pasos con su
+ * guía de reglas caben en menos de tres mil tokens) y la salida al tope de
+ * cada intento (`maxTokens` × `attempts`). Por arriba, a propósito: una
+ * reserva corta deja pasar el tope; una larga, no.
+ */
+export function estimateRecommendCallUsd(maxTokens: number, attempts = 1): number {
+  const n = Math.max(1, Math.floor(attempts));
+  return Number(llmCostUsd({ model: RECOMMEND_MODEL, inputTokens: 3_000 * n, outputTokens: maxTokens * n }));
+}
+
+/**
+ * Aparta del tope diario lo que va a costar «Proponer cadencia» con el
+ * modelo, si alcanza (presupuesto-web.ts: el mismo candado y la misma
+ * cuenta que el worker y «Recalcular»). Devuelve el id de la reserva, o
+ * null si no alcanza, y entonces la guía sale de las reglas.
+ */
+export function reserveRecommendLlmBudget(tx: WorkspaceTx, estimateUsd: number): Promise<string | null> {
+  return reserveWebLlmBudget(tx, 'recommend', estimateUsd);
+}
+
+/** Suelta la reserva de una propuesta: la llamada no se hizo, o falló sin cobrarse. */
+export function releaseRecommendLlmReservation(tx: WorkspaceTx, reservationId: string): Promise<void> {
+  return releaseWebLlmReservation(tx, reservationId);
 }

@@ -9,6 +9,12 @@
  * (CadenciaError, OutreachMotorError) que aquí se traducen. Cualquier
  * otro error se registra y se resume: un mensaje de Postgres no se le
  * enseña a una creadora.
+ *
+ * Todas exigen el rol (puedeOperarVentas: owner, admin o member) ANTES de
+ * validar, de tocar la base o de llamar al modelo: un 'viewer' o un
+ * 'client' (en una agencia, la marca misma) ve las cadencias pero no
+ * propone, activa, edita ni enrola (E.sinPermiso). La base no lo frena
+ * sola: membership_is_team solo excluye a 'client' al aprobar y resolver.
  */
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -25,6 +31,7 @@ import {
 import { enrollContacts, OutreachMotorError } from "@mc/db/queries/outreach";
 import { OUTREACH_URLS } from "@mc/core/outreach/messages";
 import { withWorkspace } from "../_lib/db";
+import { puedeOperarVentas } from "../_lib/permiso";
 import { proponerCadencia } from "./_lib/proponer";
 import { SIN_PERSONA } from "./_lib/protocolo";
 import { redactorAnthropic, redactorConfigurado } from "./_lib/redactor";
@@ -61,6 +68,9 @@ async function mensajeDe(err: unknown): Promise<string> {
 
 const uuid = z.string().regex(UUID_RE);
 
+/** Lo que vuelve a quien no puede operar Ventas. */
+const SIN_PERMISO: CadenciaState = { error: E.sinPermiso! };
+
 // ---------------------------------------------------------------------
 // Proponer y crear
 // ---------------------------------------------------------------------
@@ -78,6 +88,7 @@ const proponerSchema = z.object({
  * si hay llave, y se abre la línea de tiempo.
  */
 export async function proponerDesdeSenal(_prev: CadenciaState, formData: FormData): Promise<CadenciaState> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = proponerSchema.safeParse({
     signalId: String(formData.get("signalId") ?? ""),
     contactId: String(formData.get("contactId") ?? ""),
@@ -106,6 +117,7 @@ export async function proponerDesdeSenal(_prev: CadenciaState, formData: FormDat
 }
 
 export async function crearDesdePlantilla(_prev: CadenciaState, formData: FormData): Promise<CadenciaState> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const slug = String(formData.get("slug") ?? "");
   if (!/^[a-z][a-z0-9-]{1,60}$/.test(slug)) return { error: MESSAGES.plantillas.placeholder };
   let id: string;
@@ -141,6 +153,7 @@ export async function crearDesdePlantilla(_prev: CadenciaState, formData: FormDa
  * aquí igual: su etiqueta dice a quién le escribe.
  */
 export async function activarCadencia(sequenceId: string): Promise<CadenciaState> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   if (!UUID_RE.test(sequenceId)) return { error: E.invalid };
   const t = MESSAGES.estado;
   try {
@@ -192,6 +205,7 @@ export async function activarCadencia(sequenceId: string): Promise<CadenciaState
 }
 
 export async function cambiarEstado(sequenceId: string, status: "active" | "paused" | "archived"): Promise<CadenciaState> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   if (!UUID_RE.test(sequenceId) || !["active", "paused", "archived"].includes(status)) return { error: E.invalid };
   try {
     await withWorkspace((tx) => setSequenceStatus(tx, sequenceId, status));
@@ -204,6 +218,7 @@ export async function cambiarEstado(sequenceId: string, status: "active" | "paus
 }
 
 export async function duplicarCadencia(sequenceId: string): Promise<CadenciaState> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   if (!UUID_RE.test(sequenceId)) return { error: E.invalid };
   let id: string;
   try {
@@ -216,6 +231,7 @@ export async function duplicarCadencia(sequenceId: string): Promise<CadenciaStat
 }
 
 export async function renombrarCadencia(sequenceId: string, name: string): Promise<CadenciaState> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const n = name.trim();
   if (!UUID_RE.test(sequenceId) || !n || [...n].length > NAME_MAX) return { error: E.invalid };
   try {
@@ -248,6 +264,7 @@ const pasoSchema = z.object({
 export type PasoCambios = z.input<typeof pasoSchema>;
 
 export async function guardarPaso(sequenceId: string, stepId: string, cambios: PasoCambios): Promise<CadenciaState> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = pasoSchema.safeParse(cambios);
   if (!UUID_RE.test(sequenceId) || !UUID_RE.test(stepId) || !parsed.success) return { error: E.invalid };
   try {
@@ -260,6 +277,7 @@ export async function guardarPaso(sequenceId: string, stepId: string, cambios: P
 }
 
 export async function anadirPaso(sequenceId: string): Promise<CadenciaState> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   if (!UUID_RE.test(sequenceId)) return { error: E.invalid };
   let comoGesto: boolean;
   try {
@@ -274,6 +292,7 @@ export async function anadirPaso(sequenceId: string): Promise<CadenciaState> {
 }
 
 export async function quitarPaso(sequenceId: string, stepId: string): Promise<CadenciaState> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   if (!UUID_RE.test(sequenceId) || !UUID_RE.test(stepId)) return { error: E.invalid };
   try {
     await withWorkspace((tx) => deleteStep(tx, stepId));
@@ -285,6 +304,7 @@ export async function quitarPaso(sequenceId: string, stepId: string): Promise<Ca
 }
 
 export async function reordenarPasos(sequenceId: string, stepIds: string[]): Promise<CadenciaState> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   if (!UUID_RE.test(sequenceId) || !Array.isArray(stepIds) || stepIds.length > 50 || !stepIds.every((s) => UUID_RE.test(s))) {
     return { error: E.invalid };
   }
@@ -325,6 +345,7 @@ const enrolarSchema = z.object({ dealId: uuid, contactIds: z.array(uuid).min(1).
  * redactar, gestos a mano y pasos saltados.
  */
 export async function enrolarDesdeNegocio(sequenceId: string, _prev: EnrolarState, formData: FormData): Promise<EnrolarState> {
+  if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const t = MESSAGES.enrolar;
   const parsed = enrolarSchema.safeParse({
     dealId: String(formData.get("dealId") ?? ""),

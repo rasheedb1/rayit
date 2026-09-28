@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * misma interfaz que el de Claude. Las consultas se prueban contra
  * Postgres embebido en packages/db/test/cadencias.test.ts.
  */
-const { q, enrollContacts, outboundHealth, redirect } = vi.hoisted(() => ({
+const { q, enrollContacts, outboundHealth, redirect, puedeOperarVentas } = vi.hoisted(() => ({
   q: {
     setSequenceStatus: vi.fn(),
     getSequenceDetail: vi.fn(),
@@ -16,6 +16,8 @@ const { q, enrollContacts, outboundHealth, redirect } = vi.hoisted(() => ({
     createSequenceFromProposal: vi.fn(),
     replaceStepsFromProposal: vi.fn(),
     recordRecommendLlmCall: vi.fn(),
+    reserveRecommendLlmBudget: vi.fn(),
+    releaseRecommendLlmReservation: vi.fn(),
     duplicateSequence: vi.fn(),
     liveEnrollmentsElsewhere: vi.fn(),
     optedOutAmong: vi.fn(),
@@ -28,9 +30,11 @@ const { q, enrollContacts, outboundHealth, redirect } = vi.hoisted(() => ({
   enrollContacts: vi.fn(),
   outboundHealth: vi.fn(),
   redirect: vi.fn(),
+  puedeOperarVentas: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("../_lib/permiso", () => ({ puedeOperarVentas: () => puedeOperarVentas() }));
 vi.mock("next/navigation", () => ({ redirect: (...a: unknown[]) => redirect(...a) }));
 vi.mock("../_lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({ identity: { userId: null } }) }));
 vi.mock("../../_lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({ identity: { userId: null } }) }));
@@ -51,14 +55,20 @@ vi.mock("@mc/db/queries/outreach", async (original) => ({
 }));
 
 import { checkSequenceAgainstPolicy, GuidanceWriterError } from "@mc/core";
+import { billedUpperBound } from "@mc/core/outreach/anthropic";
+import type { LlmRequest } from "@mc/core/outreach/llm";
 import { CadenciaError } from "@mc/db/queries/cadencias";
 import { proponerCadencia } from "./_lib/proponer";
 import { SIN_PERSONA } from "./_lib/protocolo";
 import { sinTexto } from "./_lib/vista";
-import { activarCadencia, anadirPaso, enrolarDesdeNegocio, guardarPaso, proponerDesdeSenal } from "./actions";
+import {
+  activarCadencia, anadirPaso, cambiarEstado, crearDesdePlantilla, duplicarCadencia, enrolarDesdeNegocio, guardarPaso, proponerDesdeSenal,
+  quitarPaso, renombrarCadencia, reordenarPasos,
+} from "./actions";
 import { MESSAGES } from "./messages";
 
 const SEQ = "00000013-0000-4000-8000-000000000a01";
+const RESERVA = "00000013-0000-4000-8000-00000000e501";
 const STEP = "00000013-0000-4000-8000-000000000b01";
 const SIGNAL = "00000002-0000-4000-8000-00000005e001";
 const CAMILA = "00000002-0000-4000-8000-0000000c0001";
@@ -110,8 +120,10 @@ beforeEach(() => {
   enrollContacts.mockReset();
   outboundHealth.mockReset().mockResolvedValue({ llm: { spentToday: 0, dailyCap: 5, currency: "USD" } });
   redirect.mockReset();
+  puedeOperarVentas.mockReset().mockResolvedValue(true);
   q.getRecommendationContext.mockResolvedValue(contexto);
   q.createSequenceFromProposal.mockResolvedValue(SEQ);
+  q.reserveRecommendLlmBudget.mockResolvedValue(RESERVA);
   q.liveEnrollmentsElsewhere.mockResolvedValue(new Map());
   q.optedOutAmong.mockResolvedValue(new Set());
   q.enrollableContactsOfDeal.mockImplementation(async (_tx: unknown, _deal: string, ids: string[]) => ids);
@@ -125,6 +137,31 @@ beforeEach(() => {
 describe('la regla de "use server"', () => {
   it("todo lo que exporta actions.ts en tiempo de ejecución es una función async", async () => {
     for (const [nombre, valor] of Object.entries(await import("./actions"))) expect(typeof valor, nombre).toBe("function");
+  });
+});
+
+describe("el rol (PUEDEN_OPERAR_VENTAS)", () => {
+  it("un 'viewer' o un 'client' recibe sinPermiso en las once acciones, sin escribir nada ni llamar al modelo", async () => {
+    puedeOperarVentas.mockResolvedValue(false);
+    const sin = { error: MESSAGES.errores.sinPermiso };
+    const resultados = [
+      await proponerDesdeSenal({}, form({ signalId: SIGNAL, contactId: "", sequenceId: "" })),
+      await crearDesdePlantilla({}, form({ slug: "marca-con-campana-activa" })),
+      await activarCadencia(SEQ),
+      await cambiarEstado(SEQ, "paused"),
+      await duplicarCadencia(SEQ),
+      await renombrarCadencia(SEQ, "Otra"),
+      await guardarPaso(SEQ, STEP, { dayOffset: 2 }),
+      await anadirPaso(SEQ),
+      await quitarPaso(SEQ, STEP),
+      await reordenarPasos(SEQ, [STEP]),
+      await enrolarDesdeNegocio(SEQ, {}, form({ dealId: DEAL, contactId: CAMILA })),
+    ];
+    for (const r of resultados) expect(r).toEqual(sin);
+    for (const fn of Object.values(q)) expect(fn).not.toHaveBeenCalled();
+    expect(enrollContacts).not.toHaveBeenCalled();
+    expect(outboundHealth).not.toHaveBeenCalled();
+    expect(redirect).not.toHaveBeenCalled();
   });
 });
 
@@ -146,7 +183,13 @@ describe("proponer", () => {
       usage: { model: "claude-sonnet-5", inputTokens: 800, outputTokens: 200 },
     }));
     await proponerCadencia({ signalId: SIGNAL, contactId: CAMILA }, writer);
-    expect(q.recordRecommendLlmCall).toHaveBeenCalledWith(expect.anything(), { model: "claude-sonnet-5", inputTokens: 800, outputTokens: 200 });
+    // Apartó antes de llamar y la llamada registrada suelta esa reserva (en la misma transacción): no queda nada por soltar.
+    expect(q.reserveRecommendLlmBudget).toHaveBeenCalledWith(expect.anything(), expect.any(Number));
+    expect(q.reserveRecommendLlmBudget.mock.calls[0]![1]).toBeGreaterThan(0);
+    expect(q.recordRecommendLlmCall).toHaveBeenCalledWith(
+      expect.anything(), { model: "claude-sonnet-5", inputTokens: 800, outputTokens: 200 }, RESERVA,
+    );
+    expect(q.releaseRecommendLlmReservation).not.toHaveBeenCalled();
     const [, input] = q.createSequenceFromProposal.mock.calls[0]!;
     expect(input.meta).toMatchObject({ guidance: "llm", model: "claude-sonnet-5" });
     // Al modelo solo le llegan los pasos de mensaje; el comentario y la reacción los hace una persona y conservan su guía.
@@ -165,7 +208,7 @@ describe("proponer", () => {
       throw new GuidanceWriterError("tiempo de espera", cota);
     });
     await proponerCadencia({ signalId: SIGNAL, contactId: CAMILA }, writer);
-    expect(q.recordRecommendLlmCall).toHaveBeenCalledWith(expect.anything(), cota);
+    expect(q.recordRecommendLlmCall).toHaveBeenCalledWith(expect.anything(), cota, RESERVA);
     expect(q.createSequenceFromProposal.mock.calls[0]![1].meta).toMatchObject({ guidance: "rules", guidanceWhyRules: "failed" });
   });
 
@@ -192,11 +235,12 @@ describe("proponer", () => {
     expect(q.replaceStepsFromProposal.mock.calls[1]![2].meta.contactId).toBe(CAMILA);
   });
 
-  it("sin presupuesto de hoy no llama al modelo", async () => {
-    outboundHealth.mockResolvedValue({ llm: { spentToday: 5, dailyCap: 5, currency: "USD" } });
+  it("sin presupuesto de hoy (la reserva no alcanza) no llama al modelo", async () => {
+    q.reserveRecommendLlmBudget.mockResolvedValue(null);
     const writer = vi.fn();
     await proponerCadencia({ signalId: SIGNAL, contactId: null }, writer);
     expect(writer).not.toHaveBeenCalled();
+    expect(q.recordRecommendLlmCall).not.toHaveBeenCalled();
     expect(q.createSequenceFromProposal.mock.calls[0]![1].meta.guidanceWhyRules).toBe("budget");
   });
 
@@ -204,6 +248,33 @@ describe("proponer", () => {
     q.getRecommendationContext.mockRejectedValue(new CadenciaError("no_signal", "x"));
     expect(await proponerDesdeSenal({}, form({ signalId: SIGNAL, contactId: "", sequenceId: "" }))).toEqual({ error: MESSAGES.errores.no_signal });
     expect(await proponerDesdeSenal({}, form({ signalId: "no", contactId: "", sequenceId: "" }))).toEqual({ error: MESSAGES.errores.invalid });
+  });
+});
+
+describe("la reserva del tope del modelo (0075)", () => {
+  it("si el modelo falla sin cobrar (4xx), la reserva se suelta y no se registra llamada", async () => {
+    const writer = vi.fn(async () => {
+      throw new GuidanceWriterError("sin llave", null);
+    });
+    await proponerCadencia({ signalId: SIGNAL, contactId: CAMILA }, writer);
+    expect(q.recordRecommendLlmCall).not.toHaveBeenCalled();
+    expect(q.releaseRecommendLlmReservation).toHaveBeenCalledWith(expect.anything(), RESERVA);
+  });
+
+  it("si guardar la secuencia falla después de la llamada, la llamada queda registrada y la reserva no se suelta dos veces", async () => {
+    const writer = vi.fn(async (req: { steps: Array<{ index: number }> }) => ({
+      steps: req.steps.map((s) => ({ index: s.index, guidance: `Guía redactada para el paso ${s.index + 1}, sin huecos.` })),
+      usage: { model: "claude-sonnet-5", inputTokens: 800, outputTokens: 200 },
+    }));
+    q.createSequenceFromProposal.mockRejectedValue(new Error("se cayó la base"));
+    await expect(proponerCadencia({ signalId: SIGNAL, contactId: CAMILA }, writer)).rejects.toThrow("se cayó la base");
+    expect(q.recordRecommendLlmCall).toHaveBeenCalledWith(expect.anything(), expect.anything(), RESERVA);
+    expect(q.releaseRecommendLlmReservation).not.toHaveBeenCalled();
+  });
+
+  it("sin redactor no se aparta nada", async () => {
+    await proponerCadencia({ signalId: SIGNAL, contactId: CAMILA }, null);
+    expect(q.reserveRecommendLlmBudget).not.toHaveBeenCalled();
   });
 });
 
@@ -444,45 +515,55 @@ describe("las notas del contexto en la propuesta", () => {
 });
 
 describe("el redactor con Claude, sin red", () => {
+  const req = {
+    signalKind: "launch" as const, locale: "es" as const, signalHeadline: null, companyName: null, briefTitle: null, briefNotes: null,
+    requiresDisclosure: false, steps: [],
+  };
+  /** Un LlmClient falso detrás de la misma interfaz que el AnthropicLlm de @mc/core. */
+  const cliente = (complete: (r: LlmRequest) => Promise<unknown>) => ({ name: "fake", complete: vi.fn(complete) }) as never;
+
   it("le dice al modelo en qué idioma escribir: el de la petición, el mismo de la guía de reglas", async () => {
     const { redactorAnthropic } = await import("./_lib/redactor");
-    const create = vi.fn(async () => ({
-      stop_reason: "end_turn",
-      usage: { input_tokens: 10, output_tokens: 5 },
-      content: [{ type: "text", text: JSON.stringify({ steps: [{ index: 0, guidance: "Abre con su campaña y una cifra de tu perfil." }] }) }],
+    const complete = vi.fn(async (_r: LlmRequest) => ({
+      stopReason: "end_turn", model: "claude-sonnet-5-20260901", inputTokens: 10, outputTokens: 5, costUsd: 0.00007,
+      text: JSON.stringify({ steps: [{ index: 0, guidance: "Abre con su campaña y una cifra de tu perfil." }] }),
     }));
-    const writer = redactorAnthropic({ messages: { create } } as never);
-    const r = await writer({
-      signalKind: "launch", locale: "es", signalHeadline: null, companyName: null, briefTitle: null, briefNotes: null,
-      requiresDisclosure: false, steps: [],
-    });
-    const [body] = create.mock.calls[0]! as unknown as [{ system: string; messages: Array<{ content: string }> }];
-    expect(body.system).toContain("en español neutro (idioma «es»)");
-    expect(JSON.parse(body.messages[0]!.content).locale).toBe("es");
+    const r = await redactorAnthropic(cliente(complete))(req);
+    const [peticion] = complete.mock.calls[0]!;
+    expect(peticion).toMatchObject({ purpose: "recommend", model: "claude-sonnet-5", maxTokens: 4000 });
+    expect(peticion.jsonSchema).toBeDefined();
+    expect(peticion.system).toContain("en español neutro (idioma «es»)");
+    expect(JSON.parse(peticion.user).locale).toBe("es");
     expect(r.steps).toEqual([{ index: 0, guidance: "Abre con su campaña y una cifra de tu perfil." }]);
+    // Los tokens de la respuesta, con el modelo que tiene precio (no el alias que devuelva la API).
+    expect(r.usage).toEqual({ model: "claude-sonnet-5", inputTokens: 10, outputTokens: 5 });
   });
 
   it("un tiempo de espera deja una cota de lo que pudo cobrarse; un error de la API (4xx) no", async () => {
-    const { redactorAnthropic, usoEstimado } = await import("./_lib/redactor");
+    const { redactorAnthropic } = await import("./_lib/redactor");
     const Anthropic = (await import("@anthropic-ai/sdk")).default;
-    const req = {
-      signalKind: "launch" as const, locale: "es" as const, signalHeadline: null, companyName: null, briefTitle: null, briefNotes: null,
-      requiresDisclosure: false, steps: [],
-    };
-    const tiempo = redactorAnthropic({ messages: { create: vi.fn(async () => { throw new Anthropic.APIConnectionTimeoutError(); }) } } as never);
-    const e1 = await tiempo(req).catch((e: unknown) => e);
+    const e1 = await redactorAnthropic(cliente(async () => { throw new Anthropic.APIConnectionTimeoutError(); }))(req).catch((e: unknown) => e);
     expect(e1).toBeInstanceOf(GuidanceWriterError);
     const cota = (e1 as GuidanceWriterError).usage!;
     expect(cota.model).toBe("claude-sonnet-5");
     expect(cota.inputTokens).toBeGreaterThan(0);
-    expect(cota.outputTokens).toBeGreaterThanOrEqual(4000);
-    expect(usoEstimado("abc", "def")).toEqual({ model: "claude-sonnet-5", inputTokens: 4, outputTokens: 8000 });
+    // Dos intentos (el primero y un reintento), cada uno con la salida al tope.
+    expect(cota.outputTokens).toBe(8000);
+    expect(billedUpperBound({ model: "claude-sonnet-5", system: "abc", user: "def", maxTokens: 4000 }, 2)).toEqual({
+      model: "claude-sonnet-5", inputTokens: 4, outputTokens: 8000,
+    });
 
-    const rechazo = redactorAnthropic({
-      messages: { create: vi.fn(async () => { throw new Anthropic.APIError(401, undefined, "sin llave", undefined); }) },
-    } as never);
-    const e2 = await rechazo(req).catch((e: unknown) => e);
+    const e2 = await redactorAnthropic(cliente(async () => { throw new Anthropic.APIError(401, undefined, "sin llave", undefined); }))(req)
+      .catch((e: unknown) => e);
     expect(e2).toBeInstanceOf(GuidanceWriterError);
     expect((e2 as GuidanceWriterError).usage).toBeNull();
+  });
+
+  it("una negativa se cobra igual: vuelve sin guía y con sus tokens", async () => {
+    const { redactorAnthropic } = await import("./_lib/redactor");
+    const r = await redactorAnthropic(cliente(async () => ({
+      stopReason: "refusal", model: "claude-sonnet-5", inputTokens: 30, outputTokens: 2, costUsd: 0, text: "",
+    })))(req);
+    expect(r).toEqual({ steps: [], usage: { model: "claude-sonnet-5", inputTokens: 30, outputTokens: 2 } });
   });
 });

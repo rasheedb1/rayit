@@ -36,17 +36,25 @@
 -- nada ni restar las reservas del worker. Ahora aparta igual que el
 -- worker: con el mismo candado por espacio, la web calcula lo que queda
 -- (tope − gastado hoy − reservas abiertas) y, si alcanza, anota su
--- reserva con outbound_llm_reserve_profile; al registrar la llamada la
--- borra con outbound_llm_release_profile. Las dos son SECURITY DEFINER,
--- solo del workspace de la transacción y solo con purpose 'profile': lo
+-- reserva con outbound_llm_reserve_web; al registrar la llamada la
+-- borra con outbound_llm_release_web. Las dos son SECURITY DEFINER,
+-- solo del workspace de la transacción y solo con purpose de la web: lo
 -- peor que puede hacer un workspace con ellas es apartarse o soltarse su
 -- propio presupuesto, nunca el de otro ni las reservas del worker.
+--
+-- Pulido r4 (VEN-13), en su sitio: «Proponer cadencia» también llama al
+-- modelo desde la web (el redactor de la guía) y solo miraba gastado <
+-- tope. Aparta igual que «Recalcular», con purpose 'recommend': el CHECK
+-- de purpose y las dos políticas del dueño aceptan 'profile' y
+-- 'recommend', y las funciones de la web pasan a ser
+-- outbound_llm_reserve_web(purpose, amount) y
+-- outbound_llm_release_web(id), con esa misma lista y nada más.
 -- =====================================================================
 
 CREATE TABLE IF NOT EXISTS outbound_llm_reservation (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id        uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
-  purpose             text NOT NULL CHECK (purpose IN ('generate', 'judge', 'profile')),
+  purpose             text NOT NULL CHECK (purpose IN ('generate', 'judge', 'profile', 'recommend')),
   amount              numeric(14,6) NOT NULL CHECK (amount >= 0),
   cost_currency       char(3) NOT NULL DEFAULT 'USD',
   created_at          timestamptz NOT NULL DEFAULT now()
@@ -71,31 +79,32 @@ REVOKE INSERT, UPDATE, DELETE ON outbound_llm_reservation FROM mc_app;
 
 COMMENT ON TABLE outbound_llm_reservation IS
   'Lo apartado del tope diario del modelo mientras una llamada está en curso (VEN-12). La escribe y la borra el '
-  'worker, y la web solo para «Recalcular» del perfil (purpose profile, con outbound_llm_reserve_profile y '
-  'outbound_llm_release_profile); una reserva de más de diez minutos ya no cuenta.';
+  'worker, y la web solo para «Recalcular» del perfil y «Proponer cadencia» (purpose profile o recommend, con '
+  'outbound_llm_reserve_web y outbound_llm_release_web); una reserva de más de diez minutos ya no cuenta.';
 
 -- ---------------------------------------------------------------------
--- La reserva de «Recalcular» del perfil comercial (pulido r3, VEN-11)
+-- Las reservas de la web: «Recalcular» del perfil comercial (pulido r3,
+-- VEN-11) y «Proponer cadencia» (pulido r4, VEN-13)
 -- ---------------------------------------------------------------------
 -- La tabla lleva FORCE ROW LEVEL SECURITY: las dos funciones corren como
 -- su dueño y necesitan sus políticas, TO CURRENT_USER (mc_migrator, o
--- mc_migrator_embedded en PGlite) y solo para filas 'profile' del
--- workspace de la transacción, como outbound_workspace_optout_record
+-- mc_migrator_embedded en PGlite) y solo para filas 'profile' o
+-- 'recommend' del workspace de la transacción, como outbound_workspace_optout_record
 -- (0055 §8.4). A mc_app no le alcanza: sigue sin INSERT ni DELETE.
 --
 -- La cuenta (tope − gastado − reservas) y el candado los pone quien llama
--- (reserveProfileLlmBudget de @mc/db, con el mismo candado por espacio
--- que el worker): la función solo anota o suelta.
+-- (reserveWebLlmBudget de @mc/db, con el mismo candado por espacio que
+-- el worker): la función solo anota o suelta.
 DROP POLICY IF EXISTS outbound_llm_reservation_owner_profile_insert ON outbound_llm_reservation;
 CREATE POLICY outbound_llm_reservation_owner_profile_insert ON outbound_llm_reservation
   FOR INSERT TO CURRENT_USER
-  WITH CHECK (purpose = 'profile' AND workspace_id = current_workspace_id());
+  WITH CHECK (purpose IN ('profile', 'recommend') AND workspace_id = current_workspace_id());
 DROP POLICY IF EXISTS outbound_llm_reservation_owner_profile_delete ON outbound_llm_reservation;
 CREATE POLICY outbound_llm_reservation_owner_profile_delete ON outbound_llm_reservation
   FOR DELETE TO CURRENT_USER
-  USING (purpose = 'profile' AND workspace_id = current_workspace_id());
+  USING (purpose IN ('profile', 'recommend') AND workspace_id = current_workspace_id());
 
-CREATE OR REPLACE FUNCTION outbound_llm_reserve_profile(p_amount numeric)
+CREATE OR REPLACE FUNCTION outbound_llm_reserve_web(p_purpose text, p_amount numeric)
 RETURNS uuid
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -106,26 +115,31 @@ DECLARE
   id uuid;
 BEGIN
   IF ws IS NULL THEN
-    RAISE EXCEPTION 'outbound_llm_reserve_profile necesita un workspace fijado en la transacción.'
+    RAISE EXCEPTION 'outbound_llm_reserve_web necesita un workspace fijado en la transacción.'
       USING ERRCODE = 'insufficient_privilege';
   END IF;
+  IF p_purpose IS NULL OR p_purpose NOT IN ('profile', 'recommend') THEN
+    RAISE EXCEPTION 'La web solo aparta para profile o recommend (llegó %).', p_purpose
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
   IF p_amount IS NULL OR p_amount < 0 OR p_amount > 1000 THEN
-    RAISE EXCEPTION 'Una reserva del perfil va de 0 a 1000 USD (llegó %).', p_amount
+    RAISE EXCEPTION 'Una reserva de la web va de 0 a 1000 USD (llegó %).', p_amount
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
   INSERT INTO outbound_llm_reservation (workspace_id, purpose, amount)
-  VALUES (ws, 'profile', round(p_amount, 6))
+  VALUES (ws, p_purpose, round(p_amount, 6))
   RETURNING outbound_llm_reservation.id INTO id;
   RETURN id;
 END;
 $$;
-REVOKE ALL ON FUNCTION outbound_llm_reserve_profile(numeric) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION outbound_llm_reserve_profile(numeric) TO mc_app;
-COMMENT ON FUNCTION outbound_llm_reserve_profile(numeric) IS
-  'Aparta la estimación de una llamada de «Recalcular» del perfil comercial (VEN-11) en outbound_llm_reservation, '
-  'con purpose profile y el workspace de la transacción. La cuenta y el candado los pone quien llama.';
+REVOKE ALL ON FUNCTION outbound_llm_reserve_web(text, numeric) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION outbound_llm_reserve_web(text, numeric) TO mc_app;
+COMMENT ON FUNCTION outbound_llm_reserve_web(text, numeric) IS
+  'Aparta la estimación de una llamada al modelo desde la web —«Recalcular» del perfil comercial (profile, VEN-11) '
+  'o «Proponer cadencia» (recommend, VEN-13)— en outbound_llm_reservation, con el workspace de la transacción. La '
+  'cuenta y el candado los pone quien llama.';
 
-CREATE OR REPLACE FUNCTION outbound_llm_release_profile(p_id uuid)
+CREATE OR REPLACE FUNCTION outbound_llm_release_web(p_id uuid)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -133,11 +147,11 @@ SET search_path = public, pg_temp
 AS $$
 BEGIN
   DELETE FROM outbound_llm_reservation r
-   WHERE r.id = p_id AND r.purpose = 'profile' AND r.workspace_id = current_workspace_id();
+   WHERE r.id = p_id AND r.purpose IN ('profile', 'recommend') AND r.workspace_id = current_workspace_id();
 END;
 $$;
-REVOKE ALL ON FUNCTION outbound_llm_release_profile(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION outbound_llm_release_profile(uuid) TO mc_app;
-COMMENT ON FUNCTION outbound_llm_release_profile(uuid) IS
-  'Suelta una reserva de «Recalcular» del perfil comercial (VEN-11): la llamada se registró, o no se hizo. Solo '
-  'purpose profile del workspace de la transacción.';
+REVOKE ALL ON FUNCTION outbound_llm_release_web(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION outbound_llm_release_web(uuid) TO mc_app;
+COMMENT ON FUNCTION outbound_llm_release_web(uuid) IS
+  'Suelta una reserva de la web (profile o recommend): la llamada se registró, o no se hizo. Solo del workspace de '
+  'la transacción; las del worker (generate, judge) no las toca.';

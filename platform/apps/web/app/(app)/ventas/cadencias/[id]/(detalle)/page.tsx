@@ -7,8 +7,10 @@ import { PageHeader } from "@/components/page-header";
 import { Pill } from "@/components/ui/pill";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
+import { Aviso } from "../../../../_lib/aviso";
 import { ModuleTabs } from "../../../_componentes/pestanas";
 import { withWorkspace } from "../../../_lib/db";
+import { puedeOperarVentas } from "../../../_lib/permiso";
 import {
   alcance, avisoDePolitica, descripcionDeSenal, esperaEntre, ESTADO_PILL, etiquetaActivar, etiquetaCanal, etiquetaTipo, horaDePaso, modoDePaso,
   personaParaEnrolar, resumenFlujo,
@@ -65,6 +67,10 @@ function pasosVista(d: SequenceDetail, f: Formatter, angulos: ReadonlyMap<string
  * Con ?negocio=<id> (el enlace «Enrolar en una cadencia» de un referido
  * en la bandeja, VEN-14), «Enrolar» abre con ese negocio elegido; con
  * &contacto=<id>, además con esa persona (la referida) marcada.
+ *
+ * Quien no puede operar Ventas (un 'viewer' o un 'client') ve la línea de
+ * tiempo de solo lectura: sin controles, sin editar pasos, sin proponer
+ * ni enrolar. Las acciones lo vuelven a mirar en el servidor.
  */
 export default async function CadenciaPage({
   params,
@@ -92,6 +98,7 @@ export default async function CadenciaPage({
   });
   if (!datos) notFound();
   const { d, plantillas, angulos, negocios, personas } = datos;
+  const puedeOperar = await puedeOperarVentas();
   const f = formatterFor(await getCurrentWorkspace());
   const t = MESSAGES;
   const archivada = d.status === "archived";
@@ -126,13 +133,17 @@ export default async function CadenciaPage({
       />
       <ModuleTabs active={CADENCIAS} />
 
-      <Controles
-        sequenceId={d.id}
-        status={d.status}
-        nombre={d.name}
-        activarLabel={etiquetaActivar(d, negocios)}
-        puedeActivar={d.steps.length > 0}
-      />
+      {puedeOperar ? (
+        <Controles
+          sequenceId={d.id}
+          status={d.status}
+          nombre={d.name}
+          activarLabel={etiquetaActivar(d, negocios)}
+          puedeActivar={d.steps.length > 0}
+        />
+      ) : (
+        <Aviso info={t.errores.sinPermiso!} className="mb-6 max-w-3xl" />
+      )}
 
       {d.steps.length > 0 && (
         <section aria-labelledby="resumen" className="mb-6">
@@ -173,14 +184,14 @@ export default async function CadenciaPage({
         <LineaDeTiempo
           sequenceId={d.id}
           pasos={pasosVista(d, f, nombresAngulo)}
-          estructura={!d.locked && !archivada}
-          editable={!archivada}
+          estructura={puedeOperar && !d.locked && !archivada}
+          editable={puedeOperar && !archivada}
           angulos={angulos.map((a) => ({ value: a.key, label: a.label }))}
           tipos={EDITABLE_STEP_TYPES.map((s) => ({ value: s, label: etiquetaTipo(s) }))}
           canales={EDITABLE_CHANNELS.map((c) => ({ value: c, label: etiquetaCanal(c) }))}
         />
         <aside className="grid content-start gap-4">
-          {d.signal && !d.locked && !archivada && (
+          {puedeOperar && d.signal && !d.locked && !archivada && (
             <ProponerOtraVez
               sequenceId={d.id}
               signalId={d.signal.id}
@@ -198,7 +209,7 @@ export default async function CadenciaPage({
                 })}
             />
           )}
-          {!archivada && (
+          {puedeOperar && !archivada && (
             <Enrolar sequenceId={d.id} negocios={negociosVista} activa={d.status === "active"} inicial={negocioPedido ?? d.proposal?.dealId ?? null} contactoInicial={contactoPedido} />
           )}
         </aside>

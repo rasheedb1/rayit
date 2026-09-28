@@ -11,6 +11,11 @@
  * dominio vuelven como código —FichaError de ventas-ficha, o VentasError
  * de ventas— que aquí se traducen. Cualquier otro error se registra y se
  * resume: un mensaje de Postgres no se le enseña a una creadora.
+ *
+ * Todas las que escriben exigen el rol (puedeOperarVentas: owner, admin o
+ * member) ANTES de validar o tocar la base: un 'viewer' o un 'client' ven
+ * la ficha pero no registran actividad, ni fijan o cierran la siguiente
+ * acción, ni aprueban, resuelven, saltan o reanudan mensajes.
  */
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
@@ -110,6 +115,7 @@ export interface SiguienteState extends VentasState {
  * «Sin responsable».
  */
 export async function fijarSiguienteAccion(_prev: SiguienteState, formData: FormData): Promise<SiguienteState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = FICHA.siguiente;
   const parsed = siguienteSchema.safeParse({
     dealId: field(formData, "dealId"),
@@ -161,6 +167,7 @@ export async function fijarSiguienteAccion(_prev: SiguienteState, formData: Form
  * estaba vieja enseñe la acción de ahora junto al aviso que lo explica.
  */
 export async function marcarHecha(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = FICHA.siguiente;
   const dealId = field(formData, "dealId");
   if (!UUID_RE.test(dealId)) return { message: t.doneError };
@@ -208,6 +215,7 @@ export interface RegistroState extends VentasState {
  * de hoy. Esas vuelven en `pendientes` y la ficha pregunta si era esa.
  */
 export async function registrarActividad(_prev: RegistroState, formData: FormData): Promise<RegistroState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = FICHA.actividad;
   const parsed = actividadSchema.safeParse({
     companyId: field(formData, "companyId"),
