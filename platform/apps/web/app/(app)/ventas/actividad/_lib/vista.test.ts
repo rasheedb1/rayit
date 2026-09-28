@@ -224,7 +224,7 @@ describe("una fila de la cola", () => {
   });
 
   it("un correo de la cadencia que aún no se redacta dice su paso y «por redactar», no «Sin asunto» (pulido r4)", () => {
-    const borrador = { status: "draft" as const, channel: "email" as const, stepType: "email", stepPosition: 2, reason: null, retryable: false };
+    const borrador = { status: "draft" as const, channel: "email" as const, stepType: "email" as const, stepPosition: 2, reason: null, retryable: false };
     const v = vista(fila(borrador));
     expect(v.titulo).toBe("Paso 2 · Correo");
     expect(v.nota).toBe(MESSAGES.fila.porRedactar);
