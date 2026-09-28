@@ -1982,6 +1982,30 @@ persona.
   hora de oficina de su día local, y el «fuera de la oficina» de Esteban
   vuelve diez días después de su respuesta.
 
+#### Decisión 9, tomada (pulido r5, 28 de septiembre)
+
+**Sin `ANTHROPIC_API_KEY`, un espacio de verdad no clasifica las
+respuestas solo.** Se queda como está desde la ronda 1, y deja de ser un
+supuesto (§8, decisión 9):
+
+- **Con llave**, `LlmIntentClassifier` (Haiku) clasifica y aplica los
+  efectos de esta sección. Es el camino del criterio de VEN-14.
+- **Sin llave**, `outbound.intent` solo aplica las bajas explícitas que
+  ya ve el detector de VEN-10; lo demás queda «sin clasificar», la
+  bandeja lo dice arriba de la conversación y una persona lo clasifica
+  con «Corregir», que aplica los mismos efectos (`intent_source =
+  'person'`): un «me interesa» corregido mueve el negocio igual.
+- **El clasificador falso** (`createFakeIntentClassifier`) queda para
+  las pruebas, la demo y `OUTREACH_WRITER=fake` fuera de producción; nunca
+  para un espacio de verdad.
+
+Por qué: una intención mueve negocios, enfría una cadencia noventa días
+o da de baja a una persona, y el falso decide por palabras sueltas.
+Clasificar mal sin que nadie lo sepa es peor que avisar y dejarlo en
+manos de una persona. El único pendiente de VEN-14 es humano: poner la
+llave de Anthropic (`platform/.env.example`). Revertirla sigue siendo
+una línea en `intentClassifierFrom` (§8, decisión 9).
+
 ### 5.8 El brief como regla (VEN-7, 25 de septiembre)
 
 El brief (`outbound_brief`, `/ventas/brief`) tiene dos mitades que no
@@ -2553,18 +2577,15 @@ revisores técnico y de producto y el mismo umbral.
    qué: el falso decide por palabras sueltas, y una intención mueve
    negocios, enfría cadencias noventa días y da de baja a una persona
    (irreversible); hacerlo en un espacio de verdad sin que nadie lo sepa
-   es peor que no hacerlo. **Estado (25 de septiembre): supuesto
-   declarado, pendiente de que Rasheed lo confirme antes de mergear.**
-   Por eso VEN-14 está en `en_curso` en `backlog.ts` (pulido r1): el
-   criterio, tal como se escribió, no se cumple hasta que la decisión se
-   tome.
+   es peor que no hacerlo. **Estado (28 de septiembre, pulido r5):
+   decidida así**, sin llave no se clasifica con palabras (§5.7,
+   «Decisión 9, tomada»). VEN-14 pasa a `hecho`: con la llave, el modelo
+   clasifica; sin ella, una persona clasifica con «Corregir» y los
+   efectos son los mismos. El único pendiente es humano, poner la llave.
    El criterio de aceptación de VEN-14 (`done` en `backlog.ts`) sigue
-   siendo el original: cambiarlo no le toca al constructor; el supuesto
-   está en la `note` de la historia. En la ronda 5 el falso dejó de leer
+   siendo el original. En la ronda 5 el falso dejó de leer
    «no me interesa» como interés (la regla de la negación va antes y da
-   «ahora no», igual que el prompt del modelo), así que lo que sigue en
-   pie de este supuesto es solo la pregunta de si un espacio de verdad
-   sin llave debe clasificar con palabras. **Si Rasheed lo rechaza**, basta con
+   «ahora no», igual que el prompt del modelo). **Si se revierte**, basta con
    que `intentClassifierFrom` (`apps/worker/src/jobs/ventas/outbound.intent.ts`)
    devuelva `createFakeIntentClassifier()` cuando no hay llave (y la
    bandeja deje de avisar: `outreach_classifier_status` diría `fake`). Lo

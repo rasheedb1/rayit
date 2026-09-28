@@ -223,10 +223,10 @@ la baja por enlace solo con quien envió (decisión 6, VEN-15), el token
 de baja opaco en vez de firmado (decisión 7, VEN-15) y que sin
 `ANTHROPIC_API_KEY` las respuestas no se clasifiquen solas, con el
 clasificador falso solo en pruebas, en la demo y con
-`OUTREACH_WRITER=fake` fuera de producción (decisión 9, VEN-14). En
-VEN-14 el criterio de aceptación de `backlog.ts` quedó con su texto
-original: el supuesto va en la nota, y Rasheed lo confirma antes de
-mergear.
+`OUTREACH_WRITER=fake` fuera de producción (decisión 9, VEN-14). La
+decisión 9 quedó tomada así en el pulido r5 (28 de septiembre, §5.7 de
+ventas-outreach.md): VEN-14 está `hecho` y su único pendiente es poner
+la llave de Anthropic.
 
 ## 8. Resumen (RES-1, RES-2): las decisiones que importan
 
