@@ -22,7 +22,10 @@
  *
  * El enlace de baja necesita la URL pública de la web (APP_URL, o la de
  * producción de Vercel). Sin ella el correo real no se reclama: un correo
- * sin enlace de baja válido no sale (0046 §4.5).
+ * sin enlace de baja válido no sale (0046 §4.5). Y «pública» quiere decir
+ * https y no esta máquina (publicAppUrl): con el APP_URL de desarrollo
+ * (http://localhost:3100) el destinatario recibiría un enlace de baja que
+ * no abre, así que en modo real el correo tampoco se reclama.
  */
 import {
   GoogleOAuth, loadGoogleOAuthConfig, loadUnipileConfig, NULL_OUTREACH_CALL_LOG, UnipileClient, type FetchLike,
@@ -58,6 +61,23 @@ export function appUrlFrom(env: Env): string | null {
   if (!raw) return null;
   try {
     return new URL(raw).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * La URL de la web solo si sirve en el correo de un destinatario de
+ * verdad: https y un host que no sea esta máquina. Si no, null (y el
+ * correo real no se reclama; ver arriba).
+ */
+export function publicAppUrl(appUrl: string | null): string | null {
+  if (!appUrl) return null;
+  try {
+    const u = new URL(appUrl);
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    const local = host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0';
+    return u.protocol === 'https:' && !local ? u.origin : null;
   } catch {
     return null;
   }
@@ -158,6 +178,10 @@ export function buildChannels(opts: BuildChannelsOptions): Channels {
   const google = loadGoogleOAuthConfig(opts.env, appUrl);
   const unipile = loadUnipileConfig(opts.env);
   const logger = opts.logger ? { warn: (msg: string, meta?: Record<string, unknown>) => opts.logger!.warn(msg, meta) } : undefined;
+  const publicUrl = publicAppUrl(appUrl);
+  if (appUrl && !publicUrl) {
+    logger?.warn('APP_URL no es un origen https público: el correo real no se reclama (su enlace de baja no abriría)', { appUrl });
+  }
   const gmail = new GmailChannel({
     secrets: opts.secrets, oauth: 'config' in google ? new GoogleOAuth(google.config, http) : null,
     callLog, fetch: opts.fetch, now: opts.now, logger,
@@ -170,6 +194,6 @@ export function buildChannels(opts: BuildChannelsOptions): Channels {
     senders: { email: gmail, linkedin, instagram_dm: instagram },
     readers: { email: gmail, linkedin, instagram_dm: instagram },
     bounces: (account) => gmail.bounceMailboxFor(account),
-    appUrl,
+    appUrl: publicUrl,
   };
 }

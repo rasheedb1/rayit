@@ -19,7 +19,7 @@ import { lastTick } from '../src/runner/cron.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { loadJobDefinitions } from '../src/runner/definitions.ts';
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
-import { NO_RETRY_KEY, onceExitCode, runOnce, type OnceSummary } from '../src/runner/once.ts';
+import { MAX_TICK_CUTS, NO_RETRY_KEY, onceExitCode, retryBackoffFrom, retryDelayMs, runOnce, TICK_CUT_KEY, type OnceSummary } from '../src/runner/once.ts';
 import { defineJob } from '../src/runner/registry.ts';
 import { formatHealth } from '../src/runner/salud.ts';
 import { jobRuns, openTestDatabase, testConfig } from './helpers/harness.ts';
@@ -120,8 +120,10 @@ test('1 · la primera pasada corre lo vencido, encadena lo de abajo y anota el f
   assert.doesNotMatch(JSON.stringify(arribaRun?.metadata), /NO-DEBE-GUARDARSE/, 'el redactor también corre en --once');
 });
 
-test('2 · la segunda pasada no repite lo ya corrido y reintenta lo que falló', async () => {
+test('2 · la segunda pasada no repite lo ya corrido y reintenta lo que falló, sin esperar backoff (--once no lo pide)', async () => {
   const antes = { ...calls };
+  // Enseguida, aunque WORKER_RETRY_DELAY_S=1 en testConfig: --once reintenta en la pasada siguiente,
+  // como antes de CIM-7. La espera entre reintentos solo la pide el turno (test/tick.test.ts).
   const s = await pasada();
   assert.deepEqual(s.runs.map((r) => [r.job, r.reason, r.status]), [['test.once_falla', 'retry', 'failed'], ['test.once_parcial', 'retry', 'partial']],
     'partial se reintenta (retryOnItemFailure por defecto), como en pg-boss');
@@ -265,4 +267,84 @@ test('10 · la salud: última corrida, última buena, fallos desde entonces y «
   assert.match(texto, /test\.once_falla\s+failed .*nunca terminó bien · 2 fallo\(s\) desde entonces/);
   assert.match(texto, /Datos al: todavía no/);
   assert.doesNotMatch(texto, /test\.once_nada/, 'un job sin handler no ensucia la salud');
+});
+
+test('11 · la salud no cuenta como fallo un corte del turno (CIM-7): se retoma, no falló', async () => {
+  // Tras una corrida ok, un corte del presupuesto: failed / timeout / tickCut, como lo deja el turno.
+  await db.raw.query(
+    `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, error, metadata)
+     VALUES ('test.once_arriba', 'failed', 1, now() + interval '1 second', now() + interval '2 seconds', 'timeout', $1::jsonb)`,
+    [JSON.stringify({ [TICK_CUT_KEY]: true })],
+  );
+  const h = Object.fromEntries((await getWorkerHealth(db)).map((x) => [x.jobId, x]));
+  assert.equal(h['test.once_arriba']?.failedSinceOk, 0, 'el corte no es un fallo desde la última buena');
+  assert.equal(h['test.once_arriba']?.lastStatus, 'failed');
+  assert.equal(h['test.once_arriba']?.lastCut, true);
+  assert.equal(h['test.once_falla']?.lastCut, false);
+  assert.equal(h['test.once_falla']?.failedSinceOk, 2, 'los fallos de verdad se siguen contando');
+  const texto = formatHealth(Object.values(h), new Date());
+  assert.match(texto, /test\.once_arriba\s+cortado por el turno, se retoma .* · última buena hace \d+ min\n/);
+  assert.doesNotMatch(texto, /test\.once_arriba.*(fallo|timeout)/);
+
+  // Y un fallo de verdad después del corte sí cuenta (solo ese).
+  await db.raw.query(
+    `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, error)
+     VALUES ('test.once_arriba', 'failed', 2, now() + interval '3 seconds', now() + interval '4 seconds', 'Error: proveedor caído')`,
+  );
+  const despues = (await getWorkerHealth(db)).find((x) => x.jobId === 'test.once_arriba');
+  assert.equal(despues?.failedSinceOk, 1);
+  assert.equal(despues?.lastCut, false);
+});
+
+test(`12 · un job que no cabe en el turno (${MAX_TICK_CUTS} cortes o más sin terminar bien) se enseña como tal, no como «se retoma»`, async () => {
+  // test.once_vacio terminó bien en la pasada 1; después, cortes seguidos del turno, como los de compute.baseline
+  // con una sentencia de más de 45 s que statement_timeout corta siempre.
+  const cortes = (n: number, desde: number) => db.raw.query(
+    `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, error, metadata)
+     SELECT 'test.once_vacio', 'failed', 1, now() + make_interval(secs => $2 + g), now() + make_interval(secs => $2 + g), 'timeout', $1::jsonb
+       FROM generate_series(1, $3::int) g`,
+    [JSON.stringify({ [TICK_CUT_KEY]: true }), desde, n],
+  );
+  await cortes(MAX_TICK_CUTS - 1, 10);
+  let h = (await getWorkerHealth(db)).find((x) => x.jobId === 'test.once_vacio')!;
+  assert.equal(h.cutsSinceOk, MAX_TICK_CUTS - 1);
+  assert.match(formatHealth([h], new Date()), /test\.once_vacio\s+cortado por el turno, se retoma /, 'por debajo del tope, todavía se retoma');
+
+  await cortes(1, 100);
+  h = (await getWorkerHealth(db)).find((x) => x.jobId === 'test.once_vacio')!;
+  assert.equal(h.cutsSinceOk, MAX_TICK_CUTS);
+  assert.equal(h.failedSinceOk, 0, 'siguen sin ser fallos del job');
+  const texto = formatHealth([h], new Date());
+  assert.match(texto, new RegExp(`test\\.once_vacio\\s+no cabe en el turno \\(${MAX_TICK_CUTS} cortes\\): súbelo a Pro o pártelo · último corte `));
+  assert.doesNotMatch(texto, /se retoma/);
+
+  // Una corrida buena pone la cuenta a cero.
+  await db.raw.query(
+    `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at) VALUES ('test.once_vacio', 'ok', 1, now() + interval '200 seconds', now() + interval '201 seconds')`,
+  );
+  assert.equal((await getWorkerHealth(db)).find((x) => x.jobId === 'test.once_vacio')?.cutsSinceOk, 0);
+});
+
+test('13 · RunOnceOptions.backoff (lo pide el turno, CIM-7): un fallo espera su backoff; sin él, --once reintenta en la pasada siguiente', async () => {
+  await db.raw.exec(`INSERT INTO job_definition (id, label_es, queue, default_cron, timeout_s, max_attempts, max_concurrency)
+                     VALUES ('test.once_espera', 'Prueba once: espera', 'test_espera', '${ANUAL}', 5, 4, 1)`);
+  const espera = defineJob('test.once_espera', async () => { count('espera'); throw new Error('proveedor caído (429)'); });
+  const config = testConfig({ groups: ['test_espera'], retryDelayS: 60, retryDelayMaxS: 900 });
+  const t0 = Date.now();
+  const en = (s: number, conEspera: boolean) => runOnce({
+    config, db, logger, jobs: [espera], env: {},
+    secrets: new InMemorySecretStore(), refreshers: refresherRegistry([new FakeTokenRefresher('tiktok')]),
+    now: () => new Date(t0 + s * 1000),
+    ...(conEspera ? { backoff: retryBackoffFrom(config) } : {}),
+  });
+  assert.deepEqual((await en(0, true)).runs.map((r) => [r.reason, r.status]), [['due', 'failed']]);
+  assert.equal(reasons(await en(30, true))['test.once_espera'], 'backoff', 'con backoff, a los 30 s todavía espera (60 s)');
+  assert.deepEqual((await en(30, false)).runs.map((r) => [r.reason, r.status]), [['retry', 'failed']], 'sin él (--once), reintenta ya');
+  // Dos fallos: la espera se dobla (120 s) desde que empezó el segundo, a los 30 s.
+  assert.equal(reasons(await en(140, true))['test.once_espera'], 'backoff');
+  assert.deepEqual((await en(150, true)).runs.map((r) => r.reason), ['retry']);
+  assert.equal(calls['espera'], 3);
+  assert.equal(retryDelayMs(1, { delayS: 60, maxS: 900 }), 60_000);
+  assert.equal(retryDelayMs(5, { delayS: 60, maxS: 900 }), 900_000, 'con techo');
+  assert.equal(retryDelayMs(0, { delayS: 60, maxS: 900 }), 0);
 });

@@ -130,6 +130,15 @@ jobs:
           TEST_DATABASE_URL: postgres://mc_app_ci:ci@localhost:5432/oncue
           TEST_DATABASE_ADMIN_URL: postgres://mc:mc@localhost:5432/oncue
         run: pnpm test
+      - name: 'El worker por turnos con dos pools (CIM-7)'
+        # Dos turnos que se solapan, cada uno con su pool, en el peor orden:
+        # el candado por job de claimRun es lo único que evita la corrida
+        # doble, y PGlite (una sola conexión) no lo puede probar.
+        working-directory: platform/apps/worker
+        env:
+          TEST_DATABASE_URL: postgres://mc_app_ci:ci@localhost:5432/oncue
+          TEST_DATABASE_ADMIN_URL: postgres://mc:mc@localhost:5432/oncue
+        run: node --test --experimental-strip-types --test-timeout=120000 test/tick-postgres.test.ts
 
   calidad:
     name: Tipos, lint, pruebas y build

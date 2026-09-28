@@ -125,6 +125,13 @@ export interface AlertasDeps {
   readSignals?: ReadSignals;
   /** Hora local desde la que se revisa; 0 revisa a cualquier hora. */
   horaLocal?: number;
+  /**
+   * La señal del runner (ctx.signal). Disparada, no se empieza el
+   * workspace siguiente y se devuelve lo hecho (`interrupted` cuenta los
+   * que quedaron): en un turno (CIM-7) el job que se pasa no sigue vivo
+   * detrás del runner. Los que faltan salen en la corrida siguiente.
+   */
+  signal?: AbortSignal;
 }
 
 export interface AlertasResult {
@@ -142,6 +149,8 @@ export interface AlertasResult {
   emailDeferred: number;
   /** Correos inmediatos de alertas urgentes que aparecieron después del resumen del día (r5). */
   urgentSent: number;
+  /** Workspaces que no se revisaron porque llegó la señal del runner. */
+  interrupted: number;
 }
 
 type Espacio = {
@@ -318,9 +327,14 @@ export async function runAlertas(
   const leer = deps.readSignals ?? readSignalsFromDb;
   const r: AlertasResult = {
     workspaces: 0, created: {}, emailsSent: 0, emailSkipped: 0, emailSkippedReason: null, emailFailed: 0, emailDeferred: 0,
-    urgentSent: 0,
+    urgentSent: 0, interrupted: 0,
   };
-  for (const w of await espacios(db, now, hora)) {
+  const lista = await espacios(db, now, hora);
+  for (const [i, w] of lista.entries()) {
+    if (deps.signal?.aborted) {
+      r.interrupted = lista.length - i;
+      break;
+    }
     r.workspaces++;
     try {
       const creadas = await db.transaction(async (tx) => {
@@ -362,7 +376,7 @@ export function createAlertasJob(deps: Omit<AlertasDeps, 'mailer' | 'appUrl'> & 
       const appUrl = ctx.env['APP_URL']?.trim() || null;
       if (!appUrl) ctx.logger.warn('alertas de outreach: sin APP_URL, el resumen sale sin enlaces', {});
       let fallos = 0;
-      const r = await runAlertas(ctx.db, ctx.now(), { ...deps, mailer, mailerMissing: falta, appUrl }, (ws, err) => {
+      const r = await runAlertas(ctx.db, ctx.now(), { ...deps, mailer, mailerMissing: falta, appUrl, signal: ctx.signal }, (ws, err) => {
         fallos++;
         ctx.logger.warn('alertas de outreach: falló un workspace', { workspaceId: ws, error: err instanceof Error ? err.message : String(err) });
       });

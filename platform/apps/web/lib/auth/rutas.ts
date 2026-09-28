@@ -20,6 +20,8 @@ export const RUTAS_PUBLICAS = [
   "/reporte", //          el reporte de campaña que abre la marca (CAM-6)
   "/baja", //             la baja de una secuencia de outreach: la abre quien la recibe (VEN)
   "/api/webhooks", //     lo llaman las plataformas, no un navegador con sesión
+  "/api/cron/tick", //    el turno del worker: lo llama el cron (pg_cron de Supabase o Vercel Cron), sin sesión; exige su Bearer CRON_SECRET (CIM-7).
+  //                      Solo esta ruta, no el prefijo /api/cron: otro turno futuro nace protegido y se abre con su propia línea.
 ] as const;
 
 /**

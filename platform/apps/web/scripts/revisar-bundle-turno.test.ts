@@ -1,0 +1,110 @@
+// @vitest-environment node
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, test } from "vitest";
+// @ts-expect-error: script .mjs sin tipos (corre con node después de next build).
+import { chunksDe, chunksDinamicosDe, HUELLA_WORKER, PAQUETES_FUERA, PERMITIDOS, revisarBundle, RUTA_TURNO } from "./revisar-bundle-turno.mjs";
+
+/**
+ * CIM-7 · la revisión del bundle del turno, sobre un .next/server de
+ * mentira: encuentra los chunks que carga la ruta y falla con un
+ * `file:///` fuera de los permitidos (el caso real de loadPrompt en la
+ * ronda 2: packages/core/src/outreach/generate.ts).
+ */
+const dirs: string[] = [];
+afterEach(() => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
+
+function bundle(raiz: string, chunks: Record<string, string>): string {
+  const server = mkdtempSync(join(tmpdir(), "turno-bundle-"));
+  dirs.push(server);
+  mkdirSync(join(server, "app", "api", "cron", "tick"), { recursive: true });
+  mkdirSync(join(server, "chunks"));
+  const ids = Object.keys(chunks);
+  writeFileSync(join(server, RUTA_TURNO), `var a=t=>t.X(0,[${ids.join(",")}],()=>t(1));`);
+  for (const [id, js] of Object.entries(chunks)) writeFileSync(join(server, "chunks", `${id}.js`), js);
+  return server;
+}
+
+describe("la revisión del bundle del turno (CIM-7)", () => {
+  const raiz = "/maquina/del/build/platform";
+  const url = (rel: string) => `${pathToFileURL(raiz).href}/${rel}`;
+
+  test("lee los ids de chunk de la ruta", () => {
+    expect(chunksDe('e.X(0,[3345,6829, 454],()=>1); e.X(0,[454,77],x)')).toEqual(["3345", "6829", "454", "77"]);
+  });
+
+  test("con solo los módulos permitidos, pasa", () => {
+    const server = bundle(raiz, {
+      "1": `const HERE="${url("packages/db/src/tls.ts")}";`,
+      "2": `x("${url("packages/connectors/src/testing/fixture-fetch.ts")}")`,
+    });
+    const r = revisarBundle(server, raiz);
+    expect(r.prohibidos).toEqual([]);
+    expect(r.encontrados).toEqual(["packages/connectors/src/testing/fixture-fetch.ts", "packages/db/src/tls.ts"]);
+    expect(r.archivos).toBe(3);
+  });
+
+  test("un readFileSync relativo a import.meta.url en packages/core o apps/worker lo tumba", () => {
+    const server = bundle(raiz, {
+      "454": `(0,n.readFileSync)(new URL(\`./prompts/\${e}.md\`,"${url("packages/core/src/outreach/generate.ts")}"),"utf8")`,
+      "9": `new URL("./x.json","${url("apps/worker/src/jobs/x.ts")}")`,
+    });
+    expect(revisarBundle(server, raiz).prohibidos).toEqual(["apps/worker/src/jobs/x.ts", "packages/core/src/outreach/generate.ts"]);
+  });
+
+  test("un file:/// de otra máquina tampoco se da por bueno", () => {
+    const server = bundle(raiz, { "1": `"file:///vercel/path0/packages/db/src/tls.ts"` });
+    expect(revisarBundle(server, raiz).prohibidos).toEqual(["file:///vercel/path0/packages/db/src/tls.ts"]);
+  });
+
+  test("sin build, o con un chunk que falta, falla en vez de dar un falso verde", () => {
+    const vacio = mkdtempSync(join(tmpdir(), "turno-bundle-"));
+    dirs.push(vacio);
+    expect(() => revisarBundle(vacio, raiz)).toThrow(/next build/);
+    const server = bundle(raiz, { "1": "" });
+    rmSync(join(server, "chunks", "1.js"));
+    expect(() => revisarBundle(server, raiz)).toThrow(/no existe/);
+  });
+
+  test("pg-boss en el bundle del turno lo tumba: el turno no lo usa (runner/comun.ts)", () => {
+    const limpio = bundle(raiz, { "1": `const JOB_LOCK_PREFIX="mc-worker/job:";select count(*) from pgboss.job` });
+    expect(revisarBundle(limpio, raiz).paquetes).toEqual([]);
+    const conBoss = bundle(raiz, { "7": `class PgBoss extends EventEmitter{}throw new Error("pg-boss is not installed")` });
+    expect(revisarBundle(conBoss, raiz).paquetes).toEqual(["pg-boss"]);
+    expect((PAQUETES_FUERA as Record<string, { motivo: string }>)["pg-boss"]!.motivo).toMatch(/comun\.ts/);
+  });
+
+  test("sigue los import() dinámicos de la ruta (y los de sus chunks): el worker, que se carga tras el Bearer, también se revisa", () => {
+    expect(chunksDinamicosDe("Promise.all([c.e(6829),c.e(454)]).then(c.bind(c,1)); c.e(454)")).toEqual(["6829", "454"]);
+    const server = bundle(raiz, { "1": "runtime" });
+    writeFileSync(join(server, RUTA_TURNO), `var a=t=>t.X(0,[1],()=>t(1));const run=async()=>(await Promise.all([c.e(20)]).then(c.bind(c,5))).runTickFromEnv();`);
+    writeFileSync(join(server, "chunks", "20.js"), `"${HUELLA_WORKER} …";c.e(21)`);
+    writeFileSync(join(server, "chunks", "21.js"), `new URL("./x.md","${url("packages/core/src/outreach/generate.ts")}")`);
+    const r = revisarBundle(server, raiz);
+    expect(r.archivos).toBe(4);
+    expect(r.estaticos).toBe(2);
+    expect(r.workerSiempre, "el worker va en un chunk dinámico").toBe(false);
+    expect(r.prohibidos, "lo de los chunks dinámicos también se revisa").toEqual(["packages/core/src/outreach/generate.ts"]);
+  });
+
+  test("el worker en los chunks que se cargan siempre lo tumba (un 401 pagaría su arranque en frío)", () => {
+    const server = bundle(raiz, { "1": `throw new ConfigError("${HUELLA_WORKER} en el despliegue de producción")` });
+    expect(revisarBundle(server, raiz).workerSiempre).toBe(true);
+  });
+
+  test("la huella del worker sigue estando en src/tick.ts", () => {
+    const tick = readFileSync(join(__dirname, "..", "..", "worker", "src", "tick.ts"), "utf8");
+    expect(tick).toContain(HUELLA_WORKER);
+  });
+
+  test("cada permitido lleva su motivo", () => {
+    for (const [modulo, motivo] of Object.entries(PERMITIDOS as Record<string, string>)) {
+      expect(motivo.length, modulo).toBeGreaterThan(40);
+      expect(modulo).not.toMatch(/^(packages\/core|apps\/worker)\//);
+    }
+  });
+});

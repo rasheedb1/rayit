@@ -42,9 +42,10 @@ import { defineJob } from '../../runner/registry.ts';
 import { buildChannels, jobScope } from './canales/index.ts';
 import type { ChannelReader, OutgoingMessage } from './canales/types.ts';
 import { motorDbFromJob, type MotorDb } from './motor-db.ts';
+import { jobDeadline } from './plazo.ts';
 
 export const REPLIES_JOB_ID = 'outbound.replies';
-/** Margen antes del timeout del job: a partir de ahí no empieza otro hilo. */
+/** Margen antes del timeout del job: a partir de ahí no empieza otro hilo. Es el tope; con un timeout corto (un turno), el 25 % (plazo.ts). */
 export const REPLIES_DEADLINE_MARGIN_MS = 30_000;
 /** Las páginas que lee una corrida como mucho (el tiempo suele cortar antes). */
 export const REPLIES_MAX_PAGES = 20;
@@ -214,7 +215,7 @@ export const repliesJob = defineJob(
       env: ctx.env, scope: jobScope(ctx), secrets: ctx.secrets, logger: ctx.logger, callLog: new PostgresOutreachCallLog(ctx.db),
       now: () => ctx.now(),
     });
-    const deadline = new Date(Date.now() + ctx.definition.timeoutS * 1000 - REPLIES_DEADLINE_MARGIN_MS);
+    const deadline = jobDeadline(ctx.definition.timeoutS, REPLIES_DEADLINE_MARGIN_MS);
     const r = await runReplies(motorDbFromJob(ctx.db), { readers: channels.readers, now: () => ctx.now(), logger: ctx.logger, signal: ctx.signal, deadline });
     const metadata = {
       threads: r.threads, pages: r.pages, inbound: r.inbound, optOuts: r.optOuts, automatic: r.automatic, canceled: r.canceled,

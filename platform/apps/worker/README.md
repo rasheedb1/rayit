@@ -61,9 +61,15 @@ cubre su propio tick. Sale con 1 si alguna corrida terminó `failed` o si
 una señal dejó jobs sin empezar. Al terminar
 imprime la salud (`getWorkerHealth` de `@mc/db/queries/worker`) con
 «Datos al <fecha>». No necesita el esquema `pgboss`, solo que el rol de
-conexión pueda hacer `SET ROLE mc_worker`. Es el camino recomendado para
-producción: `.github/workflows/worker-once.yml`, cada hora, hoy apagado.
-Por qué, costos y cómo encenderlo: [docs/propuestas/WRK.md](../../../docs/propuestas/WRK.md).
+conexión pueda hacer `SET ROLE mc_worker`. Cada corrida se **reclama**
+antes de empezar (CIM-7): con un candado por job
+(`pg_advisory_xact_lock`, solo lo que dura una transacción corta) se
+relee el estado de su tick y se abre ahí mismo la fila `running`, así
+que dos pasadas a la vez no corren dos veces lo mismo. Era la
+recomendación de [docs/propuestas/WRK.md](../../../docs/propuestas/WRK.md)
+(`.github/workflows/worker-once.yml`, cada hora, apagado); el 27-sep
+Rasheed eligió el modo **por turnos** (abajo), que es esta misma pasada
+con un presupuesto de tiempo, cada minuto, desde la web.
 No se corre a la vez que el proceso largo.
 
 Contra Supabase el worker arranca **solo cuando Rasheed aplique
@@ -78,6 +84,337 @@ y salen con 0 en vez de caerse en bucle; `start` (producción) no degrada.
 ```bash
 make worker.humo                        # = pnpm --filter @mc/worker humo: lista job_definition por DATABASE_URL
 ```
+
+### Por turnos: el worker en Vercel (CIM-7)
+
+Sin un proceso siempre encendido: alguien llama cada minuto a
+`POST /api/cron/tick` de la web con `Authorization: Bearer <CRON_SECRET>`,
+y la ruta (`apps/web/app/api/cron/tick/route.ts`, `maxDuration` 60 s)
+corre **un turno** de 45 s con `runTick` (`src/tick.ts`, exportado como
+`@mc/worker/tick`):
+
+1. **Programa** lo que toca: la pasada de `--once`, con los mismos crons
+   de `job_definition` y `job_run` como cola. Cada corrida se reclama
+   (arriba): dos turnos solapados, o uno repetido, no duplican nada.
+2. **Procesa** lo vencido, `outbound.dispatch` primero (`TICK_FIRST`: un
+   toque atrasado es lo único que nota un cliente), hasta tres corridas a
+   la vez, y no empieza ninguna si quedan menos de 10 s. Lo encadenado no
+   se adelanta a lo de arriba: si `collect.post_metrics` y
+   `compute.baseline` están vencidos a la vez, el segundo espera a que el
+   primero termine y corre como su encadenado, con los datos nuevos. Un
+   fallo espera su backoff antes del reintento, el mismo que el proceso
+   largo (`WORKER_RETRY_DELAY_S`·2^(intentos−1), con techo
+   `WORKER_RETRY_DELAY_MAX_S`): un proveedor caído no recibe un golpe por
+   minuto; mientras espera, el resumen lo deja en `left` con `backoff`.
+   (Solo el turno lo pide, con `RunOnceOptions.backoff`; `--once` sigue
+   reintentando en la pasada siguiente, como siempre.) Una corrida que
+   lanza fuera de su job —la base falla al reclamarla, al leer la cuota o
+   al cerrar su fila— no tumba el turno: queda en el log con su job, en
+   `left` con `error`, y los demás recorredores terminan lo suyo antes de
+   responder. Cada corrida recibe como `timeout_s`
+   lo que queda del turno: la que se mide por su timeout termina sola
+   (`outbound.dispatch` deja de reclamar y devuelve a su cola lo que no
+   intentó); la que se pasa termina `failed`, `error = timeout`,
+   `metadata.tickCut = true` (en la misma escritura que cierra la fila:
+   otro turno nunca la ve como un intento), que **no gasta un intento**: el turno
+   siguiente la retoma (`reason: resume`), hasta 20 cortes por tick del
+   cron (`MAX_TICK_CUTS`). Lo que no llegó a empezar sigue vencido. Una
+   fila de un turno muerto (Vercel lo mató, un redeploy) deja de estar
+   viva a los `sliceS + 30 s`, el timeout que tuvo en el turno y que queda
+   en la metadata del reclamo, no a los `timeout_s` de su definición
+   (600 s en `collect.post_metrics`): no hay zombis.
+3. **Responde** con el resumen (`TickSummary`: qué corrió, con qué
+   estado, cuánto tardó, qué quedó y por qué) y deja **una línea** en el
+   log de Vercel (`[cron/tick] {…}`). El logger del worker, sin
+   `LOG_LEVEL`, solo escribe avisos y errores. `planMs` es lo que tardó
+   la planificación y `orphanedBossJobs`, lo que espera en `pgboss.job`
+   (abajo).
+
+Sin nada vencido, el turno son cuatro consultas seguidas por **una sola
+conexión** (el rol, las definiciones, el estado de todos los ticks en una
+consulta y `pgboss.job`) y sale: Vercel Hobby cobra la CPU activa y aquí
+no se espera a nada. `platform.limits` (la cuota de CON-1) se lee una vez
+por instancia cada 5 min (`TICK_LIMITS_TTL_MS`, `tickQuota` en
+`src/tick.ts`), no en cada turno; sus «entrada ignorada» (las de la
+migración 0011) van a `debug`, con **un** aviso por instancia que dice
+cuántas son, en vez de siete líneas por minuto en el log de Vercel. Y la
+ruta carga el worker (~0,6 MB) con `import()` **después** de comprobar el
+Bearer: un 401 a la URL pública no paga su arranque en frío
+(`revisar-bundle-turno.mjs` falla el build si vuelve a los chunks de
+carga siempre). El objetivo es **menos de 300 ms de pared**: tras el
+despliegue, `make cron.status` enseña las últimas respuestas, con su
+`elapsedMs` y su `planMs`. Los
+handlers, el `SET ROLE mc_worker`, los secretos y los refreshers son los
+del proceso (`src/recursos.ts`). **El turno y el proceso largo no se
+encienden a la vez**: pg-boss no mira `job_run` y correrían dos veces.
+
+Lo que conviene saber de un turno de 45 s:
+
+- `outbound.dispatch` y `outbound.replies` se guardan un margen antes de
+  su timeout para no empezar un envío que no pueda acabar. Es el menor
+  entre 30 s y el 25 % del timeout (`src/jobs/ventas/plazo.ts`): en el
+  proceso largo (120 s) siguen siendo 30 s y 45 toques por pasada; en un
+  turno (unos 40 s) son 10 s de margen y unos **15 toques por pasada**,
+  cada dos minutos, unos 450 por hora para todos los workspaces. Con el
+  margen fijo eran 5 toques y 150 por hora. La metadata de cada corrida
+  dice cuántos podía reclamar (`claimBudget`). Si hace falta más, la
+  palanca es la opción A (Pro: `maxDuration` y `TICK_BUDGET_MS` más
+  largos).
+- Un job que tarde más de lo que da el turno tiene que poder retomarse
+  (revisar `ctx.signal` y saltarse lo ya hecho), como los de CON-5. El
+  runner no puede matar un handler: si no mira la señal, sigue vivo con
+  su conexión después del corte. Por eso todos los de Ventas la miran
+  (`sales.follow_ups`, `outbound.alerts` y `sales.channels_release`
+  desde CIM-7 r3; el primero, que es una transacción, lleva además un
+  `statement_timeout` para que la base corte lo que siga vivo,
+  `src/jobs/ventas/plazo.ts`).
+- **En modo por turnos no hay trabajo a demanda.** El turno solo corre lo
+  que el cron de `job_definition` dice que está vencido: un
+  `boss.send(...)` (un «Recalcular» desde una pantalla, como el previsto
+  para `campaign.compute`) no lo procesa nadie, y **una fila escrita a
+  mano en `job_run` no lo pide**: `job_run` no tiene un estado de cola
+  (su CHECK es `running/ok/failed/skipped/partial`) y una fila `ok` o
+  `skipped` dejaría el tick por cubierto y SALTARÍA la corrida del cron.
+  Para algo a demanda: esperar al cron, o correr
+  `pnpm --filter @mc/worker once` a mano con la base de producción. Si
+  hace falta de verdad, es una historia aparte: una tabla (o estado) de
+  peticiones que `runOnce` consuma con el mismo `claimRun`. Para que un
+  `boss.send` no pase en silencio, cada turno cuenta lo que espera en
+  `pgboss.job` (`created` o `retry`), lo devuelve en `orphanedBossJobs` y
+  avisa en el log si es más de 0. Para eso `mc_worker` tiene que poder
+  leer `pgboss.job`, y pg-boss crea su esquema con el rol de conexión de
+  `--install`, no con `mc_worker`: sin el GRANT
+  ([CON-2 §«El turno y pgboss.job»](../../../docs/propuestas/CON-2.md))
+  el turno devuelve `orphanedBossJobs: 'unreadable'` (no `null`, que es
+  «no hay esquema») y avisa una vez por instancia con el GRANT que falta.
+- **Conexiones.** El pool del turno es `2 × TICK_CONCURRENCY + 1` = 7:
+  una corrida puede tener una transacción abierta y pedir otra conexión
+  a la vez (`api_call_log` se escribe con `ctx.db`). Dos turnos
+  solapados son 14, dentro de las 15 de modo sesión que el pooler de
+  Supabase da por usuario. `WORKER_JOB_POOL_MAX` lo cambia; por debajo de
+  7 un turno puede quedarse esperando conexión hasta el corte.
+- **Nada espera para siempre** (`openTickDatabase` en `src/tick.ts`).
+  Una conexión nueva se espera como mucho 5 s
+  (`TICK_CONNECT_TIMEOUT_MS`): con el pooler colgado o sin clientes, el
+  turno falla con su motivo en vez de quedarse hasta que Vercel mate la
+  función. Cada conexión del turno fija, junto al `SET ROLE` y en la
+  misma ida y vuelta, `statement_timeout` e
+  `idle_in_transaction_session_timeout` iguales al presupuesto (45 s): un
+  job cortado que no mira la señal, o metido en una sentencia larga
+  (`compute.trait_lift`, `compute.baseline`), suelta su conexión de modo
+  sesión a más tardar 45 s después, aunque la función quede congelada.
+  Y la ruta no espera al turno más de `TICK_BUDGET_MS + TICK_CLOSE_MS`
+  (48 s): si no respondió, contesta **504** y deja en el log «el turno
+  no respondió a tiempo», que `make cron.status` traduce.
+- **En local, el turno no toca producción.** `pnpm --filter @mc/web dev`
+  carga el `.env.local` de `make db.unlock`, que apunta al Supabase de
+  producción: un `curl` a la ruta correría el turno de verdad, en
+  paralelo con el cron, con correo real. Por eso `runTickFromEnv` se
+  niega (`ConfigError`) a correr contra una base que no es de esta
+  máquina fuera del despliegue de producción de Vercel
+  (`VERCEL_ENV=production`), salvo `TICK_ALLOW_REMOTE=1` a sabiendas.
+  En modo real el correo no se reclama si `APP_URL` no es un origen
+  https público (`publicAppUrl` en `jobs/ventas/canales`): con
+  `http://localhost:3100`, el enlace de baja no abriría. La receta para
+  probar la ruta en local está justo debajo de esta lista.
+- **La salud** (`pnpm --filter @mc/worker salud`) no cuenta un corte como
+  fallo: `failedSinceOk` los salta y, si la última corrida fue un corte,
+  dice «cortado por el turno, se retoma» (`lastCut` en
+  `@mc/db/queries/worker`). Salvo que no quepa nunca: con 20 cortes o más
+  desde su última corrida buena (`cutsSinceOk` ≥ `MAX_TICK_CUTS`) dice
+  «no cabe en el turno (N cortes): súbelo a Pro o pártelo», porque no se
+  va a retomar (cada tick del cron agota sus cortes y espera al
+  siguiente). `make cron.status` lo pone en rojo (`no_caben`).
+
+**Probar la ruta de punta a punta en local**, contra el Postgres de
+Docker y sin tocar producción (desde `platform/`):
+
+```bash
+make up && make seed
+export CRON_SECRET=$(openssl rand -hex 32)
+CRON_SECRET=$CRON_SECRET WORKER_DATABASE_URL=postgres://mc:mc@localhost:5432/oncue \
+  SECRET_STORE=memory TOKEN_REFRESHER=fake OUTREACH_CHANNELS=fake \
+  pnpm --filter @mc/web dev --port 3100
+# en otra terminal, con el mismo CRON_SECRET exportado:
+curl -s -X POST -H "Authorization: Bearer $CRON_SECRET" localhost:3100/api/cron/tick
+```
+
+`SECRET_STORE=memory` y `TOKEN_REFRESHER=fake` porque en local no hay
+`TOKEN_ENCRYPTION_KEY` ni apps de OAuth; `OUTREACH_CHANNELS=fake` saca
+los toques de la demo por el canal falso. Sin Bearer, o con otro, la
+misma llamada da 401. **Con `next start` no vale lo mismo**: pone
+`NODE_ENV=production`, y ahí el canal falso está prohibido (la ruta
+responde 500 con «OUTREACH_CHANNELS=fake no se permite en producción»
+en el log). Con `next start`, quita `OUTREACH_CHANNELS` y deja los
+canales en real sin llaves: salen como «no configurado» y sus toques
+esperan.
+
+**Lo que se tocó en `src/runner/` (carpeta de Nicolás), y por qué.** El
+turno es la misma pasada que `--once`: la pila de pendientes, el
+encadenado, la regla de reintento y el reclamo tenían que ser los mismos,
+y envolver `runOnce` desde `src/tick.ts` no bastaba (el presupuesto y el
+reclamo atómico ocurren entre corrida y corrida, dentro del bucle).
+Copiarlo en `tick.ts` era duplicar la lógica, que el enunciado prohíbe.
+Lo que `--once` no usa vive FUERA de `runner/`, en
+`src/turno/recorrer.ts` (el presupuesto, los tres recorredores con
+`blockedBy`, `outbound.dispatch` primero), y entra en `runOnce` por un
+punto de extensión pequeño, `walk`; `--once` usa `sequentialWalk`, el
+bucle de siempre. En `runner/` queda lo que de verdad comparten, en
+**dos pull requests** para que Nicolás revise primero lo imprescindible y
+aparte lo que solo mejora:
+
+**PR 1 · lo imprescindible** (rama `rasheed/CIM-7-runner-1`, sobre
+`rasheed/integracion`; sin él el turno no es correcto):
+
+| Archivo | Qué | Por qué |
+|---|---|---|
+| `once.ts` | `claimRun`: candado por job (`pg_advisory_xact_lock`) + relectura del estado + fila `running`, en una transacción | Dos turnos solapados no corren dos veces lo mismo. Sin él, en Postgres real, las dos pasadas reclaman (`test/tick-postgres.test.ts`, `test/once-reclamo.test.ts`) |
+| `once.ts` | `walk` en `RunOnceOptions` (`WalkControl`: la pila, `run(item, deadline?)`, `skip`), `sequentialWalk`; `sliceS` en el reclamo; `tickCut` en `closeMetadata`; los cortes (`cuts`, `MAX_TICK_CUTS`) en el estado del tick | El punto de extensión del turno (`src/turno/recorrer.ts`). Sin `walk` (`--once`), el mismo bucle que antes |
+| `run.ts` | `RunInput.runId` y `RunInput.closeMetadata` | Abrir la fila en el reclamo y marcar `tickCut`/`noRetry` en la escritura que la cierra |
+| `worker.ts` | `JOB_LOCK_PREFIX` y `recordSkipped` bajo ese candado | Dos turnos no dejan dos filas «sin handler» |
+| `db.ts` | `connectionTimeoutMillis` y `sessionTimeoutMs` opcionales en `PostgresDatabaseOptions`; el `SET ROLE` y los timeouts en una sola consulta | Solo los pasa el turno; sin ellos, el proceso largo queda igual |
+| `salud.ts` | «cortado por el turno, se retoma», o «no cabe en el turno» con `MAX_TICK_CUTS` cortes | La salud no enseña como fallo un job sano que se retoma, ni como sano uno que no va a terminar |
+
+**PR 2 · lo opcional** (rama `rasheed/CIM-7-runner-2`, sobre el PR 1; no
+cambia lo que hacen `--once` ni el proceso largo):
+
+| Archivo | Qué | Por qué |
+|---|---|---|
+| `comun.ts` (nuevo) | `EXPIRE_MARGIN_S`, `JOB_LOCK_PREFIX`, `SKIPPED_NO_HANDLER`, `RoleError`, `assertRole`, `createQuota`, `recordSkipped`, **movidos tal cual**; `worker.ts` y `boss.ts` los reexportan con sus nombres | El turno los usa sin importar `worker.ts`/`boss.ts`, que arrastraban pg-boss entero a su bundle (de 1,15 MB a 0,59 MB; el build falla si vuelve: `apps/web/scripts/revisar-bundle-turno.mjs`) |
+| `once.ts` | `planOnce` lee el estado de todos los ticks en una consulta (`tickStates`), la fila «sin handler» solo cuando falta, y la cuota solo si algo corre | Un turno vacío, una conexión y cuatro consultas, no una por definición |
+| `once.ts` | `RunOnceOptions.backoff` (`verdict` con `lastFailedAt`, `retryDelayMs`), **opcional y apagado por defecto** | El turno pasa cada minuto y pide la espera entre reintentos del proceso largo (pg-boss); `--once` no la pasa y reintenta en la pasada siguiente, como siempre |
+
+Si Nicolás no quiere el PR 2, el turno se adapta sin tocar `runner/`:
+pierde la espera entre reintentos (un proveedor caído recibe
+`max_attempts` golpes en `max_attempts` minutos), pg-boss vuelve a su
+chunk dinámico (lo paga cada turno con Bearer, no un 401) y un turno
+vacío hace una consulta por definición.
+
+**Cambios que también ven el proceso largo y `--once`** (fuera de
+`runner/`, y por eso no en la tabla de arriba). Ninguno cambia lo que
+pasa en producción con la configuración de hoy, pero no es cierto que
+«no pasen por nada de esto»:
+
+| Dónde | Qué cambia para el proceso largo y `--once` |
+|---|---|
+| `jobs/ventas/canales` (`publicAppUrl`) | Con canales reales y un `APP_URL` que no es https público (`http://…`, `localhost`), `outbound.dispatch` deja de reclamar correo y lo avisa: antes lo enviaba con un enlace de baja que no abría. Con un https público reclama lo mismo que antes (`test/outreach-canales.test.ts`) |
+| `jobs/ventas/seguimientos.ts` | `sales.follow_ups` fija `statement_timeout` a su plazo dentro de su transacción: una sentencia colgada la corta la base |
+| `outbound.alerts`, `canales.release`, `seguimientos` | Miran `ctx.signal`: al apagar el proceso (SIGTERM) o al vencer su `timeout_s`, alerts y release paran entre un workspace (o una cuenta) y el siguiente y devuelven lo hecho, y `sales.follow_ups` deshace su transacción (es idempotente: la corrida siguiente deja lo mismo), en vez de seguir detrás del runner |
+| `jobs/ventas/plazo.ts` | El margen de `outbound.dispatch` y `outbound.replies` es el menor entre 30 s y el 25 % del timeout: con los 120 s del proceso largo siguen siendo 30 s |
+| `recordSkipped` | La misma fila «sin handler», ahora dentro de una transacción con candado |
+| `--once` | Nada más: sin `backoff` (apagado por defecto) reintenta como antes; `planMs`, `durationMs` y `cut` son campos nuevos del resumen |
+
+**Pendiente: la revisión de Nicolás antes del merge a `main`**, con su
+aprobación explícita en el PR 1 (y, si lo quiere, en el PR 2) antes de
+integrar el resto de CIM-7. Los dos PR llevan estas tablas en la
+descripción y a Nicolás como revisor obligatorio; los abre quien integra
+(los agentes no empujan ni abren PR), y el enlace va a la nota de CIM-7
+en `apps/web/content/backlog.ts`.
+
+**Variables en Vercel** (production), además de las que ya tiene la web:
+
+| Variable | Qué es | Cómo se pone |
+|---|---|---|
+| `CRON_SECRET` | El Bearer de la ruta. **El mismo valor** que en el Vault de Supabase. Sin él (o con menos de 32 caracteres) la ruta responde 401 a todos. | `openssl rand -hex 32` en tu terminal (a un gestor de contraseñas, no a un archivo) y `make vercel.run ARGS="env add CRON_SECRET production"`, que lo pide por teclado (nunca como argumento: saldría en `ps` y en el historial) |
+| `WORKER_DATABASE_URL` | La conexión del worker: pooler en **modo sesión** (`:5432`, el turno rechaza `:6543`), rol miembro de `mc_worker`. La buena es `mc_worker_login` de [WRK §1.1](../../../docs/propuestas/WRK.md): `DATABASE_URL_DIRECT` (`mc_migrator`) también sirve, pero puede hacer DDL y no debe vivir en Vercel. | `make vercel.run ARGS="env add WORKER_DATABASE_URL production"` |
+| `TOKEN_ENCRYPTION_KEY`, `APP_URL` | Ya están: descifrar tokens y el enlace de baja. | — |
+| `GOOGLE_OUTREACH_CLIENT_ID/SECRET`, `UNIPILE_DSN`, `UNIPILE_ACCESS_TOKEN`, `ANTHROPIC_API_KEY` | Los canales y el modelo del outreach. Sin ellas su canal queda «no configurado» y sus toques esperan. | `.env.example` dice de dónde sale cada una |
+
+Tras cambiar variables, `make vercel.deploy PROD=1`.
+
+**Opción B, hoy (Vercel Hobby + pg_cron de Supabase).** Hobby no deja un
+Vercel Cron por minuto, así que llama Supabase. `make cron.install` hace
+tres llamadas, en este orden, para que la tarea nunca dispare sin
+secreto: `db/ops/cron-tick-vault.sql` comprueba que Vault está (sin
+secretos); `db/ops/cron-tick-secreto.sql` guarda el secreto en
+**Supabase Vault** (`on_cue_cron_secret`; la tarea lo lee de
+`vault.decrypted_secrets` al disparar, en `cron.job` no queda el valor);
+y `db/ops/cron-tick.sql` crea `pg_cron` y `pg_net` si faltan y programa
+`on-cue-tick` cada minuto con `net.http_post`, que además no llama si el
+secreto falta (`WHERE EXISTS`). Programa también `on-cue-tick-purga`, a
+diario a las 03:17 UTC, que borra de `cron.job_run_details` lo de más
+de 7 días: pg_cron deja una fila por disparo (1.440 al día) y nadie la
+purga; `net._http_response` caduca sola.
+El secreto va solo y en dos `SELECT` de nivel superior, sin bloque `DO`:
+`pg_stat_statements` normaliza sus literales a `$1`, y un fallo del lote
+de pg_cron no puede arrastrarlo al log de Postgres. Si la API rechaza
+ese lote, `scripts/cron-tick.sh` no copia su respuesta (Postgres cita la
+sentencia, `LINE 1: … update_secret(id, '<secreto>')`): imprime la
+primera línea con el valor cambiado por `***`. Un matiz propio de
+pg_net: `net.http_post` deja la petición, con su cabecera
+`Authorization` en claro, en `net.http_request_queue` hasta que su
+worker la manda (milisegundos); esa tabla solo la lee `postgres`, y
+`make cron.status` cuenta sus filas (`cola_pg_net`) y avisa si crece
+(pg_net atascado). Lo corre el dueño, con el token de administración:
+
+```bash
+cd platform
+make cron.install      # pide CRON_SECRET sin mostrarlo (el mismo de Vercel); APP_URL=https://… para otra URL
+make cron.status       # el estado en JSON y un veredicto en verde o en rojo (sale con 1 si no está sano)
+```
+
+`make cron.status` termina con **una línea de veredicto**
+(`db/ops/cron-tick-veredicto.mjs`, sobre las respuestas de pg_net de los
+últimos 5 min): todo 200 → «el turno responde» con su `elapsedMs` medio;
+un **401** → el `CRON_SECRET` del Vault no es el de Vercel
+(`make cron.install` con el de Vercel); un **500** → el turno falla,
+mira los logs de Vercel (`[cron/tick]`; lo típico es que falte
+`WORKER_DATABASE_URL`); un **504** → el turno no respondió a tiempo
+(pooler colgado); `timed_out` → la ruta tarda más de 60 s; ninguna
+respuesta → pg_cron no está disparando; **jobs que no caben** → los que
+llevan 20 cortes o más sin una corrida buena (`no_caben`), que no se van
+a retomar solos. Avisa además si `outbound.dispatch` lleva más de 30 min
+sin una pasada buena, si la cola de pg_net crece, y si la memoria
+proyectada del mes pasa de 250 GB-h (abajo, «Cupos de Hobby»); si no,
+dice en verde cuántos GB-h lleva camino de gastar. Sale con 1 si no está
+sano: sirve de chequeo (a mano tras integrar, o desde cualquier cron que
+avise).
+
+Es idempotente: correrlo otra vez actualiza el secreto y deja una sola
+tarea. Rotar el secreto es `make cron.install` con el nuevo y el mismo
+valor en Vercel. `make cron.install` y `make cron.status` miran además
+que en `pg_stat_statements` no haya ninguna llamada a Vault con el
+literal (`db/ops/cron-tick-huellas.sql`); si la hubiera, dicen cómo
+limpiarla (`pg_stat_statements_reset()`) y que hay que rotar.
+
+**Cupos de Hobby, con números.** En Hobby, pasarse de un cupo **pausa
+el proyecto entero** —la web del cliente incluida— hasta el mes
+siguiente; no se paga el exceso. Lo que gasta el turno (llamada cada
+minuto, función de 2 GB, que es el tamaño por defecto de Vercel):
+
+| Cupo de Hobby al mes | Lo que gasta el turno | Cuenta |
+|---|---|---|
+| 1 000 000 invocaciones | **43 200** (4 %) | 1 440 llamadas al día × 30 |
+| 360 GB-h de memoria aprovisionada | **24 GB-h por cada segundo de turno medio**: ~7 GB-h con turnos vacíos (~0,3 s), 240 GB-h a 10 s de media, **360 a 15 s**. Con turnos de ~40 s en la mitad de los minutos (media ~20 s), ~480: pausa | `elapsedMs` medio / 1000 × 43 200 × 2 GB / 3 600 |
+| 4 h de CPU activa | Solo se ve en Vercel → Usage (el turno no la puede medir): cabe si la media es menor de **0,33 s de CPU por turno** (14 400 s / 43 200). Un turno es casi todo espera de red (Supabase, proveedores, Anthropic), así que la CPU es una fracción de su duración, pero cada turno abre su pool con TLS y cada arranque en frío carga el worker | 4 × 3 600 / 43 200 |
+
+La web del cliente gasta de los mismos cupos. `make cron.status`
+proyecta los GB-h del mes con la media de lo que guarda pg_net (unas 6 h
+de respuestas) y avisa por encima de **250 GB-h** (unos 10 s de turno
+medio). **Umbral para pasar a la opción A**: ese aviso, o la CPU activa
+del mes por encima de ~2,5 h en Vercel → Usage, o cuando haya outreach de
+verdad (varios workspaces con `generate`/`review`/`intent` llamando al
+modelo cada 2–3 minutos: cada llamada es espera y alarga el turno). Y un
+matiz que no es técnico: según los términos de Vercel, **Hobby es para
+uso personal y no comercial**; On Cue cobra a sus clientes, así que la
+opción B sirve para arrancar y probar, no para operar con clientes que
+pagan. La decisión es de Rasheed y queda aquí con los números.
+
+**Opción A, después (Vercel Pro + Vercel Cron).** Cambia solo quién
+llama. Vercel Cron llama por **GET** y manda `Authorization: Bearer
+$CRON_SECRET` solo, y la ruta acepta GET igual que POST:
+
+1. `apps/web/vercel.json`:
+   ```json
+   { "crons": [{ "path": "/api/cron/tick", "schedule": "* * * * *" }] }
+   ```
+2. `make vercel.deploy PROD=1` y comprobar en Vercel → Cron Jobs que corre.
+3. `make cron.uninstall`: retira las tareas de pg_cron (`on-cue-tick` y
+   su purga) y borra su secreto del Vault. Con los dos encendidos no se duplica nada (cada corrida se
+   reclama), pero se paga el doble de invocaciones.
+4. Con Pro, si hace falta más aire: subir `maxDuration` en `route.ts` y
+   `TICK_BUDGET_MS` en `app/api/cron/tick/_lib/turno.ts` a la par
+   (el turno debe acabar unos 15 s antes).
 
 ## Variables de entorno (nombres, no valores)
 
@@ -664,6 +1001,58 @@ pnpm --filter @mc/connectors test    # conectores: unitarias con fetch falso y p
 pnpm --filter @mc/worker typecheck lint
 ```
 
+El modo por turnos (CIM-7) tiene las suyas: `test/tick.test.ts` (sobre
+la foto con los seeds: respeta el presupuesto, corta y retoma sin gastar
+intentos, dos turnos a la vez no duplican, el tope de cortes, lo
+encadenado espera a lo de arriba con tres recorredores, el backoff entre
+reintentos, y `outbound.dispatch` sacando el mensaje de la demo por el
+canal falso), `test/senal-turno.test.ts` (los jobs de Ventas dejan de
+trabajar con la señal disparada), `test/cron-tick-sql.test.ts` (el SQL
+de `db/ops/` sin secretos en claro, idempotente, el orden de
+`make cron.install`, la purga, y el token de administración fuera de la
+línea de comandos de curl) y, en la web,
+`app/api/cron/tick/_lib/turno.test.ts` (401 sin Bearer o con uno malo,
+el resumen con el bueno, por GET y POST, el esquema `bearer` sin
+mayúsculas, solo `/api/cron/tick` sin sesión, que toda
+`app/api/cron/**/route.ts` exija el Bearer, y el 504 cuando el turno no
+responde). `tick.test.ts` cubre además `outbound.dispatch` con más
+toques vencidos de los que caben en una pasada (el turno corto envía
+los que caben, el siguiente tick de `*/2` el resto, ninguno dos veces),
+la guardia contra una base remota fuera de Vercel y la espera de
+conexión acotada con un «pooler» que no contesta.
+
+**Lo que PGlite no puede probar** está en `test/tick-postgres.test.ts`:
+dos turnos con dos pools en el peor orden (el candado por job de
+`claimRun` es lo único que evita la corrida doble; en PGlite las
+transacciones se serializan y no se distingue), `outbound.dispatch` con
+dos turnos a la vez, el pool de 7 conexiones y el `statement_timeout`
+que corta la sentencia larga de un job cortado. Sin `TEST_DATABASE_URL`
+se salta (`﹣ skipped` en `pnpm verificar`); en el CI corre siempre
+(paso «El worker por turnos con dos pools»). En local, con Docker
+(desde `platform/`):
+
+```bash
+make up && make seed      # Postgres 16, db/montaje-postgres-real.sql y las migraciones con seed
+cd apps/worker && TEST_DATABASE_URL=postgres://mc_app_ci:ci@localhost:5432/oncue \
+  TEST_DATABASE_ADMIN_URL=postgres://mc:mc@localhost:5432/oncue \
+  node --test --experimental-strip-types --test-timeout=120000 test/tick-postgres.test.ts
+```
+
+Sin Docker, cualquier Postgres 16: el de `embedded-postgres`, con el
+montaje y la migración que explica `packages/db/README.md` («Contra
+Postgres real, en local»), y las mismas dos variables con su puerto.
+Así se corrió el 28-sep-2026 (Postgres 16.14): 5 de 5 en verde.
+
+El turno corre DENTRO del bundle de Next, y webpack congela
+`import.meta.url` en la ruta de la máquina del build: un `readFileSync`
+relativo al módulo da ENOENT en Vercel. Por eso los prompts de outreach
+van incrustados (`packages/core/src/outreach/prompts.gen.ts`, que
+regenera `make core.prompts` y vigila `test/outreach-prompts.test.ts` de
+`@mc/core`), y el `build` de `@mc/web` termina con
+`apps/web/scripts/revisar-bundle-turno.mjs`, que falla si el bundle de
+`/api/cron/tick` lleva un `file:///` fuera de los permitidos (cada uno
+con el motivo por el que esa ruta no se lee en producción).
+
 Las de integración aplican TODAS las migraciones reales con el runner
 de `@mc/db` (`test/migraciones.test.ts` falla si una no queda en
 `schema_migrations`), y los seeds con `applyRepoSeeds()` del arnés (la `0014` da
@@ -685,6 +1074,9 @@ puedes, mete varios casos en el mismo arnés en vez de abrir otro. No tocan Supa
 
 ```
 src/index.ts                 arranque, --install, --pglite, --demo, apagado limpio
+src/tick.ts                  el modo por turnos (CIM-7): runTick y runTickFromEnv, exportados como @mc/worker/tick
+src/recursos.ts              secretos y refreshers: los mismos para el proceso, --once y los turnos
+src/runner/once.ts           una pasada: lo vencido, el reclamo por job y el presupuesto de un turno
 src/runner/config.ts         variables de entorno
 src/runner/logger.ts         JSON por línea + redactor
 src/runner/db.ts             pool de pg + SET ROLE mc_worker (Postgres real)

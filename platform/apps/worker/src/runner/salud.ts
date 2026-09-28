@@ -4,7 +4,7 @@
  * --once al terminar y `pnpm --filter @mc/worker salud`. Los asOf salen
  * de getWorkerHealth (@mc/db/queries/worker).
  */
-import { workerDataAsOf, type WorkerJobHealth } from '@mc/db/queries/worker';
+import { MAX_TICK_CUTS, workerDataAsOf, type WorkerJobHealth } from '@mc/db/queries/worker';
 import { SKIPPED_NO_HANDLER } from './worker.ts';
 
 /** «hace 3 h», «hace 2 d»: la distancia que importa al mirar si el worker está vivo. */
@@ -20,7 +20,12 @@ export function formatHealth(rows: readonly WorkerJobHealth[], now: Date): strin
   const withHandler = rows.filter((r) => r.enabled && r.lastStatus !== null && !(r.lastStatus === 'skipped' && r.lastError === SKIPPED_NO_HANDLER));
   const neverRan = rows.filter((r) => r.enabled && r.lastStatus === null);
   const lines = withHandler.map((r) => {
-    const last = `${r.lastStatus!.padEnd(8)} ${r.lastRunAt} (${timeAgo(r.lastRunAt!, now)})`;
+    // Un corte del turno (CIM-7) no es un fallo: la fila dice failed/timeout, pero el turno siguiente la retoma.
+    // Salvo que no quepa nunca: con MAX_TICK_CUTS cortes seguidos no se va a retomar.
+    const status = !r.lastCut ? r.lastStatus!.padEnd(8)
+      : r.cutsSinceOk >= MAX_TICK_CUTS ? `no cabe en el turno (${r.cutsSinceOk} cortes): súbelo a Pro o pártelo · último corte`
+      : 'cortado por el turno, se retoma';
+    const last = `${status} ${r.lastRunAt} (${timeAgo(r.lastRunAt!, now)})`;
     const lastOk = r.lastOkAt ? `última buena ${timeAgo(r.lastOkAt, now)}` : 'nunca terminó bien';
     const failures = r.failedSinceOk > 0 ? ` · ${r.failedSinceOk} fallo(s) desde entonces` : '';
     return `  ${r.jobId.padEnd(26)} ${last} · ${lastOk}${failures}`;

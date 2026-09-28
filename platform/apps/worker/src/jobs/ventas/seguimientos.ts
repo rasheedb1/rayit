@@ -71,6 +71,7 @@
  */
 import type { JobDatabase, Queryable } from '../../runner/db.ts';
 import { defineJob } from '../../runner/registry.ts';
+import { limitStatements, statementTimeoutMs, throwIfAborted } from './plazo.ts';
 
 export const SEGUIMIENTOS_JOB_ID = 'sales.follow_ups';
 
@@ -96,6 +97,14 @@ export interface SeguimientosOptions {
    * todo lo pendiente.
    */
   horaLocal?: number;
+  /**
+   * La señal del runner (ctx.signal): disparada, no se empieza la
+   * siguiente sentencia y la transacción se deshace (los avisos son
+   * idempotentes: la corrida siguiente los deja igual).
+   */
+  signal?: AbortSignal;
+  /** statement_timeout de la transacción, en ms: la base corta lo que siga vivo tras el timeout del job (plazo.ts). */
+  statementTimeoutMs?: number;
 }
 
 export interface SeguimientosResult {
@@ -151,8 +160,11 @@ const CANDIDATOS = `
 export async function runSeguimientos(db: JobDatabase, now: Date, opts: SeguimientosOptions = {}): Promise<SeguimientosResult> {
   const hora = Math.max(0, Math.min(23, Math.trunc(opts.horaLocal ?? SEGUIMIENTOS_HORA_LOCAL)));
   const t = SEGUIMIENTOS_TEXTOS;
+  throwIfAborted(opts.signal);
   return db.transaction(async (tx: Queryable) => {
+    if (opts.statementTimeoutMs !== undefined) await limitStatements(tx, opts.statementTimeoutMs);
     await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [SEGUIMIENTOS_JOB_ID]);
+    throwIfAborted(opts.signal);
 
     const overdue = await tx.query<{ entity_id: string }>(
       `WITH ${CANDIDATOS}
@@ -171,6 +183,7 @@ export async function runSeguimientos(db: JobDatabase, now: Date, opts: Seguimie
       [now.toISOString(), hora, t.overdueTitle, t.body],
     );
 
+    throwIfAborted(opts.signal);
     // Lo de hoy. Si a la hora del aviso ya pasó su hora ($1 > vencimiento),
     // sale como vencido: la pantalla ya dice «Vencido». No se repite si ya
     // hay un «Vence hoy» de ese día, ni un vencido posterior al vencimiento
@@ -211,7 +224,12 @@ export async function runSeguimientos(db: JobDatabase, now: Date, opts: Seguimie
 export const seguimientosJob = defineJob(
   SEGUIMIENTOS_JOB_ID,
   async (_payload, ctx) => {
-    const r = await runSeguimientos(ctx.db, ctx.now());
+    // En un turno (CIM-7) el timeout es lo que queda del turno: con la señal y el
+    // statement_timeout, un job que se pasa no sigue vivo después de que el runner lo corte.
+    const r = await runSeguimientos(ctx.db, ctx.now(), {
+      signal: ctx.signal,
+      statementTimeoutMs: statementTimeoutMs(ctx.definition.timeoutS, Date.now()),
+    });
     ctx.logger.info('seguimientos de ventas', { dueToday: r.dueToday, overdue: r.overdue });
     return { processed: r.dueToday + r.overdue, failed: 0, metadata: { dueToday: r.dueToday, overdue: r.overdue } };
   },

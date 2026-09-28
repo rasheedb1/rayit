@@ -33,6 +33,9 @@ importers:
       '@mc/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@mc/worker':
+        specifier: workspace:*
+        version: link:../worker
       '@supabase/ssr':
         specifier: 0.12.7
         version: 0.12.7(@supabase/supabase-js@2.117.0)

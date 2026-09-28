@@ -58,6 +58,13 @@ export interface ReleaseDeps {
   /** null = faltan UNIPILE_DSN/ACCESS_TOKEN: los LinkedIn e Instagram esperan. */
   unipile: Pick<UnipileApi, 'deleteAccount' | 'deleteWebhook'> | null;
   now: Date;
+  /**
+   * La señal del runner (ctx.signal). Disparada, no se reclama la
+   * siguiente cuenta y se devuelve lo hecho: en un turno (CIM-7) el job
+   * que se pasa no sigue vivo detrás del runner. Lo que no se tocó sigue
+   * en la cola para la vuelta siguiente.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ReleaseResult {
@@ -185,6 +192,7 @@ export async function runChannelsRelease(deps: ReleaseDeps): Promise<ReleaseResu
   );
 
   for (const { id } of queue) {
+    if (deps.signal?.aborted) break;
     // Otro job (el keepalive y este corren a la vez) o una reconexión se la llevaron: nada que hacer.
     const a = await claim(db, id, staleBefore);
     if (!a) continue;
@@ -218,11 +226,11 @@ export async function runChannelsRelease(deps: ReleaseDeps): Promise<ReleaseResu
           continue;
         }
         for (const webhookId of a.provider_webhook_ids) {
-          await deps.unipile.deleteWebhook(webhookId, { channelAccountId: a.id });
+          await deps.unipile.deleteWebhook(webhookId, { channelAccountId: a.id, signal: deps.signal });
           r.unipileWebhooksDeleted += 1;
         }
         if (!shared) {
-          await deps.unipile.deleteAccount(a.provider_account_id, { channelAccountId: a.id });
+          await deps.unipile.deleteAccount(a.provider_account_id, { channelAccountId: a.id, signal: deps.signal });
           r.unipileAccountsDeleted += 1;
         }
         if (!(await markReleased(db, a, now))) continue;
@@ -253,6 +261,7 @@ export const canalesReleaseJob = defineJob(
       google: 'config' in googleCfg ? new GoogleOAuth(googleCfg.config, { callLog, now: ctx.now }) : null,
       unipile: 'config' in unipileCfg ? new UnipileClient({ config: unipileCfg.config, callLog, now: ctx.now }) : null,
       now: ctx.now(),
+      signal: ctx.signal,
     });
     if (r.released + r.failed > 0) ctx.logger.info('canales soltados en el proveedor', { ...r });
     // Lo que falla vuelve en la siguiente vuelta del cron (cinco minutos): reintentar ya no ayuda.
