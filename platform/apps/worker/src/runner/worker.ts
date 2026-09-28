@@ -53,6 +53,13 @@ export class RoleError extends Error {
 
 export const CRON_SCHEDULE_KEY = 'cron';
 export const SKIPPED_NO_HANDLER = 'sin handler';
+/**
+ * Prefijo del candado por job (pg_advisory_xact_lock(hashtextextended(
+ * prefijo || id, 0))). Lo toman el reclamo de una corrida de --once y del
+ * modo por turnos (once.ts) y recordSkipped: dura lo que su transacción,
+ * así que un proceso muerto no lo deja tomado.
+ */
+export const JOB_LOCK_PREFIX = 'mc-worker/job:';
 
 export async function startWorker(opts: StartWorkerOptions): Promise<RunningWorker> {
   const { config, db, logger } = opts;
@@ -200,20 +207,25 @@ async function enqueueChained(boss: PgBoss, destinos: readonly string[], desde: 
  * Una definición habilitada sin handler queda constando en job_run como
  * `skipped` / "sin handler", para que se vea desde SQL y no solo en el
  * log. Una sola fila mientras siga sin handler: si la última fila del
- * job ya dice eso, no se repite en cada reinicio.
+ * job ya dice eso, no se repite en cada reinicio. La lectura y la
+ * escritura van bajo el mismo candado que el reclamo de una corrida
+ * (JOB_LOCK_PREFIX): dos turnos a la vez (CIM-7) no dejan dos filas.
  */
 export async function recordSkipped(db: WorkerDatabase, jobId: string): Promise<void> {
-  const { rows } = await db.query<{ status: string; error: string | null }>(
-    'SELECT status, error FROM job_run WHERE job_id = $1 ORDER BY id DESC LIMIT 1',
-    [jobId],
-  );
-  const last = rows[0];
-  if (last && last.status === 'skipped' && last.error === SKIPPED_NO_HANDLER) return;
-  await db.query(
-    `INSERT INTO job_run (job_id, status, attempt, finished_at, duration_ms, error)
-     VALUES ($1, 'skipped', 1, now(), 0, $2)`,
-    [jobId, SKIPPED_NO_HANDLER],
-  );
+  await db.transaction(async (tx) => {
+    await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${JOB_LOCK_PREFIX}${jobId}`]);
+    const { rows } = await tx.query<{ status: string; error: string | null }>(
+      'SELECT status, error FROM job_run WHERE job_id = $1 ORDER BY id DESC LIMIT 1',
+      [jobId],
+    );
+    const last = rows[0];
+    if (last && last.status === 'skipped' && last.error === SKIPPED_NO_HANDLER) return;
+    await tx.query(
+      `INSERT INTO job_run (job_id, status, attempt, finished_at, duration_ms, error)
+       VALUES ($1, 'skipped', 1, now(), 0, $2)`,
+      [jobId, SKIPPED_NO_HANDLER],
+    );
+  });
 }
 
 /**
