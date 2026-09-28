@@ -4,7 +4,8 @@
  * idioma) y los códigos convertidos en frases. Puro, con pruebas.
  */
 import { OUTREACH_URLS } from "@mc/core/outreach/messages";
-import type { QueueBlockers, QueueRow } from "@mc/db/queries/actividad";
+import { isTextlessStep } from "@mc/core/outreach/sequence-policy";
+import { DONE_BY_HAND, type QueueBlockers, type QueueRow } from "@mc/db/queries/actividad";
 import type { Formatter } from "@/lib/format";
 import { etiquetaTipo } from "../../cadencias/_lib/vista";
 import { canalHref } from "../../canales/_lib/foco";
@@ -14,6 +15,22 @@ import { codigoDeMotivo, ESTADO_PILL, motivoDe } from "./vista";
 
 const T = MESSAGES.fila;
 const W = MESSAGES.espera;
+const M = MESSAGES.fila.aMano;
+
+/**
+ * Un gesto a mano por hacer: el borrador de un paso que hace la persona
+ * (TEXTLESS_STEP_TYPES: comentario o reacción en una red, tarea a mano).
+ * El despachador no lo reclama nunca, así que no «sale», no «se redacta» y
+ * el envío apagado no lo para: dice «A mano · el 28 sep» y lleva «Hecho».
+ */
+export function esGestoPorHacer(r: Pick<QueueRow, "status" | "stepType">): boolean {
+  return r.status === "draft" && r.stepType !== null && isTextlessStep(r.stepType);
+}
+
+/** Un gesto a mano que la persona ya marcó «Hecho» (markManualTouchDone). */
+export function esGestoHecho(r: Pick<QueueRow, "status" | "reason">): boolean {
+  return r.status === "skipped" && r.reason === DONE_BY_HAND;
+}
 
 /** Lo que la fila necesita saber además de su toque: qué para la cola (getQueueBlockers) y el reloj (para el año de la fecha). */
 export interface ContextoFila {
@@ -76,10 +93,12 @@ function cadenciaParada(
  * cumple.
  */
 export function esperaDe(
-  r: Pick<QueueRow, "status" | "channel" | "sequenceId" | "sequenceStatus" | "enrollmentStatus" | "companyId">,
+  r: Pick<QueueRow, "status" | "stepType" | "channel" | "sequenceId" | "sequenceStatus" | "enrollmentStatus" | "companyId">,
   bloqueos: QueueBlockers | null | undefined,
 ): Espera | null {
   if (!POR_SALIR.has(r.status)) return null;
+  // Un gesto a mano no sale por la cola: ni el envío apagado ni el canal sin cuenta lo paran.
+  if (esGestoPorHacer(r)) return null;
   const cadencia = cadenciaParada(r);
   if (bloqueos && !bloqueos.outreachEnabled) {
     // El envío apagado ya lo dice el aviso de arriba: si además la cadencia está parada, eso es lo que la fila
@@ -139,6 +158,7 @@ function cuando(
     largo: fraseLarga(larga(d)),
   });
   const soloFecha = (c: string) => c;
+  if (esGestoPorHacer(r)) return r.dueAt ? { corto: M.cuando(f.date(r.dueAt.toISOString())), largo: M.largo(larga(r.dueAt)) } : { corto: "", largo: null };
   if (espera) return { corto: T.enEspera(espera.corto), largo: r.dueAt ? T.esperaPrevisto(larga(r.dueAt)) : null };
   if (r.status === "sent" && r.sentAt) return con(r.sentAt, soloFecha, T.salio);
   if (r.status === "scheduled") return r.dueAt ? con(r.dueAt, r.retrying ? T.reintento : T.toca) : { corto: T.sinHora, largo: null };
@@ -154,11 +174,14 @@ export function filaVista(r: QueueRow, f: Formatter, ctx: ContextoFila = {}): Fi
   // Sin paso, el contexto ya dice «Sin cadencia»: la fila no repite «Fuera de una cadencia».
   const paso = r.stepPosition !== null && tipo ? T.paso(f.int(r.stepPosition), tipo) : tipo;
   const asunto = r.subject?.trim() || null;
+  const porHacer = esGestoPorHacer(r);
+  const hechoAMano = esGestoHecho(r);
   // Un borrador de una cadencia que todavía no se redacta no es un correo vacío a punto de salir: dice su paso
-  // («Paso 2 · Correo») y «por redactar», como las filas de LinkedIn; el asunto, cuando exista.
-  const porRedactar = !asunto && r.status === "draft" && paso !== null;
+  // («Paso 2 · Correo») y «por redactar», como las filas de LinkedIn; el asunto, cuando exista. Un gesto a mano
+  // no se redacta nunca: su título es su paso y su nota, «lo haces tú».
+  const porRedactar = !asunto && r.status === "draft" && paso !== null && !porHacer;
   const titulo = asunto
-    ?? (porRedactar ? paso
+    ?? ((porRedactar || (porHacer && paso !== null)) ? paso
       : r.channel === "email" && r.stepType !== "email_reply" ? T.sinAsunto : (paso ?? T.suelto(MESSAGES.uso.canales[r.channel])));
   const marcas: string[] = [];
   if (r.status === "sent" && r.openedAt) marcas.push(T.abierto);
@@ -168,20 +191,21 @@ export function filaVista(r: QueueRow, f: Formatter, ctx: ContextoFila = {}): Fi
   const momento = cuando(r, f, espera, ctx.now);
   return {
     id: r.touchId,
-    estado: MESSAGES.estados[r.status],
-    estadoKind: ESTADO_PILL[r.status],
+    estado: porHacer ? M.estado : hechoAMano ? M.hecho : MESSAGES.estados[r.status],
+    estadoKind: hechoAMano ? "good" : ESTADO_PILL[r.status],
     titulo,
     // Qué mensaje es, para distinguir las casillas de una misma persona: el paso, o el asunto si no hay paso.
     queEs: paso ?? titulo,
     contacto: r.contactName ?? r.contactEmail ?? T.sinContacto,
     contexto: [r.companyName, r.sequenceName ?? T.sinCadencia].filter(Boolean).join(" · "),
     paso: paso !== titulo ? paso : null,
-    nota: porRedactar ? T.porRedactar : null,
+    nota: porHacer ? M.nota : porRedactar ? T.porRedactar : null,
     cuando: momento.corto,
     cuandoCompleto: momento.largo,
     cuenta: r.accountName ? T.desde(r.accountName) : null,
-    motivo: motivoDe(r.status, r.reason),
-    motivoCodigo: codigoDeMotivo(r.status, r.reason),
+    // Hecho a mano ya lo dice la pastilla: sin motivo debajo.
+    motivo: hechoAMano ? null : motivoDe(r.status, r.reason),
+    motivoCodigo: hechoAMano ? null : codigoDeMotivo(r.status, r.reason),
     motivoTono: r.status === "failed" ? "bad" : r.status === "held" ? "warn" : "muted",
     marcas,
     intentos: conIntentos ? T.intentos(f.int(r.attemptCount), r.attemptCount) : null,
@@ -195,6 +219,7 @@ export function filaVista(r: QueueRow, f: Formatter, ctx: ContextoFila = {}): Fi
     // Lo retenido espera a una persona: su botón lleva a la cadencia de la ficha, donde está «Aprobar y enviar».
     revisar: r.status === "held" ? OUTREACH_URLS.companyCadence(r.companyId) : null,
     cancelable: r.cancelable,
+    hecho: porHacer,
     enviando: r.status === "processing",
     fichaHref: OUTREACH_URLS.company(r.companyId),
   };

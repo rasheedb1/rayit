@@ -353,3 +353,37 @@ describe("cuando la cola está parada, la fila lo dice en vez de «Sale …»", 
     expect(v.espera?.href).toBe("/ventas/politica");
   });
 });
+
+describe("un gesto a mano (pulido r6)", () => {
+  // Un comentario en LinkedIn: el enrolamiento lo crea como borrador, y el despachador no lo reclama nunca.
+  const comentario = (over: Partial<QueueRow> = {}) => fila({
+    status: "draft", stepType: "linkedin_comment", stepPosition: 2, dueAt: new Date("2026-09-28T15:06:00Z"),
+    reason: null, attemptCount: 0, retryable: false, accountName: null, enrollmentStatus: "active", ...over,
+  });
+
+  it("dice «A mano · el 28 sep», no «Borrador · por redactar», ni «En espera · envío apagado», y lleva «Hecho»", () => {
+    const v = vista(comentario(), { ...LIBRE, outreachEnabled: false, channelsWithoutAccount: ["linkedin"] });
+    expect(v.estado).toBe("A mano");
+    expect(v.cuando).toBe(`el ${f.date("2026-09-28T15:06:00Z")}`);
+    expect(v.cuando).not.toMatch(/Sale|redactar|espera/i);
+    expect(v.cuandoCompleto).toContain("On Cue no lo redacta ni lo envía");
+    expect(v.nota).toBe("lo haces tú");
+    expect(v.titulo).toBe(v.paso ?? v.titulo);
+    expect(v.titulo).toMatch(/^Paso 2 · /);
+    expect(v.espera).toBeNull();
+    expect(v.hecho).toBe(true);
+    // Un borrador que On Cue sí envía sigue siendo «Borrador · por redactar», sin «Hecho».
+    const correo = vista(comentario({ stepType: "email", channel: "email" }), LIBRE);
+    expect(correo.estado).toBe(MESSAGES.estados.draft);
+    expect(correo.nota).toBe(MESSAGES.fila.porRedactar);
+    expect(correo.hecho).toBe(false);
+  });
+
+  it("hecho, dice «Hecho a mano» en verde y sin motivo debajo", () => {
+    const v = vista(comentario({ status: "skipped", bucket: "history", reason: "done_by_hand", statusChangedAt: new Date("2026-09-28T16:00:00Z") }));
+    expect(v.estado).toBe("Hecho a mano");
+    expect(v.estadoKind).toBe("good");
+    expect(v.motivo).toBeNull();
+    expect(v.hecho).toBe(false);
+  });
+});

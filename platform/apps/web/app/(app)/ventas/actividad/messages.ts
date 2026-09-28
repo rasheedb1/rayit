@@ -47,7 +47,7 @@ const plural =
 export type MotivoCode =
   | "replied" | "not_now" | "opted_out" | "opted_out_in_flight" | "outreach_disabled" | "sequence_archived" | "completed"
   | "bounced" | "email_invalid" | "no_address" | "invalid_address" | "no_contact" | "company_cap" | "canceled_by_user"
-  | "sent_confirmed_by_user" | "paused" | "cooldown" | "deal_won" | "deal_lost";
+  | "sent_confirmed_by_user" | "paused" | "cooldown" | "deal_won" | "deal_lost" | "done_by_hand";
 
 export const MESSAGES = {
   metaTitle: tituloDeVentas("Actividad"),
@@ -64,7 +64,7 @@ export const MESSAGES = {
     label: "Qué ver",
     cola: "Cola",
     historial: "Historial",
-    colaAyuda: "Programados, retenidos, borradores y fallidos",
+    colaAyuda: "Programados, retenidos, borradores y fallidos. Los gestos a mano se ven aquí, pero no cuentan: los haces tú",
     historialAyuda: "Enviados, cancelados y saltados",
     /** «Cola · 12»: la cifra llega formateada. */
     conCifra: (vista: string, n: string) => `${vista} · ${n}`,
@@ -104,6 +104,21 @@ export const MESSAGES = {
     sinAsunto: "Sin asunto",
     /** Un borrador de cadencia que todavía no se redacta: el título es su paso y esto va al lado, en neutro. */
     porRedactar: "por redactar",
+    /**
+     * Un gesto a mano (comentario o reacción en una red, tarea a mano:
+     * TEXTLESS_STEP_TYPES). On Cue no lo redacta ni lo envía: la pastilla
+     * dice «A mano» y la hora es el día en que te toca, sin «Sale» ni
+     * «envío apagado». «Hecho» lo saca de la cola (pulido r6).
+     */
+    aMano: {
+      estado: "A mano",
+      cuando: (dia: string) => `el ${dia}`,
+      largo: (cuando: string) => `Te toca el ${cuando}. Lo haces tú en la red: On Cue no lo redacta ni lo envía.`,
+      nota: "lo haces tú",
+      hecho: "Hecho a mano",
+      boton: "Hecho",
+      botonLabel: (paso: string, persona: string) => `Marcar como hecho: ${paso} para ${persona}`,
+    },
     desde: (cuenta: string) => `Desde ${cuenta}`,
     intentos: plural({ one: "{n} intento", other: "{n} intentos" }),
     reintento: (cuando: string) => `Reintento ${cuando}`,
@@ -179,6 +194,7 @@ export const MESSAGES = {
     cooldown: "la cadencia está en espera",
     deal_won: "la marca ya firmó: el negocio se ganó",
     deal_lost: "el negocio se marcó como perdido",
+    done_by_hand: "lo hiciste tú, a mano",
   } satisfies Record<MotivoCode, string>,
   motivoGenerico: "no salió",
 
@@ -243,6 +259,12 @@ export const MESSAGES = {
     ninguno: "Nada cambió.",
     generico: "No pudimos hacerlo. Vuelve a intentarlo en un momento.",
     sinPermiso: "Tu rol en este espacio no puede reintentar ni cancelar mensajes. Pídeselo a quien administra el espacio.",
+    /** «Hecho» en un gesto a mano. */
+    aMano: {
+      hecho: "Marcado como hecho. La cadencia sigue con el siguiente paso.",
+      not_found: "Ese paso ya no existe.",
+      not_manual: "Ese paso ya no está por hacer.",
+    },
     /** Por qué un fallido no volvió (o no se ofrece): el motivo del resumen y el de la fila. */
     reintento: {
       not_found: "ya no existe",

@@ -1,13 +1,15 @@
 import type { CadenceTouch } from "@mc/db/queries/outreach";
 import { holdReasonText, noticeLang, parseHoldReason } from "@mc/core/outreach/messages";
+import { isTextlessStep } from "@mc/core/outreach/sequence-policy";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill, type PillKind } from "@/components/ui/pill";
 import type { Formatter } from "@/lib/format";
-import type { TouchStatus } from "@mc/db/queries/actividad";
+import { DONE_BY_HAND, type TouchStatus } from "@mc/db/queries/actividad";
 import { motivoDe } from "../../actividad/_lib/vista";
 import { FICHA } from "../messages";
 import { AprobarMensaje } from "./aprobar";
+import { GestoHecho } from "./gesto";
 import { ResolverIntento } from "./intento";
 import { ReanudarCadencia } from "./reanudar";
 import { SaltarMensaje } from "./saltar";
@@ -57,15 +59,23 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
   }
 
   const canal = (x: CadenceTouch) => t.canales[x.channel] ?? x.channel;
+  // Un gesto a mano (comentario, reacción, tarea: TEXTLESS_STEP_TYPES) no «sale»: te toca ese día, y se marca «Hecho».
+  const porHacer = (x: CadenceTouch) => x.status === "draft" && x.stepType !== null && isTextlessStep(x.stepType);
+  const hechoAMano = (x: CadenceTouch) => x.status === "skipped" && x.blockedReason === DONE_BY_HAND;
   // Lo que falló, se canceló o se saltó ya no va a salir: su hora se dice en pasado («iba a salir el…»), con el motivo.
   const terminado = (x: CadenceTouch) => x.status === "failed" || x.status === "canceled" || x.status === "skipped";
   const cuando = (x: CadenceTouch) => {
     if (x.sentAt) return t.salio(f.dateTimeShort(x.sentAt.toISOString()));
+    if (hechoAMano(x)) return t.aMano.hechoEl(f.date(x.statusChangedAt.toISOString()));
+    if (porHacer(x)) return x.scheduledFor ? t.aMano.cuando(f.date(x.scheduledFor.toISOString())) : t.aMano.estado;
     if (!x.scheduledFor) return "";
     const fecha = f.dateTimeShort(x.scheduledFor.toISOString());
     return terminado(x) ? t.iba(fecha) : t.sale(fecha);
   };
-  const motivo = (x: CadenceTouch) => (terminado(x) ? motivoDe(x.status as TouchStatus, x.blockedReason) : null);
+  const motivo = (x: CadenceTouch) => (terminado(x) && !hechoAMano(x) ? motivoDe(x.status as TouchStatus, x.blockedReason) : null);
+  const estado = (x: CadenceTouch) =>
+    porHacer(x) ? t.aMano.estado : hechoAMano(x) ? t.aMano.hecho : (t.estados[x.status] ?? x.status);
+  const color = (x: CadenceTouch): PillKind => (hechoAMano(x) ? "good" : (KIND[x.status] ?? "neutral"));
 
   // Dos columnas, para que a 400 px se lea sin mover la tabla: quién, por
   // dónde y cuándo en la primera (lo primero que busca la creadora), y el
@@ -97,9 +107,15 @@ export function MensajesDeCadencia({ companyId, touches, f }: { companyId: strin
         return (
           <div className="grid min-w-0 gap-2">
             <span>
-              <Pill kind={KIND[x.status] ?? "neutral"}>{t.estados[x.status] ?? x.status}</Pill>
+              <Pill kind={color(x)}>{estado(x)}</Pill>
             </span>
             {motivo(x) && <p className="text-xs text-ink-2">{t.motivo(motivo(x)!)}</p>}
+            {porHacer(x) && (
+              <>
+                <p className="text-xs text-ink-2">{t.aMano.nota}</p>
+                <GestoHecho companyId={companyId} touchId={x.id} persona={persona(x)} />
+              </>
+            )}
             {x.reply && (
               <p className="text-xs text-ink-2">
                 {t.respondio(f.dateTimeShort(x.reply.occurredAt.toISOString()))}{" "}

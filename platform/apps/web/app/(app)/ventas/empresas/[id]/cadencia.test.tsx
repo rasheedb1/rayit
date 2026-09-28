@@ -12,7 +12,9 @@ const aprobarMensaje = vi.fn();
 const resolverIntento = vi.fn();
 const saltarMensaje = vi.fn();
 const reanudarCadencia = vi.fn();
+const marcarGestoHecho = vi.fn();
 vi.mock("../actions", () => ({
+  marcarGestoHecho: (...a: unknown[]) => marcarGestoHecho(...a),
   aprobarMensaje: (...a: unknown[]) => aprobarMensaje(...a),
   resolverIntento: (...a: unknown[]) => resolverIntento(...a),
   saltarMensaje: (...a: unknown[]) => saltarMensaje(...a),
@@ -43,6 +45,45 @@ beforeEach(() => {
   resolverIntento.mockReset();
   saltarMensaje.mockReset().mockResolvedValue({ ok: true, notice: FICHA.cadencia.saltar.hecho, stamp: 1 });
   reanudarCadencia.mockReset().mockResolvedValue({ ok: true, notice: FICHA.cadencia.pausa.hecho, stamp: 1 });
+  marcarGestoHecho.mockReset().mockResolvedValue({ ok: true, notice: FICHA.cadencia.aMano.aviso, stamp: 1 });
+});
+
+describe("un gesto a mano (pulido r6)", () => {
+  const comentario = (over: Partial<CadenceTouch> = {}) => toque({
+    id: "00000005-0000-4000-8000-000000070031", channel: "linkedin", stepType: "linkedin_comment", stepIndex: 2, status: "draft",
+    subject: null, body: "", scheduledFor: new Date("2026-09-28T15:06:00Z"), accountName: null, ...over,
+  });
+
+  it("dice «A mano · el 28 sep», no «Borrador · sale el…», y «Hecho» lo anota", async () => {
+    render(<MensajesDeCadencia companyId={COMPANY} f={f} touches={[comentario()]} />);
+    const fila = screen.getAllByRole("row")[1]!;
+    expect(within(fila).getByText(t.aMano.estado)).toBeInTheDocument();
+    expect(within(fila).queryByText(t.estados.draft!)).toBeNull();
+    expect(within(fila).getByText(t.linea("LinkedIn", t.aMano.cuando(f.date("2026-09-28T15:06:00Z"))))).toBeInTheDocument();
+    expect(within(fila).queryByText(/sale el/)).toBeNull();
+    expect(within(fila).getByText(t.aMano.nota)).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(within(fila).getByRole("button", { name: t.aMano.botonLabel("Sofía Cárdenas") }));
+    });
+    const datos = marcarGestoHecho.mock.calls[0]![1] as FormData;
+    expect(Object.fromEntries(datos)).toEqual({ companyId: COMPANY, touchId: "00000005-0000-4000-8000-000000070031" });
+    expect(await screen.findByText(t.aMano.aviso)).toBeInTheDocument();
+  });
+
+  it("hecho, dice «Hecho a mano» con su fecha y sin motivo ni botón", () => {
+    render(
+      <MensajesDeCadencia
+        companyId={COMPANY}
+        f={f}
+        touches={[comentario({ status: "skipped", blockedReason: "done_by_hand", statusChangedAt: new Date("2026-09-28T16:00:00Z") })]}
+      />,
+    );
+    const fila = screen.getAllByRole("row")[1]!;
+    expect(within(fila).getByText(t.aMano.hecho)).toBeInTheDocument();
+    expect(within(fila).getByText(t.linea("LinkedIn", t.aMano.hechoEl(f.date("2026-09-28T16:00:00Z"))))).toBeInTheDocument();
+    expect(within(fila).queryByRole("button")).toBeNull();
+    expect(within(fila).queryByText(/Lo hiciste/)).toBeNull();
+  });
 });
 
 describe("lo que ya no va a salir (pulido r5)", () => {

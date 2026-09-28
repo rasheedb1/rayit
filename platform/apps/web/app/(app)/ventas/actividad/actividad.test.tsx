@@ -12,13 +12,14 @@ import { formatterFor } from "@/lib/format";
  * envío»), el embudo con la vista de flujo y sus explicaciones (que
  * Escape cierra) y la frontera propia de una pieza montada.
  */
-const { cancelarSeleccion, reintentarUno, reintentarPorTipo, refresh } = vi.hoisted(() => ({
+const { cancelarSeleccion, reintentarUno, reintentarPorTipo, marcarGestoHecho, refresh } = vi.hoisted(() => ({
   cancelarSeleccion: vi.fn(async (ids: string[]) => ({ ok: `${ids.length} mensajes cancelados.` })),
   reintentarUno: vi.fn(async () => ({ ok: "1 mensaje volvió a la cola." })),
   reintentarPorTipo: vi.fn(async () => ({ ok: "2 mensajes volvieron a la cola." })),
+  marcarGestoHecho: vi.fn(async () => ({ ok: "Marcado como hecho. La cadencia sigue con el siguiente paso." })),
   refresh: vi.fn(),
 }));
-vi.mock("./actions", () => ({ cancelarSeleccion, reintentarUno, reintentarPorTipo }));
+vi.mock("./actions", () => ({ cancelarSeleccion, reintentarUno, reintentarPorTipo, marcarGestoHecho }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 vi.mock("@/lib/db", () => ({ withWorkspace: (fn: (tx: unknown) => unknown) => fn({}) }));
 vi.mock("@/lib/workspace/settings", () => ({
@@ -63,6 +64,7 @@ const fila = (id: string, over: Partial<FilaVista> = {}): FilaVista => ({
   espera: null,
   revisar: null,
   cancelable: true,
+  hecho: false,
   enviando: false,
   fichaHref: "/ventas/empresas/x",
   ...over,
@@ -133,6 +135,18 @@ describe("la lista de la cola", () => {
     fireEvent.click(reintentar[0]!);
     await waitFor(() => expect(reintentarUno).toHaveBeenCalledWith("a"));
     await waitFor(() => expect(onResultado).toHaveBeenCalledWith({ ok: "1 mensaje volvió a la cola." }));
+  });
+
+  it("pulido r6: un gesto a mano lleva «Hecho», que lo marca; el resto de las filas no", async () => {
+    render(lista({
+      filas: [...filas, fila("g", { estado: "A mano", titulo: "Paso 2 · Comentario en LinkedIn", queEs: "Paso 2 · Comentario en LinkedIn", hecho: true })],
+    }));
+    const botones = screen.getAllByRole("button", { name: /^Marcar como hecho/ });
+    expect(botones).toHaveLength(1);
+    expect(botones[0]!.getAttribute("aria-label")).toBe("Marcar como hecho: Paso 2 · Comentario en LinkedIn para Persona g");
+    fireEvent.click(botones[0]!);
+    await waitFor(() => expect(marcarGestoHecho).toHaveBeenCalledWith("g"));
+    await waitFor(() => expect(onResultado).toHaveBeenCalledWith({ ok: "Marcado como hecho. La cadencia sigue con el siguiente paso." }));
   });
 
   it("las casillas de una misma persona se distinguen por el mensaje", () => {
