@@ -108,19 +108,8 @@ export function hiloVista(
   };
 }
 
-/**
- * Adónde pasa «Marcar como hecha» (y la tecla e) en la vista de
- * pendientes: la conversación de detrás de la abierta, o la de delante si
- * era la última, o la lista si era la única. En «Hechas» y «Todas» la
- * conversación sigue en la lista: se queda (null). Una abierta que no está
- * en la lista (por URL) también se queda.
- */
-export function siguienteTrasHecha(hilos: readonly HiloVista[], vista: VistaBandeja, lista: string): string | null {
-  if (vista !== "pendientes") return null;
-  const i = hilos.findIndex((h) => h.activo);
-  if (i < 0) return null;
-  return hilos[i + 1]?.href ?? hilos[i - 1]?.href ?? lista;
-}
+/** Adónde pasa «Marcar como hecha» en pendientes: vive en orden.ts (lo usa también el cliente). */
+export { siguienteTrasHecha } from "./orden";
 
 export interface ReferidoVista {
   propuesta: string;

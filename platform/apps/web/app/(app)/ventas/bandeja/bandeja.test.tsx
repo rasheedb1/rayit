@@ -32,6 +32,8 @@ import { formatterFor } from "@/lib/format";
 import { AtajosBandeja, MarcarHecha } from "./acciones";
 import { Conversacion } from "./conversacion";
 import { ListaHilos } from "./lista";
+import { ordenarHilos, ordenEstable } from "./orden";
+import { ListaEnOrden, OrdenBandeja } from "./orden-bandeja";
 import { MESSAGE_INTENTS } from "@mc/core/outreach/intent";
 import { INTENCIONES, MESSAGES } from "./messages";
 import { CrearReferido, Respuestas } from "./responder";
@@ -686,5 +688,72 @@ describe("«Marcar como hecha» en pendientes", () => {
       fireEvent.click(screen.getByRole("button", { name: t.conversacion.marcarHecha }));
     });
     expect(router.push).toHaveBeenLastCalledWith("/c");
+  });
+});
+
+describe("el orden de la lista no se mueve mientras dura la visita (pulido r6)", () => {
+  const hilo = (n: number, nombre: string, unread: number, lastAt: string): InboxThread => ({
+    contactId: `00000160-0000-4000-8000-0000000000d${n}`, channel: "email", contactName: nombre, companyId: COMPANY,
+    companyName: "Vitalé", lastAt: new Date(lastAt), lastDirection: "inbound", lastSnippet: "Hola", unread,
+    lastIntent: null, done: false,
+  });
+  // El orden del servidor: los sin leer arriba y, dentro, del más reciente al más viejo.
+  const servidor = (hilos: InboxThread[]) => [...hilos].sort((a, b) =>
+    Number(b.unread > 0) - Number(a.unread > 0) || b.lastAt.getTime() - a.lastAt.getTime());
+  const felipe = hilo(1, "Felipe Ortega", 1, "2026-09-23T20:00:00Z");
+  const carolina = hilo(2, "Carolina Ruiz", 2, "2026-09-23T19:00:00Z");
+  const juliana = hilo(3, "Juliana Pérez", 1, "2026-09-23T18:00:00Z");
+  const daniel = hilo(4, "Daniel Restrepo", 0, "2026-09-23T21:00:00Z");
+  const abierto = felipe.contactId;
+  const pintar = (hilos: InboxThread[]) =>
+    servidor(hilos).map((h) => hiloVista(h, f, h.contactId === abierto, "pendientes"));
+
+  it("ordenEstable conserva el orden visto, pone arriba los nuevos y quita los que salen", () => {
+    expect(ordenEstable(null, ["b", "a"])).toEqual(["b", "a"]);
+    expect(ordenEstable(["a", "b", "c"], ["b", "c", "a"])).toEqual(["a", "b", "c"]);
+    expect(ordenEstable(["a", "b", "c"], ["n", "c", "a"])).toEqual(["n", "a", "c"]);
+    expect(ordenarHilos([{ key: "b" }, { key: "a" }], ["a", "b", "x"])).toEqual([{ key: "a" }, { key: "b" }]);
+  });
+
+  it("abierto el primero sin leer y marcado leído, j lleva al que se veía debajo, y «hecha» también", async () => {
+    const Pantalla = ({ hilos }: { hilos: InboxThread[] }) => (
+      <OrdenBandeja hilos={pintar(hilos)} vista="pendientes" listaHref="/ventas/bandeja">
+        <ListaEnOrden activoSoloEscritorio={false} puedeOperar />
+        <MarcarHecha contactId={abierto} channel="email" hecha={false} siguienteHref="/del-servidor" />
+      </OrdenBandeja>
+    );
+    const { rerender } = render(<Pantalla hilos={[felipe, carolina, juliana, daniel]} />);
+    const nombres = () => screen.getAllByRole("link").map((a) => (a.textContent ?? "").split("Vitalé")[0]!);
+    expect(nombres()[0]).toContain("Felipe Ortega");
+
+    // MarcarLeido marca a Felipe y refresca: el servidor lo baja a su sitio por fecha.
+    const despues = [{ ...felipe, unread: 0 }, carolina, juliana, daniel];
+    expect(servidor(despues).map((h) => h.contactName)).toEqual(["Carolina Ruiz", "Juliana Pérez", "Daniel Restrepo", "Felipe Ortega"]);
+    rerender(<Pantalla hilos={despues} />);
+    // La lista se ve igual que antes, y j lleva a Carolina, la que se veía debajo.
+    expect(nombres()).toEqual([
+      expect.stringContaining("Felipe Ortega"), expect.stringContaining("Carolina Ruiz"),
+      expect.stringContaining("Juliana Pérez"), expect.stringContaining("Daniel Restrepo"),
+    ]);
+    fireEvent.keyDown(window, { key: "j" });
+    expect(router.push).toHaveBeenLastCalledWith(hiloHref(carolina.contactId, "email"));
+
+    // «Marcar como hecha» pasa también a Carolina, no a la siguiente del orden nuevo del servidor.
+    marcarHecho.mockResolvedValue({ ok: true, notice: t.conversacion.hechaAviso });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.conversacion.marcarHecha }));
+    });
+    expect(router.push).toHaveBeenLastCalledWith(hiloHref(carolina.contactId, "email"));
+  });
+
+  it("al cambiar de vista vuelve el orden del servidor", () => {
+    const Pantalla = ({ hilos, vista }: { hilos: InboxThread[]; vista: "pendientes" | "todas" }) => (
+      <OrdenBandeja hilos={servidor(hilos).map((h) => hiloVista(h, f, false, vista))} vista={vista} listaHref="/ventas/bandeja">
+        <ListaEnOrden activoSoloEscritorio={false} puedeOperar />
+      </OrdenBandeja>
+    );
+    const { rerender } = render(<Pantalla hilos={[felipe, carolina]} vista="pendientes" />);
+    rerender(<Pantalla hilos={[{ ...felipe, unread: 0 }, carolina]} vista="todas" />);
+    expect(screen.getAllByRole("link")[0]!.textContent).toContain("Carolina Ruiz");
   });
 });
