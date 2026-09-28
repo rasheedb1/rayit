@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -654,26 +654,49 @@ describe("ronda 4", () => {
 
 describe("ronda 5", () => {
   it("después de encender o apagar, el foco va al título del interruptor y una región status lo dice", async () => {
-    // Con la máquina cargada, la transición de React tarda en soltar el
-    // botón: se espera cada botón (findByRole) en vez de darlo por pintado.
-    const espera = { timeout: 5000 };
+    // Pulido r4 (CIM-12): la prueba competía con la transición del
+    // formulario de ConfirmInline. El anuncio se pinta en cuanto la acción
+    // responde, pero la transición (el botón ocupado) sigue abierta unos
+    // ticks más; un rerender en ese hueco dejaba la confirmación de
+    // encender a la vista. Ahora cada clic va dentro de act, se espera a
+    // que la acción se llame y a que el botón se suelte, y el rerender (la
+    // página con el estado nuevo) también va dentro de act.
+    const espera = { timeout: 10_000 };
     enableOutreach.mockResolvedValue(undefined);
     disableOutreach.mockResolvedValue(0);
+    const clic = async (nombre: string) => {
+      const boton = await screen.findByRole("button", { name: nombre }, espera);
+      await waitFor(() => expect(boton).toBeEnabled(), espera);
+      await act(async () => {
+        fireEvent.click(boton);
+      });
+    };
+    const confirmar = async (nombre: string, accion: typeof enableOutreach, anuncio: string) => {
+      await clic(nombre);
+      await waitFor(() => expect(accion).toHaveBeenCalledTimes(1), espera);
+      await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(anuncio), espera);
+      // La transición del formulario terminó: el botón que envía ya no está ocupado.
+      await waitFor(() => {
+        for (const b of screen.queryAllByRole("button", { name: nombre })) expect(b).not.toHaveAttribute("aria-busy");
+      }, espera);
+    };
     const { rerender } = render(interruptor());
-    fireEvent.click(await screen.findByRole("button", { name: t.interruptor.encender }, espera));
-    fireEvent.click(await screen.findByRole("button", { name: t.interruptor.siEncender }, espera));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(t.interruptor.anuncioEncendido), espera);
-    rerender(interruptor({ enabled: true }));
+    await clic(t.interruptor.encender);
+    await confirmar(t.interruptor.siEncender, enableOutreach, t.interruptor.anuncioEncendido);
+    await act(async () => {
+      rerender(interruptor({ enabled: true }));
+    });
     const titulo = screen.getByRole("heading", { name: t.interruptor.title });
     await waitFor(() => expect(titulo).toHaveFocus(), espera);
     expect(document.activeElement).not.toBe(document.body);
 
-    fireEvent.click(await screen.findByRole("button", { name: t.interruptor.apagar }, espera));
-    fireEvent.click(await screen.findByRole("button", { name: t.interruptor.siApagar }, espera));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(t.interruptor.anuncioApagado), espera);
-    rerender(interruptor({ enabled: false }));
+    await clic(t.interruptor.apagar);
+    await confirmar(t.interruptor.siApagar, disableOutreach, t.interruptor.anuncioApagado);
+    await act(async () => {
+      rerender(interruptor({ enabled: false }));
+    });
     await waitFor(() => expect(screen.getByRole("heading", { name: t.interruptor.title })).toHaveFocus(), espera);
-  }, 20_000);
+  }, 30_000);
 
   it("si falla, el foco no se mueve y el error lo dice", async () => {
     enableOutreach.mockRejectedValue(new Error("base caída"));
