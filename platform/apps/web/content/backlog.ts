@@ -150,7 +150,7 @@ export const STORIES: readonly Story[] = [
     desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
     done: "Veinte corridas seguidas de pnpm verificar en una máquina cargada, sin una sola prueba cancelada.",
     status: "en_curso",
-    note: "Pulido r4: el interruptor de la política y «No, es otra marca» del radar esperan a que la transición de React suelte el botón (act + waitFor sobre la acción) antes de seguir; cinco corridas a la vez de sus suites, en verde. Sigue en curso hasta 20 corridas seguidas de `pnpm verificar` con otro verificar a la vez.",
+    note: "Pulido r4: el interruptor, el perfil y el radar esperan a que la transición de ConfirmInline suelte el botón antes del rerender; canales abre su base con 180 s. Con dos verificar a la vez aún fallan pruebas de Nicolás (oauth-refresh del worker, guard.attempts; cuentas-service con hook de 60 s): en curso hasta 20 corridas en verde.",
   },
   {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],
