@@ -330,6 +330,19 @@ describe("el uso por canal", () => {
     expect(screen.getByRole("link", { name: "Reconectar" }).getAttribute("href")).toBe("/ventas/canales#canal-email-titulo");
   });
 
+  it("pulido r6: un canal sin llaves no promete «Reconectar»: dice que no está disponible, en gris", () => {
+    render(<UsoPorCanalVista cuentas={[
+      usoVista(uso({ accountId: "li-caida", channel: "linkedin", provider: "unipile", level: "off", offReason: "account", used: 0, usedShare: 0, warmingUp: false }), f, false),
+      usoVista(uso({ accountId: "ig-viva", channel: "instagram_dm", provider: "unipile", accountName: "Laura en Instagram", warmingUp: false }), f, false),
+    ]} />);
+    expect(screen.queryByRole("link", { name: "Reconectar" })).toBeNull();
+    expect(screen.getByText("LinkedIn todavía no está disponible en On Cue.")).toBeTruthy();
+    // Aunque la base diga que hay cupo, sin llaves no sale nada: nunca «Con margen».
+    expect(screen.getByText("Instagram todavía no está disponible en On Cue.")).toBeTruthy();
+    expect(screen.getAllByText("Sin envío")).toHaveLength(2);
+    expect(screen.queryByText("Con margen")).toBeNull();
+  });
+
   it("sin cuentas, lo dice", () => {
     render(<UsoPorCanalVista cuentas={[]} />);
     expect(screen.getByText("Conecta una cuenta para ver su uso.")).toBeTruthy();

@@ -379,6 +379,12 @@ export const MESSAGES = {
       account: { texto: "La cuenta no está conectada: no sale nada por ella hasta que la reconectes.", enlace: "Reconectar" },
       disabled: { texto: "El envío del espacio está apagado: no sale nada hasta que lo enciendas.", enlace: "Ir a la política de envío" },
     } satisfies Record<UsageOffReason, { texto: string; enlace: string }>,
+    /**
+     * El canal no está disponible en la plataforma (faltan sus llaves): no
+     * se pide reconectar, porque el botón de /ventas/canales va
+     * deshabilitado. Es la misma frase que la cabecera de esa pantalla.
+     */
+    noDisponible: (canal: string) => `${canal} todavía no está disponible en On Cue.`,
     politicaHref: "/ventas/politica",
     cargando: "Cargando el uso de hoy",
     error: "No pudimos cargar el uso de hoy. El resto de la página sigue funcionando.",

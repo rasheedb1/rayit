@@ -7,6 +7,7 @@ import { Pill, type PillKind } from "@/components/ui/pill";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../_lib/db";
+import { channelSetup, isChannel } from "../../canales/_lib/config";
 import { canalHref } from "../../canales/_lib/foco";
 import { MESSAGES } from "../messages";
 import { FronteraWidget } from "./frontera-widget";
@@ -43,8 +44,8 @@ export interface UsoVista {
   /** Qué tope manda hoy, si no es el diario de la cuenta. */
   manda: string | null;
   proveedor: string;
-  /** Por qué no sale nada, con adónde ir a arreglarlo; null si sale. */
-  sinEnvio: { texto: string; enlace: string; href: string } | null;
+  /** Por qué no sale nada, con adónde ir a arreglarlo (sin enlace si no hay nada que hacer); null si sale. */
+  sinEnvio: { texto: string; enlace: string | null; href: string | null } | null;
   usedShare: number;
   softShare: number;
   medidor: string;
@@ -62,17 +63,26 @@ function proveedorDe(u: ChannelUsage): string {
   return T.proveedores[u.provider] ?? T.plataformas[u.channel];
 }
 
-export function usoVista(u: ChannelUsage, f: Formatter): UsoVista {
+/**
+ * `disponible`: si el canal de la cuenta tiene sus llaves en la plataforma
+ * (channelSetup). Sin ellas no sale nada aunque la base diga que hay cupo:
+ * la cuenta va en gris «Sin envío» con la frase de «no disponible», y sin
+ * el enlace «Reconectar», que llevaría a un botón deshabilitado (pulido r6).
+ */
+export function usoVista(u: ChannelUsage, f: Formatter, disponible = true): UsoVista {
   const canal = T.canales[u.channel];
   const cuenta = u.accountName ?? canal;
-  const nivelTexto = T.niveles[u.level];
+  const nivel: UsageLevel = disponible ? u.level : "off";
+  const nivelTexto = T.niveles[nivel];
   const manda =
     u.limitedBy === "week"
       ? T.manda.week()
       : u.limitedBy === "workspace" && u.workspaceUsed !== null && u.workspaceLimit !== null
         ? T.manda.workspace(f.int(u.workspaceUsed), f.int(u.workspaceLimit))
         : null;
-  const sinEnvio = u.offReason === "account"
+  const sinEnvio = !disponible
+    ? { texto: T.noDisponible(canal), enlace: null, href: null }
+    : u.offReason === "account"
     ? { ...T.sinEnvio.account, href: canalHref(u.channel) }
     : u.offReason === "disabled"
       ? { ...T.sinEnvio.disabled, href: OUTREACH_URLS.policySwitch }
@@ -81,7 +91,7 @@ export function usoVista(u: ChannelUsage, f: Formatter): UsoVista {
     id: u.accountId,
     canal,
     cuenta,
-    nivel: u.level,
+    nivel,
     nivelTexto,
     cifra: T.cifra(f.int(u.used), f.int(u.hardLimit)),
     blando: T.blando(f.int(u.softLimit)),
@@ -153,8 +163,13 @@ function Cuenta({ u }: { u: UsoVista }) {
       {u.calentando && <p className="text-xs text-fg-2">{u.calentando}</p>}
       {u.sinEnvio && (
         <p className="text-xs text-warn">
-          {u.sinEnvio.texto}{" "}
-          <Link href={u.sinEnvio.href} className="font-medium underline underline-offset-2">{u.sinEnvio.enlace}</Link>
+          {u.sinEnvio.texto}
+          {u.sinEnvio.href && u.sinEnvio.enlace && (
+            <>
+              {" "}
+              <Link href={u.sinEnvio.href} className="font-medium underline underline-offset-2">{u.sinEnvio.enlace}</Link>
+            </>
+          )}
         </p>
       )}
       <div>
@@ -236,7 +251,10 @@ export function UsoPorCanalEsqueleto() {
 async function UsoPorCanalDatos() {
   const usage = await withWorkspace((tx) => listChannelUsage(tx));
   const f = formatterFor(await getCurrentWorkspace());
-  return <UsoPorCanalVista cuentas={usage.map((u) => usoVista(u, f))} />;
+  // Las llaves del proveedor, las mismas que deshabilitan «Conectar» y «Reconectar» en /ventas/canales.
+  const setup = channelSetup(process.env);
+  const disponible = (c: ChannelUsage["channel"]) => (isChannel(c) ? setup[c].configured : true);
+  return <UsoPorCanalVista cuentas={usage.map((u) => usoVista(u, f, disponible(u.channel)))} />;
 }
 
 /**
