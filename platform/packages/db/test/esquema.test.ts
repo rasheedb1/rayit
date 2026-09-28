@@ -1013,10 +1013,9 @@ describe('ronda 5: disparadores, reglas, esquemas, el rol de la app y lo que nom
     );
   });
 
-  test('un disparador SECURITY DEFINER con EXECUTE revocado reescribe un catálogo, y la guardia lo nombra', async (ctx) => {
-    // El «permission denied» de abajo mide los privilegios de mc_app, y en
-    // el CI el rol de conexión (mc_app_ci) también hereda los de mc_worker.
-    if (t.kind !== 'pglite') return ctx.skip('los privilegios de mc_app solo se miden en PGlite (mc_app_ci hereda los de mc_worker)');
+  test('un disparador SECURITY DEFINER con EXECUTE revocado reescribe un catálogo, y la guardia lo nombra', async () => {
+    // El «permission denied» de abajo mide los privilegios de mc_app: en el
+    // CI la sesión también es mc_app (db/montaje-postgres-real.sql, CIM-2c).
     // El guion de los revisores, tal cual: UPDATE niche falla con
     // permission denied, pero INSERT INTO company deja niche reescrito,
     // porque Postgres no mira EXECUTE al disparar.

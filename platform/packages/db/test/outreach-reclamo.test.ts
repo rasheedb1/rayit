@@ -207,7 +207,7 @@ test('pulido r3 · cambiarle a una ficha el correo por uno de la lista del espac
 
 test('pulido r3 · una baja del espacio se cancela y el toque del otro workspace sale igual', async (ctx) => {
   if (t.kind === 'postgres') {
-    ctx.skip('el reclamo sin workspace tomaría toques de otros archivos en el Postgres compartido');
+    ctx.skip('el reclamo sin workspace tomaría los toques de la demo que trae sembrada la copia de TEST_DATABASE_URL');
     return;
   }
   // Sin filtro de workspace: el reclamo del cron, de todos a la vez.
@@ -219,7 +219,7 @@ test('pulido r3 · una baja del espacio se cancela y el toque del otro workspace
 
 test('pulido r3 · si la base rechaza un toque del lote, los demás se reclaman igual', async (ctx) => {
   if (t.kind === 'postgres') {
-    ctx.skip('el disparador de prueba es DDL sobre la tabla compartida');
+    ctx.skip('sigue a la prueba de arriba, que se salta contra Postgres real (la demo sembrada)');
     return;
   }
   // Una regla que el descarte no conoce: la base rechaza el reclamo de Rosa con check_violation.

@@ -10,11 +10,15 @@
  *     se serializan.
  *   - TEST_DATABASE_URL=postgres://…: un Postgres real ya migrado y con
  *     seed (por ejemplo, el Docker de `make up` + `make seed`, o el
- *     Postgres 16 del CI). Aquí sí hay concurrencia real y se ejercita
- *     el runner de pg. El rol de conexión no debe tener BYPASSRLS ni ser
- *     dueño de las tablas, o RLS no aplica; `admin(sql)` usa
- *     TEST_DATABASE_ADMIN_URL (superusuario o dueño) y, si falta,
- *     la misma URL. NUNCA apuntarlas a Supabase: el helper se niega.
+ *     Postgres 16 del CI). Es el MOLDE: cada apertura trabaja sobre su
+ *     propia copia (CREATE DATABASE … TEMPLATE) y la borra al cerrar.
+ *     Aquí sí hay concurrencia real y se ejercita el runner de pg. El
+ *     rol de conexión no debe tener BYPASSRLS ni ser dueño de las
+ *     tablas, o RLS no aplica (el del CI, mc_app_ci, lo crea
+ *     db/montaje-postgres-real.sql); `admin(sql)` y las copias usan
+ *     TEST_DATABASE_ADMIN_URL (superusuario, o dueño con CREATEDB) y,
+ *     si falta, la misma URL. NUNCA apuntarlas a Supabase: el helper se
+ *     niega.
  *
  * Para las pruebas de otros paquetes (connectors, worker): abrir aquí y
  * usar `db` (withWorkspace / asWorker) o `admin(sql)` para sembrar, en

@@ -783,9 +783,7 @@ nuevo.
 
 ```bash
 cd platform
-make up && make seed
-docker compose exec -T db psql -U mc -d oncue -c \
-  "CREATE ROLE mc_app_ci LOGIN PASSWORD 'ci' IN ROLE mc_app; GRANT mc_worker TO mc_app_ci;"
+make up && make seed      # make up ya crea mc_app_ci (db/montaje-postgres-real.sql)
 pnpm --filter @mc/db demo:enlace-baja          # imprime /baja/<token> y el curl del un clic
 DATABASE_URL=postgres://mc_app_ci:ci@localhost:5432/oncue pnpm --filter @mc/web dev --port 3100
 ```

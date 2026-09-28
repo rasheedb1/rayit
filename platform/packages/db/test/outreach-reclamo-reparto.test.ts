@@ -67,7 +67,7 @@ after(async () => {
 test('con cuatro plazas, los dos del pequeño salen en la primera corrida aunque el grande tenga doce más viejos', async (ctx) => {
   // El reclamo de verdad es de TODOS los workspaces: contra un Postgres compartido con otros archivos (y la demo
   // sembrada) se llevaría sus toques. La regla es SQL puro y se mide igual en PGlite.
-  if (t.kind !== 'pglite') return ctx.skip('reclamo global: solo en la base propia de este archivo');
+  if (t.kind !== 'pglite') return ctx.skip('reclamo global: solo sin la demo sembrada (seeds: false), que la copia de TEST_DATABASE_URL trae');
   const r = await t.db.asWorker((tx) => claimDueTouches(tx, { now: CLOCK, channels: ['email'], limit: 4 }));
   const ids = r.claimed.map((c) => c.id);
   assert.equal(ids.length, 4);
