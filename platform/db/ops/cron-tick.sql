@@ -14,41 +14,37 @@
 --     make cron.status      # la tarea, el secreto (sin su valor) y las últimas corridas
 --     make cron.uninstall   # para pasar a Vercel Cron (opción A)
 --
--- Este archivo es una PLANTILLA: los marcadores APP_URL y CRON_SECRET,
--- entre llaves dobles, solo aparecen donde van los valores (aquí no, o el
--- secreto acabaría también en este comentario). Los
--- rellena db/ops/render.mjs desde el entorno (nunca por argumentos, para
--- que el secreto no salga en `ps`), después de validarlos: la URL, un
--- origen https; el secreto, solo [A-Za-z0-9_-]. El texto rellenado va
--- por la entrada estándar a scripts/supabase-admin.sh sql-stdin y no se
--- escribe en ningún archivo.
+-- Este archivo es una PLANTILLA con un solo marcador, el de APP_URL
+-- entre llaves dobles, donde va la URL. El SECRETO NO pasa por aquí: va
+-- en su propia llamada (db/ops/cron-tick-secreto.sql), para que ni un
+-- fallo de este lote lo arrastre al log de Postgres ni un bloque DO lo
+-- deje en claro en pg_stat_statements. db/ops/render.mjs rellena la URL
+-- desde el entorno (nunca por argumentos) después de validarla: un
+-- origen https. El texto rellenado va por la entrada estándar a
+-- scripts/supabase-admin.sh sql-stdin y no se escribe en ningún archivo.
 --
--- El secreto se guarda en Supabase Vault (cifrado en reposo) y la tarea
--- lo LEE al disparar, de vault.decrypted_secrets: en cron.job solo queda
--- la consulta, nunca el valor. Rotarlo es volver a correr
+-- El secreto vive en Supabase Vault (cifrado en reposo) y la tarea lo
+-- LEE al disparar, de vault.decrypted_secrets: en cron.job solo queda la
+-- consulta, nunca el valor. Rotarlo es volver a correr
 -- `make cron.install` con el nuevo (y ponerlo igual en Vercel).
 --
--- Idempotente: crea las extensiones si faltan, crea o actualiza el
--- secreto, y retira la tarea `on-cue-tick` si ya existía antes de
--- programarla otra vez. Correrlo dos veces deja una sola tarea.
+-- Idempotente: crea las extensiones si faltan y retira la tarea
+-- `on-cue-tick` si ya existía antes de programarla otra vez. Correrlo dos
+-- veces deja una sola tarea.
 -- =====================================================================
 
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 CREATE EXTENSION IF NOT EXISTS pg_net;
 
 -- ---------------------------------------------------------------------
--- 1 · El secreto, en Vault. El mismo valor que CRON_SECRET en Vercel.
+-- 1 · Vault tiene que estar (Supabase lo trae): lo comprueba este lote,
+--     que no lleva secretos, para que la llamada del secreto no tenga de
+--     qué fallar.
 -- ---------------------------------------------------------------------
 DO $$
-DECLARE
-  v_id uuid;
 BEGIN
-  SELECT id INTO v_id FROM vault.secrets WHERE name = 'on_cue_cron_secret';
-  IF v_id IS NULL THEN
-    PERFORM vault.create_secret('{{CRON_SECRET}}', 'on_cue_cron_secret',
-      'Bearer de /api/cron/tick (CIM-7). El mismo valor que CRON_SECRET en Vercel.');
-  ELSE
-    PERFORM vault.update_secret(v_id, '{{CRON_SECRET}}');
+  IF to_regproc('vault.create_secret') IS NULL OR to_regproc('vault.update_secret') IS NULL THEN
+    RAISE EXCEPTION 'Supabase Vault no está instalado (extensión supabase_vault): el secreto del turno no tiene dónde guardarse';
   END IF;
 END
 $$;

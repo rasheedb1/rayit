@@ -45,6 +45,25 @@ extensiones_listas() {
     | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d and int(d[0]["n"]) == 2 else 1)'
 }
 
+# ¿Quedó algún literal del secreto en pg_stat_statements? (db/ops/cron-tick-huellas.sql)
+huellas() {
+  local hay n
+  hay="$(admin_sql "select to_regclass('extensions.pg_stat_statements') is not null as hay" \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print("si" if d and d[0]["hay"] else "no")')" || return 0
+  if [[ "$hay" != si ]]; then
+    printf '  pg_stat_statements no está en extensions: no se puede comprobar si quedó el secreto en claro.\n'
+    return 0
+  fi
+  n="$(admin_sql "$(cat db/ops/cron-tick-huellas.sql)" | python3 -c 'import json,sys; print(int(json.load(sys.stdin)[0]["literales"]))')" || return 0
+  if [[ "$n" == 0 ]]; then
+    verde "pg_stat_statements: ninguna llamada a Vault con el secreto en claro."
+  else
+    rojo "pg_stat_statements tiene $n llamada(s) a Vault SIN normalizar: el secreto pudo quedar en claro."
+    rojo "Límpialo y rota el secreto (instrucciones en db/ops/cron-tick-huellas.sql)."
+    return 1
+  fi
+}
+
 install() {
   export APP_URL="${APP_URL:-$APP_URL_DEFAULT}"
   if [[ -z "${CRON_SECRET:-}" ]]; then
@@ -53,8 +72,13 @@ install() {
   fi
   export CRON_SECRET
   local sql
-  # render.mjs valida los dos valores y lee el secreto del entorno.
-  sql="$(node db/ops/render.mjs db/ops/cron-tick.sql)" || exit 2
+  # render.mjs valida cada valor y lo lee del entorno. Dos llamadas: la
+  # tarea (con la URL, sin el secreto) y, aparte, el secreto en Vault
+  # (dos SELECT sin nada más; ver db/ops/cron-tick-secreto.sql).
+  node db/ops/render.mjs db/ops/cron-tick-secreto.sql >/dev/null || exit 2
+  sql="$(CRON_SECRET= node db/ops/render.mjs db/ops/cron-tick.sql)" || exit 2
+  admin_sql "$sql" >/dev/null
+  sql="$(APP_URL= node db/ops/render.mjs db/ops/cron-tick-secreto.sql)" || exit 2
   admin_sql "$sql" >/dev/null
   unset sql CRON_SECRET
   verde "Tarea on-cue-tick programada cada minuto contra $APP_URL/api/cron/tick; secreto en Vault (on_cue_cron_secret)."
@@ -67,6 +91,7 @@ status() {
     return 1
   fi
   admin_sql "$(cat db/ops/cron-tick-estado.sql)"
+  huellas
 }
 
 uninstall() {

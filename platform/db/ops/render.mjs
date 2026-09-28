@@ -1,21 +1,26 @@
 #!/usr/bin/env node
 /**
- * Rellena la plantilla del disparador del worker (db/ops/cron-tick.sql,
- * CIM-7) con APP_URL y CRON_SECRET y la escribe en la salida estándar.
+ * Rellena una plantilla del disparador del worker (db/ops/cron-tick*.sql,
+ * CIM-7) y la escribe en la salida estándar.
  *
- *   APP_URL=https://… CRON_SECRET=… node db/ops/render.mjs db/ops/cron-tick.sql | ./scripts/supabase-admin.sh sql-stdin
+ *   APP_URL=https://…  node db/ops/render.mjs db/ops/cron-tick.sql         | ./scripts/supabase-admin.sh sql-stdin
+ *   CRON_SECRET=…      node db/ops/render.mjs db/ops/cron-tick-secreto.sql | ./scripts/supabase-admin.sh sql-stdin
  *
- * Los dos valores llegan por el ENTORNO, nunca por argumentos: un
- * argumento sale en `ps` y en el historial. Se validan antes de tocar el
- * SQL, porque van dentro de literales: la URL tiene que ser un origen
- * https (sin ruta, sin usuario, sin consulta) y el secreto, solo
- * [A-Za-z0-9_-] de 32 a 256 caracteres (`openssl rand -hex 32` da 64).
- * Nada de comillas: nada que escapar. Lo usa scripts/cron-tick.sh.
+ * Cada plantilla lleva SOLO los marcadores que necesita, y solo esos se
+ * piden y se validan: la de la tarea no ve nunca el secreto, y la del
+ * secreto no lleva nada más (van en dos llamadas; ver cron-tick-secreto.sql).
+ *
+ * Los valores llegan por el ENTORNO, nunca por argumentos: un argumento
+ * sale en `ps` y en el historial. Se validan antes de tocar el SQL,
+ * porque van dentro de literales: la URL tiene que ser un origen https
+ * (sin ruta, sin usuario, sin consulta) y el secreto, solo [A-Za-z0-9_-]
+ * de 32 a 256 caracteres (`openssl rand -hex 32` da 64). Nada de
+ * comillas: nada que escapar. Lo usa scripts/cron-tick.sh.
  */
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export const PLACEHOLDERS = { appUrl: '{{APP_URL}}', cronSecret: '{{CRON_SECRET}}' };
+export const PLACEHOLDERS = { APP_URL: '{{APP_URL}}', CRON_SECRET: '{{CRON_SECRET}}' };
 const SECRET_RE = /^[A-Za-z0-9_-]{32,256}$/;
 
 export class RenderError extends Error {
@@ -47,13 +52,14 @@ export function checkSecret(raw) {
   return raw;
 }
 
-export function renderCronTick(template, { appUrl, cronSecret }) {
-  const origin = appOrigin(appUrl);
-  const secret = checkSecret(cronSecret);
-  for (const p of Object.values(PLACEHOLDERS)) {
-    if (!template.includes(p)) throw new RenderError(`La plantilla no tiene ${p}`);
-  }
-  const out = template.replaceAll(PLACEHOLDERS.appUrl, origin).replaceAll(PLACEHOLDERS.cronSecret, secret);
+const CHECKS = { APP_URL: appOrigin, CRON_SECRET: checkSecret };
+
+/** Rellena los marcadores que la plantilla tiene (y solo esos) con `values`, validados. */
+export function renderTemplate(template, values) {
+  const used = Object.keys(PLACEHOLDERS).filter((k) => template.includes(PLACEHOLDERS[k]));
+  if (used.length === 0) throw new RenderError('La plantilla no tiene marcadores: se corre tal cual, sin render.mjs');
+  let out = template;
+  for (const k of used) out = out.replaceAll(PLACEHOLDERS[k], CHECKS[k](values[k]));
   if (/\{\{[A-Z_]+\}\}/.test(out)) throw new RenderError('Quedó un marcador sin rellenar en la plantilla');
   return out;
 }
@@ -61,11 +67,11 @@ export function renderCronTick(template, { appUrl, cronSecret }) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const file = process.argv[2];
   if (!file) {
-    process.stderr.write('Uso: APP_URL=… CRON_SECRET=… node db/ops/render.mjs db/ops/cron-tick.sql\n');
+    process.stderr.write('Uso: APP_URL=… | CRON_SECRET=… node db/ops/render.mjs db/ops/<plantilla>.sql\n');
     process.exit(2);
   }
   try {
-    process.stdout.write(renderCronTick(readFileSync(file, 'utf8'), { appUrl: process.env.APP_URL, cronSecret: process.env.CRON_SECRET }));
+    process.stdout.write(renderTemplate(readFileSync(file, 'utf8'), { APP_URL: process.env.APP_URL, CRON_SECRET: process.env.CRON_SECRET }));
   } catch (err) {
     process.stderr.write(`${err instanceof RenderError ? err.message : String(err)}\n`);
     process.exit(2);

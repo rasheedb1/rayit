@@ -3,6 +3,8 @@
 -- sin el valor del secreto: de Vault se mira que exista y cuándo cambió.
 -- Una sola fila JSON (la API de administración devuelve la última consulta).
 -- Supone pg_cron y pg_net instalados; scripts/cron-tick.sh lo comprueba antes.
+-- Que el secreto no haya quedado en claro en pg_stat_statements lo mira
+-- aparte db/ops/cron-tick-huellas.sql: la vista puede no existir.
 SELECT jsonb_build_object(
   'tarea', (
     SELECT jsonb_agg(jsonb_build_object('jobid', jobid, 'schedule', schedule, 'active', active, 'command', command))
