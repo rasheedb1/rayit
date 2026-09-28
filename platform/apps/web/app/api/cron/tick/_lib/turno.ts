@@ -45,6 +45,8 @@ export function tickLogLine(s: TickSummary): string {
     upToDate: s.upToDate,
     exhausted: s.exhausted,
     failedRuns: s.failedRuns,
+    planMs: s.planMs,
+    ...(s.orphanedBossJobs ? { orphanedBossJobs: s.orphanedBossJobs } : {}),
   });
 }
 
@@ -62,12 +64,20 @@ const NO_STORE = { "cache-control": "no-store" } as const;
 export function createTickHandler(deps: TickRouteDeps): (req: Request) => Promise<Response> {
   const log = deps.log ?? ((line: string) => console.info("[cron/tick]", line));
   const logError = deps.logError ?? ((message: string, err?: unknown) => console.error("[cron/tick]", message, err ?? ""));
+  // El aviso de «sin CRON_SECRET» sale una vez por instancia: la URL es
+  // pública y cualquiera que la golpee llenaría el log, y el aviso útil se
+  // perdería entre el ruido. El 401 sigue igual para todos.
+  let avisado = false;
   return async function tick(req: Request): Promise<Response> {
     const secret = deps.secret();
     if (!bearerMatches(req.headers.get("authorization"), secret)) {
-      if (!secret || secret.length < CRON_SECRET_MIN_LENGTH) logError("CRON_SECRET falta o es corto: ningún turno puede entrar (apps/worker/README.md, «Por turnos»)");
+      if ((!secret || secret.length < CRON_SECRET_MIN_LENGTH) && !avisado) {
+        avisado = true;
+        logError("CRON_SECRET falta o es corto: ningún turno puede entrar (apps/worker/README.md, «Por turnos»)");
+      }
       return new Response(null, { status: 401, headers: NO_STORE });
     }
+    avisado = false;
     try {
       const summary = await deps.run(TICK_BUDGET_MS);
       log(tickLogLine(summary));

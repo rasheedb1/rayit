@@ -15,6 +15,8 @@ const RESUMEN: TickSummary = {
   upToDate: 12,
   exhausted: [],
   failedRuns: 0,
+  planMs: 41,
+  orphanedBossJobs: null,
 };
 
 /** El secreto va explícito: con un valor por defecto, montar(undefined) probaría el bueno. */
@@ -70,7 +72,7 @@ describe("la ruta del turno (CIM-7)", () => {
         expect((await handler(pedir("POST", auth))).status).toBe(401);
       }
       expect(run).not.toHaveBeenCalled();
-      expect(logError).toHaveBeenCalled();
+      expect(logError, "el aviso sale una vez por instancia, no una por petición anónima").toHaveBeenCalledTimes(1);
     }
     expect(bearerMatches(`Bearer ${"x".repeat(CRON_SECRET_MIN_LENGTH - 1)}`, "x".repeat(CRON_SECRET_MIN_LENGTH - 1))).toBe(false);
     expect(bearerMatches(`Bearer ${"x".repeat(CRON_SECRET_MIN_LENGTH)}`, "x".repeat(CRON_SECRET_MIN_LENGTH))).toBe(true);
@@ -94,5 +96,8 @@ describe("la ruta del turno (CIM-7)", () => {
   test("la ruta no pide sesión (la protege su Bearer) y el resumen del log es una línea", () => {
     expect(esRutaPublica("/api/cron/tick")).toBe(true);
     expect(tickLogLine({ ...RESUMEN, ran: [{ ...RESUMEN.ran[0]!, cut: true, status: "failed" }] })).toContain("outbound.dispatch:failed(cortado)");
+    expect(JSON.parse(tickLogLine(RESUMEN))).toMatchObject({ planMs: 41 });
+    expect(JSON.parse(tickLogLine(RESUMEN))).not.toHaveProperty("orphanedBossJobs");
+    expect(JSON.parse(tickLogLine({ ...RESUMEN, orphanedBossJobs: 2 }))).toMatchObject({ orphanedBossJobs: 2 });
   });
 });
