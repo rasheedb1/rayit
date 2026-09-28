@@ -160,12 +160,15 @@ export const MESSAGES = {
     espacios: "Tus espacios",
     // Etiquetas neutras: se le muestran a cualquier persona, y el rol
     // describe un permiso, no a quien lo tiene.
+    // Son los seis roles de sistema de 0034 (ACC-3): cinco por tipo de
+    // workspace, con «Dueño» y «Solo lectura» en los dos.
     rol: {
       owner: "Propietario/a",
       admin: "Administrador/a",
-      member: "Miembro",
+      manager: "Mánager",
+      editor: "Editor/a",
+      finance: "Contador/a",
       viewer: "Solo lectura",
-      client: "Cliente",
     },
     renombrar: {
       accion: "Renombrar",

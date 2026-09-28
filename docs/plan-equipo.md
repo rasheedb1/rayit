@@ -30,6 +30,33 @@ nueve índices, y el entorno local se levanta con un comando.
 > autorización OAuth a cada creador: una cuenta se agrega por su @ y se
 > lee con fuentes oficiales (CON-10, en `main`). La autorización del
 > dueño (alcance, retención, demografía) pasa a una versión avanzada.
+>
+> **Cierre del sprint 2, 23 de septiembre.** Las cinco historias de
+> Nicolás (CON-1, CAM-1, CAM-2, CON-3 y CON-10) están en `main`; CON-3
+> quedó probada en vivo en producción como «Autorizar cifras» de TikTok
+> (híbrido: la cuenta se agrega por @ y el dueño autoriza una vez).
+> Supabase tiene aplicadas todas las migraciones de `main`; producción
+> sirve `1a524d7` y le falta un commit. `pnpm verificar` sobre `main`
+> pasa 1.623 pruebas sin fallos, pero sale en rojo por un rechazo no
+> manejado en una prueba de Resumen. Detalle, pendientes de Rasheed y
+> lo que sigue en la sección 10 de
+> [backlog-mvp.md](backlog-mvp.md#10-cierre-del-sprint-2-al-23-de-septiembre-de-2026).
+> Al cierre de módulos del 23-sep por la tarde, CON-4 (la pantalla
+> Conexiones) quedó en `main` y en producción: ver
+> [propuestas/CIERRE-CON-B.md](propuestas/CIERRE-CON-B.md). La parte de
+> Nicolás en Accesos (ACC-1, 2, 3, 5, 6 y 8) se cerró con ACC-6: el
+> alcance cubre todas las consultas de Campañas, Finanzas y Conexiones
+> (migración 0040); lo que falta de Rasheed antes de ACC-4 y ACC-7 está en
+> [propuestas/CIERRE-ACC.md](propuestas/CIERRE-ACC.md) §5.
+>
+> **Cierre de los módulos de Nicolás, 23 y 24 de septiembre.** FIN, CAM
+> y Conexiones están en `main` y en producción; el worker quedó listo y
+> sin encender (falta un rol de Supabase, de Rasheed, y el visto bueno
+> de Nicolás); una prueba de punta a punta recorre la cadena entera en
+> una base, de la cuenta por @ al flujo de caja, y `pnpm verificar` está
+> en verde. Lo que sigue sin estar conectado y de quién depende está en
+> la sección 11 de
+> [backlog-mvp.md](backlog-mvp.md#11-cierre-de-los-módulos-de-nicolás-al-23-de-septiembre-de-2026).
 
 ---
 

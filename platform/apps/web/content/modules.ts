@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
+import { can as tienePermiso, PERMISO_MINIMO, type Permiso } from "@mc/core";
 import type { OwnerId } from "./team";
-import { flags as defaultFlags, type FlagKey, type Flags } from "./flags";
+import { flags as defaultFlags, isFlagKey, type FlagKey, type Flags } from "./flags";
 
 export type StoryPrefix = "CIM" | "CON" | "RES" | "VEN" | "COT" | "CAM" | "FIN" | "ACC";
 
@@ -22,11 +23,37 @@ export interface ModuleDef {
   paths: string[];
   /** Bandera que lo enciende. Sin bandera, el módulo siempre está encendido. */
   flag?: FlagKey;
+  /**
+   * Permiso mínimo para abrirlo (ACC-5): el `.ver` principal del módulo,
+   * de `PERMISO_MINIMO` de @mc/core. Una bandera dice si el módulo EXISTE;
+   * un permiso, si ESTA persona entra; se evalúan en ese orden
+   * (requireModule). Sin permiso, el módulo se abre a cualquier sesión,
+   * como sin bandera siempre está encendido: hoy las herramientas del
+   * equipo (cimientos, kit) y los de fase 2, que están apagados y reciben
+   * el suyo al encenderse.
+   */
+  permission?: Permiso;
+}
+
+/**
+ * Los permisos de una sesión, como los entrega lib/permisos (conjunto)
+ * o como llegan a la navegación (lista: las props de un componente
+ * cliente viajan serializadas).
+ */
+export type Permisos = ReadonlySet<Permiso> | readonly Permiso[];
+
+/** ¿Estos permisos abren este módulo? Un módulo sin permiso, sí. */
+export function puedeAbrir(permisos: Permisos, m: ModuleDef): boolean {
+  if (m.permission === undefined) return true;
+  // Una lista (la de la navegación) se busca tal cual: construir un Set
+  // por módulo y por render no compra nada con unas cuarenta llaves.
+  return "has" in permisos ? tienePermiso(permisos, m.permission) : permisos.includes(m.permission);
 }
 
 export const MODULES: readonly ModuleDef[] = [
   {
     slug: "resumen",
+    permission: PERMISO_MINIMO.resumen,
     name: "Resumen",
     group: "producto",
     phase: 1,
@@ -39,6 +66,7 @@ export const MODULES: readonly ModuleDef[] = [
   },
   {
     slug: "ventas",
+    permission: PERMISO_MINIMO.ventas,
     name: "Ventas",
     group: "producto",
     phase: 1,
@@ -51,6 +79,7 @@ export const MODULES: readonly ModuleDef[] = [
   },
   {
     slug: "cotizar",
+    permission: PERMISO_MINIMO.cotizar,
     name: "Cotizar",
     group: "producto",
     phase: 1,
@@ -63,6 +92,7 @@ export const MODULES: readonly ModuleDef[] = [
   },
   {
     slug: "campanas",
+    permission: PERMISO_MINIMO.campanas,
     name: "Campañas",
     group: "producto",
     phase: 1,
@@ -75,6 +105,7 @@ export const MODULES: readonly ModuleDef[] = [
   },
   {
     slug: "finanzas",
+    permission: PERMISO_MINIMO.finanzas,
     name: "Finanzas",
     group: "producto",
     phase: 1,
@@ -92,6 +123,7 @@ export const MODULES: readonly ModuleDef[] = [
   },
   {
     slug: "conexiones",
+    permission: PERMISO_MINIMO.conexiones,
     name: "Conexiones",
     group: "producto",
     phase: 1,
@@ -121,6 +153,7 @@ export const MODULES: readonly ModuleDef[] = [
   },
   {
     slug: "accesos",
+    permission: PERMISO_MINIMO.equipo,
     name: "Accesos",
     group: "construccion",
     phase: 1,
@@ -160,21 +193,52 @@ export function isEnabled(m: ModuleDef, flags: Flags = defaultFlags): boolean {
   return m.flag === undefined || flags[m.flag] === true;
 }
 
-/** Módulos de producto encendidos, en el orden de la navegación. */
-export function productModules(flags: Flags = defaultFlags): ModuleDef[] {
-  return MODULES.filter((m) => m.group === "producto" && isEnabled(m, flags));
+/**
+ * Módulos de producto encendidos, en el orden de la navegación. Con
+ * `permisos`, solo los que esa sesión puede abrir (ACC-5): es lo que
+ * pinta el menú. Sin `permisos` no se filtra por persona: es la lista
+ * del plan de construcción.
+ */
+export function productModules(flags: Flags = defaultFlags, permisos?: Permisos): ModuleDef[] {
+  return MODULES.filter((m) => m.group === "producto" && isEnabled(m, flags) && (permisos === undefined || puedeAbrir(permisos, m)));
 }
 
 export const PRODUCT_MODULES = productModules();
 export const PHASE2_MODULES = MODULES.filter((m) => m.phase === 2);
 
+export interface RequireModuleOptions {
+  /** Se inyecta en pruebas; en la app se usan las reales. */
+  flags?: Flags;
+  /**
+   * Los permisos de la sesión. Si se pasan, un módulo cuyo permiso no
+   * está responde 404, igual que con la bandera apagada: un 403
+   * confirmaría que el módulo existe. Si no se pasan, no se comprueba
+   * el permiso (el llamador síncrono de /kit, que es pública).
+   */
+  permisos?: Permisos;
+}
+
 /**
- * El módulo de una ruta, o 404 si no existe o su bandera está apagada.
- * Lo llama la página de cada módulo (hoy, ModulePlan) antes de renderizar:
- * apagar una bandera cierra la ruta directa, no solo la quita del menú.
+ * El módulo de una ruta, o 404 si no existe, si su bandera está apagada
+ * o —con `permisos`— si esta sesión no tiene el suyo, en ese orden.
+ * Apagar una bandera o quitar un permiso cierra la ruta directa, no
+ * solo la quita del menú.
+ *
+ * Es puro y síncrono a propósito: nav.tsx (cliente) importa este
+ * archivo, así que aquí no se abre la base. El que carga los permisos
+ * de la sesión es requireModuleAccess (lib/permisos/modulo.ts), que es
+ * lo que llama el layout de cada módulo. El segundo argumento acepta
+ * las banderas a secas, como antes de ACC-5.
  */
-export function requireModule(slug: string, flags: Flags = defaultFlags): ModuleDef {
+export function requireModule(slug: string, opciones: Flags | RequireModuleOptions = {}): ModuleDef {
+  const { flags = defaultFlags, permisos } = esFlags(opciones) ? { flags: opciones } : opciones;
   const m = moduleBySlug(slug);
   if (!m || !isEnabled(m, flags)) notFound();
+  if (permisos !== undefined && !puedeAbrir(permisos, m)) notFound();
   return m;
+}
+
+/** Un objeto de banderas tiene llaves de FLAG_KEYS; las opciones, `flags` o `permisos` (o nada). */
+function esFlags(x: Flags | RequireModuleOptions): x is Flags {
+  return Object.keys(x).some(isFlagKey);
 }

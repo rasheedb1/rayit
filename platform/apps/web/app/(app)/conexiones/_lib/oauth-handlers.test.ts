@@ -7,8 +7,8 @@
  * de NINGUNA tabla (recorriendo pg_catalog) contiene el access token, el
  * refresh token, el code ni el client secret.
  */
-import { randomBytes } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createHash, randomBytes } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   dumpTextColumns, EncryptedSecretStore, findSecretInDump, FixtureFetch, keyringFromEnv, loadFixtures, TokenCipher, withoutNetwork, type NetworkGuard,
 } from "@mc/connectors";
@@ -20,6 +20,8 @@ import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 
 const NOW = new Date("2026-09-22T10:00:00Z");
 const ORIGIN = "http://localhost:3000";
+// El volcado de R4 recorre todas las tablas del embebido: con la máquina cargada pasa de los 5 s por defecto.
+vi.setConfig({ testTimeout: 120_000 });
 const ENV = {
   NODE_ENV: "test",
   APP_URL: ORIGIN,
@@ -28,15 +30,26 @@ const ENV = {
   TIKTOK_LOGIN_CLIENT_SECRET: "TT-CLIENT-SECRET-SECRETO",
   META_APP_ID: "meta-app-id",
   META_APP_SECRET: "META-APP-SECRET-SECRETO",
+  GOOGLE_CLIENT_ID: "google-client-id",
+  GOOGLE_CLIENT_SECRET: "GOOGLE-CLIENT-SECRET-SECRETO",
 };
 const CODE_TT = "CODE-TIKTOK-SECRETO-1234567890";
 const CODE_IG = "CODE-INSTAGRAM-SECRETO-0987654321";
+const CODE_YT = "4/0AY-CODE-YOUTUBE-SECRETO-1122334455";
 /** Lo que los fixtures devuelven y que no puede aparecer en ninguna tabla ni salir en una URL nuestra. */
 const SECRETS = [
-  ENV.TIKTOK_LOGIN_CLIENT_SECRET, ENV.META_APP_SECRET, CODE_TT, CODE_IG,
+  ENV.TIKTOK_LOGIN_CLIENT_SECRET, ENV.META_APP_SECRET, ENV.GOOGLE_CLIENT_SECRET, CODE_TT, CODE_IG, CODE_YT,
   "act.demo-access-tiktok-0001-SECRETO", "rft.demo-refresh-tiktok-0001-SECRETO",
   "IGQVJ-short-demo-0001-SECRETO", "IGAA-long-demo-0001-SECRETO",
+  "ya29.demo-access-youtube-0001-SECRETO", "1//demo-refresh-youtube-0001-SECRETO",
 ];
+
+const CREATOR_LAURA = "00000002-0000-4000-8000-000000000003";
+const USER_LAURA = "00000002-0000-4000-8000-000000000002";
+/** Andrés Pardo, el mánager de la demo (seed 0003): membership 'admin'. */
+const USER_MANAGER = "00000002-0000-4000-8000-000000000004";
+const ROLE_MANAGER_CONECTA = "00000009-0000-4000-8000-00000000ac81";
+const USER_EDITOR = "00000009-0000-4000-8000-0000000000c2";
 
 let db: EmbeddedDb;
 let guard: NetworkGuard;
@@ -45,6 +58,10 @@ let handlers: OAuthHandlers;
 let clock = NOW;
 
 const withWorkspace = <T,>(fn: (tx: WorkspaceTx) => Promise<T>) => db.withWorkspace(SEED_WORKSPACE_ID, fn);
+/** Los mismos handlers con la sesión de una persona (app.user_id fijado, como lib/db desde CIM-3). */
+function handlersAs(userId: string): OAuthHandlers {
+  return createOAuthHandlers({ env: ENV, withWorkspace: (fn) => db.withWorkspace(SEED_WORKSPACE_ID, fn, { userId }), fetch: fetch.fetch, now: () => clock });
+}
 
 beforeAll(async () => {
   guard = withoutNetwork();
@@ -52,13 +69,27 @@ beforeAll(async () => {
   fetch = new FixtureFetch([
     ...(await loadFixtures("tiktok", [["oauth.token", "code.ok"], ["user.info", "ok"]])),
     ...(await loadFixtures("instagram", [["oauth.access_token", "ok"], ["oauth.long_lived", "ok"], ["me", "ok"]])),
+    ...(await loadFixtures("youtube", [["oauth.token", "code.ok"], ["channels.list", "mine.ok"]])),
   ]);
   handlers = createOAuthHandlers({ env: ENV, withWorkspace, fetch: fetch.fetch, now: () => clock });
-}, 60_000);
+  await db.execAsSuperuser(`
+    INSERT INTO app_user (id, email, name) VALUES ('${USER_EDITOR}', 'edita@ejemplo.com', 'Edita Ruiz') ON CONFLICT DO NOTHING;
+    INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${SEED_WORKSPACE_ID}', '${USER_EDITOR}', system_role_id('creator', 'editor')) ON CONFLICT DO NOTHING;
+    -- «El mánager con la casilla de ACC-4» (ACC-4 aún no existe): un rol a medida del workspace con los permisos del
+    -- Mánager de fábrica más conectar y desconectar. Andrés (seed 0003) es 'manager' de fábrica y pasa a este rol.
+    INSERT INTO role (id, workspace_id, key, workspace_kind, label_es, is_system)
+    VALUES ('${ROLE_MANAGER_CONECTA}', '${SEED_WORKSPACE_ID}', 'manager_conecta', 'creator', 'Mánager (también conecta mis cuentas)', false) ON CONFLICT DO NOTHING;
+    INSERT INTO role_permission (role_id, permission_key)
+      SELECT '${ROLE_MANAGER_CONECTA}', permission_key FROM role_permission WHERE role_id = system_role_id('creator', 'manager')
+      UNION VALUES ('${ROLE_MANAGER_CONECTA}'::uuid, 'conexiones.cuenta.conectar'), ('${ROLE_MANAGER_CONECTA}'::uuid, 'conexiones.cuenta.desconectar')
+    ON CONFLICT DO NOTHING;
+    UPDATE membership SET role_id = '${ROLE_MANAGER_CONECTA}' WHERE workspace_id = '${SEED_WORKSPACE_ID}' AND user_id = '${USER_MANAGER}';
+  `);
+}, 300_000); // Postgres embebido con las migraciones y los seeds: con la máquina cargada pasa del minuto.
 
 afterAll(async () => {
-  await db.close();
-  guard.restore();
+  await db?.close();
+  guard?.restore();
 });
 
 function startRequest(provider: string, body: Record<string, string>): Request {
@@ -72,8 +103,8 @@ function cookieOf(res: Response): string {
   return m![1]!;
 }
 
-async function start(provider: string) {
-  const res = await handlers.start(startRequest(provider, { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), provider);
+async function start(provider: string, h: OAuthHandlers = handlers) {
+  const res = await h.start(startRequest(provider, { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), provider);
   expect(res.status).toBe(303);
   const location = new URL(res.headers.get("location")!);
   const state = location.searchParams.get("state")!;
@@ -101,6 +132,18 @@ describe("start", () => {
     expect(await get.text()).toMatch(/Conectar/);
   });
 
+  it("un POST sin cuerpo (o con uno que no es un formulario) no es un 500: vuelve con el aviso de consentimiento", async () => {
+    // Se vio en producción al cerrar CON-B: req.formData() lanza sin Content-Type de formulario.
+    for (const req of [
+      new Request(`${ORIGIN}/conexiones/oauth/tiktok/start`, { method: "POST" }),
+      new Request(`${ORIGIN}/conexiones/oauth/tiktok/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
+    ]) {
+      const res = await handlers.start(req, "tiktok");
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(`${ORIGIN}/conexiones?error=consentimiento`);
+    }
+  });
+
   it("con consentimiento: 303 a TikTok con state, y cookie httpOnly, SameSite=Lax, 10 minutos, sin nada secreto", async () => {
     const { res, location, state, cookie } = await start("tiktok");
     expect(location.origin + location.pathname).toBe("https://www.tiktok.com/v2/auth/authorize/");
@@ -117,10 +160,42 @@ describe("start", () => {
     expect(cookie).not.toContain(ENV.TOKEN_ENCRYPTION_KEY);
   });
 
-  it("una red sin app configurada responde 503 nombrando las variables", async () => {
+  it("una red sin app configurada responde 404 nombrando las variables", async () => {
     const res = await handlers.start(startRequest("tiktok-business", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "tiktok-business");
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(404);
     expect(await res.text()).toMatch(/TIKTOK_BUSINESS_APP_ID/);
+  });
+});
+
+describe("CON-8 apagado: YouTube sin GOOGLE_CLIENT_ID ni GOOGLE_CLIENT_SECRET", () => {
+  const SIN_GOOGLE = Object.fromEntries(Object.entries(ENV).filter(([k]) => !k.startsWith("GOOGLE_CLIENT_")));
+  const apagado = () => createOAuthHandlers({ env: SIN_GOOGLE, withWorkspace, fetch: fetch.fetch, now: () => clock });
+
+  it("start y callback responden 404 con la frase, sin llamar a Google ni tocar la base; nunca 500", async () => {
+    const h = apagado();
+    const before = await countConnections();
+    const calls = fetch.calls.length;
+    const frase = /YouTube no está configurado en este entorno: faltan GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET/;
+
+    const inicio = await h.start(startRequest("youtube", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "youtube");
+    expect(inicio.status).toBe(404);
+    expect(await inicio.text()).toMatch(frase);
+    expect(inicio.headers.get("set-cookie")).toBeNull();
+
+    // Con code y state (alguien que vuelve de Google con un enlace viejo), con error de la plataforma y sin nada.
+    const consultas: Record<string, string>[] = [{ code: CODE_YT, state: "x" }, { error: "access_denied" }, {}];
+    for (const query of consultas) {
+      const res = await h.callback(callbackRequest("youtube", query), "youtube");
+      expect(res.status).toBe(404);
+      expect(await res.text()).toMatch(frase);
+      expect(res.headers.get("set-cookie")).toMatch(/Max-Age=0/);
+    }
+    expect(fetch.calls.length).toBe(calls);
+    expect(await countConnections()).toBe(before);
+  });
+
+  it("las otras redes siguen vivas: TikTok arranca igual", async () => {
+    await start("tiktok", apagado());
   });
 });
 
@@ -192,7 +267,12 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     expect(active.map((c) => c.purpose)).toEqual(["analytics"]);
     expect(active[0]!.policyVersion).toBe(CONSENT_POLICY_VERSION);
     const evidence = await db.queryAsSuperuser<{ evidence: Record<string, unknown> }>("SELECT evidence FROM data_consent WHERE id = $1", [active[0]!.id]);
-    expect(evidence.rows[0]!.evidence).toMatchObject({ ip: "203.0.113.7", userAgent: "vitest", policyVersion: CONSENT_POLICY_VERSION, scopesGranted: row.scopes, at: NOW.toISOString() });
+    expect(evidence.rows[0]!.evidence).toMatchObject({
+      v: 2, method: "oauth", declaredOwner: false, ipHash: createHash("sha256").update("203.0.113.7").digest("hex"), userAgent: "vitest",
+      policyVersion: CONSENT_POLICY_VERSION, scopesGranted: row.scopes, at: NOW.toISOString(), onBehalfOf: { creatorId: CREATOR_LAURA },
+    });
+    expect(evidence.rows[0]!.evidence).not.toHaveProperty("ip");
+    expect(evidence.rows[0]!.evidence).not.toHaveProperty("actedBy");
     expect(String(evidence.rows[0]!.evidence["textShown"])).toMatch(/TikTok/);
 
     const log = await db.queryAsSuperuser<{ endpoint: string; ok: boolean; connection_id: string | null }>("SELECT endpoint, ok, connection_id FROM api_call_log ORDER BY id");
@@ -222,6 +302,75 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     expect(new Date(row.accessExpiresAt!).getTime() - NOW.getTime()).toBe(5_183_944_000);
     const active = (await withWorkspace((tx) => listConsents(tx, id))).filter((c) => c.revokedAt === null).map((c) => c.purpose).sort();
     expect(active).toEqual(["analytics", "audience_demographics"]);
+  });
+
+  it("YouTube (CON-8): 303 a Google con access_type=offline y prompt=consent; el callback deja el canal con sus dos scopes y el token cifrado", async () => {
+    const { location, cookie, state } = await start("youtube");
+    expect(location.origin + location.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
+    expect(location.searchParams.get("client_id")).toBe("google-client-id");
+    expect(location.searchParams.get("redirect_uri")).toBe(`${ORIGIN}/conexiones/oauth/youtube/callback`);
+    expect(location.searchParams.get("access_type")).toBe("offline");
+    expect(location.searchParams.get("prompt")).toBe("consent");
+    expect(location.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly");
+
+    const res = await handlers.callback(callbackRequest("youtube", { code: CODE_YT, state, scope: "https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly" }, cookie), "youtube");
+    expect(res.status).toBe(303);
+    const id = new URL(res.headers.get("location")!).searchParams.get("conectada")!;
+    for (const s of SECRETS) expect(res.headers.get("location")!).not.toContain(s);
+
+    const row = (await withWorkspace((tx) => listConnections(tx))).find((r) => r.id === id)!;
+    expect(row.platformId).toBe("youtube");
+    // El id del canal sale de channels.list?mine=true: el endpoint de token de Google no lo dice.
+    expect(row.externalAccountId).toBe("UCdemo000000000000000001");
+    expect(row.handle).toBe("lauracocinafacil");
+    expect(row.status).toBe("active");
+    expect(row.scopes).toEqual(["https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/yt-analytics.readonly"]);
+    // Una hora: expires_in 3599 del fixture. Google no da vencimiento del refresh token.
+    expect(row.accessExpiresAt).toBe("2026-09-22T10:59:59.000Z");
+    const expiry = await db.queryAsSuperuser<{ refresh_expires_at: unknown }>("SELECT refresh_expires_at FROM social_connection WHERE id = $1", [id]);
+    expect(expiry.rows[0]!.refresh_expires_at).toBeNull();
+    // El seed traía el canal con ref 'seed://…': se reconectó con una ref cifrada, no se duplicó.
+    expect(row.secretRef).toMatch(/^enc:youtube:[0-9a-f-]{36}$/);
+
+    // yt-analytics.readonly abre reports.query: dos finalidades consentidas.
+    const active = (await withWorkspace((tx) => listConsents(tx, id))).filter((c) => c.revokedAt === null).map((c) => c.purpose).sort();
+    expect(active).toEqual(["analytics", "audience_demographics"]);
+
+    // El token queda cifrado y se descifra con la clave del entorno; el refresh token es el de Google.
+    const tokens = await withWorkspace((tx) => new EncryptedSecretStore({ db: tx, cipher: new TokenCipher(keyringFromEnv(ENV)) }).get(row.secretRef));
+    expect(tokens?.accessToken).toBe("ya29.demo-access-youtube-0001-SECRETO");
+    expect(tokens?.refreshToken).toBe("1//demo-refresh-youtube-0001-SECRETO");
+
+    const log = await db.queryAsSuperuser<{ endpoint: string; ok: boolean }>("SELECT endpoint, ok FROM api_call_log WHERE connection_id = $1 ORDER BY id", [id]);
+    expect(log.rows.map((r) => r.endpoint)).toEqual(["oauth.token", "youtube.channels.list"]);
+    expect(log.rows.every((r) => r.ok)).toBe(true);
+  });
+
+  it("YouTube: una cuenta de Google sin canal no crea nada y vuelve con ?error=sin_canal", async () => {
+    const sinCanal = new FixtureFetch([
+      ...(await loadFixtures("youtube", [["oauth.token", "code.ok"], ["channels.list", "mine.empty"]])),
+    ]);
+    const otros = createOAuthHandlers({ env: ENV, withWorkspace, fetch: sinCanal.fetch, now: () => clock });
+    const startRes = await otros.start(startRequest("youtube", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "youtube");
+    const state = new URL(startRes.headers.get("location")!).searchParams.get("state")!;
+    const before = await countConnections();
+    const res = await otros.callback(callbackRequest("youtube", { code: CODE_YT, state }, cookieOf(startRes)), "youtube");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/conexiones?error=sin_canal`);
+    expect(await countConnections()).toBe(before);
+    for (const s of SECRETS) expect(JSON.stringify(sinCanal.calls)).not.toContain(s);
+  });
+
+  it("YouTube: Google no entrega refresh token → ?error=sin_renovacion, no «la plataforma no respondió», y nada se guarda", async () => {
+    const sinRenovacion = new FixtureFetch(await loadFixtures("youtube", [["oauth.token", "code.sin_refresh"]]));
+    const otros = createOAuthHandlers({ env: ENV, withWorkspace, fetch: sinRenovacion.fetch, now: () => clock });
+    const startRes = await otros.start(startRequest("youtube", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "youtube");
+    const state = new URL(startRes.headers.get("location")!).searchParams.get("state")!;
+    const before = await countConnections();
+    const res = await otros.callback(callbackRequest("youtube", { code: CODE_YT, state }, cookieOf(startRes)), "youtube");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/conexiones?error=sin_renovacion`);
+    expect(await countConnections()).toBe(before);
   });
 
   it("reconectar TikTok reutiliza la misma fila y la misma ref: una sola fila en connection_secret", async () => {
@@ -266,6 +415,7 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
 
   it("R4: ninguna columna de texto, jsonb, arreglo o bytea de ninguna tabla contiene un token, el code ni el client secret", async () => {
     const dump = await dumpTextColumns({ query: (text, params) => db.queryAsSuperuser(text, params) });
+    expect(findSecretInDump(dump, ["203.0.113.7"]), "la IP no va en claro en ninguna evidencia").toBeNull();
     expect(dump.length).toBeGreaterThan(100);
     expect(dump.some((d) => d.table === "connection_secret" && d.column === "ciphertext")).toBe(true);
     expect(dump.some((d) => d.table === "data_consent" && d.column === "evidence")).toBe(true);
@@ -274,5 +424,105 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     const recorded = JSON.stringify(fetch.calls);
     for (const s of SECRETS) expect(recorded).not.toContain(s);
     expect(guard.attempts).toBe(0);
+  }, 60_000);
+});
+
+describe("consentimiento delegado (ACC-8): el callback de CON-3 deja la misma evidencia", () => {
+  it("el mánager autoriza el Instagram de la creadora: consentimiento a nombre de ella con él como operador, aviso a ella, bitácora con él", async () => {
+    const manager = handlersAs(USER_MANAGER);
+    const { cookie, state } = await start("instagram", manager);
+    const res = await manager.callback(callbackRequest("instagram", { code: CODE_IG, state }, cookie), "instagram");
+    expect(res.status).toBe(303);
+    const id = new URL(res.headers.get("location")!).searchParams.get("conectada")!;
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    const active = (await withWorkspace((tx) => listConsents(tx, id))).filter((c) => c.revokedAt === null);
+    expect(active.length).toBe(2);
+    for (const c of active) {
+      const ev = await db.queryAsSuperuser<{ creator_id: string; evidence: Record<string, unknown> }>("SELECT creator_id, evidence FROM data_consent WHERE id = $1", [c.id]);
+      expect(ev.rows[0]!.creator_id).toBe(CREATOR_LAURA);
+      expect(ev.rows[0]!.evidence).toMatchObject({ v: 2, method: "oauth", onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, email: "andres@ejemplo.com", roleKey: "manager_conecta" } });
+    }
+    const notice = await db.queryAsSuperuser<{ user_id: string; body_es: string }>("SELECT user_id, body_es FROM notification WHERE kind = 'connection_added' AND entity_id = $1", [id]);
+    expect(notice.rows.length).toBe(1);
+    expect(notice.rows[0]!.user_id).toBe(USER_LAURA);
+    expect(notice.rows[0]!.body_es).toMatch(/^Andrés Pardo conectó la cuenta @laura\.cocinafacil de Instagram el .+ en tu nombre\./);
+    const audit = await db.queryAsSuperuser<{ actor_user_id: string; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action IN ('connection.added', 'connection.reconnected', 'connection.authorized') AND entity_id = $1 ORDER BY id DESC LIMIT 1", [id]);
+    expect(audit.rows[0]!.actor_user_id).toBe(USER_MANAGER);
+    expect(audit.rows[0]!.after).toMatchObject({ accessMode: "direct_oauth", onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "manager_conecta" } });
+    expect(JSON.stringify(audit.rows[0]!.after)).not.toContain("@ejemplo.com");
+    const row = (await withWorkspace((tx) => listConnections(tx))).find((r) => r.id === id)!;
+    expect(row.secretRef).toMatch(/^enc:instagram:/);
+    for (const s of SECRETS) expect(JSON.stringify(notice.rows) + JSON.stringify(audit.rows)).not.toContain(s);
+  });
+
+  it("un editor sin conexiones.cuenta.conectar no llega a la plataforma, y con una cookie ajena el callback tampoco escribe", async () => {
+    const editor = handlersAs(USER_EDITOR);
+    const before = await countConnections();
+    const calls = fetch.calls.length;
+    const denied = await editor.start(startRequest("tiktok", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "tiktok");
+    expect(denied.status).toBe(303);
+    expect(denied.headers.get("location")).toBe(`${ORIGIN}/conexiones?error=sin_permiso`);
+    expect(denied.headers.get("set-cookie")).toBeNull();
+    // Con el inicio de otra sesión (la cookie del mánager) el callback comprueba el permiso antes de guardar nada.
+    const { cookie, state } = await start("tiktok", handlersAs(USER_MANAGER));
+    const res = await editor.callback(callbackRequest("tiktok", { code: CODE_TT, state }, cookie), "tiktok");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/conexiones?error=sin_permiso`);
+    expect(await countConnections()).toBe(before);
+    expect(fetch.calls.length, "sin permiso no se canjea el code: ningún token que luego habría que tirar").toBe(calls);
+    const consents = await db.queryAsSuperuser<{ n: number }>("SELECT count(*)::int AS n FROM data_consent WHERE evidence->'actedBy'->>'userId' = $1", [USER_EDITOR]);
+    expect(Number(consents.rows[0]!.n)).toBe(0);
+  });
+});
+
+describe("alcance (ACC-6): un miembro acotado no se queda con la cuenta de otra creadora", () => {
+  it("con alcance por marca no hay creador en su alcance: el arranque vuelve con ?error=fuera_de_alcance y no va a la plataforma", async () => {
+    const MARCA = "0000000a-0000-4000-8000-0000000000f4";
+    await db.execAsSuperuser(`
+      INSERT INTO app_user (id, email) VALUES ('${MARCA}', 'marca.oauth@ejemplo.com') ON CONFLICT DO NOTHING;
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${SEED_WORKSPACE_ID}', '${MARCA}', '${ROLE_MANAGER_CONECTA}') ON CONFLICT DO NOTHING;
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+      SELECT '${SEED_WORKSPACE_ID}', '${MARCA}', 'company', company_id FROM company_link WHERE workspace_id = '${SEED_WORKSPACE_ID}' LIMIT 1
+      ON CONFLICT DO NOTHING;
+    `);
+    const calls = fetch.calls.length;
+    const res = await handlersAs(MARCA).start(startRequest("tiktok", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "tiktok");
+    expect(res.status).toBe(303);
+    expect(new URL(res.headers.get("location")!).searchParams.get("error")).toBe("fuera_de_alcance");
+    expect(fetch.calls.length, "no se habló con la plataforma").toBe(calls);
+  });
+
+  const MIEMBRO = "0000000a-0000-4000-8000-0000000000f2";
+  const SOFIA = "0000000a-0000-4000-8000-0000000000f3";
+
+  it("la cuenta de TikTok ya es de Sofía y el miembro (que sí puede conectar) solo tiene alcance a Laura: ?error=fuera_de_alcance y la fila no cambia", async () => {
+    await db.execAsSuperuser(`
+      INSERT INTO app_user (id, email) VALUES ('${MIEMBRO}', 'miembro.oauth@ejemplo.com') ON CONFLICT DO NOTHING;
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${SEED_WORKSPACE_ID}', '${MIEMBRO}', '${ROLE_MANAGER_CONECTA}') ON CONFLICT DO NOTHING;
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id) VALUES ('${SEED_WORKSPACE_ID}', '${MIEMBRO}', 'creator', '${CREATOR_LAURA}') ON CONFLICT DO NOTHING;
+      INSERT INTO creator_profile (id, workspace_id, display_name) VALUES ('${SOFIA}', '${SEED_WORKSPACE_ID}', 'Sofía') ON CONFLICT DO NOTHING;
+    `);
+    // La autorización viva de open_id_demo_laura pasa a ser de Sofía (una agencia que reparte cuentas).
+    await db.queryAsSuperuser(`UPDATE social_connection SET creator_id = $1 WHERE external_account_id = 'open_id_demo_laura'`, [SOFIA]);
+    const antes = await db.queryAsSuperuser<{ creator_id: string; secret_ref: string }>(
+      "SELECT creator_id, secret_ref FROM social_connection WHERE external_account_id = 'open_id_demo_laura'",
+    );
+    expect(antes.rows).toHaveLength(1);
+
+    try {
+      const acotado = handlersAs(MIEMBRO);
+      const s = await acotado.start(startRequest("tiktok", { acepto: "on", policy_version: CONSENT_POLICY_VERSION }), "tiktok");
+      const state = new URL(s.headers.get("location")!).searchParams.get("state")!;
+      const res = await acotado.callback(callbackRequest("tiktok", { code: CODE_TT, state }, cookieOf(s)), "tiktok");
+      expect(res.status).toBe(303);
+      expect(new URL(res.headers.get("location")!).searchParams.get("error")).toBe("fuera_de_alcance");
+
+      const despues = await db.queryAsSuperuser<{ creator_id: string; secret_ref: string }>(
+        "SELECT creator_id, secret_ref FROM social_connection WHERE external_account_id = 'open_id_demo_laura'",
+      );
+      expect(despues.rows).toEqual(antes.rows);
+    } finally {
+      await db.queryAsSuperuser(`UPDATE social_connection SET creator_id = $1 WHERE external_account_id = 'open_id_demo_laura'`, [CREATOR_LAURA]);
+    }
   });
 });

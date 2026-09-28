@@ -18,10 +18,10 @@ Componentes compartidos de On Cue. Galería en `/kit` (bandera `kit`, encendida 
 | `Dialog` | `dialog.tsx` | Modal con portal en `<body>`: el foco entra y vuelve, Tab da la vuelta, Escape y el fondo cierran, lo de detrás queda `inert` y quieto. Quien lo abre lo monta y lo desmonta (`onClose`). Pie de botones: `flex flex-wrap justify-end gap-2`, **Cancelar primero y la acción después** (`variant="danger"` si no se deshace): la destructiva cae siempre en el mismo sitio y el foco inicial nunca en ella. Nació en el pipeline (VEN-8); en el kit desde VEN-7 r4. Cliente. |
 | `ConfirmInline` | `confirm-inline.tsx` | Acción que no se deshace en dos pasos y en el mismo sitio: el primer botón pregunta con su consecuencia (foco en la pregunta), el segundo ejecuta; Escape o Cancelar devuelven el foco. Si el mismo sitio alterna dos acciones (encender/apagar), dale una `key` por estado. Nació en Cotizar (ConfirmarAccion); en el kit desde VEN-10. Cliente. |
 | `EmptyState` | `empty-state.tsx` | Título, descripción y acción cuando no hay datos. |
-| `DataAsOf` | `data-as-of.tsx` | «datos hasta el 20 sep · Instagram», con `<time>` y fecha en UTC. |
+| `DataAsOf` | `data-as-of.tsx` | «datos hasta el 20 sep · Instagram», con `<time>`. `opts` toma el locale y la zona del workspace (`formatterFor`); sin él, es-CO y UTC. |
 | `Kpi`, `KpiRow` | `kpi.tsx` | Cifra con nota, delta (signo en el texto), sparkline, enlace y esqueleto. Cuatro por fila en escritorio. `deltaText` opcional para un delta que no es relativo («+2,1 puntos»). |
 | `DataTable`, `CellMain` | `data-table.tsx` | Columnas con align num, caption, vacío, carga, error, fila clicable. Cabecera fija con `maxHeight` (scroll interno). `sort` y `page` previstos sin implementar. |
-| `LineChart` | `line-chart.tsx` | Líneas SVG con ventana sombreada, tooltip y teclado. `ariaLabel` obligatorio. Cliente. |
+| `LineChart` | `line-chart.tsx` | Líneas SVG con ventana sombreada, tooltip y teclado. `ariaLabel` obligatorio. `shades` (CAM-3): varias ventanas con tono `accent` o `muted`, como la línea base y la campaña. Cliente. |
 | `BarChart` | `bar-chart.tsx` | Barras apiladas o agrupadas, con Total. `axisLabels` opcional: etiqueta corta bajo la barra, la categoría entera en tooltip y tabla. Cliente. |
 | `ChartCard` | `chart-card.tsx` | Título, leyenda, «Ver tabla / Ver gráfico» (tabla derivada del mismo dato), nota, DataAsOf, carga y error. |
 | `chart-utils.ts` | — | Colores por nombre de token y formato por nombre (`int`, `compact`, `pct`, `money`, `money-full`), para que crucen la frontera servidor → cliente. |
@@ -40,3 +40,11 @@ Formato de cifras y fechas: `lib/format.ts` (`formatMoney`, `formatInt`, `format
 ## Regla del plan
 
 Agregar un componente es libre. Cambiar la API de uno existente pide PR revisado por Nicolás: una vez que Resumen, Ventas o Cotizar lo usan, cambiarlo cuesta dos PR.
+
+## Lo que un módulo todavía tiene en casa
+
+`Casilla` (la casilla de «se repite cada mes» y «es deducible») vive en
+`app/(app)/finanzas/gastos/form.tsx`, no aquí: FIN-5 es el primer módulo
+que la necesita y cambiar la API de un componente del kit cuesta dos PR.
+Sube al kit —con su `Section` en `/kit` y su prueba— cuando un segundo
+módulo la pida.

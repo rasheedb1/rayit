@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import { readAlertSignalCounts } from '../src/queries/entregabilidad.ts';
 import { skipQueuedTouch } from '../src/queries/bandejas.ts';
 import { notifyTouchHeld, releaseHeldTouch, resolveUnconfirmedTouch, resumeEnrollment } from '../src/queries/outreach.ts';
+import { membershipSql } from './membresia.ts';
 import { openTestDb, SETUP_TIMEOUT, type TestDb } from './pglite.ts';
 
 const id = (kind: string) => `00000069-0000-4000-8000-${kind.padStart(12, '0')}`;
@@ -41,7 +42,7 @@ before(async () => {
     INSERT INTO outbound_policy (workspace_id, postal_address) VALUES ('${WS}', 'Calle 93 # 11-26, Bogotá');
     INSERT INTO app_user (id, email, name) VALUES ('${DUENA}', 'duena@salidas.test', 'Dueña'),
                                                   ('${CLIENTE}', 'cliente@salidas.test', 'Cliente');
-    INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS}', '${DUENA}', 'owner'), ('${WS}', '${CLIENTE}', 'client');
+    ${membershipSql([{ workspaceId: WS, userId: DUENA, kind: 'owner' }, { workspaceId: WS, userId: CLIENTE, kind: 'client' }])}
     INSERT INTO company (id, name, owner_workspace_id) VALUES ('${CO}', 'Vitalé', '${WS}');
     INSERT INTO company_link (workspace_id, company_id) VALUES ('${WS}', '${CO}');
     INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES

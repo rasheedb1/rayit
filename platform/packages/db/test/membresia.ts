@@ -10,13 +10,17 @@
  *
  *   owner  → 'owner' / owner
  *   member → 'member' / editor (creador) o manager (agencia), el relleno de 0034_access_control
+ *   admin  → 'admin' / manager (creador) o admin (agencia)
+ *   viewer → 'viewer' / viewer
  *   client → 'client' / viewer, el relleno de 0034_access_control
  */
-export type MembershipKind = 'owner' | 'member' | 'client';
+export type MembershipKind = 'owner' | 'admin' | 'member' | 'viewer' | 'client';
 
 const NEW_KEY: Record<MembershipKind, string> = {
   owner: "'owner'",
   member: "CASE w.kind WHEN 'agency' THEN 'manager' ELSE 'editor' END",
+  admin: "CASE w.kind WHEN 'agency' THEN 'admin' ELSE 'manager' END",
+  viewer: "'viewer'",
   client: "'viewer'",
 };
 

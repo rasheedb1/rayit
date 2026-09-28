@@ -33,6 +33,14 @@ export interface PlatformApiErrorInit {
   kind: ApiErrorKind;
   /** Código de la plataforma (o nuestro: 'network', 'aborted', 'quota_exhausted'). */
   code: string;
+  /**
+   * Subcódigo de la plataforma, cuando lo da (Meta: `error_subcode`). El
+   * `code` de Meta es genérico —100 es «parámetro»— y el subcódigo es lo
+   * único que distingue «a la cuenta le faltan seguidores» (2108006) de
+   * un error nuestro. CON-7 lo necesita para saber si un fallo es un
+   * requisito que explicar o un defecto que arreglar.
+   */
+  subcode?: string;
   /** Explicación corta en español, apta para status_detail y para la UI. */
   messageEs: string;
   httpStatus?: number;
@@ -51,6 +59,8 @@ export class PlatformApiError extends Error {
   readonly httpStatus: number | undefined;
   readonly retryAfterS: number | undefined;
   readonly requestId: string | undefined;
+  /** Subcódigo de la plataforma, si lo dio (ver PlatformApiErrorInit). */
+  readonly subcode: string | undefined;
 
   constructor(init: PlatformApiErrorInit) {
     super(`${init.platformId} ${init.endpoint} ${init.code}: ${init.messageEs}`, init.cause === undefined ? undefined : { cause: init.cause });
@@ -63,6 +73,7 @@ export class PlatformApiError extends Error {
     this.httpStatus = init.httpStatus;
     this.retryAfterS = init.retryAfterS;
     this.requestId = init.requestId;
+    this.subcode = init.subcode;
   }
 
   get isRetryable(): boolean {
@@ -83,6 +94,8 @@ export interface ParsedApiError {
   code: string;
   message?: string;
   requestId?: string;
+  /** `error_subcode` de Meta y equivalentes; ver PlatformApiErrorInit.subcode. */
+  subcode?: string;
 }
 
 export interface ClassifyInput {
@@ -98,7 +111,8 @@ export interface ClassifyInput {
 
 /** Códigos que significan «el token no sirve», por plataforma. */
 export const AUTH_CODES: Readonly<Record<PlatformId, readonly string[]>> = {
-  tiktok: ['access_token_invalid', 'scope_not_authorized'],
+  // ed_*: códigos del proveedor de datos de TikTok (CON-12, public/tiktok-aggregator.ts).
+  tiktok: ['access_token_invalid', 'scope_not_authorized', 'ed_invalid_token', 'ed_unverified_email'],
   instagram: ['190'],
   facebook: ['190'],
   youtube: ['authError', 'unauthorized'],
@@ -106,7 +120,7 @@ export const AUTH_CODES: Readonly<Record<PlatformId, readonly string[]>> = {
 
 /** Códigos de cuota agotada por una ventana larga (horas o el día): no se reintenta ahora. */
 export const QUOTA_CODES: Readonly<Record<PlatformId, readonly string[]>> = {
-  tiktok: [],
+  tiktok: ['ed_units_depleted', 'ed_subscription_expired'],
   instagram: ['4', '17', '32', '613', '80001', '80002', '80004'],
   facebook: ['4', '17', '32', '613', '80001', '80002', '80004'],
   youtube: ['quotaExceeded', 'dailyLimitExceeded'],
@@ -114,14 +128,27 @@ export const QUOTA_CODES: Readonly<Record<PlatformId, readonly string[]>> = {
 
 /** Códigos transitorios que algunas plataformas mandan con HTTP 400/403. */
 export const TRANSIENT_CODES: Readonly<Record<PlatformId, readonly string[]>> = {
-  tiktok: ['internal_error'],
+  tiktok: ['internal_error', 'ed_internal_error'],
   instagram: ['1', '2'],       // «An unknown error has occurred», «Service temporarily unavailable»
   facebook: ['1', '2'],
   youtube: ['backendError', 'internalError'],
 };
 
 /** Códigos de rate limit corto (segundos o un minuto): transitorio con espera. */
-const RATE_LIMIT_CODES = new Set(['rate_limit_exceeded', 'rateLimitExceeded', 'userRateLimitExceeded', 'rate_limit']);
+const RATE_LIMIT_CODES = new Set(['rate_limit_exceeded', 'rateLimitExceeded', 'userRateLimitExceeded', 'rate_limit', 'ed_rate_limit']);
+
+/**
+ * Códigos definitivos que llegan con un estado HTTP que por sí solo
+ * diría otra cosa. El proveedor de datos de TikTok manda sus códigos
+ * COMO estado HTTP, y el 520 (publicación restringida) no es un 5xx
+ * transitorio: reintentarlo gasta unidades para nada.
+ */
+export const PERMANENT_CODES_BY_PLATFORM: Readonly<Record<PlatformId, readonly string[]>> = {
+  tiktok: ['ed_post_restricted', 'ed_topic_restricted'],
+  instagram: [],
+  facebook: [],
+  youtube: [],
+};
 
 /** TikTok Accounts API: 40100–40199 son de autenticación (cabecera de platforms/tiktok.ts). */
 const TIKTOK_BUSINESS_AUTH_RANGE: readonly [number, number] = [40100, 40199];
@@ -129,7 +156,7 @@ const TIKTOK_BUSINESS_AUTH_RANGE: readonly [number, number] = [40100, 40199];
 export function classifyApiError(input: ClassifyInput): PlatformApiError {
   const { platformId, endpoint, httpStatus, parsed } = input;
   const code = parsed?.code ?? (input.failure ?? (httpStatus !== undefined ? `http_${httpStatus}` : 'unknown'));
-  const base = { platformId, endpoint, code, httpStatus, retryAfterS: input.retryAfterS, requestId: parsed?.requestId, cause: input.cause };
+  const base = { platformId, endpoint, code, httpStatus, retryAfterS: input.retryAfterS, requestId: parsed?.requestId, subcode: parsed?.subcode, cause: input.cause };
 
   if (input.failure === 'aborted') {
     return new PlatformApiError({ ...base, kind: 'transient', messageEs: 'La llamada se canceló antes de terminar.' });
@@ -160,6 +187,7 @@ export function kindFor(platformId: PlatformId, httpStatus: number | undefined, 
     if (httpStatus === 429) return 'transient';
     if (QUOTA_CODES[platformId].includes(code)) return 'quota';
     if (RATE_LIMIT_CODES.has(code) || TRANSIENT_CODES[platformId].includes(code)) return 'transient';
+    if (PERMANENT_CODES_BY_PLATFORM[platformId].includes(code)) return 'permanent';
     if (platformId === 'tiktok' && /^\d{5}$/.test(code)) {
       const n = Number(code);
       if (n >= TIKTOK_BUSINESS_AUTH_RANGE[0] && n <= TIKTOK_BUSINESS_AUTH_RANGE[1]) return 'auth';

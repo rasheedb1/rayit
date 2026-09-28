@@ -15,6 +15,11 @@ export type LineChartProps = {
   fromZero?: boolean;
   /** Ventana sombreada por índices de labels, con etiqueta ("Campaña 24–31 ago"). */
   shade?: { from: number; to: number; label: string };
+  /**
+   * Varias ventanas sombreadas, en orden (CAM-3: la línea base en tono
+   * neutro y la campaña en el acento). Se suman a `shade` si viene.
+   */
+  shades?: ChartShade[];
   format?: ValueFormat;
   axisFormat?: ValueFormat;
   currency?: string;
@@ -26,6 +31,14 @@ export type LineChartProps = {
   className?: string;
 };
 
+/** Una ventana sombreada: índices de labels (ambos incluidos), etiqueta y tono. */
+export type ChartShade = { from: number; to: number; label: string; tone?: "accent" | "muted" };
+
+const SHADE_TONE = {
+  accent: { fill: "var(--accent-wash)", text: "var(--accent)" },
+  muted: { fill: "var(--surface-2)", text: "var(--muted)" },
+} as const;
+
 const M = { t: 16, b: 28, l: 48 };
 
 export function LineChart({
@@ -34,6 +47,7 @@ export function LineChart({
   ariaLabel,
   fromZero = true,
   shade,
+  shades,
   format = "compact",
   axisFormat,
   currency,
@@ -109,14 +123,17 @@ export function LineChart({
   return (
     <div ref={ref} className={`relative ${className}`} onPointerLeave={() => setHover(null)}>
       <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="block max-w-full" role="img" aria-label={ariaLabel}>
-        {shade && (
-          <>
-            <rect x={x(shade.from)} y={M.t} width={Math.max(0, x(shade.to) - x(shade.from))} height={ih} fill="var(--accent-wash)" />
-            <text x={x(shade.from) + 6} y={M.t + 12} fontSize={11} fontWeight={600} fill="var(--accent)">
-              {shade.label}
-            </text>
-          </>
-        )}
+        {[...(shade ? [{ ...shade, tone: "accent" as const }] : []), ...(shades ?? [])].map((w, wi) => {
+          const tone = SHADE_TONE[w.tone ?? "accent"];
+          return (
+            <g key={`${w.label}-${wi}`}>
+              <rect x={x(w.from)} y={M.t} width={Math.max(0, x(w.to) - x(w.from))} height={ih} fill={tone.fill} />
+              <text x={x(w.from) + 6} y={M.t + 12} fontSize={11} fontWeight={600} fill={tone.text}>
+                {w.label}
+              </text>
+            </g>
+          );
+        })}
         {ticks.map((tv) => (
           <g key={tv}>
             <line x1={M.l} x2={M.l + iw} y1={y(tv)} y2={y(tv)} stroke={tv === yMin ? "var(--axis)" : "var(--grid)"} strokeWidth={1} />

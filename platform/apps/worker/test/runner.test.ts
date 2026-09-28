@@ -83,7 +83,9 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
   assert.equal(byJob.get('oauth.refresh')?.['handler'], 'sí');
   assert.equal(byJob.get('oauth.refresh')?.['cron'], '*/15 * * * *');
   assert.equal(byJob.get('oauth.refresh')?.['group'], 'connections');
-  assert.equal(byJob.get('collect.posts')?.['handler'], 'no');
+  assert.equal(byJob.get('collect.posts')?.['handler'], 'sí', 'CON-5 lo registra');
+  assert.equal(byJob.get('collect.post_metrics')?.['handler'], 'sí');
+  assert.equal(byJob.get('collect.demographics')?.['handler'], 'sí', 'CON-7 lo registra');
   assert.equal(byJob.get('video.probe')?.['cron'], '—');
 
   const listo = records.find((r) => r['msg'] === 'worker listo');
@@ -98,7 +100,8 @@ test('1 · arranca como mc_worker, lee las definiciones y el log dice cuáles ti
   );
   assert.equal(skipped.rows.length, base - conHandler);
   assert.ok(skipped.rows.every((r) => r.error === 'sin handler' && Number(r.n) === 1));
-  assert.ok(!skipped.rows.some((r) => r.job_id === 'oauth.refresh' || r.job_id === 'collect.account_metrics' || r.job_id === 'test.off'));
+  const conHandlerIds = ['oauth.refresh', 'collect.account_metrics', 'collect.posts', 'collect.post_metrics', 'compute.baseline', 'compute.post_score', 'collect.demographics', 'brand.snapshot', 'campaign.compute', 'finance.reminders', 'test.off'];
+  assert.ok(!skipped.rows.some((r) => conHandlerIds.includes(r.job_id)));
 
   // Los crons viven en pg-boss, con la clave 'cron' y el payload que identifica al job.
   const schedules = await h.worker.boss.getSchedules();

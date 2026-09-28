@@ -39,6 +39,7 @@ import { recordWorkspaceOptOut } from '../src/queries/outreach/inbound.ts';
 import { listContacts, optOutContact } from '../src/queries/ventas.ts';
 import { createDb, type BaseTx } from '../src/client.ts';
 import { crearEnlaceDeDemo, esBaseLocal } from '../scripts/demo-enlace-baja.ts';
+import { membershipSql } from './membresia.ts';
 import { openTestDb, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 const WS_S = '00000038-0000-4000-8000-00000000000a';
@@ -327,7 +328,7 @@ describe('la baja desde el enlace', () => {
       INSERT INTO app_user (id, email, name) VALUES
         ('${AGENCIA}', 'uno@registro.test', 'Uno'),
         ('${AGENCIA_2}', 'dos@otro-registro.test', 'Dos');
-      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_AG1}', '${AGENCIA}', 'owner'), ('${WS_AG2}', '${AGENCIA_2}', 'owner');
+      ${membershipSql([{ workspaceId: WS_AG1, userId: AGENCIA, kind: 'owner' }, { workspaceId: WS_AG2, userId: AGENCIA_2, kind: 'owner' }])}
       INSERT INTO contact (id, company_id, full_name, email, source, source_url, owner_workspace_id) VALUES
         ('${CONTACT_AG}', '${COMPANY}', 'Compras', 'agencia@marca.test', 'public_website', 'https://marca.test/compras', NULL);
       INSERT INTO outbound_touch (id, workspace_id, company_id, contact_id, channel, body, status, scheduled_for, sent_at,
@@ -584,9 +585,11 @@ describe('la política editable', () => {
           ('${DUENA}', 'duena@politica.test', 'Dueña'), ('${ADMIN}', 'admin@politica.test', 'Admin'),
           ('${LECTORA}', 'lectora@politica.test', 'Lectora'), ('${CLIENTE}', 'cliente@politica.test', 'Cliente'),
           ('${MIEMBRO}', 'miembro@politica.test', 'Miembro');
-        INSERT INTO membership (workspace_id, user_id, role) VALUES
-          ('${WS_O}', '${DUENA}', 'owner'), ('${WS_O}', '${ADMIN}', 'admin'), ('${WS_O}', '${LECTORA}', 'viewer'),
-          ('${WS_O}', '${CLIENTE}', 'client'), ('${WS_O}', '${MIEMBRO}', 'member');
+        ${membershipSql([
+          { workspaceId: WS_O, userId: DUENA, kind: 'owner' }, { workspaceId: WS_O, userId: ADMIN, kind: 'admin' },
+          { workspaceId: WS_O, userId: LECTORA, kind: 'viewer' }, { workspaceId: WS_O, userId: CLIENTE, kind: 'client' },
+          { workspaceId: WS_O, userId: MIEMBRO, kind: 'member' },
+        ])}
       `);
     });
 

@@ -6,7 +6,14 @@ import {
   transitionInvoice, InvalidTransition, canTransition, INVOICE_TRANSITIONS, INVOICE_STATUSES,
   deriveStatus, agingBucket, daysBetween, addDays,
   nextInvoiceNumber, parseInvoiceNumber,
+  parseFinanceSettings, financeSettingsToJson, hasFiscalIdentity,
+  FINANCE_SETTINGS_DEFAULTS, FINANCE_SETTINGS_VERSION, FINANCE_TEXT_MAX, type FinanceSettings,
+  applyPayment, taxReserveFor, reserveRateFrom, reservePeriod,
+  MONTO_MAXIMO, PAYABLE_STATUSES, PAYMENT_METHODS, PAYMENT_METHOD_LABEL_ES, isPaymentMethod,
+  InvoiceError, InvoiceNotPayable, PaymentAmountInvalid, PaymentExceedsOutstanding,
+  AmountOutOfRange, PaymentDateInFuture, InvoicePaymentConflict, TaxReserveRateInvalid,
 } from '../src/facturacion.ts';
+import { hoyEnZona } from '../src/zonas.ts';
 
 // ---------------------------------------------------------------- decimales
 
@@ -210,4 +217,283 @@ test('la numeración sigue el formato del seed 0003', () => {
   assert.equal(parseInvoiceNumber('COT-2026-014'), null);
   assert.equal(parseInvoiceNumber('FV-26-1'), null);
   assert.throws(() => nextInvoiceNumber(2026, -1), /Secuencia inválida/);
+});
+
+// ------------------------------------------------- configuración financiera
+
+test('el bloque del seed se lee sin cambiarlo: números JSON y sin v', () => {
+  // Tal cual lo dejan db/seed/0002 y 0003.
+  const s = parseFinanceSettings({ iva_pct: 19, retencion_pct: 11, reserva_pct: 11, plazo_dias: 30 });
+  assert.equal(s.v, 1, 'un bloque sin v es v1');
+  assert.equal(s.ivaPct, '19');
+  assert.equal(s.retencionPct, '11');
+  assert.equal(s.reservaPct, '11');
+  assert.equal(s.plazoDias, 30);
+  assert.equal(s.razonSocial, null, 'lo que el seed no trae es una ausencia, no ""');
+});
+
+test('sin bloque, los valores por defecto son los de Colombia', () => {
+  for (const vacio of [undefined, null, {}, 'no es un objeto', [1, 2], 42]) {
+    const s = parseFinanceSettings(vacio);
+    assert.equal(s.ivaPct, '19');
+    assert.equal(s.retencionPct, '11');
+    assert.equal(s.reservaPct, '11');
+    assert.equal(s.plazoDias, 30);
+  }
+  assert.deepEqual(parseFinanceSettings({}), FINANCE_SETTINGS_DEFAULTS);
+});
+
+test('parseFinanceSettings no lanza nunca: lo que no entiende usa el valor por defecto', () => {
+  const s = parseFinanceSettings({
+    v: 99,
+    iva_pct: 'muchísimo',
+    retencion_pct: -5,
+    reserva_pct: 101,
+    plazo_dias: 3650,
+    razon_social: '   ',
+    identificacion: 12345, // no es string
+    llave_del_futuro: { a: 1 },
+  });
+  assert.equal(s.v, 99, 'la versión desconocida se conserva, no se pisa');
+  assert.equal(s.ivaPct, '19');
+  assert.equal(s.retencionPct, '11', 'un porcentaje negativo no es un porcentaje');
+  assert.equal(s.reservaPct, '11', '101 % tampoco');
+  assert.equal(s.plazoDias, 30, 'diez años de plazo es un error de tecleo');
+  assert.equal(s.razonSocial, null, 'solo espacios es una ausencia');
+  assert.equal(s.identificacion, null);
+});
+
+test('los porcentajes aceptan coma y decimales, y se normalizan con punto', () => {
+  assert.equal(parseFinanceSettings({ iva_pct: '19,5' }).ivaPct, '19.5');
+  assert.equal(parseFinanceSettings({ iva_pct: ' 8.25 ' }).ivaPct, '8.25');
+  assert.equal(parseFinanceSettings({ iva_pct: '0' }).ivaPct, '0', 'cero por ciento es válido: no todo país tiene IVA');
+  assert.equal(parseFinanceSettings({ iva_pct: '100' }).ivaPct, '100');
+  assert.equal(parseFinanceSettings({ iva_pct: '19.555' }).ivaPct, '19', 'tres decimales no: el valor por defecto');
+  // Y lo que sale de ahí es lo que multiplica dinero.
+  assert.equal(pctToRate(parseFinanceSettings({ reserva_pct: '15' }).reservaPct), '0.15');
+  assert.equal(pctToRate(parseFinanceSettings({ iva_pct: '19,5' }).ivaPct), '0.195');
+});
+
+test('los textos se recortan al tope y no se guardan vacíos', () => {
+  const largo = 'a'.repeat(FINANCE_TEXT_MAX + 50);
+  const s = parseFinanceSettings({ razon_social: `  Laura Méndez S.A.S.  `, direccion: largo, banco: '' });
+  assert.equal(s.razonSocial, 'Laura Méndez S.A.S.');
+  assert.equal(s.direccion?.length, FINANCE_TEXT_MAX);
+  assert.equal(s.banco, null);
+});
+
+test('ida y vuelta: lo que se escribe es lo que se vuelve a leer', () => {
+  const original: FinanceSettings = {
+    v: 1,
+    ivaPct: '19.5',
+    retencionPct: '11',
+    reservaPct: '15',
+    plazoDias: 45,
+    razonSocial: 'Laura Méndez S.A.S.',
+    identificacion: 'NIT 901.234.567-8',
+    direccion: 'Calle 93 #12-34, Bogotá',
+    regimen: 'Responsable de IVA',
+    correoFacturacion: 'facturacion@lauramendez.co',
+    banco: 'Bancolombia',
+    cuenta: 'Ahorros 123-456789-01',
+    enlacePago: null,
+  };
+  // El viaje real: objeto → jsonb → texto → objeto.
+  const vuelta = parseFinanceSettings(JSON.parse(JSON.stringify(financeSettingsToJson(original))));
+  assert.deepEqual(vuelta, original);
+});
+
+test('financeSettingsToJson escribe las llaves del seed y los porcentajes como string', () => {
+  const json = financeSettingsToJson({ ...FINANCE_SETTINGS_DEFAULTS, reservaPct: '15' });
+  assert.equal(json['reserva_pct'], '15');
+  assert.equal(typeof json['iva_pct'], 'string', 'nada que multiplique dinero viaja como number');
+  assert.equal(json['plazo_dias'], 30, 'los días sí son un entero');
+  assert.equal(json['v'], FINANCE_SETTINGS_VERSION);
+  // Las llaves son exactamente las que ya escribió el seed.
+  assert.deepEqual(
+    Object.keys(json).sort(),
+    ['banco', 'correo_facturacion', 'cuenta', 'direccion', 'enlace_pago', 'identificacion',
+     'iva_pct', 'plazo_dias', 'razon_social', 'regimen', 'reserva_pct', 'retencion_pct', 'v'],
+  );
+});
+
+test('hasFiscalIdentity dice si la factura puede imprimir su cabecera (FIN-1)', () => {
+  assert.equal(hasFiscalIdentity(FINANCE_SETTINGS_DEFAULTS), false);
+  assert.equal(hasFiscalIdentity({ ...FINANCE_SETTINGS_DEFAULTS, razonSocial: 'X S.A.S.' }), false);
+  assert.equal(
+    hasFiscalIdentity({ ...FINANCE_SETTINGS_DEFAULTS, razonSocial: 'X S.A.S.', identificacion: 'NIT 1-2' }),
+    true,
+  );
+});
+
+test('el vencimiento por defecto sale del plazo configurado, no de un 30 escrito a mano', () => {
+  const s = parseFinanceSettings({ plazo_dias: 45 });
+  assert.equal(addDays('2026-09-23', s.plazoDias), '2026-11-07');
+  assert.equal(addDays('2026-09-23', parseFinanceSettings({ plazo_dias: 0 }).plazoDias), '2026-09-23', 'pago contra entrega');
+});
+
+// ---------------------------------------------------------------- pagos (FIN-2)
+
+/** Lo que el seed 0003 deja en FV-2026-010: enviada, 3 100 000, nada cobrado. */
+const FV_010 = { status: 'sent' as const, total: '3100000.00', paidAmount: '0.00' };
+
+/** El día y el instante de un cobro de hoy, con la forma que la consulta le pasa a core. */
+const HOY = { receivedOn: '2026-09-23', receivedAt: '2026-09-23T15:00:00Z', today: '2026-09-23' };
+
+test('un pago parcial deja la factura en partial y no toca paid_at', () => {
+  const r = applyPayment(FV_010, { amount: '1000000', ...HOY });
+  assert.equal(r.status, 'partial');
+  assert.equal(r.amount, '1000000.00');
+  assert.equal(r.paidAmount, '1000000.00');
+  assert.equal(r.outstanding, '2100000.00');
+  assert.equal(r.paidAt, null, 'un abono no es «pagada el …»');
+});
+
+test('el pago que completa el total la deja pagada, con paid_at en el instante del cobro', () => {
+  const r = applyPayment({ ...FV_010, paidAmount: '1000000.00' }, { amount: '2100000', ...HOY });
+  assert.equal(r.status, 'paid');
+  assert.equal(r.paidAmount, '3100000.00');
+  assert.equal(r.outstanding, '0.00');
+  assert.equal(r.paidAt, '2026-09-23T15:00:00Z');
+});
+
+test('los centavos cuadran: tres abonos que suman el total la dejan pagada', () => {
+  const a = applyPayment(FV_010, { amount: '1033333.33', ...HOY });
+  const b = applyPayment({ ...FV_010, status: 'partial', paidAmount: a.paidAmount }, { amount: '1033333.33', ...HOY });
+  const c = applyPayment({ ...FV_010, status: 'partial', paidAmount: b.paidAmount }, { amount: '1033333.34', ...HOY });
+  assert.equal(c.paidAmount, '3100000.00');
+  assert.equal(c.status, 'paid');
+});
+
+test('se cobra sobre enviada, parcial y vencida; nunca sobre borrador, pagada o anulada', () => {
+  assert.deepEqual([...PAYABLE_STATUSES], ['sent', 'partial', 'overdue']);
+  for (const status of ['sent', 'partial', 'overdue'] as const) {
+    assert.equal(applyPayment({ ...FV_010, status }, { amount: '100', ...HOY }).status, 'partial');
+  }
+  for (const status of ['draft', 'paid', 'void'] as const) {
+    assert.throws(() => applyPayment({ ...FV_010, status }, { amount: '100', ...HOY }), (err: unknown) => {
+      assert.ok(err instanceof InvoiceNotPayable);
+      assert.equal(err.code, 'InvoiceNotPayable');
+      assert.match(err.messageEs, /no admite pagos/);
+      return true;
+    });
+  }
+});
+
+test('un pago de cero, negativo o mayor que el saldo se rechaza', () => {
+  assert.throws(() => applyPayment(FV_010, { amount: '0', ...HOY }), PaymentAmountInvalid);
+  assert.throws(() => applyPayment(FV_010, { amount: '-100', ...HOY }), PaymentAmountInvalid);
+  assert.throws(() => applyPayment(FV_010, { amount: '3100000.01', ...HOY }), (err: unknown) => {
+    assert.ok(err instanceof PaymentExceedsOutstanding);
+    assert.equal(err.outstanding, '3100000.00');
+    assert.match(err.messageEs, /queda por cobrar/);
+    return true;
+  });
+  // Sobre una factura que ya lleva un abono, el saldo del mensaje es el que queda.
+  assert.throws(
+    () => applyPayment({ ...FV_010, status: 'partial', paidAmount: '3000000.00' }, { amount: '100000.01', ...HOY }),
+    (err: unknown) => err instanceof PaymentExceedsOutstanding && err.outstanding === '100000.00',
+  );
+});
+
+test('un cobro fechado mañana no ha ocurrido', () => {
+  assert.throws(
+    () => applyPayment(FV_010, { amount: '100', receivedOn: '2026-09-24', receivedAt: '2026-09-24T15:00:00Z', today: '2026-09-23' }),
+    PaymentDateInFuture,
+  );
+  // Hoy sí.
+  assert.equal(applyPayment(FV_010, { amount: '100', ...HOY }).status, 'partial');
+});
+
+test('MONTO_MAXIMO es el máximo de numeric(14,2) y se comprueba antes de llegar a Postgres', () => {
+  assert.equal(MONTO_MAXIMO, '999999999999.99');
+  const enorme = { status: 'sent' as const, total: '999999999999.99', paidAmount: '0.00' };
+  assert.equal(applyPayment(enorme, { amount: '999999999999.99', ...HOY }).status, 'paid');
+  assert.throws(() => applyPayment(enorme, { amount: '1000000000000.00', ...HOY }), (err: unknown) => {
+    assert.ok(err instanceof AmountOutOfRange);
+    assert.match(err.messageEs, /999999999999\.99/);
+    return true;
+  });
+});
+
+test('un monto que no es un decimal no llega a la base', () => {
+  assert.throws(() => applyPayment(FV_010, { amount: '1.000.000', ...HOY }), /Monto inválido/);
+  assert.throws(() => applyPayment(FV_010, { amount: '', ...HOY }), /Monto inválido/);
+});
+
+// ------------------------------------------------------- reserva de impuestos
+
+test('la reserva es el porcentaje del cobro, redondeado al centavo mitad hacia arriba', () => {
+  // La cifra del seed 0003 §6: 3 700 000 al 11 % → 407 000.
+  assert.equal(taxReserveFor('3700000.00', '0.11'), '407000.00');
+  assert.equal(taxReserveFor('4700000.00', '0.1100'), '517000.00');
+  // Half-up en el centavo: 0,055 → 0,06, no 0,05.
+  assert.equal(taxReserveFor('0.50', '0.11'), '0.06');
+  assert.equal(taxReserveFor('1000000.00', '0.115'), '115000.00');
+});
+
+test('la tasa sale de settings.finanzas.reserva_pct, y una ausencia no es un cero', () => {
+  assert.equal(reserveRateFrom(11), '0.11');
+  assert.equal(reserveRateFrom('11'), '0.11');
+  assert.equal(reserveRateFrom('11,5'), '0.115');
+  assert.equal(reserveRateFrom('11.55'), '0.1155', 'cuatro decimales es lo que guarda numeric(6,4)');
+  assert.equal(reserveRateFrom(100), '1');
+  // Ausente o cero: este espacio no aparta y no se escribe ninguna fila.
+  assert.equal(reserveRateFrom(undefined), null);
+  assert.equal(reserveRateFrom(null), null);
+  assert.equal(reserveRateFrom(0), null);
+  assert.equal(reserveRateFrom('0'), null);
+  assert.equal(reserveRateFrom('0.00'), null);
+  // Presente pero roto: se ve, no se supone.
+  // Más de dos decimales en el porcentaje no caben en numeric(6,4): el
+  // apartado no correspondería a la tasa escrita junto a él.
+  for (const roto of ['once', -1, 101, '150', {}, NaN, true, '11.555', 11.5555]) {
+    assert.throws(() => reserveRateFrom(roto), TaxReserveRateInvalid, `debería fallar con ${JSON.stringify(roto)}`);
+  }
+});
+
+test('el período fiscal es el trimestre del día del cobro, con los bordes bien', () => {
+  assert.equal(reservePeriod('2026-01-01'), '2026-Q1');
+  assert.equal(reservePeriod('2026-03-31'), '2026-Q1');
+  assert.equal(reservePeriod('2026-04-01'), '2026-Q2');
+  assert.equal(reservePeriod('2026-06-30'), '2026-Q2');
+  assert.equal(reservePeriod('2026-07-01'), '2026-Q3');
+  assert.equal(reservePeriod('2026-09-30'), '2026-Q3');
+  assert.equal(reservePeriod('2026-10-01'), '2026-Q4');
+  assert.equal(reservePeriod('2026-12-31'), '2026-Q4');
+  assert.throws(() => reservePeriod('2026-13-01'), /Mes inválido/);
+  assert.throws(() => reservePeriod('31/12/2026'), /YYYY-MM-DD/);
+});
+
+test('el trimestre es el de la zona del workspace, no el de UTC', () => {
+  // 1 de enero a la 01:00 UTC son las 20:00 del 31 de diciembre en Bogotá:
+  // el creador lo declara en 2026-Q4, no en 2027-Q1.
+  const instante = new Date('2027-01-01T01:00:00Z');
+  assert.equal(reservePeriod(hoyEnZona('America/Bogota', instante)), '2026-Q4');
+  assert.equal(reservePeriod(hoyEnZona('UTC', instante)), '2027-Q1');
+});
+
+test('los métodos de pago son una lista cerrada y el del seed está en ella', () => {
+  assert.deepEqual([...PAYMENT_METHODS], ['transferencia', 'efectivo', 'pse', 'tarjeta', 'otro']);
+  assert.equal(isPaymentMethod('transferencia'), true, 'es el método del seed 0003 §6');
+  assert.equal(isPaymentMethod('bitcoin'), false);
+  for (const m of PAYMENT_METHODS) assert.ok(PAYMENT_METHOD_LABEL_ES[m].length > 0);
+});
+
+test('todos los errores de pago son InvoiceError, con messageEs en español', () => {
+  const errores = [
+    new InvoiceNotPayable('draft'),
+    new PaymentAmountInvalid('0'),
+    new PaymentExceedsOutstanding('100.00'),
+    new AmountOutOfRange('1000000000000.00'),
+    new PaymentDateInFuture('2026-09-24', '2026-09-23'),
+    new InvoicePaymentConflict('0.00', '500000.00'),
+    new TaxReserveRateInvalid('once'),
+  ];
+  for (const err of errores) {
+    assert.ok(err instanceof InvoiceError, `${err.name} debería ser InvoiceError`);
+    assert.equal(err.messageEs, err.message);
+    assert.equal(err.name, err.code);
+    assert.match(err.messageEs, /[áéíóúñ¿]|no |la |el /i, `${err.name} tiene que hablar español`);
+  }
 });

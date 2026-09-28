@@ -11,10 +11,13 @@
  * Una sola constante para todos los módulos: Ventas la usa desde el
  * pulido r8 y Cotizar puede usarla para sus totales.
  */
-import { compareDecimal, type Decimal } from './facturacion.ts';
+import { compareDecimal, MONTO_MAXIMO } from './facturacion.ts';
 
-/** El mayor valor de numeric(14,2). */
-export const MONTO_MAXIMO: Decimal = '999999999999.99';
+/**
+ * El mayor valor de numeric(14,2). Es el mismo de Finanzas (facturacion.ts,
+ * FIN): una sola declaración, reexportada aquí para quien importe montos.ts.
+ */
+export { MONTO_MAXIMO };
 
 const DECIMAL_RE = /^-?\d+(\.\d+)?$/;
 

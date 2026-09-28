@@ -55,7 +55,7 @@ beforeEach(() => {
 });
 
 describe("reintentar y cancelar piden un rol que opere la cola", () => {
-  it.each(["viewer", "client"])("un '%s' no reintenta ni cancela: ni siquiera se abre la transacción", async (rol) => {
+  it.each(["viewer", "finance"])("un '%s' no reintenta ni cancela: ni siquiera se abre la transacción", async (rol) => {
     contexto.rol = rol;
     expect(await todas()).toEqual([SIN_PERMISO, SIN_PERMISO, SIN_PERMISO]);
     expect(withWorkspace).not.toHaveBeenCalled();
@@ -72,7 +72,7 @@ describe("reintentar y cancelar piden un rol que opere la cola", () => {
     expect(withWorkspace).not.toHaveBeenCalled();
   });
 
-  it.each(["owner", "admin", "member"])("un '%s' sí: las tres llegan a la base", async (rol) => {
+  it.each(["owner", "admin", "manager", "editor"])("un '%s' sí: las tres llegan a la base", async (rol) => {
     contexto.rol = rol;
     const [uno, porTipo, cancelar] = await todas();
     expect(uno).toEqual({ ok: "1 mensaje volvió a la cola." });

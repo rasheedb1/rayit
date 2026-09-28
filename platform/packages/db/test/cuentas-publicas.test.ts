@@ -1,7 +1,8 @@
 /** CON-10 · cuentas por @: alta, snapshot diario (la primera lectura del día queda; mc_app no la corrige), lista con último snapshot y Δ7d, fallos, aislamiento. */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addPublicAccount, CreatorNotInWorkspace, disconnectConnection, findPublicAccountByHandle, listAccounts, listConsents, markAccountLookupFailure, publicSecretRef, recordAccountSnapshot, recordConsent, upgradePublicAccountToOAuth } from '../src/index.ts';
+import { addPublicAccount, AGGREGATOR_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, findPublicAccountByHandle, listAccounts, listConsents, markAccountLookupFailure, publicSecretRef, recordAccountSnapshot, recordConsent, setAccountAccessMode, upgradePublicAccountToOAuth } from '../src/index.ts';
+import { filasDeBitacora } from './bitacora.ts';
 import { openTestDb, WORKSPACE_LAURA, type TestDb, SETUP_TIMEOUT } from './pglite.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-000000000003';
@@ -33,6 +34,16 @@ describe('alta por @', () => {
     assert.equal(mine.lastSyncedAt, null);
     await assert.rejects(t.db.withWorkspace(WORKSPACE_AJENO, (tx) => addPublicAccount(tx, input)), CreatorNotInWorkspace);
     assert.equal((await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listAccounts(tx))).length, 0);
+
+    // Bitácora (ACC-2): conectar una cuenta por @ deja su fila; volver a agregarla, la de reconexión. Sin secret_ref.
+    const bitacora = await filasDeBitacora(t, WORKSPACE_LAURA, a.id);
+    assert.deepEqual(bitacora.map((f) => f.action), ['connection.added', 'connection.reconnected']);
+    assert.deepEqual(bitacora[1]?.before, { accessMode: 'public_profile', status: 'active', deleted: false });
+    assert.equal(bitacora[0]?.actor_kind, 'system', 'sin identidad en la transacción no se inventa un usuario');
+    assert.equal(bitacora[0]?.before, null);
+    assert.deepEqual(bitacora[0]?.after, { platformId: 'instagram', externalAccountId: '17841400000009999', handle: 'nicolasduartea', accountType: 'business', accessMode: 'public_profile', onBehalfOf: { creatorId: CREATOR_LAURA } });
+    assert.equal(JSON.stringify(bitacora).includes('public:instagram'), false);
+    assert.deepEqual(await filasDeBitacora(t, WORKSPACE_AJENO, a.id), []);
   });
 
   test('el consentimiento de una cuenta pública guarda la declaración de propiedad', async () => {
@@ -40,6 +51,42 @@ describe('alta por @', () => {
     await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordConsent(tx, { connectionId: id, creatorId: CREATOR_LAURA, purpose: 'analytics', policyVersion: '2026-09-22', evidence: { declaredOwner: true, handle: 'nicolasduartea', ip: '203.0.113.7' } }));
     const consents = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listConsents(tx, id));
     assert.equal(consents.filter((c) => c.revokedAt === null).length, 1);
+  });
+});
+
+describe('publicaciones medidas (CON-5)', () => {
+  test('la fila dice cuántas publicaciones vivas hay y hasta cuándo llegan sus lecturas', async () => {
+    const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...input, handle: 'concontenido', externalAccountId: '17841400000008888' }));
+    const vacia = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!;
+    assert.equal(vacia.postsCount, 0);
+    assert.equal(vacia.lastPostSnapshotAt, null, 'sin lecturas de contenido: null, no una fecha inventada');
+
+    await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
+      await tx.query(
+        `INSERT INTO post (workspace_id, creator_id, connection_id, platform_id, external_post_id, media_type, published_at, deleted_on_platform)
+         VALUES (current_workspace_id(), $1, $2, 'instagram', 'medio-1', 'video', '2026-09-20T12:00:00Z', false),
+                (current_workspace_id(), $1, $2, 'instagram', 'medio-2', 'image', '2026-09-19T12:00:00Z', false),
+                (current_workspace_id(), $1, $2, 'instagram', 'medio-3', 'video', '2026-09-18T12:00:00Z', true)`,
+        [CREATOR_LAURA, id],
+      );
+      await tx.query(
+        `INSERT INTO post_metric_snapshot (post_id, workspace_id, captured_at, age_hours, views, source)
+         SELECT p.id, current_workspace_id(), '2026-09-22T05:00:00Z', 41.0, 900, 'api'
+           FROM post p WHERE p.connection_id = $1 AND p.external_post_id = 'medio-1'`,
+        [id],
+      );
+      await tx.query(
+        `INSERT INTO post_metric_snapshot (post_id, workspace_id, captured_at, age_hours, views, source)
+         SELECT p.id, current_workspace_id(), '2026-09-23T05:00:00Z', 65.0, 1100, 'api'
+           FROM post p WHERE p.connection_id = $1 AND p.external_post_id = 'medio-2'`,
+        [id],
+      );
+    });
+
+    const row = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!;
+    assert.equal(row.postsCount, 2, 'lo borrado en la plataforma no cuenta como publicación viva');
+    assert.equal(row.lastPostSnapshotAt, '2026-09-23T05:00:00.000Z', 'la lectura de contenido más reciente, en ISO');
+    assert.equal((await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listAccounts(tx))).length, 0, 'RLS: el otro workspace no ve nada');
   });
 });
 
@@ -137,7 +184,81 @@ describe('de @ a autorizada', () => {
     assert.ok(old.rows[0]!.deleted_at);
     assert.match(old.rows[0]!.external_account_id, /^open_id_selva~sustituida~/);
     assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findPublicAccountByHandle(tx, 'tiktok', 'selvathegolden')), null, 'ya no es pública');
+    // Bitácora (ACC-2): la autorización deja de dónde venía y a dónde llegó, sin secret_ref.
+    const autorizada = await filasDeBitacora(t, WORKSPACE_LAURA, id, 'connection.authorized');
+    assert.equal(autorizada.length, 1);
+    assert.deepEqual(autorizada[0]?.before, { accessMode: 'public_profile' });
+    assert.deepEqual(autorizada[0]?.after, { accessMode: 'direct_oauth', externalAccountId: 'open_id_selva', handle: 'selvathegolden', accountType: 'creator', scopes: ['user.info.basic', 'video.list'], accessExpiresAt: '2026-09-24T00:00:00.000Z', onBehalfOf: { creatorId: CREATOR_LAURA } });
+    assert.equal(JSON.stringify(autorizada).includes('enc:tiktok'), false);
+    // La autorización anterior que se retiró tiene su propia fila: la bitácora explica por qué desapareció.
+    const retirada = await filasDeBitacora(t, WORKSPACE_LAURA, previousId, 'connection.disconnected');
+    assert.equal(retirada.length, 1);
+    assert.deepEqual(retirada[0]?.before, { status: 'active', accessMode: 'direct_oauth', deleted: false });
+    assert.deepEqual(retirada[0]?.after, { status: 'disabled', accessMode: 'direct_oauth', deleted: true, replacedBy: id, onBehalfOf: { creatorId: CREATOR_LAURA } });
+    // Volver a agregar por @ una cuenta ya autorizada no la baja a pública, y la bitácora lo dice así.
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...input, platformId: 'tiktok', handle: 'selvathegolden', externalAccountId: 'open_id_selva', profileUrl: null, accountType: 'creator' }));
+    const [otraVez] = (await filasDeBitacora(t, WORKSPACE_LAURA, id, 'connection.reconnected')).slice(-1);
+    assert.equal((otraVez?.after as { accessMode: string }).accessMode, 'direct_oauth');
+    assert.equal((otraVez?.before as { accessMode: string }).accessMode, 'direct_oauth');
     await assert.rejects(t.db.withWorkspace(WORKSPACE_AJENO, (tx) => upgradePublicAccountToOAuth(tx, id, { externalAccountId: 'x', handle: null, displayName: null, avatarUrl: null, profileUrl: null, accountType: 'unknown', secretRef: 'enc:tiktok:55555555-5555-4555-8555-555555555555', scopes: [], accessExpiresAt: new Date(), refreshExpiresAt: null })));
   });
 });
 
+
+describe('cuentas por proveedor de datos (CON-12)', () => {
+  const tiktok = { ...input, platformId: 'tiktok' as const, handle: 'laura.cocinafacil', externalAccountId: 'MS4wLjABAAAA-anonimo-d01', profileUrl: 'https://www.tiktok.com/@laura.cocinafacil', accountType: 'unknown' as const };
+
+  test('el alta con proveedor deja access_mode aggregator y su snapshot cuenta como última lectura', async () => {
+    const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...tiktok, accessMode: 'aggregator' }));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordAccountSnapshot(tx, { connectionId: id, day: '2026-09-23', followers: 128400, following: 312, mediaCount: 3, views: 65401, raw: {}, source: AGGREGATOR_SNAPSHOT_SOURCE }));
+    const row = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!;
+    assert.equal(row.accessMode, 'aggregator');
+    assert.deepEqual(row.latest, { day: '2026-09-23', followers: 128400, following: 312, mediaCount: 3, views: 65401 });
+    assert.ok(row.lastSyncedAt, 'la lectura del proveedor mueve la frescura del dato');
+    assert.equal((await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => listAccounts(tx))).length, 0, 'otro workspace no la ve');
+  });
+
+  test('contratar el proveedor convierte la cuenta por @ sin perder id ni historia; darlo de baja la devuelve', async () => {
+    const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...tiktok, handle: 'selvathegolden', externalAccountId: 'selvathegolden' }));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => recordAccountSnapshot(tx, { connectionId: id, day: '2026-09-22', followers: null, following: null, mediaCount: null, views: null, raw: {} }));
+
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => setAccountAccessMode(tx, id, 'aggregator')), true);
+    const conProveedor = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!;
+    assert.equal(conProveedor.accessMode, 'aggregator');
+    assert.equal(conProveedor.latest?.day, '2026-09-22', 'la historia por @ se conserva');
+    // De dónde salen las cifras —y si se pagan— queda en la bitácora (ACC-2).
+    const cambio = await filasDeBitacora(t, WORKSPACE_LAURA, id, 'connection.source_changed');
+    assert.equal(cambio.length, 1);
+    assert.deepEqual(cambio[0]!.before, { accessMode: 'public_profile' });
+    assert.deepEqual(cambio[0]!.after, { accessMode: 'aggregator' });
+
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => setAccountAccessMode(tx, id, 'aggregator')), false, 'ya estaba: no vuelve a escribir');
+    assert.equal((await filasDeBitacora(t, WORKSPACE_LAURA, id, 'connection.source_changed')).length, 1, 'un no-cambio no deja fila');
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => setAccountAccessMode(tx, id, 'public_profile')), true);
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!.accessMode, 'public_profile');
+    assert.equal(await t.db.withWorkspace(WORKSPACE_AJENO, (tx) => setAccountAccessMode(tx, id, 'aggregator')), false, 'otro workspace no la mueve');
+  });
+
+  test('autorizar una cuenta que ya iba por proveedor convierte la misma fila, no crea una segunda', async () => {
+    const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...tiktok, handle: 'porproveedor', externalAccountId: 'porproveedor', accessMode: 'aggregator' }));
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => findPublicAccountByHandle(tx, 'tiktok', 'PorProveedor')))?.id, id, 'la busca «Autorizar» aunque vaya por proveedor');
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => upgradePublicAccountToOAuth(tx, id, {
+      externalAccountId: 'open_id_porproveedor', handle: 'porproveedor', displayName: null, avatarUrl: null, profileUrl: null, accountType: 'creator',
+      secretRef: 'enc:tiktok:88888888-8888-4888-8888-888888888888', scopes: ['user.info.basic'], accessExpiresAt: new Date('2026-09-24T00:00:00Z'), refreshExpiresAt: null,
+    }));
+    const filas = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).filter((r) => r.handle === 'porproveedor');
+    assert.deepEqual(filas.map((r) => [r.id, r.accessMode]), [[id, 'direct_oauth']], 'una sola fila, la misma, y deja de gastar unidades');
+  });
+
+  test('una cuenta autorizada por su dueño no se degrada a aggregator', async () => {
+    const { id } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...tiktok, handle: 'duenoautorizado', externalAccountId: 'open_id_dueno' }));
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => upgradePublicAccountToOAuth(tx, id, {
+      externalAccountId: 'open_id_dueno', handle: 'duenoautorizado', displayName: null, avatarUrl: null, profileUrl: null, accountType: 'creator',
+      secretRef: 'enc:tiktok:77777777-7777-4777-8777-777777777777', scopes: ['user.info.basic'], accessExpiresAt: new Date('2026-09-24T00:00:00Z'), refreshExpiresAt: null,
+    }));
+    assert.equal(await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => setAccountAccessMode(tx, id, 'aggregator')), false);
+    // Volver a agregarla por @ con el proveedor encendido tampoco la degrada.
+    await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => addPublicAccount(tx, { ...tiktok, handle: 'duenoautorizado', externalAccountId: 'open_id_dueno', accessMode: 'aggregator' }));
+    assert.equal((await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listAccounts(tx))).find((r) => r.id === id)!.accessMode, 'direct_oauth');
+  });
+});

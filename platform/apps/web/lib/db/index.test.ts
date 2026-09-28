@@ -7,7 +7,7 @@
  * provisional MC_WORKSPACE_ID ya no tiene efecto.
  */
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { listInvoices } from "@mc/db/queries/finanzas";
+import { createInvoice, listInvoices } from "@mc/db/queries/finanzas";
 import {
   createMediaKit, createQuote, getPrimaryCreator, getQuote, listMediaKitLockNotices, listQuotableDeals, sendQuote,
 } from "@mc/db/queries/cotizar";
@@ -109,6 +109,17 @@ describe("acceptQuoteFromLink: aceptar desde el enlace deja la campaña planeada
     });
     expect(campana).toEqual([{ status: "planned" }]);
 
+    // Bitácora (ACC-2): la campaña que creó COT-4 dejó su fila sin que Cotizar la escribiera.
+    const bitacora = await withWorkspace(async (tx) => {
+      const { rows } = await tx.query<{ action: string; actor_kind: string; after: { quoteId: string } }>(
+        "SELECT action, actor_kind, after FROM audit_log WHERE entity_id = $1 ORDER BY created_at",
+        [despues!.campaignId],
+      );
+      return rows;
+    });
+    expect(bitacora.map((f) => f.action)).toEqual(["campaign.created"]);
+    expect(bitacora[0]?.after.quoteId).toBe(creada.id);
+
     // Las frases que quedaron en la base son las de messages.ts.
     const aviso = await withWorkspace(async (tx) => {
       const { rows } = await tx.query<{ title_es: string; body_es: string }>(
@@ -154,4 +165,27 @@ describe("openProtectedMediaKit: el techo del enlace avisa al creador (pulido r6
     });
     expect(guardado).toEqual([{ title_es: "Un media kit quedó bloqueado por contraseñas fallidas", severity: "warning" }]);
   }, 60_000);
+});
+
+describe("la bitácora por el camino real de la web (ACC-2)", () => {
+  test("crear una factura con withWorkspace de lib/db deja su fila; sin sesión (modo demo) el actor es system", async () => {
+    const factura = await withWorkspace(async (tx) => {
+      const { rows } = await tx.query<{ id: string }>("SELECT company_id AS id FROM company_link LIMIT 1");
+      return createInvoice(tx, { companyId: rows[0]!.id, subtotal: "100000.00", issuedOn: "2026-09-23", dueOn: "2026-10-23" });
+    });
+    const filas = await withWorkspace(async (tx) => {
+      const { rows } = await tx.query<{ action: string; actor_kind: string; actor_user_id: string | null; before: unknown; after: { number: string; total: string } }>(
+        "SELECT action, actor_kind, actor_user_id, before, after FROM audit_log WHERE entity_id = $1",
+        [factura.id],
+      );
+      return rows;
+    });
+    expect(filas).toHaveLength(1);
+    expect(filas[0]?.action).toBe("invoice.created");
+    expect(filas[0]?.actor_kind).toBe("system");
+    expect(filas[0]?.actor_user_id).toBeNull();
+    expect(filas[0]?.before).toBeNull();
+    expect(filas[0]?.after.number).toBe(factura.number);
+    expect(filas[0]?.after.total).toBe("119000.00");
+  });
 });

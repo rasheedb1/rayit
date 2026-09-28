@@ -25,7 +25,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { appUser, creatorProfile, eq, membership, workspace } from '../src/index.ts';
+import { appUser, creatorProfile, eq, membership, sql, workspace } from '../src/index.ts';
 import {
   AuthIdentityMismatchError, createCreatorWorkspace, freeSlug, getAppUser, getMyIdentityAndWorkspaces, isMemberOf,
   listMyWorkspaces, nameFromEmail, renameWorkspace, slugify, updateMyName, upsertAppUserPorCorreo,
@@ -281,7 +281,7 @@ describe('espacios de la persona que entra', () => {
     await assert.rejects(
       () =>
         t.db.withIdentity({ userId: idB }, (tx) =>
-          tx.db.insert(membership).values({ workspaceId: WS_NUEVO, userId: idB, role: 'owner' }),
+          tx.db.insert(membership).values({ workspaceId: WS_NUEVO, userId: idB, roleId: sql`system_role_id('creator', 'owner')` }),
         ),
       esRechazoDeMembresia,
     );
@@ -293,7 +293,7 @@ describe('espacios de la persona que entra', () => {
       () =>
         t.db.withWorkspace(
           WS_NUEVO,
-          (tx) => tx.db.insert(membership).values({ workspaceId: WS_NUEVO, userId: idB, role: 'admin' }),
+          (tx) => tx.db.insert(membership).values({ workspaceId: WS_NUEVO, userId: idB, roleId: sql`system_role_id('creator', 'manager')` }),
           { userId: idA },
         ),
       esRechazoDeMembresia,
@@ -308,7 +308,7 @@ describe('espacios de la persona que entra', () => {
     await assert.rejects(
       t.db.withWorkspace(
         WS_NUEVO,
-        (tx) => tx.db.update(membership).set({ role: 'viewer' }).where(eq(membership.userId, idA)).returning(),
+        (tx) => tx.db.update(membership).set({ roleId: sql`system_role_id('creator', 'viewer')` }).where(eq(membership.userId, idA)).returning(),
         { userId: idA },
       ),
       esPermisoDenegado,

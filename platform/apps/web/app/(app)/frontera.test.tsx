@@ -45,10 +45,16 @@ describe("el segmento (app) tiene frontera de error y esqueleto de carga", () =>
     for (const modulo of ["campanas", "conexiones"]) {
       expect(readdirSync(join(AQUI, modulo))).toContain("loading.tsx");
     }
-    // Y Finanzas conserva los suyos: un módulo puede afinar el texto.
+    // Finanzas conserva SU frontera —un módulo puede afinar el texto—,
+    // pero desde FIN-3 sus esqueletos viven en los grupos de ruta de
+    // cada lista, (inicio) y facturas/(lista), y no en la raíz del
+    // segmento: ahí envolvían también facturas/<id> y facturas/nueva.
     const enFinanzas = readdirSync(join(AQUI, "finanzas"));
     expect(enFinanzas).toContain("error.tsx");
-    expect(enFinanzas).toContain("loading.tsx");
+    expect(enFinanzas).not.toContain("loading.tsx");
+    for (const lista of ["(inicio)", "facturas/(lista)"]) {
+      expect(readdirSync(join(AQUI, "finanzas", lista))).toContain("loading.tsx");
+    }
   });
 
   it("el error se anuncia como alerta, en español, y deja volver", () => {

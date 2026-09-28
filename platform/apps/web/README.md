@@ -2,7 +2,7 @@
 
 Next.js 15, React 19, Tailwind 4, Geist. Cada ruta muestra el plan de
 construcción de su módulo hasta que llega la pantalla real. Resumen
-(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1) y Conexiones (CON-3)
+(RES-1, RES-2), Finanzas (FIN-1), Campañas (CAM-1, CAM-4, CAM-5, CAM-6) y Conexiones (CON-3)
 ya son reales: leen la base por `@mc/db`.
 
 ## Base de datos en local
@@ -57,8 +57,58 @@ app/(app)/plan/[modulo]/      El plan de construcción de un módulo que YA tien
                               pantalla. Se enlaza desde su cabecera.
 app/(app)/resumen/            Resumen: KPIs, seguidores por red, visualizaciones
                               por red, frescura por conexión e importación por CSV.
-app/(app)/finanzas/           Finanzas: lista, factura nueva y detalle.
-                              index.ts exporta facturarCampana() para Campañas.
+app/(app)/finanzas/           Finanzas, en seis vistas con su tira de pestañas
+                              (_componentes/pestanas.tsx, cada una detrás de su
+                              permiso). index.ts exporta facturarCampana() para
+                              Campañas. bandeja.tsx: los recordatorios de cobro (FIN-4).
+app/(app)/finanzas/(inicio)/  Cobro por antigüedad (FIN-3) y la bandeja de FIN-4.
+app/(app)/finanzas/facturas/  El archivo de facturas, la nueva y el detalle con sus
+                              cobros (FIN-2: registrar pago, reserva de impuestos).
+app/(app)/finanzas/gastos/    Gastos, recurrentes y su proyección a ocho semanas (FIN-5).
+app/(app)/finanzas/flujo/     Flujo de caja proyectado a ocho semanas (FIN-6). Todo lo
+                              calcula projectCashflow() de @mc/core; la pantalla pinta.
+app/(app)/finanzas/ingresos/  Ingresos de plataformas por CSV o a mano (FIN-7).
+app/(app)/finanzas/configuracion/  Porcentajes, plazo, moneda y datos fiscales del
+                              workspace (FIN-8). Es de donde salen los defaults de una
+                              factura nueva y la tasa que FIN-2 estampa en tax_reserve.
+app/(app)/finanzas/recordatorios/  Solo actions.ts: «Marcar como enviado». NO es una
+                              ruta (no tiene page.tsx); la carpeta existe para que el
+                              archivo se llame actions.ts y lo mire convencion.test.ts.
+app/(app)/campanas/           Campañas: lista y ficha. En la ficha, «Resultado»
+                              (CAM-5, resultado.tsx: los seis KPIs de campaign_result,
+                              qué falta y «Recalcular»: aparece solo si la base deja
+                              escribir campaign_result —migración 0041— y el rol tiene
+                              campanas.resultado.calcular) y
+                              «Lo que aportó la marca» (CAM-4): aporte.tsx
+                              (formulario y CSV), [id]/_lib/csv-ventas.ts (el CSV
+                              de ventas diarias), _lib/messages.ts (los textos).
+                              «Seguidores de la marca» (CAM-3): [id]/seguidores.tsx, su
+                              modelo puro en _lib/seguidores.ts y «Actualizar ahora» en
+                              _lib/marca-service.ts, con el mismo recordBrandSnapshot que
+                              el job brand.snapshot.
+                              «Reporte a la marca» (CAM-6): [id]/reporte-seccion.tsx
+                              (generar, enviar por enlace o PDF, versiones),
+                              [id]/reporte/[reportId]/ (la vista previa del creador) y
+                              _ui/documento-reporte.tsx, EL documento que pintan la
+                              vista previa y la página pública: solo lee el payload
+                              congelado. «Descargar PDF» es el diálogo de impresión
+                              (@media print en globals.css), sin dependencia nueva.
+                              _lib/rutas.ts: las rutas de otros módulos que enlaza la
+                              ficha (la factura de Finanzas), en un solo sitio.
+                              ciclo-db.test.ts: el ciclo entero, de la cotización
+                              aceptada a la apertura pública del reporte, en una prueba.
+app/(public)/reporte/[slug]/  El reporte que abre la marca sin sesión (CAM-6), por
+                              public_report() de la migración 0037: noindex, 404 real
+                              para un borrador o un slug desconocido, y la primera
+                              apertura marca viewed_at (los robots de vista previa no).
+app/(app)/conexiones/         Cuentas (CON-4): alta por @ (CON-10), una tabla con las
+                              dos clases de fila (por @ y autorizada) y el flujo OAuth
+                              de CON-3 detrás de oauth_connect. _lib/estado.ts: el
+                              estado, el acceso, la frescura y los huecos (CON-7) como
+                              funciones puras; tabla.tsx los pinta con lo de CON-5
+                              (publicaciones) y ACC-8 («Conectada por»). _lib/permisos.ts,
+                              _lib/consent.ts y _lib/messages.ts: quién puede conectar,
+                              la evidencia del consentimiento y los textos.
 test/fixtures/csv/            Exportaciones de ejemplo del importador (ver su README).
 components/ui/                Kit de interfaz compartido (ver su README).
 lib/format.ts                 Dinero, fechas y porcentajes. El locale y la zona
@@ -87,6 +137,48 @@ content/team.ts               Quién es quién.
 components/                   Marco, navegación, tema, tarjetas del plan.
 lib/backlog.ts                Cálculos sobre el backlog: avance, días, enlaces.
 ```
+
+## Finanzas, dónde está cada cosa
+
+Dos vistas, dos preguntas distintas, y una tira de pestañas
+(`_componentes/pestanas.tsx`) para pasar de una a otra:
+
+| Ruta | Qué responde | De dónde sale |
+|---|---|---|
+| `/finanzas` · `(inicio)/page.tsx` | «¿Quién me debe y qué cobro primero?» | `listReceivables` sobre la vista `receivables` (0010) + `getReceivablesKpis` |
+| `/finanzas/facturas` · `facturas/(lista)/page.tsx` | «¿Qué facturé?» — el archivo, con borradores y anuladas | `listInvoices` |
+| `/finanzas/facturas/nueva` · `/finanzas/facturas/<id>` | Crear y ver una factura | `createInvoice`, `getInvoice`, `transitionInvoice` |
+
+Lo que conviene saber antes de tocarlo:
+
+- **La vista `receivables` excluye `draft` y `void`.** Por eso un
+  borrador no aparece nunca en `/finanzas`: no es algo que nadie te
+  deba. El archivo sí los lista.
+- **El orden de cobro se hace en SQL**, no en la pantalla
+  (`URGENCY_RANK` en `queries/finanzas.ts`): vencidas, vence pronto, al
+  día, cobradas, y dentro de cada grupo por `due_on` ascendente. El
+  cursor se ancla a `due_on` y no a los días de mora, que cambian a
+  medianoche.
+- **El filtro y la búsqueda viven en la URL** (`?bucket=vencida&q=Hogar`),
+  como en Ventas: se pueden compartir y el botón de atrás los deshace.
+  `_componentes/filtros.tsx` es el único componente cliente de la
+  pantalla y no consulta nada.
+- **Los textos están todos en `_lib/messages.ts`**, los dos colores de
+  la pastilla salen de la misma función (`_lib/estado.ts`), y una
+  ausencia se dice con una frase: «Sin campaña», «Nada pendiente»,
+  «Ninguna vencida», «Sin cobros en 2025 para comparar». Nunca un guion
+  mudo ni un cero.
+- **Los esqueletos viven en los grupos de ruta** `(inicio)` y
+  `facturas/(lista)`, no en la raíz del segmento: ahí envolvían también
+  `facturas/<id>` y respondían 200 antes de saber que el id no existe
+  (la lección del pulido r4, en `app/(app)/_lib/esqueleto.tsx`). La
+  frontera de error sí está en la raíz, que es donde tiene que estar.
+- **A 400 px la tabla hace scroll por dentro**, así que el botón de la
+  última columna no se ve: la marca de la primera columna es el mismo
+  enlace. Se mide con
+  `DENTRO='table td:first-child a' node apps/web/scripts/ancho-movil.mjs
+  http://localhost:3141 /finanzas`.
+
 
 ## Marcar avance
 
@@ -181,6 +273,7 @@ en `platform/.env.local`) y en Vercel:
 | `TOKEN_ENCRYPTION_KEY` | firma la cookie `mc.workspace` (la misma clave maestra que el OAuth de Conexiones, con otra etiqueta). Sin ella todo funciona, pero el espacio elegido no se recuerda y el selector lo dice |
 | `APP_URL` | a qué origen vuelve el enlace del correo. En desarrollo y en las vistas previas, sin ella se deduce de las cabeceras de la petición; en **producción** nunca (las manda el cliente): sin `APP_URL` ni `VERCEL_PROJECT_PRODUCTION_URL`, `/login` no manda el enlace y el log dice por qué (`lib/auth/origen.ts`) |
 | `SUPPORT_EMAIL` | el correo de contacto que publican `/legal`, el error «ese correo ya está ligado a otra cuenta» de `/login` y el tope de espacios del selector. Sin él ninguno promete «escríbenos»: `/legal` dice que se publicará y `/login` ofrece entrar con otro correo. En producción, que falte se avisa en el log |
+| `DEMO_USER_ID` | **solo sin llaves** (modo demo): a quién se simula para los permisos del marco (ACC-5). Un id de `app_user`; el de la creadora del seed es `00000002-0000-4000-8000-000000000002`. Sin ella, el modo demo es el Dueño. Con llaves no se lee, como `DEMO_WORKSPACE_ID` |
 | `TURNSTILE_SITE_KEY` | la clave **de sitio** (pública) de Cloudflare Turnstile para el CAPTCHA de `/login` (CIM-10). La secreta va en el panel de Supabase, no aquí. Sin ella, `/login` funciona sin CAPTCHA: fuera de producción lo dice en una línea, en producción lo avisa el log |
 
 Sin las dos primeras la web **no se cae**: entra en modo demo, `/login`
@@ -370,6 +463,53 @@ aplica las dos en el orden malo y comprueba el mensaje, y además lee de
 la base migrada que `mc_app` tenga INSERT (y no UPDATE ni DELETE) sobre
 membership.
 
+## Conexiones: quién conecta y quién consiente
+
+Quien conecta una cuenta ajena no es quien consiente (ACC-8, decisión E
+de `docs/propuestas/ACC-accesos-y-roles.md`). Las dos preguntas se
+responden por separado dentro de la misma transacción:
+
+- **A nombre de quién** queda el consentimiento: el `creator_profile`
+  del workspace (`getConsentCreator`). Siempre. Es de quien son los
+  datos, y es la respuesta el día que Meta o TikTok pregunten.
+- **Quién actuó**: la persona de la sesión, `current_user_id()`, con el
+  rol de su membresía (`getSessionMember`, `role.key` de 0034). Si no es
+  el titular, la fila de `data_consent` lo dice en `evidence.actedBy`
+  (id, correo y rol de ese día) y el titular recibe el aviso
+  `connection_added` (migración 0038) con quién, qué cuenta y cuándo.
+  La bitácora la escriben las consultas con `audit()` (ACC-2):
+  `actor_user_id` es quien actuó, y el `after` de cada fila de
+  conexiones y consentimientos lleva `onBehalfOf` y, si actuó un
+  tercero, `actedBy { userId, roleKey }`, sin correo. Quitar la cuenta
+  deja la misma huella en `evidence.revocation` y `connection.disconnected`.
+
+La evidencia es la **v2** (`_lib/consent.ts`): `v`, `method`
+(`public_handle` u `oauth`), `declaredOwner`, `ipHash` (sha256; la IP
+ya no va en claro), `userAgent`, `textShown`, `policyVersion`, `at`,
+`onBehalfOf { creatorId }` y, solo si actúa un tercero, `actedBy`.
+Aplica a los dos caminos: «Agregar cuenta» por @ y el callback de OAuth.
+
+**El permiso.** Cada Server Action abre con `requirePermission()`
+(ACC-1). Además, `conexiones.cuenta.conectar` y `…desconectar` se
+comprueban como primera sentencia de la transacción que escribe
+(`requireConexionesPermission`, `_lib/permisos.ts`), leyendo
+`role_permission` por la membresía de la sesión. Esa segunda barrera es
+la que hoy decide, porque hasta ACC-5 `requirePermission` resuelve toda
+sesión como Dueño, y es la única que ven los route handlers de OAuth.
+También corre antes de gastar una llamada a la plataforma y antes de
+mandar a nadie al diálogo de OAuth. En un workspace de creador solo el
+Dueño trae esos permisos de fábrica; el Mánager los recibe con la
+casilla de ACC-4. **No existe el permiso de ver un token**: la lista
+muestra estado y @, y el almacén cifrado solo lo abren los jobs y
+«Actualizar».
+
+En la lista, una cuenta conectada por un tercero dice «Conectada por
+<nombre> el <fecha>» debajo del @ (nombre de `app_user` mientras sea
+miembro; si ya no lo es, el correo que la evidencia guardó ese día).
+Cuando la conectó el propio titular no se dice nada: la ausencia de la
+línea es la información. El seed trae ese caso: Andrés Pardo, mánager
+de la demo (`db/seed/0003`), conectó el Instagram de Laura.
+
 ## Reglas del marco
 
 - El tema se fija en `<html data-theme>` antes de pintar y se guarda
@@ -378,5 +518,23 @@ membership.
   literal.
 - Un módulo apagado en `content/flags.ts` desaparece del menú y su
   ruta no existe.
+- **Banderas y permisos (ACC-5).** Una bandera dice si el módulo
+  **existe**; un permiso, si **esta persona** entra. Cada módulo declara
+  en `content/modules.ts` su permiso mínimo (`permission`, de
+  `PERMISO_MINIMO` de `@mc/core`) y el `layout.tsx` de su carpeta hace
+  `await requireModuleAccess("<slug>")` (`lib/permisos/modulo.ts`): se
+  evalúa primero la bandera y después el permiso, y en los dos casos la
+  ruta responde **404**, nunca 403 (un 403 confirmaría que el módulo
+  existe). El menú esconde lo que no se puede abrir: el `Shell` resuelve
+  `permisosDeLaSesion()` en servidor y se lo pasa a la navegación. Los
+  permisos salen de la membresía en el workspace actual
+  (`membership.role_id → role_permission`, `@mc/db/queries/accesos`),
+  una vez por petición; sin sesión, ninguno; sin llaves (modo demo), el
+  Dueño —o los permisos reales de `DEMO_USER_ID`, que es como se prueba
+  en dev que el marco esconde y cierra—. Una pantalla que pide más que
+  el mínimo de su módulo (`/finanzas/flujo`) llama a
+  `requirePagePermission("…")`, también 404. Toda Server Action abre con
+  `await requirePermission("…")` (`lib/permisos`). El detalle está en
+  `lib/permisos/README.md`.
 - Nada aquí hace aritmética de métricas. Cuando lleguen los datos, los
   números derivados salen de las vistas de la base.

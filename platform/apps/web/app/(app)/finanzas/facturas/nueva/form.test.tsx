@@ -19,7 +19,13 @@ const companies: CompanyOption[] = [
 const campaigns: CampaignOption[] = [
   { id: CAMPANA, name: "Lanzamiento cold brew", status: "reported", companyId: CAFE_ALMA, companyName: "Café Alma", amount: "3100000.00", currency: "COP", quoteId: null },
 ];
-const defaults = { issuedOn: "2026-09-21", dueOn: "2026-10-21" };
+/**
+ * Lo que la página le pasa desde la configuración financiera del
+ * workspace (FIN-8). Son los del seed: 19 % de IVA, 11 % de retención y
+ * 30 días de plazo. Antes el formulario los sacaba de DEFAULT_TAX_RATE y
+ * de un 30 escrito a mano.
+ */
+const defaults = { issuedOn: "2026-09-21", dueOn: "2026-10-21", taxPct: "19", withholdingPct: "11", plazoDias: 30 };
 
 beforeEach(() => crearFactura.mockReset());
 
@@ -49,7 +55,7 @@ describe("NuevaFacturaForm", () => {
     expect(screen.getByLabelText("Total en vivo")).toHaveTextContent("COP 975.000");
   });
 
-  it("el vencimiento sigue a la emisión (+30) hasta que la persona lo toca", () => {
+  it("el vencimiento sigue a la emisión (+ el plazo configurado) hasta que la persona lo toca", () => {
     render(<NuevaFacturaForm companies={companies} campaigns={campaigns} workspace={WORKSPACE} defaults={defaults} />);
     fireEvent.change(screen.getByLabelText(/Emisión/), { target: { value: "2026-12-31" } });
     expect(screen.getByLabelText(/Vencimiento/)).toHaveValue("2027-01-30");
@@ -78,5 +84,46 @@ describe("NuevaFacturaForm", () => {
       <NuevaFacturaForm companies={companies} campaigns={campaigns} workspace={WORKSPACE} defaults={defaults} initialMessage="La campaña no tiene monto acordado: escríbelo a mano." />,
     );
     expect(screen.getByRole("alert")).toHaveTextContent("La campaña no tiene monto acordado");
+  });
+
+  it("los porcentajes y el plazo de la CONFIGURACIÓN mandan, no los de Colombia", () => {
+    // Un workspace mexicano: 16 % de IVA, sin retención y 45 días. Si el
+    // formulario volviera a las constantes de core, esto fallaría.
+    const mx = { issuedOn: "2026-09-21", dueOn: "2026-11-05", taxPct: "16", withholdingPct: "0", plazoDias: 45 };
+    render(<NuevaFacturaForm companies={companies} campaigns={campaigns} workspace={WORKSPACE} defaults={mx} />);
+
+    expect(screen.getByLabelText(/IVA %/)).toHaveValue("16");
+    expect(screen.getByLabelText(/Retención en la fuente %/)).toHaveValue("0");
+    expect(screen.getByLabelText(/Vencimiento/)).toHaveValue("2026-11-05");
+    expect(screen.getByLabelText(/Vencimiento/)).toHaveAccessibleDescription(/45 días después de la emisión/);
+
+    // Y el plazo configurado es el que sigue a la emisión.
+    fireEvent.change(screen.getByLabelText(/Emisión/), { target: { value: "2026-12-01" } });
+    expect(screen.getByLabelText(/Vencimiento/)).toHaveValue("2027-01-15");
+
+    // El total en vivo usa el 16 %, no el 19 %.
+    fireEvent.change(screen.getByLabelText(/Subtotal/), { target: { value: "1.000.000" } });
+    expect(screen.getByLabelText("Total en vivo")).toHaveTextContent("COP 1.160.000");
+  });
+
+  it("con plazo cero la ayuda dice pago contra entrega y el vencimiento es el mismo día", () => {
+    const contraEntrega = { issuedOn: "2026-09-21", dueOn: "2026-09-21", taxPct: "19", withholdingPct: "11", plazoDias: 0 };
+    render(<NuevaFacturaForm companies={companies} campaigns={campaigns} workspace={WORKSPACE} defaults={contraEntrega} />);
+    expect(screen.getByLabelText(/Vencimiento/)).toHaveAccessibleDescription(/pago contra entrega/);
+    fireEvent.change(screen.getByLabelText(/Emisión/), { target: { value: "2026-12-01" } });
+    expect(screen.getByLabelText(/Vencimiento/)).toHaveValue("2026-12-01");
+  });
+
+  it("llegando con ?campana= el subtotal se descompone con la tasa CONFIGURADA, no con el 19 % de core", () => {
+    // El camino del botón «Facturar» de Campañas: la campaña ya viene
+    // elegida al montar. En un workspace al 16 %, subtotal + IVA tiene
+    // que volver a dar los 3.100.000 acordados con la marca.
+    const mx = { issuedOn: "2026-09-21", dueOn: "2026-11-05", taxPct: "16", withholdingPct: "0", plazoDias: 45, campaignId: CAMPANA };
+    const { container } = render(
+      <NuevaFacturaForm companies={companies} campaigns={campaigns} workspace={WORKSPACE} defaults={mx} />,
+    );
+    // 3.100.000 / 1,16 = 2.672.413,79 (con el 19 % daría 2.605.042,02).
+    expect(container.querySelector('input[name="subtotal"]')).toHaveValue("2672413.79");
+    expect(screen.getByLabelText("Total en vivo")).toHaveTextContent("COP 3.100.000");
   });
 });

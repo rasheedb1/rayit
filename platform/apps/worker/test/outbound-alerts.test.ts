@@ -255,7 +255,7 @@ test('sin APP_URL el job lo avisa en el registro y el resumen sale sin enlaces (
   await db.raw.exec(`
     INSERT INTO workspace (id, slug, name, timezone, locale) VALUES ('${WS_SIN_URL}', 'alertas-sin-url', 'Sin URL', 'America/Bogota', 'es-CO');
     INSERT INTO app_user (id, email, name) VALUES ('${USER_SIN_URL}', 'sin-url@alertas.test', 'Sin URL');
-    INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_SIN_URL}', '${USER_SIN_URL}', 'owner');
+    ${membershipSql([{ workspaceId: WS_SIN_URL, userId: USER_SIN_URL, kind: 'owner' }])}
     INSERT INTO outbound_policy (workspace_id) VALUES ('${WS_SIN_URL}');
   `);
   const cartero = new CarteroFalso();
@@ -293,7 +293,7 @@ async function espacioDeFixture(ws: string, user: string, slug: string, name: st
   await db.raw.exec(`
     INSERT INTO workspace (id, slug, name, timezone, locale) VALUES ('${ws}', '${slug}', '${name}', 'America/Bogota', 'es-CO');
     INSERT INTO app_user (id, email, name) VALUES ('${user}', '${slug}@alertas.test', '${name}');
-    INSERT INTO membership (workspace_id, user_id, role) VALUES ('${ws}', '${user}', 'owner');
+    ${membershipSql([{ workspaceId: ws, userId: user, kind: 'owner' }])}
     INSERT INTO outbound_policy (workspace_id) VALUES ('${ws}');
   `);
 }

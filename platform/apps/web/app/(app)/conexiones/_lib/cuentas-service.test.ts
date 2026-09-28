@@ -5,17 +5,34 @@
  * declaración y el snapshot del día; actualizar el mismo día no duplica el snapshot;
  * TikTok se agrega sin métricas; errores en español; sin credenciales en
  * ninguna tabla.
+ *
+ * ACC-8 · consentimiento delegado: el mánager agrega la cuenta del creador
+ * → consentimiento a nombre del creador con el mánager en actedBy, aviso
+ * al creador, bitácora con el mánager; el propio creador → sin actedBy y
+ * sin aviso; un editor sin permiso → falla antes de leer o escribir nada;
+ * ningún token en la evidencia ni en el aviso.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { dumpTextColumns, findSecretInDump, FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from "@mc/connectors";
+import { createHash, randomBytes } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { dumpTextColumns, EncryptedSecretStore, findSecretInDump, FixtureFetch, keyringFromEnv, loadFixtures, TokenCipher, withoutNetwork, type NetworkGuard } from "@mc/connectors";
 import { listConsents, type WorkspaceTx } from "@mc/db";
 import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { createCuentasService, OWNERSHIP_DECLARATION_ES, type CuentasService } from "./cuentas-service";
+import { SinPermisoError } from "./permisos";
 
 const NOW = new Date("2026-09-22T15:00:00Z");
 const ENV = { INSTAGRAM_HOUSE_TOKEN: "IGAA-house-web-SECRETO", GOOGLE_API_KEY: "AIza-web-key-SECRETO" };
 const WHO = { ip: "203.0.113.7", userAgent: "vitest" };
+const IP_HASH = createHash("sha256").update(WHO.ip).digest("hex");
+// Cada prueba abre transacciones sobre Postgres embebido y el volcado de R4 recorre todas las tablas: con la máquina cargada pasan de los 5 s por defecto.
+vi.setConfig({ testTimeout: 120_000 });
+const CREATOR_LAURA = "00000002-0000-4000-8000-000000000003";
+const USER_LAURA = "00000002-0000-4000-8000-000000000002";
+/** Andrés Pardo, el mánager de la demo (seed 0003): membership 'admin'. */
+const USER_MANAGER = "00000002-0000-4000-8000-000000000004";
+const ROLE_MANAGER_CONECTA = "00000009-0000-4000-8000-00000000ac81";
+const USER_EDITOR = "00000009-0000-4000-8000-0000000000b2";
 
 let db: EmbeddedDb;
 let guard: NetworkGuard;
@@ -30,9 +47,28 @@ beforeAll(async () => {
     ...(await loadFixtures("instagram", [["business_discovery", "ok"]])),
     ...(await loadFixtures("youtube", [["channels.list", "handle.ok"]])),
     ...(await loadFixtures("tiktok", [["oembed.profile", "ok"], ["oembed.profile", "not_found"]])),
+    ...(await loadFixtures("ensembledata", [["user.info", "ok"], ["user.posts", "ok"]])),
   ]);
   service = createCuentasService({ env: ENV, withWorkspace, fetch: fetch.fetch, now: () => NOW });
-}, 60_000);
+  await db.execAsSuperuser(`
+    INSERT INTO app_user (id, email, name) VALUES ('${USER_EDITOR}', 'edita@ejemplo.com', 'Edita Ruiz') ON CONFLICT DO NOTHING;
+    INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${SEED_WORKSPACE_ID}', '${USER_EDITOR}', system_role_id('creator', 'editor')) ON CONFLICT DO NOTHING;
+    -- «El mánager con la casilla de ACC-4» (ACC-4 aún no existe): un rol a medida del workspace con los permisos del
+    -- Mánager de fábrica más conectar y desconectar. Andrés (seed 0003) es 'manager' de fábrica y pasa a este rol.
+    INSERT INTO role (id, workspace_id, key, workspace_kind, label_es, is_system)
+    VALUES ('${ROLE_MANAGER_CONECTA}', '${SEED_WORKSPACE_ID}', 'manager_conecta', 'creator', 'Mánager (también conecta mis cuentas)', false) ON CONFLICT DO NOTHING;
+    INSERT INTO role_permission (role_id, permission_key)
+      SELECT '${ROLE_MANAGER_CONECTA}', permission_key FROM role_permission WHERE role_id = system_role_id('creator', 'manager')
+      UNION VALUES ('${ROLE_MANAGER_CONECTA}'::uuid, 'conexiones.cuenta.conectar'), ('${ROLE_MANAGER_CONECTA}'::uuid, 'conexiones.cuenta.desconectar')
+    ON CONFLICT DO NOTHING;
+    UPDATE membership SET role_id = '${ROLE_MANAGER_CONECTA}' WHERE workspace_id = '${SEED_WORKSPACE_ID}' AND user_id = '${USER_MANAGER}';
+  `);
+}, 300_000); // Postgres embebido con las migraciones y los seeds: con la máquina cargada pasa del minuto.
+
+/** El mismo servicio con la sesión de una persona: withWorkspace fija app.user_id como lo hace lib/db con CIM-3. */
+function serviceAs(userId: string): CuentasService {
+  return createCuentasService({ env: ENV, withWorkspace: (fn) => db.withWorkspace(SEED_WORKSPACE_ID, fn, { userId }), fetch: fetch.fetch, now: () => NOW });
+}
 
 afterAll(async () => {
   await db.close();
@@ -55,7 +91,11 @@ describe("agregar", () => {
     const consents = await withWorkspace((tx) => listConsents(tx, out.id));
     expect(consents.filter((c) => c.revokedAt === null).map((c) => c.purpose)).toEqual(["analytics"]);
     const ev = await db.queryAsSuperuser<{ evidence: Record<string, unknown> }>("SELECT evidence FROM data_consent WHERE id = $1", [consents[0]!.id]);
-    expect(ev.rows[0]!.evidence).toMatchObject({ declaredOwner: true, handle: "cafealma", platformId: "instagram", ip: "203.0.113.7", userAgent: "vitest", textShown: OWNERSHIP_DECLARATION_ES });
+    expect(ev.rows[0]!.evidence).toMatchObject({ v: 2, method: "public_handle", declaredOwner: true, handle: "cafealma", platformId: "instagram", ipHash: IP_HASH, userAgent: "vitest", textShown: OWNERSHIP_DECLARATION_ES, onBehalfOf: { creatorId: CREATOR_LAURA } });
+    expect(ev.rows[0]!.evidence).not.toHaveProperty("ip");
+    expect(ev.rows[0]!.evidence).not.toHaveProperty("actedBy");
+    // Modo demo, sin sesión: no hay a quién avisar ni a quién nombrar.
+    expect(out.ownerNotice).toBe("no_session");
     const log = await db.queryAsSuperuser<{ endpoint: string; connection_id: string | null }>("SELECT endpoint, connection_id FROM api_call_log ORDER BY id");
     expect(log.rows.at(-1)).toEqual({ endpoint: "instagram.business_discovery", connection_id: out.id });
   });
@@ -84,7 +124,8 @@ describe("agregar", () => {
     if (!out.ok) return;
     const row = (await service.listar()).find((r) => r.id === out.id)!;
     expect(row.latest?.followers).toBe(38400);
-    expect(row.latest?.views).not.toBeNull();
+    // El canal publica su acumulado; la columna es la vista del día, que Resumen suma por día (cierre CON-C).
+    expect(row.latest?.views).toBeNull();
     const sinKey = createCuentasService({ env: { INSTAGRAM_HOUSE_TOKEN: "x" }, withWorkspace, fetch: fetch.fetch, now: () => NOW });
     const res = await sinKey.agregar({ platformId: "youtube", handle: "@NutriveOficial" }, WHO);
     expect(res).toMatchObject({ ok: false, code: "not_configured" });
@@ -119,5 +160,190 @@ describe("actualizar y quitar", () => {
     expect(findSecretInDump(dump, [ENV.INSTAGRAM_HOUSE_TOKEN, ENV.GOOGLE_API_KEY])).toBeNull();
     expect(JSON.stringify(fetch.calls)).not.toContain("SECRETO");
     expect(guard.attempts).toBe(0);
+  });
+});
+
+describe("consentimiento delegado (ACC-8)", () => {
+  it("el mánager agrega el Instagram del creador: consentimiento a nombre del creador con el mánager como operador, aviso al creador, bitácora con el mánager", async () => {
+    const manager = serviceAs(USER_MANAGER);
+    const out = await manager.agregar({ platformId: "instagram", handle: "@cafealma" }, WHO);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.ownerNotice).toBe("sent");
+    const consents = await withWorkspace((tx) => listConsents(tx, out.id));
+    const active = consents.filter((c) => c.revokedAt === null);
+    expect(active.map((c) => c.purpose)).toEqual(["analytics"]);
+    const ev = await db.queryAsSuperuser<{ creator_id: string; evidence: Record<string, unknown> }>("SELECT creator_id, evidence FROM data_consent WHERE id = $1", [active[0]!.id]);
+    expect(ev.rows[0]!.creator_id).toBe(CREATOR_LAURA);
+    expect(ev.rows[0]!.evidence).toMatchObject({
+      v: 2, declaredOwner: true, onBehalfOf: { creatorId: CREATOR_LAURA },
+      actedBy: { userId: USER_MANAGER, email: "andres@ejemplo.com", roleKey: "manager_conecta" },
+    });
+    const notice = await db.queryAsSuperuser<{ user_id: string; kind: string; title_es: string; body_es: string; action_url: string; entity_id: string }>(
+      "SELECT user_id, kind, title_es, body_es, action_url, entity_id FROM notification WHERE kind = 'connection_added' AND entity_id = $1", [out.id],
+    );
+    expect(notice.rows.length).toBe(1);
+    expect(notice.rows[0]).toMatchObject({ user_id: USER_LAURA, kind: "connection_added", title_es: "Una cuenta se conectó en tu nombre", action_url: "/conexiones", entity_id: out.id });
+    expect(notice.rows[0]!.body_es).toMatch(/^Andrés Pardo conectó la cuenta @cafealma de Instagram el .+ en tu nombre\./);
+    // La última fila de alta de esa cuenta: las pruebas de arriba ya la agregaron y la quitaron en modo demo, así que ahora es una reconexión (ACC-2).
+    const audit = await db.queryAsSuperuser<{ action: string; actor_user_id: string; after: Record<string, unknown> }>("SELECT action, actor_user_id, after FROM audit_log WHERE action IN ('connection.added', 'connection.reconnected') AND entity_id = $1 ORDER BY id DESC LIMIT 1", [out.id]);
+    expect(audit.rows[0]!.action).toBe("connection.reconnected");
+    expect(audit.rows.length).toBe(1);
+    expect(audit.rows[0]!.actor_user_id).toBe(USER_MANAGER);
+    expect(audit.rows[0]!.after).toMatchObject({ onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "manager_conecta" } });
+    expect(JSON.stringify(audit.rows[0]!.after)).not.toContain("@ejemplo.com");
+    // La lista lo dice.
+    const row = (await manager.listar()).find((r) => r.id === out.id)!;
+    expect(row.connectedBy).toMatchObject({ userId: USER_MANAGER, name: "Andrés Pardo", email: "andres@ejemplo.com" });
+    // Volver a agregarla no duplica el aviso mientras el creador no lo lea.
+    const again = await manager.agregar({ platformId: "instagram", handle: "cafealma" }, WHO);
+    expect(again).toMatchObject({ ok: true, id: out.id, ownerNotice: "already_pending" });
+    expect(Number((await db.queryAsSuperuser<{ n: number }>("SELECT count(*)::int AS n FROM notification WHERE kind = 'connection_added' AND entity_id = $1", [out.id])).rows[0]!.n)).toBe(1);
+  });
+
+  it("el propio creador agrega su cuenta: sin actedBy, sin aviso, la bitácora lo nombra a él", async () => {
+    const laura = serviceAs(USER_LAURA);
+    const out = await laura.agregar({ platformId: "youtube", handle: "@NutriveOficial" }, WHO);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.ownerNotice).toBe("owner_acted");
+    const active = (await withWorkspace((tx) => listConsents(tx, out.id))).filter((c) => c.revokedAt === null);
+    const ev = await db.queryAsSuperuser<{ evidence: Record<string, unknown> }>("SELECT evidence FROM data_consent WHERE id = $1", [active[0]!.id]);
+    expect(ev.rows[0]!.evidence).toMatchObject({ v: 2, onBehalfOf: { creatorId: CREATOR_LAURA } });
+    expect(ev.rows[0]!.evidence).not.toHaveProperty("actedBy");
+    expect((await db.queryAsSuperuser("SELECT 1 FROM notification WHERE kind = 'connection_added' AND entity_id = $1", [out.id])).rows.length).toBe(0);
+    const audit = await db.queryAsSuperuser<{ actor_user_id: string; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action IN ('connection.added', 'connection.reconnected') AND entity_id = $1 ORDER BY id DESC", [out.id]);
+    expect(audit.rows[0]!.actor_user_id).toBe(USER_LAURA);
+    expect(audit.rows[0]!.after).not.toHaveProperty("actedBy");
+    expect((await laura.listar()).find((r) => r.id === out.id)!.connectedBy).toBeNull();
+  });
+
+  it("un editor sin el permiso no agrega ni quita: falla antes de llamar a la plataforma y sin escribir nada", async () => {
+    const editor = serviceAs(USER_EDITOR);
+    const calls = fetch.calls.length;
+    const before = await db.queryAsSuperuser<{ n: number }>("SELECT (SELECT count(*) FROM social_connection) + (SELECT count(*) FROM data_consent) + (SELECT count(*) FROM notification) + (SELECT count(*) FROM audit_log) + (SELECT count(*) FROM api_call_log) AS n");
+    const out = await editor.agregar({ platformId: "instagram", handle: "@cafealma" }, WHO);
+    expect(out).toMatchObject({ ok: false, code: "sin_permiso" });
+    expect((out as { message: string }).message).toMatch(/No tienes permiso para conectar cuentas/);
+    expect(fetch.calls.length).toBe(calls);
+    const ig = (await editor.listar()).find((r) => r.handle === "cafealma")!;
+    expect(ig, "sí puede VER la lista").toBeTruthy();
+    await expect(editor.quitar(ig.id)).rejects.toBeInstanceOf(SinPermisoError);
+    // «Actualizar» también: abriría tokens, gastaría cuota y escribiría snapshots.
+    expect(await editor.actualizar(ig.id)).toMatchObject({ ok: false, code: "sin_permiso" });
+    expect(fetch.calls.length).toBe(calls);
+    const after = await db.queryAsSuperuser<{ n: number }>("SELECT (SELECT count(*) FROM social_connection) + (SELECT count(*) FROM data_consent) + (SELECT count(*) FROM notification) + (SELECT count(*) FROM audit_log) + (SELECT count(*) FROM api_call_log) AS n");
+    expect(Number(after.rows[0]!.n)).toBe(Number(before.rows[0]!.n));
+    expect(ig.status).toBe("active");
+  });
+
+  it("el mánager quita la cuenta: la revocación queda en la evidencia con él como operador y en la bitácora", async () => {
+    const manager = serviceAs(USER_MANAGER);
+    const ig = (await manager.listar()).find((r) => r.handle === "cafealma")!;
+    await manager.quitar(ig.id);
+    const ev = await db.queryAsSuperuser<{ evidence: Record<string, unknown>; revoked_at: string | null }>("SELECT evidence, revoked_at FROM data_consent WHERE connection_id = $1 ORDER BY granted_at DESC LIMIT 1", [ig.id]);
+    expect(ev.rows[0]!.revoked_at).not.toBeNull();
+    expect(ev.rows[0]!.evidence["revocation"]).toMatchObject({ v: 2, at: NOW.toISOString(), onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "manager_conecta" } });
+    expect(ev.rows[0]!.evidence["actedBy"], "el otorgamiento no se toca").toMatchObject({ userId: USER_MANAGER });
+    const audit = await db.queryAsSuperuser<{ actor_user_id: string | null; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action = 'connection.disconnected' AND entity_id = $1 ORDER BY id DESC", [ig.id]);
+    expect(audit.rows.length, "la de arriba en modo demo (sin actor) y esta").toBe(2);
+    expect(audit.rows[1]!.actor_user_id).toBeNull();
+    expect(audit.rows[0]!.actor_user_id).toBe(USER_MANAGER);
+    expect(audit.rows[0]!.after).toMatchObject({ status: "disabled", onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "manager_conecta" } });
+  });
+
+  it("R4: ni el token casa ni la API key ni una IP en claro aparecen en ninguna evidencia ni en ningún aviso", async () => {
+    const dump = await dumpTextColumns({ query: (text, params) => db.queryAsSuperuser(text, params) });
+    expect(findSecretInDump(dump, [ENV.INSTAGRAM_HOUSE_TOKEN, ENV.GOOGLE_API_KEY, WHO.ip])).toBeNull();
+    const evidences = dump.find((d) => d.table === "data_consent" && d.column === "evidence")!;
+    expect(evidences.text).toContain("actedBy");
+    const notices = dump.find((d) => d.table === "notification" && d.column === "body_es")!;
+    expect(notices.text).toContain("en tu nombre");
+    expect(guard.attempts).toBe(0);
+  });
+});
+
+describe("TikTok con el proveedor de datos contratado (CON-12)", () => {
+  const ENV_PROVEEDOR = { ...ENV, ENSEMBLEDATA_TOKEN: "ed-token-web-SECRETO" };
+
+  it("sin la variable, TikTok sigue sin cifras por @ y no se llama al proveedor", () => {
+    const tiktok = service.availability().find((a) => a.platformId === "tiktok")!;
+    expect(tiktok.label).toBe("oEmbed de TikTok");
+    expect(tiktok.offersEs).toMatch(/no publica seguidores/);
+    expect(JSON.stringify(fetch.calls)).not.toContain("ensembledata.com");
+  });
+
+  it("con la variable, la cuenta que ya estaba por @ pasa a aggregator con sus cifras, sin duplicarse ni perder su id", async () => {
+    const todasAntes = await service.listar();
+    const antes = todasAntes.find((r) => r.handle === "laura.cocinafacil" && r.accessMode === "public_profile")!;
+    expect(antes.latest).toBeNull();
+
+    const conProveedor = createCuentasService({ env: ENV_PROVEEDOR, withWorkspace, fetch: fetch.fetch, now: () => NOW });
+    expect(conProveedor.availability().find((a) => a.platformId === "tiktok")!.offersEs).toMatch(/proveedor de datos/);
+
+    const upd = await conProveedor.actualizar(antes.id);
+    expect(upd).toMatchObject({ ok: true, withMetrics: true, alreadyReadToday: false });
+
+    const filas = await conProveedor.listar();
+    const despues = filas.find((r) => r.id === antes.id)!;
+    expect(despues.accessMode).toBe("aggregator");
+    expect(despues.latest).toEqual({ day: "2026-09-22", followers: 128400, following: 312, mediaCount: 3, views: null });
+    // El seed ya traía otra fila de TikTok con ese @ (open_id distinto, autorizada):
+    // lo que importa es que cambiar de fuente no agregó ninguna.
+    expect(filas.length).toBe(todasAntes.length);
+    expect(filas.filter((r) => r.accessMode === "aggregator").map((r) => r.id)).toEqual([antes.id]);
+
+    const src = await db.queryAsSuperuser<{ source: string }>("SELECT source FROM account_metric_snapshot WHERE connection_id = $1", [antes.id]);
+    expect(src.rows.map((r) => r.source)).toEqual(["aggregator"]);
+  });
+
+  it("agregar un @ nuevo de TikTok deja seguidores y videos del día sin que el creador suba nada (las vistas llegan por video)", async () => {
+    const conProveedor = createCuentasService({ env: ENV_PROVEEDOR, withWorkspace, fetch: fetch.fetch, now: () => NOW });
+    await conProveedor.quitar((await conProveedor.listar()).find((r) => r.handle === "laura.cocinafacil")!.id);
+
+    const out = await conProveedor.agregar({ platformId: "tiktok", handle: "@laura.cocinafacil" }, WHO);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const row = (await conProveedor.listar()).find((r) => r.id === out.id)!;
+    expect(row.accessMode).toBe("aggregator");
+    expect(row.latest?.followers).toBe(128400);
+    expect(row.latest?.mediaCount).toBe(3);
+    expect(row.latest?.views).toBeNull();
+    expect(row.status).toBe("active");
+  });
+
+  it("R4: el token del proveedor no queda en ninguna tabla ni en las llamadas grabadas", async () => {
+    const dump = await dumpTextColumns({ query: (text, params) => db.queryAsSuperuser(text, params) });
+    expect(findSecretInDump(dump, ["ed-token-web-SECRETO"])).toBeNull();
+    expect(JSON.stringify(fetch.calls)).not.toContain("ed-token-web-SECRETO");
+    expect(guard.attempts).toBe(0);
+  });
+});
+
+describe("YouTube autorizado (CON-8): «Actualizar» lee con el token del dueño", () => {
+  it("deja los suscriptores del día con source api y vistas en null; antes del cierre decía «todavía no tiene lectura de cuenta»", async () => {
+    const env = { ...ENV, TOKEN_ENCRYPTION_KEY: randomBytes(32).toString("base64") };
+    const ref = "enc:youtube:0000000c-0000-4000-8000-0000000000a1";
+    const tokens = { accessToken: "ya29.web-actualizar-SECRETO", refreshToken: "1//web-actualizar-SECRETO", accessExpiresAt: new Date("2026-09-22T16:00:00Z"), scopes: ["https://www.googleapis.com/auth/youtube.readonly"] };
+    const inserted = await db.queryAsSuperuser<{ id: string }>(
+      `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, scopes, access_mode, access_expires_at)
+       VALUES ($1, $2, 'youtube', 'UCcanalActualizar000000a1', 'CanalActualizar', $3, $4::text[], 'direct_oauth', $5) RETURNING id`,
+      [SEED_WORKSPACE_ID, CREATOR_LAURA, ref, tokens.scopes, tokens.accessExpiresAt],
+    );
+    const id = inserted.rows[0]!.id;
+    await withWorkspace((tx) => new EncryptedSecretStore({ db: tx, cipher: new TokenCipher(keyringFromEnv(env)) }).set(ref, tokens));
+    const yt = new FixtureFetch(await loadFixtures("youtube", [["channels.list", "mine.ok"]]));
+    const conToken = createCuentasService({ env, withWorkspace: (fn) => db.withWorkspace(SEED_WORKSPACE_ID, fn, { userId: USER_LAURA }), fetch: yt.fetch, now: () => NOW });
+
+    const out = await conToken.actualizar(id);
+    expect(out).toMatchObject({ ok: true, withMetrics: true });
+    const snap = await db.queryAsSuperuser<{ followers: string | null; views: string | null; source: string }>(
+      "SELECT followers::text, views::text, source FROM account_metric_snapshot WHERE connection_id = $1", [id]);
+    expect(snap.rows).toHaveLength(1);
+    expect(Number(snap.rows[0]!.followers)).toBeGreaterThan(0);
+    expect(snap.rows[0]!.views).toBeNull();
+    expect(snap.rows[0]!.source).toBe("api");
+    expect(yt.calls.map((c) => new URL(c.url).pathname)).toEqual(["/youtube/v3/channels"]);
+    expect(JSON.stringify(yt.calls)).not.toContain(tokens.accessToken);
   });
 });

@@ -1,0 +1,105 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "Variante tolerada: la lista viene en data.posts y el cursor dentro de data. Mismo resultado."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://ensembledata\\.com/apis/tt/user/posts\\?"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "data": {
+        "posts": [
+          {
+            "aweme_id": "7400000000000000d01",
+            "desc": "Receta 1 con @cafealma.co #recetafacil",
+            "create_time": 1787932800,
+            "is_top": false,
+            "author": {
+              "unique_id": "laura.cocinafacil"
+            },
+            "music": {
+              "id": "7000000000000001"
+            },
+            "video": {
+              "duration": 31000,
+              "width": 1080,
+              "height": 1920,
+              "cover": {
+                "url_list": [
+                  "https://p16-sign.tiktokcdn-us.com/demo/cover-d01.jpeg"
+                ]
+              }
+            },
+            "statistics": {
+              "play_count": 50001,
+              "digg_count": 1201,
+              "comment_count": 41,
+              "share_count": 11
+            }
+          },
+          {
+            "aweme_id": "7400000000000000d02",
+            "desc": "Receta 2 #recetafacil",
+            "create_time": 1788019200,
+            "is_top": false,
+            "author": {
+              "unique_id": "laura.cocinafacil"
+            },
+            "music": {
+              "id": "7000000000000002"
+            },
+            "video": {
+              "duration": 31000,
+              "width": 1080,
+              "height": 1920,
+              "cover": {
+                "url_list": [
+                  "https://p16-sign.tiktokcdn-us.com/demo/cover-d02.jpeg"
+                ]
+              }
+            },
+            "statistics": {
+              "play_count": 12000,
+              "digg_count": 402,
+              "comment_count": 18,
+              "share_count": 3
+            }
+          },
+          {
+            "aweme_id": "7400000000000000d03",
+            "desc": "Receta 3 #postre",
+            "create_time": 1788105600,
+            "is_top": false,
+            "author": {
+              "unique_id": "laura.cocinafacil"
+            },
+            "music": {
+              "id": "7000000000000003"
+            },
+            "video": {
+              "duration": 31000,
+              "width": 1080,
+              "height": 1920,
+              "cover": {
+                "url_list": [
+                  "https://p16-sign.tiktokcdn-us.com/demo/cover-d03.jpeg"
+                ]
+              }
+            },
+            "statistics": {
+              "play_count": 3400,
+              "digg_count": 90,
+              "comment_count": 4,
+              "share_count": 1
+            }
+          }
+        ],
+        "nextCursor": 0
+      }
+    }
+  }
+}

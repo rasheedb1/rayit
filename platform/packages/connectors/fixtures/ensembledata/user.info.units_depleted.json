@@ -1,0 +1,17 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "495 UNITS_DEPLETED: se acabaron las unidades del día del plan."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://ensembledata\\.com/apis/tt/user/info\\?"
+  },
+  "response": {
+    "status": 495,
+    "body": {
+      "detail": "Units depleted"
+    }
+  }
+}

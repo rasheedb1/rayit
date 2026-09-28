@@ -5,6 +5,7 @@
  * al vault.
  */
 import type { OAuthAppConfig, OAuthProviderId } from './types.ts';
+import { YOUTUBE_OAUTH_SCOPES } from './google.ts';
 import { INSTAGRAM_LOGIN_SCOPES } from './instagram-login.ts';
 import { TIKTOK_BUSINESS_SCOPES } from './tiktok-business.ts';
 import { TIKTOK_LOGIN_SCOPES } from './tiktok-login.ts';
@@ -20,12 +21,14 @@ export const OAUTH_ENV_NAMES: Readonly<Record<OAuthProviderId, OAuthEnvNames>> =
   tiktok: { clientId: 'TIKTOK_LOGIN_CLIENT_KEY', clientSecret: 'TIKTOK_LOGIN_CLIENT_SECRET', redirectUri: 'TIKTOK_LOGIN_REDIRECT_URI' },
   'tiktok-business': { clientId: 'TIKTOK_BUSINESS_APP_ID', clientSecret: 'TIKTOK_BUSINESS_APP_SECRET', redirectUri: 'TIKTOK_BUSINESS_REDIRECT_URI' },
   instagram: { clientId: 'META_APP_ID', clientSecret: 'META_APP_SECRET', redirectUri: 'META_REDIRECT_URI' },
+  youtube: { clientId: 'GOOGLE_CLIENT_ID', clientSecret: 'GOOGLE_CLIENT_SECRET', redirectUri: 'GOOGLE_REDIRECT_URI' },
 };
 
 const DEFAULT_SCOPES: Readonly<Record<OAuthProviderId, readonly string[]>> = {
   tiktok: TIKTOK_LOGIN_SCOPES,
   'tiktok-business': TIKTOK_BUSINESS_SCOPES,
   instagram: INSTAGRAM_LOGIN_SCOPES,
+  youtube: YOUTUBE_OAUTH_SCOPES,
 };
 
 /** Ruta del callback en la web; con APP_URL delante es la redirect URI a registrar si no se fija la variable. */

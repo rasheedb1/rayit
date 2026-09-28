@@ -11,10 +11,17 @@ src/client.ts      withWorkspace / withIdentity / asWorker / withCatalogs sobre 
 src/pglite.ts      lo mismo sobre PGlite
 src/embedded.ts    PGlite con db/migrations + db/seed, corriendo como mc_app
 src/from-env.ts    cómo la web elige entre los dos (DATABASE_URL o demo)
+src/audit.ts       audit / auditAsJob: la bitácora obligatoria de toda escritura (uso 7)
 src/tls.ts         la CA de Supabase, verificada siempre (nunca rejectUnauthorized: false)
+src/scope.ts       scopeFilter / assertScopeAllows / assertUnscoped: el alcance dentro del workspace (uso 9)
 src/schema/        tablas y vistas del MVP, curadas desde db/migrations
 src/queries/       un archivo por módulo: cimientos, catalogos, resumen, ventas,
-                   cotizar, campanas, finanzas, conexiones
+                   cotizar, campanas, finanzas (facturas y gastos), conexiones
+                   (finanzas trae además getCashflowInputs, la ÚNICA consulta del
+                   flujo de caja y de la proyección de gastos: devuelve filas en
+                   bruto y clasifica @mc/core, y listReminders/markReminderSent,
+                   la bandeja de recordatorios de FIN-4 sobre notification: el
+                   texto ya viene redactado del job)
 test/pglite.ts     openTestDb(): la base para las pruebas de cualquier paquete
 scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 ```
@@ -25,8 +32,11 @@ scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 |---|---|---|
 | Cliente, tipos, esquema y operadores de Drizzle | `@mc/db` | `import { createDbFromEnv, deal, eq, desc, CURRENT_WORKSPACE } from '@mc/db'` |
 | Consultas de un módulo | `@mc/db/queries/<módulo>` | `import { listInvoices } from '@mc/db/queries/finanzas'` |
+| Qué puede hacer la sesión en el workspace actual (ACC-5) | `@mc/db/queries/accesos` | `import { getSessionPermissions } from '@mc/db/queries/accesos'` — las llaves de `membership.role_id → role_permission`, con los dos ids de la transacción; la web las convierte en permisos del catálogo (`apps/web/lib/permisos`) |
+| Salud del worker (WRK) | `@mc/db/queries/worker` | `getWorkerHealth(q)`: última corrida, última buena y fallos desde entonces por cada `job_definition`; `workerDataAsOf(salud)` es «Datos al <fecha>». Recibe cualquier ejecutor de SQL, pero solo sirve como `mc_worker`: las corridas de cron tienen `workspace_id` NULL y `job_run` tiene RLS, así que como `mc_app` sale vacía (docs/propuestas/WRK.md §4) |
 | Construir una base a mano (worker, scripts) | `@mc/db/client` | `import { createPgDb, createPool, type CatalogDb } from '@mc/db/client'` |
 | Base para pruebas | `@mc/db/test/pglite` | `import { openTestDb } from '@mc/db/test/pglite'` |
+| Bitácora | `@mc/db` | `import { audit, auditAsJob } from '@mc/db'` |
 
 El tipo `Db` que entrega el barril **no** tiene `withCatalogs`: una
 transacción sin workspace sobre una tabla con RLS devuelve cero filas sin
@@ -45,7 +55,7 @@ nombres chocan, `tsc` lo señala (TS2308). Los operadores de Drizzle
 `drizzle-orm` ni cuiden su versión. `isUuid` / `UUID_RE` también, para
 validar ids que llegan de una ruta o un formulario antes de consultar.
 
-## Los seis usos
+## Los nueve usos
 
 ### 1. Leer con workspace (pantallas y server actions)
 
@@ -294,6 +304,182 @@ outreach y a la guardia (mide privilegios de mc_app con un rol que
 hereda los de mc_worker, o cuenta filas sin esperar la demo sembrada).
 Es la historia CIM-2c del backlog.
 
+### 7. Bitácora: `audit()` en toda escritura de dinero, publicación o cuenta conectada
+
+```ts
+import { audit } from '../audit.ts';   // desde queries/<módulo>.ts
+
+export async function transitionInvoice(tx: WorkspaceTx, id: string, to: InvoiceStatus) {
+  const row = …;                        // SELECT … FOR UPDATE
+  await tx.query('UPDATE invoice SET status = $2 … WHERE id = $1', [id, to]);
+  await audit(tx, {
+    action: 'invoice.sent',             // '<entidad>.<evento>', de AUDIT_ACTIONS
+    entityType: 'invoice',              // la tabla
+    entityId: id,
+    before: { status: row.status },     // solo lo que cambia, de ESTA entidad
+    after: { status: to },
+  });
+  return getInvoice(tx, id);
+}
+```
+
+Se llama **dentro de la función de consulta que escribe, con el mismo
+`tx`**, no desde la Server Action: así audita igual quien llame a la
+consulta (COT-4 crea la campaña con `createCampaignFromQuote` y la fila
+queda sin que Cotizar sepa nada), y si la transacción hace rollback la
+bitácora se va con ella. Lo que la fila guarda lo pone la base, no un
+parámetro: `workspace_id = current_workspace_id()` (RLS rechaza otro),
+`actor_user_id = current_user_id()` (la identidad que `withWorkspace(…,
+identity)` fijó desde la sesión) y `actor_kind = 'user'`, o `'system'`
+con actor nulo si la transacción no tiene identidad (copia sin llaves,
+pruebas): decir «user» sin saber cuál sería mentir. Desde un job,
+`auditAsJob(ctx.db, { workspaceId, job: { id, runId }, …entrada })`:
+`actor_kind = 'job'`, `workspace_id` explícito y el job en `after._job`.
+
+`before` y `after` se construyen **a mano con los campos permitidos de
+la entidad** (nunca `...row`) y aun así pasan por `sanitizeForAudit`:
+`redactSecrets` de `@mc/connectors` (tokens, secretos, contraseñas,
+`OAuthTokens` por forma) y después `CLAVES_PROHIBIDAS_EN_BITACORA`
+(`secret_ref`, `ip`, `raw`, `evidence`, correos y teléfonos, user agent,
+cookies) que se **eliminan** a cualquier profundidad; todo lo que parezca
+un correo dentro de un string queda como `[correo omitido]`.
+`test/audit.test.ts` lo demuestra con el volcado de columnas de texto
+(`dumpTextColumns`, el precedente de CON-3).
+
+`audit()` no devuelve nada (el id de `audit_log` es un bigserial que no
+sale de la base; CIM-2 §3), no hay función que la lea (la pantalla es de
+AGE-2) y nadie la corrige: `mc_app` tiene SELECT + INSERT y nada más
+(**0025 §5**; la guardia lo exige en `PRIVILEGIOS_DE_LA_APP`).
+
+**La convención se hace cumplir con una prueba**, no con el tipo:
+`test/audit-convencion.test.ts` recorre `queries/{finanzas, campanas,
+conexiones}.ts`, encuentra cada función —exportada o no— que contiene
+`INSERT INTO`, `UPDATE … SET`, `DELETE FROM` o `tx.db.insert|update|
+delete(` y falla si no contiene `audit(`, salvo que esté en
+`SIN_BITACORA_DECLARADAS` con su motivo (métricas append-only, salud
+técnica de una lectura). Una función declarada ahí que ya no escriba
+también falla. Para sumar un archivo de consultas a la lista basta con
+agregarlo a `ARCHIVOS`.
+
+Qué se audita hoy: `invoice.created / sent / payment_recorded / paid /
+voided / reopened / marked_overdue`, `campaign.created / updated /
+status_changed / post_linked / post_unlinked / primary_post_set`,
+`connection.added / reconnected / authorized / disconnected`,
+`consent.recorded / revoked` y, de CAM-4, `campaign.brand_input.added` y
+`campaign.brand_csv.imported` (la forma admite un subrecurso:
+`<entidad>.<recurso>.<evento>`). El `before` sale de la fila (leída y
+bloqueada antes de escribir), no se supone: reconectar dice cómo
+estaba la cuenta, y autorizar una cuenta por @ que retira otra fila deja
+también la de la retirada. Agregar una acción es agregarla a `AUDIT_ACTIONS`
+(`src/audit.ts`): una acción fuera de la lista lanza
+`InvalidAuditActionError` antes de tocar la base, aunque venga con un
+cast.
+
+### 8. Roles y permisos (0034, ACC-3)
+
+```sql
+-- El rol de una membresía es una fila de role; su matriz, role_permission.
+SELECT p.key
+  FROM membership m
+  JOIN role_permission rp ON rp.role_id = m.role_id
+  JOIN permission p ON p.key = rp.permission_key
+ WHERE m.workspace_id = current_workspace_id() AND m.user_id = current_user_id();
+
+-- Dar de alta a alguien con un rol de fábrica: system_role_id(kind, key).
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES (current_workspace_id(), current_user_id(), system_role_id('creator', 'owner'));
+```
+
+Desde `0034_access_control.sql`, `membership.role` (un `text` que nadie
+leía) es `membership.role_id`, clave ajena a `role`. Los diez roles de
+fábrica (`workspace_id IS NULL`: cinco de creador, cinco de agencia) y
+su matriz los siembra la migración desde el catálogo de
+`@mc/core` (`permisos.ts`, ACC-1): la web los **lee** (`role_read` deja
+ver los de sistema y los a medida del workspace fijado) y no los
+escribe; los roles a medida son ACC-9. `system_role_id(kind, key)`
+devuelve el id de uno de fábrica, o `NULL` si esa clave no existe para
+ese tipo de workspace (no hay «admin» de creador). El disparador
+`role_fits_workspace` impide colgar un rol de agencia en un workspace
+de creador, o el rol a medida de otro workspace.
+
+El código pregunta por **permisos**, nunca por roles (backlog §7,
+decisión 7): `listMyWorkspaces` devuelve `role` como la clave del rol
+(`'owner'`, `'manager'`, …) solo para lo que la pantalla de cuenta
+muestra; qué puede hacer una sesión lo responde `getSessionPermissions` de
+`queries/accesos.ts` (ACC-5) con la consulta de arriba.
+
+Lo demás que deja 0034: `invitation` (una pendiente por correo y
+workspace; el token solo como SHA-256, y el `CHECK` no admite otra
+cosa; revocar es `revoked_at`, `mc_app` no borra), `membership_scope`
+(el alcance, ACC-6: sin filas, todo el workspace; la web solo lo lee; uso 9), `workspace_grant`
+(la concesión creador → agencia, AGE-1: la web la lee por los dos
+extremos y no la escribe) y `audit_log.on_behalf_of_workspace_id` con
+`actor_kind = 'delegate'`. Detalle y decisiones:
+`docs/propuestas/ACC-3.md`.
+
+### 9. Alcance con `scopeFilter` (ACC-6)
+
+La tenencia la garantiza RLS; el **alcance** —«este miembro ve solo lo
+de Camilo», «el ejecutivo, solo sus marcas»— lo pone cada consulta. Las
+filas viven en `membership_scope` (0034 §6: `creator`, `company` o
+`campaign` por membresía; `mc_app` solo la lee) y las evalúa
+`scope_allows()` (0040) con la persona de la transacción
+(`current_user_id()`). **Sin filas, todo el workspace**: hoy nadie tiene
+filas y nada cambia.
+
+```ts
+import { assertScopeAllows, assertUnscoped, scopeFilter, UNSCOPED_ONLY } from '../scope.ts';
+
+// Una vez por tabla raíz: qué columna responde a cada tipo de alcance.
+const SCOPE_CAMPAIGN = scopeFilter({ creator: 'c.creator_id', company: 'c.company_id', campaign: 'c.id' });
+
+// En cada lectura Y en cada UPDATE/DELETE, junto a sus condiciones.
+await tx.query(`SELECT … FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`, [id]);
+
+// Antes de una alta: la fila nueva tiene que caer en el alcance de quien la crea.
+await assertScopeAllows(tx, { creator: creatorId, company: companyId, campaign: null });
+
+// Lo que es del espacio entero (un gasto, la configuración): solo sin alcance.
+await tx.query(`SELECT … FROM expense e WHERE ${UNSCOPED_ONLY}`);
+await assertUnscoped(tx); // antes de escribirlo
+```
+
+Las reglas, y por qué:
+
+- **Un ancla por tipo, siempre los tres.** Una expresión `uuid` (la
+  columna, o una subconsulta a su padre: una factura llega a su creadora
+  por la campaña), `{ any: 'SELECT …' }` para una relación
+  uno-a-muchos (las campañas de un post), o `null` cuando la tabla no
+  tiene camino a ese tipo: una cuenta conectada no es de una marca, así
+  que quien tenga alcance por marca no ve cuentas. `null` **oculta**; abrir
+  por defecto sería una política de alcance que no se ve como un bug.
+- **Entre tipos se intersecta, dentro de un tipo se une.** Creador Y
+  marca es «las campañas de Camilo con la marca X».
+- **Un ancla NULL no está en ningún alcance.** Una factura sin campaña no
+  es de ninguna creadora; con alcance por creadora no se ve (y no se
+  puede crear: `ScopeError`, con `messageEs`).
+- **Fuera del alcance es «no existe»**: `null`, lista vacía o el mismo
+  `…NotFound` que devuelve una fila de otro workspace. La pantalla da su
+  404 sin confirmar que la fila existe.
+- **Barato cuando no hay alcance.** Cada tipo empieza por un `EXISTS`
+  sin correlación con la fila, que Postgres evalúa una vez por consulta;
+  `scope_allows()` y los `ARRAY(…)` solo se calculan si la persona sí
+  tiene filas de ese tipo.
+- **Dos pruebas lo sostienen.** `test/alcance-<modulo>.test.ts` (arnés en
+  `test/alcance.ts`) recorre TODAS las funciones exportadas con dos
+  creadoras en un workspace; `test/alcance-convencion.test.ts` lee el
+  fuente y falla si una función exportada que consulta no pasa por
+  `scopeFilter()`/`assertScopeAllows()`/`assertUnscoped()` ni está en su
+  lista blanca con motivo. Hoy cubren `campanas` (con `campanas/reporte`),
+  `finanzas` y `conexiones`; `ventas`, `cotizar` y `resumen` son de su
+  dueño (docs/propuestas/CIERRE-ACC.md §4).
+- **El worker no filtra por alcance.** `mc_worker` corre sin persona:
+  `scope_allows()` no encuentra filas y deja pasar todo, y ningún archivo
+  de `apps/worker/src` compone el alcance (lo comprueba la prueba de
+  convención). El alcance es de la web.
+- ACC-7 puede usar el mismo predicado como política restrictiva:
+  `USING (scope_allows('creator', creator_id))`.
+
 ## Lo que hace el cliente por ti
 
 - **Timeouts.** Toda transacción arranca con `SET LOCAL statement_timeout`
@@ -356,6 +542,20 @@ Es la historia CIM-2c del backlog.
   importa `tlsFor` / `hostOf` / `resolveTls` de aquí en vez de tener su
   copia: era el mismo camino de seguridad escrito dos veces, y solo uno
   tenía prueba.
+
+## El reporte a la marca (CAM-6)
+
+`@mc/db/queries/campanas` reexporta `campanas/reporte.ts` —
+`generateReport`, `listCampaignReports`, `getReport`, `markReportSent`,
+con `WorkspaceTx`— y `campanas/reporte-publico.ts` —`readPublicReport`,
+la cuarta función pública, con `PublicShareTx` como las tres de
+Cotizar—. El payload lo arma `construirReporte` de `@mc/core` (lista
+blanca, versión 1) y se congela en `report.payload`: nada lo reescribe,
+ni un snapshot nuevo ni marcar «enviado» ni la función pública, que
+solo toca `status`, `viewed_at` y `view_count` (0037 §2). Generar sobre
+un borrador lo reemplaza; sobre uno enviado crea otra versión, y al
+enviarla la anterior apunta a ella (`superseded_by`) sin dejar de abrir.
+`test/campanas-reporte.test.ts` tiene la prueba byte a byte.
 
 ## Ciclo de una migración nueva
 
@@ -506,9 +706,33 @@ además más rápido.
   (`queries/cimientos.ts`), no de una constante. Colombia es el valor
   por defecto de un workspace, no del producto.
 - Las métricas se insertan, no se actualizan (`*_snapshot`), y las
-  escribe el worker: `mc_app` solo las lee (**0025**).
+  escribe el worker: `mc_app` solo las lee (**0025**). Dos excepciones, solo
+  con INSERT y `ON CONFLICT DO NOTHING`: `account_metric_snapshot`
+  («Actualizar» de Conexiones, 0025 §5) y `brand_account_snapshot`
+  («Actualizar ahora» de la ficha de campaña, **0035**, bajo una campaña
+  visible y de su empresa, único por campaña, red y día).
 - Ninguna pantalla hace aritmética de métricas: un número derivado va en
   una vista (`src/schema/vistas.ts`) o en una consulta tipada.
 - Dinero como `string` decimal (`numeric`) con moneda aparte; fechas
   `timestamptz` en UTC.
 - Los tokens nunca tocan la base en claro (`secret_ref`).
+- **Este paquete no tiene idioma.** Cuando una consulta deja una frase
+  en una tabla de otro módulo (`activity.subject`, `notification.title_es`,
+  que es NOT NULL desde 0009), la recibe de quien la llama por un tipo
+  `Textos…` —`TextosCotizar`, `TextosFinanzas`— y guarda junto a ella su
+  código y su entidad (`kind` + `entity_id`) para poder recomponerla.
+  Así la cifra sale con el `formatterFor` del espacio y no con un
+  `es-CO` escrito aquí.
+- Toda escritura de dinero, publicación o cuenta conectada deja su fila
+  en `audit_log` con `audit()` (uso 7), en la misma transacción, con
+  `before`/`after` redactados; `test/audit-convencion.test.ts` lo exige
+  en los archivos de consultas que adoptaron la convención.
+
+## Los tiempos de las pruebas
+
+Cada archivo de `test/` abre su propia base embebida en su `before`, y
+con 35 migraciones eso cuesta de 84 a 200 s según la carga. `--test-timeout`
+es de 300 s y cada `before` lleva `{ timeout: 600_000 }`: con
+`--test-isolation=none`, un `before` que se pasa **cancela la suite
+entera del paquete** y el informe dice `pass 0, cancelled 704` sin
+señalar quién tardó. Un archivo nuevo necesita el mismo límite.

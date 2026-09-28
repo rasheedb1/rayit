@@ -28,7 +28,7 @@ import assert from 'node:assert/strict';
 import {
   and, appUser, assertWorkspaceId, contact, creatorProfile, CURRENT_WORKSPACE, deal, dealPipeline, dealStageHistory,
   eq, featureFlag, isNull, membership, NestedTransactionError, pipelineStage, quote, quoteItem, rateCard, rateCardItem,
-  TransactionClosedError, type BaseTx, type WorkspaceTx,
+  sql, TransactionClosedError, type BaseTx, type WorkspaceTx,
 } from '../src/index.ts';
 import { listFeatureFlags, listPipelineStages } from '../src/queries/catalogos.ts';
 import { getWorkspace } from '../src/queries/cimientos.ts';
@@ -372,9 +372,9 @@ describe('membership y contact: las dos tablas que 0019 cerró', () => {
         ('${USER_B}', 'b@ejemplo.com', 'Persona B');
       INSERT INTO company (id, name) VALUES ('${COMPANY_B}', 'Fresko');
       SELECT set_config('app.workspace_id', '${WS_A}', false);
-      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_A}', '${USER_A}', 'owner');
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS_A}', '${USER_A}', system_role_id('creator', 'owner'));
       SELECT set_config('app.workspace_id', '${WS_B}', false);
-      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_B}', '${USER_B}', 'owner');
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS_B}', '${USER_B}', system_role_id('creator', 'owner'));
       SELECT set_config('app.workspace_id', '', false);
       INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS_A}', '${COMPANY}', 'client');
       INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS_B}', '${COMPANY_B}', 'client');
@@ -391,7 +391,7 @@ describe('membership y contact: las dos tablas que 0019 cerró', () => {
 
   test('membership: desde A no se puede colgar a alguien de B', async () => {
     await assert.rejects(
-      t.db.withWorkspace(WS_A, (tx) => tx.db.insert(membership).values({ workspaceId: WS_B, userId: USER_A, role: 'admin' })),
+      t.db.withWorkspace(WS_A, (tx) => tx.db.insert(membership).values({ workspaceId: WS_B, userId: USER_A, roleId: sql`system_role_id('creator', 'manager')` })),
       isRechazada,
     );
   });
@@ -405,7 +405,7 @@ describe('membership y contact: las dos tablas que 0019 cerró', () => {
     // tiene INSERT sobre membership: el alta es del worker y del seed.
     await assert.rejects(
       t.db.withWorkspace(WS_B, (tx) =>
-        tx.db.insert(membership).values({ workspaceId: CURRENT_WORKSPACE, userId: USER_A, role: 'owner' }),
+        tx.db.insert(membership).values({ workspaceId: CURRENT_WORKSPACE, userId: USER_A, roleId: sql`system_role_id('creator', 'owner')` }),
       ),
       isRechazada,
     );
@@ -420,7 +420,7 @@ describe('membership y contact: las dos tablas que 0019 cerró', () => {
   test('membership: desde ningún workspace se edita ni se borra una membresía', async () => {
     for (const ws of [WS_A, WS_B]) {
       await assert.rejects(
-        t.db.withWorkspace(ws, (tx) => tx.db.update(membership).set({ role: 'owner' }).where(eq(membership.userId, USER_A))),
+        t.db.withWorkspace(ws, (tx) => tx.db.update(membership).set({ roleId: sql`system_role_id('creator', 'owner')` }).where(eq(membership.userId, USER_A))),
         isRechazada,
       );
       await assert.rejects(
@@ -1429,7 +1429,7 @@ describe('getWorkspace: nunca sirve al vecino', () => {
     const persona = '0000009e-0000-4000-8000-000000000001';
     await t.admin(`
       INSERT INTO app_user (id, email, name) VALUES ('${persona}', 'dos-espacios@ejemplo.test', 'Dos espacios');
-      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_A}', '${persona}', 'owner'), ('${WS_B}', '${persona}', 'owner');
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS_A}', '${persona}', system_role_id('creator', 'owner')), ('${WS_B}', '${persona}', system_role_id('creator', 'owner'));
     `);
     try {
       for (const ws of [WS_A, WS_B]) {
@@ -1467,7 +1467,7 @@ describe('un padre por persona no aísla una tabla con inquilino (pulido, ronda 
     if (!embebido()) return;
     await t.admin(`
       INSERT INTO app_user (id, email, name) VALUES ('${PERSONA}', 'en-a-y-en-b@ejemplo.test', 'En A y en B');
-      INSERT INTO membership (workspace_id, user_id, role) VALUES ('${WS_A}', '${PERSONA}', 'member'), ('${WS_B}', '${PERSONA}', 'member');
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS_A}', '${PERSONA}', system_role_id('creator', 'editor')), ('${WS_B}', '${PERSONA}', system_role_id('creator', 'editor'));
       SET ROLE mc_migrator_embedded;
       CREATE TABLE zz_persona (id uuid PRIMARY KEY, workspace_id uuid NOT NULL REFERENCES workspace(id),
         created_by uuid REFERENCES app_user(id), nota text);

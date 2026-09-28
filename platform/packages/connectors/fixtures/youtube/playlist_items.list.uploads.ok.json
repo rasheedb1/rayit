@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "source": "docs",
+    "recordedAt": "2026-09-23",
+    "notes": "v3/docs/playlistItems/list sobre la lista de subidas de un canal. El ORDEN importa: la lista de subidas llega de lo más reciente a lo más viejo, y de eso depende que la ventana `since` pueda cortar en el primer video ya conocido."
+  },
+  "request": {
+    "method": "GET",
+    "urlPattern": "^https://www\\.googleapis\\.com/youtube/v3/playlistItems\\?part=contentDetails&playlistId=UUnutrive000000000000001"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "youtube#playlistItemListResponse",
+      "etag": "e",
+      "pageInfo": { "totalResults": 3, "resultsPerPage": 50 },
+      "items": [
+        { "kind": "youtube#playlistItem", "etag": "e", "id": "UUn3", "contentDetails": { "videoId": "vid00000003", "videoPublishedAt": "2026-09-03T15:00:00Z" } },
+        { "kind": "youtube#playlistItem", "etag": "e", "id": "UUn2", "contentDetails": { "videoId": "vid00000002", "videoPublishedAt": "2026-09-02T15:00:00Z" } },
+        { "kind": "youtube#playlistItem", "etag": "e", "id": "UUn1", "contentDetails": { "videoId": "vid00000001", "videoPublishedAt": "2026-09-01T15:00:00Z" } }
+      ]
+    }
+  }
+}

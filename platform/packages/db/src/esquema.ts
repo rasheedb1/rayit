@@ -210,6 +210,10 @@ export const EXCEPCIONES_SIN_AISLAMIENTO: Readonly<Record<string, string>> = {
   benchmark: 'cifras públicas de referencia con su fuente y su nivel de evidencia (0013)',
   blocked_claim: 'afirmaciones que el producto no deja escribir, y qué decir en su lugar (0013)',
   metric_requirement: 'qué exige cada red para entregar cada grupo de métricas (0011)',
+  permission:
+    'catálogo de permisos <módulo>.<recurso>.<acción> (0034, ACC-3). Igual para todos; lo llena la migración desde ' +
+    'packages/core/src/permisos.ts y la web solo lo lee. Los roles (role, con workspace_id NULL para los de sistema) ' +
+    'SÍ llevan RLS: son el patrón de feature_flag',
 
   // ------ observación de terceros: no hay inquilino a quien aislar ---
   // OJO, para cuando llegue el radar (fase 2): «sin dueño» no es
@@ -408,6 +412,12 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'del despachador (sales.channels_release los borra en Unipile al desconectar) y mc_app no la escribe. Mismo dueño ' +
     'y misma cerradura que outreach_channel_connect: solo ve el workspace de la transacción y solo AÑADE ids con ' +
     'forma de id. EXECUTE solo para mc_app. No es de ningún disparador',
+  // El reporte a la marca (0037, CAM-6): la misma puerta que la cotización.
+  'public_report(text,boolean)':
+    'abre /reporte/<slug> sin sesión (0037), con el mismo rol y la misma cerradura que public_quote: devuelve el ' +
+    'payload congelado al generar el reporte (nunca la fila) y solo escribe la primera vista y el contador de ' +
+    'visitas (privilegios de COLUMNA: status, viewed_at, view_count). Un borrador no abre nada. No es de ningún ' +
+    'disparador',
 };
 
 /**
@@ -425,6 +435,13 @@ export const FUNCIONES_QUE_USA_EL_CODIGO: Readonly<Record<string, string>> = {
   'deal_move_stage(uuid,text,boolean,numeric,text)':
     '0031_mover_negocio: el tablero de Ventas, «Enviar» y «Aceptar» en Cotizar y la aceptación pública',
   'brand_key(text)': '0031_mover_negocio: el radar y las listas de Ventas reconocen una marca por su nombre',
+  'system_role_id(text,text)':
+    '0034_access_control: el id de un rol de sistema por (tipo de workspace, clave). Lo usan createCreatorWorkspace ' +
+    '(la dueña del espacio nuevo), los seeds y las pruebas',
+  'scope_allows(text,uuid)':
+    '0040_scope_allows: el alcance por creador, marca o campaña que compone cada consulta de Campañas, Finanzas y ' +
+    'Conexiones (src/scope.ts, ACC-6)',
+  'scope_allows(text,uuid[])': '0040_scope_allows: la misma pregunta para una relación uno-a-muchos (las campañas de un post)',
 };
 
 /**
@@ -736,6 +753,13 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
       'del enlace), y la vista previa y la baja leen si ESE workspace ya la tenía, para decir «ya estabas fuera» ' +
       '(entregabilidad §8). Solo la fila del workspace y la dirección que fija la función',
   },
+  report: {
+    tabla: ['SELECT'],
+    columnas: { UPDATE: ['status', 'view_count', 'viewed_at'] },
+    motivo:
+      'abrir /reporte/<slug> (0037 §2, CAM-6), marcarlo visto la primera vez y sumar la visita; nunca el payload ' +
+      'congelado, el workspace ni la campaña',
+  },
 };
 
 /** Cómo tiene que ser una política `TO mc_public_share`. */
@@ -760,8 +784,8 @@ const TOKEN_DE_LA_BAJA = /^\(?token_hash = NULLIF\(current_setting\('app\.public
 const CONTACTOS_DE_LA_BAJA = /= ANY \(\(NULLIF\(current_setting\('app\.public_optout_contacts'/;
 
 /**
- * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033, las nueve de la baja (0046 §9), la de
- * quién envía (entregabilidad §5) y las dos de la baja con quien envió (entregabilidad §8). Una
+ * Las políticas `TO mc_public_share`, exactas: las siete de 0030, la de 0033, las dos de 0037, las nueve de la
+ * baja (0046 §9), la de quién envía (entregabilidad §5) y las dos de la baja con quien envió (entregabilidad §8). Una
  * de más —`CREATE POLICY … ON invoice TO mc_public_share USING (true)`—
  * o una de estas reescrita con ALTER POLICY se reporta. Las políticas
  * sin TO (PUBLIC) también le alcanzan, pero alcanzan igual a mc_app y
@@ -871,6 +895,16 @@ export const POLITICAS_DEL_ENLACE_PUBLICO: Readonly<Record<string, PoliticaDelEn
     exige: [TOKEN_DE_LA_BAJA],
     motivo: 'la baja de ese mismo enlace en el workspace que lo envió, y ninguna otra',
   },
+  'report.report_public_share': {
+    cmd: 'r',
+    exige: [SLUG_DE_LA_LLAMADA],
+    motivo: 'el reporte enviado de ese slug (0037 §3, CAM-6); un borrador no abre',
+  },
+  'report.report_public_share_state': {
+    cmd: 'w',
+    exige: [SLUG_DE_LA_LLAMADA],
+    motivo: 'marcar visto y sumar la visita a ese reporte (0037 §3)',
+  },
 };
 
 /**
@@ -922,6 +956,14 @@ export const UNICOS_GLOBALES_DECLARADOS: Readonly<Record<string, string>> = {
     'sumarían y LinkedIn podría bloquearlo. Mismo criterio que outreach_channel_account_live_idx: cubre solo las ' +
     'cuentas autenticadas y provider_identity la escribe solo el callback del proveedor (candado de 0046 §2.1, canales_identidad_y_rotacion): ' +
     'chocar exige haber autenticado ese perfil',
+  'invitation.invitation_token_hash_uk':
+    'el SHA-256 del token del enlace de invitación (0034 §7; el CHECK de la columna no admite otra cosa). La ' +
+    'aceptación busca por el hash sin saber el workspace, así que tiene que resolver a una sola fila; y chocar exige ' +
+    'conocer el token (≥128 bits al azar, generado por el código), que ya es tenerlo',
+  'brand_account_snapshot.brand_account_snapshot_catalog_day_idx':
+    'parcial sobre las filas SIN campaña (campaign_id IS NULL), que mc_app no escribe: su política de INSERT ' +
+    '(0035, brand_account_snapshot_write) exige campaign_id, y esas filas son las del seed de demostración (0029, ' +
+    'TO CURRENT_USER). Las que sí escribe van bajo brand_account_snapshot_campaign_day_idx, por campaña (CAM-3)',
 };
 
 /**
@@ -1001,7 +1043,12 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
   external_post_snapshot: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
   trend_signal: { permite: ['SELECT'], motivo: 'lo calcula el worker' },
   trait_lift: { permite: ['SELECT'], motivo: 'lo calcula el worker' },
-  brand_account_snapshot: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
+  brand_account_snapshot: {
+    permite: ['SELECT', 'INSERT'],
+    motivo:
+      'métrica append-only: la mide el worker (brand.snapshot) y la web la AÑADE con «Actualizar ahora» en la ficha de ' +
+      'campaña (CAM-3, 0035): ON CONFLICT DO NOTHING, bajo una campaña visible y de su empresa. Nadie la corrige ni la borra',
+  },
 
   // Métricas PROPIAS (0025 §5): las mide y las escribe el worker, como
   // mc_worker. Una pantalla no reescribe las vistas de un post.
@@ -1013,12 +1060,25 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'assert_reference_visible en post_id',
   },
   audience_breakdown: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
+  metric_gap: {
+    permite: ['SELECT'],
+    motivo:
+      'por qué NO hay un dato (CON-7, 0036): lo escribe collect.demographics, que es quien intenta medir, y la ' +
+      'pantalla solo lo lee. Sin esta línea, un GRANT … ON ALL TABLES futuro le devolvería a mc_app la escritura ' +
+      'sin que la guardia lo notara, y una pantalla podría borrar la explicación de un hueco',
+  },
   post_engagement_curve: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
   post_retention_curve: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
   post_impression_source: { permite: ['SELECT'], motivo: 'métrica append-only del worker' },
   post_score: { permite: ['SELECT'], motivo: 'lo calcula el worker a partir de las métricas' },
   creator_baseline: { permite: ['SELECT'], motivo: 'lo calcula el worker a partir de las métricas' },
-  campaign_result: { permite: ['SELECT'], motivo: 'lo consolida el worker a partir de las métricas' },
+  campaign_result: {
+    permite: ['SELECT', 'INSERT', 'UPDATE'],
+    motivo:
+      'materializado, no métrica: lo reemplaza el worker (campaign.compute) y la web con «Recalcular» en la ficha ' +
+      '(CAM-5, 0041), con el mismo UPSERT. Las restrictivas de 0041 atan la fila a una campaña visible de su mismo ' +
+      'workspace. Sin DELETE: un resultado no se borra desde la web',
+  },
   job_run: { permite: ['SELECT'], motivo: 'bitácora de trabajos: la escribe el worker, la web solo la lee' },
   account_metric_snapshot: {
     permite: ['SELECT', 'INSERT'],
@@ -1106,6 +1166,33 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
 
   // Contabilidad del runner: se lee al arrancar y no se escribe desde la app.
   schema_migrations: { permite: ['SELECT'], motivo: 'la lee la guardia de esquema; escribirla sería mentirle a la base' },
+
+  // Accesos (0034, ACC-3): el catálogo y los roles de fábrica los llena
+  // la migración; los roles a medida son ACC-9 y las concesiones AGE-1.
+  permission: { permite: ['SELECT'], motivo: 'catálogo global de solo lectura (0034 §1)' },
+  role: {
+    permite: ['SELECT'],
+    motivo:
+      'los roles de sistema los siembra la migración (0034 §4); los a medida llegan con ACC-9, que traerá su política ' +
+      'de escritura por workspace y su GRANT',
+  },
+  role_permission: { permite: ['SELECT'], motivo: 'la matriz: la siembra la migración; editable solo desde ACC-9' },
+  membership_scope: {
+    permite: ['SELECT'],
+    motivo:
+      'el alcance de una persona (0034 §6, ACC-6) lo fija quien administra el equipo por función o worker; con ' +
+      'escritura, cualquier miembro borraría su propio alcance y vería todo el workspace',
+  },
+  workspace_grant: {
+    permite: ['SELECT'],
+    motivo:
+      'la concesión creador → agencia (0034 §8) la escribe el worker o una función acotada cuando exista AGE-1; ' +
+      'la web la lee por los dos extremos',
+  },
+  invitation: {
+    permite: ['SELECT', 'INSERT', 'UPDATE'],
+    motivo: 'revocar una invitación es revoked_at (0034 §7): nadie borra el rastro de a quién se invitó',
+  },
 
   // Tablas de inquilino con un comando de menos.
   workspace: {
