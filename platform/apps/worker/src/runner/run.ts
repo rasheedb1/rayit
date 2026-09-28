@@ -30,6 +30,13 @@ export interface RunInput {
   bossJobId: string;
   /** Señal de pg-boss (apagado, expiración). Se encadena con el timeout propio. */
   signal?: AbortSignal;
+  /**
+   * La fila de job_run ya abierta (`running`) por quien reclamó la
+   * corrida: --once y el modo por turnos la abren dentro del reclamo
+   * atómico (once.ts, claimRun), así dos pasadas a la vez no la abren dos
+   * veces. Sin ella, se abre aquí, como siempre.
+   */
+  runId?: number;
 }
 
 export interface RunDeps {
@@ -172,7 +179,7 @@ export async function executeRun(input: RunInput, deps: RunDeps): Promise<RunOut
   const now = deps.now ?? (() => new Date());
   const ctxPayload = payloadContext(payload);
 
-  const runId = await insertRun(deps, definition.id, ctxPayload, attempt, bossJobId);
+  const runId = input.runId ?? await insertRun(deps, definition.id, ctxPayload, attempt, bossJobId);
   const logger = deps.logger.child({ job: definition.id, runId, jobId: bossJobId, attempt });
 
   const abort = new AbortController();
