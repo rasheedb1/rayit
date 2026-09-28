@@ -8,8 +8,10 @@ import {
   PLATFORMS,
   type CsvImportResult,
 } from "@mc/db/queries/resumen";
+import { readLimitedBytes } from "@/lib/cuerpo-limitado";
 import { withWorkspace } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
+import { isSameOriginPost, publicOriginOrNull } from "@/lib/mismo-origen";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "../../messages";
 import { CAMPOS, type Campo, type Mapeo } from "./formatos";
@@ -32,8 +34,12 @@ import {
  * GLOBAL en Next, y para que cupieran los 5 MB del archivo había que
  * subirlo a 6 MB para TODAS las acciones de la app (Finanzas, Campañas,
  * Conexiones, Ventas). Aquí el techo es solo de esta ruta, y se cumple
- * leyendo el cuerpo con un contador (`leerCuerpoConTope`), no fiándose
- * de la cabecera Content-Length.
+ * leyendo el cuerpo con un contador (`readLimitedBytes`, de
+ * lib/cuerpo-limitado.ts, el mismo del webhook y de la baja), no
+ * fiándose de la cabecera Content-Length. Y como un route handler no
+ * trae la comprobación de origen de las server actions, se la pone
+ * `isSameOriginPost` (lib/mismo-origen.ts), la misma regla que los
+ * inicios de conexión de canales.
  *
  * El servidor NO se fía de lo que el navegador dice haber validado:
  * recibe el TEXTO del archivo y el mapeo, y vuelve a leer y a validar
@@ -168,57 +174,6 @@ export async function importarLote(entrada: unknown): Promise<ResultadoLote> {
   }
 }
 
-/**
- * El cuerpo entero, o null si pasa de `max` bytes. Se corta en cuanto
- * se pasa, sin leer el resto: la cabecera Content-Length la escribe
- * quien manda la petición y puede mentir (o faltar, con chunked), así
- * que solo sirve para rechazar ANTES de leer; quien manda es el contador.
- */
-export async function leerCuerpoConTope(req: Request, max: number): Promise<Uint8Array<ArrayBuffer> | null> {
-  const declarado = Number(req.headers.get("content-length") ?? NaN);
-  if (Number.isFinite(declarado) && declarado > max) return null;
-  if (!req.body) return new Uint8Array(0);
-  const lector = req.body.getReader();
-  const partes: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await lector.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > max) {
-      await lector.cancel().catch(() => undefined);
-      return null;
-    }
-    partes.push(value);
-  }
-  const cuerpo = new Uint8Array(total);
-  let desde = 0;
-  for (const p of partes) {
-    cuerpo.set(p, desde);
-    desde += p.byteLength;
-  }
-  return cuerpo;
-}
-
-/**
- * ¿Viene la petición de una página de esta misma aplicación? Las server
- * actions lo comprueban solas (Origin contra Host); un route handler no,
- * y un formulario multipart de otro sitio es una petición «simple» que
- * el navegador manda sin preguntar. La cookie de sesión ya es
- * SameSite=Lax, que no viaja en un POST de otro sitio; esto es la
- * segunda puerta, la misma que pone Next a sus acciones.
- */
-export function esMismoOrigen(req: Request): boolean {
-  const origen = req.headers.get("origin");
-  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
-  if (!origen || !host) return false;
-  try {
-    return new URL(origen).host === host.split(",")[0]!.trim();
-  } catch {
-    return false;
-  }
-}
-
 const responder = (cuerpo: ResultadoLote, status: number) => Response.json(cuerpo, { status });
 
 /**
@@ -230,15 +185,18 @@ const responder = (cuerpo: ResultadoLote, status: number) => Response.json(cuerp
  */
 export async function recibirLote(req: Request): Promise<Response> {
   const t = MESSAGES.importar.error;
-  if (!esMismoOrigen(req)) return responder({ ok: false, error: t.generico }, 403);
+  if (!(await isSameOriginPost(req, () => publicOriginOrNull(req)))) return responder({ ok: false, error: t.generico }, 403);
 
-  const cuerpo = await leerCuerpoConTope(req, MAX_CUERPO);
-  if (!cuerpo) return responder({ ok: false, error: t.demasiadoGrande(MEGAS) }, 413);
+  const cuerpo = await readLimitedBytes(req, MAX_CUERPO);
+  if (!cuerpo.ok) {
+    const error = cuerpo.status === 413 ? t.demasiadoGrande(MEGAS) : t.generico;
+    return responder({ ok: false, error }, cuerpo.status);
+  }
 
   let entrada: unknown;
   try {
     const tipo = req.headers.get("content-type") ?? "";
-    const form = await new Response(cuerpo, { headers: { "content-type": tipo } }).formData();
+    const form = await new Response(cuerpo.bytes, { headers: { "content-type": tipo } }).formData();
     const archivo = form.get("archivo");
     const datos = form.get("datos");
     if (!(archivo instanceof Blob) || typeof datos !== "string") return responder({ ok: false, error: t.generico }, 400);

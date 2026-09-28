@@ -34,6 +34,22 @@ describe("readLimitedBytes", () => {
     expect(justo.ok && justo.bytes.byteLength).toBe(10);
   });
 
+  it("corta el flujo en cuanto se pasa, sin leer el resto (la importación por CSV de Resumen, RES-6)", async () => {
+    // En trozos, como llega un POST chunked grande: el lector cancela el
+    // flujo al pasarse y no se piden los trozos que faltan.
+    const trozo = new Uint8Array(64 * 1024);
+    let pedidos = 0;
+    const cuerpo = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pedidos += 1;
+        if (pedidos > 100) return c.close();
+        c.enqueue(trozo);
+      },
+    });
+    expect(await readLimitedBytes(pedir(cuerpo), 100 * 1024)).toEqual({ ok: false, status: 413 });
+    expect(pedidos).toBeLessThan(10);
+  });
+
   it("400 sin cuerpo", async () => {
     expect(await readLimitedBytes(pedir(null), 10)).toEqual({ ok: false, status: 400 });
   });

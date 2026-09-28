@@ -329,7 +329,7 @@ export const STORIES: readonly Story[] = [
     desc: "Mover la escritura de la importación por CSV de la server action a un route handler POST con su propio techo de 6 MB, y devolver serverActions.bodySizeLimit al valor de Next (1 MB): hoy ese techo es global y sube el de todas las server actions de la app.",
     done: "Un CSV de 5 MB se importa; un POST de 2 MB a cualquier otra server action se rechaza.",
     status: "hecho",
-    note: "POST /resumen/importar/lote con techo propio (contador, 413) y Origin contra Host; next.config vuelve al 1 MB de las server actions. Probado en lote.test.ts.",
+    note: "POST /resumen/importar/lote con techo propio (readLimitedBytes, 413) y la regla de origen compartida con canales (lib/mismo-origen.ts); next.config vuelve al 1 MB de las server actions. Probado en lote.test.ts.",
   },
   {
     id: "RES-3", module: "RES", owner: "rasheed", size: "M", sprint: 5, deps: ["CON-6", "VEN-4", "FIN-4"],

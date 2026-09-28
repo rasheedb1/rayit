@@ -78,6 +78,7 @@ import {
   getReconnectableGmail, getReconnectableUnipileAccount,
 } from "@mc/db/queries/canales";
 import { OrigenNoConfiguradoError } from "@/lib/auth/origen";
+import { isSameOriginPost } from "@/lib/mismo-origen";
 import { MESSAGES } from "../messages";
 import type { ChannelErrorCode } from "./banner";
 import { missingFor, type Channel } from "./config";
@@ -116,24 +117,11 @@ function cookie(value: string, maxAgeS: number, secure: boolean, name = GOOGLE_C
 const forbidden = () => plain(403, MESSAGES.routes.forbidden);
 
 /**
- * ¿El POST de inicio sale de una página nuestra? Las server actions las
- * protege Next; estos dos inicios son route handlers y no. La cookie de
- * Supabase ya es SameSite=Lax, pero en modo demo (DEMO_WORKSPACE_ID, sin
- * sesión) cualquier página ajena podría crear filas pendientes y enlaces
- * de hosted auth con un formulario. Se rechaza lo que el navegador marca
- * de otro sitio (Sec-Fetch-Site distinto de same-origin) y un Origin que
- * no sea el público de la app ni el de la propia petición. Sin ninguna
- * de las dos cabeceras (un cliente que no es un navegador) no hay
- * falsificación de petición posible: no lleva la cookie de nadie.
+ * ¿El POST de inicio sale de una página nuestra? La regla es la de
+ * lib/mismo-origen.ts, la misma de la importación por CSV de Resumen; el
+ * origen público sale de `deps`, y sin él solo vale el de la petición.
  */
-export async function isSameOriginPost(req: Request, deps: Pick<ChannelDeps, "origin">): Promise<boolean> {
-  const site = req.headers.get("sec-fetch-site");
-  if (site !== null && site !== "same-origin") return false;
-  const origin = req.headers.get("origin");
-  if (origin === null) return true;
-  // Sin origen público configurado (producción sin APP_URL) solo vale el de la propia petición.
-  return origin === new URL(req.url).origin || origin === (await publicOrigin(req, deps));
-}
+const fromOurPage = (req: Request, deps: Pick<ChannelDeps, "origin">) => isSameOriginPost(req, () => publicOrigin(req, deps));
 
 /**
  * El origen público de la app, o null si producción no lo tiene
@@ -215,7 +203,7 @@ async function begin(
 
 export async function googleStart(req: Request, deps: ChannelDeps): Promise<Response> {
   if (req.method !== "POST") return plain(405, MESSAGES.routes.postOnly, { Allow: "POST" });
-  if (!(await isSameOriginPost(req, deps))) return crossOrigin();
+  if (!(await fromOurPage(req, deps))) return crossOrigin();
   if (!(await deps.canManage())) return forbidden();
   const form = await optionalForm(req);
   if (!form) return plain(400, MESSAGES.routes.badForm);
@@ -349,7 +337,7 @@ async function flushAndFail(deps: ChannelDeps, log: InMemoryOutreachCallLog, non
  */
 export async function unipileStart(req: Request, deps: ChannelDeps): Promise<Response> {
   if (req.method !== "POST") return plain(405, MESSAGES.routes.postOnly, { Allow: "POST" });
-  if (!(await isSameOriginPost(req, deps))) return crossOrigin();
+  if (!(await fromOurPage(req, deps))) return crossOrigin();
   if (!(await deps.canManage())) return forbidden();
   let form: FormData;
   try {
