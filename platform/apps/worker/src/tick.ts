@@ -18,8 +18,8 @@
  *      si está vencido (sin pg-boss: job_run es el registro, no una cola). Cada corrida se
  *      RECLAMA con un candado por job antes de empezar: dos turnos a la
  *      vez, o uno repetido, no corren dos veces lo mismo.
- *   2. Procesa lo vencido, outbound.dispatch primero (TICK_FIRST), hasta
- *      TICK_CONCURRENCY corridas a la vez, y
+ *   2. Procesa lo vencido (src/turno/recorrer.ts), outbound.dispatch
+ *      primero (TICK_FIRST), hasta TICK_CONCURRENCY corridas a la vez, y
  *      no empieza ninguna si quedan menos de minSliceMs. Cada corrida
  *      tiene como timeout_s lo que queda del turno: la que se mide por su
  *      timeout (outbound.dispatch) termina sola y devuelve a su cola lo
@@ -52,16 +52,17 @@
  */
 import type { ConnectorHttpOverrides, QuotaManager, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
 import { allJobs } from './jobs/index.ts';
-import { channelModeFrom } from './jobs/ventas/canales/index.ts';
+import { channelModeFrom, isLocalDatabase } from './jobs/ventas/canales/index.ts';
 import { DISPATCH_JOB_ID } from './jobs/ventas/outbound.dispatch.ts';
 import { buildRefreshers, buildSecrets } from './recursos.ts';
-import { loadConfig, type Env } from './runner/config.ts';
+import { assertRole } from './runner/comun.ts';
+import { ConfigError, loadConfig, type Env, type WorkerConfig } from './runner/config.ts';
 import { PostgresDatabase, type WorkerDatabase } from './runner/db.ts';
 import { createLogger, isLogLevel, type Logger } from './runner/logger.ts';
-import { runOnce, type OnceBudget, type OnceReason, type OnceSummary } from './runner/once.ts';
+import { runOnce, type OnceReason, type OnceSummary } from './runner/once.ts';
 import type { JobRegistration } from './runner/registry.ts';
 import type { RunStatus } from './runner/run.ts';
-import { assertRole } from './runner/worker.ts';
+import { turnoWalk, type TurnoBudget } from './turno/recorrer.ts';
 
 /** Lo que el turno se guarda al final del presupuesto para cerrar las filas de job_run y responder. */
 export const TICK_MARGIN_MS = 5_000;
@@ -91,6 +92,13 @@ export const TICK_FIRST: readonly string[] = [DISPATCH_JOB_ID];
 export const TICK_MIN_BUDGET_MS = 1_000;
 /** Lo que se espera a que el pool se cierre antes de responder igual (closeWithin). */
 export const TICK_CLOSE_MS = 3_000;
+/**
+ * Lo que se espera una conexión nueva (pg, por defecto, espera para
+ * siempre). Con el pooler de Supabase colgado o sin clientes libres, el
+ * turno falla a los 5 s con su motivo en el log, en vez de quedarse
+ * esperando hasta que Vercel mate la función sin dejar rastro.
+ */
+export const TICK_CONNECT_TIMEOUT_MS = 5_000;
 
 export interface RunTickOptions {
   /** La base del worker: conexión en modo sesión con SET ROLE mc_worker (o el embebido en pruebas). */
@@ -153,7 +161,7 @@ export interface TickSummary {
 }
 
 /** El presupuesto de la pasada: el margen y el mínimo para empezar, acotados para presupuestos cortos. */
-export function tickBudget(budgetMs: number, startedAt: number = Date.now()): OnceBudget {
+export function tickBudget(budgetMs: number, startedAt: number = Date.now()): TurnoBudget {
   const marginMs = Math.min(TICK_MARGIN_MS, Math.floor(budgetMs * 0.2));
   return { deadline: startedAt + budgetMs - marginMs, minSliceMs: Math.min(TICK_MIN_SLICE_MS, Math.floor(budgetMs * 0.25)) };
 }
@@ -226,9 +234,7 @@ export async function runTick(opts: RunTickOptions): Promise<TickSummary> {
     now: opts.now,
     quota: opts.quota,
     http: opts.http,
-    budget: tickBudget(opts.budgetMs, started),
-    concurrency: opts.concurrency ?? TICK_CONCURRENCY,
-    first: TICK_FIRST,
+    walk: turnoWalk({ budget: tickBudget(opts.budgetMs, started), concurrency: opts.concurrency ?? TICK_CONCURRENCY, first: TICK_FIRST }),
   });
   const orphaned = await countOrphanedBossJobs(opts.db, logger);
   if (orphaned !== null && orphaned > 0) {
@@ -245,6 +251,47 @@ export interface RunTickFromEnvOptions {
 }
 
 /**
+ * ¿Puede correr aquí un turno contra esta base? Contra una base que no es
+ * de esta máquina, solo en el despliegue de producción de Vercel
+ * (VERCEL_ENV=production): `pnpm --filter @mc/web dev` carga el
+ * .env.local de `make db.unlock`, que apunta al Supabase de PRODUCCIÓN, y
+ * un curl a la ruta en local correría el turno de verdad (correo real, en
+ * paralelo con el cron de producción). TICK_ALLOW_REMOTE=1 lo permite a
+ * sabiendas. Es la misma idea que channelModeFrom con el canal falso.
+ */
+export function assertTickTarget(env: Env, config: Pick<WorkerConfig, 'databaseUrl'>): void {
+  if (isLocalDatabase(config.databaseUrl) || env['VERCEL_ENV'] === 'production' || env['TICK_ALLOW_REMOTE'] === '1') return;
+  throw new ConfigError(
+    'El turno contra una base remota solo corre en el despliegue de producción de Vercel (VERCEL_ENV=production). ' +
+      'Para probarlo en local, apunta WORKER_DATABASE_URL a tu Postgres de Docker; con la de .env.local correría contra ' +
+      'producción y enviaría de verdad. TICK_ALLOW_REMOTE=1 lo permite a sabiendas.',
+  );
+}
+
+/**
+ * La base de un turno: la del proceso largo (modo sesión, SET ROLE
+ * mc_worker), con la espera de conexión acotada (TICK_CONNECT_TIMEOUT_MS)
+ * y, en cada conexión, statement_timeout e idle_in_transaction_session_timeout
+ * iguales al presupuesto: un job cortado que no mira ctx.signal (o metido
+ * en una sentencia larga, como compute.baseline) suelta su conexión a lo
+ * sumo `budgetMs` después, en vez de retenerla contra las 15 de modo
+ * sesión del pooler mientras la función está congelada.
+ */
+export function openTickDatabase(config: WorkerConfig, budgetMs: number, logger: Logger): PostgresDatabase {
+  return new PostgresDatabase({
+    connectionString: config.databaseUrl!,
+    setRole: config.setRole,
+    jobPoolMax: config.jobPoolMax,
+    bossPoolMax: 1,
+    applicationName: `${config.applicationName}:tick`,
+    sslRootCert: config.sslRootCert,
+    connectionTimeoutMillis: TICK_CONNECT_TIMEOUT_MS,
+    sessionTimeoutMs: budgetMs,
+    onError: (err) => logger.error('error en el pool de conexiones', { err }),
+  });
+}
+
+/**
  * Un turno con la base del entorno: WORKER_DATABASE_URL (o
  * DATABASE_URL_DIRECT), modo sesión (:5432), SET ROLE WORKER_SET_ROLE
  * (mc_worker). Abre el pool, corre y lo cierra: una función que se
@@ -254,18 +301,11 @@ export async function runTickFromEnv(opts: RunTickFromEnvOptions): Promise<TickS
   const env = opts.env ?? process.env;
   const logger = opts.logger ?? tickLogger(env);
   const config = loadConfig(env, { mode: 'postgres', ...(env['WORKER_JOB_POOL_MAX'] ? {} : { jobPoolMax: TICK_POOL_MAX }) });
+  assertTickTarget(env, config);
   if (config.jobPoolMax < TICK_POOL_MAX) {
     logger.warn('WORKER_JOB_POOL_MAX por debajo de lo que pide el turno: una corrida puede esperar conexión hasta el corte', { jobPoolMax: config.jobPoolMax, needed: TICK_POOL_MAX });
   }
-  const db = new PostgresDatabase({
-    connectionString: config.databaseUrl!,
-    setRole: config.setRole,
-    jobPoolMax: config.jobPoolMax,
-    bossPoolMax: 1,
-    applicationName: `${config.applicationName}:tick`,
-    sslRootCert: config.sslRootCert,
-    onError: (err) => logger.error('error en el pool de conexiones', { err }),
-  });
+  const db = openTickDatabase(config, opts.budgetMs, logger);
   try {
     return await runTick({ db, budgetMs: opts.budgetMs, env, now: opts.now, logger });
   } finally {

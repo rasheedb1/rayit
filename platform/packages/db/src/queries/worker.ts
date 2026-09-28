@@ -41,9 +41,23 @@ export interface WorkerJobHealth {
   lastError: string | null;
   /** ISO de la última corrida ok o partial, o null si nunca terminó bien. Un nulo no es «hace mucho»: es «nunca». */
   lastOkAt: string | null;
-  /** Corridas failed desde lastOkAt (todas, si nunca terminó bien). */
+  /**
+   * Corridas failed desde lastOkAt (todas, si nunca terminó bien), sin
+   * contar los cortes del modo por turnos (TICK_CUT_KEY): un corte no es
+   * un fallo del job, el turno siguiente lo retoma sin gastar un intento.
+   */
   failedSinceOk: number;
+  /** La última corrida la cortó el presupuesto de un turno (CIM-7): se retoma, no falló. */
+  lastCut: boolean;
 }
+
+/**
+ * Marca en job_run.metadata de una corrida que cortó el presupuesto de un
+ * turno del worker (CIM-7): termina `failed` con `timeout`, pero no es un
+ * fallo del job. La escribe el runner (apps/worker/src/runner/once.ts,
+ * que la reexporta) y la leen su planificación y esta salud.
+ */
+export const TICK_CUT_KEY = 'tickCut';
 
 const TS = (col: string) => `to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
 
@@ -51,13 +65,15 @@ export async function getWorkerHealth(q: HealthExecutor): Promise<WorkerJobHealt
   const { rows } = await q.query(
     `SELECT d.id, d.label_es, d.queue, d.default_cron, d.enabled,
             ${TS('ultima.started_at')} AS last_run_at, ultima.status AS last_status, ultima.error AS last_error,
+            coalesce((ultima.metadata->>'${TICK_CUT_KEY}')::boolean, false) AS last_cut,
             ${TS('buena.started_at')} AS last_ok_at,
             (SELECT count(*) FROM job_run f
               WHERE f.job_id = d.id AND f.workspace_id IS NULL AND f.status = 'failed'
+                AND (f.metadata->>'${TICK_CUT_KEY}')::boolean IS NOT TRUE
                 AND (buena.started_at IS NULL OR f.started_at > buena.started_at))::int AS failed_since_ok
        FROM job_definition d
        LEFT JOIN LATERAL (
-         SELECT started_at, status, error FROM job_run r WHERE r.job_id = d.id AND r.workspace_id IS NULL ORDER BY r.started_at DESC, r.id DESC LIMIT 1
+         SELECT started_at, status, error, metadata FROM job_run r WHERE r.job_id = d.id AND r.workspace_id IS NULL ORDER BY r.started_at DESC, r.id DESC LIMIT 1
        ) ultima ON true
        LEFT JOIN LATERAL (
          SELECT started_at FROM job_run r WHERE r.job_id = d.id AND r.workspace_id IS NULL AND r.status IN ('ok','partial') ORDER BY r.started_at DESC, r.id DESC LIMIT 1
@@ -75,6 +91,7 @@ export async function getWorkerHealth(q: HealthExecutor): Promise<WorkerJobHealt
     lastError: (r['last_error'] as string | null) ?? null,
     lastOkAt: (r['last_ok_at'] as string | null) ?? null,
     failedSinceOk: Number(r['failed_since_ok'] ?? 0),
+    lastCut: r['last_cut'] === true,
   }));
 }
 

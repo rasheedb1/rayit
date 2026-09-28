@@ -97,6 +97,21 @@ export interface PostgresDatabaseOptions {
   /** Ruta al CA. null = decidir por el host (localhost sin TLS; lo demás con el CA de Supabase del repo). */
   sslRootCert: string | null;
   onError?: (err: Error) => void;
+  /**
+   * Cuánto se espera una conexión nueva antes de fallar (pg espera para
+   * siempre por defecto). El turno de CIM-7 pone unos segundos: con el
+   * pooler colgado, el turno falla con su motivo en vez de esperar a que
+   * Vercel mate la función. Sin él, como siempre.
+   */
+  connectionTimeoutMillis?: number;
+  /**
+   * statement_timeout e idle_in_transaction_session_timeout de cada
+   * conexión, fijados junto al SET ROLE. El turno pone su presupuesto: un
+   * job cortado que no mira ctx.signal suelta su conexión de modo sesión
+   * a lo sumo ese tiempo después, en vez de retenerla contra las 15 del
+   * pooler. Sin él, los de la base.
+   */
+  sessionTimeoutMs?: number;
 }
 
 /**
@@ -117,11 +132,19 @@ export class PostgresDatabase implements WorkerDatabase {
   readonly #ssl: Ssl;
   /** La URL ya sin parámetros de TLS: una sola fuente de verdad, también para pg-boss. */
   readonly #connectionString: string;
-  /** Clientes del pool que ya hicieron SET ROLE. */
+  /** Clientes del pool que ya hicieron SET ROLE (y fijaron sus timeouts). */
   readonly #prepared = new WeakSet<pg.PoolClient>();
+  /** Lo que corre cada conexión nueva, en UNA ida y vuelta: SET ROLE y, en el turno, los timeouts de sesión. null si nada. */
+  readonly #prepare: string | null;
 
   constructor(opts: PostgresDatabaseOptions) {
     this.#opts = opts;
+    const timeoutMs = opts.sessionTimeoutMs ? Math.max(1, Math.floor(opts.sessionTimeoutMs)) : null;
+    const sets = [
+      ...(opts.setRole ? [`SET ROLE ${quoteIdent(opts.setRole)}`] : []),
+      ...(timeoutMs ? [`SET statement_timeout = ${timeoutMs}`, `SET idle_in_transaction_session_timeout = ${timeoutMs}`] : []),
+    ];
+    this.#prepare = sets.length > 0 ? sets.join('; ') : null;
     const tls = resolveTls(opts.connectionString, opts.sslRootCert);
     this.#ssl = tls.ssl;
     this.#connectionString = tls.connectionString;
@@ -130,6 +153,7 @@ export class PostgresDatabase implements WorkerDatabase {
       ssl: this.#ssl,
       max: opts.jobPoolMax,
       application_name: `${opts.applicationName}:jobs`,
+      ...(opts.connectionTimeoutMillis ? { connectionTimeoutMillis: opts.connectionTimeoutMillis } : {}),
     });
     this.#pool.on('error', (err) => opts.onError?.(err));
   }
@@ -145,16 +169,18 @@ export class PostgresDatabase implements WorkerDatabase {
 
   async #acquire(): Promise<pg.PoolClient> {
     const client = await this.#pool.connect();
-    if (this.#opts.setRole && !this.#prepared.has(client)) {
+    if (this.#prepare && !this.#prepared.has(client)) {
       try {
-        await client.query(`SET ROLE ${quoteIdent(this.#opts.setRole)}`);
+        await client.query(this.#prepare);
         this.#prepared.add(client);
       } catch (err) {
         // Un cliente sin el rol correcto no puede volver al pool: se destruye.
         client.release(err instanceof Error ? err : new Error(String(err)));
         throw new Error(
-          `No se pudo hacer SET ROLE ${this.#opts.setRole}: ${(err as Error).message}. ` +
-          'El rol con el que se conecta el worker tiene que ser miembro de mc_worker (ver docs/propuestas/WRK.md §1).',
+          this.#opts.setRole
+            ? `No se pudo hacer SET ROLE ${this.#opts.setRole}: ${(err as Error).message}. ` +
+              'El rol con el que se conecta el worker tiene que ser miembro de mc_worker (ver docs/propuestas/WRK.md §1).'
+            : `No se pudieron fijar los timeouts de la conexión: ${(err as Error).message}.`,
           { cause: err },
         );
       }

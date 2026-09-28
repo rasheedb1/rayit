@@ -37,11 +37,10 @@
  *
  * Las corridas van una detrás de otra: primero lo que no corre después
  * de nada (collect.*), luego lo encadenado (compute.*), y dentro de cada
- * nivel por tick, el más viejo primero. En un turno van hasta
- * `concurrency` a la vez, y el orden se mantiene igual: un job no empieza
- * mientras algo de su `after` siga pendiente o corriendo en la pasada
- * (blockedBy, más abajo). Con timeout_s de 60–600 s por job, una
- * pasada completa cabe de sobra en el límite de un runner de GitHub.
+ * nivel por tick, el más viejo primero. Con timeout_s de 60–600 s por
+ * job, una pasada completa cabe de sobra en el límite de un runner de
+ * GitHub. Cómo se recorre esa pila es lo único que cambia el modo por
+ * turnos (`walk`, abajo).
  *
  * Dos pasadas a la vez (dos turnos de CIM-7 que se solapan, o un
  * workflow repetido): cada corrida se RECLAMA antes de empezar
@@ -54,28 +53,25 @@
  * proceso largo encendido no hay reclamo: pg-boss no mira job_run; no se
  * corren a la vez.)
  *
- * Modo por turnos (CIM-7, src/tick.ts): la misma pasada con un
- * presupuesto (`budget`). No empieza una corrida si quedan menos de
- * `minSliceMs`; a la que empieza le da como timeout_s lo que queda del
- * turno (un job que se mide por su timeout, como outbound.dispatch,
- * termina solo y devuelve lo que no intentó), y la que aun así se pasa
- * termina `failed` con `timeout` y `metadata.tickCut`, en la misma
- * escritura que cierra la fila (RunInput.closeMetadata). Un corte no
- * gasta un intento: el turno siguiente la retoma (reason `resume`), hasta
- * MAX_TICK_CUTS cortes por tick del cron. Lo que no llegó a empezar
- * queda como `budget` y sigue vencido para el turno siguiente.
+ * Modo por turnos (CIM-7, src/tick.ts): la misma pasada, recorrida por
+ * src/turno/recorrer.ts (presupuesto, varios recorredores) a través de
+ * `walk`. Aquí queda solo lo que comparte con --once: el reclamo, el
+ * estado de los ticks en una consulta, el backoff del reintento y el
+ * corte. A la corrida que empieza el turno le da como timeout_s lo que
+ * le queda (`deadline`); la que aun así se pasa termina `failed` con
+ * `timeout` y `metadata.tickCut`, en la misma escritura que cierra la
+ * fila (RunInput.closeMetadata). Un corte no gasta un intento: el turno
+ * siguiente la retoma (reason `resume`), hasta MAX_TICK_CUTS cortes por
+ * tick del cron.
  *
- * Este modo lo añadió CIM-7 (Rasheed) dentro de runner/, la carpeta de
- * Nicolás: el reclamo atómico, el presupuesto, los recorredores y la
- * planificación en una consulta viven aquí porque son la MISMA pasada
- * que --once (la pila de pendientes, el encadenado, la regla de
- * reintento); copiarla en src/tick.ts era duplicar la lógica. Qué cambió
- * y por qué, en apps/worker/README.md («Por turnos · lo que se tocó en
+ * Lo que tocó CIM-7 (Rasheed) en runner/, la carpeta de Nicolás, y por
+ * qué, en apps/worker/README.md («Por turnos · lo que se tocó en
  * runner/»). Pendiente de su revisión antes del merge a main.
  */
 import { randomUUID } from 'node:crypto';
 import type { QuotaManager, ConnectorHttpOverrides, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
-import { EXPIRE_MARGIN_S } from './boss.ts';
+import { TICK_CUT_KEY } from '@mc/db/queries/worker';
+import { createQuota, EXPIRE_MARGIN_S, JOB_LOCK_PREFIX, recordSkipped, SKIPPED_NO_HANDLER } from './comun.ts';
 import type { Env, WorkerConfig } from './config.ts';
 import { CronError, lastTick } from './cron.ts';
 import type { Queryable, WorkerDatabase } from './db.ts';
@@ -83,7 +79,6 @@ import { loadJobDefinitions } from './definitions.ts';
 import type { Logger } from './logger.ts';
 import { JobRegistry, type JobDefinition, type JobRegistration } from './registry.ts';
 import { CHAIN_SOURCE, executeRun, JobItemsFailedError, JobTimeoutError, type RunOutcome, type RunStatus } from './run.ts';
-import { createQuota, JOB_LOCK_PREFIX, recordSkipped, SKIPPED_NO_HANDLER } from './worker.ts';
 
 /** `source` del payload de una corrida de --once, como `cron` en las de pg-boss. */
 export const ONCE_SOURCE = 'once';
@@ -101,23 +96,8 @@ export interface RunOnceOptions {
   http?: ConnectorHttpOverrides;
   /** SIGTERM del runner: no se empieza nada nuevo y la corrida en curso recibe la señal. */
   signal?: AbortSignal;
-  /** El presupuesto de un turno (modo por turnos, CIM-7). Sin él, --once: sin límite de tiempo. */
-  budget?: OnceBudget;
-  /** Cuántas corridas a la vez. 1 (por defecto, --once): una detrás de otra. */
-  concurrency?: number;
-  /**
-   * Jobs que, si están vencidos, empiezan antes que el resto (el turno pone
-   * outbound.dispatch: un toque atrasado lo nota un cliente; un compute.*
-   * cinco minutos tarde, no). Solo reordena lo que no corre después de nada.
-   */
-  first?: readonly string[];
-}
-
-export interface OnceBudget {
-  /** Hasta cuándo puede correr una corrida, en milisegundos de reloj de pared (Date.now()). */
-  deadline: number;
-  /** Lo mínimo que tiene que quedar para EMPEZAR una corrida. */
-  minSliceMs: number;
+  /** Cómo se recorre lo pendiente. Por defecto, --once: sequentialWalk. El turno (CIM-7) pone el suyo. */
+  walk?: Walk;
 }
 
 /** due: vencida · retry: tras un fallo · resume: tras un corte del turno · chained: tras el job de arriba. */
@@ -163,8 +143,8 @@ export function onceExitCode(s: OnceSummary): 0 | 1 {
 
 /** Marca en job_run.metadata de una corrida que el job pidió no reintentar (`retry: false`). */
 export const NO_RETRY_KEY = 'noRetry';
-/** Marca en job_run.metadata de una corrida que cortó el presupuesto del turno (CIM-7): no cuenta como intento. */
-export const TICK_CUT_KEY = 'tickCut';
+/** Marca en job_run.metadata de una corrida que cortó el presupuesto del turno (CIM-7): no cuenta como intento. La lee también la salud (@mc/db/queries/worker). */
+export { TICK_CUT_KEY };
 /**
  * Cortes por presupuesto que se toleran dentro de un mismo tick del cron.
  * Un job que se retoma avanza en cada turno; uno que nunca cabe no puede
@@ -485,8 +465,47 @@ export async function claimRun(db: WorkerDatabase, item: PendingRun, at: Date, b
   });
 }
 
+/**
+ * Cómo se recorre la pila de lo pendiente: el punto de extensión del modo
+ * por turnos (CIM-7). --once usa sequentialWalk; el turno, el suyo
+ * (src/turno/recorrer.ts: presupuesto, varios recorredores, lo urgente
+ * primero). El recorrido solo decide QUÉ empieza y CUÁNDO: el reclamo,
+ * la corrida, las marcas y el encadenado los hace `run`.
+ */
+export interface WalkControl {
+  /** La pila: el siguiente sale del final. `run` apila aquí lo encadenado. */
+  readonly pending: PendingRun[];
+  /** Los jobs que ya empezaron en esta pasada: cada uno corre como mucho una vez. */
+  readonly ran: ReadonlySet<string>;
+  readonly signal?: AbortSignal;
+  /**
+   * Reclama y corre `item`, y apila lo que va después. Con `deadline` (ms de
+   * Date.now()), la corrida tiene como timeout_s lo que queda hasta ahí, si
+   * es menos que el suyo; si aun así se pasa, termina con tickCut y el
+   * turno siguiente la retoma sin gastar un intento.
+   */
+  run(item: PendingRun, deadline?: number): Promise<void>;
+  /** Un pendiente que no empieza, y por qué (shutting_down cuenta como pasada interrumpida). */
+  skip(item: PendingRun, reason: OnceSkipReason): void;
+}
+
+export type Walk = (control: WalkControl) => Promise<void>;
+
+/** --once: una corrida detrás de otra, sin límite de tiempo; con la señal abortada no empieza nada más. */
+export const sequentialWalk: Walk = async (c) => {
+  while (c.pending.length > 0) {
+    const next = c.pending.pop()!;
+    if (c.ran.has(next.def.id)) continue;
+    if (c.signal?.aborted) {
+      c.skip(next, 'shutting_down');
+      continue;
+    }
+    await c.run(next);
+  }
+};
+
 export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
-  const { config, db, logger, budget } = opts;
+  const { config, db, logger } = opts;
   const env = opts.env ?? process.env;
   const clock = opts.now ?? (() => new Date());
   const now = clock();
@@ -499,12 +518,6 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
   const planStarted = Date.now();
   const { due, skipped, definitions } = await planOnce(db, config, registry, now, logger);
   const planMs = Date.now() - planStarted;
-  if (opts.first?.length) {
-    // Los que el turno pide primero (outbound.dispatch), si no corren después de nada: sort es estable, el resto conserva su orden.
-    const first = new Set(opts.first);
-    const ahead = (d: DueJob) => (first.has(d.def.id) && (registry.get(d.def.id)?.options.after ?? []).length === 0 ? 0 : 1);
-    due.sort((a, b) => ahead(a) - ahead(b));
-  }
   const byId = new Map(definitions.map((d) => [d.id, d]));
   const enabledIds = new Set(definitions.filter((d) => d.enabled).map((d) => d.id));
   logger.info('pasada: lo vencido', { at: now.toISOString(), due: due.map((d) => d.def.id), groups: config.groups ?? 'todos' });
@@ -516,12 +529,13 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
   const pending: PendingRun[] =
     due.map((d) => ({ def: d.def, registration: d.registration, payload: { job: d.def.id, source: ONCE_SOURCE }, coverFrom: d.coverFrom, reason: d.reason })).reverse();
 
-  const run = async (next: PendingRun): Promise<void> => {
+  const run = async (next: PendingRun, deadline?: number): Promise<void> => {
+    ran.add(next.def.id); // antes de cualquier await: otro recorredor ya no lo toma
     const bossJobId = `once:${randomUUID()}`;
     const runQuota = await getQuota();
     // En un turno, el job tiene lo que queda del presupuesto como timeout_s:
     // el que se mide por su timeout (outbound.dispatch) termina solo, a tiempo.
-    const sliceS = budget ? Math.max(1, Math.floor((budget.deadline - Date.now()) / 1000)) : next.def.timeoutS;
+    const sliceS = deadline !== undefined ? Math.max(1, Math.floor((deadline - Date.now()) / 1000)) : next.def.timeoutS;
     const sliced = sliceS < next.def.timeoutS;
     const definition = sliced ? { ...next.def, timeoutS: sliceS } : next.def;
     const claim = await claimRun(db, next, clock(), bossJobId, sliced ? sliceS : undefined, backoff);
@@ -570,76 +584,22 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
       }
     }
   };
+  const skip = (item: PendingRun, reason: OnceSkipReason): void => {
+    skipped.push({ job: item.def.id, reason });
+    if (reason === 'shutting_down') interrupted++;
+  };
 
-  // `concurrency` recorredores sobre la misma pila; con 1 (--once), una corrida detrás de otra.
-  //
-  // Con más de uno, el orden «lo de arriba antes que lo de abajo» de
-  // planOnce no basta: si collect.post_metrics y compute.baseline están
-  // vencidos a la vez (la puesta al día tras un despliegue o una caída),
-  // el recorredor 2 tomaría compute.baseline en cuanto el 1 empieza
-  // collect.post_metrics y lo calcularía con los datos de ayer; después
-  // ran.has() impediría el encadenado. Por eso un recorredor no saca de
-  // la pila un job cuyo `after` sigue pendiente o corriendo en esta
-  // pasada (blockedBy): toma el siguiente que no lo esté o, si no queda
-  // ninguno, espera a que termine una corrida (settled).
-  const inFlight = new Set<string>();
-  let wake: () => void = () => undefined;
-  let settled = new Promise<void>((resolve) => { wake = resolve; });
-  const notify = (): void => {
-    const w = wake;
-    settled = new Promise<void>((resolve) => { wake = resolve; });
-    w();
-  };
-  const blockedBy = (item: PendingRun): boolean =>
-    (item.registration.options.after ?? []).some((id) => inFlight.has(id) || pending.some((p) => p.def.id === id && !ran.has(id)));
-  /** El siguiente de la pila que puede empezar ya; 'wait' si todos esperan a una corrida en marcha; null si no queda nada. */
-  const take = (): PendingRun | 'wait' | null => {
-    for (let i = pending.length - 1; i >= 0; i--) {
-      const item = pending[i]!;
-      if (ran.has(item.def.id)) {
-        pending.splice(i, 1); // ya corrió en esta pasada (el encadenado y su tick): una vez por pasada
-        continue;
-      }
-      if (!blockedBy(item)) return pending.splice(i, 1)[0]!;
-    }
-    if (pending.length === 0) return null;
-    // Nada en marcha a lo que esperar (no debería pasar: `after` no tiene ciclos): el de arriba de la pila.
-    return inFlight.size > 0 ? 'wait' : pending.pop()!;
-  };
-  const walker = async (): Promise<void> => {
-    for (let next = take(); next; next = take()) {
-      if (next === 'wait') {
-        await settled;
-        continue;
-      }
-      if (opts.signal?.aborted) {
-        skipped.push({ job: next.def.id, reason: 'shutting_down' });
-        interrupted++;
-        continue;
-      }
-      if (budget && budget.deadline - Date.now() < budget.minSliceMs) {
-        skipped.push({ job: next.def.id, reason: 'budget' });
-        continue;
-      }
-      ran.add(next.def.id);
-      inFlight.add(next.def.id);
-      try {
-        await run(next);
-      } finally {
-        inFlight.delete(next.def.id);
-        notify();
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.max(1, Math.floor(opts.concurrency ?? 1)) }, walker));
+  await (opts.walk ?? sequentialWalk)({ pending, ran, signal: opts.signal, run, skip });
 
   const failedRuns = runs.filter((r) => r.status === 'failed' && !r.cut).length;
   const summary: OnceSummary = { at: now.toISOString(), runs, skipped, failedRuns, interrupted, planMs };
+  const cut = runs.filter((r) => r.cut).map((r) => r.job);
+  const noTime = skipped.filter((s) => s.reason === 'budget').map((s) => s.job);
   logger.info('pasada terminada', {
     runs: runs.map((r) => `${r.job}:${r.status}`),
     upToDate: skipped.filter((s) => s.reason === 'up_to_date').map((s) => s.job),
     exhausted: skipped.filter((s) => s.reason === 'retries_exhausted').map((s) => s.job),
-    ...(budget ? { cut: runs.filter((r) => r.cut).map((r) => r.job), noTime: skipped.filter((s) => s.reason === 'budget').map((s) => s.job) } : {}),
+    ...(cut.length || noTime.length ? { cut, noTime } : {}),
     failedRuns,
     interrupted,
     exitCode: onceExitCode(summary),

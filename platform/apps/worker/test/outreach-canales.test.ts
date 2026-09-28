@@ -24,12 +24,12 @@ import {
 } from '@mc/connectors';
 import { FakeGmail, FakeUnipile } from '@mc/connectors/testing';
 import { decideBeforeSend, type OpenThread, type SendContext } from '@mc/db/queries/outreach';
-import { appUrlFrom, buildChannels } from '../src/jobs/ventas/canales/index.ts';
+import { appUrlFrom, buildChannels, publicAppUrl } from '../src/jobs/ventas/canales/index.ts';
 import { ConfigError } from '../src/runner/config.ts';
 import { GmailChannel } from '../src/jobs/ventas/canales/gmail.ts';
 import { inviteNote, profileIdentifier, UnipileChannel } from '../src/jobs/ventas/canales/unipile.ts';
 import type { OutgoingMessage } from '../src/jobs/ventas/canales/types.ts';
-import { claimBudget, composeMessage, DEADLINE_MARGIN_MS, ESTIMATED_SEND_MS } from '../src/jobs/ventas/outbound.dispatch.ts';
+import { claimBudget, composeMessage, DEADLINE_MARGIN_MS, dispatchableChannels, ESTIMATED_SEND_MS } from '../src/jobs/ventas/outbound.dispatch.ts';
 import { deadlineMarginMs, jobDeadline } from '../src/jobs/ventas/plazo.ts';
 
 const NOW = new Date('2026-09-24T15:00:00Z');
@@ -395,6 +395,24 @@ test('buildChannels: falso o real según OUTREACH_CHANNELS, y la URL del enlace 
   assert.equal(real.senders.linkedin!.configured(), false, 'sin UNIPILE_* LinkedIn espera en la cola');
   assert.equal(appUrlFrom({ VERCEL_PROJECT_PRODUCTION_URL: 'on-cue-web.vercel.app' }), 'https://on-cue-web.vercel.app');
   assert.equal(appUrlFrom({}), null);
+});
+
+test('en modo real, con un APP_URL que no es https público (el de desarrollo), el correo no se reclama: su enlace de baja no abriría', () => {
+  const s = new InMemorySecretStore();
+  const llaves = { GOOGLE_OUTREACH_CLIENT_ID: 'x', GOOGLE_OUTREACH_CLIENT_SECRET: 'y' };
+  const avisos: string[] = [];
+  for (const appUrl of ['http://localhost:3100', 'https://localhost:3100', 'http://on-cue-web.vercel.app', 'https://127.0.0.1', 'https://app.localhost']) {
+    const real = buildChannels({ env: { APP_URL: appUrl, ...llaves }, secrets: s, logger: { warn: (msg) => avisos.push(msg) } });
+    assert.equal(real.appUrl, null, appUrl);
+    assert.equal(real.senders.email!.configured(), true, 'Gmail está configurado: lo que falta es la URL');
+    assert.ok(!dispatchableChannels(real).ready.includes('email'), `${appUrl}: el correo no se reclama`);
+  }
+  assert.equal(avisos.length, 5, 'y lo dice en el log');
+  assert.ok(dispatchableChannels(buildChannels({ env: { APP_URL: 'https://on-cue-web.vercel.app', ...llaves }, secrets: s })).ready.includes('email'));
+  assert.equal(publicAppUrl('https://on-cue-web.vercel.app/x'), 'https://on-cue-web.vercel.app');
+  assert.equal(publicAppUrl(null), null);
+  // El canal falso sigue con su URL de desarrollo: ahí no hay destinatario que engañar.
+  assert.equal(buildChannels({ env: { OUTREACH_CHANNELS: 'fake', APP_URL: 'http://localhost:3100' }, scope: { databaseUrl: null, embedded: true }, secrets: s }).appUrl, 'http://localhost:3100');
 });
 
 test('decideBeforeSend relee todo en la transacción del envío', () => {
