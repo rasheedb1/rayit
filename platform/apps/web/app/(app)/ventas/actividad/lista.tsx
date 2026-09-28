@@ -24,6 +24,8 @@ export interface FilaVista {
   contexto: string;
   /** El paso, o null si ya es el título o no tiene (un toque suelto: el contexto dice «Sin cadencia»). */
   paso: string | null;
+  /** Una nota neutra junto al paso: «por redactar» en un borrador que todavía no tiene asunto ni texto. */
+  nota?: string | null;
   /** Cuándo, corto (al lado de la pastilla: «24 de sept, 7:31 p. m.» o «Sale lun 28, 8:12 a. m.»), y la frase larga para el title y el detalle. */
   cuando: string;
   cuandoCompleto: string | null;
@@ -209,6 +211,7 @@ export function ListaActividad({
               </div>
               <p className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-fg-3">
                 {f.paso && <span>{f.paso}</span>}
+                {f.nota && <span>{f.nota}</span>}
                 {f.intentos && <span className="tabular-nums">{f.intentos}</span>}
                 {f.cuenta && <span className="min-w-0 break-all">{f.cuenta}</span>}
                 {f.marcas.map((m) => <span key={m} className="text-good">{m}</span>)}

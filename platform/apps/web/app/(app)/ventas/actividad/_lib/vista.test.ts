@@ -223,6 +223,20 @@ describe("una fila de la cola", () => {
     expect(v.estadoKind).toBe("good");
   });
 
+  it("un correo de la cadencia que aún no se redacta dice su paso y «por redactar», no «Sin asunto» (pulido r4)", () => {
+    const borrador = { status: "draft" as const, channel: "email" as const, stepType: "email", stepPosition: 2, reason: null, retryable: false };
+    const v = vista(fila(borrador));
+    expect(v.titulo).toBe("Paso 2 · Correo");
+    expect(v.nota).toBe(MESSAGES.fila.porRedactar);
+    expect(v.paso).toBeNull();
+    // Con asunto ya redactado, el asunto es el título y el paso va debajo, sin nota.
+    const redactado = vista(fila({ ...borrador, subject: "Una idea para Fresko" }));
+    expect([redactado.titulo, redactado.paso, redactado.nota]).toEqual(["Una idea para Fresko", "Paso 2 · Correo", null]);
+    // Un correo suelto (sin paso) sin asunto sigue diciendo «Sin asunto».
+    const suelto = vista(fila({ ...borrador, status: "failed", stepId: null, stepType: null, stepPosition: null, sequenceName: null }));
+    expect([suelto.titulo, suelto.nota]).toEqual([MESSAGES.fila.sinAsunto, null]);
+  });
+
   it("sin nombre usa el correo; un toque suelto dice «Sin cadencia» una sola vez", () => {
     const v = vista(fila({ contactName: null, stepId: null, stepType: null, stepPosition: null, sequenceName: null }));
     expect(v.contacto).toBe("c3@marca.test");
