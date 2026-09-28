@@ -524,7 +524,7 @@ describe("el redactor con Claude, sin red", () => {
 
   it("le dice al modelo en qué idioma escribir: el de la petición, el mismo de la guía de reglas", async () => {
     const { redactorAnthropic } = await import("./_lib/redactor");
-    const complete = vi.fn(async (_r: LlmRequest) => ({
+    const complete = vi.fn<(r: LlmRequest) => Promise<unknown>>(async () => ({
       stopReason: "end_turn", model: "claude-sonnet-5-20260901", inputTokens: 10, outputTokens: 5, costUsd: 0.00007,
       text: JSON.stringify({ steps: [{ index: 0, guidance: "Abre con su campaña y una cifra de tu perfil." }] }),
     }));
