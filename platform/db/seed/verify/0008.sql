@@ -126,7 +126,8 @@ SELECT 'h_me_interesa_mueve_el_negocio' AS check_id,
                        AND m.classified_at <= now() AND m.read_at IS NULL)
          AND (SELECT e.status FROM outbound_enrollment e WHERE e.deal_id = d.id) = 'replied'
          AND (SELECT string_agg(t.status || coalesce(':' || t.blocked_reason, ''), ',' ORDER BY t.step_index)
-                FROM outbound_touch t WHERE t.deal_id = d.id) = 'sent,sent,canceled:replied'
+                -- El paso 1 (el comentario) es un gesto a mano: «Hecho a mano», no enviado (pulido r6).
+                FROM outbound_touch t WHERE t.deal_id = d.id) = 'skipped:done_by_hand,sent,canceled:replied'
          AND d.last_contact_at <= now() AS ok
   FROM deal d
   JOIN deal_pipeline p ON p.id = d.id

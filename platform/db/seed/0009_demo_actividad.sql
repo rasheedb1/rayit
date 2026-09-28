@@ -8,15 +8,22 @@
 -- dejarían el despachador y sus contadores con el Gmail de Laura
 -- conectado y su LinkedIn caído (seed 0005):
 --
---   * Camilo Herrera (Café Alma) entró en «Marca con campaña activa» y su
---     primer paso, el comentario en LinkedIn, FALLÓ con account_auth: la
---     cuenta de LinkedIn perdió el permiso. Como no hay otro LinkedIn
---     conectado, la actividad no ofrece «Reintentar» sino reconectar
---     (outbound_touch_retry_block = account_down, 0072);
+--   * Camilo Herrera (Café Alma) entró en «Marca con campaña activa»:
+--     Laura le dejó el comentario en LinkedIn a mano (paso 1), su correo
+--     salió (paso 2) y el mensaje de LinkedIn del paso 3 FALLÓ ayer con
+--     account_auth: la cuenta de LinkedIn perdió el permiso. Como no hay
+--     otro LinkedIn conectado, la actividad no ofrece «Reintentar» sino
+--     reconectar (outbound_touch_retry_block = account_down, 0072);
 --   * Laura Quintero (Granos del Valle) recibió el comentario hace tres
---     días hábiles (antes de que LinkedIn cayera) y su correo del paso 2
---     FALLÓ ayer con rejected: se puede reintentar, y el botón «Correo · 1»
---     de la cola lo devuelve a la cola;
+--     días hábiles y su correo del paso 2 FALLÓ ayer con rejected: se
+--     puede reintentar, y el botón «Correo · 1» de la cola lo devuelve a
+--     la cola;
+--   * los comentarios del paso 1 son gestos a mano (TEXTLESS_STEP_TYPES:
+--     On Cue no los redacta ni los envía): quedan 'skipped' con
+--     blocked_reason 'done_by_hand', «Hecho a mano», sin cuenta ni id del
+--     proveedor, y no cuentan en el uso (pulido r6: antes figuraban como
+--     enviados por Unipile o fallidos por la cuenta, estados que el
+--     producto no produce; verify/0009.sql (f) lo vigila);
 --   * los dos enrolamientos quedaron 'completed', como los deja el motor
 --     cuando falla el único toque vivo (advanceEnrollment); reintentar el
 --     correo de Laura reabre el suyo;
@@ -40,7 +47,7 @@
 --
 -- Mapa de identificadores (00000009-…, solo dígitos hexadecimales):
 --   …-0000000e0004..005     outbound_enrollment       (e0 = enrolamiento)
---   …-000000070001..006     outbound_touch            (7 = toque)
+--   …-000000070001..008     outbound_touch            (7 = toque)
 -- =====================================================================
 
 SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', false);
@@ -63,9 +70,9 @@ SELECT e.id::uuid, '00000002-0000-4000-8000-000000000001', '00000005-0000-4000-8
        (habiles[e.desde] + time '09:00') AT TIME ZONE 'America/Bogota',
        (habiles[1] + e.fin) AT TIME ZONE 'America/Bogota'
   FROM dias, (VALUES
-    -- Camilo Herrera (Café Alma): el comentario de ayer falló.
-    ('00000009-0000-4000-8000-0000000e0004', '00000002-0000-4000-8000-0000000c0004', '00000005-0000-4000-8000-0000005e0101',
-     '{"angles_used": []}', 1, time '10:10:05'),
+    -- Camilo Herrera (Café Alma): el mensaje de LinkedIn de ayer (paso 3) falló.
+    ('00000009-0000-4000-8000-0000000e0004', '00000002-0000-4000-8000-0000000c0004', '00000005-0000-4000-8000-0000005e0103',
+     '{"angles_used": ["presencia", "encaje_audiencia"]}', 5, time '10:10:05'),
     -- Laura Quintero (Granos del Valle): el correo de ayer falló.
     ('00000009-0000-4000-8000-0000000e0005', '00000002-0000-4000-8000-0000000c0009', '00000005-0000-4000-8000-0000005e0102',
      '{"angles_used": ["presencia"]}', 3, time '09:40:06')
@@ -87,7 +94,9 @@ dias AS (
     FROM hoy, generate_series(hoy.d - 1, hoy.d - 30, interval '-1 day') g
    WHERE extract(isodow FROM g) < 6),
 h AS (
-  SELECT (habiles[1] + time '10:10') AT TIME ZONE 'America/Bogota' AS camilo_1,
+  SELECT (habiles[5] + time '10:05') AT TIME ZONE 'America/Bogota' AS camilo_1,
+         (habiles[3] + time '10:25') AT TIME ZONE 'America/Bogota' AS camilo_2,
+         (habiles[1] + time '10:10') AT TIME ZONE 'America/Bogota' AS camilo_3,
          (habiles[3] + time '10:20') AT TIME ZONE 'America/Bogota' AS laura_1,
          (habiles[1] + time '09:40') AT TIME ZONE 'America/Bogota' AS laura_2,
          -- El paso 1 de Daniel y de Carolina (seed 0005), un día hábil antes de su correo.
@@ -102,24 +111,29 @@ INSERT INTO outbound_touch
    subject, body, status, scheduled_for, claimed_at, sent_at, attempt_count, recipient_address,
    provider_message_id, blocked_reason, status_changed_at, created_at, channel_account_id)
 VALUES
-  -- Camilo · 1: el comentario en LinkedIn, fallido: la cuenta perdió el permiso.
+  -- Camilo · 1: el comentario en LinkedIn, hecho a mano.
   ('00000009-0000-4000-8000-000000070001', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-0000000c0004',
    '00000005-0000-4000-8000-0000005e0001', 1, '00000009-0000-4000-8000-0000000e0004',
-   '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL,
-   'Muy buena la cata de café de origen del viernes. El video del tostado en cámara lenta es de lo mejor que vi esta semana.',
-   'failed', (SELECT camilo_1 FROM h), (SELECT camilo_1 FROM h), NULL, 1, NULL, NULL, 'account_auth',
-   (SELECT camilo_1 FROM h) + interval '5 seconds', (SELECT camilo_1 FROM h) - interval '1 hour',
+   '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL, '',
+   'skipped', (SELECT camilo_1 FROM h), NULL, NULL, 0, NULL, NULL, 'done_by_hand',
+   (SELECT camilo_1 FROM h), (SELECT camilo_1 FROM h) - interval '1 hour', NULL),
+  -- Camilo · 3: el mensaje de LinkedIn con la prueba de desempeño, fallido: la cuenta perdió el permiso.
+  ('00000009-0000-4000-8000-000000070008', '00000002-0000-4000-8000-000000000001',
+   '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-0000000c0004',
+   '00000005-0000-4000-8000-0000005e0001', 3, '00000009-0000-4000-8000-0000000e0004',
+   '00000005-0000-4000-8000-0000005e0103', 'linkedin', NULL,
+   'Camilo, te dejo el video del café de olla que grabé con grano de origen: le fue mejor que a casi todo lo que publiqué este año.',
+   'failed', (SELECT camilo_3 FROM h), (SELECT camilo_3 FROM h), NULL, 1, NULL, NULL, 'account_auth',
+   (SELECT camilo_3 FROM h) + interval '5 seconds', (SELECT camilo_3 FROM h) - interval '1 hour',
    '00000005-0000-4000-8000-0000000ac002'),
-  -- Laura Quintero · 1: el comentario en LinkedIn, enviado antes de que la cuenta cayera.
+  -- Laura Quintero · 1: el comentario en LinkedIn, hecho a mano.
   ('00000009-0000-4000-8000-000000070002', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000c0009',
    '00000005-0000-4000-8000-0000005e0001', 1, '00000009-0000-4000-8000-0000000e0005',
-   '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL,
-   'La receta de arepas con maíz del Valle quedó perfecta. Se nota el cuidado en el grano.',
-   'sent', (SELECT laura_1 FROM h), (SELECT laura_1 FROM h) - interval '9 seconds', (SELECT laura_1 FROM h), 1, NULL,
-   'unipile-demo-comment-0009', NULL,
-   (SELECT laura_1 FROM h), (SELECT laura_1 FROM h) - interval '1 hour', '00000005-0000-4000-8000-0000000ac002'),
+   '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL, '',
+   'skipped', (SELECT laura_1 FROM h), NULL, NULL, 0, NULL, NULL, 'done_by_hand',
+   (SELECT laura_1 FROM h), (SELECT laura_1 FROM h) - interval '1 hour', NULL),
   -- Laura Quintero · 2: el correo del encaje de audiencia, rechazado por el proveedor. Se puede reintentar.
   ('00000009-0000-4000-8000-000000070003', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-0000000000e6', '00000002-0000-4000-8000-0000000c0009',
@@ -130,34 +144,63 @@ VALUES
    'failed', (SELECT laura_2 FROM h), (SELECT laura_2 FROM h), NULL, 1, 'lquintero@granosdelvalle.co', NULL, 'rejected',
    (SELECT laura_2 FROM h) + interval '6 seconds', (SELECT laura_2 FROM h) - interval '1 hour',
    '00000005-0000-4000-8000-0000000ac001'),
-  -- Daniel Restrepo · 1 (pulido r1): el comentario en LinkedIn antes de su correo. Sin él, el embudo de la
-  -- cadencia crecía hacia abajo (el paso 2 salía a más gente que el paso 1).
+  -- Daniel Restrepo · 1 (pulido r1): el comentario en LinkedIn antes de su correo, hecho a mano. Sin él, el
+  -- embudo de la cadencia crecía hacia abajo (el paso 2 salía a más gente que el paso 1).
   ('00000009-0000-4000-8000-000000070004', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-0000000c0008',
    '00000005-0000-4000-8000-0000005e0001', 1, '00000005-0000-4000-8000-0000000e0002',
-   '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL,
-   'Qué buena la receta de ajiaco en olla de barro del domingo. Se nota el sabor de casa.',
-   'sent', (SELECT daniel_1 FROM h), (SELECT daniel_1 FROM h) - interval '9 seconds', (SELECT daniel_1 FROM h), 1, NULL,
-   'unipile-demo-comment-0009-4', NULL,
-   (SELECT daniel_1 FROM h), (SELECT daniel_1 FROM h) - interval '1 hour', '00000005-0000-4000-8000-0000000ac002'),
-  -- Carolina Ruiz · 1: el comentario en LinkedIn antes de su correo.
+   '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL, '',
+   'skipped', (SELECT daniel_1 FROM h), NULL, NULL, 0, NULL, NULL, 'done_by_hand',
+   (SELECT daniel_1 FROM h), (SELECT daniel_1 FROM h) - interval '1 hour', NULL),
+  -- Carolina Ruiz · 1: el comentario en LinkedIn antes de su correo, hecho a mano.
   ('00000009-0000-4000-8000-000000070005', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-0000000000e8', '00000002-0000-4000-8000-0000000c0012',
    '00000005-0000-4000-8000-0000005e0001', 1, '00000005-0000-4000-8000-0000000e0003',
-   '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL,
-   'Me encantó el video de la olla que pasa de la estufa a la mesa. Así cocina quien me sigue.',
-   'sent', (SELECT carolina_1 FROM h), (SELECT carolina_1 FROM h) - interval '9 seconds', (SELECT carolina_1 FROM h), 1, NULL,
-   'unipile-demo-comment-0009-5', NULL,
-   (SELECT carolina_1 FROM h), (SELECT carolina_1 FROM h) - interval '1 hour', '00000005-0000-4000-8000-0000000ac002'),
+   '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL, '',
+   'skipped', (SELECT carolina_1 FROM h), NULL, NULL, 0, NULL, NULL, 'done_by_hand',
+   (SELECT carolina_1 FROM h), (SELECT carolina_1 FROM h) - interval '1 hour', NULL),
   -- Carolina Ruiz · 3: el mensaje de LinkedIn, cancelado por su «ahora no» (como su paso 4 en 0005).
   ('00000009-0000-4000-8000-000000070006', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-0000000000e8', '00000002-0000-4000-8000-0000000c0012',
    '00000005-0000-4000-8000-0000005e0001', 3, '00000005-0000-4000-8000-0000000e0003',
    '00000005-0000-4000-8000-0000005e0103', 'linkedin', NULL,
-   'Carolina, te dejo el video de la olla en primer plano: 150 mil views en una semana.',
+   'Carolina, te dejo el video de la olla en primer plano: 150 mil visualizaciones en una semana.',
    'canceled', (SELECT carolina_3 FROM h), NULL, NULL, 0, NULL, NULL, 'not_now',
    now() - interval '11 days', (SELECT carolina_1 FROM h) - interval '1 hour', NULL)
 ON CONFLICT (id) DO NOTHING;
+
+
+-- Camilo · 2: el correo del encaje de audiencia, que salió (con el hilo y el enlace de baja, como lo deja el
+-- despachador: 0005 §5).
+WITH hoy AS (SELECT (now() AT TIME ZONE 'America/Bogota')::date AS d),
+dias AS (
+  SELECT array_agg(g::date ORDER BY g DESC) AS habiles
+    FROM hoy, generate_series(hoy.d - 1, hoy.d - 30, interval '-1 day') g
+   WHERE extract(isodow FROM g) < 6),
+h AS (SELECT (habiles[3] + time '10:25') AT TIME ZONE 'America/Bogota' AS camilo_2 FROM dias)
+INSERT INTO outbound_touch
+  (id, workspace_id, company_id, contact_id, sequence_id, step_index, enrollment_id, step_id, channel,
+   subject, body, status, scheduled_for, claimed_at, sent_at, attempt_count, recipient_address,
+   provider_message_id, message_id_rfc, thread_ref, status_changed_at, created_at, channel_account_id)
+SELECT '00000009-0000-4000-8000-000000070007', '00000002-0000-4000-8000-000000000001',
+       '00000002-0000-4000-8000-0000000000e1', '00000002-0000-4000-8000-0000000c0004',
+       '00000005-0000-4000-8000-0000005e0001', 2, '00000009-0000-4000-8000-0000000e0004',
+       '00000005-0000-4000-8000-0000005e0102', 'email', 'Café de origen en la cocina de mi audiencia',
+       'Hola, Camilo: quienes me siguen preparan el café en casa cada mañana y siempre preguntan qué grano uso. '
+       '¿Te cuento cómo le fue a la receta con grano de origen que hicimos juntos en abril?',
+       'sent', h.camilo_2, h.camilo_2 - interval '8 seconds', h.camilo_2, 1, 'c.herrera@cafealma.co',
+       'gmail-demo-0009-7', '<demo-0009-7@mail.gmail.com>', 'gmail-thread-demo-0009-7',
+       h.camilo_2, h.camilo_2 - interval '1 hour', '00000005-0000-4000-8000-0000000ac001'
+  FROM h
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO outbound_optout_link
+  (token_hash, workspace_id, touch_id, contact_id, attempt, recipient_address, claimed_at, sent_at)
+SELECT encode(sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'UTF8')), 'hex'),
+       t.workspace_id, t.id, t.contact_id, t.attempt_count, t.recipient_address, t.claimed_at, t.sent_at
+  FROM outbound_touch t
+ WHERE t.id = '00000009-0000-4000-8000-000000070007' AND t.status = 'sent'
+   AND NOT EXISTS (SELECT 1 FROM outbound_optout_link l WHERE l.touch_id = t.id AND l.attempt = t.attempt_count);
 
 
 -- =====================================================================

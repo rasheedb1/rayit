@@ -201,14 +201,15 @@ INSERT INTO outbound_touch
    provider_message_id, message_id_rfc, thread_ref, opened_at, replied_at, held_reason, blocked_reason,
    status_changed_at, created_at)
 VALUES
-  -- Vitalé · 1: el comentario en su último post (LinkedIn).
+  -- Vitalé · 1: el comentario en su último post (LinkedIn). Es un gesto a mano (TEXTLESS_STEP_TYPES): On Cue
+  -- no lo redacta ni lo envía. Laura lo hizo en LinkedIn y lo marcó «Hecho» (pulido r6: antes figuraba
+  -- como enviado por Unipile, un estado que el producto no produce).
   ('00000005-0000-4000-8000-000000070001', '00000002-0000-4000-8000-000000000001',
    '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000c0011',
    '00000005-0000-4000-8000-0000005e0001', 1, '00000005-0000-4000-8000-0000000e0001',
-   '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL,
-   'Qué buena la idea de la avena con frutos rojos para arrancar la semana. La probé en casa y funciona.',
-   'sent', (SELECT vitale_1 FROM h), (SELECT vitale_1 FROM h) - interval '10 seconds', (SELECT vitale_1 FROM h), 1,
-   NULL, 'unipile-demo-comment-0001', NULL, NULL, NULL, NULL, NULL, NULL,
+   '00000005-0000-4000-8000-0000005e0101', 'linkedin', NULL, '',
+   'skipped', (SELECT vitale_1 FROM h), NULL, NULL, 0,
+   NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'done_by_hand',
    (SELECT vitale_1 FROM h), (SELECT vitale_1 FROM h) - interval '1 hour'),
   -- Vitalé · 2: el correo del encaje de audiencia; lo abrió.
   ('00000005-0000-4000-8000-000000070002', '00000002-0000-4000-8000-000000000001',
@@ -226,7 +227,7 @@ VALUES
    '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000c0011',
    '00000005-0000-4000-8000-0000005e0001', 3, '00000005-0000-4000-8000-0000000e0001',
    '00000005-0000-4000-8000-0000005e0103', 'linkedin', NULL,
-   'Sofía, te dejo el video de la granola casera: 212 mil views, cuatro veces mi mediana. '
+   'Sofía, te dejo el video de la granola casera: 212 mil visualizaciones, cuatro veces mi mediana. '
    'Una receta así con Vitalé funcionaría igual de bien.',
    'scheduled', (SELECT proximo FROM h),
    NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
@@ -246,7 +247,7 @@ VALUES
    '00000002-0000-4000-8000-0000000000e7', '00000002-0000-4000-8000-0000000c0011',
    '00000005-0000-4000-8000-0000005e0001', 5, '00000005-0000-4000-8000-0000000e0001',
    '00000005-0000-4000-8000-0000005e0105', 'linkedin', NULL,
-   'Con Café Alma hicimos tres videos en abril: 712 mil views y un código de descuento que se usó 1.840 veces.',
+   'Con Café Alma hicimos tres videos en abril: 712 mil visualizaciones y un código de descuento que se usó 1.840 veces.',
    'draft', NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
    now() - interval '3 hours', now() - interval '3 hours'),
   -- Sabores Caseros · 2: el correo al que Daniel respondió.
@@ -265,7 +266,7 @@ VALUES
    '00000002-0000-4000-8000-0000000000e5', '00000002-0000-4000-8000-0000000c0008',
    '00000005-0000-4000-8000-0000005e0001', 3, '00000005-0000-4000-8000-0000000e0002',
    '00000005-0000-4000-8000-0000005e0103', 'linkedin', NULL,
-   'Daniel, te comparto el video de las arepas rellenas: 180 mil views en una semana.',
+   'Daniel, te comparto el video de las arepas rellenas: 180 mil visualizaciones en una semana.',
    'canceled', (SELECT sabores_3 FROM h), NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'replied',
    now() - interval '5 days', now() - interval '6 days'),
   -- Olla Fácil · 2: el correo al que Carolina contestó «ahora no».
