@@ -32,7 +32,8 @@ import { DEMO_WORKSPACE_ID } from '../src/jobs/ventas/demo-ids.ts';
 import { prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
 import { motorDbFromJob } from '../src/jobs/ventas/motor-db.ts';
 import { dispatchJob, DISPATCH_JOB_ID } from '../src/jobs/ventas/outbound.dispatch.ts';
-import { loadConfig } from '../src/runner/config.ts';
+import { ConfigError, loadConfig } from '../src/runner/config.ts';
+import { holdLongProcessLock } from '../src/runner/exclusion.ts';
 import { PostgresDatabase, type Queryable, type WorkerDatabase } from '../src/runner/db.ts';
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
 import { defineJob, type JobRegistration } from '../src/runner/registry.ts';
@@ -125,6 +126,7 @@ describe('el turno contra Postgres real (TEST_DATABASE_URL)', { skip: REAL ? fal
       INSERT INTO job_definition (id, label_es, queue, default_cron, timeout_s, max_attempts, max_concurrency) VALUES
         ('test.pg_contado', 'Prueba pg: contado', 'test_pg_carrera', '${ANUAL}', 60, 1, 1),
         ('test.pg_dormilon', 'Prueba pg: dormilón', 'test_pg_dormilon', '${ANUAL}', 300, 1, 1),
+        ('test.pg_candado', 'Prueba pg: candado', 'test_pg_candado', '${ANUAL}', 60, 1, 1),
         ${pools};
     `);
   }, SETUP_TIMEOUT);
@@ -203,5 +205,25 @@ describe('el turno contra Postgres real (TEST_DATABASE_URL)', { skip: REAL ? fal
     // El timeout es de las conexiones del turno: una conexión cualquiera sigue con el de la base.
     const [fila] = await leer<{ v: string }>(`SELECT current_setting('statement_timeout') AS v`);
     assert.equal(fila?.v, '0');
+  });
+  test('con el proceso largo vivo (su candado en otra sesión), el turno no corre nada; un segundo proceso largo no arranca; suelto el candado, el turno corre', async () => {
+    let candados = 0;
+    const candado = defineJob('test.pg_candado', async () => { candados++; return { processed: 1, failed: 0 }; });
+    const conexion = { connectionString: t.url!, ssl: false as const };
+    const largo = await holdLongProcessLock({ connection: conexion, applicationName: 'mc-worker:test-candado', logger });
+    try {
+      const s = await turno(pool(), 'test_pg_candado', [candado]);
+      assert.deepEqual(s.ran, []);
+      assert.deepEqual(s.left, [{ job: '*', reason: 'running' }]);
+      assert.equal(candados, 0);
+      const filas = await leer<{ n: number }>(`SELECT count(*)::int AS n FROM job_run WHERE job_id = 'test.pg_candado'`);
+      assert.equal(filas[0]?.n, 0, 'ni una fila');
+      await assert.rejects(holdLongProcessLock({ connection: conexion, applicationName: 'mc-worker:test-candado-2', logger }), ConfigError, 'un segundo proceso largo no arranca');
+    } finally {
+      await largo.release();
+    }
+    const s = await turno(pool(), 'test_pg_candado', [candado]);
+    assert.deepEqual(s.ran.map((r) => [r.job, r.status]), [['test.pg_candado', 'ok']]);
+    assert.equal(candados, 1);
   });
 });
