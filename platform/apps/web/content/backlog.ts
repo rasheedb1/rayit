@@ -402,7 +402,7 @@ export const STORIES: readonly Story[] = [
     desc: "Qué busca el creador (categorías, países, presupuesto mínimo, entregables) y qué no acepta. Filtra la bandeja del radar.",
     done: "Una señal de una categoría excluida no aparece en la bandeja.",
     status: "hecho",
-    note: "/ventas/brief: un brief por creador; el radar oculta lo que excluye y lo dice, y una marca excluida por su nombre se reconoce aunque la señal traiga dominio o ficha del catálogo. Pendiente humano: la cola única del integrador en docs/ventas-outreach.md §5.2 (mezclar main; db.migrate aplica 0043…0075 en orden; db.guardia; seeds). Detalle en docs/ventas-outreach.md §5.8.",
+    note: "/ventas/brief: un brief por creador; el radar oculta lo que excluye y lo dice, y una marca excluida por su nombre se reconoce aunque la señal traiga dominio o ficha. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds). Detalle en docs/ventas-outreach.md §5.8.",
   },
   {
     id: "VEN-8", module: "VEN", owner: "rasheed", size: "S", sprint: 6, deps: ["VEN-3"],
@@ -410,7 +410,7 @@ export const STORIES: readonly Story[] = [
     desc: "Motivo de pérdida, y tasa de conversión por etapa desde deal_stage_history.",
     done: "La tasa entre etapas aparece en el pipeline con el número de deals que la sostiene.",
     status: "hecho",
-    note: "Motivo obligatorio en un diálogo y en la base; conversión por etapa de 90 días bajo cada columna, con su número de negocios y la regla de las etapas saltadas a la vista. Pendiente humano: la cola única del integrador en docs/ventas-outreach.md §5.2 (mezclar main; db.migrate aplica 0043…0075 en orden; db.guardia; seeds). Detalle en docs/ventas-outreach.md.",
+    note: "Motivo obligatorio en un diálogo y en la base; conversión por etapa de 90 días bajo cada columna. Pulido r5: perder un negocio cierra su cadencia (0076). Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
   },
   // Outreach automático. Diseño en docs/ventas-outreach.md, a partir de CadenceV1.0.
   {
@@ -426,8 +426,8 @@ export const STORIES: readonly Story[] = [
     title: "Motor de cadencias",
     desc: "Pasos normalizados, enrolamiento, cola en outbound_touch con reclamo atómico, despachador por canal con interfaz común, días hábiles y zona horaria del workspace, límites diarios y semanales, reintentos con espera creciente, interruptor de apagado, cancelación al responder con relectura del estado antes de enviar.",
     done: "Una secuencia de tres pasos con plantillas fijas se ejecuta sola contra un buzón de prueba; una respuesta cancela lo pendiente; el límite diario reprograma al día siguiente.",
-    status: "bloqueada",
-    note: "Motor de cadencias con aprobar, resolver, saltar y reanudar del equipo, festivos por país y reclamo fila a fila. Pulido r4: seeds y alta pendientes de adaptar a 0034 (membership.role → role_id; con 0034–0042 de main, seed 0002 falla). Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2. Pegar aquí las salidas de sus pasos 4 y 6.",
+    status: "hecho",
+    note: "Motor de cadencias con aprobar, resolver, saltar y reanudar, festivos por país y reclamo fila a fila. Pulido r5: origin/main mezclado (roles por role_id, seeds y alta en verde); ganar o perder un negocio detiene su cadencia (0076); la ficha dice «iba a salir» y por qué. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds) y pegar aquí las salidas de los pasos 4 y 6.",
   },
   {
     id: "VEN-11", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["CON-6", "COT-1"],
@@ -435,7 +435,7 @@ export const STORIES: readonly Story[] = [
     desc: "Identidad, audiencia, desempeño (mediana y mejores videos con su porqué), formatos, prueba social de campañas reportadas y tarifas, más una narrativa generada cuyas cifras enlazan a su origen. Es el análisis del perfil y los videos del creador que alimenta el outreach.",
     done: "Con el seed, el perfil muestra los cinco mejores videos con sus cifras y cada cifra de la narrativa lleva a su origen.",
     status: "hecho",
-    note: "Hecha; el historial de rondas está en docs/ventas-outreach.md §5.4. Pulido r2: el media kit toma de post_score las mismas views, edad y múltiplo que «Tus cinco mejores videos». Pulido r3: «Recalcular» aparta su costo con el mismo candado y la misma cuenta que el worker (0075, purpose profile); las cifras de campaña dicen «al cierre del reporte» con su fecha. Pendiente del integrador: la cola única del integrador en docs/ventas-outreach.md §5.2 (mezclar main; db.migrate aplica 0043…0075 en orden; db.guardia; seeds).",
+    note: "Perfil comercial con narrativa trazable; «Recalcular» aparta su costo del tope (0075). Pulido r5: dice «visualizaciones», no «views». Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds). Historial en docs/ventas-outreach.md §5.4.",
   },
   {
     id: "VEN-12", module: "VEN", owner: "rasheed", size: "L", sprint: 5, deps: ["VEN-10", "VEN-11"],
@@ -443,7 +443,7 @@ export const STORIES: readonly Story[] = [
     desc: "Generador con perfil del creador, señal de la marca, ángulo del día y toques realmente enviados; pre-vuelo determinista, juez con rúbrica por paso en tabla, regeneración con pistas cerradas, disparadores de riesgo y revisión humana con calentamiento por tipo de paso.",
     done: "Un mensaje con una cifra sin origen no pasa; dos marcas del mismo nicho reciben correos con similitud menor de 0,65; el juez registra nota, tokens y costo.",
     status: "hecho",
-    note: "Cifras trazables, pre-vuelo, compuertas A-B-C, juez con costo y tope reservado antes de cada llamada (0075). Pulido r4: guardar, programar y «Redactar con IA» del pitch exigen el rol. Pendiente humano: ANTHROPIC_API_KEY en el worker. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2.",
+    note: "Cifras trazables, pre-vuelo, compuertas A-B-C, juez con costo y tope reservado antes de cada llamada (0075). Pulido r5: una sola tabla de precios (llm-precios.ts); un modelo sin precio lanza antes de llamar. Pendiente humano: ANTHROPIC_API_KEY en el worker. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
   },
   {
     id: "VEN-13", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-12"],
@@ -451,7 +451,7 @@ export const STORIES: readonly Story[] = [
     desc: "Desde el brief, la señal, los canales conectados y los contactos disponibles, una secuencia propuesta con día, canal, ángulo y guía por paso; plantillas por nicho y tipo de señal; línea de tiempo editable.",
     done: "Desde una señal de campaña activa, el creador obtiene una secuencia de seis pasos con guía y la activa en dos clics.",
     status: "hecho",
-    note: "Proponer y activar cadencias con guía dentro de la política. Pulido r4: las once acciones exigen el rol; «Proponer cadencia» reserva el tope del modelo (purpose recommend en 0075) y el redactor usa el cliente de @mc/core. Pendiente humano: ANTHROPIC_API_KEY. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2.",
+    note: "Proponer y activar cadencias con guía dentro de la política; las acciones exigen el rol y «Proponer cadencia» reserva el tope del modelo. Pendiente humano: ANTHROPIC_API_KEY. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
   },
   {
     id: "VEN-14", module: "VEN", owner: "rasheed", size: "L", sprint: 5, deps: ["VEN-12"],
@@ -459,7 +459,7 @@ export const STORIES: readonly Story[] = [
     desc: "Aprobar, editar o regenerar lo propuesto; hilos de correo, LinkedIn e Instagram en un solo lugar; clasificación de la intención de la respuesta (interesado, ahora no, fuera de oficina, baja, referido) y su efecto en el deal y el enrolamiento.",
     done: "Un mensaje retenido se aprueba desde la bandeja y sale; una respuesta «me interesa» mueve el deal y aparece en la bandeja con la conversación completa.",
     status: "en_curso",
-    note: "/ventas/aprobaciones y /ventas/bandeja, el job outbound.intent y la corrección a mano; pulido r2: con una cifra sin origen la tarjeta no ofrece «Aprobar», sino «Editar y aprobar» con la cifra señalada; pruebas en apps/worker/test/outreach-bandejas.test.ts y packages/db/test/bandejas.test.ts. Migraciones 0069–0071, en la cola única de docs/ventas-outreach.md §5.2. Falta confirmar la decisión 9 (sin llave de Anthropic no se clasifica): pendiente de Rasheed. Detalle en docs/ventas-outreach.md §5.7.",
+    note: "/ventas/aprobaciones y /ventas/bandeja, outbound.intent y la corrección a mano. Pulido r5: aprobaciones no ofrece lo de un negocio ya ganado o perdido; la bandeja fecha «23 sep». Pendiente de Rasheed: la decisión 9 (sin llave de Anthropic no se clasifica). Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
   },
   {
     id: "VEN-15", module: "VEN", owner: "rasheed", size: "M", sprint: 4, deps: ["VEN-10"],
@@ -467,7 +467,7 @@ export const STORIES: readonly Story[] = [
     desc: "Pie de baja con página pública, cabecera List-Unsubscribe de un clic, rebotes asíncronos, calentamiento progresivo por cuenta, baja respetada en todos los canales, alertas diarias por correo.",
     done: "Un clic en el enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido; el día siguiente llega el resumen de salud.",
     status: "hecho",
-    note: "Probado en pglite de punta a punta con el conector de VEN-9. Solo 5.1.x es rebote duro; los bloqueos (5.7.x, 5.4.5) suman a la tasa. Pulido r1: la web no apaga require_optout_link (candado outbound_policy_optout_link); encender pide un canal conectado y dice cuántos mensajes y personas vuelven a la cola; la alerta de «no sale nada» no cuenta lo que espera a una persona. Pulido r2: la baja por respuesta o a mano queda también en la dirección (outbound_workspace_optout) y mc_app no borra una ficha de baja; «Política» es pestaña de Ventas; la baja de un clic cuenta su tope de 8 KiB sobre el flujo (413), con el lector compartido del webhook (lib/cuerpo-limitado.ts). Pulido r3: los correos de la demo (seed 0006) salen el último día hábil, en la ventana y la zona del espacio; la baja pinta el error con el botón ya habilitado; cambiarle el correo a una ficha por uno de la lista del espacio cancela lo suyo en la cola (0055 §8.5); las once pestañas caben desde lg. Pendiente humano: visto bueno de Rasheed a las decisiones 6 y 7 (§8: la baja vale para quien envió; token opaco) y la cola única del integrador en docs/ventas-outreach.md §5.2 (mezclar main; db.migrate aplica 0043…0075 en orden; db.guardia; seeds).",
+    note: "Rebotes, calentamiento, baja de un clic con quien envió y candados de la política, probado en pglite de punta a punta. Pulido r5: la baja por LinkedIn o Instagram vive en el perfil (0077): otra ficha con la misma URL no se enrola ni recibe. Pendiente humano: visto bueno de Rasheed a las decisiones 6 y 7 (§8). Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
   },
   {
     id: "VEN-16", module: "VEN", owner: "rasheed", size: "M", sprint: 5, deps: ["VEN-10"],
@@ -475,7 +475,7 @@ export const STORIES: readonly Story[] = [
     desc: "Cola visible con reintento por tipo, uso por canal con límite blando y duro, embudo por paso (enviados, abiertos, respondidos, positivos), vista de flujo de la cadencia.",
     done: "Con una semana de envíos de prueba, el embudo cuadra con outbound_touch fila a fila.",
     status: "hecho",
-    note: "/ventas/actividad con cola, reintento por tipo y cursor; uso por canal y embudo por paso (0072, seed 0009). Pulido r4: un correo de cadencia por redactar dice «Paso N · Correo · por redactar», no «Sin asunto». Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2.",
+    note: "/ventas/actividad con cola, reintento por tipo y cursor; uso por canal y embudo por paso (0072). Pulido r5: los motivos «la marca ya firmó» y «el negocio se marcó como perdido». Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
   },
 
   // ---------------------------------------------------------------- COT

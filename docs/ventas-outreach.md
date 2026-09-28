@@ -899,12 +899,19 @@ Lo que hace hoy, por partes:
 La historia de cómo se llegó aquí (las rondas de revisión) está en el
 log de git de las ramas `rasheed/VEN-10-motor-cadencias*`.
 
-**Numeración (pulido r2, 26-sep-2026).** Supabase (`schema_migrations`)
-tiene la serie de main hasta `0042_metricas_al_corte_desempate.sql`
-(0034–0042: accesos, CAM y CON). La de integración va entera detrás, de
-`0043_seguimientos.sql` a `0075_presupuesto_llm_reservas.sql`, en el
-orden en que se escribió, y ninguna está aplicada en ningún sitio. Ya no
-hay renumeración al integrar: el script `renumerar-outreach.sh` se borró
+**Numeración y estado de Supabase (pulido r5, 28-sep-2026).** Supabase
+(`schema_migrations`) tiene la serie de main hasta
+`0042_metricas_al_corte_desempate.sql` (0034–0042: accesos, CAM y CON).
+Comprobado el 28-sep-2026 con una lectura como `mc_app`
+(`make db.sql Q="select * from schema_migrations order by 1 desc limit 5"`):
+la última es 0042, aplicada el 23-sep. Un `main` local que termine en
+0033 está atrasado respecto de `origin/main`; es `origin/main` el que
+corre en producción sobre esa base. Por eso las cabeceras de 0043–0077
+que dicen «0034–0042 de main, ya aplicadas» son correctas y no se
+cambian. La serie de integración va entera detrás, de
+`0043_seguimientos.sql` a `0077_baja_por_perfil.sql`, en el orden en que
+se escribió, y **ninguna está aplicada en ningún sitio**. Ya no hay
+renumeración al integrar: el script `renumerar-outreach.sh` se borró
 (su mapa movía siete de los doce archivos que chocaban y los mandaba a
 números que la propia rama ya usaba). Los números de antes del pulido r2
 eran: 0034–0045 → 0043–0054 (+9), 0050–0067 → 0055–0072 (+5) y
@@ -912,7 +919,37 @@ eran: 0034–0045 → 0043–0054 (+9), 0050–0067 → 0055–0072 (+5) y
 citan los nuevos. `packages/db/test/aplicar.test.ts` («esta rama mezclada
 con main no repite número») corre `listSql` sobre la unión de
 `db/migrations` y las de `origin/main`, así que un choque nuevo sale en
-`pnpm verificar` y no en el integrador.
+`pnpm verificar` y no en el integrador. Las del pulido r5: `0076` (ganar
+o perder un negocio detiene su cadencia) y `0077` (la baja por LinkedIn
+o Instagram vive en el perfil). Si otra área tomó los mismos números en
+paralelo, el integrador renumera las del área que llegue después.
+
+**origin/main ya está mezclado (pulido r5, commit `5b8749dd`).** La
+rama iba 369 commits detrás de `origin/main`. La mezcla dio 28
+conflictos, resueltos así (para quien tenga que repetirla o revisarla):
+
+| Archivo | Regla |
+|---|---|
+| `packages/db/src/esquema.ts` (la guardia) | **Unir** las listas de las dos ramas, nunca elegir un lado: `FUNCIONES_DEFINER_DECLARADAS`, `PRIVILEGIOS_DEL_ENLACE_PUBLICO` (la baja de 0046/0055 y el reporte de 0037), `POLITICAS_DEL_ENLACE_PUBLICO` (22: 7 de 0030, 1 de 0033, 2 de 0037, 9 de 0046, 1 y 2 de 0055) y `UNICOS_GLOBALES_DECLARADOS` |
+| `packages/db/test/esquema.test.ts` | El inventario del enlace público con las dos series (22 políticas, `report` y la baja) |
+| `packages/db/src/queries/ventas.ts` | `listOwnerOptions` sigue con `membership_is_team` (0060), que funciona con `role_id` |
+| `packages/db/test/ventas.test.ts`, `outbound-alerts`, `entregabilidad`, `actividad`, `outreach-ficha-salidas` | Las membresías por `membershipSql` (ahora con `admin` y `viewer`), no `membership(role)` |
+| `packages/db/test/{aplicar,campanas,conexiones,cuentas-publicas,finanzas,queries,rls,schema}.test.ts`, `apps/worker/test/{connectors,oauth-refresh-real,preflight}.test.ts` | Las importaciones de las dos ramas y `SETUP_TIMEOUT` (900 s) en vez de 600 s |
+| `apps/worker/test/oauth-refresh.test.ts` | La versión de main (`deEsteJob`, `singletonKey`) con el conteo de llamadas por conexión de esta rama |
+| `apps/worker/test/runner.test.ts` | Los conteos derivados de `job_definition` (esta rama); la lista de main renombrada a `conHandlerIds` |
+| `apps/worker/src/index.ts`, `src/jobs/index.ts` | Los jobs de las dos ramas: conexiones, campañas, finanzas y ventas |
+| `packages/{core,connectors,db}/package.json`, `apps/worker/package.json` | Unión de `exports` y `scripts`; `@mc/core` exporta también `./scripts/*` |
+| `packages/core/src/index.ts`, `packages/connectors/src/index.ts` | Unión; `MONTO_MAXIMO` y `GOOGLE_TOKEN_URL` quedan con una sola declaración (la de main) |
+| `apps/worker/README.md`, `packages/connectors/README.md`, `packages/db/README.md` | Unión de las dos secciones |
+
+Fuera de los conflictos, dos arreglos que la mezcla exigió: los
+conjuntos de roles de la web (`lib/auth/reglas.ts`) pasan a las claves
+de 0034 (`OPERAN`: owner, admin, manager, editor, el mismo grupo que la
+base acepta en 0072), y dos pruebas de Finanzas esperan la fecha
+relativa de Intl («Vence dentro de 7 días»). Después de mezclar se
+corrieron `make db.check` (0001–0077), `make db.seed.check`,
+`pnpm verificar` y `pnpm --filter @mc/web build`, todo en verde;
+`make db.guardia` contra Supabase va después de `db.migrate` (paso 1).
 
 **main borró `membership.role`.** `0034_access_control` (main, ya en
 Supabase) la cambia por `role_id → role` y convierte los `client` en
@@ -921,7 +958,7 @@ forma al aplicarse, con o sin `role_id`: `outreach_can_manage` (0055 §7:
 owner, admin de agencia o mánager del creador), `membership_is_team` y
 `membership_is_owner` (0060) y `outreach_can_operate` (0072: todo rol
 que no sea `viewer` ni `finance`). Con eso la unión (0001–0042 de main y
-0043–0075 de esta serie) se aplica entera en Postgres embebido
+0043–0077 de esta serie) se aplica entera en Postgres embebido
 (comprobado el 26-sep-2026). Los fixtures de las pruebas dan de alta las
 membresías con `membershipSql` (`@mc/db/test/membresia`), que también
 funciona en las dos series. `make db.check` en verde no demuestra nada
@@ -932,10 +969,12 @@ corre `pnpm verificar` después de mezclar.
 VEN-10), un comando por paso, desde `platform/`, con
 `W=00000002-0000-4000-8000-000000000001` (el workspace de la demo):
 
-1. La cola única del integrador: mezclar main, **`pnpm verificar`**
-   (las pruebas del motor sobre la serie integrada; `db.check` no
-   basta), `make db.check`, `make db.migrate` (aplica 0043…0075 en
-   orden), `make db.guardia` y los seeds. Al resolver la mezcla de
+1. La cola única del integrador: mezclar `origin/main` otra vez (ya
+   está dentro hasta `af157372`; solo entra lo que main sume después, y
+   si toca `esquema.ts` se aplica la regla de la tabla de arriba),
+   **`pnpm verificar`** (las pruebas del motor sobre la serie
+   integrada; `db.check` no basta), `make db.check`, `make db.migrate`
+   (aplica 0043…0077 en orden), `make db.guardia` y los seeds. Al resolver la mezcla de
    `packages/db/test/ventas.test.ts`, la lista de responsables del seed
    de main trae también a Andrés Pardo (mánager, 0034_access_control):
    es del equipo y cuenta.
@@ -960,8 +999,8 @@ VEN-10), un comando por paso, desde `platform/`, con
    `reanudarCadencia` (ficha) y `encenderEnvio` y `apagarEnvio`
    (/ventas/politica), y añadir `ventas` a `MODULOS_CON_CONVENCION`.
    Hasta entonces las acciones de la ficha piden `puedeOperarVentas`
-   (owner, admin, member) y las del interruptor `puedeCambiarLaPolitica`
-   (owner, admin); en la base, `outreach_resolve_unconfirmed` exige
+   (owner, admin, manager, editor) y las del interruptor
+   `puedeCambiarLaPolitica` (owner, admin); en la base, `outreach_resolve_unconfirmed` exige
    `membership_is_team` (0058, pulido r1), que con la serie de main deja
    fuera al rol `viewer`.
 
