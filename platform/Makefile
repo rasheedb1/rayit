@@ -7,6 +7,7 @@ DB_URL ?= postgres://mc:mc@localhost:5432/oncue
         github.set github.install github.install-forzado github.mine github.uninstall \
         github.status github.check \
         vercel.set vercel.dir vercel.link vercel.rename vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
+        cron.install cron.status cron.uninstall \
         verificar arranque
 
 help: ## Muestra esta ayuda
@@ -123,6 +124,24 @@ db.cert: ## Vuelve a bajar el certificado raíz de Supabase (y la copia embebida
 	@curl -sL https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt \
 	  -o db/certs/supabase-root-2021.crt && echo "  certificado actualizado"
 	@node db/scripts/embed-ca.mjs && echo "  packages/db/src/supabase-ca.ts regenerado"
+
+# =====================================================================
+# El worker por turnos (CIM-7, opción B): pg_cron de Supabase llama cada
+# minuto a /api/cron/tick de la web con el Bearer CRON_SECRET, guardado
+# en Supabase Vault. Pide el token de administración (solo el dueño):
+# pg_cron y pg_net piden superusuario. CRON_SECRET se pide sin mostrarlo
+# si no está en el entorno; APP_URL, por defecto la de producción.
+# Detalle y cómo pasar a Vercel Cron: apps/worker/README.md, «Por turnos».
+# =====================================================================
+
+cron.install: ## Programa el turno del worker cada minuto (pg_cron -> /api/cron/tick). Idempotente
+	@./scripts/cron-tick.sh install
+
+cron.status: ## La tarea del turno, su secreto en Vault (sin el valor) y las últimas corridas
+	@./scripts/cron-tick.sh status
+
+cron.uninstall: ## Retira la tarea y su secreto (para pasar a Vercel Cron, opción A)
+	@./scripts/cron-tick.sh uninstall
 
 # =====================================================================
 # GitHub · el token compartido

@@ -8,6 +8,7 @@
 # cifrado, porque puede borrar el proyecto entero.
 #
 #   ./scripts/supabase-admin.sh sql "CREATE ROLE ..."
+#   ... | ./scripts/supabase-admin.sh sql-stdin   <- la consulta por stdin, no en `ps`
 #   ./scripts/supabase-admin.sh info
 #   ./scripts/supabase-admin.sh keys
 #   ./scripts/supabase-admin.sh recover    <- romper el cristal
@@ -35,6 +36,15 @@ case "${1:-}" in
       -d "$(python3 -c 'import json,sys;print(json.dumps({"query":sys.argv[1]}))' "$2")" \
       "$API/projects/$REF/database/query" | python3 -m json.tool 2>/dev/null || true
     ;;
+  sql-stdin)
+    # La consulta por la entrada estándar y no como argumento: un
+    # argumento sale en `ps`. Lo usa make cron.install, que lleva dentro
+    # el CRON_SECRET (scripts/cron-tick.sh).
+    t="$(token)" || exit 1
+    python3 -c 'import json,sys;print(json.dumps({"query":sys.stdin.read()}))' \
+      | curl -s -X POST -H "Authorization: Bearer $t" -H 'Content-Type: application/json' --data-binary @- \
+          "$API/projects/$REF/database/query" | python3 -m json.tool 2>/dev/null || true
+    ;;
   recover)
     # Romper el cristal: las llaves que NO se pueden regenerar, guardadas
     # dentro de la propia base. Solo el rol postgres llega a ese esquema.
@@ -49,5 +59,5 @@ case "${1:-}" in
 
   info) curl -s -H "Authorization: Bearer $(token)" "$API/projects/$REF" | python3 -m json.tool ;;
   keys) curl -s -H "Authorization: Bearer $(token)" "$API/projects/$REF/api-keys" | python3 -m json.tool ;;
-  *)    sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+  *)    sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
 esac
