@@ -1,0 +1,44 @@
+[
+ {
+  "severity": "media",
+  "where": "platform/apps/worker/src/index.ts (arranque del proceso largo) y platform/apps/worker/src/tick.ts:40-41",
+  "issue": "Que el turno y el proceso largo nunca corran a la vez solo lo dice la documentación («no se encienden a la vez: pg-boss no mira job_run y correrían dos veces»); ningún código lo impide. Caso real: un desarrollador con `make db.unlock` (su .env.local tiene DATABASE_URL_DIRECT de producción) corre `pnpm --filter @mc/worker start` o `dev` mientras pg_cron dispara el turno cada minuto. Resultado: cada job con cron corre dos veces en producción (dos pasadas de generate/review/intent contra Anthropic, cuota de proveedor doble en collect.*, avisos duplicados donde el job no es idempotente). assertTickTarget protege el camino del turno de local a producción, pero no el del proceso largo.",
+  "fix": "Hacer que los dos modos se excluyan en la base. (1) Al arrancar sin --once, que el proceso largo tome en una conexión dedicada `pg_try_advisory_lock(hashtextextended('mc-worker:proceso-largo',0))` y la retenga mientras vive. Que runTick la pruebe con `pg_try_advisory_xact_lock` (o mire pg_locks) y, si está tomada, salga con `left: [{job:'*', reason:'running'}]` y un aviso. (2) Al revés: que startWorker se niegue a arrancar (ConfigError) si job_run tiene filas con metadata.sliceS de los últimos 5 min, salvo WORKER_ALLOW_WITH_TICK=1. Añadir una prueba en tick.test.ts con el candado tomado por otra sesión, y actualizar la frase del README."
+ },
+ {
+  "severity": "media",
+  "where": "commit 3939bb87 (integra rasheed/CIM-7-runner-1 y -2); platform/apps/worker/src/runner/once.ts (+466/-~100), comun.ts, db.ts, run.ts, worker.ts, boss.ts, salud.ts",
+  "issue": "La regla era tocar runner/ (carpeta de Nicolás) lo mínimo posible. La rama integra también el PR 2, que el propio README llama «opcional»: tickStates en lote, el backoff y comun.ts. Todo eso lleva unas 600 líneas cambiadas a runner/ y entra en rasheed/integracion sin la aprobación de Nicolás, que el backlog da por pendiente. Si Nicolás rechaza el PR 2, habrá que deshacerlo desde una rama integrada.",
+  "fix": "Dejar en esta rama solo rasheed/CIM-7-runner-1 (claimRun, walk, runId/closeMetadata, timeouts de db.ts, salud) e integrar el PR 2 cuando Nicolás lo apruebe explícitamente. El turno ya documenta cómo funciona sin él. Otra opción: condicionar la integración de CIM-7 a su aprobación de los dos PR y enlazarlos en la note de CIM-7 antes del merge."
+ },
+ {
+  "severity": "baja",
+  "where": "platform/apps/worker/src/tick.ts:363-375 (openTickDatabase) y :405-412 (closeWithin)",
+  "issue": "Cada conexión fija statement_timeout e idle_in_transaction_session_timeout, pero no idle_session_timeout. Hay dos casos en que la función puede quedar congelada con conexiones de modo sesión abiertas: el 504 de la ruta (el turno sigue en segundo plano) y closeWithin cuando «el pool no se cerró a tiempo». Una conexión ociosa, fuera de transacción, no la corta nada en el servidor, y cuenta contra los 15 clientes de sesión del pooler, que dos turnos solapados ya usan a 14.",
+  "fix": "Añadir `SET idle_session_timeout = <budgetMs + TICK_CLOSE_MS + 10000>` al #prepare de PostgresDatabase cuando llega sessionTimeoutMs (Postgres ≥14; Supabase lo es) y medirlo en tick-postgres.test.ts: una conexión que no se devuelve desaparece de pg_stat_activity pasado ese plazo."
+ },
+ {
+  "severity": "baja",
+  "where": "platform/apps/worker/src/tick.ts:316",
+  "issue": "runTick espera a tickQuota antes de runOnce, así que se salta la carga perezosa de la cuota que runOnce tiene a propósito («la cuota se lee solo si algo va a correr»). En una instancia fría, un turno sin nada vencido hace una consulta más (platform.limits) de las cuatro que promete el README. El efecto es pequeño por la caché de 5 min, pero documentación y código dicen cosas distintas.",
+  "fix": "Pasar la cuota a runOnce de forma perezosa. Por ejemplo, que RunOnceOptions acepte `quota?: QuotaManager | (() => Promise<QuotaManager>)` y que tick.ts pase `() => tickQuota(...)`. O si no, corregir el README: «cuatro consultas en una instancia caliente; cinco en frío»."
+ },
+ {
+  "severity": "media",
+  "where": "platform/scripts/cron-tick.sh:131 (install llama a status) + platform/db/ops/cron-tick-veredicto.mjs:74-77",
+  "issue": "La primera vez que el dueño corre `make cron.install` en una instalación correcta, el comando termina en rojo y con exit 1 («make: *** Error 1»). install() llama a status nada más programar la tarea, y todavía no hay ninguna respuesta de pg_net (el primer disparo llega en el minuto siguiente y la respuesta, cuando acaba el turno). Por eso el veredicto da error: «Ninguna respuesta de la ruta en 5 min: pg_cron no está disparando». El diagnóstico es falso y cae justo en el paso humano pendiente que cierra CIM-7. Lo reproduje simulando status con tarea y secreto recién creados y ultimas_respuestas null: exit 1.",
+  "fix": "En veredicto(), si la tarea o el secreto tienen menos de ~2 min (el estado ya trae secreto_en_vault[0].updated_at; se puede añadir el jobid o created de cron.job) y no hay respuestas, emitir un aviso y no un error: «Recién instalado: el primer turno llega en 1–2 min; corre make cron.status entonces». Como alternativa, que install() espere hasta ~90 s a la primera fila de net._http_response antes de llamar a status. Añadir en cron-tick-sql.test.ts el caso «recién instalado, sin respuestas → sano, con aviso»."
+ },
+ {
+  "severity": "baja",
+  "where": "platform/db/ops/cron-tick-veredicto.mjs:73-89",
+  "issue": "El veredicto mira todas las respuestas de los últimos 5 min y da error si alguna fue 401, 500 o 504, aunque las más recientes ya sean 200. Justo después de rotar el secreto o de arreglar WORKER_DATABASE_URL (que es lo que el propio veredicto manda hacer), `make cron.install` y `make cron.status` siguen en rojo hasta 5 min con un diagnóstico que ya no es cierto. También lo reproduje: un 401 anterior al updated_at del secreto da exit 1.",
+  "fix": "Descartar para el error las respuestas con created anterior a secreto_en_vault[0].updated_at, y decidir el estado por la respuesta más reciente: si la última es 200, sano, y las anteriores, si fallaron, como aviso («hubo N 401 antes del cambio del secreto»). Una prueba con 401 viejo y 200 nuevo, que debe dar sano."
+ },
+ {
+  "severity": "baja",
+  "where": "platform/apps/worker/src/tick.ts:31-33 y apps/worker/README.md («El turno y el proceso largo no se encienden a la vez»)",
+  "issue": "Que el proceso largo (pg-boss) y el turno no corran a la vez solo lo dice la documentación. `make worker` (README, «Correrlo») carga el .env.local de `make db.unlock`, que apunta al Supabase de producción. Un desarrollador que lo levante mientras el cron de producción está activo corre dos veces collect.*, compute.* y las llamadas de outbound.generate, review e intent al modelo, con su costo. Los toques no salen dos veces porque su reclamo usa SKIP LOCKED, pero sí se duplican job_run y el gasto.",
+  "fix": "Que startWorker tome al arrancar un candado de sesión (pg_try_advisory_lock(hashtext('mc-worker:proceso'))) y lo guarde mientras vive. runTick lo comprueba al planificar (pg_try_advisory_lock y luego unlock, o mirar pg_locks) y, si está tomado, sale sin correr nada con left=[{job:'*', reason:'process_running'}] y un aviso. Como toca runner/worker.ts, que vaya en el PR 1 para Nicolás."
+ }
+]
