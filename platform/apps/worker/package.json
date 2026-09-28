@@ -6,6 +6,9 @@
   "engines": {
     "node": ">=22.12.0"
   },
+  "exports": {
+    "./tick": "./src/tick.ts"
+  },
   "scripts": {
     "dev": "node --watch --env-file-if-exists=../../.env.local --experimental-strip-types src/dev.ts",
     "start": "node --experimental-strip-types src/index.ts",

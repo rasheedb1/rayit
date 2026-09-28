@@ -16,6 +16,7 @@
     "@mc/connectors": "workspace:*",
     "@mc/core": "workspace:*",
     "@mc/db": "workspace:*",
+    "@mc/worker": "workspace:*",
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.117.0",
     "geist": "1.7.2",

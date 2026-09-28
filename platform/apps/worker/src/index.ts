@@ -14,13 +14,10 @@
  * Apagado limpio: SIGTERM/SIGINT → boss.stop graceful (espera los jobs
  * activos hasta WORKER_STOP_TIMEOUT_S) → cierra el pool → sale con 0.
  */
-import {
-  createInstagramRefresher, createTikTokRefresher, createYouTubeRefresher, EncryptedSecretStore, EnvSecretStore, FakeTokenRefresher, HttpCore,
-  InMemorySecretStore, keyringFromEnv, loadOAuthApps, MasterKeyError, NULL_CALL_LOG, PLATFORM_IDS, refresherRegistry, TokenCipher,
-  type ConnectorHttpOverrides, type SecretStore, type TokenRefresherRegistry,
-} from '@mc/connectors';
+import type { ConnectorHttpOverrides, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
 import { allJobs } from './jobs/index.ts';
 import { channelModeFrom } from './jobs/ventas/canales/index.ts';
+import { buildRefreshers, buildSecrets } from './recursos.ts';
 import { ConfigError, loadConfig, type Env, type WorkerConfig } from './runner/config.ts';
 import { PostgresDatabase, type WorkerDatabase } from './runner/db.ts';
 import { createLogger, type Logger } from './runner/logger.ts';
@@ -77,44 +74,6 @@ async function openDatabase(): Promise<WorkerDatabase> {
 }
 
 /**
- * El almacén real (CON-3): connection_secret cifrado con TOKEN_ENCRYPTION_KEY,
- * leído y escrito con la conexión del worker (mc_worker). Sin la clave el
- * worker no arranca: un refresher que no puede leer tokens no sirve de nada.
- */
-function buildSecrets(db: WorkerDatabase): SecretStore {
-  if (config.secretStore === 'memory') return new InMemorySecretStore();
-  if (config.secretStore === 'env') {
-    logger.warn('SECRET_STORE=env: los tokens salen de variables de entorno. Solo para desarrollo.');
-    return new EnvSecretStore();
-  }
-  try {
-    return new EncryptedSecretStore({ db, cipher: new TokenCipher(keyringFromEnv(process.env)) });
-  } catch (err) {
-    if (err instanceof MasterKeyError) throw new ConfigError(`${err.message} Para desarrollo sin clave: SECRET_STORE=memory o env.`);
-    throw err;
-  }
-}
-
-function buildRefreshers(): TokenRefresherRegistry {
-  if (config.tokenRefresher === 'fake') {
-    logger.warn('TOKEN_REFRESHER=fake: los tokens se "renuevan" con un refresher falso. Solo para desarrollo.');
-    return refresherRegistry(PLATFORM_IDS.map((p) => new FakeTokenRefresher(p)));
-  }
-  // TikTok e Instagram (CON-3) y YouTube (CON-8) reales, sobre el cliente HTTP de CON-1.
-  // El sink es nulo porque el job oauth.refresh escribe su propia fila en api_call_log.
-  const { apps, missing } = loadOAuthApps(process.env);
-  for (const [provider, vars] of Object.entries(missing)) {
-    logger.warn('app OAuth sin configurar: sus tokens no se podrán renovar', { provider, missing: vars });
-  }
-  const core = new HttpCore({ callLog: NULL_CALL_LOG, logger, retry: { maxRetries: 1 } });
-  return refresherRegistry([
-    createTikTokRefresher(core, { login: apps.tiktok, business: apps['tiktok-business'] }),
-    createInstagramRefresher(core, apps.instagram),
-    createYouTubeRefresher(core, apps.youtube),
-  ]);
-}
-
-/**
  * Piezas que solo existen en --demo: el reloj que avanza un día entre
  * las dos lecturas de CON-5, y las respuestas grabadas cuando no hay
  * credenciales de la casa. Fuera del demo es null y no se toca nada.
@@ -160,8 +119,9 @@ async function mainOnce(db: WorkerDatabase, secrets: SecretStore, refreshers: To
 
 async function main(): Promise<void> {
   const db = await openDatabase();
-  const secrets = buildSecrets(db);
-  const refreshers = buildRefreshers();
+  // Los mismos que usa el modo por turnos (src/tick.ts): src/recursos.ts.
+  const secrets = buildSecrets(config, db, logger, process.env);
+  const refreshers = buildRefreshers(config, logger, process.env);
   if (once) return mainOnce(db, secrets, refreshers);
   const demoRed = await buildDemo();
 
