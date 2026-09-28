@@ -18,6 +18,7 @@ name: Worker · una pasada
 #   APP_URL                    la de producción (redirect de las apps OAuth)
 #   TIKTOK_LOGIN_CLIENT_KEY, TIKTOK_LOGIN_CLIENT_SECRET
 #   INSTAGRAM_HOUSE_TOKEN, GOOGLE_API_KEY   (sin ellas esas redes se saltan y se avisa)
+#   INSTAGRAM_HOUSE_IG_USER_ID  (id de la cuenta casa: Instagram por @ va por Facebook Login)
 #   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET  (CON-8: renovar los canales autorizados)
 #   META_APP_ID, META_APP_SECRET, TIKTOK_BUSINESS_APP_ID, TIKTOK_BUSINESS_APP_SECRET
 #                              (apps de CON-3 fuera del MVP: hoy sin conexiones)
@@ -75,6 +76,7 @@ jobs:
           TIKTOK_LOGIN_CLIENT_KEY: ${{ secrets.TIKTOK_LOGIN_CLIENT_KEY }}
           TIKTOK_LOGIN_CLIENT_SECRET: ${{ secrets.TIKTOK_LOGIN_CLIENT_SECRET }}
           INSTAGRAM_HOUSE_TOKEN: ${{ secrets.INSTAGRAM_HOUSE_TOKEN }}
+          INSTAGRAM_HOUSE_IG_USER_ID: ${{ secrets.INSTAGRAM_HOUSE_IG_USER_ID }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}

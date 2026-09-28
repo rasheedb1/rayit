@@ -6,7 +6,7 @@
  */
 import type { HttpCore } from '../http/client.ts';
 import { isPlatformApiError } from '../http/errors.ts';
-import { InstagramClient } from '../platforms/instagram-api.ts';
+import { FACEBOOK_GRAPH_BASE_URL, INSTAGRAM_NO_DISCOVERY_CODE, InstagramClient, type InstagramOptions } from '../platforms/instagram-api.ts';
 import type { OAuthTokens } from '../types.ts';
 import { toLookupError } from './tiktok-public.ts';
 import { assertHandle, PublicLookupError, type PublicProfile, type PublicProfileSource } from './types.ts';
@@ -15,6 +15,14 @@ import { assertHandle, PublicLookupError, type PublicProfile, type PublicProfile
 export const META_USER_NOT_FOUND_CODE = '110';
 
 export const INSTAGRAM_HOUSE_TOKEN_ENV = 'INSTAGRAM_HOUSE_TOKEN';
+/**
+ * Id de la cuenta profesional de On Cue en la Graph API de Facebook
+ * (17841…). Con él, business_discovery va por Facebook Login
+ * (graph.facebook.com/{id}) y el token casa es un token de Facebook
+ * (EAA…) con instagram_basic y pages_show_list. Sin él, por Instagram
+ * Login (graph.instagram.com/me), donde Meta NO expone business_discovery.
+ */
+export const INSTAGRAM_HOUSE_IG_USER_ID_ENV = 'INSTAGRAM_HOUSE_IG_USER_ID';
 export const INSTAGRAM_METRICS_NOTE_ES = 'Instagram publica seguidores y número de publicaciones de las cuentas profesionales. Alcance, guardados y demografía requieren que el dueño autorice la cuenta.';
 
 /**
@@ -28,26 +36,48 @@ export function instagramHouseTokens(env: Readonly<Record<string, string | undef
   return token ? { accessToken: token, accessExpiresAt: new Date(8_640_000_000_000_000), scopes: ['instagram_business_basic'] } : null;
 }
 
-export function missingInstagramHouseToken(env: Readonly<Record<string, string | undefined>>): readonly string[] {
-  return instagramHouseTokens(env) ? [] : [INSTAGRAM_HOUSE_TOKEN_ENV];
+/** Host y nodo de business_discovery según el tipo de token casa. */
+export function instagramHouseClientOptions(env: Readonly<Record<string, string | undefined>>): InstagramOptions {
+  const igUserId = env[INSTAGRAM_HOUSE_IG_USER_ID_ENV]?.trim();
+  return igUserId ? { baseUrl: FACEBOOK_GRAPH_BASE_URL, discoveryNode: igUserId } : {};
 }
 
+export function missingInstagramHouseToken(env: Readonly<Record<string, string | undefined>>): readonly string[] {
+  const token = instagramHouseTokens(env)?.accessToken;
+  if (!token) return [INSTAGRAM_HOUSE_TOKEN_ENV];
+  // Un token de Facebook (EAA…) solo sirve con el id de la cuenta: sin él iría a graph.instagram.com y fallaría.
+  if (token.startsWith('EAA') && !env[INSTAGRAM_HOUSE_IG_USER_ID_ENV]?.trim()) return [INSTAGRAM_HOUSE_IG_USER_ID_ENV];
+  return [];
+}
+
+/** La respuesta de Meta cuando el token casa es de Instagram Login: el campo no existe en ese host. */
+export function isDiscoveryUnavailable(err: unknown): boolean {
+  return isPlatformApiError(err) && err.code === INSTAGRAM_NO_DISCOVERY_CODE;
+}
+
+export const INSTAGRAM_DISCOVERY_UNAVAILABLE_ES = `El token de Instagram de On Cue es de «Instagram Login», y con ese tipo de token Meta no deja leer otras cuentas por @. Hace falta un token de Facebook Login y ${INSTAGRAM_HOUSE_IG_USER_ID_ENV} (docs/propuestas/CON-10.md §3).`;
+
 export const INSTAGRAM_HOUSE_TOKEN_MISSING_ES = `Falta ${INSTAGRAM_HOUSE_TOKEN_ENV}: el token de la cuenta profesional de On Cue con la que se leen las cuentas públicas.`;
+export const INSTAGRAM_HOUSE_IG_USER_ID_MISSING_ES = `Falta ${INSTAGRAM_HOUSE_IG_USER_ID_ENV}: el token de Instagram de On Cue es de Facebook y necesita el id de su cuenta profesional.`;
 
 export function createInstagramPublicSource(core: HttpCore, env: Readonly<Record<string, string | undefined>>): PublicProfileSource {
   const house = instagramHouseTokens(env);
+  const missing = missingInstagramHouseToken(env);
+  const clientOpts = instagramHouseClientOptions(env);
   return {
     platformId: 'instagram',
     label: 'Instagram (business_discovery)',
-    missing: missingInstagramHouseToken(env),
+    missing,
     accessMode: 'public_profile',
     async lookup(handle, opts = {}) {
       const clean = assertHandle('instagram', handle);
       if (!house) throw new PublicLookupError('not_configured', INSTAGRAM_HOUSE_TOKEN_MISSING_ES);
+      if (missing.length > 0) throw new PublicLookupError('not_configured', INSTAGRAM_HOUSE_IG_USER_ID_MISSING_ES);
       let res;
       try {
-        res = await new InstagramClient(core, { connectionId: null, tokens: house }).businessDiscovery(clean, { signal: opts.signal });
+        res = await new InstagramClient(core, { connectionId: null, tokens: house }, clientOpts).businessDiscovery(clean, { signal: opts.signal });
       } catch (err) {
+        if (isDiscoveryUnavailable(err)) throw new PublicLookupError('not_configured', INSTAGRAM_DISCOVERY_UNAVAILABLE_ES, { cause: err });
         // Meta separa «no existe» (110, subcódigo 2207013) de «personal o privada» (100):
         // el primero es un @ mal escrito y la pantalla lo dice así (CAM-3).
         if (isPlatformApiError(err) && err.code === META_USER_NOT_FOUND_CODE) {

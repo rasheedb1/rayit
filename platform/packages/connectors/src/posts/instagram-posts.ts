@@ -23,7 +23,15 @@
 import type { HttpCore } from '../http/client.ts';
 import type { NormalizedVideo } from '../normalize/types.ts';
 import { InstagramClient } from '../platforms/instagram-api.ts';
-import { INSTAGRAM_HOUSE_TOKEN_MISSING_ES, instagramHouseTokens, missingInstagramHouseToken } from '../public/instagram-public.ts';
+import {
+  INSTAGRAM_DISCOVERY_UNAVAILABLE_ES,
+  INSTAGRAM_HOUSE_IG_USER_ID_MISSING_ES,
+  INSTAGRAM_HOUSE_TOKEN_MISSING_ES,
+  instagramHouseClientOptions,
+  instagramHouseTokens,
+  isDiscoveryUnavailable,
+  missingInstagramHouseToken,
+} from '../public/instagram-public.ts';
 import { toLookupError } from '../public/tiktok-public.ts';
 import { assertHandle, PublicLookupError } from '../public/types.ts';
 import type { OAuthTokens } from '../types.ts';
@@ -45,15 +53,18 @@ export function createInstagramPublicPostSource(
   opts: InstagramPostSourceOptions = {},
 ): PostSource {
   const house = instagramHouseTokens(env);
+  const missing = missingInstagramHouseToken(env);
+  const clientOpts = instagramHouseClientOptions(env);
   const pageSize = opts.pageSize ?? INSTAGRAM_POSTS_PAGE;
 
   function open(target: PostSourceTarget): { ig: InstagramClient; handle: string } {
     if (!house) throw new PublicLookupError('not_configured', INSTAGRAM_HOUSE_TOKEN_MISSING_ES);
+    if (missing.length > 0) throw new PublicLookupError('not_configured', INSTAGRAM_HOUSE_IG_USER_ID_MISSING_ES);
     const handle = assertHandle('instagram', target.handle ?? target.externalAccountId);
     // connectionId null: la llamada es del token de la casa, y su cuota
     // es una sola para todas las cuentas que se leen con él.
     const auth: { connectionId: string | null; tokens: OAuthTokens } = { connectionId: null, tokens: house };
-    return { ig: new InstagramClient(core, auth), handle };
+    return { ig: new InstagramClient(core, auth, clientOpts), handle };
   }
 
   /** Páginas del edge, con los errores traducidos y la cuenta no legible dicha con palabras. */
@@ -65,6 +76,7 @@ export function createInstagramPublicPostSource(
       try {
         res = await ig.businessDiscoveryMedia(handle, { after, limit: pageSize, signal });
       } catch (err) {
+        if (isDiscoveryUnavailable(err)) throw new PublicLookupError('not_configured', INSTAGRAM_DISCOVERY_UNAVAILABLE_ES, { cause: err });
         throw toLookupError(err, handle, 'Instagram');
       }
       if (page === 0 && !res.data.found) {
@@ -79,7 +91,7 @@ export function createInstagramPublicPostSource(
   return {
     platformId: 'instagram',
     label: 'Instagram (business_discovery.media)',
-    missing: missingInstagramHouseToken(env),
+    missing,
     supportsLookupById: false,
     noPostsNoteEs: null,
 

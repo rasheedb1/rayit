@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { ENSEMBLEDATA_TOKEN_ENV, GOOGLE_API_KEY_ENV, INSTAGRAM_HOUSE_TOKEN_ENV, OAUTH_ENV_NAMES } from '@mc/connectors';
+import { ENSEMBLEDATA_TOKEN_ENV, GOOGLE_API_KEY_ENV, INSTAGRAM_HOUSE_IG_USER_ID_ENV, INSTAGRAM_HOUSE_TOKEN_ENV, OAUTH_ENV_NAMES } from '@mc/connectors';
 
 const WORKFLOW = new URL('../../../../.github/workflows/worker-once.yml', import.meta.url);
 
@@ -19,6 +19,7 @@ test('el workflow del worker pasa las variables de todas las fuentes, cada una d
   const yml = await readFile(WORKFLOW, 'utf8');
   const fuentes = [
     INSTAGRAM_HOUSE_TOKEN_ENV, // CON-10 / CON-5, Instagram por @
+    INSTAGRAM_HOUSE_IG_USER_ID_ENV, // con Facebook Login (27-sep): sin él, business_discovery no existe
     GOOGLE_API_KEY_ENV, // CON-10 / CON-5, YouTube por @
     ENSEMBLEDATA_TOKEN_ENV, // CON-12
     // Todas las apps de OAuth (CON-3 y CON-8), no una lista escogida: una

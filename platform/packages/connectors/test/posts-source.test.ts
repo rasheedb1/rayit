@@ -331,3 +331,15 @@ test('facebook no tiene fuente de posts en esta versión', async () => {
   assert.equal(createAuthorizedPostSource(a.core, 'noexiste'), null);
   assert.equal(a.publicas.facebook, undefined);
 });
+
+test('instagram por @ con Facebook Login: las publicaciones van a graph.facebook.com/{id}; con token de Instagram Login lo dice', async () => {
+  const FB = { INSTAGRAM_HOUSE_TOKEN: 'EAA-token-de-la-casa-SECRETO', INSTAGRAM_HOUSE_IG_USER_ID: '17841400000000999' };
+  const a = await arnes(await loadFixtures('instagram', [['business_discovery.media', 'fb.ok']]));
+  const videos = await todos(createInstagramPublicPostSource(a.core, FB), target('cafealma'));
+  assert.equal(videos.length, 3);
+  assert.match(a.fetch.calls[0]!.url, /^https:\/\/graph\.facebook\.com\/v25\.0\/17841400000000999\?/);
+
+  const b = await arnes(await loadFixtures('instagram', [['business_discovery', 'no_field']]));
+  const e = await falla(todos(b.publicas.instagram!, target('oncue__')));
+  assert.ok(e instanceof PublicLookupError && e.code === 'not_configured' && /Instagram Login/.test(e.messageEs));
+});
