@@ -1163,6 +1163,30 @@ describe('VEN-1 · editar la ficha, el responsable y la búsqueda (pulido r5)', 
     assert.equal(Number(conMonto?.openDealAmount), 1_500_000, 'suma lo que tiene monto');
   });
 
+  test('VEN-4 (pulido r4): quien acepta la señal o abre el negocio es su responsable y el de «Enviar pitch»', async () => {
+    const quien = (id: string) =>
+      laura(async (tx) =>
+        (await tx.query<{ owner_user_id: string | null; next_action_user_id: string | null }>(
+          'SELECT owner_user_id, next_action_user_id FROM deal WHERE id = $1', [id],
+        )).rows[0],
+      );
+    const senal = await conLaura((tx) => createSignal(tx, { companyName: 'Harinas Prueba R4', headlineEs: 'Lanza harina de almendra' }));
+    assert.ok(senal.id);
+    const aceptada = await conLaura((tx) => acceptSignal(tx, senal.id!));
+    assert.equal(aceptada.dealCreated, true);
+    assert.deepEqual({ ...(await quien(aceptada.dealId)) }, { owner_user_id: USER_LAURA, next_action_user_id: USER_LAURA });
+
+    const aMano = await conLaura((tx) => createDeal(tx, { companyId: aceptada.companyId, name: 'Segunda campaña' }));
+    assert.deepEqual({ ...(await quien(aMano)) }, { owner_user_id: USER_LAURA, next_action_user_id: USER_LAURA });
+    // La tabla «Para hoy» y la ficha lo dicen con su nombre.
+    const fila = (await laura((tx) => listPipeline(tx, { companyId: aceptada.companyId }))).find((d) => d.id === aMano);
+    assert.equal(fila?.nextActionUserName, 'Laura Méndez');
+
+    // Sin sesión (la demo), sin responsable, como antes.
+    const sinSesion = await laura((tx) => createDeal(tx, { companyId: aceptada.companyId, name: 'Sin sesión' }));
+    assert.deepEqual({ ...(await quien(sinSesion)) }, { owner_user_id: null, next_action_user_id: null });
+  });
+
   test('quien crea la empresa queda de responsable; sin sesión, ninguno', async () => {
     const conSesion = await conLaura((tx) => createCompany(tx, { name: 'Responsable Uno', domain: 'responsable-uno.co' }));
     const fila = await laura((tx) => getCompany(tx, conSesion));

@@ -1841,11 +1841,15 @@ export async function acceptSignal(
   }
 
   const dealName = dealNameFromSignal(sig.headline_es, ev, [company.name, evName], opts.pendingDealName);
+  // Quien acepta la señal es el responsable del negocio y de su «Enviar
+  // pitch» (VEN-4: cada negocio abierto tiene acción, fecha y responsable),
+  // como company_link lo toma de responsable de la empresa. Sin sesión (la
+  // demo), current_user_id() es NULL y queda sin responsable, como antes.
   const deal = await tx.query<{ id: string }>(
-    `INSERT INTO deal (workspace_id, company_id, origin_signal_id, name, stage_id, amount, currency,
-                       next_action, next_action_kind, next_action_due)
-     SELECT current_workspace_id(), $1, $2, $3, 'nuevo', $4::numeric, w.currency, $5, 'pitch',
-            ${dueInBusinessDays('$8', '$6', '$7')}
+    `INSERT INTO deal (workspace_id, company_id, origin_signal_id, owner_user_id, name, stage_id, amount, currency,
+                       next_action, next_action_kind, next_action_due, next_action_user_id)
+     SELECT current_workspace_id(), $1, $2, current_user_id(), $3, 'nuevo', $4::numeric, w.currency, $5, 'pitch',
+            ${dueInBusinessDays('$8', '$6', '$7')}, current_user_id()
      FROM ${WORKSPACE_TZ} w
      RETURNING id`,
     [
@@ -2004,7 +2008,8 @@ export interface CreateDealInput {
  *
  * Nace en «nuevo», en la moneda del workspace, con su primera fila de
  * historial y la siguiente acción a tres días hábiles a las 15:00 locales, como
- * uno que llega del radar. Que la empresa ya tenga otro abierto no lo
+ * uno que llega del radar. Quien lo abre es su responsable y el de esa
+ * primera acción (VEN-4). Que la empresa ya tenga otro abierto no lo
  * impide: aquí lo pide la persona, a propósito (otra campaña, otro
  * producto de la misma marca).
  */
@@ -2020,9 +2025,9 @@ export async function createDeal(tx: WorkspaceTx, input: CreateDealInput): Promi
 
   const deal = await tx.query<{ id: string }>(
     `INSERT INTO deal (workspace_id, company_id, owner_user_id, name, stage_id, amount, currency,
-                       next_action, next_action_kind, next_action_due)
+                       next_action, next_action_kind, next_action_due, next_action_user_id)
      SELECT current_workspace_id(), $1, current_user_id(), $2, 'nuevo', $3::numeric, w.currency, $4, 'pitch',
-            ${dueInBusinessDays('$7', '$5', '$6')}
+            ${dueInBusinessDays('$7', '$5', '$6')}, current_user_id()
      FROM ${WORKSPACE_TZ} w
      RETURNING id`,
     [
