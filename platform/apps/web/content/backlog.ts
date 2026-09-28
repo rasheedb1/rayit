@@ -141,8 +141,8 @@ export const STORIES: readonly Story[] = [
     title: "@mc/db entero en verde contra Postgres real",
     desc: "El job contra-postgres-real del CI corre @mc/db contra un Postgres 16 montado como Supabase (db/montaje-postgres-real.sql). outreach.test.ts y esquema.test.ts ya pasan ahí y tienen su propio paso; el resto de archivos todavía no: miden los privilegios de mc_app con mc_app_ci, que también hereda los de mc_worker, o cuentan filas sin esperar la demo sembrada (rls, ventas, ventas-ficha, resumen, cotizar, identidad, queries, cuentas-publicas).",
     done: "pnpm --filter @mc/db test pasa en el job contra-postgres-real y el paso deja de ser continue-on-error.",
-    status: "pendiente",
-    note: "Pulido r1 (25-sep, embedded-postgres 16.14 montado como el CI): 20 archivos ya pasan y van al paso obligatorio (packages/db/test/contra-postgres-real.txt, solo crece). El paso informativo corre el resto: 97 rojas y 7 canceladas en brief, cotizar, cuentas-publicas, entregabilidad, finanzas, identidad, outreach-aprobar, outreach-motor, perfil-comercial, resumen, rls, ventas-ficha y ventas. Casi todas miden GRANT de mc_app con mc_app_ci, que hereda mc_worker; camino: un rol de conexión solo miembro de mc_app.",
+    status: "hecho",
+    note: "Pulido r6 (28-sep): db/montaje-postgres-real.sql crea mc_app_ci (su sesión es mc_app; asume mc_worker sin heredarlo) y openTestDb trabaja sobre una copia propia de la base (CREATE DATABASE … TEMPLATE). @mc/db entero contra Postgres 16.14 UTF8: 1 444 pruebas, 0 rojas, 22 saltadas con motivo. El job corre pnpm test sin continue-on-error. Pendiente humano: verlo en verde en GitHub antes de la cola única de CIM-2.",
   },
   {
     id: "CIM-12", module: "CIM", owner: "rasheed", size: "S", sprint: 4, deps: ["CIM-2"],
@@ -150,7 +150,7 @@ export const STORIES: readonly Story[] = [
     desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
     done: "Veinte corridas seguidas de pnpm verificar en una máquina cargada, sin una sola prueba cancelada.",
     status: "en_curso",
-    note: "Pulido r4: el interruptor, el perfil y el radar esperan a que la transición de ConfirmInline suelte el botón antes del rerender; canales abre su base con 180 s. Con dos verificar a la vez aún fallan pruebas de Nicolás (oauth-refresh del worker, guard.attempts; cuentas-service con hook de 60 s): en curso hasta 20 corridas en verde.",
+    note: "Pulido r6: todo before que abre la base usa SETUP_TIMEOUT (900 s) de test/pglite.ts; accesos-sesion (el que paga la foto) y otros once tenían techo propio de 120–600 s. Con dos verificar a la vez aún fallan pruebas de Nicolás (oauth-refresh del worker, guard.attempts; cuentas-service con hook de 60 s): en curso hasta 20 corridas en verde.",
   },
   {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],
