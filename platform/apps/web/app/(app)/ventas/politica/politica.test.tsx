@@ -436,23 +436,38 @@ describe("ronda 4", () => {
   it("después de encender se ve «Apagar el envío», no la confirmación de apagar ya abierta; y al revés", async () => {
     enableOutreach.mockResolvedValue(undefined);
     disableOutreach.mockResolvedValue(0);
+    // Pulido r4 (CIM-12): el rerender espera a que la transición del formulario termine (el botón que envía deja
+    // de estar ocupado); en medio, la confirmación de encender se quedaba abierta.
+    const espera = { timeout: 10_000 };
+    const confirmar = async (nombre: string, accion: typeof enableOutreach) => {
+      const boton = screen.getByRole("button", { name: nombre });
+      await act(async () => {
+        fireEvent.click(boton);
+      });
+      await waitFor(() => expect(accion).toHaveBeenCalledTimes(1), espera);
+      await waitFor(() => {
+        for (const b of screen.queryAllByRole("button", { name: nombre })) expect(b).not.toHaveAttribute("aria-busy");
+      }, espera);
+    };
     const { rerender } = render(interruptor());
     fireEvent.click(screen.getByRole("button", { name: t.interruptor.encender }));
-    fireEvent.click(screen.getByRole("button", { name: t.interruptor.siEncender }));
-    await waitFor(() => expect(enableOutreach).toHaveBeenCalledTimes(1));
+    await confirmar(t.interruptor.siEncender, enableOutreach);
     // La página vuelve a pintarse con la política encendida (revalidatePath).
-    rerender(interruptor({ enabled: true }));
+    await act(async () => {
+      rerender(interruptor({ enabled: true }));
+    });
     expect(screen.getByRole("button", { name: t.interruptor.apagar })).toBeInTheDocument();
     expect(screen.queryByRole("group")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: t.interruptor.siApagar })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: t.interruptor.apagar }));
-    fireEvent.click(screen.getByRole("button", { name: t.interruptor.siApagar }));
-    await waitFor(() => expect(disableOutreach).toHaveBeenCalledTimes(1));
-    rerender(interruptor({ enabled: false }));
+    await confirmar(t.interruptor.siApagar, disableOutreach);
+    await act(async () => {
+      rerender(interruptor({ enabled: false }));
+    });
     expect(screen.getByRole("button", { name: t.interruptor.encender })).toBeInTheDocument();
     expect(screen.queryByRole("group")).not.toBeInTheDocument();
-  });
+  }, 30_000);
 
   it("sin dirección, la línea de arriba no repite lo que dice la de abajo", () => {
     render(interruptor({ nuncaEncendido: true, hasAddress: false }));
