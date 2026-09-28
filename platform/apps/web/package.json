@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node --env-file-if-exists=../../.env.local ./node_modules/next/dist/bin/next dev",
-    "build": "next build",
+    "build": "next build && node scripts/revisar-bundle-turno.mjs",
     "start": "node --env-file-if-exists=../../.env.local ./node_modules/next/dist/bin/next start",
     "typecheck": "tsc --noEmit",
     "lint": "next lint",
