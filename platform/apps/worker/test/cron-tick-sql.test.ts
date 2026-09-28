@@ -324,3 +324,67 @@ test('la proyección contra los cupos de Hobby: avisa por encima de ~250 GB-h al
   assert.ok(m.veredicto(SANO).lineas.some((l) => /150 ms por turno/.test(l.texto)));
   assert.match(leer('cron-tick-estado.sql'), /'turno_medio'/);
 });
+
+test('recién instalado (secreto o primera corrida de hace menos de 2 min) y sin respuestas aún: aviso, no error', async () => {
+  const m = (await import(`${OPS}cron-tick-veredicto.mjs`)) as { veredicto: (e: unknown) => Veredicto; RECIEN_MS: number };
+  const hace = (s: number) => new Date(Date.parse(AHORA) - s * 1000).toISOString();
+  const recien = /Recién instalado: el primer turno llega en 1–2 min; corre make cron\.status entonces/;
+
+  // Lo que ve `make cron.install` al terminar: el secreto de hace segundos, la tarea sin corridas, ninguna respuesta.
+  const instalado = m.veredicto({ ...SANO, secreto_en_vault: [{ name: 'on_cue_cron_secret', updated_at: hace(5) }], ultimas_respuestas: null, dispatch_ultimo_ok: null });
+  assert.equal(instalado.sano, true, JSON.stringify(instalado.lineas));
+  assert.ok(instalado.lineas.some((l) => l.nivel === 'aviso' && recien.test(l.texto)), JSON.stringify(instalado.lineas));
+  assert.ok(!instalado.lineas.some((l) => /El turno responde/.test(l.texto)), 'sin respuestas no dice que responde');
+
+  // Igual si la tarea corrió por primera vez hace un minuto (secreto viejo, reinstalado solo la tarea).
+  const primera = m.veredicto({ ...SANO, tarea: [{ ...SANO.tarea[0], primera_corrida: hace(60) }], secreto_en_vault: [{ name: 'on_cue_cron_secret', updated_at: hace(86_400) }], ultimas_respuestas: [] });
+  assert.equal(primera.sano, true, JSON.stringify(primera.lineas));
+
+  // Pasados los 2 min sin respuestas, rojo como siempre.
+  const tarde = m.veredicto({ ...SANO, secreto_en_vault: [{ name: 'on_cue_cron_secret', updated_at: hace(m.RECIEN_MS / 1000 + 60) }], ultimas_respuestas: [] });
+  assert.equal(tarde.sano, false);
+  assert.ok(tarde.lineas.some((l) => l.nivel === 'error' && /Ninguna respuesta de la ruta en 5 min/.test(l.texto)), JSON.stringify(tarde.lineas));
+  // Y una tarea sin ninguna corrida (la purga borró su historial) no cuenta como recién instalada.
+  const purgada = m.veredicto({ ...SANO, tarea: [{ ...SANO.tarea[0], primera_corrida: null }], ultimas_respuestas: [] });
+  assert.equal(purgada.sano, false);
+
+  // El SQL de estado trae la primera corrida de la tarea, y el script de install llama a status al final.
+  assert.match(leer('cron-tick-estado.sql'), /'primera_corrida', \(SELECT min\(d\.start_time\) FROM cron\.job_run_details d WHERE d\.jobid = j\.jobid\)/);
+  const correr = spawnSync(process.execPath, [`${OPS}cron-tick-veredicto.mjs`], {
+    input: JSON.stringify([{ cron_tick: { ...SANO, secreto_en_vault: [{ name: 'on_cue_cron_secret', updated_at: hace(5) }], ultimas_respuestas: null } }]), encoding: 'utf8',
+  });
+  assert.equal(correr.status, 0, `make cron.install termina en verde: ${correr.stderr}`);
+  assert.match(correr.stdout, recien);
+});
+
+test('decide la respuesta más reciente: un 401 viejo y un 200 nuevo es sano (el 401 queda de aviso); lo de antes del secreto actual no da error', async () => {
+  const m = (await import(`${OPS}cron-tick-veredicto.mjs`)) as { veredicto: (e: unknown) => Veredicto };
+  const hace = (s: number) => new Date(Date.parse(AHORA) - s * 1000).toISOString();
+
+  const arreglado = m.veredicto({ ...SANO, ultimas_respuestas: [respuesta(80, 401), respuesta(20, 200)] });
+  assert.equal(arreglado.sano, true, JSON.stringify(arreglado.lineas));
+  assert.match(arreglado.lineas[0]!.texto, /El turno responde: 1 respuesta\(s\) 200 en 5 min, 120 ms de media/);
+  assert.ok(arreglado.lineas.some((l) => l.nivel === 'aviso' && /fallidas antes de la última \(401 ×1\).*la más reciente es 200/.test(l.texto)), JSON.stringify(arreglado.lineas));
+
+  // Un 500 y un 504 viejos, el más reciente 200: sano.
+  assert.equal(m.veredicto({ ...SANO, ultimas_respuestas: [respuesta(20, 200), respuesta(100, 500), respuesta(160, 504)] }).sano, true);
+  // El orden de llegada no importa: decide `created`.
+  assert.equal(m.veredicto({ ...SANO, ultimas_respuestas: [respuesta(160, 200), respuesta(20, 500)] }).sano, false, 'el 500 es el más reciente');
+
+  // Respuestas de antes del último cambio del secreto: no cuentan para el error.
+  const reinstalado = m.veredicto({
+    ...SANO, secreto_en_vault: [{ name: 'on_cue_cron_secret', updated_at: hace(30) }], ultimas_respuestas: [respuesta(60, 401), respuesta(120, 401), respuesta(10, 200)],
+  });
+  assert.equal(reinstalado.sano, true, JSON.stringify(reinstalado.lineas));
+  assert.ok(reinstalado.lineas.some((l) => l.nivel === 'aviso' && /401 ×2/.test(l.texto)));
+  // Solo 401 de antes del secreto nuevo y el secreto de hace segundos: recién instalado, aviso.
+  const esperando = m.veredicto({ ...SANO, secreto_en_vault: [{ name: 'on_cue_cron_secret', updated_at: hace(10) }], ultimas_respuestas: [respuesta(60, 401)] });
+  assert.equal(esperando.sano, true, JSON.stringify(esperando.lineas));
+  assert.ok(esperando.lineas.some((l) => l.nivel === 'aviso' && /Recién instalado/.test(l.texto)));
+  // …y si pasan los 2 min sin respuesta desde el secreto nuevo, rojo.
+  const sinRespuesta = m.veredicto({ ...SANO, secreto_en_vault: [{ name: 'on_cue_cron_secret', updated_at: hace(180) }], ultimas_respuestas: [respuesta(240, 401)] });
+  assert.equal(sinRespuesta.sano, false);
+  assert.ok(sinRespuesta.lineas.some((l) => l.nivel === 'error' && /desde que cambió el secreto/.test(l.texto)), JSON.stringify(sinRespuesta.lineas));
+  // Un 401 DESPUÉS del secreto nuevo sigue siendo error.
+  assert.equal(m.veredicto({ ...SANO, secreto_en_vault: [{ name: 'on_cue_cron_secret', updated_at: hace(120) }], ultimas_respuestas: [respuesta(20, 401)] }).sano, false);
+});

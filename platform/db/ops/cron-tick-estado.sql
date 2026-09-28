@@ -11,8 +11,12 @@ SELECT jsonb_build_object(
   -- El reloj de la base: «en los últimos 5 min» se mide con él, no con el de quien mira.
   'ahora', now(),
   'tarea', (
-    SELECT jsonb_agg(jsonb_build_object('jobid', jobid, 'schedule', schedule, 'active', active, 'command', command))
-      FROM cron.job WHERE jobname = 'on-cue-tick'),
+    -- primera_corrida: cron.job no guarda cuándo se creó la tarea; su
+    -- corrida más antigua que queda dice si acaba de empezar (el veredicto
+    -- no da error a una instalación de hace un minuto sin respuestas aún).
+    SELECT jsonb_agg(jsonb_build_object('jobid', j.jobid, 'schedule', j.schedule, 'active', j.active, 'command', j.command,
+             'primera_corrida', (SELECT min(d.start_time) FROM cron.job_run_details d WHERE d.jobid = j.jobid)))
+      FROM cron.job j WHERE j.jobname = 'on-cue-tick'),
   'purga', (
     SELECT jsonb_agg(jsonb_build_object('jobid', jobid, 'schedule', schedule, 'active', active))
       FROM cron.job WHERE jobname = 'on-cue-tick-purga'),

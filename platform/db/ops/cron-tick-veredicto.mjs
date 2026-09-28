@@ -18,6 +18,8 @@ import { pathToFileURL } from 'node:url';
 
 /** Sin ninguna respuesta de pg_net en este tiempo, pg_cron no está disparando. */
 export const SIN_RESPUESTA_MS = 5 * 60_000;
+/** Tras `make cron.install`, lo que se espera a la primera respuesta antes de darla por perdida. */
+export const RECIEN_MS = 2 * 60_000;
 /** Peticiones esperando en net.http_request_queue a partir de las que pg_net se da por atascado. */
 export const COLA_ATASCADA = 5;
 /** Sin una pasada buena de outbound.dispatch en este tiempo (con el turno respondiendo), algo lo frena. */
@@ -54,6 +56,20 @@ export function estadoDe(respuesta) {
 const ms = (iso) => (iso ? Date.parse(iso) : Number.NaN);
 
 /**
+ * ¿Se acaba de instalar? El secreto cambió o la tarea corrió por primera
+ * vez hace menos de RECIEN_MS. `make cron.install` llama a status al
+ * terminar, antes de que pg_net traiga la primera respuesta: eso es un
+ * aviso, no un error. Una tarea sin ninguna corrida NO cuenta como
+ * recién instalada: la purga diaria borra el historial de una tarea que
+ * dejó de disparar hace días.
+ */
+export function recienInstalado(estado, ahora) {
+  const secreto = ms(estado?.secreto_en_vault?.[0]?.updated_at);
+  const primera = ms(estado?.tarea?.[0]?.primera_corrida);
+  return [secreto, primera].some((t) => Number.isFinite(t) && ahora - t <= RECIEN_MS);
+}
+
+/**
  * { sano, lineas: [{ nivel: 'ok' | 'error' | 'aviso', texto }] } a partir del estado.
  * El primer error decide; los avisos no tumban el chequeo.
  */
@@ -68,26 +84,45 @@ export function veredicto(estado) {
   else if (!tarea.active) error('La tarea on-cue-tick está desactivada en pg_cron: el turno no corre. make cron.install la vuelve a programar.');
   if (!estado?.secreto_en_vault?.length) error('No hay secreto en Vault (on_cue_cron_secret): la tarea no llama. make cron.install con el CRON_SECRET de Vercel.');
 
-  const recientes = (estado?.ultimas_respuestas ?? []).filter((r) => ahora - ms(r.created) <= SIN_RESPUESTA_MS);
-  if (tarea?.active && recientes.length === 0) {
-    error('Ninguna respuesta de la ruta en 5 min: pg_cron no está disparando (mira ultimas_corridas arriba) o pg_net no envía.');
+  // Las respuestas de los últimos 5 min, la más reciente primero. Para el
+  // error solo cuentan las posteriores al último cambio del secreto: un
+  // 401 de antes de `make cron.install` ya está resuelto.
+  const recientes = (estado?.ultimas_respuestas ?? [])
+    .filter((r) => ahora - ms(r.created) <= SIN_RESPUESTA_MS)
+    .sort((a, b) => ms(b.created) - ms(a.created));
+  const secretoCambio = ms(estado?.secreto_en_vault?.[0]?.updated_at);
+  const vigentes = Number.isFinite(secretoCambio) ? recientes.filter((r) => ms(r.created) >= secretoCambio) : recientes;
+  const codigo = (r) => (r.timed_out ? 'timeout' : r.status_code ?? 'sin_respuesta');
+  const ultima = vigentes[0];
+
+  if (tarea?.active && !ultima) {
+    if (recienInstalado(estado, ahora)) {
+      aviso('Recién instalado: el primer turno llega en 1–2 min; corre make cron.status entonces.');
+    } else {
+      error(`Ninguna respuesta de la ruta ${recientes.length ? 'desde que cambió el secreto en Vault' : 'en 5 min'}: pg_cron no está disparando (mira ultimas_corridas arriba) o pg_net no envía.`);
+    }
   }
-  const codigos = recientes.map((r) => (r.timed_out ? 'timeout' : r.status_code ?? 'sin_respuesta'));
-  if (codigos.includes(401)) {
+  // Decide la más reciente: un 401 o un 500 que ya se arregló no deja el chequeo en rojo.
+  const c = ultima ? codigo(ultima) : null;
+  if (c === 401) {
     error('401: el CRON_SECRET del Vault no es el de Vercel. make cron.install con el valor que tiene Vercel (o rótalo en los dos).');
-  }
-  if (codigos.some((c) => c === 500)) {
+  } else if (c === 500) {
     error('500: el turno falla. Mira los logs de Vercel ([cron/tick]); lo típico al integrar es que falte WORKER_DATABASE_URL.');
-  }
-  if (codigos.includes(504)) {
+  } else if (c === 504) {
     error('504: el turno no respondió a tiempo (pooler de Supabase colgado o sin conexiones de sesión). Mira los logs de Vercel ([cron/tick]).');
+  } else if (c === 'timeout') {
+    error('pg_net dio la petición por perdida a los 60 s: la ruta tarda más que su maxDuration.');
+  } else if (c === 'sin_respuesta') {
+    error(`pg_net no obtuvo respuesta: ${ultima.error_msg ?? 'sin detalle'} (¿APP_URL correcta?).`);
+  } else if (typeof c === 'number' && c !== 200) {
+    error(`La ruta respondió ${c}: mira APP_URL (make cron.install) y los logs de Vercel.`);
   }
-  if (codigos.includes('timeout')) error('pg_net dio la petición por perdida a los 60 s: la ruta tarda más que su maxDuration.');
-  if (codigos.includes('sin_respuesta')) {
-    error(`pg_net no obtuvo respuesta: ${recientes.find((r) => !r.timed_out && r.status_code == null)?.error_msg ?? 'sin detalle'} (¿APP_URL correcta?).`);
+  // Las fallidas de antes de la última (o de antes del secreto actual): aviso, no error.
+  const viejas = recientes.filter((r) => r !== ultima && codigo(r) !== 200).map(codigo);
+  if (viejas.length) {
+    const cuenta = [...new Set(viejas)].map((k) => `${k} ×${viejas.filter((v) => v === k).length}`).join(', ');
+    aviso(`Hubo respuestas fallidas antes de la última (${cuenta}) en 5 min; la más reciente ${c === null ? 'aún no llega' : `es ${c}`}. Si se repiten, mira los logs de Vercel ([cron/tick]).`);
   }
-  const otros = [...new Set(codigos.filter((c) => typeof c === 'number' && c !== 200 && ![401, 500, 504].includes(c)))];
-  if (otros.length) error(`La ruta respondió ${otros.join(', ')}: mira APP_URL (make cron.install) y los logs de Vercel.`);
 
   const noCaben = estado?.no_caben ?? [];
   if (noCaben.length) {
@@ -99,10 +134,11 @@ export function veredicto(estado) {
   if (cola >= COLA_ATASCADA) aviso(`pg_net tiene ${cola} petición(es) sin enviar: está atascado, y la cabecera con el secreto sigue en net.http_request_queue.`);
 
   const sano = !lineas.some((l) => l.nivel === 'error');
-  if (sano) {
-    const tiempos = recientes.map((r) => Number(/"elapsedMs":(\d+)/.exec(r.content ?? '')?.[1])).filter(Number.isFinite);
+  if (sano && c === 200) {
+    const buenas = recientes.filter((r) => codigo(r) === 200);
+    const tiempos = buenas.map((r) => Number(/"elapsedMs":(\d+)/.exec(r.content ?? '')?.[1])).filter(Number.isFinite);
     const medio = tiempos.length ? Math.round(tiempos.reduce((a, b) => a + b, 0) / tiempos.length) : null;
-    lineas.unshift({ nivel: 'ok', texto: `El turno responde: ${recientes.length} respuesta(s) 200 en 5 min${medio === null ? '' : `, ${medio} ms de media`}.` });
+    lineas.unshift({ nivel: 'ok', texto: `El turno responde: ${buenas.length} respuesta(s) 200 en 5 min${medio === null ? '' : `, ${medio} ms de media`}.` });
     // La proyección del mes, con la media de lo que guarda pg_net (unas 6 h) si la hay; si no, la de 5 min.
     const largo = Number(estado?.turno_medio?.elapsed_ms);
     const base = Number.isFinite(largo) && Number(estado?.turno_medio?.respuestas) > 0 ? largo : medio;

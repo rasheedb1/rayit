@@ -381,13 +381,21 @@ make cron.status       # el estado en JSON y un veredicto en verde o en rojo (sa
 
 `make cron.status` termina con **una línea de veredicto**
 (`db/ops/cron-tick-veredicto.mjs`, sobre las respuestas de pg_net de los
-últimos 5 min): todo 200 → «el turno responde» con su `elapsedMs` medio;
-un **401** → el `CRON_SECRET` del Vault no es el de Vercel
+últimos 5 min). **Decide la más reciente**, y para el error solo
+cuentan las posteriores al último cambio del secreto en Vault
+(`secreto_en_vault[0].updated_at`): un 401 que ya arregló
+`make cron.install` no deja el chequeo en rojo, y las fallidas de antes
+de la última salen como aviso. La más reciente 200 → «el turno responde»
+con su `elapsedMs` medio; un **401** → el `CRON_SECRET` del Vault no es el de Vercel
 (`make cron.install` con el de Vercel); un **500** → el turno falla,
 mira los logs de Vercel (`[cron/tick]`; lo típico es que falte
 `WORKER_DATABASE_URL`); un **504** → el turno no respondió a tiempo
 (pooler colgado); `timed_out` → la ruta tarda más de 60 s; ninguna
-respuesta → pg_cron no está disparando; **jobs que no caben** → los que
+respuesta → pg_cron no está disparando, salvo si el secreto cambió o la
+tarea corrió por primera vez hace menos de 2 min: entonces es un aviso
+(«Recién instalado: el primer turno llega en 1–2 min»), y
+`make cron.install`, que llama a status al terminar, acaba en verde;
+**jobs que no caben** → los que
 llevan 20 cortes o más sin una corrida buena (`no_caben`), que no se van
 a retomar solos. Avisa además si `outbound.dispatch` lleva más de 30 min
 sin una pasada buena, si la cola de pg_net crece, y si la memoria
