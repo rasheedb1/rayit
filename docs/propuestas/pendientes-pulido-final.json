@@ -1,0 +1,80 @@
+[
+ {
+  "severity": "media",
+  "where": "packages/db/test/aplicar.test.ts (falta una prueba de la ruta de actualización 0033 → 0077)",
+  "issue": "El alcance dice que Supabase está en 0033 con datos y que 0034+ tienen que aplicar limpias encima. make db.check y los tests solo aplican la serie entera sobre una base vacía; ninguna prueba siembra la base en 0033 y después aplica el resto. Lo reproduje a mano con los seeds de main en 0033 y hoy pasa, pero una migración futura con backfill, NOT NULL o CHECK sobre datos existentes llegaría a Supabase sin que nada la hubiera probado con datos.",
+  "fix": "Agregar un caso a aplicar.test.ts o un test/actualizacion.test.ts: PGlite, applyMigrations(exec, { hasta: '0033_zzz' }), después applySeeds con los seeds de origin/main en su commit de 0033 (git show f2fed50c^:platform/db/seed/*.sql a un directorio temporal; si no hay remoto, se salta con motivo), después applyMigrations(exec) y aserciones de conteo (empresas, contactos, negocios, cotizaciones iguales antes y después), y al final applySeeds de la rama. Correrlo también en el job «esquema» del CI."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/resumen/importar/asistente.tsx:128",
+  "issue": "Un solo componente cliente de 1025 líneas. Asistente (líneas 128–486) mezcla el estado del asistente, el envío por lotes y la lógica de los cuatro pasos, y PasoFormato ocupa otras 200 líneas. Cuesta de revisar y cualquier cambio vuelve a tocar el archivo entero.",
+  "fix": "Pasar el estado y las transiciones a un reducer puro en _lib/asistente-estado.ts, con pruebas, y cada Paso* a su propio archivo (paso-subir.tsx, paso-formato.tsx, paso-revisar.tsx, paso-hecho.tsx). Asistente queda como orquestador de menos de 150 líneas."
+ },
+ {
+  "severity": "baja",
+  "where": "packages/connectors/src/outreach/state.ts:86 y packages/connectors/src/outreach/unipile-webhook.ts:60",
+  "issue": "La expresión regular de UUID aparece tres veces: UUID_RE en state.ts, UUID en unipile-webhook.ts y UUID_RE/isUuid exportados en packages/db/src/client.ts. Si una se corrige y las otras no, el estado firmado y el webhook aceptarían ids distintos.",
+  "fix": "Exportar isUuid desde @mc/core, que no tiene dependencias y del que ya dependen connectors y db, y usarla en los tres sitios. @mc/db puede reexportarla para no romper sus importaciones."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/cotizar/_ui/fecha.tsx:22",
+  "issue": "FechaInput es un parche local del kit: en Chromium, DateInput no muestra el anillo de foco al llegar con Tab, y Cotizar le añade clases focus:. Ventas, Finanzas o cualquier otra pantalla que use DateInput directamente sigue sin anillo en ese caso, y el propio archivo dice que es provisional y pendiente de un PR al kit.",
+  "fix": "Abrir el PR al kit (con visto bueno de Nicolás) que añada `focus:border-ink focus:ring-2 focus:ring-ink/15` a DateInput en components/ui/date-input.tsx, borrar _ui/fecha.tsx y volver a importar DateInput en generar-form.tsx, ventana.tsx y nueva/form.tsx. Mientras tanto, dejarlo como pendiente humano en la note de COT-2 en backlog.ts."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/content/backlog.ts (CIM-12, en_curso)",
+  "issue": "La note dice que con dos `pnpm verificar` a la vez todavía fallan pruebas por tiempo (oauth-refresh del worker, cuentas-service con hook de 60 s). En mi corrida, con otros revisores cargando la máquina, todo salió verde, pero el «terminado cuando» (20 corridas seguidas sin una prueba cancelada) sigue sin demostrarse, y una puerta de calidad intermitente le resta confianza a cada integración.",
+  "fix": "Dejar un script scripts/estres-verificar.sh que corra N veces `pnpm verificar` en paralelo de a dos y cuente las pruebas canceladas o fallidas, correrlo con N=20 y anotar el resultado en la note. Para las pruebas de Nicolás, subir sus hooks a SETUP_TIMEOUT con su visto bueno o dejarlo explícito como pendiente humano."
+ },
+ {
+  "severity": "media",
+  "where": "packages/core/src/outreach/narrativa.ts:755 y :778 · /ventas/perfil con un creador nuevo",
+  "issue": "Con un creador nuevo sin datos, «Calcular mi perfil» arma una narrativa pensada para la marca con frases internas: «Soy Mar Nueva y hago contenido. Todavía no tengo videos con puntaje frente a mi mediana. Todavía no tengo campañas con resultado medido. Si tu marca le habla a esta audiencia, conversemos.» Habla de una audiencia que nunca describió y usa jerga del producto («puntaje frente a mi mediana»). Lo verifiqué en un workspace MXN vacío. Es lo primero que ve un creador que paga, y esa narrativa es la base del pitch.",
+  "fix": "Cuando p2 y p3 no tengan ninguna cifra, no redactar la narrativa. Devolver un estado «sin datos suficientes» que la pantalla muestre con un EmptyState propio (en ventas/perfil/messages.ts) con enlaces a Conexiones y a /resumen/importar. Si se mantiene algún texto de relleno, que no salga hacia la marca: quitar «puntaje frente a mi mediana» y el cierre «le habla a esta audiencia» cuando no hay audiencia. Añadir una prueba en packages/core/test/outreach-perfil.test.ts."
+ },
+ {
+  "severity": "baja",
+  "where": "db/migrations/0067_recomendador_cadencias.sql:118,147,174,199,229,262,289 (y 0046_outreach.sql:303) · /ventas/cadencias/<id>",
+  "issue": "La guía que ve el creador en cada paso de una cadencia propuesta todavía dice «sus views frente a tu mediana» (lo vi en el paso 3 de la propuesta de Granos del Valle). Las notas de VEN-11 y VEN-13 dicen que el pulido r6 dejó «visualizaciones» también en la guía de pasos: la nota del backlog no cuadra con el producto. 0046 y 0067 no están aplicadas en Supabase, así que se pueden corregir en su propio archivo. Los textos del seed 0002 («236 K views», «94 K views») también llegan a la línea de tiempo de la ficha.",
+  "fix": "Cambiar «views» por «visualizaciones» en los guidance_es de 0067 y en el de 0046 §303 (y en los dos textos del seed 0002). Añadir a la prueba de plantillas una comprobación de que ningún guidance_es contiene /\\bviews\\b/i."
+ },
+ {
+  "severity": "baja",
+  "where": "packages/core/src/outreach/narrativa.ts:754 · /ventas/perfil (seed)",
+  "issue": "La narrativa con el seed dice «En mis captions escribo corto y uso hashtags y emojis». Es un anglicismo en la voz del producto, en el mismo texto al que se le hizo el cambio a «visualizaciones».",
+  "fix": "Cambiar a «En mis textos» o «En las descripciones» y actualizar la prueba de la narrativa."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/cotizar/(tarifario) · /cotizar con un workspace vacío",
+  "issue": "El estado vacío del tarifario solo ofrece «Ver conexiones». Un creador nuevo cuyas redes todavía no aprobaron la API no tiene salida visible hacia la importación por CSV, que es justo lo que llena las medianas. Resumen, en cambio, ofrece los dos caminos.",
+  "fix": "Añadir en el EmptyState un segundo enlace a /resumen/importar con su texto en cotizar/messages.ts, como hace SinConexiones en resumen/(panel)/page.tsx."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/ventas/cadencias/[id]/(detalle) · botón «Activar y escribir a …»",
+  "issue": "Al activar, el aviso verde dice «Cadencia activa y Laura Quintero dentro…», pero durante más de 3 s la cabecera sigue en «Borrador · 0 personas dentro» con el botón «Activando…» (medido con next start contra Postgres local). Durante ese tiempo la pantalla se contradice a sí misma.",
+  "fix": "Mostrar el aviso de éxito cuando termine la transición del router.refresh(), o actualizar de forma optimista la píldora de estado y el contador desde la respuesta de la acción."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/app/(app)/resumen/graficos.tsx · /resumen a 1280 px",
+  "issue": "«Visualizaciones por semana» a 1280 px etiqueta solo 6 de las 12 barras (12/7, 26/7, 9/8, 23/8, 6/9, 27/9) y deja un hueco irregular antes de la última. Sobra espacio para las doce; el recorte de axisLabels pensado para 400 px se aplica también en escritorio.",
+  "fix": "Calcular el paso de las etiquetas según el ancho disponible (todas desde sm:, una sí y una no en móvil) o con una regla que no deje el hueco entre la penúltima etiqueta y la última."
+ },
+ {
+  "severity": "baja",
+  "where": "apps/web/content/backlog.ts:177 (nota de CIM-6)",
+  "issue": "La nota dice que la quinta señal pendiente es «Molino Andino, sin company_id; verify j_radar lo comprueba». El seed 0008 metió a Molino Andino en el CRM, y verify/0002.sql:377 y la nota de VEN-2 dicen que ahora es Harinas La Sabana. El backlog vivo contradice al seed.",
+  "fix": "Corregir la nota de CIM-6 a «Harinas La Sabana (pulido r2)», igual que VEN-2."
+ },
+ {
+  "severity": "baja",
+  "where": "/kit/<slug> (app/(public)/kit/[slug]/page.tsx)",
+  "issue": "Una vez, en el recorrido a 400 px en oscuro, salió en consola el error React #418 (hidratación, texto distinto entre servidor y cliente) en el media kit público. En 8 intentos más no se repitió. Es probable que venga de un texto que depende de la hora o de la zona.",
+  "fix": "Revisar los componentes cliente del media kit que formatean fechas o tiempos relativos con new Date() en el render y pasarles el valor ya formateado desde el servidor. Añadir una prueba de render sin avisos de hidratación."
+ }
+]
