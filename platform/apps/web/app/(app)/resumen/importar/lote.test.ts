@@ -39,7 +39,7 @@ vi.mock("./_lib/permiso", () => ({ puedeImportar: async () => puedeImportar }));
 
 import { buscarPostsConocidos } from "./actions";
 import { diaEnZona, MAX_BYTES } from "./_lib/csv";
-import { importarLote as importarCsv, leerCuerpoConTope, MAX_CUERPO } from "./_lib/lote";
+import { importarLote as importarCsv, MAX_CUERPO } from "./_lib/lote";
 import { POST } from "./lote/route";
 import { MESSAGES } from "../messages";
 
@@ -251,7 +251,7 @@ describe("la ruta POST de la importación, con su propio techo (RES-6)", () => {
     return new Request(`${ORIGEN}/resumen/importar/lote`, {
       method: "POST",
       body: cuerpo,
-      headers: { origin: ORIGEN, "x-forwarded-host": "on-cue.test", ...cabeceras },
+      headers: { origin: ORIGEN, "sec-fetch-site": "same-origin", ...cabeceras },
     });
   }
 
@@ -302,35 +302,31 @@ describe("la ruta POST de la importación, con su propio techo (RES-6)", () => {
     expect(cuentas).toHaveLength(0);
   });
 
-  it("el techo lo pone el contador, no la cabecera: un Content-Length que miente no cuela", async () => {
-    // Sin Content-Length (chunked) y con más bytes de los permitidos.
-    const trozo = new Uint8Array(64 * 1024);
-    let enviados = 0;
-    const flujo = new ReadableStream<Uint8Array>({
-      pull(c) {
-        if (enviados > 200 * 1024) return c.close();
-        enviados += trozo.byteLength;
-        c.enqueue(trozo);
-      },
-    });
-    const req = new Request(`${ORIGEN}/x`, { method: "POST", body: flujo, duplex: "half" } as RequestInit);
-    expect(await leerCuerpoConTope(req, 100 * 1024)).toBeNull();
-    // Y la cabecera sí sirve para rechazar ANTES de leer nada.
-    const declarada = new Request(`${ORIGEN}/x`, { method: "POST", body: "hola", headers: { "content-length": "999999" } });
-    expect(await leerCuerpoConTope(declarada, 10)).toBeNull();
-    const pequena = new Request(`${ORIGEN}/x`, { method: "POST", body: "hola" });
-    expect(new TextDecoder().decode((await leerCuerpoConTope(pequena, 10))!)).toBe("hola");
-  });
+  // El contador en sí (Content-Length que miente, flujo chunked cortado
+  // a mitad) se prueba con readLimitedBytes en lib/cuerpo-limitado.test.ts,
+  // y la regla de origen, sola, en lib/mismo-origen.test.ts.
 
   it("una petición de otro origen no se procesa: es la puerta que las server actions ponen solas", async () => {
-    const ajena = await POST(
-      peticion(fixture("instagram-insights.csv"), { red: "instagram", handleNuevo: "ruta.ajena", mapeo: MAPEO_IG }, {
-        origin: "https://sitio-malo.test",
-      }),
+    const ajenas: Record<string, string>[] = [
+      { origin: "https://sitio-malo.test" },
+      { origin: "null" },
+      { "sec-fetch-site": "cross-site" },
+      { "sec-fetch-site": "same-site" },
+    ];
+    for (const cabeceras of ajenas) {
+      const r = await POST(
+        peticion(fixture("instagram-insights.csv"), { red: "instagram", handleNuevo: "ruta.ajena", mapeo: MAPEO_IG }, cabeceras),
+      );
+      expect(r.status, JSON.stringify(cabeceras)).toBe(403);
+    }
+    const cuentas = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
+      tx.query("SELECT 1 FROM social_connection WHERE handle = 'ruta.ajena'").then((x) => x.rows),
     );
-    expect(ajena.status).toBe(403);
+    expect(cuentas).toHaveLength(0);
+    // Sin Origin ni Sec-Fetch-Site no es un navegador (no lleva la cookie
+    // de nadie): pasa la puerta y cae en la validación del cuerpo.
     const sinOrigen = new Request(`${ORIGEN}/resumen/importar/lote`, { method: "POST", body: new FormData() });
-    expect((await POST(sinOrigen)).status).toBe(403);
+    expect((await POST(sinOrigen)).status).toBe(400);
   });
 
   it("un cuerpo que no es el del asistente se rechaza con la frase genérica", async () => {
@@ -338,7 +334,7 @@ describe("la ruta POST de la importación, con su propio techo (RES-6)", () => {
       new Request(`${ORIGEN}/resumen/importar/lote`, {
         method: "POST",
         body: "no soy multipart",
-        headers: { origin: ORIGEN, "x-forwarded-host": "on-cue.test", "content-type": "text/plain" },
+        headers: { origin: ORIGEN, "sec-fetch-site": "same-origin", "content-type": "text/plain" },
       }),
     );
     expect(r.status).toBe(400);
