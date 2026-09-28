@@ -14,6 +14,7 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer, type AddressInfo, type Socket } from 'node:net';
 import type { PGlite } from '@electric-sql/pglite';
 import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, withoutNetwork, type NetworkGuard } from '@mc/connectors';
 import { nextWindowSlot } from '@mc/core';
@@ -30,7 +31,7 @@ import { createLogger, MemorySink } from '../src/runner/logger.ts';
 import { claimRun, MAX_TICK_CUTS, TICK_CUT_KEY, type Claim } from '../src/runner/once.ts';
 import { defineJob, type JobDefinition, type JobRegistration } from '../src/runner/registry.ts';
 import { ConfigError } from '../src/runner/config.ts';
-import { assertTickTarget, runTick, runTickFromEnv, tickBudget, type RunTickOptions, type TickSummary } from '../src/tick.ts';
+import { assertTickTarget, runTick, runTickFromEnv, TICK_CLOSE_MS, TICK_CONNECT_TIMEOUT_MS, tickBudget, type RunTickOptions, type TickSummary } from '../src/tick.ts';
 import { jobRuns, SETUP_TIMEOUT } from './helpers/harness.ts';
 import { bogota, motorKit } from './helpers/motor-kit.ts';
 
@@ -377,6 +378,27 @@ test('contra una base remota el turno solo corre en el despliegue de producción
   assert.doesNotThrow(() => assertTickTarget({ VERCEL_ENV: 'production' }, { databaseUrl: supabase }));
   assert.doesNotThrow(() => assertTickTarget({ TICK_ALLOW_REMOTE: '1' }, { databaseUrl: supabase }), 'a sabiendas');
   assert.doesNotThrow(() => assertTickTarget({}, { databaseUrl: 'postgres://mc:mc@localhost:5432/oncue' }), 'tu Postgres de Docker');
+});
+
+test(`con el pooler colgado (acepta y no contesta), el turno falla a los ${TICK_CONNECT_TIMEOUT_MS / 1000} s con su motivo, no a los 60 s de Vercel`, async () => {
+  // Un «pooler» en esta máquina que acepta la conexión y no dice nada: lo que pasa con las 15 de sesión ocupadas.
+  const abiertas: Socket[] = [];
+  const mudo = createServer((socket) => { abiertas.push(socket); });
+  await new Promise<void>((resolve) => mudo.listen(0, '127.0.0.1', resolve));
+  const { port } = mudo.address() as AddressInfo;
+  try {
+    const t0 = Date.now();
+    await assert.rejects(
+      runTickFromEnv({ budgetMs: 45_000, logger, env: { WORKER_DATABASE_URL: `postgres://mc:mc@127.0.0.1:${port}/oncue` } }),
+      /timeout/i,
+    );
+    const ms = Date.now() - t0;
+    // La espera de conexión, más como mucho lo que se espera a cerrar el pool (TICK_CLOSE_MS): muy por debajo de los 60 s.
+    assert.ok(ms >= TICK_CONNECT_TIMEOUT_MS - 200 && ms < TICK_CONNECT_TIMEOUT_MS + TICK_CLOSE_MS + 2_000, `falló a los ${ms} ms`);
+  } finally {
+    for (const s of abiertas) s.destroy();
+    await new Promise<void>((resolve) => mudo.close(() => resolve()));
+  }
 });
 
 test('con el canal falso pedido contra una base que no es local, el turno no arranca', async () => {

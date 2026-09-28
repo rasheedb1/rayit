@@ -27,7 +27,7 @@ function montar(secret: string | undefined) {
   const run = vi.fn<(budgetMs: number) => Promise<TickSummary>>(async () => RESUMEN);
   const log = vi.fn();
   const logError = vi.fn();
-  return { run, log, logError, handler: createTickHandler({ secret: () => secret, run, log, logError }) };
+  return { run, log, logError, handler: createTickHandler({ secret: () => secret, run, log, logError, waitMs: 1_000 }) };
 }
 
 const pedir = (method: "GET" | "POST", authorization?: string) =>
@@ -98,12 +98,45 @@ describe("la ruta del turno (CIM-7)", () => {
       run: async () => { throw new Error("password authentication failed for user mc_worker_login"); },
       log: vi.fn(),
       logError,
+      waitMs: 1_000,
     });
     const res = await handler(pedir("POST", `Bearer ${SECRETO}`));
     expect(res.status).toBe(500);
     const cuerpo = await res.text();
     expect(cuerpo).toBe(JSON.stringify({ ok: false }));
     expect(logError).toHaveBeenCalledWith("el turno no pudo correr", expect.any(Error));
+  });
+
+  test("si el turno no responde (el pooler colgado), la ruta contesta 504 a su hora y lo deja en el log, antes de que Vercel la mate", async () => {
+    vi.useFakeTimers();
+    try {
+      const logError = vi.fn();
+      const log = vi.fn();
+      let tarde: ((err: Error) => void) | undefined;
+      const handler = createTickHandler({
+        secret: () => SECRETO,
+        run: () => new Promise<TickSummary>((_resolve, reject) => { tarde = reject; }), // nunca responde
+        log,
+        logError,
+        waitMs: 48_000,
+      });
+      const respuesta = handler(pedir("POST", `Bearer ${SECRETO}`));
+      await vi.advanceTimersByTimeAsync(47_999);
+      expect(logError).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      const res = await respuesta;
+      expect(res.status).toBe(504);
+      expect(await res.text()).toBe(JSON.stringify({ ok: false }));
+      expect(log).not.toHaveBeenCalled();
+      expect(logError).toHaveBeenCalledTimes(1);
+      expect(String(logError.mock.calls[0]![0])).toMatch(/el turno no respondió a tiempo \(48000 ms; espera 48000 ms\)/);
+      // Si al final termina con error, se anota; no queda una promesa rechazada sin atender.
+      tarde?.(new Error("Connection terminated"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(logError).toHaveBeenLastCalledWith("el turno terminó con error después de responder 504", expect.any(Error));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("la ruta no pide sesión (la protege su Bearer) y el resumen del log es una línea", () => {

@@ -5,7 +5,11 @@
 -- Supone pg_cron y pg_net instalados; scripts/cron-tick.sh lo comprueba antes.
 -- Que el secreto no haya quedado en claro en pg_stat_statements lo mira
 -- aparte db/ops/cron-tick-huellas.sql: la vista puede no existir.
+-- El veredicto (verde o rojo, y qué hacer) lo saca de esta fila
+-- db/ops/cron-tick-veredicto.mjs.
 SELECT jsonb_build_object(
+  -- El reloj de la base: «en los últimos 5 min» se mide con él, no con el de quien mira.
+  'ahora', now(),
   'tarea', (
     SELECT jsonb_agg(jsonb_build_object('jobid', jobid, 'schedule', schedule, 'active', active, 'command', command))
       FROM cron.job WHERE jobname = 'on-cue-tick'),
@@ -27,5 +31,15 @@ SELECT jsonb_build_object(
   'ultimas_respuestas', (
     SELECT jsonb_agg(r ORDER BY r.created DESC) FROM (
       SELECT id, status_code, timed_out, error_msg, created, left(content, 500) AS content
-        FROM net._http_response ORDER BY created DESC LIMIT 5) r)
+        FROM net._http_response ORDER BY created DESC LIMIT 5) r),
+  -- Peticiones que pg_net aún no ha mandado. Cada una lleva la cabecera
+  -- Authorization con el secreto en claro hasta que sale (normalmente
+  -- milisegundos; la tabla solo la lee postgres). Si crece, pg_net está
+  -- atascado y el secreto se queda ahí más tiempo.
+  'cola_pg_net', (SELECT count(*) FROM net.http_request_queue),
+  -- La última pasada buena de outbound.dispatch: si el turno responde 200
+  -- pero esto no avanza, el despacho no está corriendo.
+  'dispatch_ultimo_ok', (
+    SELECT max(started_at) FROM public.job_run
+     WHERE job_id = 'outbound.dispatch' AND status = 'ok' AND workspace_id IS NULL)
 ) AS cron_tick;

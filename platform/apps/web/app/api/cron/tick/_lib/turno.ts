@@ -56,11 +56,34 @@ export interface TickRouteDeps {
   secret: () => string | undefined;
   /** Un turno con la base del worker (runTickFromEnv de @mc/worker/tick). */
   run: (budgetMs: number) => Promise<TickSummary>;
+  /**
+   * Cuánto espera la ruta al turno antes de responder 504 por su cuenta:
+   * el presupuesto más lo que el turno se da para cerrar el pool
+   * (route.ts: TICK_BUDGET_MS + TICK_CLOSE_MS), por debajo de maxDuration.
+   * Si algo que el presupuesto no acota se cuelga (el pooler, el SET
+   * ROLE), el log dice «no respondió a tiempo» antes de que Vercel mate
+   * la función sin dejar rastro.
+   */
+  waitMs: number;
   log?: (line: string) => void;
   logError?: (message: string, err?: unknown) => void;
 }
 
 const NO_STORE = { "cache-control": "no-store" } as const;
+
+/** Lo que devuelve la espera cuando el turno no respondió en waitMs. */
+const LATE = Symbol("tarde");
+
+/** El turno, o LATE si no responde en `ms`. El turno sigue en segundo plano: lo corta su presupuesto o Vercel. */
+async function withinMs<T>(work: Promise<T>, ms: number): Promise<T | typeof LATE> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<typeof LATE>((resolve) => { timer = setTimeout(() => resolve(LATE), ms); });
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export function createTickHandler(deps: TickRouteDeps): (req: Request) => Promise<Response> {
   const log = deps.log ?? ((line: string) => console.info("[cron/tick]", line));
@@ -79,8 +102,16 @@ export function createTickHandler(deps: TickRouteDeps): (req: Request) => Promis
       return new Response(null, { status: 401, headers: NO_STORE });
     }
     avisado = false;
+    const started = Date.now();
     try {
-      const summary = await deps.run(TICK_BUDGET_MS);
+      const work = deps.run(TICK_BUDGET_MS);
+      const summary = await withinMs(work, deps.waitMs);
+      if (summary === LATE) {
+        // Si termina después, que su error no quede sin atender (el turno ya se dio por perdido).
+        work.catch((err: unknown) => logError("el turno terminó con error después de responder 504", err));
+        logError(`el turno no respondió a tiempo (${Date.now() - started} ms; espera ${deps.waitMs} ms): ¿pooler colgado o sin conexiones? make cron.status`);
+        return Response.json({ ok: false }, { status: 504, headers: NO_STORE });
+      }
       log(tickLogLine(summary));
       return Response.json(summary, { headers: NO_STORE });
     } catch (err) {

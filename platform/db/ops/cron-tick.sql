@@ -27,6 +27,12 @@
 -- LEE al disparar, de vault.decrypted_secrets: en cron.job solo queda la
 -- consulta, nunca el valor. Rotarlo es volver a correr
 -- `make cron.install` con el nuevo (y ponerlo igual en Vercel).
+-- Un matiz, propio de pg_net: net.http_post deja la petición, CON sus
+-- cabeceras (el Authorization: Bearer en claro), en net.http_request_queue
+-- hasta que su worker la manda, normalmente en milisegundos. Esa tabla
+-- solo la lee postgres; `make cron.status` cuenta sus filas
+-- (cola_pg_net): si crece, pg_net está atascado y el secreto se queda
+-- ahí más tiempo.
 --
 -- Orden de `make cron.install` (scripts/cron-tick.sh), para que la tarea
 -- nunca dispare sin secreto: 1) cron-tick-vault.sql comprueba que Vault

@@ -8,12 +8,17 @@
  * propia llamada y con SELECT que pg_stat_statements normaliza (nada de
  * DO), que la tarea lo lee de ahí (en cron.job no queda el valor), que es
  * idempotente por construcción, y que el relleno valida lo que mete en
- * los literales y no filtra el secreto cuando falla.
+ * los literales y no filtra el secreto cuando falla. Y lo que hace
+ * scripts/cron-tick.sh con las respuestas: no copia el secreto si la API
+ * rechaza su lote, y `make cron.status` da un veredicto
+ * (db/ops/cron-tick-veredicto.mjs).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const OPS = fileURLToPath(new URL('../../../db/ops/', import.meta.url));
@@ -153,4 +158,110 @@ test('supabase-admin.sh no pone el token de administración en la línea de coma
   assert.doesNotMatch(codigo, /-H\s+["']Authorization/, 'ninguna cabecera Authorization como argumento');
   assert.match(codigo, /--config <\(printf 'header = "Authorization: Bearer %s"\\n' "\$t"\)/, 'va por un descriptor, con printf (interno de bash)');
   assert.equal([...codigo.matchAll(/\bcurl\b/g)].length, 1, 'una sola llamada a curl, la de api()');
+});
+
+test('si la API rechaza la llamada del secreto, admin_sql --redactar no lo copia a la terminal', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cron-tick-'));
+  try {
+    // Una API de administración de mentira que rechaza la consulta citando la sentencia, como Postgres (LINE 1: …).
+    const falsa = join(dir, 'admin-falso.sh');
+    writeFileSync(falsa, [
+      '#!/usr/bin/env bash',
+      'sql="$(cat)"',
+      `python3 -c 'import json,sys; s=sys.argv[1].strip().splitlines()[0]; print(json.dumps({"message": "Failed to run sql query: ERROR:  42501: permission denied for function update_secret LINE 1: " + s}))' "$(printf '%s' "$sql" | grep -v '^--' | grep -v '^$')"`,
+      '',
+    ].join('\n'));
+    chmodSync(falsa, 0o755);
+    const lote = rellenar('cron-tick-secreto.sql', { CRON_SECRET: SECRETO }).stdout;
+    const correr = (redactar: boolean) => spawnSync('bash', ['-c', `source scripts/cron-tick.sh; ADMIN="$FALSA"; admin_sql ${redactar ? '--redactar ' : ''}"$LOTE"`], {
+      cwd: fileURLToPath(new URL('../../../', import.meta.url)),
+      env: { PATH: process.env['PATH'] ?? '', FALSA: falsa, LOTE: lote, CRON_SECRET: SECRETO },
+      encoding: 'utf8',
+    });
+    const sinRedactar = correr(false);
+    assert.equal(sinRedactar.status, 1);
+    assert.ok(sinRedactar.stderr.includes(SECRETO), 'la prueba es de verdad: la respuesta de la API trae el secreto');
+
+    const r = correr(true);
+    assert.equal(r.status, 1, 'sigue fallando: install se detiene');
+    assert.equal(r.stdout, '');
+    assert.ok(!r.stderr.includes(SECRETO), `el secreto no sale: ${r.stderr}`);
+    assert.ok(!r.stderr.includes(SECRETO.slice(0, 32)), 'ni un trozo');
+    assert.match(r.stderr, /rechazó la consulta del secreto/);
+    assert.match(r.stderr, /permission denied for function update_secret LINE 1: SELECT vault\.update_secret\(id, '\*\*\*'\)/, 'el motivo sí, con *** en lugar del valor');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const sh = readFileSync(fileURLToPath(new URL('../../../scripts/cron-tick.sh', import.meta.url)), 'utf8');
+  assert.match(sh, /admin_sql --redactar "\$sql"/, 'install manda el lote del secreto por el modo que no copia la respuesta');
+});
+
+/** Una respuesta de pg_net de hace `hace` segundos, con el reloj de la base en AHORA. */
+const AHORA = '2026-09-28T15:00:00+00:00';
+const respuesta = (hace: number, status_code: number | null, extra: Record<string, unknown> = {}) => ({
+  id: hace, status_code, timed_out: false, error_msg: null, created: new Date(Date.parse(AHORA) - hace * 1000).toISOString(),
+  content: status_code === 200 ? `{"at":"2026-09-28T14:59:00.000Z","budgetMs":45000,"elapsedMs":${100 + hace},"ran":[]` : '{"ok":false}', ...extra,
+});
+const SANO = {
+  ahora: AHORA,
+  tarea: [{ jobid: 1, schedule: '* * * * *', active: true, command: '…' }],
+  secreto_en_vault: [{ name: 'on_cue_cron_secret' }],
+  ultimas_respuestas: [respuesta(20, 200), respuesta(80, 200)],
+  cola_pg_net: 0,
+  dispatch_ultimo_ok: '2026-09-28T14:58:00+00:00',
+};
+
+interface Veredicto { sano: boolean; lineas: Array<{ nivel: 'ok' | 'aviso' | 'error'; texto: string }> }
+
+test('make cron.status da un veredicto: verde si todo responde 200, y en rojo qué hacer si no', async () => {
+  const m = (await import(`${OPS}cron-tick-veredicto.mjs`)) as { veredicto: (e: unknown) => Veredicto; estadoDe: (r: unknown) => unknown };
+  const ok = m.veredicto(m.estadoDe([{ cron_tick: SANO }]));
+  assert.equal(ok.sano, true);
+  assert.match(ok.lineas[0]!.texto, /El turno responde: 2 respuesta\(s\) 200 en 5 min, 150 ms de media/);
+
+  const casos: Array<[string, Record<string, unknown>, RegExp]> = [
+    ['secreto distinto', { ultimas_respuestas: [respuesta(20, 401), respuesta(80, 200)] }, /CRON_SECRET del Vault no es el de Vercel/],
+    ['falla el turno', { ultimas_respuestas: [respuesta(20, 500)] }, /logs de Vercel \(\[cron\/tick\]\).*WORKER_DATABASE_URL/],
+    ['no respondió a tiempo', { ultimas_respuestas: [respuesta(20, 504)] }, /no respondió a tiempo/],
+    ['pg_net lo dio por perdido', { ultimas_respuestas: [respuesta(20, null, { timed_out: true })] }, /más que su maxDuration/],
+    ['pg_cron no dispara', { ultimas_respuestas: [respuesta(400, 200)] }, /Ninguna respuesta de la ruta en 5 min: pg_cron no está disparando/],
+    ['sin tarea', { tarea: null }, /on-cue-tick no existe/],
+    ['tarea apagada', { tarea: [{ active: false }] }, /desactivada/],
+    ['sin secreto', { secreto_en_vault: null }, /No hay secreto en Vault/],
+    ['otra URL', { ultimas_respuestas: [respuesta(20, 404)] }, /respondió 404: mira APP_URL/],
+  ];
+  for (const [nombre, cambio, motivo] of casos) {
+    const v = m.veredicto({ ...SANO, ...cambio });
+    assert.equal(v.sano, false, nombre);
+    assert.ok(v.lineas.some((l) => l.nivel === 'error' && motivo.test(l.texto)), `${nombre}: ${JSON.stringify(v.lineas)}`);
+  }
+
+  // Avisos que no tumban el chequeo: pg_net atascado (el secreto se queda en su cola) y el despacho parado.
+  const atascado = m.veredicto({ ...SANO, cola_pg_net: 12, dispatch_ultimo_ok: '2026-09-28T13:00:00+00:00' });
+  assert.equal(atascado.sano, true);
+  assert.ok(atascado.lineas.some((l) => l.nivel === 'aviso' && /12 petición\(es\) sin enviar.*net\.http_request_queue/.test(l.texto)));
+  assert.ok(atascado.lineas.some((l) => l.nivel === 'aviso' && /outbound\.dispatch fue hace 120 min/.test(l.texto)));
+});
+
+test('el veredicto por la línea de comandos: sale con 1 si no está sano, y no repite el cuerpo de las respuestas', () => {
+  const correr = (estado: unknown) => spawnSync(process.execPath, [`${OPS}cron-tick-veredicto.mjs`], { input: JSON.stringify([{ cron_tick: estado }]), encoding: 'utf8' });
+  const ok = correr(SANO);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /El turno responde/);
+  const mal = correr({ ...SANO, ultimas_respuestas: [respuesta(20, 401, { content: 'Bearer abc' })] });
+  assert.equal(mal.status, 1);
+  assert.match(mal.stderr, /CRON_SECRET/);
+  assert.ok(!`${mal.stdout}${mal.stderr}`.includes('Bearer abc'));
+  const roto = spawnSync(process.execPath, [`${OPS}cron-tick-veredicto.mjs`], { input: 'no es json {', encoding: 'utf8' });
+  assert.equal(roto.status, 1);
+  const script = readFileSync(fileURLToPath(new URL('../../../scripts/cron-tick.sh', import.meta.url)), 'utf8');
+  assert.match(script, /node db\/ops\/cron-tick-veredicto\.mjs \|\| sano=1/, 'status lo corre y sale con 1 si no está sano');
+});
+
+test('el estado cuenta la cola de pg_net (donde espera la cabecera con el secreto) y la última pasada buena de outbound.dispatch', () => {
+  const estado = leer('cron-tick-estado.sql');
+  assert.match(estado, /'cola_pg_net', \(SELECT count\(\*\) FROM net\.http_request_queue\)/);
+  assert.match(estado, /'dispatch_ultimo_ok'/);
+  assert.match(estado, /'ahora', now\(\)/);
+  assert.match(leer('cron-tick.sql'), /net\.http_request_queue/, 'y la plantilla dice dónde queda la cabecera hasta que sale');
 });

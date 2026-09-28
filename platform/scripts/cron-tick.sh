@@ -4,7 +4,8 @@
 # Supabase llama cada minuto a /api/cron/tick con el Bearer CRON_SECRET.
 #
 #   ./scripts/cron-tick.sh install     crea o actualiza la tarea y el secreto en Vault
-#   ./scripts/cron-tick.sh status      la tarea, el secreto (sin su valor) y las últimas corridas
+#   ./scripts/cron-tick.sh status      la tarea, el secreto (sin su valor), las últimas corridas y un
+#                                      veredicto: sale con 1 si el turno no está sano
 #   ./scripts/cron-tick.sh uninstall   la retira y borra el secreto (para pasar a Vercel Cron)
 #
 # Lo corre el dueño del proyecto: usa scripts/supabase-admin.sh (el token
@@ -25,13 +26,41 @@ rojo()  { printf '\033[31m  %s\033[0m\n' "$*" >&2; }
 verde() { printf '\033[32m  %s\033[0m\n' "$*"; }
 
 # Una consulta de administración; sale con 1 si la API devolvió un error.
+#
+#   admin_sql [--redactar] "<sql>"
+#
+# Con --redactar (la llamada del secreto), si la API la rechaza no se copia
+# su respuesta: los errores de Postgres que devuelve pueden traer la
+# sentencia (`LINE 1: SELECT vault.update_secret(id, '<secreto>')…`), y el
+# CRON_SECRET acabaría en la terminal, en su historial o en un log de CI.
+# Se imprime solo la primera línea del mensaje, con el valor de
+# CRON_SECRET (y cualquier cadena larga de hexadecimales o base64)
+# cambiado por ***. El secreto llega a python por el entorno, no por argumentos.
 admin_sql() {
-  local out
-  out="$(printf '%s' "$1" | "$ADMIN" sql-stdin)"
+  local redactar=0 out
+  if [[ "${1:-}" == --redactar ]]; then redactar=1; shift; fi
+  out="$(printf '%s' "$1" | "$ADMIN" sql-stdin)" || true
   if printf '%s' "$out" | python3 -c 'import json,sys
 d=json.load(sys.stdin)
 sys.exit(1 if isinstance(d, dict) and ("message" in d or "error" in d) else 0)' 2>/dev/null; then
     printf '%s\n' "$out"
+  elif [[ "$redactar" == 1 ]]; then
+    rojo "Supabase rechazó la consulta del secreto (el detalle se omite: podría llevar el valor):"
+    printf '%s' "$out" | python3 -c 'import json,os,re,sys
+raw=sys.stdin.read()
+try:
+    d=json.loads(raw)
+    msg=str(d.get("message") or d.get("error") or raw) if isinstance(d, dict) else raw
+except Exception:
+    msg=raw
+lines=msg.strip().splitlines()
+msg=lines[0] if lines else "(sin mensaje)"
+s=os.environ.get("CRON_SECRET") or ""
+if s:
+    msg=msg.replace(s, "***")
+msg=re.sub(r"[A-Za-z0-9_-]{32,}", "***", msg)
+print("  " + msg[:300])' >&2
+    return 1
   else
     rojo "Supabase rechazó la consulta:"
     printf '%s\n' "$out" >&2
@@ -82,7 +111,7 @@ install() {
   tarea="$(CRON_SECRET= node db/ops/render.mjs db/ops/cron-tick.sql)" || exit 2
   admin_sql "$(cat db/ops/cron-tick-vault.sql)" >/dev/null
   sql="$(APP_URL= node db/ops/render.mjs db/ops/cron-tick-secreto.sql)" || exit 2
-  admin_sql "$sql" >/dev/null
+  admin_sql --redactar "$sql" >/dev/null
   unset sql CRON_SECRET
   admin_sql "$tarea" >/dev/null
   unset tarea
@@ -95,8 +124,14 @@ status() {
     rojo "pg_cron o pg_net no están instalados: el disparador no existe. make cron.install lo crea."
     return 1
   fi
-  admin_sql "$(cat db/ops/cron-tick-estado.sql)"
-  huellas
+  local estado sano=0
+  estado="$(admin_sql "$(cat db/ops/cron-tick-estado.sql)")" || return 1
+  printf '%s\n' "$estado"
+  printf '\n'
+  # El veredicto: verde si el turno responde 200; si no, en rojo y qué hacer (db/ops/cron-tick-veredicto.mjs).
+  printf '%s' "$estado" | node db/ops/cron-tick-veredicto.mjs || sano=1
+  huellas || sano=1
+  return "$sano"
 }
 
 uninstall() {
@@ -108,9 +143,12 @@ uninstall() {
   verde "Tareas on-cue-tick y on-cue-tick-purga retiradas y secreto borrado de Vault."
 }
 
-case "${1:-}" in
-  install)   install ;;
-  status)    status ;;
-  uninstall) uninstall ;;
-  *)         sed -n '3,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
-esac
+# Solo al ejecutarlo: las pruebas (apps/worker/test/cron-tick-sql.test.ts) lo cargan con `source` para probar admin_sql.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  case "${1:-}" in
+    install)   install ;;
+    status)    status ;;
+    uninstall) uninstall ;;
+    *)         sed -n '3,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  esac
+fi

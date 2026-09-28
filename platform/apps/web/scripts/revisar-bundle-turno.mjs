@@ -17,6 +17,12 @@
  * falla con cualquier módulo que no esté en PERMITIDOS, cada uno con el
  * motivo por el que su ruta no se usa en producción.
  *
+ * Y falla también si en ese bundle entra un paquete de PAQUETES_FUERA:
+ * pg-boss, que el turno no usa (su cola es job_run) y que entró una vez
+ * entero (~1 MB, arranque en frío en cada llamada de cada minuto) por
+ * una constante de runner/boss.ts. Lo que el turno comparte con el
+ * proceso largo sin pg-boss vive en apps/worker/src/runner/comun.ts.
+ *
  *   node apps/web/scripts/revisar-bundle-turno.mjs          (desde platform/, tras el build)
  */
 import { existsSync, readFileSync } from 'node:fs';
@@ -42,6 +48,17 @@ export const PERMITIDOS = {
     'el runner de migraciones solo lo usa el Postgres embebido (sin DATABASE_URL), nunca en producción',
 };
 
+/**
+ * Paquetes que NO deben entrar en el bundle del turno, con la huella que
+ * dejan en él (un texto suyo que el código de On Cue no escribe) y por qué.
+ */
+export const PAQUETES_FUERA = {
+  'pg-boss': {
+    huella: /pg-boss is not installed|pg-boss is stopped|PgBoss/,
+    motivo: 'el turno no usa pg-boss (su cola es job_run): importa de runner/comun.ts, no de runner/worker.ts ni runner/boss.ts',
+  },
+};
+
 /** Los chunks que carga una ruta de Next: `__webpack_require__.X(0, [ids…], …)`. */
 export function chunksDe(routeJs) {
   const ids = new Set();
@@ -62,9 +79,11 @@ export function revisarBundle(serverDir, raiz = PLATFORM) {
   const archivos = [route, ...chunksDe(routeJs).map((id) => join(serverDir, 'chunks', `${id}.js`))];
   const prefijo = `${pathToFileURL(raiz).href.replace(/\/$/, '')}/`;
   const encontrados = new Map();
+  const paquetes = new Set();
   for (const archivo of archivos) {
     if (!existsSync(archivo)) throw new Error(`El turno carga ${archivo} y no existe`);
     const js = archivo === route ? routeJs : readFileSync(archivo, 'utf8');
+    for (const [nombre, { huella }] of Object.entries(PAQUETES_FUERA)) if (huella.test(js)) paquetes.add(nombre);
     for (const m of js.matchAll(/file:\/\/\/[^"'`\s)]+/g)) {
       const url = m[0];
       const rel = url.startsWith(prefijo) ? decodeURIComponent(url.slice(prefijo.length)) : url;
@@ -72,12 +91,17 @@ export function revisarBundle(serverDir, raiz = PLATFORM) {
     }
   }
   const prohibidos = [...encontrados.keys()].filter((rel) => !(rel in PERMITIDOS));
-  return { archivos: archivos.length, encontrados: [...encontrados.keys()].sort(), prohibidos: prohibidos.sort() };
+  return { archivos: archivos.length, encontrados: [...encontrados.keys()].sort(), prohibidos: prohibidos.sort(), paquetes: [...paquetes].sort() };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   try {
     const r = revisarBundle(join(WEB, '.next', 'server'));
+    if (r.paquetes.length > 0) {
+      console.error('En el bundle de /api/cron/tick entró un paquete que el turno no usa:');
+      for (const p of r.paquetes) console.error(`  ${p}: ${PAQUETES_FUERA[p].motivo}`);
+      process.exit(1);
+    }
     if (r.prohibidos.length > 0) {
       console.error('El bundle de /api/cron/tick lee archivos por una ruta de la máquina del build (en Vercel darán ENOENT):');
       for (const p of r.prohibidos) console.error(`  ${p}`);
@@ -85,7 +109,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
       console.error('añádelos a PERMITIDOS en apps/web/scripts/revisar-bundle-turno.mjs con el motivo.');
       process.exit(1);
     }
-    console.log(`  bundle del turno: ${r.archivos} archivos, ninguna ruta de la máquina del build fuera de las permitidas (${r.encontrados.length}).`);
+    console.log(`  bundle del turno: ${r.archivos} archivos, sin ${Object.keys(PAQUETES_FUERA).join(', ')} y ninguna ruta de la máquina del build fuera de las permitidas (${r.encontrados.length}).`);
   } catch (err) {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 // @ts-expect-error: script .mjs sin tipos (corre con node después de next build).
-import { chunksDe, PERMITIDOS, revisarBundle, RUTA_TURNO } from "./revisar-bundle-turno.mjs";
+import { chunksDe, PAQUETES_FUERA, PERMITIDOS, revisarBundle, RUTA_TURNO } from "./revisar-bundle-turno.mjs";
 
 /**
  * CIM-7 · la revisión del bundle del turno, sobre un .next/server de
@@ -68,6 +68,14 @@ describe("la revisión del bundle del turno (CIM-7)", () => {
     const server = bundle(raiz, { "1": "" });
     rmSync(join(server, "chunks", "1.js"));
     expect(() => revisarBundle(server, raiz)).toThrow(/no existe/);
+  });
+
+  test("pg-boss en el bundle del turno lo tumba: el turno no lo usa (runner/comun.ts)", () => {
+    const limpio = bundle(raiz, { "1": `const JOB_LOCK_PREFIX="mc-worker/job:";select count(*) from pgboss.job` });
+    expect(revisarBundle(limpio, raiz).paquetes).toEqual([]);
+    const conBoss = bundle(raiz, { "7": `class PgBoss extends EventEmitter{}throw new Error("pg-boss is not installed")` });
+    expect(revisarBundle(conBoss, raiz).paquetes).toEqual(["pg-boss"]);
+    expect((PAQUETES_FUERA as Record<string, { motivo: string }>)["pg-boss"]!.motivo).toMatch(/comun\.ts/);
   });
 
   test("cada permitido lleva su motivo", () => {
