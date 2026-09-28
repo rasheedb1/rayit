@@ -120,9 +120,15 @@ test('1 · la primera pasada corre lo vencido, encadena lo de abajo y anota el f
   assert.doesNotMatch(JSON.stringify(arribaRun?.metadata), /NO-DEBE-GUARDARSE/, 'el redactor también corre en --once');
 });
 
-test('2 · la segunda pasada no repite lo ya corrido y reintenta lo que falló', async () => {
+test('2 · la segunda pasada no repite lo ya corrido y reintenta lo que falló (pasada su espera)', async () => {
   const antes = { ...calls };
-  const s = await pasada();
+  // Enseguida, el fallo espera su backoff (WORKER_RETRY_DELAY_S=1 en testConfig): nada corre.
+  const pronto = await pasada();
+  assert.deepEqual(pronto.runs.map((r) => r.job), []);
+  assert.equal(reasons(pronto)['test.once_falla'], 'backoff');
+  assert.equal(reasons(pronto)['test.once_parcial'], 'backoff');
+  // Dos segundos después, sí.
+  const s = await pasada({ now: () => new Date(Date.now() + 2_000) });
   assert.deepEqual(s.runs.map((r) => [r.job, r.reason, r.status]), [['test.once_falla', 'retry', 'failed'], ['test.once_parcial', 'retry', 'partial']],
     'partial se reintenta (retryOnItemFailure por defecto), como en pg-boss');
   assert.equal(reasons(s)['test.once_cuota'], 'up_to_date', 'retry: false no se reintenta: la pasada lo da por cubierto');

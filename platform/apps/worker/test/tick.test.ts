@@ -58,6 +58,18 @@ const corte = defineJob('test.tick_corte', async (_p, ctx) => {
   while (!ctx.signal.aborted) await sleep(20);
   return { processed: 0, failed: 0 };
 });
+/** Cuándo empezó y terminó cada corrida del grupo test_orden (ms de reloj de pared). */
+const tiempos: Record<string, { start: number; end: number; source?: unknown }> = {};
+const medido = (id: string, ms: number) => async (payload: Record<string, unknown>) => {
+  const start = Date.now();
+  await sleep(ms);
+  tiempos[id] = { start, end: Date.now(), source: payload['source'] };
+  return { processed: 1, failed: 0 };
+};
+const arriba = defineJob('test.tick_orden_arriba', medido('arriba', 150));
+const abajo = defineJob('test.tick_orden_abajo', medido('abajo', 10), { after: ['test.tick_orden_arriba'] });
+const suelto = defineJob('test.tick_orden_suelto', medido('suelto', 10));
+const falla = defineJob('test.tick_falla', async () => { count('falla'); throw new Error('proveedor caído (429)'); });
 const muerto = defineJob('test.tick_muerto', async () => { count('muerto'); return { processed: 1, failed: 0 }; });
 const vivo = defineJob('test.tick_vivo', async () => { count('vivo'); return { processed: 1, failed: 0 }; });
 
@@ -94,7 +106,11 @@ before(async () => {
       ('test.tick_eterno',   'Prueba turno: eterno',  'test_eterno',      '${ANUAL}', 300, 1, 1),
       ('test.tick_corte',    'Prueba turno: corte',   'test_corte',       '${ANUAL}', 300, 1, 1),
       ('test.tick_muerto',   'Prueba turno: muerto',  'test_muerto',      '${ANUAL}', 600, 2, 1),
-      ('test.tick_vivo',     'Prueba turno: vivo',    'test_muerto',      '${ANUAL}', 600, 2, 1);
+      ('test.tick_vivo',     'Prueba turno: vivo',    'test_muerto',      '${ANUAL}', 600, 2, 1),
+      ('test.tick_orden_arriba', 'Prueba turno: arriba', 'test_orden',    '${ANUAL}', 60,  1, 1),
+      ('test.tick_orden_abajo',  'Prueba turno: abajo',  'test_orden',    '${ANUAL}', 60,  1, 1),
+      ('test.tick_orden_suelto', 'Prueba turno: suelto', 'test_orden',    '${ANUAL}', 60,  1, 1),
+      ('test.tick_falla',    'Prueba turno: falla',   'test_backoff',     '${ANUAL}', 60,  4, 1);
   `);
 }, SETUP_TIMEOUT);
 
@@ -219,6 +235,36 @@ test('una fila running de un turno muerto deja de estar viva a su sliceS + 30 s,
     'la del turno (sliceS 40) murió hace 50 s: cuenta como intento y se reintenta');
   assert.deepEqual(s.left, [{ job: 'test.tick_vivo', reason: 'running' }], 'sin sliceS, 600 s de timeout: sigue viva');
   assert.equal(calls['vivo'], undefined);
+});
+
+test('con 3 recorredores, lo encadenado vencido a la vez que lo de arriba espera a que termine, y corre una vez con sus datos nuevos', async () => {
+  // La puesta al día: arriba (collect.post_metrics) y abajo (compute.baseline) vencidos por su cron a la vez.
+  const s = await turno('test_orden', [arriba, abajo, suelto], { concurrency: 3 });
+  assert.deepEqual(s.ran.map((r) => r.job).sort(), ['test.tick_orden_abajo', 'test.tick_orden_arriba', 'test.tick_orden_suelto']);
+  const a = tiempos['arriba']!;
+  const b = tiempos['abajo']!;
+  assert.ok(b.start >= a.end, `abajo empezó (${b.start}) después de que arriba terminara (${a.end})`);
+  assert.equal(b.source, 'chain', 'corrió como encadenado de arriba, no por su cron con los datos de antes');
+  assert.equal(s.ran.find((r) => r.job === 'test.tick_orden_abajo')?.reason, 'chained');
+  assert.ok(tiempos['suelto']!.start < a.end, 'lo que no depende de nada sigue en paralelo');
+  assert.equal((await jobRuns(db, 'test.tick_orden_abajo')).length, 1, 'una sola corrida de abajo en la pasada');
+});
+
+test('un fallo espera su backoff antes del reintento, como en el proceso largo (WORKER_RETRY_DELAY_S=60)', async () => {
+  const t0 = RELOJ.getTime();
+  const en = (s: number) => turno('test_backoff', [falla], { now: () => new Date(t0 + s * 1000), env: { WORKER_GROUPS: 'test_backoff', WORKER_RETRY_DELAY_S: '60', WORKER_RETRY_DELAY_MAX_S: '900' } });
+  const razon = (s: TickSummary) => s.left.find((l) => l.job === 'test.tick_falla')?.reason;
+
+  assert.deepEqual((await en(0)).ran.map((r) => [r.reason, r.status]), [['due', 'failed']], 'minuto 0: falla');
+  const a30 = await en(30);
+  assert.deepEqual(a30.ran, [], '0:30: dentro de los 60 s de espera, no se reintenta');
+  assert.equal(razon(a30), 'backoff');
+  assert.deepEqual((await en(60)).ran.map((r) => [r.reason, r.status]), [['retry', 'failed']], '1:00: pasada la espera, sí');
+  // Segundo fallo a la 1:00: la espera se dobla (60·2 = 120 s), hasta las 3:00.
+  assert.equal(razon(await en(150)), 'backoff', '2:30: dentro de los 120 s');
+  assert.deepEqual((await en(180)).ran.map((r) => [r.reason, r.status]), [['retry', 'failed']], '3:00: el tercer intento');
+  assert.deepEqual((await jobRuns(db, 'test.tick_falla')).map((r) => r.attempt), [1, 2, 3]);
+  assert.equal(calls['falla'], 3, 'tres golpes al proveedor en tres minutos, no uno por turno');
 });
 
 test('los trabajos que esperan en pgboss.job se cuentan y se avisan: el turno no los procesa', async () => {

@@ -18,12 +18,17 @@
  *       pidió no reintentar (retry: false)   → al día, no corre
  *     intentos ≥ max_attempts                → reintentos agotados hasta
  *                                              el próximo tick (se avisa)
+ *     el último intento empezó hace menos
+ *       de su backoff                        → espera (`backoff`)
  *     si no                                  → corre, attempt = intentos + 1
- *   (intentos = partial o failed reintentables + running colgadas)
+ *   (intentos = partial o failed reintentables + running colgadas;
+ *    backoff = WORKER_RETRY_DELAY_S·2^(intentos−1), con techo
+ *    WORKER_RETRY_DELAY_MAX_S: el de pg-boss en el proceso largo)
  *
  * Así una pasada corre lo vencido, la siguiente no repite lo ya corrido
- * y un fallo se reintenta en la pasada siguiente hasta max_attempts,
- * con la misma regla de reintento que el proceso largo (worker.ts).
+ * y un fallo se reintenta en una pasada posterior, pasada su espera,
+ * hasta max_attempts: la misma regla de reintento que el proceso largo
+ * (worker.ts, queueOptionsFor en boss.ts), sin el jitter de pg-boss.
  *
  * Encadenamiento (JobOptions.after): igual que en el proceso largo, si
  * un job termina ok o partial con processed > 0, lo que corre después
@@ -32,7 +37,10 @@
  *
  * Las corridas van una detrás de otra: primero lo que no corre después
  * de nada (collect.*), luego lo encadenado (compute.*), y dentro de cada
- * nivel por tick, el más viejo primero. Con timeout_s de 60–600 s por job, una
+ * nivel por tick, el más viejo primero. En un turno van hasta
+ * `concurrency` a la vez, y el orden se mantiene igual: un job no empieza
+ * mientras algo de su `after` siga pendiente o corriendo en la pasada
+ * (blockedBy, más abajo). Con timeout_s de 60–600 s por job, una
  * pasada completa cabe de sobra en el límite de un runner de GitHub.
  *
  * Dos pasadas a la vez (dos turnos de CIM-7 que se solapan, o un
@@ -129,8 +137,11 @@ export interface OnceRun {
   cut: boolean;
 }
 
-/** budget: vencido pero sin tiempo en el turno para empezarlo; sigue vencido para el siguiente. */
-export type OnceSkipReason = 'up_to_date' | 'running' | 'retries_exhausted' | 'no_handler' | 'no_cron' | 'disabled' | 'shutting_down' | 'budget';
+/**
+ * budget: vencido pero sin tiempo en el turno para empezarlo; sigue vencido para el siguiente.
+ * backoff: falló hace menos de su espera de reintento (retryDelayFor); la pasada que llegue después lo reintenta.
+ */
+export type OnceSkipReason = 'up_to_date' | 'running' | 'retries_exhausted' | 'backoff' | 'no_handler' | 'no_cron' | 'disabled' | 'shutting_down' | 'budget';
 
 export interface OnceSummary {
   /** ISO del reloj con el que se calcularon los ticks. */
@@ -175,7 +186,37 @@ interface TickState extends Record<string, unknown> {
   attempts: number;
   running: number;
   cuts: number;
+  /** Cuándo empezó el último intento fallido del tick (lo que cuenta en `attempts`); null si no hay. */
+  lastFailedAt: Date | null;
 }
+
+const EMPTY_STATE: TickState = { done: 0, attempts: 0, running: 0, cuts: 0, lastFailedAt: null };
+
+/** La espera entre reintentos, la misma que el proceso largo da a pg-boss (queueOptionsFor en boss.ts). */
+export interface RetryBackoff {
+  /** WORKER_RETRY_DELAY_S: la espera tras el primer fallo. */
+  delayS: number;
+  /** WORKER_RETRY_DELAY_MAX_S: el techo. */
+  maxS: number;
+}
+
+export function retryBackoffFrom(config: Pick<WorkerConfig, 'retryDelayS' | 'retryDelayMaxS'>): RetryBackoff {
+  return { delayS: config.retryDelayS, maxS: config.retryDelayMaxS };
+}
+
+/**
+ * Cuánto se espera antes del reintento que sigue a `attempts` fallos:
+ * delayS·2^(attempts−1), con techo maxS. Es el backoff exponencial de
+ * pg-boss (retryBackoff: true, retryDelay, retryDelayMax) sin su jitter.
+ */
+export function retryDelayMs(attempts: number, backoff: RetryBackoff): number {
+  if (attempts <= 0) return 0;
+  const s = Math.min(backoff.delayS * 2 ** Math.min(attempts - 1, 30), backoff.maxS);
+  return Math.max(0, s) * 1000;
+}
+
+/** Sin espera entre reintentos: lo que usa claimRun si quien llama no pasa la de su configuración. */
+const NO_BACKOFF: RetryBackoff = { delayS: 0, maxS: 0 };
 
 /** La marca en la metadata del reclamo: el timeout que de verdad tiene la corrida en un turno (CIM-7). */
 export const SLICE_KEY = 'sliceS';
@@ -208,7 +249,7 @@ interface StateQuery {
 async function tickStates(db: Queryable, items: readonly StateQuery[], now: Date): Promise<Map<string, TickState>> {
   const out = new Map<string, TickState>();
   if (items.length === 0) return out;
-  const { rows } = await db.query<TickState & { job_id: string }>(
+  const { rows } = await db.query<Omit<TickState, 'lastFailedAt'> & { job_id: string; last_failed_at: Date | string | null }>(
     `WITH t(job_id, cover_from, timeout_s) AS (SELECT * FROM unnest($1::text[], $2::timestamptz[], $3::int[])),
           r AS (
             SELECT t.job_id, t.cover_from, j.status, j.started_at, j.metadata,
@@ -227,26 +268,48 @@ async function tickStates(db: Queryable, items: readonly StateQuery[], now: Date
                 OR (r.status = 'running' AND NOT r.live)))::int AS attempts,
             count(r.job_id) FILTER (WHERE r.status = 'running' AND r.live)::int AS running,
             count(r.job_id) FILTER (WHERE r.started_at >= r.cover_from AND r.status = 'failed'
-                AND (r.metadata->>'${TICK_CUT_KEY}')::boolean IS TRUE)::int AS cuts
+                AND (r.metadata->>'${TICK_CUT_KEY}')::boolean IS TRUE)::int AS cuts,
+            max(r.started_at) FILTER (WHERE r.started_at >= r.cover_from AND (
+                (r.status IN ('partial','failed') AND (r.metadata->>'${NO_RETRY_KEY}')::boolean IS NOT TRUE
+                   AND (r.metadata->>'${TICK_CUT_KEY}')::boolean IS NOT TRUE)
+                OR (r.status = 'running' AND NOT r.live))) AS last_failed_at
        FROM t LEFT JOIN r ON r.job_id = t.job_id
       GROUP BY t.job_id`,
     [items.map((i) => i.def.id), items.map((i) => i.coverFrom.toISOString()), items.map((i) => i.def.timeoutS), now.toISOString()],
   );
   for (const r of rows) {
-    out.set(r.job_id, { done: Number(r.done ?? 0), attempts: Number(r.attempts ?? 0), running: Number(r.running ?? 0), cuts: Number(r.cuts ?? 0) });
+    out.set(r.job_id, {
+      done: Number(r.done ?? 0),
+      attempts: Number(r.attempts ?? 0),
+      running: Number(r.running ?? 0),
+      cuts: Number(r.cuts ?? 0),
+      lastFailedAt: r.last_failed_at ? new Date(r.last_failed_at) : null,
+    });
   }
   return out;
 }
 
 async function tickState(db: Queryable, def: JobDefinition, coverFrom: Date, now: Date): Promise<TickState> {
-  return (await tickStates(db, [{ def, coverFrom }], now)).get(def.id) ?? { done: 0, attempts: 0, running: 0, cuts: 0 };
+  return (await tickStates(db, [{ def, coverFrom }], now)).get(def.id) ?? EMPTY_STATE;
 }
 
-/** Lo que dice el estado de un tick: si toca correr, con qué intento y por qué; si no, por qué no. */
-function verdict(state: TickState, def: JobDefinition): { skip: OnceSkipReason } | { attempt: number; reason: OnceReason } {
+/**
+ * Lo que dice el estado de un tick: si toca correr, con qué intento y por qué; si no, por qué no.
+ *
+ * Un fallo espera su backoff antes del reintento, como en el proceso
+ * largo: sin esto, en modo por turnos (una pasada por minuto) un
+ * proveedor caído o que responde 429 recibiría max_attempts golpes en
+ * max_attempts minutos. La espera se mide desde que EMPEZÓ el intento
+ * fallido (started_at, que se escribe con el reloj de la pasada, el
+ * mismo de `now`; finished_at lo pone el now() de la base).
+ */
+function verdict(state: TickState, def: JobDefinition, now: Date, backoff: RetryBackoff): { skip: OnceSkipReason } | { attempt: number; reason: OnceReason } {
   if (state.running > 0) return { skip: 'running' };
   if (state.done > 0) return { skip: 'up_to_date' };
   if (state.attempts >= def.maxAttempts || state.cuts >= MAX_TICK_CUTS) return { skip: 'retries_exhausted' };
+  if (state.attempts > 0 && state.lastFailedAt && now.getTime() < state.lastFailedAt.getTime() + retryDelayMs(state.attempts, backoff)) {
+    return { skip: 'backoff' };
+  }
   return { attempt: state.attempts + state.cuts + 1, reason: state.attempts > 0 ? 'retry' : state.cuts > 0 ? 'resume' : 'due' };
 }
 
@@ -334,9 +397,10 @@ export async function planOnce(db: WorkerDatabase, config: WorkerConfig, registr
   await recordUnhandled(db, unhandled);
 
   const states = await tickStates(db, candidates, now);
+  const backoff = retryBackoffFrom(config);
   for (const c of candidates) {
-    const state = states.get(c.def.id) ?? { done: 0, attempts: 0, running: 0, cuts: 0 };
-    const v = verdict(state, c.def);
+    const state = states.get(c.def.id) ?? EMPTY_STATE;
+    const v = verdict(state, c.def, now, backoff);
     if ('skip' in v) {
       if (v.skip === 'retries_exhausted') {
         logger.warn('reintentos agotados hasta el próximo tick', { job: c.def.id, tick: c.tick.toISOString(), attempts: state.attempts, cuts: state.cuts, maxAttempts: c.def.maxAttempts });
@@ -399,14 +463,14 @@ export type Claim = { runId: number; attempt: number; reason: OnceReason } | { s
  * en la metadata del reclamo para que tickStates dé por muerta a tiempo
  * la fila de un turno que no llegó a cerrarla.
  */
-export async function claimRun(db: WorkerDatabase, item: PendingRun, at: Date, bossJobId: string, sliceS?: number): Promise<Claim> {
+export async function claimRun(db: WorkerDatabase, item: PendingRun, at: Date, bossJobId: string, sliceS?: number, backoff: RetryBackoff = NO_BACKOFF): Promise<Claim> {
   return db.transaction(async (tx) => {
     await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${JOB_LOCK_PREFIX}${item.def.id}`]);
     const state = await tickState(tx, item.def, item.coverFrom ?? at, at);
     let attempt = 1;
     let reason = item.reason;
     if (item.coverFrom) {
-      const v = verdict(state, item.def);
+      const v = verdict(state, item.def, at, backoff);
       if ('skip' in v) return v;
       ({ attempt, reason } = v);
     } else if (state.running > 0) {
@@ -427,6 +491,7 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
   const clock = opts.now ?? (() => new Date());
   const now = clock();
   const registry = new JobRegistry(opts.jobs);
+  const backoff = retryBackoffFrom(config);
   // La cuota (platform.limits) se lee solo si algo va a correr: un turno sin nada vencido no la necesita.
   let quota: Promise<QuotaManager> | null = opts.quota ? Promise.resolve(opts.quota) : null;
   const getQuota = () => (quota ??= createQuota(db, logger, opts.now, opts.http));
@@ -459,7 +524,7 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
     const sliceS = budget ? Math.max(1, Math.floor((budget.deadline - Date.now()) / 1000)) : next.def.timeoutS;
     const sliced = sliceS < next.def.timeoutS;
     const definition = sliced ? { ...next.def, timeoutS: sliceS } : next.def;
-    const claim = await claimRun(db, next, clock(), bossJobId, sliced ? sliceS : undefined);
+    const claim = await claimRun(db, next, clock(), bossJobId, sliced ? sliceS : undefined, backoff);
     if ('skip' in claim) {
       skipped.push({ job: next.def.id, reason: claim.skip });
       return;
@@ -507,9 +572,46 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
   };
 
   // `concurrency` recorredores sobre la misma pila; con 1 (--once), una corrida detrás de otra.
+  //
+  // Con más de uno, el orden «lo de arriba antes que lo de abajo» de
+  // planOnce no basta: si collect.post_metrics y compute.baseline están
+  // vencidos a la vez (la puesta al día tras un despliegue o una caída),
+  // el recorredor 2 tomaría compute.baseline en cuanto el 1 empieza
+  // collect.post_metrics y lo calcularía con los datos de ayer; después
+  // ran.has() impediría el encadenado. Por eso un recorredor no saca de
+  // la pila un job cuyo `after` sigue pendiente o corriendo en esta
+  // pasada (blockedBy): toma el siguiente que no lo esté o, si no queda
+  // ninguno, espera a que termine una corrida (settled).
+  const inFlight = new Set<string>();
+  let wake: () => void = () => undefined;
+  let settled = new Promise<void>((resolve) => { wake = resolve; });
+  const notify = (): void => {
+    const w = wake;
+    settled = new Promise<void>((resolve) => { wake = resolve; });
+    w();
+  };
+  const blockedBy = (item: PendingRun): boolean =>
+    (item.registration.options.after ?? []).some((id) => inFlight.has(id) || pending.some((p) => p.def.id === id && !ran.has(id)));
+  /** El siguiente de la pila que puede empezar ya; 'wait' si todos esperan a una corrida en marcha; null si no queda nada. */
+  const take = (): PendingRun | 'wait' | null => {
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const item = pending[i]!;
+      if (ran.has(item.def.id)) {
+        pending.splice(i, 1); // ya corrió en esta pasada (el encadenado y su tick): una vez por pasada
+        continue;
+      }
+      if (!blockedBy(item)) return pending.splice(i, 1)[0]!;
+    }
+    if (pending.length === 0) return null;
+    // Nada en marcha a lo que esperar (no debería pasar: `after` no tiene ciclos): el de arriba de la pila.
+    return inFlight.size > 0 ? 'wait' : pending.pop()!;
+  };
   const walker = async (): Promise<void> => {
-    for (let next = pending.pop(); next; next = pending.pop()) {
-      if (ran.has(next.def.id)) continue;
+    for (let next = take(); next; next = take()) {
+      if (next === 'wait') {
+        await settled;
+        continue;
+      }
       if (opts.signal?.aborted) {
         skipped.push({ job: next.def.id, reason: 'shutting_down' });
         interrupted++;
@@ -520,7 +622,13 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
         continue;
       }
       ran.add(next.def.id);
-      await run(next);
+      inFlight.add(next.def.id);
+      try {
+        await run(next);
+      } finally {
+        inFlight.delete(next.def.id);
+        notify();
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.floor(opts.concurrency ?? 1)) }, walker));

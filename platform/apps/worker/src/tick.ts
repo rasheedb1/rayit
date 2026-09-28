@@ -117,8 +117,12 @@ export interface TickRun {
   cut: boolean;
 }
 
-/** Por qué un job vencido quedó para después: sin tiempo para empezarlo, cortado a medias, o lo tiene otro turno. */
-export type TickLeftReason = 'budget' | 'cut' | 'running' | 'shutting_down';
+/**
+ * Por qué un job vencido quedó para después: sin tiempo para empezarlo,
+ * cortado a medias, lo tiene otro turno, o falló hace menos que su
+ * espera de reintento (backoff, la misma que el proceso largo).
+ */
+export type TickLeftReason = 'budget' | 'cut' | 'running' | 'backoff' | 'shutting_down';
 
 export interface TickSummary {
   /** El reloj del turno, ISO. */
@@ -149,7 +153,7 @@ export function tickBudget(budgetMs: number, startedAt: number = Date.now()): On
   return { deadline: startedAt + budgetMs - marginMs, minSliceMs: Math.min(TICK_MIN_SLICE_MS, Math.floor(budgetMs * 0.25)) };
 }
 
-const LEFT_REASONS: ReadonlySet<string> = new Set<TickLeftReason>(['budget', 'running', 'shutting_down']);
+const LEFT_REASONS: ReadonlySet<string> = new Set<TickLeftReason>(['budget', 'running', 'backoff', 'shutting_down']);
 
 export function toTickSummary(s: OnceSummary, budgetMs: number, elapsedMs: number, orphanedBossJobs: number | null = null): TickSummary {
   return {
