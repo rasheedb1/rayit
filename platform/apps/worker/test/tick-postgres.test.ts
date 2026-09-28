@@ -13,9 +13,14 @@
  * quitándolo: rojo).
  *
  * También: dos turnos a la vez sobre outbound.dispatch y el seed de
- * outreach sacan el mensaje una sola vez, y TICK_CONCURRENCY corridas que
+ * outreach sacan el mensaje una sola vez, TICK_CONCURRENCY corridas que
  * retienen una transacción y escriben api_call_log con otra conexión
- * caben en el pool del turno (TICK_POOL_MAX).
+ * caben en el pool del turno (TICK_POOL_MAX), y un job cortado dentro de
+ * una sentencia larga suelta su conexión al acabar el presupuesto
+ * (statement_timeout de la base del turno, openTickDatabase).
+ *
+ * En local, sin Docker: apps/worker/README.md, «Pruebas» (Postgres 16 de
+ * embedded-postgres, el montaje, migrar con seed y TEST_DATABASE_URL).
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,10 +32,11 @@ import { DEMO_WORKSPACE_ID } from '../src/jobs/ventas/demo-ids.ts';
 import { prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
 import { motorDbFromJob } from '../src/jobs/ventas/motor-db.ts';
 import { dispatchJob, DISPATCH_JOB_ID } from '../src/jobs/ventas/outbound.dispatch.ts';
+import { loadConfig } from '../src/runner/config.ts';
 import { PostgresDatabase, type Queryable, type WorkerDatabase } from '../src/runner/db.ts';
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
 import { defineJob, type JobRegistration } from '../src/runner/registry.ts';
-import { runTick, TICK_CONCURRENCY, TICK_POOL_MAX, type RunTickOptions, type TickSummary } from '../src/tick.ts';
+import { openTickDatabase, runTick, TICK_CONCURRENCY, TICK_POOL_MAX, type RunTickOptions, type TickSummary } from '../src/tick.ts';
 import { SETUP_TIMEOUT } from './helpers/harness.ts';
 
 const REAL = Boolean(process.env.TEST_DATABASE_URL);
@@ -57,6 +63,19 @@ const retiene = (i: number): JobRegistration => defineJob(`test.pg_pool_${i}`, a
   return { processed: 1, failed: 0 };
 });
 const POOL_JOBS = Array.from({ length: TICK_CONCURRENCY }, (_, i) => retiene(i));
+/** Cómo terminó la sentencia de un minuto del dormilón, y cuánto duró; null mientras sigue. */
+let despertar: { error: string; ms: number } | null = null;
+/** Un job que no mira ctx.signal y se mete en una sentencia de un minuto (como compute.baseline en una tabla grande). */
+const dormilon = defineJob('test.pg_dormilon', async (_p, ctx) => {
+  const inicio = Date.now();
+  try {
+    await ctx.db.query('SELECT pg_sleep(60)');
+    despertar = { error: 'ninguno', ms: Date.now() - inicio };
+  } catch (err) {
+    despertar = { error: err instanceof Error ? err.message : String(err), ms: Date.now() - inicio };
+  }
+  return { processed: 1, failed: 0 };
+});
 
 /** Un pool propio, como el de una invocación de Vercel (runTickFromEnv): SET ROLE mc_worker, TICK_POOL_MAX conexiones. */
 function pool(): PostgresDatabase {
@@ -105,6 +124,7 @@ describe('el turno contra Postgres real (TEST_DATABASE_URL)', { skip: REAL ? fal
     await t.admin(`
       INSERT INTO job_definition (id, label_es, queue, default_cron, timeout_s, max_attempts, max_concurrency) VALUES
         ('test.pg_contado', 'Prueba pg: contado', 'test_pg_carrera', '${ANUAL}', 60, 1, 1),
+        ('test.pg_dormilon', 'Prueba pg: dormilón', 'test_pg_dormilon', '${ANUAL}', 300, 1, 1),
         ${pools};
     `);
   }, SETUP_TIMEOUT);
@@ -162,5 +182,26 @@ describe('el turno contra Postgres real (TEST_DATABASE_URL)', { skip: REAL ? fal
     assert.ok(s.elapsedMs < 5_000, `sin esperar conexión hasta el corte: ${s.elapsedMs} ms`);
     const log = await leer<{ n: number }>(`SELECT count(*)::int AS n FROM api_call_log WHERE endpoint = 'test.pool'`);
     assert.equal(log[0]?.n, TICK_CONCURRENCY);
+  });
+
+  test('un job cortado dentro de una sentencia larga suelta su conexión al acabar el presupuesto (statement_timeout)', async () => {
+    const BUDGET = 3_000;
+    const config = loadConfig({ WORKER_DATABASE_URL: t.url! }, { mode: 'postgres', jobPoolMax: TICK_POOL_MAX });
+    const db = openTickDatabase(config, BUDGET, logger);
+    abiertas.push(db);
+
+    const s = await turno(db, 'test_pg_dormilon', [dormilon], { budgetMs: BUDGET });
+    assert.deepEqual(s.ran.map((r) => [r.job, r.cut]), [['test.pg_dormilon', true]], 'el turno lo cortó y respondió a tiempo');
+    assert.ok(s.elapsedMs < BUDGET, `${s.elapsedMs} ms`);
+    assert.equal(despertar, null, 'al responder, el job sigue dentro de su pg_sleep(60): no mira la señal');
+    // …hasta el statement_timeout de la sesión (el presupuesto): la base cancela la sentencia y la conexión vuelve al pool.
+    const hasta = Date.now() + BUDGET + 2_000;
+    while (despertar === null && Date.now() < hasta) await sleep(50);
+    const d = despertar as { error: string; ms: number } | null;
+    assert.match(d?.error ?? 'sigue durmiendo', /statement timeout/, 'la cortó la base, no los 60 s');
+    assert.ok((d?.ms ?? Infinity) < BUDGET + 1_000, `a los ${d?.ms} ms, no a los 60 s`);
+    // El timeout es de las conexiones del turno: una conexión cualquiera sigue con el de la base.
+    const [fila] = await leer<{ v: string }>(`SELECT current_setting('statement_timeout') AS v`);
+    assert.equal(fila?.v, '0');
   });
 });

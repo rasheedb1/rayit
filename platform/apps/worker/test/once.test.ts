@@ -19,7 +19,7 @@ import { lastTick } from '../src/runner/cron.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { loadJobDefinitions } from '../src/runner/definitions.ts';
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
-import { NO_RETRY_KEY, onceExitCode, runOnce, type OnceSummary } from '../src/runner/once.ts';
+import { NO_RETRY_KEY, onceExitCode, runOnce, TICK_CUT_KEY, type OnceSummary } from '../src/runner/once.ts';
 import { defineJob } from '../src/runner/registry.ts';
 import { formatHealth } from '../src/runner/salud.ts';
 import { jobRuns, openTestDatabase, testConfig } from './helpers/harness.ts';
@@ -271,4 +271,31 @@ test('10 · la salud: última corrida, última buena, fallos desde entonces y «
   assert.match(texto, /test\.once_falla\s+failed .*nunca terminó bien · 2 fallo\(s\) desde entonces/);
   assert.match(texto, /Datos al: todavía no/);
   assert.doesNotMatch(texto, /test\.once_nada/, 'un job sin handler no ensucia la salud');
+});
+
+test('11 · la salud no cuenta como fallo un corte del turno (CIM-7): se retoma, no falló', async () => {
+  // Tras una corrida ok, un corte del presupuesto: failed / timeout / tickCut, como lo deja el turno.
+  await db.raw.query(
+    `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, error, metadata)
+     VALUES ('test.once_arriba', 'failed', 1, now() + interval '1 second', now() + interval '2 seconds', 'timeout', $1::jsonb)`,
+    [JSON.stringify({ [TICK_CUT_KEY]: true })],
+  );
+  const h = Object.fromEntries((await getWorkerHealth(db)).map((x) => [x.jobId, x]));
+  assert.equal(h['test.once_arriba']?.failedSinceOk, 0, 'el corte no es un fallo desde la última buena');
+  assert.equal(h['test.once_arriba']?.lastStatus, 'failed');
+  assert.equal(h['test.once_arriba']?.lastCut, true);
+  assert.equal(h['test.once_falla']?.lastCut, false);
+  assert.equal(h['test.once_falla']?.failedSinceOk, 2, 'los fallos de verdad se siguen contando');
+  const texto = formatHealth(Object.values(h), new Date());
+  assert.match(texto, /test\.once_arriba\s+cortado por el turno, se retoma .* · última buena hace \d+ min\n/);
+  assert.doesNotMatch(texto, /test\.once_arriba.*(fallo|timeout)/);
+
+  // Y un fallo de verdad después del corte sí cuenta (solo ese).
+  await db.raw.query(
+    `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, error)
+     VALUES ('test.once_arriba', 'failed', 2, now() + interval '3 seconds', now() + interval '4 seconds', 'Error: proveedor caído')`,
+  );
+  const despues = (await getWorkerHealth(db)).find((x) => x.jobId === 'test.once_arriba');
+  assert.equal(despues?.failedSinceOk, 1);
+  assert.equal(despues?.lastCut, false);
 });

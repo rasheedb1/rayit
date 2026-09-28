@@ -29,8 +29,10 @@ import { PgliteDatabase } from '../src/runner/db-pglite.ts';
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
 import { claimRun, MAX_TICK_CUTS, TICK_CUT_KEY, type Claim } from '../src/runner/once.ts';
 import { defineJob, type JobDefinition, type JobRegistration } from '../src/runner/registry.ts';
-import { runTick, tickBudget, type RunTickOptions, type TickSummary } from '../src/tick.ts';
+import { ConfigError } from '../src/runner/config.ts';
+import { assertTickTarget, runTick, runTickFromEnv, tickBudget, type RunTickOptions, type TickSummary } from '../src/tick.ts';
 import { jobRuns, SETUP_TIMEOUT } from './helpers/harness.ts';
+import { bogota, motorKit } from './helpers/motor-kit.ts';
 
 const ANUAL = '0 0 1 1 *';
 /** El reloj de los turnos: fijo (ver arriba). */
@@ -76,6 +78,9 @@ const vivo = defineJob('test.tick_vivo', async () => { count('vivo'); return { p
 let web: EmbeddedDb;
 let db: PgliteDatabase;
 let guard: NetworkGuard;
+/** El utillaje del motor (VEN-10) sobre esta base: lo que siembra va como superusuario (la sesión de la PGlite es mc_app, con RLS). */
+const comoSuperusuario = () => ({ raw: { exec: (sql: string) => web.execAsSuperuser(sql), query: (text: string, params?: unknown[]) => web.queryAsSuperuser(text, params) } }) as unknown as PgliteDatabase;
+const kit = motorKit({ db: comoSuperusuario, motor: () => motorDbFromJob(db), prefix: '0000017c', slug: 'turno' });
 const sink = new MemorySink();
 const logger = createLogger({ level: 'debug', sink });
 
@@ -317,6 +322,61 @@ test('outbound.dispatch sobre el seed de outreach: dos turnos a la vez sacan el 
   const again = await turno('sales', [dispatchJob], { now: () => reloj, env, budgetMs: 45_000 });
   assert.deepEqual(again.ran, [], 'el mismo tick de */2 ya está cubierto');
   assert.equal((await jobRuns(db, DISPATCH_JOB_ID)).length, 1);
+});
+
+test('outbound.dispatch con más toques vencidos de los que caben en una pasada: el turno envía los que caben, el siguiente tick de */2 el resto, y ninguno sale dos veces', async () => {
+  // Un martes a las 10:00 de Bogotá, dentro de la ventana: el tick de */2 de las 10:00 y el de las 10:02.
+  const t1 = bogota('2026-10-06', '10:00');
+  const t2 = new Date(t1.getTime() + 2 * 60_000);
+  const t3 = new Date(t1.getTime() + 4 * 60_000);
+  const TOQUES = 6;
+  const w = await kit.workspace(1, { contacts: TOQUES, dailyCap: 100, warmupStartedAt: null });
+  await kit.enroll(w, bogota('2026-10-06', '09:00'));
+  // Los primeros correos de los seis, vencidos a la vez; solo este workspace despacha.
+  await web.queryAsSuperuser(`UPDATE outbound_touch SET scheduled_for = $2 WHERE workspace_id = $1 AND step_id = $3`, [w.id, bogota('2026-10-06', '09:40').toISOString(), w.steps[0]]);
+  await web.queryAsSuperuser(`UPDATE outbound_policy SET enabled = false WHERE workspace_id <> $1`, [w.id]);
+  const env = { WORKER_GROUPS: 'sales', OUTREACH_CHANNELS: 'fake', APP_URL: 'https://oncue.test' };
+  const enviados = async () => (await web.queryAsSuperuser<{ id: string; provider_message_id: string | null; attempt_count: number }>(
+    `SELECT id, provider_message_id, attempt_count FROM outbound_touch WHERE workspace_id = $1 AND status = 'sent'`, [w.id])).rows;
+
+  // Un turno corto: el job tiene unos 6 s, y a ESTIMATED_SEND_MS por toque caben 2.
+  const primero = await turno('sales', [dispatchJob], { now: () => t1, env, budgetMs: 8_000 });
+  const c1 = (await jobRuns(db, DISPATCH_JOB_ID)).at(-1);
+  const cabian = Number(c1?.metadata['claimBudget']);
+  assert.ok(cabian >= 1 && cabian < TOQUES, `la pasada solo podía con ${cabian} de ${TOQUES}`);
+  assert.deepEqual(primero.ran.map((r) => [r.job, r.status, r.processed, r.cut]), [[DISPATCH_JOB_ID, 'ok', cabian, false]],
+    'termina solo, antes de su plazo: devuelve a la cola lo que no intentó, sin corte');
+  assert.equal((await enviados()).length, cabian);
+
+  // El mismo tick de */2 ya está cubierto: un turno repetido no envía más.
+  assert.deepEqual((await turno('sales', [dispatchJob], { now: () => new Date(t1.getTime() + 30_000), env, budgetMs: 8_000 })).ran, []);
+  assert.equal((await enviados()).length, cabian);
+
+  // El tick siguiente retoma lo que quedó en la cola.
+  const segundo = await turno('sales', [dispatchJob], { now: () => t2, env, budgetMs: 45_000 });
+  assert.deepEqual(segundo.ran.map((r) => [r.job, r.status, r.processed]), [[DISPATCH_JOB_ID, 'ok', TOQUES - cabian]]);
+  const tercero = await turno('sales', [dispatchJob], { now: () => t3, env, budgetMs: 45_000 });
+  assert.deepEqual(tercero.ran.map((r) => [r.status, r.processed]), [['ok', 0]], 'nada más que enviar');
+
+  const filas = await enviados();
+  assert.equal(filas.length, TOQUES, 'los seis salieron');
+  assert.ok(filas.every((f) => f.attempt_count === 1), 'cada uno en un solo intento');
+  const envios = [primero, segundo, tercero].flatMap((t) => t.ran).reduce((n, r) => n + r.processed, 0);
+  assert.equal(envios, TOQUES, 'tantos envíos como toques: ninguno salió dos veces');
+  assert.ok(filas.every((f) => f.provider_message_id), 'todos con su mensaje del proveedor');
+});
+
+test('contra una base remota el turno solo corre en el despliegue de producción de Vercel (o con TICK_ALLOW_REMOTE=1)', async () => {
+  const supabase = 'postgresql://mc_worker_login.x:clave@aws-0-ca-central-1.pooler.supabase.com:5432/postgres';
+  // Lo que pasa con `pnpm --filter @mc/web dev` y el .env.local de `make db.unlock`: se niega ANTES de abrir el pool (sin red).
+  await assert.rejects(runTickFromEnv({ budgetMs: 4_000, logger, env: { DATABASE_URL_DIRECT: supabase, APP_URL: 'http://localhost:3100' } }),
+    (err: unknown) => err instanceof ConfigError && /solo corre en el despliegue de producción de Vercel/.test(err.message) && /WORKER_DATABASE_URL/.test(err.message));
+  await assert.rejects(runTickFromEnv({ budgetMs: 4_000, logger, env: { WORKER_DATABASE_URL: supabase, VERCEL_ENV: 'preview' } }), ConfigError,
+    'tampoco en una vista previa de Vercel');
+  assert.throws(() => assertTickTarget({ VERCEL_ENV: 'preview' }, { databaseUrl: supabase }), ConfigError);
+  assert.doesNotThrow(() => assertTickTarget({ VERCEL_ENV: 'production' }, { databaseUrl: supabase }));
+  assert.doesNotThrow(() => assertTickTarget({ TICK_ALLOW_REMOTE: '1' }, { databaseUrl: supabase }), 'a sabiendas');
+  assert.doesNotThrow(() => assertTickTarget({}, { databaseUrl: 'postgres://mc:mc@localhost:5432/oncue' }), 'tu Postgres de Docker');
 });
 
 test('con el canal falso pedido contra una base que no es local, el turno no arranca', async () => {

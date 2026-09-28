@@ -20,7 +20,9 @@ export function formatHealth(rows: readonly WorkerJobHealth[], now: Date): strin
   const withHandler = rows.filter((r) => r.enabled && r.lastStatus !== null && !(r.lastStatus === 'skipped' && r.lastError === SKIPPED_NO_HANDLER));
   const neverRan = rows.filter((r) => r.enabled && r.lastStatus === null);
   const lines = withHandler.map((r) => {
-    const last = `${r.lastStatus!.padEnd(8)} ${r.lastRunAt} (${timeAgo(r.lastRunAt!, now)})`;
+    // Un corte del turno (CIM-7) no es un fallo: la fila dice failed/timeout, pero el turno siguiente la retoma.
+    const status = r.lastCut ? 'cortado por el turno, se retoma' : r.lastStatus!.padEnd(8);
+    const last = `${status} ${r.lastRunAt} (${timeAgo(r.lastRunAt!, now)})`;
     const lastOk = r.lastOkAt ? `última buena ${timeAgo(r.lastOkAt, now)}` : 'nunca terminó bien';
     const failures = r.failedSinceOk > 0 ? ` · ${r.failedSinceOk} fallo(s) desde entonces` : '';
     return `  ${r.jobId.padEnd(26)} ${last} · ${lastOk}${failures}`;
