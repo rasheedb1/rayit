@@ -27,7 +27,7 @@ describe("la pastilla de mora", () => {
   it("vence pronto en ámbar, al día en verde y cobrada en neutral", () => {
     expect(pillForReceivable({ bucket: "vence_pronto", daysOverdue: -7, status: "sent" })).toEqual({
       kind: "warn",
-      text: "Vence en 7 días",
+      text: "Vence dentro de 7 días",
     });
     expect(pillForReceivable({ bucket: "al_dia", daysOverdue: -23, status: "sent" })).toEqual({
       kind: "good",

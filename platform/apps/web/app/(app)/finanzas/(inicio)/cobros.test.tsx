@@ -204,7 +204,7 @@ describe("/finanzas con el seed coincide con el mock", () => {
   it("las otras dos llevan su color y su frase, no un guion", async () => {
     render(await pintar());
     const pronto = fila("Café Alma");
-    expect(within(pronto).getByText("Vence en 7 días")).toHaveClass("text-warn");
+    expect(within(pronto).getByText("Vence dentro de 7 días")).toHaveClass("text-warn");
     const alDia = fila("Fresko Market");
     expect(within(alDia).getByText("Al día")).toHaveClass("text-good");
   });
