@@ -68,7 +68,7 @@ const ES: GuidancePhrases = {
   angleOpening: {
     presencia: () => 'algo concreto de su último post, en una o dos frases',
     encaje_audiencia: () => 'la coincidencia entre tu audiencia y su cliente, con una cifra de tu perfil',
-    prueba_desempeno: (s) => `un video tuyo parecido a lo que necesita ${s}, con sus views frente a tu mediana`,
+    prueba_desempeno: (s) => `un video tuyo parecido a lo que necesita ${s}, con sus visualizaciones frente a tu mediana`,
     concepto_creativo: (s) => `una idea de video concreta para ${s}`,
     prueba_social: () => 'el resultado medido de una campaña tuya con una marca del mismo sector',
     // El paso de cierre exige el media kit (requires_asset); la cotización solo si la creadora tiene una pública.

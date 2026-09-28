@@ -443,7 +443,7 @@ describe("la edición de la narrativa", () => {
     fireEvent.click(screen.getByRole("button", { name: "Editar" }));
     const area = screen.getByLabelText("Texto de la narrativa") as HTMLTextAreaElement;
     expect(area.value).not.toContain("[claim:");
-    expect(area.value).toContain("mediana de ⟦115,4 mil⟧ views");
+    expect(area.value).toContain("mediana de ⟦115,4 mil⟧ visualizaciones");
     expect(area.className).not.toContain("font-mono");
     // Sin tocar nada, lo que se guarda es la narrativa con sus marcas, igual que estaba.
     fireEvent.click(screen.getByRole("button", { name: "Guardar narrativa" }));

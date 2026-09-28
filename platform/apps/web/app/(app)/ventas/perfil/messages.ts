@@ -232,10 +232,10 @@ export const MESSAGES = {
           : `Parte de tus seguidores de ${red} que son ${genero === "f" ? "mujeres" : "hombres"}`,
       audienceCountry: (red: string, pais: string) => `Parte de tus seguidores de ${red} que vive en ${pais}`,
       nonFollowers: (red: string) => `Alcance en personas que no siguen tu cuenta: mediana por video en ${red}`,
-      median: (red: string, corte: string) => `Views medianas por video en ${red}, ${corte}`,
+      median: (red: string, corte: string) => `Visualizaciones medianas por video en ${red}, ${corte}`,
       scoredVideos: "Videos con puntaje frente a tu mediana",
       videoMultiple: (titulo: string, red: string, corte: string) => `Veces tu mediana de ${red} que hizo «${titulo}», ${corte}`,
-      videoViews: (titulo: string, red: string, corte: string) => `Views de «${titulo}» en ${red}, ${corte}`,
+      videoViews: (titulo: string, red: string, corte: string) => `Visualizaciones de «${titulo}» en ${red}, ${corte}`,
       videoDuration: (titulo: string) => `Duración de «${titulo}»`,
       whyGroup: (axis: WhyAxis, group: string, titulo: string) =>
         `${GRUPOS[axis][group] ?? group}, sin contar «${titulo}»: su mediana, en veces tu mediana`,
@@ -245,7 +245,7 @@ export const MESSAGES = {
       tone: (rasgo: ToneTrait) => `Parte de tus captions ${TONO_CAPTIONS[rasgo]}`,
       captionsRead: "Captions leídos para inferir formatos y tono",
       // Las de campaña son las del reporte (campaign_result), no las de hoy: Campañas enseña las vivas (pulido r3).
-      campaignViews: (marca: string) => `Views de la campaña con ${marca}, al cierre del reporte`,
+      campaignViews: (marca: string) => `Visualizaciones de la campaña con ${marca}, al cierre del reporte`,
       campaignMultiple: (marca: string) => `Veces tu mediana que hizo la campaña con ${marca}, al cierre del reporte`,
       campaignBrandFollowers: (marca: string) => `Seguidores que ganó ${marca} con la campaña, al cierre del reporte`,
       campaignRedemptions: (marca: string) => `Canjes del código de ${marca}, al cierre del reporte`,
@@ -279,7 +279,7 @@ export const MESSAGES = {
 
   desempeno: {
     title: "Qué te funciona",
-    medianas: "Views medianas por video",
+    medianas: "Visualizaciones medianas por video",
     medianaNota: (n: string, confiable: boolean, corte: string) => `${n} videos · ${corte}${confiable ? "" : " · muestra corta"}`,
     mejores: "Tus cinco mejores videos",
     mejoresMeta: (n: string) => `Frente a tu mediana, entre ${n} videos con puntaje`,

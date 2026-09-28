@@ -16,7 +16,7 @@ export interface CifraVista {
   key: Claim["key"];
   /** La cifra escrita con Intl y el locale, la moneda y la zona del workspace. */
   valor: string;
-  /** Qué es («Views medianas por video en TikTok, a los 7 días de publicado»). */
+  /** Qué es («Visualizaciones medianas por video en TikTok, a los 7 días de publicado»). */
   que: string;
   /** De dónde sale: tabla, red y fecha de la lectura («Demografía de la cuenta · TikTok · al 24 de septiembre de 2026»). */
   origen: string;

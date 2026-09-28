@@ -9,7 +9,7 @@ const cifra = (id: string, valor: string, que: string): CifraVista => ({
 });
 const CIFRAS = Object.fromEntries(
   [
-    cifra("mediana-tiktok", "115,4 mil", "Views medianas por video en TikTok"),
+    cifra("mediana-tiktok", "115,4 mil", "Visualizaciones medianas por video en TikTok"),
     cifra("porque-a-duracion-corto", "3,0×", "Tus otros videos cortos"),
     cifra("porque-b-pieza-reel", "3,0×", "Tus otros reels"),
   ].map((c) => [c.id, c]),

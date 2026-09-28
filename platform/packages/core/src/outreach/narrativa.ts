@@ -642,10 +642,10 @@ export function claimLabelEs(c: Pick<Claim, 'key' | 'params'>, language: Narrati
     }
     case 'audience.country': return `Parte de los seguidores de ${r} que vive en ${regionName(p.bucket ?? '', language)}`;
     case 'non_followers': return `Alcance en personas que no siguen la cuenta, mediana por video en ${r}`;
-    case 'median': return `Views medianas por video en ${r}${corte}`;
+    case 'median': return `Visualizaciones medianas por video en ${r}${corte}`;
     case 'scored_videos': return 'Videos con puntaje frente a su mediana';
     case 'video.multiple': return `Veces su mediana de ${r}${corte} que hizo «${p.title}»`;
-    case 'video.views': return `Views de «${p.title}» en ${r}${corte}`;
+    case 'video.views': return `Visualizaciones de «${p.title}» en ${r}${corte}`;
     case 'video.duration': return `Duración de «${p.title}»`;
     case 'why.group': return `Veces su mediana, mediana de sus OTROS videos que ${grupoEs(p.axis!, p.group!)} (sin contar «${p.title ?? ''}»)`;
     case 'why.rest': return `Veces su mediana, mediana de sus videos que no ${grupoEs(p.axis!, p.group!)}`;
@@ -653,7 +653,7 @@ export function claimLabelEs(c: Pick<Claim, 'key' | 'params'>, language: Narrati
     case 'format.content': return `Publicaciones que son ${PORQUE_ES.contents[p.content!]}`;
     case 'tone': return `Parte de sus captions en los que ${PORQUE_ES.tone[p.trait!]}`;
     case 'captions_read': return 'Captions leídos para inferir formatos y tono';
-    case 'campaign.views': return `Views de la campaña con ${p.company}`;
+    case 'campaign.views': return `Visualizaciones de la campaña con ${p.company}`;
     case 'campaign.multiple': return `Veces su mediana que hizo la campaña con ${p.company}`;
     case 'campaign.brand_followers': return `Seguidores que ganó ${p.company} con la campaña`;
     case 'campaign.redemptions': return `Canjes del código de ${p.company}`;
@@ -726,7 +726,7 @@ export function templateNarrative(perfil: PerfilComercial, opts: TemplateOptions
   const mediana = (mejor && performance.medians.find((md) => md.platformId === mejor.platformId)) ?? performance.medians[0];
   if (mediana) {
     const cuando = CUT_PHRASE_ES[mediana.cutHours];
-    p2.push(`En ${red(mediana.platformId)}${cuando ? `, ${cuando},` : ''} mis videos tienen una mediana de ${m(mediana.claimId)} views.`);
+    p2.push(`En ${red(mediana.platformId)}${cuando ? `, ${cuando},` : ''} mis videos tienen una mediana de ${m(mediana.claimId)} visualizaciones.`);
   }
   if (mejor) {
     const r = red(mejor.platformId);
@@ -735,8 +735,8 @@ export function templateNarrative(perfil: PerfilComercial, opts: TemplateOptions
     const base = mejor.baselineClaimId && mejor.baselineClaimId !== mediana?.claimId ? mejor.baselineClaimId : null;
     p2.push(
       mejor.viewsClaimId
-        ? `Mi mejor video, «${mejor.title}» en ${r}, llegó a ${m(mejor.viewsClaimId)} views${cuando ? ` ${cuando}` : ''}: ${m(mejor.multipleClaimId)} mi mediana de ${r}${base ? `, que a esa edad es de ${m(base)} views` : ''}.`
-        : `Mi mejor video, «${mejor.title}» en ${r}, hizo ${m(mejor.multipleClaimId)} mi mediana de ${r}${base ? `, que es de ${m(base)} views` : ''}.`,
+        ? `Mi mejor video, «${mejor.title}» en ${r}, llegó a ${m(mejor.viewsClaimId)} visualizaciones${cuando ? ` ${cuando}` : ''}: ${m(mejor.multipleClaimId)} mi mediana de ${r}${base ? `, que a esa edad es de ${m(base)} visualizaciones` : ''}.`
+        : `Mi mejor video, «${mejor.title}» en ${r}, hizo ${m(mejor.multipleClaimId)} mi mediana de ${r}${base ? `, que es de ${m(base)} visualizaciones` : ''}.`,
     );
     // Cómo es el video: la explicación principal. La razón, solo si los datos la sostienen.
     const w = mejor.why;
@@ -760,7 +760,7 @@ export function templateNarrative(perfil: PerfilComercial, opts: TemplateOptions
   for (const c of perfil.socialProof.slice(0, 2)) {
     const cifras = c.claimIds.slice(0, 2).map((id) => {
       switch (porId[id]?.key) {
-        case 'campaign.views': return `${m(id)} views`;
+        case 'campaign.views': return `${m(id)} visualizaciones`;
         case 'campaign.brand_followers': return `${m(id)} seguidores nuevos para la marca`;
         case 'campaign.redemptions': return `${m(id)} canjes del código`;
         case 'campaign.revenue': return `${m(id)} en ventas atribuidas`;
@@ -814,7 +814,7 @@ Reglas que no se negocian:
 4. Solo menciona marcas, campañas y videos que aparecen en los datos. No inventes clientes, premios ni resultados.
 5. Puedes nombrar un video, una campaña o una tarifa copiando su nombre tal cual aparece entre «».
 6. Nada de superlativos vacíos ("increíble", "el mejor"), urgencia falsa ni presión. Máximo cien palabras por párrafo.
-7. Cada marca se reemplaza por su valor tal como aparece en CIFRAS: escribe alrededor lo que falte (por ejemplo «views»), sin repetir lo que el valor ya trae (%, ×, la moneda, «s»). La palabra que pongas justo después de una marca tiene que ser lo que esa cifra mide según su etiqueta: una mediana de views nunca va seguida de «seguidores».
+7. Cada marca se reemplaza por su valor tal como aparece en CIFRAS: escribe alrededor lo que falte (por ejemplo «visualizaciones»), sin repetir lo que el valor ya trae (%, ×, la moneda, «s»). La palabra que pongas justo después de una marca tiene que ser lo que esa cifra mide según su etiqueta: una mediana de visualizaciones nunca va seguida de «seguidores».
 8. Una cifra «veces su mediana» se compara con la mediana de SU red y SU corte: si la pones junto a una mediana, que sea la que dice su etiqueta, y nombra la red.
 9. Una razón de «lo que lo distingue» compara los OTROS videos con ese rasgo contra los que no lo tienen: dilo así, sin atribuirle al video un resultado que no es suyo. Si no hay razón, describe cómo es el video y no inventes una causa.
 10. Responde solo con los tres párrafos.`,

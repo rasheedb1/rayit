@@ -515,13 +515,13 @@ test('el redactor falso cita por prioridad: la campaña con esta marca, luego la
   const claims = [youtube, ytViews, ...CLAIMS, campana];
   for (let attempt = 1; attempt <= 4; attempt++) {
     const fresko = await gen.generate(fakeInput({ angle: { ...angle, proofSources: [...angle.proofSources] }, claims, signal: null, attempt }));
-    assert.match(fresko.body, /(Mis videos de TikTok tienen una mediana de|En TikTok, un video mío típico llega a) 115\.446 \[claim:baseline:tiktok:median_views\] views/, fresko.body);
+    assert.match(fresko.body, /(Mis videos de TikTok tienen una mediana de|En TikTok, un video mío típico llega a) 115\.446 \[claim:baseline:tiktok:median_views\] visualizaciones/, fresko.body);
     const alma = await gen.generate(fakeInput({
       angle: { ...angle, proofSources: [...angle.proofSources] }, claims, signal: null, attempt, company: { name: 'Café Alma', industry: 'alimentos', city: 'Bogotá', country: 'CO' },
     }));
     // Ronda 5: ya trabajaron juntos, así que abre con esa relación y cita la campaña como «esa campaña».
     assert.match(alma.body, /(Después de la campaña que hicimos juntos con|Sigo con buen recuerdo de nuestra campaña con) Café Alma/, alma.body);
-    assert.match(alma.body, /Esa campaña sumó 412\.000 \[claim:campaign:c1:views\] views\./, alma.body);
+    assert.match(alma.body, /Esa campaña sumó 412\.000 \[claim:campaign:c1:views\] visualizaciones\./, alma.body);
     assert.doesNotMatch(alma.body, /Sigo lo que hace|hay algo que quiero proponerte/, 'no es un correo en frío');
     assert.ok(alma.body.split('Café Alma').length - 1 <= 2, `la marca, dos veces como mucho: ${alma.body}`);
     assert.ok(fresko.body.split(fakeInput().company.name).length - 1 <= 2, `la marca, dos veces como mucho: ${fresko.body}`);

@@ -32,16 +32,16 @@ export function postTitle(caption: string | null | undefined, lang: ClaimLang): 
 
 export const CLAIM_LABELS = {
   es: {
-    medianViews: (p: string) => `Mediana de views en ${platformName(p)} a 7 días`,
+    medianViews: (p: string) => `Mediana de visualizaciones en ${platformName(p)} a 7 días`,
     medianEngagement: (p: string) => `Interacción mediana en ${platformName(p)}`,
     audienceAge: (p: string, bucket: string) => `Seguidores de ${bucket} años en ${platformName(p)}`,
     audienceGender: (p: string, bucket: string) => `Seguidores ${GENDER.es[bucket] ?? bucket} en ${platformName(p)}`,
     audienceCountry: (p: string, country: string) => `Seguidores en ${country} en ${platformName(p)}`,
     followersTotal: () => 'Seguidores en total, en todas las redes',
     followers: (p: string) => `Seguidores en ${platformName(p)}`,
-    postViews: (title: string, p: string) => `Views de ${title} en ${platformName(p)}`,
-    postVsMedian: (title: string) => `${title}: views frente a la mediana propia`,
-    campaignViews: (brand: string) => `Views de la campaña con ${brand}`,
+    postViews: (title: string, p: string) => `Visualizaciones de ${title} en ${platformName(p)}`,
+    postVsMedian: (title: string) => `${title}: visualizaciones frente a la mediana propia`,
+    campaignViews: (brand: string) => `Visualizaciones de la campaña con ${brand}`,
     campaignNonFollowers: (brand: string) => `Alcance en no seguidores de la campaña con ${brand}`,
     campaignRedemptions: (brand: string) => `Códigos redimidos en la campaña con ${brand}`,
     campaignFollowers: (brand: string) => `Seguidores que ganó ${brand} con la campaña`,
