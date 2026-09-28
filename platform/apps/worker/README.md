@@ -70,7 +70,8 @@ recomendación de [docs/propuestas/WRK.md](../../../docs/propuestas/WRK.md)
 (`.github/workflows/worker-once.yml`, cada hora, apagado); el 27-sep
 Rasheed eligió el modo **por turnos** (abajo), que es esta misma pasada
 con un presupuesto de tiempo, cada minuto, desde la web.
-No se corre a la vez que el proceso largo.
+No se corre a la vez que el proceso largo: el turno lo comprueba antes
+de empezar y el proceso largo al arrancar (abajo, «Por turnos»).
 
 Contra Supabase el worker arranca **solo cuando Rasheed aplique
 [docs/propuestas/CON-2.md](../../../docs/propuestas/CON-2.md)** (esquema
@@ -146,7 +147,32 @@ despliegue, `make cron.status` enseña las últimas respuestas, con su
 `elapsedMs` y su `planMs`. Los
 handlers, el `SET ROLE mc_worker`, los secretos y los refreshers son los
 del proceso (`src/recursos.ts`). **El turno y el proceso largo no se
-encienden a la vez**: pg-boss no mira `job_run` y correrían dos veces.
+encienden a la vez**: pg-boss no mira `job_run` y correrían dos veces
+(dos generaciones con Anthropic, avisos duplicados). No lo dice solo
+este README, lo impide la base (`src/runner/exclusion.ts`):
+
+- El proceso largo (`start`, sin `--once`) toma al arrancar, en una
+  conexión suya que retiene mientras vive,
+  `pg_try_advisory_lock(hashtextextended('mc-worker:proceso-largo', 0))`.
+  Si otro proceso largo ya lo tiene, no arranca (sale con 2 y el motivo).
+  Si esa conexión se cae, el worker se detiene y sale con 1: sin el
+  candado el turno ya no lo ve.
+- El turno, antes de hacer nada, mira en `pg_locks` si ese candado lo
+  tiene otra sesión. Si lo tiene, no corre nada: responde
+  `left: [{ job: '*', reason: 'running' }]` y deja un aviso en el log.
+  Mira `pg_locks` en vez de tomar el candado para que dos turnos
+  solapados no se bloqueen entre sí.
+- El proceso largo tampoco arranca si `job_run` tiene corridas de turnos
+  (`bossJobId` `tick:…` o `metadata.sliceS`) de los últimos 5 min: el
+  cron de Supabase está instalado contra esa base. Es justo el caso de
+  un `pnpm --filter @mc/worker start` con el `.env.local` de
+  `make db.unlock`, que apunta a **producción**. `make cron.uninstall`
+  apaga el turno; `WORKER_ALLOW_WITH_TICK=1` arranca igual, a sabiendas.
+
+La conexión del candado es una más del modo sesión del pooler (de las
+15 por usuario y base) mientras viva el proceso largo. En PGlite (una
+sola sesión) el candado no se ve desde el turno; lo prueba
+`test/tick-postgres.test.ts` contra Postgres de verdad.
 
 Lo que conviene saber de un turno de 45 s:
 
