@@ -123,6 +123,20 @@ describe('el turno contra Postgres real (TEST_DATABASE_URL)', { skip: REAL ? fal
     assert.equal(filas[0]?.n, 1);
   });
 
+  test('un turno sin nada vencido usa UNA conexión y sale enseguida (Hobby cobra la CPU activa)', async () => {
+    const nombre = `mc-worker:test-vacio-${process.pid}`;
+    const db = new PostgresDatabase({ connectionString: t.url!, setRole: 'mc_worker', jobPoolMax: TICK_POOL_MAX, bossPoolMax: 1, applicationName: nombre, sslRootCert: null });
+    abiertas.push(db);
+    const s = await turno(db, 'test_pg_carrera', [contado]);
+    assert.deepEqual(s.ran, []);
+    assert.equal(s.upToDate, 1);
+    // En Supabase el objetivo es < 300 ms (README); aquí, holgado, para no dar rojos por carga de la máquina.
+    assert.ok(s.elapsedMs < 1_000, `${s.elapsedMs} ms (plan ${s.planMs} ms)`);
+    // Las conexiones ociosas siguen en el pool un rato: se cuentan desde otra.
+    const abiertasDelTurno = await leer<{ n: number }>(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE application_name = '${nombre}:jobs'`);
+    assert.equal(abiertasDelTurno[0]?.n, 1, 'el rol, las definiciones, el estado de los ticks y pgboss.job, por la misma conexión');
+  });
+
   test('outbound.dispatch con dos turnos a la vez: el mensaje de la demo sale una vez', async () => {
     const reloj = nextWindowSlot(new Date(), 'America/Bogota');
     const uno = pool();

@@ -245,6 +245,9 @@ export async function runTickFromEnv(opts: RunTickFromEnvOptions): Promise<TickS
   const env = opts.env ?? process.env;
   const logger = opts.logger ?? tickLogger(env);
   const config = loadConfig(env, { mode: 'postgres', ...(env['WORKER_JOB_POOL_MAX'] ? {} : { jobPoolMax: TICK_POOL_MAX }) });
+  if (config.jobPoolMax < TICK_POOL_MAX) {
+    logger.warn('WORKER_JOB_POOL_MAX por debajo de lo que pide el turno: una corrida puede esperar conexión hasta el corte', { jobPoolMax: config.jobPoolMax, needed: TICK_POOL_MAX });
+  }
   const db = new PostgresDatabase({
     connectionString: config.databaseUrl!,
     setRole: config.setRole,
