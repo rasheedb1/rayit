@@ -144,6 +144,26 @@ Crea las tablas de pg-boss 12 (versión de esquema 42) dentro de
 comando migra. En Docker local (`make up`) no hace falta 3.1: el
 usuario `mc` es superusuario y el comando crea también el esquema.
 
+#### El turno y `pgboss.job` (CIM-7)
+
+El worker por turnos (`/api/cron/tick`, apps/worker/README.md «Por
+turnos») no usa pg-boss, pero cuenta los trabajos que esperan en
+`pgboss.job` para avisar de un `boss.send` que nadie va a atender
+(`orphanedBossJobs`). Corre con `SET ROLE mc_worker`, y el esquema lo
+crea `install-schema` con el rol de conexión (`mc_migrator` o
+`mc_worker_login`), no con `mc_worker`: sin este GRANT el turno no lo
+puede leer, devuelve `orphanedBossJobs: 'unreadable'` y avisa una vez
+por instancia en el log de Vercel. Una vez, después de 3.3:
+
+```bash
+./scripts/supabase-admin.sh sql "GRANT USAGE ON SCHEMA pgboss TO mc_worker; GRANT SELECT ON pgboss.job TO mc_worker;"
+```
+
+Solo lectura de una tabla de pg-boss; el turno no escribe en ella. Si
+se reinstala el esquema (`DROP SCHEMA pgboss` y 3.3 otra vez), el GRANT
+se pierde con él y hay que repetirlo. El texto exacto es
+`BOSS_READ_GRANT` en `apps/worker/src/tick.ts`.
+
 ### 3.4 Variables en el vault y en Railway/Fly (CIM-7)
 
 El worker no necesita ninguna variable nueva para arrancar: usa
