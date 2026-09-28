@@ -19,7 +19,11 @@
  *
  * Desde una pantalla: boss.send('campaign.compute', { workspaceId,
  * campaignId }) recalcula solo esa (hoy la web no llega a la cola; ver
- * docs/propuestas/CAM-5.md §0.3.6).
+ * docs/propuestas/CAM-5.md §0.3.6). OJO: en el modo por turnos (CIM-7,
+ * src/tick.ts, el worker en Vercel) nadie procesa pg-boss: un boss.send
+ * se queda en pgboss.job (el turno lo cuenta en orphanedBossJobs y avisa).
+ * Ahí un recálculo a demanda se pide con una fila en job_run o se deja
+ * al cron de la mañana (README, «Por turnos»).
  */
 import { computeCampaignResult, listCampaignsToCompute, type ResultExecutor } from '@mc/db';
 import { defineJob, type JobPayload } from '../../runner/registry.ts';

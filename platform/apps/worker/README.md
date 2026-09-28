@@ -96,33 +96,85 @@ corre **un turno** de 45 s con `runTick` (`src/tick.ts`, exportado como
 1. **Programa** lo que toca: la pasada de `--once`, con los mismos crons
    de `job_definition` y `job_run` como cola. Cada corrida se reclama
    (arriba): dos turnos solapados, o uno repetido, no duplican nada.
-2. **Procesa** lo vencido, hasta cuatro corridas a la vez, y no empieza
-   ninguna si quedan menos de 10 s. Cada corrida recibe como `timeout_s`
+2. **Procesa** lo vencido, `outbound.dispatch` primero (`TICK_FIRST`: un
+   toque atrasado es lo único que nota un cliente), hasta tres corridas a
+   la vez, y no empieza ninguna si quedan menos de 10 s. Cada corrida recibe como `timeout_s`
    lo que queda del turno: la que se mide por su timeout termina sola
    (`outbound.dispatch` deja de reclamar y devuelve a su cola lo que no
    intentó); la que se pasa termina `failed`, `error = timeout`,
-   `metadata.tickCut = true`, que **no gasta un intento**: el turno
+   `metadata.tickCut = true` (en la misma escritura que cierra la fila:
+   otro turno nunca la ve como un intento), que **no gasta un intento**: el turno
    siguiente la retoma (`reason: resume`), hasta 20 cortes por tick del
    cron (`MAX_TICK_CUTS`). Lo que no llegó a empezar sigue vencido. Una
-   fila de un turno muerto deja de estar viva a los `timeout_s + 30 s`:
-   no hay zombis.
+   fila de un turno muerto (Vercel lo mató, un redeploy) deja de estar
+   viva a los `sliceS + 30 s`, el timeout que tuvo en el turno y que queda
+   en la metadata del reclamo, no a los `timeout_s` de su definición
+   (600 s en `collect.post_metrics`): no hay zombis.
 3. **Responde** con el resumen (`TickSummary`: qué corrió, con qué
    estado, cuánto tardó, qué quedó y por qué) y deja **una línea** en el
    log de Vercel (`[cron/tick] {…}`). El logger del worker, sin
-   `LOG_LEVEL`, solo escribe avisos y errores.
+   `LOG_LEVEL`, solo escribe avisos y errores. `planMs` es lo que tardó
+   la planificación y `orphanedBossJobs`, lo que espera en `pgboss.job`
+   (abajo).
 
-Sin nada vencido, el turno son unas pocas consultas en paralelo y sale:
-Vercel Hobby cobra la CPU activa y aquí no se espera a nada. Los
+Sin nada vencido, el turno son cuatro consultas seguidas por **una sola
+conexión** (el rol, las definiciones, el estado de todos los ticks en una
+consulta y `pgboss.job`) y sale: Vercel Hobby cobra la CPU activa y aquí
+no se espera a nada. El objetivo es **menos de 300 ms de pared**: tras el
+despliegue, `make cron.status` enseña las últimas respuestas, con su
+`elapsedMs` y su `planMs`. Los
 handlers, el `SET ROLE mc_worker`, los secretos y los refreshers son los
 del proceso (`src/recursos.ts`). **El turno y el proceso largo no se
 encienden a la vez**: pg-boss no mira `job_run` y correrían dos veces.
 
-Lo que conviene saber de un turno de 45 s: `outbound.dispatch` se guarda
-30 s de margen antes de su timeout (`DEADLINE_MARGIN_MS`), así que en un
-turno envía durante unos 10 s, cinco toques por pasada cada dos minutos
-(unos 150 por hora). Un job que tarde más de lo que da el turno tiene que
-poder retomarse (revisar `ctx.signal` y saltarse lo ya hecho), como los
-de CON-5.
+Lo que conviene saber de un turno de 45 s:
+
+- `outbound.dispatch` y `outbound.replies` se guardan un margen antes de
+  su timeout para no empezar un envío que no pueda acabar. Es el menor
+  entre 30 s y el 25 % del timeout (`src/jobs/ventas/plazo.ts`): en el
+  proceso largo (120 s) siguen siendo 30 s y 45 toques por pasada; en un
+  turno (unos 40 s) son 10 s de margen y unos **15 toques por pasada**,
+  cada dos minutos, unos 450 por hora para todos los workspaces. Con el
+  margen fijo eran 5 toques y 150 por hora. La metadata de cada corrida
+  dice cuántos podía reclamar (`claimBudget`). Si hace falta más, la
+  palanca es la opción A (Pro: `maxDuration` y `TICK_BUDGET_MS` más
+  largos).
+- Un job que tarde más de lo que da el turno tiene que poder retomarse
+  (revisar `ctx.signal` y saltarse lo ya hecho), como los de CON-5.
+- **La cola del turno es `job_run`, no pg-boss.** Un `boss.send(...)` (un
+  «Recalcular» desde una pantalla, como el previsto para
+  `campaign.compute`) no lo procesa nadie en este modo. Un trabajo a
+  demanda se pide con una fila en `job_run` o se deja a su cron. Para que
+  no pase en silencio, cada turno cuenta lo que espera en `pgboss.job`
+  (`created` o `retry`), lo devuelve en `orphanedBossJobs` y avisa en el
+  log si es más de 0.
+- **Conexiones.** El pool del turno es `2 × TICK_CONCURRENCY + 1` = 7:
+  una corrida puede tener una transacción abierta y pedir otra conexión
+  a la vez (`api_call_log` se escribe con `ctx.db`). Dos turnos
+  solapados son 14, dentro de las 15 de modo sesión que el pooler de
+  Supabase da por usuario. `WORKER_JOB_POOL_MAX` lo cambia; por debajo de
+  7 un turno puede quedarse esperando conexión hasta el corte.
+
+**Lo que se tocó en `src/runner/` (carpeta de Nicolás), y por qué.** El
+turno es la misma pasada que `--once`: la pila de pendientes, el
+encadenado, la regla de reintento y el reclamo tenían que ser los mismos,
+y envolver `runOnce` desde `src/tick.ts` no bastaba (el presupuesto y el
+reclamo atómico ocurren entre corrida y corrida, dentro del bucle).
+Copiarlo en `tick.ts` era duplicar la lógica, que el enunciado prohíbe.
+Los cambios:
+
+| Archivo | Qué | Por qué |
+|---|---|---|
+| `once.ts` | `claimRun`: candado por job (`pg_advisory_xact_lock`) + relectura del estado + fila `running`, en una transacción | Dos turnos solapados no corren dos veces lo mismo. Sin él, en Postgres real, las dos pasadas reclaman (`test/tick-postgres.test.ts`, `test/once-reclamo.test.ts`) |
+| `once.ts` | `budget`, `concurrency`, `first` en `RunOnceOptions`; `sliceS` en el reclamo; `tickCut` | El presupuesto del turno. Sin `budget` (`--once`), todo igual que antes |
+| `once.ts` | `tickStates`: el estado de todos los ticks en una consulta | Un turno vacío, una conexión y no una por definición |
+| `run.ts` | `RunInput.runId` y `RunInput.closeMetadata` | Abrir la fila en el reclamo y marcar `tickCut`/`noRetry` en la escritura que la cierra |
+| `worker.ts` | `JOB_LOCK_PREFIX` y `recordSkipped` bajo ese candado | Dos turnos no dejan dos filas «sin handler» |
+
+El proceso largo (`pnpm --filter @mc/worker start`) no pasa por nada de
+esto salvo `recordSkipped`, que hace lo mismo que antes dentro de una
+transacción. **Pendiente: la revisión de Nicolás antes del merge a
+`main`.**
 
 **Variables en Vercel** (production), además de las que ya tiene la web:
 
@@ -137,11 +189,15 @@ Tras cambiar variables, `make vercel.deploy PROD=1`.
 
 **Opción B, hoy (Vercel Hobby + pg_cron de Supabase).** Hobby no deja un
 Vercel Cron por minuto, así que llama Supabase: `db/ops/cron-tick.sql`
-crea `pg_cron` y `pg_net` si faltan, guarda el secreto en **Supabase
+crea `pg_cron` y `pg_net` si faltan, comprueba que Vault está y programa
+`on-cue-tick` cada minuto con `net.http_post`; aparte, en su propia
+llamada, `db/ops/cron-tick-secreto.sql` guarda el secreto en **Supabase
 Vault** (`on_cue_cron_secret`; la tarea lo lee de
-`vault.decrypted_secrets` al disparar, en `cron.job` no queda el valor)
-y programa `on-cue-tick` cada minuto con `net.http_post`. Lo corre el
-dueño, con el token de administración:
+`vault.decrypted_secrets` al disparar, en `cron.job` no queda el valor).
+El secreto va solo y en dos `SELECT` de nivel superior, sin bloque `DO`:
+`pg_stat_statements` normaliza sus literales a `$1`, y un fallo del lote
+de pg_cron no puede arrastrarlo al log de Postgres. Lo corre el dueño,
+con el token de administración:
 
 ```bash
 cd platform
@@ -151,7 +207,10 @@ make cron.status       # la tarea, el secreto (sin su valor), las últimas corri
 
 Es idempotente: correrlo otra vez actualiza el secreto y deja una sola
 tarea. Rotar el secreto es `make cron.install` con el nuevo y el mismo
-valor en Vercel.
+valor en Vercel. `make cron.install` y `make cron.status` miran además
+que en `pg_stat_statements` no haya ninguna llamada a Vault con el
+literal (`db/ops/cron-tick-huellas.sql`); si la hubiera, dicen cómo
+limpiarla (`pg_stat_statements_reset()`) y que hay que rotar.
 
 **Opción A, después (Vercel Pro + Vercel Cron).** Cambia solo quién
 llama. Vercel Cron llama por **GET** y manda `Authorization: Bearer
