@@ -42,11 +42,16 @@ import { defineJob } from '../../runner/registry.ts';
 import { buildChannels, jobScope } from './canales/index.ts';
 import type { ChannelSender, FindSentResult, OutgoingMessage, SendResult } from './canales/types.ts';
 import { motorDbFromJob, type MotorDb } from './motor-db.ts';
+import { jobDeadline } from './plazo.ts';
 
 export const DISPATCH_JOB_ID = 'outbound.dispatch';
 /** Lo que el despachador cuenta por toque al decidir cuántos reclama (un proveedor normal tarda menos). */
 export const ESTIMATED_SEND_MS = 2_000;
-/** Margen antes del timeout del job: a partir de ahí no empieza envíos y devuelve lo que no intentó. */
+/**
+ * Margen antes del timeout del job: a partir de ahí no empieza envíos y
+ * devuelve lo que no intentó. Es el tope: con un timeout corto (un turno
+ * de CIM-7) el margen es el 25 % del timeout (plazo.ts).
+ */
 export const DEADLINE_MARGIN_MS = 30_000;
 
 export interface DispatchDeps {
@@ -63,7 +68,7 @@ export interface DispatchDeps {
   workspaceId?: string;
   /**
    * Hasta cuándo puede EMPEZAR un envío, en tiempo real (el timeout del
-   * job menos DEADLINE_MARGIN_MS). También acota cuántos se reclaman:
+   * job menos su margen, jobDeadline). También acota cuántos se reclaman:
    * los que caben a ESTIMATED_SEND_MS cada uno. Sin él, sin límite.
    */
   deadline?: Date;
@@ -90,6 +95,8 @@ export interface DispatchReport {
   errors: Array<{ touchId: string; error: string }>;
   /** Canales que no se reclamaron porque les faltan las llaves. */
   notConfigured: DispatchChannel[];
+  /** Cuántos toques podía reclamar la pasada (claimBudget): el tiempo que tuvo, en toques. */
+  budget: number;
 }
 
 /** Los canales que se pueden reclamar en esta corrida. El correo, además, necesita la URL del enlace de baja. */
@@ -304,7 +311,7 @@ export async function runDispatch(db: MotorDb, deps: DispatchDeps): Promise<Disp
     zombies: { failed: zombies.failed.length, canceled: zombies.canceled.length, released: zombies.released.length },
     claim: { ...claim, claimed: claim.claimed.length },
     sent: [], confirmed: [], retried: [], failed: [], waiting: [], canceled: [], postponed: [], held: [], released: [],
-    warnings: [], errors: [], notConfigured,
+    warnings: [], errors: [], notConfigured, budget,
   };
   const stop = () => Boolean(deps.signal?.aborted) || (deps.deadline !== undefined && Date.now() >= deps.deadline.getTime());
   let next = 0;
@@ -340,7 +347,7 @@ export const dispatchJob = defineJob(
       env: ctx.env, scope: jobScope(ctx), secrets: ctx.secrets, logger: ctx.logger, callLog: new PostgresOutreachCallLog(ctx.db),
       now: () => ctx.now(),
     });
-    const deadline = new Date(Date.now() + ctx.definition.timeoutS * 1000 - DEADLINE_MARGIN_MS);
+    const deadline = jobDeadline(ctx.definition.timeoutS, DEADLINE_MARGIN_MS);
     const report = await runDispatch(motorDbFromJob(ctx.db), {
       senders: channels.senders,
       now: () => ctx.now(),
@@ -359,7 +366,7 @@ export const dispatchJob = defineJob(
       canceledCompanyCap: report.claim.canceledCompanyCap, canceledBriefExcluded: report.claim.canceledBriefExcluded,
       paced: report.claim.paced.length,
       released: report.released.length, zombies: report.zombies.failed, zombiesReleased: report.zombies.released,
-      errors: report.errors.length, notConfigured: report.notConfigured,
+      errors: report.errors.length, notConfigured: report.notConfigured, claimBudget: report.budget,
     };
     ctx.logger.info('despacho de cadencias', metadata);
     return {

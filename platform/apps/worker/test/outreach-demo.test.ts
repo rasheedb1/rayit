@@ -75,7 +75,7 @@ test('job:dispatch cuenta los cancelados como la metadata del job, y un argument
     zombies: { failed: 0, canceled: 0, released: 0 },
     claim: { ...emptyClaimReport(), claimed: 0, canceledOptedOut: 1, canceledEmailInvalid: 2, canceledFinished: 3, skippedNoAddress: 4, canceledCompanyCap: 5, canceledBriefExcluded: 6 },
     sent: [], confirmed: [], retried: [], failed: [], waiting: [], canceled: [{ touchId: 'x', reason: 'opted_out' }], postponed: [], held: [],
-    released: [], warnings: [], errors: [], notConfigured: [],
+    released: [], warnings: [], errors: [], notConfigured: [], budget: 0,
   };
   assert.equal(canceledCount(r), 18);
   const texto = resumenDespacho(r);

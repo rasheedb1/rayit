@@ -29,7 +29,8 @@ import { ConfigError } from '../src/runner/config.ts';
 import { GmailChannel } from '../src/jobs/ventas/canales/gmail.ts';
 import { inviteNote, profileIdentifier, UnipileChannel } from '../src/jobs/ventas/canales/unipile.ts';
 import type { OutgoingMessage } from '../src/jobs/ventas/canales/types.ts';
-import { claimBudget, composeMessage, ESTIMATED_SEND_MS } from '../src/jobs/ventas/outbound.dispatch.ts';
+import { claimBudget, composeMessage, DEADLINE_MARGIN_MS, ESTIMATED_SEND_MS } from '../src/jobs/ventas/outbound.dispatch.ts';
+import { deadlineMarginMs, jobDeadline } from '../src/jobs/ventas/plazo.ts';
 
 const NOW = new Date('2026-09-24T15:00:00Z');
 const TOKEN = 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG';
@@ -433,4 +434,15 @@ test('claimBudget: se reclama solo lo que cabe en el tiempo que le queda a la co
   assert.equal(claimBudget({ deadline: new Date(ahora + 80_000) }, ahora), 80_000 / ESTIMATED_SEND_MS);
   assert.equal(claimBudget({ deadline: new Date(ahora + 1_000_000) }, ahora), 50, 'nunca más que el lote');
   assert.equal(claimBudget({ deadline: new Date(ahora - 1) }, ahora), 0, 'sin tiempo, nada');
+});
+
+test('el plazo del despachador: margen fijo con el timeout largo, proporcional con el de un turno (CIM-7)', () => {
+  const ahora = Date.parse('2026-09-28T15:00:00Z');
+  const toques = (timeoutS: number) => claimBudget({ deadline: jobDeadline(timeoutS, DEADLINE_MARGIN_MS, ahora) }, ahora);
+  assert.equal(deadlineMarginMs(120, DEADLINE_MARGIN_MS), 30_000, 'el proceso largo, como siempre');
+  assert.equal(toques(120), 45, 'proceso largo: 90 s para empezar');
+  assert.equal(deadlineMarginMs(40, DEADLINE_MARGIN_MS), 10_000);
+  assert.equal(toques(40), 15, 'un turno de 45 s (40 s para el job): 30 s para empezar, no 10 s y 5 toques');
+  assert.equal(toques(10), 3, 'el mínimo para empezar en un turno (10 s) no deja la pasada vacía');
+  assert.ok(toques(40) > 5);
 });

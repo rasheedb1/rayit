@@ -18,14 +18,16 @@
  *      si está vencido (la cola es job_run, sin pg-boss). Cada corrida se
  *      RECLAMA con un candado por job antes de empezar: dos turnos a la
  *      vez, o uno repetido, no corren dos veces lo mismo.
- *   2. Procesa lo vencido, hasta TICK_CONCURRENCY corridas a la vez, y
+ *   2. Procesa lo vencido, outbound.dispatch primero (TICK_FIRST), hasta
+ *      TICK_CONCURRENCY corridas a la vez, y
  *      no empieza ninguna si quedan menos de minSliceMs. Cada corrida
  *      tiene como timeout_s lo que queda del turno: la que se mide por su
  *      timeout (outbound.dispatch) termina sola y devuelve a su cola lo
  *      que no intentó; la que se pasa termina `failed` con `tickCut`, que
  *      no gasta un intento, y el turno siguiente la retoma. Nada queda
  *      `running` para siempre: una fila de un turno muerto deja de estar
- *      viva a los timeout_s + 30 s, como en --once.
+ *      viva a los sliceS + 30 s (el timeout que tuvo en el turno, que
+ *      queda en su metadata), no a los timeout_s de su definición.
  *   3. Devuelve un resumen: qué corrió, cuánto tardó, qué quedó.
  *
  * Los handlers, el SET ROLE mc_worker, los secretos y los refreshers son
@@ -35,10 +37,18 @@
  *
  * El turno no se corre a la vez que el proceso largo (`pnpm --filter
  * @mc/worker start`): pg-boss no mira job_run y correrían dos veces.
+ *
+ * La cola del turno es job_run, NO pg-boss: un `boss.send(...)` (un
+ * «Recalcular» desde una pantalla, el encadenado del proceso largo) no lo
+ * procesa nadie en este modo. Un trabajo a demanda se pide con una fila
+ * en job_run o se deja a su cron. Para que no pase en silencio, el turno
+ * cuenta lo que espera en pgboss.job y lo devuelve en
+ * `orphanedBossJobs`, con un aviso en el log si es mayor que 0.
  */
 import type { ConnectorHttpOverrides, QuotaManager, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
 import { allJobs } from './jobs/index.ts';
 import { channelModeFrom } from './jobs/ventas/canales/index.ts';
+import { DISPATCH_JOB_ID } from './jobs/ventas/outbound.dispatch.ts';
 import { buildRefreshers, buildSecrets } from './recursos.ts';
 import { loadConfig, type Env } from './runner/config.ts';
 import { PostgresDatabase, type WorkerDatabase } from './runner/db.ts';
@@ -52,10 +62,26 @@ import { assertRole } from './runner/worker.ts';
 export const TICK_MARGIN_MS = 5_000;
 /** Lo mínimo que tiene que quedar para empezar una corrida. */
 export const TICK_MIN_SLICE_MS = 10_000;
-/** Corridas a la vez dentro de un turno. */
-export const TICK_CONCURRENCY = 4;
-/** Conexiones del turno (las corridas más el reclamo), si no se fija WORKER_JOB_POOL_MAX. */
-export const TICK_POOL_MAX = 5;
+/**
+ * Corridas a la vez dentro de un turno. En Hobby el turno es I/O casi
+ * todo (proveedores, Anthropic): tres a la vez dan para lo vencido de un
+ * minuto sin agotar las conexiones de Supabase (ver TICK_POOL_MAX).
+ */
+export const TICK_CONCURRENCY = 3;
+/**
+ * Conexiones del turno, si no se fija WORKER_JOB_POOL_MAX: dos por
+ * corrida más una. Una corrida puede tener a la vez una transacción
+ * abierta y pedir una segunda conexión (PostgresCallLogSink escribe
+ * api_call_log con ctx.db; el reclamo de un encadenado abre la suya), y
+ * la planificación, el reclamo y el cierre de la fila usan otra. Con 2·3+1
+ * = 7, dos turnos solapados son 14: caben en las 15 de modo sesión que el
+ * pooler de Supabase da por usuario y base. test/tick-postgres.test.ts lo
+ * mide con TICK_CONCURRENCY corridas que escriben api_call_log dentro de
+ * una transacción.
+ */
+export const TICK_POOL_MAX = TICK_CONCURRENCY * 2 + 1;
+/** Jobs que el turno empieza antes que el resto si están vencidos: un toque atrasado es lo único que nota un cliente. */
+export const TICK_FIRST: readonly string[] = [DISPATCH_JOB_ID];
 /** El presupuesto más corto que tiene sentido: con menos no cabe ni el margen. */
 export const TICK_MIN_BUDGET_MS = 1_000;
 /** Lo que se espera a que el pool se cierre antes de responder igual (closeWithin). */
@@ -107,6 +133,14 @@ export interface TickSummary {
   exhausted: string[];
   /** Corridas que terminaron failed por el job (un corte del turno no cuenta). */
   failedRuns: number;
+  /** Lo que tardó la planificación: sin nada vencido es casi todo el turno (objetivo < 300 ms en Supabase, una conexión). */
+  planMs: number;
+  /**
+   * Trabajos esperando en pgboss.job ('created' o 'retry'). El turno no
+   * los procesa (su cola es job_run): mayor que 0 es un boss.send que
+   * nadie va a atender. null si no hay esquema pgboss o no se puede leer.
+   */
+  orphanedBossJobs: number | null;
 }
 
 /** El presupuesto de la pasada: el margen y el mínimo para empezar, acotados para presupuestos cortos. */
@@ -117,7 +151,7 @@ export function tickBudget(budgetMs: number, startedAt: number = Date.now()): On
 
 const LEFT_REASONS: ReadonlySet<string> = new Set<TickLeftReason>(['budget', 'running', 'shutting_down']);
 
-export function toTickSummary(s: OnceSummary, budgetMs: number, elapsedMs: number): TickSummary {
+export function toTickSummary(s: OnceSummary, budgetMs: number, elapsedMs: number, orphanedBossJobs: number | null = null): TickSummary {
   return {
     at: s.at,
     budgetMs,
@@ -130,7 +164,28 @@ export function toTickSummary(s: OnceSummary, budgetMs: number, elapsedMs: numbe
     upToDate: s.skipped.filter((x) => x.reason === 'up_to_date').length,
     exhausted: s.skipped.filter((x) => x.reason === 'retries_exhausted').map((x) => x.job),
     failedRuns: s.failedRuns,
+    planMs: s.planMs,
+    orphanedBossJobs,
   };
+}
+
+/**
+ * Cuántos trabajos esperan en pgboss.job. Sin esquema pgboss (el modo por
+ * turnos no lo instala) o sin permiso para leerlo, null tras una sola
+ * consulta; si existe, una segunda que cuenta.
+ */
+export async function countOrphanedBossJobs(db: WorkerDatabase, logger: Logger): Promise<number | null> {
+  try {
+    const { rows } = await db.query<{ readable: boolean }>(
+      `SELECT coalesce(has_table_privilege(to_regclass('pgboss.job'), 'SELECT'), false) AS readable`,
+    );
+    if (!rows[0]?.readable) return null;
+    const counted = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM pgboss.job WHERE state IN ('created', 'retry')`);
+    return Number(counted.rows[0]?.n ?? 0);
+  } catch (err) {
+    logger.debug('no se pudo contar pgboss.job', { err });
+    return null;
+  }
 }
 
 /** El logger de un turno: JSON por línea y, sin LOG_LEVEL, solo avisos y errores (el resumen lo escribe quien llama). */
@@ -164,8 +219,13 @@ export async function runTick(opts: RunTickOptions): Promise<TickSummary> {
     http: opts.http,
     budget: tickBudget(opts.budgetMs, started),
     concurrency: opts.concurrency ?? TICK_CONCURRENCY,
+    first: TICK_FIRST,
   });
-  return toTickSummary(summary, opts.budgetMs, Date.now() - started);
+  const orphaned = await countOrphanedBossJobs(opts.db, logger);
+  if (orphaned !== null && orphaned > 0) {
+    logger.warn('hay trabajos en pgboss.job que el modo por turnos no procesa: pídelos con una fila en job_run o déjalos a su cron', { orphanedBossJobs: orphaned });
+  }
+  return toTickSummary(summary, opts.budgetMs, Date.now() - started, orphaned);
 }
 
 export interface RunTickFromEnvOptions {
