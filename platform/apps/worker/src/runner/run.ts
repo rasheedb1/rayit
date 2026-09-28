@@ -37,6 +37,14 @@ export interface RunInput {
    * veces. Sin ella, se abre aquí, como siempre.
    */
   runId?: number;
+  /**
+   * Marcas que el llamador quiere en job_run.metadata según cómo terminó
+   * la corrida (--once y el modo por turnos: `tickCut`, `noRetry`). Van
+   * en la MISMA escritura que cierra la fila: un segundo UPDATE dejaba un
+   * instante en que otra pasada veía la fila cerrada sin su marca (y un
+   * proceso muerto entre los dos, para siempre).
+   */
+  closeMetadata?: (outcome: { status: RunStatus; result: JobResult | null; error: Error | null }) => Record<string, unknown> | undefined;
 }
 
 export interface RunDeps {
@@ -244,6 +252,7 @@ export async function executeRun(input: RunInput, deps: RunDeps): Promise<RunOut
     ...(chainedAfter(payload) ? { tras: chainedAfter(payload) } : {}),
     ...(error instanceof JobTimeoutError ? { timeoutS: error.timeoutS } : {}),
     ...(ctxPayload.workspaceId && !(await workspaceRecorded(deps, runId)) ? { workspaceIdIgnored: ctxPayload.workspaceId } : {}),
+    ...(input.closeMetadata?.({ status, result, error }) ?? {}),
   });
 
   await deps.db.query(

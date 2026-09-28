@@ -12,7 +12,8 @@
  *
  *   tick = último disparo de default_cron ≤ ahora (cron.ts, UTC)
  *   job_run globales (workspace_id NULL) del job desde ese tick:
- *     alguna running viva (< timeout_s + 30 s) → otra pasada lo tiene
+ *     alguna running viva (< timeout + 30 s)   → otra pasada lo tiene
+ *       (timeout: el de la definición, o el sliceS del turno que la abrió)
  *     alguna ok o skipped, o un fallo que
  *       pidió no reintentar (retry: false)   → al día, no corre
  *     intentos ≥ max_attempts                → reintentos agotados hasta
@@ -50,10 +51,19 @@
  * `minSliceMs`; a la que empieza le da como timeout_s lo que queda del
  * turno (un job que se mide por su timeout, como outbound.dispatch,
  * termina solo y devuelve lo que no intentó), y la que aun así se pasa
- * termina `failed` con `timeout` y `metadata.tickCut`. Un corte no
+ * termina `failed` con `timeout` y `metadata.tickCut`, en la misma
+ * escritura que cierra la fila (RunInput.closeMetadata). Un corte no
  * gasta un intento: el turno siguiente la retoma (reason `resume`), hasta
  * MAX_TICK_CUTS cortes por tick del cron. Lo que no llegó a empezar
  * queda como `budget` y sigue vencido para el turno siguiente.
+ *
+ * Este modo lo añadió CIM-7 (Rasheed) dentro de runner/, la carpeta de
+ * Nicolás: el reclamo atómico, el presupuesto, los recorredores y la
+ * planificación en una consulta viven aquí porque son la MISMA pasada
+ * que --once (la pila de pendientes, el encadenado, la regla de
+ * reintento); copiarla en src/tick.ts era duplicar la lógica. Qué cambió
+ * y por qué, en apps/worker/README.md («Por turnos · lo que se tocó en
+ * runner/»). Pendiente de su revisión antes del merge a main.
  */
 import { randomUUID } from 'node:crypto';
 import type { QuotaManager, ConnectorHttpOverrides, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
@@ -65,7 +75,7 @@ import { loadJobDefinitions } from './definitions.ts';
 import type { Logger } from './logger.ts';
 import { JobRegistry, type JobDefinition, type JobRegistration } from './registry.ts';
 import { CHAIN_SOURCE, executeRun, JobItemsFailedError, JobTimeoutError, type RunOutcome, type RunStatus } from './run.ts';
-import { createQuota, JOB_LOCK_PREFIX, recordSkipped } from './worker.ts';
+import { createQuota, JOB_LOCK_PREFIX, recordSkipped, SKIPPED_NO_HANDLER } from './worker.ts';
 
 /** `source` del payload de una corrida de --once, como `cron` en las de pg-boss. */
 export const ONCE_SOURCE = 'once';
@@ -87,6 +97,12 @@ export interface RunOnceOptions {
   budget?: OnceBudget;
   /** Cuántas corridas a la vez. 1 (por defecto, --once): una detrás de otra. */
   concurrency?: number;
+  /**
+   * Jobs que, si están vencidos, empiezan antes que el resto (el turno pone
+   * outbound.dispatch: un toque atrasado lo nota un cliente; un compute.*
+   * cinco minutos tarde, no). Solo reordena lo que no corre después de nada.
+   */
+  first?: readonly string[];
 }
 
 export interface OnceBudget {
@@ -125,6 +141,8 @@ export interface OnceSummary {
   failedRuns: number;
   /** Jobs vencidos que no llegaron a empezar porque llegó una señal. */
   interrupted: number;
+  /** Lo que tardó la planificación (definiciones, estado de los ticks): el costo de un turno sin nada vencido. */
+  planMs: number;
 }
 
 /** El proceso sale con 1 si hubo una corrida fallida o una pasada interrumpida: el cron externo la marca en rojo. */
@@ -159,39 +177,69 @@ interface TickState extends Record<string, unknown> {
   cuts: number;
 }
 
+/** La marca en la metadata del reclamo: el timeout que de verdad tiene la corrida en un turno (CIM-7). */
+export const SLICE_KEY = 'sliceS';
+
+interface StateQuery {
+  def: JobDefinition;
+  coverFrom: Date;
+}
+
 /**
- * El estado de un job desde `coverFrom`, contando solo las corridas
- * globales: una corrida encadenada o manual de UN workspace no cubre el
- * tick de todos.
+ * El estado de varios jobs, cada uno desde su `coverFrom`, en UNA
+ * consulta (un turno sin nada vencido gasta una conexión y no una por
+ * definición), contando solo las corridas globales: una corrida
+ * encadenada o manual de UN workspace no cubre el tick de todos.
  *
  *   done      ok o skipped; o partial/failed que pidió no reintentar
  *   attempts  partial o failed que sí se reintentan, y las `running`
- *             colgadas (más viejas que timeout_s + 30 s: al proceso lo
- *             mataron), para que max_attempts también las cuente
+ *             colgadas, para que max_attempts también las cuente
  *   running   `running` viva, EMPIECE CUANDO EMPIECE: una corrida de
  *             antes del tick que sigue en marcha tampoco se pisa
  *   cuts      failed por el presupuesto de un turno (tickCut): no son
  *             intentos, el turno siguiente las retoma (MAX_TICK_CUTS)
+ *
+ * Una `running` está viva mientras no pase su timeout más
+ * EXPIRE_MARGIN_S: el de job_definition o, si la abrió un turno, el que
+ * tuvo de verdad (metadata.sliceS, unos 40 s). Así la fila de un turno
+ * que murió a mitad (Vercel lo mató, un redeploy) deja de bloquear su job
+ * al minuto y no a los timeout_s (600 s en collect.post_metrics).
  */
-async function tickState(db: Queryable, def: JobDefinition, coverFrom: Date, now: Date): Promise<TickState> {
-  const liveSince = new Date(now.getTime() - (def.timeoutS + EXPIRE_MARGIN_S) * 1000);
-  const { rows } = await db.query<TickState>(
-    `SELECT count(*) FILTER (WHERE started_at >= $2::timestamptz AND (
-                status IN ('ok','skipped')
-                OR (status IN ('partial','failed') AND (metadata->>'${NO_RETRY_KEY}')::boolean IS TRUE)))::int AS done,
-            count(*) FILTER (WHERE started_at >= $2::timestamptz AND (
-                (status IN ('partial','failed') AND (metadata->>'${NO_RETRY_KEY}')::boolean IS NOT TRUE
-                   AND (metadata->>'${TICK_CUT_KEY}')::boolean IS NOT TRUE)
-                OR (status = 'running' AND started_at <= $3::timestamptz)))::int AS attempts,
-            count(*) FILTER (WHERE status = 'running' AND started_at > $3::timestamptz)::int AS running,
-            count(*) FILTER (WHERE started_at >= $2::timestamptz AND status = 'failed'
-                AND (metadata->>'${TICK_CUT_KEY}')::boolean IS TRUE)::int AS cuts
-       FROM job_run
-      WHERE job_id = $1 AND workspace_id IS NULL AND (started_at >= $2::timestamptz OR status = 'running')`,
-    [def.id, coverFrom.toISOString(), liveSince.toISOString()],
+async function tickStates(db: Queryable, items: readonly StateQuery[], now: Date): Promise<Map<string, TickState>> {
+  const out = new Map<string, TickState>();
+  if (items.length === 0) return out;
+  const { rows } = await db.query<TickState & { job_id: string }>(
+    `WITH t(job_id, cover_from, timeout_s) AS (SELECT * FROM unnest($1::text[], $2::timestamptz[], $3::int[])),
+          r AS (
+            SELECT t.job_id, t.cover_from, j.status, j.started_at, j.metadata,
+                   j.started_at > $4::timestamptz - make_interval(secs => (coalesce(
+                     CASE WHEN j.metadata->>'${SLICE_KEY}' ~ '^[0-9]{1,6}$' THEN (j.metadata->>'${SLICE_KEY}')::int END,
+                     t.timeout_s) + ${EXPIRE_MARGIN_S})::double precision) AS live
+              FROM t JOIN job_run j
+                ON j.job_id = t.job_id AND j.workspace_id IS NULL AND (j.started_at >= t.cover_from OR j.status = 'running'))
+     SELECT t.job_id,
+            count(r.job_id) FILTER (WHERE r.started_at >= r.cover_from AND (
+                r.status IN ('ok','skipped')
+                OR (r.status IN ('partial','failed') AND (r.metadata->>'${NO_RETRY_KEY}')::boolean IS TRUE)))::int AS done,
+            count(r.job_id) FILTER (WHERE r.started_at >= r.cover_from AND (
+                (r.status IN ('partial','failed') AND (r.metadata->>'${NO_RETRY_KEY}')::boolean IS NOT TRUE
+                   AND (r.metadata->>'${TICK_CUT_KEY}')::boolean IS NOT TRUE)
+                OR (r.status = 'running' AND NOT r.live)))::int AS attempts,
+            count(r.job_id) FILTER (WHERE r.status = 'running' AND r.live)::int AS running,
+            count(r.job_id) FILTER (WHERE r.started_at >= r.cover_from AND r.status = 'failed'
+                AND (r.metadata->>'${TICK_CUT_KEY}')::boolean IS TRUE)::int AS cuts
+       FROM t LEFT JOIN r ON r.job_id = t.job_id
+      GROUP BY t.job_id`,
+    [items.map((i) => i.def.id), items.map((i) => i.coverFrom.toISOString()), items.map((i) => i.def.timeoutS), now.toISOString()],
   );
-  const r = rows[0];
-  return { done: Number(r?.done ?? 0), attempts: Number(r?.attempts ?? 0), running: Number(r?.running ?? 0), cuts: Number(r?.cuts ?? 0) };
+  for (const r of rows) {
+    out.set(r.job_id, { done: Number(r.done ?? 0), attempts: Number(r.attempts ?? 0), running: Number(r.running ?? 0), cuts: Number(r.cuts ?? 0) });
+  }
+  return out;
+}
+
+async function tickState(db: Queryable, def: JobDefinition, coverFrom: Date, now: Date): Promise<TickState> {
+  return (await tickStates(db, [{ def, coverFrom }], now)).get(def.id) ?? { done: 0, attempts: 0, running: 0, cuts: 0 };
 }
 
 /** Lo que dice el estado de un tick: si toca correr, con qué intento y por qué; si no, por qué no. */
@@ -236,36 +284,68 @@ function coverFromFor(def: JobDefinition, tick: Date, registry: JobRegistry, all
 }
 
 /**
+ * La fila «sin handler» (recordSkipped) de las definiciones sin handler,
+ * pero solo de las que todavía no la tienen como última: se mira en una
+ * consulta, y la transacción con candado de recordSkipped se abre solo
+ * cuando hace falta escribir (una vez por job, no una cada turno).
+ */
+async function recordUnhandled(db: WorkerDatabase, ids: readonly string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const { rows } = await db.query<{ job_id: string; status: string; error: string | null }>(
+    `SELECT DISTINCT ON (job_id) job_id, status, error FROM job_run WHERE job_id = ANY($1::text[]) ORDER BY job_id, id DESC`,
+    [ids],
+  );
+  const marked = new Set(rows.filter((r) => r.status === 'skipped' && r.error === SKIPPED_NO_HANDLER).map((r) => r.job_id));
+  for (const id of ids) if (!marked.has(id)) await recordSkipped(db, id);
+}
+
+/**
  * Qué toca correr ahora: lo de arriba antes que lo encadenado, y luego por tick. Deja constancia de los que no tienen handler, como el proceso largo.
- * Las definiciones se evalúan a la vez (una consulta cada una): un turno sin nada vencido (CIM-7) sale en lo que tarda la más lenta, no en la suma.
+ * El estado de todos los ticks sale de una sola consulta (tickStates): un turno sin nada vencido (CIM-7) son tres consultas por una conexión.
  */
 export async function planOnce(db: WorkerDatabase, config: WorkerConfig, registry: JobRegistry, now: Date, logger: Logger): Promise<{ due: DueJob[]; skipped: OnceSummary['skipped']; definitions: JobDefinition[] }> {
   const all = await loadJobDefinitions(db);
   const allById = new Map(all.map((d) => [d.id, d]));
   const definitions = config.groups ? all.filter((d) => config.groups!.includes(d.queue)) : all;
 
-  const plan = async (def: JobDefinition): Promise<DueJob | { job: string; reason: OnceSkipReason }> => {
-    if (!def.enabled) return { job: def.id, reason: 'disabled' };
+  type Planned = DueJob | { job: string; reason: OnceSkipReason };
+  const planned: Planned[] = [];
+  const candidates: Array<{ index: number; def: JobDefinition; registration: JobRegistration; tick: Date; coverFrom: Date }> = [];
+  const unhandled: string[] = [];
+  for (const def of definitions) {
+    if (!def.enabled) {
+      planned.push({ job: def.id, reason: 'disabled' });
+      continue;
+    }
     const registration = registry.get(def.id);
     if (!registration) {
-      await recordSkipped(db, def.id);
-      return { job: def.id, reason: 'no_handler' };
+      unhandled.push(def.id);
+      planned.push({ job: def.id, reason: 'no_handler' });
+      continue;
     }
     const tick = safeTick(def, now, logger);
-    if (!tick) return { job: def.id, reason: 'no_cron' };
+    if (!tick) {
+      planned.push({ job: def.id, reason: 'no_cron' });
+      continue;
+    }
+    candidates.push({ index: planned.length, def, registration, tick, coverFrom: coverFromFor(def, tick, registry, allById, now, logger) });
+    planned.push({ job: def.id, reason: 'up_to_date' }); // se reemplaza abajo con su veredicto
+  }
+  await recordUnhandled(db, unhandled);
 
-    const coverFrom = coverFromFor(def, tick, registry, allById, now, logger);
-    const state = await tickState(db, def, coverFrom, now);
-    const v = verdict(state, def);
+  const states = await tickStates(db, candidates, now);
+  for (const c of candidates) {
+    const state = states.get(c.def.id) ?? { done: 0, attempts: 0, running: 0, cuts: 0 };
+    const v = verdict(state, c.def);
     if ('skip' in v) {
       if (v.skip === 'retries_exhausted') {
-        logger.warn('reintentos agotados hasta el próximo tick', { job: def.id, tick: tick.toISOString(), attempts: state.attempts, cuts: state.cuts, maxAttempts: def.maxAttempts });
+        logger.warn('reintentos agotados hasta el próximo tick', { job: c.def.id, tick: c.tick.toISOString(), attempts: state.attempts, cuts: state.cuts, maxAttempts: c.def.maxAttempts });
       }
-      return { job: def.id, reason: v.skip };
+      planned[c.index] = { job: c.def.id, reason: v.skip };
+    } else {
+      planned[c.index] = { def: c.def, registration: c.registration, coverFrom: c.coverFrom, attempt: v.attempt, reason: v.reason };
     }
-    return { def, registration, coverFrom, attempt: v.attempt, reason: v.reason };
-  };
-  const planned = await Promise.all(definitions.map(plan));
+  }
   const due = planned.filter((p): p is DueJob => 'def' in p);
   const skipped: OnceSummary['skipped'] = planned.filter((p): p is { job: string; reason: OnceSkipReason } => !('def' in p));
 
@@ -285,13 +365,14 @@ export async function planOnce(db: WorkerDatabase, config: WorkerConfig, registr
  * elementos se reintenta salvo que el job diga `retry: false` o su
  * registro `retryOnItemFailure: false`; un fallo que lanzó, siempre.
  */
-function shouldRetry(outcome: RunOutcome, registration: JobRegistration): boolean {
+function shouldRetry(outcome: Pick<RunOutcome, 'status' | 'result' | 'error'>, registration: JobRegistration): boolean {
   if (outcome.status === 'ok') return false;
   const itemFailure = outcome.status === 'partial' || outcome.error instanceof JobItemsFailedError;
   return itemFailure ? (outcome.result?.retry ?? registration.options.retryOnItemFailure) : true;
 }
 
-interface PendingRun {
+/** Una corrida por reclamar. Exportada para las pruebas del reclamo (test/once-reclamo.test.ts). */
+export interface PendingRun {
   def: JobDefinition;
   registration: JobRegistration;
   payload: Record<string, unknown>;
@@ -300,7 +381,7 @@ interface PendingRun {
   reason: OnceReason;
 }
 
-type Claim = { runId: number; attempt: number; reason: OnceReason } | { skip: OnceSkipReason };
+export type Claim = { runId: number; attempt: number; reason: OnceReason } | { skip: OnceSkipReason };
 
 /**
  * Reclama una corrida: con el candado del job, relee el estado de su
@@ -308,8 +389,17 @@ type Claim = { runId: number; attempt: number; reason: OnceReason } | { skip: On
  * reloj de la pasada, el mismo con el que se calculan los ticks) en la
  * misma transacción. Quien llega segundo espera el candado y ve esa
  * fila. Un encadenado solo mira que no haya otra viva.
+ *
+ * El candado es lo único que lo hace atómico en Postgres de verdad (READ
+ * COMMITTED, dos conexiones): sin él las dos transacciones leen «nada
+ * corriendo» antes de que ninguna inserte. test/once-reclamo.test.ts lo
+ * comprueba intercalándolas, y test/tick-postgres.test.ts con dos pools.
+ *
+ * `sliceS`, en un turno, es el timeout que va a tener la corrida: queda
+ * en la metadata del reclamo para que tickStates dé por muerta a tiempo
+ * la fila de un turno que no llegó a cerrarla.
  */
-async function claimRun(db: WorkerDatabase, item: PendingRun, at: Date, bossJobId: string): Promise<Claim> {
+export async function claimRun(db: WorkerDatabase, item: PendingRun, at: Date, bossJobId: string, sliceS?: number): Promise<Claim> {
   return db.transaction(async (tx) => {
     await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${JOB_LOCK_PREFIX}${item.def.id}`]);
     const state = await tickState(tx, item.def, item.coverFrom ?? at, at);
@@ -325,7 +415,7 @@ async function claimRun(db: WorkerDatabase, item: PendingRun, at: Date, bossJobI
     const { rows } = await tx.query<{ id: number | string }>(
       `INSERT INTO job_run (job_id, status, attempt, started_at, metadata)
        VALUES ($1, 'running', $2, $3::timestamptz, $4::jsonb) RETURNING id`,
-      [item.def.id, attempt, at.toISOString(), JSON.stringify({ bossJobId })],
+      [item.def.id, attempt, at.toISOString(), JSON.stringify({ bossJobId, ...(sliceS !== undefined ? { [SLICE_KEY]: sliceS } : {}) })],
     );
     return { runId: Number(rows[0]?.id), attempt, reason };
   });
@@ -341,7 +431,15 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
   let quota: Promise<QuotaManager> | null = opts.quota ? Promise.resolve(opts.quota) : null;
   const getQuota = () => (quota ??= createQuota(db, logger, opts.now, opts.http));
 
+  const planStarted = Date.now();
   const { due, skipped, definitions } = await planOnce(db, config, registry, now, logger);
+  const planMs = Date.now() - planStarted;
+  if (opts.first?.length) {
+    // Los que el turno pide primero (outbound.dispatch), si no corren después de nada: sort es estable, el resto conserva su orden.
+    const first = new Set(opts.first);
+    const ahead = (d: DueJob) => (first.has(d.def.id) && (registry.get(d.def.id)?.options.after ?? []).length === 0 ? 0 : 1);
+    due.sort((a, b) => ahead(a) - ahead(b));
+  }
   const byId = new Map(definitions.map((d) => [d.id, d]));
   const enabledIds = new Set(definitions.filter((d) => d.enabled).map((d) => d.id));
   logger.info('pasada: lo vencido', { at: now.toISOString(), due: due.map((d) => d.def.id), groups: config.groups ?? 'todos' });
@@ -356,27 +454,33 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
   const run = async (next: PendingRun): Promise<void> => {
     const bossJobId = `once:${randomUUID()}`;
     const runQuota = await getQuota();
-    const claim = await claimRun(db, next, clock(), bossJobId);
+    // En un turno, el job tiene lo que queda del presupuesto como timeout_s:
+    // el que se mide por su timeout (outbound.dispatch) termina solo, a tiempo.
+    const sliceS = budget ? Math.max(1, Math.floor((budget.deadline - Date.now()) / 1000)) : next.def.timeoutS;
+    const sliced = sliceS < next.def.timeoutS;
+    const definition = sliced ? { ...next.def, timeoutS: sliceS } : next.def;
+    const claim = await claimRun(db, next, clock(), bossJobId, sliced ? sliceS : undefined);
     if ('skip' in claim) {
       skipped.push({ job: next.def.id, reason: claim.skip });
       return;
     }
-    // En un turno, el job tiene lo que queda del presupuesto como timeout_s:
-    // el que se mide por su timeout (outbound.dispatch) termina solo, a tiempo.
-    const sliceS = budget ? Math.max(1, Math.floor((budget.deadline - Date.now()) / 1000)) : next.def.timeoutS;
-    const definition = sliceS < next.def.timeoutS ? { ...next.def, timeoutS: sliceS } : next.def;
+    // Las marcas van en la misma escritura que cierra la fila (closeMetadata):
+    // otra pasada nunca ve un corte contado como intento.
+    const closeMetadata = (o: Pick<RunOutcome, 'status' | 'result' | 'error'>): Record<string, unknown> | undefined => {
+      // Un corte no es un fallo del job: el turno siguiente lo retoma sin gastar un intento.
+      if (sliced && o.error instanceof JobTimeoutError) return { [TICK_CUT_KEY]: true };
+      // La pasada siguiente lo da por cubierto, como pg-boss cuando no se lanza.
+      if (o.status !== 'ok' && !shouldRetry(o, next.registration)) return { [NO_RETRY_KEY]: true };
+      return undefined;
+    };
     const outcome = await executeRun(
-      { definition, registration: next.registration, payload: next.payload, attempt: claim.attempt, bossJobId, signal: opts.signal, runId: claim.runId },
+      { definition, registration: next.registration, payload: next.payload, attempt: claim.attempt, bossJobId, signal: opts.signal, runId: claim.runId, closeMetadata },
       { db, logger, secrets: opts.secrets, refreshers: opts.refreshers, quota: runQuota, http: opts.http, env, now: opts.now },
     );
-    const cut = definition !== next.def && outcome.error instanceof JobTimeoutError;
+    const cut = sliced && outcome.error instanceof JobTimeoutError;
     if (cut) {
-      // No es un fallo del job: el turno siguiente lo retoma sin gastar un intento.
-      await db.query(`UPDATE job_run SET metadata = metadata || jsonb_build_object($2::text, true) WHERE id = $1`, [outcome.runId, TICK_CUT_KEY]);
       logger.warn('corrida cortada por el presupuesto del turno: el siguiente la retoma', { job: next.def.id, runId: outcome.runId, sliceS, timeoutS: next.def.timeoutS });
     } else if (outcome.status !== 'ok' && !shouldRetry(outcome, next.registration)) {
-      // La pasada siguiente lo da por cubierto, como pg-boss cuando no se lanza.
-      await db.query(`UPDATE job_run SET metadata = metadata || jsonb_build_object($2::text, true) WHERE id = $1`, [outcome.runId, NO_RETRY_KEY]);
       logger.info('sin reintento: el job indicó que no ayuda', { job: next.def.id, runId: outcome.runId, status: outcome.status });
     }
     runs.push({
@@ -422,7 +526,7 @@ export async function runOnce(opts: RunOnceOptions): Promise<OnceSummary> {
   await Promise.all(Array.from({ length: Math.max(1, Math.floor(opts.concurrency ?? 1)) }, walker));
 
   const failedRuns = runs.filter((r) => r.status === 'failed' && !r.cut).length;
-  const summary: OnceSummary = { at: now.toISOString(), runs, skipped, failedRuns, interrupted };
+  const summary: OnceSummary = { at: now.toISOString(), runs, skipped, failedRuns, interrupted, planMs };
   logger.info('pasada terminada', {
     runs: runs.map((r) => `${r.job}:${r.status}`),
     upToDate: skipped.filter((s) => s.reason === 'up_to_date').map((s) => s.job),
