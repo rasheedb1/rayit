@@ -20,7 +20,8 @@ import { claimsCitedIn, type SalesClaim } from './claims.ts';
 import type { GeneratedMessage, GenerationInput, MessageGenerator } from './generate.ts';
 import { similarityGate, subjectGate, type GateResult, type SimilarityVerdict } from './gates.ts';
 import { weightedScore, decideJudged, type MessageJudge, type ReviewDecision, type RubricScores, type StepRubric } from './judge.ts';
-import { estimateCallUsd, GENERATION_MAX_TOKENS, JUDGE_MAX_TOKENS, LlmOutputError, type LlmPurpose } from './llm.ts';
+import { GENERATION_MAX_TOKENS, JUDGE_MAX_TOKENS, LlmOutputError, type LlmPurpose } from './llm.ts';
+import { estimateCallUsd } from './llm-precios.ts';
 import { preflight, type PreflightIssue, type RegenerateHint, type RiskTrigger } from './preflight.ts';
 
 /** Caracteres que se suponen de prompt al estimar una llamada antes de hacerla. */

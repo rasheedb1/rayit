@@ -9,4 +9,4 @@ export * from './recomendar.ts';
 export * from './proposal-notes.ts';
 export * from './thread.ts';
 export * from './guidance-phrases.ts';
-export * from './llm-cost.ts';
+export * from './llm-precios.ts';

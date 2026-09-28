@@ -26,7 +26,8 @@ import { createFakeGenerator, createFakeJudge } from '@mc/core/outreach/fake';
 import { buildGenerationPrompt, loadPrompt, type GenerationInput, type MessageGenerator } from '@mc/core/outreach/generate';
 import { textSimilarity } from '@mc/core/outreach/gates';
 import { LlmMessageJudge } from '@mc/core/outreach/judge';
-import { llmCostUsd, type LlmClient, type LlmRequest } from '@mc/core/outreach/llm';
+import type { LlmClient, LlmRequest } from '@mc/core/outreach/llm';
+import { llmCostUsd } from '@mc/core/outreach/llm-precios';
 import { TEMPLATE_VARIABLES } from '@mc/core/outreach/render';
 import { enrollContacts, loadGenerationContext, loadPitchComposer, requestPitchDraft, savePitch } from '@mc/db/queries/outreach';
 import { motorDbFromClient, type MotorDb } from '../src/jobs/ventas/motor-db.ts';
@@ -210,7 +211,7 @@ function scriptedJudgeLlm(): LlmClient & { requests: LlmRequest[] } {
         scores: { relevance: 9, quality: 8.5, structure: 9, voice: 8 }, risk_triggers: [], regenerate_hint: null,
         note: 'Abre con la marca y cita dos cifras con origen.',
       });
-      return { text, model: req.model, inputTokens: 1800, outputTokens: 90, costUsd: llmCostUsd(req.model, 1800, 90), stopReason: 'end_turn' };
+      return { text, model: req.model, inputTokens: 1800, outputTokens: 90, costUsd: Number(llmCostUsd({ model: req.model, inputTokens: 1800, outputTokens: 90 })), stopReason: 'end_turn' };
     },
   };
 }

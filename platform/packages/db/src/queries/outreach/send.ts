@@ -166,7 +166,7 @@ function parseSendContext(r: SendContextRow, previous: SendContext['previous']):
     resumeAt: toDate(r.resume_at),
     sequenceStatus: textOrNull(fn, '$.sequence_status', r.sequence_status),
     optedOut: r.opted_out === true,
-    dealClosed: r.deal_closed == null ? null : oneOf(fn, '$.deal_closed', r.deal_closed, DEAL_CLOSED_REASONS),
+    dealClosed: r.deal_closed === null || r.deal_closed === undefined ? null : oneOf(fn, '$.deal_closed', r.deal_closed, DEAL_CLOSED_REASONS),
     enabled: r.enabled === true,
     postalAddress: textOrNull(fn, '$.postal_address', r.postal_address),
     requireOptoutLink: r.require_optout_link !== false,

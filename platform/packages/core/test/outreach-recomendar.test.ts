@@ -12,7 +12,7 @@ import {
   signalKindOfSource, type GuidanceRequest, type GuidanceWriter, type RecommendInput, type RecommendTemplate, type RecommendTemplateStep,
 } from '../src/outreach/recomendar.ts';
 import { GUIDANCE_PHRASES, guidanceLocale } from '../src/outreach/guidance-phrases.ts';
-import { llmCostUsd, UnknownModelPriceError } from '../src/outreach/llm-cost.ts';
+import { llmCostUsd, UnknownModelPriceError } from '../src/outreach/llm-precios.ts';
 import { checkSequenceAgainstPolicy } from '../src/outreach/sequence-policy.ts';
 
 const paso = (

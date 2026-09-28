@@ -45,8 +45,7 @@
  * Todo lo que el recomendador explica va en códigos (ProposalNote): la
  * pantalla los traduce en su messages.ts.
  */
-import type { LlmUsage } from './llm-cost.ts';
-import { MODEL_WRITER } from './llm-precios.ts';
+import { MODEL_WRITER, type LlmUsage } from './llm-precios.ts';
 import { findPlaceholders } from './placeholder-guard.ts';
 import { GUIDANCE_PHRASES, type GuidanceLocale } from './guidance-phrases.ts';
 import {

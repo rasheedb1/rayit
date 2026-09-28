@@ -23,8 +23,9 @@
 import { detectOptOut } from './optout.ts';
 import { fillPrompt, loadPrompt, untrusted } from './generate.ts';
 import {
-  estimateCallUsd, LlmOutputError, OUTREACH_MODELS, readLlmResponse, type LlmCallOptions, type LlmClient,
+  LlmOutputError, OUTREACH_MODELS, readLlmResponse, type LlmCallOptions, type LlmClient,
 } from './llm.ts';
+import { estimateCallUsd } from './llm-precios.ts';
 import { addLocalDays, compareDates, zonedInstant, zonedParts, type LocalDate } from './schedule.ts';
 
 export const MESSAGE_INTENTS = ['interested', 'not_now', 'ooo', 'unsubscribe', 'referral', 'ambiguous'] as const;
