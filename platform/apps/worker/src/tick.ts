@@ -58,6 +58,8 @@ export const TICK_CONCURRENCY = 4;
 export const TICK_POOL_MAX = 5;
 /** El presupuesto más corto que tiene sentido: con menos no cabe ni el margen. */
 export const TICK_MIN_BUDGET_MS = 1_000;
+/** Lo que se espera a que el pool se cierre antes de responder igual (closeWithin). */
+export const TICK_CLOSE_MS = 3_000;
 
 export interface RunTickOptions {
   /** La base del worker: conexión en modo sesión con SET ROLE mc_worker (o el embebido en pruebas). */
@@ -195,6 +197,21 @@ export async function runTickFromEnv(opts: RunTickFromEnvOptions): Promise<TickS
   try {
     return await runTick({ db, budgetMs: opts.budgetMs, env, now: opts.now, logger });
   } finally {
-    await db.close().catch(() => undefined);
+    await closeWithin(db, TICK_CLOSE_MS, logger);
   }
+}
+
+/**
+ * pool.end() espera a que se devuelvan las conexiones prestadas. Si un
+ * job cortado no mira ctx.signal y sigue con una, la respuesta no puede
+ * quedarse esperándolo hasta que Vercel mate la función: se responde a
+ * los TICK_CLOSE_MS y el pool se cierra cuando la suelte.
+ */
+async function closeWithin(db: WorkerDatabase, ms: number, logger: Logger): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), ms); });
+  const closed = db.close().then(() => 'closed' as const, () => 'closed' as const);
+  const outcome = await Promise.race([closed, late]);
+  clearTimeout(timer);
+  if (outcome === 'late') logger.warn('el pool no se cerró a tiempo: un job cortado sigue con una conexión', { waitedMs: ms });
 }
