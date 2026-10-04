@@ -41,6 +41,10 @@ export const meta = {
     { title: 'Revisión final', detail: 'producto integrado en bucle hasta el umbral' },
     { title: 'Fase 8 · worker en Vercel', detail: 'worker por turnos + pg_cron' },
     { title: 'Integración 8', detail: 'merge y CI, sin migrar' },
+    { title: 'Fase 9 · cierre del MVP', detail: 'CIM-12 → ACC-4 · RES-3 · ACC-7 · CIM-11' },
+    { title: 'Integración 9', detail: 'merge y CI, sin migrar' },
+    { title: 'Fase 10 · roles a medida', detail: 'ACC-9' },
+    { title: 'Integración 10', detail: 'merge y CI, sin migrar' },
     { title: 'Pulido', detail: 'lo integrado que quedó bajo el umbral, sin migrar Supabase' },
   ],
 }
@@ -404,6 +408,74 @@ LO QUE HAY QUE HACER:
 TERMINADO CUANDO: un turno procesa lo vencido y termina a tiempo; la ruta está protegida; el SQL del cron es idempotente y sin secretos en claro; el modo proceso sigue igual; \`pnpm verificar\` y el build en verde.
 `,
   },
+  // ------------------------------------------------------------ Fase 9
+  puerta: {
+    id: 'puerta', historias: 'CIM-12 (y el estado de CIM-1/CIM-7)', branch: 'rasheed/CIM-12-verificar-determinista',
+    brief: `
+ESTADO AL 4-OCT: todo lo de las fases 1–8 está en producción (main = rasheed/integracion; Supabase con 0001–0077; el worker corre por turnos en /api/cron/tick). Los módulos de Nicolás (Conexiones, Campañas, Finanzas y Accesos ACC-1/2/3/5/6/8) están hechos: léelos y construye ENCIMA, sin duplicar. Si necesitas esquema, la siguiente migración libre es 0078 (otras piezas corren en paralelo: si dos eligen el mismo número, el integrador renumera). Las migraciones 0001–0077 están aplicadas y son inmutables.
+QUÉ CONSTRUYES: que la puerta de calidad sea determinista, ANTES de que otras cuatro piezas la usen en paralelo.
+- CIM-12: «pnpm verificar» (turbo --concurrency=2) a veces cancela pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved», y con dos verificar a la vez fallan pruebas por tiempo (oauth-refresh del worker, guard.attempts; cuentas-service con hook de 60 s). Encuentra la causa raíz (promesas globales de pglite sin resolver, hooks con techo propio, pruebas que dependen del reloj o del día de la semana, puertos o archivos compartidos entre suites) y arréglala de raíz: no subas timeouts a ciegas ni marques pruebas como skip. Lo de las pruebas de Nicolás, con el cambio mínimo y dicho en decisions.
+- Deja scripts/estres-verificar.sh (en platform/) que corra N veces pnpm verificar, de a dos en paralelo, y cuente pruebas canceladas o fallidas. Córrelo con N=10 como mínimo (lánzalo en segundo plano y revisa su salida cada pocos minutos; no te quedes esperando en silencio) y anota el resultado en la note de CIM-12.
+- De paso, corrige en backlog.ts el estado de CIM-1 y CIM-7: el rol del worker (mc_worker_login, miembro de mc_worker) existe desde el 28-sep y el worker corre por turnos en Vercel; el proceso largo con pg-boss no se usa en producción. CIM-1 → hecho con nota corta; CIM-7 → nota con lo que falte (el disparador del cron) sin inventar.
+TERMINADO CUANDO: el script de estrés corre N≥10 rondas sin una prueba cancelada ni fallida; pnpm verificar y el build en verde.
+`,
+  },
+  equipo: {
+    id: 'equipo', historias: 'ACC-4', branch: 'rasheed/ACC-4-pantalla-equipo',
+    brief: `
+ESTADO AL 4-OCT: todo lo de las fases 1–8 está en producción (main = rasheed/integracion; Supabase con 0001–0077; el worker corre por turnos en /api/cron/tick). Los módulos de Nicolás (Conexiones, Campañas, Finanzas y Accesos ACC-1/2/3/5/6/8) están hechos: léelos y construye ENCIMA, sin duplicar. Si necesitas esquema, la siguiente migración libre es 0078 (otras piezas corren en paralelo: si dos eligen el mismo número, el integrador renumera). Las migraciones 0001–0077 están aplicadas y son inmutables.
+QUÉ CONSTRUYES: la pantalla Equipo (ACC-4), sobre el sistema de accesos de Nicolás. Lee antes docs/propuestas/ACC-accesos-y-roles.md, ACC-1.md, ACC-3.md, ACC-5.md, ACC-6.md, ACC-8.md y CIERRE-ACC.md, la migración 0034_access_control.sql, can() y el catálogo de permisos.
+- Ruta /equipo (o la que el marco de ACC-5 ya reserve): lista de miembros con su rol, invitaciones pendientes, invitar por correo eligiendo uno de los roles de fábrica, aceptar por enlace con vencimiento (token al azar guardado por su hash; un solo uso; caduca), cambiar rol y revocar. Al invitar a un mánager, dos casillas explícitas y APAGADAS por defecto: «también puede ver mis finanzas» y «también puede conectar mis cuentas». Regla dura: nadie otorga un permiso que no tiene (se comprueba en el servidor, no solo en la pantalla).
+- Quitar o degradar al último dueño falla con un mensaje claro (en la base y en la acción).
+- El correo de invitación: si hay SMTP configurado se envía; si no, la pantalla muestra el enlace para copiarlo (estado claro, sin inventar envíos).
+- Todas las acciones exigen el permiso correspondiente con can() en el servidor y quedan en la bitácora de ACC-2.
+TERMINADO CUANDO: prueba (pglite y de pantalla) de que un creador invita a su mánager, el mánager entra por el enlace y ve Campañas pero no el flujo de caja; con la casilla de finanzas marcada sí lo ve; quitar al último dueño falla con mensaje; un enlace vencido o usado no sirve.
+`,
+  },
+  semana: {
+    id: 'semana', historias: 'RES-3', branch: 'rasheed/RES-3-lo-que-importa',
+    brief: `
+ESTADO AL 4-OCT: todo lo de las fases 1–8 está en producción (main = rasheed/integracion; Supabase con 0001–0077; el worker corre por turnos en /api/cron/tick). Los módulos de Nicolás (Conexiones, Campañas, Finanzas y Accesos ACC-1/2/3/5/6/8) están hechos: léelos y construye ENCIMA, sin duplicar. Si necesitas esquema, la siguiente migración libre es 0078 (otras piezas corren en paralelo: si dos eligen el mismo número, el integrador renumera). Las migraciones 0001–0077 están aplicadas y son inmutables.
+QUÉ CONSTRUYES: «Lo que importa esta semana» (RES-3), un bloque arriba de /resumen generado desde los datos, que lee la tabla notification.
+- Cuatro fuentes, cada una con su fila y su enlace al módulo: outliers nuevos (videos con puntaje frente a la línea base de CON-6), conexión con error (Conexiones), factura vencida (Finanzas, FIN-4), negocio con seguimiento vencido (Ventas, VEN-4: deal_due / deal_overdue). Si alguna fuente aún no genera su notification, añade el productor mínimo en el job que corresponda (o una consulta tipada si no hace falta job) sin duplicar lógica de Nicolás.
+- Orden por urgencia; descartar una fila («Entendido») la marca leída; estado vacío cuando no hay nada («Todo en orden esta semana»). Textos en el messages.ts del módulo; cifras con lib/format.ts; tema claro y oscuro; 400 px.
+- Respeta permisos: un miembro sin acceso a Finanzas no ve la fila de la factura (can() / scopeFilter de ACC).
+TERMINADO CUANDO: prueba con las cuatro fuentes: cada una produce su fila y cada fila lleva a su módulo; una fila de finanzas no aparece a quien no puede ver finanzas.
+`,
+  },
+  creador: {
+    id: 'creador', historias: 'ACC-7', branch: 'rasheed/ACC-7-rls-por-creador',
+    brief: `
+ESTADO AL 4-OCT: todo lo de las fases 1–8 está en producción (main = rasheed/integracion; Supabase con 0001–0077; el worker corre por turnos en /api/cron/tick). Los módulos de Nicolás (Conexiones, Campañas, Finanzas y Accesos ACC-1/2/3/5/6/8) están hechos: léelos y construye ENCIMA, sin duplicar. Si necesitas esquema, la siguiente migración libre es 0078 (otras piezas corren en paralelo: si dos eligen el mismo número, el integrador renumera). Las migraciones 0001–0077 están aplicadas y son inmutables.
+QUÉ CONSTRUYES: endurecimiento por creador en la base (ACC-7). Lee docs/propuestas/ACC-6.md (scopeFilter) y ACC-accesos-y-roles.md.
+- Hoy el aislamiento por creador dentro de un workspace (una agencia con varios creadores, y un mánager que solo lleva a algunos) lo aplica la aplicación con scopeFilter(). Añade la política de fila por creator_id en las cuatro tablas que lo llevan —social_connection, post, campaign y deal— para que una consulta cruda que se olvide de scopeFilter() tampoco devuelva filas de otro creador. Combínala con el aislamiento por workspace existente (las dos condiciones, no una u otra) y respeta los roles que ven a todos los creadores del workspace.
+- La guardia de esquema (packages/db/src/esquema.ts) debe exigirlo: una de esas tablas sin la política por creador la hace fallar.
+- No rompas el worker (mc_worker, BYPASSRLS) ni los enlaces públicos (mc_public_share).
+TERMINADO CUANDO: prueba en pglite: con un miembro limitado a un creador, una consulta cruda sin scopeFilter() sobre cada una de las cuatro tablas no devuelve filas del otro creador; un dueño sigue viendo todo; la guardia reporta la tabla si se le quita la política.
+`,
+  },
+  ids: {
+    id: 'ids', historias: 'CIM-11', branch: 'rasheed/CIM-11-ids-sin-contador',
+    brief: `
+ESTADO AL 4-OCT: todo lo de las fases 1–8 está en producción (main = rasheed/integracion; Supabase con 0001–0077; el worker corre por turnos en /api/cron/tick). Los módulos de Nicolás (Conexiones, Campañas, Finanzas y Accesos ACC-1/2/3/5/6/8) están hechos: léelos y construye ENCIMA, sin duplicar. Si necesitas esquema, la siguiente migración libre es 0078 (otras piezas corren en paralelo: si dos eligen el mismo número, el integrador renumera). Las migraciones 0001–0077 están aplicadas y son inmutables.
+QUÉ CONSTRUYES: ids sin contador global (CIM-11). Lee docs/propuestas/CIM-2.md §3.
+- Las tablas donde escribe mc_app con id bigserial (audit_log, api_call_log, account_metric_snapshot, deal_stage_history, idea_evidence, preflight_result, video_onscreen_text, y cualquier otra que encuentres con la misma forma) dejan inferir por el id de una fila propia cuántas escribió toda la plataforma. Una migración las pasa a uuid DEFAULT gen_random_uuid(), con sus índices y referencias, CONSERVANDO las filas existentes (Supabase tiene datos reales: la migración convierte, no borra). Prueba la actualización con datos: aplica hasta 0077 en pglite, siembra, aplica la nueva y comprueba conteos y referencias.
+- Actualiza el código que use esos ids como número (Drizzle, consultas, ordenaciones por id: ordena por fecha) y los jobs de Nicolás que los toquen, con el cambio mínimo dicho en decisions.
+- La guardia de esquema lo exige: una tabla en la que inserta mc_app con id de secuencia la hace fallar.
+TERMINADO CUANDO: ninguna tabla en la que inserta mc_app tiene un id de secuencia global; la guardia reporta la próxima que lo intente; la migración convierte filas existentes (probado con datos).
+`,
+  },
+  // ------------------------------------------------------------ Fase 10
+  roles: {
+    id: 'roles', historias: 'ACC-9', branch: 'rasheed/ACC-9-roles-a-medida',
+    brief: `
+ESTADO AL 4-OCT: todo lo de las fases 1–8 está en producción (main = rasheed/integracion; Supabase con 0001–0077; el worker corre por turnos en /api/cron/tick). Los módulos de Nicolás (Conexiones, Campañas, Finanzas y Accesos ACC-1/2/3/5/6/8) están hechos: léelos y construye ENCIMA, sin duplicar. Si necesitas esquema, la siguiente migración libre es 0078 (otras piezas corren en paralelo: si dos eligen el mismo número, el integrador renumera). Las migraciones 0001–0077 están aplicadas y son inmutables.
+QUÉ CONSTRUYES: la matriz de permisos editable y los roles a medida (ACC-9), encima de la pantalla Equipo (ACC-4, ya integrada). Lee docs/propuestas/ACC-accesos-y-roles.md y el catálogo de permisos.
+- Una pantalla que muestra los permisos uno por uno (agrupados por módulo, con su explicación en lenguaje claro) para cada rol, y deja crear un rol propio del workspace (role con workspace_id): nombre, permisos marcados, asignarlo a un miembro. Los roles de fábrica se ven pero no se editan.
+- Regla dura: nadie crea ni asigna un rol con permisos que él mismo no tiene; no se puede borrar un rol en uso sin reasignar; todo pasa por can() en el servidor y queda en la bitácora.
+TERMINADO CUANDO: prueba de que una agencia crea el rol «Becario» con tres permisos, se lo asigna a alguien y ese alguien solo puede lo que esos tres permisos dicen; un miembro sin permiso de administrar roles no puede crear uno.
+`,
+  },
 }
 
 // Conflicto conocido de la fase 1, con su resolución ya decidida.
@@ -427,6 +499,8 @@ const FASES_DEF = [
   { n: 5, titulo: 'Fase 5 · inteligencia', primero: [], paralelo: ['perfil', 'generacion', 'recomendador'] },
   { n: 6, titulo: 'Fase 6 · operación', primero: [], paralelo: ['bandejas', 'metricas', 'cierre'] },
   { n: 8, titulo: 'Fase 8 · worker en Vercel', primero: [], paralelo: ['tick'] },
+  { n: 9, titulo: 'Fase 9 · cierre del MVP', primero: ['puerta'], paralelo: ['equipo', 'semana', 'creador', 'ids'] },
+  { n: 10, titulo: 'Fase 10 · roles a medida', primero: [], paralelo: ['roles'] },
 ]
 
 // ---------------------------------------------------------------------
