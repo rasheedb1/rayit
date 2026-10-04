@@ -2,13 +2,15 @@ import { createTickHandler, TICK_BUDGET_MS, TICK_CLOSE_MS } from "./_lib/turno";
 
 /**
  * El turno del worker (CIM-7): corre lo vencido de job_definition y sale.
- * Lo llama cada minuto el cron de Supabase (POST, opción B) o Vercel
- * Cron (GET, opción A); solo con `Authorization: Bearer <CRON_SECRET>`.
+ * Lo llama cada minuto el cron de Supabase (POST, opción B) con una firma
+ * que caduca (X-On-Cue-Timestamp y X-On-Cue-Signature, HMAC-SHA256 con
+ * CRON_SECRET, ±90 s), o Vercel Cron (GET, opción A) con `Authorization:
+ * Bearer <CRON_SECRET>`; la ruta acepta las dos (_lib/turno.ts).
  * Se conecta como el worker: WORKER_DATABASE_URL (o DATABASE_URL_DIRECT),
  * modo sesión, SET ROLE mc_worker. Todo en apps/worker/README.md, «Por turnos».
  *
  * El worker (@mc/worker/tick: los handlers, los conectores, el SDK de
- * Anthropic; ~0,6 MB) se carga DESPUÉS de comprobar el Bearer, con un
+ * Anthropic; ~0,6 MB) se carga DESPUÉS de comprobar la credencial, con un
  * import dinámico: la URL es pública y un 401 no paga su arranque en
  * frío (Hobby cobra la CPU activa). Este archivo no importa del worker
  * nada que no sea un tipo; apps/web/scripts/revisar-bundle-turno.mjs

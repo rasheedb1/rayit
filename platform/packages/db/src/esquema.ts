@@ -662,12 +662,12 @@ export const ACCESOS_EN_ESQUEMAS_DECLARADOS: Readonly<Record<string, AccesoDecla
   'net.http_request_queue': {
     privilegios: TODO_A_PUBLIC,
     motivo:
-      'la cola de pg_net: cada net.http_post deja aquí su petición, CON sus cabeceras —el Authorization: Bearer del ' +
-      'CRON_SECRET—, hasta que el worker de pg_net la manda (milisegundos). pg_net se la concede entera a PUBLIC, ' +
-      'incluidos TRUNCATE y TRIGGER, que PRIVILEGIOS_PROHIBIDOS no le deja a mc_app en ninguna relación de public. ' +
-      'Es lo más delicado del esquema: con una inyección SQL se podría leer el secreto en tránsito o cambiar una ' +
-      'petición pendiente. Medida propuesta (CIM-7): que el cron no mande el secreto en claro sino una firma que ' +
-      'caduque, o que Supabase revoque el GRANT a PUBLIC',
+      'la cola de pg_net: cada net.http_post deja aquí su petición, CON sus cabeceras, hasta que el worker de pg_net ' +
+      'la manda (milisegundos). pg_net se la concede entera a PUBLIC, incluidos TRUNCATE y TRIGGER, que ' +
+      'PRIVILEGIOS_PROHIBIDOS no le deja a mc_app en ninguna relación de public. Por eso el cron no manda aquí el ' +
+      'CRON_SECRET sino una firma que caduca a los 90 s (db/ops/cron-tick.sql): leerla sirve para pedir un turno que ' +
+      'el cron pide de todos modos. Lo que queda, solo con una inyección SQL: cambiar o borrar una petición ' +
+      'pendiente (un turno perdido) y encolar otras. La medida de fondo es que Supabase revoque el GRANT a PUBLIC',
   },
   'net._http_response': {
     privilegios: TODO_A_PUBLIC,

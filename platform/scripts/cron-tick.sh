@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # =====================================================================
 # El disparador del worker por turnos (CIM-7, opción B): pg_cron de
-# Supabase llama cada minuto a /api/cron/tick con el Bearer CRON_SECRET.
+# Supabase llama cada minuto a /api/cron/tick con una firma de CRON_SECRET
+# que caduca (HMAC-SHA256 del timestamp, ±90 s; ver db/ops/cron-tick.sql).
 #
 #   ./scripts/cron-tick.sh install     crea o actualiza la tarea y el secreto en Vault
 #   ./scripts/cron-tick.sh status      la tarea, el secreto (sin su valor), las últimas corridas y un
@@ -103,8 +104,8 @@ install() {
   local sql tarea
   # render.mjs valida cada valor y lo lee del entorno; los dos se validan
   # antes de tocar nada. Tres llamadas, en este orden, para que la tarea
-  # nunca dispare sin secreto (pg_cron mandaría 'Bearer ' || NULL):
-  #   1. ¿está Vault? (cron-tick-vault.sql, sin secretos)
+  # nunca dispare sin secreto (no llamaría, y cron.status daría rojo):
+  #   1. ¿están Vault y extensions.hmac? (cron-tick-vault.sql, sin secretos)
   #   2. el secreto en Vault (dos SELECT sin nada más; cron-tick-secreto.sql)
   #   3. la tarea y su purga (con la URL, sin el secreto; cron-tick.sql)
   node db/ops/render.mjs db/ops/cron-tick-secreto.sql >/dev/null || exit 2

@@ -36,10 +36,10 @@ SELECT jsonb_build_object(
     SELECT jsonb_agg(r ORDER BY r.created DESC) FROM (
       SELECT id, status_code, timed_out, error_msg, created, left(content, 500) AS content
         FROM net._http_response ORDER BY created DESC LIMIT 5) r),
-  -- Peticiones que pg_net aún no ha mandado. Cada una lleva la cabecera
-  -- Authorization con el secreto en claro hasta que sale (normalmente
-  -- milisegundos; pg_net se la concede a PUBLIC, ver db/ops/cron-tick.sql).
-  -- Si crece, pg_net está atascado y el secreto se queda ahí más tiempo.
+  -- Peticiones que pg_net aún no ha mandado (normalmente salen en
+  -- milisegundos). Llevan la firma del turno, no el secreto: la tabla la
+  -- alcanza PUBLIC (ver db/ops/cron-tick.sql). Si crece, pg_net está
+  -- atascado, y lo que salga con más de 90 s de retraso la ruta lo rechaza.
   'cola_pg_net', (SELECT count(*) FROM net.http_request_queue),
   -- La última pasada buena de outbound.dispatch: si el turno responde 200
   -- pero esto no avanza, el despacho no está corriendo.

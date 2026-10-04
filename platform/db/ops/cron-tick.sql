@@ -27,23 +27,37 @@
 -- LEE al disparar, de vault.decrypted_secrets: en cron.job solo queda la
 -- consulta, nunca el valor. Rotarlo es volver a correr
 -- `make cron.install` con el nuevo (y ponerlo igual en Vercel).
--- Un matiz, propio de pg_net: net.http_post deja la petición, CON sus
--- cabeceras (el Authorization: Bearer en claro), en net.http_request_queue
--- hasta que su worker la manda, normalmente en milisegundos. Esa tabla
--- NO es solo de postgres: pg_net 0.20.4 se la concede entera a PUBLIC
--- (otorgado por supabase_admin, irrevocable con nuestras credenciales;
--- medido el 4-oct-2026), así que mc_app también la alcanza. La guardia
--- de esquema lo acepta declarado (ACCESOS_EN_ESQUEMAS_DECLARADOS en
--- packages/db/src/esquema.ts), con el riesgo escrito. `make cron.status`
--- cuenta sus filas (cola_pg_net): si crece, pg_net está atascado y el
--- secreto se queda ahí más tiempo.
+--
+-- LA TAREA NO MANDA EL SECRETO: manda una FIRMA QUE CADUCA. pg_net deja
+-- cada petición, CON sus cabeceras, en net.http_request_queue hasta que
+-- su worker la manda (milisegundos), y esa tabla no es solo de postgres:
+-- pg_net 0.20.4 se la concede entera a PUBLIC (otorgado por
+-- supabase_admin, irrevocable con nuestras credenciales; medido el
+-- 4-oct-2026), así que mc_app también la alcanza. La guardia de esquema lo
+-- acepta declarado (ACCESOS_EN_ESQUEMAS_DECLARADOS en
+-- packages/db/src/esquema.ts). Por eso la petición lleva:
+--
+--     X-On-Cue-Timestamp   el segundo del disparo (epoch, en decimal)
+--     X-On-Cue-Signature   hex de HMAC-SHA256(timestamp, secreto), con
+--                          extensions.hmac de pgcrypto
+--
+-- y la ruta (apps/web/app/api/cron/tick/_lib/turno.ts) solo la acepta a
+-- ±90 s de su reloj, comparando en tiempo constante. Lo que alguien lea de
+-- la cola sirve para pedir UN turno durante minuto y medio, que el cron
+-- pide de todos modos, y un turno repetido no corre nada dos veces (cada
+-- corrida se reclama con un candado por job). Ni Authorization ni Bearer:
+-- el Bearer lo sigue aceptando la ruta solo para Vercel Cron (opción A) y
+-- para probar a mano. `make cron.status` cuenta las filas de la cola
+-- (cola_pg_net): si crece, pg_net está atascado y lo que llegue tarde,
+-- con la firma caducada, la ruta lo rechaza con 401.
 --
 -- Orden de `make cron.install` (scripts/cron-tick.sh), para que la tarea
 -- nunca dispare sin secreto: 1) cron-tick-vault.sql comprueba que Vault
 -- está (sin secretos), 2) cron-tick-secreto.sql lo guarda, 3) este lote
--- programa la tarea. Y aun así la tarea no llama si el secreto falta
--- (WHERE EXISTS abajo): un Vault borrado a mano no deja peticiones sin
--- Authorization ni 401 cada minuto en cron.status.
+-- programa la tarea. Y aun así la tarea no llama si el secreto falta (el
+-- FROM vault.decrypted_secrets de abajo no da ninguna fila): un Vault
+-- borrado a mano no deja peticiones sin firma ni 401 cada minuto en
+-- cron.status.
 --
 -- Idempotente: crea las extensiones si faltan y retira las tareas
 -- `on-cue-tick` y `on-cue-tick-purga` si ya existían antes de
@@ -68,12 +82,15 @@ SELECT cron.schedule(
     url := '{{APP_URL}}/api/cron/tick',
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
-      'Authorization', 'Bearer ' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'on_cue_cron_secret')
+      'X-On-Cue-Timestamp', f.ts,
+      'X-On-Cue-Signature', encode(extensions.hmac(f.ts, s.decrypted_secret, 'sha256'), 'hex')
     ),
     body := '{}'::jsonb,
     timeout_milliseconds := 60000
   )
-  WHERE EXISTS (SELECT 1 FROM vault.decrypted_secrets WHERE name = 'on_cue_cron_secret' AND decrypted_secret IS NOT NULL);
+  FROM (SELECT floor(extract(epoch FROM now()))::bigint::text AS ts) f,
+       vault.decrypted_secrets s
+  WHERE s.name = 'on_cue_cron_secret' AND s.decrypted_secret IS NOT NULL;
   $tick$
 );
 

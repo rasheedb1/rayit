@@ -26,5 +26,5 @@
 SELECT vault.update_secret(id, '{{CRON_SECRET}}') FROM vault.secrets WHERE name = 'on_cue_cron_secret';
 
 SELECT vault.create_secret('{{CRON_SECRET}}', 'on_cue_cron_secret',
-         'Bearer de /api/cron/tick (CIM-7). El mismo valor que CRON_SECRET en Vercel.')
+         'Clave de la firma de /api/cron/tick (CIM-7). El mismo valor que CRON_SECRET en Vercel.')
  WHERE NOT EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'on_cue_cron_secret');

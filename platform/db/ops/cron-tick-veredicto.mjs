@@ -105,7 +105,8 @@ export function veredicto(estado) {
   // Decide la más reciente: un 401 o un 500 que ya se arregló no deja el chequeo en rojo.
   const c = ultima ? codigo(ultima) : null;
   if (c === 401) {
-    error('401: el CRON_SECRET del Vault no es el de Vercel. make cron.install con el valor que tiene Vercel (o rótalo en los dos).');
+    error('401: la firma no pasa. Lo típico: el CRON_SECRET del Vault no es el de Vercel; make cron.install con el valor que tiene Vercel (o rótalo en los dos). ' +
+      'Si coinciden, la firma llegó caducada: el reloj de Supabase y el de Vercel se separan más de 90 s, o pg_net la mandó tarde (mira cola_pg_net).');
   } else if (c === 500) {
     error('500: el turno falla. Mira los logs de Vercel ([cron/tick]); lo típico al integrar es que falte WORKER_DATABASE_URL.');
   } else if (c === 504) {
@@ -131,7 +132,9 @@ export function veredicto(estado) {
   }
 
   const cola = Number(estado?.cola_pg_net ?? 0);
-  if (cola >= COLA_ATASCADA) aviso(`pg_net tiene ${cola} petición(es) sin enviar: está atascado, y la cabecera con el secreto sigue en net.http_request_queue.`);
+  if (cola >= COLA_ATASCADA) {
+    aviso(`pg_net tiene ${cola} petición(es) sin enviar en net.http_request_queue: está atascado. Lo que salga con más de 90 s de retraso lleva la firma caducada y la ruta lo rechaza (401); el secreto no está en la cola, solo firmas.`);
+  }
 
   const sano = !lineas.some((l) => l.nivel === 'error');
   if (sano && c === 200) {
