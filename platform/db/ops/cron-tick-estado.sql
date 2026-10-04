@@ -38,8 +38,8 @@ SELECT jsonb_build_object(
         FROM net._http_response ORDER BY created DESC LIMIT 5) r),
   -- Peticiones que pg_net aún no ha mandado. Cada una lleva la cabecera
   -- Authorization con el secreto en claro hasta que sale (normalmente
-  -- milisegundos; la tabla solo la lee postgres). Si crece, pg_net está
-  -- atascado y el secreto se queda ahí más tiempo.
+  -- milisegundos; pg_net se la concede a PUBLIC, ver db/ops/cron-tick.sql).
+  -- Si crece, pg_net está atascado y el secreto se queda ahí más tiempo.
   'cola_pg_net', (SELECT count(*) FROM net.http_request_queue),
   -- La última pasada buena de outbound.dispatch: si el turno responde 200
   -- pero esto no avanza, el despacho no está corriendo.
