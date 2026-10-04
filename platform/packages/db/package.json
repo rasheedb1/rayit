@@ -34,6 +34,7 @@
     "./demo-baja": "./src/demo-baja.ts",
     "./test/pglite": "./test/pglite.ts",
     "./test/membresia": "./test/membresia.ts",
+    "./test/demo": "./test/demo.ts",
     "./queries/cadencias": "./src/queries/cadencias/index.ts",
     "./queries/cadencias-limites": "./src/queries/cadencias/limites.ts",
     "./queries/accesos": "./src/queries/accesos.ts",

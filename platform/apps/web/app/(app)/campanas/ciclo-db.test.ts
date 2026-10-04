@@ -39,6 +39,7 @@ vi.mock("next/headers", () => ({ headers: async () => new Headers({ "user-agent"
 
 import { getCampaign, getCampaignResult, listCampaignReports, recordBrandSnapshot } from "@mc/db";
 import type { PublicReportView } from "@mc/db/queries/campanas";
+import { medianasVigentesSql, multiploPonderado, type MedianaVigente } from "@mc/db/test/demo";
 import { closeDb, getDbMode, withWorkspace } from "@/lib/db";
 import { aceptarCotizacion, crearCampanaConVentana } from "@/app/(app)/cotizar/actions";
 import { facturarCampana } from "@/app/(app)/finanzas";
@@ -179,7 +180,13 @@ describe("el ciclo de una campaña, de la cotización aceptada a la apertura pú
       shares: 990, // 528 + 462
       linkClicks: null, // ninguna de las dos lecturas trae clics: null, no cero
       reachNonFollowersPct: "0.54991", // (28 600 + 28 987) / 104 720 = 0,549914…
-      viewsVsMedian: "0.824", // (88 000·88 000/121 500 + 66 000·66 000/69 000) / 154 000 = 0,82381…
+      // (88 000·88 000/mediana IG + 66 000·66 000/mediana TikTok) / 154 000, con la
+      // línea base que el seed dejó HOY: la mediana cambia con el día de la
+      // siembra (0,824 el 28-sep, 0,812 el 4-oct; CIM-12, @mc/db/test/demo).
+      viewsVsMedian: multiploPonderado(
+        [{ platformId: "instagram", views: 88_000 }, { platformId: "tiktok", views: 66_000 }],
+        await withWorkspace((tx) => tx.query<MedianaVigente>(medianasVigentesSql()).then((x) => x.rows)),
+      ),
       brandFollowersGained: 1600,
       brandFollowersBaselineRate: "10.0000",
       brandFollowersCampaignRate: "200.0000",

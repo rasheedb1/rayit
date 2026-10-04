@@ -297,7 +297,15 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
     const run = await corrida(h, 'campaign.compute', 2);
     assert.equal(run.status, 'ok', run.error ?? '');
     const r = await resultado();
-    assert.equal(r.views_vs_median, '4.496', 'Café Alma: 4,496× la mediana del creador');
+    // El múltiplo sale de la línea base del seed (que la última prueba de este
+    // bloque demuestra idéntica a la de compute.baseline), no de una cifra
+    // clavada: la parrilla del seed avanza con el reloj y la mediana de los
+    // últimos veinte videos cambia según el día (4,496 el 28-sep, 4,466 el
+    // 4-oct; CIM-12). Café Alma: 412 000 views del reel y 300 000 del TikTok
+    // a 30 días, ponderado por views como packages/core/src/campanas.ts.
+    const mediana = (red: string) => Number(basesDelSeed.find((b) => b.clave === `${red}:720`)!.median_views);
+    const ponderado = (412_000 * (412_000 / mediana('instagram')) + 300_000 * (300_000 / mediana('tiktok'))) / 712_000;
+    assert.equal(r.views_vs_median, ponderado.toFixed(3), 'Café Alma: el múltiplo de la mediana del creador');
     assert.ok(!r.missing_inputs.includes('baseline'));
   });
 
@@ -313,21 +321,30 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
         LIMIT 5`,
     );
     const post = (n: string) => `00000002-0000-4000-8000-000000000${n}`;
-    assert.deepEqual(top.rows.map((r) => [r.post_id, r.views_vs_median, r.outlier_tier, r.is_outlier]), [
-      [post('d01'), '5.971', 'breakout', true],
-      [post('d06'), '3.710', 'outlier', true],
-      [post('d18'), '2.662', 'outlier', true],
-      [post('d02'), '2.469', 'outlier', true],
-      [post('d28'), '2.359', 'outlier', true],
-    ]);
+    // Los cinco mejores del seed, con sus cifras: las de hoy, porque la
+    // mediana de la parrilla cambia con el día (CIM-12). Que el seed y
+    // CON-6 calculan lo mismo lo prueba la última prueba de este bloque.
+    const delSeed = puntajesDelSeed
+      .filter((p) => p.views_vs_median !== null)
+      .sort((a, b) => Number(b.views_vs_median) - Number(a.views_vs_median));
+    assert.deepEqual(
+      top.rows.map((r) => [r.post_id, r.views_vs_median, r.outlier_tier, r.is_outlier]),
+      delSeed.slice(0, 5).map((p) => [p.post_id, p.views_vs_median, p.outlier_tier, p.is_outlier]),
+    );
+    assert.deepEqual([top.rows[0]?.post_id, top.rows[0]?.outlier_tier], [post('d01'), 'breakout'], 'el reel de Café Alma encabeza, como breakout');
 
     const avisos = await h.db.query<{ kind: string; entity_type: string; entity_id: string; action_url: string; title_es: string }>(
       `SELECT kind, entity_type, entity_id, action_url, title_es FROM notification
         WHERE workspace_id = '${LAURA}' AND kind IN ('outlier','breakout') AND read_at IS NULL AND dismissed_at IS NULL
         ORDER BY entity_id`,
     );
-    assert.equal(avisos.rows.length, 6, 'los seis videos a 2× o más, una vez cada uno');
-    assert.deepEqual(avisos.rows.filter((a) => a.kind === 'breakout').map((a) => a.entity_id), [post('d01')]);
+    const aDosOMas = delSeed.filter((p) => p.is_outlier);
+    assert.equal(avisos.rows.length, aDosOMas.length, 'los videos a 2× o más, una vez cada uno');
+    assert.ok(aDosOMas.length >= 2, 'la demo tiene videos destacados');
+    assert.deepEqual(
+      avisos.rows.filter((a) => a.kind === 'breakout').map((a) => a.entity_id),
+      delSeed.filter((p) => p.outlier_tier === 'breakout').map((p) => p.post_id).sort(),
+    );
     for (const a of avisos.rows) {
       assert.equal(a.entity_type, 'post');
       assert.equal(a.action_url, '/resumen', 'RES-3 es quien la muestra');

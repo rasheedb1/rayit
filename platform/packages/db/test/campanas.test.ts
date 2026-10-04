@@ -39,6 +39,7 @@ import {
   recordBrandSnapshot,
 } from '../src/index.ts';
 import { filasDeBitacora } from './bitacora.ts';
+import { medianasVigentesSql, multiploPonderado, POSTS_CAFE_ALMA_A_30_DIAS, type MedianaVigente } from './demo.ts';
 import {
   openTestDb, type TestDb,
   WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO, CAMPAIGN_NUTRIVE, CAMPAIGN_HOGAR_LINDO,
@@ -56,6 +57,9 @@ const CAMPAIGN_SIN_FECHAS = '00000003-0000-4000-8000-00000ca0f002';
 
 let t: TestDb;
 const laura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_LAURA, fn);
+/** El múltiplo de Café Alma contra la línea base que hay hoy en la tabla (test/demo.ts, CIM-12). */
+const multiploCafeAlma = async () =>
+  multiploPonderado(POSTS_CAFE_ALMA_A_30_DIAS, await laura((tx) => tx.query<MedianaVigente>(medianasVigentesSql()).then((r) => r.rows)));
 
 before(async () => {
   t = await openTestDb();
@@ -285,8 +289,17 @@ describe('buscar y sugerir', () => {
     // por fecha de publicación descendente.
     const ids = todos.map((p) => p.postId);
     assert.ok(!ids.includes(POST_D01_REEL_CAFE_ALMA) && !ids.includes(POST_D02_TIKTOK_CAFE_ALMA), 'los suyos no se ofrecen');
-    for (const id of [POST_D04_TIKTOK_FRESKO, POST_D03_TIKTOK_FRESKO, POST_D05_YOUTUBE_NUTRIVE]) {
-      assert.ok(ids.includes(id), `${id} debería poder asociarse`);
+    // Los de las otras campañas se buscan por su caption y no por su sitio
+    // en la primera página: la parrilla del seed 0002 avanza con el reloj
+    // y, pasados unos días, el del 15 de julio ya no cabe en los 50 más
+    // recientes (CIM-12: la prueba fallaba según el día).
+    const buscar = async (q: string) => (await laura((tx) => listLinkablePosts(tx, { campaignId: CAMPAIGN_CAFE_ALMA, q }))).map((p) => p.postId);
+    const coldBrew = await buscar('cold brew');
+    assert.ok(!coldBrew.includes(POST_D01_REEL_CAFE_ALMA) && !coldBrew.includes(POST_D02_TIKTOK_CAFE_ALMA), 'ni buscándolos se ofrecen los suyos');
+    const deFresko = await buscar('@freskomarket');
+    const nutrive = await buscar('Nutrivé');
+    for (const [id, encontrados] of [[POST_D04_TIKTOK_FRESKO, deFresko], [POST_D03_TIKTOK_FRESKO, deFresko], [POST_D05_YOUTUBE_NUTRIVE, nutrive]] as const) {
+      assert.ok(encontrados.includes(id), `${id} debería poder asociarse`);
     }
     const fechas = todos.map((p) => p.publishedAt);
     assert.deepEqual(fechas, [...fechas].sort().reverse(), 'más recientes primero');
@@ -922,7 +935,7 @@ describe('resultado de campaña', () => {
       assert.ok(r);
       assert.deepEqual(
         [r.cutHours, r.views, r.reach, r.interactions, r.saves, r.shares, r.linkClicks, r.reachNonFollowersPct, r.viewsVsMedian],
-        [720, 712000, 486000, 57530, 9600, 5100, 6240, '0.58025', '4.496'],
+        [720, 712000, 486000, 57530, 9600, 5100, 6240, '0.58025', await multiploCafeAlma()],
       );
       assert.deepEqual(
         [r.brandFollowersGained, r.brandFollowersBaselineRate, r.brandFollowersCampaignRate, r.codeRedemptions, r.attributedRevenue, r.currency],
@@ -963,10 +976,12 @@ describe('resultado de campaña', () => {
     });
 
     test('CON-6 → CAM-5: views_vs_median sale de creator_baseline; sin línea base fiable, null y «baseline»', async () => {
-      // Con la línea base del seed (el contrato de CON-6: la tabla, no su código): 4,496.
+      // Con la línea base del seed (el contrato de CON-6: la tabla, no su
+      // código). La cifra cambia con el día en que se sembró (test/demo.ts).
+      const esperado = await multiploCafeAlma();
       await laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
       const con = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
-      assert.deepEqual([con?.viewsVsMedian, con?.missingInputs], ['4.496', ['brand_csv_sales']]);
+      assert.deepEqual([con?.viewsVsMedian, con?.missingInputs], [esperado, ['brand_csv_sales']]);
       // Sin la de TikTok (CON-6 todavía no la calculó, o su muestra no es fiable).
       const fiables = await laura((tx) =>
         tx.query<{ id: string }>("SELECT id FROM creator_baseline WHERE platform_id = 'tiktok' AND is_reliable").then((r) => r.rows.map((x) => x.id)),
@@ -984,7 +999,7 @@ describe('resultado de campaña', () => {
         await t.admin(`UPDATE creator_baseline SET is_reliable = true WHERE id IN (${lista})`);
       }
       await laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
-      assert.equal((await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA)))?.viewsVsMedian, '4.496');
+      assert.equal((await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA)))?.viewsVsMedian, esperado);
     });
 
     test('desde otro workspace no se lee ni se escribe el resultado de Laura', async () => {
