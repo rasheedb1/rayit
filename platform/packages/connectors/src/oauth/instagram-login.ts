@@ -20,9 +20,13 @@
  *
  * No hay refresh token: se guarda el de larga duración como accessToken,
  * refreshToken vacío y accessExpiresAt a ~60 días. Meta documenta
- * `access_token=` en la URL para las dos llamadas de graph.instagram.com;
- * aquí va en la cabecera Authorization como en CON-1, para no dejarlo en
- * ningún log de acceso (docs/propuestas/CON-3.md §0.5). Scopes:
+ * `access_token=` en la URL para las dos llamadas de graph.instagram.com
+ * y es la ÚNICA forma que aceptan: con el token en la cabecera
+ * Authorization responden 100 «The parameter access_token is required»
+ * (comprobado en producción el 4-oct-2026, con un token real). Por eso
+ * esas dos llamadas lo mandan como parámetro, y el token va en `secrets`
+ * para que ni el log de llamadas ni el fetch grabado de las pruebas lo
+ * conserven (CON-3 §0.5 prefería la cabecera; no era posible). Scopes:
  * instagram_business_basic e instagram_business_manage_insights (§0.5).
  */
 import type { HttpCore } from '../http/client.ts';
@@ -85,10 +89,11 @@ export async function instagramExchangeCode(core: HttpCore, cfg: OAuthAppConfig,
   const externalAccountId = typeof userId === 'string' ? userId : typeof userId === 'number' && Number.isSafeInteger(userId) ? String(userId) : null;
   // El token corto solo sirve para pedir el de larga duración; nunca se guarda.
   const shortLived: OAuthTokens = { accessToken: shortToken, accessExpiresAt: expiresAt(core.now(), 3600, 3600), scopes: scopesGranted };
+  // Meta no acepta este token en la cabecera: va como parámetro (ver arriba).
   const long = await core.call<Record<string, unknown>>({
     platformId: 'instagram', family: 'instagram', endpoint: OAUTH_ENDPOINTS.longLived, method: 'GET', url: `${INSTAGRAM_GRAPH_HOST}/access_token`,
-    query: { grant_type: 'ig_exchange_token', client_secret: cfg.clientSecret },
-    connectionId: null, tokens: shortLived, authStyle: 'bearer', secrets: [cfg.clientSecret, shortToken], parseError: parseInstagramError, signal: opts.signal,
+    query: { grant_type: 'ig_exchange_token', client_secret: cfg.clientSecret, access_token: shortLived.accessToken },
+    connectionId: null, tokens: null, authStyle: 'none', secrets: [cfg.clientSecret, shortToken], parseError: parseInstagramError, signal: opts.signal,
   });
   const tokens = longLivedTokens(long.body, core.now(), scopesGranted.length > 0 ? scopesGranted : cfg.scopes);
   return { tokens, externalAccountId, scopesGranted: [...tokens.scopes] };
@@ -102,8 +107,9 @@ export async function instagramRefresh(core: HttpCore, _cfg: OAuthAppConfig, tok
   try {
     const res = await core.call<Record<string, unknown>>({
       platformId: 'instagram', family: 'instagram', endpoint: OAUTH_ENDPOINTS.refresh, method: 'GET', url: `${INSTAGRAM_GRAPH_HOST}/refresh_access_token`,
-      query: { grant_type: 'ig_refresh_token' },
-      connectionId: opts.connectionId ?? null, tokens, authStyle: 'bearer', parseError: parseInstagramError, signal: opts.signal,
+      // Igual que el token de larga duración: Meta solo lo acepta como parámetro.
+      query: { grant_type: 'ig_refresh_token', access_token: tokens.accessToken },
+      connectionId: opts.connectionId ?? null, tokens: null, authStyle: 'none', secrets: [tokens.accessToken], parseError: parseInstagramError, signal: opts.signal,
     });
     return longLivedTokens(res.body, core.now(), tokens.scopes);
   } catch (err) {
