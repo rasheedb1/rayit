@@ -8,7 +8,7 @@ DB_URL ?= postgres://mc:mc@localhost:5432/oncue
         github.status github.check \
         vercel.set vercel.dir vercel.link vercel.rename vercel.unlink vercel.status vercel.check vercel.deploy vercel.run \
         cron.install cron.status cron.uninstall core.prompts \
-        verificar arranque
+        verificar verificar.estres arranque
 
 help: ## Muestra esta ayuda
 	@grep -E '^[a-zA-Z_.-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -69,8 +69,11 @@ fmt: ## Formatea el código
 test: ## Corre las pruebas
 	pnpm turbo run test
 
-verificar: ## La puerta de calidad entera: typecheck + lint + test, sin caché y de dos en dos
+verificar: ## La puerta de calidad entera: typecheck + lint + test, sin caché, dos verificar a la vez como mucho en la máquina
 	pnpm verificar
+
+verificar.estres: ## ¿Es determinista la puerta? N corridas de pnpm verificar, de a P (N=10 P=2); ver scripts/estres-verificar.sh --help
+	@./scripts/estres-verificar.sh $(or $(N),10) --paralelo $(or $(P),2) $(if $(DIAS),--dias-rotando)
 
 arranque: ## Deja esta máquina lista: credenciales, remoto y comprobaciones
 	@./scripts/arranque.sh

@@ -277,6 +277,19 @@ docs/                  Arquitectura, esquema, investigación de APIs
 .claude/settings.json  Permisos de Claude Code para el equipo. Se versiona.
 ```
 
+## Puerta de calidad
+
+| Comando | Qué hace |
+|---|---|
+| `pnpm verificar` (en `platform/`) | typecheck, lint y test. Deja dos a la vez en toda la máquina: el tercero espera turno y lo dice |
+| `make verificar.estres N=10 P=2` | Corre la puerta N veces, de a P, y cuenta pruebas fallidas o canceladas con la carga de cada corrida |
+
+Las pruebas que abren Postgres embebido cargan una foto de disco
+(`platform/node_modules/.cache/mc-pglite`) en vez de migrar; se rehace
+sola cuando cambia una migración. Detalle en `platform/packages/db/README.md`.
+
+---
+
 ## Convenciones
 
 - **Idioma**: comentarios, documentación y nombres de rama en español.
