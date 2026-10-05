@@ -77,7 +77,22 @@ Arreglos de esta clase:
    reloj rotando» daban verde sin probar nada. Con la variable pasando,
    a +90 días caían 16 pruebas de `@mc/db` (Finanzas, Cotizar, campañas),
    2 del worker, 2 de la web y 3 de `foto.test.mjs`.
-4. **Un candado huérfano** de la foto de disco hacía esperar hasta diez
+4. **El día de la semana.** Moviendo el ancla día a día
+   (`--ancla-rotando`) salieron tres pruebas que solo pasaban ciertos
+   días, todas de Rasheed: el despacho de la demo del worker
+   (`tick.test.ts`, `outreach-demo.test.ts`, y la misma en
+   `tick-postgres.test.ts` del CI) pedía «ahora, o la PRÓXIMA apertura»
+   del horario de envío, que un sábado, un domingo o un festivo de
+   Colombia cae en el futuro del `now()` de la base, y el despacho no
+   reclamaba nada; la prueba del tick siguiente usaba el 6-oct fijo y,
+   desde ese día, la corrida de la anterior quedaba después y su tick
+   salía como cubierto; y el asistente de importación fijaba la
+   exportación al 12-sep, que deja de valer en cuanto una fecha del
+   archivo leída en día/mes (el 9-oct) pasa. Ahora la demo despacha en
+   la última apertura ya llegada (`test/helpers/ventana.ts`), el tick
+   siguiente es el día hábil siguiente a ese, y la exportación es la de
+   hoy.
+5. **Un candado huérfano** de la foto de disco hacía esperar hasta diez
    minutos, en silencio (r2).
 
 ## Arreglo
@@ -94,6 +109,8 @@ Arreglos de esta clase:
 | `pnpm verificar --filter=…` vuelve a pasar las banderas a turbo | `scripts/verificar.sh` |
 | Los techos salen de lo medido: `SETUP_TIMEOUT_MS` 180 s, `PRUEBA_DB_TIMEOUT_MS` 60 s, `--test-timeout` de `@mc/db` 120 s | `packages/db/test/tiempos.ts`, `apps/web/lib/testing/tiempos.ts` |
 | `embedded.ts` ya no mete `foto.mjs` ni el reloj en el bundle de la web: los carga con un `import()` que webpack no sigue, sin `import.meta.url`. El build vuelve a «Compiled successfully» sin avisos y el bundle del turno, a sus tres rutas permitidas | `packages/db/src/embedded.ts`, `db/lib/reloj.mjs`, `revisar-bundle-turno.mjs` |
+| Las pruebas que despachan la demo usan la última apertura ya llegada del horario de envío, no la próxima | `apps/worker/test/helpers/ventana.ts`, `tick.test.ts`, `outreach-demo.test.ts`, `tick-postgres.test.ts` |
+| El reloj de las pruebas guarda `performance.now` al cargar: `vi.useFakeTimers()` lo finge, y leyéndolo en cada llamada los `afterEach` con `vi.useRealTimers()` se colgaban | `scripts/pruebas/reloj.mjs` |
 | `estres-verificar.sh --dias 2,7,30,90` (la máquina en esas fechas), `--ancla-rotando` (el día de las pruebas, los siete de la semana) y `--sin-ancla` | `scripts/estres-verificar.sh`, `make verificar.estres` |
 
 ## Decisiones
@@ -118,8 +135,9 @@ Arreglos de esta clase:
   Con el ancla puesta, la máquina a +90 no cambia nada en las suites de
   la demo: es justo lo que se quiere demostrar, y por eso la tanda
   `--sin-ancla` enseña que el reloj sí se mueve y que sin ancla hay rojo.
-  Mover el ancla más allá de una semana deja de tener sentido: la demo
-  está escrita para unos días concretos.
+  Mover el ancla sirve para cazar pruebas que dependen del día de la
+  semana o de una fecha cercana; más allá de unos días empieza a medir
+  la demo y no las pruebas (a+9, Finanzas: «Resultado»).
 - **Los techos no arreglan nada**: solo deciden cuándo una prueba
   colgada da rojo. Se fijan con margen sobre lo medido, no «el más alto
   que había»: con el techo de 900 s de la r2, una prueba de cuatro
@@ -158,6 +176,13 @@ Cambios mínimos, ninguno de lógica de producto:
 
 ## Pendiente
 
+- **Cuatro pruebas de Finanzas con vencimientos fijos de octubre**
+  (`packages/db/test/finanzas.test.ts`: «draft → sent → void», «trae las
+  tres facturas por cobrar», «ocho semanas…», «y los KPI de Finanzas se
+  mueven con el cobro») cambian de resultado desde el 14-oct. Con el
+  ancla la puerta no las ve; para Nicolás: fechas relativas a
+  CURRENT_DATE o la demo anclada, como las de campañas.
+
 - **El job «contra-postgres-real» del CI corre con el reloj de verdad**
   (un Postgres real no se ancla) y sus pruebas de Finanzas y Cotizar
   dependen de la demo de septiembre: desde diciembre darán rojo ahí. Lo
@@ -166,4 +191,38 @@ Cambios mínimos, ninguno de lógica de producto:
 
 ## Resultado
 
-RESULTADOS
+Tandas del 5-oct con `scripts/estres-verificar.sh`, `pnpm verificar`
+entero, de a dos, con otros agentes trabajando en la máquina (11
+núcleos). «m+N» es la máquina N días adelante; «a+N», el ancla de las
+pruebas N días adelante.
+
+| Tanda | Corridas | Reloj | Carga (1 min) inicio → máx | Segundos por corrida | Fallidas · archivos en FAIL · canceladas · tareas sin su reloj |
+|---|---|---|---|---|---|
+| A · `make verificar.estres N=10 P=2` | 10 | m+0 | 5,1 → 77,5 | 279–340 | 0 · 0 · 0 · — |
+| B · `N=8 DIAS=2,7,30,90` | 8 | m+2, +7, +30, +90 (dos de cada) | 20,1 → 60,7 | 248–331 | 0 · 0 · 0 · 0 |
+| E · `N=10 DIAS=1` (`--dias-rotando`) | 10 | m+0 … m+9 | 7,6 → 71,9 | 238–282 | 0 · 0 · 0 · 0 |
+| F · `N=10 ANCLA=1` (`--ancla-rotando`) | 10 | a+0 … a+9 | 17,2 → 42,5 | 252–265 | a+0 … a+8: 0 · 0 · 0 · 0. a+9: 4 de Finanzas (abajo) |
+| D · `N=2 DIAS=2,90 SIN_ANCLA=1` (control) | 2 | m+2 y m+90, sin ancla | 15,8 → 30,6 | 244–248 | m+2: 0. m+90: 13 de `@mc/db` (Finanzas, Cotizar) y 1 de la web |
+
+- **A, B y E son el criterio de la historia**: 28 corridas de a dos sin
+  una prueba fallida ni cancelada, también con la máquina a +2, +7, +30 y
+  +90 días y en los diez días siguientes. La espera de turno fue 0 en
+  todas: solo corría este estrés.
+- **D es el control**: sin el ancla el reloj sí se mueve. A +2 días ya
+  no cae nada (las campañas miran la demo del 28-sep); a +90 caen las de
+  Finanzas y Cotizar que dependen de la demo de septiembre y el formato
+  de fecha de Ventas, que pone el año cuando no es el actual.
+- **F, con el ancla rotando, encontró tres pruebas que dependían del día
+  de la semana** (arregladas, «Causa» 4) en una primera tanda de 7 (5 en
+  rojo). Tras el arreglo, a+0 … a+8 (lunes 5 a martes 13, con un fin de
+  semana y el festivo del 12-oct) en verde. A **a+9 (el 14-oct)** caen
+  cuatro pruebas de Finanzas (`finanzas.test.ts`, de Nicolás) que crean
+  facturas con vencimientos fijos de octubre: desde ese día entran en
+  «vence pronto» y en las ocho semanas del flujo. Con el ancla la puerta
+  no lo ve; sin ella daría rojo el 14-oct real. Queda en «Pendiente».
+- Lo más lento medido en A, B y E: la primera suite de `@mc/db` (siembra
+  la demo) 41 s; la prueba más lenta de la web, 6 s; la del worker, 11 s.
+  De ahí salen los techos (`SETUP_TIMEOUT_MS` 180 s,
+  `PRUEBA_DB_TIMEOUT_MS` 60 s, `--test-timeout` de `@mc/db` 120 s).
+- `pnpm --filter @mc/web build`: «Compiled successfully», sin avisos, y el
+  bundle del turno con sus tres rutas permitidas de siempre.

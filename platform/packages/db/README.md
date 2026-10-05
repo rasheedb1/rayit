@@ -803,8 +803,8 @@ máquina.
 
 Cada archivo de `test/` abre su propia base embebida en su `before`,
 desde la foto (arriba): décimas de segundo, más una siembra por proceso.
-`--test-timeout` es de 120 s (la prueba más lenta medida tarda 27 s
-bajo carga) y cada `before` que abre la base lleva `SETUP_TIMEOUT` de
+`--test-timeout` es de 120 s (lo más lento medido, la primera suite,
+que siembra la demo, tardó 41 s con carga 77) y cada `before` que abre la base lleva `SETUP_TIMEOUT` de
 `test/pglite.ts` (`SETUP_TIMEOUT_MS` de `test/tiempos.ts`, 180 s, el
 mismo techo que usan los `beforeAll` de la web y el arnés del worker),
 sacado de lo medido: construir la foto y sembrar la demo con la máquina

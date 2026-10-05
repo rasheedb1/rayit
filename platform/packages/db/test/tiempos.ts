@@ -8,10 +8,12 @@
  * medido, no de «lo más alto que había» (r3, 5-oct): el peor caso
  * legítimo es el primer proceso de la máquina después de cambiar una
  * migración, que construye la foto (77 migraciones) y siembra la demo con
- * la máquina cargada mientras los demás esperan su candado. Eso tardó
- * hasta 60 s con carga 50-70 en las tandas de estres-verificar.sh; 180 s
- * es tres veces eso. Más arriba solo retrasa el rojo de un arranque
- * colgado de verdad. Un candado de un proceso muerto ya no hace esperar:
+ * la máquina cargada mientras los demás esperan su candado. En las 28
+ * corridas de estres-verificar.sh del 5-oct (carga hasta 77) lo más lento
+ * fue la primera suite de @mc/db, que siembra la demo: 41 s. Construir la
+ * foto en frío cuesta de 5 a 60 s según la carga; 180 s cubre las dos
+ * cosas seguidas con margen. Más arriba solo retrasa el rojo de un
+ * arranque colgado de verdad. Un candado de un proceso muerto ya no hace esperar:
  * foto.mjs lo detecta por el pid.
  */
 export const SETUP_TIMEOUT_MS = 180_000;

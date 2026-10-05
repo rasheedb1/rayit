@@ -24,8 +24,9 @@ export const PRUEBA_TIMEOUT_MS = 20_000;
  * entera renderizada contra la demo, un ciclo de campaña, la importación
  * de 2 385 posts de RES-6). PGlite es WASM en el hilo del proceso: con la
  * máquina cargada, una consulta pesada pasa del segundo. Medido (r3,
- * 5-oct): la más lenta de la web tarda ~5,5 s sola y no pasó de 20 s con
- * dos verificar a la vez; 60 s es el triple del peor caso visto.
+ * 5-oct): en 28 corridas de estres-verificar.sh, de a dos y con carga
+ * hasta 77, la más lenta (el CSV de casi 5 MB) no pasó de 6 s; 60 s es
+ * diez veces eso.
  */
 export const PRUEBA_DB_TIMEOUT_MS = 60_000;
 

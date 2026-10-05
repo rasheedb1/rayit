@@ -91,7 +91,7 @@ export const STORIES: readonly Story[] = [
     desc: "apps/web con Next.js + TypeScript, packages/db con Drizzle, apps/worker con pg-boss, turbo corriendo dev, typecheck, lint y test. Un package.json por paquete.",
     done: "make dev levanta los tres procesos y pnpm turbo run typecheck lint pasa en CI.",
     status: "hecho",
-    note: "4-oct: hecha. mc_worker_login (miembro de mc_worker) existe desde el 28-sep y el worker corre por turnos en la web (/api/cron/tick, CIM-7); el proceso largo con pg-boss no se usa en producción, así que el GRANT y el esquema pgboss que la bloqueaban ya no hacen falta.",
+    note: "4-oct: hecha. mc_worker_login (miembro de mc_worker) existe desde el 28-sep y el worker corre por turnos en la web (/api/cron/tick); el proceso largo con pg-boss no se usa en producción.",
   },
   {
     id: "CIM-2", module: "CIM", owner: "rasheed", size: "M", sprint: 1, deps: ["CIM-1"],
@@ -147,9 +147,9 @@ export const STORIES: readonly Story[] = [
     id: "CIM-12", module: "CIM", owner: "rasheed", size: "S", sprint: 4, deps: ["CIM-2"],
     title: "pnpm verificar determinista",
     desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
-    done: "Veinte corridas seguidas de pnpm verificar en una máquina cargada, sin una sola prueba cancelada.",
+    done: "N≥10 rondas de make verificar.estres de a dos sin una prueba fallida ni cancelada, también con la máquina en otra fecha (DIAS=2,7,30,90).",
     status: "hecho",
-    note: "5-oct: hecha. Causa: carga, no lógica. Cada proceso de pruebas volvía a migrar PGlite y, en la web, a sembrar la demo (diez procesos de vitest por verificar); un candado huérfano de la foto hacía esperar en silencio; y unas pruebas clavaban cifras de un día. Arreglo: foto de disco con huella completa y candado pid@host con latido (db/lib/foto.mjs, probado en foto.test.mjs), la demo sembrada una vez por corrida, vitest con un tercio de los núcleos, dos verificar a la vez como mucho en la máquina (scripts/verificar.sh), techos en lib/testing/tiempos.ts y las cifras fijas sembrando el 28-sep (demo-anclada.test.ts). make verificar.estres: 10 corridas de a 2 (carga hasta 52), 4 de a 4 a la vez que esas, y 4 de a 4 sin turnos (carga hasta 71): 0 fallidas, 0 archivos en FAIL, 0 canceladas. Decisiones y archivos de Nicolás tocados: docs/propuestas/CIM-12.md.",
+    note: "5-oct (r3): hecha. La cancelación era turbo matando @mc/db cuando fallaba otra tarea; las pruebas corren con el reloj anclado al 5-oct. make verificar.estres: 28 corridas de a dos (10 normales, 8 con la máquina a +2/+7/+30/+90, 10 a +0…+9), carga hasta 77: 0 fallidas, 0 canceladas. Detalle y pendientes: docs/propuestas/CIM-12.md.",
   },
   {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],
@@ -181,7 +181,7 @@ export const STORIES: readonly Story[] = [
     desc: "El repositorio de GitHub conectado al proyecto de Vercel para que cada merge a main publique solo; el worker corre por turnos en la propia web (/api/cron/tick), llamado cada minuto por pg_cron de Supabase (Hobby) y, con Vercel Pro, por Vercel Cron.",
     done: "Un merge a main aparece en la URL sin correr ningún comando.",
     status: "en_curso",
-    note: "5-oct: el worker corre por turnos en producción (runTick en /api/cron/tick, con mc_worker_login desde el 28-sep) y el disparador existe: pg_cron de Supabase llama cada minuto firmando con CRON_SECRET, y make cron.status da verde. Falta: (1) la aprobación de Nicolás del PR 1 del runner (rama rasheed/CIM-7-runner-1; el PR 2, -2, es opcional), que pide apps/worker/README.md: en git no hay rastro de ella ni enlace al PR; (2) conectar GitHub a Vercel para que un merge a main publique solo, que es el «hecho» (un clic de Rasheed; hoy, make vercel.deploy PROD=1). Ojo: según la revisión del 5-oct, make cron.status muestra en cada turno dos jobs en exhausted, collect.account_metrics y outbound.replies; sin historia propia todavía.",
+    note: "5-oct: el worker corre por turnos en producción y pg_cron lo llama cada minuto (make cron.status en verde). Falta conectar GitHub a Vercel para que un merge a main publique solo (hoy, make vercel.deploy PROD=1) y la aprobación de Nicolás del PR 1 del runner; detalle en docs/propuestas/CIM-12.md.",
   },
   {
     id: "CIM-8", module: "CIM", owner: "nicolas", size: "S", sprint: 1, deps: ["CIM-2"],
