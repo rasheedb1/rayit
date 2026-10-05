@@ -23,7 +23,7 @@
 import { PGlite, type Transaction } from '@electric-sql/pglite';
 import { citext } from '@electric-sql/pglite/contrib/citext';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
-import { applyMigrations, execPglite, MIGRATIONS_DIR } from '@mc/db/embedded';
+import { applyMigrations, MIGRATIONS_DIR, type MigrationExec } from '@mc/db/embedded';
 import { fromPglite } from 'pg-boss';
 import { quoteIdent, type BossConnection, type Queryable, type QueryResult, type RoleCheck, type Row, type WorkerDatabase } from './db.ts';
 
@@ -52,9 +52,12 @@ export class PgliteDatabase implements WorkerDatabase {
     const db = await PGlite.create({ extensions: { citext, pg_trgm } });
     // Como superusuario, igual que antes: pg-boss comparte esta sesión y
     // los roles (mc_worker, mc_app) los crean las propias migraciones.
-    // El exec es el de @mc/db (db/lib/foto.mjs), el mismo de las pruebas.
+    const exec: MigrationExec = async (sql) => {
+      const out = await db.exec(sql);
+      return { rows: (out.at(-1)?.rows ?? []) as Array<Record<string, unknown>> };
+    };
     try {
-      await applyMigrations(execPglite(db), { dir: opts.migrationsDir ?? MIGRATIONS_DIR });
+      await applyMigrations(exec, { dir: opts.migrationsDir ?? MIGRATIONS_DIR });
     } catch (err) {
       await db.close().catch(() => undefined);
       throw err;
