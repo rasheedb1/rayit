@@ -25,6 +25,9 @@ import { applyMigrations, applySeeds, execPglite, MIGRATIONS_DIR, SEED_DIR, type
 import type { DbOptions } from './client.ts';
 import type { PgliteDb } from './pglite.ts';
 import type { PGlite } from '@electric-sql/pglite';
+// Solo tipos: se borran al compilar y no meten nada en el bundle (ver cargar).
+import type * as Foto from '../../../db/lib/foto.mjs';
+import type * as Reloj from '../../../db/lib/reloj.mjs';
 
 export { MIGRATIONS_DIR, SEED_DIR };
 /**
@@ -54,8 +57,8 @@ export const DB_DIR = dirname(MIGRATIONS_DIR);
  * tampoco se usa aquí import.meta.url: las rutas salen de DB_DIR, que
  * calcula aplicar.mjs.
  */
-type FotoMod = typeof import('../../../db/lib/foto.mjs');
-type RelojMod = typeof import('../../../db/lib/reloj.mjs');
+type FotoMod = typeof Foto;
+type RelojMod = typeof Reloj;
 const cargar = <T>(archivo: string): Promise<T> =>
   import(/* webpackIgnore: true */ /* @vite-ignore */ pathToFileURL(join(DB_DIR, 'lib', archivo)).href) as Promise<T>;
 let fotoMod: Promise<FotoMod> | undefined;

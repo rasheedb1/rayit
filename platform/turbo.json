@@ -1,6 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalPassThroughEnv": ["MC_RELOJ_DIAS", "MC_TEST_WORKERS", "MC_PGLITE_FOTO", "MC_PGLITE_FOTO_DIR"],
+  "globalPassThroughEnv": ["MC_RELOJ_DIAS", "MC_RELOJ_ANCLA", "MC_RELOJ_ANCLA_DIAS", "MC_TEST_WORKERS", "MC_PGLITE_FOTO", "MC_PGLITE_FOTO_DIR"],
   "tasks": {
     "build":     { "dependsOn": ["^build"], "outputs": [".next/**", "dist/**"] },
     "dev":       { "cache": false, "persistent": true },
