@@ -20,6 +20,7 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FixtureFetch, loadFixtures, withoutNetwork, type NetworkGuard } from '@mc/connectors';
 import { MIN_SAMPLE_FOR_BASELINE } from '@mc/core';
+import { medianasVigentesSql, multiploPonderado, POSTS_CAFE_ALMA_A_30_DIAS, type MedianaVigente } from '@mc/db/test/demo';
 import { allJobs } from '../src/jobs/index.ts';
 import { defineJob, JobRegistry } from '../src/runner/registry.ts';
 import { chainedAfter, CHAIN_SOURCE } from '../src/runner/run.ts';
@@ -297,15 +298,13 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
     const run = await corrida(h, 'campaign.compute', 2);
     assert.equal(run.status, 'ok', run.error ?? '');
     const r = await resultado();
-    // El múltiplo sale de la línea base del seed (que la última prueba de este
-    // bloque demuestra idéntica a la de compute.baseline), no de una cifra
-    // clavada: la parrilla del seed avanza con el reloj y la mediana de los
-    // últimos veinte videos cambia según el día (4,496 el 28-sep, 4,466 el
-    // 4-oct; CIM-12). Café Alma: 412 000 views del reel y 300 000 del TikTok
-    // a 30 días, ponderado por views como packages/core/src/campanas.ts.
-    const mediana = (red: string) => Number(basesDelSeed.find((b) => b.clave === `${red}:720`)!.median_views);
-    const ponderado = (412_000 * (412_000 / mediana('instagram')) + 300_000 * (300_000 / mediana('tiktok'))) / 712_000;
-    assert.equal(r.views_vs_median, ponderado.toFixed(3), 'Café Alma: el múltiplo de la mediana del creador');
+    // El múltiplo contra la línea base del seed (que la última prueba de este
+    // bloque demuestra idéntica a la de compute.baseline), por el oráculo de
+    // @mc/db/test/demo, que usa calcularResultado de @mc/core: la mediana
+    // de la parrilla cambia con el día (CIM-12). La cifra fija, 4,496 con
+    // la demo sembrada el 28-sep, la ancla packages/db/test/demo-anclada.test.ts.
+    const medianas = (await h.db.raw.query<MedianaVigente>(medianasVigentesSql())).rows;
+    assert.equal(r.views_vs_median, multiploPonderado(POSTS_CAFE_ALMA_A_30_DIAS, medianas), 'Café Alma: el múltiplo de la mediana del creador');
     assert.ok(!r.missing_inputs.includes('baseline'));
   });
 
@@ -323,7 +322,8 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
     const post = (n: string) => `00000002-0000-4000-8000-000000000${n}`;
     // Los cinco mejores del seed, con sus cifras: las de hoy, porque la
     // mediana de la parrilla cambia con el día (CIM-12). Que el seed y
-    // CON-6 calculan lo mismo lo prueba la última prueba de este bloque.
+    // CON-6 calculan lo mismo lo prueba la última prueba de este bloque; las
+    // cifras fijas del 28-sep, packages/db/test/demo-anclada.test.ts.
     const delSeed = puntajesDelSeed
       .filter((p) => p.views_vs_median !== null)
       .sort((a, b) => Number(b.views_vs_median) - Number(a.views_vs_median));

@@ -977,7 +977,8 @@ describe('resultado de campaña', () => {
 
     test('CON-6 → CAM-5: views_vs_median sale de creator_baseline; sin línea base fiable, null y «baseline»', async () => {
       // Con la línea base del seed (el contrato de CON-6: la tabla, no su
-      // código). La cifra cambia con el día en que se sembró (test/demo.ts).
+      // código). La cifra cambia con el día en que se sembró (test/demo.ts);
+      // la fija, 4,496 sembrando el 28-sep, la ancla demo-anclada.test.ts.
       const esperado = await multiploCafeAlma();
       await laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
       const con = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
