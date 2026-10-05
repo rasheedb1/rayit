@@ -181,7 +181,7 @@ export const STORIES: readonly Story[] = [
     desc: "El repositorio de GitHub conectado al proyecto de Vercel para que cada merge a main publique solo; el worker corre por turnos en la propia web (/api/cron/tick), llamado cada minuto por pg_cron de Supabase (Hobby) y, con Vercel Pro, por Vercel Cron.",
     done: "Un merge a main aparece en la URL sin correr ningún comando.",
     status: "en_curso",
-    note: "5-oct: el worker corre por turnos en producción y pg_cron lo llama cada minuto (make cron.status en verde). Falta conectar GitHub a Vercel para que un merge a main publique solo (hoy, make vercel.deploy PROD=1) y la aprobación de Nicolás del PR 1 del runner; detalle en docs/propuestas/CIM-12.md.",
+    note: "5-oct: el worker corre por turnos en producción y pg_cron lo llama cada minuto, firmando el turno (make cron.status en verde). Único pendiente técnico: conectar GitHub a Vercel para que un merge a main publique solo (un clic de Rasheed; hoy, make vercel.deploy PROD=1). Falta además la aprobación a posteriori de Nicolás del runner ya integrado (PR 1, rasheed/CIM-7-runner-1, entero en rasheed/integracion). Visto el 5-oct: cada turno marca collect.account_metrics y outbound.replies como agotados (outbound.replies falla); sin historia propia todavía. Detalle en docs/propuestas/CIM-12.md.",
   },
   {
     id: "CIM-8", module: "CIM", owner: "nicolas", size: "S", sprint: 1, deps: ["CIM-2"],

@@ -665,12 +665,14 @@ tiempos reales. Lo que las hace deterministas (CIM-12):
   worker (`apps/worker/test/campaign-compute.test.ts`) siembran como si
   hoy fuera el 28-sep (`createEmbeddedDb({ relojDias: diasHasta(ANCLA_DEMO) })`
   y `applyRepoSeeds(db, { relojDias })`) y comparan contra ese día: pasan
-  con o sin el ancla de arriba, también contra un Postgres real. Las
-  demás pruebas de la demo comparan contra el oráculo de `test/demo.ts`
-  o dependen del ancla; que sigan en verde con el ancla movida lo
-  comprueba `make verificar.estres ANCLA=1`, y que la máquina en otra
-  fecha no las toque, `make verificar.estres DIAS=2,7,30,90`
-  (docs/propuestas/CIM-12.md, «Resultado»).
+  con o sin el ancla de arriba, también contra un Postgres real. Ver
+  «Los relojes de las pruebas», abajo.
+- **Las facturas que crean las pruebas vencen relativo a hoy.**
+  `test/finanzas.test.ts` las crea con `diaDelEspacio(n)` (hoy + n días
+  en la zona del espacio, según el `now()` de la base), no con
+  `'2026-10-21'`: con un vencimiento fijo, desde el 14-oct caían en
+  «vence pronto» y el job contra Postgres real, que no se ancla, se
+  habría puesto rojo solo.
 - **Dos `pnpm verificar` a la vez como mucho en toda la máquina**
   (`scripts/verificar.sh`): el tercero espera turno y lo dice, como
   mucho `MC_VERIFICAR_ESPERA_MAX` segundos (1800); después sale con 75,
@@ -800,13 +802,49 @@ máquina.
   `before`/`after` redactados; `test/audit-convencion.test.ts` lo exige
   en los archivos de consultas que adoptaron la convención.
 
+## Los relojes de las pruebas
+
+Hay dos días fijos y una regla para elegir. Todo lo de abajo lo hacen
+`scripts/pruebas/reloj.mjs` y `maquina.mjs`, con el mismo reemplazo de
+`Date` (`scripts/pruebas/fecha.mjs`).
+
+| Reloj | Qué es | Quién lo usa | Cómo |
+|---|---|---|---|
+| **El ancla de las pruebas**, `ANCLA_PRUEBAS` = 5-oct-2026 15:00 UTC | `Date` y el `now()` de PGlite empiezan ahí y el tiempo corre | Todas las suites de `@mc/db`, `@mc/worker` y `@mc/web` sobre PGlite | `--import scripts/pruebas/reloj.mjs` en sus scripts `test` y en `vitest.config.ts`; no se pide en cada prueba |
+| **La demo del 28-sep**, `ANCLA_DEMO` (`test/demo.ts`) | Los seeds se siembran como si hoy fuera el 28-sep; el reloj de la prueba no cambia | Las cifras que dependen del día de la siembra, también contra Postgres real: `test/campanas.test.ts` (y su oráculo), `test/demo-anclada.test.ts`, `apps/worker/test/campaign-compute.test.ts` | `createEmbeddedDb({ snapshot: true, relojDias: diasHasta(ANCLA_DEMO) })` o `applyRepoSeeds(db, { relojDias })` |
+| **El reloj de verdad** | Sin ancla | El job «contra-postgres-real» del CI (`TEST_DATABASE_URL` apaga el ancla: el `now()` de un servidor no se mueve) | Lo que se cree con fecha va relativo al `now()` de la base (`diaDelEspacio` de `test/finanzas.test.ts`, `CURRENT_DATE + n` en SQL) |
+
+La regla al escribir una prueba:
+
+- Una fecha que la prueba **crea** (una factura, un gasto, un toque) va
+  relativa al `now()` de la base, nunca escrita a mano en el futuro
+  cercano: así vale con ancla, sin ella y contra Postgres real.
+- Una cifra de la demo que **depende del día de la siembra** (una
+  mediana, un corte de 30 días) se compara contra `ANCLA_DEMO`, o, en
+  `@mc/worker` y `@mc/web` (que corren siempre anclados), contra la
+  cifra literal del 5-oct.
+- Lo demás confía en el ancla.
+
+Qué se comprueba y cómo: `make verificar.estres ANCLA=1` mueve el ancla
+día a día (ninguna prueba depende del día de la semana);
+`DIAS=2,7,30,90`, la máquina (el ancla la tapa); `SIN_ANCLA=1
+FILTRO=@mc/db DIAS=9,60`, lo que verá el job del CI el 14-oct y el
+4-dic. Lo que todavía cae sin ancla, y desde cuándo, está en
+`docs/propuestas/CIM-12.md` («Pendiente»).
+
 ## Los tiempos de las pruebas
 
 Cada archivo de `test/` abre su propia base embebida en su `before`,
 desde la foto (arriba): décimas de segundo, más una siembra por proceso.
-`--test-timeout` es de 120 s (lo más lento medido, la primera suite,
-que siembra la demo, tardó 41 s con carga 77) y cada `before` que abre la base lleva `SETUP_TIMEOUT` de
-`test/pglite.ts` (`SETUP_TIMEOUT_MS` de `test/tiempos.ts`, 180 s, el
-mismo techo que usan los `beforeAll` de la web y el arnés del worker),
-sacado de lo medido: construir la foto y sembrar la demo con la máquina
-cargada. Un archivo nuevo usa el mismo límite, sin un número propio.
+Todos los techos viven en `test/tiempos.ts`, con su medida, y los usan
+también la web (`apps/web/lib/testing/tiempos.ts` los reexporta) y el
+worker (`apps/worker/test/helpers/harness.ts`):
+
+| Constante | Valor | Para qué |
+|---|---|---|
+| `SETUP_TIMEOUT_MS` | 180 s | Cada `before`/`beforeAll` que abre la base: construir la foto y sembrar la demo con la máquina cargada (lo más lento medido, 41 s con carga 77) |
+| `PRUEBA_DB_TIMEOUT_MS` | 60 s | Una prueba que consulta la demo varias veces (lo más lento: 6 s en la web, 11 s en el worker) |
+| `PRUEBA_SCRIPT_TIMEOUT_MS` | 120 s | El `--test-timeout` de `@mc/db` y del worker (lo más lento: 21 s); `scripts/pruebas/verificar.test.mjs` comprueba que los `package.json` dicen esto |
+| `DESCRIBE_DB_TIMEOUT_MS` | 240 s | Un `describe` que abre su base en su `before`: node:test le aplica el techo al describe entero, hook incluido |
+
+Un archivo nuevo usa estas constantes, sin un número propio.

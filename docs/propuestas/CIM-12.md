@@ -1,7 +1,7 @@
 # CIM-12 · `pnpm verificar` determinista
 
-Rasheed, 5-oct-2026. Rama `rasheed/CIM-12-verificar-determinista-r3`
-(sobre la r2).
+Rasheed, 5-oct-2026. Rama `rasheed/CIM-12-verificar-determinista-r4`
+(sobre la r3). Lo nuevo de la r4, en «Ronda 4» al final de «Arreglo».
 
 ## Mecanismo
 
@@ -113,6 +113,23 @@ Arreglos de esta clase:
 | El reloj de las pruebas guarda `performance.now` al cargar: `vi.useFakeTimers()` lo finge, y leyéndolo en cada llamada los `afterEach` con `vi.useRealTimers()` se colgaban | `scripts/pruebas/reloj.mjs` |
 | `estres-verificar.sh --dias 2,7,30,90` (la máquina en esas fechas), `--ancla-rotando` (el día de las pruebas, los siete de la semana) y `--sin-ancla` | `scripts/estres-verificar.sh`, `make verificar.estres` |
 
+### Ronda 4
+
+| Qué | Dónde |
+|---|---|
+| **Las facturas que crean las pruebas de Finanzas vencen relativo al `now()` de la base** (`diaDelEspacio(n)`), no el 21 o el 23 de octubre. Con la fecha fija, el 14-oct «draft → sent → void» caía en «vence pronto», se paraba antes de cobrar, y la factura que dejaba abierta tumbaba otras tres (FIN-6 y los KPI): el job «contra-postgres-real» del CI, que no se ancla, se habría puesto rojo solo | `packages/db/test/finanzas.test.ts` |
+| La numeración de Cotizar se prueba en el cambio de año 2099→2100, no en el de 2027: en un Postgres sembrado en 2027 la demo ya numera COT-2027-001…005 | `packages/db/test/cotizar.test.ts` |
+| El pago de Sofía de las pruebas de alcance, «hace tres días» pero nunca antes del 1 de enero: del 1 al 3 de enero caía fuera de «cobrado en el año» | `packages/db/test/alcance.ts` |
+| **El modo demo abre la base al arrancar el servidor** (`instrumentation.ts` → `abrirBaseDeLaDemo`), no dentro de la primera petición: en `next dev` sin `DATABASE_URL` la primera página que abría la base daba 500 con «failed to pipe response · RangeError: Maximum call stack size exceeded» | `apps/web/instrumentation.ts`, `apps/web/lib/db/cliente.ts` |
+| **Techos con nombre y medida**, sin un número suelto: `PRUEBA_DB_TIMEOUT_MS` y `PRUEBA_SCRIPT_TIMEOUT_MS` en `@mc/db/test/tiempos`, `DESCRIBE_DB_TIMEOUT_MS` (= arranque + pruebas) para los describe que abren su base (antes 900 s), `ESPERA_UI_LARGA_MS` en la web. El worker baja de `--test-timeout=300000` a 120 s, como `@mc/db`; sus hooks de 600, 300, 240 y 180 s pasan a `SETUP_TIMEOUT` | `packages/db/test/tiempos.ts`, `apps/web/lib/testing/tiempos.ts`, `apps/worker/test/**` |
+| La prueba del tick siguiente del worker calcula su día sola (el primer día hábil después de hoy), sin leer una variable que llenaba la prueba anterior | `apps/worker/test/tick.test.ts` |
+| Cifras literales del 5-oct en las suites ancladas (4,466, el top 5, seis avisos, 0,812); el oráculo de `test/demo.ts` queda solo en `@mc/db`, que también corre sin ancla contra Postgres real | `apps/worker/test/costuras-con.test.ts`, `campaign-compute.test.ts` (4,496: siembra el 28-sep), `apps/web/app/(app)/campanas/ciclo-db.test.ts` |
+| **Un solo reemplazo de `Date`** para el ancla y para la máquina | `scripts/pruebas/fecha.mjs` (`instalarDate`, `horaReal`, `etiqueta`), con sus pruebas |
+| **El estrés cuenta el reloj por tarea sin mirar el prefijo de turbo**: cada proceso dice `reloj[@mc/db#test]: …` y la lista de tareas sale de `turbo run test --dry=json`. Con dos tareas escribiendo a la vez turbo deja prefijos como `@mc/db:test:@mc/worker:test:`, y la r3 los contaba como «tareas sin reloj» | `scripts/pruebas/estres-contar.sh` y su prueba con un registro mezclado |
+| Cada tanda del estrés en su carpeta (`tanda.XXXXXX`), también con `ESTRES_DIR`: dos estrés en la misma carpeta se leían los `.codigo` | `scripts/estres-verificar.sh` |
+| `--filtro PAQUETE` en el estrés (`FILTRO=` en make) para la tanda de control del CI: `SIN_ANCLA=1 FILTRO=@mc/db DIAS=9,60` | `scripts/estres-verificar.sh`, `Makefile` |
+| La espera de turno llega a 1800 s (antes 600) y el 75 dice «NO es un rojo… vuelve a lanzarlo»; CLAUDE.md pide a los agentes relanzar ante un 75 | `scripts/verificar.sh`, `CLAUDE.md` |
+
 ## Decisiones
 
 - **Anclar el reloj de las pruebas, no reescribir la demo.** Los gastos
@@ -144,6 +161,35 @@ Arreglos de esta clase:
   minutos también habría pasado el estrés.
 - **El turno vive en `/tmp/mc-verificar-turnos-UID`, no en `$TMPDIR`**:
   dos sesiones del mismo usuario pueden tener `$TMPDIR` distintos.
+- **r4 · Finanzas: fechas relativas y no «la demo anclada».** La revisión
+  proponía, como alternativa, abrir esas pruebas sobre
+  `createEmbeddedDb({ relojDias: diasHasta('2026-10-05') })` como las de
+  campañas. No sirve aquí: `relojDias` solo mueve el reloj de los SEEDS al
+  sembrar; «vence pronto» y las ocho semanas se calculan al CONSULTAR,
+  con el `CURRENT_DATE` de ese momento, y un Postgres real no se puede
+  mover. Lo que se rompía eran facturas que la propia prueba creaba con
+  fecha fija: pasarlas a `hoy + n` es el arreglo de raíz, y las pruebas
+  siguen corriendo contra Postgres real en el CI.
+- **r4 · El modo demo se abre en `instrumentation.ts`.** Comprobado con
+  `next dev` en limpio (`.next` borrado): en `7b6c3fbc` (antes de esta
+  historia) `/resumen` daba 200 a la primera; con la r3, 500, y con
+  `snapshot: false` en `from-env.ts`, 200 otra vez. Lo dispara abrir la
+  base desde la foto (miles de `await` encadenados) dentro de la primera
+  petición; abierta al arrancar, `/resumen`, `/ventas`, `/finanzas`,
+  `/cotizar`, `/campanas` y `/conexiones` dan 200 a la primera. El
+  servidor tarda unos segundos más en decir «Ready» (abre la base antes);
+  con `DATABASE_URL`, en producción o en las pruebas no hace nada.
+- **r4 · Cifras literales en las suites ancladas.** El worker y la web
+  corren siempre con el ancla, así que la demo que ven es la del 5-oct
+  y sus cifras son fijas (comprobado: iguales de a−1 a a+9). Comparar
+  contra `calcularResultado`, el mismo código que se prueba, no
+  demostraba nada. `@mc/db` conserva el oráculo solo donde corre también
+  sin ancla, contra Postgres real.
+- **r4 · 1800 s de espera de turno, sin cálculo por cola.** Calcularlo
+  con la duración media necesitaría guardar historiales de corridas;
+  un techo fijo holgado (unas diez corridas por delante con dos turnos)
+  da lo mismo para quien espera, y el 75 sigue existiendo para un turno
+  colgado de verdad.
 
 ## Archivos de Nicolás que se tocaron
 
@@ -158,6 +204,11 @@ Cambios mínimos, ninguno de lógica de producto:
 | `apps/worker/test/campaign-compute.test.ts` | Siembra la demo del 28-sep; techo común | Fresko pasaba a 30 días el 7-oct |
 | `apps/worker/test/costuras-con.test.ts` | El múltiplo contra el oráculo de `@mc/db/test/demo` (r2) | Dependía del día de la siembra |
 | `apps/web/app/(app)/conexiones/_lib/*.test.ts`, `campanas/**/*.test.ts`, `finanzas/ingresos/integracion.test.ts` | `snapshot: true`; techos de `lib/testing/tiempos.ts`; un comentario viejo | Sembraban la demo en cada archivo (r2) |
+| `packages/db/test/finanzas.test.ts` (r4) | `diaDelEspacio(n)`: las facturas que crean cinco pruebas vencen relativo a hoy; `hoyEnElEspacio` la usa | Vencimientos fijos de octubre: rojo sin ancla desde el 14-oct |
+| `packages/db/test/alcance.ts` (r4) | El pago de Sofía nunca antes del 1 de enero; el describe con `DESCRIBE_DB_TIMEOUT_MS` en vez de 900 s | Rojo del 1 al 3 de enero sin ancla; un techo sin medida |
+| `apps/worker/test/costuras-con.test.ts`, `campaign-compute.test.ts` (r4) | Cifras literales (5-oct y 28-sep); sus `before` con `SETUP_TIMEOUT` y sus describe con `DESCRIBE_DB_TIMEOUT` | El oráculo era casi tautológico; con `--test-timeout` a 120 s, el techo del arranque tiene que ser explícito |
+| `apps/worker/test/{once,migraciones,punta-a-punta,recordatorios}.test.ts`, `helpers/harness.ts` (r4) | Sus 600/300/180 s, a `SETUP_TIMEOUT`; `punta-a-punta` abre la foto (`snapshot: true`) en vez de migrar | Techos propios sin medida; una migración entera de más en cada corrida |
+| `apps/web/app/(app)/conexiones/_lib/{cuentas-service,oauth-handlers}.test.ts`, `campanas/[id]/{aporte,asociar}.test.tsx` (r4) | `vi.setConfig({ testTimeout: 120_000 })` → `PRUEBA_DB_TIMEOUT_MS`; `LARGO`/`asyncUtilTimeout` → `PRUEBA_LENTA_MS`/`ESPERA_UI_LARGA_MS`; las esperas de 2 s → la común; el comentario viejo de oauth-handlers | Números propios que el README decía que no existían |
 
 ## CIM-1 y CIM-7
 
@@ -167,27 +218,40 @@ Cambios mínimos, ninguno de lógica de producto:
   producción.
 - **CIM-7, en curso.** El disparador existe (pg_cron de Supabase llama
   cada minuto firmando el turno; `make cron.status` en verde el 5-oct).
-  Falta conectar GitHub a Vercel para que un merge a `main` publique solo
-  (un clic de Rasheed; hoy, `make vercel.deploy PROD=1`) y la aprobación
-  de Nicolás del PR 1 del runner (`rasheed/CIM-7-runner-1`). Visto en la
-  revisión del 5-oct: `make cron.status` muestra en cada turno dos jobs
-  en `exhausted`, `collect.account_metrics` y `outbound.replies`, sin
-  historia propia todavía.
+  Único pendiente técnico: conectar GitHub a Vercel para que un merge a
+  `main` publique solo (un clic de Rasheed; hoy, `make vercel.deploy
+  PROD=1`). Falta además la aprobación **a posteriori** de Nicolás del
+  runner ya integrado: el PR 1 (`rasheed/CIM-7-runner-1`) está entero en
+  `rasheed/integracion` (`git log rasheed/integracion..rasheed/CIM-7-runner-1`
+  sale vacío) y, con ella, en producción. Visto en la revisión del 5-oct:
+  cada turno marca `collect.account_metrics` y `outbound.replies` como
+  agotados (`exhausted`), y `outbound.replies` sale en `failed` (corrida
+  1236); sin historia propia todavía. Las dos cosas están también en la
+  nota del tablero.
 
 ## Pendiente
 
-- **Cuatro pruebas de Finanzas con vencimientos fijos de octubre**
-  (`packages/db/test/finanzas.test.ts`: «draft → sent → void», «trae las
-  tres facturas por cobrar», «ocho semanas…», «y los KPI de Finanzas se
-  mueven con el cobro») cambian de resultado desde el 14-oct. Con el
-  ancla la puerta no las ve; para Nicolás: fechas relativas a
-  CURRENT_DATE o la demo anclada, como las de campañas.
-
-- **El job «contra-postgres-real» del CI corre con el reloj de verdad**
-  (un Postgres real no se ancla) y sus pruebas de Finanzas y Cotizar
-  dependen de la demo de septiembre: desde diciembre darán rojo ahí. Lo
-  arregla pasar los gastos y la numeración del seed 0003 a fechas
-  relativas (de Nicolás) o anclar esas pruebas como las de campañas.
+- ~~Cuatro pruebas de Finanzas con vencimientos fijos de octubre~~ y
+  ~~la numeración de Cotizar en 2027~~: arregladas en la r4 (arriba).
+  `@mc/db` sin ancla, con la máquina a +0, +9, +60 y +75 días (hasta el
+  19-dic): verde.
+- **Los gastos recurrentes del seed 0003 tienen fechas absolutas** (julio,
+  agosto y septiembre de 2026). La proyección de gastos mira los 120
+  días anteriores a hoy, así que **desde el 30-dic-2026** el job
+  «contra-postgres-real» del CI (sin ancla) dará rojo en siete pruebas
+  de gastos y flujo (`finanzas.test.ts`: «trae los gastos recurrentes de
+  la ventana», «los gastos y la reserva del seed», «el seed proyecta 3,7 M
+  al mes», «un gasto recurrente aparece proyectado», «marcar como error
+  es editar»; `finanzas-costuras.test.ts`: «un abono, un gasto recurrente
+  nuevo…» y «una suscripción anual…»). La propia prueba lo avisa con su
+  motivo («Los del seed 0003 están con fechas absolutas de 2026: hay que
+  pasarlos a fechas relativas»). No es de las pruebas sino del seed, y
+  arreglarlo cambia la demo de producción y las pruebas que leen
+  «septiembre de 2026» (gastos por mes, la web de Finanzas): es de
+  Nicolás (CIM-8). Propuesta: sembrar los recurrentes en los tres meses
+  cerrados anteriores a `CURRENT_DATE` y que las pruebas pidan
+  `ultimoMesCerrado()` en vez de `'2026-09'`. La puerta local no lo ve
+  (ancla); el job del CI sí, y con un mensaje que dice qué hacer.
 
 ## Resultado
 
