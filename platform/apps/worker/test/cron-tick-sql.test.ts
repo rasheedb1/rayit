@@ -2,8 +2,11 @@
  * CIM-7 · el SQL del disparador (db/ops/cron-tick*.sql) y su relleno
  * (db/ops/render.mjs).
  *
- * pg_cron, pg_net y Vault no existen en pglite, así que el SQL no se
- * ejecuta aquí; se comprueba lo que sí se puede sin Supabase: que no
+ * pg_cron, pg_net, Vault y pgcrypto no existen en pglite, así que el lote
+ * no se ejecuta aquí; el COMANDO de la tarea sí, con dobles de la misma
+ * forma: lo que encolaría es un timestamp y su HMAC, nunca el secreto, y
+ * el HMAC es el que la ruta espera (el mismo cálculo en Node). Y lo que se
+ * comprueba sin Supabase: que no
  * lleva un secreto en claro, que el secreto solo entra en Vault, en su
  * propia llamada y con SELECT que pg_stat_statements normaliza (nada de
  * DO), que la tarea lo lee de ahí (en cron.job no queda el valor), que es
@@ -16,10 +19,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PGlite } from '@electric-sql/pglite';
 import { MAX_TICK_CUTS, TICK_CUT_KEY } from '@mc/db/queries/worker';
 import { openTestDatabase } from './helpers/harness.ts';
 
@@ -74,14 +79,16 @@ test('el secreto va en su propia llamada, con dos SELECT de nivel superior y nad
   assert.match(s[0]!, /vault\.update_secret\(id, '\{\{CRON_SECRET\}\}'\) FROM vault\.secrets WHERE name = 'on_cue_cron_secret'$/);
   assert.match(s[1]!, /WHERE NOT EXISTS \(SELECT 1 FROM vault\.secrets WHERE name = 'on_cue_cron_secret'\)$/, 'crear solo si falta: idempotente');
   assert.equal([...secreto.matchAll(/\{\{CRON_SECRET\}\}/g)].length, 2, 'y en ningún comentario');
-  // La tarea lo lee de Vault al disparar: en cron.job no queda el valor.
-  assert.match(comandoDeLaTarea(tarea), /'Bearer ' \|\| \(SELECT decrypted_secret FROM vault\.decrypted_secrets WHERE name = 'on_cue_cron_secret'\)/);
+  // La tarea lo lee de Vault al disparar (en cron.job no queda el valor) y solo para firmar: no lo manda.
+  assert.match(comandoDeLaTarea(tarea), /encode\(extensions\.hmac\(f\.ts, s\.decrypted_secret, 'sha256'\), 'hex'\)/);
+  assert.doesNotMatch(comandoDeLaTarea(tarea), /Authorization|Bearer/i, 'el cron de Supabase usa SOLO la firma');
   assert.match(comandoDeLaTarea(tarea), /net\.http_post\(\s*url := '\{\{APP_URL\}\}\/api\/cron\/tick'/);
   // Vault se comprueba en su propio lote, sin secretos, para que la llamada del secreto no tenga de qué fallar.
   assert.match(leer('cron-tick-vault.sql'), /to_regproc\('vault\.create_secret'\) IS NULL/);
+  assert.match(leer('cron-tick-vault.sql'), /to_regprocedure\('extensions\.hmac\(text,text,text\)'\) IS NULL/, 'y que pgcrypto esté, para firmar');
   assert.doesNotMatch(leer('cron-tick-vault.sql'), /\{\{[A-Z_]+\}\}/, 'sin marcadores: se manda tal cual');
-  // Y si aun así falta, la tarea no dispara: nada de peticiones con 'Bearer ' || NULL.
-  assert.match(comandoDeLaTarea(tarea), /\)\s*WHERE EXISTS \(SELECT 1 FROM vault\.decrypted_secrets WHERE name = 'on_cue_cron_secret' AND decrypted_secret IS NOT NULL\);\s*$/);
+  // Y si aun así falta, la tarea no dispara: sin fila en Vault, el FROM no da ninguna y no hay llamada.
+  assert.match(comandoDeLaTarea(tarea), /\)\s*FROM \(SELECT floor\(extract\(epoch FROM now\(\)\)\)::bigint::text AS ts\) f,\s*vault\.decrypted_secrets s\s*WHERE s\.name = 'on_cue_cron_secret' AND s\.decrypted_secret IS NOT NULL;\s*$/);
 });
 
 test('install valida todo antes de tocar nada, y guarda el secreto ANTES de programar la tarea; y mira pg_stat_statements', () => {
@@ -260,7 +267,7 @@ test('el veredicto por la línea de comandos: sale con 1 si no está sano, y no 
   assert.match(script, /node db\/ops\/cron-tick-veredicto\.mjs \|\| sano=1/, 'status lo corre y sale con 1 si no está sano');
 });
 
-test('el estado cuenta la cola de pg_net (donde espera la cabecera con el secreto) y la última pasada buena de outbound.dispatch', () => {
+test('el estado cuenta la cola de pg_net (donde esperan las firmas) y la última pasada buena de outbound.dispatch', () => {
   const estado = leer('cron-tick-estado.sql');
   assert.match(estado, /'cola_pg_net', \(SELECT count\(\*\) FROM net\.http_request_queue\)/);
   assert.match(estado, /'dispatch_ultimo_ok'/);
@@ -387,4 +394,78 @@ test('decide la respuesta más reciente: un 401 viejo y un 200 nuevo es sano (el
   assert.ok(sinRespuesta.lineas.some((l) => l.nivel === 'error' && /desde que cambió el secreto/.test(l.texto)), JSON.stringify(sinRespuesta.lineas));
   // Un 401 DESPUÉS del secreto nuevo sigue siendo error.
   assert.equal(m.veredicto({ ...SANO, secreto_en_vault: [{ name: 'on_cue_cron_secret', updated_at: hace(120) }], ultimas_respuestas: [respuesta(20, 401)] }).sano, false);
+});
+
+/**
+ * El doble de extensions.hmac para PGlite, que no trae pgcrypto: HMAC
+ * (RFC 2104) con el sha256() del núcleo, que es lo que calcula pgcrypto.
+ * La prueba de abajo lo contrasta con Node antes de usarlo; la
+ * equivalencia con el pgcrypto de Supabase se mide al verificar contra
+ * Supabase (CIM-7), dentro de una transacción revertida.
+ */
+const HMAC_DE_PRUEBA = `
+  CREATE FUNCTION extensions.hmac(data text, key text, type text) RETURNS bytea LANGUAGE plpgsql AS $$
+  DECLARE k bytea := convert_to(key, 'UTF8'); ipad bytea; opad bytea;
+  BEGIN
+    IF type <> 'sha256' THEN RAISE EXCEPTION 'solo sha256'; END IF;
+    IF length(k) > 64 THEN k := sha256(k); END IF;
+    k := k || decode(repeat('00', 64 - length(k)), 'hex');
+    ipad := k; opad := k;
+    FOR i IN 0..63 LOOP
+      ipad := set_byte(ipad, i, get_byte(k, i) # 54);
+      opad := set_byte(opad, i, get_byte(k, i) # 92);
+    END LOOP;
+    RETURN sha256(opad || sha256(ipad || convert_to(data, 'UTF8')));
+  END $$;`;
+
+test('el comando de la tarea, ejecutado: encola el timestamp y su HMAC-SHA256 —el que la ruta espera—, nunca el secreto', async () => {
+  const comando = comandoDeLaTarea(rellenar('cron-tick.sql', { APP_URL: 'https://on-cue-web.vercel.app' }).stdout);
+  const pg = await PGlite.create();
+  try {
+    // pg_net, Vault y pgcrypto, con la misma forma que en Supabase: http_post con sus parámetros por nombre
+    // (encola en net.http_request_queue), la vista de Vault con name y decrypted_secret, y hmac(text, text, text).
+    await pg.exec(`
+      CREATE SCHEMA extensions; CREATE SCHEMA vault; CREATE SCHEMA net;
+      CREATE TABLE vault.decrypted_secrets (name text, decrypted_secret text);
+      CREATE TABLE net.http_request_queue (id bigserial, url text, headers jsonb, body jsonb, timeout_milliseconds int);
+      CREATE FUNCTION net.http_post(url text, body jsonb DEFAULT '{}', params jsonb DEFAULT '{}', headers jsonb DEFAULT '{}',
+                                    timeout_milliseconds int DEFAULT 5000)
+        RETURNS bigint LANGUAGE sql
+        AS $$INSERT INTO net.http_request_queue (url, headers, body, timeout_milliseconds) VALUES (url, headers, body, timeout_milliseconds) RETURNING id$$;
+      ${HMAC_DE_PRUEBA}
+    `);
+
+    // El doble es HMAC de verdad: el vector 2 de RFC 4231, el secreto de 64 caracteres y uno de más de 64 bytes (se resume antes).
+    for (const [mensaje, clave] of [['what do ya want for nothing?', 'Jefe'], ['1791115200', SECRETO], ['1791115200', `${SECRETO}${SECRETO}x`]] as const) {
+      const { rows } = await pg.query<{ h: string }>(`SELECT encode(extensions.hmac($1, $2, 'sha256'), 'hex') AS h`, [mensaje, clave]);
+      assert.equal(rows[0]?.h, createHmac('sha256', clave).update(mensaje, 'utf8').digest('hex'), `${mensaje} / ${clave.length}`);
+    }
+
+    // Sin el secreto en Vault, el comando no encola nada.
+    await pg.exec(comando);
+    assert.equal((await pg.query<{ n: number }>('SELECT count(*)::int AS n FROM net.http_request_queue')).rows[0]?.n, 0);
+
+    // Con él, una petición: con el timestamp de ahora y su firma, y en ningún sitio el secreto.
+    await pg.query("INSERT INTO vault.decrypted_secrets VALUES ('on_cue_cron_secret', $1)", [SECRETO]);
+    const antes = Math.floor(Date.now() / 1000);
+    await pg.exec(comando);
+    const despues = Math.ceil(Date.now() / 1000);
+    const { rows } = await pg.query<{ url: string; crudo: string; headers: Record<string, string>; timeout_milliseconds: number }>(
+      'SELECT url, row_to_json(q)::text AS crudo, headers, timeout_milliseconds FROM net.http_request_queue q',
+    );
+    assert.equal(rows.length, 1);
+    const fila = rows[0]!;
+    assert.equal(fila.url, 'https://on-cue-web.vercel.app/api/cron/tick');
+    assert.equal(fila.timeout_milliseconds, 60_000);
+    assert.ok(!fila.crudo.includes(SECRETO), 'la fila de la cola no lleva el secreto');
+    assert.ok(!fila.crudo.includes(SECRETO.slice(0, 16)), 'ni un trozo');
+    assert.deepEqual(Object.keys(fila.headers).sort(), ['Content-Type', 'X-On-Cue-Signature', 'X-On-Cue-Timestamp']);
+    const ts = fila.headers['X-On-Cue-Timestamp']!;
+    assert.match(ts, /^\d{10}$/, 'segundos desde 1970, en decimal');
+    assert.ok(Number(ts) >= antes - 1 && Number(ts) <= despues, `${ts} es el segundo del disparo`);
+    // La misma cuenta que hace la ruta (tickSignature en apps/web/app/api/cron/tick/_lib/turno.ts).
+    assert.equal(fila.headers['X-On-Cue-Signature'], createHmac('sha256', SECRETO).update(ts, 'utf8').digest('hex'));
+  } finally {
+    await pg.close();
+  }
 });

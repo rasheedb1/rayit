@@ -91,7 +91,12 @@
  *     mc_app no tenga USAGE en ningún esquema fuera de public,
  *     information_schema, pg_* y extensions (el de Supabase para las
  *     extensiones), o entrada en ESQUEMAS_DECLARADOS; y que no pueda
- *     CREAR en public.
+ *     CREAR en public ni en un esquema declarado. Declarar un esquema NO
+ *     abre lo que hay dentro: cada relación y cada función a la que
+ *     mc_app llega en él tiene que estar en ACCESOS_EN_ESQUEMAS_DECLARADOS
+ *     con sus privilegios exactos (CIM-7: `net`, el de pg_net). Y uno que
+ *     crea una extensión (ESQUEMAS_DE_EXTENSION) solo vale si lo creó esa
+ *     extensión; mientras no está instalada, la declaración duerme.
  *   · El propio rol mc_app. Los privilegios se leen de los GRANT, pero un
  *     rol con BYPASSRLS o SUPERUSER se salta las políticas, y uno que
  *     pertenece a otro hereda lo suyo: con `GRANT mc_worker TO mc_app`,
@@ -590,9 +595,148 @@ export const REGLAS_DECLARADAS: Readonly<Record<string, string>> = {};
  * Los esquemas, además de public, information_schema, pg_* y extensions,
  * en los que mc_app puede tener USAGE, y por qué. La guardia solo mira
  * `public`: un esquema nuevo al que llega mc_app es un sitio donde nadie
- * pregunta. Vacía.
+ * pregunta. Por eso declarar uno no basta: lo que mc_app alcanza dentro
+ * va, objeto por objeto, en ACCESOS_EN_ESQUEMAS_DECLARADOS, y CREATE en
+ * él se reporta siempre.
  */
-export const ESQUEMAS_DECLARADOS: Readonly<Record<string, string>> = {};
+export const ESQUEMAS_DECLARADOS: Readonly<Record<string, string>> = {
+  net:
+    'el esquema de la extensión pg_net de Supabase, que usa el cron del worker por turnos (CIM-7, ' +
+    'db/ops/cron-tick.sql): pg_cron llama cada minuto a /api/cron/tick con net.http_post. El USAGE para PUBLIC ' +
+    '—y con él para mc_app— lo otorga supabase_admin al crear la extensión, y con las credenciales del proyecto no ' +
+    'se puede revocar: el REVOKE … FROM PUBLIC de postgres no surte efecto porque no es quien lo concedió (medido ' +
+    'el 28-sep, cuando esta guardia tumbó la web al instalar el cron). Riesgo aceptado (decisión de Rasheed, como ' +
+    'en Chief): mc_app podría encolar peticiones HTTP salientes, y leer y escribir las tablas de pg_net, solo con ' +
+    'una inyección SQL, y todas las consultas de la aplicación van parametrizadas. Lo que alcanza está en ' +
+    'ACCESOS_EN_ESQUEMAS_DECLARADOS, y solo vale si el esquema es de pg_net (ESQUEMAS_DE_EXTENSION)',
+};
+
+/**
+ * Los esquemas de ESQUEMAS_DECLARADOS que crea una extensión, y cuál.
+ *
+ *   · Solo valen si el esquema es MIEMBRO de esa extensión (pg_depend,
+ *     deptype 'e'): un `net` creado a mano no es el de pg_net y se
+ *     reporta como cualquier esquema sin declarar.
+ *   · Mientras la extensión no está instalada, la declaración duerme y no
+ *     sale como obsoleta: pg_net no lo instala una migración sino `make
+ *     cron.install` (y lo quita `make cron.uninstall`), así que la web
+ *     tiene que arrancar con y sin él. Instalada y sin USAGE para mc_app,
+ *     sí sobra.
+ */
+export const ESQUEMAS_DE_EXTENSION: Readonly<Record<string, string>> = {
+  net: 'pg_net',
+};
+
+/** Lo que mc_app puede sobre un objeto de un esquema declarado. */
+export interface AccesoDeclarado {
+  /**
+   * Los privilegios que se le aceptan, como los escribe aclexplode
+   * (SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER,
+   * MAINTAIN; USAGE en una secuencia) o EXECUTE en una función. Es un
+   * techo, como PRIVILEGIOS_DE_LA_APP: si la base le da menos, no se
+   * reporta; si le da uno más, sí.
+   */
+  privilegios: readonly string[];
+  motivo: string;
+}
+
+/** Los privilegios que pg_net 0.20.4 le da a PUBLIC en sus dos tablas (`arwdDxtm`, otorgado por supabase_admin). */
+const TODO_A_PUBLIC = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'] as const;
+
+/**
+ * TODO lo que mc_app alcanza en los esquemas de ESQUEMAS_DECLARADOS,
+ * objeto por objeto: `esquema.relación` o `esquema.función(tipos)`.
+ *
+ * Es el inventario medido de pg_net 0.20.4 en Supabase (la versión por
+ * defecto del proyecto el 4-oct-2026), con CREATE EXTENSION dentro de una
+ * transacción revertida. Todo lo concede supabase_admin a PUBLIC —el
+ * GRANT de las tablas y las secuencias, y el EXECUTE por defecto de las
+ * funciones—, así que no se puede revocar con las credenciales del
+ * proyecto. Si Supabase actualiza pg_net, la guardia nombra lo que
+ * cambie: se mide otra vez y se declara, o se deja de usar.
+ *
+ * Fuera de lo que dice esta lista, en net mc_app no puede nada: una tabla
+ * nueva, una función nueva o un privilegio de más se reportan.
+ */
+export const ACCESOS_EN_ESQUEMAS_DECLARADOS: Readonly<Record<string, AccesoDeclarado>> = {
+  'net.http_request_queue': {
+    privilegios: TODO_A_PUBLIC,
+    motivo:
+      'la cola de pg_net: cada net.http_post deja aquí su petición, CON sus cabeceras, hasta que el worker de pg_net ' +
+      'la manda (milisegundos). pg_net se la concede entera a PUBLIC, incluidos TRUNCATE y TRIGGER, que ' +
+      'PRIVILEGIOS_PROHIBIDOS no le deja a mc_app en ninguna relación de public. Por eso el cron no manda aquí el ' +
+      'CRON_SECRET sino una firma que caduca a los 90 s (db/ops/cron-tick.sql): leerla sirve para pedir un turno que ' +
+      'el cron pide de todos modos. Lo que queda, solo con una inyección SQL: cambiar o borrar una petición ' +
+      'pendiente (un turno perdido) y encolar otras. La medida de fondo es que Supabase revoque el GRANT a PUBLIC',
+  },
+  'net._http_response': {
+    privilegios: TODO_A_PUBLIC,
+    motivo:
+      'las respuestas de pg_net, que él mismo borra a las 6 h: hoy solo las del turno, cuyo cuerpo es el resumen ' +
+      'del worker (jobs y conteos de toda la plataforma, sin datos de ningún workspace). Mismo GRANT a PUBLIC: ' +
+      'mc_app las podría leer, reescribir o borrar, y make cron.status saca de ellas su veredicto',
+  },
+  'net.http_request_queue_id_seq': {
+    privilegios: ['SELECT', 'UPDATE', 'USAGE'],
+    motivo:
+      'la secuencia de los id de la cola, con USAGE, SELECT y UPDATE a PUBLIC: dice cuántas peticiones lleva ' +
+      'pg_net (hoy, los turnos del cron) y deja mover su setval. No lleva datos de ningún workspace',
+  },
+  'net.http_get(text,jsonb,jsonb,integer)': {
+    privilegios: ['EXECUTE'],
+    motivo:
+      'encola una petición GET (plpgsql, SECURITY INVOKER: corre con los privilegios de quien llama, que como ' +
+      'PUBLIC ya puede escribir en la cola). Es el riesgo aceptado del esquema',
+  },
+  'net.http_post(text,jsonb,jsonb,jsonb,integer)': {
+    privilegios: ['EXECUTE'],
+    motivo:
+      'encola una petición POST; es la que usa el cron (db/ops/cron-tick.sql). Plpgsql, SECURITY INVOKER, igual ' +
+      'que http_get',
+  },
+  'net.http_delete(text,jsonb,jsonb,integer,jsonb)': {
+    privilegios: ['EXECUTE'],
+    motivo: 'encola una petición DELETE. Plpgsql, SECURITY INVOKER, igual que http_get',
+  },
+  'net.http_collect_response(bigint,boolean)': {
+    privilegios: ['EXECUTE'],
+    motivo: 'lee la respuesta de una petición por su id (plpgsql, SECURITY INVOKER): lo mismo que el SELECT de _http_response',
+  },
+  'net._http_collect_response(bigint,boolean)': {
+    privilegios: ['EXECUTE'],
+    motivo: 'la versión interna de http_collect_response (plpgsql, SECURITY INVOKER)',
+  },
+  'net._await_response(bigint)': {
+    privilegios: ['EXECUTE'],
+    motivo: 'espera a que llegue la respuesta de un id (plpgsql, SECURITY INVOKER); solo lee _http_response',
+  },
+  'net._encode_url_with_params_array(text,text[])': {
+    privilegios: ['EXECUTE'],
+    motivo: 'arma una URL con sus parámetros (C, SECURITY INVOKER): una función pura, no toca tablas',
+  },
+  'net._urlencode_string(character varying)': {
+    privilegios: ['EXECUTE'],
+    motivo: 'codifica un texto para una URL (C, SECURITY INVOKER): una función pura, no toca tablas',
+  },
+  'net.check_worker_is_up()': {
+    privilegios: ['EXECUTE'],
+    motivo: 'falla si el worker de pg_net no corre (plpgsql, SECURITY INVOKER): solo pregunta',
+  },
+  'net.wait_until_running()': {
+    privilegios: ['EXECUTE'],
+    motivo: 'espera a que el worker de pg_net esté en marcha (C, SECURITY INVOKER): solo pregunta',
+  },
+  'net.wake()': {
+    privilegios: ['EXECUTE'],
+    motivo: 'despierta al worker de pg_net para que procese la cola (C, SECURITY INVOKER): no escribe nada',
+  },
+  'net.worker_restart()': {
+    privilegios: ['EXECUTE'],
+    motivo:
+      'reinicia el worker de pg_net (C, SECURITY INVOKER, con el EXECUTE a PUBLIC de toda función nueva): lo peor ' +
+      'que haría mc_app con ella es retrasar un turno',
+  },
+};
 
 /**
  * Los roles de los que mc_app puede ser miembro, y por qué. Un miembro
@@ -1337,8 +1481,17 @@ export interface EstadoDelEsquema {
   candadosQueFaltan: string[];
   /** Reglas de `public` que no son el _RETURN de una vista, sin declarar. */
   reglas: string[];
-  /** Esquemas fuera de public a los que llega mc_app, o CREATE en public. */
+  /**
+   * Esquemas fuera de public a los que llega mc_app sin declarar, o
+   * declarados como de una extensión que no los creó; y CREATE en public o
+   * en un esquema declarado.
+   */
   esquemasDeMas: string[];
+  /**
+   * En los esquemas declarados, lo que mc_app alcanza fuera de
+   * ACCESOS_EN_ESQUEMAS_DECLARADOS: `esquema.objeto (privilegios)`.
+   */
+  accesosEnEsquemas: string[];
   /** Lo que el propio rol mc_app no debería tener: atributos que saltan la RLS o roles de los que es miembro. */
   rolDeLaApp: string[];
   /** Claves ajenas SET NULL / SET DEFAULT sobre una columna cuya rama «IS NULL» abre la fila a todos. */
@@ -1489,6 +1642,17 @@ interface FilaEsquema extends Record<string, unknown> {
   esquema: string;
   uso: boolean;
   crea: boolean;
+  /** La extensión de la que el esquema es miembro (la que lo creó), o null. */
+  extension: string | null;
+}
+interface FilaExtension extends Record<string, unknown> {
+  extname: string;
+}
+interface FilaAcceso extends Record<string, unknown> {
+  /** `esquema.relación` o `esquema.función(tipos)`. */
+  objeto: string;
+  /** Como lo escribe aclexplode; EXECUTE en una función; OWNER si mc_app es el dueño. */
+  privilegio: string;
 }
 interface FilaRol extends Record<string, unknown> {
   rol: string;
@@ -1738,10 +1902,63 @@ const SQL_REGLAS = `
 const SQL_ESQUEMAS = `
   SELECT n.nspname::text AS esquema,
          has_schema_privilege($1::name, n.oid, 'USAGE') AS uso,
-         has_schema_privilege($1::name, n.oid, 'CREATE') AS crea
+         has_schema_privilege($1::name, n.oid, 'CREATE') AS crea,
+         (SELECT e.extname::text
+            FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid
+           WHERE d.classid = 'pg_namespace'::regclass AND d.objid = n.oid
+             AND d.refclassid = 'pg_extension'::regclass AND d.deptype = 'e'
+           LIMIT 1) AS extension
     FROM pg_namespace n
    WHERE n.nspname NOT IN ('information_schema', 'extensions') AND n.nspname NOT LIKE 'pg\\_%'
    ORDER BY 1`;
+
+/** De las extensiones de ESQUEMAS_DE_EXTENSION, las que están instaladas. */
+const SQL_EXTENSIONES = `
+  SELECT extname::text AS extname FROM pg_extension WHERE extname = ANY ($1::text[]) ORDER BY 1`;
+
+/**
+ * Lo que mc_app alcanza en los esquemas DECLARADOS ($2) en los que tiene
+ * USAGE: cada privilegio de cada relación —de la relación entera o por
+ * columna, suyo o de PUBLIC, leídos de relacl y attacl como en
+ * SQL_PRIVILEGIOS—, OWNER si es su dueño, y EXECUTE en cada función que
+ * puede ejecutar (has_function_privilege cuenta el EXECUTE que toda
+ * función nueva le da a PUBLIC). La firma de una función se escribe como
+ * en SQL_FUNCIONES, con el esquema delante.
+ */
+const SQL_ACCESOS_EN_ESQUEMAS = `
+  WITH esquemas AS (
+    SELECT n.oid, n.nspname FROM pg_namespace n
+     WHERE n.nspname = ANY ($2::text[]) AND has_schema_privilege($1::name, n.oid, 'USAGE')
+  ), app AS (
+    SELECT oid FROM pg_roles WHERE rolname = $1::name
+  )
+  SELECT e.nspname || '.' || c.relname AS objeto, a.privilege_type AS privilegio
+    FROM pg_class c
+    JOIN esquemas e ON e.oid = c.relnamespace
+   CROSS JOIN LATERAL aclexplode(c.relacl) a
+   WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') AND (a.grantee = 0 OR a.grantee IN (SELECT oid FROM app))
+  UNION
+  SELECT e.nspname || '.' || c.relname, a.privilege_type
+    FROM pg_attribute att
+    JOIN pg_class c ON c.oid = att.attrelid
+    JOIN esquemas e ON e.oid = c.relnamespace
+   CROSS JOIN LATERAL aclexplode(att.attacl) a
+   WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') AND att.attnum > 0 AND NOT att.attisdropped
+     AND (a.grantee = 0 OR a.grantee IN (SELECT oid FROM app))
+  UNION
+  SELECT e.nspname || '.' || c.relname, 'OWNER'
+    FROM pg_class c
+    JOIN esquemas e ON e.oid = c.relnamespace
+   WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') AND c.relowner IN (SELECT oid FROM app)
+  UNION
+  SELECT e.nspname || '.' || p.proname || '(' ||
+         coalesce((SELECT string_agg(format_type(x.tipo, NULL), ',' ORDER BY x.n)
+                     FROM unnest(p.proargtypes::oid[]) WITH ORDINALITY x(tipo, n)), '') || ')',
+         'EXECUTE'
+    FROM pg_proc p
+    JOIN esquemas e ON e.oid = p.pronamespace
+   WHERE has_function_privilege($1::name, p.oid, 'EXECUTE')
+   ORDER BY 1, 2`;
 
 /** El rol mc_app y cada rol del que es miembro, con los atributos que saltan la RLS. */
 const SQL_ROL_DE_LA_APP = `
@@ -1908,6 +2125,8 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const candados = await leer<FilaCandado>(SQL_CANDADOS, [Object.keys(DISPARADORES_DE_CANDADO)]);
   const reglasLeidas = await leer<FilaRegla>(SQL_REGLAS);
   const esquemas = await leer<FilaEsquema>(SQL_ESQUEMAS, [APP_ROLE]);
+  const extensiones = await leer<FilaExtension>(SQL_EXTENSIONES, [[...new Set(Object.values(ESQUEMAS_DE_EXTENSION))]]);
+  const accesos = await leer<FilaAcceso>(SQL_ACCESOS_EN_ESQUEMAS, [APP_ROLE, Object.keys(ESQUEMAS_DECLARADOS)]);
   const rolesDeLaApp = await leer<FilaRol>(SQL_ROL_DE_LA_APP, [APP_ROLE]);
   const rolDelEnlace = await leer<FilaRolDelEnlace>(SQL_ROL_DEL_ENLACE, [PUBLIC_SHARE_ROLE]);
   const politicasDelEnlace = await leer<FilaPoliticaDelEnlace>(SQL_POLITICAS_DEL_ENLACE, [PUBLIC_SHARE_ROLE]);
@@ -2204,9 +2423,49 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     }
     if (!e.uso && !e.crea) continue;
     esquemasConUso.add(e.esquema);
+    const permisos = [e.uso ? 'USAGE' : '', e.crea ? 'CREATE' : ''].filter(Boolean).join(', ');
     if (!(e.esquema in ESQUEMAS_DECLARADOS)) {
-      esquemasDeMas.push(`${e.esquema} (${[e.uso ? 'USAGE' : '', e.crea ? 'CREATE' : ''].filter(Boolean).join(', ')})`);
+      esquemasDeMas.push(`${e.esquema} (${permisos})`);
+      continue;
     }
+    // Declarado como el de una extensión: solo vale el que creó ella.
+    const suya = ESQUEMAS_DE_EXTENSION[e.esquema];
+    if (suya && e.extension !== suya) {
+      esquemasDeMas.push(
+        `${e.esquema} (${permisos}): ESQUEMAS_DECLARADOS lo acepta como el esquema de la extensión ${suya}, y ` +
+          (e.extension ? `es miembro de ${e.extension}` : 'no lo creó ninguna extensión'),
+      );
+      continue;
+    }
+    // Declarar un esquema es aceptar llegar a lo que hay, no crear objetos.
+    if (e.crea) {
+      esquemasDeMas.push(
+        `${e.esquema} (CREATE: ${APP_ROLE} puede crear objetos en un esquema declarado, que nadie ha medido)`,
+      );
+    }
+  }
+  // Las declaraciones de un esquema de extensión duermen mientras la
+  // extensión no está instalada: el esquema aún no existe.
+  const instaladas = new Set(extensiones.map((x) => x.extname));
+  const dormido = (esquema: string) => {
+    const suya = ESQUEMAS_DE_EXTENSION[esquema];
+    return suya !== undefined && !instaladas.has(suya) && !esquemasConUso.has(esquema);
+  };
+
+  // ---- lo que mc_app alcanza DENTRO de los esquemas declarados: cada
+  //      objeto y cada privilegio, contra su inventario exacto
+  const alcanzados = new Map<string, Set<string>>();
+  for (const a of accesos) {
+    let s = alcanzados.get(a.objeto);
+    if (!s) alcanzados.set(a.objeto, (s = new Set()));
+    s.add(a.privilegio);
+  }
+  const accesosEnEsquemas: string[] = [];
+  for (const [objeto, privs] of [...alcanzados].sort(([a], [b]) => a.localeCompare(b))) {
+    const declarado = ACCESOS_EN_ESQUEMAS_DECLARADOS[objeto];
+    const deMas = [...privs].filter((p) => !declarado?.privilegios.includes(p)).sort();
+    if (!deMas.length) continue;
+    accesosEnEsquemas.push(`${objeto} (${deMas.join(', ')}${declarado ? ': más de lo declarado' : ''})`);
   }
 
   // ---- el propio rol de la aplicación
@@ -2423,14 +2682,23 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
       ]
     : [];
   if (inventarioLeido) {
-    const sobran = (lista: string, declaradas: Readonly<Record<string, string>>, existen: (k: string) => boolean) =>
+    const sobran = (lista: string, declaradas: Readonly<Record<string, unknown>>, existen: (k: string) => boolean) =>
       Object.keys(declaradas)
         .filter((k) => !existen(k))
         .map((k) => `${lista}: ${k}`);
     otrasDeclaracionesObsoletas.push(
       ...sobran('DISPARADORES_DEFINER_DECLARADOS', DISPARADORES_DEFINER_DECLARADOS, (k) => clavesDeDisparadores.has(k)),
       ...sobran('REGLAS_DECLARADAS', REGLAS_DECLARADAS, (k) => clavesDeReglas.has(k)),
-      ...sobran('ESQUEMAS_DECLARADOS', ESQUEMAS_DECLARADOS, (k) => esquemasConUso.has(k)),
+      ...sobran('ESQUEMAS_DECLARADOS', ESQUEMAS_DECLARADOS, (k) => esquemasConUso.has(k) || dormido(k)),
+      ...sobran('ESQUEMAS_DE_EXTENSION', ESQUEMAS_DE_EXTENSION, (k) => k in ESQUEMAS_DECLARADOS),
+      // Una entrada sobra si su esquema no está declarado, o si lo está, mc_app
+      // llega a él y aun así no alcanza el objeto (no existe, o ya está cerrado).
+      // Con el esquema dormido (pg_net sin instalar) no se dice nada.
+      ...sobran('ACCESOS_EN_ESQUEMAS_DECLARADOS', ACCESOS_EN_ESQUEMAS_DECLARADOS, (k) => {
+        const esquema = k.slice(0, k.indexOf('.'));
+        if (!(esquema in ESQUEMAS_DECLARADOS)) return false;
+        return !esquemasConUso.has(esquema) || alcanzados.has(k);
+      }),
       ...sobran('ROLES_DE_LA_APP_DECLARADOS', ROLES_DE_LA_APP_DECLARADOS, (k) => rolesDeLosQueEsMiembro.has(k)),
       ...(politicas.length
         ? sobran('AISLADAS_POR_PERSONA_DECLARADAS', AISLADAS_POR_PERSONA_DECLARADAS, (k) => personasUsadas.has(k))
@@ -2592,6 +2860,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     candadosQueFaltan,
     reglas,
     esquemasDeMas,
+    accesosEnEsquemas,
     rolDeLaApp,
     borradosQuePublican,
     referenciasSinComprobar,
@@ -2632,6 +2901,7 @@ export const ESQUEMA_AL_DIA: EstadoDelEsquema = {
   candadosQueFaltan: [],
   reglas: [],
   esquemasDeMas: [],
+  accesosEnEsquemas: [],
   rolDeLaApp: [],
   borradosQuePublican: [],
   referenciasSinComprobar: [],
@@ -2749,6 +3019,14 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
       `${APP_ROLE} llega a esquemas que la guardia no inspecciona, o puede crear objetos: ` +
         estado.esquemasDeMas.join(', ') +
         `. Revócaselo (REVOKE USAGE ON SCHEMA … FROM ${APP_ROLE}), o declara el esquema en ESQUEMAS_DECLARADOS`,
+    );
+  }
+  if (estado.accesosEnEsquemas.length) {
+    partes.push(
+      `${APP_ROLE} alcanza, dentro de un esquema declarado, objetos o privilegios que nadie declaró: ` +
+        estado.accesosEnEsquemas.join(', ') +
+        '. Declarar el esquema no abre lo que hay dentro: revócaselo, o mídelo y decláralo objeto por objeto en ' +
+        'ACCESOS_EN_ESQUEMAS_DECLARADOS con su motivo',
     );
   }
   if (estado.rolDeLaApp.length) {

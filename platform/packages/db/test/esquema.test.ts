@@ -13,7 +13,8 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assertSchemaUpToDate, COLUMNAS_QUE_USA_EL_CODIGO, DISPARADORES_DE_CANDADO, ESQUEMA_AL_DIA, esquemaObligatorio, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO,
+  ACCESOS_EN_ESQUEMAS_DECLARADOS, assertSchemaUpToDate, COLUMNAS_QUE_USA_EL_CODIGO, DISPARADORES_DE_CANDADO, ESQUEMA_AL_DIA,
+  ESQUEMAS_DE_EXTENSION, ESQUEMAS_DECLARADOS, esquemaObligatorio, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO,
   explicarEsquema, migracionesDelRepositorio, POLITICAS_DEL_ENLACE_PUBLICO, PRIVILEGIOS_DE_LA_APP,
   PRIVILEGIOS_DEL_ENLACE_PUBLICO, type EstadoDelEsquema,
 } from '../src/esquema.ts';
@@ -1389,5 +1390,186 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
     const e = await estadoDelEsquema(vieja);
     assert.ok(e.pendientes.length > 0);
     assert.deepEqual(e.enlacePublico, []);
+  });
+});
+
+/**
+ * CIM-7: el esquema `net` de pg_net. El cron del worker por turnos lo
+ * usa (db/ops/cron-tick.sql), y al instalarlo el 28-sep la guardia tumbó
+ * la web entera: Supabase crea `net` con USAGE para PUBLIC, otorgado por
+ * supabase_admin, y con las credenciales del proyecto no se revoca.
+ *
+ * La decisión es aceptarlo declarado, y solo eso: aquí se simula lo que
+ * pg_net 0.20.4 crea en Supabase (medido con CREATE EXTENSION dentro de
+ * una transacción revertida: las mismas firmas, funciones SECURITY
+ * INVOKER, y TODO concedido a PUBLIC) y se comprueba que la guardia
+ * queda en verde con eso, y que no deja pasar nada más: otro esquema,
+ * un objeto nuevo dentro de net, CREATE, o un `net` que no creó pg_net.
+ *
+ * PGlite no trae pg_net, así que la extensión se registra a mano en
+ * pg_extension (como superusuario) y el esquema se le añade con ALTER
+ * EXTENSION … ADD SCHEMA; DROP EXTENSION … CASCADE lo deshace todo.
+ */
+describe('CIM-7: el esquema net de pg_net, declarado y nada más', () => {
+  /** Lo que crea pg_net 0.20.4, con sus GRANT. `sin` quita una pieza para las pruebas de obsoletas. */
+  const pgNet = (sin: { extension?: boolean; uso?: boolean; funcion?: string } = {}) =>
+    [
+      sin.extension
+        ? ''
+        : 'INSERT INTO pg_extension (oid, extname, extowner, extnamespace, extrelocatable, extversion) VALUES ' +
+          "(4000000000, 'pg_net', (SELECT oid FROM pg_roles WHERE rolname = current_user), 'public'::regnamespace, false, '0.20.4');",
+      'CREATE SCHEMA net;',
+      sin.extension ? '' : 'ALTER EXTENSION pg_net ADD SCHEMA net;',
+      sin.uso ? '' : 'GRANT USAGE ON SCHEMA net TO PUBLIC;',
+      "CREATE DOMAIN net.http_method AS text CHECK (VALUE ILIKE 'get' OR VALUE ILIKE 'post' OR VALUE ILIKE 'delete');",
+      "CREATE TYPE net.request_status AS ENUM ('PENDING', 'SUCCESS', 'ERROR');",
+      'CREATE TYPE net.http_response AS (status_code integer, headers jsonb, body text);',
+      'CREATE TYPE net.http_response_result AS (status net.request_status, message text, response net.http_response);',
+      'CREATE UNLOGGED TABLE net.http_request_queue (id bigserial, method net.http_method NOT NULL, url text NOT NULL, ' +
+        'headers jsonb NOT NULL, body bytea, timeout_milliseconds int NOT NULL);',
+      'CREATE UNLOGGED TABLE net._http_response (id bigint, status_code integer, content_type text, headers jsonb, ' +
+        'content text, timed_out bool, error_msg text, created timestamptz NOT NULL DEFAULT now());',
+      'CREATE INDEX ON net._http_response (created);',
+      'GRANT ALL ON ALL TABLES IN SCHEMA net TO PUBLIC;',
+      'GRANT ALL ON ALL SEQUENCES IN SCHEMA net TO PUBLIC;',
+      // Las tres que encolan, como en pg_net: plpgsql, INVOKER, un INSERT en la cola.
+      "CREATE FUNCTION net.http_get(url text, params jsonb DEFAULT '{}', headers jsonb DEFAULT '{}', " +
+        "timeout_milliseconds int DEFAULT 5000) RETURNS bigint LANGUAGE sql AS $$INSERT INTO net.http_request_queue " +
+        "(method, url, headers, timeout_milliseconds) VALUES ('GET', url, headers, timeout_milliseconds) RETURNING id$$;",
+      "CREATE FUNCTION net.http_post(url text, body jsonb DEFAULT '{}', params jsonb DEFAULT '{}', headers jsonb DEFAULT '{}', " +
+        "timeout_milliseconds int DEFAULT 5000) RETURNS bigint LANGUAGE sql AS $$INSERT INTO net.http_request_queue " +
+        "(method, url, headers, body, timeout_milliseconds) VALUES ('POST', url, headers, convert_to(body::text, 'UTF8'), " +
+        'timeout_milliseconds) RETURNING id$$;',
+      "CREATE FUNCTION net.http_delete(url text, params jsonb DEFAULT '{}', headers jsonb DEFAULT '{}', " +
+        "timeout_milliseconds int DEFAULT 5000, body jsonb DEFAULT NULL) RETURNS bigint LANGUAGE sql AS $$INSERT INTO " +
+        "net.http_request_queue (method, url, headers, timeout_milliseconds) VALUES ('DELETE', url, headers, " +
+        'timeout_milliseconds) RETURNING id$$;',
+      // Las demás, con su firma: lo que la guardia mira es la firma y el EXECUTE, no el cuerpo.
+      ...[
+        'net.http_collect_response(request_id bigint, async boolean DEFAULT true) RETURNS net.http_response_result',
+        'net._http_collect_response(request_id bigint, async boolean DEFAULT true) RETURNS net.http_response_result',
+        'net._await_response(request_id bigint) RETURNS boolean',
+        'net._encode_url_with_params_array(url text, params_array text[]) RETURNS text',
+        'net._urlencode_string(string varchar) RETURNS text',
+        'net.check_worker_is_up() RETURNS void',
+        'net.wait_until_running() RETURNS void',
+        'net.wake() RETURNS void',
+        'net.worker_restart() RETURNS boolean',
+      ]
+        .filter((f) => !sin.funcion || !f.startsWith(`${sin.funcion}(`))
+        .map((f) => {
+          const tipo = f.split(' RETURNS ')[1];
+          return `CREATE FUNCTION ${f} LANGUAGE sql AS $$SELECT ${tipo === 'void' ? '1' : `NULL::${tipo}`}$$;`;
+        }),
+    ]
+      .filter(Boolean)
+      .join(' ');
+  const quitarPgNet = (conExtension = true) =>
+    conExtension ? 'DROP EXTENSION pg_net CASCADE' : 'DROP SCHEMA net CASCADE';
+
+  async function con<T>(sql: string, deshacer: string, fn: (estado: EstadoDelEsquema) => T | Promise<T>): Promise<T> {
+    await t.admin(sql);
+    try {
+      return await fn(await estadoDelEsquema(t.db));
+    } finally {
+      await t.admin(deshacer);
+    }
+  }
+  /** Una pregunta de catálogo, para confirmar que la simulación da lo que da Supabase. */
+  const si = async (sql: string) =>
+    (await t.db.withCatalogs((tx) => tx.query<{ si: boolean }>(`SELECT (${sql}) AS si`))).rows[0]?.si;
+
+  test('con lo que crea pg_net 0.20.4 la guardia queda en verde, y es por la declaración', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('registrar una extensión a mano en pg_extension pide superusuario');
+    // La declaración existe y nombra pg_net: sin ella, esta prueba falla
+    // (net saldría en esquemasDeMas y cada objeto en accesosEnEsquemas).
+    assert.match(ESQUEMAS_DECLARADOS.net ?? '', /pg_net/);
+    assert.equal(ESQUEMAS_DE_EXTENSION.net, 'pg_net');
+    await con(pgNet(), quitarPgNet(), async (e) => {
+      // Lo mismo que en Supabase: mc_app llega a net por PUBLIC y lo puede todo en la cola.
+      assert.equal(await si("has_schema_privilege('mc_app', 'net', 'USAGE')"), true);
+      assert.equal(await si("has_table_privilege('mc_app', 'net.http_request_queue', 'SELECT, INSERT, TRIGGER')"), true);
+      assert.equal(await si("has_table_privilege('mc_app', 'net._http_response', 'SELECT, DELETE, TRUNCATE')"), true);
+      assert.equal(await si("has_function_privilege('mc_app', 'net.http_post(text,jsonb,jsonb,jsonb,integer)', 'EXECUTE')"), true);
+      assert.deepEqual(e.esquemasDeMas, []);
+      assert.deepEqual(e.accesosEnEsquemas, []);
+      assert.deepEqual(e.funcionesDefiner, []);
+      assert.deepEqual(e.otrasDeclaracionesObsoletas, []);
+      assert.equal(explicarEsquema(e), null);
+    });
+    // Y cada entrada del inventario corresponde a algo que pg_net crea: si
+    // sobrara una, habría salido como obsoleta arriba.
+    assert.ok(Object.keys(ACCESOS_EN_ESQUEMAS_DECLARADOS).every((k) => k.startsWith('net.')));
+  });
+
+  test('con net declarado, otro esquema cualquiera con USAGE para mc_app sigue tumbando la guardia', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('registrar una extensión a mano en pg_extension pide superusuario');
+    await con(
+      pgNet() + ' CREATE SCHEMA otro; CREATE TABLE otro.secretos (x text); GRANT USAGE ON SCHEMA otro TO mc_app; ' +
+        'GRANT SELECT ON otro.secretos TO mc_app;',
+      `${quitarPgNet()}; DROP SCHEMA otro CASCADE`,
+      async (e) => {
+        assert.deepEqual(e.esquemasDeMas, ['otro (USAGE)']);
+        assert.deepEqual(e.accesosEnEsquemas, [], 'lo de otro no se inventaría: el esquema entero ya se reporta');
+        assert.match(String(explicarEsquema(e)), /otro \(USAGE\)/);
+        assert.doesNotMatch(String(explicarEsquema(e)), /\bnet\b/);
+      },
+    );
+    // Lo mismo con otro, solo, contra la base recién migrada: la declaración de net no lo cambia.
+    await t.admin('CREATE SCHEMA otro; GRANT USAGE ON SCHEMA otro TO mc_app');
+    try {
+      await assert.rejects(assertSchemaUpToDate(t.db, { production: true }), /otro \(USAGE\)/);
+    } finally {
+      await t.admin('DROP SCHEMA otro CASCADE');
+    }
+  });
+
+  test('declarar net no abre lo que hay dentro: una tabla nueva, una función nueva o CREATE se reportan', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('registrar una extensión a mano en pg_extension pide superusuario');
+    await con(
+      pgNet() +
+        ' CREATE TABLE net.zz_secretos (x text); GRANT SELECT ON net.zz_secretos TO mc_app;' +
+        ' CREATE TABLE net.zz_por_columna (x text, y text); GRANT UPDATE (y) ON net.zz_por_columna TO PUBLIC;' +
+        ' CREATE FUNCTION net.zz_nueva(uuid) RETURNS int LANGUAGE sql AS $$SELECT 1$$;' +
+        ' GRANT CREATE ON SCHEMA net TO PUBLIC;',
+      quitarPgNet(),
+      (e) => {
+        assert.deepEqual(e.accesosEnEsquemas, [
+          'net.zz_nueva(uuid) (EXECUTE)',
+          'net.zz_por_columna (UPDATE)',
+          'net.zz_secretos (SELECT)',
+        ]);
+        assert.deepEqual(e.esquemasDeMas.map((x) => x.split(' (')[0]), ['net']);
+        assert.match(e.esquemasDeMas[0] ?? '', /CREATE/);
+        assert.match(String(explicarEsquema(e)), /ACCESOS_EN_ESQUEMAS_DECLARADOS/);
+      },
+    );
+  });
+
+  test('un esquema net que no creó pg_net no es el declarado, aunque tenga lo mismo dentro', async (ctx) => {
+    if (t.kind !== 'pglite') return ctx.skip('registrar una extensión a mano en pg_extension pide superusuario');
+    await con(pgNet({ extension: true }), quitarPgNet(false), (e) => {
+      assert.equal(e.esquemasDeMas.length, 1, JSON.stringify(e.esquemasDeMas));
+      assert.match(e.esquemasDeMas[0] ?? '', /^net \(USAGE\): .*extensión pg_net.*no lo creó ninguna extensión/);
+      assert.notEqual(explicarEsquema(e), null);
+    });
+  });
+
+  test('sin pg_net la declaración duerme; instalado y sin USAGE, o sin una de sus funciones, sobra', async (ctx) => {
+    // Sin net (la base recién migrada, y Supabase hoy): nada que decir.
+    const sinPgNet = await estadoDelEsquema(t.db);
+    assert.deepEqual(sinPgNet.otrasDeclaracionesObsoletas, []);
+    assert.equal(explicarEsquema(sinPgNet), null);
+    if (t.kind !== 'pglite') return ctx.skip('registrar una extensión a mano en pg_extension pide superusuario');
+    // pg_net instalado y Supabase deja de dar USAGE a PUBLIC: la declaración sobra.
+    await con(pgNet({ uso: true }), quitarPgNet(), (e) => {
+      assert.deepEqual(e.otrasDeclaracionesObsoletas, ['ESQUEMAS_DECLARADOS: net']);
+      assert.deepEqual(e.accesosEnEsquemas, []);
+    });
+    // Una versión de pg_net sin worker_restart: su entrada sobra, y la guardia lo dice.
+    await con(pgNet({ funcion: 'net.worker_restart' }), quitarPgNet(), (e) => {
+      assert.deepEqual(e.otrasDeclaracionesObsoletas, ['ACCESOS_EN_ESQUEMAS_DECLARADOS: net.worker_restart()']);
+      assert.match(String(explicarEsquema(e)), /sobran excepciones declaradas/);
+    });
   });
 });
