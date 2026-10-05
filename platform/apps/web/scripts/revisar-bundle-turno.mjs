@@ -53,10 +53,6 @@ export const PERMITIDOS = {
     'FIXTURES_DIR solo lo lee loadFixture, que usan las pruebas; en producción los conectores van por la red',
   'db/lib/aplicar.mjs':
     'el runner de migraciones solo lo usa el Postgres embebido (sin DATABASE_URL), nunca en producción',
-  'db/lib/foto.mjs':
-    'la foto del esquema migrado (CIM-12) solo la abre el Postgres embebido (sin DATABASE_URL), nunca en producción',
-  'packages/db/src/embedded.ts':
-    'motorDe(import.meta.url) solo corre al abrir la foto del Postgres embebido (sin DATABASE_URL), nunca en producción',
 };
 
 /**

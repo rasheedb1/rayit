@@ -17,6 +17,7 @@
 import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { esperarAviso } from './carrera.ts';
 import type { WorkerSql } from '../src/client.ts';
 import { CLAIM_LOCK_KEY, claimDueTouches, type ClaimReport } from '../src/queries/outreach.ts';
 import { updateContact } from '../src/queries/ventas.ts';
@@ -93,7 +94,7 @@ test('dos reclamos a la vez: uno sale y el otro se pospone por la separación co
       await puerta;
       return r;
     });
-    await primeraReclamo;
+    await esperarAviso(primeraReclamo, primera);
     let resuelta = false;
     const segunda = t.db.asWorker(reclamo).then((r) => ((resuelta = true), r));
     await new Promise((r) => setTimeout(r, 400));

@@ -21,12 +21,15 @@ export default async function setup(): Promise<() => Promise<void>> {
   // Si ya viene de fuera (otra herramienta que la fijó), no es nuestra: no se borra.
   const propia = !process.env.MC_PGLITE_CORRIDA;
   if (propia) process.env.MC_PGLITE_CORRIDA = `web-${process.pid}-${Date.now()}`;
-  const carpeta = carpetaDeCorrida(process.env.MC_PGLITE_CORRIDA!);
+  const carpeta = await carpetaDeCorrida(process.env.MC_PGLITE_CORRIDA!);
 
   const corridas = dirname(carpeta);
   for (const nombre of await readdir(corridas).catch(() => [] as string[])) {
     const ruta = join(corridas, nombre);
-    const vieja = await stat(ruta).then((s) => Date.now() - s.mtimeMs > CORRIDA_VIEJA_MS, () => false);
+    // La hora de la máquina y no Date.now(): con el reloj de las pruebas
+    // movido (scripts/pruebas/reloj.mjs), la corrida viva de otro verificar
+    // parecería de hace semanas y se le borraría la carpeta.
+    const vieja = await stat(ruta).then((s) => performance.timeOrigin + performance.now() - s.mtimeMs > CORRIDA_VIEJA_MS, () => false);
     if (vieja) await rm(ruta, { recursive: true, force: true }).catch(() => undefined);
   }
 

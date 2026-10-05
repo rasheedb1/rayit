@@ -8,9 +8,9 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { allJobs } from '../src/jobs/index.ts';
-import { applyRepoSeeds, jobRuns, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
+import { applyRepoSeeds, jobRuns, SETUP_TIMEOUT, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
-import { medianasVigentesSql, multiploPonderado, POSTS_CAFE_ALMA_A_30_DIAS, type MedianaVigente } from '@mc/db/test/demo';
+import { ANCLA_DEMO, diasHasta, medianasVigentesSql, multiploPonderado, POSTS_CAFE_ALMA_A_30_DIAS, type MedianaVigente } from '@mc/db/test/demo';
 
 const NOW = new Date('2026-09-23T07:30:00Z');
 const LAURA = '00000002-0000-4000-8000-000000000001';
@@ -24,7 +24,10 @@ const OTRA_MARCA = '00000009-0000-4000-8000-0000000c05e1';
 const OTRA_CAMPANA = '00000009-0000-4000-8000-00000c05ca01';
 
 async function seed(db: PgliteDatabase): Promise<void> {
-  await applyRepoSeeds(db);
+  // La demo sembrada como si hoy fuera ANCLA_DEMO (CIM-12): las lecturas de
+  // los posts de campaña del seed 0003 tienen fecha fija, y sembrada «hoy»
+  // Fresko pasaba a 30 días el 7-oct y la prueba se ponía roja sola.
+  await applyRepoSeeds(db, { relojDias: diasHasta(ANCLA_DEMO) });
   await db.raw.exec(`
     INSERT INTO workspace (id, slug, name, kind, currency) VALUES ('${OTRO}', 'otro-cam5', 'Otro', 'creator', 'USD');
     INSERT INTO company (id, name, domain, owner_workspace_id) VALUES ('${OTRA_MARCA}', 'Otra marca', 'otra.example', '${OTRO}');
@@ -69,7 +72,7 @@ async function runOnce(h: Harness, payload: Record<string, unknown> = {}): Promi
 let h: Harness;
 before(async () => {
   h = await startHarness({ jobs: allJobs, now: () => NOW, seed });
-}, { timeout: 600_000 });
+}, SETUP_TIMEOUT);
 after(async () => { await h.stop(); });
 
 test('las campañas en curso quedan con el resultado recalculado; la cerrada no se toca', async () => {

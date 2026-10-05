@@ -18,6 +18,17 @@ import { PRUEBA_TIMEOUT_MS } from "./lib/testing/tiempos";
  */
 const PROCESOS = Number(process.env.MC_TEST_WORKERS) || Math.max(2, Math.floor(availableParallelism() / 3));
 
+/**
+ * El reloj de las pruebas (scripts/pruebas/reloj.mjs, CIM-12): cada
+ * proceso de vitest lo carga antes que nada, así que Date y el now() de
+ * la base embebida dicen el día del ancla y no el de la máquina. El
+ * origen se fija aquí, una vez por `vitest run`, para que todos los
+ * procesos compartan el mismo reloj (la demo la siembra uno y la cargan
+ * los demás). performance y no Date: este proceso no lleva el reloj movido.
+ */
+const RELOJ = fileURLToPath(new URL("../../scripts/pruebas/reloj.mjs", import.meta.url));
+process.env.MC_RELOJ_ORIGEN ??= String(Math.round(performance.timeOrigin + performance.now()));
+
 // Pruebas de componentes y utilidades. No hay plugin de React: esbuild
 // compila el JSX con el runtime automático, igual que Next.
 export default defineConfig({
@@ -37,7 +48,7 @@ export default defineConfig({
     include: ["**/*.test.{ts,tsx}"],
     exclude: ["node_modules", ".next"],
     pool: "forks",
-    poolOptions: { forks: { minForks: 1, maxForks: PROCESOS } },
+    poolOptions: { forks: { minForks: 1, maxForks: PROCESOS, execArgv: ["--import", RELOJ] } },
     // 20 s y no los 5 de vitest: la primera prueba de un archivo carga con
     // el import y la compilación de sus componentes. Los hooks que abren
     // la base y las pruebas que la consultan llevan su constante de

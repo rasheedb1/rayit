@@ -39,7 +39,8 @@ import {
   recordBrandSnapshot,
 } from '../src/index.ts';
 import { filasDeBitacora } from './bitacora.ts';
-import { medianasVigentesSql, multiploPonderado, POSTS_CAFE_ALMA_A_30_DIAS, type MedianaVigente } from './demo.ts';
+import { createEmbeddedDb, type EmbeddedDb } from '../src/embedded.ts';
+import { ANCLA_DEMO, diasHasta, medianasVigentesSql, multiploPonderado, POSTS_CAFE_ALMA_A_30_DIAS, type MedianaVigente } from './demo.ts';
 import {
   openTestDb, type TestDb,
   WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO, CAMPAIGN_NUTRIVE, CAMPAIGN_HOGAR_LINDO,
@@ -112,15 +113,74 @@ function cercaDelMock(actual: number | null | undefined, ref: number, que: strin
   );
 }
 
-/** La curva de 0002 llega hasta ayer: la última lectura es de las últimas 48 h. */
-const lecturaReciente = (iso: string | null | undefined, que: string) => {
+/**
+ * La curva de 0002 llega hasta el día antes de la siembra: la última
+ * lectura es de las 48 h anteriores a `hoy` (el día en que se sembró la
+ * demo que se mira, no el reloj de la prueba).
+ */
+const lecturaReciente = (iso: string | null | undefined, que: string, hoy: number) => {
   assert.ok(typeof iso === 'string', `${que}: debería haber una lectura, no ${iso}`);
-  const horas = (Date.now() - Date.parse(iso as string)) / 3_600_000;
-  assert.ok(horas >= 0 && horas < 48, `${que}: la última lectura (${iso}) debería ser de las últimas 48 h`);
+  const horas = (hoy - Date.parse(iso as string)) / 3_600_000;
+  assert.ok(horas >= 0 && horas < 48, `${que}: la última lectura (${iso}) debería ser de las 48 h antes de ${new Date(hoy).toISOString()}`);
 };
 
+/**
+ * Las cifras de las campañas con fecha fija (CIM-12). Los posts de
+ * campaña y sus lecturas del seed 0003 tienen fecha fija (el TikTok de
+ * Fresko cumple 30 días el 7-oct; la curva de Café Alma deja de medirse a
+ * los 90 días, el 8-nov) y la parrilla de 0002 cuenta desde hoy: contra la
+ * demo sembrada «hoy», estas tres pruebas eran ciertas solo unos días. Aquí
+ * se siembra como si hoy fuera ANCLA_DEMO (desplazarReloj sobre los
+ * seeds) y se compara contra ese día, sea cual sea el reloj. Siempre el
+ * embebido, también con TEST_DATABASE_URL: el reloj de los seeds solo se
+ * mueve al sembrar (como en demo-anclada.test.ts).
+ */
+describe(`la demo sembrada el ${ANCLA_DEMO}: las cifras de las campañas con fecha fija`, () => {
+  let anclada: EmbeddedDb;
+  let relojDias: number;
+  /** El instante «de hoy» de esa siembra: el reloj de la prueba movido los mismos días que los seeds. */
+  const hoyDeLaDemo = () => Date.now() + relojDias * 86_400_000;
+  const deLaura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => anclada.withWorkspace(WORKSPACE_LAURA, fn);
+
+  before(async () => {
+    relojDias = diasHasta(ANCLA_DEMO);
+    anclada = await createEmbeddedDb({ snapshot: true, relojDias, authDisabled: true });
+  }, SETUP_TIMEOUT);
+  after(async () => {
+    await anclada?.close();
+  });
+
+  test('la lista da las cuatro campañas del mock con sus cifras y sus datos hasta', async () => {
+    const rows = await deLaura((tx) => listCampaigns(tx));
+    assert.deepEqual(rows.map((r) => r.companyName), ['Fresko Market', 'Café Alma', 'Nutrivé', 'Hogar Lindo'], 'más recientes primero');
+    cercaDelMock(rows[0]?.viewsTotal, 140000 + 125000, 'Fresko Market');
+    cercaDelMock(rows[1]?.viewsTotal, 412000 + 300000, 'Café Alma');
+    cercaDelMock(rows[2]?.viewsTotal, 58000, 'Nutrivé');
+    assert.equal(rows[3]?.viewsTotal, null, 'sin posts no hay views: null, no cero');
+    lecturaReciente(rows[1]?.dataAsOf, 'Café Alma', hoyDeLaDemo());
+  });
+
+  test('los posts de Café Alma: 412 K + 300 K, con su alcance, sus guardados y datos hasta', async () => {
+    const posts = await deLaura((tx) => listCampaignPosts(tx, CAMPAIGN_CAFE_ALMA));
+    assert.deepEqual(posts.map((p) => p.postId), [POST_D01_REEL_CAFE_ALMA, POST_D02_TIKTOK_CAFE_ALMA]);
+    cercaDelMock(posts[0]?.views, 412000, 'el reel de Café Alma');
+    cercaDelMock(posts[1]?.views, 300000, 'el TikTok de Café Alma');
+    cercaDelMock(posts[0]?.reach, 296000, 'el alcance del reel');
+    cercaDelMock(posts[0]?.saves, 6200, 'los guardados del reel');
+    lecturaReciente(posts[0]?.dataAsOf, 'el reel de Café Alma', hoyDeLaDemo());
+    lecturaReciente(posts[1]?.dataAsOf, 'el TikTok de Café Alma', hoyDeLaDemo());
+  });
+
+  test('Fresko aún no llega a 30 días: resultado parcial a 7 días', async () => {
+    await deLaura((tx) => computeCampaignResult(tx, CAMPAIGN_FRESKO));
+    const r = await deLaura((tx) => getCampaignResult(tx, CAMPAIGN_FRESKO));
+    assert.equal(r?.cutHours, 168);
+    assert.ok((r?.views ?? 0) > 0);
+  });
+});
+
 describe('lista y ficha', () => {
-  test('la lista da las cuatro campañas del mock con sus cifras', async () => {
+  test('la lista da las cuatro campañas del mock con su estado, posts, monto y factura', async () => {
     const rows = await laura((tx) => listCampaigns(tx));
     const seed = rows.filter((r) => r.id !== CAMPAIGN_PRUEBA && r.id !== CAMPAIGN_SIN_FECHAS);
     assert.deepEqual(
@@ -133,12 +193,10 @@ describe('lista y ficha', () => {
       ],
       'más recientes primero',
     );
-    cercaDelMock(seed[0]?.viewsTotal, 140000 + 125000, 'Fresko Market');
-    cercaDelMock(seed[1]?.viewsTotal, 412000 + 300000, 'Café Alma');
-    cercaDelMock(seed[2]?.viewsTotal, 58000, 'Nutrivé');
+    // Las views y el «datos hasta» cambian con el día: los mira la demo anclada, arriba.
     assert.equal(seed[3]?.viewsTotal, null, 'sin posts no hay views: null, no cero');
     const cafe = rows.find((r) => r.id === CAMPAIGN_CAFE_ALMA);
-    lecturaReciente(cafe?.dataAsOf, 'Café Alma');
+    assert.ok(cafe?.dataAsOf, 'Café Alma tiene lecturas');
     assert.equal(cafe?.startsOn, '2026-08-10');
     assert.equal(cafe?.endsOn, '2026-08-17');
     assert.equal(rows.find((r) => r.id === CAMPAIGN_HOGAR_LINDO)?.dataAsOf, null);
@@ -172,7 +230,7 @@ describe('lista y ficha', () => {
     assert.equal(await laura((tx) => getCampaign(tx, '00000003-0000-4000-8000-000000000000')), null);
   });
 
-  test('los posts de Café Alma: dos, 412 K + 300 K, el principal primero, con datos hasta', async () => {
+  test('los posts de Café Alma: dos, el principal primero, con su entregable y su fecha', async () => {
     const posts = await laura((tx) => listCampaignPosts(tx, CAMPAIGN_CAFE_ALMA));
     assert.deepEqual(
       posts.map((p) => [p.postId, p.platformId, p.isPrimary, p.deliverable]),
@@ -181,13 +239,9 @@ describe('lista y ficha', () => {
         [POST_D02_TIKTOK_CAFE_ALMA, 'tiktok', false, 'tiktok'],
       ],
     );
-    cercaDelMock(posts[0]?.views, 412000, 'el reel de Café Alma');
-    cercaDelMock(posts[1]?.views, 300000, 'el TikTok de Café Alma');
-    cercaDelMock(posts[0]?.reach, 296000, 'el alcance del reel');
-    cercaDelMock(posts[0]?.saves, 6200, 'los guardados del reel');
-    lecturaReciente(posts[0]?.dataAsOf, 'el reel de Café Alma');
+    // Las cifras y el «datos hasta», en la demo anclada (arriba).
+    assert.ok(posts.every((p) => (p.views ?? 0) > 0 && p.dataAsOf), 'los dos tienen lecturas');
     assert.equal(posts[0]?.publishedAt, '2026-08-10T17:00:00Z');
-    lecturaReciente(posts[1]?.dataAsOf, 'el TikTok de Café Alma');
   });
 });
 
@@ -961,10 +1015,11 @@ describe('resultado de campaña', () => {
       assert.deepEqual(r?.missingInputs, ['posts', 'brand_followers', 'brand_csv_sales']);
     });
 
-    test('Fresko aún no llega a 30 días: resultado parcial a 7 días, con el CSV de CAM-4', async () => {
+    test('Fresko con el CSV de CAM-4: solo le faltan los seguidores de la marca', async () => {
       await laura((tx) => computeCampaignResult(tx, CAMPAIGN_FRESKO));
       const r = await laura((tx) => getCampaignResult(tx, CAMPAIGN_FRESKO));
-      assert.equal(r?.cutHours, 168);
+      // El corte (7 días hasta el 7-oct, 30 desde entonces) depende del día:
+      // lo mira la demo anclada, al principio del archivo.
       assert.ok((r?.views ?? 0) > 0);
       assert.deepEqual(r?.missingInputs, ['brand_followers'], 'las pruebas de CAM-4 le cargaron el CSV de ventas');
     });

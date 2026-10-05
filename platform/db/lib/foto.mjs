@@ -24,7 +24,17 @@
  *     `fuentes` que pase quien la pide (el módulo con su `preparar`),
  *   - el nombre y el contenido de cada archivo de db/migrations.
  * Cambiar una migración, el runner o un `preparar` da otra foto; no hay
- * que borrar nada a mano. Las de huellas viejas con el mismo prefijo se
+ * que borrar nada a mano.
+ *
+ * Lo que NO entra en la huella: el reloj. Las migraciones no dependen de
+ * él: lo único que queda con la hora de migrar son marcas de auditoría de
+ * los catálogos (los updated_at de 0011, el created_at por DEFAULT de las
+ * filas de catálogo que insertan), que ninguna consulta usa para decidir
+ * nada; el resto de now() vive en cuerpos de funciones y en DEFAULT de
+ * tablas que se llenan después. Si una
+ * migración llegara a sembrar filas que dependan de la fecha, su foto
+ * envejecería: habría que meter el día en la `clave`, como hace la foto
+ * con seeds de packages/db/src/embedded.ts. Las de huellas viejas con el mismo prefijo se
  * borran al escribir una nueva, si llevan más de una hora sin usarse.
  *
  * Concurrencia: vitest arranca varios procesos a la vez y todos quieren
@@ -45,7 +55,9 @@ import { createRequire } from 'node:module';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { applyMigrations, listSql, MIGRATIONS_DIR } from './aplicar.mjs';
+import { applyMigrations, execPglite, listSql, MIGRATIONS_DIR } from './aplicar.mjs';
+
+export { execPglite };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** platform/node_modules/.cache/mc-pglite, o MC_PGLITE_FOTO_DIR. */
@@ -73,6 +85,16 @@ const AVISO_MS = 10_000;
 const FOTO_VIEJA_MS = 60 * 60_000;
 const ESPERA_MS = 250;
 
+/**
+ * La hora de la máquina en ms, para comparar con el mtime de un archivo.
+ * No es Date.now(): las pruebas corren con el reloj anclado
+ * (scripts/pruebas/reloj.mjs mueve Date y el reloj de PGlite), y el mtime
+ * lo pone el sistema de archivos con la hora de verdad. Con Date.now() un
+ * candado vivo parecía de hace meses y otro proceso se lo quitaba, y el
+ * latido escribía mtimes del futuro. performance no lo mueve nadie.
+ */
+const ahora = () => performance.timeOrigin + performance.now();
+
 /** Las extensiones de todas las bases de pruebas, como en Supabase. */
 export const EXTENSIONES = ['citext', 'pg_trgm'];
 
@@ -89,18 +111,13 @@ export function motorDe(desde) {
 export async function extensionesDe(motor) {
   const out = {};
   for (const nombre of EXTENSIONES) {
-    const mod = await import(pathToFileURL(join(dirname(motor), 'contrib', `${nombre}.js`)).href);
+    // Una ruta calculada: que ningún empaquetador intente resolverla (este
+    // módulo no entra en el bundle de la web, pero si alguna vez entrara,
+    // así no trae «Critical dependency: the request of a dependency is an expression»).
+    const mod = await import(/* webpackIgnore: true */ /* @vite-ignore */ pathToFileURL(join(dirname(motor), 'contrib', `${nombre}.js`)).href);
     out[nombre] = mod[nombre];
   }
   return out;
-}
-
-/** exec() de PGlite como lo quiere el runner: varias sentencias, las filas de la última. */
-export function execPglite(pglite) {
-  return async (sql) => {
-    const out = await pglite.exec(sql);
-    return { rows: out.at(-1)?.rows ?? [] };
-  };
 }
 
 /**
@@ -174,7 +191,7 @@ async function guardar(carpeta, ruta, foto, prefijo) {
   const nombre = ruta.slice(carpeta.length + 1);
   for (const f of await readdir(carpeta).catch(() => [])) {
     if (f === nombre || !f.startsWith(`${prefijo}-`) || !f.endsWith('.tar')) continue;
-    const vieja = await stat(join(carpeta, f)).then((s) => Date.now() - s.mtimeMs > FOTO_VIEJA_MS, () => false);
+    const vieja = await stat(join(carpeta, f)).then((s) => ahora() - s.mtimeMs > FOTO_VIEJA_MS, () => false);
     if (vieja) await rm(join(carpeta, f), { force: true }).catch(() => undefined);
   }
 }
@@ -206,7 +223,7 @@ async function dueñoDe(candado) {
     if (err?.code === 'ENOENT') return null;
     throw err;
   }
-  const edad = Date.now() - s.mtimeMs;
+  const edad = ahora() - s.mtimeMs;
   const m = /^(\d+)@(.+)$/.exec(texto);
   if (!m) return { texto, viejo: edad > VACIO_VIEJO_MS };
   const pid = Number(m[1]);
@@ -220,7 +237,7 @@ async function dueñoDe(candado) {
  * proceso tiene el candado y le toca construirla.
  */
 async function candadoOFoto(ruta, candado) {
-  const inicio = Date.now();
+  const inicio = ahora();
   let avisado = false;
   for (;;) {
     const hallada = await leer(ruta);
@@ -250,12 +267,19 @@ async function candadoOFoto(ruta, candado) {
       await rm(candado, { force: true });
       continue;
     }
-    if (!avisado && Date.now() - inicio > AVISO_MS) {
+    if (!avisado && ahora() - inicio > AVISO_MS) {
       avisado = true;
       process.stderr.write(`foto: esperando la foto que construye ${dueño?.pid ? `el pid ${dueño.pid}` : 'otro proceso'} (candado: ${candado})…\n`);
     }
-    // Un temporizador con ref: mientras se espera, el proceso no se da
-    // por terminado (node:test cancela todo si el bucle se queda vacío).
+    // Un temporizador CON ref, a propósito. PGlite no abre sockets ni
+    // temporizadores: mientras este proceso espera el candado de OTRO, este
+    // setTimeout es lo único que mantiene vivo el bucle de eventos. Sin él
+    // (un .unref(), un fs.watch con persistent: false), un proceso suelto
+    // (`node db/migrate.mjs`, los hijos de foto.test.mjs) saldría con el
+    // await sin resolver; lo pilla «dos procesos a la vez» de foto.test.mjs.
+    // Dentro de node:test (Node 24+) el runner mantiene vivo el bucle él
+    // solo; la cancelación masiva de CIM-12 era otra cosa (un SIGTERM:
+    // docs/propuestas/CIM-12.md §Mecanismo).
     await new Promise((r) => setTimeout(r, ESPERA_MS));
   }
 }
@@ -269,8 +293,8 @@ async function soltar(candado) {
 /** Renueva el mtime del candado cada LATIDO_MS hasta que se llame a la función que devuelve. */
 function latir(candado) {
   const t = setInterval(() => {
-    const ahora = new Date();
-    utimes(candado, ahora, ahora).catch(() => undefined);
+    const s = ahora() / 1000;
+    utimes(candado, s, s).catch(() => undefined);
   }, LATIDO_MS);
   t.unref();
   return () => clearInterval(t);

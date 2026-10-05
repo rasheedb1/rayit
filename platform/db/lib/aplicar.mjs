@@ -158,7 +158,7 @@ export class SeedFailedError extends Error {
  * @param {(sql: string) => Promise<{ rows: any[] }>} exec
  * `opts.transformar` recibe el SQL de cada seed y devuelve el que se
  * corre. Solo lo usan las pruebas que siembran con el reloj movido
- * (desplazarReloj de db/seed/verify/reloj.mjs); `make seed` no lo pasa.
+ * (desplazarReloj de db/lib/reloj.mjs); `make seed` no lo pasa.
  *
  * @param {{ dir?: string, transformar?: (sql: string, file: string) => string, onApplied?: (file: string, ms: number) => void }} [opts]
  */
@@ -180,4 +180,21 @@ export async function applySeeds(exec, opts = {}) {
     opts.onApplied?.(file, Date.now() - t0);
   }
   return files;
+}
+
+/**
+ * El `exec` de este runner sobre una PGlite: exec() admite varias
+ * sentencias y devuelve un resultado por cada una; el runner solo mira
+ * las filas de la última. Lo usan el embebido de las pruebas, la foto de
+ * disco (foto.mjs) y el Postgres embebido del worker (db-pglite.ts).
+ * Vive aquí y no en foto.mjs para que importarlo no meta la foto en el
+ * bundle de la web (CIM-12, r3).
+ *
+ * @param {{ exec(sql: string): Promise<Array<{ rows: any[] }>> }} pglite
+ */
+export function execPglite(pglite) {
+  return async (sql) => {
+    const out = await pglite.exec(sql);
+    return { rows: out.at(-1)?.rows ?? [] };
+  };
 }

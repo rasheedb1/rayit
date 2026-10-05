@@ -4,7 +4,8 @@
  * un logger en memoria y un worker arrancado con reintentos rápidos.
  */
 import { PGlite } from '@electric-sql/pglite';
-import { abrirSuperusuario, applySeeds, execPglite, SEED_DIR } from '@mc/db/embedded';
+import { abrirSuperusuario, applyRepoSeeds as sembrarRepo, execPglite } from '@mc/db/embedded';
+import { SETUP_TIMEOUT_MS } from '@mc/db/test/tiempos';
 import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, type ConnectorHttpOverrides, type QuotaManager, type SecretStore, type TokenRefresher } from '@mc/connectors';
 import { loadConfig, type WorkerConfig } from '../../src/runner/config.ts';
 import { PgliteDatabase } from '../../src/runner/db-pglite.ts';
@@ -13,14 +14,13 @@ import type { JobRegistration } from '../../src/runner/registry.ts';
 import { startWorker, type RunningWorker } from '../../src/runner/worker.ts';
 
 /**
- * El tiempo del arranque de un archivo de pruebas: aplicar
- * todas las migraciones en PGlite. Va en su propio `before(fn,
- * SETUP_TIMEOUT)` para que --test-timeout mida las pruebas y no la
- * migración: con varios agentes en la máquina (carga 40-60), migrar pasaba
- * de dos minutos y el primer before arrastraba a todos los archivos, que
- * con --test-isolation=none comparten la raíz.
+ * El tiempo del arranque de un archivo de pruebas: abrir la foto de la
+ * base migrada (o construirla, el primer proceso tras cambiar una
+ * migración). Va en su propio `before(fn, SETUP_TIMEOUT)` para que
+ * --test-timeout mida las pruebas y no el arranque. El número es el de
+ * todos los paquetes (@mc/db/test/tiempos, CIM-12), con su porqué.
  */
-export const SETUP_TIMEOUT = { timeout: 900_000 } as const;
+export const SETUP_TIMEOUT = { timeout: SETUP_TIMEOUT_MS } as const;
 
 /**
  * La base de cada archivo: la misma que deja PgliteDatabase.open —todas
@@ -38,10 +38,12 @@ export async function openTestDatabase(): Promise<PgliteDatabase> {
  * Carga db/seed/*.sql con el runner de @mc/db (el mismo de openTestDb y
  * de `make seed`): cada seed en su transacción, en orden. Para las
  * pruebas que parten de la demo; se pasa como `seed` a startHarness o se
- * llama dentro del propio `seed`.
+ * llama dentro del propio `seed`. Con `relojDias`, siembra la demo como
+ * si hoy fuera ese día (diasHasta(ANCLA_DEMO) de @mc/db/test/demo): para
+ * las pruebas que miran cifras de campañas con fechas fijas (CIM-12).
  */
-export async function applyRepoSeeds(db: PgliteDatabase): Promise<void> {
-  await applySeeds(execPglite(db.raw), { dir: SEED_DIR });
+export async function applyRepoSeeds(db: PgliteDatabase, opts: { relojDias?: number } = {}): Promise<void> {
+  await sembrarRepo(execPglite(db.raw), opts.relojDias ?? 0);
 }
 
 export function testConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {

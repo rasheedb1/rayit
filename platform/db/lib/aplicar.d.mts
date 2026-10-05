@@ -34,6 +34,9 @@ export function listSql(dir: string): Promise<string[]>;
 export function applyMigrations(exec: MigrationExec, opts?: ApplyMigrationsOptions): Promise<ApplyMigrationsResult>;
 export function applySeeds(exec: MigrationExec, opts?: ApplySeedsOptions): Promise<string[]>;
 
+/** El exec de este runner sobre una PGlite (varias sentencias, las filas de la última). */
+export function execPglite(pglite: { exec(sql: string): Promise<Array<{ rows: unknown[] }>> }): MigrationExec;
+
 export class DuplicateMigrationNumberError extends Error {
   files: string[];
   constructor(files: string[]);

@@ -172,3 +172,64 @@ test('MC_PGLITE_FOTO=0 construye en memoria cada vez y no escribe nada', async (
     e.limpiar();
   }
 });
+
+test('dentro de node:test, esperar el candado de otro proceso no deja el bucle vacío ni cancela la prueba', async () => {
+  // Lo que pidió la revisión de CIM-12 (r3): la espera del candado de OTRO
+  // proceso, dentro del propio runner de node:test (las demás pruebas de
+  // este archivo esperan en procesos hijos). Sin hijo a propósito: un
+  // ChildProcess vivo es un handle que mantendría vivo el bucle por su
+  // cuenta. El candado es de un pid vivo que no es nuestro (el 1, launchd
+  // o init: kill(1, 0) da EPERM, «vive y es de otro usuario») y se suelta
+  // con un temporizador SIN ref.
+  //
+  // Lo que esta prueba NO puede ver, medido el 5-oct: con Node 24 y 25 el
+  // runner de node:test mantiene vivo el bucle él solo mientras quede una
+  // prueba pendiente (un setInterval en su beforeExit), así que una espera
+  // sin handles aquí dentro no se cancela: cuelga hasta --test-timeout. La
+  // cancelación con «Promise resolution is still pending but the event
+  // loop has already resolved» en esas versiones viene de un SIGTERM o un
+  // SIGINT al proceso (docs/propuestas/CIM-12.md §Mecanismo). Donde el
+  // setTimeout con ref de foto.mjs sí decide es en un proceso suelto (el
+  // `node -e` de los hijos de arriba): con un .unref() ahí, «dos procesos a
+  // la vez» falla porque el hijo que espera sale con el await sin resolver.
+  const e = escenario();
+  try {
+    const { fotoMigrada } = await import(FOTO);
+    const { PGlite } = await import('@electric-sql/pglite');
+    const args = {
+      PGlite,
+      extensions: {},
+      motor: 'prueba',
+      clave: 'prueba-en-proceso',
+      dir: e.migraciones,
+      carpeta: e.fotos,
+      preparar: async (p) => {
+        await p.exec(readFileSync(join(e.migraciones, '0001_t.sql'), 'utf8'));
+      },
+    };
+    // El nombre del candado sale de la huella: se construye una vez en
+    // otra carpeta (la sonda) y se copia el nombre.
+    const sondaDir = join(e.raiz, 'sonda');
+    await fotoMigrada({ ...args, carpeta: sondaDir });
+    const [tar] = readdirSync(sondaDir).filter((f) => f.endsWith('.tar'));
+    mkdirSync(e.fotos, { recursive: true });
+    const candado = join(e.fotos, `${tar}.candado`);
+    writeFileSync(candado, `1@${hostname()}`);
+    setTimeout(() => rmSync(candado, { force: true }), 1_500).unref();
+
+    const t0 = performance.now();
+    const foto = await fotoMigrada(args);
+    const ms = performance.now() - t0;
+    assert.ok(ms >= 1_400, `esperó al candado ajeno (${Math.round(ms)} ms)`);
+    const db = await PGlite.create({ loadDataDir: foto });
+    try {
+      const { rows } = await db.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public'");
+      assert.deepEqual(rows.map((r) => r.tablename), ['uno']);
+    } finally {
+      await db.close();
+    }
+    assert.deepEqual(e.candados(), [], 'soltó su candado');
+  } finally {
+    e.limpiar();
+  }
+});

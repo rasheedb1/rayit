@@ -15,6 +15,7 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { esperarAviso } from './carrera.ts';
 import { readFile } from 'node:fs/promises';
 import {
   calcularItem, calcularPaquete, redondearParaNegociar,
@@ -1165,7 +1166,7 @@ describe('COT-3 · el panel y el enlace a la vez', () => {
       await retenida;
       return r;
     });
-    await acepto;
+    await esperarAviso(acepto, enlace);
     // El creador pulsa «Rechazar» en ese instante.
     const panel = t.db.withWorkspace(WORKSPACE_LAURA, (tx) => rejectQuote(tx, q.id)).then(
       () => null,
@@ -1210,7 +1211,7 @@ describe('COT-3 · el panel y el enlace a la vez', () => {
       await retenida;
       return r;
     });
-    await rechazo;
+    await esperarAviso(rechazo, panel);
     const enlace = t.db.withPublicShare((tx) => acceptPublicQuote(tx, q.slug, FIRMA));
     await esperar(t.kind === 'postgres' ? 400 : 10);
     soltar();
@@ -1784,7 +1785,7 @@ describe('0031 · el negocio sigue a su cotización: etapa, monto y ponderado', 
       await retenida;
       return r;
     });
-    await acepto;
+    await esperarAviso(acepto, enlace);
     const tablero = t.db.withWorkspace(WORKSPACE_LAURA, (tx) => moveDeal(tx, dealId, 'perdido', { lostReason: 'precio' })).then(
       () => null,
       (err: unknown) => err,
@@ -2030,7 +2031,7 @@ describe('0033 · un negocio, una cotización aceptada', () => {
       await retenida;
       return r;
     });
-    await acepto;
+    await esperarAviso(acepto, primera);
     const segunda = t.db.withPublicShare((tx) => acceptPublicQuote(tx, vieja.slug, { name: 'Otra persona', email: 'otra@cafealma.co' }));
     await esperar(t.kind === 'postgres' ? 400 : 10);
     soltar();

@@ -64,7 +64,7 @@ beforeAll(async () => {
     ON CONFLICT DO NOTHING;
     UPDATE membership SET role_id = '${ROLE_MANAGER_CONECTA}' WHERE workspace_id = '${SEED_WORKSPACE_ID}' AND user_id = '${USER_MANAGER}';
   `);
-}, SETUP_TIMEOUT_MS); // Postgres embebido con las migraciones y los seeds: con la máquina cargada pasa del minuto.
+}, SETUP_TIMEOUT_MS); // Abre la demo desde la foto de la corrida (décimas); el techo es el común, con su porqué en lib/testing/tiempos.ts.
 
 /** El mismo servicio con la sesión de una persona: withWorkspace fija app.user_id como lo hace lib/db con CIM-3. */
 function serviceAs(userId: string): CuentasService {

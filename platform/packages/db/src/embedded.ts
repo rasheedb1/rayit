@@ -20,10 +20,8 @@
  *     lo que pasa en producción.
  */
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { applyMigrations, applySeeds, MIGRATIONS_DIR, SEED_DIR, type MigrationExec } from '../../../db/lib/aplicar.mjs';
-import { abrirSuperusuario, execPglite, FOTO_DIR, fotoMigrada, motorDe } from '../../../db/lib/foto.mjs';
-import { desplazarReloj } from '../../../db/seed/verify/reloj.mjs';
+import { pathToFileURL } from 'node:url';
+import { applyMigrations, applySeeds, execPglite, MIGRATIONS_DIR, SEED_DIR, type MigrationExec } from '../../../db/lib/aplicar.mjs';
 import type { DbOptions } from './client.ts';
 import type { PgliteDb } from './pglite.ts';
 import type { PGlite } from '@electric-sql/pglite';
@@ -37,15 +35,54 @@ export { MIGRATIONS_DIR, SEED_DIR };
  * CON-2b; propuesto a Rasheed en docs/propuestas/CIERRE-CON-A.md.
  */
 export { applyMigrations, applySeeds, type MigrationExec };
-/**
- * La foto de disco de una base migrada (db/lib/foto.mjs, CIM-12), para el
- * arnés de pruebas del worker: abrirSuperusuario migra una vez por huella
- * y cada archivo abre la foto en vez de volver a migrar. execPglite es el
- * exec del runner sobre una PGlite (el de PgliteDatabase.open).
- */
-export { abrirSuperusuario, execPglite, fotoMigrada, motorDe };
+/** El exec del runner sobre una PGlite (el de PgliteDatabase.open y el del arnés del worker). */
+export { execPglite };
 /** platform/db: migraciones, seeds y certificados. */
 export const DB_DIR = dirname(MIGRATIONS_DIR);
+
+/**
+ * La foto de disco (db/lib/foto.mjs) y el reloj de los seeds
+ * (db/lib/reloj.mjs) se cargan SOLO cuando hacen falta, con un import()
+ * que ningún empaquetador sigue (CIM-12, r3).
+ *
+ * Por qué: este módulo está en el grafo de la web (from-env.ts lo importa
+ * para el modo demo) y con él todas las rutas de servidor, incluido el
+ * turno del worker. Importados de forma estática, foto.mjs y reloj.mjs
+ * entraban en el bundle de producción, que nunca abre el embebido, y su
+ * import() con ruta calculada daba «Critical dependency: the request of a
+ * dependency is an expression» en `next build` y en `next dev`. Por eso
+ * tampoco se usa aquí import.meta.url: las rutas salen de DB_DIR, que
+ * calcula aplicar.mjs.
+ */
+type FotoMod = typeof import('../../../db/lib/foto.mjs');
+type RelojMod = typeof import('../../../db/lib/reloj.mjs');
+const cargar = <T>(archivo: string): Promise<T> =>
+  import(/* webpackIgnore: true */ /* @vite-ignore */ pathToFileURL(join(DB_DIR, 'lib', archivo)).href) as Promise<T>;
+let fotoMod: Promise<FotoMod> | undefined;
+const cargarFoto = () => (fotoMod ??= cargar<FotoMod>('foto.mjs'));
+let relojMod: Promise<RelojMod> | undefined;
+const cargarReloj = () => (relojMod ??= cargar<RelojMod>('reloj.mjs'));
+
+/**
+ * La base del worker y de los conectores, abierta desde la foto de disco
+ * (abrirSuperusuario de db/lib/foto.mjs): migra una vez por huella y cada
+ * archivo de pruebas abre la foto en vez de volver a migrar.
+ */
+export async function abrirSuperusuario(opts: { PGlite: typeof PGlite; desde: string | URL }): Promise<PGlite> {
+  return (await cargarFoto()).abrirSuperusuario(opts);
+}
+
+/**
+ * db/seed/*.sql sobre `exec`, con el reloj movido `relojDias` días si se
+ * pide (desplazarReloj: CURRENT_DATE y now() de los seeds, nada más). Lo
+ * usan createEmbeddedDb y el arnés del worker para sembrar la demo
+ * anclada (diasHasta(ANCLA_DEMO) de test/demo.ts).
+ */
+export async function applyRepoSeeds(exec: MigrationExec, relojDias = 0): Promise<string[]> {
+  if (relojDias === 0) return applySeeds(exec, { dir: SEED_DIR });
+  const { desplazarReloj } = await cargarReloj();
+  return applySeeds(exec, { dir: SEED_DIR, transformar: (sql, file) => desplazarReloj(sql, relojDias, file) });
+}
 
 /** El rol con el que corren las consultas, igual que la web contra Supabase. */
 export const APP_ROLE = 'mc_app';
@@ -84,7 +121,7 @@ export interface EmbeddedOptions extends DbOptions {
   snapshot?: boolean;
   /**
    * Sembrar como si hoy fuera `relojDias` días después (negativo: antes),
-   * con desplazarReloj de db/seed/verify/reloj.mjs: CURRENT_DATE y now()
+   * con desplazarReloj de db/lib/reloj.mjs: CURRENT_DATE y now()
    * de los seeds se mueven, el resto no. Es para las pruebas que anclan
    * una cifra de la demo a un día fijo (diasHasta de test/demo.ts): la
    * parrilla del seed 0002 cuenta desde hoy y los posts de campaña del
@@ -118,8 +155,13 @@ async function pgliteModules() {
 /** exec() admite varias sentencias y devuelve un resultado por cada una; el runner solo mira las filas de la última. */
 const execOf: (pglite: Pglite) => MigrationExec = execPglite;
 
-/** Este módulo: entra en la huella de sus fotos, porque aquí viven ROLES_SQL y prepararBase. */
-const ESTE_MODULO = fileURLToPath(import.meta.url);
+/**
+ * Este módulo: entra en la huella de sus fotos, porque aquí viven
+ * ROLES_SQL y prepararBase, y de él sale el motor (la versión de PGlite).
+ * Desde DB_DIR y no con import.meta.url (ver cargar): si el archivo se
+ * mueve, leerlo para la huella falla con ENOENT, no en silencio.
+ */
+const ESTE_MODULO = join(DB_DIR, '..', 'packages', 'db', 'src', 'embedded.ts');
 
 /**
  * Los roles de Supabase, antes de migrar. Lo crea el superusuario y la
@@ -154,10 +196,11 @@ const ROLES_SQL = `
  */
 async function fotoSinSeeds(): Promise<Blob> {
   const { PGlite, extensions } = await pgliteModules();
+  const { fotoMigrada, motorDe } = await cargarFoto();
   return fotoMigrada({
     PGlite,
     extensions,
-    motor: motorDe(import.meta.url),
+    motor: motorDe(pathToFileURL(ESTE_MODULO)),
     clave: `embebido:${ROLES_SQL}`,
     fuentes: [ESTE_MODULO],
     preparar: (p) => prepararBase(p, { seeds: false }),
@@ -166,10 +209,7 @@ async function fotoSinSeeds(): Promise<Blob> {
 
 /** Los seeds, con el reloj movido si se pide. */
 function sembrar(pglite: Pglite, relojDias: number): Promise<string[]> {
-  return applySeeds(execOf(pglite), {
-    dir: SEED_DIR,
-    transformar: relojDias === 0 ? undefined : (sql, file) => desplazarReloj(sql, relojDias, file),
-  });
+  return applyRepoSeeds(execOf(pglite), relojDias);
 }
 
 /** El día UTC de hoy según Date (que scripts/pruebas/reloj.mjs puede mover). */
@@ -210,21 +250,24 @@ async function sembrada(relojDias: number): Promise<Blob> {
       await molde.close();
     }
   }
+  const { fotoMigrada, motorDe, FOTO_DIR } = await cargarFoto();
   return fotoMigrada({
     PGlite,
     extensions,
-    motor: motorDe(import.meta.url),
+    motor: motorDe(pathToFileURL(ESTE_MODULO)),
     clave: `embebido-seeds:${ROLES_SQL}:${hoyUTC()}:${process.env.MC_RELOJ_DIAS ?? '0'}:${relojDias}`,
     fuentes: [ESTE_MODULO, SEED_DIR],
     desde: fotoSinSeeds,
     preparar,
-    carpeta: carpetaDeCorrida(corrida),
+    carpeta: carpetaEn(FOTO_DIR, corrida),
   });
 }
 
+const carpetaEn = (fotoDir: string, corrida: string) => join(fotoDir, 'corridas', corrida.replace(/[^a-z0-9-]/gi, '_'));
+
 /** Dónde guarda una corrida de vitest sus fotos con seeds (y lo que borra su globalSetup). */
-export function carpetaDeCorrida(corrida: string): string {
-  return join(FOTO_DIR, 'corridas', corrida.replace(/[^a-z0-9-]/gi, '_'));
+export async function carpetaDeCorrida(corrida: string): Promise<string> {
+  return carpetaEn((await cargarFoto()).FOTO_DIR, corrida);
 }
 
 function fotoDe(seeds: boolean, relojDias: number): Promise<Blob> {

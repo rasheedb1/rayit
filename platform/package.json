@@ -11,8 +11,9 @@
     "seed:check": "node db/seed/verify/run.mjs",
     "seed:check:unit": "node --test \"db/seed/verify/*.test.mjs\"",
     "seed:check:futuro": "node db/seed/verify/run.mjs --dias 40",
-    "test": "pnpm run foto:test && pnpm run seed:check:unit && pnpm run seed:check",
-    "foto:test": "node --test \"db/lib/*.test.mjs\""
+    "test": "pnpm run foto:test && pnpm run scripts:test && pnpm run seed:check:unit && pnpm run seed:check",
+    "foto:test": "node --test \"db/lib/*.test.mjs\"",
+    "scripts:test": "node --test \"scripts/pruebas/*.test.mjs\""
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.17",

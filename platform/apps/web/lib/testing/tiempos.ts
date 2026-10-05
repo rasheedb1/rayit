@@ -21,12 +21,13 @@ export const PRUEBA_TIMEOUT_MS = 20_000;
 
 /**
  * Una prueba que consulta la base embebida varias veces (una página
- * entera renderizada contra la demo, un ciclo de campaña). PGlite es WASM
- * en el hilo del proceso: con la máquina cargada, una consulta pesada
- * pasa del segundo. El más alto de los que había sueltos (300 s), para
- * no bajarle el techo a ninguna.
+ * entera renderizada contra la demo, un ciclo de campaña, la importación
+ * de 2 385 posts de RES-6). PGlite es WASM en el hilo del proceso: con la
+ * máquina cargada, una consulta pesada pasa del segundo. Medido (r3,
+ * 5-oct): la más lenta de la web tarda ~5,5 s sola y no pasó de 20 s con
+ * dos verificar a la vez; 60 s es el triple del peor caso visto.
  */
-export const PRUEBA_DB_TIMEOUT_MS = 300_000;
+export const PRUEBA_DB_TIMEOUT_MS = 60_000;
 
 /** Una prueba de interfaz sin base que recorre un formulario entero con varias transiciones. */
 export const PRUEBA_LENTA_MS = 30_000;

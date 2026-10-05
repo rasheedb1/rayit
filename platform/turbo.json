@@ -1,5 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": ["MC_RELOJ_DIAS", "MC_TEST_WORKERS", "MC_PGLITE_FOTO", "MC_PGLITE_FOTO_DIR"],
   "tasks": {
     "build":     { "dependsOn": ["^build"], "outputs": [".next/**", "dist/**"] },
     "dev":       { "cache": false, "persistent": true },
@@ -9,7 +10,7 @@
     "format":    { "cache": false },
 
     "//#test": {
-      "inputs": ["db/migrations/**", "db/seed/**", "db/lib/**", "package.json"],
+      "inputs": ["db/migrations/**", "db/seed/**", "db/lib/**", "scripts/verificar.sh", "scripts/pruebas/**", "package.json"],
       "outputs": []
     },
 
