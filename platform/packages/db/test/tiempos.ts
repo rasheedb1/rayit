@@ -26,15 +26,20 @@ export const SETUP_TIMEOUT_MS = 180_000;
  * una consulta pesada pasa del segundo. Medido (r3, 5-oct): en 28
  * corridas de estres-verificar.sh, de a dos y con carga hasta 77, la más
  * lenta de la web (el CSV de casi 5 MB) no pasó de 6 s y la del worker,
- * de 11 s; 60 s es más de cinco veces eso.
+ * de 11 s. En las 20 de la r4 (carga hasta 53): 9,2 s y 15,5 s. 60 s es
+ * cuatro veces lo peor.
  */
 export const PRUEBA_DB_TIMEOUT_MS = 60_000;
 
 /**
  * El --test-timeout de los scripts `test` de @mc/db y del worker
  * (package.json): el techo de cualquier prueba, describe o hook sin uno
- * propio. Lo más lento medido en las tandas del 5-oct fue una prueba de
- * @mc/db de 21 s (getSessionPermissions; con la máquina tranquila, 15 s).
+ * propio. Lo más lento medido (r4, 5-oct, 20 corridas de a dos con carga
+ * hasta 53): una prueba de @mc/db, 3,2 s; un describe, 3,3 s; una del
+ * worker, 15,5 s. El describe `getSessionPermissions` sale con 55 s en
+ * el informe, pero es el primero de la suite y node:test le suma la
+ * espera a los `before` de todos los archivos, que su techo NO cuenta
+ * (comprobado con un before de 3 s y un describe de techo 1 s: pasa).
  * node --test no lee constantes: el número va escrito en los package.json
  * y scripts/pruebas/verificar.test.mjs comprueba que dicen este.
  */
@@ -46,8 +51,7 @@ export const PRUEBA_SCRIPT_TIMEOUT_MS = 120_000;
  * aplica el techo al describe ENTERO, hook incluido: es el del arranque
  * (SETUP_TIMEOUT_MS, el peor caso de abrir la base) más el de las
  * pruebas. Medido (r4, 5-oct): el describe de alcance más largo tarda
- * 1,4 s con la máquina tranquila (lo de las tandas de estrés, en
- * docs/propuestas/CIM-12.md §Resultado). Antes eran 900 s, que no salían
- * de ninguna medida.
+ * 1,4 s con la máquina tranquila y 3,3 s en las 20 corridas de estrés
+ * con carga hasta 53. Antes eran 900 s, que no salían de ninguna medida.
  */
 export const DESCRIBE_DB_TIMEOUT_MS = SETUP_TIMEOUT_MS + PRUEBA_DB_TIMEOUT_MS;

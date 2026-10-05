@@ -149,7 +149,7 @@ export const STORIES: readonly Story[] = [
     desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
     done: "N≥10 rondas de make verificar.estres de a dos sin una prueba fallida ni cancelada, también con la máquina en otra fecha (DIAS=2,7,30,90).",
     status: "hecho",
-    note: "5-oct (r3): hecha. La cancelación era turbo matando @mc/db cuando fallaba otra tarea; las pruebas corren con el reloj anclado al 5-oct. make verificar.estres: 28 corridas de a dos (10 normales, 8 con la máquina a +2/+7/+30/+90, 10 a +0…+9), carga hasta 77: 0 fallidas, 0 canceladas. Detalle y pendientes: docs/propuestas/CIM-12.md.",
+    note: "5-oct (r4): hecha. La cancelación era turbo matando @mc/db cuando fallaba otra tarea; las pruebas corren con el reloj anclado al 5-oct y las facturas que crean vencen relativo a hoy. Estrés r4 (27 corridas, carga hasta 53): 10 normales de a dos, 10 con el ancla de a+0 a a+9 (incluido el 14-oct), 4 con la máquina a +2/+90 y 3 de @mc/db sin ancla a +9/+60/+75 (el job del CI contra Postgres real): 0 fallidas, 0 canceladas, 0 tareas sin su reloj. Pendiente de Nicolás: los gastos del seed 0003 con fecha fija dan rojo sin ancla desde el 30-dic. Detalle: docs/propuestas/CIM-12.md.",
   },
   {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],

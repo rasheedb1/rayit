@@ -843,8 +843,8 @@ worker (`apps/worker/test/helpers/harness.ts`):
 | Constante | Valor | Para qué |
 |---|---|---|
 | `SETUP_TIMEOUT_MS` | 180 s | Cada `before`/`beforeAll` que abre la base: construir la foto y sembrar la demo con la máquina cargada (lo más lento medido, 41 s con carga 77) |
-| `PRUEBA_DB_TIMEOUT_MS` | 60 s | Una prueba que consulta la demo varias veces (lo más lento: 6 s en la web, 11 s en el worker) |
-| `PRUEBA_SCRIPT_TIMEOUT_MS` | 120 s | El `--test-timeout` de `@mc/db` y del worker (lo más lento: 21 s); `scripts/pruebas/verificar.test.mjs` comprueba que los `package.json` dicen esto |
+| `PRUEBA_DB_TIMEOUT_MS` | 60 s | Una prueba que consulta la demo varias veces (lo más lento en el estrés de la r4: 9,2 s en la web, 15,5 s en el worker) |
+| `PRUEBA_SCRIPT_TIMEOUT_MS` | 120 s | El `--test-timeout` de `@mc/db` y del worker (lo más lento en el estrés de la r4: 3,2 s una prueba de `@mc/db`, 15,5 s una del worker); `scripts/pruebas/verificar.test.mjs` comprueba que los `package.json` dicen esto |
 | `DESCRIBE_DB_TIMEOUT_MS` | 240 s | Un `describe` que abre su base en su `before`: node:test le aplica el techo al describe entero, hook incluido |
 
 Un archivo nuevo usa estas constantes, sin un número propio.

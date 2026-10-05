@@ -255,6 +255,36 @@ Cambios mínimos, ninguno de lógica de producto:
 
 ## Resultado
 
+### Ronda 4
+
+Tandas del 5-oct (tarde) con `scripts/estres-verificar.sh` de la r4, con
+otros agentes trabajando en la máquina. Cada tanda en su carpeta
+(`tanda.XXXXXX`) y el reloj contado por etiqueta.
+
+| Tanda | Corridas | Reloj | Carga (1 min) inicio → máx | Segundos por corrida | Fallidas · archivos en FAIL · canceladas · tareas sin su reloj |
+|---|---|---|---|---|---|
+| C · `SIN_ANCLA=1 FILTRO=@mc/db DIAS=9,60,75 N=3 P=3` | 3 | m+9, +60, +75, sin ancla (lo que verá el job del CI el 14-oct, el 4-dic y el 19-dic) | 6,3 → 13,3 | 84–148 (una esperó turno 86 s) | 0 · 0 · 0 · 0 |
+| A · `N=10 P=2` | 10 | m+0 | 9,8 → 46,8 | 253–413 | 0 · 0 · 0 · — |
+| F · `N=10 ANCLA=1` (`--ancla-rotando`) | 10 | a+0 … a+9 (lunes 5 a miércoles 14, con el festivo del 12-oct) | 9,1 → 53,0 | 231–250 | 0 · 0 · 0 · 0 |
+| B · `N=4 DIAS=2,90` | 4 | m+2, m+90 | 14,1 → 28,3 | 236–245 | 0 · 0 · 0 · 0 |
+
+- **27 corridas sin una prueba fallida ni cancelada.** a+9 (el 14-oct),
+  que en la r3 tumbaba cuatro de Finanzas, en verde; y `@mc/db` entero
+  sin ancla, como en el CI contra Postgres real, en verde hasta el 19-dic
+  (los gastos del seed caen el 30-dic: «Pendiente»).
+- Lo más lento medido en A y F (de ahí los techos de
+  `packages/db/test/tiempos.ts`): una prueba de `@mc/db`, 3,2 s; el
+  describe de alcance más largo, 3,3 s; una del worker, 15,5 s; una de la
+  web (el CSV de 5 MB), 9,2 s.
+- `pnpm verificar` (15 tareas) y `pnpm --filter @mc/web build` en verde
+  sobre la r4; el build, «Compiled successfully» y el bundle del turno
+  con sus tres rutas permitidas.
+- `next dev` en limpio sin `DATABASE_URL`: `/resumen`, `/ventas`,
+  `/finanzas`, `/cotizar`, `/campanas` y `/conexiones` en 200 a la
+  primera.
+
+### Ronda 3
+
 Tandas del 5-oct con `scripts/estres-verificar.sh`, `pnpm verificar`
 entero, de a dos, con otros agentes trabajando en la máquina (11
 núcleos). «m+N» es la máquina N días adelante; «a+N», el ancla de las
