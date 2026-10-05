@@ -84,7 +84,7 @@ const accounts = () => withWorkspace((tx) => listChannelAccounts(tx));
 // 180 s, como las demás pruebas de la web que abren Postgres embebido; una base que nunca abre sigue fallando.
 beforeAll(async () => {
   guard = withoutNetwork();
-  db = await createEmbeddedDb({ seeds: true });
+  db = await createEmbeddedDb({ seeds: true, snapshot: true });
 }, 180_000);
 
 afterAll(async () => {

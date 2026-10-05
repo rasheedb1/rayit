@@ -21,6 +21,7 @@
  */
 import { dirname } from 'node:path';
 import { applyMigrations, applySeeds, MIGRATIONS_DIR, SEED_DIR, type MigrationExec } from '../../../db/lib/aplicar.mjs';
+import { fotoMigrada, motorDe } from '../../../db/lib/foto.mjs';
 import type { DbOptions } from './client.ts';
 import type { PgliteDb } from './pglite.ts';
 import type { PGlite } from '@electric-sql/pglite';
@@ -34,6 +35,12 @@ export { MIGRATIONS_DIR, SEED_DIR };
  * CON-2b; propuesto a Rasheed en docs/propuestas/CIERRE-CON-A.md.
  */
 export { applyMigrations, applySeeds, type MigrationExec };
+/**
+ * La foto de disco de una base migrada (db/lib/foto.mjs, CIM-12), para el
+ * arnés de pruebas del worker: migra una vez por contenido de
+ * db/migrations y cada archivo abre la foto en vez de volver a migrar.
+ */
+export { fotoMigrada, motorDe };
 /** platform/db: migraciones, seeds y certificados. */
 export const DB_DIR = dirname(MIGRATIONS_DIR);
 
@@ -52,10 +59,12 @@ export interface EmbeddedOptions extends DbOptions {
    */
   hasta?: string;
   /**
-   * Migrar y sembrar UNA vez por proceso y abrir las siguientes bases
-   * desde esa foto (PGlite dumpDataDir → loadDataDir), en vez de repetir
-   * las migraciones y los seeds en cada archivo de pruebas. Lo pide
-   * test/pglite.ts. Con `hasta` no aplica: esas pruebas migran a mano.
+   * Abrir desde una foto (PGlite dumpDataDir → loadDataDir) en vez de
+   * migrar y sembrar otra vez: el esquema sale de la foto de disco
+   * compartida entre procesos (db/lib/foto.mjs, una por contenido de
+   * db/migrations) y los seeds se siembran UNA vez por proceso encima de
+   * ella. Lo piden test/pglite.ts, el modo demo (from-env.ts) y las
+   * pruebas de la web. Con `hasta` no aplica: esas pruebas migran a mano.
    *
    * Por qué: con `--test-isolation=none`, el before() de nivel superior
    * de cada archivo cuelga de la prueba raíz y todos corren antes de la
@@ -98,36 +107,11 @@ function execOf(pglite: Pglite): MigrationExec {
 }
 
 /**
- * Las fotos de una base ya migrada, por variante (con o sin seeds), una
- * por proceso. Se guarda la PROMESA: dos archivos que abren a la vez
- * esperan la misma foto en vez de migrar dos veces. Si falla, se olvida,
- * y la siguiente llamada lo intenta de nuevo (y falla con su error).
+ * Los roles de Supabase, antes de migrar. Lo crea el superusuario y la
+ * sesión queda como el migrador. Va en una constante porque es parte de
+ * la clave de la foto en disco: si cambia, la foto vieja no sirve.
  */
-const fotos = new Map<string, Promise<Blob>>();
-
-function fotoDe(seeds: boolean): Promise<Blob> {
-  const clave = seeds ? 'con-seeds' : 'sin-seeds';
-  let foto = fotos.get(clave);
-  if (!foto) {
-    foto = (async () => {
-      const { PGlite, extensions } = await pgliteModules();
-      const molde = await PGlite.create({ extensions });
-      try {
-        await prepararBase(molde, { seeds });
-        return await molde.dumpDataDir('none');
-      } finally {
-        await molde.close();
-      }
-    })();
-    fotos.set(clave, foto);
-    foto.catch(() => fotos.delete(clave));
-  }
-  return foto;
-}
-
-/** Los roles, las migraciones y (si se piden) los seeds, como en Supabase. La sesión queda como el migrador. */
-async function prepararBase(pglite: Pglite, opts: { seeds: boolean; hasta?: string }): Promise<void> {
-  await pglite.exec(`
+const ROLES_SQL = `
     CREATE EXTENSION IF NOT EXISTS citext;
     CREATE EXTENSION IF NOT EXISTS pg_trgm;
     CREATE ROLE mc_migrator_embedded NOSUPERUSER;
@@ -146,7 +130,59 @@ async function prepararBase(pglite: Pglite, opts: { seeds: boolean; hasta?: stri
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${APP_ROLE};
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ${APP_ROLE};
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO ${APP_ROLE};
-  `);
+  `;
+
+/**
+ * La foto con los seeds, una por proceso: los seeds se siembran relativos
+ * a now(), así que no van a disco (db/lib/foto.mjs). Se guarda la PROMESA:
+ * dos archivos que abren a la vez esperan la misma foto en vez de sembrar
+ * dos veces. Si falla, se olvida, y la siguiente llamada lo intenta de
+ * nuevo (y falla con su error).
+ */
+let conSeeds: Promise<Blob> | undefined;
+
+/**
+ * La foto del esquema sin seeds: migrada UNA vez por contenido de
+ * db/migrations y compartida entre procesos (CIM-12). Antes cada proceso
+ * de vitest y cada archivo que no usaba la foto volvía a migrar.
+ */
+async function fotoSinSeeds(): Promise<Blob> {
+  const { PGlite, extensions } = await pgliteModules();
+  return fotoMigrada({
+    PGlite,
+    extensions,
+    motor: motorDe(import.meta.url),
+    clave: `embebido:${ROLES_SQL}`,
+    preparar: (p) => prepararBase(p, { seeds: false }),
+  });
+}
+
+function fotoDe(seeds: boolean): Promise<Blob> {
+  if (!seeds) return fotoSinSeeds();
+  if (!conSeeds) {
+    const foto = (async () => {
+      const { PGlite, extensions } = await pgliteModules();
+      const molde = await PGlite.create({ loadDataDir: await fotoSinSeeds(), extensions });
+      try {
+        // Los seeds corren como el migrador, igual que tras migrar en prepararBase.
+        await molde.exec('SET ROLE mc_migrator_embedded');
+        await applySeeds(execOf(molde), { dir: SEED_DIR });
+        return await molde.dumpDataDir('none');
+      } finally {
+        await molde.close();
+      }
+    })();
+    conSeeds = foto;
+    foto.catch(() => {
+      if (conSeeds === foto) conSeeds = undefined;
+    });
+  }
+  return conSeeds;
+}
+
+/** Los roles, las migraciones y (si se piden) los seeds, como en Supabase. La sesión queda como el migrador. */
+async function prepararBase(pglite: Pglite, opts: { seeds: boolean; hasta?: string }): Promise<void> {
+  await pglite.exec(ROLES_SQL);
   const exec = execOf(pglite);
   await applyMigrations(exec, { dir: MIGRATIONS_DIR, hasta: opts.hasta });
   if (opts.seeds && opts.hasta === undefined) await applySeeds(exec, { dir: SEED_DIR });

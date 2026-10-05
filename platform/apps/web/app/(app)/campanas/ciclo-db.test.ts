@@ -180,11 +180,11 @@ describe("el ciclo de una campaña, de la cotización aceptada a la apertura pú
       shares: 990, // 528 + 462
       linkClicks: null, // ninguna de las dos lecturas trae clics: null, no cero
       reachNonFollowersPct: "0.54991", // (28 600 + 28 987) / 104 720 = 0,549914…
-      // (88 000·88 000/mediana IG + 66 000·66 000/mediana TikTok) / 154 000, con la
+      // (88 000·88 000/mediana TikTok + 66 000·66 000/mediana IG) / 154 000, con la
       // línea base que el seed dejó HOY: la mediana cambia con el día de la
       // siembra (0,824 el 28-sep, 0,812 el 4-oct; CIM-12, @mc/db/test/demo).
       viewsVsMedian: multiploPonderado(
-        [{ platformId: "instagram", views: 88_000 }, { platformId: "tiktok", views: 66_000 }],
+        [{ platformId: "tiktok", views: 88_000 }, { platformId: "instagram", views: 66_000 }],
         await withWorkspace((tx) => tx.query<MedianaVigente>(medianasVigentesSql()).then((x) => x.rows)),
       ),
       brandFollowersGained: 1600,

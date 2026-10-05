@@ -65,7 +65,7 @@ function handlersAs(userId: string): OAuthHandlers {
 
 beforeAll(async () => {
   guard = withoutNetwork();
-  db = await createEmbeddedDb({ seeds: true });
+  db = await createEmbeddedDb({ seeds: true, snapshot: true });
   fetch = new FixtureFetch([
     ...(await loadFixtures("tiktok", [["oauth.token", "code.ok"], ["user.info", "ok"]])),
     ...(await loadFixtures("instagram", [["oauth.access_token", "ok"], ["oauth.long_lived", "ok"], ["me", "ok"]])),

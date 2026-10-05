@@ -43,7 +43,7 @@ async function filas(campaignId: string) {
 
 beforeAll(async () => {
   guard = withoutNetwork();
-  db = await createEmbeddedDb({ seeds: true });
+  db = await createEmbeddedDb({ seeds: true, snapshot: true });
   await db.execAsSuperuser(`
     INSERT INTO campaign (id, workspace_id, company_id, name, status, starts_on, ends_on, brand_baseline_from, brand_accounts) VALUES
       ('${CAMPAIGN_LIVE}', '${SEED_WORKSPACE_ID}', '${COMPANY_CAFE_ALMA}', 'Café Alma en curso', 'live', DATE '2026-09-20', DATE '2026-09-27', DATE '2026-09-06', '[{"platform_id": "instagram", "handle": "@cafealma"}]'),

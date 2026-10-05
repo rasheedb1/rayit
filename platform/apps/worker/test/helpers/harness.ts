@@ -3,7 +3,10 @@
  * migraciones del repo (incluida 0014, los privilegios de mc_worker),
  * un logger en memoria y un worker arrancado con reintentos rápidos.
  */
-import { applySeeds, SEED_DIR, type MigrationExec } from '@mc/db/embedded';
+import { PGlite } from '@electric-sql/pglite';
+import { citext } from '@electric-sql/pglite/contrib/citext';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { applyMigrations, applySeeds, fotoMigrada, MIGRATIONS_DIR, motorDe, SEED_DIR, type MigrationExec } from '@mc/db/embedded';
 import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, type ConnectorHttpOverrides, type QuotaManager, type SecretStore, type TokenRefresher } from '@mc/connectors';
 import { loadConfig, type WorkerConfig } from '../../src/runner/config.ts';
 import { PgliteDatabase } from '../../src/runner/db-pglite.ts';
@@ -21,8 +24,26 @@ import { startWorker, type RunningWorker } from '../../src/runner/worker.ts';
  */
 export const SETUP_TIMEOUT = { timeout: 900_000 } as const;
 
+/**
+ * La base de cada archivo: la misma que deja PgliteDatabase.open —todas
+ * las migraciones, aplicadas como superusuario—, pero abierta desde la
+ * foto de disco de @mc/db (db/lib/foto.mjs) en vez de migrar otra vez
+ * (CIM-12). Migrar cuesta de 5 a 60 s según la carga y lo hacían los
+ * cuarenta archivos; abrir la foto, menos de uno. Que open() aplica las
+ * migraciones lo sigue probando test/migraciones.test.ts.
+ */
 export async function openTestDatabase(): Promise<PgliteDatabase> {
-  return PgliteDatabase.open({ setRole: 'mc_worker' });
+  const extensions = { citext, pg_trgm };
+  const foto = await fotoMigrada({
+    PGlite,
+    extensions,
+    motor: motorDe(import.meta.url),
+    clave: 'superusuario',
+    preparar: async (p) => {
+      await applyMigrations(async (sql) => ({ rows: ((await p.exec(sql)).at(-1)?.rows ?? []) as Array<Record<string, unknown>> }), { dir: MIGRATIONS_DIR });
+    },
+  });
+  return PgliteDatabase.wrap(await PGlite.create({ loadDataDir: foto, extensions }), 'mc_worker');
 }
 
 /**

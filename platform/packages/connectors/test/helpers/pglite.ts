@@ -10,6 +10,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { citext } from '@electric-sql/pglite/contrib/citext';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { applyMigrations, MIGRATIONS_DIR, type MigrationExec } from '../../../../db/lib/aplicar.mjs';
+import { fotoMigrada, motorDe } from '../../../../db/lib/foto.mjs';
 import type { SqlExecutor } from '../../src/log/postgres.ts';
 
 export { MIGRATIONS_DIR };
@@ -19,14 +20,27 @@ export const CREATOR_ID = '00000002-0000-4000-8000-000000000003';
 export const CONNECTION_TIKTOK = '00000002-0000-4000-8000-0000000000c2';
 export const CONNECTION_YOUTUBE = '00000002-0000-4000-8000-0000000000c3';
 
+/**
+ * Todas las migraciones aplicadas como superusuario, abiertas desde la
+ * foto de disco (db/lib/foto.mjs, CIM-12): la misma que usa el arnés del
+ * worker, así que se migra una vez para los dos paquetes.
+ */
 export async function openMigratedPglite(): Promise<PGlite> {
-  const db = await PGlite.create({ extensions: { citext, pg_trgm } });
-  const exec: MigrationExec = async (sql) => {
-    const out = await db.exec(sql);
-    return { rows: (out.at(-1)?.rows ?? []) as Array<Record<string, unknown>> };
-  };
-  await applyMigrations(exec, { dir: MIGRATIONS_DIR });
-  return db;
+  const extensions = { citext, pg_trgm };
+  const foto = await fotoMigrada({
+    PGlite,
+    extensions,
+    motor: motorDe(import.meta.url),
+    clave: 'superusuario',
+    preparar: async (db) => {
+      const exec: MigrationExec = async (sql) => {
+        const out = await db.exec(sql);
+        return { rows: (out.at(-1)?.rows ?? []) as Array<Record<string, unknown>> };
+      };
+      await applyMigrations(exec, { dir: MIGRATIONS_DIR });
+    },
+  });
+  return PGlite.create({ loadDataDir: foto, extensions });
 }
 
 /** Workspace, creadora y dos conexiones con los ids fijos del seed 0003 (sección 0). */

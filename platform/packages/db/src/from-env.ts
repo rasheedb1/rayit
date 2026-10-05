@@ -50,6 +50,8 @@ export async function createDbFromEnv(
   // El embebido acaba de aplicar db/migrations con el mismo runner: no
   // hay nada que comprobar.
   const { createEmbeddedDb } = await import('./embedded.ts');
-  const db = await createEmbeddedDb({ seeds: true, ...opts });
+  // Desde la foto del esquema (db/lib/foto.mjs): migra una vez por contenido de
+  // db/migrations, no en cada arranque ni en cada archivo de pruebas (CIM-12).
+  const db = await createEmbeddedDb({ seeds: true, snapshot: true, ...opts });
   return { db, mode: 'embedded' };
 }

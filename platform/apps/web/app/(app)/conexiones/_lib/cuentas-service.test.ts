@@ -42,7 +42,7 @@ const withWorkspace = <T,>(fn: (tx: WorkspaceTx) => Promise<T>) => db.withWorksp
 
 beforeAll(async () => {
   guard = withoutNetwork();
-  db = await createEmbeddedDb({ seeds: true });
+  db = await createEmbeddedDb({ seeds: true, snapshot: true });
   fetch = new FixtureFetch([
     ...(await loadFixtures("instagram", [["business_discovery", "ok"]])),
     ...(await loadFixtures("youtube", [["channels.list", "handle.ok"]])),
