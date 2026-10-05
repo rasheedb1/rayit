@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VerifierContext } from "@mc/core/outreach/narrativa";
+import { PRUEBA_LENTA_MS } from "@/lib/testing/tiempos";
 
 /**
  * /ventas/perfil · lo que hacen los botones del cliente cuando la acción
@@ -167,5 +168,5 @@ describe("el aviso de guardado y Recalcular", () => {
       rerender(pagina("De plantilla: [claim:mediana-tiktok].", "2026-09-25T10:10:00.000Z"));
     });
     await waitFor(() => expect(avisos()).toEqual(["Perfil recalculado."]), espera);
-  }, 30_000);
+  }, PRUEBA_LENTA_MS);
 });

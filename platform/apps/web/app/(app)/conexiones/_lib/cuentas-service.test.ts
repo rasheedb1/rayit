@@ -20,6 +20,7 @@ import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { createCuentasService, OWNERSHIP_DECLARATION_ES, type CuentasService } from "./cuentas-service";
 import { SinPermisoError } from "./permisos";
+import { SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 const NOW = new Date("2026-09-22T15:00:00Z");
 const ENV = { INSTAGRAM_HOUSE_TOKEN: "IGAA-house-web-SECRETO", GOOGLE_API_KEY: "AIza-web-key-SECRETO" };
@@ -63,7 +64,7 @@ beforeAll(async () => {
     ON CONFLICT DO NOTHING;
     UPDATE membership SET role_id = '${ROLE_MANAGER_CONECTA}' WHERE workspace_id = '${SEED_WORKSPACE_ID}' AND user_id = '${USER_MANAGER}';
   `);
-}, 300_000); // Postgres embebido con las migraciones y los seeds: con la máquina cargada pasa del minuto.
+}, SETUP_TIMEOUT_MS); // Postgres embebido con las migraciones y los seeds: con la máquina cargada pasa del minuto.
 
 /** El mismo servicio con la sesión de una persona: withWorkspace fija app.user_id como lo hace lib/db con CIM-3. */
 function serviceAs(userId: string): CuentasService {

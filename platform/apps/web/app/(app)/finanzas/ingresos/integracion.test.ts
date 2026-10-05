@@ -12,6 +12,7 @@ import {
 } from "@mc/db/queries/finanzas";
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from "@mc/db/test/pglite";
 import { analizar, revisar } from "./_lib/csv";
+import { SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 /**
  * El «terminado cuando» de FIN-7, de punta a punta y sin red: el CSV de
@@ -33,7 +34,7 @@ const fixture = (nombre: string) =>
 let t: TestDb;
 beforeAll(async () => {
   t = await openTestDb();
-}, 300_000);
+}, SETUP_TIMEOUT_MS);
 afterAll(async () => {
   await t?.close();
 });

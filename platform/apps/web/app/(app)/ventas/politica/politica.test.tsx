@@ -50,6 +50,7 @@ import { Interruptor } from "./interruptor";
 import { MESSAGES } from "./messages";
 import { Salud, motivoCaida } from "./salud";
 import { formatterFor } from "@/lib/format";
+import { PRUEBA_LENTA_MS } from "@/lib/testing/tiempos";
 
 const t = MESSAGES;
 /** El instante de la página en las pruebas de «Salud de hoy»: 9:00 en Bogotá. */
@@ -467,7 +468,7 @@ describe("ronda 4", () => {
     });
     expect(screen.getByRole("button", { name: t.interruptor.encender })).toBeInTheDocument();
     expect(screen.queryByRole("group")).not.toBeInTheDocument();
-  }, 30_000);
+  }, PRUEBA_LENTA_MS);
 
   it("sin dirección, la línea de arriba no repite lo que dice la de abajo", () => {
     render(interruptor({ nuncaEncendido: true, hasAddress: false }));
@@ -711,7 +712,7 @@ describe("ronda 5", () => {
       rerender(interruptor({ enabled: false }));
     });
     await waitFor(() => expect(screen.getByRole("heading", { name: t.interruptor.title })).toHaveFocus(), espera);
-  }, 30_000);
+  }, PRUEBA_LENTA_MS);
 
   it("si falla, el foco no se mueve y el error lo dice", async () => {
     enableOutreach.mockRejectedValue(new Error("base caída"));

@@ -113,11 +113,12 @@ const CODIGO = ['aplicar.mjs', 'foto.mjs'];
 /** Una promesa por huella: dentro de un proceso, la foto se lee una vez. */
 const enMemoria = new Map();
 
-/** Los archivos de `ruta` (o la propia ruta si es un archivo), en orden. */
+/** Los archivos de `ruta` (o la propia ruta si es un archivo), en orden; sin bajar a subcarpetas (db/seed/verify). */
 async function archivosDe(ruta) {
   const s = await stat(ruta);
   if (!s.isDirectory()) return [ruta];
-  return (await readdir(ruta)).sort().map((f) => join(ruta, f));
+  const entradas = await readdir(ruta, { withFileTypes: true });
+  return entradas.filter((e) => e.isFile()).map((e) => join(ruta, e.name)).sort();
 }
 
 async function huella({ clave, motor, extensions, dir, fuentes }) {

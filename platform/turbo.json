@@ -9,7 +9,7 @@
     "format":    { "cache": false },
 
     "//#test": {
-      "inputs": ["db/migrations/**", "db/seed/**", "package.json"],
+      "inputs": ["db/migrations/**", "db/seed/**", "db/lib/**", "package.json"],
       "outputs": []
     },
 

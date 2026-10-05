@@ -26,6 +26,7 @@ import { closeDb, getDbMode } from "@/lib/db";
 import KitPage from "./kit/[slug]/page";
 import CotizacionPage from "./cotizacion/[slug]/page";
 import BajaPage from "./baja/[token]/page";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 vi.mock("next/headers", () => ({
   headers: async () => new Headers({ "user-agent": "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/140 Safari/537.36" }),
@@ -39,7 +40,7 @@ const entorno = { DATABASE_URL: process.env.DATABASE_URL };
 beforeAll(async () => {
   delete process.env.DATABASE_URL;
   expect(await getDbMode()).toBe("embedded");
-}, 120_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();
@@ -68,17 +69,17 @@ describe("un enlace público que no existe es un 404", () => {
   test("el media kit con un slug desconocido llama a notFound()", async () => {
     const digest = await digestDe(() => KitPage({ params: Promise.resolve({ slug: SLUG_INEXISTENTE }) }));
     expect(digest).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("la cotización con un slug desconocido llama a notFound()", async () => {
     const digest = await digestDe(() => CotizacionPage({ params: Promise.resolve({ slug: SLUG_INEXISTENTE }) }));
     expect(digest).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("la baja con un token que no es de ningún correo enviado llama a notFound() (VEN-15)", async () => {
     const digest = await digestDe(() => BajaPage({ params: Promise.resolve({ token: SLUG_INEXISTENTE }) }));
     expect(digest).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("ningún loading.tsx en (public), tampoco en la baja: el 200 saldría antes que el notFound()", () => {
     const cargando = archivos(SEGMENTO).filter((f) => /[\\/]loading\.(t|j)sx?$/.test(f));

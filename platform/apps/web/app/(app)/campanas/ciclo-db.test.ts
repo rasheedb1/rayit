@@ -48,6 +48,7 @@ import { invoiceHref } from "./_lib/rutas";
 import {
   asociarPost, cambiarEstadoCampana, generarReporte, importarCsvVentas, marcarReporteEnviado, recalcularResultado, registrarAporte,
 } from "./[id]/actions";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 /** COT-2026-008 del seed 0004: Nutrivé, «viewed», sin ventana, dos ítems. */
 const QUOTE_NUTRIVE = "00000004-0000-4000-8000-0000000c0708";
@@ -94,7 +95,7 @@ async function estadoDelReporte(id: string) {
 beforeAll(async () => {
   for (const k of Object.keys(entorno)) delete process.env[k];
   expect(await getDbMode()).toBe("embedded");
-}, 300_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();
@@ -274,5 +275,5 @@ describe("el ciclo de una campaña, de la cotización aceptada a la apertura pú
     expect(vieja.result).toEqual(doc.result);
     const vigente = (await abrirPublico(nueva.slug)) as PublicReportView;
     expect(vigente.result).toMatchObject({ codeRedemptions: 300, cpa: "25783.33" });
-  }, 300_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });

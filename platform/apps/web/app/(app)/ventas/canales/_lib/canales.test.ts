@@ -43,6 +43,7 @@ import { channelBanner } from "./banner";
 import { channelRows, reasonText } from "./filas";
 import { GOOGLE_COOKIE, googleCallback, googleStart, UNIPILE_COOKIE, unipileFailure, unipileStart } from "./conexion";
 import { channelKeys, type ChannelDeps } from "./deps";
+import { SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 const NOW = new Date("2026-09-24T10:00:00Z");
 /** El flujo completo sobre pglite: bajo carga pasa de los 5 s por defecto. */
@@ -85,7 +86,7 @@ const accounts = () => withWorkspace((tx) => listChannelAccounts(tx));
 beforeAll(async () => {
   guard = withoutNetwork();
   db = await createEmbeddedDb({ seeds: true, snapshot: true });
-}, 180_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   // Si la base no llegó a abrir, el error que cuenta es el del beforeAll, no un «undefined.close».

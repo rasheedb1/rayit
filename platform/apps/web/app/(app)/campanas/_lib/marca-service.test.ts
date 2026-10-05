@@ -13,6 +13,7 @@ import type { WorkspaceTx } from "@mc/db";
 import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { createMarcaService, type MarcaService } from "./marca-service";
+import { SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 const NOW = new Date("2026-09-23T15:00:00Z");
 const ENV = { INSTAGRAM_HOUSE_TOKEN: "IGAA-house-marca-SECRETO", GOOGLE_API_KEY: "AIza-marca-key-SECRETO" };
@@ -54,7 +55,7 @@ beforeAll(async () => {
   const [igNotFound] = await loadFixtures("instagram", [["business_discovery", "not_found"]]);
   fetch = new FixtureFetch([forHandle(igNotFound!, "cafe_alma_mal%29"), forHandle(igOk!, "cafealma%29")]);
   service = createMarcaService({ env: ENV, withWorkspace, fetch: fetch.fetch, now: () => NOW });
-}, 120_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await db.close();

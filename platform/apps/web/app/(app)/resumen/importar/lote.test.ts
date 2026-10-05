@@ -42,6 +42,7 @@ import { diaEnZona, MAX_BYTES } from "./_lib/csv";
 import { importarLote as importarCsv, MAX_CUERPO } from "./_lib/lote";
 import { POST } from "./lote/route";
 import { MESSAGES } from "../messages";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 const fixture = (nombre: string) => readFileSync(join(__dirname, "../../../../test/fixtures/csv", nombre), "utf8");
 
@@ -65,7 +66,7 @@ beforeAll(async () => {
     INSERT INTO creator_profile (workspace_id, display_name, handle)
     VALUES ('${WS_VECINO}', 'Vecino', 'vecino.accion') ON CONFLICT DO NOTHING;
   `);
-}, 180_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await t?.close();
@@ -109,7 +110,7 @@ describe("importarLote, la escritura", () => {
       listExternalPostIds(tx, cuenta.connectionId, ["ig_18001122334455001", "ig_18001122334455003"]),
     );
     expect(ids.sort()).toEqual(["ig_18001122334455001", "ig_18001122334455003"]);
-  }, 60_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   it("la fecha de exportación se vuelve a validar en el servidor y marca la lectura", async () => {
     // Del futuro: no llega a la base.
@@ -141,7 +142,7 @@ describe("importarLote, la escritura", () => {
     });
     expect(r).toMatchObject({ ok: true, resultado: { newPosts: 3, readings: 3, staleReadings: 0 } });
     expect(r.ok && Date.parse(r.resultado.capturedAt)).toBe(Date.parse("2026-09-16T17:00:00Z"));
-  }, 60_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   it("el mismo archivo dos veces con la fecha de hoy no escribe una segunda lectura idéntica", async () => {
     // Hoy la base pone now() al microsegundo: «nunca hacia atrás» no veía
@@ -169,7 +170,7 @@ describe("importarLote, la escritura", () => {
       ok: true,
       resultado: { newPosts: 0, knownPosts: 3, knownPostsWithReading: 0, readings: 0, staleReadings: 0, unchangedReadings: 3 },
     });
-  }, 60_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   it("una red que no está en PLATFORMS no pasa del esquema", async () => {
     // z.enum(PLATFORMS) toma la tupla tal cual: ni un doble cast que
@@ -237,7 +238,7 @@ describe("importarLote, la escritura", () => {
       ok: false,
       error: "Esa cuenta ya no existe en este espacio de trabajo. Elige otra en el paso 2.",
     });
-  }, 60_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });
 
 describe("la ruta POST de la importación, con su propio techo (RES-6)", () => {
@@ -277,7 +278,7 @@ describe("la ruta POST de la importación, con su propio techo (RES-6)", () => {
     );
     expect(r.status).toBe(200);
     expect(await r.json()).toMatchObject({ ok: true, resultado: { newPosts: 2385, readings: 2385 } });
-  }, 180_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   it("un cuerpo por encima del techo se corta con 413 y no llega a la base", async () => {
     const texto = `Post ID,Views\n${"y".repeat(MAX_CUERPO)}\n`;
@@ -379,5 +380,5 @@ describe("buscarPostsConocidos, la lectura del paso 3", () => {
     expect(r.ok && r.conocidos).toHaveLength(1);
     expect(r.ok && Date.parse(r.conocidos[0]!.ultimaLectura!)).toBe(Date.parse(exportado));
     expect(await buscarPostsConocidos({ connectionId: "no-soy-uuid", ids: [] })).toEqual({ ok: false });
-  }, 60_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });
