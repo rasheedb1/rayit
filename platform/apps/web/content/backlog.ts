@@ -181,7 +181,7 @@ export const STORIES: readonly Story[] = [
     desc: "El repositorio de GitHub conectado al proyecto de Vercel para que cada merge a main publique solo; el worker corre por turnos en la propia web (/api/cron/tick), llamado cada minuto por pg_cron de Supabase (Hobby) y, con Vercel Pro, por Vercel Cron.",
     done: "Un merge a main aparece en la URL sin correr ningún comando.",
     status: "en_curso",
-    note: "4-oct: el turno está en producción (runTick y /api/cron/tick con Bearer) y el vault tiene WORKER_DATABASE_URL (mc_worker_login, desde el 28-sep) y CRON_SECRET. Falta el disparador: `make cron.status` dice que pg_cron y pg_net no están instalados en Supabase, así que nada llama al turno. Pendiente humano: `make cron.install` con el mismo CRON_SECRET y `make cron.status` en verde; y conectar GitHub a Vercel para que un merge a main publique solo (hoy se publica con make vercel.deploy PROD=1).",
+    note: "4-oct: el worker corre por turnos en producción: runTick en /api/cron/tick, con mc_worker_login (WORKER_DATABASE_URL) desde el 28-sep, y el disparador ya existe: pg_cron de Supabase llama cada minuto firmando con CRON_SECRET (HMAC del timestamp; el secreto no pasa por la cola de pg_net) y `make cron.status` da verde (respuestas 200, ~0,6 s por turno, ~15 GB-h/mes de los 360 de Hobby). El proceso largo con pg-boss no se usa en producción. Falta lo que pide el «hecho»: conectar GitHub a Vercel para que un merge a main publique solo (pendiente humano, un clic de Rasheed en Vercel); hoy se publica con make vercel.deploy PROD=1.",
   },
   {
     id: "CIM-8", module: "CIM", owner: "nicolas", size: "S", sprint: 1, deps: ["CIM-2"],
