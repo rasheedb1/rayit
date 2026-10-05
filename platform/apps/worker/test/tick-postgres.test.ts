@@ -25,11 +25,10 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry } from '@mc/connectors';
-import { nextWindowSlot } from '@mc/core';
 import { enableOutreach } from '@mc/db/queries/outreach';
 import { openTestDb, type TestDb } from '@mc/db/test/pglite';
 import { DEMO_WORKSPACE_ID } from '../src/jobs/ventas/demo-ids.ts';
-import { prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
+import { nextDemoTouch, prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
 import { motorDbFromJob } from '../src/jobs/ventas/motor-db.ts';
 import { dispatchJob, DISPATCH_JOB_ID } from '../src/jobs/ventas/outbound.dispatch.ts';
 import { ConfigError, loadConfig } from '../src/runner/config.ts';
@@ -39,6 +38,7 @@ import { createLogger, MemorySink } from '../src/runner/logger.ts';
 import { defineJob, type JobRegistration } from '../src/runner/registry.ts';
 import { openTickDatabase, runTick, TICK_CONCURRENCY, TICK_POOL_MAX, type RunTickOptions, type TickSummary } from '../src/tick.ts';
 import { SETUP_TIMEOUT } from './helpers/harness.ts';
+import { aperturaReciente } from './helpers/ventana.ts';
 
 const REAL = Boolean(process.env.TEST_DATABASE_URL);
 const ANUAL = '0 0 1 1 *';
@@ -160,9 +160,12 @@ describe('el turno contra Postgres real (TEST_DATABASE_URL)', { skip: REAL ? fal
   });
 
   test('outbound.dispatch con dos turnos a la vez: el mensaje de la demo sale una vez', async () => {
-    const reloj = nextWindowSlot(new Date(), 'America/Bogota');
     const uno = pool();
     const motor = motorDbFromJob(uno);
+    // Un instante del horario de envío que ya llegó: el now() de este Postgres es el de verdad (CIM-12).
+    const siguiente = await motor.transaction((tx) => nextDemoTouch(tx, DEMO_WORKSPACE_ID));
+    assert.ok(siguiente, 'el seed de outreach tiene un mensaje programado');
+    const reloj = aperturaReciente(siguiente.timeZone, siguiente.window);
     const prep = await motor.transaction((tx) => prepareDemoForDispatch(tx, DEMO_WORKSPACE_ID, reloj));
     await motor.transaction((tx) => enableOutreach(tx, { workspaceId: DEMO_WORKSPACE_ID, now: reloj }));
     const env = { WORKER_GROUPS: 'sales', OUTREACH_CHANNELS: 'fake', APP_URL: 'https://oncue.test', WORKER_DATABASE_URL: t.url };

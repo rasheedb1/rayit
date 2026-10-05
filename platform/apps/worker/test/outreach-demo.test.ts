@@ -5,7 +5,6 @@
 import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemorySecretStore } from '@mc/connectors';
-import { nextWindowSlot } from '@mc/core';
 import { emptyClaimReport, enableOutreach } from '@mc/db/queries/outreach';
 import { buildChannels, channelModeFrom, databaseUrlFrom, fakeAllowed, jobScope } from '../src/jobs/ventas/canales/index.ts';
 import { fakeChannels } from '../src/jobs/ventas/canales/fake.ts';
@@ -14,11 +13,12 @@ import {
 } from '../src/jobs/ventas/correr-motor.ts';
 import { DEMO_WORKSPACE_ID } from '../src/jobs/ventas/demo-ids.ts';
 import { resumenDemo, runDemoMotor } from '../src/jobs/ventas/demo-motor.ts';
-import { prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
+import { nextDemoTouch, prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
 import { motorDbFromClient } from '../src/jobs/ventas/motor-db.ts';
 import { canceledCount, runDispatch } from '../src/jobs/ventas/outbound.dispatch.ts';
 import { ConfigError } from '../src/runner/config.ts';
 import { SETUP_TIMEOUT } from './helpers/harness.ts';
+import { aperturaReciente } from './helpers/ventana.ts';
 
 /**
  * Las dos pruebas de la demo abren una base con TODOS los seeds. Migrar y
@@ -178,8 +178,11 @@ test('--preparar-demo deja la demo lista con el reloj de verdad, sin SQL a mano:
   const db = await createEmbeddedDb({ snapshot: true });
   try {
     const motor = motorDbFromClient(db);
-    // El reloj de quien integra, dentro del horario de envío (en la prueba, la próxima apertura si ahora no lo es).
-    const clock = nextWindowSlot(new Date(), 'America/Bogota');
+    // El reloj de quien integra, dentro del horario de envío (en la prueba, la última apertura si
+    // ahora no lo es: la próxima, un fin de semana, caía en el futuro de la base; CIM-12).
+    const siguiente = await motor.transaction((tx) => nextDemoTouch(tx, DEMO_WORKSPACE_ID));
+    assert.ok(siguiente, 'el seed de outreach tiene un mensaje programado');
+    const clock = aperturaReciente(siguiente.timeZone, siguiente.window);
     const prep = await motor.transaction((tx) => prepareDemoForDispatch(tx, DEMO_WORKSPACE_ID, clock));
     assert.equal(prep.insideWindow, true);
     assert.equal(prep.reconnected, 1, 'el LinkedIn de la demo');
