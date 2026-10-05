@@ -148,8 +148,8 @@ export const STORIES: readonly Story[] = [
     title: "pnpm verificar determinista",
     desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
     done: "Veinte corridas seguidas de pnpm verificar en una máquina cargada, sin una sola prueba cancelada.",
-    status: "en_curso",
-    note: "Pulido r6: todo before que abre la base usa SETUP_TIMEOUT (900 s) de test/pglite.ts; accesos-sesion (el que paga la foto) y otros once tenían techo propio de 120–600 s. Con dos verificar a la vez aún fallan pruebas de Nicolás (oauth-refresh del worker, guard.attempts; cuentas-service con hook de 60 s): en curso hasta 20 corridas en verde.",
+    status: "hecho",
+    note: "5-oct: hecha. Causas raíz: cada archivo del worker y de la web volvía a migrar PGlite (77 migraciones, 30–60 s con la máquina cargada), así que dos verificar a la vez agotaban la CPU; ahora la base migrada es una foto en disco compartida entre procesos (db/lib/foto.mjs, una por contenido de db/migrations, con candado). El worker corría con --test-isolation=none: cuarenta workers de pg-boss vivos en el mismo hilo y guard.attempts contando fetch de otros archivos; ahora un archivo por proceso. Y pruebas que clavaban cifras de un día (mediana de la demo, posts asociables, meses del CSV de AdSense) comparan contra la tabla (@mc/db/test/demo). scripts/estres-verificar.sh: 10 corridas de a dos, 0 fallidas y 0 canceladas; y 10 más con --dias-rotando (+0…+9 días), también en verde. Una tanda anterior dio rojo por tiempo cuando el Mac se durmió a mitad: el script ahora corre con caffeinate.",
   },
   {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],
