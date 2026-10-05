@@ -17,7 +17,7 @@ import { nextDemoTouch, prepareDemoForDispatch } from '../src/jobs/ventas/demo-p
 import { motorDbFromClient } from '../src/jobs/ventas/motor-db.ts';
 import { canceledCount, runDispatch } from '../src/jobs/ventas/outbound.dispatch.ts';
 import { ConfigError } from '../src/runner/config.ts';
-import { SETUP_TIMEOUT } from './helpers/harness.ts';
+import { PRUEBA_DB_TIMEOUT, SETUP_TIMEOUT } from './helpers/harness.ts';
 import { aperturaReciente } from './helpers/ventana.ts';
 
 /**
@@ -33,8 +33,8 @@ before(async () => {
   await (await createEmbeddedDb({ snapshot: true })).close();
 }, SETUP_TIMEOUT);
 
-/** El tope de las pruebas de la demo: abrir la foto y correr el motor, con margen para una máquina cargada. */
-const DEMO_TIMEOUT = { timeout: 240_000 } as const;
+/** El tope de las pruebas de la demo: abrir la foto (décimas, ya construida arriba) y correr el motor. */
+const DEMO_TIMEOUT = PRUEBA_DB_TIMEOUT;
 
 test('job:dispatch y job:replies leen sus argumentos y rechazan lo que no conocen', () => {
   assert.deepEqual(parseArgs(['dispatch'], {}), { pasada: 'dispatch', canalFalso: false, demo: false, workspaceId: undefined, accion: 'pasada' });

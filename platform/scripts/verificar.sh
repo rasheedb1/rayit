@@ -35,10 +35,19 @@
 #
 #   MC_VERIFICAR_TURNOS=0         sin turnos (corre ya, como antes)
 #   MC_VERIFICAR_TURNOS=4         cuatro a la vez
-#   MC_VERIFICAR_ESPERA_MAX=600   segundos de espera como mucho (por
-#                                 omisión 600; 0 = sin techo). Pasado
+#   MC_VERIFICAR_ESPERA_MAX=1800  segundos de espera como mucho (por
+#                                 omisión 1800; 0 = sin techo). Pasado
 #                                 eso sale con el código 75 diciendo
-#                                 quién tiene los turnos.
+#                                 quién tiene los turnos. El 75 NO es un
+#                                 rojo: no se corrió nada; se vuelve a
+#                                 lanzar.
+#
+# Por qué 1800 s: una corrida tarda de 250 a 340 s con la máquina
+# cargada (las tandas de estres-verificar.sh del 5-oct) y hay dos turnos.
+# Con cuatro piezas verificando a la vez más sus revisores, el quinto o
+# el sexto en la cola esperan dos o tres corridas: 545 s midió un revisor
+# con un solo cliente de más, a 55 s del techo de antes (600 s). 1800 s
+# deja pasar unas diez corridas por delante antes de rendirse.
 #   MC_VERIFICAR_SECO=1           imprime el comando y sale, sin turno
 #                                 (para las pruebas de este script)
 # =====================================================================
@@ -46,7 +55,7 @@ set -uo pipefail
 
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TURNOS="${MC_VERIFICAR_TURNOS:-2}"
-ESPERA_MAX="${MC_VERIFICAR_ESPERA_MAX:-600}"
+ESPERA_MAX="${MC_VERIFICAR_ESPERA_MAX:-1800}"
 TURNO_MAX="${MC_VERIFICAR_TURNO_MAX:-7200}"
 # /tmp y no $TMPDIR: dos sesiones del mismo usuario pueden tener $TMPDIR distintos.
 DIR_TURNOS="${MC_VERIFICAR_TURNOS_DIR:-/tmp/mc-verificar-turnos-$(id -u)}"
@@ -143,7 +152,7 @@ if [ "$TURNOS" != 0 ]; then
     if [ "$ESPERA_MAX" != 0 ] && [ $((SECONDS - inicio)) -ge "$ESPERA_MAX" ]; then
       echo "verificar: no hubo turno en $ESPERA_MAX s; estos lo tienen:" >&2
       quienes
-      echo "verificar: sale con $SIN_TURNO sin haber corrido nada. Vuelve a lanzarlo, o sube MC_VERIFICAR_ESPERA_MAX." >&2
+      echo "verificar: sale con $SIN_TURNO sin haber corrido nada: NO es un rojo, la máquina está llena. Vuelve a lanzarlo (o sube MC_VERIFICAR_ESPERA_MAX)." >&2
       exit "$SIN_TURNO"
     fi
     sleep 3

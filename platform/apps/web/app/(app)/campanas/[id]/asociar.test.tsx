@@ -79,7 +79,7 @@ describe("LinkPosts", () => {
     expect(screen.getByRole("button", { name: "Buscar" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText(/almuerzos saludables/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Buscar por título o caption"), { target: { value: "cold brew" } });
-    await waitFor(() => expect(buscarPosts).toHaveBeenCalledWith(CAMPANA, "cold brew"), { timeout: 2000 });
+    await waitFor(() => expect(buscarPosts).toHaveBeenCalledWith(CAMPANA, "cold brew"));
     await waitFor(() => expect(screen.getByText("Ningún post con «cold brew»")).toBeInTheDocument());
   });
 
@@ -95,10 +95,10 @@ describe("LinkPosts", () => {
     buscarPosts.mockResolvedValue([]);
     const { rerender } = render(<LinkPosts campaignId={CAMPANA} suggestions={[]} initial={[post]} />);
     fireEvent.change(screen.getByLabelText("Buscar por título o caption"), { target: { value: "nutriv" } });
-    await waitFor(() => expect(buscarPosts).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    await waitFor(() => expect(buscarPosts).toHaveBeenCalledTimes(1));
     // La ficha se revalida (el post ya se asoció): initial cambia y se repite la búsqueda.
     rerender(<LinkPosts campaignId={CAMPANA} suggestions={[]} initial={[]} />);
-    await waitFor(() => expect(buscarPosts).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    await waitFor(() => expect(buscarPosts).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByText("Ningún post con «nutriv»")).toBeInTheDocument());
     // La primera respuesta llega tarde con el post: se ignora.
     resolveFirst([post]);

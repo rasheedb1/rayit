@@ -72,11 +72,11 @@ test: ## Corre las pruebas
 verificar: ## La puerta de calidad entera: typecheck + lint + test, sin caché, dos verificar a la vez como mucho en la máquina
 	pnpm verificar
 
-verificar.estres: ## ¿Es determinista la puerta? N corridas de pnpm verificar, de a P (N=10 P=2 [DIAS=1|2,7,30,90] [ANCLA=1|0,3] [SIN_ANCLA=1]); ver scripts/estres-verificar.sh --help
+verificar.estres: ## ¿Es determinista la puerta? N corridas de pnpm verificar, de a P (N=10 P=2 [DIAS=1|2,7,30,90] [ANCLA=1|0,3] [SIN_ANCLA=1] [FILTRO=@mc/db]); ver scripts/estres-verificar.sh --help
 	@./scripts/estres-verificar.sh $(or $(N),10) --paralelo $(or $(P),2) \
 		$(if $(filter 1,$(DIAS)),--dias-rotando,$(if $(DIAS),--dias $(DIAS))) \
 		$(if $(filter 1,$(ANCLA)),--ancla-rotando,$(if $(ANCLA),--ancla $(ANCLA))) \
-		$(if $(SIN_ANCLA),--sin-ancla)
+		$(if $(SIN_ANCLA),--sin-ancla) $(if $(FILTRO),--filtro $(FILTRO))
 
 arranque: ## Deja esta máquina lista: credenciales, remoto y comprobaciones
 	@./scripts/arranque.sh

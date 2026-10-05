@@ -37,7 +37,7 @@ import { PostgresDatabase, type Queryable, type WorkerDatabase } from '../src/ru
 import { createLogger, MemorySink } from '../src/runner/logger.ts';
 import { defineJob, type JobRegistration } from '../src/runner/registry.ts';
 import { openTickDatabase, runTick, TICK_CONCURRENCY, TICK_POOL_MAX, type RunTickOptions, type TickSummary } from '../src/tick.ts';
-import { SETUP_TIMEOUT } from './helpers/harness.ts';
+import { DESCRIBE_DB_TIMEOUT, SETUP_TIMEOUT } from './helpers/harness.ts';
 import { aperturaReciente } from './helpers/ventana.ts';
 
 const REAL = Boolean(process.env.TEST_DATABASE_URL);
@@ -118,7 +118,7 @@ function turno(db: WorkerDatabase, group: string, jobs: readonly JobRegistration
   });
 }
 
-describe('el turno contra Postgres real (TEST_DATABASE_URL)', { skip: REAL ? false : 'sin TEST_DATABASE_URL: PGlite no tiene dos conexiones' }, () => {
+describe('el turno contra Postgres real (TEST_DATABASE_URL)', { ...DESCRIBE_DB_TIMEOUT, skip: REAL ? false : 'sin TEST_DATABASE_URL: PGlite no tiene dos conexiones' }, () => {
   before(async () => {
     t = await openTestDb();
     const pools = POOL_JOBS.map((j) => `('${j.id}', 'Prueba pool', 'test_pg_pool', '${ANUAL}', 60, 1, 1)`).join(',\n');

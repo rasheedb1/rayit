@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { allJobs } from '../src/jobs/index.ts';
 import { applyRepoSeeds, jobRuns, SETUP_TIMEOUT, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
-import { ANCLA_DEMO, diasHasta, medianasVigentesSql, multiploPonderado, POSTS_CAFE_ALMA_A_30_DIAS, type MedianaVigente } from '@mc/db/test/demo';
+import { ANCLA_DEMO, diasHasta } from '@mc/db/test/demo';
 
 const NOW = new Date('2026-09-23T07:30:00Z');
 const LAURA = '00000002-0000-4000-8000-000000000001';
@@ -89,9 +89,8 @@ test('las campañas en curso quedan con el resultado recalculado; la cerrada no 
   const cafe = r.get(CAFE_ALMA);
   assert.deepEqual(
     [cafe?.cut_hours, cafe?.views, cafe?.reach, cafe?.cpm, cafe?.cost_per_follower, cafe?.cpa, cafe?.views_vs_median, cafe?.missing_inputs],
-    // El múltiplo, contra la línea base que el seed dejó hoy: cambia con el día de la siembra (CIM-12, @mc/db/test/demo).
-    [720, '712000', '486000', '4353.93', '2500.00', '9748.43',
-      multiploPonderado(POSTS_CAFE_ALMA_A_30_DIAS, (await h.db.raw.query<MedianaVigente>(medianasVigentesSql())).rows), ['brand_csv_sales']],
+    // 4,496: la demo sembrada el 28-sep (arriba), la misma cifra de packages/db/test/demo-anclada.test.ts.
+    [720, '712000', '486000', '4353.93', '2500.00', '9748.43', '4.496', ['brand_csv_sales']],
   );
   assert.equal(cafe?.computed_at, NOW.toISOString().replace('.000Z', 'Z'), 'computed_at es ctx.now()');
   assert.equal(r.get(FRESKO)?.cut_hours, 168);

@@ -593,18 +593,22 @@ describe('COT-3 y COT-4 · cotización, enlace y aceptación', () => {
   });
 
   test('el año de la numeración es el de la zona del workspace, no el de UTC', async () => {
-    // 1 de enero de 2027 a la 01:00 UTC es 31 de diciembre de 2026 a las
-    // 20:00 en Bogotá: esa cotización es de 2026.
+    // 1 de enero de 2100 a la 01:00 UTC es 31 de diciembre de 2099 a las
+    // 20:00 en Bogotá: esa cotización es de 2099. Un cambio de año lejano a
+    // propósito (CIM-12): la demo numera sus cotizaciones con el año en que
+    // se siembra, y con el de 2027 esta prueba esperaba COT-2027-001 y, en
+    // un Postgres real sembrado en 2027 (el job «contra-postgres-real» del
+    // CI, sin reloj anclado), salía COT-2027-006.
     const zona = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const { rows } = await tx.query<{ timezone: string }>('SELECT timezone FROM workspace WHERE id = $1', [tx.workspaceId]);
       return rows[0]!.timezone;
     });
     assert.equal(zona, 'America/Bogota');
-    const n = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => nextQuoteNumber(tx, { at: new Date('2027-01-01T01:00:00Z') }));
-    assert.match(n, /^COT-2026-\d{3}$/);
-    // Cinco horas y media más tarde en UTC, en Bogotá ya es 2027.
-    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => nextQuoteNumber(tx, { at: new Date('2027-01-01T05:30:00Z') }));
-    assert.equal(despues, 'COT-2027-001');
+    const n = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => nextQuoteNumber(tx, { at: new Date('2100-01-01T01:00:00Z') }));
+    assert.equal(n, 'COT-2099-001');
+    // Cinco horas y media más tarde en UTC, en Bogotá ya es 2100.
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => nextQuoteNumber(tx, { at: new Date('2100-01-01T05:30:00Z') }));
+    assert.equal(despues, 'COT-2100-001');
   });
 
   test('crear desde un deal, enviar, abrir el enlace, aceptar y crear la campaña', async () => {

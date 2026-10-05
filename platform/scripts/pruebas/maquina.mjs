@@ -13,28 +13,17 @@
  *
  * Mueve Date.now(), `new Date()` y `Date()` con un desfase fijo; el
  * tiempo sigue corriendo. performance no se toca (de ahí sale la hora de
- * verdad que usan reloj.mjs y db/lib/foto.mjs).
+ * verdad que usan reloj.mjs y db/lib/foto.mjs). El reemplazo de Date es el
+ * mismo de reloj.mjs: fecha.mjs.
  */
+import { etiqueta, horaReal, instalarDate } from './fecha.mjs';
+
 const dias = Number(process.env.MC_RELOJ_DIAS ?? '0');
 if (!Number.isInteger(dias)) {
   throw new Error(`MC_RELOJ_DIAS tiene que ser un número entero de días; vale «${process.env.MC_RELOJ_DIAS}».`);
 }
 
 if (dias !== 0) {
-  const RealDate = Date;
-  // performance.now guardado al cargar: vi.useFakeTimers() lo finge (ver reloj.mjs).
-  const origenPerf = performance.timeOrigin;
-  const ahoraPerf = performance.now.bind(performance);
-  const ahora = () => Math.floor(origenPerf + ahoraPerf() + dias * 86_400_000);
-  // Una función y no una subclase, como en reloj.mjs: comparte el prototipo.
-  function DateDeLaMaquina(...args) {
-    if (!new.target) return new RealDate(ahora()).toString();
-    return Reflect.construct(RealDate, args.length === 0 ? [ahora()] : args, new.target);
-  }
-  DateDeLaMaquina.prototype = RealDate.prototype;
-  DateDeLaMaquina.parse = RealDate.parse;
-  DateDeLaMaquina.UTC = RealDate.UTC;
-  DateDeLaMaquina.now = ahora;
-  globalThis.Date = DateDeLaMaquina;
-  process.stderr.write(`reloj: la máquina a +${dias} días (pid ${process.pid})\n`);
+  instalarDate(() => horaReal() + dias * 86_400_000);
+  process.stderr.write(`${etiqueta()}: la máquina a +${dias} días (pid ${process.pid})\n`);
 }

@@ -21,7 +21,7 @@
     "salud": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/salud.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "node --import ../../scripts/pruebas/reloj.mjs --test --experimental-strip-types --test-isolation=process --test-concurrency=1 --test-timeout=300000 test/*.test.ts"
+    "test": "node --import ../../scripts/pruebas/reloj.mjs --test --experimental-strip-types --test-isolation=process --test-concurrency=1 --test-timeout=120000 test/*.test.ts"
   },
   "dependencies": {
     "@mc/connectors": "workspace:*",

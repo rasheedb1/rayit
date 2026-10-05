@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -111,6 +111,40 @@ test('sin turno en MC_VERIFICAR_ESPERA_MAX segundos sale con 75 y dice quién lo
   assert.equal(r.codigo, 75);
   assert.match(r.err, /no hubo turno en 1 s; estos lo tienen:/);
   assert.match(r.err, new RegExp(`${process.pid}@.* en /otro/clon`));
+  assert.match(r.err, /NO es un rojo.*Vuelve a lanzarlo/, 'quien lo lanza sabe que no es un fallo de las pruebas');
   assert.ok(!readdirSync(dir).includes('corrio'), 'no corrió el comando');
   assert.deepEqual(readdirSync(dir).sort(), ['turno-1', 'turno-2'], 'los turnos ajenos siguen ahí');
+});
+
+test('sin MC_VERIFICAR_ESPERA_MAX, la espera llega a 1800 s: con dos turnos y cuatro piezas a la vez, 600 se quedaba corto', async (t) => {
+  const dir = carpeta(t);
+  const hora = arranqueDe(process.pid);
+  ocupar(dir, 1, process.pid, hora);
+  ocupar(dir, 2, process.pid, hora);
+  const env = { ...process.env, MC_VERIFICAR_TURNOS_DIR: dir };
+  delete env.MC_VERIFICAR_ESPERA_MAX;
+  // Basta con ver el aviso de la espera, que dice el techo, y cortarlo.
+  const hijo = spawn('bash', [SCRIPT, 'true'], { env, stdio: ['ignore', 'ignore', 'pipe'] });
+  let err = '';
+  await new Promise((resolve) => {
+    hijo.stderr.on('data', (d) => {
+      err += d;
+      if (/como mucho \d+ s/.test(err)) resolve();
+    });
+    hijo.on('close', resolve);
+  });
+  hijo.kill('SIGTERM');
+  assert.match(err, /espero turno \(como mucho 1800 s\)/);
+});
+
+test('los --test-timeout de @mc/db y del worker son PRUEBA_SCRIPT_TIMEOUT_MS de @mc/db/test/tiempos.ts', () => {
+  const raiz = join(dirname(SCRIPT), '..');
+  const tiempos = readFileSync(join(raiz, 'packages/db/test/tiempos.ts'), 'utf8');
+  const m = /PRUEBA_SCRIPT_TIMEOUT_MS = ([\d_]+);/.exec(tiempos);
+  assert.ok(m, 'la constante existe');
+  const ms = Number(m[1].replaceAll('_', ''));
+  for (const paquete of ['packages/db', 'apps/worker']) {
+    const test = JSON.parse(readFileSync(join(raiz, paquete, 'package.json'), 'utf8')).scripts.test;
+    assert.match(test, new RegExp(`--test-timeout=${ms}(\\s|$)`), `${paquete}: ${test}`);
+  }
 });

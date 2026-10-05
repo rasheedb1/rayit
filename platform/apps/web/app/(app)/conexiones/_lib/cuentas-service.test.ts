@@ -20,14 +20,14 @@ import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { createCuentasService, OWNERSHIP_DECLARATION_ES, type CuentasService } from "./cuentas-service";
 import { SinPermisoError } from "./permisos";
-import { SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 const NOW = new Date("2026-09-22T15:00:00Z");
 const ENV = { INSTAGRAM_HOUSE_TOKEN: "IGAA-house-web-SECRETO", GOOGLE_API_KEY: "AIza-web-key-SECRETO" };
 const WHO = { ip: "203.0.113.7", userAgent: "vitest" };
 const IP_HASH = createHash("sha256").update(WHO.ip).digest("hex");
-// Cada prueba abre transacciones sobre Postgres embebido y el volcado de R4 recorre todas las tablas: con la máquina cargada pasan de los 5 s por defecto.
-vi.setConfig({ testTimeout: 120_000 });
+// Cada prueba abre transacciones sobre Postgres embebido y el volcado de R4 recorre todas las tablas: el techo de las pruebas con base (lib/testing/tiempos.ts).
+vi.setConfig({ testTimeout: PRUEBA_DB_TIMEOUT_MS });
 const CREATOR_LAURA = "00000002-0000-4000-8000-000000000003";
 const USER_LAURA = "00000002-0000-4000-8000-000000000002";
 /** Andrés Pardo, el mánager de la demo (seed 0003): membership 'admin'. */

@@ -5,7 +5,7 @@
  */
 import { PGlite } from '@electric-sql/pglite';
 import { abrirSuperusuario, applyRepoSeeds as sembrarRepo, execPglite } from '@mc/db/embedded';
-import { SETUP_TIMEOUT_MS } from '@mc/db/test/tiempos';
+import { DESCRIBE_DB_TIMEOUT_MS, PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from '@mc/db/test/tiempos';
 import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, type ConnectorHttpOverrides, type QuotaManager, type SecretStore, type TokenRefresher } from '@mc/connectors';
 import { loadConfig, type WorkerConfig } from '../../src/runner/config.ts';
 import { PgliteDatabase } from '../../src/runner/db-pglite.ts';
@@ -21,6 +21,16 @@ import { startWorker, type RunningWorker } from '../../src/runner/worker.ts';
  * todos los paquetes (@mc/db/test/tiempos, CIM-12), con su porqué.
  */
 export const SETUP_TIMEOUT = { timeout: SETUP_TIMEOUT_MS } as const;
+
+/** Una prueba que corre jobs contra la demo (el motor de Ventas, la cadencia entera): el techo común, con lo medido. */
+export const PRUEBA_DB_TIMEOUT = { timeout: PRUEBA_DB_TIMEOUT_MS } as const;
+
+/**
+ * Un describe que abre su base en su propio `before`: node:test le aplica
+ * --test-timeout al describe ENTERO, hook incluido, así que su techo es el
+ * del arranque más el de las pruebas (@mc/db/test/tiempos).
+ */
+export const DESCRIBE_DB_TIMEOUT = { timeout: DESCRIBE_DB_TIMEOUT_MS } as const;
 
 /**
  * La base de cada archivo: la misma que deja PgliteDatabase.open —todas

@@ -39,10 +39,14 @@ pnpm --filter @mc/web test        # vitest
 Las pruebas (CIM-12): vitest abre un tercio de los núcleos
 (`MC_TEST_WORKERS` lo fija) y su `globalSetup` siembra la demo una vez
 por corrida para todos los procesos (`vitest.global-setup.ts`). Ningún
-archivo lleva un techo de tiempo propio: los `beforeAll` que abren la
-base usan `SETUP_TIMEOUT_MS`, el mismo de @mc/db, y las pruebas que la
-consultan `PRUEBA_DB_TIMEOUT_MS`, los dos de `lib/testing/tiempos.ts`
-(con su porqué). Un archivo nuevo usa esas constantes, no un número.
+archivo lleva un número de tiempo propio: los `beforeAll` que abren la
+base usan `SETUP_TIMEOUT_MS` y las pruebas que la consultan
+`PRUEBA_DB_TIMEOUT_MS` (los dos de @mc/db); los formularios largos sin
+base, `PRUEBA_LENTA_MS`, y las esperas de interfaz que encadenan una
+acción y un rerender, `ESPERA_UI_LARGA_MS`. Todos en
+`lib/testing/tiempos.ts`, con su porqué y lo medido. Un archivo nuevo
+usa esas constantes, no un número (`grep -rnE "timeout: *[0-9]"` sobre
+`app/` y `lib/` no devuelve nada).
 
 Y corren en un día fijo: cada proceso de vitest carga
 `scripts/pruebas/reloj.mjs` (`execArgv` en `vitest.config.ts`), que ancla

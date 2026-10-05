@@ -673,7 +673,8 @@ tiempos reales. Lo que las hace deterministas (CIM-12):
   (docs/propuestas/CIM-12.md, «Resultado»).
 - **Dos `pnpm verificar` a la vez como mucho en toda la máquina**
   (`scripts/verificar.sh`): el tercero espera turno y lo dice, como
-  mucho `MC_VERIFICAR_ESPERA_MAX` segundos (600); después sale con 75.
+  mucho `MC_VERIFICAR_ESPERA_MAX` segundos (1800); después sale con 75,
+  que no es un rojo: no corrió nada y se vuelve a lanzar.
   Un agente lo lanza en segundo plano y lee el final.
 - **turbo corre con `--continue`.** Sin él, cuando una tarea fallaba
   turbo mataba a las demás, y node:test informaba las pruebas que le

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VerifierContext } from "@mc/core/outreach/narrativa";
-import { PRUEBA_LENTA_MS } from "@/lib/testing/tiempos";
+import { ESPERA_UI_LARGA_MS, PRUEBA_LENTA_MS } from "@/lib/testing/tiempos";
 
 /**
  * /ventas/perfil · lo que hacen los botones del cliente cuando la acción
@@ -139,7 +139,7 @@ describe("el aviso de guardado y Recalcular", () => {
     // Pulido r4 (CIM-12): cada clic que dispara una acción va dentro de act, y antes del rerender (la página
     // revalidada) se espera a que la acción se llame y a que su botón deje de estar ocupado: un rerender en medio
     // de la transición de ConfirmInline se quedaba con la confirmación abierta y el aviso viejo a la vista.
-    const espera = { timeout: 10_000 };
+    const espera = { timeout: ESPERA_UI_LARGA_MS };
     const libre = (nombre: string) =>
       waitFor(() => {
         for (const b of screen.queryAllByRole("button", { name: nombre })) expect(b).not.toHaveAttribute("aria-busy");

@@ -34,6 +34,7 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { WorkspaceTx } from '../src/client.ts';
 import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, type TestDb } from './pglite.ts';
+import { DESCRIBE_DB_TIMEOUT_MS } from './tiempos.ts';
 
 export const CREATOR_LAURA = '00000002-0000-4000-8000-000000000003';
 /** La persona del seed: dueña del workspace, sin alcance. */
@@ -135,8 +136,13 @@ export async function sembrarAlcance(t: TestDb): Promise<void> {
     VALUES ('${INVOICE_SOFIA}', '${WORKSPACE_LAURA}', '${EMPRESA_SOFIA}', '${CAMPAIGN_SOFIA}', 'FV-2026-901', 'COP',
             1000000.00, 190000.00, 0.00, 1190000.00, DATE '2026-09-01', CURRENT_DATE + 30, 'sent', 400000.00)
     ON CONFLICT DO NOTHING;
+    -- Hace tres días, pero nunca antes del 1 de enero: los KPI cuentan lo
+    -- cobrado en el año (date_trunc('year', CURRENT_DATE)), y del 1 al 3 de
+    -- enero el pago caía en el año anterior (CIM-12; el job contra Postgres
+    -- real del CI corre con el reloj de verdad).
     INSERT INTO payment (id, workspace_id, invoice_id, direction, amount, currency, method, received_at)
-    VALUES ('${PAYMENT_SOFIA}', '${WORKSPACE_LAURA}', '${INVOICE_SOFIA}', 'in', 400000.00, 'COP', 'transferencia', now() - interval '3 days')
+    VALUES ('${PAYMENT_SOFIA}', '${WORKSPACE_LAURA}', '${INVOICE_SOFIA}', 'in', 400000.00, 'COP', 'transferencia',
+            greatest(now() - interval '3 days', date_trunc('year', CURRENT_DATE)::timestamptz))
     ON CONFLICT DO NOTHING;
     INSERT INTO tax_reserve (id, workspace_id, payment_id, rate, amount, currency, period)
     VALUES ('${TAX_RESERVE_SOFIA}', '${WORKSPACE_LAURA}', '${PAYMENT_SOFIA}', 0.1100, 44000.00, 'COP', '2026-Q3')
@@ -257,11 +263,13 @@ export function definirPruebasDeAlcance(
   const funciones = funcionesExportadas(modulo);
   const conConsulta = Object.entries(casos).filter((e): e is [string, Exclude<CasoDeAlcance, 'pura'>] => e[1] !== 'pura');
 
-  // El límite de 120 s del script (--test-timeout) también se aplica al
-  // describe ENTERO, y este agrupa más de treinta pruebas sobre una base:
-  // con la máquina cargada pasó de 120 s, se canceló y arrastró el resto
-  // de la suite (--test-isolation=none). Cada prueba sigue con el suyo.
-  describe(`alcance en queries/${nombre}.ts`, { timeout: 900_000 }, () => {
+  // El límite del script (--test-timeout) también se aplica al describe
+  // ENTERO, y este abre su base y agrupa más de treinta pruebas sobre ella:
+  // cuando cada apertura migraba, con la máquina cargada pasó de 120 s, se
+  // canceló y arrastró el resto de la suite (--test-isolation=none). Su
+  // techo es el del arranque más el de las pruebas (test/tiempos.ts, con
+  // lo medido). Cada prueba sigue con el suyo.
+  describe(`alcance en queries/${nombre}.ts`, { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
     let antes: Record<string, string | null>;
 
     before(async () => {

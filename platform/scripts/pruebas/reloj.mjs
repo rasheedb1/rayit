@@ -51,13 +51,19 @@
  * daría rojos que no existen.
  *
  * Si alguna de esas variables está puesta, cada proceso dice su reloj por
- * stderr («reloj: …»). No es adorno: turbo corre las tareas en modo
- * estricto y solo les pasa las variables que turbo.json declara; hasta el
- * 5-oct MC_RELOJ_DIAS no estaba declarada y las tandas «con el reloj
- * rotando» daban verde sin mover nada. estres-verificar.sh cuenta estas
- * líneas por tarea y da la corrida por roja si en alguna falta. Sin
- * variables (la puerta de todos los días) calla.
+ * stderr, con su tarea («reloj[@mc/db#test]: …», fecha.mjs). No es adorno:
+ * turbo corre las tareas en modo estricto y solo les pasa las variables
+ * que turbo.json declara; hasta el 5-oct MC_RELOJ_DIAS no estaba
+ * declarada y las tandas «con el reloj rotando» daban verde sin mover
+ * nada. estres-verificar.sh cuenta estas líneas por tarea y da la corrida
+ * por roja si en alguna falta. Sin variables (la puerta de todos los
+ * días) calla.
+ *
+ * Qué ancla vale para qué prueba: packages/db/README.md, «Los relojes de
+ * las pruebas».
  */
+
+import { etiqueta, horaReal, instalarDate } from './fecha.mjs';
 
 /**
  * El día en que corren las pruebas: el 5-oct-2026, el día en que la
@@ -85,15 +91,8 @@ if (anclado && Number.isNaN(anclaMs)) {
   throw new Error(`MC_RELOJ_ANCLA tiene que ser un instante ISO (2026-10-05T15:00:00Z) o «real»; vale «${textoAncla}».`);
 }
 
-/**
- * La hora de verdad, de performance, con su now() ORIGINAL guardado al
- * cargar: vi.useFakeTimers() de vitest también finge performance.now, y
- * leyéndolo en cada llamada el Date de aquí quedaba atado al reloj falso
- * (los afterEach con vi.useRealTimers() se colgaban).
- */
-const origenPerf = performance.timeOrigin;
-const ahoraPerf = performance.now.bind(performance);
-const real = () => origenPerf + ahoraPerf();
+// La hora de verdad, a salvo de vi.useFakeTimers (fecha.mjs).
+const real = horaReal;
 
 let ahora;
 let aviso;
@@ -102,29 +101,14 @@ if (anclado) {
   const origen = Number(process.env.MC_RELOJ_ORIGEN);
   const base = anclaMs + diasAncla * DIA_MS;
   ahora = () => base + (real() - origen);
-  aviso = `reloj: anclado en ${new Date(base).toISOString()}${diasAncla ? ` (ancla ${diasAncla > 0 ? '+' : ''}${diasAncla} días)` : ''}${diasMaquina ? `; la máquina, a +${diasMaquina} días, no cuenta` : ''}`;
+  aviso = `${etiqueta()}: anclado en ${new Date(base).toISOString()}${diasAncla ? ` (ancla ${diasAncla > 0 ? '+' : ''}${diasAncla} días)` : ''}${diasMaquina ? `; la máquina, a +${diasMaquina} días, no cuenta` : ''}`;
 } else if (diasMaquina !== 0) {
   ahora = () => real() + diasMaquina * DIA_MS;
-  aviso = `reloj: la máquina a +${diasMaquina} días, sin ancla`;
+  aviso = `${etiqueta()}: la máquina a +${diasMaquina} días, sin ancla`;
 }
 
 if (ahora) {
-  const RealDate = Date;
-  // Una función y no una subclase: comparte el prototipo de Date, así que
-  // `instanceof Date` sigue valiendo para las fechas que crea el propio
-  // motor (structuredClone, los drivers), y `class X extends Date` sigue
-  // creando instancias de X.
-  function DateDeLasPruebas(...args) {
-    const ms = Math.floor(ahora());
-    // Llamada sin `new`, Date() devuelve la fecha de ahora como texto.
-    if (!new.target) return new RealDate(ms).toString();
-    return Reflect.construct(RealDate, args.length === 0 ? [ms] : args, new.target);
-  }
-  DateDeLasPruebas.prototype = RealDate.prototype;
-  DateDeLasPruebas.parse = RealDate.parse;
-  DateDeLasPruebas.UTC = RealDate.UTC;
-  DateDeLasPruebas.now = () => Math.floor(ahora());
-  globalThis.Date = DateDeLasPruebas;
+  instalarDate(ahora);
   const pedido = ['MC_RELOJ_ANCLA', 'MC_RELOJ_ANCLA_DIAS', 'MC_RELOJ_DIAS'].some((v) => process.env[v]);
   if (pedido) process.stderr.write(`${aviso} (pid ${process.pid})\n`);
 }

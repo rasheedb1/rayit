@@ -23,10 +23,15 @@
 #                                     sin el ancla: reproduce los rojos que
 #                                     el ancla evita (para comprobar que
 #                                     el reloj de verdad se mueve)
+#   ./scripts/estres-verificar.sh 2 --dias 9,60 --sin-ancla --filtro @mc/db
+#                                     solo las tareas de @mc/db, sin ancla:
+#                                     lo que verá el job «contra-postgres-real»
+#                                     del CI (reloj de verdad) el 14-oct y el
+#                                     4-dic
 #   ./scripts/estres-verificar.sh 4 --solo-test
 #                                     solo `turbo run test`, sin
 #                                     typecheck ni lint (para diagnosticar)
-#   make verificar.estres N=10 [P=4] [DIAS=2,7,30,90] [ANCLA=1]
+#   make verificar.estres N=10 [P=4] [DIAS=2,7,30,90] [ANCLA=1] [SIN_ANCLA=1] [FILTRO=@mc/db]
 #                                     lo mismo desde make (DIAS=1 es
 #                                     --dias-rotando; ANCLA=1, --ancla-rotando)
 #
@@ -60,18 +65,21 @@
 # Al final, el total. Sale con 1 si alguna corrida tuvo un solo número
 # distinto de cero en esas columnas o una salida distinta de 0.
 #
-# Los registros completos quedan en $ESTRES_DIR (por omisión, una
-# carpeta nueva en el directorio temporal): corrida-NN.log, con su
-# .codigo y su .carga (las lecturas de `uptime`).
+# Los registros completos quedan en una carpeta nueva por tanda: dentro
+# de $ESTRES_DIR si se da (tanda.XXXXXX), o en el directorio temporal.
+# corrida-NN.log, con su .codigo y su .carga (las lecturas de `uptime`).
 #
 # El reloj (scripts/pruebas/reloj.mjs y maquina.mjs): las suites que
 # miran la demo (@mc/db, @mc/worker, @mc/web) corren siempre con el reloj
 # anclado al 5-oct-2026, sea el día que sea. --dias mueve la MÁQUINA
 # (todos los procesos, con NODE_OPTIONS) y --ancla mueve el ANCLA. Con
-# cualquiera de los dos, cada proceso dice su reloj por stderr («reloj:
-# …») y la columna «reloj» cuenta las tareas de pruebas que NO lo dijeron:
-# si turbo no les pasó la variable (modo estricto, turbo.json), la corrida
-# no probó nada y sale en rojo.
+# cualquiera de los dos, cada proceso dice su reloj por stderr, con su
+# tarea («reloj[@mc/db#test]: …»), y la columna «reloj» cuenta las tareas
+# de pruebas que NO lo dijeron: si turbo no les pasó la variable (modo
+# estricto, turbo.json), la corrida no probó nada y sale en rojo. La lista
+# de tareas sale de turbo (--dry=json), no de los prefijos del registro,
+# que se mezclan cuando dos tareas escriben a la vez
+# (scripts/pruebas/estres-contar.sh, con sus pruebas).
 # =====================================================================
 set -uo pipefail
 
@@ -91,7 +99,8 @@ DIAS=""        # lista de días de la máquina, o «rotando»
 ANCLA=""       # lista de días del ancla, o «rotando»
 SIN_ANCLA=0
 SOLO_TEST=0
-USO="Uso: $0 [N] [--paralelo P] [--dias LISTA|--dias-rotando] [--ancla LISTA|--ancla-rotando] [--sin-ancla] [--solo-test]   (--help para más)"
+FILTRO=""      # un paquete: solo sus tareas (--filter de turbo)
+USO="Uso: $0 [N] [--paralelo P] [--dias LISTA|--dias-rotando] [--ancla LISTA|--ancla-rotando] [--sin-ancla] [--solo-test] [--filtro PAQUETE]   (--help para más)"
 lista_ok() { case "$1" in rotando) return 0 ;; ''|*[!0-9,-]*) return 1 ;; *) return 0 ;; esac; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -104,6 +113,8 @@ while [ "$#" -gt 0 ]; do
     --ancla=*) ANCLA="${1#--ancla=}" ;;
     --sin-ancla) SIN_ANCLA=1 ;;
     --solo-test) SOLO_TEST=1 ;;
+    --filtro) shift; FILTRO="${1:-}" ;;
+    --filtro=*) FILTRO="${1#--filtro=}" ;;
     --paralelo) shift; P="${1:-}" ;;
     --paralelo=*) P="${1#--paralelo=}" ;;
     ''|*[!0-9]*) echo "$USO" >&2; exit 2 ;;
@@ -115,19 +126,37 @@ for l in "$DIAS" "$ANCLA"; do
   if [ -n "$l" ] && ! lista_ok "$l"; then echo "--dias y --ancla piden una lista de enteros separados por comas (2,7,30,90)." >&2; exit 2; fi
 done
 case "$P" in ''|*[!0-9]*) echo "--paralelo pide un número." >&2; exit 2 ;; esac
+case "$FILTRO" in *[!a-z0-9@/._-]*) echo "--filtro pide un nombre de paquete (@mc/db)." >&2; exit 2 ;; esac
 if [ "$N" -lt 1 ] || [ "$P" -lt 1 ]; then echo "N y P tienen que ser al menos 1." >&2; exit 2; fi
 
 # Aquí la espera de turno es parte de lo que se mide: sin techo, salvo que se pida.
 export MC_VERIFICAR_ESPERA_MAX="${MC_VERIFICAR_ESPERA_MAX:-0}"
 
-DIR="${ESTRES_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/estres-verificar.XXXXXX")}"
-mkdir -p "$DIR"
-MAQUINA="$RAIZ/scripts/pruebas/maquina.mjs"
-
-if [ "$SOLO_TEST" = 1 ]; then
-  COMANDO=(bash "$RAIZ/scripts/verificar.sh" pnpm exec turbo run test --force --concurrency=2 --continue)
+# Cada tanda en su propia carpeta, también con ESTRES_DIR: dos estrés que
+# eligieran la misma escribirían uno encima del otro y la tabla de uno
+# leería los .codigo del otro (pasó en la revisión de la r3).
+if [ -n "${ESTRES_DIR:-}" ]; then
+  mkdir -p "$ESTRES_DIR" || exit 2
+  DIR="$(mktemp -d "$ESTRES_DIR/tanda.XXXXXX")" || exit 2
 else
-  COMANDO=(pnpm verificar)
+  DIR="$(mktemp -d "${TMPDIR:-/tmp}/estres-verificar.XXXXXX")" || exit 2
+fi
+MAQUINA="$RAIZ/scripts/pruebas/maquina.mjs"
+# shellcheck source=scripts/pruebas/estres-contar.sh
+source "$RAIZ/scripts/pruebas/estres-contar.sh"
+
+FILTRAR=()
+[ -n "$FILTRO" ] && FILTRAR=("--filter=$FILTRO")
+if [ "$SOLO_TEST" = 1 ]; then
+  COMANDO=(bash "$RAIZ/scripts/verificar.sh" pnpm exec turbo run test --force --concurrency=2 --continue ${FILTRAR[@]+"${FILTRAR[@]}"})
+else
+  COMANDO=(pnpm verificar ${FILTRAR[@]+"${FILTRAR[@]}"})
+fi
+
+# Las tareas de pruebas que tienen que decir su reloj (estres-contar.sh).
+TAREAS=""
+if [ -n "$DIAS" ] || [ -n "$ANCLA" ]; then
+  TAREAS="$(tareas_de_prueba "$RAIZ" ${FILTRAR[@]+"${FILTRAR[@]}"})" || { echo "No pude sacar la lista de tareas de turbo (turbo run test --dry=json)." >&2; exit 2; }
 fi
 
 echo "estres-verificar: $N corridas de '${COMANDO[*]}', de a $P, en $RAIZ"
@@ -136,6 +165,8 @@ echo "carga al empezar: $(uptime | sed 's/.*load averages*: *//')"
 [ -n "$DIAS" ] && echo "la máquina, días: $DIAS"
 [ -n "$ANCLA" ] && echo "el ancla de las pruebas, días: $ANCLA"
 [ "$SIN_ANCLA" = 1 ] && echo "SIN ancla: las pruebas ven el reloj de la máquina"
+[ -n "$FILTRO" ] && echo "solo $FILTRO"
+[ -n "$TAREAS" ] && echo "tareas que dicen su reloj: $TAREAS"
 echo
 
 registro() { printf '%s/corrida-%02d.log' "$DIR" "$1"; }
@@ -180,47 +211,6 @@ correr() {
   echo "$codigo $((SECONDS - inicio))" >"$log.codigo"
 }
 
-# Suma el número que captura la expresión $1 en cada línea de la entrada.
-sumar() { sed -E "s/$1/\\1/" | awk '{s+=$1} END {print s+0}'; }
-
-# Los contadores de un registro (ver la cabecera), en una línea:
-#   fallidas archivos saltadas canceladas errores tareas espera
-contar() {
-  local log="$1" limpio node vitest archivos saltadas canceladas errores tareas espera
-  limpio="$(perl -pe 's/\e\[[0-9;]*m//g' "$log")"
-  node=$(grep -aE 'ℹ fail [0-9]+' <<<"$limpio" | sumar '.*ℹ fail ([0-9]+).*')
-  vitest=$(grep -aE 'Tests +[0-9]+ failed' <<<"$limpio" | sumar '.*Tests +([0-9]+) failed.*')
-  archivos=$(grep -aE 'Test Files +[0-9]+ failed' <<<"$limpio" | sumar '.*Test Files +([0-9]+) failed.*')
-  saltadas=-
-  if [ "$archivos" != 0 ]; then
-    saltadas=$(grep -aE 'Tests +.*[0-9]+ skipped' <<<"$limpio" | sumar '.*[^0-9]([0-9]+) skipped.*')
-  fi
-  canceladas=$(grep -aE 'ℹ cancelled [0-9]+' <<<"$limpio" | sumar '.*ℹ cancelled ([0-9]+).*')
-  errores=$(grep -aE 'Errors +[0-9]+ errors?' <<<"$limpio" | sumar '.*Errors +([0-9]+) error.*')
-  tareas=$(grep -aE '^ *Failed: ' <<<"$limpio" | sed -E 's/^ *Failed: +//' | tr ',' '\n' | grep -c '#' || true)
-  espera=$(grep -aE 'turno tomado tras [0-9]+ s' <<<"$limpio" | sumar '.*turno tomado tras ([0-9]+) s.*')
-  echo "$((node + vitest)) $archivos $saltadas $canceladas $errores $tareas $espera"
-}
-
-# Cuántas tareas de pruebas no dijeron su reloj, con la máquina a +dm días
-# y el ancla a +da (ver la cabecera); «-» si no se movió nada.
-sin_reloj() {
-  local log="$1" dm="$2" da="$3" limpio tareas t falta=0
-  if [ "$dm" = 0 ] && { [ "$da" = 0 ] || [ "$SIN_ANCLA" = 1 ]; }; then echo -; return; fi
-  limpio="$(perl -pe 's/\e\[[0-9;]*m//g' "$log")"
-  if [ "$dm" != 0 ]; then
-    # maquina.mjs va en NODE_OPTIONS: lo dice cada proceso de cada tarea.
-    tareas=$(grep -aoE '^[^ ]+:test:' <<<"$limpio" | sort -u)
-  else
-    # Solo el ancla: lo dicen las suites que cargan reloj.mjs.
-    tareas='@mc/db:test: @mc/worker:test: @mc/web:test:'
-  fi
-  for t in $tareas; do
-    grep -aqF "$t reloj:" <<<"$limpio" || falta=$((falta + 1))
-  done
-  echo "$falta"
-}
-
 # «inicio→máxima→fin» de la carga de 1 minuto de una corrida.
 cargas() {
   local f="$1.carga" ini fin max
@@ -242,7 +232,7 @@ fila() {
   da=$(dia_de "$ANCLA" "$i")
   reloj="m+$dm"
   if [ "$SIN_ANCLA" = 1 ]; then reloj="$reloj,real"; else reloj="$reloj,a+$da"; fi
-  r=$(sin_reloj "$log" "$dm" "$da")
+  r=$(sin_reloj "$log" "$dm" "$da" "$SIN_ANCLA" "$TAREAS")
   printf "$FORMATO" "$i" "$reloj" "$codigo" "$segundos" "$espera" "$(cargas "$log")" "$f" "$a" "$s" "$c" "$e" "$t" "$r"
   total_f=$((total_f + f)); total_a=$((total_a + a)); total_c=$((total_c + c))
   total_e=$((total_e + e)); total_t=$((total_t + t))
@@ -250,7 +240,7 @@ fila() {
   if [ "$codigo" != 0 ] || [ "$f" != 0 ] || [ "$a" != 0 ] || [ "$c" != 0 ] || [ "$e" != 0 ] || [ "$t" != 0 ] || { [ "$r" != - ] && [ "$r" != 0 ]; }; then
     rojas=$((rojas + 1))
     # Qué falló, para no tener que abrir el registro.
-    perl -pe 's/\e\[[0-9;]*m//g' "$log" | grep -aE '✖ .*\([0-9.]+m?s\)$| FAIL |^ *Failed: ' | sort -u | head -15 | sed 's/^/    /'
+    sin_color "$log" | grep -aE '✖ .*\([0-9.]+m?s\)$| FAIL |^ *Failed: ' | sort -u | head -15 | sed 's/^/    /'
   fi
 }
 

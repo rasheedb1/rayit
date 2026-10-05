@@ -11,26 +11,21 @@
  */
 
 /**
- * beforeAll/afterAll que abren o cierran la base embebida. El mismo de
- * @mc/db (test/tiempos.ts), con su porqué.
+ * beforeAll/afterAll que abren o cierran la base embebida, y las pruebas
+ * que consultan la demo varias veces: los mismos de @mc/db
+ * (test/tiempos.ts), con su porqué y lo medido.
  */
-export { SETUP_TIMEOUT_MS } from "@mc/db/test/tiempos";
+export { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@mc/db/test/tiempos";
 
 /** Una prueba cualquiera: el testTimeout de vitest.config.ts. */
 export const PRUEBA_TIMEOUT_MS = 20_000;
 
 /**
- * Una prueba que consulta la base embebida varias veces (una página
- * entera renderizada contra la demo, un ciclo de campaña, la importación
- * de 2 385 posts de RES-6). PGlite es WASM en el hilo del proceso: con la
- * máquina cargada, una consulta pesada pasa del segundo. Medido (r3,
- * 5-oct): en 28 corridas de estres-verificar.sh, de a dos y con carga
- * hasta 77, la más lenta (el CSV de casi 5 MB) no pasó de 6 s; 60 s es
- * diez veces eso.
+ * Una prueba de interfaz sin base que recorre un formulario entero con
+ * varias transiciones (los dos formularios de aportes de CAM-4). Medido
+ * (r4, 5-oct): la más lenta tarda menos de 2 s con la máquina tranquila;
+ * el margen es para la máquina con dos verificar a la vez.
  */
-export const PRUEBA_DB_TIMEOUT_MS = 60_000;
-
-/** Una prueba de interfaz sin base que recorre un formulario entero con varias transiciones. */
 export const PRUEBA_LENTA_MS = 30_000;
 
 /**
@@ -40,3 +35,13 @@ export const PRUEBA_LENTA_MS = 30_000;
  * PRUEBA_TIMEOUT_MS: una espera que nunca se cumple sigue fallando.
  */
 export const ESPERA_UI_MS = 5_000;
+
+/**
+ * Una espera de interfaz que encadena una acción mockeada, su transición
+ * de React y un rerender (las confirmaciones de Ventas, el radar, los
+ * aportes de campañas): los 5 s de ESPERA_UI_MS se agotaron alguna vez
+ * con la máquina cargada sin que nada estuviera mal. La mitad de
+ * PRUEBA_TIMEOUT_MS: una espera que nunca se cumple sigue fallando dentro
+ * de su prueba, con el mensaje de testing-library y no con el del techo.
+ */
+export const ESPERA_UI_LARGA_MS = 10_000;
