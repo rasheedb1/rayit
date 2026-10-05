@@ -89,8 +89,8 @@ make worker.humo                        # = pnpm --filter @mc/worker humo: lista
 ### Por turnos: el worker en Vercel (CIM-7)
 
 Sin un proceso siempre encendido: alguien llama cada minuto a
-`POST /api/cron/tick` de la web con `Authorization: Bearer <CRON_SECRET>`,
-y la ruta (`apps/web/app/api/cron/tick/route.ts`, `maxDuration` 60 s)
+`POST /api/cron/tick` de la web con una credencial derivada de
+`CRON_SECRET` (abajo, «La credencial de la ruta»), y la ruta (`apps/web/app/api/cron/tick/route.ts`, `maxDuration` 60 s)
 corre **un turno** de 45 s con `runTick` (`src/tick.ts`, exportado como
 `@mc/worker/tick`):
 
@@ -139,8 +139,8 @@ por instancia cada 5 min (`TICK_LIMITS_TTL_MS`, `tickQuota` en
 `src/tick.ts`), no en cada turno; sus «entrada ignorada» (las de la
 migración 0011) van a `debug`, con **un** aviso por instancia que dice
 cuántas son, en vez de siete líneas por minuto en el log de Vercel. Y la
-ruta carga el worker (~0,6 MB) con `import()` **después** de comprobar el
-Bearer: un 401 a la URL pública no paga su arranque en frío
+ruta carga el worker (~0,6 MB) con `import()` **después** de comprobar la
+credencial: un 401 a la URL pública no paga su arranque en frío
 (`revisar-bundle-turno.mjs` falla el build si vuelve a los chunks de
 carga siempre). El objetivo es **menos de 300 ms de pared**: tras el
 despliegue, `make cron.status` enseña las últimas respuestas, con su
@@ -268,7 +268,8 @@ curl -s -X POST -H "Authorization: Bearer $CRON_SECRET" localhost:3100/api/cron/
 `SECRET_STORE=memory` y `TOKEN_REFRESHER=fake` porque en local no hay
 `TOKEN_ENCRYPTION_KEY` ni apps de OAuth; `OUTREACH_CHANNELS=fake` saca
 los toques de la demo por el canal falso. Sin Bearer, o con otro, la
-misma llamada da 401. **Con `next start` no vale lo mismo**: pone
+misma llamada da 401. (El Bearer es para probar a mano y para Vercel Cron;
+el cron de Supabase firma, ver «La credencial de la ruta».) **Con `next start` no vale lo mismo**: pone
 `NODE_ENV=production`, y ahí el canal falso está prohibido (la ruta
 responde 500 con «OUTREACH_CHANNELS=fake no se permite en producción»
 en el log). Con `next start`, quita `OUTREACH_CHANNELS` y deja los
@@ -341,7 +342,7 @@ en `apps/web/content/backlog.ts`.
 
 | Variable | Qué es | Cómo se pone |
 |---|---|---|
-| `CRON_SECRET` | El Bearer de la ruta. **El mismo valor** que en el Vault de Supabase. Sin él (o con menos de 32 caracteres) la ruta responde 401 a todos. | `openssl rand -hex 32` en tu terminal (a un gestor de contraseñas, no a un archivo) y `make vercel.run ARGS="env add CRON_SECRET production"`, que lo pide por teclado (nunca como argumento: saldría en `ps` y en el historial) |
+| `CRON_SECRET` | La clave de la ruta: firma del cron de Supabase y Bearer de Vercel Cron. **El mismo valor** que en el Vault de Supabase. Sin él (o con menos de 32 caracteres) la ruta responde 401 a todos. | `openssl rand -hex 32` en tu terminal (a un gestor de contraseñas, no a un archivo) y `make vercel.run ARGS="env add CRON_SECRET production"`, que lo pide por teclado (nunca como argumento: saldría en `ps` y en el historial) |
 | `WORKER_DATABASE_URL` | La conexión del worker: pooler en **modo sesión** (`:5432`, el turno rechaza `:6543`), rol miembro de `mc_worker`. La buena es `mc_worker_login` de [WRK §1.1](../../../docs/propuestas/WRK.md): `DATABASE_URL_DIRECT` (`mc_migrator`) también sirve, pero puede hacer DDL y no debe vivir en Vercel. | `make vercel.run ARGS="env add WORKER_DATABASE_URL production"` |
 | `TOKEN_ENCRYPTION_KEY`, `APP_URL` | Ya están: descifrar tokens y el enlace de baja. | — |
 | `GOOGLE_OUTREACH_CLIENT_ID/SECRET`, `UNIPILE_DSN`, `UNIPILE_ACCESS_TOKEN`, `ANTHROPIC_API_KEY` | Los canales y el modelo del outreach. Sin ellas su canal queda «no configurado» y sus toques esperan. | `.env.example` dice de dónde sale cada una |
@@ -357,8 +358,8 @@ secretos); `db/ops/cron-tick-secreto.sql` guarda el secreto en
 `vault.decrypted_secrets` al disparar, en `cron.job` no queda el valor);
 y `db/ops/cron-tick.sql` crea `pg_cron` y `pg_net` si faltan y programa
 `on-cue-tick` cada minuto con `net.http_post`, que además no llama si el
-secreto falta (`WHERE EXISTS`). Programa también `on-cue-tick-purga`, a
-diario a las 03:17 UTC, que borra de `cron.job_run_details` lo de más
+secreto falta (sin su fila en Vault, el `FROM` no da ninguna). Programa
+también `on-cue-tick-purga`, a diario a las 03:17 UTC, que borra de `cron.job_run_details` lo de más
 de 7 días: pg_cron deja una fila por disparo (1.440 al día) y nadie la
 purga; `net._http_response` caduca sola.
 El secreto va solo y en dos `SELECT` de nivel superior, sin bloque `DO`:
@@ -366,12 +367,35 @@ El secreto va solo y en dos `SELECT` de nivel superior, sin bloque `DO`:
 de pg_cron no puede arrastrarlo al log de Postgres. Si la API rechaza
 ese lote, `scripts/cron-tick.sh` no copia su respuesta (Postgres cita la
 sentencia, `LINE 1: … update_secret(id, '<secreto>')`): imprime la
-primera línea con el valor cambiado por `***`. Un matiz propio de
-pg_net: `net.http_post` deja la petición, con su cabecera
-`Authorization` en claro, en `net.http_request_queue` hasta que su
-worker la manda (milisegundos); esa tabla solo la lee `postgres`, y
-`make cron.status` cuenta sus filas (`cola_pg_net`) y avisa si crece
-(pg_net atascado). Lo corre el dueño, con el token de administración:
+primera línea con el valor cambiado por `***`.
+
+**La credencial de la ruta.** El cron de Supabase **no manda el
+secreto**: `net.http_post` deja cada petición, con sus cabeceras, en
+`net.http_request_queue` hasta que el worker de pg_net la manda
+(milisegundos), y pg_net 0.20.4 le concede esa tabla entera a `PUBLIC`
+(otorgado por `supabase_admin`, que no podemos revocar; medido el
+4-oct-2026, y declarado en la guardia de esquema como
+`ACCESOS_EN_ESQUEMAS_DECLARADOS`). Así que la tarea firma:
+
+| Cabecera | Valor |
+|---|---|
+| `X-On-Cue-Timestamp` | el segundo del disparo, en decimal (epoch) |
+| `X-On-Cue-Signature` | hex de HMAC-SHA256(timestamp, `CRON_SECRET`), con `extensions.hmac` de pgcrypto |
+
+La ruta (`apps/web/app/api/cron/tick/_lib/turno.ts`) la acepta solo a
+**±90 s** de su reloj, comparando en tiempo constante, y responde el mismo
+401 vacío a una caducada, una futura, una alterada, una mal formada o una
+que falta. Lo que alguien lea de la cola vale para pedir **un turno**
+durante minuto y medio —lo que el cron pide de todos modos— y un turno
+repetido no corre nada dos veces (cada corrida se reclama con un candado
+por job), así que no se guarda qué firmas entraron. La ruta sigue
+aceptando `Authorization: Bearer <CRON_SECRET>`, que es lo que manda
+Vercel Cron (opción A) y lo cómodo para probar a mano; el cron de Supabase
+no lo usa. `make cron.status` cuenta la cola (`cola_pg_net`) y avisa si
+crece: lo que pg_net mande con más de 90 s de retraso llega con la firma
+caducada y la ruta lo rechaza.
+
+Lo corre el dueño, con el token de administración:
 
 ```bash
 cd platform
@@ -386,8 +410,10 @@ cuentan las posteriores al último cambio del secreto en Vault
 (`secreto_en_vault[0].updated_at`): un 401 que ya arregló
 `make cron.install` no deja el chequeo en rojo, y las fallidas de antes
 de la última salen como aviso. La más reciente 200 → «el turno responde»
-con su `elapsedMs` medio; un **401** → el `CRON_SECRET` del Vault no es el de Vercel
-(`make cron.install` con el de Vercel); un **500** → el turno falla,
+con su `elapsedMs` medio; un **401** → la firma no pasa: casi siempre el
+`CRON_SECRET` del Vault no es el de Vercel (`make cron.install` con el de
+Vercel), y si coinciden, una firma caducada (relojes a más de 90 s, o pg_net
+atascado); un **500** → el turno falla,
 mira los logs de Vercel (`[cron/tick]`; lo típico es que falte
 `WORKER_DATABASE_URL`); un **504** → el turno no respondió a tiempo
 (pooler colgado); `timed_out` → la ruta tarda más de 60 s; ninguna
@@ -1043,11 +1069,16 @@ reintentos, y `outbound.dispatch` sacando el mensaje de la demo por el
 canal falso), `test/senal-turno.test.ts` (los jobs de Ventas dejan de
 trabajar con la señal disparada), `test/cron-tick-sql.test.ts` (el SQL
 de `db/ops/` sin secretos en claro, idempotente, el orden de
-`make cron.install`, la purga, y el token de administración fuera de la
-línea de comandos de curl) y, en la web,
+`make cron.install`, la purga, el token de administración fuera de la
+línea de comandos de curl, y el comando de la tarea ejecutado en PGlite
+con dobles de pg_net, Vault y pgcrypto: encola el timestamp y su HMAC, el
+mismo que calcula la ruta, y nunca el secreto) y, en la web,
 `app/api/cron/tick/_lib/turno.test.ts` (401 sin Bearer o con uno malo,
 el resumen con el bueno, por GET y POST, el esquema `bearer` sin
-mayúsculas, solo `/api/cron/tick` sin sesión, que toda
+mayúsculas; la firma: válida, en el borde de ±90 s, y el mismo 401 para
+una de hace 120 s, una futura, una alterada, una mal formada o ninguna, y
+que `db/ops/cron-tick.sql` mande justo esas cabeceras y ningún
+`Authorization`; solo `/api/cron/tick` sin sesión, que toda
 `app/api/cron/**/route.ts` exija el Bearer, y el 504 cuando el turno no
 responde). `tick.test.ts` cubre además `outbound.dispatch` con más
 toques vencidos de los que caben en una pasada (el turno corto envía

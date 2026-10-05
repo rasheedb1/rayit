@@ -132,8 +132,9 @@ core.prompts: ## Regenera la copia incrustada de los prompts de outreach (tras e
 
 # =====================================================================
 # El worker por turnos (CIM-7, opción B): pg_cron de Supabase llama cada
-# minuto a /api/cron/tick de la web con el Bearer CRON_SECRET, guardado
-# en Supabase Vault. Pide el token de administración (solo el dueño):
+# minuto a /api/cron/tick de la web con una firma de CRON_SECRET que
+# caduca a los 90 s (el secreto, guardado en Supabase Vault, no viaja).
+# Pide el token de administración (solo el dueño):
 # pg_cron y pg_net piden superusuario. CRON_SECRET se pide sin mostrarlo
 # si no está en el entorno; APP_URL, por defecto la de producción.
 # Detalle y cómo pasar a Vercel Cron: apps/worker/README.md, «Por turnos».
