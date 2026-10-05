@@ -62,18 +62,30 @@ test('un comando corre con turno y lo suelta al terminar, con el código del com
   assert.deepEqual(readdirSync(dir), [], 'el turno queda libre');
 });
 
-test('un turno de un pid muerto, o de un pid reciclado por otro proceso, se libera', async (t) => {
+test('un turno de un pid muerto se libera', async (t) => {
   const dir = carpeta(t);
   // Un pid que ya no existe: el de un proceso que acaba de terminar.
   const muerto = spawn('true');
   await new Promise((r) => muerto.on('close', r));
   ocupar(dir, 1, muerto.pid, 'Mon Jan 1 00:00:00 2024');
-  // Un pid vivo (este proceso) con otra hora de arranque: el sistema lo recicló.
+  ocupar(dir, 2, process.pid, arranqueDe(process.pid));
+  const r = await correr(['true'], { MC_VERIFICAR_TURNOS_DIR: dir, MC_VERIFICAR_ESPERA_MAX: '5' });
+  assert.equal(r.codigo, 0, r.err);
+  assert.match(r.err, new RegExp(`el turno 1 era de ${muerto.pid}@.*que ya no está; lo libero`));
+  assert.doesNotMatch(r.err, /el turno 2/, 'el vivo no se toca');
+});
+
+test('un turno de un pid reciclado por otro proceso (otra hora de arranque) se libera', async (t) => {
+  const dir = carpeta(t);
+  // El turno 1 es de un dueño vivo de verdad; el 2, de este mismo pid pero
+  // con otra hora de arranque: el verificar que lo tenía murió y el
+  // sistema le dio su pid a otro proceso.
+  ocupar(dir, 1, process.pid, arranqueDe(process.pid));
   ocupar(dir, 2, process.pid, 'Mon Jan 1 00:00:00 2024');
   const r = await correr(['true'], { MC_VERIFICAR_TURNOS_DIR: dir, MC_VERIFICAR_ESPERA_MAX: '5' });
   assert.equal(r.codigo, 0, r.err);
-  assert.match(r.err, /el turno 1 era de \d+@.*que ya no está; lo libero/);
-  assert.match(r.err, /el turno 2 era de .*lo libero/);
+  assert.match(r.err, /el turno 2 era de \d+@.*que ya no está; lo libero/);
+  assert.doesNotMatch(r.err, /el turno 1/, 'el vivo no se toca');
 });
 
 test('un turno de más de dos horas se libera aunque su dueño viva', async (t) => {

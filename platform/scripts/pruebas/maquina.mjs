@@ -22,7 +22,10 @@ if (!Number.isInteger(dias)) {
 
 if (dias !== 0) {
   const RealDate = Date;
-  const ahora = () => Math.floor(performance.timeOrigin + performance.now() + dias * 86_400_000);
+  // performance.now guardado al cargar: vi.useFakeTimers() lo finge (ver reloj.mjs).
+  const origenPerf = performance.timeOrigin;
+  const ahoraPerf = performance.now.bind(performance);
+  const ahora = () => Math.floor(origenPerf + ahoraPerf() + dias * 86_400_000);
   // Una función y no una subclase, como en reloj.mjs: comparte el prototipo.
   function DateDeLaMaquina(...args) {
     if (!new.target) return new RealDate(ahora()).toString();

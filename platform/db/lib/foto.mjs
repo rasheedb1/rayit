@@ -93,7 +93,9 @@ const ESPERA_MS = 250;
  * candado vivo parecía de hace meses y otro proceso se lo quitaba, y el
  * latido escribía mtimes del futuro. performance no lo mueve nadie.
  */
-const ahora = () => performance.timeOrigin + performance.now();
+const origenPerf = performance.timeOrigin;
+const ahoraPerf = performance.now.bind(performance);
+const ahora = () => origenPerf + ahoraPerf();
 
 /** Las extensiones de todas las bases de pruebas, como en Supabase. */
 export const EXTENSIONES = ['citext', 'pg_trgm'];

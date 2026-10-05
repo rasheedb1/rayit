@@ -19,7 +19,9 @@
  *
  * Qué mueve: Date.now(), `new Date()` sin argumentos y `Date()`. El
  * tiempo sigue corriendo desde el ancla (los plazos, los waitFor y los
- * temporizadores no cambian: performance y setTimeout no se tocan).
+ * temporizadores no cambian: performance y setTimeout no se tocan). Las
+ * pruebas que piden vi.useFakeTimers() siguen mandando: el reloj falso
+ * de vitest reemplaza a este mientras está puesto.
  * PGlite toma su reloj de Date.now() —el clock_gettime de Emscripten—,
  * así que now() y CURRENT_DATE de la base embebida se mueven igual. Un
  * Postgres real (TEST_DATABASE_URL) no: esas corridas no se anclan.
@@ -83,8 +85,15 @@ if (anclado && Number.isNaN(anclaMs)) {
   throw new Error(`MC_RELOJ_ANCLA tiene que ser un instante ISO (2026-10-05T15:00:00Z) o «real»; vale «${textoAncla}».`);
 }
 
-/** La hora de verdad: performance no lo mueve nadie (ni este módulo ni vitest). */
-const real = () => performance.timeOrigin + performance.now();
+/**
+ * La hora de verdad, de performance, con su now() ORIGINAL guardado al
+ * cargar: vi.useFakeTimers() de vitest también finge performance.now, y
+ * leyéndolo en cada llamada el Date de aquí quedaba atado al reloj falso
+ * (los afterEach con vi.useRealTimers() se colgaban).
+ */
+const origenPerf = performance.timeOrigin;
+const ahoraPerf = performance.now.bind(performance);
+const real = () => origenPerf + ahoraPerf();
 
 let ahora;
 let aviso;
