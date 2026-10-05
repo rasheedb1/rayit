@@ -613,14 +613,38 @@ pnpm turbo run typecheck lint test --force     # o TURBO_FORCE=1
 El job «calidad» del CI corre siempre con `--force`, que es el único
 sitio donde el verde tiene que ser incuestionable.
 
-Las suites de `@mc/db` y `@mc/worker` levantan PGlite (WASM) y esperan a
-pg-boss con tiempos reales. Corren con `--test-isolation=none` (un solo
-proceso, los archivos en orden) y `--test-timeout=120000`: con el
-aislamiento por proceso, y varias instancias WASM arrancando a la vez,
-el runner cancelaba archivos enteros con «Promise resolution is still
-pending but the event loop has already resolved» en una máquina cargada
-—justo lo que es un runner compartido de CI—. En un solo proceso es
-además más rápido.
+Las suites levantan PGlite (WASM) y algunas esperan a pg-boss con
+tiempos reales. Lo que las hace deterministas (CIM-12):
+
+- **El esquema se migra una vez por contenido de `db/migrations`**, no
+  una vez por archivo: `db/lib/foto.mjs` guarda la base migrada en
+  `node_modules/.cache/mc-pglite/` (con candado y rename atómico, porque
+  vitest arranca diez procesos a la vez) y cada apertura la carga en
+  menos de un segundo. Los seeds no van a disco —se siembran relativos a
+  `now()`— sino una vez por proceso encima de la foto. Cambiar una
+  migración da otra foto; `MC_PGLITE_FOTO=0` lo apaga.
+- **`@mc/db` corre con `--test-isolation=none`**: un solo proceso, y
+  las bases de todos los archivos salen de la misma foto sembrada. Todos
+  los `before` de nivel superior cuelgan de la prueba raíz y arrancan a
+  la vez, antes de la primera prueba; por eso llevan `SETUP_TIMEOUT` de
+  `test/pglite.ts` y ningún número propio.
+- **`@mc/worker` corre un archivo por proceso** (`--test-isolation=process
+  --test-concurrency=1`). Con `none`, los `before` de los cuarenta
+  archivos arrancaban a la vez un worker de pg-boss cada uno, que seguía
+  sondeando su base hasta el final de la suite: las pruebas competían
+  con otros 44 workers vivos en el mismo hilo, un `before` sin techo
+  propio tumbaba las 422 pruebas, y los conteos de llamadas de un
+  archivo se cruzaban con los de otro.
+- **Ninguna prueba clava una cifra que dependa del día.** La demo se
+  siembra relativa a hoy pero los posts de las campañas tienen fecha
+  fija, así que la mediana de la línea base cambia con el día; las
+  pruebas comparan contra `test/demo.ts` (la tabla), no contra el número
+  de un día. `MC_RELOJ_DIAS=N` con `scripts/pruebas/reloj.mjs` corre la
+  suite «dentro de N días», y `scripts/estres-verificar.sh
+  --dias-rotando` pasa por los siete días de la semana.
+
+`scripts/estres-verificar.sh N` corre `pnpm verificar` N veces, de a dos
+a la vez, y cuenta las pruebas fallidas o canceladas.
 
 ## Reglas del proyecto que este paquete impone
 
@@ -737,9 +761,10 @@ además más rápido.
 
 ## Los tiempos de las pruebas
 
-Cada archivo de `test/` abre su propia base embebida en su `before`, y
-con 35 migraciones eso cuesta de 84 a 200 s según la carga. `--test-timeout`
-es de 300 s y cada `before` lleva `{ timeout: 600_000 }`: con
-`--test-isolation=none`, un `before` que se pasa **cancela la suite
-entera del paquete** y el informe dice `pass 0, cancelled 704` sin
-señalar quién tardó. Un archivo nuevo necesita el mismo límite.
+Cada archivo de `test/` abre su propia base embebida en su `before`,
+desde la foto (arriba): décimas de segundo, más una siembra por proceso.
+`--test-timeout` es de 300 s y cada `before` que abre la base lleva
+`SETUP_TIMEOUT` de `test/pglite.ts`: con `--test-isolation=none`, un
+`before` que se pasa **cancela la suite entera del paquete** y el
+informe dice `pass 0, cancelled 704` sin señalar quién tardó. Un archivo
+nuevo usa el mismo límite, sin un número propio.
