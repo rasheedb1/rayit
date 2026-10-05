@@ -84,5 +84,14 @@ Cambios mínimos, ninguno de lógica de producto:
 
 ## Resultado
 
-Ver la nota de CIM-12 en `apps/web/content/backlog.ts`, con las tandas de
-`make verificar.estres` y la carga de cada una.
+Tandas del 5-oct con `scripts/estres-verificar.sh`, con otros agentes
+trabajando en la máquina (11 núcleos):
+
+| Tanda | Corridas | Carga (1 min) inicio → máx | Segundos por corrida | Fallidas · archivos en FAIL · canceladas |
+|---|---|---|---|---|
+| A · `10 --paralelo 2` | 10 | 4,3 → 52,2 | 227–706 (hasta 478 de espera de turno) | 0 · 0 · 0 |
+| B · `4 --paralelo 4`, a la vez que A | 4 | 10,8 → 37,5 | 465–707 (230–475 de espera) | 0 · 0 · 0 |
+| C · `4 --paralelo 4` con `MC_VERIFICAR_TURNOS=0` (cuatro a la vez de verdad) | 4 | 15,7 → 71,4 | 561–566 | 0 · 0 · 0 |
+
+La C es la que en la ronda anterior daba rojo en @mc/web: sin el turno,
+cuatro verificar a la vez y carga 71, ninguna prueba pasó de su techo.
