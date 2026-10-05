@@ -146,15 +146,15 @@ describe("CON-4 · la pantalla Cuentas con la bandera oauth_connect encendida", 
     expect(html).toContain("Sin leer todavía");
   });
 
-  test("«Conectar» aparece con el diálogo de consentimiento, y solo para TikTok", () => {
+  test("«Conectar» aparece con el diálogo de consentimiento para TikTok y para Instagram", () => {
     expect(html).toContain("Conectar una cuenta autorizada");
     expect(html).toContain("Conectar TikTok");
     expect(html).toContain("/conexiones/oauth/tiktok/start");
-    // Instagram está configurada en este entorno y aun así no se ofrece
-    // como cuenta nueva: por @ ya entrega seguidores y publicaciones
-    // (decisión 6 de CON-4.md). Reparar una autorización de Instagram
-    // que ya existe sí sigue siendo posible; eso es otra cosa.
-    expect(html).not.toContain("Conectar Instagram");
+    // Desde el 4-oct-2026 Instagram también se ofrece como cuenta nueva:
+    // autorizarla con Instagram Login desbloquea la analítica que el @
+    // no da (alcance, vistas, guardados, demografía).
+    expect(html).toContain("Conectar Instagram");
+    expect(html).toContain("/conexiones/oauth/instagram/start");
   });
 
   test("cierre CON-C: YouTube sin GOOGLE_CLIENT_* no ofrece botón ni ruta; una frase dice qué falta", () => {

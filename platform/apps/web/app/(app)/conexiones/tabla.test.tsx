@@ -133,6 +133,18 @@ describe("la tabla con oauth_connect encendida", () => {
     expect(r.getByRole("button", { name: MESSAGES.tabla.autorizarCifrasAria("@cafealma.recetas") })).toBeInTheDocument();
   });
 
+  it("una cuenta de Instagram por @ ofrece «Autorizar analítica» con la app de Meta configurada (4-oct-2026)", () => {
+    const cuenta = fila({ id: "ig1", platformId: "instagram", handle: "cafealma.ig", accessMode: "public_profile", secretRef: "public:instagram:cafealma.ig", accessExpiresAt: null });
+    pintar([cuenta], CONFIGURADO);
+    expect(screen.getByRole("button", { name: MESSAGES.tabla.autorizarAnaliticaAria("@cafealma.ig") })).toBeInTheDocument();
+  });
+
+  it("una cuenta de Instagram por @ no ofrece «Autorizar analítica» sin META_APP_ID y META_APP_SECRET", () => {
+    const cuenta = fila({ id: "ig1", platformId: "instagram", handle: "cafealma.ig", accessMode: "public_profile", secretRef: "public:instagram:cafealma.ig", accessExpiresAt: null });
+    pintar([cuenta], SIN_CREDENCIALES);
+    expect(screen.queryByRole("button", { name: MESSAGES.tabla.autorizarAnaliticaAria("@cafealma.ig") })).not.toBeInTheDocument();
+  });
+
   it("CON-8: un canal de YouTube por @ ofrece «Autorizar analítica» solo si la app de Google está configurada", () => {
     const canal = fila({ id: "3", platformId: "youtube", handle: "NutriveOficial", accessMode: "public_profile", secretRef: "public:youtube:NutriveOficial", accessExpiresAt: null });
     pintar([canal], { ...CONFIGURADO, apps: { ...CONFIGURADO.apps, youtube: { configurada: true, faltan: [] } } });

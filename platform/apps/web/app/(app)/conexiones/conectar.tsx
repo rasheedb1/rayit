@@ -16,9 +16,12 @@ const t = MESSAGES.conectar;
  *     que el permiso del dueño es lo que desbloquea las cifras. Es lo
  *     que se probó en vivo el 23-sep.
  *   - **Instagram** entrega seguidores y publicaciones por @ con
- *     `business_discovery` (CON-10 §3). Autorizarla está escrito en
- *     CON-3 pero quedó fuera del MVP: ofrecer aquí un botón que pide
- *     permisos para conseguir lo que ya tenemos es pedir de más.
+ *     `business_discovery` (CON-10 §3), y por eso quedó fuera de esta
+ *     lista en el MVP. Desde el 4-oct-2026 se ofrece: Nicolás decidió
+ *     que el dueño autorice con Instagram Login (CON-3) para leer lo que
+ *     el @ no da —alcance, vistas, guardados, demografía— con los scopes
+ *     instagram_business_basic e instagram_business_manage_insights.
+ *     Con la app en Desarrollo solo autorizan las cuentas probadoras.
  *   - **`tiktok-business`** (la Accounts API) no es otra red, es otra
  *     app de la misma; depende del trámite de CON-9 y aquí haría elegir
  *     entre dos TikToks.
@@ -29,7 +32,7 @@ const t = MESSAGES.conectar;
  * Añadir una es añadirla a esta lista: el diálogo, la ruta y el
  * callback ya existen para las tres de CON-3.
  */
-export const REDES_CONECTABLES: readonly OAuthProviderId[] = ["tiktok", "youtube"];
+export const REDES_CONECTABLES: readonly OAuthProviderId[] = ["tiktok", "instagram", "youtube"];
 
 /**
  * «Conectar una cuenta autorizada»: un botón por red, cada uno con su
