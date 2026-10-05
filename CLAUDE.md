@@ -281,12 +281,21 @@ docs/                  Arquitectura, esquema, investigación de APIs
 
 | Comando | Qué hace |
 |---|---|
-| `pnpm verificar` (en `platform/`) | typecheck, lint y test. Deja dos a la vez en toda la máquina: el tercero espera turno y lo dice |
-| `make verificar.estres N=10 P=2` | Corre la puerta N veces, de a P, y cuenta pruebas fallidas o canceladas con la carga de cada corrida |
+| `pnpm verificar` (en `platform/`) | typecheck, lint y test. Deja dos a la vez en toda la máquina: el tercero espera turno y lo dice. Acepta banderas de turbo (`pnpm verificar --filter=@mc/db`) |
+| `make verificar.estres N=10 P=2` | Corre la puerta N veces, de a P, y cuenta pruebas fallidas o canceladas con la carga de cada corrida. `DIAS=2,7,30,90` la corre con la máquina en esas fechas; `ANCLA=1`, con el día de las pruebas rotando |
+
+**Agentes: lanzad `pnpm verificar` en segundo plano** (`run_in_background`)
+y leed el final del registro. Con la espera de turno pasa de los 600 s
+que dura como mucho un Bash en primer plano, y cortado a la mitad no se
+sabe si fue rojo o espera. La espera tiene techo: pasados
+`MC_VERIFICAR_ESPERA_MAX` segundos (600) sale con el código 75 y dice
+quién tiene los turnos, sin haber corrido nada.
 
 Las pruebas que abren Postgres embebido cargan una foto de disco
 (`platform/node_modules/.cache/mc-pglite`) en vez de migrar; se rehace
-sola cuando cambia una migración. Detalle en `platform/packages/db/README.md`.
+sola cuando cambia una migración. Y corren con el reloj anclado al
+5-oct-2026 (`platform/scripts/pruebas/reloj.mjs`): la demo que ven es la
+misma el día que sea. Detalle en `platform/packages/db/README.md`.
 
 ---
 

@@ -648,19 +648,38 @@ tiempos reales. Lo que las hace deterministas (CIM-12):
   con otros 44 workers vivos en el mismo hilo, un `before` sin techo
   propio tumbaba las 422 pruebas, y los conteos de llamadas de un
   archivo se cruzaban con los de otro.
-- **Ninguna prueba sobre la demo de hoy clava una cifra que dependa del
-  día.** La demo se siembra relativa a hoy pero los posts de las
-  campañas tienen fecha fija, así que la mediana de la línea base cambia
-  con el día. Esas pruebas comparan contra el oráculo de `test/demo.ts`
-  (la mediana de la tabla pasada por `calcularResultado` de @mc/core,
-  sin copiar la fórmula), y las cifras fijas (4,496× para Café Alma, los
-  cinco mejores videos) se comprueban en `test/demo-anclada.test.ts`,
-  que siembra como si fuera el 28-sep con `createEmbeddedDb({ relojDias:
-  diasHasta(ANCLA_DEMO) })`. `MC_RELOJ_DIAS=N` con
-  `scripts/pruebas/reloj.mjs` corre la suite «dentro de N días», y
-  `scripts/estres-verificar.sh --dias-rotando` pasa por los siete días.
+- **Las pruebas corren en un día fijo, no en el de la máquina.** La
+  demo mezcla fechas relativas a hoy (la parrilla de 0002, las facturas
+  abiertas) con hechos de fecha fija (los posts y lecturas de las
+  campañas, los gastos de septiembre), y muchas pruebas comparan contra
+  ella: con el reloj de la máquina la puerta se ponía roja sola el 7-oct
+  (Fresko cumple 30 días), en noviembre y en diciembre. Los scripts
+  `test` de `@mc/db` y `@mc/worker` y los procesos de vitest de la web
+  cargan `scripts/pruebas/reloj.mjs`, que ancla `Date` —y con él el
+  `now()` de PGlite— al 5-oct-2026 a las 15:00 UTC; el tiempo sigue
+  corriendo desde ahí. `MC_RELOJ_ANCLA=real` lo apaga; con
+  `TEST_DATABASE_URL` (Postgres real) no se ancla.
+- **Las cifras de campañas con fecha fija miran una demo anclada.** La
+  lista con sus views, los posts de Café Alma con su «datos hasta» y el
+  corte de 7 días de Fresko (`test/campanas.test.ts`) y el recálculo del
+  worker (`apps/worker/test/campaign-compute.test.ts`) siembran como si
+  hoy fuera el 28-sep (`createEmbeddedDb({ relojDias: diasHasta(ANCLA_DEMO) })`
+  y `applyRepoSeeds(db, { relojDias })`) y comparan contra ese día: pasan
+  con o sin el ancla de arriba, también contra un Postgres real. Las
+  demás pruebas de la demo comparan contra el oráculo de `test/demo.ts`
+  o dependen del ancla; que sigan en verde con el ancla movida lo
+  comprueba `make verificar.estres ANCLA=1`, y que la máquina en otra
+  fecha no las toque, `make verificar.estres DIAS=2,7,30,90`
+  (docs/propuestas/CIM-12.md, «Resultado»).
 - **Dos `pnpm verificar` a la vez como mucho en toda la máquina**
-  (`scripts/verificar.sh`): el tercero espera turno y lo dice.
+  (`scripts/verificar.sh`): el tercero espera turno y lo dice, como
+  mucho `MC_VERIFICAR_ESPERA_MAX` segundos (600); después sale con 75.
+  Un agente lo lanza en segundo plano y lee el final.
+- **turbo corre con `--continue`.** Sin él, cuando una tarea fallaba
+  turbo mataba a las demás, y node:test informaba las pruebas que le
+  quedaban a `@mc/db` como canceladas con «Promise resolution is still
+  pending but the event loop has already resolved»: el síntoma original
+  de CIM-12 era el rojo de OTRA tarea.
 
 `make verificar.estres N=10 P=2` (o `scripts/estres-verificar.sh --help`)
 corre `pnpm verificar` N veces, de a P a la vez, y cuenta por corrida las
@@ -784,10 +803,9 @@ máquina.
 
 Cada archivo de `test/` abre su propia base embebida en su `before`,
 desde la foto (arriba): décimas de segundo, más una siembra por proceso.
-`--test-timeout` es de 300 s y cada `before` que abre la base lleva
-`SETUP_TIMEOUT` de `test/pglite.ts` (`SETUP_TIMEOUT_MS` de
-`test/tiempos.ts`, el mismo techo que usan los `beforeAll` de la web en
-`apps/web/lib/testing/tiempos.ts`): con `--test-isolation=none`, un
-`before` que se pasa **cancela la suite entera del paquete** y el
-informe dice `pass 0, cancelled 704` sin señalar quién tardó. Un archivo
-nuevo usa el mismo límite, sin un número propio.
+`--test-timeout` es de 120 s (la prueba más lenta medida tarda 27 s
+bajo carga) y cada `before` que abre la base lleva `SETUP_TIMEOUT` de
+`test/pglite.ts` (`SETUP_TIMEOUT_MS` de `test/tiempos.ts`, 180 s, el
+mismo techo que usan los `beforeAll` de la web y el arnés del worker),
+sacado de lo medido: construir la foto y sembrar la demo con la máquina
+cargada. Un archivo nuevo usa el mismo límite, sin un número propio.

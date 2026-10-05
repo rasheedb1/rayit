@@ -1136,7 +1136,11 @@ muerto no hace esperar a nadie. Con `--test-isolation=none` los
 y seguían vivos hasta el final: cuarenta workers sondeando en el mismo
 hilo, un `before` lento que tumbaba la suite entera y conteos de
 llamadas que se cruzaban entre archivos. Si añades un archivo de
-integración, mete varios casos en el mismo arnés en vez de abrir otro. No tocan Supabase nunca. pg-boss 12 trae adaptador para pglite (`fromPglite`,
+integración, mete varios casos en el mismo arnés en vez de abrir otro. El
+script `test` carga `scripts/pruebas/reloj.mjs`: `Date` y el `now()` de
+PGlite van anclados al 5-oct-2026, y la demo que siembra
+`applyRepoSeeds` es la misma el día que sea (con `relojDias`, la del
+28-sep, para las cifras de campañas con fecha fija). No tocan Supabase nunca. pg-boss 12 trae adaptador para pglite (`fromPglite`,
 `backend: 'pglite'`); no hace falta Docker.
 
 ## Estructura

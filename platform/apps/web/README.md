@@ -44,6 +44,12 @@ base usan `SETUP_TIMEOUT_MS`, el mismo de @mc/db, y las pruebas que la
 consultan `PRUEBA_DB_TIMEOUT_MS`, los dos de `lib/testing/tiempos.ts`
 (con su porqué). Un archivo nuevo usa esas constantes, no un número.
 
+Y corren en un día fijo: cada proceso de vitest carga
+`scripts/pruebas/reloj.mjs` (`execArgv` en `vitest.config.ts`), que ancla
+`Date` y el `now()` de la base embebida al 5-oct-2026, así que la demo
+que ven las pruebas es la misma el día que sea. `MC_RELOJ_ANCLA=real`
+lo apaga (detalle en `packages/db/README.md`).
+
 Desde CIM-3 el workspace sale de la **sesión**, no de una variable.
 `DEMO_WORKSPACE_ID` sigue existiendo como atajo de desarrollo y solo se
 lee en una copia **sin** llaves de Supabase Auth; con las llaves, sin

@@ -1,68 +1,129 @@
 # CIM-12 · `pnpm verificar` determinista
 
-Rasheed, 5-oct-2026. Rama `rasheed/CIM-12-verificar-determinista-r2`.
+Rasheed, 5-oct-2026. Rama `rasheed/CIM-12-verificar-determinista-r3`
+(sobre la r2).
 
-## Causa
+## Mecanismo
 
-Todos los rojos al azar de la puerta eran de **carga**, no de lógica, más
-unas pocas pruebas que **dependían del día**:
+El síntoma con el que se abrió la historia (25-sep): una corrida de
+`pnpm verificar` informó las 735 pruebas de `@mc/db` como canceladas con
+«Promise resolution is still pending but the event loop has already
+resolved». No había una promesa de PGlite sin resolver. Medido el 5-oct
+con Node 24.21 y 25.2 (el de la máquina y el del CI):
 
-1. **Cada proceso de pruebas volvía a migrar PGlite** (77 migraciones,
-   de 5 a 60 s según la carga) y, en la web, **volvía a sembrar la demo**.
-   Vitest abría un proceso por núcleo (10) y cada uno sembraba la suya;
-   con dos `pnpm verificar` a la vez eran 20 procesos sembrando en 11
-   núcleos, con cuatro más de 40. Los `beforeAll` pasaban de su techo y
-   vitest perdía su propio RPC («Timeout calling onTaskUpdate»).
-2. **El worker corría con `--test-isolation=none`**: cuarenta workers de
-   pg-boss vivos en el mismo hilo, y `guard.attempts` contaba los `fetch`
-   de otros archivos (ronda 1).
-3. **Pruebas que clavaban cifras de un día**: la mediana de la demo
-   (la parrilla del seed 0002 cuenta desde hoy y los posts de campaña del
-   0003 tienen fecha fija), los posts asociables y los meses del CSV de
-   AdSense (ronda 1).
-4. **Un candado huérfano** de la foto de disco (un Ctrl-C o un agente
-   reiniciado mientras se construía) hacía esperar hasta diez minutos, en
-   silencio, a todos los demás (ronda 2).
+- El runner de node:test ya **no** cancela una prueba porque el bucle de
+  eventos se quede vacío: en su `beforeExit` arma un `setInterval` y
+  espera a las pruebas pendientes. Una prueba que espera una promesa que
+  nunca llega se queda colgada hasta `--test-timeout`; no se cancela
+  (probado con `await new Promise(() => {})` dentro de un `test` y de un
+  `before`, con y sin `--test`, con aislamiento `none` y `process`).
+- Ese mensaje sale en otro sitio: el manejador de **SIGINT y SIGTERM**
+  del runner llama a la misma salida con `kill = true`, no espera, y da
+  por canceladas con ese texto todas las pruebas que quedan (está en el
+  `harness.js` del propio binario de Node). Reproducido: un `node --test`
+  con cinco pruebas de un segundo, `kill -TERM` al segundo y medio →
+  `pass 1, cancelled 4`, «Promise resolution is still pending…».
+- **Quién mandaba la señal: turbo.** Sin `--continue`, cuando una tarea
+  falla turbo mata a las que siguen corriendo. Reproducido con un
+  monorepo de juguete (`a#test` que sale con 1 a los dos segundos, `b#test`
+  con ocho pruebas de node:test): `b:test: ℹ cancelled 6`, con el mismo
+  mensaje. El 25-sep `pnpm verificar` era `turbo run … --concurrency=2`
+  sin `--continue`: lo que falló aquel día fue OTRA tarea (las del worker
+  y la web que daban rojo por tiempo bajo carga), y turbo se llevó por
+  delante a `@mc/db`, que estaba sana. Por eso «las demás corridas y la
+  suite suelta, en verde».
+- Lo mismo pasa cuando un agente corta un Bash a los 600 s: SIGTERM a
+  todo el árbol y las pruebas pendientes salen «canceladas». En
+  `estres-verificar.sh`, la columna `cancel.` distinta de cero quiere
+  decir eso: alguien mató el proceso.
+
+Arreglos de esta clase:
+
+- `pnpm verificar` corre turbo con `--continue` (ya en la r2; ahora la
+  prueba de `scripts/verificar.sh` lo fija): un rojo de una tarea ya no
+  cancela las demás, y el informe dice cuál falló.
+- Los rojos por tiempo que lo disparaban se quitaron de raíz (abajo).
+- Las pruebas de carreras de `@mc/db` (cotizar, outreach) ya no esperan
+  a secas el aviso que da una transacción desde dentro: si la
+  transacción fallaba antes de avisar, la prueba se colgaba dos minutos
+  y su error salía como un rechazo sin dueño. `esperarAviso`
+  (`packages/db/test/carrera.ts`) corre el aviso contra la transacción.
+- El `setTimeout` con ref de la espera del candado de `db/lib/foto.mjs`
+  sí importa fuera de node:test: un proceso suelto que espera la foto de
+  otro saldría con el `await` sin resolver. Con un `.unref()` ahí,
+  «dos procesos a la vez» de `foto.test.mjs` falla (comprobado). Y
+  `foto.test.mjs` tiene ahora una prueba que espera un candado ajeno
+  dentro del propio runner, sin hijos que mantengan vivo el bucle.
+
+## Causa de los rojos al azar
+
+1. **Carga.** Cada proceso de pruebas volvía a migrar PGlite (77
+   migraciones, de 5 a 60 s según la carga) y, en la web, a sembrar la
+   demo; vitest abría un proceso por núcleo. Con dos `pnpm verificar` a
+   la vez los `beforeAll` pasaban de su techo y vitest perdía su RPC.
+2. **El worker con `--test-isolation=none`**: cuarenta workers de pg-boss
+   vivos en el mismo hilo, y `guard.attempts` contaba los `fetch` de
+   otros archivos.
+3. **El día.** La demo mezcla fechas relativas a hoy con hechos de fecha
+   fija, y muchas pruebas comparan contra ella. Con el reloj de la
+   máquina la puerta se ponía roja sola: desde el 7-oct a las 06:00 UTC
+   (la lectura de 30 días del TikTok de Fresko entra en el seed y su
+   resultado pasa de 7 a 30 días), desde noviembre (la curva de Café Alma
+   deja de medirse a los 90 días) y desde diciembre (los gastos de
+   septiembre salen de la ventana de Finanzas, el año de la numeración).
+   La r2 decía tenerlo resuelto y no era cierto: turbo corre las tareas
+   en modo estricto, `MC_RELOJ_DIAS` no estaba en `turbo.json` y **el
+   reloj nunca se movió dentro de `pnpm verificar`**; las tandas «con el
+   reloj rotando» daban verde sin probar nada. Con la variable pasando,
+   a +90 días caían 16 pruebas de `@mc/db` (Finanzas, Cotizar, campañas),
+   2 del worker, 2 de la web y 3 de `foto.test.mjs`.
+4. **Un candado huérfano** de la foto de disco hacía esperar hasta diez
+   minutos, en silencio (r2).
 
 ## Arreglo
 
 | Qué | Dónde |
 |---|---|
-| La base migrada es una **foto en disco** compartida entre procesos y entre paquetes; la huella cubre migraciones, extensiones, `aplicar.mjs`, `foto.mjs` y el módulo que prepara la base | `db/lib/foto.mjs` |
-| El candado lleva `pid@host` y un **latido** (mtime cada 2 s). Un pid muerto en esta máquina libera el candado al instante; a los 10 s de espera se avisa por stderr con el pid y la ruta | `db/lib/foto.mjs`, probado en `db/lib/foto.test.mjs` |
-| **Una sola** `abrirSuperusuario` para el worker y los conectores (antes, dos `preparar` copiados bajo la misma clave) y un solo `execPglite` | `db/lib/foto.mjs` |
-| La web **siembra la demo una vez por corrida**: el `globalSetup` de vitest fija `MC_PGLITE_CORRIDA` y la foto sembrada va a una carpeta de esa corrida, que se borra al terminar | `apps/web/vitest.global-setup.ts`, `packages/db/src/embedded.ts` |
-| Vitest con **un tercio de los núcleos** (`MC_TEST_WORKERS` lo fija) | `apps/web/vitest.config.ts` |
-| **Dos `pnpm verificar` a la vez** como mucho en toda la máquina, entre clones; el tercero espera turno y lo dice | `scripts/verificar.sh` |
-| Ningún archivo de pruebas de la web lleva un techo propio: `SETUP_TIMEOUT_MS` (el de @mc/db), `PRUEBA_DB_TIMEOUT_MS`, `PRUEBA_LENTA_MS`, `ESPERA_UI_MS` | `apps/web/lib/testing/tiempos.ts`, `packages/db/test/tiempos.ts` |
-| Las cifras de la demo **vuelven a estar fijas** sembrando como si fuera el 28-sep (`relojDias`), y el oráculo de las pruebas de cada día usa `calcularResultado` de @mc/core, no una copia de la fórmula | `packages/db/test/demo-anclada.test.ts`, `packages/db/test/demo.ts` |
-| `estres-verificar.sh` con `--paralelo P`, `--help`, una fila por tanda, la carga de cada corrida y los archivos en FAIL; `make verificar.estres` | `scripts/estres-verificar.sh`, `Makefile` |
+| La base migrada es una **foto en disco** compartida entre procesos y paquetes; la huella cubre migraciones, extensiones, `aplicar.mjs`, `foto.mjs` y el módulo que prepara la base | `db/lib/foto.mjs` |
+| El candado lleva `pid@host` y un **latido**; un pid muerto lo libera al instante. Las edades se miden con la hora de la máquina (`performance`), no con `Date`: con el reloj de las pruebas movido, un candado vivo parecía de hace meses | `db/lib/foto.mjs`, `db/lib/foto.test.mjs` |
+| La web **siembra la demo una vez por corrida**; vitest con **un tercio de los núcleos** | `apps/web/vitest.global-setup.ts`, `vitest.config.ts` |
+| **El reloj de las pruebas anclado** al 5-oct-2026 15:00 UTC en `@mc/db`, `@mc/worker` y `@mc/web` (Date y, con él, el `now()` de PGlite); el tiempo corre desde ahí y todos los procesos de una corrida comparten origen | `scripts/pruebas/reloj.mjs`, scripts `test`, `vitest.config.ts` |
+| **Las cifras de campañas con fecha fija** (la lista con views, los posts de Café Alma, el corte de Fresko, el recálculo del worker) miran la demo sembrada el 28-sep y comparan contra ese día: pasan con o sin ancla, también contra un Postgres real | `packages/db/test/campanas.test.ts`, `apps/worker/test/campaign-compute.test.ts` |
+| `turbo.json` deja pasar `MC_RELOJ_*`, `MC_TEST_WORKERS` y `MC_PGLITE_FOTO*`; cada proceso con el reloj movido lo dice y el estrés cuenta las tareas que no lo dijeron | `turbo.json`, `scripts/estres-verificar.sh` |
+| **Dos `pnpm verificar` a la vez** en toda la máquina; la espera tiene techo (`MC_VERIFICAR_ESPERA_MAX`, 600 s, sale con 75) y un turno se libera si su pid murió, si el pid es de otro proceso (otra hora de arranque) o si tiene más de dos horas | `scripts/verificar.sh`, `scripts/pruebas/verificar.test.mjs` |
+| `pnpm verificar --filter=…` vuelve a pasar las banderas a turbo | `scripts/verificar.sh` |
+| Los techos salen de lo medido: `SETUP_TIMEOUT_MS` 180 s, `PRUEBA_DB_TIMEOUT_MS` 60 s, `--test-timeout` de `@mc/db` 120 s | `packages/db/test/tiempos.ts`, `apps/web/lib/testing/tiempos.ts` |
+| `embedded.ts` ya no mete `foto.mjs` ni el reloj en el bundle de la web: los carga con un `import()` que webpack no sigue, sin `import.meta.url`. El build vuelve a «Compiled successfully» sin avisos y el bundle del turno, a sus tres rutas permitidas | `packages/db/src/embedded.ts`, `db/lib/reloj.mjs`, `revisar-bundle-turno.mjs` |
+| `estres-verificar.sh --dias 2,7,30,90` (la máquina en esas fechas), `--ancla-rotando` (el día de las pruebas, los siete de la semana) y `--sin-ancla` | `scripts/estres-verificar.sh`, `make verificar.estres` |
 
 ## Decisiones
 
-- **La foto sembrada va a disco por corrida, no por día.** La revisión
-  proponía una clave con el día UTC. No basta: los seeds cuentan desde
-  `now()` con precisión de horas (un token que vence «dentro de 50
-  minutos», un correo «hace 3 horas»), y una foto sembrada a las 8 y
-  cargada a las 18 daría otra demo. La clave lleva igualmente el día UTC
-  y `MC_RELOJ_DIAS`, pero lo que manda es la corrida.
-- **Latido de 30 s, no de 15, y solo para candados de otra máquina.** En
-  la misma máquina manda el pid: mientras viva, se espera (salvo cinco
-  minutos sin latido, que es un proceso colgado). PGlite es WASM en el
-  hilo principal y una migración grande bloquea el bucle de eventos, y
-  con él el latido, varios segundos con la máquina a carga 100: con 15 s
-  un segundo proceso le habría quitado el candado a uno vivo.
-- **Un tercio de los núcleos para vitest, no un cuarto.** Medido sin
-  carga: 41 s con 10 procesos, 58 s con 3, 84 s con 2. Con el turno de
-  `verificar.sh` (dos a la vez) un tercio deja 2 × 3 procesos de vitest
-  más las dos tareas de turbo en 11 núcleos.
-- **El seed no se toca.** Anclar la parrilla del 0002 a los posts de
-  campaña haría envejecer la demo de producción (`make db.seed`). Se
-  ancla la siembra de las pruebas (desplazarReloj, el mismo de
-  `make db.seed.check DIAS=…`).
-- **`PRUEBA_DB_TIMEOUT_MS` es 300 s**, el más alto de los que había
-  sueltos, para no bajarle el techo a ninguna prueba; los techos no
-  arreglan nada, solo deciden cuándo una prueba colgada falla.
+- **Anclar el reloj de las pruebas, no reescribir la demo.** Los gastos
+  de septiembre, los posts de campaña y la numeración de 2026 son hechos
+  de la demo (seed 0003, de Nicolás) y las pruebas de Finanzas lo dicen
+  ellas mismas («hay que pasarlos a fechas relativas… o esta lectura ya
+  no prueba nada»). Que la demo de producción envejezca es asunto de
+  `make db.seed.check`, no de la puerta: la puerta tiene que dar lo
+  mismo el día que sea. Se ancla el día, no la hora del proceso: el
+  tiempo sigue corriendo para los plazos y los `waitFor`.
+- **El 5-oct como ancla**, el día en que la puerta entera se midió en
+  verde, a las 15:00 UTC (el mismo día de UTC−12 a UTC+8). Moverlo es
+  una decisión: cambia las cifras que ven las pruebas.
+- **Con `TEST_DATABASE_URL` no se ancla**: el reloj de un Postgres real
+  no se mueve, y un Date anclado contra un `now()` real daría rojos que
+  no existen. Las pruebas de campañas con fecha fija abren siempre el
+  embebido anclado, así que el job «contra-postgres-real» del CI ya no
+  depende del día por ellas; las de Finanzas sí (ver «Pendiente»).
+- **`--dias` mueve la máquina, `--ancla` mueve el día de las pruebas.**
+  Con el ancla puesta, la máquina a +90 no cambia nada en las suites de
+  la demo: es justo lo que se quiere demostrar, y por eso la tanda
+  `--sin-ancla` enseña que el reloj sí se mueve y que sin ancla hay rojo.
+  Mover el ancla más allá de una semana deja de tener sentido: la demo
+  está escrita para unos días concretos.
+- **Los techos no arreglan nada**: solo deciden cuándo una prueba
+  colgada da rojo. Se fijan con margen sobre lo medido, no «el más alto
+  que había»: con el techo de 900 s de la r2, una prueba de cuatro
+  minutos también habría pasado el estrés.
 - **El turno vive en `/tmp/mc-verificar-turnos-UID`, no en `$TMPDIR`**:
   dos sesiones del mismo usuario pueden tener `$TMPDIR` distintos.
 
@@ -72,26 +133,37 @@ Cambios mínimos, ninguno de lógica de producto:
 
 | Archivo | Qué cambió | Por qué |
 |---|---|---|
-| `packages/connectors/test/helpers/pglite.ts` | `openMigratedPglite` llama a `abrirSuperusuario` | Migraba en cada archivo; ahora abre la foto compartida, con la misma función que el worker |
-| `apps/worker/test/helpers/harness.ts` | `openTestDatabase` llama a `abrirSuperusuario`; `applyRepoSeeds` usa `execPglite` | Lo mismo; el `preparar` copiado desapareció |
-| `apps/worker/src/runner/db-pglite.ts` | `PgliteDatabase.open` usa `execPglite` de @mc/db | Era la tercera copia del mismo exec; sin cambio de comportamiento |
-| `apps/worker/package.json` | `test` con `--test-isolation=process` | Con `none`, cuarenta pg-boss en un hilo y `guard.attempts` contando fetch ajenos |
-| `apps/worker/test/costuras-con.test.ts` | El múltiplo de Café Alma y los cinco mejores comparan contra el oráculo de `@mc/db/test/demo` | Dependían del día de la siembra; la cifra fija vive en `packages/db/test/demo-anclada.test.ts` |
-| `apps/worker/test/campaign-compute.test.ts` | El múltiplo contra el oráculo | Igual |
-| `apps/web/app/(app)/conexiones/_lib/cuentas-service.test.ts`, `oauth-handlers.test.ts`, `pagina.test.tsx` | `snapshot: true` al abrir la base; techos de `lib/testing/tiempos.ts` | Sembraban la demo en cada archivo (el hook de 60 s que fallaba) |
-| `apps/web/app/(app)/campanas/_lib/marca-service.test.ts`, `ciclo-db.test.ts`, `ficha-db.test.tsx`, `[id]/reporte.test.tsx`, `[id]/recalcular-db.test.ts` | `snapshot: true`; el múltiplo de `ciclo-db` contra el oráculo; techos de `tiempos.ts` | Lo mismo, y la mediana que cambia con el día |
-| `apps/web/app/(app)/finanzas/ingresos/integracion.test.ts` | Los meses del CSV se reemplazan de una pasada; techo de `tiempos.ts` | Tres `replace` seguidos chocaban en octubre |
+| `packages/connectors/test/helpers/pglite.ts` | `openMigratedPglite` llama a `abrirSuperusuario` (r2) | Migraba en cada archivo |
+| `apps/worker/test/helpers/harness.ts` | `abrirSuperusuario` y `applyRepoSeeds` de `@mc/db/embedded`; `SETUP_TIMEOUT` de `@mc/db/test/tiempos`; `applyRepoSeeds(db, { relojDias })` | La foto, un solo techo y la demo anclada |
+| `apps/worker/src/runner/db-pglite.ts` | `execPglite` de `@mc/db` (r2) | Era la tercera copia del mismo exec |
+| `apps/worker/package.json` | `--test-isolation=process` (r2); `--import ../../scripts/pruebas/reloj.mjs` | Un archivo por proceso; el reloj de las pruebas |
+| `apps/worker/test/campaign-compute.test.ts` | Siembra la demo del 28-sep; techo común | Fresko pasaba a 30 días el 7-oct |
+| `apps/worker/test/costuras-con.test.ts` | El múltiplo contra el oráculo de `@mc/db/test/demo` (r2) | Dependía del día de la siembra |
+| `apps/web/app/(app)/conexiones/_lib/*.test.ts`, `campanas/**/*.test.ts`, `finanzas/ingresos/integracion.test.ts` | `snapshot: true`; techos de `lib/testing/tiempos.ts`; un comentario viejo | Sembraban la demo en cada archivo (r2) |
+
+## CIM-1 y CIM-7
+
+- **CIM-1, hecha.** `mc_worker_login` (miembro de `mc_worker`) existe
+  desde el 28-sep y el worker corre por turnos en la web
+  (`/api/cron/tick`); el proceso largo con pg-boss no se usa en
+  producción.
+- **CIM-7, en curso.** El disparador existe (pg_cron de Supabase llama
+  cada minuto firmando el turno; `make cron.status` en verde el 5-oct).
+  Falta conectar GitHub a Vercel para que un merge a `main` publique solo
+  (un clic de Rasheed; hoy, `make vercel.deploy PROD=1`) y la aprobación
+  de Nicolás del PR 1 del runner (`rasheed/CIM-7-runner-1`). Visto en la
+  revisión del 5-oct: `make cron.status` muestra en cada turno dos jobs
+  en `exhausted`, `collect.account_metrics` y `outbound.replies`, sin
+  historia propia todavía.
+
+## Pendiente
+
+- **El job «contra-postgres-real» del CI corre con el reloj de verdad**
+  (un Postgres real no se ancla) y sus pruebas de Finanzas y Cotizar
+  dependen de la demo de septiembre: desde diciembre darán rojo ahí. Lo
+  arregla pasar los gastos y la numeración del seed 0003 a fechas
+  relativas (de Nicolás) o anclar esas pruebas como las de campañas.
 
 ## Resultado
 
-Tandas del 5-oct con `scripts/estres-verificar.sh`, con otros agentes
-trabajando en la máquina (11 núcleos):
-
-| Tanda | Corridas | Carga (1 min) inicio → máx | Segundos por corrida | Fallidas · archivos en FAIL · canceladas |
-|---|---|---|---|---|
-| A · `10 --paralelo 2` | 10 | 4,3 → 52,2 | 227–706 (hasta 478 de espera de turno) | 0 · 0 · 0 |
-| B · `4 --paralelo 4`, a la vez que A | 4 | 10,8 → 37,5 | 465–707 (230–475 de espera) | 0 · 0 · 0 |
-| C · `4 --paralelo 4` con `MC_VERIFICAR_TURNOS=0` (cuatro a la vez de verdad) | 4 | 15,7 → 71,4 | 561–566 | 0 · 0 · 0 |
-
-La C es la que en la ronda anterior daba rojo en @mc/web: sin el turno,
-cuatro verificar a la vez y carga 71, ninguna prueba pasó de su techo.
+RESULTADOS
