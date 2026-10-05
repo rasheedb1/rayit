@@ -28,6 +28,13 @@
 # =====================================================================
 set -uo pipefail
 
+# En macOS, con el Mac despierto mientras dure: una corrida que pilla el
+# reposo (o el estrangulamiento de antes de dormir) tarda siete veces más
+# y da rojo por tiempo sin que las pruebas tengan nada (CIM-12, 5-oct).
+if [ -z "${ESTRES_DESPIERTO:-}" ] && command -v caffeinate >/dev/null 2>&1; then
+  ESTRES_DESPIERTO=1 exec caffeinate -dims "$0" "$@"
+fi
+
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 N=10
 ROTAR=0
