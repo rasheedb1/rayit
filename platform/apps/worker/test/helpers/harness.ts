@@ -4,6 +4,8 @@
  * un logger en memoria y un worker arrancado con reintentos rápidos.
  */
 import { applySeeds, SEED_DIR, type MigrationExec } from '@mc/db/embedded';
+// @ts-expect-error — módulo .mjs sin tipos, el mismo que corre db/seed/verify/run.mjs
+import { desplazarReloj } from '../../../../db/seed/verify/reloj.mjs';
 import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, type ConnectorHttpOverrides, type QuotaManager, type SecretStore, type TokenRefresher } from '@mc/connectors';
 import { loadConfig, type WorkerConfig } from '../../src/runner/config.ts';
 import { PgliteDatabase } from '../../src/runner/db-pglite.ts';
@@ -30,13 +32,30 @@ export async function openTestDatabase(): Promise<PgliteDatabase> {
  * de `make seed`): cada seed en su transacción, en orden. Para las
  * pruebas que parten de la demo; se pasa como `seed` a startHarness o se
  * llama dentro del propio `seed`.
+ *
+ * `reloj`: siembra como si HOY fuera ese día (desplazarReloj de
+ * db/seed/verify, el mismo que usa `make db.seed.check`). La demo es
+ * relativa a CURRENT_DATE pero los cinco posts de campaña de 0003 van
+ * con fecha fija, así que las cifras que salen del cruce (la mediana del
+ * creador, qué videos «ya alcanzaron» un corte) cambian con el
+ * calendario: el 2-oct-2026 el TikTok de Fresko cumplió 30 días y entró
+ * en la línea base. Una prueba que afirma esas cifras tiene que fijar el
+ * día, y el mismo día en `now` del arnés.
  */
-export async function applyRepoSeeds(db: PgliteDatabase): Promise<void> {
+export async function applyRepoSeeds(db: PgliteDatabase, opts: { reloj?: Date } = {}): Promise<void> {
+  const dias = opts.reloj ? diasHasta(opts.reloj) : 0;
   const exec: MigrationExec = async (sql) => {
-    const out = await db.raw.exec(sql);
+    const out = await db.raw.exec(dias === 0 ? sql : desplazarReloj(sql, dias));
     return { rows: (out.at(-1)?.rows ?? []) as Array<Record<string, unknown>> };
   };
   await applySeeds(exec, { dir: SEED_DIR });
+}
+
+/** Días enteros entre la medianoche UTC de hoy y la del día pedido (negativo si ya pasó). */
+function diasHasta(dia: Date): number {
+  const hoy = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate());
+  const aquel = Date.UTC(dia.getUTCFullYear(), dia.getUTCMonth(), dia.getUTCDate());
+  return Math.round((aquel - hoy) / 86_400_000);
 }
 
 export function testConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {

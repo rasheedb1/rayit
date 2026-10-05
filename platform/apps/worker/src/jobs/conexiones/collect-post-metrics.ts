@@ -107,7 +107,7 @@ export async function selectMeasurablePosts(
             ultima.captured_at AS last_api_at
        FROM post p
        JOIN social_connection c ON c.id = p.connection_id AND c.workspace_id = p.workspace_id
-            AND c.deleted_at IS NULL AND c.access_mode IN ('public_profile', 'direct_oauth') AND c.status IN ('active', 'error')
+            AND c.deleted_at IS NULL AND c.access_mode IN ('public_profile', 'aggregator', 'direct_oauth') AND c.status IN ('active', 'error')
        LEFT JOIN LATERAL (
          SELECT cm.status, cm.ends_on
            FROM campaign_post cp JOIN campaign cm ON cm.id = cp.campaign_id AND cm.workspace_id = p.workspace_id
@@ -294,6 +294,11 @@ export const collectPostMetricsJob = defineJob<CollectPostMetricsPayload>('colle
         if (elegida.kind === 'sin_configurar') {
           sinConfigurar[platform] = `faltan ${elegida.missing.join(', ')}`;
           log.warn('fuente de publicaciones sin configurar; se salta la cuenta', { missing: elegida.missing });
+          return;
+        }
+        if (elegida.kind === 'token_vencido') {
+          if (elegida.outcome === 'needs_reauth') { errores.push(acc.id); log.warn('la plataforma rechazó renovar el permiso; la cuenta pide reautorizar', { code: elegida.code }); }
+          else { transitorios.push(acc.id); log.warn('el acceso venció y la renovación falló de forma pasajera; se reintenta', { code: elegida.code }); }
           return;
         }
         // YouTube cobra por unidades y el presupuesto es del día entero,

@@ -86,7 +86,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   return { title: data ? `${data.campaign.companyName} · ${data.campaign.name}` : "Campaña" };
 }
 
-function Section({ id, title, meta, children }: { id: string; title: string; meta?: string; children: React.ReactNode }) {
+function Section({ id, title, meta, children }: { id: string; title: string; meta?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section className="min-w-0 rounded-md border border-line p-4" aria-labelledby={id}>
       <SectionTitle meta={meta}>
@@ -357,7 +357,15 @@ export default async function CampanaPage({
 
       <div className="grid min-w-0 gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0 space-y-8">
-          <Section id="acordado" title="Acordado antes de publicar" meta={campaign.agreed ? `Cotización ${campaign.agreed.quoteNumber}` : undefined}>
+          <Section
+            id="acordado"
+            title="Acordado antes de publicar"
+            meta={campaign.agreed ? (
+              <Link href={`/cotizar/cotizaciones/${campaign.agreed.quoteId}`} className="underline underline-offset-2 hover:text-fg">
+                Cotización {campaign.agreed.quoteNumber}
+              </Link>
+            ) : undefined}
+          >
             {campaign.agreed ? (
               <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
                 <DataItem label="Métricas acordadas">{campaign.agreed.agreedMetrics.length > 0 ? campaign.agreed.agreedMetrics.join(", ") : <None>Sin métricas acordadas</None>}</DataItem>

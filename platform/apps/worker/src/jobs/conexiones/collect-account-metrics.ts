@@ -23,10 +23,11 @@
  * token: userInfo / me / channels.list?mine=true, source 'api'. Los
  * videos y sus métricas son de CON-5.
  */
-import { createPublicProfileSources, isPlatformApiError, isPlatformId, PublicLookupError, type PublicProfileSources } from '@mc/connectors';
+import { createPublicProfileSources, isPlatformApiError, isPlatformId, PublicLookupError, type OAuthTokens, type PublicProfileSources } from '@mc/connectors';
 import { auditAsJob } from '@mc/db';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
 import { mapLimit } from './oauth-refresh.ts';
+import { tokensListos } from './_token.ts';
 
 export interface CollectAccountMetricsPayload extends JobPayload {
   /** Solo esta cuenta (desde la pantalla). */
@@ -41,6 +42,8 @@ interface AccountRow extends Record<string, unknown> {
   external_account_id: string;
   access_mode: string;
   secret_ref: string;
+  access_expires_at: Date | string | null;
+  refresh_expires_at: Date | string | null;
 }
 
 interface Metrics {
@@ -57,9 +60,7 @@ interface Metrics {
  * vistas van en null (ver PublicAccountMetrics.views en @mc/connectors).
  * null = red sin lectura de cuenta con token.
  */
-async function readAuthorized(ctx: JobContext, acc: AccountRow): Promise<{ metrics: Metrics; raw: unknown } | null> {
-  const tokens = await ctx.secrets.get(acc.secret_ref);
-  if (!tokens) throw new PublicLookupError('not_configured', 'El almacén no tiene el permiso de esta cuenta; hay que volver a autorizarla.');
+async function readAuthorized(ctx: JobContext, acc: AccountRow, tokens: OAuthTokens): Promise<{ metrics: Metrics; raw: unknown } | null> {
   const auth = { connectionId: acc.id, tokens };
   if (acc.platform_id === 'tiktok') {
     const { data, raw } = await ctx.connectors.tiktokDisplay(auth).userInfo({ signal: ctx.signal });
@@ -79,7 +80,7 @@ async function readAuthorized(ctx: JobContext, acc: AccountRow): Promise<{ metri
 
 export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>('collect.account_metrics', async (payload, ctx) => {
   const { rows } = await ctx.db.query<AccountRow>(
-    `SELECT id, workspace_id, platform_id, handle, external_account_id, access_mode, secret_ref
+    `SELECT id, workspace_id, platform_id, handle, external_account_id, access_mode, secret_ref, access_expires_at, refresh_expires_at
        FROM social_connection
       WHERE access_mode IN ('public_profile', 'aggregator', 'direct_oauth') AND deleted_at IS NULL AND status IN ('active', 'error')
         AND ($1::uuid IS NULL OR id = $1) AND ($2::uuid IS NULL OR workspace_id = $2)
@@ -117,7 +118,13 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
           let note: string | null;
           let sourceName: string;
           if (acc.access_mode === 'direct_oauth') {
-            const read = await readAuthorized(ctx, acc);
+            // Con el token vigente: si venció, se renueva aquí mismo
+            // (_token.ts); solo una renovación rechazada pide reautorizar.
+            const listo = await tokensListos(ctx, acc);
+            if (listo.kind === 'sin_secreto') throw new PublicLookupError('not_configured', 'El almacén no tiene el permiso de esta cuenta; hay que volver a autorizarla.');
+            if (listo.kind === 'needs_reauth') { errored.push(acc.id); log.warn('la plataforma rechazó renovar el permiso; la cuenta pide reautorizar', { code: listo.code }); return; }
+            if (listo.kind === 'transitorio') { transient.push(acc.id); log.warn('el acceso venció y la renovación falló de forma pasajera; se reintenta', { code: listo.code }); return; }
+            const read = await readAuthorized(ctx, acc, listo.tokens);
             if (!read) { noMetrics.push(acc.id); log.info('red autorizada sin lectura de cuenta todavía'); return; }
             m = read.metrics; raw = read.raw; note = null; sourceName = 'api';
           } else {

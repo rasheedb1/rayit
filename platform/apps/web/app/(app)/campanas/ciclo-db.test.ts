@@ -171,6 +171,18 @@ describe("el ciclo de una campaña, de la cotización aceptada a la apertura pú
     await recalcularResultado(campaignId);
     expect(redirect).toHaveBeenLastCalledWith(`/campanas/${campaignId}`);
     const r = await withWorkspace((tx) => getCampaignResult(tx, campaignId));
+    // La mediana del creador a 720 h sale de creator_baseline (seed 0002) y
+    // cambia con el calendario: los posts de campaña de 0003 tienen fecha
+    // fija y entran en la ventana de la línea base al cumplir 30 días (el
+    // TikTok de Fresko, el 2-oct-2026). Hasta entonces era 121 500 para
+    // TikTok y 69 000 para Instagram, y el múltiplo 0,824; se deriva de
+    // la tabla para no depender del día.
+    const medianas = Object.fromEntries((await withWorkspace((tx) =>
+      tx.query<{ platform_id: string; median_views: string }>(
+        "SELECT DISTINCT ON (platform_id) platform_id, median_views::text AS median_views FROM creator_baseline WHERE age_hours_cut = 720 AND is_reliable ORDER BY platform_id, computed_at DESC",
+      ),
+    )).rows.map((x) => [x.platform_id, Number(x.median_views)]));
+    const vsMediana = ((88000 * 88000) / medianas["tiktok"]! + (66000 * 66000) / medianas["instagram"]!) / 154000;
     expect(r).toMatchObject({
       cutHours: 720,
       views: 154000, // 88 000 + 66 000
@@ -179,7 +191,7 @@ describe("el ciclo de una campaña, de la cotización aceptada a la apertura pú
       shares: 990, // 528 + 462
       linkClicks: null, // ninguna de las dos lecturas trae clics: null, no cero
       reachNonFollowersPct: "0.54991", // (28 600 + 28 987) / 104 720 = 0,549914…
-      viewsVsMedian: "0.824", // (88 000·88 000/121 500 + 66 000·66 000/69 000) / 154 000 = 0,82381…
+      viewsVsMedian: vsMediana.toFixed(3), // Σ views·(views/mediana) / Σ views; con 121 500 y 69 000: 0,82381… → "0.824"
       brandFollowersGained: 1600,
       brandFollowersBaselineRate: "10.0000",
       brandFollowersCampaignRate: "200.0000",

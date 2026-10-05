@@ -29,8 +29,9 @@
  * ctx.db corre como mc_worker y se salta RLS: cada SELECT, INSERT,
  * UPDATE y DELETE de aquí lleva su workspace_id explícito.
  */
-import { isPlatformApiError, type NormalizedDemographics } from '@mc/connectors';
+import { isPlatformApiError, type NormalizedDemographics, type OAuthTokens } from '@mc/connectors';
 import { mapLimit } from '../../runner/concurrency.ts';
+import { tokensListos } from './_token.ts';
 import type { Queryable } from '../../runner/db.ts';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
 import {
@@ -54,6 +55,8 @@ interface AccountRow extends Record<string, unknown> {
   status: string;
   scopes: string[] | string;
   secret_ref: string;
+  access_expires_at: Date | string | null;
+  refresh_expires_at: Date | string | null;
   followers: string | number | null;
   /** Las dimensiones que YA tienen fila de hoy para esta cuenta. */
   today_dimensions: string[] | string;
@@ -84,9 +87,7 @@ interface DemographicsRead {
 }
 
 /** Las llamadas del plan, ya normalizadas a filas de audience_breakdown. */
-async function readDemographics(ctx: JobContext, acc: AccountRow, plan: DemographicsPlan, pendientes: ReadonlySet<string>): Promise<DemographicsRead> {
-  const tokens = await ctx.secrets.get(acc.secret_ref);
-  if (!tokens) throw new Error(`El almacén no tiene el permiso de la conexión ${acc.id}; hay que volver a autorizarla.`);
+async function readDemographics(ctx: JobContext, acc: AccountRow, plan: DemographicsPlan, pendientes: ReadonlySet<string>, tokens: OAuthTokens): Promise<DemographicsRead> {
   const auth = { connectionId: acc.id, tokens };
   const opts = { signal: ctx.signal };
   const rows: NormalizedDemographics = [];
@@ -167,7 +168,7 @@ export const collectDemographicsJob = defineJob<CollectDemographicsPayload>('col
   const day = ctx.now().toISOString().slice(0, 10);
   const { rows } = await ctx.db.query<AccountRow>(
     `SELECT c.id, c.workspace_id, c.platform_id, c.handle, c.external_account_id, c.access_mode,
-            c.account_type, c.status, c.scopes, c.secret_ref,
+            c.account_type, c.status, c.scopes, c.secret_ref, c.access_expires_at, c.refresh_expires_at,
             (SELECT s.followers FROM account_metric_snapshot s
               WHERE s.connection_id = c.id AND s.workspace_id = c.workspace_id
               ORDER BY s.day DESC, s.captured_at DESC LIMIT 1) AS followers,
@@ -224,10 +225,20 @@ export const collectDemographicsJob = defineJob<CollectDemographicsPayload>('col
         const pendientes = new Set(dimensionsOf(decision.plan).filter((d) => !yaHoy.has(d)));
         if (pendientes.size === 0) { alreadyToday.push(acc.id); log.debug('ya está toda la demografía de hoy'); return; }
 
-        // 3 · Solo ahora se llama.
+        // 3 · Solo ahora se llama, con el token vigente: si venció, se
+        //     renueva aquí mismo (_token.ts); solo una renovación
+        //     rechazada por la plataforma pide reautorizar.
+        const listo = await tokensListos(ctx, acc);
+        if (listo.kind === 'sin_secreto') {
+          transient.push(acc.id); onlyQuota = false;
+          log.error('el almacén no tiene el permiso de esta cuenta; revisa SECRET_STORE', { secretRef: acc.secret_ref });
+          return;
+        }
+        if (listo.kind === 'needs_reauth') { errored.push(acc.id); log.warn('la plataforma rechazó renovar el permiso; la cuenta pide reautorizar', { code: listo.code }); return; }
+        if (listo.kind === 'transitorio') { transient.push(acc.id); onlyQuota = false; log.warn('el acceso venció y la renovación falló de forma pasajera; se reintenta', { code: listo.code }); return; }
         let leido: DemographicsRead;
         try {
-          leido = await readDemographics(ctx, acc, decision.plan, pendientes);
+          leido = await readDemographics(ctx, acc, decision.plan, pendientes, listo.tokens);
         } catch (err) {
           leido = { rows: [], error: err };
         }

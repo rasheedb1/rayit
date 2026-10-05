@@ -1006,20 +1006,25 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
 }
 
 /**
- * Anota un fallo de lectura pública sin tocar las filas históricas.
- * `permanent` pasa la cuenta a 'error'. Devuelve false si no anotó nada:
- * la cuenta ya no está viva en este workspace o no está en el alcance
- * (ACC-6). No lanza a propósito: quien la llama ya está devolviendo el
- * fallo de la lectura a la pantalla, y un segundo error taparía el primero.
+ * Anota un fallo de lectura sin tocar las filas históricas. `permanent`
+ * pasa la cuenta a 'error'; `'needs_reauth'` la deja pidiendo volver a
+ * autorizar, que es lo que el worker escribe cuando la plataforma rechaza
+ * el token del dueño (antes la web la dejaba en 'error' y la fila ofrecía
+ * «Actualizar» en bucle en vez de «Reautorizar»; QA CON, 4-oct-2026).
+ * Devuelve false si no anotó nada: la cuenta ya no está viva en este
+ * workspace o no está en el alcance (ACC-6). No lanza a propósito: quien
+ * la llama ya está devolviendo el fallo de la lectura a la pantalla, y un
+ * segundo error taparía el primero.
  */
-export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: string, detailEs: string, permanent: boolean): Promise<boolean> {
+export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: string, detailEs: string, permanent: boolean | 'needs_reauth'): Promise<boolean> {
+  const status = permanent === 'needs_reauth' ? 'needs_reauth' : permanent ? 'error' : null;
   const { rows } = await tx.query<{ id: string }>(
     `UPDATE social_connection c
         SET last_error_at = now(), consecutive_failures = consecutive_failures + 1, status_detail = $2,
-            status = CASE WHEN $3 THEN 'error' ELSE status END
+            status = COALESCE($3, status)
       WHERE c.id = $1 AND c.deleted_at IS NULL AND ${SCOPE_CONNECTION}
       RETURNING c.id`,
-    [connectionId, detailEs, permanent],
+    [connectionId, detailEs, status],
   );
   return rows.length > 0;
 }

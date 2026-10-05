@@ -426,10 +426,29 @@ describe('crear facturas', () => {
     );
   });
 
+  test('una campaña con factura viva no se factura dos veces; anulada, sí', async () => {
+    // Café Alma ya tiene FV-2026-010 (enviada) en el seed: un segundo
+    // «Facturar» (doble clic, dos pestañas) duplicaba «Por cobrar».
+    const antes = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query<{ n: string }>("SELECT count(*)::text AS n FROM invoice WHERE campaign_id = $1", [CAMPAIGN_CAFE_ALMA]));
+    await assert.rejects(
+      t.db.withWorkspace(WORKSPACE_LAURA, (tx) => createInvoiceFromCampaign(tx, CAMPAIGN_CAFE_ALMA, { issuedOn: '2026-09-21' })),
+      /ya tiene la factura FV-2026-\d{3}/,
+    );
+    const despues = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query<{ n: string }>("SELECT count(*)::text AS n FROM invoice WHERE campaign_id = $1", [CAMPAIGN_CAFE_ALMA]));
+    assert.equal(despues.rows[0]!.n, antes.rows[0]!.n, 'no se creó ningún borrador');
+  });
+
   test('desde una campaña del seed (Café Alma) trae empresa, campaña y monto sin escribirlos', async () => {
+    // Sin factura viva (como si las de antes se hubieran anulado), facturar
+    // es el camino normal. Se desatan y se vuelven a atar fuera de la
+    // prueba para que FIN-2/FIN-3/FIN-6 sigan contando FV-2026-010.
+    await t.admin(`UPDATE invoice SET campaign_id = NULL, external_ref = coalesce(external_ref, '') || '|qa-desatada' WHERE campaign_id = '${CAMPAIGN_CAFE_ALMA}' AND status <> 'void'`);
+    let creada: string | null = null;
+    try {
     const inv = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
       createInvoiceFromCampaign(tx, CAMPAIGN_CAFE_ALMA, { issuedOn: '2026-09-21' }),
     );
+    creada = inv.id;
     assert.equal(inv.companyName, 'Café Alma');
     assert.equal(inv.campaignId, CAMPAIGN_CAFE_ALMA);
     assert.equal(inv.campaignName, 'Lanzamiento cold brew');
@@ -442,6 +461,10 @@ describe('crear facturas', () => {
     assert.equal(inv.dueOn, '2026-10-21', 'la cotización acordó pago a 30 días');
     // La campaña viene de COT-2026-003 (seed 0004): la factura la cita.
     assert.equal(inv.quoteId, '00000004-0000-4000-8000-0000000c0703');
+    } finally {
+      if (creada) await t.admin(`DELETE FROM invoice WHERE id = '${creada}'`);
+      await t.admin(`UPDATE invoice SET campaign_id = '${CAMPAIGN_CAFE_ALMA}', external_ref = nullif(replace(external_ref, '|qa-desatada', ''), '') WHERE external_ref LIKE '%|qa-desatada'`);
+    }
   });
 });
 

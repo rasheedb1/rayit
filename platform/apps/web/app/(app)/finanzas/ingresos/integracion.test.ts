@@ -45,7 +45,11 @@ function acercarAHoy(texto: string, hoy: string): string {
     const total = a! * 12 + (m! - 1) - atras;
     return `${String(Math.floor(total / 12)).padStart(4, "0")}-${String((total % 12) + 1).padStart(2, "0")}`;
   };
-  return texto.replace("2026-06", mes(3)).replace("2026-07", mes(2)).replace("2026-08", mes(1));
+  // En una sola pasada: tres `replace` encadenados se pisaban en cuanto
+  // uno de los meses destino coincidía con uno del fixture (en octubre
+  // mes(3) es 2026-07, y la fila de junio acababa en septiembre).
+  const destino: Record<string, string> = { "2026-06": mes(3), "2026-07": mes(2), "2026-08": mes(1) };
+  return texto.replace(/2026-0[678]/g, (m) => destino[m]!);
 }
 
 describe("un CSV de AdSense aparece como ingreso en su mes y no se duplica", () => {

@@ -263,9 +263,11 @@ export function createCuentasService(deps: CuentasDeps) {
         const message = err instanceof PublicLookupError ? err.messageEs
           : isPlatformApiError(err) && err.kind === "auth" ? "La plataforma rechazó el permiso de esta cuenta; hay que volver a autorizarla."
           : isPlatformApiError(err) ? err.messageEs : "No se pudo leer la cuenta. Inténtalo de nuevo en unos minutos.";
-        const permanent = isPlatformApiError(err) && err.kind === "auth";
+        // El token rechazado deja la fila en needs_reauth, como el worker:
+        // la pantalla ofrece «Reautorizar», no «Actualizar» en bucle.
+        const rechazado = isPlatformApiError(err) && err.kind === "auth";
         await deps.withWorkspace(async (tx) => {
-          await markAccountLookupFailure(tx, row.id, message, permanent);
+          await markAccountLookupFailure(tx, row.id, message, rechazado ? "needs_reauth" : false);
           await flush(callLog, tx, row.id);
         }).catch(() => undefined);
         return { ok: false, code: err instanceof PublicLookupError ? err.code : "transient", message };

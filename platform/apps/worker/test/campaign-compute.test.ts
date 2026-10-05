@@ -23,7 +23,11 @@ const OTRA_MARCA = '00000009-0000-4000-8000-0000000c05e1';
 const OTRA_CAMPANA = '00000009-0000-4000-8000-00000c05ca01';
 
 async function seed(db: PgliteDatabase): Promise<void> {
-  await applyRepoSeeds(db);
+  // Sembrado con el reloj en NOW: las cifras de abajo (4,496× la mediana,
+  // el CPM) salen del cruce entre los posts de campaña con fecha fija y
+  // la parrilla relativa del seed, y cambian con el calendario (ver
+  // applyRepoSeeds). Con el mismo día en el seed y en `now`, no.
+  await applyRepoSeeds(db, { reloj: NOW });
   await db.raw.exec(`
     INSERT INTO workspace (id, slug, name, kind, currency) VALUES ('${OTRO}', 'otro-cam5', 'Otro', 'creator', 'USD');
     INSERT INTO company (id, name, domain, owner_workspace_id) VALUES ('${OTRA_MARCA}', 'Otra marca', 'otra.example', '${OTRO}');

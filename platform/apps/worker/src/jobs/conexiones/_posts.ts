@@ -20,6 +20,7 @@ import {
 } from '@mc/connectors';
 import type { JobContext, JobPayload } from '../../runner/registry.ts';
 import { PLATFORM_NAMES } from './oauth-refresh.ts';
+import { tokensListos } from './_token.ts';
 
 export interface CollectPayload extends JobPayload {
   /** Solo esta cuenta (desde la pantalla o una prueba). */
@@ -36,6 +37,8 @@ export interface CollectableAccount extends Record<string, unknown> {
   external_account_id: string;
   access_mode: string;
   secret_ref: string;
+  access_expires_at: Date | string | null;
+  refresh_expires_at: Date | string | null;
 }
 
 /**
@@ -50,7 +53,7 @@ export interface CollectableAccount extends Record<string, unknown> {
  */
 export async function selectCollectableAccounts(ctx: JobContext, payload: CollectPayload): Promise<CollectableAccount[]> {
   const { rows } = await ctx.db.query<CollectableAccount>(
-    `SELECT id, workspace_id, creator_id, platform_id, handle, external_account_id, access_mode, secret_ref
+    `SELECT id, workspace_id, creator_id, platform_id, handle, external_account_id, access_mode, secret_ref, access_expires_at, refresh_expires_at
        FROM social_connection
       WHERE access_mode IN ('public_profile', 'aggregator', 'direct_oauth') AND deleted_at IS NULL AND status IN ('active', 'error')
         AND ($1::uuid IS NULL OR id = $1) AND ($2::uuid IS NULL OR workspace_id = $2)
@@ -69,22 +72,25 @@ export function groupByPlatform<T extends { platform_id: string }>(rows: readonl
 export type SourceChoice =
   | { kind: 'source'; source: PostSource; target: PostSourceTarget }
   | { kind: 'sin_fuente'; noteEs: string }
-  | { kind: 'sin_configurar'; missing: readonly string[] };
+  | { kind: 'sin_configurar'; missing: readonly string[] }
+  /** El acceso venció y la renovación en línea no lo resolvió (_token.ts): needs_reauth ya quedó escrito, o fue pasajero. */
+  | { kind: 'token_vencido'; outcome: 'needs_reauth' | 'transitorio'; code: string };
 
 /**
  * Qué fuente le toca a esta cuenta. `direct_oauth` usa el token del
- * dueño (y el almacén de secretos); cualquier otra, la fuente pública
- * de su plataforma. Una cuenta autorizada sin credencial en el almacén
- * NO es una cuenta rota: es un problema nuestro, y sale como
- * `sin_configurar`.
+ * dueño (y el almacén de secretos), renovado aquí mismo si ya venció;
+ * cualquier otra, la fuente pública de su plataforma. Una cuenta
+ * autorizada sin credencial en el almacén NO es una cuenta rota: es un
+ * problema nuestro, y sale como `sin_configurar`.
  */
 export async function chooseSource(ctx: JobContext, acc: CollectableAccount, publicas: PostSources): Promise<SourceChoice> {
   if (acc.access_mode === 'direct_oauth') {
     const source = createAuthorizedPostSource(ctx.connectors.core, acc.platform_id);
     if (!source) return { kind: 'sin_fuente', noteEs: `Todavía no leemos publicaciones de ${platformName(acc.platform_id)} con el permiso del dueño.` };
-    const tokens = await ctx.secrets.get(acc.secret_ref);
-    if (!tokens) return { kind: 'sin_configurar', missing: ['connection_secret'] };
-    return { kind: 'source', source, target: targetFor(acc, tokens) };
+    const listo = await tokensListos(ctx, acc);
+    if (listo.kind === 'sin_secreto') return { kind: 'sin_configurar', missing: ['connection_secret'] };
+    if (listo.kind !== 'ok') return { kind: 'token_vencido', outcome: listo.kind, code: listo.code };
+    return { kind: 'source', source, target: targetFor(acc, listo.tokens) };
   }
   const source = isPlatformId(acc.platform_id) ? publicas[acc.platform_id] : undefined;
   if (!source) return { kind: 'sin_fuente', noteEs: `${platformName(acc.platform_id)} no tiene una fuente pública de publicaciones en esta versión.` };

@@ -2,9 +2,13 @@
  * oauth.refresh · renueva los tokens que están por vencer.
  *
  * Cada 15 minutos (job_definition.default_cron) busca las conexiones
- * activas por OAuth directo cuyo access token vence dentro del margen
+ * por OAuth directo en 'active' o en 'error' (una lectura fallida no
+ * invalida el token, y sin renovarlo la cuenta acabaría en needs_reauth
+ * sin motivo) cuyo access token vence dentro del margen
  * (OAUTH_REFRESH_MARGIN_MINUTES, 30 por defecto), las agrupa por
  * plataforma y renueva hasta max_concurrency a la vez por plataforma.
+ * Los recolectores renuevan además en línea un token ya vencido antes
+ * de leer con él (_token.ts), pasando por renovarConexion.
  *
  * Por conexión:
  *   1. lee los tokens del SecretStore por secret_ref
@@ -95,7 +99,7 @@ export async function selectDueConnections(db: Queryable, payload: OAuthRefreshP
       `SELECT id, workspace_id, platform_id, handle, secret_ref, access_expires_at, refresh_expires_at
          FROM social_connection
         WHERE id = $1 AND ($2::uuid IS NULL OR workspace_id = $2)
-          AND status = 'active' AND deleted_at IS NULL AND access_mode = 'direct_oauth'`,
+          AND status IN ('active', 'error') AND deleted_at IS NULL AND access_mode = 'direct_oauth'`,
       [payload.connectionId, payload.workspaceId ?? null],
     );
     return rows;
@@ -107,7 +111,7 @@ export async function selectDueConnections(db: Queryable, payload: OAuthRefreshP
     `SELECT c.id, c.workspace_id, c.platform_id, c.handle, c.secret_ref, c.access_expires_at, c.refresh_expires_at
        FROM social_connection c
        JOIN unnest($1::text[], $2::timestamptz[]) AS m(platform_id, cutoff) ON m.platform_id = c.platform_id
-      WHERE c.status = 'active' AND c.deleted_at IS NULL AND c.access_mode = 'direct_oauth'
+      WHERE c.status IN ('active', 'error') AND c.deleted_at IS NULL AND c.access_mode = 'direct_oauth'
         AND c.access_expires_at IS NOT NULL AND c.access_expires_at <= m.cutoff
       ORDER BY c.access_expires_at ASC`,
     [platforms, dates],
@@ -150,7 +154,7 @@ export const oauthRefreshJob = defineJob<OAuthRefreshPayload>('oauth.refresh', a
           transient.push(conn.id);
           return;
         }
-        const outcome = await refreshOne(conn, ctx, now).catch((err: unknown): Outcome => {
+        const outcome = await renovarConexion(conn, ctx, now).catch((err: unknown): Outcome => {
           // Un error nuestro (base, almacén) no puede tumbar el lote ni
           // cambiar el estado de la cuenta: cuenta como transitorio.
           ctx.logger.error('error inesperado renovando una conexión', { connectionId: conn.id, workspaceId: conn.workspace_id, platform, err });
@@ -176,6 +180,26 @@ export const oauthRefreshJob = defineJob<OAuthRefreshPayload>('oauth.refresh', a
     metadata: { due: due.length, marginMinutes, renewed, needsReauth, transient },
   };
 });
+
+/**
+ * Una sola renovación en vuelo por conexión dentro de este proceso. Los
+ * recolectores renuevan en línea un token vencido (_token.ts) y pueden
+ * coincidir entre sí o con este job: TikTok ROTA el refresh token en cada
+ * llamada, así que dos renovaciones a la vez con el mismo refresh token
+ * acabarían en invalid_grant y en un needs_reauth sin motivo. La segunda
+ * espera a la primera y se lleva su resultado.
+ */
+const enVuelo = new Map<string, Promise<Outcome>>();
+
+export type RefreshOutcome = Outcome;
+
+export function renovarConexion(conn: ConnectionRow, ctx: JobContext, now: Date): Promise<Outcome> {
+  const pendiente = enVuelo.get(conn.id);
+  if (pendiente) return pendiente;
+  const p = refreshOne(conn, ctx, now).finally(() => { enVuelo.delete(conn.id); });
+  enVuelo.set(conn.id, p);
+  return p;
+}
 
 async function refreshOne(conn: ConnectionRow, ctx: JobContext, now: Date): Promise<Outcome> {
   const log = ctx.logger.child({ connectionId: conn.id, workspaceId: conn.workspace_id, platform: conn.platform_id });
@@ -233,12 +257,16 @@ async function refreshOne(conn: ConnectionRow, ctx: JobContext, now: Date): Prom
     await markTransient(ctx.db, conn);
     return { kind: 'transient', code: 'secret_store_write', retryHelps: false };
   }
+  // Una fila en 'error' (la lectura falló: cuenta borrada, @ que no
+  // existe) conserva ese estado y su detalle: el token renovado no
+  // arregla lo que la lectura dijo. Solo la fila 'active' se limpia.
   const updated = await ctx.db.query(
     `UPDATE social_connection
         SET access_expires_at = $3, refresh_expires_at = COALESCE($4, refresh_expires_at),
             scopes = CASE WHEN cardinality($5::text[]) > 0 THEN $5::text[] ELSE scopes END,
-            status = 'active', status_detail = NULL, consecutive_failures = 0
-      WHERE id = $1 AND workspace_id = $2 AND status = 'active'
+            status_detail = CASE WHEN status = 'error' THEN status_detail ELSE NULL END,
+            consecutive_failures = CASE WHEN status = 'error' THEN consecutive_failures ELSE 0 END
+      WHERE id = $1 AND workspace_id = $2 AND status IN ('active', 'error')
         AND access_expires_at IS NOT DISTINCT FROM $6`,
     [conn.id, conn.workspace_id, fresh.accessExpiresAt, fresh.refreshExpiresAt ?? null, fresh.scopes, asDate(conn.access_expires_at)],
   );

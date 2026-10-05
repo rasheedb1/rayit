@@ -943,6 +943,19 @@ export async function createInvoiceFromCampaign(
   const camp = rows[0];
   if (!camp) throw new Error('La campaña no existe en este workspace.');
   if (!camp.amount) throw new Error(`La campaña «${camp.name}» no tiene monto acordado: escríbelo a mano.`);
+  // Una factura viva por campaña: un doble clic en «Facturar» (o dos
+  // pestañas) creaba dos borradores por el mismo monto y «Por cobrar» y el
+  // flujo de caja lo sumaban dos veces (QA FIN, 4-oct-2026). La anulada no
+  // cuenta: facturar de nuevo tras anular es el camino normal.
+  const viva = await tx.query<{ id: string; number: string; status: string }>(
+    `SELECT i.id, i.number, i.status
+       FROM invoice i LEFT JOIN campaign ca ON ca.id = i.campaign_id AND ca.workspace_id = i.workspace_id
+      WHERE i.campaign_id = $1 AND i.status <> 'void' AND ${SCOPE_INVOICE}
+      ORDER BY i.issued_on DESC, i.number DESC LIMIT 1`,
+    [campaignId],
+  );
+  const previa = viva.rows[0];
+  if (previa) throw new Error(`La campaña «${camp.name}» ya tiene la factura ${previa.number}: ábrela desde Finanzas. Si hace falta otra, anula esa primero.`);
 
   // La configuración manda también aquí: es el camino del botón
   // «Facturar» de Campañas (CAM-1), y una factura creada desde una
