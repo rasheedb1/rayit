@@ -119,6 +119,32 @@ export async function withPublicShare<T>(fn: (tx: PublicShareTx) => Promise<T>):
   return db.withPublicShare(fn);
 }
 
+/**
+ * Abre la base del modo demo al arrancar el servidor, FUERA de cualquier
+ * petición (la llama instrumentation.ts). Con DATABASE_URL, en producción
+ * o en las pruebas no hace nada: ahí la base se abre con la primera
+ * consulta, como siempre.
+ *
+ * Por qué (CIM-12, r4): abrir el embebido son miles de `await` seguidos
+ * (cargar la foto, sembrar la demo encima, volcarla y abrirla). Dentro de
+ * una petición de `next dev`, esa cadena quedaba en el contexto async del
+ * render de React, y la primera página que abría la base daba 500 con
+ * «failed to pipe response · RangeError: Maximum call stack size
+ * exceeded»; la segunda ya respondía. Pasaba desde que el modo demo abre
+ * desde la foto (snapshot: true); antes no. Abierta aquí, las peticiones
+ * solo esperan una promesa ya resuelta.
+ */
+export async function abrirBaseDeLaDemo(): Promise<void> {
+  if (process.env.DATABASE_URL || process.env.NODE_ENV === "production" || process.env.NODE_ENV === "test") return;
+  try {
+    await getDb();
+  } catch (err) {
+    // Sin base no se arranca a medias: la primera petición lo vuelve a
+    // intentar (getDb olvida la promesa fallida) y enseña su error.
+    console.warn("[db] No se pudo abrir la base de la demo al arrancar:", err instanceof Error ? err.message : err);
+  }
+}
+
 /** Contra qué corre la web: 'postgres' (DATABASE_URL) o 'embedded' (modo demo). */
 export async function getDbMode(): Promise<DbMode> {
   return (await getDb()).mode;
