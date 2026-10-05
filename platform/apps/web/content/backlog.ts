@@ -90,9 +90,8 @@ export const STORIES: readonly Story[] = [
     title: "Monorepo listo",
     desc: "apps/web con Next.js + TypeScript, packages/db con Drizzle, apps/worker con pg-boss, turbo corriendo dev, typecheck, lint y test. Un package.json por paquete.",
     done: "make dev levanta los tres procesos y pnpm turbo run typecheck lint pasa en CI.",
-    status: "bloqueada",
-    note:
-      "ESTADO (22-sep, pulido r1): monorepo, `pnpm verificar` y build en verde; una sola frontera de error en (app) y withWorkspace comprueba que el workspace existe (el alta de CIM-3 no pasa por ahí). BLOQUEADA por dos comandos en Supabase con el token de administración: GRANT mc_worker TO mc_migrator y CREATE SCHEMA pgboss (docs/propuestas/CON-2.md §3.1). Vuelve a «hecho» cuando `pnpm --filter @mc/worker dev` arranque el runner contra Supabase. Historia por rondas: docs/propuestas/CIM-2.md §6.2.",
+    status: "hecho",
+    note: "4-oct: hecha. mc_worker_login (miembro de mc_worker) existe desde el 28-sep y el worker corre por turnos en la web (/api/cron/tick, CIM-7); el proceso largo con pg-boss no se usa en producción, así que el GRANT y el esquema pgboss que la bloqueaban ya no hacen falta.",
   },
   {
     id: "CIM-2", module: "CIM", owner: "rasheed", size: "M", sprint: 1, deps: ["CIM-1"],
@@ -182,7 +181,7 @@ export const STORIES: readonly Story[] = [
     desc: "El repositorio de GitHub conectado al proyecto de Vercel para que cada merge a main publique solo; el worker corre por turnos en la propia web (/api/cron/tick), llamado cada minuto por pg_cron de Supabase (Hobby) y, con Vercel Pro, por Vercel Cron.",
     done: "Un merge a main aparece en la URL sin correr ningún comando.",
     status: "en_curso",
-    note: "28-sep (r5): el worker por turnos está hecho y probado sin red: runTick en @mc/worker/tick (reclamo atómico por job, presupuesto de 45 s que corta y retoma sin gastar intentos, una corrida que lanza no tumba el turno) y /api/cron/tick con Bearer en tiempo constante, que carga el worker solo tras el Bearer; make cron.install/status/uninstall, con cron.status en rojo si un job no cabe en el turno y la proyección de GB-h contra el cupo de Hobby (Hobby es de uso no comercial: los números y el umbral para pasar a Pro, en el README). --once sigue igual (sin backoff). Lo de runner/ va en dos PR para Nicolás, ramas rasheed/CIM-7-runner-1 (imprescindible) y rasheed/CIM-7-runner-2 (opcional): falta abrirlos y su aprobación explícita del 1 antes del merge a main; el enlace del PR va aquí. Pendiente humano, en este orden: crear mc_worker_login (WRK.md §1.1) y ponerlo como WORKER_DATABASE_URL en Vercel; el GRANT de pgboss.job a mc_worker (CON-2 §3.3); openssl rand -hex 32 como CRON_SECRET en Vercel y make vercel.deploy PROD=1; make cron.install con el mismo secreto (Vault de Supabase) y make cron.status en verde. Sigue pendiente conectar GitHub a Vercel. Detalle: apps/worker/README.md, «Por turnos».",
+    note: "4-oct: el turno está en producción (runTick y /api/cron/tick con Bearer) y el vault tiene WORKER_DATABASE_URL (mc_worker_login, desde el 28-sep) y CRON_SECRET. Falta el disparador: `make cron.status` dice que pg_cron y pg_net no están instalados en Supabase, así que nada llama al turno. Pendiente humano: `make cron.install` con el mismo CRON_SECRET y `make cron.status` en verde; y conectar GitHub a Vercel para que un merge a main publique solo (hoy se publica con make vercel.deploy PROD=1).",
   },
   {
     id: "CIM-8", module: "CIM", owner: "nicolas", size: "S", sprint: 1, deps: ["CIM-2"],
