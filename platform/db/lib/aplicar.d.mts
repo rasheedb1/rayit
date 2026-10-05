@@ -20,6 +20,8 @@ export interface ApplyMigrationsResult {
 export interface ApplySeedsOptions {
   /** Directorio con *.sql; por defecto db/seed. */
   dir?: string;
+  /** El SQL que se corre en lugar del de cada archivo (solo pruebas: el reloj movido). */
+  transformar?: (sql: string, file: string) => string;
   onApplied?: (file: string, ms: number) => void;
 }
 

@@ -156,13 +156,18 @@ export class SeedFailedError extends Error {
  * no entra nada.
  *
  * @param {(sql: string) => Promise<{ rows: any[] }>} exec
- * @param {{ dir?: string, onApplied?: (file: string, ms: number) => void }} [opts]
+ * `opts.transformar` recibe el SQL de cada seed y devuelve el que se
+ * corre. Solo lo usan las pruebas que siembran con el reloj movido
+ * (desplazarReloj de db/seed/verify/reloj.mjs); `make seed` no lo pasa.
+ *
+ * @param {{ dir?: string, transformar?: (sql: string, file: string) => string, onApplied?: (file: string, ms: number) => void }} [opts]
  */
 export async function applySeeds(exec, opts = {}) {
   const dir = opts.dir ?? SEED_DIR;
   const files = await listSql(dir);
   for (const file of files) {
-    const sql = await readFile(join(dir, file), 'utf8');
+    const original = await readFile(join(dir, file), 'utf8');
+    const sql = opts.transformar ? opts.transformar(original, file) : original;
     const t0 = Date.now();
     try {
       await exec('BEGIN');
