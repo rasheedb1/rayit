@@ -616,13 +616,26 @@ sitio donde el verde tiene que ser incuestionable.
 Las suites levantan PGlite (WASM) y algunas esperan a pg-boss con
 tiempos reales. Lo que las hace deterministas (CIM-12):
 
-- **El esquema se migra una vez por contenido de `db/migrations`**, no
-  una vez por archivo: `db/lib/foto.mjs` guarda la base migrada en
-  `node_modules/.cache/mc-pglite/` (con candado y rename atómico, porque
-  vitest arranca diez procesos a la vez) y cada apertura la carga en
-  menos de un segundo. Los seeds no van a disco —se siembran relativos a
-  `now()`— sino una vez por proceso encima de la foto. Cambiar una
-  migración da otra foto; `MC_PGLITE_FOTO=0` lo apaga.
+- **El esquema se migra una vez por huella**, no una vez por archivo:
+  `db/lib/foto.mjs` guarda la base migrada en
+  `node_modules/.cache/mc-pglite/` y cada apertura la carga en menos de
+  un segundo. La huella cubre las migraciones, las extensiones, el
+  runner (`aplicar.mjs`), `foto.mjs` y el módulo que prepara la base:
+  cambiar cualquiera da otra foto. El worker y los conectores usan la
+  misma `abrirSuperusuario`; el embebido, la suya con los roles de
+  Supabase. `MC_PGLITE_FOTO=0` lo apaga y `MC_PGLITE_FOTO_DIR` la manda
+  a otra carpeta.
+- **El candado de la foto no deja a nadie esperando a un muerto.** Quien
+  construye escribe su `pid@host` y renueva el mtime cada 2 s. Si muere
+  (Ctrl-C, `kill -9`, el agente que se reinicia), el siguiente ve que el
+  pid ya no existe y la construye él; a los 10 s de espera avisa por
+  stderr con el pid y la ruta del candado. `db/lib/foto.test.mjs` lo
+  prueba con procesos de verdad.
+- **Los seeds se siembran una vez por proceso**, o **una vez por
+  corrida** si está `MC_PGLITE_CORRIDA` (la fija el `globalSetup` de
+  vitest de la web): entonces la foto sembrada va a una carpeta de esa
+  corrida y la cargan todos sus procesos. No se guarda entre corridas
+  porque los seeds cuentan desde `now()` con precisión de horas.
 - **`@mc/db` corre con `--test-isolation=none`**: un solo proceso, y
   las bases de todos los archivos salen de la misma foto sembrada. Todos
   los `before` de nivel superior cuelgan de la prueba raíz y arrancan a
@@ -635,16 +648,24 @@ tiempos reales. Lo que las hace deterministas (CIM-12):
   con otros 44 workers vivos en el mismo hilo, un `before` sin techo
   propio tumbaba las 422 pruebas, y los conteos de llamadas de un
   archivo se cruzaban con los de otro.
-- **Ninguna prueba clava una cifra que dependa del día.** La demo se
-  siembra relativa a hoy pero los posts de las campañas tienen fecha
-  fija, así que la mediana de la línea base cambia con el día; las
-  pruebas comparan contra `test/demo.ts` (la tabla), no contra el número
-  de un día. `MC_RELOJ_DIAS=N` con `scripts/pruebas/reloj.mjs` corre la
-  suite «dentro de N días», y `scripts/estres-verificar.sh
-  --dias-rotando` pasa por los siete días de la semana.
+- **Ninguna prueba sobre la demo de hoy clava una cifra que dependa del
+  día.** La demo se siembra relativa a hoy pero los posts de las
+  campañas tienen fecha fija, así que la mediana de la línea base cambia
+  con el día. Esas pruebas comparan contra el oráculo de `test/demo.ts`
+  (la mediana de la tabla pasada por `calcularResultado` de @mc/core,
+  sin copiar la fórmula), y las cifras fijas (4,496× para Café Alma, los
+  cinco mejores videos) se comprueban en `test/demo-anclada.test.ts`,
+  que siembra como si fuera el 28-sep con `createEmbeddedDb({ relojDias:
+  diasHasta(ANCLA_DEMO) })`. `MC_RELOJ_DIAS=N` con
+  `scripts/pruebas/reloj.mjs` corre la suite «dentro de N días», y
+  `scripts/estres-verificar.sh --dias-rotando` pasa por los siete días.
+- **Dos `pnpm verificar` a la vez como mucho en toda la máquina**
+  (`scripts/verificar.sh`): el tercero espera turno y lo dice.
 
-`scripts/estres-verificar.sh N` corre `pnpm verificar` N veces, de a dos
-a la vez, y cuenta las pruebas fallidas o canceladas.
+`make verificar.estres N=10 P=2` (o `scripts/estres-verificar.sh --help`)
+corre `pnpm verificar` N veces, de a P a la vez, y cuenta por corrida las
+pruebas fallidas o canceladas, los archivos en FAIL y la carga de la
+máquina.
 
 ## Reglas del proyecto que este paquete impone
 
@@ -764,7 +785,9 @@ a la vez, y cuenta las pruebas fallidas o canceladas.
 Cada archivo de `test/` abre su propia base embebida en su `before`,
 desde la foto (arriba): décimas de segundo, más una siembra por proceso.
 `--test-timeout` es de 300 s y cada `before` que abre la base lleva
-`SETUP_TIMEOUT` de `test/pglite.ts`: con `--test-isolation=none`, un
+`SETUP_TIMEOUT` de `test/pglite.ts` (`SETUP_TIMEOUT_MS` de
+`test/tiempos.ts`, el mismo techo que usan los `beforeAll` de la web en
+`apps/web/lib/testing/tiempos.ts`): con `--test-isolation=none`, un
 `before` que se pasa **cancela la suite entera del paquete** y el
 informe dice `pass 0, cancelled 704` sin señalar quién tardó. Un archivo
 nuevo usa el mismo límite, sin un número propio.

@@ -36,6 +36,14 @@ pnpm --filter @mc/web build
 pnpm --filter @mc/web test        # vitest
 ```
 
+Las pruebas (CIM-12): vitest abre un tercio de los núcleos
+(`MC_TEST_WORKERS` lo fija) y su `globalSetup` siembra la demo una vez
+por corrida para todos los procesos (`vitest.global-setup.ts`). Ningún
+archivo lleva un techo de tiempo propio: los `beforeAll` que abren la
+base usan `SETUP_TIMEOUT_MS`, el mismo de @mc/db, y las pruebas que la
+consultan `PRUEBA_DB_TIMEOUT_MS`, los dos de `lib/testing/tiempos.ts`
+(con su porqué). Un archivo nuevo usa esas constantes, no un número.
+
 Desde CIM-3 el workspace sale de la **sesión**, no de una variable.
 `DEMO_WORKSPACE_ID` sigue existiendo como atajo de desarrollo y solo se
 lee en una copia **sin** llaves de Supabase Auth; con las llaves, sin

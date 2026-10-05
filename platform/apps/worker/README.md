@@ -1127,9 +1127,11 @@ faltara, las pruebas fallan.
 
 **Los tiempos** (CIM-12): cada archivo corre en SU proceso, uno detrás
 de otro (`--test-isolation=process --test-concurrency=1`), y abre su
-base desde la foto del esquema migrado que comparte con `@mc/db` y
-`@mc/connectors` (`db/lib/foto.mjs`): se migra una vez por contenido de
-`db/migrations`, no en cada archivo. Con `--test-isolation=none` los
+base desde la foto del esquema migrado que comparte con
+`@mc/connectors` (`abrirSuperusuario` de `db/lib/foto.mjs`, la misma
+función para los dos): se migra una vez por huella (migraciones,
+runner y `foto.mjs`), no en cada archivo, y un candado de un proceso
+muerto no hace esperar a nadie. Con `--test-isolation=none` los
 `before` de todos los archivos arrancaban a la vez su worker de pg-boss
 y seguían vivos hasta el final: cuarenta workers sondeando en el mismo
 hilo, un `before` lento que tumbaba la suite entera y conteos de
