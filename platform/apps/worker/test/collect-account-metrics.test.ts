@@ -125,6 +125,58 @@ test('sin credenciales, la plataforma se salta y se avisa; nada falla', async ()
   }
 });
 
+test('RES-3 · el token rechazado deja la cuenta en needs_reauth CON su aviso crítico, en la misma transacción; otra corrida esa semana no lo repite', async () => {
+  // El user.info de la cuenta autorizada responde 401 access_token_invalid
+  // (la forma de video.list.invalid_token, de la doc de errores de TikTok).
+  const [info] = await loadFixtures('tiktok', [['user.info', 'ok']]);
+  const rechazado: Fixture = {
+    ...info!,
+    response: {
+      status: 401,
+      body: { data: {}, error: { code: 'access_token_invalid', message: 'The access token is invalid or not found in the request.', log_id: 'res3' } },
+    },
+  };
+  const rFetch = new FixtureFetch([
+    rechazado,
+    ...(await loadFixtures('instagram', [['business_discovery', 'ok']])),
+    ...(await loadFixtures('youtube', [['channels.list', 'handle.ok']])),
+    ...(await loadFixtures('tiktok', [['oembed.profile', 'ok'], ['oembed.profile', 'not_found']])),
+  ]);
+  const h4 = await startHarness({ jobs: allJobs, now: () => NOW, seed, env: ENV, http: { fetch: rFetch.fetch } });
+  await h4.secrets.set('vault:tt-auth', AUTH_TOKENS);
+  try {
+    const corrida = async (n: number) => {
+      await h4.worker.boss.send('collect.account_metrics', { source: 'test' });
+      return waitFor(async () => {
+        const runs = (await jobRuns(h4.db, 'collect.account_metrics')).filter((r) => r.status !== 'running');
+        return runs.length >= n ? runs[n - 1] : undefined;
+      }, { label: `token rechazado, corrida ${n}`, timeoutMs: 30_000 });
+    };
+    const run = await corrida(1);
+    assert.equal(run.status, 'ok', run.error ?? '');
+    assert.ok((run.metadata as { errored: string[] }).errored.includes(ids.auth));
+
+    const estado = await h4.db.query<{ status: string }>(`SELECT status FROM social_connection WHERE id = $1`, [ids.auth]);
+    assert.equal(estado.rows[0]!.status, 'needs_reauth');
+    const avisos = async () =>
+      (await h4.db.query<{ severity: string; title_es: string; action_url: string }>(
+        `SELECT severity, title_es, action_url FROM notification WHERE kind = 'connection_error' AND entity_type = 'social_connection' AND entity_id = $1`,
+        [ids.auth])).rows;
+    const [aviso, ...otros] = await avisos();
+    assert.deepEqual(otros, []);
+    assert.equal(aviso!.severity, 'critical');
+    assert.equal(aviso!.title_es, 'Vuelve a conectar tu cuenta de TikTok @laura.cocinafacil.auth');
+    assert.equal(aviso!.action_url, '/conexiones');
+
+    // La cuenta en needs_reauth ya no es de las que lee la corrida, y si lo
+    // fuera, el aviso de la semana no se repite.
+    assert.equal((await corrida(2)).status, 'ok');
+    assert.equal((await avisos()).length, 1);
+  } finally {
+    await h4.stop();
+  }
+});
+
 test('CON-12 · con ENSEMBLEDATA_TOKEN, TikTok deja seguidores y videos (las vistas llegan por video), la fila pasa a aggregator y el token no queda en ningún lado', async () => {
   const ED_TOKEN = 'ed-token-worker-SECRETO';
   // El proveedor responde en la misma URL para cualquier @: aquí se acota
