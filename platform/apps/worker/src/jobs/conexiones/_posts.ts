@@ -20,6 +20,7 @@ import {
 } from '@mc/connectors';
 import type { Queryable } from '../../runner/db.ts';
 import type { JobContext, JobPayload } from '../../runner/registry.ts';
+import { connectionErrorSeverity, connectionErrorTitle, type BrokenAccountKind } from './aviso-cuenta.ts';
 import { PLATFORM_NAMES } from './oauth-refresh.ts';
 
 export interface CollectPayload extends JobPayload {
@@ -168,23 +169,35 @@ export type BrokenAccount = Pick<CollectableAccount, 'id' | 'workspace_id' | 'pl
  * la cuenta. Es lo que «Lo que importa esta semana» enseña con su enlace
  * a Conexiones; sin aviso, la cuenta caía en silencio.
  *
- * Como mucho uno por cuenta y por semana: la cuenta en 'error' se vuelve
- * a intentar cada día (selectCollectableAccounts) y cada intento fallido
- * pasa por aquí. Si sigue rota a la semana, otro aviso: sigue importando.
- * markNeedsReauth y oauth.refresh no pasan por aquí: ya avisaban, y una
- * cuenta en needs_reauth no se vuelve a intentar.
+ * También lo usa markNeedsReauth (el token rechazado al recolectar
+ * posts): el título y la severidad viven en aviso-cuenta.ts, y
+ * oauth.refresh toma de allí el mismo título.
+ *
+ * Como mucho uno por cuenta y por semana para la MISMA avería: la cuenta
+ * en 'error' se vuelve a intentar cada día (selectCollectableAccounts) y
+ * cada intento fallido pasa por aquí. Se escribe otro aviso si:
+ *   - pasó una semana y sigue rota (sigue importando);
+ *   - la avería subió de gravedad: un «No podemos leer» (warning) no
+ *     calla el «Vuelve a conectar» (critical) del día siguiente, que
+ *     tiene que ir arriba del bloque y no debajo de los cobros;
+ *   - la cuenta se leyó bien después del último aviso
+ *     (last_synced_at): es otra avería, aunque caiga en la misma semana.
+ * Corre dentro de la transacción de quien cambia el estado de la cuenta:
+ * el estado y su aviso entran juntos o no entra ninguno.
  */
-export async function notifyBrokenAccount(db: Queryable, acc: BrokenAccount, kind: 'reauth' | 'unreadable', detailEs: string): Promise<void> {
-  const red = `${platformName(acc.platform_id)}${acc.handle ? ` (${acc.handle})` : ''}`;
-  const titulo = kind === 'reauth' ? `Vuelve a conectar tu cuenta de ${red}` : `No podemos leer tu cuenta de ${red}`;
+export async function notifyBrokenAccount(db: Queryable, acc: BrokenAccount, kind: BrokenAccountKind, detailEs: string): Promise<void> {
   await db.query(
     `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
      SELECT $1::uuid, 'connection_error', $2, $3, $4, 'social_connection', $5::uuid, '/conexiones'
       WHERE NOT EXISTS (
         SELECT 1 FROM notification n
          WHERE n.workspace_id = $1::uuid AND n.kind = 'connection_error' AND n.entity_type = 'social_connection'
-           AND n.entity_id = $5::uuid AND n.dismissed_at IS NULL AND n.created_at > now() - interval '7 days')`,
-    [acc.workspace_id, kind === 'reauth' ? 'critical' : 'warning', titulo, detailEs, acc.id],
+           AND n.entity_id = $5::uuid AND n.dismissed_at IS NULL AND n.created_at > now() - interval '7 days'
+           AND NOT ($2::text = 'critical' AND n.severity <> 'critical')
+           AND n.created_at >= coalesce(
+                 (SELECT s.last_synced_at FROM social_connection s WHERE s.id = $5::uuid AND s.workspace_id = $1::uuid),
+                 '-infinity'::timestamptz))`,
+    [acc.workspace_id, connectionErrorSeverity(kind), connectionErrorTitle(platformName(acc.platform_id), acc.handle, kind), detailEs, acc.id],
   );
 }
 
@@ -204,6 +217,8 @@ export async function markAccountError(ctx: JobContext, acc: CollectableAccount,
 /**
  * El token del dueño ya no sirve: needs_reauth y una notificación, como
  * hace oauth.refresh. Sin esto el creador no se entera hasta que mira.
+ * El aviso es el de notifyBrokenAccount: mismo título, misma severidad,
+ * misma regla para no repetirse.
  */
 export async function markNeedsReauth(ctx: JobContext, acc: CollectableAccount, detailEs: string): Promise<void> {
   await ctx.db.transaction(async (tx) => {
@@ -213,11 +228,7 @@ export async function markNeedsReauth(ctx: JobContext, acc: CollectableAccount, 
         WHERE id = $1 AND workspace_id = $2`,
       [acc.id, acc.workspace_id, detailEs],
     );
-    await tx.query(
-      `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
-       VALUES ($1, 'connection_error', 'critical', $2, $3, 'social_connection', $4, '/conexiones')`,
-      [acc.workspace_id, `Vuelve a conectar tu cuenta de ${platformName(acc.platform_id)}${acc.handle ? ` (${acc.handle})` : ''}`, detailEs, acc.id],
-    );
+    await notifyBrokenAccount(tx, acc, 'reauth', detailEs);
   });
 }
 

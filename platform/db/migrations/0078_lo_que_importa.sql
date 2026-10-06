@@ -27,20 +27,42 @@
 -- con app.user_id NULL— la fila lleva user_id NULL y vale para esa
 -- demo, igual que la demo entera es de nadie.
 --
+-- «Entendido» se puede deshacer, y sigue sin borrarse nada. Cada gesto
+-- es una fila nueva: 'ack' (Entendido) o 'undo' (Deshacer). Lo que vale
+-- es el ÚLTIMO gesto de esa persona sobre ese aviso. Así un clic por
+-- error no esconde para siempre un cobro vencido (la pantalla ofrece
+-- «Deshacer» justo después), y la constancia de lo que pasó no se
+-- reescribe: no hace falta ni UPDATE ni DELETE, ni una función
+-- SECURITY DEFINER que los rodee.
+--
 -- Aislamiento:
 --   · RLS por workspace con FORCE, como todas (0010, 0024).
 --   · Al escribir, además, la fila es de quien escribe: WITH CHECK pide
 --     user_id = current_user_id() (o los dos NULL en la demo). Nadie
---     marca leído por otro.
---   · mc_app solo lee e inserta: un «Entendido» no se corrige ni se
---     borra (la constancia de que alguien vio el aviso no se reescribe).
+--     marca leído —ni deshace— por otro.
+--   · mc_app solo lee e inserta: un gesto no se corrige ni se borra.
 --     Ni UPDATE ni DELETE (packages/db/src/esquema.ts,
 --     PRIVILEGIOS_DE_LA_APP).
 --   · Las tres claves ajenas llevan assert_reference_visible (0025 §3):
 --     nadie apunta a un aviso, una persona o un espacio que no ve.
 --
+-- Rendimiento. El bloque elige, por cada cosa (video, cuenta, factura,
+-- negocio, cuenta de envío), su aviso MÁS RECIENTE (DISTINCT ON
+-- entity_id … ORDER BY created_at DESC), y el productor de las cuentas
+-- rotas pregunta lo mismo antes de escribir. El único índice útil de
+-- 0009 era (workspace_id, created_at DESC), y sales.follow_ups y
+-- finance.reminders escriben a diario: sin el índice de abajo, la
+-- consulta de arriba del panel recorría todo el historial del espacio.
+-- Parcial (entity_id IS NOT NULL): los avisos sin cosa no lo usan.
+--
 -- Idempotente: IF NOT EXISTS, DROP … IF EXISTS antes de cada CREATE.
 -- =====================================================================
+
+-- Para el filtro de cada rama del bloque: el aviso más reciente de cada
+-- cosa, por espacio, tipo de cosa y cosa (ver «Rendimiento» arriba).
+CREATE INDEX IF NOT EXISTS notification_entity_recent_idx
+  ON notification (workspace_id, entity_type, entity_id, created_at DESC)
+  WHERE entity_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS notification_ack (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -48,13 +70,17 @@ CREATE TABLE IF NOT EXISTS notification_ack (
   notification_id     uuid NOT NULL REFERENCES notification(id) ON DELETE CASCADE,
   -- NULL solo en el modo demo, sin sesión (ver arriba).
   user_id             uuid REFERENCES app_user(id) ON DELETE CASCADE,
-  acked_at            timestamptz NOT NULL DEFAULT now()
+  -- 'ack' = «Entendido»; 'undo' = «Deshacer». Vale el último.
+  action              text NOT NULL DEFAULT 'ack' CHECK (action IN ('ack', 'undo')),
+  -- clock_timestamp() y no now(): dos gestos de la misma transacción
+  -- (una prueba, un script) no empatan, y «el último» queda claro.
+  created_at          timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
--- Un «Entendido» por aviso y persona; el de la demo (user_id NULL)
--- también es uno solo, de ahí NULLS NOT DISTINCT (como 0046).
-CREATE UNIQUE INDEX IF NOT EXISTS notification_ack_uk
-  ON notification_ack (workspace_id, notification_id, user_id) NULLS NOT DISTINCT;
+-- El último gesto de una persona sobre un aviso. Sin UNIQUE: cada gesto
+-- es su fila. El de la demo (user_id NULL) cuenta como una persona más.
+CREATE INDEX IF NOT EXISTS notification_ack_last_idx
+  ON notification_ack (workspace_id, notification_id, user_id, created_at DESC);
 
 DO $$
 BEGIN
@@ -95,7 +121,7 @@ CREATE TRIGGER ref_visible_user_id
   EXECUTE FUNCTION assert_reference_visible('user_id', 'app_user', 'id');
 
 COMMENT ON TABLE notification_ack IS
-  'El «Entendido» de una persona sobre un aviso de notification (RES-3, «Lo que importa esta semana»). Es de la '
-  'persona y no del aviso: notification.read_at ya significa «ya lo mandé» en los recordatorios de cobro (FIN-4) y '
-  'casi todos los avisos van a todo el espacio. user_id NULL solo en el modo demo, sin sesión. mc_app lee e inserta '
-  'la suya; no se corrige ni se borra.';
+  'El «Entendido» (y su «Deshacer») de una persona sobre un aviso de notification (RES-3, «Lo que importa esta '
+  'semana»). Es de la persona y no del aviso: notification.read_at ya significa «ya lo mandé» en los recordatorios '
+  'de cobro (FIN-4) y casi todos los avisos van a todo el espacio. Cada gesto es una fila y vale el último. user_id '
+  'NULL solo en el modo demo, sin sesión. mc_app lee e inserta las suyas; no se corrigen ni se borran.';

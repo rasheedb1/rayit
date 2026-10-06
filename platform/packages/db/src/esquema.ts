@@ -1334,9 +1334,10 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
   notification_ack: {
     permite: ['SELECT', 'INSERT'],
     motivo:
-      'el «Entendido» de una persona sobre un aviso (0078, RES-3): se anota y no se corrige ni se borra. Con UPDATE o ' +
-      'DELETE, quien lo dio podría deshacer la constancia de que lo vio; y la política de INSERT exige que la fila sea de ' +
-      'quien escribe (user_id = current_user_id()), así que nadie marca leído por otro',
+      'el «Entendido» y el «Deshacer» de una persona sobre un aviso (0078, RES-3): cada gesto es una fila nueva y vale ' +
+      'el último, así que deshacer no necesita ni UPDATE ni DELETE. Con ellos, quien lo dio podría reescribir la ' +
+      'constancia de lo que vio; y la política de INSERT exige que la fila sea de quien escribe (user_id = ' +
+      'current_user_id()), así que nadie marca leído ni deshace por otro',
   },
   outbound_llm_call: {
     permite: ['SELECT', 'INSERT'],

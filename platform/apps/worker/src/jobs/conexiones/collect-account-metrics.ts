@@ -186,25 +186,30 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
           }
         } catch (err) {
           if (isPlatformApiError(err) && err.kind === 'auth') {
-            // El token de una cuenta autorizada ya no sirve: needs_reauth, como hace oauth.refresh.
-            await ctx.db.query(
-              `UPDATE social_connection SET status = 'needs_reauth', status_detail = $3, last_error_at = now(), consecutive_failures = consecutive_failures + 1
-                WHERE id = $1 AND workspace_id = $2`,
-              [acc.id, acc.workspace_id, err.messageEs],
-            );
-            // Sin aviso, la cuenta caía en silencio: collect.posts no vuelve a intentar una en needs_reauth (RES-3).
-            await notifyBrokenAccount(ctx.db, acc, 'reauth', err.messageEs);
+            // El token de una cuenta autorizada ya no sirve: needs_reauth, como hace oauth.refresh, y su aviso
+            // en la MISMA transacción (RES-3): collect.posts no vuelve a intentar una cuenta en needs_reauth,
+            // así que una cuenta que cambiara de estado sin aviso caería en silencio.
+            await ctx.db.transaction(async (tx) => {
+              await tx.query(
+                `UPDATE social_connection SET status = 'needs_reauth', status_detail = $3, last_error_at = now(), consecutive_failures = consecutive_failures + 1
+                  WHERE id = $1 AND workspace_id = $2`,
+                [acc.id, acc.workspace_id, err.messageEs],
+              );
+              await notifyBrokenAccount(tx, acc, 'reauth', err.messageEs);
+            });
             errored.push(acc.id);
             log.warn('la plataforma rechazó el token de la cuenta autorizada', { code: err.code });
             return;
           }
           if (err instanceof PublicLookupError && (err.code === 'not_found' || err.code === 'not_discoverable' || err.code === 'invalid_handle')) {
-            await ctx.db.query(
-              `UPDATE social_connection SET status = 'error', status_detail = $3, last_error_at = now(), consecutive_failures = consecutive_failures + 1
-                WHERE id = $1 AND workspace_id = $2`,
-              [acc.id, acc.workspace_id, err.messageEs],
-            );
-            await notifyBrokenAccount(ctx.db, acc, 'unreadable', err.messageEs);
+            await ctx.db.transaction(async (tx) => {
+              await tx.query(
+                `UPDATE social_connection SET status = 'error', status_detail = $3, last_error_at = now(), consecutive_failures = consecutive_failures + 1
+                  WHERE id = $1 AND workspace_id = $2`,
+                [acc.id, acc.workspace_id, err.messageEs],
+              );
+              await notifyBrokenAccount(tx, acc, 'unreadable', err.messageEs);
+            });
             errored.push(acc.id);
             log.warn('la cuenta ya no se puede leer', { code: err.code });
           } else {

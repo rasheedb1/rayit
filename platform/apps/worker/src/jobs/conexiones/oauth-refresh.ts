@@ -34,6 +34,7 @@ import { envInt } from '../../runner/config.ts';
 import type { JobDatabase, Queryable } from '../../runner/db.ts';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
 import { mapLimit } from '../../runner/concurrency.ts';
+import { connectionErrorTitle } from './aviso-cuenta.ts';
 
 export interface OAuthRefreshPayload extends JobPayload {
   /** Renovar solo esta conexión (p. ej. desde la pantalla Conexiones), sin mirar el margen. */
@@ -263,7 +264,8 @@ async function markNeedsReauth(db: JobDatabase, conn: ConnectionRow, platformNam
     await tx.query(
       `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
        VALUES ($1, 'connection_error', 'critical', $2, $3, 'social_connection', $4, '/conexiones')`,
-      [conn.workspace_id, `Vuelve a conectar tu cuenta de ${platformName}${conn.handle ? ` (${conn.handle})` : ''}`, detailEs, conn.id],
+      // El título vive en aviso-cuenta.ts (RES-3): el mismo en los tres caminos que avisan de una cuenta rota.
+      [conn.workspace_id, connectionErrorTitle(platformName, conn.handle, 'reauth'), detailEs, conn.id],
     );
   });
   log.warn('conexión pasa a needs_reauth', { code });
