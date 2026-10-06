@@ -26,6 +26,7 @@
 import { createPublicProfileSources, isPlatformApiError, isPlatformId, PublicLookupError, type PublicProfileSources } from '@mc/connectors';
 import { auditAsJob } from '@mc/db';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
+import { notifyBrokenAccount } from './_posts.ts';
 import { mapLimit } from './oauth-refresh.ts';
 
 export interface CollectAccountMetricsPayload extends JobPayload {
@@ -191,6 +192,8 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
                 WHERE id = $1 AND workspace_id = $2`,
               [acc.id, acc.workspace_id, err.messageEs],
             );
+            // Sin aviso, la cuenta caía en silencio: collect.posts no vuelve a intentar una en needs_reauth (RES-3).
+            await notifyBrokenAccount(ctx.db, acc, 'reauth', err.messageEs);
             errored.push(acc.id);
             log.warn('la plataforma rechazó el token de la cuenta autorizada', { code: err.code });
             return;
@@ -201,6 +204,7 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
                 WHERE id = $1 AND workspace_id = $2`,
               [acc.id, acc.workspace_id, err.messageEs],
             );
+            await notifyBrokenAccount(ctx.db, acc, 'unreadable', err.messageEs);
             errored.push(acc.id);
             log.warn('la cuenta ya no se puede leer', { code: err.code });
           } else {

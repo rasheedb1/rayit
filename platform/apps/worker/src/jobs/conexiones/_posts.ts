@@ -18,6 +18,7 @@ import {
   type PostSourceTarget,
   type PostSources,
 } from '@mc/connectors';
+import type { Queryable } from '../../runner/db.ts';
 import type { JobContext, JobPayload } from '../../runner/registry.ts';
 import { PLATFORM_NAMES } from './oauth-refresh.ts';
 
@@ -157,14 +158,47 @@ export function isAborted(err: unknown): boolean {
   return false;
 }
 
-/** La cuenta del creador no se puede leer: queda en 'error' con la razón en español. */
-export async function markAccountError(ctx: JobContext, acc: CollectableAccount, detailEs: string): Promise<void> {
-  await ctx.db.query(
-    `UPDATE social_connection
-        SET status = 'error', status_detail = $3, last_error_at = now(), consecutive_failures = consecutive_failures + 1
-      WHERE id = $1 AND workspace_id = $2`,
-    [acc.id, acc.workspace_id, detailEs],
+/** Lo que necesita el aviso de una cuenta rota: la cuenta, su espacio, su red y su @. */
+export type BrokenAccount = Pick<CollectableAccount, 'id' | 'workspace_id' | 'platform_id' | 'handle'>;
+
+/**
+ * El aviso de una cuenta que se rompió por un camino que no avisaba
+ * (RES-3): la cuenta que ya no se puede leer ('error', aquí y en
+ * collect.account_metrics) y el token rechazado al leer las métricas de
+ * la cuenta. Es lo que «Lo que importa esta semana» enseña con su enlace
+ * a Conexiones; sin aviso, la cuenta caía en silencio.
+ *
+ * Como mucho uno por cuenta y por semana: la cuenta en 'error' se vuelve
+ * a intentar cada día (selectCollectableAccounts) y cada intento fallido
+ * pasa por aquí. Si sigue rota a la semana, otro aviso: sigue importando.
+ * markNeedsReauth y oauth.refresh no pasan por aquí: ya avisaban, y una
+ * cuenta en needs_reauth no se vuelve a intentar.
+ */
+export async function notifyBrokenAccount(db: Queryable, acc: BrokenAccount, kind: 'reauth' | 'unreadable', detailEs: string): Promise<void> {
+  const red = `${platformName(acc.platform_id)}${acc.handle ? ` (${acc.handle})` : ''}`;
+  const titulo = kind === 'reauth' ? `Vuelve a conectar tu cuenta de ${red}` : `No podemos leer tu cuenta de ${red}`;
+  await db.query(
+    `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
+     SELECT $1::uuid, 'connection_error', $2, $3, $4, 'social_connection', $5::uuid, '/conexiones'
+      WHERE NOT EXISTS (
+        SELECT 1 FROM notification n
+         WHERE n.workspace_id = $1::uuid AND n.kind = 'connection_error' AND n.entity_type = 'social_connection'
+           AND n.entity_id = $5::uuid AND n.dismissed_at IS NULL AND n.created_at > now() - interval '7 days')`,
+    [acc.workspace_id, kind === 'reauth' ? 'critical' : 'warning', titulo, detailEs, acc.id],
   );
+}
+
+/** La cuenta del creador no se puede leer: queda en 'error' con la razón en español, y se avisa (RES-3). */
+export async function markAccountError(ctx: JobContext, acc: CollectableAccount, detailEs: string): Promise<void> {
+  await ctx.db.transaction(async (tx) => {
+    await tx.query(
+      `UPDATE social_connection
+          SET status = 'error', status_detail = $3, last_error_at = now(), consecutive_failures = consecutive_failures + 1
+        WHERE id = $1 AND workspace_id = $2`,
+      [acc.id, acc.workspace_id, detailEs],
+    );
+    await notifyBrokenAccount(tx, acc, 'unreadable', detailEs);
+  });
 }
 
 /**
