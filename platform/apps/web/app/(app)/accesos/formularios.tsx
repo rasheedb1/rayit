@@ -1,14 +1,15 @@
 "use client";
 
-import { useActionState, useEffect, useId, useRef, useState } from "react";
+import { startTransition, useActionState, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { Casilla } from "@mc/core";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmAction } from "@/components/ui/confirm-action";
 import { Field, Input, Select } from "@/components/ui/field";
 import type { ActionState } from "@/lib/forms";
 import { formatDate, type LocaleOpts } from "@/lib/format";
 import { MESSAGES } from "./_lib/messages";
-import { cambiarRol, invitar, quitarMiembro, renovarInvitacion, type InvitarState } from "./actions";
+import { cambiarRol, invitar, quitarMiembro, renovarInvitacion, revocarInvitacion, type InvitarState } from "./actions";
 
 const t = MESSAGES;
 
@@ -109,6 +110,22 @@ export function ResultadoInvitacion({ estado, fechas }: { estado: NonNullable<In
 }
 
 /**
+ * Envía un formulario a su acción SIN el reinicio que React 19 hace a
+ * un `<form action>` al terminar: ese reinicio vacía el correo y las
+ * casillas aunque la acción responda con un error, y deja el <select>
+ * controlado diciendo otra cosa que su estado. Con onSubmit, lo
+ * escrito se queda; cada formulario se vacía a mano solo cuando sale
+ * bien.
+ */
+function enviarSinReiniciar(accion: (fd: FormData) => void) {
+  return (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    startTransition(() => accion(fd));
+  };
+}
+
+/**
  * Invitar por correo. El rol se elige entre los que quien invita puede
  * dar; si es Mánager de creador aparecen las dos casillas, apagadas.
  */
@@ -127,6 +144,7 @@ export function InvitarForm({
   const formRef = useRef<HTMLFormElement>(null);
   const rol = roles.find((r) => r.id === roleId);
 
+  // Solo cuando sale bien se vacía: con un error, lo escrito se queda.
   useEffect(() => {
     if (estado.ok) {
       formRef.current?.reset();
@@ -136,7 +154,7 @@ export function InvitarForm({
 
   return (
     <div className="grid gap-4">
-      <form ref={formRef} action={accion} className="grid gap-4" noValidate>
+      <form ref={formRef} onSubmit={enviarSinReiniciar(accion)} className="grid gap-4" noValidate>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label={t.invitar.correo} help={t.invitar.correoAyuda} error={estado.errors?.email} required>
             <Input name="email" type="email" autoComplete="off" maxLength={254} />
@@ -171,7 +189,10 @@ export function InvitarForm({
 /**
  * «Cambiar rol» de una persona, en su misma fila: un botón que abre el
  * selector de rol y, si es Mánager de creador, sus casillas con lo que
- * tiene hoy marcado.
+ * tiene hoy marcado. Como ConfirmAction: al abrir, el foco va al
+ * selector; Escape o Cancelar cierran y lo devuelven al botón; al
+ * guardar, el formulario se queda abierto con el botón en carga y se
+ * cierra cuando la acción sale bien.
  */
 export function CambiarRol({
   userId,
@@ -190,17 +211,51 @@ export function CambiarRol({
   const [estado, accion, enviando] = useActionState<ActionState, FormData>(cambiarRol, {});
   const [elegido, setElegido] = useState(roleId);
   const rol = roles.find((r) => r.id === elegido);
+  const selectorRef = useRef<HTMLDivElement>(null);
+  const disparadorRef = useRef<HTMLSpanElement>(null);
+  const volverAlDisparador = useRef(false);
+  const estadoVisto = useRef(estado);
+  // El estado que había al abrir: su mensaje es de un intento anterior y no se repite.
+  const [estadoAlAbrir, setEstadoAlAbrir] = useState<ActionState | null>(null);
+
+  // La acción salió bien: se cierra y el foco vuelve al botón.
+  useEffect(() => {
+    if (estado === estadoVisto.current) return;
+    estadoVisto.current = estado;
+    if (estado.ok) cerrar();
+  }, [estado]);
 
   useEffect(() => {
-    if (estado.ok) setAbierto(false);
-  }, [estado]);
+    if (abierto) {
+      selectorRef.current?.querySelector("select")?.focus();
+    } else if (volverAlDisparador.current) {
+      volverAlDisparador.current = false;
+      disparadorRef.current?.querySelector("button")?.focus();
+    }
+  }, [abierto]);
+
+  function cerrar() {
+    volverAlDisparador.current = true;
+    setAbierto(false);
+    setElegido(roleId);
+  }
 
   if (!abierto) {
     return (
       <span className="inline-flex flex-col items-start gap-1">
-        <Button size="sm" variant="ghost" onClick={() => setAbierto(true)}>
-          {t.miembros.cambiarRol}
-        </Button>
+        <span ref={disparadorRef} className="inline-flex">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setEstadoAlAbrir(estado);
+              setAbierto(true);
+            }}
+            className="whitespace-nowrap"
+          >
+            {t.miembros.cambiarRol}
+          </Button>
+        </span>
         {estado.ok && (
           <span role="status" className="text-xs text-good">
             {t.miembros.guardado}
@@ -211,19 +266,31 @@ export function CambiarRol({
   }
 
   return (
-    <form action={accion} className="grid w-full gap-3 rounded-md border border-border bg-surface-2 p-3">
+    <form
+      onSubmit={enviarSinReiniciar(accion)}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !enviando) {
+          e.preventDefault();
+          cerrar();
+        }
+      }}
+      aria-busy={enviando || undefined}
+      className="grid w-full gap-3 rounded-md border border-border bg-surface-2 p-3"
+    >
       <input type="hidden" name="userId" value={userId} />
-      <Field label={t.invitar.rol} help={rol?.description ?? undefined} error={estado.errors?.roleId}>
-        <Select name="roleId" value={elegido} onChange={(e) => setElegido(e.target.value)} options={roles.map((r) => ({ value: r.id, label: r.label }))} />
-      </Field>
+      <div ref={selectorRef}>
+        <Field label={t.invitar.rol} help={rol?.description ?? undefined} error={estado.errors?.roleId}>
+          <Select name="roleId" value={elegido} onChange={(e) => setElegido(e.target.value)} options={roles.map((r) => ({ value: r.id, label: r.label }))} />
+        </Field>
+      </div>
       {rol?.conCasillas && <Casillas key={elegido} opciones={casillas} marcadas={elegido === roleId ? marcadas : []} />}
-      {estado.message && (
+      {estado.message && estado !== estadoAlAbrir && (
         <p role="alert" className="text-sm text-bad">
           {estado.message}
         </p>
       )}
       <div className="flex flex-wrap justify-end gap-2">
-        <Button size="sm" variant="ghost" onClick={() => setAbierto(false)}>
+        <Button size="sm" variant="ghost" onClick={cerrar} disabled={enviando}>
           {t.miembros.cancelar}
         </Button>
         <Button size="sm" type="submit" variant="primary" loading={enviando}>
@@ -235,80 +302,59 @@ export function CambiarRol({
 }
 
 /**
- * «Quitar» a una persona, en dos pasos y en el mismo sitio (el patrón de
- * ConfirmInline del kit). Va aparte porque aquí la acción puede
- * responder con una frase —«no se puede quitar al último dueño»— y
- * ConfirmInline solo sabe de acciones que no devuelven nada.
+ * «Quitar» a una persona, en dos pasos y en el mismo sitio, con
+ * ConfirmAction del kit: la acción puede responder con una frase —«no se
+ * puede quitar al último dueño»— y esa frase queda bajo el botón. Si la
+ * persona es la única dueña, el botón ni se ofrece: sale deshabilitado
+ * con el motivo (la acción y el disparador de la base siguen siendo la
+ * barrera real).
  */
-export function QuitarMiembro({ userId, quien }: { userId: string; quien: string }) {
-  const [abierto, setAbierto] = useState(false);
-  const [estado, accion, enviando] = useActionState<ActionState, FormData>(quitarMiembro, {});
-  const id = useId();
-  const preguntaRef = useRef<HTMLParagraphElement>(null);
-
-  useEffect(() => {
-    if (abierto) preguntaRef.current?.focus();
-  }, [abierto]);
-
-  if (!abierto) {
-    return (
-      <span className="inline-flex flex-col items-start gap-1">
-        <Button size="sm" variant="danger" onClick={() => setAbierto(true)}>
-          {t.miembros.quitar}
-        </Button>
-        {estado.message && (
-          <span role="alert" className="max-w-xs text-xs text-bad">
-            {estado.message}
-          </span>
-        )}
-      </span>
-    );
-  }
-
+export function QuitarMiembro({ userId, quien, unicoDueno = false }: { userId: string; quien: string; unicoDueno?: boolean }) {
   return (
-    <form
-      action={(fd) => {
-        setAbierto(false);
-        accion(fd);
-      }}
-      role="group"
-      aria-labelledby={`${id}-pregunta`}
-      aria-describedby={`${id}-consecuencia`}
-      className="grid w-full gap-2 rounded-md border border-border bg-surface-2 p-3"
-      onKeyDown={(e) => {
-        if (e.key === "Escape") setAbierto(false);
-      }}
-    >
-      <input type="hidden" name="userId" value={userId} />
-      <p id={`${id}-pregunta`} ref={preguntaRef} tabIndex={-1} className="text-sm font-medium text-ink outline-none">
-        {t.miembros.quitarPregunta(quien)}
-      </p>
-      <p id={`${id}-consecuencia`} className="text-xs text-muted">
-        {t.miembros.quitarConsecuencia}
-      </p>
-      <div className="flex flex-wrap justify-end gap-2">
-        <Button size="sm" variant="ghost" onClick={() => setAbierto(false)}>
-          {t.miembros.cancelar}
-        </Button>
-        <Button size="sm" type="submit" variant="danger" loading={enviando}>
-          {t.miembros.quitarConfirmar}
-        </Button>
-      </div>
-    </form>
+    <ConfirmAction
+      action={quitarMiembro}
+      fields={{ userId }}
+      label={t.miembros.quitar}
+      variant="danger"
+      size="sm"
+      question={t.miembros.quitarPregunta(quien)}
+      consequence={t.miembros.quitarConsecuencia}
+      confirmLabel={t.miembros.quitarConfirmar}
+      cancelLabel={t.miembros.cancelar}
+      disabledReason={unicoDueno ? t.errores.last_owner : undefined}
+    />
   );
 }
 
-/** «Nuevo enlace» para una invitación pendiente: revoca la anterior y enseña el enlace nuevo. */
-export function RenovarInvitacion({ invitationId, fechas }: { invitationId: string; fechas: LocaleOpts }) {
+/**
+ * Lo que se puede hacer con una invitación pendiente: «Nuevo enlace» y
+ * «Revocar», los dos del mismo tamaño en una fila que envuelve, y debajo,
+ * en su propia fila, el enlace nuevo o el motivo por el que no se pudo.
+ */
+export function AccionesInvitacion({ invitationId, correo, fechas }: { invitationId: string; correo: string; fechas: LocaleOpts }) {
   const [estado, accion, enviando] = useActionState<InvitarState, FormData>(renovarInvitacion, {});
   return (
-    <div className="grid w-full gap-2">
-      <form action={accion}>
-        <input type="hidden" name="invitationId" value={invitationId} />
-        <Button size="sm" type="submit" variant="secondary" loading={enviando}>
-          {t.pendientes.renovar}
-        </Button>
-      </form>
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-start gap-2">
+        <form onSubmit={enviarSinReiniciar(accion)} className="shrink-0">
+          <input type="hidden" name="invitationId" value={invitationId} />
+          <Button size="sm" type="submit" variant="secondary" loading={enviando} className="whitespace-nowrap">
+            {t.pendientes.renovar}
+          </Button>
+        </form>
+        <ConfirmAction
+          action={revocarInvitacion}
+          fields={{ invitationId }}
+          label={t.pendientes.revocar}
+          variant="danger"
+          size="sm"
+          question={t.pendientes.revocarPregunta(correo)}
+          consequence={t.pendientes.revocarConsecuencia}
+          confirmLabel={t.pendientes.revocarConfirmar}
+          cancelLabel={t.pendientes.cancelar}
+          openWidth="w-full sm:w-80"
+        />
+      </div>
       {estado.message && (
         <p role="alert" className="text-xs text-bad">
           {estado.message}

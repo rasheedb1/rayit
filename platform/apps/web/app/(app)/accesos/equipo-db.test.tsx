@@ -34,8 +34,8 @@ import AccesosLayout from "./layout";
 import EquipoPage from "./page";
 import { MESSAGES } from "./_lib/messages";
 import { invitar, quitarMiembro, type InvitarState } from "./actions";
-import { aceptarInvitacion } from "../invitacion/[token]/actions";
-import InvitacionPage from "../invitacion/[token]/page";
+import { aceptarInvitacion } from "../../(invitacion)/invitacion/[token]/actions";
+import InvitacionPage from "../../(invitacion)/invitacion/[token]/page";
 
 /** Laura Méndez, dueña del espacio del seed (db/seed/0002). */
 const LAURA = "00000002-0000-4000-8000-000000000002";

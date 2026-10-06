@@ -24,8 +24,10 @@ import { getSessionPermissions } from '../src/queries/accesos.ts';
 import { sessionHasPermission } from '../src/queries/conexiones.ts';
 import {
   acceptInvitation,
+  aVistaDeInvitacion,
   changeMemberRole,
   createInvitation,
+  hasPendingInvitationForSessionEmail,
   invitationTokenHash,
   isLastOwnerError,
   listMembers,
@@ -378,9 +380,152 @@ describe('nadie otorga lo que no tiene ni toca a quien tiene más', () => {
     const input = { email: 'ejecutivo@agencia.test', roleId: manager, extraPermissions: [], expiresAt: EN_UNA_SEMANA(), token: newInvitationToken() };
     assert.equal((await comoAdmin((tx) => createInvitation(tx, input))).ok, true);
   });
+
+  test('ni revoca la invitación de Dueño que hizo la Dueña: ni directo, ni invitando de nuevo con menos, ni a mano (0079 §2)', async () => {
+    const owner = await rol('agency', 'owner');
+    const viewer = await rol('agency', 'viewer');
+    const correo = 'socia@agencia.test';
+    const deLaDuena = await en(WS_AGENCIA, DUENA_AGENCIA, (tx) =>
+      createInvitation(tx, { email: correo, roleId: owner, extraPermissions: [], expiresAt: EN_UNA_SEMANA(), token: newInvitationToken() }),
+    );
+    assert.ok(deLaDuena.ok);
+
+    assert.deepEqual(await comoAdmin((tx) => revokeInvitation(tx, deLaDuena.invitationId)), { ok: false, code: 'cannot_grant' });
+    const reemplazo = { email: correo, roleId: viewer, extraPermissions: [], expiresAt: EN_UNA_SEMANA(), token: newInvitationToken() };
+    assert.deepEqual(await comoAdmin((tx) => createInvitation(tx, reemplazo)), { ok: false, code: 'cannot_grant' });
+    const aMano = await comoAdmin((tx) =>
+      tx.query('UPDATE invitation SET revoked_at = now() WHERE id = $1 RETURNING id', [deLaDuena.invitationId]),
+    );
+    assert.equal(aMano.rows.length, 0);
+
+    const pendientes = await en(WS_AGENCIA, DUENA_AGENCIA, (tx) => listPendingInvitations(tx));
+    assert.ok(pendientes.some((i) => i.id === deLaDuena.invitationId), 'la invitación de Dueño sigue pendiente');
+    // La Dueña sí la revoca.
+    assert.deepEqual(await en(WS_AGENCIA, DUENA_AGENCIA, (tx) => revokeInvitation(tx, deLaDuena.invitationId)), { ok: true });
+  });
 });
 
-describe('0078: las casillas en la base y el archivo dos veces', () => {
+describe('lo que devuelve invitation_lookup se comprueba, no se cree', () => {
+  const pendiente = {
+    status: 'pending', workspaceName: 'Laura', roleKey: 'manager', roleLabel: 'Mánager', extraPermissions: [],
+    expiresAt: '2026-10-12T00:00:00Z', invitedByName: null, invitedEmailMasked: 'a•••@x.test', emailMatches: true,
+  };
+
+  test('una pendiente bien formada pasa, con la fecha en ISO', () => {
+    const v = aVistaDeInvitacion(pendiente);
+    assert.equal(v.status, 'pending');
+    assert.ok(v.status === 'pending' && v.expiresAt === '2026-10-12T00:00:00.000Z');
+  });
+
+  test('un estado cerrado pasa tal cual; cualquier otra cosa es not_found', () => {
+    assert.deepEqual(aVistaDeInvitacion({ status: 'used' }), { status: 'used' });
+    for (const raro of [null, 'pending', { status: 'otro' }, { ...pendiente, roleLabel: 3 }, { ...pendiente, expiresAt: 'nunca' },
+      { ...pendiente, extraPermissions: [1] }, { ...pendiente, emailMatches: 'sí' }]) {
+      assert.deepEqual(aVistaDeInvitacion(raro), { status: 'not_found' }, JSON.stringify(raro));
+    }
+  });
+});
+
+describe('dos personas invitan al mismo correo a la vez', () => {
+  test('la segunda recibe pending_exists, no un 23505, y su transacción sigue viva', async () => {
+    const primera = await invitar('carrera@ejemplo.test', 'viewer');
+    const viewer = await rol('creator', 'viewer');
+    // La carrera, sin dos conexiones: la segunda no ve la pendiente al
+    // revocar (como si la primera aún no hubiera confirmado) y choca en
+    // el INSERT contra invitation_pending_uk.
+    const r = await comoLaura(async (tx) => {
+      const query = ((text: string, params?: readonly unknown[]) =>
+        /^\s*UPDATE invitation SET revoked_at/.test(text)
+          ? Promise.resolve({ rows: [], rowCount: 0, command: 'UPDATE', oid: 0, fields: [] })
+          : tx.query(text, params)) as WorkspaceTx['query'];
+      const ciega = new Proxy(tx, { get: (obj, k) => (k === 'query' ? query : Reflect.get(obj, k)) });
+      const res = await createInvitation(ciega, {
+        email: 'carrera@ejemplo.test', roleId: viewer, extraPermissions: [], expiresAt: EN_UNA_SEMANA(), token: newInvitationToken(),
+      });
+      const viva = await tx.query<{ uno: number }>('SELECT 1 AS uno');
+      return { res, viva: viva.rows[0]?.uno };
+    });
+    assert.deepEqual(r, { res: { ok: false, code: 'pending_exists' }, viva: 1 });
+    const pendientes = (await comoLaura((tx) => listPendingInvitations(tx))).filter((i) => i.email === 'carrera@ejemplo.test');
+    assert.deepEqual(pendientes.map((i) => i.id), [primera.invitationId]);
+  });
+});
+
+describe('¿me esperan en algún espacio? (0079 §1)', () => {
+  const pregunta = (email: string) => t.db.withIdentity({ email }, (tx) => hasPendingInvitationForSessionEmail(tx));
+
+  test('sí con una pendiente y vigente; no vencida, revocada, aceptada, ni sin correo', async () => {
+    await invitar('esperada@ejemplo.test', 'manager');
+    assert.equal(await pregunta('esperada@ejemplo.test'), true);
+    assert.equal(await pregunta('ESPERADA@ejemplo.test'), true, 'citext: sin distinguir mayúsculas');
+    assert.equal(await pregunta('nadie-me-espera@ejemplo.test'), false);
+
+    await invitar('vencida-0079@ejemplo.test', 'viewer', [], new Date(Date.now() - 60_000));
+    assert.equal(await pregunta('vencida-0079@ejemplo.test'), false);
+
+    const revocada = await invitar('revocada-0079@ejemplo.test', 'viewer');
+    await comoLaura((tx) => revokeInvitation(tx, revocada.invitationId));
+    assert.equal(await pregunta('revocada-0079@ejemplo.test'), false);
+
+    // Andrés aceptó la suya al principio: ya no lo esperan.
+    assert.equal(await pregunta(CORREO[ANDRES]), false);
+
+    assert.equal(await t.db.withIdentity({ userId: CAMILO }, (tx) => hasPendingInvitationForSessionEmail(tx)), false);
+  });
+
+  test('mc_app no lee invitaciones ajenas fijando la bandera a mano', async () => {
+    const filas = await t.db.withIdentity({ email: 'esperada@ejemplo.test' }, async (tx) => {
+      await tx.query("SELECT set_config('app.invitation_email_probe', 'on', true)");
+      return (await tx.query('SELECT id FROM invitation')).rows;
+    });
+    assert.equal(filas.length, 0);
+  });
+});
+
+describe('el último dueño, sin la excepción por cascada (0079 §3)', () => {
+  const WS_SOLA = '00000079-0000-4000-8000-00000000a501';
+  const SOLA = '00000079-0000-4000-8000-0000000000f1';
+
+  test('borrar a la persona que es la única dueña de un espacio vivo falla; borrar el espacio entero, no', async () => {
+    await t.admin(`
+      INSERT INTO app_user (id, email, name) VALUES ('${SOLA}', 'sola@ejemplo.test', 'Sola');
+      SELECT set_config('app.workspace_id', '${WS_SOLA}', false);
+      INSERT INTO workspace (id, slug, name, kind) VALUES ('${WS_SOLA}', 'sola-0079', 'Sola 0079', 'creator');
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS_SOLA}', '${SOLA}', system_role_id('creator', 'owner'));
+      SELECT set_config('app.workspace_id', '', false);
+    `);
+    await assert.rejects(t.admin(`DELETE FROM app_user WHERE id = '${SOLA}'`), (err) => /último dueño/.test(mensajes(err)));
+    await t.admin(`DELETE FROM workspace WHERE id = '${WS_SOLA}'; DELETE FROM app_user WHERE id = '${SOLA}';`);
+  });
+});
+
+describe('las casillas solo con el Mánager de creador, también en la base (0079 §4)', () => {
+  test('ni a mano en una membresía de Editor ni en una invitación de Editor', async () => {
+    const editor = await rol('creator', 'editor');
+    await comoLaura((tx) => changeMemberRole(tx, BEATRIZ, editor, []));
+    await assert.rejects(
+      comoLaura((tx) => tx.query(`UPDATE membership SET extra_permissions = $1 WHERE user_id = '${BEATRIZ}'`, [CASILLAS.finanzas])),
+      (err) => /solo van con el rol de Mánager/.test(mensajes(err)),
+    );
+    await assert.rejects(
+      comoLaura((tx) =>
+        tx.query(
+          `INSERT INTO invitation (workspace_id, email, role_id, extra_permissions, token_hash, invited_by, expires_at)
+           VALUES (current_workspace_id(), 'casillas@ejemplo.test', $1, $2, $3, current_user_id(), now() + interval '1 day')`,
+          [editor, CASILLAS.finanzas, invitationTokenHash(newInvitationToken())],
+        ),
+      ),
+      (err) => /solo van con el rol de Mánager/.test(mensajes(err)),
+    );
+  });
+
+  test('con el Mánager, sí', async () => {
+    const manager = await rol('creator', 'manager');
+    assert.deepEqual(await comoLaura((tx) => changeMemberRole(tx, BEATRIZ, manager, CASILLAS.conexiones)), { ok: true, changed: true });
+  });
+});
+
+describe('0078 y 0079: las casillas en la base y los archivos dos veces', () => {
   test('el CHECK de las casillas es exactamente EXTRA_PERMISOS de @mc/core', async () => {
     const filas = await comoLaura((tx) =>
       tx.query<{ def: string }>(
@@ -395,8 +540,9 @@ describe('0078: las casillas en la base y el archivo dos veces', () => {
     }
   });
 
-  test('aplicarla otra vez como el rol que migra no falla ni cambia nada', async () => {
-    const sql = readFileSync(fileURLToPath(new URL('../../../db/migrations/0078_equipo.sql', import.meta.url)), 'utf8');
+  test('aplicar 0078 y 0079 otra vez, en orden, como el rol que migra no falla ni cambia nada', async () => {
+    const leer = (f: string) => readFileSync(fileURLToPath(new URL(`../../../db/migrations/${f}`, import.meta.url)), 'utf8');
+    const sql = `${leer('0078_equipo.sql')}\n${leer('0079_equipo_cerrojos.sql')}`;
     const foto = () =>
       comoLaura((tx) =>
         tx.query(

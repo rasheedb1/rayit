@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
-import { admiteCasillas, can, CASILLAS, casillasDe, NOMBRES_DE_CASILLA, permisosQueFaltan } from "@mc/core";
+import { admiteCasillas, can, CASILLAS, casillasDe, INVITACION_VIGENCIA_DIAS, NOMBRES_DE_CASILLA, permisosQueFaltan } from "@mc/core";
 import { getTeamWorkspaceKind, listMembers, listPendingInvitations, listTeamRoles } from "@mc/db/queries/equipo";
 import { PageHeader, SectionTitle } from "@/components/page-header";
-import { ConfirmInline } from "@/components/ui/confirm-inline";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { withWorkspace } from "@/lib/db";
@@ -11,8 +10,7 @@ import { requireModuleAccess } from "@/lib/permisos/modulo";
 import { permisosDeLaSesion } from "@/lib/permisos/sesion";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "./_lib/messages";
-import { revocarInvitacion } from "./actions";
-import { CambiarRol, InvitarForm, QuitarMiembro, RenovarInvitacion, type CasillaOpcion, type RolOpcion } from "./formularios";
+import { AccionesInvitacion, CambiarRol, InvitarForm, QuitarMiembro, type CasillaOpcion, type RolOpcion } from "./formularios";
 
 const t = MESSAGES;
 
@@ -56,6 +54,12 @@ export default async function EquipoPage() {
   const permisosDelRol = new Map(roles.map((r) => [r.id, r.permissions]));
   /** ¿Puede quien mira tocar a esta persona? Solo si tiene todo lo que ella tiene. */
   const puedeTocar = (roleId: string, extras: readonly string[]) => otorga([...(permisosDelRol.get(roleId) ?? []), ...extras]);
+  /**
+   * Si hay una sola persona con rol de Dueño, a esa fila no se le ofrece
+   * «Quitar» (sale deshabilitado con el motivo). Cortesía: la acción y el
+   * disparador membership_keeps_an_owner siguen siendo la barrera real.
+   */
+  const esUnicoDueno = miembros.filter((m) => m.roleKey === "owner").length === 1;
 
   return (
     <>
@@ -63,7 +67,7 @@ export default async function EquipoPage() {
 
       {puedeInvitar ? (
         <section className="mb-12 max-w-3xl">
-          <SectionTitle meta={t.invitar.descripcion}>{t.invitar.titulo}</SectionTitle>
+          <SectionTitle meta={t.invitar.descripcion(INVITACION_VIGENCIA_DIAS)}>{t.invitar.titulo}</SectionTitle>
           <InvitarForm roles={rolesOtorgables} casillas={casillas} fechas={fechas} />
         </section>
       ) : (
@@ -76,12 +80,13 @@ export default async function EquipoPage() {
           {miembros.map((m) => {
             const tocable = puedeTocar(m.roleId, m.extraPermissions);
             const quien = m.name ?? m.email;
+            const ultimoDueno = esUnicoDueno && m.roleKey === "owner";
             return (
               <li key={m.userId} className="flex flex-col gap-3 border-b border-border px-4 py-3 last:border-b-0 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                   <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-ink">
                     <span className="min-w-0 truncate">{quien}</span>
-                    {m.isMe && <Pill kind="good">{t.miembros.tu}</Pill>}
+                    {m.isMe && <Pill kind="neutral">{t.miembros.tu}</Pill>}
                   </p>
                   {m.name && <p className="truncate text-xs text-muted">{m.email}</p>}
                   <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-2">
@@ -96,7 +101,9 @@ export default async function EquipoPage() {
                 </div>
                 {tocable && (puedeEditar || puedeQuitar) && (
                   <div className="flex shrink-0 flex-wrap items-start gap-2 sm:max-w-sm sm:justify-end">
-                    {puedeEditar && (
+                    {/* A la única dueña no se le ofrece cambiar de rol: el
+                        único cambio posible sería degradarla, y la base lo para. */}
+                    {puedeEditar && !ultimoDueno && (
                       <CambiarRol
                         userId={m.userId}
                         roleId={m.roleId}
@@ -105,7 +112,7 @@ export default async function EquipoPage() {
                         casillas={casillas}
                       />
                     )}
-                    {puedeQuitar && <QuitarMiembro userId={m.userId} quien={quien} />}
+                    {puedeQuitar && <QuitarMiembro userId={m.userId} quien={quien} unicoDueno={ultimoDueno} />}
                   </div>
                 )}
               </li>
@@ -146,19 +153,10 @@ export default async function EquipoPage() {
                     )}
                   </span>
                 </div>
-                {puedeInvitar && (
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
-                    <RenovarInvitacion invitationId={i.id} fechas={fechas} />
-                    <ConfirmInline
-                      action={revocarInvitacion.bind(null, i.id)}
-                      label={t.pendientes.revocar}
-                      variant="danger"
-                      question={t.pendientes.revocarPregunta(i.email)}
-                      consequence={t.pendientes.revocarConsecuencia}
-                      confirmLabel={t.pendientes.revocarConfirmar}
-                      cancelLabel={t.pendientes.cancelar}
-                    />
-                  </div>
+                {/* Revocar o renovar pide lo mismo que dar (0079 §2): la invitación
+                    de un rol que quien mira no podría dar no se le ofrece. */}
+                {puedeInvitar && puedeTocar(i.roleId, i.extraPermissions) && (
+                  <AccionesInvitacion invitationId={i.id} correo={i.email} fechas={fechas} />
                 )}
               </li>
             ))}

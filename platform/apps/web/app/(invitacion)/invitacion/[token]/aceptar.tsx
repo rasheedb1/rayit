@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
-import { MESSAGES } from "../../accesos/_lib/messages";
+import { MESSAGES } from "../../../(app)/accesos/_lib/messages";
 import { aceptarInvitacion, type AceptarState } from "./actions";
 
 const t = MESSAGES.aceptar;

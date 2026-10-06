@@ -2,12 +2,16 @@
  * Equipo (ACC-4): quién está en el espacio, a quién se invitó, y
  * cambiar el rol, quitar, invitar, revocar y aceptar. Dueño: Rasheed.
  *
- * Lo que decide la BASE (0078_equipo.sql), no este archivo:
+ * Lo que decide la BASE (0078_equipo.sql y 0079_equipo_cerrojos.sql), no este archivo:
  *   - el permiso de cada escritura (equipo.miembro.invitar,
  *     equipo.rol.editar, equipo.miembro.revocar), por política;
- *   - «nadie otorga lo que no tiene» (session_can_grant), por política;
+ *   - «nadie otorga lo que no tiene» (session_can_grant), por política,
+ *     también al revocar una invitación (0079 §2);
  *   - el último dueño (membership_keeps_an_owner), por disparador;
- *   - aceptar: invitation_accept(), SECURITY DEFINER, un solo uso.
+ *   - las casillas solo con el Mánager de creador, por disparador (0079 §4);
+ *   - aceptar: invitation_accept(), SECURITY DEFINER, un solo uso;
+ *   - si a alguien lo esperan en un espacio, para no crearle uno propio
+ *     al entrar (has_pending_invitation_for_session_email, 0079 §1).
  * Aquí se traduce lo que la base rechaza a un código que la pantalla
  * sabe decir, y se deja la fila de bitácora (ACC-2) en la misma
  * transacción que la escritura.
@@ -60,6 +64,19 @@ function pgError(err: unknown): PgLikeError | null {
 export function isLastOwnerError(err: unknown): boolean {
   const e = pgError(err);
   return e?.code === '23514' && (e.constraint === 'membership_last_owner' || /último dueño/.test(e.message ?? ''));
+}
+
+/**
+ * Dos invitaciones pendientes al mismo correo a la vez: el índice único
+ * parcial invitation_pending_uk (0034 §7) para la segunda.
+ */
+export function isPendingExistsError(err: unknown): boolean {
+  for (let e: unknown = err; e; e = (e as { cause?: unknown }).cause) {
+    const p = pgError(e);
+    if (p?.code === '23505' && p.constraint === 'invitation_pending_uk') return true;
+    if (!p) break;
+  }
+  return false;
 }
 
 /** Una política de RLS rechazó la fila nueva: falta el permiso, o se pidió dar algo que no se tiene. */
@@ -263,6 +280,7 @@ export async function listPendingInvitations(tx: WorkspaceTx): Promise<PendingIn
  *   already_member      ese correo ya es de alguien del espacio
  *   not_found           la persona o la invitación no está (o ya no está pendiente)
  *   last_owner          sería dejar el espacio sin dueño
+ *   pending_exists      otra persona acaba de invitar a ese correo (dos a la vez)
  */
 export type TeamErrorCode =
   | 'forbidden'
@@ -271,7 +289,8 @@ export type TeamErrorCode =
   | 'extras_not_allowed'
   | 'already_member'
   | 'not_found'
-  | 'last_owner';
+  | 'last_owner'
+  | 'pending_exists';
 
 export type TeamResult<T = object> = ({ ok: true } & T) | { ok: false; code: TeamErrorCode };
 
@@ -341,23 +360,49 @@ export async function createInvitation(
   );
   if (ya[0]?.ya) return { ok: false, code: 'already_member' };
 
-  const { rows: viejas } = await tx.query<{ id: string }>(
-    `UPDATE invitation SET revoked_at = now()
-      WHERE workspace_id = current_workspace_id() AND email = $1::citext AND accepted_at IS NULL AND revoked_at IS NULL
-      RETURNING id`,
+  // Invitar de nuevo revoca la pendiente, y revocar pide lo mismo que
+  // dar (0079 §2): una Administradora no reemplaza por un Editor la
+  // invitación de Dueño que hizo la Dueña.
+  const { rows: ajenas } = await tx.query<{ ajena: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM invitation
+        WHERE workspace_id = current_workspace_id() AND email = $1::citext AND accepted_at IS NULL AND revoked_at IS NULL
+          AND NOT session_can_grant(role_id, extra_permissions)
+     ) AS ajena`,
     [input.email],
   );
+  if (ajenas[0]?.ajena) return { ok: false, code: 'cannot_grant' };
+
+  // Un punto de vuelta antes de tocar nada: si otra persona invita al
+  // mismo correo a la vez, el índice invitation_pending_uk para la
+  // segunda (23505) y aquí se deshace solo lo de esta, sin abortar la
+  // transacción de quien llama.
+  await tx.query('SAVEPOINT crear_invitacion');
+  let viejas: { id: string }[];
+  let invitationId: string;
+  try {
+    ({ rows: viejas } = await tx.query<{ id: string }>(
+      `UPDATE invitation SET revoked_at = now()
+        WHERE workspace_id = current_workspace_id() AND email = $1::citext AND accepted_at IS NULL AND revoked_at IS NULL
+        RETURNING id`,
+      [input.email],
+    ));
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO invitation (workspace_id, email, role_id, extra_permissions, token_hash, invited_by, expires_at)
+       VALUES (current_workspace_id(), $1::citext, $2::uuid, $3::text[], $4, current_user_id(), $5)
+       RETURNING id`,
+      [input.email, input.roleId, extras, invitationTokenHash(input.token), input.expiresAt.toISOString()],
+    );
+    invitationId = rows[0]!.id;
+  } catch (err) {
+    if (!isPendingExistsError(err)) throw err;
+    await tx.query('ROLLBACK TO SAVEPOINT crear_invitacion');
+    return { ok: false, code: 'pending_exists' };
+  }
+  await tx.query('RELEASE SAVEPOINT crear_invitacion');
   for (const vieja of viejas) {
     await audit(tx, { action: 'invitation.revoked', entityType: 'invitation', entityId: vieja.id, after: { reason: 'replaced' } });
   }
-
-  const { rows } = await tx.query<{ id: string }>(
-    `INSERT INTO invitation (workspace_id, email, role_id, extra_permissions, token_hash, invited_by, expires_at)
-     VALUES (current_workspace_id(), $1::citext, $2::uuid, $3::text[], $4, current_user_id(), $5)
-     RETURNING id`,
-    [input.email, input.roleId, extras, invitationTokenHash(input.token), input.expiresAt.toISOString()],
-  );
-  const invitationId = rows[0]!.id;
   await audit(tx, {
     action: 'invitation.created',
     entityType: 'invitation',
@@ -369,8 +414,15 @@ export async function createInvitation(
 
 /** Revoca una invitación pendiente. El enlace deja de servir; la fila se queda (nadie borra el rastro). */
 export async function revokeInvitation(tx: WorkspaceTx, invitationId: string): Promise<TeamResult> {
-  const { rows: p } = await tx.query<{ puede: boolean }>("SELECT session_can('equipo.miembro.invitar') AS puede");
+  const { rows: p } = await tx.query<{ puede: boolean; otorga: boolean | null }>(
+    `SELECT session_can('equipo.miembro.invitar') AS puede,
+            (SELECT session_can_grant(i.role_id, i.extra_permissions) FROM invitation i
+              WHERE i.id = $1::uuid AND i.workspace_id = current_workspace_id()) AS otorga`,
+    [invitationId],
+  );
   if (p[0]?.puede !== true) return { ok: false, code: 'forbidden' };
+  // Revocar pide lo mismo que dar (0079 §2). Sin fila (null), not_found abajo.
+  if (p[0]?.otorga === false) return { ok: false, code: 'cannot_grant' };
   const { rows } = await tx.query<{ id: string }>(
     `UPDATE invitation SET revoked_at = now()
       WHERE id = $1::uuid AND workspace_id = current_workspace_id() AND accepted_at IS NULL AND revoked_at IS NULL
@@ -508,6 +560,9 @@ export type InvitationPreview =
       invitedEmailMasked: string;
       /** ¿La sesión es ese correo? null sin sesión. */
       emailMatches: boolean | null;
+      /** El locale y la zona del espacio que invita, para pintar el vencimiento (0079 §5). */
+      locale: string | null;
+      timezone: string | null;
     };
 
 /**
@@ -516,18 +571,62 @@ export type InvitationPreview =
  */
 export async function lookupInvitation(tx: BaseTx, token: string): Promise<InvitationPreview> {
   if (!isInvitationToken(token)) return { status: 'not_found' };
-  const { rows } = await tx.query<{ r: InvitationPreview & { expiresAt?: string } }>(
-    'SELECT invitation_lookup($1) AS r',
-    [invitationTokenHash(token)],
-  );
-  const r = rows[0]?.r;
-  if (!r) return { status: 'not_found' };
-  if (r.status !== 'pending') return { status: r.status };
+  const { rows } = await tx.query<{ r: unknown }>('SELECT invitation_lookup($1) AS r', [invitationTokenHash(token)]);
+  return aVistaDeInvitacion(rows[0]?.r);
+}
+
+const ESTADOS_CERRADOS: readonly InvitationClosedStatus[] = ['not_found', 'revoked', 'used', 'expired'];
+
+const esTexto = (v: unknown): v is string => typeof v === 'string';
+
+/**
+ * El jsonb de invitation_lookup, comprobado campo a campo en vez de
+ * creído con un cast: si la función cambia de forma (o devuelve algo
+ * raro), el enlace se pinta como «no es válido» y no como una pantalla
+ * con huecos. Exportada para probarla sin base.
+ */
+export function aVistaDeInvitacion(r: unknown): InvitationPreview {
+  if (typeof r !== 'object' || r === null) return { status: 'not_found' };
+  const o = r as Record<string, unknown>;
+  if ((ESTADOS_CERRADOS as readonly unknown[]).includes(o.status)) return { status: o.status as InvitationClosedStatus };
+  if (o.status !== 'pending') return { status: 'not_found' };
+  const vence = esTexto(o.expiresAt) ? new Date(o.expiresAt) : null;
+  const extras = Array.isArray(o.extraPermissions) ? o.extraPermissions : o.extraPermissions == null ? [] : null;
+  if (
+    !esTexto(o.workspaceName) || !esTexto(o.roleKey) || !esTexto(o.roleLabel) || !esTexto(o.invitedEmailMasked) ||
+    !vence || Number.isNaN(vence.getTime()) || !extras || !extras.every(esTexto) ||
+    !(o.invitedByName === null || o.invitedByName === undefined || esTexto(o.invitedByName)) ||
+    !(o.emailMatches === null || o.emailMatches === undefined || typeof o.emailMatches === 'boolean') ||
+    !(o.locale == null || esTexto(o.locale)) ||
+    !(o.timezone == null || esTexto(o.timezone))
+  ) {
+    return { status: 'not_found' };
+  }
   return {
-    ...r,
-    extraPermissions: r.extraPermissions ?? [],
-    expiresAt: new Date(r.expiresAt).toISOString(),
+    status: 'pending',
+    workspaceName: o.workspaceName,
+    roleKey: o.roleKey,
+    roleLabel: o.roleLabel,
+    extraPermissions: extras,
+    expiresAt: vence.toISOString(),
+    invitedByName: (o.invitedByName as string | null | undefined) ?? null,
+    invitedEmailMasked: o.invitedEmailMasked,
+    emailMatches: (o.emailMatches as boolean | null | undefined) ?? null,
+    locale: (o.locale as string | null | undefined) ?? null,
+    timezone: (o.timezone as string | null | undefined) ?? null,
   };
+}
+
+/**
+ * ¿A la persona de la sesión la esperan en algún espacio? Su correo
+ * verificado tiene una invitación pendiente y vigente
+ * (has_pending_invitation_for_session_email, 0079 §1). Lo pregunta el
+ * primer inicio de sesión para no crearle un espacio propio a quien
+ * viene invitado. Solo un sí o un no: el resto lo dice el enlace.
+ */
+export async function hasPendingInvitationForSessionEmail(tx: IdentityTx): Promise<boolean> {
+  const { rows } = await tx.query<{ hay: boolean }>('SELECT has_pending_invitation_for_session_email() AS hay');
+  return rows[0]?.hay === true;
 }
 
 export type AcceptInvitationResult =

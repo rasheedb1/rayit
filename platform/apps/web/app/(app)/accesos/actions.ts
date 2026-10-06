@@ -76,7 +76,10 @@ async function crearYEntregar(correo: string, roleId: string, extras: readonly s
   let origen: string;
   try {
     origen = await origenDeLaPeticion();
-  } catch {
+  } catch (err) {
+    // El detalle (falta APP_URL, cabecera Host rara) es para el log; a
+    // quien invita le llega una frase suya.
+    console.error("[equipo] no se pudo armar el enlace de la invitación", err);
     return { message: t.errores.sinOrigen };
   }
   const propios = await permisosDeLaSesion();
@@ -128,7 +131,7 @@ export async function invitar(_prev: InvitarState, formData: FormData): Promise<
 /**
  * Un enlace nuevo para una invitación pendiente (vencida o no): la misma
  * persona, el mismo rol y las mismas casillas, con otro token y otra
- * semana. La anterior queda revocada en la misma transacción.
+ * vigencia (INVITACION_VIGENCIA_DIAS). La anterior queda revocada en la misma transacción.
  */
 export async function renovarInvitacion(_prev: InvitarState, formData: FormData): Promise<InvitarState> {
   await requirePermission("equipo.miembro.invitar");
@@ -139,12 +142,19 @@ export async function renovarInvitacion(_prev: InvitarState, formData: FormData)
   return crearYEntregar(pendiente.email, pendiente.roleId, pendiente.extraPermissions);
 }
 
-/** Revoca una invitación pendiente: el enlace deja de servir. Va atada a su id (ConfirmInline). */
-export async function revocarInvitacion(invitationId: string): Promise<void> {
+/**
+ * Revoca una invitación pendiente: el enlace deja de servir. Responde
+ * con una frase si no se pudo (ConfirmAction la pinta bajo el botón):
+ * ya se aceptó o se revocó en otra pestaña (not_found), o es de un rol
+ * que quien revoca no podría dar (cannot_grant, 0079 §2).
+ */
+export async function revocarInvitacion(_prev: ActionState, formData: FormData): Promise<ActionState> {
   await requirePermission("equipo.miembro.invitar");
-  if (!isUuid(invitationId)) return;
-  await withWorkspace((tx) => revokeInvitation(tx, invitationId));
+  const id = formField(formData, "invitationId").trim();
+  if (!isUuid(id)) return { message: t.errores.not_found };
+  const r = await withWorkspace((tx) => revokeInvitation(tx, id));
   revalidatePath("/accesos");
+  return r.ok ? { ok: true } : { message: mensajeDe(r.code) };
 }
 
 /**

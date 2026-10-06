@@ -74,7 +74,7 @@ describe("/auth/callback", () => {
     const r = await llamar("code=abc&next=%2Ffinanzas");
     expect(r.status).toBe(307);
     expect(r.headers.get("location")).toBe("https://on-cue.test/finanzas");
-    expect(registrarEntrada).toHaveBeenCalledWith({ email: "ana@ejemplo.test", nombre: null, authUserId: AUTH_ID });
+    expect(registrarEntrada).toHaveBeenCalledWith({ email: "ana@ejemplo.test", nombre: null, authUserId: AUTH_ID }, { next: "/finanzas" });
   });
 
   test("correo SIN verificar: fuera, con la sesión cerrada solo aquí y sin tocar la base", async () => {

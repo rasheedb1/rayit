@@ -141,19 +141,27 @@ export function elegirWorkspaceId(preferido: string | null, mios: readonly { id:
   return mios[0]?.id ?? null;
 }
 
+/** A dónde va quien tiene sesión pero ningún espacio porque lo esperan en uno (ACC-4). */
+export const SIN_ESPACIO_POR_INVITACION = "/invitacion";
+
+/** Quién es la persona de la sesión, y sus espacios, sin elegir ninguno todavía. */
+export interface IdentidadDeSesion {
+  sesion: Sesion;
+  identity: { userId: string; email: string };
+  /** Puede venir vacío: la esperan en un espacio por invitación y aún no la aceptó. */
+  workspaces: readonly MyWorkspace[];
+}
+
 /**
- * El contexto de ESTA petición. `cache` de React lo memoriza: la
- * pantalla, el marco y el selector de espacio preguntan una vez entre
- * los tres, así que toda la resolución cuesta una transacción.
+ * La persona de la sesión, sin exigir que tenga espacio. null sin
+ * sesión (quien llama decide si eso es /login). La usa getCurrentContext
+ * y, sola, la página del enlace de una invitación: quien llega a
+ * aceptar puede no pertenecer todavía a ningún espacio, y no por eso
+ * deja de ser alguien (lib/auth/sincronizar.ts, ACC-4).
  */
-export const getCurrentContext = cache(async (): Promise<Contexto> => {
+export const getIdentidadDeSesion = cache(async (): Promise<IdentidadDeSesion | null> => {
   const sesion = await getSesion();
-  if (!sesion) {
-    // Con llaves y sin sesión no hay NADA que servir. `redirect` lanza,
-    // así que de aquí no sale ningún workspace.
-    if (isAuthConfigured()) redirect("/login");
-    return { workspaceId: workspaceDeDesarrollo(), sesion: null, workspaces: [] };
-  }
+  if (!sesion) return null;
 
   // Quién soy y qué es mío, desde el correo verificado. Solo da de alta
   // si no hay absolutamente nada que leer (primer inicio de sesión, o
@@ -173,16 +181,33 @@ export const getCurrentContext = cache(async (): Promise<Contexto> => {
     throw err;
   });
   if (!mio) redirect(SALIDA_POR_IDENTIDAD);
-  const { userId, workspaces } = mio;
+  return { sesion, identity: { userId: mio.userId, email: sesion.email }, workspaces: mio.workspaces };
+});
+
+/**
+ * El contexto de ESTA petición. `cache` de React lo memoriza: la
+ * pantalla, el marco y el selector de espacio preguntan una vez entre
+ * los tres, así que toda la resolución cuesta una transacción.
+ */
+export const getCurrentContext = cache(async (): Promise<Contexto> => {
+  const yo = await getIdentidadDeSesion();
+  if (!yo) {
+    // Con llaves y sin sesión no hay NADA que servir. `redirect` lanza,
+    // así que de aquí no sale ningún workspace.
+    if (isAuthConfigured()) redirect("/login");
+    return { workspaceId: workspaceDeDesarrollo(), sesion: null, workspaces: [] };
+  }
+  const { sesion, identity, workspaces } = yo;
 
   const preferido = await espacioDeLaCookie(sesion.email);
   const workspaceId = elegirWorkspaceId(preferido?.w ?? null, workspaces);
   if (!workspaceId) {
-    // leerOCrearSesion crea uno si no había ninguno, así que llegar
-    // aquí sería un fallo suyo, no un estado normal.
-    throw new Error(`La sesión de ${sesion.email} no tiene ningún espacio después de sincronizar.`);
+    // leerOCrearSesion crea un espacio si no había ninguno, salvo a quien
+    // esperan en uno por invitación (ACC-4): esa persona todavía no
+    // tiene nada que ver aquí, y /invitacion se lo dice.
+    redirect(SIN_ESPACIO_POR_INVITACION);
   }
-  return { workspaceId, identity: { userId, email: sesion.email }, sesion, workspaces };
+  return { workspaceId, identity, sesion, workspaces };
 });
 
 /** El id del workspace actual. Lo usa lib/db; una pantalla no lo necesita. */
