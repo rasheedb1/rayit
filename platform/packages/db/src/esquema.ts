@@ -1331,6 +1331,13 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'outbound_llm_reserve_web y outbound_llm_release_web. Con escritura, un workspace se borraría las reservas del worker y dos jobs ' +
       'volverían a gastar el mismo saldo',
   },
+  notification_ack: {
+    permite: ['SELECT', 'INSERT'],
+    motivo:
+      'el «Entendido» de una persona sobre un aviso (0078, RES-3): se anota y no se corrige ni se borra. Con UPDATE o ' +
+      'DELETE, quien lo dio podría deshacer la constancia de que lo vio; y la política de INSERT exige que la fila sea de ' +
+      'quien escribe (user_id = current_user_id()), así que nadie marca leído por otro',
+  },
   outbound_llm_call: {
     permite: ['SELECT', 'INSERT'],
     motivo:
