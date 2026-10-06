@@ -52,7 +52,7 @@ importers:
         specifier: 15.5.25
         version: 15.5.25(@types/node@24.13.6)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       nodemailer:
-        specifier: ^10.0.10
+        specifier: 10.0.10
         version: 10.0.10
       papaparse:
         specifier: 5.7.0
@@ -86,7 +86,7 @@ importers:
         specifier: ^24.0.0
         version: 24.13.6
       '@types/nodemailer':
-        specifier: ^8.0.2
+        specifier: 8.0.2
         version: 8.0.2
       '@types/papaparse':
         specifier: ^5.5.2

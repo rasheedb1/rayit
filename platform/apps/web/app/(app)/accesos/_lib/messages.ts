@@ -16,7 +16,7 @@ export const textoVencida = (dias: number) => `Los enlaces valen ${plazo(dias)}.
 
 export const MESSAGES = {
   meta: "Equipo",
-  eyebrow: "Accesos",
+  eyebrow: "Tu espacio",
   titulo: "Equipo",
   descripcion:
     "Quién entra a este espacio y qué puede hacer. Cada persona ve solo lo que su rol le deja; el dinero y las cuentas conectadas se dan a propósito.",

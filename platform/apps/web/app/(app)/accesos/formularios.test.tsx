@@ -1,23 +1,25 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { InvitarState } from "./actions";
 
 // El estado de la acción se inyecta: aquí se prueba qué PINTA el
 // formulario; la acción y la base, en equipo-db.test.tsx.
 let estado: InvitarState = {};
+const despachar = vi.fn();
 vi.mock("react", async () => {
   const react = await vi.importActual<typeof import("react")>("react");
-  return { ...react, useActionState: () => [estado, vi.fn(), false] };
+  return { ...react, useActionState: () => [estado, despachar, false] };
 });
 vi.mock("./actions", () => ({
   invitar: vi.fn(),
   cambiarRol: vi.fn(),
   quitarMiembro: vi.fn(),
   renovarInvitacion: vi.fn(),
+  revocarInvitacion: vi.fn(),
 }));
 
 import { MESSAGES } from "./_lib/messages";
-import { InvitarForm, type CasillaOpcion, type RolOpcion } from "./formularios";
+import { CambiarRol, InvitarForm, QuitarMiembro, type CasillaOpcion, type RolOpcion } from "./formularios";
 
 const ROLES: RolOpcion[] = [
   { id: "00000000-0000-4000-8000-000000000001", label: "Dueño", description: "El creador.", conCasillas: false },
@@ -100,5 +102,71 @@ describe("InvitarForm", () => {
     pintar({ errors: { email: MESSAGES.errores.correo }, message: MESSAGES.errores.cannot_grant });
     expect(screen.getByText(MESSAGES.errores.correo)).toBeInTheDocument();
     expect(screen.getByText(MESSAGES.errores.cannot_grant)).toBeInTheDocument();
+  });
+});
+
+describe("InvitarForm: un error no borra lo escrito", () => {
+  it("tras un error, el correo, el rol y la casilla siguen como estaban, y el envío lleva los tres", () => {
+    const { container, rerender } = pintar();
+    const correo = screen.getByLabelText(new RegExp(`^${MESSAGES.invitar.correo}`)) as HTMLInputElement;
+    fireEvent.change(correo, { target: { value: "mariana@ejemplo.test" } });
+    elegir("Mánager");
+    fireEvent.click(screen.getByLabelText(MESSAGES.casillas.finanzas.label));
+    despachar.mockClear();
+
+    act(() => {
+      fireEvent.submit(container.querySelector("form")!);
+    });
+    expect(despachar).toHaveBeenCalledTimes(1);
+    const enviado = despachar.mock.calls[0]![0] as FormData;
+    expect(enviado.get("email")).toBe("mariana@ejemplo.test");
+    expect(enviado.get("roleId")).toBe(ROLES[1]!.id);
+    expect(enviado.get("casilla.finanzas")).toBe("on");
+
+    // La acción responde con un error: React 19 vaciaría un <form action>.
+    estado = { message: MESSAGES.errores.cannot_grant };
+    rerender(<InvitarForm roles={ROLES} casillas={TODAS} fechas={fechas} />);
+    expect(screen.getByText(MESSAGES.errores.cannot_grant)).toBeInTheDocument();
+    expect((screen.getByLabelText(new RegExp(`^${MESSAGES.invitar.correo}`)) as HTMLInputElement).value).toBe("mariana@ejemplo.test");
+    expect((screen.getByLabelText(new RegExp(`^${MESSAGES.invitar.rol}`)) as HTMLSelectElement).value).toBe(ROLES[1]!.id);
+    expect(screen.getByLabelText(MESSAGES.casillas.finanzas.label)).toBeChecked();
+    expect(screen.getByLabelText(MESSAGES.casillas.conexiones.label)).not.toBeChecked();
+  });
+});
+
+describe("CambiarRol", () => {
+  function abrir() {
+    estado = {};
+    render(<CambiarRol userId="u1" roleId={ROLES[2]!.id} marcadas={[]} roles={ROLES} casillas={TODAS} />);
+    const boton = screen.getByRole("button", { name: MESSAGES.miembros.cambiarRol });
+    fireEvent.click(boton);
+  }
+
+  it("al abrir, el foco va al selector; Escape cierra y lo devuelve al botón", () => {
+    abrir();
+    expect(screen.getByLabelText(new RegExp(`^${MESSAGES.invitar.rol}`))).toHaveFocus();
+    fireEvent.keyDown(screen.getByLabelText(new RegExp(`^${MESSAGES.invitar.rol}`)), { key: "Escape" });
+    expect(screen.getByRole("button", { name: MESSAGES.miembros.cambiarRol })).toHaveFocus();
+  });
+
+  it("Cancelar también devuelve el foco al botón", () => {
+    abrir();
+    fireEvent.click(screen.getByRole("button", { name: MESSAGES.miembros.cancelar }));
+    expect(screen.getByRole("button", { name: MESSAGES.miembros.cambiarRol })).toHaveFocus();
+  });
+});
+
+describe("QuitarMiembro", () => {
+  it("a la única dueña no se le ofrece: el botón sale deshabilitado y dice por qué", () => {
+    estado = {};
+    render(<QuitarMiembro userId="u1" quien="Laura" unicoDueno />);
+    expect(screen.getByRole("button", { name: MESSAGES.miembros.quitar })).toBeDisabled();
+    expect(screen.getByText(MESSAGES.errores.last_owner)).toBeInTheDocument();
+  });
+
+  it("a cualquier otra persona, sí", () => {
+    estado = {};
+    render(<QuitarMiembro userId="u2" quien="Mariana" />);
+    expect(screen.getByRole("button", { name: MESSAGES.miembros.quitar })).toBeEnabled();
   });
 });

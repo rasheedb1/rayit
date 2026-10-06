@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { flags as defaultFlags, type Flags } from "@/content/flags";
 import type { Permiso } from "@mc/core";
-import { isEnabled, moduleBySlug, productModules, puedeAbrir, type Permisos } from "@/content/modules";
+import { isEnabled, moduleBySlug, productModules } from "@/content/modules";
 import { OwnerAvatar } from "./owner";
 
 const ICONS: Partial<Record<string, LucideIcon>> = {
@@ -28,23 +28,22 @@ const ICONS: Partial<Record<string, LucideIcon>> = {
   campanas: Megaphone,
   finanzas: Wallet,
   conexiones: Plug,
+  accesos: KeyRound,
   kit: Palette,
 };
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 
 /**
- * Lo que ve el equipo. La galería del kit solo con su bandera encendida;
- * Accesos (hoy el plan del módulo, mañana la pantalla de Equipo) solo
- * con su permiso, igual que su ruta (ACC-5).
+ * Lo que ve el equipo. La galería del kit solo con su bandera encendida.
+ * (Accesos estaba aquí hasta ACC-4: ahora es «Equipo», un módulo de
+ * producto más, y sale en productModules con su permiso.)
  */
-function teamTools(flags: Flags, permisos: Permisos): NavItem[] {
+function teamTools(flags: Flags): NavItem[] {
   const items: NavItem[] = [
     { href: "/", label: "Plan", icon: ListChecks },
     { href: "/cimientos", label: "Cimientos", icon: Layers },
   ];
-  const accesos = moduleBySlug("accesos");
-  if (accesos && puedeAbrir(permisos, accesos)) items.push({ href: "/accesos", label: accesos.name, icon: KeyRound });
   items.push({ href: "/reglas", label: "Reglas", icon: BookOpen });
   const kit = moduleBySlug("kit");
   if (kit && isEnabled(kit, flags)) items.push({ href: "/kit", label: kit.name, icon: Palette });
@@ -73,7 +72,7 @@ const linkOn = "bg-bg-3 font-medium text-fg";
 export function SideNav({ flags = defaultFlags, permisos }: NavProps) {
   const pathname = usePathname();
   const modules = productModules(flags, permisos);
-  const tools = teamTools(flags, permisos);
+  const tools = teamTools(flags);
   return (
     <nav className="flex flex-col gap-6" aria-label="Principal">
       <div>
@@ -118,7 +117,7 @@ export function SideNav({ flags = defaultFlags, permisos }: NavProps) {
 /** En pantallas pequeñas la navegación es una fila que se desplaza. */
 export function MobileNav({ flags = defaultFlags, permisos }: NavProps) {
   const pathname = usePathname();
-  const tools = teamTools(flags, permisos);
+  const tools = teamTools(flags);
   const items = [
     ...tools.slice(0, 1),
     ...productModules(flags, permisos).map((m) => ({ href: `/${m.slug}`, label: m.name })),
