@@ -149,7 +149,7 @@ export const STORIES: readonly Story[] = [
     desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
     done: "N≥10 rondas de make verificar.estres de a dos sin una prueba fallida ni cancelada, también con la máquina en otra fecha (DIAS=2,7,30,90).",
     status: "hecho",
-    note: "5-oct: hecha. Causa: turbo mataba @mc/db al fallar otra tarea (ahora --continue); reloj de pruebas anclado; turnos de verificar con la hora en C. Estrés r5: ESTRES_R5. Pendiente de Nicolás (CIM-8): seed 0003 rojo sin ancla desde el 30-dic. Detalle: docs/propuestas/CIM-12.md.",
+    note: "5-oct: hecha. Causa: turbo mataba @mc/db al fallar otra tarea (ahora --continue); reloj de pruebas anclado; turnos de verificar con la hora en C. Estrés r5: 18 corridas de a dos en verde, 10 normales y 8 con la máquina a +2/+7/+30/+90. Pendiente de Nicolás (CIM-8): seed 0003 rojo sin ancla desde el 30-dic. Detalle: docs/propuestas/CIM-12.md.",
   },
   {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],

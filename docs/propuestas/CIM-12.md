@@ -279,6 +279,32 @@ Cambios mínimos, ninguno de lógica de producto:
 
 ## Resultado
 
+### Ronda 5
+
+Tandas del 5-oct (noche) con `scripts/estres-verificar.sh` sobre la r5
+(con `rasheed/integracion` al día, CON-3 incluido), con otros agentes
+trabajando en la máquina.
+
+| Tanda | Corridas | Reloj | Carga (1 min) inicio → máx | Segundos por corrida | Fallidas · archivos en FAIL · canceladas · tareas sin su reloj |
+|---|---|---|---|---|---|
+| A · `N=10 P=2` | 10 | m+0 | 5,2 → 33,9 | 245–265 | 0 · 0 · 0 · — |
+| B · `N=8 DIAS=2,7,30,90` | 8 | m+2, +7, +30, +90 (dos de cada) | 11,8 → 22,9 | 242–264 | 0 · 0 · 0 · 0 |
+| Control · `1 --dias 86 --sin-ancla --filtro @mc/db` | 1 | m+86 sin ancla (el 30-dic, como el job del CI) | 7,2 → 8,8 | 72 | 6 · 0 · 0 · 0: los gastos del seed 0003 («Pendiente»), el rojo esperado |
+
+- **18 corridas de a dos sin una prueba fallida ni cancelada**, 10 con
+  la máquina en hoy y 8 con la máquina a +2, +7, +30 y +90 días, sobre
+  el código de la r5. Es el criterio de la historia.
+- El control confirma que el reloj se mueve dentro de turbo con
+  `MC_RELOJ_*` ya en el `env` de las tareas, y deja el número exacto del
+  pendiente de CIM-8: 6 pruebas, no 7.
+- `pnpm verificar` (15 tareas) y `pnpm --filter @mc/web build` en verde;
+  el build, «Compiled successfully» y el bundle del turno con sus tres
+  rutas permitidas.
+- `node --test scripts/pruebas/verificar.test.mjs`: 11 pruebas en verde;
+  las dos del idioma fallan con el `verificar.sh` de la r4 (comprobado
+  poniéndolo en su sitio: «el turno 1 era de …, que ya no está; lo
+  libero» con el dueño vivo).
+
 ### Ronda 4
 
 Tandas del 5-oct (tarde) con `scripts/estres-verificar.sh` de la r4, con
