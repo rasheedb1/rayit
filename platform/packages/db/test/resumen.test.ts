@@ -405,7 +405,9 @@ describe('Resumen · frescura y cobertura', () => {
       assert.match(f.dataUntil!, /^\d{4}-\d{2}-\d{2}$/);
       // Todas al día con el reloj del módulo, o casi.
       assert.ok(f.daysBehind !== null && f.daysBehind >= 0 && f.daysBehind <= 2, `daysBehind = ${f.daysBehind}`);
-      assert.equal(f.status, 'active');
+      // Activas, salvo la página de Facebook: el seed 0011 la deja pidiendo
+      // volver a autorizar («Lo que importa esta semana», RES-3).
+      assert.equal(f.status, f.platformId === 'facebook' ? 'needs_reauth' : 'active');
       assert.ok(f.lastSyncedAt);
     }
     // El seed deja el token de YouTube a punto de vencer: connection_health lo marca.

@@ -77,20 +77,48 @@ ON CONFLICT (id) DO UPDATE SET title_es = EXCLUDED.title_es, body_es = EXCLUDED.
 -- ---------------------------------------------------------------------
 -- 2 · FV-2026-007: el segundo aviso de mora, sin mandar
 -- ---------------------------------------------------------------------
--- El texto es el de @mc/core redactarRecordatorio (paso 4, tono mora_2)
--- con las cifras de la factura; el enlace, el de urlRecordatorio.
+-- El texto sigue a @mc/core redactarRecordatorio (paso 4, tono mora_2):
+-- saludo, apertura, cifras, el bloque de pago (Laura no configuró cómo
+-- le pagan, FIN-8) y el cierre; el enlace, el de urlRecordatorio. Las
+-- cifras van como las formatea en es-CO, el locale de la demo.
+WITH f AS (
+  SELECT i.*, co.name AS empresa, ca.name AS campana, w.name AS creador,
+         'COP ' || replace(to_char(i.total - i.paid_amount, 'FM999G999G999'), ',', '.') AS pendiente_txt,
+         'COP ' || replace(to_char(i.total, 'FM999G999G999'), ',', '.') AS total_txt,
+         extract(day FROM i.due_on)::int || ' de '
+           || (ARRAY['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'])
+                [extract(month FROM i.due_on)::int]
+           || ' de ' || extract(year FROM i.due_on)::int AS vence_txt
+    FROM invoice i
+    JOIN company co  ON co.id = i.company_id
+    JOIN workspace w ON w.id = i.workspace_id
+    LEFT JOIN campaign ca ON ca.id = i.campaign_id
+   WHERE i.id = '00000003-0000-4000-8000-0000fac26007'
+)
 INSERT INTO notification (id, workspace_id, user_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url,
                           created_at, emailed_at)
-SELECT '00000011-0000-4000-8000-0000000a1102', i.workspace_id, NULL, 'invoice_overdue', 'warning',
-       'Segundo aviso · factura ' || i.number || ' con 21 días de mora',
-       'Este es el segundo aviso por la factura ' || i.number || ', que acumula 21 días de mora con un saldo de COP '
-         || replace(to_char(i.total - i.paid_amount, 'FM999G999G999'), ',', '.')
-         || '. Si hay algo del lado de ustedes que esté deteniendo el trámite —una orden de compra, un soporte, un radicado— '
-         || 'díganme y lo resuelvo hoy mismo.',
-       'invoice', i.id, '/finanzas/facturas/' || i.id || '?recordatorio=4',
-       (i.due_on + 21)::timestamp + interval '14 hours', now()
-  FROM invoice i
- WHERE i.id = '00000003-0000-4000-8000-0000fac26007'
+SELECT '00000011-0000-4000-8000-0000000a1102', f.workspace_id, NULL, 'invoice_overdue', 'warning',
+       'Segundo aviso · factura ' || f.number || ' con 21 días de mora',
+       concat_ws(E'\n',
+         'Hola, equipo de ' || f.empresa || ':',
+         '',
+         'Este es el segundo aviso por la factura ' || f.number || ', que acumula 21 días de mora con un saldo de '
+           || f.pendiente_txt || '. Si hay algo del lado de ustedes que esté deteniendo el trámite —una orden de compra, '
+           || 'un soporte, un radicado— díganme y lo resuelvo hoy mismo.',
+         '',
+         '  Factura: ' || f.number,
+         CASE WHEN f.campana IS NOT NULL THEN '  Campaña: ' || f.campana END,
+         '  Venció: ' || f.vence_txt,
+         '  Total de la factura: ' || f.total_txt,
+         '',
+         'Todavía no tienes datos de pago configurados, así que este correo no los incluye: escríbelos a mano antes de '
+           || 'enviarlo, o configúralos una sola vez en Finanzas → Configuración → «Cómo te pagan» para que salgan solos.',
+         '',
+         'Gracias por la gestión,',
+         f.creador),
+       'invoice', f.id, '/finanzas/facturas/' || f.id || '?recordatorio=4',
+       (f.due_on + 21)::timestamp + interval '14 hours', now()
+  FROM f
 ON CONFLICT (id) DO UPDATE SET title_es = EXCLUDED.title_es, body_es = EXCLUDED.body_es, created_at = EXCLUDED.created_at,
                                emailed_at = EXCLUDED.emailed_at, read_at = NULL, dismissed_at = NULL;
 

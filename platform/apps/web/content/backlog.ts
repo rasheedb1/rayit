@@ -336,7 +336,7 @@ export const STORIES: readonly Story[] = [
     desc: "Lista generada desde los datos: outliers nuevos, conexión con error, factura vencida, deal con seguimiento vencido. Lee notification.",
     done: "Las cuatro fuentes producen su fila y cada una lleva a su módulo.",
     status: "hecho",
-    note: "5-oct: bloque arriba de /resumen (queries/resumen-semana.ts), una fila por cosa y por urgencia, solo lo que sigue siendo cierto hoy; sin finanzas.factura.ver no hay fila de factura y el alcance de ACC-6 aplica. «Entendido» es por persona (0078 notification_ack, sin aplicar en Supabase): read_at ya es «ya lo mandé» en FIN-4. La cuenta que ya no se puede leer ahora avisa (uno por semana). Prueba de punta a punta con los cuatro productores en apps/worker/test/lo-que-importa.test.ts.",
+    note: "5-oct (r2): bloque arriba de /resumen (queries/resumen-semana.ts), una fila por cosa y por urgencia, solo lo que sigue siendo cierto hoy; sin finanzas.factura.ver no hay fila de factura ni «Entendido» sobre ella, y el alcance de ACC-6 aplica en cada rama (inscrito en la guardia). Quinta fuente: la cuenta de envío caída (Ventas › Canales). «Entendido» es por persona y se deshace (0078 notification_ack, gestos append-only, con el índice por cosa en notification; sin aplicar en Supabase). Cinco filas a la vista y el resto plegado; el vacío no afirma nada sobre la mora. La demo trae un aviso de cada fuente (seed 0011). Punta a punta con los productores en apps/worker/test/lo-que-importa.test.ts.",
   },
   {
     id: "RES-4", module: "RES", owner: "rasheed", size: "S", sprint: 6, deps: ["CON-7"],

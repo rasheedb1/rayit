@@ -1105,6 +1105,9 @@ describe('bandeja de recordatorios (FIN-4)', () => {
     // (EMPRESA_SIN_RESERVA) y lo espera con OTRO dueño, así que el
     // primero en insertar decidía de quién era la empresa.
     await t.admin(`
+      -- RES-3: el seed 0011 deja en la demo el paso 4 de FV-2026-007 sin
+      -- mandar; esta bandeja se arma con sus propios recordatorios.
+      DELETE FROM notification WHERE id = '00000011-0000-4000-8000-0000000a1102';
       INSERT INTO company (id, name, owner_workspace_id)
       VALUES ('${EMPRESA_AJENA}', 'Marca Ajena', '${WORKSPACE_AJENO}') ON CONFLICT DO NOTHING;
       INSERT INTO invoice (id, workspace_id, company_id, number, currency, subtotal, tax, withholding, total, issued_on, due_on, status, paid_amount)
