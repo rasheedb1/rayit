@@ -6,13 +6,13 @@
 --     node db/seed/verify/run.mjs 0011
 --
 -- Cada consulta con columna `ok` es una prueba: un false hace fallar
--- run.mjs. Lo que se cuida es que la demo enseñe las CUATRO fuentes del
+-- run.mjs. Lo que se cuida es que la demo enseñe las CINCO fuentes del
 -- bloque de arriba de /resumen: un aviso de cada una, con la forma de su
 -- productor, sobre una cosa que todavía cumple la regla de lectura de
 -- packages/db/src/queries/resumen-semana.ts (la cuenta sigue caída, la
 -- factura sigue vencida, el negocio sigue vencido y el aviso es de ese
 -- compromiso, el video se avisó esta semana). Que la consulta de verdad
--- devuelva esas cuatro filas lo prueba, sobre el mismo seed,
+-- devuelva esas cinco filas lo prueba, sobre el mismo seed,
 -- packages/db/test/resumen-semana.test.ts («el seed de la demo…»).
 --
 -- Mira las tablas y no deal_pipeline: la vista usa su propio now(), que
@@ -49,9 +49,16 @@ SELECT 'a2_canal_caido' AS check_id, a.channel, a.status,
  WHERE n.id = '00000011-0000-4000-8000-0000000a1105';
 
 -- (b) La cuenta sigue caída y el aviso es el crítico de needs_reauth, con su enlace.
+--     El título es el de @mc/core connectionErrorTitle('Facebook', handle,
+--     'reauth') (packages/core/src/cuentas.ts): dice qué pasó y no promete
+--     «vuelve a conectarla», que Conexiones no puede hacer en la demo. La
+--     igualdad con la función la compara packages/db/test/resumen-semana.test.ts;
+--     aquí, la forma, y que ni el título ni el detalle prometan reconectar.
 SELECT 'b_cuenta_caida' AS check_id, c.platform_id, c.status, n.severity, n.title_es,
        c.status = 'needs_reauth' AND c.deleted_at IS NULL AND n.severity = 'critical' AND n.action_url = '/conexiones'
-         AND n.title_es = 'Vuelve a conectar tu cuenta de Facebook @' || c.handle AS ok
+         AND n.title_es = 'Facebook dejó de darnos las cifras de @' || c.handle
+         AND n.title_es !~* '(vuelve a (conectar|autorizar)|reautoriz)'
+         AND coalesce(c.status_detail, '') !~* '(vuelve a (conectar|autorizar)|reautoriz)' AS ok
   FROM notification n
   JOIN social_connection c ON c.id = n.entity_id
  WHERE n.id = '00000011-0000-4000-8000-0000000a1101';

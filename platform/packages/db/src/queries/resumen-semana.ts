@@ -41,11 +41,18 @@
  *       (VEN-4 se lo manda al responsable del negocio); sin user_id es de
  *       todo el espacio. Sin persona —el modo demo— se ve todo.
  *   4 · Leído es de la persona: notification_ack (0078), donde vale el
- *       último gesto (Entendido o Deshacer). No se toca
- *       `notification.read_at`, que en FIN-4 quiere decir «ya lo mandé».
- *       Un aviso con read_at o dismissed_at ya se atendió en su módulo y
- *       tampoco sale. Por eso el bloque vacío NO afirma que no haya
- *       cobros vencidos: dice que no hay nada nuevo que atender.
+ *       último gesto (Entendido o Deshacer). Sin sesión (el modo demo)
+ *       no hay persona y no se escribe en la base: quien llama pasa
+ *       `hidden`, los avisos que ESE visitante entendió (su cookie). No
+ *       se toca `notification.read_at`, que en FIN-4 quiere decir «ya lo
+ *       mandé». Un aviso con dismissed_at no sale; con read_at tampoco,
+ *       SALVO la factura: mandar el recordatorio no cobra la factura, y
+ *       mientras siga abierta y vencida la fila sigue, con otro texto
+ *       (`reminderSentAt`). Solo el «Entendido» de la persona la quita.
+ *   4b · Urgencia ANTES del corte: cada rama ordena por severidad y
+ *       luego por lo más reciente (el mismo orden que compareHighlights)
+ *       antes de su LIMIT. Con 30 cuentas rotas, la crítica más vieja no
+ *       se queda fuera por veinte avisos recientes de menos peso.
  *   5 · Permisos y alcance. Qué FUENTES se piden lo decide quien llama
  *       con los permisos de la sesión (`weeklySourcesFor`: sin
  *       finanzas.factura.ver no hay fila de factura), y el «Entendido»
@@ -192,6 +199,13 @@ export interface InvoiceHighlight extends HighlightBase<'invoice'> {
   dueOn: string;
   /** Días de mora HOY en la zona del espacio (≥ 1). */
   daysOverdue: number;
+  /**
+   * Cuándo se marcó como enviado en Finanzas el recordatorio de este
+   * aviso (notification.read_at, FIN-4), ISO 8601 en UTC; null si sigue
+   * por mandar. Mandarlo no cobra la factura: la fila sigue y cambia el
+   * texto («Recordatorio enviado el … · sigue sin pagar»).
+   */
+  reminderSentAt: string | null;
 }
 
 export interface DealHighlight extends HighlightBase<'deal'> {
@@ -223,14 +237,40 @@ export interface WeeklyHighlights {
 /** El aviso es de esta persona: va a todo el espacio, o a ella. Sin persona (modo demo), todo. */
 const PARA_MI = `(n.user_id IS NULL OR current_user_id() IS NULL OR n.user_id = current_user_id())`;
 
-/** El último gesto de esta persona sobre el aviso `idExpr` (0078): 'ack', 'undo' o NULL si nunca tocó. */
+/**
+ * El último gesto de esta persona sobre el aviso `idExpr` (0078): 'ack',
+ * 'undo' o NULL si nunca tocó. Sin persona (modo demo) siempre NULL: la
+ * tabla no guarda gestos sin persona.
+ */
 const ultimoGesto = (idExpr: string) => `(SELECT a.action FROM notification_ack a
    WHERE a.workspace_id = current_workspace_id() AND a.notification_id = ${idExpr}
-     AND a.user_id IS NOT DISTINCT FROM current_user_id()
+     AND a.user_id = current_user_id()
    ORDER BY a.created_at DESC, a.id DESC LIMIT 1)`;
 
-/** Sin atender: ni descartado ni atendido en su módulo, ni entendido por esta persona. */
-const SIN_ATENDER = `n.dismissed_at IS NULL AND n.read_at IS NULL AND ${ultimoGesto('n.id')} IS DISTINCT FROM 'ack'`;
+/**
+ * Sin atender (regla 4): ni descartado, ni entendido por esta persona,
+ * ni entre los que quien visita sin sesión ya entendió (`ocultas`, el
+ * parámetro uuid[]). `leidoQuita`: si un aviso con read_at también sale.
+ * Sí en todas las ramas menos la factura, donde read_at es «recordatorio
+ * enviado» y la factura sigue sin pagar.
+ */
+function sinAtender(ocultas: string, leidoQuita = true): string {
+  return [
+    'n.dismissed_at IS NULL',
+    ...(leidoQuita ? ['n.read_at IS NULL'] : []),
+    `${ultimoGesto('n.id')} IS DISTINCT FROM 'ack'`,
+    `NOT (n.id = ANY(${ocultas}::uuid[]))`,
+  ].join(' AND ');
+}
+
+/**
+ * El orden de cada rama ANTES de su LIMIT (regla 4b): urgencia, lo más
+ * reciente, el id. Es el de compareHighlights dentro de una fuente, así
+ * que lo que corta SQL es lo que la pantalla habría enseñado primero.
+ * `severidad` es la expresión de la severidad de la fila.
+ */
+const orden = (severidad = 'n.severity') =>
+  `ORDER BY CASE ${severidad} WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 WHEN 'info' THEN 2 ELSE 3 END, n.created_at DESC, n.id`;
 
 /**
  * El aviso más reciente de cada cosa (regla 1), de los que son de esta
@@ -251,9 +291,13 @@ function ultimoPorEntidad(source: WeeklySource): string {
   )`;
 }
 
-/** Las columnas del aviso que llevan todas las ramas. */
-const COLUMNAS_AVISO = `n.id, n.kind, n.severity, n.title_es, n.body_es, n.action_url,
-       to_char(n.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at`;
+/**
+ * Las columnas del aviso que llevan todas las ramas. created_at con
+ * microsegundos: compareHighlights lo compara como texto y tiene que
+ * desempatar igual que el ORDER BY de la rama.
+ */
+const columnasAviso = (severidad = 'n.severity') => `n.id, n.kind, ${severidad} AS severity, n.title_es, n.body_es, n.action_url,
+       to_char(n.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at`;
 
 /** La zona del espacio `w`, como la cuentan deal_pipeline (0043) y sales.follow_ups. */
 const ZONA = `coalesce(nullif(w.timezone, ''), 'UTC')`;
@@ -325,23 +369,23 @@ interface OutlierRaw extends AvisoRaw<'outlier'> {
   age_hours_cut: AgeCut | null;
 }
 
-async function outliers(tx: WorkspaceTx, limit: number): Promise<OutlierHighlight[]> {
+async function outliers(tx: WorkspaceTx, limit: number, ocultas: readonly string[]): Promise<OutlierHighlight[]> {
   const { rows } = await tx.query<OutlierRaw>(
     `WITH ${ultimoPorEntidad('outlier')}
-     SELECT ${COLUMNAS_AVISO},
+     SELECT ${columnasAviso()},
             p.id AS post_id, p.platform_id, p.title AS post_title, p.caption AS post_caption,
             coalesce(p.permalink, p.url) AS post_url,
             ps.views_vs_median::text AS views_vs_median, ps.age_hours_cut
        FROM ultimo n
        JOIN post p ON p.id = n.entity_id
        LEFT JOIN post_score ps ON ps.post_id = p.id
-      WHERE ${SIN_ATENDER}
+      WHERE ${sinAtender('$4')}
         AND NOT p.deleted_on_platform
         AND n.created_at >= now() - make_interval(days => $2::int)
         AND ${SCOPE_POST}
-      ORDER BY n.created_at DESC
+      ${orden()}
       LIMIT $3`,
-    [AVISOS.outlier.kinds, OUTLIER_WINDOW_DAYS, limit],
+    [AVISOS.outlier.kinds, OUTLIER_WINDOW_DAYS, limit, ocultas],
   );
   return rows.map((r) => ({
     ...base('outlier', r),
@@ -364,20 +408,20 @@ interface ConnectionRaw extends AvisoRaw<'connection'> {
   detail: string | null;
 }
 
-async function connections(tx: WorkspaceTx, limit: number): Promise<ConnectionHighlight[]> {
+async function connections(tx: WorkspaceTx, limit: number, ocultas: readonly string[]): Promise<ConnectionHighlight[]> {
   const { rows } = await tx.query<ConnectionRaw>(
     `WITH ${ultimoPorEntidad('connection')}
-     SELECT ${COLUMNAS_AVISO},
+     SELECT ${columnasAviso()},
             c.id AS connection_id, c.platform_id, c.handle, c.status, c.status_detail AS detail
        FROM ultimo n
        JOIN social_connection c ON c.id = n.entity_id
-      WHERE ${SIN_ATENDER}
+      WHERE ${sinAtender('$3')}
         AND c.deleted_at IS NULL
         AND c.status IN ('needs_reauth', 'error', 'expired', 'revoked')
         AND ${SCOPE_CONNECTION}
-      ORDER BY n.created_at DESC
+      ${orden()}
       LIMIT $2`,
-    [AVISOS.connection.kinds, limit],
+    [AVISOS.connection.kinds, limit, ocultas],
   );
   return rows.map((r) => ({
     ...base('connection', r),
@@ -402,20 +446,20 @@ interface ChannelRaw extends AvisoRaw<'channel'> {
  * success, markChannelAccountOk) es el más reciente cuando la cuenta se
  * recuperó, y la cuenta ya está 'connected': no sale.
  */
-async function channels(tx: WorkspaceTx, limit: number): Promise<ChannelHighlight[]> {
+async function channels(tx: WorkspaceTx, limit: number, ocultas: readonly string[]): Promise<ChannelHighlight[]> {
   const { rows } = await tx.query<ChannelRaw>(
     `WITH ${ultimoPorEntidad('channel')}
-     SELECT ${COLUMNAS_AVISO},
+     SELECT ${columnasAviso()},
             a.id AS account_id, a.channel, a.display_name, a.status
        FROM ultimo n
        JOIN outreach_channel_account a ON a.id = n.entity_id
-      WHERE ${SIN_ATENDER}
+      WHERE ${sinAtender('$3')}
         AND n.severity <> 'success'
         AND a.status IN ('needs_reconnect', 'error')
         AND ${SCOPE_CHANNEL}
-      ORDER BY n.created_at DESC
+      ${orden()}
       LIMIT $2`,
-    [AVISOS.channel.kinds, limit],
+    [AVISOS.channel.kinds, limit, ocultas],
   );
   return rows.map((r) => ({
     ...base('channel', r),
@@ -434,34 +478,47 @@ interface InvoiceRaw extends AvisoRaw<'invoice'> {
   outstanding: string;
   due_on: string;
   days_overdue: number;
+  reminder_sent_at: string | null;
 }
+
+/**
+ * La severidad de la fila de una factura: la del recordatorio, y como
+ * mínimo 'warning'. Una factura del bloque está vencida HOY, aunque su
+ * último aviso sea el del paso −7 o el 0 (info) o ya se haya mandado.
+ */
+const SEVERIDAD_FACTURA = `CASE WHEN n.severity = 'critical' THEN 'critical' ELSE 'warning' END`;
 
 /**
  * La factura sigue abierta (sent o partial) y vencida HOY en la zona del
  * espacio, como cuenta Finanzas la mora (listReminders). El recordatorio
  * del paso −7 o del 0 de una factura que ya venció cuenta: es el último
- * que hay y la factura está vencida.
+ * que hay y la factura está vencida. Un recordatorio ya mandado
+ * (read_at) NO la saca (regla 4): entre el paso 4 (+21) y el 5 (+45)
+ * pasan 24 días sin aviso nuevo, y un «todo en orden» con un cobro de 40
+ * días sin pagar sería mentira. La mora se cuenta en la zona del espacio;
+ * la vista receivables (0010) la cuenta en UTC (FIN-9).
  */
-async function invoices(tx: WorkspaceTx, limit: number): Promise<InvoiceHighlight[]> {
+async function invoices(tx: WorkspaceTx, limit: number, ocultas: readonly string[]): Promise<InvoiceHighlight[]> {
   const { rows } = await tx.query<InvoiceRaw>(
     `WITH ${ultimoPorEntidad('invoice')}
-     SELECT ${COLUMNAS_AVISO},
+     SELECT ${columnasAviso(SEVERIDAD_FACTURA)},
             i.id AS invoice_id, i.number, co.name AS company_name, i.currency,
             (i.total - i.paid_amount)::text AS outstanding,
             to_char(i.due_on, 'YYYY-MM-DD') AS due_on,
-            ((now() AT TIME ZONE ${ZONA})::date - i.due_on)::int AS days_overdue
+            ((now() AT TIME ZONE ${ZONA})::date - i.due_on)::int AS days_overdue,
+            to_char(n.read_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS reminder_sent_at
        FROM ultimo n
        JOIN invoice i   ON i.id = n.entity_id
        JOIN company co  ON co.id = i.company_id
        JOIN workspace w ON w.id = i.workspace_id
        LEFT JOIN campaign ca ON ca.id = i.campaign_id
-      WHERE ${SIN_ATENDER}
+      WHERE ${sinAtender('$3', false)}
         AND i.status IN ('sent', 'partial')
         AND i.due_on < (now() AT TIME ZONE ${ZONA})::date
         AND ${SCOPE_INVOICE}
-      ORDER BY i.due_on, i.number
+      ${orden(SEVERIDAD_FACTURA)}
       LIMIT $2`,
-    [AVISOS.invoice.kinds, limit],
+    [AVISOS.invoice.kinds, limit, ocultas],
   );
   return rows.map((r) => ({
     ...base('invoice', r),
@@ -472,6 +529,7 @@ async function invoices(tx: WorkspaceTx, limit: number): Promise<InvoiceHighligh
     outstanding: r.outstanding,
     dueOn: r.due_on,
     daysOverdue: r.days_overdue,
+    reminderSentAt: r.reminder_sent_at,
   }));
 }
 
@@ -494,10 +552,10 @@ interface DealRaw extends AvisoRaw<'deal'> {
  * negocio queda «futuro» y sale del bloque; si la movió a otro día ya
  * pasado, el aviso viejo no vale y el job escribe uno nuevo.
  */
-async function deals(tx: WorkspaceTx, limit: number): Promise<DealHighlight[]> {
+async function deals(tx: WorkspaceTx, limit: number, ocultas: readonly string[]): Promise<DealHighlight[]> {
   const { rows } = await tx.query<DealRaw>(
     `WITH ${ultimoPorEntidad('deal')}
-     SELECT ${COLUMNAS_AVISO},
+     SELECT ${columnasAviso()},
             d.id AS deal_id, d.name AS deal_name, d.company_id, d.company_name, btrim(d.next_action) AS next_action,
             to_char(d.next_action_due AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS due_at,
             d.due_state,
@@ -505,15 +563,15 @@ async function deals(tx: WorkspaceTx, limit: number): Promise<DealHighlight[]> {
        FROM ultimo n
        JOIN deal_pipeline d ON d.id = n.entity_id
        JOIN workspace w     ON w.id = d.workspace_id
-      WHERE ${SIN_ATENDER}
+      WHERE ${sinAtender('$3')}
         AND NOT d.is_won AND NOT d.is_lost
         AND nullif(btrim(d.next_action), '') IS NOT NULL
         AND d.due_state IN ('vencido', 'hoy')
         AND n.created_at >= (date_trunc('day', d.next_action_due AT TIME ZONE ${ZONA}) AT TIME ZONE ${ZONA})
         AND ${SCOPE_DEAL}
-      ORDER BY d.next_action_due, d.name
+      ${orden()}
       LIMIT $2`,
-    [AVISOS.deal.kinds, limit],
+    [AVISOS.deal.kinds, limit, ocultas],
   );
   return rows.map((r) => ({
     ...base('deal', r),
@@ -532,7 +590,9 @@ async function deals(tx: WorkspaceTx, limit: number): Promise<DealHighlight[]> {
 // Lectura, «Entendido» y «Deshacer»
 // ---------------------------------------------------------------------
 
-const RAMAS: { readonly [S in WeeklySource]: (tx: WorkspaceTx, limit: number) => Promise<Extract<WeeklyHighlight, { source: S }>[]> } = {
+type Rama<S extends WeeklySource> = (tx: WorkspaceTx, limit: number, ocultas: readonly string[]) => Promise<Extract<WeeklyHighlight, { source: S }>[]>;
+
+const RAMAS: { readonly [S in WeeklySource]: Rama<S> } = {
   connection: connections,
   channel: channels,
   invoice: invoices,
@@ -547,7 +607,8 @@ const SEVERITY_RANK: Readonly<Record<HighlightSeverity, number>> = { critical: 0
  * leerse, el último recordatorio de un cobro), luego lo que ya venció,
  * luego lo de hoy y al final las buenas noticias (un video que se
  * disparó). A igual severidad, en el orden de WEEKLY_SOURCES; dentro de
- * la misma fuente, lo más reciente primero.
+ * la misma fuente, lo más reciente primero. Dentro de una fuente es el
+ * mismo orden con el que cada rama corta en SQL (`orden`, regla 4b).
  */
 export function compareHighlights(a: WeeklyHighlight, b: WeeklyHighlight): number {
   return (
@@ -561,17 +622,65 @@ export function compareHighlights(a: WeeklyHighlight, b: WeeklyHighlight): numbe
 /** Solo las fuentes de la lista, en su orden: lo que llegue de fuera no elige SQL. */
 const pedidas = (sources: readonly WeeklySource[]) => WEEKLY_SOURCES.filter((s) => sources.includes(s));
 
+/** Cuántos ids ocultos se aceptan como mucho: los de una cookie, que llega del navegador. */
+export const MAX_HIDDEN = 50;
+
+export interface WeeklyHighlightsOptions {
+  /**
+   * Los avisos que quien visita SIN sesión (modo demo) ya entendió: los
+   * de su cookie (apps/web …/resumen/_lib/entendidos.ts). Sin sesión no
+   * hay persona y notification_ack no guarda nada (0078), así que el
+   * «Entendido» de un visitante no le vacía el bloque a los demás. Lo
+   * que no sea un uuid se ignora, y se toman como mucho MAX_HIDDEN.
+   */
+  hidden?: readonly string[];
+}
+
 /**
  * Lo que importa esta semana para la persona de la transacción, de las
  * fuentes pedidas (las que sus permisos ven: `weeklySourcesFor`), en
  * orden de urgencia y como mucho MAX_HIGHLIGHTS filas. `more` dice si
  * quedaron filas fuera: cada rama pide una de más.
  */
-export async function listWeeklyHighlights(tx: WorkspaceTx, sources: readonly WeeklySource[]): Promise<WeeklyHighlights> {
+export async function listWeeklyHighlights(
+  tx: WorkspaceTx,
+  sources: readonly WeeklySource[],
+  options: WeeklyHighlightsOptions = {},
+): Promise<WeeklyHighlights> {
+  const ocultas = (options.hidden ?? []).filter(isUuid).slice(0, MAX_HIDDEN);
   const filas: WeeklyHighlight[] = [];
-  for (const s of pedidas(sources)) filas.push(...(await RAMAS[s](tx, MAX_HIGHLIGHTS + 1)));
+  for (const s of pedidas(sources)) filas.push(...(await RAMAS[s](tx, MAX_HIGHLIGHTS + 1, ocultas)));
   filas.sort(compareHighlights);
   return { rows: filas.slice(0, MAX_HIGHLIGHTS), more: filas.length > MAX_HIGHLIGHTS };
+}
+
+/**
+ * El aviso `$1`, si es del bloque para la persona de la transacción: de
+ * este espacio (RLS), de ella (PARA_MI) y de una de las fuentes pedidas
+ * —por su cosa y su kind—. Parámetros: $1 el id, $2 y $3 los pares
+ * (entity_type, kind) de las fuentes.
+ */
+const AVISO_DEL_BLOQUE = `SELECT n.id FROM notification n
+        WHERE n.id = $1 AND ${PARA_MI}
+          AND (n.entity_type, n.kind) IN (SELECT * FROM unnest($2::text[], $3::text[]))`;
+
+const paresDe = (fuentes: readonly WeeklySource[]) => [
+  fuentes.flatMap((s) => AVISOS[s].kinds.map(() => AVISOS[s].entityType)),
+  fuentes.flatMap((s): readonly string[] => AVISOS[s].kinds),
+];
+
+/**
+ * ¿Es este aviso del bloque para quien pregunta, con estas fuentes? Lo
+ * usa el «Entendido» sin sesión (modo demo), que no escribe en la base:
+ * antes de guardar el id en la cookie del visitante se comprueba que es
+ * un aviso que ese visitante ve, igual que `gesto` antes de escribir.
+ */
+export async function isWeeklyHighlight(tx: WorkspaceTx, notificationId: string, sources: readonly WeeklySource[]): Promise<boolean> {
+  if (!isUuid(notificationId)) return false;
+  const fuentes = pedidas(sources);
+  if (fuentes.length === 0) return false;
+  const { rows } = await tx.query<{ ok: boolean }>(`SELECT EXISTS (${AVISO_DEL_BLOQUE}) AS ok`, [notificationId, ...paresDe(fuentes)]);
+  return rows[0]?.ok === true;
 }
 
 /**
@@ -582,7 +691,8 @@ export async function listWeeklyHighlights(tx: WorkspaceTx, sources: readonly We
  * factura aunque conozca el id. Escribe solo si cambia algo (el último
  * gesto no era ya ese), así repetir el clic no deja otra fila.
  * Devuelve false si el aviso no existe en este espacio, no es de esas
- * fuentes o no es de ella.
+ * fuentes o no es de ella, y siempre sin persona (modo demo): ese gesto
+ * no va a la base (ver WeeklyHighlightsOptions.hidden).
  */
 async function gesto(tx: WorkspaceTx, notificationId: string, sources: readonly WeeklySource[], action: 'ack' | 'undo'): Promise<boolean> {
   if (!isUuid(notificationId)) return false;
@@ -590,9 +700,8 @@ async function gesto(tx: WorkspaceTx, notificationId: string, sources: readonly 
   if (fuentes.length === 0) return false;
   const { rows } = await tx.query<{ ok: boolean }>(
     `WITH aviso AS (
-       SELECT n.id FROM notification n
-        WHERE n.id = $1 AND ${PARA_MI}
-          AND (n.entity_type, n.kind) IN (SELECT * FROM unnest($2::text[], $3::text[]))
+       ${AVISO_DEL_BLOQUE}
+          AND current_user_id() IS NOT NULL
      ), nueva AS (
        INSERT INTO notification_ack (workspace_id, notification_id, user_id, action)
        SELECT current_workspace_id(), aviso.id, current_user_id(), $4
@@ -601,12 +710,7 @@ async function gesto(tx: WorkspaceTx, notificationId: string, sources: readonly 
        RETURNING id
      )
      SELECT EXISTS (SELECT 1 FROM aviso) AS ok`,
-    [
-      notificationId,
-      fuentes.flatMap((s) => AVISOS[s].kinds.map(() => AVISOS[s].entityType)),
-      fuentes.flatMap((s): readonly string[] => AVISOS[s].kinds),
-      action,
-    ],
+    [notificationId, ...paresDe(fuentes), action],
   );
   return rows[0]?.ok === true;
 }

@@ -20,7 +20,7 @@ import {
 } from '@mc/connectors';
 import type { Queryable } from '../../runner/db.ts';
 import type { JobContext, JobPayload } from '../../runner/registry.ts';
-import { connectionErrorSeverity, connectionErrorTitle, type BrokenAccountKind } from './aviso-cuenta.ts';
+import { connectionErrorSeverity, connectionErrorTitle, type BrokenAccountKind } from '@mc/core';
 import { PLATFORM_NAMES } from './oauth-refresh.ts';
 
 export interface CollectPayload extends JobPayload {
@@ -170,7 +170,7 @@ export type BrokenAccount = Pick<CollectableAccount, 'id' | 'workspace_id' | 'pl
  * a Conexiones; sin aviso, la cuenta caía en silencio.
  *
  * También lo usa markNeedsReauth (el token rechazado al recolectar
- * posts): el título y la severidad viven en aviso-cuenta.ts, y
+ * posts): el título y la severidad viven en @mc/core (cuentas.ts), y
  * oauth.refresh toma de allí el mismo título.
  *
  * Como mucho uno por cuenta y por semana para la MISMA avería: la cuenta

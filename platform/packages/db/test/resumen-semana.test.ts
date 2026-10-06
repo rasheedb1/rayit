@@ -17,21 +17,28 @@
  *   - solo lo que SIGUE siendo cierto hoy;
  *   - «Entendido» es de la persona (0078), se puede deshacer, no toca
  *     read_at, no se da por otro, ni sobre un aviso ajeno ni sobre una
- *     fuente que la persona no ve;
+ *     fuente que la persona no ve; cada persona lee solo sus gestos, y
+ *     sin sesión (demo) no se escribe nada: el visitante pasa los suyos
+ *     en `hidden` y no se los quita a nadie más;
+ *   - la factura con el recordatorio ya mandado sigue mientras no se
+ *     pague: cambia el texto, no desaparece;
  *   - sin finanzas.factura.ver (los permisos REALES del rol Mánager,
  *     leídos de role_permission) no hay fila de factura;
  *   - el alcance de ACC-6: quien ve solo lo de Laura no ve lo de Sofía,
  *     en ninguna de las cinco ramas;
+ *   - la urgencia manda ANTES del corte: con más cuentas rotas de las
+ *     que caben, la crítica más vieja no se queda fuera;
  *   - con más de MAX_HIGHLIGHTS, `more` lo dice.
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { videoName, type Permiso } from '@mc/core';
+import { connectionErrorTitle, videoName, type Permiso } from '@mc/core';
 import type { WorkspaceTx } from '../src/client.ts';
 import { getSessionPermissions } from '../src/queries/accesos.ts';
 import {
   acknowledgeHighlight,
   compareHighlights,
+  isWeeklyHighlight,
   listWeeklyHighlights,
   MAX_HIGHLIGHTS,
   unacknowledgeHighlight,
@@ -43,7 +50,7 @@ import {
 import { markReminderSent } from '../src/queries/finanzas.ts';
 import { openTestDb, POST_D01_REEL_CAFE_ALMA, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 import {
-  CONEXION_SOFIA, CREATOR_SOFIA, EMPRESA_SOFIA, INVOICE_SOFIA, POST_SOFIA, sembrarAlcance, USER_LAURA, USER_MIEMBRO,
+  CONEXION_SOFIA, CREATOR_LAURA, CREATOR_SOFIA, EMPRESA_SOFIA, INVOICE_SOFIA, POST_SOFIA, sembrarAlcance, USER_LAURA, USER_MIEMBRO,
 } from './alcance.ts';
 
 /** La cuenta de TikTok de Laura (seed 0002). */
@@ -87,10 +94,11 @@ let negocio: { id: string; company_id: string };
 const como = <T>(userId: string | null, fn: (tx: WorkspaceTx) => Promise<T>): Promise<T> =>
   userId === null ? t.db.withWorkspace(WORKSPACE_LAURA, fn) : t.db.withWorkspace(WORKSPACE_LAURA, fn, { userId });
 
-const leer = (userId: string | null, sources: readonly WeeklySource[] = WEEKLY_SOURCES) =>
-  como(userId, (tx) => listWeeklyHighlights(tx, sources));
+const leer = (userId: string | null, sources: readonly WeeklySource[] = WEEKLY_SOURCES, hidden?: readonly string[]) =>
+  como(userId, (tx) => listWeeklyHighlights(tx, sources, { hidden }));
 
-const lista = async (userId: string | null, sources: readonly WeeklySource[] = WEEKLY_SOURCES) => (await leer(userId, sources)).rows;
+const lista = async (userId: string | null, sources: readonly WeeklySource[] = WEEKLY_SOURCES, hidden?: readonly string[]) =>
+  (await leer(userId, sources, hidden)).rows;
 
 const permisosDe = async (userId: string): Promise<ReadonlySet<Permiso>> =>
   new Set((await como(userId, (tx) => getSessionPermissions(tx))) as Permiso[]);
@@ -169,6 +177,9 @@ describe('el seed de la demo (0011)', () => {
     assert.equal(cuenta.connectionId, CONEXION_FACEBOOK);
     assert.equal(cuenta.status, 'needs_reauth');
     assert.equal(cuenta.actionUrl, '/conexiones');
+    // El seed copia el título a mano (es SQL): tiene que ser el de @mc/core, el mismo que escribe el worker.
+    assert.equal(cuenta.storedTitle, connectionErrorTitle('Facebook', cuenta.handle, 'reauth'));
+    assert.doesNotMatch(`${cuenta.storedTitle} ${cuenta.detail}`, /vuelve a (conectar|autorizar)|reautoriz/i, 'no promete lo que Conexiones no hace');
     assert.ok(canal?.source === 'channel');
     assert.equal(canal.accountId, CANAL_LINKEDIN);
     assert.equal(canal.actionUrl, '/ventas/canales');
@@ -206,6 +217,7 @@ describe('las fuentes', () => {
     // El seed fija due_on con CURRENT_DATE (UTC) y la mora se cuenta en Bogotá: 40 entre las 0:00 y las 5:00 UTC.
     assert.ok([40, 41].includes(factura.daysOverdue), `mora ${factura.daysOverdue}`);
     assert.equal(factura.actionUrl, `/finanzas/facturas/${FV_007}?recordatorio=4`);
+    assert.equal(factura.reminderSentAt, null, 'el recordatorio sigue por mandar');
 
     assert.ok(trato?.source === 'deal');
     assert.equal(trato.dealId, negocio.id);
@@ -337,10 +349,40 @@ describe('«Entendido» y «Deshacer»', () => {
     assert.equal(propios.rows[0]?.n, 0);
   });
 
-  test('sin persona (demo) también vale, y es solo de la demo', async () => {
-    assert.equal(await entender(null, N_CONEXION), true);
-    assert.ok(!ids(await lista(null)).includes(N_CONEXION));
-    assert.ok(ids(await lista(USER_LAURA)).includes(N_CONEXION));
+  test('sin persona (demo) no se escribe nada: el «Entendido» de un visitante no vacía el bloque de los demás', async () => {
+    assert.equal(await entender(null, N_CONEXION), false, 'sin sesión el gesto no va a la base');
+    assert.equal(await deshacer(null, N_CONEXION), false);
+    assert.equal(await gestos(N_CONEXION), 0);
+    assert.ok(ids(await lista(null)).includes(N_CONEXION), 'el siguiente visitante lo sigue viendo');
+    // El gesto del visitante viaja en su cookie y la lectura lo aplica solo a él.
+    assert.equal(await como(null, (tx) => isWeeklyHighlight(tx, N_CONEXION, WEEKLY_SOURCES)), true);
+    assert.ok(!ids(await lista(null, WEEKLY_SOURCES, [N_CONEXION])).includes(N_CONEXION));
+    assert.ok(ids(await lista(null)).includes(N_CONEXION));
+    // Lo que llegue de la cookie que no sea un uuid se ignora, sin romper la consulta.
+    assert.ok(ids(await lista(null, WEEKLY_SOURCES, ['no-es-un-id', "'; DROP TABLE notification; --"])).includes(N_CONEXION));
+  });
+
+  test('isWeeklyHighlight valida como el gesto: fuente visible, del espacio y de la persona', async () => {
+    const manager = weeklySourcesFor(await permisosDe(USER_MANAGER));
+    assert.equal(await como(USER_MANAGER, (tx) => isWeeklyHighlight(tx, N_FACTURA, manager)), false, 'sin Finanzas, la factura no');
+    assert.equal(await como(null, (tx) => isWeeklyHighlight(tx, N_AJENO, WEEKLY_SOURCES)), false, 'de otro espacio, no');
+    assert.equal(await como(USER_MANAGER, (tx) => isWeeklyHighlight(tx, N_NEGOCIO, WEEKLY_SOURCES)), false, 'de otra persona, no');
+    assert.equal(await como(null, (tx) => isWeeklyHighlight(tx, 'no-es-un-id', WEEKLY_SOURCES)), false);
+  });
+
+  test('cada persona lee solo sus gestos: quién dio «Entendido» a qué no es del resto del espacio', async () => {
+    assert.equal(await entender(USER_MANAGER, N_CONEXION), true);
+    const contar = (userId: string) =>
+      como(userId, async (tx) => (await tx.query<{ n: number; ajenos: number }>(
+        `SELECT count(*)::int AS n, count(*) FILTER (WHERE user_id IS DISTINCT FROM current_user_id())::int AS ajenos FROM notification_ack`,
+      )).rows[0]);
+    const laura = await contar(USER_LAURA);
+    const manager = await contar(USER_MANAGER);
+    assert.equal(laura?.ajenos, 0);
+    assert.equal(manager?.ajenos, 0);
+    assert.ok((laura?.n ?? 0) > 0 && (manager?.n ?? 0) > 0, 'las dos tienen los suyos');
+    assert.ok(ids(await lista(USER_LAURA)).includes(N_CONEXION), 'el de la Mánager no le quita nada a Laura');
+    assert.equal(await deshacer(USER_MANAGER, N_CONEXION), true);
   });
 
   test('no vale para un aviso que no es del bloque, de otro espacio, de otra persona o con un id imposible', async () => {
@@ -371,20 +413,43 @@ describe('«Entendido» y «Deshacer»', () => {
         /row-level security|política|policy/i,
       );
     }
+    await assert.rejects(
+      como(null, (tx) =>
+        tx.query(
+          `INSERT INTO notification_ack (workspace_id, notification_id, user_id, action) VALUES (current_workspace_id(), $1, NULL, 'ack')`,
+          [N_FACTURA],
+        )),
+      /null value|not-null|row-level security|policy/i,
+      'sin persona no hay gesto en la base: la demo no comparte un «Entendido»',
+    );
     await assert.rejects(como(USER_LAURA, (tx) => tx.query('DELETE FROM notification_ack')), /permission denied|permiso/i);
     await assert.rejects(como(USER_LAURA, (tx) => tx.query(`UPDATE notification_ack SET action = 'undo'`)), /permission denied|permiso/i);
   });
 });
 
 describe('solo lo que sigue siendo cierto', () => {
-  test('el recordatorio ya mandado en Finanzas saca la factura, y no vuelve el del paso anterior', async () => {
+  test('el recordatorio ya mandado en Finanzas NO saca la factura: sigue sin pagar, y cambia solo lo que se sabe', async () => {
     assert.equal(await como(USER_LAURA, (tx) => markReminderSent(tx, N_FACTURA)), true);
-    const filas = await lista(USER_LAURA);
-    assert.ok(!filas.some((f) => f.source === 'invoice'));
+    const facturas = (await lista(USER_LAURA)).filter((f) => f.source === 'invoice');
+    const factura = facturas.find((f) => f.id === N_FACTURA);
+    assert.ok(factura?.source === 'invoice', 'la factura vencida sigue en el bloque');
+    assert.ok(factura.reminderSentAt !== null && /^\d{4}-\d{2}-\d{2}T/.test(factura.reminderSentAt));
+    assert.equal(factura.severity, 'warning', 'como mínimo «aviso»: está vencida');
+    assert.ok(!facturas.some((f) => f.id === N_FACTURA_PASO_0), 'una fila por factura: no vuelve el aviso del paso anterior');
+    // Solo el «Entendido» de la persona la quita.
+    assert.equal(await entender(USER_LAURA, N_FACTURA), true);
+    assert.ok(!ids(await lista(USER_LAURA)).includes(N_FACTURA));
+    assert.equal(await deshacer(USER_LAURA, N_FACTURA), true);
   });
 
-  test('una factura pagada no está vencida aunque su aviso siga sin leer', async () => {
-    await t.admin(`UPDATE notification SET read_at = NULL WHERE id = '${N_FACTURA}'`);
+  test('una factura cuyo último aviso es informativo (paso 0) y ya venció cuenta como «aviso»', async () => {
+    await t.admin(`UPDATE notification SET severity = 'info' WHERE id = '${N_FACTURA}'`);
+    const factura = (await lista(USER_LAURA)).find((f) => f.id === N_FACTURA);
+    assert.equal(factura?.severity, 'warning');
+    await t.admin(`UPDATE notification SET severity = 'warning' WHERE id = '${N_FACTURA}'`);
+  });
+
+  test('una factura pagada no está vencida, ni con el recordatorio por mandar ni mandado', async () => {
     assert.ok(ids(await lista(USER_LAURA)).includes(N_FACTURA));
     await t.admin(`UPDATE invoice SET status = 'paid', paid_amount = total, paid_at = now() WHERE id = '${FV_007}'`);
     assert.ok(!ids(await lista(USER_LAURA)).includes(N_FACTURA));
@@ -467,5 +532,39 @@ describe('más de las que caben', () => {
     assert.equal(more, true);
     const justo = await leer(USER_LAURA, ['connection']);
     assert.equal(justo.more, false);
+  });
+});
+
+describe('la urgencia manda antes del corte', () => {
+  test('con más cuentas rotas de las que caben, la crítica más vieja sale, y primero', async () => {
+    const n = MAX_HIGHLIGHTS + 2;
+    const conexion = (i: number) => `0000000c-0000-4000-8000-0000000cc${String(i).padStart(3, '0')}`;
+    const avisoDe = (i: number) => `0000000c-0000-4000-8000-0000000ab${String(i).padStart(3, '0')}`;
+    await t.admin(Array.from({ length: n }, (_, i) => `
+      INSERT INTO social_connection
+        (id, workspace_id, creator_id, platform_id, external_account_id, handle, display_name, profile_url,
+         account_type, secret_ref, scopes, access_mode, status, connected_at)
+      VALUES ('${conexion(i)}', '${WORKSPACE_LAURA}', '${CREATOR_LAURA}', 'tiktok', 'rota.${i}', 'rota.${i}', 'Rota ${i}',
+              'https://www.tiktok.com/@rota.${i}', 'creator', 'public:tiktok:rota.${i}', '{}', 'public_profile',
+              ${i === 0 ? "'needs_reauth'" : "'error'"}, now() - interval '60 days')
+      ON CONFLICT DO NOTHING;
+      ${aviso({
+        id: avisoDe(i), kind: 'connection_error', severity: i === 0 ? 'critical' : 'warning', entityType: 'social_connection',
+        entityId: conexion(i), actionUrl: '/conexiones',
+        // La crítica es la MÁS VIEJA: con el corte por fecha se quedaba fuera.
+        createdAt: i === 0 ? "now() - interval '30 days'" : `now() - interval '${i} minutes'`,
+      })}`).join('\n'));
+    try {
+      const { rows, more } = await leer(USER_LAURA, ['connection']);
+      assert.equal(more, true);
+      assert.equal(rows[0]?.id, avisoDe(0), 'la crítica, primera');
+      assert.equal(rows[0]?.severity, 'critical');
+      for (let i = 1; i < rows.length; i++) assert.ok(compareHighlights(rows[i - 1]!, rows[i]!) < 0, 'el corte de SQL sigue el orden de la pantalla');
+    } finally {
+      await t.admin(`
+        DELETE FROM notification WHERE id::text LIKE '0000000c-0000-4000-8000-0000000ab%';
+        DELETE FROM social_connection WHERE id::text LIKE '0000000c-0000-4000-8000-0000000cc%';
+      `);
+    }
   });
 });

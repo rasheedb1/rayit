@@ -15,7 +15,10 @@
 --       —el portafolio de negocio le quitó el permiso de estadísticas— y
 --       lleva el aviso crítico que escribe markNeedsReauth. Es la de
 --       business_portfolio: ningún recolector de la demo la lee, así que
---       su estado no cambia ninguna otra cifra.
+--       su estado no cambia ninguna otra cifra. Ni el título ni el detalle
+--       prometen «vuelve a conectarla»: en la demo Conexiones no puede
+--       reautorizar Facebook («Esta versión no puede reautorizarla desde
+--       aquí»), y la fila más urgente no puede mandar a un callejón.
 --   2 · Cobro: FV-2026-007 (Hogar Lindo, vencida hace 41 días, seed
 --       0003) con el recordatorio del paso 4 (+21 días, «Segundo aviso
 --       de mora») sin mandar, como lo deja finance.reminders.
@@ -36,8 +39,10 @@
 -- Reglas del archivo (las de 0002, 0006 y 0010):
 --   * Idempotente. UUID fijos; ON CONFLICT DO UPDATE devuelve el aviso a
 --     su cosa y a su fecha relativa, sin leer (como la alerta de 0006).
---     Un «Entendido» que alguien dio en la demo (notification_ack) se
---     respeta: el seed no lo borra.
+--     No hay «Entendido» de la demo que limpiar: sin sesión el gesto
+--     vive en el navegador de cada visitante y notification_ack no
+--     guarda nada sin persona (0078, user_id NOT NULL). Un prospecto
+--     que despacha las cinco filas no se las vacía a los demás.
 --   * Con emailed_at puesto: son de la demo, el resumen por correo no
 --     tiene por qué mandarlos.
 --   * Solo el workspace de la demo. Requiere 0078 (migración) y los
@@ -59,15 +64,18 @@ SELECT set_config('TimeZone', 'UTC', false);
 -- ---------------------------------------------------------------------
 UPDATE social_connection
    SET status = 'needs_reauth',
-       status_detail = 'Facebook dejó de darnos las estadísticas de la página: el portafolio de negocio le quitó el permiso. Vuelve a autorizarla.',
+       status_detail = 'El portafolio de negocio de Meta le quitó a On Cue el permiso de estadísticas de la página.',
        last_error_at = now() - interval '5 hours'
  WHERE id = '00000002-0000-4000-8000-0000000000c4';
 
--- El título es el de apps/worker/src/jobs/conexiones/aviso-cuenta.ts (connectionErrorTitle).
+-- El título es el de @mc/core connectionErrorTitle('Facebook', handle, 'reauth')
+-- (packages/core/src/cuentas.ts), copiado a mano porque esto es SQL:
+-- packages/db/test/resumen-semana.test.ts compara los dos, y
+-- verify/0011.sql comprueba la forma.
 INSERT INTO notification (id, workspace_id, user_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url,
                           created_at, emailed_at)
 SELECT '00000011-0000-4000-8000-0000000a1101', c.workspace_id, NULL, 'connection_error', 'critical',
-       'Vuelve a conectar tu cuenta de Facebook @' || c.handle, c.status_detail,
+       'Facebook dejó de darnos las cifras de @' || c.handle, c.status_detail,
        'social_connection', c.id, '/conexiones', now() - interval '5 hours', now()
   FROM social_connection c
  WHERE c.id = '00000002-0000-4000-8000-0000000000c4'

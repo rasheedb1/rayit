@@ -23,9 +23,12 @@
 --       «Entendido» de la mánager se lo borraba también a la creadora.
 --
 -- Así que «leído» es de la persona y vive aparte: una fila por
--- (aviso, persona). Sin persona —el modo demo, que corre sin sesión y
--- con app.user_id NULL— la fila lleva user_id NULL y vale para esa
--- demo, igual que la demo entera es de nadie.
+-- (aviso, persona). Siempre CON persona (user_id NOT NULL). El modo
+-- demo corre sin sesión (app.user_id NULL) y en producción lo comparten
+-- todos los visitantes: un «Entendido» sin persona vaciaba el bloque
+-- para todos los demás, y para siempre. Sin sesión, el «Entendido» es
+-- de quien visita y vive en su navegador (una cookie, ver
+-- apps/web/app/(app)/resumen/_lib/entendidos.ts); aquí no se escribe.
 --
 -- «Entendido» se puede deshacer, y sigue sin borrarse nada. Cada gesto
 -- es una fila nueva: 'ack' (Entendido) o 'undo' (Deshacer). Lo que vale
@@ -38,8 +41,11 @@
 -- Aislamiento:
 --   · RLS por workspace con FORCE, como todas (0010, 0024).
 --   · Al escribir, además, la fila es de quien escribe: WITH CHECK pide
---     user_id = current_user_id() (o los dos NULL en la demo). Nadie
---     marca leído —ni deshace— por otro.
+--     user_id = current_user_id(). Nadie marca leído —ni deshace— por
+--     otro, y sin sesión no se escribe nada (NOT NULL).
+--   · Y al leer, también: cada persona ve solo SUS gestos. Quién dio
+--     «Entendido» a qué y cuándo no es asunto del resto del espacio, y
+--     ninguna consulta lo necesita (el bloque pregunta por los propios).
 --   · mc_app solo lee e inserta: un gesto no se corrige ni se borra.
 --     Ni UPDATE ni DELETE (packages/db/src/esquema.ts,
 --     PRIVILEGIOS_DE_LA_APP).
@@ -68,8 +74,8 @@ CREATE TABLE IF NOT EXISTS notification_ack (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id        uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
   notification_id     uuid NOT NULL REFERENCES notification(id) ON DELETE CASCADE,
-  -- NULL solo en el modo demo, sin sesión (ver arriba).
-  user_id             uuid REFERENCES app_user(id) ON DELETE CASCADE,
+  -- Siempre una persona: sin sesión no se escribe aquí (ver arriba).
+  user_id             uuid NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
   -- 'ack' = «Entendido»; 'undo' = «Deshacer». Vale el último.
   action              text NOT NULL DEFAULT 'ack' CHECK (action IN ('ack', 'undo')),
   -- clock_timestamp() y no now(): dos gestos de la misma transacción
@@ -78,7 +84,7 @@ CREATE TABLE IF NOT EXISTS notification_ack (
 );
 
 -- El último gesto de una persona sobre un aviso. Sin UNIQUE: cada gesto
--- es su fila. El de la demo (user_id NULL) cuenta como una persona más.
+-- es su fila.
 CREATE INDEX IF NOT EXISTS notification_ack_last_idx
   ON notification_ack (workspace_id, notification_id, user_id, created_at DESC);
 
@@ -94,9 +100,11 @@ END $$;
 ALTER TABLE notification_ack ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notification_ack FORCE ROW LEVEL SECURITY;
 
+-- Cada persona lee solo sus gestos (ver «Aislamiento» arriba).
 DROP POLICY IF EXISTS notification_ack_ws_read ON notification_ack;
-CREATE POLICY notification_ack_ws_read ON notification_ack FOR SELECT
-  USING (workspace_id = current_workspace_id());
+DROP POLICY IF EXISTS notification_ack_own_read ON notification_ack;
+CREATE POLICY notification_ack_own_read ON notification_ack FOR SELECT
+  USING (workspace_id = current_workspace_id() AND user_id = current_user_id());
 
 DROP POLICY IF EXISTS notification_ack_own_insert ON notification_ack;
 CREATE POLICY notification_ack_own_insert ON notification_ack FOR INSERT
@@ -123,5 +131,6 @@ CREATE TRIGGER ref_visible_user_id
 COMMENT ON TABLE notification_ack IS
   'El «Entendido» (y su «Deshacer») de una persona sobre un aviso de notification (RES-3, «Lo que importa esta '
   'semana»). Es de la persona y no del aviso: notification.read_at ya significa «ya lo mandé» en los recordatorios '
-  'de cobro (FIN-4) y casi todos los avisos van a todo el espacio. Cada gesto es una fila y vale el último. user_id '
-  'NULL solo en el modo demo, sin sesión. mc_app lee e inserta las suyas; no se corrigen ni se borran.';
+  'de cobro (FIN-4) y casi todos los avisos van a todo el espacio. Cada gesto es una fila y vale el último. Siempre '
+  'con persona: sin sesión (modo demo) el gesto vive en el navegador de quien visita. mc_app lee e inserta solo las '
+  'suyas; no se corrigen ni se borran.';

@@ -165,7 +165,7 @@ test('RES-3 · el token rechazado deja la cuenta en needs_reauth CON su aviso cr
     const [aviso, ...otros] = await avisos();
     assert.deepEqual(otros, []);
     assert.equal(aviso!.severity, 'critical');
-    assert.equal(aviso!.title_es, 'Vuelve a conectar tu cuenta de TikTok @laura.cocinafacil.auth');
+    assert.equal(aviso!.title_es, 'TikTok dejó de darnos las cifras de @laura.cocinafacil.auth');
     assert.equal(aviso!.action_url, '/conexiones');
 
     // La cuenta en needs_reauth ya no es de las que lee la corrida, y si lo

@@ -196,7 +196,7 @@ describe('los productores escriben, Resumen enseña', () => {
       `SELECT severity, title_es FROM notification WHERE kind = 'connection_error' AND entity_id = $1 ORDER BY created_at, id`,
       [CONEXION_TIKTOK]);
     assert.deepEqual(rows.map((r) => r.severity), ['warning', 'critical']);
-    assert.equal(rows[1]?.title_es, 'Vuelve a conectar tu cuenta de TikTok @laura.cocinafacil', 'el título de aviso-cuenta.ts, con el @');
+    assert.equal(rows[1]?.title_es, 'TikTok dejó de darnos las cifras de @laura.cocinafacil', 'el título de @mc/core connectionErrorTitle, con el @');
     const fila = (await bloqueDe(LAURA)).filas.find((f) => f.source === 'connection');
     assert.ok(fila?.source === 'connection');
     assert.equal(fila.severity, 'critical');
