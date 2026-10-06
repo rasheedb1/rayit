@@ -6,7 +6,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { setTimeout as dormir } from 'node:timers/promises';
 import { tmpdir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,8 +34,15 @@ function carpeta(t) {
   return dir;
 }
 
-/** La hora de arranque de `pid` tal como la escribe verificar.sh. */
-const arranqueDe = (pid) => execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).replace(/\s+/g, ' ').trim();
+/**
+ * La hora de arranque de `pid`, por omisión tal como la escribe
+ * verificar.sh (LC_ALL=C). Con otro `idioma`, como la escribía antes una
+ * Terminal en ese idioma: «lun 5 oct …» con es_ES.UTF-8.
+ */
+const arranqueDe = (pid, idioma = 'C') =>
+  execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: idioma } })
+    .replace(/\s+/g, ' ')
+    .trim();
 
 /** Ocupa el turno `k` de `dir` a nombre de `pid`, con la hora `hora`. */
 function ocupar(dir, k, pid, hora) {
@@ -116,25 +124,88 @@ test('sin turno en MC_VERIFICAR_ESPERA_MAX segundos sale con 75 y dice quién lo
   assert.deepEqual(readdirSync(dir).sort(), ['turno-1', 'turno-2'], 'los turnos ajenos siguen ahí');
 });
 
-test('sin MC_VERIFICAR_ESPERA_MAX, la espera llega a 1800 s: con dos turnos y cuatro piezas a la vez, 600 se quedaba corto', async (t) => {
+/**
+ * Con los dos turnos ocupados, lanza verificar.sh con `espera` (undefined:
+ * sin MC_VERIFICAR_ESPERA_MAX), lo corta en cuanto avisa que espera y
+ * devuelve ese aviso: dice el techo.
+ */
+async function avisoDeEspera(t, espera) {
   const dir = carpeta(t);
   const hora = arranqueDe(process.pid);
   ocupar(dir, 1, process.pid, hora);
   ocupar(dir, 2, process.pid, hora);
   const env = { ...process.env, MC_VERIFICAR_TURNOS_DIR: dir };
-  delete env.MC_VERIFICAR_ESPERA_MAX;
-  // Basta con ver el aviso de la espera, que dice el techo, y cortarlo.
+  if (espera === undefined) delete env.MC_VERIFICAR_ESPERA_MAX;
+  else env.MC_VERIFICAR_ESPERA_MAX = espera;
   const hijo = spawn('bash', [SCRIPT, 'true'], { env, stdio: ['ignore', 'ignore', 'pipe'] });
   let err = '';
   await new Promise((resolve) => {
     hijo.stderr.on('data', (d) => {
       err += d;
-      if (/como mucho \d+ s/.test(err)) resolve();
+      if (/espero turno \(.*\)/.test(err)) resolve();
     });
     hijo.on('close', resolve);
   });
   hijo.kill('SIGTERM');
-  assert.match(err, /espero turno \(como mucho 1800 s\)/);
+  return err;
+}
+
+test('sin MC_VERIFICAR_ESPERA_MAX, la espera llega a 1800 s: con dos turnos y cuatro piezas a la vez, 600 se quedaba corto', async (t) => {
+  assert.match(await avisoDeEspera(t, undefined), /espero turno \(como mucho 1800 s\)/);
+});
+
+test('con MC_VERIFICAR_ESPERA_MAX=0 (como lo lanza el estrés) el aviso dice «sin techo», no «como mucho 0 s»', async (t) => {
+  const err = await avisoDeEspera(t, '0');
+  assert.match(err, /espero turno \(sin techo\)/);
+  assert.doesNotMatch(err, /como mucho 0 s/);
+});
+
+test('un turno con la hora escrita en español (versión anterior, Terminal con LANG=es_ES) no se libera: sale con 75', async (t) => {
+  const dir = carpeta(t);
+  // Así quedaba la hora cuando verificar.sh la leía con el idioma de quien
+  // lo lanzaba. En una máquina sin es_ES (el CI) sale en C: la prueba
+  // sigue valiendo, es la de un turno vivo normal.
+  const hora = arranqueDe(process.pid, 'es_ES.UTF-8');
+  ocupar(dir, 1, process.pid, hora);
+  ocupar(dir, 2, process.pid, hora);
+  const r = await correr(['true'], { MC_VERIFICAR_TURNOS_DIR: dir, MC_VERIFICAR_ESPERA_MAX: '1', LC_ALL: 'C', LANG: '' });
+  assert.equal(r.codigo, 75, r.err);
+  assert.doesNotMatch(r.err, /lo libero/, 'el dueño vive: su turno no se toca');
+  assert.deepEqual(readdirSync(dir).sort(), ['turno-1', 'turno-2']);
+  assert.equal(readFileSync(join(dir, 'turno-1', 'duenio'), 'utf8'), `${process.pid}@${HOST}\n${hora}\n`);
+});
+
+test('un verificar lanzado en español y otro en C (un agente) respetan sus turnos: el tope de dos no se rompe', async (t) => {
+  const dir = carpeta(t);
+  ocupar(dir, 2, process.pid, arranqueDe(process.pid));
+  // El dueño del turno 1 es un verificar de verdad, desde una Terminal en
+  // español, que tiene el turno mientras su comando corre.
+  const persona = spawn('bash', [SCRIPT, 'sleep', '60'], {
+    env: { ...process.env, MC_VERIFICAR_TURNOS_DIR: dir, LC_ALL: 'es_ES.UTF-8', LANG: 'es_ES.UTF-8' },
+    stdio: 'ignore',
+    // Su propio grupo, para cortarlo con su `sleep`: bash no atiende el
+    // SIGTERM hasta que termina el comando que espera.
+    detached: true,
+  });
+  t.after(async () => {
+    if (persona.exitCode !== null || persona.signalCode !== null) return;
+    const cerrado = new Promise((r) => persona.on('close', r));
+    try {
+      process.kill(-persona.pid, 'SIGTERM');
+    } catch {
+      // Ya no estaba.
+    }
+    await cerrado;
+  });
+  const duenio = join(dir, 'turno-1', 'duenio');
+  for (let i = 0; i < 100 && !(existsSync(duenio) && readFileSync(duenio, 'utf8').split('\n').length >= 3); i++) await dormir(50);
+  const [linea, hora] = readFileSync(duenio, 'utf8').split('\n');
+  assert.equal(linea, `${persona.pid}@${HOST}`);
+  assert.match(hora, /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) /, 'la hora queda escrita en C aunque quien lo lanza esté en español');
+  const r = await correr(['true'], { MC_VERIFICAR_TURNOS_DIR: dir, MC_VERIFICAR_ESPERA_MAX: '2', LC_ALL: 'C', LANG: '' });
+  assert.equal(r.codigo, 75, r.err);
+  assert.doesNotMatch(r.err, /lo libero/, 'el verificar en español sigue vivo: su turno no se toca');
+  assert.equal(readFileSync(duenio, 'utf8').split('\n')[0], `${persona.pid}@${HOST}`);
 });
 
 test('los --test-timeout de @mc/db y del worker son PRUEBA_SCRIPT_TIMEOUT_MS de @mc/db/test/tiempos.ts', () => {

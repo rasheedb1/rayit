@@ -24,7 +24,8 @@
 #
 # Un turno es una carpeta en /tmp/mc-verificar-turnos-UID (mkdir es
 # atómico) con un archivo `duenio`: `pid@host` en la primera línea y la
-# hora de arranque de ese proceso (`ps -o lstart=`) en la segunda. Se
+# hora de arranque de ese proceso (`LC_ALL=C ps -o lstart=`, siempre en
+# inglés: ver arranque_de) en la segunda. Se
 # suelta al salir, y también con Ctrl-C o kill. Un turno se da por
 # libre, y lo toma el siguiente, si:
 #   - su pid ya no existe (kill -9, el Mac que se reinicia);
@@ -75,7 +76,18 @@ fi
 
 # La hora de arranque del proceso $1, con los espacios normalizados
 # (macOS rellena el día con un espacio). Vacía si el proceso no existe.
-arranque_de() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'; }
+# Con LC_ALL=C: `ps -o lstart=` sale en el idioma de quien lo llama
+# («lun 5 oct …» en una Terminal en español, «Mon Oct 5 …» en un agente,
+# que corre sin LANG). Sin fijarlo, el agente leía la hora de un verificar
+# vivo lanzado por una persona como la de otro proceso, lo daba por pid
+# reciclado y le quitaba el turno: tres verificar a la vez.
+arranque_de() { LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //; s/ $//'; }
+
+# ¿La hora $1 está escrita como la escribe arranque_de (en C: «Mon Oct 5
+# 17:09:13 2026»)? Un turno de una versión anterior de este script, desde
+# una Terminal en español, tiene «lun 5 oct …»: esa hora no se puede
+# comparar, y al turno se le cree al pid, como a uno sin hora.
+hora_en_c() { [[ "$1" =~ ^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\ (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\ [0-9]{1,2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}\ [0-9]{4}$ ]]; }
 
 # Segundos desde la última modificación de $1. `date -r ARCHIVO` vale en
 # macOS y en GNU; `stat -f %m` no (en GNU es el modo de sistema de
@@ -102,9 +114,10 @@ turno_vivo() {
   # De otra máquina (un /tmp compartido): no se puede saber; se respeta.
   [ "$host" != "$HOST" ] && return 0
   kill -0 "$pid" 2>/dev/null || return 1
-  # El pid vive, pero ¿es el mismo proceso? Sin hora escrita (un turno de
-  # una versión anterior de este script) se le cree al pid.
-  [ -z "${hora:-}" ] || [ "$(arranque_de "$pid")" = "$hora" ]
+  # El pid vive, pero ¿es el mismo proceso? Sin hora escrita, o escrita en
+  # otro idioma (un turno de una versión anterior de este script), se le
+  # cree al pid: la salvaguarda de TURNO_MAX lo suelta si no era él.
+  [ -z "${hora:-}" ] || ! hora_en_c "$hora" || [ "$(arranque_de "$pid")" = "$hora" ]
 }
 
 # Quién tiene cada turno, para los avisos.
@@ -146,7 +159,9 @@ if [ "$TURNOS" != 0 ]; then
     [ -n "$MIO" ] && break
     if [ "$avisado" = 0 ]; then
       avisado=1
-      echo "verificar: ya hay $TURNOS verificar en esta máquina; espero turno (como mucho ${ESPERA_MAX} s). Quiénes:" >&2
+      # Con 0 no hay techo (así lo lanza estres-verificar.sh): «como mucho 0 s» se leía al revés.
+      if [ "$ESPERA_MAX" = 0 ]; then techo='sin techo'; else techo="como mucho ${ESPERA_MAX} s"; fi
+      echo "verificar: ya hay $TURNOS verificar en esta máquina; espero turno ($techo). Quiénes:" >&2
       quienes
     fi
     if [ "$ESPERA_MAX" != 0 ] && [ $((SECONDS - inicio)) -ge "$ESPERA_MAX" ]; then

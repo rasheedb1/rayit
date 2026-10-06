@@ -11,6 +11,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { assertScopeAllows, assertUnscoped, getScopeKinds, ScopeError, scopeFilter, type WorkspaceTx } from '../src/index.ts';
 import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
+import { DESCRIBE_DB_TIMEOUT_MS } from './tiempos.ts';
 import { CAMPAIGN_SOFIA, CREATOR_LAURA, CREATOR_SOFIA, EMPRESA_SOFIA, sembrarAlcance, USER_LAURA, USER_MIEMBRO } from './alcance.ts';
 
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-00000000a1ca';
@@ -41,7 +42,7 @@ after(async () => {
   await t.close();
 });
 
-describe('la tabla y su aislamiento', { timeout: 600_000 }, () => {
+describe('la tabla y su aislamiento', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
   test('membership_scope existe con RLS forzada, una política de lectura por workspace, y mc_app solo puede leer', async () => {
     const [rel] = await t.raw<{ relrowsecurity: boolean; relforcerowsecurity: boolean }>(
       `SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'membership_scope'`,
@@ -118,7 +119,7 @@ describe('la tabla y su aislamiento', { timeout: 600_000 }, () => {
   });
 });
 
-describe('scope_allows(): la semántica', { timeout: 600_000 }, () => {
+describe('scope_allows(): la semántica', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
   test('sin filas de alcance (la dueña), todo cae en alcance, NULL incluido', async () => {
     await duena(async (tx) => {
       assert.equal(await allows(tx, 'creator', CREATOR_SOFIA), true);
@@ -189,7 +190,7 @@ describe('scope_allows(): la semántica', { timeout: 600_000 }, () => {
   });
 });
 
-describe('scopeFilter() y assertScopeAllows()', { timeout: 600_000 }, () => {
+describe('scopeFilter() y assertScopeAllows()', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
   test('scopeFilter compone las tres preguntas; null oculta a quien tenga ese alcance; any es un ARRAY(…)', () => {
     const tengo = (kind: string) =>
       `EXISTS (SELECT 1 FROM membership_scope s WHERE s.workspace_id = current_workspace_id() AND s.user_id = current_user_id() AND s.scope_type = '${kind}')`;
