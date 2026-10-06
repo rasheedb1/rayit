@@ -1125,14 +1125,22 @@ los privilegios a `mc_worker`; la `0015` crea `connection_secret`; la
 `0039`, `metric_gap`) y corren como `mc_worker`: si un privilegio
 faltara, las pruebas fallan.
 
-**Los tiempos**: cada archivo abre SU propia base embebida en su
-`before`, y con 35 migraciones eso cuesta de 84 a 200 s según la carga
-de la máquina. Por eso `--test-timeout` es de 300 s y los `before` de
-cada archivo llevan `{ timeout: 600_000 }`: con `--test-isolation=none`,
-un `before` que se pasa de su límite **cancela la suite entera del
-paquete**, y el informe dice `pass 0, cancelled 704` sin señalar quién
-tardó. Si añades un archivo de integración, dale el mismo límite y, si
-puedes, mete varios casos en el mismo arnés en vez de abrir otro. No tocan Supabase nunca. pg-boss 12 trae adaptador para pglite (`fromPglite`,
+**Los tiempos** (CIM-12): cada archivo corre en SU proceso, uno detrás
+de otro (`--test-isolation=process --test-concurrency=1`), y abre su
+base desde la foto del esquema migrado que comparte con
+`@mc/connectors` (`abrirSuperusuario` de `db/lib/foto.mjs`, la misma
+función para los dos): se migra una vez por huella (migraciones,
+runner y `foto.mjs`), no en cada archivo, y un candado de un proceso
+muerto no hace esperar a nadie. Con `--test-isolation=none` los
+`before` de todos los archivos arrancaban a la vez su worker de pg-boss
+y seguían vivos hasta el final: cuarenta workers sondeando en el mismo
+hilo, un `before` lento que tumbaba la suite entera y conteos de
+llamadas que se cruzaban entre archivos. Si añades un archivo de
+integración, mete varios casos en el mismo arnés en vez de abrir otro. El
+script `test` carga `scripts/pruebas/reloj.mjs`: `Date` y el `now()` de
+PGlite van anclados al 5-oct-2026, y la demo que siembra
+`applyRepoSeeds` es la misma el día que sea (con `relojDias`, la del
+28-sep, para las cifras de campañas con fecha fija). No tocan Supabase nunca. pg-boss 12 trae adaptador para pglite (`fromPglite`,
 `backend: 'pglite'`); no hace falta Docker.
 
 ## Estructura

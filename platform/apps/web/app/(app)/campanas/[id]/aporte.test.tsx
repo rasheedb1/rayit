@@ -1,15 +1,16 @@
 import { configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ESPERA_UI_LARGA_MS, PRUEBA_LENTA_MS } from "@/lib/testing/tiempos";
 
 /**
  * Estas pruebas montan dos formularios con Server Actions simuladas y
  * esperan a que React aplique el resultado. En una máquina cargada (varias
  * sesiones corriendo pruebas a la vez) la primera pasa de 5 s y las
- * esperas de 1 s de testing-library se quedan cortas: se alargan aquí,
- * solo para este archivo.
+ * esperas de testing-library se quedan cortas: se alargan aquí, solo para
+ * este archivo, con los techos de lib/testing/tiempos.ts.
  */
-const LARGO = { timeout: 30_000 };
-configure({ asyncUtilTimeout: 10_000 });
+const LARGO = { timeout: PRUEBA_LENTA_MS };
+configure({ asyncUtilTimeout: ESPERA_UI_LARGA_MS });
 
 const registrarAporte = vi.fn();
 const importarCsvVentas = vi.fn();

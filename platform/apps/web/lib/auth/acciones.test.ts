@@ -103,6 +103,7 @@ import { AuthIdentityMismatchError, listMyWorkspaces } from "@mc/db/queries/iden
 import { registrarEntrada } from "./sincronizar";
 import { cambiarEspacio, crearEspacio, renombrarEspacio } from "./acciones";
 import { MESSAGES } from "./messages";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 const ANA = "ana@ejemplo.test";
 const BRUNO = "bruno@ejemplo.test";
@@ -147,7 +148,7 @@ beforeAll(async () => {
   brunoWs = bruno.workspaces[0]!.id;
 
   expect(anaWs).not.toBe(brunoWs);
-}, 180_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();
@@ -259,7 +260,7 @@ describe("el primer espacio se crea una sola vez", () => {
 
     sesion = { authUserId: AUTH.carla, email: nuevo, nombre: null };
     expect((await getCurrentContext()).workspaces).toHaveLength(1);
-  }, 60_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });
 
 describe("el correo del seed (terminado cuando: «se entra con el correo del seed y aparece la creadora demo»)", () => {
@@ -349,7 +350,7 @@ describe("crearEspacio tiene tope", () => {
       if (previo === undefined) delete process.env.SUPPORT_EMAIL;
       else process.env.SUPPORT_EMAIL = previo;
     }
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });
 
 describe("/auth/salir: una sesión con la identidad en conflicto se cierra de verdad", () => {

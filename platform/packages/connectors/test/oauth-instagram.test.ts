@@ -41,8 +41,10 @@ test('exchangeCode: dos llamadas (corto y larga duración); se guarda el largo, 
   assert.equal(fetch.calls[0]!.method, 'POST');
   assert.equal((fetch.calls[0]!.body as Record<string, string>)['code'], '[REDACTADO]');
   assert.equal(fetch.calls[1]!.method, 'GET');
-  assert.equal(fetch.calls[1]!.headers['Authorization'], '[REDACTADO]', 'el token corto va en cabecera');
-  assert.ok(!fetch.calls[1]!.url.includes('IGQVJ-short-demo-0001-SECRETO'), 'y no en la URL');
+  // 4-oct-2026: Meta exige el token corto como parámetro access_token (con la cabecera responde 100); el fetch grabado lo redacta.
+  assert.equal(fetch.calls[1]!.headers['Authorization'], undefined, 'el token corto NO va en cabecera');
+  assert.match(fetch.calls[1]!.url, /[?&]access_token=/, 'va como parámetro');
+  assert.ok(!fetch.calls[1]!.url.includes('IGQVJ-short-demo-0001-SECRETO'), 'y el fetch grabado no lo conserva');
   assert.deepEqual(log.entries.map((e) => e.endpoint), ['oauth.token', 'oauth.long_lived']);
   assert.equal(assertNoSecrets([JSON.stringify(log.entries)], SECRETS), null);
 });

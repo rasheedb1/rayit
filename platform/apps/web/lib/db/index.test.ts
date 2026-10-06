@@ -15,6 +15,7 @@ import { acceptQuoteFromLink, closeDb, getDbMode, openProtectedMediaKit, withPub
 import { readPublicQuote } from "@mc/db/queries/cotizar";
 import { TEXTOS_BLOQUEO_MEDIA_KIT, TEXTOS_COTIZAR } from "@/app/(app)/cotizar/_lib/textos";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 /** Un workspace que no existe en el seed: RLS no devuelve nada suyo. */
 const OTRO = "0000000a-0000-4000-8000-000000000001";
@@ -33,7 +34,7 @@ beforeAll(async () => {
   delete process.env.DEMO_WORKSPACE_ID;
   delete process.env.MC_WORKSPACE_ID;
   expect(await getDbMode()).toBe("embedded");
-}, 120_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();
@@ -164,7 +165,7 @@ describe("openProtectedMediaKit: el techo del enlace avisa al creador (pulido r6
       return rows;
     });
     expect(guardado).toEqual([{ title_es: "Un media kit quedó bloqueado por contraseñas fallidas", severity: "warning" }]);
-  }, 60_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });
 
 describe("la bitácora por el camino real de la web (ACC-2)", () => {

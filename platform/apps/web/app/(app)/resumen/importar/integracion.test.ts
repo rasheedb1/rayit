@@ -13,6 +13,7 @@ import {
 } from "@mc/db/queries/resumen";
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from "@mc/db/test/pglite";
 import { analizar, instanteDeCaptura, proponerFechaExportacion, revisar } from "./_lib/csv";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 /**
  * El «terminado cuando» de RES-2, de punta a punta y sin red: un CSV de
@@ -30,7 +31,7 @@ const fixture = (nombre: string) => readFileSync(join(__dirname, "../../../../te
 let t: TestDb;
 beforeAll(async () => {
   t = await openTestDb();
-}, 180_000);
+}, SETUP_TIMEOUT_MS);
 afterAll(async () => {
   await t?.close();
 });
@@ -106,7 +107,7 @@ describe("un CSV de Instagram Insights llena los snapshots y aparece en Resumen"
     expect(Number(filas[0]!.age_hours)).toBeGreaterThan(0);
     // El carrusel no se importa como video.
     expect(filas[2]!.media_type).toBe("carousel");
-  }, 180_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   it("el archivo tal como lo escribe Meta (mes/día, «Reach», día del informe) entra con su fecha de exportación", async () => {
     // Fechas relativas a hoy, escritas como las escribe Meta: MM/DD/YYYY HH:mm.
@@ -163,5 +164,5 @@ describe("un CSV de Instagram Insights llena los snapshots y aparece en Resumen"
     // Y aparece en Resumen, dentro de la ventana de 30 días.
     const frescura = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFreshnessByConnection(tx, { platform: "instagram" }));
     expect(frescura.find((c) => c.handle === "laura.meta.csv")?.lastCsvDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  }, 180_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });

@@ -18,6 +18,7 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { dumpTextColumns, findSecretInDump, FixtureFetch, InMemorySecretStore, loadFixtures, PostgresQuotaUsageStore, QuotaManager, refresherRegistry, withoutNetwork, loadPlatformLimits, type NetworkGuard } from '@mc/connectors';
 import { createEmbeddedDb, type EmbeddedDb } from '@mc/db/embedded';
+import { SETUP_TIMEOUT_MS } from '@mc/db/test/tiempos';
 import { getSessionPermissions } from '@mc/db/queries/accesos';
 import {
   addBrandInput, getCampaign, getCampaignResult, linkPost, listCampaigns, listBrandFollowers, listCampaignPosts, recordBrandSnapshot, transitionCampaign,
@@ -119,7 +120,8 @@ const asContadora = <T,>(fn: Parameters<typeof asLaura<T>>[0]) => web.withWorksp
 
 before(async () => {
   guard = withoutNetwork();
-  web = await createEmbeddedDb();
+  // Desde la foto de la demo, como el resto de las suites (CIM-12): migrar y sembrar aquí costaba de 5 a 60 s.
+  web = await createEmbeddedDb({ snapshot: true });
   const pglite = await web.raw(async (p: PGlite) => p);
   worker = PgliteDatabase.wrap(pglite, 'mc_worker');
   definitions = new Map((await loadJobDefinitions(worker)).map((d) => [d.id, d]));
@@ -133,7 +135,7 @@ before(async () => {
   `);
   inicio = (await web.queryAsSuperuser<{ t: string }>(`SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS t`)).rows[0]!.t;
   fetch = new FixtureFetch(await loadFixtures('youtube', [['channels.list', 'handle.uploads.ok'], ['playlist_items.list', 'uploads.ok'], ['videos.list', 'canal.ok']]));
-}, { timeout: 600_000 });
+}, { timeout: SETUP_TIMEOUT_MS });
 
 after(async () => {
   guard?.restore();

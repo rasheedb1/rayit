@@ -302,6 +302,7 @@ a partir de CadenceV1.0):
 | VEN-14 | Bandeja de aprobación y bandeja unificada, con clasificación de intención de la respuesta. | L | VEN-12 | Un retenido se aprueba y sale; un «me interesa» mueve el deal. |
 | VEN-15 | Entregabilidad y cumplimiento: baja pública, `List-Unsubscribe`, rebotes, calentamiento, alertas. | M | VEN-10 | El enlace de baja marca al contacto y cancela todo; un rebote marca el correo inválido. |
 | VEN-16 | Actividad y métricas: cola con reintento por tipo, uso por canal, embudo por paso, vista de flujo. | M | VEN-10 | El embudo cuadra con `outbound_touch` fila a fila. |
+| VEN-17 | Jobs agotados en los turnos de producción: `outbound.replies` en `failed` y `collect.account_metrics` agotado en cada turno desde el 5-oct (abierta desde CIM-7). | S | CIM-7, VEN-10 | Una semana de turnos sin jobs agotados; sin llave o conexión, «no configurado», no fallo. |
 
 ### COT · Cotizar (Rasheed)
 

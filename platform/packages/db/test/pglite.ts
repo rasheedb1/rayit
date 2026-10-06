@@ -38,6 +38,7 @@
  * regla es la misma en los dos.)
  */
 import type { CatalogDb, DbOptions } from '../src/client.ts';
+import { SETUP_TIMEOUT_MS } from './tiempos.ts';
 
 /** Ids fijos del seed 0003 (docs/propuestas/CIM-8.md). */
 export const WORKSPACE_LAURA = '00000002-0000-4000-8000-000000000001';
@@ -69,7 +70,8 @@ export const POST_D05_YOUTUBE_NUTRIVE = '00000002-0000-4000-8000-000000000d05';
  * alfabético (accesos-sesion) paga además la foto compartida de migrar y
  * sembrar, y con 120 s propios canceló la suite entera bajo carga.
  */
-export const SETUP_TIMEOUT = { timeout: 900_000 } as const;
+export const SETUP_TIMEOUT = { timeout: SETUP_TIMEOUT_MS } as const;
+export { SETUP_TIMEOUT_MS };
 
 export interface TestDb {
   readonly kind: 'pglite' | 'postgres';

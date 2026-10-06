@@ -108,11 +108,14 @@ function Reautorizar({ row, provider, urgente = true }: { row: FilaDeCuenta; pro
  * (o por el proveedor de datos, CON-12): en TikTok las cifras, que por @
  * no existen (CON-10 §7); en YouTube la analítica —retención y
  * demografía—, que la Data API no entrega sin el permiso del canal
- * (CON-8). Instagram no aparece: por @ ya da lo que el MVP necesita.
+ * (CON-8); en Instagram también la analítica —alcance, vistas,
+ * guardados y demografía—, que business_discovery no entrega (4-oct-2026,
+ * misma decisión que abre «Conectar Instagram» en conectar.tsx).
  */
 const OWNER_AUTHORIZABLE: Partial<Record<FilaDeCuenta["platformId"], { provider: OAuthProviderId; label: string; aria: (cuenta: string) => string }>> = {
   tiktok: { provider: "tiktok", label: t.autorizarCifras, aria: t.autorizarCifrasAria },
   youtube: { provider: "youtube", label: t.autorizarAnalitica, aria: t.autorizarAnaliticaAria },
+  instagram: { provider: "instagram", label: t.autorizarAnalitica, aria: t.autorizarAnaliticaAria },
 };
 
 function AuthorizeButton({ row, entorno }: { row: FilaDeCuenta; entorno: EntornoDeConexion }) {

@@ -39,6 +39,7 @@ import { closeDb, getDbMode, withWorkspace } from "@/lib/db";
 import { MESSAGES } from "../_lib/messages";
 import ReportePublicoPage, { generateMetadata } from "@/app/(public)/reporte/[slug]/page";
 import { generarReporte, marcarReporteEnviado } from "./actions";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 /** «Lanzamiento cold brew» de Café Alma (seed 0003), en «Reporte listo». */
 const CAMPANA = "00000003-0000-4000-8000-000000ca0001";
@@ -48,7 +49,7 @@ beforeAll(async () => {
   delete process.env.DATABASE_URL;
   delete process.env.DEMO_WORKSPACE_ID;
   expect(await getDbMode()).toBe("embedded");
-}, 120_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();
@@ -79,7 +80,7 @@ describe("el reporte a la marca, por el camino de la web (CAM-6)", () => {
     expect(err).toBeInstanceOf(SinPermisoError);
     expect((err as SinPermisoError).permiso).toBe("campanas.reporte.generar");
     expect(await reportes()).toEqual([]);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("el Dueño genera un borrador, y su enlace no abre: 404", async () => {
     sesion.permisos = null; // Dueño
@@ -87,7 +88,7 @@ describe("el reporte a la marca, por el camino de la web (CAM-6)", () => {
     const [borrador] = await reportes();
     expect(borrador?.status).toBe("draft");
     expect(await digestDe(() => abrir(borrador!.slug))).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("sin el permiso no se envía: SinPermisoError, sigue en borrador y sin actividad", async () => {
     const [borrador] = await reportes();
@@ -101,7 +102,7 @@ describe("el reporte a la marca, por el camino de la web (CAM-6)", () => {
       tx.query("SELECT 1 FROM activity WHERE kind = 'report_sent' AND metadata->>'reportId' = $1", [borrador!.id]),
     );
     expect(act.rows).toHaveLength(0);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("el Dueño lo envía por enlace: actividad en la empresa, aviso y bitácora, con las frases de messages.ts", async () => {
     sesion.permisos = null;
@@ -118,7 +119,7 @@ describe("el reporte a la marca, por el camino de la web (CAM-6)", () => {
     expect(filas.act.map((a) => a.subject)).toEqual(["Reporte de «Lanzamiento cold brew» enviado por enlace"]);
     expect(filas.aviso.map((a) => a.title_es)).toEqual(["Reporte enviado a Café Alma"]);
     expect(filas.bitacora).toHaveLength(1);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("la marca lo abre sin sesión: lo acordado va primero, la pestaña no se indexa y la apertura queda registrada", async () => {
     const [enviado] = await reportes();
@@ -148,11 +149,11 @@ describe("el reporte a la marca, por el camino de la web (CAM-6)", () => {
     const meta = await generateMetadata({ params: Promise.resolve({ slug: enviado!.slug }) });
     expect(meta.robots).toEqual({ index: false, follow: false });
     expect(String(meta.title)).toMatch(/^Lanzamiento cold brew · /);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("un enlace que no existe es un 404 de verdad y no dice nada en la pestaña", async () => {
     expect(await digestDe(() => abrir("no-existe-este-enlace-0000"))).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
     const meta = await generateMetadata({ params: Promise.resolve({ slug: "no-existe-este-enlace-0001" }) });
     expect(meta.title).toBe(MESSAGES.meta.reportePublicoSinDatos);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });

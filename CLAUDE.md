@@ -277,6 +277,30 @@ docs/                  Arquitectura, esquema, investigación de APIs
 .claude/settings.json  Permisos de Claude Code para el equipo. Se versiona.
 ```
 
+## Puerta de calidad
+
+| Comando | Qué hace |
+|---|---|
+| `pnpm verificar` (en `platform/`) | typecheck, lint y test. Deja dos a la vez en toda la máquina: el tercero espera turno y lo dice. Acepta banderas de turbo (`pnpm verificar --filter=@mc/db`) |
+| `make verificar.estres N=10 P=2` | Corre la puerta N veces, de a P, y cuenta pruebas fallidas o canceladas con la carga de cada corrida. `DIAS=2,7,30,90` la corre con la máquina en esas fechas; `ANCLA=1`, con el día de las pruebas rotando; `SIN_ANCLA=1 FILTRO=@mc/db`, como el job del CI contra Postgres real (sin ancla) |
+
+**Agentes: lanzad `pnpm verificar` en segundo plano** (`run_in_background`)
+y leed el final del registro. Con la espera de turno pasa de los 600 s
+que dura como mucho un Bash en primer plano, y cortado a la mitad no se
+sabe si fue rojo o espera. La espera tiene techo: pasados
+`MC_VERIFICAR_ESPERA_MAX` segundos (1800) sale con el código 75 y dice
+quién tiene los turnos, sin haber corrido nada. **Un 75 no es un rojo:
+volved a lanzarlo** (es la máquina llena, no las pruebas); solo un código
+distinto de 0 y de 75 dice algo del código.
+
+Las pruebas que abren Postgres embebido cargan una foto de disco
+(`platform/node_modules/.cache/mc-pglite`) en vez de migrar; se rehace
+sola cuando cambia una migración. Y corren con el reloj anclado al
+5-oct-2026 (`platform/scripts/pruebas/reloj.mjs`): la demo que ven es la
+misma el día que sea. Detalle en `platform/packages/db/README.md`.
+
+---
+
 ## Convenciones
 
 - **Idioma**: comentarios, documentación y nombres de rama en español.

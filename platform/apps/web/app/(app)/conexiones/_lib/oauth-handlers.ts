@@ -239,7 +239,22 @@ export function createOAuthHandlers(deps: OAuthHandlerDeps): OAuthHandlers {
         profile = await prov.identity(core, tokens, { businessId: exchanged.externalAccountId ?? undefined });
         externalAccountId = profile.external_account_id ?? exchanged.externalAccountId;
       } catch (err) {
-        await flushCallLog(deps, callLog).catch(() => undefined);
+        await flushCallLog(deps, callLog).catch((e: unknown) => {
+          console.error("[conexiones/oauth] no se pudo guardar api_call_log del intercambio", redactSecrets({ provider, message: e instanceof Error ? e.message : String(e) }));
+        });
+        // Qué rechazó la plataforma, para los logs del despliegue (4-oct-2026: en
+        // producción el aviso «intercambio» no decía cuál de las tres llamadas
+        // falló). Sin code ni tokens: PlatformApiError ya viene sin ellos y
+        // redactSecrets quita lo que se parezca a uno.
+        console.error("[conexiones/oauth] falló el intercambio o la identidad", redactSecrets({
+          provider,
+          paso: isPlatformApiError(err) ? err.endpoint : "desconocido",
+          kind: isPlatformApiError(err) ? err.kind : undefined,
+          code: isPlatformApiError(err) ? err.code : undefined,
+          subcode: isPlatformApiError(err) ? err.subcode : undefined,
+          httpStatus: isPlatformApiError(err) ? err.httpStatus : undefined,
+          message: err instanceof Error ? err.message : String(err),
+        }));
         // Una cuenta de Google sin canal, o sin refresh token, no es un code malo ni una caída: se dice con esas palabras (CON-8).
         const codeOut: OAuthErrorCode = isPlatformApiError(err) && err.code === "no_channel"
           ? "sin_canal"

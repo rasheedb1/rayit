@@ -10,7 +10,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { pasoDeUrl } from '@mc/core';
 import { allJobs } from '../src/jobs/index.ts';
-import { applyRepoSeeds, jobRuns, startHarness, waitFor, type Harness } from './helpers/harness.ts';
+import { applyRepoSeeds, jobRuns, SETUP_TIMEOUT, startHarness, waitFor, type Harness } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 
 /** Ids fijos del seed 0003 (docs/propuestas/CIM-8.md). */
@@ -95,7 +95,7 @@ async function correr(): Promise<{ status: string; metadata: Record<string, unkn
 
 before(async () => {
   h = await startHarness({ jobs: allJobs, seed, now: () => new Date(`${hoy}T10:00:00Z`) });
-}, { timeout: 180_000 });
+}, SETUP_TIMEOUT);
 after(async () => {
   await h.stop();
 });

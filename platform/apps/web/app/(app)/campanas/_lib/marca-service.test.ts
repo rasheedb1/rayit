@@ -13,6 +13,7 @@ import type { WorkspaceTx } from "@mc/db";
 import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { createMarcaService, type MarcaService } from "./marca-service";
+import { SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 const NOW = new Date("2026-09-23T15:00:00Z");
 const ENV = { INSTAGRAM_HOUSE_TOKEN: "IGAA-house-marca-SECRETO", GOOGLE_API_KEY: "AIza-marca-key-SECRETO" };
@@ -43,7 +44,7 @@ async function filas(campaignId: string) {
 
 beforeAll(async () => {
   guard = withoutNetwork();
-  db = await createEmbeddedDb({ seeds: true });
+  db = await createEmbeddedDb({ seeds: true, snapshot: true });
   await db.execAsSuperuser(`
     INSERT INTO campaign (id, workspace_id, company_id, name, status, starts_on, ends_on, brand_baseline_from, brand_accounts) VALUES
       ('${CAMPAIGN_LIVE}', '${SEED_WORKSPACE_ID}', '${COMPANY_CAFE_ALMA}', 'Café Alma en curso', 'live', DATE '2026-09-20', DATE '2026-09-27', DATE '2026-09-06', '[{"platform_id": "instagram", "handle": "@cafealma"}]'),
@@ -54,7 +55,7 @@ beforeAll(async () => {
   const [igNotFound] = await loadFixtures("instagram", [["business_discovery", "not_found"]]);
   fetch = new FixtureFetch([forHandle(igNotFound!, "cafe_alma_mal%29"), forHandle(igOk!, "cafealma%29")]);
   service = createMarcaService({ env: ENV, withWorkspace, fetch: fetch.fetch, now: () => NOW });
-}, 120_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await db.close();

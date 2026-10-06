@@ -21,7 +21,7 @@ import { nextWindowSlot } from '@mc/core';
 import { createEmbeddedDb, type EmbeddedDb } from '@mc/db/embedded';
 import { enableOutreach } from '@mc/db/queries/outreach';
 import { DEMO_WORKSPACE_ID } from '../src/jobs/ventas/demo-ids.ts';
-import { prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
+import { nextDemoTouch, prepareDemoForDispatch } from '../src/jobs/ventas/demo-preparar.ts';
 import { motorDbFromJob } from '../src/jobs/ventas/motor-db.ts';
 import { dispatchJob, DISPATCH_JOB_ID } from '../src/jobs/ventas/outbound.dispatch.ts';
 import { lastTick } from '../src/runner/cron.ts';
@@ -39,6 +39,7 @@ import {
   type RunTickOptions, type TickSummary,
 } from '../src/tick.ts';
 import { jobRuns, SETUP_TIMEOUT } from './helpers/harness.ts';
+import { aperturaReciente } from './helpers/ventana.ts';
 import { bogota, motorKit } from './helpers/motor-kit.ts';
 
 const ANUAL = '0 0 1 1 *';
@@ -371,9 +372,11 @@ test('platform.limits con entradas que no se aplican (las de la migración 0011)
 });
 
 test('outbound.dispatch sobre el seed de outreach: dos turnos a la vez sacan el mensaje vencido UNA vez, con presupuesto para más de 5 toques, y el siguiente no lo repite', async () => {
-  // Dentro del horario de envío de la demo (Bogotá): ahora, o la próxima apertura.
-  const reloj = nextWindowSlot(new Date(), 'America/Bogota');
   const motor = motorDbFromJob(db);
+  // Dentro del horario de envío de la demo (Bogotá, con sus festivos), ya llegado.
+  const siguiente = await motor.transaction((tx) => nextDemoTouch(tx, DEMO_WORKSPACE_ID));
+  assert.ok(siguiente, 'el seed de outreach tiene un mensaje programado');
+  const reloj = aperturaReciente(siguiente.timeZone, siguiente.window);
   const prep = await motor.transaction((tx) => prepareDemoForDispatch(tx, DEMO_WORKSPACE_ID, reloj));
   await motor.transaction((tx) => enableOutreach(tx, { workspaceId: DEMO_WORKSPACE_ID, now: reloj }));
   const env = { WORKER_GROUPS: 'sales', OUTREACH_CHANNELS: 'fake', APP_URL: 'https://oncue.test' };
@@ -403,15 +406,24 @@ test('outbound.dispatch sobre el seed de outreach: dos turnos a la vez sacan el 
 });
 
 test('outbound.dispatch con más toques vencidos de los que caben en una pasada: el turno envía los que caben, el siguiente tick de */2 el resto, y ninguno sale dos veces', async () => {
-  // Un martes a las 10:00 de Bogotá, dentro de la ventana: el tick de */2 de las 10:00 y el de las 10:02.
-  const t1 = bogota('2026-10-06', '10:00');
+  // Un día hábil a las 10:00 de Bogotá, dentro de la ventana: el tick de */2 de las 10:00 y el de las 10:02.
+  // El día es el primer hábil DESPUÉS de hoy, calculado aquí y no a partir de la prueba anterior: cualquier
+  // corrida de outbound.dispatch que haya dejado otra prueba de este archivo (la de la demo despacha en
+  // aperturaReciente, que nunca pasa de ahora) queda antes de t1, y este tick no sale como cubierto. Con
+  // un día fijo (el 6-oct), desde ese día la corrida de la demo quedaba después de t1 y la prueba se ponía
+  // roja sola (CIM-12, estres-verificar.sh --ancla-rotando); y leído de una variable que llenaba la prueba
+  // anterior, corrida sola (--test-name-pattern) volvía a depender del día (r4).
+  const manana = new Date(Date.now() + 86_400_000);
+  const dia = nextWindowSlot(manana, 'America/Bogota').toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+  assert.ok(bogota(dia, '10:00').getTime() > Date.now(), `el tick de las 10:00 del ${dia} todavía no ha llegado`);
+  const t1 = bogota(dia, '10:00');
   const t2 = new Date(t1.getTime() + 2 * 60_000);
   const t3 = new Date(t1.getTime() + 4 * 60_000);
   const TOQUES = 6;
   const w = await kit.workspace(1, { contacts: TOQUES, dailyCap: 100, warmupStartedAt: null });
-  await kit.enroll(w, bogota('2026-10-06', '09:00'));
+  await kit.enroll(w, bogota(dia, '09:00'));
   // Los primeros correos de los seis, vencidos a la vez; solo este workspace despacha.
-  await web.queryAsSuperuser(`UPDATE outbound_touch SET scheduled_for = $2 WHERE workspace_id = $1 AND step_id = $3`, [w.id, bogota('2026-10-06', '09:40').toISOString(), w.steps[0]]);
+  await web.queryAsSuperuser(`UPDATE outbound_touch SET scheduled_for = $2 WHERE workspace_id = $1 AND step_id = $3`, [w.id, bogota(dia, '09:40').toISOString(), w.steps[0]]);
   await web.queryAsSuperuser(`UPDATE outbound_policy SET enabled = false WHERE workspace_id <> $1`, [w.id]);
   const env = { WORKER_GROUPS: 'sales', OUTREACH_CHANNELS: 'fake', APP_URL: 'https://oncue.test' };
   const enviados = async () => (await web.queryAsSuperuser<{ id: string; provider_message_id: string | null; attempt_count: number }>(

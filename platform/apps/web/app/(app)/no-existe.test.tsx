@@ -38,6 +38,7 @@ import MediaKitExiste from "./cotizar/media-kit/[id]/(detalle)/layout";
 import EmpresaEnMiCrm, { generateMetadata as tituloEmpresa } from "./ventas/empresas/[id]/(ficha)/layout";
 import PitchDeEmpresaEnMiCrm from "./ventas/empresas/[id]/pitch/layout";
 import CadenciaDelEspacio, { generateMetadata as tituloCadencia } from "./ventas/cadencias/[id]/(detalle)/layout";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 vi.mock("next/navigation", async (original) => ({
   ...(await original<typeof import("next/navigation")>()),
@@ -54,7 +55,7 @@ beforeAll(async () => {
   delete process.env.DATABASE_URL;
   delete process.env.DEMO_WORKSPACE_ID;
   expect(await getDbMode()).toBe("embedded");
-}, 120_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();
@@ -117,7 +118,7 @@ describe("un detalle privado que no existe es un 404, con su esqueleto", () => {
   for (const { carpeta, layout } of casos) {
     test(`/${carpeta}: con un id desconocido, su layout llama a notFound()`, async () => {
       expect(await digestDe(layout)).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
-    }, 120_000);
+    }, PRUEBA_DB_TIMEOUT_MS);
 
     test(`/${carpeta}: ningún loading.tsx envuelve a su layout, el 200 saldría antes que el notFound()`, () => {
       expect(esqueletosPorEncima(carpeta)).toEqual([]);
@@ -159,16 +160,16 @@ describe("el título de la pestaña del detalle dice de qué es", () => {
   test("una cotización: su número y su marca", async () => {
     expect((await tituloCotizacion(id("00000004-0000-4000-8000-0000000c0703"))).title).toBe("COT-2026-003 · Café Alma");
     expect((await tituloCotizacion(id(ID_INEXISTENTE))).title).toBe("Cotización");
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("una empresa: su nombre y el módulo", async () => {
     expect((await tituloEmpresa(id("00000002-0000-4000-8000-0000000000e1"))).title).toBe("Café Alma · Ventas");
     expect((await tituloEmpresa(id(ID_INEXISTENTE))).title).toBe("Empresa · Ventas");
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("una cadencia: su nombre y el módulo", async () => {
     // La del seed 0005, copiada de la plantilla «Marca con campaña activa».
     expect((await tituloCadencia(id("00000005-0000-4000-8000-0000005e0001"))).title).toBe("Marca con campaña activa · Cadencias · Ventas");
     expect((await tituloCadencia(id(ID_INEXISTENTE))).title).toBe("Cadencias · Ventas");
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });
