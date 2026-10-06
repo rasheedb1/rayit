@@ -22,6 +22,84 @@ import type { Campo, FormatoId } from "./importar/_lib/formatos";
 const contar = (n: number, txt: string, uno: string, varios: string) => (n === 1 ? `1 ${uno}` : `${txt} ${varios}`);
 
 export const MESSAGES = {
+  /**
+   * «Lo que importa esta semana» (RES-3): el bloque de arriba. Cada fila
+   * es una cosa que pide atención, con su enlace al módulo donde se
+   * resuelve. Los textos se arman aquí con las cifras YA formateadas
+   * (lib/format.ts), no con el título que escribió el productor del
+   * aviso: así toda la fila habla el idioma de la interfaz.
+   */
+  semana: {
+    titulo: "Lo que importa esta semana",
+    /** «3 pendientes». `n` decide el número; `txt` es `n` ya formateado. */
+    pendientes: (n: number, txt: string) => contar(n, txt, "pendiente", "pendientes"),
+    descripcion:
+      "Lo que pide tu atención, lo más urgente arriba. «Entendido» lo quita de tu lista; en su módulo sigue como está.",
+    vacio: {
+      title: "Todo en orden esta semana",
+      description:
+        "Ninguna cuenta caída, ningún cobro vencido ni seguimiento atrasado, y ningún video se disparó en los últimos siete días.",
+    },
+    /** Si el bloque no carga, el resto del resumen sigue: se dice aquí y no tumba la página. */
+    error: "No pudimos cargar lo que importa esta semana. Las cifras de abajo no dependen de esto.",
+    cargando: "Cargando lo que importa esta semana",
+    entendido: "Entendido",
+    /** Para el lector de pantalla: qué se marca como entendido. */
+    entendidoDe: (que: string) => `Entendido: ${que}`,
+    /** La pastilla de cada fila: de qué se trata. */
+    fuente: {
+      connection: "Cuenta",
+      invoice: "Cobro",
+      deal: "Seguimiento",
+      outlier: "Video destacado",
+    },
+    /** El enlace de cada fila: el módulo donde se resuelve. */
+    ir: {
+      connection: "Ver en Conexiones",
+      invoice: "Ver la factura",
+      deal: "Ver en Ventas",
+      outlier: "Ver la red en Resumen",
+    },
+    connection: {
+      needs_reauth: (red: string) => `Vuelve a conectar tu cuenta de ${red}`,
+      expired: (red: string) => `Tu acceso a ${red} venció: vuelve a conectar la cuenta`,
+      revoked: (red: string) => `Quitaste el acceso a ${red}: vuelve a conectar la cuenta`,
+      error: (red: string) => `No podemos leer tu cuenta de ${red}`,
+      /** Sin el detalle de la plataforma, qué pasa si no se atiende. */
+      sinDetalle: "Mientras tanto no llegan cifras nuevas de esta cuenta.",
+    },
+    invoice: {
+      titulo: (numero: string, empresa: string) => `La factura ${numero} de ${empresa} está vencida`,
+      /** `pendiente` es el saldo ya formateado; `cuando`, «hace 41 días». */
+      detalle: (pendiente: string, cuando: string) => `${pendiente} por cobrar · venció ${cuando}`,
+    },
+    deal: {
+      vencido: (accion: string) => `Seguimiento vencido: ${accion}`,
+      hoy: (accion: string) => `Vence hoy: ${accion}`,
+      /** `cuando` es «hoy», «ayer» o «hace 3 días», del idioma del espacio. */
+      detalleVencido: (empresa: string, negocio: string, cuando: string) => `${empresa} · ${negocio} · venció ${cuando}`,
+      detalleHoy: (empresa: string, negocio: string) => `${empresa} · ${negocio}`,
+    },
+    outlier: {
+      /** `multiplo` ya formateado («6×»). */
+      titulo: (video: string, multiplo: string) => `«${video}» hizo ${multiplo} tu mediana`,
+      breakout: (video: string, multiplo: string) => `Se disparó: «${video}» hizo ${multiplo} tu mediana`,
+      /** Un video sin título en la plataforma. */
+      sinTitulo: "Un video sin título",
+      /** NULL no es cero (CON-6 §2): sin múltiplo todavía, se dice con palabras. */
+      sinMultiplo: (video: string) => `«${video}» va por encima de tus otros videos`,
+      sinMultiploDetalle: "Aún no hay suficientes videos para comparar.",
+      /** El corte al que se midió el múltiplo: «2,4×» sin «a los 7 días» no se entiende (CON-6 §2). */
+      corte: {
+        24: "a las 24 horas",
+        72: "a los 3 días",
+        168: "a los 7 días",
+        720: "a los 30 días",
+      } as Readonly<Record<number, string>>,
+      detalle: (red: string, corte: string | null) => (corte ? `${red} · medido ${corte}` : red),
+      verVideo: "Abrir el video",
+    },
+  },
   page: {
     /** El título de la pestaña del navegador. */
     metaTitle: "Resumen",
