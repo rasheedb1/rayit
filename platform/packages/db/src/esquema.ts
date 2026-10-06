@@ -442,6 +442,12 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'membership (0028) con el rol y las casillas que decidió quien invitó —y que la política de alta de invitation ' +
     'ya comprobó que podía dar—, accepted_at y la fila invitation.accepted en audit_log. Lo devuelve todo al salir. ' +
     'EXECUTE solo para mc_app. No es de ningún disparador',
+  'has_pending_invitation_for_session_email()':
+    '¿a la persona de la sesión la esperan en algún espacio? (0079 §1, ACC-4): el primer inicio de sesión no le crea ' +
+    'un espacio propio a quien viene invitado. Mismo dueño y misma cerradura que invitation_lookup: una política TO ' +
+    'CURRENT_USER le deja ver solo las invitaciones al correo verificado de la sesión (current_user_email()) mientras ' +
+    'la propia función fija la bandera, y la borra antes de salir. No escribe nada y devuelve solo un booleano: ni el ' +
+    'espacio, ni el rol, ni quién invitó. EXECUTE solo para mc_app. No es de ningún disparador',
   // El reporte a la marca (0037, CAM-6): la misma puerta que la cotización.
   'public_report(text,boolean)':
     'abre /reporte/<slug> sin sesión (0037), con el mismo rol y la misma cerradura que public_quote: devuelve el ' +

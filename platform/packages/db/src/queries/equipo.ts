@@ -578,6 +578,8 @@ export async function lookupInvitation(tx: BaseTx, token: string): Promise<Invit
 const ESTADOS_CERRADOS: readonly InvitationClosedStatus[] = ['not_found', 'revoked', 'used', 'expired'];
 
 const esTexto = (v: unknown): v is string => typeof v === 'string';
+/** null o ausente: la función puede omitir la clave o mandarla en null. */
+const vacio = (v: unknown): v is null | undefined => v === null || v === undefined;
 
 /**
  * El jsonb de invitation_lookup, comprobado campo a campo en vez de
@@ -591,14 +593,14 @@ export function aVistaDeInvitacion(r: unknown): InvitationPreview {
   if ((ESTADOS_CERRADOS as readonly unknown[]).includes(o.status)) return { status: o.status as InvitationClosedStatus };
   if (o.status !== 'pending') return { status: 'not_found' };
   const vence = esTexto(o.expiresAt) ? new Date(o.expiresAt) : null;
-  const extras = Array.isArray(o.extraPermissions) ? o.extraPermissions : o.extraPermissions == null ? [] : null;
+  const extras = Array.isArray(o.extraPermissions) ? o.extraPermissions : vacio(o.extraPermissions) ? [] : null;
   if (
     !esTexto(o.workspaceName) || !esTexto(o.roleKey) || !esTexto(o.roleLabel) || !esTexto(o.invitedEmailMasked) ||
     !vence || Number.isNaN(vence.getTime()) || !extras || !extras.every(esTexto) ||
-    !(o.invitedByName === null || o.invitedByName === undefined || esTexto(o.invitedByName)) ||
-    !(o.emailMatches === null || o.emailMatches === undefined || typeof o.emailMatches === 'boolean') ||
-    !(o.locale == null || esTexto(o.locale)) ||
-    !(o.timezone == null || esTexto(o.timezone))
+    !(vacio(o.invitedByName) || esTexto(o.invitedByName)) ||
+    !(vacio(o.emailMatches) || typeof o.emailMatches === 'boolean') ||
+    !(vacio(o.locale) || esTexto(o.locale)) ||
+    !(vacio(o.timezone) || esTexto(o.timezone))
   ) {
     return { status: 'not_found' };
   }

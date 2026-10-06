@@ -24,8 +24,8 @@ function pintar(action: (prev: ConfirmActionState, fd: FormData) => Promise<Conf
 /** Una acción que no responde hasta que la prueba lo dice. */
 function accionEnEspera() {
   let soltar: (s: ConfirmActionState) => void = () => {};
-  const action = vi.fn(
-    (_prev: ConfirmActionState, _fd: FormData) => new Promise<ConfirmActionState>((r) => (soltar = r)),
+  const action = vi.fn<(prev: ConfirmActionState, fd: FormData) => Promise<ConfirmActionState>>(
+    () => new Promise<ConfirmActionState>((r) => (soltar = r)),
   );
   return { action, soltar: (s: ConfirmActionState) => soltar(s) };
 }

@@ -101,15 +101,15 @@ async function menu(): Promise<string[]> {
 }
 
 describe("modo demo contra el seed, con los roles de 0034", () => {
-  test("sin DEMO_USER_ID: el Dueño; los seis módulos y los layouts pasan", async () => {
+  test("sin DEMO_USER_ID: el Dueño; los seis módulos, Equipo y los layouts pasan", async () => {
     delete process.env.DEMO_USER_ID;
-    expect(await menu()).toEqual(["resumen", "ventas", "cotizar", "campanas", "finanzas", "conexiones"]);
+    expect(await menu()).toEqual(["resumen", "ventas", "cotizar", "campanas", "finanzas", "conexiones", "accesos"]);
     expect(await digestDe(() => CampanasLayout({ children }))).toBeUndefined();
   }, PRUEBA_DB_TIMEOUT_MS);
 
   test("la dueña del seed, por su membresía real: todo pasa", async () => {
     process.env.DEMO_USER_ID = LAURA;
-    expect(await menu()).toHaveLength(6);
+    expect(await menu()).toHaveLength(7);
     expect(await digestDe(() => CampanasLayout({ children }))).toBeUndefined();
     expect(await digestDe(() => FinanzasLayout({ children }))).toBeUndefined();
   }, PRUEBA_DB_TIMEOUT_MS);
@@ -123,7 +123,7 @@ describe("modo demo contra el seed, con los roles de 0034", () => {
 
   test("Mánager: /campanas pasa; /finanzas y /finanzas/flujo responden 404", async () => {
     process.env.DEMO_USER_ID = MANAGER;
-    expect(await menu()).toEqual(["resumen", "ventas", "cotizar", "campanas", "conexiones"]);
+    expect(await menu()).toEqual(["resumen", "ventas", "cotizar", "campanas", "conexiones", "accesos"]);
     expect(await digestDe(() => CampanasLayout({ children }))).toBeUndefined();
     expect(await digestDe(() => FinanzasLayout({ children }))).toBe(NO_ENCONTRADO);
     expect(await digestDe(() => FlujoPage())).toBe(NO_ENCONTRADO);

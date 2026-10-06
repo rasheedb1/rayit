@@ -222,7 +222,10 @@ export function CambiarRol({
   useEffect(() => {
     if (estado === estadoVisto.current) return;
     estadoVisto.current = estado;
-    if (estado.ok) cerrar();
+    if (estado.ok) {
+      volverAlDisparador.current = true;
+      setAbierto(false);
+    }
   }, [estado]);
 
   useEffect(() => {
