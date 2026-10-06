@@ -1,3 +1,4 @@
+import type { AgeCut } from "@mc/core";
 import type { CsvImportErrorCode } from "@mc/db/queries/resumen";
 import type { ErrorCsvCodigo, ProblemaCodigo, ProblemaFechaExportacion } from "./importar/_lib/csv";
 import type { Campo, FormatoId } from "./importar/_lib/formatos";
@@ -33,12 +34,21 @@ export const MESSAGES = {
     titulo: "Lo que importa esta semana",
     /** «3 pendientes». `n` decide el número; `txt` es `n` ya formateado. */
     pendientes: (n: number, txt: string) => contar(n, txt, "pendiente", "pendientes"),
+    /** Cuando la consulta trajo más de las que caben (MAX_HIGHLIGHTS): `txt` es ese tope ya formateado. */
+    pendientesMas: (txt: string) => `Más de ${txt} pendientes`,
+    /** Solo cuando hay filas: habla del botón «Entendido», que el bloque vacío no tiene. */
     descripcion:
       "Lo que pide tu atención, lo más urgente arriba. «Entendido» lo quita de tu lista; en su módulo sigue como está.",
+    /**
+     * El bloque vacío. NO afirma nada sobre los datos: el bloque enseña
+     * avisos sin atender, no la mora ni el estado de las cuentas, y quien
+     * ya dio «Entendido» o mandó el recordatorio desde Finanzas puede
+     * tener una factura vencida y el bloque vacío.
+     */
     vacio: {
       title: "Todo en orden esta semana",
       description:
-        "Ninguna cuenta caída, ningún cobro vencido ni seguimiento atrasado, y ningún video se disparó en los últimos siete días.",
+        "Nada nuevo que atender. Aquí te avisamos cuando una cuenta deje de leerse, venza un cobro, se atrase un seguimiento o se dispare un video.",
     },
     /** Si el bloque no carga, el resto del resumen sigue: se dice aquí y no tumba la página. */
     error: "No pudimos cargar lo que importa esta semana. Las cifras de abajo no dependen de esto.",
@@ -46,19 +56,32 @@ export const MESSAGES = {
     entendido: "Entendido",
     /** Para el lector de pantalla: qué se marca como entendido. */
     entendidoDe: (que: string) => `Entendido: ${que}`,
+    /** El aviso que queda tras «Entendido», con su «Deshacer» (role=status: el lector de pantalla lo anuncia). */
+    quitado: (que: string) => `Quitado de tu lista: ${que}`,
+    deshacer: "Deshacer",
+    deshacerDe: (que: string) => `Deshacer: volver a mostrar ${que}`,
+    devuelto: (que: string) => `De vuelta en tu lista: ${que}`,
+    errorEntendido: "No pudimos quitarlo de tu lista. Inténtalo otra vez.",
+    errorDeshacer: "No pudimos devolverlo a tu lista. Inténtalo otra vez.",
+    /** Las primeras filas se ven; el resto, plegado, para que las cifras de abajo no queden dos pantallas más abajo. */
+    verMas: (n: number, txt: string) => (n === 1 ? "Ver 1 más" : `Ver ${txt} más`),
+    verMenos: "Ver menos",
+    /** Cuando hay más filas de las que el bloque lee. */
+    hayMas: "Hay más avisos de los que caben aquí: atiende los de arriba y los siguientes subirán.",
     /** La pastilla de cada fila: de qué se trata. */
     fuente: {
       connection: "Cuenta",
+      channel: "Canal de envío",
       invoice: "Cobro",
       deal: "Seguimiento",
       outlier: "Video destacado",
     },
-    /** El enlace de cada fila: el módulo donde se resuelve. */
+    /** El enlace de cada fila: a dónde lleva, dicho en el botón. */
     ir: {
       connection: "Ver en Conexiones",
+      channel: "Ver en Canales",
       invoice: "Ver la factura",
       deal: "Ver en Ventas",
-      outlier: "Ver la red en Resumen",
     },
     connection: {
       needs_reauth: (red: string) => `Vuelve a conectar tu cuenta de ${red}`,
@@ -67,6 +90,12 @@ export const MESSAGES = {
       error: (red: string) => `No podemos leer tu cuenta de ${red}`,
       /** Sin el detalle de la plataforma, qué pasa si no se atiende. */
       sinDetalle: "Mientras tanto no llegan cifras nuevas de esta cuenta.",
+    },
+    /** La cuenta de envío de Ventas (correo, LinkedIn…) que frena las secuencias. `canal` es «Gmail», «LinkedIn»… */
+    channel: {
+      needs_reconnect: (canal: string, nombre: string | null) => `Vuelve a conectar tu ${canal}${nombre ? ` (${nombre})` : ""}`,
+      error: (canal: string, nombre: string | null) => `Tu ${canal}${nombre ? ` (${nombre})` : ""} no puede enviar`,
+      detalle: "Lo que iba a salir por esta cuenta espera en la cola hasta que vuelva.",
     },
     invoice: {
       titulo: (numero: string, empresa: string) => `La factura ${numero} de ${empresa} está vencida`,
@@ -80,14 +109,20 @@ export const MESSAGES = {
       detalleVencido: (empresa: string, negocio: string, cuando: string) => `${empresa} · ${negocio} · venció ${cuando}`,
       detalleHoy: (empresa: string, negocio: string) => `${empresa} · ${negocio}`,
     },
+    /**
+     * El video destacado. `video` es su nombre (título, o su texto si no
+     * tiene: @mc/core videoName) o null si no hay ninguno; entonces se
+     * dice «Tu video de Instagram», sin comillas alrededor de un relleno.
+     * `multiplo` ya formateado («6×»).
+     */
     outlier: {
-      /** `multiplo` ya formateado («6×»). */
-      titulo: (video: string, multiplo: string) => `«${video}» hizo ${multiplo} tu mediana`,
-      breakout: (video: string, multiplo: string) => `Se disparó: «${video}» hizo ${multiplo} tu mediana`,
-      /** Un video sin título en la plataforma. */
-      sinTitulo: "Un video sin título",
+      titulo: (video: string | null, red: string, multiplo: string) =>
+        video ? `«${video}» hizo ${multiplo} tu mediana` : `Tu video de ${red} hizo ${multiplo} tu mediana`,
+      breakout: (video: string | null, red: string, multiplo: string) =>
+        video ? `Se disparó: «${video}» hizo ${multiplo} tu mediana` : `Se disparó tu video de ${red}: hizo ${multiplo} tu mediana`,
       /** NULL no es cero (CON-6 §2): sin múltiplo todavía, se dice con palabras. */
-      sinMultiplo: (video: string) => `«${video}» va por encima de tus otros videos`,
+      sinMultiplo: (video: string | null, red: string) =>
+        video ? `«${video}» va por encima de tus otros videos` : `Tu video de ${red} va por encima de tus otros videos`,
       sinMultiploDetalle: "Aún no hay suficientes videos para comparar.",
       /** El corte al que se midió el múltiplo: «2,4×» sin «a los 7 días» no se entiende (CON-6 §2). */
       corte: {
@@ -95,9 +130,12 @@ export const MESSAGES = {
         72: "a los 3 días",
         168: "a los 7 días",
         720: "a los 30 días",
-      } as Readonly<Record<number, string>>,
+      } satisfies Record<AgeCut, string>,
       detalle: (red: string, corte: string | null) => (corte ? `${red} · medido ${corte}` : red),
-      verVideo: "Abrir el video",
+      /** El clic principal: el video mismo, en su red (no hay todavía una ficha de video en On Cue). */
+      abrirVideo: (red: string) => `Abrir el video en ${red}`,
+      /** El secundario: las cifras de esa red en este mismo panel. */
+      verCifras: (red: string) => `Ver tus cifras de ${red}`,
     },
   },
   page: {
