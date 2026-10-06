@@ -49,6 +49,7 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { esperarAviso } from './carrera.ts';
 import { createHash } from 'node:crypto';
 import type { PublicShareTx, WorkerTx, WorkspaceTx } from '../src/client.ts';
 import {
@@ -663,7 +664,7 @@ describe('0046 · límites atómicos', () => {
       await puerta;
       return ok;
     });
-    await primeraSumo;
+    await esperarAviso(primeraSumo, primera);
     let resuelta = false;
     const segunda = t.db.asWorker((tx) => una(tx)).then((ok) => ((resuelta = true), ok));
     await new Promise((r) => setTimeout(r, 400));

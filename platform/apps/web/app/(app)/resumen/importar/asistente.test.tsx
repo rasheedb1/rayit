@@ -236,8 +236,11 @@ describe("el asistente de importación", () => {
     expect(screen.getByLabelText("Fecha de la exportación")).toHaveValue("2026-09-12");
 
     // Si alguien la cambia a día/mes, el paso 3 le avisa de que las fechas se dispersan.
+    // La exportación, de hoy: leídas en día/mes las fechas llegan al 9 de octubre, y con una
+    // exportación fija del 12-sep el paso 2 no dejaba seguir desde ese día (CIM-12).
     fireEvent.click(within(orden).getByRole("button", { name: "Día/Mes" }));
-    fireEvent.change(screen.getByLabelText("Fecha de la exportación"), { target: { value: "2026-09-12" } });
+    const hoy = new Date().toLocaleDateString("en-CA", { timeZone: WORKSPACE.timezone });
+    fireEvent.change(screen.getByLabelText("Fecha de la exportación"), { target: { value: hoy } });
     fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
     expect(await screen.findByText(/Leídas en orden día\/mes, las fechas de este archivo quedan a meses/)).toBeInTheDocument();
   });

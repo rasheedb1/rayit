@@ -34,6 +34,7 @@ import ConexionesPage from "./conexiones/page";
 import { MESSAGES } from "./_lib/messages";
 import { MESSAGES as FINANZAS } from "./finanzas/_lib/messages";
 import { MESSAGES as VENTAS } from "./ventas/_lib/messages";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
 
@@ -46,7 +47,7 @@ beforeAll(async () => {
   delete process.env.DATABASE_URL;
   process.env.DEMO_WORKSPACE_ID = INEXISTENTE;
   expect(await getDbMode()).toBe("embedded");
-}, 120_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();
@@ -152,6 +153,6 @@ describe("con un DEMO_WORKSPACE_ID que no existe, la frontera dice la verdad", (
       expect(html).toContain('href="/"');
       // Y nada del error en sí: ni el id, ni el texto.
       expect(html).not.toContain(INEXISTENTE);
-    }, 120_000);
+    }, PRUEBA_DB_TIMEOUT_MS);
   }
 });

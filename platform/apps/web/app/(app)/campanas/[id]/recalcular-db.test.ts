@@ -26,6 +26,7 @@ import { closeDb, getDbMode, withWorkspace } from "@/lib/db";
 import { withWorkspaceId } from "@/lib/db/cliente";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { recalcularResultado } from "./actions";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 const MANAGER = "0000000e-0000-4000-8000-0000000005c1";
 const EDITOR = "0000000e-0000-4000-8000-0000000005c2";
@@ -98,7 +99,7 @@ beforeAll(async () => {
     },
     { userId: "0000000e-0000-4000-8000-0000000005c9", email: "otro-cam5@ejemplo.test" },
   );
-}, 300_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();
@@ -115,7 +116,7 @@ describe("«Recalcular» con 0041 y los roles de 0034", () => {
     expect(antes.n).toBe(1);
     await expect(recalcularResultado(CAMPAIGN_CAFE_ALMA)).rejects.toBeInstanceOf(SinPermisoError);
     expect(await resultado()).toEqual(antes);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("el Mánager recalcula su campaña: las cifras del seed recalculado, y dos veces dan una sola fila", async () => {
     process.env.DEMO_USER_ID = MANAGER;
@@ -128,7 +129,7 @@ describe("«Recalcular» con 0041 y los roles de 0034", () => {
     await recalcularResultado(CAMPAIGN_CAFE_ALMA);
     expect(redirect).toHaveBeenLastCalledWith(`/campanas/${CAMPAIGN_CAFE_ALMA}`);
     expect(await resultado()).toEqual(primera);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("una campaña de otro workspace: «no existe en este espacio» y ninguna fila, ni vista desde ese workspace", async () => {
     process.env.DEMO_USER_ID = MANAGER;
@@ -141,5 +142,5 @@ describe("«Recalcular» con 0041 y los roles de 0034", () => {
       { userId: "0000000e-0000-4000-8000-0000000005c9", email: "otro-cam5@ejemplo.test" },
     );
     expect(desdeElOtro.rows).toHaveLength(0);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });

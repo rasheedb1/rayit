@@ -79,6 +79,33 @@ after(async () => {
   await t?.close();
 });
 
+/**
+ * Hoy + `dias` en la zona del espacio, según el reloj de la BASE (CIM-12).
+ *
+ * Las facturas que crean estas pruebas tenían vencimientos fijos de
+ * octubre de 2026 ('2026-10-21'): pasaban el día en que se escribieron y,
+ * desde el 14-oct, caían en «vence pronto» y en las ocho semanas del
+ * flujo, y una factura que no llegaba a cobrarse arrastraba a las pruebas
+ * de FIN-6 y a los KPI. La puerta lo tapaba con el reloj anclado; el job
+ * «contra-postgres-real» del CI (sin ancla) se habría puesto rojo solo.
+ * Con fechas relativas al now() de la base valen con o sin ancla, contra
+ * PGlite y contra un Postgres real.
+ */
+async function diaDelEspacio(dias: number, workspaceId = WORKSPACE_LAURA): Promise<string> {
+  if (!Number.isInteger(dias)) throw new Error(`dias inválido: ${dias}`);
+  const rows = await t.db.withWorkspace(workspaceId, async (tx) => {
+    const r = await tx.query<{ dia: string }>(
+      `SELECT to_char((now() AT TIME ZONE coalesce(nullif(w.timezone, ''), 'UTC'))::date + $1::int, 'YYYY-MM-DD') AS dia
+         FROM workspace w WHERE w.id = current_workspace_id()`,
+      [dias],
+    );
+    return r.rows;
+  });
+  const dia = rows[0]?.dia;
+  if (!dia) throw new Error(`sin día para el espacio ${workspaceId}`);
+  return dia;
+}
+
 describe('aislamiento por workspace', () => {
   test('listar devuelve las 3 facturas por cobrar del workspace del seed', async () => {
     const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
@@ -135,9 +162,10 @@ describe('aislamiento por workspace', () => {
 
     // La empresa existe (company no tiene RLS) pero no está vinculada al
     // workspace ajeno: company_link sí tiene RLS.
+    const [issuedOn, dueOn] = [await diaDelEspacio(-14), await diaDelEspacio(16)];
     await assert.rejects(
       t.db.withWorkspace(WORKSPACE_AJENO, (tx) =>
-        createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, subtotal: '1000000', issuedOn: '2026-09-21', dueOn: '2026-10-21' }),
+        createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, subtotal: '1000000', issuedOn, dueOn }),
       ),
       /no existe en este workspace/,
     );
@@ -346,13 +374,14 @@ describe('FIN-3 · cuentas por cobrar (vista receivables)', () => {
 
 describe('crear facturas', () => {
   test('dos creaciones en paralelo producen números consecutivos distintos', async () => {
+    const [issuedOn, dueOn] = [await diaDelEspacio(-14), await diaDelEspacio(16)];
     const crear = () =>
       t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
         createInvoice(tx, {
           companyId: COMPANY_CAFE_ALMA,
           subtotal: '1000000.00',
-          issuedOn: '2026-09-21',
-          dueOn: '2026-10-21',
+          issuedOn,
+          dueOn,
         }),
       );
     const [a, b] = await Promise.all([crear(), crear()]);
@@ -371,9 +400,10 @@ describe('crear facturas', () => {
 
   test('crear una factura deja su fila en la bitácora: actor de la sesión, before null y after solo con lo permitido (ACC-2)', async () => {
     const USER_LAURA = '00000002-0000-4000-8000-000000000002';
+    const [issuedOn, dueOn] = [await diaDelEspacio(-12), await diaDelEspacio(18)];
     const creada = await t.db.withWorkspace(
       WORKSPACE_LAURA,
-      (tx) => createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, campaignId: CAMPAIGN_CAFE_ALMA, subtotal: '250000.00', issuedOn: '2026-09-23', dueOn: '2026-10-23', externalRef: ' DIAN-77 ' }),
+      (tx) => createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, campaignId: CAMPAIGN_CAFE_ALMA, subtotal: '250000.00', issuedOn, dueOn, externalRef: ' DIAN-77 ' }),
       { userId: USER_LAURA },
     );
     const filas = await filasDeBitacora(t, WORKSPACE_LAURA, creada.id);
@@ -387,7 +417,7 @@ describe('crear facturas', () => {
     assert.deepEqual(fila?.after, {
       number: creada.number, companyId: COMPANY_CAFE_ALMA, campaignId: CAMPAIGN_CAFE_ALMA, quoteId: null, currency: 'COP',
       subtotal: '250000.00', tax: '47500.00', withholding: '27500.00', total: '297500.00',
-      issuedOn: '2026-09-23', dueOn: '2026-10-23', status: 'draft', externalRef: 'DIAN-77',
+      issuedOn, dueOn, status: 'draft', externalRef: 'DIAN-77',
     });
     assert.deepEqual(await filasDeBitacora(t, WORKSPACE_AJENO, creada.id), [], 'desde otro workspace no se ve');
   });
@@ -458,8 +488,10 @@ describe('transiciones', () => {
   });
 
   test('draft → sent → void, y paid exige el total', async () => {
+    // Vence dentro de 16 días: «al día», que empieza pasados los siete de «vence pronto».
+    const [issuedOn, dueOn] = [await diaDelEspacio(-14), await diaDelEspacio(16)];
     const nueva = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
-      createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, subtotal: '500000.00', issuedOn: '2026-09-21', dueOn: '2026-10-21' }),
+      createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, subtotal: '500000.00', issuedOn, dueOn }),
     );
     const enviada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => transitionInvoice(tx, nueva.id, 'sent'));
     assert.equal(enviada.status, 'sent');
@@ -1238,15 +1270,8 @@ const EMPRESA_SIN_RESERVA = '00000009-0000-4000-8000-0000000000e1';
 const FACTURA_SIN_RESERVA = '00000009-0000-4000-8000-0000fac00001';
 
 /** Hoy en la zona del espacio: es el día que la pantalla propone y el que acepta el cobro. */
-async function hoyEnElEspacio(workspaceId = WORKSPACE_LAURA): Promise<string> {
-  const rows = await t.db.withWorkspace(workspaceId, async (tx) => {
-    const r = await tx.query<{ hoy: string }>(
-      `SELECT to_char((now() AT TIME ZONE coalesce(nullif(w.timezone, ''), 'UTC'))::date, 'YYYY-MM-DD') AS hoy
-         FROM workspace w WHERE w.id = current_workspace_id()`,
-    );
-    return r.rows;
-  });
-  return rows[0]?.hoy ?? '';
+function hoyEnElEspacio(workspaceId = WORKSPACE_LAURA): Promise<string> {
+  return diaDelEspacio(0, workspaceId);
 }
 
 /** Cuántas filas hay de cada tabla que toca un cobro, para comprobar que un rechazo no deja nada. */
@@ -1264,10 +1289,11 @@ async function conteos(workspaceId = WORKSPACE_LAURA): Promise<Record<string, nu
   return { pagos: c?.pagos ?? -1, reservas: c?.reservas ?? -1, bitacora: c?.bitacora ?? -1, avisos: c?.avisos ?? -1 };
 }
 
-/** Una factura enviada, recién creada, para no ensuciar las del seed. */
+/** Una factura enviada, recién creada, para no ensuciar las del seed. Vencida hace cuatro días, emitida un mes antes. */
 async function facturaEnviada(subtotal: string): Promise<{ id: string; total: string }> {
+  const [issuedOn, dueOn] = [await diaDelEspacio(-34), await diaDelEspacio(-4)];
   const nueva = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
-    createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, subtotal, issuedOn: '2026-09-01', dueOn: '2026-10-01' }),
+    createInvoice(tx, { companyId: COMPANY_CAFE_ALMA, subtotal, issuedOn, dueOn }),
   );
   const enviada = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => transitionInvoice(tx, nueva.id, 'sent'));
   return { id: enviada.id, total: enviada.total };

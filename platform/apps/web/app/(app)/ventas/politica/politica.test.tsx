@@ -50,6 +50,7 @@ import { Interruptor } from "./interruptor";
 import { MESSAGES } from "./messages";
 import { Salud, motivoCaida } from "./salud";
 import { formatterFor } from "@/lib/format";
+import { ESPERA_UI_LARGA_MS, PRUEBA_LENTA_MS } from "@/lib/testing/tiempos";
 
 const t = MESSAGES;
 /** El instante de la página en las pruebas de «Salud de hoy»: 9:00 en Bogotá. */
@@ -438,7 +439,7 @@ describe("ronda 4", () => {
     disableOutreach.mockResolvedValue(0);
     // Pulido r4 (CIM-12): el rerender espera a que la transición del formulario termine (el botón que envía deja
     // de estar ocupado); en medio, la confirmación de encender se quedaba abierta.
-    const espera = { timeout: 10_000 };
+    const espera = { timeout: ESPERA_UI_LARGA_MS };
     const confirmar = async (nombre: string, accion: typeof enableOutreach) => {
       const boton = screen.getByRole("button", { name: nombre });
       await act(async () => {
@@ -467,7 +468,7 @@ describe("ronda 4", () => {
     });
     expect(screen.getByRole("button", { name: t.interruptor.encender })).toBeInTheDocument();
     expect(screen.queryByRole("group")).not.toBeInTheDocument();
-  }, 30_000);
+  }, PRUEBA_LENTA_MS);
 
   it("sin dirección, la línea de arriba no repite lo que dice la de abajo", () => {
     render(interruptor({ nuncaEncendido: true, hasAddress: false }));
@@ -676,7 +677,7 @@ describe("ronda 5", () => {
     // encender a la vista. Ahora cada clic va dentro de act, se espera a
     // que la acción se llame y a que el botón se suelte, y el rerender (la
     // página con el estado nuevo) también va dentro de act.
-    const espera = { timeout: 10_000 };
+    const espera = { timeout: ESPERA_UI_LARGA_MS };
     enableOutreach.mockResolvedValue(undefined);
     disableOutreach.mockResolvedValue(0);
     const clic = async (nombre: string) => {
@@ -711,7 +712,7 @@ describe("ronda 5", () => {
       rerender(interruptor({ enabled: false }));
     });
     await waitFor(() => expect(screen.getByRole("heading", { name: t.interruptor.title })).toHaveFocus(), espera);
-  }, 30_000);
+  }, PRUEBA_LENTA_MS);
 
   it("si falla, el foco no se mueve y el error lo dice", async () => {
     enableOutreach.mockRejectedValue(new Error("base caída"));

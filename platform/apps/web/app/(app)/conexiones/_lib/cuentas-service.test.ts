@@ -20,13 +20,14 @@ import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { createCuentasService, OWNERSHIP_DECLARATION_ES, type CuentasService } from "./cuentas-service";
 import { SinPermisoError } from "./permisos";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 const NOW = new Date("2026-09-22T15:00:00Z");
 const ENV = { INSTAGRAM_HOUSE_TOKEN: "IGAA-house-web-SECRETO", GOOGLE_API_KEY: "AIza-web-key-SECRETO" };
 const WHO = { ip: "203.0.113.7", userAgent: "vitest" };
 const IP_HASH = createHash("sha256").update(WHO.ip).digest("hex");
-// Cada prueba abre transacciones sobre Postgres embebido y el volcado de R4 recorre todas las tablas: con la máquina cargada pasan de los 5 s por defecto.
-vi.setConfig({ testTimeout: 120_000 });
+// Cada prueba abre transacciones sobre Postgres embebido y el volcado de R4 recorre todas las tablas: el techo de las pruebas con base (lib/testing/tiempos.ts).
+vi.setConfig({ testTimeout: PRUEBA_DB_TIMEOUT_MS });
 const CREATOR_LAURA = "00000002-0000-4000-8000-000000000003";
 const USER_LAURA = "00000002-0000-4000-8000-000000000002";
 /** Andrés Pardo, el mánager de la demo (seed 0003): membership 'admin'. */
@@ -42,7 +43,7 @@ const withWorkspace = <T,>(fn: (tx: WorkspaceTx) => Promise<T>) => db.withWorksp
 
 beforeAll(async () => {
   guard = withoutNetwork();
-  db = await createEmbeddedDb({ seeds: true });
+  db = await createEmbeddedDb({ seeds: true, snapshot: true });
   fetch = new FixtureFetch([
     ...(await loadFixtures("instagram", [["business_discovery", "ok"]])),
     ...(await loadFixtures("youtube", [["channels.list", "handle.ok"]])),
@@ -63,7 +64,7 @@ beforeAll(async () => {
     ON CONFLICT DO NOTHING;
     UPDATE membership SET role_id = '${ROLE_MANAGER_CONECTA}' WHERE workspace_id = '${SEED_WORKSPACE_ID}' AND user_id = '${USER_MANAGER}';
   `);
-}, 300_000); // Postgres embebido con las migraciones y los seeds: con la máquina cargada pasa del minuto.
+}, SETUP_TIMEOUT_MS); // Abre la demo desde la foto de la corrida (décimas); el techo es el común, con su porqué en lib/testing/tiempos.ts.
 
 /** El mismo servicio con la sesión de una persona: withWorkspace fija app.user_id como lo hace lib/db con CIM-3. */
 function serviceAs(userId: string): CuentasService {

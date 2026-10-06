@@ -22,7 +22,7 @@ import { createLogger, MemorySink } from '../src/runner/logger.ts';
 import { MAX_TICK_CUTS, NO_RETRY_KEY, onceExitCode, retryBackoffFrom, retryDelayMs, runOnce, TICK_CUT_KEY, type OnceSummary } from '../src/runner/once.ts';
 import { defineJob } from '../src/runner/registry.ts';
 import { formatHealth } from '../src/runner/salud.ts';
-import { jobRuns, openTestDatabase, testConfig } from './helpers/harness.ts';
+import { jobRuns, openTestDatabase, SETUP_TIMEOUT, testConfig } from './helpers/harness.ts';
 
 const ANUAL = '0 0 1 1 *';
 
@@ -78,7 +78,7 @@ before(async () => {
   `);
   const ws = await db.raw.query<{ id: string }>(`INSERT INTO workspace (slug, name) VALUES ('ws-once', 'Once') RETURNING id`);
   workspaceId = ws.rows[0]!.id;
-}, { timeout: 600_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await db.close();

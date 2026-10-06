@@ -19,6 +19,7 @@
  */
 import { renderToString } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 /** Valores de mentira: aquí solo importa que `loadOAuthApps` vea la app configurada. */
 const ENV_OAUTH = {
@@ -103,14 +104,14 @@ beforeAll(async () => {
   process.env.OAUTH_CONNECT = "0";
   htmlSinBandera = await pintar();
   void closeDb;
-}, 600_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   const { closeDb } = await import("@/lib/db");
   await closeDb().catch(() => undefined);
   for (const k of Object.keys(ENV_OAUTH)) delete process.env[k];
   Object.assign(process.env, entorno);
-}, 60_000);
+}, SETUP_TIMEOUT_MS);
 
 describe("CON-4 · la pantalla Cuentas con la bandera oauth_connect encendida", () => {
   test("una conexión con el token vencido se ve «Vencida» y con «Reautorizar», aunque status siga en 'active'", () => {

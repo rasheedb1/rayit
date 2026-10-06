@@ -43,10 +43,11 @@ import { channelBanner } from "./banner";
 import { channelRows, reasonText } from "./filas";
 import { GOOGLE_COOKIE, googleCallback, googleStart, UNIPILE_COOKIE, unipileFailure, unipileStart } from "./conexion";
 import { channelKeys, type ChannelDeps } from "./deps";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 const NOW = new Date("2026-09-24T10:00:00Z");
-/** El flujo completo sobre pglite: bajo carga pasa de los 5 s por defecto. */
-const HEAVY_MS = 30_000;
+/** El flujo completo sobre pglite: el techo de las pruebas con base (lib/testing/tiempos.ts). */
+const HEAVY_MS = PRUEBA_DB_TIMEOUT_MS;
 const ORIGIN = "http://localhost:3100";
 const SECRET = "SECRETO-COMPARTIDO-DE-PRUEBA-123";
 const ENV = {
@@ -84,8 +85,8 @@ const accounts = () => withWorkspace((tx) => listChannelAccounts(tx));
 // 180 s, como las demás pruebas de la web que abren Postgres embebido; una base que nunca abre sigue fallando.
 beforeAll(async () => {
   guard = withoutNetwork();
-  db = await createEmbeddedDb({ seeds: true });
-}, 180_000);
+  db = await createEmbeddedDb({ seeds: true, snapshot: true });
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   // Si la base no llegó a abrir, el error que cuenta es el del beforeAll, no un «undefined.close».

@@ -12,6 +12,7 @@ import {
 } from "@mc/db/queries/finanzas";
 import { openTestDb, WORKSPACE_LAURA, type TestDb } from "@mc/db/test/pglite";
 import { analizar, revisar } from "./_lib/csv";
+import { SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 /**
  * El «terminado cuando» de FIN-7, de punta a punta y sin red: el CSV de
@@ -33,7 +34,7 @@ const fixture = (nombre: string) =>
 let t: TestDb;
 beforeAll(async () => {
   t = await openTestDb();
-}, 300_000);
+}, SETUP_TIMEOUT_MS);
 afterAll(async () => {
   await t?.close();
 });
@@ -45,7 +46,11 @@ function acercarAHoy(texto: string, hoy: string): string {
     const total = a! * 12 + (m! - 1) - atras;
     return `${String(Math.floor(total / 12)).padStart(4, "0")}-${String((total % 12) + 1).padStart(2, "0")}`;
   };
-  return texto.replace("2026-06", mes(3)).replace("2026-07", mes(2)).replace("2026-08", mes(1));
+  // De una pasada: con tres replace seguidos, en octubre de 2026 el junio
+  // del fixture pasaba a «2026-07» y el replace siguiente lo volvía a mover
+  // (CIM-12: la prueba solo fallaba los meses en que los nombres chocaban).
+  const nuevo: Record<string, string> = { "2026-06": mes(3), "2026-07": mes(2), "2026-08": mes(1) };
+  return texto.replace(/2026-0[678]/g, (viejo) => nuevo[viejo]!);
 }
 
 describe("un CSV de AdSense aparece como ingreso en su mes y no se duplica", () => {

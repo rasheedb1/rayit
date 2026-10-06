@@ -567,7 +567,9 @@ describe('canales', () => {
 });
 
 describe('canales_last_error_codigo · last_error de antes, en frase', () => {
-  test('la frase del seed viejo pasa a su código, cualquier otra a «unknown», y una fila vieja se puede seguir actualizando', { timeout: 120_000 }, async () => {
+  // Migra de cero hasta 0052 (sin foto): su techo es el --test-timeout del
+  // paquete, PRUEBA_SCRIPT_TIMEOUT_MS de test/tiempos.ts (CIM-12).
+  test('la frase del seed viejo pasa a su código, cualquier otra a «unknown», y una fila vieja se puede seguir actualizando', async () => {
     const antes = await createEmbeddedDb({ seeds: false, hasta: '0052_contacto_codigo_de_baja.sql' });
     try {
       await antes.execAsSuperuser(`

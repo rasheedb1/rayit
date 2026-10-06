@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { createEmbeddedDb, MIGRATIONS_DIR as DB_MIGRATIONS_DIR } from '@mc/db/embedded';
 import { checksumOf, DuplicateMigrationNumberError, listSql } from '../../../db/lib/aplicar.mjs';
 import { MIGRATIONS_DIR, PgliteDatabase } from '../src/runner/db-pglite.ts';
-import { openTestDatabase } from './helpers/harness.ts';
+import { openTestDatabase, SETUP_TIMEOUT } from './helpers/harness.ts';
 
 interface Registrada extends Record<string, unknown> {
   filename: string;
@@ -34,7 +34,7 @@ const temporales: string[] = [];
 
 before(async () => {
   db = await openTestDatabase();
-}, { timeout: 300_000 });
+}, SETUP_TIMEOUT);
 
 after(async () => {
   await db.close();
@@ -62,7 +62,8 @@ test('cada migración del repositorio queda registrada en el worker, con su chec
   assert.deepEqual(rows.map((r) => ({ filename: r.filename, checksum: r.checksum })), esperado);
 });
 
-test('el worker y openTestDb terminan con la misma schema_migrations', { timeout: 300_000 }, async () => {
+// Las dos que siguen migran una base entera (sin foto, a propósito): su techo es el del arranque.
+test('el worker y openTestDb terminan con la misma schema_migrations', SETUP_TIMEOUT, async () => {
   const embebida = await createEmbeddedDb({ seeds: false });
   try {
     const deDb = await embebida.queryAsSuperuser<Registrada>(REGISTRADAS);
@@ -73,7 +74,7 @@ test('el worker y openTestDb terminan con la misma schema_migrations', { timeout
   }
 });
 
-test('una migración nueva en el directorio se aplica al abrir', { timeout: 300_000 }, async () => {
+test('una migración nueva en el directorio se aplica al abrir', SETUP_TIMEOUT, async () => {
   const dir = await dirTemporal();
   for (const f of await listSql(MIGRATIONS_DIR)) await copyFile(join(MIGRATIONS_DIR, f), join(dir, f));
   await writeFile(join(dir, '9999_con2b_prueba.sql'), 'CREATE TABLE con2b_prueba (id int PRIMARY KEY);\n');

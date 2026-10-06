@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { listOutboundQueue, type QueueBucket } from "@mc/db/queries/actividad";
 import { openTestDb, type TestDb } from "@mc/db/test/pglite";
 import { filtrosDe, hrefDe } from "./vista";
+import { SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 /**
  * El cursor de la URL, de punta a punta y sin red: el token que genera
@@ -39,7 +40,7 @@ beforeAll(async () => {
             now() + interval '1 day', now()),
            ('${id("77")}', '${WS}', '${CO}', 'email', 'Siete', 'Hola.', 'draft', NULL, NULL, NULL, NULL, NULL, now());
   `);
-}, 180_000);
+}, SETUP_TIMEOUT_MS);
 afterAll(async () => {
   await t?.close();
 });
