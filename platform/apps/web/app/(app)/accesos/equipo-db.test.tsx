@@ -14,6 +14,11 @@
  *   - un enlace vencido o usado no sirve.
  * Y: sin SMTP la pantalla da el enlace para copiar y dice que no se
  * envió; la pantalla de Equipo enseña a cada quien lo que le toca.
+ *
+ * El último bloque recorre lo mismo con SESIÓN de Supabase (ACC-4 r2):
+ * un mánager sin cuenta entra por el callback con `next` al enlace, no
+ * recibe un espacio propio, acepta, y Campañas sí / flujo no, por
+ * getCurrentContext → leerOCrearSesion y quienAcepta con identidad.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
@@ -22,8 +27,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: "localhost:3100" }), cookies: async () => new Map() }));
 vi.mock("@/lib/auth/origen", () => ({ origenDeLaPeticion: async () => "http://localhost:3100" }));
+// La sesión de Supabase, de mentira: null es el modo demo de siempre
+// (sin llaves, DEMO_USER_ID); con valor y con las llaves en el entorno,
+// es el camino de producción (getCurrentContext → leerOCrearSesion).
+let sesion: { authUserId: string; email: string; nombre: string | null } | null = null;
+vi.mock("@/lib/auth/session", () => ({ getSesion: async () => sesion, nombreDeMetadata: () => null }));
 
 import { createInvitation, listTeamRoles, newInvitationToken } from "@mc/db/queries/equipo";
+import { leerSesion, registrarEntrada } from "@/lib/auth/sincronizar";
 import { closeDb, getDbMode } from "@/lib/db";
 import { withWorkspaceId } from "@/lib/db/cliente";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
@@ -232,5 +243,55 @@ describe("lo que no sirve", () => {
       message: MESSAGES.errores.last_owner,
     });
     expect(await digestDe(() => FlujoPage())).toBeUndefined();
+  }, PRUEBA_DB_TIMEOUT_MS);
+});
+
+describe("con sesión de Supabase: el camino de producción (ACC-4 r2)", () => {
+  const CORREO = "nuevo.manager@ejemplo.test";
+  const AUTH_ID = "a0000000-0000-4000-8000-0000000004d1";
+  let token = "";
+
+  beforeAll(async () => {
+    como(LAURA);
+    const estado = await invitar({}, formulario({ email: CORREO, roleId: await idDelRol("manager") }));
+    expect(estado.ok).toBe(true);
+    token = tokenDe(estado);
+    // Desde aquí, con llaves: DEMO_USER_ID deja de existir para la web.
+    delete process.env.DEMO_USER_ID;
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://supabase.ejemplo.test";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "clave-anonima-de-prueba";
+  }, SETUP_TIMEOUT_MS);
+
+  afterAll(() => {
+    sesion = null;
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  });
+
+  test("sin sesión, el enlace pide entrar y vuelve a él", async () => {
+    sesion = null;
+    const pantalla = await texto(paginaDelEnlace(token));
+    expect(pantalla).toContain(MESSAGES.aceptar.sinSesion.titulo);
+  }, PRUEBA_DB_TIMEOUT_MS);
+
+  test("el callback con next al enlace no le crea espacio; el enlace lo reconoce por su sesión; acepta y entra con un solo espacio", async () => {
+    sesion = { email: CORREO, authUserId: AUTH_ID, nombre: null };
+    const alta = await registrarEntrada(sesion, { next: `/invitacion/${token}` });
+    expect(alta.workspaces).toEqual([]);
+
+    const pantalla = await texto(paginaDelEnlace(token));
+    expect(pantalla).toContain("Entrarías como Mánager");
+    expect(pantalla).toContain(MESSAGES.aceptar.boton);
+
+    expect(await digestDe(() => aceptarInvitacion(token))).toMatch(/^NEXT_REDIRECT;[a-z]+;\/resumen;/);
+    expect((await leerSesion(sesion))?.workspaces.map((w) => w.id)).toEqual([SEED_WORKSPACE_ID]);
+
+    expect(await digestDe(() => CampanasLayout({ children }))).toBeUndefined();
+    expect(await digestDe(() => FlujoPage())).toBe(NO_ENCONTRADO);
+  }, PRUEBA_DB_TIMEOUT_MS);
+
+  test("el enlace ya usado, con sesión, tampoco sirve", async () => {
+    sesion = { email: CORREO, authUserId: AUTH_ID, nombre: null };
+    expect(await aceptarInvitacion(token)).toEqual({ status: "used" });
   }, PRUEBA_DB_TIMEOUT_MS);
 });
