@@ -25,6 +25,8 @@
 --   4 · Video destacado: el video con mejor múltiplo de las últimas dos
 --       semanas (o el mejor de todos, si no hay), con el aviso de
 --       compute.post_score: breakout desde 5×, outlier desde 2×.
+--   Y la quinta fuente, la cuenta de envío: el LinkedIn de Laura, que el
+--   seed 0005 ya deja por reconectar, con su aviso de canales (3b).
 --
 -- Las tres últimas cosas se ELIGEN con los datos y no con un id fijo: la
 -- demo se vuelve a sembrar semanas después (run.mjs, cuarta pasada) y el
@@ -46,6 +48,7 @@
 --   …-0000000a1102   aviso del cobro (invoice_overdue, paso 4)
 --   …-0000000a1103   aviso del seguimiento (deal_overdue)
 --   …-0000000a1104   aviso del video (outlier o breakout)
+--   …-0000000a1105   aviso de la cuenta de envío (connection_error de canales)
 -- =====================================================================
 
 SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', false);
@@ -125,6 +128,25 @@ ON CONFLICT (id) DO UPDATE SET user_id = EXCLUDED.user_id, title_es = EXCLUDED.t
                                entity_id = EXCLUDED.entity_id, action_url = EXCLUDED.action_url,
                                created_at = EXCLUDED.created_at, emailed_at = EXCLUDED.emailed_at,
                                read_at = NULL, dismissed_at = NULL;
+
+-- ---------------------------------------------------------------------
+-- 3b · La cuenta de envío caída: el LinkedIn de Laura (seed 0005)
+-- ---------------------------------------------------------------------
+-- La cuenta ya está en needs_reconnect en el seed 0005, y la campana ya
+-- tiene la alerta del día (0006, outreach_account_down). Aquí va el
+-- aviso que dejan canales.keepalive y el webhook de Unipile al caer
+-- (markChannelAccountDown), con el título de @mc/core CANALES_TEXTOS.down:
+-- es la quinta fuente del bloque, la que frena las secuencias.
+INSERT INTO notification (id, workspace_id, user_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url,
+                          created_at, emailed_at)
+SELECT '00000011-0000-4000-8000-0000000a1105', a.workspace_id, NULL, 'connection_error', 'critical',
+       'Vuelve a conectar tu LinkedIn (' || a.display_name || ')',
+       'LinkedIn cerró la sesión. Vuelve a conectar la cuenta desde Canales.',
+       'outreach_channel_account', a.id, '/ventas/canales', least(now(), coalesce(a.last_error_at, now())), now()
+  FROM outreach_channel_account a
+ WHERE a.id = '00000005-0000-4000-8000-0000000ac002' AND a.status IN ('needs_reconnect', 'error')
+ON CONFLICT (id) DO UPDATE SET title_es = EXCLUDED.title_es, body_es = EXCLUDED.body_es, created_at = EXCLUDED.created_at,
+                               emailed_at = EXCLUDED.emailed_at, read_at = NULL, dismissed_at = NULL;
 
 -- ---------------------------------------------------------------------
 -- 4 · El video de la semana

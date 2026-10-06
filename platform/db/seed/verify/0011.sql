@@ -24,19 +24,29 @@ SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', fa
 
 -- (a) Un aviso de cada fuente, ni más ni menos, sin leer ni descartar.
 SELECT 'a_un_aviso_por_fuente' AS check_id,
-       count(*) FILTER (WHERE n.kind = 'connection_error' AND n.entity_type = 'social_connection') AS cuenta,
-       count(*) FILTER (WHERE n.kind = 'invoice_overdue' AND n.entity_type = 'invoice')            AS cobro,
-       count(*) FILTER (WHERE n.kind = 'deal_overdue' AND n.entity_type = 'deal')                  AS seguimiento,
-       count(*) FILTER (WHERE n.kind IN ('outlier', 'breakout') AND n.entity_type = 'post')        AS video,
-       count(*) = 4
+       count(*) FILTER (WHERE n.kind = 'connection_error' AND n.entity_type = 'social_connection')        AS cuenta,
+       count(*) FILTER (WHERE n.kind = 'connection_error' AND n.entity_type = 'outreach_channel_account') AS canal,
+       count(*) FILTER (WHERE n.kind = 'invoice_overdue' AND n.entity_type = 'invoice')                   AS cobro,
+       count(*) FILTER (WHERE n.kind = 'deal_overdue' AND n.entity_type = 'deal')                         AS seguimiento,
+       count(*) FILTER (WHERE n.kind IN ('outlier', 'breakout') AND n.entity_type = 'post')               AS video,
+       count(*) = 5
          AND count(*) FILTER (WHERE n.kind = 'connection_error' AND n.entity_type = 'social_connection') = 1
+         AND count(*) FILTER (WHERE n.kind = 'connection_error' AND n.entity_type = 'outreach_channel_account') = 1
          AND count(*) FILTER (WHERE n.kind = 'invoice_overdue' AND n.entity_type = 'invoice') = 1
          AND count(*) FILTER (WHERE n.kind = 'deal_overdue' AND n.entity_type = 'deal') = 1
          AND count(*) FILTER (WHERE n.kind IN ('outlier', 'breakout') AND n.entity_type = 'post') = 1
          AND bool_and(n.read_at IS NULL AND n.dismissed_at IS NULL AND n.created_at <= now()) AS ok
   FROM notification n
  WHERE n.id IN ('00000011-0000-4000-8000-0000000a1101', '00000011-0000-4000-8000-0000000a1102',
-                '00000011-0000-4000-8000-0000000a1103', '00000011-0000-4000-8000-0000000a1104');
+                '00000011-0000-4000-8000-0000000a1103', '00000011-0000-4000-8000-0000000a1104',
+                '00000011-0000-4000-8000-0000000a1105');
+
+-- (a2) La cuenta de envío sigue por reconectar y el aviso lleva a Canales.
+SELECT 'a2_canal_caido' AS check_id, a.channel, a.status,
+       a.status IN ('needs_reconnect', 'error') AND n.severity = 'critical' AND n.action_url = '/ventas/canales' AS ok
+  FROM notification n
+  JOIN outreach_channel_account a ON a.id = n.entity_id
+ WHERE n.id = '00000011-0000-4000-8000-0000000a1105';
 
 -- (b) La cuenta sigue caída y el aviso es el crítico de needs_reauth, con su enlace.
 SELECT 'b_cuenta_caida' AS check_id, c.platform_id, c.status, n.severity, n.title_es,

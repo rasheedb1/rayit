@@ -26,7 +26,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ARCHIVOS = ['campanas.ts', 'campanas/reporte.ts', 'campanas/reporte-publico.ts', 'finanzas.ts', 'conexiones.ts'] as const;
+const ARCHIVOS = ['campanas.ts', 'campanas/reporte.ts', 'campanas/reporte-publico.ts', 'finanzas.ts', 'conexiones.ts', 'resumen-semana.ts'] as const;
 type Archivo = (typeof ARCHIVOS)[number];
 
 /**
@@ -73,6 +73,18 @@ const SIN_ALCANCE_DECLARADAS: Record<Archivo, Record<string, string>> = {
     sessionHasPermission:
       'el permiso de la persona de la sesión (role_permission, ACC-5/ACC-8): el permiso y el alcance son capas distintas; ' +
       'la escritura que sigue pasa por su propio filtro',
+  },
+  // «Lo que importa esta semana» (RES-3): lee facturas, negocios, cuentas,
+  // cuentas de envío y posts, y cada rama compone su SCOPE_* como el
+  // módulo dueño de la fila. Solo los dos gestos escriben sin alcance.
+  'resumen-semana.ts': {
+    acknowledgeHighlight:
+      'solo escribe el «Entendido» PROPIO en notification_ack (0078): RLS acota el espacio, la política de INSERT exige ' +
+      'user_id = current_user_id() y PARA_MI limita a los avisos de la persona; no devuelve ni enseña ninguna fila de ' +
+      'un creador, una marca o una campaña. Lo que la persona ve lo decide la lectura, que sí filtra por alcance en cada rama',
+    unacknowledgeHighlight:
+      'el «Deshacer» del anterior, con las mismas tres cerraduras (RLS, la política de INSERT y PARA_MI): solo anota un ' +
+      'gesto propio; la fila vuelve a la lista solo si la lectura, con su alcance, la deja pasar',
   },
 };
 
