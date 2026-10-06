@@ -153,15 +153,17 @@ jobs:
           cache: pnpm
           cache-dependency-path: platform/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      # `pnpm verificar` = turbo run typecheck lint test --force
-      # --concurrency=2. Está en platform/package.json (y en `make
-      # verificar`) para que el CI y quien trabaja en local corran
-      # EXACTAMENTE lo mismo: cuando los flags vivían solo aquí, el
-      # comando documentado daba falsos verdes (--force: la caché de
-      # turbo es local a la máquina y se comparte entre clones y
-      # worktrees sin distinguir la rama) y falsos rojos
-      # (--concurrency=2: @mc/db, @mc/worker y @mc/web levantan PGlite y
-      # pg-boss a la vez y se quedan sin bucle de eventos).
+      # `pnpm verificar` = scripts/verificar.sh: espera uno de los dos
+      # turnos de verificar de la máquina (en el CI siempre hay uno libre)
+      # y corre `turbo run typecheck lint test --force --concurrency=2
+      # --continue`. Es el mismo comando en el CI, en `make verificar` y
+      # en local: --force porque la caché de turbo se comparte entre
+      # clones y worktrees sin distinguir la rama (falsos verdes);
+      # --continue porque sin él turbo manda SIGTERM a las tareas que
+      # siguen corriendo cuando otra falla, y node:test da por
+      # «canceladas» sus pruebas pendientes («Promise resolution is still
+      # pending…»): un rojo ajeno, no una promesa sin resolver.
+      # Ver docs/propuestas/CIM-12.md §Mecanismo.
       - run: pnpm verificar
       - name: Build del dashboard
         run: pnpm --filter @mc/web build

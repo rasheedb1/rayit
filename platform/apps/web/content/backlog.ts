@@ -149,7 +149,7 @@ export const STORIES: readonly Story[] = [
     desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
     done: "N≥10 rondas de make verificar.estres de a dos sin una prueba fallida ni cancelada, también con la máquina en otra fecha (DIAS=2,7,30,90).",
     status: "hecho",
-    note: "5-oct (r4): hecha. La cancelación era turbo matando @mc/db cuando fallaba otra tarea; las pruebas corren con el reloj anclado al 5-oct y las facturas que crean vencen relativo a hoy. Estrés r4 (27 corridas, carga hasta 53): 10 normales de a dos, 10 con el ancla de a+0 a a+9 (incluido el 14-oct), 4 con la máquina a +2/+90 y 3 de @mc/db sin ancla a +9/+60/+75 (el job del CI contra Postgres real): 0 fallidas, 0 canceladas, 0 tareas sin su reloj. Pendiente de Nicolás: los gastos del seed 0003 con fecha fija dan rojo sin ancla desde el 30-dic. Detalle: docs/propuestas/CIM-12.md.",
+    note: "5-oct: hecha. Causa: turbo mataba @mc/db al fallar otra tarea (ahora --continue); reloj de pruebas anclado; turnos de verificar con la hora en C. Estrés r5: ESTRES_R5. Pendiente de Nicolás (CIM-8): seed 0003 rojo sin ancla desde el 30-dic. Detalle: docs/propuestas/CIM-12.md.",
   },
   {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],
@@ -181,7 +181,7 @@ export const STORIES: readonly Story[] = [
     desc: "El repositorio de GitHub conectado al proyecto de Vercel para que cada merge a main publique solo; el worker corre por turnos en la propia web (/api/cron/tick), llamado cada minuto por pg_cron de Supabase (Hobby) y, con Vercel Pro, por Vercel Cron.",
     done: "Un merge a main aparece en la URL sin correr ningún comando.",
     status: "en_curso",
-    note: "5-oct: el worker corre por turnos en producción y pg_cron lo llama cada minuto, firmando el turno (make cron.status en verde). Único pendiente técnico: conectar GitHub a Vercel para que un merge a main publique solo (un clic de Rasheed; hoy, make vercel.deploy PROD=1). Falta además la aprobación a posteriori de Nicolás del runner ya integrado (PR 1, rasheed/CIM-7-runner-1, entero en rasheed/integracion). Visto el 5-oct: cada turno marca collect.account_metrics y outbound.replies como agotados (outbound.replies falla); sin historia propia todavía. Detalle en docs/propuestas/CIM-12.md.",
+    note: "Turnos en producción con pg_cron cada minuto (make cron.status en verde el 5-oct). Falta: conectar GitHub a Vercel (un clic de Rasheed) y el visto bueno de Nicolás al runner. Los jobs agotados en cada turno van en VEN-17.",
   },
   {
     id: "CIM-8", module: "CIM", owner: "nicolas", size: "S", sprint: 1, deps: ["CIM-2"],
@@ -189,7 +189,7 @@ export const STORIES: readonly Story[] = [
     desc: "Tres facturas (una vencida), pagos, gastos recurrentes, dos campañas con posts asociados y snapshots de seguidores de la marca. Números tomados del mock. Idempotente.",
     done: "make seed deja Finanzas y Campañas con los mismos números que el mock.",
     status: "hecho",
-    note: "Seed 0003 con verificación en Postgres embebido: node db/seed/verify/run.mjs (run-0003.mjs queda como atajo). 0002 ya existe con los ids del contrato de docs/propuestas/CIM-8.md, así que la sección 0 de 0003 (prerrequisitos) queda en no-op; CIM-6 ajustó en 0003 las fechas de Café Alma para una sola línea de tiempo (CIM-6.md §3.10).",
+    note: "Seed 0003 con verificación en Postgres embebido: node db/seed/verify/run.mjs (run-0003.mjs queda como atajo). 0002 ya existe con los ids del contrato de docs/propuestas/CIM-8.md, así que la sección 0 de 0003 (prerrequisitos) queda en no-op; CIM-6 ajustó en 0003 las fechas de Café Alma para una sola línea de tiempo (CIM-6.md §3.10). Pendiente con fecha (CIM-12, 5-oct): desde el 30-dic-2026 los gastos recurrentes del seed 0003 salen de la ventana de 120 días y el job contra-postgres-real del CI (sin ancla) da 6 pruebas de gastos y flujo en rojo. Arreglo propuesto: sembrarlos en los tres meses cerrados anteriores a CURRENT_DATE y que las pruebas pidan ultimoMesCerrado(). Detalle: docs/propuestas/CIM-12.md §Pendiente.",
   },
 
   // ---------------------------------------------------------------- CON
@@ -475,6 +475,15 @@ export const STORIES: readonly Story[] = [
     done: "Con una semana de envíos de prueba, el embudo cuadra con outbound_touch fila a fila.",
     status: "hecho",
     note: "/ventas/actividad con cola, reintento por tipo y cursor; uso por canal y embudo por paso (0072). Pulido r5: los motivos «la marca ya firmó» y «el negocio se marcó como perdido». Pulido r6 (28-sep): los gestos a mano van «A mano», fuera de «Cola», con «Hecho»; «Uso de hoy» no ofrece «Reconectar» sin llaves; pestañas «X · Ventas»; la demo no siembra comentarios enviados. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
+  },
+
+  {
+    id: "VEN-17", module: "VEN", owner: "rasheed", size: "S", sprint: 5, deps: ["CIM-7", "VEN-10"],
+    title: "Jobs agotados en los turnos de producción",
+    desc: "Desde el 5-oct cada turno de /api/cron/tick deja collect.account_metrics y outbound.replies agotados (exhausted), y outbound.replies termina en failed (corrida 1236). Saber por qué falla outbound.replies y por qué los dos se agotan, y que cada job acabe corrido o saltado con su motivo.",
+    done: "Una semana de turnos en producción sin jobs agotados ni outbound.replies en failed; si falta una llave o una conexión, el job lo dice como «no configurado», no como fallo.",
+    status: "pendiente",
+    note: "Abierta el 5-oct (r5 de CIM-12) desde la nota de CIM-7: visto en la revisión de los turnos de ese día; causa sin investigar. Si la de collect.account_metrics está en el conector, esa parte es de Nicolás (CON-2).",
   },
 
   // ---------------------------------------------------------------- COT

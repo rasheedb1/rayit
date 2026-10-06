@@ -613,6 +613,18 @@ pnpm turbo run typecheck lint test --force     # o TURBO_FORCE=1
 El job «calidad» del CI corre siempre con `--force`, que es el único
 sitio donde el verde tiene que ser incuestionable.
 
+Sin `--force` (`make test`, `pnpm turbo run test`), la caché de las
+pruebas de `@mc/db`, del worker y de los conectores sí tiene en cuenta
+lo que cambia su resultado (`turbo.json`, CIM-12 r5): `MC_RELOJ_DIAS`,
+`MC_RELOJ_ANCLA` y `MC_RELOJ_ANCLA_DIAS` van en el `env` de cada tarea
+(entran en el hash; `globalPassThroughEnv` no entraba, y
+`MC_RELOJ_DIAS=90` repetía el verde de la máquina a +0), y los archivos
+de la raíz que cargan (`scripts/pruebas/**`, `db/lib/**`, migraciones,
+seeds, `packages/db/test/tiempos.ts`) van en sus `inputs`. Lo que no
+entra: `MC_RELOJ_ANCLA=real` mira el día de verdad, que turbo no ve, así
+que una corrida sin ancla se lanza siempre con `--force` (como hace
+`estres-verificar.sh --sin-ancla`, a través de `pnpm verificar`).
+
 Las suites levantan PGlite (WASM) y algunas esperan a pg-boss con
 tiempos reales. Lo que las hace deterministas (CIM-12):
 

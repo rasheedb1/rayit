@@ -1,7 +1,8 @@
 # CIM-12 · `pnpm verificar` determinista
 
-Rasheed, 5-oct-2026. Rama `rasheed/CIM-12-verificar-determinista-r4`
-(sobre la r3). Lo nuevo de la r4, en «Ronda 4» al final de «Arreglo».
+Rasheed, 5-oct-2026. Rama `rasheed/CIM-12-verificar-determinista-r5`
+(sobre la r4, con `rasheed/integracion` al día). Lo nuevo de cada ronda,
+en «Ronda 4» y «Ronda 5» al final de «Arreglo».
 
 ## Mecanismo
 
@@ -104,8 +105,8 @@ Arreglos de esta clase:
 | La web **siembra la demo una vez por corrida**; vitest con **un tercio de los núcleos** | `apps/web/vitest.global-setup.ts`, `vitest.config.ts` |
 | **El reloj de las pruebas anclado** al 5-oct-2026 15:00 UTC en `@mc/db`, `@mc/worker` y `@mc/web` (Date y, con él, el `now()` de PGlite); el tiempo corre desde ahí y todos los procesos de una corrida comparten origen | `scripts/pruebas/reloj.mjs`, scripts `test`, `vitest.config.ts` |
 | **Las cifras de campañas con fecha fija** (la lista con views, los posts de Café Alma, el corte de Fresko, el recálculo del worker) miran la demo sembrada el 28-sep y comparan contra ese día: pasan con o sin ancla, también contra un Postgres real | `packages/db/test/campanas.test.ts`, `apps/worker/test/campaign-compute.test.ts` |
-| `turbo.json` deja pasar `MC_RELOJ_*`, `MC_TEST_WORKERS` y `MC_PGLITE_FOTO*`; cada proceso con el reloj movido lo dice y el estrés cuenta las tareas que no lo dijeron | `turbo.json`, `scripts/estres-verificar.sh` |
-| **Dos `pnpm verificar` a la vez** en toda la máquina; la espera tiene techo (`MC_VERIFICAR_ESPERA_MAX`, 600 s, sale con 75) y un turno se libera si su pid murió, si el pid es de otro proceso (otra hora de arranque) o si tiene más de dos horas | `scripts/verificar.sh`, `scripts/pruebas/verificar.test.mjs` |
+| `turbo.json` deja pasar `MC_RELOJ_*`, `MC_TEST_WORKERS` y `MC_PGLITE_FOTO*`; cada proceso con el reloj movido lo dice y el estrés cuenta las tareas que no lo dijeron (en la r5, `MC_RELOJ_*` pasa al hash: «Ronda 5») | `turbo.json`, `scripts/estres-verificar.sh` |
+| **Dos `pnpm verificar` a la vez** en toda la máquina; la espera tiene techo (`MC_VERIFICAR_ESPERA_MAX`, ~~600 s~~ 1800 s desde la r4, sale con 75) y un turno se libera si su pid murió, si el pid es de otro proceso (otra hora de arranque) o si tiene más de dos horas | `scripts/verificar.sh`, `scripts/pruebas/verificar.test.mjs` |
 | `pnpm verificar --filter=…` vuelve a pasar las banderas a turbo | `scripts/verificar.sh` |
 | Los techos salen de lo medido: `SETUP_TIMEOUT_MS` 180 s, `PRUEBA_DB_TIMEOUT_MS` 60 s, `--test-timeout` de `@mc/db` 120 s | `packages/db/test/tiempos.ts`, `apps/web/lib/testing/tiempos.ts` |
 | `embedded.ts` ya no mete `foto.mjs` ni el reloj en el bundle de la web: los carga con un `import()` que webpack no sigue, sin `import.meta.url`. El build vuelve a «Compiled successfully» sin avisos y el bundle del turno, a sus tres rutas permitidas | `packages/db/src/embedded.ts`, `db/lib/reloj.mjs`, `revisar-bundle-turno.mjs` |
@@ -129,6 +130,19 @@ Arreglos de esta clase:
 | Cada tanda del estrés en su carpeta (`tanda.XXXXXX`), también con `ESTRES_DIR`: dos estrés en la misma carpeta se leían los `.codigo` | `scripts/estres-verificar.sh` |
 | `--filtro PAQUETE` en el estrés (`FILTRO=` en make) para la tanda de control del CI: `SIN_ANCLA=1 FILTRO=@mc/db DIAS=9,60` | `scripts/estres-verificar.sh`, `Makefile` |
 | La espera de turno llega a 1800 s (antes 600) y el 75 dice «NO es un rojo… vuelve a lanzarlo»; CLAUDE.md pide a los agentes relanzar ante un 75 | `scripts/verificar.sh`, `CLAUDE.md` |
+
+### Ronda 5
+
+| Qué | Dónde |
+|---|---|
+| **La hora de arranque de un turno se lee y se escribe en C** (`LC_ALL=C ps -o lstart=`). `ps` la daba en el idioma de quien lo llamaba: un verificar lanzado desde una Terminal en español escribía «lun 5 oct …», un agente (sin `LANG`) leía «Mon Oct 5 …» para el mismo pid, lo daba por reciclado y le quitaba el turno: tres verificar a la vez. Un turno de una versión anterior con la hora en otro idioma no se compara: se le cree al pid (la salvaguarda de dos horas lo suelta si no era él). Dos pruebas nuevas, que fallan con el script de la r4: dos turnos con la hora en es_ES → sale con 75 sin liberar nada; un verificar de verdad lanzado con `LC_ALL=es_ES.UTF-8` y otro con `LC_ALL=C` → el segundo espera | `scripts/verificar.sh`, `scripts/pruebas/verificar.test.mjs` |
+| Con `MC_VERIFICAR_ESPERA_MAX=0` (como lo lanza el estrés) el aviso dice «espero turno (sin techo)», no «como mucho 0 s» | `scripts/verificar.sh` y su prueba |
+| **`MC_RELOJ_*` entran en el hash de turbo** (el `env` de cada tarea `test`, no `globalPassThroughEnv`), y las tareas de pruebas de `@mc/db`, del worker y de los conectores tienen entre sus `inputs` los archivos de la raíz que cargan (`scripts/pruebas/**`, `db/lib/**`, seeds, `packages/db/test/tiempos.ts`). Comprobado con `turbo run test --dry=json`: `MC_RELOJ_DIAS=90`, `MC_RELOJ_ANCLA_DIAS=3`, un cambio en `reloj.mjs`, en `foto.mjs` o en `tiempos.ts` cambian el hash de las cuatro tareas; `MC_TEST_WORKERS` no (no cambia el resultado). Antes, `MC_RELOJ_DIAS=90 pnpm turbo run test` daba HIT y repetía el verde de +0 | `turbo.json`, `packages/db/README.md` («Verificar de verdad») |
+| Los últimos techos sueltos, a `tiempos.ts`: los tres describe de `alcance-esquema` a `DESCRIBE_DB_TIMEOUT_MS` (eran 600 s), la prueba de migraciones de los conectores a `SETUP_TIMEOUT_MS` (300 s), y la de `canales_last_error_codigo` al `--test-timeout` del paquete (`PRUEBA_SCRIPT_TIMEOUT_MS`, el mismo 120 s que tenía escrito) | `packages/db/test/{alcance-esquema,canales}.test.ts`, `packages/connectors/test/migraciones.test.ts` |
+| `instrumentation.ts` comprueba el modo demo ANTES de importar el cliente de base: en producción, con `DATABASE_URL` o en el turno del worker, el arranque en frío ya no carga ese grafo. `abrirBaseDeLaDemo` mantiene la misma guarda; una prueba nueva fija los cinco casos | `apps/web/instrumentation.ts`, `instrumentation.test.ts` |
+| `apps/worker/src/runner/db-pglite.ts` vuelve a `rasheed/integracion`: la deduplicación del exec (r2) no hacía falta para la puerta y es código de producción del runner de Nicolás. Queda propuesta para un PR suyo | — |
+| El comentario del CI sobre `pnpm verificar` dice lo que es (`scripts/verificar.sh`: turno, `--force --concurrency=2 --continue`) y la causa de las cancelaciones (SIGTERM de turbo), con enlace a «Mecanismo» | `.github/workflows/ci.yml` |
+| El fallo de producción visto el 5-oct (`outbound.replies` en `failed`, `collect.account_metrics` agotado) tiene historia propia, **VEN-17**; el pendiente del seed 0003 está en la nota de **CIM-8**, la historia de su dueño | `apps/web/content/backlog.ts`, `docs/backlog-mvp.md` |
 
 ## Decisiones
 
@@ -199,7 +213,7 @@ Cambios mínimos, ninguno de lógica de producto:
 |---|---|---|
 | `packages/connectors/test/helpers/pglite.ts` | `openMigratedPglite` llama a `abrirSuperusuario` (r2) | Migraba en cada archivo |
 | `apps/worker/test/helpers/harness.ts` | `abrirSuperusuario` y `applyRepoSeeds` de `@mc/db/embedded`; `SETUP_TIMEOUT` de `@mc/db/test/tiempos`; `applyRepoSeeds(db, { relojDias })` | La foto, un solo techo y la demo anclada |
-| `apps/worker/src/runner/db-pglite.ts` | `execPglite` de `@mc/db` (r2) | Era la tercera copia del mismo exec |
+| ~~`apps/worker/src/runner/db-pglite.ts`~~ | ~~`execPglite` de `@mc/db` (r2)~~ — revertido en la r5: igual que en `rasheed/integracion` | La puerta no lo necesita y es código de producción del runner. Propuesto aparte: que `PgliteDatabase.open` use `execPglite` de `@mc/db/embedded` en vez de su propia copia del exec (tres líneas), en un PR que revise Nicolás |
 | `apps/worker/package.json` | `--test-isolation=process` (r2); `--import ../../scripts/pruebas/reloj.mjs` | Un archivo por proceso; el reloj de las pruebas |
 | `apps/worker/test/campaign-compute.test.ts` | Siembra la demo del 28-sep; techo común | Fresko pasaba a 30 días el 7-oct |
 | `apps/worker/test/costuras-con.test.ts` | El múltiplo contra el oráculo de `@mc/db/test/demo` (r2) | Dependía del día de la siembra |
@@ -209,6 +223,9 @@ Cambios mínimos, ninguno de lógica de producto:
 | `apps/worker/test/costuras-con.test.ts`, `campaign-compute.test.ts` (r4) | Cifras literales (5-oct y 28-sep); sus `before` con `SETUP_TIMEOUT` y sus describe con `DESCRIBE_DB_TIMEOUT` | El oráculo era casi tautológico; con `--test-timeout` a 120 s, el techo del arranque tiene que ser explícito |
 | `apps/worker/test/{once,migraciones,punta-a-punta,recordatorios}.test.ts`, `helpers/harness.ts` (r4) | Sus 600/300/180 s, a `SETUP_TIMEOUT`; `punta-a-punta` abre la foto (`snapshot: true`) en vez de migrar | Techos propios sin medida; una migración entera de más en cada corrida |
 | `apps/web/app/(app)/conexiones/_lib/{cuentas-service,oauth-handlers}.test.ts`, `campanas/[id]/{aporte,asociar}.test.tsx` (r4) | `vi.setConfig({ testTimeout: 120_000 })` → `PRUEBA_DB_TIMEOUT_MS`; `LARGO`/`asyncUtilTimeout` → `PRUEBA_LENTA_MS`/`ESPERA_UI_LARGA_MS`; las esperas de 2 s → la común; el comentario viejo de oauth-handlers | Números propios que el README decía que no existían |
+| `packages/connectors/test/migraciones.test.ts` (r5) | `{ timeout: 300_000 }` → `SETUP_TIMEOUT_MS`, importado por ruta de `packages/db/test/tiempos.ts` (como `helpers/pglite.ts` importa `db/lib`: `@mc/db` depende de los conectores y no al revés) | El último techo propio de los conectores |
+| `packages/db/test/alcance-esquema.test.ts` (r5) | Sus tres describe, de 600 s a `DESCRIBE_DB_TIMEOUT_MS` | Con 600 s, un describe colgado tardaba diez minutos en dar rojo |
+| `apps/web/content/backlog.ts`, nota de CIM-8 (r5) | El pendiente del seed 0003 con su fecha (30-dic) y el arreglo propuesto | Estaba solo en la nota de CIM-12, que nadie de Finanzas lee |
 
 ## CIM-1 y CIM-7
 
@@ -226,8 +243,8 @@ Cambios mínimos, ninguno de lógica de producto:
   sale vacío) y, con ella, en producción. Visto en la revisión del 5-oct:
   cada turno marca `collect.account_metrics` y `outbound.replies` como
   agotados (`exhausted`), y `outbound.replies` sale en `failed` (corrida
-  1236); sin historia propia todavía. Las dos cosas están también en la
-  nota del tablero.
+  1236). Desde la r5 tiene historia propia, **VEN-17**, y la nota de
+  CIM-7 la cita.
 
 ## Pendiente
 
@@ -238,12 +255,15 @@ Cambios mínimos, ninguno de lógica de producto:
 - **Los gastos recurrentes del seed 0003 tienen fechas absolutas** (julio,
   agosto y septiembre de 2026). La proyección de gastos mira los 120
   días anteriores a hoy, así que **desde el 30-dic-2026** el job
-  «contra-postgres-real» del CI (sin ancla) dará rojo en siete pruebas
+  «contra-postgres-real» del CI (sin ancla) dará rojo en **seis** pruebas
   de gastos y flujo (`finanzas.test.ts`: «trae los gastos recurrentes de
   la ventana», «los gastos y la reserva del seed», «el seed proyecta 3,7 M
-  al mes», «un gasto recurrente aparece proyectado», «marcar como error
-  es editar»; `finanzas-costuras.test.ts`: «un abono, un gasto recurrente
-  nuevo…» y «una suscripción anual…»). La propia prueba lo avisa con su
+  al mes», «un gasto recurrente aparece proyectado»;
+  `finanzas-costuras.test.ts`: «un abono, un gasto recurrente nuevo…» y
+  «una suscripción anual…»). Medido en la r5 con
+  `estres-verificar.sh 1 --dias 86 --sin-ancla --filtro @mc/db` (el
+  30-dic): `ℹ fail 6`. La r4 decía siete y contaba «marcar como error es
+  editar», que pasa. La propia prueba lo avisa con su
   motivo («Los del seed 0003 están con fechas absolutas de 2026: hay que
   pasarlos a fechas relativas»). No es de las pruebas sino del seed, y
   arreglarlo cambia la demo de producción y las pruebas que leen
@@ -251,7 +271,11 @@ Cambios mínimos, ninguno de lógica de producto:
   Nicolás (CIM-8). Propuesta: sembrar los recurrentes en los tres meses
   cerrados anteriores a `CURRENT_DATE` y que las pruebas pidan
   `ultimoMesCerrado()` en vez de `'2026-09'`. La puerta local no lo ve
-  (ancla); el job del CI sí, y con un mensaje que dice qué hacer.
+  (ancla); el job del CI sí, y con un mensaje que dice qué hacer. Desde
+  la r5 está en la nota de CIM-8, la historia de Nicolás, con la fecha.
+  No se añadió al CI un paso de aviso adelantado (`--dias 60
+  --sin-ancla`): daría rojo en cada PR desde el 31-oct por algo que
+  ningún PR cambia; la fecha en la nota de su dueño es el aviso.
 
 ## Resultado
 
