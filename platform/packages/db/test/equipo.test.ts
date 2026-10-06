@@ -234,11 +234,11 @@ describe('cambiar el rol, las casillas y quitar', () => {
     assert.deepEqual(await en(WORKSPACE_LAURA, ANDRES, (tx) => removeMember(tx, CAMILO)), { ok: false, code: 'forbidden' });
     // A mano: la política no deja ver la fila para cambiarla ni para borrarla.
     const cambio = await en(WORKSPACE_LAURA, ANDRES, (tx) =>
-      tx.query(`UPDATE membership SET role_id = system_role_id('creator', 'owner') WHERE user_id = '${ANDRES}'`),
+      tx.query(`UPDATE membership SET role_id = system_role_id('creator', 'owner') WHERE user_id = '${ANDRES}' RETURNING user_id`),
     );
-    assert.equal(cambio.rowCount ?? cambio.rows.length, 0);
-    const baja = await en(WORKSPACE_LAURA, ANDRES, (tx) => tx.query(`DELETE FROM membership WHERE user_id = '${CAMILO}'`));
-    assert.equal(baja.rowCount ?? baja.rows.length, 0);
+    assert.equal(cambio.rows.length, 0);
+    const baja = await en(WORKSPACE_LAURA, ANDRES, (tx) => tx.query(`DELETE FROM membership WHERE user_id = '${CAMILO}' RETURNING user_id`));
+    assert.equal(baja.rows.length, 0);
     // Y sigue siendo Mánager.
     const yo = (await comoLaura((tx) => listMembers(tx))).find((m) => m.userId === ANDRES);
     assert.equal(yo?.roleKey, 'manager');
@@ -368,9 +368,9 @@ describe('nadie otorga lo que no tiene ni toca a quien tiene más', () => {
       (err) => /row-level security/i.test(mensajes(err)),
     );
     const degradar = await comoAdmin((tx) =>
-      tx.query(`UPDATE membership SET role_id = $1 WHERE user_id = '${DUENA_AGENCIA}'`, [viewer]),
+      tx.query(`UPDATE membership SET role_id = $1 WHERE user_id = '${DUENA_AGENCIA}' RETURNING user_id`, [viewer]),
     );
-    assert.equal(degradar.rowCount ?? degradar.rows.length, 0);
+    assert.equal(degradar.rows.length, 0);
   });
 
   test('pero sí invita a lo que tiene: un Ejecutivo de cuenta', async () => {

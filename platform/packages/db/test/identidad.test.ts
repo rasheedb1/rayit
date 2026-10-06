@@ -60,11 +60,6 @@ function esRechazoDeMembresia(err: unknown): boolean {
   return esViolacionRls(err) || /apunta en (workspace_id|user_id) a un (workspace|app_user) que no existe o que esta transacción no puede ver/.test(mensajes(err));
 }
 
-/** mc_app sin el privilegio (0024 §7: sin UPDATE ni DELETE en membership; 0028 solo devuelve el INSERT). */
-function esPermisoDenegado(err: unknown): boolean {
-  return /permission denied for table membership/.test(mensajes(err));
-}
-
 const CORREO_A = 'ana@ejemplo.test';
 const CORREO_B = 'bruno@ejemplo.test';
 /** Ids de auth.users (Supabase Auth), que NO son los de app_user. */
