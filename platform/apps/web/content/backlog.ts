@@ -668,8 +668,8 @@ export const STORIES: readonly Story[] = [
     title: "Pantalla Equipo: invitar al mánager",
     desc: "Invitar por correo eligiendo uno de los roles de fábrica, aceptar por enlace con vencimiento, cambiar rol y revocar. Al invitar a un mánager, dos casillas explícitas y apagadas: «también puede ver mis finanzas» y «también puede conectar mis cuentas». Nadie otorga un permiso que no tiene.",
     done: "Un creador invita a su mánager, el mánager entra por el enlace y ve Campañas pero no el flujo de caja; con la casilla marcada sí lo ve. Quitar al último dueño falla con mensaje.",
-    status: "pendiente",
-    note: "Es la demo del quinto viernes. Recortada a lo del piloto: sin matriz editable ni roles a medida, que son ACC-9.",
+    status: "hecho",
+    note: "5-oct: hecha. Equipo en /accesos (la ruta de ACC-5) y el enlace en /invitacion/<token> (7 días, un solo uso, solo para el correo invitado). Migración 0078_equipo, sin aplicar en Supabase (la aplica el integrador): casillas en membership/invitation.extra_permissions, session_permission_keys() como única definición de los permisos de la sesión, cambiar rol y quitar con política por permiso, «nadie otorga lo que no tiene» y el último dueño en la base. Correo por SMTP_URL; sin él, enlace para copiar. Todo en audit_log. Pendiente de antes de ACC-4 (CIERRE-ACC §5.1–5.2): Ventas, Cotizar y Resumen siguen con permisos por rol (OPERAN incluye editor).",
   },
   {
     id: "ACC-5", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["ACC-3"],
