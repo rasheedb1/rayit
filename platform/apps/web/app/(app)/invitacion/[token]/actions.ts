@@ -26,7 +26,7 @@ export interface AceptarState {
  * lib/workspace) y la persona va al primer módulo que puede abrir con su
  * rol; el Contador no tiene Resumen, por ejemplo.
  */
-export async function aceptarInvitacion(token: string, _prev: AceptarState, _formData: FormData): Promise<AceptarState> {
+export async function aceptarInvitacion(token: string): Promise<AceptarState> {
   const quien = await quienAcepta();
   if (!quien) redirect(`/login?next=${encodeURIComponent(`/invitacion/${token}`)}`);
 

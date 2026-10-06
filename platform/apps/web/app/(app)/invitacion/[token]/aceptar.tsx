@@ -14,7 +14,7 @@ const t = MESSAGES.aceptar;
  * otra pestaña, venció mientras se leía), se dice aquí mismo.
  */
 export function AceptarInvitacion({ token }: { token: string }) {
-  const [estado, accion, enviando] = useActionState<AceptarState, FormData>(aceptarInvitacion.bind(null, token), {});
+  const [estado, accion, enviando] = useActionState<AceptarState, FormData>(() => aceptarInvitacion(token), {});
   return (
     <form action={accion} className="grid gap-3">
       {estado.status && (

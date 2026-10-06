@@ -156,7 +156,7 @@ describe("la creadora invita a su mánager (terminado cuando)", () => {
   test("acepta y entra: Campañas sí, el flujo de caja no", async () => {
     como(MANAGER);
     expect(await digestDe(() => CampanasLayout({ children }))).toBe(NO_ENCONTRADO);
-    const salida = await digestDe(() => aceptarInvitacion(token, {}, new FormData()));
+    const salida = await digestDe(() => aceptarInvitacion(token));
     expect(salida).toMatch(/^NEXT_REDIRECT;[a-z]+;\/resumen;/);
     expect(await digestDe(() => CampanasLayout({ children }))).toBeUndefined();
     expect(await digestDe(() => FlujoPage())).toBe(NO_ENCONTRADO);
@@ -175,7 +175,7 @@ describe("la creadora invita a su mánager (terminado cuando)", () => {
 
   test("el enlace usado no sirve otra vez", async () => {
     como(MANAGER);
-    expect(await aceptarInvitacion(token, {}, new FormData())).toEqual({ status: "used" });
+    expect(await aceptarInvitacion(token)).toEqual({ status: "used" });
     expect(await texto(paginaDelEnlace(token))).toContain(MESSAGES.aceptar.estados.used.titulo);
   }, PRUEBA_DB_TIMEOUT_MS);
 });
@@ -192,7 +192,7 @@ describe("con la casilla de finanzas marcada", () => {
 
     como(MANAGER_FINANZAS);
     expect(await texto(paginaDelEnlace(token))).toContain(MESSAGES.casillas.finanzas.label);
-    expect(await digestDe(() => aceptarInvitacion(token, {}, new FormData()))).toMatch(/^NEXT_REDIRECT;/);
+    expect(await digestDe(() => aceptarInvitacion(token))).toMatch(/^NEXT_REDIRECT;/);
     expect(await digestDe(() => FlujoPage())).toBeUndefined();
     expect(await digestDe(() => CampanasLayout({ children }))).toBeUndefined();
 
@@ -216,7 +216,7 @@ describe("lo que no sirve", () => {
     expect(r.ok).toBe(true);
     como(MANAGER);
     expect(await texto(paginaDelEnlace(token))).toContain(MESSAGES.aceptar.estados.expired.titulo);
-    expect(await aceptarInvitacion(token, {}, new FormData())).toEqual({ status: "expired" });
+    expect(await aceptarInvitacion(token)).toEqual({ status: "expired" });
   }, PRUEBA_DB_TIMEOUT_MS);
 
   test("un enlace inventado tampoco", async () => {
