@@ -90,7 +90,8 @@ export function ListaSemana({
       el.focus();
       setFoco(null);
     }
-  });
+    // `filas` también: la fila de destino puede llegar con el siguiente render del servidor.
+  }, [foco, filas, quitadas, abierto]);
 
   const cambiar = (s: ReadonlySet<string>, id: string, quitar: boolean) => {
     const n = new Set(s);
