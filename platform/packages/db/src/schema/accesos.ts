@@ -93,6 +93,8 @@ export const invitation = pgTable('invitation', {
   email: citext('email').notNull(),
   roleId: uuid('role_id').notNull().references(() => role.id),
   scope: jsonb('scope').default([]).notNull(),
+  /** Las casillas que se marcaron al invitar (0078): las recibe la membresía al aceptar. */
+  extraPermissions: text('extra_permissions').array().default([]).notNull(),
   tokenHash: text('token_hash').notNull(),
   invitedBy: uuid('invited_by').references(() => appUser.id, { onDelete: 'set null' }),
   expiresAt: timestamptz('expires_at').notNull(),

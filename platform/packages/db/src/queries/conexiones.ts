@@ -369,7 +369,9 @@ export async function getSessionMember(tx: WorkspaceTx): Promise<SessionMember |
 
 /**
  * ¿Tiene la persona de la sesión este permiso en el workspace actual?
- * Se lee de role_permission (0034) por su membresía, dentro de la misma
+ * Se lee de su rol (role_permission, 0034) y de sus casillas de Equipo
+ * (membership.extra_permissions: «también puede conectar mis cuentas»,
+ * 0078, ACC-4) por session_permission_keys(), dentro de la misma
  * transacción que va a escribir: así el permiso y la escritura ven la
  * misma membresía. Sin identidad (modo demo) o sin membresía, false.
  *
@@ -381,11 +383,7 @@ export async function getSessionMember(tx: WorkspaceTx): Promise<SessionMember |
  */
 export async function sessionHasPermission(tx: WorkspaceTx, permissionKey: string): Promise<boolean> {
   const { rows } = await tx.query<{ ok: boolean }>(
-    `SELECT EXISTS (
-       SELECT 1 FROM membership m
-         JOIN role_permission rp ON rp.role_id = m.role_id
-        WHERE m.workspace_id = current_workspace_id() AND m.user_id = current_user_id() AND rp.permission_key = $1
-     ) AS ok`,
+    `SELECT EXISTS (SELECT 1 FROM session_permission_keys() AS k WHERE k = $1) AS ok`,
     [permissionKey],
   );
   return rows[0]?.ok === true;

@@ -39,6 +39,7 @@
     "./queries/cadencias": "./src/queries/cadencias/index.ts",
     "./queries/cadencias-limites": "./src/queries/cadencias/limites.ts",
     "./queries/accesos": "./src/queries/accesos.ts",
+    "./queries/equipo": "./src/queries/equipo.ts",
     "./queries/worker": "./src/queries/worker.ts"
   },
   "scripts": {
