@@ -274,8 +274,10 @@ describe('0034: invitation', { timeout: TIEMPO_BLOQUE }, () => {
     await assert.rejects(
       laura((tx) =>
         tx.query(
-          `INSERT INTO invitation (workspace_id, email, role_id, token_hash, expires_at, accepted_at, revoked_at)
-           VALUES (current_workspace_id(), 'ambas@acc3.test', system_role_id('creator', 'viewer'), $1, now(), now(), now())`,
+          // invited_by: desde 0078 §4 la política de alta exige que sea la
+          // persona de la sesión, y la RLS se evalúa antes que los CHECK.
+          `INSERT INTO invitation (workspace_id, email, role_id, token_hash, invited_by, expires_at, accepted_at, revoked_at)
+           VALUES (current_workspace_id(), 'ambas@acc3.test', system_role_id('creator', 'viewer'), $1, current_user_id(), now(), now(), now())`,
           [sha256('ambas')],
         ),
       ),
