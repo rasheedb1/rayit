@@ -132,6 +132,22 @@ export async function getTeamWorkspaceKind(tx: WorkspaceTx): Promise<'creator' |
   return kind;
 }
 
+/**
+ * Lo que dice el correo de una invitación: el nombre del espacio y el de
+ * quien invita (la persona de la sesión; null en la demo sin sesión o si
+ * no puso nombre).
+ */
+export async function getInvitationSender(tx: WorkspaceTx): Promise<{ workspaceName: string; inviterName: string | null }> {
+  const { rows } = await tx.query<{ workspace_name: string; inviter_name: string | null }>(
+    `SELECT w.name AS workspace_name,
+            (SELECT nullif(btrim(u.name), '') FROM app_user u WHERE u.id = current_user_id()) AS inviter_name
+       FROM workspace w WHERE w.id = current_workspace_id()`,
+  );
+  const r = rows[0];
+  if (!r) throw new Error('El workspace de la transacción no existe o no se ve.');
+  return { workspaceName: r.workspace_name, inviterName: r.inviter_name };
+}
+
 /** Una persona del espacio, con su rol y sus casillas. */
 export interface TeamMember {
   userId: string;
