@@ -37,6 +37,8 @@ export interface FilaVista {
   fuente: string;
   pill: PillKind;
   plataforma: string | null;
+  /** De quién es la cuenta o el video, cuando el espacio tiene más de una creadora; null si solo hay una. */
+  quien: string | null;
   titulo: string;
   detalle: string;
   principal: Enlace;
@@ -78,7 +80,10 @@ export function ListaSemana({
   const mostradas = abierto ? quedan : quedan.slice(0, aLaVista);
   const plegadas = quedan.length - mostradas.length;
   const num = (n: number) => numeros[n] ?? String(n);
-  const meta = quedan.length === 0 ? undefined : more ? t.pendientesMas(num(filas.length)) : t.pendientes(quedan.length, num(quedan.length));
+  // Con `more` hay más de las que llegaron: tras cada «Entendido» siguen
+  // siendo más que las que quedan aquí, y el contador baja igual que sin él.
+  const meta =
+    quedan.length === 0 ? undefined : more ? t.pendientesMas(num(quedan.length)) : t.pendientes(quedan.length, num(quedan.length));
 
   // El foco se mueve DESPUÉS de pintar: la fila de destino puede llegar en
   // el render siguiente (la que vuelve con «Deshacer» la trae el servidor).
@@ -177,13 +182,14 @@ function Fila({ fila, onEntendido }: { fila: FilaVista; onEntendido: () => void 
         <div className="flex flex-wrap items-center gap-2">
           <Pill kind={fila.pill}>{fila.fuente}</Pill>
           {fila.plataforma && <PlatformPill platformId={fila.plataforma} />}
+          {fila.quien && <span className="text-xs text-fg-2 [overflow-wrap:anywhere]">{fila.quien}</span>}
         </div>
         <p className="mt-1.5 text-sm font-medium text-ink [overflow-wrap:anywhere]">{fila.titulo}</p>
         <p className="mt-0.5 text-xs text-fg-3 tabular-nums [overflow-wrap:anywhere]">{fila.detalle}</p>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <EnlaceFila enlace={fila.principal} principal />
-        {fila.secundario && <EnlaceFila enlace={fila.secundario} />}
+        <EnlaceFila enlace={fila.principal} de={fila.titulo} principal />
+        {fila.secundario && <EnlaceFila enlace={fila.secundario} de={fila.titulo} />}
         <Button
           size="sm"
           variant="ghost"
@@ -203,15 +209,23 @@ function Fila({ fila, onEntendido }: { fila: FilaVista; onEntendido: () => void 
  * El enlace de la fila. Dentro de On Cue, el Button del kit con href. El
  * video en su red sale de la aplicación: un <a> en pestaña aparte, sin
  * opener, con el mismo aspecto que el botón (el kit no tiene uno externo).
+ *
+ * Su nombre accesible lleva el título de la fila (`de`), como el
+ * «Entendido»: con tres seguimientos vencidos, quien salta por la lista
+ * de enlaces no oye «Ver en Ventas» tres veces sin saber de cuál. Empieza
+ * por el texto visible, para que quien le habla al lector por voz lo
+ * pueda nombrar igual. Con aria-label y no aria-describedby: el Button
+ * del kit solo deja pasar aria-label.
  */
-function EnlaceFila({ enlace, principal = false }: { enlace: Enlace; principal?: boolean }) {
+function EnlaceFila({ enlace, de, principal = false }: { enlace: Enlace; de: string; principal?: boolean }) {
+  const nombre = MESSAGES.semana.enlaceDe(enlace.label, de);
   if (!enlace.externo) {
     return principal ? (
-      <Button size="sm" href={enlace.href}>
+      <Button size="sm" href={enlace.href} aria-label={nombre}>
         {enlace.label}
       </Button>
     ) : (
-      <Link href={enlace.href} className="text-xs text-ink-2 underline-offset-2 hover:text-ink hover:underline">
+      <Link href={enlace.href} aria-label={nombre} className="text-xs text-ink-2 underline-offset-2 hover:text-ink hover:underline">
         {enlace.label}
       </Link>
     );
@@ -221,6 +235,7 @@ function EnlaceFila({ enlace, principal = false }: { enlace: Enlace; principal?:
       href={enlace.href}
       target="_blank"
       rel="noopener noreferrer"
+      aria-label={nombre}
       className={
         principal
           ? "inline-flex min-h-7 max-w-full items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-ink transition-colors hover:border-axis hover:bg-hover"

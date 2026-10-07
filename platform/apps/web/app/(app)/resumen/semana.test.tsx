@@ -66,7 +66,7 @@ vi.mock("next/headers", () => ({
   }),
 }));
 
-import { permisosDeRol, SinPermisoError } from "@mc/core";
+import { connectionErrorTitle, permisosDeRol, SinPermisoError } from "@mc/core";
 import { formatterFor } from "@/lib/format";
 import { deshacerEntendido, entenderAviso } from "./actions";
 import { MESSAGES } from "./messages";
@@ -80,7 +80,7 @@ const aviso = { storedTitle: "título guardado", storedBody: null, createdAt: "2
 const CONEXION: ConnectionHighlight = {
   ...aviso, id: "0000000c-0000-4000-8000-000000000c01", kind: "connection_error", severity: "critical", actionUrl: "/conexiones",
   source: "connection", connectionId: "00000002-0000-4000-8000-0000000000c2", platformId: "tiktok", handle: "laura.cocinafacil",
-  status: "needs_reauth", detail: "TikTok pidió volver a autorizar la cuenta.",
+  creatorName: "Laura Méndez", status: "needs_reauth", detail: "TikTok pidió volver a autorizar la cuenta.",
 };
 const CANAL: ChannelHighlight = {
   ...aviso, id: "0000000c-0000-4000-8000-000000000c02", kind: "connection_error", severity: "critical", actionUrl: "/ventas/canales",
@@ -103,7 +103,8 @@ const NEGOCIO: DealHighlight = {
 const VIDEO: OutlierHighlight = {
   ...aviso, id: "0000000c-0000-4000-8000-000000000a02", kind: "breakout", severity: "success", actionUrl: "/resumen",
   source: "outlier", tier: "breakout", postId: "00000002-0000-4000-8000-000000000d01", platformId: "instagram",
-  postTitle: "Cold brew en casa en 3 pasos", postUrl: "https://www.instagram.com/reel/abc", viewsVsMedian: "5.971", ageHoursCut: 720,
+  postTitle: "Cold brew en casa en 3 pasos", postUrl: "https://www.instagram.com/reel/abc", creatorName: "Laura Méndez",
+  viewsVsMedian: "5.971", ageHoursCut: 720,
 };
 const FILAS: WeeklyHighlight[] = [CONEXION, CANAL, FACTURA, NEGOCIO, VIDEO];
 
@@ -123,6 +124,9 @@ function fila(texto: string | RegExp): HTMLElement {
 
 const entendido = (li: HTMLElement) => within(li).getByRole("button", { name: /^Entendido: / });
 
+/** El título de la cuenta rota en la fila: el de la campana (@mc/core). */
+const TITULO_CUENTA = "TikTok dejó de darnos las cifras de @laura.cocinafacil";
+
 beforeEach(() => {
   base.listWeeklyHighlights.mockReset();
   base.acknowledgeHighlight.mockReset();
@@ -137,10 +141,23 @@ beforeEach(() => {
 describe("cada fila dice qué pasa y lleva a su módulo", () => {
   it("la cuenta caída, a Conexiones, nombrada con su @ como en el resto de la página", () => {
     render(<LoQueImportaLista filas={FILAS} f={f} />);
-    const li = fila("Tu cuenta de TikTok @laura.cocinafacil dejó de darnos sus cifras");
+    const li = fila(TITULO_CUENTA);
     expect(li).toHaveTextContent("TikTok pidió volver a autorizar la cuenta.");
     expect(within(li).getByText("Cuenta")).toBeInTheDocument();
-    expect(within(li).getByRole("link", { name: "Ver en Conexiones" })).toHaveAttribute("href", "/conexiones");
+    expect(within(li).getByRole("link", { name: `Ver en Conexiones: ${TITULO_CUENTA}` })).toHaveAttribute("href", "/conexiones");
+  });
+
+  it("la cuenta caída dice lo mismo que el aviso de la campana: el título de @mc/core, sin otra frase", () => {
+    const estados = ["needs_reauth", "expired", "revoked", "error"] as const;
+    render(<LoQueImportaLista filas={estados.map((status, i) => ({ ...CONEXION, id: `${CONEXION.id.slice(0, -2)}9${i}`, status }))} f={f} />);
+    const titulos = screen.getAllByRole("listitem").map((li) => li.querySelector("p")?.textContent);
+    expect(titulos).toEqual([
+      connectionErrorTitle("TikTok", "laura.cocinafacil", "reauth"),
+      connectionErrorTitle("TikTok", "laura.cocinafacil", "reauth"),
+      connectionErrorTitle("TikTok", "laura.cocinafacil", "reauth"),
+      connectionErrorTitle("TikTok", "laura.cocinafacil", "unreadable"),
+    ]);
+    expect(titulos[0]).toBe(TITULO_CUENTA);
   });
 
   it("la cuenta de envío caída, a Ventas › Canales", () => {
@@ -148,14 +165,20 @@ describe("cada fila dice qué pasa y lleva a su módulo", () => {
     const li = fila("Vuelve a conectar tu LinkedIn (Laura Méndez)");
     expect(li).toHaveTextContent("Lo que iba a salir por esta cuenta espera en la cola hasta que vuelva.");
     expect(within(li).getByText("Canal de envío")).toBeInTheDocument();
-    expect(within(li).getByRole("link", { name: "Ver en Canales" })).toHaveAttribute("href", "/ventas/canales");
+    expect(within(li).getByRole("link", { name: "Ver en Canales: Vuelve a conectar tu LinkedIn (Laura Méndez)" })).toHaveAttribute(
+      "href",
+      "/ventas/canales",
+    );
   });
 
   it("la factura vencida, a su detalle en Finanzas con el paso del recordatorio", () => {
     render(<LoQueImportaLista filas={FILAS} f={f} />);
     const li = fila("La factura FV-2026-007 de Hogar Lindo está vencida");
     expect(li.textContent).toMatch(/COP\s1\.100\.000 por cobrar · venció hace 41 días/);
-    expect(within(li).getByRole("link", { name: "Ver la factura" })).toHaveAttribute("href", FACTURA.actionUrl);
+    expect(within(li).getByRole("link", { name: "Ver la factura: La factura FV-2026-007 de Hogar Lindo está vencida" })).toHaveAttribute(
+      "href",
+      FACTURA.actionUrl,
+    );
   });
 
   it("la factura con el recordatorio ya mandado sigue, y dice cuándo se mandó: mandarlo no la cobra", () => {
@@ -168,26 +191,30 @@ describe("cada fila dice qué pasa y lleva a su módulo", () => {
     render(<LoQueImportaLista filas={FILAS} f={f} />);
     const li = fila("Seguimiento vencido: Llamar a Laura Quintero por la propuesta");
     expect(li).toHaveTextContent("Fresko · Fresko · Q4 · venció hace 3 días");
-    expect(within(li).getByRole("link", { name: "Ver en Ventas" })).toHaveAttribute("href", `/ventas/empresas/${NEGOCIO.companyId}`);
+    expect(within(li).getByRole("link", { name: "Ver en Ventas: Seguimiento vencido: Llamar a Laura Quintero por la propuesta" })).toHaveAttribute(
+      "href",
+      `/ventas/empresas/${NEGOCIO.companyId}`,
+    );
   });
 
   it("el video que se disparó: el clic principal abre el video en su red; las cifras de la red, de secundario", () => {
     render(<LoQueImportaLista filas={FILAS} f={f} />);
-    const li = fila("Se disparó: «Cold brew en casa en 3 pasos» hizo 6× tu mediana");
+    const titulo = "Se disparó: «Cold brew en casa en 3 pasos» hizo 6× tu mediana";
+    const li = fila(titulo);
     expect(li).toHaveTextContent("Instagram · medido a los 30 días");
     const enlaces = within(li).getAllByRole("link");
-    expect(enlaces[0]).toHaveAccessibleName("Abrir el video en Instagram");
+    expect(enlaces[0]).toHaveAccessibleName(`Abrir el video en Instagram: ${titulo}`);
     expect(enlaces[0]).toHaveAttribute("href", VIDEO.postUrl);
     expect(enlaces[0]).toHaveAttribute("target", "_blank");
     expect(enlaces[0]).toHaveAttribute("rel", "noopener noreferrer");
-    expect(within(li).getByRole("link", { name: "Ver tus cifras de Instagram" })).toHaveAttribute("href", "/resumen?red=instagram");
+    expect(within(li).getByRole("link", { name: `Ver tus cifras de Instagram: ${titulo}` })).toHaveAttribute("href", "/resumen?red=instagram");
   });
 
   it("un video sin permalink https lleva a las cifras de su red, y el botón lo dice", () => {
     render(<LoQueImportaLista filas={[{ ...VIDEO, postUrl: "javascript:alert(1)" }]} f={f} />);
     const enlaces = screen.getAllByRole("link");
     expect(enlaces).toHaveLength(1);
-    expect(enlaces[0]).toHaveAccessibleName("Ver tus cifras de Instagram");
+    expect(enlaces[0]).toHaveAccessibleName(/^Ver tus cifras de Instagram: /);
     expect(enlaces[0]).toHaveAttribute("href", "/resumen?red=instagram");
   });
 
@@ -212,6 +239,46 @@ describe("cada fila dice qué pasa y lleva a su módulo", () => {
     for (const li of items) expect(entendido(li)).toHaveAttribute("type", "button");
     expect(screen.getByText("5 pendientes")).toBeInTheDocument();
     expect(screen.getByText(MESSAGES.semana.descripcion)).toBeInTheDocument();
+  });
+});
+
+describe("una agencia, con varias creadoras en el espacio", () => {
+  it("la fila de una cuenta y la de un video dicen de quién son; el título de la cuenta sigue siendo el de la campana", () => {
+    render(<LoQueImportaLista filas={[CONEXION, { ...VIDEO, creatorName: "Sofía Ríos" }, NEGOCIO]} varias f={f} />);
+    const cuenta = fila(TITULO_CUENTA);
+    expect(within(cuenta).getByText("Laura Méndez")).toBeInTheDocument();
+    const video = fila("Se disparó: «Cold brew en casa en 3 pasos» hizo 6× su mediana");
+    expect(within(video).getByText("Sofía Ríos")).toBeInTheDocument();
+    // El seguimiento no es de una creadora: no lleva nombre.
+    expect(fila(/^Seguimiento vencido/).textContent).not.toMatch(/Laura Méndez|Sofía Ríos/);
+    expect(screen.queryByText(/tu mediana|tus otros videos|Tu video/)).toBeNull();
+  });
+
+  it("sin título ni múltiplo, el video tampoco es «tuyo»", () => {
+    render(
+      <LoQueImportaLista
+        filas={[
+          { ...VIDEO, postTitle: null },
+          { ...VIDEO, id: `${VIDEO.id.slice(0, -1)}4`, kind: "outlier", tier: "outlier", viewsVsMedian: null },
+        ]}
+        varias
+        f={f}
+      />,
+    );
+    expect(screen.getByText("Se disparó un video de Instagram: hizo 6× su mediana")).toBeInTheDocument();
+    expect(screen.getByText("«Cold brew en casa en 3 pasos» va por encima de sus otros videos")).toBeInTheDocument();
+  });
+
+  it("con una sola creadora no se nombra a nadie: la fila habla de tú", () => {
+    render(<LoQueImportaLista filas={[CONEXION, VIDEO]} f={f} />);
+    expect(screen.queryByText("Laura Méndez")).toBeNull();
+    expect(screen.getByText(/tu mediana/)).toBeInTheDocument();
+  });
+
+  it("el bloque pasa a la lista lo que dice la base sobre las creadoras", async () => {
+    base.listWeeklyHighlights.mockResolvedValue({ rows: [CONEXION], more: false, severalCreators: true });
+    render(await LoQueImporta());
+    expect(within(fila(TITULO_CUENTA)).getByText("Laura Méndez")).toBeInTheDocument();
   });
 });
 
@@ -250,6 +317,17 @@ describe("muchas filas", () => {
     expect(screen.getByText("Más de 20 pendientes")).toBeInTheDocument();
     expect(screen.getByText(MESSAGES.semana.hayMas)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ver 15 más" })).toBeInTheDocument();
+  });
+
+  it("con más de las que lee el bloque, el contador baja al despachar una, como sin ellas", async () => {
+    base.acknowledgeHighlight.mockResolvedValue(true);
+    const veinte = Array.from({ length: 20 }, (_, i) => ({ ...NEGOCIO, id: `0000000c-0000-4000-8000-00000000e1${String(i).padStart(2, "0")}` }));
+    render(<LoQueImportaLista filas={veinte} more f={f} />);
+    await act(async () => {
+      fireEvent.click(entendido(screen.getAllByRole("listitem")[0] as HTMLElement));
+    });
+    expect(screen.getByText("Más de 19 pendientes")).toBeInTheDocument();
+    expect(screen.queryByText("Más de 20 pendientes")).toBeNull();
   });
 });
 
@@ -294,10 +372,10 @@ describe("«Entendido» en la lista", () => {
     base.acknowledgeHighlight.mockResolvedValue(false);
     render(<LoQueImportaLista filas={FILAS} f={f} />);
     await act(async () => {
-      fireEvent.click(entendido(fila(/^Tu cuenta de TikTok @laura.cocinafacil/)));
+      fireEvent.click(entendido(fila(TITULO_CUENTA)));
     });
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(MESSAGES.semana.errorEntendido));
-    expect(fila(/^Tu cuenta de TikTok @laura.cocinafacil/)).toBeInTheDocument();
+    expect(fila(TITULO_CUENTA)).toBeInTheDocument();
   });
 });
 
@@ -329,7 +407,7 @@ describe("permisos", () => {
 
   it("el bloque de la Mánager consulta sin la fuente de facturas", async () => {
     sesion.permisos = permisosDeRol("creator", "manager");
-    base.listWeeklyHighlights.mockResolvedValue({ rows: [CONEXION, NEGOCIO, VIDEO], more: false });
+    base.listWeeklyHighlights.mockResolvedValue({ rows: [CONEXION, NEGOCIO, VIDEO], more: false, severalCreators: false });
     render(await LoQueImporta());
     expect(base.listWeeklyHighlights).toHaveBeenCalledWith({}, ["connection", "channel", "deal", "outlier"], { hidden: [] });
     expect(screen.queryByText(/FV-2026-007/)).toBeNull();
@@ -419,14 +497,14 @@ describe("el modo demo, sin sesión: el «Entendido» es de quien visita", () =>
     expect(primera.get(NOMBRE)?.split(".")).toHaveLength(5);
 
     // Su bloque se pide escondiendo SUS cinco avisos…
-    base.listWeeklyHighlights.mockResolvedValue({ rows: [], more: false });
+    base.listWeeklyHighlights.mockResolvedValue({ rows: [], more: false, severalCreators: false });
     const { unmount } = render(await LoQueImporta());
     expect(base.listWeeklyHighlights).toHaveBeenLastCalledWith({}, TODAS, { hidden: FILAS.map((x) => x.id) });
     unmount();
 
     // …y la segunda, con su navegador limpio, no esconde nada: ve las cinco filas.
     navegador.cookies = new Map();
-    base.listWeeklyHighlights.mockResolvedValue({ rows: FILAS, more: false });
+    base.listWeeklyHighlights.mockResolvedValue({ rows: FILAS, more: false, severalCreators: false });
     render(await LoQueImporta());
     expect(base.listWeeklyHighlights).toHaveBeenLastCalledWith({}, TODAS, { hidden: [] });
     expect(screen.getAllByRole("listitem")).toHaveLength(5);
@@ -434,7 +512,7 @@ describe("el modo demo, sin sesión: el «Entendido» es de quien visita", () =>
 
   it("con sesión la cookie no cuenta: el «Entendido» es de la persona, en la base", async () => {
     navegador.cookies.set(NOMBRE, VIDEO.id);
-    base.listWeeklyHighlights.mockResolvedValue({ rows: [VIDEO], more: false });
+    base.listWeeklyHighlights.mockResolvedValue({ rows: [VIDEO], more: false, severalCreators: false });
     render(await LoQueImporta());
     expect(base.listWeeklyHighlights).toHaveBeenLastCalledWith({}, TODAS, { hidden: [] });
   });

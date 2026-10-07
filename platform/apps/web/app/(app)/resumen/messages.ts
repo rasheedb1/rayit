@@ -1,4 +1,5 @@
-import type { AgeCut } from "@mc/core";
+import { brokenAccountKind, connectionErrorTitle, type AgeCut } from "@mc/core";
+import type { BrokenConnectionStatus } from "@mc/db/queries/resumen-semana";
 import type { CsvImportErrorCode } from "@mc/db/queries/resumen";
 import type { ErrorCsvCodigo, ProblemaCodigo, ProblemaFechaExportacion } from "./importar/_lib/csv";
 import type { Campo, FormatoId } from "./importar/_lib/formatos";
@@ -56,6 +57,8 @@ export const MESSAGES = {
     entendido: "Entendido",
     /** Para el lector de pantalla: qué se marca como entendido. */
     entendidoDe: (que: string) => `Entendido: ${que}`,
+    /** Para el lector de pantalla: el enlace de la fila con la fila de la que es («Ver en Ventas: Seguimiento vencido: …»). */
+    enlaceDe: (enlace: string, que: string) => `${enlace}: ${que}`,
     /** El aviso que queda tras «Entendido», con su «Deshacer» (role=status: el lector de pantalla lo anuncia). */
     quitado: (que: string) => `Quitado de tu lista: ${que}`,
     deshacer: "Deshacer",
@@ -84,16 +87,17 @@ export const MESSAGES = {
       deal: "Ver en Ventas",
     },
     /**
-     * La cuenta social rota. `cuenta` es «TikTok @laura» (@mc/core
-     * accountLabel). Dice lo que pasó y no promete cómo se arregla: si
-     * Conexiones puede reautorizarla depende del entorno, y lo dice
-     * Conexiones (como connectionErrorTitle del worker).
+     * La cuenta social rota. El título es EL MISMO que el del aviso de la
+     * campana, que escribe el worker: la plantilla vive en @mc/core
+     * (cuentas.ts › connectionErrorTitle) porque el worker no lee este
+     * archivo, y aquí solo se elige cuál según el estado de la cuenta.
+     * Dice lo que pasó y no promete cómo se arregla: si Conexiones puede
+     * reautorizarla depende del entorno, y lo dice Conexiones. `red` es
+     * «TikTok»; `handle`, el @ tal como lo guarda Conexiones.
      */
     connection: {
-      needs_reauth: (cuenta: string) => `Tu cuenta de ${cuenta} dejó de darnos sus cifras`,
-      expired: (cuenta: string) => `Tu acceso a ${cuenta} venció`,
-      revoked: (cuenta: string) => `Se quitó el acceso a ${cuenta}`,
-      error: (cuenta: string) => `No podemos leer tu cuenta de ${cuenta}`,
+      titulo: (red: string, handle: string | null, status: BrokenConnectionStatus) =>
+        connectionErrorTitle(red, handle, brokenAccountKind(status)),
       /** Sin el detalle de la plataforma, qué pasa si no se atiende. */
       sinDetalle: "Mientras tanto no llegan cifras nuevas de esta cuenta.",
     },
@@ -124,16 +128,37 @@ export const MESSAGES = {
      * El video destacado. `video` es su nombre (título, o su texto si no
      * tiene: @mc/core videoName) o null si no hay ninguno; entonces se
      * dice «Tu video de Instagram», sin comillas alrededor de un relleno.
-     * `multiplo` ya formateado («6×»).
+     * `multiplo` ya formateado («6×»). `varias`: el espacio tiene más de
+     * una creadora, y el video y la mediana son de ella («su mediana»),
+     * no de quien lee. Su nombre va junto a la pastilla de la fila, como
+     * en la de una cuenta (semana.tsx › vistaDeFila).
      */
     outlier: {
-      titulo: (video: string | null, red: string, multiplo: string) =>
-        video ? `«${video}» hizo ${multiplo} tu mediana` : `Tu video de ${red} hizo ${multiplo} tu mediana`,
-      breakout: (video: string | null, red: string, multiplo: string) =>
-        video ? `Se disparó: «${video}» hizo ${multiplo} tu mediana` : `Se disparó tu video de ${red}: hizo ${multiplo} tu mediana`,
+      titulo: (video: string | null, red: string, multiplo: string, varias = false) =>
+        varias
+          ? video
+            ? `«${video}» hizo ${multiplo} su mediana`
+            : `Un video de ${red} hizo ${multiplo} su mediana`
+          : video
+            ? `«${video}» hizo ${multiplo} tu mediana`
+            : `Tu video de ${red} hizo ${multiplo} tu mediana`,
+      breakout: (video: string | null, red: string, multiplo: string, varias = false) =>
+        varias
+          ? video
+            ? `Se disparó: «${video}» hizo ${multiplo} su mediana`
+            : `Se disparó un video de ${red}: hizo ${multiplo} su mediana`
+          : video
+            ? `Se disparó: «${video}» hizo ${multiplo} tu mediana`
+            : `Se disparó tu video de ${red}: hizo ${multiplo} tu mediana`,
       /** NULL no es cero (CON-6 §2): sin múltiplo todavía, se dice con palabras. */
-      sinMultiplo: (video: string | null, red: string) =>
-        video ? `«${video}» va por encima de tus otros videos` : `Tu video de ${red} va por encima de tus otros videos`,
+      sinMultiplo: (video: string | null, red: string, varias = false) =>
+        varias
+          ? video
+            ? `«${video}» va por encima de sus otros videos`
+            : `Un video de ${red} va por encima de sus otros videos`
+          : video
+            ? `«${video}» va por encima de tus otros videos`
+            : `Tu video de ${red} va por encima de tus otros videos`,
       sinMultiploDetalle: "Aún no hay suficientes videos para comparar.",
       /** El corte al que se midió el múltiplo: «2,4×» sin «a los 7 días» no se entiende (CON-6 §2). */
       corte: {

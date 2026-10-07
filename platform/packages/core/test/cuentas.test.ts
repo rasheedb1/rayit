@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { accountLabel, arroba, connectionErrorSeverity, connectionErrorTitle } from '../src/cuentas.ts';
+import { accountLabel, arroba, brokenAccountKind, connectionErrorSeverity, connectionErrorTitle } from '../src/cuentas.ts';
 
 test('arroba: una sola, aunque el handle ya la traiga', () => {
   assert.equal(arroba('laura.cocinafacil'), '@laura.cocinafacil');
@@ -23,8 +23,8 @@ test('accountLabel: la red y el @, o solo la red si no hay @', () => {
 test('el título de la cuenta rota dice qué pasó y no promete cómo se arregla', () => {
   assert.equal(connectionErrorTitle('Facebook', 'lauracocinafacil', 'reauth'), 'Facebook dejó de darnos las cifras de @lauracocinafacil');
   assert.equal(connectionErrorTitle('Facebook', null, 'reauth'), 'Facebook dejó de darnos las cifras de tu cuenta');
-  assert.equal(connectionErrorTitle('TikTok', '@laura', 'unreadable'), 'No podemos leer tu cuenta de TikTok @laura');
-  assert.equal(connectionErrorTitle('TikTok', undefined, 'unreadable'), 'No podemos leer tu cuenta de TikTok');
+  assert.equal(connectionErrorTitle('TikTok', '@laura', 'unreadable'), 'No podemos leer la cuenta de TikTok @laura');
+  assert.equal(connectionErrorTitle('TikTok', undefined, 'unreadable'), 'No podemos leer la cuenta de TikTok');
   for (const kind of ['reauth', 'unreadable'] as const) {
     assert.doesNotMatch(connectionErrorTitle('Facebook', 'x', kind), /vuelve a conectar|reautoriza/i);
   }
@@ -33,4 +33,9 @@ test('el título de la cuenta rota dice qué pasó y no promete cómo se arregla
 test('sin token es crítico; una cuenta que no se lee, aviso', () => {
   assert.equal(connectionErrorSeverity('reauth'), 'critical');
   assert.equal(connectionErrorSeverity('unreadable'), 'warning');
+});
+
+test('la avería por el estado de la cuenta: error no se lee; las demás se quedaron sin token', () => {
+  assert.equal(brokenAccountKind('error'), 'unreadable');
+  for (const status of ['needs_reauth', 'expired', 'revoked']) assert.equal(brokenAccountKind(status), 'reauth');
 });

@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { unstable_rethrow } from "next/navigation";
-import { accountLabel, channelHealthName } from "@mc/core";
+import { channelHealthName } from "@mc/core";
 import {
   listWeeklyHighlights,
   MAX_HIGHLIGHTS,
@@ -45,8 +45,10 @@ export async function LoQueImporta() {
     const fuentes = fuentesVisibles(permisos);
     const hidden = identity ? [] : leerEntendidos((await cookies()).get(COOKIE_ENTENDIDOS)?.value);
     const leidas: WeeklyHighlights =
-      fuentes.length === 0 ? { rows: [], more: false } : await withWorkspace((tx) => listWeeklyHighlights(tx, fuentes, { hidden }));
-    return <LoQueImportaLista filas={leidas.rows} more={leidas.more} f={formatterFor(ws)} />;
+      fuentes.length === 0
+        ? { rows: [], more: false, severalCreators: false }
+        : await withWorkspace((tx) => listWeeklyHighlights(tx, fuentes, { hidden }));
+    return <LoQueImportaLista filas={leidas.rows} more={leidas.more} varias={leidas.severalCreators} f={formatterFor(ws)} />;
   } catch (err) {
     // Un redirect (sin sesión) o un 404 siguen su camino. Lo demás no tumba
     // el Resumen entero: el bloque lo dice y las cifras de abajo cargan.
@@ -74,16 +76,16 @@ function red(platformId: string): string {
   return isPlatformId(platformId) ? PLATFORM_LABEL[platformId] : platformId;
 }
 
-/** Qué dice la fila y su línea de detalle, con las cifras ya formateadas. */
-export function textoDeFila(fila: WeeklyHighlight, f: Formatter): { titulo: string; detalle: string } {
+/**
+ * Qué dice la fila y su línea de detalle, con las cifras ya formateadas.
+ * `varias`: el espacio tiene más de una creadora (WeeklyHighlights.severalCreators).
+ */
+export function textoDeFila(fila: WeeklyHighlight, f: Formatter, varias = false): { titulo: string; detalle: string } {
   const t = MESSAGES.semana;
   switch (fila.source) {
-    case "connection": {
-      // Como Conexiones, «Hasta cuándo llegan los datos» y el aviso del
-      // worker: la red y el @, con las piezas de @mc/core (cuentas.ts).
-      const nombre = accountLabel(red(fila.platformId), fila.handle);
-      return { titulo: t.connection[fila.status](nombre), detalle: fila.detail ?? t.connection.sinDetalle };
-    }
+    case "connection":
+      // El título del aviso de la campana, palabra por palabra (@mc/core cuentas.ts).
+      return { titulo: t.connection.titulo(red(fila.platformId), fila.handle, fila.status), detalle: fila.detail ?? t.connection.sinDetalle };
     case "channel":
       return { titulo: t.channel[fila.status](channelHealthName(fila.channel), fila.displayName), detalle: t.channel.detalle };
     case "invoice":
@@ -107,30 +109,37 @@ export function textoDeFila(fila: WeeklyHighlight, f: Formatter): { titulo: stri
       const laRed = red(fila.platformId);
       const corte = fila.ageHoursCut === null ? null : t.outlier.corte[fila.ageHoursCut];
       if (fila.viewsVsMedian === null) {
-        return { titulo: t.outlier.sinMultiplo(fila.postTitle, laRed), detalle: t.outlier.sinMultiploDetalle };
+        return { titulo: t.outlier.sinMultiplo(fila.postTitle, laRed, varias), detalle: t.outlier.sinMultiploDetalle };
       }
       const multiplo = f.multiple(Number(fila.viewsVsMedian));
       return {
         titulo:
           fila.tier === "breakout"
-            ? t.outlier.breakout(fila.postTitle, laRed, multiplo)
-            : t.outlier.titulo(fila.postTitle, laRed, multiplo),
+            ? t.outlier.breakout(fila.postTitle, laRed, multiplo, varias)
+            : t.outlier.titulo(fila.postTitle, laRed, multiplo, varias),
         detalle: t.outlier.detalle(laRed, corte),
       };
     }
   }
 }
 
-/** La fila lista para pintar: palabras, cifras y enlaces, sin nada que formatear en el cliente. */
-export function vistaDeFila(fila: WeeklyHighlight, f: Formatter): FilaVista {
-  const { titulo, detalle } = textoDeFila(fila, f);
-  const plataforma = fila.source === "connection" || fila.source === "outlier" ? fila.platformId : null;
+/**
+ * La fila lista para pintar: palabras, cifras y enlaces, sin nada que
+ * formatear en el cliente. Con varias creadoras en el espacio, la fila de
+ * una cuenta o de un video dice de quién es (`quien`): en una agencia,
+ * «@laura.cocinafacil» no basta para saber sin abrirla de quién es.
+ */
+export function vistaDeFila(fila: WeeklyHighlight, f: Formatter, varias = false): FilaVista {
+  const { titulo, detalle } = textoDeFila(fila, f, varias);
+  const deCreadora = fila.source === "connection" || fila.source === "outlier";
+  const plataforma = deCreadora ? fila.platformId : null;
   const { principal, secundario } = enlacesDeFila(fila, plataforma ? red(plataforma) : "");
   return {
     id: fila.id,
     fuente: MESSAGES.semana.fuente[fila.source],
     pill: PILL[fila.severity],
     plataforma,
+    quien: varias && deCreadora ? fila.creatorName : null,
     titulo,
     detalle,
     principal,
@@ -139,10 +148,20 @@ export function vistaDeFila(fila: WeeklyHighlight, f: Formatter): FilaVista {
 }
 
 /** La lista ya leída: aparte de la consulta para poder probarla con filas de ejemplo. */
-export function LoQueImportaLista({ filas, more = false, f }: { filas: readonly WeeklyHighlight[]; more?: boolean; f: Formatter }) {
+export function LoQueImportaLista({
+  filas,
+  more = false,
+  varias = false,
+  f,
+}: {
+  filas: readonly WeeklyHighlight[];
+  more?: boolean;
+  varias?: boolean;
+  f: Formatter;
+}) {
   // Los números del contador y de «Ver N más», formateados aquí con el locale del espacio.
   const numeros = Array.from({ length: Math.max(filas.length, MAX_HIGHLIGHTS) + 1 }, (_, i) => f.int(i));
-  return <ListaSemana filas={filas.map((fila) => vistaDeFila(fila, f))} more={more} aLaVista={FILAS_A_LA_VISTA} numeros={numeros} />;
+  return <ListaSemana filas={filas.map((fila) => vistaDeFila(fila, f, varias))} more={more} aLaVista={FILAS_A_LA_VISTA} numeros={numeros} />;
 }
 
 /** El esqueleto del bloque mientras llega: la misma caja, sin texto inventado. */

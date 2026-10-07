@@ -29,7 +29,9 @@
  *       outlier. El índice notification_entity_recent_idx (0078) sirve
  *       justo esta elección; sin ventana de tiempo a propósito: una
  *       factura con el último recordatorio (+45) de hace cinco meses
- *       sigue vencida, y recortar por fecha la escondería.
+ *       sigue vencida, y recortar por fecha la escondería. Los videos
+ *       sí llevan su ventana dentro de la elección (regla 2): ahí no
+ *       cambia el resultado y el índice corta por fecha.
  *   2 · Solo lo que SIGUE siendo cierto. El aviso es de cuándo se
  *       escribió; la fila se enseña si la cosa todavía importa hoy:
  *       la cuenta sigue caída, la factura sigue abierta y vencida en la
@@ -159,6 +161,8 @@ export interface OutlierHighlight extends HighlightBase<'outlier'> {
    */
   postTitle: string | null;
   postUrl: string | null;
+  /** creator_profile.display_name de la creadora del video (ver WeeklyHighlights.severalCreators). */
+  creatorName: string;
   /** post_score.views_vs_median de hoy, como texto decimal; null = «todavía no sabemos» (CON-6 §2), nunca cero. */
   viewsVsMedian: string | null;
   /** El corte en horas al que se midió ese múltiplo. */
@@ -172,6 +176,8 @@ export interface ConnectionHighlight extends HighlightBase<'connection'> {
   platformId: PlatformId;
   /** El @ de la cuenta tal como lo guarda Conexiones (sin «@»). */
   handle: string | null;
+  /** creator_profile.display_name de la creadora de la cuenta (ver WeeklyHighlights.severalCreators). */
+  creatorName: string;
   status: BrokenConnectionStatus;
   /** social_connection.status_detail: la razón en palabras del producto. */
   detail: string | null;
@@ -228,6 +234,14 @@ export type WeeklyHighlight = OutlierHighlight | ConnectionHighlight | ChannelHi
 export interface WeeklyHighlights {
   rows: WeeklyHighlight[];
   more: boolean;
+  /**
+   * El espacio tiene más de una creadora (una agencia): la fila de una
+   * cuenta o de un video tiene que decir de quién es, y «tu mediana» ya
+   * no es de nadie. Se cuentan las del ESPACIO y no las del alcance de la
+   * persona: quien solo ve lo de Laura en una agencia sigue en una
+   * agencia, y el número no dice cuáles son las otras.
+   */
+  severalCreators: boolean;
 }
 
 // ---------------------------------------------------------------------
@@ -277,8 +291,16 @@ const orden = (severidad = 'n.severity') =>
  * persona. $1 son los kinds de la fuente. El «Entendido» se mira fuera,
  * después de elegir. El orden de DISTINCT ON es el del índice
  * notification_entity_recent_idx (0078).
+ *
+ * `extra` es una condición más sobre el aviso, DENTRO de la elección:
+ * solo vale para una que no cambie cuál es el más reciente de lo que
+ * queda. La ventana de los videos es así (si el último aviso de un video
+ * es de antes de la ventana, todos los anteriores también), y ponerla
+ * aquí deja que el índice corte por fecha en vez de recorrer cada aviso
+ * de video que el espacio tuvo nunca. Una constante de este archivo,
+ * nunca algo de fuera.
  */
-function ultimoPorEntidad(source: WeeklySource): string {
+function ultimoPorEntidad(source: WeeklySource, extra = ''): string {
   return `ultimo AS (
     SELECT DISTINCT ON (n.entity_id)
            n.id, n.kind, n.severity, n.title_es, n.body_es, n.action_url, n.created_at,
@@ -286,7 +308,7 @@ function ultimoPorEntidad(source: WeeklySource): string {
       FROM notification n
      WHERE n.workspace_id = current_workspace_id()
        AND n.entity_type = '${AVISOS[source].entityType}' AND n.entity_id IS NOT NULL
-       AND n.kind = ANY($1::text[]) AND ${PARA_MI}
+       AND n.kind = ANY($1::text[]) AND ${PARA_MI}${extra ? `\n       ${extra}` : ''}
      ORDER BY n.entity_id, n.created_at DESC, n.id DESC
   )`;
 }
@@ -364,24 +386,31 @@ interface OutlierRaw extends AvisoRaw<'outlier'> {
   platform_id: PlatformId;
   post_title: string | null;
   post_caption: string | null;
+  creator_name: string;
   post_url: string | null;
   views_vs_median: string | null;
   age_hours_cut: AgeCut | null;
 }
 
+/**
+ * La ventana de un video destacado (regla 2), con $2 = OUTLIER_WINDOW_DAYS.
+ * Va dentro de ultimoPorEntidad: ver su `extra`.
+ */
+const DENTRO_DE_LA_VENTANA = 'AND n.created_at >= now() - make_interval(days => $2::int)';
+
 async function outliers(tx: WorkspaceTx, limit: number, ocultas: readonly string[]): Promise<OutlierHighlight[]> {
   const { rows } = await tx.query<OutlierRaw>(
-    `WITH ${ultimoPorEntidad('outlier')}
+    `WITH ${ultimoPorEntidad('outlier', DENTRO_DE_LA_VENTANA)}
      SELECT ${columnasAviso()},
             p.id AS post_id, p.platform_id, p.title AS post_title, p.caption AS post_caption,
-            coalesce(p.permalink, p.url) AS post_url,
+            coalesce(p.permalink, p.url) AS post_url, cr.display_name AS creator_name,
             ps.views_vs_median::text AS views_vs_median, ps.age_hours_cut
        FROM ultimo n
        JOIN post p ON p.id = n.entity_id
+       JOIN creator_profile cr ON cr.id = p.creator_id
        LEFT JOIN post_score ps ON ps.post_id = p.id
       WHERE ${sinAtender('$4')}
         AND NOT p.deleted_on_platform
-        AND n.created_at >= now() - make_interval(days => $2::int)
         AND ${SCOPE_POST}
       ${orden()}
       LIMIT $3`,
@@ -395,6 +424,7 @@ async function outliers(tx: WorkspaceTx, limit: number, ocultas: readonly string
     // El mismo nombre que el aviso de CON-6: título, o el texto del video si no hay.
     postTitle: videoName(r.post_title, r.post_caption),
     postUrl: r.post_url,
+    creatorName: r.creator_name,
     viewsVsMedian: r.views_vs_median,
     ageHoursCut: r.age_hours_cut,
   }));
@@ -404,6 +434,7 @@ interface ConnectionRaw extends AvisoRaw<'connection'> {
   connection_id: string;
   platform_id: PlatformId;
   handle: string | null;
+  creator_name: string;
   status: BrokenConnectionStatus;
   detail: string | null;
 }
@@ -412,9 +443,11 @@ async function connections(tx: WorkspaceTx, limit: number, ocultas: readonly str
   const { rows } = await tx.query<ConnectionRaw>(
     `WITH ${ultimoPorEntidad('connection')}
      SELECT ${columnasAviso()},
-            c.id AS connection_id, c.platform_id, c.handle, c.status, c.status_detail AS detail
+            c.id AS connection_id, c.platform_id, c.handle, cr.display_name AS creator_name,
+            c.status, c.status_detail AS detail
        FROM ultimo n
        JOIN social_connection c ON c.id = n.entity_id
+       JOIN creator_profile cr ON cr.id = c.creator_id
       WHERE ${sinAtender('$3')}
         AND c.deleted_at IS NULL
         AND c.status IN ('needs_reauth', 'error', 'expired', 'revoked')
@@ -428,6 +461,7 @@ async function connections(tx: WorkspaceTx, limit: number, ocultas: readonly str
     connectionId: r.connection_id,
     platformId: r.platform_id,
     handle: r.handle,
+    creatorName: r.creator_name,
     status: r.status,
     detail: r.detail,
   }));
@@ -619,6 +653,17 @@ export function compareHighlights(a: WeeklyHighlight, b: WeeklyHighlight): numbe
   );
 }
 
+/** Más de una creadora en el espacio (ver WeeklyHighlights.severalCreators). */
+async function severalCreators(tx: WorkspaceTx): Promise<boolean> {
+  const { rows } = await tx.query<{ varias: boolean }>(
+    `SELECT count(*) > 1 AS varias
+       FROM (SELECT 1 FROM creator_profile
+              WHERE workspace_id = current_workspace_id() AND deleted_at IS NULL
+              LIMIT 2) x`,
+  );
+  return rows[0]?.varias === true;
+}
+
 /** Solo las fuentes de la lista, en su orden: lo que llegue de fuera no elige SQL. */
 const pedidas = (sources: readonly WeeklySource[]) => WEEKLY_SOURCES.filter((s) => sources.includes(s));
 
@@ -651,7 +696,11 @@ export async function listWeeklyHighlights(
   const filas: WeeklyHighlight[] = [];
   for (const s of pedidas(sources)) filas.push(...(await RAMAS[s](tx, MAX_HIGHLIGHTS + 1, ocultas)));
   filas.sort(compareHighlights);
-  return { rows: filas.slice(0, MAX_HIGHLIGHTS), more: filas.length > MAX_HIGHLIGHTS };
+  return {
+    rows: filas.slice(0, MAX_HIGHLIGHTS),
+    more: filas.length > MAX_HIGHLIGHTS,
+    severalCreators: filas.some((f) => f.source === 'connection' || f.source === 'outlier') && (await severalCreators(tx)),
+  };
 }
 
 /**
