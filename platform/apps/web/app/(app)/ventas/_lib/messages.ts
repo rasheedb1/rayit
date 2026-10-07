@@ -478,6 +478,10 @@ export const MESSAGES = {
         name: "Nombre del negocio",
         namePlaceholder: "Serie de 3 videos · Q4",
         amount: "Monto estimado",
+        /** De qué creador es (ACC-7): solo aparece cuando hay más de uno para elegir. */
+        creator: "Creador",
+        creatorNone: "Sin creador",
+        creatorPick: "Elige un creador",
         submit: "Abrir negocio",
         created: (name: string) => `Abriste «${name}». Está en «Nuevo», en el pipeline.`,
         error: "No se pudo abrir el negocio.",
@@ -926,6 +930,7 @@ export const MESSAGES = {
     companyName: "La empresa necesita un nombre.",
     companyNameTooLong: "El nombre cabe en 200 caracteres.",
     company: "La empresa no es válida.",
+    creator: "Elige uno de los creadores de la lista.",
     source: "Di de dónde sacaste el dato: sin eso no se guarda.",
     email: "El correo no es válido.",
     linkedin: "El LinkedIn tiene que ser un enlace que empiece por https://.",
@@ -954,6 +959,8 @@ export const MESSAGES = {
     ContactCreateFailed: "No se pudo guardar el contacto.",
     DealNotFound: "Ese negocio no existe en tu espacio.",
     DealCreateFailed: "No se pudo abrir el negocio.",
+    DealCreatorRequired:
+      "Llevas a varios creadores: di de cuál es el negocio. Desde la ficha de la marca, en «Nuevo negocio», puedes elegirlo.",
     DealLocked: (p: Readonly<Record<string, string>>) =>
       p.reason === "quote"
         ? "Este negocio tiene una cotización aceptada: no sale de «Ganado». Termina su campaña desde la cotización y, si el acuerdo se cayó, cancélala en Campañas antes de reabrirlo."
@@ -964,6 +971,7 @@ export const MESSAGES = {
     EmptyContact: "Un contacto necesita al menos nombre, correo o usuario de Instagram.",
     InvalidAmount: "El monto no es válido: solo números, con hasta dos decimales.",
     InvalidCompany: "Di de qué marca es la señal: su nombre o su dominio.",
+    InvalidCreator: "Ese creador no está en tu espacio.",
     InvalidDealName: "El negocio necesita un nombre de hasta 120 caracteres.",
     InvalidHeadline: "La señal necesita una línea que diga qué viste.",
     InvalidName: "La empresa necesita un nombre.",

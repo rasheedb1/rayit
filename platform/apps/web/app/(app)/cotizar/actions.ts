@@ -10,6 +10,7 @@ import {
   unlockMediaKit, updateMediaKitShare, updateQuoteDraft,
   CotizarError, type QuoteItemInput, type SaveRateCardItem,
 } from "@mc/db/queries/cotizar";
+import { scopeErrorOf } from "@mc/db";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
 import { DECIMAL_RE, firstErrors, formField, UUID_RE, type ActionState } from "@/lib/forms";
@@ -46,6 +47,11 @@ function codigoDe(err: unknown): string {
   if (err instanceof CotizarError || err instanceof TarifaError) {
     if (Object.hasOwn(E, err.code)) return err.code;
   }
+  // Fuera del alcance de quien escribe (ACC-6/ACC-7): el ScopeError de
+  // @mc/db o el 42501 con que la base rechaza la fila, que scopeErrorOf
+  // reconoce por la política por creador. Su texto es el de ScopeError
+  // (E.ScopeError, y una prueba exige que coincidan).
+  if (scopeErrorOf(err)) return "ScopeError";
   if (err && typeof err === "object" && "code" in err && typeof err.code === "string" && Object.hasOwn(E, err.code)) {
     return err.code;
   }
@@ -55,7 +61,9 @@ function codigoDe(err: unknown): string {
 
 /** El texto en español de un error, para las acciones que devuelven estado (useActionState). */
 function mensajeDe(err: unknown): string {
-  return E[codigoDe(err)] ?? E.generico!;
+  const codigo = codigoDe(err);
+  if (codigo === "ScopeError") return scopeErrorOf(err)?.messageEs ?? E.ScopeError!;
+  return E[codigo] ?? E.generico!;
 }
 
 // ---------------------------------------------------------------------

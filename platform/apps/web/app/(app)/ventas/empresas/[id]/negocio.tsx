@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Field, Input } from "@/components/ui/field";
+import { Field, Input, Select } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
 import { crearNegocio } from "../../actions";
 import { Aviso } from "../../../_lib/aviso";
@@ -17,8 +17,24 @@ import { useVentasForm } from "../../_lib/use-ventas-form";
  *
  * El botón abre el formulario en su sitio; al guardar se cierra y el
  * aviso queda a la vista.
+ *
+ * De qué creador es (ACC-7): con un solo creador para elegir no se
+ * pregunta (es ese). Con varios aparece el selector; quien ve a todos
+ * puede dejarlo «Sin creador», y quien está acotado a varios tiene que
+ * elegir, porque un negocio sin creador quedaría fuera de su alcance.
  */
-export function NuevoNegocio({ companyId, currency }: { companyId: string; currency: string }) {
+export function NuevoNegocio({
+  companyId,
+  currency,
+  creators = [],
+  creatorRequired = false,
+}: {
+  companyId: string;
+  currency: string;
+  /** listDealCreatorOptions de @mc/db: los creadores que esta persona puede poner. */
+  creators?: ReadonlyArray<{ id: string; name: string }>;
+  creatorRequired?: boolean;
+}) {
   const t = MESSAGES.empresas.detail.newDeal;
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
@@ -64,6 +80,17 @@ export function NuevoNegocio({ companyId, currency }: { companyId: string; curre
           <MoneyInput value={amount} currency={currency} onChange={(v) => setAmount(v)} />
           <input type="hidden" name="amount" value={amount} />
         </Field>
+        {creators.length > 1 && (
+          <Field label={t.creator} error={errors.creatorId} required={creatorRequired} htmlFor="negocio-creador">
+            <Select
+              name="creatorId"
+              defaultValue=""
+              required={creatorRequired}
+              placeholder={creatorRequired ? t.creatorPick : t.creatorNone}
+              options={creators.map((c) => ({ value: c.id, label: c.name }))}
+            />
+          </Field>
+        )}
       </div>
 
       <Aviso message={state.message} className="mt-4" />

@@ -37,6 +37,7 @@ import {
   updateContact,
   type SignalDuplicateReason,
 } from "@mc/db/queries/ventas";
+import { scopeErrorOf } from "@mc/db";
 import type { BriefVerdict } from "@mc/db/queries/brief";
 import { MONTO_MAXIMO, excedeMontoMaximo } from "@mc/core";
 import { decodificarCsv } from "@/lib/csv";
@@ -95,14 +96,19 @@ async function montoMaximoError(): Promise<string> {
 }
 
 /**
- * El texto de un error: el de su código si es de Ventas, el genérico de
- * la acción si no (y entonces se registra: es un error que nadie previó).
+ * El texto de un error: el de su código si es de Ventas; el del alcance
+ * si lo que se iba a escribir quedaría fuera del de quien escribe
+ * (ScopeError de @mc/db, o el 42501 con que la base lo rechaza, ACC-7,
+ * que scopeErrorOf traduce); el genérico de la acción si no (y entonces
+ * se registra: es un error que nadie previó).
  */
 function messageOf(err: unknown, fallback: string): string {
   if (err instanceof VentasError && Object.hasOwn(E, err.code)) {
     const m = E[err.code];
     return typeof m === "function" ? m(err.params) : m;
   }
+  const scope = scopeErrorOf(err);
+  if (scope) return scope.messageEs;
   console.error("[ventas]", err);
   return fallback;
 }
@@ -503,6 +509,9 @@ const negocioSchema = z.object({
   companyId: z.string().regex(UUID_RE, V.company),
   name: z.string().trim().min(1, V.dealName).max(120, V.dealName),
   amount: z.string().trim().refine((v) => v === "" || DECIMAL_RE.test(v), V.amount),
+  // De qué creador es (ACC-7). Vacío: el único del espacio o del alcance,
+  // o «sin creador» para quien ve a todos; lo decide createDeal.
+  creatorId: z.string().trim().refine((v) => v === "" || UUID_RE.test(v), V.creator),
 });
 
 /**
@@ -517,18 +526,28 @@ export async function crearNegocio(_prev: VentasState, formData: FormData): Prom
     companyId: field(formData, "companyId"),
     name: field(formData, "name"),
     amount: field(formData, "amount"),
+    creatorId: field(formData, "creatorId"),
   });
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const v = parsed.data;
   if (excedeMontoMaximo(v.amount)) return { errors: { amount: await montoMaximoError() } };
   try {
     await withWorkspace((tx) =>
-      createDeal(tx, { companyId: v.companyId, name: v.name, amount: v.amount || null, nextAction: MESSAGES.radar.pitchAction }),
+      createDeal(tx, {
+        companyId: v.companyId,
+        name: v.name,
+        amount: v.amount || null,
+        nextAction: MESSAGES.radar.pitchAction,
+        creatorId: v.creatorId || null,
+      }),
     );
   } catch (err) {
     const message = messageOf(err, t.error);
     if (err instanceof VentasError && err.code === "InvalidDealName") return { errors: { name: message } };
     if (err instanceof VentasError && err.code === "InvalidAmount") return { errors: { amount: message } };
+    if (err instanceof VentasError && (err.code === "DealCreatorRequired" || err.code === "InvalidCreator")) {
+      return { errors: { creatorId: message } };
+    }
     return { message };
   }
   revalidateVentas(v.companyId);

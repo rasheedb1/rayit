@@ -34,6 +34,7 @@ vi.mock("@mc/db/queries/ventas", async (original) => ({
   createSignal: (...a: unknown[]) => createSignal(...a),
 }));
 
+import { ScopeError } from "@mc/db";
 import { CompanyNotEditable, ContactNotOwned, DuplicateCompanyName, DuplicateDomain, VentasError } from "@mc/db/queries/ventas";
 import { MESSAGES } from "./_lib/messages";
 import {
@@ -314,5 +315,40 @@ describe("el rol (pulido r3)", () => {
     for (const fn of [updateCompany, updateContact, moveDeal, importSignals, createCompany, createDeal, createSignal, revalidatePath]) {
       expect(fn).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("«Nuevo negocio» con alcance por creador (ACC-7)", () => {
+  const CREADORA = "00000002-0000-4000-8000-000000000003";
+
+  it("lleva el creador elegido a createDeal; vacío, null (lo decide @mc/db)", async () => {
+    await crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "", creatorId: CREADORA }));
+    expect(createDeal).toHaveBeenLastCalledWith({}, expect.objectContaining({ creatorId: CREADORA }));
+    await crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "" }));
+    expect(createDeal).toHaveBeenLastCalledWith({}, expect.objectContaining({ creatorId: null }));
+  });
+
+  it("un creador que no es un id no llega a la base", async () => {
+    const r = await crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "", creatorId: "sofia" }));
+    expect(r.errors).toEqual({ creatorId: MESSAGES.validacion.creator });
+    expect(createDeal).not.toHaveBeenCalled();
+  });
+
+  it("quien lleva a varios y no eligió ve el error en el campo del creador", async () => {
+    createDeal.mockRejectedValue(new VentasError("DealCreatorRequired"));
+    const r = await crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "" }));
+    expect(r.errors).toEqual({ creatorId: MESSAGES.errores.DealCreatorRequired });
+  });
+
+  it("ScopeError, y el 42501 de la política por creador, se dicen con el texto del alcance", async () => {
+    const alcance = new ScopeError().messageEs;
+    createDeal.mockRejectedValue(new ScopeError());
+    await expect(crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "" }))).resolves.toEqual({ message: alcance });
+    createDeal.mockRejectedValue(
+      Object.assign(new Error("Failed query"), {
+        cause: Object.assign(new Error('new row violates row-level security policy "deal_creator_scope" for table "deal"'), { code: "42501" }),
+      }),
+    );
+    await expect(crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "" }))).resolves.toEqual({ message: alcance });
   });
 });

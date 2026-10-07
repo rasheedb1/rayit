@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { listProposableSignals } from "@mc/db/queries/cadencias";
 import { listCompanyCadenceTouches } from "@mc/db/queries/outreach";
-import { getCompany, listContacts, listOwnerOptions, listPipeline } from "@mc/db/queries/ventas";
+import { getCompany, listContacts, listDealCreatorOptions, listOwnerOptions, listPipeline } from "@mc/db/queries/ventas";
 import {
   getCompanyChain,
   getLocalDates,
@@ -83,6 +83,8 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
       // Solo los de esta empresa, filtrados en SQL: la ficha no lee el pipeline entero.
       deals: await listPipeline(tx, { companyId: id }),
       owners: await listOwnerOptions(tx),
+      // De qué creador puede ser un negocio nuevo (ACC-7): solo se pregunta con más de uno.
+      dealCreators: await listDealCreatorOptions(tx),
       activity: await listCompanyActivity(tx, id),
       signals: await listCompanySignals(tx, id),
       chain,
@@ -97,7 +99,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
   });
   // Se desvinculó entre la primera lectura y esta.
   if (!data) notFound();
-  const { company, contacts, deals, owners, activity, signals, chain, invoices, niches, dates, cadence, proposable } = data;
+  const { company, contacts, deals, owners, dealCreators, activity, signals, chain, invoices, niches, dates, cadence, proposable } = data;
   const senalDeNegocio = new Map(proposable.map((s) => [s.dealId, s]));
 
   const workspace = await getCurrentWorkspace();
@@ -182,7 +184,12 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
             }
           >
             <div className="mb-3 flex flex-wrap items-start gap-2">
-              <NuevoNegocio companyId={company.id} currency={workspace.currency} />
+              <NuevoNegocio
+                companyId={company.id}
+                currency={workspace.currency}
+                creators={dealCreators.creators}
+                creatorRequired={dealCreators.required}
+              />
               <Button href={`/ventas/empresas/${company.id}/pitch`} size="sm" aria-label={x.pitch.abrirLabel(company.name)}>
                 {x.pitch.abrir}
               </Button>
