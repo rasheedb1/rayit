@@ -24,6 +24,7 @@ import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { formatDate, formatInt } from "@/lib/format";
 import { MESSAGES } from "./_lib/messages";
 import CampanaPage from "./[id]/page";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 const EDITOR = "0000000e-0000-4000-8000-0000000006c1";
 const MANAGER = "0000000e-0000-4000-8000-0000000006c2";
@@ -63,7 +64,7 @@ beforeAll(async () => {
       [CAMPAIGN_SIN_FACTURA, COMPANY_CAFE_ALMA],
     ),
   );
-}, 300_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();
@@ -97,14 +98,14 @@ describe("la ficha real contra el seed", () => {
       expect(texto).toContain(`${titulo} ${red} ${publicado} ${formatInt(Number(u.views))} hasta el ${formatDate(u.captured_at)}`);
     }
     expect(texto).not.toContain("Sin posts asociados");
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("sin posts, la frase: Hogar Lindo (reporte listo, sin posts en el seed)", async () => {
     delete process.env.DEMO_USER_ID;
     const { texto } = await ficha(CAMPAIGN_HOGAR_LINDO);
     expect(texto).toContain("0 posts");
     expect(texto).toContain("Sin posts asociados");
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("con 0041, la dueña ve «Recalcular» y «Generar reporte»; el Editor lee las frases y no los botones", async () => {
     delete process.env.DEMO_USER_ID;
@@ -119,7 +120,7 @@ describe("la ficha real contra el seed", () => {
     expect(editor.texto).toContain(MESSAGES.resultado.noRole);
     expect(editor.texto).not.toContain(MESSAGES.reporte.generar);
     expect(editor.texto).toContain(MESSAGES.reporte.sinPermisoGenerar);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("CAM-1 → FIN-1 por rol: la dueña abre la factura; el Mánager (sin Finanzas) ve el número, sin enlace ni «Facturar»", async () => {
     delete process.env.DEMO_USER_ID;
@@ -141,5 +142,5 @@ describe("la ficha real contra el seed", () => {
     const sinFacturaDuena = await ficha(CAMPAIGN_SIN_FACTURA);
     expect(sinFacturaDuena.html).toMatch(/>Facturar</);
     expect(sinFacturaDuena.texto).toContain(MESSAGES.facturas.sinFactura);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });

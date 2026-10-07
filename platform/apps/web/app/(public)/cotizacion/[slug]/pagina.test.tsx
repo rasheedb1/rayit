@@ -15,6 +15,7 @@ import { getPrimaryCreator, getQuote } from "@mc/db/queries/cotizar";
 import { closeDb, getDbMode, withWorkspace } from "@/lib/db";
 import { MESSAGES } from "@/app/(app)/cotizar/messages";
 import CotizacionPage, { generateMetadata } from "./page";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 vi.mock("next/headers", () => ({
   // Un robot de vista previa: leer no cuenta visita ni marca nada como visto.
@@ -36,7 +37,7 @@ beforeAll(async () => {
     slug = (await getQuote(tx, ACEPTADA))!.slug;
     creadora = (await getPrimaryCreator(tx))!.displayName;
   });
-}, 120_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();
@@ -49,12 +50,12 @@ describe("la cotización pública de una aceptada (pulido r7)", () => {
     const meta = await generateMetadata({ params: Promise.resolve({ slug }) });
     expect(meta.title).toBe(`COT-2026-004 · ${creadora}`);
     expect(meta.robots).toEqual({ index: false, follow: false });
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("un enlace que no existe no inventa título", async () => {
     const meta = await generateMetadata({ params: Promise.resolve({ slug: "no-existe-este-enlace-0000" }) });
     expect(meta.title).toBe(MESSAGES.meta.cotizacionPublicaSinDatos);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("quien recarga el enlace lee quién la aceptó y cuándo, no «a tu nombre»", async () => {
     const html = renderToString(await CotizacionPage({ params: Promise.resolve({ slug }) }));
@@ -62,5 +63,5 @@ describe("la cotización pública de una aceptada (pulido r7)", () => {
     expect(html).toMatch(/Aceptada por Camila Rojas el [^<]+\. Quien te la envió ya lo sabe\./);
     expect(html).not.toContain(t.graciasTitle);
     expect(html).not.toContain("a tu nombre");
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });

@@ -91,6 +91,14 @@ export const AUDIT_ACTIONS = [
   'connection.source_changed',
   'consent.recorded',
   'consent.revoked',
+  // Equipo (ACC-4): quién entra, con qué rol y qué casillas, y quién sale.
+  // `invitation.accepted` la escribe invitation_accept() en SQL (0078 §5),
+  // con el mismo nombre. El correo invitado no va: es PII.
+  'invitation.created',
+  'invitation.revoked',
+  'invitation.accepted',
+  'membership.role_changed',
+  'membership.removed',
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

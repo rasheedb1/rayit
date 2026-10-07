@@ -90,9 +90,8 @@ export const STORIES: readonly Story[] = [
     title: "Monorepo listo",
     desc: "apps/web con Next.js + TypeScript, packages/db con Drizzle, apps/worker con pg-boss, turbo corriendo dev, typecheck, lint y test. Un package.json por paquete.",
     done: "make dev levanta los tres procesos y pnpm turbo run typecheck lint pasa en CI.",
-    status: "bloqueada",
-    note:
-      "ESTADO (22-sep, pulido r1): monorepo, `pnpm verificar` y build en verde; una sola frontera de error en (app) y withWorkspace comprueba que el workspace existe (el alta de CIM-3 no pasa por ahí). BLOQUEADA por dos comandos en Supabase con el token de administración: GRANT mc_worker TO mc_migrator y CREATE SCHEMA pgboss (docs/propuestas/CON-2.md §3.1). Vuelve a «hecho» cuando `pnpm --filter @mc/worker dev` arranque el runner contra Supabase. Historia por rondas: docs/propuestas/CIM-2.md §6.2.",
+    status: "hecho",
+    note: "4-oct: hecha. mc_worker_login (miembro de mc_worker) existe desde el 28-sep y el worker corre por turnos en la web (/api/cron/tick); el proceso largo con pg-boss no se usa en producción.",
   },
   {
     id: "CIM-2", module: "CIM", owner: "rasheed", size: "M", sprint: 1, deps: ["CIM-1"],
@@ -148,9 +147,9 @@ export const STORIES: readonly Story[] = [
     id: "CIM-12", module: "CIM", owner: "rasheed", size: "S", sprint: 4, deps: ["CIM-2"],
     title: "pnpm verificar determinista",
     desc: "Una corrida de pnpm verificar (turbo --concurrency=2) canceló las 735 pruebas de @mc/db con «Promise resolution is still pending but the event loop has already resolved»; las demás corridas y la suite suelta, en verde. Hay que saber qué promesa global de pglite queda sin resolver bajo carga.",
-    done: "Veinte corridas seguidas de pnpm verificar en una máquina cargada, sin una sola prueba cancelada.",
-    status: "en_curso",
-    note: "Pulido r6: todo before que abre la base usa SETUP_TIMEOUT (900 s) de test/pglite.ts; accesos-sesion (el que paga la foto) y otros once tenían techo propio de 120–600 s. Con dos verificar a la vez aún fallan pruebas de Nicolás (oauth-refresh del worker, guard.attempts; cuentas-service con hook de 60 s): en curso hasta 20 corridas en verde.",
+    done: "N≥10 rondas de make verificar.estres de a dos sin una prueba fallida ni cancelada, también con la máquina en otra fecha (DIAS=2,7,30,90).",
+    status: "hecho",
+    note: "5-oct: hecha. Causa: turbo mataba @mc/db al fallar otra tarea (ahora --continue); reloj de pruebas anclado; turnos de verificar con la hora en C. Estrés r5: 18 corridas de a dos en verde, 10 normales y 8 con la máquina a +2/+7/+30/+90. Pendiente de Nicolás (CIM-8): seed 0003 rojo sin ancla desde el 30-dic. Detalle: docs/propuestas/CIM-12.md.",
   },
   {
     id: "CIM-4", module: "CIM", owner: "nicolas", size: "M", sprint: 1, deps: [],
@@ -182,7 +181,7 @@ export const STORIES: readonly Story[] = [
     desc: "El repositorio de GitHub conectado al proyecto de Vercel para que cada merge a main publique solo; el worker corre por turnos en la propia web (/api/cron/tick), llamado cada minuto por pg_cron de Supabase (Hobby) y, con Vercel Pro, por Vercel Cron.",
     done: "Un merge a main aparece en la URL sin correr ningún comando.",
     status: "en_curso",
-    note: "28-sep (r5): el worker por turnos está hecho y probado sin red: runTick en @mc/worker/tick (reclamo atómico por job, presupuesto de 45 s que corta y retoma sin gastar intentos, una corrida que lanza no tumba el turno) y /api/cron/tick con Bearer en tiempo constante, que carga el worker solo tras el Bearer; make cron.install/status/uninstall, con cron.status en rojo si un job no cabe en el turno y la proyección de GB-h contra el cupo de Hobby (Hobby es de uso no comercial: los números y el umbral para pasar a Pro, en el README). --once sigue igual (sin backoff). Lo de runner/ va en dos PR para Nicolás, ramas rasheed/CIM-7-runner-1 (imprescindible) y rasheed/CIM-7-runner-2 (opcional): falta abrirlos y su aprobación explícita del 1 antes del merge a main; el enlace del PR va aquí. Pendiente humano, en este orden: crear mc_worker_login (WRK.md §1.1) y ponerlo como WORKER_DATABASE_URL en Vercel; el GRANT de pgboss.job a mc_worker (CON-2 §3.3); openssl rand -hex 32 como CRON_SECRET en Vercel y make vercel.deploy PROD=1; make cron.install con el mismo secreto (Vault de Supabase) y make cron.status en verde. Sigue pendiente conectar GitHub a Vercel. Detalle: apps/worker/README.md, «Por turnos».",
+    note: "Turnos en producción con pg_cron cada minuto (make cron.status en verde el 5-oct). Falta: conectar GitHub a Vercel (un clic de Rasheed) y el visto bueno de Nicolás al runner. Los jobs agotados en cada turno van en VEN-17.",
   },
   {
     id: "CIM-8", module: "CIM", owner: "nicolas", size: "S", sprint: 1, deps: ["CIM-2"],
@@ -190,7 +189,7 @@ export const STORIES: readonly Story[] = [
     desc: "Tres facturas (una vencida), pagos, gastos recurrentes, dos campañas con posts asociados y snapshots de seguidores de la marca. Números tomados del mock. Idempotente.",
     done: "make seed deja Finanzas y Campañas con los mismos números que el mock.",
     status: "hecho",
-    note: "Seed 0003 con verificación en Postgres embebido: node db/seed/verify/run.mjs (run-0003.mjs queda como atajo). 0002 ya existe con los ids del contrato de docs/propuestas/CIM-8.md, así que la sección 0 de 0003 (prerrequisitos) queda en no-op; CIM-6 ajustó en 0003 las fechas de Café Alma para una sola línea de tiempo (CIM-6.md §3.10).",
+    note: "Seed 0003 con verificación en Postgres embebido: node db/seed/verify/run.mjs (run-0003.mjs queda como atajo). 0002 ya existe con los ids del contrato de docs/propuestas/CIM-8.md, así que la sección 0 de 0003 (prerrequisitos) queda en no-op; CIM-6 ajustó en 0003 las fechas de Café Alma para una sola línea de tiempo (CIM-6.md §3.10). Pendiente con fecha (CIM-12, 5-oct): desde el 30-dic-2026 los gastos recurrentes del seed 0003 salen de la ventana de 120 días y el job contra-postgres-real del CI (sin ancla) da 6 pruebas de gastos y flujo en rojo. Arreglo propuesto: sembrarlos en los tres meses cerrados anteriores a CURRENT_DATE y que las pruebas pidan ultimoMesCerrado(). Detalle: docs/propuestas/CIM-12.md §Pendiente.",
   },
 
   // ---------------------------------------------------------------- CON
@@ -232,7 +231,7 @@ export const STORIES: readonly Story[] = [
     desc: "Callback, cifrado del token con TOKEN_ENCRYPTION_KEY, secret_ref en social_connection, data_consent con la evidencia. Necesita acceso de desarrollador a las apps de TikTok y Meta (lo da Rasheed).",
     done: "Conectar una cuenta de prueba deja la fila con sus scopes y el token no aparece en claro en ninguna tabla.",
     status: "hecho",
-    note: "Probada en vivo el 23-sep en producción: @selvathegolden autorizó sus cifras de TikTok con «Autorizar cifras» (híbrido de CON-10: la fila por @ se convierte en autorizada sin perder historial); token cifrado en connection_secret y ninguno en claro (prueba de volcado). App de TikTok propia con Login Kit y sandbox, dominio verificado, OAUTH_CONNECT=1 en Vercel; para otros creadores falta el App Review de Login Kit. Instagram Login no se probó: en el MVP Instagram va por @. Paso a paso en docs/propuestas/CON-3.md §5; cierre en backlog-mvp.md §10.",
+    note: "Probada en vivo el 23-sep en producción: @selvathegolden autorizó sus cifras de TikTok con «Autorizar cifras» (híbrido de CON-10: la fila por @ se convierte en autorizada sin perder historial); token cifrado en connection_secret y ninguno en claro (prueba de volcado). App de TikTok propia con Login Kit y sandbox, dominio verificado, OAUTH_CONNECT=1 en Vercel; para otros creadores falta el App Review de Login Kit. Instagram Login no se probó: en el MVP Instagram va por @. Paso a paso en docs/propuestas/CON-3.md §5; cierre en backlog-mvp.md §10. 4-oct: Nicolás abre Instagram Login para leer insights: «Conectar Instagram» en la sección de cuentas autorizadas y «Autorizar analítica» en la fila por @ (conectar.tsx, tabla.tsx); META_APP_ID y META_APP_SECRET en Vercel; app de Meta en Desarrollo, solo cuentas probadoras (@nicolasduartea aceptada); App Review y verificación del negocio pendientes para abrirlo a todos. 5-oct: probado en vivo en producción: @nicolasduartea autorizó (direct_oauth, dos scopes, token cifrado hasta el 4-dic, consentimientos analytics y audience_demographics). Dos arreglos de camino: Meta exige access_token como parámetro en el token largo y en la renovación (con cabecera responde 100), y el callback ahora deja en el log qué llamada rechazó la plataforma.",
   },
   {
     id: "CON-4", module: "CON", owner: "nicolas", size: "M", sprint: 5, deps: ["CON-3", "CIM-5"],
@@ -336,7 +335,8 @@ export const STORIES: readonly Story[] = [
     title: "Lo que importa esta semana",
     desc: "Lista generada desde los datos: outliers nuevos, conexión con error, factura vencida, deal con seguimiento vencido. Lee notification.",
     done: "Las cuatro fuentes producen su fila y cada una lleva a su módulo.",
-    status: "pendiente",
+    status: "hecho",
+    note: "5-oct (r2): bloque arriba de /resumen (queries/resumen-semana.ts), una fila por cosa y por urgencia, solo lo que sigue siendo cierto hoy; sin finanzas.factura.ver no hay fila de factura ni «Entendido» sobre ella, y el alcance de ACC-6 aplica en cada rama (inscrito en la guardia). Quinta fuente: la cuenta de envío caída (Ventas › Canales). «Entendido» es por persona y se deshace (0081 notification_ack, gestos append-only, con el índice por cosa en notification; sin aplicar en Supabase). Cinco filas a la vista y el resto plegado; el vacío no afirma nada sobre la mora. La demo trae un aviso de cada fuente (seed 0012). Punta a punta con los productores en apps/worker/test/lo-que-importa.test.ts. 7-oct (r3): sin sesión (demo) el «Entendido» va a una cookie del visitante y no a la base (0081 user_id NOT NULL): nadie vacía el bloque de los demás; la factura con el recordatorio mandado sigue mientras no se pague; cada rama corta por urgencia; el gesto mira el alcance (sin oráculo); la cuenta sin token vuelve a la semana (barrido en oauth.refresh, que ya avisa con la misma regla que los recolectores); nombres de cuenta en @mc/core. 7-oct (r4): la fila de la cuenta dice el título de la campana (@mc/core); en una agencia, cada cuenta o video dice de quién es; en la demo el video no abre un 404 y el cobro cuenta lo mismo que Finanzas. Toca jobs de Conexiones (Nicolás): avisos de cuenta rota con notifyBrokenAccount (candado por cuenta, no repite en 7 días aunque se descarte), título sin «Vuelve a conectar», barrido remindBrokenAccounts en oauth.refresh. Pide su revisión antes del merge: detalle y vuelta atrás en docs/fases-rasheed.md §9. 7-oct (integración fase 9): renumerada a 0081 y seed 0012, detrás de 0078-0080 y 0011 de ACC-4; sin aplicar en Supabase.",
   },
   {
     id: "RES-4", module: "RES", owner: "rasheed", size: "S", sprint: 6, deps: ["CON-7"],
@@ -476,6 +476,15 @@ export const STORIES: readonly Story[] = [
     done: "Con una semana de envíos de prueba, el embudo cuadra con outbound_touch fila a fila.",
     status: "hecho",
     note: "/ventas/actividad con cola, reintento por tipo y cursor; uso por canal y embudo por paso (0072). Pulido r5: los motivos «la marca ya firmó» y «el negocio se marcó como perdido». Pulido r6 (28-sep): los gestos a mano van «A mano», fuera de «Cola», con «Hecho»; «Uso de hoy» no ofrece «Reconectar» sin llaves; pestañas «X · Ventas»; la demo no siembra comentarios enviados. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
+  },
+
+  {
+    id: "VEN-17", module: "VEN", owner: "rasheed", size: "S", sprint: 5, deps: ["CIM-7", "VEN-10"],
+    title: "Jobs agotados en los turnos de producción",
+    desc: "Desde el 5-oct cada turno de /api/cron/tick deja collect.account_metrics y outbound.replies agotados (exhausted), y outbound.replies termina en failed (corrida 1236). Saber por qué falla outbound.replies y por qué los dos se agotan, y que cada job acabe corrido o saltado con su motivo.",
+    done: "Una semana de turnos en producción sin jobs agotados ni outbound.replies en failed; si falta una llave o una conexión, el job lo dice como «no configurado», no como fallo.",
+    status: "pendiente",
+    note: "Abierta el 5-oct (r5 de CIM-12) desde la nota de CIM-7: visto en la revisión de los turnos de ese día; causa sin investigar. Si la de collect.account_metrics está en el conector, esa parte es de Nicolás (CON-2).",
   },
 
   // ---------------------------------------------------------------- COT
@@ -660,8 +669,8 @@ export const STORIES: readonly Story[] = [
     title: "Pantalla Equipo: invitar al mánager",
     desc: "Invitar por correo eligiendo uno de los roles de fábrica, aceptar por enlace con vencimiento, cambiar rol y revocar. Al invitar a un mánager, dos casillas explícitas y apagadas: «también puede ver mis finanzas» y «también puede conectar mis cuentas». Nadie otorga un permiso que no tiene.",
     done: "Un creador invita a su mánager, el mánager entra por el enlace y ve Campañas pero no el flujo de caja; con la casilla marcada sí lo ve. Quitar al último dueño falla con mensaje.",
-    status: "pendiente",
-    note: "Es la demo del quinto viernes. Recortada a lo del piloto: sin matriz editable ni roles a medida, que son ACC-9.",
+    status: "hecho",
+    note: "7-oct (r4): hecha, pendiente del visto bueno de Nicolás a nav.tsx, modules.ts, accesos.ts, conexiones.ts y permisos.ts (CIERRE-ACC §7bis). Equipo en /accesos (/equipo redirige); el enlace /invitacion/<token> vale 7 días, un solo uso, solo para el correo invitado y solo si quien invitó todavía puede dar ese rol. En la demo el enlace se ve pero no se acepta. Migraciones 0078, 0079 y 0080 y el seed 0011 sin aplicar en Supabase: los aplica el integrador, en orden. Sigue pendiente de antes (CIERRE-ACC §5.1–5.2): Ventas, Cotizar y Resumen con permisos por rol.",
   },
   {
     id: "ACC-5", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["ACC-3"],

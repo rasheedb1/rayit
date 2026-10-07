@@ -47,6 +47,7 @@ import { invoiceHref } from "./_lib/rutas";
 import {
   asociarPost, cambiarEstadoCampana, generarReporte, importarCsvVentas, marcarReporteEnviado, recalcularResultado, registrarAporte,
 } from "./[id]/actions";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 /** COT-2026-008 del seed 0004: Nutrivé, «viewed», sin ventana, dos ítems. */
 const QUOTE_NUTRIVE = "00000004-0000-4000-8000-0000000c0708";
@@ -93,7 +94,7 @@ async function estadoDelReporte(id: string) {
 beforeAll(async () => {
   for (const k of Object.keys(entorno)) delete process.env[k];
   expect(await getDbMode()).toBe("embedded");
-}, 300_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();
@@ -179,7 +180,11 @@ describe("el ciclo de una campaña, de la cotización aceptada a la apertura pú
       shares: 990, // 528 + 462
       linkClicks: null, // ninguna de las dos lecturas trae clics: null, no cero
       reachNonFollowersPct: "0.54991", // (28 600 + 28 987) / 104 720 = 0,549914…
-      viewsVsMedian: "0.824", // (88 000·88 000/121 500 + 66 000·66 000/69 000) / 154 000 = 0,82381…
+      // (88 000·88 000/125 000 + 66 000·66 000/69 000) / 154 000 = 0,8122…, con la
+      // línea base de la demo del día de las pruebas: la web corre anclada al
+      // 5-oct (scripts/pruebas/reloj.mjs). Sembrada el 28-sep la mediana de
+      // TikTok era 121 500 y daba 0,824 (CIM-12, @mc/db/test/demo).
+      viewsVsMedian: "0.812",
       brandFollowersGained: 1600,
       brandFollowersBaselineRate: "10.0000",
       brandFollowersCampaignRate: "200.0000",
@@ -267,5 +272,5 @@ describe("el ciclo de una campaña, de la cotización aceptada a la apertura pú
     expect(vieja.result).toEqual(doc.result);
     const vigente = (await abrirPublico(nueva.slug)) as PublicReportView;
     expect(vigente.result).toMatchObject({ codeRedemptions: 300, cpa: "25783.33" });
-  }, 300_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });

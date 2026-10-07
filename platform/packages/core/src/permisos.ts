@@ -180,8 +180,14 @@ export const PERMISO_MINIMO: Readonly<Record<Modulo, Permiso>> = {
 export const WORKSPACE_KINDS = ['creator', 'agency'] as const;
 export type WorkspaceKind = (typeof WORKSPACE_KINDS)[number];
 
-/** Las claves de los roles de sistema. Coinciden con role.key de ACC-3. */
-export type RoleKey = 'owner' | 'admin' | 'manager' | 'editor' | 'finance' | 'viewer';
+/**
+ * Las claves de los roles de sistema, en el orden en que se muestran: de
+ * más a menos (Dueño, Administrador, Mánager…). Coinciden con role.key
+ * de ACC-3. Es el ÚNICO orden de roles: lo usan la lista de Equipo
+ * (ACC-4) y el selector de rol, que no repiten la lista a mano.
+ */
+export const ROLE_KEYS = ['owner', 'admin', 'manager', 'editor', 'finance', 'viewer'] as const;
+export type RoleKey = (typeof ROLE_KEYS)[number];
 
 export interface RolSistema {
   readonly key: RoleKey;
@@ -196,7 +202,7 @@ const ver = (modulo: Modulo): readonly Permiso[] => permisosDelModulo(modulo).fi
 
 /**
  * La matriz, literal. Las dos reglas que NO están aquí van en código:
- * nadie otorga lo que no tiene (permisosOtorgables, puedeAsignarRol) y
+ * nadie otorga lo que no tiene (permisosQueFaltan) y
  * el último dueño no se quita ni se degrada (esUltimoDueno).
  *
  * Decisión E (backlog §7, decisión 9): el dinero no entra en ningún rol
@@ -322,20 +328,36 @@ export function can(permisos: ReadonlySet<Permiso>, permiso: Permiso): boolean {
 }
 
 /**
- * Nadie otorga lo que no tiene: de lo que se pide, lo que quien invita
- * o edita puede dar de verdad. Es la intersección con los propios. Sin
- * esto un administrador se hace dueño en dos clics.
+ * Nadie otorga lo que no tiene, en UNA función: de lo que se pide, lo
+ * que quien invita o edita NO tiene, sin repetir y en el orden pedido.
+ * Vacío = puede darlo todo. `pedidos` admite cualquier texto porque los
+ * permisos de un rol pueden venir de la base (role_permission, roles a
+ * medida de ACC-9): uno que no está en el catálogo tampoco se tiene.
+ *
+ * Las otras dos preguntas se escriben con esta: permisosOtorgables (lo
+ * que sí se puede dar) y puedeAsignarRol (un rol de fábrica entero). La
+ * base hace la misma pregunta con session_can_grant() (0078 §2).
  */
-export function permisosOtorgables(propios: ReadonlySet<Permiso>, pedidos: Iterable<Permiso>): ReadonlySet<Permiso> {
-  const out = new Set<Permiso>();
-  for (const p of pedidos) if (propios.has(p)) out.add(p);
-  return out;
+export function permisosQueFaltan(propios: ReadonlySet<Permiso>, pedidos: Iterable<string>): string[] {
+  const faltan = new Set<string>();
+  for (const p of pedidos) if (!propios.has(p as Permiso)) faltan.add(p);
+  return [...faltan];
 }
 
-/** ¿Puede quien tiene `propios` asignar este rol entero? Solo si tiene todos sus permisos. */
+/**
+ * De lo que se pide, lo que quien invita o edita puede dar de verdad: lo
+ * pedido menos permisosQueFaltan. Sin esto un administrador se hace
+ * dueño en dos clics.
+ */
+export function permisosOtorgables(propios: ReadonlySet<Permiso>, pedidos: Iterable<Permiso>): ReadonlySet<Permiso> {
+  const lista = [...pedidos];
+  const faltan = new Set(permisosQueFaltan(propios, lista));
+  return new Set(lista.filter((p) => !faltan.has(p)));
+}
+
+/** ¿Puede quien tiene `propios` asignar este rol entero? Solo si no le falta ninguno de sus permisos. */
 export function puedeAsignarRol(propios: ReadonlySet<Permiso>, kind: WorkspaceKind, key: RoleKey): boolean {
-  for (const p of permisosDeRol(kind, key)) if (!propios.has(p)) return false;
-  return true;
+  return permisosQueFaltan(propios, permisosDeRol(kind, key)).length === 0;
 }
 
 /**

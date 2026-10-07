@@ -24,7 +24,7 @@ const AQUI = dirname(fileURLToPath(import.meta.url));
 const APP = join(AQUI, "..", "..", "app", "(app)");
 
 /** Los módulos cuyas Server Actions ya abren con requirePermission. */
-const MODULOS_CON_CONVENCION = ["campanas", "finanzas", "conexiones"] as const;
+const MODULOS_CON_CONVENCION = ["campanas", "finanzas", "conexiones", "accesos"] as const;
 
 /** Cuántas acciones exportadas tenían esos módulos al adoptar la convención: si baja, la prueba dejó de mirar algo. */
 const ACCIONES_MINIMAS = 12;

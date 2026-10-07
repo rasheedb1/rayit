@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ESPERA_UI_LARGA_MS } from "@/lib/testing/tiempos";
 
 // Las Server Actions se sustituyen: aquí importa cómo reacciona la
 // bandeja a lo que devuelven, no la base (eso lo prueba @mc/db).
@@ -20,14 +21,8 @@ import { Radar, type SignalCardData } from "./radar";
 
 const PAISES = countryOptions("es-CO");
 
-/**
- * Lo que tarda una acción mockeada más su transición de React con la
- * máquina cargada (`pnpm verificar` en paralelo con otros agentes): los
- * 5 s de vitest.setup.ts se agotaron alguna vez sin que nada estuviera
- * mal. 15 s sigue por debajo del testTimeout (20 s): una espera que
- * nunca se cumple sigue fallando.
- */
-const LENTO = { timeout: 15_000 };
+/** Una acción mockeada más su transición de React (lib/testing/tiempos.ts, con su porqué). */
+const LENTO = { timeout: ESPERA_UI_LARGA_MS };
 
 const SIGNAL = "00000005-0000-4000-8000-000000000001";
 const card: SignalCardData = {

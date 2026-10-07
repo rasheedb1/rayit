@@ -89,6 +89,12 @@ export const membership = pgTable(
      * normalmente con system_role_id(kind, key).
      */
     roleId: uuid('role_id').notNull(),
+    /**
+     * Lo que la persona puede además de su rol (0078, ACC-4): solo los
+     * permisos de las dos casillas del mánager (EXTRA_PERMISOS de
+     * @mc/core). La base los limita con un CHECK.
+     */
+    extraPermissions: text('extra_permissions').array().default([]).notNull(),
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.workspaceId, t.userId] })],

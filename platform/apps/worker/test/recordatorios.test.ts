@@ -10,7 +10,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { pasoDeUrl } from '@mc/core';
 import { allJobs } from '../src/jobs/index.ts';
-import { applyRepoSeeds, jobRuns, startHarness, waitFor, type Harness } from './helpers/harness.ts';
+import { applyRepoSeeds, jobRuns, SETUP_TIMEOUT, startHarness, waitFor, type Harness } from './helpers/harness.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
 
 /** Ids fijos del seed 0003 (docs/propuestas/CIM-8.md). */
@@ -32,6 +32,9 @@ let hoy: string;
 async function seed(db: PgliteDatabase): Promise<void> {
   await applyRepoSeeds(db);
   await db.raw.exec(`
+    -- RES-3: el seed 0012 deja en la demo el paso 4 de FV-2026-007 sin mandar
+    -- (para «Lo que importa esta semana»). Aquí los pasos los escribe el job.
+    DELETE FROM notification WHERE id = '00000011-0000-4000-8000-0000000a1102';
     INSERT INTO workspace (id, slug, name, kind, country, currency, timezone, locale, settings)
     VALUES ('${WORKSPACE_AJENO}', 'workspace-ajeno', 'Estudio Ajeno', 'creator', 'CO', 'COP', 'America/Bogota', 'es-CO',
             -- FIN-8: el ajeno SÍ configuró cómo le pagan; Laura (el seed) no.
@@ -95,7 +98,7 @@ async function correr(): Promise<{ status: string; metadata: Record<string, unkn
 
 before(async () => {
   h = await startHarness({ jobs: allJobs, seed, now: () => new Date(`${hoy}T10:00:00Z`) });
-}, { timeout: 180_000 });
+}, SETUP_TIMEOUT);
 after(async () => {
   await h.stop();
 });

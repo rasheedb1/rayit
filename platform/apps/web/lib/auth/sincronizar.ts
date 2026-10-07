@@ -4,6 +4,7 @@ import {
   createCreatorWorkspace, freeSlug, getMyIdentityAndWorkspaces, listMyWorkspaces, lockByEmail, nameFromEmail,
   upsertAppUserPorCorreo, type MyWorkspace,
 } from "@mc/db/queries/identidad";
+import { hasPendingInvitationForSessionEmail } from "@mc/db/queries/equipo";
 import { withIdentity, withWorkspaceId } from "@/lib/db/cliente";
 import { MESSAGES } from "./messages";
 
@@ -25,7 +26,13 @@ import { MESSAGES } from "./messages";
  *                      nadie más en el camino normal: da de alta la
  *                      fila de app_user si no existía, deja la última
  *                      visita al día y, si la persona no pertenece a
- *                      ningún espacio, le crea el suyo.
+ *                      ningún espacio, le crea el suyo. SALVO que la
+ *                      esperen en uno (ACC-4): si su correo tiene una
+ *                      invitación pendiente, o vuelve al enlace de una
+ *                      (`next` = /invitacion/…), no se le crea nada y
+ *                      entra al espacio que la invitó al aceptar. Sin
+ *                      eso, un mánager nuevo terminaba con dos espacios:
+ *                      el de su creadora y uno vacío que no pidió.
  *
  * El único caso en que una lectura cae al segundo es el que no tiene
  * otra salida: hay sesión de Supabase pero no hay fila de app_user (el
@@ -41,7 +48,11 @@ export interface ContextoDeSesion {
   userId: string;
   email: string;
   nombre: string | null;
-  /** Al menos uno: si no tenía, se acaba de crear. */
+  /**
+   * Al menos uno (si no tenía, se acaba de crear), salvo que la esperen
+   * en un espacio por invitación: entonces puede venir vacío hasta que
+   * la acepte (ver registrarEntrada).
+   */
   workspaces: MyWorkspace[];
 }
 
@@ -102,12 +113,36 @@ export async function leerSesion({ email, authUserId }: QuienEntra): Promise<Con
   return { userId: mio.user.id, email: limpio, nombre: mio.user.name, workspaces: mio.workspaces };
 }
 
+/** Las rutas del enlace de una invitación (app/(invitacion)/invitacion/[token]). */
+export const PREFIJO_INVITACION = "/invitacion/";
+
+export interface OpcionesDeEntrada {
+  /**
+   * A dónde vuelve después de entrar (`next` del enlace mágico, ya
+   * saneado). Si es el enlace de una invitación, no se le crea espacio
+   * propio aunque la invitación ya no sirva: al volver a cualquier otra
+   * página, leerOCrearSesion lo crea entonces.
+   */
+  next?: string | null;
+}
+
+/**
+ * ¿La persona viene a un espacio por invitación? Por el destino (vuelve
+ * al enlace) o por la base (su correo verificado tiene una invitación
+ * pendiente y vigente, 0079 §1).
+ */
+async function laEsperanEnUnEspacio(email: string, next: string | null | undefined): Promise<boolean> {
+  if (next?.startsWith(PREFIJO_INVITACION)) return true;
+  return withIdentity({ email }, (tx) => hasPendingInvitationForSessionEmail(tx));
+}
+
 /**
  * ESCRIBE: el alta de quien entra por /auth/callback. Idempotente —el
  * upsert va por el único de email y el espacio solo se crea si no hay
- * ninguno— y protegido contra dos peticiones a la vez.
+ * ninguno— y protegido contra dos peticiones a la vez. A quien esperan
+ * en un espacio por invitación no se le crea el suyo (ACC-4).
  */
-export async function registrarEntrada(quien: QuienEntra): Promise<ContextoDeSesion> {
+export async function registrarEntrada(quien: QuienEntra, opciones: OpcionesDeEntrada = {}): Promise<ContextoDeSesion> {
   const email = quien.email.trim();
   // `userId` es el id que tendrá la fila SI es nueva: la política de alta
   // de app_user del pase de endurecimiento exige id = current_user_id().
@@ -118,11 +153,25 @@ export async function registrarEntrada(quien: QuienEntra): Promise<ContextoDeSes
 
   const identity = { userId: persona.id, email };
   let workspaces = await withIdentity(identity, (tx) => listMyWorkspaces(tx));
-  if (workspaces.length === 0) {
+  if (workspaces.length === 0 && !(await laEsperanEnUnEspacio(email, opciones.next))) {
     workspaces = await crearPrimerEspacio({ email, identity, nombrePersona: persona.name });
   }
 
   return { userId: persona.id, email, nombre: persona.name, workspaces };
+}
+
+/**
+ * ESCRIBE: el espacio propio de quien lo pide a pesar de tener una
+ * invitación pendiente (el botón «Crear mi propio espacio» de
+ * /invitacion). Mismo cerrojo que el alta: dos clics no crean dos.
+ */
+export async function crearEspacioPropio(quien: QuienEntra): Promise<ContextoDeSesion> {
+  const mio = await leerSesion(quien);
+  if (!mio) return registrarEntrada(quien);
+  if (mio.workspaces.length > 0) return mio;
+  const identity = { userId: mio.userId, email: mio.email };
+  const workspaces = await crearPrimerEspacio({ email: mio.email, identity, nombrePersona: mio.nombre });
+  return { ...mio, workspaces };
 }
 
 /**
@@ -170,10 +219,15 @@ async function crearPrimerEspacio({
 /**
  * El camino de lectura con su red de seguridad: lee, y solo si no hay
  * nada que leer (ni fila ni espacios) da de alta. Lo usa
- * lib/workspace/current.ts.
+ * lib/workspace/current.ts. Puede devolver cero espacios: es quien
+ * viene por invitación y todavía no la aceptó (current.ts lo manda a
+ * /invitacion).
  */
 export async function leerOCrearSesion(quien: QuienEntra): Promise<ContextoDeSesion> {
   const mio = await leerSesion(quien);
   if (mio && mio.workspaces.length > 0) return mio;
+  // Ya tiene fila y la esperan en un espacio: no hay nada que escribir,
+  // y leer sigue sin escribir.
+  if (mio && (await laEsperanEnUnEspacio(mio.email, null))) return mio;
   return registrarEntrada(quien);
 }

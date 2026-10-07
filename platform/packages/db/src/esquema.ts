@@ -430,6 +430,28 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'del despachador (sales.channels_release los borra en Unipile al desconectar) y mc_app no la escribe. Mismo dueño ' +
     'y misma cerradura que outreach_channel_connect: solo ve el workspace de la transacción y solo AÑADE ids con ' +
     'forma de id. EXECUTE solo para mc_app. No es de ningún disparador',
+  // Aceptar una invitación de Equipo (0078 §5, ACC-4).
+  'invitation_lookup(text)':
+    'qué dice el enlace de una invitación (0078 §5, ACC-4): quien lo abre tiene sesión pero no es miembro del espacio ' +
+    'que invita, así que no puede leer la fila (RLS por workspace_id). Del rol que migra y con FORCE ROW LEVEL ' +
+    'SECURITY: una política TO CURRENT_USER le deja ver SOLO la invitación cuyo sha256 del token fija la propia ' +
+    'función, y lo borra antes de salir. No escribe nada; devuelve el estado y, si está pendiente, el nombre del ' +
+    'espacio, el rol, las casillas, el vencimiento y el correo invitado enmascarado; si quien invitó ya no podría ' +
+    'darlo (invitation_inviter_can_grant, 0080 §2), revoked. EXECUTE solo para mc_app. No es de ningún disparador',
+  'invitation_accept(text)':
+    'acepta una invitación (0078 §5, ACC-4): mismo dueño y misma cerradura que invitation_lookup, con FOR UPDATE ' +
+    '(un solo uso). Exige sesión y que el correo de la persona sea el invitado; fija app.workspace_id al de la ' +
+    'invitación y hace lo que haría cualquier transacción de ese espacio con sus políticas: el alta PROPIA de ' +
+    'membership (0028) con el rol y las casillas que decidió quien invitó —y que la política de alta de invitation ' +
+    'ya comprobó que podía dar, y que 0080 §3 vuelve a comprobar al aceptar: si a quien invitó lo degradaron o lo ' +
+    'quitaron, revoked—, accepted_at y la fila invitation.accepted en audit_log. Lo devuelve todo al salir. ' +
+    'EXECUTE solo para mc_app. No es de ningún disparador',
+  'has_pending_invitation_for_session_email()':
+    '¿a la persona de la sesión la esperan en algún espacio? (0079 §1, ACC-4): el primer inicio de sesión no le crea ' +
+    'un espacio propio a quien viene invitado. Mismo dueño y misma cerradura que invitation_lookup: una política TO ' +
+    'CURRENT_USER le deja ver solo las invitaciones al correo verificado de la sesión (current_user_email()) mientras ' +
+    'la propia función fija la bandera, y la borra antes de salir. No escribe nada y devuelve solo un booleano: ni el ' +
+    'espacio, ni el rol, ni quién invitó. EXECUTE solo para mc_app. No es de ningún disparador',
   // El reporte a la marca (0037, CAM-6): la misma puerta que la cotización.
   'public_report(text,boolean)':
     'abre /reporte/<slug> sin sesión (0037), con el mismo rol y la misma cerradura que public_quote: devuelve el ' +
@@ -456,6 +478,9 @@ export const FUNCIONES_QUE_USA_EL_CODIGO: Readonly<Record<string, string>> = {
   'system_role_id(text,text)':
     '0034_access_control: el id de un rol de sistema por (tipo de workspace, clave). Lo usan createCreatorWorkspace ' +
     '(la dueña del espacio nuevo), los seeds y las pruebas',
+  'session_permission_keys()':
+    '0078_equipo: los permisos de la sesión en el workspace fijado (rol + casillas del mánager). La leen ' +
+    'getSessionPermissions (ACC-5) y sessionHasPermission (ACC-8); las políticas de Equipo, por session_can',
   'scope_allows(text,uuid)':
     '0040_scope_allows: el alcance por creador, marca o campaña que compone cada consulta de Campañas, Finanzas y ' +
     'Conexiones (src/scope.ts, ACC-6)',
@@ -1349,6 +1374,15 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'outbound_llm_reserve_web y outbound_llm_release_web. Con escritura, un workspace se borraría las reservas del worker y dos jobs ' +
       'volverían a gastar el mismo saldo',
   },
+  notification_ack: {
+    permite: ['SELECT', 'INSERT'],
+    motivo:
+      'el «Entendido» y el «Deshacer» de una persona sobre un aviso (0081, RES-3): cada gesto es una fila nueva y vale ' +
+      'el último, así que deshacer no necesita ni UPDATE ni DELETE. Con ellos, quien lo dio podría reescribir la ' +
+      'constancia de lo que vio; y la política de INSERT exige que la fila sea de quien escribe (user_id = ' +
+      'current_user_id()), así que nadie marca leído ni deshace por otro; la de SELECT, que cada persona lea solo los ' +
+      'suyos',
+  },
   outbound_llm_call: {
     permite: ['SELECT', 'INSERT'],
     motivo:
@@ -1383,7 +1417,10 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
   },
   invitation: {
     permite: ['SELECT', 'INSERT', 'UPDATE'],
-    motivo: 'revocar una invitación es revoked_at (0034 §7): nadie borra el rastro de a quién se invitó',
+    motivo:
+      'revocar una invitación es revoked_at (0034 §7): nadie borra el rastro de a quién se invitó. Desde 0078 §4, ' +
+      'UPDATE solo de revoked_at: reabrirla, cambiarle el rol o alargarle el plazo no se puede (se invita de nuevo)',
+    soloColumnas: { UPDATE: ['revoked_at'] },
   },
 
   // Tablas de inquilino con un comando de menos.
@@ -1397,10 +1434,13 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
     },
   },
   membership: {
-    permite: ['SELECT', 'INSERT'],
+    permite: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
     motivo:
       'el alta propia de CIM-3 (0028): darse de alta a uno mismo en el espacio que se acaba de crear, que es lo ' +
-      'único que deja membership_alta. Cambiar roles o echar a alguien sigue siendo del worker',
+      'único que deja membership_alta. Desde 0078 §3 (ACC-4), cambiar el rol y quitar a alguien desde Equipo, con ' +
+      'política por permiso (equipo.rol.editar, equipo.miembro.revocar) y «nadie otorga lo que no tiene»; UPDATE ' +
+      'solo del rol y de las casillas, nunca del workspace ni de la persona',
+    soloColumnas: { UPDATE: ['role_id', 'extra_permissions'] },
   },
   app_user: { permite: ['SELECT', 'INSERT', 'UPDATE'], motivo: 'nadie borra a una persona desde una pantalla' },
   media_kit_lockout: {

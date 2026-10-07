@@ -435,6 +435,42 @@ siguen funcionando. Solo los pasos 7 y 8 escriben en la base real.
 Si algo de 1 a 6 sale vacío o distinto, es el alcance: vuelve al plan B
 de §7.2 y avísame.
 
+## 7bis. Lo que ACC-4 (Rasheed) tocó de este cierre
+
+Para que Nicolás lo revise en el PR de ACC-4
+(`rasheed/ACC-4-pantalla-equipo-r4`, migraciones `0078_equipo`,
+`0079_equipo_cerrojos` y `0080_equipo_quien_invito`, sin aplicar en
+Supabase):
+
+| # | Qué | Dónde | Por qué | Prueba |
+|---|---|---|---|---|
+| 1 | `getSessionPermissions` (ACC-5) y `sessionHasPermission` (ACC-8) leen `session_permission_keys()` en vez de su propio JOIN a `role_permission` | `packages/db/src/queries/accesos.ts`, `queries/conexiones.ts` (una consulta cada una) | La función suma el rol **y** las casillas del mánager (`membership.extra_permissions`, 0078 §1–2). Con dos JOIN a mano, uno se olvidaba de las casillas. **Pide visto bueno de Nicolás.** | `equipo.test.ts` «la casilla de conectar cuentas es lo que ACC-8 pregunta», y las suites de ACC-5/ACC-8 sin tocar |
+| 2 | Quien tiene alcance (filas en `membership_scope`) **no administra el equipo**: ni invita, ni revoca, ni cambia roles, ni quita | 0079 §6: `session_has_scope()` dentro de `session_can_grant()`, que es lo que piden las cuatro políticas del equipo; la consulta responde `scoped` y la pantalla no ofrece las acciones | ACC-6 §4.5 dejó a ACC-4 decir quién da alcance. «Nadie otorga lo que no tiene» miraba solo permisos: un miembro acotado con `equipo.miembro.invitar` podía invitar a alguien que entraba sin alcance, viéndolo todo. Lo conservador hasta tener la regla del subconjunto | `equipo.test.ts` «quien tiene alcance no administra el equipo (0079 §6)»: por la consulta y a mano, y al quitar la fila vuelve a poder |
+| 3 | `invitation.scope` tiene que ser `[]` (`invitation_scope_not_yet`) | 0079 §6 | `invitation_accept` no copia el alcance a `membership_scope`: una invitación con alcance entraría sin él. Cuando ACC-6/7 lo copie, se quita el CHECK | `equipo.test.ts` «una invitación no lleva alcance» |
+| 4 | El menú: Accesos deja las herramientas del equipo y sale en Producto, al final, con el nombre «Equipo». `teamTools(flags, permisos)` pasa a `teamTools(flags)`: ya no mira permisos ni pinta Accesos (lo hace `productModules`, con el mismo `puedeAbrir`) | `apps/web/components/nav.tsx` (carpeta de Nicolás): el import de `puedeAbrir`/`Permisos`, las dos líneas de Accesos en `teamTools`, su firma y sus dos llamadas; el icono `KeyRound` pasa a `ICONS.accesos` | Con ACC-4 Accesos deja de ser el plan del módulo y es la pantalla real del creador. Dejarlo en las herramientas lo pintaba dos veces (como herramienta y como módulo) o había que filtrarlo en dos sitios. La regla del permiso queda en un solo lugar (`puedeAbrir` de `content/modules.ts`, ACC-5). **Pide visto bueno de Nicolás en el PR.** | `components/nav.test.tsx`: «Equipo, en Producto y al final, solo con equipo.miembro.ver (el Mánager lo tiene, el Contador no)», el orden del grupo Producto y el menú móvil del Contador sin Equipo |
+| 5 | El módulo `accesos`: `name` «Accesos» → «Equipo» y `group` `construccion` → `producto`. La ruta y el permiso (`PERMISO_MINIMO.equipo`) no cambian, ni la puerta de ACC-5 | `apps/web/content/modules.ts` (una entrada, con su comentario) | Es lo que mueve el punto 4: el menú sale de `MODULES`. La ruta se queda en `/accesos` porque ACC-5 ya la reservó con su puerta; `/equipo` redirige ahí (`next.config.ts`, permanente) | `content/modules.test.ts`: los módulos de Producto en orden con «Equipo» al final, el del Mánager con `accesos` y el del Contador sin él. `lib/permisos/paginas.test.ts` sigue exigiendo la puerta en `/accesos` |
+| 6 | «Nadie otorga lo que no tiene» en UNA función de core: `permisosQueFaltan(propios, pedidos)` pasa de `equipo.ts` a `permisos.ts`, y `permisosOtorgables` y `puedeAsignarRol` se escriben con ella (misma firma, mismo resultado). `RoleKey` sale de `ROLE_KEYS`, la lista de claves en el orden de la pantalla, que Equipo usa en vez de repetirla | `packages/core/src/permisos.ts` (ACC-1, de Nicolás) | La revisión de la ronda 4 encontró la regla en tres funciones y el orden de los roles escrito a mano en `queries/equipo.ts`. **Pide visto bueno de Nicolás.** | `core/test/permisos.test.ts`: «permisosQueFaltan es la regla, y las otras dos salen de ella» y «ROLE_KEYS es el único orden»; las pruebas de ACC-1 sin tocar |
+| 7 | Leer `invitation` pide `equipo.miembro.ver` (o `equipo.miembro.invitar`): la política `invitation_read` de 0034 la dejaba a cualquier miembro | 0080 §1 | Un Editor o un Solo lectura leían los correos invitados (datos personales) desde cualquier consulta futura | `equipo.test.ts` «sin equipo.miembro.ver no se lee ninguna invitación» |
+
+**Visto bueno que se pide en el PR, explícito, a Nicolás:** filas 1
+(`accesos.ts` y `conexiones.ts`), 4 (`nav.tsx`), 5 (`modules.ts`) y 6
+(`permisos.ts`), todas en archivos suyos. Las filas 2, 3 y 7 son
+esquema nuevo de ACC-4 (0079 y 0080) y van con la revisión normal.
+Mientras no llegue, ACC-4 figura en el backlog como «hecha, pendiente
+del visto bueno de Nicolás».
+
+Lo que ACC-4 **no** toca: los disparadores `role_fits_workspace` de
+0034 §5 (membership, invitation y workspace_grant). La ronda 2 los
+reemplazaba en 0079 por una copia con otro mensaje; la ronda 3 lo
+deshizo antes de aplicarse y la regla sigue siendo la de 0034.
+
+Queda para ACC-6/7: la regla del subconjunto («solo se da un alcance
+contenido en el propio»), la copia de `invitation.scope` al aceptar y
+la pantalla que escribe el alcance (§5.6). Cuando existan, quien está
+acotado podrá volver a invitar dentro de lo suyo: es cambiar la línea
+`AND NOT session_has_scope()` de `session_can_grant()` por la
+comprobación del subconjunto.
+
 ## 8. Fuera de alcance, con su historia
 
 | Qué | Por qué | Historia |

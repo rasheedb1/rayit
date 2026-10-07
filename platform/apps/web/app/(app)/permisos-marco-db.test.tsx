@@ -33,6 +33,7 @@ import CampanasLayout from "./campanas/layout";
 import FinanzasLayout from "./finanzas/layout";
 import FlujoPage from "./finanzas/flujo/page";
 import { editarCampana } from "./campanas/[id]/actions";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 /** Laura Méndez, dueña del espacio del seed (db/seed/0002). */
 const LAURA = "00000002-0000-4000-8000-000000000002";
@@ -75,7 +76,7 @@ beforeAll(async () => {
   expect(await getDbMode()).toBe("embedded");
   await alta(CONTADORA, "contadora@ejemplo.test", "finance");
   await alta(MANAGER, "manager@ejemplo.test", "manager");
-}, 300_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();
@@ -100,33 +101,33 @@ async function menu(): Promise<string[]> {
 }
 
 describe("modo demo contra el seed, con los roles de 0034", () => {
-  test("sin DEMO_USER_ID: el Dueño; los seis módulos y los layouts pasan", async () => {
+  test("sin DEMO_USER_ID: el Dueño; los seis módulos, Equipo y los layouts pasan", async () => {
     delete process.env.DEMO_USER_ID;
-    expect(await menu()).toEqual(["resumen", "ventas", "cotizar", "campanas", "finanzas", "conexiones"]);
+    expect(await menu()).toEqual(["resumen", "ventas", "cotizar", "campanas", "finanzas", "conexiones", "accesos"]);
     expect(await digestDe(() => CampanasLayout({ children }))).toBeUndefined();
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("la dueña del seed, por su membresía real: todo pasa", async () => {
     process.env.DEMO_USER_ID = LAURA;
-    expect(await menu()).toHaveLength(6);
+    expect(await menu()).toHaveLength(7);
     expect(await digestDe(() => CampanasLayout({ children }))).toBeUndefined();
     expect(await digestDe(() => FinanzasLayout({ children }))).toBeUndefined();
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("Contador: /campanas responde 404 y no aparece en el menú; /finanzas sí (terminado cuando)", async () => {
     process.env.DEMO_USER_ID = CONTADORA;
     expect(await menu()).toEqual(["finanzas"]);
     expect(await digestDe(() => CampanasLayout({ children }))).toBe(NO_ENCONTRADO);
     expect(await digestDe(() => FinanzasLayout({ children }))).toBeUndefined();
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("Mánager: /campanas pasa; /finanzas y /finanzas/flujo responden 404", async () => {
     process.env.DEMO_USER_ID = MANAGER;
-    expect(await menu()).toEqual(["resumen", "ventas", "cotizar", "campanas", "conexiones"]);
+    expect(await menu()).toEqual(["resumen", "ventas", "cotizar", "campanas", "conexiones", "accesos"]);
     expect(await digestDe(() => CampanasLayout({ children }))).toBeUndefined();
     expect(await digestDe(() => FinanzasLayout({ children }))).toBe(NO_ENCONTRADO);
     expect(await digestDe(() => FlujoPage())).toBe(NO_ENCONTRADO);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("una Server Action de Campañas con el Contador: SinPermisoError y la campaña no cambia", async () => {
     process.env.DEMO_USER_ID = CONTADORA;
@@ -137,12 +138,12 @@ describe("modo demo contra el seed, con los roles de 0034", () => {
     await expect(editarCampana({}, f)).rejects.toBeInstanceOf(SinPermisoError);
     const despues = await withWorkspace((tx) => tx.query<{ name: string }>("SELECT name FROM campaign WHERE id = $1", [CAMPAIGN_CAFE_ALMA]));
     expect(despues.rows[0]?.name).toBe(antes.rows[0]?.name);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 
   test("alguien que no es miembro: ningún módulo y todo 404", async () => {
     process.env.DEMO_USER_ID = NADIE;
     expect(await menu()).toEqual([]);
     expect(await digestDe(() => CampanasLayout({ children }))).toBe(NO_ENCONTRADO);
     expect(await digestDe(() => FinanzasLayout({ children }))).toBe(NO_ENCONTRADO);
-  }, 120_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });

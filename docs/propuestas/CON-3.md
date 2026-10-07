@@ -284,6 +284,15 @@ apps/worker/
 
 ---
 
+> **Nota del 5-oct-2026 (prueba en vivo).** Instagram Login quedó probado
+> en producción con @nicolasduartea. La decisión de mandar el token en la
+> cabecera `Authorization` para `graph.instagram.com/access_token`
+> (`ig_exchange_token`) y `refresh_access_token` no era viable: Meta
+> responde `100 · The parameter access_token is required` con un token
+> real. Las dos llamadas lo mandan como parámetro y lo declaran en
+> `secrets`, así que el log de llamadas y el fetch grabado lo redactan
+> igual. El intercambio del `code` y `/me` sí aceptan la cabecera.
+
 ## 1. La migración `0015_connection_secret.sql` (para revisar y aplicar)
 
 Está en `db/migrations/0015_connection_secret.sql`, pasa `make db.check`

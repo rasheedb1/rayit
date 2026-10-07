@@ -255,7 +255,7 @@ test('un token rechazado deja la cuenta en needs_reauth con su notificación, y 
     assert.equal(aviso.rows.length, 1);
     assert.equal(aviso.rows[0]!.kind, 'connection_error');
     assert.equal(aviso.rows[0]!.severity, 'critical');
-    assert.match(aviso.rows[0]!.title_es, /Vuelve a conectar tu cuenta de TikTok/);
+    assert.match(aviso.rows[0]!.title_es, /TikTok dejó de darnos las cifras de/);
     assert.equal(aviso.rows[0]!.action_url, '/conexiones');
     assert.equal(aviso.rows[0]!.entity_id, conn);
 

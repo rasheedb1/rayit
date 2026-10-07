@@ -11,6 +11,7 @@ import { Frescura, FrescuraEsqueleto } from "../frescura";
 import { Graficos, GraficosEsqueleto } from "../graficos";
 import { Kpis, KpisEsqueleto } from "../kpis";
 import { MESSAGES } from "../messages";
+import { LoQueImporta, LoQueImportaEsqueleto } from "../semana";
 import { parseFiltro } from "../_lib/filtro";
 
 export const metadata: Metadata = { title: MESSAGES.page.metaTitle };
@@ -82,6 +83,13 @@ export default async function ResumenPage({
           </Link>
         </div>
       )}
+
+      {/* Lo que importa esta semana (RES-3) va antes de todo y no depende de
+          las conexiones: un cobro vencido importa aunque no haya cuentas.
+          Su propio Suspense: la cabecera no espera a esta consulta. */}
+      <Suspense fallback={<LoQueImportaEsqueleto />}>
+        <LoQueImporta />
+      </Suspense>
 
       {cobertura.connections === 0 ? (
         <SinConexiones />

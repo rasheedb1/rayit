@@ -152,10 +152,14 @@ export const MODULES: readonly ModuleDef[] = [
     paths: ["packages/db/src/client.ts (Rasheed)", "apps/web/components/ui/ (Nicolás)", "db/seed/ (por archivo)"],
   },
   {
+    // La ruta sigue siendo /accesos (la fijó ACC-5 con su puerta y su
+    // permiso); lo que ve el creador es «Equipo», en Producto, desde que
+    // ACC-4 la convirtió en la pantalla real. Va al final del grupo: es
+    // configuración del espacio, no trabajo de todos los días.
     slug: "accesos",
     permission: PERMISO_MINIMO.equipo,
-    name: "Accesos",
-    group: "construccion",
+    name: "Equipo",
+    group: "producto",
     phase: 1,
     summary: "Una cuenta, varias personas, y cada una con lo suyo.",
     purpose:

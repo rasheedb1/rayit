@@ -27,9 +27,9 @@ describe("SideNav", () => {
     expect(screen.getByRole("link", { name: /Laboratorio de video/ })).toHaveAttribute("href", "/laboratorio");
   });
 
-  it("los seis módulos del MVP, en este orden", () => {
+  it("los seis módulos del MVP y Equipo al final, en este orden", () => {
     render(<SideNav flags={allOff} permisos={todo} />);
-    expect(productLinks()).toEqual(["/resumen", "/ventas", "/cotizar", "/campanas", "/finanzas", "/conexiones"]);
+    expect(productLinks()).toEqual(["/resumen", "/ventas", "/cotizar", "/campanas", "/finanzas", "/conexiones", "/accesos"]);
   });
 
   it("marca el módulo activo por ruta con aria-current", () => {
@@ -58,13 +58,15 @@ describe("SideNav con permisos (ACC-5)", () => {
     expect(screen.getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/");
   });
 
-  it("Accesos solo con equipo.miembro.ver (el Mánager lo tiene, el Contador no); Plan, Cimientos y Reglas siempre", () => {
+  it("Equipo, en Producto y al final, solo con equipo.miembro.ver (el Mánager lo tiene, el Contador no); Plan, Cimientos y Reglas siempre", () => {
     const { unmount } = render(<SideNav flags={allOff} permisos={contador} />);
-    expect(screen.queryByRole("link", { name: "Accesos" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Equipo" })).not.toBeInTheDocument();
     for (const name of ["Plan", "Cimientos", "Reglas"]) expect(screen.getByRole("link", { name })).toBeInTheDocument();
     unmount();
     render(<SideNav flags={allOff} permisos={[...permisosDeRol("creator", "manager")]} />);
-    expect(screen.getByRole("link", { name: "Accesos" })).toHaveAttribute("href", "/accesos");
+    expect(screen.getByRole("link", { name: "Equipo" })).toHaveAttribute("href", "/accesos");
+    expect(productLinks().at(-1)).toBe("/accesos");
+    expect(screen.queryByRole("link", { name: "Accesos" })).not.toBeInTheDocument();
   });
 
   it("una bandera apagada gana aunque el permiso esté", () => {
@@ -74,7 +76,7 @@ describe("SideNav con permisos (ACC-5)", () => {
 });
 
 describe("MobileNav", () => {
-  it("con Contador: Plan, Finanzas y las herramientas sin Accesos", () => {
+  it("con Contador: Plan, Finanzas y las herramientas, sin Equipo", () => {
     render(<MobileNav flags={allOff} permisos={contador} />);
     const hrefs = screen.getAllByRole("link").map((a) => a.getAttribute("href"));
     expect(hrefs).toEqual(["/", "/finanzas", "/cimientos", "/reglas"]);

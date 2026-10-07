@@ -24,7 +24,7 @@ import { allJobs } from '../src/jobs/index.ts';
 import { defineJob, JobRegistry } from '../src/runner/registry.ts';
 import { chainedAfter, CHAIN_SOURCE } from '../src/runner/run.ts';
 import type { PgliteDatabase } from '../src/runner/db-pglite.ts';
-import { applyRepoSeeds, jobRuns, seedTestDefinitions, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
+import { applyRepoSeeds, DESCRIBE_DB_TIMEOUT, jobRuns, SETUP_TIMEOUT, seedTestDefinitions, startHarness, waitFor, type Harness, type JobRunRow } from './helpers/harness.ts';
 
 const noop = async () => ({ processed: 0, failed: 0 });
 
@@ -72,7 +72,7 @@ describe('encadenamiento en el registro', () => {
 // 2 · CON-5 → CON-6, con el recolector de verdad
 // ---------------------------------------------------------------------
 
-describe('CON-5 → CON-6: tras collect.post_metrics, la línea base y el puntaje', () => {
+describe('CON-5 → CON-6: tras collect.post_metrics, la línea base y el puntaje', DESCRIBE_DB_TIMEOUT, () => {
   const W = '00000031-0000-4000-8000-000000000001';
   const C = '00000031-0000-4000-8000-000000000011';
   const ENV = { INSTAGRAM_HOUSE_TOKEN: 'IGAA-costura-SECRETO', GOOGLE_API_KEY: 'AIza-costura-SECRETO' };
@@ -119,7 +119,7 @@ describe('CON-5 → CON-6: tras collect.post_metrics, la línea base y el puntaj
         }
       },
     });
-  });
+  }, SETUP_TIMEOUT);
   after(async () => {
     await h.stop();
     guard.restore();
@@ -222,7 +222,7 @@ describe('CON-5 → CON-6: tras collect.post_metrics, la línea base y el puntaj
 // 3 · CON-6 → CAM-5, sobre el seed de la demo
 // ---------------------------------------------------------------------
 
-describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea base de CON-6', () => {
+describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea base de CON-6', DESCRIBE_DB_TIMEOUT, () => {
   const LAURA = '00000002-0000-4000-8000-000000000001';
   const CAFE_ALMA = '00000003-0000-4000-8000-000000ca0001';
   let h: Harness;
@@ -273,7 +273,7 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
         `);
       },
     });
-  });
+  }, SETUP_TIMEOUT);
   after(async () => { await h.stop(); });
 
   test('sin línea base, campaign.compute no inventa el múltiplo y dice que falta', async () => {
@@ -297,7 +297,12 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
     const run = await corrida(h, 'campaign.compute', 2);
     assert.equal(run.status, 'ok', run.error ?? '');
     const r = await resultado();
-    assert.equal(r.views_vs_median, '4.496', 'Café Alma: 4,496× la mediana del creador');
+    // La cifra de la demo el día de las pruebas: el worker corre con el reloj
+    // anclado al 5-oct (scripts/pruebas/reloj.mjs) y la parrilla del seed se
+    // siembra relativa a ese día, así que la mediana es fija. Sembrada el
+    // 28-sep era 4,496 (packages/db/test/demo-anclada.test.ts): la parrilla
+    // corre con el día y la cifra con ella (CIM-12, @mc/db/test/demo).
+    assert.equal(r.views_vs_median, '4.466', 'Café Alma: 4,466× la mediana del creador');
     assert.ok(!r.missing_inputs.includes('baseline'));
   });
 
@@ -313,11 +318,13 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
         LIMIT 5`,
     );
     const post = (n: string) => `00000002-0000-4000-8000-000000000${n}`;
+    // Las cifras del día de las pruebas (el 5-oct anclado, como arriba). El
+    // 28-sep, d02 iba a 2,469: es el único de los cinco que cambia.
     assert.deepEqual(top.rows.map((r) => [r.post_id, r.views_vs_median, r.outlier_tier, r.is_outlier]), [
       [post('d01'), '5.971', 'breakout', true],
       [post('d06'), '3.710', 'outlier', true],
       [post('d18'), '2.662', 'outlier', true],
-      [post('d02'), '2.469', 'outlier', true],
+      [post('d02'), '2.400', 'outlier', true],
       [post('d28'), '2.359', 'outlier', true],
     ]);
 

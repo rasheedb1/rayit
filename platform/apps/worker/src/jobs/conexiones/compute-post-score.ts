@@ -31,7 +31,7 @@
  * ctx.db corre como mc_worker y se salta RLS: cada lectura y cada
  * escritura llevan workspace_id explícito.
  */
-import { isOutlier, outlierTier, savesPer1k, engagementRate, versusMedian, OUTLIER_TIERS, type AgeCut, type OutlierTier } from '@mc/core';
+import { isOutlier, outlierTier, savesPer1k, engagementRate, versusMedian, videoName, OUTLIER_TIERS, type AgeCut, type OutlierTier } from '@mc/core';
 import { isPlatformId } from '@mc/connectors';
 import { mapLimit } from '../../runner/concurrency.ts';
 import type { Queryable } from '../../runner/db.ts';
@@ -72,9 +72,6 @@ const CORTE_EN_PALABRAS: Record<AgeCut, string> = {
   168: 'a los 7 días',
   720: 'a los 30 días',
 };
-
-/** Cuánto del título o del texto del video cabe en el aviso antes de estorbar. */
-const TITULO_MAX = 60;
 
 interface CandidateRow extends Record<string, unknown> {
   post_id: string;
@@ -187,8 +184,8 @@ export function textoNotificacion(row: CandidateRow, score: ScoreValues, tramo: 
   const red = isPlatformId(row.platform_id) ? PLATFORM_NAMES[row.platform_id] : row.platform_id;
   const cuando = CORTE_EN_PALABRAS[row.cut_hours as AgeCut] ?? `a las ${row.cut_hours} horas`;
   const multiplo = score.viewsVsMedian === null ? '' : `${veces.format(score.viewsVsMedian)}×`;
-  const bruto = (row.title ?? row.caption ?? '').replace(/\s+/g, ' ').trim();
-  const nombre = bruto.length > TITULO_MAX ? `${bruto.slice(0, TITULO_MAX).trimEnd()}…` : bruto;
+  // El mismo nombre que la fila de Resumen (RES-3): título, o el texto si no hay.
+  const nombre = videoName(row.title, row.caption);
   const cual = nombre ? `«${nombre}»` : `Tu video de ${red}`;
 
   const titleEs =

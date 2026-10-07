@@ -22,6 +22,7 @@ vi.mock("next/navigation", () => ({ redirect: (...a: unknown[]) => redirect(...a
 
 import { crearFactura, registrarPago } from "@/app/(app)/finanzas/facturas/actions";
 import { closeDb, getDbMode, withWorkspace } from "./index";
+import { SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 /** Café Alma, vinculada al workspace del seed (0002). */
 const COMPANY_CAFE_ALMA = "00000002-0000-4000-8000-0000000000e1";
@@ -34,7 +35,7 @@ beforeAll(async () => {
   delete process.env.DATABASE_URL;
   delete process.env.DEMO_WORKSPACE_ID;
   expect(await getDbMode()).toBe("embedded");
-}, 120_000);
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await closeDb();

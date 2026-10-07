@@ -32,7 +32,8 @@ scripts/introspect.mjs   drizzle-kit pull sobre PGlite, para curar el esquema
 |---|---|---|
 | Cliente, tipos, esquema y operadores de Drizzle | `@mc/db` | `import { createDbFromEnv, deal, eq, desc, CURRENT_WORKSPACE } from '@mc/db'` |
 | Consultas de un módulo | `@mc/db/queries/<módulo>` | `import { listInvoices } from '@mc/db/queries/finanzas'` |
-| Qué puede hacer la sesión en el workspace actual (ACC-5) | `@mc/db/queries/accesos` | `import { getSessionPermissions } from '@mc/db/queries/accesos'` — las llaves de `membership.role_id → role_permission`, con los dos ids de la transacción; la web las convierte en permisos del catálogo (`apps/web/lib/permisos`) |
+| Qué puede hacer la sesión en el workspace actual (ACC-5) | `@mc/db/queries/accesos` | `import { getSessionPermissions } from '@mc/db/queries/accesos'` — las llaves del rol (`membership.role_id → role_permission`) más las casillas de Equipo (`membership.extra_permissions`), por `session_permission_keys()` (0078), con los dos ids de la transacción; la web las convierte en permisos del catálogo (`apps/web/lib/permisos`) |
+| Equipo: personas, invitaciones, cambiar el rol, quitar y aceptar por enlace (ACC-4) | `@mc/db/queries/equipo` | `import { createInvitation, acceptInvitation } from '@mc/db/queries/equipo'` — el token nace aquí (`newInvitationToken`) y la base solo guarda su SHA-256; aceptar es `invitation_accept()` (0078 §5) en una transacción `withIdentity`; el permiso, «nadie otorga lo que no tiene» (también al revocar), el último dueño, las casillas solo con el Mánager, el rol del tipo del espacio (este, desde 0034 §5), que quien tiene alcance no administra el equipo (`sessionHasScope`, código `scoped`) y el techo de 20 invitaciones por espacio y día (código `rate_limited`), quién lee las invitaciones (`equipo.miembro.ver`) y que el enlace muera si a quien invitó lo degradan o lo quitan los decide la base (0078, 0079 y 0080) y cada escritura deja su fila en `audit_log`; `hasPendingInvitationForSessionEmail` (0079 §1) le dice al primer inicio de sesión que a esa persona la esperan en otro espacio |
 | Salud del worker (WRK) | `@mc/db/queries/worker` | `getWorkerHealth(q)`: última corrida, última buena y fallos desde entonces por cada `job_definition`; `workerDataAsOf(salud)` es «Datos al <fecha>». Recibe cualquier ejecutor de SQL, pero solo sirve como `mc_worker`: las corridas de cron tienen `workspace_id` NULL y `job_run` tiene RLS, así que como `mc_app` sale vacía (docs/propuestas/WRK.md §4) |
 | Construir una base a mano (worker, scripts) | `@mc/db/client` | `import { createPgDb, createPool, type CatalogDb } from '@mc/db/client'` |
 | Base para pruebas | `@mc/db/test/pglite` | `import { openTestDb } from '@mc/db/test/pglite'` |
@@ -613,14 +614,93 @@ pnpm turbo run typecheck lint test --force     # o TURBO_FORCE=1
 El job «calidad» del CI corre siempre con `--force`, que es el único
 sitio donde el verde tiene que ser incuestionable.
 
-Las suites de `@mc/db` y `@mc/worker` levantan PGlite (WASM) y esperan a
-pg-boss con tiempos reales. Corren con `--test-isolation=none` (un solo
-proceso, los archivos en orden) y `--test-timeout=120000`: con el
-aislamiento por proceso, y varias instancias WASM arrancando a la vez,
-el runner cancelaba archivos enteros con «Promise resolution is still
-pending but the event loop has already resolved» en una máquina cargada
-—justo lo que es un runner compartido de CI—. En un solo proceso es
-además más rápido.
+Sin `--force` (`make test`, `pnpm turbo run test`), la caché de las
+pruebas de `@mc/db`, del worker y de los conectores sí tiene en cuenta
+lo que cambia su resultado (`turbo.json`, CIM-12 r5): `MC_RELOJ_DIAS`,
+`MC_RELOJ_ANCLA` y `MC_RELOJ_ANCLA_DIAS` van en el `env` de cada tarea
+(entran en el hash; `globalPassThroughEnv` no entraba, y
+`MC_RELOJ_DIAS=90` repetía el verde de la máquina a +0), y los archivos
+de la raíz que cargan (`scripts/pruebas/**`, `db/lib/**`, migraciones,
+seeds, `packages/db/test/tiempos.ts`) van en sus `inputs`. Lo que no
+entra: `MC_RELOJ_ANCLA=real` mira el día de verdad, que turbo no ve, así
+que una corrida sin ancla se lanza siempre con `--force` (como hace
+`estres-verificar.sh --sin-ancla`, a través de `pnpm verificar`).
+
+Las suites levantan PGlite (WASM) y algunas esperan a pg-boss con
+tiempos reales. Lo que las hace deterministas (CIM-12):
+
+- **El esquema se migra una vez por huella**, no una vez por archivo:
+  `db/lib/foto.mjs` guarda la base migrada en
+  `node_modules/.cache/mc-pglite/` y cada apertura la carga en menos de
+  un segundo. La huella cubre las migraciones, las extensiones, el
+  runner (`aplicar.mjs`), `foto.mjs` y el módulo que prepara la base:
+  cambiar cualquiera da otra foto. El worker y los conectores usan la
+  misma `abrirSuperusuario`; el embebido, la suya con los roles de
+  Supabase. `MC_PGLITE_FOTO=0` lo apaga y `MC_PGLITE_FOTO_DIR` la manda
+  a otra carpeta.
+- **El candado de la foto no deja a nadie esperando a un muerto.** Quien
+  construye escribe su `pid@host` y renueva el mtime cada 2 s. Si muere
+  (Ctrl-C, `kill -9`, el agente que se reinicia), el siguiente ve que el
+  pid ya no existe y la construye él; a los 10 s de espera avisa por
+  stderr con el pid y la ruta del candado. `db/lib/foto.test.mjs` lo
+  prueba con procesos de verdad.
+- **Los seeds se siembran una vez por proceso**, o **una vez por
+  corrida** si está `MC_PGLITE_CORRIDA` (la fija el `globalSetup` de
+  vitest de la web): entonces la foto sembrada va a una carpeta de esa
+  corrida y la cargan todos sus procesos. No se guarda entre corridas
+  porque los seeds cuentan desde `now()` con precisión de horas.
+- **`@mc/db` corre con `--test-isolation=none`**: un solo proceso, y
+  las bases de todos los archivos salen de la misma foto sembrada. Todos
+  los `before` de nivel superior cuelgan de la prueba raíz y arrancan a
+  la vez, antes de la primera prueba; por eso llevan `SETUP_TIMEOUT` de
+  `test/pglite.ts` y ningún número propio.
+- **`@mc/worker` corre un archivo por proceso** (`--test-isolation=process
+  --test-concurrency=1`). Con `none`, los `before` de los cuarenta
+  archivos arrancaban a la vez un worker de pg-boss cada uno, que seguía
+  sondeando su base hasta el final de la suite: las pruebas competían
+  con otros 44 workers vivos en el mismo hilo, un `before` sin techo
+  propio tumbaba las 422 pruebas, y los conteos de llamadas de un
+  archivo se cruzaban con los de otro.
+- **Las pruebas corren en un día fijo, no en el de la máquina.** La
+  demo mezcla fechas relativas a hoy (la parrilla de 0002, las facturas
+  abiertas) con hechos de fecha fija (los posts y lecturas de las
+  campañas, los gastos de septiembre), y muchas pruebas comparan contra
+  ella: con el reloj de la máquina la puerta se ponía roja sola el 7-oct
+  (Fresko cumple 30 días), en noviembre y en diciembre. Los scripts
+  `test` de `@mc/db` y `@mc/worker` y los procesos de vitest de la web
+  cargan `scripts/pruebas/reloj.mjs`, que ancla `Date` —y con él el
+  `now()` de PGlite— al 5-oct-2026 a las 15:00 UTC; el tiempo sigue
+  corriendo desde ahí. `MC_RELOJ_ANCLA=real` lo apaga; con
+  `TEST_DATABASE_URL` (Postgres real) no se ancla.
+- **Las cifras de campañas con fecha fija miran una demo anclada.** La
+  lista con sus views, los posts de Café Alma con su «datos hasta» y el
+  corte de 7 días de Fresko (`test/campanas.test.ts`) y el recálculo del
+  worker (`apps/worker/test/campaign-compute.test.ts`) siembran como si
+  hoy fuera el 28-sep (`createEmbeddedDb({ relojDias: diasHasta(ANCLA_DEMO) })`
+  y `applyRepoSeeds(db, { relojDias })`) y comparan contra ese día: pasan
+  con o sin el ancla de arriba, también contra un Postgres real. Ver
+  «Los relojes de las pruebas», abajo.
+- **Las facturas que crean las pruebas vencen relativo a hoy.**
+  `test/finanzas.test.ts` las crea con `diaDelEspacio(n)` (hoy + n días
+  en la zona del espacio, según el `now()` de la base), no con
+  `'2026-10-21'`: con un vencimiento fijo, desde el 14-oct caían en
+  «vence pronto» y el job contra Postgres real, que no se ancla, se
+  habría puesto rojo solo.
+- **Dos `pnpm verificar` a la vez como mucho en toda la máquina**
+  (`scripts/verificar.sh`): el tercero espera turno y lo dice, como
+  mucho `MC_VERIFICAR_ESPERA_MAX` segundos (1800); después sale con 75,
+  que no es un rojo: no corrió nada y se vuelve a lanzar.
+  Un agente lo lanza en segundo plano y lee el final.
+- **turbo corre con `--continue`.** Sin él, cuando una tarea fallaba
+  turbo mataba a las demás, y node:test informaba las pruebas que le
+  quedaban a `@mc/db` como canceladas con «Promise resolution is still
+  pending but the event loop has already resolved»: el síntoma original
+  de CIM-12 era el rojo de OTRA tarea.
+
+`make verificar.estres N=10 P=2` (o `scripts/estres-verificar.sh --help`)
+corre `pnpm verificar` N veces, de a P a la vez, y cuenta por corrida las
+pruebas fallidas o canceladas, los archivos en FAIL y la carga de la
+máquina.
 
 ## Reglas del proyecto que este paquete impone
 
@@ -739,11 +819,49 @@ además más rápido.
   `before`/`after` redactados; `test/audit-convencion.test.ts` lo exige
   en los archivos de consultas que adoptaron la convención.
 
+## Los relojes de las pruebas
+
+Hay dos días fijos y una regla para elegir. Todo lo de abajo lo hacen
+`scripts/pruebas/reloj.mjs` y `maquina.mjs`, con el mismo reemplazo de
+`Date` (`scripts/pruebas/fecha.mjs`).
+
+| Reloj | Qué es | Quién lo usa | Cómo |
+|---|---|---|---|
+| **El ancla de las pruebas**, `ANCLA_PRUEBAS` = 5-oct-2026 15:00 UTC | `Date` y el `now()` de PGlite empiezan ahí y el tiempo corre | Todas las suites de `@mc/db`, `@mc/worker` y `@mc/web` sobre PGlite | `--import scripts/pruebas/reloj.mjs` en sus scripts `test` y en `vitest.config.ts`; no se pide en cada prueba |
+| **La demo del 28-sep**, `ANCLA_DEMO` (`test/demo.ts`) | Los seeds se siembran como si hoy fuera el 28-sep; el reloj de la prueba no cambia | Las cifras que dependen del día de la siembra, también contra Postgres real: `test/campanas.test.ts` (y su oráculo), `test/demo-anclada.test.ts`, `apps/worker/test/campaign-compute.test.ts` | `createEmbeddedDb({ snapshot: true, relojDias: diasHasta(ANCLA_DEMO) })` o `applyRepoSeeds(db, { relojDias })` |
+| **El reloj de verdad** | Sin ancla | El job «contra-postgres-real» del CI (`TEST_DATABASE_URL` apaga el ancla: el `now()` de un servidor no se mueve) | Lo que se cree con fecha va relativo al `now()` de la base (`diaDelEspacio` de `test/finanzas.test.ts`, `CURRENT_DATE + n` en SQL) |
+
+La regla al escribir una prueba:
+
+- Una fecha que la prueba **crea** (una factura, un gasto, un toque) va
+  relativa al `now()` de la base, nunca escrita a mano en el futuro
+  cercano: así vale con ancla, sin ella y contra Postgres real.
+- Una cifra de la demo que **depende del día de la siembra** (una
+  mediana, un corte de 30 días) se compara contra `ANCLA_DEMO`, o, en
+  `@mc/worker` y `@mc/web` (que corren siempre anclados), contra la
+  cifra literal del 5-oct.
+- Lo demás confía en el ancla.
+
+Qué se comprueba y cómo: `make verificar.estres ANCLA=1` mueve el ancla
+día a día (ninguna prueba depende del día de la semana);
+`DIAS=2,7,30,90`, la máquina (el ancla la tapa); `SIN_ANCLA=1
+FILTRO=@mc/db DIAS=9,60`, lo que verá el job del CI el 14-oct y el
+4-dic. Lo que todavía cae sin ancla, y desde cuándo, está en
+`docs/propuestas/CIM-12.md` («Pendiente»).
+
 ## Los tiempos de las pruebas
 
-Cada archivo de `test/` abre su propia base embebida en su `before`, y
-con 35 migraciones eso cuesta de 84 a 200 s según la carga. `--test-timeout`
-es de 300 s y cada `before` lleva `{ timeout: 600_000 }`: con
-`--test-isolation=none`, un `before` que se pasa **cancela la suite
-entera del paquete** y el informe dice `pass 0, cancelled 704` sin
-señalar quién tardó. Un archivo nuevo necesita el mismo límite.
+Cada archivo de `test/` abre su propia base embebida en su `before`,
+desde la foto (arriba): décimas de segundo, más una siembra por proceso.
+Todos los techos viven en `test/tiempos.ts`, con su medida, y los usan
+también la web (`apps/web/lib/testing/tiempos.ts` los reexporta) y el
+worker (`apps/worker/test/helpers/harness.ts`):
+
+| Constante | Valor | Para qué |
+|---|---|---|
+| `SETUP_TIMEOUT_MS` | 180 s | Cada `before`/`beforeAll` que abre la base: construir la foto y sembrar la demo con la máquina cargada (lo más lento medido, 41 s con carga 77) |
+| `PRUEBA_DB_TIMEOUT_MS` | 60 s | Una prueba que consulta la demo varias veces (lo más lento en el estrés de la r4: 9,2 s en la web, 15,5 s en el worker) |
+| `PRUEBA_SCRIPT_TIMEOUT_MS` | 120 s | El `--test-timeout` de `@mc/db` y del worker (lo más lento en el estrés de la r4: 3,2 s una prueba de `@mc/db`, 15,5 s una del worker); `scripts/pruebas/verificar.test.mjs` comprueba que los `package.json` dicen esto |
+| `DESCRIBE_DB_TIMEOUT_MS` | 240 s | Un `describe` que abre su base en su `before`: node:test le aplica el techo al describe entero, hook incluido |
+
+Un archivo nuevo usa estas constantes, sin un número propio.

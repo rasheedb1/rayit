@@ -17,11 +17,12 @@ import { createEmbeddedDb, type EmbeddedDb } from "@mc/db/embedded";
 import { createOAuthHandlers, OAUTH_COOKIE, type OAuthHandlers } from "./oauth-handlers";
 import { CONSENT_POLICY_VERSION } from "./consent";
 import { SEED_WORKSPACE_ID } from "@/lib/workspace/current";
+import { PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from "@/lib/testing/tiempos";
 
 const NOW = new Date("2026-09-22T10:00:00Z");
 const ORIGIN = "http://localhost:3000";
-// El volcado de R4 recorre todas las tablas del embebido: con la máquina cargada pasa de los 5 s por defecto.
-vi.setConfig({ testTimeout: 120_000 });
+// El volcado de R4 recorre todas las tablas del embebido: el techo de las pruebas con base (lib/testing/tiempos.ts).
+vi.setConfig({ testTimeout: PRUEBA_DB_TIMEOUT_MS });
 const ENV = {
   NODE_ENV: "test",
   APP_URL: ORIGIN,
@@ -65,7 +66,7 @@ function handlersAs(userId: string): OAuthHandlers {
 
 beforeAll(async () => {
   guard = withoutNetwork();
-  db = await createEmbeddedDb({ seeds: true });
+  db = await createEmbeddedDb({ seeds: true, snapshot: true });
   fetch = new FixtureFetch([
     ...(await loadFixtures("tiktok", [["oauth.token", "code.ok"], ["user.info", "ok"]])),
     ...(await loadFixtures("instagram", [["oauth.access_token", "ok"], ["oauth.long_lived", "ok"], ["me", "ok"]])),
@@ -85,7 +86,7 @@ beforeAll(async () => {
     ON CONFLICT DO NOTHING;
     UPDATE membership SET role_id = '${ROLE_MANAGER_CONECTA}' WHERE workspace_id = '${SEED_WORKSPACE_ID}' AND user_id = '${USER_MANAGER}';
   `);
-}, 300_000); // Postgres embebido con las migraciones y los seeds: con la máquina cargada pasa del minuto.
+}, SETUP_TIMEOUT_MS); // Abre la foto de la demo (lib/testing/tiempos.ts): el techo del arranque, no lo que tarda.
 
 afterAll(async () => {
   await db?.close();
@@ -425,7 +426,7 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     const recorded = JSON.stringify(fetch.calls);
     for (const s of SECRETS) expect(recorded).not.toContain(s);
     expect(guard.attempts).toBe(0);
-  }, 60_000);
+  }, PRUEBA_DB_TIMEOUT_MS);
 });
 
 describe("consentimiento delegado (ACC-8): el callback de CON-3 deja la misma evidencia", () => {

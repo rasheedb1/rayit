@@ -298,3 +298,26 @@ export function suggestRate(input: {
     },
   };
 }
+
+/**
+ * Cuánto del título o del texto de un video cabe en un aviso antes de
+ * estorbar. Lo usan el aviso de compute.post_score (CON-6) y la fila de
+ * «Lo que importa esta semana» (RES-3): el mismo video se nombra igual
+ * en la campana y en el Resumen.
+ */
+export const VIDEO_NAME_MAX = 60;
+
+/**
+ * El nombre de un video para una frase: su título, o si no tiene (el
+ * conector de Instagram nunca lo trae y TikTok suele mandarlo vacío) el
+ * texto que lo acompaña, en una sola línea y recortado a
+ * VIDEO_NAME_MAX. `null` cuando no hay ninguno de los dos: quien llama
+ * decide cómo decirlo («Tu video de Instagram»), nunca un relleno entre
+ * comillas.
+ */
+export function videoName(title: string | null | undefined, caption: string | null | undefined): string | null {
+  const limpio = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
+  const bruto = limpio(title) || limpio(caption);
+  if (!bruto) return null;
+  return bruto.length > VIDEO_NAME_MAX ? `${bruto.slice(0, VIDEO_NAME_MAX).trimEnd()}…` : bruto;
+}
