@@ -238,7 +238,15 @@ export async function runDemoPosts(opts: {
  * termine después de la última recolección e imprime job_run.metadata,
  * creator_baseline y post_score.
  */
-export async function runDemoCompute(opts: { db: WorkerDatabase; logger: Logger; workspaceId: string }): Promise<void> {
+export async function runDemoCompute(opts: {
+  db: WorkerDatabase;
+  logger: Logger;
+  workspaceId: string;
+  /** Cuánto tiene que estar quieta job_run para dar la cadena por terminada; 3 s por omisión. */
+  quietoMs?: number;
+  /** Cuánto se espera como mucho; 60 s por omisión. */
+  plazoMs?: number;
+}): Promise<boolean> {
   const { db, logger, workspaceId } = opts;
   // La cadena terminó cuando hay un compute.* después de la última
   // recolección, nada corriendo y ninguna fila nueva en job_run durante
@@ -246,27 +254,33 @@ export async function runDemoCompute(opts: { db: WorkerDatabase; logger: Logger;
   // recolección» no basta: uno encadenado desde la primera ronda puede
   // empezar después, y una línea base que no escribe nada no encadena
   // post_score (no hay qué recalcular).
-  const QUIETO_MS = 3_000;
-  const hasta = Date.now() + 60_000;
+  //
+  // Todo por fecha, no por id: desde 0082 (CIM-11) job_run.id es un uuid
+  // al azar, sin orden, y Postgres no tiene max(uuid). La huella que dice
+  // «algo cambió» es cuántas filas hay y cuántas siguen corriendo.
+  const QUIETO_MS = opts.quietoMs ?? 3_000;
+  const hasta = Date.now() + (opts.plazoMs ?? 60_000);
   let visto = '';
   let quietoDesde = Date.now();
   let terminada = false;
   for (;;) {
-    const ultimos = await db.query<{ ultimo: string | null; collect: string | null; compute: string | null; corriendo: number }>(
-      `SELECT max(id)::text AS ultimo,
-              max(id) FILTER (WHERE job_id = 'collect.post_metrics')::text AS collect,
-              max(id) FILTER (WHERE job_id LIKE 'compute.%')::text AS compute,
+    const ultimos = await db.query<{ collect: Date | string | null; compute: Date | string | null; n: number; corriendo: number }>(
+      `SELECT max(started_at) FILTER (WHERE job_id = 'collect.post_metrics') AS collect,
+              max(started_at) FILTER (WHERE job_id LIKE 'compute.%') AS compute,
+              count(*)::int AS n,
               count(*) FILTER (WHERE status = 'running')::int AS corriendo
          FROM job_run WHERE job_id IN ('collect.post_metrics', 'compute.baseline', 'compute.post_score')`,
     );
     const u = ultimos.rows[0];
-    const huella = `${u?.ultimo ?? ''}/${u?.corriendo ?? 0}`;
+    const huella = `${u?.n ?? 0}/${u?.corriendo ?? 0}`;
     if (huella !== visto) {
       visto = huella;
       quietoDesde = Date.now();
     }
-    const id = (v: string | null | undefined) => BigInt(v ?? '0');
-    terminada = u !== undefined && u.corriendo === 0 && id(u.compute) > id(u.collect) && Date.now() - quietoDesde >= QUIETO_MS;
+    // Un compute.* que empezó después de la última recolección: el runner
+    // lo abre cuando la de arriba ya cerró, con una lectura nueva del reloj.
+    const despues = u?.compute != null && (u.collect == null || new Date(u.compute).getTime() > new Date(u.collect).getTime());
+    terminada = u !== undefined && u.corriendo === 0 && despues && Date.now() - quietoDesde >= QUIETO_MS;
     if (terminada || Date.now() > hasta) break;
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -301,6 +315,7 @@ export async function runDemoCompute(opts: { db: WorkerDatabase; logger: Logger;
     rows: puntajes.rows,
     sinCorteMedido: sinFila.rows[0]?.n ?? 0,
   });
+  return terminada;
 }
 
 export async function runDemo(opts: {
