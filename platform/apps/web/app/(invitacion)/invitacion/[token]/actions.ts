@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { getSessionPermissions } from "@mc/db/queries/accesos";
 import { acceptInvitation, isInvitationToken, type AcceptInvitationResult } from "@mc/db/queries/equipo";
 import { flags } from "@/content/flags";
+import { isAuthConfigured } from "@/lib/auth/config";
 import { cerrarSesionLocal } from "@/lib/auth/salir";
 import { productModules } from "@/content/modules";
 import { withIdentity, withWorkspaceId } from "@/lib/db/cliente";
@@ -13,7 +14,8 @@ import { recordarEspacio } from "@/lib/workspace/elegir";
 import { quienAcepta } from "./quien";
 
 export interface AceptarState {
-  status?: Exclude<AcceptInvitationResult["status"], "ok">;
+  /** Lo que dijo la base, o «demo»: sin llaves de Auth y sin persona simulada no hay quién acepte. */
+  status?: Exclude<AcceptInvitationResult["status"], "ok"> | "demo";
 }
 
 /**
@@ -29,6 +31,9 @@ export interface AceptarState {
  */
 export async function aceptarInvitacion(token: string): Promise<AceptarState> {
   const quien = await quienAcepta();
+  // En la demo /login no lleva a ningún sitio («falta configurar la
+  // autenticación»): se dice aquí, como en la página del enlace.
+  if (!quien && !isAuthConfigured()) return { status: "demo" };
   if (!quien) redirect(`/login?next=${encodeURIComponent(`/invitacion/${token}`)}`);
 
   const r = await withIdentity(quien, (tx) => acceptInvitation(tx, token));
@@ -57,6 +62,9 @@ export async function aceptarInvitacion(token: string): Promise<AceptarState> {
  * `next` libre que sanear, y /login lo vuelve a sanear de todos modos.
  */
 export async function salirYVolver(token: string): Promise<void> {
+  // En la demo no hay sesión que cerrar ni /login al que ir: se queda en
+  // el enlace (la página ya no ofrece este botón sin llaves de Auth).
+  if (!isAuthConfigured()) redirect(isInvitationToken(token) ? `/invitacion/${token}` : "/");
   await cerrarSesionLocal();
   revalidatePath("/", "layout");
   redirect(isInvitationToken(token) ? `/login?next=${encodeURIComponent(`/invitacion/${token}`)}` : "/login");

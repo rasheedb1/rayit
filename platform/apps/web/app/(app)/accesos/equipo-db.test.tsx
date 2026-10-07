@@ -171,6 +171,31 @@ describe("la creadora invita a su mánager (terminado cuando)", () => {
     expect(despues).toContain(CORREO_MANAGER);
   }, PRUEBA_DB_TIMEOUT_MS);
 
+  test("en la demo el enlace se ve pero no se acepta: sin persona simulada, o con una de otro correo, no hay botones que no lleven a nada", async () => {
+    // Sin DEMO_USER_ID: nadie abre el enlace. Antes pedía «Entrar» y
+    // /login decía que faltaba configurar la autenticación.
+    delete process.env.DEMO_USER_ID;
+    const sinNadie = await texto(paginaDelEnlace(token));
+    expect(sinNadie).toContain("Entrarías como Mánager");
+    expect(sinNadie).toContain(MESSAGES.aceptar.demo.titulo);
+    expect(sinNadie).not.toContain(MESSAGES.aceptar.sinSesion.titulo);
+    expect(sinNadie).not.toContain(MESSAGES.aceptar.boton);
+    expect(sinNadie).not.toContain(MESSAGES.aceptar.salir);
+    // Y si alguien manda el formulario igual, la acción lo dice: no manda a /login.
+    expect(await aceptarInvitacion(token)).toEqual({ status: "demo" });
+
+    // La persona de la demo es Laura, no la invitada: ni «Entrar con otra
+    // cuenta» (no hay sesión que cerrar) ni «Aceptar».
+    como(LAURA);
+    const otraPersona = await texto(paginaDelEnlace(token));
+    expect(otraPersona).toContain("Entrarías como Mánager");
+    expect(otraPersona).toContain(MESSAGES.aceptar.demo.texto);
+    expect(otraPersona).not.toContain(MESSAGES.aceptar.salir);
+    expect(otraPersona).not.toContain(MESSAGES.aceptar.boton);
+    // El texto de la invitación recién creada promete solo lo que la demo cumple.
+    expect(MESSAGES.resultado.demo).not.toMatch(/probar/);
+  }, PRUEBA_DB_TIMEOUT_MS);
+
   test("el mánager abre el enlace: ve a qué espacio y con qué rol, y abrirlo no lo gasta", async () => {
     como(MANAGER);
     const pantalla = await texto(paginaDelEnlace(token));
@@ -291,6 +316,13 @@ describe("con sesión de Supabase: el camino de producción (ACC-4 r2)", () => {
     sesion = null;
     const pantalla = await texto(paginaDelEnlace(token));
     expect(pantalla).toContain(MESSAGES.aceptar.sinSesion.titulo);
+  }, PRUEBA_DB_TIMEOUT_MS);
+
+  test("sin sesión, un enlace sin forma de token dice que no es válido, no que hay que entrar", async () => {
+    sesion = null;
+    const pantalla = await texto(paginaDelEnlace("xxxx"));
+    expect(pantalla).toContain(MESSAGES.aceptar.estados.not_found.titulo);
+    expect(pantalla).not.toContain(MESSAGES.aceptar.sinSesion.titulo);
   }, PRUEBA_DB_TIMEOUT_MS);
 
   test("el callback con next al enlace no le crea espacio; el enlace lo reconoce por su sesión; acepta y entra con un solo espacio", async () => {

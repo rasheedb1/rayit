@@ -64,9 +64,14 @@ export const MESSAGES = {
   resultado: {
     titulo: (correo: string) => `Invitación para ${correo}`,
     enviada: "Le enviamos el enlace por correo.",
-    sinCorreo: "El envío de correos no está configurado en este espacio: copia el enlace y mándaselo tú.",
-    /** Modo demo (sin inicio de sesión): no se envía nada aunque haya SMTP, porque nadie firma la invitación. */
-    demo: "En la demo no se envían correos: copia el enlace para probar la invitación.",
+    /** Falta el SMTP de la PLATAFORMA (SMTP_URL, MAIL_FROM): no es un ajuste del espacio y quien invita no lo arregla. */
+    sinCorreo: "On Cue todavía no envía correos desde este servidor: copia el enlace y mándaselo tú.",
+    /**
+     * Modo demo (sin inicio de sesión): no se envía nada aunque haya SMTP,
+     * porque nadie firma la invitación. Y el enlace no se puede aceptar
+     * (no hay cuentas): abrirlo enseña lo que verá la persona invitada.
+     */
+    demo: "En la demo no se envían correos: copia el enlace para ver lo que recibirá esa persona.",
     falloCorreo: "No se pudo enviar el correo: copia el enlace y mándaselo tú.",
     enlace: "Enlace de la invitación",
     soloAhora: "El enlace solo se muestra ahora. Si se pierde, genera uno nuevo desde las invitaciones pendientes.",
@@ -157,7 +162,16 @@ export const MESSAGES = {
         titulo: "Este enlace no es válido",
         texto: "Puede que esté incompleto. Pídele a quien te invitó que te mande uno nuevo.",
       },
-      revoked: { titulo: "Esta invitación se revocó", texto: "Quien te invitó la canceló. Si fue un error, pídele una nueva." },
+      /**
+       * Revocada a mano, reemplazada por «Nuevo enlace» (la anterior se
+       * revoca) o muerta porque quien invitó ya no puede dar ese rol
+       * (0080 §3). El texto sirve para los tres: no culpa a nadie ni
+       * hace pedir algo que puede estar ya en la bandeja.
+       */
+      revoked: {
+        titulo: "Este enlace ya no sirve",
+        texto: "Puede que te hayan mandado uno más nuevo (busca el último correo) o que la invitación se haya cancelado.",
+      },
       used: { titulo: "Este enlace ya se usó", texto: "Cada invitación sirve una sola vez. Si ya eres parte del espacio, entra desde el selector de espacios." },
       expired: { titulo: "Esta invitación venció", texto: textoVencida(INVITACION_VIGENCIA_DIAS) },
       wrong_email: {
@@ -168,6 +182,16 @@ export const MESSAGES = {
         titulo: "Ya eres parte de este espacio",
         texto: "No hace falta aceptar nada: cámbiate a él desde el selector de espacios.",
       },
+    },
+    /**
+     * Modo demo (sin llaves de Auth, como corre hoy la demo pública): no
+     * hay cuentas, así que el enlace se ve pero no se acepta. Va en lugar
+     * del botón de aceptar y de «Entrar con otra cuenta», que en la demo
+     * no llevan a ningún sitio.
+     */
+    demo: {
+      titulo: "En la demo no se puede aceptar",
+      texto: "En la demo no hay cuentas: el enlace muestra lo que verá la persona invitada; aceptarlo pide iniciar sesión con su correo.",
     },
     irAlInicio: "Ir al inicio",
     salir: "Entrar con otra cuenta",

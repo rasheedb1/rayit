@@ -1,5 +1,6 @@
 import "server-only";
 import nodemailer from "nodemailer";
+import type SMTPTransport from "nodemailer/lib/smtp-transport";
 import type { Env } from "@/lib/auth/config";
 
 /**
@@ -74,13 +75,20 @@ export function remitente(env: Env = process.env): string | null {
   return env.NODE_ENV === "production" ? null : REMITENTE_DE_DESARROLLO;
 }
 
+/**
+ * El transporte SMTP de la URL, con los tres techos. Tipado con las
+ * opciones que exporta nodemailer y sin cast: si una versión nueva
+ * cambia connectionTimeout, greetingTimeout o socketTimeout, el
+ * compilador lo dice aquí.
+ */
 function transporteDesde(url: string): TransporteDeCorreo {
-  return nodemailer.createTransport({
+  const opciones: SMTPTransport.Options = {
     url,
     connectionTimeout: TECHO_MS,
     greetingTimeout: TECHO_MS,
     socketTimeout: TECHO_MS,
-  } as Parameters<typeof nodemailer.createTransport>[0]);
+  };
+  return nodemailer.createTransport(opciones);
 }
 
 /**

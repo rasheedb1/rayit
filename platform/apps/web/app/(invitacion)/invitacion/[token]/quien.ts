@@ -18,7 +18,8 @@ import { getIdentidadDeSesion } from "@/lib/workspace/current";
  *
  * En una copia SIN llaves (modo demo) no hay sesión posible; la persona
  * simulada es DEMO_USER_ID, como en lib/permisos/sesion.ts, y sin ella
- * no hay nadie que acepte. Con llaves, DEMO_USER_ID no existe para este
+ * no hay nadie que acepte: la página lee el enlace sin sesión y dice que
+ * en la demo no se acepta. Con llaves, DEMO_USER_ID no existe para este
  * archivo.
  */
 export async function quienAcepta(): Promise<(Identity & { userId: string }) | null> {

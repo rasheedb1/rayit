@@ -15,12 +15,13 @@ const t = MESSAGES.aceptar;
  */
 export function AceptarInvitacion({ token }: { token: string }) {
   const [estado, accion, enviando] = useActionState<AceptarState, FormData>(() => aceptarInvitacion(token), {});
+  const aviso = estado.status === "demo" ? t.demo : estado.status ? t.estados[estado.status] : null;
   return (
     <form action={accion} className="grid gap-3">
-      {estado.status && (
+      {aviso && (
         <div role="alert" className="rounded-md border border-bad/40 bg-bad-wash px-3 py-2 text-sm text-ink">
-          <p className="font-medium">{t.estados[estado.status].titulo}</p>
-          <p className="text-ink-2">{t.estados[estado.status].texto}</p>
+          <p className="font-medium">{aviso.titulo}</p>
+          <p className="text-ink-2">{aviso.texto}</p>
         </div>
       )}
       <div>
