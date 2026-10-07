@@ -500,12 +500,19 @@ Las reglas, y por qué:
   tiene filas de alcance por creador: lo mismo en `scopeFilter()`, en la
   política y en `session_has_scope()` (Equipo). Dueño y Administrador ven
   todo porque la base no les deja tener alcance (disparador
-  `membership_full_role_unscoped`, 0082 §2), no por una excepción.
-- **La guardia** exige las cuatro políticas con su forma, que toda tabla
+  `membership_full_role_unscoped`, 0082 §2), no por una excepción. «Es
+  Dueño o Administrador» está escrito una vez, `role_is_full_access(role_id)`:
+  lo preguntan el disparador, la comprobación previa de 0082 y Equipo.
+- **La guardia** exige las cuatro políticas con su forma y **TO mc_app y
+  nadie más** (TO PUBLIC también acotaría a la web, pero rompe los enlaces
+  públicos: `mc_public_share` no puede leer el alcance), que toda tabla
   con `creator_id` esté en `TABLAS_CON_ALCANCE_POR_CREADOR` o en
   `TABLAS_CON_CREADOR_SIN_POLITICA` con su motivo, y que los cuerpos de
-  `session_sees_all_creators()`, `scope_allows()` y del disparador sean
-  los de su migración (`CUERPOS_DEL_ALCANCE`, md5).
+  las funciones de la red sean los de su migración (`CUERPOS_DEL_ALCANCE`,
+  md5): `session_sees_all_creators()`, `scope_allows()`, el disparador,
+  `role_is_full_access()`, las dos listas de creadores y las tres SECURITY
+  DEFINER que responden sí o no (`public_account_out_of_scope`,
+  `open_deal_out_of_scope`, `deal_creator_locked`).
 - **Lo que esa política esconde y el código necesita saber.** Antes se
   buscaba «la fila ya existe, pero fuera de tu alcance» sin filtro; ahora
   la base no la enseña. Si quien lo sabe es un índice único, la escritura
@@ -520,20 +527,28 @@ Las reglas, y por qué:
   (`listDealCreatorOptions`, con `seesAll` en su propia consulta), las
   altas (`creatorForNewDeal`: el único, `null` «sin creador» para quien
   ve a todos, `DealCreatorRequired` o `NoCreatorInScope` para quien está
-  acotado) y, por `sole_creator_for_session(ws)`, el worker y la bandeja
-  (`soleCreatorFor(tx, workspaceId)`, con el espacio como parámetro: no
-  se interpola SQL). Desde la bandeja, quien está acotado a varios
-  creadores marca «Me interesa» sin que se abra el negocio
-  (`dealNeedsCreator`), y no toca el negocio de otro creador
-  (`out_of_scope`, con `open_deal_out_of_scope()`, 0082 §6, que solo dice
-  sí o no). El creador de un negocio se cambia con
-  `setDealCreator(tx, dealId, creatorId | null)`, que deja bitácora
-  (`deal.creator_changed`). Prueba: `test/alcance-rls.test.ts`.
+  acotado). El negocio que abre una respuesta de outreach es del creador
+  de la cuenta que la envió, o del brief de su cadencia
+  (`originCreatorOf`); sin creador de origen, del de
+  `sole_creator_for_session(ws)` (`soleCreatorFor(tx, workspaceId)`, con
+  el espacio como parámetro: no se interpola SQL). Desde la bandeja, quien
+  está acotado y no tiene de quién abrirlo marca «Me interesa» sin que se
+  abra el negocio (`dealNeedsCreator`: `'pick'` si lleva a varios,
+  `'none'` si solo a creadores dados de baja), y no toca el negocio de
+  otro creador ni abre uno a nombre de otro (`out_of_scope`, con
+  `open_deal_out_of_scope()`, 0082 §6, que solo dice sí o no). El creador
+  de un negocio se cambia con `setDealCreator(tx, dealId, creatorId |
+  null)`, que deja bitácora (`deal.creator_changed`) y no parte un acuerdo
+  cuya cotización enviada o campaña viva es de otro creador
+  (`DealCreatorLocked`, `deal_creator_locked()`, 0082 §7). Prueba:
+  `test/alcance-rls.test.ts`.
 - **Los negocios y campañas de antes** sin creador pasan, en 0082 §5, al
   único creador vivo de su espacio cuando hay uno solo (sin tocar
   `updated_at`); con varios quedan «sin creador» y la ficha lo dice.
 - **Los errores de Postgres** se reconocen por código y restricción con
-  `findPgError()` (`src/pg-error.ts`), que recorre la cadena `cause`; un
+  `findPgError()` (`src/pg-error.ts`), sobre `findInCauseChain()`: el
+  único sitio de @mc/db y de la web que busca un error de Postgres en la
+  cadena `cause`; un
   predicado opcional cubre lo que Postgres solo pone en el mensaje (el
   nombre de la política, `scopeErrorOf()`). En Equipo,
   `isFullRoleUnscopedError()` y el código `scoped_member` de

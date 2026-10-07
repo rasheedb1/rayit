@@ -3,10 +3,10 @@
  *
  * node-postgres lanza el error de Postgres tal cual, pero Drizzle y
  * PGlite lo envuelven en otro y lo dejan en `cause`. Todo lo que en
- * @mc/db (y en la web) reconoce un error de Postgres (23505, 23514,
- * 42501…) recorre la cadena aquí: `findInCauseChain` es el único
- * recorrido de `cause`, y `findPgError` la pregunta de siempre encima
- * de él: por su código y el nombre de su restricción, nunca por el texto
+ * @mc/db (y en la web) busca un error de Postgres (23505, 23514,
+ * 42501…) recorre la cadena aquí: `findInCauseChain` es el recorrido, y
+ * `findPgError` la pregunta de siempre encima de él: por su código y el
+ * nombre de su restricción, nunca por el texto
  * del mensaje, que depende del idioma del servidor. La única excepción
  * es la que Postgres no deja en ningún campo —qué política rechazó una
  * fila—, y para eso está `matches` (scopeErrorOf).
