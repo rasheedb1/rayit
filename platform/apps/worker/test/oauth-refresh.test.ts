@@ -169,7 +169,7 @@ test('5 · renueva la que vence pronto, deja intacta la lejana y marca needs_rea
 
   // api_call_log: una fila por llamada real (near, other, revoked, flaky), sin cuerpo
   const calls = await h.db.query<{ connection_id: string; endpoint: string; http_status: number; ok: boolean; error_code: string | null; duration_ms: number; rate_limited: boolean }>(
-    `SELECT connection_id, endpoint, http_status, ok, error_code, duration_ms, rate_limited FROM api_call_log ORDER BY called_at`,
+    `SELECT connection_id, endpoint, http_status, ok, error_code, duration_ms, rate_limited FROM api_call_log ORDER BY called_at, endpoint, connection_id`,
   );
   assert.equal(calls.rows.length, 4);
   assert.ok(calls.rows.every((c) => c.endpoint === 'oauth.refresh' && typeof c.duration_ms === 'number'));

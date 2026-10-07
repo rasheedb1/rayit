@@ -99,7 +99,7 @@ async function snapshots(db: PgliteDatabase): Promise<SnapRow[]> {
 }
 
 async function calls(db: PgliteDatabase): Promise<string[]> {
-  const { rows } = await db.query<{ endpoint: string }>('SELECT endpoint FROM api_call_log ORDER BY called_at');
+  const { rows } = await db.query<{ endpoint: string }>('SELECT endpoint FROM api_call_log ORDER BY called_at, endpoint');
   return rows.map((r) => r.endpoint);
 }
 

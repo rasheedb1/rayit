@@ -330,8 +330,8 @@ export const outboundPolicy = pgTable('outbound_policy', {
   enabled: boolean('enabled').default(false).notNull(),
   disabledReason: text('disabled_reason'),
   disabledAt: timestamptz('disabled_at'),
-  /** Presupuesto diario del juez y el generador, en dólares. */
-  llmDailyCapUsd: numeric('llm_daily_cap_usd', { precision: 14, scale: 2 }).default('5.00').notNull(),
+  /** Presupuesto diario del juez y el generador, en dólares. El DEFAULT es la función de 0046 §6.1, la misma del candado y de outbound_health. */
+  llmDailyCapUsd: numeric('llm_daily_cap_usd', { precision: 14, scale: 2 }).default(sql`outreach_default_llm_daily_cap()`).notNull(),
   warmupDays: integer('warmup_days').default(14).notNull(),
   /** Dirección postal del pie de baja (CAN-SPAM). */
   postalAddress: text('postal_address'),

@@ -2672,8 +2672,8 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     if (clave in UNICOS_GLOBALES_DECLARADOS) continue;
     const columnas = u.columnas ?? [];
     const propias = inquilinoPorTabla.get(u.tabla) ?? [];
-    // La clave primaria sustituta de la fila (uuid al azar o bigserial):
-    // la genera la base, no lleva dato, y chocar con ella solo dice que
+    // La clave primaria sustituta de la fila (uuid al azar; desde 0082
+    // ninguna de secuencia donde llega mc_app, clavesDeSecuencia): la genera la base, no lleva dato, y chocar con ella solo dice que
     // ese id existe, que es lo que ya sabe quien lo escribe.
     const sustituta = u.primaria && u.generada;
     // La columna de inquilino, en las columnas o en una expresión.

@@ -1,6 +1,6 @@
 /**
- * Leer la bitácora en las pruebas (ACC-2). Nunca pide el id: es un
- * bigserial que no sale de la base (CIM-2 §3).
+ * Leer la bitácora en las pruebas (ACC-2). Nunca pide el id: desde 0082
+ * es un uuid al azar, y no sale de la base.
  */
 import type { TestDb } from './pglite.ts';
 

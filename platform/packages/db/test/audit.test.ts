@@ -69,7 +69,7 @@ describe('la fila va en la misma transacción que la escritura', () => {
     assert.deepEqual(await filas(WORKSPACE_LAURA, 'invoice.voided'), []);
   });
 
-  test('audit() no devuelve nada: el id bigserial no sale de la base', async () => {
+  test('audit() no devuelve nada: el id no sale de la base', async () => {
     const out = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) =>
       audit(tx, { action: 'invoice.sent', entityType: 'invoice', entityId: INVOICE_ID, before: { status: 'draft' }, after: { status: 'sent' } }),
     );
@@ -130,6 +130,8 @@ describe('el actor sale de la base, no de un parámetro', () => {
     await assert.rejects(t.db.asWorker((tx) => auditAsJob(tx, { ...base, workspaceId: 'laura', job: { id: 'x', runId: RUN_ID } })), /UUID/);
     await assert.rejects(t.db.asWorker((tx) => auditAsJob(tx, { ...base, workspaceId: WORKSPACE_LAURA, job: { id: '', runId: RUN_ID } })), /job\.id/);
     await assert.rejects(t.db.asWorker((tx) => auditAsJob(tx, { ...base, workspaceId: WORKSPACE_LAURA, job: { id: 'x', runId: '42' } })), /runId/, 'el número de antes ya no es una corrida');
+    await assert.rejects(t.db.asWorker((tx) => auditAsJob(tx, { ...base, workspaceId: WORKSPACE_LAURA, job: { id: 'x', runId: '' } })), /runId/, 'la cadena vacía no es una corrida');
+    await assert.rejects(t.db.asWorker((tx) => auditAsJob(tx, { ...base, workspaceId: WORKSPACE_LAURA, job: { id: 'x', runId: `${RUN_ID}x` } })), /runId/, 'un uuid con algo detrás tampoco');
   });
 });
 

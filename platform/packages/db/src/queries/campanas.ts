@@ -2002,7 +2002,7 @@ export type BrandSnapshotOutcome = 'guardada' | 'ya_hay_lectura_de_hoy';
  * no duplica ni corrige (ON CONFLICT DO NOTHING). Así, una marca «no
  * encontrada» a las 07:00 cuyo handle se corrige a mediodía tiene su
  * cifra ese mismo día, sin borrar la lectura de la mañana. El id
- * bigserial no sale de aquí (CIM-2 §3). Desde la web, RLS exige que la
+ * (uuid al azar desde 0082) no sale de aquí. Desde la web, RLS exige que la
  * campaña se vea y que company_id sea el suyo; el worker filtra por
  * workspace antes de llamar.
  *

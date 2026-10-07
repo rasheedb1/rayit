@@ -686,7 +686,7 @@ describe('lo que aporta la marca', () => {
     )).then((r) => r.rows);
   const bitacora = (action: string) =>
     laura((tx) => tx.query<{ entity_type: string; entity_id: string; actor_user_id: string | null; after: Record<string, unknown> }>(
-      `SELECT entity_type, entity_id, actor_user_id, after FROM audit_log WHERE action = $1 ORDER BY created_at, id`,
+      `SELECT entity_type, entity_id, actor_user_id, after FROM audit_log WHERE action = $1 ORDER BY created_at`,
       [action],
     )).then((r) => r.rows);
 

@@ -343,7 +343,7 @@ export async function runDemo(opts: {
       );
       const notes = await db.query(`SELECT kind, severity, title_es FROM notification ORDER BY created_at`);
       const calls = await db.query(
-        `SELECT connection_id, platform_id, endpoint, http_status, ok, error_code, duration_ms, rate_limited FROM api_call_log ORDER BY called_at`,
+        `SELECT connection_id, platform_id, endpoint, http_status, ok, error_code, duration_ms, rate_limited FROM api_call_log ORDER BY called_at, endpoint, connection_id`,
       );
       logger.info('demo: job_run', { rows: runs.rows });
       logger.info('demo: social_connection', { rows: conns.rows });

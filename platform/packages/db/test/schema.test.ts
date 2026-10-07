@@ -18,8 +18,8 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getTableColumns, getTableName, getViewName, getViewSelectedFields, is } from 'drizzle-orm';
-import { PgColumn, PgTable, PgView } from 'drizzle-orm/pg-core';
+import { getTableColumns, getTableName, getViewName, getViewSelectedFields, is, SQL } from 'drizzle-orm';
+import { PgColumn, PgDialect, PgTable, PgView } from 'drizzle-orm/pg-core';
 import {
   APP_ROLE, estadoDelEsquema, EXCEPCIONES_SIN_AISLAMIENTO, explicarEsquema, PRIVILEGIOS, PRIVILEGIOS_DE_LA_APP,
   type EstadoDelEsquema,
@@ -97,6 +97,18 @@ function dbType(c: ColumnRow): string {
 function drizzleType(col: PgColumn): string {
   const t = col.getSQLType();
   return t === 'bigserial' ? 'bigint' : t;
+}
+
+const DIALECTO = new PgDialect();
+
+/**
+ * El DEFAULT de Drizzle como SQL, si es una expresión (defaultNow(),
+ * defaultRandom(), .default(sql`…`)); null si es un valor. Para comparar
+ * con la base las funciones sin argumentos: now() y clock_timestamp() no
+ * son lo mismo (CIM-11, 0082 §3: el orden de los registros es el del reloj).
+ */
+function drizzleDefaultFn(col: PgColumn): string | null {
+  return is(col.default, SQL) ? DIALECTO.sqlToQuery(col.default).sql : null;
 }
 
 let t: TestDb;
@@ -215,6 +227,10 @@ describe('el esquema Drizzle coincide con db/migrations', () => {
         assert.equal(drizzleType(col), dbType(c), `${name}.${col.name}: tipo`);
         assert.equal(col.notNull, c.is_nullable === 'NO', `${name}.${col.name}: NOT NULL`);
         assert.equal(col.hasDefault, c.column_default !== null, `${name}.${col.name}: DEFAULT`);
+        // Una función sin argumentos (now(), clock_timestamp(), gen_random_uuid()…): la misma en los dos lados.
+        if (c.column_default !== null && /^[a-z_]+\(\)$/.test(c.column_default)) {
+          assert.equal(drizzleDefaultFn(col), c.column_default, `${name}.${col.name}: la expresión del DEFAULT`);
+        }
       }
       const undeclared = [...inDb.keys()].filter((c) => !declared.has(c));
       assert.deepEqual(undeclared, [], `${name}: columnas de la base que faltan en el esquema`);
