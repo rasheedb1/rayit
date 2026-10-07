@@ -1,11 +1,13 @@
 -- =====================================================================
--- 0082 · Ninguna fila que mc_app lea lleva un contador global (CIM-11)
+-- 0078 · Ninguna fila que mc_app lea lleva un contador global (CIM-11)
 -- ---------------------------------------------------------------------
--- Número: 0082. La serie de esta rama acaba en 0077, pero
--- rasheed/integracion ya tiene 0078–0081 (ACC-4 y RES-3); se toma la
--- siguiente libre para no chocar. Si otra pieza en paralelo eligió el
--- mismo número, el integrador renumera: nada aquí depende del número.
--- No está aplicada en ningún sitio.
+-- Número: 0078, la siguiente libre de esta serie (la prueba de
+-- db/migrations no admite huecos). rasheed/integracion ya tiene
+-- 0078–0081 (ACC-4 y RES-3): al integrar, esta pasa detrás de la última
+-- y se renumeran también sus menciones («0078» en esquema.ts, las
+-- pruebas, el README de @mc/db y los documentos). La prueba de la
+-- conversión la busca por el nombre, no por el número. No está aplicada
+-- en ningún sitio.
 --
 -- El hallazgo (0026 §4, docs/propuestas/CIM-2.md §3). Quince tablas
 -- tenían `id bigserial`: una secuencia de la tabla ENTERA, no de un
@@ -53,14 +55,14 @@
 --       El id era lo único que ordenaba dos llamadas, dos entradas de
 --       bitácora o dos corridas de la MISMA transacción (now() es el
 --       mismo para todas). Sin contador, el orden es la fecha, y la
---       fecha tiene que distinguirlas (como notification_ack en 0081).
+--       fecha tiene que distinguirlas (como notification_ack, de RES-3).
 --   4 · Una comprobación al final: si queda una columna con DEFAULT
 --       nextval(…) o identity en una tabla de `public` donde mc_app
 --       lee o escribe, la migración falla. La guardia de
 --       packages/db/src/esquema.ts lo vigila después (clavesDeSecuencia).
 --
 -- Bloqueos. ALTER TABLE … TYPE toma ACCESS EXCLUSIVE y reescribe la
--- tabla. En Supabase (5-oct-2026) la mayor es job_run, ~10.000 filas:
+-- tabla. En Supabase (7-oct-2026) la mayor es job_run, ~10.000 filas:
 -- milisegundos. lock_timeout corta si una transacción larga (un turno
 -- del worker) tiene la tabla: se reintenta con el worker en pausa.
 --

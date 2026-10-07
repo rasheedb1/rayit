@@ -1002,7 +1002,7 @@ VEN-10), un comando por paso, desde `platform/`, con
    `membership_is_team` (0058, pulido r1), que con la serie de main deja
    fuera al rol `viewer`.
 
-**CIM-11 (7-oct-2026): `0082_ids_sin_contador` va pegada al despliegue.**
+**CIM-11 (7-oct-2026): `0078_ids_sin_contador` va pegada al despliegue.**
 Pasa las quince claves `bigserial` (audit_log, api_call_log, job_run,
 post_metric_snapshot y las demás de su cabecera) a `uuid`, conservando
 las filas, y el runner lee desde entonces `job_run.id` como texto. El

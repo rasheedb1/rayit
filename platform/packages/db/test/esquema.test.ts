@@ -809,7 +809,7 @@ describe('ronda 4: columnas, correlaciones, padres con globales, índices único
   test('las secuencias: SELECT de más se reporta, y una secuencia nueva sin tabla también', async () => {
     // Desde B, `SELECT last_value FROM account_metric_snapshot_id_seq`
     // devolvía el volumen de toda la plataforma. 0026 §4 quita SELECT y
-    // UPDATE, y deja USAGE solo donde mc_app inserta. Desde 0082 (CIM-11)
+    // UPDATE, y deja USAGE solo donde mc_app inserta. Desde 0078 (CIM-11)
     // public no tiene ninguna: la tabla de la prueba trae la suya.
     await con(
       `SET ROLE ${migrador()}; CREATE TABLE zz_s (id bigserial PRIMARY KEY); CREATE SEQUENCE zz_seq; RESET ROLE; ` +

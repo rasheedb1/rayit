@@ -504,7 +504,7 @@ describe('VEN-7 r2 · quién cambia el brief, y la traza', () => {
       tx.query<{ actor_user_id: string | null; before: { title: string; excluded_categories: string[] } | null; after: { title: string; excluded_categories: string[]; workspace_id?: string } }>(
         `SELECT actor_user_id, before, after FROM audit_log
           WHERE action = 'ventas.brief.guardar' AND entity_type = 'outbound_brief' AND entity_id = $1
-          ORDER BY id DESC LIMIT 1`,
+          ORDER BY created_at DESC LIMIT 1`,
         [id],
       ),
     );
@@ -951,7 +951,7 @@ describe('VEN-7 r5 · «No aceptar «…»» desde el brief: una marca que aún 
       traza: (
         await tx.query<{ entity_type: string; before: unknown; after: { relationship: string; created: boolean } }>(
           `SELECT entity_type, before, after FROM audit_log
-            WHERE action = 'ventas.brief.no_aceptar_marca' AND entity_id = $1 ORDER BY id DESC LIMIT 1`,
+            WHERE action = 'ventas.brief.no_aceptar_marca' AND entity_id = $1 ORDER BY created_at DESC LIMIT 1`,
           [r.id],
         )
       ).rows[0],

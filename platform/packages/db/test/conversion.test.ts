@@ -118,9 +118,13 @@ describe('VEN-8 · conversión por etapa', () => {
     assert.ok(historia.length >= 40, 'el seed trae la historia de los negocios de Laura');
     const etapa = new Map(etapas.map((e) => [e.id, e]));
     const ms = (v: Date | string) => new Date(v).getTime();
-    /** El orden de la historia: la hora y, a igual hora, el id (bigserial). */
+    /**
+     * El orden de la historia: la hora y, a igual hora, el id. Desde 0078
+     * el id es un uuid: Postgres lo compara byte a byte, que es el orden
+     * del texto en minúsculas.
+     */
     const antes = (a: { changed_at: Date | string; id: string }, b: { changed_at: Date | string; id: string }) =>
-      ms(a.changed_at) < ms(b.changed_at) || (ms(a.changed_at) === ms(b.changed_at) && BigInt(a.id) < BigInt(b.id));
+      ms(a.changed_at) < ms(b.changed_at) || (ms(a.changed_at) === ms(b.changed_at) && a.id < b.id);
 
     const esperado: Record<string, { entered: number; advanced: number }> = {};
     for (const st of etapas.filter((e) => !e.is_won && !e.is_lost)) {

@@ -107,7 +107,7 @@ describe('aviso al titular y bitácora', () => {
     // addPublicAccount y recordConsent auditan solas (ACC-2); ACC-8 añade la delegación al `after`.
     const audit = await t.db.asWorker((tx) => tx.query<{ action: string; actor_user_id: string; actor_kind: string; after: Record<string, unknown>; workspace_id: string }>(
       `SELECT action, actor_user_id, actor_kind, after, workspace_id FROM audit_log
-        WHERE (action = 'connection.added' AND entity_id = $1) OR (action = 'consent.recorded' AND after->>'connectionId' = $1::text) ORDER BY id`, [id],
+        WHERE (action = 'connection.added' AND entity_id = $1) OR (action = 'consent.recorded' AND after->>'connectionId' = $1::text) ORDER BY created_at`, [id],
     ));
     assert.deepEqual(audit.rows.map((r) => r.action), ['connection.added', 'consent.recorded']);
     for (const row of audit.rows) {
