@@ -93,6 +93,20 @@ export const ORDEN_ULTIMA_CORRIDA = (alias?: string): string => {
   return `${a}started_at DESC, ${a}finished_at DESC NULLS FIRST`;
 };
 
+/**
+ * El mismo orden, al derecho: de la primera corrida a la última, para
+ * listar la historia de un job (la demo del worker, el harness de sus
+ * pruebas). Dos corridas con el mismo started_at quedan como las deja
+ * ORDEN_ULTIMA_CORRIDA, invertidas: primero la que terminó antes y al
+ * final la que sigue abierta. El id (uuid) va al último solo para que el
+ * resultado no dependa del plan si coinciden en todo; no dice cuál fue
+ * antes.
+ */
+export const ORDEN_CORRIDAS_ASC = (alias?: string): string => {
+  const a = alias ? `${alias}.` : '';
+  return `${a}started_at, ${a}finished_at NULLS LAST, ${a}id`;
+};
+
 const TS = (col: string) => `to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
 
 export async function getWorkerHealth(q: HealthExecutor): Promise<WorkerJobHealth[]> {

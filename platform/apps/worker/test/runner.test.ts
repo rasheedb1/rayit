@@ -337,6 +337,35 @@ test('la última corrida de un job con dos del mismo started_at: la abierta prim
   }
 });
 
+test('jobRuns lista dos corridas del mismo started_at en el orden de ORDEN_ULTIMA_CORRIDA al derecho (ORDEN_CORRIDAS_ASC, CIM-11)', async () => {
+  // claimRun escribe started_at con el reloj de la pasada y PGlite mide en
+  // milisegundos: dos corridas del mismo job pueden empatar. Las pruebas
+  // que leen runs[0] y runs[1] no pueden depender de un orden al azar.
+  const T = "TIMESTAMPTZ '2026-10-01 09:00:00+00'";
+  const fila = (status: string, terminoSeg: number | null, etiqueta: string) =>
+    h.db.raw.query(
+      `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, metadata)
+       VALUES ('test.empate_asc', $1, 1, ${T}, ${T} + make_interval(secs => $2::int), jsonb_build_object('e', $3::text))`,
+      [status, terminoSeg, etiqueta],
+    );
+  await h.db.raw.exec(
+    `INSERT INTO job_definition (id, label_es, queue, default_cron, timeout_s, max_attempts, max_concurrency)
+     VALUES ('test.empate_asc', 'Prueba: empate de started_at, al derecho', 'test', NULL, 5, 1, 1)`,
+  );
+  try {
+    // Insertadas al revés de como deben salir: el orden de llegada no ayuda.
+    await fila('running', null, 'abierta');
+    await fila('ok', 2, 'segunda');
+    await fila('failed', 1, 'primera');
+    for (let vuelta = 0; vuelta < 3; vuelta++) {
+      const runs = await jobRuns(h.db, 'test.empate_asc');
+      assert.deepEqual(runs.map((r) => r.metadata['e']), ['primera', 'segunda', 'abierta']);
+    }
+  } finally {
+    await h.db.raw.exec("DELETE FROM job_run WHERE job_id = 'test.empate_asc'; DELETE FROM job_definition WHERE id = 'test.empate_asc'");
+  }
+});
+
 test('runIdOf: un RETURNING sin fila falla al abrir la corrida, no con un runId «undefined» (CIM-11)', () => {
   const id = '0b8f6a52-6f1e-4c7a-9d1e-2f3a4b5c6d7e';
   assert.equal(runIdOf([{ id }]), id);

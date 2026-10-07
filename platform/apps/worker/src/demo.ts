@@ -23,6 +23,7 @@
  * Las cuentas se eligen con DEMO_INSTAGRAM_HANDLE y DEMO_YOUTUBE_HANDLE.
  */
 import { FixtureFetch, loadFixtures, type ConnectorHttpOverrides, type SecretStore } from '@mc/connectors';
+import { ORDEN_CORRIDAS_ASC } from '@mc/db/queries/worker';
 import type { Env } from './runner/config.ts';
 import type { WorkerDatabase } from './runner/db.ts';
 import type { Logger } from './runner/logger.ts';
@@ -160,7 +161,7 @@ async function esperaCorridas(db: WorkerDatabase, jobId: string, n: number, msTo
   for (;;) {
     const { rows } = await db.query<Record<string, unknown>>(
       `SELECT id, job_id, status, attempt, duration_ms, items_processed, items_failed, error, metadata
-         FROM job_run WHERE job_id = $1 AND status <> 'running' ORDER BY started_at`,
+         FROM job_run WHERE job_id = $1 AND status <> 'running' ORDER BY ${ORDEN_CORRIDAS_ASC()}`,
       [jobId],
     );
     if (rows.length >= n || Date.now() > hasta) return rows;
@@ -289,7 +290,7 @@ export async function runDemoCompute(opts: {
   if (!terminada) logger.warn('demo CON-6: la cadena no terminó en 60 s; se imprime lo que hay');
   const { rows: cadena } = await db.query<Record<string, unknown>>(
     `SELECT id, job_id, status, duration_ms, items_processed, items_failed, error, metadata
-       FROM job_run WHERE job_id IN ('compute.baseline', 'compute.post_score') AND status <> 'running' ORDER BY started_at`,
+       FROM job_run WHERE job_id IN ('compute.baseline', 'compute.post_score') AND status <> 'running' ORDER BY ${ORDEN_CORRIDAS_ASC()}`,
   );
   logger.info('demo CON-6: job_run de compute.* (encadenados tras collect.post_metrics: metadata.tras)', { rows: cadena });
 
@@ -336,7 +337,7 @@ export async function runDemo(opts: {
     void (async () => {
       const runs = await db.query(
         `SELECT id, job_id, status, attempt, duration_ms, items_processed, items_failed, error, metadata
-           FROM job_run WHERE status <> 'skipped' ORDER BY started_at`,
+           FROM job_run WHERE status <> 'skipped' ORDER BY ${ORDEN_CORRIDAS_ASC()}`,
       );
       const conns = await db.query(
         `SELECT handle, status, status_detail, to_char(access_expires_at, 'YYYY-MM-DD HH24:MI') AS access_expires_at FROM social_connection ORDER BY handle`,
