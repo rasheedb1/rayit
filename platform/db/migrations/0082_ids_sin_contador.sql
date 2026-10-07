@@ -67,8 +67,10 @@
 -- Despliegue. El código de esta rama lee job_run.id como texto (el
 -- runId del runner) y el de antes como número: con el esquema nuevo y
 -- el código viejo, Number(uuid) es NaN y la corrida no se cierra. Se
--- aplica con el turno del cron en pausa, y la web y el worker se
--- despliegan justo después (docs/ventas-outreach.md §5.2).
+-- aplica y se despliega seguido: make db.migrate, make db.guardia y
+-- make vercel.deploy PROD=1. Un turno que caiga en medio falla y el
+-- siguiente lo retoma; para que no caiga ninguno, make cron.uninstall
+-- antes y make cron.install después (docs/ventas-outreach.md §5.2).
 --
 -- Re-ejecutable: CREATE OR REPLACE VIEW, y cada tabla se convierte solo
 -- si su id sigue siendo bigint.

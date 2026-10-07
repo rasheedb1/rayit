@@ -1002,6 +1002,20 @@ VEN-10), un comando por paso, desde `platform/`, con
    `membership_is_team` (0058, pulido r1), que con la serie de main deja
    fuera al rol `viewer`.
 
+**CIM-11 (7-oct-2026): `0082_ids_sin_contador` va pegada al despliegue.**
+Pasa las quince claves `bigserial` (audit_log, api_call_log, job_run,
+post_metric_snapshot y las demás de su cabecera) a `uuid`, conservando
+las filas, y el runner lee desde entonces `job_run.id` como texto. El
+código de antes, contra el esquema nuevo, no cierra sus corridas
+(`Number(uuid)` es NaN), y el de después, contra el viejo, no arranca
+(la guardia ve la migración pendiente). Por eso, en un solo tramo:
+`make db.migrate`, `make db.guardia` en verde y
+`make vercel.deploy PROD=1`. Un turno que caiga en medio falla y el
+siguiente lo retoma; para que no caiga ninguno, `make cron.uninstall`
+antes y `make cron.install` al final (pide CRON_SECRET). Si el
+`lock_timeout` de 15 s corta la migración, es que un turno tenía la
+tabla: se vuelve a correr (es re-ejecutable).
+
 **Pulido r1 (25-sep-2026), lo que cambió en el esquema de esta serie**
 (0046, 0051, 0056 y 0058, todas sin aplicar): la web no cambia `channel`,
 `provider`, `warmup_started_at` ni `last_ok_at` de una cuenta, ni la
