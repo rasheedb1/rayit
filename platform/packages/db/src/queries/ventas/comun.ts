@@ -34,6 +34,7 @@ export const VENTAS_ERROR_CODES = [
   'DealNotFound',
   'DealCreateFailed',
   'DealCreatorRequired',
+  'DealCreatorLocked',
   'DealLocked',
   'DuplicateDomain',
   'DuplicateEmail',

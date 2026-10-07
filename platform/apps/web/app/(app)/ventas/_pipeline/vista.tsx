@@ -9,15 +9,15 @@ import type { Formatter } from "@/lib/format";
 import { dealLabel } from "@/lib/negocio";
 import { FICHA } from "../empresas/messages";
 import { MESSAGES } from "../_lib/messages";
-
-/** Los textos del creador de un negocio, los mismos de la ficha de la marca (ACC-7). */
-const FICHA_EMPRESA = MESSAGES.empresas.detail;
 import { lostReasonText, type PipelineForma } from "../_lib/estado";
 import { siguienteAccionData, ultimoContacto, type SeguimientoContexto } from "../_seguimiento/datos";
 import { SiguienteAccion } from "../_seguimiento/siguiente-accion";
 import { UltimoContacto } from "../_seguimiento/ultimo-contacto";
 import { ConversionSummary, conversionView } from "./conversion";
 import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
+
+/** «Sin creador»: el mismo texto de la ficha de la marca (ACC-7). */
+const SIN_CREADOR = MESSAGES.empresas.detail.dealCreator.none;
 
 /**
  * El pipeline en sus dos formas: el tablero por etapa (arrastrar y
@@ -114,7 +114,7 @@ export function PipelineView({
     })(),
     // Los días los cuenta listPipeline en SQL; aquí solo se escriben.
     lastContact: ultimoContacto(d, f),
-    creatorText: mostrarCreador || d.creatorId === null ? (d.creatorName ?? FICHA_EMPRESA.dealCreator.none) : null,
+    creatorText: mostrarCreador || d.creatorId === null ? (d.creatorName ?? SIN_CREADOR) : null,
   }));
   const boardStages: BoardStage[] = stages.map((s) => ({
     id: s.stageId,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
 import { cambiarCreadorNegocio } from "../../actions";
@@ -17,6 +17,11 @@ import { useVentasForm } from "../../_lib/use-ventas-form";
  * y se cambia: «Cambiar» abre un selector con los creadores que la
  * persona puede poner (listDealCreatorOptions) y, si ve a todos, «Sin
  * creador». Las reglas son de setDealCreator; esto solo las pinta.
+ *
+ * El foco no se pierde: al abrir va al selector y al cerrar (Cancelar o
+ * guardar) vuelve a «Cambiar», o al renglón del creador si el botón ya
+ * no está, para que quien usa teclado o lector de pantalla siga en el
+ * mismo negocio de la ficha.
  */
 export function CreadorDelNegocio({
   dealId,
@@ -44,10 +49,23 @@ export function CreadorDelNegocio({
   const t = MESSAGES.empresas.detail.dealCreator;
   const [open, setOpen] = useState(false);
   const [notice, setNotice] = useState<string | undefined>();
+  const cambiarRef = useRef<HTMLButtonElement>(null);
+  const renglonRef = useRef<HTMLDivElement>(null);
+  /** Se cerró el formulario: el foco vuelve a donde estaba la persona. */
+  const devolverFoco = useRef(false);
+  const cerrar = () => {
+    devolverFoco.current = true;
+    setOpen(false);
+  };
   const { state, pending, formRef, onSubmit, errors } = useVentasForm(cambiarCreadorNegocio, (s) => {
     setNotice(s.notice);
-    setOpen(false);
+    cerrar();
   });
+  useEffect(() => {
+    if (open || !devolverFoco.current) return;
+    devolverFoco.current = false;
+    (cambiarRef.current ?? renglonRef.current)?.focus();
+  }, [open]);
   const selectId = `creador-${dealId}`;
   const options = [
     ...(seesAll ? [{ value: "", label: t.none }] : []),
@@ -58,20 +76,20 @@ export function CreadorDelNegocio({
 
   if (!open) {
     return (
-      <div className="space-y-1">
+      <div ref={renglonRef} tabIndex={-1} className="space-y-1 outline-none">
         <p className="flex flex-wrap items-baseline gap-x-1.5 text-xs">
           <span className="text-muted">{t.label}</span>
           <span className={creatorId ? "text-ink-2" : "text-muted"}>{creatorName ?? t.none}</span>
           {!creatorId && <span className="text-muted">· {t.noneHelp}</span>}
           {editable && (
             <button
+              ref={cambiarRef}
               type="button"
               onClick={() => {
                 setNotice(undefined);
                 setOpen(true);
               }}
               aria-label={t.changeLabel(dealName)}
-              aria-expanded={false}
               className="text-ink underline underline-offset-4 hover:text-ink-2"
             >
               {t.change}
@@ -95,7 +113,7 @@ export function CreadorDelNegocio({
         <Button type="submit" variant="primary" size="sm" loading={pending}>
           {t.save}
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => setOpen(false)} disabled={pending}>
+        <Button variant="ghost" size="sm" onClick={cerrar} disabled={pending}>
           {MESSAGES.acciones.cancel}
         </Button>
       </div>

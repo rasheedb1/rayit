@@ -953,6 +953,7 @@ export const MESSAGES = {
     companyName: "La empresa necesita un nombre.",
     companyNameTooLong: "El nombre cabe en 200 caracteres.",
     company: "La empresa no es válida.",
+    deal: "Ese negocio no es válido.",
     creator: "Elige uno de los creadores de la lista.",
     source: "Di de dónde sacaste el dato: sin eso no se guarda.",
     email: "El correo no es válido.",
@@ -984,6 +985,8 @@ export const MESSAGES = {
     DealCreateFailed: "No se pudo abrir el negocio.",
     DealCreatorRequired:
       "Llevas a varios creadores: di de cuál es el negocio. Desde la ficha de la marca, en «Nuevo negocio», puedes elegirlo.",
+    DealCreatorLocked:
+      "Este negocio ya tiene una cotización enviada o una campaña de otro creador: cambiarlo partiría el acuerdo entre dos. Solo puede ser del creador de esa cotización o esa campaña.",
     DealLocked: (p: Readonly<Record<string, string>>) =>
       p.reason === "quote"
         ? "Este negocio tiene una cotización aceptada: no sale de «Ganado». Termina su campaña desde la cotización y, si el acuerdo se cayó, cancélala en Campañas antes de reabrirlo."

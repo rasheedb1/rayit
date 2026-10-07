@@ -41,7 +41,7 @@ import { INTENT_SOURCES, MESSAGE_INTENTS, STEP_TYPES } from '../schema/outreach.
 import { CONTACT_SOURCES, TOUCH_STATUSES } from '../schema/ventas.ts';
 import { advanceEnrollment } from './outreach/enroll.ts';
 import { normalizeAddress } from './outreach/inbound.ts';
-import { loadIntentMessage, reapplyIntent } from './outreach/intent.ts';
+import { loadIntentMessage, originCreatorOf, reapplyIntent, type DealNeedsCreator } from './outreach/intent.ts';
 import { requestPitchDraft, type RequestPitchDraftResult } from './outreach/pitch.ts';
 import { releaseHeldTouch, type ReleaseHeldCode } from './outreach/review.ts';
 import { assertIds, date, DEAL_CLOSED_SQL, int, oneOf, text, textOrNull, toDate } from './outreach/shared.ts';
@@ -918,12 +918,14 @@ export type ReclassifyResult =
   | {
       ok: true; intent: MessageIntent; dealMoved: boolean; optOut: boolean; optOutReview: boolean;
       /**
-       * «Me interesa» sin negocio abierto, corregido por quien está acotado
-       * a varios creadores (o a ninguno vivo): la intención quedó escrita y
-       * el negocio no se abrió, porque no se sabe de qué creador es. Se abre
-       * desde la ficha de la marca, eligiéndolo (ACC-7).
+       * «Me interesa» sin negocio abierto ni creador de origen, corregido
+       * por quien está acotado por creador: la intención quedó escrita y el
+       * negocio no se abrió, porque no se sabe de qué creador es (ACC-7).
+       * 'pick': lleva a varios, se abre desde la ficha de la marca
+       * eligiéndolo; 'none': solo a creadores dados de baja, no puede abrir
+       * ninguno; null: no hizo falta.
        */
-      dealNeedsCreator: boolean;
+      dealNeedsCreator: DealNeedsCreator;
     }
   | { ok: false; code: 'not_found' | 'opted_out' | 'out_of_scope' };
 
@@ -941,7 +943,11 @@ export type ReclassifyResult =
  *     (deal_id es una clave ajena: si no se ve, es por el alcance);
  *   · no apunta a ninguno, la marca no tiene uno abierto que se vea y sí
  *     uno que no se ve (open_deal_out_of_scope, 0082 §6, que solo dice sí
- *     o no): fuera.
+ *     o no): fuera;
+ *   · no hay ninguno abierto y habría que abrirlo, pero el outreach salió
+ *     de un creador fuera de su alcance (originCreatorOf: la cuenta que
+ *     envió o el brief de la cadencia): el negocio sería de ese creador y
+ *     no lo podría ver. Fuera, en vez de abrirlo a nombre de otro.
  *
  * Para quien ve a todos, nunca: ni siquiera pregunta.
  */
@@ -964,13 +970,16 @@ async function interestedOutOfScope(tx: WorkspaceTx, messageId: string): Promise
   if (r.linked) return !r.linked_visible;
   if (!r.company_id) return false;
   const marca = (
-    await tx.query<{ v: boolean }>(
-      `SELECT NOT EXISTS (SELECT 1 FROM deal d WHERE d.company_id = $1::uuid AND d.won_at IS NULL AND d.lost_at IS NULL)
-              AND open_deal_out_of_scope($1::uuid) AS v`,
+    await tx.query<{ visible: boolean; oculto: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM deal d WHERE d.company_id = $1::uuid AND d.won_at IS NULL AND d.lost_at IS NULL) AS visible,
+              open_deal_out_of_scope($1::uuid) AS oculto`,
       [r.company_id],
     )
   ).rows[0];
-  return marca?.v === true;
+  if (marca?.visible === true) return false;
+  if (marca?.oculto === true) return true;
+  const origin = await originCreatorOf(tx, messageId, tx.workspaceId);
+  return origin.creatorId !== null && !origin.usable;
 }
 
 /**

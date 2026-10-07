@@ -556,7 +556,7 @@ export async function crearNegocio(_prev: VentasState, formData: FormData): Prom
 }
 
 const creadorNegocioSchema = z.object({
-  dealId: z.string().regex(UUID_RE, V.company),
+  dealId: z.string().regex(UUID_RE, V.deal),
   companyId: z.string().regex(UUID_RE, V.company),
   // Vacío: «Sin creador», que solo puede elegir quien ve a todos (setDealCreator lo comprueba).
   creatorId: z.string().trim().refine((v) => v === "" || UUID_RE.test(v), V.creator),
@@ -565,8 +565,9 @@ const creadorNegocioSchema = z.object({
 /**
  * Cambiar de qué creador es un negocio (ACC-7), desde la ficha de su
  * marca. Las reglas son de setDealCreator: un creador del espacio y del
- * alcance de quien lo cambia, y «Sin creador» solo para quien ve a
- * todos. Deja su fila en la bitácora.
+ * alcance de quien lo cambia, «Sin creador» solo para quien ve a
+ * todos, y nunca uno distinto del de su cotización enviada o su campaña
+ * viva (DealCreatorLocked). Deja su fila en la bitácora.
  */
 export async function cambiarCreadorNegocio(_prev: VentasState, formData: FormData): Promise<VentasState> {
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };

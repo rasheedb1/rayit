@@ -146,6 +146,9 @@ export const MESSAGES = {
     /** ACC-7: quien lleva a varios creadores marca «Me interesa» y la marca no tiene negocio: no se adivina de quién es. */
     listoSinNegocio: (intencion: string) =>
       `Intención corregida: ${intencion}. No abrimos el negocio porque llevas a varios creadores: ábrelo desde la ficha de la marca, en «Nuevo negocio», y elige de cuál es.`,
+    /** ACC-7: quien solo lleva a creadores que ya no están marca «Me interesa»: no hay de quién abrirlo (el mismo caso que noCreators de la ficha). */
+    listoSinCreadores: (intencion: string) =>
+      `Intención corregida: ${intencion}. No abrimos el negocio porque tu acceso está limitado a creadores que ya no están en el espacio. Pide a quien administra el equipo que te asigne uno.`,
     bajaNoSeCorrige: "La ficha está de baja: ya no recibe mensajes y eso no se corrige.",
     vuelta: "Vuelve el",
     vueltaAyuda: "Opcional. Vacía, se lee del mensaje; sin fecha en el mensaje, la cadencia sigue en 7 días.",

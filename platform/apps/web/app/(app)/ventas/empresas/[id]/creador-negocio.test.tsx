@@ -77,4 +77,27 @@ describe("de qué creador es un negocio, en la ficha (ACC-7)", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Eso quedaría fuera de tu alcance en este espacio.");
     expect(screen.getByLabelText(t.label)).toBeInTheDocument();
   });
+
+  it("al cancelar, el foco vuelve a «Cambiar», que no lleva un aria-expanded fijo", () => {
+    render(<CreadorDelNegocio {...base} />);
+    const cambiar = screen.getByRole("button", { name: t.changeLabel("Serie Q4") });
+    expect(cambiar).not.toHaveAttribute("aria-expanded");
+    fireEvent.click(cambiar);
+    expect(screen.getByLabelText(t.label)).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: MESSAGES.acciones.cancel }));
+    expect(screen.getByRole("button", { name: t.changeLabel("Serie Q4") })).toHaveFocus();
+  });
+
+  it("al guardar, el foco vuelve a «Cambiar» y el aviso dice qué pasó", async () => {
+    cambiarCreadorNegocio.mockResolvedValue({ ok: true, notice: t.saved(SOFIA.name), stamp: 1 });
+    render(<CreadorDelNegocio {...base} />);
+    fireEvent.click(screen.getByRole("button", { name: t.changeLabel("Serie Q4") }));
+    fireEvent.change(screen.getByLabelText(t.label), { target: { value: SOFIA.id } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.save }));
+    });
+    expect(screen.queryByLabelText(t.label)).toBeNull();
+    expect(screen.getByRole("button", { name: t.changeLabel("Serie Q4") })).toHaveFocus();
+    expect(screen.getByText(t.saved(SOFIA.name))).toBeInTheDocument();
+  });
 });

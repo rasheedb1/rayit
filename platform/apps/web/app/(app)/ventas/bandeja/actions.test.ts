@@ -120,11 +120,19 @@ describe("las demás acciones", () => {
     reclassifyInboxMessage.mockResolvedValue({ ok: false, code: "out_of_scope" });
     expect(await corregirIntencion({ messageId: MSG, intent: "interested" })).toEqual({ ok: false, error: t.errores.out_of_scope });
     reclassifyInboxMessage.mockResolvedValue({
-      ok: true, intent: "interested", dealMoved: false, optOut: false, optOutReview: false, dealNeedsCreator: true,
+      ok: true, intent: "interested", dealMoved: false, optOut: false, optOutReview: false, dealNeedsCreator: "pick",
     });
     expect(await corregirIntencion({ messageId: MSG, intent: "interested" })).toEqual({
       ok: true, notice: t.corregir.listoSinNegocio("interesada"),
     });
+    // Acotada solo a creadores dados de baja: no se la manda a un «Nuevo negocio» que tiene desactivado.
+    reclassifyInboxMessage.mockResolvedValue({
+      ok: true, intent: "interested", dealMoved: false, optOut: false, optOutReview: false, dealNeedsCreator: "none",
+    });
+    expect(await corregirIntencion({ messageId: MSG, intent: "interested" })).toEqual({
+      ok: true, notice: t.corregir.listoSinCreadores("interesada"),
+    });
+    expect(t.corregir.listoSinCreadores("interesada")).not.toContain("Nuevo negocio");
     // Lo que @mc/db no previó y la política rechazó llega como lo que es, no como el genérico.
     const politica = Object.assign(new Error('new row violates row-level security policy "deal_creator_scope" for table "deal"'), {
       code: "42501",

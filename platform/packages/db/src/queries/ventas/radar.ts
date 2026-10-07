@@ -1035,7 +1035,12 @@ export async function creatorForNewDeal(tx: WorkspaceTx, chosen: string | null |
  *
  *   · `creatorId` elegido: assertChosenCreator, como al abrirlo;
  *   · `null` («Sin creador»): solo quien ve a todos. A quien está acotado
- *     el negocio se le iría de las manos (ScopeError).
+ *     el negocio se le iría de las manos (ScopeError);
+ *   · y nunca a un creador distinto del de su cotización enviada o su
+ *     campaña viva (DealCreatorLocked, deal_creator_locked de 0082 §7):
+ *     el negocio, la cotización y la campaña de un mismo acuerdo son del
+ *     mismo creador, o el pipeline y Campañas se contradicen para quien
+ *     está acotado. Pasar AL creador de la cotización sí se deja.
  *
  * El negocio tiene que verse (si no, DealNotFound: el de otro creador no
  * existe para quien está acotado). Deja su fila en audit_log
@@ -1058,6 +1063,12 @@ export async function setDealCreator(
     if (todos.rows[0]?.all !== true) throw new ScopeError();
   }
   if (antes.creator_id === creatorId) return { changed: false, creatorName };
+  // El acuerdo no se parte entre dos creadores: con una cotización enviada
+  // o una campaña viva de otro creador, el negocio sigue con el suyo
+  // (deal_creator_locked, 0082 §7; también ve la campaña que la política
+  // esconde a quien está acotado).
+  const locked = await tx.query<{ v: boolean }>('SELECT deal_creator_locked($1::uuid, $2::uuid) AS v', [dealId, creatorId]);
+  if (locked.rows[0]?.v !== false) throw new VentasError('DealCreatorLocked');
   const { rows } = await tx.query<{ id: string }>('UPDATE deal SET creator_id = $2::uuid WHERE id = $1 RETURNING id', [dealId, creatorId]);
   if (!rows[0]) throw new DealNotFound();
   await audit(tx, {
