@@ -143,9 +143,20 @@ export function InvitarForm({
   const [roleId, setRoleId] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
   const rol = roles.find((r) => r.id === roleId);
+  /**
+   * Los campos que se corrigieron después del último envío: su error de
+   * ese envío ya no dice la verdad y se apaga en cuanto se tocan. El
+   * servidor vuelve a validar en el siguiente envío.
+   */
+  const [corregidos, setCorregidos] = useState<ReadonlySet<"email" | "roleId">>(new Set());
+  const corregir = (campo: "email" | "roleId") =>
+    setCorregidos((antes) => (antes.has(campo) ? antes : new Set(antes).add(campo)));
+  const errorDe = (campo: "email" | "roleId") => (corregidos.has(campo) ? undefined : estado.errors?.[campo]);
 
-  // Solo cuando sale bien se vacía: con un error, lo escrito se queda.
+  // Cada respuesta trae sus propios errores. Solo cuando sale bien se
+  // vacía el formulario: con un error, lo escrito se queda.
   useEffect(() => {
+    setCorregidos(new Set());
     if (estado.ok) {
       formRef.current?.reset();
       setRoleId("");
@@ -156,14 +167,17 @@ export function InvitarForm({
     <div className="grid gap-4">
       <form ref={formRef} onSubmit={enviarSinReiniciar(accion)} className="grid gap-4" noValidate>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label={t.invitar.correo} help={t.invitar.correoAyuda} error={estado.errors?.email} required>
-            <Input name="email" type="email" autoComplete="off" maxLength={254} />
+          <Field label={t.invitar.correo} help={t.invitar.correoAyuda} error={errorDe("email")} required>
+            <Input name="email" type="email" autoComplete="off" maxLength={254} onChange={() => corregir("email")} />
           </Field>
-          <Field label={t.invitar.rol} help={rol?.description ?? undefined} error={estado.errors?.roleId} required>
+          <Field label={t.invitar.rol} help={rol?.description ?? undefined} error={errorDe("roleId")} required>
             <Select
               name="roleId"
               value={roleId}
-              onChange={(e) => setRoleId(e.target.value)}
+              onChange={(e) => {
+                setRoleId(e.target.value);
+                corregir("roleId");
+              }}
               placeholder={t.invitar.rolPlaceholder}
               options={roles.map((r) => ({ value: r.id, label: r.label }))}
             />
@@ -192,7 +206,8 @@ export function InvitarForm({
  * tiene hoy marcado. Como ConfirmAction: al abrir, el foco va al
  * selector; Escape o Cancelar cierran y lo devuelven al botón; al
  * guardar, el formulario se queda abierto con el botón en carga y se
- * cierra cuando la acción sale bien.
+ * cierra cuando la acción sale bien. Si vuelve con un error («no se
+ * puede degradar al último dueño»), sigue abierto y el foco va al error.
  */
 export function CambiarRol({
   userId,
@@ -213,18 +228,22 @@ export function CambiarRol({
   const rol = roles.find((r) => r.id === elegido);
   const selectorRef = useRef<HTMLDivElement>(null);
   const disparadorRef = useRef<HTMLSpanElement>(null);
+  const alertaRef = useRef<HTMLParagraphElement>(null);
   const volverAlDisparador = useRef(false);
   const estadoVisto = useRef(estado);
   // El estado que había al abrir: su mensaje es de un intento anterior y no se repite.
   const [estadoAlAbrir, setEstadoAlAbrir] = useState<ActionState | null>(null);
 
-  // La acción salió bien: se cierra y el foco vuelve al botón.
+  // La acción salió bien: se cierra y el foco vuelve al botón. Con un
+  // error, el formulario sigue abierto y el foco va al mensaje.
   useEffect(() => {
     if (estado === estadoVisto.current) return;
     estadoVisto.current = estado;
     if (estado.ok) {
       volverAlDisparador.current = true;
       setAbierto(false);
+    } else if (estado.message) {
+      alertaRef.current?.focus();
     }
   }, [estado]);
 
@@ -288,7 +307,7 @@ export function CambiarRol({
       </div>
       {rol?.conCasillas && <Casillas key={elegido} opciones={casillas} marcadas={elegido === roleId ? marcadas : []} />}
       {estado.message && estado !== estadoAlAbrir && (
-        <p role="alert" className="text-sm text-bad">
+        <p ref={alertaRef} role="alert" tabIndex={-1} className="text-sm text-bad focus:outline-none">
           {estado.message}
         </p>
       )}

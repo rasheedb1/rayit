@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { admiteCasillas, can, CASILLAS, casillasDe, INVITACION_VIGENCIA_DIAS, NOMBRES_DE_CASILLA, permisosQueFaltan } from "@mc/core";
-import { getTeamWorkspaceKind, listMembers, listPendingInvitations, listTeamRoles } from "@mc/db/queries/equipo";
+import { getTeamWorkspaceKind, listMembers, listPendingInvitations, listTeamRoles, sessionHasScope } from "@mc/db/queries/equipo";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
@@ -35,16 +35,19 @@ export default async function EquipoPage() {
   const fmt = formatterFor(ws);
   const fechas = { locale: fmt.locale, timeZone: fmt.timeZone };
 
-  const { miembros, pendientes, roles, kind } = await withWorkspace(async (tx) => ({
+  const { miembros, pendientes, roles, kind, acotada } = await withWorkspace(async (tx) => ({
     miembros: await listMembers(tx),
     pendientes: await listPendingInvitations(tx),
     roles: await listTeamRoles(tx),
     kind: await getTeamWorkspaceKind(tx),
+    acotada: await sessionHasScope(tx),
   }));
 
-  const puedeInvitar = can(permisos, "equipo.miembro.invitar");
-  const puedeEditar = can(permisos, "equipo.rol.editar");
-  const puedeQuitar = can(permisos, "equipo.miembro.revocar");
+  // Con alcance limitado (ACC-6) no se administra el equipo (0079 §6):
+  // ni invitar, ni cambiar, ni quitar, aunque el rol tenga el permiso.
+  const puedeInvitar = !acotada && can(permisos, "equipo.miembro.invitar");
+  const puedeEditar = !acotada && can(permisos, "equipo.rol.editar");
+  const puedeQuitar = !acotada && can(permisos, "equipo.miembro.revocar");
   const otorga = (pedidos: Iterable<string>) => permisosQueFaltan(permisos, pedidos).length === 0;
 
   const rolesOtorgables: RolOpcion[] = roles
@@ -71,7 +74,9 @@ export default async function EquipoPage() {
           <InvitarForm roles={rolesOtorgables} casillas={casillas} fechas={fechas} />
         </section>
       ) : (
-        <p className="mb-8 max-w-3xl rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-ink-2">{t.soloVer}</p>
+        <p className="mb-8 max-w-3xl rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-ink-2">
+          {acotada ? t.errores.scoped : t.soloVer}
+        </p>
       )}
 
       <section className="mb-12 max-w-3xl">

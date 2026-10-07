@@ -29,7 +29,7 @@ import { requirePermission } from "@/lib/permisos";
 import { permisosDeLaSesion } from "@/lib/permisos/sesion";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
-import { enviarInvitacion, type EnvioInvitacion } from "./_lib/correo";
+import { enviarInvitacion, nombreParaCorreo, type EnvioInvitacion } from "./_lib/correo";
 import { MESSAGES } from "./_lib/messages";
 
 /**
@@ -103,10 +103,14 @@ async function crearYEntregar(correo: string, roleId: string, extras: readonly s
   const enlace = `${origen}/invitacion/${token}`;
   const fmt = formatterFor(await getCurrentWorkspace());
   const venceTexto = fmt.date(vence.toISOString(), "long");
+  // Los dos nombres los pone quien invita: en una línea y recortados,
+  // para que un espacio no pueda escribir el correo de la plataforma.
+  const espacio = nombreParaCorreo(r.workspaceName);
+  const quien = r.inviterName ? nombreParaCorreo(r.inviterName) : null;
   const envio = await enviarInvitacion({
     para: correo,
-    asunto: t.correo.asunto(r.workspaceName),
-    texto: t.correo.cuerpo({ espacio: r.workspaceName, rol: r.rol, quien: r.inviterName, enlace, vence: venceTexto }),
+    asunto: t.correo.asunto(espacio),
+    texto: t.correo.cuerpo({ espacio, rol: r.rol, quien, enlace, vence: venceTexto }),
   });
 
   revalidatePath("/accesos");

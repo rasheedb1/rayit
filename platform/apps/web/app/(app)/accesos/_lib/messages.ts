@@ -1,4 +1,4 @@
-import { INVITACION_VIGENCIA_DIAS, type Casilla } from "@mc/core";
+import { INVITACION_VIGENCIA_DIAS, INVITACIONES_POR_DIA, type Casilla } from "@mc/core";
 import type { TeamErrorCode } from "@mc/db/queries/equipo";
 
 /**
@@ -105,6 +105,9 @@ export const MESSAGES = {
     not_found: "Esa persona o esa invitación ya no está.",
     last_owner: "No se puede quitar ni degradar al último dueño del espacio. Nombra antes a otra persona como Dueño.",
     pending_exists: "Alguien acaba de invitar a ese correo; recarga la lista.",
+    rate_limited: `Este espacio ya creó ${INVITACIONES_POR_DIA} invitaciones en las últimas 24 horas. Vuelve a intentarlo mañana.`,
+    scoped:
+      "Tu acceso está limitado a algunos creadores o campañas: invitar, cambiar roles o quitar a alguien lo hace quien ve todo el espacio.",
     correo: "Escribe un correo válido.",
     rol: "Elige un rol.",
     sinOrigen: "No pudimos armar el enlace. Inténtalo de nuevo o escríbenos.",

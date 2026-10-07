@@ -45,8 +45,10 @@ export interface ConfirmActionProps {
  *     mientras la acción corre: no se puede volver a pulsar «Quitar»;
  *   - al volver la acción se cierra, y su mensaje (si lo hay) queda
  *     debajo del primer botón, con role="alert";
- *   - el foco vuelve SIEMPRE al primer botón: al cancelar, con Escape y
- *     al volver de la acción. Nunca cae en <body>.
+ *   - el foco vuelve al primer botón al cancelar, con Escape y al volver
+ *     de la acción sin mensaje; si la acción respondió con un mensaje,
+ *     va a ese mensaje (justo debajo del botón), para que se lea entero
+ *     y desde ahí Mayús+Tab devuelva al botón. Nunca cae en <body>.
  *
  * Si la acción hace desaparecer la fila (quitar a alguien), el
  * componente se desmonta con ella y no hay foco que devolver.
@@ -62,14 +64,18 @@ export function ConfirmAction({
   const id = useId();
   const preguntaRef = useRef<HTMLParagraphElement>(null);
   const disparadorRef = useRef<HTMLSpanElement>(null);
+  const alertaRef = useRef<HTMLSpanElement>(null);
   const volverAlDisparador = useRef(false);
+  /** La acción acaba de volver con un mensaje: el foco va a él y no al botón. */
+  const irAlMensaje = useRef(false);
   const estadoVisto = useRef(estado);
 
-  // La acción volvió: se cierra y el foco regresa al primer botón.
+  // La acción volvió: se cierra, y el foco regresa al primer botón o a su mensaje.
   useEffect(() => {
     if (estado === estadoVisto.current) return;
     estadoVisto.current = estado;
     volverAlDisparador.current = true;
+    irAlMensaje.current = Boolean(estado.message);
     setAbierta(false);
   }, [estado]);
 
@@ -78,13 +84,17 @@ export function ConfirmAction({
       preguntaRef.current?.focus();
     } else if (volverAlDisparador.current) {
       volverAlDisparador.current = false;
-      disparadorRef.current?.querySelector("button")?.focus();
+      if (irAlMensaje.current && alertaRef.current) alertaRef.current.focus();
+      else disparadorRef.current?.querySelector("button")?.focus();
+      irAlMensaje.current = false;
     }
   }, [abierta]);
 
   function cerrar() {
     if (enviando) return;
     volverAlDisparador.current = true;
+    // Al cancelar, el mensaje de un intento anterior no es noticia: el foco va al botón.
+    irAlMensaje.current = false;
     setAbierta(false);
   }
 
@@ -110,7 +120,7 @@ export function ConfirmAction({
           </span>
         )}
         {estado.message && (
-          <span role="alert" className="max-w-xs text-xs leading-4 text-bad">
+          <span ref={alertaRef} role="alert" tabIndex={-1} className="max-w-xs text-xs leading-4 text-bad focus:outline-none">
             {estado.message}
           </span>
         )}

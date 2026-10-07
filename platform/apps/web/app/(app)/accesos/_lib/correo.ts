@@ -38,6 +38,23 @@ const REMITENTE_DE_DESARROLLO = "On Cue <no-responder@oncue.invalid>";
 /** Lo que tarda como mucho el SMTP antes de rendirse: la persona está esperando el formulario. */
 const TECHO_MS = 8_000;
 
+/** Lo más largo que entra en el correo del nombre de un espacio o de quien invita. */
+export const NOMBRE_EN_CORREO_MAX = 60;
+
+/**
+ * Un nombre que puso alguien (el del espacio, el de quien invita), listo
+ * para el asunto y el cuerpo de un correo que firma la plataforma: en
+ * una sola línea (saltos, tabuladores y caracteres de control pasan a un
+ * espacio) y recortado a NOMBRE_EN_CORREO_MAX con «…». Así un nombre
+ * no puede traer un párrafo entero de texto engañoso, ni partir el
+ * asunto en dos cabeceras.
+ */
+export function nombreParaCorreo(texto: string, max = NOMBRE_EN_CORREO_MAX): string {
+  const limpio = texto.replace(/[\p{C}\s]+/gu, " ").trim();
+  const letras = [...limpio];
+  return letras.length <= max ? limpio : `${letras.slice(0, max - 1).join("").trimEnd()}…`;
+}
+
 /** El remitente, o null si no hay con qué enviar. */
 export function remitente(env: Env = process.env): string | null {
   if (!env.SMTP_URL?.trim()) return null;

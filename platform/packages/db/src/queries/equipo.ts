@@ -9,6 +9,10 @@
  *     también al revocar una invitación (0079 §2);
  *   - el último dueño (membership_keeps_an_owner), por disparador;
  *   - las casillas solo con el Mánager de creador, por disparador (0079 §4);
+ *   - quien tiene alcance (ACC-6) no administra el equipo (0079 §6);
+ *   - el rol, del tipo del espacio, por disparador (0079 §7);
+ *   - como mucho INVITACIONES_POR_DIA invitaciones por espacio en 24
+ *     horas, por disparador (0079 §8);
  *   - aceptar: invitation_accept(), SECURITY DEFINER, un solo uso;
  *   - si a alguien lo esperan en un espacio, para no crearle uno propio
  *     al entrar (has_pending_invitation_for_session_email, 0079 §1).
@@ -74,6 +78,16 @@ export function isPendingExistsError(err: unknown): boolean {
   for (let e: unknown = err; e; e = (e as { cause?: unknown }).cause) {
     const p = pgError(e);
     if (p?.code === '23505' && p.constraint === 'invitation_pending_uk') return true;
+    if (!p) break;
+  }
+  return false;
+}
+
+/** El techo de invitaciones por espacio y día (invitation_daily_cap, 0079 §8). */
+export function isDailyCapError(err: unknown): boolean {
+  for (let e: unknown = err; e; e = (e as { cause?: unknown }).cause) {
+    const p = pgError(e);
+    if (p?.code === '23514' && p.constraint === 'invitation_daily_cap') return true;
     if (!p) break;
   }
   return false;
@@ -281,6 +295,8 @@ export async function listPendingInvitations(tx: WorkspaceTx): Promise<PendingIn
  *   not_found           la persona o la invitación no está (o ya no está pendiente)
  *   last_owner          sería dejar el espacio sin dueño
  *   pending_exists      otra persona acaba de invitar a ese correo (dos a la vez)
+ *   rate_limited        el espacio ya creó INVITACIONES_POR_DIA invitaciones en 24 horas (0079 §8)
+ *   scoped              quien actúa tiene alcance limitado (ACC-6) y no administra el equipo (0079 §6)
  */
 export type TeamErrorCode =
   | 'forbidden'
@@ -290,7 +306,9 @@ export type TeamErrorCode =
   | 'already_member'
   | 'not_found'
   | 'last_owner'
-  | 'pending_exists';
+  | 'pending_exists'
+  | 'rate_limited'
+  | 'scoped';
 
 export type TeamResult<T = object> = ({ ok: true } & T) | { ok: false; code: TeamErrorCode };
 
@@ -309,18 +327,33 @@ async function validarRolYCasillas(
   return { ok: true, role };
 }
 
-/** Lo que la base va a decidir, preguntado antes para dar el motivo y no un 42501. */
+/**
+ * Lo que la base va a decidir, preguntado antes para dar el motivo y no
+ * un 42501. `acotada`: la sesión tiene alcance (0079 §6), y entonces
+ * session_can_grant es falso para cualquier rol; se dice aparte para
+ * no culpar al rol elegido.
+ */
 async function puedeYOtorga(
   tx: WorkspaceTx,
   permiso: string,
   roleId: string,
   extras: readonly string[],
-): Promise<{ puede: boolean; otorga: boolean }> {
-  const { rows } = await tx.query<{ puede: boolean; otorga: boolean }>(
-    'SELECT session_can($1) AS puede, session_can_grant($2::uuid, $3::text[]) AS otorga',
+): Promise<{ puede: boolean; otorga: boolean; acotada: boolean }> {
+  const { rows } = await tx.query<{ puede: boolean; otorga: boolean; acotada: boolean }>(
+    'SELECT session_can($1) AS puede, session_can_grant($2::uuid, $3::text[]) AS otorga, session_has_scope() AS acotada',
     [permiso, roleId, [...extras]],
   );
-  return { puede: rows[0]?.puede === true, otorga: rows[0]?.otorga === true };
+  return { puede: rows[0]?.puede === true, otorga: rows[0]?.otorga === true, acotada: rows[0]?.acotada === true };
+}
+
+/**
+ * ¿La persona de la sesión tiene alcance limitado en este espacio
+ * (membership_scope, ACC-6)? Si sí, no administra el equipo (0079 §6):
+ * la pantalla no le ofrece invitar, cambiar ni quitar.
+ */
+export async function sessionHasScope(tx: WorkspaceTx): Promise<boolean> {
+  const { rows } = await tx.query<{ acotada: boolean }>('SELECT session_has_scope() AS acotada');
+  return rows[0]?.acotada === true;
 }
 
 export interface CreateInvitationInput {
@@ -347,8 +380,9 @@ export async function createInvitation(
   const extras = [...new Set(input.extraPermissions)];
   const v = await validarRolYCasillas(tx, input.roleId, extras);
   if (!v.ok) return v;
-  const { puede, otorga } = await puedeYOtorga(tx, 'equipo.miembro.invitar', input.roleId, extras);
+  const { puede, otorga, acotada } = await puedeYOtorga(tx, 'equipo.miembro.invitar', input.roleId, extras);
   if (!puede) return { ok: false, code: 'forbidden' };
+  if (acotada) return { ok: false, code: 'scoped' };
   if (!otorga) return { ok: false, code: 'cannot_grant' };
 
   const { rows: ya } = await tx.query<{ ya: boolean }>(
@@ -375,8 +409,10 @@ export async function createInvitation(
 
   // Un punto de vuelta antes de tocar nada: si otra persona invita al
   // mismo correo a la vez, el índice invitation_pending_uk para la
-  // segunda (23505) y aquí se deshace solo lo de esta, sin abortar la
-  // transacción de quien llama.
+  // segunda (23505), y si el espacio ya llegó a su techo del día, el
+  // disparador invitation_daily_cap (0079 §8) para esta. En los dos
+  // casos se deshace solo lo de esta —también la revocación de la
+  // pendiente vieja—, sin abortar la transacción de quien llama.
   await tx.query('SAVEPOINT crear_invitacion');
   let viejas: { id: string }[];
   let invitationId: string;
@@ -395,9 +431,10 @@ export async function createInvitation(
     );
     invitationId = rows[0]!.id;
   } catch (err) {
-    if (!isPendingExistsError(err)) throw err;
+    const code = isPendingExistsError(err) ? 'pending_exists' : isDailyCapError(err) ? 'rate_limited' : null;
+    if (!code) throw err;
     await tx.query('ROLLBACK TO SAVEPOINT crear_invitacion');
-    return { ok: false, code: 'pending_exists' };
+    return { ok: false, code };
   }
   await tx.query('RELEASE SAVEPOINT crear_invitacion');
   for (const vieja of viejas) {
@@ -414,13 +451,14 @@ export async function createInvitation(
 
 /** Revoca una invitación pendiente. El enlace deja de servir; la fila se queda (nadie borra el rastro). */
 export async function revokeInvitation(tx: WorkspaceTx, invitationId: string): Promise<TeamResult> {
-  const { rows: p } = await tx.query<{ puede: boolean; otorga: boolean | null }>(
-    `SELECT session_can('equipo.miembro.invitar') AS puede,
+  const { rows: p } = await tx.query<{ puede: boolean; acotada: boolean; otorga: boolean | null }>(
+    `SELECT session_can('equipo.miembro.invitar') AS puede, session_has_scope() AS acotada,
             (SELECT session_can_grant(i.role_id, i.extra_permissions) FROM invitation i
               WHERE i.id = $1::uuid AND i.workspace_id = current_workspace_id()) AS otorga`,
     [invitationId],
   );
   if (p[0]?.puede !== true) return { ok: false, code: 'forbidden' };
+  if (p[0]?.acotada === true) return { ok: false, code: 'scoped' };
   // Revocar pide lo mismo que dar (0079 §2). Sin fila (null), not_found abajo.
   if (p[0]?.otorga === false) return { ok: false, code: 'cannot_grant' };
   const { rows } = await tx.query<{ id: string }>(
@@ -485,6 +523,7 @@ export async function changeMemberRole(
 
   const nuevo = await puedeYOtorga(tx, 'equipo.rol.editar', roleId, extras);
   if (!nuevo.puede) return { ok: false, code: 'forbidden' };
+  if (nuevo.acotada) return { ok: false, code: 'scoped' };
   const viejo = await puedeYOtorga(tx, 'equipo.rol.editar', antes.roleId, antes.extraPermissions);
   if (!nuevo.otorga || !viejo.otorga) return { ok: false, code: 'cannot_grant' };
 
@@ -519,8 +558,9 @@ export async function changeMemberRole(
 export async function removeMember(tx: WorkspaceTx, userId: string): Promise<TeamResult> {
   const antes = await miembro(tx, userId);
   if (!antes) return { ok: false, code: 'not_found' };
-  const { puede, otorga } = await puedeYOtorga(tx, 'equipo.miembro.revocar', antes.roleId, antes.extraPermissions);
+  const { puede, otorga, acotada } = await puedeYOtorga(tx, 'equipo.miembro.revocar', antes.roleId, antes.extraPermissions);
   if (!puede) return { ok: false, code: 'forbidden' };
+  if (acotada) return { ok: false, code: 'scoped' };
   if (!otorga) return { ok: false, code: 'cannot_grant' };
 
   const { rows } = await conUltimoDueno(() =>
