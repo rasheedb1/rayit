@@ -134,6 +134,29 @@ describe("InvitarForm: un error no borra lo escrito", () => {
   });
 });
 
+describe("InvitarForm: el error de un campo se apaga al corregirlo", () => {
+  it("tras enviar vacío, escribir el correo apaga su error, y elegir el rol, el suyo", () => {
+    const { rerender } = pintar();
+    estado = { errors: { email: MESSAGES.errores.correo, roleId: MESSAGES.errores.rol } };
+    rerender(<InvitarForm roles={ROLES} casillas={TODAS} fechas={fechas} />);
+    expect(screen.getByText(MESSAGES.errores.correo)).toBeInTheDocument();
+    expect(screen.getByText(MESSAGES.errores.rol)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(new RegExp(`^${MESSAGES.invitar.correo}`)), { target: { value: "mariana@ejemplo.test" } });
+    expect(screen.queryByText(MESSAGES.errores.correo)).toBeNull();
+    expect(screen.getByText(MESSAGES.errores.rol)).toBeInTheDocument();
+    expect(screen.getByLabelText(new RegExp(`^${MESSAGES.invitar.correo}`))).not.toHaveAttribute("aria-invalid", "true");
+
+    elegir("Mánager");
+    expect(screen.queryByText(MESSAGES.errores.rol)).toBeNull();
+
+    // La siguiente respuesta trae sus propios errores, y se vuelven a ver.
+    estado = { errors: { email: MESSAGES.errores.correo } };
+    rerender(<InvitarForm roles={ROLES} casillas={TODAS} fechas={fechas} />);
+    expect(screen.getByText(MESSAGES.errores.correo)).toBeInTheDocument();
+  });
+});
+
 describe("CambiarRol", () => {
   function abrir() {
     estado = {};
@@ -153,6 +176,17 @@ describe("CambiarRol", () => {
     abrir();
     fireEvent.click(screen.getByRole("button", { name: MESSAGES.miembros.cancelar }));
     expect(screen.getByRole("button", { name: MESSAGES.miembros.cambiarRol })).toHaveFocus();
+  });
+
+  it("si la acción vuelve con un error, el panel sigue abierto y el foco va al error", () => {
+    estado = {};
+    const { rerender } = render(<CambiarRol userId="u1" roleId={ROLES[0]!.id} marcadas={[]} roles={ROLES} casillas={TODAS} />);
+    fireEvent.click(screen.getByRole("button", { name: MESSAGES.miembros.cambiarRol }));
+    estado = { message: MESSAGES.errores.last_owner };
+    rerender(<CambiarRol userId="u1" roleId={ROLES[0]!.id} marcadas={[]} roles={ROLES} casillas={TODAS} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(MESSAGES.errores.last_owner);
+    expect(screen.getByRole("alert")).toHaveFocus();
+    expect(screen.getByRole("button", { name: MESSAGES.miembros.guardar })).toBeInTheDocument();
   });
 });
 

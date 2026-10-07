@@ -8,7 +8,7 @@ import { describe, expect, test, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { enviarInvitacion, remitente, type TransporteDeCorreo } from "./_lib/correo";
+import { enviarInvitacion, NOMBRE_EN_CORREO_MAX, nombreParaCorreo, remitente, type TransporteDeCorreo } from "./_lib/correo";
 
 const correo = { para: "mariana@ejemplo.test", asunto: "Te invitan", texto: "Enlace: http://localhost:3100/invitacion/x" };
 
@@ -55,5 +55,24 @@ describe("enviarInvitacion", () => {
   test("fuera de producción, sin MAIL_FROM firma un remitente de desarrollo", () => {
     expect(remitente({ SMTP_URL: "smtp://localhost:1025" })).toMatch(/oncue\.invalid/);
     expect(remitente({ SMTP_URL: " " })).toBeNull();
+  });
+});
+
+describe("nombreParaCorreo: lo que pone quien invita, en una línea y corto", () => {
+  test("un nombre normal pasa tal cual", () => {
+    expect(nombreParaCorreo("Espacio de Laura")).toBe("Espacio de Laura");
+  });
+
+  test("saltos de línea, tabuladores y caracteres de control pasan a un espacio: no parten el asunto", () => {
+    expect(nombreParaCorreo("Laura\r\nBcc: todos@ejemplo.test\t\u0000fin")).toBe("Laura Bcc: todos@ejemplo.test fin");
+  });
+
+  test(`un nombre largo se recorta a ${NOMBRE_EN_CORREO_MAX} con «…», sin partir un emoji`, () => {
+    const largo = `${"Tu cuenta fue suspendida, verifica tus datos aquí ".repeat(4)}😀`;
+    const corto = nombreParaCorreo(largo);
+    expect([...corto].length).toBeLessThanOrEqual(NOMBRE_EN_CORREO_MAX);
+    expect(corto.endsWith("…")).toBe(true);
+    expect(nombreParaCorreo("ñ".repeat(NOMBRE_EN_CORREO_MAX))).toBe("ñ".repeat(NOMBRE_EN_CORREO_MAX));
+    expect([...nombreParaCorreo("😀".repeat(NOMBRE_EN_CORREO_MAX + 5))].length).toBe(NOMBRE_EN_CORREO_MAX);
   });
 });

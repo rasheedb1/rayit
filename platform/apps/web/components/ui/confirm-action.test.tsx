@@ -41,7 +41,7 @@ describe("ConfirmAction", () => {
     expect(action).not.toHaveBeenCalled();
   });
 
-  it("mientras la acción corre, el formulario sigue abierto y en carga; al volver, su mensaje queda bajo el botón y el foco vuelve a él", async () => {
+  it("mientras la acción corre, el formulario sigue abierto y en carga; al volver con un mensaje, queda bajo el botón y el foco va a él", async () => {
     const { action, soltar } = accionEnEspera();
     pintar(action);
     fireEvent.click(screen.getByRole("button", { name: "Quitar" }));
@@ -53,7 +53,23 @@ describe("ConfirmAction", () => {
 
     soltar({ message: "No se puede quitar ni degradar al último dueño del espacio." });
     expect(await screen.findByRole("alert")).toHaveTextContent("último dueño");
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveFocus());
+
+    // Volver a abrir y cancelar: el mensaje viejo no es noticia, el foco va al botón.
+    fireEvent.click(screen.getByRole("button", { name: "Quitar" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancelar" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Quitar" })).toHaveFocus());
+  });
+
+  it("al volver sin mensaje, el foco regresa al primer botón", async () => {
+    const { action, soltar } = accionEnEspera();
+    pintar(action);
+    fireEvent.click(screen.getByRole("button", { name: "Quitar" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sí, quitar" }));
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+    soltar({ ok: true });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Quitar" })).toHaveFocus());
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("Escape y Cancelar cierran sin ejecutar y devuelven el foco al botón", async () => {
