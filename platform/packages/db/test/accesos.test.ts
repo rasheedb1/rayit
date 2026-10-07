@@ -334,9 +334,15 @@ describe('0034: invitation', { timeout: TIEMPO_BLOQUE }, () => {
 
 describe('0034: membership_scope, workspace_grant, roles y privilegios', { timeout: TIEMPO_BLOQUE }, () => {
   test('membership_scope: se lee solo en el workspace fijado, y la web no lo escribe ni lo borra', async () => {
+    // El alcance es de una Mánager: Dueño y Administrador no lo llevan
+    // (0082 §2, ACC-7), y la base rechazaría la fila.
+    const MANAGER = '00000034-0000-4000-8000-0000000000d1';
     await t.admin(`
+      INSERT INTO app_user (id, email) VALUES ('${MANAGER}', 'manager.0034@ejemplo.com') ON CONFLICT DO NOTHING;
+      INSERT INTO membership (workspace_id, user_id, role_id)
+        VALUES ('${WORKSPACE_LAURA}', '${MANAGER}', system_role_id('creator', 'manager')) ON CONFLICT DO NOTHING;
       INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
-      VALUES ('${WORKSPACE_LAURA}', '${USER_LAURA}', 'creator', '${CREATOR_LAURA}');
+      VALUES ('${WORKSPACE_LAURA}', '${MANAGER}', 'creator', '${CREATOR_LAURA}');
     `);
     assert.equal(await laura((tx) => conteo(tx, 'SELECT count(*)::int AS n FROM membership_scope')), 1);
     assert.equal(await t.db.withWorkspace(WS_B, (tx) => conteo(tx, 'SELECT count(*)::int AS n FROM membership_scope')), 0);
@@ -350,7 +356,7 @@ describe('0034: membership_scope, workspace_grant, roles y privilegios', { timeo
     ]) {
       await assert.rejects(laura((tx) => tx.query(sentencia)), esPermisoDenegado, sentencia);
     }
-    await t.admin('DELETE FROM membership_scope');
+    await t.admin(`DELETE FROM membership_scope; DELETE FROM membership WHERE user_id = '${MANAGER}'`);
   });
 
   test('workspace_grant: mc_app no la escribe; la ven quien concede y quien recibe, y nadie más', async () => {

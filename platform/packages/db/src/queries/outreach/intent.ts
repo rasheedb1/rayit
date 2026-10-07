@@ -55,6 +55,7 @@ import { cleanReferral, MESSAGE_INTENTS, notNowResumeAt, oooResumeAt, type Messa
 import { noticeLang } from '@mc/core/outreach/messages';
 import { zonedInstant, zonedParts } from '@mc/core/outreach/schedule';
 import type { SqlExecutor, WorkerSql } from '../../client.ts';
+import { soleCreatorSql } from '../../scope.ts';
 import { advanceEnrollment, cancelPendingForEnrollment } from './enroll.ts';
 import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
 import { applyReplyOptOut, cancelLoosePitches, type InboundEffectsInput } from './inbound.ts';
@@ -319,7 +320,10 @@ async function surroundings(tx: SqlExecutor, m: UnclassifiedMessage): Promise<Su
  * Abre el negocio de un «me interesa» que llegó sin negocio abierto con la
  * marca: nace en «En conversación», en la moneda del workspace, con
  * «Responder hoy» y su vencimiento, su primera fila de historial y el
- * dueño que enroló (si sigue en el equipo). La cadencia y el mensaje del
+ * dueño que enroló (si sigue en el equipo). Su creador (ACC-7) es el
+ * único del espacio, o el único del alcance de quien corrige la
+ * intención desde la bandeja (soleCreatorSql); con varios, sin creador,
+ * como hasta hoy. Desde el worker no hay persona ni alcance. La cadencia y el mensaje del
  * hilo quedan enlazados a él: la siguiente respuesta ya lo encuentra.
  */
 async function openDealFromReply(
@@ -329,8 +333,9 @@ async function openDealFromReply(
   const id = (
     await tx.query<{ id: string }>(
       `INSERT INTO deal (workspace_id, company_id, owner_user_id, name, stage_id, currency, next_action, next_action_due,
-                         last_contact_at)
-       SELECT w.id, $2::uuid, $3::uuid, $4, 'conversacion', w.currency, $5, $6::timestamptz, $7::timestamptz
+                         last_contact_at, creator_id)
+       SELECT w.id, $2::uuid, $3::uuid, $4, 'conversacion', w.currency, $5, $6::timestamptz, $7::timestamptz,
+              ${soleCreatorSql('w.id')}
          FROM workspace w WHERE w.id = $1::uuid
        RETURNING id`,
       [m.workspaceId, s.company_id, s.recipient, name.slice(0, 120), nextAction, due.toISOString(), m.occurredAt.toISOString()],

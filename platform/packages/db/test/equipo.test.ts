@@ -583,11 +583,30 @@ describe('0078, 0079 y 0080: las casillas en la base y los archivos dos veces', 
 });
 
 describe('quien tiene alcance no administra el equipo (0079 §6)', () => {
-  const comoAdmin = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => en(WS_AGENCIA, ADMIN_AGENCIA, fn);
+  /**
+   * Una Coordinadora con un rol a medida que tiene los permisos de la
+   * Administradora: Dueño y Administrador no pueden llevar alcance (0082
+   * §2, ACC-7), así que quien administra el equipo Y tiene alcance solo
+   * puede ser un rol a medida.
+   */
+  const COORDINADORA = '00000079-0000-4000-8000-0000000000c7';
+  const comoAdmin = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => en(WS_AGENCIA, COORDINADORA, fn);
   /** Una creadora cualquiera: el alcance solo pide un uuid, la clave foránea es a la membresía. */
   const CREADORA = '00000079-0000-4000-8000-00000000c0de';
 
-  test('con una fila de alcance, la Administradora no invita, ni cambia, ni quita, ni revoca: ni por la consulta ni a mano', async () => {
+  test('con una fila de alcance, quien administra el equipo no invita, ni cambia, ni quita, ni revoca: ni por la consulta ni a mano', async () => {
+    await t.admin(`
+      INSERT INTO app_user (id, email, name) VALUES ('${COORDINADORA}', 'coordinadora@agencia.test', 'Coordinadora') ON CONFLICT DO NOTHING;
+      INSERT INTO role (workspace_id, key, workspace_kind, label_es, is_system)
+        VALUES ('${WS_AGENCIA}', 'coordinacion', 'agency', 'Coordinación', false) ON CONFLICT DO NOTHING;
+      INSERT INTO role_permission (role_id, permission_key)
+        SELECT r.id, rp.permission_key FROM role r, role_permission rp
+         WHERE r.workspace_id = '${WS_AGENCIA}' AND r.key = 'coordinacion' AND rp.role_id = system_role_id('agency', 'admin')
+        ON CONFLICT DO NOTHING;
+      INSERT INTO membership (workspace_id, user_id, role_id)
+        SELECT '${WS_AGENCIA}', '${COORDINADORA}', r.id FROM role r WHERE r.workspace_id = '${WS_AGENCIA}' AND r.key = 'coordinacion'
+        ON CONFLICT DO NOTHING;
+    `);
     const manager = await rol('agency', 'manager');
     const viewer = await rol('agency', 'viewer');
     // Antes de acotarla deja una invitación pendiente que después intentará revocar.
@@ -601,7 +620,7 @@ describe('quien tiene alcance no administra el equipo (0079 §6)', () => {
       INSERT INTO membership (workspace_id, user_id, role_id)
         VALUES ('${WS_AGENCIA}', '00000079-0000-4000-8000-0000000000e3', system_role_id('agency', 'manager'));
       INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
-        VALUES ('${WS_AGENCIA}', '${ADMIN_AGENCIA}', 'creator', '${CREADORA}');
+        VALUES ('${WS_AGENCIA}', '${COORDINADORA}', 'creator', '${CREADORA}');
     `);
     try {
       assert.equal(await comoAdmin((tx) => sessionHasScope(tx)), true);
@@ -641,7 +660,7 @@ describe('quien tiene alcance no administra el equipo (0079 §6)', () => {
       // Leer el equipo sí puede.
       assert.ok((await comoAdmin((tx) => listMembers(tx))).length >= 3);
     } finally {
-      await t.admin(`DELETE FROM membership_scope WHERE user_id = '${ADMIN_AGENCIA}'`);
+      await t.admin(`DELETE FROM membership_scope WHERE user_id = '${COORDINADORA}'`);
     }
 
     // Sin la fila, vuelve a poder: el alcance era lo único que la paraba.

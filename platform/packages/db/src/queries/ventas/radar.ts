@@ -4,6 +4,7 @@
  * descartarlas y rechazar una marca. Dueño: Rasheed.
  */
 import { isUuid, type WorkspaceTx } from '../../client.ts';
+import { ScopeError, soleCreatorSql } from '../../scope.ts';
 import { addExcludedCompany, BRIEF_LIMITS, BriefError, briefSignalLateralSql, briefVerdictSql, type BriefVerdict } from '../brief.ts';
 import { CompanyNotFound, DuplicateCompanyName, normalizeDomain, SignalAlreadyReviewed, SignalNotFound, type SignalRow, type SignalStatus, VentasError } from './comun.ts';
 import { dueInBusinessDays, normalizeCountry, safeLimit, type SignalRowSql, toSignalRow, truncate } from './interno.ts';
@@ -769,16 +770,20 @@ export async function acceptSignal(
   // pitch» (VEN-4: cada negocio abierto tiene acción, fecha y responsable),
   // como company_link lo toma de responsable de la empresa. Sin sesión (la
   // demo), current_user_id() es NULL y queda sin responsable, como antes.
+  // De qué creador es (ACC-7): el único del espacio o del alcance de
+  // quien acepta. Una señal no dice de quién es; quien lleva a varios
+  // creadores y está acotado abre el negocio desde la ficha, eligiendo.
+  const creatorId = await creatorForNewDeal(tx, null);
   const deal = await tx.query<{ id: string }>(
     `INSERT INTO deal (workspace_id, company_id, origin_signal_id, owner_user_id, name, stage_id, amount, currency,
-                       next_action, next_action_kind, next_action_due, next_action_user_id)
+                       next_action, next_action_kind, next_action_due, next_action_user_id, creator_id)
      SELECT current_workspace_id(), $1, $2, current_user_id(), $3, 'nuevo', $4::numeric, w.currency, $5, 'pitch',
-            ${dueInBusinessDays('$8', '$6', '$7')}, current_user_id()
+            ${dueInBusinessDays('$8', '$6', '$7')}, current_user_id(), $9::uuid
      FROM ${WORKSPACE_TZ} w
      RETURNING id`,
     [
       companyId, signalId, truncate(dealName, 120), sig.budget_estimate, opts.nextAction?.trim() || PITCH_ACTION,
-      PITCH_DUE_BUSINESS_DAYS, PITCH_DUE_HOUR, opts.now?.toISOString() ?? null,
+      PITCH_DUE_BUSINESS_DAYS, PITCH_DUE_HOUR, opts.now?.toISOString() ?? null, creatorId,
     ],
   );
   const dealId = deal.rows[0]?.id;
@@ -925,6 +930,78 @@ export interface CreateDealInput {
   nextAction?: string;
   /** Desde cuándo se cuentan los días hábiles del pitch. Por defecto, now() de la base; lo fijan las pruebas. */
   now?: Date;
+  /**
+   * De qué creador es (ACC-7). Sin él, el único del espacio o del alcance
+   * de quien lo abre (creatorForNewDeal); con varios, lo elige la ficha
+   * (listDealCreatorOptions).
+   */
+  creatorId?: string | null;
+}
+
+/** Un creador que se puede elegir para un negocio nuevo. */
+export interface DealCreatorOption {
+  id: string;
+  name: string;
+}
+
+/** Los creadores para «Nuevo negocio», y si elegir uno es obligatorio. */
+export interface DealCreatorOptions {
+  creators: DealCreatorOption[];
+  /**
+   * Quien está acotado por creador y lleva a varios tiene que elegir: un
+   * negocio sin creador quedaría fuera de su alcance y no lo vería
+   * (ACC-6 D4). Quien ve a todos puede dejarlo «Sin creador», como hasta
+   * hoy. Con un solo creador no se pregunta: es ese.
+   */
+  required: boolean;
+}
+
+/**
+ * Los creadores vivos que la persona de la transacción puede poner en un
+ * negocio: los de su alcance por creador, o todos los del espacio si no
+ * lo tiene (scope_allows, 0040). Ordenados por nombre.
+ */
+export async function listDealCreatorOptions(tx: WorkspaceTx): Promise<DealCreatorOptions> {
+  const { rows } = await tx.query<{ id: string; name: string; all: boolean }>(
+    `SELECT cp.id, cp.display_name AS name, session_sees_all_creators() AS all
+       FROM creator_profile cp
+      WHERE cp.deleted_at IS NULL AND scope_allows('creator', cp.id)
+      ORDER BY lower(cp.display_name), cp.id`,
+  );
+  const creators = rows.map((r) => ({ id: r.id, name: r.name }));
+  const seesAll = rows[0]?.all ?? true;
+  return { creators, required: !seesAll && creators.length > 1 };
+}
+
+/**
+ * El creador de un negocio que se va a abrir (ACC-7). La política por
+ * creador de deal (0082 §3) no deja escribir una fila fuera del alcance
+ * de quien la escribe; aquí se decide ANTES, para decirlo en el idioma
+ * de la pantalla y no con un 42501:
+ *
+ *   · si llega uno elegido, tiene que ser un creador vivo del espacio
+ *     (InvalidCreator) y caer en el alcance de quien abre (ScopeError);
+ *   · si no, el único del espacio o del alcance (soleCreatorSql); y si no
+ *     hay uno solo, NULL para quien ve a todos («sin creador», como hasta
+ *     hoy) y DealCreatorRequired para quien está acotado.
+ */
+export async function creatorForNewDeal(tx: WorkspaceTx, chosen: string | null | undefined): Promise<string | null> {
+  if (chosen) {
+    if (!isUuid(chosen)) throw new VentasError('InvalidCreator');
+    const { rows } = await tx.query<{ ok: boolean }>(
+      `SELECT scope_allows('creator', cp.id) AS ok FROM creator_profile cp WHERE cp.id = $1 AND cp.deleted_at IS NULL`,
+      [chosen],
+    );
+    if (rows.length === 0) throw new VentasError('InvalidCreator');
+    if (rows[0]?.ok !== true) throw new ScopeError();
+    return chosen;
+  }
+  const { rows } = await tx.query<{ id: string | null; all: boolean }>(
+    `SELECT ${soleCreatorSql()} AS id, session_sees_all_creators() AS all`,
+  );
+  const id = rows[0]?.id ?? null;
+  if (id === null && rows[0]?.all === false) throw new VentasError('DealCreatorRequired');
+  return id;
 }
 
 /**
@@ -947,16 +1024,17 @@ export async function createDeal(tx: WorkspaceTx, input: CreateDealInput): Promi
   const linked = await tx.query('SELECT 1 FROM company_link WHERE company_id = $1', [input.companyId]);
   if (linked.rows.length === 0) throw new CompanyNotFound();
 
+  const creatorId = await creatorForNewDeal(tx, input.creatorId);
   const deal = await tx.query<{ id: string }>(
     `INSERT INTO deal (workspace_id, company_id, owner_user_id, name, stage_id, amount, currency,
-                       next_action, next_action_kind, next_action_due, next_action_user_id)
+                       next_action, next_action_kind, next_action_due, next_action_user_id, creator_id)
      SELECT current_workspace_id(), $1, current_user_id(), $2, 'nuevo', $3::numeric, w.currency, $4, 'pitch',
-            ${dueInBusinessDays('$7', '$5', '$6')}, current_user_id()
+            ${dueInBusinessDays('$7', '$5', '$6')}, current_user_id(), $8::uuid
      FROM ${WORKSPACE_TZ} w
      RETURNING id`,
     [
       input.companyId, name, amount, input.nextAction?.trim() || PITCH_ACTION, PITCH_DUE_BUSINESS_DAYS, PITCH_DUE_HOUR,
-      input.now?.toISOString() ?? null,
+      input.now?.toISOString() ?? null, creatorId,
     ],
   );
   const dealId = deal.rows[0]?.id;
