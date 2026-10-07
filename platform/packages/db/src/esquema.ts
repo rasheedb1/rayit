@@ -2675,7 +2675,8 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     const columnas = u.columnas ?? [];
     const propias = inquilinoPorTabla.get(u.tabla) ?? [];
     // La clave primaria sustituta de la fila (uuid al azar; desde 0082
-    // ninguna de secuencia donde llega mc_app, clavesDeSecuencia): la genera la base, no lleva dato, y chocar con ella solo dice que
+    // ninguna de secuencia donde llega mc_app, clavesDeSecuencia): la
+    // genera la base, no lleva dato, y chocar con ella solo dice que
     // ese id existe, que es lo que ya sabe quien lo escribe.
     const sustituta = u.primaria && u.generada;
     // La columna de inquilino, en las columnas o en una expresión.
@@ -3189,7 +3190,8 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
   }
   if (estado.clavesDeSecuencia.length) {
     partes.push(
-      `hay columnas que la base rellena con una secuencia en tablas que ${APP_ROLE} lee o escribe; una secuencia ` +
+      `hay columnas que la base rellena con una secuencia en tablas que ${APP_ROLE} o ${PUBLIC_SHARE_ROLE} leen o ` +
+        'escriben (directo, por PUBLIC, por membresía o por columna); una secuencia ' +
         'es de la tabla entera, así que el valor de una fila propia dice cuántas escribió toda la plataforma: ' +
         estado.clavesDeSecuencia.join(', ') +
         '. Pásalas a uuid DEFAULT gen_random_uuid() en una migración (ver 0082), o decláralas en ' +

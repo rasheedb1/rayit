@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { allJobs } from '../src/jobs/index.ts';
 import { recordSkipped } from '../src/runner/comun.ts';
 import { defineJob } from '../src/runner/registry.ts';
+import { runIdOf } from '../src/runner/run.ts';
 import { jobRuns, seedTestDefinitions, startHarness, waitFor, type Harness, SETUP_TIMEOUT } from './helpers/harness.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -334,4 +335,11 @@ test('la última corrida de un job con dos del mismo started_at: la abierta prim
   } finally {
     await h.db.raw.exec("DELETE FROM job_run WHERE job_id = 'test.empate'; DELETE FROM job_definition WHERE id = 'test.empate'");
   }
+});
+
+test('runIdOf: un RETURNING sin fila falla al abrir la corrida, no con un runId «undefined» (CIM-11)', () => {
+  const id = '0b8f6a52-6f1e-4c7a-9d1e-2f3a4b5c6d7e';
+  assert.equal(runIdOf([{ id }]), id);
+  assert.throws(() => runIdOf([]), /job_run no devolvió id al abrir la corrida/);
+  assert.throws(() => runIdOf([{ id: undefined as unknown as string }]), /job_run no devolvió id/);
 });

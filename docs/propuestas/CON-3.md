@@ -404,7 +404,7 @@ la fila 8 de §8.3:
    make db.sql Q="select id, platform_id, external_account_id, handle, status, scopes, access_expires_at, refresh_expires_at, secret_ref, connected_at from social_connection where platform_id = 'tiktok' and deleted_at is null order by connected_at desc limit 3"
    make db.sql Q="select secret_ref, key_version, octet_length(ciphertext) as bytes, workspace_id, created_at from connection_secret order by created_at desc limit 3"
    make db.sql Q="select purpose, granted, policy_version, evidence - 'textShown' as evidence, granted_at from data_consent order by granted_at desc limit 3"
-   make db.sql Q="select endpoint, http_status, ok, error_code, called_at from api_call_log order by id desc limit 5"
+   make db.sql Q="select endpoint, http_status, ok, error_code, called_at from api_call_log order by called_at desc limit 5"
    ```
    Lo esperado: `scopes = {user.info.basic,user.info.profile,user.info.stats,video.list}`,
    `access_expires_at` a 24 h, `refresh_expires_at` a 365 días,

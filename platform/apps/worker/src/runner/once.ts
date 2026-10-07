@@ -81,7 +81,7 @@ import type { Queryable, WorkerDatabase } from './db.ts';
 import { loadJobDefinitions } from './definitions.ts';
 import type { Logger } from './logger.ts';
 import { JobRegistry, type JobDefinition, type JobRegistration } from './registry.ts';
-import { CHAIN_SOURCE, executeRun, JobItemsFailedError, JobTimeoutError, type RunOutcome, type RunStatus } from './run.ts';
+import { CHAIN_SOURCE, executeRun, JobItemsFailedError, JobTimeoutError, runIdOf, type RunOutcome, type RunStatus } from './run.ts';
 
 /** `source` del payload de una corrida de --once, como `cron` en las de pg-boss. */
 export const ONCE_SOURCE = 'once';
@@ -483,7 +483,7 @@ export async function claimRun(db: WorkerDatabase, item: PendingRun, at: Date, b
        VALUES ($1, 'running', $2, $3::timestamptz, $4::jsonb) RETURNING id`,
       [item.def.id, attempt, at.toISOString(), JSON.stringify({ bossJobId, ...(sliceS !== undefined ? { [SLICE_KEY]: sliceS } : {}) })],
     );
-    return { runId: String(rows[0]?.id), attempt, reason };
+    return { runId: runIdOf(rows), attempt, reason };
   });
 }
 

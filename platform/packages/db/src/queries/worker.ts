@@ -93,7 +93,7 @@ export const ORDEN_ULTIMA_CORRIDA = (alias?: string): string => {
   return `${a}started_at DESC, ${a}finished_at DESC NULLS FIRST`;
 };
 
-const TS = (col: string) =>`to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
+const TS = (col: string) => `to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
 
 export async function getWorkerHealth(q: HealthExecutor): Promise<WorkerJobHealth[]> {
   const { rows } = await q.query(

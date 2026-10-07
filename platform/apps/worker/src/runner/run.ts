@@ -165,16 +165,26 @@ async function insertRun(deps: RunDeps, jobId: string, ctx: PayloadContext, atte
     [jobId, workspaceId, ctx.entityType, ctx.entityId, attempt, JSON.stringify({ bossJobId, ...(workspaceId === null && ctx.workspaceId ? { workspaceIdIgnored: ctx.workspaceId } : {}) })],
   );
   try {
-    const { rows } = await insert(ctx.workspaceId);
-    return String(rows[0]?.id);
+    return runIdOf((await insert(ctx.workspaceId)).rows);
   } catch (err) {
     if (ctx.workspaceId && (err as { code?: string }).code === FK_VIOLATION) {
       deps.logger.warn('el workspace del payload no existe; job_run se abre sin workspace', { job: jobId, workspaceId: ctx.workspaceId });
-      const { rows } = await insert(null);
-      return String(rows[0]?.id);
+      return runIdOf((await insert(null)).rows);
     }
     throw err;
   }
+}
+
+/**
+ * El id de la corrida que devolvió `INSERT … RETURNING id`. Un RETURNING
+ * vacío falla AQUÍ, diciendo qué pasó: `String(undefined)` daría el texto
+ * 'undefined' como runId y el error saldría después, en el UPDATE de
+ * cierre, como un uuid mal escrito.
+ */
+export function runIdOf(rows: ReadonlyArray<{ id: string }>): string {
+  const id = rows[0]?.id;
+  if (typeof id !== 'string') throw new Error('job_run no devolvió id al abrir la corrida');
+  return id;
 }
 
 async function workspaceRecorded(deps: RunDeps, runId: string): Promise<boolean> {

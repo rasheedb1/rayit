@@ -934,6 +934,36 @@ describe('Resumen · importación por CSV', () => {
     await assert.rejects(() => enLaura((tx) => listKnownPosts(tx, 'no-soy-uuid', ['x'])), conCodigo('invalid_connection'));
   });
 
+  test('dos lecturas del mismo instante: la última es la de mejor fuente, no la de un id al azar (ORDEN_ULTIMA_LECTURA, CIM-11)', async () => {
+    // Hasta 0082 el empate lo resolvía `id DESC` («la que se escribió
+    // después»); con el id uuid, eso cambiaba de resultado entre corridas.
+    const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'youtube', handle: 'empate.de.lecturas' }));
+    const exportado = haceDias(2);
+    await enLaura((tx) =>
+      importCsvReadings(tx, {
+        connectionId: cuenta.connectionId,
+        platform: 'youtube',
+        rows: [fila('em_1', { publishedAt: haceDias(9), views: 100 })],
+        capturedAt: exportado,
+      }),
+    );
+    // La misma lectura, en el mismo instante y a la misma edad, escrita a
+    // mano después (peor fuente) y por la API (mejor fuente).
+    const otra = (fuente: string, views: number) =>
+      t.admin(
+        `INSERT INTO post_metric_snapshot (post_id, workspace_id, captured_at, age_hours, views, source)
+         SELECT s.post_id, s.workspace_id, s.captured_at, s.age_hours, ${views}, '${fuente}'
+           FROM post_metric_snapshot s JOIN post p ON p.id = s.post_id
+          WHERE p.connection_id = '${cuenta.connectionId}' AND p.external_post_id = 'em_1' AND s.source = 'csv_import'`,
+      );
+    const ultima = async () =>
+      (await enLaura((tx) => listKnownPosts(tx, cuenta.connectionId, ['em_1'])))[0]!.lastReading?.views;
+    await otra('manual', 999);
+    assert.equal(await ultima(), 100, 'csv_import gana a manual');
+    await otra('api', 555);
+    assert.equal(await ultima(), 555, 'api gana a csv_import');
+  });
+
   test('un archivo exportado ANTES que la última lectura no cambia la última ni mueve el reloj', async () => {
     const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'tiktok', handle: 'orden.de.llegada' }));
     // Primero el archivo nuevo, exportado hace un día…

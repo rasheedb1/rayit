@@ -339,7 +339,11 @@ describe('0082 convierte las claves con las filas dentro', () => {
         'zz_cim11_contador.id (public.zz_cim11_contador_id_seq)',
         'zz_cim11_identidad.numero (public.zz_cim11_identidad_numero_seq)',
       ]);
-      assert.match(explicarEsquema(e) ?? '', /secuencia[\s\S]*zz_cim11_contador\.id[\s\S]*CLAVES_DE_SECUENCIA_DECLARADAS/);
+      const explicacion = explicarEsquema(e) ?? '';
+      assert.match(explicacion, /secuencia[\s\S]*zz_cim11_contador\.id[\s\S]*CLAVES_DE_SECUENCIA_DECLARADAS/);
+      // Dice los dos roles y los cuatro caminos que mira, no solo un GRANT
+      // directo a mc_app (zz_cim11_del_enlace solo le llega a mc_public_share).
+      assert.match(explicacion, /tablas que mc_app o mc_public_share leen o escriben \(directo, por PUBLIC, por membresía o por columna\)/);
     } finally {
       await db.execAsSuperuser('DROP TABLE zz_cim11_contador, zz_cim11_identidad, zz_cim11_del_worker');
     }
@@ -392,6 +396,7 @@ describe('0082 convierte las claves con las filas dentro', () => {
         'zz_cim11_heredada.id (public.zz_cim11_heredada_id_seq)',
         'zz_cim11_por_columna.id (public.zz_cim11_por_columna_id_seq)',
       ]);
+      assert.match(explicarEsquema(e) ?? '', /mc_app o mc_public_share leen o escriben[\s\S]*zz_cim11_del_enlace\.id/);
     } finally {
       await db.execAsSuperuser(
         `DROP TABLE zz_cim11_heredada, zz_cim11_por_columna, zz_cim11_del_enlace, zz_cim11_de_nadie;

@@ -85,6 +85,26 @@ const DEFAULT_LIMIT = 50;
 /** Techo de una página: más que esto es un error de quien llama, no una consulta. */
 const MAX_LIMIT = 500;
 
+/**
+ * Las fuentes de una lectura de post_metric_snapshot, de mejor a peor: la
+ * API de la red, su exportación (csv_import), un agregador de terceros y
+ * lo escrito a mano. Es la misma lista con que post_metrics_at_cut
+ * desempata en 0082 §1; si cambia aquí, cambia allí en una migración.
+ */
+const PRIORIDAD_DE_FUENTE = (alias: string): string =>
+  `array_position(ARRAY['api', 'csv_import', 'aggregator', 'manual'], ${alias}.source)`;
+
+/**
+ * «La última lectura» de un post en post_metric_snapshot con alias
+ * `alias`: la capturada más tarde; a igual captured_at, la del post más
+ * viejo (age_hours), y después la de mejor fuente. Hasta 0082 (CIM-11)
+ * el empate lo resolvía `id DESC`, que era «la que se escribió después»;
+ * ahora el id es un uuid al azar y no dice nada: queda solo como último
+ * criterio para que el resultado no dependa del plan.
+ */
+export const ORDEN_ULTIMA_LECTURA = (alias: string): string =>
+  `${alias}.captured_at DESC, ${alias}.age_hours DESC, ${PRIORIDAD_DE_FUENTE(alias)}, ${alias}.id`;
+
 /** La tabla "Mis videos": última métrica y puntaje de cada post, más reciente primero. */
 export async function listPostBoard(tx: WorkspaceTx, opts: { limit?: number } = {}): Promise<PostBoardRow[]> {
   const limit = opts.limit ?? DEFAULT_LIMIT;
@@ -1170,7 +1190,7 @@ export async function listKnownPosts(
                 s.follows_from_post, s.reach_non_followers
            FROM post_metric_snapshot s
           WHERE s.post_id = p.id
-          ORDER BY s.captured_at DESC, s.id DESC
+          ORDER BY ${ORDEN_ULTIMA_LECTURA('s')}
           LIMIT 1
        ) u ON true
       WHERE p.connection_id = $1 AND p.external_post_id = ANY($2::text[])`,
@@ -1484,7 +1504,7 @@ export async function importCsvReadings(
               EXISTS (
                 SELECT 1
                   FROM (SELECT s.* FROM post_metric_snapshot s WHERE s.post_id = p.id
-                         ORDER BY s.captured_at DESC, s.id DESC LIMIT 1) u, zona z
+                         ORDER BY ${ORDEN_ULTIMA_LECTURA('s')} LIMIT 1) u, zona z
                  WHERE (u.captured_at AT TIME ZONE z.tz)::date = ($2::timestamptz AT TIME ZONE z.tz)::date
                    AND u.views IS NOT DISTINCT FROM e.views
                    AND u.reach IS NOT DISTINCT FROM e.reach
