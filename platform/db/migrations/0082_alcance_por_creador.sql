@@ -162,3 +162,54 @@ DROP POLICY IF EXISTS deal_creator_scope ON deal;
 CREATE POLICY deal_creator_scope ON deal
   AS RESTRICTIVE FOR ALL TO mc_app
   USING ((SELECT session_sees_all_creators()) OR scope_allows('creator', creator_id));
+
+
+-- =====================================================================
+-- 3 · public_account_out_of_scope(): «ese @ ya es de otro creador»
+-- ---------------------------------------------------------------------
+-- La única pregunta que la política de §2 deja sin respuesta y que el
+-- código necesita. «Agregar por @» y el regreso de OAuth (Conexiones,
+-- CON-10) buscan la cuenta por @ que ya exista con ese handle para
+-- convertir ESA fila en autorizada (mismo id, mismo historial). Si la
+-- fila es de una creadora fuera del alcance de quien conecta, ACC-6
+-- respondía ScopeError (ACC-6 §6, hallazgos 1, 2 y 7): devolver «no
+-- existe» crearía una segunda fila para la misma cuenta real bajo otra
+-- creadora. Con §2 la fila ya no se ve, así que la consulta normal no
+-- distingue «no existe» de «existe y no es tuya».
+--
+-- Esta función responde solo sí o no, para UN handle de UNA red, dentro
+-- del espacio fijado y para la persona de la transacción: ¿hay una
+-- cuenta viva por @ con ese handle que NO cae en su alcance por creador?
+-- No devuelve la fila, ni su creadora, ni su id. No enseña nada nuevo:
+-- es lo que ACC-6 ya decía con ScopeError.
+--
+-- SECURITY DEFINER porque tiene que mirar por debajo de §2 (la política
+-- es TO mc_app; el dueño de la tabla solo pasa por la de workspace, que
+-- con FORCE también le aplica). Aun así se ata al espacio a mano
+-- (workspace_id = current_workspace_id()), y sin espacio fijado responde
+-- falso. Sin EXECUTE para PUBLIC; solo mc_app la llama. Declarada en la
+-- guardia (FUNCIONES_DEFINER_DECLARADAS).
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public_account_out_of_scope(p_platform text, p_handle text) RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+  SELECT current_workspace_id() IS NOT NULL
+     AND p_handle IS NOT NULL
+     AND NOT session_sees_all_creators()
+     AND EXISTS (
+           SELECT 1 FROM social_connection c
+            WHERE c.workspace_id = current_workspace_id()
+              AND c.platform_id = p_platform
+              AND c.access_mode IN ('public_profile', 'aggregator')
+              AND c.deleted_at IS NULL
+              AND lower(c.handle) = lower(p_handle)
+              AND NOT scope_allows('creator', c.creator_id))
+$$;
+COMMENT ON FUNCTION public_account_out_of_scope(text, text) IS
+  'Sí o no: ¿hay en el espacio fijado una cuenta viva por @ de esa red con ese handle fuera del alcance por creador de la sesión? Para que Conexiones diga ScopeError en vez de duplicar la cuenta (0082 §3, ACC-7).';
+
+REVOKE ALL ON FUNCTION public_account_out_of_scope(text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public_account_out_of_scope(text, text) TO mc_app;

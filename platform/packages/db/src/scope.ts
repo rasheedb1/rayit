@@ -126,6 +126,51 @@ export async function assertScopeAllows(tx: WorkspaceTx, targets: Readonly<Recor
   if (rows[0]?.ok !== true) throw new ScopeError();
 }
 
+/** El 23505 de esa restricción, buscado en la cadena `cause` (Drizzle y PGlite envuelven el error de Postgres). */
+function isUniqueViolationOf(err: unknown, constraint: string): boolean {
+  for (let e: unknown = err; typeof e === 'object' && e !== null; e = (e as { cause?: unknown }).cause) {
+    const p = e as { code?: unknown; constraint?: unknown };
+    if (p.code === '23505' && p.constraint === constraint) return true;
+  }
+  return false;
+}
+
+/**
+ * Una escritura que puede chocar con un índice único contra una fila que
+ * la transacción NO ve por el alcance por creador (ACC-7, 0082 §2).
+ *
+ * Antes de ACC-7 las consultas buscaban esa fila sin `scopeFilter()` y,
+ * si estaba fuera del alcance, lanzaban ScopeError antes de escribir.
+ * Con la política por creador en la base esa búsqueda ya no la
+ * encuentra: el único que sabe que existe es el índice único, que cuenta
+ * todas las filas. Aquí se escribe dentro de un SAVEPOINT; si choca con
+ * `constraint` y la persona está acotada por creador
+ * (`session_sees_all_creators()` falso), el choque ES la fila que no ve,
+ * y se dice con ScopeError sin dejar la transacción abortada. Para quien
+ * ve a todos los creadores el choque es otra cosa (dos altas a la vez) y
+ * se relanza tal cual.
+ *
+ * `savepoint` es un identificador fijo del módulo que llama, nunca un
+ * valor que llegue de fuera.
+ */
+export async function writeOrScopeError<T>(tx: WorkspaceTx, savepoint: string, constraint: string, write: () => Promise<T>): Promise<T> {
+  await tx.query(`SAVEPOINT ${savepoint}`);
+  let out: T;
+  try {
+    out = await write();
+  } catch (err) {
+    await tx.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+    await tx.query(`RELEASE SAVEPOINT ${savepoint}`);
+    if (isUniqueViolationOf(err, constraint)) {
+      const { rows } = await tx.query<{ all: boolean }>('SELECT session_sees_all_creators() AS all');
+      if (rows[0]?.all === false) throw new ScopeError();
+    }
+    throw err;
+  }
+  await tx.query(`RELEASE SAVEPOINT ${savepoint}`);
+  return out;
+}
+
 /**
  * Antes de escribir algo del espacio entero (un gasto, la configuración
  * financiera): quien tiene alcance —«solo lo de Camilo»— no lo toca,

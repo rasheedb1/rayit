@@ -85,7 +85,7 @@ import {
 } from '@mc/core';
 import { audit } from '../audit.ts';
 import { isUuid, type WorkspaceTx } from '../client.ts';
-import { ScopeError, scopeFilter } from '../scope.ts';
+import { ScopeError, scopeFilter, writeOrScopeError } from '../scope.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -970,10 +970,12 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
   // garantía en la base; el bloqueo evita que la segunda llamada choque
   // con él y pueda devolver la campaña de la primera.
   await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`campaign-from-quote:${q.id}`]);
-  // Sin filtro de alcance a propósito: el índice único parcial cuenta
-  // TODAS las campañas vivas de la cotización. Si la que existe está
-  // fuera del alcance (se reasignó a otra creadora o marca), se dice con
-  // ScopeError en vez de chocar con el índice en el INSERT.
+  // Sin scopeFilter() a propósito: el índice único parcial cuenta TODAS
+  // las campañas vivas de la cotización. Si la que existe está fuera del
+  // alcance por marca o por campaña (se reasignó), se dice con ScopeError
+  // en vez de chocar con el índice en el INSERT. Si está fuera del
+  // alcance por CREADOR, la política de 0082 (ACC-7) ya no la deja ver
+  // aquí: la dice el propio índice, en el INSERT de abajo.
   const existing = await tx.query<{ id: string; visible: boolean }>(
     `SELECT c.id, (${SCOPE_CAMPAIGN}) AS visible FROM campaign c
       WHERE c.quote_id = $1 AND c.status <> 'cancelled' ORDER BY c.created_at LIMIT 1`,
@@ -995,7 +997,11 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
     paymentTermsDays: q.payment_terms_days,
   });
 
-  const inserted = await tx.query<{ id: string }>(
+  // El choque con campaign_quote_id_active_key, con el bloqueo de arriba
+  // tomado, solo puede ser una campaña viva de la cotización que esta
+  // persona no ve (otra creadora): writeOrScopeError lo dice con
+  // ScopeError y deja la transacción usable.
+  const inserted = await writeOrScopeError(tx, 'campana_de_cotizacion', 'campaign_quote_id_active_key', () => tx.query<{ id: string }>(
     `INSERT INTO campaign (workspace_id, company_id, creator_id, deal_id, quote_id, name, brief,
                            starts_on, ends_on, tracking_code, tracking_url, utm, brand_baseline_from, brand_accounts,
                            amount, currency, status)
@@ -1009,7 +1015,7 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
       brandBaselineFrom(input.startsOn), JSON.stringify(brandAccountsFromSocials(q.socials)),
       q.total, q.currency,
     ],
-  );
+  ));
   const id = inserted.rows[0]?.id;
   if (!id) throw new CampaignError('CampaignInsertError', 'No se pudo crear la campaña.');
   // Audita aquí y no en COT-4: quien llame a esta función deja la fila sin saberlo.
