@@ -76,16 +76,10 @@ const SIN_ALCANCE_DECLARADAS: Record<Archivo, Record<string, string>> = {
   },
   // «Lo que importa esta semana» (RES-3): lee facturas, negocios, cuentas,
   // cuentas de envío y posts, y cada rama compone su SCOPE_* como el
-  // módulo dueño de la fila. Solo los dos gestos escriben sin alcance.
-  'resumen-semana.ts': {
-    acknowledgeHighlight:
-      'solo escribe el «Entendido» PROPIO en notification_ack (0078): RLS acota el espacio, la política de INSERT exige ' +
-      'user_id = current_user_id() y PARA_MI limita a los avisos de la persona; no devuelve ni enseña ninguna fila de ' +
-      'un creador, una marca o una campaña. Lo que la persona ve lo decide la lectura, que sí filtra por alcance en cada rama',
-    unacknowledgeHighlight:
-      'el «Deshacer» del anterior, con las mismas tres cerraduras (RLS, la política de INSERT y PARA_MI): solo anota un ' +
-      'gesto propio; la fila vuelve a la lista solo si la lectura, con su alcance, la deja pasar',
-  },
+  // módulo dueño de la fila. Los gestos («Entendido», «Deshacer») y la
+  // comprobación del modo demo usan los mismos SCOPE_* (COSA_EN_ALCANCE):
+  // nada sin alcance que declarar.
+  'resumen-semana.ts': {},
 };
 
 /** Lo que cuenta como «pasa por el alcance». */

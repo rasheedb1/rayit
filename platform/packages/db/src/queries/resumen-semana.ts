@@ -655,19 +655,37 @@ export async function listWeeklyHighlights(
 }
 
 /**
- * El aviso `$1`, si es del bloque para la persona de la transacción: de
- * este espacio (RLS), de ella (PARA_MI) y de una de las fuentes pedidas
- * —por su cosa y su kind—. Parámetros: $1 el id, $2 y $3 los pares
- * (entity_type, kind) de las fuentes.
+ * La cosa del aviso `n` sigue en el alcance de la persona (ACC-6), con el
+ * MISMO SCOPE_* de la rama que la enseña. Sin esto, quien solo ve lo de
+ * Laura podía mandar el id de un aviso de Sofía al «Entendido», recibir
+ * true y saber así que existe.
  */
-const AVISO_DEL_BLOQUE = `SELECT n.id FROM notification n
-        WHERE n.id = $1 AND ${PARA_MI}
-          AND (n.entity_type, n.kind) IN (SELECT * FROM unnest($2::text[], $3::text[]))`;
+const COSA_EN_ALCANCE: { readonly [S in WeeklySource]: string } = {
+  connection: `EXISTS (SELECT 1 FROM social_connection c WHERE c.id = n.entity_id AND ${SCOPE_CONNECTION})`,
+  channel: `EXISTS (SELECT 1 FROM outreach_channel_account a WHERE a.id = n.entity_id AND ${SCOPE_CHANNEL})`,
+  invoice: `EXISTS (SELECT 1 FROM invoice i LEFT JOIN campaign ca ON ca.id = i.campaign_id
+                     WHERE i.id = n.entity_id AND ${SCOPE_INVOICE})`,
+  deal: `EXISTS (SELECT 1 FROM deal_pipeline d WHERE d.id = n.entity_id AND ${SCOPE_DEAL})`,
+  outlier: `EXISTS (SELECT 1 FROM post p WHERE p.id = n.entity_id AND ${SCOPE_POST})`,
+};
 
-const paresDe = (fuentes: readonly WeeklySource[]) => [
-  fuentes.flatMap((s) => AVISOS[s].kinds.map(() => AVISOS[s].entityType)),
-  fuentes.flatMap((s): readonly string[] => AVISOS[s].kinds),
-];
+/**
+ * El aviso `$1`, si es del bloque para la persona de la transacción: de
+ * este espacio (RLS), de ella (PARA_MI), de una de las fuentes pedidas
+ * —por su cosa y su kind— y con la cosa dentro de su alcance. Las
+ * fuentes ya pasaron por `pedidas` (la lista fija de WEEKLY_SOURCES), y
+ * sus entity_type y kinds son constantes de este archivo: nada de lo que
+ * se interpola viene de fuera.
+ */
+function avisoDelBloque(fuentes: readonly WeeklySource[]): string {
+  const porFuente = fuentes.map((s) => {
+    const kinds = AVISOS[s].kinds.map((k) => `'${k}'`).join(', ');
+    return `(n.entity_type = '${AVISOS[s].entityType}' AND n.kind IN (${kinds}) AND ${COSA_EN_ALCANCE[s]})`;
+  });
+  return `SELECT n.id FROM notification n
+        WHERE n.id = $1 AND ${PARA_MI}
+          AND (${porFuente.join('\n            OR ')})`;
+}
 
 /**
  * ¿Es este aviso del bloque para quien pregunta, con estas fuentes? Lo
@@ -679,7 +697,7 @@ export async function isWeeklyHighlight(tx: WorkspaceTx, notificationId: string,
   if (!isUuid(notificationId)) return false;
   const fuentes = pedidas(sources);
   if (fuentes.length === 0) return false;
-  const { rows } = await tx.query<{ ok: boolean }>(`SELECT EXISTS (${AVISO_DEL_BLOQUE}) AS ok`, [notificationId, ...paresDe(fuentes)]);
+  const { rows } = await tx.query<{ ok: boolean }>(`SELECT EXISTS (${avisoDelBloque(fuentes)}) AS ok`, [notificationId]);
   return rows[0]?.ok === true;
 }
 
@@ -687,11 +705,13 @@ export async function isWeeklyHighlight(tx: WorkspaceTx, notificationId: string,
  * El gesto de la persona de la transacción sobre un aviso del bloque
  * (notification_ack, 0078). Solo vale para los avisos de las fuentes que
  * esa persona puede ver —el mismo `sources` con el que se leyó— y para
- * los que son de ella (PARA_MI): quien no ve Finanzas no marca una
- * factura aunque conozca el id. Escribe solo si cambia algo (el último
+ * los que son de ella (PARA_MI), con la cosa dentro de su alcance
+ * (ACC-6): quien no ve Finanzas no marca una factura aunque conozca el
+ * id, y quien solo ve lo de Laura no averigua si existe un aviso de
+ * Sofía. Escribe solo si cambia algo (el último
  * gesto no era ya ese), así repetir el clic no deja otra fila.
  * Devuelve false si el aviso no existe en este espacio, no es de esas
- * fuentes o no es de ella, y siempre sin persona (modo demo): ese gesto
+ * fuentes, no es de ella o su cosa está fuera de su alcance, y siempre sin persona (modo demo): ese gesto
  * no va a la base (ver WeeklyHighlightsOptions.hidden).
  */
 async function gesto(tx: WorkspaceTx, notificationId: string, sources: readonly WeeklySource[], action: 'ack' | 'undo'): Promise<boolean> {
@@ -700,17 +720,17 @@ async function gesto(tx: WorkspaceTx, notificationId: string, sources: readonly 
   if (fuentes.length === 0) return false;
   const { rows } = await tx.query<{ ok: boolean }>(
     `WITH aviso AS (
-       ${AVISO_DEL_BLOQUE}
+       ${avisoDelBloque(fuentes)}
           AND current_user_id() IS NOT NULL
      ), nueva AS (
        INSERT INTO notification_ack (workspace_id, notification_id, user_id, action)
-       SELECT current_workspace_id(), aviso.id, current_user_id(), $4
+       SELECT current_workspace_id(), aviso.id, current_user_id(), $2
          FROM aviso
-        WHERE coalesce(${ultimoGesto('aviso.id')}, 'undo') <> $4
+        WHERE coalesce(${ultimoGesto('aviso.id')}, 'undo') <> $2
        RETURNING id
      )
      SELECT EXISTS (SELECT 1 FROM aviso) AS ok`,
-    [notificationId, ...paresDe(fuentes), action],
+    [notificationId, action],
   );
   return rows[0]?.ok === true;
 }

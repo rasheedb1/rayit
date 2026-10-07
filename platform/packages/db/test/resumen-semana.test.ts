@@ -442,6 +442,34 @@ describe('solo lo que sigue siendo cierto', () => {
     assert.equal(await deshacer(USER_LAURA, N_FACTURA), true);
   });
 
+  test('pasado el último paso de FIN-4 (+45) no hay más recordatorios, y la factura con 90 días de mora sigue en el bloque', async () => {
+    const { rows: [antes] } = await t.db.asWorker((tx) =>
+      tx.query<{ due_on: string }>(`SELECT to_char(due_on, 'YYYY-MM-DD') AS due_on FROM invoice WHERE id = $1`, [FV_007]));
+    assert.ok(antes);
+    // El último recordatorio (paso 5, crítico) ya se mandó, y desde entonces pasaron semanas sin otro aviso.
+    // (Hace 40 días y no 45: tiene que seguir siendo el más reciente de la factura, después del del paso 0.)
+    await t.admin(`
+      UPDATE invoice SET due_on = CURRENT_DATE - 90 WHERE id = '${FV_007}';
+      UPDATE notification SET severity = 'critical', action_url = '/finanzas/facturas/${FV_007}?recordatorio=5',
+                              created_at = now() - interval '40 days', read_at = now() - interval '39 days'
+       WHERE id = '${N_FACTURA}';
+    `);
+    try {
+      const factura = (await lista(USER_LAURA)).find((f) => f.id === N_FACTURA);
+      assert.ok(factura?.source === 'invoice', 'un cobro muy vencido no desaparece de las urgencias');
+      assert.ok(factura.daysOverdue >= 89, `${factura.daysOverdue} días de mora`);
+      assert.equal(factura.severity, 'critical');
+      assert.ok(factura.reminderSentAt !== null, 'con la fecha del recordatorio que ya se mandó');
+    } finally {
+      await t.admin(`
+        UPDATE invoice SET due_on = '${antes.due_on}' WHERE id = '${FV_007}';
+        UPDATE notification SET severity = 'warning', action_url = '/finanzas/facturas/${FV_007}?recordatorio=4',
+                                created_at = now() - interval '20 days'
+         WHERE id = '${N_FACTURA}';
+      `);
+    }
+  });
+
   test('una factura cuyo último aviso es informativo (paso 0) y ya venció cuenta como «aviso»', async () => {
     await t.admin(`UPDATE notification SET severity = 'info' WHERE id = '${N_FACTURA}'`);
     const factura = (await lista(USER_LAURA)).find((f) => f.id === N_FACTURA);
@@ -513,6 +541,18 @@ describe('alcance (ACC-6)', () => {
     const miembro = ids(await lista(USER_MIEMBRO));
     assert.deepEqual(miembro.filter((id) => sofia.includes(id)), []);
   });
+  test('el «Entendido» tampoco sirve de oráculo: fuera del alcance, el id de un aviso de Sofía da false y no escribe nada', async () => {
+    const sofia = [N_SOFIA_CONEXION, N_SOFIA_CANAL, N_SOFIA_FACTURA, N_SOFIA_VIDEO, N_SOFIA_NEGOCIO];
+    for (const id of sofia) {
+      assert.equal(await entender(USER_MIEMBRO, id), false, `entender ${id}`);
+      assert.equal(await deshacer(USER_MIEMBRO, id), false, `deshacer ${id}`);
+      assert.equal(await como(USER_MIEMBRO, (tx) => isWeeklyHighlight(tx, id, WEEKLY_SOURCES)), false, `isWeeklyHighlight ${id}`);
+      assert.equal(await gestos(id), 0);
+    }
+    // La dueña, que sí lo ve, sí puede (y lo devuelve como estaba).
+    assert.equal(await entender(USER_LAURA, N_SOFIA_FACTURA), true);
+    assert.equal(await deshacer(USER_LAURA, N_SOFIA_FACTURA), true);
+  });
 });
 
 describe('más de las que caben', () => {
@@ -536,6 +576,20 @@ describe('más de las que caben', () => {
 });
 
 describe('la urgencia manda antes del corte', () => {
+  test('compareHighlights: dentro de una fuente, un crítico viejo va antes que un aviso reciente; a igual severidad, el más reciente', () => {
+    const cuenta = (id: string, severity: 'critical' | 'warning', createdAt: string): WeeklyHighlight => ({
+      source: 'connection', id, kind: 'connection_error', severity, storedTitle: '', storedBody: null, actionUrl: '/conexiones', createdAt,
+      connectionId: id, platformId: 'tiktok', handle: null, status: severity === 'critical' ? 'needs_reauth' : 'error', detail: null,
+    });
+    const viejaCritica = cuenta('a', 'critical', '2026-09-01T00:00:00.000000Z');
+    const recienteAviso = cuenta('b', 'warning', '2026-10-01T00:00:00.000000Z');
+    const masRecienteAviso = cuenta('c', 'warning', '2026-10-02T00:00:00.000000Z');
+    assert.deepEqual(
+      [masRecienteAviso, recienteAviso, viejaCritica].sort(compareHighlights).map((f) => f.id),
+      ['a', 'c', 'b'],
+    );
+  });
+
   test('con más cuentas rotas de las que caben, la crítica más vieja sale, y primero', async () => {
     const n = MAX_HIGHLIGHTS + 2;
     const conexion = (i: number) => `0000000c-0000-4000-8000-0000000cc${String(i).padStart(3, '0')}`;
