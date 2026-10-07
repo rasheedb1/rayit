@@ -12,8 +12,9 @@
  *     (acceptPublicQuote → public_quote_accept, 0030, en withPublicShare),
  *     que deja la fila de «Ganado»;
  *
- * y que el índice único (deal_id, step) hace fallar un choque en vez de
- * repetir el número: en PGlite, forzando el número que calcularía un
+ * que, una vez escrito, step no se mueve (ni como mc_app, que conserva
+ * UPDATE en la tabla), y que el índice único (deal_id, step) hace fallar
+ * un choque en vez de repetir el número: en PGlite, forzando el número que calcularía un
  * escritor que no bloquea el negocio; contra Postgres real
  * (TEST_DATABASE_URL), con dos transacciones a la vez de verdad.
  */
@@ -101,6 +102,29 @@ describe('deal_stage_history.step con quienes insertan de verdad', () => {
       { step: Math.max(...antes.map((p) => Number(p.step))) + 1, to: 'ganado' },
     );
     consecutivos(despues);
+  });
+
+  test('después de insertarse, step no cambia: mc_app no puede renumerar la historia de un negocio', async () => {
+    const dealId = await negocio('step-fijo');
+    for (const etapa of ['contactado', 'propuesta']) await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => moveDeal(tx, dealId, etapa));
+    const antes = await pasos(dealId);
+    assert.ok(antes.length >= 2);
+    // Correr toda la historia (lo que encontró la revisión) e intercambiar
+    // dos pasos (el índice único no lo impide si se hace de una vez).
+    for (const nuevo of ['step + 100', 'CASE step WHEN 1 THEN 2 WHEN 2 THEN 1 ELSE step END']) {
+      await assert.rejects(
+        t.db.withWorkspace(WORKSPACE_LAURA, (tx) => tx.query(`UPDATE deal_stage_history SET step = ${nuevo} WHERE deal_id = $1`, [dealId])),
+        (err: { code?: string; message?: string }) => err.code === '23514' && /step no cambia/.test(err.message ?? ''),
+        nuevo,
+      );
+    }
+    assert.deepEqual(await pasos(dealId), antes);
+    // Lo demás de la fila sigue como estaba: el cierre es solo sobre step, y
+    // un UPDATE que deja step igual pasa.
+    const tocadas = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) =>
+      (await tx.query('UPDATE deal_stage_history SET step = step WHERE deal_id = $1 RETURNING step', [dealId])).rows.length);
+    assert.equal(tocadas, antes.length);
+    consecutivos(await pasos(dealId));
   });
 });
 

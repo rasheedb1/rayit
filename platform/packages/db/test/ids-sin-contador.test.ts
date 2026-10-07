@@ -71,6 +71,17 @@ const SEMBRAR_LAS_VACIAS = `
   INSERT INTO audit_log (workspace_id, action, entity_type) VALUES
     ('${WORKSPACE_LAURA}', 'prueba.cim11.uno', 'test'),
     ('${WORKSPACE_LAURA}', 'prueba.cim11.dos', 'test');
+  -- Lo que deja auditAsJob: el número de la corrida dentro del JSON. Una
+  -- como número (lo que escribía el código de antes de 0082), otra como
+  -- texto, y una que nombra una corrida que no existe (se queda igual).
+  INSERT INTO audit_log (workspace_id, actor_kind, action, entity_type, after)
+  SELECT '${WORKSPACE_LAURA}', 'job', 'prueba.cim11.job.' || j.status, 'test',
+         jsonb_build_object('source', 'api', '_job', jsonb_build_object('id', j.job_id,
+           'runId', CASE WHEN j.status = 'ok' THEN to_jsonb(j.id) ELSE to_jsonb(j.id::text) END))
+    FROM job_run j WHERE j.job_id = 'brand.snapshot';
+  INSERT INTO audit_log (workspace_id, actor_kind, action, entity_type, after) VALUES
+    ('${WORKSPACE_LAURA}', 'job', 'prueba.cim11.job.huerfana', 'test',
+     '{"_job": {"id": "brand.snapshot", "runId": "987654321"}}');
   INSERT INTO api_call_log (connection_id, platform_id, endpoint, ok)
   SELECT id, platform_id, 'cim-11.prueba', true FROM social_connection ORDER BY id LIMIT 1;
 `;
@@ -83,7 +94,8 @@ interface Huella extends Record<string, unknown> {
 
 /**
  * Por tabla: cuántas filas y un md5 de todas ellas SIN el id (ni el step
- * que 0082 le añade a deal_stage_history, que se mide aparte), en un orden
+ * que 0082 le añade a deal_stage_history, ni el runId que audit_log
+ * guarda de job_run en after._job: los dos se miden aparte), en un orden
  * que no depende del id. Si la conversión perdiera, duplicara o tocara
  * una fila (una clave ajena incluida), la huella cambia.
  */
@@ -92,7 +104,7 @@ async function huellas(db: EmbeddedDb): Promise<Huella[]> {
     (t) =>
       `SELECT '${t}' AS tabla, count(*)::int AS filas,
               md5(coalesce(string_agg(f, '|' ORDER BY f), '')) AS huella
-         FROM (SELECT (to_jsonb(x) - 'id' - 'step')::text AS f FROM public.${t} x) s`,
+         FROM (SELECT ((to_jsonb(x) - 'id' - 'step') #- '{after,_job,runId}')::text AS f FROM public.${t} x) s`,
   ).join(' UNION ALL ');
   return (await db.queryAsSuperuser<Huella>(`${sql} ORDER BY tabla`)).rows;
 }
@@ -105,6 +117,28 @@ async function pasos(db: EmbeddedDb, orden: string): Promise<string> {
                FROM deal_stage_history) s`,
   );
   return rows[0]!.pasos;
+}
+
+interface CorridaDeLaBitacora extends Record<string, unknown> {
+  action: string;
+  corrida: string | null;
+}
+
+/**
+ * Cada entrada de bitácora escrita por un job, con la corrida a la que
+ * apunta su after._job.runId descrita por lo que no es el id (job, estado,
+ * inicio). Antes y después de 0082 tiene que dar lo mismo: el runId cambia
+ * de número a uuid, la corrida a la que apunta no.
+ */
+async function corridasDeLaBitacora(db: EmbeddedDb): Promise<CorridaDeLaBitacora[]> {
+  const { rows } = await db.queryAsSuperuser<CorridaDeLaBitacora>(
+    `SELECT a.action, concat_ws(',', j.job_id, j.status, j.started_at) AS corrida
+       FROM audit_log a
+       LEFT JOIN job_run j ON j.id::text = a.after -> '_job' ->> 'runId'
+      WHERE a.after ? '_job'
+      ORDER BY a.action`,
+  );
+  return rows.map((r) => ({ action: r.action, corrida: r.corrida === '' ? null : r.corrida }));
 }
 
 /** Lo que devuelve post_metrics_at_cut, entero, como huella. */
@@ -123,6 +157,7 @@ describe('0082 convierte las claves con las filas dentro', () => {
   let guardiaAntes: string[];
   let aplicadas: string[];
   let pasosAntes: string;
+  let bitacoraAntes: CorridaDeLaBitacora[];
 
   before(async () => {
     // La migración por su nombre, no por su número: si el integrador la
@@ -138,6 +173,7 @@ describe('0082 convierte las claves con las filas dentro', () => {
     antes = await huellas(db);
     cortesAntes = await huellaDeLosCortes(db);
     pasosAntes = await pasos(db, 'row_number() OVER (PARTITION BY deal_id ORDER BY changed_at, id)');
+    bitacoraAntes = await corridasDeLaBitacora(db);
     guardiaAntes = (await estadoDelEsquema(db)).clavesDeSecuencia;
     aplicadas = await db.migrar();
   }, SETUP_TIMEOUT);
@@ -194,6 +230,33 @@ describe('0082 convierte las claves con las filas dentro', () => {
             AS huerfanas`,
     );
     assert.equal(rows[0]!.huerfanas, 0);
+  });
+
+  test('la bitácora de los jobs sigue apuntando a su corrida: after._job.runId pasa del número al uuid de la misma fila de job_run', async () => {
+    // La prueba no es sobre una bitácora sin jobs: hay dos que apuntan a
+    // una corrida (una con el runId como número, otra como texto) y una
+    // huérfana desde antes.
+    assert.deepEqual(
+      bitacoraAntes.map((b) => [b.action, b.corrida !== null]),
+      [['prueba.cim11.job.failed', true], ['prueba.cim11.job.huerfana', false], ['prueba.cim11.job.ok', true]],
+    );
+    assert.deepEqual(await corridasDeLaBitacora(db), bitacoraAntes);
+    const { rows } = await db.queryAsSuperuser<{ action: string; run_id: string; existe: boolean }>(
+      `SELECT a.action, a.after -> '_job' ->> 'runId' AS run_id,
+              EXISTS (SELECT 1 FROM job_run j WHERE j.id::text = a.after -> '_job' ->> 'runId') AS existe
+         FROM audit_log a WHERE a.action LIKE 'prueba.cim11.job.%' ORDER BY a.action`,
+    );
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    assert.deepEqual(
+      rows.map((r) => [r.action, r.existe, UUID.test(r.run_id)]),
+      [['prueba.cim11.job.failed', true, true], ['prueba.cim11.job.huerfana', false, false], ['prueba.cim11.job.ok', true, true]],
+    );
+    // La huérfana no se toca, y job_run no se lleva la columna de paso.
+    assert.equal(rows.find((r) => r.action === 'prueba.cim11.job.huerfana')!.run_id, '987654321');
+    const columna = await db.queryAsSuperuser(
+      "SELECT 1 FROM pg_attribute WHERE attrelid = 'public.job_run'::regclass AND attname = 'id_nuevo' AND NOT attisdropped",
+    );
+    assert.equal(columna.rows.length, 0);
   });
 
   test('deal_stage_history.step numera los pasos de cada negocio en el orden que daba el id', async () => {

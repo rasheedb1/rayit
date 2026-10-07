@@ -49,16 +49,28 @@
 --       disparador al insertar, y un índice único (deal_id, step) hace
 --       que un choque falle en vez de repetir el número. Las filas que
 --       ya están lo reciben en el orden que tenían, (changed_at, id) con
---       el id bigint, ANTES de convertirlo.
+--       el id bigint, ANTES de convertirlo. Después de insertarse, step
+--       no cambia: otro disparador rechaza el UPDATE que lo mueva (la
+--       historia es append-only; mc_app conserva UPDATE en la tabla y sin
+--       ese cierre podría renumerar los pasos de un negocio).
 --   2 · Las quince claves pasan a `uuid DEFAULT gen_random_uuid()`,
 --       CONSERVANDO las filas: cada fila existente recibe un uuid al
 --       azar (USING gen_random_uuid() se evalúa fila a fila al
 --       reescribir la tabla), la clave primaria y su índice se
 --       reconstruyen con la tabla, y la secuencia se borra. Ninguna
 --       clave ajena apunta a estas tablas (comprobado contra el esquema
---       completo), así que no hay referencias que traducir. Reescribir
---       la tabla no dispara los disparadores de fila ni pasa por la RLS:
---       las filas de todos los workspaces se convierten.
+--       completo). Hay UNA referencia que no es clave ajena: auditAsJob
+--       (packages/db/src/audit.ts) guarda el id de la corrida en
+--       audit_log.after->'_job'->>'runId' (lo escribe
+--       collect-account-metrics en connection.source_changed). job_run
+--       no recibe un uuid cualquiera: §2a se lo asigna primero en una
+--       columna aparte, reescribe esas entradas de bitácora con él y
+--       solo entonces convierte la clave con ese mismo valor, así que
+--       cada entrada sigue apuntando a su corrida. El número viejo no se
+--       guarda en ningún sitio: mc_app lee job_run y volvería a ser el
+--       contador. Reescribir la tabla no dispara los disparadores de
+--       fila ni pasa por la RLS: las filas de todos los workspaces se
+--       convierten.
 --   3 · El instante de los registros es el del reloj, no el de la
 --       transacción: api_call_log.called_at, audit_log.created_at y
 --       job_run.started_at pasan de DEFAULT now() a clock_timestamp().
@@ -194,6 +206,35 @@ CREATE TRIGGER deal_stage_history_step
   BEFORE INSERT ON deal_stage_history
   FOR EACH ROW EXECUTE FUNCTION deal_stage_history_step();
 
+-- Y después de insertarse, nadie lo mueve. mc_app conserva UPDATE sobre
+-- deal_stage_history (0025 solo le quitó UPDATE y DELETE de audit_log), y
+-- el índice único impide repetir un número, no cambiar el orden: un
+-- `UPDATE … SET step = step + 100` renumeraría la historia y el desempate
+-- de la conversión (VEN-8) dejaría de ser el orden en que pasaron las
+-- cosas. Se cierra con un disparador y no con un REVOKE para no tocar el
+-- resto de la fila ni PRIVILEGIOS_DE_LA_APP; vale para todos los roles,
+-- también el dueño (una corrección a mano desactiva el disparador a
+-- propósito, a la vista). Sin lista de columnas (BEFORE UPDATE, no UPDATE
+-- OF step), para que tampoco lo mueva otro disparador.
+CREATE OR REPLACE FUNCTION deal_stage_history_step_fijo()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  RAISE EXCEPTION 'deal_stage_history.step no cambia después de insertarse (de % a %)', OLD.step, NEW.step
+    USING ERRCODE = 'check_violation',
+          HINT = 'La historia de un negocio es append-only: un paso nuevo es un INSERT (CIM-11, 0082 §1b).';
+END $$;
+REVOKE ALL ON FUNCTION deal_stage_history_step_fijo() FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS deal_stage_history_step_fijo ON deal_stage_history;
+CREATE TRIGGER deal_stage_history_step_fijo
+  BEFORE UPDATE ON deal_stage_history
+  FOR EACH ROW WHEN (NEW.step IS DISTINCT FROM OLD.step)
+  EXECUTE FUNCTION deal_stage_history_step_fijo();
+
 -- =====================================================================
 -- 2 · Las quince claves, a uuid, con sus filas
 -- ---------------------------------------------------------------------
@@ -202,7 +243,33 @@ CREATE TRIGGER deal_stage_history_step
 -- tipo con un uuid nuevo por fila y el DEFAULT definitivo en la misma
 -- sentencia (una sola reescritura). La clave primaria sigue llamándose
 -- <tabla>_pkey: Postgres reconstruye su índice con el tipo nuevo.
+--
+-- 2a · job_run, antes que nada: su uuid nuevo va primero a id_nuevo (un
+-- DEFAULT volátil en ADD COLUMN se evalúa fila a fila), las entradas de
+-- bitácora que nombran una corrida por su número pasan a nombrarla por
+-- ese uuid, y el bucle de abajo convierte job_run.id USING id_nuevo. Con
+-- FORCE ROW LEVEL SECURITY quitado un momento en las dos tablas, como en
+-- §1b: el dueño no ve filas con él puesto. `->>` lee igual el runId que
+-- se escribió como número (antes de esta rama) que como texto.
 -- =====================================================================
+DO $$
+BEGIN
+  IF (SELECT a.atttypid FROM pg_attribute a
+       WHERE a.attrelid = 'public.job_run'::regclass AND a.attname = 'id' AND NOT a.attisdropped)
+     = 'bigint'::regtype THEN
+    ALTER TABLE public.job_run ADD COLUMN IF NOT EXISTS id_nuevo uuid NOT NULL DEFAULT gen_random_uuid();
+    ALTER TABLE public.audit_log NO FORCE ROW LEVEL SECURITY;
+    ALTER TABLE public.job_run NO FORCE ROW LEVEL SECURITY;
+    UPDATE public.audit_log a
+       SET after = jsonb_set(a.after, '{_job,runId}', to_jsonb(j.id_nuevo::text))
+      FROM public.job_run j
+     WHERE jsonb_typeof(a.after -> '_job') = 'object'
+       AND a.after -> '_job' ->> 'runId' = j.id::text;
+    ALTER TABLE public.audit_log FORCE ROW LEVEL SECURITY;
+    ALTER TABLE public.job_run FORCE ROW LEVEL SECURITY;
+  END IF;
+END $$;
+
 DO $$
 DECLARE
   t   text;
@@ -223,9 +290,14 @@ BEGIN
       IF seq IS NOT NULL THEN
         EXECUTE format('DROP SEQUENCE %s', seq);
       END IF;
+      -- job_run conserva el uuid que §2a ya le dio a la bitácora.
       EXECUTE format(
-        'ALTER TABLE public.%I ALTER COLUMN id SET DATA TYPE uuid USING gen_random_uuid(), '
-        '  ALTER COLUMN id SET DEFAULT gen_random_uuid()', t);
+        'ALTER TABLE public.%I ALTER COLUMN id SET DATA TYPE uuid USING %s, '
+        '  ALTER COLUMN id SET DEFAULT gen_random_uuid()',
+        t, CASE WHEN t = 'job_run' THEN 'id_nuevo' ELSE 'gen_random_uuid()' END);
+      IF t = 'job_run' THEN
+        ALTER TABLE public.job_run DROP COLUMN id_nuevo;
+      END IF;
     END IF;
   END LOOP;
 END $$;
