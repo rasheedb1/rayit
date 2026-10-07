@@ -126,6 +126,13 @@
 --     para no abrir un segundo negocio con una marca que ya tiene uno
 --     abierto de otro creador.
 --
+-- Y (ronda 4):
+--   · §2: role_is_full_access(), la regla «Dueño o Administrador» escrita
+--     una sola vez para el disparador, la comprobación previa y Equipo;
+--   · §7: deal_creator_locked(), el sí o no con el que setDealCreator no
+--     pasa a otro creador un negocio cuya cotización o campaña ya es de
+--     un creador distinto.
+--
 -- Re-ejecutable: CREATE OR REPLACE FUNCTION, DROP POLICY/TRIGGER IF
 -- EXISTS, REVOKE y GRANT idempotentes, y el relleno de §5 solo toca
 -- NULL. No crea roles ni necesita el token de administración. Depende de
@@ -282,6 +289,13 @@ GRANT EXECUTE ON FUNCTION sole_creator_for_session(uuid) TO mc_app, mc_worker;
 -- membership_full_role_unscoped): la aplicación lo reconoce por ahí,
 -- como membership_last_owner de 0078 §3, y no por el texto.
 --
+-- «Rol de acceso completo» es UNA función, role_is_full_access(role_id):
+-- el rol de sistema Dueño o Administrador (workspace_id NULL y clave
+-- 'owner' o 'admin'). La llaman el disparador, la comprobación previa de
+-- abajo y Equipo antes del cambio de rol (equipo.ts,
+-- llevaAlcanceYPasaARolCompleto). La regla está escrita una vez; la
+-- guardia fija su cuerpo (CUERPOS_DEL_ALCANCE).
+--
 -- SECURITY INVOKER, con la RLS de quien escribe: lee membership, role y
 -- membership_scope, que mc_app puede leer en el espacio fijado. Una fila
 -- de alcance cuya membresía no se ve se rechaza también (fallar cerrado:
@@ -290,6 +304,19 @@ GRANT EXECUTE ON FUNCTION sole_creator_for_session(uuid) TO mc_app, mc_worker;
 -- La guardia exige los dos disparadores (DISPARADORES_DE_CANDADO) y fija
 -- el cuerpo de la función (CUERPOS_DEL_ALCANCE).
 -- =====================================================================
+CREATE OR REPLACE FUNCTION role_is_full_access(p_role uuid) RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path = public, extensions, pg_temp
+AS $$
+  SELECT coalesce((SELECT r.workspace_id IS NULL AND r.key IN ('owner', 'admin')
+                     FROM role r WHERE r.id = p_role), false)
+$$;
+COMMENT ON FUNCTION role_is_full_access(uuid) IS
+  '¿Es el rol de sistema Dueño o Administrador, los que ven todo el espacio y no llevan alcance? La única copia de la regla: la usan el disparador membership_full_role_unscoped, la comprobación previa de 0082 §2 y Equipo (0082 §2, ACC-7).';
+REVOKE ALL ON FUNCTION role_is_full_access(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION role_is_full_access(uuid) TO mc_app;
+
 CREATE OR REPLACE FUNCTION membership_full_role_unscoped() RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = public, extensions, pg_temp
@@ -298,9 +325,8 @@ DECLARE
   rol_completo boolean;
 BEGIN
   IF TG_TABLE_NAME = 'membership_scope' THEN
-    SELECT r.workspace_id IS NULL AND r.key IN ('owner', 'admin') INTO rol_completo
+    SELECT role_is_full_access(m.role_id) INTO rol_completo
       FROM membership m
-      JOIN role r ON r.id = m.role_id
      WHERE m.workspace_id = NEW.workspace_id
        AND m.user_id = NEW.user_id;
     IF NOT FOUND THEN
@@ -310,10 +336,7 @@ BEGIN
               HINT = 'Escribe el alcance con el espacio fijado (0082 §2).';
     END IF;
   ELSE
-    SELECT r.workspace_id IS NULL AND r.key IN ('owner', 'admin') INTO rol_completo
-      FROM role r
-     WHERE r.id = NEW.role_id;
-    rol_completo := coalesce(rol_completo, false)
+    rol_completo := role_is_full_access(NEW.role_id)
       AND EXISTS (SELECT 1 FROM membership_scope s
                    WHERE s.workspace_id = NEW.workspace_id
                      AND s.user_id = NEW.user_id);
@@ -359,8 +382,7 @@ BEGIN
   SELECT string_agg(DISTINCT format('%s en %s', s.user_id, s.workspace_id), ', ') INTO quienes
     FROM membership_scope s
     JOIN membership m ON m.workspace_id = s.workspace_id AND m.user_id = s.user_id
-    JOIN role r ON r.id = m.role_id
-   WHERE r.workspace_id IS NULL AND r.key IN ('owner', 'admin');
+   WHERE role_is_full_access(m.role_id);
 
   FOREACH t IN ARRAY forzadas LOOP
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
@@ -598,3 +620,55 @@ COMMENT ON FUNCTION open_deal_out_of_scope(uuid) IS
 
 REVOKE ALL ON FUNCTION open_deal_out_of_scope(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION open_deal_out_of_scope(uuid) TO mc_app;
+
+
+-- =====================================================================
+-- 7 · deal_creator_locked(): «este negocio ya tiene cotización o campaña
+--     de otro creador»
+-- ---------------------------------------------------------------------
+-- La ficha de la marca deja cambiar de qué creador es un negocio
+-- (setDealCreator). Si el negocio ya mandó una cotización (no borrador) o
+-- tiene una campaña viva (no cancelada) a nombre de otro creador, el
+-- cambio partiría el acuerdo en dos: el negocio de B, su cotización y su
+-- campaña de A. Un mánager acotado a B vería el negocio ganado sin su
+-- campaña, y uno acotado a A la campaña sin su negocio. Se rechaza
+-- (DealCreatorLocked) y la persona lo arregla donde vive el acuerdo.
+--
+-- Pasar a ESE mismo creador sí se deja: es lo que pone en orden un
+-- negocio «Sin creador» cuya cotización ya era de A.
+--
+-- La cotización la ve cualquiera del espacio (quote no está en la red,
+-- ACC-10), pero la campaña de un creador fuera del alcance de quien
+-- cambia no se ve con §3. Por eso, como §4 y §6, responde solo sí o no,
+-- para UN negocio y UN creador destino, atada al espacio fijado (falso
+-- sin él). No devuelve la cotización, la campaña, su creador ni cuántas.
+-- SECURITY DEFINER; sin EXECUTE para PUBLIC; solo mc_app. Declarada en la
+-- guardia (FUNCIONES_DEFINER_DECLARADAS) y con su cuerpo fijado
+-- (CUERPOS_DEL_ALCANCE).
+-- =====================================================================
+CREATE OR REPLACE FUNCTION deal_creator_locked(p_deal uuid, p_creator uuid) RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+  SELECT current_workspace_id() IS NOT NULL
+     AND p_deal IS NOT NULL
+     AND (EXISTS (
+            SELECT 1 FROM quote q
+             WHERE q.workspace_id = current_workspace_id()
+               AND q.deal_id = p_deal
+               AND q.status <> 'draft'
+               AND q.creator_id IS DISTINCT FROM p_creator)
+          OR EXISTS (
+            SELECT 1 FROM campaign c
+             WHERE c.workspace_id = current_workspace_id()
+               AND c.deal_id = p_deal
+               AND c.status <> 'cancelled'
+               AND c.creator_id IS DISTINCT FROM p_creator))
+$$;
+COMMENT ON FUNCTION deal_creator_locked(uuid, uuid) IS
+  'Sí o no: ¿el negocio tiene, en el espacio fijado, una cotización enviada o una campaña viva de un creador distinto de p_creator? Para que setDealCreator no parta el acuerdo entre dos creadores (0082 §7, ACC-7).';
+
+REVOKE ALL ON FUNCTION deal_creator_locked(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION deal_creator_locked(uuid, uuid) TO mc_app;

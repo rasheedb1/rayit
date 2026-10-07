@@ -529,16 +529,16 @@ async function conUltimoDueno<T>(fn: () => Promise<T>): Promise<T> {
 /**
  * ¿La persona lleva alcance (cualquier fila de membership_scope en este
  * espacio) y el rol nuevo es Dueño o Administrador de sistema? Es la
- * regla del disparador membership_full_role_unscoped (0082 §2),
+ * regla del disparador membership_full_role_unscoped, con la misma
+ * función role_is_full_access() (0082 §2),
  * preguntada antes para decir «quítale antes el alcance» con la
  * transacción viva, en vez de un 23514.
  */
 async function llevaAlcanceYPasaARolCompleto(tx: WorkspaceTx, userId: string, roleId: string): Promise<boolean> {
   const { rows } = await tx.query<{ v: boolean }>(
-    `SELECT r.workspace_id IS NULL AND r.key IN ('owner', 'admin')
+    `SELECT role_is_full_access($2::uuid)
             AND EXISTS (SELECT 1 FROM membership_scope s
-                         WHERE s.workspace_id = current_workspace_id() AND s.user_id = $1::uuid) AS v
-       FROM role r WHERE r.id = $2::uuid`,
+                         WHERE s.workspace_id = current_workspace_id() AND s.user_id = $1::uuid) AS v`,
     [userId, roleId],
   );
   return rows[0]?.v === true;

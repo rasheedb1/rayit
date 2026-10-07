@@ -15,7 +15,7 @@ import {
   type FetchLike, type PublicProfileSources,
 } from "@mc/connectors";
 import {
-  brandAccountsOf, brandNoDataReasonFor, BRAND_PLATFORMS_WITHOUT_FOLLOWER_SOURCE, brandPlatformsReadOn, BRAND_SNAPSHOT_STATUSES, getCampaign,
+  brandAccountsOf, brandNoDataReasonFor, BRAND_PLATFORMS_WITHOUT_FOLLOWER_SOURCE, brandPlatformsReadOn, BRAND_SNAPSHOT_STATUSES, findPgError, getCampaign,
   recordBrandSnapshot, type BrandNoDataReason, type BrandSnapshotInput, type BrandSnapshotOutcome, type WorkspaceTx,
 } from "@mc/db";
 
@@ -64,10 +64,7 @@ type Fila = Omit<BrandSnapshotInput, "campaignId" | "companyId" | "day">;
 
 /** Postgres rechazó el INSERT por privilegio (42501): la base aún no tiene 0035. */
 function esSinPrivilegio(err: unknown): boolean {
-  for (let e: unknown = err; e && typeof e === "object"; e = (e as { cause?: unknown }).cause) {
-    if ((e as { code?: unknown }).code === "42501") return true;
-  }
-  return false;
+  return findPgError(err, "42501") !== null;
 }
 
 export function createMarcaService(deps: MarcaDeps) {

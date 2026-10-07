@@ -184,6 +184,7 @@
 import { getTableColumns, getTableName, getViewName, getViewSelectedFields, is } from 'drizzle-orm';
 import { PgColumn, PgTable, PgView } from 'drizzle-orm/pg-core';
 import type { CatalogDb } from './client.ts';
+import { findInCauseChain } from './pg-error.ts';
 import type { CreatorScopeTable } from './scope.ts';
 import * as schema from './schema/index.ts';
 import {
@@ -351,6 +352,14 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'no se ve. Solo LEE deal, atada a mano al workspace fijado (y falso sin él o para quien ve a todos), y responde ' +
     'sí o no para UNA marca: ni el negocio, ni su creador, ni cuántos. EXECUTE solo para mc_app. No es de ningún ' +
     'disparador',
+  // La cotización o la campaña de otro creador, por debajo de la política por creador (0082 §7, ACC-7).
+  'deal_creator_locked(uuid,uuid)':
+    'Ventas pregunta, antes de cambiar de qué creador es un negocio (setDealCreator), si ya tiene una cotización ' +
+    'enviada o una campaña viva de un creador distinto del nuevo: la campaña de un creador fuera del alcance de ' +
+    'quien cambia no se ve con la política de 0082, y sin la respuesta el acuerdo quedaría partido entre dos ' +
+    'creadores. Solo LEE quote y campaign, atada a mano al workspace fijado (y falso sin él), y responde sí o no ' +
+    'para UN negocio y UN creador: ni la cotización, ni la campaña, ni su creador, ni cuántas. EXECUTE solo para ' +
+    'mc_app. No es de ningún disparador',
   // La regla de la baja de outbound_touch mira la lista global (0046 §4.1).
   'address_is_suppressed(citext)':
     'la regla de la baja de outbound_touch (0046 §4.1) compara el correo de la ficha y recipient_address con la ' +
@@ -508,6 +517,15 @@ export const FUNCIONES_QUE_USA_EL_CODIGO: Readonly<Record<string, string>> = {
   'open_deal_out_of_scope(uuid)':
     '0082_alcance_por_creador §6: la bandeja no abre un segundo negocio con una marca cuyo negocio abierto es de otro ' +
     'creador (bandejas.ts, interestedOutOfScope) y la ficha lo explica (hasOpenDealOutOfScope)',
+  'role_is_full_access(uuid)':
+    '0082_alcance_por_creador §2: ¿el rol es Dueño o Administrador de sistema? La única copia de la regla; Equipo la ' +
+    'pregunta antes de cambiar el rol de quien lleva alcance (changeMemberRole, scoped_member)',
+  'deal_creator_locked(uuid,uuid)':
+    '0082_alcance_por_creador §7: setDealCreator no pasa a otro creador un negocio con cotización enviada o campaña ' +
+    'viva de un creador distinto (DealCreatorLocked)',
+  'public_account_out_of_scope(text,text)':
+    '0082_alcance_por_creador §4: Conexiones dice ScopeError en vez de duplicar una cuenta por @ que ya es de otra ' +
+    'creadora (findPublicAccountByHandle)',
   'session_sees_all_creators()':
     '0082_alcance_por_creador: ¿la sesión ve a todos los creadores del espacio? La piden las cuatro políticas por ' +
     'creador (TABLAS_CON_ALCANCE_POR_CREADOR) y writeOrScopeError (src/scope.ts, ACC-7). Sin EXECUTE para mc_app, ' +
@@ -661,7 +679,13 @@ export const DISPARADORES_DE_CANDADO: Readonly<Record<string, string>> = {
  * el alcance desaparece en silencio. Por eso se exige, en cada arranque,
  * que cada una tenga una política:
  *   · RESTRICTIVE (se suma con AND a la de workspace: nunca abre nada);
- *   · que alcance a mc_app (TO mc_app, o a un rol del que sea miembro);
+ *   · TO mc_app y a nadie más (polroles exactamente {mc_app}). TO PUBLIC
+ *     también alcanzaría a mc_app, pero rompe los enlaces públicos:
+ *     mc_public_share (0030) lee y mueve deal dentro de sus funciones
+ *     SECURITY DEFINER, no tiene EXECUTE sobre session_sees_all_creators()
+ *     ni SELECT sobre membership_scope, y la aceptación pública de una
+ *     cotización caería con «permission denied». Un rol del que mc_app
+ *     sea miembro tampoco vale: lo heredaría quien más sea miembro;
  *   · FOR ALL y sin WITH CHECK, para que la fila nueva de un INSERT o un
  *     UPDATE pase por la misma condición;
  *   · con exactamente la forma de POLITICA_POR_CREADOR.
@@ -734,17 +758,26 @@ export const TABLAS_CON_CREADOR_SIN_POLITICA: Readonly<Record<string, string>> =
  * Que existan no basta (FUNCIONES_QUE_USA_EL_CODIGO): un CREATE OR
  * REPLACE FUNCTION session_sees_all_creators() … SELECT true, hecho a mano
  * en el SQL Editor, deja las cuatro políticas intactas y apaga la red, o
- * deja a Dueño y Administrador llevar alcance. Cambiar una de estas
- * funciones es una migración nueva y el md5 nuevo aquí, en el mismo PR.
+ * deja a Dueño y Administrador llevar alcance. Lo mismo con las tres
+ * SECURITY DEFINER que miran por debajo de la política y responden sí o
+ * no: public_account_out_of_scope reescrita a `SELECT false` vuelve a
+ * duplicar bajo otra creadora la cuenta por @ que ya existe, y
+ * open_deal_out_of_scope o deal_creator_locked, a falso, abren un segundo
+ * negocio con la marca o parten un acuerdo entre dos creadores. Cambiar
+ * una de estas funciones es una migración nueva y el md5 nuevo aquí, en
+ * el mismo PR.
  */
 export const CUERPOS_DEL_ALCANCE: Readonly<Record<string, { md5: string; origen: string }>> = {
   'session_sees_all_creators()': { md5: '2097bed8872069dd29c8e84bc3f280b2', origen: '0082_alcance_por_creador §1' },
   'scope_allows(text,uuid)': { md5: 'a8a03a4cddc600da1fec05f15a895cc1', origen: '0040_scope_allows' },
   'scope_allows(text,uuid[])': { md5: 'a69e8de3de693f471a18fe0e087cecca', origen: '0040_scope_allows' },
-  'membership_full_role_unscoped()': { md5: '43dee241bad3b88a065380a2b2cf0d50', origen: '0082_alcance_por_creador §2' },
+  'membership_full_role_unscoped()': { md5: '950ac71faa8b7a60dd2162c5e476dd73', origen: '0082_alcance_por_creador §2' },
   'creators_for_session(uuid)': { md5: '085cca1a6ea5c005538a6484810d4a43', origen: '0082_alcance_por_creador §1b' },
   'sole_creator_for_session(uuid)': { md5: 'c364ec655dc4f33b8313be97c937d2a4', origen: '0082_alcance_por_creador §1b' },
   'open_deal_out_of_scope(uuid)': { md5: '3022212a5798784ca0d8d5f8415e5834', origen: '0082_alcance_por_creador §6' },
+  'public_account_out_of_scope(text,text)': { md5: '182f7d58dbffc5c009bb94a1c08d8b55', origen: '0082_alcance_por_creador §4' },
+  'role_is_full_access(uuid)': { md5: '9463df0a33c4d04c588dc638b80f5e83', origen: '0082_alcance_por_creador §2' },
+  'deal_creator_locked(uuid,uuid)': { md5: '2ff722c50bd889e8b5c76e6954c0d29b', origen: '0082_alcance_por_creador §7' },
 };
 
 /**
@@ -755,9 +788,19 @@ export const CUERPOS_DEL_ALCANCE: Readonly<Record<string, { md5: string; origen:
 const POLITICA_POR_CREADOR =
   /^\(\(\s*SELECT session_sees_all_creators\(\)(?: AS session_sees_all_creators)?\s*\) OR scope_allows\('creator'::text, creator_id\)\)$/;
 
-/** ¿Esta política es la red del alcance por creador? Ver TABLAS_CON_ALCANCE_POR_CREADOR. */
-function esPoliticaPorCreador(p: { permisiva: boolean; aplica: boolean; cmd: string; qual: string | null; with_check: string | null }): boolean {
-  return !p.permisiva && p.aplica && p.cmd === '*' && p.with_check === null && p.qual !== null && POLITICA_POR_CREADOR.test(p.qual.trim());
+type PoliticaLeida = { permisiva: boolean; solo_app: boolean; cmd: string; qual: string | null; with_check: string | null };
+
+/** ¿Tiene la forma de la red (RESTRICTIVE, FOR ALL, sin WITH CHECK, el predicado de 0082), sea para el rol que sea? */
+function tieneLaFormaPorCreador(p: PoliticaLeida): boolean {
+  return !p.permisiva && p.cmd === '*' && p.with_check === null && p.qual !== null && POLITICA_POR_CREADOR.test(p.qual.trim());
+}
+
+/**
+ * ¿Esta política es la red del alcance por creador? La forma, y TO
+ * mc_app y a nadie más. Ver TABLAS_CON_ALCANCE_POR_CREADOR.
+ */
+function esPoliticaPorCreador(p: PoliticaLeida): boolean {
+  return p.solo_app && tieneLaFormaPorCreador(p);
 }
 
 /**
@@ -1771,6 +1814,8 @@ interface FilaPolitica extends Record<string, unknown> {
   permisiva: boolean;
   /** Si la política alcanza a mc_app (TO PUBLIC, o a un rol del que mc_app es miembro). */
   aplica: boolean;
+  /** Si sus roles son exactamente {mc_app}: ni PUBLIC, ni otro rol además (la política por creador, 0082 §3). */
+  solo_app: boolean;
   qual: string | null;
   with_check: string | null;
 }
@@ -1918,6 +1963,7 @@ const SQL_POLITICAS = `
          (0 = ANY (p.polroles) OR EXISTS (
             SELECT 1 FROM pg_roles r WHERE r.oid = ANY (p.polroles) AND pg_has_role($1::name, r.oid, 'MEMBER')
          )) AS aplica,
+         (p.polroles = ARRAY[to_regrole($1::name::text)]::oid[]) AS solo_app,
          pg_get_expr(p.polqual, p.polrelid) AS qual,
          pg_get_expr(p.polwithcheck, p.polrelid) AS with_check
     FROM pg_policy p
@@ -2291,11 +2337,7 @@ function expresionesPara(p: FilaPolitica, cmd: Privilegio): Array<{ expr: string
 
 /** El código de error de Postgres, buscado en la cadena de causas (Drizzle y pg lo envuelven). */
 function codigoDeError(err: unknown): string | null {
-  for (let e = err; e && typeof e === 'object'; e = (e as { cause?: unknown }).cause) {
-    const code = (e as { code?: unknown }).code;
-    if (typeof code === 'string') return code;
-  }
-  return null;
+  return findInCauseChain(err, (e) => typeof e.code === 'string')?.code ?? null;
 }
 
 /** La tabla no existe: la base nunca se migró. Cualquier otro error es «no se pudo preguntar». */
@@ -2622,6 +2664,15 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
         if (!porNombre.has(tabla)) return [`${tabla} (no existe)`];
         const suyas = politicasPorTabla.get(tabla) ?? [];
         if (suyas.some(esPoliticaPorCreador)) return [];
+        // Con la forma pero con otros roles: el caso que más engaña, porque
+        // TO PUBLIC sí acota a mc_app y la consulta cruda sale bien.
+        const otrosRoles = suyas.filter((p) => tieneLaFormaPorCreador(p) && !p.solo_app);
+        if (otrosRoles.length) {
+          return [
+            `${tabla} (${otrosRoles.map((p) => p.polname).join(', ')} debe ser TO ${APP_ROLE}: TO PUBLIC, u otro rol ` +
+              'además, rompe los enlaces públicos (0030), porque mc_public_share no puede leer el alcance)',
+          ];
+        }
         const parecidas = suyas.filter((p) => !p.permisiva && p.polname.includes('creator'));
         return [
           parecidas.length

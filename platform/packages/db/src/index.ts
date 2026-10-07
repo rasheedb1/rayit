@@ -42,7 +42,7 @@ export {
   assertScopeAllows, assertUnscoped, CREATOR_SCOPE_TABLES, getScopeKinds, SCOPE_KINDS, ScopeError, scopeErrorOf, scopeFilter, soleCreatorFor,
   UNSCOPED_ONLY, writeOrScopeError, type CreatorScopeTable, type ScopeAnchors, type ScopeKind, type ScopeMany, type ScopeSavepoint,
 } from './scope.ts';
-export { findPgError, type PgLikeError } from './pg-error.ts';
+export { findInCauseChain, findPgError, type PgLikeError } from './pg-error.ts';
 export {
   audit, auditAsJob, assertAuditAction, AUDIT_ACTIONS, CLAVES_PROHIBIDAS_EN_BITACORA, CORREO_OMITIDO, InvalidAuditActionError,
   isForbiddenAuditKey, sanitizeForAudit, type AuditAction, type AuditEntry, type AuditExecutor, type JobAuditEntry,
