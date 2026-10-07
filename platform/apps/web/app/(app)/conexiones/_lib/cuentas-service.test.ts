@@ -96,8 +96,8 @@ describe("agregar", () => {
     expect(ev.rows[0]!.evidence).not.toHaveProperty("actedBy");
     // Modo demo, sin sesión: no hay a quién avisar ni a quién nombrar.
     expect(out.ownerNotice).toBe("no_session");
-    const log = await db.queryAsSuperuser<{ endpoint: string; connection_id: string | null }>("SELECT endpoint, connection_id FROM api_call_log ORDER BY called_at");
-    expect(log.rows.at(-1)).toEqual({ endpoint: "instagram.business_discovery", connection_id: out.id });
+    const log = await db.queryAsSuperuser<{ endpoint: string; connection_id: string | null }>("SELECT endpoint, connection_id FROM api_call_log WHERE connection_id = $1", [out.id]);
+    expect(log.rows).toEqual([{ endpoint: "instagram.business_discovery", connection_id: out.id }]);
   });
 
   it("TikTok por @: se agrega sin métricas y lo dice; un @ inexistente o mal escrito devuelve el mensaje en español", async () => {

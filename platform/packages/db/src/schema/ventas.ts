@@ -264,6 +264,12 @@ export const dealStageHistory = pgTable('deal_stage_history', {
   changedBy: uuid('changed_by').references(() => appUser.id, { onDelete: 'set null' }),
   changedAt: timestamptz('changed_at').defaultNow().notNull(),
   daysInStage: numeric('days_in_stage', { precision: 8, scale: 2 }),
+  /**
+   * El orden del paso dentro de su negocio (1, 2, 3…). Lo pone siempre el
+   * disparador deal_stage_history_step (0078); desempata dos pasos con la
+   * misma changed_at, que antes desempataba el id bigserial (CIM-11).
+   */
+  step: integer('step').default(1).notNull(),
 });
 
 export const activity = pgTable('activity', {

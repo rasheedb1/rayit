@@ -28,11 +28,13 @@ test('api_call_log guarda las llamadas de outreach con provider y cuenta de cana
     error_code: 'invalid_grant', error_message: null, duration_ms: 5, rate_limited: false, retry_after_s: null,
   });
   const { rows } = await db.query<{ provider: string; platform_id: string | null; channel_account_id: string | null }>(
-    `SELECT provider, platform_id, channel_account_id FROM api_call_log WHERE provider IS NOT NULL ORDER BY called_at`,
+    // Por proveedor y no por llegada: las dos van seguidas, y el reloj de
+    // PGlite es de milisegundos (desde 0078 no hay id que las ordene).
+    `SELECT provider, platform_id, channel_account_id FROM api_call_log WHERE provider IS NOT NULL ORDER BY provider`,
   );
   assert.deepEqual(rows, [
-    { provider: 'unipile', platform_id: null, channel_account_id: ACCOUNT },
     { provider: 'gmail', platform_id: null, channel_account_id: null },
+    { provider: 'unipile', platform_id: null, channel_account_id: ACCOUNT },
   ]);
 });
 

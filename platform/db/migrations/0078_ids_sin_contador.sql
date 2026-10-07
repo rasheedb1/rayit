@@ -40,6 +40,16 @@
 --       de terceros y, al final, lo escrito a mano. Es una regla que se
 --       puede explicar, no el orden de llegada; con el id al azar, el
 --       orden de llegada ya no existe.
+--   1b · deal_stage_history.step: el orden de los pasos de UN negocio.
+--       La conversión por etapa (VEN-8, queries/conversion.ts) ordena
+--       la historia por (changed_at, id): un negocio que nace y se mueve
+--       en la misma transacción deja dos filas con el mismo now(), y
+--       solo el id decía cuál fue antes. Ese orden no puede salir de un
+--       contador global; sale de uno POR NEGOCIO, que no dice nada de
+--       nadie más: step = 1, 2, 3… dentro de cada deal_id, lo pone un
+--       disparador al insertar. Las filas que ya están lo reciben en el
+--       orden que tenían, (changed_at, id) con el id bigint, ANTES de
+--       convertirlo.
 --   2 · Las quince claves pasan a `uuid DEFAULT gen_random_uuid()`,
 --       CONSERVANDO las filas: cada fila existente recibe un uuid al
 --       azar (USING gen_random_uuid() se evalúa fila a fila al
@@ -56,6 +66,9 @@
 --       bitácora o dos corridas de la MISMA transacción (now() es el
 --       mismo para todas). Sin contador, el orden es la fecha, y la
 --       fecha tiene que distinguirlas (como notification_ack, de RES-3).
+--       Postgres mide en microsegundos; PGlite, en milisegundos, así que
+--       las pruebas no dan por hecho el orden de dos filas del mismo
+--       milisegundo.
 --   4 · Una comprobación al final: si queda una columna con DEFAULT
 --       nextval(…) o identity en una tabla de `public` donde mc_app
 --       lee o escribe, la migración falla. La guardia de
@@ -102,6 +115,64 @@ CROSS JOIN (VALUES (24), (72), (168), (720)) AS c(cut_hours)
 WHERE s.age_hours <= c.cut_hours
 ORDER BY s.post_id, c.cut_hours, s.age_hours DESC, s.captured_at ASC,
          array_position(ARRAY['api', 'csv_import', 'aggregator', 'manual'], s.source);
+
+-- =====================================================================
+-- 1b · deal_stage_history.step, el orden dentro de cada negocio
+-- ---------------------------------------------------------------------
+-- El relleno va con FORCE ROW LEVEL SECURITY quitado un momento, dentro
+-- de esta transacción: con él, quien migra (el dueño) no ve ninguna fila
+-- (la política hereda de deal, y deal tampoco le enseña nada) y el
+-- UPDATE no tocaría ninguna. Actualizar step no dispara los
+-- disparadores de referencias (son UPDATE OF deal_id, changed_by y las
+-- etapas). Al final, FORCE otra vez: la guardia lo exige.
+--
+-- El disparador es SECURITY INVOKER: quien inserta (mc_app desde Ventas,
+-- mc_public_share al aceptar una cotización, el worker) ve la historia
+-- del negocio por la misma política que la deja insertar. Dos pasos del
+-- mismo negocio a la vez no se pisan: deal_move_stage (0031) toma la
+-- fila del negocio FOR UPDATE antes de escribir la historia.
+-- =====================================================================
+ALTER TABLE deal_stage_history ADD COLUMN IF NOT EXISTS step integer;
+
+ALTER TABLE deal_stage_history NO FORCE ROW LEVEL SECURITY;
+UPDATE deal_stage_history h
+   SET step = o.n
+  FROM (SELECT id, row_number() OVER (PARTITION BY deal_id ORDER BY changed_at, id) AS n
+          FROM deal_stage_history) o
+ WHERE o.id = h.id AND h.step IS NULL;
+ALTER TABLE deal_stage_history FORCE ROW LEVEL SECURITY;
+
+-- El DEFAULT 1 solo es para que un INSERT no tenga que nombrarla (Drizzle
+-- la ve opcional): el disparador de abajo la reemplaza siempre.
+ALTER TABLE deal_stage_history ALTER COLUMN step SET DEFAULT 1;
+ALTER TABLE deal_stage_history ALTER COLUMN step SET NOT NULL;
+ALTER TABLE deal_stage_history DROP CONSTRAINT IF EXISTS deal_stage_history_step_check;
+ALTER TABLE deal_stage_history ADD CONSTRAINT deal_stage_history_step_check CHECK (step >= 1);
+CREATE INDEX IF NOT EXISTS deal_stage_history_deal_id_step_idx ON deal_stage_history (deal_id, step);
+
+COMMENT ON COLUMN deal_stage_history.step IS
+  'El orden del paso dentro de su negocio (1, 2, 3…): lo pone deal_stage_history_step() al insertar. '
+  'Desempata dos pasos con la misma changed_at (CIM-11, 0078).';
+
+CREATE OR REPLACE FUNCTION deal_stage_history_step()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  -- Siempre lo calcula la base: quien inserta no elige su lugar en la historia.
+  SELECT coalesce(max(h.step), 0) + 1 INTO NEW.step
+    FROM deal_stage_history h
+   WHERE h.deal_id = NEW.deal_id;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION deal_stage_history_step() FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS deal_stage_history_step ON deal_stage_history;
+CREATE TRIGGER deal_stage_history_step
+  BEFORE INSERT ON deal_stage_history
+  FOR EACH ROW EXECUTE FUNCTION deal_stage_history_step();
 
 -- =====================================================================
 -- 2 · Las quince claves, a uuid, con sus filas

@@ -82,7 +82,8 @@ interface Huella extends Record<string, unknown> {
 }
 
 /**
- * Por tabla: cuántas filas y un md5 de todas ellas SIN el id, en un orden
+ * Por tabla: cuántas filas y un md5 de todas ellas SIN el id (ni el step
+ * que 0078 le añade a deal_stage_history, que se mide aparte), en un orden
  * que no depende del id. Si la conversión perdiera, duplicara o tocara
  * una fila (una clave ajena incluida), la huella cambia.
  */
@@ -91,9 +92,19 @@ async function huellas(db: EmbeddedDb): Promise<Huella[]> {
     (t) =>
       `SELECT '${t}' AS tabla, count(*)::int AS filas,
               md5(coalesce(string_agg(f, '|' ORDER BY f), '')) AS huella
-         FROM (SELECT (to_jsonb(x) - 'id')::text AS f FROM public.${t} x) s`,
+         FROM (SELECT (to_jsonb(x) - 'id' - 'step')::text AS f FROM public.${t} x) s`,
   ).join(' UNION ALL ');
   return (await db.queryAsSuperuser<Huella>(`${sql} ORDER BY tabla`)).rows;
+}
+
+/** La historia de los negocios con el número de cada paso (`orden` es la expresión SQL que lo da). */
+async function pasos(db: EmbeddedDb, orden: string): Promise<string> {
+  const { rows } = await db.queryAsSuperuser<{ pasos: string }>(
+    `SELECT coalesce(string_agg(f, '|' ORDER BY f), '') AS pasos
+       FROM (SELECT concat_ws(',', deal_id, from_stage_id, to_stage_id, changed_at, ${orden}) AS f
+               FROM deal_stage_history) s`,
+  );
+  return rows[0]!.pasos;
 }
 
 /** Lo que devuelve post_metrics_at_cut, entero, como huella. */
@@ -111,6 +122,7 @@ describe('0078 convierte las claves con las filas dentro', () => {
   let cortesAntes: { filas: number; huella: string };
   let guardiaAntes: string[];
   let aplicadas: string[];
+  let pasosAntes: string;
 
   before(async () => {
     // La migración por su nombre, no por su número: si el integrador la
@@ -125,6 +137,7 @@ describe('0078 convierte las claves con las filas dentro', () => {
     await db.execAsSuperuser(SEMBRAR_LAS_VACIAS);
     antes = await huellas(db);
     cortesAntes = await huellaDeLosCortes(db);
+    pasosAntes = await pasos(db, 'row_number() OVER (PARTITION BY deal_id ORDER BY changed_at, id)');
     guardiaAntes = (await estadoDelEsquema(db)).clavesDeSecuencia;
     aplicadas = await db.migrar();
   }, SETUP_TIMEOUT);
@@ -183,6 +196,22 @@ describe('0078 convierte las claves con las filas dentro', () => {
     assert.equal(rows[0]!.huerfanas, 0);
   });
 
+  test('deal_stage_history.step numera los pasos de cada negocio en el orden que daba el id', async () => {
+    assert.equal(await pasos(db, 'step'), pasosAntes);
+    // Y el siguiente paso de un negocio lo numera la base, aunque se pida otro.
+    const { rows } = await db.queryAsSuperuser<{ deal_id: string; max: number }>(
+      'SELECT deal_id, max(step)::int AS max FROM deal_stage_history GROUP BY deal_id ORDER BY deal_id LIMIT 1',
+    );
+    const { deal_id, max } = rows[0]!;
+    const nuevo = await db.queryAsSuperuser<{ step: number }>(
+      `INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, step)
+       SELECT id, stage_id, stage_id, 1 FROM deal WHERE id = $1 RETURNING step`,
+      [deal_id],
+    );
+    assert.equal(nuevo.rows[0]!.step, max + 1);
+    await db.execAsSuperuser(`DELETE FROM deal_stage_history WHERE deal_id = '${deal_id}' AND step = ${max + 1}`);
+  });
+
   test('post_metrics_at_cut devuelve las mismas lecturas que antes', async () => {
     assert.deepEqual(await huellaDeLosCortes(db), cortesAntes);
   });
@@ -197,23 +226,37 @@ describe('0078 convierte las claves con las filas dentro', () => {
     assert.equal(explicarEsquema(despues), null);
   });
 
-  test('como mc_app, el INSERT devuelve un uuid, y dos entradas de la misma transacción quedan en orden por su fecha', async () => {
+  test('como mc_app, el INSERT devuelve un uuid, y la fecha de dos entradas de la misma transacción es la del reloj', async () => {
     const r = await db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const alta = (n: number) =>
-        tx.query<{ id: string }>(
+        tx.query<{ id: string; created_at: string; inicio: string }>(
           `INSERT INTO audit_log (workspace_id, action, entity_type)
-           VALUES (current_workspace_id(), 'prueba.cim11.orden.${n}', 'test') RETURNING id::text AS id`,
+           VALUES (current_workspace_id(), 'prueba.cim11.orden.${n}', 'test')
+           RETURNING id::text AS id, created_at::text AS created_at, now()::text AS inicio`,
         );
-      const uno = await alta(1);
-      const dos = await alta(2);
-      const orden = await tx.query<{ action: string }>(
-        "SELECT action FROM audit_log WHERE action LIKE 'prueba.cim11.orden.%' ORDER BY created_at",
-      );
-      return { uno: uno.rows[0]!.id, dos: dos.rows[0]!.id, orden: orden.rows.map((x) => x.action) };
+      const uno = (await alta(1)).rows[0]!;
+      // Más que el milisegundo del reloj de PGlite: así la diferencia se ve.
+      await tx.query('SELECT pg_sleep(0.005)');
+      const dos = (await alta(2)).rows[0]!;
+      return { uno, dos };
     });
-    assert.match(r.uno, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    assert.notEqual(r.uno, r.dos);
-    assert.deepEqual(r.orden, ['prueba.cim11.orden.1', 'prueba.cim11.orden.2']);
+    assert.match(r.uno.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.notEqual(r.uno.id, r.dos.id);
+    // now() es el mismo para toda la transacción; clock_timestamp() no.
+    assert.equal(r.uno.inicio, r.dos.inicio);
+    assert.ok(new Date(r.dos.created_at) > new Date(r.uno.created_at), `${r.uno.created_at} → ${r.dos.created_at}`);
+    const { rows } = await db.queryAsSuperuser<{ col: string; def: string }>(
+      `SELECT c.relname || '.' || a.attname AS col, pg_get_expr(d.adbin, d.adrelid) AS def
+         FROM pg_attrdef d JOIN pg_class c ON c.oid = d.adrelid
+         JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+        WHERE (c.relname, a.attname) IN (('api_call_log', 'called_at'), ('audit_log', 'created_at'), ('job_run', 'started_at'))
+        ORDER BY 1`,
+    );
+    assert.deepEqual(rows, [
+      { col: 'api_call_log.called_at', def: 'clock_timestamp()' },
+      { col: 'audit_log.created_at', def: 'clock_timestamp()' },
+      { col: 'job_run.started_at', def: 'clock_timestamp()' },
+    ]);
   });
 
   test('la guardia nombra la próxima tabla que nazca con una secuencia a la vista de mc_app', async () => {

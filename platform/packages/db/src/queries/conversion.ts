@@ -66,9 +66,10 @@ export async function getStageConversion(tx: WorkspaceTx, opts: StageConversionO
   const days = opts.since === undefined ? CONVERSION_WINDOW_DAYS : null;
   const { rows } = await tx.query<{ stage_id: string; entered: string; advanced: string; rate: string | null }>(
     // La primera entrada de cada negocio en cada etapa, ordenada por
-    // (changed_at, id) y no solo por la hora: un negocio que se crea y se
+    // (changed_at, step) y no solo por la hora: un negocio que se crea y se
     // mueve en la misma transacción deja dos filas con el mismo now(), y
-    // solo el id (bigserial, crece con cada INSERT) dice cuál fue antes.
+    // solo step (1, 2, 3… dentro del negocio, 0078) dice cuál fue antes.
+    // Hasta CIM-11 era el id bigserial: un contador de toda la plataforma.
     // Con «changed_at >=» un negocio que nace en «En conversación» y en la
     // misma transacción vuelve a «Nuevo» contaba como que avanzó desde
     // «Nuevo»: la fila de «En conversación» tiene la misma hora.
@@ -83,9 +84,9 @@ export async function getStageConversion(tx: WorkspaceTx, opts: StageConversionO
      ),
      entradas AS (
        SELECT DISTINCT ON (h.deal_id, h.to_stage_id)
-              h.deal_id, h.to_stage_id AS stage_id, h.changed_at AS entro, h.id AS primer_id
+              h.deal_id, h.to_stage_id AS stage_id, h.changed_at AS entro, h.step AS primer_paso
          FROM deal_stage_history h
-        ORDER BY h.deal_id, h.to_stage_id, h.changed_at, h.id
+        ORDER BY h.deal_id, h.to_stage_id, h.changed_at, h.step
      ),
      resultado AS (
        SELECT e.stage_id, e.deal_id,
@@ -95,7 +96,7 @@ export async function getStageConversion(tx: WorkspaceTx, opts: StageConversionO
                   JOIN pipeline_stage t2 ON t2.id = h2.to_stage_id
                   JOIN pipeline_stage t1 ON t1.id = e.stage_id
                  WHERE h2.deal_id = e.deal_id
-                   AND (h2.changed_at, h2.id) > (e.entro, e.primer_id)
+                   AND (h2.changed_at, h2.step) > (e.entro, e.primer_paso)
                    AND t2.position > t1.position
                    AND NOT t2.is_lost
               ) AS avanzo
