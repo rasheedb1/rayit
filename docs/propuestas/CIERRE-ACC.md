@@ -435,6 +435,25 @@ siguen funcionando. Solo los pasos 7 y 8 escriben en la base real.
 Si algo de 1 a 6 sale vacío o distinto, es el alcance: vuelve al plan B
 de §7.2 y avísame.
 
+## 7bis. Lo que ACC-4 (Rasheed) tocó de este cierre
+
+Para que Nicolás lo revise en el PR de ACC-4
+(`rasheed/ACC-4-pantalla-equipo-r2`, migraciones `0078_equipo` y
+`0079_equipo_cerrojos`, sin aplicar en Supabase):
+
+| # | Qué | Dónde | Por qué | Prueba |
+|---|---|---|---|---|
+| 1 | `getSessionPermissions` (ACC-5) y `sessionHasPermission` (ACC-8) leen `session_permission_keys()` en vez de su propio JOIN a `role_permission` | `packages/db/src/queries/accesos.ts`, `queries/conexiones.ts` (una consulta cada una) | La función suma el rol **y** las casillas del mánager (`membership.extra_permissions`, 0078 §1–2). Con dos JOIN a mano, uno se olvidaba de las casillas. **Pide visto bueno de Nicolás.** | `equipo.test.ts` «la casilla de conectar cuentas es lo que ACC-8 pregunta», y las suites de ACC-5/ACC-8 sin tocar |
+| 2 | Quien tiene alcance (filas en `membership_scope`) **no administra el equipo**: ni invita, ni revoca, ni cambia roles, ni quita | 0079 §6: `session_has_scope()` dentro de `session_can_grant()`, que es lo que piden las cuatro políticas del equipo; la consulta responde `scoped` y la pantalla no ofrece las acciones | ACC-6 §4.5 dejó a ACC-4 decir quién da alcance. «Nadie otorga lo que no tiene» miraba solo permisos: un miembro acotado con `equipo.miembro.invitar` podía invitar a alguien que entraba sin alcance, viéndolo todo. Lo conservador hasta tener la regla del subconjunto | `equipo.test.ts` «quien tiene alcance no administra el equipo (0079 §6)»: por la consulta y a mano, y al quitar la fila vuelve a poder |
+| 3 | `invitation.scope` tiene que ser `[]` (`invitation_scope_not_yet`) | 0079 §6 | `invitation_accept` no copia el alcance a `membership_scope`: una invitación con alcance entraría sin él. Cuando ACC-6/7 lo copie, se quita el CHECK | `equipo.test.ts` «una invitación no lleva alcance» |
+
+Queda para ACC-6/7: la regla del subconjunto («solo se da un alcance
+contenido en el propio»), la copia de `invitation.scope` al aceptar y
+la pantalla que escribe el alcance (§5.6). Cuando existan, quien está
+acotado podrá volver a invitar dentro de lo suyo: es cambiar la línea
+`AND NOT session_has_scope()` de `session_can_grant()` por la
+comprobación del subconjunto.
+
 ## 8. Fuera de alcance, con su historia
 
 | Qué | Por qué | Historia |
