@@ -54,12 +54,24 @@
 --     pública de una cotización con «permission denied». Su cerradura
 --     sigue siendo la de 0030 (POLITICAS_DEL_ENLACE_PUBLICO). El rol que
 --     migra, igual: los seeds no tienen persona.
---   · Las hijas sin creator_id (campaign_post, invoice, payment,
---     data_consent, los snapshots…) no llevan política propia: las que
---     cuelgan de una de estas cuatro por EXISTS ya heredan el filtro, y
---     las demás las sigue acotando scopeFilter() en las consultas. La
---     historia es «las cuatro tablas que llevan creator_id» (backlog,
---     ACC-7).
+--   · Las hijas sin creator_id (campaign_post, invoice, payment, los
+--     snapshots…) no llevan política propia: las que cuelgan de una de
+--     estas cuatro por EXISTS en su política (campaign_post por su
+--     campaña, 0018) heredan el filtro, y las demás las sigue acotando
+--     scopeFilter() en las consultas.
+--   · Otras tablas que también tienen creator_id (quote, data_consent,
+--     las de ideas y guiones…) quedan como estaban: la historia es «las
+--     cuatro» del backlog (ACC-7), y ampliar la lista es añadir aquí su
+--     política y su entrada en TABLAS_CON_ALCANCE_POR_CREADOR.
+--
+-- Lo que la política esconde y el código necesita saber. ACC-6 buscaba
+-- sin filtro «la fila ya existe, pero no es tuya» antes de escribir, para
+-- decir ScopeError en vez de chocar con un índice o duplicar una cuenta.
+-- Esa búsqueda ya no ve la fila. Donde lo sabe un índice único (la
+-- campaña viva de una cotización, el id externo de una cuenta), lo dice
+-- el choque: writeOrScopeError en packages/db/src/scope.ts. Donde no hay
+-- índice (el @ de una cuenta agregada a mano), §3 trae una función que
+-- responde solo sí o no.
 --
 -- La guardia (packages/db/src/esquema.ts, TABLAS_CON_ALCANCE_POR_CREADOR)
 -- exige en cada arranque que las cuatro tengan esta política, restrictiva,

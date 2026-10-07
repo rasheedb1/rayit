@@ -13,7 +13,7 @@ src/embedded.ts    PGlite con db/migrations + db/seed, corriendo como mc_app
 src/from-env.ts    cómo la web elige entre los dos (DATABASE_URL o demo)
 src/audit.ts       audit / auditAsJob: la bitácora obligatoria de toda escritura (uso 7)
 src/tls.ts         la CA de Supabase, verificada siempre (nunca rejectUnauthorized: false)
-src/scope.ts       scopeFilter / assertScopeAllows / assertUnscoped: el alcance dentro del workspace (uso 9)
+src/scope.ts       scopeFilter / assertScopeAllows / assertUnscoped / writeOrScopeError: el alcance dentro del workspace (uso 9)
 src/schema/        tablas y vistas del MVP, curadas desde db/migrations
 src/queries/       un archivo por módulo: cimientos, catalogos, resumen, ventas,
                    cotizar, campanas, finanzas (facturas y gastos), conexiones
@@ -485,8 +485,24 @@ Las reglas, y por qué:
   `scope_allows()` no encuentra filas y deja pasar todo, y ningún archivo
   de `apps/worker/src` compone el alcance (lo comprueba la prueba de
   convención). El alcance es de la web.
-- ACC-7 puede usar el mismo predicado como política restrictiva:
-  `USING (scope_allows('creator', creator_id))`.
+- **Y en cuatro tablas, también la base (ACC-7, 0082).**
+  `social_connection`, `post`, `campaign` y `deal` llevan una política
+  RESTRICTIVE solo para `mc_app`: `(SELECT session_sees_all_creators())
+  OR scope_allows('creator', creator_id)`. Una consulta cruda que se
+  olvide de `scopeFilter()` no devuelve filas de otro creador, y una
+  escritura no las crea ni las mueve (42501). Dueño y Administrador ven a
+  todos; el worker (BYPASSRLS) y los enlaces públicos (`mc_public_share`)
+  no pasan por ella. Solo cubre el alcance por **creador**: el de marca y
+  campaña sigue siendo de `scopeFilter()`. La guardia del esquema exige
+  las cuatro (`TABLAS_CON_ALCANCE_POR_CREADOR`).
+- **Lo que esa política esconde y el código necesita saber.** Antes se
+  buscaba «la fila ya existe, pero fuera de tu alcance» sin filtro; ahora
+  la base no la enseña. Si quien lo sabe es un índice único, la escritura
+  va en `writeOrScopeError(tx, savepoint, restricción, fn)`: el choque de
+  una persona acotada es `ScopeError` y la transacción sigue usable. Si
+  no hay índice (el @ de una cuenta), una función que responde solo sí o
+  no (`public_account_out_of_scope`, 0082 §3). Prueba:
+  `test/alcance-rls.test.ts`.
 
 ## Lo que hace el cliente por ti
 

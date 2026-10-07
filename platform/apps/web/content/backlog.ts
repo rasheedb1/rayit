@@ -693,7 +693,8 @@ export const STORIES: readonly Story[] = [
     title: "Endurecimiento por creador en RLS",
     desc: "Política de fila por creator_id en las cuatro tablas que lo llevan: social_connection, post, campaign y deal.",
     done: "Una consulta cruda que se olvide de scopeFilter() tampoco devuelve filas de otro creador.",
-    status: "pendiente",
+    status: "hecho",
+    note: "7-oct: migración 0082_alcance_por_creador, sin aplicar (el integrador la aplica ANTES de desplegar: la guardia la exige). Política RESTRICTIVE por creador, solo para mc_app, en las cuatro tablas, con el mismo predicado que scopeFilter(); Dueño y Administrador ven a todos los creadores; el worker y los enlaces públicos no pasan por ella. La guardia del esquema nombra la tabla a la que le falte. Prueba en pglite: test/alcance-rls.test.ts (docs/propuestas/ACC-7.md).",
   },
   {
     id: "ACC-8", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["CON-3", "ACC-3"],
