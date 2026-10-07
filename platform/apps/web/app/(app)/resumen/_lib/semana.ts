@@ -36,11 +36,6 @@ export function fuentesVisibles(permisos: ReadonlySet<Permiso>, flags: Flags = d
   });
 }
 
-/** «@handle», como lo escriben Conexiones y «Hasta cuándo llegan los datos»; sin duplicar la arroba. */
-export function arroba(handle: string): string {
-  return `@${handle.replace(/^@+/, "")}`;
-}
-
 /**
  * El enlace de la fila al módulo donde se resuelve:
  *

@@ -12,13 +12,14 @@ export const TITULO_SEMANA_ID = "lo-que-importa";
  *
  * La descripción habla del botón «Entendido»: solo se pasa cuando hay
  * filas. El título lleva tabIndex=-1 para poder recibir el foco cuando
- * se quita la última fila: quien navega con teclado no cae en <body>.
+ * se quita la última fila: quien navega con teclado no cae en <body>, y
+ * el anillo de foco del kit (focus-visible) le enseña dónde quedó.
  */
 export function MarcoSemana({ meta, descripcion, children }: { meta?: string; descripcion?: string; children: ReactNode }) {
   return (
     <section className="mb-8" aria-labelledby={TITULO_SEMANA_ID}>
       <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 id={TITULO_SEMANA_ID} tabIndex={-1} className="text-sm font-semibold outline-none">
+        <h2 id={TITULO_SEMANA_ID} tabIndex={-1} className="rounded-sm text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ink">
           {MESSAGES.semana.titulo}
         </h2>
         {meta && <span className="text-xs text-fg-3 tabular-nums">{meta}</span>}

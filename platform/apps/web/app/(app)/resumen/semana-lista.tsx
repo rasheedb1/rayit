@@ -19,10 +19,13 @@ import type { Enlace } from "./_lib/semana";
  *   1 · Plegar: se ven las primeras FILAS_A_LA_VISTA y el resto tras
  *       «Ver N más». Con veinte seguimientos vencidos, las cifras que dan
  *       nombre a la página no pueden quedar dos pantallas más abajo.
- *   2 · Deshacer: tras «Entendido» la fila se va al momento y queda un
- *       aviso «Quitado de tu lista» con «Deshacer» (role=status: el
- *       lector de pantalla lo anuncia). Un clic por error no esconde un
- *       cobro vencido hasta el próximo recordatorio.
+ *   2 · Deshacer: tras «Entendido» la fila se va al momento, sin
+ *       esperar al servidor (no hay estado de carga que enseñar: si falla,
+ *       la fila vuelve con el error), y queda un aviso «Quitado de tu
+ *       lista» con «Deshacer» (role=status: el lector de pantalla lo
+ *       anuncia). Un clic por error no esconde un cobro vencido. Y si se
+ *       navega sin deshacer, una cuenta que sigue rota vuelve sola a la
+ *       semana (el barrido de oauth.refresh, RES-3).
  *   3 · El foco: tras «Entendido», al «Entendido» de la fila siguiente
  *       (o de la anterior, si era la última), y al título del bloque si
  *       ya no queda ninguna. Tras «Deshacer», a la fila que vuelve.
@@ -67,7 +70,6 @@ export function ListaSemana({
   const [abierto, setAbierto] = useState(false);
   const [aviso, setAviso] = useState<Aviso | null>(null);
   const [foco, setFoco] = useState<string | typeof TITULO | null>(null);
-  const [enCurso, setEnCurso] = useState<string | null>(null);
   const [, startTransition] = useTransition();
   const raiz = useRef<HTMLDivElement>(null);
   const listaId = useId();
@@ -106,10 +108,8 @@ export function ListaSemana({
     setQuitadas((s) => cambiar(s, fila.id, true));
     setAviso({ tipo: "quitado", fila });
     setFoco(vecina ? vecina.id : TITULO);
-    setEnCurso(fila.id);
     startTransition(async () => {
       const ok = await entenderAviso(fila.id).catch(() => false);
-      setEnCurso(null);
       if (!ok) {
         setQuitadas((s) => cambiar(s, fila.id, false));
         setAviso({ tipo: "error", texto: t.errorEntendido });
@@ -136,7 +136,7 @@ export function ListaSemana({
         ) : (
           <ul id={listaId} className="divide-y divide-line rounded-md border border-line">
             {mostradas.map((f) => (
-              <Fila key={f.id} fila={f} ocupada={enCurso === f.id} onEntendido={() => entender(f)} />
+              <Fila key={f.id} fila={f} onEntendido={() => entender(f)} />
             ))}
           </ul>
         )}
@@ -169,7 +169,7 @@ export function ListaSemana({
   );
 }
 
-function Fila({ fila, ocupada, onEntendido }: { fila: FilaVista; ocupada: boolean; onEntendido: () => void }) {
+function Fila({ fila, onEntendido }: { fila: FilaVista; onEntendido: () => void }) {
   const t = MESSAGES.semana;
   return (
     <li className="flex flex-col gap-2.5 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
@@ -189,7 +189,6 @@ function Fila({ fila, ocupada, onEntendido }: { fila: FilaVista; ocupada: boolea
           variant="ghost"
           name="entendido"
           value={fila.id}
-          loading={ocupada}
           aria-label={t.entendidoDe(fila.titulo)}
           onClick={onEntendido}
         >

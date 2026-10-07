@@ -1,5 +1,6 @@
+import { cookies } from "next/headers";
 import { unstable_rethrow } from "next/navigation";
-import { channelHealthName } from "@mc/core";
+import { accountLabel, channelHealthName } from "@mc/core";
 import {
   listWeeklyHighlights,
   MAX_HIGHLIGHTS,
@@ -12,11 +13,13 @@ import { PLATFORM_LABEL, isPlatformId } from "@/components/ui/platform-pill";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { permisosDeLaSesion } from "@/lib/permisos/sesion";
+import { getCurrentContext } from "@/lib/workspace/current";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "./messages";
 import { ListaSemana, type FilaVista } from "./semana-lista";
 import { MarcoSemana } from "./semana-marco";
-import { arroba, enlacesDeFila, FILAS_A_LA_VISTA, fuentesVisibles } from "./_lib/semana";
+import { COOKIE_ENTENDIDOS, leerEntendidos } from "./_lib/entendidos";
+import { enlacesDeFila, FILAS_A_LA_VISTA, fuentesVisibles } from "./_lib/semana";
 
 /**
  * «Lo que importa esta semana» (RES-3): el bloque de arriba de /resumen.
@@ -29,15 +32,20 @@ import { arroba, enlacesDeFila, FILAS_A_LA_VISTA, fuentesVisibles } from "./_lib
  * pasa después del clic (plegar, «Entendido», «Deshacer», el foco) es de
  * la lista del cliente, semana-lista.tsx.
  *
+ * Sin sesión (el modo demo) el «Entendido» de quien visita vive en su
+ * cookie (_lib/entendidos.ts) y no en la base: se le pasa a la consulta
+ * como `hidden`, así cada visitante despacha SUS filas y no las de todos.
+ *
  * Una lista y no tarjetas (Linear Inbox, Vercel): cada fila dice qué
  * pasa, cuánto pesa y a dónde ir, y se despacha con «Entendido».
  */
 export async function LoQueImporta() {
   try {
-    const [permisos, ws] = await Promise.all([permisosDeLaSesion(), getCurrentWorkspace()]);
+    const [permisos, ws, { identity }] = await Promise.all([permisosDeLaSesion(), getCurrentWorkspace(), getCurrentContext()]);
     const fuentes = fuentesVisibles(permisos);
+    const hidden = identity ? [] : leerEntendidos((await cookies()).get(COOKIE_ENTENDIDOS)?.value);
     const leidas: WeeklyHighlights =
-      fuentes.length === 0 ? { rows: [], more: false } : await withWorkspace((tx) => listWeeklyHighlights(tx, fuentes));
+      fuentes.length === 0 ? { rows: [], more: false } : await withWorkspace((tx) => listWeeklyHighlights(tx, fuentes, { hidden }));
     return <LoQueImportaLista filas={leidas.rows} more={leidas.more} f={formatterFor(ws)} />;
   } catch (err) {
     // Un redirect (sin sesión) o un 404 siguen su camino. Lo demás no tumba
@@ -71,8 +79,9 @@ export function textoDeFila(fila: WeeklyHighlight, f: Formatter): { titulo: stri
   const t = MESSAGES.semana;
   switch (fila.source) {
     case "connection": {
-      // Como Conexiones y «Hasta cuándo llegan los datos»: la red y el @.
-      const nombre = fila.handle ? `${red(fila.platformId)} ${arroba(fila.handle)}` : red(fila.platformId);
+      // Como Conexiones, «Hasta cuándo llegan los datos» y el aviso del
+      // worker: la red y el @, con las piezas de @mc/core (cuentas.ts).
+      const nombre = accountLabel(red(fila.platformId), fila.handle);
       return { titulo: t.connection[fila.status](nombre), detalle: fila.detail ?? t.connection.sinDetalle };
     }
     case "channel":
@@ -80,7 +89,12 @@ export function textoDeFila(fila: WeeklyHighlight, f: Formatter): { titulo: stri
     case "invoice":
       return {
         titulo: t.invoice.titulo(fila.invoiceNumber, fila.companyName),
-        detalle: t.invoice.detalle(f.money(fila.outstanding, fila.currency, { mode: "full" }), f.relativeDays(-fila.daysOverdue)),
+        // Con el recordatorio ya mandado la factura sigue (no está pagada) y lo dice.
+        detalle: t.invoice.detalle(
+          f.money(fila.outstanding, fila.currency, { mode: "full" }),
+          f.relativeDays(-fila.daysOverdue),
+          fila.reminderSentAt === null ? null : f.date(fila.reminderSentAt),
+        ),
       };
     case "deal":
       return fila.dueState === "hoy"

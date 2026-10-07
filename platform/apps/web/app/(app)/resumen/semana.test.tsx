@@ -26,9 +26,16 @@ const base = vi.hoisted(() => ({
   listWeeklyHighlights: vi.fn(),
   acknowledgeHighlight: vi.fn(),
   unacknowledgeHighlight: vi.fn(),
+  isWeeklyHighlight: vi.fn(),
   lecturas: 0,
 }));
-const sesion = vi.hoisted(() => ({ permisos: new Set<string>() as ReadonlySet<string> }));
+const sesion = vi.hoisted(() => ({
+  permisos: new Set<string>() as ReadonlySet<string>,
+  /** Con sesión, quién es; undefined = modo demo, sin nadie. */
+  identity: { userId: "00000002-0000-4000-8000-000000000002", email: "laura@ejemplo.com" } as { userId: string; email: string } | undefined,
+}));
+/** La cookie del navegador que hace la petición: cada visitante de la demo trae la suya. */
+const navegador = vi.hoisted(() => ({ cookies: new Map<string, string>() }));
 
 vi.mock("@mc/db/queries/resumen-semana", async (importOriginal) => {
   const real = await importOriginal<typeof import("@mc/db/queries/resumen-semana")>();
@@ -37,6 +44,7 @@ vi.mock("@mc/db/queries/resumen-semana", async (importOriginal) => {
     listWeeklyHighlights: base.listWeeklyHighlights,
     acknowledgeHighlight: base.acknowledgeHighlight,
     unacknowledgeHighlight: base.unacknowledgeHighlight,
+    isWeeklyHighlight: base.isWeeklyHighlight,
   };
 });
 vi.mock("@/lib/db", () => ({
@@ -50,6 +58,13 @@ vi.mock("@/lib/workspace/settings", () => ({
 }));
 vi.mock("@/lib/permisos/sesion", () => ({ permisosDeLaSesion: async () => sesion.permisos }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("@/lib/workspace/current", () => ({ getCurrentContext: async () => ({ identity: sesion.identity }) }));
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: (name: string) => (navegador.cookies.has(name) ? { name, value: navegador.cookies.get(name) } : undefined),
+    set: (name: string, value: string) => void navegador.cookies.set(name, value),
+  }),
+}));
 
 import { permisosDeRol, SinPermisoError } from "@mc/core";
 import { formatterFor } from "@/lib/format";
@@ -76,7 +91,7 @@ const FACTURA: InvoiceHighlight = {
   ...aviso, id: "0000000c-0000-4000-8000-000000000f01", kind: "invoice_overdue", severity: "warning",
   actionUrl: "/finanzas/facturas/00000003-0000-4000-8000-0000fac26007?recordatorio=4",
   source: "invoice", invoiceId: "00000003-0000-4000-8000-0000fac26007", invoiceNumber: "FV-2026-007", companyName: "Hogar Lindo",
-  currency: "COP", outstanding: "1100000.00", dueOn: "2026-08-25", daysOverdue: 41,
+  currency: "COP", outstanding: "1100000.00", dueOn: "2026-08-25", daysOverdue: 41, reminderSentAt: null,
 };
 const NEGOCIO: DealHighlight = {
   ...aviso, id: "0000000c-0000-4000-8000-000000000d01", kind: "deal_overdue", severity: "warning",
@@ -112,14 +127,17 @@ beforeEach(() => {
   base.listWeeklyHighlights.mockReset();
   base.acknowledgeHighlight.mockReset();
   base.unacknowledgeHighlight.mockReset();
+  base.isWeeklyHighlight.mockReset();
   base.lecturas = 0;
   sesion.permisos = permisosDeRol("creator", "owner");
+  sesion.identity = { userId: "00000002-0000-4000-8000-000000000002", email: "laura@ejemplo.com" };
+  navegador.cookies = new Map();
 });
 
 describe("cada fila dice qué pasa y lleva a su módulo", () => {
   it("la cuenta caída, a Conexiones, nombrada con su @ como en el resto de la página", () => {
     render(<LoQueImportaLista filas={FILAS} f={f} />);
-    const li = fila("Vuelve a conectar tu cuenta de TikTok @laura.cocinafacil");
+    const li = fila("Tu cuenta de TikTok @laura.cocinafacil dejó de darnos sus cifras");
     expect(li).toHaveTextContent("TikTok pidió volver a autorizar la cuenta.");
     expect(within(li).getByText("Cuenta")).toBeInTheDocument();
     expect(within(li).getByRole("link", { name: "Ver en Conexiones" })).toHaveAttribute("href", "/conexiones");
@@ -138,6 +156,12 @@ describe("cada fila dice qué pasa y lleva a su módulo", () => {
     const li = fila("La factura FV-2026-007 de Hogar Lindo está vencida");
     expect(li.textContent).toMatch(/COP\s1\.100\.000 por cobrar · venció hace 41 días/);
     expect(within(li).getByRole("link", { name: "Ver la factura" })).toHaveAttribute("href", FACTURA.actionUrl);
+  });
+
+  it("la factura con el recordatorio ya mandado sigue, y dice cuándo se mandó: mandarlo no la cobra", () => {
+    render(<LoQueImportaLista filas={[{ ...FACTURA, daysOverdue: 90, reminderSentAt: "2026-09-20T15:00:00Z" }]} f={f} />);
+    const li = fila("La factura FV-2026-007 de Hogar Lindo está vencida");
+    expect(li.textContent).toMatch(/COP\s1\.100\.000 por cobrar · venció hace 90 días · recordatorio enviado el 20 sep/);
   });
 
   it("el seguimiento vencido, a la ficha de la empresa en Ventas", () => {
@@ -270,10 +294,10 @@ describe("«Entendido» en la lista", () => {
     base.acknowledgeHighlight.mockResolvedValue(false);
     render(<LoQueImportaLista filas={FILAS} f={f} />);
     await act(async () => {
-      fireEvent.click(entendido(fila(/^Vuelve a conectar tu cuenta de TikTok/)));
+      fireEvent.click(entendido(fila(/^Tu cuenta de TikTok @laura.cocinafacil/)));
     });
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(MESSAGES.semana.errorEntendido));
-    expect(fila(/^Vuelve a conectar tu cuenta de TikTok/)).toBeInTheDocument();
+    expect(fila(/^Tu cuenta de TikTok @laura.cocinafacil/)).toBeInTheDocument();
   });
 });
 
@@ -307,7 +331,7 @@ describe("permisos", () => {
     sesion.permisos = permisosDeRol("creator", "manager");
     base.listWeeklyHighlights.mockResolvedValue({ rows: [CONEXION, NEGOCIO, VIDEO], more: false });
     render(await LoQueImporta());
-    expect(base.listWeeklyHighlights).toHaveBeenCalledWith({}, ["connection", "channel", "deal", "outlier"]);
+    expect(base.listWeeklyHighlights).toHaveBeenCalledWith({}, ["connection", "channel", "deal", "outlier"], { hidden: [] });
     expect(screen.queryByText(/FV-2026-007/)).toBeNull();
     expect(screen.getAllByRole("listitem")).toHaveLength(3);
   });
@@ -356,5 +380,62 @@ describe("las acciones", () => {
   it("un id imposible no llega a la base", async () => {
     expect(await entenderAviso("no-es-un-id")).toBe(false);
     expect(base.lecturas).toBe(0);
+  });
+});
+
+describe("el modo demo, sin sesión: el «Entendido» es de quien visita", () => {
+  const TODAS: WeeklySource[] = ["connection", "channel", "invoice", "deal", "outlier"];
+  const NOMBRE = "oncue_semana_entendidos";
+
+  it("no escribe en la base: guarda el id en la cookie del visitante, después de comprobar que el aviso es de su bloque", async () => {
+    sesion.identity = undefined;
+    base.isWeeklyHighlight.mockResolvedValue(true);
+    expect(await entenderAviso(VIDEO.id)).toBe(true);
+    expect(base.acknowledgeHighlight).not.toHaveBeenCalled();
+    expect(base.isWeeklyHighlight).toHaveBeenCalledWith({}, VIDEO.id, TODAS);
+    expect(navegador.cookies.get(NOMBRE)).toBe(VIDEO.id);
+
+    expect(await entenderAviso(CONEXION.id)).toBe(true);
+    expect(navegador.cookies.get(NOMBRE)).toBe(`${VIDEO.id}.${CONEXION.id}`);
+    // «Deshacer» lo saca de la cookie, sin tocar la base tampoco.
+    expect(await deshacerEntendido(VIDEO.id)).toBe(true);
+    expect(base.unacknowledgeHighlight).not.toHaveBeenCalled();
+    expect(navegador.cookies.get(NOMBRE)).toBe(CONEXION.id);
+  });
+
+  it("un id que no es de su bloque (otra fuente, otro alcance) no entra en la cookie", async () => {
+    sesion.identity = undefined;
+    base.isWeeklyHighlight.mockResolvedValue(false);
+    expect(await entenderAviso(FACTURA.id)).toBe(false);
+    expect(navegador.cookies.has(NOMBRE)).toBe(false);
+  });
+
+  it("dos visitas distintas: lo que despacha la primera, la segunda lo sigue viendo", async () => {
+    sesion.identity = undefined;
+    base.isWeeklyHighlight.mockResolvedValue(true);
+    // La primera visita da «Entendido» a las cinco filas.
+    for (const fila of FILAS) expect(await entenderAviso(fila.id)).toBe(true);
+    const primera = navegador.cookies;
+    expect(primera.get(NOMBRE)?.split(".")).toHaveLength(5);
+
+    // Su bloque se pide escondiendo SUS cinco avisos…
+    base.listWeeklyHighlights.mockResolvedValue({ rows: [], more: false });
+    const { unmount } = render(await LoQueImporta());
+    expect(base.listWeeklyHighlights).toHaveBeenLastCalledWith({}, TODAS, { hidden: FILAS.map((x) => x.id) });
+    unmount();
+
+    // …y la segunda, con su navegador limpio, no esconde nada: ve las cinco filas.
+    navegador.cookies = new Map();
+    base.listWeeklyHighlights.mockResolvedValue({ rows: FILAS, more: false });
+    render(await LoQueImporta());
+    expect(base.listWeeklyHighlights).toHaveBeenLastCalledWith({}, TODAS, { hidden: [] });
+    expect(screen.getAllByRole("listitem")).toHaveLength(5);
+  });
+
+  it("con sesión la cookie no cuenta: el «Entendido» es de la persona, en la base", async () => {
+    navegador.cookies.set(NOMBRE, VIDEO.id);
+    base.listWeeklyHighlights.mockResolvedValue({ rows: [VIDEO], more: false });
+    render(await LoQueImporta());
+    expect(base.listWeeklyHighlights).toHaveBeenLastCalledWith({}, TODAS, { hidden: [] });
   });
 });

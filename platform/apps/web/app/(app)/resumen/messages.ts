@@ -42,8 +42,8 @@ export const MESSAGES = {
     /**
      * El bloque vacío. NO afirma nada sobre los datos: el bloque enseña
      * avisos sin atender, no la mora ni el estado de las cuentas, y quien
-     * ya dio «Entendido» o mandó el recordatorio desde Finanzas puede
-     * tener una factura vencida y el bloque vacío.
+     * ya dio «Entendido» a una factura vencida la sigue teniendo vencida
+     * con el bloque vacío.
      */
     vacio: {
       title: "Todo en orden esta semana",
@@ -83,11 +83,17 @@ export const MESSAGES = {
       invoice: "Ver la factura",
       deal: "Ver en Ventas",
     },
+    /**
+     * La cuenta social rota. `cuenta` es «TikTok @laura» (@mc/core
+     * accountLabel). Dice lo que pasó y no promete cómo se arregla: si
+     * Conexiones puede reautorizarla depende del entorno, y lo dice
+     * Conexiones (como connectionErrorTitle del worker).
+     */
     connection: {
-      needs_reauth: (red: string) => `Vuelve a conectar tu cuenta de ${red}`,
-      expired: (red: string) => `Tu acceso a ${red} venció: vuelve a conectar la cuenta`,
-      revoked: (red: string) => `Quitaste el acceso a ${red}: vuelve a conectar la cuenta`,
-      error: (red: string) => `No podemos leer tu cuenta de ${red}`,
+      needs_reauth: (cuenta: string) => `Tu cuenta de ${cuenta} dejó de darnos sus cifras`,
+      expired: (cuenta: string) => `Tu acceso a ${cuenta} venció`,
+      revoked: (cuenta: string) => `Se quitó el acceso a ${cuenta}`,
+      error: (cuenta: string) => `No podemos leer tu cuenta de ${cuenta}`,
       /** Sin el detalle de la plataforma, qué pasa si no se atiende. */
       sinDetalle: "Mientras tanto no llegan cifras nuevas de esta cuenta.",
     },
@@ -99,8 +105,13 @@ export const MESSAGES = {
     },
     invoice: {
       titulo: (numero: string, empresa: string) => `La factura ${numero} de ${empresa} está vencida`,
-      /** `pendiente` es el saldo ya formateado; `cuando`, «hace 41 días». */
-      detalle: (pendiente: string, cuando: string) => `${pendiente} por cobrar · venció ${cuando}`,
+      /**
+       * `pendiente` es el saldo ya formateado; `cuando`, «hace 41 días».
+       * `enviado` es la fecha del último recordatorio si ya se mandó desde
+       * Finanzas: mandarlo no cobra la factura, así que la fila sigue.
+       */
+      detalle: (pendiente: string, cuando: string, enviado: string | null) =>
+        `${pendiente} por cobrar · venció ${cuando}${enviado ? ` · recordatorio enviado el ${enviado}` : ""}`,
     },
     deal: {
       vencido: (accion: string) => `Seguimiento vencido: ${accion}`,
