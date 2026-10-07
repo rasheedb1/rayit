@@ -850,7 +850,8 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     tabla: ['INSERT', 'SELECT'],
     motivo: 'el paso de etapa de la aceptación queda en el historial (0030 §3)',
   },
-  deal_stage_history_id_seq: { tabla: ['USAGE'], motivo: 'el id del INSERT en deal_stage_history (0030 §3)' },
+  // Hasta 0082 también USAGE en deal_stage_history_id_seq, para el id del
+  // INSERT. Desde CIM-11 el id es gen_random_uuid() y la secuencia no existe.
   pipeline_stage: {
     tabla: ['SELECT'],
     motivo: 'leer la etapa del negocio: la pide assert_reference_visible de 0025 al cambiar deal.stage_id (0030 §3)',
