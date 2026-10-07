@@ -235,8 +235,9 @@ Varios hallazgos llegaron dos veces (los dos revisores): se agrupan.
 El seed `0013_demo_agencia.sql` deja «Agencia Norte · demo»
 (`00000013-0000-4000-8000-000000000001`): Camilo Rey y Mariana Gil,
 Valentina Ortiz (Dueña) y Diego Salas (Ejecutivo de cuenta, acotado a
-Camilo); cinco negocios (dos de cada creador, uno «Sin creador», y Fresko
-Market con uno de cada uno) y una campaña de cada creador. Sin fechas: no
+Camilo); cuatro marcas propias de la agencia; cinco negocios (dos de cada
+creador, uno «Sin creador», y Mercado Verde con uno de cada uno) y una
+campaña de cada creador. Sin fechas: no
 envejece ni lo toca el worker. `node db/seed/verify/run.mjs 0013`
 comprueba el escenario y, con las mismas funciones que la política, qué
 ve cada persona.
@@ -244,7 +245,7 @@ ve cada persona.
 - **Como quien ve a todos, sin llaves:**
   `DEMO_WORKSPACE_ID=00000013-0000-4000-8000-000000000001 pnpm --filter @mc/web dev --port 3105`.
   Ventas › Pipeline enseña el creador en cada tarjeta (fila móvil a 400 px
-  incluida) y «Sin creador» en el de Nutrivé; la ficha de Nutrivé, «Sin
+  incluida) y «Sin creador» en el de Granola Sol; la ficha de Granola Sol, «Sin
   creador · Solo lo ve quien ve a todos» y «Cambiar»; «Nuevo negocio»,
   el selector con los dos creadores. El modo demo no lleva persona en las
   pantallas (lib/permisos/sesion.ts), así que siempre es la vista de quien
@@ -252,7 +253,7 @@ ve cada persona.
 - **Como el ejecutivo acotado:** con Supabase Auth y el seed aplicado
   (`make db.seed`), entrar como `diego@agencia-demo.test` con
   `generate_link` (apps/web/README.md, «Cómo probarlo sin esperar un
-  correo»). Ve solo lo de Camilo; la ficha de Fresko Market dice que la
+  correo»). Ve solo lo de Camilo; la ficha de Mercado Verde dice que la
   marca tiene negocios que él no ve; «Nuevo negocio» no pregunta (solo
   tiene a Camilo). `valentina@agencia-demo.test` es la dueña.
 

@@ -49,12 +49,12 @@ SELECT 'b_negocios_y_campanas_por_creador' AS check_id,
 SELECT 'c_la_duena_ve_todo' AS check_id,
        session_sees_all_creators() AS ve_a_todos,
        session_sees_all_creators()
-       AND NOT open_deal_out_of_scope('00000002-0000-4000-8000-0000000000e2')
+       AND NOT open_deal_out_of_scope('00000013-0000-4000-8000-0000000000e2')
        AS ok;
 
 -- (d) Diego, con el mismo predicado que la política: solo los dos de
 --     Camilo (ni los de Mariana ni el «Sin creador»), una sola campaña, y
---     Fresko Market tiene un negocio abierto que él no ve (el aviso de la
+--     Mercado Verde tiene un negocio abierto que él no ve (el aviso de la
 --     ficha). Su selector de «Nuevo negocio» tiene a Camilo y a nadie más.
 SELECT set_config('app.user_id', '00000013-0000-4000-8000-000000000004', false);
 SELECT 'd_el_ejecutivo_solo_camilo' AS check_id,
@@ -63,7 +63,7 @@ SELECT 'd_el_ejecutivo_solo_camilo' AS check_id,
        AND (SELECT array_agg(d.id::text ORDER BY d.id) FROM deal d WHERE scope_allows('creator', d.creator_id))
            = ARRAY['00000013-0000-4000-8000-0000000dea01', '00000013-0000-4000-8000-0000000dea02']
        AND (SELECT count(*) FROM campaign c WHERE scope_allows('creator', c.creator_id)) = 1
-       AND open_deal_out_of_scope('00000002-0000-4000-8000-0000000000e2')
+       AND open_deal_out_of_scope('00000013-0000-4000-8000-0000000000e2')
        AND (SELECT array_agg(c ORDER BY c) FROM creators_for_session('00000013-0000-4000-8000-000000000001') AS c)
            = ARRAY['00000013-0000-4000-8000-0000000000a3'::uuid]
        AS ok;
