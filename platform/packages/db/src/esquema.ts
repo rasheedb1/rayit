@@ -184,6 +184,7 @@
 import { getTableColumns, getTableName, getViewName, getViewSelectedFields, is } from 'drizzle-orm';
 import { PgColumn, PgTable, PgView } from 'drizzle-orm/pg-core';
 import type { CatalogDb } from './client.ts';
+import type { CreatorScopeTable } from './scope.ts';
 import * as schema from './schema/index.ts';
 import {
   COLUMNAS_DE_INQUILINO, terminosDelAnd, veredicto, type AislamientoDeLectura, type ContextoDePolitica, type Lado,
@@ -334,7 +335,7 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'public_optout, LEE el enlace por el sha256 del token, si la ficha ya estaba de baja y el nombre del workspace ' +
     'que envió (id y name, por columna, solo esa fila); devuelve la dirección enmascarada y un sí o un no a «quien ' +
     'lo abre es de ese workspace», nunca el id. No escribe nada. No es de ningún disparador',
-  // El @ que ya es de otra creadora, por debajo de la política por creador (0082 §3, ACC-7).
+  // El @ que ya es de otra creadora, por debajo de la política por creador (0082 §4, ACC-7).
   'public_account_out_of_scope(text,text)':
     'Conexiones pregunta, antes de dar de alta o autorizar una cuenta por @, si ese handle ya es de una creadora ' +
     'fuera del alcance de quien conecta (findPublicAccountByHandle, ACC-6 §6): la política por creador de 0082 ya ' +
@@ -619,12 +620,20 @@ export const DISPARADORES_DE_CANDADO: Readonly<Record<string, string>> = {
     'sin él, el alta quedaba viva y el motor chocaba con la regla de outbound_touch en cada vuelta',
   'outbound_touch.outbound_touch_optout':
     'no se programa, no se reclama ni se envía a quien pidió la baja (0007, en las transiciones desde 0046 §4.1)',
+  'membership_scope.membership_scope_full_role_unscoped':
+    'Dueño y Administrador no llevan alcance (0082 §2, ACC-7): una fila de alcance para una de esas membresías se ' +
+    'rechaza. Sin él, la misma persona vería todo en una consulta cruda y no en scopeFilter(), o quedaría acotada ' +
+    'con un rol que la matriz describe como «todo»',
+  'membership.membership_full_role_unscoped':
+    'lo mismo al cambiar de rol: quien tiene alcance no pasa a Dueño o Administrador sin que antes se le quite ' +
+    '(0082 §2, ACC-7)',
 };
 
 /**
  * Las tablas que llevan creator_id y, además de la política de su
- * workspace, la política RESTRICTIVA por creador (ACC-7, 0082 §2), y por
- * qué. La clave es la tabla.
+ * workspace, la política RESTRICTIVA por creador (ACC-7, 0082 §3), y lo
+ * que protege. La clave es la tabla; las claves son exactamente
+ * CREATOR_SCOPE_TABLES de scope.ts (el tipo lo exige).
  *
  * El alcance por creador («Ana ve solo lo de Camilo», ACC-6) lo pone cada
  * consulta con scopeFilter(); en estas cuatro también lo pone la base,
@@ -640,17 +649,87 @@ export const DISPARADORES_DE_CANDADO: Readonly<Record<string, string>> = {
  *     UPDATE pase por la misma condición;
  *   · con exactamente la forma de POLITICA_POR_CREADOR.
  * Si falta, la tabla sale en `alcancePorCreador` con lo que le falta.
+ *
+ * Lo que dice cada entrada es lo que la red cubre DE VERDAD (lo comprueba
+ * test/alcance-rls.test.ts). Las métricas, el dinero (quote, invoice,
+ * payment) y los consentimientos NO heredan el filtro: su política es
+ * solo de workspace. Llevarlos a la red es ACC-10.
  */
-export const TABLAS_CON_ALCANCE_POR_CREADOR: Readonly<Record<string, string>> = {
-  social_connection: 'las cuentas conectadas de cada creador (Conexiones): tokens, métricas de cuenta y consentimientos cuelgan de ellas',
-  post: 'los videos de cada creador y, por ellos, sus métricas y su lugar en las campañas',
-  campaign: 'las campañas de cada creador (Campañas), y por ellas sus facturas, reportes y aportes de la marca',
-  deal: 'los negocios de Ventas con su monto; un negocio sin creador no cae en ningún alcance por creador',
+export const TABLAS_CON_ALCANCE_POR_CREADOR: Readonly<Record<CreatorScopeTable, string>> = {
+  social_connection:
+    'las cuentas conectadas de cada creador (Conexiones) y, por EXISTS sobre ellas, api_call_log y api_quota_usage ' +
+    'en sus filas con cuenta; la vista connection_health. NO sus métricas (account_metric_snapshot), ni sus ' +
+    'consentimientos (data_consent), que siguen solo con su workspace (ACC-10)',
+  post:
+    'los videos de cada creador y las vistas que leen de post (creator_post_board, second_by_second). NO sus ' +
+    'métricas: post_metric_snapshot y las vistas post_metrics_* leen de la tabla de métricas, que solo tiene ' +
+    'política de workspace (ACC-10)',
+  campaign:
+    'las campañas de cada creador (Campañas) y, por EXISTS sobre ellas, campaign_post. NO sus facturas, pagos, ' +
+    'resultados ni aportes de la marca, que siguen con su workspace y scopeFilter() (ACC-10)',
+  deal:
+    'los negocios de Ventas con su monto, la vista deal_pipeline y, por EXISTS, deal_stage_history; un negocio sin ' +
+    'creador no cae en ningún alcance por creador. NO sus cotizaciones (quote, con su total), que llevan su propio ' +
+    'creator_id y siguen sin política por creador (ACC-10)',
+};
+
+/**
+ * Las demás tablas de `public` que tienen columna creator_id y NO llevan
+ * la política por creador, y por qué. La guardia enumera las tablas con
+ * creator_id en la base: cada una tiene que estar en
+ * TABLAS_CON_ALCANCE_POR_CREADOR o aquí. Así una tabla nueva con
+ * creator_id no queda fuera de la red sin que nadie lo decida; para
+ * añadirla aquí hay que poder escribir el motivo.
+ */
+export const TABLAS_CON_CREADOR_SIN_POLITICA: Readonly<Record<string, string>> = {
+  quote:
+    'Cotizar. Lleva el total y lo ve quien ve el negocio; pendiente de ACC-10 (restrictiva por su creator_id). ' +
+    'Hoy la acota scopeFilter() donde Cotizar lo compone (CIERRE-ACC §5.4)',
+  data_consent:
+    'el consentimiento de cada cuenta conectada (ACC-8). Pendiente de ACC-10, por su creator_id o por EXISTS sobre ' +
+    'social_connection',
+  platform_payout:
+    'los ingresos de las plataformas (Finanzas). Pendiente de ACC-10 con invoice y payment; hoy los acota ' +
+    'scopeFilter() en todas las consultas de Finanzas (alcance-finanzas.test.ts)',
+  media_kit: 'el media kit congelado de cada creador (Cotizar), que además se publica por enlace. Pendiente de ACC-10',
+  rate_card: 'el tarifario de cada creador (Cotizar). Pendiente de ACC-10',
+  outbound_brief:
+    'lo que cada creador acepta y no acepta (Ventas). Lo edita solo quien administra outreach (0073 §5); pendiente ' +
+    'de ACC-10',
+  outreach_channel_account:
+    'la cuenta de envío de outreach (Ventas › Canales); creator_id es opcional (una cuenta del espacio). El worker ' +
+    'la reclama sin persona. Pendiente de ACC-10',
+  creator_baseline:
+    'la línea base de métricas de cada creador, la escribe el worker y se lee con las métricas: va con ellas en ' +
+    'ACC-10',
+  posting_window: 'la mejor hora de publicar de cada creador, derivada de métricas: va con ellas en ACC-10',
+  trait_lift: 'lo que distingue a los videos que funcionan, por creador y nicho; derivada de métricas: ACC-10',
+  watchlist: 'las cuentas que cada creador vigila en el radar de nicho, públicas. Sin pantalla en el MVP; ACC-10',
+  idea: 'las ideas y guiones del laboratorio de video. Sin pantalla en el MVP; ACC-10',
+  video_asset: 'los archivos del laboratorio de video. Sin pantalla en el MVP; ACC-10',
+};
+
+/**
+ * El cuerpo de las funciones de las que depende la red por creador, como
+ * md5 de pg_proc.prosrc con los espacios normalizados (btrim y cada
+ * racha de espacios en uno), y de qué migración sale.
+ *
+ * Que existan no basta (FUNCIONES_QUE_USA_EL_CODIGO): un CREATE OR
+ * REPLACE FUNCTION session_sees_all_creators() … SELECT true, hecho a mano
+ * en el SQL Editor, deja las cuatro políticas intactas y apaga la red, o
+ * deja a Dueño y Administrador llevar alcance. Cambiar una de estas
+ * funciones es una migración nueva y el md5 nuevo aquí, en el mismo PR.
+ */
+export const CUERPOS_DEL_ALCANCE: Readonly<Record<string, { md5: string; origen: string }>> = {
+  'session_sees_all_creators()': { md5: '2097bed8872069dd29c8e84bc3f280b2', origen: '0082_alcance_por_creador §1' },
+  'scope_allows(text,uuid)': { md5: 'a8a03a4cddc600da1fec05f15a895cc1', origen: '0040_scope_allows' },
+  'scope_allows(text,uuid[])': { md5: 'a69e8de3de693f471a18fe0e087cecca', origen: '0040_scope_allows' },
+  'membership_full_role_unscoped()': { md5: '43dee241bad3b88a065380a2b2cf0d50', origen: '0082_alcance_por_creador §2' },
 };
 
 /**
  * La forma de la política por creador tal como la escribe pg_get_expr
- * (0082 §2). Postgres le pone alias a la subconsulta, y el texto puede
+ * (0082 §3). Postgres le pone alias a la subconsulta, y el texto puede
  * variar en espacios entre versiones; nada más.
  */
 const POLITICA_POR_CREADOR =
@@ -1572,8 +1651,10 @@ export interface EstadoDelEsquema {
   /** Disparadores de DISPARADORES_DE_CANDADO que no existen o están desactivados, con lo que cierran. */
   candadosQueFaltan: string[];
   /**
-   * Tablas de TABLAS_CON_ALCANCE_POR_CREADOR sin su política restrictiva
-   * por creador (0082, ACC-7), con lo que les falta.
+   * La red del alcance por creador (0082, ACC-7): tablas de
+   * TABLAS_CON_ALCANCE_POR_CREADOR sin su política restrictiva, tablas
+   * con creator_id sin declarar, y funciones de CUERPOS_DEL_ALCANCE cuyo
+   * cuerpo cambió; cada una con lo que le falta.
    */
   alcancePorCreador: string[];
   /** Reglas de `public` que no son el _RETURN de una vista, sin declarar. */
@@ -1972,6 +2053,31 @@ const SQL_CANDADOS = `
      AND NOT t.tgisinternal
    ORDER BY 1`;
 
+/**
+ * Las tablas de `public` que tienen columna creator_id (viva), para
+ * exigir que cada una esté en TABLAS_CON_ALCANCE_POR_CREADOR o en
+ * TABLAS_CON_CREADOR_SIN_POLITICA. Las vistas no: heredan de sus tablas.
+ */
+const SQL_TABLAS_CON_CREADOR = `
+  SELECT c.relname::text AS relname
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+     AND a.attname = 'creator_id' AND a.attnum > 0 AND NOT a.attisdropped
+   ORDER BY 1`;
+
+/**
+ * Por cada firma de CUERPOS_DEL_ALCANCE: el md5 de su cuerpo con los
+ * espacios normalizados, o NULL si la función no existe.
+ */
+const SQL_CUERPOS = `
+  SELECT f AS firma,
+         (SELECT md5(regexp_replace(btrim(p.prosrc), '\\s+', ' ', 'g'))
+            FROM pg_proc p WHERE p.oid = to_regprocedure('public.' || f)) AS md5
+    FROM unnest($1::text[]) AS f
+   ORDER BY 1`;
+
 /** Los disparadores de tablas de `public` cuya función es SECURITY DEFINER, sea del esquema que sea. */
 const SQL_DISPARADORES_DEFINER = `
   SELECT c.relname::text AS tabla, t.tgname::text AS disparador, f.oid::regprocedure::text AS funcion
@@ -2220,6 +2326,8 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const unicos = await leer<FilaUnico>(SQL_UNICOS);
   const disparadoresDefinerLeidos = await leer<FilaDisparadorDefiner>(SQL_DISPARADORES_DEFINER);
   const candados = await leer<FilaCandado>(SQL_CANDADOS, [Object.keys(DISPARADORES_DE_CANDADO)]);
+  const tablasConCreador = await leer<{ relname: string }>(SQL_TABLAS_CON_CREADOR);
+  const cuerpos = await leer<{ firma: string; md5: string | null }>(SQL_CUERPOS, [Object.keys(CUERPOS_DEL_ALCANCE)]);
   const reglasLeidas = await leer<FilaRegla>(SQL_REGLAS);
   const esquemas = await leer<FilaEsquema>(SQL_ESQUEMAS, [APP_ROLE]);
   const extensiones = await leer<FilaExtension>(SQL_EXTENSIONES, [[...new Set(Object.values(ESQUEMAS_DE_EXTENSION))]]);
@@ -2503,6 +2611,24 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
         ];
       })
     : [];
+  //      Toda tabla con creator_id, en una de las dos listas: una nueva no
+  //      queda fuera de la red sin que alguien lo declare.
+  for (const { relname } of tablasConCreador) {
+    if (relname in TABLAS_CON_ALCANCE_POR_CREADOR || relname in TABLAS_CON_CREADOR_SIN_POLITICA) continue;
+    alcancePorCreador.push(
+      `${relname} (tiene creator_id y no está ni en TABLAS_CON_ALCANCE_POR_CREADOR ni en TABLAS_CON_CREADOR_SIN_POLITICA)`,
+    );
+  }
+  //      Y los cuerpos de las funciones de las que depende la red.
+  for (const { firma, md5 } of cuerpos) {
+    const esperado = CUERPOS_DEL_ALCANCE[firma];
+    if (!esperado || md5 === esperado.md5) continue;
+    alcancePorCreador.push(
+      md5 === null
+        ? `${firma} (no existe; la crea ${esperado.origen})`
+        : `${firma} (su cuerpo no es el de ${esperado.origen}: md5 ${md5}, se esperaba ${esperado.md5})`,
+    );
+  }
 
   // ---- columnas que el código lee y escribe (src/schema): que existan.
   //      Una relación que falta entera se dice una vez, no columna por
@@ -3130,7 +3256,8 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
         'filas de todos los creadores del espacio a quien solo lleva a algunos, y ninguna otra comprobación lo ve ' +
         '(la tenencia sigue en pie): ' +
         estado.alcancePorCreador.join('; ') +
-        '. Aplica 0082_alcance_por_creador o vuelve a crear la política como allí',
+        '. Aplica 0082_alcance_por_creador o vuelve a crear la política o la función como allí; una tabla nueva con ' +
+        'creator_id lleva la política o una entrada con su motivo en TABLAS_CON_CREADOR_SIN_POLITICA',
     );
   }
   if (estado.reglas.length) {

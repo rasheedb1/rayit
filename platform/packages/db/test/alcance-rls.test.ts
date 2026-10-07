@@ -18,9 +18,13 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { estadoDelEsquema, explicarEsquema, TABLAS_CON_ALCANCE_POR_CREADOR } from '../src/esquema.ts';
+import {
+  CUERPOS_DEL_ALCANCE, estadoDelEsquema, explicarEsquema, TABLAS_CON_ALCANCE_POR_CREADOR, TABLAS_CON_CREADOR_SIN_POLITICA,
+} from '../src/esquema.ts';
 import type { WorkspaceTx } from '../src/client.ts';
-import { ScopeError, writeOrScopeError } from '../src/scope.ts';
+import { findPgError } from '../src/pg-error.ts';
+import { listCampaigns } from '../src/queries/campanas.ts';
+import { CREATOR_SCOPE_TABLES, ScopeError, scopeErrorOf, writeOrScopeError, type ScopeSavepoint } from '../src/scope.ts';
 import { migratorRole, openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, type TestDb } from './pglite.ts';
 import { DESCRIBE_DB_TIMEOUT_MS } from './tiempos.ts';
 import {
@@ -34,8 +38,8 @@ const DEAL_SOFIA_ENLACE = '0000000a-0000-4000-8000-0000000dea02';
 const QUOTE_SOFIA_ENLACE = '0000000a-0000-4000-8000-0000c0700002';
 const SLUG_SOFIA_ENLACE = 'cot-sofia-acc7';
 
-// La agencia: dos creadores, una dueña sin alcance, una administradora
-// a la que alguien dejó una fila de alcance, y un ejecutivo acotado a A.
+// La agencia: dos creadores, una dueña y una administradora (que no
+// pueden llevar alcance, 0082 §2) y un ejecutivo acotado a A.
 const WS_AGENCIA = '0000000c-0000-4000-8000-000000000001';
 const CREADOR_A = '0000000c-0000-4000-8000-0000000000a3';
 const CREADOR_B = '0000000c-0000-4000-8000-0000000000b3';
@@ -48,6 +52,8 @@ const EJECUTIVO_A = '0000000c-0000-4000-8000-000000000022';
 
 /** La migración, para volver a crear la política tal cual después de quitarla. */
 const MIGRACION = fileURLToPath(new URL('../../../db/migrations/0082_alcance_por_creador.sql', import.meta.url));
+/** La de scope_allows(), para devolverla a su sitio después de la sonda. */
+const MIGRACION_0040 = fileURLToPath(new URL('../../../db/migrations/0040_scope_allows.sql', import.meta.url));
 
 /** Las cuatro tablas, con un id de Sofía en cada una. */
 const DE_SOFIA: Readonly<Record<string, string>> = {
@@ -96,7 +102,6 @@ before(async () => {
       ('${CREADOR_B}', '${WS_AGENCIA}', 'Creadora B', 'MX', '{es}', '{viajes}')
     ON CONFLICT DO NOTHING;
     INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id) VALUES
-      ('${WS_AGENCIA}', '${ADMIN_AGENCIA}', 'creator', '${CREADOR_A}'),
       ('${WS_AGENCIA}', '${EJECUTIVO_A}', 'creator', '${CREADOR_A}')
     ON CONFLICT DO NOTHING;
     INSERT INTO company (id, name, owner_workspace_id) VALUES ('${MARCA_AGENCIA}', 'Marca de la agencia', '${WS_AGENCIA}') ON CONFLICT DO NOTHING;
@@ -112,19 +117,13 @@ after(async () => {
   await t.close();
 });
 
-/** El código de Postgres del error, buscado en la cadena `cause`. */
-function codigoDe(err: unknown): string | null {
-  for (let e: unknown = err; typeof e === 'object' && e !== null; e = (e as { cause?: unknown }).cause) {
-    const c = (e as { code?: unknown }).code;
-    if (typeof c === 'string') return c;
-  }
-  return null;
-}
-const rechazoDeRls = (err: unknown) => codigoDe(err) === '42501';
+/** El 42501 con el que la política por creador rechaza una fila nueva, y que @mc/db traduce a ScopeError. */
+const rechazoDeRls = (err: unknown) => findPgError(err, '42501') !== null && scopeErrorOf(err) instanceof ScopeError;
 
 describe('una consulta cruda, sin scopeFilter(), sobre las cuatro tablas', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
-  test('las cuatro son exactamente las de la guardia', () => {
+  test('las cuatro son exactamente las de la guardia y las de scope.ts', () => {
     assert.deepEqual(Object.keys(DE_SOFIA).sort(), Object.keys(TABLAS_CON_ALCANCE_POR_CREADOR).sort());
+    assert.deepEqual([...CREATOR_SCOPE_TABLES].sort(), Object.keys(TABLAS_CON_ALCANCE_POR_CREADOR).sort());
   });
 
   for (const [tabla, idSofia] of Object.entries(DE_SOFIA)) {
@@ -151,6 +150,31 @@ describe('una consulta cruda, sin scopeFilter(), sobre las cuatro tablas', { tim
       assert.deepEqual(await como(WORKSPACE_LAURA, undefined, (tx) => crudas(tx, tabla)), deLaDuena);
     });
   }
+
+  test('lo que dice la guardia que cubre, y lo que dice que NO (ACC-10), es verdad', async () => {
+    await t.admin(`
+      INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id) VALUES ('${DEAL_SOFIA}', NULL, 'nuevo');
+      INSERT INTO post_metric_snapshot (workspace_id, post_id, captured_at, age_hours, views)
+      VALUES ('${WORKSPACE_LAURA}', '${POST_SOFIA}', now() - interval '1 hour', 24, 1234);
+    `);
+    const visto = await miembro(async (tx) => {
+      const n = async (sql: string, params: unknown[]) => Number((await tx.query<{ n: number }>(sql, params)).rows[0]?.n);
+      return {
+        historial: await n('SELECT count(*)::int AS n FROM deal_stage_history WHERE deal_id = $1', [DEAL_SOFIA]),
+        pipeline: await n('SELECT count(*)::int AS n FROM deal_pipeline WHERE id = $1', [DEAL_SOFIA]),
+        metricas: await n('SELECT count(*)::int AS n FROM post_metric_snapshot WHERE post_id = $1', [POST_SOFIA]),
+        cotizacion: await n('SELECT count(*)::int AS n FROM quote WHERE creator_id = $1', [CREATOR_SOFIA]),
+      };
+    });
+    assert.equal(visto.historial, 0, 'deal_stage_history hereda por su EXISTS sobre deal');
+    assert.equal(visto.pipeline, 0, 'deal_pipeline hereda: es una vista con security_invoker sobre deal');
+    // Lo que NO cubre, como dicen TABLAS_CON_ALCANCE_POR_CREADOR y la
+    // cabecera de 0082. El día que ACC-10 lo cierre, esta prueba falla y
+    // se da la vuelta.
+    assert.ok(visto.metricas > 0, 'post_metric_snapshot solo tiene política de workspace (ACC-10)');
+    assert.ok(visto.cotizacion > 0, 'quote no está en la red (TABLAS_CON_CREADOR_SIN_POLITICA, ACC-10)');
+    assert.ok('quote' in TABLAS_CON_CREADOR_SIN_POLITICA && 'data_consent' in TABLAS_CON_CREADOR_SIN_POLITICA);
+  });
 
   test('lo que se lee a través de ellas hereda el filtro: vistas y JOIN', async () => {
     const leido = await miembro(async (tx) => ({
@@ -217,7 +241,7 @@ describe('los roles que ven a todos los creadores, y los que no', { timeout: DES
 
   test('en una agencia: la dueña y la administradora ven a los dos creadores, el ejecutivo acotado solo al suyo', async () => {
     assert.deepEqual(await campanasDe(DUENA_AGENCIA), [CAMPANA_A, CAMPANA_B]);
-    assert.deepEqual(await campanasDe(ADMIN_AGENCIA), [CAMPANA_A, CAMPANA_B], 'Administrador ve toda la agencia aunque le dejaran una fila de alcance');
+    assert.deepEqual(await campanasDe(ADMIN_AGENCIA), [CAMPANA_A, CAMPANA_B]);
     assert.deepEqual(await campanasDe(EJECUTIVO_A), [CAMPANA_A]);
     assert.deepEqual(
       [await veTodos(WS_AGENCIA, DUENA_AGENCIA), await veTodos(WS_AGENCIA, ADMIN_AGENCIA), await veTodos(WS_AGENCIA, EJECUTIVO_A)],
@@ -225,16 +249,69 @@ describe('los roles que ven a todos los creadores, y los que no', { timeout: DES
     );
   });
 
-  test('la dueña de un espacio de creador con una fila de alcance olvidada sigue viéndolo todo', async () => {
-    await t.admin(`INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
-                   VALUES ('${WORKSPACE_LAURA}', '${USER_LAURA}', 'creator', '${CREATOR_LAURA}') ON CONFLICT DO NOTHING`);
-    try {
-      assert.equal(await veTodos(WORKSPACE_LAURA, USER_LAURA), true);
-      const ids = await duena((tx) => crudas(tx, 'campaign'));
-      assert.ok(ids.some((f) => f.id === CAMPAIGN_SOFIA));
-    } finally {
-      await t.admin(`DELETE FROM membership_scope WHERE workspace_id = '${WORKSPACE_LAURA}' AND user_id = '${USER_LAURA}'`);
+  test('una sola regla: para la misma persona, listCampaigns() (scopeFilter) y el SELECT crudo (la política) dan los mismos ids', async () => {
+    const personas: ReadonlyArray<readonly [string, string, string]> = [
+      ['la dueña de la agencia', WS_AGENCIA, DUENA_AGENCIA],
+      ['la administradora de la agencia', WS_AGENCIA, ADMIN_AGENCIA],
+      ['el ejecutivo acotado a A', WS_AGENCIA, EJECUTIVO_A],
+      ['la dueña de un espacio de creador', WORKSPACE_LAURA, USER_LAURA],
+      ['el miembro acotado a Laura', WORKSPACE_LAURA, USER_MIEMBRO],
+    ];
+    for (const [quien, ws, userId] of personas) {
+      const { lista, cruda, acotada } = await como(ws, userId, async (tx) => ({
+        lista: (await listCampaigns(tx)).map((c) => c.id).sort(),
+        cruda: (await tx.query<{ id: string }>('SELECT id FROM campaign')).rows.map((r) => r.id).sort(),
+        acotada: (await tx.query<{ a: boolean }>('SELECT NOT session_sees_all_creators() AS a')).rows[0]?.a,
+      }));
+      assert.ok(lista.length > 0, quien);
+      assert.deepEqual(lista, cruda, `${quien}: la aplicación y la base no dicen lo mismo`);
+      const tieneAlcance = await como(ws, userId, (tx) =>
+        tx.query<{ v: boolean }>('SELECT session_has_scope() AS v').then((r) => r.rows[0]?.v));
+      assert.equal(tieneAlcance, acotada, `${quien}: session_has_scope() (Equipo) y la política la ven igual`);
     }
+  });
+
+  test('Dueño y Administrador no llevan alcance: la base rechaza la fila, y el cambio de rol de quien lo tiene', async () => {
+    const esRolCompleto = (err: unknown) => findPgError(err, '23514', 'membership_full_role_unscoped') !== null;
+    for (const [ws, userId, creador] of [
+      [WORKSPACE_LAURA, USER_LAURA, CREATOR_LAURA],
+      [WS_AGENCIA, DUENA_AGENCIA, CREADOR_A],
+      [WS_AGENCIA, ADMIN_AGENCIA, CREADOR_A],
+    ] as const) {
+      await assert.rejects(
+        t.admin(`INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id) VALUES ('${ws}', '${userId}', 'creator', '${creador}')`),
+        esRolCompleto,
+      );
+      await assert.rejects(
+        t.admin(`INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id) VALUES ('${ws}', '${userId}', 'company', '${MARCA_AGENCIA}')`),
+        esRolCompleto,
+        'ningún tipo de alcance: Dueño y Administrador ven el espacio entero',
+      );
+    }
+    // El ejecutivo acotado no pasa a Administrador sin que antes se le quite el alcance…
+    await assert.rejects(
+      t.admin(`UPDATE membership SET role_id = system_role_id('agency', 'admin') WHERE workspace_id = '${WS_AGENCIA}' AND user_id = '${EJECUTIVO_A}'`),
+      esRolCompleto,
+    );
+    // …ni la fila de alcance se mueve a la administradora.
+    await assert.rejects(
+      t.admin(`UPDATE membership_scope SET user_id = '${ADMIN_AGENCIA}' WHERE workspace_id = '${WS_AGENCIA}' AND user_id = '${EJECUTIVO_A}'`),
+      esRolCompleto,
+    );
+    // A un rol que no ve todo, sí: el ejecutivo pasa a Solo lectura con su alcance.
+    await t.admin(`UPDATE membership SET role_id = system_role_id('agency', 'viewer') WHERE workspace_id = '${WS_AGENCIA}' AND user_id = '${EJECUTIVO_A}'`);
+    await t.admin(`UPDATE membership SET role_id = system_role_id('agency', 'manager') WHERE workspace_id = '${WS_AGENCIA}' AND user_id = '${EJECUTIVO_A}'`);
+    assert.deepEqual(await campanasDe(EJECUTIVO_A), [CAMPANA_A]);
+  });
+
+  test('una fila de alcance cuya membresía la transacción no ve se rechaza (fallar cerrado)', async () => {
+    await assert.rejects(
+      t.admin(`SET ROLE ${migratorRole(t)};
+               INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+               VALUES ('${WS_AGENCIA}', '${EJECUTIVO_A}', 'creator', '${CREADOR_B}');`),
+      (err: unknown) => findPgError(err, '23514', 'membership_full_role_unscoped') !== null,
+    ).finally(() => t.admin('RESET ROLE'));
+    assert.deepEqual(await campanasDe(EJECUTIVO_A), [CAMPANA_A], 'el ejecutivo sigue acotado solo a A');
   });
 
   test('un alcance por marca no es un alcance por creador: la base no lo acota (eso sigue siendo de scopeFilter())', async () => {
@@ -297,7 +374,7 @@ describe('lo que la política deja sin respuesta: el @ y el índice único', { t
   });
 
   test('writeOrScopeError: el choque con una fila que la persona acotada no ve es ScopeError; para la dueña es el error de siempre', async () => {
-    const otraCampanaDe = (quoteId: string) => (tx: WorkspaceTx) => writeOrScopeError(tx, 'prueba_acc7', 'campaign_quote_id_active_key', () => tx.query(
+    const otraCampanaDe = (quoteId: string) => (tx: WorkspaceTx) => writeOrScopeError(tx, 'campana_de_cotizacion', 'campaign_quote_id_active_key', () => tx.query(
       `INSERT INTO campaign (workspace_id, company_id, creator_id, quote_id, name, status)
        VALUES (current_workspace_id(), $1, $2, $3, 'Segunda viva', 'planned')`,
       [COMPANY_CAFE_ALMA, CREATOR_LAURA, quoteId],
@@ -310,10 +387,36 @@ describe('lo que la política deja sin respuesta: el @ y el índice único', { t
         assert.equal((await tx.query('SELECT 1 AS uno')).rows.length, 1);
         throw new Error('fin');
       }), /fin/);
-      await assert.rejects(duena(otraCampanaDe(QUOTE_SOFIA_ENLACE)), (e: unknown) => codigoDe(e) === '23505');
+      await assert.rejects(duena(otraCampanaDe(QUOTE_SOFIA_ENLACE)), (e: unknown) => findPgError(e, '23505', 'campaign_quote_id_active_key') !== null);
     } finally {
       await t.admin(`UPDATE campaign SET quote_id = NULL WHERE id = '${CAMPAIGN_SOFIA}'`);
     }
+  });
+
+  test('writeOrScopeError: un SAVEPOINT que no es un identificador simple no llega al SQL', async () => {
+    let escribio = false;
+    await assert.rejects(
+      duena((tx) => writeOrScopeError(tx, 'x; DROP TABLE deal; --' as ScopeSavepoint, 'campaign_quote_id_active_key', async () => {
+        escribio = true;
+      })),
+      TypeError,
+    );
+    assert.equal(escribio, false);
+    assert.equal((await duena((tx) => tx.query('SELECT 1 FROM deal LIMIT 1'))).rows.length, 1, 'deal sigue ahí');
+  });
+
+  test('scopeErrorOf: el 42501 de la política por creador es ScopeError; otro 42501, no', async () => {
+    const deLaPolitica = await miembro((tx) => tx.query(
+      `INSERT INTO deal (workspace_id, company_id, creator_id, name, stage_id) VALUES (current_workspace_id(), $1, $2, 'Colado', 'nuevo')`,
+      [COMPANY_CAFE_ALMA, CREATOR_SOFIA],
+    )).then(() => null, (err: unknown) => err);
+    assert.ok(scopeErrorOf(deLaPolitica) instanceof ScopeError);
+    const otro = await miembro((tx) => tx.query('DELETE FROM membership_scope')).then(() => null, (err: unknown) => err);
+    assert.ok(findPgError(otro, '42501') !== null, 'permission denied también es 42501');
+    assert.equal(scopeErrorOf(otro), null);
+    assert.equal(scopeErrorOf(new Error('cualquier otra cosa')), null);
+    const propio = new ScopeError();
+    assert.equal(scopeErrorOf(propio), propio);
   });
 });
 
@@ -340,6 +443,59 @@ describe('la guardia del esquema exige la política en las cuatro tablas', { tim
       await t.admin(`SET ROLE ${migrador()}; ${await readFile(MIGRACION, 'utf8')}; RESET ROLE`);
     }
     assert.deepEqual((await estadoDelEsquema(t.db)).alcancePorCreador, [], 'volver a correr 0082 la deja como estaba');
+  });
+
+  test('una tabla nueva con creator_id que no está en ninguna de las dos listas sale en la guardia', async () => {
+    await t.admin(`SET ROLE ${migrador()};
+      CREATE TABLE acc7_nueva (id uuid PRIMARY KEY, workspace_id uuid NOT NULL, creator_id uuid);
+      RESET ROLE`);
+    try {
+      const { alcancePorCreador } = await estadoDelEsquema(t.db);
+      assert.deepEqual(alcancePorCreador, [
+        'acc7_nueva (tiene creator_id y no está ni en TABLAS_CON_ALCANCE_POR_CREADOR ni en TABLAS_CON_CREADOR_SIN_POLITICA)',
+      ]);
+    } finally {
+      await t.admin(`SET ROLE ${migrador()}; DROP TABLE acc7_nueva; RESET ROLE`);
+    }
+    assert.deepEqual((await estadoDelEsquema(t.db)).alcancePorCreador, []);
+  });
+
+  test('si alguien reescribe session_sees_all_creators() o el disparador para que no acoten, la guardia lo dice', async () => {
+    assert.deepEqual(Object.keys(CUERPOS_DEL_ALCANCE).sort(), [
+      'membership_full_role_unscoped()', 'scope_allows(text,uuid)', 'scope_allows(text,uuid[])', 'session_sees_all_creators()',
+    ]);
+    const sondas = [
+      {
+        firma: 'session_sees_all_creators()',
+        sql: `CREATE OR REPLACE FUNCTION session_sees_all_creators() RETURNS boolean LANGUAGE sql STABLE
+              SET search_path = public, extensions, pg_temp AS $$ SELECT true $$`,
+      },
+      {
+        firma: 'scope_allows(text,uuid)',
+        sql: 'CREATE OR REPLACE FUNCTION scope_allows(kind text, target uuid) RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT true $$',
+      },
+      {
+        firma: 'membership_full_role_unscoped()',
+        sql: `CREATE OR REPLACE FUNCTION membership_full_role_unscoped() RETURNS trigger LANGUAGE plpgsql
+              SET search_path = public, extensions, pg_temp AS $$ BEGIN RETURN NEW; END $$`,
+      },
+    ];
+    try {
+      for (const { firma, sql } of sondas) {
+        await t.admin(`SET ROLE ${migrador()}; ${sql}; RESET ROLE`);
+        const { alcancePorCreador } = await estadoDelEsquema(t.db);
+        assert.equal(alcancePorCreador.length, 1, firma);
+        assert.match(alcancePorCreador[0] ?? '', new RegExp(`^${firma.replace(/[()[\]]/g, '\\$&')} \\(su cuerpo no es el de 00(82|40)`), firma);
+        if (firma === 'session_sees_all_creators()') {
+          // Y la sonda muerde: con la función en `true`, el miembro vuelve a ver lo de Sofía.
+          assert.ok((await miembro((tx) => crudas(tx, 'deal'))).some((f) => f.id === DEAL_SOFIA));
+        }
+        await t.admin(`SET ROLE ${migrador()}; ${await readFile(firma.startsWith('scope_allows') ? MIGRACION_0040 : MIGRACION, 'utf8')}; RESET ROLE`);
+      }
+    } finally {
+      await t.admin(`SET ROLE ${migrador()}; ${await readFile(MIGRACION_0040, 'utf8')}; ${await readFile(MIGRACION, 'utf8')}; RESET ROLE`);
+    }
+    assert.deepEqual((await estadoDelEsquema(t.db)).alcancePorCreador, []);
   });
 
   test('una política con el nombre pero sin la forma (permisiva, con otra condición o con WITH CHECK) tampoco cuenta', async () => {

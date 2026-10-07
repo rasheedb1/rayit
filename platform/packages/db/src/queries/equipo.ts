@@ -31,6 +31,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { admiteCasillas, isExtraPermiso, ROLE_KEYS, UltimoDuenoError } from '@mc/core';
 import type { BaseTx, IdentityTx, WorkspaceTx } from '../client.ts';
 import { audit } from '../audit.ts';
+import { findPgError } from '../pg-error.ts';
 
 // ---------------------------------------------------------------------
 // El token
@@ -58,24 +59,9 @@ export function invitationTokenHash(token: string): string {
 // Errores de la base que la pantalla sabe decir
 // ---------------------------------------------------------------------
 
-interface PgLikeError {
-  code?: string;
-  constraint?: string;
-}
-
-/**
- * El error de Postgres con ese código y esa restricción, buscado en la
- * cadena `cause`: node-postgres lo lanza tal cual, pero Drizzle y PGlite
- * lo envuelven. Por el nombre de la restricción, nunca por el texto del
- * mensaje (que está en español y puede cambiar).
- */
-function findPgError(err: unknown, code: string, constraint: string): PgLikeError | null {
-  for (let e: unknown = err; typeof e === 'object' && e !== null; e = (e as { cause?: unknown }).cause) {
-    const p = e as PgLikeError;
-    if (p.code === code && p.constraint === constraint) return p;
-  }
-  return null;
-}
+// El error de Postgres con su código y su restricción, buscado en la
+// cadena `cause` (findPgError, ../pg-error.ts): por el nombre de la
+// restricción, nunca por el texto del mensaje.
 
 /** El disparador del último dueño (0078 §3): CONSTRAINT membership_last_owner. */
 export function isLastOwnerError(err: unknown): boolean {

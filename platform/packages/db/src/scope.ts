@@ -27,6 +27,7 @@
  *     un bug.
  */
 import type { WorkspaceTx } from './client.ts';
+import { findPgError, type PgLikeError } from './pg-error.ts';
 
 /** membership_scope.scope_type (CHECK en 0034 §6). */
 export const SCOPE_KINDS = ['creator', 'company', 'campaign'] as const;
@@ -57,6 +58,13 @@ export type ScopeAnchors = Readonly<Record<ScopeKind, string | ScopeMany | null>
  * MVP—. Repite la primera mitad de scope_allows() a propósito: la
  * función no se expande en línea (lleva subconsultas) y se llamaría por
  * fila, con el ARRAY(…) de las anclas uno-a-muchos calculado para nada.
+ *
+ * Para el tipo 'creator' es, letra por letra, la negación de
+ * session_sees_all_creators() (0082 §1), la que piden las políticas por
+ * creador de la base: una consulta con scopeFilter() y una cruda dan las
+ * mismas filas a la misma persona. No hay excepción por rol en ninguno
+ * de los dos sitios: Dueño y Administrador ven a todos porque la base no
+ * les deja tener filas de alcance (0082 §2).
  */
 function scopeHas(kind: ScopeKind): string {
   return (
@@ -126,18 +134,52 @@ export async function assertScopeAllows(tx: WorkspaceTx, targets: Readonly<Recor
   if (rows[0]?.ok !== true) throw new ScopeError();
 }
 
-/** El 23505 de esa restricción, buscado en la cadena `cause` (Drizzle y PGlite envuelven el error de Postgres). */
-function isUniqueViolationOf(err: unknown, constraint: string): boolean {
+/**
+ * Las tablas que llevan la política RESTRICTIVA por creador en la base
+ * (ACC-7, 0082 §3). Es la fuente de la lista: la guardia del esquema
+ * (TABLAS_CON_ALCANCE_POR_CREADOR) tiene que declarar exactamente estas,
+ * y scopeErrorOf() reconoce sus políticas por el nombre.
+ */
+export const CREATOR_SCOPE_TABLES = ['social_connection', 'post', 'campaign', 'deal'] as const;
+export type CreatorScopeTable = (typeof CREATOR_SCOPE_TABLES)[number];
+
+/** El nombre de la política de 0082 §3 en el mensaje del 42501: `"deal_creator_scope"`. */
+const CREATOR_POLICY_IN_MESSAGE = new RegExp(`"(${CREATOR_SCOPE_TABLES.join('|')})_creator_scope"`);
+
+/**
+ * El 42501 con el que la base rechaza una fila nueva a nombre de un
+ * creador fuera del alcance (la política por creador de 0082 §3), como
+ * ScopeError; `null` si el error es otra cosa.
+ *
+ * Es la red: las altas de @mc/db ya comprueban el alcance antes de
+ * escribir y lanzan ScopeError ellas mismas. Esto es para que una
+ * escritura que se le escape a esa comprobación tampoco llegue a la
+ * pantalla como un error de Postgres en inglés. Postgres no pone la
+ * política en un campo del error: la nombra en el mensaje, entre
+ * comillas, en cualquier idioma, y solo cuando la que falla es una
+ * RESTRICTIVA (que es justo esta).
+ */
+export function scopeErrorOf(err: unknown): ScopeError | null {
+  if (err instanceof ScopeError) return err;
   for (let e: unknown = err; typeof e === 'object' && e !== null; e = (e as { cause?: unknown }).cause) {
-    const p = e as { code?: unknown; constraint?: unknown };
-    if (p.code === '23505' && p.constraint === constraint) return true;
+    const p = e as PgLikeError;
+    if (p.code === '42501' && typeof p.message === 'string' && CREATOR_POLICY_IN_MESSAGE.test(p.message)) return new ScopeError();
   }
-  return false;
+  return null;
 }
 
 /**
+ * Los SAVEPOINT de writeOrScopeError: identificadores fijos de los
+ * módulos que lo llaman. Es una unión y no un `string` para que el SQL
+ * que se arma con ellos no pueda recibir otra cosa; uno nuevo se añade
+ * aquí.
+ */
+export type ScopeSavepoint = 'campana_de_cotizacion' | 'autorizar_cuenta_por_arroba';
+const SAVEPOINT_RE = /^[a-z_][a-z0-9_]{0,62}$/;
+
+/**
  * Una escritura que puede chocar con un índice único contra una fila que
- * la transacción NO ve por el alcance por creador (ACC-7, 0082 §2).
+ * la transacción NO ve por el alcance por creador (ACC-7, 0082 §3).
  *
  * Antes de ACC-7 las consultas buscaban esa fila sin `scopeFilter()` y,
  * si estaba fuera del alcance, lanzaban ScopeError antes de escribir.
@@ -150,10 +192,17 @@ function isUniqueViolationOf(err: unknown, constraint: string): boolean {
  * ve a todos los creadores el choque es otra cosa (dos altas a la vez) y
  * se relanza tal cual.
  *
- * `savepoint` es un identificador fijo del módulo que llama, nunca un
- * valor que llegue de fuera.
+ * `savepoint` va dentro del SQL: además del tipo, se comprueba que sea
+ * un identificador simple antes de escribir nada, por si llega con un
+ * cast desde JavaScript.
  */
-export async function writeOrScopeError<T>(tx: WorkspaceTx, savepoint: string, constraint: string, write: () => Promise<T>): Promise<T> {
+export async function writeOrScopeError<T>(
+  tx: WorkspaceTx,
+  savepoint: ScopeSavepoint,
+  constraint: string,
+  write: () => Promise<T>,
+): Promise<T> {
+  if (!SAVEPOINT_RE.test(savepoint)) throw new TypeError(`SAVEPOINT no válido: ${JSON.stringify(savepoint)}`);
   await tx.query(`SAVEPOINT ${savepoint}`);
   let out: T;
   try {
@@ -161,7 +210,7 @@ export async function writeOrScopeError<T>(tx: WorkspaceTx, savepoint: string, c
   } catch (err) {
     await tx.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
     await tx.query(`RELEASE SAVEPOINT ${savepoint}`);
-    if (isUniqueViolationOf(err, constraint)) {
+    if (findPgError(err, '23505', constraint) !== null) {
       const { rows } = await tx.query<{ all: boolean }>('SELECT session_sees_all_creators() AS all');
       if (rows[0]?.all === false) throw new ScopeError();
     }
@@ -169,6 +218,37 @@ export async function writeOrScopeError<T>(tx: WorkspaceTx, savepoint: string, c
   }
   await tx.query(`RELEASE SAVEPOINT ${savepoint}`);
   return out;
+}
+
+/**
+ * El creador de una fila nueva que no lo trae (un negocio que nace del
+ * radar, de una respuesta o de la ficha de una marca), como expresión
+ * SQL `uuid` para un INSERT … SELECT:
+ *
+ *   · si la persona de la transacción está acotada por creador, el
+ *     ÚNICO de su alcance;
+ *   · si no lo está, el ÚNICO creador vivo del espacio (un espacio de
+ *     creador);
+ *   · y NULL en cualquier otro caso: varios creadores y nadie que diga
+ *     cuál. Para quien ve a todos, NULL es «sin creador», como hasta hoy;
+ *     para quien está acotado, NULL no cae en su alcance (ACC-6 D4) y la
+ *     consulta que llama lo dice antes de escribir.
+ *
+ * `workspace` es la expresión del espacio: `current_workspace_id()` en
+ * la web, o la columna del espacio cuando corre en el worker, que nombra
+ * su workspace en cada consulta. Es SQL del módulo que llama, nunca un
+ * valor que llegue de fuera.
+ */
+export function soleCreatorSql(workspace = 'current_workspace_id()'): string {
+  const mine =
+    `SELECT s.scope_id FROM membership_scope s WHERE s.workspace_id = ${workspace} ` +
+    `AND s.user_id = current_user_id() AND s.scope_type = 'creator'`;
+  return (
+    `(SELECT CASE WHEN count(*) = 1 THEN (array_agg(sc.id))[1] END FROM (` +
+    `${mine.replace('SELECT s.scope_id', 'SELECT s.scope_id AS id')} ` +
+    `UNION SELECT cp.id FROM creator_profile cp WHERE cp.workspace_id = ${workspace} AND cp.deleted_at IS NULL ` +
+    `AND NOT EXISTS (${mine})) sc)`
+  );
 }
 
 /**
