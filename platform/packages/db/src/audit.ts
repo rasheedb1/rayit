@@ -99,6 +99,9 @@ export const AUDIT_ACTIONS = [
   'invitation.accepted',
   'membership.role_changed',
   'membership.removed',
+  // Ventas (ACC-7): de qué creador es un negocio. Decide quién lo ve
+  // cuando hay alcance por creador; before/after llevan solo el creatorId.
+  'deal.creator_changed',
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

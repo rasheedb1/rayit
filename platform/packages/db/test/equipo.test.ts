@@ -39,6 +39,7 @@ import {
   createInvitation,
   hasPendingInvitationForSessionEmail,
   invitationTokenHash,
+  isFullRoleUnscopedError,
   isLastOwnerError,
   listMembers,
   listPendingInvitations,
@@ -688,6 +689,44 @@ describe('quien tiene alcance no administra el equipo (0079 §6)', () => {
       ),
       (err) => /invitation_scope_not_yet/.test(mensajes(err)),
     );
+  });
+});
+
+describe('a quien lleva alcance no se le hace Dueño ni Administrador (0082 §2, ACC-7)', () => {
+  const EJECUTIVA = '00000082-0000-4000-8000-0000000000e4';
+  const CREADORA = '00000082-0000-4000-8000-00000000c0de';
+  const comoDuena = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => en(WS_AGENCIA, DUENA_AGENCIA, fn);
+
+  test('changeMemberRole lo dice con su código, sin tocar el rol; sin el alcance, sí', async () => {
+    const admin = await rol('agency', 'admin');
+    const owner = await rol('agency', 'owner');
+    const manager = await rol('agency', 'manager');
+    await t.admin(`
+      INSERT INTO app_user (id, email, name) VALUES ('${EJECUTIVA}', 'ejecutiva.acc7@agencia.test', 'Ejecutiva ACC-7') ON CONFLICT DO NOTHING;
+      INSERT INTO membership (workspace_id, user_id, role_id)
+        VALUES ('${WS_AGENCIA}', '${EJECUTIVA}', system_role_id('agency', 'manager')) ON CONFLICT DO NOTHING;
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+        VALUES ('${WS_AGENCIA}', '${EJECUTIVA}', 'creator', '${CREADORA}');
+    `);
+    const rolDe = async () => (await comoDuena((tx) => listMembers(tx))).find((m) => m.userId === EJECUTIVA)?.roleKey;
+    try {
+      assert.deepEqual(await comoDuena((tx) => changeMemberRole(tx, EJECUTIVA, admin, [])), { ok: false, code: 'scoped_member' });
+      assert.deepEqual(await comoDuena((tx) => changeMemberRole(tx, EJECUTIVA, owner, [])), { ok: false, code: 'scoped_member' });
+      assert.equal(await rolDe(), 'manager', 'el rol no cambió');
+      // A un rol que no ve todo, sí, con su alcance.
+      const viewer = await rol('agency', 'viewer');
+      assert.deepEqual(await comoDuena((tx) => changeMemberRole(tx, EJECUTIVA, viewer, [])), { ok: true, changed: true });
+      assert.deepEqual(await comoDuena((tx) => changeMemberRole(tx, EJECUTIVA, manager, [])), { ok: true, changed: true });
+      // Y la base lo para aunque se escriba a mano; isFullRoleUnscopedError lo reconoce.
+      await assert.rejects(
+        comoDuena((tx) => tx.query('UPDATE membership SET role_id = $1 WHERE user_id = $2', [admin, EJECUTIVA])),
+        (err: unknown) => isFullRoleUnscopedError(err) && !isLastOwnerError(err),
+      );
+    } finally {
+      await t.admin(`DELETE FROM membership_scope WHERE user_id = '${EJECUTIVA}'`);
+    }
+    assert.deepEqual(await comoDuena((tx) => changeMemberRole(tx, EJECUTIVA, admin, [])), { ok: true, changed: true });
+    assert.equal(await rolDe(), 'admin');
   });
 });
 

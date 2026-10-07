@@ -915,8 +915,63 @@ export async function createReferralContact(
 }
 
 export type ReclassifyResult =
-  | { ok: true; intent: MessageIntent; dealMoved: boolean; optOut: boolean; optOutReview: boolean }
-  | { ok: false; code: 'not_found' | 'opted_out' };
+  | {
+      ok: true; intent: MessageIntent; dealMoved: boolean; optOut: boolean; optOutReview: boolean;
+      /**
+       * «Me interesa» sin negocio abierto, corregido por quien está acotado
+       * a varios creadores (o a ninguno vivo): la intención quedó escrita y
+       * el negocio no se abrió, porque no se sabe de qué creador es. Se abre
+       * desde la ficha de la marca, eligiéndolo (ACC-7).
+       */
+      dealNeedsCreator: boolean;
+    }
+  | { ok: false; code: 'not_found' | 'opted_out' | 'out_of_scope' };
+
+/**
+ * ¿«Me interesa» tocaría un negocio que la persona no ve por su alcance
+ * por creador (ACC-7)? Los efectos de «interesado» mueven el negocio del
+ * mensaje (el suyo, el de su cadencia o su toque) o, sin él, el abierto
+ * más reciente de la marca, y si no hay ninguno abren uno. Para quien
+ * está acotado, la política de deal (0082 §3) esconde el de otro
+ * creador: el cambio de etapa no tocaría nada sin avisar, o se abriría
+ * un SEGUNDO negocio para la misma marca. Se pregunta antes y no se toca
+ * nada:
+ *
+ *   · el mensaje apunta a un negocio y la transacción no lo ve: fuera
+ *     (deal_id es una clave ajena: si no se ve, es por el alcance);
+ *   · no apunta a ninguno, la marca no tiene uno abierto que se vea y sí
+ *     uno que no se ve (open_deal_out_of_scope, 0082 §6, que solo dice sí
+ *     o no): fuera.
+ *
+ * Para quien ve a todos, nunca: ni siquiera pregunta.
+ */
+async function interestedOutOfScope(tx: WorkspaceTx, messageId: string): Promise<boolean> {
+  const r = (
+    await tx.query<{ all: boolean; linked: string | null; linked_visible: boolean; company_id: string | null }>(
+      `SELECT session_sees_all_creators() AS all,
+              coalesce(m.deal_id, e.deal_id, t.deal_id) AS linked,
+              EXISTS (SELECT 1 FROM deal d WHERE d.id = coalesce(m.deal_id, e.deal_id, t.deal_id)) AS linked_visible,
+              c.company_id
+         FROM outbound_message m
+         LEFT JOIN outbound_enrollment e ON e.id = m.enrollment_id
+         LEFT JOIN outbound_touch t ON t.id = m.touch_id
+         LEFT JOIN contact c ON c.id = m.contact_id
+        WHERE m.id = $1::uuid`,
+      [messageId],
+    )
+  ).rows[0];
+  if (!r || r.all) return false;
+  if (r.linked) return !r.linked_visible;
+  if (!r.company_id) return false;
+  const marca = (
+    await tx.query<{ v: boolean }>(
+      `SELECT NOT EXISTS (SELECT 1 FROM deal d WHERE d.company_id = $1::uuid AND d.won_at IS NULL AND d.lost_at IS NULL)
+              AND open_deal_out_of_scope($1::uuid) AS v`,
+      [r.company_id],
+    )
+  ).rows[0];
+  return marca?.v === true;
+}
 
 /**
  * «Corregir intención»: una persona dice qué quiere decir una respuesta
@@ -937,6 +992,11 @@ export type ReclassifyResult =
  * mensaje («vuelvo el 6 de octubre», findReturnDate, la misma lectura del
  * clasificador falso). Sin ninguna de las dos, la cadencia vuelve a los
  * siete días (oooResumeAt).
+ *
+ * Con alcance por creador (ACC-7), «interesado» no toca un negocio que la
+ * persona no ve: 'out_of_scope' sin cambiar nada (interestedOutOfScope).
+ * Y si hay que abrir uno y no se sabe de qué creador es, la intención
+ * queda escrita sin abrirlo (`dealNeedsCreator`).
  */
 export async function reclassifyInboxMessage(
   tx: WorkspaceTx,
@@ -946,6 +1006,7 @@ export async function reclassifyInboxMessage(
   const intent = oneOf('reclassifyInboxMessage', 'intent', input.intent, MESSAGE_INTENTS);
   const m = await loadIntentMessage(tx, input.messageId);
   if (!m || m.workspaceId !== tx.workspaceId) return { ok: false, code: 'not_found' };
+  if (intent === 'interested' && (await interestedOutOfScope(tx, m.id))) return { ok: false, code: 'out_of_scope' };
   if (m.intent === 'unsubscribe' && m.contactId) {
     const out = (
       await tx.query<{ opted_out: boolean }>(`SELECT ${CONTACT_OPTED_OUT_SQL('c')} AS opted_out FROM contact c WHERE c.id = $1::uuid`, [m.contactId])
@@ -961,7 +1022,9 @@ export async function reclassifyInboxMessage(
   const fx = await reapplyIntent(
     tx, m, { intent, confidence: 1, returnDate, referral: null, source: 'person', reason: null }, input.now,
   );
-  return { ok: true, intent, dealMoved: fx.dealMoved, optOut: fx.optOut, optOutReview: fx.optOutReview };
+  return {
+    ok: true, intent, dealMoved: fx.dealMoved, optOut: fx.optOut, optOutReview: fx.optOutReview, dealNeedsCreator: fx.dealNeedsCreator,
+  };
 }
 
 /** ¿El worker clasifica las respuestas? 'model' o 'fake' sí; 'off' le falta la llave; 'unknown' no corrió en el último día (0070). */

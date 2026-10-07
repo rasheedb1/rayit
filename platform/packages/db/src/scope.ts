@@ -26,7 +26,7 @@
  *     Abrir por defecto sería una política de alcance que no se ve como
  *     un bug.
  */
-import type { WorkspaceTx } from './client.ts';
+import type { SqlExecutor, WorkspaceTx } from './client.ts';
 import { findPgError, type PgLikeError } from './pg-error.ts';
 
 /** membership_scope.scope_type (CHECK en 0034 §6). */
@@ -161,11 +161,12 @@ const CREATOR_POLICY_IN_MESSAGE = new RegExp(`"(${CREATOR_SCOPE_TABLES.join('|')
  */
 export function scopeErrorOf(err: unknown): ScopeError | null {
   if (err instanceof ScopeError) return err;
-  for (let e: unknown = err; typeof e === 'object' && e !== null; e = (e as { cause?: unknown }).cause) {
-    const p = e as PgLikeError;
-    if (p.code === '42501' && typeof p.message === 'string' && CREATOR_POLICY_IN_MESSAGE.test(p.message)) return new ScopeError();
-  }
-  return null;
+  return findPgError(err, '42501', undefined, isCreatorPolicyRejection) !== null ? new ScopeError() : null;
+}
+
+/** ¿El 42501 nombra una de las políticas por creador? Ver scopeErrorOf. */
+function isCreatorPolicyRejection(p: PgLikeError): boolean {
+  return typeof p.message === 'string' && CREATOR_POLICY_IN_MESSAGE.test(p.message);
 }
 
 /**
@@ -222,33 +223,25 @@ export async function writeOrScopeError<T>(
 
 /**
  * El creador de una fila nueva que no lo trae (un negocio que nace del
- * radar, de una respuesta o de la ficha de una marca), como expresión
- * SQL `uuid` para un INSERT … SELECT:
+ * radar, de una respuesta o de la ficha de una marca): el único de los
+ * que la persona de la transacción puede poner, o `null` si hay cero o
+ * varios. La pregunta es de la base, `sole_creator_for_session(ws)`
+ * (0082 §1b), con el espacio como parámetro: la misma para la web, la
+ * bandeja y el worker (que nombra su espacio porque no lo fija), y la
+ * misma lista que enseña el selector (`creators_for_session`). Un
+ * alcance a un creador dado de baja no cuenta.
  *
- *   · si la persona de la transacción está acotada por creador, el
- *     ÚNICO de su alcance;
- *   · si no lo está, el ÚNICO creador vivo del espacio (un espacio de
- *     creador);
- *   · y NULL en cualquier otro caso: varios creadores y nadie que diga
- *     cuál. Para quien ve a todos, NULL es «sin creador», como hasta hoy;
- *     para quien está acotado, NULL no cae en su alcance (ACC-6 D4) y la
- *     consulta que llama lo dice antes de escribir.
- *
- * `workspace` es la expresión del espacio: `current_workspace_id()` en
- * la web, o la columna del espacio cuando corre en el worker, que nombra
- * su workspace en cada consulta. Es SQL del módulo que llama, nunca un
- * valor que llegue de fuera.
+ * `seesAll` es `session_sees_all_creators()`: con `creatorId` null,
+ * dice si eso es «sin creador» (quien ve a todos) o «no se sabe de
+ * quién, y sin creador no lo verías» (quien está acotado).
  */
-export function soleCreatorSql(workspace = 'current_workspace_id()'): string {
-  const mine =
-    `SELECT s.scope_id FROM membership_scope s WHERE s.workspace_id = ${workspace} ` +
-    `AND s.user_id = current_user_id() AND s.scope_type = 'creator'`;
-  return (
-    `(SELECT CASE WHEN count(*) = 1 THEN (array_agg(sc.id))[1] END FROM (` +
-    `${mine.replace('SELECT s.scope_id', 'SELECT s.scope_id AS id')} ` +
-    `UNION SELECT cp.id FROM creator_profile cp WHERE cp.workspace_id = ${workspace} AND cp.deleted_at IS NULL ` +
-    `AND NOT EXISTS (${mine})) sc)`
+export async function soleCreatorFor(tx: SqlExecutor, workspaceId: string): Promise<{ creatorId: string | null; seesAll: boolean }> {
+  const { rows } = await tx.query<{ id: string | null; all: boolean }>(
+    'SELECT sole_creator_for_session($1::uuid) AS id, session_sees_all_creators() AS all',
+    [workspaceId],
   );
+  // Una respuesta que no llega se lee como «acotada»: cerrado, nunca abierto.
+  return { creatorId: rows[0]?.id ?? null, seesAll: rows[0]?.all === true };
 }
 
 /**

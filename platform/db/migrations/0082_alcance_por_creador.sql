@@ -115,10 +115,25 @@
 -- nadie: la política está para que el primer alcance real no dependa de
 -- que todas las consultas se acuerden.
 --
+-- Además (ronda 3):
+--   · §1b: creators_for_session() y sole_creator_for_session(), LA
+--     fuente de «de qué creador es un negocio nuevo» para el selector,
+--     la web y el worker; un alcance a un creador dado de baja no cuenta;
+--   · §5: los negocios y campañas de antes, sin creador, pasan a nombre
+--     del único creador de su espacio cuando hay uno solo, para que el
+--     primer mánager acotado no pierda el pipeline de antes;
+--   · §6: open_deal_out_of_scope(), el sí o no que la bandeja necesita
+--     para no abrir un segundo negocio con una marca que ya tiene uno
+--     abierto de otro creador.
+--
 -- Re-ejecutable: CREATE OR REPLACE FUNCTION, DROP POLICY/TRIGGER IF
--- EXISTS, REVOKE y GRANT idempotentes. No crea roles ni necesita el
--- token de administración. Depende de 0034 (role, membership.role_id,
--- membership_scope) y 0040 (scope_allows).
+-- EXISTS, REVOKE y GRANT idempotentes, y el relleno de §5 solo toca
+-- NULL. No crea roles ni necesita el token de administración. Depende de
+-- 0034 (role, membership.role_id, membership_scope) y 0040
+-- (scope_allows). Como 0026, 0032, 0033 y 0044, quita FORCE ROW LEVEL
+-- SECURITY a algunas tablas un momento (§2 y §5) y se lo devuelve en la
+-- misma transacción: el rol que migra es su dueño y, sin espacio fijado,
+-- sus políticas le esconderían todas las filas.
 -- =====================================================================
 
 DO $$
@@ -171,6 +186,79 @@ COMMENT ON FUNCTION session_sees_all_creators() IS
 -- en Supabase), y con nombre para los dos roles que la pueden necesitar.
 REVOKE ALL ON FUNCTION session_sees_all_creators() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION session_sees_all_creators() TO mc_app, mc_worker;
+
+
+-- =====================================================================
+-- 1b · Los creadores que la sesión puede poner en una fila nueva, y el
+--      único de ellos
+-- ---------------------------------------------------------------------
+-- creators_for_session(ws): los creadores VIVOS del espacio `ws` que
+-- caen en el alcance por creador de la persona de la transacción: los
+-- de su alcance si lo tiene, todos si no (la misma regla que
+-- session_sees_all_creators() y scope_allows()). Un alcance que apunta a
+-- un creador dado de baja, o a un id que no es un creador de ese espacio
+-- (membership_scope.scope_id no tiene clave foránea), no es un creador
+-- que se pueda elegir: no sale. Pero sigue acotando: quien solo tiene
+-- alcance a un creador borrado no ve a ninguno (la lista sale vacía),
+-- igual que la política de §3.
+--
+-- sole_creator_for_session(ws): el único de esa lista, o NULL si hay
+-- cero o varios.
+--
+-- Son LA fuente de «de qué creador es un negocio nuevo» (ACC-7): el
+-- selector de «Nuevo negocio» (listDealCreatorOptions), el alta de la
+-- web (creatorForNewDeal) y la del worker y la bandeja
+-- (openDealFromReply). Antes el selector contaba creadores vivos y el
+-- alta contaba filas de alcance: con alcance a un creador borrado y a
+-- uno vivo, el selector no se enseñaba (había uno) y el alta pedía
+-- elegir (había dos). La persona no tenía salida.
+--
+-- Reciben el espacio porque el worker no fija app.workspace_id y nombra
+-- el suyo en cada consulta. Sin persona (el worker, el modo demo)
+-- current_user_id() es NULL, no hay filas de alcance y la lista es la
+-- de todos los creadores vivos del espacio.
+--
+-- SECURITY INVOKER: con la RLS de quien pregunta (en la web, el espacio
+-- fijado; mc_worker no pasa por políticas). STABLE. Sus cuerpos los fija
+-- la guardia (CUERPOS_DEL_ALCANCE).
+-- =====================================================================
+CREATE OR REPLACE FUNCTION creators_for_session(p_workspace uuid) RETURNS SETOF uuid
+LANGUAGE sql
+STABLE
+SET search_path = public, extensions, pg_temp
+AS $$
+  SELECT cp.id
+    FROM creator_profile cp
+   WHERE cp.workspace_id = p_workspace
+     AND cp.deleted_at IS NULL
+     AND (NOT EXISTS (SELECT 1 FROM membership_scope s
+                       WHERE s.workspace_id = p_workspace
+                         AND s.user_id = current_user_id()
+                         AND s.scope_type = 'creator')
+          OR EXISTS (SELECT 1 FROM membership_scope s
+                      WHERE s.workspace_id = p_workspace
+                        AND s.user_id = current_user_id()
+                        AND s.scope_type = 'creator'
+                        AND s.scope_id = cp.id))
+$$;
+COMMENT ON FUNCTION creators_for_session(uuid) IS
+  'Los creadores vivos del espacio que la persona de la transacción puede poner en una fila nueva: los de su alcance por creador, o todos si no lo tiene. Un alcance a un creador borrado no cuenta (0082 §1b, ACC-7).';
+
+CREATE OR REPLACE FUNCTION sole_creator_for_session(p_workspace uuid) RETURNS uuid
+LANGUAGE sql
+STABLE
+SET search_path = public, extensions, pg_temp
+AS $$
+  SELECT CASE WHEN count(*) = 1 THEN (array_agg(c.id))[1] END
+    FROM creators_for_session(p_workspace) AS c(id)
+$$;
+COMMENT ON FUNCTION sole_creator_for_session(uuid) IS
+  'El único creador de creators_for_session(ws), o NULL si hay cero o varios: de quién es un negocio que nace sin que nadie lo diga (0082 §1b, ACC-7).';
+
+REVOKE ALL ON FUNCTION creators_for_session(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION sole_creator_for_session(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION creators_for_session(uuid) TO mc_app, mc_worker;
+GRANT EXECUTE ON FUNCTION sole_creator_for_session(uuid) TO mc_app, mc_worker;
 
 
 -- =====================================================================
@@ -244,14 +332,43 @@ REVOKE ALL ON FUNCTION membership_full_role_unscoped() FROM PUBLIC;
 
 -- Antes de crear los disparadores: si ya hubiera filas así, se para con
 -- un mensaje claro en vez de dejar el caso que §2 prohíbe.
+--
+-- En TODOS los espacios. El rol que migra es dueño de membership_scope,
+-- membership y role, y las tres tienen FORCE ROW LEVEL SECURITY: sin
+-- espacio fijado, membership_scope_read y membership_read le esconden
+-- todas las filas y el EXISTS respondería «no hay» siempre, también en
+-- Supabase (la ronda 2 lo hacía así y no protegía nada). Como en 0026,
+-- 0032 y 0033, se les quita FORCE solo para esta pregunta y se les
+-- devuelve en la misma transacción; si la migración se para, el
+-- ROLLBACK lo deshace igual. Si quien migra no fuera su dueño, el ALTER
+-- falla con «must be owner»: ruidoso, nunca un falso «no hay».
 DO $$
+DECLARE
+  forzadas text[] := ARRAY[]::text[];
+  t text;
+  quienes text;
 BEGIN
-  IF EXISTS (SELECT 1 FROM membership_scope s
-               JOIN membership m ON m.workspace_id = s.workspace_id AND m.user_id = s.user_id
-               JOIN role r ON r.id = m.role_id
-              WHERE r.workspace_id IS NULL AND r.key IN ('owner', 'admin')) THEN
+  FOR t IN
+    SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relname IN ('membership_scope', 'membership', 'role') AND c.relforcerowsecurity
+  LOOP
+    EXECUTE format('ALTER TABLE %I NO FORCE ROW LEVEL SECURITY', t);
+    forzadas := forzadas || t;
+  END LOOP;
+
+  SELECT string_agg(DISTINCT format('%s en %s', s.user_id, s.workspace_id), ', ') INTO quienes
+    FROM membership_scope s
+    JOIN membership m ON m.workspace_id = s.workspace_id AND m.user_id = s.user_id
+    JOIN role r ON r.id = m.role_id
+   WHERE r.workspace_id IS NULL AND r.key IN ('owner', 'admin');
+
+  FOREACH t IN ARRAY forzadas LOOP
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+  END LOOP;
+
+  IF quienes IS NOT NULL THEN
     RAISE EXCEPTION USING
-      MESSAGE = '0082: hay filas de membership_scope de personas con rol Dueño o Administrador.',
+      MESSAGE = '0082: hay filas de membership_scope de personas con rol Dueño o Administrador: ' || quienes || '.',
       HINT = 'Bórralas (esas personas ven todo el espacio) o cámbiales el rol, y vuelve a aplicar.';
   END IF;
 END $$;
@@ -344,3 +461,140 @@ COMMENT ON FUNCTION public_account_out_of_scope(text, text) IS
 
 REVOKE ALL ON FUNCTION public_account_out_of_scope(text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public_account_out_of_scope(text, text) TO mc_app;
+
+
+-- =====================================================================
+-- 5 · Los negocios y las campañas de antes, a nombre de su creador
+-- ---------------------------------------------------------------------
+-- Hasta ACC-7, Ventas abría todos sus negocios con creator_id NULL (el
+-- radar, la ficha y la respuesta de outreach), y una campaña podía
+-- quedar sin creador. La política de §3 trata un NULL como fuera de
+-- cualquier alcance. El día que se escriba la primera fila de
+-- membership_scope, un mánager acotado a la ÚNICA creadora de su espacio
+-- vería los negocios nuevos (nacen a nombre de ella,
+-- sole_creator_for_session) y perdería todos los de antes: un pipeline
+-- partido sin explicación.
+--
+-- En un espacio con UN solo creador vivo, «sin creador» solo puede
+-- querer decir «de ese creador»: es la misma regla con la que nacen los
+-- negocios nuevos (§1b). Aquí se aplica a lo que ya existe, en deal y en
+-- campaign, las dos tablas de la red cuyo creator_id admite NULL
+-- (social_connection y post lo llevan NOT NULL). Con varios creadores no
+-- se adivina: queda «sin creador», la ficha de la marca lo dice y deja
+-- asignarlo (setDealCreator, con su bitácora).
+--
+-- Quitando FORCE un momento a deal, campaign y creator_profile, como en
+-- §2. Y sin tocar updated_at: deal_updated y campaign_updated se apagan
+-- solo durante el UPDATE y se vuelven a encender. Si no, todos los
+-- negocios de antes saldrían «tocados hoy», y el «abierto más reciente
+-- de la marca» de la bandeja (intent.ts, surroundings) cambiaría de
+-- negocio. El disparador de referencias visibles (ref_visible_creator_id,
+-- 0025 §7) sí corre: el creador es del mismo espacio y está vivo.
+--
+-- Idempotente: solo toca NULL. Un NOTICE dice cuántos.
+-- =====================================================================
+DO $$
+DECLARE
+  forzadas text[] := ARRAY[]::text[];
+  t text;
+  negocios integer;
+  campanas integer;
+BEGIN
+  FOR t IN
+    SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relname IN ('deal', 'campaign', 'creator_profile') AND c.relforcerowsecurity
+  LOOP
+    EXECUTE format('ALTER TABLE %I NO FORCE ROW LEVEL SECURITY', t);
+    forzadas := forzadas || t;
+  END LOOP;
+  ALTER TABLE deal DISABLE TRIGGER deal_updated;
+  ALTER TABLE campaign DISABLE TRIGGER campaign_updated;
+
+  WITH unico AS (
+    SELECT cp.workspace_id, (array_agg(cp.id))[1] AS creator_id
+      FROM creator_profile cp
+     WHERE cp.deleted_at IS NULL
+     GROUP BY cp.workspace_id
+    HAVING count(*) = 1
+  ), hecho AS (
+    UPDATE deal d SET creator_id = u.creator_id
+      FROM unico u
+     WHERE d.workspace_id = u.workspace_id AND d.creator_id IS NULL
+    RETURNING d.id
+  )
+  SELECT count(*) INTO negocios FROM hecho;
+
+  WITH unico AS (
+    SELECT cp.workspace_id, (array_agg(cp.id))[1] AS creator_id
+      FROM creator_profile cp
+     WHERE cp.deleted_at IS NULL
+     GROUP BY cp.workspace_id
+    HAVING count(*) = 1
+  ), hecho AS (
+    UPDATE campaign c SET creator_id = u.creator_id
+      FROM unico u
+     WHERE c.workspace_id = u.workspace_id AND c.creator_id IS NULL
+    RETURNING c.id
+  )
+  SELECT count(*) INTO campanas FROM hecho;
+
+  ALTER TABLE deal ENABLE TRIGGER deal_updated;
+  ALTER TABLE campaign ENABLE TRIGGER campaign_updated;
+  FOREACH t IN ARRAY forzadas LOOP
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+  END LOOP;
+
+  IF negocios > 0 OR campanas > 0 THEN
+    RAISE NOTICE '0082: % negocios y % campañas sin creador pasan al único creador de su espacio.', negocios, campanas;
+  END IF;
+END $$;
+
+
+-- =====================================================================
+-- 6 · open_deal_out_of_scope(): «esa marca ya tiene un negocio abierto
+--     de otro creador»
+-- ---------------------------------------------------------------------
+-- La bandeja de Ventas deja corregir una respuesta a «Me interesa». Si
+-- la marca no tiene un negocio abierto, se abre uno (openDealFromReply);
+-- si lo tiene, se mueve a «En conversación». Con §3, a quien está
+-- acotado por creador el negocio abierto de OTRO creador no se le ve: la
+-- búsqueda del «abierto más reciente de la marca» no lo encuentra y
+-- abriría un SEGUNDO negocio para la misma marca (lo que el CRM tiene
+-- que evitar), o, si el mensaje ya apuntaba a él, el cambio de etapa no
+-- tocaría nada sin avisar.
+--
+-- Esta función responde solo sí o no, para UNA marca, dentro del espacio
+-- fijado y para la persona de la transacción: ¿hay un negocio abierto
+-- (sin ganar ni perder) de esa marca que NO cae en su alcance por
+-- creador? No devuelve el negocio, ni su creador, ni su id, ni cuántos.
+-- La bandeja lo dice («ese negocio lo lleva otra persona del equipo») y
+-- no toca nada; la ficha de la marca lo usa para explicar por qué la
+-- persona no ve todos los negocios de esa marca.
+--
+-- SECURITY DEFINER por la misma razón que §4, y con las mismas ataduras:
+-- workspace_id = current_workspace_id() a mano, falso sin espacio
+-- fijado, falso para quien ve a todos. Sin EXECUTE para PUBLIC; solo
+-- mc_app. Declarada en la guardia (FUNCIONES_DEFINER_DECLARADAS).
+-- =====================================================================
+CREATE OR REPLACE FUNCTION open_deal_out_of_scope(p_company uuid) RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+  SELECT current_workspace_id() IS NOT NULL
+     AND p_company IS NOT NULL
+     AND NOT session_sees_all_creators()
+     AND EXISTS (
+           SELECT 1 FROM deal d
+            WHERE d.workspace_id = current_workspace_id()
+              AND d.company_id = p_company
+              AND d.won_at IS NULL
+              AND d.lost_at IS NULL
+              AND NOT scope_allows('creator', d.creator_id))
+$$;
+COMMENT ON FUNCTION open_deal_out_of_scope(uuid) IS
+  'Sí o no: ¿la marca tiene en el espacio fijado un negocio abierto fuera del alcance por creador de la sesión? Para que la bandeja no abra un segundo negocio y la ficha explique lo que no se ve (0082 §6, ACC-7).';
+
+REVOKE ALL ON FUNCTION open_deal_out_of_scope(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION open_deal_out_of_scope(uuid) TO mc_app;

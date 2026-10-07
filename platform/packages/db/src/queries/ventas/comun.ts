@@ -44,6 +44,7 @@ export const VENTAS_ERROR_CODES = [
   'InvalidDealName',
   'InvalidHeadline',
   'InvalidName',
+  'NoCreatorInScope',
   'InvalidOwner',
   'InvalidReason',
   'InvalidRelationship',
@@ -366,6 +367,13 @@ export interface PipelineDealRow {
   ownerName: string | null;
   /** Por qué se perdió; solo en un negocio en una etapa perdida. */
   lostReason: LostReason | null;
+  /**
+   * De qué creador es (ACC-7) y su nombre; null es «sin creador», que con
+   * alcance por creador solo ve quien ve a todos. Se cambia con
+   * setDealCreator.
+   */
+  creatorId: string | null;
+  creatorName: string | null;
 }
 
 export type DueState = 'sin_fecha' | 'vencido' | 'hoy' | 'futuro';

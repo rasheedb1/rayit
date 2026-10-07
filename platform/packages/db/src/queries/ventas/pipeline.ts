@@ -52,12 +52,13 @@ export async function listPipeline(
             to_char(p.last_contact_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_contact_at,
             ((now() AT TIME ZONE w.tz)::date - (p.last_contact_at AT TIME ZONE w.tz)::date) AS last_contact_days,
             p.expected_close_date::text AS expected_close_date, p.is_won, p.is_lost,
-            d.owner_user_id, u.name AS owner_name, d.lost_reason,
+            d.owner_user_id, u.name AS owner_name, d.lost_reason, d.creator_id, cp.display_name AS creator_name,
             round(extract(epoch FROM now() - COALESCE(h.changed_at, d.created_at)) / 86400.0)::int AS days_in_stage
      FROM deal_pipeline p
      JOIN deal d ON d.id = p.id
      CROSS JOIN ${WORKSPACE_TZ} w
      LEFT JOIN app_user u ON u.id = d.owner_user_id
+     LEFT JOIN creator_profile cp ON cp.id = d.creator_id
      LEFT JOIN app_user nu ON nu.id = d.next_action_user_id
      LEFT JOIN LATERAL (
        SELECT changed_at FROM deal_stage_history

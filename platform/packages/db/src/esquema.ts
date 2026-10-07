@@ -343,6 +343,14 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'social_connection, atada a mano al workspace fijado (y falso sin él), y responde sí o no para UN handle de UNA ' +
     'red: ni la fila, ni la creadora, ni el id. Es lo que ACC-6 ya decía con ScopeError. EXECUTE solo para mc_app. ' +
     'No es de ningún disparador',
+  // El negocio abierto de la marca que es de otro creador, por debajo de la política por creador (0082 §6, ACC-7).
+  'open_deal_out_of_scope(uuid)':
+    'La bandeja de Ventas pregunta, antes de aplicar «Me interesa», si la marca tiene un negocio abierto de un ' +
+    'creador fuera del alcance de quien corrige: la política por creador de 0082 ya no deja ver esa fila, y sin la ' +
+    'respuesta se abriría un segundo negocio para la misma marca. La ficha de la marca lo usa para explicar lo que ' +
+    'no se ve. Solo LEE deal, atada a mano al workspace fijado (y falso sin él o para quien ve a todos), y responde ' +
+    'sí o no para UNA marca: ni el negocio, ni su creador, ni cuántos. EXECUTE solo para mc_app. No es de ningún ' +
+    'disparador',
   // La regla de la baja de outbound_touch mira la lista global (0046 §4.1).
   'address_is_suppressed(citext)':
     'la regla de la baja de outbound_touch (0046 §4.1) compara el correo de la ficha y recipient_address con la ' +
@@ -491,6 +499,15 @@ export const FUNCIONES_QUE_USA_EL_CODIGO: Readonly<Record<string, string>> = {
     '0040_scope_allows: el alcance por creador, marca o campaña que compone cada consulta de Campañas, Finanzas y ' +
     'Conexiones (src/scope.ts, ACC-6)',
   'scope_allows(text,uuid[])': '0040_scope_allows: la misma pregunta para una relación uno-a-muchos (las campañas de un post)',
+  'creators_for_session(uuid)':
+    '0082_alcance_por_creador §1b: los creadores vivos que la sesión puede poner en un negocio; el selector de ' +
+    '«Nuevo negocio» y las altas de Ventas (listDealCreatorOptions, creatorForNewDeal, setDealCreator)',
+  'sole_creator_for_session(uuid)':
+    '0082_alcance_por_creador §1b: el único de creators_for_session(), de quién es el negocio que abre una respuesta ' +
+    'de outreach en el worker y en la bandeja (soleCreatorFor, src/scope.ts)',
+  'open_deal_out_of_scope(uuid)':
+    '0082_alcance_por_creador §6: la bandeja no abre un segundo negocio con una marca cuyo negocio abierto es de otro ' +
+    'creador (bandejas.ts, interestedOutOfScope) y la ficha lo explica (hasOpenDealOutOfScope)',
   'session_sees_all_creators()':
     '0082_alcance_por_creador: ¿la sesión ve a todos los creadores del espacio? La piden las cuatro políticas por ' +
     'creador (TABLAS_CON_ALCANCE_POR_CREADOR) y writeOrScopeError (src/scope.ts, ACC-7). Sin EXECUTE para mc_app, ' +
@@ -725,6 +742,9 @@ export const CUERPOS_DEL_ALCANCE: Readonly<Record<string, { md5: string; origen:
   'scope_allows(text,uuid)': { md5: 'a8a03a4cddc600da1fec05f15a895cc1', origen: '0040_scope_allows' },
   'scope_allows(text,uuid[])': { md5: 'a69e8de3de693f471a18fe0e087cecca', origen: '0040_scope_allows' },
   'membership_full_role_unscoped()': { md5: '43dee241bad3b88a065380a2b2cf0d50', origen: '0082_alcance_por_creador §2' },
+  'creators_for_session(uuid)': { md5: '085cca1a6ea5c005538a6484810d4a43', origen: '0082_alcance_por_creador §1b' },
+  'sole_creator_for_session(uuid)': { md5: 'c364ec655dc4f33b8313be97c937d2a4', origen: '0082_alcance_por_creador §1b' },
+  'open_deal_out_of_scope(uuid)': { md5: '3022212a5798784ca0d8d5f8415e5834', origen: '0082_alcance_por_creador §6' },
 };
 
 /**

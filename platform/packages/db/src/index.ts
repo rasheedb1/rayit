@@ -39,7 +39,7 @@ export {
 } from './client.ts';
 export { createDbFromEnv, type DbMode } from './from-env.ts';
 export {
-  assertScopeAllows, assertUnscoped, CREATOR_SCOPE_TABLES, getScopeKinds, SCOPE_KINDS, ScopeError, scopeErrorOf, scopeFilter, soleCreatorSql,
+  assertScopeAllows, assertUnscoped, CREATOR_SCOPE_TABLES, getScopeKinds, SCOPE_KINDS, ScopeError, scopeErrorOf, scopeFilter, soleCreatorFor,
   UNSCOPED_ONLY, writeOrScopeError, type CreatorScopeTable, type ScopeAnchors, type ScopeKind, type ScopeMany, type ScopeSavepoint,
 } from './scope.ts';
 export { findPgError, type PgLikeError } from './pg-error.ts';

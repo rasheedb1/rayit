@@ -81,6 +81,15 @@ export function isDailyCapError(err: unknown): boolean {
   return findPgError(err, '23514', 'invitation_daily_cap') !== null;
 }
 
+/**
+ * Dueño y Administrador no llevan alcance (membership_full_role_unscoped,
+ * 0082 §2, ACC-7): pasar a uno de esos roles a quien tiene filas en
+ * membership_scope lo para la base.
+ */
+export function isFullRoleUnscopedError(err: unknown): boolean {
+  return findPgError(err, '23514', 'membership_full_role_unscoped') !== null;
+}
+
 // ---------------------------------------------------------------------
 // Lecturas
 // ---------------------------------------------------------------------
@@ -282,6 +291,8 @@ export async function listPendingInvitations(tx: WorkspaceTx): Promise<PendingIn
  *   pending_exists      otra persona acaba de invitar a ese correo (dos a la vez)
  *   rate_limited        el espacio ya creó INVITACIONES_POR_DIA invitaciones en 24 horas (0079 §7)
  *   scoped              quien actúa tiene alcance limitado (ACC-6) y no administra el equipo (0079 §6)
+ *   scoped_member       la persona a la que se le cambia el rol lleva alcance, y Dueño y
+ *                       Administrador no lo llevan (0082 §2): antes hay que quitárselo
  */
 export type TeamErrorCode =
   | 'forbidden'
@@ -293,7 +304,8 @@ export type TeamErrorCode =
   | 'last_owner'
   | 'pending_exists'
   | 'rate_limited'
-  | 'scoped';
+  | 'scoped'
+  | 'scoped_member';
 
 export type TeamResult<T = object> = ({ ok: true } & T) | { ok: false; code: TeamErrorCode };
 
@@ -515,11 +527,31 @@ async function conUltimoDueno<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * ¿La persona lleva alcance (cualquier fila de membership_scope en este
+ * espacio) y el rol nuevo es Dueño o Administrador de sistema? Es la
+ * regla del disparador membership_full_role_unscoped (0082 §2),
+ * preguntada antes para decir «quítale antes el alcance» con la
+ * transacción viva, en vez de un 23514.
+ */
+async function llevaAlcanceYPasaARolCompleto(tx: WorkspaceTx, userId: string, roleId: string): Promise<boolean> {
+  const { rows } = await tx.query<{ v: boolean }>(
+    `SELECT r.workspace_id IS NULL AND r.key IN ('owner', 'admin')
+            AND EXISTS (SELECT 1 FROM membership_scope s
+                         WHERE s.workspace_id = current_workspace_id() AND s.user_id = $1::uuid) AS v
+       FROM role r WHERE r.id = $2::uuid`,
+    [userId, roleId],
+  );
+  return rows[0]?.v === true;
+}
+
+/**
  * Cambia el rol de una persona y sus casillas. Quien actúa necesita
  * equipo.rol.editar, tener todo lo que la persona tiene HOY (no se toca
  * a quien está por encima) y todo lo que se le da. Degradar al último
- * dueño lanza UltimoDuenoError. Las invitaciones que la persona firmó y
- * ya no podría dar quedan revocadas en la misma transacción.
+ * dueño lanza UltimoDuenoError. Hacer Dueño o Administrador a quien
+ * lleva alcance es 'scoped_member' (0082 §2). Las invitaciones que la
+ * persona firmó y ya no podría dar quedan revocadas en la misma
+ * transacción.
  */
 export async function changeMemberRole(
   tx: WorkspaceTx,
@@ -541,15 +573,28 @@ export async function changeMemberRole(
 
   const mismas = [...extras].sort().join() === [...antes.extraPermissions].sort().join();
   if (antes.roleId === roleId && mismas) return { ok: true, changed: false };
+  if (await llevaAlcanceYPasaARolCompleto(tx, userId, roleId)) return { ok: false, code: 'scoped_member' };
 
-  const { rows } = await conUltimoDueno(() =>
-    tx.query<{ user_id: string }>(
-      `UPDATE membership SET role_id = $2::uuid, extra_permissions = $3::text[]
-        WHERE workspace_id = current_workspace_id() AND user_id = $1::uuid
-        RETURNING user_id`,
-      [userId, roleId, extras],
-    ),
-  );
+  // En un SAVEPOINT: si el alcance llegó entre la pregunta y el UPDATE,
+  // el disparador lo para (23514) y se devuelve el mismo código con la
+  // transacción todavía usable.
+  let rows: { user_id: string }[];
+  await tx.query('SAVEPOINT cambio_de_rol');
+  try {
+    ({ rows } = await conUltimoDueno(() =>
+      tx.query<{ user_id: string }>(
+        `UPDATE membership SET role_id = $2::uuid, extra_permissions = $3::text[]
+          WHERE workspace_id = current_workspace_id() AND user_id = $1::uuid
+          RETURNING user_id`,
+        [userId, roleId, extras],
+      ),
+    ));
+  } catch (err) {
+    await tx.query('ROLLBACK TO SAVEPOINT cambio_de_rol');
+    if (isFullRoleUnscopedError(err)) return { ok: false, code: 'scoped_member' };
+    throw err;
+  }
+  await tx.query('RELEASE SAVEPOINT cambio_de_rol');
   if (!rows[0]) return { ok: false, code: 'cannot_grant' };
   await audit(tx, {
     action: 'membership.role_changed',

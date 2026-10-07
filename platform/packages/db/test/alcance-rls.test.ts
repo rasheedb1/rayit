@@ -24,8 +24,11 @@ import {
 import type { WorkspaceTx } from '../src/client.ts';
 import { findPgError } from '../src/pg-error.ts';
 import { listCampaigns } from '../src/queries/campanas.ts';
-import { acceptSignal, createDeal, createSignal, listDealCreatorOptions, listPipeline, VentasError } from '../src/queries/ventas.ts';
-import { CREATOR_SCOPE_TABLES, ScopeError, scopeErrorOf, writeOrScopeError, type ScopeSavepoint } from '../src/scope.ts';
+import { reclassifyInboxMessage } from '../src/queries/bandejas.ts';
+import {
+  acceptSignal, createDeal, createSignal, hasOpenDealOutOfScope, listDealCreatorOptions, listPipeline, setDealCreator, VentasError,
+} from '../src/queries/ventas.ts';
+import { CREATOR_SCOPE_TABLES, ScopeError, scopeErrorOf, soleCreatorFor, writeOrScopeError, type ScopeSavepoint } from '../src/scope.ts';
 import { migratorRole, openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, type TestDb } from './pglite.ts';
 import { DESCRIBE_DB_TIMEOUT_MS } from './tiempos.ts';
 import {
@@ -336,7 +339,7 @@ describe('Ventas con la red puesta: los negocios nacen con su creador', { timeou
 
   test('el ejecutivo acotado abre un negocio en Ventas y lo ve', async () => {
     const opciones = await ejecutivo((tx) => listDealCreatorOptions(tx));
-    assert.deepEqual(opciones, { creators: [{ id: CREADOR_A, name: 'Creador A' }], required: false }, 'solo el suyo, y no se pregunta');
+    assert.deepEqual(opciones, { creators: [{ id: CREADOR_A, name: 'Creador A' }], required: false, seesAll: false }, 'solo el suyo, y no se pregunta');
     const id = await ejecutivo((tx) => createDeal(tx, { companyId: MARCA_AGENCIA, name: 'Serie de A', amount: '500000' }));
     assert.equal(await creadorDe(id), CREADOR_A, 'nace a nombre del único creador de su alcance');
     const pipeline = await ejecutivo((tx) => listPipeline(tx, { companyId: MARCA_AGENCIA }));
@@ -404,9 +407,194 @@ describe('Ventas con la red puesta: los negocios nacen con su creador', { timeou
       INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS_UNA}', '${MARCA_UNA}', 'prospect') ON CONFLICT DO NOTHING;
     `);
     const opciones = await como(WS_UNA, DUENA_UNA, (tx) => listDealCreatorOptions(tx));
-    assert.deepEqual(opciones, { creators: [{ id: CREADORA_UNA, name: 'Una' }], required: false });
+    assert.deepEqual(opciones, { creators: [{ id: CREADORA_UNA, name: 'Una' }], required: false, seesAll: true });
     const id = await como(WS_UNA, DUENA_UNA, (tx) => createDeal(tx, { companyId: MARCA_UNA, name: 'Primer negocio' }));
     assert.equal(await creadorDe(id), CREADORA_UNA);
+  });
+});
+
+describe('un alcance a un creador dado de baja no cuenta (ronda 2, hallazgos 3 y 7)', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
+  const ejecutivo = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => como(WS_AGENCIA, EJECUTIVO_A, fn);
+  const CREADOR_BORRADO = '0000000c-0000-4000-8000-0000000000d3';
+  const creadorDe = (dealId: string) =>
+    t.db.asWorker((tx) => tx.query<{ creator_id: string | null }>('SELECT creator_id FROM deal WHERE id = $1', [dealId]))
+      .then((r) => r.rows[0]?.creator_id ?? null);
+
+  before(async () => {
+    await t.admin(`
+      INSERT INTO creator_profile (id, workspace_id, display_name, deleted_at)
+        VALUES ('${CREADOR_BORRADO}', '${WS_AGENCIA}', 'Creador dado de baja', now()) ON CONFLICT DO NOTHING;
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+        VALUES ('${WS_AGENCIA}', '${EJECUTIVO_A}', 'creator', '${CREADOR_BORRADO}') ON CONFLICT DO NOTHING;
+    `);
+  });
+  after(async () => {
+    await t.admin(`DELETE FROM membership_scope WHERE user_id = '${EJECUTIVO_A}' AND scope_id = '${CREADOR_BORRADO}'`);
+  });
+
+  test('alcance a uno borrado y a uno vivo: el selector, el alta y el worker dicen lo mismo, y el negocio nace del vivo', async () => {
+    const opciones = await ejecutivo((tx) => listDealCreatorOptions(tx));
+    assert.deepEqual(opciones, { creators: [{ id: CREADOR_A, name: 'Creador A' }], required: false, seesAll: false });
+    assert.deepEqual(await ejecutivo((tx) => soleCreatorFor(tx, WS_AGENCIA)), { creatorId: CREADOR_A, seesAll: false });
+    const id = await ejecutivo((tx) => createDeal(tx, { companyId: MARCA_AGENCIA, name: 'Con uno borrado en el alcance' }));
+    assert.equal(await creadorDe(id), CREADOR_A);
+    // Elegir el borrado a mano no vale: no es un creador vivo.
+    await assert.rejects(
+      ejecutivo((tx) => createDeal(tx, { companyId: MARCA_AGENCIA, name: 'Del borrado', creatorId: CREADOR_BORRADO })),
+      (e: unknown) => e instanceof VentasError && e.code === 'InvalidCreator',
+    );
+  });
+
+  test('alcance solo a uno borrado: no ve a nadie, el selector lo dice y el alta no inventa un creador', async () => {
+    await t.admin(`DELETE FROM membership_scope WHERE user_id = '${EJECUTIVO_A}' AND scope_id = '${CREADOR_A}'`);
+    try {
+      assert.deepEqual(await ejecutivo((tx) => listDealCreatorOptions(tx)), { creators: [], required: true, seesAll: false });
+      assert.deepEqual(await ejecutivo((tx) => soleCreatorFor(tx, WS_AGENCIA)), { creatorId: null, seesAll: false });
+      await assert.rejects(
+        ejecutivo((tx) => createDeal(tx, { companyId: MARCA_AGENCIA, name: 'De nadie' })),
+        (e: unknown) => e instanceof VentasError && e.code === 'NoCreatorInScope',
+      );
+      assert.deepEqual(await ejecutivo((tx) => crudas(tx, 'campaign')), [], 'y la política no le enseña ninguna campaña');
+    } finally {
+      await t.admin(`INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+                     VALUES ('${WS_AGENCIA}', '${EJECUTIVO_A}', 'creator', '${CREADOR_A}') ON CONFLICT DO NOTHING`);
+    }
+  });
+
+  test('en el worker (sin persona) es el único creador vivo del espacio, o ninguno', async () => {
+    assert.deepEqual(await t.db.asWorker((tx) => soleCreatorFor(tx, WS_AGENCIA)), { creatorId: null, seesAll: true });
+    assert.deepEqual(await t.db.asWorker((tx) => soleCreatorFor(tx, WORKSPACE_LAURA)), { creatorId: null, seesAll: true });
+  });
+});
+
+describe('la bandeja: «Me interesa» con alcance por creador (ronda 2, hallazgos 1 y 9)', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
+  const ejecutivo = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => como(WS_AGENCIA, EJECUTIVO_A, fn);
+  const duenaAgencia = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => como(WS_AGENCIA, DUENA_AGENCIA, fn);
+  const CREADOR_E = '0000000c-0000-4000-8000-0000000000e3';
+  /** Una marca sin negocios, y una con un negocio abierto de B. */
+  const MARCA_NUEVA = '0000000c-0000-4000-8000-0000000000e7';
+  const MARCA_DE_B = '0000000c-0000-4000-8000-0000000000e8';
+  const DEAL_DE_B = '0000000c-0000-4000-8000-00000000dea8';
+  const CONTACTO_NUEVA = '0000000c-0000-4000-8000-0000000c0e07';
+  const CONTACTO_DE_B = '0000000c-0000-4000-8000-0000000c0e08';
+  const MSG_NUEVA = '0000000c-0000-4000-8000-0000000a5007';
+  const MSG_DE_B = '0000000c-0000-4000-8000-0000000a5008';
+  const MSG_ENLAZADO = '0000000c-0000-4000-8000-0000000a5009';
+  const ahora = new Date('2026-10-07T15:00:00Z');
+  const corregir = (quien: typeof ejecutivo, messageId: string) =>
+    quien((tx) => reclassifyInboxMessage(tx, { messageId, intent: 'interested', now: ahora }));
+  const negociosDe = (companyId: string) =>
+    t.db.asWorker((tx) => tx.query<{ id: string; creator_id: string | null; stage_id: string }>(
+      'SELECT id, creator_id, stage_id FROM deal WHERE company_id = $1 ORDER BY created_at', [companyId],
+    )).then((r) => r.rows);
+  const intencionDe = (messageId: string) =>
+    t.db.asWorker((tx) => tx.query<{ intent: string | null }>('SELECT intent FROM outbound_message WHERE id = $1', [messageId]))
+      .then((r) => r.rows[0]?.intent ?? null);
+
+  before(async () => {
+    await t.admin(`
+      INSERT INTO creator_profile (id, workspace_id, display_name) VALUES ('${CREADOR_E}', '${WS_AGENCIA}', 'Creadora E') ON CONFLICT DO NOTHING;
+      INSERT INTO company (id, name, owner_workspace_id) VALUES
+        ('${MARCA_NUEVA}', 'Marca nueva ACC-7', '${WS_AGENCIA}'), ('${MARCA_DE_B}', 'Marca de B ACC-7', '${WS_AGENCIA}')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO company_link (workspace_id, company_id, relationship) VALUES
+        ('${WS_AGENCIA}', '${MARCA_NUEVA}', 'prospect'), ('${WS_AGENCIA}', '${MARCA_DE_B}', 'prospect')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO deal (id, workspace_id, company_id, creator_id, name, stage_id)
+        VALUES ('${DEAL_DE_B}', '${WS_AGENCIA}', '${MARCA_DE_B}', '${CREADOR_B}', 'Lo de B', 'contactado') ON CONFLICT DO NOTHING;
+      INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES
+        ('${CONTACTO_NUEVA}', '${MARCA_NUEVA}', '${WS_AGENCIA}', 'Nora Nueva', 'nora@nueva-acc7.test', 'user_provided'),
+        ('${CONTACTO_DE_B}', '${MARCA_DE_B}', '${WS_AGENCIA}', 'Beto De B', 'beto@deb-acc7.test', 'user_provided')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO outbound_message (id, workspace_id, contact_id, deal_id, direction, channel, thread_ref, provider_message_id, body,
+                                    occurred_at, intent, intent_confidence, intent_source, classified_at) VALUES
+        ('${MSG_NUEVA}', '${WS_AGENCIA}', '${CONTACTO_NUEVA}', NULL, 'inbound', 'email', 'hilo-acc7-n', 'acc7-n', 'Cuéntame más.',
+         '2026-10-07T14:00:00Z', 'ambiguous', 0.4, 'model', now()),
+        ('${MSG_DE_B}', '${WS_AGENCIA}', '${CONTACTO_DE_B}', NULL, 'inbound', 'email', 'hilo-acc7-b', 'acc7-b', 'Me interesa.',
+         '2026-10-07T14:00:00Z', 'ambiguous', 0.4, 'model', now()),
+        ('${MSG_ENLAZADO}', '${WS_AGENCIA}', '${CONTACTO_NUEVA}', '${DEAL_DE_B}', 'inbound', 'email', 'hilo-acc7-e', 'acc7-e', 'Sí.',
+         '2026-10-07T14:30:00Z', 'ambiguous', 0.4, 'model', now())
+      ON CONFLICT DO NOTHING;
+    `);
+  });
+
+  test('acotado a dos creadores y la marca sin negocio: la intención queda, el negocio no se abre, y lo dice', async () => {
+    await t.admin(`INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+                   VALUES ('${WS_AGENCIA}', '${EJECUTIVO_A}', 'creator', '${CREADOR_E}') ON CONFLICT DO NOTHING`);
+    try {
+      const r = await corregir(ejecutivo, MSG_NUEVA);
+      assert.deepEqual(r, { ok: true, intent: 'interested', dealMoved: false, optOut: false, optOutReview: false, dealNeedsCreator: true });
+      assert.equal(await intencionDe(MSG_NUEVA), 'interested');
+      assert.deepEqual(await negociosDe(MARCA_NUEVA), [], 'ni un negocio sin creador (que la política rechazaría) ni uno adivinado');
+    } finally {
+      await t.admin(`DELETE FROM membership_scope WHERE user_id = '${EJECUTIVO_A}' AND scope_id = '${CREADOR_E}'`);
+    }
+    // Con un solo creador en su alcance, la misma corrección abre el negocio a su nombre.
+    const r = await corregir(ejecutivo, MSG_NUEVA);
+    assert.equal(r.ok && r.dealNeedsCreator, false);
+    const negocios = await negociosDe(MARCA_NUEVA);
+    assert.equal(negocios.length, 1);
+    assert.equal(negocios[0]?.creator_id, CREADOR_A);
+    assert.equal(negocios[0]?.stage_id, 'conversacion');
+  });
+
+  test('la marca ya tiene un negocio abierto de otro creador: no abre un segundo, no toca nada y lo dice', async () => {
+    assert.equal(await ejecutivo((tx) => hasOpenDealOutOfScope(tx, MARCA_DE_B)), true);
+    assert.deepEqual(await corregir(ejecutivo, MSG_DE_B), { ok: false, code: 'out_of_scope' });
+    assert.equal(await intencionDe(MSG_DE_B), 'ambiguous', 'la intención no cambió');
+    assert.deepEqual(await negociosDe(MARCA_DE_B), [{ id: DEAL_DE_B, creator_id: CREADOR_B, stage_id: 'contactado' }]);
+    // Quien ve a todos sí: mueve el negocio de B, sin abrir otro.
+    assert.equal(await duenaAgencia((tx) => hasOpenDealOutOfScope(tx, MARCA_DE_B)), false);
+    const r = await corregir(duenaAgencia, MSG_DE_B);
+    assert.equal(r.ok && r.dealMoved, true);
+    assert.deepEqual(await negociosDe(MARCA_DE_B), [{ id: DEAL_DE_B, creator_id: CREADOR_B, stage_id: 'conversacion' }]);
+  });
+
+  test('el mensaje apunta a un negocio que no ve: tampoco, aunque la marca tenga uno suyo', async () => {
+    assert.deepEqual(await corregir(ejecutivo, MSG_ENLAZADO), { ok: false, code: 'out_of_scope' });
+    assert.equal(await intencionDe(MSG_ENLAZADO), 'ambiguous');
+    assert.equal(await ejecutivo((tx) => hasOpenDealOutOfScope(tx, MARCA_NUEVA)), false, 'el de la marca nueva es de A: lo ve');
+  });
+});
+
+describe('de qué creador es un negocio: verlo y cambiarlo (ronda 2, hallazgo 6)', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
+  const ejecutivo = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => como(WS_AGENCIA, EJECUTIVO_A, fn);
+  const duenaAgencia = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => como(WS_AGENCIA, DUENA_AGENCIA, fn);
+  const DEAL_SIN = '0000000c-0000-4000-8000-00000000dea9';
+
+  before(async () => {
+    await t.admin(`INSERT INTO deal (id, workspace_id, company_id, creator_id, name, stage_id)
+                   VALUES ('${DEAL_SIN}', '${WS_AGENCIA}', '${MARCA_AGENCIA}', NULL, 'Sin creador ACC-7', 'nuevo') ON CONFLICT DO NOTHING`);
+  });
+
+  test('el pipeline dice el creador de cada negocio, o que no tiene', async () => {
+    const filas = await duenaAgencia((tx) => listPipeline(tx, { companyId: MARCA_AGENCIA }));
+    const sin = filas.find((d) => d.id === DEAL_SIN);
+    assert.deepEqual([sin?.creatorId, sin?.creatorName], [null, null]);
+    assert.ok(filas.some((d) => d.creatorId === CREADOR_A && d.creatorName === 'Creador A'));
+  });
+
+  test('la dueña lo asigna (con su bitácora) y el ejecutivo pasa a verlo; él no lo deja sin creador ni lo pasa a otro', async () => {
+    assert.deepEqual(await duenaAgencia((tx) => setDealCreator(tx, DEAL_SIN, CREADOR_A)), { changed: true });
+    assert.deepEqual(await duenaAgencia((tx) => setDealCreator(tx, DEAL_SIN, CREADOR_A)), { changed: false }, 'lo mismo no cambia nada');
+    const bitacora = await duenaAgencia((tx) => tx.query<{ action: string; before: unknown; after: unknown }>(
+      'SELECT action, before, after FROM audit_log WHERE entity_id = $1 ORDER BY id', [DEAL_SIN],
+    )).then((r) => r.rows);
+    assert.deepEqual(bitacora, [{ action: 'deal.creator_changed', before: { creatorId: null }, after: { creatorId: CREADOR_A } }]);
+    assert.ok((await ejecutivo((tx) => listPipeline(tx, { companyId: MARCA_AGENCIA }))).some((d) => d.id === DEAL_SIN));
+
+    await assert.rejects(ejecutivo((tx) => setDealCreator(tx, DEAL_SIN, null)), ScopeError, 'sin creador se le iría de las manos');
+    await assert.rejects(ejecutivo((tx) => setDealCreator(tx, DEAL_SIN, CREADOR_B)), ScopeError, 'B no es de su alcance');
+    await assert.rejects(
+      ejecutivo((tx) => setDealCreator(tx, DEAL_SIN, '0000000c-0000-4000-8000-00000000dead')),
+      (e: unknown) => e instanceof VentasError && e.code === 'InvalidCreator',
+    );
+    // La dueña lo devuelve a «sin creador»: el ejecutivo deja de verlo, y no lo puede tocar.
+    assert.deepEqual(await duenaAgencia((tx) => setDealCreator(tx, DEAL_SIN, null)), { changed: true });
+    await assert.rejects(
+      ejecutivo((tx) => setDealCreator(tx, DEAL_SIN, CREADOR_A)),
+      (e: unknown) => e instanceof VentasError && e.code === 'DealNotFound',
+    );
   });
 });
 
@@ -546,7 +734,8 @@ describe('la guardia del esquema exige la política en las cuatro tablas', { tim
 
   test('si alguien reescribe session_sees_all_creators() o el disparador para que no acoten, la guardia lo dice', async () => {
     assert.deepEqual(Object.keys(CUERPOS_DEL_ALCANCE).sort(), [
-      'membership_full_role_unscoped()', 'scope_allows(text,uuid)', 'scope_allows(text,uuid[])', 'session_sees_all_creators()',
+      'creators_for_session(uuid)', 'membership_full_role_unscoped()', 'open_deal_out_of_scope(uuid)', 'scope_allows(text,uuid)',
+      'scope_allows(text,uuid[])', 'session_sees_all_creators()', 'sole_creator_for_session(uuid)',
     ]);
     const sondas = [
       {
@@ -603,3 +792,105 @@ describe('la guardia del esquema exige la política en las cuatro tablas', { tim
     assert.deepEqual((await estadoDelEsquema(t.db)).alcancePorCreador, []);
   });
 });
+
+describe('0082 en una base con datos: los negocios de antes y la guardia de §2 (ronda 2, hallazgos 5, 10 y 11)', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
+  const WS_LEGADO = '0000000e-0000-4000-8000-000000000001';
+  const DUENA_LEGADO = '0000000e-0000-4000-8000-000000000002';
+  const MANAGER_LEGADO = '0000000e-0000-4000-8000-000000000003';
+  const CREADORA_LEGADO = '0000000e-0000-4000-8000-000000000004';
+  const MARCA_LEGADO = '0000000e-0000-4000-8000-0000000000e1';
+  const DEAL_LEGADO = '0000000e-0000-4000-8000-00000000dea1';
+  const CAMPANA_LEGADO = '0000000e-0000-4000-8000-000000ca0001';
+  const DEAL_AGENCIA_LEGADO = '0000000e-0000-4000-8000-00000000dea2';
+  const manager = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => como(WS_LEGADO, MANAGER_LEGADO, fn);
+  /** 0082 como la aplica el integrador: con el rol que migra, dueño de las tablas y con su RLS forzada. */
+  const aplicar0082 = async () => t.admin(`SET ROLE ${migratorRole(t)}; ${await readFile(MIGRACION, 'utf8')}; RESET ROLE`);
+
+  before(async () => {
+    await t.admin(`
+      INSERT INTO workspace (id, slug, name, kind) VALUES ('${WS_LEGADO}', 'acc7-legado', 'Espacio de antes', 'creator') ON CONFLICT DO NOTHING;
+      INSERT INTO app_user (id, email) VALUES
+        ('${DUENA_LEGADO}', 'duena.legado@ejemplo.com'), ('${MANAGER_LEGADO}', 'manager.legado@ejemplo.com')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES
+        ('${WS_LEGADO}', '${DUENA_LEGADO}', system_role_id('creator', 'owner')),
+        ('${WS_LEGADO}', '${MANAGER_LEGADO}', system_role_id('creator', 'manager'))
+      ON CONFLICT DO NOTHING;
+      INSERT INTO creator_profile (id, workspace_id, display_name) VALUES ('${CREADORA_LEGADO}', '${WS_LEGADO}', 'La de antes') ON CONFLICT DO NOTHING;
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+        VALUES ('${WS_LEGADO}', '${MANAGER_LEGADO}', 'creator', '${CREADORA_LEGADO}') ON CONFLICT DO NOTHING;
+      INSERT INTO company (id, name, owner_workspace_id) VALUES ('${MARCA_LEGADO}', 'Marca de antes', '${WS_LEGADO}') ON CONFLICT DO NOTHING;
+      INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS_LEGADO}', '${MARCA_LEGADO}', 'client') ON CONFLICT DO NOTHING;
+      INSERT INTO deal (id, workspace_id, company_id, creator_id, name, stage_id)
+        VALUES ('${DEAL_LEGADO}', '${WS_LEGADO}', '${MARCA_LEGADO}', NULL, 'Negocio de antes de ACC-7', 'nuevo') ON CONFLICT DO NOTHING;
+      ALTER TABLE deal DISABLE TRIGGER deal_updated;
+      UPDATE deal SET updated_at = '2026-09-01T10:00:00Z' WHERE id = '${DEAL_LEGADO}';
+      ALTER TABLE deal ENABLE TRIGGER deal_updated;
+      INSERT INTO campaign (id, workspace_id, company_id, creator_id, name, status)
+        VALUES ('${CAMPANA_LEGADO}', '${WS_LEGADO}', '${MARCA_LEGADO}', NULL, 'Campaña de antes', 'planned') ON CONFLICT DO NOTHING;
+      INSERT INTO deal (id, workspace_id, company_id, creator_id, name, stage_id)
+        VALUES ('${DEAL_AGENCIA_LEGADO}', '${WS_AGENCIA}', '${MARCA_AGENCIA}', NULL, 'De la agencia, de antes', 'nuevo') ON CONFLICT DO NOTHING;
+    `);
+  });
+
+  test('en un espacio de una sola creadora, el negocio y la campaña de antes pasan a ser suyos y su mánager acotado los ve', async () => {
+    const vistos = () => manager(async (tx) => ({
+      negocio: (await tx.query('SELECT 1 FROM deal WHERE id = $1', [DEAL_LEGADO])).rows.length,
+      campana: (await tx.query('SELECT 1 FROM campaign WHERE id = $1', [CAMPANA_LEGADO])).rows.length,
+    }));
+    assert.deepEqual(await vistos(), { negocio: 0, campana: 0 }, 'antes del relleno, un NULL no cae en su alcance');
+    await aplicar0082();
+    assert.deepEqual(await vistos(), { negocio: 1, campana: 1 });
+    const fila = await t.db.asWorker((tx) => tx.query<{ creator_id: string; updated_at: string }>(
+      `SELECT creator_id, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') AS updated_at FROM deal WHERE id = $1`,
+      [DEAL_LEGADO],
+    )).then((r) => r.rows[0]);
+    assert.deepEqual(fila, { creator_id: CREADORA_LEGADO, updated_at: '2026-09-01T10:00:00' }, 'a nombre de su creadora y sin tocar updated_at');
+    // Con varios creadores no se adivina: el de la agencia sigue sin creador.
+    const deLaAgencia = await t.db.asWorker((tx) => tx.query<{ creator_id: string | null }>(
+      'SELECT creator_id FROM deal WHERE id = $1', [DEAL_AGENCIA_LEGADO],
+    )).then((r) => r.rows);
+    assert.deepEqual(deLaAgencia, [{ creator_id: null }]);
+    // Lo nuevo del espacio, en el worker, nace a nombre de la misma creadora.
+    assert.deepEqual(await t.db.asWorker((tx) => soleCreatorFor(tx, WS_LEGADO)), { creatorId: CREADORA_LEGADO, seesAll: true });
+    const sinFuerza = await t.raw<{ relname: string }>(
+      `SELECT relname::text FROM pg_class
+        WHERE relnamespace = 'public'::regnamespace AND NOT relforcerowsecurity
+          AND relname IN ('deal', 'campaign', 'creator_profile', 'membership_scope', 'membership', 'role')`,
+    );
+    assert.deepEqual(sinFuerza, [], 'las tablas vuelven a tener FORCE');
+    const apagados = await t.raw<{ tgname: string }>(
+      `SELECT tgname::text FROM pg_trigger WHERE tgname IN ('deal_updated', 'campaign_updated') AND tgenabled = 'D'`,
+    );
+    assert.deepEqual(apagados, [], 'y los disparadores de updated_at, encendidos');
+  });
+
+  test('si ya hubiera alcance de una Dueña, la migración se para aunque quien migra no vea esa fila con su RLS', async () => {
+    await t.admin(`
+      ALTER TABLE membership_scope DISABLE TRIGGER membership_scope_full_role_unscoped;
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+        VALUES ('${WS_LEGADO}', '${DUENA_LEGADO}', 'creator', '${CREADORA_LEGADO}');
+      ALTER TABLE membership_scope ENABLE TRIGGER membership_scope_full_role_unscoped;
+    `);
+    try {
+      // Quien migra, con su RLS forzada y sin espacio fijado, no ve esa
+      // fila (lo demuestra «una fila de alcance cuya membresía la
+      // transacción no ve»): por eso §2 le quita FORCE para preguntar.
+      await assert.rejects(aplicar0082(), (err: unknown) =>
+        /hay filas de membership_scope de personas con rol Dueño o Administrador/.test(mensajeDe(err)));
+    } finally {
+      await t.admin(`RESET ROLE; DELETE FROM membership_scope WHERE user_id = '${DUENA_LEGADO}'`);
+    }
+    await aplicar0082();
+    assert.deepEqual((await estadoDelEsquema(t.db)).alcancePorCreador, []);
+  });
+});
+
+/** El texto de un error y de toda su cadena `cause`. */
+function mensajeDe(err: unknown): string {
+  const partes: string[] = [];
+  for (let e: unknown = err; typeof e === 'object' && e !== null; e = (e as { cause?: unknown }).cause) {
+    partes.push(String((e as { message?: unknown }).message ?? ''));
+  }
+  return partes.join(' | ');
+}

@@ -4,9 +4,10 @@
  * descartarlas y rechazar una marca. Dueño: Rasheed.
  */
 import { isUuid, type WorkspaceTx } from '../../client.ts';
-import { ScopeError, soleCreatorSql } from '../../scope.ts';
+import { audit } from '../../audit.ts';
+import { ScopeError } from '../../scope.ts';
 import { addExcludedCompany, BRIEF_LIMITS, BriefError, briefSignalLateralSql, briefVerdictSql, type BriefVerdict } from '../brief.ts';
-import { CompanyNotFound, DuplicateCompanyName, normalizeDomain, SignalAlreadyReviewed, SignalNotFound, type SignalRow, type SignalStatus, VentasError } from './comun.ts';
+import { CompanyNotFound, DealNotFound, DuplicateCompanyName, normalizeDomain, SignalAlreadyReviewed, SignalNotFound, type SignalRow, type SignalStatus, VentasError } from './comun.ts';
 import { dueInBusinessDays, normalizeCountry, safeLimit, type SignalRowSql, toSignalRow, truncate } from './interno.ts';
 
 export interface ListSignalsParams {
@@ -938,39 +939,66 @@ export interface CreateDealInput {
   creatorId?: string | null;
 }
 
-/** Un creador que se puede elegir para un negocio nuevo. */
+/** Un creador que se puede elegir para un negocio. */
 export interface DealCreatorOption {
   id: string;
   name: string;
 }
 
-/** Los creadores para «Nuevo negocio», y si elegir uno es obligatorio. */
+/** Los creadores para «Nuevo negocio» y para cambiar el de un negocio, y si elegir uno es obligatorio. */
 export interface DealCreatorOptions {
   creators: DealCreatorOption[];
   /**
-   * Quien está acotado por creador y lleva a varios tiene que elegir: un
-   * negocio sin creador quedaría fuera de su alcance y no lo vería
-   * (ACC-6 D4). Quien ve a todos puede dejarlo «Sin creador», como hasta
-   * hoy. Con un solo creador no se pregunta: es ese.
+   * Quien está acotado por creador tiene que elegir cuando no lleva
+   * exactamente uno: un negocio sin creador quedaría fuera de su alcance
+   * y no lo vería (ACC-6 D4). Quien ve a todos puede dejarlo «Sin
+   * creador», como hasta hoy. Con un solo creador no se pregunta: es
+   * ese. Acotado y sin ninguno (su alcance apunta a creadores dados de
+   * baja), es obligatorio y no hay a quién: no puede abrir negocios.
    */
   required: boolean;
+  /** `session_sees_all_creators()`: si puede dejar o pasar un negocio a «Sin creador». */
+  seesAll: boolean;
 }
 
 /**
  * Los creadores vivos que la persona de la transacción puede poner en un
- * negocio: los de su alcance por creador, o todos los del espacio si no
- * lo tiene (scope_allows, 0040). Ordenados por nombre.
+ * negocio, ordenados por nombre, y si ve a todos. Es LA lectura del
+ * selector de la ficha y de las altas (creatorForNewDeal, setDealCreator):
+ * los dos cuentan de `creators_for_session()` (0082 §1b), la misma lista
+ * que usa el worker al abrir el negocio de una respuesta. Un alcance a
+ * un creador dado de baja no aparece. «Ve a todos» se pregunta en su
+ * propia consulta, no se deduce de la primera fila: sin creadores no hay
+ * filas.
  */
 export async function listDealCreatorOptions(tx: WorkspaceTx): Promise<DealCreatorOptions> {
-  const { rows } = await tx.query<{ id: string; name: string; all: boolean }>(
-    `SELECT cp.id, cp.display_name AS name, session_sees_all_creators() AS all
-       FROM creator_profile cp
-      WHERE cp.deleted_at IS NULL AND scope_allows('creator', cp.id)
+  const { rows } = await tx.query<{ id: string; name: string }>(
+    `SELECT cp.id, cp.display_name AS name
+       FROM creators_for_session(current_workspace_id()) AS e(id)
+       JOIN creator_profile cp ON cp.id = e.id
       ORDER BY lower(cp.display_name), cp.id`,
   );
+  const todos = await tx.query<{ all: boolean }>('SELECT session_sees_all_creators() AS all');
+  // Sin respuesta, acotada: cerrado, nunca abierto.
+  const seesAll = todos.rows[0]?.all === true;
   const creators = rows.map((r) => ({ id: r.id, name: r.name }));
-  const seesAll = rows[0]?.all ?? true;
-  return { creators, required: !seesAll && creators.length > 1 };
+  return { creators, required: !seesAll && creators.length !== 1, seesAll };
+}
+
+/**
+ * Un creador elegido a mano para un negocio: tiene que ser un creador
+ * vivo del espacio (InvalidCreator) y estar entre los que la persona
+ * puede poner (ScopeError). La misma lista que el selector.
+ */
+async function assertChosenCreator(tx: WorkspaceTx, chosen: string): Promise<void> {
+  if (!isUuid(chosen)) throw new VentasError('InvalidCreator');
+  const { rows } = await tx.query<{ ok: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM creators_for_session(current_workspace_id()) AS e(id) WHERE e.id = cp.id) AS ok
+       FROM creator_profile cp WHERE cp.id = $1 AND cp.deleted_at IS NULL`,
+    [chosen],
+  );
+  if (rows.length === 0) throw new VentasError('InvalidCreator');
+  if (rows[0]?.ok !== true) throw new ScopeError();
 }
 
 /**
@@ -979,29 +1007,72 @@ export async function listDealCreatorOptions(tx: WorkspaceTx): Promise<DealCreat
  * de quien la escribe; aquí se decide ANTES, para decirlo en el idioma
  * de la pantalla y no con un 42501:
  *
- *   · si llega uno elegido, tiene que ser un creador vivo del espacio
- *     (InvalidCreator) y caer en el alcance de quien abre (ScopeError);
- *   · si no, el único del espacio o del alcance (soleCreatorSql); y si no
- *     hay uno solo, NULL para quien ve a todos («sin creador», como hasta
- *     hoy) y DealCreatorRequired para quien está acotado.
+ *   · si llega uno elegido, assertChosenCreator (InvalidCreator,
+ *     ScopeError);
+ *   · si no, el único de listDealCreatorOptions; con varios, NULL para
+ *     quien ve a todos («sin creador», como hasta hoy) y
+ *     DealCreatorRequired para quien está acotado; acotado y sin
+ *     ninguno, NoCreatorInScope.
  */
 export async function creatorForNewDeal(tx: WorkspaceTx, chosen: string | null | undefined): Promise<string | null> {
   if (chosen) {
-    if (!isUuid(chosen)) throw new VentasError('InvalidCreator');
-    const { rows } = await tx.query<{ ok: boolean }>(
-      `SELECT scope_allows('creator', cp.id) AS ok FROM creator_profile cp WHERE cp.id = $1 AND cp.deleted_at IS NULL`,
-      [chosen],
-    );
-    if (rows.length === 0) throw new VentasError('InvalidCreator');
-    if (rows[0]?.ok !== true) throw new ScopeError();
+    await assertChosenCreator(tx, chosen);
     return chosen;
   }
-  const { rows } = await tx.query<{ id: string | null; all: boolean }>(
-    `SELECT ${soleCreatorSql()} AS id, session_sees_all_creators() AS all`,
-  );
-  const id = rows[0]?.id ?? null;
-  if (id === null && rows[0]?.all === false) throw new VentasError('DealCreatorRequired');
-  return id;
+  const { creators, seesAll } = await listDealCreatorOptions(tx);
+  if (creators.length === 1) return creators[0]!.id;
+  if (seesAll) return null;
+  throw new VentasError(creators.length === 0 ? 'NoCreatorInScope' : 'DealCreatorRequired');
+}
+
+/**
+ * Cambia de qué creador es un negocio (ACC-7, hallazgo 6 de la ronda 2):
+ * hasta ahora solo se elegía al abrirlo, y un negocio «Sin creador» o
+ * del creador equivocado no tenía arreglo desde la pantalla.
+ *
+ *   · `creatorId` elegido: assertChosenCreator, como al abrirlo;
+ *   · `null` («Sin creador»): solo quien ve a todos. A quien está acotado
+ *     el negocio se le iría de las manos (ScopeError).
+ *
+ * El negocio tiene que verse (si no, DealNotFound: el de otro creador no
+ * existe para quien está acotado). Deja su fila en audit_log
+ * ('deal.creator_changed', el creador antes y después). Devuelve si
+ * cambió algo.
+ */
+export async function setDealCreator(tx: WorkspaceTx, dealId: string, creatorId: string | null): Promise<{ changed: boolean }> {
+  if (!isUuid(dealId)) throw new DealNotFound();
+  const antes = (await tx.query<{ creator_id: string | null }>('SELECT creator_id FROM deal WHERE id = $1 FOR UPDATE', [dealId])).rows[0];
+  if (!antes) throw new DealNotFound();
+  if (creatorId) {
+    await assertChosenCreator(tx, creatorId);
+  } else {
+    const todos = await tx.query<{ all: boolean }>('SELECT session_sees_all_creators() AS all');
+    if (todos.rows[0]?.all !== true) throw new ScopeError();
+  }
+  if (antes.creator_id === creatorId) return { changed: false };
+  const { rows } = await tx.query<{ id: string }>('UPDATE deal SET creator_id = $2::uuid WHERE id = $1 RETURNING id', [dealId, creatorId]);
+  if (!rows[0]) throw new DealNotFound();
+  await audit(tx, {
+    action: 'deal.creator_changed',
+    entityType: 'deal',
+    entityId: dealId,
+    before: { creatorId: antes.creator_id },
+    after: { creatorId },
+  });
+  return { changed: true };
+}
+
+/**
+ * ¿Esta marca tiene un negocio abierto que la persona no ve por su
+ * alcance por creador? Sí o no, sin decir cuál ni cuántos
+ * (open_deal_out_of_scope, 0082 §6). Para que la ficha explique la
+ * ausencia en vez de enseñar un pipeline incompleto sin decirlo. Falso
+ * para quien ve a todos.
+ */
+export async function hasOpenDealOutOfScope(tx: WorkspaceTx, companyId: string): Promise<boolean> {
+  if (!isUuid(companyId)) return false;
+  const { rows } = await tx.query<{ v: boolean }>('SELECT open_deal_out_of_scope($1::uuid) AS v', [companyId]);
+  return rows[0]?.v === true;
 }
 
 /**

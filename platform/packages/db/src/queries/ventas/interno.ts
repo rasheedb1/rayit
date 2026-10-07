@@ -175,6 +175,7 @@ export interface PipelineRowSql {
   due_state: DueState; last_contact_at: string | null; last_contact_days: number | null;
   expected_close_date: string | null; is_won: boolean; is_lost: boolean;
   owner_user_id: string | null; owner_name: string | null; days_in_stage: number; lost_reason: LostReason | null;
+  creator_id: string | null; creator_name: string | null;
 }
 
 export function toPipelineRow(r: PipelineRowSql): PipelineDealRow {
@@ -206,6 +207,8 @@ export function toPipelineRow(r: PipelineRowSql): PipelineDealRow {
     ownerUserId: r.owner_user_id,
     ownerName: r.owner_name,
     lostReason: r.is_lost ? r.lost_reason : null,
+    creatorId: r.creator_id,
+    creatorName: r.creator_id ? r.creator_name : null,
   };
 }
 

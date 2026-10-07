@@ -116,6 +116,27 @@ describe("las demás acciones", () => {
     expect(await corregirIntencion({ messageId: MSG, intent: "interested" })).toEqual({ ok: false, error: t.errores.opted_out });
   });
 
+  it("corregir con alcance por creador (ACC-7): fuera de alcance, sin negocio por no saber de quién es, y el 42501 de la política", async () => {
+    reclassifyInboxMessage.mockResolvedValue({ ok: false, code: "out_of_scope" });
+    expect(await corregirIntencion({ messageId: MSG, intent: "interested" })).toEqual({ ok: false, error: t.errores.out_of_scope });
+    reclassifyInboxMessage.mockResolvedValue({
+      ok: true, intent: "interested", dealMoved: false, optOut: false, optOutReview: false, dealNeedsCreator: true,
+    });
+    expect(await corregirIntencion({ messageId: MSG, intent: "interested" })).toEqual({
+      ok: true, notice: t.corregir.listoSinNegocio("interesada"),
+    });
+    // Lo que @mc/db no previó y la política rechazó llega como lo que es, no como el genérico.
+    const politica = Object.assign(new Error('new row violates row-level security policy "deal_creator_scope" for table "deal"'), {
+      code: "42501",
+    });
+    reclassifyInboxMessage.mockRejectedValue(new Error("Failed query", { cause: politica }));
+    expect(await corregirIntencion({ messageId: MSG, intent: "interested" })).toEqual({ ok: false, error: t.errores.out_of_scope });
+    reclassifyInboxMessage.mockRejectedValue(new Error("otra cosa"));
+    const consola = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await corregirIntencion({ messageId: MSG, intent: "interested" })).toEqual({ ok: false, error: t.errores.accion });
+    consola.mockRestore();
+  });
+
   it("corregir a «fuera de la oficina» lleva la fecha de vuelta escrita; vacía o en otra intención, ninguna", async () => {
     reclassifyInboxMessage.mockResolvedValue({ ok: true, intent: "ooo", dealMoved: false, optOut: false, optOutReview: false });
     await corregirIntencion({ messageId: MSG, intent: "ooo", returnDate: "2026-10-06" });

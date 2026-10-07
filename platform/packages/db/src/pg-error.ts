@@ -3,9 +3,12 @@
  *
  * node-postgres lanza el error de Postgres tal cual, pero Drizzle y
  * PGlite lo envuelven en otro y lo dejan en `cause`. Todo lo que en
- * @mc/db reconoce un error por su código (23505, 23514, 42501…) y por el
- * nombre de su restricción recorre la cadena aquí, una sola vez, y nunca
- * por el texto del mensaje, que depende del idioma del servidor.
+ * @mc/db reconoce un error de Postgres (23505, 23514, 42501…) recorre la
+ * cadena aquí, una sola vez: por su código y el nombre de su
+ * restricción, nunca por el texto del mensaje, que depende del idioma
+ * del servidor. La única excepción es la que Postgres no deja en ningún
+ * campo —qué política rechazó una fila—, y para eso está `matches`
+ * (scopeErrorOf).
  */
 
 /** Lo que interesa de un error de Postgres: su código SQLSTATE, la restricción y el mensaje. */
@@ -16,13 +19,21 @@ export interface PgLikeError {
 }
 
 /**
- * El primer error de la cadena `cause` con ese código y, si se da, esa
- * restricción. `null` si no hay ninguno.
+ * El primer error de la cadena `cause` con ese código, esa restricción
+ * (si se da) y que cumpla `matches` (si se da). `null` si no hay ninguno.
  */
-export function findPgError(err: unknown, code: string, constraint?: string): PgLikeError | null {
+export function findPgError(
+  err: unknown,
+  code: string,
+  constraint?: string,
+  matches?: (p: PgLikeError) => boolean,
+): PgLikeError | null {
   for (let e: unknown = err; typeof e === 'object' && e !== null; e = (e as { cause?: unknown }).cause) {
     const p = e as PgLikeError;
-    if (p.code === code && (constraint === undefined || p.constraint === constraint)) return p;
+    if (p.code !== code) continue;
+    if (constraint !== undefined && p.constraint !== constraint) continue;
+    if (matches !== undefined && !matches(p)) continue;
+    return p;
   }
   return null;
 }

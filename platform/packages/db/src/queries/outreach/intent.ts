@@ -55,7 +55,7 @@ import { cleanReferral, MESSAGE_INTENTS, notNowResumeAt, oooResumeAt, type Messa
 import { noticeLang } from '@mc/core/outreach/messages';
 import { zonedInstant, zonedParts } from '@mc/core/outreach/schedule';
 import type { SqlExecutor, WorkerSql } from '../../client.ts';
-import { soleCreatorSql } from '../../scope.ts';
+import { soleCreatorFor } from '../../scope.ts';
 import { advanceEnrollment, cancelPendingForEnrollment } from './enroll.ts';
 import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
 import { applyReplyOptOut, cancelLoosePitches, type InboundEffectsInput } from './inbound.ts';
@@ -271,6 +271,14 @@ export interface IntentEffects {
    * el interesado no llegaba nunca al pipeline.
    */
   dealCreated: boolean;
+  /**
+   * Un «me interesa» corregido desde la bandeja por quien está acotado a
+   * varios creadores (o a ninguno vivo), sin negocio abierto con la
+   * marca: la intención queda escrita, pero el negocio no se abre porque
+   * no se sabe de qué creador es (openDealFromReply). La bandeja lo dice.
+   * Nunca en el worker, que no tiene alcance.
+   */
+  dealNeedsCreator: boolean;
   /** La cadencia del hilo quedó en enfriamiento o en pausa hasta esta fecha. */
   resumeAt: Date | null;
   /** Toques devueltos a la cola por un «fuera de la oficina» que había detenido la cadencia. */
@@ -320,28 +328,39 @@ async function surroundings(tx: SqlExecutor, m: UnclassifiedMessage): Promise<Su
  * Abre el negocio de un «me interesa» que llegó sin negocio abierto con la
  * marca: nace en «En conversación», en la moneda del workspace, con
  * «Responder hoy» y su vencimiento, su primera fila de historial y el
- * dueño que enroló (si sigue en el equipo). Su creador (ACC-7) es el
- * único del espacio, o el único del alcance de quien corrige la
- * intención desde la bandeja (soleCreatorSql); con varios, sin creador,
- * como hasta hoy. Desde el worker no hay persona ni alcance. La cadencia y el mensaje del
+ * dueño que enroló (si sigue en el equipo). La cadencia y el mensaje del
  * hilo quedan enlazados a él: la siguiente respuesta ya lo encuentra.
+ *
+ * Su creador (ACC-7) es el único que la sesión puede poner
+ * (soleCreatorFor, sole_creator_for_session de 0082 §1b): en el worker,
+ * sin persona ni alcance, el único creador vivo del espacio o ninguno;
+ * desde la bandeja, el único del alcance de quien corrige. Si quien
+ * corrige está acotado por creador y no hay uno solo, NO se abre: un
+ * negocio sin creador quedaría fuera de su alcance (la política de deal
+ * lo rechazaría con 42501) y no hay a quién ponérselo sin preguntar.
+ * Devuelve `needsCreator` para que la bandeja diga que lo abra desde la
+ * ficha de la marca, eligiendo de qué creador es.
  */
 async function openDealFromReply(
   tx: SqlExecutor, m: UnclassifiedMessage, s: Surroundings, name: string, nextAction: string, due: Date,
-): Promise<string | null> {
-  if (!s.company_id) return null;
+): Promise<{ id: string | null; needsCreator: boolean }> {
+  if (!s.company_id) return { id: null, needsCreator: false };
+  const { creatorId, seesAll } = await soleCreatorFor(tx, m.workspaceId);
+  if (creatorId === null && !seesAll) return { id: null, needsCreator: true };
   const id = (
     await tx.query<{ id: string }>(
       `INSERT INTO deal (workspace_id, company_id, owner_user_id, name, stage_id, currency, next_action, next_action_due,
                          last_contact_at, creator_id)
-       SELECT w.id, $2::uuid, $3::uuid, $4, 'conversacion', w.currency, $5, $6::timestamptz, $7::timestamptz,
-              ${soleCreatorSql('w.id')}
+       SELECT w.id, $2::uuid, $3::uuid, $4, 'conversacion', w.currency, $5, $6::timestamptz, $7::timestamptz, $8::uuid
          FROM workspace w WHERE w.id = $1::uuid
        RETURNING id`,
-      [m.workspaceId, s.company_id, s.recipient, name.slice(0, 120), nextAction, due.toISOString(), m.occurredAt.toISOString()],
+      [
+        m.workspaceId, s.company_id, s.recipient, name.slice(0, 120), nextAction, due.toISOString(), m.occurredAt.toISOString(),
+        creatorId,
+      ],
     )
   ).rows[0]?.id;
-  if (!id) return null;
+  if (!id) return { id: null, needsCreator: false };
   await tx.query(
     `INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_by) VALUES ($1::uuid, NULL, 'conversacion', current_user_id())`,
     [id],
@@ -350,7 +369,7 @@ async function openDealFromReply(
     await tx.query(`UPDATE outbound_enrollment SET deal_id = $2::uuid WHERE id = $1::uuid AND deal_id IS NULL`, [m.enrollmentId, id]);
   }
   await tx.query(`UPDATE outbound_message SET deal_id = $2::uuid WHERE id = $1::uuid AND deal_id IS NULL`, [m.id, id]);
-  return id;
+  return { id, needsCreator: false };
 }
 
 /** Un aviso por mensaje y efecto, que lleva a su hilo en la bandeja. Idempotente. */
@@ -387,7 +406,7 @@ function longDate(at: Date, locale: string, timeZone: string): string {
 
 function emptyEffects(d: IntentDecision): IntentEffects {
   return {
-    applied: false, intent: d.intent, dealId: null, dealMoved: false, dealCreated: false, resumeAt: null, restored: [], canceled: [],
+    applied: false, intent: d.intent, dealId: null, dealMoved: false, dealCreated: false, dealNeedsCreator: false, resumeAt: null, restored: [], canceled: [],
     optOut: false, optOutReview: false, notified: false,
   };
 }
@@ -469,15 +488,16 @@ async function intentEffects(
         );
       } else {
         // Sin negocio abierto con la marca (el caso normal de una cadencia en frío): se abre en «En conversación».
-        const created = await openDealFromReply(
+        const opened = await openDealFromReply(
           tx, m, s, t.dealName(s.company ?? who), t.replyToday, endOfLocalDay(now, m.timeZone),
         );
-        if (created) {
-          s.deal_id = created;
-          out.dealId = created;
+        if (opened.id) {
+          s.deal_id = opened.id;
+          out.dealId = opened.id;
           out.dealCreated = true;
           out.dealMoved = true;
         }
+        out.dealNeedsCreator = opened.needsCreator;
       }
       // §5.7: «Interesado: se cancelan los toques pendientes». La respuesta
       // ya detuvo sus cadencias (stopOnReply), pero un pitch suelto a la
