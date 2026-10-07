@@ -33,6 +33,7 @@ import {
   importSignals,
   moveDeal,
   optOutContact,
+  setDealCreator,
   updateCompany,
   updateContact,
   type SignalDuplicateReason,
@@ -552,6 +553,42 @@ export async function crearNegocio(_prev: VentasState, formData: FormData): Prom
   }
   revalidateVentas(v.companyId);
   return { ok: true, notice: t.created(v.name), stamp: Date.now() };
+}
+
+const creadorNegocioSchema = z.object({
+  dealId: z.string().regex(UUID_RE, V.company),
+  companyId: z.string().regex(UUID_RE, V.company),
+  // Vacío: «Sin creador», que solo puede elegir quien ve a todos (setDealCreator lo comprueba).
+  creatorId: z.string().trim().refine((v) => v === "" || UUID_RE.test(v), V.creator),
+});
+
+/**
+ * Cambiar de qué creador es un negocio (ACC-7), desde la ficha de su
+ * marca. Las reglas son de setDealCreator: un creador del espacio y del
+ * alcance de quien lo cambia, y «Sin creador» solo para quien ve a
+ * todos. Deja su fila en la bitácora.
+ */
+export async function cambiarCreadorNegocio(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
+  const t = MESSAGES.empresas.detail.dealCreator;
+  const parsed = creadorNegocioSchema.safeParse({
+    dealId: field(formData, "dealId"),
+    companyId: field(formData, "companyId"),
+    creatorId: field(formData, "creatorId"),
+  });
+  if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
+  const v = parsed.data;
+  let r: { changed: boolean; creatorName: string | null };
+  try {
+    r = await withWorkspace((tx) => setDealCreator(tx, v.dealId, v.creatorId || null));
+  } catch (err) {
+    const message = messageOf(err, t.error);
+    if (err instanceof VentasError && err.code === "InvalidCreator") return { errors: { creatorId: message } };
+    return { message };
+  }
+  revalidateVentas(v.companyId);
+  if (!r.changed) return { ok: true, notice: t.unchanged, stamp: Date.now() };
+  return { ok: true, notice: r.creatorName ? t.saved(r.creatorName) : t.savedNone, stamp: Date.now() };
 }
 
 // ---------------------------------------------------------------------

@@ -22,18 +22,27 @@ import { useVentasForm } from "../../_lib/use-ventas-form";
  * pregunta (es ese). Con varios aparece el selector; quien ve a todos
  * puede dejarlo «Sin creador», y quien está acotado a varios tiene que
  * elegir, porque un negocio sin creador quedaría fuera de su alcance.
+ * Quien está acotado solo a creadores dados de baja no puede abrir
+ * ninguno (`canOpen`), y se le dice.
  */
 export function NuevoNegocio({
   companyId,
   currency,
   creators = [],
   creatorRequired = false,
+  canOpen = true,
 }: {
   companyId: string;
   currency: string;
   /** listDealCreatorOptions de @mc/db: los creadores que esta persona puede poner. */
   creators?: ReadonlyArray<{ id: string; name: string }>;
   creatorRequired?: boolean;
+  /**
+   * Falso para quien está acotado y no tiene ningún creador vivo en su
+   * alcance: no hay de quién abrir un negocio, y el botón lo dice en vez
+   * de llevar a un formulario que fallaría.
+   */
+  canOpen?: boolean;
 }) {
   const t = MESSAGES.empresas.detail.newDeal;
   const [open, setOpen] = useState(false);
@@ -44,6 +53,19 @@ export function NuevoNegocio({
     setNotice(s.notice);
     setOpen(false);
   });
+
+  if (!canOpen) {
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="secondary" size="sm" disabled aria-describedby="nuevo-negocio-sin-creadores">
+          {t.open}
+        </Button>
+        <p id="nuevo-negocio-sin-creadores" className="flex-1 text-xs leading-5 text-muted">
+          {t.noCreators}
+        </p>
+      </div>
+    );
+  }
 
   if (!open) {
     return (

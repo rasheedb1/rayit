@@ -48,4 +48,11 @@ describe("«Nuevo negocio»: de qué creador es (ACC-7)", () => {
     expect(screen.queryByRole("option", { name: t.creatorNone })).toBeNull();
     expect(screen.getByRole("option", { name: t.creatorPick })).toBeInTheDocument();
   });
+
+  it("acotada solo a creadores dados de baja: el botón no abre un formulario que fallaría, y dice por qué", () => {
+    render(<NuevoNegocio companyId={COMPANY} currency="COP" creators={[]} creatorRequired canOpen={false} />);
+    const boton = screen.getByRole("button", { name: t.open });
+    expect(boton).toBeDisabled();
+    expect(boton).toHaveAccessibleDescription(t.noCreators);
+  });
 });

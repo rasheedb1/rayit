@@ -575,8 +575,12 @@ describe('de qué creador es un negocio: verlo y cambiarlo (ronda 2, hallazgo 6)
   });
 
   test('la dueña lo asigna (con su bitácora) y el ejecutivo pasa a verlo; él no lo deja sin creador ni lo pasa a otro', async () => {
-    assert.deepEqual(await duenaAgencia((tx) => setDealCreator(tx, DEAL_SIN, CREADOR_A)), { changed: true });
-    assert.deepEqual(await duenaAgencia((tx) => setDealCreator(tx, DEAL_SIN, CREADOR_A)), { changed: false }, 'lo mismo no cambia nada');
+    assert.deepEqual(await duenaAgencia((tx) => setDealCreator(tx, DEAL_SIN, CREADOR_A)), { changed: true, creatorName: 'Creador A' });
+    assert.deepEqual(
+      await duenaAgencia((tx) => setDealCreator(tx, DEAL_SIN, CREADOR_A)),
+      { changed: false, creatorName: 'Creador A' },
+      'lo mismo no cambia nada',
+    );
     const bitacora = await duenaAgencia((tx) => tx.query<{ action: string; before: unknown; after: unknown }>(
       'SELECT action, before, after FROM audit_log WHERE entity_id = $1 ORDER BY id', [DEAL_SIN],
     )).then((r) => r.rows);
@@ -590,7 +594,7 @@ describe('de qué creador es un negocio: verlo y cambiarlo (ronda 2, hallazgo 6)
       (e: unknown) => e instanceof VentasError && e.code === 'InvalidCreator',
     );
     // La dueña lo devuelve a «sin creador»: el ejecutivo deja de verlo, y no lo puede tocar.
-    assert.deepEqual(await duenaAgencia((tx) => setDealCreator(tx, DEAL_SIN, null)), { changed: true });
+    assert.deepEqual(await duenaAgencia((tx) => setDealCreator(tx, DEAL_SIN, null)), { changed: true, creatorName: null });
     await assert.rejects(
       ejecutivo((tx) => setDealCreator(tx, DEAL_SIN, CREADOR_A)),
       (e: unknown) => e instanceof VentasError && e.code === 'DealNotFound',

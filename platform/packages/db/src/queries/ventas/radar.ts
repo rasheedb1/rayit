@@ -990,15 +990,18 @@ export async function listDealCreatorOptions(tx: WorkspaceTx): Promise<DealCreat
  * vivo del espacio (InvalidCreator) y estar entre los que la persona
  * puede poner (ScopeError). La misma lista que el selector.
  */
-async function assertChosenCreator(tx: WorkspaceTx, chosen: string): Promise<void> {
+async function assertChosenCreator(tx: WorkspaceTx, chosen: string): Promise<{ name: string }> {
   if (!isUuid(chosen)) throw new VentasError('InvalidCreator');
-  const { rows } = await tx.query<{ ok: boolean }>(
-    `SELECT EXISTS (SELECT 1 FROM creators_for_session(current_workspace_id()) AS e(id) WHERE e.id = cp.id) AS ok
+  const { rows } = await tx.query<{ ok: boolean; name: string }>(
+    `SELECT EXISTS (SELECT 1 FROM creators_for_session(current_workspace_id()) AS e(id) WHERE e.id = cp.id) AS ok,
+            cp.display_name AS name
        FROM creator_profile cp WHERE cp.id = $1 AND cp.deleted_at IS NULL`,
     [chosen],
   );
-  if (rows.length === 0) throw new VentasError('InvalidCreator');
-  if (rows[0]?.ok !== true) throw new ScopeError();
+  const row = rows[0];
+  if (!row) throw new VentasError('InvalidCreator');
+  if (row.ok !== true) throw new ScopeError();
+  return { name: row.name };
 }
 
 /**
@@ -1037,19 +1040,24 @@ export async function creatorForNewDeal(tx: WorkspaceTx, chosen: string | null |
  * El negocio tiene que verse (si no, DealNotFound: el de otro creador no
  * existe para quien está acotado). Deja su fila en audit_log
  * ('deal.creator_changed', el creador antes y después). Devuelve si
- * cambió algo.
+ * cambió algo y el nombre del creador elegido (null: «Sin creador»).
  */
-export async function setDealCreator(tx: WorkspaceTx, dealId: string, creatorId: string | null): Promise<{ changed: boolean }> {
+export async function setDealCreator(
+  tx: WorkspaceTx,
+  dealId: string,
+  creatorId: string | null,
+): Promise<{ changed: boolean; creatorName: string | null }> {
   if (!isUuid(dealId)) throw new DealNotFound();
   const antes = (await tx.query<{ creator_id: string | null }>('SELECT creator_id FROM deal WHERE id = $1 FOR UPDATE', [dealId])).rows[0];
   if (!antes) throw new DealNotFound();
+  let creatorName: string | null = null;
   if (creatorId) {
-    await assertChosenCreator(tx, creatorId);
+    creatorName = (await assertChosenCreator(tx, creatorId)).name;
   } else {
     const todos = await tx.query<{ all: boolean }>('SELECT session_sees_all_creators() AS all');
     if (todos.rows[0]?.all !== true) throw new ScopeError();
   }
-  if (antes.creator_id === creatorId) return { changed: false };
+  if (antes.creator_id === creatorId) return { changed: false, creatorName };
   const { rows } = await tx.query<{ id: string }>('UPDATE deal SET creator_id = $2::uuid WHERE id = $1 RETURNING id', [dealId, creatorId]);
   if (!rows[0]) throw new DealNotFound();
   await audit(tx, {
@@ -1059,7 +1067,7 @@ export async function setDealCreator(tx: WorkspaceTx, dealId: string, creatorId:
     before: { creatorId: antes.creator_id },
     after: { creatorId },
   });
-  return { changed: true };
+  return { changed: true, creatorName };
 }
 
 /**

@@ -45,6 +45,12 @@ export interface BoardDeal {
    * que un negocio se enfría.
    */
   lastContact: UltimoContactoData | null;
+  /**
+   * De qué creador es (ACC-7): su nombre, o «Sin creador»; null cuando no
+   * se dice (la persona ve a un solo creador). Opcional para las vistas
+   * que no lo pintan.
+   */
+  creatorText?: string | null;
 }
 
 /** Un negocio abierto sin siguiente acción: la tarjeta lo marca en ámbar y lo dice. */
@@ -429,6 +435,7 @@ function DealCard({
       </Link>
       {/* Un negocio que se llama como la marca (los viejos del radar): repetirlo es ruido. */}
       {dealLabel(deal.companyName, deal.name) && <p className="mt-0.5 text-xs leading-4 text-ink-2">{deal.name}</p>}
+      {deal.creatorText && <p className="mt-0.5 text-xs leading-4 text-muted">{deal.creatorText}</p>}
 
       <p className="mt-2 whitespace-nowrap text-sm tabular-nums text-ink">{deal.amountText ?? <span className="text-muted">{t.noAmount}</span>}</p>
 

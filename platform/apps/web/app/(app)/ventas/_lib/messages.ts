@@ -482,12 +482,35 @@ export const MESSAGES = {
         creator: "Creador",
         creatorNone: "Sin creador",
         creatorPick: "Elige un creador",
+        /** Acotada a creadores que ya no están (dados de baja): no hay de quién abrir un negocio. */
+        noCreators:
+          "Tu acceso está limitado a creadores que ya no están en el espacio: no puedes abrir negocios. Pide a quien administra el equipo que te asigne uno.",
         submit: "Abrir negocio",
         created: (name: string) => `Abriste «${name}». Está en «Nuevo», en el pipeline.`,
         error: "No se pudo abrir el negocio.",
       },
       quote: "Cotizar",
       quoteLabel: (name: string) => `Cotizar «${name}»`,
+      /**
+       * De qué creador es cada negocio (ACC-7): con alcance por creador,
+       * decide quién lo ve. Se dice en la ficha y se puede cambiar.
+       */
+      dealCreator: {
+        label: "Creador",
+        none: "Sin creador",
+        /** Por qué importa «Sin creador»: quien lleva solo a algunos creadores no lo ve. */
+        noneHelp: "Solo lo ve quien ve a todos los creadores del espacio.",
+        change: "Cambiar",
+        changeLabel: (deal: string) => `Cambiar de qué creador es «${deal}»`,
+        save: "Guardar",
+        saved: (creator: string) => `Ahora es de ${creator}.`,
+        savedNone: "Ahora no es de ningún creador.",
+        unchanged: "Ya era de ese creador.",
+        error: "No se pudo cambiar el creador del negocio.",
+      },
+      /** La marca tiene negocios que esta persona no ve por su alcance (open_deal_out_of_scope). */
+      hiddenDeals:
+        "Esta marca tiene negocios abiertos de creadores que no llevas, o sin creador. No los ves aquí; quien los lleva sí.",
       notFound: {
         title: "Esa empresa no está en tu espacio",
         description: "Puede que el enlace sea de otro espacio de trabajo o que la empresa ya no esté vinculada.",
@@ -975,6 +998,8 @@ export const MESSAGES = {
     InvalidDealName: "El negocio necesita un nombre de hasta 120 caracteres.",
     InvalidHeadline: "La señal necesita una línea que diga qué viste.",
     InvalidName: "La empresa necesita un nombre.",
+    NoCreatorInScope:
+      "Tu acceso está limitado a creadores que ya no están en el espacio: no puedes abrir negocios. Pide a quien administra el equipo que te asigne uno.",
     InvalidOwner: "El responsable tiene que ser alguien de tu espacio.",
     InvalidReason: "Di por qué la descartas: es lo que afina el radar.",
     InvalidRelationship: "Esa relación no existe.",
