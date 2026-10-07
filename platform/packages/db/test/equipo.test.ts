@@ -11,14 +11,19 @@
  *   - nadie otorga lo que no tiene ni toca a quien tiene más, en la
  *     consulta y en la base (políticas de 0078);
  *   - todo deja su fila en audit_log;
- *   - el CHECK de las casillas es la lista de @mc/core, y 0078 se puede
- *     aplicar dos veces.
+ *   - quien tiene alcance (ACC-6) no administra el equipo, y una
+ *     invitación no lleva alcance (0079 §6);
+ *   - el rol tiene que ser del tipo del espacio, también a mano (0079 §7);
+ *   - como mucho INVITACIONES_POR_DIA invitaciones por espacio en 24
+ *     horas, y una fecha vieja no se cuela (0079 §8);
+ *   - el CHECK de las casillas es la lista de @mc/core, y 0078 y 0079 se
+ *     pueden aplicar dos veces.
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { CASILLAS, EXTRA_PERMISOS, UltimoDuenoError } from '@mc/core';
+import { CASILLAS, EXTRA_PERMISOS, INVITACIONES_POR_DIA, UltimoDuenoError } from '@mc/core';
 import type { WorkspaceTx } from '../src/client.ts';
 import { getSessionPermissions } from '../src/queries/accesos.ts';
 import { sessionHasPermission } from '../src/queries/conexiones.ts';
@@ -37,6 +42,7 @@ import {
   newInvitationToken,
   removeMember,
   revokeInvitation,
+  sessionHasScope,
 } from '../src/queries/equipo.ts';
 import { migratorRole, openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
@@ -555,5 +561,178 @@ describe('0078 y 0079: las casillas en la base y los archivos dos veces', () => 
     const antes = await foto();
     await t.admin(`SET ROLE ${migratorRole(t)};\n${sql}\nRESET ROLE;`);
     assert.deepEqual((await foto()).rows, antes.rows);
+  });
+});
+
+describe('quien tiene alcance no administra el equipo (0079 §6)', () => {
+  const comoAdmin = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => en(WS_AGENCIA, ADMIN_AGENCIA, fn);
+  /** Una creadora cualquiera: el alcance solo pide un uuid, la clave foránea es a la membresía. */
+  const CREADORA = '00000079-0000-4000-8000-00000000c0de';
+
+  test('con una fila de alcance, la Administradora no invita, ni cambia, ni quita, ni revoca: ni por la consulta ni a mano', async () => {
+    const manager = await rol('agency', 'manager');
+    const viewer = await rol('agency', 'viewer');
+    // Antes de acotarla deja una invitación pendiente que después intentará revocar.
+    const previa = await comoAdmin((tx) =>
+      createInvitation(tx, { email: 'previa@agencia.test', roleId: viewer, extraPermissions: [], expiresAt: EN_UNA_SEMANA(), token: newInvitationToken() }),
+    );
+    assert.ok(previa.ok);
+    // Y alguien a quien podría tocar sin alcance: un Ejecutivo de cuenta.
+    await t.admin(`
+      INSERT INTO app_user (id, email, name) VALUES ('00000079-0000-4000-8000-0000000000e3', 'ejecutivo2@agencia.test', 'Ejecutivo Dos');
+      INSERT INTO membership (workspace_id, user_id, role_id)
+        VALUES ('${WS_AGENCIA}', '00000079-0000-4000-8000-0000000000e3', system_role_id('agency', 'manager'));
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+        VALUES ('${WS_AGENCIA}', '${ADMIN_AGENCIA}', 'creator', '${CREADORA}');
+    `);
+    try {
+      assert.equal(await comoAdmin((tx) => sessionHasScope(tx)), true);
+      const input = { email: 'nuevo@agencia.test', roleId: viewer, extraPermissions: [], expiresAt: EN_UNA_SEMANA(), token: newInvitationToken() };
+      assert.deepEqual(await comoAdmin((tx) => createInvitation(tx, input)), { ok: false, code: 'scoped' });
+      assert.deepEqual(await comoAdmin((tx) => changeMemberRole(tx, '00000079-0000-4000-8000-0000000000e3', viewer, [])), {
+        ok: false,
+        code: 'scoped',
+      });
+      assert.deepEqual(await comoAdmin((tx) => removeMember(tx, '00000079-0000-4000-8000-0000000000e3')), { ok: false, code: 'scoped' });
+      assert.deepEqual(await comoAdmin((tx) => revokeInvitation(tx, previa.invitationId)), { ok: false, code: 'scoped' });
+
+      // A mano, la base dice lo mismo: el alta la para la política, y el
+      // cambio, la baja y la revocación no encuentran fila que tocar.
+      await assert.rejects(
+        comoAdmin((tx) =>
+          tx.query(
+            `INSERT INTO invitation (workspace_id, email, role_id, token_hash, invited_by, expires_at)
+             VALUES (current_workspace_id(), 'a-mano@agencia.test', $1, $2, current_user_id(), now() + interval '1 day')`,
+            [viewer, invitationTokenHash(newInvitationToken())],
+          ),
+        ),
+        (err) => /row-level security/i.test(mensajes(err)),
+      );
+      const cambio = await comoAdmin((tx) =>
+        tx.query(`UPDATE membership SET role_id = $1 WHERE user_id = '00000079-0000-4000-8000-0000000000e3' RETURNING user_id`, [viewer]),
+      );
+      assert.equal(cambio.rows.length, 0);
+      const baja = await comoAdmin((tx) =>
+        tx.query(`DELETE FROM membership WHERE user_id = '00000079-0000-4000-8000-0000000000e3' RETURNING user_id`),
+      );
+      assert.equal(baja.rows.length, 0);
+      const revocada = await comoAdmin((tx) =>
+        tx.query('UPDATE invitation SET revoked_at = now() WHERE id = $1 RETURNING id', [previa.invitationId]),
+      );
+      assert.equal(revocada.rows.length, 0);
+      // Leer el equipo sí puede.
+      assert.ok((await comoAdmin((tx) => listMembers(tx))).length >= 3);
+    } finally {
+      await t.admin(`DELETE FROM membership_scope WHERE user_id = '${ADMIN_AGENCIA}'`);
+    }
+
+    // Sin la fila, vuelve a poder: el alcance era lo único que la paraba.
+    assert.equal(await comoAdmin((tx) => sessionHasScope(tx)), false);
+    assert.deepEqual(await comoAdmin((tx) => changeMemberRole(tx, '00000079-0000-4000-8000-0000000000e3', viewer, [])), {
+      ok: true,
+      changed: true,
+    });
+    assert.deepEqual(await comoAdmin((tx) => changeMemberRole(tx, '00000079-0000-4000-8000-0000000000e3', manager, [])), {
+      ok: true,
+      changed: true,
+    });
+    assert.deepEqual(await comoAdmin((tx) => revokeInvitation(tx, previa.invitationId)), { ok: true });
+  });
+
+  test('una invitación no lleva alcance: la aceptación no lo copiaría y la persona entraría viéndolo todo', async () => {
+    const viewer = await rol('creator', 'viewer');
+    await assert.rejects(
+      comoLaura((tx) =>
+        tx.query(
+          `INSERT INTO invitation (workspace_id, email, role_id, scope, token_hash, invited_by, expires_at)
+           VALUES (current_workspace_id(), 'con-alcance@ejemplo.test', $1, $2::jsonb, $3, current_user_id(), now() + interval '1 day')`,
+          [viewer, JSON.stringify([{ type: 'creator', id: '00000079-0000-4000-8000-00000000c0de' }]), invitationTokenHash(newInvitationToken())],
+        ),
+      ),
+      (err) => /invitation_scope_not_yet/.test(mensajes(err)),
+    );
+  });
+});
+
+describe('el rol, del tipo del espacio, también a mano (0079 §7)', () => {
+  test('ni una invitación ni una membresía de un espacio de creador llevan un rol de agencia', async () => {
+    const deAgencia = await rol('agency', 'viewer');
+    await assert.rejects(
+      comoLaura((tx) =>
+        tx.query(
+          `INSERT INTO invitation (workspace_id, email, role_id, token_hash, invited_by, expires_at)
+           VALUES (current_workspace_id(), 'agencia-en-creador@ejemplo.test', $1, $2, current_user_id(), now() + interval '1 day')`,
+          [deAgencia, invitationTokenHash(newInvitationToken())],
+        ),
+      ),
+      (err) => /no es de este espacio/.test(mensajes(err)),
+    );
+    await assert.rejects(
+      comoLaura((tx) => tx.query(`UPDATE membership SET role_id = $1, extra_permissions = '{}' WHERE user_id = '${BEATRIZ}'`, [deAgencia])),
+      (err) => /no es de este espacio/.test(mensajes(err)),
+    );
+    // Y la consulta ni lo intenta: el rol no está entre los de este espacio.
+    const input = { email: 'agencia-en-creador@ejemplo.test', roleId: deAgencia, extraPermissions: [], expiresAt: EN_UNA_SEMANA(), token: newInvitationToken() };
+    assert.deepEqual(await comoLaura((tx) => createInvitation(tx, input)), { ok: false, code: 'role_not_found' });
+  });
+});
+
+describe('el techo de invitaciones por espacio y día (0079 §8)', () => {
+  const WS_TECHO = '00000079-0000-4000-8000-00000000a7e0';
+  const DUENA_TECHO = '00000079-0000-4000-8000-0000000000a7';
+  const comoDuena = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => en(WS_TECHO, DUENA_TECHO, fn);
+
+  before(async () => {
+    await t.admin(`
+      INSERT INTO app_user (id, email, name) VALUES ('${DUENA_TECHO}', 'techo@ejemplo.test', 'Dueña Techo');
+      SELECT set_config('app.workspace_id', '${WS_TECHO}', false);
+      INSERT INTO workspace (id, slug, name, kind) VALUES ('${WS_TECHO}', 'techo-0079', 'Techo 0079', 'creator');
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS_TECHO}', '${DUENA_TECHO}', system_role_id('creator', 'owner'));
+      SELECT set_config('app.workspace_id', '', false);
+    `);
+  });
+
+  test('el número de la base es INVITACIONES_POR_DIA de @mc/core', () => {
+    const sql = readFileSync(fileURLToPath(new URL('../../../db/migrations/0079_equipo_cerrojos.sql', import.meta.url)), 'utf8');
+    const enLaBase = sql.match(/IF hechas >= (\d+) THEN/);
+    assert.ok(enLaBase, 'invitation_daily_cap compara con un número');
+    assert.equal(Number(enLaBase[1]), INVITACIONES_POR_DIA);
+  });
+
+  test(`la invitación ${INVITACIONES_POR_DIA + 1} del día da rate_limited, y no revoca la pendiente que iba a reemplazar`, async () => {
+    const viewer = (await comoDuena((tx) => listTeamRoles(tx))).find((r) => r.key === 'viewer')!.id;
+    const nueva = (email: string) => ({ email, roleId: viewer, extraPermissions: [], expiresAt: EN_UNA_SEMANA(), token: newInvitationToken() });
+    for (let i = 0; i < INVITACIONES_POR_DIA; i++) {
+      const r = await comoDuena((tx) => createInvitation(tx, nueva(`techo-${i}@ejemplo.test`)));
+      assert.equal(r.ok, true, `la invitación ${i + 1} entra`);
+    }
+    // Una más, a otro correo, no.
+    assert.deepEqual(await comoDuena((tx) => createInvitation(tx, nueva('una-mas@ejemplo.test'))), { ok: false, code: 'rate_limited' });
+    // Ni «nuevo enlace» para una que ya existe: y la vieja sigue pendiente,
+    // con su enlace sirviendo (el SAVEPOINT deshizo la revocación).
+    assert.deepEqual(await comoDuena((tx) => createInvitation(tx, nueva('techo-0@ejemplo.test'))), { ok: false, code: 'rate_limited' });
+    const pendientes = await comoDuena((tx) => listPendingInvitations(tx));
+    assert.equal(pendientes.length, INVITACIONES_POR_DIA);
+    assert.ok(pendientes.some((i) => i.email === 'techo-0@ejemplo.test'));
+  });
+
+  test('a mano tampoco, ni con una fecha de alta vieja: created_at lo pone la base', async () => {
+    const viewer = (await comoDuena((tx) => listTeamRoles(tx))).find((r) => r.key === 'viewer')!.id;
+    await assert.rejects(
+      comoDuena((tx) =>
+        tx.query(
+          `INSERT INTO invitation (workspace_id, email, role_id, token_hash, invited_by, expires_at, created_at)
+           VALUES (current_workspace_id(), 'vieja@ejemplo.test', $1, $2, current_user_id(), now() + interval '1 day', now() - interval '3 days')`,
+          [viewer, invitationTokenHash(newInvitationToken())],
+        ),
+      ),
+      (err) => /20 invitaciones/.test(mensajes(err)),
+    );
+    // El techo es por espacio: Laura, en el suyo, sigue invitando.
+    const { invitationId } = await invitar('otro-espacio@ejemplo.test', 'viewer');
+    const fecha = await comoLaura((tx) =>
+      tx.query<{ reciente: boolean }>(`SELECT created_at > now() - interval '1 minute' AS reciente FROM invitation WHERE id = $1`, [invitationId]),
+    );
+    assert.equal(fecha.rows[0]?.reciente, true);
   });
 });
