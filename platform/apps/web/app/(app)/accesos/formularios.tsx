@@ -354,7 +354,7 @@ export function CambiarRol({
  * acción y el disparador de la base siguen siendo la barrera real.
  *
  * Si sale bien, la fila desaparece con el botón: el foco y el aviso los
- * pone AvisoDeBajas (personas.tsx), que vive por encima de la lista.
+ * pone AvisoDeSalidas (salidas.tsx), que vive por encima de la lista.
  */
 export function QuitarMiembro({ userId, quien, unicoDueno = false }: { userId: string; quien: string; unicoDueno?: boolean }) {
   return (
@@ -380,6 +380,22 @@ export function QuitarMiembro({ userId, quien, unicoDueno = false }: { userId: s
  */
 export function AccionesInvitacion({ invitationId, correo, fechas }: { invitationId: string; correo: string; fechas: LocaleOpts }) {
   const [estado, accion, enviando] = useActionState<InvitarState, FormData>(renovarInvitacion, {});
+  const resultadoRef = useRef<HTMLDivElement>(null);
+  const mensajeRef = useRef<HTMLParagraphElement>(null);
+  const estadoVisto = useRef(estado);
+
+  // El foco, como en InvitarForm: mientras corre, «Nuevo enlace» está en
+  // carga y deshabilitado y lo pierde. Al volver va al enlace nuevo (que
+  // se selecciona solo, listo para copiar) o al motivo por el que no se
+  // pudo; nunca se queda en <body>. Si revocar hace desaparecer la fila,
+  // el foco lo pone AvisoDeSalidas.
+  useEffect(() => {
+    if (estado === estadoVisto.current) return;
+    estadoVisto.current = estado;
+    if (estado.invitacion) resultadoRef.current?.querySelector<HTMLInputElement>("input[readonly]")?.focus();
+    else if (estado.message) mensajeRef.current?.focus();
+  }, [estado]);
+
   return (
     <div className="grid gap-2">
       <div className="flex flex-wrap items-start gap-2">
@@ -403,11 +419,14 @@ export function AccionesInvitacion({ invitationId, correo, fechas }: { invitatio
         />
       </div>
       {estado.message && (
-        <p role="alert" className="text-xs text-bad">
+        <p ref={mensajeRef} role="alert" tabIndex={-1} className="text-xs text-bad focus:outline-none">
           {estado.message}
         </p>
       )}
-      {estado.invitacion && <ResultadoInvitacion estado={estado.invitacion} fechas={fechas} />}
+      {/* contents: sin caja propia, como en InvitarForm. */}
+      <div ref={resultadoRef} className="contents">
+        {estado.invitacion && <ResultadoInvitacion estado={estado.invitacion} fechas={fechas} />}
+      </div>
     </div>
   );
 }

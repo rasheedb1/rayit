@@ -28,13 +28,20 @@ export default function AccesosLoading() {
       <div className="max-w-3xl overflow-hidden rounded-md border border-border">
         <div className="flex gap-6 border-b border-border bg-surface-2 px-2.5 py-2 text-xs font-medium text-muted" aria-hidden="true">
           <span className="flex-1">{t.persona}</span>
-          <span className="hidden w-28 sm:block">{t.rol}</span>
-          <span className="hidden w-28 sm:block">{t.desde}</span>
+          <span className="w-24 sm:w-40">{t.rol}</span>
         </div>
+        {/* Las dos columnas de la tabla real: la persona (nombre, correo y
+            «Desde el …», y debajo sus acciones) y el rol. */}
         {[0, 1, 2].map((i) => (
-          <div key={i} className="border-b border-border px-2.5 py-3 last:border-b-0">
-            <span className="block h-4 w-40 animate-pulse rounded-sm bg-hover" />
-            <span className="mt-2 block h-3 w-56 max-w-full animate-pulse rounded-sm bg-hover" />
+          <div key={i} className="flex gap-6 border-b border-border px-2.5 py-3 last:border-b-0">
+            <span className="min-w-0 flex-1">
+              <span className="block h-4 w-40 max-w-full animate-pulse rounded-sm bg-hover" />
+              <span className="mt-2 block h-3 w-56 max-w-full animate-pulse rounded-sm bg-hover" />
+              <span className="mt-3 block h-7 w-36 max-w-full animate-pulse rounded-md bg-hover" />
+            </span>
+            <span className="w-24 sm:w-40">
+              <span className="block h-4 w-20 max-w-full animate-pulse rounded-sm bg-hover" />
+            </span>
           </div>
         ))}
       </div>

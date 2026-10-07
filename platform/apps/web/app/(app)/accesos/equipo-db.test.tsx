@@ -171,6 +171,24 @@ describe("la creadora invita a su mánager (terminado cuando)", () => {
     expect(despues).toContain(CORREO_MANAGER);
   }, PRUEBA_DB_TIMEOUT_MS);
 
+  test("Personas cabe en un teléfono: dos columnas, y «Cambiar rol» y «Quitar» bajo cada persona, sin una columna de acciones que se salga", async () => {
+    como(LAURA);
+    const html = renderToStaticMarkup((await EquipoPage()) as ReactElement);
+    const tabla = html.slice(html.indexOf("<table"), html.indexOf("</table>"));
+    const cabeceras = [...tabla.matchAll(/<th[^>]*>([^<]*)<\/th>/g)].map((m) => m[1]);
+    expect(cabeceras).toEqual([MESSAGES.miembros.columnas.persona, MESSAGES.miembros.columnas.rol]);
+    // La fila de Andrés (el mánager del seed 0003): su primera celda lleva
+    // a la persona, desde cuándo está y sus dos acciones.
+    const fila = tabla.split("<tr").find((f) => f.includes("andres@ejemplo.com"));
+    expect(fila).toBeDefined();
+    const persona = fila!.slice(fila!.indexOf("<td"), fila!.indexOf("</td>"));
+    expect(persona).toContain(MESSAGES.miembros.cambiarRol);
+    expect(persona).toContain(MESSAGES.miembros.quitar);
+    expect(persona).toMatch(/Desde el \d/);
+    // Una sola copia de cada acción por persona: nada escondido para móvil.
+    expect(fila!.split(MESSAGES.miembros.cambiarRol).length - 1).toBe(1);
+  }, PRUEBA_DB_TIMEOUT_MS);
+
   test("en la demo el enlace se ve pero no se acepta: sin persona simulada, o con una de otro correo, no hay botones que no lleven a nada", async () => {
     // Sin DEMO_USER_ID: nadie abre el enlace. Antes pedía «Entrar» y
     // /login decía que faltaba configurar la autenticación.

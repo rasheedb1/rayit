@@ -19,8 +19,8 @@ vi.mock("./actions", () => ({
 }));
 
 import { MESSAGES } from "./_lib/messages";
-import { CambiarRol, InvitarForm, QuitarMiembro, type CasillaOpcion, type RolOpcion } from "./formularios";
-import { AvisoDeBajas } from "./personas";
+import { AccionesInvitacion, CambiarRol, InvitarForm, QuitarMiembro, type CasillaOpcion, type RolOpcion } from "./formularios";
+import { AvisoDeSalidas } from "./salidas";
 
 const ROLES: RolOpcion[] = [
   { id: "00000000-0000-4000-8000-000000000001", label: "Dueño", description: "El creador.", conCasillas: false },
@@ -258,38 +258,90 @@ describe("InvitarForm: el foco vuelve a donde hay que mirar", () => {
   });
 });
 
-describe("AvisoDeBajas: quitar a alguien no deja el foco en <body>", () => {
+describe("AvisoDeSalidas: quitar a alguien no deja el foco en <body>", () => {
   const titulo = <h2>{MESSAGES.miembros.titulo}</h2>;
-  const LAURA = { id: "u1", nombre: "Laura" };
-  const MARIANA = { id: "u2", nombre: "Mariana" };
+  const LAURA = { id: "u1", aviso: MESSAGES.miembros.quitado("Laura") };
+  const MARIANA = { id: "u2", aviso: MESSAGES.miembros.quitado("Mariana") };
 
   it("si la lista se acorta y el foco se perdió, va al título y se anuncia quién salió", () => {
-    const { rerender } = render(<AvisoDeBajas personas={[LAURA, MARIANA]} titulo={titulo}>{null}</AvisoDeBajas>);
+    const { rerender } = render(<AvisoDeSalidas filas={[LAURA, MARIANA]} titulo={titulo}>{null}</AvisoDeSalidas>);
     expect(document.body).toHaveFocus();
-    rerender(<AvisoDeBajas personas={[LAURA]} titulo={titulo}>{null}</AvisoDeBajas>);
+    rerender(<AvisoDeSalidas filas={[LAURA]} titulo={titulo}>{null}</AvisoDeSalidas>);
     expect(screen.getByText(MESSAGES.miembros.titulo).parentElement).toHaveFocus();
     expect(screen.getByText(MESSAGES.miembros.quitado("Mariana"))).toHaveAttribute("aria-live", "polite");
   });
 
   it("si el foco está en otro control, no se lo quita; y sin bajas no anuncia nada", () => {
     const { rerender } = render(
-      <AvisoDeBajas personas={[LAURA, MARIANA]} titulo={titulo}>
+      <AvisoDeSalidas filas={[LAURA, MARIANA]} titulo={titulo}>
         <button type="button">otro</button>
-      </AvisoDeBajas>,
+      </AvisoDeSalidas>,
     );
     screen.getByRole("button", { name: "otro" }).focus();
     rerender(
-      <AvisoDeBajas personas={[LAURA, MARIANA]} titulo={titulo}>
+      <AvisoDeSalidas filas={[LAURA, MARIANA]} titulo={titulo}>
         <button type="button">otro</button>
-      </AvisoDeBajas>,
+      </AvisoDeSalidas>,
     );
     expect(screen.queryByText(MESSAGES.miembros.quitado("Mariana"))).toBeNull();
     rerender(
-      <AvisoDeBajas personas={[LAURA]} titulo={titulo}>
+      <AvisoDeSalidas filas={[LAURA]} titulo={titulo}>
         <button type="button">otro</button>
-      </AvisoDeBajas>,
+      </AvisoDeSalidas>,
     );
     expect(screen.getByRole("button", { name: "otro" })).toHaveFocus();
     expect(screen.getByText(MESSAGES.miembros.quitado("Mariana"))).toBeInTheDocument();
   });
 });
+
+describe("Invitaciones pendientes: el foco después de «Nuevo enlace» y de «Sí, revocar»", () => {
+  const INVITACION = "00000000-0000-4000-8000-0000000000aa";
+  const CORREO = "mariana@ejemplo.test";
+  const pendiente = (st: InvitarState) => {
+    estado = st;
+    return <AccionesInvitacion invitationId={INVITACION} correo={CORREO} fechas={fechas} />;
+  };
+
+  it("«Nuevo enlace» que sale bien lleva el foco al enlace nuevo, listo para copiar", () => {
+    const { rerender } = render(pendiente({}));
+    screen.getByRole("button", { name: MESSAGES.pendientes.renovar }).focus();
+    rerender(
+      pendiente({
+        ok: true,
+        invitacion: { correo: CORREO, enlace: "http://x/invitacion/nuevo", envio: "sin_configurar", venceIso: "2026-10-14T17:00:00.000Z", reemplazadas: 1 },
+      }),
+    );
+    expect(screen.getByDisplayValue("http://x/invitacion/nuevo")).toHaveFocus();
+    expect(document.body).not.toHaveFocus();
+  });
+
+  it("y si no se pudo, al motivo", () => {
+    const { rerender } = render(pendiente({}));
+    rerender(pendiente({ message: MESSAGES.errores.rate_limited }));
+    // El estado inyectado también le llega a ConfirmAction (Revocar), que
+    // pinta su propio role="alert": se mira cuál tiene el foco.
+    const enfocado = document.activeElement;
+    expect(enfocado).toHaveAttribute("role", "alert");
+    expect(enfocado).toHaveTextContent(MESSAGES.errores.rate_limited);
+    expect(screen.getAllByRole("alert")).toContain(enfocado);
+  });
+
+  it("revocar hace desaparecer la fila: el foco va al título de la lista y se anuncia de quién era", () => {
+    const titulo = <h2>{MESSAGES.pendientes.titulo}</h2>;
+    const fila = { id: CORREO, aviso: MESSAGES.pendientes.revocada(CORREO) };
+    const { rerender } = render(
+      <AvisoDeSalidas filas={[fila]} titulo={titulo}>
+        {pendiente({})}
+      </AvisoDeSalidas>,
+    );
+    screen.getByRole("button", { name: MESSAGES.pendientes.revocar }).focus();
+    rerender(
+      <AvisoDeSalidas filas={[]} titulo={titulo}>
+        {null}
+      </AvisoDeSalidas>,
+    );
+    expect(screen.getByText(MESSAGES.pendientes.titulo).parentElement).toHaveFocus();
+    expect(screen.getByText(MESSAGES.pendientes.revocada(CORREO))).toHaveAttribute("aria-live", "polite");
+  });
+});
+

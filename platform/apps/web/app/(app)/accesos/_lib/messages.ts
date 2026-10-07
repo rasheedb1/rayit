@@ -86,7 +86,9 @@ export const MESSAGES = {
   miembros: {
     titulo: "Personas",
     meta: (n: number) => (n === 1 ? "1 persona" : `${n} personas`),
-    columnas: { persona: "Persona", rol: "Rol", desde: "Desde", acciones: "Acciones" },
+    columnas: { persona: "Persona", rol: "Rol" },
+    /** Bajo el correo de cada persona: desde cuándo es miembro. */
+    desde: (fecha: string) => `Desde el ${fecha}`,
     tu: "Tú",
     cambiarRol: "Cambiar rol",
     guardar: "Guardar",
@@ -117,6 +119,8 @@ export const MESSAGES = {
     revocarPregunta: (correo: string) => `¿Revocar la invitación de ${correo}?`,
     revocarConsecuencia: "El enlace deja de servir en cuanto confirmes.",
     revocarConfirmar: "Sí, revocar",
+    /** Se anuncia (aria-live) cuando la fila desaparece: el foco vuelve al título de la lista. */
+    revocada: (correo: string) => `Se revocó la invitación de ${correo}.`,
     cancelar: "Cancelar",
   },
 

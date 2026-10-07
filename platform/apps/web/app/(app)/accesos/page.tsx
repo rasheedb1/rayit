@@ -1,5 +1,14 @@
 import type { Metadata } from "next";
-import { admiteCasillas, can, CASILLAS, casillasDe, INVITACION_VIGENCIA_DIAS, NOMBRES_DE_CASILLA, permisosQueFaltan } from "@mc/core";
+import {
+  admiteCasillas,
+  can,
+  CASILLAS,
+  casillasDe,
+  esUltimoDueno,
+  INVITACION_VIGENCIA_DIAS,
+  NOMBRES_DE_CASILLA,
+  permisosQueFaltan,
+} from "@mc/core";
 import {
   getTeamWorkspaceKind,
   listMembers,
@@ -19,7 +28,7 @@ import { permisosDeLaSesion } from "@/lib/permisos/sesion";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "./_lib/messages";
 import { AccionesInvitacion, CambiarRol, InvitarForm, QuitarMiembro, type CasillaOpcion, type RolOpcion } from "./formularios";
-import { AvisoDeBajas } from "./personas";
+import { AvisoDeSalidas } from "./salidas";
 
 const t = MESSAGES;
 
@@ -68,28 +77,59 @@ export default async function EquipoPage() {
   const puedeTocar = (roleId: string, extras: readonly string[]) => otorga([...(permisosDelRol.get(roleId) ?? []), ...extras]);
   /**
    * Si hay una sola persona con rol de Dueño, a esa fila no se le ofrece
-   * «Quitar» (sale deshabilitado con el motivo). Cortesía: la acción y el
-   * disparador membership_keeps_an_owner siguen siendo la barrera real.
+   * «Quitar» (sale deshabilitado con el motivo) ni «Cambiar rol».
+   * Cortesía: la acción y el disparador membership_keeps_an_owner siguen
+   * siendo la barrera real.
    */
-  const esUnicoDueno = miembros.filter((m) => m.roleKey === "owner").length === 1;
+  const duenos = miembros.filter((m) => m.roleKey === "owner").map((m) => m.userId);
+
+  /** Cambiar rol y Quitar de una persona, o nada si quien mira no puede tocarla. */
+  function acciones(m: TeamMember) {
+    if (!puedeTocar(m.roleId, m.extraPermissions) || !(puedeEditar || puedeQuitar)) return null;
+    const ultimoDueno = esUltimoDueno(duenos, m.userId);
+    return (
+      <div className="flex flex-wrap items-start gap-2">
+        {/* A la única dueña no se le ofrece cambiar de rol: el único
+            cambio posible sería degradarla, y la base lo para. */}
+        {puedeEditar && !ultimoDueno && (
+          <CambiarRol userId={m.userId} roleId={m.roleId} marcadas={casillasDe(m.extraPermissions)} roles={rolesOtorgables} casillas={casillas} />
+        )}
+        {puedeQuitar && <QuitarMiembro userId={m.userId} quien={m.name ?? m.email} unicoDueno={ultimoDueno} />}
+      </div>
+    );
+  }
 
   /**
-   * Personas, con la tabla del kit. Acciones lleva formularios en la
-   * celda (Cambiar rol se abre ahí mismo, Quitar pide confirmación): la
-   * tabla los admite como Conexiones lleva los suyos. En móvil la tabla
-   * se desplaza por dentro, como todas las del kit; la página no.
+   * Personas, con la tabla del kit y DOS columnas, Persona y Rol, para
+   * que a 400 px todo quepa sin desplazar la tabla de lado. La fecha de
+   * alta va bajo el correo («Desde el …») y las acciones, en una fila
+   * propia bajo la persona: a cualquier ancho «Cambiar rol» y «Quitar»
+   * están a la vista, y el formulario de Cambiar rol se abre con el
+   * ancho de la celda, no apretado en una columna de acciones. Una sola
+   * copia de cada acción (nada de una versión escondida para móvil): el
+   * foco, los avisos y las pruebas ven un único botón.
    */
   const columnas: Column<TeamMember>[] = [
     {
       key: "persona",
       header: t.miembros.columnas.persona,
       render: (m) => (
-        <CellMain sub={m.name ? m.email : undefined}>
-          <span className="inline-flex flex-wrap items-center gap-2">
-            <span className="min-w-0 break-all">{m.name ?? m.email}</span>
-            {m.isMe && <Pill kind="neutral">{t.miembros.tu}</Pill>}
-          </span>
-        </CellMain>
+        <div className="grid min-w-0 gap-2">
+          <CellMain
+            sub={
+              <>
+                {m.name && <span className="block break-all">{m.email}</span>}
+                <span className="block tabular-nums">{t.miembros.desde(fmt.date(m.joinedAt, "long"))}</span>
+              </>
+            }
+          >
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <span className="min-w-0 break-all">{m.name ?? m.email}</span>
+              {m.isMe && <Pill kind="neutral">{t.miembros.tu}</Pill>}
+            </span>
+          </CellMain>
+          {acciones(m)}
+        </div>
       ),
     },
     {
@@ -105,36 +145,6 @@ export default async function EquipoPage() {
           ))}
         </span>
       ),
-    },
-    {
-      key: "desde",
-      header: t.miembros.columnas.desde,
-      render: (m) => <span className="whitespace-nowrap tabular-nums text-ink-2">{fmt.date(m.joinedAt, "long")}</span>,
-    },
-    {
-      key: "acciones",
-      header: t.miembros.columnas.acciones,
-      render: (m) => {
-        const quien = m.name ?? m.email;
-        const ultimoDueno = esUnicoDueno && m.roleKey === "owner";
-        if (!puedeTocar(m.roleId, m.extraPermissions) || !(puedeEditar || puedeQuitar)) return null;
-        return (
-          <div className="flex min-w-[11rem] flex-wrap items-start gap-2">
-            {/* A la única dueña no se le ofrece cambiar de rol: el
-                único cambio posible sería degradarla, y la base lo para. */}
-            {puedeEditar && !ultimoDueno && (
-              <CambiarRol
-                userId={m.userId}
-                roleId={m.roleId}
-                marcadas={casillasDe(m.extraPermissions)}
-                roles={rolesOtorgables}
-                casillas={casillas}
-              />
-            )}
-            {puedeQuitar && <QuitarMiembro userId={m.userId} quien={quien} unicoDueno={ultimoDueno} />}
-          </div>
-        );
-      },
     },
   ];
 
@@ -154,8 +164,8 @@ export default async function EquipoPage() {
       )}
 
       <section className="mb-12 max-w-3xl">
-        <AvisoDeBajas
-          personas={miembros.map((m) => ({ id: m.userId, nombre: m.name ?? m.email }))}
+        <AvisoDeSalidas
+          filas={miembros.map((m) => ({ id: m.userId, aviso: t.miembros.quitado(m.name ?? m.email) }))}
           titulo={<SectionTitle meta={t.miembros.meta(miembros.length)}>{t.miembros.titulo}</SectionTitle>}
         >
           <DataTable
@@ -166,11 +176,16 @@ export default async function EquipoPage() {
             emptyState={null}
             stickyHeader={false}
           />
-        </AvisoDeBajas>
+        </AvisoDeSalidas>
       </section>
 
       <section className="max-w-3xl">
-        <SectionTitle>{t.pendientes.titulo}</SectionTitle>
+        {/* Por correo y no por id, como la clave de cada fila: «Nuevo
+            enlace» cambia el id de la invitación y no es una salida. */}
+        <AvisoDeSalidas
+          filas={pendientes.map((i) => ({ id: i.email, aviso: t.pendientes.revocada(i.email) }))}
+          titulo={<SectionTitle>{t.pendientes.titulo}</SectionTitle>}
+        >
         {/* Lista y no DataTable a propósito: «Nuevo enlace» pinta debajo de
             la fila el enlace recién creado, con su campo para copiar y su
             aviso del correo, a todo el ancho. En una celda de tabla ese
@@ -215,6 +230,7 @@ export default async function EquipoPage() {
             ))}
           </ul>
         )}
+        </AvisoDeSalidas>
       </section>
     </>
   );
