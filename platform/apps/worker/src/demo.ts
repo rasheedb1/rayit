@@ -279,7 +279,9 @@ export async function runDemoCompute(opts: {
     }
     // Un compute.* que empezó después de la última recolección: el runner
     // lo abre cuando la de arriba ya cerró, con una lectura nueva del reloj.
-    const despues = u?.compute != null && (u.collect == null || new Date(u.compute).getTime() > new Date(u.collect).getTime());
+    const compute = u?.compute ?? null;
+    const collect = u?.collect ?? null;
+    const despues = compute !== null && (collect === null || new Date(compute).getTime() > new Date(collect).getTime());
     terminada = u !== undefined && u.corriendo === 0 && despues && Date.now() - quietoDesde >= QUIETO_MS;
     if (terminada || Date.now() > hasta) break;
     await new Promise((r) => setTimeout(r, 500));

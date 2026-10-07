@@ -46,9 +46,10 @@
 --       solo el id decía cuál fue antes. Ese orden no puede salir de un
 --       contador global; sale de uno POR NEGOCIO, que no dice nada de
 --       nadie más: step = 1, 2, 3… dentro de cada deal_id, lo pone un
---       disparador al insertar. Las filas que ya están lo reciben en el
---       orden que tenían, (changed_at, id) con el id bigint, ANTES de
---       convertirlo.
+--       disparador al insertar, y un índice único (deal_id, step) hace
+--       que un choque falle en vez de repetir el número. Las filas que
+--       ya están lo reciben en el orden que tenían, (changed_at, id) con
+--       el id bigint, ANTES de convertirlo.
 --   2 · Las quince claves pasan a `uuid DEFAULT gen_random_uuid()`,
 --       CONSERVANDO las filas: cada fila existente recibe un uuid al
 --       azar (USING gen_random_uuid() se evalúa fila a fila al
@@ -68,10 +69,18 @@
 --       Postgres mide en microsegundos; PGlite, en milisegundos, así que
 --       las pruebas no dan por hecho el orden de dos filas del mismo
 --       milisegundo.
---   4 · Una comprobación al final: si queda una columna con DEFAULT
---       nextval(…) o identity en una tabla de `public` donde mc_app
---       lee o escribe, la migración falla. La guardia de
---       packages/db/src/esquema.ts lo vigila después (clavesDeSecuencia).
+--   4b · outreach_writer_status (0062) y outreach_classifier_status
+--       (0070) eligen la última corrida de outbound.generate y
+--       outbound.intent por (started_at, id): con el id al azar, a igual
+--       started_at ganaba cualquiera. Desempatan por finished_at, como
+--       el runner y la salud del worker (ORDEN_ULTIMA_CORRIDA de
+--       @mc/db/queries/worker).
+--   5 · Una comprobación al final: si queda una columna con DEFAULT
+--       nextval(…) o identity en una tabla de `public` donde mc_app o
+--       mc_public_share leen o insertan (directo, por PUBLIC, por
+--       membresía o por columna), la migración falla. La guardia de
+--       packages/db/src/esquema.ts lo vigila después con el mismo
+--       criterio (clavesDeSecuencia).
 --
 -- Bloqueos. ALTER TABLE … TYPE toma ACCESS EXCLUSIVE y reescribe la
 -- tabla. En Supabase (7-oct-2026) la mayor es job_run, ~10.000 filas:
@@ -129,7 +138,9 @@ ORDER BY s.post_id, c.cut_hours, s.age_hours DESC, s.captured_at ASC,
 -- mc_public_share al aceptar una cotización, el worker) ve la historia
 -- del negocio por la misma política que la deja insertar. Dos pasos del
 -- mismo negocio a la vez no se pisan: deal_move_stage (0031) toma la
--- fila del negocio FOR UPDATE antes de escribir la historia.
+-- fila del negocio FOR UPDATE antes de escribir la historia, y el índice
+-- único (deal_id, step) hace fallar al que no lo haga en vez de repetir
+-- el número.
 -- =====================================================================
 ALTER TABLE deal_stage_history ADD COLUMN IF NOT EXISTS step integer;
 
@@ -147,7 +158,17 @@ ALTER TABLE deal_stage_history ALTER COLUMN step SET DEFAULT 1;
 ALTER TABLE deal_stage_history ALTER COLUMN step SET NOT NULL;
 ALTER TABLE deal_stage_history DROP CONSTRAINT IF EXISTS deal_stage_history_step_check;
 ALTER TABLE deal_stage_history ADD CONSTRAINT deal_stage_history_step_check CHECK (step >= 1);
-CREATE INDEX IF NOT EXISTS deal_stage_history_deal_id_step_idx ON deal_stage_history (deal_id, step);
+-- Único: max(step) + 1 solo es correcto si nadie más inserta en el mismo
+-- negocio a la vez, y eso hoy lo garantizan los escritores (deal_move_stage
+-- y la aceptación pública bloquean el negocio FOR UPDATE; radar.ts e
+-- intent.ts escriben en negocios recién creados). Un escritor futuro que
+-- no bloquee, o un rol cuya RLS vea solo parte de la historia, calcularía
+-- el mismo step que otro: con el índice único, el segundo espera al
+-- primero y falla (23505) en vez de dejar dos pasos con el mismo número.
+-- Es por inquilino: deal_id apunta a deal, aislado por workspace, así que
+-- el choque solo puede ser con la historia de un negocio propio.
+DROP INDEX IF EXISTS deal_stage_history_deal_id_step_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS deal_stage_history_deal_id_step_key ON deal_stage_history (deal_id, step);
 
 COMMENT ON COLUMN deal_stage_history.step IS
   'El orden del paso dentro de su negocio (1, 2, 3…): lo pone deal_stage_history_step() al insertar. '
@@ -238,11 +259,67 @@ ORDER BY s.post_id, c.cut_hours, s.age_hours DESC, s.captured_at ASC,
          array_position(ARRAY['api', 'csv_import', 'aggregator', 'manual'], s.source), s.id;
 
 -- =====================================================================
+-- 4b · La última corrida de outbound.generate y outbound.intent
+-- ---------------------------------------------------------------------
+-- Idénticas a 0062 §2.3 y 0070 §3 salvo el desempate: (started_at, id)
+-- pasa a (started_at, finished_at). Solo miran corridas ok o partial,
+-- que siempre están cerradas. CREATE OR REPLACE conserva el dueño, el
+-- REVOKE de PUBLIC y el GRANT a mc_app; se repiten igual por si acaso.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION outreach_writer_status()
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+  SELECT CASE
+           WHEN r.writer IN ('anthropic','fake') THEN r.writer
+           WHEN r.not_configured THEN 'off'
+           ELSE 'unknown'
+         END
+    FROM (SELECT 1) x
+    LEFT JOIN LATERAL (
+      SELECT j.metadata->>'writer' AS writer, coalesce((j.metadata->>'notConfigured')::boolean, false) AS not_configured
+        FROM job_run j
+       WHERE j.job_id = 'outbound.generate' AND j.status IN ('ok','partial') AND j.started_at > now() - interval '1 day'
+       ORDER BY j.started_at DESC, j.finished_at DESC NULLS FIRST
+       LIMIT 1) r ON true
+$$;
+REVOKE ALL ON FUNCTION outreach_writer_status() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION outreach_writer_status() TO mc_app;
+
+CREATE OR REPLACE FUNCTION outreach_classifier_status()
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+  SELECT CASE
+           WHEN r.classifier IN ('model', 'fake') THEN r.classifier
+           WHEN r.not_configured THEN 'off'
+           ELSE 'unknown'
+         END
+    FROM (SELECT 1) x
+    LEFT JOIN LATERAL (
+      SELECT j.metadata->>'classifier' AS classifier, coalesce((j.metadata->>'notConfigured')::boolean, false) AS not_configured
+        FROM job_run j
+       WHERE j.job_id = 'outbound.intent' AND j.status IN ('ok', 'partial') AND j.started_at > now() - interval '1 day'
+       ORDER BY j.started_at DESC, j.finished_at DESC NULLS FIRST
+       LIMIT 1) r ON true
+$$;
+REVOKE ALL ON FUNCTION outreach_classifier_status() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION outreach_classifier_status() TO mc_app;
+
+-- =====================================================================
 -- 5 · Comprobación: ningún contador global donde llega mc_app
 -- ---------------------------------------------------------------------
 -- La misma pregunta que la guardia (clavesDeSecuencia), aquí para que la
--- migración no termine dejando una. has_table_privilege mira también lo
--- heredado por PUBLIC y por membresía.
+-- migración no termine dejando una, con su mismo criterio: mc_app o el
+-- rol de los enlaces públicos (mc_public_share) leen o insertan en la
+-- tabla. has_any_column_privilege mira también lo heredado por PUBLIC y
+-- por membresía, y lo concedido por columna.
 -- =====================================================================
 DO $$
 DECLARE
@@ -256,9 +333,11 @@ BEGIN
     LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND a.attnum > 0 AND NOT a.attisdropped
      AND (a.attidentity <> '' OR pg_get_expr(d.adbin, d.adrelid) ~ '^nextval\(')
-     AND (has_table_privilege('mc_app', c.oid, 'SELECT') OR has_table_privilege('mc_app', c.oid, 'INSERT'));
+     AND EXISTS (SELECT 1 FROM pg_roles r
+                  WHERE r.rolname IN ('mc_app', 'mc_public_share')
+                    AND has_any_column_privilege(r.oid, c.oid, 'SELECT, INSERT'));
   IF quedan IS NOT NULL THEN
-    RAISE EXCEPTION 'quedan claves de secuencia global donde llega mc_app: %', quedan
+    RAISE EXCEPTION 'quedan claves de secuencia global donde llegan mc_app o mc_public_share: %', quedan
       USING HINT = 'Una clave que la base rellena sola va con uuid DEFAULT gen_random_uuid() (CIM-11).';
   END IF;
 END $$;

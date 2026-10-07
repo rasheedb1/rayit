@@ -1658,6 +1658,8 @@ interface FilaClaveDeSecuencia extends Record<string, unknown> {
   columna: string;
   /** El nombre de la secuencia, o el DEFAULT tal cual si no se pudo resolver. */
   secuencia: string | null;
+  /** Si mc_app o mc_public_share la leen o insertan: directo, por PUBLIC, por membresía o por columna. */
+  aplica: boolean;
 }
 interface FilaUnico extends Record<string, unknown> {
   tabla: string;
@@ -1853,11 +1855,21 @@ const SQL_INQUILINOS = `
  * secuencia: identity, o un DEFAULT que llama a nextval(…). La secuencia
  * va en el texto para el mensaje (la de un identity no sale en el
  * DEFAULT: la da pg_get_serial_sequence).
+ *
+ * `aplica`: si mc_app ($1) o el rol de los enlaces públicos ($2) leen o
+ * insertan en la tabla, contando lo que les llega por PUBLIC, por
+ * membresía en otro rol y por columna (has_any_column_privilege mira la
+ * tabla y cada columna). Es el mismo criterio que la comprobación final
+ * de 0082 §5: la guardia no deja pasar lo que la migración habría
+ * frenado. Un rol que no existe no cuenta (se busca en pg_roles).
  */
 const SQL_CLAVES_DE_SECUENCIA = `
   SELECT c.relname AS tabla, a.attname::text AS columna,
          coalesce(pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname),
-                  pg_get_expr(d.adbin, d.adrelid)) AS secuencia
+                  pg_get_expr(d.adbin, d.adrelid)) AS secuencia,
+         EXISTS (SELECT 1 FROM pg_roles r
+                  WHERE r.rolname IN ($1, $2)
+                    AND has_any_column_privilege(r.oid, c.oid, 'SELECT, INSERT')) AS aplica
     FROM pg_attribute a
     JOIN pg_class c ON c.oid = a.attrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -2210,7 +2222,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const disparadores = await leer<FilaDisparador>(SQL_DISPARADORES, [FUNCION_DE_REFERENCIAS]);
   const inquilinos = await leer<FilaInquilino>(SQL_INQUILINOS, [[...COLUMNAS_DE_INQUILINO]]);
   const unicos = await leer<FilaUnico>(SQL_UNICOS);
-  const clavesLeidas = await leer<FilaClaveDeSecuencia>(SQL_CLAVES_DE_SECUENCIA);
+  const clavesLeidas = await leer<FilaClaveDeSecuencia>(SQL_CLAVES_DE_SECUENCIA, [APP_ROLE, PUBLIC_SHARE_ROLE]);
   const disparadoresDefinerLeidos = await leer<FilaDisparadorDefiner>(SQL_DISPARADORES_DEFINER);
   const candados = await leer<FilaCandado>(SQL_CANDADOS, [Object.keys(DISPARADORES_DE_CANDADO)]);
   const reglasLeidas = await leer<FilaRegla>(SQL_REGLAS);
@@ -2766,8 +2778,10 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const clavesQueAplican = new Set<string>();
   const clavesDeSecuencia: string[] = [];
   for (const k of clavesLeidas) {
-    const suyos = deLaApp(k.tabla);
-    if (!suyos.has('SELECT') && !suyos.has('INSERT')) continue;
+    // A quién le llega lo dice la base (SQL_CLAVES_DE_SECUENCIA): deLaApp
+    // solo ve los GRANT directos a mc_app y a PUBLIC, no lo heredado por
+    // membresía ni lo del rol de los enlaces públicos.
+    if (!k.aplica) continue;
     const clave = `${k.tabla}.${k.columna}`;
     clavesQueAplican.add(clave);
     if (clave in CLAVES_DE_SECUENCIA_DECLARADAS) continue;
