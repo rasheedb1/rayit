@@ -352,3 +352,52 @@ que hace falta saber para tocar el módulo sin romperlo.
   en el servidor, que no se fía del navegador. `importCsvReadings`
   se protege sola: valida la cuenta, la fecha y los duplicados, y los
   rechazos viajan como código para que el texto lo ponga la pantalla.
+
+## 9. «Lo que importa esta semana» (RES-3): lo que toca de Conexiones
+
+El bloque de arriba de /resumen lee `notification`
+(`packages/db/src/queries/resumen-semana.ts`). Tres de sus cinco fuentes
+ya tenían productor (FIN-4, VEN-4, CON-6) y la cuenta de envío lo tiene
+en Ventas. La cuenta social **que ya no se puede leer** no escribía
+ningún aviso: caía en silencio. Para cerrarlo, RES-3 tocó jobs de la
+carpeta de Nicolás (`apps/worker/src/jobs/conexiones/`). **Pide su
+revisión antes del merge a `main`**; en la rama, esos cambios van en
+commits propios («jobs de Conexiones (revisión de Nicolás)»).
+
+**Qué cambia en sus jobs, entero:**
+
+| Dónde | Antes | Ahora | Por qué |
+|---|---|---|---|
+| `aviso-cuenta.ts` (nuevo) | — | `notifyBrokenAccount`: el aviso `connection_error` de una cuenta social, en un solo sitio | Tres caminos rompen una cuenta; los tres dicen lo mismo y con la misma regla |
+| `_posts.ts › markAccountError` | `UPDATE … status = 'error'`, sin aviso | El mismo UPDATE y el aviso (`warning`) **en la misma transacción** | El productor mínimo que pide RES-3 |
+| `collect-account-metrics.ts` | Los dos UPDATE de estado, sin aviso | Cada UPDATE con su aviso, en la misma transacción | Lo mismo, por el otro recolector |
+| `_posts.ts › markNeedsReauth` y `oauth-refresh.ts › markNeedsReauth` | Su propio INSERT, título «Vuelve a conectar tu cuenta de TikTok (laura)» | `notifyBrokenAccount`, título «TikTok dejó de darnos las cifras de @laura» | Si oauth.refresh y collect.posts rechazaban el token el mismo día, la campana enseñaba dos críticos iguales. El título nuevo no promete reconectar: en la demo Conexiones contesta «esta versión no puede reautorizarla desde aquí», y la fila más urgente del Resumen no puede mandar a un callejón |
+| **Regla de no repetir** | No había | Como mucho un aviso por cuenta cada 7 días para la misma avería (`BROKEN_ACCOUNT_REPEAT_DAYS`); otro si sube de `warning` a `critical` o si la cuenta se leyó bien después del último (`last_synced_at`). Un aviso descartado (`dismissed_at`) también cuenta | Una cuenta en `error` se reintenta cada día: sin la regla, un aviso diario |
+| **Candado** | — | `pg_advisory_xact_lock` con la clave `connection_error:<id de la cuenta>` antes del `INSERT … WHERE NOT EXISTS` | En READ COMMITTED, collect.posts y collect.account_metrics fallando a la vez sobre la misma cuenta escribían dos avisos |
+| `oauth-refresh.ts` | — | Barrido `remindBrokenAccounts` en la corrida general (no en la de una cuenta pedida): las cuentas sin token (`needs_reauth`, `expired`, `revoked`) sin aviso en 7 días reciben otro, una transacción por cuenta | Nadie vuelve a leer una cuenta sin token: un «Entendido» por error la sacaba para siempre del Resumen |
+
+El título vive en `@mc/core` (`cuentas.ts › connectionErrorTitle`) y la
+fila del Resumen dice **ese mismo título** (`brokenAccountKind` elige la
+variante por el estado de la cuenta), así la campana y el Resumen no
+nombran la misma cuenta con dos frases. `apps/web …/resumen/semana.test.tsx`
+lo comprueba.
+
+**Si Nicolás no lo aprueba**, lo que queda es el productor mínimo: el
+aviso de `markAccountError` y de collect.account_metrics, con su regla y
+su candado. Se revierten el cambio de título y de INSERT de los dos
+`markNeedsReauth` y el barrido; la fila del Resumen sigue funcionando
+(lee lo que haya), y su título vuelve a ser el que escriba Conexiones.
+
+**Las otras decisiones del bloque, en corto:**
+
+- Una agencia (más de una creadora en el espacio) ve **de quién** es cada
+  cuenta o video junto a la pastilla de la fila, y el video dice «su
+  mediana» en vez de «tu mediana». El nombre no entra en el título de la
+  cuenta para no romper la igualdad con la campana.
+- En el espacio del seed (la demo pública) el video destacado no se abre
+  en su red: los videos son inventados y su url da un 404. No se le quita
+  la url al post en el seed porque el media kit de Cotizar (seed 0004) la
+  usa para citar el video.
+- En la demo, el aviso del paso 4 de FV-2026-007 ya está mandado el día
+  que Finanzas dice que salió el último recordatorio: la fila y el
+  detalle de la factura cuentan la misma historia.

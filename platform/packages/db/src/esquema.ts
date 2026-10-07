@@ -1356,6 +1356,15 @@ export const PRIVILEGIOS_DE_LA_APP: Readonly<Record<string, PrivilegiosDeclarado
       'outbound_llm_reserve_web y outbound_llm_release_web. Con escritura, un workspace se borraría las reservas del worker y dos jobs ' +
       'volverían a gastar el mismo saldo',
   },
+  notification_ack: {
+    permite: ['SELECT', 'INSERT'],
+    motivo:
+      'el «Entendido» y el «Deshacer» de una persona sobre un aviso (0081, RES-3): cada gesto es una fila nueva y vale ' +
+      'el último, así que deshacer no necesita ni UPDATE ni DELETE. Con ellos, quien lo dio podría reescribir la ' +
+      'constancia de lo que vio; y la política de INSERT exige que la fila sea de quien escribe (user_id = ' +
+      'current_user_id()), así que nadie marca leído ni deshace por otro; la de SELECT, que cada persona lea solo los ' +
+      'suyos',
+  },
   outbound_llm_call: {
     permite: ['SELECT', 'INSERT'],
     motivo:

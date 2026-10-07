@@ -19,7 +19,7 @@ import {
   type PostSources,
 } from '@mc/connectors';
 import type { JobContext, JobPayload } from '../../runner/registry.ts';
-import { PLATFORM_NAMES } from './oauth-refresh.ts';
+import { notifyBrokenAccount, platformName } from './aviso-cuenta.ts';
 
 export interface CollectPayload extends JobPayload {
   /** Solo esta cuenta (desde la pantalla o una prueba). */
@@ -97,10 +97,6 @@ function targetFor(acc: CollectableAccount, tokens: PostSourceTarget['tokens']):
   return { connectionId: acc.id, handle: acc.handle, externalAccountId: acc.external_account_id, tokens };
 }
 
-export function platformName(platformId: string): string {
-  return isPlatformId(platformId) ? PLATFORM_NAMES[platformId] : platformId;
-}
-
 export function sourcesFor(ctx: JobContext): PostSources {
   return createPublicPostSources(ctx.connectors.core, ctx.env);
 }
@@ -157,19 +153,24 @@ export function isAborted(err: unknown): boolean {
   return false;
 }
 
-/** La cuenta del creador no se puede leer: queda en 'error' con la razón en español. */
+/** La cuenta del creador no se puede leer: queda en 'error' con la razón en español, y se avisa (RES-3). */
 export async function markAccountError(ctx: JobContext, acc: CollectableAccount, detailEs: string): Promise<void> {
-  await ctx.db.query(
-    `UPDATE social_connection
-        SET status = 'error', status_detail = $3, last_error_at = now(), consecutive_failures = consecutive_failures + 1
-      WHERE id = $1 AND workspace_id = $2`,
-    [acc.id, acc.workspace_id, detailEs],
-  );
+  await ctx.db.transaction(async (tx) => {
+    await tx.query(
+      `UPDATE social_connection
+          SET status = 'error', status_detail = $3, last_error_at = now(), consecutive_failures = consecutive_failures + 1
+        WHERE id = $1 AND workspace_id = $2`,
+      [acc.id, acc.workspace_id, detailEs],
+    );
+    await notifyBrokenAccount(tx, acc, 'unreadable', detailEs);
+  });
 }
 
 /**
  * El token del dueño ya no sirve: needs_reauth y una notificación, como
  * hace oauth.refresh. Sin esto el creador no se entera hasta que mira.
+ * El aviso es el de notifyBrokenAccount: mismo título, misma severidad,
+ * misma regla para no repetirse.
  */
 export async function markNeedsReauth(ctx: JobContext, acc: CollectableAccount, detailEs: string): Promise<void> {
   await ctx.db.transaction(async (tx) => {
@@ -179,11 +180,7 @@ export async function markNeedsReauth(ctx: JobContext, acc: CollectableAccount, 
         WHERE id = $1 AND workspace_id = $2`,
       [acc.id, acc.workspace_id, detailEs],
     );
-    await tx.query(
-      `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
-       VALUES ($1, 'connection_error', 'critical', $2, $3, 'social_connection', $4, '/conexiones')`,
-      [acc.workspace_id, `Vuelve a conectar tu cuenta de ${platformName(acc.platform_id)}${acc.handle ? ` (${acc.handle})` : ''}`, detailEs, acc.id],
-    );
+    await notifyBrokenAccount(tx, acc, 'reauth', detailEs);
   });
 }
 

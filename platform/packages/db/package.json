@@ -17,6 +17,7 @@
     "./queries/identidad": "./src/queries/identidad.ts",
     "./queries/resumen": "./src/queries/resumen.ts",
     "./queries/resumen-constantes": "./src/queries/resumen-constantes.ts",
+    "./queries/resumen-semana": "./src/queries/resumen-semana.ts",
     "./queries/ventas": "./src/queries/ventas.ts",
     "./queries/ventas-ficha": "./src/queries/ventas-ficha.ts",
     "./queries/brief": "./src/queries/brief.ts",

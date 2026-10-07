@@ -26,7 +26,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ARCHIVOS = ['campanas.ts', 'campanas/reporte.ts', 'campanas/reporte-publico.ts', 'finanzas.ts', 'conexiones.ts'] as const;
+const ARCHIVOS = ['campanas.ts', 'campanas/reporte.ts', 'campanas/reporte-publico.ts', 'finanzas.ts', 'conexiones.ts', 'resumen-semana.ts'] as const;
 type Archivo = (typeof ARCHIVOS)[number];
 
 /**
@@ -74,6 +74,12 @@ const SIN_ALCANCE_DECLARADAS: Record<Archivo, Record<string, string>> = {
       'el permiso de la persona de la sesión (role_permission, ACC-5/ACC-8): el permiso y el alcance son capas distintas; ' +
       'la escritura que sigue pasa por su propio filtro',
   },
+  // «Lo que importa esta semana» (RES-3): lee facturas, negocios, cuentas,
+  // cuentas de envío y posts, y cada rama compone su SCOPE_* como el
+  // módulo dueño de la fila. Los gestos («Entendido», «Deshacer») y la
+  // comprobación del modo demo usan los mismos SCOPE_* (COSA_EN_ALCANCE):
+  // nada sin alcance que declarar.
+  'resumen-semana.ts': {},
 };
 
 /** Lo que cuenta como «pasa por el alcance». */

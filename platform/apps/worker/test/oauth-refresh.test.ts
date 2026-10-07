@@ -252,6 +252,28 @@ test('refresh_expires_at vencido pasa a needs_reauth sin llamar a la plataforma'
   assert.match(notes.rows[0]!.title_es, /YouTube/);
 });
 
+test('RES-3 · si otro camino ya avisó esta semana de la cuenta sin token, oauth.refresh no escribe un segundo aviso crítico', async () => {
+  const raw = h.db.raw;
+  const cp = await raw.query<{ id: string }>(`SELECT id FROM creator_profile WHERE workspace_id = $1`, [seed.workspaceId]);
+  const r = await raw.query<{ id: string }>(
+    `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, access_expires_at, refresh_expires_at)
+     VALUES ($1, $2, 'youtube', 'yt-dos-caminos', 'dos.caminos', 'vault:dos-caminos', $3, $4) RETURNING id`,
+    [seed.workspaceId, cp.rows[0]!.id, minutes(5), minutes(-1)],
+  );
+  const id = r.rows[0]!.id;
+  await h.secrets.set('vault:dos-caminos', { accessToken: 'ACCESS-DOS', accessExpiresAt: minutes(5), scopes: [] });
+  // El que dejó collect.posts (markNeedsReauth de _posts.ts) un rato antes, el mismo día.
+  await raw.query(
+    `INSERT INTO notification (workspace_id, kind, severity, title_es, entity_type, entity_id, action_url, created_at)
+     VALUES ($1, 'connection_error', 'critical', 'YouTube dejó de darnos las cifras de @dos.caminos', 'social_connection', $2, '/conexiones', now() - interval '2 hours')`,
+    [seed.workspaceId, id],
+  );
+  await h.worker.boss.send('oauth.refresh', { connectionId: id }, { singletonKey: `conexion:${id}` });
+  await waitFor(async () => (await conn(id)).status === 'needs_reauth', { timeoutMs: 20_000, label: 'dos caminos' });
+  const notes = await h.db.query<{ n: number }>(`SELECT count(*)::int AS n FROM notification WHERE entity_id = $1`, [id]);
+  assert.equal(notes.rows[0]!.n, 1, 'la misma regla que notifyBrokenAccount: un crítico por semana y por avería');
+});
+
 test('sin credencial en el SecretStore la cuenta NO cambia de estado: es un problema nuestro, no del creador', async () => {
   const raw = h.db.raw;
   const cp = await raw.query<{ id: string }>(`SELECT id FROM creator_profile WHERE workspace_id = $1`, [seed.workspaceId]);

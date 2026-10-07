@@ -1,0 +1,99 @@
+-- =====================================================================
+-- Verificación del seed 0012 («Lo que importa esta semana», RES-3).
+-- ---------------------------------------------------------------------
+-- Cómo correrlo:
+--   Postgres embebido, sin tocar Supabase:
+--     node db/seed/verify/run.mjs 0012
+--
+-- Cada consulta con columna `ok` es una prueba: un false hace fallar
+-- run.mjs. Lo que se cuida es que la demo enseñe las CINCO fuentes del
+-- bloque de arriba de /resumen: un aviso de cada una, con la forma de su
+-- productor, sobre una cosa que todavía cumple la regla de lectura de
+-- packages/db/src/queries/resumen-semana.ts (la cuenta sigue caída, la
+-- factura sigue vencida, el negocio sigue vencido y el aviso es de ese
+-- compromiso, el video se avisó esta semana). Que la consulta de verdad
+-- devuelva esas cinco filas lo prueba, sobre el mismo seed,
+-- packages/db/test/resumen-semana.test.ts («el seed de la demo…»).
+--
+-- Mira las tablas y no deal_pipeline: la vista usa su propio now(), que
+-- el reloj de run.mjs (--dias) no mueve; con la tabla, el seed y la
+-- verificación cuentan con el mismo reloj.
+-- =====================================================================
+
+SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', false);
+
+-- (a) Un aviso de cada fuente, ni más ni menos, sin descartar, y sin
+--     leer salvo el cobro (ese read_at es «recordatorio enviado», (c).
+SELECT 'a_un_aviso_por_fuente' AS check_id,
+       count(*) FILTER (WHERE n.kind = 'connection_error' AND n.entity_type = 'social_connection')        AS cuenta,
+       count(*) FILTER (WHERE n.kind = 'connection_error' AND n.entity_type = 'outreach_channel_account') AS canal,
+       count(*) FILTER (WHERE n.kind = 'invoice_overdue' AND n.entity_type = 'invoice')                   AS cobro,
+       count(*) FILTER (WHERE n.kind = 'deal_overdue' AND n.entity_type = 'deal')                         AS seguimiento,
+       count(*) FILTER (WHERE n.kind IN ('outlier', 'breakout') AND n.entity_type = 'post')               AS video,
+       count(*) = 5
+         AND count(*) FILTER (WHERE n.kind = 'connection_error' AND n.entity_type = 'social_connection') = 1
+         AND count(*) FILTER (WHERE n.kind = 'connection_error' AND n.entity_type = 'outreach_channel_account') = 1
+         AND count(*) FILTER (WHERE n.kind = 'invoice_overdue' AND n.entity_type = 'invoice') = 1
+         AND count(*) FILTER (WHERE n.kind = 'deal_overdue' AND n.entity_type = 'deal') = 1
+         AND count(*) FILTER (WHERE n.kind IN ('outlier', 'breakout') AND n.entity_type = 'post') = 1
+         AND bool_and((n.read_at IS NULL OR n.kind = 'invoice_overdue') AND n.dismissed_at IS NULL AND n.created_at <= now()) AS ok
+  FROM notification n
+ WHERE n.id IN ('00000011-0000-4000-8000-0000000a1101', '00000011-0000-4000-8000-0000000a1102',
+                '00000011-0000-4000-8000-0000000a1103', '00000011-0000-4000-8000-0000000a1104',
+                '00000011-0000-4000-8000-0000000a1105');
+
+-- (a2) La cuenta de envío sigue por reconectar y el aviso lleva a Canales.
+SELECT 'a2_canal_caido' AS check_id, a.channel, a.status,
+       a.status IN ('needs_reconnect', 'error') AND n.severity = 'critical' AND n.action_url = '/ventas/canales' AS ok
+  FROM notification n
+  JOIN outreach_channel_account a ON a.id = n.entity_id
+ WHERE n.id = '00000011-0000-4000-8000-0000000a1105';
+
+-- (b) La cuenta sigue caída y el aviso es el crítico de needs_reauth, con su enlace.
+--     El título es el de @mc/core connectionErrorTitle('Facebook', handle,
+--     'reauth') (packages/core/src/cuentas.ts): dice qué pasó y no promete
+--     «vuelve a conectarla», que Conexiones no puede hacer en la demo. La
+--     igualdad con la función la compara packages/db/test/resumen-semana.test.ts;
+--     aquí, la forma, y que ni el título ni el detalle prometan reconectar.
+SELECT 'b_cuenta_caida' AS check_id, c.platform_id, c.status, n.severity, n.title_es,
+       c.status = 'needs_reauth' AND c.deleted_at IS NULL AND n.severity = 'critical' AND n.action_url = '/conexiones'
+         AND n.title_es = 'Facebook dejó de darnos las cifras de @' || c.handle
+         AND n.title_es !~* '(vuelve a (conectar|autorizar)|reautoriz)'
+         AND coalesce(c.status_detail, '') !~* '(vuelve a (conectar|autorizar)|reautoriz)' AS ok
+  FROM notification n
+  JOIN social_connection c ON c.id = n.entity_id
+ WHERE n.id = '00000011-0000-4000-8000-0000000a1101';
+
+-- (c) La factura sigue abierta y vencida, y el aviso es el paso 4 de FIN-4,
+--     ya mandado el día que Finanzas dice que salió el último recordatorio
+--     (seed 0003: reminders_sent, last_reminder_at). Así el bloque y el
+--     detalle de la factura cuentan la misma historia.
+SELECT 'c_cobro_vencido' AS check_id, i.number, i.status, CURRENT_DATE - i.due_on AS dias_de_mora, n.action_url,
+       i.reminders_sent, i.last_reminder_at, n.read_at,
+       i.status IN ('sent', 'partial') AND i.due_on < CURRENT_DATE AND n.severity = 'warning'
+         AND n.action_url = '/finanzas/facturas/' || i.id || '?recordatorio=4'
+         AND i.reminders_sent > 0 AND n.read_at = i.last_reminder_at AND n.read_at >= n.created_at AS ok
+  FROM notification n
+  JOIN invoice i ON i.id = n.entity_id
+ WHERE n.id = '00000011-0000-4000-8000-0000000a1102';
+
+-- (d) El negocio sigue abierto, con la acción vencida, y el aviso nació
+--     después del vencimiento (es de ESE compromiso) y va a una persona.
+SELECT 'd_seguimiento_vencido' AS check_id, d.name, d.next_action_due, n.created_at,
+       NOT st.is_won AND NOT st.is_lost AND nullif(btrim(d.next_action), '') IS NOT NULL
+         AND d.next_action_due < now() AND n.created_at >= d.next_action_due AND n.user_id IS NOT NULL
+         AND n.action_url = '/ventas/empresas/' || d.company_id AS ok
+  FROM notification n
+  JOIN deal d ON d.id = n.entity_id
+  JOIN pipeline_stage st ON st.id = d.stage_id
+ WHERE n.id = '00000011-0000-4000-8000-0000000a1103';
+
+-- (e) El video se avisó esta semana, en su tramo, y sigue publicado.
+SELECT 'e_video_de_la_semana' AS check_id, n.kind, s.views_vs_median, n.created_at,
+       NOT p.deleted_on_platform AND n.created_at >= now() - interval '7 days' AND n.severity = 'success'
+         AND n.kind = CASE WHEN s.views_vs_median >= 5 THEN 'breakout' ELSE 'outlier' END
+         AND s.views_vs_median >= 2 AS ok
+  FROM notification n
+  JOIN post p ON p.id = n.entity_id
+  JOIN post_score s ON s.post_id = p.id
+ WHERE n.id = '00000011-0000-4000-8000-0000000a1104';

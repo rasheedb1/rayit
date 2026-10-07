@@ -1,3 +1,5 @@
+import { brokenAccountKind, connectionErrorTitle, type AgeCut } from "@mc/core";
+import type { BrokenConnectionStatus } from "@mc/db/queries/resumen-semana";
 import type { CsvImportErrorCode } from "@mc/db/queries/resumen";
 import type { ErrorCsvCodigo, ProblemaCodigo, ProblemaFechaExportacion } from "./importar/_lib/csv";
 import type { Campo, FormatoId } from "./importar/_lib/formatos";
@@ -22,6 +24,156 @@ import type { Campo, FormatoId } from "./importar/_lib/formatos";
 const contar = (n: number, txt: string, uno: string, varios: string) => (n === 1 ? `1 ${uno}` : `${txt} ${varios}`);
 
 export const MESSAGES = {
+  /**
+   * «Lo que importa esta semana» (RES-3): el bloque de arriba. Cada fila
+   * es una cosa que pide atención, con su enlace al módulo donde se
+   * resuelve. Los textos se arman aquí con las cifras YA formateadas
+   * (lib/format.ts), no con el título que escribió el productor del
+   * aviso: así toda la fila habla el idioma de la interfaz.
+   */
+  semana: {
+    titulo: "Lo que importa esta semana",
+    /** «3 pendientes». `n` decide el número; `txt` es `n` ya formateado. */
+    pendientes: (n: number, txt: string) => contar(n, txt, "pendiente", "pendientes"),
+    /** Cuando la consulta trajo más de las que caben (MAX_HIGHLIGHTS): `txt` es ese tope ya formateado. */
+    pendientesMas: (txt: string) => `Más de ${txt} pendientes`,
+    /** Solo cuando hay filas: habla del botón «Entendido», que el bloque vacío no tiene. */
+    descripcion:
+      "Lo que pide tu atención, lo más urgente arriba. «Entendido» lo quita de tu lista; en su módulo sigue como está.",
+    /**
+     * El bloque vacío. NO afirma nada sobre los datos: el bloque enseña
+     * avisos sin atender, no la mora ni el estado de las cuentas, y quien
+     * ya dio «Entendido» a una factura vencida la sigue teniendo vencida
+     * con el bloque vacío.
+     */
+    vacio: {
+      title: "Todo en orden esta semana",
+      description:
+        "Nada nuevo que atender. Aquí te avisamos cuando una cuenta deje de leerse, venza un cobro, se atrase un seguimiento o se dispare un video.",
+    },
+    /** Si el bloque no carga, el resto del resumen sigue: se dice aquí y no tumba la página. */
+    error: "No pudimos cargar lo que importa esta semana. Las cifras de abajo no dependen de esto.",
+    cargando: "Cargando lo que importa esta semana",
+    entendido: "Entendido",
+    /** Para el lector de pantalla: qué se marca como entendido. */
+    entendidoDe: (que: string) => `Entendido: ${que}`,
+    /** Para el lector de pantalla: el enlace de la fila con la fila de la que es («Ver en Ventas: Seguimiento vencido: …»). */
+    enlaceDe: (enlace: string, que: string) => `${enlace}: ${que}`,
+    /** El aviso que queda tras «Entendido», con su «Deshacer» (role=status: el lector de pantalla lo anuncia). */
+    quitado: (que: string) => `Quitado de tu lista: ${que}`,
+    deshacer: "Deshacer",
+    deshacerDe: (que: string) => `Deshacer: volver a mostrar ${que}`,
+    devuelto: (que: string) => `De vuelta en tu lista: ${que}`,
+    errorEntendido: "No pudimos quitarlo de tu lista. Inténtalo otra vez.",
+    errorDeshacer: "No pudimos devolverlo a tu lista. Inténtalo otra vez.",
+    /** Las primeras filas se ven; el resto, plegado, para que las cifras de abajo no queden dos pantallas más abajo. */
+    verMas: (n: number, txt: string) => (n === 1 ? "Ver 1 más" : `Ver ${txt} más`),
+    verMenos: "Ver menos",
+    /** Cuando hay más filas de las que el bloque lee. */
+    hayMas: "Hay más avisos de los que caben aquí: atiende los de arriba y los siguientes subirán.",
+    /** La pastilla de cada fila: de qué se trata. */
+    fuente: {
+      connection: "Cuenta",
+      channel: "Canal de envío",
+      invoice: "Cobro",
+      deal: "Seguimiento",
+      outlier: "Video destacado",
+    },
+    /** El enlace de cada fila: a dónde lleva, dicho en el botón. */
+    ir: {
+      connection: "Ver en Conexiones",
+      channel: "Ver en Canales",
+      invoice: "Ver la factura",
+      deal: "Ver en Ventas",
+    },
+    /**
+     * La cuenta social rota. El título es EL MISMO que el del aviso de la
+     * campana, que escribe el worker: la plantilla vive en @mc/core
+     * (cuentas.ts › connectionErrorTitle) porque el worker no lee este
+     * archivo, y aquí solo se elige cuál según el estado de la cuenta.
+     * Dice lo que pasó y no promete cómo se arregla: si Conexiones puede
+     * reautorizarla depende del entorno, y lo dice Conexiones. `red` es
+     * «TikTok»; `handle`, el @ tal como lo guarda Conexiones.
+     */
+    connection: {
+      titulo: (red: string, handle: string | null, status: BrokenConnectionStatus) =>
+        connectionErrorTitle(red, handle, brokenAccountKind(status)),
+      /** Sin el detalle de la plataforma, qué pasa si no se atiende. */
+      sinDetalle: "Mientras tanto no llegan cifras nuevas de esta cuenta.",
+    },
+    /** La cuenta de envío de Ventas (correo, LinkedIn…) que frena las secuencias. `canal` es «Gmail», «LinkedIn»… */
+    channel: {
+      needs_reconnect: (canal: string, nombre: string | null) => `Vuelve a conectar tu ${canal}${nombre ? ` (${nombre})` : ""}`,
+      error: (canal: string, nombre: string | null) => `Tu ${canal}${nombre ? ` (${nombre})` : ""} no puede enviar`,
+      detalle: "Lo que iba a salir por esta cuenta espera en la cola hasta que vuelva.",
+    },
+    invoice: {
+      titulo: (numero: string, empresa: string) => `La factura ${numero} de ${empresa} está vencida`,
+      /**
+       * `pendiente` es el saldo ya formateado; `cuando`, «hace 41 días».
+       * `enviado` es la fecha del último recordatorio si ya se mandó desde
+       * Finanzas: mandarlo no cobra la factura, así que la fila sigue.
+       */
+      detalle: (pendiente: string, cuando: string, enviado: string | null) =>
+        `${pendiente} por cobrar · venció ${cuando}${enviado ? ` · recordatorio enviado el ${enviado}` : ""}`,
+    },
+    deal: {
+      vencido: (accion: string) => `Seguimiento vencido: ${accion}`,
+      hoy: (accion: string) => `Vence hoy: ${accion}`,
+      /** `cuando` es «hoy», «ayer» o «hace 3 días», del idioma del espacio. */
+      detalleVencido: (empresa: string, negocio: string, cuando: string) => `${empresa} · ${negocio} · venció ${cuando}`,
+      detalleHoy: (empresa: string, negocio: string) => `${empresa} · ${negocio}`,
+    },
+    /**
+     * El video destacado. `video` es su nombre (título, o su texto si no
+     * tiene: @mc/core videoName) o null si no hay ninguno; entonces se
+     * dice «Tu video de Instagram», sin comillas alrededor de un relleno.
+     * `multiplo` ya formateado («6×»). `varias`: el espacio tiene más de
+     * una creadora, y el video y la mediana son de ella («su mediana»),
+     * no de quien lee. Su nombre va junto a la pastilla de la fila, como
+     * en la de una cuenta (semana.tsx › vistaDeFila).
+     */
+    outlier: {
+      titulo: (video: string | null, red: string, multiplo: string, varias = false) =>
+        varias
+          ? video
+            ? `«${video}» hizo ${multiplo} su mediana`
+            : `Un video de ${red} hizo ${multiplo} su mediana`
+          : video
+            ? `«${video}» hizo ${multiplo} tu mediana`
+            : `Tu video de ${red} hizo ${multiplo} tu mediana`,
+      breakout: (video: string | null, red: string, multiplo: string, varias = false) =>
+        varias
+          ? video
+            ? `Se disparó: «${video}» hizo ${multiplo} su mediana`
+            : `Se disparó un video de ${red}: hizo ${multiplo} su mediana`
+          : video
+            ? `Se disparó: «${video}» hizo ${multiplo} tu mediana`
+            : `Se disparó tu video de ${red}: hizo ${multiplo} tu mediana`,
+      /** NULL no es cero (CON-6 §2): sin múltiplo todavía, se dice con palabras. */
+      sinMultiplo: (video: string | null, red: string, varias = false) =>
+        varias
+          ? video
+            ? `«${video}» va por encima de sus otros videos`
+            : `Un video de ${red} va por encima de sus otros videos`
+          : video
+            ? `«${video}» va por encima de tus otros videos`
+            : `Tu video de ${red} va por encima de tus otros videos`,
+      sinMultiploDetalle: "Aún no hay suficientes videos para comparar.",
+      /** El corte al que se midió el múltiplo: «2,4×» sin «a los 7 días» no se entiende (CON-6 §2). */
+      corte: {
+        24: "a las 24 horas",
+        72: "a los 3 días",
+        168: "a los 7 días",
+        720: "a los 30 días",
+      } satisfies Record<AgeCut, string>,
+      detalle: (red: string, corte: string | null) => (corte ? `${red} · medido ${corte}` : red),
+      /** El clic principal: el video mismo, en su red (no hay todavía una ficha de video en On Cue). */
+      abrirVideo: (red: string) => `Abrir el video en ${red}`,
+      /** El secundario: las cifras de esa red en este mismo panel. */
+      verCifras: (red: string) => `Ver tus cifras de ${red}`,
+    },
+  },
   page: {
     /** El título de la pestaña del navegador. */
     metaTitle: "Resumen",

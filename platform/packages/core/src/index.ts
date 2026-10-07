@@ -17,3 +17,4 @@ export * from './brief.ts';
 export * from './bajas.ts';
 export * from './canales-textos.ts';
 export * from './outreach/index.ts';
+export * from './cuentas.ts';

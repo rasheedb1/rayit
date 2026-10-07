@@ -442,10 +442,12 @@ JOIN invoice i ON i.campaign_id = c.id
 LEFT JOIN deal d ON d.id = c.deal_id
 LEFT JOIN pipeline_stage st ON st.id = d.stage_id;
 
--- (l) Las cuatro conexiones activas, con sus posts contados. Verificable
---     con cualquier reloj: esta consulta no mira la frescura.
+-- (l) Las cuatro conexiones, con sus posts contados: activas, salvo la
+--     página de Facebook, que el seed 0012 deja pidiendo volver a
+--     autorizar (la cuenta de «Lo que importa esta semana», RES-3).
+--     Verificable con cualquier reloj: esta consulta no mira la frescura.
 SELECT 'l_conexiones_cuentas' AS check_id, platform_id, status, account_type, posts_tracked,
-       status = 'active'
+       status = CASE platform_id WHEN 'facebook' THEN 'needs_reauth' ELSE 'active' END
          AND posts_tracked = CASE platform_id WHEN 'tiktok' THEN 21 WHEN 'instagram' THEN 17 WHEN 'youtube' THEN 12 ELSE 10 END AS ok
 FROM connection_health
 ORDER BY platform_id;

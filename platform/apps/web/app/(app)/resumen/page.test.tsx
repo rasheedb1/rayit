@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -28,6 +28,10 @@ vi.mock("./frescura", () => ({
   FrescuraEsqueleto: () => null,
 }));
 vi.mock("./filtros", () => ({ Filtros: () => <div data-testid="filtros" /> }));
+vi.mock("./semana", () => ({
+  LoQueImporta: () => <div data-testid="semana" />,
+  LoQueImportaEsqueleto: () => null,
+}));
 
 import ResumenPage from "./(panel)/page";
 
@@ -74,5 +78,13 @@ describe("la página Resumen elige entre vacío y cifras", () => {
     // El plan de construcción es del equipo: no se enlaza desde la pantalla de la creadora (pulido r8).
     expect(screen.queryByRole("link", { name: "Plan de construcción" })).toBeNull();
     expect(screen.getByRole("link", { name: "Importar un CSV" })).toHaveAttribute("href", "/resumen/importar");
+  });
+
+  it("«Lo que importa esta semana» (RES-3) va arriba en los tres casos: un cobro vencido importa sin cuentas", async () => {
+    for (const c of [{ connections: 0, withData: 0 }, { connections: 2, withData: 0 }, { connections: 4, withData: 3 }]) {
+      await pintar(c);
+      expect(screen.getByTestId("semana")).toBeInTheDocument();
+      cleanup();
+    }
   });
 });
