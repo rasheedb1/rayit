@@ -21,7 +21,7 @@
 --   · Dos campañas planificadas, una de cada creador.
 --
 -- Cómo verlo (docs/propuestas/ACC-7.md, «Cómo verlo»):
---   · Sin llaves (modo demo): DEMO_WORKSPACE_ID=00000013-0000-4000-8000-000000000001
+--   · Sin llaves (modo demo): DEMO_WORKSPACE_ID=000000a7-0000-4000-8000-000000000001
 --     enseña la agencia como la ve quien ve a todos (el modo demo no
 --     tiene persona en las pantallas): el selector, «Sin creador» y el
 --     creador en cada tarjeta.
@@ -48,7 +48,8 @@
 --
 -- Requiere 0082 (y las anteriores). No depende de otro seed.
 --
--- Mapa de identificadores (00000013-…):
+-- Mapa de identificadores (000000a7-…, por ACC-7; 00000013- ya lo usan
+-- las pruebas de cadencias y chocaría con ellas):
 --   …-000000000001    workspace (Agencia Norte · demo)
 --   …-000000000002    app_user Valentina Ortiz (Dueña)
 --   …-000000000004    app_user Diego Salas (Ejecutivo de cuenta, acotado a Camilo)
@@ -59,8 +60,8 @@
 --   …-000000ca0001…02 campaign
 -- =====================================================================
 
-SELECT set_config('app.workspace_id', '00000013-0000-4000-8000-000000000001', false);
-SELECT set_config('app.user_id', '00000013-0000-4000-8000-000000000002', false);
+SELECT set_config('app.workspace_id', '000000a7-0000-4000-8000-000000000001', false);
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000002', false);
 SELECT set_config('TimeZone', 'UTC', false);
 
 
@@ -68,26 +69,26 @@ SELECT set_config('TimeZone', 'UTC', false);
 -- 1 · El espacio y sus dos personas
 -- =====================================================================
 INSERT INTO workspace (id, slug, name, kind, country, currency, timezone, locale, plan, niche_slugs)
-VALUES ('00000013-0000-4000-8000-000000000001', 'agencia-norte-demo', 'Agencia Norte · demo',
+VALUES ('000000a7-0000-4000-8000-000000000001', 'agencia-norte-demo', 'Agencia Norte · demo',
         'agency', 'CO', 'COP', 'America/Bogota', 'es-CO', 'agency', '{cocina,viajes}')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO app_user (id, email, name, locale)
-VALUES ('00000013-0000-4000-8000-000000000002', 'valentina@agencia-demo.test', 'Valentina Ortiz', 'es-CO')
+VALUES ('000000a7-0000-4000-8000-000000000002', 'valentina@agencia-demo.test', 'Valentina Ortiz', 'es-CO')
 ON CONFLICT DO NOTHING;
 INSERT INTO membership (workspace_id, user_id, role_id)
-VALUES ('00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-000000000002', system_role_id('agency', 'owner'))
+VALUES ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000002', system_role_id('agency', 'owner'))
 ON CONFLICT DO NOTHING;
 
-SELECT set_config('app.user_id', '00000013-0000-4000-8000-000000000004', false);
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000004', false);
 INSERT INTO app_user (id, email, name, locale)
-VALUES ('00000013-0000-4000-8000-000000000004', 'diego@agencia-demo.test', 'Diego Salas', 'es-CO')
+VALUES ('000000a7-0000-4000-8000-000000000004', 'diego@agencia-demo.test', 'Diego Salas', 'es-CO')
 ON CONFLICT DO NOTHING;
 INSERT INTO membership (workspace_id, user_id, role_id)
-VALUES ('00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-000000000004', system_role_id('agency', 'manager'))
+VALUES ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000004', system_role_id('agency', 'manager'))
 ON CONFLICT DO NOTHING;
 
-SELECT set_config('app.user_id', '00000013-0000-4000-8000-000000000002', false);
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000002', false);
 
 
 -- =====================================================================
@@ -95,8 +96,8 @@ SELECT set_config('app.user_id', '00000013-0000-4000-8000-000000000002', false);
 -- =====================================================================
 INSERT INTO creator_profile (id, workspace_id, display_name, handle, country, languages, niche_slugs)
 VALUES
-  ('00000013-0000-4000-8000-0000000000a3', '00000013-0000-4000-8000-000000000001', 'Camilo Rey', 'camilo.cocina', 'CO', '{es}', '{cocina}'),
-  ('00000013-0000-4000-8000-0000000000b3', '00000013-0000-4000-8000-000000000001', 'Mariana Gil', 'mariana.viaja', 'CO', '{es}', '{viajes}')
+  ('000000a7-0000-4000-8000-0000000000a3', '000000a7-0000-4000-8000-000000000001', 'Camilo Rey', 'camilo.cocina', 'CO', '{es}', '{cocina}'),
+  ('000000a7-0000-4000-8000-0000000000b3', '000000a7-0000-4000-8000-000000000001', 'Mariana Gil', 'mariana.viaja', 'CO', '{es}', '{viajes}')
 ON CONFLICT DO NOTHING;
 
 DO $$
@@ -110,8 +111,8 @@ BEGIN
     ALTER TABLE membership_scope NO FORCE ROW LEVEL SECURITY;
   END IF;
   INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
-  VALUES ('00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-000000000004', 'creator',
-          '00000013-0000-4000-8000-0000000000a3')
+  VALUES ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000004', 'creator',
+          '000000a7-0000-4000-8000-0000000000a3')
   ON CONFLICT DO NOTHING;
   IF forzada THEN
     ALTER TABLE membership_scope FORCE ROW LEVEL SECURITY;
@@ -128,21 +129,21 @@ END $$;
 -- =====================================================================
 INSERT INTO company (id, name, country, city, industry, niche_slugs, owner_workspace_id)
 VALUES
-  ('00000013-0000-4000-8000-0000000000e1', 'Tostadora Andina', 'CO', 'Manizales', 'alimentos', '{cocina}', '00000013-0000-4000-8000-000000000001'),
-  ('00000013-0000-4000-8000-0000000000e2', 'Mercado Verde',    'CO', 'Bogotá',    'alimentos', '{cocina,viajes}', '00000013-0000-4000-8000-000000000001'),
-  ('00000013-0000-4000-8000-0000000000e3', 'Hostal Brisa',     'CO', 'Santa Marta', 'turismo', '{viajes}', '00000013-0000-4000-8000-000000000001'),
-  ('00000013-0000-4000-8000-0000000000e4', 'Granola Sol',      'CO', 'Medellín',  'alimentos', '{cocina}', '00000013-0000-4000-8000-000000000001')
+  ('000000a7-0000-4000-8000-0000000000e1', 'Tostadora Andina', 'CO', 'Manizales', 'alimentos', '{cocina}', '000000a7-0000-4000-8000-000000000001'),
+  ('000000a7-0000-4000-8000-0000000000e2', 'Mercado Verde',    'CO', 'Bogotá',    'alimentos', '{cocina,viajes}', '000000a7-0000-4000-8000-000000000001'),
+  ('000000a7-0000-4000-8000-0000000000e3', 'Hostal Brisa',     'CO', 'Santa Marta', 'turismo', '{viajes}', '000000a7-0000-4000-8000-000000000001'),
+  ('000000a7-0000-4000-8000-0000000000e4', 'Granola Sol',      'CO', 'Medellín',  'alimentos', '{cocina}', '000000a7-0000-4000-8000-000000000001')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO company_link (workspace_id, company_id, owner_user_id, relationship, notes)
 VALUES
-  ('00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-0000000000e1', '00000013-0000-4000-8000-000000000002', 'client',
+  ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e1', '000000a7-0000-4000-8000-000000000002', 'client',
    'Trabaja con Camilo.'),
-  ('00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-0000000000e2', '00000013-0000-4000-8000-000000000002', 'prospect',
+  ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e2', '000000a7-0000-4000-8000-000000000002', 'prospect',
    'Habla con los dos: un negocio de Camilo y otro de Mariana.'),
-  ('00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-0000000000e3', '00000013-0000-4000-8000-000000000002', 'prospect',
+  ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e3', '000000a7-0000-4000-8000-000000000002', 'prospect',
    'Viajes con Mariana.'),
-  ('00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-0000000000e4', '00000013-0000-4000-8000-000000000002', 'prospect',
+  ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e4', '000000a7-0000-4000-8000-000000000002', 'prospect',
    'Llegó sin decir para quién: el negocio está «Sin creador».')
 ON CONFLICT DO NOTHING;
 
@@ -155,27 +156,27 @@ ON CONFLICT DO NOTHING;
 -- =====================================================================
 INSERT INTO deal (id, workspace_id, company_id, creator_id, owner_user_id, name, stage_id, amount, currency, next_action)
 VALUES
-  ('00000013-0000-4000-8000-0000000dea01', '00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-0000000000e1',
-   '00000013-0000-4000-8000-0000000000a3', '00000013-0000-4000-8000-000000000004',
+  ('000000a7-0000-4000-8000-0000000dea01', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e1',
+   '000000a7-0000-4000-8000-0000000000a3', '000000a7-0000-4000-8000-000000000004',
    'Recetas con café · Camilo', 'propuesta', 4500000.00, 'COP', 'Esperar respuesta a la propuesta'),
-  ('00000013-0000-4000-8000-0000000dea02', '00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-0000000000e2',
-   '00000013-0000-4000-8000-0000000000a3', '00000013-0000-4000-8000-000000000004',
+  ('000000a7-0000-4000-8000-0000000dea02', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e2',
+   '000000a7-0000-4000-8000-0000000000a3', '000000a7-0000-4000-8000-000000000004',
    'Mercado de la semana · Camilo', 'contactado', 3000000.00, 'COP', 'Mandar el media kit'),
-  ('00000013-0000-4000-8000-0000000dea03', '00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-0000000000e2',
-   '00000013-0000-4000-8000-0000000000b3', '00000013-0000-4000-8000-000000000002',
+  ('000000a7-0000-4000-8000-0000000dea03', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e2',
+   '000000a7-0000-4000-8000-0000000000b3', '000000a7-0000-4000-8000-000000000002',
    'Snacks de viaje · Mariana', 'nuevo', 2500000.00, 'COP', 'Enviar pitch'),
-  ('00000013-0000-4000-8000-0000000dea04', '00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-0000000000e3',
-   '00000013-0000-4000-8000-0000000000b3', '00000013-0000-4000-8000-000000000002',
+  ('000000a7-0000-4000-8000-0000000dea04', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e3',
+   '000000a7-0000-4000-8000-0000000000b3', '000000a7-0000-4000-8000-000000000002',
    'Casa de playa · Mariana', 'conversacion', 6000000.00, 'COP', 'Responder con fechas'),
-  ('00000013-0000-4000-8000-0000000dea05', '00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-0000000000e4',
-   NULL, '00000013-0000-4000-8000-000000000002',
+  ('000000a7-0000-4000-8000-0000000dea05', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e4',
+   NULL, '000000a7-0000-4000-8000-000000000002',
    'Por definir · Nutrivé', 'nuevo', NULL, 'COP', 'Decidir de qué creador es')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_by)
-SELECT d.id, NULL, d.stage_id, '00000013-0000-4000-8000-000000000002'
+SELECT d.id, NULL, d.stage_id, '000000a7-0000-4000-8000-000000000002'
   FROM deal d
- WHERE d.workspace_id = '00000013-0000-4000-8000-000000000001'
+ WHERE d.workspace_id = '000000a7-0000-4000-8000-000000000001'
    AND NOT EXISTS (SELECT 1 FROM deal_stage_history h WHERE h.deal_id = d.id);
 
 
@@ -184,8 +185,8 @@ SELECT d.id, NULL, d.stage_id, '00000013-0000-4000-8000-000000000002'
 -- =====================================================================
 INSERT INTO campaign (id, workspace_id, company_id, creator_id, name, brief, amount, currency, status)
 VALUES
-  ('00000013-0000-4000-8000-000000ca0001', '00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-0000000000e1',
-   '00000013-0000-4000-8000-0000000000a3', 'Café de la mañana · Camilo', '1 reel + 3 historias.', 4000000.00, 'COP', 'planned'),
-  ('00000013-0000-4000-8000-000000ca0002', '00000013-0000-4000-8000-000000000001', '00000013-0000-4000-8000-0000000000e3',
-   '00000013-0000-4000-8000-0000000000b3', 'Escapada a la costa · Mariana', '2 TikTok + 1 reel.', 5500000.00, 'COP', 'planned')
+  ('000000a7-0000-4000-8000-000000ca0001', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e1',
+   '000000a7-0000-4000-8000-0000000000a3', 'Café de la mañana · Camilo', '1 reel + 3 historias.', 4000000.00, 'COP', 'planned'),
+  ('000000a7-0000-4000-8000-000000ca0002', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e3',
+   '000000a7-0000-4000-8000-0000000000b3', 'Escapada a la costa · Mariana', '2 TikTok + 1 reel.', 5500000.00, 'COP', 'planned')
 ON CONFLICT DO NOTHING;

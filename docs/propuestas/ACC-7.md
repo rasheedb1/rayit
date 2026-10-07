@@ -233,7 +233,7 @@ Varios hallazgos llegaron dos veces (los dos revisores): se agrupan.
 ## Cómo verlo
 
 El seed `0013_demo_agencia.sql` deja «Agencia Norte · demo»
-(`00000013-0000-4000-8000-000000000001`): Camilo Rey y Mariana Gil,
+(`000000a7-0000-4000-8000-000000000001`): Camilo Rey y Mariana Gil,
 Valentina Ortiz (Dueña) y Diego Salas (Ejecutivo de cuenta, acotado a
 Camilo); cuatro marcas propias de la agencia; cinco negocios (dos de cada
 creador, uno «Sin creador», y Mercado Verde con uno de cada uno) y una
@@ -243,7 +243,7 @@ comprueba el escenario y, con las mismas funciones que la política, qué
 ve cada persona.
 
 - **Como quien ve a todos, sin llaves:**
-  `DEMO_WORKSPACE_ID=00000013-0000-4000-8000-000000000001 pnpm --filter @mc/web dev --port 3105`.
+  `DEMO_WORKSPACE_ID=000000a7-0000-4000-8000-000000000001 pnpm --filter @mc/web dev --port 3105`.
   Ventas › Pipeline enseña el creador en cada tarjeta (fila móvil a 400 px
   incluida) y «Sin creador» en el de Granola Sol; la ficha de Granola Sol, «Sin
   creador · Solo lo ve quien ve a todos» y «Cambiar»; «Nuevo negocio»,
