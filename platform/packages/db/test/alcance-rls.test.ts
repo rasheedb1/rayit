@@ -20,6 +20,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { estadoDelEsquema, explicarEsquema, TABLAS_CON_ALCANCE_POR_CREADOR } from '../src/esquema.ts';
 import type { WorkspaceTx } from '../src/client.ts';
+import { ScopeError, writeOrScopeError } from '../src/scope.ts';
 import { migratorRole, openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, type TestDb } from './pglite.ts';
 import { DESCRIBE_DB_TIMEOUT_MS } from './tiempos.ts';
 import {
@@ -163,5 +164,202 @@ describe('una consulta cruda, sin scopeFilter(), sobre las cuatro tablas', { tim
     assert.deepEqual([...leido.tablero, ...leido.salud].filter((r) => r.creator_id !== CREATOR_LAURA), []);
     assert.ok(leido.asociados.length > 0);
     assert.equal(leido.asociados.some((r) => r.id === POST_SOFIA), false);
+  });
+});
+
+describe('escribir sin scopeFilter(): la misma condición vale para la fila nueva', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
+  test('el miembro no crea una campaña ni un negocio a nombre de Sofía', async () => {
+    await assert.rejects(
+      miembro((tx) => tx.query(
+        `INSERT INTO campaign (workspace_id, company_id, creator_id, name, status)
+         VALUES (current_workspace_id(), $1, $2, 'Colada', 'planned')`,
+        [COMPANY_CAFE_ALMA, CREATOR_SOFIA],
+      )),
+      rechazoDeRls,
+    );
+    await assert.rejects(
+      miembro((tx) => tx.query(
+        `INSERT INTO deal (workspace_id, company_id, creator_id, name, stage_id) VALUES (current_workspace_id(), $1, $2, 'Colado', 'nuevo')`,
+        [COMPANY_CAFE_ALMA, CREATOR_SOFIA],
+      )),
+      rechazoDeRls,
+    );
+  });
+
+  test('el miembro no pasa una fila de Laura a Sofía, ni toca ni borra las de Sofía', async () => {
+    await assert.rejects(
+      miembro((tx) => tx.query('UPDATE campaign SET creator_id = $1 WHERE creator_id = $2', [CREATOR_SOFIA, CREATOR_LAURA])),
+      rechazoDeRls,
+    );
+    const tocadas = await miembro(async (tx) => ({
+      campana: (await tx.query("UPDATE campaign SET name = 'Tocada' WHERE id = $1 RETURNING id", [CAMPAIGN_SOFIA])).rows.length,
+      cuenta: (await tx.query("UPDATE social_connection SET status = 'disabled' WHERE id = $1 RETURNING id", [CONEXION_SOFIA])).rows.length,
+      post: (await tx.query('DELETE FROM post WHERE id = $1 RETURNING id', [POST_SOFIA])).rows.length,
+      negocio: (await tx.query('DELETE FROM deal WHERE id = $1 RETURNING id', [DEAL_SOFIA])).rows.length,
+    }));
+    assert.deepEqual(tocadas, { campana: 0, cuenta: 0, post: 0, negocio: 0 });
+    const siguen = await duena(async (tx) => (await tx.query<{ n: number }>(
+      `SELECT (SELECT count(*) FROM campaign WHERE id = $1 AND name <> 'Tocada')
+            + (SELECT count(*) FROM social_connection WHERE id = $2 AND status = 'active')
+            + (SELECT count(*) FROM post WHERE id = $3)
+            + (SELECT count(*) FROM deal WHERE id = $4) AS n`,
+      [CAMPAIGN_SOFIA, CONEXION_SOFIA, POST_SOFIA, DEAL_SOFIA],
+    )).rows[0]?.n);
+    assert.equal(Number(siguen), 4, 'las cuatro filas de Sofía siguen intactas');
+  });
+});
+
+describe('los roles que ven a todos los creadores, y los que no', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
+  const campanasDe = (userId: string) =>
+    como(WS_AGENCIA, userId, (tx) => tx.query<{ id: string }>('SELECT id FROM campaign ORDER BY id').then((r) => r.rows.map((x) => x.id)));
+  const veTodos = (ws: string, userId: string) =>
+    como(ws, userId, (tx) => tx.query<{ v: boolean }>('SELECT session_sees_all_creators() AS v').then((r) => r.rows[0]?.v));
+
+  test('en una agencia: la dueña y la administradora ven a los dos creadores, el ejecutivo acotado solo al suyo', async () => {
+    assert.deepEqual(await campanasDe(DUENA_AGENCIA), [CAMPANA_A, CAMPANA_B]);
+    assert.deepEqual(await campanasDe(ADMIN_AGENCIA), [CAMPANA_A, CAMPANA_B], 'Administrador ve toda la agencia aunque le dejaran una fila de alcance');
+    assert.deepEqual(await campanasDe(EJECUTIVO_A), [CAMPANA_A]);
+    assert.deepEqual(
+      [await veTodos(WS_AGENCIA, DUENA_AGENCIA), await veTodos(WS_AGENCIA, ADMIN_AGENCIA), await veTodos(WS_AGENCIA, EJECUTIVO_A)],
+      [true, true, false],
+    );
+  });
+
+  test('la dueña de un espacio de creador con una fila de alcance olvidada sigue viéndolo todo', async () => {
+    await t.admin(`INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+                   VALUES ('${WORKSPACE_LAURA}', '${USER_LAURA}', 'creator', '${CREATOR_LAURA}') ON CONFLICT DO NOTHING`);
+    try {
+      assert.equal(await veTodos(WORKSPACE_LAURA, USER_LAURA), true);
+      const ids = await duena((tx) => crudas(tx, 'campaign'));
+      assert.ok(ids.some((f) => f.id === CAMPAIGN_SOFIA));
+    } finally {
+      await t.admin(`DELETE FROM membership_scope WHERE workspace_id = '${WORKSPACE_LAURA}' AND user_id = '${USER_LAURA}'`);
+    }
+  });
+
+  test('un alcance por marca no es un alcance por creador: la base no lo acota (eso sigue siendo de scopeFilter())', async () => {
+    assert.equal(await veTodos(WORKSPACE_LAURA, USER_MIEMBRO_MARCA), true);
+    const filas = await como(WORKSPACE_LAURA, USER_MIEMBRO_MARCA, (tx) => crudas(tx, 'campaign'));
+    assert.ok(filas.some((f) => f.id === CAMPAIGN_SOFIA) && filas.some((f) => f.creator_id === CREATOR_LAURA));
+  });
+
+  test('una persona de otro espacio no gana nada: la tenencia sigue antes que el alcance', async () => {
+    const desdeLaAgencia = await como(WS_AGENCIA, DUENA_AGENCIA, (tx) => crudas(tx, 'campaign'));
+    assert.equal(desdeLaAgencia.some((f) => f.id === CAMPAIGN_SOFIA), false);
+  });
+});
+
+describe('a quién no toca: el worker y los enlaces públicos', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
+  test('las cuatro políticas son RESTRICTIVE, FOR ALL y solo para mc_app', async () => {
+    const politicas = await t.raw<{ tablename: string; permissive: string; roles: string; cmd: string }>(
+      `SELECT tablename::text, permissive::text, roles::text, cmd::text FROM pg_policies
+        WHERE policyname LIKE '%\\_creator\\_scope' ORDER BY tablename`,
+    );
+    assert.deepEqual(politicas, Object.keys(TABLAS_CON_ALCANCE_POR_CREADOR).sort().map((tablename) => ({
+      tablename, permissive: 'RESTRICTIVE', roles: '{mc_app}', cmd: 'ALL',
+    })));
+  });
+
+  test('el worker (mc_worker, BYPASSRLS) sigue viendo las filas de Sofía', async () => {
+    const n = await t.db.asWorker((tx) => tx.query<{ n: number }>(
+      `SELECT (SELECT count(*) FROM social_connection WHERE creator_id = $1) + (SELECT count(*) FROM post WHERE creator_id = $1)
+            + (SELECT count(*) FROM campaign WHERE creator_id = $1) + (SELECT count(*) FROM deal WHERE creator_id = $1) AS n`,
+      [CREATOR_SOFIA],
+    ).then((r) => Number(r.rows[0]?.n)));
+    assert.ok(n >= 4, `el worker ve las de Sofía (${n})`);
+  });
+
+  test('la marca acepta por el enlace público la cotización de un negocio de Sofía, y el negocio pasa a Ganado', async () => {
+    const r = await t.db.withPublicShare((tx) =>
+      tx.query<{ r: { status: string } }>('SELECT public_quote_accept($1, $2, $3) AS r', [SLUG_SOFIA_ENLACE, 'Ana Gómez', 'ana@marcasofia.co']));
+    assert.equal(r.rows[0]?.r.status, 'ok');
+    const etapa = await duena((tx) => tx.query<{ stage_id: string }>('SELECT stage_id FROM deal WHERE id = $1', [DEAL_SOFIA_ENLACE]));
+    assert.equal(etapa.rows[0]?.stage_id, 'ganado');
+    assert.equal((await miembro((tx) => tx.query('SELECT 1 FROM deal WHERE id = $1', [DEAL_SOFIA_ENLACE]))).rows.length, 0);
+  });
+});
+
+describe('lo que la política deja sin respuesta: el @ y el índice único', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
+  const fuera = (ws: string | null, userId: string | undefined, handle: string | null) => {
+    const sql = 'SELECT public_account_out_of_scope($1, $2) AS v';
+    if (ws === null) return t.db.withCatalogs((tx) => tx.query<{ v: boolean }>(sql, ['tiktok', handle])).then((r) => r.rows[0]?.v);
+    return como(ws, userId, (tx) => tx.query<{ v: boolean }>(sql, ['tiktok', handle])).then((r) => r.rows[0]?.v);
+  };
+
+  test('public_account_out_of_scope: sí solo para el @ de otra creadora y a quien está acotado', async () => {
+    assert.equal(await fuera(WORKSPACE_LAURA, USER_MIEMBRO, 'sofia.viaja'), true);
+    assert.equal(await fuera(WORKSPACE_LAURA, USER_MIEMBRO, 'SOFIA.VIAJA'), true, 'el handle se compara sin mayúsculas, como en Conexiones');
+    assert.equal(await fuera(WORKSPACE_LAURA, USER_LAURA, 'sofia.viaja'), false, 'la dueña la ve: no está fuera');
+    assert.equal(await fuera(WORKSPACE_LAURA, USER_MIEMBRO, 'no.existe.acc7'), false);
+    assert.equal(await fuera(WORKSPACE_LAURA, USER_MIEMBRO, null), false);
+    assert.equal(await fuera(WS_AGENCIA, EJECUTIVO_A, 'sofia.viaja'), false, 'desde otro espacio, nada: no enseña cuentas de nadie más');
+    assert.equal(await fuera(null, undefined, 'sofia.viaja'), false, 'sin espacio fijado, falso');
+  });
+
+  test('writeOrScopeError: el choque con una fila que la persona acotada no ve es ScopeError; para la dueña es el error de siempre', async () => {
+    const otraCampanaDe = (quoteId: string) => (tx: WorkspaceTx) => writeOrScopeError(tx, 'prueba_acc7', 'campaign_quote_id_active_key', () => tx.query(
+      `INSERT INTO campaign (workspace_id, company_id, creator_id, quote_id, name, status)
+       VALUES (current_workspace_id(), $1, $2, $3, 'Segunda viva', 'planned')`,
+      [COMPANY_CAFE_ALMA, CREATOR_LAURA, quoteId],
+    ));
+    await t.admin(`UPDATE campaign SET quote_id = '${QUOTE_SOFIA_ENLACE}' WHERE id = '${CAMPAIGN_SOFIA}'`);
+    try {
+      await assert.rejects(miembro(async (tx) => {
+        await assert.rejects(otraCampanaDe(QUOTE_SOFIA_ENLACE)(tx), ScopeError);
+        // La transacción sigue usable después del SAVEPOINT.
+        assert.equal((await tx.query('SELECT 1 AS uno')).rows.length, 1);
+        throw new Error('fin');
+      }), /fin/);
+      await assert.rejects(duena(otraCampanaDe(QUOTE_SOFIA_ENLACE)), (e: unknown) => codigoDe(e) === '23505');
+    } finally {
+      await t.admin(`UPDATE campaign SET quote_id = NULL WHERE id = '${CAMPAIGN_SOFIA}'`);
+    }
+  });
+});
+
+describe('la guardia del esquema exige la política en las cuatro tablas', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
+  const migrador = () => migratorRole(t);
+
+  test('con 0082 aplicada no falta ninguna', async () => {
+    const estado = await estadoDelEsquema(t.db);
+    assert.deepEqual(estado.alcancePorCreador, []);
+    assert.deepEqual(estado.funcionesDefiner, [], 'public_account_out_of_scope está declarada');
+    assert.deepEqual(estado.funcionesQueFaltan, []);
+  });
+
+  test('sin la política de deal, la guardia nombra la tabla y la consulta cruda vuelve a enseñar lo de Sofía', async () => {
+    await t.admin(`SET ROLE ${migrador()}; DROP POLICY deal_creator_scope ON deal; RESET ROLE`);
+    try {
+      const estado = await estadoDelEsquema(t.db);
+      assert.deepEqual(estado.alcancePorCreador, ['deal (sin la política restrictiva por creador)']);
+      assert.match(explicarEsquema(estado) ?? '', /faltan políticas de alcance por creador: .*: deal \(sin la política restrictiva por creador\)/);
+      // La prueba de arriba muerde: sin la política, el miembro ve el negocio de Sofía.
+      const filas = await miembro((tx) => crudas(tx, 'deal'));
+      assert.ok(filas.some((f) => f.id === DEAL_SOFIA));
+    } finally {
+      await t.admin(`SET ROLE ${migrador()}; ${await readFile(MIGRACION, 'utf8')}; RESET ROLE`);
+    }
+    assert.deepEqual((await estadoDelEsquema(t.db)).alcancePorCreador, [], 'volver a correr 0082 la deja como estaba');
+  });
+
+  test('una política con el nombre pero sin la forma (permisiva, con otra condición o con WITH CHECK) tampoco cuenta', async () => {
+    const variantes = [
+      'CREATE POLICY post_creator_scope ON post AS PERMISSIVE FOR ALL TO mc_app USING ((SELECT session_sees_all_creators()) OR scope_allows(\'creator\', creator_id))',
+      'CREATE POLICY post_creator_scope ON post AS RESTRICTIVE FOR ALL TO mc_app USING (true)',
+      'CREATE POLICY post_creator_scope ON post AS RESTRICTIVE FOR SELECT TO mc_app USING ((SELECT session_sees_all_creators()) OR scope_allows(\'creator\', creator_id))',
+      'CREATE POLICY post_creator_scope ON post AS RESTRICTIVE FOR ALL TO mc_app USING ((SELECT session_sees_all_creators()) OR scope_allows(\'creator\', creator_id)) WITH CHECK (true)',
+      `CREATE POLICY post_creator_scope ON post AS RESTRICTIVE FOR ALL TO ${migrador()} USING ((SELECT session_sees_all_creators()) OR scope_allows('creator', creator_id))`,
+    ];
+    try {
+      for (const variante of variantes) {
+        await t.admin(`SET ROLE ${migrador()}; DROP POLICY IF EXISTS post_creator_scope ON post; ${variante}; RESET ROLE`);
+        const { alcancePorCreador } = await estadoDelEsquema(t.db);
+        assert.equal(alcancePorCreador.length, 1, variante);
+        assert.match(alcancePorCreador[0] ?? '', /^post \(/, variante);
+      }
+    } finally {
+      await t.admin(`SET ROLE ${migrador()}; ${await readFile(MIGRACION, 'utf8')}; RESET ROLE`);
+    }
+    assert.deepEqual((await estadoDelEsquema(t.db)).alcancePorCreador, []);
   });
 });
