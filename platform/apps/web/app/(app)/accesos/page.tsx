@@ -171,6 +171,11 @@ export default async function EquipoPage() {
 
       <section className="max-w-3xl">
         <SectionTitle>{t.pendientes.titulo}</SectionTitle>
+        {/* Lista y no DataTable a propósito: «Nuevo enlace» pinta debajo de
+            la fila el enlace recién creado, con su campo para copiar y su
+            aviso del correo, a todo el ancho. En una celda de tabla ese
+            bloque quedaría apretado en la columna de acciones. Mismos
+            tokens que la tabla de Personas (border-border). */}
         {pendientes.length === 0 ? (
           <EmptyState title={t.pendientes.vacio} />
         ) : (

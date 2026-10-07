@@ -449,6 +449,16 @@ Para que Nicolás lo revise en el PR de ACC-4
 | 4 | El menú: Accesos deja las herramientas del equipo y sale en Producto, al final, con el nombre «Equipo». `teamTools(flags, permisos)` pasa a `teamTools(flags)`: ya no mira permisos ni pinta Accesos (lo hace `productModules`, con el mismo `puedeAbrir`) | `apps/web/components/nav.tsx` (carpeta de Nicolás): el import de `puedeAbrir`/`Permisos`, las dos líneas de Accesos en `teamTools`, su firma y sus dos llamadas; el icono `KeyRound` pasa a `ICONS.accesos` | Con ACC-4 Accesos deja de ser el plan del módulo y es la pantalla real del creador. Dejarlo en las herramientas lo pintaba dos veces (como herramienta y como módulo) o había que filtrarlo en dos sitios. La regla del permiso queda en un solo lugar (`puedeAbrir` de `content/modules.ts`, ACC-5). **Pide visto bueno de Nicolás en el PR.** | `components/nav.test.tsx`: «Equipo, en Producto y al final, solo con equipo.miembro.ver (el Mánager lo tiene, el Contador no)», el orden del grupo Producto y el menú móvil del Contador sin Equipo |
 | 5 | El módulo `accesos`: `name` «Accesos» → «Equipo» y `group` `construccion` → `producto`. La ruta y el permiso (`PERMISO_MINIMO.equipo`) no cambian, ni la puerta de ACC-5 | `apps/web/content/modules.ts` (una entrada, con su comentario) | Es lo que mueve el punto 4: el menú sale de `MODULES`. La ruta se queda en `/accesos` porque ACC-5 ya la reservó con su puerta; `/equipo` redirige ahí (`next.config.ts`, permanente) | `content/modules.test.ts`: los módulos de Producto en orden con «Equipo» al final, el del Mánager con `accesos` y el del Contador sin él. `lib/permisos/paginas.test.ts` sigue exigiendo la puerta en `/accesos` |
 
+**Visto bueno que se pide en el PR, explícito, a Nicolás:** filas 1
+(`accesos.ts` y `conexiones.ts`), 4 (`nav.tsx`) y 5 (`modules.ts`),
+las tres en carpetas suyas. Las filas 2 y 3 son esquema nuevo de ACC-4
+(0079) y van con la revisión normal.
+
+Lo que ACC-4 **no** toca: los disparadores `role_fits_workspace` de
+0034 §5 (membership, invitation y workspace_grant). La ronda 2 los
+reemplazaba en 0079 por una copia con otro mensaje; la ronda 3 lo
+deshizo antes de aplicarse y la regla sigue siendo la de 0034.
+
 Queda para ACC-6/7: la regla del subconjunto («solo se da un alcance
 contenido en el propio»), la copia de `invitation.scope` al aceptar y
 la pantalla que escribe el alcance (§5.6). Cuando existan, quien está
