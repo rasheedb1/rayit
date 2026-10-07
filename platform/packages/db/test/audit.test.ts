@@ -17,6 +17,8 @@ import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglit
 const USER_LAURA = '00000002-0000-4000-8000-000000000002';
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-00000000ac02';
 const INVOICE_ID = '00000003-0000-4000-8000-0000fac26001';
+/** Una corrida de job_run: desde 0082 su id es un uuid, no un contador. */
+const RUN_ID = '0000000b-0000-4000-8000-00000000c11a';
 
 interface Fila {
   actor_user_id: string | null;
@@ -108,7 +110,7 @@ describe('el actor sale de la base, no de un parámetro', () => {
     await t.db.asWorker((tx) =>
       auditAsJob(tx, {
         workspaceId: WORKSPACE_LAURA,
-        job: { id: 'collect.account_metrics', runId: 42 },
+        job: { id: 'collect.account_metrics', runId: RUN_ID },
         action: 'connection.disconnected',
         entityType: 'social_connection',
         entityId: '00000002-0000-4000-8000-000000000c01',
@@ -119,15 +121,15 @@ describe('el actor sale de la base, no de un parámetro', () => {
     const [fila] = await filas(WORKSPACE_LAURA, 'connection.disconnected');
     assert.equal(fila?.actor_kind, 'job');
     assert.equal(fila?.actor_user_id, null);
-    assert.deepEqual(fila?.after, { status: 'disabled', _job: { id: 'collect.account_metrics', runId: 42 } });
+    assert.deepEqual(fila?.after, { status: 'disabled', _job: { id: 'collect.account_metrics', runId: RUN_ID } });
     assert.deepEqual(await filas(WORKSPACE_AJENO, 'connection.disconnected'), [], 'el otro workspace no la ve');
   });
 
   test('auditAsJob exige un workspace UUID y un job con id y runId', async () => {
     const base = { action: 'connection.disconnected' as const, entityType: 'social_connection', entityId: null };
-    await assert.rejects(t.db.asWorker((tx) => auditAsJob(tx, { ...base, workspaceId: 'laura', job: { id: 'x', runId: 1 } })), /UUID/);
-    await assert.rejects(t.db.asWorker((tx) => auditAsJob(tx, { ...base, workspaceId: WORKSPACE_LAURA, job: { id: '', runId: 1 } })), /job\.id/);
-    await assert.rejects(t.db.asWorker((tx) => auditAsJob(tx, { ...base, workspaceId: WORKSPACE_LAURA, job: { id: 'x', runId: 1.5 } })), /runId/);
+    await assert.rejects(t.db.asWorker((tx) => auditAsJob(tx, { ...base, workspaceId: 'laura', job: { id: 'x', runId: RUN_ID } })), /UUID/);
+    await assert.rejects(t.db.asWorker((tx) => auditAsJob(tx, { ...base, workspaceId: WORKSPACE_LAURA, job: { id: '', runId: RUN_ID } })), /job\.id/);
+    await assert.rejects(t.db.asWorker((tx) => auditAsJob(tx, { ...base, workspaceId: WORKSPACE_LAURA, job: { id: 'x', runId: '42' } })), /runId/, 'el número de antes ya no es una corrida');
   });
 });
 

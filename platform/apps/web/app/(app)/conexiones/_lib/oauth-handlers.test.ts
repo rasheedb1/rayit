@@ -275,7 +275,7 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     expect(evidence.rows[0]!.evidence).not.toHaveProperty("actedBy");
     expect(String(evidence.rows[0]!.evidence["textShown"])).toMatch(/TikTok/);
 
-    const log = await db.queryAsSuperuser<{ endpoint: string; ok: boolean; connection_id: string | null }>("SELECT endpoint, ok, connection_id FROM api_call_log ORDER BY id");
+    const log = await db.queryAsSuperuser<{ endpoint: string; ok: boolean; connection_id: string | null }>("SELECT endpoint, ok, connection_id FROM api_call_log ORDER BY called_at");
     expect(log.rows.map((r) => r.endpoint)).toEqual(["oauth.token", "tiktok.user.info"]);
     expect(log.rows.every((r) => r.ok && r.connection_id === tiktokId)).toBe(true);
 
@@ -341,7 +341,7 @@ describe("callback completo (la prueba del «terminado cuando»)", () => {
     expect(tokens?.accessToken).toBe("ya29.demo-access-youtube-0001-SECRETO");
     expect(tokens?.refreshToken).toBe("1//demo-refresh-youtube-0001-SECRETO");
 
-    const log = await db.queryAsSuperuser<{ endpoint: string; ok: boolean }>("SELECT endpoint, ok FROM api_call_log WHERE connection_id = $1 ORDER BY id", [id]);
+    const log = await db.queryAsSuperuser<{ endpoint: string; ok: boolean }>("SELECT endpoint, ok FROM api_call_log WHERE connection_id = $1 ORDER BY called_at", [id]);
     expect(log.rows.map((r) => r.endpoint)).toEqual(["oauth.token", "youtube.channels.list"]);
     expect(log.rows.every((r) => r.ok)).toBe(true);
   });
@@ -446,7 +446,7 @@ describe("consentimiento delegado (ACC-8): el callback de CON-3 deja la misma ev
     expect(notice.rows.length).toBe(1);
     expect(notice.rows[0]!.user_id).toBe(USER_LAURA);
     expect(notice.rows[0]!.body_es).toMatch(/^Andrés Pardo conectó la cuenta @laura\.cocinafacil de Instagram el .+ en tu nombre\./);
-    const audit = await db.queryAsSuperuser<{ actor_user_id: string; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action IN ('connection.added', 'connection.reconnected', 'connection.authorized') AND entity_id = $1 ORDER BY id DESC LIMIT 1", [id]);
+    const audit = await db.queryAsSuperuser<{ actor_user_id: string; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action IN ('connection.added', 'connection.reconnected', 'connection.authorized') AND entity_id = $1 ORDER BY created_at DESC LIMIT 1", [id]);
     expect(audit.rows[0]!.actor_user_id).toBe(USER_MANAGER);
     expect(audit.rows[0]!.after).toMatchObject({ accessMode: "direct_oauth", onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "manager_conecta" } });
     expect(JSON.stringify(audit.rows[0]!.after)).not.toContain("@ejemplo.com");

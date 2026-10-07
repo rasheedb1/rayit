@@ -160,7 +160,7 @@ async function esperaCorridas(db: WorkerDatabase, jobId: string, n: number, msTo
   for (;;) {
     const { rows } = await db.query<Record<string, unknown>>(
       `SELECT id, job_id, status, attempt, duration_ms, items_processed, items_failed, error, metadata
-         FROM job_run WHERE job_id = $1 AND status <> 'running' ORDER BY id`,
+         FROM job_run WHERE job_id = $1 AND status <> 'running' ORDER BY started_at`,
       [jobId],
     );
     if (rows.length >= n || Date.now() > hasta) return rows;
@@ -273,7 +273,7 @@ export async function runDemoCompute(opts: { db: WorkerDatabase; logger: Logger;
   if (!terminada) logger.warn('demo CON-6: la cadena no terminó en 60 s; se imprime lo que hay');
   const { rows: cadena } = await db.query<Record<string, unknown>>(
     `SELECT id, job_id, status, duration_ms, items_processed, items_failed, error, metadata
-       FROM job_run WHERE job_id IN ('compute.baseline', 'compute.post_score') AND status <> 'running' ORDER BY id`,
+       FROM job_run WHERE job_id IN ('compute.baseline', 'compute.post_score') AND status <> 'running' ORDER BY started_at`,
   );
   logger.info('demo CON-6: job_run de compute.* (encadenados tras collect.post_metrics: metadata.tras)', { rows: cadena });
 
@@ -319,14 +319,14 @@ export async function runDemo(opts: {
     void (async () => {
       const runs = await db.query(
         `SELECT id, job_id, status, attempt, duration_ms, items_processed, items_failed, error, metadata
-           FROM job_run WHERE status <> 'skipped' ORDER BY id`,
+           FROM job_run WHERE status <> 'skipped' ORDER BY started_at`,
       );
       const conns = await db.query(
         `SELECT handle, status, status_detail, to_char(access_expires_at, 'YYYY-MM-DD HH24:MI') AS access_expires_at FROM social_connection ORDER BY handle`,
       );
       const notes = await db.query(`SELECT kind, severity, title_es FROM notification ORDER BY created_at`);
       const calls = await db.query(
-        `SELECT connection_id, platform_id, endpoint, http_status, ok, error_code, duration_ms, rate_limited FROM api_call_log ORDER BY id`,
+        `SELECT connection_id, platform_id, endpoint, http_status, ok, error_code, duration_ms, rate_limited FROM api_call_log ORDER BY called_at`,
       );
       logger.info('demo: job_run', { rows: runs.rows });
       logger.info('demo: social_connection', { rows: conns.rows });

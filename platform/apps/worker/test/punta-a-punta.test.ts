@@ -362,7 +362,7 @@ describe('Accesos: bitácora y roles', () => {
     // Como superusuario: el volcado mira TODAS las tablas, también las que mc_app no puede leer.
     const dump = await dumpTextColumns({ query: (text: string, params?: readonly unknown[]) => web.queryAsSuperuser(text, params) }, 'public');
     assert.equal(findSecretInDump(dump, [ENV.GOOGLE_API_KEY]), null);
-    const runs = await worker.query<{ job_id: string; status: string }>(`SELECT job_id, status FROM job_run WHERE metadata->>'bossJobId' LIKE 'e2e:%' ORDER BY id`);
+    const runs = await worker.query<{ job_id: string; status: string }>(`SELECT job_id, status FROM job_run WHERE metadata->>'bossJobId' LIKE 'e2e:%' ORDER BY started_at`);
     assert.ok(runs.rows.length >= 6 && runs.rows.every((r) => r.status === 'ok'), `cada job de la cadena dejó su job_run ok: ${JSON.stringify(runs.rows)}`);
   });
 

@@ -156,7 +156,7 @@ test('2 · un job encolado pasa por running y termina ok con duration_ms > 0', a
   assert.equal(done.metadata['bossJobId'], jobId);
 
   const log = h.sink.records().find((r) => r['msg'] === 'job terminado' && r['job'] === 'test.echo' && r['processed'] === 3);
-  assert.equal(log?.['runId'], Number(done.id));
+  assert.equal(log?.['runId'], done.id);
   assert.equal(log?.['jobId'], jobId);
   assert.ok(typeof log?.['durationMs'] === 'number');
 

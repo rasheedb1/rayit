@@ -118,7 +118,7 @@ export interface OnceRun {
   reason: OnceReason;
   /** Desde cuándo se está cubriendo el job, ISO; null en un encadenado. */
   tick: string | null;
-  runId: number;
+  runId: string;
   status: RunStatus;
   processed: number;
   failed: number;
@@ -352,7 +352,7 @@ function coverFromFor(def: JobDefinition, tick: Date, registry: JobRegistry, all
 async function recordUnhandled(db: WorkerDatabase, ids: readonly string[]): Promise<void> {
   if (ids.length === 0) return;
   const { rows } = await db.query<{ job_id: string; status: string; error: string | null }>(
-    `SELECT DISTINCT ON (job_id) job_id, status, error FROM job_run WHERE job_id = ANY($1::text[]) ORDER BY job_id, id DESC`,
+    `SELECT DISTINCT ON (job_id) job_id, status, error FROM job_run WHERE job_id = ANY($1::text[]) ORDER BY job_id, started_at DESC`,
     [ids],
   );
   const marked = new Set(rows.filter((r) => r.status === 'skipped' && r.error === SKIPPED_NO_HANDLER).map((r) => r.job_id));
@@ -441,7 +441,7 @@ export interface PendingRun {
   reason: OnceReason;
 }
 
-export type Claim = { runId: number; attempt: number; reason: OnceReason } | { skip: OnceSkipReason };
+export type Claim = { runId: string; attempt: number; reason: OnceReason } | { skip: OnceSkipReason };
 
 /**
  * Reclama una corrida: con el candado del job, relee el estado de su
@@ -472,12 +472,12 @@ export async function claimRun(db: WorkerDatabase, item: PendingRun, at: Date, b
     } else if (state.running > 0) {
       return { skip: 'running' };
     }
-    const { rows } = await tx.query<{ id: number | string }>(
+    const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO job_run (job_id, status, attempt, started_at, metadata)
        VALUES ($1, 'running', $2, $3::timestamptz, $4::jsonb) RETURNING id`,
       [item.def.id, attempt, at.toISOString(), JSON.stringify({ bossJobId, ...(sliceS !== undefined ? { [SLICE_KEY]: sliceS } : {}) })],
     );
-    return { runId: Number(rows[0]?.id), attempt, reason };
+    return { runId: String(rows[0]?.id), attempt, reason };
   });
 }
 

@@ -28,7 +28,7 @@ test('api_call_log guarda las llamadas de outreach con provider y cuenta de cana
     error_code: 'invalid_grant', error_message: null, duration_ms: 5, rate_limited: false, retry_after_s: null,
   });
   const { rows } = await db.query<{ provider: string; platform_id: string | null; channel_account_id: string | null }>(
-    `SELECT provider, platform_id, channel_account_id FROM api_call_log WHERE provider IS NOT NULL ORDER BY id`,
+    `SELECT provider, platform_id, channel_account_id FROM api_call_log WHERE provider IS NOT NULL ORDER BY called_at`,
   );
   assert.deepEqual(rows, [
     { provider: 'unipile', platform_id: null, channel_account_id: ACCOUNT },

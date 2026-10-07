@@ -50,7 +50,8 @@ function contexto(opts: ContextoOpts): JobContext {
   const callLog = new PostgresCallLogSink(opts.db);
   return {
     jobId: opts.definition.id,
-    runId: 1,
+    // Una corrida a mano: job_run.id es un uuid desde 0082 (auditAsJob lo exige).
+    runId: '0000000b-0000-4000-8000-0000000000c1',
     attempt: opts.attempt ?? 1,
     workspaceId: W1,
     definition: opts.definition,

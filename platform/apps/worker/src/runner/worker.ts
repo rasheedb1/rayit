@@ -193,7 +193,7 @@ async function registerAll(boss: PgBoss, opts: StartWorkerOptions): Promise<{ de
  * colapsar con el cron ni con el de otro workspace. Un fallo al encolar
  * no tumba el job de arriba, que ya terminó: se anota y el cron cubre.
  */
-async function enqueueChained(boss: PgBoss, destinos: readonly string[], desde: string, payload: unknown, runId: number, logger: Logger): Promise<void> {
+async function enqueueChained(boss: PgBoss, destinos: readonly string[], desde: string, payload: unknown, runId: string, logger: Logger): Promise<void> {
   if (destinos.length === 0) return;
   const { workspaceId } = payloadContext(payload);
   const alcance = workspaceId ?? 'todos';

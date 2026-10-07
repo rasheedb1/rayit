@@ -874,7 +874,7 @@ describe('VEN-7 r4 · «No aceptar esta marca» desde el radar: la da de alta y 
       link: (await tx.query<{ relationship: string }>('SELECT relationship FROM company_link WHERE company_id = $1', [r.companyId])).rows,
       traza: (
         await tx.query<{ before: { excluded_companies: string[] }; after: { excluded_companies: string[] } }>(
-          `SELECT before, after FROM audit_log WHERE action = 'ventas.brief.excluir_marca' ORDER BY id DESC LIMIT 1`,
+          `SELECT before, after FROM audit_log WHERE action = 'ventas.brief.excluir_marca' ORDER BY created_at DESC LIMIT 1`,
         )
       ).rows[0],
     }));

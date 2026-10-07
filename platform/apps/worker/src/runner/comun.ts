@@ -61,7 +61,7 @@ export async function recordSkipped(db: WorkerDatabase, jobId: string): Promise<
   await db.transaction(async (tx) => {
     await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${JOB_LOCK_PREFIX}${jobId}`]);
     const { rows } = await tx.query<{ status: string; error: string | null }>(
-      'SELECT status, error FROM job_run WHERE job_id = $1 ORDER BY id DESC LIMIT 1',
+      'SELECT status, error FROM job_run WHERE job_id = $1 ORDER BY started_at DESC LIMIT 1',
       [jobId],
     );
     const last = rows[0];

@@ -169,6 +169,9 @@
  *     un inquilino: con SELECT, `last_value` de audit_log_id_seq es el
  *     volumen de toda la plataforma. mc_app no tiene SELECT ni UPDATE en
  *     ninguna, y USAGE solo en las de tablas donde inserta.
+ *   · Y ninguna COLUMNA de una tabla que mc_app lee o escribe sale de
+ *     una secuencia (CIM-11, 0082). Sin SELECT en audit_log_id_seq, el
+ *     id de una fila propia seguía siendo el contador al escribirla.
  *
  * LA GUARDIA NO FALLA ABIERTA
  * ---------------------------
@@ -1150,6 +1153,20 @@ export const HIJAS_CON_GLOBALES_DECLARADAS: Readonly<Record<string, string>> = {
  */
 export const SECUENCIAS_DECLARADAS: Readonly<Record<string, string>> = {};
 
+/**
+ * Las columnas `tabla.columna` que la base rellena con una secuencia
+ * (DEFAULT nextval(…) o identity) en una tabla que mc_app lee o escribe,
+ * y por qué. Vacía, y debería seguir así (CIM-11, 0082): una secuencia es
+ * de la tabla ENTERA, así que el valor de una fila propia —el id que
+ * devuelve un INSERT, o el que se lee con SELECT— dice cuántas filas
+ * escribió toda la plataforma hasta ese momento. Restar dos es medir el
+ * volumen ajeno. Una clave que la base rellena sola va con
+ * `uuid DEFAULT gen_random_uuid()`; un número de orden por inquilino (el
+ * consecutivo de una factura) se calcula dentro de su workspace, nunca
+ * con una secuencia compartida.
+ */
+export const CLAVES_DE_SECUENCIA_DECLARADAS: Readonly<Record<string, string>> = {};
+
 /** La función que comprueba que una referencia nombra una fila visible (0025 §3). */
 export const FUNCION_DE_REFERENCIAS = 'assert_reference_visible';
 
@@ -1512,6 +1529,13 @@ export interface EstadoDelEsquema {
    * que ya no corresponden, con el nombre de la lista delante.
    */
   otrasDeclaracionesObsoletas: string[];
+  /**
+   * Columnas que la base rellena con una secuencia (nextval o identity)
+   * en tablas que mc_app lee o escribe, fuera de
+   * CLAVES_DE_SECUENCIA_DECLARADAS: `tabla.columna (secuencia)`. Cada
+   * valor es un contador de TODA la plataforma (CIM-11).
+   */
+  clavesDeSecuencia: string[];
   /** Privilegios que mc_app conserva y no debería (de tabla, de columna o de secuencia). */
   privilegiosDeMas: PrivilegioDeMas[];
   /** Otros roles con privilegios en `public`. */
@@ -1587,6 +1611,12 @@ interface FilaPrivilegio extends Record<string, unknown> {
 interface FilaInquilino extends Record<string, unknown> {
   tabla: string;
   columna: string;
+}
+interface FilaClaveDeSecuencia extends Record<string, unknown> {
+  tabla: string;
+  columna: string;
+  /** El nombre de la secuencia, o el DEFAULT tal cual si no se pudo resolver. */
+  secuencia: string | null;
 }
 interface FilaUnico extends Record<string, unknown> {
   tabla: string;
@@ -1775,6 +1805,24 @@ const SQL_INQUILINOS = `
     JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
      AND a.attnum > 0 AND NOT a.attisdropped AND a.attname = ANY ($1::text[])
+   ORDER BY 1, 2`;
+
+/**
+ * Las columnas de las tablas de `public` que la base rellena con una
+ * secuencia: identity, o un DEFAULT que llama a nextval(…). La secuencia
+ * va en el texto para el mensaje (la de un identity no sale en el
+ * DEFAULT: la da pg_get_serial_sequence).
+ */
+const SQL_CLAVES_DE_SECUENCIA = `
+  SELECT c.relname AS tabla, a.attname::text AS columna,
+         coalesce(pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname),
+                  pg_get_expr(d.adbin, d.adrelid)) AS secuencia
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND a.attnum > 0 AND NOT a.attisdropped
+     AND (a.attidentity <> '' OR pg_get_expr(d.adbin, d.adrelid) ~ 'nextval\\(')
    ORDER BY 1, 2`;
 
 /** Los índices únicos y de exclusión de las tablas de `public`, con sus columnas y su predicado. */
@@ -2121,6 +2169,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const disparadores = await leer<FilaDisparador>(SQL_DISPARADORES, [FUNCION_DE_REFERENCIAS]);
   const inquilinos = await leer<FilaInquilino>(SQL_INQUILINOS, [[...COLUMNAS_DE_INQUILINO]]);
   const unicos = await leer<FilaUnico>(SQL_UNICOS);
+  const clavesLeidas = await leer<FilaClaveDeSecuencia>(SQL_CLAVES_DE_SECUENCIA);
   const disparadoresDefinerLeidos = await leer<FilaDisparadorDefiner>(SQL_DISPARADORES_DEFINER);
   const candados = await leer<FilaCandado>(SQL_CANDADOS, [Object.keys(DISPARADORES_DE_CANDADO)]);
   const reglasLeidas = await leer<FilaRegla>(SQL_REGLAS);
@@ -2670,12 +2719,29 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
       });
     }
   }
+  // ---- claves de secuencia (CIM-11): quitarle a mc_app el SELECT de la
+  //      secuencia no basta, porque el valor llega en la COLUMNA. El id de
+  //      una fila propia es el contador de toda la plataforma al escribirla.
+  const clavesQueAplican = new Set<string>();
+  const clavesDeSecuencia: string[] = [];
+  for (const k of clavesLeidas) {
+    const suyos = deLaApp(k.tabla);
+    if (!suyos.has('SELECT') && !suyos.has('INSERT')) continue;
+    const clave = `${k.tabla}.${k.columna}`;
+    clavesQueAplican.add(clave);
+    if (clave in CLAVES_DE_SECUENCIA_DECLARADAS) continue;
+    clavesDeSecuencia.push(`${clave} (${k.secuencia ?? 'identity'})`);
+  }
+
   const nombresDeSecuencias = new Set(secuencias.map((q) => q.relname));
   const otrasDeclaracionesObsoletas: string[] = relaciones.length
     ? [
         ...Object.keys(SECUENCIAS_DECLARADAS)
           .filter((q) => !nombresDeSecuencias.has(q))
           .map((q) => `SECUENCIAS_DECLARADAS: ${q}`),
+        ...Object.keys(CLAVES_DE_SECUENCIA_DECLARADAS)
+          .filter((k) => !clavesQueAplican.has(k))
+          .map((k) => `CLAVES_DE_SECUENCIA_DECLARADAS: ${k}`),
         ...Object.keys(HIJAS_CON_GLOBALES_DECLARADAS)
           .filter((h) => !(inquilinoPorTabla.get(h) ?? []).length)
           .map((h) => `HIJAS_CON_GLOBALES_DECLARADAS: ${h}`),
@@ -2868,6 +2934,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     unicosSinInquilino,
     unicosDeclaradosObsoletos: siAlDia(unicosDeclaradosObsoletos),
     otrasDeclaracionesObsoletas: siAlDia(otrasDeclaracionesObsoletas),
+    clavesDeSecuencia,
     privilegiosDeMas,
     rolesDeMas,
     // Lo que falta solo dice algo en una base migrada y al día.
@@ -2909,6 +2976,7 @@ export const ESQUEMA_AL_DIA: EstadoDelEsquema = {
   unicosSinInquilino: [],
   unicosDeclaradosObsoletos: [],
   otrasDeclaracionesObsoletas: [],
+  clavesDeSecuencia: [],
   privilegiosDeMas: [],
   rolesDeMas: [],
   enlacePublico: [],
@@ -3060,6 +3128,15 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
         'qué valores tiene otro y le impiden guardar los suyos: ' +
         estado.unicosSinInquilino.join(', ') +
         '. Hazlos por inquilino en una migración (ver 0026 §2), o decláralos en UNICOS_GLOBALES_DECLARADOS',
+    );
+  }
+  if (estado.clavesDeSecuencia.length) {
+    partes.push(
+      `hay columnas que la base rellena con una secuencia en tablas que ${APP_ROLE} lee o escribe; una secuencia ` +
+        'es de la tabla entera, así que el valor de una fila propia dice cuántas escribió toda la plataforma: ' +
+        estado.clavesDeSecuencia.join(', ') +
+        '. Pásalas a uuid DEFAULT gen_random_uuid() en una migración (ver 0082), o decláralas en ' +
+        'CLAVES_DE_SECUENCIA_DECLARADAS con su motivo',
     );
   }
   if (estado.privilegiosDeMas.length) {

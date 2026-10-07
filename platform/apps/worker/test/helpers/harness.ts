@@ -122,7 +122,7 @@ export async function waitFor<T>(check: () => Promise<T | null | undefined | fal
 }
 
 export interface JobRunRow extends Record<string, unknown> {
-  id: number | string;
+  id: string;
   job_id: string;
   workspace_id: string | null;
   entity_type: string | null;
@@ -140,7 +140,7 @@ export interface JobRunRow extends Record<string, unknown> {
 export async function jobRuns(db: PgliteDatabase, jobId: string): Promise<JobRunRow[]> {
   const { rows } = await db.query<JobRunRow>(
     `SELECT id, job_id, workspace_id, entity_type, entity_id, status, attempt, duration_ms, items_processed, items_failed, error, metadata, finished_at
-       FROM job_run WHERE job_id = $1 ORDER BY id`,
+       FROM job_run WHERE job_id = $1 ORDER BY started_at`,
     [jobId],
   );
   return rows;

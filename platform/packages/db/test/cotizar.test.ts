@@ -1661,7 +1661,7 @@ describe('0031 · el negocio sigue a su cotización: etapa, monto y ponderado', 
     // La transición es la de Ventas: historial con días y sin huecos.
     const historia = await t.db.withWorkspace(WORKSPACE_LAURA, async (tx) => {
       const { rows } = await tx.query<{ from_stage_id: string | null; to_stage_id: string; days_in_stage: string | null }>(
-        'SELECT from_stage_id, to_stage_id, days_in_stage::text AS days_in_stage FROM deal_stage_history WHERE deal_id = $1 ORDER BY id', [dealId]);
+        'SELECT from_stage_id, to_stage_id, days_in_stage::text AS days_in_stage FROM deal_stage_history WHERE deal_id = $1 ORDER BY changed_at', [dealId]);
       return rows;
     });
     assert.deepEqual(historia.map((h) => [h.from_stage_id, h.to_stage_id]), [[null, 'nuevo'], ['nuevo', 'propuesta'], ['propuesta', 'ganado']]);

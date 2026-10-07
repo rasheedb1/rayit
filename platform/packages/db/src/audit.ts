@@ -267,8 +267,8 @@ export async function audit(tx: WorkspaceTx, entry: AuditEntry): Promise<void> {
 export interface JobAuditEntry extends AuditEntry {
   /** Explícito: el worker corre como mc_worker y RLS no lo fija por él. */
   workspaceId: string;
-  /** Qué job y qué corrida (job_run.id). Va en after._job; no sale de la base. */
-  job: { id: string; runId: number };
+  /** Qué job y qué corrida (job_run.id, un uuid desde 0082). Va en after._job; no sale de la base. */
+  job: { id: string; runId: string };
 }
 
 /**
@@ -279,8 +279,8 @@ export interface JobAuditEntry extends AuditEntry {
  */
 export async function auditAsJob(exec: AuditExecutor, entry: JobAuditEntry): Promise<void> {
   assertWorkspaceId(entry.workspaceId);
-  if (!entry.job.id || !Number.isInteger(entry.job.runId)) {
-    throw new Error('auditAsJob necesita job.id (job_definition) y job.runId (job_run.id, entero).');
+  if (!entry.job.id || !entry.job.runId || !UUID_OR_NULL.test(entry.job.runId)) {
+    throw new Error('auditAsJob necesita job.id (job_definition) y job.runId (job_run.id, un uuid).');
   }
   const p = prepare({ ...entry, after: { ...(entry.after ?? {}), _job: { id: entry.job.id, runId: entry.job.runId } } });
   await exec.query(

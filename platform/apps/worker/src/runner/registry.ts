@@ -55,8 +55,8 @@ export interface JobPayload {
 export interface JobContext {
   /** id de job_definition, p. ej. 'oauth.refresh'. */
   jobId: string;
-  /** id de la fila en job_run. */
-  runId: number;
+  /** id de la fila en job_run (un uuid desde 0082). */
+  runId: string;
   /** Intento, empezando en 1 (lo reporta pg-boss). */
   attempt: number;
   workspaceId: string | undefined;

@@ -211,7 +211,7 @@ test('la demografía de las cuentas autorizadas coincide con el fixture, y cada 
   assert.match(porCuenta.get(id('porArroba'))!.message_es, /el dueño tiene que autorizar/);
 
   // --- ninguna llamada de más ---------------------------------------
-  const log = await h.db.query<{ endpoint: string; connection_id: string }>(`SELECT endpoint, connection_id FROM api_call_log ORDER BY id`);
+  const log = await h.db.query<{ endpoint: string; connection_id: string }>(`SELECT endpoint, connection_id FROM api_call_log ORDER BY called_at`);
   assert.deepEqual(
     log.rows.map((r) => r.endpoint).sort(),
     ['instagram.account.demographics', 'instagram.account.demographics', 'instagram.account.demographics', 'instagram.account.demographics',
@@ -332,7 +332,7 @@ test('lo que la plataforma contesta: una tabla vacía no es un dato, y «faltan 
     assert.equal(g.rows[0]!.connection_id, NUEVA);
     assert.match(g.rows[0]!.message_es, /cien seguidores/);
 
-    const llamadas = await h2.db.query<{ endpoint: string }>(`SELECT endpoint FROM api_call_log ORDER BY id`);
+    const llamadas = await h2.db.query<{ endpoint: string }>(`SELECT endpoint FROM api_call_log ORDER BY called_at`);
     const ig = llamadas.rows.filter((r) => r.endpoint === 'instagram.account.demographics');
     assert.equal(ig.length, 1, 'se corta en el primer corte: no se piden los otros tres');
   } finally {

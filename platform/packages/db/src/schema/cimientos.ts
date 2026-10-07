@@ -8,7 +8,7 @@
  */
 import { sql } from 'drizzle-orm';
 import {
-  bigserial, boolean, date, integer, jsonb, pgTable, primaryKey, text, uuid, type AnyPgColumn,
+  boolean, date, integer, jsonb, pgTable, primaryKey, text, uuid, type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { citext, country, createdAt, currency, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 
@@ -173,7 +173,7 @@ export const jobDefinition = pgTable('job_definition', {
 });
 
 export const jobRun = pgTable('job_run', {
-  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  id: uuidPk(),
   jobId: text('job_id').notNull().references(() => jobDefinition.id),
   workspaceId: uuid('workspace_id').references(() => workspace.id, { onDelete: 'cascade' }),
   entityType: text('entity_type'),

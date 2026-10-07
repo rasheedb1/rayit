@@ -99,7 +99,7 @@ async function snapshots(db: PgliteDatabase): Promise<SnapRow[]> {
 }
 
 async function calls(db: PgliteDatabase): Promise<string[]> {
-  const { rows } = await db.query<{ endpoint: string }>('SELECT endpoint FROM api_call_log ORDER BY id');
+  const { rows } = await db.query<{ endpoint: string }>('SELECT endpoint FROM api_call_log ORDER BY called_at');
   return rows.map((r) => r.endpoint);
 }
 
@@ -224,7 +224,7 @@ function contexto(overrides: { signal?: AbortSignal; quota?: QuotaManager; db?: 
   const callLog = new InMemoryCallLogSink();
   const quota = overrides.quota ?? new QuotaManager({ now: () => NOW });
   return {
-    jobId: 'brand.snapshot', runId: 0, attempt: 1, workspaceId: undefined,
+    jobId: 'brand.snapshot', runId: '0000000b-0000-4000-8000-0000000000b1', attempt: 1, workspaceId: undefined,
     definition: { id: 'brand.snapshot', labelEs: 'Seguidores de marcas en campaña', queue: 'campaigns', defaultCron: '0 7 * * *', timeoutS: 600, maxAttempts: 5, maxConcurrency: 2, enabled: true },
     db: overrides.db ?? h.db, logger: createLogger({ level: 'debug', sink: new MemorySink() }), signal: overrides.signal ?? new AbortController().signal,
     secrets: new InMemorySecretStore(), refreshers: refresherRegistry([]),

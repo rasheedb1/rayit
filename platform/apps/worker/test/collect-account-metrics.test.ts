@@ -97,7 +97,7 @@ test('snapshots de Instagram y YouTube, TikTok anotada sin métricas, la cuenta 
   assert.equal(by.get(ids.gone)!.status, 'error');
   assert.match(by.get(ids.gone)!.status_detail!, /No encontramos @noexiste.zz9/);
 
-  const log = await h.db.query<{ endpoint: string; ok: boolean }>(`SELECT endpoint, ok FROM api_call_log ORDER BY id`);
+  const log = await h.db.query<{ endpoint: string; ok: boolean }>(`SELECT endpoint, ok FROM api_call_log ORDER BY called_at`);
   assert.deepEqual(log.rows.map((r) => r.endpoint).sort(), ['instagram.business_discovery', 'tiktok.oembed', 'tiktok.oembed', 'tiktok.user.info', 'youtube.channels.list']);
   assert.equal(guard.attempts, 0);
 

@@ -8,7 +8,7 @@
  * en company_link, que también está aislada.
  */
 import { sql } from 'drizzle-orm';
-import { bigserial, boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { citext, country, createdAt, currency, localTime, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 import { OUTBOUND_CHANNELS } from './_canales.ts';
 import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts';
@@ -257,7 +257,7 @@ export const deal = pgTable('deal', {
 });
 
 export const dealStageHistory = pgTable('deal_stage_history', {
-  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  id: uuidPk(),
   dealId: uuid('deal_id').notNull().references(() => deal.id, { onDelete: 'cascade' }),
   fromStageId: text('from_stage_id').references(() => pipelineStage.id),
   toStageId: text('to_stage_id').notNull().references(() => pipelineStage.id),
