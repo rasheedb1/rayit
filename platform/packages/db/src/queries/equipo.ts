@@ -2,7 +2,8 @@
  * Equipo (ACC-4): quién está en el espacio, a quién se invitó, y
  * cambiar el rol, quitar, invitar, revocar y aceptar. Dueño: Rasheed.
  *
- * Lo que decide la BASE (0078_equipo.sql y 0079_equipo_cerrojos.sql), no este archivo:
+ * Lo que decide la BASE (0078_equipo.sql, 0079_equipo_cerrojos.sql y
+ * 0080_equipo_quien_invito.sql), no este archivo:
  *   - el permiso de cada escritura (equipo.miembro.invitar,
  *     equipo.rol.editar, equipo.miembro.revocar), por política;
  *   - «nadie otorga lo que no tiene» (session_can_grant), por política,
@@ -13,7 +14,10 @@
  *   - el rol, del tipo del espacio, por disparador (role_fits_workspace, 0034 §5);
  *   - como mucho INVITACIONES_POR_DIA invitaciones por espacio en 24
  *     horas, por disparador (0079 §7);
- *   - aceptar: invitation_accept(), SECURITY DEFINER, un solo uso;
+ *   - aceptar: invitation_accept(), SECURITY DEFINER, un solo uso, y
+ *     solo si quien invitó todavía podría darlo (0080 §3);
+ *   - leer las invitaciones, solo con equipo.miembro.ver o
+ *     equipo.miembro.invitar (0080 §1);
  *   - si a alguien lo esperan en un espacio, para no crearle uno propio
  *     al entrar (has_pending_invitation_for_session_email, 0079 §1).
  * Aquí se traduce lo que la base rechaza a un código que la pantalla
@@ -24,7 +28,7 @@
  * base solo guarda su SHA-256 (0034 §7) y nadie puede volver a leerlo.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { admiteCasillas, isExtraPermiso, UltimoDuenoError } from '@mc/core';
+import { admiteCasillas, isExtraPermiso, ROLE_KEYS, UltimoDuenoError } from '@mc/core';
 import type { BaseTx, IdentityTx, WorkspaceTx } from '../client.ts';
 import { audit } from '../audit.ts';
 
@@ -57,17 +61,25 @@ export function invitationTokenHash(token: string): string {
 interface PgLikeError {
   code?: string;
   constraint?: string;
-  message?: string;
 }
 
-function pgError(err: unknown): PgLikeError | null {
-  return typeof err === 'object' && err !== null ? (err as PgLikeError) : null;
+/**
+ * El error de Postgres con ese código y esa restricción, buscado en la
+ * cadena `cause`: node-postgres lo lanza tal cual, pero Drizzle y PGlite
+ * lo envuelven. Por el nombre de la restricción, nunca por el texto del
+ * mensaje (que está en español y puede cambiar).
+ */
+function findPgError(err: unknown, code: string, constraint: string): PgLikeError | null {
+  for (let e: unknown = err; typeof e === 'object' && e !== null; e = (e as { cause?: unknown }).cause) {
+    const p = e as PgLikeError;
+    if (p.code === code && p.constraint === constraint) return p;
+  }
+  return null;
 }
 
-/** El disparador del último dueño (0078 §3). Por el nombre de la restricción, no por el texto. */
+/** El disparador del último dueño (0078 §3): CONSTRAINT membership_last_owner. */
 export function isLastOwnerError(err: unknown): boolean {
-  const e = pgError(err);
-  return e?.code === '23514' && (e.constraint === 'membership_last_owner' || /último dueño/.test(e.message ?? ''));
+  return findPgError(err, '23514', 'membership_last_owner') !== null;
 }
 
 /**
@@ -75,28 +87,12 @@ export function isLastOwnerError(err: unknown): boolean {
  * parcial invitation_pending_uk (0034 §7) para la segunda.
  */
 export function isPendingExistsError(err: unknown): boolean {
-  for (let e: unknown = err; e; e = (e as { cause?: unknown }).cause) {
-    const p = pgError(e);
-    if (p?.code === '23505' && p.constraint === 'invitation_pending_uk') return true;
-    if (!p) break;
-  }
-  return false;
+  return findPgError(err, '23505', 'invitation_pending_uk') !== null;
 }
 
 /** El techo de invitaciones por espacio y día (invitation_daily_cap, 0079 §7). */
 export function isDailyCapError(err: unknown): boolean {
-  for (let e: unknown = err; e; e = (e as { cause?: unknown }).cause) {
-    const p = pgError(e);
-    if (p?.code === '23514' && p.constraint === 'invitation_daily_cap') return true;
-    if (!p) break;
-  }
-  return false;
-}
-
-/** Una política de RLS rechazó la fila nueva: falta el permiso, o se pidió dar algo que no se tiene. */
-export function isPolicyRejection(err: unknown): boolean {
-  const e = pgError(err);
-  return e?.code === '42501';
+  return findPgError(err, '23514', 'invitation_daily_cap') !== null;
 }
 
 // ---------------------------------------------------------------------
@@ -114,8 +110,8 @@ export interface TeamRole {
   permissions: string[];
 }
 
-/** El orden de los roles de fábrica en la pantalla: de más a menos. */
-const ORDEN_DE_ROLES = ['owner', 'admin', 'manager', 'editor', 'finance', 'viewer'];
+/** El orden de los roles de fábrica en la pantalla, de más a menos: ROLE_KEYS de @mc/core, el único. */
+const ORDEN_DE_ROLES: readonly string[] = ROLE_KEYS;
 
 /**
  * Los roles que se pueden asignar en ESTE espacio, con sus permisos:
@@ -491,6 +487,32 @@ async function miembro(
 }
 
 /**
+ * Las invitaciones pendientes que `userId` firmó y que ya no podría dar,
+ * revocadas en la misma transacción que lo degrada o lo quita (0080 §2):
+ * invitation_inviter_can_grant() dice que no sigue en el espacio, que
+ * ahora tiene alcance, o que le falta algo de lo que dio. La barrera es
+ * la base —invitation_lookup e invitation_accept ya dicen 'revoked' de
+ * esas invitaciones—; esto deja la lista de pendientes diciendo la
+ * verdad y cada revocación en la bitácora. Solo toca las que quien actúa
+ * podría revocar (invitation_update, 0079 §2): las demás siguen en la
+ * lista, con el enlace ya muerto.
+ */
+async function revocarLasQueYaNoPuedeDar(tx: WorkspaceTx, userId: string): Promise<number> {
+  const { rows } = await tx.query<{ id: string }>(
+    `UPDATE invitation SET revoked_at = now()
+      WHERE workspace_id = current_workspace_id() AND invited_by = $1::uuid
+        AND accepted_at IS NULL AND revoked_at IS NULL
+        AND NOT invitation_inviter_can_grant(workspace_id, invited_by, role_id, extra_permissions)
+      RETURNING id`,
+    [userId],
+  );
+  for (const r of rows) {
+    await audit(tx, { action: 'invitation.revoked', entityType: 'invitation', entityId: r.id, after: { reason: 'inviter_lost_access' } });
+  }
+  return rows.length;
+}
+
+/**
  * Lo que la base lanza al quitar o degradar al último dueño
  * (membership_keeps_an_owner, 0078 §3), traducido al error de core.
  * Lanza —no devuelve un código— a propósito: la transacción ya quedó
@@ -510,7 +532,8 @@ async function conUltimoDueno<T>(fn: () => Promise<T>): Promise<T> {
  * Cambia el rol de una persona y sus casillas. Quien actúa necesita
  * equipo.rol.editar, tener todo lo que la persona tiene HOY (no se toca
  * a quien está por encima) y todo lo que se le da. Degradar al último
- * dueño lanza UltimoDuenoError.
+ * dueño lanza UltimoDuenoError. Las invitaciones que la persona firmó y
+ * ya no podría dar quedan revocadas en la misma transacción.
  */
 export async function changeMemberRole(
   tx: WorkspaceTx,
@@ -549,6 +572,7 @@ export async function changeMemberRole(
     before: { roleKey: antes.roleKey, extraPermissions: antes.extraPermissions },
     after: { roleKey: v.role.key, extraPermissions: extras },
   });
+  await revocarLasQueYaNoPuedeDar(tx, userId);
   return { ok: true, changed: true };
 }
 
@@ -556,7 +580,7 @@ export async function changeMemberRole(
  * Quita a una persona del espacio. Necesita equipo.miembro.revocar y
  * tener todo lo que la persona tiene. Quitar al último dueño lanza
  * UltimoDuenoError. Su alcance (membership_scope) se va con ella por la
- * cascada de 0034 §6.
+ * cascada de 0034 §6, y sus invitaciones pendientes quedan revocadas.
  */
 export async function removeMember(tx: WorkspaceTx, userId: string): Promise<TeamResult> {
   const antes = await miembro(tx, userId);
@@ -579,6 +603,7 @@ export async function removeMember(tx: WorkspaceTx, userId: string): Promise<Tea
     entityId: userId,
     before: { roleKey: antes.roleKey, extraPermissions: antes.extraPermissions },
   });
+  await revocarLasQueYaNoPuedeDar(tx, userId);
   return { ok: true };
 }
 

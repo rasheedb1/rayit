@@ -433,14 +433,15 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'que invita, así que no puede leer la fila (RLS por workspace_id). Del rol que migra y con FORCE ROW LEVEL ' +
     'SECURITY: una política TO CURRENT_USER le deja ver SOLO la invitación cuyo sha256 del token fija la propia ' +
     'función, y lo borra antes de salir. No escribe nada; devuelve el estado y, si está pendiente, el nombre del ' +
-    'espacio, el rol, las casillas, el vencimiento y el correo invitado enmascarado. EXECUTE solo para mc_app. No es ' +
-    'de ningún disparador',
+    'espacio, el rol, las casillas, el vencimiento y el correo invitado enmascarado; si quien invitó ya no podría ' +
+    'darlo (invitation_inviter_can_grant, 0080 §2), revoked. EXECUTE solo para mc_app. No es de ningún disparador',
   'invitation_accept(text)':
     'acepta una invitación (0078 §5, ACC-4): mismo dueño y misma cerradura que invitation_lookup, con FOR UPDATE ' +
     '(un solo uso). Exige sesión y que el correo de la persona sea el invitado; fija app.workspace_id al de la ' +
     'invitación y hace lo que haría cualquier transacción de ese espacio con sus políticas: el alta PROPIA de ' +
     'membership (0028) con el rol y las casillas que decidió quien invitó —y que la política de alta de invitation ' +
-    'ya comprobó que podía dar—, accepted_at y la fila invitation.accepted en audit_log. Lo devuelve todo al salir. ' +
+    'ya comprobó que podía dar, y que 0080 §3 vuelve a comprobar al aceptar: si a quien invitó lo degradaron o lo ' +
+    'quitaron, revoked—, accepted_at y la fila invitation.accepted en audit_log. Lo devuelve todo al salir. ' +
     'EXECUTE solo para mc_app. No es de ningún disparador',
   'has_pending_invitation_for_session_email()':
     '¿a la persona de la sesión la esperan en algún espacio? (0079 §1, ACC-4): el primer inicio de sesión no le crea ' +

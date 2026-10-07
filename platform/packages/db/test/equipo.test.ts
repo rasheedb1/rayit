@@ -17,8 +17,11 @@
  *     exige 0034 §5; 0079 no lo toca);
  *   - como mucho INVITACIONES_POR_DIA invitaciones por espacio en 24
  *     horas, y una fecha vieja no se cuela (0079 §7);
- *   - el CHECK de las casillas es la lista de @mc/core, y 0078 y 0079 se
- *     pueden aplicar dos veces.
+ *   - sin equipo.miembro.ver no se leen las invitaciones (0080 §1);
+ *   - si degradan o quitan a quien invitó, su enlace deja de servir y
+ *     la invitación sale de pendientes (0080 §2 y §3);
+ *   - el CHECK de las casillas es la lista de @mc/core, y 0078, 0079 y
+ *     0080 se pueden aplicar dos veces.
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -546,7 +549,7 @@ describe('las casillas solo con el Mánager de creador, también en la base (007
   });
 });
 
-describe('0078 y 0079: las casillas en la base y los archivos dos veces', () => {
+describe('0078, 0079 y 0080: las casillas en la base y los archivos dos veces', () => {
   test('el CHECK de las casillas es exactamente EXTRA_PERMISOS de @mc/core', async () => {
     const filas = await comoLaura((tx) =>
       tx.query<{ def: string }>(
@@ -561,9 +564,9 @@ describe('0078 y 0079: las casillas en la base y los archivos dos veces', () => 
     }
   });
 
-  test('aplicar 0078 y 0079 otra vez, en orden, como el rol que migra no falla ni cambia nada', async () => {
+  test('aplicar 0078, 0079 y 0080 otra vez, en orden, como el rol que migra no falla ni cambia nada', async () => {
     const leer = (f: string) => readFileSync(fileURLToPath(new URL(`../../../db/migrations/${f}`, import.meta.url)), 'utf8');
-    const sql = `${leer('0078_equipo.sql')}\n${leer('0079_equipo_cerrojos.sql')}`;
+    const sql = ['0078_equipo.sql', '0079_equipo_cerrojos.sql', '0080_equipo_quien_invito.sql'].map(leer).join('\n');
     const foto = () =>
       comoLaura((tx) =>
         tx.query(
@@ -749,5 +752,121 @@ describe('el techo de invitaciones por espacio y día (0079 §7)', () => {
       tx.query<{ reciente: boolean }>(`SELECT created_at > now() - interval '1 minute' AS reciente FROM invitation WHERE id = $1`, [invitationId]),
     );
     assert.equal(fecha.rows[0]?.reciente, true);
+  });
+});
+
+describe('quién lee las invitaciones, y que quien invitó siga pudiendo darlo (0080)', () => {
+  const WS = '00000080-0000-4000-8000-00000000a800';
+  const DUENA = '00000080-0000-4000-8000-0000000000a1';
+  const ADMIN = '00000080-0000-4000-8000-0000000000a2';
+  const LECTORA = '00000080-0000-4000-8000-0000000000a3';
+  const EJECUTIVO = '00000080-0000-4000-8000-0000000000a4';
+  const INVITADA = '00000080-0000-4000-8000-0000000000a5';
+  const CORREO_INVITADA = 'invitada-0080@ejemplo.test';
+  const comoDuena = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => en(WS, DUENA, fn);
+  const comoAdmin = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => en(WS, ADMIN, fn);
+  const rolDeAgencia = async (key: string) => (await comoDuena((tx) => listTeamRoles(tx))).find((r) => r.key === key && r.isSystem)!.id;
+  const pendientes = async () => (await comoDuena((tx) => listPendingInvitations(tx))).map((i) => i.id);
+  const ver = (token: string) => t.db.withIdentity({ userId: INVITADA }, (tx) => lookupInvitation(tx, token));
+  const esMiembro = async () => (await comoDuena((tx) => listMembers(tx))).some((m) => m.userId === INVITADA);
+
+  /** La Administradora invita a la invitada con un rol de agencia; devuelve el token y el id. */
+  async function invitaLaAdmin(key: string) {
+    const token = newInvitationToken();
+    const roleId = await rolDeAgencia(key);
+    const r = await comoAdmin((tx) => createInvitation(tx, { email: CORREO_INVITADA, roleId, extraPermissions: [], expiresAt: EN_UNA_SEMANA(), token }));
+    assert.ok(r.ok, JSON.stringify(r));
+    assert.equal((await ver(token)).status, 'pending', 'el enlace nace sirviendo');
+    return { token, invitationId: r.invitationId };
+  }
+
+  /** La Administradora vuelve a serlo, a mano: cada prueba la degrada o la quita de una forma distinta. */
+  const reponerAdmin = () =>
+    t.admin(`
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WS}', '${ADMIN}', system_role_id('agency', 'admin'))
+      ON CONFLICT (workspace_id, user_id) DO UPDATE SET role_id = EXCLUDED.role_id;
+    `);
+
+  before(async () => {
+    await t.admin(`
+      INSERT INTO app_user (id, email, name) VALUES
+        ('${DUENA}', 'duena-0080@agencia.test', 'Dueña 0080'),
+        ('${ADMIN}', 'admin-0080@agencia.test', 'Admin 0080'),
+        ('${LECTORA}', 'lectora-0080@agencia.test', 'Lectora 0080'),
+        ('${EJECUTIVO}', 'ejecutivo-0080@agencia.test', 'Ejecutivo 0080'),
+        ('${INVITADA}', '${CORREO_INVITADA}', 'Invitada 0080');
+      SELECT set_config('app.workspace_id', '${WS}', false);
+      INSERT INTO workspace (id, slug, name, kind) VALUES ('${WS}', 'agencia-0080', 'Agencia 0080', 'agency');
+      INSERT INTO membership (workspace_id, user_id, role_id) VALUES
+        ('${WS}', '${DUENA}', system_role_id('agency', 'owner')),
+        ('${WS}', '${ADMIN}', system_role_id('agency', 'admin')),
+        ('${WS}', '${LECTORA}', system_role_id('agency', 'viewer')),
+        ('${WS}', '${EJECUTIVO}', system_role_id('agency', 'manager'));
+      SELECT set_config('app.workspace_id', '', false);
+    `);
+  }, SETUP_TIMEOUT);
+
+  test('sin equipo.miembro.ver (Solo lectura, Ejecutivo de cuenta) no se lee ninguna invitación; quien ve el equipo, sí (§1)', async () => {
+    const { invitationId } = await invitaLaAdmin('viewer');
+    const cuantas = (userId: string) =>
+      en(WS, userId, async (tx) => (await tx.query<{ n: number }>('SELECT count(*)::int AS n FROM invitation')).rows[0]!.n);
+    assert.equal(await cuantas(LECTORA), 0, 'Solo lectura no ve los correos invitados');
+    assert.equal(await cuantas(EJECUTIVO), 0, 'el Ejecutivo de cuenta tampoco');
+    assert.ok((await cuantas(ADMIN)) >= 1, 'la Administradora sí');
+    assert.ok((await cuantas(DUENA)) >= 1, 'y la Dueña');
+    assert.deepEqual(await comoDuena((tx) => revokeInvitation(tx, invitationId)), { ok: true });
+  });
+
+  test('si degradan a quien invitó, el enlace dice revocado, no se acepta, y la invitación sale de pendientes con su bitácora (§2, §3)', async () => {
+    const { token, invitationId } = await invitaLaAdmin('admin');
+    const viewer = await rolDeAgencia('viewer');
+    assert.deepEqual(await comoDuena((tx) => changeMemberRole(tx, ADMIN, viewer, [])), { ok: true, changed: true });
+
+    assert.deepEqual(await ver(token), { status: 'revoked' });
+    assert.deepEqual(await t.db.withIdentity({ userId: INVITADA }, (tx) => acceptInvitation(tx, token)), { status: 'revoked' });
+    assert.equal(await esMiembro(), false, 'el enlace no dio Administradora');
+    assert.ok(!(await pendientes()).includes(invitationId), 'ya no figura como pendiente');
+    const bitacora = await comoDuena((tx) =>
+      tx.query<{ action: string; reason: string | null }>(
+        `SELECT action, after->>'reason' AS reason FROM audit_log WHERE entity_id = $1::uuid ORDER BY created_at, action`,
+        [invitationId],
+      ),
+    );
+    assert.deepEqual(bitacora.rows, [
+      { action: 'invitation.created', reason: null },
+      { action: 'invitation.revoked', reason: 'inviter_lost_access' },
+    ]);
+    await reponerAdmin();
+  });
+
+  test('degradada a mano, sin pasar por la aplicación: la fila sigue pendiente, pero el enlace ya no sirve (la base decide)', async () => {
+    const { token, invitationId } = await invitaLaAdmin('admin');
+    await t.admin(`UPDATE membership SET role_id = system_role_id('agency', 'manager') WHERE workspace_id = '${WS}' AND user_id = '${ADMIN}'`);
+    assert.ok((await pendientes()).includes(invitationId));
+    assert.deepEqual(await ver(token), { status: 'revoked' });
+    assert.deepEqual(await t.db.withIdentity({ userId: INVITADA }, (tx) => acceptInvitation(tx, token)), { status: 'revoked' });
+    assert.equal(await esMiembro(), false);
+    assert.deepEqual(await comoDuena((tx) => revokeInvitation(tx, invitationId)), { ok: true });
+    await reponerAdmin();
+  });
+
+  test('si la quitan del espacio, igual; lo que todavía podría dar sigue sirviendo', async () => {
+    // Degradada a Ejecutivo de cuenta ya no invita: ni siquiera a otro Ejecutivo.
+    const { token: deEjecutivo } = await invitaLaAdmin('manager');
+    const ejecutivo = await rolDeAgencia('manager');
+    assert.deepEqual(await comoDuena((tx) => changeMemberRole(tx, ADMIN, ejecutivo, [])), { ok: true, changed: true });
+    assert.deepEqual(await ver(deEjecutivo), { status: 'revoked' }, 'sin equipo.miembro.invitar no firma ninguna');
+    await reponerAdmin();
+
+    const { token, invitationId } = await invitaLaAdmin('viewer');
+    assert.deepEqual(await comoDuena((tx) => removeMember(tx, ADMIN)), { ok: true });
+    assert.deepEqual(await ver(token), { status: 'revoked' });
+    assert.ok(!(await pendientes()).includes(invitationId));
+    await reponerAdmin();
+
+    // Y si quien invitó conserva lo que dio, el enlace sirve.
+    const sigue = await invitaLaAdmin('viewer');
+    assert.equal((await t.db.withIdentity({ userId: INVITADA }, (tx) => acceptInvitation(tx, sigue.token))).status, 'ok');
+    assert.equal(await esMiembro(), true);
   });
 });

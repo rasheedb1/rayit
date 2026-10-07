@@ -75,18 +75,6 @@ export function casillasDe(extras: readonly string[]): Casilla[] {
   return NOMBRES_DE_CASILLA.filter((c) => CASILLAS[c].every((p) => tiene.has(p)));
 }
 
-/**
- * ¿Puede quien tiene `propios` dar estos permisos? Es «nadie otorga lo
- * que no tiene» sobre un conjunto cualquiera: el de un rol (sistema o a
- * medida, como lo devuelve la base) más sus casillas. Devuelve los que
- * le faltan, para decir cuáles; vacío = sí.
- */
-export function permisosQueFaltan(propios: ReadonlySet<Permiso>, pedidos: Iterable<string>): string[] {
-  const faltan = new Set<string>();
-  for (const p of pedidos) if (!propios.has(p as Permiso)) faltan.add(p);
-  return [...faltan];
-}
-
 /** Lo que tendrá una persona: su rol de sistema más sus casillas. Para pruebas y para pintar; la sesión lo lee de la base. */
 export function permisosConCasillas(kind: WorkspaceKind, key: RoleKey, casillas: Iterable<Casilla> = []): ReadonlySet<Permiso> {
   const rol = rolSistema(kind, key);
