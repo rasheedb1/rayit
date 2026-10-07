@@ -1854,7 +1854,8 @@ const SQL_INQUILINOS = `
 
 /**
  * Las columnas de las tablas de `public` que la base rellena con una
- * secuencia: identity, o un DEFAULT que llama a nextval(…). La secuencia
+ * secuencia: identity, o un DEFAULT que llama a nextval(…) en cualquier
+ * parte de la expresión (un folio 'Q-' || nextval(…) también). La secuencia
  * va en el texto para el mensaje (la de un identity no sale en el
  * DEFAULT: la da pg_get_serial_sequence).
  *
