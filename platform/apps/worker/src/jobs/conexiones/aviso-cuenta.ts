@@ -29,10 +29,13 @@
  */
 import { connectionErrorSeverity, connectionErrorTitle, type BrokenAccountKind, type PlatformId } from '@mc/core';
 import { PLATFORM_LABELS } from '@mc/core/plataformas';
-import type { Queryable } from '../../runner/db.ts';
+import type { JobDatabase, Queryable } from '../../runner/db.ts';
 
 /** Cada cuánto, como mucho, se repite el aviso de la MISMA avería de una cuenta. */
 export const BROKEN_ACCOUNT_REPEAT_DAYS = 7;
+
+/** El candado de transacción del aviso de UNA cuenta (ver notifyBrokenAccount). */
+export const BROKEN_ACCOUNT_LOCK_PREFIX = 'connection_error:';
 
 /** El nombre de la red para una frase; una red desconocida se dice tal cual. */
 export function platformName(platformId: string): string {
@@ -53,7 +56,10 @@ export interface BrokenAccount {
  *
  * Como mucho uno por cuenta y por semana para la MISMA avería: la cuenta
  * en 'error' se vuelve a intentar cada día (selectCollectableAccounts) y
- * cada intento fallido pasa por aquí. Se escribe otro aviso si:
+ * cada intento fallido pasa por aquí. El aviso de la semana cuenta
+ * aunque alguien lo haya descartado (dismissed_at): quien lo quitó de la
+ * campana no lo vuelve a ver mañana con el reintento, lo vuelve a ver a
+ * la semana, igual que en remindBrokenAccounts. Se escribe otro aviso si:
  *   - pasó una semana y sigue rota (sigue importando);
  *   - la avería subió de gravedad: un «No podemos leer» (warning) no
  *     calla el crítico del día siguiente, que tiene que ir arriba del
@@ -61,18 +67,25 @@ export interface BrokenAccount {
  *   - la cuenta se leyó bien después del último aviso
  *     (last_synced_at): es otra avería, aunque caiga en la misma semana.
  * Corre dentro de la transacción de quien cambia el estado de la cuenta:
- * el estado y su aviso entran juntos o no entra ninguno.
+ * el estado y su aviso entran juntos o no entra ninguno. Y TIENE que
+ * correr en una: el candado de la cuenta (pg_advisory_xact_lock) se suelta
+ * al cerrar la transacción. Sin él, collect.posts y
+ * collect.account_metrics fallando a la vez sobre la misma cuenta veían
+ * los dos «no hay aviso» (READ COMMITTED) y escribían dos. Con él, el
+ * segundo espera al primero y, como cada sentencia de READ COMMITTED mira
+ * lo confirmado hasta ese momento, ve su aviso y no escribe.
  *
  * Devuelve si escribió un aviso.
  */
-export async function notifyBrokenAccount(db: Queryable, acc: BrokenAccount, kind: BrokenAccountKind, detailEs: string | null): Promise<boolean> {
-  const { rows } = await db.query(
+export async function notifyBrokenAccount(tx: Queryable, acc: BrokenAccount, kind: BrokenAccountKind, detailEs: string | null): Promise<boolean> {
+  await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${BROKEN_ACCOUNT_LOCK_PREFIX}${acc.id}`]);
+  const { rows } = await tx.query(
     `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
      SELECT $1::uuid, 'connection_error', $2, $3, $4, 'social_connection', $5::uuid, '/conexiones'
       WHERE NOT EXISTS (
         SELECT 1 FROM notification n
          WHERE n.workspace_id = $1::uuid AND n.kind = 'connection_error' AND n.entity_type = 'social_connection'
-           AND n.entity_id = $5::uuid AND n.dismissed_at IS NULL
+           AND n.entity_id = $5::uuid
            AND n.created_at > now() - make_interval(days => $6::int)
            AND NOT ($2::text = 'critical' AND n.severity <> 'critical')
            AND n.created_at >= coalesce(
@@ -99,12 +112,13 @@ const SIN_TOKEN = ['needs_reauth', 'expired', 'revoked'] as const;
  * llevan BROKEN_ACCOUNT_REPEAT_DAYS días sin un aviso suyo (ni
  * descartado: quien lo quitó de la campana no lo vuelve a ver al minuto
  * siguiente, lo vuelve a ver a la semana). Cada una pasa por
- * notifyBrokenAccount, con su regla. `workspaceId` lo limita a un espacio
- * (la corrida de una prueba o de la demo).
+ * notifyBrokenAccount, con su regla, en una transacción por cuenta (la
+ * que su candado necesita). `workspaceId` lo limita a un espacio (la
+ * corrida de una prueba o de la demo).
  *
  * Devuelve cuántos avisos escribió.
  */
-export async function remindBrokenAccounts(db: Queryable, workspaceId: string | null = null): Promise<number> {
+export async function remindBrokenAccounts(db: JobDatabase, workspaceId: string | null = null): Promise<number> {
   const { rows } = await db.query<BrokenAccount & { status_detail: string | null; [k: string]: unknown }>(
     `SELECT c.id, c.workspace_id, c.platform_id, c.handle, c.status_detail
        FROM social_connection c
@@ -119,7 +133,7 @@ export async function remindBrokenAccounts(db: Queryable, workspaceId: string | 
   );
   let escritos = 0;
   for (const acc of rows) {
-    if (await notifyBrokenAccount(db, acc, 'reauth', acc.status_detail)) escritos += 1;
+    if (await db.transaction((tx) => notifyBrokenAccount(tx, acc, 'reauth', acc.status_detail))) escritos += 1;
   }
   return escritos;
 }

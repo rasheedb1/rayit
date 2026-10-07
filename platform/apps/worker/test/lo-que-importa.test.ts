@@ -29,7 +29,7 @@ import { markChannelAccountDown } from '@mc/db/queries/canales';
 import { listWeeklyHighlights, weeklySourcesFor, type WeeklyHighlight, type WeeklySource } from '@mc/db/queries/resumen-semana';
 import { openTestDb, type TestDb } from '@mc/db/test/pglite';
 import { markAccountError, markNeedsReauth, selectCollectableAccounts } from '../src/jobs/conexiones/_posts.ts';
-import { remindBrokenAccounts } from '../src/jobs/conexiones/aviso-cuenta.ts';
+import { BROKEN_ACCOUNT_LOCK_PREFIX, notifyBrokenAccount, remindBrokenAccounts } from '../src/jobs/conexiones/aviso-cuenta.ts';
 import { acknowledgeHighlight } from '@mc/db/queries/resumen-semana';
 import { computePostScoreJob } from '../src/jobs/conexiones/compute-post-score.ts';
 import { recordatoriosJob } from '../src/jobs/finanzas/recordatorios.ts';
@@ -190,6 +190,17 @@ describe('los productores escriben, Resumen enseña', () => {
     assert.equal(avisos.rows[0]?.n, 1);
   });
 
+  test('un aviso descartado también cuenta: el reintento del día siguiente no lo vuelve a escribir', async () => {
+    // Alguien lo quitó de la campana (dismissed_at). La cuenta sigue en 'error' y se reintenta cada día.
+    await t.admin(`UPDATE notification SET dismissed_at = now() WHERE kind = 'connection_error' AND entity_id = '${CONEXION_TIKTOK}'`);
+    const [tiktok] = await selectCollectableAccounts(ctxDe('collect.posts'), { connectionId: CONEXION_TIKTOK });
+    assert.ok(tiktok);
+    await markAccountError(ctxDe('collect.posts'), tiktok, 'La cuenta ya no existe en TikTok.');
+    const avisos = await jobDb.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM notification WHERE kind = 'connection_error' AND entity_id = $1`, [CONEXION_TIKTOK]);
+    assert.equal(avisos.rows[0]?.n, 1, 'lo vuelve a ver a la semana, no mañana');
+  });
+
   test('si la avería sube de gravedad la misma semana (no se lee → token rechazado), el crítico sí se escribe y va arriba', async () => {
     const [tiktok] = await selectCollectableAccounts(ctxDe('collect.posts'), { connectionId: CONEXION_TIKTOK });
     assert.ok(tiktok);
@@ -241,5 +252,43 @@ describe('los productores escriben, Resumen enseña', () => {
 
     // Y no se repite: el barrido siguiente, la misma semana, no escribe nada.
     assert.equal(await remindBrokenAccounts(jobDb, LAURA_WS), 0);
+  });
+});
+
+describe('dos jobs que rompen la misma cuenta a la vez', () => {
+  test('el aviso toma el candado de la cuenta ANTES de mirar si ya hay uno, dentro de la misma transacción', async () => {
+    // La base de la prueba (PGlite) es de una sola conexión y no puede
+    // correr dos transacciones a la vez: se prueba el orden de las
+    // sentencias, que es lo que cierra la carrera en Postgres (ver
+    // notifyBrokenAccount).
+    const vistas: { sql: string; params: readonly unknown[] }[] = [];
+    const espia: Queryable = {
+      query: async <R extends Row = Row>(text: string, params: readonly unknown[] = []): Promise<QueryResult<R>> => {
+        vistas.push({ sql: text, params });
+        return { rows: [] as R[], rowCount: 0 };
+      },
+    };
+    const cuenta = { id: CONEXION_TIKTOK, workspace_id: LAURA_WS, platform_id: 'tiktok', handle: 'laura.cocinafacil' };
+    await notifyBrokenAccount(espia, cuenta, 'unreadable', null);
+    assert.match(vistas[0]?.sql ?? '', /pg_advisory_xact_lock\(hashtextextended\(\$1, 0\)\)/);
+    assert.deepEqual(vistas[0]?.params, [`${BROKEN_ACCOUNT_LOCK_PREFIX}${CONEXION_TIKTOK}`]);
+    assert.match(vistas[1]?.sql ?? '', /INSERT INTO notification[\s\S]*WHERE NOT EXISTS/);
+    assert.equal(vistas.length, 2);
+  });
+
+  test('el barrido abre una transacción por cuenta: el candado no se suelta antes de escribir', async () => {
+    let transacciones = 0;
+    const db: JobDatabase = {
+      query: jobDb.query,
+      transaction: (fn) => {
+        transacciones += 1;
+        return jobDb.transaction(fn);
+      },
+    };
+    await t.admin(`UPDATE notification SET created_at = created_at - interval '30 days'
+                    WHERE kind = 'connection_error' AND entity_id = '${CONEXION_TIKTOK}'`);
+    const escritos = await remindBrokenAccounts(db, LAURA_WS);
+    assert.ok(escritos >= 1);
+    assert.equal(transacciones, escritos, 'una por cuenta que pasó por notifyBrokenAccount');
   });
 });

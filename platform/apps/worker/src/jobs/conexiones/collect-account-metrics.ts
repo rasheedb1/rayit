@@ -26,7 +26,7 @@
 import { createPublicProfileSources, isPlatformApiError, isPlatformId, PublicLookupError, type PublicProfileSources } from '@mc/connectors';
 import { auditAsJob } from '@mc/db';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
-import { notifyBrokenAccount } from './_posts.ts';
+import { notifyBrokenAccount } from './aviso-cuenta.ts';
 import { mapLimit } from './oauth-refresh.ts';
 
 export interface CollectAccountMetricsPayload extends JobPayload {

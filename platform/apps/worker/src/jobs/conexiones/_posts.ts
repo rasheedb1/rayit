@@ -21,10 +21,6 @@ import {
 import type { JobContext, JobPayload } from '../../runner/registry.ts';
 import { notifyBrokenAccount, platformName } from './aviso-cuenta.ts';
 
-// El aviso de una cuenta rota vive en aviso-cuenta.ts (RES-3); se
-// re-exporta para quien ya lo importaba de aquí.
-export { notifyBrokenAccount, platformName, type BrokenAccount } from './aviso-cuenta.ts';
-
 export interface CollectPayload extends JobPayload {
   /** Solo esta cuenta (desde la pantalla o una prueba). */
   connectionId?: string;
