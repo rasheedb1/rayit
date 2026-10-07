@@ -381,6 +381,10 @@ describe("cambiar de qué creador es un negocio (ACC-7)", () => {
 
   it("un id que no lo es no llega a la base; quien solo mira, tampoco", async () => {
     expect((await cambiarCreadorNegocio({}, datos("sofia"))).errors).toEqual({ creatorId: MESSAGES.validacion.creator });
+    // Un negocio mal formado dice que el negocio no es válido, no la empresa.
+    const malNegocio = await cambiarCreadorNegocio({}, form({ dealId: "negocio", companyId: COMPANY, creatorId: CREADORA }));
+    expect(malNegocio.errors).toEqual({ dealId: MESSAGES.validacion.deal });
+    expect(MESSAGES.validacion.deal).not.toBe(MESSAGES.validacion.company);
     puedeOperarVentas.mockResolvedValue(false);
     expect(await cambiarCreadorNegocio({}, datos(CREADORA))).toEqual({ message: MESSAGES.sinPermiso });
     expect(setDealCreator).not.toHaveBeenCalled();
@@ -393,5 +397,11 @@ describe("cambiar de qué creador es un negocio (ACC-7)", () => {
     expect(await cambiarCreadorNegocio({}, datos(CREADORA))).toEqual({ errors: { creatorId: MESSAGES.errores.InvalidCreator } });
     setDealCreator.mockRejectedValue(new VentasError("DealNotFound"));
     expect(await cambiarCreadorNegocio({}, datos(CREADORA))).toEqual({ message: MESSAGES.errores.DealNotFound });
+  });
+
+  it("con su cotización o su campaña de otro creador, lo dice en vez de partir el acuerdo (DealCreatorLocked)", async () => {
+    setDealCreator.mockRejectedValue(new VentasError("DealCreatorLocked"));
+    expect(await cambiarCreadorNegocio({}, datos(CREADORA))).toEqual({ message: MESSAGES.errores.DealCreatorLocked });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });
