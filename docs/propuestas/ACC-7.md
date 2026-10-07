@@ -1,7 +1,8 @@
 # ACC-7 · El alcance por creador también en la base
 
-> Historia ACC-7 (épico ACC, sprint 6). Ramas `rasheed/ACC-7-rls-por-creador`
-> y `rasheed/ACC-7-rls-por-creador-r2` (los once hallazgos de la ronda 1).
+> Historia ACC-7 (épico ACC, sprint 6). Ramas `rasheed/ACC-7-rls-por-creador`,
+> `rasheed/ACC-7-rls-por-creador-r2` (los once hallazgos de la ronda 1) y
+> `rasheed/ACC-7-rls-por-creador-r3` (los trece de la ronda 2).
 > 7 de octubre de 2026. Migración `0082_alcance_por_creador.sql`, **sin
 > aplicar**: la aplica el integrador, y **antes** de desplegar (la guardia
 > del esquema la exige y la web no arranca sin ella).
@@ -119,11 +120,13 @@ respuesta de outreach a negocio. Ahora:
 
 - **Las tres altas ponen el creador.** `createDeal` y `acceptSignal` con
   `creatorForNewDeal()`: el elegido (que tiene que ser del espacio,
-  `InvalidCreator`, y de su alcance, `ScopeError`) o el único de su
-  alcance o del espacio (`soleCreatorSql()`); con varios y acotado,
-  `DealCreatorRequired`; con varios y sin alcance, sin creador, como
-  hasta hoy. La respuesta de outreach (`openDealFromReply`) toma el único
-  del espacio o del alcance.
+  `InvalidCreator`, y de su alcance, `ScopeError`) o el único de
+  `listDealCreatorOptions()`; con varios y acotado,
+  `DealCreatorRequired`; acotado a creadores dados de baja,
+  `NoCreatorInScope`; con varios y sin alcance, sin creador, como hasta
+  hoy. La respuesta de outreach (`openDealFromReply`) toma
+  `sole_creator_for_session()` y, si quien corrige desde la bandeja está
+  acotado y no hay uno solo, no abre el negocio (ver ronda 3).
 - **«Nuevo negocio» pregunta de quién es** cuando hay más de un creador
   para elegir (`listDealCreatorOptions`): opcional para quien ve a todos,
   obligatorio para quien está acotado a varios.
@@ -180,6 +183,19 @@ respuesta de outreach a negocio. Ahora:
 - Web: `ventas/actions.test.ts`, `cotizar/actions.test.ts` y
   `ventas/empresas/[id]/negocio.test.tsx`.
 
+## Ronda 3: los trece hallazgos de la ronda 2
+
+| # | Qué | Cómo quedó |
+|---|---|---|
+| 1, 9 | «Corregir intención → Me interesa» desde la bandeja, acotada a varios creadores: 42501 y el genérico; y un segundo negocio con la marca si el abierto era de otro creador | `reclassifyInboxMessage` pregunta antes (`interestedOutOfScope`): si el mensaje apunta a un negocio que no ve, o la marca solo tiene abierto uno que no ve (`open_deal_out_of_scope`, 0082 §6, sí o no), devuelve `out_of_scope` sin tocar nada. Si hay que abrir uno y no se sabe de qué creador, la intención queda escrita y el negocio no se abre (`dealNeedsCreator`): la bandeja dice «ábrelo desde la ficha y elige». La acción traduce además `scopeErrorOf()`. Se tomó la forma del hallazgo 9 (marcar y no abrir) y no la del 1 (`creator_required`, sin marcar): la persona sí sabe que la respuesta es de interés; lo que no sabe la base es de quién es el negocio |
+| 2, 8 | Equipo no reconocía `membership_full_role_unscoped` | `changeMemberRole` lo pregunta antes (`scoped_member`) y, si llega entre la pregunta y el UPDATE, lo reconoce con `isFullRoleUnscopedError()` dentro de un SAVEPOINT. Texto en `accesos/_lib/messages.ts`. Pruebas en `equipo.test.ts` y `accesos/actions.test.ts` |
+| 3, 7 | El selector y el alta contaban distinto con un alcance a un creador borrado | Una sola lista en la base: `creators_for_session(ws)` (0082 §1b) cruza con `creator_profile` vivo del mismo espacio; `sole_creator_for_session(ws)` cuenta de ella. `listDealCreatorOptions` lee `session_sees_all_creators()` en su propia consulta (sin filas no hay «primera fila»). Casos: [borrado, vivo] nace del vivo; [borrado] solo, `NoCreatorInScope` y «Nuevo negocio» desactivado con su motivo |
+| 4, 12 | `soleCreatorSql()` armaba SQL con `replace` e interpolaba el espacio | Ya no existe: es la función SQL `sole_creator_for_session(ws uuid)`, con su md5 en `CUERPOS_DEL_ALCANCE`, y `soleCreatorFor(tx, workspaceId)` la llama con el espacio como parámetro. No queda SQL que interpolar ni que probar como texto |
+| 5, 10 | Los negocios de antes, con `creator_id` NULL, invisibles para el primer mánager acotado | 0082 §5: en cada espacio con UN creador vivo, `deal` y `campaign` sin creador pasan a ese creador. Quita FORCE un momento (como 0026, 0032, 0033, 0044) y apaga `deal_updated` y `campaign_updated` durante el UPDATE para no tocar `updated_at`. Probado: el mánager acotado no lo veía y después sí; el de una agencia con varios sigue sin creador; las tablas vuelven a tener FORCE y los disparadores, encendidos |
+| 6 | El creador de un negocio no se veía ni se cambiaba | El pipeline (tarjeta, lista y fila móvil) y la ficha dicen el creador cuando la persona ve a más de uno, y «Sin creador» siempre, con «solo lo ve quien ve a todos». En la ficha, «Cambiar» abre un selector (`setDealCreator`: mismas reglas que el alta; «Sin creador» solo para quien ve a todos; bitácora `deal.creator_changed`). Y la ficha dice cuando la marca tiene negocios abiertos que la persona no ve (`hasOpenDealOutOfScope`) |
+| 11 | La guardia de §2 leía como el migrador, sin espacio y con FORCE: nunca veía filas | Quita FORCE a `membership_scope`, `membership` y `role` solo para esa pregunta, como en §5. Se eligió eso y no recorrer los espacios con `set_config`: para recorrerlos hay que leer `workspace`, que también tiene FORCE, y un `set_config` no ayuda con una política que no aplicara al migrador. Si el migrador no fuera dueño, el ALTER falla en voz alta. Probado: con una fila de alcance de una Dueña sembrada saltándose el disparador, volver a aplicar 0082 se para |
+| 13 | `scopeErrorOf()` repetía el recorrido de `cause` | `findPgError(err, code, constraint?, matches?)`: un predicado opcional para lo que Postgres solo dice en el mensaje |
+
 ## Pendiente
 
 - **Aplicar 0082 en Supabase antes de desplegar** (`make db.migrate`,
@@ -192,4 +208,8 @@ respuesta de outreach a negocio. Ahora:
   lecturas (CIERRE-ACC §5.4). Para el alcance por creador la base ya
   filtra las cuatro tablas; el de marca y campaña sigue pendiente ahí.
 - La pantalla que escriba `membership_scope` (CIERRE-ACC §5.6) tiene que
-  traducir `membership_full_role_unscoped` («quítale antes el alcance»).
+  traducir `membership_full_role_unscoped` al dar alcance a un Dueño o un
+  Administrador (el cambio de rol ya lo traduce Equipo: `scoped_member`).
+- Al aplicar 0082 en Supabase, el NOTICE de §5 dice cuántos negocios y
+  campañas pasaron a su creador; los de agencias con varios creadores
+  quedan «sin creador» y se asignan desde la ficha.

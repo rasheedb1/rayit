@@ -513,13 +513,31 @@ Las reglas, y por qué:
   una persona acotada es `ScopeError` y la transacción sigue usable. Si
   no hay índice (el @ de una cuenta), una función que responde solo sí o
   no (`public_account_out_of_scope`, 0082 §4).
-- **Una fila nueva que no trae creador** (un negocio de Ventas) lo toma
-  con `soleCreatorSql()`: el único del alcance de quien escribe, o el
-  único del espacio; si hay varios, lo elige la pantalla
-  (`listDealCreatorOptions`, `creatorForNewDeal`). Prueba:
-  `test/alcance-rls.test.ts`.
+- **De qué creador es un negocio** sale de UNA lista en la base,
+  `creators_for_session(ws)` (0082 §1b): los creadores vivos que la
+  persona puede poner (los de su alcance, o todos). Un alcance a un
+  creador dado de baja no cuenta. La leen el selector
+  (`listDealCreatorOptions`, con `seesAll` en su propia consulta), las
+  altas (`creatorForNewDeal`: el único, `null` «sin creador» para quien
+  ve a todos, `DealCreatorRequired` o `NoCreatorInScope` para quien está
+  acotado) y, por `sole_creator_for_session(ws)`, el worker y la bandeja
+  (`soleCreatorFor(tx, workspaceId)`, con el espacio como parámetro: no
+  se interpola SQL). Desde la bandeja, quien está acotado a varios
+  creadores marca «Me interesa» sin que se abra el negocio
+  (`dealNeedsCreator`), y no toca el negocio de otro creador
+  (`out_of_scope`, con `open_deal_out_of_scope()`, 0082 §6, que solo dice
+  sí o no). El creador de un negocio se cambia con
+  `setDealCreator(tx, dealId, creatorId | null)`, que deja bitácora
+  (`deal.creator_changed`). Prueba: `test/alcance-rls.test.ts`.
+- **Los negocios y campañas de antes** sin creador pasan, en 0082 §5, al
+  único creador vivo de su espacio cuando hay uno solo (sin tocar
+  `updated_at`); con varios quedan «sin creador» y la ficha lo dice.
 - **Los errores de Postgres** se reconocen por código y restricción con
-  `findPgError()` (`src/pg-error.ts`), que recorre la cadena `cause`.
+  `findPgError()` (`src/pg-error.ts`), que recorre la cadena `cause`; un
+  predicado opcional cubre lo que Postgres solo pone en el mensaje (el
+  nombre de la política, `scopeErrorOf()`). En Equipo,
+  `isFullRoleUnscopedError()` y el código `scoped_member` de
+  `changeMemberRole` dicen «quítale antes el alcance».
 
 ## Lo que hace el cliente por ti
 
