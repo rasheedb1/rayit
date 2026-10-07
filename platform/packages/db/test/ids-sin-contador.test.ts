@@ -281,4 +281,60 @@ describe('0082 convierte las claves con las filas dentro', () => {
       await db.execAsSuperuser('DROP TABLE zz_cim11_contador, zz_cim11_identidad, zz_cim11_del_worker');
     }
   });
+
+  test('outreach_writer_status y outreach_classifier_status: a igual started_at, manda la corrida que terminó después (0082 §4b)', async () => {
+    const casos = [
+      { job: 'outbound.generate', fn: 'outreach_writer_status', clave: 'writer', antes: 'fake', despues: 'anthropic' },
+      { job: 'outbound.intent', fn: 'outreach_classifier_status', clave: 'classifier', antes: 'fake', despues: 'model' },
+    ];
+    for (const c of casos) {
+      for (const [primero, segundo] of [[c.antes, c.despues], [c.despues, c.antes]] as const) {
+        await db.execAsSuperuser(`DELETE FROM job_run WHERE job_id = '${c.job}'`);
+        // El mismo started_at; la que terminó después se inserta primero,
+        // para que el orden de llegada no la favorezca.
+        await db.execAsSuperuser(
+          `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, metadata) VALUES
+             ('${c.job}', 'ok', 1, date_trunc('minute', now()) - interval '1 hour', date_trunc('minute', now()) - interval '50 minutes', '{"${c.clave}": "${segundo}"}'),
+             ('${c.job}', 'ok', 1, date_trunc('minute', now()) - interval '1 hour', date_trunc('minute', now()) - interval '55 minutes', '{"${c.clave}": "${primero}"}')`,
+        );
+        const { rows } = await db.queryAsSuperuser<{ s: string }>(`SELECT ${c.fn}() AS s`);
+        assert.equal(rows[0]!.s, segundo, `${c.fn}: la que terminó después es la última`);
+      }
+      await db.execAsSuperuser(`DELETE FROM job_run WHERE job_id = '${c.job}'`);
+    }
+  });
+
+  test('la guardia también ve la secuencia que le llega a mc_app por un rol intermedio, por columna, o a mc_public_share', async () => {
+    // El mismo criterio que la comprobación final de 0082 §5
+    // (has_any_column_privilege): un GRANT directo a mc_app no es el
+    // único camino por el que el id de una fila llega a quien no debe.
+    await db.execAsSuperuser(
+      `CREATE ROLE zz_cim11_intermedio NOLOGIN;
+       GRANT zz_cim11_intermedio TO mc_app;
+       SET ROLE ${MIGRADOR};
+       CREATE TABLE zz_cim11_heredada (id bigserial PRIMARY KEY);
+       CREATE TABLE zz_cim11_por_columna (id bigserial PRIMARY KEY, nota text);
+       CREATE TABLE zz_cim11_del_enlace (id bigserial PRIMARY KEY);
+       CREATE TABLE zz_cim11_de_nadie (id bigserial PRIMARY KEY);
+       REVOKE ALL ON zz_cim11_heredada, zz_cim11_por_columna, zz_cim11_del_enlace, zz_cim11_de_nadie FROM mc_app, mc_public_share, PUBLIC;
+       GRANT SELECT ON zz_cim11_heredada TO zz_cim11_intermedio;
+       GRANT SELECT (nota) ON zz_cim11_por_columna TO mc_app;
+       GRANT INSERT ON zz_cim11_del_enlace TO mc_public_share;
+       RESET ROLE`,
+    );
+    try {
+      const e = await estadoDelEsquema(db);
+      assert.deepEqual(e.clavesDeSecuencia, [
+        'zz_cim11_del_enlace.id (public.zz_cim11_del_enlace_id_seq)',
+        'zz_cim11_heredada.id (public.zz_cim11_heredada_id_seq)',
+        'zz_cim11_por_columna.id (public.zz_cim11_por_columna_id_seq)',
+      ]);
+    } finally {
+      await db.execAsSuperuser(
+        `DROP TABLE zz_cim11_heredada, zz_cim11_por_columna, zz_cim11_del_enlace, zz_cim11_de_nadie;
+         REVOKE zz_cim11_intermedio FROM mc_app;
+         DROP ROLE zz_cim11_intermedio`,
+      );
+    }
+  });
 });
