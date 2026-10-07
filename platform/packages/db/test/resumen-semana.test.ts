@@ -88,6 +88,10 @@ const N_SOFIA_NEGOCIO = N('5d01');
 let t: TestDb;
 /** Lo que enseña el bloque sobre el seed de la demo, antes de tocar nada. */
 let semilla: WeeklyHighlight[];
+/** Si el bloque del seed dice que el espacio tiene varias creadoras (no: solo Laura). */
+let variasEnLaSemilla: boolean;
+/** Cuándo dice Finanzas que salió el último recordatorio de FV-2026-007 (seed 0003), ISO en UTC. */
+let ultimoRecordatorio: string | undefined;
 /** Un negocio abierto de Laura con la acción vencida (seed 0002). */
 let negocio: { id: string; company_id: string };
 
@@ -130,7 +134,17 @@ function aviso(o: {
 before(async () => {
   t = await openTestDb();
   // El seed de la demo, tal cual: sin persona, como el modo demo.
-  semilla = await lista(null);
+  const leida = await leer(null);
+  semilla = leida.rows;
+  variasEnLaSemilla = leida.severalCreators;
+  ultimoRecordatorio = (
+    await t.db.asWorker((tx) =>
+      tx.query<{ at: string }>(
+        `SELECT to_char(last_reminder_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at FROM invoice WHERE id = $1`,
+        [FV_007],
+      ),
+    )
+  ).rows[0]?.at;
   // A partir de aquí, solo los avisos de la prueba.
   await t.admin(`DELETE FROM notification WHERE id::text LIKE '00000011-%'`);
 
@@ -186,11 +200,18 @@ describe('el seed de la demo (0011)', () => {
     assert.ok(cobro?.source === 'invoice');
     assert.equal(cobro.invoiceId, FV_007);
     assert.equal(cobro.actionUrl, `/finanzas/facturas/${FV_007}?recordatorio=4`);
+    // La misma historia que el detalle de la factura en Finanzas: el recordatorio ya salió, el día que dice Finanzas.
+    assert.ok(ultimoRecordatorio, 'el seed 0003 dice cuándo salió el último recordatorio');
+    assert.equal(cobro.reminderSentAt, ultimoRecordatorio);
     assert.ok(seguimiento?.source === 'deal');
     assert.equal(seguimiento.actionUrl, `/ventas/empresas/${seguimiento.companyId}`);
     assert.ok(video?.source === 'outlier');
     assert.ok(video.viewsVsMedian !== null && Number(video.viewsVsMedian) >= 2);
     assert.ok(video.postTitle, 'el video de la demo tiene nombre');
+    // Una sola creadora en la demo: la fila habla de tú y no nombra a nadie.
+    assert.equal(variasEnLaSemilla, false);
+    assert.equal(cuenta.creatorName, 'Laura Méndez');
+    assert.equal(video.creatorName, 'Laura Méndez');
   });
 });
 
@@ -257,7 +278,7 @@ describe('las fuentes', () => {
   test('una fuente que no es de la lista no elige SQL: se ignora', async () => {
     const filas = await lista(USER_LAURA, ['invoice', 'nada' as WeeklySource]);
     assert.deepEqual(filas.map((f) => f.source), ['invoice']);
-    assert.deepEqual(await leer(USER_LAURA, []), { rows: [], more: false });
+    assert.deepEqual(await leer(USER_LAURA, []), { rows: [], more: false, severalCreators: false });
   });
 });
 
@@ -311,7 +332,7 @@ describe('permisos y personas', () => {
   test('otro espacio no ve nada de este, ni este el aviso del otro', async () => {
     assert.ok(!ids(await lista(USER_LAURA)).includes(N_AJENO));
     const ajeno = await t.db.withWorkspace(WS_AJENO, (tx) => listWeeklyHighlights(tx, WEEKLY_SOURCES));
-    assert.deepEqual(ajeno, { rows: [], more: false }, 'la cuenta del aviso ajeno es de otro espacio: RLS no la deja unir');
+    assert.deepEqual(ajeno, { rows: [], more: false, severalCreators: false }, 'la cuenta del aviso ajeno es de otro espacio: RLS no la deja unir');
   });
 });
 
@@ -541,6 +562,14 @@ describe('alcance (ACC-6)', () => {
     const miembro = ids(await lista(USER_MIEMBRO));
     assert.deepEqual(miembro.filter((id) => sofia.includes(id)), []);
   });
+  test('con Sofía en el espacio hay varias creadoras, y cada fila de cuenta o de video dice de quién es', async () => {
+    const leida = await leer(USER_LAURA);
+    assert.equal(leida.severalCreators, true);
+    const deSofia = leida.rows.filter((f) => f.id === N_SOFIA_CONEXION || f.id === N_SOFIA_VIDEO);
+    assert.equal(deSofia.length, 2);
+    for (const f of deSofia) assert.ok((f.source === 'connection' || f.source === 'outlier') && f.creatorName === 'Sofía Rojas', f.id);
+  });
+
   test('el «Entendido» tampoco sirve de oráculo: fuera del alcance, el id de un aviso de Sofía da false y no escribe nada', async () => {
     const sofia = [N_SOFIA_CONEXION, N_SOFIA_CANAL, N_SOFIA_FACTURA, N_SOFIA_VIDEO, N_SOFIA_NEGOCIO];
     for (const id of sofia) {
@@ -579,7 +608,7 @@ describe('la urgencia manda antes del corte', () => {
   test('compareHighlights: dentro de una fuente, un crítico viejo va antes que un aviso reciente; a igual severidad, el más reciente', () => {
     const cuenta = (id: string, severity: 'critical' | 'warning', createdAt: string): WeeklyHighlight => ({
       source: 'connection', id, kind: 'connection_error', severity, storedTitle: '', storedBody: null, actionUrl: '/conexiones', createdAt,
-      connectionId: id, platformId: 'tiktok', handle: null, status: severity === 'critical' ? 'needs_reauth' : 'error', detail: null,
+      connectionId: id, platformId: 'tiktok', handle: null, creatorName: 'Laura Méndez', status: severity === 'critical' ? 'needs_reauth' : 'error', detail: null,
     });
     const viejaCritica = cuenta('a', 'critical', '2026-09-01T00:00:00.000000Z');
     const recienteAviso = cuenta('b', 'warning', '2026-10-01T00:00:00.000000Z');

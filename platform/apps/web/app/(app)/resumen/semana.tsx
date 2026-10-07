@@ -13,7 +13,7 @@ import { PLATFORM_LABEL, isPlatformId } from "@/components/ui/platform-pill";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor, type Formatter } from "@/lib/format";
 import { permisosDeLaSesion } from "@/lib/permisos/sesion";
-import { getCurrentContext } from "@/lib/workspace/current";
+import { getCurrentContext, SEED_WORKSPACE_ID } from "@/lib/workspace/current";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "./messages";
 import { ListaSemana, type FilaVista } from "./semana-lista";
@@ -41,14 +41,22 @@ import { enlacesDeFila, FILAS_A_LA_VISTA, fuentesVisibles } from "./_lib/semana"
  */
 export async function LoQueImporta() {
   try {
-    const [permisos, ws, { identity }] = await Promise.all([permisosDeLaSesion(), getCurrentWorkspace(), getCurrentContext()]);
+    const [permisos, ws, { identity, workspaceId }] = await Promise.all([permisosDeLaSesion(), getCurrentWorkspace(), getCurrentContext()]);
     const fuentes = fuentesVisibles(permisos);
     const hidden = identity ? [] : leerEntendidos((await cookies()).get(COOKIE_ENTENDIDOS)?.value);
     const leidas: WeeklyHighlights =
       fuentes.length === 0
         ? { rows: [], more: false, severalCreators: false }
         : await withWorkspace((tx) => listWeeklyHighlights(tx, fuentes, { hidden }));
-    return <LoQueImportaLista filas={leidas.rows} more={leidas.more} varias={leidas.severalCreators} f={formatterFor(ws)} />;
+    return (
+      <LoQueImportaLista
+        filas={leidas.rows}
+        more={leidas.more}
+        varias={leidas.severalCreators}
+        abrirVideos={workspaceId !== SEED_WORKSPACE_ID}
+        f={formatterFor(ws)}
+      />
+    );
   } catch (err) {
     // Un redirect (sin sesión) o un 404 siguen su camino. Lo demás no tumba
     // el Resumen entero: el bloque lo dice y las cifras de abajo cargan.
@@ -129,11 +137,11 @@ export function textoDeFila(fila: WeeklyHighlight, f: Formatter, varias = false)
  * una cuenta o de un video dice de quién es (`quien`): en una agencia,
  * «@laura.cocinafacil» no basta para saber sin abrirla de quién es.
  */
-export function vistaDeFila(fila: WeeklyHighlight, f: Formatter, varias = false): FilaVista {
+export function vistaDeFila(fila: WeeklyHighlight, f: Formatter, varias = false, abrirVideo = true): FilaVista {
   const { titulo, detalle } = textoDeFila(fila, f, varias);
   const deCreadora = fila.source === "connection" || fila.source === "outlier";
   const plataforma = deCreadora ? fila.platformId : null;
-  const { principal, secundario } = enlacesDeFila(fila, plataforma ? red(plataforma) : "");
+  const { principal, secundario } = enlacesDeFila(fila, plataforma ? red(plataforma) : "", { abrirVideo });
   return {
     id: fila.id,
     fuente: MESSAGES.semana.fuente[fila.source],
@@ -152,16 +160,19 @@ export function LoQueImportaLista({
   filas,
   more = false,
   varias = false,
+  abrirVideos = true,
   f,
 }: {
   filas: readonly WeeklyHighlight[];
   more?: boolean;
   varias?: boolean;
+  /** false en el espacio del seed: sus videos son inventados (ver enlacesDeFila). */
+  abrirVideos?: boolean;
   f: Formatter;
 }) {
   // Los números del contador y de «Ver N más», formateados aquí con el locale del espacio.
   const numeros = Array.from({ length: Math.max(filas.length, MAX_HIGHLIGHTS) + 1 }, (_, i) => f.int(i));
-  return <ListaSemana filas={filas.map((fila) => vistaDeFila(fila, f, varias))} more={more} aLaVista={FILAS_A_LA_VISTA} numeros={numeros} />;
+  return <ListaSemana filas={filas.map((fila) => vistaDeFila(fila, f, varias, abrirVideos))} more={more} aLaVista={FILAS_A_LA_VISTA} numeros={numeros} />;
 }
 
 /** El esqueleto del bloque mientras llega: la misma caja, sin texto inventado. */

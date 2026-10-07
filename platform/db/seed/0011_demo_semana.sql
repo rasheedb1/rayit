@@ -21,7 +21,13 @@
 --       aquí»), y la fila más urgente no puede mandar a un callejón.
 --   2 · Cobro: FV-2026-007 (Hogar Lindo, vencida hace 41 días, seed
 --       0003) con el recordatorio del paso 4 (+21 días, «Segundo aviso
---       de mora») sin mandar, como lo deja finance.reminders.
+--       de mora») como lo deja finance.reminders, YA MANDADO: el seed
+--       0003 dice que la factura lleva dos recordatorios y el último hace
+--       tres días (reminders_sent, last_reminder_at), y su detalle en
+--       Finanzas lo enseña así. El aviso se marca enviado ese mismo día
+--       (read_at = last_reminder_at, como markReminderSent), y el bloque
+--       lo dice: «… · recordatorio enviado el 4 oct». La factura sigue
+--       en el bloque porque mandar el recordatorio no la cobra.
 --   3 · Seguimiento: el negocio abierto con la acción vencida más
 --       antigua, con el deal_overdue que deja sales.follow_ups el día
 --       después del vencimiento, para su responsable.
@@ -83,7 +89,7 @@ ON CONFLICT (id) DO UPDATE SET title_es = EXCLUDED.title_es, body_es = EXCLUDED.
                                emailed_at = EXCLUDED.emailed_at, read_at = NULL, dismissed_at = NULL;
 
 -- ---------------------------------------------------------------------
--- 2 · FV-2026-007: el segundo aviso de mora, sin mandar
+-- 2 · FV-2026-007: el segundo aviso de mora, ya mandado
 -- ---------------------------------------------------------------------
 -- El texto sigue a @mc/core redactarRecordatorio (paso 4, tono mora_2):
 -- saludo, apertura, cifras, el bloque de pago (Laura no configuró cómo
@@ -104,7 +110,7 @@ WITH f AS (
    WHERE i.id = '00000003-0000-4000-8000-0000fac26007'
 )
 INSERT INTO notification (id, workspace_id, user_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url,
-                          created_at, emailed_at)
+                          created_at, emailed_at, read_at)
 SELECT '00000011-0000-4000-8000-0000000a1102', f.workspace_id, NULL, 'invoice_overdue', 'warning',
        'Segundo aviso · factura ' || f.number || ' con 21 días de mora',
        concat_ws(E'\n',
@@ -125,10 +131,13 @@ SELECT '00000011-0000-4000-8000-0000000a1102', f.workspace_id, NULL, 'invoice_ov
          'Gracias por la gestión,',
          f.creador),
        'invoice', f.id, '/finanzas/facturas/' || f.id || '?recordatorio=4',
-       (f.due_on + 21)::timestamp + interval '14 hours', now()
+       (f.due_on + 21)::timestamp + interval '14 hours', now(),
+       -- Enviado cuando Finanzas dice que salió el último recordatorio; nunca
+       -- antes de que el aviso exista.
+       greatest(f.last_reminder_at, (f.due_on + 21)::timestamp + interval '14 hours')
   FROM f
 ON CONFLICT (id) DO UPDATE SET title_es = EXCLUDED.title_es, body_es = EXCLUDED.body_es, created_at = EXCLUDED.created_at,
-                               emailed_at = EXCLUDED.emailed_at, read_at = NULL, dismissed_at = NULL;
+                               emailed_at = EXCLUDED.emailed_at, read_at = EXCLUDED.read_at, dismissed_at = NULL;
 
 -- ---------------------------------------------------------------------
 -- 3 · El seguimiento vencido más antiguo

@@ -85,14 +85,23 @@ const esExterno = (url: string | null): url is string => url !== null && /^https
  * usuario, con cifras agregadas donde el video no aparece; queda de
  * secundario («Ver tus cifras de Instagram»). Sin permalink https, ese
  * es el único.
+ *
+ * `abrirVideo: false` también lo deja como único: en el espacio del seed
+ * (la demo pública) los videos son inventados y su url («…/demo-d06») da
+ * un 404 en la red. Se decide aquí y no quitándole la url al post en el
+ * seed: el media kit de Cotizar (seed 0004) cita sus videos por esa url.
  */
-export function enlacesDeFila(f: WeeklyHighlight, red: string): { principal: Enlace; secundario: Enlace | null } {
+export function enlacesDeFila(
+  f: WeeklyHighlight,
+  red: string,
+  { abrirVideo = true }: { abrirVideo?: boolean } = {},
+): { principal: Enlace; secundario: Enlace | null } {
   const t = MESSAGES.semana;
   const modulo = (label: string): Enlace => ({ href: hrefDeFila(f), label, externo: false });
   switch (f.source) {
     case "outlier": {
       const cifras = modulo(t.outlier.verCifras(red));
-      return esExterno(f.postUrl)
+      return abrirVideo && esExterno(f.postUrl)
         ? { principal: { href: f.postUrl, label: t.outlier.abrirVideo(red), externo: true }, secundario: cifras }
         : { principal: cifras, secundario: null };
     }

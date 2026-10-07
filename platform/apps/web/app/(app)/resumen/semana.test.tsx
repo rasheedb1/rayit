@@ -33,6 +33,8 @@ const sesion = vi.hoisted(() => ({
   permisos: new Set<string>() as ReadonlySet<string>,
   /** Con sesión, quién es; undefined = modo demo, sin nadie. */
   identity: { userId: "00000002-0000-4000-8000-000000000002", email: "laura@ejemplo.com" } as { userId: string; email: string } | undefined,
+  /** El espacio de la petición: uno real por defecto; el del seed es la demo. */
+  workspaceId: "0000000e-0000-4000-8000-000000000001",
 }));
 /** La cookie del navegador que hace la petición: cada visitante de la demo trae la suya. */
 const navegador = vi.hoisted(() => ({ cookies: new Map<string, string>() }));
@@ -58,7 +60,10 @@ vi.mock("@/lib/workspace/settings", () => ({
 }));
 vi.mock("@/lib/permisos/sesion", () => ({ permisosDeLaSesion: async () => sesion.permisos }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
-vi.mock("@/lib/workspace/current", () => ({ getCurrentContext: async () => ({ identity: sesion.identity }) }));
+vi.mock("@/lib/workspace/current", () => ({
+  SEED_WORKSPACE_ID: "00000002-0000-4000-8000-000000000001",
+  getCurrentContext: async () => ({ identity: sesion.identity, workspaceId: sesion.workspaceId }),
+}));
 vi.mock("next/headers", () => ({
   cookies: async () => ({
     get: (name: string) => (navegador.cookies.has(name) ? { name, value: navegador.cookies.get(name) } : undefined),
@@ -136,6 +141,7 @@ beforeEach(() => {
   sesion.permisos = permisosDeRol("creator", "owner");
   sesion.identity = { userId: "00000002-0000-4000-8000-000000000002", email: "laura@ejemplo.com" };
   navegador.cookies = new Map();
+  sesion.workspaceId = "0000000e-0000-4000-8000-000000000001";
 });
 
 describe("cada fila dice qué pasa y lleva a su módulo", () => {
@@ -216,6 +222,22 @@ describe("cada fila dice qué pasa y lleva a su módulo", () => {
     expect(enlaces).toHaveLength(1);
     expect(enlaces[0]).toHaveAccessibleName(/^Ver tus cifras de Instagram: /);
     expect(enlaces[0]).toHaveAttribute("href", "/resumen?red=instagram");
+  });
+
+  it("en la demo (el espacio del seed) el video no se abre en su red: es inventado, y su url da un 404", async () => {
+    sesion.workspaceId = "00000002-0000-4000-8000-000000000001";
+    base.listWeeklyHighlights.mockResolvedValue({ rows: [VIDEO], more: false, severalCreators: false });
+    render(await LoQueImporta());
+    const enlaces = within(fila(/^Se disparó/)).getAllByRole("link");
+    expect(enlaces).toHaveLength(1);
+    expect(enlaces[0]).toHaveAccessibleName(/^Ver tus cifras de Instagram: /);
+    expect(enlaces[0]).toHaveAttribute("href", "/resumen?red=instagram");
+  });
+
+  it("fuera de la demo, el mismo bloque sí abre el video", async () => {
+    base.listWeeklyHighlights.mockResolvedValue({ rows: [VIDEO], more: false, severalCreators: false });
+    render(await LoQueImporta());
+    expect(within(fila(/^Se disparó/)).getAllByRole("link")[0]).toHaveAttribute("href", VIDEO.postUrl);
   });
 
   it("un video sin título ni texto se nombra por su red, sin comillas alrededor de un relleno", () => {

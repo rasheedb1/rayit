@@ -22,7 +22,8 @@
 
 SELECT set_config('app.workspace_id', '00000002-0000-4000-8000-000000000001', false);
 
--- (a) Un aviso de cada fuente, ni más ni menos, sin leer ni descartar.
+-- (a) Un aviso de cada fuente, ni más ni menos, sin descartar, y sin
+--     leer salvo el cobro (ese read_at es «recordatorio enviado», (c).
 SELECT 'a_un_aviso_por_fuente' AS check_id,
        count(*) FILTER (WHERE n.kind = 'connection_error' AND n.entity_type = 'social_connection')        AS cuenta,
        count(*) FILTER (WHERE n.kind = 'connection_error' AND n.entity_type = 'outreach_channel_account') AS canal,
@@ -35,7 +36,7 @@ SELECT 'a_un_aviso_por_fuente' AS check_id,
          AND count(*) FILTER (WHERE n.kind = 'invoice_overdue' AND n.entity_type = 'invoice') = 1
          AND count(*) FILTER (WHERE n.kind = 'deal_overdue' AND n.entity_type = 'deal') = 1
          AND count(*) FILTER (WHERE n.kind IN ('outlier', 'breakout') AND n.entity_type = 'post') = 1
-         AND bool_and(n.read_at IS NULL AND n.dismissed_at IS NULL AND n.created_at <= now()) AS ok
+         AND bool_and((n.read_at IS NULL OR n.kind = 'invoice_overdue') AND n.dismissed_at IS NULL AND n.created_at <= now()) AS ok
   FROM notification n
  WHERE n.id IN ('00000011-0000-4000-8000-0000000a1101', '00000011-0000-4000-8000-0000000a1102',
                 '00000011-0000-4000-8000-0000000a1103', '00000011-0000-4000-8000-0000000a1104',
@@ -63,10 +64,15 @@ SELECT 'b_cuenta_caida' AS check_id, c.platform_id, c.status, n.severity, n.titl
   JOIN social_connection c ON c.id = n.entity_id
  WHERE n.id = '00000011-0000-4000-8000-0000000a1101';
 
--- (c) La factura sigue abierta y vencida, y el aviso es el paso 4 de FIN-4.
+-- (c) La factura sigue abierta y vencida, y el aviso es el paso 4 de FIN-4,
+--     ya mandado el día que Finanzas dice que salió el último recordatorio
+--     (seed 0003: reminders_sent, last_reminder_at). Así el bloque y el
+--     detalle de la factura cuentan la misma historia.
 SELECT 'c_cobro_vencido' AS check_id, i.number, i.status, CURRENT_DATE - i.due_on AS dias_de_mora, n.action_url,
+       i.reminders_sent, i.last_reminder_at, n.read_at,
        i.status IN ('sent', 'partial') AND i.due_on < CURRENT_DATE AND n.severity = 'warning'
-         AND n.action_url = '/finanzas/facturas/' || i.id || '?recordatorio=4' AS ok
+         AND n.action_url = '/finanzas/facturas/' || i.id || '?recordatorio=4'
+         AND i.reminders_sent > 0 AND n.read_at = i.last_reminder_at AND n.read_at >= n.created_at AS ok
   FROM notification n
   JOIN invoice i ON i.id = n.entity_id
  WHERE n.id = '00000011-0000-4000-8000-0000000a1102';
