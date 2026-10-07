@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ACCIONES, MODULOS, PERMISOS, PERMISO_MINIMO, ROLES_SISTEMA, TODOS_LOS_PERMISOS, WORKSPACE_KINDS,
   assertNoEsUltimoDueno, can, esUltimoDueno, isPermiso, moduloDe, permisoDef, permisosDeRol, permisosDelModulo,
-  permisosOtorgables, puedeAsignarRol, rolSistema,
+  permisosOtorgables, permisosQueFaltan, puedeAsignarRol, ROLE_KEYS, rolSistema,
   PermisoDesconocidoError, RolDesconocidoError, SinPermisoError, UltimoDuenoError,
   type Permiso,
 } from '../src/permisos.ts';
@@ -204,6 +204,27 @@ test('un Administrador de agencia no puede asignar Dueño; un Dueño puede asign
   assert.equal(puedeAsignarRol(permisosDeRol('creator', 'manager'), 'creator', 'finance'), false);
   // Solo lectura cabe dentro de lo que el Mánager tiene: sí lo puede asignar.
   assert.equal(puedeAsignarRol(permisosDeRol('creator', 'manager'), 'creator', 'viewer'), true);
+});
+
+test('permisosQueFaltan es la regla, y las otras dos salen de ella', () => {
+  const manager = permisosDeRol('creator', 'manager');
+  const pedidos: Permiso[] = ['campanas.reporte.enviar', 'finanzas.flujo.ver', 'finanzas.flujo.ver', 'ventas.negocio.ver'];
+  // Sin repetir, en el orden pedido, y un permiso que no está en el catálogo (un rol a medida mal escrito) tampoco se tiene.
+  assert.deepEqual(permisosQueFaltan(manager, [...pedidos, 'inventado.algo.ver']), ['finanzas.flujo.ver', 'inventado.algo.ver']);
+  assert.deepEqual(permisosQueFaltan(permisosDeRol('creator', 'owner'), pedidos), []);
+  // Lo otorgable es lo pedido menos lo que falta.
+  const faltan = new Set(permisosQueFaltan(manager, pedidos));
+  assert.deepEqual([...permisosOtorgables(manager, pedidos)], [...new Set(pedidos)].filter((p) => !faltan.has(p)));
+  for (const r of ROLES_SISTEMA) {
+    assert.equal(puedeAsignarRol(manager, r.workspaceKind, r.key), permisosQueFaltan(manager, r.permisos).length === 0, r.key);
+  }
+});
+
+test('ROLE_KEYS es el único orden de los roles: todas las claves de ROLES_SISTEMA, sin repetir, de Dueño a Solo lectura', () => {
+  assert.equal(new Set(ROLE_KEYS).size, ROLE_KEYS.length);
+  assert.deepEqual([...new Set(ROLES_SISTEMA.map((r) => r.key))].sort(), [...ROLE_KEYS].sort());
+  assert.equal(ROLE_KEYS[0], 'owner');
+  assert.equal(ROLE_KEYS.at(-1), 'viewer');
 });
 
 test('el último dueño no se quita ni se degrada', () => {

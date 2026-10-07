@@ -44,7 +44,7 @@ export async function confirmarEntrada(formData: FormData): Promise<void> {
   const { data, error } = await supabase.auth.verifyOtp({ type: tipo, token_hash: tokenHash });
   if (error) redirect(`/login?error=${enlaceInvalido(error.message)}`);
 
-  const fallo = await completarEntrada(supabase, data.user);
+  const fallo = await completarEntrada(supabase, data.user, destino);
   if (fallo) redirect(`/login?error=${fallo}`);
 
   // completarEntrada ya exigió un correo verificado: aquí hay correo.

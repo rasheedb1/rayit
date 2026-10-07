@@ -94,13 +94,19 @@ devuelve la definición o `undefined`.
 
 ### Las reglas que van en código
 
-- **Nadie otorga lo que no tiene.** `permisosOtorgables(propios,
-  pedidos)` es la intersección; `puedeAsignarRol(propios, kind, key)`
-  dice si quien invita tiene todos los permisos del rol. Sin esto un
-  administrador se hace dueño en dos clics.
+- **Nadie otorga lo que no tiene.** Una sola función:
+  `permisosQueFaltan(propios, pedidos)` dice qué de lo pedido no tiene
+  quien invita o edita (vacío = puede darlo). Acepta permisos que vienen
+  de la base (roles a medida). `permisosOtorgables` (lo que sí puede
+  dar) y `puedeAsignarRol(propios, kind, key)` (un rol de fábrica
+  entero) se escriben con ella. Sin esto un administrador se hace dueño
+  en dos clics. La base hace la misma pregunta con `session_can_grant()`.
 - **El último dueño no se quita ni se degrada.** `esUltimoDueno(duenos,
-  userId)` y `assertNoEsUltimoDueno()` (lanza `UltimoDuenoError`). La
-  usa ACC-4; la función pura vive aquí.
+  userId)` y `assertNoEsUltimoDueno()` (lanza `UltimoDuenoError`).
+  Equipo (ACC-4) la usa para no ofrecer «Quitar» a la única dueña; la
+  barrera es el disparador `membership_keeps_an_owner` de la base.
+- **El orden de los roles.** `ROLE_KEYS` es la lista de claves de
+  `RoleKey`, de más a menos; Equipo ordena con ella, no con una copia.
 
 ### Errores
 

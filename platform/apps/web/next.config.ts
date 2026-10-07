@@ -46,6 +46,17 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "",
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON_KEY ?? "",
   },
+  /**
+   * /equipo → /accesos, permanente. La pantalla se llama «Equipo» en el
+   * menú, el título y el correo, pero su ruta es /accesos (la reservó
+   * ACC-5 con su puerta y su permiso). Quien la escribe a mano, o un
+   * enlace de soporte, llega igual. Solo la ruta exacta: /equipo/<algo>
+   * no existe. La puerta de /accesos decide después quién entra.
+   * Probado en app/(app)/accesos/ruta.test.ts.
+   */
+  async redirects() {
+    return [{ source: "/equipo", destination: "/accesos", permanent: true }];
+  },
   // Sin `experimental.serverActions.bodySizeLimit` A PROPÓSITO: las
   // server actions se quedan en el 1 MB de Next. Ese techo es GLOBAL (no
   // se puede fijar por acción), y subirlo a 6 MB para que cupiera el CSV

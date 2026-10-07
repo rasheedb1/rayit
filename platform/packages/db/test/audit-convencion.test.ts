@@ -15,8 +15,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-/** Los archivos de consultas de Nicolás. Los de Rasheed entran cuando él adopte la convención (docs/propuestas/ACC-2.md §3). */
-const ARCHIVOS = ['finanzas.ts', 'campanas.ts', 'campanas/reporte.ts', 'conexiones.ts'] as const;
+/**
+ * Los archivos de consultas de Nicolás, y los de Rasheed que ya adoptaron
+ * la convención (docs/propuestas/ACC-2.md §3): equipo.ts nace con ella (ACC-4).
+ */
+const ARCHIVOS = ['finanzas.ts', 'campanas.ts', 'campanas/reporte.ts', 'conexiones.ts', 'equipo.ts'] as const;
 
 /**
  * Escrituras sin bitácora, con motivo. Lo que no es un hecho del negocio
@@ -42,6 +45,7 @@ const SIN_BITACORA_DECLARADAS: Record<(typeof ARCHIVOS)[number], Record<string, 
       'un reporte generado es un BORRADOR que solo ve el creador (el enlace no abre hasta enviarlo, 0037 §3): congelar ' +
       'cifras no es publicar. La publicación es markReportSent, que sí deja campaign.report_sent',
   },
+  'equipo.ts': {},
   'conexiones.ts': {
     recordAccountSnapshot:
       'métrica append-only: account_metric_snapshot es su propia bitácora (0025 §5: mc_app ni la corrige ni la borra); ' +

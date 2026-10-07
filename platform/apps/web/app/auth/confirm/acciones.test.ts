@@ -93,7 +93,7 @@ describe("confirmarEntrada", () => {
   test("el clic canjea el token, sincroniza y va al destino", async () => {
     expect(await destino({ token_hash: "h", type: "email", next: "/finanzas" })).toBe("/finanzas");
     expect(verifyOtp).toHaveBeenCalledWith({ type: "email", token_hash: "h" });
-    expect(registrarEntrada).toHaveBeenCalledWith({ email: "ana@ejemplo.test", nombre: null, authUserId: VERIFICADA.id });
+    expect(registrarEntrada).toHaveBeenCalledWith({ email: "ana@ejemplo.test", nombre: null, authUserId: VERIFICADA.id }, { next: "/finanzas" });
   });
 
   test("el destino se vuelve a sanear aquí: el formulario lo manda el navegador", async () => {

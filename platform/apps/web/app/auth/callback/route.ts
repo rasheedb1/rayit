@@ -69,6 +69,6 @@ export async function GET(request: Request) {
   }
   if (error) return alLogin(enlaceInvalido(error.message));
 
-  const fallo = await completarEntrada(supabase, data.user);
+  const fallo = await completarEntrada(supabase, data.user, destino);
   return fallo ? alLogin(fallo) : NextResponse.redirect(new URL(destino, url.origin));
 }

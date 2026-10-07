@@ -418,20 +418,27 @@ describe('membership y contact: las dos tablas que 0019 cerró', () => {
     );
   });
 
-  test('membership: desde ningún workspace se edita ni se borra una membresía', async () => {
+  test('membership: desde otro workspace no se edita ni se borra; desde el suyo, la única dueña no se degrada ni se borra', async () => {
+    // Desde 0078 (ACC-4) mc_app tiene UPDATE (rol y casillas) y DELETE
+    // sobre membership, con política por workspace y por permiso. Desde
+    // B, la fila de A ni se ve: cero filas. Desde A —sin identidad, con
+    // la bandera de la demo, que la base trata como Dueño—, el disparador
+    // del último dueño la para.
     // Antes y después, no un número fijo: contra Postgres real (CIM-2c) la
     // base trae la demo sembrada y hay más membresías que las dos de aquí.
     const antes = await t.db.asWorker((tx) => countRows(tx, 'membership'));
-    for (const ws of [WS_A, WS_B]) {
-      await assert.rejects(
-        t.db.withWorkspace(ws, (tx) => tx.db.update(membership).set({ roleId: sql`system_role_id('creator', 'owner')` }).where(eq(membership.userId, USER_A))),
-        isRechazada,
-      );
-      await assert.rejects(
-        t.db.withWorkspace(ws, (tx) => tx.db.delete(membership).where(eq(membership.userId, USER_A))),
-        isRechazada,
-      );
-    }
+    const cambiadas = await t.db.withWorkspace(WS_B, (tx) =>
+      tx.db.update(membership).set({ roleId: sql`system_role_id('creator', 'viewer')` }).where(eq(membership.userId, USER_A)).returning(),
+    );
+    assert.deepEqual(cambiadas, []);
+    const borradas = await t.db.withWorkspace(WS_B, (tx) => tx.db.delete(membership).where(eq(membership.userId, USER_A)).returning());
+    assert.deepEqual(borradas, []);
+    const esUltimoDueno = (err: unknown) => /último dueño/.test(`${String(err)} ${String((err as Error)?.cause ?? '')}`);
+    await assert.rejects(
+      t.db.withWorkspace(WS_A, (tx) => tx.db.update(membership).set({ roleId: sql`system_role_id('creator', 'viewer')` }).where(eq(membership.userId, USER_A))),
+      esUltimoDueno,
+    );
+    await assert.rejects(t.db.withWorkspace(WS_A, (tx) => tx.db.delete(membership).where(eq(membership.userId, USER_A))), esUltimoDueno);
     assert.equal(await t.db.asWorker((tx) => countRows(tx, 'membership')), antes);
   });
 

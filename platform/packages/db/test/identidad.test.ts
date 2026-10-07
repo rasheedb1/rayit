@@ -60,11 +60,6 @@ function esRechazoDeMembresia(err: unknown): boolean {
   return esViolacionRls(err) || /apunta en (workspace_id|user_id) a un (workspace|app_user) que no existe o que esta transacción no puede ver/.test(mensajes(err));
 }
 
-/** mc_app sin el privilegio (0024 §7: sin UPDATE ni DELETE en membership; 0028 solo devuelve el INSERT). */
-function esPermisoDenegado(err: unknown): boolean {
-  return /permission denied for table membership/.test(mensajes(err));
-}
-
 const CORREO_A = 'ana@ejemplo.test';
 const CORREO_B = 'bruno@ejemplo.test';
 /** Ids de auth.users (Supabase Auth), que NO son los de app_user. */
@@ -300,23 +295,24 @@ describe('espacios de la persona que entra', () => {
     );
   });
 
-  test('ni cambiar roles ni borrar membresías desde la web (membership_alta_propia)', async () => {
-    // Sin política de UPDATE ni de DELETE, y desde el endurecimiento
-    // tampoco con el privilegio: 0024 §7 le quita a mc_app UPDATE y
-    // DELETE sobre membership y 0028 solo le devuelve el INSERT. Las dos
-    // sentencias fallan antes de mirar ninguna fila.
+  test('la única dueña no se degrada ni se borra desde la web (0078: el último dueño y la membresía por espacio)', async () => {
+    // Hasta 0078 mc_app no tenía UPDATE ni DELETE sobre membership. Desde
+    // ACC-4 los tiene, por columna y con política por permiso (Equipo),
+    // y el disparador membership_keeps_an_owner no deja el espacio sin
+    // dueño: degradarse a sí misma siendo la única falla en la base.
     await assert.rejects(
       t.db.withWorkspace(
         WS_NUEVO,
         (tx) => tx.db.update(membership).set({ roleId: sql`system_role_id('creator', 'viewer')` }).where(eq(membership.userId, idA)).returning(),
         { userId: idA },
       ),
-      esPermisoDenegado,
+      (err: unknown) => /último dueño/.test(String((err as Error).cause ?? err)) || /último dueño/.test(String(err)),
     );
-    await assert.rejects(
-      t.db.withIdentity({ userId: idA }, (tx) => tx.db.delete(membership).where(eq(membership.userId, idA)).returning()),
-      esPermisoDenegado,
-    );
+    // Sin espacio fijado (la transacción de la sesión) no se ve ninguna
+    // fila que borrar: la política de baja exige el workspace de la
+    // transacción y el permiso equipo.miembro.revocar en él.
+    const borradas = await t.db.withIdentity({ userId: idA }, (tx) => tx.db.delete(membership).where(eq(membership.userId, idA)).returning());
+    assert.deepEqual(borradas, []);
     assert.equal(await t.db.withIdentity({ userId: idA }, (tx) => isMemberOf(tx, WS_NUEVO, idA)), true);
   });
 
@@ -367,13 +363,15 @@ describe('espacios de la persona que entra', () => {
  * antes de que el alta llegue a probarse.
  */
 describe('el privilegio que necesita el primer inicio de sesión', () => {
-  test('mc_app tiene INSERT sobre membership, y ni UPDATE ni DELETE', async () => {
-    const [fila] = await t.raw<{ insertar: boolean; cambiar: boolean; borrar: boolean }>(
+  test('mc_app tiene INSERT sobre membership; UPDATE solo del rol y las casillas, y DELETE con política (0078, ACC-4)', async () => {
+    const [fila] = await t.raw<{ insertar: boolean; cambiar: boolean; borrar: boolean; rol: boolean; persona: boolean }>(
       `SELECT has_table_privilege(current_user, 'membership', 'INSERT') AS insertar,
               has_table_privilege(current_user, 'membership', 'UPDATE') AS cambiar,
-              has_table_privilege(current_user, 'membership', 'DELETE') AS borrar`,
+              has_table_privilege(current_user, 'membership', 'DELETE') AS borrar,
+              has_column_privilege(current_user, 'membership', 'role_id', 'UPDATE') AS rol,
+              has_column_privilege(current_user, 'membership', 'user_id', 'UPDATE') AS persona`,
     );
-    assert.deepEqual(fila, { insertar: true, cambiar: false, borrar: false });
+    assert.deepEqual(fila, { insertar: true, cambiar: false, borrar: true, rol: true, persona: false });
   });
 });
 

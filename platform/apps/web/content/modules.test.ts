@@ -13,12 +13,13 @@ const allOff: Flags = { ...flags, video_lab: false, agency_workspace: false, con
 
 describe("productModules", () => {
   it("los seis del MVP, en el orden del menú", () => {
-    expect(productModules(allOff).map((m) => m.name)).toEqual(["Resumen", "Ventas", "Cotizar", "Campañas", "Finanzas", "Conexiones"]);
+    expect(productModules(allOff).map((m) => m.name)).toEqual(["Resumen", "Ventas", "Cotizar", "Campañas", "Finanzas", "Conexiones", "Equipo"]);
   });
   it("una bandera encendida suma su módulo al final", () => {
     const names = productModules({ ...allOff, niche_radar: true }).map((m) => m.name);
     expect(names).toContain("Tendencias del nicho");
-    expect(names).toHaveLength(7);
+    expect(names.at(-1)).toBe("Tendencias del nicho");
+    expect(names).toHaveLength(8);
   });
 });
 
@@ -60,8 +61,8 @@ describe("permiso por módulo (ACC-5)", () => {
 
   it("productModules con permisos: el menú del Contador es solo Finanzas; el del Mánager, todo menos Finanzas", () => {
     expect(productModules(allOff, CONTADOR).map((m) => m.slug)).toEqual(["finanzas"]);
-    expect(productModules(allOff, MANAGER).map((m) => m.slug)).toEqual(["resumen", "ventas", "cotizar", "campanas", "conexiones"]);
-    expect(productModules(allOff, DUENO)).toHaveLength(6);
+    expect(productModules(allOff, MANAGER).map((m) => m.slug)).toEqual(["resumen", "ventas", "cotizar", "campanas", "conexiones", "accesos"]);
+    expect(productModules(allOff, DUENO)).toHaveLength(7);
     expect(productModules(allOff, [])).toEqual([]);
   });
 });

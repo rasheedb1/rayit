@@ -40,8 +40,16 @@ export function esTipoDeCorreo(tipo: string | null | undefined): tipo is EmailOt
 /**
  * Deja entrar a quien Supabase acaba de autenticar, o cierra la sesión
  * a medias y dice por qué no. `null` es «dentro».
+ *
+ * `destino` es el `next` ya saneado: si vuelve al enlace de una
+ * invitación, el alta no le crea espacio propio (ACC-4,
+ * lib/auth/sincronizar.ts).
  */
-export async function completarEntrada(supabase: SupabaseClient, usuario: User | null): Promise<CodigoDeEntrada | null> {
+export async function completarEntrada(
+  supabase: SupabaseClient,
+  usuario: User | null,
+  destino?: string,
+): Promise<CodigoDeEntrada | null> {
   // Sin correo verificado no hay identidad (`sesionDeUsuario`). El
   // intercambio YA abrió la sesión, así que se cierra antes de mandar a
   // /login: si no, quedaría una cookie viva que ninguna pantalla acepta.
@@ -53,7 +61,7 @@ export async function completarEntrada(supabase: SupabaseClient, usuario: User |
   const { email, nombre, authUserId } = sesion;
 
   try {
-    const { userId, workspaces } = await registrarEntrada({ email, nombre, authUserId });
+    const { userId, workspaces } = await registrarEntrada({ email, nombre, authUserId }, { next: destino });
     // Volver a entrar por el enlace mágico no debería devolver a nadie
     // a su espacio más antiguo si estaba trabajando en otro: la regla
     // de preferencia es la misma de cada petición.

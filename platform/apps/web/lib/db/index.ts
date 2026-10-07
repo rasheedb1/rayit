@@ -6,6 +6,7 @@ import {
   type PublicMediaKitOptions, type PublicMediaKitResult, type PublicQuoteAcceptResult, type TextosBloqueoMediaKit,
   type TextosCotizar,
 } from "@mc/db/queries/cotizar";
+import { lookupInvitation, type InvitationPreview } from "@mc/db/queries/equipo";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { proofWorkspace, type ProviderCallbackProof } from "./aviso-de-proveedor";
 import { closeDb as cerrarCliente, withPublicShare, withWorkspaceId } from "./cliente";
@@ -90,6 +91,20 @@ export async function withWorkspace<T>(fn: (tx: WorkspaceTx) => Promise<T>): Pro
  * tipo Db a CatalogDb para abrirla.
  */
 export { withPublicShare } from "./cliente";
+
+/**
+ * Lo que dice el enlace de una invitación de Equipo (ACC-4) cuando no
+ * hay nadie con sesión que lo abra: solo en el modo demo (sin llaves de
+ * Auth y sin DEMO_USER_ID), donde no existen las cuentas. Es una
+ * operación con nombre y de solo lectura, como los enlaces públicos de
+ * Cotizar: invitation_lookup (0078 §5) busca por el hash del token, no
+ * necesita workspace ni identidad, y sin identidad no dice si el correo
+ * coincide (emailMatches null). Con llaves, la página no pasa por aquí:
+ * sin sesión pide entrar.
+ */
+export async function lookupInvitationWithoutSession(token: string): Promise<InvitationPreview> {
+  return withPublicShare((tx) => lookupInvitation(tx, token));
+}
 
 export type AceptacionDesdeEnlace =
   | Exclude<PublicQuoteAcceptResult, { status: "ok" }>
