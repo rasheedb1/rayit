@@ -5,6 +5,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { allJobs } from '../src/jobs/index.ts';
+import { recordSkipped } from '../src/runner/comun.ts';
 import { defineJob } from '../src/runner/registry.ts';
 import { jobRuns, seedTestDefinitions, startHarness, waitFor, type Harness, SETUP_TIMEOUT } from './helpers/harness.ts';
 
@@ -282,5 +283,55 @@ test('idempotencia de cron: reiniciar no duplica schedules y un cron cambiado se
     assert.equal(Number(skippedTest.rows[0]!.n), 5, 'los que perdieron su handler sí se anotan');
   } finally {
     await second.boss.stop({ graceful: true, timeout: 5000, close: false });
+  }
+});
+
+test('la última corrida de un job con dos del mismo started_at: la abierta primero y, entre cerradas, la que terminó después (CIM-11)', async () => {
+  // Hasta 0082 desempataba el id creciente; ahora es un uuid al azar. Dos
+  // corridas del mismo job comparten started_at cuando el reloj de la
+  // pasada es fijo (claimRun lo escribe con él). recordSkipped (y
+  // recordUnhandled, con el mismo ORDEN_ULTIMA_CORRIDA) tienen que leer
+  // como «la última» la misma fila siempre, no una al azar.
+  const T = "TIMESTAMPTZ '2026-10-01 08:00:00+00'";
+  const sinHandler = async () =>
+    Number((await h.db.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM job_run WHERE job_id = 'test.empate' AND status = 'skipped' AND error = 'sin handler'`,
+    )).rows[0]!.n);
+  const fila = (status: string, error: string | null, terminoSeg: number | null) =>
+    h.db.raw.query(
+      `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, error)
+       VALUES ('test.empate', $1, 1, ${T}, ${T} + make_interval(secs => $2::int), $3)`,
+      [status, terminoSeg, error],
+    );
+  await h.db.raw.exec(
+    `INSERT INTO job_definition (id, label_es, queue, default_cron, timeout_s, max_attempts, max_concurrency)
+     VALUES ('test.empate', 'Prueba: empate de started_at', 'test', NULL, 5, 1, 1)`,
+  );
+  try {
+    // Tres vueltas: con un desempate al azar, alguna saldría distinta.
+    for (let vuelta = 0; vuelta < 3; vuelta++) {
+      // La «sin handler» terminó antes que la ok: la última es la ok, y se vuelve a anotar.
+      await h.db.raw.exec("DELETE FROM job_run WHERE job_id = 'test.empate'");
+      await fila('skipped', 'sin handler', 1);
+      await fila('ok', null, 2);
+      await recordSkipped(h.db, 'test.empate');
+      assert.equal(await sinHandler(), 2, 'la ok terminó después: recordSkipped anota otra vez');
+
+      // Al revés: la «sin handler» es la que terminó después, y no se repite.
+      await h.db.raw.exec("DELETE FROM job_run WHERE job_id = 'test.empate'");
+      await fila('ok', null, 1);
+      await fila('skipped', 'sin handler', 2);
+      await recordSkipped(h.db, 'test.empate');
+      assert.equal(await sinHandler(), 1, 'la «sin handler» es la última: no se repite');
+
+      // Una que sigue abierta (finished_at null) va antes que cualquier cerrada.
+      await h.db.raw.exec("DELETE FROM job_run WHERE job_id = 'test.empate'");
+      await fila('skipped', 'sin handler', 5);
+      await fila('running', null, null);
+      await recordSkipped(h.db, 'test.empate');
+      assert.equal(await sinHandler(), 2, 'la abierta es la última: recordSkipped anota');
+    }
+  } finally {
+    await h.db.raw.exec("DELETE FROM job_run WHERE job_id = 'test.empate'; DELETE FROM job_definition WHERE id = 'test.empate'");
   }
 });

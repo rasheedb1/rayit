@@ -151,12 +151,13 @@ export interface JobRunRow extends Record<string, unknown> {
   items_failed: number;
   error: string | null;
   metadata: Record<string, unknown>;
+  started_at: Date | string;
   finished_at: Date | string | null;
 }
 
 export async function jobRuns(db: PgliteDatabase, jobId: string): Promise<JobRunRow[]> {
   const { rows } = await db.query<JobRunRow>(
-    `SELECT id, job_id, workspace_id, entity_type, entity_id, status, attempt, duration_ms, items_processed, items_failed, error, metadata, finished_at
+    `SELECT id, job_id, workspace_id, entity_type, entity_id, status, attempt, duration_ms, items_processed, items_failed, error, metadata, started_at, finished_at
        FROM job_run WHERE job_id = $1 ORDER BY started_at`,
     [jobId],
   );

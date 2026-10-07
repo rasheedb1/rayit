@@ -73,7 +73,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { QuotaManager, ConnectorHttpOverrides, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
-import { MAX_TICK_CUTS, TICK_CUT_KEY } from '@mc/db/queries/worker';
+import { MAX_TICK_CUTS, ORDEN_ULTIMA_CORRIDA, TICK_CUT_KEY } from '@mc/db/queries/worker';
 import { createQuota, EXPIRE_MARGIN_S, JOB_LOCK_PREFIX, recordSkipped, SKIPPED_NO_HANDLER } from './comun.ts';
 import type { Env, WorkerConfig } from './config.ts';
 import { CronError, lastTick } from './cron.ts';
@@ -352,7 +352,7 @@ function coverFromFor(def: JobDefinition, tick: Date, registry: JobRegistry, all
 async function recordUnhandled(db: WorkerDatabase, ids: readonly string[]): Promise<void> {
   if (ids.length === 0) return;
   const { rows } = await db.query<{ job_id: string; status: string; error: string | null }>(
-    `SELECT DISTINCT ON (job_id) job_id, status, error FROM job_run WHERE job_id = ANY($1::text[]) ORDER BY job_id, started_at DESC`,
+    `SELECT DISTINCT ON (job_id) job_id, status, error FROM job_run WHERE job_id = ANY($1::text[]) ORDER BY job_id, ${ORDEN_ULTIMA_CORRIDA()}`,
     [ids],
   );
   const marked = new Set(rows.filter((r) => r.status === 'skipped' && r.error === SKIPPED_NO_HANDLER).map((r) => r.job_id));
@@ -458,6 +458,12 @@ export type Claim = { runId: string; attempt: number; reason: OnceReason } | { s
  * `sliceS`, en un turno, es el timeout que va a tener la corrida: queda
  * en la metadata del reclamo para que tickStates dé por muerta a tiempo
  * la fila de un turno que no llegó a cerrarla.
+ *
+ * started_at sigue siendo el reloj de la pasada y no clock_timestamp():
+ * el backoff y los ticks se miden con él (verdict, tickStates), y un
+ * reloj inyectado en las pruebas tiene que valer para los dos. Dos
+ * corridas del mismo job con el mismo started_at se ordenan con
+ * ORDEN_ULTIMA_CORRIDA (CIM-11: el id ya no desempata).
  */
 export async function claimRun(db: WorkerDatabase, item: PendingRun, at: Date, bossJobId: string, sliceS?: number, backoff: RetryBackoff = NO_BACKOFF): Promise<Claim> {
   return db.transaction(async (tx) => {

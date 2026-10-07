@@ -75,7 +75,25 @@ export const TICK_CUT_KEY = 'tickCut';
  */
 export const MAX_TICK_CUTS = 20;
 
-const TS = (col: string) => `to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
+/**
+ * El orden de «la última corrida» de un job, para un ORDER BY sobre
+ * job_run con alias `alias`. Hasta 0082 (CIM-11) desempataba el id
+ * creciente; ahora es un uuid al azar y no dice nada. Dos corridas del
+ * mismo job empiezan a la vez cuando el reloj de la pasada es fijo (un
+ * reloj inyectado en las pruebas, o dos turnos en el mismo
+ * milisegundo): gana la que sigue abierta y, entre cerradas, la que
+ * terminó después. Lo usan esta salud, el runner (once.ts y comun.ts) y,
+ * con el mismo texto, outreach_writer_status y outreach_classifier_status
+ * (0082 §4b). Supone un solo reloj: started_at lo escribe el runner con
+ * el de la pasada o la base con clock_timestamp(), y en producción los
+ * dos son la hora real.
+ */
+export const ORDEN_ULTIMA_CORRIDA = (alias?: string): string => {
+  const a = alias ? `${alias}.` : '';
+  return `${a}started_at DESC, ${a}finished_at DESC NULLS FIRST`;
+};
+
+const TS = (col: string) =>`to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
 
 export async function getWorkerHealth(q: HealthExecutor): Promise<WorkerJobHealth[]> {
   const { rows } = await q.query(
@@ -93,10 +111,10 @@ export async function getWorkerHealth(q: HealthExecutor): Promise<WorkerJobHealt
                 AND (buena.started_at IS NULL OR c.started_at > buena.started_at))::int AS cuts_since_ok
        FROM job_definition d
        LEFT JOIN LATERAL (
-         SELECT started_at, status, error, metadata FROM job_run r WHERE r.job_id = d.id AND r.workspace_id IS NULL ORDER BY r.started_at DESC, r.id DESC LIMIT 1
+         SELECT started_at, status, error, metadata FROM job_run r WHERE r.job_id = d.id AND r.workspace_id IS NULL ORDER BY ${ORDEN_ULTIMA_CORRIDA('r')} LIMIT 1
        ) ultima ON true
        LEFT JOIN LATERAL (
-         SELECT started_at FROM job_run r WHERE r.job_id = d.id AND r.workspace_id IS NULL AND r.status IN ('ok','partial') ORDER BY r.started_at DESC, r.id DESC LIMIT 1
+         SELECT started_at FROM job_run r WHERE r.job_id = d.id AND r.workspace_id IS NULL AND r.status IN ('ok','partial') ORDER BY ${ORDEN_ULTIMA_CORRIDA('r')} LIMIT 1
        ) buena ON true
       ORDER BY d.queue, d.id`,
   );
