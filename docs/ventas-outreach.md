@@ -1019,7 +1019,9 @@ tabla: se vuelve a correr (es re-ejecutable). Va detrás de
 se renumeró al mezclar `rasheed/integracion`. Además del tipo de las
 claves deja `deal_stage_history.step` con índice único `(deal_id, step)`
 (las filas viejas se numeran con `row_number()`, así que el relleno no
-choca), `clock_timestamp()` en los registros y las funciones de estado
+choca) y fijo después de insertarse, traduce el `after._job.runId` de
+la bitácora al uuid nuevo de su corrida (§2a), `clock_timestamp()` en
+los registros y las funciones de estado
 de outreach (`outreach_writer_status`, `outreach_classifier_status`)
 desempatando por `finished_at` en vez de por el id.
 

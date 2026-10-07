@@ -747,9 +747,13 @@ máquina.
   `clock_timestamp()`, así que dos filas de una transacción no empatan;
   «la última corrida» de un job desempata por `finished_at`
   (`ORDEN_ULTIMA_CORRIDA` de `@mc/db/queries/worker`), y los pasos de un
-  negocio por `deal_stage_history.step`, único por negocio. Ningún código
-  trata un id como número: `test/ids-sin-contador-codigo.test.ts` lo
-  busca en toda la plataforma.
+  negocio por `deal_stage_history.step`, único por negocio y fijo
+  después de insertarse (un disparador rechaza el UPDATE que lo mueva).
+  «La última lectura» de un post en `post_metric_snapshot` es
+  `ORDEN_ULTIMA_LECTURA` de `queries/resumen.ts` (fecha, edad, fuente),
+  nunca `id DESC`. Ningún código trata un id como número ni lo usa como
+  «el último que se escribió»: `test/ids-sin-contador-codigo.test.ts` lo
+  busca en toda la plataforma, también en los `.md`.
 - **Nada corre con los privilegios de otro sin declararlo** (**0029**).
   Postgres no mira EXECUTE al disparar: un disparador SECURITY DEFINER
   corre con su dueño para cualquiera que escriba en la tabla, aunque a
