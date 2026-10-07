@@ -272,7 +272,7 @@ test('como mc_app: una persona corrige la intención y se aplican sus efectos; u
     { ok: false, code: 'not_found' }, 'lo ajeno no existe',
   );
   const r = await t.db.withWorkspace(WS_A, (tx) => reclassifyInboxMessage(tx, { messageId: AMBIGUA, intent: 'interested', now }));
-  assert.deepEqual(r, { ok: true, intent: 'interested', dealMoved: true, optOut: false, optOutReview: false });
+  assert.deepEqual(r, { ok: true, intent: 'interested', dealMoved: true, optOut: false, optOutReview: false, dealNeedsCreator: false });
   const conv = (await t.db.withWorkspace(WS_A, (tx) => loadInboxConversation(tx, CONTACT_2, 'linkedin')))!;
   const m = conv.messages.find((x) => x.id === AMBIGUA)!;
   assert.deepEqual([m.intent, m.intentSource, m.intentConfidence], ['interested', 'person', 1]);
