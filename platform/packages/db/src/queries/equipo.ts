@@ -10,9 +10,9 @@
  *   - el último dueño (membership_keeps_an_owner), por disparador;
  *   - las casillas solo con el Mánager de creador, por disparador (0079 §4);
  *   - quien tiene alcance (ACC-6) no administra el equipo (0079 §6);
- *   - el rol, del tipo del espacio, por disparador (0079 §7);
+ *   - el rol, del tipo del espacio, por disparador (role_fits_workspace, 0034 §5);
  *   - como mucho INVITACIONES_POR_DIA invitaciones por espacio en 24
- *     horas, por disparador (0079 §8);
+ *     horas, por disparador (0079 §7);
  *   - aceptar: invitation_accept(), SECURITY DEFINER, un solo uso;
  *   - si a alguien lo esperan en un espacio, para no crearle uno propio
  *     al entrar (has_pending_invitation_for_session_email, 0079 §1).
@@ -83,7 +83,7 @@ export function isPendingExistsError(err: unknown): boolean {
   return false;
 }
 
-/** El techo de invitaciones por espacio y día (invitation_daily_cap, 0079 §8). */
+/** El techo de invitaciones por espacio y día (invitation_daily_cap, 0079 §7). */
 export function isDailyCapError(err: unknown): boolean {
   for (let e: unknown = err; e; e = (e as { cause?: unknown }).cause) {
     const p = pgError(e);
@@ -168,15 +168,18 @@ export async function getTeamWorkspaceKind(tx: WorkspaceTx): Promise<'creator' |
  * quien invita (la persona de la sesión; null en la demo sin sesión o si
  * no puso nombre).
  */
-export async function getInvitationSender(tx: WorkspaceTx): Promise<{ workspaceName: string; inviterName: string | null }> {
-  const { rows } = await tx.query<{ workspace_name: string; inviter_name: string | null }>(
+export async function getInvitationSender(
+  tx: WorkspaceTx,
+): Promise<{ workspaceName: string; inviterId: string | null; inviterName: string | null }> {
+  const { rows } = await tx.query<{ workspace_name: string; inviter_id: string | null; inviter_name: string | null }>(
     `SELECT w.name AS workspace_name,
+            current_user_id() AS inviter_id,
             (SELECT nullif(btrim(u.name), '') FROM app_user u WHERE u.id = current_user_id()) AS inviter_name
        FROM workspace w WHERE w.id = current_workspace_id()`,
   );
   const r = rows[0];
   if (!r) throw new Error('El workspace de la transacción no existe o no se ve.');
-  return { workspaceName: r.workspace_name, inviterName: r.inviter_name };
+  return { workspaceName: r.workspace_name, inviterId: r.inviter_id, inviterName: r.inviter_name };
 }
 
 /** Una persona del espacio, con su rol y sus casillas. */
@@ -295,7 +298,7 @@ export async function listPendingInvitations(tx: WorkspaceTx): Promise<PendingIn
  *   not_found           la persona o la invitación no está (o ya no está pendiente)
  *   last_owner          sería dejar el espacio sin dueño
  *   pending_exists      otra persona acaba de invitar a ese correo (dos a la vez)
- *   rate_limited        el espacio ya creó INVITACIONES_POR_DIA invitaciones en 24 horas (0079 §8)
+ *   rate_limited        el espacio ya creó INVITACIONES_POR_DIA invitaciones en 24 horas (0079 §7)
  *   scoped              quien actúa tiene alcance limitado (ACC-6) y no administra el equipo (0079 §6)
  */
 export type TeamErrorCode =
@@ -375,7 +378,7 @@ export interface CreateInvitationInput {
 export async function createInvitation(
   tx: WorkspaceTx,
   input: CreateInvitationInput,
-): Promise<TeamResult<{ invitationId: string; replaced: number }>> {
+): Promise<TeamResult<{ invitationId: string; replaced: number; roleLabel: string }>> {
   if (!isInvitationToken(input.token)) throw new Error('createInvitation: el token no tiene la forma de newInvitationToken().');
   const extras = [...new Set(input.extraPermissions)];
   const v = await validarRolYCasillas(tx, input.roleId, extras);
@@ -410,7 +413,7 @@ export async function createInvitation(
   // Un punto de vuelta antes de tocar nada: si otra persona invita al
   // mismo correo a la vez, el índice invitation_pending_uk para la
   // segunda (23505), y si el espacio ya llegó a su techo del día, el
-  // disparador invitation_daily_cap (0079 §8) para esta. En los dos
+  // disparador invitation_daily_cap (0079 §7) para esta. En los dos
   // casos se deshace solo lo de esta —también la revocación de la
   // pendiente vieja—, sin abortar la transacción de quien llama.
   await tx.query('SAVEPOINT crear_invitacion');
@@ -446,7 +449,7 @@ export async function createInvitation(
     entityId: invitationId,
     after: { roleKey: v.role.key, extraPermissions: extras, expiresAt: input.expiresAt.toISOString() },
   });
-  return { ok: true, invitationId, replaced: viejas.length };
+  return { ok: true, invitationId, replaced: viejas.length, roleLabel: v.role.label };
 }
 
 /** Revoca una invitación pendiente. El enlace deja de servir; la fila se queda (nadie borra el rastro). */
@@ -683,8 +686,29 @@ export type AcceptInvitationResult =
  */
 export async function acceptInvitation(tx: IdentityTx, token: string): Promise<AcceptInvitationResult> {
   if (!isInvitationToken(token)) return { status: 'not_found' };
-  const { rows } = await tx.query<{ r: AcceptInvitationResult }>('SELECT invitation_accept($1) AS r', [
-    invitationTokenHash(token),
-  ]);
-  return rows[0]?.r ?? { status: 'not_found' };
+  const { rows } = await tx.query<{ r: unknown }>('SELECT invitation_accept($1) AS r', [invitationTokenHash(token)]);
+  return aResultadoDeAceptar(rows[0]?.r);
+}
+
+const ESTADOS_DE_ACEPTAR: readonly string[] = [...ESTADOS_CERRADOS, 'wrong_email', 'already_member'];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * El jsonb de invitation_accept, comprobado como aVistaDeInvitacion: solo
+ * 'ok' con un workspaceId uuid y un roleKey, o uno de los estados que la
+ * pantalla sabe decir. Cualquier otra forma es not_found («el enlace no
+ * es válido»), nunca un estado que la pantalla no tiene. Exportada para
+ * probarla sin base.
+ */
+export function aResultadoDeAceptar(r: unknown): AcceptInvitationResult {
+  if (typeof r !== 'object' || r === null) return { status: 'not_found' };
+  const o = r as Record<string, unknown>;
+  if (o.status === 'ok') {
+    return esTexto(o.workspaceId) && UUID.test(o.workspaceId) && esTexto(o.roleKey) && o.roleKey !== ''
+      ? { status: 'ok', workspaceId: o.workspaceId, roleKey: o.roleKey }
+      : { status: 'not_found' };
+  }
+  return ESTADOS_DE_ACEPTAR.includes(o.status as string)
+    ? { status: o.status as Exclude<AcceptInvitationResult['status'], 'ok'> }
+    : { status: 'not_found' };
 }

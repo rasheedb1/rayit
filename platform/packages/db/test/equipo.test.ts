@@ -13,9 +13,10 @@
  *   - todo deja su fila en audit_log;
  *   - quien tiene alcance (ACC-6) no administra el equipo, y una
  *     invitación no lleva alcance (0079 §6);
- *   - el rol tiene que ser del tipo del espacio, también a mano (0079 §7);
+ *   - el rol tiene que ser del tipo del espacio, también a mano (lo
+ *     exige 0034 §5; 0079 no lo toca);
  *   - como mucho INVITACIONES_POR_DIA invitaciones por espacio en 24
- *     horas, y una fecha vieja no se cuela (0079 §8);
+ *     horas, y una fecha vieja no se cuela (0079 §7);
  *   - el CHECK de las casillas es la lista de @mc/core, y 0078 y 0079 se
  *     pueden aplicar dos veces.
  */
@@ -29,6 +30,7 @@ import { getSessionPermissions } from '../src/queries/accesos.ts';
 import { sessionHasPermission } from '../src/queries/conexiones.ts';
 import {
   acceptInvitation,
+  aResultadoDeAceptar,
   aVistaDeInvitacion,
   changeMemberRole,
   createInvitation,
@@ -430,6 +432,19 @@ describe('lo que devuelve invitation_lookup se comprueba, no se cree', () => {
       assert.deepEqual(aVistaDeInvitacion(raro), { status: 'not_found' }, JSON.stringify(raro));
     }
   });
+
+  test('aceptar: ok con su uuid y su rol, o un estado que la pantalla sabe decir; lo demás es not_found', () => {
+    const ok = { status: 'ok', workspaceId: WORKSPACE_LAURA, roleKey: 'manager' };
+    assert.deepEqual(aResultadoDeAceptar(ok), ok);
+    assert.deepEqual(aResultadoDeAceptar({ ...ok, extra: 1 }), ok, 'las claves de más no viajan');
+    for (const cerrado of ['not_found', 'revoked', 'used', 'expired', 'wrong_email', 'already_member'] as const) {
+      assert.deepEqual(aResultadoDeAceptar({ status: cerrado }), { status: cerrado });
+    }
+    for (const raro of [null, undefined, 'ok', { status: 'otro' }, { status: 'pending' }, { ...ok, workspaceId: 'no-uuid' },
+      { ...ok, workspaceId: 7 }, { ...ok, roleKey: '' }, { ...ok, roleKey: null }, { status: 'ok' }]) {
+      assert.deepEqual(aResultadoDeAceptar(raro), { status: 'not_found' }, JSON.stringify(raro));
+    }
+  });
 });
 
 describe('dos personas invitan al mismo correo a la vez', () => {
@@ -654,7 +669,7 @@ describe('quien tiene alcance no administra el equipo (0079 §6)', () => {
   });
 });
 
-describe('el rol, del tipo del espacio, también a mano (0079 §7)', () => {
+describe('el rol, del tipo del espacio, también a mano (0034 §5)', () => {
   test('ni una invitación ni una membresía de un espacio de creador llevan un rol de agencia', async () => {
     const deAgencia = await rol('agency', 'viewer');
     await assert.rejects(
@@ -665,11 +680,11 @@ describe('el rol, del tipo del espacio, también a mano (0079 §7)', () => {
           [deAgencia, invitationTokenHash(newInvitationToken())],
         ),
       ),
-      (err) => /no es de este espacio/.test(mensajes(err)),
+      (err) => /es de un workspace de tipo|de otro workspace/.test(mensajes(err)),
     );
     await assert.rejects(
       comoLaura((tx) => tx.query(`UPDATE membership SET role_id = $1, extra_permissions = '{}' WHERE user_id = '${BEATRIZ}'`, [deAgencia])),
-      (err) => /no es de este espacio/.test(mensajes(err)),
+      (err) => /es de un workspace de tipo|de otro workspace/.test(mensajes(err)),
     );
     // Y la consulta ni lo intenta: el rol no está entre los de este espacio.
     const input = { email: 'agencia-en-creador@ejemplo.test', roleId: deAgencia, extraPermissions: [], expiresAt: EN_UNA_SEMANA(), token: newInvitationToken() };
@@ -677,7 +692,7 @@ describe('el rol, del tipo del espacio, también a mano (0079 §7)', () => {
   });
 });
 
-describe('el techo de invitaciones por espacio y día (0079 §8)', () => {
+describe('el techo de invitaciones por espacio y día (0079 §7)', () => {
   const WS_TECHO = '00000079-0000-4000-8000-00000000a7e0';
   const DUENA_TECHO = '00000079-0000-4000-8000-0000000000a7';
   const comoDuena = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => en(WS_TECHO, DUENA_TECHO, fn);

@@ -75,11 +75,14 @@ export function ResultadoInvitacion({ estado, fechas }: { estado: NonNullable<In
     }
   }
 
-  const correo = estado.envio === "enviado" ? r.enviada : estado.envio === "fallo" ? r.falloCorreo : r.sinCorreo;
+  const correo = { enviado: r.enviada, fallo: r.falloCorreo, sin_configurar: r.sinCorreo, demo: r.demo }[estado.envio];
+  // Solo es un aviso cuando falta algo que debería estar (SMTP, o el
+  // servidor falló); en la demo no enviar es lo esperado.
+  const aviso = estado.envio === "fallo" || estado.envio === "sin_configurar";
   return (
     <div role="status" className="grid gap-3 rounded-md border border-border bg-surface-2 p-4 text-sm">
       <p className="font-medium text-ink">{r.titulo(estado.correo)}</p>
-      <p className={estado.envio === "enviado" ? "text-ink-2" : "text-warn"}>{correo}</p>
+      <p className={aviso ? "text-warn" : "text-ink-2"}>{correo}</p>
       {estado.reemplazadas > 0 && <p className="text-muted">{r.reemplazada}</p>}
       <div className="grid gap-1.5">
         <label htmlFor={`${id}-enlace`} className="text-xs font-medium text-muted">
@@ -142,6 +145,8 @@ export function InvitarForm({
   const [estado, accion, enviando] = useActionState<InvitarState, FormData>(invitar, {});
   const [roleId, setRoleId] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
+  const mensajeRef = useRef<HTMLParagraphElement>(null);
+  const resultadoRef = useRef<HTMLDivElement>(null);
   const rol = roles.find((r) => r.id === roleId);
   /**
    * Los campos que se corrigieron después del último envío: su error de
@@ -155,12 +160,25 @@ export function InvitarForm({
 
   // Cada respuesta trae sus propios errores. Solo cuando sale bien se
   // vacía el formulario: con un error, lo escrito se queda.
+  //
+  // Y el foco: mientras la acción corre, «Invitar» está en carga y
+  // deshabilitado, así que lo pierde. Al volver se lleva a lo que hay que
+  // leer o corregir —el primer campo con error, el mensaje general, o el
+  // enlace recién creado (que se selecciona solo, listo para copiar)—
+  // para que quien usa teclado o lector de pantalla no vuelva a empezar
+  // desde arriba. El campo se busca por su nombre y no por aria-invalid:
+  // en este render todavía puede llevar la marca de «corregido».
   useEffect(() => {
     setCorregidos(new Set());
     if (estado.ok) {
       formRef.current?.reset();
       setRoleId("");
+      resultadoRef.current?.querySelector<HTMLInputElement>("input[readonly]")?.focus();
+      return;
     }
+    const campo = (["email", "roleId"] as const).find((c) => estado.errors?.[c]);
+    if (campo) formRef.current?.querySelector<HTMLElement>(`[name="${campo}"]`)?.focus();
+    else if (estado.message) mensajeRef.current?.focus();
   }, [estado]);
 
   return (
@@ -185,7 +203,7 @@ export function InvitarForm({
         </div>
         {rol?.conCasillas && <Casillas key={roleId} opciones={casillas} />}
         {estado.message && (
-          <p role="alert" className="text-sm text-bad">
+          <p ref={mensajeRef} role="alert" tabIndex={-1} className="text-sm text-bad focus:outline-none">
             {estado.message}
           </p>
         )}
@@ -195,7 +213,10 @@ export function InvitarForm({
           </Button>
         </div>
       </form>
-      {estado.invitacion && <ResultadoInvitacion estado={estado.invitacion} fechas={fechas} />}
+      {/* contents: sin caja propia, para no sumar un hueco de la rejilla cuando está vacío. */}
+      <div ref={resultadoRef} className="contents">
+        {estado.invitacion && <ResultadoInvitacion estado={estado.invitacion} fechas={fechas} />}
+      </div>
     </div>
   );
 }
@@ -328,8 +349,12 @@ export function CambiarRol({
  * ConfirmAction del kit: la acción puede responder con una frase —«no se
  * puede quitar al último dueño»— y esa frase queda bajo el botón. Si la
  * persona es la única dueña, el botón ni se ofrece: sale deshabilitado
- * con el motivo (la acción y el disparador de la base siguen siendo la
- * barrera real).
+ * con una nota corta y neutra (miembros.unicoDueno); la frase del error
+ * (errores.last_owner) queda para cuando la acción falla de verdad. La
+ * acción y el disparador de la base siguen siendo la barrera real.
+ *
+ * Si sale bien, la fila desaparece con el botón: el foco y el aviso los
+ * pone AvisoDeBajas (personas.tsx), que vive por encima de la lista.
  */
 export function QuitarMiembro({ userId, quien, unicoDueno = false }: { userId: string; quien: string; unicoDueno?: boolean }) {
   return (
@@ -343,7 +368,7 @@ export function QuitarMiembro({ userId, quien, unicoDueno = false }: { userId: s
       consequence={t.miembros.quitarConsecuencia}
       confirmLabel={t.miembros.quitarConfirmar}
       cancelLabel={t.miembros.cancelar}
-      disabledReason={unicoDueno ? t.errores.last_owner : undefined}
+      disabledReason={unicoDueno ? t.miembros.unicoDueno : undefined}
     />
   );
 }

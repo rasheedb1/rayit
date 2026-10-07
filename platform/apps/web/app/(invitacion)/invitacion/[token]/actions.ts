@@ -3,8 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionPermissions } from "@mc/db/queries/accesos";
-import { acceptInvitation, type AcceptInvitationResult } from "@mc/db/queries/equipo";
+import { acceptInvitation, isInvitationToken, type AcceptInvitationResult } from "@mc/db/queries/equipo";
 import { flags } from "@/content/flags";
+import { cerrarSesionLocal } from "@/lib/auth/salir";
 import { productModules } from "@/content/modules";
 import { withIdentity, withWorkspaceId } from "@/lib/db/cliente";
 import { aConjunto } from "@/lib/permisos/sesion";
@@ -43,4 +44,20 @@ export async function aceptarInvitacion(token: string): Promise<AceptarState> {
   const destino = productModules(flags, permisos)[0];
   revalidatePath("/", "layout");
   redirect(destino ? `/${destino.slug}` : "/");
+}
+
+/**
+ * «Entrar con otra cuenta», desde un enlace abierto con la cuenta
+ * equivocada: cierra la sesión de este navegador y manda a /login con
+ * `next` de vuelta a ESTE enlace, para que quien entra con el correo
+ * invitado aterrice aquí y no tenga que buscar el correo otra vez.
+ *
+ * El destino lo arma el servidor: /invitacion/ más un token con la forma
+ * de newInvitationToken() (si no la tiene, /login a secas). No hay
+ * `next` libre que sanear, y /login lo vuelve a sanear de todos modos.
+ */
+export async function salirYVolver(token: string): Promise<void> {
+  await cerrarSesionLocal();
+  revalidatePath("/", "layout");
+  redirect(isInvitationToken(token) ? `/login?next=${encodeURIComponent(`/invitacion/${token}`)}` : "/login");
 }

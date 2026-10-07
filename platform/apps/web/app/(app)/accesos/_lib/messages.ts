@@ -14,6 +14,17 @@ const plazo = (dias: number) => (dias === 1 ? "1 día" : `${dias} días`);
 /** El texto de un enlace vencido, con el plazo que de verdad tiene. */
 export const textoVencida = (dias: number) => `Los enlaces valen ${plazo(dias)}. Pídele a quien te invitó que te mande uno nuevo.`;
 
+/**
+ * Lo que da cada casilla, contado a quien recibe la invitación (la página
+ * del enlace y el correo), con el nombre del espacio: las etiquetas del
+ * formulario (MESSAGES.casillas.*.label) hablan desde quien invita
+ * («mis finanzas») y aquí no se entenderían.
+ */
+const CASILLAS_PARA_INVITADO = {
+  finanzas: (espacio: string) => `Ver las finanzas de ${espacio}: facturas, gastos y flujo de caja.`,
+  conexiones: (espacio: string) => `Conectar y quitar las cuentas de redes de ${espacio}.`,
+} as const satisfies Record<Casilla, (espacio: string) => string>;
+
 export const MESSAGES = {
   meta: "Equipo",
   eyebrow: "Tu espacio",
@@ -53,7 +64,9 @@ export const MESSAGES = {
   resultado: {
     titulo: (correo: string) => `Invitación para ${correo}`,
     enviada: "Le enviamos el enlace por correo.",
-    sinCorreo: "Aún no enviamos este correo por ti: copia el enlace y mándaselo.",
+    sinCorreo: "El envío de correos no está configurado en este espacio: copia el enlace y mándaselo tú.",
+    /** Modo demo (sin inicio de sesión): no se envía nada aunque haya SMTP, porque nadie firma la invitación. */
+    demo: "En la demo no se envían correos: copia el enlace para probar la invitación.",
     falloCorreo: "No se pudo enviar el correo: copia el enlace y mándaselo tú.",
     enlace: "Enlace de la invitación",
     soloAhora: "El enlace solo se muestra ahora. Si se pierde, genera uno nuevo desde las invitaciones pendientes.",
@@ -68,8 +81,8 @@ export const MESSAGES = {
   miembros: {
     titulo: "Personas",
     meta: (n: number) => (n === 1 ? "1 persona" : `${n} personas`),
+    columnas: { persona: "Persona", rol: "Rol", desde: "Desde", acciones: "Acciones" },
     tu: "Tú",
-    desde: (fecha: string) => `Desde el ${fecha}`,
     cambiarRol: "Cambiar rol",
     guardar: "Guardar",
     cancelar: "Cancelar",
@@ -78,6 +91,14 @@ export const MESSAGES = {
     quitarPregunta: (quien: string) => `¿Quitar a ${quien} del espacio?`,
     quitarConsecuencia: "Deja de entrar en cuanto confirmes. Para volver necesita una invitación nueva.",
     quitarConfirmar: "Sí, quitar",
+    /** Se anuncia (aria-live) cuando la fila desaparece: el foco vuelve al título de la lista. */
+    quitado: (quien: string) => `Se quitó a ${quien} del espacio.`,
+    /**
+     * Bajo el botón deshabilitado de quien es el único Dueño. Corta y
+     * neutra: nadie provocó un error. El error de verdad
+     * (errores.last_owner) es para cuando la acción falla.
+     */
+    unicoDueno: "Único Dueño: nombra antes a otra persona como Dueño.",
   },
 
   pendientes: {
@@ -121,6 +142,8 @@ export const MESSAGES = {
     invitadoPor: (quien: string) => `Te invita ${quien}.`,
     vence: (fecha: string) => `El enlace vence el ${fecha}.`,
     casillasTitulo: "Además de tu rol:",
+    /** Las casillas, contadas al invitado (CASILLAS_PARA_INVITADO). */
+    casillas: CASILLAS_PARA_INVITADO,
     boton: "Aceptar y entrar",
     otroCorreo: (correo: string) =>
       `Esta invitación es para ${correo}. Entra con ese correo para aceptarla: el enlace no sirve para otra cuenta.`,
@@ -164,9 +187,12 @@ export const MESSAGES = {
 
   correo: {
     asunto: (espacio: string) => `Te invitan a ${espacio} en On Cue`,
-    cuerpo: (d: { espacio: string; rol: string; quien: string | null; enlace: string; vence: string }) =>
+    cuerpo: (d: { espacio: string; rol: string; quien: string | null; enlace: string; vence: string; casillas: readonly Casilla[] }) =>
       [
         d.quien ? `${d.quien} te invita a ${d.espacio} en On Cue como ${d.rol}.` : `Te invitan a ${d.espacio} en On Cue como ${d.rol}.`,
+        ...(d.casillas.length > 0
+          ? ["", "Además de tu rol podrás:", ...d.casillas.map((c) => `· ${CASILLAS_PARA_INVITADO[c](d.espacio)}`)]
+          : []),
         "",
         `Acepta la invitación aquí (entra con este mismo correo): ${d.enlace}`,
         "",

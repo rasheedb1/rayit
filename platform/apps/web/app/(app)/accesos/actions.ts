@@ -3,10 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
+  casillasDe,
   NOMBRES_DE_CASILLA,
   normalizarCorreo,
   permisosDeCasillas,
-  permisosQueFaltan,
   UltimoDuenoError,
   venceInvitacion,
 } from "@mc/core";
@@ -15,18 +15,17 @@ import {
   createInvitation,
   getInvitationSender,
   listPendingInvitations,
-  listTeamRoles,
   newInvitationToken,
   removeMember,
   revokeInvitation,
   type TeamErrorCode,
 } from "@mc/db/queries/equipo";
+import { isAuthConfigured } from "@/lib/auth/config";
 import { origenDeLaPeticion } from "@/lib/auth/origen";
 import { withWorkspace } from "@/lib/db";
 import { formatterFor } from "@/lib/format";
 import { formField, isUuid, type ActionState } from "@/lib/forms";
 import { requirePermission } from "@/lib/permisos";
-import { permisosDeLaSesion } from "@/lib/permisos/sesion";
 import { getCurrentContext } from "@/lib/workspace/current";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { enviarInvitacion, nombreParaCorreo, type EnvioInvitacion } from "./_lib/correo";
@@ -37,9 +36,11 @@ import { MESSAGES } from "./_lib/messages";
  * (la convención de ACC-1, que lib/permisos/convencion.test.ts hace
  * cumplir) y después la BASE vuelve a decidir: las políticas de 0078
  * piden el mismo permiso y «nadie otorga lo que no tiene», y el
- * disparador del último dueño no deja el espacio sin dueño. Aquí se
- * comprueba antes lo que se puede, para responder con una frase y no con
- * un error, y se traduce lo que la base rechaza.
+ * disparador del último dueño no deja el espacio sin dueño. Lo que la
+ * base va a rechazar lo pregunta antes la consulta de @mc/db
+ * (createInvitation, changeMemberRole: role_not_found, cannot_grant…),
+ * y aquí solo se traduce el código a su frase: la regla no se repite
+ * en TypeScript.
  *
  * Todo deja su fila en audit_log desde @mc/db/queries/equipo (ACC-2).
  */
@@ -67,10 +68,12 @@ function extrasDelFormulario(formData: FormData): string[] {
 }
 
 /**
- * Crea la invitación y entrega el enlace: por correo si hay SMTP, y
- * siempre en la respuesta para copiarlo. El origen del enlace se resuelve
- * ANTES de crear nada: sin él no hay enlace que dar y la invitación sería
- * una fila que nadie puede aceptar.
+ * Crea la invitación y entrega el enlace: por correo si hay SMTP y una
+ * persona con sesión que invita, y siempre en la respuesta para copiarlo.
+ * En modo demo (sin llaves de Auth) cualquiera que abra la URL actúa, así
+ * que no se envía nada aunque haya SMTP (envío «demo»). El origen del
+ * enlace se resuelve ANTES de crear nada: sin él no hay enlace que dar y
+ * la invitación sería una fila que nadie puede aceptar.
  */
 async function crearYEntregar(correo: string, roleId: string, extras: readonly string[]): Promise<InvitarState> {
   let origen: string;
@@ -82,21 +85,13 @@ async function crearYEntregar(correo: string, roleId: string, extras: readonly s
     console.error("[equipo] no se pudo armar el enlace de la invitación", err);
     return { message: t.errores.sinOrigen };
   }
-  const propios = await permisosDeLaSesion();
   const token = newInvitationToken();
   const vence = venceInvitacion();
 
   const r = await withWorkspace(async (tx) => {
-    const rol = (await listTeamRoles(tx)).find((x) => x.id === roleId);
-    if (!rol) return { ok: false as const, code: "role_not_found" as const };
-    // Nadie otorga lo que no tiene: antes de ir a la base, con los
-    // permisos de la sesión (la base lo vuelve a exigir en su política).
-    if (permisosQueFaltan(propios, [...rol.permissions, ...extras]).length > 0) {
-      return { ok: false as const, code: "cannot_grant" as const };
-    }
     const creada = await createInvitation(tx, { email: correo, roleId, extraPermissions: extras, expiresAt: vence, token });
     if (!creada.ok) return creada;
-    return { ...creada, rol: rol.label, ...(await getInvitationSender(tx)) };
+    return { ...creada, ...(await getInvitationSender(tx)) };
   });
   if (!r.ok) return { message: mensajeDe(r.code) };
 
@@ -107,11 +102,14 @@ async function crearYEntregar(correo: string, roleId: string, extras: readonly s
   // para que un espacio no pueda escribir el correo de la plataforma.
   const espacio = nombreParaCorreo(r.workspaceName);
   const quien = r.inviterName ? nombreParaCorreo(r.inviterName) : null;
-  const envio = await enviarInvitacion({
-    para: correo,
-    asunto: t.correo.asunto(espacio),
-    texto: t.correo.cuerpo({ espacio, rol: r.rol, quien, enlace, vence: venceTexto }),
-  });
+  const envio: EnvioInvitacion = isAuthConfigured()
+    ? await enviarInvitacion({
+        para: correo,
+        asunto: t.correo.asunto(espacio),
+        texto: t.correo.cuerpo({ espacio, rol: r.roleLabel, quien, enlace, vence: venceTexto, casillas: casillasDe(extras) }),
+        invitadoPor: r.inviterId,
+      })
+    : "demo";
 
   revalidatePath("/accesos");
   return {
@@ -172,17 +170,9 @@ export async function cambiarRol(_prev: ActionState, formData: FormData): Promis
   if (!isUuid(userId)) return { message: t.errores.not_found };
   if (!isUuid(roleId)) return { errors: { roleId: t.errores.rol } };
   const extras = extrasDelFormulario(formData);
-  const propios = await permisosDeLaSesion();
 
   try {
-    const r = await withWorkspace(async (tx) => {
-      const rol = (await listTeamRoles(tx)).find((x) => x.id === roleId);
-      if (!rol) return { ok: false as const, code: "role_not_found" as const };
-      if (permisosQueFaltan(propios, [...rol.permissions, ...extras]).length > 0) {
-        return { ok: false as const, code: "cannot_grant" as const };
-      }
-      return changeMemberRole(tx, userId, roleId, extras);
-    });
+    const r = await withWorkspace((tx) => changeMemberRole(tx, userId, roleId, extras));
     if (!r.ok) return { message: mensajeDe(r.code) };
   } catch (err) {
     if (err instanceof UltimoDuenoError) return { message: t.errores.last_owner };

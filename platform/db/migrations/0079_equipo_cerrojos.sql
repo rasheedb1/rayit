@@ -27,7 +27,7 @@
 --     un Editor. Aquí: el disparador extra_permissions_manager_only en
 --     membership y en invitation.
 --
--- Y la segunda revisión, tres más:
+-- Y la segunda revisión, dos más:
 --
 --   · «Nadie otorga lo que no tiene» solo miraba permisos, no el alcance
 --     de ACC-6 (membership_scope: sin filas = todo el espacio). Un
@@ -36,11 +36,8 @@
 --     ignoraba al aceptar. Aquí (§6): quien tiene alcance no administra
 --     el equipo, y una invitación no lleva alcance, hasta que ACC-6/7
 --     traiga la regla del subconjunto.
---   · El rol tenía que ser del tipo del espacio (un rol de agencia no va
---     en un espacio de creador), pero solo lo decía la aplicación. Aquí
---     (§7): el disparador role_fits_workspace.
 --   · Invitar manda un correo de la plataforma con el nombre del espacio,
---     que pone quien invita, y no tenía techo. Aquí (§8): como mucho
+--     que pone quien invita, y no tenía techo. Aquí (§7): como mucho
 --     INVITACIONES_POR_DIA (20) por espacio en 24 horas.
 --
 -- ÍNDICE
@@ -51,8 +48,12 @@
 --   4 · las casillas, solo con el Mánager de creador
 --   5 · invitation_lookup dice también el locale y la zona del espacio
 --   6 · el alcance: quien lo tiene no administra el equipo
---   7 · el rol, del tipo del espacio
---   8 · el techo: 20 invitaciones por espacio en 24 horas
+--   7 · el techo: 20 invitaciones por espacio en 24 horas
+--
+-- Lo que NO hace: que el rol sea del tipo del espacio (un rol de agencia
+-- no va en un espacio de creador; uno a medida, solo en el suyo) ya lo
+-- exige la base desde 0034 §5, con los disparadores role_fits_workspace
+-- de membership, invitation y workspace_grant. Esta migración no los toca.
 --
 -- Re-ejecutable: IF NOT EXISTS, DROP … IF EXISTS y CREATE OR REPLACE.
 -- Comprobado dos veces seguidas en PGlite (packages/db/test/equipo.test.ts).
@@ -303,8 +304,9 @@ CREATE TRIGGER extra_permissions_manager_only
 -- La página del enlace ya no vive dentro del marco de la aplicación
 -- (quien la abre puede no tener ningún espacio todavía: §1), así que no
 -- hay «espacio actual» del que sacar el formato de la fecha de
--- vencimiento. La fecha es del espacio que invita —vence a su medianoche,
--- no a la de quien lee—, así que se pinta con su locale y su zona.
+-- vencimiento. La invitación vence 7 días después de crearse
+-- (venceInvitacion); la fecha se pinta en el locale y la zona del
+-- espacio que invita, no en los de quien lee.
 -- Igual que 0078 §5 en todo lo demás; solo se añaden las dos claves.
 -- =====================================================================
 CREATE OR REPLACE FUNCTION invitation_lookup(p_token_hash text) RETURNS jsonb
@@ -453,79 +455,7 @@ COMMENT ON CONSTRAINT invitation_scope_not_yet ON invitation IS
 
 
 -- =====================================================================
--- 7 · El rol, del tipo del espacio
--- ---------------------------------------------------------------------
--- Un rol de fábrica es de creador o de agencia (role.workspace_kind) y
--- solo va en un espacio de ese tipo; uno a medida (ACC-9), solo en su
--- propio espacio. listTeamRoles ya ofrece solo esos, pero un INSERT o
--- un UPDATE a mano como mc_app podía poner el Ejecutivo de cuenta de
--- una agencia en un espacio de creador.
---
--- Disparador y no WITH CHECK, como §4: así vale para todo el que
--- escribe —mc_app, la aceptación (que es del rol que migra), el alta de
--- un espacio, el worker y los seeds— con una sola definición. Lee role y
--- workspace con la RLS de quien escribe: el workspace es el fijado (las
--- políticas de alta lo exigen) y se ve; los roles de sistema los ve
--- cualquiera. Un rol que no se ve no encaja, y se rechaza. Un workspace
--- que no se ve solo le pasa a quien la política de alta va a rechazar
--- de todos modos, así que ahí no se decide nada.
--- =====================================================================
-CREATE OR REPLACE FUNCTION role_fits_workspace() RETURNS trigger
-LANGUAGE plpgsql
-SET search_path = public, extensions, pg_temp
-AS $$
-DECLARE
-  tipo   text;
-  encaja boolean;
-BEGIN
-  SELECT w.kind INTO tipo FROM workspace w WHERE w.id = NEW.workspace_id;
-  IF NOT FOUND THEN
-    RETURN NEW;
-  END IF;
-  SELECT (r.workspace_id IS NULL AND r.workspace_kind = tipo) OR r.workspace_id = NEW.workspace_id
-    INTO encaja
-    FROM role r WHERE r.id = NEW.role_id;
-  IF NOT coalesce(encaja, false) THEN
-    RAISE EXCEPTION 'Ese rol no es de este espacio: los roles de fábrica van con su tipo de espacio (creador o agencia) y los a medida, con el suyo.'
-      USING ERRCODE = 'check_violation',
-            CONSTRAINT = 'role_fits_workspace',
-            HINT = 'Elige uno de los roles que lista listTeamRoles para este espacio (0079 §7).';
-  END IF;
-  RETURN NEW;
-END $$;
-COMMENT ON FUNCTION role_fits_workspace() IS
-  'Disparador de membership e invitation: el rol es de fábrica del tipo del espacio, o a medida del propio espacio (0079 §7, ACC-4).';
-REVOKE ALL ON FUNCTION role_fits_workspace() FROM PUBLIC;
-
-DO $$
-DECLARE
-  malas integer;
-BEGIN
-  SELECT (SELECT count(*) FROM membership m JOIN workspace w ON w.id = m.workspace_id JOIN role r ON r.id = m.role_id
-           WHERE NOT ((r.workspace_id IS NULL AND r.workspace_kind = w.kind) OR r.workspace_id = m.workspace_id))
-       + (SELECT count(*) FROM invitation i JOIN workspace w ON w.id = i.workspace_id JOIN role r ON r.id = i.role_id
-           WHERE NOT ((r.workspace_id IS NULL AND r.workspace_kind = w.kind) OR r.workspace_id = i.workspace_id))
-    INTO malas;
-  IF malas > 0 THEN
-    RAISE EXCEPTION USING
-      MESSAGE = format('0079: hay %s filas de membership o invitation con un rol que no es del tipo de su espacio.', malas),
-      HINT = 'Cámbiales el rol por el equivalente del tipo del espacio y vuelve a aplicar.';
-  END IF;
-END $$;
-
-DROP TRIGGER IF EXISTS role_fits_workspace ON membership;
-CREATE TRIGGER role_fits_workspace
-  BEFORE INSERT OR UPDATE OF role_id, workspace_id ON membership
-  FOR EACH ROW EXECUTE FUNCTION role_fits_workspace();
-
-DROP TRIGGER IF EXISTS role_fits_workspace ON invitation;
-CREATE TRIGGER role_fits_workspace
-  BEFORE INSERT OR UPDATE OF role_id, workspace_id ON invitation
-  FOR EACH ROW EXECUTE FUNCTION role_fits_workspace();
-
-
--- =====================================================================
--- 8 · El techo: 20 invitaciones por espacio en 24 horas
+-- 7 · El techo: 20 invitaciones por espacio en 24 horas
 -- ---------------------------------------------------------------------
 -- Invitar manda un correo desde el SMTP de la plataforma, y el asunto y
 -- el cuerpo llevan el nombre del espacio, que pone quien invita. Sin
@@ -565,12 +495,12 @@ BEGIN
     RAISE EXCEPTION 'Este espacio ya creó 20 invitaciones en las últimas 24 horas.'
       USING ERRCODE = 'check_violation',
             CONSTRAINT = 'invitation_daily_cap',
-            HINT = 'Espera a que pasen 24 horas desde las primeras (0079 §8).';
+            HINT = 'Espera a que pasen 24 horas desde las primeras (0079 §7).';
   END IF;
   RETURN NEW;
 END $$;
 COMMENT ON FUNCTION invitation_daily_cap() IS
-  'Disparador BEFORE INSERT de invitation: como mucho 20 por espacio en 24 horas, con created_at puesto por la base (0079 §8, ACC-4).';
+  'Disparador BEFORE INSERT de invitation: como mucho 20 por espacio en 24 horas, con created_at puesto por la base (0079 §7, ACC-4).';
 REVOKE ALL ON FUNCTION invitation_daily_cap() FROM PUBLIC;
 
 DROP TRIGGER IF EXISTS invitation_daily_cap ON invitation;

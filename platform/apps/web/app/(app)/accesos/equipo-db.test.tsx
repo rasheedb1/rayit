@@ -12,8 +12,9 @@
  *   - con la casilla de finanzas marcada, sí lo ve;
  *   - quitar al último dueño falla con mensaje;
  *   - un enlace vencido o usado no sirve.
- * Y: sin SMTP la pantalla da el enlace para copiar y dice que no se
- * envió; la pantalla de Equipo enseña a cada quien lo que le toca.
+ * Y: en modo demo (sin llaves de Auth) no se envía ningún correo aunque
+ * haya SMTP —cualquiera que abra la URL actúa—, y la acción da el enlace
+ * para copiar; la pantalla de Equipo enseña a cada quien lo que le toca.
  *
  * El último bloque recorre lo mismo con SESIÓN de Supabase (ACC-4 r2):
  * un mánager sin cuenta entra por el callback con `next` al enlace, no
@@ -27,6 +28,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: "localhost:3100" }), cookies: async () => new Map() }));
 vi.mock("@/lib/auth/origen", () => ({ origenDeLaPeticion: async () => "http://localhost:3100" }));
+// El transporte de correo, vigilado: en modo demo no se crea nunca.
+const crearTransporte = vi.hoisted(() => vi.fn());
+vi.mock("nodemailer", () => ({ default: { createTransport: crearTransporte } }));
 // La sesión de Supabase, de mentira: null es el modo demo de siempre
 // (sin llaves, DEMO_USER_ID); con valor y con las llaves en el entorno,
 // es el camino de producción (getCurrentContext → leerOCrearSesion).
@@ -138,16 +142,28 @@ afterAll(async () => {
 describe("la creadora invita a su mánager (terminado cuando)", () => {
   let token = "";
 
-  test("Laura invita desde Equipo: sin SMTP, la pantalla da el enlace para copiar y dice que no se envió", async () => {
+  test("Laura invita desde Equipo: en la demo, con SMTP configurado, no se envía nada y la acción da el enlace para copiar", async () => {
     como(LAURA);
     const pantalla = await texto(EquipoPage());
     expect(pantalla).toContain(MESSAGES.invitar.titulo);
     expect(pantalla).toContain("Laura");
 
-    const estado = await invitar({}, formulario({ email: `  ${CORREO_MANAGER.toUpperCase()} `, roleId: await idDelRol("manager") }));
+    // Hay SMTP (como las alertas de VEN-15 en producción), pero no hay
+    // llaves de Auth: quien invita es cualquiera que abrió la URL.
+    process.env.SMTP_URL = "smtp://127.0.0.1:2525";
+    process.env.MAIL_FROM = "On Cue <hola@oncue.test>";
+    crearTransporte.mockClear();
+    let estado: InvitarState;
+    try {
+      estado = await invitar({}, formulario({ email: `  ${CORREO_MANAGER.toUpperCase()} `, roleId: await idDelRol("manager") }));
+    } finally {
+      delete process.env.SMTP_URL;
+      delete process.env.MAIL_FROM;
+    }
     expect(estado.ok).toBe(true);
     expect(estado.invitacion?.correo).toBe(CORREO_MANAGER);
-    expect(estado.invitacion?.envio).toBe("sin_configurar");
+    expect(estado.invitacion?.envio).toBe("demo");
+    expect(crearTransporte).not.toHaveBeenCalled();
     token = tokenDe(estado);
 
     const despues = await texto(EquipoPage());
@@ -202,7 +218,10 @@ describe("con la casilla de finanzas marcada", () => {
     const token = tokenDe(estado);
 
     como(MANAGER_FINANZAS);
-    expect(await texto(paginaDelEnlace(token))).toContain(MESSAGES.casillas.finanzas.label);
+    // Contada al invitado, con el nombre del espacio: no «mis finanzas».
+    const enlace = await texto(paginaDelEnlace(token));
+    expect(enlace).toMatch(/Ver las finanzas de [^:]+: facturas, gastos y flujo de caja/);
+    expect(enlace).not.toContain(MESSAGES.casillas.finanzas.label);
     expect(await digestDe(() => aceptarInvitacion(token))).toMatch(/^NEXT_REDIRECT;/);
     expect(await digestDe(() => FlujoPage())).toBeUndefined();
     expect(await digestDe(() => CampanasLayout({ children }))).toBeUndefined();

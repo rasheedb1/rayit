@@ -3,11 +3,11 @@ import { casillasDe } from "@mc/core";
 import { lookupInvitation } from "@mc/db/queries/equipo";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
-import { cerrarSesion } from "@/lib/auth/acciones";
 import { withIdentity } from "@/lib/db/cliente";
 import { formatterFor } from "@/lib/format";
 import { MESSAGES } from "../../../(app)/accesos/_lib/messages";
 import { AceptarInvitacion } from "./aceptar";
+import { salirYVolver } from "./actions";
 import { quienAcepta } from "./quien";
 
 const t = MESSAGES.aceptar;
@@ -30,7 +30,12 @@ export const dynamic = "force-dynamic";
  * salir hacia ningún otro sitio.
  *
  * La fecha de vencimiento, en el locale y la zona del espacio que invita
- * (0079 §5): el enlace vence a su medianoche, no a la de quien lo lee.
+ * (0079 §5), no en los de quien lo lee: el enlace vence
+ * INVITACION_VIGENCIA_DIAS días después de crearse.
+ *
+ * Las casillas se cuentan desde el invitado y con el nombre del espacio
+ * («Ver las finanzas de Laura: …»), no con la etiqueta del formulario,
+ * que habla desde quien invita («mis finanzas»).
  */
 export default async function InvitacionPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
@@ -71,7 +76,7 @@ export default async function InvitacionPage({ params }: { params: Promise<{ tok
           <p className="font-medium text-ink">{t.casillasTitulo}</p>
           <ul className="mt-1 list-disc pl-5">
             {casillas.map((c) => (
-              <li key={c}>{MESSAGES.casillas[c].label}</li>
+              <li key={c}>{t.casillas[c](vista.workspaceName)}</li>
             ))}
           </ul>
         </div>
@@ -83,7 +88,7 @@ export default async function InvitacionPage({ params }: { params: Promise<{ tok
       {vista.emailMatches === false ? (
         <div role="alert" className="grid gap-3 rounded-md border border-warn/40 bg-warn-wash px-3 py-2 text-sm text-ink">
           <p>{t.otroCorreo(vista.invitedEmailMasked)}</p>
-          <form action={cerrarSesion}>
+          <form action={salirYVolver.bind(null, token)}>
             <Button type="submit" variant="secondary" size="sm">
               {t.salir}
             </Button>

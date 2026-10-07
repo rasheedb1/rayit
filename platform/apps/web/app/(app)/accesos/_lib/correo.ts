@@ -6,9 +6,14 @@ import type { Env } from "@/lib/auth/config";
  * El correo de una invitación de Equipo (ACC-4).
  *
  * Usa el mismo SMTP de la plataforma que las alertas del outreach
- * (SMTP_URL y MAIL_FROM, platform/.env.example §Correo). Tres
+ * (SMTP_URL y MAIL_FROM, platform/.env.example §Correo). Cuatro
  * resultados, y la pantalla dice cuál fue sin inventar nada:
  *
+ *   demo            no hay quien firme la invitación: la web va en modo
+ *                   demo (sin llaves de Auth, cualquiera que abra la URL
+ *                   actúa) o la invitación no tiene invited_by. No se
+ *                   envía aunque haya SMTP: la plataforma no manda
+ *                   correos en nombre de un visitante anónimo
  *   enviado         el servidor SMTP lo aceptó
  *   sin_configurar  no hay SMTP_URL (o, en producción, no hay MAIL_FROM):
  *                   no se intenta y la pantalla muestra el enlace para copiar
@@ -19,12 +24,18 @@ import type { Env } from "@/lib/auth/config";
  * entregar el enlace, no una condición para invitar. El enlace viaja en
  * el cuerpo y en ningún otro sitio; no se registra.
  */
-export type EnvioInvitacion = "enviado" | "sin_configurar" | "fallo";
+export type EnvioInvitacion = "enviado" | "sin_configurar" | "fallo" | "demo";
 
 export interface CorreoDeInvitacion {
   para: string;
   asunto: string;
   texto: string;
+  /**
+   * Quién invita (invitation.invited_by): una persona con sesión. Sin
+   * ella no se envía nada (demo): un correo firmado por On Cue tiene que
+   * tener detrás a alguien identificable.
+   */
+  invitadoPor: string | null;
 }
 
 /** Lo que el cartero usa de un transporte de nodemailer: se inyecta en las pruebas. */
@@ -82,6 +93,7 @@ export async function enviarInvitacion(
   env: Env = process.env,
   crear: (url: string) => TransporteDeCorreo = transporteDesde,
 ): Promise<EnvioInvitacion> {
+  if (!correo.invitadoPor) return "demo";
   const from = remitente(env);
   if (!from) return "sin_configurar";
   try {

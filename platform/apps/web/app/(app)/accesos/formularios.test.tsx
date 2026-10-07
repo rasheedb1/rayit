@@ -20,6 +20,7 @@ vi.mock("./actions", () => ({
 
 import { MESSAGES } from "./_lib/messages";
 import { CambiarRol, InvitarForm, QuitarMiembro, type CasillaOpcion, type RolOpcion } from "./formularios";
+import { AvisoDeBajas } from "./personas";
 
 const ROLES: RolOpcion[] = [
   { id: "00000000-0000-4000-8000-000000000001", label: "Dueño", description: "El creador.", conCasillas: false },
@@ -87,6 +88,15 @@ describe("InvitarForm", () => {
     expect(screen.queryByText(MESSAGES.resultado.enviada)).toBeNull();
     expect(screen.getByText(/12 de octubre de 2026/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: MESSAGES.resultado.copiar })).toBeInTheDocument();
+  });
+
+  it("en la demo dice que no se envían correos, sin tono de aviso", () => {
+    pintar({
+      ok: true,
+      invitacion: { correo: "m@e.test", enlace: "http://x/invitacion/abc", envio: "demo", venceIso: "2026-10-12T17:00:00.000Z", reemplazadas: 0 },
+    });
+    expect(screen.getByText(MESSAGES.resultado.demo)).not.toHaveClass("text-warn");
+    expect(screen.queryByText(MESSAGES.resultado.sinCorreo)).toBeNull();
   });
 
   it("con el correo enviado lo dice, y el enlace sigue a mano", () => {
@@ -191,16 +201,95 @@ describe("CambiarRol", () => {
 });
 
 describe("QuitarMiembro", () => {
-  it("a la única dueña no se le ofrece: el botón sale deshabilitado y dice por qué", () => {
+  it("a la única dueña no se le ofrece: el botón sale deshabilitado con una nota neutra, no con el error", () => {
     estado = {};
     render(<QuitarMiembro userId="u1" quien="Laura" unicoDueno />);
     expect(screen.getByRole("button", { name: MESSAGES.miembros.quitar })).toBeDisabled();
-    expect(screen.getByText(MESSAGES.errores.last_owner)).toBeInTheDocument();
+    expect(screen.getByText(MESSAGES.miembros.unicoDueno)).toHaveClass("text-muted");
+    expect(screen.queryByText(MESSAGES.errores.last_owner)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("a cualquier otra persona, sí", () => {
     estado = {};
     render(<QuitarMiembro userId="u2" quien="Mariana" />);
     expect(screen.getByRole("button", { name: MESSAGES.miembros.quitar })).toBeEnabled();
+  });
+});
+
+describe("InvitarForm: el foco vuelve a donde hay que mirar", () => {
+  const correo = () => screen.getByLabelText(new RegExp(`^${MESSAGES.invitar.correo}`));
+
+  it("con un error de campo, al primer campo con error", () => {
+    const { rerender } = pintar();
+    estado = { errors: { roleId: MESSAGES.errores.rol } };
+    rerender(<InvitarForm roles={ROLES} casillas={TODAS} fechas={fechas} />);
+    expect(screen.getByLabelText(new RegExp(`^${MESSAGES.invitar.rol}`))).toHaveFocus();
+    estado = { errors: { email: MESSAGES.errores.correo, roleId: MESSAGES.errores.rol } };
+    rerender(<InvitarForm roles={ROLES} casillas={TODAS} fechas={fechas} />);
+    expect(correo()).toHaveFocus();
+  });
+
+  it("aunque ese campo se hubiera corregido antes de enviar", () => {
+    const { rerender } = pintar();
+    fireEvent.change(correo(), { target: { value: "mal" } });
+    estado = { errors: { email: MESSAGES.errores.correo } };
+    rerender(<InvitarForm roles={ROLES} casillas={TODAS} fechas={fechas} />);
+    expect(correo()).toHaveFocus();
+    expect(correo()).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("con un mensaje general («ya está en el espacio»), al mensaje", () => {
+    const { rerender } = pintar();
+    estado = { message: MESSAGES.errores.already_member };
+    rerender(<InvitarForm roles={ROLES} casillas={TODAS} fechas={fechas} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(MESSAGES.errores.already_member);
+    expect(screen.getByRole("alert")).toHaveFocus();
+  });
+
+  it("si sale bien, al enlace recién creado", () => {
+    const { rerender } = pintar();
+    estado = {
+      ok: true,
+      invitacion: { correo: "m@e.test", enlace: "http://x/invitacion/abc", envio: "enviado", venceIso: "2026-10-12T17:00:00.000Z", reemplazadas: 0 },
+    };
+    rerender(<InvitarForm roles={ROLES} casillas={TODAS} fechas={fechas} />);
+    expect(screen.getByDisplayValue("http://x/invitacion/abc")).toHaveFocus();
+  });
+});
+
+describe("AvisoDeBajas: quitar a alguien no deja el foco en <body>", () => {
+  const titulo = <h2>{MESSAGES.miembros.titulo}</h2>;
+  const LAURA = { id: "u1", nombre: "Laura" };
+  const MARIANA = { id: "u2", nombre: "Mariana" };
+
+  it("si la lista se acorta y el foco se perdió, va al título y se anuncia quién salió", () => {
+    const { rerender } = render(<AvisoDeBajas personas={[LAURA, MARIANA]} titulo={titulo}>{null}</AvisoDeBajas>);
+    expect(document.body).toHaveFocus();
+    rerender(<AvisoDeBajas personas={[LAURA]} titulo={titulo}>{null}</AvisoDeBajas>);
+    expect(screen.getByText(MESSAGES.miembros.titulo).parentElement).toHaveFocus();
+    expect(screen.getByText(MESSAGES.miembros.quitado("Mariana"))).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("si el foco está en otro control, no se lo quita; y sin bajas no anuncia nada", () => {
+    const { rerender } = render(
+      <AvisoDeBajas personas={[LAURA, MARIANA]} titulo={titulo}>
+        <button type="button">otro</button>
+      </AvisoDeBajas>,
+    );
+    screen.getByRole("button", { name: "otro" }).focus();
+    rerender(
+      <AvisoDeBajas personas={[LAURA, MARIANA]} titulo={titulo}>
+        <button type="button">otro</button>
+      </AvisoDeBajas>,
+    );
+    expect(screen.queryByText(MESSAGES.miembros.quitado("Mariana"))).toBeNull();
+    rerender(
+      <AvisoDeBajas personas={[LAURA]} titulo={titulo}>
+        <button type="button">otro</button>
+      </AvisoDeBajas>,
+    );
+    expect(screen.getByRole("button", { name: "otro" })).toHaveFocus();
+    expect(screen.getByText(MESSAGES.miembros.quitado("Mariana"))).toBeInTheDocument();
   });
 });

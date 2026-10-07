@@ -103,7 +103,7 @@ export const INVITACION_VIGENCIA_DIAS = 7;
  * puede ser un correo de la plataforma con el nombre del espacio, que
  * pone quien invita: sin techo, un espacio con un nombre engañoso
  * mandaría correos sin fin firmados por On Cue. El techo de verdad lo
- * pone la base (disparador invitation_daily_cap, 0079 §8); este número
+ * pone la base (disparador invitation_daily_cap, 0079 §7); este número
  * es para la frase, y una prueba exige que sean el mismo.
  */
 export const INVITACIONES_POR_DIA = 20;

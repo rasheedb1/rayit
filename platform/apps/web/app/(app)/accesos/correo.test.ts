@@ -9,8 +9,14 @@ import { describe, expect, test, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import { enviarInvitacion, NOMBRE_EN_CORREO_MAX, nombreParaCorreo, remitente, type TransporteDeCorreo } from "./_lib/correo";
+import { MESSAGES } from "./_lib/messages";
 
-const correo = { para: "mariana@ejemplo.test", asunto: "Te invitan", texto: "Enlace: http://localhost:3100/invitacion/x" };
+const correo = {
+  para: "mariana@ejemplo.test",
+  asunto: "Te invitan",
+  texto: "Enlace: http://localhost:3100/invitacion/x",
+  invitadoPor: "00000002-0000-4000-8000-000000000002",
+};
 
 function transporte(falla = false) {
   const enviados: unknown[] = [];
@@ -24,6 +30,13 @@ function transporte(falla = false) {
 }
 
 describe("enviarInvitacion", () => {
+  test("sin quien invite (modo demo, invited_by NULL) no se envía aunque haya SMTP: demo, y el transporte ni se crea", async () => {
+    const crear = vi.fn(() => transporte().t);
+    const env = { SMTP_URL: "smtp://x:25", MAIL_FROM: "On Cue <hola@oncue.app>" };
+    expect(await enviarInvitacion({ ...correo, invitadoPor: null }, env, crear)).toBe("demo");
+    expect(crear).not.toHaveBeenCalled();
+  });
+
   test("sin SMTP_URL no intenta nada: sin_configurar", async () => {
     const { t, enviados } = transporte();
     expect(await enviarInvitacion(correo, {}, () => t)).toBe("sin_configurar");
@@ -74,5 +87,21 @@ describe("nombreParaCorreo: lo que pone quien invita, en una línea y corto", ()
     expect(corto.endsWith("…")).toBe(true);
     expect(nombreParaCorreo("ñ".repeat(NOMBRE_EN_CORREO_MAX))).toBe("ñ".repeat(NOMBRE_EN_CORREO_MAX));
     expect([...nombreParaCorreo("😀".repeat(NOMBRE_EN_CORREO_MAX + 5))].length).toBe(NOMBRE_EN_CORREO_MAX);
+  });
+});
+
+describe("el cuerpo del correo", () => {
+  const base = { espacio: "Laura Méndez", rol: "Mánager", quien: "Laura", enlace: "http://x/invitacion/abc", vence: "14 de octubre de 2026" };
+
+  test("con casillas, las cuenta al invitado y con el nombre del espacio", () => {
+    const cuerpo = MESSAGES.correo.cuerpo({ ...base, casillas: ["finanzas", "conexiones"] });
+    expect(cuerpo).toContain("Además de tu rol podrás:");
+    expect(cuerpo).toContain("Ver las finanzas de Laura Méndez: facturas, gastos y flujo de caja.");
+    expect(cuerpo).toContain("Conectar y quitar las cuentas de redes de Laura Méndez.");
+    expect(cuerpo).not.toContain("mis finanzas");
+  });
+
+  test("sin casillas, ni la línea", () => {
+    expect(MESSAGES.correo.cuerpo({ ...base, casillas: [] })).not.toContain("Además de tu rol");
   });
 });

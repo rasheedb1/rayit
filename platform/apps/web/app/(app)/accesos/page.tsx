@@ -1,7 +1,15 @@
 import type { Metadata } from "next";
 import { admiteCasillas, can, CASILLAS, casillasDe, INVITACION_VIGENCIA_DIAS, NOMBRES_DE_CASILLA, permisosQueFaltan } from "@mc/core";
-import { getTeamWorkspaceKind, listMembers, listPendingInvitations, listTeamRoles, sessionHasScope } from "@mc/db/queries/equipo";
+import {
+  getTeamWorkspaceKind,
+  listMembers,
+  listPendingInvitations,
+  listTeamRoles,
+  sessionHasScope,
+  type TeamMember,
+} from "@mc/db/queries/equipo";
 import { PageHeader, SectionTitle } from "@/components/page-header";
+import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { withWorkspace } from "@/lib/db";
@@ -11,6 +19,7 @@ import { permisosDeLaSesion } from "@/lib/permisos/sesion";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "./_lib/messages";
 import { AccionesInvitacion, CambiarRol, InvitarForm, QuitarMiembro, type CasillaOpcion, type RolOpcion } from "./formularios";
+import { AvisoDeBajas } from "./personas";
 
 const t = MESSAGES;
 
@@ -64,6 +73,71 @@ export default async function EquipoPage() {
    */
   const esUnicoDueno = miembros.filter((m) => m.roleKey === "owner").length === 1;
 
+  /**
+   * Personas, con la tabla del kit. Acciones lleva formularios en la
+   * celda (Cambiar rol se abre ahí mismo, Quitar pide confirmación): la
+   * tabla los admite como Conexiones lleva los suyos. En móvil la tabla
+   * se desplaza por dentro, como todas las del kit; la página no.
+   */
+  const columnas: Column<TeamMember>[] = [
+    {
+      key: "persona",
+      header: t.miembros.columnas.persona,
+      render: (m) => (
+        <CellMain sub={m.name ? m.email : undefined}>
+          <span className="inline-flex flex-wrap items-center gap-2">
+            <span className="min-w-0 break-all">{m.name ?? m.email}</span>
+            {m.isMe && <Pill kind="neutral">{t.miembros.tu}</Pill>}
+          </span>
+        </CellMain>
+      ),
+    },
+    {
+      key: "rol",
+      header: t.miembros.columnas.rol,
+      render: (m) => (
+        <span className="flex flex-wrap items-center gap-1.5 text-ink-2">
+          <span className="whitespace-nowrap">{m.roleLabel}</span>
+          {casillasDe(m.extraPermissions).map((c) => (
+            <Pill key={c} kind="warn">
+              {t.casillas[c].corta}
+            </Pill>
+          ))}
+        </span>
+      ),
+    },
+    {
+      key: "desde",
+      header: t.miembros.columnas.desde,
+      render: (m) => <span className="whitespace-nowrap tabular-nums text-ink-2">{fmt.date(m.joinedAt, "long")}</span>,
+    },
+    {
+      key: "acciones",
+      header: t.miembros.columnas.acciones,
+      render: (m) => {
+        const quien = m.name ?? m.email;
+        const ultimoDueno = esUnicoDueno && m.roleKey === "owner";
+        if (!puedeTocar(m.roleId, m.extraPermissions) || !(puedeEditar || puedeQuitar)) return null;
+        return (
+          <div className="flex min-w-[11rem] flex-wrap items-start gap-2">
+            {/* A la única dueña no se le ofrece cambiar de rol: el
+                único cambio posible sería degradarla, y la base lo para. */}
+            {puedeEditar && !ultimoDueno && (
+              <CambiarRol
+                userId={m.userId}
+                roleId={m.roleId}
+                marcadas={casillasDe(m.extraPermissions)}
+                roles={rolesOtorgables}
+                casillas={casillas}
+              />
+            )}
+            {puedeQuitar && <QuitarMiembro userId={m.userId} quien={quien} unicoDueno={ultimoDueno} />}
+          </div>
+        );
+      },
+    },
+  ];
+
   return (
     <>
       <PageHeader eyebrow={t.eyebrow} title={t.titulo} description={t.descripcion} />
@@ -80,50 +154,19 @@ export default async function EquipoPage() {
       )}
 
       <section className="mb-12 max-w-3xl">
-        <SectionTitle meta={t.miembros.meta(miembros.length)}>{t.miembros.titulo}</SectionTitle>
-        <ul className="overflow-hidden rounded-md border border-border">
-          {miembros.map((m) => {
-            const tocable = puedeTocar(m.roleId, m.extraPermissions);
-            const quien = m.name ?? m.email;
-            const ultimoDueno = esUnicoDueno && m.roleKey === "owner";
-            return (
-              <li key={m.userId} className="flex flex-col gap-3 border-b border-border px-4 py-3 last:border-b-0 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-ink">
-                    <span className="min-w-0 truncate">{quien}</span>
-                    {m.isMe && <Pill kind="neutral">{t.miembros.tu}</Pill>}
-                  </p>
-                  {m.name && <p className="truncate text-xs text-muted">{m.email}</p>}
-                  <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-2">
-                    <span>{m.roleLabel}</span>
-                    {casillasDe(m.extraPermissions).map((c) => (
-                      <Pill key={c} kind="warn">
-                        {t.casillas[c].corta}
-                      </Pill>
-                    ))}
-                    <span className="text-muted">· {t.miembros.desde(fmt.date(m.joinedAt, "long"))}</span>
-                  </p>
-                </div>
-                {tocable && (puedeEditar || puedeQuitar) && (
-                  <div className="flex shrink-0 flex-wrap items-start gap-2 sm:max-w-sm sm:justify-end">
-                    {/* A la única dueña no se le ofrece cambiar de rol: el
-                        único cambio posible sería degradarla, y la base lo para. */}
-                    {puedeEditar && !ultimoDueno && (
-                      <CambiarRol
-                        userId={m.userId}
-                        roleId={m.roleId}
-                        marcadas={casillasDe(m.extraPermissions)}
-                        roles={rolesOtorgables}
-                        casillas={casillas}
-                      />
-                    )}
-                    {puedeQuitar && <QuitarMiembro userId={m.userId} quien={quien} unicoDueno={ultimoDueno} />}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+        <AvisoDeBajas
+          personas={miembros.map((m) => ({ id: m.userId, nombre: m.name ?? m.email }))}
+          titulo={<SectionTitle meta={t.miembros.meta(miembros.length)}>{t.miembros.titulo}</SectionTitle>}
+        >
+          <DataTable
+            caption={t.miembros.titulo}
+            columns={columnas}
+            rows={miembros}
+            rowKey={(m) => m.userId}
+            emptyState={null}
+            stickyHeader={false}
+          />
+        </AvisoDeBajas>
       </section>
 
       <section className="max-w-3xl">
