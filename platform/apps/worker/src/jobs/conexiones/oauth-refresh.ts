@@ -34,7 +34,7 @@ import { envInt } from '../../runner/config.ts';
 import type { JobDatabase, Queryable } from '../../runner/db.ts';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
 import { mapLimit } from '../../runner/concurrency.ts';
-import { connectionErrorTitle } from '@mc/core';
+import { notifyBrokenAccount, remindBrokenAccounts } from './aviso-cuenta.ts';
 
 export interface OAuthRefreshPayload extends JobPayload {
   /** Renovar solo esta conexión (p. ej. desde la pantalla Conexiones), sin mirar el margen. */
@@ -168,19 +168,28 @@ export const oauthRefreshJob = defineJob<OAuthRefreshPayload>('oauth.refresh', a
     ),
   );
 
+  // El recordatorio semanal de las cuentas que siguen sin token (RES-3):
+  // nadie más las vuelve a tocar. Solo en la corrida general, no en la de
+  // una cuenta pedida desde Conexiones. Un fallo aquí no tumba lo renovado.
+  const reminded = payload.connectionId || ctx.signal.aborted
+    ? 0
+    : await remindBrokenAccounts(ctx.db, payload.workspaceId ?? null).catch((err: unknown) => {
+        ctx.logger.error('no se pudo recordar las cuentas sin token', { err });
+        return 0;
+      });
+
   return {
     processed: renewed.length + needsReauth.length,
     failed: transient.length,
     // Si TODO lo que falló es de los que no mejoran con un reintento
     // inmediato, el siguiente tick del cron es el reintento.
     retry: transient.length > 0 && retryUseless.length < transient.length,
-    metadata: { due: due.length, marginMinutes, renewed, needsReauth, transient },
+    metadata: { due: due.length, marginMinutes, renewed, needsReauth, transient, reminded },
   };
 });
 
 async function refreshOne(conn: ConnectionRow, ctx: JobContext, now: Date): Promise<Outcome> {
   const log = ctx.logger.child({ connectionId: conn.id, workspaceId: conn.workspace_id, platform: conn.platform_id });
-  const platformName = isPlatformId(conn.platform_id) ? PLATFORM_NAMES[conn.platform_id] : conn.platform_id;
 
   const tokens = await ctx.secrets.get(conn.secret_ref);
   if (!tokens) {
@@ -193,7 +202,7 @@ async function refreshOne(conn: ConnectionRow, ctx: JobContext, now: Date): Prom
 
   const refreshExpiry = tokens.refreshExpiresAt ?? asDate(conn.refresh_expires_at);
   if (refreshExpiry && refreshExpiry.getTime() <= now.getTime()) {
-    return markNeedsReauth(ctx.db, conn, platformName, 'refresh_expired',
+    return markNeedsReauth(ctx.db, conn, 'refresh_expired',
       `El permiso de renovación venció el ${formatDateEs(refreshExpiry)}; hay que volver a autorizar la cuenta.`, log);
   }
 
@@ -215,7 +224,7 @@ async function refreshOne(conn: ConnectionRow, ctx: JobContext, now: Date): Prom
       : new TokenRefreshError({ kind: 'transient', code: 'unexpected', messageEs: 'Error inesperado al renovar; se volverá a intentar.', cause: err });
     await logApiCall(ctx, conn, { ok: false, httpStatus: e.httpStatus ?? null, errorCode: e.code, errorMessage: e.messageEs, durationMs, rateLimited: e.isRateLimited, retryAfterS: e.retryAfterS ?? null });
     if (e.isPermanent) {
-      return markNeedsReauth(ctx.db, conn, platformName, e.code, `${e.messageEs} (${e.code})`, log);
+      return markNeedsReauth(ctx.db, conn, e.code, `${e.messageEs} (${e.code})`, log);
     }
     log.warn('renovación con fallo transitorio', { code: e.code, httpStatus: e.httpStatus, retryAfterS: e.retryAfterS, err: e.code === 'unexpected' ? err : undefined });
     await markTransient(ctx.db, conn);
@@ -253,7 +262,7 @@ async function refreshOne(conn: ConnectionRow, ctx: JobContext, now: Date): Prom
   return { kind: 'renewed' };
 }
 
-async function markNeedsReauth(db: JobDatabase, conn: ConnectionRow, platformName: string, code: string, detailEs: string, log: JobContext['logger']): Promise<Outcome> {
+async function markNeedsReauth(db: JobDatabase, conn: ConnectionRow, code: string, detailEs: string, log: JobContext['logger']): Promise<Outcome> {
   await db.transaction(async (tx) => {
     await tx.query(
       `UPDATE social_connection
@@ -261,12 +270,9 @@ async function markNeedsReauth(db: JobDatabase, conn: ConnectionRow, platformNam
         WHERE id = $1 AND workspace_id = $2`,
       [conn.id, conn.workspace_id, detailEs],
     );
-    await tx.query(
-      `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
-       VALUES ($1, 'connection_error', 'critical', $2, $3, 'social_connection', $4, '/conexiones')`,
-      // El título vive en @mc/core cuentas.ts (RES-3): el mismo en los tres caminos que avisan de una cuenta rota.
-      [conn.workspace_id, connectionErrorTitle(platformName, conn.handle, 'reauth'), detailEs, conn.id],
-    );
+    // El mismo aviso, y la misma regla para no repetirse, que los otros
+    // dos caminos que rompen una cuenta (aviso-cuenta.ts, RES-3).
+    await notifyBrokenAccount(tx, conn, 'reauth', detailEs);
   });
   log.warn('conexión pasa a needs_reauth', { code });
   return { kind: 'needs_reauth', code };

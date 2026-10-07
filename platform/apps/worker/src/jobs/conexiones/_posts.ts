@@ -20,8 +20,11 @@ import {
 } from '@mc/connectors';
 import type { Queryable } from '../../runner/db.ts';
 import type { JobContext, JobPayload } from '../../runner/registry.ts';
-import { connectionErrorSeverity, connectionErrorTitle, type BrokenAccountKind } from '@mc/core';
-import { PLATFORM_NAMES } from './oauth-refresh.ts';
+import { notifyBrokenAccount, platformName } from './aviso-cuenta.ts';
+
+// El aviso de una cuenta rota vive en aviso-cuenta.ts (RES-3); se
+// re-exporta para quien ya lo importaba de aquí.
+export { notifyBrokenAccount, platformName, type BrokenAccount } from './aviso-cuenta.ts';
 
 export interface CollectPayload extends JobPayload {
   /** Solo esta cuenta (desde la pantalla o una prueba). */
@@ -99,10 +102,6 @@ function targetFor(acc: CollectableAccount, tokens: PostSourceTarget['tokens']):
   return { connectionId: acc.id, handle: acc.handle, externalAccountId: acc.external_account_id, tokens };
 }
 
-export function platformName(platformId: string): string {
-  return isPlatformId(platformId) ? PLATFORM_NAMES[platformId] : platformId;
-}
-
 export function sourcesFor(ctx: JobContext): PostSources {
   return createPublicPostSources(ctx.connectors.core, ctx.env);
 }
@@ -157,48 +156,6 @@ export function isAborted(err: unknown): boolean {
   if (isPlatformApiError(err)) return err.code === 'aborted';
   if (err instanceof PublicLookupError) return isPlatformApiError(err.cause) && err.cause.code === 'aborted';
   return false;
-}
-
-/** Lo que necesita el aviso de una cuenta rota: la cuenta, su espacio, su red y su @. */
-export type BrokenAccount = Pick<CollectableAccount, 'id' | 'workspace_id' | 'platform_id' | 'handle'>;
-
-/**
- * El aviso de una cuenta que se rompió por un camino que no avisaba
- * (RES-3): la cuenta que ya no se puede leer ('error', aquí y en
- * collect.account_metrics) y el token rechazado al leer las métricas de
- * la cuenta. Es lo que «Lo que importa esta semana» enseña con su enlace
- * a Conexiones; sin aviso, la cuenta caía en silencio.
- *
- * También lo usa markNeedsReauth (el token rechazado al recolectar
- * posts): el título y la severidad viven en @mc/core (cuentas.ts), y
- * oauth.refresh toma de allí el mismo título.
- *
- * Como mucho uno por cuenta y por semana para la MISMA avería: la cuenta
- * en 'error' se vuelve a intentar cada día (selectCollectableAccounts) y
- * cada intento fallido pasa por aquí. Se escribe otro aviso si:
- *   - pasó una semana y sigue rota (sigue importando);
- *   - la avería subió de gravedad: un «No podemos leer» (warning) no
- *     calla el «Vuelve a conectar» (critical) del día siguiente, que
- *     tiene que ir arriba del bloque y no debajo de los cobros;
- *   - la cuenta se leyó bien después del último aviso
- *     (last_synced_at): es otra avería, aunque caiga en la misma semana.
- * Corre dentro de la transacción de quien cambia el estado de la cuenta:
- * el estado y su aviso entran juntos o no entra ninguno.
- */
-export async function notifyBrokenAccount(db: Queryable, acc: BrokenAccount, kind: BrokenAccountKind, detailEs: string): Promise<void> {
-  await db.query(
-    `INSERT INTO notification (workspace_id, kind, severity, title_es, body_es, entity_type, entity_id, action_url)
-     SELECT $1::uuid, 'connection_error', $2, $3, $4, 'social_connection', $5::uuid, '/conexiones'
-      WHERE NOT EXISTS (
-        SELECT 1 FROM notification n
-         WHERE n.workspace_id = $1::uuid AND n.kind = 'connection_error' AND n.entity_type = 'social_connection'
-           AND n.entity_id = $5::uuid AND n.dismissed_at IS NULL AND n.created_at > now() - interval '7 days'
-           AND NOT ($2::text = 'critical' AND n.severity <> 'critical')
-           AND n.created_at >= coalesce(
-                 (SELECT s.last_synced_at FROM social_connection s WHERE s.id = $5::uuid AND s.workspace_id = $1::uuid),
-                 '-infinity'::timestamptz))`,
-    [acc.workspace_id, connectionErrorSeverity(kind), connectionErrorTitle(platformName(acc.platform_id), acc.handle, kind), detailEs, acc.id],
-  );
 }
 
 /** La cuenta del creador no se puede leer: queda en 'error' con la razón en español, y se avisa (RES-3). */

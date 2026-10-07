@@ -29,6 +29,8 @@ import { markChannelAccountDown } from '@mc/db/queries/canales';
 import { listWeeklyHighlights, weeklySourcesFor, type WeeklyHighlight, type WeeklySource } from '@mc/db/queries/resumen-semana';
 import { openTestDb, type TestDb } from '@mc/db/test/pglite';
 import { markAccountError, markNeedsReauth, selectCollectableAccounts } from '../src/jobs/conexiones/_posts.ts';
+import { remindBrokenAccounts } from '../src/jobs/conexiones/aviso-cuenta.ts';
+import { acknowledgeHighlight } from '@mc/db/queries/resumen-semana';
 import { computePostScoreJob } from '../src/jobs/conexiones/compute-post-score.ts';
 import { recordatoriosJob } from '../src/jobs/finanzas/recordatorios.ts';
 import { runSeguimientos } from '../src/jobs/ventas/seguimientos.ts';
@@ -217,5 +219,27 @@ describe('los productores escriben, Resumen enseña', () => {
     const avisos = await jobDb.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM notification WHERE kind = 'connection_error' AND entity_id = $1`, [CONEXION_TIKTOK]);
     assert.equal(avisos.rows[0]?.n, 3);
+  });
+  test('una cuenta que sigue sin token vuelve al bloque a la semana, aunque se diera «Entendido» por error', async () => {
+    // La TikTok de Laura queda sin token; su último aviso fue hace ocho días y Laura le dio «Entendido».
+    await jobDb.query(`UPDATE social_connection SET status = 'needs_reauth' WHERE id = $1`, [CONEXION_TIKTOK]);
+    await t.admin(`UPDATE notification SET created_at = created_at - interval '8 days'
+                    WHERE kind = 'connection_error' AND entity_id = '${CONEXION_TIKTOK}'`);
+    const fuentes = weeklySourcesFor(await permisosDe(LAURA));
+    const antes = (await bloqueDe(LAURA)).filas.find((f) => f.source === 'connection' && f.connectionId === CONEXION_TIKTOK);
+    assert.ok(antes, 'el aviso viejo sigue en el bloque: nadie lo atendió');
+    assert.equal(await como(LAURA, (tx) => acknowledgeHighlight(tx, antes.id, fuentes)), true);
+    assert.ok(!(await bloqueDe(LAURA)).filas.some((f) => f.source === 'connection' && f.connectionId === CONEXION_TIKTOK));
+
+    // Nadie lee una cuenta sin token: sin el barrido, no volvía nunca. (≥ 1: la
+    // Facebook del seed 0011 también está sin token y sin aviso en esta prueba.)
+    assert.ok((await remindBrokenAccounts(jobDb, LAURA_WS)) >= 1);
+    const vuelve = (await bloqueDe(LAURA)).filas.find((f) => f.source === 'connection' && f.connectionId === CONEXION_TIKTOK);
+    assert.ok(vuelve, 'otro aviso, con otro id: el «Entendido» de la semana pasada no lo calla');
+    assert.notEqual(vuelve.id, antes.id);
+    assert.equal(vuelve.severity, 'critical');
+
+    // Y no se repite: el barrido siguiente, la misma semana, no escribe nada.
+    assert.equal(await remindBrokenAccounts(jobDb, LAURA_WS), 0);
   });
 });
