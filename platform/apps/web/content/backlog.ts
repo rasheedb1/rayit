@@ -694,7 +694,7 @@ export const STORIES: readonly Story[] = [
     desc: "Política de fila por creator_id en las cuatro tablas que lo llevan: social_connection, post, campaign y deal.",
     done: "Una consulta cruda que se olvide de scopeFilter() tampoco devuelve filas de otro creador.",
     status: "hecho",
-    note: "7-oct: migración 0082_alcance_por_creador, sin aplicar (el integrador la aplica ANTES de desplegar: la guardia la exige). Política RESTRICTIVE por creador, solo para mc_app, en las cuatro tablas, con el mismo predicado que scopeFilter(); Dueño y Administrador ven a todos los creadores; el worker y los enlaces públicos no pasan por ella. La guardia del esquema nombra la tabla a la que le falte. Prueba en pglite: test/alcance-rls.test.ts (docs/propuestas/ACC-7.md).",
+    note: "7-oct: migración 0082_alcance_por_creador, sin aplicar (el integrador la aplica ANTES de desplegar: la guardia la exige). Política RESTRICTIVE por creador, solo para mc_app, en las cuatro tablas, con el mismo predicado que scopeFilter(); el worker y los enlaces públicos no pasan por ella. 7-oct (r2): una sola regla de «ve a todos» —no tener filas de alcance— en la política, scopeFilter() y session_has_scope(): la base no deja que Dueño ni Administrador lleven alcance (disparador membership_full_role_unscoped); la guardia exige además que toda tabla con creator_id esté declarada y fija el cuerpo de session_sees_all_creators(), scope_allows() y el disparador (md5); los negocios de Ventas nacen con su creador («Nuevo negocio» pregunta cuando hay varios) y Ventas y Cotizar dicen el 42501 de la política como ScopeError. Lo que no cubre (métricas, quote, invoice, payment, data_consent) es ACC-10. Prueba en pglite: test/alcance-rls.test.ts (docs/propuestas/ACC-7.md)",
   },
   {
     id: "ACC-8", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["CON-3", "ACC-3"],
@@ -711,5 +711,13 @@ export const STORIES: readonly Story[] = [
     done: "Una agencia crea el rol «Becario» con tres permisos y se lo asigna a alguien.",
     status: "pendiente",
     note: "Necesidad de agencia, no de un creador con un mánager: para el piloto bastan los cinco roles de fábrica.",
+  },
+  {
+    id: "ACC-10", module: "ACC", owner: "rasheed", size: "M", sprint: 6, deps: ["ACC-7"],
+    title: "Alcance por creador en métricas, dinero y consentimientos",
+    desc: "Extender la red de ACC-7 a lo que todavía solo protege su workspace: una política RESTRICTIVE por creador en post_metric_snapshot y account_metric_snapshot (por EXISTS sobre post y social_connection, o por su creator_id), quote (por su creator_id), invoice y payment (por EXISTS sobre campaign) y data_consent, con su entrada en TABLAS_CON_ALCANCE_POR_CREADOR y fuera de TABLAS_CON_CREADOR_SIN_POLITICA.",
+    done: "Como miembro acotado a un creador, un SELECT crudo sobre las métricas, las cotizaciones, las facturas, los pagos y los consentimientos no devuelve nada del otro creador; la prueba de ACC-7 que hoy fija lo que no cubre se da la vuelta.",
+    status: "pendiente",
+    note: "Salió de la revisión de ACC-7 (r1, hallazgos 2 y 11): las métricas son el dato principal y quote lleva el total. Hoy no hay filas de alcance, así que nada se ve de más; la red está para cuando ACC-4 o CIERRE-ACC §5.6 las escriban.",
   },
 ];

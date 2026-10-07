@@ -486,23 +486,40 @@ Las reglas, y por qué:
   de `apps/worker/src` compone el alcance (lo comprueba la prueba de
   convención). El alcance es de la web.
 - **Y en cuatro tablas, también la base (ACC-7, 0082).**
-  `social_connection`, `post`, `campaign` y `deal` llevan una política
-  RESTRICTIVE solo para `mc_app`: `(SELECT session_sees_all_creators())
-  OR scope_allows('creator', creator_id)`. Una consulta cruda que se
-  olvide de `scopeFilter()` no devuelve filas de otro creador, y una
-  escritura no las crea ni las mueve (42501). Dueño y Administrador ven a
-  todos; el worker (BYPASSRLS) y los enlaces públicos (`mc_public_share`)
-  no pasan por ella. Solo cubre el alcance por **creador**: el de marca y
-  campaña sigue siendo de `scopeFilter()`. La guardia del esquema exige
-  las cuatro (`TABLAS_CON_ALCANCE_POR_CREADOR`).
+  `social_connection`, `post`, `campaign` y `deal` (`CREATOR_SCOPE_TABLES`)
+  llevan una política RESTRICTIVE solo para `mc_app`: `(SELECT
+  session_sees_all_creators()) OR scope_allows('creator', creator_id)`.
+  Una consulta cruda que se olvide de `scopeFilter()` no devuelve filas de
+  otro creador, y una escritura no las crea ni las mueve (42501, que
+  `scopeErrorOf()` traduce a `ScopeError`). El worker (BYPASSRLS) y los
+  enlaces públicos (`mc_public_share`) no pasan por ella. Solo cubre el
+  alcance por **creador**: el de marca y campaña sigue siendo de
+  `scopeFilter()`. **No** cubre las métricas, `quote`, `invoice`,
+  `payment` ni `data_consent` (ACC-10).
+- **Una sola regla de «ve a todos».** Ve a todos los creadores quien no
+  tiene filas de alcance por creador: lo mismo en `scopeFilter()`, en la
+  política y en `session_has_scope()` (Equipo). Dueño y Administrador ven
+  todo porque la base no les deja tener alcance (disparador
+  `membership_full_role_unscoped`, 0082 §2), no por una excepción.
+- **La guardia** exige las cuatro políticas con su forma, que toda tabla
+  con `creator_id` esté en `TABLAS_CON_ALCANCE_POR_CREADOR` o en
+  `TABLAS_CON_CREADOR_SIN_POLITICA` con su motivo, y que los cuerpos de
+  `session_sees_all_creators()`, `scope_allows()` y del disparador sean
+  los de su migración (`CUERPOS_DEL_ALCANCE`, md5).
 - **Lo que esa política esconde y el código necesita saber.** Antes se
   buscaba «la fila ya existe, pero fuera de tu alcance» sin filtro; ahora
   la base no la enseña. Si quien lo sabe es un índice único, la escritura
   va en `writeOrScopeError(tx, savepoint, restricción, fn)`: el choque de
   una persona acotada es `ScopeError` y la transacción sigue usable. Si
   no hay índice (el @ de una cuenta), una función que responde solo sí o
-  no (`public_account_out_of_scope`, 0082 §3). Prueba:
+  no (`public_account_out_of_scope`, 0082 §4).
+- **Una fila nueva que no trae creador** (un negocio de Ventas) lo toma
+  con `soleCreatorSql()`: el único del alcance de quien escribe, o el
+  único del espacio; si hay varios, lo elige la pantalla
+  (`listDealCreatorOptions`, `creatorForNewDeal`). Prueba:
   `test/alcance-rls.test.ts`.
+- **Los errores de Postgres** se reconocen por código y restricción con
+  `findPgError()` (`src/pg-error.ts`), que recorre la cadena `cause`.
 
 ## Lo que hace el cliente por ti
 

@@ -1038,8 +1038,8 @@ export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: st
  * un creador fuera del alcance, NO se devuelve null (se crearía una
  * segunda fila para la misma cuenta real bajo otro creador): se lanza
  * ScopeError antes de escribir. Desde ACC-7 la fila de otra creadora ni
- * siquiera se ve (0082 §2), así que, si no aparece, se pregunta a
- * public_account_out_of_scope() (0082 §3), que responde solo sí o no.
+ * siquiera se ve (0082 §3), así que, si no aparece, se pregunta a
+ * public_account_out_of_scope() (0082 §4), que responde solo sí o no.
  */
 export async function findPublicAccountByHandle(tx: WorkspaceTx, platformId: ConnectionPlatformId, handle: string): Promise<ExistingConnection | null> {
   const { rows } = await tx.query<{ id: string; secret_ref: string; deleted_at: string | Date | null; status: ConnectionStatus; visible: boolean }>(

@@ -364,6 +364,7 @@ con las agencias, que es donde el alcance empieza a significar algo.
 | ACC-7 | Endurecimiento: política RLS por `creator_id` en `social_connection`, `post`, `campaign` y `deal`. | Rasheed | M | ACC-6 | Una consulta cruda sin `scopeFilter()` tampoco devuelve filas de otro creador. |
 | ACC-8 | Consentimiento delegado: quien conecta una cuenta ajena no es quien consiente. `data_consent.evidence` lleva `acted_by` y el creador recibe notificación. | Nicolás | S | CON-3, ACC-3 | El mánager conecta el TikTok del creador: el consentimiento queda a nombre del creador, con el mánager como operador, y le llega la notificación. |
 | ACC-9 | Matriz de permisos editable y roles a medida: la pantalla que muestra los permisos uno por uno y deja crear un rol propio (`role` con `workspace_id`). | Rasheed | M | ACC-4 | Una agencia crea el rol «Becario» con tres permisos y se lo asigna a alguien. |
+| ACC-10 | Alcance por creador en métricas, dinero y consentimientos: la política de ACC-7 en `post_metric_snapshot`, `account_metric_snapshot`, `quote`, `invoice`, `payment` y `data_consent` (por su `creator_id` o por EXISTS sobre `post`, `social_connection` o `campaign`). | Rasheed | M | ACC-7 | Como miembro acotado, un SELECT crudo sobre métricas, cotizaciones, facturas, pagos o consentimientos no devuelve nada del otro creador. |
 
 ### AGE · Agencias (fase 2, tras `agency_workspace`)
 
@@ -396,7 +397,7 @@ el quinto es lo que depende de aprobaciones, más el piloto.
 | **3** · semanas 5 y 6 | VEN-4, VEN-5 · COT-1, COT-2 | CON-5, CON-6 · FIN-2, FIN-3, FIN-5 · **ACC-1, ACC-2** |
 | **4** · semanas 7 y 8 | COT-3, COT-4 · VEN-6 · **ACC-3** (revisar y aplicar) | CAM-3, CAM-4, CAM-5, CAM-6 · FIN-6 · **ACC-3** (SQL y semilla) |
 | **5** · semanas 9 y 10 | RES-3 · **ACC-4** · piloto | CON-4, CON-7, CON-8 · FIN-4, FIN-8 · **ACC-5, ACC-8** |
-| **6** · fase 2, sin fecha | ACC-7, ACC-9 · AGE-1, AGE-2 · **RES-4, VEN-7, VEN-8** | ACC-6 · AGE-3 · **FIN-7** |
+| **6** · fase 2, sin fecha | ACC-7, ACC-9, ACC-10 · AGE-1, AGE-2 · **RES-4, VEN-7, VEN-8** | ACC-6 · AGE-3 · **FIN-7** |
 
 Carga estimada por sprint antes de los roles (extremo bajo, sobre 10
 días): Rasheed 12 · 12 · 11 · 9 · 5. Nicolás 12 · 13 · 12 · 12 · 10.

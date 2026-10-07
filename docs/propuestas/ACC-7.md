@@ -1,6 +1,7 @@
 # ACC-7 · El alcance por creador también en la base
 
-> Historia ACC-7 (épico ACC, sprint 6). Rama `rasheed/ACC-7-rls-por-creador`.
+> Historia ACC-7 (épico ACC, sprint 6). Ramas `rasheed/ACC-7-rls-por-creador`
+> y `rasheed/ACC-7-rls-por-creador-r2` (los once hallazgos de la ronda 1).
 > 7 de octubre de 2026. Migración `0082_alcance_por_creador.sql`, **sin
 > aplicar**: la aplica el integrador, y **antes** de desplegar (la guardia
 > del esquema la exige y la web no arranca sin ella).
@@ -26,9 +27,35 @@ CREATE POLICY <tabla>_creator_scope ON <tabla> AS RESTRICTIVE FOR ALL TO mc_app
 |---|---|
 | RESTRICTIVE | Se suma con AND a la de workspace: las dos condiciones, nunca una u otra. No abre nada. |
 | `scope_allows('creator', creator_id)` | El mismo predicado de `scopeFilter()` (0040): sin filas de alcance por creador, todo; con ellas, solo esos; un `creator_id` NULL no cae en ningún alcance. |
-| `session_sees_all_creators()` | ¿La persona ve a todos los creadores? Sí sin alcance por creador, y sí con rol **Dueño** o **Administrador** de fábrica aunque alguien le hubiera dejado una fila de alcance. Envuelta en `(SELECT …)`: se evalúa una vez por consulta, no por fila. |
+| `session_sees_all_creators()` | ¿La persona no tiene alcance por creador? Es, letra por letra, `NOT scopeHas('creator')` de `scope.ts`. Envuelta en `(SELECT …)`: se evalúa una vez por consulta, no por fila. |
 | FOR ALL, sin WITH CHECK | La fila nueva de un INSERT o un UPDATE pasa por la misma condición: nadie crea ni mueve una fila a nombre de un creador que no ve (42501). |
 | TO mc_app | Solo la web, que trabaja en nombre de una persona. |
+
+## Una sola regla de «quién ve a todos» (ronda 2, hallazgos 1 y 7)
+
+La ronda 1 eximía en la base a Dueño y Administrador aunque tuvieran una
+fila de alcance; `scopeFilter()` y `session_has_scope()` (0079, Equipo)
+no. La misma persona recibía tres respuestas. Ahora hay una:
+
+- **Ve a todos quien no tiene filas de alcance por creador.** Es lo que
+  preguntan la política, `scopeFilter()` y, para cualquier tipo,
+  `session_has_scope()`.
+- **Dueño y Administrador no pueden tener alcance** (0082 §2). Un
+  disparador rechaza una fila de `membership_scope` (de cualquier tipo)
+  para una de esas membresías, y el cambio de rol a Dueño o Administrador
+  de quien tiene alcance (`check_violation`, restricción
+  `membership_full_role_unscoped`). Si la base ya tuviera filas así, la
+  migración se para con un mensaje claro.
+- Un rol a medida ve a todos igual que cualquiera: si no tiene filas.
+
+Se eligió prohibir el caso (opción B de la revisión) y no repetir la
+excepción por rol en los tres sitios (opción A) porque la opción A dejaba
+la regla escrita con las claves `'owner'`/`'admin'` en tres lugares, y
+`session_has_scope()` es de 0079, que ya está integrada. Probado: para la
+dueña y la administradora de la agencia, el ejecutivo acotado, la dueña de
+un espacio de creador y el miembro acotado, los ids de `listCampaigns()`
+y los de un `SELECT id FROM campaign` crudo son iguales, y
+`session_has_scope()` coincide con la política.
 
 ## A quién no toca
 
@@ -44,6 +71,26 @@ CREATE POLICY <tabla>_creator_scope ON <tabla> AS RESTRICTIVE FOR ALL TO mc_app
   `scopeFilter()`. Una cuenta conectada no tiene camino a una marca (ACC-6
   D3); la red de la base es para el tipo que tiene columna.
 
+## Qué cubre la red, con exactitud (hallazgo 2)
+
+| Cubre | Por qué |
+|---|---|
+| las cuatro tablas | su política |
+| `campaign_post`, `deal_stage_history`; `api_call_log` y `api_quota_usage` en las filas con cuenta | su política de workspace es un EXISTS sobre una de las cuatro |
+| `creator_post_board`, `connection_health`, `deal_pipeline`, `second_by_second` | vistas con `security_invoker` sobre ellas |
+
+| **No** cubre | Sigue con |
+|---|---|
+| métricas: `post_metric_snapshot`, `account_metric_snapshot` y las vistas `post_metrics_*` | su workspace y `scopeFilter()` donde se compone |
+| dinero: `quote` (con su total), `invoice`, `payment` | ídem |
+| `data_consent` y las demás tablas con `creator_id` propio | ídem; cada una declarada con su motivo |
+
+Una prueba lo fija en los dos sentidos: el miembro acotado no ve el
+historial ni la fila de `deal_pipeline` del negocio de Sofía, y **sí** ve
+la métrica de su post y su cotización. El día que ACC-10 cierre eso, la
+prueba falla y se da la vuelta. Extender la red es la historia **ACC-10**
+del backlog.
+
 ## Lo que la política esconde y el código necesitaba
 
 ACC-6 buscaba **sin** filtro «la fila ya existe, pero no es tuya» antes de
@@ -56,51 +103,93 @@ sitios, y se arreglaron sin cambiar lo que devuelven:
 |---|---|---|
 | `createCampaignFromQuote` (campaña viva de la cotización, de otra creadora) | el índice `campaign_quote_id_active_key` | `writeOrScopeError` (src/scope.ts): la escritura va en un SAVEPOINT; si choca con esa restricción y la persona está acotada por creador, es `ScopeError` y la transacción sigue usable. Para quien ve a todos, el choque se relanza tal cual |
 | `upgradePublicAccountToOAuth` (el open_id ya es de una cuenta de otra creadora) | el UNIQUE `(platform_id, external_account_id, workspace_id)` | `writeOrScopeError`, igual |
-| `findPublicAccountByHandle` (el @ ya es de otra creadora) | ningún índice | `public_account_out_of_scope(platform, handle)` (0082 §3): SECURITY DEFINER que responde solo sí o no, atada al espacio fijado, solo para mc_app. Declarada en `FUNCIONES_DEFINER_DECLARADAS` |
+| `findPublicAccountByHandle` (el @ ya es de otra creadora) | ningún índice | `public_account_out_of_scope(platform, handle)` (0082 §4): SECURITY DEFINER que responde solo sí o no, atada al espacio fijado, solo para mc_app. Declarada en `FUNCIONES_DEFINER_DECLARADAS` |
 
-`upsertConnection` y `addPublicAccount` no cambiaron: su `ON CONFLICT DO
-UPDATE … WHERE <alcance>` evalúa el WHERE antes que la política, así que
-siguen devolviendo cero filas y `ScopeError`.
+El nombre del SAVEPOINT de `writeOrScopeError` es una unión de literales
+(`ScopeSavepoint`) y además se valida contra `/^[a-z_][a-z0-9_]{0,62}$/`
+antes de escribir nada (hallazgo 5). Los errores de Postgres se buscan con
+`findPgError()` de `src/pg-error.ts`, la única copia (hallazgos 4 y 10).
 
-## La guardia
+## Ventas y Cotizar con la red puesta (hallazgos 6 y 8)
 
-`packages/db/src/esquema.ts` declara `TABLAS_CON_ALCANCE_POR_CREADOR` y
-exige en cada arranque que cada tabla tenga una política RESTRICTIVE que
-alcance a mc_app, FOR ALL, sin WITH CHECK y con exactamente la forma de
-arriba. Si falta, `alcancePorCreador` la nombra y `explicarEsquema` lo
-dice; en producción la web no arranca. Una restrictiva borrada no abre la
-tenencia, así que ninguna otra comprobación lo habría visto.
-`session_sees_all_creators()` va en `FUNCIONES_QUE_USA_EL_CODIGO`.
+Ventas creaba todos sus negocios con `creator_id` NULL, y la política
+trata un NULL como fuera de cualquier alcance: un Ejecutivo de cuenta
+acotado no habría podido abrir un negocio, aceptar una señal ni pasar una
+respuesta de outreach a negocio. Ahora:
+
+- **Las tres altas ponen el creador.** `createDeal` y `acceptSignal` con
+  `creatorForNewDeal()`: el elegido (que tiene que ser del espacio,
+  `InvalidCreator`, y de su alcance, `ScopeError`) o el único de su
+  alcance o del espacio (`soleCreatorSql()`); con varios y acotado,
+  `DealCreatorRequired`; con varios y sin alcance, sin creador, como
+  hasta hoy. La respuesta de outreach (`openDealFromReply`) toma el único
+  del espacio o del alcance.
+- **«Nuevo negocio» pregunta de quién es** cuando hay más de un creador
+  para elegir (`listDealCreatorOptions`): opcional para quien ve a todos,
+  obligatorio para quien está acotado a varios.
+- **El 42501 de la política se dice en español.** `scopeErrorOf()`
+  reconoce el `row-level security policy "<tabla>_creator_scope"` de las
+  cuatro tablas (y un `ScopeError`); Ventas (`messageOf`) y Cotizar
+  (`codigoDe`, código `ScopeError` en la URL) muestran
+  `ScopeError.messageEs`. Otro 42501 sigue siendo el genérico.
+
+## La guardia (hallazgos 2, 3 y 9)
+
+`packages/db/src/esquema.ts` exige en cada arranque, en `alcancePorCreador`:
+
+- que las cuatro tablas (`TABLAS_CON_ALCANCE_POR_CREADOR`, con las mismas
+  claves que `CREATOR_SCOPE_TABLES` por tipo) tengan una política
+  RESTRICTIVE que alcance a mc_app, FOR ALL, sin WITH CHECK y con
+  exactamente la forma de arriba;
+- que **toda** tabla de `public` con columna `creator_id` esté en esa
+  lista o en `TABLAS_CON_CREADOR_SIN_POLITICA`, con su motivo: una tabla
+  nueva con `creator_id` no queda fuera de la red sin que nadie lo decida;
+- que el cuerpo de `session_sees_all_creators()`, de las dos
+  `scope_allows()` y del disparador sea el de su migración
+  (`CUERPOS_DEL_ALCANCE`, md5 de `prosrc` con los espacios normalizados).
+  Un `CREATE OR REPLACE … SELECT true` desde el SQL Editor apagaba la red
+  con las políticas intactas; ahora la guardia lo nombra;
+- y los dos disparadores de §2, en `DISPARADORES_DE_CANDADO`.
 
 ## Pruebas (`packages/db/test/alcance-rls.test.ts`, pglite)
 
 - Consulta cruda, sin `scopeFilter()`, como el miembro con alcance a
   Laura: en las cuatro tablas ninguna fila de Sofía (ni por id, ni en un
-  conteo) y sí las de Laura; la dueña y el modo demo lo ven todo; vistas
-  (`creator_post_board`, `connection_health`) y JOIN heredan el filtro.
+  conteo) y sí las de Laura; la dueña y el modo demo lo ven todo; vistas y
+  JOIN heredan el filtro; lo que no cubre, también fijado.
 - Escrituras crudas: no crea campaña ni negocio de Sofía, no pasa una
-  campaña de Laura a Sofía (42501), y UPDATE/DELETE sobre filas de Sofía
-  tocan cero filas.
-- Roles: en una agencia, Dueña y Administradora (con una fila de alcance
-  olvidada) ven a los dos creadores; el Ejecutivo acotado, solo al suyo.
-  Un alcance por marca no acota en la base.
-- Worker y enlace público, como arriba. `public_account_out_of_scope` y
-  `writeOrScopeError`, sus ramas.
+  campaña de Laura a Sofía (42501, que `scopeErrorOf` traduce), y
+  UPDATE/DELETE sobre filas de Sofía tocan cero filas.
+- Una sola regla: `listCampaigns()` y el SELECT crudo dan los mismos ids
+  para cinco personas; la base rechaza el alcance de Dueño y
+  Administrador (cualquier tipo), el cambio de rol a Administrador de
+  quien lo tiene, mover la fila a la administradora, y una fila cuya
+  membresía la transacción no ve.
+- Ventas: el ejecutivo acotado abre un negocio y lo ve en el pipeline;
+  acepta una señal y el negocio es de su creador; con dos creadores tiene
+  que elegir y no puede elegir uno de fuera; la dueña de la agencia puede
+  dejarlo sin creador; en un espacio de una sola creadora, es suyo.
+- Worker y enlace público, como arriba. `public_account_out_of_scope`,
+  `writeOrScopeError` (y un SAVEPOINT inválido que no llega al SQL).
 - La guardia: en verde con 0082; sin la política de `deal` nombra la
-  tabla **y** la consulta cruda vuelve a enseñar el negocio de Sofía (la
-  prueba muerde); cinco variantes mal formadas (permisiva, `USING (true)`,
-  solo SELECT, con WITH CHECK, para otro rol) también se reportan; volver
-  a correr 0082 la deja como estaba.
+  tabla **y** la consulta cruda vuelve a enseñar el negocio de Sofía;
+  cinco variantes mal formadas también se reportan; una tabla nueva con
+  `creator_id` sin declarar; y tres sondas que reescriben
+  `session_sees_all_creators()`, `scope_allows()` y el disparador para
+  que no acoten. Volver a correr 0082 (y 0040) lo deja como estaba.
+- Web: `ventas/actions.test.ts`, `cotizar/actions.test.ts` y
+  `ventas/empresas/[id]/negocio.test.tsx`.
 
 ## Pendiente
 
 - **Aplicar 0082 en Supabase antes de desplegar** (`make db.migrate`,
   `make db.guardia`). Sin ella la guardia de producción no deja arrancar.
-- Ventas y Cotizar todavía no componen `scopeFilter()` (CIERRE-ACC §5.4).
-  Para quien esté acotado por creador, la base ya les quita los negocios
-  de otros creadores; crear un negocio **sin** creador (o de otro) le dará
-  un 42501 en vez de un mensaje: hoy nadie tiene filas de alcance, pero el
-  día que ACC-4 las escriba, esas pantallas tienen que traducirlo.
-- Otras tablas con `creator_id` (`quote`, `data_consent`, ideas y
-  guiones) siguen solo con `scopeFilter()`. Ampliarlas es una política y
-  una entrada más en la lista de la guardia.
+- **ACC-10** (backlog): extender la red a las métricas
+  (`post_metric_snapshot`, `account_metric_snapshot`, por EXISTS sobre
+  `post` o `social_connection`), a `quote` (por su `creator_id`), a
+  `invoice` y `payment` (por EXISTS sobre `campaign`) y a `data_consent`.
+- Ventas, Cotizar y Resumen todavía no componen `scopeFilter()` en sus
+  lecturas (CIERRE-ACC §5.4). Para el alcance por creador la base ya
+  filtra las cuatro tablas; el de marca y campaña sigue pendiente ahí.
+- La pantalla que escriba `membership_scope` (CIERRE-ACC §5.6) tiene que
+  traducir `membership_full_role_unscoped` («quítale antes el alcance»).
