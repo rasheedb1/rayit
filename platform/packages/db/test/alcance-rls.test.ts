@@ -25,6 +25,7 @@ import type { WorkspaceTx } from '../src/client.ts';
 import { findPgError } from '../src/pg-error.ts';
 import { listCampaigns } from '../src/queries/campanas.ts';
 import { reclassifyInboxMessage } from '../src/queries/bandejas.ts';
+import { applyIntent, loadIntentMessage } from '../src/queries/outreach/intent.ts';
 import {
   acceptSignal, createDeal, createSignal, hasOpenDealOutOfScope, listDealCreatorOptions, listPipeline, setDealCreator, VentasError,
 } from '../src/queries/ventas.ts';
@@ -523,7 +524,7 @@ describe('la bandeja: «Me interesa» con alcance por creador (ronda 2, hallazgo
                    VALUES ('${WS_AGENCIA}', '${EJECUTIVO_A}', 'creator', '${CREADOR_E}') ON CONFLICT DO NOTHING`);
     try {
       const r = await corregir(ejecutivo, MSG_NUEVA);
-      assert.deepEqual(r, { ok: true, intent: 'interested', dealMoved: false, optOut: false, optOutReview: false, dealNeedsCreator: true });
+      assert.deepEqual(r, { ok: true, intent: 'interested', dealMoved: false, optOut: false, optOutReview: false, dealNeedsCreator: 'pick' });
       assert.equal(await intencionDe(MSG_NUEVA), 'interested');
       assert.deepEqual(await negociosDe(MARCA_NUEVA), [], 'ni un negocio sin creador (que la política rechazaría) ni uno adivinado');
     } finally {
@@ -531,7 +532,7 @@ describe('la bandeja: «Me interesa» con alcance por creador (ronda 2, hallazgo
     }
     // Con un solo creador en su alcance, la misma corrección abre el negocio a su nombre.
     const r = await corregir(ejecutivo, MSG_NUEVA);
-    assert.equal(r.ok && r.dealNeedsCreator, false);
+    assert.equal(r.ok && r.dealNeedsCreator, null);
     const negocios = await negociosDe(MARCA_NUEVA);
     assert.equal(negocios.length, 1);
     assert.equal(negocios[0]?.creator_id, CREADOR_A);
@@ -554,6 +555,130 @@ describe('la bandeja: «Me interesa» con alcance por creador (ronda 2, hallazgo
     assert.deepEqual(await corregir(ejecutivo, MSG_ENLAZADO), { ok: false, code: 'out_of_scope' });
     assert.equal(await intencionDe(MSG_ENLAZADO), 'ambiguous');
     assert.equal(await ejecutivo((tx) => hasOpenDealOutOfScope(tx, MARCA_NUEVA)), false, 'el de la marca nueva es de A: lo ve');
+  });
+});
+
+describe('el negocio de una respuesta es del creador de la cuenta que envió (ronda 3, hallazgos 1 y 13)', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
+  const ejecutivo = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => como(WS_AGENCIA, EJECUTIVO_A, fn);
+  const duenaAgencia = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => como(WS_AGENCIA, DUENA_AGENCIA, fn);
+  const CUENTA_A = '0000000c-0000-4000-8000-0000000ac0a1';
+  const CUENTA_B = '0000000c-0000-4000-8000-0000000ac0b1';
+  const BRIEF_B = '0000000c-0000-4000-8000-0000000b1ef0';
+  const CADENCIA_B = '0000000c-0000-4000-8000-00000005e0b0';
+  const CREADOR_DE_BAJA = '0000000c-0000-4000-8000-0000000000f3';
+  // Una marca, un contacto y una respuesta por caso: el worker con la cuenta de A, la bandeja con la de B,
+  // la bandeja con la de A, la cadencia del brief de B, y dos sin creador de origen (el worker y la bandeja).
+  const CASOS = ['a1', 'b1', 'a2', 'c1', 'e1', 'f1'] as const;
+  const marca = (k: string) => `0000000c-0000-4000-8000-0000000e10${k}`;
+  const contacto = (k: string) => `0000000c-0000-4000-8000-0000000c10${k}`;
+  const mensaje = (k: string) => `0000000c-0000-4000-8000-0000000a10${k}`;
+  const cuentaDe: Record<(typeof CASOS)[number], string | null> = { a1: CUENTA_A, b1: CUENTA_B, a2: CUENTA_A, c1: null, e1: null, f1: null };
+  const ahora = new Date('2026-10-07T15:00:00Z');
+  const interesada = { intent: 'interested' as const, confidence: 0.92, returnDate: null, referral: null, source: 'fake' as const };
+  const negociosDe = (companyId: string) =>
+    t.db.asWorker((tx) => tx.query<{ id: string; creator_id: string | null }>(
+      'SELECT id, creator_id FROM deal WHERE company_id = $1 ORDER BY created_at', [companyId],
+    )).then((r) => r.rows);
+  const corregir = (quien: typeof ejecutivo, messageId: string) =>
+    quien((tx) => reclassifyInboxMessage(tx, { messageId, intent: 'interested', now: ahora }));
+
+  before(async () => {
+    const filas = CASOS.map((k) => ({ k, marca: marca(k), contacto: contacto(k), mensaje: mensaje(k), cuenta: cuentaDe[k] }));
+    await t.admin(`
+      INSERT INTO creator_profile (id, workspace_id, display_name, deleted_at)
+        VALUES ('${CREADOR_DE_BAJA}', '${WS_AGENCIA}', 'Creador que se fue', now()) ON CONFLICT DO NOTHING;
+      INSERT INTO outreach_channel_account (id, workspace_id, creator_id, channel, provider, provider_account_id, display_name, status) VALUES
+        ('${CUENTA_A}', '${WS_AGENCIA}', '${CREADOR_A}', 'email', 'gmail_oauth', 'a.acc7@gmail.test', 'Creador A', 'disconnected'),
+        ('${CUENTA_B}', '${WS_AGENCIA}', '${CREADOR_B}', 'email', 'gmail_oauth', 'b.acc7@gmail.test', 'Creadora B', 'disconnected')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO outbound_brief (id, workspace_id, creator_id, title, status)
+        VALUES ('${BRIEF_B}', '${WS_AGENCIA}', '${CREADOR_B}', 'Brief de B', 'active') ON CONFLICT DO NOTHING;
+      INSERT INTO outbound_sequence (id, workspace_id, brief_id, name, channel)
+        VALUES ('${CADENCIA_B}', '${WS_AGENCIA}', '${BRIEF_B}', 'Cadencia de B', 'email') ON CONFLICT DO NOTHING;
+      INSERT INTO company (id, name, owner_workspace_id) VALUES
+        ${filas.map((f) => `('${f.marca}', 'Marca ${f.k} ACC-7 r4', '${WS_AGENCIA}')`).join(', ')}
+      ON CONFLICT DO NOTHING;
+      INSERT INTO company_link (workspace_id, company_id, relationship) VALUES
+        ${filas.map((f) => `('${WS_AGENCIA}', '${f.marca}', 'prospect')`).join(', ')}
+      ON CONFLICT DO NOTHING;
+      INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source) VALUES
+        ${filas.map((f) => `('${f.contacto}', '${f.marca}', '${WS_AGENCIA}', 'Contacto ${f.k}', '${f.k}@r4-acc7.test', 'user_provided')`).join(', ')}
+      ON CONFLICT DO NOTHING;
+      INSERT INTO outbound_enrollment (workspace_id, sequence_id, contact_id)
+        VALUES ('${WS_AGENCIA}', '${CADENCIA_B}', '${contacto('c1')}') ON CONFLICT DO NOTHING;
+      INSERT INTO outbound_message (id, workspace_id, contact_id, channel_account_id, enrollment_id, direction, channel, thread_ref,
+                                    provider_message_id, body, occurred_at) VALUES
+        ${filas.map((f) => `('${f.mensaje}', '${WS_AGENCIA}', '${f.contacto}', ${f.cuenta ? `'${f.cuenta}'` : 'NULL'},
+          ${f.k === 'c1' ? `(SELECT id FROM outbound_enrollment WHERE contact_id = '${f.contacto}')` : 'NULL'},
+          'inbound', 'email', 'hilo-r4-${f.k}', 'r4-${f.k}', 'Me interesa, cuéntame.', '2026-10-07T14:00:00Z')`).join(', ')}
+      ON CONFLICT DO NOTHING;
+    `);
+  });
+
+  test('el worker abre el negocio de la cuenta de A a nombre de A, y el ejecutivo acotado a A lo ve en el pipeline', async () => {
+    // Con tres creadores vivos en la agencia, «el único» no existe: sin la cuenta, el negocio nacía sin creador.
+    assert.deepEqual(await t.db.asWorker((tx) => soleCreatorFor(tx, WS_AGENCIA)), { creatorId: null, seesAll: true });
+    const fx = await t.db.asWorker(async (tx) => {
+      const m = await loadIntentMessage(tx, mensaje('a1'));
+      assert.ok(m);
+      return applyIntent(tx, m, interesada, ahora);
+    });
+    assert.equal(fx.dealCreated, true);
+    assert.deepEqual((await negociosDe(marca('a1'))).map((d) => d.creator_id), [CREADOR_A]);
+    const pipeline = await ejecutivo((tx) => listPipeline(tx, { companyId: marca('a1') }));
+    assert.deepEqual(pipeline.map((d) => [d.id, d.creatorId]), [[fx.dealId, CREADOR_A]]);
+  });
+
+  test('sin cuenta de un creador, el brief de la cadencia dice de quién es; con una cuenta del espacio, como antes', async () => {
+    const aplicar = (k: string) => t.db.asWorker(async (tx) => {
+      const m = await loadIntentMessage(tx, mensaje(k));
+      assert.ok(m);
+      return applyIntent(tx, m, interesada, ahora);
+    });
+    assert.equal((await aplicar('c1')).dealCreated, true);
+    assert.deepEqual((await negociosDe(marca('c1'))).map((d) => d.creator_id), [CREADOR_B], 'del brief de B');
+    assert.equal((await aplicar('e1')).dealCreated, true);
+    assert.deepEqual((await negociosDe(marca('e1'))).map((d) => d.creator_id), [null], 'sin origen y con varios: sin creador');
+  });
+
+  test('desde la bandeja, el ejecutivo acotado a A no abre a nombre de B lo que llegó por la cuenta de B', async () => {
+    assert.deepEqual(await corregir(ejecutivo, mensaje('b1')), { ok: false, code: 'out_of_scope' });
+    assert.deepEqual(await negociosDe(marca('b1')), [], 'no se abre a nombre de B, ni de A');
+    const r = await corregir(duenaAgencia, mensaje('b1'));
+    assert.equal(r.ok && r.dealNeedsCreator, null);
+    assert.deepEqual((await negociosDe(marca('b1'))).map((d) => d.creator_id), [CREADOR_B], 'quien ve a todos lo abre, y es de B');
+  });
+
+  test('acotado a dos creadores, la cuenta de A ya dice de quién es: no hay que elegir', async () => {
+    const CREADOR_E = '0000000c-0000-4000-8000-0000000000e3';
+    await t.admin(`INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+                   VALUES ('${WS_AGENCIA}', '${EJECUTIVO_A}', 'creator', '${CREADOR_E}') ON CONFLICT DO NOTHING`);
+    try {
+      const r = await corregir(ejecutivo, mensaje('a2'));
+      assert.deepEqual(r, { ok: true, intent: 'interested', dealMoved: true, optOut: false, optOutReview: false, dealNeedsCreator: null });
+      assert.deepEqual((await negociosDe(marca('a2'))).map((d) => d.creator_id), [CREADOR_A]);
+    } finally {
+      await t.admin(`DELETE FROM membership_scope WHERE user_id = '${EJECUTIVO_A}' AND scope_id = '${CREADOR_E}'`);
+    }
+  });
+
+  test('acotado solo a un creador que se fue: «none», no «elige de cuál es»', async () => {
+    await t.admin(`
+      DELETE FROM membership_scope WHERE user_id = '${EJECUTIVO_A}' AND scope_id = '${CREADOR_A}';
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+        VALUES ('${WS_AGENCIA}', '${EJECUTIVO_A}', 'creator', '${CREADOR_DE_BAJA}') ON CONFLICT DO NOTHING;
+    `);
+    try {
+      const r = await corregir(ejecutivo, mensaje('f1'));
+      assert.deepEqual(r, { ok: true, intent: 'interested', dealMoved: false, optOut: false, optOutReview: false, dealNeedsCreator: 'none' });
+      assert.deepEqual(await negociosDe(marca('f1')), []);
+    } finally {
+      await t.admin(`
+        DELETE FROM membership_scope WHERE user_id = '${EJECUTIVO_A}' AND scope_id = '${CREADOR_DE_BAJA}';
+        INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+          VALUES ('${WS_AGENCIA}', '${EJECUTIVO_A}', 'creator', '${CREADOR_A}') ON CONFLICT DO NOTHING;
+      `);
+    }
   });
 });
 
@@ -599,6 +724,51 @@ describe('de qué creador es un negocio: verlo y cambiarlo (ronda 2, hallazgo 6)
       ejecutivo((tx) => setDealCreator(tx, DEAL_SIN, CREADOR_A)),
       (e: unknown) => e instanceof VentasError && e.code === 'DealNotFound',
     );
+  });
+
+  test('con su cotización enviada o su campaña viva de otro creador, el negocio no cambia de creador (DealCreatorLocked)', async () => {
+    const CREADOR_E = '0000000c-0000-4000-8000-0000000000e3';
+    const DEAL_COT = '0000000c-0000-4000-8000-00000000deb1';
+    const DEAL_CAMP = '0000000c-0000-4000-8000-00000000deb2';
+    const CAMP_B = '0000000c-0000-4000-8000-000000ca00b2';
+    const bloqueado = (e: unknown) => e instanceof VentasError && e.code === 'DealCreatorLocked';
+    await t.admin(`
+      INSERT INTO deal (id, workspace_id, company_id, creator_id, name, stage_id) VALUES
+        ('${DEAL_COT}', '${WS_AGENCIA}', '${MARCA_AGENCIA}', NULL, 'Con cotización de A', 'propuesta'),
+        ('${DEAL_CAMP}', '${WS_AGENCIA}', '${MARCA_AGENCIA}', '${CREADOR_A}', 'Con campaña de B', 'propuesta')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO quote (workspace_id, company_id, creator_id, deal_id, number, slug, currency, subtotal, tax, total,
+                         agreed_metrics, report_cuts_hours, payment_terms_days, status, sent_at, public_snapshot)
+      VALUES ('${WS_AGENCIA}', '${MARCA_AGENCIA}', '${CREADOR_A}', '${DEAL_COT}', 'COT-2026-971', 'cot-acc7-r4-bloqueo', 'COP',
+              1000000.00, 190000.00, 1190000.00, '{views}', '{168}', 30, 'sent', now(), '{"timezone": "America/Bogota"}');
+      INSERT INTO campaign (id, workspace_id, company_id, creator_id, deal_id, name, status)
+        VALUES ('${CAMP_B}', '${WS_AGENCIA}', '${MARCA_AGENCIA}', '${CREADOR_B}', '${DEAL_CAMP}', 'Campaña de B del negocio de A', 'planned')
+      ON CONFLICT DO NOTHING;
+      INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+        VALUES ('${WS_AGENCIA}', '${EJECUTIVO_A}', 'creator', '${CREADOR_E}') ON CONFLICT DO NOTHING;
+    `);
+    try {
+      // La cotización enviada es de A: a B no, ni «sin creador» lo deja partido; a A sí, que lo pone en orden.
+      await assert.rejects(duenaAgencia((tx) => setDealCreator(tx, DEAL_COT, CREADOR_B)), bloqueado);
+      assert.deepEqual(await duenaAgencia((tx) => setDealCreator(tx, DEAL_COT, CREADOR_A)), { changed: true, creatorName: 'Creador A' });
+      await assert.rejects(duenaAgencia((tx) => setDealCreator(tx, DEAL_COT, null)), bloqueado);
+      // La campaña de B no la ve el ejecutivo (acotado a A y E), y aun así no pasa el negocio a E.
+      assert.equal((await ejecutivo((tx) => crudas(tx, 'campaign'))).some((c) => c.id === CAMP_B), false);
+      await assert.rejects(ejecutivo((tx) => setDealCreator(tx, DEAL_CAMP, CREADOR_E)), bloqueado);
+      // Nada cambió, y no quedó bitácora de un cambio que no pasó.
+      const creadores = await t.db.asWorker((tx) => tx.query<{ id: string; creator_id: string | null }>(
+        'SELECT id, creator_id FROM deal WHERE id = ANY($1::uuid[]) ORDER BY id', [[DEAL_COT, DEAL_CAMP]],
+      )).then((r) => r.rows);
+      assert.deepEqual(creadores, [{ id: DEAL_COT, creator_id: CREADOR_A }, { id: DEAL_CAMP, creator_id: CREADOR_A }]);
+      // Con la campaña cancelada, el acuerdo ya no está atado a B.
+      await t.admin(`UPDATE campaign SET status = 'cancelled' WHERE id = '${CAMP_B}'`);
+      assert.deepEqual(await ejecutivo((tx) => setDealCreator(tx, DEAL_CAMP, CREADOR_E)), { changed: true, creatorName: 'Creadora E' });
+      // Sin espacio fijado, la función no responde por nadie.
+      const sinEspacio = await t.db.withCatalogs((tx) => tx.query<{ v: boolean }>('SELECT deal_creator_locked($1, $2) AS v', [DEAL_COT, CREADOR_B]));
+      assert.equal(sinEspacio.rows[0]?.v, false);
+    } finally {
+      await t.admin(`DELETE FROM membership_scope WHERE user_id = '${EJECUTIVO_A}' AND scope_id = '${CREADOR_E}'`);
+    }
   });
 });
 
@@ -736,10 +906,11 @@ describe('la guardia del esquema exige la política en las cuatro tablas', { tim
     assert.deepEqual((await estadoDelEsquema(t.db)).alcancePorCreador, []);
   });
 
-  test('si alguien reescribe session_sees_all_creators() o el disparador para que no acoten, la guardia lo dice', async () => {
+  test('si alguien reescribe una función de la red (session_sees_all_creators(), el disparador, las SECURITY DEFINER…) para que no acote, la guardia lo dice', async () => {
     assert.deepEqual(Object.keys(CUERPOS_DEL_ALCANCE).sort(), [
-      'creators_for_session(uuid)', 'membership_full_role_unscoped()', 'open_deal_out_of_scope(uuid)', 'scope_allows(text,uuid)',
-      'scope_allows(text,uuid[])', 'session_sees_all_creators()', 'sole_creator_for_session(uuid)',
+      'creators_for_session(uuid)', 'deal_creator_locked(uuid,uuid)', 'membership_full_role_unscoped()', 'open_deal_out_of_scope(uuid)',
+      'public_account_out_of_scope(text,text)', 'role_is_full_access(uuid)', 'scope_allows(text,uuid)', 'scope_allows(text,uuid[])',
+      'session_sees_all_creators()', 'sole_creator_for_session(uuid)',
     ]);
     const sondas = [
       {
@@ -756,6 +927,27 @@ describe('la guardia del esquema exige la política en las cuatro tablas', { tim
         sql: `CREATE OR REPLACE FUNCTION membership_full_role_unscoped() RETURNS trigger LANGUAGE plpgsql
               SET search_path = public, extensions, pg_temp AS $$ BEGIN RETURN NEW; END $$`,
       },
+      {
+        // Conexiones volvería a duplicar bajo otra creadora la cuenta por @ que ya existe (ACC-6 §6).
+        firma: 'public_account_out_of_scope(text,text)',
+        sql: `CREATE OR REPLACE FUNCTION public_account_out_of_scope(p_platform text, p_handle text) RETURNS boolean LANGUAGE sql
+              STABLE SECURITY DEFINER SET search_path = public, extensions, pg_temp AS $$ SELECT false $$`,
+      },
+      {
+        firma: 'open_deal_out_of_scope(uuid)',
+        sql: `CREATE OR REPLACE FUNCTION open_deal_out_of_scope(p_company uuid) RETURNS boolean LANGUAGE sql
+              STABLE SECURITY DEFINER SET search_path = public, extensions, pg_temp AS $$ SELECT false $$`,
+      },
+      {
+        firma: 'deal_creator_locked(uuid,uuid)',
+        sql: `CREATE OR REPLACE FUNCTION deal_creator_locked(p_deal uuid, p_creator uuid) RETURNS boolean LANGUAGE sql
+              STABLE SECURITY DEFINER SET search_path = public, extensions, pg_temp AS $$ SELECT false $$`,
+      },
+      {
+        firma: 'role_is_full_access(uuid)',
+        sql: `CREATE OR REPLACE FUNCTION role_is_full_access(p_role uuid) RETURNS boolean LANGUAGE sql
+              STABLE SET search_path = public, extensions, pg_temp AS $$ SELECT false $$`,
+      },
     ];
     try {
       for (const { firma, sql } of sondas) {
@@ -767,6 +959,11 @@ describe('la guardia del esquema exige la política en las cuatro tablas', { tim
           // Y la sonda muerde: con la función en `true`, el miembro vuelve a ver lo de Sofía.
           assert.ok((await miembro((tx) => crudas(tx, 'deal'))).some((f) => f.id === DEAL_SOFIA));
         }
+        if (firma === 'public_account_out_of_scope(text,text)') {
+          // Muerde: el @ de Sofía deja de ser «de otra creadora» para el miembro, y Conexiones la duplicaría.
+          const v = await miembro((tx) => tx.query<{ v: boolean }>('SELECT public_account_out_of_scope($1, $2) AS v', ['tiktok', 'sofia.viaja']));
+          assert.equal(v.rows[0]?.v, false, 'reescrita, ya no avisa: por eso la guardia fija su cuerpo');
+        }
         await t.admin(`SET ROLE ${migrador()}; ${await readFile(firma.startsWith('scope_allows') ? MIGRACION_0040 : MIGRACION, 'utf8')}; RESET ROLE`);
       }
     } finally {
@@ -775,13 +972,17 @@ describe('la guardia del esquema exige la política en las cuatro tablas', { tim
     assert.deepEqual((await estadoDelEsquema(t.db)).alcancePorCreador, []);
   });
 
-  test('una política con el nombre pero sin la forma (permisiva, con otra condición o con WITH CHECK) tampoco cuenta', async () => {
+  test('una política con el nombre pero sin la forma (permisiva, otra condición, WITH CHECK, TO PUBLIC u otro rol) tampoco cuenta', async () => {
     const variantes = [
       'CREATE POLICY post_creator_scope ON post AS PERMISSIVE FOR ALL TO mc_app USING ((SELECT session_sees_all_creators()) OR scope_allows(\'creator\', creator_id))',
       'CREATE POLICY post_creator_scope ON post AS RESTRICTIVE FOR ALL TO mc_app USING (true)',
       'CREATE POLICY post_creator_scope ON post AS RESTRICTIVE FOR SELECT TO mc_app USING ((SELECT session_sees_all_creators()) OR scope_allows(\'creator\', creator_id))',
       'CREATE POLICY post_creator_scope ON post AS RESTRICTIVE FOR ALL TO mc_app USING ((SELECT session_sees_all_creators()) OR scope_allows(\'creator\', creator_id)) WITH CHECK (true)',
       `CREATE POLICY post_creator_scope ON post AS RESTRICTIVE FOR ALL TO ${migrador()} USING ((SELECT session_sees_all_creators()) OR scope_allows('creator', creator_id))`,
+      // Con la forma exacta pero TO PUBLIC: acota a mc_app (la consulta cruda sale bien) y rompe el enlace público (0030).
+      `CREATE POLICY post_creator_scope ON post AS RESTRICTIVE FOR ALL TO PUBLIC USING ((SELECT session_sees_all_creators()) OR scope_allows('creator', creator_id))`,
+      // Y TO mc_app más otro rol: tampoco es «solo la web».
+      `CREATE POLICY post_creator_scope ON post AS RESTRICTIVE FOR ALL TO mc_app, ${migrador()} USING ((SELECT session_sees_all_creators()) OR scope_allows('creator', creator_id))`,
     ];
     try {
       for (const variante of variantes) {
@@ -789,6 +990,9 @@ describe('la guardia del esquema exige la política en las cuatro tablas', { tim
         const { alcancePorCreador } = await estadoDelEsquema(t.db);
         assert.equal(alcancePorCreador.length, 1, variante);
         assert.match(alcancePorCreador[0] ?? '', /^post \(/, variante);
+        if (/ TO PUBLIC | TO mc_app, /.test(variante)) {
+          assert.match(alcancePorCreador[0] ?? '', /debe ser TO mc_app, y solo mc_app: TO PUBLIC rompe los enlaces públicos \(0030\)/, variante);
+        }
       }
     } finally {
       await t.admin(`SET ROLE ${migrador()}; ${await readFile(MIGRACION, 'utf8')}; RESET ROLE`);

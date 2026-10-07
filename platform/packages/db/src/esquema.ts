@@ -2669,8 +2669,8 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
         const otrosRoles = suyas.filter((p) => tieneLaFormaPorCreador(p) && !p.solo_app);
         if (otrosRoles.length) {
           return [
-            `${tabla} (${otrosRoles.map((p) => p.polname).join(', ')} debe ser TO ${APP_ROLE}: TO PUBLIC, u otro rol ` +
-              'además, rompe los enlaces públicos (0030), porque mc_public_share no puede leer el alcance)',
+            `${tabla} (${otrosRoles.map((p) => p.polname).join(', ')} debe ser TO ${APP_ROLE}, y solo ${APP_ROLE}: TO PUBLIC ` +
+              'rompe los enlaces públicos (0030), porque mc_public_share no puede leer el alcance, y otro rol no acota la web)',
           ];
         }
         const parecidas = suyas.filter((p) => !p.permisiva && p.polname.includes('creator'));
