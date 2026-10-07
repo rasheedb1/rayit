@@ -334,6 +334,14 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'public_optout, LEE el enlace por el sha256 del token, si la ficha ya estaba de baja y el nombre del workspace ' +
     'que envió (id y name, por columna, solo esa fila); devuelve la dirección enmascarada y un sí o un no a «quien ' +
     'lo abre es de ese workspace», nunca el id. No escribe nada. No es de ningún disparador',
+  // El @ que ya es de otra creadora, por debajo de la política por creador (0082 §3, ACC-7).
+  'public_account_out_of_scope(text,text)':
+    'Conexiones pregunta, antes de dar de alta o autorizar una cuenta por @, si ese handle ya es de una creadora ' +
+    'fuera del alcance de quien conecta (findPublicAccountByHandle, ACC-6 §6): la política por creador de 0082 ya ' +
+    'no deja ver esa fila, y sin la respuesta se duplicaría la cuenta real bajo otra creadora. Solo LEE ' +
+    'social_connection, atada a mano al workspace fijado (y falso sin él), y responde sí o no para UN handle de UNA ' +
+    'red: ni la fila, ni la creadora, ni el id. Es lo que ACC-6 ya decía con ScopeError. EXECUTE solo para mc_app. ' +
+    'No es de ningún disparador',
   // La regla de la baja de outbound_touch mira la lista global (0046 §4.1).
   'address_is_suppressed(citext)':
     'la regla de la baja de outbound_touch (0046 §4.1) compara el correo de la ficha y recipient_address con la ' +
@@ -482,6 +490,10 @@ export const FUNCIONES_QUE_USA_EL_CODIGO: Readonly<Record<string, string>> = {
     '0040_scope_allows: el alcance por creador, marca o campaña que compone cada consulta de Campañas, Finanzas y ' +
     'Conexiones (src/scope.ts, ACC-6)',
   'scope_allows(text,uuid[])': '0040_scope_allows: la misma pregunta para una relación uno-a-muchos (las campañas de un post)',
+  'session_sees_all_creators()':
+    '0082_alcance_por_creador: ¿la sesión ve a todos los creadores del espacio? La piden las cuatro políticas por ' +
+    'creador (TABLAS_CON_ALCANCE_POR_CREADOR) y writeOrScopeError (src/scope.ts, ACC-7). Sin EXECUTE para mc_app, ' +
+    'toda lectura de social_connection, post, campaign o deal fallaría',
   'outreach_handle_key(text,text)':
     '0077_baja_por_perfil: la forma comparable de un LinkedIn o un Instagram, para la baja por perfil (inbound.ts)',
   'outreach_handles_opted_out(uuid,uuid,text,text)':
@@ -608,6 +620,46 @@ export const DISPARADORES_DE_CANDADO: Readonly<Record<string, string>> = {
   'outbound_touch.outbound_touch_optout':
     'no se programa, no se reclama ni se envía a quien pidió la baja (0007, en las transiciones desde 0046 §4.1)',
 };
+
+/**
+ * Las tablas que llevan creator_id y, además de la política de su
+ * workspace, la política RESTRICTIVA por creador (ACC-7, 0082 §2), y por
+ * qué. La clave es la tabla.
+ *
+ * El alcance por creador («Ana ve solo lo de Camilo», ACC-6) lo pone cada
+ * consulta con scopeFilter(); en estas cuatro también lo pone la base,
+ * para que una consulta cruda que se olvide de scopeFilter() no devuelva
+ * filas de otro creador. Esa red no deja rastro en ninguna otra lista de
+ * la guardia: una restrictiva que alguien borre o reescriba no abre la
+ * tenencia, así que las comprobaciones de aislamiento siguen en verde y
+ * el alcance desaparece en silencio. Por eso se exige, en cada arranque,
+ * que cada una tenga una política:
+ *   · RESTRICTIVE (se suma con AND a la de workspace: nunca abre nada);
+ *   · que alcance a mc_app (TO mc_app, o a un rol del que sea miembro);
+ *   · FOR ALL y sin WITH CHECK, para que la fila nueva de un INSERT o un
+ *     UPDATE pase por la misma condición;
+ *   · con exactamente la forma de POLITICA_POR_CREADOR.
+ * Si falta, la tabla sale en `alcancePorCreador` con lo que le falta.
+ */
+export const TABLAS_CON_ALCANCE_POR_CREADOR: Readonly<Record<string, string>> = {
+  social_connection: 'las cuentas conectadas de cada creador (Conexiones): tokens, métricas de cuenta y consentimientos cuelgan de ellas',
+  post: 'los videos de cada creador y, por ellos, sus métricas y su lugar en las campañas',
+  campaign: 'las campañas de cada creador (Campañas), y por ellas sus facturas, reportes y aportes de la marca',
+  deal: 'los negocios de Ventas con su monto; un negocio sin creador no cae en ningún alcance por creador',
+};
+
+/**
+ * La forma de la política por creador tal como la escribe pg_get_expr
+ * (0082 §2). Postgres le pone alias a la subconsulta, y el texto puede
+ * variar en espacios entre versiones; nada más.
+ */
+const POLITICA_POR_CREADOR =
+  /^\(\(\s*SELECT session_sees_all_creators\(\)(?: AS session_sees_all_creators)?\s*\) OR scope_allows\('creator'::text, creator_id\)\)$/;
+
+/** ¿Esta política es la red del alcance por creador? Ver TABLAS_CON_ALCANCE_POR_CREADOR. */
+function esPoliticaPorCreador(p: { permisiva: boolean; aplica: boolean; cmd: string; qual: string | null; with_check: string | null }): boolean {
+  return !p.permisiva && p.aplica && p.cmd === '*' && p.with_check === null && p.qual !== null && POLITICA_POR_CREADOR.test(p.qual.trim());
+}
 
 /**
  * Las reglas (CREATE RULE) de `public` que no son el _RETURN de una
@@ -1519,6 +1571,11 @@ export interface EstadoDelEsquema {
   disparadoresDefiner: string[];
   /** Disparadores de DISPARADORES_DE_CANDADO que no existen o están desactivados, con lo que cierran. */
   candadosQueFaltan: string[];
+  /**
+   * Tablas de TABLAS_CON_ALCANCE_POR_CREADOR sin su política restrictiva
+   * por creador (0082, ACC-7), con lo que les falta.
+   */
+  alcancePorCreador: string[];
   /** Reglas de `public` que no son el _RETURN de una vista, sin declarar. */
   reglas: string[];
   /**
@@ -2428,6 +2485,25 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
         `${DISPARADORES_DE_CANDADO[c.clave] ?? 'sin motivo declarado'})`,
     );
 
+  // ---- el alcance por creador en la base (ACC-7): cada tabla de la
+  //      lista, con su política restrictiva y con su forma. Una tabla que
+  //      no existe se dice como tal; sin el inventario de políticas no se
+  //      afirma nada (inventarioLeido ya lo reporta).
+  const alcancePorCreador = inventarioLeido
+    ? Object.keys(TABLAS_CON_ALCANCE_POR_CREADOR).flatMap((tabla) => {
+        if (!porNombre.has(tabla)) return [`${tabla} (no existe)`];
+        const suyas = politicasPorTabla.get(tabla) ?? [];
+        if (suyas.some(esPoliticaPorCreador)) return [];
+        const parecidas = suyas.filter((p) => !p.permisiva && p.polname.includes('creator'));
+        return [
+          parecidas.length
+            ? `${tabla} (${parecidas.map((p) => p.polname).join(', ')} no es RESTRICTIVE FOR ALL TO ${APP_ROLE} sin WITH CHECK ` +
+              'con la forma de 0082)'
+            : `${tabla} (sin la política restrictiva por creador)`,
+        ];
+      })
+    : [];
+
   // ---- columnas que el código lee y escribe (src/schema): que existan.
   //      Una relación que falta entera se dice una vez, no columna por
   //      columna.
@@ -2898,6 +2974,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     columnasQueFaltan,
     disparadoresDefiner,
     candadosQueFaltan,
+    alcancePorCreador,
     reglas,
     esquemasDeMas,
     accesosEnEsquemas,
@@ -2939,6 +3016,7 @@ export const ESQUEMA_AL_DIA: EstadoDelEsquema = {
   columnasQueFaltan: [],
   disparadoresDefiner: [],
   candadosQueFaltan: [],
+  alcancePorCreador: [],
   reglas: [],
   esquemasDeMas: [],
   accesosEnEsquemas: [],
@@ -3044,6 +3122,15 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
         'su lugar: ' +
         estado.candadosQueFaltan.join('; ') +
         '. Vuelve a activarlos (ALTER TABLE … ENABLE TRIGGER) o aplica la migración que los crea',
+    );
+  }
+  if (estado.alcancePorCreador.length) {
+    partes.push(
+      'faltan políticas de alcance por creador: sin ellas, una consulta que se olvide de scopeFilter() devuelve las ' +
+        'filas de todos los creadores del espacio a quien solo lleva a algunos, y ninguna otra comprobación lo ve ' +
+        '(la tenencia sigue en pie): ' +
+        estado.alcancePorCreador.join('; ') +
+        '. Aplica 0082_alcance_por_creador o vuelve a crear la política como allí',
     );
   }
   if (estado.reglas.length) {
