@@ -169,7 +169,8 @@
  *     un inquilino: con SELECT, `last_value` de audit_log_id_seq es el
  *     volumen de toda la plataforma. mc_app no tiene SELECT ni UPDATE en
  *     ninguna, y USAGE solo en las de tablas donde inserta.
- *   · Y ninguna COLUMNA de una tabla que mc_app lee o escribe sale de
+ *   · Y ninguna COLUMNA de una tabla que mc_app o mc_public_share leen o
+ *     insertan (directo, por PUBLIC, por membresía o por columna) sale de
  *     una secuencia (CIM-11, 0082). Sin SELECT en audit_log_id_seq, el
  *     id de una fila propia seguía siendo el contador al escribirla.
  *
@@ -1181,7 +1182,8 @@ export const SECUENCIAS_DECLARADAS: Readonly<Record<string, string>> = {};
 
 /**
  * Las columnas `tabla.columna` que la base rellena con una secuencia
- * (DEFAULT nextval(…) o identity) en una tabla que mc_app lee o escribe,
+ * (DEFAULT nextval(…) o identity) en una tabla que mc_app o
+ * mc_public_share leen o insertan (también por membresía o por columna),
  * y por qué. Vacía, y debería seguir así (CIM-11, 0082): una secuencia es
  * de la tabla ENTERA, así que el valor de una fila propia —el id que
  * devuelve un INSERT, o el que se lee con SELECT— dice cuántas filas
@@ -1572,7 +1574,7 @@ export interface EstadoDelEsquema {
   otrasDeclaracionesObsoletas: string[];
   /**
    * Columnas que la base rellena con una secuencia (nextval o identity)
-   * en tablas que mc_app lee o escribe, fuera de
+   * en tablas que mc_app o mc_public_share leen o insertan, fuera de
    * CLAVES_DE_SECUENCIA_DECLARADAS: `tabla.columna (secuencia)`. Cada
    * valor es un contador de TODA la plataforma (CIM-11).
    */

@@ -1014,7 +1014,14 @@ código de antes, contra el esquema nuevo, no cierra sus corridas
 siguiente lo retoma; para que no caiga ninguno, `make cron.uninstall`
 antes y `make cron.install` al final (pide CRON_SECRET). Si el
 `lock_timeout` de 15 s corta la migración, es que un turno tenía la
-tabla: se vuelve a correr (es re-ejecutable).
+tabla: se vuelve a correr (es re-ejecutable). Va detrás de
+`0078_equipo` … `0081_lo_que_importa` (ACC-4 y RES-3): nació como 0078 y
+se renumeró al mezclar `rasheed/integracion`. Además del tipo de las
+claves deja `deal_stage_history.step` con índice único `(deal_id, step)`
+(las filas viejas se numeran con `row_number()`, así que el relleno no
+choca), `clock_timestamp()` en los registros y las funciones de estado
+de outreach (`outreach_writer_status`, `outreach_classifier_status`)
+desempatando por `finished_at` en vez de por el id.
 
 **Pulido r1 (25-sep-2026), lo que cambió en el esquema de esta serie**
 (0046, 0051, 0056 y 0058, todas sin aplicar): la web no cambia `channel`,

@@ -740,9 +740,16 @@ máquina.
   fila propia decía cuántas escribió toda la plataforma. Las quince
   claves son `uuid DEFAULT gen_random_uuid()`, y la guardia reporta
   cualquier columna con `nextval(…)` o identity en una tabla que `mc_app`
-  lee o escribe (`clavesDeSecuencia`). Para ordenar, la fecha: los
-  registros (`api_call_log`, `audit_log`, `job_run`) la toman de
-  `clock_timestamp()`, así que dos filas de una transacción no empatan.
+  o `mc_public_share` leen o insertan, directo, por PUBLIC, por membresía
+  o por columna (`clavesDeSecuencia`, el mismo criterio que la
+  comprobación final de 0082). Para ordenar, la fecha: los registros
+  (`api_call_log`, `audit_log`, `job_run`) la toman de
+  `clock_timestamp()`, así que dos filas de una transacción no empatan;
+  «la última corrida» de un job desempata por `finished_at`
+  (`ORDEN_ULTIMA_CORRIDA` de `@mc/db/queries/worker`), y los pasos de un
+  negocio por `deal_stage_history.step`, único por negocio. Ningún código
+  trata un id como número: `test/ids-sin-contador-codigo.test.ts` lo
+  busca en toda la plataforma.
 - **Nada corre con los privilegios de otro sin declararlo** (**0029**).
   Postgres no mira EXECUTE al disparar: un disparador SECURITY DEFINER
   corre con su dueño para cualquiera que escriba en la tabla, aunque a
