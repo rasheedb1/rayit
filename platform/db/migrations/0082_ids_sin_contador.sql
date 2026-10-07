@@ -87,8 +87,9 @@
 --       started_at ganaba cualquiera. Desempatan por finished_at, como
 --       el runner y la salud del worker (ORDEN_ULTIMA_CORRIDA de
 --       @mc/db/queries/worker).
---   5 · Una comprobación al final: si queda una columna con DEFAULT
---       nextval(…) o identity en una tabla de `public` donde mc_app o
+--   5 · Una comprobación al final: si queda una columna con identity o
+--       con un DEFAULT que llame a nextval(…) (en cualquier parte de la
+--       expresión, no solo al principio) en una tabla de `public` donde mc_app o
 --       mc_public_share leen o insertan (directo, por PUBLIC, por
 --       membresía o por columna), la migración falla. La guardia de
 --       packages/db/src/esquema.ts lo vigila después con el mismo
@@ -99,13 +100,29 @@
 -- milisegundos. lock_timeout corta si una transacción larga (un turno
 -- del worker) tiene la tabla: se reintenta con el worker en pausa.
 --
--- Despliegue. El código de esta rama lee job_run.id como texto (el
--- runId del runner) y el de antes como número: con el esquema nuevo y
--- el código viejo, Number(uuid) es NaN y la corrida no se cierra. Se
--- aplica y se despliega seguido: make db.migrate, make db.guardia y
--- make vercel.deploy PROD=1. Un turno que caiga en medio falla y el
--- siguiente lo retoma; para que no caiga ninguno, make cron.uninstall
--- antes y make cron.install después (docs/ventas-outreach.md §5.2).
+-- Despliegue. Ningún código sirve contra los dos esquemas:
+--   · el viejo contra 0082 no arranca en frío. Su guardia (la de
+--     packages/db/src/esquema.ts antes de esta rama) pide USAGE en
+--     deal_stage_history_id_seq y en las otras catorce secuencias que
+--     0082 borra, y en producción from-env.ts lanza ese error: cada
+--     arranque en frío de la web en Vercel responde con un error, no
+--     solo el cron. Y la instancia que siga caliente lee job_run.id
+--     como número: Number(uuid) es NaN y la corrida no se cierra;
+--   · el nuevo contra el esquema de antes tampoco arranca: su guardia ve
+--     0082 pendiente.
+-- Así que el código nuevo se construye ANTES de migrar, sin dominio, y
+-- se promueve justo después; la ventana es lo que tarda la migración
+-- más una promoción (segundos), no un build. Desde platform/:
+--   1 · ./scripts/vercel.sh deploy --prod --skip-domain
+--       (build de producción con las variables de producción, sin
+--       tocar el dominio; imprime la URL del despliegue: <url>)
+--   2 · make cron.uninstall
+--   3 · make db.migrate   y   make db.guardia   (en verde)
+--   4 · make vercel.run ARGS="promote <url> --yes"
+--   5 · make cron.install   y   make cron.status
+-- Si 3 falla, la migración entera se deshace (va en una transacción):
+-- no se promueve nada, se vuelve a 5 y la web vieja sigue sirviendo.
+-- Detalle y por qué no una vista previa: docs/ventas-outreach.md §5.2.
 --
 -- Re-ejecutable: CREATE OR REPLACE VIEW, y cada tabla se convierte solo
 -- si su id sigue siendo bigint.
@@ -391,7 +408,10 @@ GRANT EXECUTE ON FUNCTION outreach_classifier_status() TO mc_app;
 -- migración no termine dejando una, con su mismo criterio: mc_app o el
 -- rol de los enlaces públicos (mc_public_share) leen o insertan en la
 -- tabla. has_any_column_privilege mira también lo heredado por PUBLIC y
--- por membresía, y lo concedido por columna.
+-- por membresía, y lo concedido por columna. El DEFAULT cuenta si llama a
+-- nextval( en CUALQUIER parte, no solo al principio: un folio como
+-- 'Q-' || nextval(…) también es el contador (la misma expresión regular,
+-- sin ancla, que SQL_CLAVES_DE_SECUENCIA de la guardia).
 -- =====================================================================
 DO $$
 DECLARE
@@ -404,7 +424,7 @@ BEGIN
     JOIN pg_namespace n ON n.oid = c.relnamespace
     LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND a.attnum > 0 AND NOT a.attisdropped
-     AND (a.attidentity <> '' OR pg_get_expr(d.adbin, d.adrelid) ~ '^nextval\(')
+     AND (a.attidentity <> '' OR pg_get_expr(d.adbin, d.adrelid) ~ 'nextval\(')
      AND EXISTS (SELECT 1 FROM pg_roles r
                   WHERE r.rolname IN ('mc_app', 'mc_public_share')
                     AND has_any_column_privilege(r.oid, c.oid, 'SELECT, INSERT'));

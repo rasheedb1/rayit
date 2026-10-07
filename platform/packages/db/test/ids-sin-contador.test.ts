@@ -21,6 +21,8 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { listSql, MIGRATIONS_DIR } from '../../../db/lib/aplicar.mjs';
 import { applySeeds, createEmbeddedDb, SEED_DIR, type EmbeddedDb } from '../src/embedded.ts';
 import { estadoDelEsquema, explicarEsquema } from '../src/esquema.ts';
@@ -346,6 +348,49 @@ describe('0082 convierte las claves con las filas dentro', () => {
       assert.match(explicacion, /tablas que mc_app o mc_public_share leen o escriben \(directo, por PUBLIC, por membresía o por columna\)/);
     } finally {
       await db.execAsSuperuser('DROP TABLE zz_cim11_contador, zz_cim11_identidad, zz_cim11_del_worker');
+    }
+  });
+
+  test('la guardia y la comprobación final de 0082 §5 frenan un DEFAULT que llama a nextval dentro de una expresión', async () => {
+    // Un folio como 'Q-' || nextval(…) es el mismo contador con otro
+    // disfraz: el DEFAULT no EMPIEZA por nextval, pero lo lleva. La
+    // guardia y §5 tienen que decir lo mismo; §5 se lee del archivo de la
+    // migración (desde su encabezado hasta el final) y se ejecuta tal cual.
+    const archivos = await listSql(MIGRATIONS_DIR);
+    const nombre = archivos.find((f) => f.endsWith('_ids_sin_contador.sql'))!;
+    const migracion = await readFile(join(MIGRATIONS_DIR, nombre), 'utf8');
+    const inicio = migracion.indexOf('-- 5 · Comprobación');
+    assert.ok(inicio > 0, 'falta §5 en la migración');
+    const comprobacion = migracion.slice(inicio);
+    await db.execAsSuperuser(comprobacion); // sin la tabla nueva, pasa
+
+    await db.execAsSuperuser(
+      `SET ROLE ${MIGRADOR};
+       CREATE SEQUENCE zz_cim11_folio_seq;
+       CREATE TABLE zz_cim11_folio (
+         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+         folio text NOT NULL DEFAULT ('Q-' || nextval('zz_cim11_folio_seq')::text)
+       );
+       REVOKE ALL ON zz_cim11_folio FROM mc_app, mc_public_share, PUBLIC;
+       GRANT SELECT ON zz_cim11_folio TO mc_app;
+       RESET ROLE`,
+    );
+    try {
+      const { rows } = await db.queryAsSuperuser<{ def: string }>(
+        `SELECT pg_get_expr(d.adbin, d.adrelid) AS def
+           FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+          WHERE d.adrelid = 'zz_cim11_folio'::regclass AND a.attname = 'folio'`,
+      );
+      const def = rows[0]!.def;
+      assert.doesNotMatch(def, /^nextval\(/, `el DEFAULT no empieza por nextval: ${def}`);
+      const e = await estadoDelEsquema(db);
+      assert.deepEqual(e.clavesDeSecuencia, [`zz_cim11_folio.folio (${def})`]);
+      await assert.rejects(
+        db.execAsSuperuser(comprobacion),
+        /quedan claves de secuencia global donde llegan mc_app o mc_public_share: zz_cim11_folio\.folio/,
+      );
+    } finally {
+      await db.execAsSuperuser('DROP TABLE zz_cim11_folio; DROP SEQUENCE zz_cim11_folio_seq');
     }
   });
 

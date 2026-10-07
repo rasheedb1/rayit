@@ -16,8 +16,15 @@
  *   - `id DESC` (o `<alias>.id DESC`) en un ORDER BY sobre una de las
  *     quince tablas convertidas: era «la última que se escribió», y con
  *     un uuid al azar el desempate cambia entre corridas (la ronda 2
- *     encontró dos en resumen.ts y una en el README del worker). Este
- *     también mira los .md: una consulta de un manual se copia tal cual.
+ *     encontró dos en resumen.ts y una en el README del worker).
+ *   - `id` (o `<alias>.id`) como PRIMERA clave de un ORDER BY sobre una
+ *     de las quince, en cualquier dirección: `ORDER BY id` daba el orden
+ *     de escritura y desde 0082 da uno al azar (la ronda 3 encontró uno
+ *     en el manual de CON-8). Como último desempate, detrás de claves con
+ *     significado (`ORDER BY called_at, s.id`), se acepta: solo hace que
+ *     el resultado no dependa del plan.
+ *   Los dos de ORDER BY también miran los .md: una consulta de un manual
+ *   se copia tal cual.
  * Las migraciones aplicadas (hasta 0082) son inmutables y no se miran; las
  * que vengan después, sí.
  */
@@ -50,25 +57,42 @@ const CONVERTIDAS = [
 ];
 /** Cuántas líneas hacia atrás se busca el FROM/JOIN que da el alias del ORDER BY. */
 const VENTANA = 25;
-const ID_DESC = /(?:ORDER BY|,)\s*(?:(\w+)\.)?id\s+DESC\b/gi;
+/** Las dos formas de ordenar por el id como si dijera cuál fue antes. */
+const ORDEN_POR_ID: ReadonlyArray<{ nombre: string; re: RegExp }> = [
+  // `id DESC` en cualquier posición: era «la última que se escribió».
+  { nombre: 'id DESC', re: /(?:ORDER BY|,)\s*(?:(\w+)\.)?id\s+DESC\b/gi },
+  // `id` como primera clave, ASC o DESC: era el orden de escritura. Detrás
+  // de una coma (último desempate) no cuenta.
+  { nombre: 'id como primera clave', re: /ORDER BY\s+(?:(\w+)\.)?id\b(?!_)/gi },
+];
 
 /**
- * `id DESC` como desempate sobre una tabla convertida. El alias del
- * ORDER BY (o ninguno) se resuelve contra el FROM/JOIN de las líneas de
+ * Un ORDER BY por el id que hace de orden sobre una tabla convertida. El
+ * alias del ORDER BY se resuelve contra el FROM/JOIN de las líneas de
  * arriba: `s.id DESC` es hallazgo si `s` es post_metric_snapshot, no si
- * es notification_ack (que nació con uuid y desempata con su fecha).
+ * es notification_ack (que nació con uuid y desempata con su fecha). Sin
+ * alias, manda el ÚLTIMO FROM antes del ORDER BY, que es el de su
+ * consulta: `FROM post ORDER BY id` no es hallazgo aunque unas líneas
+ * más arriba otra consulta lea post_metric_snapshot.
  */
-function idDescSobreConvertida(lineas: readonly string[], i: number): string | null {
+function ordenPorIdSobreConvertida(lineas: readonly string[], i: number): string | null {
   const codigo = sinComentario(lineas[i]!);
-  const contexto = lineas.slice(Math.max(0, i - VENTANA), i + 1).map(sinComentario).join('\n');
-  for (const m of codigo.matchAll(ID_DESC)) {
-    const alias = m[1];
-    const tablas = CONVERTIDAS.join('|');
-    const re = alias
-      ? new RegExp(`\\b(?:FROM|JOIN)\\s+(?:public\\.)?(${tablas})\\s+(?:AS\\s+)?${alias}\\b`, 'i')
-      : new RegExp(`\\b(?:FROM|JOIN)\\s+(?:public\\.)?(${tablas})\\b`, 'i');
-    const t = re.exec(contexto);
-    if (t) return `${alias ? `${alias}.` : ''}id DESC sobre ${t[1]}`;
+  const arriba = lineas.slice(Math.max(0, i - VENTANA), i).map(sinComentario).join('\n');
+  const tablas = CONVERTIDAS.join('|');
+  for (const { nombre, re: orden } of ORDEN_POR_ID) {
+    for (const m of codigo.matchAll(orden)) {
+      const alias = m[1];
+      const antes = `${arriba}\n${codigo.slice(0, m.index)}`;
+      let tabla: string | undefined;
+      if (alias) {
+        const re = new RegExp(`\\b(?:FROM|JOIN)\\s+(?:public\\.)?(${tablas})\\s+(?:AS\\s+)?${alias}\\b`, 'i');
+        tabla = re.exec(antes)?.[1];
+      } else {
+        const ultimo = [...antes.matchAll(/\bFROM\s+(?:public\.)?(\w+)/gi)].at(-1)?.[1]?.toLowerCase();
+        tabla = ultimo && CONVERTIDAS.includes(ultimo) ? ultimo : undefined;
+      }
+      if (tabla) return `${alias ? `${alias}.` : ''}${nombre} sobre ${tabla}`;
+    }
   }
   return null;
 }
@@ -110,8 +134,8 @@ test('ningún código trata como número un id que es uuid (el grep de CIM-11)',
       lineas.forEach((linea, i) => {
         const codigo = sinComentario(linea);
         if (esCodigo) for (const p of PATRONES) if (p.re.test(codigo)) hallazgos.push(`${rel}:${i + 1} ${p.nombre}: ${linea.trim()}`);
-        const desc = idDescSobreConvertida(lineas, i);
-        if (desc) hallazgos.push(`${rel}:${i + 1} ${desc}: ${linea.trim()}`);
+        const orden = ordenPorIdSobreConvertida(lineas, i);
+        if (orden) hallazgos.push(`${rel}:${i + 1} ${orden}: ${linea.trim()}`);
       });
     }
   }
@@ -144,10 +168,10 @@ test('los patrones del grep encuentran lo que la ronda 1 dejó vivo', () => {
   }
 });
 
-test('el patrón de id DESC encuentra lo que la ronda 2 dejó vivo, y no confunde las tablas que nacieron con uuid', () => {
+test('los patrones de ORDER BY id encuentran lo que las rondas 2 y 3 dejaron vivo, y no confunden las tablas que nacieron con uuid', () => {
   const caza = (sql: string) => {
     const lineas = sql.split('\n');
-    return lineas.some((_, i) => idDescSobreConvertida(lineas, i) !== null);
+    return lineas.some((_, i) => ordenPorIdSobreConvertida(lineas, i) !== null);
   };
   const vivos = [
     // resumen.ts (listKnownPosts), con el FROM unas líneas arriba.
@@ -157,6 +181,11 @@ test('el patrón de id DESC encuentra lo que la ronda 2 dejó vivo, y no confund
     // El README del worker, sin alias.
     'SELECT id, job_id FROM job_run ORDER BY id DESC LIMIT 20;',
     'FROM audit_log AS a JOIN deal d ON true ORDER BY a.created_at DESC, a.id DESC',
+    // El manual de CON-8 (ronda 3): el id como única clave, ascendente.
+    "SELECT endpoint, ok, http_status FROM api_call_log\n WHERE connection_id = '<id>' ORDER BY id;",
+    // Primera clave con alias, en cualquier dirección.
+    'SELECT j.job_id FROM job_run j ORDER BY j.id, j.started_at',
+    'FROM deal_stage_history h WHERE true ORDER BY h.id ASC',
   ];
   for (const v of vivos) assert.ok(caza(v), v);
   const bien = [
@@ -166,6 +195,15 @@ test('el patrón de id DESC encuentra lo que la ronda 2 dejó vivo, y no confund
     'FROM post_metric_snapshot s ORDER BY s.captured_at DESC, s.age_hours DESC, s.id',
     // Lo que el arreglo deja.
     'FROM job_run ORDER BY started_at DESC, finished_at DESC NULLS FIRST LIMIT 20;',
+    "FROM api_call_log WHERE connection_id = '<id>' ORDER BY called_at, endpoint;",
+    // El id como último desempate, ascendente, detrás de una fecha.
+    'FROM job_run ORDER BY started_at, finished_at NULLS LAST, id',
+    // Una columna que empieza por id no es el id.
+    'FROM post_metric_snapshot s ORDER BY s.id_externo',
+    // Una tabla que nació con uuid, el id como primera clave: no es un contador.
+    'SELECT n.id FROM notification_ack n ORDER BY n.id',
+    // La consulta de abajo lee otra tabla: manda su FROM, no el de la de arriba.
+    "SELECT * FROM post_metric_snapshot;\nSELECT id, first_seen_at FROM post ORDER BY id",
     '-- FROM job_run ORDER BY id DESC (un comentario no cuenta)',
   ];
   for (const b of bien) assert.ok(!caza(b), b);
