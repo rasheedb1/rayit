@@ -18,7 +18,6 @@ import {
   type PostSourceTarget,
   type PostSources,
 } from '@mc/connectors';
-import type { Queryable } from '../../runner/db.ts';
 import type { JobContext, JobPayload } from '../../runner/registry.ts';
 import { notifyBrokenAccount, platformName } from './aviso-cuenta.ts';
 
