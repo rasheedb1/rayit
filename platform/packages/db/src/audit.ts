@@ -275,7 +275,7 @@ export async function audit(tx: WorkspaceTx, entry: AuditEntry): Promise<void> {
 export interface JobAuditEntry extends AuditEntry {
   /** Explícito: el worker corre como mc_worker y RLS no lo fija por él. */
   workspaceId: string;
-  /** Qué job y qué corrida (job_run.id, un uuid desde 0078). Va en after._job; no sale de la base. */
+  /** Qué job y qué corrida (job_run.id, un uuid desde 0082). Va en after._job; no sale de la base. */
   job: { id: string; runId: string };
 }
 

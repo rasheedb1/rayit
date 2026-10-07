@@ -68,7 +68,7 @@ export async function getStageConversion(tx: WorkspaceTx, opts: StageConversionO
     // La primera entrada de cada negocio en cada etapa, ordenada por
     // (changed_at, step) y no solo por la hora: un negocio que se crea y se
     // mueve en la misma transacción deja dos filas con el mismo now(), y
-    // solo step (1, 2, 3… dentro del negocio, 0078) dice cuál fue antes.
+    // solo step (1, 2, 3… dentro del negocio, 0082) dice cuál fue antes.
     // Hasta CIM-11 era el id bigserial: un contador de toda la plataforma.
     // Con «changed_at >=» un negocio que nace en «En conversación» y en la
     // misma transacción vuelve a «Nuevo» contaba como que avanzó desde

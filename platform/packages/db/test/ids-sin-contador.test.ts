@@ -1,10 +1,10 @@
 /**
- * CIM-11 · Ninguna fila que mc_app lea lleva un contador global (0078).
+ * CIM-11 · Ninguna fila que mc_app lea lleva un contador global (0082).
  *
  * La actualización se prueba CON DATOS, como va a pasar en Supabase: una
- * base migrada hasta la migración anterior a 0078 (la forma vieja, con
+ * base migrada hasta la migración anterior a 0082 (la forma vieja, con
  * `id bigserial`), los seeds del repositorio encima y una fila a mano en
- * cada tabla que los seeds dejan vacía, y entonces 0078. Lo que se mide:
+ * cada tabla que los seeds dejan vacía, y entonces 0082. Lo que se mide:
  *
  *   - ninguna fila se pierde ni cambia: por tabla, el mismo número de
  *     filas y la misma huella de todo lo que no es el id (las claves
@@ -26,7 +26,7 @@ import { applySeeds, createEmbeddedDb, SEED_DIR, type EmbeddedDb } from '../src/
 import { estadoDelEsquema, explicarEsquema } from '../src/esquema.ts';
 import { SETUP_TIMEOUT, WORKSPACE_LAURA } from './pglite.ts';
 
-/** Las quince tablas que tenían `id bigserial` (ver la cabecera de 0078). */
+/** Las quince tablas que tenían `id bigserial` (ver la cabecera de 0082). */
 const TABLAS = [
   'account_metric_snapshot', 'api_call_log', 'api_quota_usage', 'audit_log', 'brand_account_snapshot',
   'deal_stage_history', 'external_post_snapshot', 'idea_evidence', 'job_run', 'post_engagement_curve',
@@ -83,7 +83,7 @@ interface Huella extends Record<string, unknown> {
 
 /**
  * Por tabla: cuántas filas y un md5 de todas ellas SIN el id (ni el step
- * que 0078 le añade a deal_stage_history, que se mide aparte), en un orden
+ * que 0082 le añade a deal_stage_history, que se mide aparte), en un orden
  * que no depende del id. Si la conversión perdiera, duplicara o tocara
  * una fila (una clave ajena incluida), la huella cambia.
  */
@@ -116,7 +116,7 @@ async function huellaDeLosCortes(db: EmbeddedDb): Promise<{ filas: number; huell
   return rows[0]!;
 }
 
-describe('0078 convierte las claves con las filas dentro', () => {
+describe('0082 convierte las claves con las filas dentro', () => {
   let db: EmbeddedDb;
   let antes: Huella[];
   let cortesAntes: { filas: number; huella: string };

@@ -170,7 +170,7 @@
  *     volumen de toda la plataforma. mc_app no tiene SELECT ni UPDATE en
  *     ninguna, y USAGE solo en las de tablas donde inserta.
  *   · Y ninguna COLUMNA de una tabla que mc_app lee o escribe sale de
- *     una secuencia (CIM-11, 0078). Sin SELECT en audit_log_id_seq, el
+ *     una secuencia (CIM-11, 0082). Sin SELECT en audit_log_id_seq, el
  *     id de una fila propia seguía siendo el contador al escribirla.
  *
  * LA GUARDIA NO FALLA ABIERTA
@@ -875,7 +875,7 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     tabla: ['INSERT', 'SELECT'],
     motivo: 'el paso de etapa de la aceptación queda en el historial (0030 §3)',
   },
-  // Hasta 0078 también USAGE en deal_stage_history_id_seq, para el id del
+  // Hasta 0082 también USAGE en deal_stage_history_id_seq, para el id del
   // INSERT. Desde CIM-11 el id es gen_random_uuid() y la secuencia no existe.
   pipeline_stage: {
     tabla: ['SELECT'],
@@ -1182,7 +1182,7 @@ export const SECUENCIAS_DECLARADAS: Readonly<Record<string, string>> = {};
 /**
  * Las columnas `tabla.columna` que la base rellena con una secuencia
  * (DEFAULT nextval(…) o identity) en una tabla que mc_app lee o escribe,
- * y por qué. Vacía, y debería seguir así (CIM-11, 0078): una secuencia es
+ * y por qué. Vacía, y debería seguir así (CIM-11, 0082): una secuencia es
  * de la tabla ENTERA, así que el valor de una fila propia —el id que
  * devuelve un INSERT, o el que se lee con SELECT— dice cuántas filas
  * escribió toda la plataforma hasta ese momento. Restar dos es medir el
@@ -3176,7 +3176,7 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
       `hay columnas que la base rellena con una secuencia en tablas que ${APP_ROLE} lee o escribe; una secuencia ` +
         'es de la tabla entera, así que el valor de una fila propia dice cuántas escribió toda la plataforma: ' +
         estado.clavesDeSecuencia.join(', ') +
-        '. Pásalas a uuid DEFAULT gen_random_uuid() en una migración (ver 0078), o decláralas en ' +
+        '. Pásalas a uuid DEFAULT gen_random_uuid() en una migración (ver 0082), o decláralas en ' +
         'CLAVES_DE_SECUENCIA_DECLARADAS con su motivo',
     );
   }

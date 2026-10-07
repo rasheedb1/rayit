@@ -1,11 +1,10 @@
 -- =====================================================================
--- 0078 · Ninguna fila que mc_app lea lleva un contador global (CIM-11)
+-- 0082 · Ninguna fila que mc_app lea lleva un contador global (CIM-11)
 -- ---------------------------------------------------------------------
--- Número: 0078, la siguiente libre de esta serie (la prueba de
--- db/migrations no admite huecos). rasheed/integracion ya tiene
--- 0078–0081 (ACC-4 y RES-3): al integrar, esta pasa detrás de la última
--- y se renumeran también sus menciones («0078» en esquema.ts, las
--- pruebas, el README de @mc/db y los documentos). La prueba de la
+-- Número: 0082. Nació como 0078; al mezclar rasheed/integracion ese
+-- número y los tres siguientes ya eran de ACC-4 (0078–0080) y RES-3
+-- (0081), así que pasa detrás de la última. Ninguna de esas cuatro crea
+-- una clave de secuencia (lo comprueba §5 y la guardia). La prueba de la
 -- conversión la busca por el nombre, no por el número. No está aplicada
 -- en ningún sitio.
 --
@@ -152,7 +151,7 @@ CREATE INDEX IF NOT EXISTS deal_stage_history_deal_id_step_idx ON deal_stage_his
 
 COMMENT ON COLUMN deal_stage_history.step IS
   'El orden del paso dentro de su negocio (1, 2, 3…): lo pone deal_stage_history_step() al insertar. '
-  'Desempata dos pasos con la misma changed_at (CIM-11, 0078).';
+  'Desempata dos pasos con la misma changed_at (CIM-11, 0082).';
 
 CREATE OR REPLACE FUNCTION deal_stage_history_step()
 RETURNS trigger

@@ -355,7 +355,7 @@ un correo dentro de un string queda como `[correo omitido]`.
 (`dumpTextColumns`, el precedente de CON-3).
 
 `audit()` no devuelve nada (el id de `audit_log` es un uuid al azar
-desde **0078**, y nadie lo necesita fuera de la base), no hay función que la lea (la pantalla es de
+desde **0082**, y nadie lo necesita fuera de la base), no hay función que la lea (la pantalla es de
 AGE-2) y nadie la corrige: `mc_app` tiene SELECT + INSERT y nada más
 (**0025 §5**; la guardia lo exige en `PRIVILEGIOS_DE_LA_APP`).
 
@@ -735,7 +735,7 @@ máquina.
   columnas, el privilegio va por columna y se declara en `soloColumnas`:
   `workspace` solo se actualiza en sus columnas de ajustes, así que el
   plan no se lo cambia el propio workspace (**0024 §7.6**).
-- **Ninguna fila que `mc_app` lea lleva un contador global** (**0078**,
+- **Ninguna fila que `mc_app` lea lleva un contador global** (**0082**,
   CIM-11). Una secuencia es de la tabla entera: el id `bigserial` de una
   fila propia decía cuántas escribió toda la plataforma. Las quince
   claves son `uuid DEFAULT gen_random_uuid()`, y la guardia reporta

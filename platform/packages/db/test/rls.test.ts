@@ -2197,12 +2197,12 @@ describe('una fila global no nombra lo que quien lee no ve (0029 §3)', () => {
   });
 });
 
-describe('las secuencias no cuentan lo de los demás (0026 §4), y desde 0078 no hay ninguna (CIM-11)', () => {
+describe('las secuencias no cuentan lo de los demás (0026 §4), y desde 0082 no hay ninguna (CIM-11)', () => {
   const noExiste = (err: unknown) => /does not exist|no existe/i.test(fullMessage(err));
 
   test('el guion de los revisores: last_value ya no tiene de dónde leerse', async () => {
     // Desde B devolvía 360 en account_metric_snapshot_id_seq: el volumen
-    // de TODA la plataforma. 0026 §4 le quitó a mc_app el SELECT; 0078
+    // de TODA la plataforma. 0026 §4 le quitó a mc_app el SELECT; 0082
     // pasó las claves a uuid y borró las secuencias.
     for (const seq of ['account_metric_snapshot_id_seq', 'audit_log_id_seq', 'api_call_log_id_seq']) {
       await assert.rejects(t.db.withWorkspace(WS_B, (tx) => tx.query(`SELECT last_value FROM ${seq}`)), noExiste, seq);
@@ -2219,7 +2219,7 @@ describe('las secuencias no cuentan lo de los demás (0026 §4), y desde 0078 no
     const ids = await t.db.withWorkspace(WS_B, async (tx) => {
       const alta = () =>
         tx.query<{ id: string }>(
-          "INSERT INTO audit_log (workspace_id, action, entity_type) VALUES (current_workspace_id(), 'prueba.0078', 'test') RETURNING id::text AS id",
+          "INSERT INTO audit_log (workspace_id, action, entity_type) VALUES (current_workspace_id(), 'prueba.0082', 'test') RETURNING id::text AS id",
         );
       return [(await alta()).rows[0]?.id, (await alta()).rows[0]?.id];
     });
