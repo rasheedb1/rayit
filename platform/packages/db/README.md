@@ -516,8 +516,13 @@ Las reglas, y por qué:
 - **Lo que esa política esconde y el código necesita saber.** Antes se
   buscaba «la fila ya existe, pero fuera de tu alcance» sin filtro; ahora
   la base no la enseña. Si quien lo sabe es un índice único, la escritura
-  va en `writeOrScopeError(tx, savepoint, restricción, fn)`: el choque de
-  una persona acotada es `ScopeError` y la transacción sigue usable. Si
+  va en `writeOrScopeError(tx, savepoint, restricción, fn, esVisible)`:
+  si choca, la persona está acotada y la fila con la que choca no la ve
+  (`esVisible`, una SELECT cruda que ya pasa por la política), es
+  `ScopeError`; si la ve, es el 23505 de siempre (un doble envío, dos
+  pestañas). La transacción sigue usable en los dos casos: el SAVEPOINT
+  lo lleva `withSavepoint` (src/pg-error.ts), el único recorrido
+  SAVEPOINT / ROLLBACK TO / RELEASE de @mc/db (también lo usa Equipo). Si
   no hay índice (el @ de una cuenta), una función que responde solo sí o
   no (`public_account_out_of_scope`, 0082 §4).
 - **De qué creador es un negocio** sale de UNA lista en la base,

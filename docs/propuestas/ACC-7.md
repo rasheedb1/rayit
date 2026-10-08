@@ -3,7 +3,8 @@
 > Historia ACC-7 (épico ACC, sprint 6). Ramas `rasheed/ACC-7-rls-por-creador`,
 > `rasheed/ACC-7-rls-por-creador-r2` (los once hallazgos de la ronda 1),
 > `rasheed/ACC-7-rls-por-creador-r3` (los trece de la ronda 2) y
-> `rasheed/ACC-7-rls-por-creador-r4` (los diecinueve de la ronda 3).
+> `rasheed/ACC-7-rls-por-creador-r4` (los diecinueve de la ronda 3) y
+> `rasheed/ACC-7-rls-por-creador-r5` (los once de la ronda 4).
 > 7 de octubre de 2026. Migración `0082_alcance_por_creador.sql`, **sin
 > aplicar**: la aplica el integrador, y **antes** de desplegar (la guardia
 > del esquema la exige y la web no arranca sin ella).
@@ -105,7 +106,7 @@ sitios, y se arreglaron sin cambiar lo que devuelven:
 
 | Dónde | Quién sabe que la fila existe | Cómo se dice |
 |---|---|---|
-| `createCampaignFromQuote` (campaña viva de la cotización, de otra creadora) | el índice `campaign_quote_id_active_key` | `writeOrScopeError` (src/scope.ts): la escritura va en un SAVEPOINT; si choca con esa restricción y la persona está acotada por creador, es `ScopeError` y la transacción sigue usable. Para quien ve a todos, el choque se relanza tal cual |
+| `createCampaignFromQuote` (campaña viva de la cotización, de otra creadora) | el índice `campaign_quote_id_active_key` | `writeOrScopeError` (src/scope.ts): la escritura va en un SAVEPOINT; si choca con esa restricción, la persona está acotada por creador y la fila con la que choca no la ve (`isVisible`, ronda 5), es `ScopeError` y la transacción sigue usable. Para quien ve a todos, o si la fila es suya, el choque se relanza tal cual |
 | `upgradePublicAccountToOAuth` (el open_id ya es de una cuenta de otra creadora) | el UNIQUE `(platform_id, external_account_id, workspace_id)` | `writeOrScopeError`, igual |
 | `findPublicAccountByHandle` (el @ ya es de otra creadora) | ningún índice | `public_account_out_of_scope(platform, handle)` (0082 §4): SECURITY DEFINER que responde solo sí o no, atada al espacio fijado, solo para mc_app. Declarada en `FUNCIONES_DEFINER_DECLARADAS` |
 
@@ -230,42 +231,92 @@ Varios hallazgos llegaron dos veces (los dos revisores): se agrupan.
 | 14 | `dealNeedsCreator` mandaba a «Nuevo negocio» a quien lo tiene desactivado | `dealNeedsCreator: 'pick' \| 'none' \| null`. `'none'` (acotado solo a creadores dados de baja) tiene su texto, sin «Nuevo negocio». Probado en pglite y en la acción de la bandeja |
 | 16 | Nada de ACC-7 se podía ver en la demo | Seed `0013_demo_agencia.sql` y `verify/0013.sql`: ver «Cómo verlo» |
 
+## Ronda 5: los once hallazgos de la ronda 4
+
+| # | Qué | Cómo quedó |
+|---|---|---|
+| 1 | El ejecutivo acotado aceptaba una señal de una marca con un negocio abierto de otro creador y abría un segundo sin avisar | `acceptSignal` pregunta `hasOpenDealOutOfScope` cuando no ve ninguno abierto: `{ dealId: null, dealCreated: false, dealHiddenOutOfScope: true }`, sin tocar nada y con la señal pendiente. `listSignals` trae `openDealHidden` y la tarjeta lo dice antes («…aceptarla no abre otro»); la acción lo dice en la tarjeta. Es la regla de la bandeja (ver «Una regla…»). Prueba: el ejecutivo acotado acepta una señal de una marca con un negocio abierto de B; la dueña, con la misma, la suma al de B |
+| 2 | `deal_creator_locked` respondía por un negocio oculto | 0082 §7 exige que la sesión vea `p_deal` (`session_sees_all_creators() OR scope_allows('creator', d.creator_id)`); por uno oculto o inexistente, falso. md5 nuevo en `CUERPOS_DEL_ALCANCE`. Prueba: el miembro acotado pregunta por `DEAL_SOFIA_ENLACE` con los dos creadores y recibe falso; la dueña, verdadero para Laura |
+| 3 | `writeOrScopeError` llamaba ScopeError a un choque con una fila propia; un ROLLBACK fallido perdía el error | Recibe `isVisible`: después de volver al SAVEPOINT, una SELECT cruda (ya con la política) mira si la fila con la que choca se ve; si se ve, el 23505 de siempre. Sondas en `createCampaignFromQuote` (campaña viva de la cotización) y `upgradePublicAccountToOAuth` (otra cuenta con ese open_id). Si la vuelta falla, llega el error original con la vuelta en su `cause`. Pruebas de los dos casos |
+| 4, 8 | «Creador Sin creador · …» se leía seguido; dos «Cambiar» en la misma tarjeta; un `<button>` suelto; Escape no cerraba | `<dl>` con dt apagado y dd legible, como la cabecera; «Cambiar creador» o «Asignar creador» con el `Button` del kit (`ghost`, `sm`; el kit no tiene variante de enlace y añadirla cambia su API); Escape cierra el selector y devuelve el foco. Pruebas de componente |
+| 5 | Dos recorridos SAVEPOINT a mano | `withSavepoint(tx, name, fn, onError)` en `pg-error.ts`, con `SavepointName` (unión que incluye `cambio_de_rol`) y el identificador validado. Lo usan `writeOrScopeError` y `changeMemberRole` |
+| 6 | El worker movía el negocio de B con la respuesta al outreach de A | `surroundings` calcula el creador de origen con la misma definición que `originCreatorOf` y, si lo hay, solo toma el abierto de ese creador; si no hay, `openDealFromReply` abre el de A. `interestedOutOfScope` aplica lo mismo (fuera solo si el creador de origen no está en el alcance). Pruebas: worker (el de B sigue en «Contactado», el mensaje queda en el de A, el ejecutivo de A lo ve, una segunda respuesta no abre un tercero) y bandeja (abre el de A sin `out_of_scope`) |
+| 7 | Nada de lo acotado se podía ver en la demo sin llaves | `DEMO_USER_ID` llega a las transacciones de las pantallas; el seed 0013 suma a Andrea y a Sara para los estados «elige un creador» y «no puedes abrir». Ver «Cómo verlo» |
+| 9 | El creador en la tarjeta era un nombre suelto | `MESSAGES.pipeline.creatorLine`: «Creador: Camilo Rey» en tarjeta, fila móvil y lista; «Sin creador» se dice solo |
+| 10 | «Por definir · Nutrivé» en Granola Sol; nombres con el creador | «Granola para el desayuno»; los demás negocios y campañas sin «· Camilo» / «· Mariana» |
+| 11 | La regex solo aceptaba comillas rectas | Acepta `"…"`, `«…»` y `“…”`; prueba con el mensaje en español |
+
+## Una regla para «el negocio abierto de la marca» (ronda 4, hallazgos 1 y 6)
+
+Cuatro caminos deciden qué negocio recibe algo de una marca: el radar
+(`acceptSignal`), el worker (`applyIntent` → `surroundings`), la bandeja
+(`reclassifyInboxMessage` → `interestedOutOfScope`) y «Nuevo negocio»
+(`createDeal`). La regla es una:
+
+- **Si el origen dice de qué creador es** (la cuenta que envió el outreach,
+  la de su toque, el brief de su cadencia: `originCreatorLateral` en
+  `outreach/intent.ts`, la misma definición para `originCreatorOf`), el
+  negocio es **por marca y creador**: se mueve el abierto de ese creador
+  o se abre uno suyo. El de otro creador ni se mueve ni impide abrir el
+  suyo, y uno «Sin creador» tampoco se toma (quien lleva solo a A no lo
+  ve, y la bandeja no podría elegirlo). Es Mercado Verde en el seed, con
+  uno de Camilo y otro de Mariana. Worker y bandeja dicen lo mismo; la
+  bandeja solo dice `out_of_scope` si ese creador no está en el alcance
+  de quien corrige.
+- **Si no lo dice** (una señal del radar, una respuesta por una cuenta del
+  espacio sin cadencia), el negocio es **por marca**: la señal o la
+  respuesta se suma al abierto de la marca. Si el único abierto es de un
+  creador que la persona no lleva, no se abre un segundo ni se toca
+  nada: el radar devuelve `dealHiddenOutOfScope` (la señal sigue
+  pendiente, para quien lo lleva) y la bandeja `out_of_scope`. La tarjeta
+  del radar lo dice antes de aceptar (`openDealHidden`).
+- **«Nuevo negocio»** es la elección explícita del creador: abre el de ese
+  creador aunque la marca tenga uno de otro. Es lo que el aviso del radar
+  le propone a quien quiere uno para su creador.
+
 ## Cómo verlo
 
 El seed `0013_demo_agencia.sql` deja «Agencia Norte · demo»
-(`000000a7-0000-4000-8000-000000000001`): Camilo Rey y Mariana Gil,
-Valentina Ortiz (Dueña) y Diego Salas (Ejecutivo de cuenta, acotado a
-Camilo); cuatro marcas propias de la agencia; cinco negocios (dos de cada
-creador, uno «Sin creador», y Mercado Verde con uno de cada uno) y una
-campaña de cada creador. Sin fechas: no
-envejece ni lo toca el worker. `node db/seed/verify/run.mjs 0013`
-comprueba el escenario y, con las mismas funciones que la política, qué
-ve cada persona.
+(`000000a7-0000-4000-8000-000000000001`): Camilo Rey, Mariana Gil y Tomás
+Vega (dado de baja); Valentina Ortiz (Dueña) y tres Ejecutivos de cuenta:
+Diego Salas (acotado a Camilo), Andrea Ríos (a Camilo y Mariana) y Sara
+Núñez (solo a Tomás). Cuatro marcas propias de la agencia; cinco
+negocios (dos de cada creador, uno «Sin creador», y Mercado Verde con uno
+de cada uno) y una campaña de cada creador. Sin fechas: no envejece ni lo
+toca el worker. `node db/seed/verify/run.mjs 0013` comprueba el escenario
+y, con las mismas funciones que la política, qué ve cada persona.
 
-- **Como quien ve a todos, sin llaves:**
-  `DEMO_WORKSPACE_ID=000000a7-0000-4000-8000-000000000001 pnpm --filter @mc/web dev --port 3105`.
-  Ventas › Pipeline enseña el creador en cada tarjeta (fila móvil a 400 px
-  incluida) y «Sin creador» en el de Granola Sol; la ficha de Granola Sol, «Sin
-  creador · Solo lo ve quien ve a todos» y «Cambiar»; «Nuevo negocio»,
-  el selector con los dos creadores. El modo demo no lleva persona en las
-  pantallas (lib/permisos/sesion.ts), así que siempre es la vista de quien
-  ve a todos.
-- **Como el ejecutivo acotado:** con Supabase Auth y el seed aplicado
-  (`make db.seed`), entrar como `diego@agencia-demo.test` con
-  `generate_link` (apps/web/README.md, «Cómo probarlo sin esperar un
-  correo»). Ve solo lo de Camilo; la ficha de Mercado Verde dice que la
-  marca tiene negocios que él no ve; «Nuevo negocio» no pregunta (solo
-  tiene a Camilo). `valentina@agencia-demo.test` es la dueña.
+**Sin llaves, como cualquiera de ellos** (ronda 4, hallazgo 7):
+`DEMO_USER_ID` ya no cambia solo los permisos del marco; también es la
+identidad de las transacciones de las pantallas (`lib/workspace/demo.ts`,
+`getCurrentContext`), así que la base le enseña sus filas:
+
+```bash
+DEMO_WORKSPACE_ID=000000a7-0000-4000-8000-000000000001 \
+DEMO_USER_ID=000000a7-0000-4000-8000-00000000000N \
+pnpm --filter @mc/web dev --port 3105
+```
+
+| N | Persona | Qué se ve |
+|---|---|---|
+| 2 | Valentina, Dueña | todo; el creador en cada tarjeta («Creador: Camilo Rey»); Granola Sol «Sin creador · Solo lo ve…» con «Asignar creador» |
+| 4 | Diego, acotado a Camilo | los dos negocios de Camilo; en Mercado Verde, el aviso de negocios que no ve; «Nuevo negocio» no pregunta |
+| 6 | Andrea, a Camilo y Mariana | cuatro negocios con su creador; «Nuevo negocio» con el selector obligatorio, «Elige un creador» |
+| 8 | Sara, solo a Tomás (dado de baja) | ningún negocio; «Nuevo negocio» desactivado con su motivo |
+
+Revisado así en esta ronda, en claro a 1280 px, en oscuro a 400 px y en
+claro a 400 px con el formulario abierto: la ficha de Granola Sol
+(Valentina), el pipeline móvil (Valentina), Mercado Verde con «Nuevo
+negocio» abierto (Andrea) y Mercado Verde desactivado (Sara), sin scroll
+horizontal. Con Supabase Auth, lo mismo entrando como
+`diego@agencia-demo.test` (y los demás) con `generate_link`
+(apps/web/README.md, «Cómo probarlo sin esperar un correo»).
 
 ## Pendiente
 
 - **Aplicar 0082 en Supabase antes de desplegar** (`make db.migrate`,
   `make db.guardia`). Sin ella la guardia de producción no deja arrancar.
   Y `make db.seed` si se quiere la agencia de demo (0013) en Supabase.
-- El modo demo sin llaves no puede enseñar la vista acotada: las
-  pantallas corren sin persona (`DEMO_USER_ID` solo cambia los permisos
-  del marco). Llevar la persona simulada a las transacciones de las
-  pantallas es un cambio de `lib/permisos` y `lib/db`, fuera de ACC-7.
 - **ACC-10** (backlog): extender la red a las métricas
   (`post_metric_snapshot`, `account_metric_snapshot`, por EXISTS sobre
   `post` o `social_connection`), a `quote` (por su `creator_id`), a

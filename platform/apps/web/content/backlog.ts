@@ -694,7 +694,7 @@ export const STORIES: readonly Story[] = [
     desc: "Política de fila por creator_id en las cuatro tablas que lo llevan: social_connection, post, campaign y deal.",
     done: "Una consulta cruda que se olvide de scopeFilter() tampoco devuelve filas de otro creador.",
     status: "hecho",
-    note: "0082 sin aplicar (aplicarla antes de desplegar: la guardia la exige). Política RESTRICTIVE por creador para mc_app en las cuatro tablas; worker y enlaces públicos fuera. Detalle de las cuatro rondas en docs/propuestas/ACC-7.md; lo que falta es ACC-10.",
+    note: "0082 sin aplicar (aplicarla antes de desplegar: la guardia la exige). Política RESTRICTIVE por creador para mc_app en las cuatro tablas; worker y enlaces públicos fuera. En la demo sin llaves se ve como cualquier persona del seed 0013 con DEMO_USER_ID. Detalle de las cinco rondas en docs/propuestas/ACC-7.md; lo que falta es ACC-10.",
   },
   {
     id: "ACC-8", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["CON-3", "ACC-3"],

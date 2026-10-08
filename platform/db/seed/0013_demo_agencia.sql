@@ -15,6 +15,11 @@
 --     (membership_scope): en una consulta cruda, en el pipeline y en
 --     Campañas solo ve lo de Camilo; en la ficha de Mercado Verde, el
 --     aviso de que la marca tiene negocios que él no ve.
+--   · Andrea Ríos, Ejecutiva de cuenta, acotada a Camilo y Mariana: el
+--     creador en cada tarjeta, y «Nuevo negocio» le pide elegir.
+--   · Sara Núñez, Ejecutiva de cuenta, acotada solo a Tomás Vega, un
+--     creador dado de baja: no ve a nadie, y «Nuevo negocio» está
+--     desactivado con su motivo.
 --   · Cuatro marcas propias de la agencia y cinco negocios: dos de
 --     Camilo, dos de Mariana (uno con Mercado Verde, que también tiene
 --     uno de Camilo) y uno sin creador, que solo ve quien ve a todos.
@@ -22,9 +27,10 @@
 --
 -- Cómo verlo (docs/propuestas/ACC-7.md, «Cómo verlo»):
 --   · Sin llaves (modo demo): DEMO_WORKSPACE_ID=000000a7-0000-4000-8000-000000000001
---     enseña la agencia como la ve quien ve a todos (el modo demo no
---     tiene persona en las pantallas): el selector, «Sin creador» y el
---     creador en cada tarjeta.
+--     y DEMO_USER_ID con el id de una de las cuatro personas de abajo
+--     (lib/workspace/demo.ts: la persona simulada llega a las
+--     transacciones de las pantallas, y la base le enseña sus filas).
+--     Sin DEMO_USER_ID, el modo demo no tiene persona y ve todo.
 --   · Con Supabase Auth y este seed aplicado (make db.seed): entrar como
 --     diego@agencia-demo.test con generate_link (apps/web/README.md,
 --     «Cómo probarlo sin esperar un correo»): lo que ve el ejecutivo
@@ -53,8 +59,11 @@
 --   …-000000000001    workspace (Agencia Norte · demo)
 --   …-000000000002    app_user Valentina Ortiz (Dueña)
 --   …-000000000004    app_user Diego Salas (Ejecutivo de cuenta, acotado a Camilo)
+--   …-000000000006    app_user Andrea Ríos (Ejecutiva de cuenta, acotada a Camilo y Mariana)
+--   …-000000000008    app_user Sara Núñez (Ejecutiva de cuenta, acotada a Tomás, dado de baja)
 --   …-0000000000a3    creator_profile Camilo Rey
 --   …-0000000000b3    creator_profile Mariana Gil
+--   …-0000000000c3    creator_profile Tomás Vega (dado de baja)
 --   …-0000000000e1…e4 company (propias de la agencia)
 --   …-0000000dea01…05 deal
 --   …-000000ca0001…02 campaign
@@ -88,6 +97,22 @@ INSERT INTO membership (workspace_id, user_id, role_id)
 VALUES ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000004', system_role_id('agency', 'manager'))
 ON CONFLICT DO NOTHING;
 
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000006', false);
+INSERT INTO app_user (id, email, name, locale)
+VALUES ('000000a7-0000-4000-8000-000000000006', 'andrea@agencia-demo.test', 'Andrea Ríos', 'es-CO')
+ON CONFLICT DO NOTHING;
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000006', system_role_id('agency', 'manager'))
+ON CONFLICT DO NOTHING;
+
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000008', false);
+INSERT INTO app_user (id, email, name, locale)
+VALUES ('000000a7-0000-4000-8000-000000000008', 'sara@agencia-demo.test', 'Sara Núñez', 'es-CO')
+ON CONFLICT DO NOTHING;
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000008', system_role_id('agency', 'manager'))
+ON CONFLICT DO NOTHING;
+
 SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000002', false);
 
 
@@ -98,6 +123,13 @@ INSERT INTO creator_profile (id, workspace_id, display_name, handle, country, la
 VALUES
   ('000000a7-0000-4000-8000-0000000000a3', '000000a7-0000-4000-8000-000000000001', 'Camilo Rey', 'camilo.cocina', 'CO', '{es}', '{cocina}'),
   ('000000a7-0000-4000-8000-0000000000b3', '000000a7-0000-4000-8000-000000000001', 'Mariana Gil', 'mariana.viaja', 'CO', '{es}', '{viajes}')
+ON CONFLICT DO NOTHING;
+-- Un creador que ya no está en la agencia (dado de baja): el alcance de
+-- Sara apunta a él, y un alcance a un creador dado de baja no cuenta.
+INSERT INTO creator_profile (id, workspace_id, display_name, handle, country, languages, niche_slugs, deleted_at)
+VALUES
+  ('000000a7-0000-4000-8000-0000000000c3', '000000a7-0000-4000-8000-000000000001', 'Tomás Vega', 'tomas.corre', 'CO', '{es}', '{deporte}',
+   '2026-09-01T00:00:00Z')
 ON CONFLICT DO NOTHING;
 
 DO $$
@@ -111,8 +143,14 @@ BEGIN
     ALTER TABLE membership_scope NO FORCE ROW LEVEL SECURITY;
   END IF;
   INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
-  VALUES ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000004', 'creator',
-          '000000a7-0000-4000-8000-0000000000a3')
+  VALUES
+    -- Diego: solo Camilo.
+    ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000004', 'creator', '000000a7-0000-4000-8000-0000000000a3'),
+    -- Andrea: Camilo y Mariana. Ve los mismos negocios que la dueña salvo el «Sin creador», y «Nuevo negocio» le pide elegir.
+    ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000006', 'creator', '000000a7-0000-4000-8000-0000000000a3'),
+    ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000006', 'creator', '000000a7-0000-4000-8000-0000000000b3'),
+    -- Sara: solo Tomás, que se fue. No ve a nadie y «Nuevo negocio» está desactivado, con su motivo.
+    ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000008', 'creator', '000000a7-0000-4000-8000-0000000000c3')
   ON CONFLICT DO NOTHING;
   IF forzada THEN
     ALTER TABLE membership_scope FORCE ROW LEVEL SECURITY;
@@ -152,7 +190,8 @@ ON CONFLICT DO NOTHING;
 -- 4 · Los negocios: de Camilo, de Mariana y uno sin creador
 -- ---------------------------------------------------------------------
 -- Sin vencimiento ni cierre esperado (ver la cabecera). Los de Camilo
--- los lleva Diego; los demás, Valentina.
+-- los lleva Diego; los demás, Valentina. Los nombres no repiten el
+-- creador: la tarjeta del pipeline ya lo dice («Creador: Camilo Rey»).
 -- =====================================================================
 INSERT INTO deal (id, workspace_id, company_id, creator_id, owner_user_id, name, stage_id, amount, currency, next_action)
 VALUES

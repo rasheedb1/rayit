@@ -16,8 +16,8 @@
 SELECT set_config('app.workspace_id', '000000a7-0000-4000-8000-000000000001', false);
 SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000002', false);
 
--- (a) Una Dueña sin alcance y un Ejecutivo de cuenta acotado a Camilo, y
---     nada más en membership_scope del espacio.
+-- (a) Una Dueña sin alcance; Diego acotado a Camilo, Andrea a Camilo y
+--     Mariana, Sara a Tomás (dado de baja), y nada más en membership_scope.
 SELECT 'a_personas_y_alcance' AS check_id,
        (SELECT r.key FROM membership m JOIN role r ON r.id = m.role_id
          WHERE m.user_id = '000000a7-0000-4000-8000-000000000002') AS valentina,
@@ -27,8 +27,14 @@ SELECT 'a_personas_y_alcance' AS check_id,
          WHERE m.user_id = '000000a7-0000-4000-8000-000000000002') = 'owner'
        AND (SELECT r.key FROM membership m JOIN role r ON r.id = m.role_id
              WHERE m.user_id = '000000a7-0000-4000-8000-000000000004') = 'manager'
-       AND (SELECT array_agg(s.user_id::text || ':' || s.scope_type || ':' || s.scope_id::text) FROM membership_scope s)
-           = ARRAY['000000a7-0000-4000-8000-000000000004:creator:000000a7-0000-4000-8000-0000000000a3']
+       AND (SELECT array_agg(s.user_id::text || ':' || s.scope_type || ':' || s.scope_id::text ORDER BY s.user_id, s.scope_id)
+              FROM membership_scope s)
+           = ARRAY['000000a7-0000-4000-8000-000000000004:creator:000000a7-0000-4000-8000-0000000000a3',
+                   '000000a7-0000-4000-8000-000000000006:creator:000000a7-0000-4000-8000-0000000000a3',
+                   '000000a7-0000-4000-8000-000000000006:creator:000000a7-0000-4000-8000-0000000000b3',
+                   '000000a7-0000-4000-8000-000000000008:creator:000000a7-0000-4000-8000-0000000000c3']
+       AND (SELECT count(*) FROM membership m JOIN role r ON r.id = m.role_id
+             WHERE m.workspace_id = '000000a7-0000-4000-8000-000000000001' AND r.key = 'manager') = 3
        AS ok;
 
 -- (b) Dos negocios de cada creador y uno sin creador; una campaña de cada uno.
@@ -66,6 +72,30 @@ SELECT 'd_el_ejecutivo_solo_camilo' AS check_id,
        AND open_deal_out_of_scope('000000a7-0000-4000-8000-0000000000e2')
        AND (SELECT array_agg(c ORDER BY c) FROM creators_for_session('000000a7-0000-4000-8000-000000000001') AS c)
            = ARRAY['000000a7-0000-4000-8000-0000000000a3'::uuid]
+       AS ok;
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000002', false);
+
+-- (f) Andrea, acotada a los dos: ve los cuatro negocios con creador (no
+--     el «Sin creador»), las dos campañas, y su selector tiene a los dos:
+--     «Nuevo negocio» le pide elegir.
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000006', false);
+SELECT 'f_la_ejecutiva_de_los_dos' AS check_id,
+       NOT session_sees_all_creators()
+       AND (SELECT count(*) FROM deal d WHERE scope_allows('creator', d.creator_id)) = 4
+       AND (SELECT count(*) FROM campaign c WHERE scope_allows('creator', c.creator_id)) = 2
+       AND (SELECT array_agg(c ORDER BY c) FROM creators_for_session('000000a7-0000-4000-8000-000000000001') AS c)
+           = ARRAY['000000a7-0000-4000-8000-0000000000a3'::uuid, '000000a7-0000-4000-8000-0000000000b3'::uuid]
+       AS ok;
+
+-- (g) Sara, acotada solo a un creador dado de baja: no ve ningún negocio
+--     ni campaña, y no tiene a quién poner en uno nuevo.
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000008', false);
+SELECT 'g_la_ejecutiva_sin_creadores_vivos' AS check_id,
+       NOT session_sees_all_creators()
+       AND (SELECT count(*) FROM deal d WHERE scope_allows('creator', d.creator_id)) = 0
+       AND (SELECT count(*) FROM campaign c WHERE scope_allows('creator', c.creator_id)) = 0
+       AND NOT EXISTS (SELECT 1 FROM creators_for_session('000000a7-0000-4000-8000-000000000001'))
+       AND sole_creator_for_session('000000a7-0000-4000-8000-000000000001') IS NULL
        AS ok;
 SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000002', false);
 
