@@ -3,7 +3,14 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { listProposableSignals } from "@mc/db/queries/cadencias";
 import { listCompanyCadenceTouches } from "@mc/db/queries/outreach";
-import { getCompany, listContacts, listOwnerOptions, listPipeline } from "@mc/db/queries/ventas";
+import {
+  getCompany,
+  hasOpenDealOutOfScope,
+  listContacts,
+  listDealCreatorOptions,
+  listOwnerOptions,
+  listPipeline,
+} from "@mc/db/queries/ventas";
 import {
   getCompanyChain,
   getLocalDates,
@@ -36,6 +43,7 @@ import { Bloque } from "../bloque";
 import { MensajesDeCadencia } from "../cadencia";
 import { Cadena } from "../cadena";
 import { Contactos } from "../contactos";
+import { CreadorDelNegocio } from "../creador-negocio";
 import { DatosEmpresa } from "../datos";
 import { vistaDeActividad } from "../actividad";
 import { LineaDeTiempo } from "../linea-de-tiempo";
@@ -83,6 +91,10 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
       // Solo los de esta empresa, filtrados en SQL: la ficha no lee el pipeline entero.
       deals: await listPipeline(tx, { companyId: id }),
       owners: await listOwnerOptions(tx),
+      // De qué creador puede ser un negocio (ACC-7): al abrirlo solo se pregunta con más de uno; se dice y se cambia en cada negocio.
+      dealCreators: await listDealCreatorOptions(tx),
+      // ¿Hay negocios abiertos de esta marca que esta persona no ve por su alcance? Se dice, sin decir cuáles.
+      hiddenDeals: await hasOpenDealOutOfScope(tx, id),
       activity: await listCompanyActivity(tx, id),
       signals: await listCompanySignals(tx, id),
       chain,
@@ -97,7 +109,7 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
   });
   // Se desvinculó entre la primera lectura y esta.
   if (!data) notFound();
-  const { company, contacts, deals, owners, activity, signals, chain, invoices, niches, dates, cadence, proposable } = data;
+  const { company, contacts, deals, owners, dealCreators, hiddenDeals, activity, signals, chain, invoices, niches, dates, cadence, proposable } = data;
   const senalDeNegocio = new Map(proposable.map((s) => [s.dealId, s]));
 
   const workspace = await getCurrentWorkspace();
@@ -130,6 +142,10 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
   const ingles = f.locale.toLowerCase().startsWith("en");
   const nicho = niches.map((n) => (ingles && n.nameEn ? n.nameEn : n.nameEs));
   const sueltos = [chain.loose.quotes, chain.loose.campaigns, chain.loose.invoices].some((l) => l.length > 0);
+  // De qué creador es cada negocio (ACC-7): se dice cuando la persona ve a
+  // más de uno, o cuando el negocio no tiene (y entonces solo lo ve quien
+  // ve a todos). En un espacio de una sola creadora sería ruido.
+  const mostrarCreador = (d: (typeof deals)[number]) => dealCreators.creators.length > 1 || d.creatorId === null;
 
   // Cada nicho es una pastilla: unidos con «y» («Cocina fácil y Fitness y
   // bienestar») no se sabía dónde acababa uno y empezaba el otro.
@@ -182,11 +198,18 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
             }
           >
             <div className="mb-3 flex flex-wrap items-start gap-2">
-              <NuevoNegocio companyId={company.id} currency={workspace.currency} />
+              <NuevoNegocio
+                companyId={company.id}
+                currency={workspace.currency}
+                creators={dealCreators.creators}
+                creatorRequired={dealCreators.required}
+                canOpen={dealCreators.seesAll || dealCreators.creators.length > 0}
+              />
               <Button href={`/ventas/empresas/${company.id}/pitch`} size="sm" aria-label={x.pitch.abrirLabel(company.name)}>
                 {x.pitch.abrir}
               </Button>
             </div>
+            {hiddenDeals && <p className="mb-3 text-xs leading-5 text-muted">{t.detail.hiddenDeals}</p>}
             {deals.length === 0 ? (
               <p className="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted">{t.noDeals}</p>
             ) : (
@@ -208,6 +231,20 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                             {motivo && <span className="text-muted"> · {motivo}</span>}
                           </p>
                           {contacto && <UltimoContacto data={contacto} className="mt-0.5" />}
+                          {mostrarCreador(d) && (
+                            <div className="mt-1">
+                              <CreadorDelNegocio
+                                dealId={d.id}
+                                dealName={negocio}
+                                companyId={company.id}
+                                creatorId={d.creatorId}
+                                creatorName={d.creatorName}
+                                creators={dealCreators.creators}
+                                seesAll={dealCreators.seesAll}
+                                canEdit={puedeOperar}
+                              />
+                            </div>
+                          )}
                         </div>
                         <div className="flex items-center gap-3">
                           <span className="whitespace-nowrap text-sm tabular-nums text-ink">

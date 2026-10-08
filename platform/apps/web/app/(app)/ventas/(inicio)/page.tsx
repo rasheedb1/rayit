@@ -5,6 +5,7 @@ import {
   PIPELINE_SEGUIMIENTOS,
   getSalesKpis,
   getStageTotals,
+  listDealCreatorOptions,
   listOwnerOptions,
   listPipeline,
   listSignals,
@@ -57,7 +58,7 @@ export default async function VentasPage({
 
   // Una sola transacción para toda la pantalla: los KPI y la vista
   // activa se leen con el mismo workspace fijado y el mismo instante.
-  const { kpis, signals, hidden, briefCreators, deals, stages, conversion, owners, dates, urgentes } = await withWorkspace(async (tx) => ({
+  const { kpis, signals, hidden, briefCreators, deals, stages, conversion, owners, dates, creadores, urgentes } = await withWorkspace(async (tx) => ({
     kpis: await getSalesKpis(tx),
     signals: vista === "radar" ? await listSignals(tx, { status: "pending", brief: verOcultas ? "show_hidden" : "apply" }) : [],
     hidden: vista === "radar" ? await countHiddenSignals(tx) : null,
@@ -71,6 +72,8 @@ export default async function VentasPage({
     // (VEN-4), sale de listPipeline: aquí solo las personas y el reloj.
     owners: vista === "pipeline" ? await listOwnerOptions(tx) : [],
     dates: vista === "pipeline" ? await getLocalDates(tx) : null,
+    // De qué creador es cada negocio (ACC-7): la tarjeta lo dice cuando la persona ve a más de uno.
+    creadores: vista === "pipeline" ? await listDealCreatorOptions(tx) : null,
     // Los avisos urgentes del outreach de hoy (VEN-15): la web no tiene
     // campana, así que se señalan junto al enlace a la política.
     urgentes: await countUrgentOutreachAlerts(tx),
@@ -160,6 +163,7 @@ export default async function VentasPage({
             forma={forma}
             filtro={filtro}
             ctx={dates ? contextoDeSeguimiento(owners, deals.flatMap((d) => nextActionOf(d) ?? []), dates, f) : null}
+            mostrarCreador={(creadores?.creators.length ?? 0) > 1}
           />
         )}
       </div>

@@ -28,6 +28,7 @@ function senal(over: Partial<SignalRow>): SignalRow {
     openDealId: null,
     openDealName: null,
     openDealCount: 0,
+    openDealHidden: false,
     sourceId: "meta_ad_library",
     sourceLabel: "Biblioteca de anuncios de Meta",
     headlineEs: "4 anuncios nuevos en Meta · snacks",

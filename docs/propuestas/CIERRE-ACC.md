@@ -298,7 +298,7 @@ contrario» indica el archivo y el tamaño del cambio.
 | 5 | Seed: no hay Contador. El Mánager sí (Andrés, seed 0003, rol de fábrica `manager`, ACC-8). Una Contadora de demo deja probar ACC-5 en la copia sin llaves | `db/seed/` | S |
 | 6 | ACC-4 escribe `membership_scope`: necesita sus políticas de INSERT/DELETE (hoy `mc_app` solo lee, 0034 §10) y cambiar `PRIVILEGIOS_DE_LA_APP` | una migración suya + `esquema.ts` | M |
 | 7 | Cotizar llama a `createCampaignFromQuote` (CAM-2), que ahora filtra la cotización por alcance: con alcance por campaña, «Crear campaña» da «la cotización no existe» sobre una cotización que Cotizar sí enseña, y `codigoDe()` no conoce `ScopeError` (cae al mensaje genérico). Se arregla al acotar Cotizar (#4) y reconociendo `ScopeError` en `codigoDe` | `app/(app)/cotizar/actions.ts` (`codigoDe`, `crearCampanaConVentana`) | S |
-| 8 | ACC-7: la política por creador puede ser `CREATE POLICY … AS RESTRICTIVE USING (scope_allows('creator', creator_id))`. `invoice` no tiene `creator_id` (llega por `campaign`), y una restrictiva también filtra los `ON CONFLICT DO UPDATE` | su migración | M |
+| 8 | ~~ACC-7: la política por creador puede ser `CREATE POLICY … AS RESTRICTIVE USING (scope_allows('creator', creator_id))`. `invoice` no tiene `creator_id` (llega por `campaign`), y una restrictiva también filtra los `ON CONFLICT DO UPDATE`~~ **Hecho el 7-oct en `0082_alcance_por_creador`** (docs/propuestas/ACC-7.md) | su migración | M |
 
 ---
 

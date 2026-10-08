@@ -13,6 +13,8 @@ const importSignals = vi.fn();
 const createCompany = vi.fn();
 const createDeal = vi.fn();
 const createSignal = vi.fn();
+const setDealCreator = vi.fn();
+const acceptSignal = vi.fn();
 const revalidatePath = vi.fn();
 const puedeOperarVentas = vi.fn();
 
@@ -32,13 +34,16 @@ vi.mock("@mc/db/queries/ventas", async (original) => ({
   createCompany: (...a: unknown[]) => createCompany(...a),
   createDeal: (...a: unknown[]) => createDeal(...a),
   createSignal: (...a: unknown[]) => createSignal(...a),
+  setDealCreator: (...a: unknown[]) => setDealCreator(...a),
+  acceptSignal: (...a: unknown[]) => acceptSignal(...a),
 }));
 
+import { ScopeError } from "@mc/db";
 import { CompanyNotEditable, ContactNotOwned, DuplicateCompanyName, DuplicateDomain, VentasError } from "@mc/db/queries/ventas";
 import { MESSAGES } from "./_lib/messages";
 import {
-  aceptarSenal, anotarSenal, cambiarRelacion, cargarLista, crearContacto, crearEmpresa, crearNegocio, darDeBaja, descartarSenal,
-  editarContacto, editarEmpresa, moverNegocio,
+  aceptarSenal, anotarSenal, cambiarCreadorNegocio, cambiarRelacion, cargarLista, crearContacto, crearEmpresa, crearNegocio, darDeBaja,
+  descartarSenal, editarContacto, editarEmpresa, moverNegocio,
 } from "./actions";
 
 const COMPANY = "00000002-0000-4000-8000-0000000000e1";
@@ -63,6 +68,8 @@ beforeEach(() => {
   createCompany.mockReset().mockResolvedValue(COMPANY);
   createDeal.mockReset().mockResolvedValue(DEAL);
   createSignal.mockReset().mockResolvedValue({ duplicate: false, reason: null, companyId: null });
+  setDealCreator.mockReset().mockResolvedValue({ changed: true, creatorName: "Laura Méndez" });
+  acceptSignal.mockReset();
   revalidatePath.mockReset();
   puedeOperarVentas.mockReset().mockResolvedValue(true);
 });
@@ -294,6 +301,26 @@ describe("el tope de los montos de Ventas (pulido r8)", () => {
   });
 });
 
+describe("aceptarSenal con alcance por creador (ACC-7)", () => {
+  const signalId = "00000009-0000-4000-8000-000000000001";
+
+  it("la marca tiene un negocio abierto de un creador que no lleva: lo dice en la tarjeta, sin «ok» ni enlace al pipeline", async () => {
+    acceptSignal.mockResolvedValue({
+      dealId: null, companyId: COMPANY, companyName: "Hostal Brisa", companyCreated: false, dealCreated: false, dealHiddenOutOfScope: true,
+    });
+    const r = await aceptarSenal({}, form({ signalId }));
+    expect(r).toEqual({ message: MESSAGES.radar.hiddenDealNotice("Hostal Brisa") });
+  });
+
+  it("si ve el negocio abierto, la señal se suma a ese, como siempre", async () => {
+    acceptSignal.mockResolvedValue({
+      dealId: DEAL, companyId: COMPANY, companyName: "Hostal Brisa", companyCreated: false, dealCreated: false, dealHiddenOutOfScope: false,
+    });
+    const r = await aceptarSenal({}, form({ signalId }));
+    expect(r).toMatchObject({ ok: true, notice: MESSAGES.radar.alreadyOpen("Hostal Brisa") });
+  });
+});
+
 describe("el rol (pulido r3)", () => {
   it("un 'viewer' no escribe nada en el CRM: cada acción vuelve con el aviso antes de tocar la base", async () => {
     puedeOperarVentas.mockResolvedValue(false);
@@ -314,5 +341,90 @@ describe("el rol (pulido r3)", () => {
     for (const fn of [updateCompany, updateContact, moveDeal, importSignals, createCompany, createDeal, createSignal, revalidatePath]) {
       expect(fn).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("«Nuevo negocio» con alcance por creador (ACC-7)", () => {
+  const CREADORA = "00000002-0000-4000-8000-000000000003";
+
+  it("lleva el creador elegido a createDeal; vacío, null (lo decide @mc/db)", async () => {
+    await crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "", creatorId: CREADORA }));
+    expect(createDeal).toHaveBeenLastCalledWith({}, expect.objectContaining({ creatorId: CREADORA }));
+    await crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "" }));
+    expect(createDeal).toHaveBeenLastCalledWith({}, expect.objectContaining({ creatorId: null }));
+  });
+
+  it("un creador que no es un id no llega a la base", async () => {
+    const r = await crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "", creatorId: "sofia" }));
+    expect(r.errors).toEqual({ creatorId: MESSAGES.validacion.creator });
+    expect(createDeal).not.toHaveBeenCalled();
+  });
+
+  it("quien lleva a varios y no eligió ve el error en el campo del creador", async () => {
+    createDeal.mockRejectedValue(new VentasError("DealCreatorRequired"));
+    const r = await crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "" }));
+    expect(r.errors).toEqual({ creatorId: MESSAGES.errores.DealCreatorRequired });
+  });
+
+  it("ScopeError, y el 42501 de la política por creador, se dicen con el texto del alcance", async () => {
+    const alcance = new ScopeError().messageEs;
+    createDeal.mockRejectedValue(new ScopeError());
+    await expect(crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "" }))).resolves.toEqual({ message: alcance });
+    createDeal.mockRejectedValue(
+      Object.assign(new Error("Failed query"), {
+        cause: Object.assign(new Error('new row violates row-level security policy "deal_creator_scope" for table "deal"'), { code: "42501" }),
+      }),
+    );
+    await expect(crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "" }))).resolves.toEqual({ message: alcance });
+  });
+
+  it("acotada a creadores dados de baja: lo dice con su texto, no con el genérico", async () => {
+    createDeal.mockRejectedValue(new VentasError("NoCreatorInScope"));
+    await expect(crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "" }))).resolves.toEqual({
+      message: MESSAGES.errores.NoCreatorInScope,
+    });
+  });
+});
+
+describe("cambiar de qué creador es un negocio (ACC-7)", () => {
+  const CREADORA = "00000002-0000-4000-8000-000000000003";
+  const t = MESSAGES.empresas.detail.dealCreator;
+  const datos = (creatorId: string) => form({ dealId: DEAL, companyId: COMPANY, creatorId });
+
+  it("lleva el creador a setDealCreator; vacío es «Sin creador»; y dice cómo quedó", async () => {
+    expect(await cambiarCreadorNegocio({}, datos(CREADORA))).toMatchObject({ ok: true, notice: t.saved("Laura Méndez") });
+    expect(setDealCreator).toHaveBeenLastCalledWith({}, DEAL, CREADORA);
+    setDealCreator.mockResolvedValue({ changed: true, creatorName: null });
+    expect(await cambiarCreadorNegocio({}, datos(""))).toMatchObject({ ok: true, notice: t.savedNone });
+    expect(setDealCreator).toHaveBeenLastCalledWith({}, DEAL, null);
+    setDealCreator.mockResolvedValue({ changed: false, creatorName: null });
+    expect(await cambiarCreadorNegocio({}, datos(""))).toMatchObject({ ok: true, notice: t.unchanged });
+    expect(revalidatePath).toHaveBeenCalledWith(`/ventas/empresas/${COMPANY}`);
+  });
+
+  it("un id que no lo es no llega a la base; quien solo mira, tampoco", async () => {
+    expect((await cambiarCreadorNegocio({}, datos("sofia"))).errors).toEqual({ creatorId: MESSAGES.validacion.creator });
+    // Un negocio mal formado dice que el negocio no es válido, no la empresa.
+    const malNegocio = await cambiarCreadorNegocio({}, form({ dealId: "negocio", companyId: COMPANY, creatorId: CREADORA }));
+    expect(malNegocio.errors).toEqual({ dealId: MESSAGES.validacion.deal });
+    expect(MESSAGES.validacion.deal).not.toBe(MESSAGES.validacion.company);
+    puedeOperarVentas.mockResolvedValue(false);
+    expect(await cambiarCreadorNegocio({}, datos(CREADORA))).toEqual({ message: MESSAGES.sinPermiso });
+    expect(setDealCreator).not.toHaveBeenCalled();
+  });
+
+  it("fuera de su alcance o «Sin creador» para quien está acotado: ScopeError; un creador que no existe, en el campo", async () => {
+    setDealCreator.mockRejectedValue(new ScopeError());
+    expect(await cambiarCreadorNegocio({}, datos(""))).toEqual({ message: new ScopeError().messageEs });
+    setDealCreator.mockRejectedValue(new VentasError("InvalidCreator"));
+    expect(await cambiarCreadorNegocio({}, datos(CREADORA))).toEqual({ errors: { creatorId: MESSAGES.errores.InvalidCreator } });
+    setDealCreator.mockRejectedValue(new VentasError("DealNotFound"));
+    expect(await cambiarCreadorNegocio({}, datos(CREADORA))).toEqual({ message: MESSAGES.errores.DealNotFound });
+  });
+
+  it("con su cotización o su campaña de otro creador, lo dice en vez de partir el acuerdo (DealCreatorLocked)", async () => {
+    setDealCreator.mockRejectedValue(new VentasError("DealCreatorLocked"));
+    expect(await cambiarCreadorNegocio({}, datos(CREADORA))).toEqual({ message: MESSAGES.errores.DealCreatorLocked });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });

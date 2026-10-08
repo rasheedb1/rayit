@@ -6,6 +6,7 @@ import {
   BANDEJA_CHANNELS, cancelInboxReply, createReferralContact, dismissInboxReply, INBOX_REPLY_MAX_CHARS, markInboxThreadDone,
   markInboxThreadRead, reclassifyInboxMessage, replyInInboxThread, type ReplyResult,
 } from "@mc/db/queries/bandejas";
+import { scopeErrorOf } from "@mc/db";
 import { VentasError } from "@mc/db/queries/ventas";
 import { UUID_RE } from "@/lib/forms";
 import { getCurrentContext } from "@/lib/workspace/current";
@@ -189,8 +190,13 @@ export async function corregirIntencion(input: z.input<typeof corregirSchema>): 
     revalidatePath(RUTA);
     if (!r.ok) return { ok: false, error: t.errores[r.code] };
     const etiqueta = t.intenciones[v.intent].label.toLowerCase();
+    if (r.dealNeedsCreator === "pick") return { ok: true, notice: t.corregir.listoSinNegocio(etiqueta) };
+    if (r.dealNeedsCreator === "none") return { ok: true, notice: t.corregir.listoSinCreadores(etiqueta) };
     return { ok: true, notice: r.dealMoved ? t.corregir.listoMovido(etiqueta) : t.corregir.listo(etiqueta) };
   } catch (err) {
+    // La red del alcance por creador (ACC-7): lo que @mc/db no previó y la
+    // política rechazó (42501) se dice como lo que es, no como un fallo.
+    if (scopeErrorOf(err)) return { ok: false, error: t.errores.out_of_scope };
     console.error("[ventas/bandeja] corregir intención", err);
     return { ok: false, error: t.errores.accion };
   }

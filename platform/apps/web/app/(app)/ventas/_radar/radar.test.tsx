@@ -98,6 +98,23 @@ describe("Radar", () => {
     expect(nueva).not.toHaveTextContent(/se sumará/);
   });
 
+  it("la marca tiene un negocio abierto de un creador que no se lleva (ACC-7): lo dice antes, y al aceptar el aviso se queda en la tarjeta", async () => {
+    const ficha = "/ventas/empresas/00000002-0000-4000-8000-0000000000e3";
+    aceptarSenal.mockResolvedValue({ message: MESSAGES.radar.hiddenDealNotice("Hostal Brisa") });
+    render(
+      <Radar
+        cards={[{ ...card, companyName: "Hostal Brisa", crm: { companyHref: ficha, joinsDeal: false, dealName: null }, hiddenDeal: true }]}
+        currency="COP"
+        countries={PAISES}
+      />,
+    );
+    const tarjeta = screen.getByRole("listitem");
+    expect(tarjeta).toHaveTextContent(MESSAGES.radar.hiddenDeal);
+    expect(tarjeta).not.toHaveTextContent(/se sumará/);
+    fireEvent.click(within(tarjeta).getByRole("button", { name: `${MESSAGES.radar.accept}: Hostal Brisa` }));
+    await waitFor(() => expect(within(tarjeta).getByText(MESSAGES.radar.hiddenDealNotice("Hostal Brisa"))).toBeInTheDocument(), LENTO);
+  });
+
   it("aceptar anuncia el negocio abierto y enlaza al pipeline", async () => {
     aceptarSenal.mockResolvedValue({
       ok: true,

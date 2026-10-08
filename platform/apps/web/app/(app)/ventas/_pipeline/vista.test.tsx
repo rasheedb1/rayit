@@ -44,6 +44,8 @@ const deal = (over: Partial<PipelineDealRow>): PipelineDealRow => ({
   ownerUserId: null,
   ownerName: null,
   lostReason: null,
+  creatorId: "0000000c-0000-4000-8000-0000000000a3",
+  creatorName: "Laura Méndez",
   ...over,
 });
 const sinAccion = deal({
@@ -166,6 +168,28 @@ describe("PipelineView con la siguiente acción (VEN-4)", () => {
     // Ni «último contacto»: la señal de que se enfría es de los abiertos.
     // (el encabezado de la columna sí está: es de la tabla, no de la fila).
     expect(screen.queryByText(/Último contacto:|Sin contacto todavía|hace 3 días/)).toBeNull();
+  });
+});
+
+describe("PipelineView: de qué creador es cada negocio (ACC-7)", () => {
+  const sinCreador = deal({ id: SIN_ACCION, companyName: "Fresko", name: "Fresko", creatorId: null, creatorName: null });
+
+  it("con un solo creador a la vista no lo repite; un negocio sin creador lo dice igual, porque no todos lo ven", () => {
+    render(<PipelineView deals={[deal({}), sinCreador]} stages={stages} f={f} forma="tablero" ctx={ctx} />);
+    expect(screen.queryByText("Laura Méndez")).toBeNull();
+    expect(within(screen.getByTestId("columna-propuesta")).getByText(MESSAGES.empresas.detail.dealCreator.none)).toBeInTheDocument();
+  });
+
+  it("con varios, la tarjeta y la lista dicen el creador", () => {
+    const { unmount } = render(
+      <PipelineView deals={[deal({}), sinCreador]} stages={stages} f={f} forma="tablero" ctx={ctx} mostrarCreador />,
+    );
+    // Con su etiqueta: un nombre suelto debajo del negocio podía ser el contacto o el responsable.
+    expect(within(screen.getByTestId("columna-propuesta")).getByText(MESSAGES.pipeline.creatorLine("Laura Méndez"))).toBeInTheDocument();
+    expect(screen.queryByText("Laura Méndez")).toBeNull();
+    unmount();
+    render(<PipelineView deals={[deal({}), sinCreador]} stages={stages} f={f} forma="lista" ctx={ctx} mostrarCreador />);
+    expect(screen.getAllByText(new RegExp(MESSAGES.pipeline.creatorLine("Laura Méndez"))).length).toBeGreaterThan(0);
   });
 });
 

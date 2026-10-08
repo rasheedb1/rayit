@@ -138,6 +138,8 @@ export const MESSAGES = {
     rate_limited: `Este espacio ya creó ${INVITACIONES_POR_DIA} invitaciones en las últimas 24 horas. Vuelve a intentarlo mañana.`,
     scoped:
       "Tu acceso está limitado a algunos creadores o campañas: invitar, cambiar roles o quitar a alguien lo hace quien ve todo el espacio.",
+    scoped_member:
+      "Esta persona tiene el acceso limitado a algunos creadores, marcas o campañas, y Dueño y Administrador ven todo el espacio: quítale antes ese límite para darle uno de esos roles.",
     correo: "Escribe un correo válido.",
     rol: "Elige un rol.",
     sinOrigen: "No pudimos armar el enlace. Inténtalo de nuevo o escríbenos.",

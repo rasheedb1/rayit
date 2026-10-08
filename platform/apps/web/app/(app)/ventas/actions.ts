@@ -33,10 +33,12 @@ import {
   importSignals,
   moveDeal,
   optOutContact,
+  setDealCreator,
   updateCompany,
   updateContact,
   type SignalDuplicateReason,
 } from "@mc/db/queries/ventas";
+import { scopeErrorOf } from "@mc/db";
 import type { BriefVerdict } from "@mc/db/queries/brief";
 import { MONTO_MAXIMO, excedeMontoMaximo } from "@mc/core";
 import { decodificarCsv } from "@/lib/csv";
@@ -95,14 +97,19 @@ async function montoMaximoError(): Promise<string> {
 }
 
 /**
- * El texto de un error: el de su código si es de Ventas, el genérico de
- * la acción si no (y entonces se registra: es un error que nadie previó).
+ * El texto de un error: el de su código si es de Ventas; el del alcance
+ * si lo que se iba a escribir quedaría fuera del de quien escribe
+ * (ScopeError de @mc/db, o el 42501 con que la base lo rechaza, ACC-7,
+ * que scopeErrorOf traduce); el genérico de la acción si no (y entonces
+ * se registra: es un error que nadie previó).
  */
 function messageOf(err: unknown, fallback: string): string {
   if (err instanceof VentasError && Object.hasOwn(E, err.code)) {
     const m = E[err.code];
     return typeof m === "function" ? m(err.params) : m;
   }
+  const scope = scopeErrorOf(err);
+  if (scope) return scope.messageEs;
   console.error("[ventas]", err);
   return fallback;
 }
@@ -298,6 +305,11 @@ export async function aceptarSenal(_prev: VentasState, formData: FormData): Prom
   }
   revalidateVentas(res.companyId);
   const name = res.companyName || field(formData, "companyName") || t.unknownBrand;
+  // La marca tiene un negocio abierto de un creador que esta persona no
+  // lleva (ACC-7): no se abrió otro y la señal sigue pendiente. Se dice en
+  // la tarjeta, que sigue ahí con su enlace a la ficha («Ya en tu CRM»),
+  // donde se abre uno para un creador propio.
+  if (res.dealHiddenOutOfScope) return { message: t.hiddenDealNotice(name) };
   // La marca ya tenía un negocio abierto: la señal se sumó a ese, y el
   // aviso lo dice con el enlace a la ficha donde está, en vez de abrir
   // otro sin avisar.
@@ -503,6 +515,9 @@ const negocioSchema = z.object({
   companyId: z.string().regex(UUID_RE, V.company),
   name: z.string().trim().min(1, V.dealName).max(120, V.dealName),
   amount: z.string().trim().refine((v) => v === "" || DECIMAL_RE.test(v), V.amount),
+  // De qué creador es (ACC-7). Vacío: el único del espacio o del alcance,
+  // o «sin creador» para quien ve a todos; lo decide createDeal.
+  creatorId: z.string().trim().refine((v) => v === "" || UUID_RE.test(v), V.creator),
 });
 
 /**
@@ -517,22 +532,69 @@ export async function crearNegocio(_prev: VentasState, formData: FormData): Prom
     companyId: field(formData, "companyId"),
     name: field(formData, "name"),
     amount: field(formData, "amount"),
+    creatorId: field(formData, "creatorId"),
   });
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
   const v = parsed.data;
   if (excedeMontoMaximo(v.amount)) return { errors: { amount: await montoMaximoError() } };
   try {
     await withWorkspace((tx) =>
-      createDeal(tx, { companyId: v.companyId, name: v.name, amount: v.amount || null, nextAction: MESSAGES.radar.pitchAction }),
+      createDeal(tx, {
+        companyId: v.companyId,
+        name: v.name,
+        amount: v.amount || null,
+        nextAction: MESSAGES.radar.pitchAction,
+        creatorId: v.creatorId || null,
+      }),
     );
   } catch (err) {
     const message = messageOf(err, t.error);
     if (err instanceof VentasError && err.code === "InvalidDealName") return { errors: { name: message } };
     if (err instanceof VentasError && err.code === "InvalidAmount") return { errors: { amount: message } };
+    if (err instanceof VentasError && (err.code === "DealCreatorRequired" || err.code === "InvalidCreator")) {
+      return { errors: { creatorId: message } };
+    }
     return { message };
   }
   revalidateVentas(v.companyId);
   return { ok: true, notice: t.created(v.name), stamp: Date.now() };
+}
+
+const creadorNegocioSchema = z.object({
+  dealId: z.string().regex(UUID_RE, V.deal),
+  companyId: z.string().regex(UUID_RE, V.company),
+  // Vacío: «Sin creador», que solo puede elegir quien ve a todos (setDealCreator lo comprueba).
+  creatorId: z.string().trim().refine((v) => v === "" || UUID_RE.test(v), V.creator),
+});
+
+/**
+ * Cambiar de qué creador es un negocio (ACC-7), desde la ficha de su
+ * marca. Las reglas son de setDealCreator: un creador del espacio y del
+ * alcance de quien lo cambia, «Sin creador» solo para quien ve a
+ * todos, y nunca uno distinto del de su cotización enviada o su campaña
+ * viva (DealCreatorLocked). Deja su fila en la bitácora.
+ */
+export async function cambiarCreadorNegocio(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
+  const t = MESSAGES.empresas.detail.dealCreator;
+  const parsed = creadorNegocioSchema.safeParse({
+    dealId: field(formData, "dealId"),
+    companyId: field(formData, "companyId"),
+    creatorId: field(formData, "creatorId"),
+  });
+  if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
+  const v = parsed.data;
+  let r: { changed: boolean; creatorName: string | null };
+  try {
+    r = await withWorkspace((tx) => setDealCreator(tx, v.dealId, v.creatorId || null));
+  } catch (err) {
+    const message = messageOf(err, t.error);
+    if (err instanceof VentasError && err.code === "InvalidCreator") return { errors: { creatorId: message } };
+    return { message };
+  }
+  revalidateVentas(v.companyId);
+  if (!r.changed) return { ok: true, notice: t.unchanged, stamp: Date.now() };
+  return { ok: true, notice: r.creatorName ? t.saved(r.creatorName) : t.savedNone, stamp: Date.now() };
 }
 
 // ---------------------------------------------------------------------

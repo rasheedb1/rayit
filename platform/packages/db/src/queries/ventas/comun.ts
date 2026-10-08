@@ -33,15 +33,19 @@ export const VENTAS_ERROR_CODES = [
   'ContactCreateFailed',
   'DealNotFound',
   'DealCreateFailed',
+  'DealCreatorRequired',
+  'DealCreatorLocked',
   'DealLocked',
   'DuplicateDomain',
   'DuplicateEmail',
   'EmptyContact',
   'InvalidAmount',
   'InvalidCompany',
+  'InvalidCreator',
   'InvalidDealName',
   'InvalidHeadline',
   'InvalidName',
+  'NoCreatorInScope',
   'InvalidOwner',
   'InvalidReason',
   'InvalidRelationship',
@@ -268,6 +272,13 @@ export interface SignalRow {
   openDealId: string | null;
   openDealName: string | null;
   /**
+   * La marca no tiene un negocio abierto que la persona vea, pero sí uno
+   * de un creador que no lleva (ACC-7, open_deal_out_of_scope). Aceptarla
+   * no abre otro (acceptSignal, dealHiddenOutOfScope). Siempre falso para
+   * quien ve a todos.
+   */
+  openDealHidden: boolean;
+  /**
    * Cuántos negocios abiertos tiene esa empresa: «No aceptar esta marca»
    * avisa que sus toques programados se cancelan (brief_excluded).
    */
@@ -364,6 +375,13 @@ export interface PipelineDealRow {
   ownerName: string | null;
   /** Por qué se perdió; solo en un negocio en una etapa perdida. */
   lostReason: LostReason | null;
+  /**
+   * De qué creador es (ACC-7) y su nombre; null es «sin creador», que con
+   * alcance por creador solo ve quien ve a todos. Se cambia con
+   * setDealCreator.
+   */
+  creatorId: string | null;
+  creatorName: string | null;
 }
 
 export type DueState = 'sin_fecha' | 'vencido' | 'hoy' | 'futuro';

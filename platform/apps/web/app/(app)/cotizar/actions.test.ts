@@ -26,6 +26,7 @@ import {
   desbloquearMediaKit, editarCotizacion, eliminarBorrador, enviarCotizacion, generarMediaKit, guardarTarifario,
   marcarAvisoBloqueoVisto, marcarAvisoVisto, rechazarCotizacion,
 } from "./actions";
+import { ScopeError } from "@mc/db";
 import { MESSAGES } from "./messages";
 import { BASIS_VACIO, type BasisTarifario } from "./_lib/tarifario";
 
@@ -87,5 +88,39 @@ describe("el rol (pulido r3)", () => {
     await expect(marcarAvisoVisto(QUOTE)).rejects.toThrow("redirect:/cotizar/cotizaciones");
     await expect(marcarAvisoBloqueoVisto(KIT, "/cotizar/media-kit")).rejects.toThrow("redirect:/cotizar/media-kit");
     expect(withWorkspace).not.toHaveBeenCalled();
+  });
+});
+
+describe("fuera del alcance (ACC-7)", () => {
+  const QUOTE = "00000005-0000-4000-8000-000000000001";
+  /** El 42501 con que la base rechaza la fila (0082 §3), envuelto como lo envuelve Drizzle. */
+  const deLaBase = () =>
+    Object.assign(new Error("Failed query"), {
+      cause: Object.assign(new Error('new row violates row-level security policy "campaign_creator_scope" for table "campaign"'), {
+        code: "42501",
+      }),
+    });
+
+  it("el texto de la pantalla es el de ScopeError, y la URL lleva el código, no el texto", async () => {
+    expect(MESSAGES.errores.ScopeError).toBe(new ScopeError().messageEs);
+    withWorkspace.mockRejectedValue(new ScopeError());
+    await expect(crearCampanaDeCotizacion(QUOTE)).rejects.toThrow(`redirect:/cotizar/cotizaciones/${QUOTE}?error=ScopeError`);
+  });
+
+  it("el 42501 de la política por creador también se dice como ScopeError, no con el mensaje genérico", async () => {
+    withWorkspace.mockRejectedValue(deLaBase());
+    await expect(crearCampanaConVentana(QUOTE, {}, (() => {
+      const fd = new FormData();
+      fd.set("startsOn", "2026-11-01");
+      fd.set("endsOn", "2026-11-30");
+      return fd;
+    })())).resolves.toEqual({ message: new ScopeError().messageEs });
+    withWorkspace.mockRejectedValue(deLaBase());
+    await expect(aceptarCotizacion(QUOTE)).rejects.toThrow(`redirect:/cotizar/cotizaciones/${QUOTE}?error=ScopeError`);
+  });
+
+  it("otro 42501 (un permiso que falta) sigue siendo el genérico", async () => {
+    withWorkspace.mockRejectedValue(Object.assign(new Error("permission denied for table membership_scope"), { code: "42501" }));
+    await expect(crearCampanaDeCotizacion(QUOTE)).rejects.toThrow(`redirect:/cotizar/cotizaciones/${QUOTE}?error=generico`);
   });
 });

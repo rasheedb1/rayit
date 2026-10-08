@@ -272,6 +272,15 @@ export const MESSAGES = {
     /** Lo mismo cuando el negocio se llama como la marca (los viejos del radar). */
     joinsOpenDeal: "Al aceptarla se sumará al negocio abierto con esta marca: no abre otro.",
     /**
+     * La marca tiene un negocio abierto de un creador que esta persona no
+     * lleva (ACC-7): aceptarla no abre otro ni toca ese (acceptSignal,
+     * dealHiddenOutOfScope). Lo mismo que dice la bandeja.
+     */
+    hiddenDeal:
+      "Esta marca ya tiene un negocio abierto de un creador que no llevas: aceptarla no abre otro. Si es para uno de tus creadores, ábrelo desde su ficha.",
+    hiddenDealNotice: (name: string) =>
+      `${name} ya tiene un negocio abierto de un creador que no llevas. No se abrió otro y la señal sigue pendiente para quien lo lleva. Si es para uno de tus creadores, ábrelo desde la ficha.`,
+    /**
      * Al aceptar: el CRM ya tiene una empresa con ese nombre y otro
      * dominio (marca.com y marca.co). Se pregunta en vez de crear una
      * segunda en silencio (pulido r2).
@@ -478,12 +487,45 @@ export const MESSAGES = {
         name: "Nombre del negocio",
         namePlaceholder: "Serie de 3 videos · Q4",
         amount: "Monto estimado",
+        /** De qué creador es (ACC-7): solo aparece cuando hay más de uno para elegir. */
+        creator: "Creador",
+        creatorNone: "Sin creador",
+        creatorPick: "Elige un creador",
+        /** Acotada a creadores que ya no están (dados de baja): no hay de quién abrir un negocio. */
+        noCreators:
+          "Tu acceso está limitado a creadores que ya no están en el espacio: no puedes abrir negocios. Pide a quien administra el equipo que te asigne uno.",
         submit: "Abrir negocio",
         created: (name: string) => `Abriste «${name}». Está en «Nuevo», en el pipeline.`,
         error: "No se pudo abrir el negocio.",
       },
       quote: "Cotizar",
       quoteLabel: (name: string) => `Cotizar «${name}»`,
+      /**
+       * De qué creador es cada negocio (ACC-7): con alcance por creador,
+       * decide quién lo ve. Se dice en la ficha y se puede cambiar.
+       */
+      dealCreator: {
+        label: "Creador",
+        none: "Sin creador",
+        /** Por qué importa «Sin creador»: quien lleva solo a algunos creadores no lo ve. */
+        noneHelp: "Solo lo ve quien ve a todos los creadores del espacio.",
+        /**
+         * El botón dice qué cambia: en la misma tarjeta está el «Cambiar»
+         * de la siguiente acción. «Asignar» cuando todavía no tiene.
+         */
+        change: "Cambiar creador",
+        assign: "Asignar creador",
+        changeLabel: (deal: string) => `Cambiar de qué creador es «${deal}»`,
+        assignLabel: (deal: string) => `Asignar un creador a «${deal}»`,
+        save: "Guardar",
+        saved: (creator: string) => `Ahora es de ${creator}.`,
+        savedNone: "Ahora no es de ningún creador.",
+        unchanged: "Ya era de ese creador.",
+        error: "No se pudo cambiar el creador del negocio.",
+      },
+      /** La marca tiene negocios que esta persona no ve por su alcance (open_deal_out_of_scope). */
+      hiddenDeals:
+        "Esta marca tiene negocios abiertos de creadores que no llevas, o sin creador. No los ves aquí; quien los lleva sí.",
       notFound: {
         title: "Esa empresa no está en tu espacio",
         description: "Puede que el enlace sea de otro espacio de trabajo o que la empresa ya no esté vinculada.",
@@ -564,6 +606,12 @@ export const MESSAGES = {
     title: "Pipeline",
     board: "Tablero",
     list: "Lista",
+    /**
+     * De qué creador es el negocio, en la tarjeta, la fila móvil y la lista
+     * (ACC-7). Con su etiqueta: sin ella, «Camilo Rey» debajo del negocio
+     * podía ser el contacto o el responsable. «Sin creador» se dice solo.
+     */
+    creatorLine: (name: string) => `Creador: ${name}`,
     viewLabel: "Forma de ver el pipeline",
     empty: {
       title: "Todavía no hay negocios",
@@ -926,6 +974,8 @@ export const MESSAGES = {
     companyName: "La empresa necesita un nombre.",
     companyNameTooLong: "El nombre cabe en 200 caracteres.",
     company: "La empresa no es válida.",
+    deal: "Ese negocio no es válido.",
+    creator: "Elige uno de los creadores de la lista.",
     source: "Di de dónde sacaste el dato: sin eso no se guarda.",
     email: "El correo no es válido.",
     linkedin: "El LinkedIn tiene que ser un enlace que empiece por https://.",
@@ -954,6 +1004,10 @@ export const MESSAGES = {
     ContactCreateFailed: "No se pudo guardar el contacto.",
     DealNotFound: "Ese negocio no existe en tu espacio.",
     DealCreateFailed: "No se pudo abrir el negocio.",
+    DealCreatorRequired:
+      "Llevas a varios creadores: di de cuál es el negocio. Desde la ficha de la marca, en «Nuevo negocio», puedes elegirlo.",
+    DealCreatorLocked:
+      "Este negocio ya tiene una cotización enviada o una campaña de otro creador: cambiarlo partiría el acuerdo entre dos. Solo puede ser del creador de esa cotización o esa campaña.",
     DealLocked: (p: Readonly<Record<string, string>>) =>
       p.reason === "quote"
         ? "Este negocio tiene una cotización aceptada: no sale de «Ganado». Termina su campaña desde la cotización y, si el acuerdo se cayó, cancélala en Campañas antes de reabrirlo."
@@ -964,9 +1018,12 @@ export const MESSAGES = {
     EmptyContact: "Un contacto necesita al menos nombre, correo o usuario de Instagram.",
     InvalidAmount: "El monto no es válido: solo números, con hasta dos decimales.",
     InvalidCompany: "Di de qué marca es la señal: su nombre o su dominio.",
+    InvalidCreator: "Ese creador no está en tu espacio.",
     InvalidDealName: "El negocio necesita un nombre de hasta 120 caracteres.",
     InvalidHeadline: "La señal necesita una línea que diga qué viste.",
     InvalidName: "La empresa necesita un nombre.",
+    NoCreatorInScope:
+      "Tu acceso está limitado a creadores que ya no están en el espacio: no puedes abrir negocios. Pide a quien administra el equipo que te asigne uno.",
     InvalidOwner: "El responsable tiene que ser alguien de tu espacio.",
     InvalidReason: "Di por qué la descartas: es lo que afina el radar.",
     InvalidRelationship: "Esa relación no existe.",

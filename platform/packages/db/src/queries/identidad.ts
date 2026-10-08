@@ -27,6 +27,7 @@
  */
 import { and, asc, eq, sql } from 'drizzle-orm';
 import type { IdentityTx, WorkspaceTx } from '../client.ts';
+import { findInCauseChain } from '../pg-error.ts';
 import { appUser, creatorProfile, isRoleKey, membership, role, workspace, type RoleKey } from '../schema/index.ts';
 
 export type AppUser = typeof appUser.$inferSelect;
@@ -143,12 +144,12 @@ export class AuthIdentityMismatchError extends Error {
 
 /** ¿Es el choque contra el índice único de app_user.auth_user_id? */
 function esOtroCorreo(err: unknown): boolean {
-  for (let e: unknown = err; e instanceof Error; e = e.cause) {
-    if (/app_user_auth_user_id_key/.test(e.message)) return true;
-    const c = (e as { constraint?: unknown }).constraint;
-    if (c === 'app_user_auth_user_id_key') return true;
-  }
-  return false;
+  return (
+    findInCauseChain(
+      err,
+      (e) => e.constraint === 'app_user_auth_user_id_key' || (typeof e.message === 'string' && /app_user_auth_user_id_key/.test(e.message)),
+    ) !== null
+  );
 }
 
 /**

@@ -26,7 +26,8 @@
  *     Abrir por defecto sería una política de alcance que no se ve como
  *     un bug.
  */
-import type { WorkspaceTx } from './client.ts';
+import type { SqlExecutor, WorkspaceTx } from './client.ts';
+import { findPgError, withSavepoint, type PgLikeError, type SavepointName } from './pg-error.ts';
 
 /** membership_scope.scope_type (CHECK en 0034 §6). */
 export const SCOPE_KINDS = ['creator', 'company', 'campaign'] as const;
@@ -57,6 +58,13 @@ export type ScopeAnchors = Readonly<Record<ScopeKind, string | ScopeMany | null>
  * MVP—. Repite la primera mitad de scope_allows() a propósito: la
  * función no se expande en línea (lleva subconsultas) y se llamaría por
  * fila, con el ARRAY(…) de las anclas uno-a-muchos calculado para nada.
+ *
+ * Para el tipo 'creator' es, letra por letra, la negación de
+ * session_sees_all_creators() (0082 §1), la que piden las políticas por
+ * creador de la base: una consulta con scopeFilter() y una cruda dan las
+ * mismas filas a la misma persona. No hay excepción por rol en ninguno
+ * de los dos sitios: Dueño y Administrador ven a todos porque la base no
+ * les deja tener filas de alcance (0082 §2).
  */
 function scopeHas(kind: ScopeKind): string {
   return (
@@ -124,6 +132,110 @@ export async function assertScopeAllows(tx: WorkspaceTx, targets: Readonly<Recor
     [targets.creator, targets.company, targets.campaign],
   );
   if (rows[0]?.ok !== true) throw new ScopeError();
+}
+
+/**
+ * Las tablas que llevan la política RESTRICTIVA por creador en la base
+ * (ACC-7, 0082 §3). Es la fuente de la lista: la guardia del esquema
+ * (TABLAS_CON_ALCANCE_POR_CREADOR) tiene que declarar exactamente estas,
+ * y scopeErrorOf() reconoce sus políticas por el nombre.
+ */
+export const CREATOR_SCOPE_TABLES = ['social_connection', 'post', 'campaign', 'deal'] as const;
+export type CreatorScopeTable = (typeof CREATOR_SCOPE_TABLES)[number];
+
+/**
+ * El nombre de la política de 0082 §3 en el mensaje del 42501:
+ * `"deal_creator_scope"`. Postgres lo pone entre las comillas de su
+ * idioma (lc_messages): rectas en inglés, que es el de Supabase, «…» en
+ * español y “…” en otros catálogos. Se aceptan las tres.
+ */
+const CREATOR_POLICY_IN_MESSAGE = new RegExp(`["«“](${CREATOR_SCOPE_TABLES.join('|')})_creator_scope["»”]`);
+
+/**
+ * El 42501 con el que la base rechaza una fila nueva a nombre de un
+ * creador fuera del alcance (la política por creador de 0082 §3), como
+ * ScopeError; `null` si el error es otra cosa.
+ *
+ * Es la red: las altas de @mc/db ya comprueban el alcance antes de
+ * escribir y lanzan ScopeError ellas mismas. Esto es para que una
+ * escritura que se le escape a esa comprobación tampoco llegue a la
+ * pantalla como un error de Postgres en inglés. Postgres no pone la
+ * política en un campo del error: la nombra en el mensaje, entre las
+ * comillas del idioma del servidor (CREATOR_POLICY_IN_MESSAGE), y solo
+ * cuando la que falla es una RESTRICTIVA (que es justo esta).
+ */
+export function scopeErrorOf(err: unknown): ScopeError | null {
+  if (err instanceof ScopeError) return err;
+  return findPgError(err, '42501', undefined, isCreatorPolicyRejection) !== null ? new ScopeError() : null;
+}
+
+/** ¿El 42501 nombra una de las políticas por creador? Ver scopeErrorOf. */
+function isCreatorPolicyRejection(p: PgLikeError): boolean {
+  return typeof p.message === 'string' && CREATOR_POLICY_IN_MESSAGE.test(p.message);
+}
+
+/** Los SAVEPOINT de writeOrScopeError: los de withSavepoint (pg-error.ts) que lo usan. */
+export type ScopeSavepoint = Extract<SavepointName, 'campana_de_cotizacion' | 'autorizar_cuenta_por_arroba'>;
+
+/**
+ * Una escritura que puede chocar con un índice único contra una fila que
+ * la transacción NO ve por el alcance por creador (ACC-7, 0082 §3).
+ *
+ * Antes de ACC-7 las consultas buscaban esa fila sin `scopeFilter()` y,
+ * si estaba fuera del alcance, lanzaban ScopeError antes de escribir.
+ * Con la política por creador en la base esa búsqueda ya no la
+ * encuentra: el único que sabe que existe es el índice único, que cuenta
+ * todas las filas. Aquí se escribe dentro de un SAVEPOINT (withSavepoint)
+ * y, si choca con `constraint`, se pregunta:
+ *
+ *   · ¿la persona ve a todos los creadores? Entonces el choque es otra
+ *     cosa (dos altas a la vez) y se relanza tal cual;
+ *   · ¿está acotada, pero la fila con la que choca SÍ la ve (`isVisible`,
+ *     una SELECT cruda que ya pasa por la política)? También se relanza:
+ *     es suya (un doble envío, dos pestañas, la misma cuenta que otra
+ *     persona autorizó un instante antes), no algo fuera de su alcance;
+ *   · solo si está acotada y no la ve, es ScopeError.
+ *
+ * La transacción sigue usable en los tres casos. Si la vuelta al
+ * SAVEPOINT falla, llega el error original (withSavepoint).
+ */
+export async function writeOrScopeError<T>(
+  tx: WorkspaceTx,
+  savepoint: ScopeSavepoint,
+  constraint: string,
+  write: () => Promise<T>,
+  isVisible: () => Promise<boolean>,
+): Promise<T> {
+  return withSavepoint(tx, savepoint, write, async (err) => {
+    if (findPgError(err, '23505', constraint) !== null) {
+      const { rows } = await tx.query<{ all: boolean }>('SELECT session_sees_all_creators() AS all');
+      if (rows[0]?.all === false && !(await isVisible())) throw new ScopeError();
+    }
+    throw err;
+  });
+}
+
+/**
+ * El creador de una fila nueva que no lo trae (un negocio que nace del
+ * radar, de una respuesta o de la ficha de una marca): el único de los
+ * que la persona de la transacción puede poner, o `null` si hay cero o
+ * varios. La pregunta es de la base, `sole_creator_for_session(ws)`
+ * (0082 §1b), con el espacio como parámetro: la misma para la web, la
+ * bandeja y el worker (que nombra su espacio porque no lo fija), y la
+ * misma lista que enseña el selector (`creators_for_session`). Un
+ * alcance a un creador dado de baja no cuenta.
+ *
+ * `seesAll` es `session_sees_all_creators()`: con `creatorId` null,
+ * dice si eso es «sin creador» (quien ve a todos) o «no se sabe de
+ * quién, y sin creador no lo verías» (quien está acotado).
+ */
+export async function soleCreatorFor(tx: SqlExecutor, workspaceId: string): Promise<{ creatorId: string | null; seesAll: boolean }> {
+  const { rows } = await tx.query<{ id: string | null; all: boolean }>(
+    'SELECT sole_creator_for_session($1::uuid) AS id, session_sees_all_creators() AS all',
+    [workspaceId],
+  );
+  // Una respuesta que no llega se lee como «acotada»: cerrado, nunca abierto.
+  return { creatorId: rows[0]?.id ?? null, seesAll: rows[0]?.all === true };
 }
 
 /**

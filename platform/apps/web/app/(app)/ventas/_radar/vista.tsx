@@ -85,6 +85,7 @@ export function RadarView({
               dealName: s.openDealId !== null ? dealLabel(s.companyName, s.openDealName) : null,
             }
           : null,
+      hiddenDeal: s.openDealHidden,
       hiddenReason: s.hiddenBy ? h.reason[s.hiddenBy]((s.hiddenMatch ?? s.companyName ?? "").trim()) : null,
       fitNotes: [
         ...(s.briefFit.belowMinBudget ? [bf.belowMin] : []),

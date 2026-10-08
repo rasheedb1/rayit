@@ -37,7 +37,7 @@
  */
 import { audit } from '../audit.ts';
 import type { WorkspaceTx } from '../client.ts';
-import { ScopeError, scopeFilter } from '../scope.ts';
+import { ScopeError, scopeFilter, writeOrScopeError } from '../scope.ts';
 
 // ---------------------------------------------------------------------
 // Tipos
@@ -1037,7 +1037,9 @@ export async function markAccountLookupFailure(tx: WorkspaceTx, connectionId: st
  * previo de «Agregar»), que van a escribir. Si la fila existe pero es de
  * un creador fuera del alcance, NO se devuelve null (se crearía una
  * segunda fila para la misma cuenta real bajo otro creador): se lanza
- * ScopeError antes de escribir.
+ * ScopeError antes de escribir. Desde ACC-7 la fila de otra creadora ni
+ * siquiera se ve (0082 §3), así que, si no aparece, se pregunta a
+ * public_account_out_of_scope() (0082 §4), que responde solo sí o no.
  */
 export async function findPublicAccountByHandle(tx: WorkspaceTx, platformId: ConnectionPlatformId, handle: string): Promise<ExistingConnection | null> {
   const { rows } = await tx.query<{ id: string; secret_ref: string; deleted_at: string | Date | null; status: ConnectionStatus; visible: boolean }>(
@@ -1046,7 +1048,11 @@ export async function findPublicAccountByHandle(tx: WorkspaceTx, platformId: Con
     [platformId, handle],
   );
   const r = rows[0];
-  if (!r) return null;
+  if (!r) {
+    const hidden = await tx.query<{ out: boolean }>('SELECT public_account_out_of_scope($1, $2) AS out', [platformId, handle]);
+    if (hidden.rows[0]?.out === true) throw new ScopeError();
+    return null;
+  }
   if (!r.visible) throw new ScopeError();
   return { id: r.id, secretRef: r.secret_ref, deletedAt: iso(r.deleted_at), status: r.status };
 }
@@ -1084,6 +1090,8 @@ export async function upgradePublicAccountToOAuth(tx: WorkspaceTx, id: string, i
   // Si ese open_id ya lo tiene una cuenta de una creadora fuera del
   // alcance, no se retira (sería tocar una fila ajena) y el UPDATE de
   // abajo chocaría con el UNIQUE como un error cualquiera: se dice antes.
+  // Fuera del alcance por CREADOR la fila ya no se ve (0082, ACC-7): esa
+  // la dice el UNIQUE en el UPDATE de abajo, con writeOrScopeError.
   const foreign = await tx.query(
     `SELECT 1 FROM social_connection c
       WHERE c.platform_id = (SELECT platform_id FROM social_connection WHERE id = $1) AND c.external_account_id = $2 AND c.id <> $1
@@ -1110,7 +1118,18 @@ export async function upgradePublicAccountToOAuth(tx: WorkspaceTx, id: string, i
      RETURNING s.id, prev.status AS prev_status, prev.access_mode AS prev_access_mode, prev.was_deleted`,
     [id, input.externalAccountId],
   );
-  const { rows } = await tx.query<{ id: string }>(
+  // Con quién chocaría el UPDATE: otra fila con ese open_id. Si quien
+  // autoriza la ve, el choque es suyo (otra persona la autorizó un instante
+  // antes) y se relanza; si no la ve, es de otra creadora (ScopeError).
+  const otraCuentaVisible = async () =>
+    (
+      await tx.query(
+        `SELECT 1 FROM social_connection c
+          WHERE c.platform_id = (SELECT platform_id FROM social_connection WHERE id = $1) AND c.external_account_id = $2 AND c.id <> $1`,
+        [id, input.externalAccountId],
+      )
+    ).rows.length > 0;
+  const { rows } = await writeOrScopeError(tx, 'autorizar_cuenta_por_arroba', 'social_connection_platform_id_external_account_id_workspace_key', () => tx.query<{ id: string }>(
     `UPDATE social_connection c
         SET external_account_id = $2, handle = COALESCE($3, c.handle), display_name = COALESCE($4, c.display_name),
             avatar_url = COALESCE($5, c.avatar_url), profile_url = COALESCE($6, c.profile_url), account_type = $7,
@@ -1120,7 +1139,7 @@ export async function upgradePublicAccountToOAuth(tx: WorkspaceTx, id: string, i
       WHERE c.id = $1 AND c.deleted_at IS NULL AND ${SCOPE_CONNECTION}
       RETURNING c.id`,
     [id, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl, input.accountType, input.secretRef, [...input.scopes], input.accessExpiresAt, input.refreshExpiresAt, input.connectedAt ?? null],
-  );
+  ), otraCuentaVisible);
   if (rows.length === 0) throw new ConnectionNotFound(id);
   const delegation = await delegationFor(tx, ownBefore.creator_id);
   for (const old of retired.rows) {

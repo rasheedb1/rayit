@@ -13,7 +13,7 @@ src/embedded.ts    PGlite con db/migrations + db/seed, corriendo como mc_app
 src/from-env.ts    cómo la web elige entre los dos (DATABASE_URL o demo)
 src/audit.ts       audit / auditAsJob: la bitácora obligatoria de toda escritura (uso 7)
 src/tls.ts         la CA de Supabase, verificada siempre (nunca rejectUnauthorized: false)
-src/scope.ts       scopeFilter / assertScopeAllows / assertUnscoped: el alcance dentro del workspace (uso 9)
+src/scope.ts       scopeFilter / assertScopeAllows / assertUnscoped / writeOrScopeError: el alcance dentro del workspace (uso 9)
 src/schema/        tablas y vistas del MVP, curadas desde db/migrations
 src/queries/       un archivo por módulo: cimientos, catalogos, resumen, ventas,
                    cotizar, campanas, finanzas (facturas y gastos), conexiones
@@ -485,8 +485,79 @@ Las reglas, y por qué:
   `scope_allows()` no encuentra filas y deja pasar todo, y ningún archivo
   de `apps/worker/src` compone el alcance (lo comprueba la prueba de
   convención). El alcance es de la web.
-- ACC-7 puede usar el mismo predicado como política restrictiva:
-  `USING (scope_allows('creator', creator_id))`.
+- **Y en cuatro tablas, también la base (ACC-7, 0082).**
+  `social_connection`, `post`, `campaign` y `deal` (`CREATOR_SCOPE_TABLES`)
+  llevan una política RESTRICTIVE solo para `mc_app`: `(SELECT
+  session_sees_all_creators()) OR scope_allows('creator', creator_id)`.
+  Una consulta cruda que se olvide de `scopeFilter()` no devuelve filas de
+  otro creador, y una escritura no las crea ni las mueve (42501, que
+  `scopeErrorOf()` traduce a `ScopeError`). El worker (BYPASSRLS) y los
+  enlaces públicos (`mc_public_share`) no pasan por ella. Solo cubre el
+  alcance por **creador**: el de marca y campaña sigue siendo de
+  `scopeFilter()`. **No** cubre las métricas, `quote`, `invoice`,
+  `payment` ni `data_consent` (ACC-10).
+- **Una sola regla de «ve a todos».** Ve a todos los creadores quien no
+  tiene filas de alcance por creador: lo mismo en `scopeFilter()`, en la
+  política y en `session_has_scope()` (Equipo). Dueño y Administrador ven
+  todo porque la base no les deja tener alcance (disparador
+  `membership_full_role_unscoped`, 0082 §2), no por una excepción. «Es
+  Dueño o Administrador» está escrito una vez, `role_is_full_access(role_id)`:
+  lo preguntan el disparador, la comprobación previa de 0082 y Equipo.
+- **La guardia** exige las cuatro políticas con su forma y **TO mc_app y
+  nadie más** (TO PUBLIC también acotaría a la web, pero rompe los enlaces
+  públicos: `mc_public_share` no puede leer el alcance), que toda tabla
+  con `creator_id` esté en `TABLAS_CON_ALCANCE_POR_CREADOR` o en
+  `TABLAS_CON_CREADOR_SIN_POLITICA` con su motivo, y que los cuerpos de
+  las funciones de la red sean los de su migración (`CUERPOS_DEL_ALCANCE`,
+  md5): `session_sees_all_creators()`, `scope_allows()`, el disparador,
+  `role_is_full_access()`, las dos listas de creadores y las tres SECURITY
+  DEFINER que responden sí o no (`public_account_out_of_scope`,
+  `open_deal_out_of_scope`, `deal_creator_locked`).
+- **Lo que esa política esconde y el código necesita saber.** Antes se
+  buscaba «la fila ya existe, pero fuera de tu alcance» sin filtro; ahora
+  la base no la enseña. Si quien lo sabe es un índice único, la escritura
+  va en `writeOrScopeError(tx, savepoint, restricción, fn, esVisible)`:
+  si choca, la persona está acotada y la fila con la que choca no la ve
+  (`esVisible`, una SELECT cruda que ya pasa por la política), es
+  `ScopeError`; si la ve, es el 23505 de siempre (un doble envío, dos
+  pestañas). La transacción sigue usable en los dos casos: el SAVEPOINT
+  lo lleva `withSavepoint` (src/pg-error.ts), el único recorrido
+  SAVEPOINT / ROLLBACK TO / RELEASE de @mc/db (también lo usa Equipo). Si
+  no hay índice (el @ de una cuenta), una función que responde solo sí o
+  no (`public_account_out_of_scope`, 0082 §4).
+- **De qué creador es un negocio** sale de UNA lista en la base,
+  `creators_for_session(ws)` (0082 §1b): los creadores vivos que la
+  persona puede poner (los de su alcance, o todos). Un alcance a un
+  creador dado de baja no cuenta. La leen el selector
+  (`listDealCreatorOptions`, con `seesAll` en su propia consulta), las
+  altas (`creatorForNewDeal`: el único, `null` «sin creador» para quien
+  ve a todos, `DealCreatorRequired` o `NoCreatorInScope` para quien está
+  acotado). El negocio que abre una respuesta de outreach es del creador
+  de la cuenta que la envió, o del brief de su cadencia
+  (`originCreatorOf`); sin creador de origen, del de
+  `sole_creator_for_session(ws)` (`soleCreatorFor(tx, workspaceId)`, con
+  el espacio como parámetro: no se interpola SQL). Desde la bandeja, quien
+  está acotado y no tiene de quién abrirlo marca «Me interesa» sin que se
+  abra el negocio (`dealNeedsCreator`: `'pick'` si lleva a varios,
+  `'none'` si solo a creadores dados de baja), y no toca el negocio de
+  otro creador ni abre uno a nombre de otro (`out_of_scope`, con
+  `open_deal_out_of_scope()`, 0082 §6, que solo dice sí o no). El creador
+  de un negocio se cambia con `setDealCreator(tx, dealId, creatorId |
+  null)`, que deja bitácora (`deal.creator_changed`) y no parte un acuerdo
+  cuya cotización enviada o campaña viva es de otro creador
+  (`DealCreatorLocked`, `deal_creator_locked()`, 0082 §7). Prueba:
+  `test/alcance-rls.test.ts`.
+- **Los negocios y campañas de antes** sin creador pasan, en 0082 §5, al
+  único creador vivo de su espacio cuando hay uno solo (sin tocar
+  `updated_at`); con varios quedan «sin creador» y la ficha lo dice.
+- **Los errores de Postgres** se reconocen por código y restricción con
+  `findPgError()` (`src/pg-error.ts`), sobre `findInCauseChain()`: el
+  único sitio de @mc/db y de la web que busca un error de Postgres en la
+  cadena `cause`; un
+  predicado opcional cubre lo que Postgres solo pone en el mensaje (el
+  nombre de la política, `scopeErrorOf()`). En Equipo,
+  `isFullRoleUnscopedError()` y el código `scoped_member` de
+  `changeMemberRole` dicen «quítale antes el alcance».
 
 ## Lo que hace el cliente por ti
 

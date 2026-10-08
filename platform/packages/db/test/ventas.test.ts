@@ -662,7 +662,7 @@ describe('VEN-2 · radar', () => {
     const marca = await laura((tx) => acceptSignal(tx, soloMarca.id!));
 
     const pipeline = await laura((tx) => listPipeline(tx));
-    const nombre = (id: string) => pipeline.find((d) => d.id === id)?.name;
+    const nombre = (id: string | null) => pipeline.find((d) => d.id === id)?.name;
     assert.equal(nombre(conTitular.dealId), 'Abre 3 tiendas en Bogotá');
     assert.equal(nombre(sinTitular.dealId), 'Por definir');
     assert.equal(nombre(marca.dealId), PENDING_DEAL_NAME);

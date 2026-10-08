@@ -6,6 +6,7 @@ import { AuthIdentityMismatchError, type MyWorkspace } from "@mc/db/queries/iden
 import { isAuthConfigured, type Env } from "@/lib/auth/config";
 import { getSesion, type Sesion } from "@/lib/auth/session";
 import { leerOCrearSesion } from "@/lib/auth/sincronizar";
+import { usuarioDeDemo } from "./demo";
 import { espacioDeLaCookie } from "./elegir";
 
 /**
@@ -68,7 +69,10 @@ export const SEED_WORKSPACE_ID = "00000002-0000-4000-8000-000000000001";
 /** Lo que una petición necesita saber antes de abrir una transacción. */
 export interface Contexto {
   workspaceId: string;
-  /** Quién es, cuando hay sesión. En modo demo no hay nadie y app.user_id queda NULL. */
+  /**
+   * Quién es, cuando hay sesión. En modo demo, la persona de DEMO_USER_ID
+   * si se fijó (lib/workspace/demo.ts); si no, nadie y app.user_id queda NULL.
+   */
   identity?: Identity;
   sesion: Sesion | null;
   /**
@@ -195,7 +199,11 @@ export const getCurrentContext = cache(async (): Promise<Contexto> => {
     // Con llaves y sin sesión no hay NADA que servir. `redirect` lanza,
     // así que de aquí no sale ningún workspace.
     if (isAuthConfigured()) redirect("/login");
-    return { workspaceId: workspaceDeDesarrollo(), sesion: null, workspaces: [] };
+    // Sin llaves, la persona simulada (DEMO_USER_ID, lib/workspace/demo.ts)
+    // también va en las transacciones de las pantallas: los permisos del
+    // marco y las filas que deja ver la base son de la misma persona.
+    const demo = usuarioDeDemo();
+    return { workspaceId: workspaceDeDesarrollo(), identity: demo ? { userId: demo } : undefined, sesion: null, workspaces: [] };
   }
   const { sesion, identity, workspaces } = yo;
 

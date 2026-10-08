@@ -32,7 +32,7 @@ before(async () => {
   await t.admin(`
     INSERT INTO workspace (id, slug, name) VALUES ('${WORKSPACE_AJENO}', 'ajeno-alcance', 'Ajeno') ON CONFLICT DO NOTHING;
     INSERT INTO app_user (id, email) VALUES ('${USER_AJENO}', 'ajeno.alcance@ejemplo.com') ON CONFLICT DO NOTHING;
-    INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WORKSPACE_AJENO}', '${USER_AJENO}', system_role_id('creator', 'owner')) ON CONFLICT DO NOTHING;
+    INSERT INTO membership (workspace_id, user_id, role_id) VALUES ('${WORKSPACE_AJENO}', '${USER_AJENO}', system_role_id('creator', 'manager')) ON CONFLICT DO NOTHING; -- con alcance: Dueño no lo lleva (0082 §2)
     INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
     VALUES ('${WORKSPACE_AJENO}', '${USER_AJENO}', 'creator', '${CREATOR_SOFIA}') ON CONFLICT DO NOTHING;
   `);

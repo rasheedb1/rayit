@@ -534,6 +534,12 @@ export const MESSAGES = {
     MediaKitNotFound: "Ese media kit no existe en este espacio de trabajo.",
     CreatorNotFound: "No encontramos tu perfil de creador.",
     DealNotFound: "Ese negocio no existe en este espacio de trabajo.",
+    /**
+     * Lo que se iba a escribir quedaría fuera del alcance de quien escribe
+     * (ACC-6/ACC-7). Es el mismo texto que ScopeError.messageEs de @mc/db
+     * (la URL lleva el código, no el texto); actions.test.ts lo exige.
+     */
+    ScopeError: "Eso quedaría fuera de tu alcance en este espacio.",
     CompanyNotFound: "Elige la marca a la que le cotizas.",
     TasaInvalida: "El impuesto es un porcentaje entre 0 y 100.",
     TarifarioVacio: "Todavía no hay ningún entregable que se pueda calcular.",

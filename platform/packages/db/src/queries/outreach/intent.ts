@@ -55,6 +55,7 @@ import { cleanReferral, MESSAGE_INTENTS, notNowResumeAt, oooResumeAt, type Messa
 import { noticeLang } from '@mc/core/outreach/messages';
 import { zonedInstant, zonedParts } from '@mc/core/outreach/schedule';
 import type { SqlExecutor, WorkerSql } from '../../client.ts';
+import { soleCreatorFor } from '../../scope.ts';
 import { advanceEnrollment, cancelPendingForEnrollment } from './enroll.ts';
 import { CANCELABLE_TOUCH_STATUSES } from '../../schema/ventas.ts';
 import { applyReplyOptOut, cancelLoosePitches, type InboundEffectsInput } from './inbound.ts';
@@ -270,6 +271,17 @@ export interface IntentEffects {
    * el interesado no llegaba nunca al pipeline.
    */
   dealCreated: boolean;
+  /**
+   * Un «me interesa» corregido desde la bandeja por quien está acotado
+   * por creador, sin negocio abierto con la marca y sin un creador de
+   * origen (la cuenta que envió o el brief de la cadencia): la intención
+   * queda escrita, pero el negocio no se abre porque no se sabe de qué
+   * creador es (openDealFromReply). 'pick': lleva a varios, que lo abra
+   * desde la ficha eligiendo; 'none': solo a creadores dados de baja, no
+   * puede abrir ninguno. La bandeja dice cada uno. Nunca en el worker,
+   * que no tiene alcance.
+   */
+  dealNeedsCreator: DealNeedsCreator;
   /** La cadencia del hilo quedó en enfriamiento o en pausa hasta esta fecha. */
   resumeAt: Date | null;
   /** Toques devueltos a la cola por un «fuera de la oficina» que había detenido la cadencia. */
@@ -281,6 +293,9 @@ export interface IntentEffects {
   notified: boolean;
 }
 
+/** Por qué un «me interesa» no abrió su negocio: a cuál de varios creadores ('pick') o a ninguno vivo ('none'). */
+export type DealNeedsCreator = 'pick' | 'none' | null;
+
 /** Lo que rodea al mensaje: su negocio, su marca, quién recibe el aviso. */
 interface Surroundings {
   deal_id: string | null;
@@ -291,16 +306,60 @@ interface Surroundings {
   enrollment_status: string | null;
 }
 
+/**
+ * El creador de origen del mensaje `m` (un alias de outbound_message en
+ * la consulta que lo compone), como `LEFT JOIN LATERAL (…) <alias>` con
+ * una columna `id`: el de la cuenta de envío del mensaje, si no el de la
+ * cuenta de su toque, si no el del brief de su cadencia; el primero que
+ * sea un creador vivo del espacio. NULL si no hay ninguno. Es UNA
+ * definición para originCreatorOf (lo que abre el negocio) y surroundings
+ * (qué negocio mueve): las dos tienen que decir el mismo creador.
+ */
+function originCreatorLateral(m: string, alias: string): string {
+  return `LEFT JOIN LATERAL (
+           SELECT x.id
+             FROM outbound_message om
+             LEFT JOIN outreach_channel_account oma ON oma.id = om.channel_account_id
+             LEFT JOIN outbound_touch ot ON ot.id = om.touch_id
+             LEFT JOIN outreach_channel_account ota ON ota.id = ot.channel_account_id
+             LEFT JOIN outbound_enrollment oe ON oe.id = om.enrollment_id
+             LEFT JOIN outbound_sequence oq ON oq.id = coalesce(oe.sequence_id, ot.sequence_id)
+             LEFT JOIN outbound_brief ob ON ob.id = oq.brief_id
+            CROSS JOIN LATERAL unnest(ARRAY[oma.creator_id, ota.creator_id, ob.creator_id]) WITH ORDINALITY AS x(id, n)
+             JOIN creator_profile cp ON cp.id = x.id AND cp.workspace_id = om.workspace_id AND cp.deleted_at IS NULL
+            WHERE om.id = ${m}.id
+            ORDER BY x.n
+            LIMIT 1) ${alias} ON true`;
+}
+
+/**
+ * El negocio que mueve una respuesta, lo que rodea al mensaje y quién
+ * recibe el aviso.
+ *
+ * El negocio: el del mensaje, el de su cadencia o su toque; si no hay, el
+ * abierto más reciente de la marca. Con un creador de origen (ACC-7,
+ * originCreatorLateral), solo el abierto de ESE creador: en una agencia
+ * cada creador lleva su propio negocio con la marca (Mercado Verde en el
+ * seed 0013, uno de Camilo y otro de Mariana), y la respuesta al outreach
+ * de A no puede mover el de B ni dejar su mensaje enlazado a él. Si A no
+ * tiene uno abierto, no hay negocio y openDealFromReply abre el de A. Un
+ * negocio «Sin creador» tampoco se toma: quien lleva solo a A no lo ve, y
+ * la bandeja, que corre con la política, no podría elegirlo; así el worker
+ * y la bandeja deciden lo mismo para el mismo mensaje. Sin creador de
+ * origen (una cuenta del espacio, sin cadencia), el abierto más reciente
+ * de la marca, sea de quien sea, como hasta ACC-7.
+ *
+ * El aviso, para quien enroló (si sigue en el equipo) o para el dueño del
+ * negocio.
+ */
 async function surroundings(tx: SqlExecutor, m: UnclassifiedMessage): Promise<Surroundings> {
-  // El negocio: el del mensaje, el de su cadencia o su toque, o el abierto
-  // más reciente de la marca en este workspace. El aviso, para quien enroló
-  // (si sigue en el equipo) o para el dueño del negocio.
   return (
     await tx.query<Surroundings>(
       `SELECT coalesce(m.deal_id, e.deal_id, t.deal_id,
                        (SELECT d.id FROM deal d
                          WHERE d.workspace_id = m.workspace_id AND d.company_id = c.company_id
                            AND d.won_at IS NULL AND d.lost_at IS NULL
+                           AND (o.id IS NULL OR d.creator_id = o.id)
                          ORDER BY d.updated_at DESC, d.id LIMIT 1)) AS deal_id,
               c.company_id, co.name AS company, coalesce(c.full_name, co.name) AS who, e.status AS enrollment_status,
               CASE WHEN e.enrolled_by IS NOT NULL AND membership_is_team(m.workspace_id, e.enrolled_by) THEN e.enrolled_by END AS recipient
@@ -309,10 +368,42 @@ async function surroundings(tx: SqlExecutor, m: UnclassifiedMessage): Promise<Su
          LEFT JOIN outbound_touch t ON t.id = m.touch_id
          LEFT JOIN contact c ON c.id = m.contact_id
          LEFT JOIN company co ON co.id = c.company_id
+         ${originCreatorLateral('m', 'o')}
         WHERE m.id = $1::uuid`,
       [m.id],
     )
   ).rows[0] ?? { deal_id: null, company_id: null, company: null, who: null, recipient: null, enrollment_status: null };
+}
+
+/**
+ * De qué creador salió el outreach que se responde (ACC-7): el de la
+ * cuenta de envío del mensaje, si no el de la cuenta de su toque, si no
+ * el del brief de su cadencia; el primero que sea un creador vivo del
+ * espacio. En una agencia la respuesta llega por la cuenta de un creador
+ * concreto, y el negocio que abre es de ese creador: sin esto nacía «sin
+ * creador» y el mánager acotado a él no veía el pipeline que genera su
+ * propio outreach.
+ *
+ * `usable`: si la sesión lo puede poner en una fila nueva
+ * (creators_for_session). En el worker, sin persona, siempre que esté
+ * vivo; desde la bandeja, solo si cae en el alcance de quien corrige.
+ * `creatorId` null: no hay creador de origen (cuenta del espacio, sin
+ * cadencia o sin brief).
+ */
+export async function originCreatorOf(
+  tx: SqlExecutor, messageId: string, workspaceId: string,
+): Promise<{ creatorId: string | null; usable: boolean }> {
+  const row = (
+    await tx.query<{ creator_id: string | null; usable: boolean | null }>(
+      `SELECT o.id AS creator_id,
+              o.id IN (SELECT c FROM creators_for_session($2::uuid) AS c) AS usable
+         FROM outbound_message m
+         ${originCreatorLateral('m', 'o')}
+        WHERE m.id = $1::uuid AND m.workspace_id = $2::uuid`,
+      [messageId, workspaceId],
+    )
+  ).rows[0];
+  return { creatorId: row?.creator_id ?? null, usable: row?.usable === true };
 }
 
 /**
@@ -321,22 +412,54 @@ async function surroundings(tx: SqlExecutor, m: UnclassifiedMessage): Promise<Su
  * «Responder hoy» y su vencimiento, su primera fila de historial y el
  * dueño que enroló (si sigue en el equipo). La cadencia y el mensaje del
  * hilo quedan enlazados a él: la siguiente respuesta ya lo encuentra.
+ *
+ * Su creador (ACC-7), en este orden:
+ *   1. el creador de origen del outreach (originCreatorOf: la cuenta que
+ *      envió o el brief de la cadencia), si la sesión lo puede poner. Si
+ *      no lo puede poner (quien corrige desde la bandeja está acotado a
+ *      otro), NO se abre: la bandeja ya lo dice antes con 'out_of_scope'
+ *      (interestedOutOfScope), esto es solo la red;
+ *   2. sin creador de origen, el único que la sesión puede poner
+ *      (soleCreatorFor, sole_creator_for_session de 0082 §1b): en el
+ *      worker, el único creador vivo del espacio o ninguno; desde la
+ *      bandeja, el único del alcance de quien corrige;
+ *   3. si quien corrige está acotado y no hay uno solo, NO se abre: un
+ *      negocio sin creador quedaría fuera de su alcance (la política de
+ *      deal lo rechazaría con 42501) y no hay a quién ponérselo sin
+ *      preguntar. Devuelve `needsCreator` ('pick' o 'none', ver
+ *      IntentEffects) para que la bandeja lo diga.
  */
 async function openDealFromReply(
   tx: SqlExecutor, m: UnclassifiedMessage, s: Surroundings, name: string, nextAction: string, due: Date,
-): Promise<string | null> {
-  if (!s.company_id) return null;
+): Promise<{ id: string | null; needsCreator: DealNeedsCreator }> {
+  if (!s.company_id) return { id: null, needsCreator: null };
+  const origin = await originCreatorOf(tx, m.id, m.workspaceId);
+  let creatorId: string | null;
+  if (origin.creatorId !== null) {
+    if (!origin.usable) return { id: null, needsCreator: null };
+    creatorId = origin.creatorId;
+  } else {
+    const sole = await soleCreatorFor(tx, m.workspaceId);
+    if (sole.creatorId === null && !sole.seesAll) {
+      const { rows } = await tx.query<{ n: number }>('SELECT count(*)::int AS n FROM creators_for_session($1::uuid)', [m.workspaceId]);
+      return { id: null, needsCreator: (rows[0]?.n ?? 0) === 0 ? 'none' : 'pick' };
+    }
+    creatorId = sole.creatorId;
+  }
   const id = (
     await tx.query<{ id: string }>(
       `INSERT INTO deal (workspace_id, company_id, owner_user_id, name, stage_id, currency, next_action, next_action_due,
-                         last_contact_at)
-       SELECT w.id, $2::uuid, $3::uuid, $4, 'conversacion', w.currency, $5, $6::timestamptz, $7::timestamptz
+                         last_contact_at, creator_id)
+       SELECT w.id, $2::uuid, $3::uuid, $4, 'conversacion', w.currency, $5, $6::timestamptz, $7::timestamptz, $8::uuid
          FROM workspace w WHERE w.id = $1::uuid
        RETURNING id`,
-      [m.workspaceId, s.company_id, s.recipient, name.slice(0, 120), nextAction, due.toISOString(), m.occurredAt.toISOString()],
+      [
+        m.workspaceId, s.company_id, s.recipient, name.slice(0, 120), nextAction, due.toISOString(), m.occurredAt.toISOString(),
+        creatorId,
+      ],
     )
   ).rows[0]?.id;
-  if (!id) return null;
+  if (!id) return { id: null, needsCreator: null };
   await tx.query(
     `INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_by) VALUES ($1::uuid, NULL, 'conversacion', current_user_id())`,
     [id],
@@ -345,7 +468,7 @@ async function openDealFromReply(
     await tx.query(`UPDATE outbound_enrollment SET deal_id = $2::uuid WHERE id = $1::uuid AND deal_id IS NULL`, [m.enrollmentId, id]);
   }
   await tx.query(`UPDATE outbound_message SET deal_id = $2::uuid WHERE id = $1::uuid AND deal_id IS NULL`, [m.id, id]);
-  return id;
+  return { id, needsCreator: null };
 }
 
 /** Un aviso por mensaje y efecto, que lleva a su hilo en la bandeja. Idempotente. */
@@ -382,7 +505,7 @@ function longDate(at: Date, locale: string, timeZone: string): string {
 
 function emptyEffects(d: IntentDecision): IntentEffects {
   return {
-    applied: false, intent: d.intent, dealId: null, dealMoved: false, dealCreated: false, resumeAt: null, restored: [], canceled: [],
+    applied: false, intent: d.intent, dealId: null, dealMoved: false, dealCreated: false, dealNeedsCreator: null, resumeAt: null, restored: [], canceled: [],
     optOut: false, optOutReview: false, notified: false,
   };
 }
@@ -464,15 +587,16 @@ async function intentEffects(
         );
       } else {
         // Sin negocio abierto con la marca (el caso normal de una cadencia en frío): se abre en «En conversación».
-        const created = await openDealFromReply(
+        const opened = await openDealFromReply(
           tx, m, s, t.dealName(s.company ?? who), t.replyToday, endOfLocalDay(now, m.timeZone),
         );
-        if (created) {
-          s.deal_id = created;
-          out.dealId = created;
+        if (opened.id) {
+          s.deal_id = opened.id;
+          out.dealId = opened.id;
           out.dealCreated = true;
           out.dealMoved = true;
         }
+        out.dealNeedsCreator = opened.needsCreator;
       }
       // §5.7: «Interesado: se cancelan los toques pendientes». La respuesta
       // ya detuvo sus cadencias (stopOnReply), pero un pitch suelto a la

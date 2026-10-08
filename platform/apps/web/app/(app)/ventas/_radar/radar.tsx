@@ -44,6 +44,12 @@ export interface SignalCardData {
    */
   crm: { companyHref: string; joinsDeal: boolean; dealName: string | null } | null;
   /**
+   * La marca tiene un negocio abierto de un creador que quien mira no
+   * lleva (ACC-7): aceptarla no abre otro y la señal queda para quien lo
+   * lleva. La tarjeta lo dice antes, como «se sumará a…».
+   */
+  hiddenDeal?: boolean;
+  /**
    * Por qué el brief la deja fuera, con la regla que lo decidió («Tu
    * brief no acepta «harinas»»), solo cuando se están viendo las ocultas
    * (VEN-7). Null si se ve.
@@ -320,6 +326,7 @@ function SignalCard({
           {card.crm?.joinsDeal && (
             <p className="mt-1 text-xs leading-5 text-muted">{card.crm.dealName ? t.joinsDeal(card.crm.dealName) : t.joinsOpenDeal}</p>
           )}
+          {card.hiddenDeal && !card.crm?.joinsDeal && <p className="mt-1 text-xs leading-5 text-muted">{t.hiddenDeal}</p>}
           <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
             <span>
               {t.source}: {card.sourceLabel}

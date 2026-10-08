@@ -16,6 +16,9 @@ import { UltimoContacto } from "../_seguimiento/ultimo-contacto";
 import { ConversionSummary, conversionView } from "./conversion";
 import { PipelineBoard, type BoardDeal, type BoardStage } from "./tablero";
 
+/** «Sin creador»: el mismo texto de la ficha de la marca (ACC-7). */
+const SIN_CREADOR = MESSAGES.empresas.detail.dealCreator.none;
+
 /**
  * El pipeline en sus dos formas: el tablero por etapa (arrastrar y
  * soltar) y la lista. La forma viaja en la URL (`?forma=lista`) igual
@@ -42,6 +45,7 @@ export function PipelineView({
   forma,
   filtro = null,
   ctx,
+  mostrarCreador = false,
 }: {
   deals: PipelineDealRow[];
   stages: StageTotal[];
@@ -53,6 +57,12 @@ export function PipelineView({
   filtro?: PipelineSeguimiento | null;
   /** Lo que el editor de la siguiente acción necesita del espacio. Sin él (la vista del radar), no se pinta el pipeline. */
   ctx: SeguimientoContexto | null;
+  /**
+   * Decir de qué creador es cada negocio (ACC-7): cuando la persona ve a
+   * más de uno. Un negocio sin creador lo dice igual, porque solo lo ve
+   * quien ve a todos. En un espacio de una sola creadora sería ruido.
+   */
+  mostrarCreador?: boolean;
 }) {
   const t = MESSAGES.pipeline;
   const x = FICHA.filtro;
@@ -104,6 +114,12 @@ export function PipelineView({
     })(),
     // Los días los cuenta listPipeline en SQL; aquí solo se escriben.
     lastContact: ultimoContacto(d, f),
+    creatorText:
+      mostrarCreador || d.creatorId === null
+        ? d.creatorId !== null && d.creatorName
+          ? MESSAGES.pipeline.creatorLine(d.creatorName)
+          : SIN_CREADOR
+        : null,
   }));
   const boardStages: BoardStage[] = stages.map((s) => ({
     id: s.stageId,
@@ -199,7 +215,7 @@ function PipelineList({ deals, ctx }: { deals: BoardDeal[]; ctx: SeguimientoCont
       key: "deal",
       header: t.columns.deal,
       render: (d) => (
-        <CellMain sub={dealLabel(d.companyName, d.name) ?? undefined}>
+        <CellMain sub={[dealLabel(d.companyName, d.name), d.creatorText].filter(Boolean).join(" · ") || undefined}>
           <Link href={`/ventas/empresas/${d.companyId}`} className="hover:underline">
             {d.companyName}
           </Link>
@@ -267,6 +283,7 @@ function FilaMovil({ deal: d, ctx }: { deal: BoardDeal; ctx: SeguimientoContexto
             {d.companyName}
           </Link>
           {negocio && <p className="mt-0.5 text-xs text-ink-2">{negocio}</p>}
+          {d.creatorText && <p className="mt-0.5 text-xs text-muted">{d.creatorText}</p>}
         </div>
         <span className="shrink-0 whitespace-nowrap text-sm tabular-nums text-ink">
           {d.amountText ?? <span className="text-muted">{t.noAmount}</span>}

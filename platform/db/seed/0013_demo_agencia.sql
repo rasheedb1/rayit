@@ -1,0 +1,231 @@
+-- =====================================================================
+-- Seed 13 · Una agencia de demo con alcance por creador (ACC-7)
+-- ---------------------------------------------------------------------
+-- La demo de Laura (0002–0012) es un espacio de UNA creadora y nadie
+-- lleva alcance: ahí no se ve nada de ACC-7. Ni el selector de creador
+-- en «Nuevo negocio», ni «Sin creador · Solo lo ve quien ve a todos», ni
+-- el creador en las tarjetas del pipeline, ni el aviso de negocios que
+-- la persona no ve. Este seed deja un espacio aparte donde sí:
+--
+--   · «Agencia Norte · demo», tipo agencia, COP y Bogotá (los valores por
+--     defecto del producto, no una regla).
+--   · Dos creadores: Camilo Rey (cocina) y Mariana Gil (viajes).
+--   · Valentina Ortiz, Dueña: ve a los dos.
+--   · Diego Salas, Ejecutivo de cuenta, acotado a Camilo
+--     (membership_scope): en una consulta cruda, en el pipeline y en
+--     Campañas solo ve lo de Camilo; en la ficha de Mercado Verde, el
+--     aviso de que la marca tiene negocios que él no ve.
+--   · Andrea Ríos, Ejecutiva de cuenta, acotada a Camilo y Mariana: el
+--     creador en cada tarjeta, y «Nuevo negocio» le pide elegir.
+--   · Sara Núñez, Ejecutiva de cuenta, acotada solo a Tomás Vega, un
+--     creador dado de baja: no ve a nadie, y «Nuevo negocio» está
+--     desactivado con su motivo.
+--   · Cuatro marcas propias de la agencia y cinco negocios: dos de
+--     Camilo, dos de Mariana (uno con Mercado Verde, que también tiene
+--     uno de Camilo) y uno sin creador, que solo ve quien ve a todos.
+--   · Dos campañas planificadas, una de cada creador.
+--
+-- Cómo verlo (docs/propuestas/ACC-7.md, «Cómo verlo»):
+--   · Sin llaves (modo demo): DEMO_WORKSPACE_ID=000000a7-0000-4000-8000-000000000001
+--     y DEMO_USER_ID con el id de una de las cuatro personas de abajo
+--     (lib/workspace/demo.ts: la persona simulada llega a las
+--     transacciones de las pantallas, y la base le enseña sus filas).
+--     Sin DEMO_USER_ID, el modo demo no tiene persona y ve todo.
+--   · Con Supabase Auth y este seed aplicado (make db.seed): entrar como
+--     diego@agencia-demo.test con generate_link (apps/web/README.md,
+--     «Cómo probarlo sin esperar un correo»): lo que ve el ejecutivo
+--     acotado. valentina@agencia-demo.test, la dueña.
+--
+-- Reglas del archivo (las de 0002 y 0011):
+--   * Idempotente: ids fijos y ON CONFLICT DO NOTHING. Ninguna fecha: los
+--     negocios no tienen vencimiento ni cierre esperado y las campañas no
+--     tienen fechas, así que nada envejece y ningún job del worker (los
+--     vencimientos, las campañas que empiezan) los toca.
+--   * RLS en modo FORCE. app_user y membership solo admiten la fila
+--     PROPIA (0025 §4 y 0028): la sesión pasa por cada persona para darla
+--     de alta, como 0003 con Andrés, y termina siendo Valentina.
+--   * membership_scope no tiene política de escritura: mc_app solo la lee
+--     (0034 §10) y nadie la escribe todavía desde la web (CIERRE-ACC
+--     §5.6). Aquí se le quita FORCE solo dentro de un bloque DO, para la
+--     única fila, y se le devuelve en la misma sentencia (como 0082 §2 y
+--     §5): si el INSERT falla, el bloque entero se deshace y la tabla
+--     sigue con FORCE. El disparador de 0082 §2 corre igual: Diego es
+--     Ejecutivo, no Dueño ni Administrador.
+--
+-- Requiere 0082 (y las anteriores). No depende de otro seed.
+--
+-- Mapa de identificadores (000000a7-…, por ACC-7; 00000013- ya lo usan
+-- las pruebas de cadencias y chocaría con ellas):
+--   …-000000000001    workspace (Agencia Norte · demo)
+--   …-000000000002    app_user Valentina Ortiz (Dueña)
+--   …-000000000004    app_user Diego Salas (Ejecutivo de cuenta, acotado a Camilo)
+--   …-000000000006    app_user Andrea Ríos (Ejecutiva de cuenta, acotada a Camilo y Mariana)
+--   …-000000000008    app_user Sara Núñez (Ejecutiva de cuenta, acotada a Tomás, dado de baja)
+--   …-0000000000a3    creator_profile Camilo Rey
+--   …-0000000000b3    creator_profile Mariana Gil
+--   …-0000000000c3    creator_profile Tomás Vega (dado de baja)
+--   …-0000000000e1…e4 company (propias de la agencia)
+--   …-0000000dea01…05 deal
+--   …-000000ca0001…02 campaign
+-- =====================================================================
+
+SELECT set_config('app.workspace_id', '000000a7-0000-4000-8000-000000000001', false);
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000002', false);
+SELECT set_config('TimeZone', 'UTC', false);
+
+
+-- =====================================================================
+-- 1 · El espacio y sus dos personas
+-- =====================================================================
+INSERT INTO workspace (id, slug, name, kind, country, currency, timezone, locale, plan, niche_slugs)
+VALUES ('000000a7-0000-4000-8000-000000000001', 'agencia-norte-demo', 'Agencia Norte · demo',
+        'agency', 'CO', 'COP', 'America/Bogota', 'es-CO', 'agency', '{cocina,viajes}')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO app_user (id, email, name, locale)
+VALUES ('000000a7-0000-4000-8000-000000000002', 'valentina@agencia-demo.test', 'Valentina Ortiz', 'es-CO')
+ON CONFLICT DO NOTHING;
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000002', system_role_id('agency', 'owner'))
+ON CONFLICT DO NOTHING;
+
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000004', false);
+INSERT INTO app_user (id, email, name, locale)
+VALUES ('000000a7-0000-4000-8000-000000000004', 'diego@agencia-demo.test', 'Diego Salas', 'es-CO')
+ON CONFLICT DO NOTHING;
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000004', system_role_id('agency', 'manager'))
+ON CONFLICT DO NOTHING;
+
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000006', false);
+INSERT INTO app_user (id, email, name, locale)
+VALUES ('000000a7-0000-4000-8000-000000000006', 'andrea@agencia-demo.test', 'Andrea Ríos', 'es-CO')
+ON CONFLICT DO NOTHING;
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000006', system_role_id('agency', 'manager'))
+ON CONFLICT DO NOTHING;
+
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000008', false);
+INSERT INTO app_user (id, email, name, locale)
+VALUES ('000000a7-0000-4000-8000-000000000008', 'sara@agencia-demo.test', 'Sara Núñez', 'es-CO')
+ON CONFLICT DO NOTHING;
+INSERT INTO membership (workspace_id, user_id, role_id)
+VALUES ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000008', system_role_id('agency', 'manager'))
+ON CONFLICT DO NOTHING;
+
+SELECT set_config('app.user_id', '000000a7-0000-4000-8000-000000000002', false);
+
+
+-- =====================================================================
+-- 2 · Los dos creadores, y el alcance de Diego
+-- =====================================================================
+INSERT INTO creator_profile (id, workspace_id, display_name, handle, country, languages, niche_slugs)
+VALUES
+  ('000000a7-0000-4000-8000-0000000000a3', '000000a7-0000-4000-8000-000000000001', 'Camilo Rey', 'camilo.cocina', 'CO', '{es}', '{cocina}'),
+  ('000000a7-0000-4000-8000-0000000000b3', '000000a7-0000-4000-8000-000000000001', 'Mariana Gil', 'mariana.viaja', 'CO', '{es}', '{viajes}')
+ON CONFLICT DO NOTHING;
+-- Un creador que ya no está en la agencia (dado de baja): el alcance de
+-- Sara apunta a él, y un alcance a un creador dado de baja no cuenta.
+INSERT INTO creator_profile (id, workspace_id, display_name, handle, country, languages, niche_slugs, deleted_at)
+VALUES
+  ('000000a7-0000-4000-8000-0000000000c3', '000000a7-0000-4000-8000-000000000001', 'Tomás Vega', 'tomas.corre', 'CO', '{es}', '{deporte}',
+   '2026-09-01T00:00:00Z')
+ON CONFLICT DO NOTHING;
+
+DO $$
+DECLARE
+  forzada boolean;
+BEGIN
+  SELECT c.relforcerowsecurity INTO forzada
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relname = 'membership_scope';
+  IF forzada THEN
+    ALTER TABLE membership_scope NO FORCE ROW LEVEL SECURITY;
+  END IF;
+  INSERT INTO membership_scope (workspace_id, user_id, scope_type, scope_id)
+  VALUES
+    -- Diego: solo Camilo.
+    ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000004', 'creator', '000000a7-0000-4000-8000-0000000000a3'),
+    -- Andrea: Camilo y Mariana. Ve los mismos negocios que la dueña salvo el «Sin creador», y «Nuevo negocio» le pide elegir.
+    ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000006', 'creator', '000000a7-0000-4000-8000-0000000000a3'),
+    ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000006', 'creator', '000000a7-0000-4000-8000-0000000000b3'),
+    -- Sara: solo Tomás, que se fue. No ve a nadie y «Nuevo negocio» está desactivado, con su motivo.
+    ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-000000000008', 'creator', '000000a7-0000-4000-8000-0000000000c3')
+  ON CONFLICT DO NOTHING;
+  IF forzada THEN
+    ALTER TABLE membership_scope FORCE ROW LEVEL SECURITY;
+  END IF;
+END $$;
+
+
+-- =====================================================================
+-- 3 · Las marcas, propias del CRM de la agencia
+-- ---------------------------------------------------------------------
+-- Fichas de la agencia (owner_workspace_id = el espacio, company_write),
+-- no las de la demo de Laura: esas son de su espacio y desde aquí no se
+-- ven (0025 §1).
+-- =====================================================================
+INSERT INTO company (id, name, country, city, industry, niche_slugs, owner_workspace_id)
+VALUES
+  ('000000a7-0000-4000-8000-0000000000e1', 'Tostadora Andina', 'CO', 'Manizales', 'alimentos', '{cocina}', '000000a7-0000-4000-8000-000000000001'),
+  ('000000a7-0000-4000-8000-0000000000e2', 'Mercado Verde',    'CO', 'Bogotá',    'alimentos', '{cocina,viajes}', '000000a7-0000-4000-8000-000000000001'),
+  ('000000a7-0000-4000-8000-0000000000e3', 'Hostal Brisa',     'CO', 'Santa Marta', 'turismo', '{viajes}', '000000a7-0000-4000-8000-000000000001'),
+  ('000000a7-0000-4000-8000-0000000000e4', 'Granola Sol',      'CO', 'Medellín',  'alimentos', '{cocina}', '000000a7-0000-4000-8000-000000000001')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO company_link (workspace_id, company_id, owner_user_id, relationship, notes)
+VALUES
+  ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e1', '000000a7-0000-4000-8000-000000000002', 'client',
+   'Trabaja con Camilo.'),
+  ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e2', '000000a7-0000-4000-8000-000000000002', 'prospect',
+   'Habla con los dos: un negocio de Camilo y otro de Mariana.'),
+  ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e3', '000000a7-0000-4000-8000-000000000002', 'prospect',
+   'Viajes con Mariana.'),
+  ('000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e4', '000000a7-0000-4000-8000-000000000002', 'prospect',
+   'Llegó sin decir para quién: el negocio está «Sin creador».')
+ON CONFLICT DO NOTHING;
+
+
+-- =====================================================================
+-- 4 · Los negocios: de Camilo, de Mariana y uno sin creador
+-- ---------------------------------------------------------------------
+-- Sin vencimiento ni cierre esperado (ver la cabecera). Los de Camilo
+-- los lleva Diego; los demás, Valentina. Los nombres no repiten el
+-- creador: la tarjeta del pipeline ya lo dice («Creador: Camilo Rey»).
+-- =====================================================================
+INSERT INTO deal (id, workspace_id, company_id, creator_id, owner_user_id, name, stage_id, amount, currency, next_action)
+VALUES
+  ('000000a7-0000-4000-8000-0000000dea01', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e1',
+   '000000a7-0000-4000-8000-0000000000a3', '000000a7-0000-4000-8000-000000000004',
+   'Recetas con café', 'propuesta', 4500000.00, 'COP', 'Esperar respuesta a la propuesta'),
+  ('000000a7-0000-4000-8000-0000000dea02', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e2',
+   '000000a7-0000-4000-8000-0000000000a3', '000000a7-0000-4000-8000-000000000004',
+   'Mercado de la semana', 'contactado', 3000000.00, 'COP', 'Mandar el media kit'),
+  ('000000a7-0000-4000-8000-0000000dea03', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e2',
+   '000000a7-0000-4000-8000-0000000000b3', '000000a7-0000-4000-8000-000000000002',
+   'Snacks de viaje', 'nuevo', 2500000.00, 'COP', 'Enviar pitch'),
+  ('000000a7-0000-4000-8000-0000000dea04', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e3',
+   '000000a7-0000-4000-8000-0000000000b3', '000000a7-0000-4000-8000-000000000002',
+   'Casa de playa', 'conversacion', 6000000.00, 'COP', 'Responder con fechas'),
+  ('000000a7-0000-4000-8000-0000000dea05', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e4',
+   NULL, '000000a7-0000-4000-8000-000000000002',
+   'Granola para el desayuno', 'nuevo', NULL, 'COP', 'Decidir de qué creador es')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_by)
+SELECT d.id, NULL, d.stage_id, '000000a7-0000-4000-8000-000000000002'
+  FROM deal d
+ WHERE d.workspace_id = '000000a7-0000-4000-8000-000000000001'
+   AND NOT EXISTS (SELECT 1 FROM deal_stage_history h WHERE h.deal_id = d.id);
+
+
+-- =====================================================================
+-- 5 · Una campaña planificada de cada creador
+-- =====================================================================
+INSERT INTO campaign (id, workspace_id, company_id, creator_id, name, brief, amount, currency, status)
+VALUES
+  ('000000a7-0000-4000-8000-000000ca0001', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e1',
+   '000000a7-0000-4000-8000-0000000000a3', 'Café de la mañana', '1 reel + 3 historias.', 4000000.00, 'COP', 'planned'),
+  ('000000a7-0000-4000-8000-000000ca0002', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e3',
+   '000000a7-0000-4000-8000-0000000000b3', 'Escapada a la costa', '2 TikTok + 1 reel.', 5500000.00, 'COP', 'planned')
+ON CONFLICT DO NOTHING;

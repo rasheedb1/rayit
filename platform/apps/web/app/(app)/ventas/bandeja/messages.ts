@@ -143,6 +143,12 @@ export const MESSAGES = {
     bajaConfirmar: "Sí, dar de baja",
     listo: (intencion: string) => `Intención corregida: ${intencion}.`,
     listoMovido: (intencion: string) => `Intención corregida: ${intencion}. El negocio pasó a «En conversación».`,
+    /** ACC-7: quien lleva a varios creadores marca «Me interesa» y la marca no tiene negocio: no se adivina de quién es. */
+    listoSinNegocio: (intencion: string) =>
+      `Intención corregida: ${intencion}. No abrimos el negocio porque llevas a varios creadores: ábrelo desde la ficha de la marca, en «Nuevo negocio», y elige de cuál es.`,
+    /** ACC-7: quien solo lleva a creadores que ya no están marca «Me interesa»: no hay de quién abrirlo (el mismo caso que noCreators de la ficha). */
+    listoSinCreadores: (intencion: string) =>
+      `Intención corregida: ${intencion}. No abrimos el negocio porque tu acceso está limitado a creadores que ya no están en el espacio. Pide a quien administra el equipo que te asigne uno.`,
     bajaNoSeCorrige: "La ficha está de baja: ya no recibe mensajes y eso no se corrige.",
     vuelta: "Vuelve el",
     vueltaAyuda: "Opcional. Vacía, se lee del mensaje; sin fecha en el mensaje, la cadencia sigue en 7 días.",
@@ -233,6 +239,9 @@ export const MESSAGES = {
     not_found: "Esa conversación ya no existe.",
     not_cancelable: "Ya no se puede cancelar: está saliendo o ya salió.",
     opted_out: "La ficha está de baja: ya no recibe mensajes y eso no se corrige.",
+    /** ACC-7: el negocio de esa respuesta (o el abierto de la marca) es de un creador fuera de tu alcance. */
+    out_of_scope:
+      "El negocio de esta marca es de un creador que no llevas: no lo puedes mover desde aquí. Pídele a quien lo lleva que corrija la respuesta.",
     no_postal_address: "Falta tu dirección postal para el pie de los correos: guárdala en la política de envío para responder.",
     referidoGenerico: "No pudimos crear el contacto. Inténtalo de nuevo.",
     already_created: "Ese contacto ya se creó.",

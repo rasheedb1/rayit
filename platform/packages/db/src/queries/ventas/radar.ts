@@ -4,8 +4,10 @@
  * descartarlas y rechazar una marca. Dueño: Rasheed.
  */
 import { isUuid, type WorkspaceTx } from '../../client.ts';
+import { audit } from '../../audit.ts';
+import { ScopeError } from '../../scope.ts';
 import { addExcludedCompany, BRIEF_LIMITS, BriefError, briefSignalLateralSql, briefVerdictSql, type BriefVerdict } from '../brief.ts';
-import { CompanyNotFound, DuplicateCompanyName, normalizeDomain, SignalAlreadyReviewed, SignalNotFound, type SignalRow, type SignalStatus, VentasError } from './comun.ts';
+import { CompanyNotFound, DealNotFound, DuplicateCompanyName, normalizeDomain, SignalAlreadyReviewed, SignalNotFound, type SignalRow, type SignalStatus, VentasError } from './comun.ts';
 import { dueInBusinessDays, normalizeCountry, safeLimit, type SignalRowSql, toSignalRow, truncate } from './interno.ts';
 
 export interface ListSignalsParams {
@@ -44,12 +46,15 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
     // La empresa y el negocio abierto se resuelven como en acceptSignal
     // (resolveCompany y su «¿ya hay un negocio abierto?»), para que la
     // tarjeta diga ANTES de aceptar lo que va a pasar: «Ya en tu CRM» y
-    // «Se sumará a <negocio>» en vez de otro negocio (pulido r8).
+    // «Se sumará a <negocio>» en vez de otro negocio (pulido r8). Y, con
+    // alcance por creador, que la marca tiene uno abierto que la persona
+    // no ve (open_deal_hidden, ACC-7): aceptarla no abre otro.
     `SELECT s.id, emp.id AS company_id,
             COALESCE(co.name, s.evidence->>'company_name')              AS company_name,
             COALESCE(co.domain::text, s.evidence->>'domain')            AS company_domain,
             (cl.company_id IS NOT NULL) AS company_linked,
             abierto.id AS open_deal_id, abierto.name AS open_deal_name, coalesce(abierto.total, 0)::int AS open_deal_count,
+            (abierto.id IS NULL AND emp.id IS NOT NULL AND open_deal_out_of_scope(emp.id)) AS open_deal_hidden,
             s.source_id, COALESCE(src.label_es, s.source_id) AS source_label,
             s.headline_es, s.detected_at, s.evidence_url, s.fit_score::text AS fit_score,
             s.budget_estimate::text AS budget_estimate, s.budget_currency::text AS budget_currency,
@@ -468,20 +473,36 @@ export async function importSignals(
   return { created: createdRows.length, duplicated: duplicatedKeys.length, duplicatedKeys, createdRows, hiddenByBrief };
 }
 
-export interface AcceptSignalResult {
-  dealId: string;
+export type AcceptSignalResult = {
   companyId: string;
   companyName: string;
   /** La empresa nació al aceptar la señal. */
   companyCreated: boolean;
-  /**
-   * Se abrió un negocio nuevo. False cuando la marca ya tenía uno
-   * abierto: la señal se suma a ese (queda en su historia) y `dealId`
-   * es el que ya existía, para que la pantalla diga «Ya tienes un
-   * negocio con X» en vez de abrir un segundo.
-   */
-  dealCreated: boolean;
-}
+} & (
+  | {
+      dealId: string;
+      /**
+       * Se abrió un negocio nuevo. False cuando la marca ya tenía uno
+       * abierto: la señal se suma a ese (queda en su historia) y `dealId`
+       * es el que ya existía, para que la pantalla diga «Ya tienes un
+       * negocio con X» en vez de abrir un segundo.
+       */
+      dealCreated: boolean;
+      dealHiddenOutOfScope: false;
+    }
+  | {
+      /**
+       * La marca tiene un negocio abierto, pero de un creador que quien
+       * acepta no lleva (ACC-7, open_deal_out_of_scope): no se abre un
+       * segundo ni se toca el suyo. La señal sigue pendiente, para quien
+       * lleva ese negocio; si es para un creador propio, se abre desde la
+       * ficha eligiéndolo. Es la regla de la bandeja (out_of_scope).
+       */
+      dealId: null;
+      dealCreated: false;
+      dealHiddenOutOfScope: true;
+    }
+);
 
 export interface AcceptSignalOptions {
   /** La siguiente acción del negocio nuevo, en el idioma de la pantalla. Por defecto, PITCH_ACTION. */
@@ -692,6 +713,9 @@ async function companyOfSignal(
  *
  *   - si la marca ya tiene un negocio abierto, la señal se suma a ese:
  *     queda su actividad en la historia del negocio y no se abre otro;
+ *   - si la marca solo tiene abierto uno que la persona no ve por su
+ *     alcance por creador (ACC-7), no abre otro ni toca nada:
+ *     `dealHiddenOutOfScope`, y la señal queda pendiente;
  *   - si no, abre un negocio en «nuevo» con «Enviar pitch» a tres días
  *     hábiles, su primera fila de historial y la actividad que lo explica.
  *
@@ -724,6 +748,29 @@ export async function acceptSignal(
   const { company, created: companyCreated } = resuelta;
   const companyId = company.id;
 
+  // ¿Ya hay un negocio abierto con esta marca? Entonces la señal es
+  // contexto de ese negocio, no un negocio más: el tercero de Vitalé
+  // abierto «sin avisar» era justo lo que el CRM tiene que evitar.
+  const abierto = await tx.query<{ id: string }>(
+    `SELECT d.id
+       FROM deal d
+       JOIN pipeline_stage st ON st.id = d.stage_id
+      WHERE d.company_id = $1 AND NOT st.is_won AND NOT st.is_lost
+      ORDER BY st.position DESC, d.created_at DESC
+      LIMIT 1`,
+    [companyId],
+  );
+  const existente = abierto.rows[0]?.id;
+  // Con alcance por creador (ACC-7), el abierto de un creador que la
+  // persona no lleva no se ve (0082 §3): sin preguntar, se abría un
+  // segundo negocio con la marca sin avisar. Una señal no dice de qué
+  // creador es, así que vale la regla de la marca, la misma que la
+  // bandeja aplica a una respuesta sin creador de origen: no se abre otro,
+  // no se toca nada y la señal queda pendiente para quien lo lleva.
+  if (!existente && (await hasOpenDealOutOfScope(tx, companyId))) {
+    return { dealId: null, companyId, companyName: company.name, companyCreated, dealCreated: false, dealHiddenOutOfScope: true };
+  }
+
   // Vincular es idempotente: si ya era una empresa del workspace, se
   // deja la relación como estaba (podía ser cliente) y su responsable.
   // Si es nueva, su responsable es quien aceptó la señal.
@@ -741,19 +788,6 @@ export async function acceptSignal(
       [signalId],
     );
 
-  // ¿Ya hay un negocio abierto con esta marca? Entonces la señal es
-  // contexto de ese negocio, no un negocio más: el tercero de Vitalé
-  // abierto «sin avisar» era justo lo que el CRM tiene que evitar.
-  const abierto = await tx.query<{ id: string }>(
-    `SELECT d.id
-       FROM deal d
-       JOIN pipeline_stage st ON st.id = d.stage_id
-      WHERE d.company_id = $1 AND NOT st.is_won AND NOT st.is_lost
-      ORDER BY st.position DESC, d.created_at DESC
-      LIMIT 1`,
-    [companyId],
-  );
-  const existente = abierto.rows[0]?.id;
   if (existente) {
     await tx.query(
       `INSERT INTO activity (workspace_id, company_id, deal_id, user_id, kind, subject, body, metadata)
@@ -761,7 +795,7 @@ export async function acceptSignal(
       [companyId, existente, truncate(sig.headline_es, 200), opts.activityBody ?? null, metadata],
     );
     await markAccepted();
-    return { dealId: existente, companyId, companyName: company.name, companyCreated, dealCreated: false };
+    return { dealId: existente, companyId, companyName: company.name, companyCreated, dealCreated: false, dealHiddenOutOfScope: false };
   }
 
   const dealName = dealNameFromSignal(sig.headline_es, ev, [company.name, evName], opts.pendingDealName);
@@ -769,16 +803,20 @@ export async function acceptSignal(
   // pitch» (VEN-4: cada negocio abierto tiene acción, fecha y responsable),
   // como company_link lo toma de responsable de la empresa. Sin sesión (la
   // demo), current_user_id() es NULL y queda sin responsable, como antes.
+  // De qué creador es (ACC-7): el único del espacio o del alcance de
+  // quien acepta. Una señal no dice de quién es; quien lleva a varios
+  // creadores y está acotado abre el negocio desde la ficha, eligiendo.
+  const creatorId = await creatorForNewDeal(tx, null);
   const deal = await tx.query<{ id: string }>(
     `INSERT INTO deal (workspace_id, company_id, origin_signal_id, owner_user_id, name, stage_id, amount, currency,
-                       next_action, next_action_kind, next_action_due, next_action_user_id)
+                       next_action, next_action_kind, next_action_due, next_action_user_id, creator_id)
      SELECT current_workspace_id(), $1, $2, current_user_id(), $3, 'nuevo', $4::numeric, w.currency, $5, 'pitch',
-            ${dueInBusinessDays('$8', '$6', '$7')}, current_user_id()
+            ${dueInBusinessDays('$8', '$6', '$7')}, current_user_id(), $9::uuid
      FROM ${WORKSPACE_TZ} w
      RETURNING id`,
     [
       companyId, signalId, truncate(dealName, 120), sig.budget_estimate, opts.nextAction?.trim() || PITCH_ACTION,
-      PITCH_DUE_BUSINESS_DAYS, PITCH_DUE_HOUR, opts.now?.toISOString() ?? null,
+      PITCH_DUE_BUSINESS_DAYS, PITCH_DUE_HOUR, opts.now?.toISOString() ?? null, creatorId,
     ],
   );
   const dealId = deal.rows[0]?.id;
@@ -796,7 +834,7 @@ export async function acceptSignal(
   );
   await markAccepted();
 
-  return { dealId, companyId, companyName: company.name, companyCreated, dealCreated: true };
+  return { dealId, companyId, companyName: company.name, companyCreated, dealCreated: true, dealHiddenOutOfScope: false };
 }
 
 /** Lo que pasó al no aceptar la marca de una señal (rejectSignalBrand). */
@@ -925,6 +963,167 @@ export interface CreateDealInput {
   nextAction?: string;
   /** Desde cuándo se cuentan los días hábiles del pitch. Por defecto, now() de la base; lo fijan las pruebas. */
   now?: Date;
+  /**
+   * De qué creador es (ACC-7). Sin él, el único del espacio o del alcance
+   * de quien lo abre (creatorForNewDeal); con varios, lo elige la ficha
+   * (listDealCreatorOptions).
+   */
+  creatorId?: string | null;
+}
+
+/** Un creador que se puede elegir para un negocio. */
+export interface DealCreatorOption {
+  id: string;
+  name: string;
+}
+
+/** Los creadores para «Nuevo negocio» y para cambiar el de un negocio, y si elegir uno es obligatorio. */
+export interface DealCreatorOptions {
+  creators: DealCreatorOption[];
+  /**
+   * Quien está acotado por creador tiene que elegir cuando no lleva
+   * exactamente uno: un negocio sin creador quedaría fuera de su alcance
+   * y no lo vería (ACC-6 D4). Quien ve a todos puede dejarlo «Sin
+   * creador», como hasta hoy. Con un solo creador no se pregunta: es
+   * ese. Acotado y sin ninguno (su alcance apunta a creadores dados de
+   * baja), es obligatorio y no hay a quién: no puede abrir negocios.
+   */
+  required: boolean;
+  /** `session_sees_all_creators()`: si puede dejar o pasar un negocio a «Sin creador». */
+  seesAll: boolean;
+}
+
+/**
+ * Los creadores vivos que la persona de la transacción puede poner en un
+ * negocio, ordenados por nombre, y si ve a todos. Es LA lectura del
+ * selector de la ficha y de las altas (creatorForNewDeal, setDealCreator):
+ * los dos cuentan de `creators_for_session()` (0082 §1b), la misma lista
+ * que usa el worker al abrir el negocio de una respuesta. Un alcance a
+ * un creador dado de baja no aparece. «Ve a todos» se pregunta en su
+ * propia consulta, no se deduce de la primera fila: sin creadores no hay
+ * filas.
+ */
+export async function listDealCreatorOptions(tx: WorkspaceTx): Promise<DealCreatorOptions> {
+  const { rows } = await tx.query<{ id: string; name: string }>(
+    `SELECT cp.id, cp.display_name AS name
+       FROM creators_for_session(current_workspace_id()) AS e(id)
+       JOIN creator_profile cp ON cp.id = e.id
+      ORDER BY lower(cp.display_name), cp.id`,
+  );
+  const todos = await tx.query<{ all: boolean }>('SELECT session_sees_all_creators() AS all');
+  // Sin respuesta, acotada: cerrado, nunca abierto.
+  const seesAll = todos.rows[0]?.all === true;
+  const creators = rows.map((r) => ({ id: r.id, name: r.name }));
+  return { creators, required: !seesAll && creators.length !== 1, seesAll };
+}
+
+/**
+ * Un creador elegido a mano para un negocio: tiene que ser un creador
+ * vivo del espacio (InvalidCreator) y estar entre los que la persona
+ * puede poner (ScopeError). La misma lista que el selector.
+ */
+async function assertChosenCreator(tx: WorkspaceTx, chosen: string): Promise<{ name: string }> {
+  if (!isUuid(chosen)) throw new VentasError('InvalidCreator');
+  const { rows } = await tx.query<{ ok: boolean; name: string }>(
+    `SELECT EXISTS (SELECT 1 FROM creators_for_session(current_workspace_id()) AS e(id) WHERE e.id = cp.id) AS ok,
+            cp.display_name AS name
+       FROM creator_profile cp WHERE cp.id = $1 AND cp.deleted_at IS NULL`,
+    [chosen],
+  );
+  const row = rows[0];
+  if (!row) throw new VentasError('InvalidCreator');
+  if (row.ok !== true) throw new ScopeError();
+  return { name: row.name };
+}
+
+/**
+ * El creador de un negocio que se va a abrir (ACC-7). La política por
+ * creador de deal (0082 §3) no deja escribir una fila fuera del alcance
+ * de quien la escribe; aquí se decide ANTES, para decirlo en el idioma
+ * de la pantalla y no con un 42501:
+ *
+ *   · si llega uno elegido, assertChosenCreator (InvalidCreator,
+ *     ScopeError);
+ *   · si no, el único de listDealCreatorOptions; con varios, NULL para
+ *     quien ve a todos («sin creador», como hasta hoy) y
+ *     DealCreatorRequired para quien está acotado; acotado y sin
+ *     ninguno, NoCreatorInScope.
+ */
+export async function creatorForNewDeal(tx: WorkspaceTx, chosen: string | null | undefined): Promise<string | null> {
+  if (chosen) {
+    await assertChosenCreator(tx, chosen);
+    return chosen;
+  }
+  const { creators, seesAll } = await listDealCreatorOptions(tx);
+  if (creators.length === 1) return creators[0]!.id;
+  if (seesAll) return null;
+  throw new VentasError(creators.length === 0 ? 'NoCreatorInScope' : 'DealCreatorRequired');
+}
+
+/**
+ * Cambia de qué creador es un negocio (ACC-7, hallazgo 6 de la ronda 2):
+ * hasta ahora solo se elegía al abrirlo, y un negocio «Sin creador» o
+ * del creador equivocado no tenía arreglo desde la pantalla.
+ *
+ *   · `creatorId` elegido: assertChosenCreator, como al abrirlo;
+ *   · `null` («Sin creador»): solo quien ve a todos. A quien está acotado
+ *     el negocio se le iría de las manos (ScopeError);
+ *   · y nunca a un creador distinto del de su cotización enviada o su
+ *     campaña viva (DealCreatorLocked, deal_creator_locked de 0082 §7):
+ *     el negocio, la cotización y la campaña de un mismo acuerdo son del
+ *     mismo creador, o el pipeline y Campañas se contradicen para quien
+ *     está acotado. Pasar AL creador de la cotización sí se deja.
+ *
+ * El negocio tiene que verse (si no, DealNotFound: el de otro creador no
+ * existe para quien está acotado). Deja su fila en audit_log
+ * ('deal.creator_changed', el creador antes y después). Devuelve si
+ * cambió algo y el nombre del creador elegido (null: «Sin creador»).
+ */
+export async function setDealCreator(
+  tx: WorkspaceTx,
+  dealId: string,
+  creatorId: string | null,
+): Promise<{ changed: boolean; creatorName: string | null }> {
+  if (!isUuid(dealId)) throw new DealNotFound();
+  const antes = (await tx.query<{ creator_id: string | null }>('SELECT creator_id FROM deal WHERE id = $1 FOR UPDATE', [dealId])).rows[0];
+  if (!antes) throw new DealNotFound();
+  let creatorName: string | null = null;
+  if (creatorId) {
+    creatorName = (await assertChosenCreator(tx, creatorId)).name;
+  } else {
+    const todos = await tx.query<{ all: boolean }>('SELECT session_sees_all_creators() AS all');
+    if (todos.rows[0]?.all !== true) throw new ScopeError();
+  }
+  if (antes.creator_id === creatorId) return { changed: false, creatorName };
+  // El acuerdo no se parte entre dos creadores: con una cotización enviada
+  // o una campaña viva de otro creador, el negocio sigue con el suyo
+  // (deal_creator_locked, 0082 §7; también ve la campaña que la política
+  // esconde a quien está acotado).
+  const locked = await tx.query<{ v: boolean }>('SELECT deal_creator_locked($1::uuid, $2::uuid) AS v', [dealId, creatorId]);
+  if (locked.rows[0]?.v !== false) throw new VentasError('DealCreatorLocked');
+  const { rows } = await tx.query<{ id: string }>('UPDATE deal SET creator_id = $2::uuid WHERE id = $1 RETURNING id', [dealId, creatorId]);
+  if (!rows[0]) throw new DealNotFound();
+  await audit(tx, {
+    action: 'deal.creator_changed',
+    entityType: 'deal',
+    entityId: dealId,
+    before: { creatorId: antes.creator_id },
+    after: { creatorId },
+  });
+  return { changed: true, creatorName };
+}
+
+/**
+ * ¿Esta marca tiene un negocio abierto que la persona no ve por su
+ * alcance por creador? Sí o no, sin decir cuál ni cuántos
+ * (open_deal_out_of_scope, 0082 §6). Para que la ficha explique la
+ * ausencia en vez de enseñar un pipeline incompleto sin decirlo. Falso
+ * para quien ve a todos.
+ */
+export async function hasOpenDealOutOfScope(tx: WorkspaceTx, companyId: string): Promise<boolean> {
+  if (!isUuid(companyId)) return false;
+  const { rows } = await tx.query<{ v: boolean }>('SELECT open_deal_out_of_scope($1::uuid) AS v', [companyId]);
+  return rows[0]?.v === true;
 }
 
 /**
@@ -947,16 +1146,17 @@ export async function createDeal(tx: WorkspaceTx, input: CreateDealInput): Promi
   const linked = await tx.query('SELECT 1 FROM company_link WHERE company_id = $1', [input.companyId]);
   if (linked.rows.length === 0) throw new CompanyNotFound();
 
+  const creatorId = await creatorForNewDeal(tx, input.creatorId);
   const deal = await tx.query<{ id: string }>(
     `INSERT INTO deal (workspace_id, company_id, owner_user_id, name, stage_id, amount, currency,
-                       next_action, next_action_kind, next_action_due, next_action_user_id)
+                       next_action, next_action_kind, next_action_due, next_action_user_id, creator_id)
      SELECT current_workspace_id(), $1, current_user_id(), $2, 'nuevo', $3::numeric, w.currency, $4, 'pitch',
-            ${dueInBusinessDays('$7', '$5', '$6')}, current_user_id()
+            ${dueInBusinessDays('$7', '$5', '$6')}, current_user_id(), $8::uuid
      FROM ${WORKSPACE_TZ} w
      RETURNING id`,
     [
       input.companyId, name, amount, input.nextAction?.trim() || PITCH_ACTION, PITCH_DUE_BUSINESS_DAYS, PITCH_DUE_HOUR,
-      input.now?.toISOString() ?? null,
+      input.now?.toISOString() ?? null, creatorId,
     ],
   );
   const dealId = deal.rows[0]?.id;
