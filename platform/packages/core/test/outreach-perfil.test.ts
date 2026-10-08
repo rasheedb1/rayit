@@ -201,9 +201,9 @@ test('dos cuentas en la misma red y una revocada: el perfil se arma, con ids ún
   e.connections = [
     ...e.connections,
     // Una segunda cuenta de TikTok, más chica: su id lleva el de la cuenta.
-    { id: '00000002-0000-4000-8000-0000000000c9', platformId: 'tiktok', handle: 'laura.recetas', status: 'active', followers: 12000, followersSnapshotId: '909', followersDay: '2026-09-24' },
+    { id: '00000002-0000-4000-8000-0000000000c9', platformId: 'tiktok', handle: 'laura.recetas', status: 'active', followers: 12000, followersSnapshotId: '00000000-0000-4000-8000-0000000009a9', followersDay: '2026-09-24' },
     // Una vieja revocada, con más seguidores: no es una red conectada.
-    { id: '00000002-0000-4000-8000-0000000000ca', platformId: 'tiktok', handle: 'laura.vieja', status: 'revoked', followers: 900000, followersSnapshotId: '910', followersDay: '2025-01-01' },
+    { id: '00000002-0000-4000-8000-0000000000ca', platformId: 'tiktok', handle: 'laura.vieja', status: 'revoked', followers: 900000, followersSnapshotId: '00000000-0000-4000-8000-0000000009aa', followersDay: '2025-01-01' },
   ];
   // Su demografía tampoco entra.
   e.audience = [...e.audience, { id: 'a99', platformId: 'tiktok', connectionId: '00000002-0000-4000-8000-0000000000ca', dimension: 'gender', bucket: 'M', share: 0.9, day: '2025-01-01' }];
@@ -225,7 +225,7 @@ test('identidad, medianas por red y tarifas llevan su fila de origen', () => {
   const p = buildPerfil(entradasLaura());
   assert.deepEqual(p.identity.networks.map((n) => n.platformId), ['tiktok', 'instagram', 'youtube']);
   assert.equal(p.identity.networks[2]!.followersClaimId, null);
-  assert.deepEqual(claimById(p, 'seguidores-tiktok')!.source, { table: 'account_metric_snapshot', id: '902', field: 'followers', asOf: '2026-09-24' });
+  assert.deepEqual(claimById(p, 'seguidores-tiktok')!.source, { table: 'account_metric_snapshot', id: '00000000-0000-4000-8000-0000000009a2', field: 'followers', asOf: '2026-09-24' });
   assert.deepEqual(p.performance.medians.map((m) => [m.platformId, m.cutHours]), [['tiktok', 168], ['instagram', 168], ['youtube', 168]]);
   assert.deepEqual(claimById(p, 'mediana-tiktok')!.source, { table: 'creator_baseline', id: 'b-tt', field: 'median_views', asOf: '2026-09-25T00:00:00.000Z' });
   const tarifa = claimById(p, p.rates!.lines[0]!.lowClaimId)!;

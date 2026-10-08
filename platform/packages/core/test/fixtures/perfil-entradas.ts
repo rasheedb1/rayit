@@ -57,8 +57,8 @@ export function entradasLaura(): PerfilInputs {
       nicheNames: ['Cocina'],
     },
     connections: [
-      { id: 'c-ig', platformId: 'instagram', handle: 'laura.cocinafacil', status: 'active', followers: 184000, followersSnapshotId: '901', followersDay: '2026-09-24' },
-      { id: 'c-tt', platformId: 'tiktok', handle: 'laura.cocinafacil', status: 'active', followers: 243000, followersSnapshotId: '902', followersDay: '2026-09-24' },
+      { id: 'c-ig', platformId: 'instagram', handle: 'laura.cocinafacil', status: 'active', followers: 184000, followersSnapshotId: '00000000-0000-4000-8000-0000000009a1', followersDay: '2026-09-24' },
+      { id: 'c-tt', platformId: 'tiktok', handle: 'laura.cocinafacil', status: 'active', followers: 243000, followersSnapshotId: '00000000-0000-4000-8000-0000000009a2', followersDay: '2026-09-24' },
       { id: 'c-yt', platformId: 'youtube', handle: 'lauracocinafacil', status: 'active', followers: null, followersSnapshotId: null, followersDay: null },
     ],
     audience: [

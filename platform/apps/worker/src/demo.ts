@@ -260,7 +260,8 @@ export async function runDemoCompute(opts: {
   // al azar, sin orden, y Postgres no tiene max(uuid). La huella que dice
   // «algo cambió» es cuántas filas hay y cuántas siguen corriendo.
   const QUIETO_MS = opts.quietoMs ?? 3_000;
-  const hasta = Date.now() + (opts.plazoMs ?? 60_000);
+  const plazoMs = opts.plazoMs ?? 60_000;
+  const hasta = Date.now() + plazoMs;
   let visto = '';
   let quietoDesde = Date.now();
   let terminada = false;
@@ -287,7 +288,7 @@ export async function runDemoCompute(opts: {
     if (terminada || Date.now() > hasta) break;
     await new Promise((r) => setTimeout(r, 500));
   }
-  if (!terminada) logger.warn('demo CON-6: la cadena no terminó en 60 s; se imprime lo que hay');
+  if (!terminada) logger.warn(`demo CON-6: la cadena no terminó en ${Math.round(plazoMs / 1000)} s; se imprime lo que hay`);
   const { rows: cadena } = await db.query<Record<string, unknown>>(
     `SELECT id, job_id, status, duration_ms, items_processed, items_failed, error, metadata
        FROM job_run WHERE job_id IN ('compute.baseline', 'compute.post_score') AND status <> 'running' ORDER BY ${ORDEN_CORRIDAS_ASC()}`,
