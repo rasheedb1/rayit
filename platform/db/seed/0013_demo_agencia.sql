@@ -158,19 +158,19 @@ INSERT INTO deal (id, workspace_id, company_id, creator_id, owner_user_id, name,
 VALUES
   ('000000a7-0000-4000-8000-0000000dea01', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e1',
    '000000a7-0000-4000-8000-0000000000a3', '000000a7-0000-4000-8000-000000000004',
-   'Recetas con café · Camilo', 'propuesta', 4500000.00, 'COP', 'Esperar respuesta a la propuesta'),
+   'Recetas con café', 'propuesta', 4500000.00, 'COP', 'Esperar respuesta a la propuesta'),
   ('000000a7-0000-4000-8000-0000000dea02', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e2',
    '000000a7-0000-4000-8000-0000000000a3', '000000a7-0000-4000-8000-000000000004',
-   'Mercado de la semana · Camilo', 'contactado', 3000000.00, 'COP', 'Mandar el media kit'),
+   'Mercado de la semana', 'contactado', 3000000.00, 'COP', 'Mandar el media kit'),
   ('000000a7-0000-4000-8000-0000000dea03', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e2',
    '000000a7-0000-4000-8000-0000000000b3', '000000a7-0000-4000-8000-000000000002',
-   'Snacks de viaje · Mariana', 'nuevo', 2500000.00, 'COP', 'Enviar pitch'),
+   'Snacks de viaje', 'nuevo', 2500000.00, 'COP', 'Enviar pitch'),
   ('000000a7-0000-4000-8000-0000000dea04', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e3',
    '000000a7-0000-4000-8000-0000000000b3', '000000a7-0000-4000-8000-000000000002',
-   'Casa de playa · Mariana', 'conversacion', 6000000.00, 'COP', 'Responder con fechas'),
+   'Casa de playa', 'conversacion', 6000000.00, 'COP', 'Responder con fechas'),
   ('000000a7-0000-4000-8000-0000000dea05', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e4',
    NULL, '000000a7-0000-4000-8000-000000000002',
-   'Por definir · Nutrivé', 'nuevo', NULL, 'COP', 'Decidir de qué creador es')
+   'Granola para el desayuno', 'nuevo', NULL, 'COP', 'Decidir de qué creador es')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO deal_stage_history (deal_id, from_stage_id, to_stage_id, changed_by)
@@ -186,7 +186,7 @@ SELECT d.id, NULL, d.stage_id, '000000a7-0000-4000-8000-000000000002'
 INSERT INTO campaign (id, workspace_id, company_id, creator_id, name, brief, amount, currency, status)
 VALUES
   ('000000a7-0000-4000-8000-000000ca0001', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e1',
-   '000000a7-0000-4000-8000-0000000000a3', 'Café de la mañana · Camilo', '1 reel + 3 historias.', 4000000.00, 'COP', 'planned'),
+   '000000a7-0000-4000-8000-0000000000a3', 'Café de la mañana', '1 reel + 3 historias.', 4000000.00, 'COP', 'planned'),
   ('000000a7-0000-4000-8000-000000ca0002', '000000a7-0000-4000-8000-000000000001', '000000a7-0000-4000-8000-0000000000e3',
-   '000000a7-0000-4000-8000-0000000000b3', 'Escapada a la costa · Mariana', '2 TikTok + 1 reel.', 5500000.00, 'COP', 'planned')
+   '000000a7-0000-4000-8000-0000000000b3', 'Escapada a la costa', '2 TikTok + 1 reel.', 5500000.00, 'COP', 'planned')
 ON CONFLICT DO NOTHING;

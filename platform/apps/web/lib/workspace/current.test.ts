@@ -130,6 +130,26 @@ describe("sin sesión y con Supabase Auth configurado: falla cerrado (ronda 3)",
     process.env.DEMO_WORKSPACE_ID = OTRO;
     const ctx = await getCurrentContext();
     expect(ctx).toEqual({ workspaceId: OTRO, sesion: null, workspaces: [] });
+    expect(ctx.identity).toBeUndefined();
+  });
+
+  test("sin llaves y con DEMO_USER_ID, la persona simulada va también en las transacciones de las pantallas (ACC-7)", async () => {
+    // Diego, acotado a Camilo en la agencia del seed 0013: sus permisos (lib/permisos) y sus filas (RLS) son de la misma persona.
+    const DIEGO = "000000a7-0000-4000-8000-000000000004";
+    previas.DEMO_WORKSPACE_ID = process.env.DEMO_WORKSPACE_ID;
+    previas.DEMO_USER_ID = process.env.DEMO_USER_ID;
+    process.env.DEMO_WORKSPACE_ID = OTRO;
+    process.env.DEMO_USER_ID = DIEGO;
+    const ctx = await getCurrentContext();
+    // withWorkspace (lib/db) fija este `identity` en la transacción: app.user_id = Diego.
+    expect(ctx).toEqual({ workspaceId: OTRO, identity: { userId: DIEGO }, sesion: null, workspaces: [] });
+  });
+
+  test("con llaves, DEMO_USER_ID no da identidad a nadie: sin sesión, a /login", async () => {
+    conLlaves();
+    previas.DEMO_USER_ID = process.env.DEMO_USER_ID;
+    process.env.DEMO_USER_ID = "000000a7-0000-4000-8000-000000000004";
+    await expect(getCurrentContext()).rejects.toBeInstanceOf(Redireccion);
   });
 });
 

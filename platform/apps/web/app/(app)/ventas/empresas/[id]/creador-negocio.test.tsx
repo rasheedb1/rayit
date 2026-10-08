@@ -88,6 +88,29 @@ describe("de qué creador es un negocio, en la ficha (ACC-7)", () => {
     expect(screen.getByRole("button", { name: t.changeLabel("Serie Q4") })).toHaveFocus();
   });
 
+  it("la etiqueta y el valor van separados (dt/dd), y el botón dice a la vista qué cambia: «Cambiar creador» o «Asignar creador»", () => {
+    const { unmount } = render(<CreadorDelNegocio {...base} />);
+    expect(screen.getByRole("term")).toHaveTextContent(t.label);
+    expect(screen.getByRole("definition")).toHaveTextContent(LAURA.name);
+    expect(screen.getByRole("button", { name: t.changeLabel("Serie Q4") })).toHaveTextContent(t.change);
+    unmount();
+    render(<CreadorDelNegocio {...base} creatorId={null} creatorName={null} />);
+    expect(screen.getByRole("definition")).toHaveTextContent(`${t.none} · ${t.noneHelp}`);
+    const asignar = screen.getByRole("button", { name: t.assignLabel("Serie Q4") });
+    expect(asignar).toHaveTextContent(t.assign);
+    // No el «Cambiar» a secas de la siguiente acción, que va en la misma tarjeta.
+    expect(t.change).not.toBe("Cambiar");
+  });
+
+  it("Escape cierra el selector sin guardar y devuelve el foco al botón", () => {
+    render(<CreadorDelNegocio {...base} />);
+    fireEvent.click(screen.getByRole("button", { name: t.changeLabel("Serie Q4") }));
+    fireEvent.keyDown(screen.getByLabelText(t.label), { key: "Escape" });
+    expect(screen.queryByLabelText(t.label)).toBeNull();
+    expect(cambiarCreadorNegocio).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: t.changeLabel("Serie Q4") })).toHaveFocus();
+  });
+
   it("al guardar, el foco vuelve a «Cambiar» y el aviso dice qué pasó", async () => {
     cambiarCreadorNegocio.mockResolvedValue({ ok: true, notice: t.saved(SOFIA.name), stamp: 1 });
     render(<CreadorDelNegocio {...base} />);

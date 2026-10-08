@@ -509,8 +509,14 @@ export const MESSAGES = {
         none: "Sin creador",
         /** Por qué importa «Sin creador»: quien lleva solo a algunos creadores no lo ve. */
         noneHelp: "Solo lo ve quien ve a todos los creadores del espacio.",
-        change: "Cambiar",
+        /**
+         * El botón dice qué cambia: en la misma tarjeta está el «Cambiar»
+         * de la siguiente acción. «Asignar» cuando todavía no tiene.
+         */
+        change: "Cambiar creador",
+        assign: "Asignar creador",
         changeLabel: (deal: string) => `Cambiar de qué creador es «${deal}»`,
+        assignLabel: (deal: string) => `Asignar un creador a «${deal}»`,
         save: "Guardar",
         saved: (creator: string) => `Ahora es de ${creator}.`,
         savedNone: "Ahora no es de ningún creador.",
@@ -600,6 +606,12 @@ export const MESSAGES = {
     title: "Pipeline",
     board: "Tablero",
     list: "Lista",
+    /**
+     * De qué creador es el negocio, en la tarjeta, la fila móvil y la lista
+     * (ACC-7). Con su etiqueta: sin ella, «Camilo Rey» debajo del negocio
+     * podía ser el contacto o el responsable. «Sin creador» se dice solo.
+     */
+    creatorLine: (name: string) => `Creador: ${name}`,
     viewLabel: "Forma de ver el pipeline",
     empty: {
       title: "Todavía no hay negocios",

@@ -184,10 +184,12 @@ describe("PipelineView: de qué creador es cada negocio (ACC-7)", () => {
     const { unmount } = render(
       <PipelineView deals={[deal({}), sinCreador]} stages={stages} f={f} forma="tablero" ctx={ctx} mostrarCreador />,
     );
-    expect(within(screen.getByTestId("columna-propuesta")).getByText("Laura Méndez")).toBeInTheDocument();
+    // Con su etiqueta: un nombre suelto debajo del negocio podía ser el contacto o el responsable.
+    expect(within(screen.getByTestId("columna-propuesta")).getByText(MESSAGES.pipeline.creatorLine("Laura Méndez"))).toBeInTheDocument();
+    expect(screen.queryByText("Laura Méndez")).toBeNull();
     unmount();
     render(<PipelineView deals={[deal({}), sinCreador]} stages={stages} f={f} forma="lista" ctx={ctx} mostrarCreador />);
-    expect(screen.getAllByText(/Laura Méndez/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(new RegExp(MESSAGES.pipeline.creatorLine("Laura Méndez"))).length).toBeGreaterThan(0);
   });
 });
 

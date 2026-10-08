@@ -1,13 +1,13 @@
 import "server-only";
 import { cache } from "react";
 import { isPermiso, permisosDeRol, type Permiso } from "@mc/core";
-import { isUuid } from "@mc/db";
 import { getSessionPermissions } from "@mc/db/queries/accesos";
-import { isAuthConfigured, type Env } from "@/lib/auth/config";
+import { isAuthConfigured } from "@/lib/auth/config";
 import { getSesion } from "@/lib/auth/session";
 import { withWorkspace } from "@/lib/db";
 import { withWorkspaceId } from "@/lib/db/cliente";
 import { getCurrentContext } from "@/lib/workspace/current";
+import { usuarioDeDemo } from "@/lib/workspace/demo";
 
 /**
  * Los permisos de quien abrió ESTA petición, en el workspace actual.
@@ -61,29 +61,20 @@ export function aConjunto(llaves: readonly string[]): ReadonlySet<Permiso> {
 }
 
 /**
- * A quién se simula en modo demo, o null para el Dueño. Aparte y con el
- * entorno inyectable para poder probarlo; con Supabase Auth configurado
- * no se mira nunca.
+ * A quién se simula en modo demo, o null para el Dueño: lib/workspace/demo.ts,
+ * la misma persona que getCurrentContext pone en las transacciones de las
+ * pantallas. Se reexporta aquí, donde la buscan la invitación y las pruebas.
  */
-export function usuarioDeDemo(env: Env = process.env): string | null {
-  if (isAuthConfigured(env)) return null;
-  const id = env.DEMO_USER_ID?.trim();
-  if (!id) return null;
-  if (!isUuid(id)) {
-    throw new Error(
-      `DEMO_USER_ID no es un UUID: "${id}". Debe ser el id de una fila de app_user (la del seed: 00000002-0000-4000-8000-000000000002).`,
-    );
-  }
-  return id;
-}
+export { usuarioDeDemo };
 
 async function permisosDeDemo(): Promise<ReadonlySet<Permiso>> {
   const userId = usuarioDeDemo();
   if (!userId) return permisosDeRol("creator", "owner");
-  // El contexto de demo no lleva identidad (app.user_id queda NULL en las
-  // transacciones de las pantallas); aquí se abre una con la persona
-  // simulada solo para leer sus permisos, por la puerta con nombre de
-  // lib/db/cliente, como hace el selector de espacio.
+  // Con la persona simulada, por la puerta con nombre de lib/db/cliente,
+  // como hace el selector de espacio. Es la misma identidad que
+  // getCurrentContext pone en las pantallas (lib/workspace/demo.ts); se
+  // fija aquí a mano para que los permisos no dependan de cómo se resolvió
+  // el contexto.
   const { workspaceId } = await getCurrentContext();
   return aConjunto(await withWorkspaceId(workspaceId, (tx) => getSessionPermissions(tx), { userId }));
 }

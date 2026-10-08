@@ -14,14 +14,17 @@ import { useVentasForm } from "../../_lib/use-ventas-form";
  * Con alcance por creador, el creador decide quién ve el negocio: uno
  * «Sin creador» solo lo ve quien ve a todos, y un ejecutivo que lleva a
  * algunos creadores no sabía por qué le faltaban negocios. Aquí se dice,
- * y se cambia: «Cambiar» abre un selector con los creadores que la
- * persona puede poner (listDealCreatorOptions) y, si ve a todos, «Sin
- * creador». Las reglas son de setDealCreator; esto solo las pinta.
+ * y se cambia: «Cambiar creador» («Asignar creador» si no tiene) abre un
+ * selector con los creadores que la persona puede poner
+ * (listDealCreatorOptions) y, si ve a todos, «Sin creador». El texto
+ * visible dice qué cambia porque en la misma tarjeta está el «Cambiar» de
+ * la siguiente acción. Las reglas son de setDealCreator; esto solo las
+ * pinta.
  *
- * El foco no se pierde: al abrir va al selector y al cerrar (Cancelar o
- * guardar) vuelve a «Cambiar», o al renglón del creador si el botón ya
- * no está, para que quien usa teclado o lector de pantalla siga en el
- * mismo negocio de la ficha.
+ * El foco no se pierde: al abrir va al selector y al cerrar (Cancelar,
+ * Escape o guardar) vuelve al botón, o al renglón del creador si el
+ * botón ya no está, para que quien usa teclado o lector de pantalla siga
+ * en el mismo negocio de la ficha.
  */
 export function CreadorDelNegocio({
   dealId,
@@ -49,7 +52,7 @@ export function CreadorDelNegocio({
   const t = MESSAGES.empresas.detail.dealCreator;
   const [open, setOpen] = useState(false);
   const [notice, setNotice] = useState<string | undefined>();
-  const cambiarRef = useRef<HTMLButtonElement>(null);
+  const cambiarRef = useRef<HTMLSpanElement>(null);
   const renglonRef = useRef<HTMLDivElement>(null);
   /** Se cerró el formulario: el foco vuelve a donde estaba la persona. */
   const devolverFoco = useRef(false);
@@ -64,7 +67,7 @@ export function CreadorDelNegocio({
   useEffect(() => {
     if (open || !devolverFoco.current) return;
     devolverFoco.current = false;
-    (cambiarRef.current ?? renglonRef.current)?.focus();
+    (cambiarRef.current?.querySelector("button") ?? renglonRef.current)?.focus();
   }, [open]);
   const selectId = `creador-${dealId}`;
   const options = [
@@ -77,32 +80,51 @@ export function CreadorDelNegocio({
   if (!open) {
     return (
       <div ref={renglonRef} tabIndex={-1} className="space-y-1 outline-none">
-        <p className="flex flex-wrap items-baseline gap-x-1.5 text-xs">
-          <span className="text-muted">{t.label}</span>
-          <span className={creatorId ? "text-ink-2" : "text-muted"}>{creatorName ?? t.none}</span>
-          {!creatorId && <span className="text-muted">· {t.noneHelp}</span>}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          {/* Etiqueta y valor como la cabecera de la ficha («Responsable  Valentina Ortiz»): dt apagado, dd legible. */}
+          <dl className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+            <dt className="text-muted">{t.label}</dt>
+            <dd className="min-w-0 text-ink-2">
+              {creatorName ?? t.none}
+              {!creatorId && <span className="text-muted"> · {t.noneHelp}</span>}
+            </dd>
+          </dl>
           {editable && (
-            <button
-              ref={cambiarRef}
-              type="button"
-              onClick={() => {
-                setNotice(undefined);
-                setOpen(true);
-              }}
-              aria-label={t.changeLabel(dealName)}
-              className="text-ink underline underline-offset-4 hover:text-ink-2"
-            >
-              {t.change}
-            </button>
+            // El Button del kit no reenvía ref: el foco vuelve buscando el botón dentro de este span.
+            <span ref={cambiarRef} className="inline-flex">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setNotice(undefined);
+                  setOpen(true);
+                }}
+                aria-label={creatorId ? t.changeLabel(dealName) : t.assignLabel(dealName)}
+              >
+                {creatorId ? t.change : t.assign}
+              </Button>
+            </span>
           )}
-        </p>
+        </div>
         <Aviso notice={notice} size="xs" />
       </div>
     );
   }
 
   return (
-    <form ref={formRef} onSubmit={onSubmit} noValidate aria-label={t.changeLabel(dealName)} className="space-y-2">
+    <form
+      ref={formRef}
+      onSubmit={onSubmit}
+      // Escape cierra el selector sin guardar, como Cancelar (y no mientras guarda).
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || pending) return;
+        e.preventDefault();
+        cerrar();
+      }}
+      noValidate
+      aria-label={creatorId ? t.changeLabel(dealName) : t.assignLabel(dealName)}
+      className="space-y-2"
+    >
       <input type="hidden" name="dealId" value={dealId} />
       <input type="hidden" name="companyId" value={companyId} />
       <Field label={t.label} error={errors.creatorId} htmlFor={selectId}>

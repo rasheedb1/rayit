@@ -14,6 +14,7 @@ const createCompany = vi.fn();
 const createDeal = vi.fn();
 const createSignal = vi.fn();
 const setDealCreator = vi.fn();
+const acceptSignal = vi.fn();
 const revalidatePath = vi.fn();
 const puedeOperarVentas = vi.fn();
 
@@ -34,6 +35,7 @@ vi.mock("@mc/db/queries/ventas", async (original) => ({
   createDeal: (...a: unknown[]) => createDeal(...a),
   createSignal: (...a: unknown[]) => createSignal(...a),
   setDealCreator: (...a: unknown[]) => setDealCreator(...a),
+  acceptSignal: (...a: unknown[]) => acceptSignal(...a),
 }));
 
 import { ScopeError } from "@mc/db";
@@ -67,6 +69,7 @@ beforeEach(() => {
   createDeal.mockReset().mockResolvedValue(DEAL);
   createSignal.mockReset().mockResolvedValue({ duplicate: false, reason: null, companyId: null });
   setDealCreator.mockReset().mockResolvedValue({ changed: true, creatorName: "Laura Méndez" });
+  acceptSignal.mockReset();
   revalidatePath.mockReset();
   puedeOperarVentas.mockReset().mockResolvedValue(true);
 });
@@ -295,6 +298,26 @@ describe("el tope de los montos de Ventas (pulido r8)", () => {
     const r = await anotarSenal({}, form({ companyName: "Fresko", headline: "Pauta en TikTok", fit: "", budget: "99999999999999" }));
     expect(r.errors).toEqual({ budget: "El monto no puede pasar de COP 999.999.999.999,99." });
     expect(createSignal).not.toHaveBeenCalled();
+  });
+});
+
+describe("aceptarSenal con alcance por creador (ACC-7)", () => {
+  const signalId = "00000009-0000-4000-8000-000000000001";
+
+  it("la marca tiene un negocio abierto de un creador que no lleva: lo dice en la tarjeta, sin «ok» ni enlace al pipeline", async () => {
+    acceptSignal.mockResolvedValue({
+      dealId: null, companyId: COMPANY, companyName: "Hostal Brisa", companyCreated: false, dealCreated: false, dealHiddenOutOfScope: true,
+    });
+    const r = await aceptarSenal({}, form({ signalId }));
+    expect(r).toEqual({ message: MESSAGES.radar.hiddenDealNotice("Hostal Brisa") });
+  });
+
+  it("si ve el negocio abierto, la señal se suma a ese, como siempre", async () => {
+    acceptSignal.mockResolvedValue({
+      dealId: DEAL, companyId: COMPANY, companyName: "Hostal Brisa", companyCreated: false, dealCreated: false, dealHiddenOutOfScope: false,
+    });
+    const r = await aceptarSenal({}, form({ signalId }));
+    expect(r).toMatchObject({ ok: true, notice: MESSAGES.radar.alreadyOpen("Hostal Brisa") });
   });
 });
 

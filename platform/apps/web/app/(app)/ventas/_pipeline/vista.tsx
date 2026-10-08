@@ -114,7 +114,12 @@ export function PipelineView({
     })(),
     // Los días los cuenta listPipeline en SQL; aquí solo se escriben.
     lastContact: ultimoContacto(d, f),
-    creatorText: mostrarCreador || d.creatorId === null ? (d.creatorName ?? SIN_CREADOR) : null,
+    creatorText:
+      mostrarCreador || d.creatorId === null
+        ? d.creatorId !== null && d.creatorName
+          ? MESSAGES.pipeline.creatorLine(d.creatorName)
+          : SIN_CREADOR
+        : null,
   }));
   const boardStages: BoardStage[] = stages.map((s) => ({
     id: s.stageId,
