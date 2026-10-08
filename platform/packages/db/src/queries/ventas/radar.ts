@@ -46,12 +46,15 @@ export async function listSignals(tx: WorkspaceTx, params: ListSignalsParams = {
     // La empresa y el negocio abierto se resuelven como en acceptSignal
     // (resolveCompany y su «¿ya hay un negocio abierto?»), para que la
     // tarjeta diga ANTES de aceptar lo que va a pasar: «Ya en tu CRM» y
-    // «Se sumará a <negocio>» en vez de otro negocio (pulido r8).
+    // «Se sumará a <negocio>» en vez de otro negocio (pulido r8). Y, con
+    // alcance por creador, que la marca tiene uno abierto que la persona
+    // no ve (open_deal_hidden, ACC-7): aceptarla no abre otro.
     `SELECT s.id, emp.id AS company_id,
             COALESCE(co.name, s.evidence->>'company_name')              AS company_name,
             COALESCE(co.domain::text, s.evidence->>'domain')            AS company_domain,
             (cl.company_id IS NOT NULL) AS company_linked,
             abierto.id AS open_deal_id, abierto.name AS open_deal_name, coalesce(abierto.total, 0)::int AS open_deal_count,
+            (abierto.id IS NULL AND emp.id IS NOT NULL AND open_deal_out_of_scope(emp.id)) AS open_deal_hidden,
             s.source_id, COALESCE(src.label_es, s.source_id) AS source_label,
             s.headline_es, s.detected_at, s.evidence_url, s.fit_score::text AS fit_score,
             s.budget_estimate::text AS budget_estimate, s.budget_currency::text AS budget_currency,
@@ -470,20 +473,36 @@ export async function importSignals(
   return { created: createdRows.length, duplicated: duplicatedKeys.length, duplicatedKeys, createdRows, hiddenByBrief };
 }
 
-export interface AcceptSignalResult {
-  dealId: string;
+export type AcceptSignalResult = {
   companyId: string;
   companyName: string;
   /** La empresa nació al aceptar la señal. */
   companyCreated: boolean;
-  /**
-   * Se abrió un negocio nuevo. False cuando la marca ya tenía uno
-   * abierto: la señal se suma a ese (queda en su historia) y `dealId`
-   * es el que ya existía, para que la pantalla diga «Ya tienes un
-   * negocio con X» en vez de abrir un segundo.
-   */
-  dealCreated: boolean;
-}
+} & (
+  | {
+      dealId: string;
+      /**
+       * Se abrió un negocio nuevo. False cuando la marca ya tenía uno
+       * abierto: la señal se suma a ese (queda en su historia) y `dealId`
+       * es el que ya existía, para que la pantalla diga «Ya tienes un
+       * negocio con X» en vez de abrir un segundo.
+       */
+      dealCreated: boolean;
+      dealHiddenOutOfScope: false;
+    }
+  | {
+      /**
+       * La marca tiene un negocio abierto, pero de un creador que quien
+       * acepta no lleva (ACC-7, open_deal_out_of_scope): no se abre un
+       * segundo ni se toca el suyo. La señal sigue pendiente, para quien
+       * lleva ese negocio; si es para un creador propio, se abre desde la
+       * ficha eligiéndolo. Es la regla de la bandeja (out_of_scope).
+       */
+      dealId: null;
+      dealCreated: false;
+      dealHiddenOutOfScope: true;
+    }
+);
 
 export interface AcceptSignalOptions {
   /** La siguiente acción del negocio nuevo, en el idioma de la pantalla. Por defecto, PITCH_ACTION. */
@@ -694,6 +713,9 @@ async function companyOfSignal(
  *
  *   - si la marca ya tiene un negocio abierto, la señal se suma a ese:
  *     queda su actividad en la historia del negocio y no se abre otro;
+ *   - si la marca solo tiene abierto uno que la persona no ve por su
+ *     alcance por creador (ACC-7), no abre otro ni toca nada:
+ *     `dealHiddenOutOfScope`, y la señal queda pendiente;
  *   - si no, abre un negocio en «nuevo» con «Enviar pitch» a tres días
  *     hábiles, su primera fila de historial y la actividad que lo explica.
  *
@@ -726,6 +748,29 @@ export async function acceptSignal(
   const { company, created: companyCreated } = resuelta;
   const companyId = company.id;
 
+  // ¿Ya hay un negocio abierto con esta marca? Entonces la señal es
+  // contexto de ese negocio, no un negocio más: el tercero de Vitalé
+  // abierto «sin avisar» era justo lo que el CRM tiene que evitar.
+  const abierto = await tx.query<{ id: string }>(
+    `SELECT d.id
+       FROM deal d
+       JOIN pipeline_stage st ON st.id = d.stage_id
+      WHERE d.company_id = $1 AND NOT st.is_won AND NOT st.is_lost
+      ORDER BY st.position DESC, d.created_at DESC
+      LIMIT 1`,
+    [companyId],
+  );
+  const existente = abierto.rows[0]?.id;
+  // Con alcance por creador (ACC-7), el abierto de un creador que la
+  // persona no lleva no se ve (0082 §3): sin preguntar, se abría un
+  // segundo negocio con la marca sin avisar. Una señal no dice de qué
+  // creador es, así que vale la regla de la marca, la misma que la
+  // bandeja aplica a una respuesta sin creador de origen: no se abre otro,
+  // no se toca nada y la señal queda pendiente para quien lo lleva.
+  if (!existente && (await hasOpenDealOutOfScope(tx, companyId))) {
+    return { dealId: null, companyId, companyName: company.name, companyCreated, dealCreated: false, dealHiddenOutOfScope: true };
+  }
+
   // Vincular es idempotente: si ya era una empresa del workspace, se
   // deja la relación como estaba (podía ser cliente) y su responsable.
   // Si es nueva, su responsable es quien aceptó la señal.
@@ -743,19 +788,6 @@ export async function acceptSignal(
       [signalId],
     );
 
-  // ¿Ya hay un negocio abierto con esta marca? Entonces la señal es
-  // contexto de ese negocio, no un negocio más: el tercero de Vitalé
-  // abierto «sin avisar» era justo lo que el CRM tiene que evitar.
-  const abierto = await tx.query<{ id: string }>(
-    `SELECT d.id
-       FROM deal d
-       JOIN pipeline_stage st ON st.id = d.stage_id
-      WHERE d.company_id = $1 AND NOT st.is_won AND NOT st.is_lost
-      ORDER BY st.position DESC, d.created_at DESC
-      LIMIT 1`,
-    [companyId],
-  );
-  const existente = abierto.rows[0]?.id;
   if (existente) {
     await tx.query(
       `INSERT INTO activity (workspace_id, company_id, deal_id, user_id, kind, subject, body, metadata)
@@ -763,7 +795,7 @@ export async function acceptSignal(
       [companyId, existente, truncate(sig.headline_es, 200), opts.activityBody ?? null, metadata],
     );
     await markAccepted();
-    return { dealId: existente, companyId, companyName: company.name, companyCreated, dealCreated: false };
+    return { dealId: existente, companyId, companyName: company.name, companyCreated, dealCreated: false, dealHiddenOutOfScope: false };
   }
 
   const dealName = dealNameFromSignal(sig.headline_es, ev, [company.name, evName], opts.pendingDealName);
@@ -802,7 +834,7 @@ export async function acceptSignal(
   );
   await markAccepted();
 
-  return { dealId, companyId, companyName: company.name, companyCreated, dealCreated: true };
+  return { dealId, companyId, companyName: company.name, companyCreated, dealCreated: true, dealHiddenOutOfScope: false };
 }
 
 /** Lo que pasó al no aceptar la marca de una señal (rejectSignalBrand). */

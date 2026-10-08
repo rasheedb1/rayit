@@ -306,16 +306,60 @@ interface Surroundings {
   enrollment_status: string | null;
 }
 
+/**
+ * El creador de origen del mensaje `m` (un alias de outbound_message en
+ * la consulta que lo compone), como `LEFT JOIN LATERAL (…) <alias>` con
+ * una columna `id`: el de la cuenta de envío del mensaje, si no el de la
+ * cuenta de su toque, si no el del brief de su cadencia; el primero que
+ * sea un creador vivo del espacio. NULL si no hay ninguno. Es UNA
+ * definición para originCreatorOf (lo que abre el negocio) y surroundings
+ * (qué negocio mueve): las dos tienen que decir el mismo creador.
+ */
+function originCreatorLateral(m: string, alias: string): string {
+  return `LEFT JOIN LATERAL (
+           SELECT x.id
+             FROM outbound_message om
+             LEFT JOIN outreach_channel_account oma ON oma.id = om.channel_account_id
+             LEFT JOIN outbound_touch ot ON ot.id = om.touch_id
+             LEFT JOIN outreach_channel_account ota ON ota.id = ot.channel_account_id
+             LEFT JOIN outbound_enrollment oe ON oe.id = om.enrollment_id
+             LEFT JOIN outbound_sequence oq ON oq.id = coalesce(oe.sequence_id, ot.sequence_id)
+             LEFT JOIN outbound_brief ob ON ob.id = oq.brief_id
+            CROSS JOIN LATERAL unnest(ARRAY[oma.creator_id, ota.creator_id, ob.creator_id]) WITH ORDINALITY AS x(id, n)
+             JOIN creator_profile cp ON cp.id = x.id AND cp.workspace_id = om.workspace_id AND cp.deleted_at IS NULL
+            WHERE om.id = ${m}.id
+            ORDER BY x.n
+            LIMIT 1) ${alias} ON true`;
+}
+
+/**
+ * El negocio que mueve una respuesta, lo que rodea al mensaje y quién
+ * recibe el aviso.
+ *
+ * El negocio: el del mensaje, el de su cadencia o su toque; si no hay, el
+ * abierto más reciente de la marca. Con un creador de origen (ACC-7,
+ * originCreatorLateral), solo el abierto de ESE creador: en una agencia
+ * cada creador lleva su propio negocio con la marca (Mercado Verde en el
+ * seed 0013, uno de Camilo y otro de Mariana), y la respuesta al outreach
+ * de A no puede mover el de B ni dejar su mensaje enlazado a él. Si A no
+ * tiene uno abierto, no hay negocio y openDealFromReply abre el de A. Un
+ * negocio «Sin creador» tampoco se toma: quien lleva solo a A no lo ve, y
+ * la bandeja, que corre con la política, no podría elegirlo; así el worker
+ * y la bandeja deciden lo mismo para el mismo mensaje. Sin creador de
+ * origen (una cuenta del espacio, sin cadencia), el abierto más reciente
+ * de la marca, sea de quien sea, como hasta ACC-7.
+ *
+ * El aviso, para quien enroló (si sigue en el equipo) o para el dueño del
+ * negocio.
+ */
 async function surroundings(tx: SqlExecutor, m: UnclassifiedMessage): Promise<Surroundings> {
-  // El negocio: el del mensaje, el de su cadencia o su toque, o el abierto
-  // más reciente de la marca en este workspace. El aviso, para quien enroló
-  // (si sigue en el equipo) o para el dueño del negocio.
   return (
     await tx.query<Surroundings>(
       `SELECT coalesce(m.deal_id, e.deal_id, t.deal_id,
                        (SELECT d.id FROM deal d
                          WHERE d.workspace_id = m.workspace_id AND d.company_id = c.company_id
                            AND d.won_at IS NULL AND d.lost_at IS NULL
+                           AND (o.id IS NULL OR d.creator_id = o.id)
                          ORDER BY d.updated_at DESC, d.id LIMIT 1)) AS deal_id,
               c.company_id, co.name AS company, coalesce(c.full_name, co.name) AS who, e.status AS enrollment_status,
               CASE WHEN e.enrolled_by IS NOT NULL AND membership_is_team(m.workspace_id, e.enrolled_by) THEN e.enrolled_by END AS recipient
@@ -324,6 +368,7 @@ async function surroundings(tx: SqlExecutor, m: UnclassifiedMessage): Promise<Su
          LEFT JOIN outbound_touch t ON t.id = m.touch_id
          LEFT JOIN contact c ON c.id = m.contact_id
          LEFT JOIN company co ON co.id = c.company_id
+         ${originCreatorLateral('m', 'o')}
         WHERE m.id = $1::uuid`,
       [m.id],
     )
@@ -353,18 +398,7 @@ export async function originCreatorOf(
       `SELECT o.id AS creator_id,
               o.id IN (SELECT c FROM creators_for_session($2::uuid) AS c) AS usable
          FROM outbound_message m
-         LEFT JOIN outreach_channel_account ma ON ma.id = m.channel_account_id
-         LEFT JOIN outbound_touch t ON t.id = m.touch_id
-         LEFT JOIN outreach_channel_account ta ON ta.id = t.channel_account_id
-         LEFT JOIN outbound_enrollment e ON e.id = m.enrollment_id
-         LEFT JOIN outbound_sequence q ON q.id = coalesce(e.sequence_id, t.sequence_id)
-         LEFT JOIN outbound_brief b ON b.id = q.brief_id
-         LEFT JOIN LATERAL (
-           SELECT x.id
-             FROM unnest(ARRAY[ma.creator_id, ta.creator_id, b.creator_id]) WITH ORDINALITY AS x(id, n)
-             JOIN creator_profile cp ON cp.id = x.id AND cp.workspace_id = m.workspace_id AND cp.deleted_at IS NULL
-            ORDER BY x.n
-            LIMIT 1) o ON true
+         ${originCreatorLateral('m', 'o')}
         WHERE m.id = $1::uuid AND m.workspace_id = $2::uuid`,
       [messageId, workspaceId],
     )

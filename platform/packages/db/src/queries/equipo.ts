@@ -31,7 +31,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { admiteCasillas, isExtraPermiso, ROLE_KEYS, UltimoDuenoError } from '@mc/core';
 import type { BaseTx, IdentityTx, WorkspaceTx } from '../client.ts';
 import { audit } from '../audit.ts';
-import { findPgError } from '../pg-error.ts';
+import { findPgError, withSavepoint } from '../pg-error.ts';
 
 // ---------------------------------------------------------------------
 // El token
@@ -575,27 +575,28 @@ export async function changeMemberRole(
   if (antes.roleId === roleId && mismas) return { ok: true, changed: false };
   if (await llevaAlcanceYPasaARolCompleto(tx, userId, roleId)) return { ok: false, code: 'scoped_member' };
 
-  // En un SAVEPOINT: si el alcance llegó entre la pregunta y el UPDATE,
-  // el disparador lo para (23514) y se devuelve el mismo código con la
-  // transacción todavía usable.
-  let rows: { user_id: string }[];
-  await tx.query('SAVEPOINT cambio_de_rol');
-  try {
-    ({ rows } = await conUltimoDueno(() =>
-      tx.query<{ user_id: string }>(
-        `UPDATE membership SET role_id = $2::uuid, extra_permissions = $3::text[]
-          WHERE workspace_id = current_workspace_id() AND user_id = $1::uuid
-          RETURNING user_id`,
-        [userId, roleId, extras],
+  // En un SAVEPOINT (withSavepoint): si el alcance llegó entre la pregunta
+  // y el UPDATE, el disparador lo para (23514) y se devuelve el mismo
+  // código con la transacción todavía usable.
+  const updated = await withSavepoint(
+    tx,
+    'cambio_de_rol',
+    () =>
+      conUltimoDueno(() =>
+        tx.query<{ user_id: string }>(
+          `UPDATE membership SET role_id = $2::uuid, extra_permissions = $3::text[]
+            WHERE workspace_id = current_workspace_id() AND user_id = $1::uuid
+            RETURNING user_id`,
+          [userId, roleId, extras],
+        ),
       ),
-    ));
-  } catch (err) {
-    await tx.query('ROLLBACK TO SAVEPOINT cambio_de_rol');
-    if (isFullRoleUnscopedError(err)) return { ok: false, code: 'scoped_member' };
-    throw err;
-  }
-  await tx.query('RELEASE SAVEPOINT cambio_de_rol');
-  if (!rows[0]) return { ok: false, code: 'cannot_grant' };
+    (err) => {
+      if (isFullRoleUnscopedError(err)) return 'scoped_member' as const;
+      throw err;
+    },
+  );
+  if (updated === 'scoped_member') return { ok: false, code: 'scoped_member' };
+  if (!updated.rows[0]) return { ok: false, code: 'cannot_grant' };
   await audit(tx, {
     action: 'membership.role_changed',
     entityType: 'membership',

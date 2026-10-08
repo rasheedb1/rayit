@@ -11,6 +11,7 @@
  * es la que Postgres no deja en ningún campo —qué política rechazó una
  * fila—, y para eso está `matches` (scopeErrorOf).
  */
+import type { SqlExecutor } from './client.ts';
 
 /** Lo que interesa de un error de Postgres: su código SQLSTATE, la restricción y el mensaje. */
 export interface PgLikeError {
@@ -53,4 +54,69 @@ export function findPgError(
       (constraint === undefined || p.constraint === constraint) &&
       (matches === undefined || matches(p)),
   );
+}
+
+/**
+ * Los SAVEPOINT de @mc/db: identificadores fijos de los módulos que usan
+ * withSavepoint. Es una unión y no un `string` para que el SQL que se
+ * arma con ellos no pueda recibir otra cosa; uno nuevo se añade aquí.
+ */
+export type SavepointName = 'campana_de_cotizacion' | 'autorizar_cuenta_por_arroba' | 'cambio_de_rol';
+const SAVEPOINT_RE = /^[a-z_][a-z0-9_]{0,62}$/;
+
+/**
+ * Una escritura que puede fallar con un error que se sabe leer (un
+ * choque con un índice único, un disparador) sin dejar la transacción
+ * abortada.
+ *
+ * `fn` corre dentro de `SAVEPOINT name`. Si termina, RELEASE. Si lanza,
+ * ROLLBACK TO y RELEASE, y entonces `onError(err)` decide: devolver lo
+ * que la llamada entiende, o lanzar. Sin `onError`, el error se relanza
+ * tal cual. Es el único recorrido SAVEPOINT / ROLLBACK TO / RELEASE de
+ * @mc/db (writeOrScopeError en scope.ts, changeMemberRole en equipo.ts).
+ *
+ * Si la vuelta al SAVEPOINT falla (la conexión se cayó, la transacción ya
+ * estaba rota), se lanza el error ORIGINAL, que es el que explica lo que
+ * pasó, sin llamar a `onError`: con la transacción inservible no hay nada
+ * que preguntarle a la base. El de la vuelta queda en su `cause` si el
+ * original no traía uno.
+ *
+ * `name` va dentro del SQL: además del tipo, se comprueba que sea un
+ * identificador simple antes de escribir nada, por si llega con un cast
+ * desde JavaScript.
+ */
+export async function withSavepoint<T, E = never>(
+  tx: SqlExecutor,
+  name: SavepointName,
+  fn: () => Promise<T>,
+  onError?: (err: unknown) => Promise<E> | E,
+): Promise<T | E> {
+  if (!SAVEPOINT_RE.test(name)) throw new TypeError(`SAVEPOINT no válido: ${JSON.stringify(name)}`);
+  await tx.query(`SAVEPOINT ${name}`);
+  let out: T;
+  try {
+    out = await fn();
+  } catch (err) {
+    try {
+      await tx.query(`ROLLBACK TO SAVEPOINT ${name}`);
+      await tx.query(`RELEASE SAVEPOINT ${name}`);
+    } catch (vuelta) {
+      conCausa(err, vuelta);
+      throw err;
+    }
+    if (!onError) throw err;
+    return onError(err);
+  }
+  await tx.query(`RELEASE SAVEPOINT ${name}`);
+  return out;
+}
+
+/** Deja `causa` en el `cause` de `err` si no traía uno y se puede escribir. Nunca lanza. */
+function conCausa(err: unknown, causa: unknown): void {
+  if (typeof err !== 'object' || err === null || (err as { cause?: unknown }).cause !== undefined) return;
+  try {
+    (err as { cause?: unknown }).cause = causa;
+  } catch {
+    // Un error congelado: se lanza igual, sin la causa.
+  }
 }

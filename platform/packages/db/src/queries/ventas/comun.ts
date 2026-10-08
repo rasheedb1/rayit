@@ -272,6 +272,13 @@ export interface SignalRow {
   openDealId: string | null;
   openDealName: string | null;
   /**
+   * La marca no tiene un negocio abierto que la persona vea, pero sí uno
+   * de un creador que no lleva (ACC-7, open_deal_out_of_scope). Aceptarla
+   * no abre otro (acceptSignal, dealHiddenOutOfScope). Siempre falso para
+   * quien ve a todos.
+   */
+  openDealHidden: boolean;
+  /**
    * Cuántos negocios abiertos tiene esa empresa: «No aceptar esta marca»
    * avisa que sus toques programados se cancelan (brief_excluded).
    */

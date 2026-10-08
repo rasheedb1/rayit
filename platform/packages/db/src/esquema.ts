@@ -357,9 +357,11 @@ export const FUNCIONES_DEFINER_DECLARADAS: Readonly<Record<string, string>> = {
     'Ventas pregunta, antes de cambiar de qué creador es un negocio (setDealCreator), si ya tiene una cotización ' +
     'enviada o una campaña viva de un creador distinto del nuevo: la campaña de un creador fuera del alcance de ' +
     'quien cambia no se ve con la política de 0082, y sin la respuesta el acuerdo quedaría partido entre dos ' +
-    'creadores. Solo LEE quote y campaign, atada a mano al workspace fijado (y falso sin él), y responde sí o no ' +
-    'para UN negocio y UN creador: ni la cotización, ni la campaña, ni su creador, ni cuántas. EXECUTE solo para ' +
-    'mc_app. No es de ningún disparador',
+    'creadores. Solo LEE deal, quote y campaign, atada a mano al workspace fijado (y falso sin él), y responde sí ' +
+    'o no para UN negocio y UN creador: ni la cotización, ni la campaña, ni su creador, ni cuántas. Y solo por un ' +
+    'negocio que la sesión ve con la política de 0082 §3: por uno oculto (o que no existe) es falso, así que no ' +
+    'sirve para averiguar de qué creador es la campaña de un negocio que no se ve, ni si ese id existe. EXECUTE ' +
+    'solo para mc_app. No es de ningún disparador',
   // La regla de la baja de outbound_touch mira la lista global (0046 §4.1).
   'address_is_suppressed(citext)':
     'la regla de la baja de outbound_touch (0046 §4.1) compara el correo de la ficha y recipient_address con la ' +
@@ -777,7 +779,7 @@ export const CUERPOS_DEL_ALCANCE: Readonly<Record<string, { md5: string; origen:
   'open_deal_out_of_scope(uuid)': { md5: '3022212a5798784ca0d8d5f8415e5834', origen: '0082_alcance_por_creador §6' },
   'public_account_out_of_scope(text,text)': { md5: '182f7d58dbffc5c009bb94a1c08d8b55', origen: '0082_alcance_por_creador §4' },
   'role_is_full_access(uuid)': { md5: '9463df0a33c4d04c588dc638b80f5e83', origen: '0082_alcance_por_creador §2' },
-  'deal_creator_locked(uuid,uuid)': { md5: '2ff722c50bd889e8b5c76e6954c0d29b', origen: '0082_alcance_por_creador §7' },
+  'deal_creator_locked(uuid,uuid)': { md5: '917bb251c5f8ce007ff81e110bd421c6', origen: '0082_alcance_por_creador §7' },
 };
 
 /**

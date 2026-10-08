@@ -27,7 +27,7 @@
  *     un bug.
  */
 import type { SqlExecutor, WorkspaceTx } from './client.ts';
-import { findPgError, type PgLikeError } from './pg-error.ts';
+import { findPgError, withSavepoint, type PgLikeError, type SavepointName } from './pg-error.ts';
 
 /** membership_scope.scope_type (CHECK en 0034 §6). */
 export const SCOPE_KINDS = ['creator', 'company', 'campaign'] as const;
@@ -143,8 +143,13 @@ export async function assertScopeAllows(tx: WorkspaceTx, targets: Readonly<Recor
 export const CREATOR_SCOPE_TABLES = ['social_connection', 'post', 'campaign', 'deal'] as const;
 export type CreatorScopeTable = (typeof CREATOR_SCOPE_TABLES)[number];
 
-/** El nombre de la política de 0082 §3 en el mensaje del 42501: `"deal_creator_scope"`. */
-const CREATOR_POLICY_IN_MESSAGE = new RegExp(`"(${CREATOR_SCOPE_TABLES.join('|')})_creator_scope"`);
+/**
+ * El nombre de la política de 0082 §3 en el mensaje del 42501:
+ * `"deal_creator_scope"`. Postgres lo pone entre las comillas de su
+ * idioma (lc_messages): rectas en inglés, que es el de Supabase, «…» en
+ * español y “…” en otros catálogos. Se aceptan las tres.
+ */
+const CREATOR_POLICY_IN_MESSAGE = new RegExp(`["«“](${CREATOR_SCOPE_TABLES.join('|')})_creator_scope["»”]`);
 
 /**
  * El 42501 con el que la base rechaza una fila nueva a nombre de un
@@ -155,9 +160,9 @@ const CREATOR_POLICY_IN_MESSAGE = new RegExp(`"(${CREATOR_SCOPE_TABLES.join('|')
  * escribir y lanzan ScopeError ellas mismas. Esto es para que una
  * escritura que se le escape a esa comprobación tampoco llegue a la
  * pantalla como un error de Postgres en inglés. Postgres no pone la
- * política en un campo del error: la nombra en el mensaje, entre
- * comillas, en cualquier idioma, y solo cuando la que falla es una
- * RESTRICTIVA (que es justo esta).
+ * política en un campo del error: la nombra en el mensaje, entre las
+ * comillas del idioma del servidor (CREATOR_POLICY_IN_MESSAGE), y solo
+ * cuando la que falla es una RESTRICTIVA (que es justo esta).
  */
 export function scopeErrorOf(err: unknown): ScopeError | null {
   if (err instanceof ScopeError) return err;
@@ -169,14 +174,8 @@ function isCreatorPolicyRejection(p: PgLikeError): boolean {
   return typeof p.message === 'string' && CREATOR_POLICY_IN_MESSAGE.test(p.message);
 }
 
-/**
- * Los SAVEPOINT de writeOrScopeError: identificadores fijos de los
- * módulos que lo llaman. Es una unión y no un `string` para que el SQL
- * que se arma con ellos no pueda recibir otra cosa; uno nuevo se añade
- * aquí.
- */
-export type ScopeSavepoint = 'campana_de_cotizacion' | 'autorizar_cuenta_por_arroba';
-const SAVEPOINT_RE = /^[a-z_][a-z0-9_]{0,62}$/;
+/** Los SAVEPOINT de writeOrScopeError: los de withSavepoint (pg-error.ts) que lo usan. */
+export type ScopeSavepoint = Extract<SavepointName, 'campana_de_cotizacion' | 'autorizar_cuenta_por_arroba'>;
 
 /**
  * Una escritura que puede chocar con un índice único contra una fila que
@@ -186,39 +185,34 @@ const SAVEPOINT_RE = /^[a-z_][a-z0-9_]{0,62}$/;
  * si estaba fuera del alcance, lanzaban ScopeError antes de escribir.
  * Con la política por creador en la base esa búsqueda ya no la
  * encuentra: el único que sabe que existe es el índice único, que cuenta
- * todas las filas. Aquí se escribe dentro de un SAVEPOINT; si choca con
- * `constraint` y la persona está acotada por creador
- * (`session_sees_all_creators()` falso), el choque ES la fila que no ve,
- * y se dice con ScopeError sin dejar la transacción abortada. Para quien
- * ve a todos los creadores el choque es otra cosa (dos altas a la vez) y
- * se relanza tal cual.
+ * todas las filas. Aquí se escribe dentro de un SAVEPOINT (withSavepoint)
+ * y, si choca con `constraint`, se pregunta:
  *
- * `savepoint` va dentro del SQL: además del tipo, se comprueba que sea
- * un identificador simple antes de escribir nada, por si llega con un
- * cast desde JavaScript.
+ *   · ¿la persona ve a todos los creadores? Entonces el choque es otra
+ *     cosa (dos altas a la vez) y se relanza tal cual;
+ *   · ¿está acotada, pero la fila con la que choca SÍ la ve (`isVisible`,
+ *     una SELECT cruda que ya pasa por la política)? También se relanza:
+ *     es suya (un doble envío, dos pestañas, la misma cuenta que otra
+ *     persona autorizó un instante antes), no algo fuera de su alcance;
+ *   · solo si está acotada y no la ve, es ScopeError.
+ *
+ * La transacción sigue usable en los tres casos. Si la vuelta al
+ * SAVEPOINT falla, llega el error original (withSavepoint).
  */
 export async function writeOrScopeError<T>(
   tx: WorkspaceTx,
   savepoint: ScopeSavepoint,
   constraint: string,
   write: () => Promise<T>,
+  isVisible: () => Promise<boolean>,
 ): Promise<T> {
-  if (!SAVEPOINT_RE.test(savepoint)) throw new TypeError(`SAVEPOINT no válido: ${JSON.stringify(savepoint)}`);
-  await tx.query(`SAVEPOINT ${savepoint}`);
-  let out: T;
-  try {
-    out = await write();
-  } catch (err) {
-    await tx.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
-    await tx.query(`RELEASE SAVEPOINT ${savepoint}`);
+  return withSavepoint(tx, savepoint, write, async (err) => {
     if (findPgError(err, '23505', constraint) !== null) {
       const { rows } = await tx.query<{ all: boolean }>('SELECT session_sees_all_creators() AS all');
-      if (rows[0]?.all === false) throw new ScopeError();
+      if (rows[0]?.all === false && !(await isVisible())) throw new ScopeError();
     }
     throw err;
-  }
-  await tx.query(`RELEASE SAVEPOINT ${savepoint}`);
-  return out;
+  });
 }
 
 /**

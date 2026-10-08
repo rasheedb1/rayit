@@ -933,21 +933,23 @@ export type ReclassifyResult =
  * ¿«Me interesa» tocaría un negocio que la persona no ve por su alcance
  * por creador (ACC-7)? Los efectos de «interesado» mueven el negocio del
  * mensaje (el suyo, el de su cadencia o su toque) o, sin él, el abierto
- * más reciente de la marca, y si no hay ninguno abren uno. Para quien
- * está acotado, la política de deal (0082 §3) esconde el de otro
- * creador: el cambio de etapa no tocaría nada sin avisar, o se abriría
- * un SEGUNDO negocio para la misma marca. Se pregunta antes y no se toca
- * nada:
+ * de la marca que elige surroundings (outreach/intent.ts), y si no hay
+ * ninguno abren uno. Para quien está acotado, la política de deal (0082
+ * §3) esconde el de otro creador: el cambio de etapa no tocaría nada sin
+ * avisar, o se abriría un SEGUNDO negocio para la misma marca. Se
+ * pregunta antes con la misma regla que el worker, y no se toca nada:
  *
  *   · el mensaje apunta a un negocio y la transacción no lo ve: fuera
  *     (deal_id es una clave ajena: si no se ve, es por el alcance);
- *   · no apunta a ninguno, la marca no tiene uno abierto que se vea y sí
- *     uno que no se ve (open_deal_out_of_scope, 0082 §6, que solo dice sí
- *     o no): fuera;
- *   · no hay ninguno abierto y habría que abrirlo, pero el outreach salió
- *     de un creador fuera de su alcance (originCreatorOf: la cuenta que
- *     envió o el brief de la cadencia): el negocio sería de ese creador y
- *     no lo podría ver. Fuera, en vez de abrirlo a nombre de otro.
+ *   · el outreach salió de un creador (originCreatorOf: la cuenta que
+ *     envió o el brief de la cadencia): el negocio es el de ese creador,
+ *     el abierto o uno nuevo, y el de otro creador no cuenta. Fuera solo
+ *     si ese creador no está en su alcance, en vez de abrirlo o moverlo a
+ *     nombre de otro;
+ *   · sin creador de origen, el negocio es el abierto de la marca: si no
+ *     tiene uno que se vea y sí uno que no se ve (open_deal_out_of_scope,
+ *     0082 §6, que solo dice sí o no), fuera. Es la regla del radar
+ *     (acceptSignal, dealHiddenOutOfScope).
  *
  * Para quien ve a todos, nunca: ni siquiera pregunta.
  */
@@ -969,6 +971,13 @@ async function interestedOutOfScope(tx: WorkspaceTx, messageId: string): Promise
   if (!r || r.all) return false;
   if (r.linked) return !r.linked_visible;
   if (!r.company_id) return false;
+  // Con creador de origen, el negocio es el de ESE creador (surroundings):
+  // el abierto de otro creador ni se mueve ni impide abrir el suyo. Fuera
+  // solo si ese creador no está en su alcance.
+  const origin = await originCreatorOf(tx, messageId, tx.workspaceId);
+  if (origin.creatorId !== null) return !origin.usable;
+  // Sin creador de origen, el negocio es el abierto de la marca, sea de
+  // quien sea: si solo hay uno que no ve, fuera.
   const marca = (
     await tx.query<{ visible: boolean; oculto: boolean }>(
       `SELECT EXISTS (SELECT 1 FROM deal d WHERE d.company_id = $1::uuid AND d.won_at IS NULL AND d.lost_at IS NULL) AS visible,
@@ -976,10 +985,7 @@ async function interestedOutOfScope(tx: WorkspaceTx, messageId: string): Promise
       [r.company_id],
     )
   ).rows[0];
-  if (marca?.visible === true) return false;
-  if (marca?.oculto === true) return true;
-  const origin = await originCreatorOf(tx, messageId, tx.workspaceId);
-  return origin.creatorId !== null && !origin.usable;
+  return marca?.visible !== true && marca?.oculto === true;
 }
 
 /**

@@ -272,6 +272,15 @@ export const MESSAGES = {
     /** Lo mismo cuando el negocio se llama como la marca (los viejos del radar). */
     joinsOpenDeal: "Al aceptarla se sumará al negocio abierto con esta marca: no abre otro.",
     /**
+     * La marca tiene un negocio abierto de un creador que esta persona no
+     * lleva (ACC-7): aceptarla no abre otro ni toca ese (acceptSignal,
+     * dealHiddenOutOfScope). Lo mismo que dice la bandeja.
+     */
+    hiddenDeal:
+      "Esta marca ya tiene un negocio abierto de un creador que no llevas: aceptarla no abre otro. Si es para uno de tus creadores, ábrelo desde su ficha.",
+    hiddenDealNotice: (name: string) =>
+      `${name} ya tiene un negocio abierto de un creador que no llevas. No se abrió otro y la señal sigue pendiente para quien lo lleva. Si es para uno de tus creadores, ábrelo desde la ficha.`,
+    /**
      * Al aceptar: el CRM ya tiene una empresa con ese nombre y otro
      * dominio (marca.com y marca.co). Se pregunta en vez de crear una
      * segunda en silencio (pulido r2).

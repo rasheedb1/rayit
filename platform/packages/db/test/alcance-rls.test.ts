@@ -21,13 +21,13 @@ import { fileURLToPath } from 'node:url';
 import {
   CUERPOS_DEL_ALCANCE, estadoDelEsquema, explicarEsquema, TABLAS_CON_ALCANCE_POR_CREADOR, TABLAS_CON_CREADOR_SIN_POLITICA,
 } from '../src/esquema.ts';
-import type { WorkspaceTx } from '../src/client.ts';
-import { findPgError } from '../src/pg-error.ts';
+import type { SqlExecutor, WorkspaceTx } from '../src/client.ts';
+import { findPgError, withSavepoint } from '../src/pg-error.ts';
 import { listCampaigns } from '../src/queries/campanas.ts';
 import { reclassifyInboxMessage } from '../src/queries/bandejas.ts';
 import { applyIntent, loadIntentMessage } from '../src/queries/outreach/intent.ts';
 import {
-  acceptSignal, createDeal, createSignal, hasOpenDealOutOfScope, listDealCreatorOptions, listPipeline, setDealCreator, VentasError,
+  acceptSignal, createDeal, createSignal, hasOpenDealOutOfScope, listDealCreatorOptions, listPipeline, listSignals, setDealCreator, VentasError,
 } from '../src/queries/ventas.ts';
 import { CREATOR_SCOPE_TABLES, ScopeError, scopeErrorOf, soleCreatorFor, writeOrScopeError, type ScopeSavepoint } from '../src/scope.ts';
 import { migratorRole, openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, COMPANY_CAFE_ALMA, type TestDb } from './pglite.ts';
@@ -680,6 +680,124 @@ describe('el negocio de una respuesta es del creador de la cuenta que envió (ro
       `);
     }
   });
+
+  // Ronda 4, hallazgo 6: la marca ya tiene un negocio abierto de B y la respuesta llega por la cuenta
+  // de A. Worker y bandeja tienen que decidir lo mismo: el de B no se toca, y el de A es de A.
+  const MARCA_MIXTA = (k: string) => `0000000c-0000-4000-8000-0000000e20${k}`;
+  const NEGOCIO_DE_B = (k: string) => `0000000c-0000-4000-8000-0000000d20${k}`;
+  const CONTACTO_MIXTA = (k: string) => `0000000c-0000-4000-8000-0000000c20${k}`;
+  const MENSAJE_MIXTA = (k: string) => `0000000c-0000-4000-8000-0000000a20${k}`;
+  const marcaConNegocioDeB = (k: string) => t.admin(`
+    INSERT INTO company (id, name, owner_workspace_id) VALUES ('${MARCA_MIXTA(k)}', 'Marca mixta ${k} ACC-7 r5', '${WS_AGENCIA}');
+    INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS_AGENCIA}', '${MARCA_MIXTA(k)}', 'prospect');
+    INSERT INTO deal (id, workspace_id, company_id, creator_id, name, stage_id)
+      VALUES ('${NEGOCIO_DE_B(k)}', '${WS_AGENCIA}', '${MARCA_MIXTA(k)}', '${CREADOR_B}', 'Lo de B con la mixta ${k}', 'contactado');
+    INSERT INTO contact (id, company_id, owner_workspace_id, full_name, email, source)
+      VALUES ('${CONTACTO_MIXTA(k)}', '${MARCA_MIXTA(k)}', '${WS_AGENCIA}', 'Contacto mixta ${k}', 'mixta-${k}@r5-acc7.test', 'user_provided');
+    INSERT INTO outbound_message (id, workspace_id, contact_id, channel_account_id, direction, channel, thread_ref,
+                                  provider_message_id, body, occurred_at)
+      VALUES ('${MENSAJE_MIXTA(k)}', '${WS_AGENCIA}', '${CONTACTO_MIXTA(k)}', '${CUENTA_A}', 'inbound', 'email', 'hilo-r5-${k}',
+              'r5-${k}', 'Me interesa, cuéntame.', '2026-10-07T14:00:00Z');
+  `);
+  const negocioDeB = (k: string) =>
+    t.db.asWorker((tx) => tx.query<{ stage_id: string }>('SELECT stage_id FROM deal WHERE id = $1', [NEGOCIO_DE_B(k)]))
+      .then((r) => r.rows[0]?.stage_id);
+  const enlaceDelMensaje = (k: string) =>
+    t.db.asWorker((tx) => tx.query<{ deal_id: string | null }>('SELECT deal_id FROM outbound_message WHERE id = $1', [MENSAJE_MIXTA(k)]))
+      .then((r) => r.rows[0]?.deal_id ?? null);
+
+  test('marca con negocio abierto de B y respuesta por la cuenta de A: el worker no toca el de B, abre el de A y el ejecutivo de A lo ve', async () => {
+    await marcaConNegocioDeB('a1');
+    const fx = await t.db.asWorker(async (tx) => {
+      const m = await loadIntentMessage(tx, MENSAJE_MIXTA('a1'));
+      assert.ok(m);
+      return applyIntent(tx, m, interesada, ahora);
+    });
+    assert.equal(fx.dealCreated, true, 'abre uno para A');
+    assert.notEqual(fx.dealId, NEGOCIO_DE_B('a1'));
+    assert.equal(await negocioDeB('a1'), 'contactado', 'el de B sigue donde estaba');
+    assert.equal(await enlaceDelMensaje('a1'), fx.dealId, 'el mensaje queda en el negocio de A, no en el de B');
+    const negocios = await negociosDe(MARCA_MIXTA('a1'));
+    assert.deepEqual(negocios.map((d) => d.creator_id).sort(), [CREADOR_A, CREADOR_B].sort());
+    const pipeline = await ejecutivo((tx) => listPipeline(tx, { companyId: MARCA_MIXTA('a1') }));
+    assert.deepEqual(pipeline.map((d) => [d.id, d.creatorId]), [[fx.dealId, CREADOR_A]], 'el ejecutivo de A ve el suyo, y solo el suyo');
+    // Una segunda respuesta por la cuenta de A ya encuentra el de A: no abre un tercero.
+    await t.admin(`
+      INSERT INTO outbound_message (id, workspace_id, contact_id, channel_account_id, direction, channel, thread_ref,
+                                    provider_message_id, body, occurred_at)
+        VALUES ('${MENSAJE_MIXTA('a2')}', '${WS_AGENCIA}', '${CONTACTO_MIXTA('a1')}', '${CUENTA_A}', 'inbound', 'email', 'hilo-r5-w2',
+                'r5-w2', 'Sigo interesada.', '2026-10-07T14:30:00Z')`);
+    const otra = await t.db.asWorker(async (tx) => {
+      const m = await loadIntentMessage(tx, MENSAJE_MIXTA('a2'));
+      assert.ok(m);
+      return applyIntent(tx, m, interesada, ahora);
+    });
+    assert.equal(otra.dealCreated, false);
+    assert.equal(otra.dealId, fx.dealId);
+    assert.equal((await negociosDe(MARCA_MIXTA('a1'))).length, 2);
+  });
+
+  test('lo mismo desde la bandeja: el ejecutivo de A corrige a «Me interesa» y abre el de A, sin out_of_scope ni tocar el de B', async () => {
+    await marcaConNegocioDeB('b1');
+    const r = await corregir(ejecutivo, MENSAJE_MIXTA('b1'));
+    assert.deepEqual(r, { ok: true, intent: 'interested', dealMoved: true, optOut: false, optOutReview: false, dealNeedsCreator: null });
+    assert.equal(await negocioDeB('b1'), 'contactado');
+    const negocios = await negociosDe(MARCA_MIXTA('b1'));
+    assert.deepEqual(negocios.map((d) => d.creator_id).sort(), [CREADOR_A, CREADOR_B].sort());
+    assert.equal(await enlaceDelMensaje('b1'), negocios.find((d) => d.creator_id === CREADOR_A)?.id);
+  });
+});
+
+describe('el radar con alcance por creador: la marca ya tiene un negocio abierto de otro creador (ronda 4, hallazgo 1)', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
+  const ejecutivo = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => como(WS_AGENCIA, EJECUTIVO_A, fn);
+  const duenaAgencia = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => como(WS_AGENCIA, DUENA_AGENCIA, fn);
+  const MARCA_RADAR = '0000000c-0000-4000-8000-0000000e3001';
+  const NEGOCIO_RADAR_B = '0000000c-0000-4000-8000-0000000d3001';
+  const negocios = () =>
+    t.db.asWorker((tx) => tx.query<{ id: string; creator_id: string | null }>(
+      'SELECT id, creator_id FROM deal WHERE company_id = $1 ORDER BY created_at', [MARCA_RADAR],
+    )).then((r) => r.rows);
+  const estadoDe = (signalId: string) =>
+    t.db.asWorker((tx) => tx.query<{ status: string }>('SELECT status FROM signal WHERE id = $1', [signalId])).then((r) => r.rows[0]?.status);
+
+  before(async () => {
+    await t.admin(`
+      INSERT INTO company (id, name, owner_workspace_id) VALUES ('${MARCA_RADAR}', 'Hostal del radar ACC-7', '${WS_AGENCIA}') ON CONFLICT DO NOTHING;
+      INSERT INTO company_link (workspace_id, company_id, relationship) VALUES ('${WS_AGENCIA}', '${MARCA_RADAR}', 'prospect') ON CONFLICT DO NOTHING;
+      INSERT INTO deal (id, workspace_id, company_id, creator_id, name, stage_id)
+        VALUES ('${NEGOCIO_RADAR_B}', '${WS_AGENCIA}', '${MARCA_RADAR}', '${CREADOR_B}', 'Lo de B con el hostal', 'propuesta') ON CONFLICT DO NOTHING;
+    `);
+  });
+
+  test('el ejecutivo acotado acepta una señal de una marca con un negocio abierto de B: no abre otro, la señal sigue pendiente, y la tarjeta lo decía', async () => {
+    const senal = await ejecutivo((tx) => createSignal(tx, { companyId: MARCA_RADAR, headlineEs: 'Abre una sede en la playa' }));
+    assert.ok(senal.id);
+    const tarjeta = (await ejecutivo((tx) => listSignals(tx))).find((s) => s.id === senal.id);
+    assert.ok(tarjeta);
+    assert.deepEqual([tarjeta.openDealId, tarjeta.openDealHidden], [null, true], 'antes de aceptar, la tarjeta ya sabe que hay uno que no ve');
+
+    const r = await ejecutivo((tx) => acceptSignal(tx, senal.id!));
+    assert.deepEqual([r.dealId, r.dealCreated, r.dealHiddenOutOfScope], [null, false, true]);
+    assert.deepEqual(await negocios(), [{ id: NEGOCIO_RADAR_B, creator_id: CREADOR_B }], 'ni un segundo negocio ni tocar el de B');
+    assert.equal(await estadoDe(senal.id!), 'pending', 'la señal queda para quien lleva el negocio');
+
+    // La dueña, con la misma señal, la suma al negocio de B: la regla es la misma, ella sí lo ve.
+    const tarjetaDuena = (await duenaAgencia((tx) => listSignals(tx))).find((s) => s.id === senal.id);
+    assert.deepEqual([tarjetaDuena?.openDealId, tarjetaDuena?.openDealHidden], [NEGOCIO_RADAR_B, false]);
+    const deLaDuena = await duenaAgencia((tx) => acceptSignal(tx, senal.id!));
+    assert.deepEqual([deLaDuena.dealId, deLaDuena.dealCreated, deLaDuena.dealHiddenOutOfScope], [NEGOCIO_RADAR_B, false, false]);
+    assert.equal(await estadoDe(senal.id!), 'accepted');
+    assert.equal((await negocios()).length, 1);
+  });
+
+  test('si el ejecutivo quiere uno para su creador, lo abre desde la ficha eligiéndolo: es explícito, y la marca queda con uno de cada uno', async () => {
+    const id = await ejecutivo((tx) => createDeal(tx, { companyId: MARCA_RADAR, name: 'Lo de A con el hostal' }));
+    assert.deepEqual((await negocios()).map((d) => d.creator_id), [CREADOR_B, CREADOR_A]);
+    // Y desde entonces el radar le suma las señales a ese, el que ve.
+    const senal = await ejecutivo((tx) => createSignal(tx, { companyId: MARCA_RADAR, headlineEs: 'Pauta en Meta para la temporada' }));
+    const r = await ejecutivo((tx) => acceptSignal(tx, senal.id!));
+    assert.deepEqual([r.dealId, r.dealCreated, r.dealHiddenOutOfScope], [id, false, false]);
+  });
 });
 
 describe('de qué creador es un negocio: verlo y cambiarlo (ronda 2, hallazgo 6)', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
@@ -770,6 +888,22 @@ describe('de qué creador es un negocio: verlo y cambiarlo (ronda 2, hallazgo 6)
       await t.admin(`DELETE FROM membership_scope WHERE user_id = '${EJECUTIVO_A}' AND scope_id = '${CREADOR_E}'`);
     }
   });
+
+  test('deal_creator_locked solo responde por un negocio que la sesión ve: por uno oculto no dice nada (ronda 4, hallazgo 2)', async () => {
+    // DEAL_SOFIA_ENLACE tiene una cotización enviada de Sofía. Para la dueña, pasarlo a Laura lo partiría.
+    const pregunta = (quien: typeof miembro, creador: string) =>
+      quien((tx) => tx.query<{ v: boolean }>('SELECT deal_creator_locked($1, $2) AS v', [DEAL_SOFIA_ENLACE, creador])).then((r) => r.rows[0]?.v);
+    assert.equal(await pregunta(duena, CREATOR_LAURA), true, 'la dueña lo ve: bloqueado para Laura');
+    assert.equal(await pregunta(duena, CREATOR_SOFIA), false, 'y libre para Sofía');
+    // El miembro acotado a Laura no ve ese negocio: ninguna pregunta le dice de quién es su acuerdo, ni que existe.
+    for (const creador of [CREATOR_LAURA, CREATOR_SOFIA]) {
+      assert.equal(await pregunta(miembro, creador), false, creador);
+    }
+    const inexistente = await miembro((tx) => tx.query<{ v: boolean }>(
+      'SELECT deal_creator_locked($1, $2) AS v', ['0000000a-0000-4000-8000-00000000dead', CREATOR_LAURA],
+    ));
+    assert.equal(inexistente.rows[0]?.v, false, 'igual que por uno que no existe');
+  });
 });
 
 describe('a quién no toca: el worker y los enlaces públicos', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
@@ -819,12 +953,19 @@ describe('lo que la política deja sin respuesta: el @ y el índice único', { t
     assert.equal(await fuera(null, undefined, 'sofia.viaja'), false, 'sin espacio fijado, falso');
   });
 
-  test('writeOrScopeError: el choque con una fila que la persona acotada no ve es ScopeError; para la dueña es el error de siempre', async () => {
-    const otraCampanaDe = (quoteId: string) => (tx: WorkspaceTx) => writeOrScopeError(tx, 'campana_de_cotizacion', 'campaign_quote_id_active_key', () => tx.query(
+  /** Una segunda campaña viva de la cotización, por writeOrScopeError, con la sonda de createCampaignFromQuote. */
+  const otraCampanaDe = (quoteId: string) => (tx: WorkspaceTx) => writeOrScopeError(
+    tx, 'campana_de_cotizacion', 'campaign_quote_id_active_key',
+    () => tx.query(
       `INSERT INTO campaign (workspace_id, company_id, creator_id, quote_id, name, status)
        VALUES (current_workspace_id(), $1, $2, $3, 'Segunda viva', 'planned')`,
       [COMPANY_CAFE_ALMA, CREATOR_LAURA, quoteId],
-    ));
+    ),
+    async () => (await tx.query(`SELECT 1 FROM campaign WHERE quote_id = $1 AND status <> 'cancelled'`, [quoteId])).rows.length > 0,
+  );
+  const es23505 = (e: unknown) => findPgError(e, '23505', 'campaign_quote_id_active_key') !== null;
+
+  test('writeOrScopeError: el choque con una fila que la persona acotada no ve es ScopeError; para la dueña es el error de siempre', async () => {
     await t.admin(`UPDATE campaign SET quote_id = '${QUOTE_SOFIA_ENLACE}' WHERE id = '${CAMPAIGN_SOFIA}'`);
     try {
       await assert.rejects(miembro(async (tx) => {
@@ -833,10 +974,48 @@ describe('lo que la política deja sin respuesta: el @ y el índice único', { t
         assert.equal((await tx.query('SELECT 1 AS uno')).rows.length, 1);
         throw new Error('fin');
       }), /fin/);
-      await assert.rejects(duena(otraCampanaDe(QUOTE_SOFIA_ENLACE)), (e: unknown) => findPgError(e, '23505', 'campaign_quote_id_active_key') !== null);
+      await assert.rejects(duena(otraCampanaDe(QUOTE_SOFIA_ENLACE)), es23505);
     } finally {
       await t.admin(`UPDATE campaign SET quote_id = NULL WHERE id = '${CAMPAIGN_SOFIA}'`);
     }
+  });
+
+  test('writeOrScopeError: si la fila con la que choca la persona acotada es SUYA (la ve), es el 23505 de siempre, no ScopeError', async () => {
+    // Una campaña viva de Laura con la cotización: el miembro la ve. Un doble envío o dos pestañas
+    // chocan con ella, y eso no es «fuera de tu alcance».
+    const CAMPANA_LAURA_VIVA = '0000000a-0000-4000-8000-0000ca0a0f01';
+    await t.admin(`
+      INSERT INTO campaign (id, workspace_id, company_id, creator_id, quote_id, name, status)
+      VALUES ('${CAMPANA_LAURA_VIVA}', '${WORKSPACE_LAURA}', '${COMPANY_CAFE_ALMA}', '${CREATOR_LAURA}', '${QUOTE_SOFIA_ENLACE}', 'La de Laura', 'planned')`);
+    try {
+      await assert.rejects(miembro(async (tx) => {
+        await assert.rejects(otraCampanaDe(QUOTE_SOFIA_ENLACE)(tx), (e: unknown) => !(e instanceof ScopeError) && es23505(e));
+        assert.equal((await tx.query('SELECT 1 AS uno')).rows.length, 1, 'y la transacción sigue usable');
+        throw new Error('fin');
+      }), /fin/);
+    } finally {
+      await t.admin(`DELETE FROM campaign WHERE id = '${CAMPANA_LAURA_VIVA}'`);
+    }
+  });
+
+  test('withSavepoint: si la vuelta al SAVEPOINT falla, llega el error original (con la vuelta en su cause) y onError no corre', async () => {
+    const original = new Error('el de la escritura');
+    const vuelta = new Error('la conexión se cayó');
+    const sql: string[] = [];
+    const tx: SqlExecutor = {
+      query: (async (text: string) => {
+        sql.push(text);
+        if (text.startsWith('ROLLBACK TO')) throw vuelta;
+        return { rows: [], rowCount: 0 };
+      }) as SqlExecutor['query'],
+    };
+    let llamado = false;
+    await assert.rejects(
+      withSavepoint(tx, 'cambio_de_rol', async () => { throw original; }, () => { llamado = true; return null; }),
+      (e: unknown) => e === original && (e as { cause?: unknown }).cause === vuelta,
+    );
+    assert.equal(llamado, false);
+    assert.deepEqual(sql, ['SAVEPOINT cambio_de_rol', 'ROLLBACK TO SAVEPOINT cambio_de_rol']);
   });
 
   test('writeOrScopeError: un SAVEPOINT que no es un identificador simple no llega al SQL', async () => {
@@ -844,7 +1023,7 @@ describe('lo que la política deja sin respuesta: el @ y el índice único', { t
     await assert.rejects(
       duena((tx) => writeOrScopeError(tx, 'x; DROP TABLE deal; --' as ScopeSavepoint, 'campaign_quote_id_active_key', async () => {
         escribio = true;
-      })),
+      }, async () => false)),
       TypeError,
     );
     assert.equal(escribio, false);
@@ -863,6 +1042,19 @@ describe('lo que la política deja sin respuesta: el @ y el índice único', { t
     assert.equal(scopeErrorOf(new Error('cualquier otra cosa')), null);
     const propio = new ScopeError();
     assert.equal(scopeErrorOf(propio), propio);
+  });
+
+  test('scopeErrorOf: el nombre de la política se reconoce con las comillas de cualquier idioma del servidor', () => {
+    const rechazo = (message: string) => Object.assign(new Error('envoltorio'), { cause: { code: '42501', message } });
+    // lc_messages = en (Supabase), es y otros catálogos.
+    for (const message of [
+      'new row violates row-level security policy "deal_creator_scope" for table "deal"',
+      'la nueva fila viola la política de seguridad de registros «deal_creator_scope» para la tabla «deal»',
+      'new row violates row-level security policy “campaign_creator_scope” for table “campaign”',
+    ]) {
+      assert.ok(scopeErrorOf(rechazo(message)) instanceof ScopeError, message);
+    }
+    assert.equal(scopeErrorOf(rechazo('la nueva fila viola la política de seguridad de registros «deal_workspace» para la tabla «deal»')), null);
   });
 });
 

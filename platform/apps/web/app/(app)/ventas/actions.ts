@@ -305,6 +305,11 @@ export async function aceptarSenal(_prev: VentasState, formData: FormData): Prom
   }
   revalidateVentas(res.companyId);
   const name = res.companyName || field(formData, "companyName") || t.unknownBrand;
+  // La marca tiene un negocio abierto de un creador que esta persona no
+  // lleva (ACC-7): no se abrió otro y la señal sigue pendiente. Se dice en
+  // la tarjeta, que sigue ahí con su enlace a la ficha («Ya en tu CRM»),
+  // donde se abre uno para un creador propio.
+  if (res.dealHiddenOutOfScope) return { message: t.hiddenDealNotice(name) };
   // La marca ya tenía un negocio abierto: la señal se sumó a ese, y el
   // aviso lo dice con el enlace a la ficha donde está, en vez de abrir
   // otro sin avisar.

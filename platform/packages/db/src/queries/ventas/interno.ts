@@ -124,6 +124,7 @@ export function toContactRow(r: ContactRowSql): ContactRow {
 export interface SignalRowSql {
   id: string; company_id: string | null; company_name: string | null; company_domain: string | null;
   company_linked: boolean; open_deal_id: string | null; open_deal_name: string | null; open_deal_count: number;
+  open_deal_hidden: boolean | null;
   source_id: string; source_label: string; headline_es: string;
   detected_at: string; evidence_url: string | null; fit_score: string | null;
   budget_estimate: string | null; budget_currency: string | null; dedupe_key: string;
@@ -142,6 +143,7 @@ export function toSignalRow(r: SignalRowSql): SignalRow {
     openDealId: r.open_deal_id,
     openDealName: r.open_deal_name,
     openDealCount: r.open_deal_count,
+    openDealHidden: r.open_deal_hidden === true,
     sourceId: r.source_id,
     sourceLabel: r.source_label,
     headlineEs: r.headline_es,

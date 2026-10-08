@@ -642,6 +642,11 @@ GRANT EXECUTE ON FUNCTION open_deal_out_of_scope(uuid) TO mc_app;
 -- cambia no se ve con §3. Por eso, como §4 y §6, responde solo sí o no,
 -- para UN negocio y UN creador destino, atada al espacio fijado (falso
 -- sin él). No devuelve la cotización, la campaña, su creador ni cuántas.
+-- Y solo responde por un negocio que la sesión VE (el mismo predicado de
+-- la política de §3): por uno que no ve, o que no existe, es falso. Sin
+-- esa condición, preguntar por un negocio oculto con cada creador
+-- candidato habría dicho de quién es su campaña viva, y que ese id
+-- existe (ronda 4, hallazgo 2).
 -- SECURITY DEFINER; sin EXECUTE para PUBLIC; solo mc_app. Declarada en la
 -- guardia (FUNCIONES_DEFINER_DECLARADAS) y con su cuerpo fijado
 -- (CUERPOS_DEL_ALCANCE).
@@ -654,6 +659,11 @@ SET search_path = public, extensions, pg_temp
 AS $$
   SELECT current_workspace_id() IS NOT NULL
      AND p_deal IS NOT NULL
+     AND EXISTS (
+           SELECT 1 FROM deal d
+            WHERE d.id = p_deal
+              AND d.workspace_id = current_workspace_id()
+              AND (session_sees_all_creators() OR scope_allows('creator', d.creator_id)))
      AND (EXISTS (
             SELECT 1 FROM quote q
              WHERE q.workspace_id = current_workspace_id()
@@ -668,7 +678,7 @@ AS $$
                AND c.creator_id IS DISTINCT FROM p_creator))
 $$;
 COMMENT ON FUNCTION deal_creator_locked(uuid, uuid) IS
-  'Sí o no: ¿el negocio tiene, en el espacio fijado, una cotización enviada o una campaña viva de un creador distinto de p_creator? Para que setDealCreator no parta el acuerdo entre dos creadores (0082 §7, ACC-7).';
+  'Sí o no: ¿el negocio, que la sesión ve, tiene en el espacio fijado una cotización enviada o una campaña viva de un creador distinto de p_creator? Falso para un negocio que no ve. Para que setDealCreator no parta el acuerdo entre dos creadores (0082 §7, ACC-7).';
 
 REVOKE ALL ON FUNCTION deal_creator_locked(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION deal_creator_locked(uuid, uuid) TO mc_app;

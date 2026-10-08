@@ -997,10 +997,12 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
     paymentTermsDays: q.payment_terms_days,
   });
 
-  // El choque con campaign_quote_id_active_key, con el bloqueo de arriba
-  // tomado, solo puede ser una campaña viva de la cotización que esta
-  // persona no ve (otra creadora): writeOrScopeError lo dice con
-  // ScopeError y deja la transacción usable.
+  // El choque con campaign_quote_id_active_key es una campaña viva de la
+  // cotización. Si esta persona no la ve (otra creadora), writeOrScopeError
+  // lo dice con ScopeError y deja la transacción usable; si la ve (otra
+  // pestaña la creó un instante antes), es el choque de siempre.
+  const campanaVivaVisible = async () =>
+    (await tx.query(`SELECT 1 FROM campaign WHERE quote_id = $1 AND status <> 'cancelled'`, [q.id])).rows.length > 0;
   const inserted = await writeOrScopeError(tx, 'campana_de_cotizacion', 'campaign_quote_id_active_key', () => tx.query<{ id: string }>(
     `INSERT INTO campaign (workspace_id, company_id, creator_id, deal_id, quote_id, name, brief,
                            starts_on, ends_on, tracking_code, tracking_url, utm, brand_baseline_from, brand_accounts,
@@ -1015,7 +1017,7 @@ export async function createCampaignFromQuote(tx: WorkspaceTx, input: CreateCamp
       brandBaselineFrom(input.startsOn), JSON.stringify(brandAccountsFromSocials(q.socials)),
       q.total, q.currency,
     ],
-  ));
+  ), campanaVivaVisible);
   const id = inserted.rows[0]?.id;
   if (!id) throw new CampaignError('CampaignInsertError', 'No se pudo crear la campaña.');
   // Audita aquí y no en COT-4: quien llame a esta función deja la fila sin saberlo.

@@ -1118,6 +1118,17 @@ export async function upgradePublicAccountToOAuth(tx: WorkspaceTx, id: string, i
      RETURNING s.id, prev.status AS prev_status, prev.access_mode AS prev_access_mode, prev.was_deleted`,
     [id, input.externalAccountId],
   );
+  // Con quién chocaría el UPDATE: otra fila con ese open_id. Si quien
+  // autoriza la ve, el choque es suyo (otra persona la autorizó un instante
+  // antes) y se relanza; si no la ve, es de otra creadora (ScopeError).
+  const otraCuentaVisible = async () =>
+    (
+      await tx.query(
+        `SELECT 1 FROM social_connection c
+          WHERE c.platform_id = (SELECT platform_id FROM social_connection WHERE id = $1) AND c.external_account_id = $2 AND c.id <> $1`,
+        [id, input.externalAccountId],
+      )
+    ).rows.length > 0;
   const { rows } = await writeOrScopeError(tx, 'autorizar_cuenta_por_arroba', 'social_connection_platform_id_external_account_id_workspace_key', () => tx.query<{ id: string }>(
     `UPDATE social_connection c
         SET external_account_id = $2, handle = COALESCE($3, c.handle), display_name = COALESCE($4, c.display_name),
@@ -1128,7 +1139,7 @@ export async function upgradePublicAccountToOAuth(tx: WorkspaceTx, id: string, i
       WHERE c.id = $1 AND c.deleted_at IS NULL AND ${SCOPE_CONNECTION}
       RETURNING c.id`,
     [id, input.externalAccountId, input.handle, input.displayName, input.avatarUrl, input.profileUrl, input.accountType, input.secretRef, [...input.scopes], input.accessExpiresAt, input.refreshExpiresAt, input.connectedAt ?? null],
-  ));
+  ), otraCuentaVisible);
   if (rows.length === 0) throw new ConnectionNotFound(id);
   const delegation = await delegationFor(tx, ownBefore.creator_id);
   for (const old of retired.rows) {
