@@ -1586,7 +1586,11 @@ export async function getResultInputs(q: ResultExecutor, campaignId: string): Pr
          JOIN cp ON cp.id = s.post_id
          CROSS JOIN unnest($3::int[]) AS k(cut)
          WHERE s.workspace_id = $1 AND s.age_hours <= k.cut
-         ORDER BY s.post_id, k.cut, s.age_hours DESC, s.captured_at DESC
+         -- A igual edad e instante, la de mejor fuente (la regla de
+         -- post_metrics_at_cut y post_metrics_latest, 0082); el id solo
+         -- quita la dependencia del plan (CIM-11).
+         ORDER BY s.post_id, k.cut, s.age_hours DESC, s.captured_at DESC,
+                  array_position(ARRAY['api', 'csv_import', 'aggregator', 'manual'], s.source), s.id
        )
        SELECT cp.id AS post_id, cp.platform_id, a.max_age::text AS max_age, x.cut,
               x.views::text AS views, x.reach::text AS reach, x.total_interactions::text AS interactions,

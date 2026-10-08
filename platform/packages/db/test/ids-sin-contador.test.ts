@@ -86,6 +86,40 @@ const SEMBRAR_LAS_VACIAS = `
      '{"_job": {"id": "brand.snapshot", "runId": "987654321"}}');
   INSERT INTO api_call_log (connection_id, platform_id, endpoint, ok)
   SELECT id, platform_id, 'cim-11.prueba', true FROM social_connection ORDER BY id LIMIT 1;
+
+  -- Lo que deja el perfil comercial guardado (VEN-11): cada cifra de
+  -- seguidores cita su fila de account_metric_snapshot por el id. Dos
+  -- que apuntan a una lectura de verdad del workspace del creador (el id
+  -- como texto, que es lo que escribe perfil.ts, y como número, por si
+  -- un perfil viejo lo guardó así), una huérfana desde antes (se queda
+  -- igual), una de otra tabla y una narrativa editada a mano: ninguna de
+  -- esas dos se toca.
+  WITH s AS (SELECT a.id, a.workspace_id, a.day, a.followers, row_number() OVER (ORDER BY a.id) AS n
+               FROM account_metric_snapshot a
+              WHERE a.workspace_id = '${WORKSPACE_LAURA}' AND a.followers IS NOT NULL),
+       c AS (SELECT id FROM creator_profile WHERE workspace_id = '${WORKSPACE_LAURA}' ORDER BY id LIMIT 1),
+       claim AS (
+         SELECT jsonb_build_object('id', 'seguidores-' || s.n, 'kind', 'count', 'key', 'followers', 'params', '{}'::jsonb,
+                  'value', s.followers, 'unit', 'seguidores',
+                  'source', jsonb_build_object('table', 'account_metric_snapshot',
+                    'id', CASE WHEN s.n = 1 THEN to_jsonb(s.id::text) ELSE to_jsonb(s.id) END,
+                    'field', 'followers', 'asOf', s.day)) AS j, s.n
+           FROM s WHERE s.n <= 2)
+  UPDATE creator_profile cp
+     SET media_kit = cp.media_kit || jsonb_build_object('perfil_comercial', jsonb_build_object(
+           'version', 3, 'computedAt', '2026-10-01T00:00:00.000Z',
+           'perfil', jsonb_build_object('claims',
+             (SELECT jsonb_agg(j ORDER BY n) FROM claim)
+             || jsonb_build_array(
+                  jsonb_build_object('id', 'seguidores-huerfana', 'kind', 'count', 'key', 'followers', 'params', '{}'::jsonb,
+                    'value', 1, 'unit', 'seguidores',
+                    'source', jsonb_build_object('table', 'account_metric_snapshot', 'id', '987654321', 'field', 'followers')),
+                  jsonb_build_object('id', 'mediana-tiktok', 'kind', 'count', 'key', 'median_views', 'params', '{}'::jsonb,
+                    'value', 1000, 'unit', 'views',
+                    'source', jsonb_build_object('table', 'creator_baseline', 'id', '42', 'field', 'median_views')))),
+           'narrative', jsonb_build_object('text', 'Corregida a mano [claim:seguidores-1].', 'source', 'edited',
+             'model', null, 'writtenAt', '2026-10-02T00:00:00.000Z', 'fallback', null)))
+    FROM c WHERE cp.id = c.id;
 `;
 
 interface Huella extends Record<string, unknown> {
@@ -143,6 +177,51 @@ async function corridasDeLaBitacora(db: EmbeddedDb): Promise<CorridaDeLaBitacora
   return rows.map((r) => ({ action: r.action, corrida: r.corrida === '' ? null : r.corrida }));
 }
 
+interface LecturaDelPerfil extends Record<string, unknown> {
+  claim: string;
+  lectura: string | null;
+}
+
+/**
+ * Cada claim del perfil comercial guardado que cita account_metric_snapshot,
+ * con la lectura a la que apunta su source.id descrita por lo que no es el
+ * id (cuenta, día, seguidores). Antes y después de 0082 tiene que dar lo
+ * mismo: el id cambia de número a uuid, la fila a la que apunta no.
+ */
+async function lecturasDelPerfil(db: EmbeddedDb): Promise<LecturaDelPerfil[]> {
+  const { rows } = await db.queryAsSuperuser<LecturaDelPerfil>(
+    `SELECT e.claim ->> 'id' AS claim, concat_ws(',', s.connection_id, s.day, s.followers) AS lectura
+       FROM creator_profile c
+      CROSS JOIN LATERAL jsonb_array_elements(c.media_kit #> '{perfil_comercial,perfil,claims}') AS e(claim)
+       LEFT JOIN account_metric_snapshot s ON s.id::text = e.claim #>> '{source,id}'
+      WHERE jsonb_typeof(c.media_kit #> '{perfil_comercial,perfil,claims}') = 'array'
+        AND e.claim #>> '{source,table}' = 'account_metric_snapshot'
+      ORDER BY 1`,
+  );
+  return rows.map((r) => ({ claim: r.claim, lectura: r.lectura === '' ? null : r.lectura }));
+}
+
+/**
+ * creator_profile entero como huella, sin el source.id de las claims que
+ * citan account_metric_snapshot (eso lo mide lecturasDelPerfil): la
+ * narrativa, las demás claims, el orden del arreglo y updated_at tienen
+ * que quedar igual.
+ */
+async function huellaDeLosPerfiles(db: EmbeddedDb): Promise<{ filas: number; huella: string }> {
+  const { rows } = await db.queryAsSuperuser<{ filas: number; huella: string }>(
+    `SELECT count(*)::int AS filas, md5(coalesce(string_agg(f, '|' ORDER BY f), '')) AS huella
+       FROM (SELECT (CASE WHEN jsonb_typeof(c.media_kit #> '{perfil_comercial,perfil,claims}') = 'array'
+                          THEN jsonb_set(to_jsonb(c), '{media_kit,perfil_comercial,perfil,claims}', coalesce(
+                                 (SELECT jsonb_agg(CASE WHEN e.claim #>> '{source,table}' = 'account_metric_snapshot'
+                                                        THEN e.claim #- '{source,id}' ELSE e.claim END ORDER BY e.ord)
+                                    FROM jsonb_array_elements(c.media_kit #> '{perfil_comercial,perfil,claims}')
+                                         WITH ORDINALITY AS e(claim, ord)), '[]'::jsonb))
+                          ELSE to_jsonb(c) END)::text AS f
+               FROM creator_profile c) s`,
+  );
+  return rows[0]!;
+}
+
 /** Lo que devuelve post_metrics_at_cut, entero, como huella. */
 async function huellaDeLosCortes(db: EmbeddedDb): Promise<{ filas: number; huella: string }> {
   const { rows } = await db.queryAsSuperuser<{ filas: number; huella: string }>(
@@ -160,6 +239,9 @@ describe('0082 convierte las claves con las filas dentro', () => {
   let aplicadas: string[];
   let pasosAntes: string;
   let bitacoraAntes: CorridaDeLaBitacora[];
+  let lecturasAntes: LecturaDelPerfil[];
+  let perfilesAntes: { filas: number; huella: string };
+  let estadoAntes: Awaited<ReturnType<typeof estadoDelEsquema>>;
 
   before(async () => {
     // La migración por su nombre, no por su número: si el integrador la
@@ -176,7 +258,10 @@ describe('0082 convierte las claves con las filas dentro', () => {
     cortesAntes = await huellaDeLosCortes(db);
     pasosAntes = await pasos(db, 'row_number() OVER (PARTITION BY deal_id ORDER BY changed_at, id)');
     bitacoraAntes = await corridasDeLaBitacora(db);
-    guardiaAntes = (await estadoDelEsquema(db)).clavesDeSecuencia;
+    lecturasAntes = await lecturasDelPerfil(db);
+    perfilesAntes = await huellaDeLosPerfiles(db);
+    estadoAntes = await estadoDelEsquema(db);
+    guardiaAntes = estadoAntes.clavesDeSecuencia;
     aplicadas = await db.migrar();
   }, SETUP_TIMEOUT);
   after(() => db?.close());
@@ -261,6 +346,52 @@ describe('0082 convierte las claves con las filas dentro', () => {
     assert.equal(columna.rows.length, 0);
   });
 
+  test('el perfil comercial guardado sigue citando su lectura: source.id pasa del número al uuid de la misma fila de account_metric_snapshot', async () => {
+    // La prueba no es sobre un perfil sin citas: dos apuntan a una lectura
+    // de verdad (una con el id como texto, otra como número) y una es
+    // huérfana desde antes.
+    assert.deepEqual(
+      lecturasAntes.map((l) => [l.claim, l.lectura !== null]),
+      [['seguidores-1', true], ['seguidores-2', true], ['seguidores-huerfana', false]],
+    );
+    assert.deepEqual(await lecturasDelPerfil(db), lecturasAntes);
+    const { rows } = await db.queryAsSuperuser<{ claim: string; id: string; tipo: string }>(
+      `SELECT e.claim ->> 'id' AS claim, e.claim #>> '{source,id}' AS id, jsonb_typeof(e.claim #> '{source,id}') AS tipo
+         FROM creator_profile c
+        CROSS JOIN LATERAL jsonb_array_elements(c.media_kit #> '{perfil_comercial,perfil,claims}') AS e(claim)
+        WHERE jsonb_typeof(c.media_kit #> '{perfil_comercial,perfil,claims}') = 'array'
+        ORDER BY 1`,
+    );
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    assert.deepEqual(
+      rows.map((r) => [r.claim, r.tipo, UUID.test(r.id)]),
+      [
+        ['mediana-tiktok', 'string', false],
+        ['seguidores-1', 'string', true],
+        ['seguidores-2', 'string', true],
+        ['seguidores-huerfana', 'string', false],
+      ],
+    );
+    // La huérfana y la de otra tabla no se tocan; el contador viejo no
+    // queda a la vista en ninguna (es lo que /ventas/perfil enseña en el title).
+    assert.equal(rows.find((r) => r.claim === 'seguidores-huerfana')!.id, '987654321');
+    assert.equal(rows.find((r) => r.claim === 'mediana-tiktok')!.id, '42');
+    // Y account_metric_snapshot no se lleva la columna de paso.
+    const columna = await db.queryAsSuperuser(
+      "SELECT 1 FROM pg_attribute WHERE attrelid = 'public.account_metric_snapshot'::regclass AND attname = 'id_nuevo' AND NOT attisdropped",
+    );
+    assert.equal(columna.rows.length, 0);
+  });
+
+  test('el resto del perfil no cambia: la narrativa editada, las demás claims, su orden y updated_at', async () => {
+    assert.deepEqual(await huellaDeLosPerfiles(db), perfilesAntes);
+    // El disparador de updated_at vuelve a estar encendido.
+    const { rows } = await db.queryAsSuperuser<{ tgenabled: string }>(
+      "SELECT tgenabled FROM pg_trigger WHERE tgrelid = 'public.creator_profile'::regclass AND tgname = 'creator_profile_updated'",
+    );
+    assert.deepEqual(rows, [{ tgenabled: 'O' }]);
+  });
+
   test('deal_stage_history.step numera los pasos de cada negocio en el orden que daba el id', async () => {
     assert.equal(await pasos(db, 'step'), pasosAntes);
     // Y el siguiente paso de un negocio lo numera la base, aunque se pida otro.
@@ -289,6 +420,22 @@ describe('0082 convierte las claves con las filas dentro', () => {
     const despues = await estadoDelEsquema(db);
     assert.deepEqual(despues.clavesDeSecuencia, []);
     assert.equal(explicarEsquema(despues), null);
+  });
+
+  test('la guardia dice qué hacer: con 0082 pendiente, migrar; con todo aplicado y una clave de secuencia, escribir la migración que la convierte', async () => {
+    // Antes de 0082 las quince salen porque falta una migración: migrar lo arregla.
+    assert.match(explicarEsquema(estadoAntes) ?? '', /faltan 1 migración\(es\)[\s\S]*Corre: make db\.migrate$/);
+    // Con todo aplicado, una tabla nueva con bigserial no la arregla
+    // ninguna migración del repositorio: hay que escribir la siguiente.
+    const alDia = await estadoDelEsquema(db);
+    const msg = explicarEsquema({ ...alDia, clavesDeSecuencia: ['zz_nueva.id (public.zz_nueva_id_seq)'] }) ?? '';
+    assert.match(msg, /zz_nueva\.id/);
+    assert.match(msg, /Escribe la siguiente 00NN_\*\.sql \(patrón de 0082 §2\) y verifícala con make db\.check$/);
+    assert.doesNotMatch(msg, /make db\.migrate/);
+    assert.doesNotMatch(msg, /no tiene el esquema de este repositorio/);
+    // Si además falta una migración, lo primero sigue siendo migrar.
+    const conPendiente = explicarEsquema({ ...alDia, pendientes: ['0099_x.sql'], clavesDeSecuencia: ['zz_nueva.id (public.zz_nueva_id_seq)'] }) ?? '';
+    assert.match(conPendiente, /Corre: make db\.migrate$/);
   });
 
   test('como mc_app, el INSERT devuelve un uuid, y la fecha de dos entradas de la misma transacción es la del reloj', async () => {

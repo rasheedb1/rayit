@@ -59,16 +59,31 @@
 --       reescribir la tabla), la clave primaria y su índice se
 --       reconstruyen con la tabla, y la secuencia se borra. Ninguna
 --       clave ajena apunta a estas tablas (comprobado contra el esquema
---       completo). Hay UNA referencia que no es clave ajena: auditAsJob
---       (packages/db/src/audit.ts) guarda el id de la corrida en
---       audit_log.after->'_job'->>'runId' (lo escribe
---       collect-account-metrics en connection.source_changed). job_run
---       no recibe un uuid cualquiera: §2a se lo asigna primero en una
---       columna aparte, reescribe esas entradas de bitácora con él y
---       solo entonces convierte la clave con ese mismo valor, así que
---       cada entrada sigue apuntando a su corrida. El número viejo no se
---       guarda en ningún sitio: mc_app lee job_run y volvería a ser el
---       contador. Reescribir la tabla no dispara los disparadores de
+--       completo). Hay DOS referencias que no son clave ajena, dentro
+--       de un jsonb:
+--         · auditAsJob (packages/db/src/audit.ts) guarda el id de la
+--           corrida en audit_log.after->'_job'->>'runId' (lo escribe
+--           collect-account-metrics en connection.source_changed);
+--         · el perfil comercial guardado (VEN-11) cita la lectura de
+--           seguidores de cada red en creator_profile.media_kit ->
+--           'perfil_comercial' -> 'perfil' -> 'claims'[] como
+--           source = {table: 'account_metric_snapshot', id: '<id>'}
+--           (packages/core/src/outreach/perfil.ts): «cada cifra apunta a
+--           la fila de la que salió», y /ventas/perfil enseña ese id.
+--       Ni job_run ni account_metric_snapshot reciben un uuid
+--       cualquiera: §2a les asigna el suyo primero en una columna aparte
+--       (id_nuevo), reescribe con él las entradas de bitácora y las
+--       claims del perfil, y solo entonces el bucle convierte la clave
+--       con ese mismo valor, así que cada referencia sigue apuntando a
+--       su fila. Lo demás del perfil (la narrativa, editada a mano o no,
+--       y las otras claims) no se toca, ni su updated_at: subir la
+--       versión del perfil para que se recalcule borraría las narrativas
+--       corregidas por el creador. El número viejo no se guarda en
+--       ningún sitio: mc_app lee las dos tablas y volvería a ser el
+--       contador. La prueba packages/db/test/ids-sin-contador-codigo
+--       obliga a declarar (REFERENCIAS_EN_JSON) la próxima cita de una de
+--       estas quince dentro de un jsonb, para decidir si una migración
+--       la traduce. Reescribir la tabla no dispara los disparadores de
 --       fila ni pasa por la RLS: las filas de todos los workspaces se
 --       convierten.
 --   3 · El instante de los registros es el del reloj, no el de la
@@ -81,6 +96,14 @@
 --       Postgres mide en microsegundos; PGlite, en milisegundos, así que
 --       las pruebas no dan por hecho el orden de dos filas del mismo
 --       milisegundo.
+--   4 · post_metrics_latest (0010), la última lectura de cada post, que
+--       alimenta el tablero de Resumen, Campañas y el perfil comercial,
+--       ordenaba solo por captured_at DESC: dos lecturas del mismo
+--       instante (una exportación CSV y la API) salían en cualquier
+--       orden, y la cifra podía cambiar de una consulta a otra. Sigue la
+--       misma regla que ORDEN_ULTIMA_LECTURA (@mc/db/queries/resumen):
+--       captured_at, edad, fuente (api > csv_import > aggregator >
+--       manual) y el id al final, solo para que no dependa del plan.
 --   4b · outreach_writer_status (0062) y outreach_classifier_status
 --       (0070) eligen la última corrida de outbound.generate y
 --       outbound.intent por (started_at, id): con el id al azar, a igual
@@ -261,13 +284,14 @@ CREATE TRIGGER deal_stage_history_step_fijo
 -- sentencia (una sola reescritura). La clave primaria sigue llamándose
 -- <tabla>_pkey: Postgres reconstruye su índice con el tipo nuevo.
 --
--- 2a · job_run, antes que nada: su uuid nuevo va primero a id_nuevo (un
--- DEFAULT volátil en ADD COLUMN se evalúa fila a fila), las entradas de
--- bitácora que nombran una corrida por su número pasan a nombrarla por
--- ese uuid, y el bucle de abajo convierte job_run.id USING id_nuevo. Con
--- FORCE ROW LEVEL SECURITY quitado un momento en las dos tablas, como en
--- §1b: el dueño no ve filas con él puesto. `->>` lee igual el runId que
--- se escribió como número (antes de esta rama) que como texto.
+-- 2a · job_run y account_metric_snapshot, antes que nada: su uuid nuevo
+-- va primero a id_nuevo (un DEFAULT volátil en ADD COLUMN se evalúa fila
+-- a fila), lo que las nombra por su número dentro de un jsonb pasa a
+-- nombrarlas por ese uuid, y el bucle de abajo convierte su id USING
+-- id_nuevo. Con FORCE ROW LEVEL SECURITY quitado un momento en las
+-- tablas que se leen y se escriben, como en §1b: el dueño no ve filas
+-- con él puesto. `->>` lee igual el runId que se escribió como número
+-- (antes de esta rama) que como texto.
 -- =====================================================================
 DO $$
 BEGIN
@@ -284,6 +308,45 @@ BEGIN
        AND a.after -> '_job' ->> 'runId' = j.id::text;
     ALTER TABLE public.audit_log FORCE ROW LEVEL SECURITY;
     ALTER TABLE public.job_run FORCE ROW LEVEL SECURITY;
+  END IF;
+END $$;
+
+-- Las claims del perfil comercial guardado que citan una lectura de
+-- seguidores. Se reescribe el arreglo entero de cada perfil que tenga
+-- alguna, en su orden (WITH ORDINALITY), cambiando solo source.id de las
+-- que apuntan a una fila que existe en el mismo workspace; las demás
+-- claims, y la que apunta a una lectura que ya no está, quedan igual. El
+-- disparador de updated_at se apaga para esta sentencia y se vuelve a
+-- encender: traducir un id no es editar el perfil.
+DO $$
+BEGIN
+  IF (SELECT a.atttypid FROM pg_attribute a
+       WHERE a.attrelid = 'public.account_metric_snapshot'::regclass AND a.attname = 'id' AND NOT a.attisdropped)
+     = 'bigint'::regtype THEN
+    ALTER TABLE public.account_metric_snapshot ADD COLUMN IF NOT EXISTS id_nuevo uuid NOT NULL DEFAULT gen_random_uuid();
+    ALTER TABLE public.account_metric_snapshot NO FORCE ROW LEVEL SECURITY;
+    ALTER TABLE public.creator_profile NO FORCE ROW LEVEL SECURITY;
+    ALTER TABLE public.creator_profile DISABLE TRIGGER creator_profile_updated;
+    UPDATE public.creator_profile cp
+       SET media_kit = jsonb_set(cp.media_kit, '{perfil_comercial,perfil,claims}', n.claims)
+      FROM (SELECT c.id,
+                   jsonb_agg(CASE WHEN s.id_nuevo IS NULL THEN e.claim
+                                  ELSE jsonb_set(e.claim, '{source,id}', to_jsonb(s.id_nuevo::text)) END
+                             ORDER BY e.ord) AS claims
+              FROM public.creator_profile c
+             CROSS JOIN LATERAL jsonb_array_elements(c.media_kit #> '{perfil_comercial,perfil,claims}')
+                   WITH ORDINALITY AS e(claim, ord)
+              LEFT JOIN public.account_metric_snapshot s
+                     ON e.claim #>> '{source,table}' = 'account_metric_snapshot'
+                    AND s.id::text = e.claim #>> '{source,id}'
+                    AND s.workspace_id = c.workspace_id
+             WHERE jsonb_typeof(c.media_kit #> '{perfil_comercial,perfil,claims}') = 'array'
+             GROUP BY c.id
+            HAVING bool_or(s.id_nuevo IS NOT NULL)) n
+     WHERE n.id = cp.id;
+    ALTER TABLE public.creator_profile ENABLE TRIGGER creator_profile_updated;
+    ALTER TABLE public.creator_profile FORCE ROW LEVEL SECURITY;
+    ALTER TABLE public.account_metric_snapshot FORCE ROW LEVEL SECURITY;
   END IF;
 END $$;
 
@@ -307,13 +370,14 @@ BEGIN
       IF seq IS NOT NULL THEN
         EXECUTE format('DROP SEQUENCE %s', seq);
       END IF;
-      -- job_run conserva el uuid que §2a ya le dio a la bitácora.
+      -- job_run y account_metric_snapshot conservan el uuid que §2a ya
+      -- les dio a la bitácora y a las claims del perfil.
       EXECUTE format(
         'ALTER TABLE public.%I ALTER COLUMN id SET DATA TYPE uuid USING %s, '
         '  ALTER COLUMN id SET DEFAULT gen_random_uuid()',
-        t, CASE WHEN t = 'job_run' THEN 'id_nuevo' ELSE 'gen_random_uuid()' END);
-      IF t = 'job_run' THEN
-        ALTER TABLE public.job_run DROP COLUMN id_nuevo;
+        t, CASE WHEN t IN ('job_run', 'account_metric_snapshot') THEN 'id_nuevo' ELSE 'gen_random_uuid()' END);
+      IF t IN ('job_run', 'account_metric_snapshot') THEN
+        EXECUTE format('ALTER TABLE public.%I DROP COLUMN id_nuevo', t);
       END IF;
     END IF;
   END LOOP;
@@ -345,6 +409,36 @@ FROM post_metric_snapshot s
 CROSS JOIN (VALUES (24), (72), (168), (720)) AS c(cut_hours)
 WHERE s.age_hours <= c.cut_hours
 ORDER BY s.post_id, c.cut_hours, s.age_hours DESC, s.captured_at ASC,
+         array_position(ARRAY['api', 'csv_import', 'aggregator', 'manual'], s.source), s.id;
+
+-- =====================================================================
+-- 4 (bis) · post_metrics_latest con la regla de la última lectura
+-- ---------------------------------------------------------------------
+-- Las mismas columnas, en el mismo orden y con los mismos tipos que 0010
+-- (creator_post_board depende de ella); CREATE OR REPLACE conserva el
+-- dueño y los GRANT, y security_invoker (0024) va explícito. El orden es
+-- el de ORDEN_ULTIMA_LECTURA en @mc/db/queries/resumen: si cambia allí,
+-- cambia aquí en una migración.
+-- =====================================================================
+CREATE OR REPLACE VIEW post_metrics_latest WITH (security_invoker = on) AS
+SELECT DISTINCT ON (s.post_id)
+       s.post_id,
+       s.workspace_id,
+       s.captured_at,
+       s.age_hours,
+       s.views, s.reach, s.likes, s.comments, s.shares, s.saves,
+       s.total_interactions,
+       s.avg_watch_time_s, s.completion_rate, s.skip_rate_3s,
+       s.profile_visits, s.follows_from_post,
+       s.reach_followers, s.reach_non_followers,
+       CASE WHEN s.reach > 0
+            THEN s.reach_non_followers::numeric / s.reach END AS non_follower_share,
+       CASE WHEN s.views > 0
+            THEN s.total_interactions::numeric / s.views END AS engagement_per_view,
+       CASE WHEN s.views > 0
+            THEN (s.saves::numeric * 1000) / s.views END AS saves_per_1k
+FROM post_metric_snapshot s
+ORDER BY s.post_id, s.captured_at DESC, s.age_hours DESC,
          array_position(ARRAY['api', 'csv_import', 'aggregator', 'manual'], s.source), s.id;
 
 -- =====================================================================

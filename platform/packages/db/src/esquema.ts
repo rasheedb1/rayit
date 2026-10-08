@@ -3245,10 +3245,46 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
   if (!partes.length) return null;
   // Con el inventario sin leer, «migra» es el consejo equivocado: la
   // base puede estar al día y solo caída.
-  const consejo = estado.inventarioLeido
-    ? 'Corre: make db.migrate'
-    : 'Comprueba primero que la base conteste (make db.info) antes de migrar nada';
-  return `[db] La base no tiene el esquema de este repositorio: ${partes.join('; ')}. ${consejo}`;
+  if (!estado.inventarioLeido) {
+    return `[db] La base no tiene el esquema de este repositorio: ${partes.join('; ')}. ` +
+      'Comprueba primero que la base conteste (make db.info) antes de migrar nada';
+  }
+  // Con todas las migraciones aplicadas y solo problemas de diseño (una
+  // clave de secuencia, un único global, una vista sin invocador…),
+  // «migra» tampoco arregla nada: no queda ninguna por aplicar. Lo que
+  // hace falta es escribir la siguiente.
+  if (soloProblemasDeDiseno(estado)) {
+    const patron = estado.clavesDeSecuencia.length ? ' (patrón de 0082 §2)' : '';
+    return `[db] El esquema de la base tiene un problema que ninguna migración pendiente arregla: ${partes.join('; ')}. ` +
+      `Escribe la siguiente 00NN_*.sql${patron} y verifícala con make db.check`;
+  }
+  return `[db] La base no tiene el esquema de este repositorio: ${partes.join('; ')}. Corre: make db.migrate`;
+}
+
+/**
+ * ¿Todo lo que encontró la guardia es de diseño? Es decir: la base tiene
+ * todas las migraciones del repositorio, y lo que falla son formas del
+ * esquema que se arreglan con una migración NUEVA (o una declaración),
+ * no aplicando las que hay. Lo que puede venir de una migración sin
+ * aplicar, o de algo desactivado a mano (sin RLS, columnas, funciones o
+ * candados que faltan, privilegios), queda fuera: ahí sigue valiendo
+ * «make db.migrate».
+ */
+function soloProblemasDeDiseno(estado: EstadoDelEsquema): boolean {
+  if (estado.aplicadas === -1 || estado.pendientes.length) return false;
+  const deDiseno = [
+    estado.clavesDeSecuencia, estado.unicosSinInquilino, estado.borradosQuePublican, estado.referenciasSinComprobar,
+    estado.politicasAbiertas, estado.vistasSinInvocador, estado.relacionesSinRls, estado.funcionesDefiner,
+    estado.disparadoresDefiner, estado.reglas,
+  ];
+  const otros = [
+    estado.sinRls, estado.funcionesQueFaltan, estado.columnasQueFaltan, estado.candadosQueFaltan, estado.esquemasDeMas,
+    estado.accesosEnEsquemas, estado.rolDeLaApp, estado.privilegiosDeMas, estado.rolesDeMas, estado.enlacePublico,
+    estado.excepcionesSinPrivilegios, estado.excepcionesObsoletas, estado.politicasAbiertasObsoletas,
+    estado.vistasDeclaradasObsoletas, estado.relacionesSinRlsObsoletas, estado.funcionesDefinerObsoletas,
+    estado.referenciasDeclaradasObsoletas, estado.unicosDeclaradosObsoletos, estado.otrasDeclaracionesObsoletas,
+  ];
+  return deDiseno.some((l) => l.length > 0) && otros.every((l) => l.length === 0);
 }
 
 /**
