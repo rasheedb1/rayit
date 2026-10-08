@@ -5,7 +5,7 @@
  * actualizan. Los números derivados (delta diario, valor al corte,
  * puntaje) salen de las vistas de 0010 (ver vistas.ts), no de la app.
  */
-import { bigint, bigserial, boolean, date, integer, jsonb, numeric, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, date, integer, jsonb, numeric, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 import { creatorProfile, platform, workspaceId } from './cimientos.ts';
 import { socialConnection } from './conexiones.ts';
@@ -53,7 +53,7 @@ export const post = pgTable('post', {
 });
 
 export const postMetricSnapshot = pgTable('post_metric_snapshot', {
-  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  id: uuidPk(),
   postId: uuid('post_id').notNull().references(() => post.id, { onDelete: 'cascade' }),
   workspaceId: workspaceId(),
   capturedAt: timestamptz('captured_at').defaultNow().notNull(),
@@ -84,7 +84,7 @@ export const postMetricSnapshot = pgTable('post_metric_snapshot', {
 });
 
 export const accountMetricSnapshot = pgTable('account_metric_snapshot', {
-  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  id: uuidPk(),
   connectionId: uuid('connection_id').notNull().references(() => socialConnection.id, { onDelete: 'cascade' }),
   workspaceId: workspaceId(),
   capturedAt: timestamptz('captured_at').defaultNow().notNull(),

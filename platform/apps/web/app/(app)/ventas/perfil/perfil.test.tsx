@@ -104,7 +104,7 @@ function largos(): PerfilPostInput[] {
 function entradas(): PerfilInputs {
   return {
     creator: { id: CREADORA, displayName: "Laura Méndez", handle: "laura.cocinafacil", bio: null, country: "CO", languages: ["es"], nicheSlugs: ["cocina"], nicheNames: ["Cocina"] },
-    connections: [{ id: "c1", platformId: "tiktok", handle: "laura", status: "active", followers: 243000, followersSnapshotId: "77", followersDay: "2026-09-24" }],
+    connections: [{ id: "c1", platformId: "tiktok", handle: "laura", status: "active", followers: 243000, followersSnapshotId: "00000000-0000-4000-8000-0000000009b7", followersDay: "2026-09-24" }],
     audience: [{ id: "00000002-0000-4000-8000-0000000a0001", platformId: "tiktok", connectionId: "c1", dimension: "gender", bucket: "F", share: 0.64, day: "2026-09-24" }],
     nonFollowers: [],
     baselines: [{ id: "00000002-0000-4000-8000-0000000b0001", platformId: "tiktok", ageHoursCut: 168, medianViews: 115446, sampleSize: 17, isReliable: true, computedAt: "2026-09-25T00:00:00.000Z" }],

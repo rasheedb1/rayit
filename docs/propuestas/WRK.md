@@ -235,7 +235,7 @@ Salen de `grep process.env / env[…]` en `apps/worker/src` y
    ```bash
    cd platform && pnpm --filter @mc/worker once      # corre lo vencido contra Supabase
    pnpm --filter @mc/worker salud
-   make db.sql Q="select job_id, status, attempt, items_processed, error from job_run order by id desc limit 20"
+   make db.sql Q="select job_id, status, attempt, items_processed, error from job_run order by started_at desc, finished_at desc nulls first limit 20"
    ```
    Se espera `oauth.refresh ok`, los `collect.*` en `ok` (Instagram y
    YouTube saltados con aviso mientras falten sus credenciales),

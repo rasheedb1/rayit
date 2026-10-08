@@ -354,8 +354,8 @@ un correo dentro de un string queda como `[correo omitido]`.
 `test/audit.test.ts` lo demuestra con el volcado de columnas de texto
 (`dumpTextColumns`, el precedente de CON-3).
 
-`audit()` no devuelve nada (el id de `audit_log` es un bigserial que no
-sale de la base; CIM-2 §3), no hay función que la lea (la pantalla es de
+`audit()` no devuelve nada (el id de `audit_log` es un uuid al azar
+desde **0082**, y nadie lo necesita fuera de la base), no hay función que la lea (la pantalla es de
 AGE-2) y nadie la corrige: `mc_app` tiene SELECT + INSERT y nada más
 (**0025 §5**; la guardia lo exige en `PRIVILEGIOS_DE_LA_APP`).
 
@@ -806,10 +806,25 @@ máquina.
   columnas, el privilegio va por columna y se declara en `soloColumnas`:
   `workspace` solo se actualiza en sus columnas de ajustes, así que el
   plan no se lo cambia el propio workspace (**0024 §7.6**).
-- **Abierto, con plan** (docs/propuestas/CIM-2.md §3): el id bigserial
-  de las tablas donde `mc_app` inserta sigue siendo un contador global
-  (no le devuelvas ese id a la web; el plan es pasarlas a uuid), y
-  `account_metric_snapshot` conserva UPDATE por el upsert de CON-10.
+- **Ninguna fila que `mc_app` lea lleva un contador global** (**0082**,
+  CIM-11). Una secuencia es de la tabla entera: el id `bigserial` de una
+  fila propia decía cuántas escribió toda la plataforma. Las quince
+  claves son `uuid DEFAULT gen_random_uuid()`, y la guardia reporta
+  cualquier columna con `nextval(…)` o identity en una tabla que `mc_app`
+  o `mc_public_share` leen o insertan, directo, por PUBLIC, por membresía
+  o por columna (`clavesDeSecuencia`, el mismo criterio que la
+  comprobación final de 0082). Para ordenar, la fecha: los registros
+  (`api_call_log`, `audit_log`, `job_run`) la toman de
+  `clock_timestamp()`, así que dos filas de una transacción no empatan;
+  «la última corrida» de un job desempata por `finished_at`
+  (`ORDEN_ULTIMA_CORRIDA` de `@mc/db/queries/worker`), y los pasos de un
+  negocio por `deal_stage_history.step`, único por negocio y fijo
+  después de insertarse (un disparador rechaza el UPDATE que lo mueva).
+  «La última lectura» de un post en `post_metric_snapshot` es
+  `ORDEN_ULTIMA_LECTURA` de `queries/resumen.ts` (fecha, edad, fuente),
+  nunca `id DESC`. Ningún código trata un id como número ni lo usa como
+  «el último que se escribió»: `test/ids-sin-contador-codigo.test.ts` lo
+  busca en toda la plataforma, también en los `.md`.
 - **Nada corre con los privilegios de otro sin declararlo** (**0029**).
   Postgres no mira EXECUTE al disparar: un disparador SECURITY DEFINER
   corre con su dueño para cualquiera que escriba en la tabla, aunque a

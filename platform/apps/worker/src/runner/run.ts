@@ -36,7 +36,7 @@ export interface RunInput {
    * atómico (once.ts, claimRun), así dos pasadas a la vez no la abren dos
    * veces. Sin ella, se abre aquí, como siempre.
    */
-  runId?: number;
+  runId?: string;
   /**
    * Marcas que el llamador quiere en job_run.metadata según cómo terminó
    * la corrida (--once y el modo por turnos: `tickCut`, `noRetry`). Van
@@ -61,7 +61,7 @@ export interface RunDeps {
 }
 
 export interface RunOutcome {
-  runId: number;
+  runId: string;
   status: RunStatus;
   durationMs: number;
   result: JobResult | null;
@@ -158,26 +158,36 @@ const FK_VIOLATION = '23503';
  * existe (se borró entre el envío y la ejecución), la fila se abre sin
  * workspace en vez de perder la ejecución entera sin rastro.
  */
-async function insertRun(deps: RunDeps, jobId: string, ctx: PayloadContext, attempt: number, bossJobId: string): Promise<number> {
-  const insert = (workspaceId: string | null) => deps.db.query<{ id: number | string }>(
+async function insertRun(deps: RunDeps, jobId: string, ctx: PayloadContext, attempt: number, bossJobId: string): Promise<string> {
+  const insert = (workspaceId: string | null) => deps.db.query<{ id: string }>(
     `INSERT INTO job_run (job_id, workspace_id, entity_type, entity_id, status, attempt, metadata)
      VALUES ($1, $2, $3, $4, 'running', $5, $6::jsonb) RETURNING id`,
     [jobId, workspaceId, ctx.entityType, ctx.entityId, attempt, JSON.stringify({ bossJobId, ...(workspaceId === null && ctx.workspaceId ? { workspaceIdIgnored: ctx.workspaceId } : {}) })],
   );
   try {
-    const { rows } = await insert(ctx.workspaceId);
-    return Number(rows[0]?.id);
+    return runIdOf((await insert(ctx.workspaceId)).rows);
   } catch (err) {
     if (ctx.workspaceId && (err as { code?: string }).code === FK_VIOLATION) {
       deps.logger.warn('el workspace del payload no existe; job_run se abre sin workspace', { job: jobId, workspaceId: ctx.workspaceId });
-      const { rows } = await insert(null);
-      return Number(rows[0]?.id);
+      return runIdOf((await insert(null)).rows);
     }
     throw err;
   }
 }
 
-async function workspaceRecorded(deps: RunDeps, runId: number): Promise<boolean> {
+/**
+ * El id de la corrida que devolvió `INSERT … RETURNING id`. Un RETURNING
+ * vacío falla AQUÍ, diciendo qué pasó: `String(undefined)` daría el texto
+ * 'undefined' como runId y el error saldría después, en el UPDATE de
+ * cierre, como un uuid mal escrito.
+ */
+export function runIdOf(rows: ReadonlyArray<{ id: string }>): string {
+  const id = rows[0]?.id;
+  if (typeof id !== 'string') throw new Error('job_run no devolvió id al abrir la corrida');
+  return id;
+}
+
+async function workspaceRecorded(deps: RunDeps, runId: string): Promise<boolean> {
   const { rows } = await deps.db.query<{ workspace_id: string | null }>('SELECT workspace_id FROM job_run WHERE id = $1', [runId]);
   return rows[0]?.workspace_id !== null && rows[0]?.workspace_id !== undefined;
 }

@@ -12,6 +12,7 @@
  * falla el build si pg-boss vuelve a entrar en el bundle del turno.
  */
 import { loadPlatformLimits, PostgresQuotaUsageStore, QuotaManager, type ConnectorHttpOverrides } from '@mc/connectors';
+import { ORDEN_ULTIMA_CORRIDA } from '@mc/db/queries/worker';
 import type { WorkerConfig } from './config.ts';
 import type { WorkerDatabase } from './db.ts';
 import type { Logger } from './logger.ts';
@@ -61,7 +62,7 @@ export async function recordSkipped(db: WorkerDatabase, jobId: string): Promise<
   await db.transaction(async (tx) => {
     await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${JOB_LOCK_PREFIX}${jobId}`]);
     const { rows } = await tx.query<{ status: string; error: string | null }>(
-      'SELECT status, error FROM job_run WHERE job_id = $1 ORDER BY id DESC LIMIT 1',
+      `SELECT status, error FROM job_run WHERE job_id = $1 ORDER BY ${ORDEN_ULTIMA_CORRIDA()} LIMIT 1`,
       [jobId],
     );
     const last = rows[0];

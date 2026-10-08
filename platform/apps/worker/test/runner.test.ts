@@ -5,7 +5,9 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { allJobs } from '../src/jobs/index.ts';
+import { recordSkipped } from '../src/runner/comun.ts';
 import { defineJob } from '../src/runner/registry.ts';
+import { runIdOf } from '../src/runner/run.ts';
 import { jobRuns, seedTestDefinitions, startHarness, waitFor, type Harness, SETUP_TIMEOUT } from './helpers/harness.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -156,7 +158,7 @@ test('2 · un job encolado pasa por running y termina ok con duration_ms > 0', a
   assert.equal(done.metadata['bossJobId'], jobId);
 
   const log = h.sink.records().find((r) => r['msg'] === 'job terminado' && r['job'] === 'test.echo' && r['processed'] === 3);
-  assert.equal(log?.['runId'], Number(done.id));
+  assert.equal(log?.['runId'], done.id);
   assert.equal(log?.['jobId'], jobId);
   assert.ok(typeof log?.['durationMs'] === 'number');
 
@@ -283,4 +285,90 @@ test('idempotencia de cron: reiniciar no duplica schedules y un cron cambiado se
   } finally {
     await second.boss.stop({ graceful: true, timeout: 5000, close: false });
   }
+});
+
+test('la última corrida de un job con dos del mismo started_at: la abierta primero y, entre cerradas, la que terminó después (CIM-11)', async () => {
+  // Hasta 0082 desempataba el id creciente; ahora es un uuid al azar. Dos
+  // corridas del mismo job comparten started_at cuando el reloj de la
+  // pasada es fijo (claimRun lo escribe con él). recordSkipped (y
+  // recordUnhandled, con el mismo ORDEN_ULTIMA_CORRIDA) tienen que leer
+  // como «la última» la misma fila siempre, no una al azar.
+  const T = "TIMESTAMPTZ '2026-10-01 08:00:00+00'";
+  const sinHandler = async () =>
+    Number((await h.db.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM job_run WHERE job_id = 'test.empate' AND status = 'skipped' AND error = 'sin handler'`,
+    )).rows[0]!.n);
+  const fila = (status: string, error: string | null, terminoSeg: number | null) =>
+    h.db.raw.query(
+      `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, error)
+       VALUES ('test.empate', $1, 1, ${T}, ${T} + make_interval(secs => $2::int), $3)`,
+      [status, terminoSeg, error],
+    );
+  await h.db.raw.exec(
+    `INSERT INTO job_definition (id, label_es, queue, default_cron, timeout_s, max_attempts, max_concurrency)
+     VALUES ('test.empate', 'Prueba: empate de started_at', 'test', NULL, 5, 1, 1)`,
+  );
+  try {
+    // Tres vueltas: con un desempate al azar, alguna saldría distinta.
+    for (let vuelta = 0; vuelta < 3; vuelta++) {
+      // La «sin handler» terminó antes que la ok: la última es la ok, y se vuelve a anotar.
+      await h.db.raw.exec("DELETE FROM job_run WHERE job_id = 'test.empate'");
+      await fila('skipped', 'sin handler', 1);
+      await fila('ok', null, 2);
+      await recordSkipped(h.db, 'test.empate');
+      assert.equal(await sinHandler(), 2, 'la ok terminó después: recordSkipped anota otra vez');
+
+      // Al revés: la «sin handler» es la que terminó después, y no se repite.
+      await h.db.raw.exec("DELETE FROM job_run WHERE job_id = 'test.empate'");
+      await fila('ok', null, 1);
+      await fila('skipped', 'sin handler', 2);
+      await recordSkipped(h.db, 'test.empate');
+      assert.equal(await sinHandler(), 1, 'la «sin handler» es la última: no se repite');
+
+      // Una que sigue abierta (finished_at null) va antes que cualquier cerrada.
+      await h.db.raw.exec("DELETE FROM job_run WHERE job_id = 'test.empate'");
+      await fila('skipped', 'sin handler', 5);
+      await fila('running', null, null);
+      await recordSkipped(h.db, 'test.empate');
+      assert.equal(await sinHandler(), 2, 'la abierta es la última: recordSkipped anota');
+    }
+  } finally {
+    await h.db.raw.exec("DELETE FROM job_run WHERE job_id = 'test.empate'; DELETE FROM job_definition WHERE id = 'test.empate'");
+  }
+});
+
+test('jobRuns lista dos corridas del mismo started_at en el orden de ORDEN_ULTIMA_CORRIDA al derecho (ORDEN_CORRIDAS_ASC, CIM-11)', async () => {
+  // claimRun escribe started_at con el reloj de la pasada y PGlite mide en
+  // milisegundos: dos corridas del mismo job pueden empatar. Las pruebas
+  // que leen runs[0] y runs[1] no pueden depender de un orden al azar.
+  const T = "TIMESTAMPTZ '2026-10-01 09:00:00+00'";
+  const fila = (status: string, terminoSeg: number | null, etiqueta: string) =>
+    h.db.raw.query(
+      `INSERT INTO job_run (job_id, status, attempt, started_at, finished_at, metadata)
+       VALUES ('test.empate_asc', $1, 1, ${T}, ${T} + make_interval(secs => $2::int), jsonb_build_object('e', $3::text))`,
+      [status, terminoSeg, etiqueta],
+    );
+  await h.db.raw.exec(
+    `INSERT INTO job_definition (id, label_es, queue, default_cron, timeout_s, max_attempts, max_concurrency)
+     VALUES ('test.empate_asc', 'Prueba: empate de started_at, al derecho', 'test', NULL, 5, 1, 1)`,
+  );
+  try {
+    // Insertadas al revés de como deben salir: el orden de llegada no ayuda.
+    await fila('running', null, 'abierta');
+    await fila('ok', 2, 'segunda');
+    await fila('failed', 1, 'primera');
+    for (let vuelta = 0; vuelta < 3; vuelta++) {
+      const runs = await jobRuns(h.db, 'test.empate_asc');
+      assert.deepEqual(runs.map((r) => r.metadata['e']), ['primera', 'segunda', 'abierta']);
+    }
+  } finally {
+    await h.db.raw.exec("DELETE FROM job_run WHERE job_id = 'test.empate_asc'; DELETE FROM job_definition WHERE id = 'test.empate_asc'");
+  }
+});
+
+test('runIdOf: un RETURNING sin fila falla al abrir la corrida, no con un runId «undefined» (CIM-11)', () => {
+  const id = '0b8f6a52-6f1e-4c7a-9d1e-2f3a4b5c6d7e';
+  assert.equal(runIdOf([{ id }]), id);
+  assert.throws(() => runIdOf([]), /job_run no devolvió id al abrir la corrida/);
+  assert.throws(() => runIdOf([{ id: undefined as unknown as string }]), /job_run no devolvió id/);
 });

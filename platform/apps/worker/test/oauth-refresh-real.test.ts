@@ -170,7 +170,7 @@ test('TikTok rota el refresh token y lo guardado (cifrado) es el nuevo; YouTube 
   // Tres llamadas HTTP (tiktok, instagram, youtube): la vencida no llegó a Meta. Sin red real.
   assert.equal(fetch.calls.length, 3);
   assert.equal(guard.attempts, 0);
-  const log = await h.db.query<{ connection_id: string; ok: boolean; error_code: string | null }>(`SELECT connection_id, ok, error_code FROM api_call_log WHERE endpoint = 'oauth.refresh' ORDER BY id`);
+  const log = await h.db.query<{ connection_id: string; ok: boolean; error_code: string | null }>(`SELECT connection_id, ok, error_code FROM api_call_log WHERE endpoint = 'oauth.refresh' ORDER BY called_at, connection_id`);
   assert.equal(log.rows.length, 4, 'una fila por conexión, la escribe el job');
   assert.equal(log.rows.find((r) => r.connection_id === ids.igOld)?.error_code, 'refresh_expired');
 });

@@ -97,8 +97,8 @@ describe("agregar", () => {
     expect(ev.rows[0]!.evidence).not.toHaveProperty("actedBy");
     // Modo demo, sin sesión: no hay a quién avisar ni a quién nombrar.
     expect(out.ownerNotice).toBe("no_session");
-    const log = await db.queryAsSuperuser<{ endpoint: string; connection_id: string | null }>("SELECT endpoint, connection_id FROM api_call_log ORDER BY id");
-    expect(log.rows.at(-1)).toEqual({ endpoint: "instagram.business_discovery", connection_id: out.id });
+    const log = await db.queryAsSuperuser<{ endpoint: string; connection_id: string | null }>("SELECT endpoint, connection_id FROM api_call_log WHERE connection_id = $1", [out.id]);
+    expect(log.rows).toEqual([{ endpoint: "instagram.business_discovery", connection_id: out.id }]);
   });
 
   it("TikTok por @: se agrega sin métricas y lo dice; un @ inexistente o mal escrito devuelve el mensaje en español", async () => {
@@ -187,7 +187,7 @@ describe("consentimiento delegado (ACC-8)", () => {
     expect(notice.rows[0]).toMatchObject({ user_id: USER_LAURA, kind: "connection_added", title_es: "Una cuenta se conectó en tu nombre", action_url: "/conexiones", entity_id: out.id });
     expect(notice.rows[0]!.body_es).toMatch(/^Andrés Pardo conectó la cuenta @cafealma de Instagram el .+ en tu nombre\./);
     // La última fila de alta de esa cuenta: las pruebas de arriba ya la agregaron y la quitaron en modo demo, así que ahora es una reconexión (ACC-2).
-    const audit = await db.queryAsSuperuser<{ action: string; actor_user_id: string; after: Record<string, unknown> }>("SELECT action, actor_user_id, after FROM audit_log WHERE action IN ('connection.added', 'connection.reconnected') AND entity_id = $1 ORDER BY id DESC LIMIT 1", [out.id]);
+    const audit = await db.queryAsSuperuser<{ action: string; actor_user_id: string; after: Record<string, unknown> }>("SELECT action, actor_user_id, after FROM audit_log WHERE action IN ('connection.added', 'connection.reconnected') AND entity_id = $1 ORDER BY created_at DESC LIMIT 1", [out.id]);
     expect(audit.rows[0]!.action).toBe("connection.reconnected");
     expect(audit.rows.length).toBe(1);
     expect(audit.rows[0]!.actor_user_id).toBe(USER_MANAGER);
@@ -213,7 +213,7 @@ describe("consentimiento delegado (ACC-8)", () => {
     expect(ev.rows[0]!.evidence).toMatchObject({ v: 2, onBehalfOf: { creatorId: CREATOR_LAURA } });
     expect(ev.rows[0]!.evidence).not.toHaveProperty("actedBy");
     expect((await db.queryAsSuperuser("SELECT 1 FROM notification WHERE kind = 'connection_added' AND entity_id = $1", [out.id])).rows.length).toBe(0);
-    const audit = await db.queryAsSuperuser<{ actor_user_id: string; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action IN ('connection.added', 'connection.reconnected') AND entity_id = $1 ORDER BY id DESC", [out.id]);
+    const audit = await db.queryAsSuperuser<{ actor_user_id: string; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action IN ('connection.added', 'connection.reconnected') AND entity_id = $1 ORDER BY created_at DESC", [out.id]);
     expect(audit.rows[0]!.actor_user_id).toBe(USER_LAURA);
     expect(audit.rows[0]!.after).not.toHaveProperty("actedBy");
     expect((await laura.listar()).find((r) => r.id === out.id)!.connectedBy).toBeNull();
@@ -246,7 +246,7 @@ describe("consentimiento delegado (ACC-8)", () => {
     expect(ev.rows[0]!.revoked_at).not.toBeNull();
     expect(ev.rows[0]!.evidence["revocation"]).toMatchObject({ v: 2, at: NOW.toISOString(), onBehalfOf: { creatorId: CREATOR_LAURA }, actedBy: { userId: USER_MANAGER, roleKey: "manager_conecta" } });
     expect(ev.rows[0]!.evidence["actedBy"], "el otorgamiento no se toca").toMatchObject({ userId: USER_MANAGER });
-    const audit = await db.queryAsSuperuser<{ actor_user_id: string | null; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action = 'connection.disconnected' AND entity_id = $1 ORDER BY id DESC", [ig.id]);
+    const audit = await db.queryAsSuperuser<{ actor_user_id: string | null; after: Record<string, unknown> }>("SELECT actor_user_id, after FROM audit_log WHERE action = 'connection.disconnected' AND entity_id = $1 ORDER BY created_at DESC", [ig.id]);
     expect(audit.rows.length, "la de arriba en modo demo (sin actor) y esta").toBe(2);
     expect(audit.rows[1]!.actor_user_id).toBeNull();
     expect(audit.rows[0]!.actor_user_id).toBe(USER_MANAGER);

@@ -8,7 +8,7 @@
  * en company_link, que también está aislada.
  */
 import { sql } from 'drizzle-orm';
-import { bigserial, boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { boolean, date, integer, jsonb, numeric, pgTable, primaryKey, text, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { citext, country, createdAt, currency, localTime, money, timestamptz, updatedAt, uuidPk } from './_tipos.ts';
 import { OUTBOUND_CHANNELS } from './_canales.ts';
 import { appUser, creatorProfile, workspace, workspaceId } from './cimientos.ts';
@@ -257,13 +257,19 @@ export const deal = pgTable('deal', {
 });
 
 export const dealStageHistory = pgTable('deal_stage_history', {
-  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  id: uuidPk(),
   dealId: uuid('deal_id').notNull().references(() => deal.id, { onDelete: 'cascade' }),
   fromStageId: text('from_stage_id').references(() => pipelineStage.id),
   toStageId: text('to_stage_id').notNull().references(() => pipelineStage.id),
   changedBy: uuid('changed_by').references(() => appUser.id, { onDelete: 'set null' }),
   changedAt: timestamptz('changed_at').defaultNow().notNull(),
   daysInStage: numeric('days_in_stage', { precision: 8, scale: 2 }),
+  /**
+   * El orden del paso dentro de su negocio (1, 2, 3…). Lo pone siempre el
+   * disparador deal_stage_history_step (0082); desempata dos pasos con la
+   * misma changed_at, que antes desempataba el id bigserial (CIM-11).
+   */
+  step: integer('step').default(1).notNull(),
 });
 
 export const activity = pgTable('activity', {
@@ -324,8 +330,8 @@ export const outboundPolicy = pgTable('outbound_policy', {
   enabled: boolean('enabled').default(false).notNull(),
   disabledReason: text('disabled_reason'),
   disabledAt: timestamptz('disabled_at'),
-  /** Presupuesto diario del juez y el generador, en dólares. */
-  llmDailyCapUsd: numeric('llm_daily_cap_usd', { precision: 14, scale: 2 }).default('5.00').notNull(),
+  /** Presupuesto diario del juez y el generador, en dólares. El DEFAULT es la función de 0046 §6.1, la misma del candado y de outbound_health. */
+  llmDailyCapUsd: numeric('llm_daily_cap_usd', { precision: 14, scale: 2 }).default(sql`outreach_default_llm_daily_cap()`).notNull(),
   warmupDays: integer('warmup_days').default(14).notNull(),
   /** Dirección postal del pie de baja (CAN-SPAM). */
   postalAddress: text('postal_address'),

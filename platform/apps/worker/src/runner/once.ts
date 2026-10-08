@@ -73,7 +73,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { QuotaManager, ConnectorHttpOverrides, SecretStore, TokenRefresherRegistry } from '@mc/connectors';
-import { MAX_TICK_CUTS, TICK_CUT_KEY } from '@mc/db/queries/worker';
+import { MAX_TICK_CUTS, ORDEN_ULTIMA_CORRIDA, TICK_CUT_KEY } from '@mc/db/queries/worker';
 import { createQuota, EXPIRE_MARGIN_S, JOB_LOCK_PREFIX, recordSkipped, SKIPPED_NO_HANDLER } from './comun.ts';
 import type { Env, WorkerConfig } from './config.ts';
 import { CronError, lastTick } from './cron.ts';
@@ -81,7 +81,7 @@ import type { Queryable, WorkerDatabase } from './db.ts';
 import { loadJobDefinitions } from './definitions.ts';
 import type { Logger } from './logger.ts';
 import { JobRegistry, type JobDefinition, type JobRegistration } from './registry.ts';
-import { CHAIN_SOURCE, executeRun, JobItemsFailedError, JobTimeoutError, type RunOutcome, type RunStatus } from './run.ts';
+import { CHAIN_SOURCE, executeRun, JobItemsFailedError, JobTimeoutError, runIdOf, type RunOutcome, type RunStatus } from './run.ts';
 
 /** `source` del payload de una corrida de --once, como `cron` en las de pg-boss. */
 export const ONCE_SOURCE = 'once';
@@ -118,7 +118,7 @@ export interface OnceRun {
   reason: OnceReason;
   /** Desde cuándo se está cubriendo el job, ISO; null en un encadenado. */
   tick: string | null;
-  runId: number;
+  runId: string;
   status: RunStatus;
   processed: number;
   failed: number;
@@ -352,7 +352,7 @@ function coverFromFor(def: JobDefinition, tick: Date, registry: JobRegistry, all
 async function recordUnhandled(db: WorkerDatabase, ids: readonly string[]): Promise<void> {
   if (ids.length === 0) return;
   const { rows } = await db.query<{ job_id: string; status: string; error: string | null }>(
-    `SELECT DISTINCT ON (job_id) job_id, status, error FROM job_run WHERE job_id = ANY($1::text[]) ORDER BY job_id, id DESC`,
+    `SELECT DISTINCT ON (job_id) job_id, status, error FROM job_run WHERE job_id = ANY($1::text[]) ORDER BY job_id, ${ORDEN_ULTIMA_CORRIDA()}`,
     [ids],
   );
   const marked = new Set(rows.filter((r) => r.status === 'skipped' && r.error === SKIPPED_NO_HANDLER).map((r) => r.job_id));
@@ -441,7 +441,7 @@ export interface PendingRun {
   reason: OnceReason;
 }
 
-export type Claim = { runId: number; attempt: number; reason: OnceReason } | { skip: OnceSkipReason };
+export type Claim = { runId: string; attempt: number; reason: OnceReason } | { skip: OnceSkipReason };
 
 /**
  * Reclama una corrida: con el candado del job, relee el estado de su
@@ -458,6 +458,12 @@ export type Claim = { runId: number; attempt: number; reason: OnceReason } | { s
  * `sliceS`, en un turno, es el timeout que va a tener la corrida: queda
  * en la metadata del reclamo para que tickStates dé por muerta a tiempo
  * la fila de un turno que no llegó a cerrarla.
+ *
+ * started_at sigue siendo el reloj de la pasada y no clock_timestamp():
+ * el backoff y los ticks se miden con él (verdict, tickStates), y un
+ * reloj inyectado en las pruebas tiene que valer para los dos. Dos
+ * corridas del mismo job con el mismo started_at se ordenan con
+ * ORDEN_ULTIMA_CORRIDA (CIM-11: el id ya no desempata).
  */
 export async function claimRun(db: WorkerDatabase, item: PendingRun, at: Date, bossJobId: string, sliceS?: number, backoff: RetryBackoff = NO_BACKOFF): Promise<Claim> {
   return db.transaction(async (tx) => {
@@ -472,12 +478,12 @@ export async function claimRun(db: WorkerDatabase, item: PendingRun, at: Date, b
     } else if (state.running > 0) {
       return { skip: 'running' };
     }
-    const { rows } = await tx.query<{ id: number | string }>(
+    const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO job_run (job_id, status, attempt, started_at, metadata)
        VALUES ($1, 'running', $2, $3::timestamptz, $4::jsonb) RETURNING id`,
       [item.def.id, attempt, at.toISOString(), JSON.stringify({ bossJobId, ...(sliceS !== undefined ? { [SLICE_KEY]: sliceS } : {}) })],
     );
-    return { runId: Number(rows[0]?.id), attempt, reason };
+    return { runId: runIdOf(rows), attempt, reason };
   });
 }
 

@@ -2197,36 +2197,34 @@ describe('una fila global no nombra lo que quien lee no ve (0029 §3)', () => {
   });
 });
 
-describe('las secuencias no cuentan lo de los demás (0026 §4)', () => {
-  test('el guion de los revisores: last_value de una secuencia ya no se lee', async () => {
+describe('las secuencias no cuentan lo de los demás (0026 §4), y desde 0082 no hay ninguna (CIM-11)', () => {
+  const noExiste = (err: unknown) => /does not exist|no existe/i.test(fullMessage(err));
+
+  test('el guion de los revisores: last_value ya no tiene de dónde leerse', async () => {
     // Desde B devolvía 360 en account_metric_snapshot_id_seq: el volumen
-    // de TODA la plataforma.
+    // de TODA la plataforma. 0026 §4 le quitó a mc_app el SELECT; 0082
+    // pasó las claves a uuid y borró las secuencias.
     for (const seq of ['account_metric_snapshot_id_seq', 'audit_log_id_seq', 'api_call_log_id_seq']) {
-      await assert.rejects(t.db.withWorkspace(WS_B, (tx) => tx.query(`SELECT last_value FROM ${seq}`)), isPermissionDenied, seq);
+      await assert.rejects(t.db.withWorkspace(WS_B, (tx) => tx.query(`SELECT last_value FROM ${seq}`)), noExiste, seq);
     }
-  });
-
-  test('ni setval, ni nextval en las secuencias de tablas que la aplicación no escribe', async () => {
-    await assert.rejects(
-      t.db.withWorkspace(WS_B, (tx) => tx.query("SELECT setval('audit_log_id_seq', 1)")),
-      isPermissionDenied,
-    );
-    await assert.rejects(
-      // post_retention_curve: métrica que solo escribe el worker. (Hasta
-      // integrar RES-2 era post_metric_snapshot; ahora la web inserta ahí
-      // las lecturas de un CSV y conserva USAGE, ver 0025 §5.)
-      t.db.withWorkspace(WS_B, (tx) => tx.query("SELECT nextval('post_retention_curve_id_seq')")),
-      isPermissionDenied,
-    );
-  });
-
-  test('pero donde sí inserta, el DEFAULT sigue funcionando: USAGE basta', async () => {
     const { rows } = await t.db.withWorkspace(WS_B, (tx) =>
-      tx.query<{ id: string }>(
-        "INSERT INTO audit_log (workspace_id, action, entity_type) VALUES (current_workspace_id(), 'prueba.0026', 'test') RETURNING id::text AS id",
-      ),
+      tx.query<{ n: number }>("SELECT count(*)::int AS n FROM pg_class WHERE relkind = 'S' AND relnamespace = 'public'::regnamespace"),
     );
-    assert.ok(Number(rows[0]?.id) > 0);
+    assert.equal(rows[0]?.n, 0, 'ninguna secuencia en public');
+  });
+
+  test('y el id de una fila propia tampoco cuenta: es un uuid al azar, no el contador de la plataforma', async () => {
+    // Era la otra mitad del oráculo (0026 §4, «lo que queda»): sin SELECT
+    // en la secuencia, el id que devolvía el INSERT seguía siendo su valor.
+    const ids = await t.db.withWorkspace(WS_B, async (tx) => {
+      const alta = () =>
+        tx.query<{ id: string }>(
+          "INSERT INTO audit_log (workspace_id, action, entity_type) VALUES (current_workspace_id(), 'prueba.0082', 'test') RETURNING id::text AS id",
+        );
+      return [(await alta()).rows[0]?.id, (await alta()).rows[0]?.id];
+    });
+    for (const id of ids) assert.match(String(id), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.notEqual(ids[0], ids[1]);
   });
 });
 

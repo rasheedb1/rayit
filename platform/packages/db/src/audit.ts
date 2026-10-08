@@ -32,7 +32,7 @@
  *   ip              no se escribe: es PII y la evidencia de
  *                   consentimiento ya la guarda data_consent.evidence.
  *
- * Lo que NO hace: devolver el id (bigserial, contador global; CIM-2 §3),
+ * Lo que NO hace: devolver el id (uuid al azar desde 0082; no sale de la base),
  * leer la bitácora (la pantalla es de la fase 2, AGE-2) ni corregirla
  * (mc_app no tiene UPDATE ni DELETE sobre audit_log, 0025 §5).
  */
@@ -233,7 +233,8 @@ export interface AuditExecutor {
   query(text: string, params?: readonly unknown[]): Promise<unknown>;
 }
 
-const UUID_OR_NULL = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i;
+/** Un uuid, entero: ni la cadena vacía ni el número de una corrida de antes de 0082. El null se mira aparte. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** jsonb o SQL NULL: un before ausente es NULL en la columna, no el JSON `null`. */
 function toJsonb(value: unknown): string | null {
@@ -246,7 +247,7 @@ function prepare(entry: AuditEntry): { action: AuditAction; entityType: string; 
   if (!ENTITY_TYPE_RE.test(entry.entityType)) {
     throw new Error(`entity_type de bitácora inválido: "${entry.entityType}". Es el nombre de la tabla, en minúsculas.`);
   }
-  if (entry.entityId !== null && !UUID_OR_NULL.test(entry.entityId)) {
+  if (entry.entityId !== null && !UUID.test(entry.entityId)) {
     throw new Error(`entity_id de bitácora inválido: "${entry.entityId}". Es un UUID o null.`);
   }
   return {
@@ -278,8 +279,8 @@ export async function audit(tx: WorkspaceTx, entry: AuditEntry): Promise<void> {
 export interface JobAuditEntry extends AuditEntry {
   /** Explícito: el worker corre como mc_worker y RLS no lo fija por él. */
   workspaceId: string;
-  /** Qué job y qué corrida (job_run.id). Va en after._job; no sale de la base. */
-  job: { id: string; runId: number };
+  /** Qué job y qué corrida (job_run.id, un uuid desde 0082). Va en after._job; no sale de la base. */
+  job: { id: string; runId: string };
 }
 
 /**
@@ -290,8 +291,8 @@ export interface JobAuditEntry extends AuditEntry {
  */
 export async function auditAsJob(exec: AuditExecutor, entry: JobAuditEntry): Promise<void> {
   assertWorkspaceId(entry.workspaceId);
-  if (!entry.job.id || !Number.isInteger(entry.job.runId)) {
-    throw new Error('auditAsJob necesita job.id (job_definition) y job.runId (job_run.id, entero).');
+  if (!entry.job.id || !UUID.test(entry.job.runId)) {
+    throw new Error('auditAsJob necesita job.id (job_definition) y job.runId (job_run.id, un uuid).');
   }
   const p = prepare({ ...entry, after: { ...(entry.after ?? {}), _job: { id: entry.job.id, runId: entry.job.runId } } });
   await exec.query(

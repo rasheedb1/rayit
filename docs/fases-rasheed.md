@@ -401,3 +401,94 @@ su candado. Se revierten el cambio de título y de INSERT de los dos
 - En la demo, el aviso del paso 4 de FV-2026-007 ya está mandado el día
   que Finanzas dice que salió el último recordatorio: la fila y el
   detalle de la factura cuentan la misma historia.
+
+## 10. Ids sin contador global (CIM-11): lo que toca de Nicolás
+
+`0082_ids_sin_contador` pasa a `uuid` el `id` de quince tablas, entre
+ellas `job_run` y `api_call_log`, que el worker y Conexiones escriben y
+leen. Todo lo que trataba ese id como número (`Number(id)`, `max(id)`)
+o como orden de escritura (`ORDER BY id`) deja de servir: un uuid al
+azar no dice cuál fue antes. Por eso CIM-11 tocó archivos de carpetas de
+Nicolás. **Pide su aprobación antes del merge a `main`**: esta es la
+lista entera (la rama contra `rasheed/integracion`), con el motivo de
+cada cambio. Ninguno cambia lo que hace un job; cambian el tipo del
+runId y cómo se ordena.
+
+Hay tres motivos, y cada fila dice cuál:
+
+- **(A) runId es texto.** `job_run.id` es un uuid: el runId pasa de
+  `number` a `string`, y `runIdOf` falla al abrir la corrida si el
+  `RETURNING` no trae fila (antes, `Number(undefined)` daba NaN en
+  silencio).
+- **(B) «La última corrida» por fecha.** Lo que leía la última corrida
+  con `ORDER BY id DESC` usa `ORDEN_ULTIMA_CORRIDA` de
+  `@mc/db/queries/worker` (`started_at DESC, finished_at DESC NULLS
+  FIRST`), y lo que lista corridas de la primera a la última,
+  `ORDEN_CORRIDAS_ASC` (el mismo orden al derecho, con el id al final
+  solo como desempate estable).
+- **(C) Un registro por fecha.** Lo que ordenaba `api_call_log`,
+  `audit_log` o `job_run` por `id` ordena por `called_at`, `created_at`
+  o `started_at` (que 0082 pasa a `clock_timestamp()`), con un
+  desempate con significado (`endpoint`, `connection_id`) donde dos
+  filas pueden caer en el mismo milisegundo de PGlite.
+
+**`apps/worker/src/runner/`**
+
+| Archivo | Cambio | Motivo |
+|---|---|---|
+| `run.ts` | `runId: string` en `RunContext`, `insertRun` y `workspaceRecorded`; `runIdOf` nuevo | A |
+| `once.ts` | `Claim.runId: string`, `claimRun` devuelve `runIdOf(rows)`; el último estado por job con `ORDEN_ULTIMA_CORRIDA` en vez de `id DESC` | A, B |
+| `comun.ts` | `recordSkipped` lee la última corrida con `ORDEN_ULTIMA_CORRIDA` en vez de `id DESC` | B |
+| `registry.ts` | `JobContext.runId: string` | A |
+| `worker.ts` | `enqueueChained(…, runId: string, …)` | A |
+
+**`apps/worker/src/demo.ts`** (`--demo`, no corre en producción)
+
+| Dónde | Cambio | Motivo |
+|---|---|---|
+| `runDemoCompute` | La espera de la cadena CON-6 mira `max(started_at)` y un conteo de filas, no `max(id)` (Postgres no tiene `max(uuid)`); acepta `quietoMs` y `plazoMs` y devuelve si terminó, para poder probarla; el aviso dice el plazo que de verdad esperó (`plazoMs`), no «60 s» fijo | B |
+| `esperaCorridas`, la consulta de la cadena y el resumen final | `ORDER BY ${ORDEN_CORRIDAS_ASC()}` en vez de `ORDER BY id` | B |
+| El volcado de `api_call_log` | `ORDER BY called_at, endpoint, connection_id` | C |
+
+**`packages/db/src/queries/campanas.ts`** (Campañas)
+
+| Dónde | Cambio | Motivo |
+|---|---|---|
+| El corte por edad del reporte (`at_cut`) | A igual edad e instante, desempata por fuente (`api`, `csv_import`, `aggregator`, `manual`) y al final por el id, como `post_metrics_at_cut` y `post_metrics_latest` (0082): antes, dos lecturas del mismo instante salían en cualquier orden | B |
+
+**`apps/worker/test/`**
+
+| Archivo | Cambio | Motivo |
+|---|---|---|
+| `helpers/harness.ts` | `JobRunRow.id: string`; `jobRuns` ordena con `ORDEN_CORRIDAS_ASC` (antes `id`, y en la r3 `started_at` sin desempate) | A, B |
+| `runner.test.ts` | El runId del log se compara como texto; pruebas nuevas: empate de `started_at` en `recordSkipped`, `jobRuns` con empate, `runIdOf` | A, B |
+| `once-reclamo.test.ts` | El doble de `job_run` devuelve un uuid como id | A |
+| `brand-snapshot.test.ts` | runId de la corrida a mano en uuid; `api_call_log` por `called_at, endpoint` | A, C |
+| `collect-senal-y-reintento.test.ts` | runId de la corrida a mano en uuid (`auditAsJob` lo exige) | A |
+| `collect-account-metrics.test.ts`, `collect-demographics.test.ts`, `connectors.test.ts`, `oauth-refresh.test.ts`, `oauth-refresh-real.test.ts` | `api_call_log` por `called_at` (y `endpoint`, `connection_id`) en vez de `id` | C |
+| `punta-a-punta.test.ts` | Las corridas `e2e:%` por `started_at` en vez de `id` | C |
+| `costuras-con.test.ts` | El orden de la cadena collect → baseline → post_score se comprueba con las fechas (cada eslabón empieza cuando el anterior terminó), no con `Number(id)`, que daba NaN y una lista de NaN «ordenada» | A, C |
+| `demo-compute.test.ts` (nuevo) | Humo de `runDemoCompute` contra PGlite con las migraciones reales: la demo no corre en `pnpm verificar` y así un cambio de tipo en `job_run` no la rompe sin que se vea | B |
+
+**`packages/connectors/test/`**
+
+| Archivo | Cambio | Motivo |
+|---|---|---|
+| `outreach-log-postgres.test.ts` | `api_call_log` por `provider` en vez de `id` (las dos llamadas caen en el mismo milisegundo de PGlite: el orden esperado pasa a ser alfabético, gmail antes que unipile) | C |
+
+**`apps/web/app/(app)/conexiones/_lib/`** (solo pruebas)
+
+| Archivo | Cambio | Motivo |
+|---|---|---|
+| `cuentas-service.test.ts` | La llamada de la cuenta se busca por `connection_id` en vez de «la última por id»; la bitácora por `created_at DESC` | C |
+| `oauth-handlers.test.ts` | `api_call_log` por `called_at, endpoint` (a igual milisegundo, `oauth.token` va antes por nombre); la bitácora por `created_at DESC` | C |
+
+**Documentos de Nicolás**: `apps/worker/README.md` (las dos consultas de
+«últimas ejecuciones» por fecha) y `docs/propuestas/WRK.md` (la misma
+consulta en su manual).
+
+**Si Nicolás no aprueba algo**: (A) no tiene alternativa mientras 0082
+siga, porque `Number(uuid)` es NaN; (B) y (C) sí: cualquier orden por
+fecha con desempate determinista sirve, y basta con que el grep de la
+historia (`packages/db/test/ids-sin-contador-codigo.test.ts`) siga en
+verde.

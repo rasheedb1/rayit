@@ -253,7 +253,7 @@ describe('FIN-3 · cuentas por cobrar (vista receivables)', () => {
     assert.equal(typeof fila.daysOverdue, 'number');
     assert.match(fila.dueOn, /^\d{4}-\d{2}-\d{2}$/);
     assert.ok(RECEIVABLE_BUCKETS.includes(fila.bucket));
-    // Ningún bigserial cruza a la web (CIM-2 §3): la vista no trae ninguno.
+    // Ninguna columna es un contador (un rank o un id de secuencia): a la web solo llegan uuid.
     assert.equal('rank' in fila, false);
   });
 
@@ -833,7 +833,7 @@ describe('configuración financiera (FIN-8)', () => {
     assert.equal(guardado.razonSocial, 'Ajeno S.A. de C.V.');
   });
 
-  test('guardar deja su fila en audit_log, con before y after y sin el id bigserial', async () => {
+  test('guardar deja su fila en audit_log, con before y after y sin devolver su id', async () => {
     const [previo] = await leer<{ n: number }>(WORKSPACE_LAURA,
       `SELECT count(*)::int AS n FROM audit_log WHERE action = 'workspace.settings_updated'`);
     const base = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getFinanceSettings(tx));
@@ -856,7 +856,7 @@ describe('configuración financiera (FIN-8)', () => {
       before: Record<string, unknown>; after: Record<string, unknown>;
     }>(WORKSPACE_LAURA,
       `SELECT actor_user_id, actor_kind, entity_type, entity_id, before, after FROM audit_log
-       WHERE action = 'workspace.settings_updated' ORDER BY created_at DESC, id DESC LIMIT 1`);
+       WHERE action = 'workspace.settings_updated' ORDER BY created_at DESC LIMIT 1`);
     assert.ok(fila, 'hay fila de bitácora');
     assert.equal(fila.actor_kind, 'system', 'sin identidad en la transacción no se dice "user"');
     assert.equal(fila.actor_user_id, null);
@@ -881,7 +881,7 @@ describe('configuración financiera (FIN-8)', () => {
     );
     const [fila] = await leer<{ after: Record<string, unknown> }>(WORKSPACE_LAURA,
       `SELECT after FROM audit_log
-       WHERE action = 'workspace.settings_updated' ORDER BY created_at DESC, id DESC LIMIT 1`);
+       WHERE action = 'workspace.settings_updated' ORDER BY created_at DESC LIMIT 1`);
     const ahora = fila?.after['finanzas'] as Record<string, unknown>;
     assert.equal(ahora['cuenta'], '••••8901', 'la cuenta, en sus cuatro últimos');
     assert.equal(ahora['correo_facturacion'], undefined, 'el correo no entra a la bitácora');
@@ -907,7 +907,7 @@ describe('configuración financiera (FIN-8)', () => {
     );
     const [fila] = await leer<{ actor_user_id: string; actor_kind: string }>(WORKSPACE_LAURA,
       `SELECT actor_user_id, actor_kind FROM audit_log
-       WHERE action = 'workspace.settings_updated' ORDER BY created_at DESC, id DESC LIMIT 1`);
+       WHERE action = 'workspace.settings_updated' ORDER BY created_at DESC LIMIT 1`);
     assert.equal(fila?.actor_user_id, persona.id);
     assert.equal(fila?.actor_kind, 'user');
     await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => updateFinanceSettings(tx, { settings: base }));
@@ -1885,7 +1885,7 @@ describe('ingresos de plataformas (FIN-7)', () => {
     assert.equal(despues.ytdPayouts, antes.ytdPayouts);
   });
 
-  test('ninguna fila devuelve un id bigserial a la web', async () => {
+  test('cada fila devuelve a la web el uuid de su pago, no un número', async () => {
     const { rows } = await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => listPlatformPayouts(tx));
     for (const r of rows) {
       assert.match(r.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'platform_payout.id es uuid');
@@ -1946,7 +1946,7 @@ interface LineaBitacora {
  * DENTRO de withWorkspace porque audit_log también tiene RLS (0010): con
  * t.raw(), fuera de transacción y sin workspace, la tabla devuelve cero
  * filas sin avisar y la prueba pasaría por la razón equivocada. El id
- * (bigserial) se usa para ordenar y no se devuelve (CIM-2 §3).
+ * no se devuelve (desde 0082 es un uuid al azar): se ordena por created_at.
  */
 async function bitacoraDe(workspaceId: string, expenseId: string): Promise<LineaBitacora[]> {
   return t.db.withWorkspace(workspaceId, async (tx) => {
@@ -1954,7 +1954,7 @@ async function bitacoraDe(workspaceId: string, expenseId: string): Promise<Linea
       `SELECT action, actor_kind, actor_user_id, before, after
        FROM audit_log
        WHERE entity_type = 'expense' AND entity_id = $1::uuid
-       ORDER BY created_at DESC, id DESC`,
+       ORDER BY created_at DESC`,
       [expenseId],
     );
     return rows;

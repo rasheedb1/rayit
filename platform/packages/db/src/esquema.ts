@@ -169,6 +169,10 @@
  *     un inquilino: con SELECT, `last_value` de audit_log_id_seq es el
  *     volumen de toda la plataforma. mc_app no tiene SELECT ni UPDATE en
  *     ninguna, y USAGE solo en las de tablas donde inserta.
+ *   · Y ninguna COLUMNA de una tabla que mc_app o mc_public_share leen o
+ *     insertan (directo, por PUBLIC, por membresía o por columna) sale de
+ *     una secuencia (CIM-11, 0082). Sin SELECT en audit_log_id_seq, el
+ *     id de una fila propia seguía siendo el contador al escribirla.
  *
  * LA GUARDIA NO FALLA ABIERTA
  * ---------------------------
@@ -1068,7 +1072,8 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     tabla: ['INSERT', 'SELECT'],
     motivo: 'el paso de etapa de la aceptación queda en el historial (0030 §3)',
   },
-  deal_stage_history_id_seq: { tabla: ['USAGE'], motivo: 'el id del INSERT en deal_stage_history (0030 §3)' },
+  // Hasta 0082 también USAGE en deal_stage_history_id_seq, para el id del
+  // INSERT. Desde CIM-11 el id es gen_random_uuid() y la secuencia no existe.
   pipeline_stage: {
     tabla: ['SELECT'],
     motivo: 'leer la etapa del negocio: la pide assert_reference_visible de 0025 al cambiar deal.stage_id (0030 §3)',
@@ -1370,6 +1375,21 @@ export const HIJAS_CON_GLOBALES_DECLARADAS: Readonly<Record<string, string>> = {
  * mc_app solo USAGE, y solo donde inserta.
  */
 export const SECUENCIAS_DECLARADAS: Readonly<Record<string, string>> = {};
+
+/**
+ * Las columnas `tabla.columna` que la base rellena con una secuencia
+ * (DEFAULT nextval(…) o identity) en una tabla que mc_app o
+ * mc_public_share leen o insertan (también por membresía o por columna),
+ * y por qué. Vacía, y debería seguir así (CIM-11, 0082): una secuencia es
+ * de la tabla ENTERA, así que el valor de una fila propia —el id que
+ * devuelve un INSERT, o el que se lee con SELECT— dice cuántas filas
+ * escribió toda la plataforma hasta ese momento. Restar dos es medir el
+ * volumen ajeno. Una clave que la base rellena sola va con
+ * `uuid DEFAULT gen_random_uuid()`; un número de orden por inquilino (el
+ * consecutivo de una factura) se calcula dentro de su workspace, nunca
+ * con una secuencia compartida.
+ */
+export const CLAVES_DE_SECUENCIA_DECLARADAS: Readonly<Record<string, string>> = {};
 
 /** La función que comprueba que una referencia nombra una fila visible (0025 §3). */
 export const FUNCION_DE_REFERENCIAS = 'assert_reference_visible';
@@ -1755,6 +1775,13 @@ export interface EstadoDelEsquema {
    * que ya no corresponden, con el nombre de la lista delante.
    */
   otrasDeclaracionesObsoletas: string[];
+  /**
+   * Columnas que la base rellena con una secuencia (nextval o identity)
+   * en tablas que mc_app o mc_public_share leen o insertan, fuera de
+   * CLAVES_DE_SECUENCIA_DECLARADAS: `tabla.columna (secuencia)`. Cada
+   * valor es un contador de TODA la plataforma (CIM-11).
+   */
+  clavesDeSecuencia: string[];
   /** Privilegios que mc_app conserva y no debería (de tabla, de columna o de secuencia). */
   privilegiosDeMas: PrivilegioDeMas[];
   /** Otros roles con privilegios en `public`. */
@@ -1832,6 +1859,14 @@ interface FilaPrivilegio extends Record<string, unknown> {
 interface FilaInquilino extends Record<string, unknown> {
   tabla: string;
   columna: string;
+}
+interface FilaClaveDeSecuencia extends Record<string, unknown> {
+  tabla: string;
+  columna: string;
+  /** El nombre de la secuencia, o el DEFAULT tal cual si no se pudo resolver. */
+  secuencia: string | null;
+  /** Si mc_app o mc_public_share la leen o insertan: directo, por PUBLIC, por membresía o por columna. */
+  aplica: boolean;
 }
 interface FilaUnico extends Record<string, unknown> {
   tabla: string;
@@ -2021,6 +2056,35 @@ const SQL_INQUILINOS = `
     JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
      AND a.attnum > 0 AND NOT a.attisdropped AND a.attname = ANY ($1::text[])
+   ORDER BY 1, 2`;
+
+/**
+ * Las columnas de las tablas de `public` que la base rellena con una
+ * secuencia: identity, o un DEFAULT que llama a nextval(…) en cualquier
+ * parte de la expresión (un folio 'Q-' || nextval(…) también). La secuencia
+ * va en el texto para el mensaje (la de un identity no sale en el
+ * DEFAULT: la da pg_get_serial_sequence).
+ *
+ * `aplica`: si mc_app ($1) o el rol de los enlaces públicos ($2) leen o
+ * insertan en la tabla, contando lo que les llega por PUBLIC, por
+ * membresía en otro rol y por columna (has_any_column_privilege mira la
+ * tabla y cada columna). Es el mismo criterio que la comprobación final
+ * de 0082 §5: la guardia no deja pasar lo que la migración habría
+ * frenado. Un rol que no existe no cuenta (se busca en pg_roles).
+ */
+const SQL_CLAVES_DE_SECUENCIA = `
+  SELECT c.relname AS tabla, a.attname::text AS columna,
+         coalesce(pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname),
+                  pg_get_expr(d.adbin, d.adrelid)) AS secuencia,
+         EXISTS (SELECT 1 FROM pg_roles r
+                  WHERE r.rolname IN ($1, $2)
+                    AND has_any_column_privilege(r.oid, c.oid, 'SELECT, INSERT')) AS aplica
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND a.attnum > 0 AND NOT a.attisdropped
+     AND (a.attidentity <> '' OR pg_get_expr(d.adbin, d.adrelid) ~ 'nextval\\(')
    ORDER BY 1, 2`;
 
 /** Los índices únicos y de exclusión de las tablas de `public`, con sus columnas y su predicado. */
@@ -2388,6 +2452,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
   const disparadores = await leer<FilaDisparador>(SQL_DISPARADORES, [FUNCION_DE_REFERENCIAS]);
   const inquilinos = await leer<FilaInquilino>(SQL_INQUILINOS, [[...COLUMNAS_DE_INQUILINO]]);
   const unicos = await leer<FilaUnico>(SQL_UNICOS);
+  const clavesLeidas = await leer<FilaClaveDeSecuencia>(SQL_CLAVES_DE_SECUENCIA, [APP_ROLE, PUBLIC_SHARE_ROLE]);
   const disparadoresDefinerLeidos = await leer<FilaDisparadorDefiner>(SQL_DISPARADORES_DEFINER);
   const candados = await leer<FilaCandado>(SQL_CANDADOS, [Object.keys(DISPARADORES_DE_CANDADO)]);
   const tablasConCreador = await leer<{ relname: string }>(SQL_TABLAS_CON_CREADOR);
@@ -2885,8 +2950,9 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     if (clave in UNICOS_GLOBALES_DECLARADOS) continue;
     const columnas = u.columnas ?? [];
     const propias = inquilinoPorTabla.get(u.tabla) ?? [];
-    // La clave primaria sustituta de la fila (uuid al azar o bigserial):
-    // la genera la base, no lleva dato, y chocar con ella solo dice que
+    // La clave primaria sustituta de la fila (uuid al azar; desde 0082
+    // ninguna de secuencia donde llega mc_app, clavesDeSecuencia): la
+    // genera la base, no lleva dato, y chocar con ella solo dice que
     // ese id existe, que es lo que ya sabe quien lo escribe.
     const sustituta = u.primaria && u.generada;
     // La columna de inquilino, en las columnas o en una expresión.
@@ -2985,12 +3051,31 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
       });
     }
   }
+  // ---- claves de secuencia (CIM-11): quitarle a mc_app el SELECT de la
+  //      secuencia no basta, porque el valor llega en la COLUMNA. El id de
+  //      una fila propia es el contador de toda la plataforma al escribirla.
+  const clavesQueAplican = new Set<string>();
+  const clavesDeSecuencia: string[] = [];
+  for (const k of clavesLeidas) {
+    // A quién le llega lo dice la base (SQL_CLAVES_DE_SECUENCIA): deLaApp
+    // solo ve los GRANT directos a mc_app y a PUBLIC, no lo heredado por
+    // membresía ni lo del rol de los enlaces públicos.
+    if (!k.aplica) continue;
+    const clave = `${k.tabla}.${k.columna}`;
+    clavesQueAplican.add(clave);
+    if (clave in CLAVES_DE_SECUENCIA_DECLARADAS) continue;
+    clavesDeSecuencia.push(`${clave} (${k.secuencia ?? 'identity'})`);
+  }
+
   const nombresDeSecuencias = new Set(secuencias.map((q) => q.relname));
   const otrasDeclaracionesObsoletas: string[] = relaciones.length
     ? [
         ...Object.keys(SECUENCIAS_DECLARADAS)
           .filter((q) => !nombresDeSecuencias.has(q))
           .map((q) => `SECUENCIAS_DECLARADAS: ${q}`),
+        ...Object.keys(CLAVES_DE_SECUENCIA_DECLARADAS)
+          .filter((k) => !clavesQueAplican.has(k))
+          .map((k) => `CLAVES_DE_SECUENCIA_DECLARADAS: ${k}`),
         ...Object.keys(HIJAS_CON_GLOBALES_DECLARADAS)
           .filter((h) => !(inquilinoPorTabla.get(h) ?? []).length)
           .map((h) => `HIJAS_CON_GLOBALES_DECLARADAS: ${h}`),
@@ -3184,6 +3269,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     unicosSinInquilino,
     unicosDeclaradosObsoletos: siAlDia(unicosDeclaradosObsoletos),
     otrasDeclaracionesObsoletas: siAlDia(otrasDeclaracionesObsoletas),
+    clavesDeSecuencia,
     privilegiosDeMas,
     rolesDeMas,
     // Lo que falta solo dice algo en una base migrada y al día.
@@ -3226,6 +3312,7 @@ export const ESQUEMA_AL_DIA: EstadoDelEsquema = {
   unicosSinInquilino: [],
   unicosDeclaradosObsoletos: [],
   otrasDeclaracionesObsoletas: [],
+  clavesDeSecuencia: [],
   privilegiosDeMas: [],
   rolesDeMas: [],
   enlacePublico: [],
@@ -3389,6 +3476,16 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
         '. Hazlos por inquilino en una migración (ver 0026 §2), o decláralos en UNICOS_GLOBALES_DECLARADOS',
     );
   }
+  if (estado.clavesDeSecuencia.length) {
+    partes.push(
+      `hay columnas que la base rellena con una secuencia en tablas que ${APP_ROLE} o ${PUBLIC_SHARE_ROLE} leen o ` +
+        'escriben (directo, por PUBLIC, por membresía o por columna); una secuencia ' +
+        'es de la tabla entera, así que el valor de una fila propia dice cuántas escribió toda la plataforma: ' +
+        estado.clavesDeSecuencia.join(', ') +
+        '. Pásalas a uuid DEFAULT gen_random_uuid() en una migración (ver 0082), o decláralas en ' +
+        'CLAVES_DE_SECUENCIA_DECLARADAS con su motivo',
+    );
+  }
   if (estado.privilegiosDeMas.length) {
     partes.push(
       `${APP_ROLE} tiene privilegios que no le tocan: ` +
@@ -3435,10 +3532,46 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
   if (!partes.length) return null;
   // Con el inventario sin leer, «migra» es el consejo equivocado: la
   // base puede estar al día y solo caída.
-  const consejo = estado.inventarioLeido
-    ? 'Corre: make db.migrate'
-    : 'Comprueba primero que la base conteste (make db.info) antes de migrar nada';
-  return `[db] La base no tiene el esquema de este repositorio: ${partes.join('; ')}. ${consejo}`;
+  if (!estado.inventarioLeido) {
+    return `[db] La base no tiene el esquema de este repositorio: ${partes.join('; ')}. ` +
+      'Comprueba primero que la base conteste (make db.info) antes de migrar nada';
+  }
+  // Con todas las migraciones aplicadas y solo problemas de diseño (una
+  // clave de secuencia, un único global, una vista sin invocador…),
+  // «migra» tampoco arregla nada: no queda ninguna por aplicar. Lo que
+  // hace falta es escribir la siguiente.
+  if (soloProblemasDeDiseno(estado)) {
+    const patron = estado.clavesDeSecuencia.length ? ' (patrón de 0082 §2)' : '';
+    return `[db] El esquema de la base tiene un problema que ninguna migración pendiente arregla: ${partes.join('; ')}. ` +
+      `Escribe la siguiente 00NN_*.sql${patron} y verifícala con make db.check`;
+  }
+  return `[db] La base no tiene el esquema de este repositorio: ${partes.join('; ')}. Corre: make db.migrate`;
+}
+
+/**
+ * ¿Todo lo que encontró la guardia es de diseño? Es decir: la base tiene
+ * todas las migraciones del repositorio, y lo que falla son formas del
+ * esquema que se arreglan con una migración NUEVA (o una declaración),
+ * no aplicando las que hay. Lo que puede venir de una migración sin
+ * aplicar, o de algo desactivado a mano (sin RLS, columnas, funciones o
+ * candados que faltan, privilegios), queda fuera: ahí sigue valiendo
+ * «make db.migrate».
+ */
+function soloProblemasDeDiseno(estado: EstadoDelEsquema): boolean {
+  if (estado.aplicadas === -1 || estado.pendientes.length) return false;
+  const deDiseno = [
+    estado.clavesDeSecuencia, estado.unicosSinInquilino, estado.borradosQuePublican, estado.referenciasSinComprobar,
+    estado.politicasAbiertas, estado.vistasSinInvocador, estado.relacionesSinRls, estado.funcionesDefiner,
+    estado.disparadoresDefiner, estado.reglas,
+  ];
+  const otros = [
+    estado.sinRls, estado.funcionesQueFaltan, estado.columnasQueFaltan, estado.candadosQueFaltan, estado.esquemasDeMas,
+    estado.accesosEnEsquemas, estado.rolDeLaApp, estado.privilegiosDeMas, estado.rolesDeMas, estado.enlacePublico,
+    estado.excepcionesSinPrivilegios, estado.excepcionesObsoletas, estado.politicasAbiertasObsoletas,
+    estado.vistasDeclaradasObsoletas, estado.relacionesSinRlsObsoletas, estado.funcionesDefinerObsoletas,
+    estado.referenciasDeclaradasObsoletas, estado.unicosDeclaradosObsoletos, estado.otrasDeclaracionesObsoletas,
+  ];
+  return deDiseno.some((l) => l.length > 0) && otros.every((l) => l.length === 0);
 }
 
 /**

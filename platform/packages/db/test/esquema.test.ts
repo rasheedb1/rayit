@@ -809,14 +809,16 @@ describe('ronda 4: columnas, correlaciones, padres con globales, índices único
   test('las secuencias: SELECT de más se reporta, y una secuencia nueva sin tabla también', async () => {
     // Desde B, `SELECT last_value FROM account_metric_snapshot_id_seq`
     // devolvía el volumen de toda la plataforma. 0026 §4 quita SELECT y
-    // UPDATE, y deja USAGE solo donde mc_app inserta.
+    // UPDATE, y deja USAGE solo donde mc_app inserta. Desde 0082 (CIM-11)
+    // public no tiene ninguna: la tabla de la prueba trae la suya.
     await con(
-      'GRANT SELECT ON audit_log_id_seq TO mc_app; ' +
-        `SET ROLE ${migrador()}; CREATE SEQUENCE zz_seq; RESET ROLE`,
-      'REVOKE SELECT ON audit_log_id_seq FROM mc_app; DROP SEQUENCE zz_seq',
+      `SET ROLE ${migrador()}; CREATE TABLE zz_s (id bigserial PRIMARY KEY); CREATE SEQUENCE zz_seq; RESET ROLE; ` +
+        'GRANT SELECT ON zz_s_id_seq TO mc_app',
+      'DROP TABLE zz_s; DROP SEQUENCE zz_seq',
       (e) => {
-        const audit = e.privilegiosDeMas.find((p) => p.tabla === 'audit_log_id_seq');
-        assert.deepEqual(audit?.privilegios, ['SELECT']);
+        const tabla = e.privilegiosDeMas.find((p) => p.tabla === 'zz_s_id_seq');
+        assert.deepEqual(tabla?.privilegios, ['SELECT']);
+        assert.deepEqual(e.clavesDeSecuencia, ['zz_s.id (public.zz_s_id_seq)'], 'y la columna, que es el mismo contador');
         const suelta = e.privilegiosDeMas.find((p) => p.tabla === 'zz_seq');
         assert.deepEqual(suelta?.privilegios, ['USAGE'], 'los privilegios por defecto ya no le dan SELECT, pero USAGE sobra');
         assert.match(String(suelta?.motivo), /sin tabla/);
@@ -1266,7 +1268,7 @@ describe('pulido, ronda 4: mc_public_share tiene exactamente lo que promete 0030
   test('el inventario declarado es el de 0030, 0031, 0033, 0037, 0046 y 0055, y la base recién migrada lo cumple', async () => {
     assert.deepEqual(Object.keys(PRIVILEGIOS_DEL_ENLACE_PUBLICO).sort(), [
       'company', 'company_link', 'contact', 'deal', 'deal_stage_history',
-      'deal_stage_history_id_seq', 'media_kit', 'media_kit_lockout', 'membership', 'outbound_enrollment',
+      'media_kit', 'media_kit_lockout', 'membership', 'outbound_enrollment',
       'outbound_optout_event', 'outbound_optout_link', 'outbound_touch', 'outbound_workspace_optout', 'pipeline_stage', 'quote',
       'report', 'workspace',
     ]);

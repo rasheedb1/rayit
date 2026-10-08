@@ -64,7 +64,7 @@ test('el job usa ctx.connectors y cada llamada deja su fila en api_call_log', as
   assert.equal(guard.attempts, 0, 'nada salió por globalThis.fetch');
 
   const { rows } = await h.db.query<{ connection_id: string | null; platform_id: string; endpoint: string; http_status: number; ok: boolean; duration_ms: number; request_units: number }>(
-    'SELECT connection_id, platform_id, endpoint, http_status, ok, duration_ms, request_units FROM api_call_log ORDER BY id',
+    'SELECT connection_id, platform_id, endpoint, http_status, ok, duration_ms, request_units FROM api_call_log ORDER BY endpoint, called_at',
   );
   assert.equal(rows.length, 3);
   assert.deepEqual(rows.map((r) => r.endpoint), ['tiktok.video.list', 'tiktok.video.list', 'youtube.channels.list']);

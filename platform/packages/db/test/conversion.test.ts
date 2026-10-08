@@ -105,8 +105,8 @@ describe('VEN-8 · conversión por etapa', () => {
     const { conversion, historia, etapas } = await laura(async (tx) => ({
       conversion: await getStageConversion(tx, TODA),
       historia: (
-        await tx.query<{ id: string; deal_id: string; to_stage_id: string; changed_at: Date | string }>(
-          'SELECT id::text AS id, deal_id, to_stage_id, changed_at FROM deal_stage_history',
+        await tx.query<{ step: number; deal_id: string; to_stage_id: string; changed_at: Date | string }>(
+          'SELECT step, deal_id, to_stage_id, changed_at FROM deal_stage_history',
         )
       ).rows,
       etapas: (
@@ -118,9 +118,10 @@ describe('VEN-8 · conversión por etapa', () => {
     assert.ok(historia.length >= 40, 'el seed trae la historia de los negocios de Laura');
     const etapa = new Map(etapas.map((e) => [e.id, e]));
     const ms = (v: Date | string) => new Date(v).getTime();
-    /** El orden de la historia: la hora y, a igual hora, el id (bigserial). */
-    const antes = (a: { changed_at: Date | string; id: string }, b: { changed_at: Date | string; id: string }) =>
-      ms(a.changed_at) < ms(b.changed_at) || (ms(a.changed_at) === ms(b.changed_at) && BigInt(a.id) < BigInt(b.id));
+    /** El orden de la historia: la hora y, a igual hora, el paso dentro del negocio (step, 0082). */
+    type Paso = { changed_at: Date | string; step: number };
+    const antes = (a: Paso, b: Paso) =>
+      ms(a.changed_at) < ms(b.changed_at) || (ms(a.changed_at) === ms(b.changed_at) && a.step < b.step);
 
     const esperado: Record<string, { entered: number; advanced: number }> = {};
     for (const st of etapas.filter((e) => !e.is_won && !e.is_lost)) {
@@ -154,10 +155,10 @@ describe('VEN-8 · conversión por etapa', () => {
     if (t.kind === 'pglite') assert.deepEqual(obtenido.nuevo, { entered: 10, advanced: 9 });
   });
 
-  test('dos filas con la misma hora se ordenan por id: nacer en conversación y volver a nuevo no es avanzar', async () => {
+  test('dos filas con la misma hora se ordenan por su paso: nacer en conversación y volver a nuevo no es avanzar', async () => {
     // Un negocio que se crea y se mueve en la MISMA transacción: now() es
-    // el mismo en las dos filas. Nace en «En conversación» (id menor) y
-    // vuelve a «Nuevo» (id mayor). Desde «Nuevo» no avanzó: la fila de
+    // el mismo en las dos filas. Nace en «En conversación» (step 1) y
+    // vuelve a «Nuevo» (step 2). Desde «Nuevo» no avanzó: la fila de
     // «En conversación» es anterior, aunque tenga la misma hora.
     const D6 = '00000009-0000-4000-8000-0000000c8d06';
     const antes = porEtapa(await enConv((tx) => getStageConversion(tx, TODA)));

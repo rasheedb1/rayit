@@ -6,6 +6,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { abrirSuperusuario, applyRepoSeeds as sembrarRepo, execPglite } from '@mc/db/embedded';
 import { DESCRIBE_DB_TIMEOUT_MS, PRUEBA_DB_TIMEOUT_MS, SETUP_TIMEOUT_MS } from '@mc/db/test/tiempos';
+import { ORDEN_CORRIDAS_ASC } from '@mc/db/queries/worker';
 import { FakeTokenRefresher, InMemorySecretStore, refresherRegistry, type ConnectorHttpOverrides, type QuotaManager, type SecretStore, type TokenRefresher } from '@mc/connectors';
 import { loadConfig, type WorkerConfig } from '../../src/runner/config.ts';
 import { PgliteDatabase } from '../../src/runner/db-pglite.ts';
@@ -139,7 +140,7 @@ export async function waitFor<T>(check: () => Promise<T | null | undefined | fal
 }
 
 export interface JobRunRow extends Record<string, unknown> {
-  id: number | string;
+  id: string;
   job_id: string;
   workspace_id: string | null;
   entity_type: string | null;
@@ -151,13 +152,14 @@ export interface JobRunRow extends Record<string, unknown> {
   items_failed: number;
   error: string | null;
   metadata: Record<string, unknown>;
+  started_at: Date | string;
   finished_at: Date | string | null;
 }
 
 export async function jobRuns(db: PgliteDatabase, jobId: string): Promise<JobRunRow[]> {
   const { rows } = await db.query<JobRunRow>(
-    `SELECT id, job_id, workspace_id, entity_type, entity_id, status, attempt, duration_ms, items_processed, items_failed, error, metadata, finished_at
-       FROM job_run WHERE job_id = $1 ORDER BY id`,
+    `SELECT id, job_id, workspace_id, entity_type, entity_id, status, attempt, duration_ms, items_processed, items_failed, error, metadata, started_at, finished_at
+       FROM job_run WHERE job_id = $1 ORDER BY ${ORDEN_CORRIDAS_ASC()}`,
     [jobId],
   );
   return rows;

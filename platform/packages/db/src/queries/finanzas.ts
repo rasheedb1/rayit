@@ -1136,8 +1136,8 @@ export async function updateFinanceSettings(
 
   const bloque = financeSettingsToJson(input.settings);
   // `RETURNING id` y no rowCount: tx.query devuelve solo `rows`
-  // (client.ts, QueryResult). El id del workspace es un uuid, no un
-  // bigserial, así que devolverlo no rompe la regla de CIM-2 §3.
+  // (client.ts, QueryResult). El id del workspace es un uuid que la
+  // pantalla ya conoce: devolverlo no le dice nada nuevo.
   const actualizado = await tx.query<{ id: string }>(
     `UPDATE workspace
      SET settings = settings || $1::jsonb,
@@ -1656,7 +1656,7 @@ const PLAZO_DIAS_POR_DEFECTO = 30;
  * comprueba que ese día coincide con `hoyEnZona()` de `@mc/core`, que
  * es la misma regla escrita en TypeScript.
  *
- * Ningún id que vuelve es `bigserial` (CIM-2 §3): son los uuid de
+ * Los ids que vuelven son los uuid de
  * `invoice`, `deal` y `expense`.
  */
 /*

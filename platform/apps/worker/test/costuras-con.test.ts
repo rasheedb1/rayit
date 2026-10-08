@@ -139,8 +139,20 @@ describe('CON-5 → CON-6: tras collect.post_metrics, la línea base y el puntaj
     const base2 = await corrida(h, 'compute.baseline', 2);
     const score2 = await corrida(h, 'compute.post_score', 2);
 
-    const orden = [collect1, base1, score1, collect2, base2, score2].map((r) => Number(r.id));
-    assert.deepEqual(orden, [...orden].sort((a, b) => a - b), 'collect → baseline → post_score, y el día 2 después del día 1');
+    // El orden por fecha, no por id (desde 0082 es un uuid al azar): cada
+    // eslabón empieza cuando el anterior ya terminó, y el día 2 después de
+    // que el día 1 cerró. started_at lo pone la base con clock_timestamp().
+    const cadena = [collect1, base1, score1, collect2, base2, score2];
+    const ms = (v: Date | string | null) => (v === null ? Number.NaN : new Date(v).getTime());
+    for (let i = 1; i < cadena.length; i++) {
+      const antes = cadena[i - 1]!;
+      const ahora = cadena[i]!;
+      assert.ok(Number.isFinite(ms(antes.finished_at)) && Number.isFinite(ms(ahora.started_at)), `${antes.job_id} y ${ahora.job_id} con fechas`);
+      assert.ok(
+        ms(ahora.started_at) >= ms(antes.finished_at),
+        `collect → baseline → post_score, y el día 2 después del día 1: ${ahora.job_id} empezó (${String(ahora.started_at)}) antes de que terminara ${antes.job_id} (${String(antes.finished_at)})`,
+      );
+    }
     for (const r of [base1, base2]) {
       assert.equal(r.status, 'ok', r.error ?? '');
       assert.equal(r.metadata['tras'], 'collect.post_metrics');

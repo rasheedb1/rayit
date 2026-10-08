@@ -946,14 +946,17 @@ corrida que escribió algo. El día lo pone la zona del workspace
 ## Cómo leer job_run
 
 ```sql
--- Últimas ejecuciones, con duración y resultado
+-- Últimas ejecuciones, con duración y resultado. Por fecha: desde 0082
+-- (CIM-11) el id es un uuid al azar y no dice cuál fue antes. Es el
+-- mismo orden que ORDEN_ULTIMA_CORRIDA (@mc/db/queries/worker).
 SELECT id, job_id, status, attempt, started_at, duration_ms, items_processed, items_failed, error
-  FROM job_run ORDER BY id DESC LIMIT 20;
+  FROM job_run ORDER BY started_at DESC, finished_at DESC NULLS FIRST LIMIT 20;
 
 -- ¿Por qué esta conexión no se renovó?
 SELECT id, status, started_at, error, metadata
   FROM job_run
- WHERE job_id = 'oauth.refresh' AND metadata->'needsReauth' ? '<connection_id>';
+ WHERE job_id = 'oauth.refresh' AND metadata->'needsReauth' ? '<connection_id>'
+ ORDER BY started_at DESC, finished_at DESC NULLS FIRST;
 
 -- Fallos de las últimas 24 h por job
 SELECT job_id, count(*) FROM job_run

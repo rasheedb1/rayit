@@ -23,6 +23,7 @@
  * Las cuentas se eligen con DEMO_INSTAGRAM_HANDLE y DEMO_YOUTUBE_HANDLE.
  */
 import { FixtureFetch, loadFixtures, type ConnectorHttpOverrides, type SecretStore } from '@mc/connectors';
+import { ORDEN_CORRIDAS_ASC } from '@mc/db/queries/worker';
 import type { Env } from './runner/config.ts';
 import type { WorkerDatabase } from './runner/db.ts';
 import type { Logger } from './runner/logger.ts';
@@ -160,7 +161,7 @@ async function esperaCorridas(db: WorkerDatabase, jobId: string, n: number, msTo
   for (;;) {
     const { rows } = await db.query<Record<string, unknown>>(
       `SELECT id, job_id, status, attempt, duration_ms, items_processed, items_failed, error, metadata
-         FROM job_run WHERE job_id = $1 AND status <> 'running' ORDER BY id`,
+         FROM job_run WHERE job_id = $1 AND status <> 'running' ORDER BY ${ORDEN_CORRIDAS_ASC()}`,
       [jobId],
     );
     if (rows.length >= n || Date.now() > hasta) return rows;
@@ -238,7 +239,15 @@ export async function runDemoPosts(opts: {
  * termine después de la última recolección e imprime job_run.metadata,
  * creator_baseline y post_score.
  */
-export async function runDemoCompute(opts: { db: WorkerDatabase; logger: Logger; workspaceId: string }): Promise<void> {
+export async function runDemoCompute(opts: {
+  db: WorkerDatabase;
+  logger: Logger;
+  workspaceId: string;
+  /** Cuánto tiene que estar quieta job_run para dar la cadena por terminada; 3 s por omisión. */
+  quietoMs?: number;
+  /** Cuánto se espera como mucho; 60 s por omisión. */
+  plazoMs?: number;
+}): Promise<boolean> {
   const { db, logger, workspaceId } = opts;
   // La cadena terminó cuando hay un compute.* después de la última
   // recolección, nada corriendo y ninguna fila nueva en job_run durante
@@ -246,34 +255,43 @@ export async function runDemoCompute(opts: { db: WorkerDatabase; logger: Logger;
   // recolección» no basta: uno encadenado desde la primera ronda puede
   // empezar después, y una línea base que no escribe nada no encadena
   // post_score (no hay qué recalcular).
-  const QUIETO_MS = 3_000;
-  const hasta = Date.now() + 60_000;
+  //
+  // Todo por fecha, no por id: desde 0082 (CIM-11) job_run.id es un uuid
+  // al azar, sin orden, y Postgres no tiene max(uuid). La huella que dice
+  // «algo cambió» es cuántas filas hay y cuántas siguen corriendo.
+  const QUIETO_MS = opts.quietoMs ?? 3_000;
+  const plazoMs = opts.plazoMs ?? 60_000;
+  const hasta = Date.now() + plazoMs;
   let visto = '';
   let quietoDesde = Date.now();
   let terminada = false;
   for (;;) {
-    const ultimos = await db.query<{ ultimo: string | null; collect: string | null; compute: string | null; corriendo: number }>(
-      `SELECT max(id)::text AS ultimo,
-              max(id) FILTER (WHERE job_id = 'collect.post_metrics')::text AS collect,
-              max(id) FILTER (WHERE job_id LIKE 'compute.%')::text AS compute,
+    const ultimos = await db.query<{ collect: Date | string | null; compute: Date | string | null; n: number; corriendo: number }>(
+      `SELECT max(started_at) FILTER (WHERE job_id = 'collect.post_metrics') AS collect,
+              max(started_at) FILTER (WHERE job_id LIKE 'compute.%') AS compute,
+              count(*)::int AS n,
               count(*) FILTER (WHERE status = 'running')::int AS corriendo
          FROM job_run WHERE job_id IN ('collect.post_metrics', 'compute.baseline', 'compute.post_score')`,
     );
     const u = ultimos.rows[0];
-    const huella = `${u?.ultimo ?? ''}/${u?.corriendo ?? 0}`;
+    const huella = `${u?.n ?? 0}/${u?.corriendo ?? 0}`;
     if (huella !== visto) {
       visto = huella;
       quietoDesde = Date.now();
     }
-    const id = (v: string | null | undefined) => BigInt(v ?? '0');
-    terminada = u !== undefined && u.corriendo === 0 && id(u.compute) > id(u.collect) && Date.now() - quietoDesde >= QUIETO_MS;
+    // Un compute.* que empezó después de la última recolección: el runner
+    // lo abre cuando la de arriba ya cerró, con una lectura nueva del reloj.
+    const compute = u?.compute ?? null;
+    const collect = u?.collect ?? null;
+    const despues = compute !== null && (collect === null || new Date(compute).getTime() > new Date(collect).getTime());
+    terminada = u !== undefined && u.corriendo === 0 && despues && Date.now() - quietoDesde >= QUIETO_MS;
     if (terminada || Date.now() > hasta) break;
     await new Promise((r) => setTimeout(r, 500));
   }
-  if (!terminada) logger.warn('demo CON-6: la cadena no terminó en 60 s; se imprime lo que hay');
+  if (!terminada) logger.warn(`demo CON-6: la cadena no terminó en ${Math.round(plazoMs / 1000)} s; se imprime lo que hay`);
   const { rows: cadena } = await db.query<Record<string, unknown>>(
     `SELECT id, job_id, status, duration_ms, items_processed, items_failed, error, metadata
-       FROM job_run WHERE job_id IN ('compute.baseline', 'compute.post_score') AND status <> 'running' ORDER BY id`,
+       FROM job_run WHERE job_id IN ('compute.baseline', 'compute.post_score') AND status <> 'running' ORDER BY ${ORDEN_CORRIDAS_ASC()}`,
   );
   logger.info('demo CON-6: job_run de compute.* (encadenados tras collect.post_metrics: metadata.tras)', { rows: cadena });
 
@@ -301,6 +319,7 @@ export async function runDemoCompute(opts: { db: WorkerDatabase; logger: Logger;
     rows: puntajes.rows,
     sinCorteMedido: sinFila.rows[0]?.n ?? 0,
   });
+  return terminada;
 }
 
 export async function runDemo(opts: {
@@ -319,14 +338,14 @@ export async function runDemo(opts: {
     void (async () => {
       const runs = await db.query(
         `SELECT id, job_id, status, attempt, duration_ms, items_processed, items_failed, error, metadata
-           FROM job_run WHERE status <> 'skipped' ORDER BY id`,
+           FROM job_run WHERE status <> 'skipped' ORDER BY ${ORDEN_CORRIDAS_ASC()}`,
       );
       const conns = await db.query(
         `SELECT handle, status, status_detail, to_char(access_expires_at, 'YYYY-MM-DD HH24:MI') AS access_expires_at FROM social_connection ORDER BY handle`,
       );
       const notes = await db.query(`SELECT kind, severity, title_es FROM notification ORDER BY created_at`);
       const calls = await db.query(
-        `SELECT connection_id, platform_id, endpoint, http_status, ok, error_code, duration_ms, rate_limited FROM api_call_log ORDER BY id`,
+        `SELECT connection_id, platform_id, endpoint, http_status, ok, error_code, duration_ms, rate_limited FROM api_call_log ORDER BY called_at, endpoint, connection_id`,
       );
       logger.info('demo: job_run', { rows: runs.rows });
       logger.info('demo: social_connection', { rows: conns.rows });

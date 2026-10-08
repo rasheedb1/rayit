@@ -1002,6 +1002,63 @@ VEN-10), un comando por paso, desde `platform/`, con
    `membership_is_team` (0058, pulido r1), que con la serie de main deja
    fuera al rol `viewer`.
 
+**CIM-11 (7-oct-2026): `0082_ids_sin_contador` va pegada al despliegue.**
+Pasa las quince claves `bigserial` (audit_log, api_call_log, job_run,
+post_metric_snapshot y las demás de su cabecera) a `uuid`, conservando
+las filas, y el runner lee desde entonces `job_run.id` como texto.
+
+**La web vieja tampoco arranca en frío contra 0082.** Su guardia pide
+USAGE en las secuencias que 0082 borra (falla en
+`deal_stage_history_id_seq: le falta USAGE`, PRIVILEGIOS_DEL_ENLACE_PUBLICO)
+y en producción `from-env.ts` lanza ese error: entre `make db.migrate` y
+que el código nuevo esté vivo, cada arranque en frío de la web en Vercel
+cae, y quien entre en ese rato ve un error, no solo el cron. La
+instancia que siga caliente tampoco sirve: lee `job_run.id` como número
+(`Number(uuid)` es NaN) y no cierra sus corridas. Y el código nuevo
+contra el esquema viejo tampoco arranca (su guardia ve 0082 pendiente).
+Por eso el código nuevo se construye ANTES de migrar y se promueve
+justo después: la ventana dura lo que la migración y una promoción
+(segundos), no lo que un build. Desde `platform/`, con la rama ya en
+`main`:
+
+```bash
+./scripts/vercel.sh deploy --prod --skip-domain   # 1 · imprime <url>; el dominio sigue en el despliegue viejo
+make cron.uninstall                               # 2 · ningún turno en medio
+make db.migrate                                   # 3 · 0082 (una transacción)
+make db.guardia                                   #     en verde
+make vercel.run ARGS="promote <url> --yes"        # 4 · el dominio pasa al despliegue de 1, sin build
+make cron.install                                 # 5 · pide CRON_SECRET
+make cron.status
+```
+
+Por qué `--prod --skip-domain` y no una vista previa: una vista previa
+se construye con las variables de *Preview*, y Vercel vuelve a
+construir una vista previa al promoverla a producción, así que la
+ventana volvería a durar un build. Un despliegue de producción con
+`--skip-domain` ya está construido con las variables de producción y
+sin el dominio; `vercel promote` solo le pasa el dominio. Es el mismo
+`scripts/vercel.sh deploy` que usa `make vercel.deploy` (con el token del
+vault, `--cwd platform`), con una bandera más. La alternativa
+equivalente es `vercel build --prod` y
+`vercel deploy --prebuilt --prod --skip-domain`.
+
+Si el paso 3 falla, 0082 se deshace entera (el runner aplica cada
+archivo en su transacción): no se promueve nada, se va al paso 5 y la
+web vieja sigue sirviendo. Si lo que corta es el `lock_timeout` de 15 s,
+es que algo tenía la tabla: se vuelve a correr (es re-ejecutable). Va
+detrás de `0078_equipo` … `0081_lo_que_importa` (ACC-4 y RES-3): nació
+como 0078 y se renumeró al mezclar `rasheed/integracion`. Además del
+tipo de las claves deja `deal_stage_history.step` con índice único
+`(deal_id, step)` (las filas viejas se numeran con `row_number()`, así
+que el relleno no choca) y fijo después de insertarse, traduce el
+`after._job.runId` de la bitácora al uuid nuevo de su corrida y el
+`source.id` de las claims del perfil comercial guardado al uuid nuevo de
+su lectura de `account_metric_snapshot` (§2a), `post_metrics_latest`
+con el desempate de la última lectura (§4 bis),
+`clock_timestamp()` en los registros y las funciones de estado de
+outreach (`outreach_writer_status`, `outreach_classifier_status`)
+desempatando por `finished_at` en vez de por el id.
+
 **Pulido r1 (25-sep-2026), lo que cambió en el esquema de esta serie**
 (0046, 0051, 0056 y 0058, todas sin aplicar): la web no cambia `channel`,
 `provider`, `warmup_started_at` ni `last_ok_at` de una cuenta, ni la
