@@ -825,7 +825,7 @@ describe('de qué creador es un negocio: verlo y cambiarlo (ronda 2, hallazgo 6)
       'lo mismo no cambia nada',
     );
     const bitacora = await duenaAgencia((tx) => tx.query<{ action: string; before: unknown; after: unknown }>(
-      'SELECT action, before, after FROM audit_log WHERE entity_id = $1 ORDER BY id', [DEAL_SIN],
+      'SELECT action, before, after FROM audit_log WHERE entity_id = $1 ORDER BY created_at', [DEAL_SIN],
     )).then((r) => r.rows);
     assert.deepEqual(bitacora, [{ action: 'deal.creator_changed', before: { creatorId: null }, after: { creatorId: CREADOR_A } }]);
     assert.ok((await ejecutivo((tx) => listPipeline(tx, { companyId: MARCA_AGENCIA }))).some((d) => d.id === DEAL_SIN));
