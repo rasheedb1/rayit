@@ -1024,7 +1024,7 @@ justo después: la ventana dura lo que la migración y una promoción
 ```bash
 ./scripts/vercel.sh deploy --prod --skip-domain   # 1 · imprime <url>; el dominio sigue en el despliegue viejo
 make cron.uninstall                               # 2 · ningún turno en medio
-make db.migrate                                   # 3 · 0083 (una transacción)
+make db.migrate                                   # 3 · 0078–0083 (una transacción por archivo)
 make db.guardia                                   #     en verde
 make vercel.run ARGS="promote <url> --yes"        # 4 · el dominio pasa al despliegue de 1, sin build
 make cron.install                                 # 5 · pide CRON_SECRET
@@ -1042,12 +1042,14 @@ vault, `--cwd platform`), con una bandera más. La alternativa
 equivalente es `vercel build --prod` y
 `vercel deploy --prebuilt --prod --skip-domain`.
 
-Si el paso 3 falla, 0083 se deshace entera (el runner aplica cada
-archivo en su transacción): no se promueve nada, se va al paso 5 y la
+Si el paso 3 falla, el archivo que falló se deshace entero (el runner
+aplica cada archivo en su transacción; las anteriores, 0078–0082,
+quedan aplicadas y `make db.migrate` sigue desde ahí): no se promueve nada, se va al paso 5 y la
 web vieja sigue sirviendo. Si lo que corta es el `lock_timeout` de 15 s,
 es que algo tenía la tabla: se vuelve a correr (es re-ejecutable). Va
-detrás de `0078_equipo` … `0081_lo_que_importa` (ACC-4 y RES-3): nació
-como 0078 y se renumeró al mezclar `rasheed/integracion`. Además del
+detrás de `0078_equipo` … `0081_lo_que_importa` (ACC-4 y RES-3) y de
+`0082_alcance_por_creador` (ACC-7): nació como 0078, se renumeró a 0082
+al mezclar `rasheed/integracion` y a 0083 al integrar la fase 9. Además del
 tipo de las claves deja `deal_stage_history.step` con índice único
 `(deal_id, step)` (las filas viejas se numeran con `row_number()`, así
 que el relleno no choca) y fijo después de insertarse, traduce el
