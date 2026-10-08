@@ -446,9 +446,15 @@ Hay tres motivos, y cada fila dice cuál:
 
 | Dónde | Cambio | Motivo |
 |---|---|---|
-| `runDemoCompute` | La espera de la cadena CON-6 mira `max(started_at)` y un conteo de filas, no `max(id)` (Postgres no tiene `max(uuid)`); acepta `quietoMs` y `plazoMs` y devuelve si terminó, para poder probarla | B |
+| `runDemoCompute` | La espera de la cadena CON-6 mira `max(started_at)` y un conteo de filas, no `max(id)` (Postgres no tiene `max(uuid)`); acepta `quietoMs` y `plazoMs` y devuelve si terminó, para poder probarla; el aviso dice el plazo que de verdad esperó (`plazoMs`), no «60 s» fijo | B |
 | `esperaCorridas`, la consulta de la cadena y el resumen final | `ORDER BY ${ORDEN_CORRIDAS_ASC()}` en vez de `ORDER BY id` | B |
 | El volcado de `api_call_log` | `ORDER BY called_at, endpoint, connection_id` | C |
+
+**`packages/db/src/queries/campanas.ts`** (Campañas)
+
+| Dónde | Cambio | Motivo |
+|---|---|---|
+| El corte por edad del reporte (`at_cut`) | A igual edad e instante, desempata por fuente (`api`, `csv_import`, `aggregator`, `manual`) y al final por el id, como `post_metrics_at_cut` y `post_metrics_latest` (0082): antes, dos lecturas del mismo instante salían en cualquier orden | B |
 
 **`apps/worker/test/`**
 

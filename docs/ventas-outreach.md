@@ -1051,7 +1051,10 @@ como 0078 y se renumeró al mezclar `rasheed/integracion`. Además del
 tipo de las claves deja `deal_stage_history.step` con índice único
 `(deal_id, step)` (las filas viejas se numeran con `row_number()`, así
 que el relleno no choca) y fijo después de insertarse, traduce el
-`after._job.runId` de la bitácora al uuid nuevo de su corrida (§2a),
+`after._job.runId` de la bitácora al uuid nuevo de su corrida y el
+`source.id` de las claims del perfil comercial guardado al uuid nuevo de
+su lectura de `account_metric_snapshot` (§2a), `post_metrics_latest`
+con el desempate de la última lectura (§4 bis),
 `clock_timestamp()` en los registros y las funciones de estado de
 outreach (`outreach_writer_status`, `outreach_classifier_status`)
 desempatando por `finished_at` en vez de por el id.
