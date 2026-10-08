@@ -1,0 +1,79 @@
+[
+ {
+  "area": "creador",
+  "severity": "media",
+  "where": "platform/packages/db/src/queries/cotizar/cotizacion.ts:598 (createQuote)",
+  "issue": "El invariante que ACC-7 introduce («el negocio, su cotización y su campaña son del mismo creador», DealCreatorLocked) solo se aplica en una dirección. createQuote acepta cualquier creatorId sobre un negocio que ya tiene creador, y no comprueba que ese creador esté en el alcance de quien cotiza. Lo comprobé en pglite (probe3): el miembro acotado a Laura crea una cotización a nombre de Sofía sobre un negocio de Laura (deal_creator=Laura, quote_creator=Sofía). Cuando la marca acepta por el enlace público, createCampaignFromQuote corre sin persona y crea una campaña de Sofía colgada de un negocio de Laura: el acuerdo partido que setDealCreator intenta impedir. Además, el miembro escribe algo a nombre de un creador que no puede leer (contradice D4 de ACC-6).",
+  "fix": "En createQuote: si llega dealId y deal.creator_id no es NULL, exigir input.creatorId = deal.creator_id y, si no coincide, lanzar CotizarError('CreadorDistintoDelNegocio') con su texto en cotizar/messages.ts. Si deal.creator_id es NULL, comprobar el creador con creators_for_session(current_workspace_id()) (ScopeError si no está) y, al enviar la cotización, poner ese creador en el negocio con setDealCreator. Añadir el caso a alcance-rls.test.ts (miembro, negocio de Laura, cotización de Sofía → rechazo). Como red, un disparador BEFORE INSERT/UPDATE en quote que compare con deal.creator_id."
+ },
+ {
+  "area": "creador",
+  "severity": "media",
+  "where": "platform/packages/db/src/queries/ventas-ficha.ts:383 (assertMember) y ventas/empresas.ts:390 (listOwnerOptions)",
+  "issue": "Con la red puesta, el responsable de un negocio o de su siguiente acción puede ser alguien que no ve ese negocio. listOwnerOptions ofrece a todo el equipo (en la ficha de Mercado Verde, Diego puede elegir a Sara, que solo lleva a un creador dado de baja), y assertMember solo comprueba que sea miembro. Pasa lo mismo cuando setDealCreator pasa un negocio de A a B: el ejecutivo de A sigue de responsable y deja de verlo, sin aviso. Ese negocio sale del «Para hoy» de su responsable sin que nadie lo sepa.",
+  "fix": "Añadir en una migración nueva una SECURITY DEFINER de sí o no, member_sees_creator(user_id, creator_id), con la misma regla que session_sees_all_creators()/scope_allows() pero para otra persona del espacio fijado. Usarla en assertMember (error InvalidOwner con texto «Esa persona no lleva a este creador») y para filtrar listOwnerOptions por negocio. En setDealCreator, si el responsable actual no ve al creador nuevo, devolverlo en el resultado y avisarlo en la ficha («X deja de verlo; asígnale otro responsable»)."
+ },
+ {
+  "area": "creador",
+  "severity": "baja",
+  "where": "platform/apps/web/app/(app)/ventas/empresas/[id]/(ficha)/page.tsx (bloque Negocios, hiddenDeals)",
+  "issue": "En la ficha de Hostal Brisa vista como Diego, la tarjeta dice «Esta marca tiene negocios abiertos de creadores que no llevas…» y justo debajo pinta el estado vacío «Sin negocios abiertos». El panel Datos dice «Negocios abiertos 0». Son tres mensajes que se contradicen en la misma pantalla.",
+  "fix": "Cuando hiddenDeals sea verdadero y no haya negocios visibles, sustituir el EmptyState por uno solo con el texto de hiddenDeals (p. ej. «No llevas ningún negocio con esta marca; tiene abiertos de otros creadores»). En Datos, poner «0 tuyos» o una nota con el mismo texto en messages.ts."
+ },
+ {
+  "area": "creador",
+  "severity": "baja",
+  "where": "platform/apps/web/lib/workspace/rol.ts:21 (tieneRol)",
+  "issue": "Desde esta rama el modo demo con DEMO_USER_ID lleva la identidad a las transacciones, pero tieneRol sigue devolviendo true a cualquiera sin Supabase Auth. La demo de ACC-7 («así lo ve Diego, Ejecutivo») enseña entonces a Diego Política de envío, Brief y Perfil comercial, que su rol no tiene: las filas son las de Diego y los permisos de rol son los de la Dueña. La demo que documenta ACC-7.md («Cómo verlo») no refleja lo que vería el ejecutivo.",
+  "fix": "Cuando usuarioDeDemo() devuelva una persona, resolver su rol con getSessionPermissions o con la membership de ese usuario en el workspace de demo (la misma consulta que permisosDeDemo), y devolver true solo cuando no haya ni Auth ni DEMO_USER_ID. Añadir una prueba en current.test.ts o rol.test.ts."
+ },
+ {
+  "area": "creador",
+  "severity": "media",
+  "where": "platform/apps/web/app/(app)/ventas/empresas/[id]/creador-negocio.tsx:107 y :128; ventas/_lib/messages.ts (dealCreator.changeLabel/assignLabel)",
+  "issue": "El nombre accesible del botón no contiene su texto visible, lo que incumple WCAG 2.5.3 (Label in Name). El texto dice «Cambiar creador» y el aria-label dice «Cambiar de qué creador es «Snacks de viaje»». Con «Asignar creador» pasa lo mismo: el aria-label es «Asignar un creador a «…»». Quien usa control por voz dice «clic Cambiar creador» y no encuentra el botón. El aria-label del form tiene el mismo problema.",
+  "fix": "Que el aria-label empiece por el texto visible: changeLabel = (deal) => `Cambiar creador de «${deal}»` y assignLabel = (deal) => `Asignar creador a «${deal}»`. Añadir en creador-negocio.test.tsx una prueba que compruebe que accessibleName contiene el textContent del botón."
+ },
+ {
+  "area": "creador",
+  "severity": "baja",
+  "where": "Ficha de Granola Sol como Diego (/ventas/empresas/000000a7-…-0000000000e4); ventas/empresas/[id]/(ficha)/page.tsx",
+  "issue": "La ficha se contradice. Encima dice «Esta marca tiene negocios abiertos de creadores que no llevas…», debajo el estado vacío dice «Sin negocios abiertos» y la tarjeta Datos dice «Negocios abiertos 0». Para quien paga, eso parece un error de datos.",
+  "fix": "Cuando hasOpenDealOutOfScope sea verdadero: que el estado vacío diga «Ninguno de tus creadores tiene un negocio abierto con esta marca» y que Datos diga «Negocios abiertos (tuyos) 0», o que muestre «—» con la nota. Ambos textos van en messages.ts, con una prueba de componente."
+ },
+ {
+  "area": "creador",
+  "severity": "baja",
+  "where": "platform/apps/web/app/(app)/ventas/_lib/messages.ts:1007 (errores.DealCreatorRequired), mostrado por crearNegocio en el campo creatorId",
+  "issue": "Dentro del propio formulario «Nuevo negocio» de la ficha, el error dice «…Desde la ficha de la marca, en «Nuevo negocio», puedes elegirlo.» y manda a la persona al sitio donde ya está. Además, «di de cuál es el negocio» suena forzado.",
+  "fix": "Separar los dos contextos. En crearNegocio, cuando el código sea DealCreatorRequired, devolver en errors.creatorId un texto del formulario: «Elige de qué creador es el negocio.». Dejar el texto largo para el radar (aceptarSenal) y la bandeja. Actualizar la prueba de ventas/actions.test.ts:366."
+ },
+ {
+  "area": "creador",
+  "severity": "baja",
+  "where": "platform/db/seed/0013_demo_agencia.sql; docs/propuestas/ACC-7.md «Cómo verlo»",
+  "issue": "El aviso nuevo del radar en la ronda 5 (hallazgo 1: openDealHidden y la tarjeta que dice «aceptarla no abre otro») no se puede ver en la demo. La agencia no tiene ninguna señal pendiente y el radar de Diego sale vacío («No hay señales por revisar»). Es justo la clase de hallazgo 7 de la ronda 4.",
+  "fix": "Sembrar en 0013 una señal pendiente de Hostal Brisa (con un negocio abierto de Mariana): Diego ve el aviso y Andrea la suma al negocio de Mariana. Comprobarlo en verify/0013.sql y añadir la fila a la tabla «Cómo verlo»."
+ },
+ {
+  "area": "creador",
+  "severity": "baja",
+  "where": "platform/db/migrations/0040_scope_allows.sql (scope_allows sin SET search_path) y packages/db/src/esquema.ts (SQL_CUERPOS solo mira prosrc)",
+  "issue": "La política RESTRICTIVE depende de scope_allows(), que no fija search_path y lee membership_scope sin calificar. La guardia solo compara el md5 de prosrc: un ALTER FUNCTION … SET search_path, RESET o SECURITY DEFINER sobre las funciones de la red pasa la guardia sin aviso. En pglite mc_app no puede crear tablas TEMP, así que una tabla pg_temp.membership_scope que sombree la real no se pudo reproducir; en Supabase no lo verifiqué.",
+  "fix": "Crear una migración nueva (0083): ALTER FUNCTION scope_allows(text,uuid) y scope_allows(text,uuid[]) SET search_path = public, extensions, pg_temp, o calificar public.membership_scope. En SQL_CUERPOS, comparar también proconfig y prosecdef con lo esperado en CUERPOS_DEL_ALCANCE, con una sonda que haga ALTER FUNCTION … RESET search_path."
+ },
+ {
+  "area": "creador",
+  "severity": "baja",
+  "where": "platform/.env.example (junto a DEMO_WORKSPACE_ID, línea ~60)",
+  "issue": "Desde ACC-7, DEMO_USER_ID ya no cambia solo el menú: fija app.user_id en todas las transacciones de las pantallas. Solo está documentada en apps/web/README.md, y .env.example (donde el equipo busca las variables) no la menciona ni advierte que no se fije en Vercel.",
+  "fix": "Añadir DEMO_USER_ID= a .env.example con el mismo aviso que DEMO_WORKSPACE_ID: solo sin llaves, no fijarla en Vercel, un id de app_user, y el ejemplo de Diego del seed 0013."
+ },
+ {
+  "area": "creador",
+  "severity": "baja",
+  "where": "platform/apps/web/app/(app)/ventas/_lib/messages.ts (empresas.detail…noCreators y errores.NoCreatorInScope)",
+  "issue": "El mismo texto largo («Tu acceso está limitado a creadores que ya no están en el espacio…») está escrito dos veces en el mismo archivo de mensajes. Una edición futura puede dejar las dos copias distintas.",
+  "fix": "Definir una sola constante y referenciarla desde las dos claves (noCreators: NO_CREATORS, NoCreatorInScope: NO_CREATORS), como ya se hace con otros textos compartidos."
+ }
+]
