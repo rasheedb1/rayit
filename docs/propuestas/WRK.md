@@ -48,6 +48,7 @@ PASS="$(openssl rand -base64 32 | tr -d '/+=')"      # no la escribas en ningún
 ./scripts/supabase-admin.sh sql "CREATE ROLE mc_worker_login LOGIN PASSWORD '$PASS' NOINHERIT"
 ./scripts/supabase-admin.sh sql "GRANT mc_worker TO mc_worker_login"
 ./scripts/supabase-admin.sh sql "GRANT USAGE ON SCHEMA public TO mc_worker_login"
+./scripts/supabase-admin.sh sql "ALTER ROLE mc_worker_login SET search_path = public, extensions"   # citext, pgcrypto y pg_trgm viven en extensions (VEN-17, 7-oct)
 ```
 
 Y la cadena, **modo sesión (:5432)** y con el ref pegado al usuario:

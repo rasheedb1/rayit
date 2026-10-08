@@ -232,7 +232,7 @@ CREATE OR REPLACE FUNCTION deal_stage_history_step()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY INVOKER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   -- Siempre lo calcula la base: quien inserta no elige su lugar en la historia.
@@ -262,7 +262,7 @@ CREATE OR REPLACE FUNCTION deal_stage_history_step_fijo()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY INVOKER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
   RAISE EXCEPTION 'deal_stage_history.step no cambia después de insertarse (de % a %)', OLD.step, NEW.step
