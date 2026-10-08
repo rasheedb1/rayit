@@ -29,6 +29,7 @@ import {
   listExternalPostIds,
   listImportableAccounts,
   listKnownPosts,
+  listPostBoard,
   MIN_SAMPLE,
   VIEWS_WEEKS,
   type CsvImportErrorCode,
@@ -958,10 +959,24 @@ describe('Resumen · importación por CSV', () => {
       );
     const ultima = async () =>
       (await enLaura((tx) => listKnownPosts(tx, cuenta.connectionId, ['em_1'])))[0]!.lastReading?.views;
+    // Y el tablero (post_metrics_latest, 0082 §4) elige la misma: la
+    // importación compara contra la cifra que la pantalla enseña.
+    const delTablero = async () => {
+      const tablero = await enLaura((tx) => listPostBoard(tx, { limit: 500 }));
+      const fila = tablero.find((f) => f.postId === postId);
+      assert.ok(fila, 'el video del empate está en el tablero');
+      return fila.views === null ? null : Number(fila.views);
+    };
+    const postId = await enLaura((tx) =>
+      tx.query<{ id: string }>("SELECT id FROM post WHERE connection_id = $1 AND external_post_id = 'em_1'", [cuenta.connectionId])
+        .then((r) => r.rows[0]!.id),
+    );
     await otra('manual', 999);
     assert.equal(await ultima(), 100, 'csv_import gana a manual');
+    assert.equal(await delTablero(), 100, 'el tablero: csv_import gana a manual');
     await otra('api', 555);
     assert.equal(await ultima(), 555, 'api gana a csv_import');
+    assert.equal(await delTablero(), 555, 'el tablero: api gana a csv_import');
   });
 
   test('un archivo exportado ANTES que la última lectura no cambia la última ni mueve el reloj', async () => {

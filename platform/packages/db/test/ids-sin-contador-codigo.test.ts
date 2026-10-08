@@ -27,6 +27,16 @@
  *   se copia tal cual.
  * Las migraciones aplicadas (hasta 0082) son inmutables y no se miran; las
  * que vengan después, sí.
+ *
+ * Y una tercera prueba mira lo que el grep de arriba no ve: el id de una
+ * fila de las quince guardado DENTRO de un jsonb, donde ninguna clave
+ * ajena lo protege (la ronda 4 encontró que el perfil comercial citaba
+ * account_metric_snapshot por su número y 0082 no lo traducía). Cada
+ * `table: '<convertida>'` (o `'table', '<convertida>'` en SQL) y cada
+ * clave `<convertida>_id` / `<convertida>Id` en packages/core,
+ * packages/db y apps tiene que estar declarada en REFERENCIAS_EN_JSON
+ * con la ruta que 0082 traduce: así cada referencia nueva obliga a
+ * decidir si una migración la convierte.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -55,6 +65,51 @@ const CONVERTIDAS = [
   'post_impression_source', 'post_metric_snapshot', 'post_retention_curve', 'preflight_result',
   'video_onscreen_text',
 ];
+/**
+ * Las referencias a una fila de las quince que viven dentro de un jsonb,
+ * sin clave ajena, y lo que hace 0082 con cada una. `escribe` es el
+ * archivo que la escribe y `marca` lo que tiene que seguir apareciendo en
+ * él: si desaparece, la declaración sobra y la prueba lo dice.
+ */
+const REFERENCIAS_EN_JSON: ReadonlyArray<{ tabla: string; ruta: string; traduce: string; escribe: string; marca: RegExp }> = [
+  {
+    tabla: 'job_run',
+    ruta: "audit_log.after -> '_job' ->> 'runId'",
+    traduce: '0082 §2a (job_run.id_nuevo)',
+    escribe: 'packages/db/src/audit.ts',
+    marca: /\brunId\b/,
+  },
+  {
+    tabla: 'account_metric_snapshot',
+    ruta: "creator_profile.media_kit #> '{perfil_comercial,perfil,claims}' -> [] -> 'source' ->> 'id'",
+    traduce: '0082 §2a (account_metric_snapshot.id_nuevo)',
+    escribe: 'packages/core/src/outreach/perfil.ts',
+    marca: /table: 'account_metric_snapshot'/,
+  },
+];
+
+const camel = (t: string) => t.replace(/_(\w)/g, (_, c: string) => c.toUpperCase());
+/** `table: 'x'`, `table: "x"` y `'table', 'x'` (jsonb_build_object), con x una de las quince. */
+const CITA_DE_TABLA = new RegExp(`\\btable['"]?\\s*[:,]\\s*['"](${CONVERTIDAS.join('|')})['"]`, 'g');
+/** Una clave que nombra una fila de las quince por su id: job_run_id, jobRunId. */
+const CLAVE_DE_FILA = new RegExp(
+  `\\b(?:(${CONVERTIDAS.join('|')})_id|(${CONVERTIDAS.map(camel).join('|')})Id)\\b`,
+  'g',
+);
+/** Dónde se buscan: el código que escribe jsonb, y sus pruebas. */
+const RAICES_JSON = ['packages/core', 'packages/db', 'apps'];
+
+/** Las tablas convertidas que una línea cita como referencia dentro de un JSON. */
+function referenciasEnJson(linea: string): string[] {
+  const codigo = sinComentario(linea);
+  const tablas: string[] = [];
+  for (const m of codigo.matchAll(CITA_DE_TABLA)) tablas.push(m[1]!);
+  for (const m of codigo.matchAll(CLAVE_DE_FILA)) {
+    tablas.push(m[1] ?? CONVERTIDAS.find((t) => camel(t) === m[2])!);
+  }
+  return tablas;
+}
+
 /** Cuántas líneas hacia atrás se busca el FROM/JOIN que da el alias del ORDER BY. */
 const VENTANA = 25;
 /** Las dos formas de ordenar por el id como si dijera cuál fue antes. */
@@ -207,4 +262,62 @@ test('los patrones de ORDER BY id encuentran lo que las rondas 2 y 3 dejaron viv
     '-- FROM job_run ORDER BY id DESC (un comentario no cuenta)',
   ];
   for (const b of bien) assert.ok(!caza(b), b);
+});
+
+test('toda referencia a una fila de las quince dentro de un jsonb está declarada, con la ruta que 0082 traduce', async () => {
+  const declaradas = new Set(REFERENCIAS_EN_JSON.map((r) => r.tabla));
+  const sinDeclarar: string[] = [];
+  const vistas = new Set<string>();
+  for (const raiz of RAICES_JSON) {
+    for await (const ruta of archivos(join(PLATFORM, raiz))) {
+      if (!CODIGO.test(ruta)) continue;
+      const rel = relative(PLATFORM, ruta);
+      if (rel === 'packages/db/test/ids-sin-contador-codigo.test.ts') continue;
+      const lineas = (await readFile(ruta, 'utf8')).split('\n');
+      lineas.forEach((linea, i) => {
+        for (const tabla of referenciasEnJson(linea)) {
+          vistas.add(tabla);
+          if (!declaradas.has(tabla)) sinDeclarar.push(`${rel}:${i + 1} ${tabla}: ${linea.trim()}`);
+        }
+      });
+    }
+  }
+  assert.deepEqual(
+    sinDeclarar,
+    [],
+    'una fila de una tabla convertida citada por su id dentro de un jsonb no tiene clave ajena que la siga: ' +
+      'si su id vuelve a cambiar, la cita queda colgada. Decide si una migración la traduce (patrón de 0082 §2a) ' +
+      'y declárala en REFERENCIAS_EN_JSON con su ruta',
+  );
+  // Cada declaración sigue viva: su escritor la escribe todavía.
+  for (const r of REFERENCIAS_EN_JSON) {
+    const texto = await readFile(join(PLATFORM, r.escribe), 'utf8');
+    assert.match(texto, r.marca, `REFERENCIAS_EN_JSON: ${r.tabla} (${r.ruta}) ya no la escribe ${r.escribe}; sobra`);
+  }
+  // La del perfil se ve en el código: el patrón no está mirando en otra parte.
+  assert.ok(vistas.has('account_metric_snapshot'), [...vistas].join(', '));
+  // Y la migración que las traduce reescribe las dos rutas declaradas.
+  const nombre = (await readdir(join(PLATFORM, 'db/migrations'))).find((f) => f.endsWith('_ids_sin_contador.sql'))!;
+  const migracion = await readFile(join(PLATFORM, 'db/migrations', nombre), 'utf8');
+  assert.match(migracion, /'\{_job,runId\}'/);
+  assert.match(migracion, /'\{perfil_comercial,perfil,claims\}'/);
+});
+
+test('el patrón de referencias en JSON encuentra la cita del perfil (ronda 4) y las formas parecidas, y no confunde otras tablas', () => {
+  const vivos: Array<[string, string]> = [
+    // perfil.ts:748, la que 0082 no traducía hasta la ronda 5.
+    ["source: { table: 'account_metric_snapshot', id: c.followersSnapshotId, field: 'followers', asOf: c.followersDay },", 'account_metric_snapshot'],
+    ['ref: { table: "idea_evidence", id: e.id }', 'idea_evidence'],
+    ["jsonb_build_object('table', 'post_metric_snapshot', 'id', s.id::text)", 'post_metric_snapshot'],
+    ['after: { ...after, job_run_id: runId }', 'job_run'],
+    ['metadata: { preflightResultId: r.id }', 'preflight_result'],
+  ];
+  for (const [v, tabla] of vivos) assert.deepEqual(referenciasEnJson(v), [tabla], v);
+  const bien = [
+    "source: { table: 'audience_breakdown', id: a.id, field: 'share', asOf: a.day },",
+    "const ref = { table: 'creator_baseline', id: b.id };",
+    'SELECT id FROM account_metric_snapshot WHERE connection_id = $1',
+    "// source: { table: 'job_run', id } (un comentario no cuenta)",
+  ];
+  for (const b of bien) assert.deepEqual(referenciasEnJson(b), [], b);
 });
