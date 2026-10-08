@@ -105,7 +105,7 @@ const DIALECTO = new PgDialect();
  * El DEFAULT de Drizzle como SQL, si es una expresión (defaultNow(),
  * defaultRandom(), .default(sql`…`)); null si es un valor. Para comparar
  * con la base las funciones sin argumentos: now() y clock_timestamp() no
- * son lo mismo (CIM-11, 0082 §3: el orden de los registros es el del reloj).
+ * son lo mismo (CIM-11, 0083 §3: el orden de los registros es el del reloj).
  */
 function drizzleDefaultFn(col: PgColumn): string | null {
   return is(col.default, SQL) ? DIALECTO.sqlToQuery(col.default).sql : null;

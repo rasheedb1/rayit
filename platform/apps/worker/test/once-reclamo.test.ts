@@ -88,7 +88,7 @@ class InterleavingDb {
         if (text.includes('INSERT INTO job_run')) {
           this.log.push(`tx${n}:insert`);
           inserts.push({ job_id: String(params[0]), status: 'running', started_at: new Date(String(params[2])), metadata: JSON.parse(String(params[3])) });
-          // job_run.id es un uuid desde 0082 (CIM-11): runIdOf rechaza otra cosa.
+          // job_run.id es un uuid desde 0083 (CIM-11): runIdOf rechaza otra cosa.
           const id = `00000000-0000-4000-8000-${String(this.#nextId++).padStart(12, '0')}`;
           return { rows: [{ id }] as unknown as R[], rowCount: 1 };
         }

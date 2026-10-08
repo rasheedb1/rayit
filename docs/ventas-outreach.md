@@ -1002,20 +1002,20 @@ VEN-10), un comando por paso, desde `platform/`, con
    `membership_is_team` (0058, pulido r1), que con la serie de main deja
    fuera al rol `viewer`.
 
-**CIM-11 (7-oct-2026): `0082_ids_sin_contador` va pegada al despliegue.**
+**CIM-11 (7-oct-2026): `0083_ids_sin_contador` va pegada al despliegue.**
 Pasa las quince claves `bigserial` (audit_log, api_call_log, job_run,
 post_metric_snapshot y las demás de su cabecera) a `uuid`, conservando
 las filas, y el runner lee desde entonces `job_run.id` como texto.
 
-**La web vieja tampoco arranca en frío contra 0082.** Su guardia pide
-USAGE en las secuencias que 0082 borra (falla en
+**La web vieja tampoco arranca en frío contra 0083.** Su guardia pide
+USAGE en las secuencias que 0083 borra (falla en
 `deal_stage_history_id_seq: le falta USAGE`, PRIVILEGIOS_DEL_ENLACE_PUBLICO)
 y en producción `from-env.ts` lanza ese error: entre `make db.migrate` y
 que el código nuevo esté vivo, cada arranque en frío de la web en Vercel
 cae, y quien entre en ese rato ve un error, no solo el cron. La
 instancia que siga caliente tampoco sirve: lee `job_run.id` como número
 (`Number(uuid)` es NaN) y no cierra sus corridas. Y el código nuevo
-contra el esquema viejo tampoco arranca (su guardia ve 0082 pendiente).
+contra el esquema viejo tampoco arranca (su guardia ve 0083 pendiente).
 Por eso el código nuevo se construye ANTES de migrar y se promueve
 justo después: la ventana dura lo que la migración y una promoción
 (segundos), no lo que un build. Desde `platform/`, con la rama ya en
@@ -1024,7 +1024,7 @@ justo después: la ventana dura lo que la migración y una promoción
 ```bash
 ./scripts/vercel.sh deploy --prod --skip-domain   # 1 · imprime <url>; el dominio sigue en el despliegue viejo
 make cron.uninstall                               # 2 · ningún turno en medio
-make db.migrate                                   # 3 · 0082 (una transacción)
+make db.migrate                                   # 3 · 0083 (una transacción)
 make db.guardia                                   #     en verde
 make vercel.run ARGS="promote <url> --yes"        # 4 · el dominio pasa al despliegue de 1, sin build
 make cron.install                                 # 5 · pide CRON_SECRET
@@ -1042,7 +1042,7 @@ vault, `--cwd platform`), con una bandera más. La alternativa
 equivalente es `vercel build --prod` y
 `vercel deploy --prebuilt --prod --skip-domain`.
 
-Si el paso 3 falla, 0082 se deshace entera (el runner aplica cada
+Si el paso 3 falla, 0083 se deshace entera (el runner aplica cada
 archivo en su transacción): no se promueve nada, se va al paso 5 y la
 web vieja sigue sirviendo. Si lo que corta es el `lock_timeout` de 15 s,
 es que algo tenía la tabla: se vuelve a correr (es re-ejecutable). Va

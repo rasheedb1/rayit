@@ -89,7 +89,7 @@ const MAX_LIMIT = 500;
  * Las fuentes de una lectura de post_metric_snapshot, de mejor a peor: la
  * API de la red, su exportación (csv_import), un agregador de terceros y
  * lo escrito a mano. Es la misma lista con que post_metrics_at_cut
- * desempata en 0082 §1; si cambia aquí, cambia allí en una migración.
+ * desempata en 0083 §1; si cambia aquí, cambia allí en una migración.
  */
 const PRIORIDAD_DE_FUENTE = (alias: string): string =>
   `array_position(ARRAY['api', 'csv_import', 'aggregator', 'manual'], ${alias}.source)`;
@@ -97,7 +97,7 @@ const PRIORIDAD_DE_FUENTE = (alias: string): string =>
 /**
  * «La última lectura» de un post en post_metric_snapshot con alias
  * `alias`: la capturada más tarde; a igual captured_at, la del post más
- * viejo (age_hours), y después la de mejor fuente. Hasta 0082 (CIM-11)
+ * viejo (age_hours), y después la de mejor fuente. Hasta 0083 (CIM-11)
  * el empate lo resolvía `id DESC`, que era «la que se escribió después»;
  * ahora el id es un uuid al azar y no dice nada: queda solo como último
  * criterio para que el resultado no dependa del plan.

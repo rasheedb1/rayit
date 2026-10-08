@@ -1946,7 +1946,7 @@ interface LineaBitacora {
  * DENTRO de withWorkspace porque audit_log también tiene RLS (0010): con
  * t.raw(), fuera de transacción y sin workspace, la tabla devuelve cero
  * filas sin avisar y la prueba pasaría por la razón equivocada. El id
- * no se devuelve (desde 0082 es un uuid al azar): se ordena por created_at.
+ * no se devuelve (desde 0083 es un uuid al azar): se ordena por created_at.
  */
 async function bitacoraDe(workspaceId: string, expenseId: string): Promise<LineaBitacora[]> {
   return t.db.withWorkspace(workspaceId, async (tx) => {

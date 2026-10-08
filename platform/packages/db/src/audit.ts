@@ -32,7 +32,7 @@
  *   ip              no se escribe: es PII y la evidencia de
  *                   consentimiento ya la guarda data_consent.evidence.
  *
- * Lo que NO hace: devolver el id (uuid al azar desde 0082; no sale de la base),
+ * Lo que NO hace: devolver el id (uuid al azar desde 0083; no sale de la base),
  * leer la bitácora (la pantalla es de la fase 2, AGE-2) ni corregirla
  * (mc_app no tiene UPDATE ni DELETE sobre audit_log, 0025 §5).
  */
@@ -233,7 +233,7 @@ export interface AuditExecutor {
   query(text: string, params?: readonly unknown[]): Promise<unknown>;
 }
 
-/** Un uuid, entero: ni la cadena vacía ni el número de una corrida de antes de 0082. El null se mira aparte. */
+/** Un uuid, entero: ni la cadena vacía ni el número de una corrida de antes de 0083. El null se mira aparte. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** jsonb o SQL NULL: un before ausente es NULL en la columna, no el JSON `null`. */
@@ -279,7 +279,7 @@ export async function audit(tx: WorkspaceTx, entry: AuditEntry): Promise<void> {
 export interface JobAuditEntry extends AuditEntry {
   /** Explícito: el worker corre como mc_worker y RLS no lo fija por él. */
   workspaceId: string;
-  /** Qué job y qué corrida (job_run.id, un uuid desde 0082). Va en after._job; no sale de la base. */
+  /** Qué job y qué corrida (job_run.id, un uuid desde 0083). Va en after._job; no sale de la base. */
   job: { id: string; runId: string };
 }
 

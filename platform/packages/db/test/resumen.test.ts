@@ -936,7 +936,7 @@ describe('Resumen · importación por CSV', () => {
   });
 
   test('dos lecturas del mismo instante: la última es la de mejor fuente, no la de un id al azar (ORDEN_ULTIMA_LECTURA, CIM-11)', async () => {
-    // Hasta 0082 el empate lo resolvía `id DESC` («la que se escribió
+    // Hasta 0083 el empate lo resolvía `id DESC` («la que se escribió
     // después»); con el id uuid, eso cambiaba de resultado entre corridas.
     const cuenta = await enLaura((tx) => ensureCsvConnection(tx, { platform: 'youtube', handle: 'empate.de.lecturas' }));
     const exportado = haceDias(2);
@@ -959,7 +959,7 @@ describe('Resumen · importación por CSV', () => {
       );
     const ultima = async () =>
       (await enLaura((tx) => listKnownPosts(tx, cuenta.connectionId, ['em_1'])))[0]!.lastReading?.views;
-    // Y el tablero (post_metrics_latest, 0082 §4) elige la misma: la
+    // Y el tablero (post_metrics_latest, 0083 §4) elige la misma: la
     // importación compara contra la cifra que la pantalla enseña.
     const delTablero = async () => {
       const tablero = await enLaura((tx) => listPostBoard(tx, { limit: 500 }));

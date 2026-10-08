@@ -187,7 +187,7 @@ export const jobRun = pgTable('job_run', {
   status: text('status', { enum: JOB_RUN_STATUSES }).default('running').notNull(),
   attempt: integer('attempt').default(1).notNull(),
   /**
-   * clock_timestamp() y no now() (0082 §3, CIM-11): el id ya no ordena,
+   * clock_timestamp() y no now() (0083 §3, CIM-11): el id ya no ordena,
    * así que dos corridas abiertas en la misma transacción se distinguen
    * por la hora del reloj. El runner la escribe a mano en los reclamos
    * (claimRun, con el reloj de la pasada).

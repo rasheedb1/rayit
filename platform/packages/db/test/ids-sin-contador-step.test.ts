@@ -1,6 +1,6 @@
 /**
  * CIM-11 · deal_stage_history.step con los roles que de verdad insertan
- * (0082 §1b).
+ * (0083 §1b).
  *
  * ids-sin-contador.test.ts prueba la conversión y el disparador como
  * superusuario. Aquí, quienes escriben la historia en producción, bajo

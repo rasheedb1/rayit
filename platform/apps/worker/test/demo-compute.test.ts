@@ -1,7 +1,7 @@
 /**
  * Humo de runDemoCompute (la espera de la cadena CON-6 en `--demo`).
  *
- * Desde 0082 (CIM-11) job_run.id es un uuid: la espera dejó de mirar
+ * Desde 0083 (CIM-11) job_run.id es un uuid: la espera dejó de mirar
  * max(id) (Postgres no tiene max(uuid)) y mira las fechas de las
  * corridas. Esta prueba la corre contra PGlite con las migraciones
  * reales, para que el próximo cambio de tipo de una columna de job_run

@@ -404,7 +404,7 @@ su candado. Se revierten el cambio de título y de INSERT de los dos
 
 ## 10. Ids sin contador global (CIM-11): lo que toca de Nicolás
 
-`0082_ids_sin_contador` pasa a `uuid` el `id` de quince tablas, entre
+`0083_ids_sin_contador` pasa a `uuid` el `id` de quince tablas, entre
 ellas `job_run` y `api_call_log`, que el worker y Conexiones escriben y
 leen. Todo lo que trataba ese id como número (`Number(id)`, `max(id)`)
 o como orden de escritura (`ORDER BY id`) deja de servir: un uuid al
@@ -428,7 +428,7 @@ Hay tres motivos, y cada fila dice cuál:
   solo como desempate estable).
 - **(C) Un registro por fecha.** Lo que ordenaba `api_call_log`,
   `audit_log` o `job_run` por `id` ordena por `called_at`, `created_at`
-  o `started_at` (que 0082 pasa a `clock_timestamp()`), con un
+  o `started_at` (que 0083 pasa a `clock_timestamp()`), con un
   desempate con significado (`endpoint`, `connection_id`) donde dos
   filas pueden caer en el mismo milisegundo de PGlite.
 
@@ -454,7 +454,7 @@ Hay tres motivos, y cada fila dice cuál:
 
 | Dónde | Cambio | Motivo |
 |---|---|---|
-| El corte por edad del reporte (`at_cut`) | A igual edad e instante, desempata por fuente (`api`, `csv_import`, `aggregator`, `manual`) y al final por el id, como `post_metrics_at_cut` y `post_metrics_latest` (0082): antes, dos lecturas del mismo instante salían en cualquier orden | B |
+| El corte por edad del reporte (`at_cut`) | A igual edad e instante, desempata por fuente (`api`, `csv_import`, `aggregator`, `manual`) y al final por el id, como `post_metrics_at_cut` y `post_metrics_latest` (0083): antes, dos lecturas del mismo instante salían en cualquier orden | B |
 
 **`apps/worker/test/`**
 
@@ -487,7 +487,7 @@ Hay tres motivos, y cada fila dice cuál:
 «últimas ejecuciones» por fecha) y `docs/propuestas/WRK.md` (la misma
 consulta en su manual).
 
-**Si Nicolás no aprueba algo**: (A) no tiene alternativa mientras 0082
+**Si Nicolás no aprueba algo**: (A) no tiene alternativa mientras 0083
 siga, porque `Number(uuid)` es NaN; (B) y (C) sí: cualquier orden por
 fecha con desempate determinista sirve, y basta con que el grep de la
 historia (`packages/db/test/ids-sin-contador-codigo.test.ts`) siga en

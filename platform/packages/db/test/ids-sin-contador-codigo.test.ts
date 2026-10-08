@@ -1,5 +1,5 @@
 /**
- * CIM-11 · Ningún código trata como número un id que desde 0082 es un uuid.
+ * CIM-11 · Ningún código trata como número un id que desde 0083 es un uuid.
  *
  * La revisión de la ronda 1 encontró dos que la conversión dejó vivos sin
  * que ninguna prueba se pusiera roja: `max(id)` y `BigInt(id)` en la
@@ -19,23 +19,23 @@
  *     encontró dos en resumen.ts y una en el README del worker).
  *   - `id` (o `<alias>.id`) como PRIMERA clave de un ORDER BY sobre una
  *     de las quince, en cualquier dirección: `ORDER BY id` daba el orden
- *     de escritura y desde 0082 da uno al azar (la ronda 3 encontró uno
+ *     de escritura y desde 0083 da uno al azar (la ronda 3 encontró uno
  *     en el manual de CON-8). Como último desempate, detrás de claves con
  *     significado (`ORDER BY called_at, s.id`), se acepta: solo hace que
  *     el resultado no dependa del plan.
  *   Los dos de ORDER BY también miran los .md: una consulta de un manual
  *   se copia tal cual.
- * Las migraciones aplicadas (hasta 0082) son inmutables y no se miran; las
+ * Las migraciones aplicadas (hasta 0083) son inmutables y no se miran; las
  * que vengan después, sí.
  *
  * Y una tercera prueba mira lo que el grep de arriba no ve: el id de una
  * fila de las quince guardado DENTRO de un jsonb, donde ninguna clave
  * ajena lo protege (la ronda 4 encontró que el perfil comercial citaba
- * account_metric_snapshot por su número y 0082 no lo traducía). Cada
+ * account_metric_snapshot por su número y 0083 no lo traducía). Cada
  * `table: '<convertida>'` (o `'table', '<convertida>'` en SQL) y cada
  * clave `<convertida>_id` / `<convertida>Id` en packages/core,
  * packages/db y apps tiene que estar declarada en REFERENCIAS_EN_JSON
- * con la ruta que 0082 traduce: así cada referencia nueva obliga a
+ * con la ruta que 0083 traduce: así cada referencia nueva obliga a
  * decidir si una migración la convierte.
  */
 import { test } from 'node:test';
@@ -49,8 +49,8 @@ const RAICES = ['apps', 'packages', 'db', 'scripts', '../docs'];
 const CODIGO = /\.(ts|tsx|mts|mjs|js|sql)$/;
 const EXTENSIONES = /\.(ts|tsx|mts|mjs|js|sql|md)$/;
 const SALTAR = new Set(['node_modules', '.next', '.turbo', 'dist', 'fixtures', '.vercel']);
-/** La última migración que ya no se puede tocar: 0082 es la que convierte. */
-const ULTIMA_INMUTABLE = 82;
+/** La última migración que ya no se puede tocar: 0083 es la que convierte. */
+const ULTIMA_INMUTABLE = 83;
 
 const PATRONES: ReadonlyArray<{ nombre: string; re: RegExp }> = [
   { nombre: 'Number(x.id)', re: /\bNumber\(\s*[\w.?!\]\[]*\.(id|runId)\s*\)/ },
@@ -58,7 +58,7 @@ const PATRONES: ReadonlyArray<{ nombre: string; re: RegExp }> = [
   { nombre: 'max/min(id)', re: /\b(max|min)\(\s*(\w+\.)?id\s*\)/i },
 ];
 
-/** Las quince tablas que 0082 pasó de `id bigserial` a uuid. */
+/** Las quince tablas que 0083 pasó de `id bigserial` a uuid. */
 const CONVERTIDAS = [
   'account_metric_snapshot', 'api_call_log', 'api_quota_usage', 'audit_log', 'brand_account_snapshot',
   'deal_stage_history', 'external_post_snapshot', 'idea_evidence', 'job_run', 'post_engagement_curve',
@@ -67,7 +67,7 @@ const CONVERTIDAS = [
 ];
 /**
  * Las referencias a una fila de las quince que viven dentro de un jsonb,
- * sin clave ajena, y lo que hace 0082 con cada una. `escribe` es el
+ * sin clave ajena, y lo que hace 0083 con cada una. `escribe` es el
  * archivo que la escribe y `marca` lo que tiene que seguir apareciendo en
  * él: si desaparece, la declaración sobra y la prueba lo dice.
  */
@@ -75,14 +75,14 @@ const REFERENCIAS_EN_JSON: ReadonlyArray<{ tabla: string; ruta: string; traduce:
   {
     tabla: 'job_run',
     ruta: "audit_log.after -> '_job' ->> 'runId'",
-    traduce: '0082 §2a (job_run.id_nuevo)',
+    traduce: '0083 §2a (job_run.id_nuevo)',
     escribe: 'packages/db/src/audit.ts',
     marca: /\brunId\b/,
   },
   {
     tabla: 'account_metric_snapshot',
     ruta: "creator_profile.media_kit #> '{perfil_comercial,perfil,claims}' -> [] -> 'source' ->> 'id'",
-    traduce: '0082 §2a (account_metric_snapshot.id_nuevo)',
+    traduce: '0083 §2a (account_metric_snapshot.id_nuevo)',
     escribe: 'packages/core/src/outreach/perfil.ts',
     marca: /table: 'account_metric_snapshot'/,
   },
@@ -264,7 +264,7 @@ test('los patrones de ORDER BY id encuentran lo que las rondas 2 y 3 dejaron viv
   for (const b of bien) assert.ok(!caza(b), b);
 });
 
-test('toda referencia a una fila de las quince dentro de un jsonb está declarada, con la ruta que 0082 traduce', async () => {
+test('toda referencia a una fila de las quince dentro de un jsonb está declarada, con la ruta que 0083 traduce', async () => {
   const declaradas = new Set(REFERENCIAS_EN_JSON.map((r) => r.tabla));
   const sinDeclarar: string[] = [];
   const vistas = new Set<string>();
@@ -286,7 +286,7 @@ test('toda referencia a una fila de las quince dentro de un jsonb está declarad
     sinDeclarar,
     [],
     'una fila de una tabla convertida citada por su id dentro de un jsonb no tiene clave ajena que la siga: ' +
-      'si su id vuelve a cambiar, la cita queda colgada. Decide si una migración la traduce (patrón de 0082 §2a) ' +
+      'si su id vuelve a cambiar, la cita queda colgada. Decide si una migración la traduce (patrón de 0083 §2a) ' +
       'y declárala en REFERENCIAS_EN_JSON con su ruta',
   );
   // Cada declaración sigue viva: su escritor la escribe todavía.
@@ -305,7 +305,7 @@ test('toda referencia a una fila de las quince dentro de un jsonb está declarad
 
 test('el patrón de referencias en JSON encuentra la cita del perfil (ronda 4) y las formas parecidas, y no confunde otras tablas', () => {
   const vivos: Array<[string, string]> = [
-    // perfil.ts:748, la que 0082 no traducía hasta la ronda 5.
+    // perfil.ts:748, la que 0083 no traducía hasta la ronda 5.
     ["source: { table: 'account_metric_snapshot', id: c.followersSnapshotId, field: 'followers', asOf: c.followersDay },", 'account_metric_snapshot'],
     ['ref: { table: "idea_evidence", id: e.id }', 'idea_evidence'],
     ["jsonb_build_object('table', 'post_metric_snapshot', 'id', s.id::text)", 'post_metric_snapshot'],

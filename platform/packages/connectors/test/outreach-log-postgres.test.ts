@@ -29,7 +29,7 @@ test('api_call_log guarda las llamadas de outreach con provider y cuenta de cana
   });
   const { rows } = await db.query<{ provider: string; platform_id: string | null; channel_account_id: string | null }>(
     // Por proveedor y no por llegada: las dos van seguidas, y el reloj de
-    // PGlite es de milisegundos (desde 0082 no hay id que las ordene).
+    // PGlite es de milisegundos (desde 0083 no hay id que las ordene).
     `SELECT provider, platform_id, channel_account_id FROM api_call_log WHERE provider IS NOT NULL ORDER BY provider`,
   );
   assert.deepEqual(rows, [

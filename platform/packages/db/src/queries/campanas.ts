@@ -1595,7 +1595,7 @@ export async function getResultInputs(q: ResultExecutor, campaignId: string): Pr
          CROSS JOIN unnest($3::int[]) AS k(cut)
          WHERE s.workspace_id = $1 AND s.age_hours <= k.cut
          -- A igual edad e instante, la de mejor fuente (la regla de
-         -- post_metrics_at_cut y post_metrics_latest, 0082); el id solo
+         -- post_metrics_at_cut y post_metrics_latest, 0083); el id solo
          -- quita la dependencia del plan (CIM-11).
          ORDER BY s.post_id, k.cut, s.age_hours DESC, s.captured_at DESC,
                   array_position(ARRAY['api', 'csv_import', 'aggregator', 'manual'], s.source), s.id
@@ -2014,7 +2014,7 @@ export type BrandSnapshotOutcome = 'guardada' | 'ya_hay_lectura_de_hoy';
  * no duplica ni corrige (ON CONFLICT DO NOTHING). Así, una marca «no
  * encontrada» a las 07:00 cuyo handle se corrige a mediodía tiene su
  * cifra ese mismo día, sin borrar la lectura de la mañana. El id
- * (uuid al azar desde 0082) no sale de aquí. Desde la web, RLS exige que la
+ * (uuid al azar desde 0083) no sale de aquí. Desde la web, RLS exige que la
  * campaña se vea y que company_id sea el suyo; el worker filtra por
  * workspace antes de llamar.
  *

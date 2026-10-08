@@ -139,7 +139,7 @@ describe('CON-5 → CON-6: tras collect.post_metrics, la línea base y el puntaj
     const base2 = await corrida(h, 'compute.baseline', 2);
     const score2 = await corrida(h, 'compute.post_score', 2);
 
-    // El orden por fecha, no por id (desde 0082 es un uuid al azar): cada
+    // El orden por fecha, no por id (desde 0083 es un uuid al azar): cada
     // eslabón empieza cuando el anterior ya terminó, y el día 2 después de
     // que el día 1 cerró. started_at lo pone la base con clock_timestamp().
     const cadena = [collect1, base1, score1, collect2, base2, score2];

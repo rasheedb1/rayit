@@ -280,7 +280,7 @@ SELECT left(encode(ciphertext, 'hex'), 24), key_version
 
 SELECT endpoint, ok, http_status FROM api_call_log
  WHERE connection_id = '<id>' ORDER BY called_at, endpoint;
--- oauth.token, youtube.channels.list (por fecha: desde 0082 el id es un uuid al azar)
+-- oauth.token, youtube.channels.list (por fecha: desde 0083 el id es un uuid al azar)
 ```
 
 6. Renovación: con el worker arrancado (`TOKEN_REFRESHER=real`,

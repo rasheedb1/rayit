@@ -171,7 +171,7 @@
  *     ninguna, y USAGE solo en las de tablas donde inserta.
  *   · Y ninguna COLUMNA de una tabla que mc_app o mc_public_share leen o
  *     insertan (directo, por PUBLIC, por membresía o por columna) sale de
- *     una secuencia (CIM-11, 0082). Sin SELECT en audit_log_id_seq, el
+ *     una secuencia (CIM-11, 0083). Sin SELECT en audit_log_id_seq, el
  *     id de una fila propia seguía siendo el contador al escribirla.
  *
  * LA GUARDIA NO FALLA ABIERTA
@@ -1072,7 +1072,7 @@ export const PRIVILEGIOS_DEL_ENLACE_PUBLICO: Readonly<Record<string, Privilegios
     tabla: ['INSERT', 'SELECT'],
     motivo: 'el paso de etapa de la aceptación queda en el historial (0030 §3)',
   },
-  // Hasta 0082 también USAGE en deal_stage_history_id_seq, para el id del
+  // Hasta 0083 también USAGE en deal_stage_history_id_seq, para el id del
   // INSERT. Desde CIM-11 el id es gen_random_uuid() y la secuencia no existe.
   pipeline_stage: {
     tabla: ['SELECT'],
@@ -1380,7 +1380,7 @@ export const SECUENCIAS_DECLARADAS: Readonly<Record<string, string>> = {};
  * Las columnas `tabla.columna` que la base rellena con una secuencia
  * (DEFAULT nextval(…) o identity) en una tabla que mc_app o
  * mc_public_share leen o insertan (también por membresía o por columna),
- * y por qué. Vacía, y debería seguir así (CIM-11, 0082): una secuencia es
+ * y por qué. Vacía, y debería seguir así (CIM-11, 0083): una secuencia es
  * de la tabla ENTERA, así que el valor de una fila propia —el id que
  * devuelve un INSERT, o el que se lee con SELECT— dice cuántas filas
  * escribió toda la plataforma hasta ese momento. Restar dos es medir el
@@ -2069,7 +2069,7 @@ const SQL_INQUILINOS = `
  * insertan en la tabla, contando lo que les llega por PUBLIC, por
  * membresía en otro rol y por columna (has_any_column_privilege mira la
  * tabla y cada columna). Es el mismo criterio que la comprobación final
- * de 0082 §5: la guardia no deja pasar lo que la migración habría
+ * de 0083 §5: la guardia no deja pasar lo que la migración habría
  * frenado. Un rol que no existe no cuenta (se busca en pg_roles).
  */
 const SQL_CLAVES_DE_SECUENCIA = `
@@ -2950,7 +2950,7 @@ export async function estadoDelEsquema(db: CatalogDb): Promise<EstadoDelEsquema>
     if (clave in UNICOS_GLOBALES_DECLARADOS) continue;
     const columnas = u.columnas ?? [];
     const propias = inquilinoPorTabla.get(u.tabla) ?? [];
-    // La clave primaria sustituta de la fila (uuid al azar; desde 0082
+    // La clave primaria sustituta de la fila (uuid al azar; desde 0083
     // ninguna de secuencia donde llega mc_app, clavesDeSecuencia): la
     // genera la base, no lleva dato, y chocar con ella solo dice que
     // ese id existe, que es lo que ya sabe quien lo escribe.
@@ -3482,7 +3482,7 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
         'escriben (directo, por PUBLIC, por membresía o por columna); una secuencia ' +
         'es de la tabla entera, así que el valor de una fila propia dice cuántas escribió toda la plataforma: ' +
         estado.clavesDeSecuencia.join(', ') +
-        '. Pásalas a uuid DEFAULT gen_random_uuid() en una migración (ver 0082), o decláralas en ' +
+        '. Pásalas a uuid DEFAULT gen_random_uuid() en una migración (ver 0083), o decláralas en ' +
         'CLAVES_DE_SECUENCIA_DECLARADAS con su motivo',
     );
   }
@@ -3541,7 +3541,7 @@ export function explicarEsquema(estado: EstadoDelEsquema): string | null {
   // «migra» tampoco arregla nada: no queda ninguna por aplicar. Lo que
   // hace falta es escribir la siguiente.
   if (soloProblemasDeDiseno(estado)) {
-    const patron = estado.clavesDeSecuencia.length ? ' (patrón de 0082 §2)' : '';
+    const patron = estado.clavesDeSecuencia.length ? ' (patrón de 0083 §2)' : '';
     return `[db] El esquema de la base tiene un problema que ninguna migración pendiente arregla: ${partes.join('; ')}. ` +
       `Escribe la siguiente 00NN_*.sql${patron} y verifícala con make db.check`;
   }

@@ -1,10 +1,10 @@
 /**
- * CIM-11 · Ninguna fila que mc_app lea lleva un contador global (0082).
+ * CIM-11 · Ninguna fila que mc_app lea lleva un contador global (0083).
  *
  * La actualización se prueba CON DATOS, como va a pasar en Supabase: una
- * base migrada hasta la migración anterior a 0082 (la forma vieja, con
+ * base migrada hasta la migración anterior a 0083 (la forma vieja, con
  * `id bigserial`), los seeds del repositorio encima y una fila a mano en
- * cada tabla que los seeds dejan vacía, y entonces 0082. Lo que se mide:
+ * cada tabla que los seeds dejan vacía, y entonces 0083. Lo que se mide:
  *
  *   - ninguna fila se pierde ni cambia: por tabla, el mismo número de
  *     filas y la misma huella de todo lo que no es el id (las claves
@@ -28,7 +28,7 @@ import { applySeeds, createEmbeddedDb, SEED_DIR, type EmbeddedDb } from '../src/
 import { estadoDelEsquema, explicarEsquema } from '../src/esquema.ts';
 import { SETUP_TIMEOUT, WORKSPACE_LAURA } from './pglite.ts';
 
-/** Las quince tablas que tenían `id bigserial` (ver la cabecera de 0082). */
+/** Las quince tablas que tenían `id bigserial` (ver la cabecera de 0083). */
 const TABLAS = [
   'account_metric_snapshot', 'api_call_log', 'api_quota_usage', 'audit_log', 'brand_account_snapshot',
   'deal_stage_history', 'external_post_snapshot', 'idea_evidence', 'job_run', 'post_engagement_curve',
@@ -74,7 +74,7 @@ const SEMBRAR_LAS_VACIAS = `
     ('${WORKSPACE_LAURA}', 'prueba.cim11.uno', 'test'),
     ('${WORKSPACE_LAURA}', 'prueba.cim11.dos', 'test');
   -- Lo que deja auditAsJob: el número de la corrida dentro del JSON. Una
-  -- como número (lo que escribía el código de antes de 0082), otra como
+  -- como número (lo que escribía el código de antes de 0083), otra como
   -- texto, y una que nombra una corrida que no existe (se queda igual).
   INSERT INTO audit_log (workspace_id, actor_kind, action, entity_type, after)
   SELECT '${WORKSPACE_LAURA}', 'job', 'prueba.cim11.job.' || j.status, 'test',
@@ -130,7 +130,7 @@ interface Huella extends Record<string, unknown> {
 
 /**
  * Por tabla: cuántas filas y un md5 de todas ellas SIN el id (ni el step
- * que 0082 le añade a deal_stage_history, ni el runId que audit_log
+ * que 0083 le añade a deal_stage_history, ni el runId que audit_log
  * guarda de job_run en after._job: los dos se miden aparte), en un orden
  * que no depende del id. Si la conversión perdiera, duplicara o tocara
  * una fila (una clave ajena incluida), la huella cambia.
@@ -163,7 +163,7 @@ interface CorridaDeLaBitacora extends Record<string, unknown> {
 /**
  * Cada entrada de bitácora escrita por un job, con la corrida a la que
  * apunta su after._job.runId descrita por lo que no es el id (job, estado,
- * inicio). Antes y después de 0082 tiene que dar lo mismo: el runId cambia
+ * inicio). Antes y después de 0083 tiene que dar lo mismo: el runId cambia
  * de número a uuid, la corrida a la que apunta no.
  */
 async function corridasDeLaBitacora(db: EmbeddedDb): Promise<CorridaDeLaBitacora[]> {
@@ -185,7 +185,7 @@ interface LecturaDelPerfil extends Record<string, unknown> {
 /**
  * Cada claim del perfil comercial guardado que cita account_metric_snapshot,
  * con la lectura a la que apunta su source.id descrita por lo que no es el
- * id (cuenta, día, seguidores). Antes y después de 0082 tiene que dar lo
+ * id (cuenta, día, seguidores). Antes y después de 0083 tiene que dar lo
  * mismo: el id cambia de número a uuid, la fila a la que apunta no.
  */
 async function lecturasDelPerfil(db: EmbeddedDb): Promise<LecturaDelPerfil[]> {
@@ -231,7 +231,7 @@ async function huellaDeLosCortes(db: EmbeddedDb): Promise<{ filas: number; huell
   return rows[0]!;
 }
 
-describe('0082 convierte las claves con las filas dentro', () => {
+describe('0083 convierte las claves con las filas dentro', () => {
   let db: EmbeddedDb;
   let antes: Huella[];
   let cortesAntes: { filas: number; huella: string };
@@ -422,15 +422,15 @@ describe('0082 convierte las claves con las filas dentro', () => {
     assert.equal(explicarEsquema(despues), null);
   });
 
-  test('la guardia dice qué hacer: con 0082 pendiente, migrar; con todo aplicado y una clave de secuencia, escribir la migración que la convierte', async () => {
-    // Antes de 0082 las quince salen porque falta una migración: migrar lo arregla.
+  test('la guardia dice qué hacer: con 0083 pendiente, migrar; con todo aplicado y una clave de secuencia, escribir la migración que la convierte', async () => {
+    // Antes de 0083 las quince salen porque falta una migración: migrar lo arregla.
     assert.match(explicarEsquema(estadoAntes) ?? '', /faltan 1 migración\(es\)[\s\S]*Corre: make db\.migrate$/);
     // Con todo aplicado, una tabla nueva con bigserial no la arregla
     // ninguna migración del repositorio: hay que escribir la siguiente.
     const alDia = await estadoDelEsquema(db);
     const msg = explicarEsquema({ ...alDia, clavesDeSecuencia: ['zz_nueva.id (public.zz_nueva_id_seq)'] }) ?? '';
     assert.match(msg, /zz_nueva\.id/);
-    assert.match(msg, /Escribe la siguiente 00NN_\*\.sql \(patrón de 0082 §2\) y verifícala con make db\.check$/);
+    assert.match(msg, /Escribe la siguiente 00NN_\*\.sql \(patrón de 0083 §2\) y verifícala con make db\.check$/);
     assert.doesNotMatch(msg, /make db\.migrate/);
     assert.doesNotMatch(msg, /no tiene el esquema de este repositorio/);
     // Si además falta una migración, lo primero sigue siendo migrar.
@@ -498,7 +498,7 @@ describe('0082 convierte las claves con las filas dentro', () => {
     }
   });
 
-  test('la guardia y la comprobación final de 0082 §5 frenan un DEFAULT que llama a nextval dentro de una expresión', async () => {
+  test('la guardia y la comprobación final de 0083 §5 frenan un DEFAULT que llama a nextval dentro de una expresión', async () => {
     // Un folio como 'Q-' || nextval(…) es el mismo contador con otro
     // disfraz: el DEFAULT no EMPIEZA por nextval, pero lo lleva. La
     // guardia y §5 tienen que decir lo mismo; §5 se lee del archivo de la
@@ -541,7 +541,7 @@ describe('0082 convierte las claves con las filas dentro', () => {
     }
   });
 
-  test('outreach_writer_status y outreach_classifier_status: a igual started_at, manda la corrida que terminó después (0082 §4b)', async () => {
+  test('outreach_writer_status y outreach_classifier_status: a igual started_at, manda la corrida que terminó después (0083 §4b)', async () => {
     const casos = [
       { job: 'outbound.generate', fn: 'outreach_writer_status', clave: 'writer', antes: 'fake', despues: 'anthropic' },
       { job: 'outbound.intent', fn: 'outreach_classifier_status', clave: 'classifier', antes: 'fake', despues: 'model' },
@@ -564,7 +564,7 @@ describe('0082 convierte las claves con las filas dentro', () => {
   });
 
   test('la guardia también ve la secuencia que le llega a mc_app por un rol intermedio, por columna, o a mc_public_share', async () => {
-    // El mismo criterio que la comprobación final de 0082 §5
+    // El mismo criterio que la comprobación final de 0083 §5
     // (has_any_column_privilege): un GRANT directo a mc_app no es el
     // único camino por el que el id de una fila llega a quien no debe.
     await db.execAsSuperuser(

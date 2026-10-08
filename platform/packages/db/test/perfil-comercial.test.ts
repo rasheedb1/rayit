@@ -70,7 +70,7 @@ test('con el seed, el perfil trae los cinco mejores videos con sus cifras y su o
   assert.ok(perfil.audience.lines.some((a) => a.dimension === 'gender'));
   assert.ok(perfil.audience.nonFollowers.length > 0);
   assert.ok(perfil.formats.pieces.length > 0 && perfil.formats.tone.length > 0);
-  // Cada claim tiene fila de origen, con su uuid (desde 0082 ninguna lleva id de secuencia).
+  // Cada claim tiene fila de origen, con su uuid (desde 0083 ninguna lleva id de secuencia).
   for (const c of perfil.claims) assert.match(c.source.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, c.id);
   // Toda cifra leída de una tabla dice cuándo se leyó (los agregados de captions y del porqué son de este cálculo).
   const deEsteCalculo = new Set(['video.duration', 'why.group', 'why.rest', 'scored_videos', 'format.piece', 'format.content', 'tone', 'captions_read']);

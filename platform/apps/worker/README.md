@@ -946,7 +946,7 @@ corrida que escribió algo. El día lo pone la zona del workspace
 ## Cómo leer job_run
 
 ```sql
--- Últimas ejecuciones, con duración y resultado. Por fecha: desde 0082
+-- Últimas ejecuciones, con duración y resultado. Por fecha: desde 0083
 -- (CIM-11) el id es un uuid al azar y no dice cuál fue antes. Es el
 -- mismo orden que ORDEN_ULTIMA_CORRIDA (@mc/db/queries/worker).
 SELECT id, job_id, status, attempt, started_at, duration_ms, items_processed, items_failed, error

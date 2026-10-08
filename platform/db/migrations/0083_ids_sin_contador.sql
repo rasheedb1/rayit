@@ -1,10 +1,12 @@
 -- =====================================================================
--- 0082 · Ninguna fila que mc_app lea lleva un contador global (CIM-11)
+-- 0083 · Ninguna fila que mc_app lea lleva un contador global (CIM-11)
 -- ---------------------------------------------------------------------
--- Número: 0082. Nació como 0078; al mezclar rasheed/integracion ese
+-- Número: 0083. Nació como 0078; al mezclar rasheed/integracion ese
 -- número y los tres siguientes ya eran de ACC-4 (0078–0080) y RES-3
--- (0081), así que pasa detrás de la última. Ninguna de esas cuatro crea
--- una clave de secuencia (lo comprueba §5 y la guardia). La prueba de la
+-- (0081), así que pasó a 0082; al integrar la fase 9, 0082 quedó para
+-- 0082_alcance_por_creador (ACC-7, mezclada antes) y esta pasa a 0083.
+-- Ninguna de esas cinco crea una clave de secuencia (lo comprueba §5 y
+-- la guardia). La prueba de la
 -- conversión la busca por el nombre, no por el número. No está aplicada
 -- en ningún sitio.
 --
@@ -124,15 +126,15 @@
 -- del worker) tiene la tabla: se reintenta con el worker en pausa.
 --
 -- Despliegue. Ningún código sirve contra los dos esquemas:
---   · el viejo contra 0082 no arranca en frío. Su guardia (la de
+--   · el viejo contra 0083 no arranca en frío. Su guardia (la de
 --     packages/db/src/esquema.ts antes de esta rama) pide USAGE en
 --     deal_stage_history_id_seq y en las otras catorce secuencias que
---     0082 borra, y en producción from-env.ts lanza ese error: cada
+--     0083 borra, y en producción from-env.ts lanza ese error: cada
 --     arranque en frío de la web en Vercel responde con un error, no
 --     solo el cron. Y la instancia que siga caliente lee job_run.id
 --     como número: Number(uuid) es NaN y la corrida no se cierra;
 --   · el nuevo contra el esquema de antes tampoco arranca: su guardia ve
---     0082 pendiente.
+--     0083 pendiente.
 -- Así que el código nuevo se construye ANTES de migrar, sin dominio, y
 -- se promueve justo después; la ventana es lo que tarda la migración
 -- más una promoción (segundos), no un build. Desde platform/:
@@ -224,7 +226,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS deal_stage_history_deal_id_step_key ON deal_st
 
 COMMENT ON COLUMN deal_stage_history.step IS
   'El orden del paso dentro de su negocio (1, 2, 3…): lo pone deal_stage_history_step() al insertar. '
-  'Desempata dos pasos con la misma changed_at (CIM-11, 0082).';
+  'Desempata dos pasos con la misma changed_at (CIM-11, 0083).';
 
 CREATE OR REPLACE FUNCTION deal_stage_history_step()
 RETURNS trigger
@@ -265,7 +267,7 @@ AS $$
 BEGIN
   RAISE EXCEPTION 'deal_stage_history.step no cambia después de insertarse (de % a %)', OLD.step, NEW.step
     USING ERRCODE = 'check_violation',
-          HINT = 'La historia de un negocio es append-only: un paso nuevo es un INSERT (CIM-11, 0082 §1b).';
+          HINT = 'La historia de un negocio es append-only: un paso nuevo es un INSERT (CIM-11, 0083 §1b).';
 END $$;
 REVOKE ALL ON FUNCTION deal_stage_history_step_fijo() FROM PUBLIC;
 

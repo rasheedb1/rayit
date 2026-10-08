@@ -256,7 +256,7 @@ export async function runDemoCompute(opts: {
   // empezar después, y una línea base que no escribe nada no encadena
   // post_score (no hay qué recalcular).
   //
-  // Todo por fecha, no por id: desde 0082 (CIM-11) job_run.id es un uuid
+  // Todo por fecha, no por id: desde 0083 (CIM-11) job_run.id es un uuid
   // al azar, sin orden, y Postgres no tiene max(uuid). La huella que dice
   // «algo cambió» es cuántas filas hay y cuántas siguen corriendo.
   const QUIETO_MS = opts.quietoMs ?? 3_000;

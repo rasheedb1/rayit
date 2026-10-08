@@ -77,14 +77,14 @@ export const MAX_TICK_CUTS = 20;
 
 /**
  * El orden de «la última corrida» de un job, para un ORDER BY sobre
- * job_run con alias `alias`. Hasta 0082 (CIM-11) desempataba el id
+ * job_run con alias `alias`. Hasta 0083 (CIM-11) desempataba el id
  * creciente; ahora es un uuid al azar y no dice nada. Dos corridas del
  * mismo job empiezan a la vez cuando el reloj de la pasada es fijo (un
  * reloj inyectado en las pruebas, o dos turnos en el mismo
  * milisegundo): gana la que sigue abierta y, entre cerradas, la que
  * terminó después. Lo usan esta salud, el runner (once.ts y comun.ts) y,
  * con el mismo texto, outreach_writer_status y outreach_classifier_status
- * (0082 §4b). Supone un solo reloj: started_at lo escribe el runner con
+ * (0083 §4b). Supone un solo reloj: started_at lo escribe el runner con
  * el de la pasada o la base con clock_timestamp(), y en producción los
  * dos son la hora real.
  */

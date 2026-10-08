@@ -17,7 +17,7 @@ import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglit
 const USER_LAURA = '00000002-0000-4000-8000-000000000002';
 const WORKSPACE_AJENO = '00000009-0000-4000-8000-00000000ac02';
 const INVOICE_ID = '00000003-0000-4000-8000-0000fac26001';
-/** Una corrida de job_run: desde 0082 su id es un uuid, no un contador. */
+/** Una corrida de job_run: desde 0083 su id es un uuid, no un contador. */
 const RUN_ID = '0000000b-0000-4000-8000-00000000c11a';
 
 interface Fila {

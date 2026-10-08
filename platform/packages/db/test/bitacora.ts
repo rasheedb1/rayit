@@ -1,5 +1,5 @@
 /**
- * Leer la bitácora en las pruebas (ACC-2). Nunca pide el id: desde 0082
+ * Leer la bitácora en las pruebas (ACC-2). Nunca pide el id: desde 0083
  * es un uuid al azar, y no sale de la base.
  */
 import type { TestDb } from './pglite.ts';

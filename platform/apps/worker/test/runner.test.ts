@@ -288,7 +288,7 @@ test('idempotencia de cron: reiniciar no duplica schedules y un cron cambiado se
 });
 
 test('la última corrida de un job con dos del mismo started_at: la abierta primero y, entre cerradas, la que terminó después (CIM-11)', async () => {
-  // Hasta 0082 desempataba el id creciente; ahora es un uuid al azar. Dos
+  // Hasta 0083 desempataba el id creciente; ahora es un uuid al azar. Dos
   // corridas del mismo job comparten started_at cuando el reloj de la
   // pasada es fijo (claimRun lo escribe con él). recordSkipped (y
   // recordUnhandled, con el mismo ORDEN_ULTIMA_CORRIDA) tienen que leer

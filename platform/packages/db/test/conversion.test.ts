@@ -118,7 +118,7 @@ describe('VEN-8 · conversión por etapa', () => {
     assert.ok(historia.length >= 40, 'el seed trae la historia de los negocios de Laura');
     const etapa = new Map(etapas.map((e) => [e.id, e]));
     const ms = (v: Date | string) => new Date(v).getTime();
-    /** El orden de la historia: la hora y, a igual hora, el paso dentro del negocio (step, 0082). */
+    /** El orden de la historia: la hora y, a igual hora, el paso dentro del negocio (step, 0083). */
     type Paso = { changed_at: Date | string; step: number };
     const antes = (a: Paso, b: Paso) =>
       ms(a.changed_at) < ms(b.changed_at) || (ms(a.changed_at) === ms(b.changed_at) && a.step < b.step);
