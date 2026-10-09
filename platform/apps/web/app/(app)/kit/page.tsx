@@ -11,6 +11,7 @@ import { CellMain, DataTable } from "@/components/ui/data-table";
 import { TableDemo } from "./table-demo";
 import { SegmentedDemo } from "./segmented-demo";
 import { ConfirmDemo } from "./confirm-demo";
+import { ConfirmActionDemo } from "./confirm-action-demo";
 import { LineChart } from "@/components/ui/line-chart";
 import { BarChart } from "@/components/ui/bar-chart";
 import { ChartCard } from "@/components/ui/chart-card";
@@ -31,6 +32,7 @@ const SECTIONS = [
   ["checkbox", "Checkbox"],
   ["segmented", "Segmented"],
   ["confirm-inline", "ConfirmInline"],
+  ["confirm-action", "ConfirmAction"],
   ["dialog", "Dialog"],
   ["empty-state", "EmptyState"],
   ["data-as-of", "DataAsOf"],
@@ -170,6 +172,25 @@ export default function Page() {
         </Variant>
         <Variant label="Dos acciones en el mismo sitio, con una key por estado">
           <ConfirmToggleDemo />
+        </Variant>
+      </Section>
+
+      <Section
+        id="confirm-action"
+        title="ConfirmAction"
+        usage={`<ConfirmAction action={quitarMiembro} fields={{ userId }} label="Quitar del equipo" variant="danger" size="sm"\n  question="¿Quitar a Laura del equipo?" consequence="Deja de entrar en cuanto confirmes." confirmLabel="Sí, quitar" cancelLabel="Cancelar"\n  disabledReason={unicoDueno ? "Es la única dueña" : undefined} />`}
+      >
+        <Variant label="Server Action con estado: el primer clic pregunta, al confirmar carga y se cierra si salió bien">
+          <ConfirmActionDemo />
+        </Variant>
+        <Variant label="La acción contesta con un mensaje: se queda bajo el botón, con el foco en él, y la pregunta sigue abierta">
+          <ConfirmActionDemo resultado="error" />
+        </Variant>
+        <Variant label="Deshabilitada con motivo (disabledReason): el botón dice por qué y no abre nada">
+          <ConfirmActionDemo disabledReason="Es la única dueña del espacio: primero nombra a otra persona." />
+        </Variant>
+        <Variant label="Acotada en una cabecera (openWidth)">
+          <ConfirmActionDemo openWidth="w-full sm:w-80" />
         </Variant>
       </Section>
 
