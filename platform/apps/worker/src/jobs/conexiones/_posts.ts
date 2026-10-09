@@ -127,6 +127,11 @@ export function classifyFailure(err: unknown): Failure {
   if (isPlatformApiError(err)) {
     if (err.kind === 'auth') return { kind: 'auth', detailEs: err.messageEs };
     if (err.kind === 'quota') return { kind: 'cuota', detailEs: err.messageEs, retryAfterS: err.retryAfterS ?? null };
+    // El 100 de Meta es «parámetro inválido»: una métrica que ese medio no
+    // tiene, un campo mal pedido. Es un defecto NUESTRO, no de la cuenta:
+    // no la pasa a 'error' (en producción dejó a @nicolasduartea en «No
+    // se pudo leer» por `link_clicks`, 9-oct-2026); se reintenta.
+    if (err.kind === 'permanent' && err.platformId === 'instagram' && err.code === '100') return { kind: 'transitorio', code: 'invalid_request' };
     if (err.kind === 'permanent') return { kind: 'cuenta', detailEs: err.messageEs };
     return { kind: 'transitorio', code: err.code };
   }

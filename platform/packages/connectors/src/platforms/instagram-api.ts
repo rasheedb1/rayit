@@ -67,10 +67,17 @@ export const INSTAGRAM_DISCOVERY_MEDIA_MAX = 100;
 export type InstagramProductType = 'REELS' | 'FEED' | 'STORY' | 'AD';
 
 /** Métricas por tipo de medio (reference/instagram-media/insights, 22-sep-2026). Pedir una no soportada devuelve code 100. */
+/** Cuántas veces se insiste en una llamada de insights quitando lo que Meta rechaza (ver #getSinMetricasRechazadas). */
+export const INSIGHTS_MAX_ATTEMPTS = 4;
+
 export const INSTAGRAM_MEDIA_METRICS: Readonly<Record<InstagramProductType, readonly string[]>> = {
-  REELS: ['views', 'reach', 'likes', 'comments', 'shares', 'saved', 'reposts', 'total_interactions', 'ig_reels_avg_watch_time', 'ig_reels_video_view_total_time', 'reels_skip_rate', 'follows', 'profile_visits'],
-  // Sin `reposts`: Meta lo rechaza para feed y carruseles («does not support the metrics: reposts», visto en producción el 5-oct-2026).
-  FEED: ['reach', 'likes', 'comments', 'shares', 'saved', 'total_interactions', 'follows', 'profile_visits', 'link_clicks'],
+  // Sin `reposts` tampoco aquí: el reel de @nicolasduartea lo rechazó (9-oct-2026).
+  REELS: ['views', 'reach', 'likes', 'comments', 'shares', 'saved', 'total_interactions', 'ig_reels_avg_watch_time', 'ig_reels_video_view_total_time', 'reels_skip_rate', 'follows', 'profile_visits'],
+  // Sin `reposts` ni `link_clicks`: Meta los rechaza para feed y carruseles («does not support the metrics: reposts»,
+  // «The metric link_clicks is not available on this endpoint»; producción, 5 y 9-oct-2026).
+  // Con `views`: desde 2024 Meta la entrega para todo medio (sustituye a impressions); los carruseles de
+  // @nicolasduartea no tenían vistas porque no se pedían (9-oct-2026).
+  FEED: ['views', 'reach', 'likes', 'comments', 'shares', 'saved', 'total_interactions', 'follows', 'profile_visits'],
   STORY: ['views', 'reach', 'replies', 'shares', 'reposts', 'total_interactions', 'follows', 'profile_visits', 'link_clicks'],
   AD: ['reach', 'likes', 'comments', 'shares', 'saved', 'total_interactions'],
 };
@@ -115,7 +122,9 @@ export function parseInstagramError(status: number, body: unknown): ParsedApiErr
 export function metricasRechazadas(err: unknown, pedidas: readonly string[]): string[] {
   if (!(err instanceof PlatformApiError) || err.code !== '100' || !err.platformMessage) return [];
   const texto = err.platformMessage.toLowerCase();
-  if (!/does not support/.test(texto)) return [];
+  // Las dos formas vistas: «does not support the metrics: reposts» y «The
+  // metric link_clicks is not available on this endpoint» (9-oct-2026).
+  if (!/does not support|not available|not supported|unsupported/.test(texto)) return [];
   return pedidas.filter((m) => new RegExp(`(^|[^a-z_])${m}([^a-z_]|$)`).test(texto));
 }
 
@@ -202,14 +211,23 @@ export class InstagramClient {
     return { data: normalizeInstagramAccountInsights(res.body, day), raw: res.body };
   }
 
-  /** La llamada de insights, y una segunda sin las métricas que la plataforma nombró como rechazadas. */
+  /**
+   * La llamada de insights, repetida sin las métricas que la plataforma
+   * nombró como rechazadas. Meta las nombra de una en una o por tandas
+   * («reposts» en una respuesta, «follows, profile_visits» en la
+   * siguiente: un reel de @nicolasduartea, 9-oct-2026), así que se
+   * insiste hasta INSIGHTS_MAX_ATTEMPTS mientras cada error quite algo nuevo.
+   */
   async #getSinMetricasRechazadas(endpoint: string, path: string, metrics: readonly string[], query: (m: readonly string[]) => Record<string, string | number | undefined>, signal?: AbortSignal) {
-    try {
-      return await this.#get(endpoint, path, query(metrics), signal);
-    } catch (err) {
-      const rechazadas = metricasRechazadas(err, metrics);
-      if (rechazadas.length === 0 || rechazadas.length === metrics.length) throw err;
-      return this.#get(endpoint, path, query(metrics.filter((m) => !rechazadas.includes(m))), signal);
+    let pedidas = metrics;
+    for (let intento = 1; ; intento++) {
+      try {
+        return await this.#get(endpoint, path, query(pedidas), signal);
+      } catch (err) {
+        const rechazadas = metricasRechazadas(err, pedidas);
+        if (intento >= INSIGHTS_MAX_ATTEMPTS || rechazadas.length === 0 || rechazadas.length === pedidas.length) throw err;
+        pedidas = pedidas.filter((m) => !rechazadas.includes(m));
+      }
     }
   }
 

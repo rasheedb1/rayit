@@ -17,6 +17,7 @@
     "job:seguimientos": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/jobs/ventas/correr-seguimientos.ts",
     "job:dispatch": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/jobs/ventas/correr-motor.ts dispatch",
     "job:replies": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/jobs/ventas/correr-motor.ts replies",
+    "job:lectura": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/jobs/conexiones/correr-lectura.ts",
     "once": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/index.ts --once",
     "salud": "node --env-file-if-exists=../../.env.local --experimental-strip-types src/salud.ts",
     "typecheck": "tsc --noEmit",

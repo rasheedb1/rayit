@@ -123,7 +123,9 @@ export async function selectMeasurablePosts(
       WHERE p.deleted_on_platform = false AND p.published_at IS NOT NULL
         AND ($1::uuid IS NULL OR p.workspace_id = $1)
         AND ($2::uuid IS NULL OR p.connection_id = $2)
-        AND (p.published_at >= $3::timestamptz - make_interval(hours => $5) OR camp.status IS NOT NULL)
+        -- Dentro del tope de edad, en campaña abierta, o SIN NINGUNA lectura todavía (una cuenta recién
+        -- conectada trae publicaciones de meses: se miden una vez; la regla exacta es shouldKeepMeasuring).
+        AND (p.published_at >= $3::timestamptz - make_interval(hours => $5) OR camp.status IS NOT NULL OR ultima.captured_at IS NULL)
       ORDER BY p.connection_id, p.published_at DESC`,
     [payload.workspaceId ?? null, payload.connectionId ?? null, now, API_SNAPSHOT_SOURCE, maxAgeHours],
   );
@@ -238,6 +240,8 @@ export const collectPostMetricsJob = defineJob<CollectPostMetricsPayload>('colle
       maxAgeHours,
       today: hoy,
       campaign: row.campaign_status === null ? null : { status: row.campaign_status, endsOn: row.campaign_ends_on },
+      // Una publicación sin ninguna lectura se mide una vez aunque sea vieja (cuenta recién conectada).
+      neverMeasured: row.last_api_at === null,
     });
     if (!vigente) {
       viejos += 1;

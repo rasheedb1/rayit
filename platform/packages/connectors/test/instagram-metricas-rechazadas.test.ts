@@ -77,9 +77,31 @@ test('media.insights: si Meta rechaza algo que no pedimos, o todo, no se repite'
   assert.equal(b.fetch.calls.length, 1, 'rechazadas todas: no hay con qué repetir');
 });
 
-test('la lista de feed ya no pide reposts', () => {
+test('la lista de feed ya no pide reposts ni link_clicks', () => {
   assert.ok(!INSTAGRAM_MEDIA_METRICS.FEED.includes('reposts'));
-  assert.ok(INSTAGRAM_MEDIA_METRICS.FEED.includes('link_clicks'));
+  assert.ok(!INSTAGRAM_MEDIA_METRICS.FEED.includes('link_clicks'));
+  assert.ok(INSTAGRAM_MEDIA_METRICS.FEED.includes('profile_visits'));
+});
+
+test('Meta puede rechazar por tandas: «reposts» y después «follows, profile_visits»; se insiste quitando cada tanda', async () => {
+  const reels = await loadFixture('instagram', 'media.insights', 'reels.ok');
+  const respuestaBuena = Array.isArray(reels.response) ? reels.response[0]! : reels.response;
+  const segunda: FixtureResponse = { status: 400, body: { error: { message: 'The Media Insights API does not support follows, profile_visits metric for this media product type.', type: 'OAuthException', code: 100, fbtrace_id: 'AbCdEfDemo' } } };
+  const c = await cliente([{ ...reels, response: [rechazo('reposts'), segunda, respuestaBuena] }]);
+  const { data } = await c.api.mediaInsights('1800000000000000d01', 'REELS', { metrics: ['views', 'reach', 'reposts', 'follows', 'profile_visits'] });
+  assert.ok(data.views !== null);
+  assert.equal(c.fetch.calls.length, 3, 'tres llamadas: dos rechazos y la buena');
+  assert.deepEqual(metricasPedidas(c.fetch.calls[2]!.url), ['views', 'reach']);
+});
+
+test('la otra forma del 100 («The metric X is not available on this endpoint») también se lee y se repite sin X', async () => {
+  const feed = await loadFixture('instagram', 'media.insights', 'feed.ok');
+  const respuestaBuena = Array.isArray(feed.response) ? feed.response[0]! : feed.response;
+  const noDisponible: FixtureResponse = { status: 400, body: { error: { message: 'The metric link_clicks is not available on this endpoint.', type: 'OAuthException', code: 100, fbtrace_id: 'AbCdEfDemo' } } };
+  const c = await cliente([{ ...feed, response: [noDisponible, respuestaBuena] }]);
+  const { data } = await c.api.mediaInsights('1800000000000000d02', 'FEED', { metrics: ['reach', 'link_clicks'] });
+  assert.equal(data.reach, 21000);
+  assert.deepEqual(metricasPedidas(c.fetch.calls[1]!.url), ['reach']);
 });
 
 test('account.insights: la misma regla con /me/insights', async () => {

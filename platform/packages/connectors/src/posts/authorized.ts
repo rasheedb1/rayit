@@ -17,6 +17,7 @@
  * que se encienda la bandera no haya que escribir nada.
  */
 import type { HttpCore } from '../http/client.ts';
+import { isPlatformApiError } from '../http/errors.ts';
 import type { NormalizedVideo, Surface } from '../normalize/types.ts';
 import { InstagramClient, INSTAGRAM_MEDIA_METRICS, type InstagramProductType } from '../platforms/instagram-api.ts';
 import { TikTokDisplayClient, TIKTOK_VIDEO_LIST_MAX, TIKTOK_VIDEO_QUERY_MAX } from '../platforms/tiktok-display.ts';
@@ -106,8 +107,17 @@ function instagramAuthorizedPostSource(core: HttpCore): PostSource {
       const readings: PostMetricsResult['readings'] = [];
       for (const post of posts) {
         const tipo = productTypeFor(post.surface);
-        const res = await ig.mediaInsights(post.externalPostId, tipo, { metrics: INSTAGRAM_MEDIA_METRICS[tipo], signal: opts.signal });
-        readings.push({ externalPostId: post.externalPostId, metrics: res.data, raw: { media_product_type: tipo, insights: res.raw } });
+        try {
+          const res = await ig.mediaInsights(post.externalPostId, tipo, { metrics: INSTAGRAM_MEDIA_METRICS[tipo], signal: opts.signal });
+          readings.push({ externalPostId: post.externalPostId, metrics: res.data, raw: { media_product_type: tipo, insights: res.raw } });
+        } catch (err) {
+          // Un 100 de Meta sobre ESTE medio (una métrica que no tiene, aun
+          // después de quitar las que nombró) no puede dejar sin lectura a
+          // las demás publicaciones de la cuenta: queda en api_call_log y
+          // se sigue. Lo que no es un 100 (token, cuota, red) sí sube.
+          if (isPlatformApiError(err) && err.code === '100' && err.kind === 'permanent') continue;
+          throw err;
+        }
       }
       return { readings, missingIds: [] };
     },

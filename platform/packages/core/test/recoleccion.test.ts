@@ -30,6 +30,12 @@ test('un post joven se mide; uno que pasó el tope, no', () => {
   assert.equal(shouldKeepMeasuring({ ageHours: 5000 }), false);
 });
 
+test('un post viejo sin ninguna lectura se mide una vez (cuenta recién conectada); con una lectura, manda el tope', () => {
+  assert.equal(shouldKeepMeasuring({ ageHours: 5000, neverMeasured: true }), true);
+  assert.equal(shouldKeepMeasuring({ ageHours: 5000, neverMeasured: false }), false);
+  assert.equal(shouldKeepMeasuring({ ageHours: 5000 }), false, 'sin el dato no se asume');
+});
+
 test('la gracia existe para que el corte de 720 h tenga una lectura posterior', () => {
   // Con la última lectura a las 719 h, post_metrics_at_cut se quedaría
   // con un valor de casi un día antes del corte.

@@ -59,6 +59,13 @@ export interface KeepMeasuringInput {
   today?: string;
   /** Tope de edad; por defecto DEFAULT_MAX_AGE_HOURS. */
   maxAgeHours?: number;
+  /**
+   * El post no tiene NINGUNA lectura todavía. Una cuenta recién conectada
+   * trae publicaciones de meses atrás: sin una primera lectura, Resumen,
+   * la línea base y la ficha de la cuenta no las verían nunca. Se miden
+   * una vez (las cifras acumuladas), y después manda el tope de edad.
+   */
+  neverMeasured?: boolean;
 }
 
 export function isOpenCampaign(campaign: OpenCampaign | null | undefined): campaign is OpenCampaign {
@@ -75,6 +82,7 @@ export function isOpenCampaign(campaign: OpenCampaign | null | undefined): campa
 export function shouldKeepMeasuring(input: KeepMeasuringInput): boolean {
   const maxAge = input.maxAgeHours ?? DEFAULT_MAX_AGE_HOURS;
   if (!Number.isFinite(input.ageHours) || input.ageHours <= maxAge) return true;
+  if (input.neverMeasured === true) return true;
   if (!isOpenCampaign(input.campaign)) return false;
   // Campaña abierta sin fecha de fin: se mide mientras siga abierta.
   if (input.campaign.endsOn === null) return true;
