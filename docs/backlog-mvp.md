@@ -10,7 +10,15 @@ cambió a pedido de Rasheed). Reemplaza el alcance de
 reglas de trabajo de ese documento (ramas, revisión, integración,
 migraciones inmutables) siguen vigentes.
 
-**Actualizado el 24 de septiembre de 2026 (00:40 UTC)** con el cierre de
+**Actualizado el 9 de octubre de 2026** con el cierre de la fase 9 de
+Rasheed: CIM-12, ACC-4, RES-3, ACC-7 y CIM-11 en `main` y en
+producción, con 0078–0084 y los seeds 0011–0013 aplicados en Supabase,
+tras la revisión de Nicolás (`docs/propuestas/REVISION-FASE-9.md`). Lo
+que le queda a Rasheed, con un prompt por módulo, está en
+`docs/cierre-rasheed-prompts.md`. El detalle está en la
+[sección 12](#12-cierre-de-la-fase-9-de-rasheed-al-9-de-octubre-de-2026).
+
+**Antes, el 24 de septiembre de 2026 (00:40 UTC),** con el cierre de
 los módulos de Nicolás: FIN, CAM y Conexiones en `main` y en
 producción, el worker listo pero sin encender (le falta un rol de
 Supabase, de Rasheed), una prueba de punta a punta que recorre la
@@ -1088,3 +1096,69 @@ con el cierre de CON-C), y `make db.guardia` está en verde.
    (Nicolás) y CON-9 (Rasheed).
 5. Bitácora de Cotizar y Ventas: fila 27 (Rasheed).
 6. Envío de correos (CIM-10) y despliegue continuo (CIM-7): Rasheed.
+
+## 12. Cierre de la fase 9 de Rasheed al 9 de octubre de 2026
+
+Escrito para Nicolás y Rasheed. Entre el 28 de septiembre y el 7 de
+octubre Rasheed construyó en `rasheed/integracion` (con su workflow de
+agentes y la puerta de 9,5) la fase 9 de su plan: CIM-12, ACC-4, RES-3,
+ACC-7 y CIM-11, más el arreglo de VEN-17 del 7-oct. La rama no podía
+entrar en `main` sin el visto bueno de Nicolás a lo que tocó de sus
+carpetas. El 9 de octubre Nicolás la revisó
+(`docs/propuestas/REVISION-FASE-9.md`), la mezcló en `main` por avance
+rápido con cuatro cambios pequeños y la puso en producción con
+0078–0084 y los seeds 0011–0013 aplicados.
+
+### 12.1 Historias, una por una
+
+| Historia | Estado | Cómo llegó a `main` | Terminado cuando, y cómo se comprobó |
+|---|---|---|---|
+| CIM-1 | **Hecha** | Ya lo estaba en la práctica desde el 28-sep (`mc_worker_login`, turnos) | La nota decía «bloqueada» en `main` por inercia; ahora dice la verdad |
+| CIM-12 | **Hecha** | Fase 9 (5-oct, r5) | `pnpm verificar` determinista: reloj anclado al 5-oct, `--continue`, turnos; sobre esta rama dio 15/15 tareas |
+| ACC-4 | **Hecha** | Fase 9 (7-oct, r4), migraciones 0078–0080 y seed 0011 | `equipo.test.ts`, `nav.test.tsx`, `modules.test.ts`; visto bueno de Nicolás a `nav.tsx`, `modules.ts`, `accesos.ts`, `conexiones.ts` y `permisos.ts` (REVISION-FASE-9 §1); `ConfirmAction` entró en la galería del kit |
+| RES-3 | **Hecha** | Fase 9 (7-oct, r4), migración 0081 y seed 0012 | `lo-que-importa.test.ts` (10 casos, con los productores reales) y `semana.test.tsx`; visto bueno a los jobs de Conexiones con dos ajustes: el barrido mira `ctx.signal` y «se arregló» incluye reconectar |
+| ACC-7 | **Hecha** (9,3) | Fase 9 (7-oct, r5), migración 0082 y seed 0013 | `alcance-rls.test.ts`; quedan 11 hallazgos en `pendientes-fase-9.json` y ACC-10, para R2-ACC |
+| CIM-11 | **Hecha** | Fase 9 (7-oct, r5), migración 0083 | `ids-sin-contador*.test.ts` convierte con los seeds dentro; visto bueno a 0083 entera y al runner, con el id como último desempate de `ORDEN_ULTIMA_CORRIDA` |
+| VEN-17 | En curso | 0084 y los dos ajustes en caliente del 7-oct | Falta la semana de turnos sin `exhausted` ni `failed` y la causa de `collect.account_metrics` (R6) |
+| CIM-7 | En curso | El runner ya estaba en producción | Visto bueno al runner dado; falta solo conectar GitHub a Vercel |
+
+### 12.2 Verificación sobre la rama
+
+`pnpm verificar` sobre `1b7777a0` tal cual, el 9-oct: 14/15 tareas;
+raíz, `@mc/core` 547, `@mc/connectors` 304, `@mc/worker` 440, `@mc/web`
+2 176 (+1 todo); `@mc/db` 1 628 con **2 rojas** en
+`ids-sin-contador.test.ts`, porque la 0084 del 7-oct quedó detrás de la
+0083 y la prueba asumía que la de CIM-11 era la última. Arreglada en la
+revisión; el resultado de la segunda corrida, con los cuatro cambios
+de la revisión, está en REVISION-FASE-9 §0.
+
+### 12.3 Producción
+
+Receta de `docs/ventas-outreach.md` §5.2 porque 0083 no convive con el
+código viejo: build de producción sin dominio (`deploy --prod
+--skip-domain`), `make db.migrate` (0078–0084), `make db.guardia`,
+`vercel promote` y `make db.seed`. El cron de pg_cron no se desinstaló
+(pide el token de administración, que solo tiene Rasheed): la ventana
+entre migrar y promover duró segundos y un turno que cayera dentro se
+reintenta al minuto siguiente. El commit en producción y la salida de
+cada paso están en REVISION-FASE-9 §8.
+
+### 12.4 Lo que Rasheed tiene pendiente (prompts en `docs/cierre-rasheed-prompts.md`)
+
+| # | Qué | Prompt |
+|---|---|---|
+| 29 | CIERRE-ACC §5 (permisos, puertas y alcance en Ventas, Cotizar y Resumen), los 11 hallazgos de ACC-7 y ACC-10 (migración 0085) | R2-ACC |
+| 30 | VEN-9 en vivo (sesiones reales de Google y Unipile), VEN-14 con `ANTHROPIC_API_KEY`, pulido de Ventas | R3-VEN |
+| 31 | RES-4 (demografía, ya con datos reales de CON-7) y pulido de Resumen | R4-RES |
+| 32 | Pulido de Cotizar y su costura con CAM-2 | R5-COT |
+| 33 | GitHub a Vercel y la semana limpia de VEN-17 | R6-CIM-7-TURNOS |
+| 34 | CIM-9 legal, CIM-10 Turnstile y SMTP, CON-9 trámites | R7 |
+
+### 12.5 Desvíos
+
+- La revisión hizo cuatro cambios en vez de devolver la rama: eran de
+  una línea cada uno (señal en el barrido, `connected_at` en la regla,
+  `id` en el orden, la galería del kit) y la prueba rota de 0084.
+- Las dos ramas de QA de Nicolás (`nicolas/QA-modulos-sprint`,
+  `nicolas/QA-9-5-modulos`) chocan en seis archivos con la fase 9; se
+  rebasan encima de `main` después (REVISION-FASE-9 §6).

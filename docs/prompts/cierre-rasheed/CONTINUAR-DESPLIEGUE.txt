@@ -1,0 +1,7 @@
+CONTINUAR-DESPLIEGUE. Ya apliqué la migración (y los seeds si los
+pediste). Comprueba por make db.sql Q="select id from
+schema_migrations order by 1 desc limit 10" que está, make db.guardia
+en verde, y sigue el protocolo F5 desde el paso 3 (push por avance
+rápido, despliegue o promoción según la receta de tu prompt,
+verificación en producción, cron.status, notas y entrega F6). Si algo
+está mal en Supabase, dímelo antes de desplegar.

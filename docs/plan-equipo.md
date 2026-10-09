@@ -57,6 +57,15 @@ nueve índices, y el entorno local se levanta con un comando.
 > en verde. Lo que sigue sin estar conectado y de quién depende está en
 > la sección 11 de
 > [backlog-mvp.md](backlog-mvp.md#11-cierre-de-los-módulos-de-nicolás-al-23-de-septiembre-de-2026).
+>
+> **Cierre de la fase 9 de Rasheed, 9 de octubre.** CIM-12, ACC-4,
+> RES-3, ACC-7 y CIM-11 están en `main` y en producción con sus
+> migraciones (0078–0084) y seeds aplicados, tras la revisión de
+> Nicolás a lo que tocaron de sus carpetas
+> (`docs/propuestas/REVISION-FASE-9.md`). Lo que le queda a Rasheed
+> está en la sección 12 de
+> [backlog-mvp.md](backlog-mvp.md#12-cierre-de-la-fase-9-de-rasheed-al-9-de-octubre-de-2026)
+> y los prompts en `docs/cierre-rasheed-prompts.md`.
 
 ---
 

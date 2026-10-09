@@ -1,0 +1,250 @@
+DESPLIEGUE: AUTORIZADO
+
+CONTEXTO COMÚN — On Cue (repositorio rayit), CIERRE DE MÓDULOS de
+Rasheed. Fecha de la foto: 9-oct-2026 a mediodía.
+
+QUIÉN SOY. Soy Rasheed, dueño de CIM-1/2/3/6/7/9/10/11/12, RES, VEN,
+COT, ACC-4/7/9/10 y CON-9; de lib/auth/, lib/workspace/,
+packages/db/src/{client,schema,queries/{resumen,resumen-semana,ventas,
+ventas-ficha,cotizar,equipo,accesos}}, db/migrations/, db/seed/ y de
+las carpetas app/(app)/{resumen,ventas,cotizar,accesos} y app/(public)/
+{kit,cotizacion,baja}. Nicolás es dueño de Conexiones (CON), Campañas
+(CAM), Finanzas (FIN) y ACC-1/2/3/5/6/8; del marco (app/layout.tsx,
+components/shell.tsx, nav.tsx, content/flags.ts, content/modules.ts,
+globals.css); de apps/web/components/ui/; de packages/connectors/; de
+apps/worker/ (runner y jobs); y de packages/core/src/{scoring,
+facturacion,campanas,flujo-caja,ingresos-plataformas,reporte,
+permisos}.ts.
+
+EL OBJETIVO DE ESTE PROMPT es CERRAR UN MÓDULO (o un bloque de
+pendientes de un módulo): todo integrado en main, verde, cosido con los
+módulos vecinos (cada costura con una prueba), las notas del tablero
+diciendo la verdad, las decisiones pendientes en una sola tabla y el
+módulo DESPLEGADO en producción y comprobado ahí. La puerta de calidad
+es la de siempre: 9,5/10 con la rúbrica de docs/fases-rasheed.md §2
+(funciona 3 · terminado cuando 2 · seguridad de datos 1,5 ·
+convenciones 1 · experiencia 1,5 · código 1). Si un comando falla, la
+nota máxima es 5.
+
+LA FOTO (verificada el 9-oct; no la vuelvas a investigar salvo para
+refrescarla con git fetch):
+- origin/main = 50145b34. origin/rasheed/integracion = 1b7777a0, 156
+  commits por delante y 0 por detrás de main. Producción (proyecto
+  Vercel on-cue-web, alias https://on-cue-web.vercel.app) sirve
+  90f76503.
+- Supabase: 0001–0077 aplicadas (0023 es un hueco declarado). Sin
+  aplicar: 0078_equipo, 0079_equipo_cerrojos, 0080_equipo_quien_invito,
+  0081_lo_que_importa, 0082_alcance_por_creador, 0083_ids_sin_contador,
+  0084_search_path_extensions y los seeds 0011, 0012 y 0013. 0085 está
+  reservada para R2-ACC. Cualquier otra: git fetch y el máximo en TODAS
+  las ramas + 1.
+- El worker corre POR TURNOS en producción (/api/cron/tick llamado por
+  pg_cron cada minuto; make cron.status lo dice). No hay proceso largo
+  ni pg-boss en producción. Todo lo que dependa de un job tiene que
+  caber en un turno de 45 s o retomarse en el siguiente.
+- GitHub NO está conectado a Vercel: hoy se despliega a mano con
+  ./scripts/vercel.sh desde platform/.
+- Variables en Vercel production: APP_URL, DATABASE_URL,
+  WORKER_DATABASE_URL, CRON_SECRET, DEMO_WORKSPACE_ID, OAUTH_CONNECT,
+  TOKEN_ENCRYPTION_KEY, TIKTOK_LOGIN_CLIENT_KEY/SECRET,
+  META_APP_ID/SECRET, INSTAGRAM_HOUSE_TOKEN, GOOGLE_API_KEY,
+  GOOGLE_OUTREACH_CLIENT_ID/SECRET, UNIPILE_DSN, UNIPILE_ACCESS_TOKEN,
+  UNIPILE_WEBHOOK_SECRET. Faltan ANTHROPIC_API_KEY, TURNSTILE_SITE_KEY,
+  SUPPORT_EMAIL y GOOGLE_CLIENT_ID/SECRET (esta última es de Nicolás).
+  Nunca las inventes: sin la variable, la función se apaga y lo dice
+  con una frase.
+- Hallazgos abiertos: docs/propuestas/pendientes-fase-9.json (11, de
+  ACC-7) y docs/propuestas/pendientes-pulido-final.json (13 del 28-sep;
+  11 siguen abiertos). Cada prompt dice cuáles son suyos.
+
+LECTURAS PREVIAS, antes de tocar un archivo: CLAUDE.md;
+platform/apps/web/README.md; platform/packages/db/README.md;
+platform/apps/worker/README.md; docs/fases-rasheed.md (§2 la puerta,
+§3 lo profesional, §8–§10 las decisiones de RES-1/2, RES-3 y CIM-11);
+docs/ventas-outreach.md (§5.2 el esquema y la cola del despliegue,
+§8 decisiones, §9.3 la sesión real); docs/backlog-mvp.md (§3 reglas,
+§4 dependencias, §5 las filas de mi módulo y la sección de estado más
+reciente); docs/propuestas/CIERRE-ACC.md (§5 lo que me toca de ACC,
+§7bis lo que ACC-4 tocó); las propuestas de las historias de mi módulo
+en docs/propuestas/; mis entradas de
+platform/apps/web/content/backlog.ts.
+
+REGLAS DEL REPOSITORIO QUE NO SE NEGOCIAN:
+- Comentarios, documentación, mensajes al usuario, commits y ramas en
+  español. Identificadores de código y de base en inglés.
+- Tipos. timestamptz en UTC y devueltas como ISO; date como 'YYYY-MM-DD'
+  (to_char); dinero numeric(14,2) con moneda aparte, string decimal en
+  TypeScript y BigInt de centavos solo dentro de core; enumerados text +
+  CHECK; tablas de métricas append-only; un nulo no es un cero; ninguna
+  consulta devuelve a la web un id numérico (desde 0083 todas las
+  claves son uuid; el grep de ids-sin-contador-codigo.test.ts lo vigila).
+- Secretos. Nunca leas ni imprimas platform/.env.local, platform/.env ni
+  platform/secrets/*.enc. Nunca escribas una credencial en un archivo
+  versionado, un log, una URL, un error, job_run.metadata ni
+  audit_log.before/after. Variable nueva: dime el nombre y la meto yo.
+- Un dueño por carpeta. Lo que necesite de una carpeta de Nicolás va a
+  docs/propuestas/CIERRE-<MÓDULO>-R.md con el diff propuesto, o en
+  commits propios titulados «(revisión de Nicolás)» si la historia no
+  puede cerrar sin ello; en ese caso la nota del tablero dice «hecha,
+  pendiente del visto bueno de Nicolás». Las migraciones aplicadas son
+  inmutables. Una migración nueva: re-ejecutable (IF NOT EXISTS, DROP
+  POLICY IF EXISTS, CREATE OR REPLACE, ADD CONSTRAINT dentro de un DO
+  que consulta pg_constraint), con cabecera que diga qué hace y por qué,
+  con search_path = public, extensions, pg_temp en toda función
+  (packages/db/test/search-path-extensions.test.ts lo exige), con make db.check y make
+  db.guardia en verde. NUNCA corras make db.migrate ni escribas en
+  Supabase desde la sesión: make db.sql Q="…" solo para leer. Migrar lo
+  hago yo en la PARADA 1.
+- Toda Server Action: "use server"; zod con formField/firstErrors/
+  DECIMAL_RE de @/lib/forms; requirePermission('<módulo>.<recurso>.
+  <acción>') como PRIMERA línea; toda escritura de dinero, publicación,
+  cuenta conectada o envío llama a audit() DENTRO de la consulta de
+  @mc/db (test/audit-convencion.test.ts lo exige); revalidatePath al
+  final; textos en messages.ts del módulo. Toda página de un módulo con
+  permiso abre con requireModuleAccess/requirePagePermission
+  (lib/permisos/paginas.test.ts lo exige).
+- El catálogo de permisos viaja en la semilla de 0034 y
+  packages/db/test/accesos.test.ts exige que sea idéntico a la salida de
+  pnpm --filter @mc/core permisos:sql. Un permiso nuevo exige migración:
+  reutiliza uno existente salvo que de verdad no haya ninguno que sirva.
+- Alcance (ACC-6/ACC-7): toda consulta de @mc/db que lea filas de un
+  creador pasa por el arnés de test/alcance.ts, o está declarada con
+  motivo en SIN_ALCANCE_DECLARADAS de alcance-convencion.test.ts. La
+  política RESTRICTIVE por creador es para mc_app; worker y enlaces
+  públicos quedan fuera.
+- Ninguna pantalla hace aritmética de métricas ni de dinero: vistas o
+  funciones puras de @mc/core. Kit y formato: components/ui, colores por
+  variables de globals.css, dinero y fechas con
+  formatterFor(await getCurrentWorkspace()). Cada pantalla se mira a 400
+  px y en tema oscuro. Una ausencia se explica con una frase, nunca con
+  un guion mudo ni con un cero. Textos de creador: «visualizaciones»,
+  nunca «views»; «descripciones», nunca «captions».
+- Worker: en producción corre como mc_worker por turnos; cada consulta
+  lleva workspace_id explícito; se respeta ctx.signal; reloj ctx.now();
+  metadata sin PII ni secretos; un job que no puede correr por falta de
+  llave termina como «no configurado» (skipped con motivo), nunca como
+  failed ni exhausted.
+- Dependencias: antes de agregar una, dime cuál, para qué y cuánto pesa.
+  No commitees pnpm-lock.yaml con importers de paquetes fuera de git.
+
+ENTORNO. macOS sin Docker, sin psql y sin GNU timeout; Node 24 y pnpm
+9.12. Las pruebas de integración van contra pglite con migraciones y
+seeds reales (@mc/db/test/pglite; apps/worker/test/helpers/harness.ts).
+pnpm verificar es determinista desde CIM-12 (reloj anclado, --continue):
+si algo sale rojo no es «la máquina», es un fallo. La web en dev en un
+puerto 3100–3999, lanzada en background y matada al terminar. Antes de
+next build o tsc, borra apps/web/.next. Si turbo cancela un paquete,
+corre por paquete (pnpm --filter @mc/db test, @mc/worker test) hasta
+tener los conteos de TODOS.
+
+GIT. Worktree propio (el comando está en la cabecera del prompt). Hay
+otras sesiones en el mismo clon: antes de cada commit, git branch
+--show-current y git status; git add solo por rutas propias, nunca -A;
+nunca git checkout ni git stash en el árbol principal. Un commit por
+paso, con el id de la historia delante. Para traer una rama abierta:
+git merge --no-ff (no rebase de ramas publicadas), resolviendo
+conflictos a favor de lo que ya está en main y reaplicando encima lo
+de la rama; cada conflicto resuelto va explicado en el mensaje del
+merge.
+
+FASES. Trabaja en modo autónomo, sin esperar aprobación, salvo en los
+dos puntos de parada de F5.
+F0 · Foto. git fetch; confirma o corrige la foto de arriba para mi
+  módulo. Escribe la sección 0 de docs/propuestas/CIERRE-<MÓDULO>-R.md
+  con el inventario: qué está en main, qué falta de cada historia según
+  su «terminado cuando» de backlog-mvp.md §5, qué hallazgos abiertos son
+  de este módulo, y el plan.
+F1 · Construcción. Lo que el prompt enumera, en su orden, con pnpm
+  verificar en verde después de cada paso que toque la base.
+F2 · Costuras. Cada contrato con otro módulo tiene una prueba que falla
+  si se rompe (la lista va en el prompt). Donde una costura depende de
+  algo que no existe todavía, la pantalla lo dice con una frase y la
+  prueba cubre esa frase.
+F3 · Deuda y decisiones. Cierra los hallazgos de pendientes-*.json que
+  son de este módulo (cada uno: hecho con su prueba, o por qué no, en
+  la tabla). Junta TODAS las «decisión pendiente» de las propuestas del
+  módulo en una tabla de CIERRE-<MÓDULO>-R.md: archivo:línea, la
+  pregunta en una frase, la opción que quedó en el código, tu
+  recomendación y qué cambia si digo lo contrario. No las cambies tú: la
+  opción conservadora se queda.
+F4 · Verificación. pnpm verificar con los conteos de TODOS los
+  paquetes; next build; make db.check y make db.guardia si hay
+  migración; verificación en dev de cada pantalla del módulo (400 px y
+  oscuro); dos revisores como en fases-rasheed.md §2 (técnico y
+  producto), nota mínima 9,5 o una ronda más (máximo cinco); /code-review
+  en nivel alto y /security-review si tocaste permisos, RLS, enlaces
+  públicos, secretos, envíos o dinero. Resuelve o justifica cada
+  hallazgo.
+F5 · Salida a producción. La primera línea del prompt dice si está
+  AUTORIZADO. El protocolo:
+  1. git fetch origin && git merge origin/main (si trae algo, vuelve a
+     F4 completo).
+  2. SI HAY MIGRACIÓN: PARADA 1. Deja la migración en la rama, con
+     db.check y guardia en verde, y entrégame: el número, qué hace, por
+     qué es compatible con el código que HOY está en producción (la
+     migración se aplica ANTES del deploy y convive con el código viejo
+     durante el hueco; si NO es compatible, como 0083, dilo y usa la
+     receta de construir antes y promover después de ventas-outreach.md
+     §5.2) y el comando exacto:
+       cd <clon principal>/platform && make db.migrate
+     Después espera a que te pegue CONTINUAR-DESPLIEGUE.
+  3. Si DESPLIEGUE: AUTORIZADO, git push origin HEAD:<tu rama> y luego
+     git push origin HEAD:main, solo por avance rápido; si lo rechaza,
+     alguien entró antes: vuelve al paso 1. Nunca --force. Si dice NO,
+     PARADA 2: dame los comandos y termina. NUNCA despliegues desde una
+     rama: producción solo sale de origin/main.
+  4. Despliega desde un worktree limpio en origin/main (../rayit-deploy
+     o equivalente; nunca desde el clon principal):
+       git -C ../rayit-deploy fetch origin && git -C ../rayit-deploy checkout --detach origin/main
+       cd ../rayit-deploy/platform && pnpm install --frozen-lockfile
+       ./scripts/vercel.sh run ls on-cue-web     # la URL anterior es el plan B
+       ./scripts/vercel.sh run deploy --cwd "$PWD" --yes --prod
+     Si GitHub ya está conectado a Vercel (CIM-7 cerrada), el push a
+     main despliega solo: entonces espera al despliegue y verifica.
+  5. Comprueba en producción: run api /v13/deployments/<url> →
+     meta.gitCommitSha = tu commit; cada pantalla del módulo responde;
+     make cron.status en verde; los seeds nuevos en la demo. Si algo
+     falla, promueve la URL anterior (plan B) y dímelo.
+F6 · Entrega. Lista de archivos; cada criterio del «terminado cuando»
+  con su evidencia (comando y salida, o pantalla y qué se vio); los
+  conteos de pruebas por paquete; la tabla de decisiones; la nota corta
+  de cada historia en content/backlog.ts (status y note con fecha); el
+  texto del PR en español; y la autoevaluación contra la rúbrica con la
+  nota de cada revisor. Lo que quedó fuera, dicho con nombre y motivo.
+
+ESTE PROMPT · R5 COT. Cotizar está en main desde la fase 2; lo que
+falta es pulido y dos costuras. Base: origin/main con R1 y R2 dentro.
+
+PASOS (F1).
+1. FechaInput (cotizar/_ui/fecha.tsx) es un parche del kit: prepara el
+   PR al kit en una rama aparte sobre origin/main
+   (rasheed/kit-dateinput-foco) que añade a components/ui/
+   date-input.tsx el anillo de foco (focus:border-ink focus:ring-2
+   focus:ring-ink/15), con la prueba del kit; borra _ui/fecha.tsx y
+   vuelve a importar DateInput en generar-form. Es carpeta de Nicolás:
+   la rama queda para su visto bueno y R5 NO la mezcla; mientras, el
+   parche se queda y la nota lo dice.
+2. El estado vacío del tarifario ofrece también /resumen/importar (texto
+   en cotizar/messages.ts), como SinConexiones en resumen.
+3. Hidratación #418 en /kit/<slug>: los componentes cliente del media
+   kit que formatean fechas o tiempos relativos reciben el valor ya
+   formateado desde el servidor; prueba de render sin avisos de
+   hidratación (y lo mismo en /cotizacion/<slug>).
+4. Costura COT-4 ↔ CAM-2 con alcance (CIERRE-ACC §5.7, ya con
+   ScopeError en codigoDe desde R2): una cotización fuera de alcance no
+   crea campaña y lo dice; una dentro sí; prueba en cotizar/actions.test
+   y en queries/cotizar/campana.test.
+5. Costura COT ↔ ACC-7 (fase 9): createQuote con el creador del negocio
+   (lo cerró R2); aquí la prueba de pantalla: en la ficha de un negocio
+   de Mariana, «Cotizar» no deja elegir a otro creador.
+6. Las decisiones pendientes de COT-1..4 (grep en docs/propuestas/ y en
+   las notas) a la tabla de CIERRE-COT-R.md.
+
+COSTURAS (F2): kit y cotización públicas (mc_public_share) sin puerta
+y sin alcance, declaradas; media-kit.test (foto congelada del seed);
+cotizar/actions.test (ScopeError); campana.test.
+
+TERMINADO CUANDO: /kit y /cotizacion sin #418 en 10 recorridos a 400 px
+en oscuro; el tarifario vacío con los dos enlaces; «Crear campaña»
+dice la verdad con y sin alcance; la rama del kit lista para Nicolás;
+COT-1..4 con nota al día.

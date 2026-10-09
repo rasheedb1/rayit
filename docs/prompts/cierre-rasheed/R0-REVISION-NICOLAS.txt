@@ -1,0 +1,69 @@
+DESPLIEGUE: NO
+
+Soy Nicolás. Rasheed tiene en origin/rasheed/integracion (1b7777a0,
+7-oct-2026) la fase 9 de su plan, 156 commits por delante de main, y
+no puede fusionarla porque cuatro historias suyas tocan archivos míos
+y pidió mi visto bueno por escrito. Este prompt es ESA revisión: no
+construye nada, decide. Lee CLAUDE.md, docs/fases-rasheed.md §9 y §10,
+docs/propuestas/CIERRE-ACC.md §7bis, docs/propuestas/CIM-12.md
+(«Archivos de Nicolás que se tocaron» y «Resultado») y la nota de CIM-7
+en platform/apps/web/content/backlog.ts.
+
+Mis carpetas: apps/worker/ (runner y jobs), packages/connectors/,
+components/nav.tsx, content/modules.ts, components/ui/,
+packages/core/src/permisos.ts, packages/db/src/queries/{accesos,
+conexiones,campanas}.ts, app/(app)/{conexiones,campanas,finanzas}.
+
+PASOS.
+1. Inventario exacto: git diff --stat origin/main...origin/rasheed/
+   integracion -- <cada carpeta mía>. Agrupa por historia (ACC-4, RES-3,
+   CIM-11, CIM-7, CIM-12) usando git log --format=%s de cada archivo.
+   Nada que no esté en esa lista cuenta como «mío tocado».
+2. Por historia, lee el diff ENTERO y contrástalo con lo que Rasheed
+   escribió que haría (§9, §10, §7bis). Para cada archivo: ¿cambia lo
+   que hace un job o una pantalla mía, o solo el tipo del runId, el
+   orden o un título? ¿Tiene prueba? ¿Rompe algún contrato de mis
+   módulos (CON-2 runner, CON-4 Conexiones, CAM-5 reporte, ACC-5
+   permisos, ACC-8 consentimiento)? Corre las pruebas de mis paquetes
+   sobre su rama: pnpm --filter @mc/worker test, @mc/connectors test,
+   @mc/core test, y la web filtrada a conexiones/, campanas/,
+   finanzas/, components/.
+3. RES-3 (§9): decide sobre el cambio de título de markNeedsReauth
+   («TikTok dejó de darnos las cifras de @laura» en vez de «Vuelve a
+   conectar…»), el barrido remindBrokenAccounts en oauth.refresh y el
+   candado pg_advisory_xact_lock. Para cada uno: APRUEBO / NO APRUEBO
+   con el motivo. Si NO, el §9 dice la vuelta atrás: déjala escrita
+   como instrucción para Rasheed, no la hagas tú.
+4. CIM-11 (§10): (A) runId como texto no tiene alternativa mientras
+   0083 exista: aprueba o rechaza 0083 ENTERA. (B) y (C): cualquier
+   orden por fecha con desempate determinista vale; comprueba que
+   ORDEN_ULTIMA_CORRIDA y ORDEN_CORRIDAS_ASC dan el mismo orden que
+   antes en apps/worker/test/runner.test.ts y que el corte por edad de
+   queries/campanas.ts sigue dando el mismo reporte (campanas/
+   reporte.test.ts). Mira además que el harness de pruebas y el --demo
+   no cambian lo que un job escribe.
+5. ACC-4 (§7bis filas 1, 4, 5, 6): nav.tsx (Accesos sale de las
+   herramientas y entra en Producto como «Equipo»), modules.ts (name y
+   group), accesos.ts y conexiones.ts (session_permission_keys() en vez
+   del JOIN propio), permisos.ts (permisosQueFaltan como única regla y
+   ROLE_KEYS). Comprueba que el Contador sigue sin ver Campañas (ACC-1)
+   y que ACC-8 sigue preguntando lo mismo (equipo.test.ts).
+6. CIM-7 (runner por turnos, ya en producción desde el 28-sep) y
+   CIM-12 (helpers de prueba): aprobación a posteriori. Lee
+   apps/worker/src/turno/ y runner/comun.ts; confirma que --once y el
+   proceso largo no cambiaron (pruebas de once-reclamo.test.ts) y que
+   el harness sigue sembrando mi demo igual.
+7. Choque con mis ramas de QA: nicolas/QA-modulos-sprint (rayit-qa, con
+   cambios sin commitear) y nicolas/QA-9-5-modulos (rayit-qa2) tocan
+   collect-account-metrics.ts, cuentas-service.ts y
+   collect-post-metrics.test.ts. Haz un merge de prueba en tu worktree
+   (git merge --no-commit origin/nicolas/QA-modulos-sprint, luego
+   abort) y lista los conflictos con la resolución que propones.
+
+ENTREGA: docs/propuestas/REVISION-FASE-9.md con una tabla por historia
+(archivo, qué cambia, prueba, APRUEBO / NO APRUEBO / APRUEBO CON
+CAMBIO + el cambio en una frase), la lista de conflictos del paso 7
+con su resolución, y al final el veredicto en una línea: «Rasheed
+puede mezclar integracion en main» o «no, hasta X». Sin commits en su
+rama: el archivo va en la mía (nicolas/revision-fase-9) y lo pego yo
+en el PR. No despliegues nada.
