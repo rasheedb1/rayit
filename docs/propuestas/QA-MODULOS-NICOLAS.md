@@ -271,3 +271,40 @@ Arreglo en `@mc/connectors`:
 Con esto, las vistas por publicación de los 25 carruseles y el reel
 llegan con la primera pasada de `collect.post_metrics` tras desplegar
 (05:00 UTC), y la ficha y Resumen dejan de ver «Sin dato» en vistas.
+
+### 7.2 Lo que hizo falta además para tener TODA la extracción (9-oct, tarde)
+
+Con 58359739 ya en producción la cuenta seguía sin vistas. Corriendo la
+lectura a mano contra la base real, uno por uno, salieron cuatro huecos
+más; todos arreglados en esta rama y probados:
+
+1. **Meta rechaza por tandas.** Un reel devolvió primero «does not
+   support the metrics: reposts» y, sin `reposts`, «does not support
+   follows, profile_visits metric for this media product type». El
+   reintento era de una sola vez; ahora insiste hasta cuatro veces
+   mientras cada error quite algo nuevo, y lee también la forma «The
+   metric X is not available on this endpoint». `reposts` sale de reels
+   y `link_clicks` de feed.
+2. **Un medio malo tumbaba el lote.** `postMetrics` leía las publicaciones
+   en serie y el primer error perdía las 25 restantes. Un 100 de Meta
+   sobre un medio concreto ahora se salta ese medio (queda en
+   `api_call_log`) y sigue con los demás.
+3. **Un 100 de Meta ponía la cuenta en «No se pudo leer».** El worker lo
+   trataba como fallo de la cuenta (`status = 'error'`); es un defecto
+   nuestro de parámetros, no de la cuenta: ahora cuenta como transitorio.
+4. **Los carruseles no pedían vistas** (`views` faltaba en la lista de
+   feed) y **las publicaciones de más de 37 días nunca se medían**: una
+   cuenta recién conectada trae meses de contenido que Resumen no vería.
+   Una publicación sin ninguna lectura se mide una vez aunque sea vieja
+   (`shouldKeepMeasuring.neverMeasured`); después manda el tope.
+
+Herramienta nueva, `pnpm --filter @mc/worker run job:lectura -- --cuenta
+<uuid>`: la misma pasada del worker (cuenta, publicaciones, cifras,
+audiencia) para una cuenta, ahora, contra la base real; deja `job_run`
+(`source: manual`) y `api_call_log` como siempre. Con ella quedó hecho en
+producción el 9-oct a las 19:18 UTC para @nicolasduartea: 26 de 26
+publicaciones leídas (173.042 vistas, 71.499 de alcance, 6.011 me gusta
+acumulados), la serie de la cuenta con vistas, alcance, interacciones y
+visitas al perfil del 8-oct, y la demografía del día. Hasta que `main`
+tenga esta rama, la pasada de las 05:00 UTC seguirá chocando con los
+mismos rechazos de Meta: hay que desplegarla.

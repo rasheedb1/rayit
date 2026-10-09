@@ -153,13 +153,23 @@ test('lo viejo deja de medirse salvo campaña abierta, y lo que la plataforma ya
       conn = await altaYouTube(db, W1, C1);
       // Reciente: se mide.
       await altaPost(db, W1, C1, conn, 'vid00000001', '2026-10-25T15:00:00Z');
-      // Viejo y sin campaña: 1 464 h, por encima del tope de 888.
+      // Viejo y sin campaña (1 464 h, por encima del tope de 888) pero SIN
+      // NINGUNA lectura: se mide una vez (cuenta recién conectada).
       await altaPost(db, W1, C1, conn, 'vid00000002', '2026-09-02T15:00:00Z');
       // Viejo pero en una campaña que sigue midiéndose: se mide.
       const enCampana = await altaPost(db, W1, C1, conn, 'vid00000003', '2026-09-03T15:00:00Z');
-      // Viejo, en una campaña abierta pero que terminó hace más de 30
-      // días: la cola de CAM-5 ya pasó y deja de medirse.
+      // Viejo, ya con una lectura, en una campaña abierta pero que terminó
+      // hace más de 30 días: la cola de CAM-5 ya pasó y deja de medirse.
       const colaVencida = await altaPost(db, W1, C1, conn, 'vid00000004', '2026-09-04T15:00:00Z');
+      // Viejo, sin campaña y ya con una lectura: ni siquiera llega a candidato.
+      const viejoLeido = await altaPost(db, W1, C1, conn, 'vid00000005', '2026-09-05T15:00:00Z');
+      for (const post of [colaVencida, viejoLeido]) {
+        await db.raw.query(
+          `INSERT INTO post_metric_snapshot (post_id, workspace_id, captured_at, age_hours, views, source)
+           VALUES ($1, $2, '2026-10-01T05:00:00Z', 640, 1000, 'api')`,
+          [post, W1],
+        );
+      }
       // Reciente pero la plataforma ya no lo devuelve: borrado.
       await altaPost(db, W1, C1, conn, 'vid00000099', '2026-10-26T15:00:00Z');
       const marca = await db.raw.query<{ id: string }>(`INSERT INTO company (name) VALUES ('Nutrivé') RETURNING id`);
@@ -178,19 +188,21 @@ test('lo viejo deja de medirse salvo campaña abierta, y lo que la plataforma ya
   try {
     await h.worker.boss.send('collect.post_metrics', { workspaceId: W1 });
     const md = (await esperaCorrida(h, 1)) as { snapshots: number; viejos: number; borrados: string[]; candidatos: number };
-    // El de septiembre sin campaña ni siquiera llega a candidato: lo
-    // descarta el corte grueso de la consulta, que es donde es barato.
-    assert.equal(md.candidatos, 4);
+    // El viejo sin campaña y ya leído ni siquiera llega a candidato: lo
+    // descarta el corte grueso de la consulta, que es donde es barato. El
+    // viejo sin ninguna lectura sí llega: se mide una vez.
+    assert.equal(md.candidatos, 5);
     // El que sí llega y se cae por la regla de @mc/core es el de la
-    // campaña cuya cola de 30 días ya pasó.
+    // campaña cuya cola de 30 días ya pasó (y que ya tiene su lectura).
     assert.equal(md.viejos, 1);
-    assert.equal(md.snapshots, 2);
+    assert.equal(md.snapshots, 3);
     assert.deepEqual(md.borrados, ['vid00000099']);
 
     const medidos = await h.db.query<{ external_post_id: string }>(
-      `SELECT p.external_post_id FROM post_metric_snapshot s JOIN post p ON p.id = s.post_id ORDER BY 1`,
+      `SELECT p.external_post_id FROM post_metric_snapshot s JOIN post p ON p.id = s.post_id WHERE s.captured_at >= $1 ORDER BY 1`,
+      [AHORA],
     );
-    assert.deepEqual(medidos.rows.map((r) => r.external_post_id), ['vid00000001', 'vid00000003']);
+    assert.deepEqual(medidos.rows.map((r) => r.external_post_id), ['vid00000001', 'vid00000002', 'vid00000003'], 'el viejo sin lectura entra una vez');
 
     const borrado = await h.db.query<{ external_post_id: string; deleted_on_platform: boolean }>(
       `SELECT external_post_id, deleted_on_platform FROM post ORDER BY 1`,

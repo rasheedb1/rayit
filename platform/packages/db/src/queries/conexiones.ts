@@ -937,7 +937,10 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
     gaps: AccountGap[] | null;
   }>(
     `SELECT c.id, c.access_mode,
-            to_char(l.day, 'YYYY-MM-DD') AS day, l.followers, l.following, l.media_count, l.views,
+            to_char(l.day, 'YYYY-MM-DD') AS day, l.followers, l.following, l.media_count,
+            -- Las vistas son del último día CERRADO (Instagram las da por día, /me/insights): si la
+            -- lectura más reciente aún no las tiene, las del día anterior con cifra, hasta una semana atrás.
+            COALESCE(l.views, v.views) AS views,
             w.followers AS followers_week_ago,
             CASE WHEN w.followers > 0 AND l.followers IS NOT NULL
                  THEN round((l.followers - w.followers)::numeric / w.followers, 6)
@@ -958,6 +961,13 @@ export async function listAccounts(tx: WorkspaceTx): Promise<AccountRow[]> {
           WHERE h.connection_id = c.id AND h.source = ANY($1::text[]) AND h.day <= l.day - 7
           ORDER BY h.day DESC LIMIT 1
        ) w ON true
+       LEFT JOIN LATERAL (
+         SELECT s.views
+           FROM account_metric_snapshot s
+          WHERE s.connection_id = c.id AND s.source = ANY($1::text[]) AND s.views IS NOT NULL
+            AND s.day >= l.day - 7 AND s.day <= l.day
+          ORDER BY s.day DESC, s.captured_at DESC LIMIT 1
+       ) v ON true
        -- El consentimiento vigente MÁS RECIENTE, tenga o no actedBy: si el titular
        -- reconectó después del mánager, la cuenta ya no está «conectada por» él.
        LEFT JOIN LATERAL (
