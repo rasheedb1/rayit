@@ -65,7 +65,8 @@ export interface BrokenAccount {
  *     calla el crítico del día siguiente, que tiene que ir arriba del
  *     bloque y no debajo de los cobros;
  *   - la cuenta se leyó bien después del último aviso
- *     (last_synced_at): es otra avería, aunque caiga en la misma semana.
+ *     (last_synced_at, o se volvió a conectar: connected_at): es otra
+ *     avería, aunque caiga en la misma semana.
  * Corre dentro de la transacción de quien cambia el estado de la cuenta:
  * el estado y su aviso entran juntos o no entra ninguno. Y TIENE que
  * correr en una: el candado de la cuenta (pg_advisory_xact_lock) se suelta
@@ -89,7 +90,7 @@ export async function notifyBrokenAccount(tx: Queryable, acc: BrokenAccount, kin
            AND n.created_at > now() - make_interval(days => $6::int)
            AND NOT ($2::text = 'critical' AND n.severity <> 'critical')
            AND n.created_at >= coalesce(
-                 (SELECT s.last_synced_at FROM social_connection s WHERE s.id = $5::uuid AND s.workspace_id = $1::uuid),
+                 (SELECT greatest(s.last_synced_at, s.connected_at) FROM social_connection s WHERE s.id = $5::uuid AND s.workspace_id = $1::uuid),
                  '-infinity'::timestamptz))
      RETURNING id`,
     [
@@ -114,11 +115,14 @@ const SIN_TOKEN = ['needs_reauth', 'expired', 'revoked'] as const;
  * siguiente, lo vuelve a ver a la semana). Cada una pasa por
  * notifyBrokenAccount, con su regla, en una transacción por cuenta (la
  * que su candado necesita). `workspaceId` lo limita a un espacio (la
- * corrida de una prueba o de la demo).
+ * corrida de una prueba o de la demo). `signal` es la de la corrida: en
+ * el turno (CIM-7) el presupuesto se acaba y el bucle para donde va, sin
+ * dejar transacciones corriendo detrás; lo que quede lo barre la corrida
+ * siguiente.
  *
  * Devuelve cuántos avisos escribió.
  */
-export async function remindBrokenAccounts(db: JobDatabase, workspaceId: string | null = null): Promise<number> {
+export async function remindBrokenAccounts(db: JobDatabase, workspaceId: string | null = null, signal?: AbortSignal): Promise<number> {
   const { rows } = await db.query<BrokenAccount & { status_detail: string | null; [k: string]: unknown }>(
     `SELECT c.id, c.workspace_id, c.platform_id, c.handle, c.status_detail
        FROM social_connection c
@@ -133,6 +137,7 @@ export async function remindBrokenAccounts(db: JobDatabase, workspaceId: string 
   );
   let escritos = 0;
   for (const acc of rows) {
+    if (signal?.aborted) break;
     if (await db.transaction((tx) => notifyBrokenAccount(tx, acc, 'reauth', acc.status_detail))) escritos += 1;
   }
   return escritos;

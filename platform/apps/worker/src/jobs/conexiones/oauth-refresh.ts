@@ -173,7 +173,7 @@ export const oauthRefreshJob = defineJob<OAuthRefreshPayload>('oauth.refresh', a
   // una cuenta pedida desde Conexiones. Un fallo aquí no tumba lo renovado.
   const reminded = payload.connectionId || ctx.signal.aborted
     ? 0
-    : await remindBrokenAccounts(ctx.db, payload.workspaceId ?? null).catch((err: unknown) => {
+    : await remindBrokenAccounts(ctx.db, payload.workspaceId ?? null, ctx.signal).catch((err: unknown) => {
         ctx.logger.error('no se pudo recordar las cuentas sin token', { err });
         return 0;
       });

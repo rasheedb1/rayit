@@ -291,4 +291,19 @@ describe('dos jobs que rompen la misma cuenta a la vez', () => {
     assert.ok(escritos >= 1);
     assert.equal(transacciones, escritos, 'una por cuenta que pasó por notifyBrokenAccount');
   });
+  test('el barrido para donde va cuando la corrida se aborta (el presupuesto del turno, CIM-7)', async () => {
+    await t.admin(`UPDATE notification SET created_at = created_at - interval '30 days'
+                    WHERE kind = 'connection_error' AND entity_id = '${CONEXION_TIKTOK}'`);
+    let transacciones = 0;
+    const db: JobDatabase = {
+      query: jobDb.query,
+      transaction: (fn) => {
+        transacciones += 1;
+        return jobDb.transaction(fn);
+      },
+    };
+    assert.equal(await remindBrokenAccounts(db, LAURA_WS, AbortSignal.abort()), 0);
+    assert.equal(transacciones, 0, 'con la señal abortada no abre ninguna transacción');
+    assert.ok((await remindBrokenAccounts(db, LAURA_WS, new AbortController().signal)) >= 1, 'sin abortar, barre');
+  });
 });
