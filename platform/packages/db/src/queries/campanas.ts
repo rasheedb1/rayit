@@ -779,8 +779,10 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
   await lockEditableCampaign(tx, id);
   const { rows } = await tx.query<{
     name: string; brief: string | null; starts_on: string | null; ends_on: string | null; tracking_code: string | null; tracking_url: string | null;
+    brand_baseline_from: string | null;
   }>(
-    `SELECT c.name, c.brief, ${DATE('c.starts_on')} AS starts_on, ${DATE('c.ends_on')} AS ends_on, c.tracking_code, c.tracking_url
+    `SELECT c.name, c.brief, ${DATE('c.starts_on')} AS starts_on, ${DATE('c.ends_on')} AS ends_on, c.tracking_code, c.tracking_url,
+            ${DATE('c.brand_baseline_from')} AS brand_baseline_from
      FROM campaign c WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`,
     [id],
   );
@@ -801,7 +803,13 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
        starts_on = $5::date,
        ends_on = $6::date,
        tracking_code = CASE WHEN $7::boolean THEN $8 ELSE tracking_code END,
-       tracking_url = CASE WHEN $9::boolean THEN $10 ELSE tracking_url END
+       tracking_url = CASE WHEN $9::boolean THEN $10 ELSE tracking_url END,
+       -- La línea base de la marca es siempre «catorce días antes del inicio»
+       -- (CAM-2, y la transición a live). Si el inicio se mueve, se mueve con
+       -- él: antes quedaba la fecha vieja y, adelantando el inicio, la ventana
+       -- salía invertida y la ficha decía «línea base corta» (QA CAM, 4-oct-2026).
+       brand_baseline_from = CASE WHEN $5::date IS DISTINCT FROM starts_on AND brand_baseline_from IS NOT NULL
+                                  THEN $5::date - 14 ELSE brand_baseline_from END
      WHERE c.id = $1 AND ${SCOPE_CAMPAIGN}`,
     [
       id,
@@ -819,11 +827,11 @@ export async function updateCampaign(tx: WorkspaceTx, id: string, input: UpdateC
     entityId: id,
     before: {
       name: current.name, brief: current.brief, startsOn: current.starts_on, endsOn: current.ends_on,
-      trackingCode: current.tracking_code, trackingUrl: current.tracking_url,
+      trackingCode: current.tracking_code, trackingUrl: current.tracking_url, brandBaselineFrom: current.brand_baseline_from,
     },
     after: {
       name: updated.name, brief: updated.brief, startsOn: updated.startsOn, endsOn: updated.endsOn,
-      trackingCode: updated.trackingCode, trackingUrl: updated.trackingUrl,
+      trackingCode: updated.trackingCode, trackingUrl: updated.trackingUrl, brandBaselineFrom: updated.brandBaselineFrom,
     },
   });
   return updated;
@@ -1630,6 +1638,12 @@ export async function getResultInputs(q: ResultExecutor, campaignId: string): Pr
          ON a->>'platform_id' = s.platform_id AND lower(ltrim(s.handle, '@')) = lower(ltrim(a->>'handle', '@'))
        WHERE s.company_id = c.company_id
          AND (s.campaign_id IS NULL OR s.campaign_id IN (SELECT id FROM campaign WHERE workspace_id = $1))
+         -- Desde la víspera de la línea base, como la ficha: sin este corte el
+         -- ancla del ritmo previo era la última lectura ANTERIOR a la ventana a
+         -- cualquier distancia (la serie de una campaña de hace meses con la
+         -- misma marca), y el «×N su ritmo previo» del resultado no coincidía
+         -- con el de la ficha (QA CAM, 4-oct-2026).
+         AND (c.brand_baseline_from IS NULL OR s.day >= c.brand_baseline_from - 1)
        ORDER BY s.platform_id, s.day, (s.followers IS NULL), s.captured_at, s.id`,
       [ws, campaignId],
     ),

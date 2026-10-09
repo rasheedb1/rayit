@@ -23,11 +23,12 @@
  * token: userInfo / me / channels.list?mine=true, source 'api'. Los
  * videos y sus métricas son de CON-5.
  */
-import { createPublicProfileSources, isPlatformApiError, isPlatformId, PublicLookupError, type PublicProfileSources } from '@mc/connectors';
+import { createPublicProfileSources, INSTAGRAM_ACCOUNT_METRICS, isPlatformApiError, isPlatformId, PublicLookupError, type NormalizedAccountMetrics, type OAuthTokens, type PublicProfileSources } from '@mc/connectors';
 import { auditAsJob } from '@mc/db';
 import { defineJob, type JobContext, type JobPayload } from '../../runner/registry.ts';
 import { notifyBrokenAccount } from './aviso-cuenta.ts';
 import { mapLimit } from './oauth-refresh.ts';
+import { tokensListos } from './_token.ts';
 
 export interface CollectAccountMetricsPayload extends JobPayload {
   /** Solo esta cuenta (desde la pantalla). */
@@ -42,6 +43,8 @@ interface AccountRow extends Record<string, unknown> {
   external_account_id: string;
   access_mode: string;
   secret_ref: string;
+  access_expires_at: Date | string | null;
+  refresh_expires_at: Date | string | null;
 }
 
 interface Metrics {
@@ -49,6 +52,51 @@ interface Metrics {
   following: number | null;
   mediaCount: number | null;
   views: number | null;
+  /** Las cifras DEL DÍA que solo da la plataforma con el permiso del dueño (Instagram, /me/insights). */
+  reach?: number | null;
+  profileViews?: number | null;
+  accountsEngaged?: number | null;
+  totalInteractions?: number | null;
+  follows?: number | null;
+  unfollows?: number | null;
+  websiteClicks?: number | null;
+}
+
+/** Lo que devuelve una lectura autorizada: las cifras, lo crudo y, si la red da cifras por día, de qué día son. */
+interface AuthorizedRead {
+  metrics: Metrics;
+  raw: unknown;
+  /** YYYY-MM-DD del snapshot. Sin él, el día de la corrida. */
+  day?: string;
+}
+
+/** Métricas de cuenta de Instagram Login: la lista documentada más las visitas al perfil (si Meta la rechaza, el cliente repite sin ella). */
+const INSTAGRAM_ACCOUNT_METRICS_COMPLETAS: readonly string[] = [...INSTAGRAM_ACCOUNT_METRICS, 'profile_views'];
+
+/**
+ * Instagram entrega las cifras de la cuenta (vistas, alcance, interacciones,
+ * visitas al perfil) por DÍA, con /me/insights, y solo con el permiso del
+ * dueño. Se piden las del último día cerrado (ayer, UTC): la corrida de las
+ * 05:10 solo tiene completo el día de ayer, y pedir «hoy» daría cinco horas
+ * de vistas como si fueran el día entero. Las métricas que Meta rechace las
+ * quita el propio cliente y repite una vez; si aun así falla por algo que
+ * no es el token, la cuenta se guarda igual con seguidores y
+ * publicaciones, y las cifras del día quedan en null.
+ */
+async function insightsDeInstagram(client: ReturnType<JobContext['connectors']['instagram']>, dia: string, ctx: JobContext, log: JobContext['logger']): Promise<NormalizedAccountMetrics | null> {
+  try {
+    const { data } = await client.accountInsights(dia, { metrics: INSTAGRAM_ACCOUNT_METRICS_COMPLETAS, signal: ctx.signal });
+    return data;
+  } catch (err) {
+    if (isPlatformApiError(err) && err.kind === 'auth') throw err;
+    log.warn('sin cifras del día de la cuenta; se guardan seguidores y publicaciones', { code: isPlatformApiError(err) ? err.code : 'unexpected', dia });
+    return null;
+  }
+}
+
+/** El día UTC anterior al de la corrida: el último que la plataforma tiene cerrado. */
+function diaAnterior(now: Date): string {
+  return new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
 }
 
 /**
@@ -58,17 +106,30 @@ interface Metrics {
  * vistas van en null (ver PublicAccountMetrics.views en @mc/connectors).
  * null = red sin lectura de cuenta con token.
  */
-async function readAuthorized(ctx: JobContext, acc: AccountRow): Promise<{ metrics: Metrics; raw: unknown } | null> {
-  const tokens = await ctx.secrets.get(acc.secret_ref);
-  if (!tokens) throw new PublicLookupError('not_configured', 'El almacén no tiene el permiso de esta cuenta; hay que volver a autorizarla.');
+async function readAuthorized(ctx: JobContext, acc: AccountRow, tokens: OAuthTokens, log: JobContext['logger']): Promise<AuthorizedRead | null> {
   const auth = { connectionId: acc.id, tokens };
   if (acc.platform_id === 'tiktok') {
     const { data, raw } = await ctx.connectors.tiktokDisplay(auth).userInfo({ signal: ctx.signal });
     return { metrics: { followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count, views: data.metrics.views }, raw };
   }
   if (acc.platform_id === 'instagram') {
-    const { data, raw } = await ctx.connectors.instagram(auth).me({ signal: ctx.signal });
-    return { metrics: { followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count, views: data.metrics.views }, raw };
+    // Seguidores y publicaciones a hoy, más las cifras del último día
+    // cerrado (ayer): el snapshot se guarda con la fecha de ESE día, que
+    // es la que la serie de la cuenta promete («datos hasta el …»).
+    const client = ctx.connectors.instagram(auth);
+    const { data, raw } = await client.me({ signal: ctx.signal });
+    const dia = diaAnterior(ctx.now());
+    const insights = await insightsDeInstagram(client, dia, ctx, log);
+    return {
+      day: dia,
+      metrics: {
+        followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count,
+        views: insights?.views ?? null, reach: insights?.reach ?? null, profileViews: insights?.profile_views ?? null,
+        accountsEngaged: insights?.accounts_engaged ?? null, totalInteractions: insights?.total_interactions ?? null,
+        follows: insights?.follows ?? null, unfollows: insights?.unfollows ?? null, websiteClicks: insights?.website_clicks ?? null,
+      },
+      raw: { me: raw, insights: insights ?? null },
+    };
   }
   if (acc.platform_id === 'youtube') {
     const { data, raw } = await ctx.connectors.youtube(auth).channelMine({ signal: ctx.signal });
@@ -80,7 +141,7 @@ async function readAuthorized(ctx: JobContext, acc: AccountRow): Promise<{ metri
 
 export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>('collect.account_metrics', async (payload, ctx) => {
   const { rows } = await ctx.db.query<AccountRow>(
-    `SELECT id, workspace_id, platform_id, handle, external_account_id, access_mode, secret_ref
+    `SELECT id, workspace_id, platform_id, handle, external_account_id, access_mode, secret_ref, access_expires_at, refresh_expires_at
        FROM social_connection
       WHERE access_mode IN ('public_profile', 'aggregator', 'direct_oauth') AND deleted_at IS NULL AND status IN ('active', 'error')
         AND ($1::uuid IS NULL OR id = $1) AND ($2::uuid IS NULL OR workspace_id = $2)
@@ -117,10 +178,19 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
           let raw: unknown;
           let note: string | null;
           let sourceName: string;
+          /** El día del snapshot: el de la corrida, salvo que la red dé cifras por día cerrado (Instagram autorizada). */
+          let diaDelSnapshot = day;
           if (acc.access_mode === 'direct_oauth') {
-            const read = await readAuthorized(ctx, acc);
+            // Con el token vigente: si venció, se renueva aquí mismo
+            // (_token.ts); solo una renovación rechazada pide reautorizar.
+            const listo = await tokensListos(ctx, acc);
+            if (listo.kind === 'sin_secreto') throw new PublicLookupError('not_configured', 'El almacén no tiene el permiso de esta cuenta; hay que volver a autorizarla.');
+            if (listo.kind === 'needs_reauth') { errored.push(acc.id); log.warn('la plataforma rechazó renovar el permiso; la cuenta pide reautorizar', { code: listo.code }); return; }
+            if (listo.kind === 'transitorio') { transient.push(acc.id); log.warn('el acceso venció y la renovación falló de forma pasajera; se reintenta', { code: listo.code }); return; }
+            const read = await readAuthorized(ctx, acc, listo.tokens, log);
             if (!read) { noMetrics.push(acc.id); log.info('red autorizada sin lectura de cuenta todavía'); return; }
             m = read.metrics; raw = read.raw; note = null; sourceName = 'api';
+            if (read.day) diaDelSnapshot = read.day;
           } else {
             const profile = await source!.lookup(acc.handle ?? acc.external_account_id, { signal: ctx.signal });
             m = profile.metrics; raw = profile.raw; note = profile.metricsNote;
@@ -164,12 +234,18 @@ export const collectAccountMetricsJob = defineJob<CollectAccountMetricsPayload>(
           if (m) {
             await ctx.db.transaction(async (tx) => {
               await tx.query(
-                `INSERT INTO account_metric_snapshot (connection_id, workspace_id, day, followers, following, media_count, views, raw, source)
-                 VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8::jsonb, $9)
+                `INSERT INTO account_metric_snapshot (connection_id, workspace_id, day, followers, following, media_count, views,
+                                                     reach, profile_views, accounts_engaged, total_interactions, follows, unfollows, website_clicks, raw, source)
+                 VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16)
                  ON CONFLICT (connection_id, day, source) DO UPDATE
                    SET followers = EXCLUDED.followers, following = EXCLUDED.following, media_count = EXCLUDED.media_count,
-                       views = EXCLUDED.views, raw = EXCLUDED.raw, captured_at = now()`,
-                [acc.id, acc.workspace_id, day, m.followers, m.following, m.mediaCount, m.views, JSON.stringify(raw ?? {}), sourceName],
+                       views = EXCLUDED.views, reach = EXCLUDED.reach, profile_views = EXCLUDED.profile_views,
+                       accounts_engaged = EXCLUDED.accounts_engaged, total_interactions = EXCLUDED.total_interactions,
+                       follows = EXCLUDED.follows, unfollows = EXCLUDED.unfollows, website_clicks = EXCLUDED.website_clicks,
+                       raw = EXCLUDED.raw, captured_at = now()`,
+                [acc.id, acc.workspace_id, diaDelSnapshot, m.followers, m.following, m.mediaCount, m.views,
+                  m.reach ?? null, m.profileViews ?? null, m.accountsEngaged ?? null, m.totalInteractions ?? null, m.follows ?? null, m.unfollows ?? null, m.websiteClicks ?? null,
+                  JSON.stringify(raw ?? {}), sourceName],
               );
               await tx.query(
                 `UPDATE social_connection SET last_synced_at = now(), last_error_at = NULL, consecutive_failures = 0, status = 'active', status_detail = NULL

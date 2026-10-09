@@ -237,6 +237,8 @@ describe('CON-5 → CON-6: tras collect.post_metrics, la línea base y el puntaj
 describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea base de CON-6', DESCRIBE_DB_TIMEOUT, () => {
   const LAURA = '00000002-0000-4000-8000-000000000001';
   const CAFE_ALMA = '00000003-0000-4000-8000-000000ca0001';
+  /** El día con el que se siembra la demo; las cifras de este bloque son las de ese día. */
+  const DIA_DEL_SEED = new Date('2026-09-23T00:00:00Z');
   let h: Harness;
   /** Un segundo después del computed_at con el que el seed calculó su línea base (docs/propuestas/CON-6.md §4). */
   let reloj = new Date();
@@ -272,7 +274,10 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
     h = await startHarness({
       jobs: allJobs, now: () => reloj,
       seed: async (db: PgliteDatabase) => {
-        await applyRepoSeeds(db);
+        // Con el reloj fijo (ver applyRepoSeeds): «4,496» y el top 5 de
+        // abajo son del cruce entre los posts fijos de 0003 y la parrilla
+        // relativa de 0002, que cambia con el calendario.
+        await applyRepoSeeds(db, { reloj: DIA_DEL_SEED });
         const r = await db.raw.query<{ computed_at: Date }>(`SELECT max(computed_at) AS computed_at FROM creator_baseline WHERE workspace_id = '${LAURA}'`);
         reloj = new Date(new Date(r.rows[0]!.computed_at).getTime() + 1_000);
         basesDelSeed = (await db.raw.query<BaseSeed>(BASES)).rows;

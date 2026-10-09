@@ -143,7 +143,20 @@ const CASOS: Record<string, CasoDeAlcance> = {
   },
   // A 'overdue' y no a 'void': la pasada de control de recordPayment (arriba) la deja en 'partial', que no se puede anular.
   transitionInvoice: { run: (tx) => transitionInvoice(tx, INVOICE_SOFIA, 'overdue'), duena: 'nombra', miembro: { rechaza: InvoiceNotFound } },
-  createInvoiceFromCampaign: { run: (tx) => createInvoiceFromCampaign(tx, CAMPAIGN_SOFIA), duena: 'nombra', miembro: { rechazaSi: noExiste } },
+  // Una factura viva por campaña: las de Sofía (la de la fixture y la que
+  // dejó el control de createInvoice) se desatan mientras dura la llamada y
+  // se vuelven a atar en la misma transacción. Quien no las ve no desata
+  // nada, y la campaña «no existe» igual.
+  createInvoiceFromCampaign: {
+    run: async (tx) => {
+      const { rows } = await tx.query<{ id: string }>("UPDATE invoice SET campaign_id = NULL WHERE campaign_id = $1 AND status <> 'void' RETURNING id", [CAMPAIGN_SOFIA]);
+      const creada = await createInvoiceFromCampaign(tx, CAMPAIGN_SOFIA);
+      await tx.query('UPDATE invoice SET campaign_id = $1 WHERE id = ANY($2::uuid[])', [CAMPAIGN_SOFIA, rows.map((r) => r.id)]);
+      return creada;
+    },
+    duena: 'nombra',
+    miembro: { rechazaSi: noExiste },
+  },
   // Cambia algo de todo el espacio: quien tiene alcance no lo toca. La dueña guarda lo mismo que había.
   updateFinanceSettings: {
     run: async (tx) => updateFinanceSettings(tx, { settings: await getFinanceSettings(tx) }),

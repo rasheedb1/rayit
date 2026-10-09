@@ -1,7 +1,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CampaignLockedError, InvalidCampaignTransition, InvalidDatesError, InvalidNameError } from '@mc/core';
+import { AGE_CUTS_HOURS, CampaignLockedError, InvalidCampaignTransition, InvalidDatesError, InvalidNameError } from '@mc/core';
 import {
   getCampaign,
   linkPost,
@@ -40,7 +40,7 @@ import {
 } from '../src/index.ts';
 import { filasDeBitacora } from './bitacora.ts';
 import { createEmbeddedDb, type EmbeddedDb } from '../src/embedded.ts';
-import { ANCLA_DEMO, diasHasta, medianasVigentesSql, multiploPonderado, POSTS_CAFE_ALMA_A_30_DIAS, type MedianaVigente } from './demo.ts';
+import { ANCLA_DEMO, diasHasta } from './demo.ts';
 import {
   openTestDb, type TestDb,
   WORKSPACE_LAURA, COMPANY_CAFE_ALMA, CAMPAIGN_CAFE_ALMA, CAMPAIGN_FRESKO, CAMPAIGN_NUTRIVE, CAMPAIGN_HOGAR_LINDO,
@@ -58,9 +58,6 @@ const CAMPAIGN_SIN_FECHAS = '00000003-0000-4000-8000-00000ca0f002';
 
 let t: TestDb;
 const laura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_LAURA, fn);
-/** El múltiplo de Café Alma contra la línea base que hay hoy en la tabla (test/demo.ts, CIM-12). */
-const multiploCafeAlma = async () =>
-  multiploPonderado(POSTS_CAFE_ALMA_A_30_DIAS, await laura((tx) => tx.query<MedianaVigente>(medianasVigentesSql()).then((r) => r.rows)));
 
 before(async () => {
   t = await openTestDb();
@@ -106,6 +103,30 @@ after(async () => {
  * 5 % por debajo mientras el video aún no cumple los 30 días. Fuera de
  * esa banda ya no es el paso del tiempo: es una regresión.
  */
+/**
+ * La cifra «× la mediana del creador» que CAM-5 debe dar con la línea
+ * base que hay en la tabla: Σ views·(views/mediana) / Σ views a 720 h,
+ * a tres decimales (packages/core/src/campanas.ts). Se deriva en vez de
+ * clavarla porque la mediana del seed cambia con el calendario: los
+ * cinco posts de campaña de 0003 tienen fecha fija y la parrilla de 0002
+ * es relativa a hoy, así que cada vez que uno de ellos cumple 30 días
+ * entra en la ventana de la línea base (el TikTok de Fresko, el 2-oct-2026).
+ */
+async function vsMedianaDelSeed(campaignId: string): Promise<string> {
+  const r = await laura((tx) => getResultInputs(tx, campaignId));
+  assert.ok(r, `${campaignId}: entradas del resultado`);
+  let ponderado = 0;
+  let total = 0;
+  for (const p of r.inputs.posts) {
+    const corte = p.cuts.find((c) => c.cutHours === 720);
+    const base = r.inputs.baselines.find((b) => b.platformId === p.platformId && b.cutHours === 720);
+    assert.ok(corte?.views && base?.medianViews, `${p.postId}: lectura a 720 h y línea base fiable de ${p.platformId}`);
+    ponderado += corte.views * (corte.views / base.medianViews);
+    total += corte.views;
+  }
+  return (ponderado / total).toFixed(3);
+}
+
 function cercaDelMock(actual: number | null | undefined, ref: number, que: string): asserts actual is number {
   assert.ok(
     typeof actual === 'number' && actual >= Math.round(ref * 0.95) && actual <= Math.round(ref * 1.03),
@@ -343,18 +364,18 @@ describe('buscar y sugerir', () => {
     // por fecha de publicación descendente.
     const ids = todos.map((p) => p.postId);
     assert.ok(!ids.includes(POST_D01_REEL_CAFE_ALMA) && !ids.includes(POST_D02_TIKTOK_CAFE_ALMA), 'los suyos no se ofrecen');
-    // Los de las otras campañas se buscan por su caption y no por su sitio
-    // en la primera página: la parrilla del seed 0002 avanza con el reloj
-    // y, pasados unos días, el del 15 de julio ya no cabe en los 50 más
-    // recientes (CIM-12: la prueba fallaba según el día).
-    const buscar = async (q: string) => (await laura((tx) => listLinkablePosts(tx, { campaignId: CAMPAIGN_CAFE_ALMA, q }))).map((p) => p.postId);
-    const coldBrew = await buscar('cold brew');
-    assert.ok(!coldBrew.includes(POST_D01_REEL_CAFE_ALMA) && !coldBrew.includes(POST_D02_TIKTOK_CAFE_ALMA), 'ni buscándolos se ofrecen los suyos');
-    const deFresko = await buscar('@freskomarket');
-    const nutrive = await buscar('Nutrivé');
-    for (const [id, encontrados] of [[POST_D04_TIKTOK_FRESKO, deFresko], [POST_D03_TIKTOK_FRESKO, deFresko], [POST_D05_YOUTUBE_NUTRIVE, nutrive]] as const) {
-      assert.ok(encontrados.includes(id), `${id} debería poder asociarse`);
+    // La lista se corta en los 50 más recientes, y los posts de las otras
+    // campañas tienen fecha FIJA (0003) mientras la parrilla del seed es
+    // relativa a hoy: cada semana hay más videos nuevos que ellos, y el de
+    // Nutrivé (15-jul) salió del corte el 4-oct-2026. Lo que se afirma es
+    // que entran exactamente los que caben en el corte.
+    const enElCorte = new Set((await laura((tx) =>
+      tx.query<{ post_id: string }>('SELECT post_id FROM creator_post_board ORDER BY published_at DESC NULLS LAST, post_id LIMIT 50'),
+    )).rows.map((r) => r.post_id));
+    for (const id of [POST_D04_TIKTOK_FRESKO, POST_D03_TIKTOK_FRESKO, POST_D05_YOUTUBE_NUTRIVE]) {
+      assert.equal(ids.includes(id), enElCorte.has(id), `${id} se ofrece si y solo si está entre los 50 más recientes`);
     }
+    assert.equal(todos.length, Math.min(50, enElCorte.size), 'la lista llena el corte');
     const fechas = todos.map((p) => p.publishedAt);
     assert.deepEqual(fechas, [...fechas].sort().reverse(), 'más recientes primero');
     const fresko = await laura((tx) => listLinkablePosts(tx, { campaignId: CAMPAIGN_CAFE_ALMA, q: 'FRESKO' }));
@@ -396,6 +417,29 @@ describe('buscar y sugerir', () => {
 });
 
 describe('editar y cambiar de estado', () => {
+  test('updateCampaign: la línea base de la marca sigue al inicio (catorce días antes), y solo si ya estaba fijada', async () => {
+    // Sin línea base (campaña planificada a mano): mover el inicio no la inventa; la fija la transición a live.
+    const sin = await laura((tx) => updateCampaign(tx, CAMPAIGN_PRUEBA, { startsOn: '2026-10-02' }));
+    assert.equal(sin.brandBaselineFrom, null);
+    // Con línea base (como la deja CAM-2 desde una cotización): adelantar el
+    // inicio la adelanta; antes quedaba la vieja y la ventana salía invertida.
+    await t.admin(`UPDATE campaign SET brand_baseline_from = DATE '2026-09-18' WHERE id = '${CAMPAIGN_PRUEBA}'`);
+    const adelantada = await laura((tx) => updateCampaign(tx, CAMPAIGN_PRUEBA, { startsOn: '2026-09-20' }));
+    assert.deepEqual([adelantada.startsOn, adelantada.brandBaselineFrom], ['2026-09-20', '2026-09-06']);
+    // Cambiar solo el fin, o repetir el mismo inicio, no la toca.
+    const mismoInicio = await laura((tx) => updateCampaign(tx, CAMPAIGN_PRUEBA, { startsOn: '2026-09-20', endsOn: '2026-10-10' }));
+    assert.equal(mismoInicio.brandBaselineFrom, '2026-09-06');
+    const bitacora = await filasDeBitacora(t, WORKSPACE_LAURA, CAMPAIGN_PRUEBA, 'campaign.updated');
+    const ultimaConCambio = bitacora.find((f) => (f.after as { brandBaselineFrom?: string | null }).brandBaselineFrom === '2026-09-06' && (f.before as { brandBaselineFrom?: string | null }).brandBaselineFrom === '2026-09-18');
+    assert.ok(ultimaConCambio, 'la bitácora deja el antes y el después de la línea base');
+    // Se devuelve la campaña a su estado para las pruebas que siguen, y se
+    // retiran las cuatro filas de bitácora de esta prueba: la siguiente
+    // cuenta las suyas.
+    await laura((tx) => updateCampaign(tx, CAMPAIGN_PRUEBA, { startsOn: '2026-10-01', endsOn: '2026-10-08' }));
+    await t.admin(`UPDATE campaign SET brand_baseline_from = NULL WHERE id = '${CAMPAIGN_PRUEBA}'`);
+    await t.admin(`DELETE FROM audit_log WHERE id IN (SELECT id FROM audit_log WHERE entity_id = '${CAMPAIGN_PRUEBA}' AND action = 'campaign.updated' ORDER BY created_at DESC LIMIT 4)`);
+  });
+
   test('updateCampaign: fechas coherentes, nombre obligatorio, null limpia y undefined conserva', async () => {
     await assert.rejects(laura((tx) => updateCampaign(tx, CAMPAIGN_PRUEBA, { endsOn: '2026-09-30' })), (e: unknown) => e instanceof InvalidDatesError && /anterior/.test(e.messageEs));
     await assert.rejects(laura((tx) => updateCampaign(tx, CAMPAIGN_PRUEBA, { startsOn: '2026-10-09' })), InvalidDatesError);
@@ -419,9 +463,9 @@ describe('editar y cambiar de estado', () => {
     assert.equal(todas.length, 4, 'dos de «sin fechas» y dos de aquí; los tres rechazos no escriben');
     assert.deepEqual((todas[0]?.after as { startsOn: string | null }).startsOn, null);
     const cambios = todas.slice(2);
-    assert.deepEqual(cambios[0]?.before, { name: c.name, brief: null, startsOn: '2026-10-01', endsOn: '2026-10-08', trackingCode: null, trackingUrl: null });
-    assert.deepEqual(cambios[0]?.after, { name: c.name, brief: 'Un brief', startsOn: '2026-10-01', endsOn: '2026-10-08', trackingCode: 'LAURAPRUEBA', trackingUrl: 'https://ejemplo.co/?utm_campaign=prueba' });
-    assert.deepEqual(cambios[1]?.after, { name: c.name, brief: 'Un brief', startsOn: '2026-10-01', endsOn: '2026-10-10', trackingCode: 'LAURAPRUEBA', trackingUrl: null });
+    assert.deepEqual(cambios[0]?.before, { name: c.name, brief: null, startsOn: '2026-10-01', endsOn: '2026-10-08', trackingCode: null, trackingUrl: null, brandBaselineFrom: null });
+    assert.deepEqual(cambios[0]?.after, { name: c.name, brief: 'Un brief', startsOn: '2026-10-01', endsOn: '2026-10-08', trackingCode: 'LAURAPRUEBA', trackingUrl: 'https://ejemplo.co/?utm_campaign=prueba', brandBaselineFrom: null });
+    assert.deepEqual(cambios[1]?.after, { name: c.name, brief: 'Un brief', startsOn: '2026-10-01', endsOn: '2026-10-10', trackingCode: 'LAURAPRUEBA', trackingUrl: null, brandBaselineFrom: null });
   });
 
   test('transiciones válidas e inválidas; al pasar a live se fija la línea base', async () => {
@@ -975,7 +1019,10 @@ describe('resultado de campaña', () => {
     assert.ok((d01?.maxAgeHours ?? 0) >= 720);
     assert.ok(r.inputs.baselines.some((b) => b.platformId === 'instagram' && b.cutHours === 720 && b.reliable));
     assert.equal(r.inputs.brandSeries[0]?.platformId, 'instagram');
-    assert.equal(r.inputs.brandSeries[0]?.points.length, 60);
+    // El seed deja 60 días (4-jul a 1-sep); la serie del resultado empieza en
+    // la víspera de la línea base (27-jul − 1), como la ficha: 38 puntos.
+    assert.equal(r.inputs.brandSeries[0]?.points.length, 38);
+    assert.equal(r.inputs.brandSeries[0]?.points[0]?.day, '2026-07-26');
     assert.deepEqual(r.inputs.brandTotals.map((x) => [x.kind, x.source, x.value]), [['code_redemptions', 'brand_manual', '318.00'], ['revenue', 'brand_manual', '8400000.00']]);
   });
 
@@ -989,7 +1036,7 @@ describe('resultado de campaña', () => {
       assert.ok(r);
       assert.deepEqual(
         [r.cutHours, r.views, r.reach, r.interactions, r.saves, r.shares, r.linkClicks, r.reachNonFollowersPct, r.viewsVsMedian],
-        [720, 712000, 486000, 57530, 9600, 5100, 6240, '0.58025', await multiploCafeAlma()],
+        [720, 712000, 486000, 57530, 9600, 5100, 6240, '0.58025', await vsMedianaDelSeed(CAMPAIGN_CAFE_ALMA)],
       );
       assert.deepEqual(
         [r.brandFollowersGained, r.brandFollowersBaselineRate, r.brandFollowersCampaignRate, r.codeRedemptions, r.attributedRevenue, r.currency],
@@ -1015,11 +1062,16 @@ describe('resultado de campaña', () => {
       assert.deepEqual(r?.missingInputs, ['posts', 'brand_followers', 'brand_csv_sales']);
     });
 
-    test('Fresko con el CSV de CAM-4: solo le faltan los seguidores de la marca', async () => {
+    test('Fresko: el corte del resultado es el mayor que TODOS sus posts ya alcanzaron, con el CSV de CAM-4', async () => {
+      // Los posts de Fresko tienen fecha fija (2 y 6-sep-2026): hasta el
+      // 5-oct el corte era 168 h; desde el 6-oct, 720 h. Se deriva de la
+      // edad de los posts para que la prueba no dependa del calendario.
+      const entradas = (await laura((tx) => getResultInputs(tx, CAMPAIGN_FRESKO)))!;
+      const edadMinima = Math.min(...entradas.inputs.posts.map((p) => p.maxAgeHours ?? 0));
+      const esperado = Math.max(...AGE_CUTS_HOURS.filter((c) => c <= edadMinima));
       await laura((tx) => computeCampaignResult(tx, CAMPAIGN_FRESKO));
       const r = await laura((tx) => getCampaignResult(tx, CAMPAIGN_FRESKO));
-      // El corte (7 días hasta el 7-oct, 30 desde entonces) depende del día:
-      // lo mira la demo anclada, al principio del archivo.
+      assert.equal(r?.cutHours, esperado);
       assert.ok((r?.views ?? 0) > 0);
       assert.deepEqual(r?.missingInputs, ['brand_followers'], 'las pruebas de CAM-4 le cargaron el CSV de ventas');
     });
@@ -1032,12 +1084,12 @@ describe('resultado de campaña', () => {
 
     test('CON-6 → CAM-5: views_vs_median sale de creator_baseline; sin línea base fiable, null y «baseline»', async () => {
       // Con la línea base del seed (el contrato de CON-6: la tabla, no su
-      // código). La cifra cambia con el día en que se sembró (test/demo.ts);
-      // la fija, 4,496 sembrando el 28-sep, la ancla demo-anclada.test.ts.
-      const esperado = await multiploCafeAlma();
+      // código). Era 4,496 hasta el 1-oct-2026; la cifra cambia cuando un
+      // post de campaña con fecha fija entra en la ventana de la mediana
+      // (ver vsMedianaDelSeed), así que se deriva de la tabla.
       await laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
       const con = await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
-      assert.deepEqual([con?.viewsVsMedian, con?.missingInputs], [esperado, ['brand_csv_sales']]);
+      assert.deepEqual([con?.viewsVsMedian, con?.missingInputs], [await vsMedianaDelSeed(CAMPAIGN_CAFE_ALMA), ['brand_csv_sales']]);
       // Sin la de TikTok (CON-6 todavía no la calculó, o su muestra no es fiable).
       const fiables = await laura((tx) =>
         tx.query<{ id: string }>("SELECT id FROM creator_baseline WHERE platform_id = 'tiktok' AND is_reliable").then((r) => r.rows.map((x) => x.id)),
@@ -1055,7 +1107,7 @@ describe('resultado de campaña', () => {
         await t.admin(`UPDATE creator_baseline SET is_reliable = true WHERE id IN (${lista})`);
       }
       await laura((tx) => computeCampaignResult(tx, CAMPAIGN_CAFE_ALMA));
-      assert.equal((await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA)))?.viewsVsMedian, esperado);
+      assert.equal((await laura((tx) => getCampaignResult(tx, CAMPAIGN_CAFE_ALMA)))?.viewsVsMedian, await vsMedianaDelSeed(CAMPAIGN_CAFE_ALMA));
     });
 
     test('desde otro workspace no se lee ni se escribe el resultado de Laura', async () => {

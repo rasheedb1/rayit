@@ -52,9 +52,17 @@ export async function openTestDatabase(): Promise<PgliteDatabase> {
  * llama dentro del propio `seed`. Con `relojDias`, siembra la demo como
  * si hoy fuera ese día (diasHasta(ANCLA_DEMO) de @mc/db/test/demo): para
  * las pruebas que miran cifras de campañas con fechas fijas (CIM-12).
+ * `reloj` es lo mismo dicho con una fecha (el QA de Nicolás, 5-oct).
  */
-export async function applyRepoSeeds(db: PgliteDatabase, opts: { relojDias?: number } = {}): Promise<void> {
-  await sembrarRepo(execPglite(db.raw), opts.relojDias ?? 0);
+export async function applyRepoSeeds(db: PgliteDatabase, opts: { relojDias?: number; reloj?: Date } = {}): Promise<void> {
+  await sembrarRepo(execPglite(db.raw), opts.relojDias ?? (opts.reloj ? diasHasta(opts.reloj) : 0));
+}
+
+/** Días enteros entre la medianoche UTC de hoy y la del día pedido (negativo si ya pasó). */
+function diasHasta(dia: Date): number {
+  const hoy = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate());
+  const aquel = Date.UTC(dia.getUTCFullYear(), dia.getUTCMonth(), dia.getUTCDate());
+  return Math.round((aquel - hoy) / 86_400_000);
 }
 
 export function testConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {

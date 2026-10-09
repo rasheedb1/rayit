@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { hoyEnZona, rateToPct, INVOICE_STATUS_LABEL_ES } from "@mc/core";
 import { getInvoice, listPayments, listReminders } from "@mc/db/queries/finanzas";
@@ -158,7 +159,13 @@ export default async function FacturaPage({
               </div>
               <div>
                 <dt className="text-xs text-fg-3">Campaña</dt>
-                <dd className="text-sm">{invoice.campaignName ?? <span className="text-fg-3">Sin campaña</span>}</dd>
+                <dd className="text-sm">
+                  {invoice.campaignId && invoice.campaignName ? (
+                    <Link href={`/campanas/${invoice.campaignId}`} className="underline underline-offset-2 hover:text-fg">{invoice.campaignName}</Link>
+                  ) : (
+                    invoice.campaignName ?? <span className="text-fg-3">Sin campaña</span>
+                  )}
+                </dd>
               </div>
               <div>
                 <dt className="text-xs text-fg-3">Emisión</dt>

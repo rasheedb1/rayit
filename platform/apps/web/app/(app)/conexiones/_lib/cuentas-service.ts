@@ -18,9 +18,9 @@
  * la misma regla con conexiones.cuenta.desconectar.
  */
 import {
-  createPublicProfileSources, EncryptedSecretStore, HttpCore, InMemoryCallLogSink, InstagramClient, isPlatformApiError, isPlatformId, keyringFromEnv,
+  createPublicProfileSources, EncryptedSecretStore, HttpCore, InMemoryCallLogSink, INSTAGRAM_ACCOUNT_METRICS, InstagramClient, isPlatformApiError, isPlatformId, keyringFromEnv,
   MasterKeyError, PostgresCallLogSink, PublicLookupError, QuotaManager, redactSecrets, TikTokDisplayClient, TokenCipher, YouTubeClient,
-  type FetchLike, type PlatformId, type PublicProfile, type PublicProfileSource, type PublicProfileSources,
+  type FetchLike, type NormalizedAccountMetrics, type PlatformId, type PublicProfile, type PublicProfileSource, type PublicProfileSources,
 } from "@mc/connectors";
 import {
   addPublicAccount, API_SNAPSHOT_SOURCE, CreatorNotInWorkspace, disconnectConnection, findPublicAccountByHandle, getConnectionCreator, getConsentCreator, listAccounts, markAccountLookupFailure, NoCreatorProfile,
@@ -244,8 +244,27 @@ export function createCuentasService(deps: CuentasDeps) {
             return { followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count, views: data.metrics.views, raw };
           }
           if (row.platformId === "instagram") {
-            const { data, raw } = await new InstagramClient(core, auth).me();
-            return { followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count, views: data.metrics.views, raw };
+            // Como el worker: seguidores y publicaciones a hoy, más las cifras
+            // del último día cerrado (/me/insights de ayer), con la fecha de ese
+            // día. Si Meta no da las del día, la cuenta se guarda igual.
+            const client = new InstagramClient(core, auth);
+            const { data, raw } = await client.me();
+            const ayer = utcDay(new Date(now().getTime() - 86_400_000));
+            // Las métricas que Meta rechace las quita el cliente y repite una vez.
+            let insights: NormalizedAccountMetrics | null = null;
+            try {
+              insights = (await client.accountInsights(ayer, { metrics: [...INSTAGRAM_ACCOUNT_METRICS, "profile_views"] })).data;
+            } catch (err) {
+              if (isPlatformApiError(err) && err.kind === "auth") throw err;
+            }
+            return {
+              day: ayer,
+              followers: data.metrics.followers, following: data.metrics.following, mediaCount: data.metrics.media_count,
+              views: insights?.views ?? null, reach: insights?.reach ?? null, profileViews: insights?.profile_views ?? null,
+              accountsEngaged: insights?.accounts_engaged ?? null, totalInteractions: insights?.total_interactions ?? null,
+              follows: insights?.follows ?? null, unfollows: insights?.unfollows ?? null, websiteClicks: insights?.website_clicks ?? null,
+              raw: { me: raw, insights },
+            };
           }
           if (row.platformId === "youtube") {
             const { data, raw } = await new YouTubeClient(core, auth).channelMine();
@@ -254,8 +273,9 @@ export function createCuentasService(deps: CuentasDeps) {
           }
           throw new PublicLookupError("not_configured", "Esta red autorizada todavía no tiene lectura de cuenta.");
         });
+        const { day: diaDeLaRed, ...cifras } = metrics as typeof metrics & { day?: string };
         await deps.withWorkspace(async (tx) => {
-          await recordAccountSnapshot(tx, { connectionId: row.id, day: utcDay(now()), ...metrics, source: API_SNAPSHOT_SOURCE });
+          await recordAccountSnapshot(tx, { connectionId: row.id, ...cifras, day: diaDeLaRed ?? utcDay(now()), source: API_SNAPSHOT_SOURCE });
           await flush(callLog, tx, row.id);
         });
         return { ok: true, id: row.id, withMetrics: true, note: null, alreadyReadToday: false };
@@ -263,9 +283,11 @@ export function createCuentasService(deps: CuentasDeps) {
         const message = err instanceof PublicLookupError ? err.messageEs
           : isPlatformApiError(err) && err.kind === "auth" ? "La plataforma rechazó el permiso de esta cuenta; hay que volver a autorizarla."
           : isPlatformApiError(err) ? err.messageEs : "No se pudo leer la cuenta. Inténtalo de nuevo en unos minutos.";
-        const permanent = isPlatformApiError(err) && err.kind === "auth";
+        // El token rechazado deja la fila en needs_reauth, como el worker:
+        // la pantalla ofrece «Reautorizar», no «Actualizar» en bucle.
+        const rechazado = isPlatformApiError(err) && err.kind === "auth";
         await deps.withWorkspace(async (tx) => {
-          await markAccountLookupFailure(tx, row.id, message, permanent);
+          await markAccountLookupFailure(tx, row.id, message, rechazado ? "needs_reauth" : false);
           await flush(callLog, tx, row.id);
         }).catch(() => undefined);
         return { ok: false, code: err instanceof PublicLookupError ? err.code : "transient", message };

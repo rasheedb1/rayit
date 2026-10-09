@@ -9,7 +9,7 @@
  */
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getAccountAudience, listAccountAudience } from '../src/index.ts';
+import { getAccountAudience, getAccountMetricsHistory, listAccountAudience } from '../src/index.ts';
 import { openTestDb, SETUP_TIMEOUT, WORKSPACE_LAURA, type TestDb } from './pglite.ts';
 
 const WORKSPACE_VECINO = '00000007-0000-4000-8000-0000000000c1';
@@ -113,6 +113,30 @@ describe('un día en que la plataforma entrega menos', () => {
     const pais = a.dimensions.find((d) => d.dimension === 'country')!;
     assert.equal(pais.day, '2026-09-23', 'y el país sigue ahí, con su propio «datos hasta»');
     assert.deepEqual(pais.buckets.map((b) => b.bucket), ['CO', 'MX']);
+  });
+});
+
+describe('la serie de la cuenta (ficha de Conexiones)', () => {
+  test('un día por fila, del más viejo al más nuevo; con dos lecturas el mismo día manda la del token', async () => {
+    await t.admin(`
+      INSERT INTO account_metric_snapshot (connection_id, workspace_id, day, followers, media_count, views, reach, profile_views, source, captured_at) VALUES
+        ('${CONN_IG}', '${WORKSPACE_LAURA}', '2026-09-22', 2200, 180, NULL, NULL, NULL, 'public_profile', '2026-09-22 05:10:00+00'),
+        ('${CONN_IG}', '${WORKSPACE_LAURA}', '2026-09-23', 2210, 181, NULL, NULL, NULL, 'public_profile', '2026-09-23 05:10:00+00'),
+        ('${CONN_IG}', '${WORKSPACE_LAURA}', '2026-09-23', 2212, 181, 4100, 2900, 35, 'api', '2026-09-24 05:12:00+00'),
+        ('${CONN_VECINO}', '${WORKSPACE_VECINO}', '2026-09-23', 7, 1, NULL, NULL, NULL, 'api', '2026-09-24 05:12:00+00');
+    `);
+    const h = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getAccountMetricsHistory(tx, CONN_IG, 30)))!;
+    assert.equal(h.handle, 'cafealma.demo');
+    assert.deepEqual(h.days.map((d) => [d.day, d.source, d.followers, d.views, d.reach, d.profileViews]), [
+      ['2026-09-22', 'public_profile', 2200, null, null, null],
+      ['2026-09-23', 'api', 2212, 4100, 2900, 35],
+    ]);
+    assert.equal(h.days[0]!.accountsEngaged, null, 'lo que la red no dio es null, no cero');
+    const corto = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getAccountMetricsHistory(tx, CONN_IG, 1)))!;
+    assert.deepEqual(corto.days.map((d) => d.day), ['2026-09-23'], 'el límite recorta por el lado viejo');
+    assert.equal(await t.db.withWorkspace(WORKSPACE_VECINO, (tx) => getAccountMetricsHistory(tx, CONN_IG)), null, 'otro workspace: no existe');
+    const sinLecturas = (await t.db.withWorkspace(WORKSPACE_LAURA, (tx) => getAccountMetricsHistory(tx, CONN_TT)))!;
+    assert.deepEqual([sinLecturas.handle, sinLecturas.days], ['laura.porarroba', []], 'una cuenta sin lecturas devuelve la ficha vacía, no null');
   });
 });
 

@@ -250,7 +250,11 @@ describe('costura FIN-8 → FIN-1: la factura nueva nace con lo configurado', ()
         'SELECT q.payment_terms_days AS d FROM campaign c LEFT JOIN quote q ON q.id = c.quote_id WHERE c.id = $1',
         [CAMPAIGN_FRESKO],
       );
+      // Fresko ya tiene FV-2026-011 (una factura viva por campaña): se
+      // desata mientras dura la llamada y se vuelve a atar aquí mismo.
+      const { rows: vivas } = await tx.query<{ id: string }>("UPDATE invoice SET campaign_id = NULL WHERE campaign_id = $1 AND status <> 'void' RETURNING id", [CAMPAIGN_FRESKO]);
       const inv = await createInvoiceFromCampaign(tx, CAMPAIGN_FRESKO, { issuedOn: '2026-10-01' });
+      await tx.query('UPDATE invoice SET campaign_id = $1 WHERE id = ANY($2::uuid[])', [CAMPAIGN_FRESKO, vivas.map((r) => r.id)]);
       return { inv, plazo: terms.rows[0]?.d ?? null };
     });
     const { inv } = desdeCampana;

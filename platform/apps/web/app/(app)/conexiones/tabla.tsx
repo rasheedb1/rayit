@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { OAuthProviderId } from "@mc/connectors";
 import { Button } from "@/components/ui/button";
 import { CellMain, DataTable, type Column } from "@/components/ui/data-table";
@@ -176,7 +177,10 @@ export function columnas(ahora: Date, f: Formatter, entorno: EntornoDeConexion, 
       header: t.columnas.cuenta,
       render: (r) => (
         <span className="block min-w-0">
-          <span className="block font-medium text-ink">{nombre(r)}</span>
+          {/* La ficha de la cuenta: su serie de 30 días y su audiencia (CON-7 en pantalla). */}
+          <Link href={`/conexiones/${r.id}`} className="block font-medium text-ink underline-offset-2 hover:underline" aria-label={MESSAGES.ficha.verFicha(nombre(r))}>
+            {nombre(r)}
+          </Link>
           <span className="mt-1 block">
             <PlatformPill platformId={r.platformId} />
           </span>

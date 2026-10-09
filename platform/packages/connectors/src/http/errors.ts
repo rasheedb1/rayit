@@ -47,6 +47,12 @@ export interface PlatformApiErrorInit {
   retryAfterS?: number;
   /** log_id / fbtrace_id / request_id de la plataforma, para soporte. */
   requestId?: string;
+  /**
+   * El texto de la plataforma tal cual (Meta: `error.message`). Para que
+   * un cliente pueda leer QUÉ rechazó («does not support the metrics:
+   * reposts») y reintentar sin eso; no es para la pantalla.
+   */
+  platformMessage?: string;
   cause?: unknown;
 }
 
@@ -61,6 +67,8 @@ export class PlatformApiError extends Error {
   readonly requestId: string | undefined;
   /** Subcódigo de la plataforma, si lo dio (ver PlatformApiErrorInit). */
   readonly subcode: string | undefined;
+  /** El mensaje de la plataforma tal cual, si lo dio (ver PlatformApiErrorInit). */
+  readonly platformMessage: string | undefined;
 
   constructor(init: PlatformApiErrorInit) {
     super(`${init.platformId} ${init.endpoint} ${init.code}: ${init.messageEs}`, init.cause === undefined ? undefined : { cause: init.cause });
@@ -74,6 +82,7 @@ export class PlatformApiError extends Error {
     this.retryAfterS = init.retryAfterS;
     this.requestId = init.requestId;
     this.subcode = init.subcode;
+    this.platformMessage = init.platformMessage;
   }
 
   get isRetryable(): boolean {
@@ -156,7 +165,7 @@ const TIKTOK_BUSINESS_AUTH_RANGE: readonly [number, number] = [40100, 40199];
 export function classifyApiError(input: ClassifyInput): PlatformApiError {
   const { platformId, endpoint, httpStatus, parsed } = input;
   const code = parsed?.code ?? (input.failure ?? (httpStatus !== undefined ? `http_${httpStatus}` : 'unknown'));
-  const base = { platformId, endpoint, code, httpStatus, retryAfterS: input.retryAfterS, requestId: parsed?.requestId, subcode: parsed?.subcode, cause: input.cause };
+  const base = { platformId, endpoint, code, httpStatus, retryAfterS: input.retryAfterS, requestId: parsed?.requestId, subcode: parsed?.subcode, platformMessage: parsed?.message, cause: input.cause };
 
   if (input.failure === 'aborted') {
     return new PlatformApiError({ ...base, kind: 'transient', messageEs: 'La llamada se canceló antes de terminar.' });

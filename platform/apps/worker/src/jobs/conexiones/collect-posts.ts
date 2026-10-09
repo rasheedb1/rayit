@@ -220,6 +220,11 @@ export const collectPostsJob = defineJob<CollectPostsPayload>('collect.posts', a
           log.warn('fuente de publicaciones sin configurar; se salta la cuenta', { missing: elegida.missing });
           return;
         }
+        if (elegida.kind === 'token_vencido') {
+          if (elegida.outcome === 'needs_reauth') { errores.push(acc.id); log.warn('la plataforma rechazó renovar el permiso; la cuenta pide reautorizar', { code: elegida.code }); }
+          else { transitorios.push(acc.id); log.warn('el acceso venció y la renovación falló de forma pasajera; se reintenta', { code: elegida.code }); }
+          return;
+        }
         try {
           const since = payload.full === true ? null : await lastKnownPublishedAt(ctx, acc);
           const videos: NormalizedVideo[] = [];
