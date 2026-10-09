@@ -468,7 +468,7 @@ AS $$
       SELECT j.metadata->>'writer' AS writer, coalesce((j.metadata->>'notConfigured')::boolean, false) AS not_configured
         FROM job_run j
        WHERE j.job_id = 'outbound.generate' AND j.status IN ('ok','partial') AND j.started_at > now() - interval '1 day'
-       ORDER BY j.started_at DESC, j.finished_at DESC NULLS FIRST
+       ORDER BY j.started_at DESC, j.finished_at DESC NULLS FIRST, j.id DESC
        LIMIT 1) r ON true
 $$;
 REVOKE ALL ON FUNCTION outreach_writer_status() FROM PUBLIC;
@@ -491,7 +491,7 @@ AS $$
       SELECT j.metadata->>'classifier' AS classifier, coalesce((j.metadata->>'notConfigured')::boolean, false) AS not_configured
         FROM job_run j
        WHERE j.job_id = 'outbound.intent' AND j.status IN ('ok', 'partial') AND j.started_at > now() - interval '1 day'
-       ORDER BY j.started_at DESC, j.finished_at DESC NULLS FIRST
+       ORDER BY j.started_at DESC, j.finished_at DESC NULLS FIRST, j.id DESC
        LIMIT 1) r ON true
 $$;
 REVOKE ALL ON FUNCTION outreach_classifier_status() FROM PUBLIC;

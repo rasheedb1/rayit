@@ -90,7 +90,10 @@ export const MAX_TICK_CUTS = 20;
  */
 export const ORDEN_ULTIMA_CORRIDA = (alias?: string): string => {
   const a = alias ? `${alias}.` : '';
-  return `${a}started_at DESC, ${a}finished_at DESC NULLS FIRST`;
+  // El id (uuid) va al último, como en ORDEN_CORRIDAS_ASC: no dice cuál
+  // fue antes, solo que el resultado no dependa del plan si dos corridas
+  // coinciden en las dos fechas (revisión de la fase 9).
+  return `${a}started_at DESC, ${a}finished_at DESC NULLS FIRST, ${a}id DESC`;
 };
 
 /**
