@@ -112,7 +112,8 @@ test('collect.account_metrics: el access vencido se renueva en línea y la cuent
   assert.deepEqual(snaps.rows.map((s) => s.connection_id).sort(), [ids.renovable, ids.enError].sort());
   assert.ok(snaps.rows.every((s) => Number(s.followers) === 412000 && s.source === 'api'));
 
-  const log = await h.db.query<{ connection_id: string; endpoint: string; ok: boolean }>(`SELECT connection_id, endpoint, ok FROM api_call_log ORDER BY id`);
+  // Por fecha y endpoint, no por id: desde 0083 (CIM-11) el id es un uuid y no dice cuál fue antes.
+  const log = await h.db.query<{ connection_id: string; endpoint: string; ok: boolean }>(`SELECT connection_id, endpoint, ok FROM api_call_log ORDER BY called_at, endpoint`);
   const de = (id: string) => log.rows.filter((r) => r.connection_id === id).map((r) => `${r.endpoint}:${r.ok}`);
   assert.deepEqual(de(ids.renovable), ['oauth.refresh:true', 'tiktok.user.info:true'], 'primero la renovación, después la lectura con el token nuevo');
   assert.deepEqual(de(ids.revocado), ['oauth.refresh:false'], 'ni una lectura con el token viejo');

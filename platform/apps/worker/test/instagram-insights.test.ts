@@ -90,8 +90,11 @@ test('la cuenta autorizada guarda el snapshot del día cerrado con vistas, alcan
   assert.deepEqual([Number(s.views), Number(s.reach)], [310000, 152000], 'vistas y alcance de /me/insights');
   assert.ok(s.accounts_engaged !== null && s.total_interactions !== null, 'cuentas que interactuaron e interacciones');
 
-  const log = await h.db.query<{ endpoint: string; ok: boolean }>(`SELECT endpoint, ok FROM api_call_log WHERE connection_id = $1 ORDER BY id`, [ids.conInsights]);
-  assert.deepEqual(log.rows.map((r) => `${r.endpoint}:${r.ok}`), ['instagram.me:true', 'instagram.account.insights:true']);
+  // Por fecha y endpoint, no por id (uuid desde 0083, CIM-11): dos llamadas
+  // pueden caer en el mismo milisegundo de PGlite, así que se compara el
+  // conjunto ordenado, no el orden de llegada.
+  const log = await h.db.query<{ endpoint: string; ok: boolean }>(`SELECT endpoint, ok FROM api_call_log WHERE connection_id = $1 ORDER BY called_at, endpoint`, [ids.conInsights]);
+  assert.deepEqual(log.rows.map((r) => `${r.endpoint}:${r.ok}`).sort(), ['instagram.account.insights:true', 'instagram.me:true']);
   assert.equal(guard.attempts, 0);
   assert.ok(!h.sink.text().includes(TOKENS.accessToken), 'el token no sale en el log');
 });
@@ -108,8 +111,8 @@ test('si Meta rechaza las métricas del día, se reintenta con la lista base y l
   );
   assert.deepEqual(rows.map((r) => [r.day, Number(r.followers), r.views, r.reach]), [['2026-09-22', 412000, null, null]]);
 
-  const log = await h.db.query<{ endpoint: string; ok: boolean }>(`SELECT endpoint, ok FROM api_call_log WHERE connection_id = $1 ORDER BY id`, [ids.sinInsights]);
-  assert.deepEqual(log.rows.map((r) => `${r.endpoint}:${r.ok}`), ['instagram.me:true', 'instagram.account.insights:false', 'instagram.account.insights:false'], 'dos intentos: la lista completa y la base');
+  const log = await h.db.query<{ endpoint: string; ok: boolean }>(`SELECT endpoint, ok FROM api_call_log WHERE connection_id = $1 ORDER BY called_at, endpoint`, [ids.sinInsights]);
+  assert.deepEqual(log.rows.map((r) => `${r.endpoint}:${r.ok}`).sort(), ['instagram.account.insights:false', 'instagram.account.insights:false', 'instagram.me:true'], 'dos intentos: la lista completa y la base');
   const conn = await h.db.query<{ status: string }>(`SELECT status FROM social_connection WHERE id = $1`, [ids.sinInsights]);
   assert.equal(conn.rows[0]!.status, 'active', 'un 100 de insights no es un problema del token');
 });

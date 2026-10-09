@@ -256,12 +256,14 @@ test('RES-3 · si otro camino ya avisó esta semana de la cuenta sin token, oaut
   const raw = h.db.raw;
   const cp = await raw.query<{ id: string }>(`SELECT id FROM creator_profile WHERE workspace_id = $1`, [seed.workspaceId]);
   const r = await raw.query<{ id: string }>(
-    `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, access_expires_at, refresh_expires_at)
-     VALUES ($1, $2, 'youtube', 'yt-dos-caminos', 'dos.caminos', 'vault:dos-caminos', $3, $4) RETURNING id`,
+    `INSERT INTO social_connection (workspace_id, creator_id, platform_id, external_account_id, handle, secret_ref, access_expires_at, refresh_expires_at, connected_at)
+     VALUES ($1, $2, 'youtube', 'yt-dos-caminos', 'dos.caminos', 'vault:dos-caminos', $3, $4, now() - interval '1 day') RETURNING id`,
     [seed.workspaceId, cp.rows[0]!.id, minutes(5), minutes(-1)],
   );
   const id = r.rows[0]!.id;
   await h.secrets.set('vault:dos-caminos', { accessToken: 'ACCESS-DOS', accessExpiresAt: minutes(5), scopes: [] });
+  // La cuenta se conectó ayer (connected_at): una reconexión posterior al
+  // aviso contaría como otra avería (revisión de la fase 9).
   // El que dejó collect.posts (markNeedsReauth de _posts.ts) un rato antes, el mismo día.
   await raw.query(
     `INSERT INTO notification (workspace_id, kind, severity, title_es, entity_type, entity_id, action_url, created_at)

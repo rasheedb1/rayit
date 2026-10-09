@@ -314,12 +314,13 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
     const run = await corrida(h, 'campaign.compute', 2);
     assert.equal(run.status, 'ok', run.error ?? '');
     const r = await resultado();
-    // La cifra de la demo el día de las pruebas: el worker corre con el reloj
-    // anclado al 5-oct (scripts/pruebas/reloj.mjs) y la parrilla del seed se
-    // siembra relativa a ese día, así que la mediana es fija. Sembrada el
-    // 28-sep era 4,496 (packages/db/test/demo-anclada.test.ts): la parrilla
-    // corre con el día y la cifra con ella (CIM-12, @mc/db/test/demo).
-    assert.equal(r.views_vs_median, '4.466', 'Café Alma: 4,466× la mediana del creador');
+    // La cifra de la demo sembrada el DIA_DEL_SEED (23-sep, ver
+    // applyRepoSeeds arriba): la parrilla del seed corre con el día y la
+    // cifra con ella (CIM-12, @mc/db/test/demo); fijando el día de la
+    // siembra la mediana es fija, con o sin el reloj anclado de
+    // scripts/pruebas/reloj.mjs. packages/db/test/demo-anclada.test.ts
+    // ancla la misma cifra sembrando el 28-sep.
+    assert.equal(r.views_vs_median, '4.496', 'Café Alma: 4,496× la mediana del creador');
     assert.ok(!r.missing_inputs.includes('baseline'));
   });
 
@@ -335,13 +336,14 @@ describe('CON-6 → CAM-5: views_vs_median de campaign.compute lee la línea bas
         LIMIT 5`,
     );
     const post = (n: string) => `00000002-0000-4000-8000-000000000${n}`;
-    // Las cifras del día de las pruebas (el 5-oct anclado, como arriba). El
-    // 28-sep, d02 iba a 2,469: es el único de los cinco que cambia.
+    // Las cifras de la demo sembrada el DIA_DEL_SEED (23-sep, como arriba).
+    // Sembrada el 5-oct, d02 va a 2,400: es el único de los cinco que
+    // cambia con el día de la siembra.
     assert.deepEqual(top.rows.map((r) => [r.post_id, r.views_vs_median, r.outlier_tier, r.is_outlier]), [
       [post('d01'), '5.971', 'breakout', true],
       [post('d06'), '3.710', 'outlier', true],
       [post('d18'), '2.662', 'outlier', true],
-      [post('d02'), '2.400', 'outlier', true],
+      [post('d02'), '2.469', 'outlier', true],
       [post('d28'), '2.359', 'outlier', true],
     ]);
 
