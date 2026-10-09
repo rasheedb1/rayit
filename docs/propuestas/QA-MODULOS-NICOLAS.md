@@ -202,3 +202,72 @@ después y se volvieron a correr aparte:
 Lo que no se pudo verificar desde esta máquina: `make cron.status` (sin
 PAT), `job_run` (RLS), y la lectura diaria de @nicolasduartea por el
 turno, que toca el 5-oct a las 05:00 UTC.
+
+## 7. Segunda parte (5-oct): todos los datos de las cuentas de Instagram en pantalla
+
+Lo que pasó el 5-oct, comprobado en Supabase: el turno sí leyó
+@nicolasduartea (seguidores y publicaciones a las 05:10, cuatro llamadas
+de demografía en 200 a las 05:20 con 100 filas en `audience_breakdown`,
+publicaciones descubiertas a las 06:00, 12:00 y 18:00). Aun así la
+pantalla decía «Vistas: Sin dato» y no enseñaba la demografía por dos
+huecos del producto:
+
+1. El job de cuenta solo pedía `/me`. El conector ya tenía
+   `accountInsights` (`/me/insights`) y nadie lo llamaba.
+2. La demografía no tenía pantalla: RES-4 (Rasheed, sprint 6) dependía de
+   que CON-7 tuviera una cuenta real con permiso de insights, y la primera
+   es justamente esta.
+
+Lo hecho en esta rama:
+
+- **Worker · `collect.account_metrics`.** Para una cuenta de Instagram
+  autorizada pide además `/me/insights` del último día cerrado (ayer, UTC)
+  y guarda el snapshot con la fecha de ESE día: vistas, alcance,
+  interacciones, cuentas que interactuaron, visitas al perfil, altas y
+  clics. Se piden las métricas documentadas más `profile_views`; si Meta
+  rechaza la lista (error 100), se repite con la base; si tampoco, la
+  cuenta se guarda igual con seguidores y publicaciones. Prueba:
+  `apps/worker/test/instagram-insights.test.ts`.
+- **Web · «Actualizar»** hace lo mismo que el worker para Instagram.
+- **db · `getAccountMetricsHistory`**: la serie de la cuenta (30 días, una
+  fila por día, con las cifras del día) dentro del alcance. Prueba en
+  `packages/db/test/demografia.test.ts`.
+- **Web · ficha de la cuenta `/conexiones/[id]`**: KPIs del último día
+  (seguidores con variación a 7 días, publicaciones, vistas, alcance,
+  interacciones, visitas al perfil), gráfico de 30 días de seguidores y
+  vistas, y «Quién la sigue»: edad, género, país y ciudad con el kit
+  (barras, «datos hasta», hasta diez tramos y «y N más»), más los huecos
+  de la red con su frase. El nombre de cada cuenta en la tabla enlaza a
+  su ficha. El 404 lo decide un `layout.tsx` propio, antes del
+  `loading.tsx` del módulo. Pruebas: `[id]/audiencia.test.tsx`.
+
+Qué verá Nicolás: la demografía de @nicolasduartea ya está en la ficha.
+Las vistas y el alcance de la cuenta aparecen con la primera pasada del
+worker tras desplegar (05:10 UTC) o al pulsar «Actualizar». Las vistas por
+publicación llegan con `collect.post_metrics` (05:00 UTC), que hoy corrió
+antes de que existieran las 26 publicaciones.
+
+Para Rasheed: RES-4 puede leer `getAccountAudience` /
+`listAccountAudience` y `getAccountMetricsHistory` de `@mc/db` tal cual;
+la ficha de Conexiones es el primer consumidor.
+
+### 7.1 Lo que apareció al revisar producción el 9-oct
+
+Cuatro días después, producción (todavía sin esta rama) tenía demografía
+diaria de @nicolasduartea (100 filas cada mañana) y seguidores diarios,
+pero **cero lecturas por publicación**: `collect.post_metrics` llamaba a
+`/{media}/insights` y Meta respondía 400, código 100, «does not support
+the metrics: reposts». La lista documentada para feed y carruseles traía
+`reposts`, y Meta rechaza la llamada entera si una métrica no aplica.
+Arreglo en `@mc/connectors`:
+
+- `reposts` sale de la lista de feed.
+- `InstagramClient.mediaInsights` y `accountInsights` leen las métricas
+  que Meta nombra en el error (`PlatformApiError.platformMessage`, nuevo)
+  y repiten una sola vez sin ellas; si el error no nombra ninguna de las
+  pedidas, o las nombra todas, se propaga. Prueba:
+  `packages/connectors/test/instagram-metricas-rechazadas.test.ts`.
+
+Con esto, las vistas por publicación de los 25 carruseles y el reel
+llegan con la primera pasada de `collect.post_metrics` tras desplegar
+(05:00 UTC), y la ficha y Resumen dejan de ver «Sin dato» en vistas.

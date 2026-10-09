@@ -18,7 +18,7 @@ const {
   listConnections, findConnectionByAccount, getConsentCreator, getConnectionCreator, getDefaultCreatorId, getSessionMember,
   sessionHasPermission, listConsents, upsertConnection, recordConsent, disconnectConnection, notifyConnectionAdded, addPublicAccount,
   recordAccountSnapshot, listAccounts, markAccountLookupFailure, findPublicAccountByHandle, upgradePublicAccountToOAuth,
-  getAccountAudience, listAccountAudience, ConnectionNotFound, CreatorNotInWorkspace,
+  getAccountAudience, listAccountAudience, getAccountMetricsHistory, ConnectionNotFound, CreatorNotInWorkspace,
 } = conexiones;
 
 /** Un cuarto miembro, solo de este módulo: alcance creator = Sofía. Prueba que «el primero» es el primero DEL ALCANCE. */
@@ -104,6 +104,7 @@ const CASOS: Record<string, CasoDeAlcance> = {
   sessionHasPermission: { run: (tx) => sessionHasPermission(tx, 'conexiones.cuenta.ver'), duena: (r) => r === true, miembro: 'nada' },
   getAccountAudience: { run: (tx) => getAccountAudience(tx, CONEXION_SOFIA), duena: 'nombra', miembro: 'nada' },
   listAccountAudience: { run: (tx) => listAccountAudience(tx), duena: 'nombra', miembro: 'nada' },
+  getAccountMetricsHistory: { run: (tx) => getAccountMetricsHistory(tx, CONEXION_SOFIA), duena: 'nombra', miembro: 'nada' },
   // Para el miembro, false y ningún aviso: la huella no mira notification, lo comprueba una prueba propia.
   notifyConnectionAdded: {
     run: (tx) => notifyConnectionAdded(tx, { userId: USER_LAURA, connectionId: CONEXION_SOFIA, ...AVISO }),

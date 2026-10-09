@@ -1,7 +1,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CampaignLockedError, InvalidCampaignTransition, InvalidDatesError, InvalidNameError } from '@mc/core';
+import { AGE_CUTS_HOURS, CampaignLockedError, InvalidCampaignTransition, InvalidDatesError, InvalidNameError } from '@mc/core';
 import {
   getCampaign,
   linkPost,
@@ -1007,10 +1007,16 @@ describe('resultado de campaña', () => {
       assert.deepEqual(r?.missingInputs, ['posts', 'brand_followers', 'brand_csv_sales']);
     });
 
-    test('Fresko aún no llega a 30 días: resultado parcial a 7 días, con el CSV de CAM-4', async () => {
+    test('Fresko: el corte del resultado es el mayor que TODOS sus posts ya alcanzaron, con el CSV de CAM-4', async () => {
+      // Los posts de Fresko tienen fecha fija (2 y 6-sep-2026): hasta el
+      // 5-oct el corte era 168 h; desde el 6-oct, 720 h. Se deriva de la
+      // edad de los posts para que la prueba no dependa del calendario.
+      const entradas = (await laura((tx) => getResultInputs(tx, CAMPAIGN_FRESKO)))!;
+      const edadMinima = Math.min(...entradas.inputs.posts.map((p) => p.maxAgeHours ?? 0));
+      const esperado = Math.max(...AGE_CUTS_HOURS.filter((c) => c <= edadMinima));
       await laura((tx) => computeCampaignResult(tx, CAMPAIGN_FRESKO));
       const r = await laura((tx) => getCampaignResult(tx, CAMPAIGN_FRESKO));
-      assert.equal(r?.cutHours, 168);
+      assert.equal(r?.cutHours, esperado);
       assert.ok((r?.views ?? 0) > 0);
       assert.deepEqual(r?.missingInputs, ['brand_followers'], 'las pruebas de CAM-4 le cargaron el CSV de ventas');
     });

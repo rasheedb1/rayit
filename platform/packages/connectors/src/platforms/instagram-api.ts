@@ -25,7 +25,7 @@
  * `access_token=` en la URL: así no queda en ningún log de acceso.
  */
 import type { HttpCore } from '../http/client.ts';
-import type { ParsedApiError } from '../http/errors.ts';
+import { PlatformApiError, type ParsedApiError } from '../http/errors.ts';
 import type { BrandAccountSnapshot, ConnectorResult, NormalizedAccountMetrics, NormalizedAccountProfile, NormalizedDemographics, NormalizedPostMetrics, NormalizedVideo, Page } from '../normalize/types.ts';
 import { emptyAccountMetrics, emptyPostMetrics } from '../normalize/types.ts';
 import { asArray, asRecord, dateFromIso, extractHashtags, extractMentions, fractionOrPercent, intOrNull, numOrNull, strOrNull } from '../normalize/values.ts';
@@ -69,7 +69,8 @@ export type InstagramProductType = 'REELS' | 'FEED' | 'STORY' | 'AD';
 /** Métricas por tipo de medio (reference/instagram-media/insights, 22-sep-2026). Pedir una no soportada devuelve code 100. */
 export const INSTAGRAM_MEDIA_METRICS: Readonly<Record<InstagramProductType, readonly string[]>> = {
   REELS: ['views', 'reach', 'likes', 'comments', 'shares', 'saved', 'reposts', 'total_interactions', 'ig_reels_avg_watch_time', 'ig_reels_video_view_total_time', 'reels_skip_rate', 'follows', 'profile_visits'],
-  FEED: ['reach', 'likes', 'comments', 'shares', 'saved', 'reposts', 'total_interactions', 'follows', 'profile_visits', 'link_clicks'],
+  // Sin `reposts`: Meta lo rechaza para feed y carruseles («does not support the metrics: reposts», visto en producción el 5-oct-2026).
+  FEED: ['reach', 'likes', 'comments', 'shares', 'saved', 'total_interactions', 'follows', 'profile_visits', 'link_clicks'],
   STORY: ['views', 'reach', 'replies', 'shares', 'reposts', 'total_interactions', 'follows', 'profile_visits', 'link_clicks'],
   AD: ['reach', 'likes', 'comments', 'shares', 'saved', 'total_interactions'],
 };
@@ -103,6 +104,19 @@ export function parseInstagramError(status: number, body: unknown): ParsedApiErr
     return { code, message: `${strOrNull(error['message']) ?? ''}${sub}`.trim() || undefined, requestId: strOrNull(error['fbtrace_id']) ?? undefined, subcode };
   }
   return status >= 400 ? { code: `http_${status}` } : null;
+}
+
+/**
+ * Las métricas que Meta nombró como rechazadas en un error 100: «does not
+ * support the metrics: reposts, link_clicks» o «does not support the
+ * ig_reels_avg_watch_time metric for this media product type». Solo las
+ * que estaban en la lista pedida; vacío si el error es otra cosa.
+ */
+export function metricasRechazadas(err: unknown, pedidas: readonly string[]): string[] {
+  if (!(err instanceof PlatformApiError) || err.code !== '100' || !err.platformMessage) return [];
+  const texto = err.platformMessage.toLowerCase();
+  if (!/does not support/.test(texto)) return [];
+  return pedidas.filter((m) => new RegExp(`(^|[^a-z_])${m}([^a-z_]|$)`).test(texto));
 }
 
 export interface InstagramOptions {
@@ -166,20 +180,37 @@ export class InstagramClient {
     }
   }
 
-  /** Insights de un medio según su media_product_type. Las métricas que la API no devuelve quedan en null. */
+  /**
+   * Insights de un medio según su media_product_type. Las métricas que la
+   * API no devuelve quedan en null. Si Meta rechaza alguna de las pedidas
+   * («does not support the metrics: reposts», code 100), se repite UNA
+   * vez sin ellas: la lista documentada y lo que acepta cada tipo de
+   * medio no siempre coinciden (en producción, `reposts` tumbó la lectura
+   * de 25 carruseles durante cuatro días, 5-oct-2026).
+   */
   async mediaInsights(mediaId: string, productType: InstagramProductType, opts: CallOptions & { metrics?: readonly string[] } = {}): Promise<ConnectorResult<NormalizedPostMetrics>> {
     const metrics = opts.metrics ?? INSTAGRAM_MEDIA_METRICS[productType];
-    const res = await this.#get('instagram.media.insights', `${encodeURIComponent(mediaId)}/insights`, { metric: metrics.join(',') }, opts.signal);
+    const res = await this.#getSinMetricasRechazadas('instagram.media.insights', `${encodeURIComponent(mediaId)}/insights`, metrics, (m) => ({ metric: m.join(',') }), opts.signal);
     return { data: normalizeInstagramMediaInsights(res.body), raw: res.body };
   }
 
-  /** Totales de la cuenta para un día (UTC): since/until cubren ese día. */
+  /** Totales de la cuenta para un día (UTC): since/until cubren ese día. Misma regla que mediaInsights con las métricas rechazadas. */
   async accountInsights(day: string, opts: CallOptions & { metrics?: readonly string[] } = {}): Promise<ConnectorResult<NormalizedAccountMetrics>> {
     const { since, until } = dayRange(day);
-    const res = await this.#get('instagram.account.insights', 'me/insights', {
-      metric: (opts.metrics ?? INSTAGRAM_ACCOUNT_METRICS).join(','), period: 'day', metric_type: 'total_value', since, until,
-    }, opts.signal);
+    const res = await this.#getSinMetricasRechazadas('instagram.account.insights', 'me/insights', opts.metrics ?? INSTAGRAM_ACCOUNT_METRICS,
+      (m) => ({ metric: m.join(','), period: 'day', metric_type: 'total_value', since, until }), opts.signal);
     return { data: normalizeInstagramAccountInsights(res.body, day), raw: res.body };
+  }
+
+  /** La llamada de insights, y una segunda sin las métricas que la plataforma nombró como rechazadas. */
+  async #getSinMetricasRechazadas(endpoint: string, path: string, metrics: readonly string[], query: (m: readonly string[]) => Record<string, string | number | undefined>, signal?: AbortSignal) {
+    try {
+      return await this.#get(endpoint, path, query(metrics), signal);
+    } catch (err) {
+      const rechazadas = metricasRechazadas(err, metrics);
+      if (rechazadas.length === 0 || rechazadas.length === metrics.length) throw err;
+      return this.#get(endpoint, path, query(metrics.filter((m) => !rechazadas.includes(m))), signal);
+    }
   }
 
   /** Seguidores por día (metric follower_count, period day): hasta 30 días por llamada. */

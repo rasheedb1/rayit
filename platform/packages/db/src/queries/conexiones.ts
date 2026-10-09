@@ -815,6 +815,14 @@ export interface AccountSnapshotInput {
   following: number | null;
   mediaCount: number | null;
   views: number | null;
+  /** Las cifras DEL DÍA que solo da la red con el permiso del dueño (Instagram, /me/insights). Sin ellas, null. */
+  reach?: number | null;
+  profileViews?: number | null;
+  accountsEngaged?: number | null;
+  totalInteractions?: number | null;
+  follows?: number | null;
+  unfollows?: number | null;
+  websiteClicks?: number | null;
   raw: unknown;
   /** 'public_profile' (por @) o 'api' (con el token del dueño). Por defecto, por @. */
   source?: string;
@@ -839,11 +847,15 @@ export type AccountSnapshotOutcome = 'guardada' | 'ya_hay_lectura_de_hoy';
 export async function recordAccountSnapshot(tx: WorkspaceTx, input: AccountSnapshotInput): Promise<AccountSnapshotOutcome> {
   await assertConnectionInScope(tx, input.connectionId);
   const inserted = await tx.query(
-    `INSERT INTO account_metric_snapshot (connection_id, workspace_id, day, followers, following, media_count, views, raw, source)
-     VALUES ($1, current_workspace_id(), $2::date, $3, $4, $5, $6, $7::jsonb, $8)
+    `INSERT INTO account_metric_snapshot (connection_id, workspace_id, day, followers, following, media_count, views,
+                                         reach, profile_views, accounts_engaged, total_interactions, follows, unfollows, website_clicks, raw, source)
+     VALUES ($1, current_workspace_id(), $2::date, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15)
      ON CONFLICT (connection_id, day, source) DO NOTHING
      RETURNING 1`,
-    [input.connectionId, input.day, input.followers, input.following, input.mediaCount, input.views, JSON.stringify(input.raw ?? {}), input.source ?? PUBLIC_SNAPSHOT_SOURCE],
+    [input.connectionId, input.day, input.followers, input.following, input.mediaCount, input.views,
+      input.reach ?? null, input.profileViews ?? null, input.accountsEngaged ?? null, input.totalInteractions ?? null,
+      input.follows ?? null, input.unfollows ?? null, input.websiteClicks ?? null,
+      JSON.stringify(input.raw ?? {}), input.source ?? PUBLIC_SNAPSHOT_SOURCE],
   );
   const saved = inserted.rows.length > 0;
   await tx.query(
@@ -1350,4 +1362,91 @@ export async function listAccountAudience(tx: WorkspaceTx): Promise<AccountAudie
       WHERE c.deleted_at IS NULL AND ${SCOPE_CONNECTION} ORDER BY c.platform_id, c.connected_at DESC`,
   );
   return readAudience(tx, rows);
+}
+
+// ---------------------------------------------------------------------
+// La serie de la cuenta (la ficha de una cuenta en Conexiones)
+// ---------------------------------------------------------------------
+
+/** Un día de la serie de la cuenta. Un nulo es «la red no lo dio», nunca un cero. */
+export interface AccountDayMetrics {
+  /** 'YYYY-MM-DD' (columna date). */
+  day: string;
+  source: string;
+  followers: number | null;
+  following: number | null;
+  mediaCount: number | null;
+  views: number | null;
+  reach: number | null;
+  profileViews: number | null;
+  accountsEngaged: number | null;
+  totalInteractions: number | null;
+  follows: number | null;
+  unfollows: number | null;
+  websiteClicks: number | null;
+}
+
+export interface AccountMetricsHistory {
+  connectionId: string;
+  platformId: ConnectionPlatformId;
+  handle: string | null;
+  displayName: string | null;
+  accessMode: AccountRow['accessMode'];
+  status: string;
+  /** Del día más viejo al más nuevo; a lo sumo `days` filas. */
+  days: AccountDayMetrics[];
+}
+
+interface HistoryRow extends Record<string, unknown> {
+  day: string;
+  source: string;
+  followers: string | number | null;
+  following: string | number | null;
+  media_count: string | number | null;
+  views: string | number | null;
+  reach: string | number | null;
+  profile_views: string | number | null;
+  accounts_engaged: string | number | null;
+  total_interactions: string | number | null;
+  follows: string | number | null;
+  unfollows: string | number | null;
+  website_clicks: string | number | null;
+}
+
+/**
+ * Los últimos `days` días con lectura de una cuenta viva (una fila por
+ * día: si el mismo día tiene lectura por @ y con token, manda la del
+ * token, que trae las cifras del día). null si el id no es de este
+ * workspace o no está en el alcance (ACC-6).
+ */
+export async function getAccountMetricsHistory(tx: WorkspaceTx, connectionId: string, days = 30): Promise<AccountMetricsHistory | null> {
+  const n = Math.min(366, Math.max(1, Math.trunc(days)));
+  const owner = await tx.query<{ id: string; platform_id: ConnectionPlatformId; handle: string | null; display_name: string | null; access_mode: AccountRow['accessMode']; status: string }>(
+    `SELECT c.id, c.platform_id, c.handle, c.display_name, c.access_mode, c.status
+       FROM social_connection c WHERE c.id = $1 AND c.deleted_at IS NULL AND ${SCOPE_CONNECTION}`,
+    [connectionId],
+  );
+  const c = owner.rows[0];
+  if (!c) return null;
+  const { rows } = await tx.query<HistoryRow>(
+    `SELECT * FROM (
+       SELECT DISTINCT ON (s.day)
+              to_char(s.day, 'YYYY-MM-DD') AS day, s.source, s.followers, s.following, s.media_count, s.views,
+              s.reach, s.profile_views, s.accounts_engaged, s.total_interactions, s.follows, s.unfollows, s.website_clicks
+         FROM account_metric_snapshot s
+        WHERE s.connection_id = $1
+        ORDER BY s.day DESC, (s.source = 'api') DESC, s.captured_at DESC
+        LIMIT $2
+     ) ultimos ORDER BY day ASC`,
+    [connectionId, n],
+  );
+  const num = (v: string | number | null): number | null => (v === null || v === undefined ? null : Number(v));
+  return {
+    connectionId: c.id, platformId: c.platform_id, handle: c.handle, displayName: c.display_name, accessMode: c.access_mode, status: c.status,
+    days: rows.map((r) => ({
+      day: r.day, source: r.source, followers: num(r.followers), following: num(r.following), mediaCount: num(r.media_count), views: num(r.views),
+      reach: num(r.reach), profileViews: num(r.profile_views), accountsEngaged: num(r.accounts_engaged), totalInteractions: num(r.total_interactions),
+      follows: num(r.follows), unfollows: num(r.unfollows), websiteClicks: num(r.website_clicks),
+    })),
+  };
 }
