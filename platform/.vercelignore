@@ -19,7 +19,13 @@ apps/media/
 # packages/connectors NO se excluye desde CON-3: la web lo importa (OAuth,
 # cifrado y configuración de las apps). Sus fixtures pesan poco y sus
 # pruebas caen por **/test/.
-**/test/
+# `**/test/**` y no `**/test/`: con la carpeta entera excluida no se puede
+# volver a incluir nada de dentro (regla de .gitignore), y la web importa
+# @mc/db/test/tiempos desde lib/testing/tiempos.ts (CIM-12), que `next
+# build` comprueba aunque no sea una prueba. Sin esa excepción el build de
+# Vercel caía con «Cannot find module '@mc/db/test/tiempos'» (9-oct-2026).
+**/test/**
+!packages/db/test/tiempos.ts
 **/*.test.ts
 **/*.test.tsx
 node_modules/
