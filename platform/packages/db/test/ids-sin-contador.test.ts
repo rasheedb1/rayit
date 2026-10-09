@@ -242,6 +242,8 @@ describe('0083 convierte las claves con las filas dentro', () => {
   let lecturasAntes: LecturaDelPerfil[];
   let perfilesAntes: { filas: number; huella: string };
   let estadoAntes: Awaited<ReturnType<typeof estadoDelEsquema>>;
+  /** La de CIM-11 y las que el repositorio tenga detrás (hoy, 0084). */
+  let MIGRACIONES_DESDE_CIM_11: string[] = [];
 
   before(async () => {
     // La migración por su nombre, no por su número: si el integrador la
@@ -249,6 +251,7 @@ describe('0083 convierte las claves con las filas dentro', () => {
     const archivos = await listSql(MIGRATIONS_DIR);
     const i = archivos.findIndex((f) => f.endsWith('_ids_sin_contador.sql'));
     assert.ok(i > 0, 'falta la migración *_ids_sin_contador.sql');
+    MIGRACIONES_DESDE_CIM_11 = archivos.slice(i);
     db = await createEmbeddedDb({ hasta: archivos[i - 1] });
     // Los seeds, con el mismo runner y el mismo rol que en una base completa
     // (createEmbeddedDb no los carga con `hasta`): cada uno en su transacción.
@@ -266,9 +269,12 @@ describe('0083 convierte las claves con las filas dentro', () => {
   }, SETUP_TIMEOUT);
   after(() => db?.close());
 
-  test('se aplica la migración de CIM-11 y nada más', () => {
-    assert.equal(aplicadas.length, 1, JSON.stringify(aplicadas));
+  test('se aplica la migración de CIM-11 primero, y detrás solo las que vinieron después (0084 search_path)', () => {
+    // Desde 0084 (VEN-17, 7-oct) hay migraciones DETRÁS de la de CIM-11:
+    // `hasta` para en la anterior, así que se aplican esta y las siguientes.
+    assert.ok(aplicadas.length >= 1, JSON.stringify(aplicadas));
     assert.match(aplicadas[0]!, /_ids_sin_contador\.sql$/);
+    assert.deepEqual(aplicadas, MIGRACIONES_DESDE_CIM_11, 'las pendientes son exactamente las que van desde la de CIM-11 hasta la última');
   });
 
   test('antes de convertir, cada tabla tenía filas (la prueba no es sobre tablas vacías)', () => {
@@ -423,8 +429,12 @@ describe('0083 convierte las claves con las filas dentro', () => {
   });
 
   test('la guardia dice qué hacer: con 0083 pendiente, migrar; con todo aplicado y una clave de secuencia, escribir la migración que la convierte', async () => {
-    // Antes de 0083 las quince salen porque falta una migración: migrar lo arregla.
-    assert.match(explicarEsquema(estadoAntes) ?? '', /faltan 1 migración\(es\)[\s\S]*Corre: make db\.migrate$/);
+    // Antes de 0083 las quince salen porque faltan migraciones (la de CIM-11
+    // y las de detrás): migrar lo arregla.
+    assert.match(
+      explicarEsquema(estadoAntes) ?? '',
+      new RegExp(`faltan ${MIGRACIONES_DESDE_CIM_11.length} migración\\(es\\)[\\s\\S]*Corre: make db\\.migrate$`),
+    );
     // Con todo aplicado, una tabla nueva con bigserial no la arregla
     // ninguna migración del repositorio: hay que escribir la siguiente.
     const alDia = await estadoDelEsquema(db);
