@@ -123,6 +123,40 @@ Decisión: la fase 9 entra en `main` primero (esta revisión); las dos
 ramas de QA se rebasan encima después (son de Nicolás y están en su
 máquina, una con cambios sin commitear).
 
+## 8. Lo que pasó después: `main` y producción (9-oct-2026)
+
+- `main` avanzó por avance rápido de `00c49413` a **`c20d1bbe`**
+  (`nicolas/revision-fase-9`, misma rama en GitHub): la fase 9 entera,
+  los cuatro cambios de la revisión, dos merges de `origin/main` (el QA
+  del 5-oct y los dos commits de Instagram del 9-oct, con seis archivos
+  en conflicto resueltos como dice §6 y cuatro pruebas ajustadas a los
+  ids uuid y a la siembra fija) y un arreglo de `.vercelignore`: el build
+  de Vercel caía con «Cannot find module '@mc/db/test/tiempos'» porque
+  `**/test/` dejaba fuera la carpeta entera y `lib/testing/tiempos.ts`
+  (CIM-12) la importa; pasa a `**/test/**` con la excepción.
+- `pnpm verificar` sobre `c20d1bbe` (worktree limpio): **15/15 tareas**;
+  raíz 15, `@mc/core` 548, `@mc/connectors` 311, `@mc/db` 1 633 (3
+  saltadas de siempre), `@mc/worker` 446, `@mc/web` 2 182 (+1 todo); 0
+  fallos, 0 canceladas. `make db.check` 0001–0084 en verde.
+- Receta de 0083 (ventas-outreach §5.2), hora UTC: build de producción
+  sin dominio listo (`on-cue-8lefmkizz-influ3.vercel.app`, READY,
+  `c20d1bbe`) → `make db.migrate` 21:17:19–21:17:27 (0078 568 ms, 0079
+  364, 0080 313, 0081 353, 0082 357, 0083 1 194, 0084 341) → `make
+  db.guardia` «en verde: 83 migraciones, 102 tablas aisladas» → `vercel
+  promote` 21:17:34–21:17:38. La ventana con la web vieja viva fue de
+  19 segundos. El cron de pg_cron no se desinstaló (pide el token de
+  administración, solo en la máquina de Rasheed): un turno que cayera en
+  esa ventana se reintenta al minuto siguiente.
+- `make db.seed`: los trece seeds aplicados, 0011 (equipo), 0012 (lo que
+  importa) y 0013 (agencia) por primera vez.
+- Humo en https://on-cue-web.vercel.app (sirve `c20d1bbe`): `/`, `/login`,
+  `/resumen`, `/accesos`, `/legal` 200; `/api/cron/tick` sin Bearer 401.
+  La demo enseña «Lo que importa esta semana» con «Entendido» y la fila
+  «dejó de darnos las cifras»; `/accesos` enseña Equipo con «Invitar».
+- Lo que no se comprobó desde esta máquina: `make cron.status` (token de
+  administración) y la demo de la agencia como Diego (`DEMO_USER_ID` no
+  va en Vercel; se mira en local contra la copia).
+
 ## 7. Lo que queda abierto para Rasheed (no bloquea el merge)
 
 1. `ACC-7.md` y `fases-rasheed.md` §10: listar `conexiones.ts`,

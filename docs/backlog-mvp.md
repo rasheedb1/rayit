@@ -1129,8 +1129,10 @@ raíz, `@mc/core` 547, `@mc/connectors` 304, `@mc/worker` 440, `@mc/web`
 2 176 (+1 todo); `@mc/db` 1 628 con **2 rojas** en
 `ids-sin-contador.test.ts`, porque la 0084 del 7-oct quedó detrás de la
 0083 y la prueba asumía que la de CIM-11 era la última. Arreglada en la
-revisión; el resultado de la segunda corrida, con los cuatro cambios
-de la revisión, está en REVISION-FASE-9 §0.
+revisión. La corrida final sobre `c20d1bbe` (lo que hoy es `main`, con
+los dos merges de `origin/main` del día): **15/15 tareas**; raíz 15,
+`@mc/core` 548, `@mc/connectors` 311, `@mc/db` 1 633, `@mc/worker` 446,
+`@mc/web` 2 182 (+1 todo); 0 fallos, 0 canceladas.
 
 ### 12.3 Producción
 
@@ -1139,9 +1141,10 @@ código viejo: build de producción sin dominio (`deploy --prod
 --skip-domain`), `make db.migrate` (0078–0084), `make db.guardia`,
 `vercel promote` y `make db.seed`. El cron de pg_cron no se desinstaló
 (pide el token de administración, que solo tiene Rasheed): la ventana
-entre migrar y promover duró segundos y un turno que cayera dentro se
-reintenta al minuto siguiente. El commit en producción y la salida de
-cada paso están en REVISION-FASE-9 §8.
+entre migrar y promover duró 19 segundos (21:17:19 a 21:17:38 UTC) y un
+turno que cayera dentro se reintenta al minuto siguiente. Producción
+sirve **`c20d1bbe`**; Supabase tiene 0001–0084 y los trece seeds. La
+salida de cada paso está en REVISION-FASE-9 §8.
 
 ### 12.4 Lo que Rasheed tiene pendiente (prompts en `docs/cierre-rasheed-prompts.md`)
 
