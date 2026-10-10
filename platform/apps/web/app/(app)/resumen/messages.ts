@@ -381,8 +381,27 @@ export const MESSAGES = {
     eyebrow: "Resumen",
     title: "No pudimos leer tus métricas",
   },
+  /** «Quién te ve» (RES-4): la demografía de CON-7 en el Resumen. Las barras y los tramos son los de Conexiones. */
+  audiencia: {
+    title: "Quién te ve",
+    description: "La audiencia de cada cuenta autorizada, tal como la entrega su red: edad, género, país y ciudad.",
+    sinArroba: "Cuenta sin nombre de usuario",
+    vacio: {
+      sinCuentas: "No hay cuentas de esa red en tu espacio",
+      sinDemografia: "Todavía no hay audiencia que enseñar",
+      autorizada:
+        "La audiencia la lee el recolector cada mañana con el permiso de analítica de la cuenta; si la cuenta tiene menos de 100 seguidores, la red no la entrega.",
+      porArroba: "Las redes solo entregan la audiencia con la autorización de su dueño. Autoriza la cuenta en Conexiones y la verás aquí al día siguiente.",
+      accion: "Ver conexiones",
+    },
+    /** Lo que esta versión no mide: se dice, no se dibuja vacío. */
+    cuandoPublicar:
+      "A qué hora están conectados tus seguidores («cuándo publicar») todavía no se recoge en esta versión: las redes lo entregan solo a cuentas autorizadas y el recolector no lo pide aún.",
+  },
+
   loading: {
     label: "Cargando tu resumen",
+    audiencia: "Quién te ve",
     /**
      * El esqueleto se pinta antes de saber el workspace, así que no lleva
      * cifras que dependan del locale: «por mil» en palabras.

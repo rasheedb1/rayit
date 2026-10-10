@@ -32,6 +32,7 @@ import { pipelineForma, tabKey } from "../_lib/estado";
 import { ModuleTabs } from "../_componentes/pestanas";
 import { contextoDeSeguimiento } from "../_seguimiento/datos";
 import { ParaHoy } from "../_seguimiento/para-hoy";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.header.metaTitle };
 // Lee la base en cada petición: nada de esto se prerenderiza.
@@ -42,6 +43,7 @@ export default async function VentasPage({
 }: {
   searchParams: Promise<{ vista?: string; forma?: string; seguimiento?: string; ocultas?: string }>;
 }) {
+  await requireModuleAccess("ventas");
   const params = await searchParams;
   const vista = tabKey(params.vista);
   const forma = pipelineForma(params.forma);

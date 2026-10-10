@@ -15,6 +15,7 @@ import { puedeOperarVentas, puedeVerBandejas } from "../_lib/permiso";
 import { Cola } from "./cola";
 import { MESSAGES } from "./messages";
 import { filaVista } from "./vista";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.metaTitle };
 export const dynamic = "force-dynamic";
@@ -32,6 +33,7 @@ const RUTA_APROBACIONES = "/ventas/aprobaciones";
  * con el teclado.
  */
 export default async function AprobacionesPage() {
+  await requireModuleAccess("ventas");
   // Un 'client' (en una agencia, la marca misma) no ve los mensajes a otras marcas: la cola ni se carga.
   if (!(await puedeVerBandejas())) return <SinAcceso />;
   const { cola, policy, writer } = await withWorkspace(async (tx) => ({

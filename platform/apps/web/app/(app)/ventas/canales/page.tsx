@@ -27,6 +27,7 @@ import { ChannelIcon } from "./iconos";
 import { Limites } from "./limites";
 import { MESSAGES } from "./messages";
 import { UsoCuenta } from "./uso";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.meta.title };
 // Lee la base y el entorno en cada petición: nada de esto se prerenderiza.
@@ -247,6 +248,7 @@ function ChannelRow({
 }
 
 export default async function CanalesPage({ searchParams }: { searchParams: Promise<{ conectado?: string; error?: string; canal?: string }> }) {
+  await requireModuleAccess("ventas");
   const params = await searchParams;
   const { accounts, policy } = await withWorkspace(async (tx) => ({
     accounts: await listChannelAccounts(tx),

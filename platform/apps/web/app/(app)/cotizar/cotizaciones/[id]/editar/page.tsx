@@ -11,6 +11,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { editarCotizacion } from "../../../actions";
 import { MESSAGES } from "../../../messages";
 import { CotizacionForm } from "../../nueva/form";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.meta.editar };
 export const dynamic = "force-dynamic";
@@ -26,6 +27,7 @@ export const dynamic = "force-dynamic";
  * cambió entre las dos lecturas.
  */
 export default async function EditarCotizacionPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireModuleAccess("cotizar");
   const { id } = await params;
   const t = MESSAGES.nueva;
   const ws = await getCurrentWorkspace();

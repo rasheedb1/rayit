@@ -3,7 +3,7 @@
 -- No se edita a mano: se cambia el catálogo y se vuelve a generar
 -- con `pnpm --filter @mc/core permisos:sql`. Re-ejecutable.
 
--- 45 permisos.
+-- 47 permisos.
 INSERT INTO permission (key, module, label_es, sensitivity) VALUES
   ('resumen.panel.ver', 'resumen', 'Ver el resumen', 'normal'),
   ('resumen.metricas.importar', 'resumen', 'Importar métricas por CSV', 'normal'),
@@ -16,6 +16,8 @@ INSERT INTO permission (key, module, label_es, sensitivity) VALUES
   ('ventas.negocio.ver', 'ventas', 'Ver el pipeline de negocios', 'normal'),
   ('ventas.negocio.crear', 'ventas', 'Crear negocios', 'normal'),
   ('ventas.negocio.editar', 'ventas', 'Mover negocios de etapa', 'normal'),
+  ('ventas.outreach.enviar', 'ventas', 'Aprobar, responder y reintentar mensajes de outreach', 'normal'),
+  ('ventas.outreach.configurar', 'ventas', 'Configurar el envío: política, canales y brief', 'sensible'),
   ('cotizar.tarifario.ver', 'cotizar', 'Ver el tarifario', 'normal'),
   ('cotizar.tarifario.editar', 'cotizar', 'Guardar el tarifario', 'normal'),
   ('cotizar.mediakit.ver', 'cotizar', 'Ver los media kits', 'normal'),
@@ -66,7 +68,7 @@ INSERT INTO role (workspace_id, key, workspace_kind, label_es, description_es, i
   (NULL, 'viewer', 'agency', 'Solo lectura', 'Ver lo que se le asigne. Sin Finanzas ni Equipo.', true)
 ON CONFLICT (key, workspace_kind) WHERE workspace_id IS NULL DO NOTHING;
 
--- 230 filas de la matriz. El role_id se resuelve por (key, workspace_kind) porque es gen_random_uuid().
+-- 238 filas de la matriz. El role_id se resuelve por (key, workspace_kind) porque es gen_random_uuid().
 INSERT INTO role_permission (role_id, permission_key)
 SELECT r.id, m.permission_key
 FROM (VALUES
@@ -81,6 +83,8 @@ FROM (VALUES
   ('owner', 'creator', 'ventas.negocio.ver'),
   ('owner', 'creator', 'ventas.negocio.crear'),
   ('owner', 'creator', 'ventas.negocio.editar'),
+  ('owner', 'creator', 'ventas.outreach.enviar'),
+  ('owner', 'creator', 'ventas.outreach.configurar'),
   ('owner', 'creator', 'cotizar.tarifario.ver'),
   ('owner', 'creator', 'cotizar.tarifario.editar'),
   ('owner', 'creator', 'cotizar.mediakit.ver'),
@@ -125,6 +129,7 @@ FROM (VALUES
   ('manager', 'creator', 'ventas.negocio.ver'),
   ('manager', 'creator', 'ventas.negocio.crear'),
   ('manager', 'creator', 'ventas.negocio.editar'),
+  ('manager', 'creator', 'ventas.outreach.enviar'),
   ('manager', 'creator', 'cotizar.tarifario.ver'),
   ('manager', 'creator', 'cotizar.tarifario.editar'),
   ('manager', 'creator', 'cotizar.mediakit.ver'),
@@ -178,6 +183,8 @@ FROM (VALUES
   ('owner', 'agency', 'ventas.negocio.ver'),
   ('owner', 'agency', 'ventas.negocio.crear'),
   ('owner', 'agency', 'ventas.negocio.editar'),
+  ('owner', 'agency', 'ventas.outreach.enviar'),
+  ('owner', 'agency', 'ventas.outreach.configurar'),
   ('owner', 'agency', 'cotizar.tarifario.ver'),
   ('owner', 'agency', 'cotizar.tarifario.editar'),
   ('owner', 'agency', 'cotizar.mediakit.ver'),
@@ -223,6 +230,8 @@ FROM (VALUES
   ('admin', 'agency', 'ventas.negocio.ver'),
   ('admin', 'agency', 'ventas.negocio.crear'),
   ('admin', 'agency', 'ventas.negocio.editar'),
+  ('admin', 'agency', 'ventas.outreach.enviar'),
+  ('admin', 'agency', 'ventas.outreach.configurar'),
   ('admin', 'agency', 'cotizar.tarifario.ver'),
   ('admin', 'agency', 'cotizar.tarifario.editar'),
   ('admin', 'agency', 'cotizar.mediakit.ver'),
@@ -265,6 +274,7 @@ FROM (VALUES
   ('manager', 'agency', 'ventas.negocio.ver'),
   ('manager', 'agency', 'ventas.negocio.crear'),
   ('manager', 'agency', 'ventas.negocio.editar'),
+  ('manager', 'agency', 'ventas.outreach.enviar'),
   ('manager', 'agency', 'cotizar.tarifario.ver'),
   ('manager', 'agency', 'cotizar.tarifario.editar'),
   ('manager', 'agency', 'cotizar.mediakit.ver'),

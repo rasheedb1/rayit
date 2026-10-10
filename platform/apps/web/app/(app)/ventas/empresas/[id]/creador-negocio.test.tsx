@@ -29,6 +29,15 @@ const base = {
 beforeEach(() => cambiarCreadorNegocio.mockReset().mockResolvedValue({}));
 
 describe("de qué creador es un negocio, en la ficha (ACC-7)", () => {
+  it("el nombre accesible del botón empieza por su texto visible (WCAG 2.5.3: quien usa la voz dice lo que lee)", () => {
+    for (const creatorId of [LAURA.id, null]) {
+      const { unmount } = render(<CreadorDelNegocio {...base} creatorId={creatorId} creatorName={creatorId ? LAURA.name : null} />);
+      const boton = screen.getByRole("button", { name: creatorId ? t.changeLabel("Serie Q4") : t.assignLabel("Serie Q4") });
+      expect(boton.getAttribute("aria-label")!.startsWith(boton.textContent!.trim())).toBe(true);
+      unmount();
+    }
+  });
+
   it("dice el creador; sin creador, lo dice y explica quién lo ve", () => {
     const { unmount } = render(<CreadorDelNegocio {...base} />);
     expect(screen.getByText(LAURA.name)).toBeInTheDocument();

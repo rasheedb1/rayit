@@ -15,6 +15,7 @@ import { ACTIVIDAD_URL, filtrosDe, hayFiltros, hrefDe, type Filtros } from "./_l
 import { AvisoApagado } from "./aviso-apagado";
 import { MESSAGES } from "./messages";
 import { PanelActividad, type VacioVista } from "./panel";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.metaTitle };
 // Lee la base en cada petición: nada de esto se prerenderiza.
@@ -129,6 +130,7 @@ function Paginas({ filtros, next, prev }: { filtros: Filtros; next: string | nul
  * no se le ofrece lo que las acciones le van a negar.
  */
 export default async function ActividadPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  await requireModuleAccess("ventas");
   const filtros = filtrosDe(await searchParams);
   const base = { sequenceId: filtros.cadencia, stepType: filtros.tipo, contact: filtros.contacto };
   const { cola, facets, bloqueos } = await withWorkspace(async (tx) => ({

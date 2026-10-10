@@ -24,6 +24,7 @@ import { LineaDeTiempo } from "../linea-de-tiempo";
 import { Notas } from "../notas";
 import { ProponerOtraVez } from "../proponer-otra-vez";
 import type { PasoVista } from "../tarjeta-paso";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const dynamic = "force-dynamic";
 
@@ -79,6 +80,7 @@ export default async function CadenciaPage({
   params: Promise<{ id: string }>;
   searchParams?: Promise<{ negocio?: string; contacto?: string }>;
 }) {
+  await requireModuleAccess("ventas");
   const { id } = await params;
   const pedido = await searchParams;
   const negocioPedido = pedido?.negocio ?? null;

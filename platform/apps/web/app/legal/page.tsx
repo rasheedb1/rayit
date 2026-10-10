@@ -12,9 +12,11 @@ export const metadata: Metadata = { title: MESSAGES.legal.meta };
  * qué pasa con su correo ANTES de escribirlo, y una página dentro de
  * (app) lo mandaría a /login, que es de donde viene.
  *
- * Pendiente de redacción (CIM-9): dice que lo está, arriba y a la
- * vista. El texto vive en lib/auth/messages.ts y el correo de contacto
- * en SUPPORT_EMAIL.
+ * Borrador (CIM-9): el texto completo vive en lib/auth/messages.ts con
+ * su fecha de versión; el aviso «pendiente de revisión legal» se queda
+ * arriba y a la vista hasta que una persona con formación legal lo
+ * revise (docs/propuestas/CIERRE-CIM-R.md §2). El correo de contacto
+ * sale de SUPPORT_EMAIL.
  */
 export default function LegalPage() {
   const t = MESSAGES.legal;
@@ -26,7 +28,10 @@ export default function LegalPage() {
 
       <h1 className="text-xl font-semibold tracking-tight text-ink">{t.titulo}</h1>
       <p className="mt-2 text-sm leading-5 text-ink-2">{t.descripcion}</p>
-      <p className="mt-4 rounded-md border border-border bg-surface-2 px-3 py-2 text-xs leading-5 text-ink-2">{t.pendiente}</p>
+      <p className="mt-1 text-xs text-muted">{t.version}</p>
+      <p role="note" className="mt-4 rounded-md border border-border bg-surface-2 px-3 py-2 text-xs leading-5 text-ink-2">
+        {t.pendiente}
+      </p>
 
       {[t.terminos, t.privacidad].map((seccion) => (
         <section key={seccion.id} id={seccion.id} className="mt-10 scroll-mt-8">

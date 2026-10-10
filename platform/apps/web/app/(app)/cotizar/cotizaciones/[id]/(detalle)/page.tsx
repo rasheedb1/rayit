@@ -21,6 +21,7 @@ import { EliminarBorrador } from "../eliminar";
 import { EnviarCotizacion } from "../enviar";
 import { VentanaCampana } from "../ventana";
 import { Aviso } from "../../../../_lib/aviso";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 // El título de la pestaña lo pone layout.tsx con el número y la marca
 // (generateMetadata): uno estático aquí lo pisaría (pulido r8).
@@ -47,6 +48,7 @@ type Props = {
  * no cambia la URL y no envuelve a /editar ni a /vista.
  */
 export default async function CotizacionPage({ params, searchParams }: Props) {
+  await requireModuleAccess("cotizar");
   const t = MESSAGES.detalle;
   const { id } = await params;
   // ?error= lleva un CÓDIGO; el texto sale de messages.ts. Un código que

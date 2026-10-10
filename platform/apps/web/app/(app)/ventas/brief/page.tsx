@@ -24,6 +24,7 @@ import { currencyOptions } from "../_lib/monedas";
 import { countryOptions } from "../_lib/paises";
 import { BriefForm, type BriefFormValues } from "./form";
 import { puedeEditarElBrief } from "./permiso";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 const t = MESSAGES.brief;
 
@@ -51,6 +52,7 @@ export const dynamic = "force-dynamic";
  * el radar: un filtro que no se ve es un filtro que se olvida.
  */
 export default async function BriefPage({ searchParams }: { searchParams: Promise<{ creador?: string }> }) {
+  await requireModuleAccess("ventas");
   const params = await searchParams;
   const [workspace, editable] = await Promise.all([getCurrentWorkspace(), puedeEditarElBrief()]);
   const f = formatterFor(workspace);

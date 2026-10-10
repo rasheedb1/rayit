@@ -21,6 +21,7 @@ import {
 } from "./_lib/tarifario";
 import { TEXTOS_COTIZAR } from "./_lib/textos";
 import { puedeOperarCotizar } from "./_lib/permiso";
+import { requirePermission } from "@/lib/permisos";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Un porcentaje de 0 a 100, con coma o punto y hasta dos decimales. 999 no pasa. */
@@ -116,6 +117,7 @@ const basisSchema = z.object({
  * `adjustments`.
  */
 export async function guardarTarifario(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  await requirePermission("cotizar.tarifario.editar");
   if (!(await puedeOperarCotizar())) return { message: E.sinPermiso };
   const creatorId = formField(formData, "creatorId");
   if (!UUID_RE.test(creatorId)) return { message: E.CreatorNotFound };
@@ -219,6 +221,7 @@ const mediaKitSchema = z.object({
 });
 
 export async function generarMediaKit(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  await requirePermission("cotizar.mediakit.generar");
   if (!(await puedeOperarCotizar())) return { message: E.sinPermiso };
   const parsed = mediaKitSchema.safeParse({
     creatorId: formField(formData, "creatorId"),
@@ -259,6 +262,7 @@ export async function generarMediaKit(_prev: ActionState, formData: FormData): P
  * bind, desde la lista.
  */
 export async function desbloquearMediaKit(id: string): Promise<void> {
+  await requirePermission("cotizar.mediakit.editar");
   if (!(await puedeOperarCotizar())) redirect("/cotizar/media-kit?error=sinPermiso");
   if (!UUID_RE.test(id)) redirect("/cotizar/media-kit");
   let error: string | null = null;
@@ -273,6 +277,7 @@ export async function desbloquearMediaKit(id: string): Promise<void> {
 
 /** Publicar o despublicar un enlace, desde la lista. Se usa con bind. */
 export async function cambiarPublicacionMediaKit(id: string, isPublic: boolean): Promise<void> {
+  await requirePermission("cotizar.mediakit.editar");
   if (!(await puedeOperarCotizar())) redirect("/cotizar/media-kit?error=sinPermiso");
   if (!UUID_RE.test(id)) redirect("/cotizar/media-kit");
   let error: string | null = null;
@@ -368,6 +373,7 @@ function aConsulta(v: Cotizacion) {
 }
 
 export async function crearCotizacion(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  await requirePermission("cotizar.cotizacion.crear");
   if (!(await puedeOperarCotizar())) return { message: E.sinPermiso };
   const leida = leerCotizacion(nuevaCotizacionSchema, formData);
   if (!leida.ok) return leida.state;
@@ -390,6 +396,7 @@ export async function crearCotizacion(_prev: ActionState, formData: FormData): P
 
 /** Guarda los cambios de un borrador. Se usa con bind(null, id). */
 export async function editarCotizacion(id: string, _prev: ActionState, formData: FormData): Promise<ActionState> {
+  await requirePermission("cotizar.cotizacion.editar");
   if (!(await puedeOperarCotizar())) return { message: E.sinPermiso };
   if (!UUID_RE.test(id)) return { message: E.QuoteNotFound };
   const leida = leerCotizacion(cotizacionSchema, formData);
@@ -412,6 +419,7 @@ export type EnviarResultado = { status: "ok"; path: string } | { status: "error"
  * portapapeles: el texto del botón promete «copiar enlace».
  */
 export async function enviarCotizacion(id: string): Promise<EnviarResultado> {
+  await requirePermission("cotizar.cotizacion.enviar");
   if (!(await puedeOperarCotizar())) return { status: "error", message: E.sinPermiso! };
   if (!UUID_RE.test(id)) return { status: "error", message: E.QuoteNotFound! };
   try {
@@ -430,10 +438,12 @@ export async function enviarCotizacion(id: string): Promise<EnviarResultado> {
  * crearla (faltan fechas), la aceptación queda y el detalle lo dice.
  */
 export async function aceptarCotizacion(id: string): Promise<void> {
+  await requirePermission("cotizar.cotizacion.enviar");
   await transicion(id, (tx) => acceptQuoteAndCreateCampaign(tx, id, TEXTOS_COTIZAR));
 }
 
 export async function rechazarCotizacion(id: string): Promise<void> {
+  await requirePermission("cotizar.cotizacion.enviar");
   await transicion(id, (tx) => rejectQuote(tx, id));
 }
 
@@ -443,6 +453,7 @@ export async function rechazarCotizacion(id: string): Promise<void> {
  * ventana acordada.
  */
 export async function crearCampanaDeCotizacion(id: string): Promise<void> {
+  await requirePermission("campanas.campana.crear");
   await transicion(id, (tx) => createCampaignForQuote(tx, id));
 }
 
@@ -458,6 +469,7 @@ const ventanaSchema = z.object({
  * edita. Se usa con bind(null, id) y useActionState.
  */
 export async function crearCampanaConVentana(id: string, _prev: ActionState, formData: FormData): Promise<ActionState> {
+  await requirePermission("campanas.campana.crear");
   if (!(await puedeOperarCotizar())) return { message: E.sinPermiso };
   if (!UUID_RE.test(id)) return { message: E.QuoteNotFound };
   const parsed = ventanaSchema.safeParse({
@@ -479,6 +491,7 @@ export async function crearCampanaConVentana(id: string, _prev: ActionState, for
 
 /** «Entendido» en un aviso de aceptación de la lista. Se usa con bind. */
 export async function marcarAvisoVisto(id: string): Promise<void> {
+  await requirePermission("cotizar.cotizacion.editar");
   // El aviso es de todo el equipo: quien no opera Cotizar lo lee, no lo cierra.
   if (UUID_RE.test(id) && (await puedeOperarCotizar())) {
     try {
@@ -500,6 +513,7 @@ export type VueltaAvisoBloqueo = (typeof VUELTA_AVISO_BLOQUEO)[number];
  * desbloquea: para eso está «Desbloquear». Se usa con bind(null, id, vuelta).
  */
 export async function marcarAvisoBloqueoVisto(id: string, vuelta: VueltaAvisoBloqueo): Promise<void> {
+  await requirePermission("cotizar.mediakit.editar");
   if (UUID_RE.test(id) && (await puedeOperarCotizar())) {
     try {
       await withWorkspace((tx) => markMediaKitLockNoticeRead(tx, id));
@@ -514,6 +528,7 @@ export async function marcarAvisoBloqueoVisto(id: string, vuelta: VueltaAvisoBlo
 
 /** Borra un borrador y vuelve a la lista. */
 export async function eliminarBorrador(id: string): Promise<void> {
+  await requirePermission("cotizar.cotizacion.editar");
   if (!UUID_RE.test(id)) redirect("/cotizar/cotizaciones");
   if (!(await puedeOperarCotizar())) redirect(`/cotizar/cotizaciones/${id}?error=sinPermiso`);
   let error: string | null = null;

@@ -17,6 +17,7 @@ import { Interruptor } from "./interruptor";
 import { MESSAGES } from "./messages";
 import { puedeCambiarLaPolitica } from "./permiso";
 import { Salud } from "./salud";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.metaTitle };
 export const dynamic = "force-dynamic";
@@ -34,6 +35,7 @@ const REBOTES_VISIBLES = 8;
  * de redacción— se enseña, con el motivo, para que nadie lo busque.
  */
 export default async function PoliticaPage() {
+  await requireModuleAccess("ventas");
   // Un solo «ahora» para las cifras de 24 horas y para saber qué rebote es de hoy.
   const ahora = new Date();
   const { policy, health, counts, rebotes, listo, avisos } = await withWorkspace(async (tx) => ({

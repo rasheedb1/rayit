@@ -1,7 +1,10 @@
 import "server-only";
+import { getSessionMember } from "@mc/db/queries/conexiones";
 import type { MembershipRole } from "@mc/db/queries/identidad";
 import { authConfig } from "@/lib/auth/config";
+import { withWorkspace } from "@/lib/db";
 import { getCurrentContext } from "./current";
+import { usuarioDeDemo } from "./demo";
 
 /**
  * Si quien mira tiene, en el workspace actual, uno de estos roles. Es la
@@ -19,7 +22,15 @@ import { getCurrentContext } from "./current";
  */
 export async function tieneRol(roles: ReadonlySet<MembershipRole>): Promise<boolean> {
   const ctx = await getCurrentContext();
-  if (authConfig() === null) return true;
+  if (authConfig() === null) {
+    // Sin llaves y sin persona simulada, la demo es la Dueña: todo. Con
+    // DEMO_USER_ID la demo enseña a esa persona (ACC-7 r6): su rol real en
+    // el espacio, leído con su identidad, como permisosDeDemo.
+    const demo = usuarioDeDemo();
+    if (!demo) return true;
+    const miembro = await withWorkspace((tx) => getSessionMember(tx));
+    return miembro !== null && roles.has(miembro.roleKey as MembershipRole);
+  }
   if (!ctx.identity) return false;
   const rol = ctx.workspaces.find((w) => w.id === ctx.workspaceId)?.role;
   return rol !== undefined && roles.has(rol);

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { withWorkspace } from "@/lib/db";
 import { MESSAGES } from "../../../messages";
 import { DocumentoCotizacion } from "../../../_ui/documento-cotizacion";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.meta.vistaPrevia };
 export const dynamic = "force-dynamic";
@@ -19,6 +20,7 @@ export const dynamic = "force-dynamic";
  * revisión antes de «Enviar».
  */
 export default async function VistaPreviaCotizacionPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireModuleAccess("cotizar");
   const t = MESSAGES.detalle.vistaPrevia;
   const { id } = await params;
   const q = await withWorkspace((tx) => getQuotePreview(tx, id));

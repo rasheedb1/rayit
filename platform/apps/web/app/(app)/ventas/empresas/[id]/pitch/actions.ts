@@ -36,6 +36,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../../../_lib/db";
 import { puedeOperarVentas } from "../../../_lib/permiso";
 import { PITCH } from "./messages";
+import { requirePermission } from "@/lib/permisos";
 
 export interface PitchState extends ActionState {
   notice?: string;
@@ -117,6 +118,7 @@ function invalid(error: z.ZodError): PitchState {
 }
 
 export async function guardarPitch(_prev: PitchState, formData: FormData): Promise<PitchState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return { message: PITCH.errores.sinPermiso };
   const parsed = schema.safeParse({ ...fields(formData), intent: field(formData, "intent") });
   if (!parsed.success) return invalid(parsed.error);
@@ -152,6 +154,7 @@ export async function guardarPitch(_prev: PitchState, formData: FormData): Promi
  * pista y las instrucciones. El worker la toma en su siguiente pasada.
  */
 export async function pedirRedaccion(_prev: PitchState, formData: FormData): Promise<PitchState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return { message: PITCH.errores.sinPermiso };
   const parsed = aiSchema.safeParse({ ...fields(formData), hint: field(formData, "hint"), instructions: field(formData, "instructions") });
   if (!parsed.success) {

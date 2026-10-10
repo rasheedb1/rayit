@@ -121,6 +121,8 @@ export const MESSAGES = {
       description:
         "El tarifario necesita dos cosas: tus visualizaciones medianas por red (salen solas cuando hay métricas) y el CPM de referencia de tu nicho y tu país.",
       accion: "Ver conexiones",
+      /** El otro camino a las medianas, para quien todavía no tiene la API de su red: el CSV (RES-2). */
+      importar: "O importa un CSV de tu red",
     },
     sinTarifario: {
       title: "Tu tarifario todavía no está guardado",
@@ -534,6 +536,8 @@ export const MESSAGES = {
     MediaKitNotFound: "Ese media kit no existe en este espacio de trabajo.",
     CreatorNotFound: "No encontramos tu perfil de creador.",
     DealNotFound: "Ese negocio no existe en este espacio de trabajo.",
+    /** ACC-7 r6: el negocio ya tiene creador y la cotización iba a nombre de otro. */
+    CreadorDistintoDelNegocio: "La cotización tiene que ser del creador de ese negocio.",
     /**
      * Lo que se iba a escribir quedaría fuera del alcance de quien escribe
      * (ACC-6/ACC-7). Es el mismo texto que ScopeError.messageEs de @mc/db

@@ -9,6 +9,7 @@ import {
   type TerminosIncluidos,
 } from '@mc/core';
 import { isUuid, type WorkspaceTx } from '../../client.ts';
+import { ScopeError } from '../../scope.ts';
 import { WORKSPACE_DEFAULTS } from '../cimientos.ts';
 import { nuevoSlug } from './enlace.ts';
 import {
@@ -602,10 +603,25 @@ export async function createQuote(tx: WorkspaceTx, input: CreateQuoteInput): Pro
   const dealId = input.dealId ?? null;
   if (dealId) {
     if (!isUuid(dealId)) throw new CotizarError('DealNotFound', 'Ese negocio no existe en este espacio de trabajo.');
-    const { rows } = await tx.query<{ company_id: string }>('SELECT company_id FROM deal WHERE id = $1', [dealId]);
+    const { rows } = await tx.query<{ company_id: string; creator_id: string | null }>('SELECT company_id, creator_id FROM deal WHERE id = $1', [dealId]);
     if (!rows[0]) throw new CotizarError('DealNotFound', 'Ese negocio no existe en este espacio de trabajo.');
     companyId = rows[0].company_id;
+    // El negocio, su cotización y su campaña son del mismo creador (ACC-7,
+    // DealCreatorLocked) en las dos direcciones: una cotización de otro
+    // creador sobre un negocio que ya tiene el suyo partiría el acuerdo al
+    // aceptarla por el enlace público (createCampaignFromQuote corre sin persona).
+    if (rows[0].creator_id !== null && rows[0].creator_id !== input.creatorId) {
+      throw new CotizarError('CreadorDistintoDelNegocio', 'La cotización tiene que ser del creador de ese negocio.');
+    }
   }
+  // Y el creador que firma está en el alcance de quien cotiza: la política
+  // por creador de 0082 cubre deal, campaign, post y social_connection, no
+  // quote (ACC-10); sin esto, un miembro acotado cotizaba a nombre de otro.
+  const alcance = await tx.query<{ ok: boolean }>(
+    'SELECT (session_sees_all_creators() OR scope_allows($1, $2::uuid)) AS ok',
+    ['creator', input.creatorId],
+  );
+  if (alcance.rows[0]?.ok !== true) throw new ScopeError();
   if (!companyId || !isUuid(companyId)) {
     throw new CotizarError('CompanyNotFound', 'Elige la marca a la que le cotizas.');
   }

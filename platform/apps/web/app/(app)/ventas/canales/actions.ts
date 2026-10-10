@@ -9,6 +9,7 @@ import { disconnect, saveCaps, type ActionDeps, type AvisosState, type LimitesSt
 import { retryAccountWebhooks } from "./_lib/aviso";
 import { channelDeps, puedeGestionarCanales } from "./_lib/server";
 import { MESSAGES } from "./messages";
+import { requirePermission } from "@/lib/permisos";
 
 export type { AvisosState, LimitesState };
 
@@ -26,6 +27,7 @@ const deps = (): ActionDeps => ({
 
 /** Guarda los límites de una cuenta, nunca por encima de su máximo (la vista de canales_liberar_y_limites). */
 export async function guardarLimites(_prev: LimitesState, formData: FormData): Promise<LimitesState> {
+  await requirePermission("ventas.outreach.configurar");
   const { saved, ...state } = await saveCaps(deps(), formData);
   if (saved) revalidatePath("/ventas/canales");
   return state;
@@ -38,6 +40,7 @@ export async function guardarLimites(_prev: LimitesState, formData: FormData): P
  * llega su id.
  */
 export async function reactivarAvisos(formData: FormData): Promise<AvisosState> {
+  await requirePermission("ventas.outreach.configurar");
   const accountId = String(formData.get("accountId") ?? "");
   const r = await retryAccountWebhooks(accountId, await origenDeLaPeticion(), channelDeps());
   if (r === "forbidden") return { message: MESSAGES.detail.readOnly };
@@ -54,6 +57,7 @@ export async function reactivarAvisos(formData: FormData): Promise<AvisosState> 
  * proveedor. La confirmación la anuncia la fila del canal.
  */
 export async function desconectar(formData: FormData): Promise<AvisosState> {
+  await requirePermission("ventas.outreach.configurar");
   const { changed, ...state } = await disconnect(deps(), formData);
   if (changed) revalidatePath("/ventas/canales");
   return state;

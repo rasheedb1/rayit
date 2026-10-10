@@ -116,8 +116,8 @@ export const STORIES: readonly Story[] = [
     title: "Términos de servicio y política de privacidad",
     desc: "Texto legal de verdad para /legal, redactado o revisado por alguien que sepa, con el responsable del tratamiento, la base legal, los plazos de conservación y el contacto de datos personales (SUPPORT_EMAIL). Hoy /legal solo dice lo que es cierto y que está pendiente.",
     done: "/legal publica unos términos y una política revisados, y SUPPORT_EMAIL está fijado en producción. Tiene que estar antes del primer cliente que pague.",
-    status: "pendiente",
-    note: "Abierta en la ronda 4 de CIM-3 (22 de septiembre): los revisores marcaron que la página no se puede poner delante de un cliente que paga. El correo de contacto ya salió de los textos de interfaz a SUPPORT_EMAIL (lib/soporte.ts).",
+    status: "en_curso",
+    note: "10-oct (R7): /legal publica el borrador completo (términos y política con responsable, base legal, plazos, quién ve qué y contacto), con fecha de versión y el aviso «pendiente de revisión legal» a la vista; prueba en app/legal/page.test.tsx. Falta de una persona: SUPPORT_EMAIL en Vercel, la revisión legal (diez confirmaciones en docs/propuestas/CIERRE-CIM-R.md §2) y quitar el aviso. Abierta en la ronda 4 de CIM-3 (22-sep).",
   },
   {
     id: "CIM-10", module: "CIM", owner: "rasheed", size: "S", sprint: 3, deps: ["CIM-3"],
@@ -125,7 +125,7 @@ export const STORIES: readonly Story[] = [
     desc: "El enlace mágico sale de un endpoint público de Supabase y el cupo de correos es por proyecto: un script basta para que nadie pueda entrar. SMTP propio en Supabase y CAPTCHA (Cloudflare Turnstile) exigido por Supabase Auth en cada enlace.",
     done: "Supabase manda con SMTP propio y rechaza un enlace sin token de Turnstile; /login pinta el widget en producción. Antes del primer cliente que pague.",
     status: "bloqueada",
-    note: "El código está (pulido r1 de CIM-3): widget en /login y captchaToken hacia Supabase. Espera a una persona: sitio en Cloudflare Turnstile, TURNSTILE_SITE_KEY en Vercel y, después, la clave secreta en Supabase → Attack Protection; y el SMTP propio. Orden en apps/web/README.md, «El límite del correo».",
+    note: "10-oct (R7): el guion paso a paso, con verificación y vuelta atrás de cada paso, en docs/propuestas/CIERRE-CIM-R.md §3 (Turnstile → TURNSTILE_SITE_KEY en Vercel → desplegar → Attack Protection en Supabase → SMTP propio; nunca al revés). El código está (pulido r1 de CIM-3): widget en /login y captchaToken hacia Supabase, con captcha.test.ts. Espera a una persona con los paneles.",
   },
   {
     id: "CIM-11", module: "CIM", owner: "rasheed", size: "M", sprint: 4, deps: ["CIM-2"],
@@ -295,6 +295,7 @@ export const STORIES: readonly Story[] = [
     desc: "Formulario de Accounts API de TikTok, App Review + Business Verification de Meta, auditoría de Google. No es código: es el camino crítico, y lo hace quien tiene las cuentas de empresa. Se inicia el día 1.",
     done: "Los tres iniciados en la semana 1, con fecha y número de caso en docs/tramites.md.",
     status: "pendiente",
+    note: "10-oct (R7): docs/tramites.md con los cinco trámites (TikTok Accounts API y Login Kit, Meta App Review + Business Verification, Google para YouTube y para el outreach), los scopes exactos que pide el código con archivo y línea, lo que hay que preparar antes (política sin aviso, SUPPORT_EMAIL, logo, datos de la empresa, cuenta de prueba por red, video) y el riesgo de Google: exige un dominio propio verificado, vercel.app no vale. Ninguno iniciado: fecha y número de caso los pone Rasheed.",
   },
 
   // ---------------------------------------------------------------- RES
@@ -343,8 +344,8 @@ export const STORIES: readonly Story[] = [
     title: "Demografía y cuándo publicar, en pantalla",
     desc: "El bloque de audiencia por edad, género y país, y el de «cuándo publicar» (seguidores conectados por hora, Instagram), sobre lo que recolecta CON-7.",
     done: "El gráfico por hora coincide con el fixture; si la cuenta no da demografía, la pantalla explica por qué.",
-    status: "pendiente",
-    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4: depende de CON-7, que a su vez depende de aprobaciones que pueden no llegar.",
+    status: "en_curso",
+    note: "10-oct (R4): «Quién te ve» en /resumen (resumen/audiencia.tsx) con la demografía real que CON-7 recolecta desde el 5-oct (@nicolasduartea), por cuenta y con el filtro de red, con las mismas barras y tramos que la ficha de Conexiones; sin demografía dice por qué (por @ o autorizada sin lecturas). «Cuándo publicar» NO se pinta: ninguna tabla guarda la hora de conexión de los seguidores (CON-7 no la pide), y la pantalla lo dice en una frase. Queda en_curso hasta que CON-7 recoja online_followers (docs/propuestas/CIERRE-RES-R.md). Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4.",
   },
 
   // ---------------------------------------------------------------- VEN
@@ -494,7 +495,7 @@ export const STORIES: readonly Story[] = [
     desc: "packages/core/tarifas.ts calcula el rango por entregable desde views promedio × CPM de niche_cpm_benchmark, con modificadores (derechos de uso, exclusividad). Las views vienen de creator_baseline si existe y es confiable; si no, el creador las escribe y quedan marcadas como manuales.",
     done: "Con las views del mock salen los rangos del mock; cambiar el CPM cambia el rango y la explicación lo dice. Cambio del criterio: sin los modificadores de engagement y audiencia del mock, que no tienen fuente; ver tarifas.ts.",
     status: "hecho",
-    note: "Rango por entregable y paquetes con la fórmula de packages/core/src/tarifas.ts, la misma en la pantalla y al guardar; «Cómo se calcula» bajo su fila, precio y CPM a mano marcados, rango al revés bloqueado en todas las capas (más un CHECK en 0030). Pulido r1: guardar ya no desmarca las casillas de condiciones y paquetes (sin el reinicio de <form action>); los modificadores quedan en cada entregable y paquete (RateCardItem.modifierIds); los campos vacíos muestran «p. ej. 25.000» o «CPM bajo» en vez de «0»; queries/cotizar partido por pieza sin cambiar su API. Pulido r2: a 400 px cada entregable es una tarjeta (rango, views y CPM apilados, sin scroll lateral). Pulido r3: tarifas.test.ts fija los rangos con las views del mock (Reel 92 K, TikTok 138 K). Pulido r4: en Paquetes el nombre de cada entregable se lee entero y es la etiqueta de su casilla; un CPM propio al revés se marca en sus campos y no se guarda (antes el entregable salía del tarifario en silencio). Pulido r6: el rango se propone a tres cifras (redondearParaNegociar; el exacto queda en «Sin redondear») y el país del CPM va por su nombre.",
+    note: "10-oct (R5): el tarifario vacío ofrece también importar un CSV (/resumen/importar), y las fechas de Cotizar usan el DateInput del kit, que ya trae el anillo de foco (docs/propuestas/CIERRE-COT-R.md). Rango por entregable y paquetes con la fórmula de packages/core/src/tarifas.ts, la misma en la pantalla y al guardar; «Cómo se calcula» bajo su fila, precio y CPM a mano marcados, rango al revés bloqueado en todas las capas (más un CHECK en 0030). Pulido r1: guardar ya no desmarca las casillas de condiciones y paquetes (sin el reinicio de <form action>); los modificadores quedan en cada entregable y paquete (RateCardItem.modifierIds); los campos vacíos muestran «p. ej. 25.000» o «CPM bajo» en vez de «0»; queries/cotizar partido por pieza sin cambiar su API. Pulido r2: a 400 px cada entregable es una tarjeta (rango, views y CPM apilados, sin scroll lateral). Pulido r3: tarifas.test.ts fija los rangos con las views del mock (Reel 92 K, TikTok 138 K). Pulido r4: en Paquetes el nombre de cada entregable se lee entero y es la etiqueta de su casilla; un CPM propio al revés se marca en sus campos y no se guarda (antes el entregable salía del tarifario en silencio). Pulido r6: el rango se propone a tres cifras (redondearParaNegociar; el exacto queda en «Sin redondear») y el país del CPM va por su nombre.",
   },
   {
     id: "COT-2", module: "COT", owner: "rasheed", size: "M", sprint: 3, deps: ["COT-1", "RES-1"],
@@ -670,7 +671,7 @@ export const STORIES: readonly Story[] = [
     desc: "Invitar por correo eligiendo uno de los roles de fábrica, aceptar por enlace con vencimiento, cambiar rol y revocar. Al invitar a un mánager, dos casillas explícitas y apagadas: «también puede ver mis finanzas» y «también puede conectar mis cuentas». Nadie otorga un permiso que no tiene.",
     done: "Un creador invita a su mánager, el mánager entra por el enlace y ve Campañas pero no el flujo de caja; con la casilla marcada sí lo ve. Quitar al último dueño falla con mensaje.",
     status: "hecho",
-    note: "9-oct: en main y en producción con 0078–0080 y el seed 0011 aplicados; visto bueno de Nicolás dado (REVISION-FASE-9.md; ConfirmAction entró en la galería /kit). Equipo en /accesos (/equipo redirige); el enlace /invitacion/<token> vale 7 días, un solo uso, solo para el correo invitado y solo si quien invitó todavía puede dar ese rol. En la demo el enlace se ve pero no se acepta. Migraciones 0078, 0079 y 0080 y el seed 0011 sin aplicar en Supabase: los aplica el integrador, en orden. Sigue pendiente de antes (CIERRE-ACC §5.1–5.2): Ventas, Cotizar y Resumen con permisos por rol.",
+    note: "10-oct (R2-ACC): CIERRE-ACC §5.1, §5.2 y §5.5 hechos: requirePermission en las 77 Server Actions de Ventas, Cotizar y Resumen (dos permisos nuevos del outreach en 0085), puerta en sus 24 páginas y la Contadora de demo (seed 0014). Queda §5.4, el alcance en las consultas (docs/propuestas/CIERRE-ACC-R.md §3). 9-oct: en main y en producción con 0078–0080 y el seed 0011 aplicados; visto bueno de Nicolás dado (REVISION-FASE-9.md; ConfirmAction entró en la galería /kit). Equipo en /accesos (/equipo redirige); el enlace /invitacion/<token> vale 7 días, un solo uso, solo para el correo invitado y solo si quien invitó todavía puede dar ese rol. En la demo el enlace se ve pero no se acepta. Migraciones 0078, 0079 y 0080 y el seed 0011 sin aplicar en Supabase: los aplica el integrador, en orden. Sigue pendiente de antes (CIERRE-ACC §5.1–5.2): Ventas, Cotizar y Resumen con permisos por rol.",
   },
   {
     id: "ACC-5", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["ACC-3"],
@@ -694,7 +695,7 @@ export const STORIES: readonly Story[] = [
     desc: "Política de fila por creator_id en las cuatro tablas que lo llevan: social_connection, post, campaign y deal.",
     done: "Una consulta cruda que se olvide de scopeFilter() tampoco devuelve filas de otro creador.",
     status: "hecho",
-    note: "9-oct: en main y en producción, 0082 y el seed 0013 aplicados. Quedan los 11 hallazgos de docs/propuestas/pendientes-fase-9.json (nota 9,3) y ACC-10. Política RESTRICTIVE por creador para mc_app en las cuatro tablas; worker y enlaces públicos fuera. En la demo sin llaves se ve como cualquier persona del seed 0013 con DEMO_USER_ID. Detalle de las cinco rondas en docs/propuestas/ACC-7.md; lo que falta es ACC-10.",
+    note: "10-oct (r6, R2-ACC): nueve de los once hallazgos de pendientes-fase-9.json cerrados (createQuote con el creador del negocio y del alcance, tieneRol con DEMO_USER_ID, la ficha sin contradicciones, WCAG del botón, scope_allows con search_path en 0085…); quedan member_sees_creator para el responsable y la señal de Hostal Brisa en el seed 0013 (CIERRE-ACC-R.md §3). 9-oct: en main y en producción, 0082 y el seed 0013 aplicados. Política RESTRICTIVE por creador para mc_app en las cuatro tablas; worker y enlaces públicos fuera. En la demo sin llaves se ve como cualquier persona del seed 0013 con DEMO_USER_ID. Detalle de las cinco rondas en docs/propuestas/ACC-7.md; lo que falta es ACC-10.",
   },
   {
     id: "ACC-8", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["CON-3", "ACC-3"],
@@ -718,6 +719,6 @@ export const STORIES: readonly Story[] = [
     desc: "Extender la red de ACC-7 a lo que todavía solo protege su workspace: una política RESTRICTIVE por creador en post_metric_snapshot y account_metric_snapshot (por EXISTS sobre post y social_connection, o por su creator_id), quote (por su creator_id), invoice y payment (por EXISTS sobre campaign) y data_consent, con su entrada en TABLAS_CON_ALCANCE_POR_CREADOR y fuera de TABLAS_CON_CREADOR_SIN_POLITICA.",
     done: "Como miembro acotado a un creador, un SELECT crudo sobre las métricas, las cotizaciones, las facturas, los pagos y los consentimientos no devuelve nada del otro creador; la prueba de ACC-7 que hoy fija lo que no cubre se da la vuelta.",
     status: "pendiente",
-    note: "Salió de la revisión de ACC-7 (r1, hallazgos 2 y 11): las métricas son el dato principal y quote lleva el total. Hoy no hay filas de alcance, así que nada se ve de más; la red está para cuando ACC-4 o CIERRE-ACC §5.6 las escriban.",
+    note: "10-oct: mientras llega, createQuote comprueba el creador contra el alcance (R2-ACC) y la política de 0082 cubre deal, campaign, post y social_connection; el plan exacto en CIERRE-ACC-R.md §3. Salió de la revisión de ACC-7 (r1, hallazgos 2 y 11): las métricas son el dato principal y quote lleva el total. Hoy no hay filas de alcance, así que nada se ve de más; la red está para cuando ACC-4 o CIERRE-ACC §5.6 las escriban.",
   },
 ];

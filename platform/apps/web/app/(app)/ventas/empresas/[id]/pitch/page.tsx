@@ -13,6 +13,7 @@ import type { EditorData } from "./editor";
 import { PITCH } from "./messages";
 import { MontajeDelEditor } from "./montaje";
 import { editorKey } from "./vista";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,7 @@ export const dynamic = "force-dynamic";
  * origen de la app.
  */
 export default async function PitchPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireModuleAccess("ventas");
   const { id } = await params;
   const workspace = await getCurrentWorkspace();
   const f = formatterFor(workspace);

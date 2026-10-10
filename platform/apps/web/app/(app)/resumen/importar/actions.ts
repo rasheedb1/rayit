@@ -5,6 +5,7 @@ import { listKnownPosts, type CsvReadingFigures } from "@mc/db/queries/resumen";
 import { withWorkspace } from "@/lib/db";
 import { UUID_RE } from "@/lib/forms";
 import { MAX_FILAS, MAX_ID } from "./_lib/csv";
+import { requirePermission } from "@/lib/permisos";
 
 /**
  * La única server action de la importación: una LECTURA pequeña (unos
@@ -37,6 +38,7 @@ export type ResultadoConocidos =
  * workspace no existe para RLS y la respuesta sale vacía.
  */
 export async function buscarPostsConocidos(entrada: unknown): Promise<ResultadoConocidos> {
+  await requirePermission("resumen.metricas.importar");
   const parsed = esquemaConocidos.safeParse(entrada);
   if (!parsed.success) return { ok: false };
   try {

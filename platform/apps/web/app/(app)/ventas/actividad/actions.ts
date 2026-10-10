@@ -27,6 +27,7 @@ import { withWorkspace } from "../_lib/db";
 import { puedeOperarLaCola } from "./_lib/permiso";
 import { ACTIVIDAD_URL, resumenDe } from "./_lib/vista";
 import { MESSAGES } from "./messages";
+import { requirePermission } from "@/lib/permisos";
 
 /** Lo que vuelve a la pantalla: la frase del resultado, o la del error. */
 export interface ActividadState {
@@ -67,6 +68,7 @@ async function reintentar(target: RetryTarget): Promise<ActividadState> {
 
 /** «Reintentar» en un fallido. */
 export async function reintentarUno(touchId: string): Promise<ActividadState> {
+  await requirePermission("ventas.outreach.enviar");
   const id = uuid.safeParse(touchId);
   if (!id.success) return { error: R.generico };
   return reintentar({ touchIds: [id.data] });
@@ -74,6 +76,7 @@ export async function reintentarUno(touchId: string): Promise<ActividadState> {
 
 /** «Correo · 3»: los fallidos reintentables de ese tipo, con la cadencia y el contacto que filtra la pantalla. */
 export async function reintentarPorTipo(input: { stepType: string; sequenceId: string | null; contact: string | null }): Promise<ActividadState> {
+  await requirePermission("ventas.outreach.enviar");
   const datos = porTipoSchema.safeParse(input);
   if (!datos.success) return { error: R.generico };
   return reintentar(datos.data);
@@ -81,6 +84,7 @@ export async function reintentarPorTipo(input: { stepType: string; sequenceId: s
 
 /** «Cancelar seleccionados»: lo cancelable de la selección; lo demás vuelve con su motivo. */
 export async function cancelarSeleccion(touchIds: string[]): Promise<ActividadState> {
+  await requirePermission("ventas.outreach.enviar");
   const ids = z.array(uuid).min(1).max(BULK_MAX).safeParse(touchIds);
   if (!ids.success) return { error: R.generico };
   if (!(await puedeOperarLaCola())) return SIN_PERMISO;
@@ -101,6 +105,7 @@ export async function cancelarSeleccion(touchIds: string[]): Promise<ActividadSt
  * sigue (markManualTouchDone).
  */
 export async function marcarGestoHecho(touchId: string): Promise<ActividadState> {
+  await requirePermission("ventas.outreach.enviar");
   const id = uuid.safeParse(touchId);
   if (!id.success) return { error: R.generico };
   if (!(await puedeOperarLaCola())) return SIN_PERMISO;

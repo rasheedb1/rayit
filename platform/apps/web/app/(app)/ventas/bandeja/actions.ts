@@ -13,6 +13,7 @@ import { getCurrentContext } from "@/lib/workspace/current";
 import { withWorkspace } from "../_lib/db";
 import { puedeOperarVentas } from "../_lib/permiso";
 import { INTENCIONES, MESSAGES } from "./messages";
+import { requirePermission } from "@/lib/permisos";
 
 /**
  * Las acciones de /ventas/bandeja (VEN-14). El workspace lo fija
@@ -42,6 +43,7 @@ const hiloSchema = z.object({
 
 /** Al abrir un hilo, sus mensajes quedan leídos. */
 export async function marcarLeido(input: z.input<typeof hiloSchema>): Promise<void> {
+  await requirePermission("ventas.outreach.enviar");
   // Quien solo mira no cambia lo que el equipo tiene sin leer.
   if (!(await puedeOperarVentas())) return;
   const parsed = hiloSchema.safeParse(input);
@@ -58,6 +60,7 @@ const hechoSchema = hiloSchema.extend({ done: z.boolean() });
 
 /** «Marcar como hecha» y «Reabrir»: el hilo sale de los pendientes (o vuelve). */
 export async function marcarHecho(input: z.input<typeof hechoSchema>): Promise<ResultadoBandeja> {
+  await requirePermission("ventas.outreach.enviar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = hechoSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: t.errores.accion };
@@ -94,6 +97,7 @@ function explicar(r: Extract<ReplyResult, { ok: false }>): ResultadoBandeja {
 
 /** «Enviar respuesta»: el motor la envía en el mismo hilo, por la cuenta que recibió el mensaje. */
 export async function responder(input: z.input<typeof responderSchema>): Promise<ResultadoBandeja> {
+  await requirePermission("ventas.outreach.enviar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = responderSchema.safeParse(input);
   if (!parsed.success) {
@@ -127,6 +131,7 @@ export type ResultadoCancelar = { ok: true; notice: string; body: string } | { o
 
 /** «Cancelar» (y «Editar», que cancela y devuelve el texto): la respuesta en cola no sale. */
 export async function cancelarRespuesta(input: z.input<typeof cancelarSchema>): Promise<ResultadoCancelar> {
+  await requirePermission("ventas.outreach.enviar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = cancelarSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: t.errores.accion };
@@ -151,6 +156,7 @@ export async function cancelarRespuesta(input: z.input<typeof cancelarSchema>): 
  * pedía ya pasó.
  */
 export async function descartarRespuesta(input: z.input<typeof toqueSchema>): Promise<ResultadoBandeja> {
+  await requirePermission("ventas.outreach.enviar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = toqueSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: t.errores.accion };
@@ -177,6 +183,7 @@ const corregirSchema = z.object({
  * escribió la persona o, sin ella, la que dice el mensaje.
  */
 export async function corregirIntencion(input: z.input<typeof corregirSchema>): Promise<ResultadoBandeja> {
+  await requirePermission("ventas.outreach.enviar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = corregirSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: t.errores.accion };
@@ -211,6 +218,7 @@ const referidoSchema = z.object({
 
 /** «Crear contacto» desde un referido: una ficha nueva de la misma marca, con procedencia 'inbound'. */
 export async function crearReferido(input: z.input<typeof referidoSchema>): Promise<ResultadoBandeja> {
+  await requirePermission("ventas.outreach.enviar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = referidoSchema.safeParse(input);
   if (!parsed.success) {

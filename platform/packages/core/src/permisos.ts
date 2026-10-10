@@ -81,6 +81,10 @@ export const PERMISOS = [
   { key: 'ventas.negocio.ver', module: 'ventas', labelEs: 'Ver el pipeline de negocios', sensitivity: 'normal' },
   { key: 'ventas.negocio.crear', module: 'ventas', labelEs: 'Crear negocios', sensitivity: 'normal' },
   { key: 'ventas.negocio.editar', module: 'ventas', labelEs: 'Mover negocios de etapa', sensitivity: 'normal' },
+  // Outreach (Rasheed): VEN-9, VEN-10, VEN-14, VEN-15. Sembrados por 0085 (0034 es inmutable).
+  { key: 'ventas.outreach.enviar', module: 'ventas', labelEs: 'Aprobar, responder y reintentar mensajes de outreach', sensitivity: 'normal' },
+  // Lo que compromete la reputación del remitente: encender el envío, la política, los canales y el brief. Solo Dueño y Administrador.
+  { key: 'ventas.outreach.configurar', module: 'ventas', labelEs: 'Configurar el envío: política, canales y brief', sensitivity: 'sensible' },
 
   // Cotizar (Rasheed): COT-1, COT-2, COT-3, COT-4.
   { key: 'cotizar.tarifario.ver', module: 'cotizar', labelEs: 'Ver el tarifario', sensitivity: 'normal' },
@@ -227,7 +231,7 @@ export const ROLES_SISTEMA: readonly RolSistema[] = [
       'Su agente, quien habla con las marcas. Ventas, Cotizar y Campañas completas, el estado de cobro de las campañas, y ve el resto. No conecta cuentas ni ve el flujo de caja.',
     permisos: [
       'resumen.panel.ver',
-      ...permisosDelModulo('ventas'),
+      ...permisosDelModulo('ventas').filter((p) => p !== 'ventas.outreach.configurar'),
       ...permisosDelModulo('cotizar'),
       ...permisosDelModulo('campanas'),
       'finanzas.cobro.ver',
@@ -280,7 +284,11 @@ export const ROLES_SISTEMA: readonly RolSistema[] = [
     workspaceKind: 'agency',
     labelEs: 'Ejecutivo de cuenta',
     descriptionEs: 'Ventas, Cotizar y Campañas de las marcas o creadores que tiene asignados.',
-    permisos: [...permisosDelModulo('ventas'), ...permisosDelModulo('cotizar'), ...permisosDelModulo('campanas')],
+    permisos: [
+      ...permisosDelModulo('ventas').filter((p) => p !== 'ventas.outreach.configurar'),
+      ...permisosDelModulo('cotizar'),
+      ...permisosDelModulo('campanas'),
+    ],
   },
   {
     key: 'finance',

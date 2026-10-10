@@ -11,6 +11,7 @@ import { getCurrentContext } from "@/lib/workspace/current";
 import { withWorkspace } from "../_lib/db";
 import { puedeOperarVentas } from "../_lib/permiso";
 import { MESSAGES } from "./messages";
+import { requirePermission } from "@/lib/permisos";
 
 /**
  * Las acciones de /ventas/aprobaciones (VEN-14). El workspace lo fija
@@ -91,6 +92,7 @@ function explicar(r: Extract<ApproveResult, { ok: false }>): ResultadoAprobacion
  * que sale cuando se encienda.
  */
 export async function aprobarToque(input: z.input<typeof aprobarSchema>): Promise<ResultadoAprobacion> {
+  await requirePermission("ventas.outreach.enviar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = aprobarSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: t.errores.generico };
@@ -129,6 +131,7 @@ const deshacerSchema = z.object({
 
 /** «Deshacer» una aprobación: el mensaje vuelve a la cola con el motivo que guardó el servidor, si todavía no salió. */
 export async function deshacerAprobacion(input: z.input<typeof deshacerSchema>): Promise<ResultadoAprobacion> {
+  await requirePermission("ventas.outreach.enviar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = deshacerSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: t.errores.generico };
@@ -154,6 +157,7 @@ const regenerarSchema = z.object({
 
 /** «Regenerar con una pista»: la versión nueva vuelve a esta bandeja cuando la IA termina. */
 export async function regenerarToque(input: z.input<typeof regenerarSchema>): Promise<ResultadoAprobacion> {
+  await requirePermission("ventas.outreach.enviar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = regenerarSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: t.errores.generico };
@@ -186,6 +190,7 @@ const saltarSchema = z.object({ touchId: z.string().regex(UUID_RE) });
 
 /** «Saltar»: el paso no sale y la cadencia sigue. */
 export async function saltarToque(input: z.input<typeof saltarSchema>): Promise<ResultadoAprobacion> {
+  await requirePermission("ventas.outreach.enviar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = saltarSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: t.errores.generico };

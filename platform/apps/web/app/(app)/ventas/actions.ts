@@ -51,6 +51,7 @@ import { parseBrandCsv, type CsvLineError } from "./_lib/csv";
 import { fitFromPercent } from "./_lib/estado";
 import { MESSAGES } from "./_lib/messages";
 import { isCountryCode } from "./_lib/paises";
+import { requirePermission } from "@/lib/permisos";
 
 /** Lo que devuelven las acciones de Ventas: lo común más un aviso de éxito. */
 export interface VentasState extends ActionState {
@@ -172,6 +173,7 @@ function duplicateMessage(reason: SignalDuplicateReason | null): string {
 }
 
 export async function anotarSenal(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.senal.registrar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const parsed = senalSchema.safeParse({
     companyName: field(formData, "companyName"),
@@ -227,6 +229,7 @@ export async function anotarSenal(_prev: VentasState, formData: FormData): Promi
 // ---------------------------------------------------------------------
 
 export async function cargarLista(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.senal.importar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.radar.csv;
   let text = field(formData, "pasted");
@@ -281,6 +284,7 @@ export async function cargarLista(_prev: VentasState, formData: FormData): Promi
 // ---------------------------------------------------------------------
 
 export async function aceptarSenal(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.senal.registrar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.radar;
   const signalId = field(formData, "signalId");
@@ -335,6 +339,7 @@ const descartarSchema = z.object({
 });
 
 export async function descartarSenal(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.senal.registrar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const parsed = descartarSchema.safeParse({ signalId: field(formData, "signalId"), reason: field(formData, "reason") });
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
@@ -386,6 +391,7 @@ function empresaError(err: unknown, fallback: string): VentasState {
  * que reenvía lo mismo con `sameName=X`: el permiso es para ese nombre.
  */
 export async function crearEmpresa(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.empresa.crear");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const parsed = empresaSchema.safeParse({
     name: field(formData, "name"),
@@ -435,6 +441,7 @@ export async function crearEmpresa(_prev: VentasState, formData: FormData): Prom
  * CompanyNotEditable, que aquí se dice en la pantalla.
  */
 export async function editarEmpresa(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.empresa.editar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.empresas.form;
   const companyId = field(formData, "companyId");
@@ -485,6 +492,7 @@ export async function editarEmpresa(_prev: VentasState, formData: FormData): Pro
  * lo comprueba updateCompany (InvalidOwner).
  */
 export async function cambiarRelacion(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.empresa.editar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.empresas.detail;
   const companyId = field(formData, "companyId");
@@ -526,6 +534,7 @@ const negocioSchema = z.object({
  * de negocios con su atajo a Cotizar.
  */
 export async function crearNegocio(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.negocio.crear");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.empresas.detail.newDeal;
   const parsed = negocioSchema.safeParse({
@@ -551,9 +560,10 @@ export async function crearNegocio(_prev: VentasState, formData: FormData): Prom
     const message = messageOf(err, t.error);
     if (err instanceof VentasError && err.code === "InvalidDealName") return { errors: { name: message } };
     if (err instanceof VentasError && err.code === "InvalidAmount") return { errors: { amount: message } };
-    if (err instanceof VentasError && (err.code === "DealCreatorRequired" || err.code === "InvalidCreator")) {
-      return { errors: { creatorId: message } };
-    }
+    // Dentro del propio formulario el error largo del radar («desde la ficha,
+    // en Nuevo negocio, puedes elegirlo») mandaba a la persona a donde ya está.
+    if (err instanceof VentasError && err.code === "DealCreatorRequired") return { errors: { creatorId: t.creatorRequired } };
+    if (err instanceof VentasError && err.code === "InvalidCreator") return { errors: { creatorId: message } };
     return { message };
   }
   revalidateVentas(v.companyId);
@@ -575,6 +585,7 @@ const creadorNegocioSchema = z.object({
  * viva (DealCreatorLocked). Deja su fila en la bitácora.
  */
 export async function cambiarCreadorNegocio(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.empresas.detail.dealCreator;
   const parsed = creadorNegocioSchema.safeParse({
@@ -648,6 +659,7 @@ function contactoError(err: unknown, fallback: string): VentasState {
 }
 
 export async function crearContacto(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.empresa.editar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const parsed = contactoSchema.safeParse(contactoForm(formData));
   if (!parsed.success) return { errors: firstErrors(parsed.error.issues) };
@@ -680,6 +692,7 @@ export async function crearContacto(_prev: VentasState, formData: FormData): Pro
  * (ContactNotOwned; la pantalla ni siquiera ofrece el botón).
  */
 export async function editarContacto(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.empresa.editar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = MESSAGES.contacto;
   const contactId = field(formData, "contactId");
@@ -708,6 +721,7 @@ export async function editarContacto(_prev: VentasState, formData: FormData): Pr
 }
 
 export async function darDeBaja(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.empresa.editar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const contactId = field(formData, "contactId");
   const companyId = field(formData, "companyId");
@@ -761,6 +775,7 @@ export async function moverNegocio(
   toStageId: string,
   opts: { lostReason?: string; amount?: string } = {},
 ): Promise<MoverResult> {
+  await requirePermission("ventas.negocio.editar");
   // Los argumentos de una Server Action llegan de un POST que cualquiera
   // puede fabricar: los tipos de TypeScript no los protegen. Un `opts`
   // null o un monto numérico no pueden ser un TypeError (500 y traza en

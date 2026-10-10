@@ -15,6 +15,7 @@ import { formatClaim } from "./cifras";
 import { MESSAGES } from "./messages";
 import { puedeEditarElPerfil } from "./permiso";
 import { describirProblemas } from "./problemas";
+import { requirePermission } from "@/lib/permisos";
 
 /**
  * Las acciones de /ventas/perfil (VEN-11). El workspace lo fija
@@ -68,6 +69,7 @@ async function formateador(): Promise<Formatter> {
 }
 
 export async function recalcularPerfil(): Promise<ResultadoAccion> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeEditarElPerfil())) return { ok: false, message: t.sinPermiso, detalles: [] };
   let marca: { creatorId: string; token: string } | null = null;
   // La reserva del intento en curso: la suelta registrar la llamada, o el finally si no se usó.
@@ -143,6 +145,7 @@ const EdicionSchema = z.object({
 });
 
 export async function guardarNarrativa(texto: string, escritaEl: string): Promise<ResultadoAccion> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeEditarElPerfil())) return { ok: false, message: t.sinPermiso, detalles: [] };
   const f = await formateador();
   const entrada = EdicionSchema.safeParse({ texto, escritaEl });
