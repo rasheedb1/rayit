@@ -52,7 +52,7 @@ const selva: AccountAudience = {
   handle: "selvathegolden",
   day: null,
   dimensions: [],
-  gaps: [{ metricGroup: "demografia_de_cuenta", requirementId: "tt.audience.auth", requirement: "owner_authorization", messageEs: "TikTok solo entrega la audiencia a la cuenta autorizada.", fixUrl: "/conexiones", day: "2026-10-05" }],
+  gaps: [{ metricGroup: "demografia_de_cuenta", requirementId: "tt.audience.auth", requirement: "owner_authorization", messageEs: "TikTok solo entrega la audiencia a la cuenta autorizada.", fixUrl: "/conexiones", day: "2026-10-05", detectedAt: "2026-10-05T05:20:00Z" }],
 };
 
 beforeEach(() => {
