@@ -1203,8 +1203,18 @@ describe('VEN-1 · editar la ficha, el responsable y la búsqueda (pulido r5)', 
       ON CONFLICT DO NOTHING;
       ${membershipSql([{ workspaceId: WORKSPACE_AJENO, userId: USER_AJENO, kind: 'owner' }])}`);
     const opciones = await laura((tx) => listOwnerOptions(tx));
-    // Andrés Pardo es el mánager de la demo (seed 0003, ACC-8): también es de este espacio.
-    assert.deepEqual(opciones, [{ userId: '00000002-0000-4000-8000-000000000004', label: 'Andrés Pardo' }, { userId: USER_LAURA, label: 'Laura Méndez' }], 'solo las personas de este espacio');
+    // Andrés Pardo es el mánager de la demo (seed 0003, ACC-8) y Carolina Ruiz la contadora (seed 0014, R2-ACC):
+    // también son de este espacio. Que la lista se acote a quien ve al creador del negocio es el hallazgo 2 de
+    // ACC-7 (member_sees_creator), pendiente.
+    assert.deepEqual(
+      opciones,
+      [
+        { userId: '00000002-0000-4000-8000-000000000004', label: 'Andrés Pardo' },
+        { userId: '00000002-0000-4000-8000-000000000005', label: 'Carolina Ruiz' },
+        { userId: USER_LAURA, label: 'Laura Méndez' },
+      ],
+      'solo las personas de este espacio',
+    );
 
     const id = await laura((tx) => createCompany(tx, { name: 'Con Responsable', domain: 'con-responsable.co' }));
     await laura((tx) => updateCompany(tx, id, { ownerUserId: USER_LAURA }));

@@ -48,10 +48,14 @@
 -- ---------------------------------------------------------------------
 -- 1 · Los dos permisos del outreach y sus roles de fábrica
 -- ---------------------------------------------------------------------
+-- Una sentencia por permiso, con la forma que accesos.test.ts busca
+-- (la de 0037): «INSERT INTO permission (…)\nVALUES ('<clave>'».
 INSERT INTO permission (key, module, label_es, sensitivity)
-VALUES
-  ('ventas.outreach.enviar', 'ventas', 'Aprobar, responder y reintentar mensajes de outreach', 'normal'),
-  ('ventas.outreach.configurar', 'ventas', 'Configurar el envío: política, canales y brief', 'sensible')
+VALUES ('ventas.outreach.enviar', 'ventas', 'Aprobar, responder y reintentar mensajes de outreach', 'normal')
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO permission (key, module, label_es, sensitivity)
+VALUES ('ventas.outreach.configurar', 'ventas', 'Configurar el envío: política, canales y brief', 'sensible')
 ON CONFLICT (key) DO NOTHING;
 
 INSERT INTO role_permission (role_id, permission_key)
