@@ -32,6 +32,38 @@ Las llaves ya están en Vercel (`GOOGLE_OUTREACH_CLIENT_ID/SECRET`,
    `/ventas/canales` y ver la fila en verde, el keepalive escribiendo
    `last_ok_at` y una cuenta caída en rojo con «Reconectar».
 
+## 4. VEN-17 · por qué un job sale «agotado» en los turnos, y qué mirar
+
+Desde esta máquina no se ve `job_run` (`mc_app` no lo lee) ni corre
+`make cron.status` (pide el token de administración), así que esto es
+lectura del código, no de producción:
+
+- `retries_exhausted` lo decide `verdict()` en `apps/worker/src/runner/once.ts`
+  dentro de la ventana del cron del job: cuando `attempts ≥ max_attempts`
+  (fallos reales) **o** `cuts ≥ MAX_TICK_CUTS` (cortes por el presupuesto
+  de 45 s del turno, `metadata.tick_cut = true`). «Agotado en cada turno»
+  es lo mismo que «ya falló o se cortó el máximo en esta ventana y
+  espera a la siguiente»: no vuelve a intentarlo cada minuto.
+- `outbound.replies` fallaba por `citext` fuera del `search_path` del rol
+  del worker: resuelto el 7-oct en caliente y con 0084 (aplicada el
+  9-oct).
+- `collect.account_metrics`: hasta el 9-oct, la cuenta de Instagram
+  autorizada (@nicolasduartea) hacía fallar la lectura con el error 100
+  de Meta («link_clicks is not available»), que `classifyFailure`
+  tomaba por permanente (`cuenta` → corrida `failed`), y cada ventana
+  gastaba sus intentos. Los dos commits de Nicolás del 9-oct (`00c49413`,
+  `58359739`: las métricas por tipo de medio sin `link_clicks` ni
+  `reposts`, hasta cuatro reintentos quitando lo que Meta rechaza, y el
+  100 de Meta como transitorio y no como fallo de la cuenta) están en
+  producción desde `23f72cd9`. Lo esperable es que desde el 10-oct ese
+  job cierre en `ok`.
+- Cómo comprobarlo (Rasheed): `make cron.status` siete días seguidos sin
+  `exhausted` ni `failed`; y, como `mc_worker`, `SELECT job_id, status,
+  attempt, error, metadata->>'tick_cut' FROM job_run WHERE started_at >
+  now() - interval '1 day' ORDER BY started_at DESC`. Si aparece
+  `tick_cut`, es el presupuesto (hay que subir a Pro o partir el job);
+  si aparece `error`, es el conector y toca a Nicolás (CON-2).
+
 ## 3. Decisiones
 
 | Pregunta | Lo que quedó | Si se quiere lo contrario |
