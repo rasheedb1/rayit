@@ -343,8 +343,8 @@ export const STORIES: readonly Story[] = [
     title: "Demografía y cuándo publicar, en pantalla",
     desc: "El bloque de audiencia por edad, género y país, y el de «cuándo publicar» (seguidores conectados por hora, Instagram), sobre lo que recolecta CON-7.",
     done: "El gráfico por hora coincide con el fixture; si la cuenta no da demografía, la pantalla explica por qué.",
-    status: "pendiente",
-    note: "Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4: depende de CON-7, que a su vez depende de aprobaciones que pueden no llegar.",
+    status: "en_curso",
+    note: "10-oct (R4): «Quién te ve» en /resumen (resumen/audiencia.tsx) con la demografía real que CON-7 recolecta desde el 5-oct (@nicolasduartea), por cuenta y con el filtro de red, con las mismas barras y tramos que la ficha de Conexiones; sin demografía dice por qué (por @ o autorizada sin lecturas). «Cuándo publicar» NO se pinta: ninguna tabla guarda la hora de conexión de los seguidores (CON-7 no la pide), y la pantalla lo dice en una frase. Queda en_curso hasta que CON-7 recoja online_followers (docs/propuestas/CIERRE-RES-R.md). Corrida del sprint 5 al 6 el 22-sep para hacerle sitio a ACC-4.",
   },
 
   // ---------------------------------------------------------------- VEN

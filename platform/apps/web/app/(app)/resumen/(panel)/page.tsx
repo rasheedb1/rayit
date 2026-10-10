@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { withWorkspace } from "@/lib/db";
 import { Cifras, FiltroEnCurso } from "../filtro-en-curso";
 import { Filtros } from "../filtros";
+import { QuienTeVe, QuienTeVeEsqueleto } from "../audiencia";
 import { Frescura, FrescuraEsqueleto } from "../frescura";
 import { Graficos, GraficosEsqueleto } from "../graficos";
 import { Kpis, KpisEsqueleto } from "../kpis";
@@ -106,6 +107,11 @@ export default async function ResumenPage({
               <Graficos filtro={filtro} />
             </Suspense>
           </div>
+
+          {/* Quién te ve (RES-4): la demografía de CON-7, con el filtro de red. Su propio Suspense, como los gráficos. */}
+          <Suspense fallback={<QuienTeVeEsqueleto />}>
+            <QuienTeVe filtro={filtro} />
+          </Suspense>
 
           {/*
             Frescura también es asíncrona: sin su propia frontera,
