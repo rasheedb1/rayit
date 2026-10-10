@@ -285,23 +285,42 @@ export const MESSAGES = {
   legal: {
     meta: "Términos y privacidad",
     titulo: "Términos y privacidad",
-    descripcion: "On Cue está en construcción. Esto es lo que hoy es cierto sobre tus datos.",
+    descripcion: "Lo que On Cue hace con tus datos y en qué condiciones lo usas, dicho sin rodeos.",
+    /** La versión publicada: cambia cuando cambia el texto (CIM-9). */
+    version: "Versión del 10 de octubre de 2026",
+    /**
+     * Borrador (CIM-9): se queda a la vista hasta que una persona con
+     * formación legal lo revise y Rasheed lo quite. Lo que un abogado tiene
+     * que confirmar está en docs/propuestas/CIERRE-CIM-R.md §2.
+     */
     pendiente:
-      "Los términos de servicio y la política de privacidad completos están en redacción y se publicarán en esta página antes de que abramos On Cue a clientes de pago.",
+      "Borrador pendiente de revisión legal. Todo lo que dice aquí es cierto sobre cómo funciona On Cue hoy; antes de abrir el servicio a clientes de pago lo revisa una persona con formación legal y esta nota desaparece.",
     terminos: {
       id: "terminos",
-      titulo: "Términos",
+      titulo: "Términos de servicio",
       parrafos: [
-        "On Cue es software en desarrollo y puede cambiar mientras lo construimos.",
-        "Los datos que subas o conectes son tuyos.",
+        "On Cue es un servicio para creadores de contenido y agencias que quieren medir sus cuentas, vender a marcas, cotizar y cobrar. Lo presta On Cue (la razón social, el NIT y la dirección se publicarán aquí al cerrar la revisión legal). Al entrar aceptas estos términos; si no estás de acuerdo con ellos, no uses el servicio.",
+        "Entras con tu correo y un enlace de un solo uso: no hay contraseña. Eres responsable de lo que se haga desde ese correo y de a quién invitas a tu espacio de trabajo y con qué rol.",
+        "Los datos que subes o conectas son tuyos. Nos das permiso para leerlos, guardarlos y enseñártelos a ti y a las personas de tu espacio de trabajo solo con el fin de prestarte el servicio. No los usamos para entrenar modelos ni los vendemos.",
+        "Lo que publicas por enlace (un media kit, una cotización, un reporte a una marca) lo ve quien tenga el enlace, mientras lo dejes publicado. Tú lo publicas y tú lo retiras.",
+        "On Cue está en construcción: puede cambiar, tener errores o estar fuera de servicio sin previo aviso, y no garantizamos que las cifras que leemos de las plataformas sean completas o estén al día. Las plataformas pueden cambiar o retirar lo que nos dejan leer.",
+        "Puedes dejar de usar On Cue cuando quieras: desconecta tus cuentas y pide el borrado de tu espacio al correo de contacto. Podemos cerrar un espacio que use el servicio para enviar correo no solicitado, suplantar a alguien o infringir las normas de las plataformas conectadas.",
+        "Estos términos se rigen por las leyes de la República de Colombia. Cuando cambien, la fecha de versión de esta página cambia con ellos.",
       ],
     },
     privacidad: {
       id: "privacidad",
-      titulo: "Privacidad",
+      titulo: "Política de privacidad",
       parrafos: [
-        "Guardamos tu correo para identificarte y para mandarte el enlace de acceso. No hay contraseñas que guardar y no vendemos ni cedemos esa dirección.",
-        "Si conectas una cuenta de TikTok, Instagram, Facebook o YouTube, guardamos sus credenciales cifradas y las métricas que esa plataforma nos deja leer, para enseñártelas a ti y a nadie más.",
+        "Responsable del tratamiento: On Cue (los datos de la empresa se publicarán aquí al cerrar la revisión legal). Tratamos datos personales conforme a la Ley 1581 de 2012, el Decreto 1377 de 2013 y las normas que los complementan. El contacto para ejercer tus derechos está al final de esta página.",
+        "Qué guardamos de ti: tu correo electrónico y tu nombre, para identificarte, mandarte el enlace de acceso y nombrarte en tu espacio de trabajo; y un registro de lo que haces en el servicio (quién cambió qué y cuándo), que es lo que permite a tu equipo y a ti saber qué pasó.",
+        "Si conectas una cuenta de TikTok, Instagram, Facebook o YouTube, guardamos las credenciales que la plataforma nos da, cifradas, y las cifras que esa plataforma nos deja leer con el permiso que concediste: datos de la cuenta, publicaciones y sus métricas y, si lo autorizas, la demografía de tu audiencia en forma agregada (edad, género, país), nunca datos de tus seguidores uno a uno. Cada permiso queda registrado con su fecha y con quién lo concedió, y puedes retirarlo desconectando la cuenta.",
+        "Si agregas una cuenta por su nombre de usuario sin autorizarla, solo leemos lo que esa plataforma publica como información pública de esa cuenta.",
+        "Si usas el envío de mensajes a marcas, guardamos los contactos que tú registras, los mensajes que salen y entran por los canales que conectas, y las respuestas de quien pidió no recibir más correo, para no volver a escribirle. Quien recibe un correo nuestro puede darse de baja con un enlace en el propio mensaje.",
+        "Con qué fin: prestarte el servicio (medir, vender, cotizar y cobrar), enseñarte tus datos y los de tu equipo, y mandarte los avisos del propio servicio. No usamos tus datos para publicidad ni los vendemos ni los cedemos a terceros, salvo a los proveedores que necesitamos para operar (alojamiento, base de datos, envío de correo, y las plataformas y proveedores de los canales que tú conectas), que los tratan por nuestra cuenta.",
+        "Quién los ve: tú y las personas que invites a tu espacio, según el rol y el alcance que les des. Lo que publiques por enlace lo ve quien tenga el enlace. Nadie fuera de tu espacio ve tus cifras.",
+        "Cuánto tiempo: mientras tu espacio exista. Al desconectar una cuenta dejamos de leerla y sus credenciales dejan de usarse. Puedes pedir una copia de tus datos, su corrección o el borrado de tu espacio al correo de contacto; lo atendemos en los plazos de la ley.",
+        "Dónde: los datos se alojan en proveedores de nube fuera de Colombia, con cifrado en tránsito y en reposo. Conectar tus cuentas y usar el servicio implica esa transferencia.",
       ],
     },
     contacto: {

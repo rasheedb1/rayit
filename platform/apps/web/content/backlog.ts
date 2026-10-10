@@ -116,8 +116,8 @@ export const STORIES: readonly Story[] = [
     title: "Términos de servicio y política de privacidad",
     desc: "Texto legal de verdad para /legal, redactado o revisado por alguien que sepa, con el responsable del tratamiento, la base legal, los plazos de conservación y el contacto de datos personales (SUPPORT_EMAIL). Hoy /legal solo dice lo que es cierto y que está pendiente.",
     done: "/legal publica unos términos y una política revisados, y SUPPORT_EMAIL está fijado en producción. Tiene que estar antes del primer cliente que pague.",
-    status: "pendiente",
-    note: "Abierta en la ronda 4 de CIM-3 (22 de septiembre): los revisores marcaron que la página no se puede poner delante de un cliente que paga. El correo de contacto ya salió de los textos de interfaz a SUPPORT_EMAIL (lib/soporte.ts).",
+    status: "en_curso",
+    note: "10-oct (R7): /legal publica el borrador completo (términos y política con responsable, base legal, plazos, quién ve qué y contacto), con fecha de versión y el aviso «pendiente de revisión legal» a la vista; prueba en app/legal/page.test.tsx. Falta de una persona: SUPPORT_EMAIL en Vercel, la revisión legal (diez confirmaciones en docs/propuestas/CIERRE-CIM-R.md §2) y quitar el aviso. Abierta en la ronda 4 de CIM-3 (22-sep).",
   },
   {
     id: "CIM-10", module: "CIM", owner: "rasheed", size: "S", sprint: 3, deps: ["CIM-3"],
@@ -125,7 +125,7 @@ export const STORIES: readonly Story[] = [
     desc: "El enlace mágico sale de un endpoint público de Supabase y el cupo de correos es por proyecto: un script basta para que nadie pueda entrar. SMTP propio en Supabase y CAPTCHA (Cloudflare Turnstile) exigido por Supabase Auth en cada enlace.",
     done: "Supabase manda con SMTP propio y rechaza un enlace sin token de Turnstile; /login pinta el widget en producción. Antes del primer cliente que pague.",
     status: "bloqueada",
-    note: "El código está (pulido r1 de CIM-3): widget en /login y captchaToken hacia Supabase. Espera a una persona: sitio en Cloudflare Turnstile, TURNSTILE_SITE_KEY en Vercel y, después, la clave secreta en Supabase → Attack Protection; y el SMTP propio. Orden en apps/web/README.md, «El límite del correo».",
+    note: "10-oct (R7): el guion paso a paso, con verificación y vuelta atrás de cada paso, en docs/propuestas/CIERRE-CIM-R.md §3 (Turnstile → TURNSTILE_SITE_KEY en Vercel → desplegar → Attack Protection en Supabase → SMTP propio; nunca al revés). El código está (pulido r1 de CIM-3): widget en /login y captchaToken hacia Supabase, con captcha.test.ts. Espera a una persona con los paneles.",
   },
   {
     id: "CIM-11", module: "CIM", owner: "rasheed", size: "M", sprint: 4, deps: ["CIM-2"],
@@ -295,6 +295,7 @@ export const STORIES: readonly Story[] = [
     desc: "Formulario de Accounts API de TikTok, App Review + Business Verification de Meta, auditoría de Google. No es código: es el camino crítico, y lo hace quien tiene las cuentas de empresa. Se inicia el día 1.",
     done: "Los tres iniciados en la semana 1, con fecha y número de caso en docs/tramites.md.",
     status: "pendiente",
+    note: "10-oct (R7): docs/tramites.md con los cinco trámites (TikTok Accounts API y Login Kit, Meta App Review + Business Verification, Google para YouTube y para el outreach), los scopes exactos que pide el código con archivo y línea, lo que hay que preparar antes (política sin aviso, SUPPORT_EMAIL, logo, datos de la empresa, cuenta de prueba por red, video) y el riesgo de Google: exige un dominio propio verificado, vercel.app no vale. Ninguno iniciado: fecha y número de caso los pone Rasheed.",
   },
 
   // ---------------------------------------------------------------- RES
