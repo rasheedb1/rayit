@@ -419,7 +419,7 @@ describe('Cotizar con la red puesta: la cotización es del creador del negocio y
   const ejecutivo = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => como(WS_AGENCIA, EJECUTIVO_A, fn);
   const cotizacion = (dealId: string | undefined, creatorId: string, companyId?: string) => ({
     dealId, companyId, creatorId,
-    items: [{ deliverable: 'tiktok', platformId: 'tiktok', description: 'TikTok', quantity: 1, unitPrice: '1000000' }],
+    items: [{ deliverable: 'tiktok', platformId: 'tiktok' as const, description: 'TikTok', quantity: 1, unitPrice: '1000000' }],
     campaignStartsOn: '2026-12-01', campaignEndsOn: '2026-12-10',
   });
 
