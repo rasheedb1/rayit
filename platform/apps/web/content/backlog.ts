@@ -670,7 +670,7 @@ export const STORIES: readonly Story[] = [
     desc: "Invitar por correo eligiendo uno de los roles de fábrica, aceptar por enlace con vencimiento, cambiar rol y revocar. Al invitar a un mánager, dos casillas explícitas y apagadas: «también puede ver mis finanzas» y «también puede conectar mis cuentas». Nadie otorga un permiso que no tiene.",
     done: "Un creador invita a su mánager, el mánager entra por el enlace y ve Campañas pero no el flujo de caja; con la casilla marcada sí lo ve. Quitar al último dueño falla con mensaje.",
     status: "hecho",
-    note: "9-oct: en main y en producción con 0078–0080 y el seed 0011 aplicados; visto bueno de Nicolás dado (REVISION-FASE-9.md; ConfirmAction entró en la galería /kit). Equipo en /accesos (/equipo redirige); el enlace /invitacion/<token> vale 7 días, un solo uso, solo para el correo invitado y solo si quien invitó todavía puede dar ese rol. En la demo el enlace se ve pero no se acepta. Migraciones 0078, 0079 y 0080 y el seed 0011 sin aplicar en Supabase: los aplica el integrador, en orden. Sigue pendiente de antes (CIERRE-ACC §5.1–5.2): Ventas, Cotizar y Resumen con permisos por rol.",
+    note: "10-oct (R2-ACC): CIERRE-ACC §5.1, §5.2 y §5.5 hechos: requirePermission en las 77 Server Actions de Ventas, Cotizar y Resumen (dos permisos nuevos del outreach en 0085), puerta en sus 24 páginas y la Contadora de demo (seed 0014). Queda §5.4, el alcance en las consultas (docs/propuestas/CIERRE-ACC-R.md §3). 9-oct: en main y en producción con 0078–0080 y el seed 0011 aplicados; visto bueno de Nicolás dado (REVISION-FASE-9.md; ConfirmAction entró en la galería /kit). Equipo en /accesos (/equipo redirige); el enlace /invitacion/<token> vale 7 días, un solo uso, solo para el correo invitado y solo si quien invitó todavía puede dar ese rol. En la demo el enlace se ve pero no se acepta. Migraciones 0078, 0079 y 0080 y el seed 0011 sin aplicar en Supabase: los aplica el integrador, en orden. Sigue pendiente de antes (CIERRE-ACC §5.1–5.2): Ventas, Cotizar y Resumen con permisos por rol.",
   },
   {
     id: "ACC-5", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["ACC-3"],
@@ -694,7 +694,7 @@ export const STORIES: readonly Story[] = [
     desc: "Política de fila por creator_id en las cuatro tablas que lo llevan: social_connection, post, campaign y deal.",
     done: "Una consulta cruda que se olvide de scopeFilter() tampoco devuelve filas de otro creador.",
     status: "hecho",
-    note: "9-oct: en main y en producción, 0082 y el seed 0013 aplicados. Quedan los 11 hallazgos de docs/propuestas/pendientes-fase-9.json (nota 9,3) y ACC-10. Política RESTRICTIVE por creador para mc_app en las cuatro tablas; worker y enlaces públicos fuera. En la demo sin llaves se ve como cualquier persona del seed 0013 con DEMO_USER_ID. Detalle de las cinco rondas en docs/propuestas/ACC-7.md; lo que falta es ACC-10.",
+    note: "10-oct (r6, R2-ACC): nueve de los once hallazgos de pendientes-fase-9.json cerrados (createQuote con el creador del negocio y del alcance, tieneRol con DEMO_USER_ID, la ficha sin contradicciones, WCAG del botón, scope_allows con search_path en 0085…); quedan member_sees_creator para el responsable y la señal de Hostal Brisa en el seed 0013 (CIERRE-ACC-R.md §3). 9-oct: en main y en producción, 0082 y el seed 0013 aplicados. Política RESTRICTIVE por creador para mc_app en las cuatro tablas; worker y enlaces públicos fuera. En la demo sin llaves se ve como cualquier persona del seed 0013 con DEMO_USER_ID. Detalle de las cinco rondas en docs/propuestas/ACC-7.md; lo que falta es ACC-10.",
   },
   {
     id: "ACC-8", module: "ACC", owner: "nicolas", size: "S", sprint: 5, deps: ["CON-3", "ACC-3"],
@@ -718,6 +718,6 @@ export const STORIES: readonly Story[] = [
     desc: "Extender la red de ACC-7 a lo que todavía solo protege su workspace: una política RESTRICTIVE por creador en post_metric_snapshot y account_metric_snapshot (por EXISTS sobre post y social_connection, o por su creator_id), quote (por su creator_id), invoice y payment (por EXISTS sobre campaign) y data_consent, con su entrada en TABLAS_CON_ALCANCE_POR_CREADOR y fuera de TABLAS_CON_CREADOR_SIN_POLITICA.",
     done: "Como miembro acotado a un creador, un SELECT crudo sobre las métricas, las cotizaciones, las facturas, los pagos y los consentimientos no devuelve nada del otro creador; la prueba de ACC-7 que hoy fija lo que no cubre se da la vuelta.",
     status: "pendiente",
-    note: "Salió de la revisión de ACC-7 (r1, hallazgos 2 y 11): las métricas son el dato principal y quote lleva el total. Hoy no hay filas de alcance, así que nada se ve de más; la red está para cuando ACC-4 o CIERRE-ACC §5.6 las escriban.",
+    note: "10-oct: mientras llega, createQuote comprueba el creador contra el alcance (R2-ACC) y la política de 0082 cubre deal, campaign, post y social_connection; el plan exacto en CIERRE-ACC-R.md §3. Salió de la revisión de ACC-7 (r1, hallazgos 2 y 11): las métricas son el dato principal y quote lleva el total. Hoy no hay filas de alcance, así que nada se ve de más; la red está para cuando ACC-4 o CIERRE-ACC §5.6 las escriban.",
   },
 ];
