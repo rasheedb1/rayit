@@ -7,7 +7,7 @@ import {
 } from "@mc/core";
 import type { MediaKitAdjuntable, QuotableDeal, RateCardItem } from "@mc/db/queries/cotizar";
 import { Button } from "@/components/ui/button";
-import { FechaInput } from "../../_ui/fecha";
+import { DateInput } from "@/components/ui/date-input";
 import { Field, Input, Select } from "@/components/ui/field";
 import { MoneyInput } from "@/components/ui/money-input";
 import { Pill } from "@/components/ui/pill";
@@ -449,7 +449,7 @@ export function CotizacionForm({
             <Input inputMode="decimal" value={taxPct} onChange={(e) => setTaxPct(e.target.value)} />
           </Field>
           <Field label={t.validez} help={t.validezAyuda} error={errors.validUntil} htmlFor={`${base}validUntil`}>
-            <FechaInput value={validUntil} onChange={setValidUntil} />
+            <DateInput value={validUntil} onChange={setValidUntil} />
           </Field>
         </section>
 
@@ -562,10 +562,10 @@ export function CotizacionForm({
             <p className="mt-1 text-xs leading-4 text-muted">{t.ventanaAyuda}</p>
             <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field label={t.desde} error={errors.campaignStartsOn} htmlFor={`${base}starts`}>
-                <FechaInput value={campaignStartsOn} onChange={setCampaignStartsOn} />
+                <DateInput value={campaignStartsOn} onChange={setCampaignStartsOn} />
               </Field>
               <Field label={t.hasta} error={errors.campaignEndsOn} htmlFor={`${base}ends`}>
-                <FechaInput value={campaignEndsOn} min={campaignStartsOn || undefined} onChange={setCampaignEndsOn} />
+                <DateInput value={campaignEndsOn} min={campaignStartsOn || undefined} onChange={setCampaignEndsOn} />
               </Field>
             </div>
           </div>

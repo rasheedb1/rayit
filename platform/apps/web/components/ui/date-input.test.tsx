@@ -1,13 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { Field } from "@/components/ui/field";
-import { FechaInput } from "./fecha";
+import { Field } from "./field";
+import { DateInput } from "./date-input";
 
-describe("FechaInput", () => {
-  it("pinta el anillo con :focus, porque en Chromium el date no casa :focus-visible desde su segmento", () => {
+describe("DateInput", () => {
+  it("pinta el anillo con :focus además de :focus-visible, porque en Chromium el date no casa :focus-visible desde su segmento", () => {
     render(
       <Field label="Vence el" htmlFor="f-vence">
-        <FechaInput value="" onChange={() => {}} className="max-w-xs" />
+        <DateInput value="" onChange={() => {}} className="max-w-xs" />
       </Field>,
     );
     const campo = screen.getByLabelText("Vence el");

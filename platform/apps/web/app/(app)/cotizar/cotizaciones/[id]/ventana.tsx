@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { FechaInput } from "../../_ui/fecha";
+import { DateInput } from "@/components/ui/date-input";
 import { Field } from "@/components/ui/field";
 import type { ActionState } from "@/lib/forms";
 import { crearCampanaConVentana } from "../../actions";
@@ -27,10 +27,10 @@ export function VentanaCampana({ id }: { id: string }) {
       <Aviso message={state.message} size="xs" />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-1">
         <Field label={t.ventanaDesde} required error={errors.startsOn} htmlFor={`ventana-desde-${id}`}>
-          <FechaInput name="startsOn" value={desde} onChange={setDesde} />
+          <DateInput name="startsOn" value={desde} onChange={setDesde} />
         </Field>
         <Field label={t.ventanaHasta} required error={errors.endsOn} htmlFor={`ventana-hasta-${id}`}>
-          <FechaInput name="endsOn" value={hasta} min={desde || undefined} onChange={setHasta} />
+          <DateInput name="endsOn" value={hasta} min={desde || undefined} onChange={setHasta} />
         </Field>
       </div>
       <Button size="sm" variant="primary" type="submit" loading={pending}>
