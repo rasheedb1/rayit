@@ -121,6 +121,8 @@ export const MESSAGES = {
       description:
         "El tarifario necesita dos cosas: tus visualizaciones medianas por red (salen solas cuando hay métricas) y el CPM de referencia de tu nicho y tu país.",
       accion: "Ver conexiones",
+      /** El otro camino a las medianas, para quien todavía no tiene la API de su red: el CSV (RES-2). */
+      importar: "O importa un CSV de tu red",
     },
     sinTarifario: {
       title: "Tu tarifario todavía no está guardado",
