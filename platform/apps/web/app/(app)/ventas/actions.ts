@@ -560,9 +560,10 @@ export async function crearNegocio(_prev: VentasState, formData: FormData): Prom
     const message = messageOf(err, t.error);
     if (err instanceof VentasError && err.code === "InvalidDealName") return { errors: { name: message } };
     if (err instanceof VentasError && err.code === "InvalidAmount") return { errors: { amount: message } };
-    if (err instanceof VentasError && (err.code === "DealCreatorRequired" || err.code === "InvalidCreator")) {
-      return { errors: { creatorId: message } };
-    }
+    // Dentro del propio formulario el error largo del radar («desde la ficha,
+    // en Nuevo negocio, puedes elegirlo») mandaba a la persona a donde ya está.
+    if (err instanceof VentasError && err.code === "DealCreatorRequired") return { errors: { creatorId: t.creatorRequired } };
+    if (err instanceof VentasError && err.code === "InvalidCreator") return { errors: { creatorId: message } };
     return { message };
   }
   revalidateVentas(v.companyId);

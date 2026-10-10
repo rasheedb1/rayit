@@ -24,6 +24,7 @@ import {
 import type { SqlExecutor, WorkspaceTx } from '../src/client.ts';
 import { findPgError, withSavepoint } from '../src/pg-error.ts';
 import { listCampaigns } from '../src/queries/campanas.ts';
+import { CotizarError, createQuote } from '../src/queries/cotizar.ts';
 import { reclassifyInboxMessage } from '../src/queries/bandejas.ts';
 import { applyIntent, loadIntentMessage } from '../src/queries/outreach/intent.ts';
 import {
@@ -411,6 +412,31 @@ describe('Ventas con la red puesta: los negocios nacen con su creador', { timeou
     assert.deepEqual(opciones, { creators: [{ id: CREADORA_UNA, name: 'Una' }], required: false, seesAll: true });
     const id = await como(WS_UNA, DUENA_UNA, (tx) => createDeal(tx, { companyId: MARCA_UNA, name: 'Primer negocio' }));
     assert.equal(await creadorDe(id), CREADORA_UNA);
+  });
+});
+
+describe('Cotizar con la red puesta: la cotización es del creador del negocio y de su alcance (ronda 6, hallazgo 1)', { timeout: DESCRIBE_DB_TIMEOUT_MS }, () => {
+  const ejecutivo = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => como(WS_AGENCIA, EJECUTIVO_A, fn);
+  const cotizacion = (dealId: string | undefined, creatorId: string, companyId?: string) => ({
+    dealId, companyId, creatorId,
+    items: [{ deliverable: 'tiktok', platformId: 'tiktok', description: 'TikTok', quantity: 1, unitPrice: '1000000' }],
+    campaignStartsOn: '2026-12-01', campaignEndsOn: '2026-12-10',
+  });
+
+  test('sobre un negocio que ya tiene creador, una cotización de otro creador se rechaza (CreadorDistintoDelNegocio)', async () => {
+    const dealId = await ejecutivo((tx) => createDeal(tx, { companyId: MARCA_AGENCIA, name: 'Cotizar de A', amount: '300000' }));
+    await assert.rejects(
+      ejecutivo((tx) => createQuote(tx, cotizacion(dealId, CREADOR_B))),
+      (e: unknown) => e instanceof CotizarError && e.code === 'CreadorDistintoDelNegocio',
+    );
+    const q = await ejecutivo((tx) => createQuote(tx, cotizacion(dealId, CREADOR_A)));
+    assert.equal(q.creatorId, CREADOR_A, 'la del creador del negocio sí');
+  });
+
+  test('sin negocio, el creador que firma tiene que estar en el alcance de quien cotiza (ScopeError); quien ve a todos, cualquiera', async () => {
+    await assert.rejects(ejecutivo((tx) => createQuote(tx, cotizacion(undefined, CREADOR_B, MARCA_AGENCIA))), ScopeError);
+    const q = await como(WS_AGENCIA, DUENA_AGENCIA, (tx) => createQuote(tx, cotizacion(undefined, CREADOR_B, MARCA_AGENCIA)));
+    assert.equal(q.creatorId, CREADOR_B);
   });
 });
 

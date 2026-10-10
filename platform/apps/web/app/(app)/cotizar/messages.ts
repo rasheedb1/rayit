@@ -534,6 +534,8 @@ export const MESSAGES = {
     MediaKitNotFound: "Ese media kit no existe en este espacio de trabajo.",
     CreatorNotFound: "No encontramos tu perfil de creador.",
     DealNotFound: "Ese negocio no existe en este espacio de trabajo.",
+    /** ACC-7 r6: el negocio ya tiene creador y la cotización iba a nombre de otro. */
+    CreadorDistintoDelNegocio: "La cotización tiene que ser del creador de ese negocio.",
     /**
      * Lo que se iba a escribir quedaría fuera del alcance de quien escribe
      * (ACC-6/ACC-7). Es el mismo texto que ScopeError.messageEs de @mc/db

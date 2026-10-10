@@ -2,6 +2,14 @@ import type { VentasErrorCode } from "@mc/db/queries/ventas";
 import { MODULO_VENTAS, tituloDeVentas } from "./titulo";
 
 /**
+ * Acotada a creadores que ya no están en el espacio (dados de baja): no
+ * hay de quién abrir un negocio. Lo dicen la ficha (newDeal.noCreators) y
+ * el error de la base (NoCreatorInScope) con las mismas palabras.
+ */
+const NO_CREATORS =
+  "Tu acceso está limitado a creadores que ya no están en el espacio: no puedes abrir negocios. Pide a quien administra el equipo que te asigne uno.";
+
+/**
  * Los topes del brief (BRIEF_LIMITS de @mc/db) ya formateados con el
  * locale del workspace («2.000» o «2,000»). Las frases que dicen un tope
  * lo reciben así, en vez de llevarlo escrito: si cambia el tope o el
@@ -492,8 +500,9 @@ export const MESSAGES = {
         creatorNone: "Sin creador",
         creatorPick: "Elige un creador",
         /** Acotada a creadores que ya no están (dados de baja): no hay de quién abrir un negocio. */
-        noCreators:
-          "Tu acceso está limitado a creadores que ya no están en el espacio: no puedes abrir negocios. Pide a quien administra el equipo que te asigne uno.",
+        noCreators: NO_CREATORS,
+        /** El formulario de la ficha, cuando se lleva a varios y no se eligió: aquí mismo se elige (ACC-7 r6). */
+        creatorRequired: "Elige de qué creador es el negocio.",
         submit: "Abrir negocio",
         created: (name: string) => `Abriste «${name}». Está en «Nuevo», en el pipeline.`,
         error: "No se pudo abrir el negocio.",
@@ -515,17 +524,23 @@ export const MESSAGES = {
          */
         change: "Cambiar creador",
         assign: "Asignar creador",
-        changeLabel: (deal: string) => `Cambiar de qué creador es «${deal}»`,
-        assignLabel: (deal: string) => `Asignar un creador a «${deal}»`,
+        // El nombre accesible EMPIEZA por el texto visible del botón («Cambiar creador», «Asignar creador»):
+        // WCAG 2.5.3, quien usa control por voz dice lo que lee (ACC-7 r6).
+        changeLabel: (deal: string) => `Cambiar creador de «${deal}»`,
+        assignLabel: (deal: string) => `Asignar creador a «${deal}»`,
         save: "Guardar",
         saved: (creator: string) => `Ahora es de ${creator}.`,
         savedNone: "Ahora no es de ningún creador.",
         unchanged: "Ya era de ese creador.",
         error: "No se pudo cambiar el creador del negocio.",
       },
-      /** La marca tiene negocios que esta persona no ve por su alcance (open_deal_out_of_scope). */
+      /** La marca tiene negocios que esta persona no ve por su alcance (open_deal_out_of_scope), y además ve alguno suyo. */
       hiddenDeals:
         "Esta marca tiene negocios abiertos de creadores que no llevas, o sin creador. No los ves aquí; quien los lleva sí.",
+      /** Lo mismo cuando no ve ninguno: un solo estado vacío, sin contradecir al de arriba (ACC-7 r6). */
+      hiddenDealsOnly: "Ninguno de tus creadores tiene un negocio abierto con esta marca; los hay de otros creadores, y los ve quien los lleva.",
+      /** La cifra de Datos cuenta solo lo que esta persona ve: con negocios ocultos, la etiqueta lo dice. */
+      openDealsOfYours: "Negocios abiertos (tuyos)",
       notFound: {
         title: "Esa empresa no está en tu espacio",
         description: "Puede que el enlace sea de otro espacio de trabajo o que la empresa ya no esté vinculada.",
@@ -1022,8 +1037,7 @@ export const MESSAGES = {
     InvalidDealName: "El negocio necesita un nombre de hasta 120 caracteres.",
     InvalidHeadline: "La señal necesita una línea que diga qué viste.",
     InvalidName: "La empresa necesita un nombre.",
-    NoCreatorInScope:
-      "Tu acceso está limitado a creadores que ya no están en el espacio: no puedes abrir negocios. Pide a quien administra el equipo que te asigne uno.",
+    NoCreatorInScope: NO_CREATORS,
     InvalidOwner: "El responsable tiene que ser alguien de tu espacio.",
     InvalidReason: "Di por qué la descartas: es lo que afina el radar.",
     InvalidRelationship: "Esa relación no existe.",

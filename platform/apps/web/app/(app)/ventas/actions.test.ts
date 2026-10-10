@@ -363,7 +363,8 @@ describe("«Nuevo negocio» con alcance por creador (ACC-7)", () => {
   it("quien lleva a varios y no eligió ve el error en el campo del creador", async () => {
     createDeal.mockRejectedValue(new VentasError("DealCreatorRequired"));
     const r = await crearNegocio({}, form({ companyId: COMPANY, name: "Serie Q4", amount: "" }));
-    expect(r.errors).toEqual({ creatorId: MESSAGES.errores.DealCreatorRequired });
+    // El texto del formulario, no el del radar: la persona ya está donde se elige (ACC-7 r6).
+    expect(r.errors).toEqual({ creatorId: MESSAGES.empresas.detail.newDeal.creatorRequired });
   });
 
   it("ScopeError, y el 42501 de la política por creador, se dicen con el texto del alcance", async () => {

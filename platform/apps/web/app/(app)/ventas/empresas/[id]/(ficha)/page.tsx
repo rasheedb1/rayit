@@ -211,9 +211,12 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
                 {x.pitch.abrir}
               </Button>
             </div>
-            {hiddenDeals && <p className="mb-3 text-xs leading-5 text-muted">{t.detail.hiddenDeals}</p>}
+            {hiddenDeals && deals.length > 0 && <p className="mb-3 text-xs leading-5 text-muted">{t.detail.hiddenDeals}</p>}
             {deals.length === 0 ? (
-              <p className="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted">{t.noDeals}</p>
+              // Con negocios ocultos por el alcance, un solo mensaje: «sin negocios» y «hay negocios que no ves» a la vez se contradecían.
+              <p className="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted">
+                {hiddenDeals ? t.detail.hiddenDealsOnly : t.noDeals}
+              </p>
             ) : (
               <ul className="divide-y divide-border rounded-md border border-border">
                 {deals.map((d) => {
@@ -352,7 +355,8 @@ export default async function EmpresaPage({ params }: { params: Promise<{ id: st
               { label: t.detail.domain, value: company.domain },
               { label: t.detail.location, value: location || null },
               // El sector y el responsable van en la cabecera (VEN-5): aquí no se repiten.
-              { label: t.detail.openDeals, value: f.int(company.openDealCount) },
+              // La cifra es la de los negocios que esta persona ve: con otros ocultos por el alcance, la etiqueta lo dice.
+              { label: hiddenDeals ? t.detail.openDealsOfYours : t.detail.openDeals, value: f.int(company.openDealCount) },
               { label: t.detail.lastActivity, value: company.lastActivityAt ? f.date(company.lastActivityAt) : t.neverContacted },
             ]}
             signalsLinks={[
