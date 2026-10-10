@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { withWorkspace } from "@/lib/db";
 import { MESSAGES } from "../../../messages";
 import { MediaKitVista } from "../../../_ui/media-kit-vista";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.meta.mediaKitVistaPrevia };
 export const dynamic = "force-dynamic";
@@ -20,6 +21,7 @@ export const dynamic = "force-dynamic";
  * las dos lecturas.
  */
 export default async function VistaPreviaMediaKitPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireModuleAccess("cotizar");
   const t = MESSAGES.mediaKit.vistaPrevia;
   const { id } = await params;
   const kit = await withWorkspace((tx) => getMediaKitById(tx, id));

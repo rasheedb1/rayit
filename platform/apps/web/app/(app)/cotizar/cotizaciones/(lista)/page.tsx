@@ -14,11 +14,13 @@ import { marcarAvisoVisto } from "../../actions";
 import { MESSAGES } from "../../messages";
 import { estadoVisible, pillDeCotizacion } from "../../_lib/estado";
 import { AvisosBloqueo } from "../../_ui/avisos-bloqueo";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.meta.cotizaciones };
 export const dynamic = "force-dynamic";
 
 export default async function CotizacionesPage() {
+  await requireModuleAccess("cotizar");
   const t = MESSAGES.cotizaciones;
   const ws = await getCurrentWorkspace();
   const f = formatterFor(ws);

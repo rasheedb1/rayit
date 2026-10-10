@@ -51,6 +51,7 @@ import { NuevoNegocio } from "../negocio";
 import { RegistroRapido } from "../registro";
 import { RelacionForm } from "../relacion";
 import { LoQueSabemos } from "../sabemos";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 // El título de la pestaña lo pone layout.tsx con el nombre de la empresa
 // (generateMetadata): uno estático aquí lo pisaría (pulido r8).
@@ -77,6 +78,7 @@ export const dynamic = "force-dynamic";
  * esqueleto de loading.tsx mientras lee, en UNA transacción.
  */
 export default async function EmpresaPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireModuleAccess("ventas");
   const { id } = await params;
   const t = MESSAGES.empresas;
   const x = FICHA;

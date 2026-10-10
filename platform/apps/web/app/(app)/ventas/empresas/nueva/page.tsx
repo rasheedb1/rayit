@@ -5,10 +5,12 @@ import { ModuleTabs } from "../../_componentes/pestanas";
 import { MESSAGES } from "../../_lib/messages";
 import { countryOptions } from "../../_lib/paises";
 import { NuevaEmpresaForm } from "./form";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.empresas.form.metaTitle };
 
 export default async function NuevaEmpresaPage() {
+  await requireModuleAccess("ventas");
   const t = MESSAGES.empresas.form;
   // Los países con el nombre en el idioma del espacio, armados aquí para
   // que el <Select> no dependa del ICU del navegador.

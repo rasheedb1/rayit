@@ -14,6 +14,7 @@ import { withWorkspace } from "../../_lib/db";
 import { RELATIONSHIP_META } from "../../_lib/estado";
 import { MESSAGES } from "../../_lib/messages";
 import { Buscador } from "../buscador";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.empresas.metaTitle };
 export const dynamic = "force-dynamic";
@@ -24,6 +25,7 @@ export const dynamic = "force-dynamic";
  * negocios abiertos y la suma de estos, desde SQL.
  */
 export default async function EmpresasPage({ searchParams }: { searchParams: Promise<{ q?: string; rel?: string }> }) {
+  await requireModuleAccess("ventas");
   const params = await searchParams;
   const q = searchTerm(params.q);
   const rel = RELATIONSHIPS.includes(params.rel as Relationship) ? (params.rel as Relationship) : null;

@@ -24,10 +24,13 @@ const AQUI = dirname(fileURLToPath(import.meta.url));
 const APP = join(AQUI, "..", "..", "app", "(app)");
 
 /** Los módulos cuyas Server Actions ya abren con requirePermission. */
-const MODULOS_CON_CONVENCION = ["campanas", "finanzas", "conexiones", "accesos"] as const;
+const MODULOS_CON_CONVENCION = ["campanas", "finanzas", "conexiones", "accesos", "ventas", "cotizar", "resumen"] as const;
 
-/** Cuántas acciones exportadas tenían esos módulos al adoptar la convención: si baja, la prueba dejó de mirar algo. */
-const ACCIONES_MINIMAS = 12;
+/**
+ * Cuántas acciones exportadas tenían esos módulos al adoptar la convención: si baja, la prueba dejó de mirar algo.
+ * Ventas, Cotizar y Resumen entraron el 10-oct-2026 (R2-ACC) con 79 acciones en 15 archivos.
+ */
+const ACCIONES_MINIMAS = 90;
 
 interface Accion {
   nombre: string;

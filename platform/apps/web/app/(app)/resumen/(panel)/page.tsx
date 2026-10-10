@@ -13,6 +13,7 @@ import { Kpis, KpisEsqueleto } from "../kpis";
 import { MESSAGES } from "../messages";
 import { LoQueImporta, LoQueImportaEsqueleto } from "../semana";
 import { parseFiltro } from "../_lib/filtro";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.page.metaTitle };
 // Lee la base en cada petición: nada de esto se prerenderiza.
@@ -59,6 +60,7 @@ export default async function ResumenPage({
 }: {
   searchParams: Promise<{ periodo?: string; red?: string }>;
 }) {
+  await requireModuleAccess("resumen");
   const filtro = parseFiltro(await searchParams);
   const cobertura = await withWorkspace((tx) => getResumenCoverage(tx));
   const t = MESSAGES.page;

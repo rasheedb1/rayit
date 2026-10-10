@@ -14,6 +14,7 @@ import { Conversacion } from "./conversacion";
 import { ListaEnOrden, OrdenBandeja } from "./orden-bandeja";
 import { MESSAGES } from "./messages";
 import { columnaListaClase, conversacionVista, FILTRO, hiloVista, listaHref, siguienteTrasHecha, vistaDe } from "./vista";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.metaTitle };
 export const dynamic = "force-dynamic";
@@ -37,6 +38,7 @@ const CANALES: ReadonlySet<string> = new Set(BANDEJA_CHANNELS);
 export default async function BandejaPage({
   searchParams,
 }: { searchParams: Promise<{ contacto?: string; canal?: string; vista?: string }> }) {
+  await requireModuleAccess("ventas");
   const sp = await searchParams;
   const t = MESSAGES;
   // Un 'client' (en una agencia, la marca misma) no lee los hilos con otras marcas: ni se cargan.

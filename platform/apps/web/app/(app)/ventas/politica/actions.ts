@@ -12,6 +12,7 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { withWorkspace } from "../_lib/db";
 import { MESSAGES } from "./messages";
 import { puedeCambiarLaPolitica } from "./permiso";
+import { requirePermission } from "@/lib/permisos";
 
 /**
  * Las acciones de /ventas/politica. El workspace lo fija withWorkspace;
@@ -74,6 +75,7 @@ function primeros(issues: { path: PropertyKey[]; message: string }[]): Record<st
 }
 
 export async function guardarPolitica(_prev: GuardarPoliticaState, form: FormData): Promise<GuardarPoliticaState> {
+  await requirePermission("ventas.outreach.configurar");
   if (!(await puedeCambiarLaPolitica())) return { message: t.sinPermiso };
   const campo = (k: string) => String(form.get(k) ?? "");
   // Las cifras del error, como las de la ayuda de la pantalla: «Entre 1 y 2.000.» en es-CO.
@@ -114,6 +116,7 @@ export type InterruptorResultado = { ok: true } | { ok: false; message: string }
  * última la exige también la base).
  */
 export async function encenderEnvio(): Promise<InterruptorResultado> {
+  await requirePermission("ventas.outreach.configurar");
   if (!(await puedeCambiarLaPolitica())) return { ok: false, message: t.interruptor.sinPermiso };
   try {
     const listo = await withWorkspace(async (tx) => {
@@ -135,6 +138,7 @@ export async function encenderEnvio(): Promise<InterruptorResultado> {
 }
 
 export async function apagarEnvio(): Promise<InterruptorResultado> {
+  await requirePermission("ventas.outreach.configurar");
   if (!(await puedeCambiarLaPolitica())) return { ok: false, message: t.interruptor.sinPermiso };
   try {
     await withWorkspace((tx) => disableOutreach(tx, DISABLED_REASON_MANUAL));

@@ -24,7 +24,7 @@ test('cada clave tiene la forma <módulo>.<recurso>.<acción> con módulo y acci
 
 test('las claves son únicas y hay 45', () => {
   assert.equal(new Set(TODOS_LOS_PERMISOS).size, PERMISOS.length);
-  assert.equal(PERMISOS.length, 45);
+  assert.equal(PERMISOS.length, 47);
 });
 
 test('cada etiqueta empieza en infinitivo y en mayúscula; cada sensibilidad es normal o sensible', () => {
@@ -124,8 +124,10 @@ test('el Mánager de creador SÍ trae campanas.reporte.enviar, todo Ventas y Cot
   assert.equal(can(manager, 'campanas.campana.crear'), true);
   assert.equal(can(manager, 'finanzas.cobro.ver'), true);
   for (const p of [...permisosDelModulo('ventas'), ...permisosDelModulo('cotizar'), ...permisosDelModulo('campanas')]) {
-    assert.equal(can(manager, p), true, p);
+    // Todo Ventas salvo configurar el envío (política, canales, brief): es del Dueño (0085, R2-ACC).
+    assert.equal(can(manager, p), p !== 'ventas.outreach.configurar', p);
   }
+  assert.equal(can(manager, 'ventas.outreach.enviar'), true);
   assert.equal(can(manager, 'resumen.panel.ver'), true);
   assert.equal(can(manager, 'conexiones.cuenta.ver'), true);
   assert.equal(can(manager, 'equipo.miembro.ver'), true);
@@ -169,9 +171,11 @@ test('en la agencia, el Administrador tiene todo salvo configurar y cerrar la cu
   assert.equal(can(admin, 'equipo.rol.editar'), true);
 });
 
-test('el Ejecutivo de cuenta de agencia tiene exactamente Ventas, Cotizar y Campañas', () => {
+test('el Ejecutivo de cuenta de agencia tiene exactamente Ventas (sin configurar el envío), Cotizar y Campañas', () => {
   const ejecutivo = permisosDeRol('agency', 'manager');
-  const esperado = new Set([...permisosDelModulo('ventas'), ...permisosDelModulo('cotizar'), ...permisosDelModulo('campanas')]);
+  const esperado = new Set(
+    [...permisosDelModulo('ventas'), ...permisosDelModulo('cotizar'), ...permisosDelModulo('campanas')].filter((p) => p !== 'ventas.outreach.configurar'),
+  );
   assert.deepEqual([...ejecutivo].sort(), [...esperado].sort());
 });
 

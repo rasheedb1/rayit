@@ -37,6 +37,7 @@ import { SIN_PERSONA } from "./_lib/protocolo";
 import { redactorAnthropic, redactorConfigurado } from "./_lib/redactor";
 import { partesDeEnrolamiento } from "./_lib/vista";
 import { MESSAGES } from "./messages";
+import { requirePermission } from "@/lib/permisos";
 
 const E = MESSAGES.errores;
 const LISTA = "/ventas/cadencias";
@@ -88,6 +89,7 @@ const proponerSchema = z.object({
  * si hay llave, y se abre la línea de tiempo.
  */
 export async function proponerDesdeSenal(_prev: CadenciaState, formData: FormData): Promise<CadenciaState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = proponerSchema.safeParse({
     signalId: String(formData.get("signalId") ?? ""),
@@ -117,6 +119,7 @@ export async function proponerDesdeSenal(_prev: CadenciaState, formData: FormDat
 }
 
 export async function crearDesdePlantilla(_prev: CadenciaState, formData: FormData): Promise<CadenciaState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const slug = String(formData.get("slug") ?? "");
   if (!/^[a-z][a-z0-9-]{1,60}$/.test(slug)) return { error: MESSAGES.plantillas.placeholder };
@@ -153,6 +156,7 @@ export async function crearDesdePlantilla(_prev: CadenciaState, formData: FormDa
  * aquí igual: su etiqueta dice a quién le escribe.
  */
 export async function activarCadencia(sequenceId: string): Promise<CadenciaState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   if (!UUID_RE.test(sequenceId)) return { error: E.invalid };
   const t = MESSAGES.estado;
@@ -205,6 +209,7 @@ export async function activarCadencia(sequenceId: string): Promise<CadenciaState
 }
 
 export async function cambiarEstado(sequenceId: string, status: "active" | "paused" | "archived"): Promise<CadenciaState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   if (!UUID_RE.test(sequenceId) || !["active", "paused", "archived"].includes(status)) return { error: E.invalid };
   try {
@@ -218,6 +223,7 @@ export async function cambiarEstado(sequenceId: string, status: "active" | "paus
 }
 
 export async function duplicarCadencia(sequenceId: string): Promise<CadenciaState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   if (!UUID_RE.test(sequenceId)) return { error: E.invalid };
   let id: string;
@@ -231,6 +237,7 @@ export async function duplicarCadencia(sequenceId: string): Promise<CadenciaStat
 }
 
 export async function renombrarCadencia(sequenceId: string, name: string): Promise<CadenciaState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const n = name.trim();
   if (!UUID_RE.test(sequenceId) || !n || [...n].length > NAME_MAX) return { error: E.invalid };
@@ -264,6 +271,7 @@ const pasoSchema = z.object({
 export type PasoCambios = z.input<typeof pasoSchema>;
 
 export async function guardarPaso(sequenceId: string, stepId: string, cambios: PasoCambios): Promise<CadenciaState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const parsed = pasoSchema.safeParse(cambios);
   if (!UUID_RE.test(sequenceId) || !UUID_RE.test(stepId) || !parsed.success) return { error: E.invalid };
@@ -277,6 +285,7 @@ export async function guardarPaso(sequenceId: string, stepId: string, cambios: P
 }
 
 export async function anadirPaso(sequenceId: string): Promise<CadenciaState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   if (!UUID_RE.test(sequenceId)) return { error: E.invalid };
   let comoGesto: boolean;
@@ -292,6 +301,7 @@ export async function anadirPaso(sequenceId: string): Promise<CadenciaState> {
 }
 
 export async function quitarPaso(sequenceId: string, stepId: string): Promise<CadenciaState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   if (!UUID_RE.test(sequenceId) || !UUID_RE.test(stepId)) return { error: E.invalid };
   try {
@@ -304,6 +314,7 @@ export async function quitarPaso(sequenceId: string, stepId: string): Promise<Ca
 }
 
 export async function reordenarPasos(sequenceId: string, stepIds: string[]): Promise<CadenciaState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   if (!UUID_RE.test(sequenceId) || !Array.isArray(stepIds) || stepIds.length > 50 || !stepIds.every((s) => UUID_RE.test(s))) {
     return { error: E.invalid };
@@ -345,6 +356,7 @@ const enrolarSchema = z.object({ dealId: uuid, contactIds: z.array(uuid).min(1).
  * redactar, gestos a mano y pasos saltados.
  */
 export async function enrolarDesdeNegocio(sequenceId: string, _prev: EnrolarState, formData: FormData): Promise<EnrolarState> {
+  await requirePermission("ventas.negocio.editar");
   if (!(await puedeOperarVentas())) return SIN_PERMISO;
   const t = MESSAGES.enrolar;
   const parsed = enrolarSchema.safeParse({

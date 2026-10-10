@@ -34,6 +34,7 @@ import { MESSAGES, type BriefLimitTexts } from "../_lib/messages";
 import { isCountryCode } from "../_lib/paises";
 import { briefLimitTexts } from "./limites";
 import { puedeEditarElBrief } from "./permiso";
+import { requirePermission } from "@/lib/permisos";
 
 const t = MESSAGES.brief;
 const E = MESSAGES.briefErrores;
@@ -115,6 +116,7 @@ function lista(formData: FormData, name: string): string[] {
  * cambian con él.
  */
 export async function guardarBrief(_prev: BriefState, formData: FormData): Promise<BriefState> {
+  await requirePermission("ventas.outreach.configurar");
   if (!(await puedeEditarElBrief())) return { message: t.sinPermiso };
 
   const limites = briefLimitTexts(formatterFor(await getCurrentWorkspace()));
@@ -187,6 +189,7 @@ export interface MarcaEncontrada {
  * busca (searchBriefCompanies).
  */
 export async function buscarMarcas(q: string): Promise<{ results: MarcaEncontrada[] } | { error: string }> {
+  await requirePermission("ventas.empresa.ver");
   if (typeof q !== "string") return { results: [] };
   try {
     const rows = await withWorkspace((tx) => searchBriefCompanies(tx, q));
@@ -212,6 +215,7 @@ export interface NoAceptarState {
  * (rejectSignalBrand). Mismo permiso que guardar el brief.
  */
 export async function noAceptarMarca(_prev: NoAceptarState, formData: FormData): Promise<NoAceptarState> {
+  await requirePermission("ventas.outreach.configurar");
   const r = MESSAGES.radar.reject;
   if (!(await puedeEditarElBrief())) return { message: t.sinPermiso };
   const signalId = formField(formData, "signalId");
@@ -246,6 +250,7 @@ const DOMINIO_RE = /^(https?:\/\/)?(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i;
  * la misma regla (outreach_can_manage) y su traza en audit_log.
  */
 export async function noAceptarMarcaNueva(texto: string): Promise<{ result: MarcaEncontrada } | { error: string }> {
+  await requirePermission("ventas.outreach.configurar");
   if (!(await puedeEditarElBrief())) return { error: t.sinPermiso };
   const escrito = typeof texto === "string" ? texto.trim() : "";
   const dominio = DOMINIO_RE.test(escrito) ? normalizeDomain(escrito) : null;

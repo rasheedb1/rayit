@@ -86,6 +86,8 @@ let sqlMigracion = '';
 /** Permisos del catálogo que NO siembra 0034 sino una migración posterior (0034 es inmutable). */
 const PERMISOS_DESPUES_DE_0034: Readonly<Record<string, string>> = {
   'campanas.reporte.generar': '0037_reporte_publico.sql',
+  'ventas.outreach.enviar': '0085_outreach_permisos_y_alcance.sql',
+  'ventas.outreach.configurar': '0085_outreach_permisos_y_alcance.sql',
 };
 const laura = <T>(fn: (tx: WorkspaceTx) => Promise<T>) => t.db.withWorkspace(WORKSPACE_LAURA, fn, { userId: USER_LAURA });
 

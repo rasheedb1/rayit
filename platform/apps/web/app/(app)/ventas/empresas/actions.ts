@@ -52,6 +52,7 @@ import { puedeOperarVentas } from "../_lib/permiso";
 import { textoDeVencimiento, type GuardadaVista } from "../_seguimiento/datos";
 import { vistaDeActividad, type ActividadVista } from "./[id]/actividad";
 import { FICHA } from "./messages";
+import { requirePermission } from "@/lib/permisos";
 
 const E = MESSAGES.errores;
 const F = FICHA.errores;
@@ -116,6 +117,7 @@ export interface SiguienteState extends VentasState {
  * «Sin responsable».
  */
 export async function fijarSiguienteAccion(_prev: SiguienteState, formData: FormData): Promise<SiguienteState> {
+  await requirePermission("ventas.empresa.editar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = FICHA.siguiente;
   const parsed = siguienteSchema.safeParse({
@@ -168,6 +170,7 @@ export async function fijarSiguienteAccion(_prev: SiguienteState, formData: Form
  * estaba vieja enseñe la acción de ahora junto al aviso que lo explica.
  */
 export async function marcarHecha(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.empresa.editar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = FICHA.siguiente;
   const dealId = field(formData, "dealId");
@@ -216,6 +219,7 @@ export interface RegistroState extends VentasState {
  * de hoy. Esas vuelven en `pendientes` y la ficha pregunta si era esa.
  */
 export async function registrarActividad(_prev: RegistroState, formData: FormData): Promise<RegistroState> {
+  await requirePermission("ventas.empresa.editar");
   if (!(await puedeOperarVentas())) return { message: MESSAGES.sinPermiso };
   const t = FICHA.actividad;
   const parsed = actividadSchema.safeParse({
@@ -267,6 +271,7 @@ export async function verMasActividad(
   companyId: string,
   cursor: string,
 ): Promise<{ items: ActividadVista[]; nextCursor: string | null } | { error: string }> {
+  await requirePermission("ventas.empresa.ver");
   const t = FICHA.actividad;
   if (!UUID_RE.test(companyId) || typeof cursor !== "string" || cursor.length > 200) return { error: t.moreError };
   try {
@@ -301,6 +306,7 @@ const aprobarSchema = z.object({
  * que hay que corregir, o como aviso.
  */
 export async function aprobarMensaje(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.outreach.enviar");
   const t = FICHA.cadencia;
   // Aprobar manda un mensaje a una marca: es del equipo (owner, admin, member), no de un cliente ni de un lector.
   if (!(await puedeOperarVentas())) return { message: t.sinPermiso };
@@ -362,6 +368,7 @@ const intentoSchema = z.object({
  * escribe las columnas del intento ni el enlace de baja por su cuenta.
  */
 export async function resolverIntento(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.outreach.enviar");
   const t = FICHA.cadencia.intento;
   if (!(await puedeOperarVentas())) return { message: FICHA.cadencia.sinPermiso };
   const parsed = intentoSchema.safeParse({
@@ -397,6 +404,7 @@ const saltarSchema = z.object({ companyId: z.string().regex(UUID_RE), touchId: z
  * retenía otra vez, con la cadencia parada para siempre.
  */
 export async function saltarMensaje(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.outreach.enviar");
   const t = FICHA.cadencia;
   if (!(await puedeOperarVentas())) return { message: t.sinPermiso };
   const parsed = saltarSchema.safeParse({ companyId: field(formData, "companyId"), touchId: field(formData, "touchId") });
@@ -419,6 +427,7 @@ export async function saltarMensaje(_prev: VentasState, formData: FormData): Pro
  * sale de la cola y la cadencia sigue (markManualTouchDone, pulido r6).
  */
 export async function marcarGestoHecho(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.outreach.enviar");
   const t = FICHA.cadencia;
   if (!(await puedeOperarVentas())) return { message: t.sinPermiso };
   const parsed = saltarSchema.safeParse({ companyId: field(formData, "companyId"), touchId: field(formData, "touchId") });
@@ -444,6 +453,7 @@ const reanudarSchema = z.object({ companyId: z.string().regex(UUID_RE), enrollme
  * vuelve a 'active' y corre lo vencido desde ahora.
  */
 export async function reanudarCadencia(_prev: VentasState, formData: FormData): Promise<VentasState> {
+  await requirePermission("ventas.outreach.enviar");
   const t = FICHA.cadencia;
   if (!(await puedeOperarVentas())) return { message: t.sinPermiso };
   const parsed = reanudarSchema.safeParse({ companyId: field(formData, "companyId"), enrollmentId: field(formData, "enrollmentId") });

@@ -14,6 +14,7 @@ import { MESSAGES, mensajeDeError } from "../../messages";
 import { AvisosBloqueo } from "../../_ui/avisos-bloqueo";
 import { GenerarMediaKitForm } from "../generar-form";
 import { Aviso } from "../../../_lib/aviso";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.meta.mediaKits };
 export const dynamic = "force-dynamic";
@@ -33,6 +34,7 @@ function tieneBloqueo(kit: MediaKitRow): boolean {
 }
 
 export default async function MediaKitPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+  await requireModuleAccess("cotizar");
   const t = MESSAGES.mediaKit;
   // ?error= lleva un código, no texto: messages.ts decide qué se lee.
   const error = mensajeDeError((await searchParams).error);

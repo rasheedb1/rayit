@@ -33,7 +33,25 @@ vi.mock("@mc/db/queries/actividad", async (importOriginal) => ({
   retryFailedTouches,
   cancelQueuedTouches,
 }));
+// Desde R2-ACC la puerta es el catálogo (requirePermission, primera línea de
+// cada acción) y no el rol: aquí se resuelve con la matriz de fábrica real
+// (permisosDeRol) para el rol simulado. 'admin' solo existe en una agencia.
+vi.mock("@/lib/permisos", async () => {
+  const { can, permisosDeRol, SinPermisoError } = await import("@mc/core");
+  const permisos = () => {
+    if (!contexto.identidad || !contexto.rol) return new Set();
+    return permisosDeRol(contexto.rol === "admin" ? "agency" : "creator", contexto.rol as never);
+  };
+  return {
+    SinPermisoError,
+    requirePermission: async (p: never) => {
+      if (!can(permisos() as never, p)) throw new SinPermisoError(p);
+    },
+    puede: async (p: never) => can(permisos() as never, p),
+  };
+});
 
+import { SinPermisoError } from "@mc/core";
 import { cancelarSeleccion, reintentarPorTipo, reintentarUno } from "./actions";
 import { MESSAGES } from "./messages";
 
@@ -54,10 +72,19 @@ beforeEach(() => {
   contexto.identidad = true;
 });
 
-describe("reintentar y cancelar piden un rol que opere la cola", () => {
-  it.each(["viewer", "finance"])("un '%s' no reintenta ni cancela: ni siquiera se abre la transacción", async (rol) => {
+/** Las tres, una por una: sin ventas.outreach.enviar cada una lanza SinPermisoError antes de tocar nada. */
+async function ningunaPasa(): Promise<void> {
+  await expect(reintentarUno(ID)).rejects.toBeInstanceOf(SinPermisoError);
+  await expect(reintentarPorTipo({ stepType: "email", sequenceId: null, contact: null })).rejects.toBeInstanceOf(SinPermisoError);
+  await expect(cancelarSeleccion([ID])).rejects.toBeInstanceOf(SinPermisoError);
+}
+
+describe("reintentar y cancelar piden ventas.outreach.enviar (el catálogo, no el rol)", () => {
+  // El Editor operaba la cola por rol (OPERAN); la matriz de ACC-1 no le da
+  // Ventas, y desde R2-ACC es el catálogo el que decide (0085).
+  it.each(["viewer", "finance", "editor"])("un '%s' no reintenta ni cancela: ni siquiera se abre la transacción", async (rol) => {
     contexto.rol = rol;
-    expect(await todas()).toEqual([SIN_PERMISO, SIN_PERMISO, SIN_PERMISO]);
+    await ningunaPasa();
     expect(withWorkspace).not.toHaveBeenCalled();
     expect(retryFailedTouches).not.toHaveBeenCalled();
     expect(cancelQueuedTouches).not.toHaveBeenCalled();
@@ -65,14 +92,14 @@ describe("reintentar y cancelar piden un rol que opere la cola", () => {
 
   it("sin rol en el espacio de la sesión, o sin identidad con Supabase Auth, tampoco (falla cerrado)", async () => {
     contexto.rol = null;
-    expect(await todas()).toEqual([SIN_PERMISO, SIN_PERMISO, SIN_PERMISO]);
+    await ningunaPasa();
     contexto.rol = "owner";
     contexto.identidad = false;
-    expect(await todas()).toEqual([SIN_PERMISO, SIN_PERMISO, SIN_PERMISO]);
+    await ningunaPasa();
     expect(withWorkspace).not.toHaveBeenCalled();
   });
 
-  it.each(["owner", "admin", "manager", "editor"])("un '%s' sí: las tres llegan a la base", async (rol) => {
+  it.each(["owner", "admin", "manager"])("un '%s' sí: las tres llegan a la base", async (rol) => {
     contexto.rol = rol;
     const [uno, porTipo, cancelar] = await todas();
     expect(uno).toEqual({ ok: "1 mensaje volvió a la cola." });

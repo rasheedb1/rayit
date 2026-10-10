@@ -6,6 +6,7 @@ import { withWorkspace } from "@/lib/db";
 import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "../messages";
 import { Asistente } from "./asistente";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.importar.metaTitle };
 // Lee la base en cada petición: nada de esto se prerenderiza.
@@ -21,6 +22,7 @@ export const dynamic = "force-dynamic";
  * server action, que vuelve a validar.
  */
 export default async function ImportarPage() {
+  await requireModuleAccess("resumen");
   const [cuentas, ws] = await Promise.all([
     withWorkspace((tx) => listImportableAccounts(tx)),
     getCurrentWorkspace(),

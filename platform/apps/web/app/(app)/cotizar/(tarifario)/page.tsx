@@ -8,12 +8,14 @@ import { getCurrentWorkspace } from "@/lib/workspace/settings";
 import { MESSAGES } from "../messages";
 import { TarifarioTabla } from "../tarifario-tabla";
 import { BASIS_VACIO, leerBasis } from "../_lib/tarifario";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.meta.tarifario };
 // Lee la base en cada petición: nada de esto se prerenderiza.
 export const dynamic = "force-dynamic";
 
 export default async function CotizarPage() {
+  await requireModuleAccess("cotizar");
   const t = MESSAGES.tarifario;
   const ws = await getCurrentWorkspace();
 

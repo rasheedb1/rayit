@@ -11,6 +11,7 @@ import { crearCotizacion } from "../../actions";
 import { MESSAGES } from "../../messages";
 import { mediaKitPorDefecto } from "../../_lib/kits";
 import { CotizacionForm } from "./form";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.meta.nueva };
 export const dynamic = "force-dynamic";
@@ -21,6 +22,7 @@ export const dynamic = "force-dynamic";
  * ya elegido.
  */
 export default async function NuevaCotizacionPage({ searchParams }: { searchParams: Promise<{ negocio?: string }> }) {
+  await requireModuleAccess("cotizar");
   const t = MESSAGES.nueva;
   const { negocio } = await searchParams;
   const ws = await getCurrentWorkspace();

@@ -18,7 +18,7 @@ import { join, relative } from "node:path";
 import { describe, expect, test } from "vitest";
 
 const APP = join(__dirname, "..", "..", "app", "(app)");
-const MODULOS_CON_PUERTA_EN_PAGINA = ["campanas", "finanzas", "conexiones", "accesos"] as const;
+const MODULOS_CON_PUERTA_EN_PAGINA = ["campanas", "finanzas", "conexiones", "accesos", "ventas", "cotizar", "resumen"] as const;
 
 function paginas(dir: string): string[] {
   return readdirSync(dir).flatMap((f) => {

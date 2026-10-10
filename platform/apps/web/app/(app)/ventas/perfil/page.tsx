@@ -13,6 +13,7 @@ import { Narrativa } from "./narrativa";
 import { puedeEditarElPerfil } from "./permiso";
 import { CalcularPrimero, Recalcular } from "./recalcular";
 import { Audiencia, Desempeno, Formatos, Fuentes, Identidad, PruebaSocial, Seccion, Tarifas } from "./secciones";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.metaTitle };
 export const dynamic = "force-dynamic";
@@ -55,6 +56,7 @@ function nombreDeIdioma(codigo: string, locale: string): string {
  * quien puede usarla (puedeEditarElPerfil).
  */
 export default async function PerfilPage() {
+  await requireModuleAccess("ventas");
   const datos = await withWorkspace(async (tx) => {
     const creador = await getPrimaryCreator(tx);
     if (!creador) return null;

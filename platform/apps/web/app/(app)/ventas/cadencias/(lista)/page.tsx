@@ -21,6 +21,7 @@ import { ESTADO_PILL } from "../_lib/vista";
 import { MESSAGES } from "../messages";
 import { PlantillaForm } from "../plantilla-form";
 import { ProponerBoton } from "../proponer-boton";
+import { requireModuleAccess } from "@/lib/permisos/modulo";
 
 export const metadata: Metadata = { title: MESSAGES.metaTitle };
 export const dynamic = "force-dynamic";
@@ -58,6 +59,7 @@ export default async function CadenciasPage({
 }: {
   searchParams: Promise<{ archivadas?: string; senales?: string }>;
 }) {
+  await requireModuleAccess("ventas");
   const sp = await searchParams;
   const conArchivadas = sp.archivadas === "1";
   const todas = sp.senales === TODAS_LAS_SENALES;
