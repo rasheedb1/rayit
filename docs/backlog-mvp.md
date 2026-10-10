@@ -1166,13 +1166,16 @@ salida de cada paso está en REVISION-FASE-9 §8.
   `nicolas/QA-9-5-modulos`) chocan en seis archivos con la fase 9; se
   rebasan encima de `main` después (REVISION-FASE-9 §6).
 
-## 13. R2-ACC y R7 al 10 de octubre de 2026
+## 13. R2-ACC, R4-RES, R5-COT y R7 al 10 de octubre de 2026
 
-Escrito para Nicolás y Rasheed. Los dos primeros prompts del cierre de
-los módulos de Rasheed (`docs/cierre-rasheed-prompts.md`) los corrió
-Nicolás el 10 de octubre con su autorización para commitear en `main` y
-desplegar. El detalle está en `docs/propuestas/CIERRE-ACC-R.md` y
-`docs/propuestas/CIERRE-CIM-R.md`; `docs/tramites.md` es nuevo.
+Escrito para Nicolás y Rasheed. Cuatro de los prompts del cierre de los
+módulos de Rasheed (`docs/cierre-rasheed-prompts.md`) los corrió Nicolás
+el 10 de octubre con su autorización para commitear en `main` y
+desplegar. El detalle está en `docs/propuestas/CIERRE-ACC-R.md`,
+`CIERRE-RES-R.md`, `CIERRE-COT-R.md` y `CIERRE-CIM-R.md`;
+`docs/tramites.md` es nuevo. Quedan R3-VEN (la sesión real de VEN-9 y
+el pulido de Ventas) y R6 (GitHub a Vercel y la semana limpia de
+VEN-17), que dependen de Rasheed.
 
 ### 13.1 Historias, una por una
 
@@ -1181,6 +1184,8 @@ desplegar. El detalle está en `docs/propuestas/CIERRE-ACC-R.md` y
 | ACC-4 (su parte de CIERRE-ACC §5) | §5.1, §5.2 y §5.5 **hechos**; §5.4 pendiente | `requirePermission` en las 77 Server Actions de Ventas, Cotizar y Resumen con los permisos de ACC-1.md §4 y dos nuevos del outreach (`ventas.outreach.enviar`, `ventas.outreach.configurar`, migración **0085**); `requireModuleAccess` en sus 24 páginas; la Contadora de demo (seed 0014) | `convencion.test.ts` (los tres módulos, 90+ acciones) y `paginas.test.ts` (47 páginas); `verify/0014.sql` |
 | ACC-7 r6 | 9 de 11 hallazgos cerrados | `createQuote` con el creador del negocio y del alcance; `tieneRol` con `DEMO_USER_ID`; la ficha sin contradicciones; WCAG del botón; el error del formulario; `scope_allows` con `search_path`; `.env.example`; `NO_CREATORS` | `alcance-rls.test.ts` (dos casos nuevos), pruebas de la web |
 | ACC-10 | Pendiente | — | Plan en CIERRE-ACC-R.md §3 |
+| RES-4 | En curso | «Quién te ve» en `/resumen` con la demografía real de CON-7, por cuenta y con el filtro de red, reutilizando el componente de la ficha de Conexiones | `resumen/audiencia.test.tsx` (3 casos). «Cuándo publicar» no se pinta: CON-7 no recoge la hora de conexión de los seguidores; la pantalla lo dice (CIERRE-RES-R.md) |
+| COT-1 a COT-4 (pulido) | Hecho lo de código | `DateInput` del kit con el anillo de foco (el parche de Cotizar desaparece); el tarifario vacío enlaza a importar un CSV | `components/ui/date-input.test.tsx`, `(tarifario)/vacio.test.tsx`; la costura COT-4 ↔ CAM-2 con `ScopeError` ya tenía prueba |
 | CIM-9 | En curso | `/legal` con el borrador completo, fecha de versión y aviso de revisión legal | `app/legal/page.test.tsx`; faltan `SUPPORT_EMAIL` y la revisión de un abogado (diez confirmaciones) |
 | CIM-10 | Bloqueada (persona) | El guion con verificación y vuelta atrás; `captcha.test.ts` | Espera a Rasheed con los paneles |
 | CON-9 | Pendiente (persona) | `docs/tramites.md` con los cinco trámites y los scopes exactos del código | Rasheed inicia y anota fecha y número de caso |
