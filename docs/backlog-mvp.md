@@ -1173,9 +1173,9 @@ módulos de Rasheed (`docs/cierre-rasheed-prompts.md`) los corrió Nicolás
 el 10 de octubre con su autorización para commitear en `main` y
 desplegar. El detalle está en `docs/propuestas/CIERRE-ACC-R.md`,
 `CIERRE-RES-R.md`, `CIERRE-COT-R.md` y `CIERRE-CIM-R.md`;
-`docs/tramites.md` es nuevo. Quedan R3-VEN (la sesión real de VEN-9 y
-el pulido de Ventas) y R6 (GitHub a Vercel y la semana limpia de
-VEN-17), que dependen de Rasheed.
+`docs/tramites.md` es nuevo. R3-VEN entró después el mismo día (abajo,
+`CIERRE-VEN-R.md`); queda R6 (GitHub a Vercel y la semana limpia de
+VEN-17), que depende de Rasheed, y la sesión real de VEN-9.
 
 ### 13.1 Historias, una por una
 
@@ -1185,6 +1185,7 @@ VEN-17), que dependen de Rasheed.
 | ACC-7 r6 | 9 de 11 hallazgos cerrados | `createQuote` con el creador del negocio y del alcance; `tieneRol` con `DEMO_USER_ID`; la ficha sin contradicciones; WCAG del botón; el error del formulario; `scope_allows` con `search_path`; `.env.example`; `NO_CREATORS` | `alcance-rls.test.ts` (dos casos nuevos), pruebas de la web |
 | ACC-10 | Pendiente | — | Plan en CIERRE-ACC-R.md §3 |
 | RES-4 | En curso | «Quién te ve» en `/resumen` con la demografía real de CON-7, por cuenta y con el filtro de red, reutilizando el componente de la ficha de Conexiones | `resumen/audiencia.test.tsx` (3 casos). «Cuándo publicar» no se pinta: CON-7 no recoge la hora de conexión de los seguidores; la pantalla lo dice (CIERRE-RES-R.md) |
+| VEN-11, VEN-13 (pulido) y VEN-9, VEN-14 | Hecho lo de código | El perfil sin cifras dice qué falta (`narrativeHasData`); «visualizaciones» en toda la guía de las cadencias con la migración **0086**; «descripciones», no «captions»; el aviso de «Activar» espera a la cabecera. VEN-9 sigue bloqueada por la sesión real y VEN-14 sin `ANTHROPIC_API_KEY` (Rasheed) | `guia-sin-anglicismos.test.ts`, `outreach-narrativa.test.ts`; `CIERRE-VEN-R.md` |
 | COT-1 a COT-4 (pulido) | Hecho lo de código | `DateInput` del kit con el anillo de foco (el parche de Cotizar desaparece); el tarifario vacío enlaza a importar un CSV | `components/ui/date-input.test.tsx`, `(tarifario)/vacio.test.tsx`; la costura COT-4 ↔ CAM-2 con `ScopeError` ya tenía prueba |
 | CIM-9 | En curso | `/legal` con el borrador completo, fecha de versión y aviso de revisión legal | `app/legal/page.test.tsx`; faltan `SUPPORT_EMAIL` y la revisión de un abogado (diez confirmaciones) |
 | CIM-10 | Bloqueada (persona) | El guion con verificación y vuelta atrás; `captcha.test.ts` | Espera a Rasheed con los paneles |
