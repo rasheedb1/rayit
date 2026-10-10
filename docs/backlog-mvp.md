@@ -1165,3 +1165,42 @@ salida de cada paso está en REVISION-FASE-9 §8.
 - Las dos ramas de QA de Nicolás (`nicolas/QA-modulos-sprint`,
   `nicolas/QA-9-5-modulos`) chocan en seis archivos con la fase 9; se
   rebasan encima de `main` después (REVISION-FASE-9 §6).
+
+## 13. R2-ACC y R7 al 10 de octubre de 2026
+
+Escrito para Nicolás y Rasheed. Los dos primeros prompts del cierre de
+los módulos de Rasheed (`docs/cierre-rasheed-prompts.md`) los corrió
+Nicolás el 10 de octubre con su autorización para commitear en `main` y
+desplegar. El detalle está en `docs/propuestas/CIERRE-ACC-R.md` y
+`docs/propuestas/CIERRE-CIM-R.md`; `docs/tramites.md` es nuevo.
+
+### 13.1 Historias, una por una
+
+| Historia | Estado | Qué entró | Terminado cuando, y cómo se comprobó |
+|---|---|---|---|
+| ACC-4 (su parte de CIERRE-ACC §5) | §5.1, §5.2 y §5.5 **hechos**; §5.4 pendiente | `requirePermission` en las 77 Server Actions de Ventas, Cotizar y Resumen con los permisos de ACC-1.md §4 y dos nuevos del outreach (`ventas.outreach.enviar`, `ventas.outreach.configurar`, migración **0085**); `requireModuleAccess` en sus 24 páginas; la Contadora de demo (seed 0014) | `convencion.test.ts` (los tres módulos, 90+ acciones) y `paginas.test.ts` (47 páginas); `verify/0014.sql` |
+| ACC-7 r6 | 9 de 11 hallazgos cerrados | `createQuote` con el creador del negocio y del alcance; `tieneRol` con `DEMO_USER_ID`; la ficha sin contradicciones; WCAG del botón; el error del formulario; `scope_allows` con `search_path`; `.env.example`; `NO_CREATORS` | `alcance-rls.test.ts` (dos casos nuevos), pruebas de la web |
+| ACC-10 | Pendiente | — | Plan en CIERRE-ACC-R.md §3 |
+| CIM-9 | En curso | `/legal` con el borrador completo, fecha de versión y aviso de revisión legal | `app/legal/page.test.tsx`; faltan `SUPPORT_EMAIL` y la revisión de un abogado (diez confirmaciones) |
+| CIM-10 | Bloqueada (persona) | El guion con verificación y vuelta atrás; `captcha.test.ts` | Espera a Rasheed con los paneles |
+| CON-9 | Pendiente (persona) | `docs/tramites.md` con los cinco trámites y los scopes exactos del código | Rasheed inicia y anota fecha y número de caso |
+
+### 13.2 Decisiones que cambian el comportamiento
+
+- **El catálogo manda sobre el rol.** El Editor operaba Ventas y Cotizar
+  por rol (`OPERAN`) aunque ACC-5 ya le cerraba `/ventas`; desde R2-ACC
+  la matriz de ACC-1 decide y el Editor no opera. Las puertas por rol se
+  quedan detrás para el mensaje en pantalla (CIERRE-ACC-R.md §2).
+- **Configurar el envío es del Dueño y del Administrador**, no del
+  Mánager: política, canales y brief comprometen la reputación del
+  remitente.
+- **El borrador legal sale publicado con el aviso a la vista**: Meta y
+  Google leen la página y un texto honesto con aviso vale más que
+  «pendiente de redacción»; ningún trámite se envía hasta quitarlo.
+
+### 13.3 Verificación y producción
+
+Ver REVISION-FASE-9 §8 para la receta; aquí, 0085 es compatible con el
+código viejo (solo añade filas y un `search_path`), así que se aplica
+antes del despliegue sin ventana. Los conteos de `pnpm verificar` y el
+commit en producción están en la entrega del 10-oct.
