@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { NARRATIVE_MAX_CHARS, narrativeLanguage, verifierContext } from "@mc/core/outreach/narrativa";
+import Link from "next/link";
+import { NARRATIVE_MAX_CHARS, narrativeHasData, narrativeLanguage, verifierContext } from "@mc/core/outreach/narrativa";
 import { getPerfilComercial, getPrimaryCreator, readPerfilDataAsOf, readPostCovers } from "@mc/db/queries/perfil-comercial";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -125,18 +126,35 @@ export default async function PerfilPage() {
         <Identidad perfil={perfil} cifras={cifras} f={f} />
 
         <Seccion id="perfil-narrativa" title={t.narrativa.title} meta={t.narrativa.meta}>
-          {/* Sin key: al guardar, la narrativa nueva llega por props y el aviso de guardado no se pierde (narrativa.tsx). */}
-          <Narrativa
-            texto={narrative.text}
-            escritaEl={narrative.writtenAt}
-            fuente={fuente}
-            aviso={narrative.fallback ? t.narrativa.fallback[narrative.fallback] : null}
-            idioma={t.narrativa.idioma(nombreDeIdioma(lengua, f.locale))}
-            cifras={cifras}
-            editable={editable}
-            verificador={verifierContext(perfil, lengua)}
-            maxTexto={f.int(NARRATIVE_MAX_CHARS)}
-          />
+          {narrativeHasData(perfil) || narrative.source === "edited" ? (
+            // Sin key: al guardar, la narrativa nueva llega por props y el aviso de guardado no se pierde (narrativa.tsx).
+            <Narrativa
+              texto={narrative.text}
+              escritaEl={narrative.writtenAt}
+              fuente={fuente}
+              aviso={narrative.fallback ? t.narrativa.fallback[narrative.fallback] : null}
+              idioma={t.narrativa.idioma(nombreDeIdioma(lengua, f.locale))}
+              cifras={cifras}
+              editable={editable}
+              verificador={verifierContext(perfil, lengua)}
+              maxTexto={f.int(NARRATIVE_MAX_CHARS)}
+            />
+          ) : (
+            // Un creador sin cifras: la plantilla serían solo frases de relleno escritas para la marca
+            // («Todavía no tengo videos con puntaje…»). Mejor decir qué falta y a dónde ir (pulido final).
+            <div className="mx-auto max-w-xl">
+              <EmptyState
+                title={t.narrativa.sinDatos.title}
+                description={t.narrativa.sinDatos.description}
+                action={{ label: t.narrativa.sinDatos.conectar, href: "/conexiones" }}
+              />
+              <p className="mt-3 text-center text-sm text-ink-2">
+                <Link href="/resumen/importar" className="underline underline-offset-2 hover:text-ink">
+                  {t.narrativa.sinDatos.importar}
+                </Link>
+              </p>
+            </div>
+          )}
         </Seccion>
 
         <Desempeno perfil={perfil} cifras={cifras} f={f} portadas={portadas} />

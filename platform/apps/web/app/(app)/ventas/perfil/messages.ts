@@ -118,6 +118,14 @@ export const MESSAGES = {
   narrativa: {
     title: "Narrativa",
     meta: "Tres párrafos para presentarte. Cada cifra lleva a su origen.",
+    /** Un creador sin cifras todavía (pulido final de VEN-11): qué falta y a dónde ir, en vez de frases de relleno. */
+    sinDatos: {
+      title: "Todavía no hay cifras con las que presentarte",
+      description:
+        "La narrativa se escribe con tus medianas, tus mejores videos, tus campañas medidas y tu tarifario. Conecta una red o importa un CSV con tus publicaciones, y cuando el recolector las lea vuelve a calcular el perfil.",
+      conectar: "Conectar una cuenta",
+      importar: "O importa un CSV de tu red",
+    },
     /**
      * Debajo de la narrativa si cita cifras de campañas: son las del
      * reporte (campaign_result.computed_at), no las de hoy que enseña
@@ -242,8 +250,8 @@ export const MESSAGES = {
       whyRest: (axis: WhyAxis, group: string) => `Tus videos sin ${SIN_RASGO[axis][group] ?? group}: su mediana, en veces tu mediana`,
       formatPiece: (pieza: PieceKind) => `Publicaciones que son ${PIEZAS_PLURAL[pieza]}`,
       formatContent: (contenido: ContentKind) => `Publicaciones que son ${CONTENIDOS_PLURAL[contenido]}`,
-      tone: (rasgo: ToneTrait) => `Parte de tus captions ${TONO_CAPTIONS[rasgo]}`,
-      captionsRead: "Captions leídos para inferir formatos y tono",
+      tone: (rasgo: ToneTrait) => `Parte de tus descripciones ${TONO_CAPTIONS[rasgo]}`,
+      captionsRead: "Descripciones leídas para inferir formatos y tono",
       // Las de campaña son las del reporte (campaign_result), no las de hoy: Campañas enseña las vivas (pulido r3).
       campaignViews: (marca: string) => `Visualizaciones de la campaña con ${marca}, al cierre del reporte`,
       campaignMultiple: (marca: string) => `Veces tu mediana que hizo la campaña con ${marca}, al cierre del reporte`,
@@ -334,7 +342,7 @@ export const MESSAGES = {
 
   formatos: {
     title: "Qué haces y cómo hablas",
-    meta: (n: string) => `Leído de ${n} captions`,
+    meta: (n: string) => `Leído de ${n} descripciones`,
     piezas: "Formatos",
     contenidos: "Tipos de contenido",
     tono: "Tono",
@@ -350,7 +358,7 @@ export const MESSAGES = {
       tutea: "Le habla de tú a quien mira",
       primera_persona: "Escribe en primera persona",
       preguntas: "Hace preguntas",
-      breve: "Captions breves",
+      breve: "Descripciones breves",
       hashtags: "Usa hashtags",
     } satisfies Record<ToneTrait, string>,
     sinDatos: "Todavía no hay publicaciones para leer.",
@@ -388,7 +396,7 @@ export const MESSAGES = {
       audiencia: "Demografía y alcance",
       base: "Líneas base",
       porque: "Puntajes y porqué",
-      captions: "Lo que se lee en tus captions",
+      captions: "Lo que se lee en tus descripciones",
     },
     videos: "Videos que la forman:",
     /** Las cifras de demografía: de qué informe salen y el resto del reparto de esa lectura. */

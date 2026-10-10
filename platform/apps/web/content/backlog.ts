@@ -419,7 +419,7 @@ export const STORIES: readonly Story[] = [
     desc: "Migración 0046_outreach con las tablas de outreach, conector de Unipile con hosted auth y webhook firmado para LinkedIn e Instagram, OAuth de Google con gmail.send y gmail.modify, pantalla de canales con estado y límites, keepalive diario del token.",
     done: "Un creador conecta su Gmail y su LinkedIn; el token de Google se refresca solo; una cuenta caída se ve en rojo con el botón de reconectar.",
     status: "bloqueada",
-    note: "Código listo contra FakeGmail y FakeUnipile, con plan B si Unipile no devuelve el name de la hosted auth (§9.3). Pulido r1: la cuenta autenticada no cambia de canal, proveedor, warmup_started_at ni last_ok_at desde la web, y no se borra (keep_live); techo de Gmail personal 500/3500; el webhook de Unipile espera 5 s a una fila bloqueada y responde 503. Pendiente humano: llaves de Google (cliente propio GOOGLE_OUTREACH_CLIENT_ID) y Unipile, grabar las sesiones reales (`record:outreach -- google | avisos | unipile`, §9.3) y aplicar las migraciones de canales (el código las cita por nombre).",
+    note: "10-oct (R3): las llaves de Google (outreach) y Unipile ya están en Vercel; lo que falta es la sesión real de §9.3 (túnel, buzón y LinkedIn de pruebas, record:outreach) y la prueba outreach-grabacion.test.ts en verde: lo hace Rasheed (docs/propuestas/CIERRE-VEN-R.md §2). Código listo contra FakeGmail y FakeUnipile, con plan B si Unipile no devuelve el name de la hosted auth (§9.3). Pulido r1: la cuenta autenticada no cambia de canal, proveedor, warmup_started_at ni last_ok_at desde la web, y no se borra (keep_live); techo de Gmail personal 500/3500; el webhook de Unipile espera 5 s a una fila bloqueada y responde 503. Pendiente humano: llaves de Google (cliente propio GOOGLE_OUTREACH_CLIENT_ID) y Unipile, grabar las sesiones reales (`record:outreach -- google | avisos | unipile`, §9.3) y aplicar las migraciones de canales (el código las cita por nombre).",
   },
   {
     id: "VEN-10", module: "VEN", owner: "rasheed", size: "L", sprint: 4, deps: ["VEN-9", "CON-2", "VEN-15"],
@@ -435,7 +435,7 @@ export const STORIES: readonly Story[] = [
     desc: "Identidad, audiencia, desempeño (mediana y mejores videos con su porqué), formatos, prueba social de campañas reportadas y tarifas, más una narrativa generada cuyas cifras enlazan a su origen. Es el análisis del perfil y los videos del creador que alimenta el outreach.",
     done: "Con el seed, el perfil muestra los cinco mejores videos con sus cifras y cada cifra de la narrativa lleva a su origen.",
     status: "hecho",
-    note: "Perfil comercial con narrativa trazable; «Recalcular» aparta su costo del tope (0075). Pulido r5: dice «visualizaciones», no «views». Pulido r6 (28-sep): «visualizaciones» también en el perfil, la narrativa y la guía de pasos. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds). Historial en docs/ventas-outreach.md §5.4.",
+    note: "10-oct (R3): un creador sin cifras ve un estado vacío con qué falta (narrativeHasData) en vez de una narrativa de relleno, y la narrativa dice «descripciones», no «captions». Perfil comercial con narrativa trazable; «Recalcular» aparta su costo del tope (0075). Pulido r5: dice «visualizaciones», no «views». Pulido r6 (28-sep): «visualizaciones» también en el perfil, la narrativa y la guía de pasos. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds). Historial en docs/ventas-outreach.md §5.4.",
   },
   {
     id: "VEN-12", module: "VEN", owner: "rasheed", size: "L", sprint: 5, deps: ["VEN-10", "VEN-11"],
@@ -451,7 +451,7 @@ export const STORIES: readonly Story[] = [
     desc: "Desde el brief, la señal, los canales conectados y los contactos disponibles, una secuencia propuesta con día, canal, ángulo y guía por paso; plantillas por nicho y tipo de señal; línea de tiempo editable.",
     done: "Desde una señal de campaña activa, el creador obtiene una secuencia de seis pasos con guía y la activa en dos clics.",
     status: "hecho",
-    note: "Proponer y activar cadencias con guía dentro de la política; las acciones exigen el rol y «Proponer cadencia» reserva el tope del modelo. Pendiente humano: ANTHROPIC_API_KEY. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
+    note: "10-oct (R3): la guía de cada paso dice «visualizaciones» también en las plantillas de 0046/0067 y en las cadencias instanciadas (migración 0086, con prueba), y el aviso de «Activar» espera a que la cabecera se refresque. Proponer y activar cadencias con guía dentro de la política; las acciones exigen el rol y «Proponer cadencia» reserva el tope del modelo. Pendiente humano: ANTHROPIC_API_KEY. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds).",
   },
   {
     id: "VEN-14", module: "VEN", owner: "rasheed", size: "L", sprint: 5, deps: ["VEN-12"],
@@ -459,7 +459,7 @@ export const STORIES: readonly Story[] = [
     desc: "Aprobar, editar o regenerar lo propuesto; hilos de correo, LinkedIn e Instagram en un solo lugar; clasificación de la intención de la respuesta (interesado, ahora no, fuera de oficina, baja, referido) y su efecto en el deal y el enrolamiento.",
     done: "Un mensaje retenido se aprueba desde la bandeja y sale; una respuesta «me interesa» mueve el deal y aparece en la bandeja con la conversación completa.",
     status: "hecho",
-    note: "/ventas/aprobaciones y /ventas/bandeja, el job outbound.intent y la corrección a mano; pruebas en apps/worker/test/outreach-bandejas.test.ts y packages/db/test/bandejas.test.ts. Pulido r5: aprobaciones no ofrece lo de un negocio ya ganado o perdido; la bandeja fecha «23 sep». Decisión 9 tomada: sin llave no se clasifica solo, una persona corrige con los mismos efectos. Pulido r6 (28-sep): la lista no se reordena al marcar leído; j, k y «hecha» siguen el orden que se ve. Pendiente humano: ANTHROPIC_API_KEY. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds). Detalle en §5.7.",
+    note: "10-oct (R3): sigue sin ANTHROPIC_API_KEY en Vercel; hasta que Rasheed la ponga, outbound.replies clasifica solo en la demo con el clasificador falso (CIERRE-VEN-R.md §2). /ventas/aprobaciones y /ventas/bandeja, el job outbound.intent y la corrección a mano; pruebas en apps/worker/test/outreach-bandejas.test.ts y packages/db/test/bandejas.test.ts. Pulido r5: aprobaciones no ofrece lo de un negocio ya ganado o perdido; la bandeja fecha «23 sep». Decisión 9 tomada: sin llave no se clasifica solo, una persona corrige con los mismos efectos. Pulido r6 (28-sep): la lista no se reordena al marcar leído; j, k y «hecha» siguen el orden que se ve. Pendiente humano: ANTHROPIC_API_KEY. Pendiente del integrador: la cola única de docs/ventas-outreach.md §5.2 (db.migrate 0043…0077, db.guardia, seeds). Detalle en §5.7.",
   },
   {
     id: "VEN-15", module: "VEN", owner: "rasheed", size: "M", sprint: 4, deps: ["VEN-10"],

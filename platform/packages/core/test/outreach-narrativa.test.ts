@@ -10,6 +10,7 @@ import { buildPerfil, type Claim } from '../src/outreach/perfil.ts';
 import {
   buildNarrativePrompt, CANTIDADES, claimLabelEs, claimsById, narrativeIssueSpans, narrativeLanguage, narrativeSegments, perfilTerms,
   templateNarrative, verifierContext, verifyNarrative, verifyNarrativeWith, writeNarrative, type NarrativeModel, type NarrativePrompt,
+  narrativeHasData,
 } from '../src/outreach/narrativa.ts';
 import type { LlmUsage } from '../src/outreach/llm-precios.ts';
 import { llmCostUsd, UnknownModelPriceError } from '../src/outreach/llm-precios.ts';
@@ -277,7 +278,7 @@ test('la plantilla compara cifras comparables: la mediana de la red del mejor vi
   assert.match(t, /En TikTok, en un video típico, \[claim:[a-z0-9-]+\] del alcance llega a personas que todavía no me siguen\./);
   assert.doesNotMatch(t, /cada video/);
   // Los rasgos de tono con el mismo verbo, juntos.
-  assert.match(t, /En mis captions escribo corto y uso emojis y hashtags\./);
+  assert.match(t, /En mis descripciones escribo corto y uso emojis y hashtags\./);
   assert.doesNotMatch(t, /uso emojis y uso/);
 });
 
@@ -426,4 +427,14 @@ test('los países se nombran en el idioma de la narrativa, no en el locale del w
   const p = buildNarrativePrompt(perfil, fmt, { locale: 'en-US' });
   assert.match(p.user, /que vive en México:/);
   assert.doesNotMatch(p.user, /Mexico|United States/);
+});
+
+test('narrativeHasData: sin medianas, videos, campañas, tarifario ni audiencia no hay con qué presentarse; con cualquiera de ellos, sí', () => {
+  assert.equal(narrativeHasData(perfil), true, 'Laura tiene de todo');
+  const vacias = entradasLaura();
+  const sinNada = buildPerfil({ ...vacias, audience: [], nonFollowers: [], baselines: [], posts: [], campaigns: [], rateCard: null });
+  assert.equal(narrativeHasData(sinNada), false);
+  // Con solo el tarifario ya hay una cifra que una marca puede leer.
+  const soloTarifa = buildPerfil({ ...vacias, audience: [], nonFollowers: [], baselines: [], posts: [], campaigns: [] });
+  assert.equal(narrativeHasData(soloTarifa), true);
 });

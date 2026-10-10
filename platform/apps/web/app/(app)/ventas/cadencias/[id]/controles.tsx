@@ -132,8 +132,9 @@ export function Controles({
         </fieldset>
       )}
       {!puedeActivar && !archivada && status !== "active" && <p className="text-xs text-fg-3">{t.sinPasos}</p>}
-      <Aviso message={state.error} notice={state.ok} />
-      {state.ok && state.href && (
+      {/* El aviso espera a que termine la transición: «Cadencia activa» con la cabecera todavía en «Borrador» contradecía a la pantalla (pulido final). */}
+      {!pending && <Aviso message={state.error} notice={state.ok} />}
+      {!pending && state.ok && state.href && (
         <Link href={state.href} className="text-sm underline underline-offset-2">
           {t.revisarEnFicha}
         </Link>

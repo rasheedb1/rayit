@@ -551,7 +551,7 @@ export const PORQUE_ES = {
     tutea: 'le habla de tú a quien mira',
     primera_persona: 'escribe en primera persona',
     preguntas: 'hace preguntas',
-    breve: 'escribe captions breves',
+    breve: 'escribe descripciones breves',
     hashtags: 'usa hashtags',
   },
   /**
@@ -651,8 +651,8 @@ export function claimLabelEs(c: Pick<Claim, 'key' | 'params'>, language: Narrati
     case 'why.rest': return `Veces su mediana, mediana de sus videos que no ${grupoEs(p.axis!, p.group!)}`;
     case 'format.piece': return `Publicaciones que son ${PORQUE_ES.pieces[p.piece!]}`;
     case 'format.content': return `Publicaciones que son ${PORQUE_ES.contents[p.content!]}`;
-    case 'tone': return `Parte de sus captions en los que ${PORQUE_ES.tone[p.trait!]}`;
-    case 'captions_read': return 'Captions leídos para inferir formatos y tono';
+    case 'tone': return `Parte de sus descripciones en las que ${PORQUE_ES.tone[p.trait!]}`;
+    case 'captions_read': return 'Descripciones leídas para inferir formatos y tono';
     case 'campaign.views': return `Visualizaciones de la campaña con ${p.company}`;
     case 'campaign.multiple': return `Veces su mediana que hizo la campaña con ${p.company}`;
     case 'campaign.brand_followers': return `Seguidores que ganó ${p.company} con la campaña`;
@@ -692,6 +692,25 @@ export interface TemplateOptions {
  * mejor video nombra la red, y si esa mediana es de otro corte que la
  * que se acaba de citar, cita también la suya.
  */
+/**
+ * Si el perfil tiene alguna cifra que una marca pueda leer: una mediana,
+ * un video con puntaje, una campaña con resultado, un tarifario o la
+ * audiencia. Sin ninguna, la narrativa de plantilla sería solo las frases
+ * de relleno («Todavía no tengo videos con puntaje…»), escritas para la
+ * marca, y la pantalla prefiere decir qué falta (pulido final de VEN-11).
+ */
+export function narrativeHasData(perfil: PerfilComercial): boolean {
+  const { audience, performance, socialProof, rates } = perfil;
+  return (
+    audience.platformId !== null ||
+    audience.nonFollowers.length > 0 ||
+    performance.medians.length > 0 ||
+    performance.top.length > 0 ||
+    socialProof.length > 0 ||
+    (rates?.lines.some((l) => l.lowClaimId) ?? false)
+  );
+}
+
 export function templateNarrative(perfil: PerfilComercial, opts: TemplateOptions = {}): string {
   const { identity, audience, performance, formats } = perfil;
   const red = (p: PlatformId) => PLATFORM_LABELS[p];
@@ -751,7 +770,7 @@ export function templateNarrative(perfil: PerfilComercial, opts: TemplateOptions
   const contenidos = formats.contents.slice(0, 2).map((f) => PORQUE_ES.contents[f.key]);
   if (piezas.length) p2.push(`Publico sobre todo ${listaEs(piezas)}${contenidos.length ? `, y lo que más hago son ${listaEs(contenidos)}` : ''}.`);
   const tono = formats.tone.slice(0, 3).map((f) => f.key);
-  if (tono.length) p2.push(`En mis captions ${tonoYo(tono)}.`);
+  if (tono.length) p2.push(`En mis descripciones ${tonoYo(tono)}.`);
   if (!p2.length) p2.push('Todavía no tengo videos con puntaje frente a mi mediana.');
 
   // 3 · Prueba social y cómo trabajar juntos.
